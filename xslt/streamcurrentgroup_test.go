@@ -92,14 +92,18 @@ func TestCurrentGroupConsumedTwiceIsNotStreamable(t *testing.T) {
 	}
 }
 
-func TestCurrentGroupInANestedContainerIsWithheld(t *testing.T) {
+func TestCurrentGroupInANestedContainerOverAStreamedGroup(t *testing.T) {
 	// The walk in streamcheck.go starts at each streamable container, so a
 	// container nested inside an xsl:for-each-group is assessed without the
 	// outer instruction's select expression -- the very thing §19.8.9.4 asks
-	// for. The call cannot be judged there, and answering "roaming" would
-	// raise XTSE3430 on the strength of what was never looked at, rejecting
-	// si-group-051, which the suite expects to run. The verdict must be
-	// withheld instead.
+	// for. enclosingGroupSelect goes and gets it.
+	//
+	// When it comes back with a posture, "not grounded" is a fact about the
+	// stylesheet: the group's members are still streamed nodes that the
+	// nested container would have to read a second time, which is
+	// §19.8.9.4's "otherwise, roaming and free-ranging". The verdict is
+	// modelled, and si-group-052 -- this stylesheet -- is refused, as the
+	// catalog requires.
 	//
 	// The entry point matters: this must go through
 	// analyzeSequenceConstructor at the nested container, which is what
@@ -115,6 +119,45 @@ func TestCurrentGroupInANestedContainerIsWithheld(t *testing.T) {
 	 </xsl:for-each-group>
 	</xsl:template>
 	</xsl:transform>`
+	p, known := analyzeNestedContainer(t, src)
+	if !known {
+		t.Fatal("a current-group() call over a streamed group was withheld; the " +
+			"outer select was assessed and is striding, so §19.8.9.4's roaming " +
+			"answer is a fact about the stylesheet")
+	}
+	if p.streamable() {
+		t.Errorf("got %v and %v, want roaming and free-ranging", p.posture, p.sweep)
+	}
+}
+
+func TestCurrentGroupInANestedContainerIsWithheldWhenTheGroupIsUnmodelled(t *testing.T) {
+	// The withholding that remains, and the only one that is warranted: the
+	// outer select is itself unmodelled -- here a call on a function this
+	// analysis has no entry for -- so nothing is known about the group and
+	// answering "roaming" would raise XTSE3430 on the strength of what was
+	// never looked at.
+	src := `<xsl:transform version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	 xmlns:my="http://example.com/">
+	<xsl:template match="Orders">
+	 <xsl:for-each-group select="my:pick(Order)" group-adjacent="@number">
+	  <xsl:source-document streamable="yes" href="t.xml">
+	   <xsl:for-each select="//transaction[@date = current-group()[1]/Date]">
+	    <value><xsl:value-of select="@value"/></value>
+	   </xsl:for-each>
+	  </xsl:source-document>
+	 </xsl:for-each-group>
+	</xsl:template>
+	</xsl:transform>`
+	if _, known := analyzeNestedContainer(t, src); known {
+		t.Error("a current-group() call whose group is unmodelled was reported as " +
+			"modelled; the roaming verdict would be raised as a spurious XTSE3430")
+	}
+}
+
+// analyzeNestedContainer assesses the body of the first streamable
+// xsl:source-document in src, which is the entry point checkStreamability uses.
+func analyzeNestedContainer(t *testing.T, src string) (props, bool) {
+	t.Helper()
 	root := parseSheet(t, src)
 	var container *xdm.Node
 	walkElements(root, func(el *xdm.Node) bool {
@@ -126,11 +169,6 @@ func TestCurrentGroupInANestedContainerIsWithheld(t *testing.T) {
 	if container == nil {
 		t.Fatal("no xsl:source-document in the test stylesheet")
 	}
-	_, known := analyzeSequenceConstructor(container, postureStriding,
+	return analyzeSequenceConstructor(container, postureStriding,
 		attributeSetDeclarations(root), collectStreamFuncs(root))
-	if known {
-		t.Error("a current-group() call inside a nested streamable container was " +
-			"reported as modelled; the outer select expression was never assessed, " +
-			"so the roaming verdict would be raised as a spurious XTSE3430")
-	}
 }

@@ -25,9 +25,9 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
-| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,336 | 99.97% | **10** |
+| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,340 | 99.98% | **6** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,456 | 99.46% | **62** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,463 | 99.52% | **55** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
@@ -108,27 +108,25 @@ All three XPath versions agree with the suite on every case in scope.
 
 965 of 965 assertions in James Clark's spectest. **No known gaps.**
 
-## xquery — 10 failures
+## xquery — 6 failures
 
-**XQuery 3.1: 30,336 / 30,346 = 99.97%.**
+**XQuery 3.1: 30,340 / 30,346 = 99.98%.**
 
 The failures cluster by production, not by symptom.
-**`prod-CastExpr.schema` (4)** — `CastAs-UnionType-27` and `-28`,
-`CastAs-ListType-21`, and `user-defined-11` — plus six singletons:
-`prod-TypeswitchExpr`, `prod-FunctionCall`, `prod-ContextItemDecl`,
-`op-same-key`, `misc-CombinedErrorCodes` and `app-Demos`, one case each.
+**`prod-CastExpr.schema` (3)** — `CastAs-UnionType-27` and `-28`, and
+`CastAs-ListType-21` — plus three singletons: `prod-ContextItemDecl`,
+`op-same-key` and `app-Demos`, one case each.
 
-The remaining three `CastAs-*` cases are one shape: a union whose member, or a
+The three `CastAs-*` cases are one shape: a union whose member, or a
 list whose item type, is a **derived string type with no built-in atomic code**
 — `xs:IDREF` in `xs:IDREFS`, or a union used as a list's item type. The item
 type resolves to no code, so the cast cannot build the sequence F&O 3.0 18.3.6
 owes and returns the single string it was handed. Closing it means giving the
 derived string types codes of their own, or teaching the list cast to carry a
 facet name where no code exists — the same information the union-member fix
-already carries, one level further in. `user-defined-11` is unrelated: it wants
-`XQST0034` for a duplicate function declaration.
+already carries, one level further in.
 
-Four of the six singletons this section used to read are now closed, each for a
+Four singletons this section used to read are now closed, each for a
 different reason and none by loosening a check: `user-defined-11` (`XQST0034`
 reaches the constructor functions an `import schema` puts in the static
 context), `K2-sequenceExprTypeswitch-5` (`XPST0008` for a variable named in an
@@ -154,11 +152,11 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 66 failures
+## xslt 3.0 — 55 failures
 
-**XSLT 3.0: 11,456 / 11,518 = 99.46%.**
+**XSLT 3.0: 11,463 / 11,518 = 99.52%.**
 
-**44 of the 66 want an `XTSE3430`** — a refusal of a stylesheet as
+**37 of the 59 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles
@@ -255,8 +253,9 @@ than the numerous ones. Absent entirely:
   expressions are implemented.
 - **The 18 per-function sections of §19.8.9** that do not follow the general
   rules: `fn:current`, `fn:last`, `fn:position`, `fn:root`, `fn:reverse`,
-  `fn:innermost`, `fn:outermost`, `fn:fold-right`, `fn:function-lookup`, the
-  accumulator pair and the merge pair.
+  `fn:innermost`, `fn:fold-right`, `fn:function-lookup`, the accumulator pair
+  and the merge pair. `fn:outermost` is now modelled: §19.8.9.15 gives it one
+  transmission operand and narrows a crawling argument to a striding result.
 - **Static type inference.** §19.2's U-types are approximated syntactically.
   Where the approximation is uncertain it answers in the direction that widens
   the sweep, which loses precision and never gains a false rejection.
@@ -420,6 +419,58 @@ So `||` is correct, currently unmodelled, and cannot be landed on its own. It
 should go in together with the U-type inference that would let §19.8.8.4 keep
 `(author | editor)` striding — the same missing inference already recorded
 against `si-group-055` in `bodyCallsCurrentGroup`.
+
+## Quantified expressions over a streamed binding — 1 case gained, 3 valid stylesheets lost
+
+**Measured and withheld.** §19.8.8.2 gives `some|every $v in S satisfies C`
+two operand roles and says of the first: *"The in expression (S). This has
+usage navigation."* Navigation from a non-grounded posture is free-ranging
+(§19.8.1), so a faithful transcription makes `some $t in transaction
+satisfies xs:decimal($t/@value) lt -11110.0` roaming inside a streamable mode
+and raises `XTSE3430`.
+
+Enabled, it gains `streamable-129` — whose binding really does navigate, with
+`preceding-sibling` — and refuses `streamable-100`, `-101` and `-102`, whose
+bindings are plain striding child steps. The suite marks all three
+`_WRONG:streamability-rules-incorrect` and asserts a result rather than an
+error: the W3C rule rejects what Saxon streams, and the catalog sides with
+Saxon.
+
+Separating the two shapes means tracing the bound variable to its uses, which
+is the data-flow analysis §19.8.8.1's own note says these rules exclude
+(*"this requires data flow analysis (tracing from the binding of a variable to
+its usages), rather than purely syntactic analysis"*). Until that exists the
+verdict is withheld for a non-grounded binding and the rule stays live for a
+grounded one, so `some $i in 1 to 3 satisfies ...` is still assessed.
+
+A spurious `XTSE3430` refuses to compile a valid stylesheet, and §19.10 makes
+the error optional; the trade is refused on the same grounds as the `||`
+operator above. In `xslt/streamexprs.go`, `quantifiedExpr`.
+
+## Three streamability cases that need data-flow analysis
+
+**Diagnosed, not fixable syntactically.** `si-iterate-035`, `si-iterate-904`
+and `si-group-031` all want `XTSE3430` for a streamed node reaching a place it
+may not, and in each of the three the node arrives through a *variable*.
+`si-iterate-904` writes `count($current/*[current()])` where `$current` was
+bound to `.`; `si-iterate-035` carries `.` into an `xsl:iterate` parameter
+through three intermediate `xsl:variable` bindings; `si-group-031` reads
+`current-group()` inside an `xsl:copy select="$root"` whose body bug 29482
+resolved to be evaluated per group.
+
+§19.8 declines this on its own terms. Of the `for` rule the spec writes that
+tracing a streamed node through a binding "requires data flow analysis (tracing
+from the binding of a variable to its usages), rather than purely syntactic
+analysis", and the whole of §19.8 is syntactic. The analysis therefore treats
+every variable reference as grounded and motionless, which is what lets the
+three compile.
+
+Closing them means giving the analyzer a variable environment that records the
+posture and sweep of each binding and consults it at every `VarRef` — a change
+to shared plumbing, not a transcription, and one that would have to be measured
+against the whole corpus before it could be trusted. `si-fork-902` and
+`si-fork-952` are a fourth and fifth case of the same shape but a different
+cause; they are recorded under *The `||` operator* above.
 
 ## `evaluate-045` — 1 case gained, 510 real documents lost
 

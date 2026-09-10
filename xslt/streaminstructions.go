@@ -124,8 +124,9 @@ func analyzeSequenceConstructor(
 		funcs:             funcs,
 		// §19.8.9.4 for a container nested inside an xsl:for-each-group: see
 		// enclosingGroupSelect.
-		currentGroup: enclosingGroupSelect(el, attrSets, funcs),
 	}
+	var outerStreamed bool
+	a.currentGroup, outerStreamed = enclosingGroupSelect(el, attrSets, funcs)
 	a.groupInScope = a.currentGroup != props{}
 	// A nested container whose enclosing group is not grounded reads streamed
 	// nodes a second time. §19.8.9.4 calls that roaming, but this walk never
@@ -133,7 +134,7 @@ func analyzeSequenceConstructor(
 	// rather than raised: si-group-051 must run, and si-group-052 -- the same
 	// stylesheet with a striding select -- is rejected by the general rules
 	// on the path itself, not by this clause.
-	a.groupOutOfReach = !a.groupInScope && hasForEachGroupAncestor(el)
+	a.groupOutOfReach = !a.groupInScope && !outerStreamed && hasForEachGroupAncestor(el)
 	p := a.body(el)
 	return p, a.known
 }
@@ -152,16 +153,25 @@ func analyzeSequenceConstructor(
 // call roaming, and si-group-052 -- identical but for a select of "Order" --
 // expects exactly that rejection. The zero props signals "no enclosing group",
 // which leaves the caller's own roaming answer in place.
+//
+// The second return value separates the two ways of arriving at those zero
+// props. It is true when an enclosing xsl:for-each-group was found AND its
+// select was assessed all the way to a posture -- so "not grounded" is a fact
+// about the stylesheet -- and false when there is no enclosing group at all,
+// or when the outer select is itself unmodelled. Only the second case may
+// withhold: the first is si-group-052, whose refusal §19.8.9.4 derives from
+// the group being streamed, and which is otherwise silenced by
+// groupOutOfReach.
 func enclosingGroupSelect(
 	el *xdm.Node, attrSets map[xdm.QName][]*xdm.Node, funcs map[funcKey]*streamFunc,
-) props {
+) (props, bool) {
 	for n := el.Parent; n != nil; n = n.Parent {
 		if !isXSL(n, "for-each-group") {
 			continue
 		}
 		at := n.Attr("", "select")
 		if at == nil {
-			return props{}
+			return props{}, false
 		}
 		outer := &instrAnalyzer{
 			ctxPosture:        postureStriding,
@@ -171,12 +181,15 @@ func enclosingGroupSelect(
 			funcs:             funcs,
 		}
 		sel := outer.exprPropsIn(at.Value, n, postureStriding, true)
-		if !outer.known || sel.posture != postureGrounded {
-			return props{}
+		if !outer.known {
+			return props{}, false
 		}
-		return groundedMotionless
+		if sel.posture != postureGrounded {
+			return props{}, true
+		}
+		return groundedMotionless, false
 	}
-	return props{}
+	return props{}, false
 }
 
 // hasForEachGroupAncestor reports whether el is nested inside an
@@ -1799,6 +1812,16 @@ func (a *instrAnalyzer) iterate(el *xdm.Node) props {
 	return props{bodyProps.posture, wider(sel.sweep, bodyProps.sweep)}
 }
 
+// groupPatternAttr returns the group-starting-with or group-ending-with
+// attribute of an xsl:for-each-group, or nil when neither is present. The two
+// are mutually exclusive under XTSE1080, so at most one is ever found.
+func groupPatternAttr(el *xdm.Node) *xdm.Node {
+	if at := el.Attr("", "group-starting-with"); at != nil {
+		return at
+	}
+	return el.Attr("", "group-ending-with")
+}
+
 // forEachGroup applies §19.8.4.19.
 func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 	at := el.Attr("", "select")
@@ -1813,13 +1836,39 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 
 	// The grouping keys are assessed with a grounded context posture.
 	//
-	// A group-starting-with or group-ending-with pattern is a higher-order
-	// inspection operand; patterns are not analysed here, and an inspection
-	// operand that is motionless contributes nothing, so a pattern is
-	// treated as unmodelled only when it is the sole grouping attribute and
-	// the verdict would otherwise be a rejection. Since neither of the two
-	// pattern forms can make the instruction roaming under these rules,
-	// they are simply not operands here.
+	// §19.8.4.19 lists "the group-starting-with or group-ending-with
+	// patterns if present" as higher-order operands with usage inspection.
+	// §19.8.10 gives a pattern one of two verdicts and no third: motionless
+	// (and so grounded), or free-ranging (and so roaming). A motionless
+	// pattern is not potentially-consuming and contributes nothing to
+	// combine(); a free-ranging one makes the whole construct roaming and
+	// free-ranging wherever it appears, since combine()'s first test is
+	// decisive and no later cascade clause derives a narrower answer from
+	// the select and the body. So the only case worth computing is the
+	// free-ranging one, and it is computed once here for every clause
+	// rather than only for the grounded one.
+	//
+	// It is taken only where the select expression is NOT grounded. A
+	// grounded select has already materialised its result, so the pattern is
+	// matched against nodes the processor holds and reading their children
+	// advances nothing. si-group-203 selects "//Item/copy-of()" and starts
+	// its groups on "Item[processing-instruction('start')]", a pattern
+	// §19.8.10 calls free-ranging on the "p[b]" rule; the catalog asserts
+	// OUTPUT for it, and it is right to, because the snapshot is in memory.
+	//
+	// The verdict is taken only when patternIsFreeRanging is sure of it, and
+	// only when the free-ranging answer does not rest on the deliberately
+	// over-broad numeric test that patternPredicateOnlySyntacticallyNumeric
+	// identifies -- the same withholding checkStreamableModePatterns applies
+	// to a rule's match pattern, and for the same reason.
+	if p := groupPatternAttr(el); p != nil && sel.posture != postureGrounded {
+		free, known := patternIsFreeRanging(p.Value, el)
+		if !known {
+			a.known = false
+		} else if free && !patternPredicateOnlySyntacticallyNumeric(p.Value, el) {
+			return roamingFreeRanging
+		}
+	}
 
 	if sel.posture == postureGrounded {
 		// Clause 1: a grounded select follows the general rules.
@@ -1876,11 +1925,25 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 	}
 
 	// Clause 3: a grouping key that is not motionless.
+	//
+	// The key is assessed with the SELECT expression's context posture, not
+	// with grounded. Grounded is what clause 1 prescribes, and only clause 1:
+	// there the select has already been materialised, so the key reads from
+	// memory. In the cascade the select is still a stream, and §19.9's worked
+	// example says so in as many words -- of the group-adjacent expression's
+	// operand "@timestamp" it writes "the context posture is the posture of
+	// the controlling operand of the focus-setting container, that is, the
+	// select expression of the containing xsl:for-each-group instruction,
+	// which as established above is striding".
+	//
+	// Assessing it as grounded made every key motionless and clause 3 dead:
+	// si-group-901's "PRICE/text()" is motionless read from memory and
+	// consuming read from the stream, and the catalog asserts XTSE3430 for it.
 	for _, gat := range []*xdm.Node{groupBy, groupAdj} {
 		if gat == nil {
 			continue
 		}
-		p := a.exprPropsIn(gat.Value, el, postureGrounded, true)
+		p := a.exprPropsIn(gat.Value, el, sel.posture, selKids)
 		if p.sweep != sweepMotionless {
 			a.noteGroupBodyModelled(el, sel)
 			return roamingFreeRanging
@@ -2012,7 +2075,7 @@ func checkStreamableMergeSources(root *xdm.Node, sets map[xdm.QName][]*xdm.Node)
 		// streamable however striding its select is.
 		if isYes(strings.TrimSpace(el.AttrValue("sort-before-merge"))) {
 			err = fmt.Errorf(
-				"xsl:merge-source is streamed but specifies sort-before-merge=\"yes\", "+
+				"xsl:merge-source is streamed but specifies sort-before-merge=\"yes\", " +
 					"so it is not guaranteed-streamable (XTSE3430)")
 			return false
 		}

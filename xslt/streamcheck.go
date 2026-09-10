@@ -84,10 +84,21 @@ func checkStreamability(root *xdm.Node) error {
 		// per-expression scan below, and it catches what that scan cannot:
 		// an instruction that is streamable expression by expression but
 		// whose operands together read the stream twice.
-		if p, known := analyzeSequenceConstructor(el, postureStriding, sets, funcs); known && !p.streamable() {
+		// §18.1: "The xsl:stream instruction is guaranteed-streamable if
+		// the contained sequence constructor is GROUNDED." That is a
+		// stronger demand than streamable(): a body that is striding and
+		// consuming passes the general rules and still hands streamed nodes
+		// out of the instruction, which §18.1's own note forbids -- "it
+		// cannot contain the instruction <xsl:sequence select='//chapter'/>.
+		// If nodes from this document are to be returned, they must first be
+		// copied". si-iterate-907 is exactly that stylesheet with an
+		// xsl:iterate around it.
+		if p, known := analyzeSequenceConstructor(el, postureStriding, sets, funcs); known &&
+			(!p.streamable() || p.posture != postureGrounded) {
 			err = fmt.Errorf(
-				"the body of a streamable %s is %v and %v, "+
-					"so it is not guaranteed-streamable (XTSE3430)",
+				"the body of a streamable %s is %v and %v, but §18.1 requires "+
+					"it to be grounded, so it is not "+
+					"guaranteed-streamable (XTSE3430)",
 				el.Name.Local, p.posture, p.sweep)
 			return false
 		}

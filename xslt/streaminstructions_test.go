@@ -416,22 +416,44 @@ func TestForEachGroupWithGroupByOutsideForkIsRoaming(t *testing.T) {
 		"xsl:for-each-group with group-by outside an xsl:fork")
 }
 
-func TestForEachGroupGroupingKeyIsAssessedGrounded(t *testing.T) {
+func TestForEachGroupGroupingKeyIsAssessedInTheSelectsPosture(t *testing.T) {
 	// §19.8.4.19 assesses the group-adjacent expression "with a context
-	// posture of grounded". A path such as "b" is therefore grounded and
-	// motionless there -- §19.8.8.8 makes any axis step from a grounded
-	// context posture grounded and motionless -- and so the "not motionless"
-	// clause does not fire. This pins the grounded assessment: were the key
-	// assessed in the instruction's own striding posture, "b" would be
-	// consuming and the instruction would be rejected.
+	// posture of grounded" -- but only in its FIRST clause, the one for a
+	// grounded select. There the group has already been materialised, so the
+	// key reads from memory.
+	//
+	// In the cascade the select is still a stream, and clause 3 asks whether
+	// the key "is not motionless" as read from there. §19.9's worked example
+	// settles the context posture in as many words: of the group-adjacent
+	// operand "@timestamp" it writes "the context posture is the posture of
+	// the controlling operand of the focus-setting container, that is, the
+	// select expression of the containing xsl:for-each-group instruction,
+	// which as established above is striding."
+	//
+	// So a key of "b" over a striding select is consuming, and clause 3
+	// fires. si-group-901 groups on "PRICE/text()" and the catalog asserts
+	// XTSE3430 for it; assessing every key as grounded made every key
+	// motionless and clause 3 unreachable.
 	p, known := analyzeInstrSource(t, `<xsl:for-each-group select="a" group-adjacent="b">
+	 <xsl:value-of select="c"/>
+	</xsl:for-each-group>`)
+	wantProps(t, p, known, postureRoaming, sweepFreeRanging,
+		"xsl:for-each-group whose group-adjacent reads the stream")
+}
+
+func TestForEachGroupMotionlessGroupingKeyIsAccepted(t *testing.T) {
+	// The other half of the same rule, and §19.9's own key: an attribute
+	// step read from a striding context posture is motionless (§19.8.8.8),
+	// so clause 3 does not fire and the instruction stays streamable. This
+	// is what keeps the corrected posture from rejecting the common case.
+	p, known := analyzeInstrSource(t, `<xsl:for-each-group select="a" group-adjacent="@b">
 	 <xsl:value-of select="c"/>
 	</xsl:for-each-group>`)
 	if !known {
 		t.Fatal("the grouping-key expression was reported unmodelled")
 	}
 	if !p.streamable() {
-		t.Errorf("xsl:for-each-group with a grounded-assessed group-adjacent: got %v and %v, "+
+		t.Errorf("xsl:for-each-group with a motionless group-adjacent: got %v and %v, "+
 			"want it guaranteed-streamable", p.posture, p.sweep)
 	}
 }

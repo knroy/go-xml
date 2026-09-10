@@ -112,10 +112,13 @@ func TestAnalyzeExprFunctionCalls(t *testing.T) {
 		// therefore a modelled rejection, not an absence of opinion.
 		{"fn:innermost(descendant::c)", roamingFreeRanging, true},
 		{"fn:reverse(a/b)", roamingFreeRanging, true},
-		// A function still absent from the table leaves no opinion, and says
-		// so: §19.8.9.15 keeps fn:outermost out, its crawling argument
-		// yielding a striding result.
-		{"fn:outermost(descendant::c)", roamingFreeRanging, false},
+		// §19.8.9.15 keeps fn:outermost out of the table because it does not
+		// follow the general rules: its one operand is transmission, and
+		// "if the posture of the argument is crawling, then the posture of
+		// the result is striding". descendant::c is crawling and consuming,
+		// so the call is striding and consuming -- a modelled answer, and a
+		// narrower one than the general rules would give.
+		{"fn:outermost(descendant::c)", props{postureStriding, sweepConsuming}, true},
 	}
 	for _, c := range cases {
 		got, known := analyze(t, c.expr)

@@ -382,8 +382,8 @@ seen. `check.sh` fails when a count goes **down**.
 DocBook 577
 RelaxNGSpectest 965
 TestQT3 30233
-TestQT3XQuery 30320
-TestXSLT30Suite 11456
+TestQT3XQuery 30340
+TestXSLT30Suite 11463
 TestXSLTSuite 6193
 VendoredSchemas 185
 XSD10 39358

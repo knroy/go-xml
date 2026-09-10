@@ -188,8 +188,18 @@ func TestInstructionBodySeesStylesheetFunctions(t *testing.T) {
 
 // TestValidStylesheetFunctionCallStillCompiles is the other half of the test
 // above, and the one that matters more: threading the function table must not
-// turn a VALID call into a rejection. This is the shape of the spec's own
-// §19.8.5.5 example, and of su-shallow-descent-A in the W3C suite.
+// turn a VALID call into a rejection.
+//
+// The call is wrapped in an xsl:copy-of, as every template in the suite's
+// su-shallow-descent-A does. That wrapper is not decoration: §18.1 makes
+// xsl:source-document guaranteed-streamable only if its contained sequence
+// constructor is GROUNDED, and a shallow-descent function declared as
+// node()* hands back streamed nodes. An earlier version of this test used a
+// bare xsl:sequence around the call and asserted it compiled, which
+// contradicted §18.1's own worked counter-example ("since the result is not
+// grounded, the xsl:stream instruction is therefore not guaranteed-
+// streamable"). The copy-of grounds the result, which is what makes the
+// stylesheet valid and what the suite case actually writes.
 func TestValidStylesheetFunctionCallStillCompiles(t *testing.T) {
 	doc := parseSheet(t, `
 <xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
@@ -201,7 +211,7 @@ func TestValidStylesheetFunctionCallStillCompiles(t *testing.T) {
   </xsl:function>
   <xsl:template name="main">
     <xsl:source-document streamable="yes" href="in.xml">
-      <xsl:sequence select="f:alternate-children(/BOOKLIST/BOOKS)"/>
+      <xsl:copy-of select="f:alternate-children(/BOOKLIST/BOOKS)"/>
     </xsl:source-document>
   </xsl:template>
 </xsl:stylesheet>`)

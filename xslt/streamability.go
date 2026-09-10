@@ -661,6 +661,16 @@ func stepsSelectElements(steps []xpath.Expr) bool {
 
 // funcCall applies §19.8.9 to a call on a built-in function.
 func (a *analyzer) funcCall(x *xpath.FuncCall) props {
+	if x.Name.URI == xdm.NSXS && len(x.Args) == 1 {
+		// §19.8.8.13: "For a call to a constructor function, the general
+		// rules for streamability apply. There is a single operand role
+		// (the argument to the function), with operand usage absorption."
+		// §19.9's own worked example spells this out for xs:date(@timestamp).
+		// A constructor function is any name in the XML Schema namespace
+		// with one argument, since that namespace holds nothing else that
+		// is callable.
+		return combine([]operand{a.operandOf(x.Args[0], usageAbsorption)}, false)
+	}
 	if x.Name.URI != fnNS {
 		// A stylesheet function is assessed under §19.8.5 (streamfunctions.go).
 		// An extension function, or a stylesheet function this analysis did
@@ -705,6 +715,20 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 			}
 			return a.currentGroup
 		}
+	}
+	// §19.8.9.15: fn:outermost has a single transmission operand and
+	// follows the general rules "with one exception: if the posture of the
+	// argument is crawling, then the posture of the result is striding".
+	// Outermost strips the nested nodes out of a crawling sequence, so what
+	// is left cannot contain a node inside another -- which is exactly what
+	// striding asserts. The exception is a narrowing, so modelling it can
+	// only make a call streamable where abandoning it said nothing.
+	if x.Name.Local == "outermost" && len(x.Args) == 1 {
+		p := combine([]operand{a.operandOf(x.Args[0], usageTransmission)}, false)
+		if p.posture == postureCrawling {
+			p.posture = postureStriding
+		}
+		return p
 	}
 	usages, ok := builtinOperandUsages(x.Name.Local, len(x.Args))
 	if !ok {

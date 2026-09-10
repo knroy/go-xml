@@ -284,8 +284,27 @@ func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 			Every: x.Every, Bindings: x.Bindings[1:], Test: x.Test,
 		}
 	}
+	seq := a.operandOf(x.Bindings[0].Seq, usageNavigation)
+	// §19.8.8.2 makes S a navigation operand, and navigation from a
+	// non-grounded posture is free-ranging (§19.8.1). Transcribed literally
+	// that refuses "some $t in transaction satisfies xs:decimal($t/@value)
+	// lt 0", whose binding is a plain striding child step -- streamable-100,
+	// -101 and -102, which the suite marks
+	// "_WRONG:streamability-rules-incorrect" and expects to RUN. Enabling it
+	// gains streamable-129 (whose binding really does navigate, with
+	// preceding-sibling) and loses those three.
+	//
+	// Telling the two apart needs to trace the bound variable to its uses --
+	// the data flow analysis §19.8.8.1's own note says these rules exclude.
+	// Until that exists the verdict is withheld rather than raised: a
+	// spurious XTSE3430 refuses to compile a valid stylesheet, which is worse
+	// than missing an error §19.10 makes optional. A binding over a grounded
+	// sequence ("$i in 1 to 3") is unaffected and still assessed.
+	if !seq.props.streamable() || seq.props.posture != postureGrounded {
+		return a.unknown()
+	}
 	return combine([]operand{
-		a.operandOf(x.Bindings[0].Seq, usageNavigation),
+		seq,
 		a.higherOrderOperand(test, usageInspection),
 	}, false)
 }

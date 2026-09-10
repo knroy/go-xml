@@ -299,7 +299,8 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 			return true
 		}
 		p, known := analyzeSequenceConstructor(el, postureStriding, sets, funcs)
-		if known && !p.streamable() && !bodyCallsCurrentGroup(el) {
+		if known && !p.streamable() &&
+			(!bodyCallsCurrentGroup(el) || hasIndependentGroupRefusal(el)) {
 			err = fmt.Errorf(
 				"the body of the template rule matching %q in a streamable "+
 					"mode is %v and %v, so it is not "+
@@ -310,6 +311,67 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 		return true
 	})
 	return err
+}
+
+// hasIndependentGroupRefusal reports whether some xsl:for-each-group in the
+// rule is refused by §19.8.4.19 for a reason that has nothing to do with the
+// call on fn:current-group -- either a grouping pattern §19.8.10 classifies as
+// free-ranging, or a grouping key that is not motionless.
+//
+// Either is a second, independent cause of the roaming verdict, and it lifts
+// bodyCallsCurrentGroup's withholding. That withholding exists for one
+// specific imprecision -- §19.8.8.4 widening two striding operands to
+// crawling, which then makes an xsl:apply-templates roaming -- and says
+// nothing about a pattern or a key that reads the stream to decide where a
+// group begins or which group a node joins. si-group-030
+// ("record[foo = 'a']"), si-group-063 ("pb[position() mod 2 = 1]") and
+// si-group-901 (group-adjacent="PRICE/text()") all call current-group() inside
+// the group and all three are asserted XTSE3430 by the catalog; withholding
+// there would silence a refusal §19.8.4.19 derived on its own.
+//
+// Both tests are deliberately the ones forEachGroup applies, so the two cannot
+// disagree: the same patternIsFreeRanging with the same
+// patternPredicateOnlySyntacticallyNumeric rescue, the same key assessed in
+// the select's own context posture, and the same restriction to a non-grounded
+// select -- which is what keeps si-group-203 running, its select being the
+// grounded "//Item/copy-of()".
+func hasIndependentGroupRefusal(rule *xdm.Node) bool {
+	found := false
+	walkElements(rule, func(el *xdm.Node) bool {
+		if found || !isXSL(el, "for-each-group") {
+			return !found
+		}
+		sel := el.Attr("", "select")
+		if sel == nil {
+			return true
+		}
+		a := &instrAnalyzer{ctxPosture: postureStriding, ctxAllowsChildren: true, known: true}
+		selP, selKids := a.exprOperandIn(sel.Value, el, postureStriding, true)
+		if !a.known || selP.posture == postureGrounded {
+			return true
+		}
+		if at := groupPatternAttr(el); at != nil {
+			free, known := patternIsFreeRanging(at.Value, el)
+			if known && free && !patternPredicateOnlySyntacticallyNumeric(at.Value, el) {
+				found = true
+				return false
+			}
+		}
+		for _, name := range []string{"group-by", "group-adjacent"} {
+			at := el.Attr("", name)
+			if at == nil {
+				continue
+			}
+			ka := &instrAnalyzer{ctxPosture: selP.posture, ctxAllowsChildren: selKids, known: true}
+			if p := ka.exprPropsIn(at.Value, el, selP.posture, selKids); ka.known &&
+				p.sweep != sweepMotionless {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 // bodyCallsCurrentGroup reports whether a template rule's body calls
