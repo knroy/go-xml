@@ -35,17 +35,25 @@ remaining ones have been probed and found sound.
 
 ## Current status
 
-Seven audits have passed over this code. This section is the whole of what is
+Eight audits have passed over this code. This section is the whole of what is
 *live*: everything it names is described in full further down, and everything
 already fixed has been reduced to one line apiece under *History* at the end,
 with the narrative in [CHANGELOG.md](../CHANGELOG.md).
 
-**Open.** Two, both cost rather than correctness, and both needing an
-attacker-controlled input the threat model already accounts for:
+**Open.** Four, and the first two end the process rather than the request.
+A Go stack overflow is a fatal runtime error, not a panic: `recover()` does not
+catch it, no deferred function runs, and one request takes the server with it.
 
 | finding | reach | why it is still open |
 |---|---|---|
+| **a 62-byte expression overflows the stack** | any compiled expression or query | the dynamic-call path charges no recursion depth; see *Open findings*. |
+| **a flat operator chain overflows the stack** | any compiled expression or stylesheet | the parser's cap counts nesting, and the attack is length; see *Open findings*. |
+| the process environment is readable | hostile stylesheet, or hostile document through a trusted one | `fn:environment-variable` and `fn:available-environment-variables` have no opt-in; see *Open findings*. |
 | `javascript:` URLs pass through | hostile stylesheet | an XSLT processor is not an HTML sanitiser; see *Open findings*. |
+
+Two further cost findings are recorded in the audit report and not yet acted
+on: `fn:distinct-values` is quadratic on numerics with heavy allocation, and
+the `MaxItems` budget is not reached on the primary XQuery evaluation path.
 
 **Knowingly incomplete.** One narrowing remains, and it is in an API rather
 than at a copy site. `xdmbuild.Builder.AddAttributeTyped` takes a type
@@ -656,6 +664,73 @@ reference DAG — not that one is hard to write by hand, because it is not.
 ---
 
 ## Open findings
+
+### CRITICAL — a self-applying inline function overflows the stack
+
+```
+let $f := function($g, $n) { $g($g, $n + 1) } return $f($f, 1)
+```
+
+Sixty-two bytes, plain XPath 3.1, default context, nothing configured: about a
+second later the process is gone with `fatal error: stack overflow`. The same
+expression through `xquery.Eval` behaves the same way. This is not a panic —
+`recover()` does not catch a Go stack overflow, so an embedder cannot contain
+it per request.
+
+It is a gap in one path rather than a decision. Named recursion, mutual
+recursion, `for`, `let` and quantified expressions all stop at
+`XPDY0001: recursion exceeded 500 levels`; only the dynamic-call path is
+uncharged. `DynamicCall.Eval` calls `fn.Invoke` directly
+(`xpath/funcitem.go:517`) where `FuncCall.Eval` calls `ctx.Descend()`, and the
+inline function's `Invoke` closure copies only `Ctx` and `items` from the
+calling context (`xpath/funcitem.go:195-200`), dropping `Depth`. Both halves
+need fixing; either alone leaves it open.
+
+**Until then, do not compile or evaluate an untrusted expression, query or
+stylesheet in a process you need to keep alive.**
+
+### CRITICAL — a flat operator chain overflows the stack during compilation
+
+`"1" + strings.Repeat("+1", 3000000)` — six megabytes of ASCII — ends the
+process during `Compile`, before any document is seen or any evaluation
+happens. Four megabytes survives; the threshold sits between. Under a 32 MB
+stack, 200 KB is enough.
+
+`maxParseDepth` does not see it. The counter is charged in `parseExprSingle`,
+which every *nesting* construct re-enters; a flat infix chain is parsed by a
+left-associative loop that does not, so the depth stays at 1 while the AST's
+left spine grows with the input. `optimize` then walks that spine unbounded
+(`xpath/optimize.go:48`). The cap bounds how deeply an expression nests, and
+the attack is how long it is.
+
+Verified triggers: `+`, `or`, unary `-`, `|`, `=>`. The comma operator does
+not. The fix belongs in the optimizer rather than the parser, because the
+parser's counter is structurally blind to a chain that never recurses.
+
+### MEDIUM — the process environment is readable by any stylesheet or query
+
+`fn:environment-variable($name)` and `fn:available-environment-variables()`
+read the process environment through `os.LookupEnv` and `os.Environ`
+(`xpath/fn_misc30.go:50`, `:59`) with no resolver, no option, and no way to
+switch them off. Measured through the public API with default options and no
+resolver configured: 92 variables enumerated, any of them readable by name.
+
+This is in scope by the definition at the top of `SECURITY.md` — "reading
+anything off the machine ... without the caller having enabled it" — and it is
+reachable in both threat models. A hostile stylesheet reads whatever it likes;
+a *trusted* stylesheet that writes `environment-variable(/report/@config)`
+lets a hostile document choose the variable.
+
+It is the only I/O in the library that fails open. `doc()`, `document()` and
+`unparsed-text()` all refuse by default, naming the disabled feature rather
+than the path, and `xsl:result-document` writes nothing to disk.
+
+The conformance-safe fix is described in the code's own comment
+(`xpath/fn_misc30.go:39-43`): the spec makes availability
+implementation-dependent, so a withheld variable is indistinguishable from an
+unset one, and returning the empty sequence unless a caller opts in costs
+nothing. **Until then, do not run untrusted stylesheets or queries in a
+process holding secrets in its environment.**
 
 ### INFO — `javascript:` URLs pass through
 

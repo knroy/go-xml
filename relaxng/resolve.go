@@ -46,6 +46,15 @@ type Resolver interface {
 // reaches a host of the schema's choosing, and URI resolution flattens a path
 // only as far as the base allows.
 //
+// An xml:base goes further than either: it replaces the base outright, scheme
+// included. A schema loaded from "file:///srv/schemas/main.rng" that carries
+//
+//	xml:base="http://169.254.169.254/latest/"   href="meta.rng"
+//	  ->  http://169.254.169.254/latest/meta.rng
+//
+// hands the resolver an http URL, so a resolver that decides by prefix-testing
+// the string for "file://" is testing something the schema controls.
+//
 // That is deliberate: this package cannot know whether a caller's schemas live
 // in one directory, several, or behind an HTTP endpoint where ".." is
 // meaningless. What it can do is say plainly that the check belongs to the

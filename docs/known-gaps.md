@@ -432,6 +432,32 @@ someone will propose, on purpose — and each carries the spec clause it rests o
 and the **measured** cost of changing it. The number is the point of the entry:
 without it, the trade gets re-attempted.
 
+### A duplicate attribute is accepted, as `encoding/xml` accepts it
+
+XML 1.0 §3.1 makes `<r b="safe" b="evil"/>` fatally malformed, and Namespaces
+in XML §6.3 says the same of two prefixes bound to one namespace producing the
+same expanded name. This parser accepts both. Each attribute survives in
+`el.Attrs`; `Attr()` returns the first, and `xsl:copy-of` re-serialises both.
+
+The divergence is inherited rather than chosen: Go's `encoding/xml` accepts the
+same document — `xml.Token()` returns no error, verified — and this package
+reads tokens from it. The check **was** implemented and reverted: it rejected
+this library's own serialiser output for an element that undeclares the default
+namespace, which is a worse failure than the one it prevented
+(`xdm/parse.go:286-293`).
+
+Two things bound the consequence. XSD validation checks *both* attributes, so
+nothing passes the schema path silently — `<r b="1" b="notanint"/>` fails
+`cvc-attribute.3`. And nothing here smuggles markup: both values are parsed
+attribute values, not text.
+
+What remains is a parser differential, and it is recorded here because
+`SECURITY.md` tells a reader that "a document accepted that the schema forbids"
+is in scope. A pipeline that authorises on `Attr()` while something downstream
+reads `Attrs[1]`, or re-parses the round-tripped output with a stricter parser,
+will not agree with itself about what the document said. If that shape is in
+your design, reject duplicates before this parser sees them.
+
 ### DOCTYPE is refused by default
 
 A DOCTYPE is the entry point for XXE and entity-expansion attacks. Refusing it
