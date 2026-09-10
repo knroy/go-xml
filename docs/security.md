@@ -471,8 +471,8 @@ The answer is that there is no new gate. `xdm` has no filesystem and no
 network; `ProcessXInclude` reads only what an `xdm.IncludeResolver` hands it,
 and `xslt.FileResolver` implements that interface by calling the very same
 `resolvePath` that already gates every other read: a non-`file` scheme is
-rejected before the filesystem is touched, symlinks are resolved before the
-containment check, and a path outside every root is refused. An inclusion
+rejected before the filesystem is touched, confinement is enforced at the
+open by `os.Root`, and a path outside every root is refused. An inclusion
 therefore reaches nothing `fn:doc` could not already reach — it is the same
 files, from the same roots, with the same refusals.
 

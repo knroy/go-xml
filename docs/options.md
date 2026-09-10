@@ -383,7 +383,7 @@ sty, err := xslt.Compile(sheet.Root, xslt.CompileOptions{
 | Field | Type | Zero value | What it does |
 |---|---|---|---|
 | `BaseURI` | `string` | none | What relative `xsl:include` and `xsl:import` resolve against. |
-| `Resolver` | `ModuleResolver` | disabled | Loads included and imported modules. **Nil means a stylesheet cannot pull in another file** — the safe default. `xslt.NewFileResolver(roots...)` confines it to directories you name, each covering its subdirectories to any depth; a symlink out of a root is resolved before the containment check, so it does not escape. |
+| `Resolver` | `ModuleResolver` | disabled | Loads included and imported modules. **Nil means a stylesheet cannot pull in another file** — the safe default. `xslt.NewFileResolver(roots...)` confines it to directories you name, each covering its subdirectories to any depth; a symlink out of a root is refused at the open by `os.Root`, so it does not escape. |
 | `StaticParams` | `map[string]xdm.Sequence` | none | Values for `xsl:param static="yes"`, keyed by the parameter's `{uri}local` name. A static parameter is bound before static analysis begins, so its value must come from the caller rather than from `Transform`'s runtime `Params`. |
 | `SchemaResolver` | `xsd.Resolver` | disabled | Loads schemas for `xsl:import-schema`. |
 | `XPathVersion` | `*xpath.Version` | derive | Pins the XPath version for every expression in the stylesheet, overriding what the stylesheet declares. Nil derives it from the `version` attribute. See [Choosing a language version](#choosing-a-language-version). |
@@ -669,7 +669,7 @@ only the roots.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `Roots` | `[]string` | the constructor's arguments | The directories a path may resolve inside. A path escaping all of them is refused, and a symlink is resolved before the check. |
+| `Roots` | `[]string` | the constructor's arguments | The directories a path may resolve inside. A path escaping all of them is refused, and confinement is enforced at the open by `os.Root`. |
 | `AllowDOCTYPE` | `bool` | refuse | Permits a `DOCTYPE` in the documents this resolver parses. |
 | `ExternalEntities` | `bool` | refuse | Permits those documents to read external entities, through this same resolver. Separate from `AllowDOCTYPE`. |
 | `UnparsedText` | `bool` | refuse | Permits `fn:unparsed-text` to read through this resolver. |
@@ -717,8 +717,8 @@ so node identities must not be held across the call.
 no network; it can read only what a resolver hands it. `xslt.FileResolver`
 implements `xdm.IncludeResolver` through the same `resolvePath` that gates
 `fn:doc`, `xsl:include` and external entities — a non-file scheme is rejected
-before the filesystem is touched, symlinks are resolved before the containment
-check, and a path outside the roots is refused. An inclusion therefore reaches
+before the filesystem is touched, confinement is enforced at the open by
+`os.Root`, and a path outside the roots is refused. An inclusion therefore reaches
 nothing `fn:doc` could not already reach. A **nil** resolver refuses every
 inclusion, which is not the same as doing nothing: the include still fails, so
 it still uses its `xi:fallback` or is a fatal error.

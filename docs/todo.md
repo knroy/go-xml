@@ -730,22 +730,32 @@ recursions that killed the process, and a third of exactly that class
 (`fn:transform`, §2.1) was found on 2026-09-10 by reading rather than fuzzing.
 A target exercising nested `fn:transform` would likely have reached it first.
 
-### 3.1a `SameKey` corpus — two types with no key coverage at all
+### 3.1a `SameKey` corpus — the two types with no coverage had a live bug
 
-The differential corpus (`xdm/samekey_oracle_test.go:143`) is generated, not
-hand-written: 112 values over 12,544 ordered pairs, all eight Gregorian types,
-five timezone forms. Six families are still missing, and one of them could be
-hiding a live bug: **`hexBinary` and `base64Binary` have zero key-test
-coverage**, and both key through the untested `typeFamilyOf + String()` tail.
-Per XSD Part 2, `0F` and `0f` are the same value and must share a key; nothing
-today would notice if they did not. Also absent: large exact integers (so the
-`Rat()`-nil branch at `maparray.go:116` is never exercised where exactness
-matters), negative zero, float boundary values, timezone boundary crossings,
-and negative `dayTimeDuration`.
+**Largely done**, `10486a6`. The differential corpus
+(`xdm/samekey_oracle_test.go`) is generated rather than hand-written, and it
+now carries 178 values over 31,684 ordered pairs — all eight Gregorian types,
+five timezone forms, and the six families that were missing.
 
-Note the limit of the method: the oracle calls the same `typeFamilyOf` as
-production, so it cannot detect a wrong *family* grouping no matter how wide the
-corpus gets. `docs/audits/2026-09-10-fix-plan.md` §7.
+The entry that said one of those families "could be hiding a live bug" was
+right. `hexBinary` and `base64Binary` had no key coverage at all and keyed
+through the `typeFamilyOf + String()` tail, so `0F` and `0f` — one value under
+XSD Part 2 §3.2.15 — took different keys, as did base64 values differing only
+by the whitespace §3.2.16 permits between characters. A value built from
+element text could compare equal to a map entry under `eq` and still fail to
+find it. `MapKeyOf` now keys on the decoded octets. The lesson is worth more
+than the fix: the gap was known, written down as a coverage note, and the bug
+sat inside it — a family with no cases cannot report that it is wrong.
+
+Still absent, and none known to fail: large exact integers past the
+`Rat()`-nil branch at `maparray.go:116` are seeded now but the branch itself
+wants a case that reaches it deliberately; and the corpus grows quadratically
+in pairs and cubically in triples, so further families cost more than they did.
+
+Note the limit of the method, which widening cannot fix: the oracle calls the
+same `typeFamilyOf` as production, so it cannot detect a wrong *family*
+grouping however many values are added. Only an independently written family
+predicate could, and none exists.
 
 ### 3.2 Deep-nesting and pathological schemas
 
