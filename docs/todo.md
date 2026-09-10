@@ -12,7 +12,7 @@ Current position:
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
 | XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
 | XPath 3.1 | 100.00% — 21,898 of 21,898 in scope (0 failing) |
-| XQuery 3.1 | 99.99% — 30,343 of 30,346 in scope (3 failing) |
+| XQuery 3.1 | 99.99% — 30,344 of 30,346 in scope (2 failing) |
 | XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
 | XSLT 3.0 | 99.68% — 11,481 of 11,518 in scope (37 failing); 15 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |

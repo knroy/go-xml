@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 )
 
 // MapItem is the fourth kind of XDM item, added in XPath 3.1.
@@ -20,27 +21,35 @@ import (
 // comparable to both a string and a number would make lookup depend on which
 // happened to be asked for.
 type MapItem struct {
-	// entries preserves insertion order so that serialising a map twice gives
-	// the same text. The specification fixes no order for map:keys, and an
-	// unstable one would make a test comparing two calls flap.
-	entries []mapEntry
-	// index finds an entry by its key's canonical form. Built lazily, since
-	// most maps are small and built once.
-	index map[string]int
+	// root is a hash array mapped trie over the canonical key (hamt.go); nil
+	// for the empty map. Lookup, put and remove each touch one path of the
+	// trie and share the rest with the map they were derived from.
+	root *hamtNode
+	// n is the number of entries, kept so that map:size stays O(1).
+	n int
+	// nextSeq is the sequence number the next new key receives. Iteration
+	// sorts entries by seq, which is what preserves insertion order so that
+	// serialising a map twice gives the same text: the specification fixes no
+	// order for map:keys, and an unstable one would make a test comparing
+	// two calls flap. A replaced key keeps its number, so map:put over an
+	// existing key leaves it where it was.
+	nextSeq uint64
 }
 
 type mapEntry struct {
 	key   *Atomic
 	value Sequence
-	// ckey is the canonical form of key, the same string index is keyed by.
+	// ckey is the canonical form of key, the string the trie is keyed by.
 	//
 	// It is stored rather than recomputed because MapKeyOf is not cheap for a
 	// numeric key -- it goes through big.Rat.RatString and string
-	// concatenation -- and every whole-map rebuild used to call it once per
-	// entry. RemoveAll over a map of n entries therefore cost n canonical-key
-	// constructions on top of the copy, which op:same-key-024 pays 11,250
-	// times over.
+	// concatenation -- and op:same-key-024 removes keys 11,250 times over.
 	ckey string
+	// hash is hamtHash(ckey), stored so that a removal or a rebuild never
+	// rehashes.
+	hash uint64
+	// seq is the entry's place in insertion order.
+	seq uint64
 }
 
 func (m *MapItem) isItem() {}
@@ -49,7 +58,7 @@ func (m *MapItem) isItem() {}
 func (m *MapItem) TypeName() string { return "map(*)" }
 
 // NewMap returns an empty map.
-func NewMap() *MapItem { return &MapItem{index: map[string]int{}} }
+func NewMap() *MapItem { return &MapItem{} }
 
 // MapKeyOf returns the canonical form under which a key is compared.
 //
@@ -169,53 +178,46 @@ func typeFamilyOf(a *Atomic) string {
 // untouched.
 //
 // Maps are immutable in the data model: map:put returns a map rather than
-// changing one, and a caller holding the original must still see it.
+// changing one, and a caller holding the original must still see it. The
+// trie shares every node but the ones on the changed path, so this is
+// O(log n) rather than the whole-map copy it used to be -- which, at the
+// 421,875 entries of op:same-key-023, was 3.66ms per call and hours per case.
 func (m *MapItem) Put(key *Atomic, value Sequence) (*MapItem, error) {
 	k, err := MapKeyOf(key)
 	if err != nil {
 		return nil, err
 	}
-	if i, ok := m.index[k]; ok {
-		// Replacing the value under an existing key leaves the index exactly
-		// as it was: the same canonical keys at the same positions. So the
-		// index map is shared with the receiver rather than rehashed, and
-		// only the entries slice is copied.
-		//
-		// That is safe because the index is never written through after a
-		// map is handed out -- the only writers are this function's append
-		// path below, RemoveAll and clone, each of which builds a fresh map,
-		// and MapBuilder, which owns its map until Build. Sharing it here
-		// removed the whole-map rehash that was 93% of the cost of map:put,
-		// which op:same-key-023 and -024 call once per key.
-		entries := make([]mapEntry, len(m.entries))
-		copy(entries, m.entries)
-		entries[i] = mapEntry{key: key, value: value, ckey: k}
-		return &MapItem{entries: entries, index: m.index}, nil
+	e := &mapEntry{key: key, value: value, ckey: k, hash: hamtHash(k), seq: m.nextSeq}
+	root, added := m.root.put(e, 0, nil)
+	out := &MapItem{root: root, n: m.n, nextSeq: m.nextSeq}
+	if added {
+		out.n++
+		out.nextSeq++
 	}
-	out := m.clone()
-	out.index[k] = len(out.entries)
-	out.entries = append(out.entries, mapEntry{key: key, value: value, ckey: k})
 	return out, nil
 }
 
 // MapBuilder accumulates entries into a map in one pass.
 //
-// Put clones the whole map, which is right for the immutable data model but
-// quadratic when a map is assembled entry by entry. map:merge is handed half a
-// million singleton maps by the suite (map-keys-014), and building the result
-// with Put took time proportional to the square of that. The builder owns its
-// map until Build hands it over, so it can mutate in place; nothing else has a
-// reference to observe the intermediate states.
+// map:merge is handed half a million singleton maps by the suite
+// (map-keys-014), and building the result with Put would allocate a trie
+// path per entry. The builder owns the nodes it creates until Build hands the
+// map over, so it writes through them in place; nothing else has a reference
+// to observe the intermediate states, and a node that belonged to an earlier
+// map is copied before it is written.
 type MapBuilder struct {
-	m *MapItem
+	m    *MapItem
+	edit *hamtEdit
 }
 
 // NewMapBuilder returns a builder over an empty map.
-func NewMapBuilder() *MapBuilder { return &MapBuilder{m: NewMap()} }
+func NewMapBuilder() *MapBuilder { return &MapBuilder{m: NewMap(), edit: &hamtEdit{}} }
 
-// NewMapBuilderFrom returns a builder seeded with a copy of m's entries, for
-// the operations that start from an existing map.
-func NewMapBuilderFrom(m *MapItem) *MapBuilder { return &MapBuilder{m: m.clone()} }
+// NewMapBuilderFrom returns a builder seeded with m's entries, for the
+// operations that start from an existing map. m itself is never written.
+func NewMapBuilderFrom(m *MapItem) *MapBuilder {
+	return &MapBuilder{m: &MapItem{root: m.root, n: m.n, nextSeq: m.nextSeq}, edit: &hamtEdit{}}
+}
 
 // Set adds or replaces an entry.
 func (b *MapBuilder) Set(key *Atomic, value Sequence) error {
@@ -223,12 +225,13 @@ func (b *MapBuilder) Set(key *Atomic, value Sequence) error {
 	if err != nil {
 		return err
 	}
-	if i, ok := b.m.index[k]; ok {
-		b.m.entries[i] = mapEntry{key: key, value: value, ckey: k}
-		return nil
+	e := &mapEntry{key: key, value: value, ckey: k, hash: hamtHash(k), seq: b.m.nextSeq}
+	root, added := b.m.root.put(e, 0, b.edit)
+	b.m.root = root
+	if added {
+		b.m.n++
+		b.m.nextSeq++
 	}
-	b.m.index[k] = len(b.m.entries)
-	b.m.entries = append(b.m.entries, mapEntry{key: key, value: value, ckey: k})
 	return nil
 }
 
@@ -239,64 +242,52 @@ func (b *MapBuilder) Lookup(key *Atomic) (Sequence, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	i, ok := b.m.index[k]
-	if !ok {
+	e := b.m.root.get(hamtHash(k), 0, k)
+	if e == nil {
 		return nil, false, nil
 	}
-	return b.m.entries[i].value, true, nil
+	return e.value, true, nil
 }
 
 // Build returns the finished map. The builder must not be used afterwards, so
-// that the map it hands out really is immutable.
+// that the map it hands out really is immutable: the edit token its nodes
+// carry is dropped here, and no later builder will match it.
 func (b *MapBuilder) Build() *MapItem {
 	m := b.m
 	b.m = nil
+	b.edit = nil
 	return m
 }
 
 // RemoveAll returns a map without any of the given keys.
 //
-// map:remove takes a *sequence* of keys, and removing them one at a time would
-// rebuild the map once per key. Absent keys are ignored rather than being an
-// error, which is what makes map:remove($m, ("a", "nosuch")) legal.
+// map:remove takes a *sequence* of keys, and each is removed along its own
+// trie path. Absent keys are ignored rather than being an error, which is
+// what makes map:remove($m, ("a", "nosuch")) legal, and a call that removes
+// nothing is answered with the receiver itself: a map is immutable, so
+// sharing it is safe.
 func (m *MapItem) RemoveAll(keys []*Atomic) (*MapItem, error) {
-	drop := make(map[string]bool, len(keys))
+	root := m.root
+	n := m.n
 	for _, key := range keys {
 		k, err := MapKeyOf(key)
 		if err != nil {
 			return nil, err
 		}
-		drop[k] = true
-	}
-	// Nothing to do is answered with the receiver itself: a map is immutable,
-	// so sharing it is safe and saves copying half a million entries for the
-	// common map:remove($m, ()) .
-	any := false
-	for k := range drop {
-		if _, ok := m.index[k]; ok {
-			any = true
-			break
-		}
-	}
-	if !any {
-		return m, nil
-	}
-	out := &MapItem{
-		entries: make([]mapEntry, 0, len(m.entries)),
-		index:   make(map[string]int, len(m.index)),
-	}
-	for _, e := range m.entries {
-		// e.ckey was computed when the entry went in. Recomputing it here
-		// cost a MapKeyOf per entry per removal, which was the single
-		// largest cost in op:same-key-024 -- and MapKeyOf for a numeric key
-		// builds a big.Rat and concatenates strings, so it is far from free.
-		if drop[e.ckey] {
+		if root == nil {
 			continue
 		}
-		out.index[e.ckey] = len(out.entries)
-		out.entries = append(out.entries, e)
+		next, removed := root.remove(hamtHash(k), 0, k)
+		if !removed {
+			continue
+		}
+		root, _ = next.(*hamtNode)
+		n--
 	}
-	return out, nil
+	if n == m.n {
+		return m, nil
+	}
+	return &MapItem{root: root, n: n, nextSeq: m.nextSeq}, nil
 }
 
 // Remove returns a map without the given key.
@@ -313,20 +304,37 @@ func (m *MapItem) Get(key *Atomic) (Sequence, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	i, ok := m.index[k]
-	if !ok {
+	e := m.root.get(hamtHash(k), 0, k)
+	if e == nil {
 		return Empty(), false, nil
 	}
-	return m.entries[i].value, true, nil
+	return e.value, true, nil
 }
 
 // Len is the number of entries.
-func (m *MapItem) Len() int { return len(m.entries) }
+func (m *MapItem) Len() int { return m.n }
+
+// ordered returns the entries in insertion order.
+//
+// The trie stores them in hash order, so they are collected and sorted by
+// sequence number. That makes iteration O(n log n) where a slice was O(n);
+// it is the price of a put that no longer copies the slice, and iteration
+// over a large map is rare where put and remove over one are the whole of
+// same-key-023.
+func (m *MapItem) ordered() []*mapEntry {
+	out := make([]*mapEntry, 0, m.n)
+	if m.root != nil {
+		m.root.walk(func(e *mapEntry) { out = append(out, e) })
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].seq < out[j].seq })
+	return out
+}
 
 // Keys returns the keys in insertion order.
 func (m *MapItem) Keys() []*Atomic {
-	out := make([]*Atomic, 0, len(m.entries))
-	for _, e := range m.entries {
+	entries := m.ordered()
+	out := make([]*Atomic, 0, len(entries))
+	for _, e := range entries {
 		out = append(out, e.key)
 	}
 	return out
@@ -335,24 +343,12 @@ func (m *MapItem) Keys() []*Atomic {
 // Entries calls f for each entry in insertion order, stopping on the first
 // error.
 func (m *MapItem) Entries(f func(key *Atomic, value Sequence) error) error {
-	for _, e := range m.entries {
+	for _, e := range m.ordered() {
 		if err := f(e.key, e.value); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (m *MapItem) clone() *MapItem {
-	out := &MapItem{
-		entries: make([]mapEntry, len(m.entries)),
-		index:   make(map[string]int, len(m.index)),
-	}
-	copy(out.entries, m.entries)
-	for k, v := range m.index {
-		out.index[k] = v
-	}
-	return out
 }
 
 // ArrayItem is the fifth kind of XDM item, added in XPath 3.1.

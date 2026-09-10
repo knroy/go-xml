@@ -1,6 +1,6 @@
 # XQuery
 
-XQuery 3.1, measured at **99.99%** of the W3C QT3 suite (30,343 of 30,346 in
+XQuery 3.1, measured at **99.99%** of the W3C QT3 suite (30,344 of 30,346 in
 scope). That percentage fell from 99.96% when `import schema` was implemented:
 416 previously-skipped cases entered the denominator and 315 of them pass, so
 the passing count rose by 315 while the rate fell. No case that passed before
@@ -351,14 +351,8 @@ window clauses; direct and computed
 constructors; `try`/`catch`; `switch`; `typeswitch`; quantified expressions;
 `ordered`/`unordered`; the extension expression; and the string constructor.
 
-The remaining 3 failures are a long tail rather than a missing feature, and
+The remaining 2 failures are a long tail rather than a missing feature, and
 each is understood:
-
-* **Pathological map cost.** `same-key-023` builds 421,875 keys and performs an
-  O(n) `map:put` and `map:remove` per key. `MapItem` is an entries slice plus a
-  rebuilt index, so both are linear in the map's size no matter how small the
-  constant factor is made; terminating needs a persistent map — a HAMT, or a
-  copy-on-write overlay. Its sibling `same-key-024`, at 11,250 keys, passes.
 
 * **`K2-sequenceExprTypeswitch-5`** wants a static `XPST0008` for a variable
   named in an unreached `typeswitch` branch. A check restricted to

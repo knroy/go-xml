@@ -25,7 +25,7 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
-| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,343 | 99.99% | **3** |
+| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,344 | 99.99% | **2** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
 | **xslt** | W3C XSLT 3.0 | 11,518 | 11,481 | 99.68% | **37** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
@@ -108,12 +108,15 @@ All three XPath versions agree with the suite on every case in scope.
 
 965 of 965 assertions in James Clark's spectest. **No known gaps.**
 
-## xquery — 3 failures
+## xquery — 2 failures
 
-**XQuery 3.1: 30,343 / 30,346 = 99.99%.**
+**XQuery 3.1: 30,344 / 30,346 = 99.99%.**
 
-What remains is three singletons: `prod-ContextItemDecl`, `op-same-key` and
-`app-Demos`, one case each.
+What remains is two singletons: `prod-ContextItemDecl` and `app-Demos`, one
+case each. `op-same-key/same-key-023` is closed: `map:put` and `map:remove`
+copied the whole entry slice, so 421,875 keys cost hours; the map is now a
+persistent hash array mapped trie that shares structure and keeps insertion
+order by sequence number.
 
 `prod-CastExpr.schema` is closed. Its last three cases — `CastAs-UnionType-27`
 and `-28`, `CastAs-ListType-21` — were one shape: a cast to a list type built
@@ -133,12 +136,11 @@ unreached `typeswitch` branch, judged against the live scope), `FunctionCall-051
 (an element validated against a complex type with element-only content has no
 typed value).
 
-The three singletons are read here.
+The two singletons are read here.
 
 | Case | Verdict | Why |
 |---|---|---|
 | `app-Demos/RexParser` | **Not implementable here** | A large real-world query rather than a targeted case. The sibling `sudoku` was fixed by making a FLWOR in a conditional branch belong to that branch; this one still fails in the same family. Its symptom has been misread before: see *Corrections*, `RexParser`'s offset. |
-| `op-same-key/same-key-023` | **Not implementable here** | 421,875 keys through O(n) `map:put` and `map:remove`. Measured rather than estimated: per-key cost scales linearly with map size (`put` 14.9µs / `remove` 46.4µs at n=1,000, to `put` 3.66ms / `remove` 19.2ms at n=421,875; lookup stays O(1) at ~380ns), so the whole case extrapolates to ~2h40m plus roughly 10TB of allocation — four to five orders of magnitude from the deadline, which no constant-factor work reaches. A persistent map would fix it, but `MapItem` has 58 references across 15 files and its entry order is load-bearing for serialization stability, which a HAMT does not preserve. `same-key-024` covers the same semantics at 11,250 keys and passes. |
 | `prod-ContextItemDecl/contextDecl-052` | **A W3C fixture defect** | The case registers `ContextItemDecl/libmodule-3.xq` under the namespace `…/libmodule3`, and the file declares `…/libmodule1`. §4.12 makes a module that declares another target namespace a module that was not found, so `XQST0059` is correct and precedes the wanted `XQST0113` — which we do implement, and which `TestContextItemDeclInLibraryModuleRejectsValue` pins. Reordering the two would mean fully compiling a module already known to be the wrong one, and would cost `modules-bad-ns`. |
 
 ## xslt 2.0 — 8 failures

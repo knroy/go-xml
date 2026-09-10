@@ -382,7 +382,7 @@ seen. `check.sh` fails when a count goes **down**.
 DocBook 577
 RelaxNGSpectest 965
 TestQT3 30233
-TestQT3XQuery 30343
+TestQT3XQuery 30344
 TestXSLT30Suite 11481
 TestXSLTSuite 6193
 VendoredSchemas 185
@@ -568,11 +568,12 @@ The rule this leaves: a test in a `go test ./...` package is a unit test, and a
 unit test that costs minutes is a bug in the test. Drive a budget's edges at a
 forced budget and assert the production value separately.
 
-One case does not pass at any deadline. `op:same-key-023` builds 75³ = 421,875
-keys and calls `map:put` and `map:remove` once for each; both are O(n) in this
-representation, so the case is quadratic and does not finish in ten minutes. It
-is a real performance defect and is recorded as one in
-[conformance-gaps.md](conformance-gaps.md) — not a timeout to be raised past.
+`op:same-key-023` was the case that proved the rule from the other side: it
+builds 75³ = 421,875 keys and calls `map:put` and `map:remove` once for each,
+and while `MapItem` was an entries slice plus a rebuilt index both were O(n),
+so the case was quadratic and finished in no deadline at all. It was recorded
+as a performance defect rather than raised past, and fixing the defect — a
+persistent hash array mapped trie — is what made it pass.
 
 ---
 
