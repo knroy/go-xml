@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -243,7 +244,7 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 	value := v.assertionValue(el, t)
 
 	for _, a := range t.Assertions {
-		ctx := newAssertContext(scoped)
+		ctx := v.assertContext(scoped)
 		ctx.Vars = map[string]xdm.Sequence{"value": value}
 		// An error during evaluation is a false result, not a separate
 		// kind of outcome: XSD 1.1 says so, and the suite makes a
@@ -258,6 +259,21 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 		// error rather than a value that failed the test.
 		ok, err := a.Test.EvalBool(ctx)
 		if err != nil {
+			// A resource refusal is the one evaluation error that is
+			// not a false result. The rule above is about the
+			// expression being wrong for the value; XPDY0130 says the
+			// processor declined to allocate, and reporting that as
+			// "not satisfied" would call the document invalid on a
+			// ground the schema never stated — and, worse, let the
+			// walk carry on spending against a budget already gone.
+			// Stopping matches what the depth and error limits do.
+			if errors.Is(err, xdm.ErrResourceLimit) {
+				v.failLimit(el, "cvc-assertion.3",
+					"assertion %q could not be evaluated: %v",
+					a.Source, err)
+				v.stopped = true
+				return
+			}
 			v.fail(el, "cvc-assertion.3",
 				"assertion %q is not satisfied: %v", a.Source, err)
 			continue
@@ -466,7 +482,7 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 			}
 			continue
 		}
-		ctx := newAssertContext(scoped)
+		ctx := v.assertContext(scoped)
 		ctx.StaticBaseURI = alt.staticBaseURI
 		ok, err := alt.Test.EvalBool(ctx)
 		if err != nil || !ok {
@@ -606,6 +622,47 @@ func collectElementDecls(p *Particle, out map[xdm.QName]*ElementDecl, seen map[*
 	}
 }
 
+// assertEpisode returns the context every assertion and type alternative in
+// this validation run is evaluated against, arming it on first use.
+//
+// One validation is the episode, in the sense xslt/runtime.go gives "one
+// transform" and xquery/xquery.go "one query": xpath.NewContext mints a fresh
+// 5,000,000-item and 1 GiB allowance, so a context per assertion gave a schema
+// with many assertions over a large document no aggregate bound at all — each
+// one individually under the limit, the run as a whole unbounded. Unlike those
+// two hosts there is no caller budget to inherit: nothing carries an
+// *xpath.Context across this package's boundary — ValidateOptions has no such
+// field, and xslt/validate.go and xquery/misc_expr.go both enter through
+// Schema.Validate with a freshly built options value — so the episode has to
+// own the budget rather than borrow one.
+//
+// Both budgets are held, because both are per-assertion here for the same
+// reason: Compiled.Eval resets each one per expression, and an assertion is
+// exactly one expression, so without the hold the reset would clear the run's
+// charges once per assertion and put the counter back where it started.
+func (v *validator) assertEpisode() *xpath.Context {
+	if v.assertCtx == nil {
+		v.assertCtx = newAssertContext(nil).
+			HoldItemBudget().HoldByteBudget()
+	}
+	return v.assertCtx
+}
+
+// assertContext returns the episode context focused on item, for one assertion.
+//
+// WithFocus copies the struct and shares the budget pointers and the held
+// flags, so every assertion in the run is charged against the one allowance
+// assertEpisode armed. Position and size are set explicitly rather than left
+// to WithFocus because an assertion on a simple type has no context item, and
+// the focus is then absent rather than a singleton.
+func (v *validator) assertContext(item xdm.Item) *xpath.Context {
+	ctx := v.assertEpisode().WithFocus(item, 1, 1)
+	if item == nil {
+		ctx.Position, ctx.Size = 0, 0
+	}
+	return ctx
+}
+
 // newAssertContext builds the evaluation context for an assertion.
 //
 // The clock is set because XSD 1.1 permits fn:current-date and its siblings in
@@ -645,6 +702,10 @@ func (emptyCollections) ResolveCollection(uri, base string) (xdm.Sequence, error
 // On a simple type an assertion is a facet rather than a component, and the
 // value under test is bound to $value — there is no element to be the context
 // item, so an expression has nothing else to refer to.
+// Unlike the element assertions above, these still take a context apiece: the
+// call chain that reaches here is free functions with no validator to hang an
+// episode budget on, and some of it runs at schema-load time where there is no
+// validation run to be the episode. See docs/todo.md 2.3.
 func checkSimpleAssertions(steps []facetStep, normalized string, t *SimpleType) error {
 	for _, st := range steps {
 		for _, a := range st.facets.Assertions {

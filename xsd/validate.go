@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // ValidationError reports one reason a document is not valid.
@@ -255,6 +256,12 @@ type validator struct {
 	schema *Schema
 	opts   ValidateOptions
 	errs   []*ValidationError
+
+	// assertCtx is the one XPath context every assertion and type
+	// alternative in this run shares, so that the item and byte budgets
+	// bound the whole validation rather than each assertion separately.
+	// Built on first use by assertEpisode; nil for a schema with none.
+	assertCtx *xpath.Context
 
 	// path is the element path to the node being validated, for messages.
 	path []string
