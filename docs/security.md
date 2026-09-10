@@ -1048,32 +1048,49 @@ both cases, because §5.3 *Missing Sub-components* gives an unfetched namespace
 a defined outcome — the references into it are ·absent· and the consequence
 falls at validation — and every conforming processor loads such a schema.
 
-The two rooted resolvers enforce their roots by different **mechanisms**, and
-the difference is deliberate rather than an oversight. `xslt.FileResolver`
-opens through `os.OpenRoot`, which resolves each path component against the
-root at open time; `xsd.FileResolver` resolves symlinks with
-`filepath.EvalSymlinks`, compares the result against the root, and then opens.
-The second is the check-then-use shape that a time-of-check/time-of-use race
-attacks in general — but not in this one, because the path that is opened is
-the *resolved* one. `EvalSymlinks` returns a path with every link already
-followed and the code opens that, so a link that passed the check is never
-traversed a second time and cannot be swung between the two steps. A racer
-that swaps a symlink inside the root as fast as the filesystem allows, against
-a resolver reading in a tight loop, produced over a hundred thousand
-successful reads and **zero** that escaped.
+Every rooted resolver enforces its root by the same **mechanism**: opening
+through `os.OpenRoot`. `xslt.FileResolver`, `xsd.FileResolver`,
+`dtd.FileResolver` and the `relaxng` resolver in `cmd/go-xml` all resolve each
+path component against the root's own descriptor at open time, so containment
+is enforced by the kernel at the moment of the open rather than by a string
+comparison taken beforehand. A symlink swapped in after the check is refused
+rather than followed.
 
-What is left is narrower than the general shape suggests: an attacker who can
-replace a *directory component of the already-resolved path* between the check
-and the open. That requires write access inside the root, and anyone with it
-can put the bytes they want in the file directly — the read is no longer the
-weak link. This is the sense in which the threat model holds: the party this
-document treats as hostile is the *document*, and a document names a location,
-it does not get to move files. `os.OpenRoot` would close even the narrow
-window, and would be the right change if `xsd` were ever hardened against a
-hostile local process sharing the root; it is not adopted today because it
-would buy nothing against the attacker this library actually defends against.
-The asymmetry is recorded here so that it is a known position rather than a
-discrepancy someone rediscovers.
+Each still performs the earlier `EvalSymlinks` and prefix comparison, and that
+is deliberate: it is the **diagnosis**, not the enforcement. It decides which
+root a path belongs to, produces the error that names the permitted
+directories, and — in `xsd` — distinguishes a location the configuration
+refused from one that was simply not there, which §4.2.1 requires, since an
+unresolvable `xs:include` may be dropped but a refused one must surface. The
+final path component is deliberately *not* pre-resolved. Resolving it would
+hand `os.Root` a path with every link already followed, leaving it nothing to
+refuse, and would reinstate the window this shape exists to close.
+
+Until 2026-09-10 `xsd`, `dtd` and the `relaxng` resolver used check-then-open:
+`EvalSymlinks` on both sides, compare, then open the resolved path. That was
+recorded here as an accepted risk, and the reasoning was sound as far as it
+went — because the path opened was the *resolved* one, escaping required
+replacing a directory component between the check and the open, which needs
+write access inside the root, and an attacker holding that can write the file
+directly. It was measured, too: a racer swapping a symlink inside the root
+against a resolver reading in a tight loop produced over a hundred thousand
+successful reads and **zero** escapes.
+
+The position is nonetheless withdrawn. The window was never the argument; the
+cost of maintaining two mechanisms for one property was. Four resolvers
+enforcing the same guarantee four ways is more expensive to keep explaining —
+and to keep re-litigating each time an external report cannot tell a reasoned
+position from an oversight — than it is to unify. The narrowness of the
+residual risk is why this was not urgent, not a reason to leave it open.
+
+One consequence worth stating, because it shapes the tests: both shapes refuse
+every *statically observable* vector identically, since `EvalSymlinks`
+collapses a planted symlink before the prefix check ever reads it. A test that
+plants a link and asserts refusal therefore passes against the unhardened code
+and proves nothing. The confinement tests assert instead that the refusal
+carries `os.Root`'s own "escapes from parent" wording, which is the evidence
+that the *open* refused; that assertion fails the moment the pre-resolution
+returns, which is what makes it worth having.
 
 `AllowHost` resists spoofing: it uses `u.Hostname()`, so userinfo tricks
 (`http://good.example@127.0.0.1/`) and ports do not fool it, and it is

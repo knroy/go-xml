@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,11 +222,20 @@ func (r *rngFileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Symlinks are resolved before the containment check, so a link inside
-	// the root cannot be used to reach outside it.
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = resolved
+	// The final component is deliberately left unresolved when a root is set:
+	// os.Root resolves it at open time, and following the link here first
+	// would leave it nothing to refuse. The parent is resolved so that both
+	// sides of the comparison are spelled alike (/var vs /private/var on
+	// macOS). Unrooted, the whole path is resolved as before — there is no
+	// containment to enforce, and this is the documented command-line case.
+	if r.root == "" {
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = resolved
+		}
+	} else if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+		abs = filepath.Join(dir, filepath.Base(abs))
 	}
+	var data []byte
 	if r.root != "" {
 		rootAbs, err := filepath.Abs(r.root)
 		if err != nil {
@@ -239,9 +249,30 @@ func (r *rngFileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("%q is outside %s", href, rootAbs)
 		}
-	}
-	data, err := os.ReadFile(abs)
-	if err != nil {
+		// Read through os.Root so containment is enforced at open time by the
+		// kernel rather than by the comparison just above, which a symlink
+		// swapped in afterwards would outlive. Same mechanism as
+		// xsd.FileResolver and xslt.FileResolver.
+		rt, err := os.OpenRoot(rootAbs)
+		if err != nil {
+			return nil, err
+		}
+		f, err := rt.Open(filepath.ToSlash(rel))
+		rt.Close()
+		if err != nil {
+			// os.Root's error is wrapped rather than replaced: it is the
+			// evidence that the open enforced containment, and the only
+			// thing a test can distinguish from the string check above,
+			// since both shapes refuse every statically visible vector.
+			return nil, fmt.Errorf("%q is outside %s: %w", href, rootAbs, err)
+		}
+		data, err = io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			return nil, err
+		}
+		abs = filepath.Join(rootAbs, rel)
+	} else if data, err = os.ReadFile(abs); err != nil {
 		return nil, err
 	}
 	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{BaseURI: abs})

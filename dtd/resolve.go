@@ -52,15 +52,28 @@ const DefaultMaxResolverBytes = 4 << 20
 // what a parameter-entity module inside the fetched text resolves against —
 // XML 1.0 §4.4.3.
 func (r *FileResolver) ResolveExternal(systemID, publicID, base string) (io.ReadCloser, string, error) {
-	path, err := r.resolvePath(systemID, base)
+	root, rel, err := r.resolvePath(systemID, base)
 	if err != nil {
 		return nil, "", err
 	}
+	path := filepath.Join(root, rel)
 	max := r.MaxBytes
 	if max == 0 {
 		max = DefaultMaxResolverBytes
 	}
-	f, err := os.Open(path)
+	// Opened through os.Root, so containment is enforced by the kernel at the
+	// moment of the open rather than by the string comparison resolvePath took
+	// beforehand. A symlink swapped in between the two — which resolvePath
+	// cannot see, having already returned — is refused here instead of
+	// followed. resolvePath keeps the earlier check because it decides WHICH
+	// path is being named and produces the error that names Root; this is the
+	// enforcement. Matches xslt/resolver.go readConfined and xsd.FileResolver.
+	rt, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, "", err
+	}
+	f, err := rt.Open(filepath.ToSlash(rel))
+	rt.Close()
 	if err != nil {
 		return nil, "", err
 	}
@@ -88,22 +101,23 @@ func (r *FileResolver) ResolveExternal(systemID, publicID, base string) (io.Read
 	return io.NopCloser(bytes.NewReader(data)), fileURIOf(path), nil
 }
 
-// resolvePath turns a system identifier into a path inside Root.
+// resolvePath turns a system identifier into a root and a path relative to it,
+// which the caller opens through os.Root rather than by name.
 //
 // A system identifier is a URI, not a path — XML 1.0 §4.2.2 — so it is parsed
 // as one before the filesystem sees it. That is what makes "sub/mod.ent" work
 // the same on Windows as on Unix, and what makes "file:///C:/dtd/r.dtd" name
 // drive C rather than a host called "C:".
-func (r *FileResolver) resolvePath(systemID, base string) (string, error) {
+func (r *FileResolver) resolvePath(systemID, base string) (root, rel string, err error) {
 	if systemID == "" {
-		return "", fmt.Errorf("empty system identifier")
+		return "", "", fmt.Errorf("empty system identifier")
 	}
 	// Refuse a non-file scheme before touching the filesystem, so http://
 	// produces a clear refusal rather than a confusing "no such file". This
 	// is the SSRF gate: this type has no network and must never look as
 	// though it might.
 	if u, err := url.Parse(systemID); err == nil && u.Scheme != "" && u.Scheme != "file" {
-		return "", fmt.Errorf(
+		return "", "", fmt.Errorf(
 			"scheme %q is not permitted (this resolver reads local files only)",
 			u.Scheme)
 	}
@@ -118,26 +132,31 @@ func (r *FileResolver) resolvePath(systemID, base string) (string, error) {
 	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	// Symlinks are resolved before the containment check, or a link inside
-	// Root pointing at /etc/passwd would pass it.
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = resolved
+	// The parent is resolved, the final component deliberately is not: the
+	// caller opens through os.Root, which resolves that component against the
+	// root's descriptor at open time. Resolving it here would follow the link
+	// first and hand os.Root a path with nothing left to refuse — the check
+	// would pass and the escape would already have happened. The parent is
+	// resolved only so both sides compare alike, since on macOS /var is itself
+	// a link to /private/var.
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+		abs = filepath.Join(dir, filepath.Base(abs))
 	}
-	root, err := filepath.Abs(r.Root)
+	root, err = filepath.Abs(r.Root)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
-	rel, err := filepath.Rel(root, abs)
+	rel, err = filepath.Rel(root, abs)
 	if err != nil || rel == ".." ||
 		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("%q is outside the permitted directory %q", abs, root)
+		return "", "", fmt.Errorf("%q is outside the permitted directory %q", abs, root)
 	}
-	return abs, nil
+	return root, rel, nil
 }
 
 // fileURIToPath turns a file: URI into a filesystem path, leaving anything

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"net/http"
 	"net/url"
@@ -166,44 +167,68 @@ func (r *FileResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 		if err != nil {
 			return nil, "", err
 		}
-		// Symlinks are resolved on both sides before the comparison, or a
-		// link planted inside the root reads whatever it points at: the
-		// path passes the containment check and os.Open then follows the
-		// link out. xslt's FileResolver has always done this; this one
-		// documented it and did not.
+		// The root is resolved; the final component of the path deliberately is
+		// NOT. os.Root below resolves every component against the root's own
+		// descriptor at open time, and that is what makes containment hold
+		// against a link swapped in after this check. Pre-resolving the leaf
+		// here would hand os.Root a path with the link already followed, which
+		// reintroduces exactly the window this shape exists to close. This now
+		// matches xslt/resolver.go readConfined; see the note there.
 		//
-		// A path that does not exist keeps its unresolved form so that the
-		// failure is a clean "no such file" from os.Open rather than an
-		// error from EvalSymlinks. The root is resolved the same way, since
-		// a root reached through a symlink would otherwise never match the
-		// resolved target.
+		// The parent directory IS resolved, and only so that like is compared
+		// with like: on macOS /var is itself a link to /private/var, so a root
+		// that resolved and a path that did not would never share a prefix.
 		//
-		// This resolves and then opens, which is the shape a TOCTOU race
-		// attacks — xslt's resolver uses os.OpenRoot instead and enforces at
-		// open time. The window does not close here because what gets opened
-		// is the RESOLVED path (p = abs below): every link has already been
-		// followed, so a link that passed the check is not traversed again
-		// and cannot be swung underneath. Exploiting what remains means
-		// replacing a directory component of the resolved path between the
-		// two steps, which needs write access inside the root — and an
-		// attacker holding that can just write the file. The hostile party
-		// here is a *document*, which names a location and cannot touch the
-		// filesystem at all. See docs/security.md, "All resolution defaults
-		// are closed".
+		// Until 2026-09-10 this resolved both sides and opened the resolved
+		// path, recorded in docs/security.md as an accepted risk on the grounds
+		// that exploiting the remainder needs write access inside the root.
+		// That position is withdrawn: two rooted resolvers enforcing one
+		// property by two mechanisms cost more to keep explaining than to
+		// unify. The string check below is retained as the DIAGNOSIS — it is
+		// what produces the errRefusedByPolicy message naming the root, and
+		// what §4.2.1 needs in order to tell a deliberate refusal from a miss.
+		// os.Root is the ENFORCEMENT.
 		if x, err := filepath.EvalSymlinks(root); err == nil {
 			root = x
 		}
-		if x, err := filepath.EvalSymlinks(abs); err == nil {
-			abs = x
+		if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+			abs = filepath.Join(dir, filepath.Base(abs))
 		}
 		// The separator matters: without it, a Root of "/srv/a" would
 		// also admit "/srv/anything".
-		if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
+		rel, err := filepath.Rel(root, abs)
+		if err != nil || rel == ".." ||
+			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return nil, "", fmt.Errorf(
 				"schemaLocation %q resolves outside the permitted root: %w",
 				location, errRefusedByPolicy)
 		}
-		p = abs
+		rt, err := os.OpenRoot(root)
+		if err != nil {
+			return nil, "", err
+		}
+		f, err := rt.Open(filepath.ToSlash(rel))
+		rt.Close()
+		if err != nil {
+			// A miss and an escape must stay distinguishable. §4.2.1 lets an
+			// include that was looked for and not found be dropped, and the
+			// W3C suite depends on that; a path os.Root refused for leaving
+			// the root is a decision and must surface as src-resolve. Only
+			// the second is errRefusedByPolicy — see assemble.go queueRef.
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, "", err
+			}
+			// os.Root's own error is wrapped rather than replaced. It is the
+			// evidence that containment was enforced HERE, at open time, and
+			// not merely by the string comparison above — which is the whole
+			// difference between this and the check-then-open shape it
+			// replaced, and the only thing a test can hold on to, since both
+			// shapes refuse every statically visible vector alike.
+			return nil, "", fmt.Errorf(
+				"schemaLocation %q resolves outside the permitted root: %w: %w",
+				location, errRefusedByPolicy, err)
+		}
+		return f, filepath.Join(root, rel), nil
 	}
 
 	f, err := os.Open(p)
