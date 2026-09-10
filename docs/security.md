@@ -40,10 +40,16 @@ Eight audits have passed over this code. This section is the whole of what is
 already fixed has been reduced to one line apiece under *History* at the end,
 with the narrative in [CHANGELOG.md](../CHANGELOG.md).
 
-**Open.** One, and it is a caller responsibility rather than a defect here.
+**Open.** Four. One is a caller responsibility; three are defects found on
+2026-09-10 while verifying an external report, none of them a claim *in* that
+report. The three share one theme — a budget minted fresh where it should be
+inherited — and are planned in `docs/audits/2026-09-10-fix-plan.md`.
 
 | finding | reach | why it is still open |
 |---|---|---|
+| `fn:transform` recursion is unbounded | hostile stylesheet | **P0.** Each nested transform mints a runtime at depth zero, so `MaxDepth` never binds across levels. Reproduced: `fatal error: stack overflow` with `MaxDepth: 5` set. A Go stack overflow is fatal, so the process dies. Fix planned. |
+| a function item does not inherit the byte budget | hostile caller | `xpath/funcitem.go:110,199` forward `items` and `Depth`, never `bytes`. Not reachable from ordinary XSLT or XQuery — an API-surface defect. |
+| an XSD assertion mints its own budget | hostile schema | `xsd/assert.go:616` gives every assertion on every element a fresh 5M-item / 1 GiB allowance. |
 | `javascript:` URLs pass through | hostile stylesheet | an XSLT processor is not an HTML sanitiser; see *Open findings*. |
 
 The eighth audit's six other findings are closed and are listed under

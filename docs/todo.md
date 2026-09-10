@@ -561,10 +561,42 @@ indirect: pass the map through `TransformOptions.Params` to a top-level
 
 ## 2. Bugs
 
-None open. Every entry this section used to carry is fixed or was retracted as
-not a defect; the reasoning that is still worth keeping lives in
-[known-gaps.md](known-gaps.md) and the CHANGELOG, not here. A todo list that
-records its own successes stops being a todo list.
+Three open, all found on 2026-09-10 while verifying an external audit report —
+none of them claims *in* that report. They share one theme: a budget that is
+minted fresh where it should be inherited. Full reasoning in
+`docs/audits/VERDICTS.md`, work in `docs/audits/2026-09-10-fix-plan.md`.
+
+### 2.1 `fn:transform` recursion is unbounded — **P0, kills the process**
+
+`rt.depth` is per-runtime, and every nested `fn:transform` builds a new runtime
+at zero, so `MaxDepth` bounds recursion within a level and never across levels.
+A stylesheet calling `fn:transform` on itself exhausts the Go stack. Reproduced
+with `MaxDepth: 5` explicitly set:
+
+```
+runtime: goroutine stack exceeds 1000000000-byte limit
+fatal error: stack overflow
+```
+
+That is a runtime fatal, not a panic — `recover()` does not catch it and the
+host process dies. Reachable from any untrusted stylesheet. Path:
+`xslt/fntransform.go:275` → `xslt/transform.go:371` → `xslt/runtime.go:625` →
+`xpath/context.go:538`. The fix is the one `xpath/funcitem.go:199-210` already
+applies to self-applying function items: take the depth from the call, not the
+closure.
+
+### 2.2 `funcitem.go` does not forward the byte budget
+
+`xpath/funcitem.go:110,199` forward the caller's `items` and `Depth` and never
+`bytes`, so a function item invoked under a nearly-exhausted `MaxBytes` gets a
+fresh allowance. Not reachable from ordinary XSLT or XQuery, where the closure
+captures the same pointer lexically — an API-surface defect. Two lines.
+
+### 2.3 `xsd/assert.go` mints a context per assertion
+
+`xsd/assert.go:616` calls `xpath.NewContext` for every assertion on every
+element, each a fresh 5M-item / 1 GiB allowance, on a path reachable from XSLT
+schema validation.
 
 ---
 
@@ -639,6 +671,19 @@ hand. It earned its keep twice: a second sweep over the same family found a surv
 region — an emptiable inner particle, whose outer scope has to be credited for
 an iteration that consumed nothing — that the first fix had left rejecting valid
 documents, and again no suite case moved.
+
+**No coverage-guided fuzzing runs in any gate.** The nine targets compile and
+their seed corpora run as ordinary unit tests, so they are smoke-tested on every
+push, but `-fuzz` appears in neither `tests/check.sh` nor
+`.github/workflows/ci.yml` — `check.sh` only *counts* them, to keep a README
+figure honest. Every result above came from running them by hand. A scheduled
+job at a bounded `-fuzztime` would make that continuous;
+`docs/audits/2026-09-10-fix-plan.md` §5 has the shape.
+
+This matters more than it looks: fuzzing here has already found *two* unbounded
+recursions that killed the process, and a third of exactly that class
+(`fn:transform`, §2.1) was found on 2026-09-10 by reading rather than fuzzing.
+A target exercising nested `fn:transform` would likely have reached it first.
 
 ### 3.2 Deep-nesting and pathological schemas
 
