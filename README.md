@@ -101,7 +101,7 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,898 of 21,898 in scope); maps, arrays, the lookup operator, the JSON family |
 | **XQuery 3.1** | 100.00% of the W3C QT3 suite (30,345 of 30,346 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; the 1 remaining failure is the tail catalogued in [todo.md](docs/todo.md) §1.5 |
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.70% of the W3C XSLT suite filtered to 3.0 (11,484 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 14 of the 35 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSLT 3.0** | 99.70% of the W3C XSLT suite filtered to 3.0 (11,484 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 14 of the 34 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
 | **XSD 1.1** | 99.90% instance (26,196 of 26,222); **99.97%** schema-validity (15,349 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
@@ -1432,7 +1432,7 @@ each — so an XSLT 2.0 run is a *filtered* run of the 3.0 suite.
 $ git clone --depth 1 https://github.com/w3c/xslt30-test.git testdata/xslt30-test
 $ GOXSLT_XSLTS=$PWD/testdata/xslt30-test go test ./tests/xslts/ -v -timeout 1800s
 XSLT suite: 14601 cases, 6201 in scope, 8400 skipped
-in-scope: 6190 passed, 11 failed (99.82%)
+in-scope: 6193 passed, 8 failed (99.87%)
 ```
 
 `TestXSLT30Suite` measures the same catalog at the 3.0 target; both run on every
@@ -1630,7 +1630,7 @@ include.
 ## Where this is going
 
 The conformance tail is no longer the interesting work. XPath is at 100% on all
-three versions, XQuery has 3 failures left and XSLT 21 across both targets —
+three versions, XQuery has 1 failure left and XSLT 42 across both targets —
 cases where the suite disagrees with the specification, where matching it would
 cost XSD tests, or which want byte-identical reproduction of another
 processor's indentation. That leaves **none genuinely open**: the last two were

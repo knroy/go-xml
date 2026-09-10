@@ -205,7 +205,7 @@ missing — which is the correct behaviour, not a cost.
 
 ### XQuery schema awareness: a tail of features `import schema` made reachable (XQuery 3.1)
 
-**3 failures of 30,346, and none of them a regression.** This entry exists
+**1 failure of 30,346, and not a regression.** This entry exists
 because the number is easy to misread. `import schema` was implemented, and
 implementing it brought **416 previously-skipped cases into scope**, of which
 339 now pass. The in-scope count went 29,930 → 30,346 and the passing count
@@ -213,15 +213,15 @@ implementing it brought **416 previously-skipped cases into scope**, of which
 construction, and quoting the failure count without the denominator beside it
 would describe a gain as a loss.
 
-The tail has fallen 203 → 113 → 101 → 93 → 42 → 26 → 10 → **3** as the features
+The tail has fallen 203 → 113 → 101 → 93 → 42 → 26 → 10 → 3 → **1** as the features
 behind it landed. What remains is a tail of separate features that
 `import schema` made *reachable* without making them present. `docs/todo.md`
 §1.5 names them and is the forward-looking half of this entry; what belongs
 here is the measured shape, because it is what says the tail is several
 features rather than one broken import.
 
-What remains is three singletons: `prod-ContextItemDecl`, `op-same-key` and
-`app-Demos`, one case each. `prod-CastExpr.schema` is at 88 / 88.
+What remains is one singleton, `prod-ContextItemDecl`; `op-same-key` and
+`app-Demos` have since closed. `prod-CastExpr.schema` is at 88 / 88.
 
 The last of the cast group was a single shape, and a narrow one: a cast to a
 list type built each token from the item type's erased *code*. `xs:IDREF`

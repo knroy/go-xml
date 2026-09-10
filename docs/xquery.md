@@ -351,8 +351,8 @@ window clauses; direct and computed
 constructors; `try`/`catch`; `switch`; `typeswitch`; quantified expressions;
 `ordered`/`unordered`; the extension expression; and the string constructor.
 
-The remaining 2 failures are a long tail rather than a missing feature, and
-each is understood:
+The remaining failure is a long tail rather than a missing feature, and it
+is understood:
 
 * **`K2-sequenceExprTypeswitch-5`** wants a static `XPST0008` for a variable
   named in an unreached `typeswitch` branch. A check restricted to
