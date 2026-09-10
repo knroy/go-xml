@@ -74,6 +74,49 @@ func wantByteRefusal(t *testing.T, err error) {
 // so no one of them is large and Compiled.Eval's per-expression reset clears
 // the counter between every one. Only a budget held across the transform sees
 // the doubling.
+// avtDoublingSheet is doublingSheet's shape with the concatenation moved into
+// an attribute value template. The two differ only in where the string is
+// built -- xsl:value-of into a text node, or {$v}{$v} into an attribute -- so
+// a budget that binds one and not the other is a hole rather than a policy.
+func avtDoublingSheet(n int, seed string) string {
+	var b strings.Builder
+	b.WriteString(`<xsl:stylesheet version="3.0" ` +
+		`xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+		`<xsl:template match="/">` +
+		`<xsl:variable name="v0" select="'` + seed + `'"/>`)
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&b, `<xsl:variable name="t%d"><x a="{$v%d}{$v%d}"/>`+
+			`</xsl:variable>`+
+			`<xsl:variable name="v%d" select="string($t%d/x/@a)"/>`,
+			i, i-1, i-1, i, i)
+	}
+	fmt.Fprintf(&b, `<out><xsl:value-of select="string-length($v%d)"/></out>`+
+		`</xsl:template></xsl:stylesheet>`, n)
+	return b.String()
+}
+
+// An attribute value template concatenates as it builds, exactly as
+// xsl:value-of does, and for a while it was the way around the budget: the
+// same doubling chain that XPDY0130 refuses through a text node ran to
+// completion through an attribute. Charged at avt.eval now.
+func TestAVTStringBombIsRefused(t *testing.T) {
+	_, err := runByteSheet(t, avtDoublingSheet(28, "AAAAAAAAAA"))
+	wantByteRefusal(t, err)
+}
+
+// The other half: an attribute built by a template that is merely large must
+// still be built, or the charge is refusing legitimate stylesheets.
+func TestALegitimateAVTStillBuilds(t *testing.T) {
+	res, err := runByteSheet(t, avtDoublingSheet(3, "AAAAAAAAAA"))
+	if err != nil {
+		t.Fatalf("three doublings inside an attribute is 80 bytes and must "+
+			"still build: %v", err)
+	}
+	if !strings.Contains(fmt.Sprint(res), "80") {
+		t.Errorf("got %v, want the attribute to be 80 characters", res)
+	}
+}
+
 func TestStylesheetStringBombIsRefused(t *testing.T) {
 	sheet := doublingSheet(26, "AAAAAAAAAA")
 	if len(sheet) > 3000 {
