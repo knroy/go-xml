@@ -108,16 +108,15 @@ All three XPath versions agree with the suite on every case in scope.
 
 965 of 965 assertions in James Clark's spectest. **No known gaps.**
 
-## xquery — 26 failures
+## xquery — 22 failures
 
-**XQuery 3.1: 30,320 / 30,346 = 99.91%.**
+**XQuery 3.1: 30,324 / 30,346 = 99.93%.**
 
 The failures cluster by production, not by symptom.
-**`prod-CastExpr.schema` (36) is all but the whole of it**, with six singletons
-behind it: `prod-TypeswitchExpr`, `prod-FunctionCall`, `prod-ContextItemDecl`,
-`op-same-key`, `misc-CombinedErrorCodes` and `app-Demos`, one case each.
+**`prod-CastExpr.schema` (19) is all but the whole of it**, with three singletons
+behind it: `prod-ContextItemDecl`, `op-same-key` and `app-Demos`, one case each.
 
-The 36 are not one gap. They are separate small features that `import schema`
+The 19 are not one gap. They are separate small features that `import schema`
 made *reachable* without making them present — typed *input* documents,
 annotation propagation through a constructor, and substitution groups over
 validated content — and they are catalogued in [todo.md](todo.md) §1.5. The
@@ -125,16 +124,22 @@ largest single shape is that a cast to a **list** type must yield items
 annotated with the list's item type, which is annotation propagation reached
 from the cast side.
 
-The six singletons are read here.
+Four of the six singletons this section used to read are now closed, each for a
+different reason and none by loosening a check: `user-defined-11` (`XQST0034`
+reaches the constructor functions an `import schema` puts in the static
+context), `K2-sequenceExprTypeswitch-5` (`XPST0008` for a variable named in an
+unreached `typeswitch` branch, judged against the live scope), `FunctionCall-051`
+(element-test subtyping follows the schema derivation relation) and `FOTY0012`
+(an element validated against a complex type with element-only content has no
+typed value).
+
+The three singletons are read here.
 
 | Case | Verdict | Why |
 |---|---|---|
 | `app-Demos/RexParser` | **Not implementable here** | A large real-world query rather than a targeted case. The sibling `sudoku` was fixed by making a FLWOR in a conditional branch belong to that branch; this one still fails in the same family. Its symptom has been misread before: see *Corrections*, `RexParser`'s offset. |
-| `op-same-key/same-key-023` | **Not implementable here** | 421,875 keys through O(n) `map:put` and `map:remove`. Measured rather than estimated: per-key cost scales linearly with map size (66µs at n=1,000 to 1.28ms at n=40,000), so the whole case extrapolates to 1.5–2 hours — four to five orders of magnitude from the deadline, which no constant-factor work reaches. A persistent map would fix it, but `MapItem` has 58 references across 15 files and its entry order is load-bearing for serialization stability, which a HAMT does not preserve. `same-key-024` covers the same semantics at 11,250 keys and passes. |
-| `prod-TypeswitchExpr/K2-sequenceExprTypeswitch-5` | **Not implementable without a parser change** | Wants a static `XPST0008` for a variable named in an unreached `typeswitch` branch. A check restricted to sibling-clause variables was built and passed eleven tests, then broke `K2-ForExprWithout-8`, where a `default $d return ()` sits inside a `for` clause binding `$d`: a sibling's name may be shadowed by an outer binding, so seeing it free proves nothing. The counts stayed net-neutral, and only the case-list diff caught it. A sound check needs the parser to track in-scope variables, which it does not do today. |
-| `prod-FunctionCall/FunctionCall-051` | **Open question** | Subtype comparison reads a static table of built-in spellings with no handle on an imported schema, so the answer is not reasoned. Its converse `FunctionCall-052` **passes by accident** for the same reason — see *Corrections*. |
-| `prod-ContextItemDecl/contextDecl-*` | **Not diagnosed individually** | Wants `XQST0113` or `XPTY0004` on a context-item declaration. |
-| `misc-CombinedErrorCodes` | **Not diagnosed individually** | One case. |
+| `op-same-key/same-key-023` | **Not implementable here** | 421,875 keys through O(n) `map:put` and `map:remove`. Measured rather than estimated: per-key cost scales linearly with map size (`put` 14.9µs / `remove` 46.4µs at n=1,000, to `put` 3.66ms / `remove` 19.2ms at n=421,875; lookup stays O(1) at ~380ns), so the whole case extrapolates to ~2h40m plus roughly 10TB of allocation — four to five orders of magnitude from the deadline, which no constant-factor work reaches. A persistent map would fix it, but `MapItem` has 58 references across 15 files and its entry order is load-bearing for serialization stability, which a HAMT does not preserve. `same-key-024` covers the same semantics at 11,250 keys and passes. |
+| `prod-ContextItemDecl/contextDecl-052` | **A W3C fixture defect** | The case registers `ContextItemDecl/libmodule-3.xq` under the namespace `…/libmodule3`, and the file declares `…/libmodule1`. §4.12 makes a module that declares another target namespace a module that was not found, so `XQST0059` is correct and precedes the wanted `XQST0113` — which we do implement, and which `TestContextItemDeclInLibraryModuleRejectsValue` pins. Reordering the two would mean fully compiling a module already known to be the wrong one, and would cost `modules-bad-ns`. |
 
 ## xslt 2.0 — 8 failures
 
@@ -647,11 +652,22 @@ is **already implemented** and cites the clause. The real blocker is that nothin
 marks the principal input as streamed, which puts it in §2 as a divergence with
 a measured risk rather than in §1 as work.
 
-## `FunctionCall-052` passes by accident
+## `FunctionCall-052` passed by accident — both are now reasoned
 
-Subtype comparison reads a static table of built-in spellings with no handle on
-an imported schema. Neither its answer nor the answer of its failing converse
-`FunctionCall-051` is reasoned. A passing case is not evidence of a correct rule.
+Subtype comparison read a static table of built-in spellings with no handle on an
+imported schema, so neither `FunctionCall-052`'s pass nor `FunctionCall-051`'s
+failure was reasoned. **Both are now decided by the schema derivation relation.**
+Two defects sat behind the one symptom: `elementSpellingSubsumes` compared type
+NAMES for equality where XPath 3.1 2.5.6.2 asks for *derived from*, and
+`KindTest.String()` rendered the author's PREFIX into the signature the
+comparison runs over, so the schema registries — keyed on `{uri}local` — could
+never be reached from a spelling at all.
+
+The derivation walk is deliberately *only* restriction, not `schemaSubsumes`.
+That function also relates two types whose union member sets stand in a subset
+relation, and a restriction of a union keeps its members: it answers **true in
+both directions** for this pair, which would have turned `FunctionCall-052` from
+a pass into a failure. Measured, not assumed.
 
 ## A `known-gaps.md` entry recorded an XSpec regression that does not exist
 
@@ -663,6 +679,20 @@ rebuild both score **225**. The entry has been removed.
 `parseNestedExpr` resets the cursor before refusing, so the offset names the
 reset, not the construct. The actual construct is a multi-clause FLWOR in a
 conditional branch.
+
+Re-measured: it is not one construct but **four distinct sites in the one
+query**, each a different manifestation of the same weakness. `scanToStop`
+(`exprsingle.go`) and `scanExprSingleSource` (`flwor_parse.go`) decide where an
+ExprSingle ends with flat counters plus a one-word `branch` flag, which cannot
+represent the nesting *order* of interleaved `if` and FLWOR constructs. Four
+successive refinements were prototyped; each fixed three sites, kept the unit
+tests green, and then surfaced the fourth. The sound fix replaces the counters in
+both scanners with a nesting stack that records construct identity, and makes
+`parseIf` pass branch-appropriate stops — roughly 150 lines across
+`exprsingle.go`, `flwor_parse.go` and `ifexpr.go`. One piece of it *is* small and
+correct standing alone (`ifexpr.go`'s else branch scans with no stop words, where
+`typeswitch.go` passes `enclosingClauseStops`), but landing it alone makes a
+third site reachable, so it must not go in unaccompanied.
 
 ## `evaluate-048` was recorded as closed and is not
 

@@ -2041,6 +2041,22 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 	if !v.opts.Annotate || typ == nil {
 		return
 	}
+	// XDM 3.1 6.2.4 leaves dm:typed-value UNDEFINED for an element whose type
+	// is a complex type with ELEMENT-ONLY content: there is no simple value
+	// and the string value is not one either, so atomizing it is FOTY0012.
+	// The annotation cannot carry that fact -- an anonymous complex type
+	// annotates as "anyType", exactly as a mixed-content one does, and mixed
+	// content DOES have a typed value -- so the assessment records it here,
+	// which is the only place that knows the content kind.
+	//
+	// Only element-only. The same section gives EMPTY content the empty
+	// sequence and MIXED content the string value as xs:untypedAtomic; both
+	// atomize without error, and marking either would turn a defined value
+	// into an error.
+	if ct, ok := typ.(*ComplexType); ok && ct != nil &&
+		ct.Content == ContentElementOnly {
+		el.NoTypedValue = true
+	}
 	if n := typ.TypeName(); n.Local != "" {
 		setResolvedAnnotation(el, xdm.AnnotationName(n.URI, n.Local), typ)
 		return

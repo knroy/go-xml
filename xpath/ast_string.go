@@ -363,12 +363,12 @@ func (t *KindTest) String() string {
 	}
 	if t.HasName && t.Name != nil {
 		if t.TypeName != "" {
-			return base + "(" + t.Name.Lexical() + ", " + t.TypeNameLexical + ")"
+			return base + "(" + t.Name.Lexical() + ", " + t.typeSpelling() + ")"
 		}
 		return base + "(" + t.Name.Lexical() + ")"
 	}
 	if t.TypeName != "" {
-		return base + "(*, " + t.TypeNameLexical + ")"
+		return base + "(*, " + t.typeSpelling() + ")"
 	}
 	return base + "()"
 }
@@ -566,4 +566,25 @@ func (e *CastExpr) String() string {
 
 func (e *TreatExpr) String() string {
 	return e.Operand.String() + " treat as " + e.Type.String()
+}
+
+// typeSpelling renders a kind test's type argument for String().
+//
+// A BUILT-IN type is rendered as the author wrote it, "xs:date", because that
+// is the spelling the built-in signatures and the subtype tables are written
+// in and the one an error message should show.
+//
+// A SCHEMA type is rendered as its resolved {uri}local key instead. String()
+// is not only a pretty-printer: xdm.FunctionItem.Signature is built from it,
+// and functionItemMatches compares two signatures as strings. Rendering the
+// author's prefix there made the comparison a comparison of PREFIXES -- two
+// tests naming the same type through differently-bound prefixes answered
+// "not a subtype", and the schema registries, which are keyed on {uri}local,
+// could never be reached from a spelling at all. That is the half of
+// FunctionCall-051 that derivesByRestriction alone could not fix.
+func (t *KindTest) typeSpelling() string {
+	if strings.HasPrefix(t.TypeName, "{") {
+		return t.TypeName
+	}
+	return t.TypeNameLexical
 }

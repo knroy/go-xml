@@ -1,6 +1,7 @@
 package xquery
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -229,4 +230,213 @@ func seqText(t *testing.T, seq xdm.Sequence) string {
 	}
 	t.Fatalf("unexpected item type %T", seq[0])
 	return ""
+}
+
+// constructorClashSchema declares one named atomic type, so that importing it
+// puts exactly one constructor function into the static context.
+const constructorClashSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+   targetNamespace="http://example.com/ctor" xmlns:c="http://example.com/ctor">
+  <xs:simpleType name="sizeType">
+    <xs:restriction base="xs:integer"><xs:maxInclusive value="100"/></xs:restriction>
+  </xs:simpleType>
+</xs:schema>`
+
+// TestFunctionDeclClashesWithSchemaConstructor pins XQST0034 for the
+// constructor functions.
+//
+// §4.15 forbids a function declaration whose expanded QName and arity are
+// already those of a function in the static context, and §4.11 puts one
+// constructor function per imported simple type there. So declaring
+// c:sizeType#1 after importing the schema that defines c:sizeType is a static
+// error, and prod-CastExpr.schema/user-defined-11 asserts exactly it.
+func TestFunctionDeclClashesWithSchemaConstructor(t *testing.T) {
+	opts := Options{Schemas: []Schema{
+		{Namespace: "http://example.com/ctor", Source: constructorClashSchema},
+	}}
+	src := `import schema namespace c = "http://example.com/ctor";
+declare function c:sizeType($a as xs:integer) { $a + 1 };
+c:sizeType(16)`
+	_, err := Eval(src, nil, opts)
+	if err == nil {
+		t.Fatalf("a declaration of the constructor's name and arity: " +
+			"want XQST0034, got no error")
+	}
+	if !strings.Contains(err.Error(), "XQST0034") {
+		t.Errorf("want XQST0034, got %v", err)
+	}
+}
+
+// TestFunctionDeclNotClashingWithSchemaConstructor is the other side of the
+// rule, and is what keeps the check from refusing valid queries.
+//
+// A constructor function exists for each simple type the schema defines and
+// for nothing else, and it has arity ONE. So a name the schema does not
+// declare as a type, and the same name at another arity, are both legal
+// declarations in the very namespace the schema owns.
+func TestFunctionDeclNotClashingWithSchemaConstructor(t *testing.T) {
+	opts := Options{Schemas: []Schema{
+		{Namespace: "http://example.com/ctor", Source: constructorClashSchema},
+	}}
+	for _, src := range []string{
+		// Not a type the schema declares.
+		`import schema namespace c = "http://example.com/ctor";
+declare function c:notAType($a as xs:integer) { $a + 1 };
+c:notAType(16)`,
+		// The type's name, but arity two: no constructor has that arity.
+		`import schema namespace c = "http://example.com/ctor";
+declare function c:sizeType($a as xs:integer, $b as xs:integer) { $a + $b };
+c:sizeType(16, 1)`,
+	} {
+		if _, err := Eval(src, nil, opts); err != nil {
+			t.Errorf("no constructor has this name and arity: "+
+				"want no error, got %v", err)
+		}
+	}
+}
+
+// elementDerivationSchema declares a union type and a restriction of it, which
+// is the one-way derivation the element-test subtype rule turns on.
+const elementDerivationSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+   targetNamespace="http://example.com/d" xmlns:d="http://example.com/d">
+  <xs:simpleType name="approximateDate">
+    <xs:union memberTypes="xs:date xs:dateTime xs:gYear xs:gYearMonth"/>
+  </xs:simpleType>
+  <xs:simpleType name="restrictedUnion">
+    <xs:restriction base="d:approximateDate"><xs:pattern value="20.*"/></xs:restriction>
+  </xs:simpleType>
+</xs:schema>`
+
+// TestElementTestSubtypeFollowsSchemaDerivation pins XPath 3.1 2.5.6.2's
+// subtype-itemtype judgement for two element tests.
+//
+// element(*, T1) is a subtype of element(*, T2) when T1 is DERIVED FROM T2,
+// not only when the two names are equal. Reached through the CONTRAVARIANT
+// parameter rule for function types, that makes
+//
+//	function(element(*, approximateDate)) as xs:integer
+//
+// an instance of
+//
+//	function(element(*, restrictedUnion)) as xs:integer
+//
+// because restrictedUnion restricts approximateDate: the function accepts
+// everything the test's parameter type admits. The relation runs ONE way, so
+// the reverse must stay false — that is the whole point of the pair, and the
+// reason this cannot go through schemaSubsumes, which relates a union and a
+// restriction of it in both directions. prod-FunctionCall/FunctionCall-051
+// and -052.
+func TestElementTestSubtypeFollowsSchemaDerivation(t *testing.T) {
+	opts := Options{Schemas: []Schema{
+		{Namespace: "http://example.com/d", Source: elementDerivationSchema},
+	}}
+	const prolog = `declare namespace d = 'http://example.com/d';
+import schema "http://example.com/d";
+declare variable $f := function($in as element(*, d:%s)) as xs:integer {1};
+$f instance of function(element(*, d:%s)) as xs:integer`
+	for _, tc := range []struct {
+		param, test string
+		want        bool
+	}{
+		// The parameter admits MORE than the test's: a subtype.
+		{"approximateDate", "restrictedUnion", true},
+		// The reverse: the function would refuse values the test admits.
+		{"restrictedUnion", "approximateDate", false},
+		// The same type on both sides is always a subtype of itself.
+		{"restrictedUnion", "restrictedUnion", true},
+	} {
+		src := fmt.Sprintf(prolog, tc.param, tc.test)
+		seq, err := Eval(src, nil, opts)
+		if err != nil {
+			t.Errorf("param %s, test %s: unexpected error %v",
+				tc.param, tc.test, err)
+			continue
+		}
+		if got := seqText(t, seq); got != fmt.Sprint(tc.want) {
+			t.Errorf("function(element(*, d:%s)) instance of "+
+				"function(element(*, d:%s)): got %s, want %v",
+				tc.param, tc.test, got, tc.want)
+		}
+	}
+}
+
+// typedValueSchema declares one element of each of the three complex content
+// kinds, so that the rule can be tested where it applies and where it does not.
+const typedValueSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+   targetNamespace="http://example.com/tv" xmlns:t="http://example.com/tv"
+   elementFormDefault="qualified">
+  <xs:element name="elementOnly">
+    <xs:complexType><xs:sequence>
+      <xs:element name="content" minOccurs="0"/>
+    </xs:sequence></xs:complexType>
+  </xs:element>
+  <xs:element name="mixed">
+    <xs:complexType mixed="true"><xs:sequence>
+      <xs:element name="content" minOccurs="0"/>
+    </xs:sequence></xs:complexType>
+  </xs:element>
+  <xs:element name="empty">
+    <xs:complexType/>
+  </xs:element>
+</xs:schema>`
+
+// TestAtomizeElementOnlyContentIsFOTY0012 pins the "typed value is absent"
+// rule.
+//
+// XDM 3.1 6.2.4 leaves dm:typed-value UNDEFINED for an element whose type is a
+// complex type with element-only content, and F&O makes fn:data on such a node
+// FOTY0012. Before this, the node atomized to xs:untypedAtomic of its string
+// value — the empty string here — so the query answered with a value instead
+// of failing. misc-CombinedErrorCodes/FOTY0012.
+func TestAtomizeElementOnlyContentIsFOTY0012(t *testing.T) {
+	opts := Options{Schemas: []Schema{
+		{Namespace: "http://example.com/tv", Source: typedValueSchema},
+	}}
+	src := `import schema namespace t = "http://example.com/tv";
+data(validate strict { <t:elementOnly/> })`
+	_, err := Eval(src, nil, opts)
+	if err == nil {
+		t.Fatalf("atomizing an element-only element: want FOTY0012, " +
+			"got no error")
+	}
+	if !strings.Contains(err.Error(), "FOTY0012") {
+		t.Errorf("want FOTY0012, got %v", err)
+	}
+}
+
+// TestAtomizeOtherContentKindsHaveTypedValues is the other side of 6.2.4, and
+// is what keeps the rule from swallowing the two content kinds that DO have a
+// typed value.
+//
+// MIXED content atomizes to the string value as xs:untypedAtomic; EMPTY
+// content atomizes to the empty sequence. Neither is an error, and an
+// unvalidated element is untouched by the rule altogether — it was never
+// assessed, so nothing concluded that its typed value is absent.
+func TestAtomizeOtherContentKindsHaveTypedValues(t *testing.T) {
+	opts := Options{Schemas: []Schema{
+		{Namespace: "http://example.com/tv", Source: typedValueSchema},
+	}}
+	for _, tc := range []struct{ src, want string }{
+		{`import schema namespace t = "http://example.com/tv";
+string-join(data(validate strict { <t:mixed>hi</t:mixed> }))`, "hi"},
+		// EMPTY content. 6.2.4 gives it the empty sequence and we still give
+		// one xs:untypedAtomic("") — a SEPARATE, pre-existing gap, unrelated
+		// to this rule and deliberately not fixed here. What matters for
+		// FOTY0012 is that it does not RAISE: empty content has a typed
+		// value, so marking it absent would turn a defined value into an
+		// error. Asserting on the string keeps the case honest about what we
+		// do without pinning the wrong count.
+		{`import schema namespace t = "http://example.com/tv";
+string-join(data(validate strict { <t:empty/> }))`, ""},
+		// Never validated: xs:untypedAtomic of the string value, as always.
+		{`string-join(data(<a><b/></a>))`, ""},
+	} {
+		seq, err := Eval(tc.src, nil, opts)
+		if err != nil {
+			t.Errorf("%s: unexpected error %v", tc.src, err)
+			continue
+		}
+		if got := seqText(t, seq); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.src, got, tc.want)
+		}
+	}
 }

@@ -240,6 +240,24 @@ type Node struct {
 	// correct answer for an unvalidated document.
 	IsNilled bool
 
+	// NoTypedValue is the data model's "typed value is absent" property (XDM
+	// 3.1 §6.2.4): an element validated against a complex type with
+	// element-only or empty content HAS no typed value, and fn:data applied
+	// to one is FOTY0012.
+	//
+	// It is separate state from TypeAnnotation for the reason IsNilled is:
+	// the annotation cannot answer it. An anonymous complex type annotates
+	// with the nearest named base, ordinarily "anyType" -- which is also what
+	// a MIXED-content type and a genuine xs:anyType element carry, and both
+	// of those DO have a typed value (their string value). Only the validator
+	// knows which of the three it assessed, so only the validator can record
+	// it.
+	//
+	// A node nothing assessed leaves this false, which is correct: an
+	// unvalidated element is xs:untypedAtomic of its string value and
+	// atomizes without complaint.
+	NoTypedValue bool
+
 	// detachedID numbers a node that roots a tree which was never finalized,
 	// assigned on the first cross-tree comparison. Zero means unassigned.
 	detachedID int64
@@ -1742,9 +1760,9 @@ func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem 
 // answers each of them exactly as the original does.
 //
 // It exists because there is no such thing as "the important half" of a node's
-// typing. Seven properties record what an assessment concluded --
+// typing. Eight properties record what an assessment concluded --
 // TypeAnnotation, UnionMember, DerivedPrimitive, ListItem, IsID, IsIDREFS,
-// IsNilled -- and each one of them has, at some point in this repository, been
+// IsNilled, NoTypedValue -- and each one of them has, at some point in this repository, been
 // dropped by a copy site that hand-picked the fields it thought mattered. Each
 // omission was silent and each produced a confidently wrong answer rather than
 // a missing one: a union-typed value atomising to xs:untypedAtomic, fn:id
@@ -1765,7 +1783,7 @@ func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem 
 // is-idrefs ON, which would make a copy of a non-ID node inherit a marking the
 // original does not have. The invariant SetTypeAnnotation protects is upheld
 // here by construction: the resolved fields cannot outlive their annotation,
-// because src is a coherent node and all seven fields travel together.
+// because src is a coherent node and all eight fields travel together.
 func (n *Node) CopyTypingFrom(src *Node) {
 	n.TypeAnnotation = src.TypeAnnotation
 	n.UnionMember = src.UnionMember
@@ -1774,6 +1792,7 @@ func (n *Node) CopyTypingFrom(src *Node) {
 	n.IsID = src.IsID
 	n.IsIDREFS = src.IsIDREFS
 	n.IsNilled = src.IsNilled
+	n.NoTypedValue = src.NoTypedValue
 }
 
 // CopyTypingStrippedFrom copies onto n the PSVI properties of src that survive
@@ -1816,6 +1835,10 @@ func (n *Node) CopyTypingStrippedFrom(src *Node) {
 	n.IsID = src.IsID
 	n.IsIDREFS = src.IsIDREFS
 	n.IsNilled = false
+	// Cleared for the same reason IsNilled is: the absence of a typed value
+	// is a conclusion of an assessment, and a stripped tree is one nothing
+	// assessed. Every element of it is xs:untypedAtomic and atomizes.
+	n.NoTypedValue = false
 }
 
 // StripTyping clears in place every PSVI property that stripping removes,

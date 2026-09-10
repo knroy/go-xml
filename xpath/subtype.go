@@ -152,10 +152,11 @@ func elementSpellingSubsumes(super, sub string) bool {
 	if superName != "*" && superName != subName {
 		return false
 	}
-	if superType != "" && superType != subType {
+	if superType != "" && superType != subType &&
+		!derivesByRestriction(subType, superType) {
 		// element() and element(N) place no constraint on the type, so an
 		// untyped supertype subsumes any typed subtype; a typed one demands
-		// the same type name.
+		// the same type name, or one derived from it.
 		return false
 	}
 	if subNil && !superNil {
@@ -486,4 +487,37 @@ func splitMapSpelling(s string) (key, val string, ok bool) {
 		}
 	}
 	return "", "", false
+}
+
+// derivesByRestriction reports whether sub's schema derivation chain reaches
+// super.
+//
+// XPath 3.1 2.5.6.2's subtype-itemtype judgement for two element tests asks
+// that the SUBTYPE's type annotation be DERIVED FROM the supertype's, not
+// equal to it. elementSpellingSubsumes compared the two names outright, so
+// "element(*, s:restrictedUnion)" was not a subtype of
+// "element(*, s:approximateDate)" even though the schema declares the first
+// as a restriction of the second. FunctionCall-051 is that pair, reached
+// through the contravariant parameter rule for function types.
+//
+// It is deliberately ONLY the restriction walk -- the first clause of
+// schemaSubsumes -- and not schemaSubsumes itself. That function also relates
+// two types whose union member sets stand in a subset relation, which is
+// right for atomic union subtyping and wrong here: a restriction of a union
+// keeps its members, so schemaSubsumes answers true in BOTH directions for
+// this very pair, and routing element tests through it would turn
+// FunctionCall-052 -- which asserts the reverse is false -- from a pass into a
+// failure.
+func derivesByRestriction(sub, super string) bool {
+	sub, super = annotationKeyOfSpelling(sub), annotationKeyOfSpelling(super)
+	depth := maxSchemaDerivationDepth
+	for base := xdm.DerivedBase(sub); base != ""; base = xdm.DerivedBase(base) {
+		if base == super {
+			return true
+		}
+		if depth--; depth <= 0 {
+			return false
+		}
+	}
+	return false
 }

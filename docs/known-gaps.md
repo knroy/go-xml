@@ -163,26 +163,25 @@ missing — which is the correct behaviour, not a cost.
 
 ### XQuery schema awareness: a tail of features `import schema` made reachable (XQuery 3.1)
 
-**42 failures of 30,346, and none of them a regression.** This entry exists
+**22 failures of 30,346, and none of them a regression.** This entry exists
 because the number is easy to misread. `import schema` was implemented, and
 implementing it brought **416 previously-skipped cases into scope**, of which
-335 now pass. The in-scope count went 29,930 → 30,346 and the passing count
-29,918 → 30,320. A lift that admits failing cases raises the failure count by
+339 now pass. The in-scope count went 29,930 → 30,346 and the passing count
+29,918 → 30,324. A lift that admits failing cases raises the failure count by
 construction, and quoting the failure count without the denominator beside it
 would describe a gain as a loss.
 
-The tail has fallen 203 → 113 → 101 → 93 → **42** as the features behind it
-landed. What remains is a tail of separate features that `import schema` made
+The tail has fallen 203 → 113 → 101 → 93 → 42 → 26 → **22** as the features
+behind it landed. What remains is a tail of separate features that `import schema` made
 *reachable* without making them present. `docs/todo.md` §1.5 names them and is
 the forward-looking half of this entry; what belongs here is the measured
 shape, because it is what says the tail is several features rather than one
 broken import.
 
 The cases cluster by production, not by symptom, and
-**`prod-CastExpr.schema` (36) is now all but the whole of it**, with six
-singletons behind it: `prod-TypeswitchExpr`, `prod-FunctionCall`,
-`prod-ContextItemDecl`, `op-same-key`, `misc-CombinedErrorCodes` and
-`app-Demos`, one case each. The error codes cluster the same way:
+**`prod-CastExpr.schema` (19) is now all but the whole of it**, with three
+singletons behind it: `prod-ContextItemDecl`, `op-same-key` and `app-Demos`,
+one case each. The error codes cluster the same way:
 
 - **Typed input.** A source document does not arrive schema-validated, so a
   node atomises as untyped however the query imported. `(a, b, c) is not an

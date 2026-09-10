@@ -194,6 +194,20 @@ func Atomize(seq Sequence) Sequence {
 func AtomizeChecked(seq Sequence) (Sequence, error) {
 	for _, it := range seq {
 		switch v := it.(type) {
+		case *Node:
+			// XDM 3.1 6.2.4 leaves dm:typed-value undefined for an element
+			// validated against a complex type with element-only content, and
+			// F&O makes demanding one FOTY0012. Atomize cannot report it and
+			// falls back to the string value as xs:untypedAtomic, which is a
+			// confidently wrong answer rather than a missing one; the split
+			// between the two functions is the same one FunctionItem makes
+			// above, and for the same reason.
+			if v.NoTypedValue {
+				return nil, Errorf("FOTY0012",
+					"the element %s has no typed value: it was validated "+
+						"against a complex type with element-only content",
+					v.Name.Lexical())
+			}
 		case *FunctionItem:
 			return nil, Errorf("FOTY0013",
 				"a function item (%s) cannot be atomized", v.String())
