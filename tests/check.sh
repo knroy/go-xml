@@ -346,11 +346,11 @@ docfigure_cmd() {
 
 section "documented figures"
 _docfig_before=$failed
-docfigure "unit test count" 1966 "$(docfigure_tests)" \
+docfigure "unit test count" 2008 "$(docfigure_tests)" \
 	README.md:109 README.md:1228 docs/testing.md:23 docs/todo.md:20
 docfigure "fuzz target count" 9 "$(docfigure_fuzz)" \
 	README.md:1234 docs/testing.md:30
-docfigure "limit boundary test count" 13 "$(docfigure_limits)" \
+docfigure "limit boundary test count" 14 "$(docfigure_limits)" \
 	docs/testing.md:24
 if [ "$failed" -eq "$_docfig_before" ]; then
 	printf 'tests %s, fuzz targets %s, limit boundary tests %s — as documented\n' \
