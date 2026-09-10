@@ -3,6 +3,9 @@ package xpath
 import (
 	"context"
 	"fmt"
+	"os"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -171,6 +174,18 @@ type Context struct {
 	//
 	// Confinement is entirely the resolver's; see xdm.EntityResolver.
 	Entities xdm.EntityResolver
+
+	// Environment answers fn:environment-variable and
+	// fn:available-environment-variables. Nil withholds the process
+	// environment from both, which is the default and the safe one: the
+	// environment of a server process routinely holds credentials, and
+	// nothing about evaluating an expression implies consent to read them.
+	//
+	// Setting Docs or Texts does not set this, and this does not set those:
+	// those grant reads of a URI space the caller has confined, while this
+	// grants reads of the process's own state, which no resolver root
+	// bounds. Withholding costs no conformance — see EnvironmentResolver.
+	Environment EnvironmentResolver
 
 	// Validator validates a tree fn:json-to-xml has just built, when the
 	// call asked for validate=true. Nil means the processor cannot do it,
@@ -704,4 +719,62 @@ func (c *Context) libraryVersion() Version {
 		return c.LibraryVersion
 	}
 	return c.Version
+}
+
+// EnvironmentResolver answers fn:environment-variable and
+// fn:available-environment-variables. Nil disables both, which is the default
+// and the safe one: the process environment routinely holds credentials, and
+// nothing about running a stylesheet implies consent to read them.
+//
+// It is an interface rather than a bool for the same reason the other resource
+// gates are. A caller who wants these functions to work usually wants a
+// *chosen* set of variables visible, not the whole process environment — the
+// grant is which names, not merely on or off. OSEnvironment is the widest
+// implementation and has to be asked for by name.
+//
+// Both methods are answerable as the empty result, and that is what makes the
+// gate conformance-safe: F&O 3.1 section 16.2.1 makes it
+// implementation-dependent which variables are available, and section 16.2.2
+// returns the empty sequence for a name that is not among them. So a withheld
+// variable and an unset one are indistinguishable by design, and a stylesheet
+// cannot tell the gate from a bare environment.
+type EnvironmentResolver interface {
+	// LookupEnvironment returns the value of name and whether it is
+	// available. A resolver that hides a variable returns ok false, which is
+	// the same answer an unset variable gives.
+	LookupEnvironment(name string) (value string, ok bool)
+
+	// EnvironmentNames returns the names LookupEnvironment will answer, in
+	// any order. An empty result is legal and means no variable is exposed.
+	EnvironmentNames() []string
+}
+
+// OSEnvironment is an EnvironmentResolver over the real process environment,
+// exposing every variable the process holds.
+//
+// It is the widest grant this library offers and is never installed by
+// default: a caller who sets it is saying that whatever runs in this context
+// is trusted with the process's own secrets. Prefer a resolver over a fixed
+// map of the variables a stylesheet actually needs.
+type OSEnvironment struct{}
+
+// LookupEnvironment reads the process environment.
+func (OSEnvironment) LookupEnvironment(name string) (string, bool) {
+	return os.LookupEnv(name)
+}
+
+// EnvironmentNames returns every variable name in the process environment,
+// sorted. The order is fixed only so that two calls in one query agree; the
+// spec fixes none, and an unstable one would make a test comparing two calls
+// flap.
+func (OSEnvironment) EnvironmentNames() []string {
+	env := os.Environ()
+	names := make([]string, 0, len(env))
+	for _, kv := range env {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			names = append(names, kv[:i])
+		}
+	}
+	sort.Strings(names)
+	return names
 }

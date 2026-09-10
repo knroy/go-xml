@@ -658,6 +658,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	xctx.Docs = opts.Documents
 	xctx.Collections = opts.Collections
 	xctx.Texts = opts.Texts
+	xctx.Environment = opts.Environment
 	// fn:json-to-xml with validate=true needs the schema layer to type the
 	// tree it builds, and reaches it through this hook rather than by
 	// importing xsd from xpath, which the dependency direction forbids. It is

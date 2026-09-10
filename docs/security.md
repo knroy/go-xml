@@ -41,13 +41,13 @@ already fixed has been reduced to one line apiece under *History* at the end,
 with the narrative in [CHANGELOG.md](../CHANGELOG.md).
 
 **Open.** Three, and the first ends the process rather than the request.
+**Open.** Three, and the first two end the process rather than the request.
 A Go stack overflow is a fatal runtime error, not a panic: `recover()` does not
 catch it, no deferred function runs, and one request takes the server with it.
 
 | finding | reach | why it is still open |
 |---|---|---|
 | **a flat operator chain overflows the stack** | any compiled expression or stylesheet | the parser's cap counts nesting, and the attack is length; see *Open findings*. |
-| the process environment is readable | hostile stylesheet, or hostile document through a trusted one | `fn:environment-variable` and `fn:available-environment-variables` have no opt-in; see *Open findings*. |
 | `javascript:` URLs pass through | hostile stylesheet | an XSLT processor is not an HTML sanitiser; see *Open findings*. |
 
 One further cost finding is recorded in the audit report and not yet acted
@@ -703,31 +703,6 @@ The limits listed under *Deliberate limits* above bound bytes at **ingress** —
 **produced during evaluation**, and `xpath` has no `MaxBytes` of any kind.
 A byte budget alongside `MaxItems` is what would close it.
 
-### MEDIUM — the process environment is readable by any stylesheet or query
-
-`fn:environment-variable($name)` and `fn:available-environment-variables()`
-read the process environment through `os.LookupEnv` and `os.Environ`
-(`xpath/fn_misc30.go:50`, `:59`) with no resolver, no option, and no way to
-switch them off. Measured through the public API with default options and no
-resolver configured: 92 variables enumerated, any of them readable by name.
-
-This is in scope by the definition at the top of `SECURITY.md` — "reading
-anything off the machine ... without the caller having enabled it" — and it is
-reachable in both threat models. A hostile stylesheet reads whatever it likes;
-a *trusted* stylesheet that writes `environment-variable(/report/@config)`
-lets a hostile document choose the variable.
-
-It is the only I/O in the library that fails open. `doc()`, `document()` and
-`unparsed-text()` all refuse by default, naming the disabled feature rather
-than the path, and `xsl:result-document` writes nothing to disk.
-
-The conformance-safe fix is described in the code's own comment
-(`xpath/fn_misc30.go:39-43`): the spec makes availability
-implementation-dependent, so a withheld variable is indistinguishable from an
-unset one, and returning the empty sequence unless a caller opts in costs
-nothing. **Until then, do not run untrusted stylesheets or queries in a
-process holding secrets in its environment.**
-
 ### INFO — `javascript:` URLs pass through
 
 `<a href="{/d/u}"/>` yields `href="javascript:alert(document.domain)"`. This is
@@ -1214,18 +1189,25 @@ No `unsafe`, no `cgo`, no `reflect` in any non-test file.
    on does not reopen XXE, but it is still the wider setting.
 3. **Sanitise URLs** if you serve transform output as HTML. XSLT does not, and
    is not supposed to.
-4. **Set a `Root`** on `FileResolver`, and an `AllowHost` on `HTTPResolver`, if
+4. **Leave `Environment` unset** unless a stylesheet genuinely needs a
+   variable, and then expose only that variable rather than reaching for
+   `xpath.OSEnvironment`. `fn:environment-variable` and
+   `fn:available-environment-variables` withhold everything by default,
+   returning the empty sequence — which the spec permits, because it makes
+   availability implementation-dependent. Setting a document or text resolver
+   does not set this.
+5. **Set a `Root`** on `FileResolver`, and an `AllowHost` on `HTTPResolver`, if
    either resolves locations an attacker can influence. A `relaxng.Resolver` is
    your own code and has no such field: it receives the href with `..` intact
    and the scheme filled in, so it must do its own containment check. See the
    interface's documentation for measured examples.
-5. **Set a timeout** on the request, and pass the context in. The
+6. **Set a timeout** on the request, and pass the context in. The
    identity-constraint finding above is CPU exhaustion; the depth limit caps it,
    but a `context` deadline is what bounds the general case. Use
    `xsd.Schema.ValidateContext` rather than `Validate`, and
    `xslt.Stylesheet.Transform`, which already takes one — a deadline the
    library never looks at bounds nothing.
-6. **Raise `MaxDepth` only deliberately.** Past a few hundred thousand levels
+7. **Raise `MaxDepth` only deliberately.** Past a few hundred thousand levels
    the XSD validator trades a clean error for an uncatchable stack overflow,
    and raising it also removes the ceiling on the identity-constraint cost. In
    `relaxng` the cost of depth is *quadratic*, so raising it there is the most
@@ -1261,6 +1243,7 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 - **`TransformOptions.MaxDepth` did not govern expression recursion** — the same finding's second half: the option bounded templates only, so the XPath side kept its package default of 500 however the caller configured it. It now reaches the XPath context, which both honours a lowered bound and stops a legitimate 530-deep continuation-passing function being refused. See CHANGELOG.
 - **`fn:distinct-values` was quadratic on numerics with heavy allocation** — cost, fixed: the pairwise `eq` scan now runs only over the float and double values, because promotion can round only there; integer and decimal key on their exact rational. 100,000 distinct integers fall from 573 s and 480 GB of allocation to 0.15 s and 109 MB. See CHANGELOG.
 - **The `MaxItems` budget was not reached on the primary XQuery evaluation path** — cost, and worse than an absent budget: a caller read the documented option and it did not bind. A FLWOR is parsed and evaluated by `xquery` rather than by `xpath`, so its tuple stream reached none of the constructs that charge the budget, and the per-expression reset in `Compiled.Eval` cleared the counter once per tuple. `Context.HoldItemBudget` moves the boundary out to one query evaluation and `flwor.eval` charges both accumulators; the two paths now refuse the same expression at the same point. See CHANGELOG.
+- **The process environment was readable by any stylesheet or query** — false accept, the only I/O in the library that failed open. `fn:environment-variable` and `fn:available-environment-variables` now answer from `Context.Environment`, and withhold everything when it is nil. See CHANGELOG.
 
 **Sixth audit.**
 

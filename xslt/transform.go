@@ -35,6 +35,15 @@ type TransformOptions struct {
 	// of whatever the resolver will open. See xpath.TextResolver.
 	Texts xpath.TextResolver
 
+	// Environment answers fn:environment-variable and
+	// fn:available-environment-variables. Nil withholds the process
+	// environment from both, which is the default: a stylesheet that can
+	// read the environment can read whatever credentials the process was
+	// started with, and no resolver root bounds that. Setting Documents or
+	// Texts does not set this. See xpath.EnvironmentResolver, and
+	// xpath.OSEnvironment for the widest grant.
+	Environment xpath.EnvironmentResolver
+
 	// MaxDepth bounds template recursion. Zero means DefaultMaxDepth; a
 	// negative value means no limit.
 	//

@@ -608,6 +608,45 @@ hands back the raw bytes of any file inside the roots.
 implied by nothing else. On the command line it is `-allow-unparsed-text`,
 reading from the `-allow-dir` roots.
 
+### fn:environment-variable
+
+Off by default, with a switch of its own: `TransformOptions.Environment` in
+`xslt`, `Context.Environment` in `xpath`. Nil withholds the process environment
+from both `fn:environment-variable($name)` and
+`fn:available-environment-variables()`. Setting the document or text resolver
+does not set it — those confine reads to a URI space you chose, while this
+reads process state no root bounds, and a server's environment routinely holds
+credentials.
+
+Withholding is not an error. `fn:environment-variable` returns the empty
+sequence and `fn:available-environment-variables` returns the empty sequence,
+which is the answer an unset variable and an empty environment give. That is
+deliberate and costs no conformance: F&O 3.1 §16.2.1 makes it
+implementation-dependent which variables are available, so a withheld variable
+is indistinguishable from an unset one by design. The other resource gates
+raise instead (`FODC0002`, `FOUT1170`) because there a stylesheet cannot
+otherwise tell "no documents" from "switched off"; here the spec has already
+said the two are the same thing.
+
+`xpath.EnvironmentResolver` is the interface — a lookup and an enumeration.
+It is an interface rather than a bool because the useful grant is *which*
+names, not on or off: a stylesheet that needs `REPORT_MODE` should not thereby
+see `AWS_SECRET_ACCESS_KEY`.
+
+```go
+type environment map[string]string
+
+func (e environment) LookupEnvironment(n string) (string, bool) { v, ok := e[n]; return v, ok }
+func (e environment) EnvironmentNames() []string { /* the keys */ }
+
+ctx.Environment = environment{"REPORT_MODE": "summary"}   // xpath
+opts.Environment = environment{"REPORT_MODE": "summary"}  // xslt.TransformOptions
+```
+
+`xpath.OSEnvironment{}` is the widest implementation, exposing every variable
+the process holds. It is never installed by default and has to be named; reach
+for it only where whatever runs is trusted with the process's own secrets.
+
 ### xslt.FileResolver
 
 `xslt.NewFileResolver(roots...)` is the one confinement every read goes
