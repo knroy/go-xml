@@ -685,6 +685,23 @@ recursions that killed the process, and a third of exactly that class
 (`fn:transform`, §2.1) was found on 2026-09-10 by reading rather than fuzzing.
 A target exercising nested `fn:transform` would likely have reached it first.
 
+### 3.1a `SameKey` corpus — two types with no key coverage at all
+
+The differential corpus (`xdm/samekey_oracle_test.go:143`) is generated, not
+hand-written: 112 values over 12,544 ordered pairs, all eight Gregorian types,
+five timezone forms. Six families are still missing, and one of them could be
+hiding a live bug: **`hexBinary` and `base64Binary` have zero key-test
+coverage**, and both key through the untested `typeFamilyOf + String()` tail.
+Per XSD Part 2, `0F` and `0f` are the same value and must share a key; nothing
+today would notice if they did not. Also absent: large exact integers (so the
+`Rat()`-nil branch at `maparray.go:116` is never exercised where exactness
+matters), negative zero, float boundary values, timezone boundary crossings,
+and negative `dayTimeDuration`.
+
+Note the limit of the method: the oracle calls the same `typeFamilyOf` as
+production, so it cannot detect a wrong *family* grouping no matter how wide the
+corpus gets. `docs/audits/2026-09-10-fix-plan.md` §7.
+
 ### 3.2 Deep-nesting and pathological schemas
 
 Limits exist for documents (`MaxDocuments`, `MaxErrors`, depth), and a content
