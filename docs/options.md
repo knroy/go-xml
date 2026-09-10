@@ -109,6 +109,7 @@ syntax error does *not* carry the sentinel.
 | `MaxModules` / `MaxModuleBytes` | `xquery/module.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the module is not there |
 | `MaxSchemaBytes` | `xquery/schemaimport.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the schema is not there |
 | `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |
+| `fn:transform` nesting | `xslt/fntransform.go` | `XPDY0001` | no context item is defined; the depth is `TransformOptions.MaxDepth`, charged from the call so that a stylesheet transforming itself accumulates it |
 
 The XSD case reaches a caller through `xsd.ValidationErrors`, which now
 unwraps to the individual `*ValidationError`s, so `errors.Is` over the whole
@@ -470,7 +471,7 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{
 | `Params` | `map[string]xdm.Sequence` | none | Values for top-level `xsl:param`, keyed by Clark name (`{uri}local`, or plain `local` for no namespace). |
 | `Documents` | `xpath.DocumentResolver` | disabled | Resolves `fn:doc` and `fn:document`. **Nil disables them**, which is the default: a stylesheet that can open arbitrary URIs is an SSRF and file-disclosure vector. |
 | `Collections` | `xpath.CollectionResolver` | disabled | Resolves `fn:collection`. **Nil disables it**, and setting `Documents` does not set this — the two are separate switches on purpose. |
-| `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Template recursion limit. Catches a stylesheet with no base case. |
+| `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Template recursion limit, and the bound on `fn:transform` nesting. Catches a stylesheet with no base case. |
 | `DisableAssertions` | `bool` | `false` — assertions enabled | Turns off `xsl:assert` checking for the whole transformation. XSLT 3.0 §22.2: "By default, assertions are enabled." |
 | `InitialMode` | `string` | default mode | Mode for the initial `apply-templates`. |
 | `InitialTemplate` | `string` | match the root | Invokes a named template instead, which is how a stylesheet of only named templates is entered. |
@@ -483,6 +484,16 @@ It is not only "a template calling itself". An identity transform recurses once
 per level of the document, so a limit below the parser's would refuse documents
 you had just successfully parsed. The default matches `xdm.DefaultMaxDepth` for
 that reason. Raise it only alongside the parser's.
+
+It also bounds `fn:transform` **nesting**, and that count is inherited rather
+than restarted. A nested transform is a transformation of its own in every
+other respect — its own entry point, parameters and initial mode — but a budget
+that began again at each level would not be a budget: a stylesheet applying
+`fn:transform` to itself would spend the full allowance at every level and
+reach the stack instead of the limit, which is a Go runtime fatal that
+`recover()` does not catch. So the depth is charged from the call rather than
+from the runtime the stylesheet was entered with, and the refusal is
+`XPDY0001` wrapping `xdm.ErrResourceLimit`.
 
 ### DisableAssertions
 
