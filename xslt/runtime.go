@@ -578,7 +578,11 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		maxDepth = DefaultMaxDepth
 	}
 	rt := &runtime{
-		sheet:       s,
+		sheet: s,
+		// A transform started by fn:transform continues its caller's
+		// recursion count rather than restarting at zero; see
+		// TransformOptions.nestedDepth for why the budget is inherited.
+		depth:       opts.nestedDepth,
 		maxDepth:    maxDepth,
 		keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
 		keyBuilding: map[keyCacheKey]bool{},

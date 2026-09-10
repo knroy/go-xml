@@ -175,6 +175,23 @@ type TransformOptions struct {
 	// sequence everywhere, and a relative @href on xsl:result-document
 	// resolves against the stylesheet's own location instead.
 	BaseOutputURI string
+
+	// nestedDepth seeds the runtime's recursion depth, so that a transform
+	// started by fn:transform continues its caller's count instead of
+	// starting a fresh one. It is unexported because it is not a caller's
+	// choice: only runNestedTransform sets it, and only to the depth of the
+	// call that reached it.
+	//
+	// Inheriting rather than granting a fresh allowance is a deliberate
+	// policy. XSLT 3.0 section 27.7 does not bound fn:transform nesting, so
+	// what happens here is a resource budget rather than a conformance
+	// question, and the house rule in docs/audits/VERDICTS.md is that a
+	// budget must be monotonic: a nested evaluation may spend the parent's
+	// remaining allowance, never reset it. Without that, MaxDepth bounded
+	// recursion only within one level, and a stylesheet calling fn:transform
+	// on itself exhausted the Go stack -- a runtime fatal, which recover()
+	// cannot catch, so the host process died. See TestSelfCallingTransformIsRefused.
+	nestedDepth int
 }
 
 // Result is the outcome of a transform.

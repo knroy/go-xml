@@ -177,6 +177,30 @@ func transformParams(m *xdm.MapItem, name string) (map[string]xdm.Sequence, erro
 
 // runNestedTransform is fn:transform's body.
 func runNestedTransform(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (xdm.Sequence, error) {
+	// One level of nesting is charged before the nested stylesheet is even
+	// loaded, so that the refusal happens without adding another frame. The
+	// depth is taken from the CALL rather than from rt, for the same reason
+	// xpath/funcitem.go takes it from the caller and not the closure: rt is
+	// the runtime the stylesheet was entered with, and for a stylesheet that
+	// transforms itself that is the same shallow depth every time round.
+	// ctx.Depth is the depth of the fn:transform call actually being made.
+	depth := rt.depth
+	if ctx.Depth > depth {
+		depth = ctx.Depth
+	}
+	depth++
+	if rt.maxDepth > 0 && depth > rt.maxDepth {
+		// Worded and coded like the depth refusals it sits beside --
+		// xpath.Context.Descend's XPDY0001, with xdm.ErrResourceLimit added
+		// so a caller can tell a refusal to compute from a bad stylesheet.
+		// It must be an ordinary error: the condition it replaces was a Go
+		// stack overflow, which is a runtime fatal that recover() cannot
+		// catch and that takes the host process with it.
+		return nil, fmt.Errorf(
+			"XPDY0001: fn:transform nesting exceeded %d levels: %w",
+			rt.maxDepth, xdm.ErrResourceLimit)
+	}
+
 	sheet, err := nestedStylesheet(ctx, rt, opts)
 	if err != nil {
 		return nil, err
@@ -197,6 +221,9 @@ func runNestedTransform(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (xdm
 	}
 
 	topts := rt.opts
+	// The nested runtime picks up where this one left off instead of
+	// restarting at zero. See TransformOptions.nestedDepth.
+	topts.nestedDepth = depth
 	// The nested transform is a transformation of its own: the outer one's
 	// entry point, its parameters and its initial mode say nothing about it.
 	// Only what the options map states, plus the resolvers, carries over.
