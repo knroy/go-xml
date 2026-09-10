@@ -129,10 +129,15 @@ ratchetXSD() {
 	# The schema and instance halves are quoted separately in README.md and
 	# docs/, and the TOTAL cannot reconstruct them, so each gets its own mark
 	# (XSD10S, XSD10I, ...) for tests/docfigures.sh to read.
+	# ratchetCount assigns _t itself, and these are POSIX shell functions with
+	# no locals, so the names are built and the calls made before _t is read
+	# again below. Getting this wrong once wrote marks named XSD10SI.
+	_xsdS="${_t}S" _xsdI="${_t}I"
 	_s=$(printf '%s' "$2" | sed -n 's/^SCHEMA[^0-9]*\([0-9]*\).*/\1/p' | head -1)
 	_i=$(printf '%s' "$2" | sed -n 's/^INSTANCE[^0-9]*\([0-9]*\).*/\1/p' | head -1)
-	[ -n "$_s" ] && ratchetCount "${_t}S" "$_s"
-	[ -n "$_i" ] && ratchetCount "${_t}I" "$_i"
+	[ -n "$_s" ] && ratchetCount "$_xsdS" "$_s"
+	[ -n "$_i" ] && ratchetCount "$_xsdI" "$_i"
+	_t=$1
 	case "${GOXSLT_RATCHET:-on}" in
 	off) return 0 ;;
 	esac
