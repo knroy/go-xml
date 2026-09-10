@@ -174,7 +174,7 @@ what is genuinely open is read here.
 |---|---|---|
 | `package-021err` | **Not implementable** | A half-applied 2020 erratum (E36). The defect is confined to the *used* package, which writes `<xsl:function name="me:function1#0">` where `@name` is an `eqname` — so the function has no well-formed name, nothing matches, and we raise XTSE3030 rather than the wanted XTSE3050. Passing would mean tolerating a malformed `@name`, which is a suite workaround, not a conformance fix. The suite has repaired this elsewhere: `accept-916` carries `change="Remove unintended error, missing arity on function name"`. §3.6.2 does admit an arity in `@names` — "`p:local#2`" is its own example — and we already parse `#N` correctly; see *Corrections*. |
 | `package-022err` | **Not implementable** | `component="function#0"` genuinely violates the `@component` enumeration `"template" \| "function" \| "attribute-set" \| "variable" \| "mode"`. Same erratum, applied to a different attribute in each file. |
-| `accept-913` | **Open question — our error is wrong either way** | §3.6.3.2 says a component matched by no `xsl:accept` keeps its visibility and only a *private* one becomes hidden, so the initial template stays public and the wanted XTDE0040 is unreachable. But we raise **XTDE3052**, which §3.6.3.2 scopes by its own parenthetical to "an abstract component accepted into a using package with `visibility="absent"`" — and `accept-913` has no `xsl:accept` at all, so nothing is absent. The defensible code is **XTSE3080** (§3.7: "It is a static error if a top-level package … contains symbolic references referring to components whose visibility is `abstract`"), because an unmatched *abstract* component stays abstract and the public initial template references it via `xsl:use-attribute-sets`. The sibling `accept-914` wants exactly XTSE3080 for the neighbouring shape. What blocks a change is a genuine tension: `accept-902`/`-910` present nearly the same structure and want the dynamic XTDE3052, and `xslt/usepackage.go` separates them today only by whether an `xsl:accept` named the component. Separating "referenced from the top level" from "merely inherited and invoked" is a reference-graph question and is unmeasured. |
+| `accept-913` | **Not implementable — suite defect** | The wanted `XTDE0040` is unreachable. The used package declares `<xsl:template name="xsl:initial-template" visibility="public">`, and §3.6.3.2 changes an inherited component's visibility only "where the visibility of C(P) is `private`" — so it stays **public**, and `XTDE0040`, which requires a name matching no template "whose visibility is `public` or `final`", cannot arise. The stylesheet's own comment, "not specifically accepting xsl:initial-template makes it private", is the premise that clause contradicts. The suite also disagrees with itself: `accept-910` and `accept-913` share an identical used package, `-910` *accepts* the template `visibility="public"` and `-913` does not, and under the clause above that `xsl:accept` is a no-op — yet `-910` wants `XTDE3052` and `-913` wants `XTDE0040`. No vendor report arbitrates: all four submissions predate the case's 2019-02-18 creation. Our `XTDE3052` is wrong too — it is scoped to a component accepted with `visibility="absent"`, and nothing here is absent — but no reachable code is the wanted one. The `XTSE3080` route was measured, not argued: dropping the `assignedVis` gate in `compileUsePackages` took the suite 11,481 → **11,468**, broke thirteen `accept-*` cases, and still left `-913` reporting the wrong code. Reverted. |
 | `package-200` | **Costs more than it gains** | Read in §2 — a rule separating it from `use-package-291`–`294` exists and rests on quoting, which neither §3.6.1 grammar mentions. |
 
 ### Schema-aware validation — 4
@@ -783,11 +783,14 @@ components by name (**and in the case of functions, arity**) … Examples are `*
 rules for `xsl:accept`. We already parse `#N` correctly. The real defect is in
 `xsl:function/@name`.
 
-## `accept-913` — the recorded diagnosis describes a different error
+## `accept-913` — settled as a suite defect, no longer an open question
 
-It describes an investigation into `xsl:initial-template` visibility, not the
-error we now emit. XTDE3052 is scoped to `visibility="absent"` and nothing here
-is absent. Reopened as an open question in §1.
+An earlier row described an investigation into `xsl:initial-template`
+visibility, not the error we emit, and was reopened as an open question. It is
+now closed in §1: §3.6.3.2 leaves the unmatched public template public, so
+XTDE0040 is unreachable, and `accept-910` is the identical stylesheet wanting a
+different code. The XTSE3080 alternative was measured at a cost of 13 cases and
+reverted.
 
 ## `sequence-0132` — the alleged contradiction compared two different constructs
 

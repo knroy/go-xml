@@ -256,8 +256,15 @@ element the processor recognises, so an absent one is visible in it.
 
 ### 2 — costs more than it gains
 
-- `accept-913` — the case's own comment states a premise §3.6.3.2 contradicts.
-  Built, instrumented, reverted.
+- `accept-913` — **settled: suite defect, not a cost question.** §3.6.3.2 keeps
+  an unmatched `public` component public (only `private` becomes `hidden`), so
+  the wanted XTDE0040 — which needs a name that matches no public-or-final
+  template — is unreachable. `accept-910` is the same stylesheet (its
+  `xsl:accept` is a no-op under that clause, and the two used packages are
+  byte-identical modulo the package name) and wants a different code, so the
+  suite contradicts itself. The XTSE3080 alternative was measured: 11,481 →
+  11,468, breaking six named `accept-90x`/`-91x` cases and seven more without
+  fixing `-913`. Reverted. Full evidence in `conformance-gaps.md` §1.
 - `package-200` — a rule separating it from `use-package-291`–`294` exists but
   rests on quoting, which neither grammar mentions, and would have exactly one
   instance in the suite.
