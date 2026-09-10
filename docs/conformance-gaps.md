@@ -27,7 +27,7 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,483 | 99.70% | **35** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,484 | 99.70% | **34** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
@@ -153,9 +153,9 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 35 failures
+## xslt 3.0 — 34 failures
 
-**XSLT 3.0: 11,483 / 11,518 = 99.70%.**
+**XSLT 3.0: 11,484 / 11,518 = 99.70%.**
 
 **14 of the 35 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
@@ -423,10 +423,18 @@ it means threading "this posture was widened" through the two-phase path fold
 of §19.8.8.7, which is a change to shared analysis plumbing rather than a
 transcription.
 
-So `||` is correct, currently unmodelled, and cannot be landed on its own. It
-should go in together with the U-type inference that would let §19.8.8.4 keep
-`(author | editor)` striding — the same missing inference already recorded
-against `si-group-055` in `bodyCallsCurrentGroup`.
+So `||` is correct, currently unmodelled, and cannot be landed on its own.
+
+**A U-type inference is not the way in, and the attempt is recorded so it is
+not repeated.** §19.8.8.4 has no U-type clause, and §19.2 would not supply a
+usable one: it maps a NameTest to "the U-type corresponding to the principal
+node kind of the axis", so `ITEM` and `MAGAZINE` are both `U{element()}` and
+indistinguishable from `PRICE` and `QUANTITY`. Narrowing the union of two
+sibling name tests to striding was built and measured — it gained `si-fork-902`
+and `si-fork-952` and lost `sx-union-202`, a wash — and it contradicts the
+spec's own worked examples, which say `unordered(a|b)` is **crawling** and that
+the argument to `count((author | editor))` is **crawling and consuming**. Two
+sibling child name tests are exactly the shape it exempted. It was reverted.
 
 ## Two streamability cases that need data-flow analysis
 
@@ -831,7 +839,7 @@ usage that stood in for it. §19.4 gives navigation as the answer for "the
 analysis cannot tell what is done with the node", and here it can, so the
 binding transmits and the result is forced grounded — a `some` or `every`
 yields an `xs:boolean`, and no streamed node leaves it. `streamable-129` now
-raises `XTSE3430`; `-100`, `-101` and `-102` still run. 11,482 → 11,483, with
+raises `XTSE3430`; `-100`, `-101` and `-102` still run. 11,482 → 11,484, with
 zero refusals across the 455 DocBook xslTNG and XSpec stylesheets.
 
 The environment is confined to the quantified expression. Nothing else has a
