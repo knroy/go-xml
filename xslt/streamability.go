@@ -108,6 +108,14 @@ type analyzer struct {
 	currentPosture        posture
 	currentAllowsChildren bool
 	currentInScope        bool
+
+	// accumAfter describes the position of this expression within its
+	// enclosing sequence constructor, which is what §19.8.9.1 needs to give
+	// a call on fn:accumulator-after a sweep. Its zero value has known
+	// false, so a call reached without the instruction walk having set it --
+	// from analyzeExpr, say -- stays unmodelled, as it was before this rule
+	// existed. See streamaccumafter.go.
+	accumAfter accumAfterState
 }
 
 // analyzeExpr returns the posture and sweep of e, and whether every construct
@@ -825,6 +833,23 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		}
 		return p
 	}
+	// §19.8.9.1: fn:accumulator-after has its own cascade, whose answer
+	// depends on where in the enclosing sequence constructor the call sits.
+	// The posture is grounded in every case; only the sweep is computed, and
+	// the instruction walk supplies the position it turns on.
+	if x.Name.Local == "accumulator-after" && len(x.Args) == 1 {
+		// Rule 1: "If the first argument (the accumulator name) is not
+		// motionless, the function is free-ranging."
+		if arg := a.expr(x.Args[0]); arg.sweep != sweepMotionless {
+			return props{postureGrounded, sweepFreeRanging}
+		}
+		sw, ok := accumulatorAfterSweep(a.accumAfter, a.ctxPosture, a.ctxAllowsChildren)
+		if !ok {
+			return a.unknown()
+		}
+		return props{postureGrounded, sw}
+	}
+
 	usages, ok := builtinOperandUsages(x.Name.Local, len(x.Args))
 	if !ok && contextDefaultingBuiltin[x.Name.Local] {
 		// A call one argument short of a form whose FINAL argument defaults

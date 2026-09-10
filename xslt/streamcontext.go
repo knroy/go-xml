@@ -147,18 +147,32 @@ func patternPredicateOnlySyntacticallyNumeric(src string, at *xdm.Node) bool {
 	if err != nil {
 		return false
 	}
-	step, ok := expr.(*xpath.Step)
-	if !ok {
-		p, isPath := expr.(*xpath.PathExpr)
-		if !isPath || len(p.Steps) == 0 {
+	var preds []xpath.Expr
+	switch x := expr.(type) {
+	case *xpath.Step:
+		preds = x.Predicates
+	case *xpath.PathExpr:
+		if len(x.Steps) == 0 {
 			return false
 		}
-		if step, ok = p.Steps[len(p.Steps)-1].(*xpath.Step); !ok {
+		step, ok := x.Steps[len(x.Steps)-1].(*xpath.Step)
+		if !ok {
 			return false
 		}
+		preds = step.Predicates
+	case *xpath.FilterExpr:
+		// The XSLT 3.0 ".[...]" pattern, which patternExprFreeRanging now
+		// classifies. Its predicates are top-level pattern predicates, so
+		// they need the same rescue as a step's.
+		if _, ok := x.Base.(*xpath.ContextItem); !ok {
+			return false
+		}
+		preds = x.Predicates
+	default:
+		return false
 	}
 	sawRescued := false
-	for _, pred := range step.Predicates {
+	for _, pred := range preds {
 		if !isPositionalPredicate(pred) {
 			continue
 		}

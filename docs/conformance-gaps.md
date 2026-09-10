@@ -27,7 +27,7 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,340 | 99.98% | **6** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,475 | 99.63% | **43** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,478 | 99.65% | **40** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
@@ -152,11 +152,11 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 43 failures
+## xslt 3.0 — 40 failures
 
-**XSLT 3.0: 11,475 / 11,518 = 99.63%.**
+**XSLT 3.0: 11,478 / 11,518 = 99.65%.**
 
-**20 of the 43 want an `XTSE3430`** — a refusal of a stylesheet as
+**18 of the 40 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles
@@ -192,6 +192,7 @@ what is genuinely open is read here.
 | `accumulator-038` | **Not implementable** | Suite defect. Its stylesheet is an *explicit* `xsl:package`, so §3.6.3.1's "Otherwise, private" applies to the unannotated `main` template and XTDE0040's own text — "does not match the expanded QName of a named template defined in the stylesheet, **whose visibility is public or final**" — is met. Both 038 and 039 were converted to `xsl:package` by Bug 28410 in 2015; only 039 carries `<modified by="Michael Kay" on="2019-03-05" change="Make main template public"/>` and only 039's stylesheet has `visibility="public"`. A second, independent defence: the wanted XPTY0004 is reachable only *after* entry succeeds, and §2.9 lets an implementation report whichever error it detects first. **Re-tested against a hypothesis that failed.** The idea tried was that §3.6.1 — "Unnamed packages … cannot be the target of an `xsl:use-package` declaration" — leaves an unnamed package with no using package for anything to be private *from*. Gating `eligibleInitialTemplate` on a *named* package made this case pass and took the suite from 11,348 to **11,347**: `package-001a` is the identical construct and its description reads "initial template must be public", expecting XTDE0040. `package-001b` and `package-914a` are the same shape. The suite therefore applies the visibility default to unnamed packages deliberately. |
 | `strip-space-009` | **Not implementable** | Asserts that whitespace survives `xsl:strip-space` under an element whose **ancestor**'s type carries an XSD 1.1 assertion. §4.4 grants no such exemption: it preserves whitespace only where "an element … has a type annotation that is a simple type or a complex type with simple content", and here `p` sits under `xs:any processContents="skip"`, so it has no simple-type annotation at all, while the ancestor's type is `mixed`, not simple content. We implement the §4.4 rule as written. The test's own comment says it exists "in order to exercise different paths in **Saxon**"; Saxon is the only submission that runs it, and passes. See the caveat on the spec edition below. |
 | `transform-004` | **Architecture debt** | The case calls `fn:transform` from a `static="yes"` variable, so it must run during the *static phase of compilation*. Registering the real function there is a two-line change and is correct by §9.7, which gives a static expression the whole F&O library and excludes nothing. It deadlocks. `Compile` keeps `compileSchema`, `compilePackage`, `overridingDecls`, `packageParent`, `overrideXPathVersion` and `compileMaxVersion` as **package-level variables** guarded by a single non-reentrant `compileMu`, so a nested `Compile` — which is exactly what `fn:transform` must do — blocks forever on a mutex the outer call still holds. Verified by stack trace, not inferred. Making this work means moving that state onto the `compiler` value. |
+| `su-ascent-902` | **Withheld — the rule contradicts the spec** | The case wants `XTSE3430` for an `xsl:function streamability="ascent"` whose first parameter is declared `as="node()*"`; its description is "Invalid ascent function - first arg accepts a sequence", and every other case in the family uses `node()?` or `node()`. But no such precondition exists. §19.8.5.7 constrains only the *body* (posture climbing or grounded, sweep motionless) and the *call* (a cascade on P0/S0); §19.8.5's preamble adds nothing about cardinality, and §19.8.8.11 gives a streaming parameter its posture from the category-and-singularity table alone, which never consults the declared occurrence indicator. Decisively, §19.8.5.7's **own worked example** declares `<xsl:param name="input" as="element(para)*"/>` and the spec says of it "the function body meets the rules for this category". Implementing the test's rule would refuse that example. Measured here: this function's body computes as grounded and motionless, which the ascent category permits, so the analysis is right to accept it — unlike its siblings `su-ascent-901` (grounded/consuming) and `-903` (striding/motionless), which it already refuses. |
 | `accumulator-061` | **Costs more than it gains** | Read in §2. |
 | `evaluate-045` | **Won't fix** | Read in §2. |
 | `evaluate-046` | **Undiagnosed** | Fails with `XTDE3400: accumulator static-vars is defined circularly` where the case expects the transform to succeed. Not read. |

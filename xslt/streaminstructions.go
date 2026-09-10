@@ -77,6 +77,14 @@ type instrAnalyzer struct {
 	// rules are there to raise. The function table was already built by
 	// checkStreamability for the body check; it simply never reached here.
 	funcs map[funcKey]*streamFunc
+
+	// accumAfter describes this instruction's position within its enclosing
+	// sequence constructor, for §19.8.9.1's rule on fn:accumulator-after.
+	// body() sets it as it walks the members in order; it is the only place
+	// that does, because it is the only place that knows the order. The zero
+	// value has known false, which leaves a call on fn:accumulator-after
+	// unmodelled wherever the enclosing sequence constructor was not walked.
+	accumAfter accumAfterState
 }
 
 // analyzeInstruction returns the posture and sweep of an XSLT instruction (or
@@ -269,6 +277,7 @@ func (a *instrAnalyzer) exprOperandIn(src string, el *xdm.Node, ctx posture, all
 		currentPosture:        ctx,
 		currentAllowsChildren: allowsChildren,
 		currentInScope:        true,
+		accumAfter:            a.accumAfter,
 	}
 	p := an.expr(expr)
 	kids := an.allowsChildren(expr)
@@ -396,12 +405,41 @@ func (a *instrAnalyzer) avtOperands(el *xdm.Node, attrs ...string) []operand {
 // returned by the constructor, in order.
 func (a *instrAnalyzer) body(el *xdm.Node) props {
 	var ops []operand
+	// §19.8.9.1 rule 8 asks whether ANY enclosing node N of the call has a
+	// preceding sibling P, within N's own sequence constructor, whose sweep
+	// is consuming. "Enclosing node" is the spec's word for the call's
+	// ancestors, so the question is asked at every level at once, and a
+	// "yes" found in an outer sequence constructor still holds inside a
+	// nested one. That is why the flag is INHERITED here rather than reset:
+	// accumulator-058 writes
+	//
+	//	<xsl:apply-templates/>
+	//	<result>...<xsl:value-of select="accumulator-after('w')"/></result>
+	//
+	// where the consuming preceding sibling belongs to the outer
+	// constructor and the call sits inside the literal result element's.
+	// The spec's own note calls that shape legal: "it allows any number of
+	// calls on accumulator-after to appear in instructions that follow the
+	// call on <xsl:apply-templates/>."
+	//
+	// Members are walked in document order, so within one constructor the
+	// answer is simply "has a member already assessed come out consuming".
+	// Saving and restoring keeps a nested constructor's own additions from
+	// leaking back out to its parent, where the following siblings have not
+	// yet been reached.
+	saved := a.accumAfter
+	defer func() { a.accumAfter = saved }()
+	a.accumAfter.known = true
 	for _, c := range el.ChildElements() {
 		if isSequenceConstructorExcluded(c) {
 			continue
 		}
+		p := a.instruction(c)
+		if p.sweep == sweepConsuming || p.sweep == sweepFreeRanging {
+			a.accumAfter.precedingConsuming = true
+		}
 		ops = append(ops, operand{
-			props:          a.instruction(c),
+			props:          p,
 			usage:          usageTransmission,
 			allowsChildren: true,
 		})

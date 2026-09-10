@@ -332,7 +332,15 @@ func patternIsFreeRanging(src string, at *xdm.Node) (bool, bool) {
 }
 
 // patternExprFreeRanging classifies one alternative of a parsed pattern.
+//
+// The node the pattern as a whole matches is what fn:current() denotes inside
+// its predicates (§19.8.9.3), so its kind is computed once here, from the
+// alternative being classified, and carried down to every predicate.
 func patternExprFreeRanging(e xpath.Expr, at *xdm.Node) (bool, bool) {
+	return patternExprFreeRangingIn(e, at, matchedExprAllowsChildren(e))
+}
+
+func patternExprFreeRangingIn(e xpath.Expr, at *xdm.Node, matchedAllowsChildren bool) (bool, bool) {
 	switch x := e.(type) {
 	case *xpath.BinaryOp:
 		// "a | b" and "a union b": a union of patterns is motionless only if
@@ -362,7 +370,7 @@ func patternExprFreeRanging(e xpath.Expr, at *xdm.Node) (bool, bool) {
 		// default branch, which abandons the classification, so a pattern
 		// built from steps is exactly the case that arrives here.
 		for _, s := range x.Steps {
-			free, known := patternStepFreeRanging(s, at)
+			free, known := patternStepFreeRanging(s, at, matchedAllowsChildren)
 			if !known {
 				return false, false
 			}
@@ -373,7 +381,26 @@ func patternExprFreeRanging(e xpath.Expr, at *xdm.Node) (bool, bool) {
 		return false, true
 
 	case *xpath.Step:
-		return patternStepFreeRanging(x, at)
+		return patternStepFreeRanging(x, at, matchedAllowsChildren)
+
+	case *xpath.FilterExpr:
+		// XSLT 3.0 extends the pattern grammar with "." as a PatternAxis-free
+		// alternative, so ".[starts-with(., ':B:')]" is a legal pattern that
+		// matches any node satisfying the predicate. The parser gives it as a
+		// FilterExpr over a ContextItem rather than as a Step, so without
+		// this arm the classification abandoned every such pattern and
+		// §19.8.10 was never applied to it -- streamable-142.
+		//
+		// The predicates are top-level predicates of the pattern, so
+		// condition (b) applies to them exactly as it does to a step's. "."
+		// matches a node of any kind, so the context item may have children:
+		// a predicate that atomises it, as starts-with(., ...) does, is
+		// absorbing and hence not motionless, which is precisely why
+		// streamable-142 marks its rule "NOT MOTIONLESS".
+		if _, ok := x.Base.(*xpath.ContextItem); !ok {
+			return false, false
+		}
+		return patternPredicatesFreeRanging(x.Predicates, true, matchedAllowsChildren)
 
 	default:
 		// id() and key() patterns, and anything else the classification does
@@ -388,12 +415,22 @@ func patternExprFreeRanging(e xpath.Expr, at *xdm.Node) (bool, bool) {
 // RootedPath and its predicates alone, because a pattern is matched against a
 // node already in hand rather than evaluated as a path. What makes
 // "fig[caption]" free-ranging is the predicate, not the "fig".
-func patternStepFreeRanging(e xpath.Expr, at *xdm.Node) (bool, bool) {
+func patternStepFreeRanging(e xpath.Expr, at *xdm.Node, matchedAllowsChildren bool) (bool, bool) {
 	s, ok := e.(*xpath.Step)
 	if !ok {
 		return false, false
 	}
-	for _, pred := range s.Predicates {
+	return patternPredicatesFreeRanging(s.Predicates, stepAllowsChildren(s), matchedAllowsChildren)
+}
+
+// patternPredicatesFreeRanging applies §19.8.10 condition (b) to a list of
+// top-level pattern predicates. allowsChildren says whether the node the
+// predicates are applied to can have children, which is what decides whether
+// atomising the context item is absorbing; matchedAllowsChildren says the same
+// of the node the WHOLE pattern matches, which is what fn:current() denotes
+// (§19.8.9.3).
+func patternPredicatesFreeRanging(preds []xpath.Expr, allowsChildren, matchedAllowsChildren bool) (bool, bool) {
+	for _, pred := range preds {
 		// Condition (b), second half: the predicate must be non-positional.
 		// isPositionalPredicate already implements §19.8.10's definition --
 		// a call to position(), last(), or function-lookup() outside a
@@ -411,7 +448,7 @@ func patternStepFreeRanging(e xpath.Expr, at *xdm.Node) (bool, bool) {
 		// are motionless while "p[starts-with(., '$')]" is not.
 		a := &analyzer{
 			ctxPosture:        postureStriding,
-			ctxAllowsChildren: stepAllowsChildren(s),
+			ctxAllowsChildren: allowsChildren,
 			known:             true,
 			// §19.8.9.3: "The use of the current function within a pattern
 			// is supported with similar restrictions. In this case the
@@ -420,7 +457,7 @@ func patternStepFreeRanging(e xpath.Expr, at *xdm.Node) (bool, bool) {
 			// this step selects, so whether absorbing it reads further from
 			// the stream is that step's question.
 			currentPosture:        postureStriding,
-			currentAllowsChildren: stepAllowsChildren(s),
+			currentAllowsChildren: matchedAllowsChildren,
 			currentInScope:        true,
 		}
 		p := a.expr(pred)
