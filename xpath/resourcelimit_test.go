@@ -64,6 +64,18 @@ func TestResourceLimitsCarrySentinelAndKeepTheirCode(t *testing.T) {
 			"XPST0003", "type nesting exceeds",
 		},
 		{
+			// xpath/parser.go, chainTooLong. The expression is well-formed
+			// and it does not nest at all: maxParseDepth counts nesting and
+			// a left-associative infix loop never re-enters parseExprSingle,
+			// so the length of one flat chain is the thing refused.
+			"operator chain length", func() error {
+				_, err := Parse("1"+
+					strings.Repeat("+1", maxChainLength+1), nil)
+				return err
+			},
+			"XPST0003", "operator chain exceeds",
+		},
+		{
 			// xpath/regex_backtrack.go, errBacktrackBudget. The pattern
 			// is valid and may well match; the engine simply declined to
 			// keep enumerating choices.

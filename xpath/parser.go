@@ -78,6 +78,58 @@ type Parser struct {
 // whatever its intent.
 const maxParseDepth = 1000
 
+// maxChainLength bounds the length of a flat infix operator chain.
+//
+// maxParseDepth counts how deeply an expression NESTS, and that is blind to
+// how LONG one is. Every infix level here — "or", "and", "+", "*", "|",
+// "intersect", "||", "=>", and prefix "-" — is parsed by a left-associative
+// LOOP, so "1 or 1 or 1 ..." never re-enters parseExprSingle and the depth
+// stays at 1 while the AST's left spine grows one node per term. Three
+// separate walkers then descend that spine by recursion — optimize
+// (xpath/optimize.go), BinaryOp.Eval (xpath/operators.go) and String()
+// (xpath/ast_string.go) — so the stack cost is linear in the chain's length
+// however the tree is later used. Measured before this bound: an "or" chain
+// crashed the process at 60,000 terms under an 8 MB goroutine stack and at
+// 200,000 under a 32 MB one, about 200 bytes of stack per term. A 300 KB
+// attribute value should not be able to take a service down, and a Go stack
+// overflow is fatal — recover() does not catch it.
+//
+// The bound is charged in the parser rather than only in the optimiser
+// because the parser is the one place that protects all three walkers: an
+// over-long chain refused here never becomes an AST for any of them to walk.
+//
+// 10,000 is set from measurement, not from feel. The longest flat chain in
+// any suite or corpus this library is tested against is 190 — a union of 190
+// self:: steps in the DocBook round-trip stylesheet under
+// tests/misc/docbook in the XSLT 3.0 suite — with 56 in DocBook xslTNG, 28 in
+// XSpec and 17 in the QT3 tools. The bound is fifty times the longest real
+// chain and four times below the smallest measured crash, which leaves it
+// safe on a stack far smaller than any of those tested. Refusing a legal
+// stylesheet would be the worse bug of the two.
+const maxChainLength = 10000
+
+// chainTooLong reports whether an infix loop has built a spine longer than
+// maxChainLength, and yields the error to return when it has.
+//
+// The count is local to each loop rather than cumulative over the parse: a
+// stylesheet holding a thousand separate ten-term predicates has a thousand
+// short spines and no deep recursion, and refusing it would be the false
+// rejection this bound exists to avoid. Only one chain's own length matters,
+// because only one chain's length becomes stack depth.
+//
+// XPST0003 is borrowed for the same reason parseExprSingle borrows it: the
+// specs give no code for "I gave up", callers and the conformance suites
+// match on the code, and the expression really is one this processor will not
+// parse. xdm.ErrResourceLimit is wrapped alongside so errors.Is separates the
+// refusal from a genuine syntax fault.
+func chainTooLong(n int, op string) error {
+	if n <= maxChainLength {
+		return nil
+	}
+	return fmt.Errorf("XPST0003: %q operator chain exceeds %d terms: %w",
+		op, maxChainLength, xdm.ErrResourceLimit)
+}
+
 // Parse compiles an XPath 2.0 expression.
 func Parse(src string, ns NamespaceResolver) (Expr, error) {
 	return parse(src, ns, false, XPath20)
@@ -706,8 +758,13 @@ func (p *Parser) parseOr() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for p.peekIs(TokOp, "or") {
 		p.pos++
+		n++
+		if err := chainTooLong(n, "or"); err != nil {
+			return nil, err
+		}
 		right, err := p.parseAnd()
 		if err != nil {
 			return nil, err
@@ -722,8 +779,13 @@ func (p *Parser) parseAnd() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for p.peekIs(TokOp, "and") {
 		p.pos++
+		n++
+		if err := chainTooLong(n, "and"); err != nil {
+			return nil, err
+		}
 		right, err := p.parseComparison()
 		if err != nil {
 			return nil, err
@@ -793,9 +855,14 @@ func (p *Parser) parseStringConcat() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		if _, ok := p.acceptOp("||"); !ok {
 			return left, nil
+		}
+		n++
+		if err := chainTooLong(n, "||"); err != nil {
+			return nil, err
 		}
 		right, err := p.parseRange()
 		if err != nil {
@@ -826,10 +893,15 @@ func (p *Parser) parseAdditive() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		op, ok := p.acceptOp("+", "-")
 		if !ok {
 			return left, nil
+		}
+		n++
+		if err := chainTooLong(n, op); err != nil {
+			return nil, err
 		}
 		right, err := p.parseMultiplicative()
 		if err != nil {
@@ -844,6 +916,7 @@ func (p *Parser) parseMultiplicative() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		op, ok := p.acceptOp("*", "div", "idiv", "mod")
 		if !ok {
@@ -867,6 +940,10 @@ func (p *Parser) parseMultiplicative() (Expr, error) {
 			p.pos++
 			op = "*"
 		}
+		n++
+		if err := chainTooLong(n, op); err != nil {
+			return nil, err
+		}
 		right, err := p.parseUnion()
 		if err != nil {
 			return nil, err
@@ -880,10 +957,15 @@ func (p *Parser) parseUnion() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		// "union" and "|" are synonyms, so both normalise to one Op.
 		if _, ok := p.acceptOp("union", "|"); !ok {
 			return left, nil
+		}
+		n++
+		if err := chainTooLong(n, "union"); err != nil {
+			return nil, err
 		}
 		right, err := p.parseIntersectExcept()
 		if err != nil {
@@ -898,10 +980,15 @@ func (p *Parser) parseIntersectExcept() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		op, ok := p.acceptOp("intersect", "except")
 		if !ok {
 			return left, nil
+		}
+		n++
+		if err := chainTooLong(n, op); err != nil {
+			return nil, err
 		}
 		right, err := p.parseInstanceOf()
 		if err != nil {
@@ -1017,14 +1104,32 @@ func (p *Parser) parseCast() (Expr, error) {
 // had it the other way round — the arrow consumed the bare literal and the
 // negation was applied to the call's result, so that expression answered -1.
 func (p *Parser) parseUnary() (Expr, error) {
-	if op, ok := p.acceptOp("-", "+"); ok {
-		operand, err := p.parseUnary()
-		if err != nil {
+	// A run of signs is the one chain in the ladder that recurses rather than
+	// loops, so it grows p's own stack as well as the AST spine. The run is
+	// counted here and the recursion rewritten as a loop, which bounds both:
+	// "-----1" is a UnaryOp per sign whatever the parser's shape, and
+	// optimize and Eval descend that spine exactly as they descend an "or".
+	ops := make([]string, 0, 8)
+	for {
+		op, ok := p.acceptOp("-", "+")
+		if !ok {
+			break
+		}
+		ops = append(ops, op)
+		if err := chainTooLong(len(ops), op); err != nil {
 			return nil, err
 		}
-		return &UnaryOp{Op: op, Operand: operand}, nil
 	}
-	return p.parseSimpleMap()
+	e, err := p.parseSimpleMap()
+	if err != nil {
+		return nil, err
+	}
+	// Applied right to left, so the innermost sign is nearest the operand and
+	// the tree is the one the recursion built.
+	for i := len(ops) - 1; i >= 0; i-- {
+		e = &UnaryOp{Op: ops[i], Operand: e}
+	}
+	return e, nil
 }
 
 // parseArrow parses the arrow operator:
@@ -1049,9 +1154,14 @@ func (p *Parser) parseArrow() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		if _, ok := p.acceptOp("=>"); !ok {
 			return left, nil
+		}
+		n++
+		if err := chainTooLong(n, "=>"); err != nil {
+			return nil, err
 		}
 		switch {
 		case p.cur().Kind == TokName:
@@ -1121,9 +1231,14 @@ func (p *Parser) parseSimpleMap() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		if _, ok := p.acceptOp("!"); !ok {
 			return left, nil
+		}
+		n++
+		if err := chainTooLong(n, "!"); err != nil {
+			return nil, err
 		}
 		right, err := p.parsePath()
 		if err != nil {

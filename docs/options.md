@@ -99,6 +99,7 @@ syntax error does *not* carry the sentinel.
 | `maxIncludeDepth` / `maxIncludeFetches` | `xdm/xinclude.go` | *(none)* | the text already said "resource limit exceeded"; now `errors.Is` agrees |
 | `maxParseDepth` (expression) | `xpath/parser.go` | `XPST0003` | the expression is syntactically invalid |
 | `maxParseDepth` (type) | `xpath/parser_path.go` | `XPST0003` | as above; a *type* nests through a path the expression counter never sees |
+| `maxChainLength` | `xpath/parser.go` | `XPST0003` | as above; the expression is well-formed, and it is the *length* of one flat operator chain that is refused, not its nesting |
 | `MaxItems` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own) |
 | `Context.MaxDepth` | `xpath/context.go` | `XPDY0001` | no context item is defined |
 | `backtrackBudget` | `xpath/regex_backtrack.go` | `FORX0002` | the regular expression is invalid |

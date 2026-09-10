@@ -19,24 +19,46 @@ import "github.com/knroy/go-xml/xdm"
 // that actually appear — a Schematron assertion evaluated once per node, a
 // count over a range — rather than existing to be thorough.
 
+// maxOptimizeDepth bounds how far the optimiser will descend.
+//
+// The parser refuses an over-long operator chain (maxChainLength), so an
+// expression reaching here through Compile cannot have a spine deep enough to
+// matter. This bound is the second half of the same guard, for the tree that
+// did not come from this parser: optimize is an ordinary function on an Expr,
+// and a caller building an AST directly, or a future construct the parser
+// does not charge, would otherwise descend it without limit and take the
+// process down — a Go stack overflow is fatal and recover() does not catch it.
+//
+// Exceeding it is not an error. Optimisation is a rewrite into an equivalent
+// tree, so declining to descend further simply leaves that subtree as written:
+// the result is always correct, only unfolded. That is why this half can be
+// silent where the parser's half must speak, and why the bound can sit an
+// order of magnitude above maxChainLength without weakening it.
+const maxOptimizeDepth = 100000
+
 // optimize rewrites e and returns the replacement.
-func optimize(e Expr) Expr {
+func optimize(e Expr) Expr { return optimizeDepth(e, 0) }
+
+func optimizeDepth(e Expr, depth int) Expr {
 	if e == nil {
 		return nil
+	}
+	if depth > maxOptimizeDepth {
+		// Deeper than this processor will rewrite. The subtree is returned
+		// unchanged, which is a legal outcome for a pass that only ever
+		// replaces a tree with an equivalent one.
+		return e
 	}
 	// Children are optimised first, so a rule sees folded operands: the "1+2"
 	// in "count(1 to (1+2))" becomes a literal before the range rule looks at
 	// the bounds.
-	e = optimizeChildren(e)
+	e = optimizeWith(e, func(c Expr) Expr { return optimizeDepth(c, depth+1) })
 
 	if lit, ok := foldConstant(e); ok {
 		return lit
 	}
 	return e
 }
-
-// optimizeChildren rewrites the sub-expressions of e in place.
-func optimizeChildren(e Expr) Expr { return optimizeWith(e, optimize) }
 
 // optimizeWith rewrites the sub-expressions of e in place using rec, which is
 // the whole-expression pass to apply to each of them. The recursion is a

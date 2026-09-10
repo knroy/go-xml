@@ -48,6 +48,8 @@ catch it, no deferred function runs, and one request takes the server with it.
 | finding | reach | why it is still open |
 |---|---|---|
 | **a flat operator chain overflows the stack** | any compiled expression or stylesheet | the parser's cap counts nesting, and the attack is length; see *Open findings*. |
+| **a 62-byte expression overflows the stack** | any compiled expression or query | the dynamic-call path charges no recursion depth; see *Open findings*. |
+| the process environment is readable | hostile stylesheet, or hostile document through a trusted one | `fn:environment-variable` and `fn:available-environment-variables` have no opt-in; see *Open findings*. |
 | `javascript:` URLs pass through | hostile stylesheet | an XSLT processor is not an HTML sanitiser; see *Open findings*. |
 
 One further cost finding is recorded in the audit report and not yet acted
@@ -79,7 +81,8 @@ rejecting direction:
 `branchLimit` · `xsd.Options` `MaxContentModelPositions` · `maxUPAStateWidth` ·
 `maxUPAPairTests` ·
 `maxSubstitutionClosure` · `TransformOptions.MaxDepth` · the RELAX NG
-derivative bound · the XPath regex step and depth budgets.
+derivative bound · the XPath regex step and depth budgets ·
+`xpath` `maxChainLength` / `maxOptimizeDepth`.
 
 "Refused loudly" needed qualifying, and now it holds in both halves. A limit
 that raises an error has to borrow a *semantic* error code, because the specs
@@ -683,6 +686,35 @@ the attack is how long it is.
 Verified triggers: `+`, `or`, unary `-`, `|`, `=>`. The comma operator does
 not. The fix belongs in the optimizer rather than the parser, because the
 parser's counter is structurally blind to a chain that never recurses.
+### CRITICAL — a self-applying inline function overflows the stack
+
+```
+let $f := function($g, $n) { $g($g, $n + 1) } return $f($f, 1)
+```
+
+Sixty-two bytes, plain XPath 3.1, default context, nothing configured: about a
+second later the process is gone with `fatal error: stack overflow`. The same
+expression through `xquery.Eval` behaves the same way. This is not a panic —
+`recover()` does not catch a Go stack overflow, so an embedder cannot contain
+it per request.
+
+It is a gap in one path rather than a decision. Named recursion, mutual
+recursion, `for`, `let` and quantified expressions all stop at
+`XPDY0001: recursion exceeded 500 levels`; only the dynamic-call path is
+uncharged. `DynamicCall.Eval` calls `fn.Invoke` directly
+(`xpath/funcitem.go:517`) where `FuncCall.Eval` calls `ctx.Descend()`, and the
+inline function's `Invoke` closure copies only `Ctx` and `items` from the
+calling context (`xpath/funcitem.go:195-200`), dropping `Depth`. Both halves
+need fixing; either alone leaves it open.
+
+**`TransformOptions.MaxDepth` does not govern this path.** A 268-byte
+stylesheet holding the same inline function in an `xsl:variable` kills the
+process through `Stylesheet.Transform` with `MaxDepth: 50` explicitly set —
+verified. That is the entry point which actually takes untrusted input, and
+the documented defence for it is configured and does not apply.
+
+**Until then, do not compile or evaluate an untrusted expression, query or
+stylesheet in a process you need to keep alive.**
 
 ### MEDIUM — a string can be doubled past every budget
 
@@ -1244,6 +1276,7 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 - **`fn:distinct-values` was quadratic on numerics with heavy allocation** — cost, fixed: the pairwise `eq` scan now runs only over the float and double values, because promotion can round only there; integer and decimal key on their exact rational. 100,000 distinct integers fall from 573 s and 480 GB of allocation to 0.15 s and 109 MB. See CHANGELOG.
 - **The `MaxItems` budget was not reached on the primary XQuery evaluation path** — cost, and worse than an absent budget: a caller read the documented option and it did not bind. A FLWOR is parsed and evaluated by `xquery` rather than by `xpath`, so its tuple stream reached none of the constructs that charge the budget, and the per-expression reset in `Compiled.Eval` cleared the counter once per tuple. `Context.HoldItemBudget` moves the boundary out to one query evaluation and `flwor.eval` charges both accumulators; the two paths now refuse the same expression at the same point. See CHANGELOG.
 - **The process environment was readable by any stylesheet or query** — false accept, the only I/O in the library that failed open. `fn:environment-variable` and `fn:available-environment-variables` now answer from `Context.Environment`, and withhold everything when it is nil. See CHANGELOG.
+- **A flat operator chain overflowed the stack during compilation** — availability, `maxParseDepth` counting nesting where the attack was length. Every infix loop in the precedence ladder now charges `maxChainLength`. See CHANGELOG.
 
 **Sixth audit.**
 
