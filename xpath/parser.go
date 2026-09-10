@@ -308,11 +308,11 @@ func (b bracedSchemaResolver) SchemaUnionAtomicMemberFacetNames(name xdm.QName) 
 	return nil, false
 }
 
-func (b bracedSchemaResolver) SchemaUnionListMemberItemType(name xdm.QName) (xdm.TypeCode, bool) {
-	if v, ok := b.inner.(SchemaUnionListMemberType); ok {
-		return v.SchemaUnionListMemberItemType(name)
+func (b bracedSchemaResolver) SchemaUnionListMemberNames(name xdm.QName) ([]xdm.QName, bool) {
+	if v, ok := b.inner.(SchemaUnionListMembers); ok {
+		return v.SchemaUnionListMemberNames(name)
 	}
-	return 0, false
+	return nil, false
 }
 
 // wrapBraced wraps ns so the synthetic prefixes resolve, preserving the inner
@@ -321,7 +321,7 @@ func wrapBraced(ns NamespaceResolver, uris []string) NamespaceResolver {
 	b := bracedResolver{NamespaceResolver: ns, uris: uris}
 	switch ns.(type) {
 	case SchemaTypes, SchemaUnionTypes, SchemaListTypes,
-		SchemaUnionNames, SchemaImpureUnionTypes, SchemaUnionListMemberType,
+		SchemaUnionNames, SchemaImpureUnionTypes, SchemaUnionListMembers,
 		SchemaUnionMemberFacets:
 		return bracedSchemaResolver{bracedResolver: b, inner: ns}
 	}

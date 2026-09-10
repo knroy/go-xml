@@ -426,23 +426,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// The value is valid, so the result is one item per whitespace-
 		// separated token, each cast to the item type -- the same shape
 		// castToListType produces for a built-in list type.
-		toks := collapseXMLSpaceFields(atoms[0].(*xdm.Atomic).String())
-		out := make(xdm.Sequence, 0, len(toks))
-		for _, tok := range toks {
-			if e.Type.SchemaListItemType == 0 {
-				// An item type with no built-in code: the tokens keep their
-				// lexical form, which is all that can be said about them
-				// without the schema's own value constructor.
-				out = append(out, xdm.NewString(tok))
-				continue
-			}
-			v, err := CastAtomic(xdm.NewString(tok), e.Type.SchemaListItemType)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, v)
-		}
-		return out, nil
+		return castListTokens(ctx, atoms[0].(*xdm.Atomic), e.Type)
 	}
 
 	// A cast to an impure or restricted union is decided entirely by the
@@ -502,7 +486,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// stays one item. Only a value no atomic member accepts falls through
 		// to the list -- and only from a string-like source, which is the
 		// same rule SchemaSimpleAtomicMembers enforces above.
-		if e.Type.SchemaSimpleListItemType != 0 &&
+		if len(e.Type.SchemaSimpleListMembers) > 0 &&
 			(isStringLike(src.Type) || src.Type == xdm.TypeUntypedAtomic) {
 			atomicTook := false
 			for _, m := range e.Type.SchemaSimpleAtomicMembers {
@@ -512,17 +496,11 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 				}
 			}
 			if !atomicTook {
-				toks := collapseXMLSpaceFields(src.String())
-				out := make(xdm.Sequence, 0, len(toks))
-				for _, tok := range toks {
-					v, err := CastAtomic(xdm.NewString(tok),
-						e.Type.SchemaSimpleListItemType)
-					if err != nil {
-						return nil, xdm.Errorf("FORG0001",
-							"%q is not castable to %s: %v",
-							src.String(), e.Type, err)
-					}
-					out = append(out, v)
+				out, err := castToListMember(ctx, src, e.Type.SchemaSimpleListMembers)
+				if err != nil {
+					return nil, xdm.Errorf("FORG0001",
+						"%q is not castable to %s: %v",
+						src.String(), e.Type, err)
 				}
 				return out, nil
 			}
@@ -815,6 +793,82 @@ func schemaTypeNameMatches(annotation, want string) bool {
 		}
 	}
 	return false
+}
+
+// castListTokens builds the sequence a cast to a schema-defined list type
+// produces from a value the schema has already admitted: one item per
+// whitespace-separated token, each cast to the list's item type.
+//
+// F&O 3.0 18.3.6 makes each item "an instance of the item type of L", which
+// is more than a built-in primitive can carry. A list of xs:IDREF owes
+// xs:IDREF values and a list of a union owes values of whichever member
+// accepted each token, so when the item type is known in full (see
+// SchemaListItem) each token goes through the same cast an expression written
+// against that type would -- facet applied, member chosen, annotation
+// recorded. The built-in code is the fallback for a resolver that answers only
+// the older question, and a token keeps its lexical form when neither is
+// known, which is all that can be said about it without the schema's own
+// value constructor.
+func castListTokens(ctx *Context, a *xdm.Atomic, list SequenceType) (xdm.Sequence, error) {
+	toks := collapseXMLSpaceFields(a.String())
+	out := make(xdm.Sequence, 0, len(toks))
+	for _, tok := range toks {
+		switch {
+		case list.SchemaListItem != nil:
+			item := &CastExpr{Operand: &Literal{Val: xdm.NewString(tok)},
+				Type: *list.SchemaListItem}
+			v, err := item.Eval(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v...)
+		case list.SchemaListItemType != 0:
+			v, err := CastAtomic(xdm.NewString(tok), list.SchemaListItemType)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		default:
+			out = append(out, xdm.NewString(tok))
+		}
+	}
+	return out, nil
+}
+
+// castToListMember casts a string-like value to the first of a union's list
+// members that accepts it, in declaration order -- the rule for every union.
+//
+// A built-in list member (xs:IDREFS) is cast as the built-in list it is; a
+// schema-defined one is put to its own validity check first, because the
+// list's facets and its item type are the schema's to apply, and only then
+// shredded into items. CastAs-UnionType-28 is a union over xs:IDREFS and a
+// list of a namespace-sensitive union handed "a b xs:integer": the first
+// member refuses the QName, the second admits it, and the result is three
+// values of the second's item type.
+func castToListMember(ctx *Context, a *xdm.Atomic, members []SequenceType) (xdm.Sequence, error) {
+	var last error
+	for _, m := range members {
+		var out xdm.Sequence
+		var err error
+		if m.ListItemFacet != "" {
+			out, err = castToListType(a, m.ListItemFacet)
+		} else {
+			if m.SchemaValueValid != nil {
+				err = m.SchemaValueValid(a.String())
+			}
+			if err == nil {
+				out, err = castListTokens(ctx, a, m)
+			}
+		}
+		if err == nil {
+			return out, nil
+		}
+		last = err
+	}
+	if last == nil {
+		last = fmt.Errorf("no list member accepts it")
+	}
+	return nil, last
 }
 
 // castToUnion casts a value to a named pure union type.

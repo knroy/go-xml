@@ -1131,98 +1131,20 @@ func schemaConstructorCast(name xdm.QName, args []Expr,
 	if name.Prefix != "" {
 		lex = name.Prefix + ":" + name.Local
 	}
-	prim, isAtomic, found := schemaTypeOf(lex, ns)
+	// The constructor is defined as a cast, so its target is resolved exactly
+	// as a type name in type position is -- atomic, pure union, list, or an
+	// impure or restricted union -- and F&O 3.0 17.5 is why the two cannot
+	// disagree: myType:sizeType is an xs:integer restricted to 1..19, so
+	// "20 cast as myType:sizeType" fails on maxInclusive and
+	// "myType:sizeType(20)" must too (user-defined-2 requires FORG0001).
+	// Castable-UnionType-10 and Castable-ListType-10 need the union and list
+	// constructors to exist before the outer castable can be asked at all.
+	st, found := schemaTypeCastTarget(lex, ns)
 	if !found {
 		return nil, false
 	}
-	if !isAtomic {
-		// A *pure union type* has a constructor for the same reason an atomic
-		// type does: the constructor is defined as a cast, and a cast to a
-		// pure union is legal — it tries the member types in order. Only a
-		// pure union qualifies, because SchemaUnionMembers is nil for any
-		// other, and an impure one has no cast to be defined as.
-		//
-		// Castable-UnionType-10 is "s:myUnionType1('2001-01-01') castable as
-		// s:myUnionType1", which needs the inner constructor to exist at all.
-		members, pure := schemaUnionMembersOf(lex, ns)
-		if !pure {
-			// A list type has a constructor for the same reason: it is
-			// defined as a cast, and a cast to a list type is legal (F&O 3.0
-			// 18.3). Castable-ListType-10 is
-			// "s:intListType1('1 2 3') castable as s:intListType1", which
-			// needs the inner constructor to exist before the outer castable
-			// can be asked at all.
-			if item, isList := schemaTypeIsList(lex, ns); isList {
-				st := SequenceType{
-					SchemaType:         annotationKeyOf(lex, ns),
-					SchemaListType:     true,
-					SchemaListItemType: item,
-					Occurrence:         "?",
-				}
-				if lex, ns := lex, ns; true {
-					st.SchemaValueValid = func(value string) error {
-						known, err := schemaValueValid(lex, ns, value)
-						if !known {
-							return nil
-						}
-						return err
-					}
-				}
-				return &CastExpr{Operand: args[0], Type: st}, true
-			}
-			// An impure or restricted union still has a constructor, because
-			// the constructor is defined as a cast and a cast to any simple
-			// type in the in-scope schema types is legal. The schema decides
-			// the value. See SchemaSimpleType.
-			st := SequenceType{
-				SchemaType:       annotationKeyOf(lex, ns),
-				SchemaSimpleType: true,
-				Occurrence:       "?",
-			}
-			if a, ok := schemaUnionAtomicMembersOf(lex, ns); ok {
-				st.SchemaSimpleAtomicMembers = a
-				if n, ok := schemaUnionAtomicMemberFacetsOf(lex, ns); ok &&
-					len(n) == len(a) {
-					st.SchemaSimpleAtomicFacets = n
-				}
-			}
-			// A string-like value the union admits only through its LIST
-			// member casts to that list, and a cast to a list type is a
-			// sequence (F&O 3.0 18.3.6). Recording the item type is what lets
-			// the cast build it; without it the constructor handed back the
-			// single string it was given. See SchemaSimpleListItemType.
-			if item, ok := schemaUnionListMemberOf(lex, ns); ok {
-				st.SchemaSimpleListItemType = item
-			}
-			if lex, ns := lex, ns; true {
-				st.SchemaValueValid = func(value string) error {
-					known, err := schemaValueValid(lex, ns, value)
-					if !known {
-						return nil
-					}
-					return err
-				}
-			}
-			return &CastExpr{Operand: args[0], Type: st}, true
-		}
-		st := SequenceType{
-			SchemaType:         annotationKeyOf(lex, ns),
-			SchemaUnionMembers: members,
-			Occurrence:         "?",
-		}
-		fillUnionMemberDetail(&st, lex, ns)
-		if lex, ns := lex, ns; true {
-			st.SchemaValueValid = func(value string) error {
-				known, err := schemaValueValid(lex, ns, value)
-				if !known {
-					return nil
-				}
-				return err
-			}
-		}
-		return &CastExpr{Operand: args[0], Type: st}, true
-	}
-	if prim == xdm.TypeQName {
+	st.Occurrence = "?"
+	if st.HasAtomicType && st.AtomicType == xdm.TypeQName {
 		// A type derived from xs:NOTATION (or from xs:QName) has the QName
 		// value space, so its constructor has to resolve the prefix here,
 		// while the static context still exists — the same reason xs:QName()
@@ -1271,32 +1193,6 @@ func schemaConstructorCast(name xdm.QName, args []Expr,
 			}, true
 		}
 		return nil, false
-	}
-	st := SequenceType{
-		AtomicType:    prim,
-		HasAtomicType: true,
-		SchemaType:    annotationKeyOf(lex, ns),
-		Occurrence:    "?",
-	}
-	// The facets of the imported type, captured exactly as the type-position
-	// path captures them, and for the same reason: they live in the schema
-	// and nothing carries a schema into the evaluator.
-	//
-	// Omitting them here made the constructor a weaker test than the cast it
-	// is defined to be. myType:sizeType is an xs:integer restricted to 1..19,
-	// so "20 cast as myType:sizeType" failed on maxInclusive while
-	// "myType:sizeType(20)" erased the type to xs:integer and returned 20 --
-	// user-defined-2, which requires FORG0001. F&O 3.0 17.5 defines a
-	// user-defined type's constructor as the corresponding cast, so the two
-	// cannot disagree.
-	if lex, ns := lex, ns; true {
-		st.SchemaValueValid = func(value string) error {
-			known, err := schemaValueValid(lex, ns, value)
-			if !known {
-				return nil
-			}
-			return err
-		}
 	}
 	return &CastExpr{Operand: args[0], Type: st}, true
 }
@@ -1636,63 +1532,8 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 			// point of not returning here. Returning early gave an imported
 			// schema type no occurrence indicator at all, so "foo:testType*"
 			// reported a syntax error at the "*" while "xs:integer*" parsed.
-			if prim, isAtomic, found := schemaTypeOf(t.Val, p.ns); found {
-				st.SchemaType = annotationKeyOf(t.Val, p.ns)
-				// The facets of an imported simple type are only in the
-				// schema, so the check is captured here rather than being
-				// reconstructed from the type code at cast time.
-				if lex, ns := t.Val, p.ns; true {
-					st.SchemaValueValid = func(value string) error {
-						known, err := schemaValueValid(lex, ns, value)
-						if !known {
-							return nil
-						}
-						return err
-					}
-					// A NOTATION-derived type has the QName value space, so a
-					// cast to it has to expand the operand's prefix here,
-					// where the bindings are. See SchemaExpandQName.
-					if prim == xdm.TypeQName {
-						st.SchemaExpandQName = func(lexical string) (xdm.QName, bool) {
-							q, err := resolveLexicalQName(lexical, ns)
-							if err != nil {
-								return xdm.QName{}, false
-							}
-							return q, true
-						}
-					}
-				}
-				if isAtomic {
-					st.AtomicType, st.HasAtomicType = prim, true
-				} else if members, pure := schemaUnionMembersOf(t.Val, p.ns); pure {
-					// A pure union has no single primitive to erase to, so it
-					// arrives here as "known but not atomic". Its members are
-					// what makes it matchable at all.
-					st.SchemaUnionMembers = members
-					fillUnionMemberDetail(&st, t.Val, p.ns)
-				} else if item, isList := schemaTypeIsList(t.Val, p.ns); isList {
-					// A list type has no single primitive either, for the
-					// other reason: its value is a sequence of tokens. Marking
-					// it keeps a cast to it off the atomic-target error, and
-					// SchemaValueValid above is what actually checks a value.
-					st.SchemaListType = true
-					st.SchemaListItemType = item
-				} else {
-					// An impure or restricted union: known, not atomic,
-					// not a pure union, not a list. It is still a legal
-					// cast target, and the schema decides a value through
-					// SchemaValueValid captured above. See SchemaSimpleType.
-					st.SchemaSimpleType = true
-					// Which members a NON-string source may reach. See
-					// SchemaSimpleAtomicMembers.
-					if a, ok := schemaUnionAtomicMembersOf(t.Val, p.ns); ok {
-						st.SchemaSimpleAtomicMembers = a
-						if n, ok := schemaUnionAtomicMemberFacetsOf(
-							t.Val, p.ns); ok && len(n) == len(a) {
-							st.SchemaSimpleAtomicFacets = n
-						}
-					}
-				}
+			if sst, found := schemaTypeCastTarget(t.Val, p.ns); found {
+				st = sst
 				goto occurrence
 			}
 			return st, p.errorf("XPST0051: unknown type %q", t.Val)

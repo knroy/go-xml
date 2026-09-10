@@ -129,31 +129,145 @@ type SchemaListTypes interface {
 }
 
 // schemaTypeIsList resolves a lexical type name and asks whether it is a list
-// type, through the same prefix bindings as everything else.
-func schemaTypeIsList(lex string, ns NamespaceResolver) (xdm.TypeCode, bool) {
+// type, through the same prefix bindings as everything else, reporting the
+// item type's name and its built-in code.
+func schemaTypeIsList(lex string, ns NamespaceResolver) (xdm.QName, xdm.TypeCode, bool) {
 	sl, ok := ns.(SchemaListTypes)
 	if !ok {
-		return 0, false
+		return xdm.QName{}, 0, false
 	}
 	name, ok := resolveTypeQName(lex, ns)
 	if !ok {
-		return 0, false
+		return xdm.QName{}, 0, false
 	}
 	item, ok := sl.SchemaTypeIsList(name)
 	if !ok {
-		return 0, false
+		return xdm.QName{}, 0, false
 	}
 	// The item type's built-in code is what the tokens are cast to one by
-	// one. A list whose item type is itself schema-defined has no such code;
-	// it is still a list -- castability is decided by the schema in full
-	// through SchemaValueValid -- but the cast itself cannot be built here,
-	// which the zero code and true signal.
+	// one when nothing better is known. A list whose item type is itself
+	// schema-defined has no such code; it is still a list -- castability is
+	// decided by the schema in full through SchemaValueValid -- and the name
+	// is what schemaCastTargetByName resolves the cast itself from.
 	if item.URI == xdm.NSXS {
 		if code, ok := BuiltinAtomicTypeCode(item.Local); ok {
-			return code, true
+			return item, code, true
 		}
 	}
-	return 0, true
+	return item, 0, true
+}
+
+// schemaTypeCastTarget resolves a schema-defined type name into the sequence
+// type a cast to it needs: the annotation key, the schema's own validity
+// check, and whichever shape the type has -- atomic, pure union, list, or an
+// impure or restricted union. ok is false when no imported schema defines the
+// name; a built-in xs: name is not looked for here.
+//
+// It is the one body behind the two places a schema type name is written --
+// in type position and as a constructor call -- and behind the item type of a
+// list, which is a type name the SCHEMA wrote and which needs exactly the same
+// resolution one level further in. See SchemaListItem.
+func schemaTypeCastTarget(lex string, ns NamespaceResolver) (SequenceType, bool) {
+	prim, isAtomic, found := schemaTypeOf(lex, ns)
+	if !found {
+		return SequenceType{}, false
+	}
+	st := SequenceType{SchemaType: annotationKeyOf(lex, ns)}
+	// The facets of an imported simple type are only in the schema, so the
+	// check is captured here rather than being reconstructed from the type
+	// code at cast time.
+	st.SchemaValueValid = func(value string) error {
+		known, err := schemaValueValid(lex, ns, value)
+		if !known {
+			return nil
+		}
+		return err
+	}
+	// A NOTATION-derived type has the QName value space, so a cast to it has
+	// to expand the operand's prefix here, where the bindings are. See
+	// SchemaExpandQName.
+	if prim == xdm.TypeQName {
+		st.SchemaExpandQName = func(lexical string) (xdm.QName, bool) {
+			q, err := resolveLexicalQName(lexical, ns)
+			if err != nil {
+				return xdm.QName{}, false
+			}
+			return q, true
+		}
+	}
+	if isAtomic {
+		st.AtomicType, st.HasAtomicType = prim, true
+	} else if members, pure := schemaUnionMembersOf(lex, ns); pure {
+		// A pure union has no single primitive to erase to, so it arrives
+		// here as "known but not atomic". Its members are what makes it
+		// matchable at all.
+		st.SchemaUnionMembers = members
+		fillUnionMemberDetail(&st, lex, ns)
+	} else if item, code, isList := schemaTypeIsList(lex, ns); isList {
+		// A list type has no single primitive either, for the other reason:
+		// its value is a sequence of tokens. Marking it keeps a cast to it
+		// off the atomic-target error, and SchemaValueValid above is what
+		// actually checks a value. The item type is resolved as a cast
+		// target of its own, so each token can be cast to it in full.
+		st.SchemaListType = true
+		st.SchemaListItemType = code
+		if it, ok := schemaCastTargetByName(item, ns); ok {
+			st.SchemaListItem = &it
+		}
+	} else {
+		// An impure or restricted union: known, not atomic, not a pure
+		// union, not a list. It is still a legal cast target, and the
+		// schema decides a value through SchemaValueValid captured above.
+		// See SchemaSimpleType.
+		st.SchemaSimpleType = true
+		// Which members a NON-string source may reach. See
+		// SchemaSimpleAtomicMembers.
+		if a, ok := schemaUnionAtomicMembersOf(lex, ns); ok {
+			st.SchemaSimpleAtomicMembers = a
+			if n, ok := schemaUnionAtomicMemberFacetsOf(lex, ns); ok &&
+				len(n) == len(a) {
+				st.SchemaSimpleAtomicFacets = n
+			}
+		}
+		// A string-like value the union admits only through a LIST member
+		// casts to that list, and a cast to a list type is a sequence (F&O
+		// 3.0 18.3.6). See SchemaSimpleListMembers.
+		st.SchemaSimpleListMembers = schemaUnionListMembersOf(lex, ns)
+	}
+	return st, true
+}
+
+// schemaCastTargetByName resolves a type NAME the schema itself wrote -- the
+// item type of a list, the list member of a union -- into the sequence type a
+// cast to it needs.
+//
+// The built-in names are answered here, because a schema names xs:IDREF and
+// xs:IDREFS as freely as its own types and the resolver has nothing to say
+// about them. A schema-defined name goes through schemaTypeCastTarget, which
+// takes a LEXICAL name and expands it through the prefix bindings; a name
+// from the schema carries its URI and no prefix, so it is given the synthetic
+// prefix the lexer substitutes for Q{uri}local, bound through the same
+// wrapper. That keeps every schema lookup on the one route it already has.
+func schemaCastTargetByName(name xdm.QName, ns NamespaceResolver) (SequenceType, bool) {
+	if name.URI == xdm.NSXS {
+		if facet, ok := listItemFacet[name.Local]; ok {
+			return SequenceType{ListItemFacet: facet}, true
+		}
+		code, ok := BuiltinAtomicTypeCode(name.Local)
+		if !ok {
+			return SequenceType{}, false
+		}
+		// The written name stays alongside the code when it is a derived
+		// type, so the cast can apply the facet the code alone cannot
+		// express -- exactly as a type written in type position keeps it.
+		return SequenceType{
+			AtomicType:    code,
+			HasAtomicType: true,
+			FacetName:     localTypeName(name.Local),
+		}, true
+	}
+	lex := bracedURIPrefix + "0:" + name.Local
+	return schemaTypeCastTarget(lex, wrapBraced(ns, []string{name.URI}))
 }
 
 // SchemaUnionMemberNames reports the annotation keys of a union type's member
@@ -216,7 +330,7 @@ type SchemaImpureUnionTypes interface {
 	SchemaUnionAtomicMemberTypes(name xdm.QName) ([]xdm.TypeCode, bool)
 }
 
-// SchemaUnionListMember reports the item type of a union's LIST member.
+// SchemaUnionListMembers reports the LIST members of a union, by name.
 //
 // It is the other half of the question SchemaUnionAtomicMemberTypes answers.
 // A cast to a list type produces a SEQUENCE -- F&O 3.0 18.3.6 makes the effect
@@ -224,34 +338,55 @@ type SchemaImpureUnionTypes interface {
 // the resulting node", and its own example has my:coordinates("2 -1") return
 // two xs:integer values. So when a string-like source is admitted by a union's
 // list member, the result is that list's items and not the one string that was
-// handed in, and the item type has to be known to build them.
+// handed in, and the list has to be known to build them.
 //
 // The count is what the suite pins. cbcl-castable-impure-010 asks for
 // "s:impureUnionType('1 2 3') castable as s:impureUnionType" to be FALSE: the
 // inner constructor yields THREE xs:decimal values, and a three-item sequence
 // is not castable to anything. Returning the single string made it true.
 //
+// The members are reported by NAME rather than as one item code, because the
+// code lost what the cast owes. A union over xs:IDREFS and a list of a union
+// (CastAs-UnionType-27 and -28) yields xs:IDREF values from the one member and
+// union-member values from the other, and xs:IDREFS is a built-in the schema's
+// own type table does not hold -- so asking it for the item type answered
+// nothing, and the single string came back. The name is resolved on the xpath
+// side into a full cast target, the same way a list's item type is.
+//
 // Optional in the same way as the interfaces above: a resolver that does not
 // implement it reports no list member, and the result keeps its old shape.
-type SchemaUnionListMemberType interface {
-	// SchemaUnionListMemberItemType returns the built-in item type of the
-	// named union's list member. ok is false when the union has no list
-	// member, or when its item type is not one of the built-in codes.
-	SchemaUnionListMemberItemType(name xdm.QName) (xdm.TypeCode, bool)
+type SchemaUnionListMembers interface {
+	// SchemaUnionListMemberNames returns the names of the named union's list
+	// members, in declaration order and transitively through member unions.
+	// ok is false when the name is not a union at all.
+	SchemaUnionListMemberNames(name xdm.QName) ([]xdm.QName, bool)
 }
 
-// schemaUnionListMemberOf resolves a lexical type name to the item type of its
-// union's list member, through the same prefix bindings as everything else.
-func schemaUnionListMemberOf(lex string, ns NamespaceResolver) (xdm.TypeCode, bool) {
-	su, ok := ns.(SchemaUnionListMemberType)
+// schemaUnionListMembersOf resolves a lexical type name to the list members of
+// its union, each as a cast target, through the same prefix bindings as
+// everything else. A member that resolves to no list is left out.
+func schemaUnionListMembersOf(lex string, ns NamespaceResolver) []SequenceType {
+	su, ok := ns.(SchemaUnionListMembers)
 	if !ok {
-		return 0, false
+		return nil
 	}
 	name, ok := resolveTypeQName(lex, ns)
 	if !ok {
-		return 0, false
+		return nil
 	}
-	return su.SchemaUnionListMemberItemType(name)
+	names, ok := su.SchemaUnionListMemberNames(name)
+	if !ok {
+		return nil
+	}
+	var out []SequenceType
+	for _, n := range names {
+		st, ok := schemaCastTargetByName(n, ns)
+		if !ok || (!st.SchemaListType && st.ListItemFacet == "") {
+			continue
+		}
+		out = append(out, st)
+	}
+	return out
 }
 
 // schemaUnionAtomicMembersOf resolves a lexical type name to the atomic member

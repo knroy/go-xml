@@ -40,9 +40,9 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 6 of 30,346; XSLT 3.0 has 40 of 11,518;
+failures of 6,201; XQuery 3.1 has 3 of 30,346; XSLT 3.0 has 40 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,576. Everything below
-is an account of those 115 cases, or of a decision that produced some of them.
+is an account of those 112 cases, or of a decision that produced some of them.
 
 What this file adds, and that one does not:
 
@@ -207,37 +207,34 @@ missing — which is the correct behaviour, not a cost.
 
 ### XQuery schema awareness: a tail of features `import schema` made reachable (XQuery 3.1)
 
-**22 failures of 30,346, and none of them a regression.** This entry exists
+**3 failures of 30,346, and none of them a regression.** This entry exists
 because the number is easy to misread. `import schema` was implemented, and
 implementing it brought **416 previously-skipped cases into scope**, of which
 339 now pass. The in-scope count went 29,930 → 30,346 and the passing count
-29,918 → 30,340. A lift that admits failing cases raises the failure count by
+29,918 → 30,343. A lift that admits failing cases raises the failure count by
 construction, and quoting the failure count without the denominator beside it
 would describe a gain as a loss.
 
-The tail has fallen 203 → 113 → 101 → 93 → 42 → 26 → **10** as the features
+The tail has fallen 203 → 113 → 101 → 93 → 42 → 26 → 10 → **3** as the features
 behind it landed. What remains is a tail of separate features that
 `import schema` made *reachable* without making them present. `docs/todo.md`
 §1.5 names them and is the forward-looking half of this entry; what belongs
 here is the measured shape, because it is what says the tail is several
 features rather than one broken import.
 
-The cases cluster by production, not by symptom.
-**`prod-CastExpr.schema` now holds 4** — `CastAs-UnionType-27` and `-28`,
-`CastAs-ListType-21`, and `user-defined-11` — with six singletons beside it:
-`prod-TypeswitchExpr`, `prod-FunctionCall`, `prod-ContextItemDecl`,
-`op-same-key`, `misc-CombinedErrorCodes` and `app-Demos`, one case each.
+What remains is three singletons: `prod-ContextItemDecl`, `op-same-key` and
+`app-Demos`, one case each. `prod-CastExpr.schema` is at 88 / 88.
 
-What is left of the cast group is a single shape, and a narrow one: a union
-whose member — or a list whose item type — is a **derived string type with no
-built-in atomic code**. `xs:IDREFS` is a list of `xs:IDREF`, and `xs:IDREF`
-erases to `xs:string` with no code of its own, so the item type resolves to
-nothing, the cast cannot build the sequence F&O 3.0 18.3.6 owes, and the single
-string it was handed comes back. The union-member half of exactly this problem
-is closed — a cast to a union now carries the member's NAME alongside its
-erased code, so `xs:NCName` applies its facet and annotates the result — and
-closing the list half means carrying the same information one level further in,
-or giving the derived string types codes of their own.
+The last of the cast group was a single shape, and a narrow one: a cast to a
+list type built each token from the item type's erased *code*. `xs:IDREF`
+erases to `xs:string`, a union to nothing, so the sequence F&O 3.0 18.3.6 owes
+— "each of which is an instance of the item type" — came back as bare strings
+or, for a union over lists, as the one string handed in, because the union's
+list member was looked up by item code and `xs:IDREFS` is a built-in the
+schema's type table does not hold. The union-member fix had already shown the
+answer — carry the NAME the code loses — and this is that answer one level
+further in: the item type, and each list member of a union, is resolved as a
+full cast target of its own, and every token is cast through it.
 
 **The error-code mismatches are the interesting minority.** A group raises
 `XPST0008` where `XQDY0027` is wanted. The `XPST0017`-for-`FORG0001` group that

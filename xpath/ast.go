@@ -504,6 +504,22 @@ type SequenceType struct {
 	// SchemaValueValid -- but the cast's result sequence does.
 	SchemaListItemType xdm.TypeCode
 
+	// SchemaListItem is the item type of the same list, resolved as a cast
+	// target in its own right, or nil when the resolver cannot supply it.
+	//
+	// SchemaListItemType is lossy in the way a cast cares about. XPath erases
+	// every derived string type to xs:string, so a list of xs:IDREF built
+	// three bare strings where F&O 3.0 18.3.6 owes three values "each of
+	// which is an instance of the item type"; and a list whose item type is
+	// a union has no code at all, so its tokens stayed the strings they were
+	// handed in as. CastAs-UnionType-27 asks for xs:IDREF* and
+	// CastAs-ListType-21 for an xs:NCName that is also an instance of the
+	// union. Each token is cast to THIS type, through the same rules as a
+	// cast written against it, so the facet is applied, the member chosen and
+	// the annotation recorded. The code stays as the fallback for a resolver
+	// that answers only the older question.
+	SchemaListItem *SequenceType
+
 	// SchemaSimpleType marks a named schema simple type that is a legal cast
 	// target but has no shape any of the fields above can describe: an
 	// *impure* union -- one carrying facets, or one holding a list type
@@ -526,22 +542,31 @@ type SequenceType struct {
 	// name denotes such a type, so the atomic-target rule lets it through.
 	SchemaSimpleType bool
 
-	// SchemaSimpleListItemType is the item type of the LIST member of the
-	// impure union SchemaSimpleType marks, when it has one.
+	// SchemaSimpleListMembers are the LIST members of the impure union
+	// SchemaSimpleType marks, in declaration order, each resolved as a cast
+	// target of its own: SchemaListType set, SchemaListItem carrying the item
+	// type, SchemaValueValid the member's own validity.
 	//
 	// A cast to a list type produces a SEQUENCE, one value per whitespace-
 	// separated token (F&O 3.0 18.3.6). A union holding a list member is
 	// impure, so such a cast arrives here rather than in the list-type branch
-	// above, and without this field the result was the single string handed
-	// in. cbcl-castable-impure-010 is what that cost: the constructor
+	// above, and without this the result was the single string handed in.
+	// cbcl-castable-impure-010 is what that cost: the constructor
 	// "s:impureUnionType('1 2 3')" owes three xs:decimal values, and a
 	// three-item sequence is not castable to anything -- so the outer
 	// "castable as s:impureUnionType" is false, where one string made it true.
 	//
-	// Only a string-like source reaches the list member at all; an atomic
+	// The members are whole types rather than one item code because the code
+	// could not say which list admitted the value, nor what its items are
+	// beyond a built-in primitive. A union over xs:IDREFS and a list of a
+	// union (CastAs-UnionType-27 and -28) owes xs:IDREF values from the first
+	// and union-member values from the second, and which one applies is
+	// decided by trying them in order -- the rule for every union.
+	//
+	// Only a string-like source reaches a list member at all; an atomic
 	// source is confined to SchemaSimpleAtomicMembers, which is the rule that
-	// separates -005 from -009. 0 when the union has no list member.
-	SchemaSimpleListItemType xdm.TypeCode
+	// separates -005 from -009. nil when the union has no list member.
+	SchemaSimpleListMembers []SequenceType
 
 	// SchemaSimpleAtomicMembers are the built-in atomic types an impure union
 	// admits directly, ignoring any list member.

@@ -99,7 +99,7 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 | **XPath 2.0** | 100.00% of the W3C QT3 suite (15,217 of 15,217 in scope) |
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,362 of 19,362 in scope) |
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,898 of 21,898 in scope); maps, arrays, the lookup operator, the JSON family |
-| **XQuery 3.1** | 99.98% of the W3C QT3 suite (30,340 of 30,346 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 315 more passes; the 6 failures are the tail catalogued in [todo.md](docs/todo.md) §1.5 |
+| **XQuery 3.1** | 99.99% of the W3C QT3 suite (30,343 of 30,346 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; the 3 failures are the tail catalogued in [todo.md](docs/todo.md) §1.5 |
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.65% of the W3C XSLT suite filtered to 3.0 (11,478 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 17 of the 40 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |

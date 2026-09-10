@@ -61,6 +61,15 @@ const unionsSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
       <xs:pattern value="[a-z:]+"/>
     </xs:restriction>
   </xs:simpleType>
+  <xs:simpleType name="idrefList">
+    <xs:list itemType="xs:IDREF"/>
+  </xs:simpleType>
+  <xs:simpleType name="ncnameOrQNameList">
+    <xs:list itemType="u:ncnameOrQName"/>
+  </xs:simpleType>
+  <xs:simpleType name="idrefsOrNames">
+    <xs:union memberTypes="xs:IDREFS u:ncnameOrQNameList"/>
+  </xs:simpleType>
 </xs:schema>`
 
 func withUnions() xquery.Options {
@@ -871,5 +880,96 @@ func TestCastToUnionKeepsAnExistingQName(t *testing.T) {
 	}
 	if got != "false" {
 		t.Fatalf("a union with no QName member must refuse one, got %s", got)
+	}
+}
+
+// TestListCastYieldsInstancesOfTheItemType asserts F&O 3.0 §18.3.6: the result
+// of casting to a list type L is "a sequence of zero or more atomic values
+// each of which is an instance of the item type of L". The item type is the
+// schema's, not a primitive it erases to -- so a list of xs:IDREF owes
+// xs:IDREF values, and a list whose item type is a union owes, per §18.3.2,
+// an instance of the member that accepted each token.
+//
+// Both halves had collapsed to xs:string. The cast built each token with the
+// item type's erased CODE, which for xs:IDREF is xs:string and for a union is
+// nothing at all, so "instance of xs:IDREF+" and "instance of xs:NCName" were
+// both false over values the cast had just been asked to produce.
+// prod-CastExpr.schema/CastAs-ListType-21 is the suite's union case.
+func TestListCastYieldsInstancesOfTheItemType(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		want string
+	}{
+		// A derived string item type: the facet is applied and recorded.
+		{`count("a b c" cast as u:idrefList)`, "3"},
+		{`("a b c" cast as u:idrefList) instance of xs:IDREF+`, "true"},
+		{`("a b c" cast as u:idrefList) instance of xs:string+`, "true"},
+		// A union item type: each item is an instance of the member that
+		// accepted it, and so of the union (XPath 3.1 §2.5.5).
+		{`count("a b xs:integer" cast as u:ncnameOrQNameList)`, "3"},
+		{`("a b xs:integer" cast as u:ncnameOrQNameList)[1] eq "a"`, "true"},
+		{`("a b xs:integer" cast as u:ncnameOrQNameList)[1] instance of xs:NCName`, "true"},
+		{`("a b xs:integer" cast as u:ncnameOrQNameList)[1] instance of u:ncnameOrQName`, "true"},
+		{`("a b xs:integer" cast as u:ncnameOrQNameList) instance of u:ncnameOrQName+`, "true"},
+		// The QName member resolves its prefix against the bindings in scope
+		// where the type name was written, as a cast to the union does.
+		{`("a b xs:integer" cast as u:ncnameOrQNameList)[3] instance of xs:QName`, "true"},
+		{`namespace-uri-from-QName(("a b xs:integer" cast as u:ncnameOrQNameList)[3]) eq "http://www.w3.org/2001/XMLSchema"`, "true"},
+		// BOUNDARY: a token no member admits fails the whole cast, so
+		// "castable as" is false rather than a shorter sequence.
+		{`"a b 1c" castable as u:ncnameOrQNameList`, "false"},
+	} {
+		got, err := run(t, unionQuery(c.body), withUnions())
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", c.body, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: got %s, want %s", c.body, got, c.want)
+		}
+	}
+}
+
+// TestUnionOfListsCastsThroughTheMemberThatAccepts asserts §18.3.2 for a
+// union whose members are LIST types: the members are tried in order, and the
+// result is the sequence the accepting member's cast produces (§18.3.6) --
+// xs:IDREF values from xs:IDREFS, union-member values from a list of a union.
+//
+// The union had carried one item CODE for "the" list member, found by asking
+// the schema's type table about xs:IDREFS -- a built-in the table does not
+// hold -- so it resolved to nothing and the single string came back.
+// prod-CastExpr.schema/CastAs-UnionType-27 and -28 are the suite's cases.
+func TestUnionOfListsCastsThroughTheMemberThatAccepts(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		want string
+	}{
+		// The first member, xs:IDREFS, admits plain names.
+		{`count("a b c" cast as u:idrefsOrNames)`, "3"},
+		{`("a b c" cast as u:idrefsOrNames) instance of xs:IDREF+`, "true"},
+		// xs:IDREFS refuses a token with a colon, so the second member takes
+		// it, and every item is then an instance of THAT list's item type.
+		{`count("a b xs:integer" cast as u:idrefsOrNames)`, "3"},
+		{`("a b xs:integer" cast as u:idrefsOrNames) instance of u:ncnameOrQName+`, "true"},
+		{`("a b xs:integer" cast as u:idrefsOrNames)[3] instance of xs:QName`, "true"},
+		{`("a b xs:integer" cast as u:idrefsOrNames) instance of xs:IDREF+`, "false"},
+		// The constructor is the same cast (F&O 3.0 17.5).
+		{`count(u:idrefsOrNames("a b xs:integer"))`, "3"},
+		// BOUNDARY: a value no member admits.
+		{`"a b 1c" castable as u:idrefsOrNames`, "false"},
+	} {
+		got, err := run(t, unionQuery(c.body), withUnions())
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", c.body, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: got %s, want %s", c.body, got, c.want)
+		}
+	}
+	// The failure is a failed cast, and F&O 3.0 18.3.1 names its code.
+	_, err := run(t, unionQuery(`"a b 1c" cast as u:idrefsOrNames`), withUnions())
+	if err == nil || !strings.Contains(err.Error(), "FORG0001") {
+		t.Fatalf("a value no list member admits must raise FORG0001, got %v", err)
 	}
 }

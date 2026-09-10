@@ -336,28 +336,28 @@ func (sc *staticContext) SchemaUnionAtomicMemberTypes(name xdm.QName) ([]xdm.Typ
 	return out, true
 }
 
-// SchemaUnionListMemberItemType implements xpath.SchemaUnionListMemberType.
+// SchemaUnionListMemberNames implements xpath.SchemaUnionListMembers.
 //
 // It walks the same transitive membership as SchemaUnionAtomicMemberTypes and
-// picks out the member that one deliberately skips: the list. The item type is
-// resolved to a built-in code, because that is what the cast needs in order to
-// build the sequence F&O 3.0 18.3.6 asks for -- one value per whitespace-
-// separated token, each an instance of the list's item type.
-//
-// The first list member wins. A union with two of them is legal XSD but has no
-// bearing here: the members are tried in declaration order, so the first is the
-// one a value would be admitted by.
-func (sc *staticContext) SchemaUnionListMemberItemType(name xdm.QName) (xdm.TypeCode, bool) {
+// picks out the members that one deliberately skips: the lists, by name and in
+// declaration order. The names are handed back rather than an item code
+// because the code lost what the cast owes -- xs:IDREFS is a built-in this
+// schema's own type table does not hold, so asking IsListSimpleType about it
+// answered nothing, and a list of a union has no single code at all. The xpath
+// side resolves each name into a full cast target, the same way it resolves a
+// list's item type. An anonymous list member has no name to report and is left
+// out, as it always was.
+func (sc *staticContext) SchemaUnionListMemberNames(name xdm.QName) ([]xdm.QName, bool) {
 	if sc.schema == nil {
-		return 0, false
+		return nil, false
 	}
 	t, ok := sc.schema.Types[name]
 	if !ok {
-		return 0, false
+		return nil, false
 	}
 	st, ok := t.(*xsd.SimpleType)
 	if !ok {
-		return 0, false
+		return nil, false
 	}
 	// A restriction of a union declares no members of its own; the nearest
 	// ancestor that does is the one to walk. This mirrors the descent in
@@ -370,13 +370,14 @@ func (sc *staticContext) SchemaUnionListMemberItemType(name xdm.QName) (xdm.Type
 		st = base
 	}
 	if st == nil || st.Variety != xsd.VarietyUnion {
-		return 0, false
+		return nil, false
 	}
 	seen := map[*xsd.SimpleType]bool{}
-	var walk func(u *xsd.SimpleType) (xdm.TypeCode, bool)
-	walk = func(u *xsd.SimpleType) (xdm.TypeCode, bool) {
+	var out []xdm.QName
+	var walk func(u *xsd.SimpleType)
+	walk = func(u *xsd.SimpleType) {
 		if u == nil || seen[u] {
-			return 0, false
+			return
 		}
 		seen[u] = true
 		for _, m := range u.MemberTypes {
@@ -385,24 +386,16 @@ func (sc *staticContext) SchemaUnionListMemberItemType(name xdm.QName) (xdm.Type
 			}
 			switch m.Variety {
 			case xsd.VarietyUnion:
-				if c, ok := walk(m); ok {
-					return c, true
-				}
+				walk(m)
 			case xsd.VarietyList:
-				if item, isList := sc.schema.IsListSimpleType(m.Name); isList {
-					if code, isAtomic, ok := sc.LookupSchemaType(item); ok && isAtomic {
-						return code, true
-					}
-					if c, found := xpath.BuiltinAtomicTypeCode(item.Local); found &&
-						item.URI == xsd.NSSchema {
-						return c, true
-					}
+				if m.Name.Local != "" {
+					out = append(out, xdm.QName{URI: m.Name.URI, Local: m.Name.Local})
 				}
 			}
 		}
-		return 0, false
 	}
-	return walk(st)
+	walk(st)
+	return out, true
 }
 
 // SchemaUnionMemberFacetNames implements xpath.SchemaUnionMemberFacets.

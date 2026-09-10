@@ -25,7 +25,7 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
-| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,340 | 99.98% | **6** |
+| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,343 | 99.99% | **3** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
 | **xslt** | W3C XSLT 3.0 | 11,518 | 11,478 | 99.65% | **40** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
@@ -108,23 +108,21 @@ All three XPath versions agree with the suite on every case in scope.
 
 965 of 965 assertions in James Clark's spectest. **No known gaps.**
 
-## xquery — 6 failures
+## xquery — 3 failures
 
-**XQuery 3.1: 30,340 / 30,346 = 99.98%.**
+**XQuery 3.1: 30,343 / 30,346 = 99.99%.**
 
-The failures cluster by production, not by symptom.
-**`prod-CastExpr.schema` (3)** — `CastAs-UnionType-27` and `-28`, and
-`CastAs-ListType-21` — plus three singletons: `prod-ContextItemDecl`,
-`op-same-key` and `app-Demos`, one case each.
+What remains is three singletons: `prod-ContextItemDecl`, `op-same-key` and
+`app-Demos`, one case each.
 
-The three `CastAs-*` cases are one shape: a union whose member, or a
-list whose item type, is a **derived string type with no built-in atomic code**
-— `xs:IDREF` in `xs:IDREFS`, or a union used as a list's item type. The item
-type resolves to no code, so the cast cannot build the sequence F&O 3.0 18.3.6
-owes and returns the single string it was handed. Closing it means giving the
-derived string types codes of their own, or teaching the list cast to carry a
-facet name where no code exists — the same information the union-member fix
-already carries, one level further in.
+`prod-CastExpr.schema` is closed. Its last three cases — `CastAs-UnionType-27`
+and `-28`, `CastAs-ListType-21` — were one shape: a cast to a list type built
+each token from the item type's erased *code*, which for `xs:IDREF` is
+`xs:string` and for a union is nothing, so F&O 3.0 18.3.6's "each an instance
+of the item type" was lost. The item type — and each list member of a union
+over lists, which `xs:IDREFS` had defeated by being a built-in the schema's
+type table does not hold — is now resolved as a full cast target, and each
+token goes through the cast an expression written against it would.
 
 Four singletons this section used to read are now closed, each for a
 different reason and none by loosening a check: `user-defined-11` (`XQST0034`

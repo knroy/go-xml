@@ -120,6 +120,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A Windows filename parsed as a URI scheme | `c:\my\doc\books.xml` was read as scheme `c`; backslashes are not legal URI characters on any platform, so it is FODC0005. | [`f536984`][f536984] |
 | `fn:transform` codes and options | FOXT0001 where the options identify no stylesheet (QT3 reserves it for an unavailable *product*); an option as element content refused as a text node; an href-less `xsl:result-document` treated as secondary. | [`f536984`][f536984] |
 | Four unchecked or unread attributes | `exponent-separator` accepted but never mapped into the format, XTSE0730 unimplemented, `xsl:attribute-set/@streamable` missing from the table, and `xsl:` attribute *values* on an LRE never checked. | [`f536984`][f536984] |
+| A cast to a schema list type built tokens from the item type's erased code | `xs:IDREF` became `xs:string` and a union item type nothing, against F&O 3.0 §18.3.6. The item type is now resolved as a full cast target and each token cast through it. | — |
+| A union over list types returned the one string it was handed | The list member was looked up by item code, and `xs:IDREFS` is a built-in the schema's type table lacks. The members are now resolved by name and tried in order. 30,340 → 30,343. | — |
 
 ### Fixed — bounds and budgets
 

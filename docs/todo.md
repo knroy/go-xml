@@ -12,7 +12,7 @@ Current position:
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
 | XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
 | XPath 3.1 | 100.00% — 21,898 of 21,898 in scope (0 failing) |
-| XQuery 3.1 | 99.98% — 30,340 of 30,346 in scope (6 failing) |
+| XQuery 3.1 | 99.99% — 30,343 of 30,346 in scope (3 failing) |
 | XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
 | XSLT 3.0 | 99.65% — 11,478 of 11,518 in scope (40 failing); 17 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
@@ -433,17 +433,14 @@ different bugs** that happen to share the cast path:
   `s:impureUnionType("2001-01-01")` still yields one item. This needed a
   result **shape**, not the annotation the old entry predicted.
 
-**What is left in the cast sets, and why it is separate work.** The 37 that
-remain are not the same feature:
-
-* `prod-CastExpr.schema`, 37. Almost all of it is one thing: a cast to a **list
-  type** must yield items *annotated with the list's item type*, so
-  `"a b c" cast as s:unionOfLists` has to be an `xs:IDREF*` and not three
-  strings. That is annotation propagation — the fourth bullet below — reached
-  from the cast side rather than from `validate`. The rest wants list and union
-  constructors as first-class **function items** (`#1`, `?`,
-  `fn:function-lookup`) for namespace-sensitive types, which is a higher-order
-  question rather than a schema one.
+**What is left in the cast sets: nothing.** `prod-CastExpr.schema` is at
+88 / 88. Its last three cases were the list half of the union-member fix:
+`"a b c" cast as s:unionOfLists` has to be an `xs:IDREF*`, and a list whose
+item type is a union owes an instance of the accepting member per token.
+The item type — and each list member of a union over lists — is now resolved
+as a full cast target rather than an erased code, so this was not annotation
+propagation from `validate` after all; it was the cast carrying the name the
+code loses, one level further in.
 *(`prod-CastableExpr` is no longer on this list. It was 8 and is now **0** —
 `prod-CastableExpr` is at 946 / 946. Both halves are described under "The
 canonical form and the list member" below, and **both of this entry's
