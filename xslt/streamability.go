@@ -109,6 +109,26 @@ type analyzer struct {
 	currentAllowsChildren bool
 	currentInScope        bool
 
+	// vars is the data-flow environment: for a range variable bound to a
+	// value that is NOT grounded, the posture and sweep that value has.
+	//
+	// §19.8.8.11 says a variable reference is grounded and motionless, and
+	// §19.8.8.1's note explains why the rules stop there: separating a
+	// binding that is used harmlessly from one that is navigated from
+	// "requires data flow analysis (tracing from the binding of a variable
+	// to its usages), rather than purely syntactic analysis". This map is
+	// that tracing, and it is confined to the one construct that needs it,
+	// the quantified expression of §19.8.8.2. Nothing else consults it,
+	// because nothing else has a binding it can see through: an
+	// xsl:variable's initialiser is given a navigation usage precisely so
+	// that a streamed node cannot be bound to it at all.
+	//
+	// A binding absent from the map is grounded, which is what §19.8.8.11
+	// says and what every reference got before. So the map can only make a
+	// reference LESS grounded, never a construct more streamable, and a
+	// construct whose binding this analysis cannot assess never enters it.
+	vars map[xdm.QName]props
+
 	// accumAfter describes the position of this expression within its
 	// enclosing sequence constructor, which is what §19.8.9.1 needs to give
 	// a call on fn:accumulator-after a sweep. Its zero value has known
@@ -293,6 +313,7 @@ func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
 		currentPosture:        a.currentPosture,
 		currentAllowsChildren: a.currentAllowsChildren,
 		currentInScope:        a.currentInScope,
+		vars:                  a.vars,
 	}
 	p := inner.expr(e)
 	a.known = a.known && inner.known
@@ -410,6 +431,7 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 			currentPosture:        a.currentPosture,
 			currentAllowsChildren: a.currentAllowsChildren,
 			currentInScope:        a.currentInScope,
+			vars:                  a.vars,
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
@@ -454,6 +476,7 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 			currentPosture:        a.currentPosture,
 			currentAllowsChildren: a.currentAllowsChildren,
 			currentInScope:        a.currentInScope,
+			vars:                  a.vars,
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
@@ -539,6 +562,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 				currentPosture:        a.currentPosture,
 				currentAllowsChildren: a.currentAllowsChildren,
 				currentInScope:        a.currentInScope,
+				vars:                  a.vars,
 			}
 			next = inner.expr(e)
 			curAllowsChildren = inner.allowsChildren(e)
@@ -663,6 +687,7 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 				currentPosture:        a.currentPosture,
 				currentAllowsChildren: a.currentAllowsChildren,
 				currentInScope:        a.currentInScope,
+				vars:                  a.vars,
 			}
 			sw := inner.expr(p).sweep
 			if !inner.known {

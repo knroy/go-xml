@@ -60,7 +60,7 @@ much each costs.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
-**15 of the 36 XSLT 3.0 failures**, and by far the largest single gap in the
+**14 of the 35 XSLT 3.0 failures**, and by far the largest single gap in the
 project. The posture-and-sweep lattice exists, and so now do the rules built on
 it: the §19.8.4 instruction rules, §19.8.5 streamable stylesheet functions,
 §18.2.8 accumulators, the §19.8.8 expression rules, the §19.8.9 function
@@ -71,7 +71,7 @@ and, by its own parenthetical, a streamable template rule.
 What remains is a long tail of individual constructs rather than a missing body
 of rules.
 
-Every one of the 35 fails in the same direction: the suite expects `XTSE3430` —
+Every one of the 14 fails in the same direction: the suite expects `XTSE3430` —
 *this construct is not guaranteed streamable* — and the transform succeeds
 instead, because the analysis returns `known=false` for a construct it cannot
 yet model and correctly declines to raise an error it has not proved.
@@ -172,12 +172,12 @@ refuses the same grouping for a reason that never consults the call — a
 free-ranging `group-starting-with` pattern, or a grouping key that is not
 motionless — since neither answer rests on the widening.
 
-**Note what it would and would not buy.** Completing it would move the 15
-cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.69% to about
-99.81%. Nine of those 15 are the unreachable group above, so the reachable
-gain is 6. It would not make the engine stream, and it would not change the result
-of a single transform that currently succeeds — it would convert 15 correct
-answers into 15 refusals to answer. That is the conformant behaviour, and it
+**Note what it would and would not buy.** Completing it would move the 14
+cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.70% to about
+99.82%. Nine of those 14 are the unreachable group above, so the reachable
+gain is 5. It would not make the engine stream, and it would not change the result
+of a single transform that currently succeeds — it would convert 14 correct
+answers into 14 refusals to answer. That is the conformant behaviour, and it
 is worth being explicit that the gain is measured in conformance rather than in
 capability.
 

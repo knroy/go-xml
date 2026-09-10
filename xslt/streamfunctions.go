@@ -695,7 +695,19 @@ func firstParamName(fn *xdm.Node) (xdm.QName, bool) {
 // is to the streaming parameter -- the first parameter of the
 // declared-streamable function whose body is being analysed -- in which case
 // the category and the reference's singularity decide it.
+// A range variable of a quantified expression is the one exception, and it is
+// data flow rather than a rule of §19.8.8.11: the binding sequence's posture
+// was recorded when the binding was entered, and the reference is given it.
+// See analyzer.vars and quantifiedExpr. A variable not in that environment is
+// grounded, exactly as before.
 func (a *analyzer) varRef(x *xpath.VarRef) props {
+	if p, ok := a.vars[x.Name]; ok {
+		// The sweep stays motionless whatever the binding's own sweep was:
+		// naming a value already bound reads nothing further. What the
+		// posture carries is where the nodes SIT, which is what the steps
+		// that follow the reference are assessed against.
+		return props{p.posture, sweepMotionless}
+	}
 	if !a.hasStreamParam {
 		return groundedMotionless
 	}
@@ -743,6 +755,7 @@ func (a *analyzer) simpleMap(x *xpath.SimpleMap) props {
 		currentPosture:        a.currentPosture,
 		currentAllowsChildren: a.currentAllowsChildren,
 		currentInScope:        a.currentInScope,
+		vars:                  a.vars,
 	}
 	p := inner.expr(x.Right)
 	a.known = a.known && inner.known

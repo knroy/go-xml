@@ -27,7 +27,7 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,482 | 99.69% | **36** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,483 | 99.70% | **35** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
@@ -153,11 +153,11 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 36 failures
+## xslt 3.0 — 35 failures
 
-**XSLT 3.0: 11,482 / 11,518 = 99.69%.**
+**XSLT 3.0: 11,483 / 11,518 = 99.70%.**
 
-**15 of the 36 want an `XTSE3430`** — a refusal of a stylesheet as
+**14 of the 35 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles
@@ -230,7 +230,7 @@ and tested on its own, in `xslt/streamlattice.go` and
 | 19.8.8.7 path expressions | complete, both phases, including the scanning-expression reassessment that makes `//x` streamable |
 | 19.8.8.8 axis steps | the posture table and the predicate rule; not the numeric-predicate narrowing |
 | 19.8.8.9 filter expressions | the motionless-predicate clause; not the numeric-predicate narrowing |
-| 19.8.8.11 variable references | the grounded case (correct wherever no streamable stylesheet function is declared) |
+| 19.8.8.11 variable references | the grounded case, the streaming-parameter case, and a data-flow environment for the range variable of a quantified expression |
 | 19.8.8.12 context item expression | complete |
 | 19.8.9.3 `fn:current` | complete, both the expression and the pattern clause |
 | 19.8.9 built-in function operand usages | the proforma table, ~150 signatures |
@@ -427,33 +427,6 @@ So `||` is correct, currently unmodelled, and cannot be landed on its own. It
 should go in together with the U-type inference that would let §19.8.8.4 keep
 `(author | editor)` striding — the same missing inference already recorded
 against `si-group-055` in `bodyCallsCurrentGroup`.
-
-## Quantified expressions over a streamed binding — 1 case gained, 3 valid stylesheets lost
-
-**Measured and withheld.** §19.8.8.2 gives `some|every $v in S satisfies C`
-two operand roles and says of the first: *"The in expression (S). This has
-usage navigation."* Navigation from a non-grounded posture is free-ranging
-(§19.8.1), so a faithful transcription makes `some $t in transaction
-satisfies xs:decimal($t/@value) lt -11110.0` roaming inside a streamable mode
-and raises `XTSE3430`.
-
-Enabled, it gains `streamable-129` — whose binding really does navigate, with
-`preceding-sibling` — and refuses `streamable-100`, `-101` and `-102`, whose
-bindings are plain striding child steps. The suite marks all three
-`_WRONG:streamability-rules-incorrect` and asserts a result rather than an
-error: the W3C rule rejects what Saxon streams, and the catalog sides with
-Saxon.
-
-Separating the two shapes means tracing the bound variable to its uses, which
-is the data-flow analysis §19.8.8.1's own note says these rules exclude
-(*"this requires data flow analysis (tracing from the binding of a variable to
-its usages), rather than purely syntactic analysis"*). Until that exists the
-verdict is withheld for a non-grounded binding and the rule stays live for a
-grounded one, so `some $i in 1 to 3 satisfies ...` is still assessed.
-
-A spurious `XTSE3430` refuses to compile a valid stylesheet, and §19.10 makes
-the error optional; the trade is refused on the same grounds as the `||`
-operator above. In `xslt/streamexprs.go`, `quantifiedExpr`.
 
 ## Two streamability cases that need data-flow analysis
 
@@ -833,6 +806,38 @@ driver defect), not the suite's.
 neighbour's name; its stylesheet is five lines with **no extension element**.
 `package-version-011` was filed as needing a network fetch; **no fetch exists** —
 `doc('')` names the containing module.
+
+## The quantified-expression divergence — the measured cost was real, and paid
+
+This file carried *Quantified expressions over a streamed binding — 1 case
+gained, 3 valid stylesheets lost*. **The measurement was correct.** §19.8.8.2
+gives the `in` expression usage navigation, navigation from a non-grounded
+posture is free-ranging (§19.8.1), and transcribing that literally did gain
+`streamable-129` and refuse `streamable-100`, `-101` and `-102` — three
+stylesheets the suite marks `_WRONG:streamability-rules-incorrect` and expects
+to run. Withholding the verdict was the right call while it stood.
+
+What removed it is the data-flow analysis the entry named as the missing
+ingredient, built for exactly this construct. The range variable is recorded
+with the binding sequence's posture, and a reference to it is given that
+posture instead of §19.8.8.11's unconditional grounded. Nothing else was
+added: the ordinary rules then separate the two shapes on their own, because
+`$t/@value` is an attribute step from a striding posture — striding and
+motionless by §19.8.8.8 — while `$t/preceding-sibling::*` is a reordering axis
+from one, for which that table has no entry at all.
+
+With the use assessed honestly the binding no longer needs the navigation
+usage that stood in for it. §19.4 gives navigation as the answer for "the
+analysis cannot tell what is done with the node", and here it can, so the
+binding transmits and the result is forced grounded — a `some` or `every`
+yields an `xs:boolean`, and no streamed node leaves it. `streamable-129` now
+raises `XTSE3430`; `-100`, `-101` and `-102` still run. 11,482 → 11,483, with
+zero refusals across the 455 DocBook xslTNG and XSpec stylesheets.
+
+The environment is confined to the quantified expression. Nothing else has a
+binding it can see through: an `xsl:variable`'s initialiser is given a
+navigation usage precisely so that a streamed node cannot be bound to it, and
+a variable absent from the environment is grounded exactly as before.
 
 ## `si-group-031` was filed as needing data-flow analysis and did not
 

@@ -284,27 +284,74 @@ func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 			Every: x.Every, Bindings: x.Bindings[1:], Test: x.Test,
 		}
 	}
-	seq := a.operandOf(x.Bindings[0].Seq, usageNavigation)
 	// §19.8.8.2 makes S a navigation operand, and navigation from a
 	// non-grounded posture is free-ranging (§19.8.1). Transcribed literally
 	// that refuses "some $t in transaction satisfies xs:decimal($t/@value)
 	// lt 0", whose binding is a plain striding child step -- streamable-100,
 	// -101 and -102, which the suite marks
-	// "_WRONG:streamability-rules-incorrect" and expects to RUN. Enabling it
-	// gains streamable-129 (whose binding really does navigate, with
-	// preceding-sibling) and loses those three.
+	// "_WRONG:streamability-rules-incorrect" and expects to RUN. The rule as
+	// written also gains streamable-129, whose binding really is navigated
+	// from: "$t/preceding-sibling::*[1]/@value".
 	//
-	// Telling the two apart needs to trace the bound variable to its uses --
-	// the data flow analysis §19.8.8.1's own note says these rules exclude.
-	// Until that exists the verdict is withheld rather than raised: a
-	// spurious XTSE3430 refuses to compile a valid stylesheet, which is worse
-	// than missing an error §19.10 makes optional. A binding over a grounded
-	// sequence ("$i in 1 to 3") is unaffected and still assessed.
-	if !seq.props.streamable() || seq.props.posture != postureGrounded {
-		return a.unknown()
+	// The navigation usage cannot tell the two apart, because it is charged
+	// to the BINDING, and both bindings are the same plain striding child
+	// step. What differs is the USE, and §19.8.8.1's own note names the
+	// missing ingredient: "this requires data flow analysis (tracing from
+	// the binding of a variable to its usages), rather than purely syntactic
+	// analysis". So the tracing is done -- the range variable is recorded in
+	// the environment with the binding sequence's posture -- and the
+	// ordinary rules then separate the two shapes without a special case.
+	// "$t/@value" is an attribute step from a striding posture, striding and
+	// motionless (§19.8.8.8); "$t/preceding-sibling::*" is a reordering axis
+	// from a striding posture, which the same table makes roaming.
+	//
+	// With the use assessed honestly, the binding no longer needs the
+	// navigation usage that stood in for it: navigation is §19.4's answer
+	// for "the analysis cannot tell what is done with the node", and here it
+	// can. The binding is TRANSMITTED into the range variable, and whatever
+	// the body does with it is charged to the body.
+	//
+	// Transmission is not the whole truth either -- the nodes are handed to
+	// the range variable, not returned by the quantified expression, whose
+	// result is an xs:boolean. So the operand carries the transmission usage
+	// through §19.8.1's arithmetic, which is what keeps the limit of one
+	// potentially-consuming operand honest, and the RESULT is forced
+	// grounded below: no streamed node can leave a "some" or an "every".
+	seq := a.operandOf(x.Bindings[0].Seq, usageTransmission)
+	if !seq.props.streamable() {
+		return roamingFreeRanging
 	}
-	return combine([]operand{
-		seq,
-		a.higherOrderOperand(test, usageInspection),
-	}, false)
+	// A grounded binding leaves the environment alone: §19.8.8.11's plain
+	// answer is already right for it, and recording it would only add an
+	// entry that says the same thing.
+	inner := a
+	if seq.props.posture != postureGrounded {
+		inner = a.withVar(x.Bindings[0].Var, seq.props)
+	}
+	op := inner.higherOrderOperand(test, usageInspection)
+	a.known = a.known && inner.known
+	p := combine([]operand{seq, op}, false)
+	if !p.streamable() {
+		return roamingFreeRanging
+	}
+	// The value of "some"/"every" is an xs:boolean, so the construct is
+	// grounded however the binding was reached; only the sweep survives.
+	return props{postureGrounded, p.sweep}
+}
+
+// withVar returns a copy of the analyzer with one more binding in the
+// data-flow environment.
+//
+// The map is copied rather than mutated so that a binding cannot outlive the
+// expression that introduced it: "some $t in a satisfies P" and a sibling
+// "some $t in b satisfies Q" must not see each other's $t, and neither must
+// anything after them.
+func (a *analyzer) withVar(name xdm.QName, p props) *analyzer {
+	b := *a
+	b.vars = make(map[xdm.QName]props, len(a.vars)+1)
+	for k, v := range a.vars {
+		b.vars[k] = v
+	}
+	b.vars[name] = p
+	return &b
 }
