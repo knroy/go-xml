@@ -16,6 +16,10 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| `fn:transform` minted a fresh depth allowance per nesting level, so a self-calling stylesheet killed the process | The charge comes from the call and the nested runtime continues the count, so nesting refuses with `XPDY0001`. | [`8e0f44d`][8e0f44d] |
+| A function item invoked through the public API ran against a byte budget of its own | Both invoke sites forward each budget with the flag marking its boundary, `items` included. | [`d63cbb2`][d63cbb2] |
+| Every XSD assertion began its own 1 GiB allowance, and a refusal was reported as an unsatisfied assertion | One budget per validation episode, and a resource refusal stops the run instead of reading as invalid. | [`f161723`][f161723] |
+| A map keyed `xs:hexBinary` and `xs:base64Binary` on their spelling, so `0F` and `0f` were two entries | The key is the decoded octets, which is what `eq` already compared. | [`10486a6`][10486a6] |
 | Nothing bounded the bytes an evaluation produced: a 1,009-byte expression returned 640 MB | `xpath.MaxBytes` charges the constructs that concatenate as they build. Refuses with `XPDY0130`. | [`b50b373`][b50b373] |
 | A self-applying function item recursed uncharged and killed the process | `DynamicCall.Eval` descends before `Invoke`, so the attack refuses with `XPDY0001`. | [`35c2e77`][35c2e77] |
 | `TransformOptions.MaxDepth` bounded template recursion only, not expressions | The option now reaches the XPath context, which is the path that takes untrusted input. | [`35c2e77`][35c2e77] |
@@ -158,6 +162,9 @@ what the suites *measured*, not what the library does.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| The gate recorded no provenance, so no figure could be tied to the tree that produced it | `check.sh` heads its transcript with Go version, commit, architecture and per-suite revision, and writes `tests/last-run.txt`. | [`03b5942`][03b5942] |
+| CI ran on Linux only, so nothing proved the file handling rule 3 asks for | The fast job runs `ubuntu`/`windows`/`macos`; `conformance` stays Linux, where the corpora are. | [`03b5942`][03b5942] |
+| Nine fuzz targets compiled and replayed seeds but never searched | A nightly matrix gives each 300s, off the per-push gate because the search is nondeterministic. | [`f2aeee8`][f2aeee8] |
 | Four stale feature labels | `streaming`, `streaming-fallback`, `XPath_3.1` and `XML_1.1` sat in `unsupportedFeatures` long after implementation, hiding 2,862 cases. Each must *move* to `supportedFeatures`, not just be deleted. | [`be2938e`][be2938e] |
 | Two more stale labels | `namespace-axis` and `infoset-dtd`; the two harnesses had been contradicting each other. | [`a820213`][a820213] |
 | Dependencies merged additively | A set's `satisfied="true"` outlived a case's `"false"`, excluding all fourteen `fn-load-xquery-module-901..914` by the declaration they exist to contradict. Now merged per (type, value). | [`d15b6df`][d15b6df] |
@@ -653,6 +660,12 @@ here so every entry in this file sits under a release.
 [b361b10]: https://github.com/knroy/go-xml/commit/b361b10
 [b4c4bb2]: https://github.com/knroy/go-xml/commit/b4c4bb2
 [b50b373]: https://github.com/knroy/go-xml/commit/b50b373
+[8e0f44d]: https://github.com/knroy/go-xml/commit/8e0f44d
+[d63cbb2]: https://github.com/knroy/go-xml/commit/d63cbb2
+[f161723]: https://github.com/knroy/go-xml/commit/f161723
+[10486a6]: https://github.com/knroy/go-xml/commit/10486a6
+[f2aeee8]: https://github.com/knroy/go-xml/commit/f2aeee8
+[03b5942]: https://github.com/knroy/go-xml/commit/03b5942
 [b6fb5ab]: https://github.com/knroy/go-xml/commit/b6fb5ab
 [bb803d5]: https://github.com/knroy/go-xml/commit/bb803d5
 [bc72bed]: https://github.com/knroy/go-xml/commit/bc72bed

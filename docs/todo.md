@@ -561,42 +561,80 @@ indirect: pass the map through `TransformOptions.Params` to a top-level
 
 ## 2. Bugs
 
-Three open, all found on 2026-09-10 while verifying an external audit report —
-none of them claims *in* that report. They share one theme: a budget that is
-minted fresh where it should be inherited. Full reasoning in
-`docs/audits/VERDICTS.md`, work in `docs/audits/2026-09-10-fix-plan.md`.
+None open. Four were found on 2026-09-10 while verifying an external audit
+report — none of them a claim *in* that report — and all four are fixed. Three
+shared one theme: a budget minted fresh where it should be inherited. The
+fourth was a map key that disagreed with `eq`. They are kept here rather than
+deleted because the seam that produced three of them recurs; a todo list that
+records its own successes stops being a todo list, but a seam that has now bitten
+five times is worth naming. Full reasoning in `docs/audits/VERDICTS.md`.
 
-### 2.1 `fn:transform` recursion is unbounded — **P0, kills the process**
+### 2.1 `fn:transform` recursion is unbounded — **was P0**
 
-`rt.depth` is per-runtime, and every nested `fn:transform` builds a new runtime
-at zero, so `MaxDepth` bounds recursion within a level and never across levels.
-A stylesheet calling `fn:transform` on itself exhausts the Go stack. Reproduced
-with `MaxDepth: 5` explicitly set:
+**Done**, `8e0f44d`. `rt.depth` is per-runtime, and every nested `fn:transform`
+built a new runtime at zero, so `MaxDepth` bounded recursion within a level and
+never across one. A stylesheet calling `fn:transform` on itself exhausted the
+Go stack — a runtime fatal, which `recover()` cannot catch, so the host process
+died — with `MaxDepth: 5` explicitly set.
 
-```
-runtime: goroutine stack exceeds 1000000000-byte limit
-fatal error: stack overflow
-```
+The charge now comes from the call (`ctx.Depth`) rather than the entry runtime,
+for the same reason `xpath/funcitem.go` takes depth from the caller and not the
+closure: a stylesheet that transforms itself re-enters at the same shallow
+`rt.depth` every time round, so only the call's depth accumulates. The nested
+runtime continues the count through an unexported `TransformOptions.nestedDepth`
+instead of restarting. Refusal is `XPDY0001` wrapping `xdm.ErrResourceLimit`,
+matching `xpath.Context.Descend`. See `xslt/nestedtransform_test.go`, whose
+sabotage showed both halves are independently load-bearing: removing either the
+charge or the inheritance brings the fatal back.
 
-That is a runtime fatal, not a panic — `recover()` does not catch it and the
-host process dies. Reachable from any untrusted stylesheet. Path:
-`xslt/fntransform.go:275` → `xslt/transform.go:371` → `xslt/runtime.go:625` →
-`xpath/context.go:538`. The fix is the one `xpath/funcitem.go:199-210` already
-applies to self-applying function items: take the depth from the call, not the
-closure.
+### 2.2 A function item does not inherit the byte budget
 
-### 2.2 `funcitem.go` does not forward the byte budget
+**Done**, `d63cbb2`. `xpath/funcitem.go` forwarded the caller's `items` and
+`Depth` at both invoke sites and left `bytes` behind, so work wrapped in a
+closure escaped `MaxBytes`. Reachable through the public API, though not from
+ordinary XSLT or XQuery, where the closure captures the same counter pointer
+lexically.
 
-`xpath/funcitem.go:110,199` forward the caller's `items` and `Depth` and never
-`bytes`, so a function item invoked under a nearly-exhausted `MaxBytes` gets a
-fresh allowance. Not reachable from ordinary XSLT or XQuery, where the closure
-captures the same pointer lexically — an API-surface defect. Two lines.
+Forwarding the counter alone would have been worse than the gap: `heldBytes`
+rides the same value copy, so a closure captured outside a host's hold would
+carry "not held" into a held call, and the first `Compiled.Eval` under the body
+would reset the caller's counter and discard charges already made — the leak
+`HoldByteBudget`'s idempotence guard exists to prevent, arriving through the
+closure instead of through re-arming. Each budget now travels with the flag
+that marks its boundary, `items` included: the same latent bug sat on that
+side, shipped and unnoticed. See `xpath/funcitem_bytebudget_test.go`.
 
 ### 2.3 `xsd/assert.go` mints a context per assertion
 
-`xsd/assert.go:616` calls `xpath.NewContext` for every assertion on every
-element, each a fresh 5M-item / 1 GiB allowance, on a path reachable from XSLT
-schema validation.
+**Done.** `xsd/assert.go` called `xpath.NewContext` for every assertion on
+every element, each a fresh 5M-item / 1 GiB allowance, so a schema with many
+assertions over a large document had no aggregate bound at all.
+
+There is no caller budget to inherit: nothing carries an `*xpath.Context`
+across this package's boundary — `ValidateOptions` has no such field, and
+`xslt/validate.go` and `xquery/misc_expr.go` both enter through
+`Schema.Validate` with a freshly built options value. So the budget is owned by
+the validation episode instead, a third instance of the boundary
+`xslt/runtime.go` draws at "one transform" and `xquery/xquery.go` at "one
+query": `validator.assertEpisode` arms one held context per run and
+`assertContext` focuses it per assertion, both budgets held because
+`Compiled.Eval` resets each one per expression and an assertion is exactly one
+expression.
+
+The refusal also had to stop being laundered. XSD 1.1 makes an evaluation error
+a false result, which would have reported `XPDY0130` as `cvc-assertion.3` "not
+satisfied" — calling the document invalid on a ground the schema never stated,
+and letting the walk carry on spending a budget already gone. A resource
+refusal now goes through `failLimit` and sets `stopped`, as the depth and error
+limits do. See `xsd/assert_budget_test.go`.
+
+Not covered: `checkSimpleAssertions`, the `<xs:assertion>` facet of a simple
+type, still mints a context per assertion. It is reached through
+`validateSimpleValueIn`, a chain of free functions with no validator to hang an
+episode on and seventeen call sites, several of them at schema-load time where
+there is no validation run to be the episode. The per-element path fixed above
+is the one that scales with document size; this one scales with the number of
+values, and threading a budget to it is a wider change than this entry.
 
 ---
 
@@ -672,13 +710,20 @@ region — an emptiable inner particle, whose outer scope has to be credited for
 an iteration that consumed nothing — that the first fix had left rejecting valid
 documents, and again no suite case moved.
 
-**No coverage-guided fuzzing runs in any gate.** The nine targets compile and
-their seed corpora run as ordinary unit tests, so they are smoke-tested on every
-push, but `-fuzz` appears in neither `tests/check.sh` nor
-`.github/workflows/ci.yml` — `check.sh` only *counts* them, to keep a README
-figure honest. Every result above came from running them by hand. A scheduled
-job at a bounded `-fuzztime` would make that continuous;
-`docs/audits/2026-09-10-fix-plan.md` §5 has the shape.
+**Coverage-guided fuzzing now runs nightly.** `.github/workflows/fuzz.yml`
+fuzzes all nine targets — one per matrix leg, since `go test -fuzz` takes one
+target per invocation — at `-fuzztime 300s`, on a `schedule:` cron and on
+`workflow_dispatch`. It is deliberately *not* in the per-push gate: a
+coverage-guided search is nondeterministic, and a five-minute job that can fail
+on a commit that would have passed a second time is one people disable rather
+than fix. `ci.yml` still replays every seed corpus as an ordinary unit test, so
+a target that stops compiling is caught in a minute, and `check.sh` still only
+*counts* the targets, to keep a README figure honest. Each of the nine was run
+locally for 20s before the job was wired in — roughly 24 million executions in
+total, no crasher — so the job did not start red. A crasher the job finds is
+uploaded as an artifact from the package's own `testdata/fuzz/<Target>/`, which
+is not the gitignored top-level `testdata/`; committing it there makes it a
+permanent seed.
 
 This matters more than it looks: fuzzing here has already found *two* unbounded
 recursions that killed the process, and a third of exactly that class

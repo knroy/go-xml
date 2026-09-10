@@ -40,17 +40,19 @@ Eight audits have passed over this code. This section is the whole of what is
 already fixed has been reduced to one line apiece under *History* at the end,
 with the narrative in [CHANGELOG.md](../CHANGELOG.md).
 
-**Open.** Four. One is a caller responsibility; three are defects found on
-2026-09-10 while verifying an external report, none of them a claim *in* that
-report. The three share one theme — a budget minted fresh where it should be
-inherited — and are planned in `docs/audits/2026-09-10-fix-plan.md`.
+**Open.** One, and it is a caller responsibility rather than a defect here.
 
 | finding | reach | why it is still open |
 |---|---|---|
-| `fn:transform` recursion is unbounded | hostile stylesheet | **P0.** Each nested transform mints a runtime at depth zero, so `MaxDepth` never binds across levels. Reproduced: `fatal error: stack overflow` with `MaxDepth: 5` set. A Go stack overflow is fatal, so the process dies. Fix planned. |
-| a function item does not inherit the byte budget | hostile caller | `xpath/funcitem.go:110,199` forward `items` and `Depth`, never `bytes`. Not reachable from ordinary XSLT or XQuery — an API-surface defect. |
-| an XSD assertion mints its own budget | hostile schema | `xsd/assert.go:616` gives every assertion on every element a fresh 5M-item / 1 GiB allowance. |
 | `javascript:` URLs pass through | hostile stylesheet | an XSLT processor is not an HTML sanitiser; see *Open findings*. |
+
+Three defects found on 2026-09-10 while verifying an external report — none of
+them a claim *in* that report — were fixed the same day and are listed under
+*History*. All three were one shape: a budget minted fresh where it should have
+been inherited, at `fn:transform`'s nesting boundary, at a function item's
+invoke sites, and at every XSD assertion. That seam has now produced five
+findings, so it is the first place to look when a limit is reported as not
+binding.
 
 The eighth audit's six other findings are closed and are listed under
 *History*. Two of them ended the process rather than the request — a Go stack
@@ -1215,6 +1217,17 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 - **The process environment was readable by any stylesheet or query** — false accept, the only I/O in the library that failed open. `fn:environment-variable` and `fn:available-environment-variables` now answer from `Context.Environment`, and withhold everything when it is nil. See CHANGELOG.
 - **A flat operator chain overflowed the stack during compilation** — availability, `maxParseDepth` counting nesting where the attack was length. Every infix loop in the precedence ladder now charges `maxChainLength`. See CHANGELOG.
 - **A string could be doubled past every budget** — availability: `MaxItems` counts items and a string is one item however long it is, so a 1,009-byte expression of twenty-six nested `let`s returned 671,088,640 bytes with no error, and the same chain of `xsl:variable` and `xsl:value-of` did it from a stylesheet. The byte limits above all bound **ingress**; nothing bounded bytes **produced during evaluation**. `xpath.MaxBytes` now charges the constructs that concatenate as they build — held across one query or one transform, because the chain's steps are siblings that a per-expression boundary never sees — and refuses with `XPDY0130`. The bound is 1 GiB against a largest measured legitimate string of 14,516,346 bytes. See CHANGELOG.
+- **A function item ran against a byte budget of its own** — cost, and the escape hatch from the finding above: both sites in `xpath/funcitem.go` that hand a call's per-evaluation limits to an invoked function item forwarded `items` and `Depth` but never `bytes`, so a body invoked under a caller that had all but spent `MaxBytes` started from zero. Not reachable from a stylesheet or a query, where the closure captures the same counter lexically; reachable through the public API, because `xdm.FunctionItem.Invoke` is exported and a function item produced under one `Context` can be invoked under another. Each budget now comes from the call together with its hold flag — the counter alone would let a closure captured outside a host's hold reset the caller's charges, which is the leak `HoldByteBudget`'s idempotence guard exists to prevent, arriving through the closure instead. See CHANGELOG.
+
+**Ninth pass — found while verifying an external report, 2026-09-10.**
+
+None of these was a claim in the report. Each was found in the code a claim
+pointed at, which is the argument for reading such a report as a map rather
+than as a description.
+
+- **`fn:transform` minted a fresh depth allowance at every nesting level** — availability, and the third of this shape: a stylesheet calling `fn:transform` on itself reached a Go stack overflow, which is a runtime fatal `recover()` cannot catch, so the host process died — with `MaxDepth` explicitly set. `rt.depth` is per-runtime and each nested transform built one at zero, so the bound held within a level and never across one. The charge now comes from the call rather than the entry runtime, and the nested runtime continues the count. See CHANGELOG.
+- **Every XSD assertion began its own 1 GiB allowance** — cost: `xpath.NewContext` per assertion per element, so a schema with many assertions over a large document had no aggregate bound. Validation has no caller budget to inherit, so the boundary is the validation episode, a third instance of the one `xslt` draws at "one transform". The budget alone was inert: XSD 1.1 makes an evaluation error a false result, so the refusal was reported as `cvc-assertion.3` "not satisfied" — calling the document invalid on a ground the schema never stated — and the walk kept spending. A resource refusal now stops the run, as the depth and error limits do. See CHANGELOG.
+- **A binary value could not find its own entry in a map** — false reject: `MapKeyOf` keyed `xs:hexBinary` and `xs:base64Binary` on the lexical form, so `0F` and `0f` — one value under XSD Part 2 §3.2.15 — took different keys, as did base64 values differing only by the whitespace §3.2.16 permits between characters. Values built from element text are unnormalised and `eq` already decoded, so a value could compare equal to a key and still miss the lookup. The key is now the octets. Found by widening the `SameKey` differential corpus, where neither binary type had any coverage. See CHANGELOG.
 
 **Sixth audit.**
 

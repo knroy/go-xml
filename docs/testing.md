@@ -579,18 +579,24 @@ persistent hash array mapped trie — is what made it pass.
 
 ## Fuzzing
 
-Five targets, using Go's native `testing.F` and no framework:
+Nine targets, using Go's native `testing.F` and no framework:
 
 | target | package | asserts |
 |---|---|---|
 | `FuzzParseNoPanic` | `xdm` | `ParseString` never panics; a refusal is an error and never a tree beside it; an accepted tree walks with its parent links intact |
+| `FuzzParseDOCTYPE` | `xdm` | the DTD subset parser never panics on a malformed `<!DOCTYPE>` |
 | `FuzzLoadSchemaNoPanic` | `xsd` | `Load` never panics at either XSD version, and every content model it accepts compiles to an automaton that answers total |
+| `FuzzSchemaComplexity` | `xsd` | the complexity limits refuse a pathological schema rather than running unbounded |
 | `FuzzSerializeRoundTrip` | `xslt` | parse → serialise → parse yields the same document, compared on expanded names, kinds and string values |
 | `FuzzCompileStylesheetNoPanic` | `xslt` | `Compile` never panics and never returns a stylesheet beside an error |
 | `FuzzCompileNoPanic` | `xpath` | the expression compiler never panics, and every parse error carries a spec code |
+| `FuzzParseCompactNoPanic` | `relaxng` | the compact-syntax parser never panics |
+| `FuzzTokenNoPanic` | `internal/xmlfork` | the forked tokeniser never panics and terminates on any byte string |
 
-A target lives in `zz_fuzz_test.go` in the package it exercises. The `zz_`
-prefix is only to sort it last.
+Most targets live in `zz_fuzz_test.go` in the package they exercise; the `zz_`
+prefix is only to sort it last. Four sit beside the code they cover instead,
+in `internal/xmlfork/fuzz_test.go`, `relaxng/compact_fuzz_test.go` and
+`xsd/complexity_fuzz_test.go`.
 
 ```sh
 # Run one target's search. -run '^$' suppresses the ordinary tests so that
@@ -605,8 +611,18 @@ restriction, not this repository's.
 
 **A plain `go test` runs the seed corpus and nothing else.** That is why the
 seeds are kept short and few — a Go fuzz target replays every seed on every
-ordinary test run, so a large corpus is a tax on every build. The five targets
+ordinary test run, so a large corpus is a tax on every build. The nine targets
 together add well under a second.
+
+**The search itself runs nightly, not on every push.**
+`.github/workflows/fuzz.yml` runs all nine at `-fuzztime 300s`, one per matrix
+leg, on a `schedule:` cron and on `workflow_dispatch` for a run by hand. It is
+kept out of the per-push gate on purpose: a coverage-guided search is
+nondeterministic, so the same commit can pass one run and fail the next when
+the mutator reaches further, and a five-minute job that blocks every merge on
+that is a job that gets disabled rather than fixed. What `ci.yml` guarantees is
+narrower and deterministic — every seed replays, so a target that stops
+compiling is caught in a minute.
 
 **A limit firing is not a failure.** The parser's `MaxDepth`, `MaxBytes` and
 `MaxNodes` exist precisely to refuse the input a fuzzer is good at generating,
@@ -720,11 +736,87 @@ Two jobs, in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 `GOXSLT_NO_SUITES=1` throughout. About a minute; catches a broken commit fast.
 gofmt is enforced rather than advisory.
 
+It runs on **`ubuntu-latest`, `windows-latest` and `macos-latest`**. This
+library resolves schema and DTD references by path, and path separators,
+symlink support, case sensitivity and the confinement rules `os.Root` enforces
+all differ on Windows — so a cross-OS matrix is the only thing that
+demonstrates the file handling actually works everywhere, rather than working
+on the one platform anybody ran it on. `fail-fast` is off: one platform's
+failure must not hide what the other two report.
+
+The matrix stops at this job. `conformance` stays `ubuntu-latest` alone,
+because it clones about 944M of W3C corpora and running that three times costs
+three times as much for almost no signal the Linux run does not already give.
+The steps that are shell scripts rather than a single `go` invocation are
+pinned to `shell: bash`, since a Windows runner would otherwise hand them to
+PowerShell.
+
 **`conformance`** — fetches the four W3C suites into a cache keyed `suites-v2`
 and runs `tests/check.sh`. This is the only place the suites are fetched
 reproducibly. Without it the published percentages depend on someone
 remembering to run the script, and a number nobody re-measures is a number that
-quietly stops being true.
+quietly stops being true. It uploads `tests/last-run.txt` as an artifact named
+`last-run`, on success and on failure alike — see [Provenance](#provenance).
+
+---
+
+## Provenance
+
+Every figure the gate prints is a measurement, and a measurement whose
+conditions are not recorded is a number someone will later read as current.
+
+That is not hypothetical. An external audit report was written against a tree
+nobody can now identify, quoted counts that no longer matched, and was read as
+a description of this repository — and the reason it could not be refuted on
+the spot is that **this repository could not prove what it had measured
+either**. `tests/ratchet.txt` holds bare `<name> <count>` pairs, and the CI
+cache key is the static string `suites-v2`, so even the suite revision behind a
+CI figure was unrecoverable. Two counts from different trees, different Go
+versions and different suite checkouts looked exactly alike.
+
+So `check.sh` opens with a *provenance* section, printed into the transcript
+and written to `tests/last-run.txt`:
+
+```
+go           go version go1.25.0 linux/amd64
+commit       f2117cc30374fee7e545fa97a0e741954d96f70e
+platform     linux/amd64 (Linux x86_64)
+utc          2026-09-10T16:16:52Z
+qt3tests     201a6e466940cdfc727f4babfedcde5332b9f578
+xsdtests     7bc3365c652a322f3d762021b3879eb92dae7e30
+xslt30       fddf1cf920087e791f13315d68dfbe874d97dc56
+relaxng      (not a git checkout of its own)
+xsltng       a840909a8c82d23458ba72e61e0eed4185be6b74
+xspec        799d52a4239931197f5fa71476e79750b3e1d0ee
+```
+
+A tree with uncommitted changes is recorded as `(dirty)` rather than refused:
+the gate is run on work in progress far more often than on a clean commit, and
+a figure measured on uncommitted changes is precisely the one that must not be
+quoted as that commit's.
+
+`relaxng` reads `(not a git checkout of its own)` because `testdata/relaxng`
+holds a copied `spectest.xml` rather than a clone. That wording is load-bearing.
+`git -C` in a directory that is not itself a repository does not fail — it
+walks *up* and answers with the enclosing repository's HEAD, which would record
+a go-xml commit as the RelaxNG suite revision and look entirely plausible. So
+`suiterev` records a revision only when `--show-toplevel` resolves to the suite
+directory itself. Comparing against the repository root is not sufficient: in
+an agent worktree `testdata/` is a symlink to the primary checkout, so the
+enclosing repository is a different path than the root and the bogus answer
+survives that test.
+
+**`tests/last-run.txt` is gitignored, deliberately.** It changes on every run,
+so committing it would put a diff in the tree every time anyone ran the gate
+and make the ratchet's own commits unreadable — and a committed copy would
+still only ever say what the last person to commit happened to run. What proves
+a figure is the file emitted *beside* that figure: attached to the CI run, or
+pasted into the issue that quotes the number. A file in git would be provenance
+for the commit; this is provenance for the measurement.
+
+It is **not** written to `tests/ratchet.txt`. The ratchet rewrites that file in
+place — `grep -v` the line, append the new one, `sort` — so anything else
+living there would be destroyed by the first count that moved.
 
 ---
 
