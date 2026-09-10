@@ -596,6 +596,18 @@ func TestDocumentOrderAndDedup(t *testing.T) {
 	if got := evalStr(t, testDoc, `//title/parent::book/title`); got != "Go,XML,XSLT" {
 		t.Errorf("= %q, want Go,XML,XSLT", got)
 	}
+	// XPath 3.1 §3.3.1.1: when every evaluation of E2 returns nodes, "the
+	// resulting node sequence is returned in document order" — however E1
+	// was ordered. A reversed left operand therefore does not reverse the
+	// path; only "!" and "for" preserve the operand's order. (The XSLT 3.0
+	// case sf-reverse-001 expects the reversed order because a streaming
+	// pipeline never sorts; see docs/conformance-gaps.md.)
+	if got := evalStr(t, testDoc, `reverse(//book)/@id`); got != "b1,b2,b3" {
+		t.Errorf("reverse(//book)/@id = %q, want document order b1,b2,b3", got)
+	}
+	if got := evalStr(t, testDoc, `reverse(//book)!string(@id)`); got != "b3,b2,b1" {
+		t.Errorf("reverse(//book)!string(@id) = %q, want b3,b2,b1", got)
+	}
 }
 
 func TestVariableScoping(t *testing.T) {
