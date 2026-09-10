@@ -232,6 +232,53 @@ func (a *instrAnalyzer) sub(ctx posture, allowsChildren bool) *instrAnalyzer {
 	}
 }
 
+// subFocus is sub for the body of a focus-changing construct nested INSIDE an
+// xsl:for-each-group -- an xsl:for-each, xsl:iterate, an xsl:copy with a
+// select, the substring constructors of xsl:analyze-string.
+//
+// §19.8.9.4's third condition is that "the focus-setting container of C is F",
+// where F is the call's nearest containing xsl:for-each-group. §19.6 defines
+// the focus-setting container as the INNERMOST focus-changing construct that
+// contains the construct in a controlled operand. So a call on
+// fn:current-group() inside one of these bodies has that instruction, not the
+// xsl:for-each-group, as its focus-setting container, and the third condition
+// fails: the call is roaming and free-ranging.
+//
+// That is what si-group-031 turns on. Its call sits inside
+// <xsl:copy select="$root">, whose select makes it focus-changing, and the
+// catalog records the resolution of bug 29482 as "this is not streamable" --
+// against the stylesheet's own inline comment, which argued from $root being
+// grounded. §19.8.9.4 does not ask what the intervening container's focus is
+// grounded to; it asks only which construct sets it.
+//
+// The group scope is dropped rather than the call refused outright, because
+// dropping it is what the rule says: with groupInScope false, funcCall gives
+// the call §19.8.9.4's "otherwise" answer, roaming and free-ranging, by the
+// path it already takes for a call with no containing xsl:for-each-group at
+// all. groupOutOfReach is left alone; it records a different fact, that this
+// walk never assessed the owning instruction's body, and a call reached
+// through here was assessed.
+// A group whose select is GROUNDED is exempt. §19.8.9.4's "otherwise" clause
+// is written without qualification, but applying it to a grounded group would
+// refuse a stylesheet that reads nothing from the stream at all: si-group-048
+// groups over "copy-of(tr)" and writes current-group() inside an
+// xsl:for-each, and the catalog asserts OUTPUT for it. The condition
+// §19.8.9.4 states exists to stop a call being evaluated repeatedly against a
+// stream that cannot be rewound -- its own note says so, "for streamed
+// evaluation to be possible, a call to current-group must not appear in a
+// construct that is evaluated repeatedly" -- and a group already materialised
+// in memory can be read as often as one likes. Every other clause of this
+// analysis that refuses an xsl:for-each-group is restricted the same way, so
+// the exemption is the house rule and not a special case.
+func (a *instrAnalyzer) subFocus(ctx posture, allowsChildren bool) *instrAnalyzer {
+	s := a.sub(ctx, allowsChildren)
+	if s.groupInScope && s.currentGroup.posture == postureGrounded {
+		return s
+	}
+	s.currentGroup, s.groupInScope = props{}, false
+	return s
+}
+
 func (a *instrAnalyzer) mergeFrom(b *instrAnalyzer) {
 	a.known = a.known && b.known
 }
@@ -674,7 +721,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		if o, ok := a.selectOperand(el, usageAbsorption); ok {
 			ops = append(ops, o)
 		}
-		sub := a.sub(postureGrounded, false)
+		sub := a.subFocus(postureGrounded, false)
 		for _, c := range el.ChildElements() {
 			if !isXSL(c, "matching-substring") && !isXSL(c, "non-matching-substring") {
 				continue
@@ -1334,6 +1381,15 @@ func hasChild(el *xdm.Node, local string) bool {
 func (a *instrAnalyzer) copyInstruction(el *xdm.Node) props {
 	bodyCtx, bodyAllows := a.ctxPosture, a.ctxAllowsChildren
 	selSweep := sweepMotionless
+	// Only an xsl:copy WITH a select is a focus-changing construct: without
+	// one the body is "assessed with ... the outer focus", so the
+	// instruction sets no focus and is not the focus-setting container of
+	// anything inside it. The distinction decides whether a call on
+	// fn:current-group() in the body still has the enclosing
+	// xsl:for-each-group as its focus-setting container (§19.8.9.4). Every
+	// bare <xsl:copy> in a grouping body -- si-group-018, -019, -030 -- is
+	// expected to run, and does.
+	focusSetting := false
 	if at := el.Attr("", "select"); at != nil {
 		sp, spKids := a.exprOperandIn(at.Value, el, a.ctxPosture, a.ctxAllowsChildren)
 		if !sp.streamable() {
@@ -1341,6 +1397,7 @@ func (a *instrAnalyzer) copyInstruction(el *xdm.Node) props {
 		}
 		bodyCtx, bodyAllows = sp.posture, spKids
 		selSweep = sp.sweep
+		focusSetting = true
 	}
 
 	// The remaining operands are the ones that genuinely compete for the
@@ -1351,6 +1408,9 @@ func (a *instrAnalyzer) copyInstruction(el *xdm.Node) props {
 	}
 	ops = append(ops, a.useAttributeSetOperands(el)...)
 	sub := a.sub(bodyCtx, bodyAllows)
+	if focusSetting {
+		sub = a.subFocus(bodyCtx, bodyAllows)
+	}
 	ops = append(ops, operand{
 		props:          sub.body(el),
 		usage:          usageAbsorption,
@@ -1710,7 +1770,7 @@ func (a *instrAnalyzer) forEach(el *xdm.Node) props {
 	// is why a grounded select does not make everything streamable.
 	if sel.posture == postureGrounded {
 		ops := []operand{{props: sel, usage: usageInspection, allowsChildren: true}}
-		sub := a.sub(postureGrounded, true)
+		sub := a.subFocus(postureGrounded, true)
 		bo := operand{
 			props:          sub.body(el),
 			usage:          usageTransmission,
@@ -1738,7 +1798,7 @@ func (a *instrAnalyzer) forEach(el *xdm.Node) props {
 	}
 
 	// The body is assessed with the context posture of the select.
-	sub := a.sub(sel.posture, selKids)
+	sub := a.subFocus(sel.posture, selKids)
 	bodyProps := sub.body(el)
 	a.mergeFrom(sub)
 
@@ -1779,7 +1839,7 @@ func (a *instrAnalyzer) iterate(el *xdm.Node) props {
 				ops = append(ops, a.bodyOperand(c, usageNavigation))
 			}
 		}
-		sub := a.sub(postureGrounded, true)
+		sub := a.subFocus(postureGrounded, true)
 		ops = append(ops, operand{
 			props:          sub.body(el),
 			usage:          usageTransmission,
@@ -1789,7 +1849,7 @@ func (a *instrAnalyzer) iterate(el *xdm.Node) props {
 		if oc := childNamed(el, "on-completion"); oc != nil {
 			// Assessed with a context posture of roaming: referring to the
 			// context item inside xsl:on-completion is an error.
-			ocSub := a.sub(postureRoaming, true)
+			ocSub := a.subFocus(postureRoaming, true)
 			var p props
 			if sat := oc.Attr("", "select"); sat != nil {
 				p = ocSub.exprPropsIn(sat.Value, oc, postureRoaming, true)
@@ -1828,7 +1888,7 @@ func (a *instrAnalyzer) iterate(el *xdm.Node) props {
 
 	// Clause 3: the same for xsl:on-completion.
 	if oc := childNamed(el, "on-completion"); oc != nil {
-		ocSub := a.sub(postureRoaming, true)
+		ocSub := a.subFocus(postureRoaming, true)
 		var p props
 		if sat := oc.Attr("", "select"); sat != nil {
 			p = ocSub.exprPropsIn(sat.Value, oc, postureRoaming, true)
@@ -1841,7 +1901,7 @@ func (a *instrAnalyzer) iterate(el *xdm.Node) props {
 		}
 	}
 
-	sub := a.sub(sel.posture, selKids)
+	sub := a.subFocus(sel.posture, selKids)
 	bodyProps := sub.body(el)
 	a.mergeFrom(sub)
 

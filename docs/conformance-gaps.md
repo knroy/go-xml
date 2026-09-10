@@ -166,7 +166,7 @@ assess whether constructs are guaranteed-streamable". These are the largest
 block in this file and they are not defects. What the analysis covers and what
 it does not is under *The §19.8 streamability analysis* below.
 
-The remaining 22 divide as follows. Several are divergences and are read in §2;
+The remaining 21 divide as follows. Several are divergences and are read in §2;
 what is genuinely open is read here.
 
 ### Package composition — 4
@@ -455,16 +455,22 @@ A spurious `XTSE3430` refuses to compile a valid stylesheet, and §19.10 makes
 the error optional; the trade is refused on the same grounds as the `||`
 operator above. In `xslt/streamexprs.go`, `quantifiedExpr`.
 
-## Three streamability cases that need data-flow analysis
+## Two streamability cases that need data-flow analysis
 
-**Diagnosed, not fixable syntactically.** `si-iterate-035`, `si-iterate-904`
-and `si-group-031` all want `XTSE3430` for a streamed node reaching a place it
-may not, and in each of the three the node arrives through a *variable*.
-`si-iterate-904` writes `count($current/*[current()])` where `$current` was
-bound to `.`; `si-iterate-035` carries `.` into an `xsl:iterate` parameter
-through three intermediate `xsl:variable` bindings; `si-group-031` reads
-`current-group()` inside an `xsl:copy select="$root"` whose body bug 29482
-resolved to be evaluated per group.
+**Diagnosed, not fixable syntactically.** `si-iterate-035` and `si-iterate-904`
+both want `XTSE3430` for a streamed node reaching a place it may not, and in
+each the node arrives through a *variable*. `si-iterate-904` writes
+`count($current/*[current()])` where `$current` was bound to `.`;
+`si-iterate-035` carries `.` into an `xsl:iterate` parameter through three
+intermediate `xsl:variable` bindings.
+
+`si-group-031` was listed here as a third case and was not one. It reads
+`current-group()` inside an `xsl:copy select="$root"`, and the entry read that
+as a streamed node arriving through `$root`. §19.8.9.4 never asks what the
+intervening container's focus is bound to: its third condition is only that
+"the focus-setting container of C is F", and §19.6 makes that the *innermost*
+focus-changing construct, which an `xsl:copy` with a select is. No variable
+environment was needed. It now passes; the correction is in §3.
 
 §19.8 declines this on its own terms. Of the `for` rule the spec writes that
 tracing a streamed node through a binding "requires data flow analysis (tracing
@@ -827,6 +833,37 @@ driver defect), not the suite's.
 neighbour's name; its stylesheet is five lines with **no extension element**.
 `package-version-011` was filed as needing a network fetch; **no fetch exists** —
 `doc('')` names the containing module.
+
+## `si-group-031` was filed as needing data-flow analysis and did not
+
+It was recorded, alongside `si-iterate-035` and `si-iterate-904`, as a case
+where "the node arrives through a *variable*" — its `current-group()` sitting
+inside `<xsl:copy select="$root">`, with `$root` bound to a copy of a streamed
+node. That reading followed the stylesheet's own inline comment, which argues
+the construct is streamable *because* `$root` is grounded.
+
+The rule that decides it never looks at `$root`. §19.8.9.4 gives a call on
+`fn:current-group()` the group's posture and sweep only when three conditions
+hold, and the third is that "the focus-setting container of C is F". §19.6
+makes the focus-setting container the **innermost** focus-changing construct
+containing the call in a controlled operand, and an `xsl:copy` **with a
+select** is focus-changing — §19.8.4.12 says its body is assessed "with context
+posture ... based on the select expression". So the container is the
+`xsl:copy`, the condition fails, and §19.8.9.4's "otherwise" clause makes the
+call roaming and free-ranging. That is the resolution of bug 29482 the catalog
+records, and it needed no variable environment: only the condition already in
+the section.
+
+Two adjustments came with it, both required to keep valid stylesheets
+compiling. A **bare** `<xsl:copy>` sets no focus and displaces nothing, so
+`si-group-018`, `-019` and `-030` are unaffected. And a group whose select is
+**grounded** is exempt from the whole clause: the group sits in memory and
+cannot be re-read from a stream, which is what §19.8.9.4's own note gives as
+the reason for the conditions. Without that exemption `si-group-048`, which
+groups over `copy-of(tr)` and calls `current-group()` inside an `xsl:for-each`,
+was refused while the catalog asserts output for it — measured, one case
+gained and one lost, before the exemption made it one gained and none lost.
+11,481 → 11,482.
 
 ## `streamable-141` did not need the streamability analysis
 

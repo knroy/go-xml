@@ -60,7 +60,7 @@ much each costs.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
-**15 of the 37 XSLT 3.0 failures**, and by far the largest single gap in the
+**15 of the 36 XSLT 3.0 failures**, and by far the largest single gap in the
 project. The posture-and-sweep lattice exists, and so now do the rules built on
 it: the §19.8.4 instruction rules, §19.8.5 streamable stylesheet functions,
 §18.2.8 accumulators, the §19.8.8 expression rules, the §19.8.9 function

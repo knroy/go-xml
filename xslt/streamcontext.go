@@ -364,6 +364,9 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 // select -- which is what keeps si-group-203 running, its select being the
 // grounded "//Item/copy-of()".
 func hasIndependentGroupRefusal(rule *xdm.Node) bool {
+	if hasDisplacedCurrentGroupCall(rule) {
+		return true
+	}
 	found := false
 	walkElements(rule, func(el *xdm.Node) bool {
 		if found || !isXSL(el, "for-each-group") {
@@ -400,6 +403,105 @@ func hasIndependentGroupRefusal(rule *xdm.Node) bool {
 		return true
 	})
 	return found
+}
+
+// hasDisplacedCurrentGroupCall reports whether the rule contains a call on
+// fn:current-group() whose focus-setting container is not the
+// xsl:for-each-group that owns the group.
+//
+// §19.8.9.4 gives the call the group's posture and sweep only when three
+// conditions hold at once, and the third is "the focus-setting container of C
+// is F". §19.6 makes that the INNERMOST focus-changing construct containing
+// the call in a controlled operand, so any focus-changing instruction between
+// the call and the group takes the title, the condition fails, and the call is
+// roaming and free-ranging. subFocus applies that in the analysis; this
+// establishes it independently, so that the refusal survives
+// bodyCallsCurrentGroup's withholding.
+//
+// The withholding it lifts is about something else entirely -- §19.8.8.4
+// widening two striding operands to crawling, which costs precision in the
+// si-group-055 class. A call displaced from its group is refused by a rule
+// that never consults a union's posture, so silencing it there would silence a
+// verdict §19.8.9.4 reached on its own. si-group-031 is the case: its
+// current-group() sits inside <xsl:copy select="$root">, and the catalog
+// records the resolution of bug 29482 as "this is not streamable".
+//
+// Only the instructions whose bodies subFocus assesses count as displacing --
+// the ones this analysis actually treats as focus-changing -- so the two
+// cannot disagree about which stylesheets are refused.
+func hasDisplacedCurrentGroupCall(rule *xdm.Node) bool {
+	found := false
+	var walk func(el *xdm.Node, inGroup, displaced bool)
+	walk = func(el *xdm.Node, inGroup, displaced bool) {
+		if found {
+			return
+		}
+		if el != rule && isXSL(el, "for-each-group") {
+			// A nested group re-establishes the focus-setting container for
+			// calls below it: the call belongs to the inner group now.
+			//
+			// A group over a GROUNDED select is exempt, for the reason
+			// subFocus gives: the group is already in memory, so nothing
+			// here can read the stream twice, and si-group-048 -- which
+			// groups over "copy-of(tr)" and calls current-group() inside an
+			// xsl:for-each -- is asserted OUTPUT by the catalog. Treating
+			// such a group as "not in scope" leaves calls below it alone.
+			inGroup, displaced = !groundedGroupSelect(el), false
+		} else if inGroup && displacesFocus(el) {
+			displaced = true
+		}
+		if inGroup && displaced {
+			for _, at := range el.Attrs {
+				if countCurrentGroupRefs(at.Value) > 0 {
+					found = true
+					return
+				}
+			}
+		}
+		for _, c := range el.ChildElements() {
+			walk(c, inGroup, displaced)
+		}
+	}
+	walk(rule, false, false)
+	return found
+}
+
+// groundedGroupSelect reports whether the select expression of an
+// xsl:for-each-group is grounded, so that the group it builds sits in memory
+// rather than on the stream.
+//
+// A select this analysis cannot assess is treated as NOT grounded, which is
+// the answer that withholds nothing: the caller only ever uses a "grounded"
+// answer to exempt a group from a refusal, so an unknown select leaves the
+// refusal to the other conditions rather than resting it on a guess.
+func groundedGroupSelect(el *xdm.Node) bool {
+	at := el.Attr("", "select")
+	if at == nil {
+		return false
+	}
+	a := &instrAnalyzer{ctxPosture: postureStriding, ctxAllowsChildren: true, known: true}
+	p, _ := a.exprOperandIn(at.Value, el, postureStriding, true)
+	return a.known && p.posture == postureGrounded
+}
+
+// displacesFocus reports whether el is one of the focus-changing instructions
+// whose contained sequence constructor this analysis assesses with a focus of
+// its own -- the set subFocus is used for.
+//
+// xsl:copy is on the list only when it carries a select. Without one §19.8.4.12
+// assesses the body "with the outer focus", so the instruction sets no focus
+// and displaces nothing; every bare <xsl:copy> inside a grouping body is
+// expected to run.
+func displacesFocus(el *xdm.Node) bool {
+	switch {
+	case isXSL(el, "for-each"), isXSL(el, "iterate"),
+		isXSL(el, "matching-substring"), isXSL(el, "non-matching-substring"),
+		isXSL(el, "on-completion"):
+		return true
+	case isXSL(el, "copy"):
+		return el.Attr("", "select") != nil
+	}
+	return false
 }
 
 // bodyCallsCurrentGroup reports whether a template rule's body calls
