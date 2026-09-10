@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 // These cover the functions added after auditing the library against the
@@ -897,5 +899,124 @@ func TestCodepointsToStringAdmitsC0(t *testing.T) {
 		if got := evalStr(t, testDoc, expr); got != fmt.Sprint(cp) {
 			t.Errorf("%s = %q, want %d", expr, got, cp)
 		}
+	}
+}
+
+// TestDistinctValuesExactNumericKey pins the correctness of the exact-rational
+// fast path in fnDistinctValues, and the boundary at which it must give way.
+//
+// The fast path may only be taken where numeric "eq" is transitive. It is
+// transitive among xs:integer and xs:decimal, which compareNumeric compares
+// through big.Rat without loss, and it is *not* transitive once a float or
+// double is in play, because promotion rounds. Every case below is chosen to
+// fail if that boundary moves.
+func TestDistinctValuesExactNumericKey(t *testing.T) {
+	cases := []struct{ expr, want string }{
+		// Cross-type equality across all four numeric types: one value.
+		{`count(distinct-values((xs:integer(1), xs:decimal(1.0), xs:double(1.0e0), xs:float(1.0))))`, "1"},
+		// The exact types alone, which is the hashed path.
+		{`count(distinct-values((xs:integer(1), xs:decimal(1.0))))`, "1"},
+		{`count(distinct-values((xs:integer(1), xs:integer(1), xs:integer(2))))`, "2"},
+
+		// Large integers beyond float64's 53-bit mantissa must stay distinct.
+		// Keying these through a float64 would collapse them.
+		{`count(distinct-values((9007199254740993, 9007199254740992)))`, "2"},
+		{`count(distinct-values((xs:integer(9007199254740993), xs:decimal(9007199254740992))))`, "2"},
+		// The same at a magnitude past int64, where the key must still be exact.
+		{`count(distinct-values((9223372036854775807, 9223372036854775806)))`, "2"},
+
+		// Decimals differing below double precision stay distinct.
+		{`count(distinct-values((xs:decimal('1.0000000000000000001'), xs:decimal('1.0000000000000000002'))))`, "2"},
+
+		// Signed zero: -0.0 eq 0.0, so one value. Spans exact and inexact.
+		{`count(distinct-values((xs:double('-0'), xs:double('0'))))`, "1"},
+		{`count(distinct-values((xs:decimal('-0'), xs:decimal('0'), xs:integer(0))))`, "1"},
+		{`count(distinct-values((xs:float('-0'), xs:double('0'), xs:integer(0))))`, "1"},
+
+		// NaN is equal to itself for distinct-values even though NaN eq NaN
+		// is false, and never equal to a number.
+		{`count(distinct-values((xs:double('NaN'), xs:float('NaN'), xs:double('NaN'))))`, "1"},
+		{`count(distinct-values((xs:double('NaN'), 1, 2)))`, "3"},
+		// Infinities are ordinary distinct values.
+		{`count(distinct-values((xs:double('INF'), xs:double('-INF'), xs:double('INF'))))`, "2"},
+
+		// Mixed numeric and non-numeric: the key spaces must not bleed. The
+		// string "1" is not the number 1.
+		{`count(distinct-values((1, '1', xs:decimal(1.0), 'a', true())))`, "4"},
+		{`count(distinct-values((1, xs:untypedAtomic('1'))))`, "2"},
+
+		// Empty sequence.
+		{`count(distinct-values(()))`, "0"},
+
+		// The non-transitive triple of fn-distinct-values-1, which is exactly
+		// why float and double may not be hashed. Under pairwise eq this keeps
+		// two of the three; a single key space would give a different answer.
+		{`count(distinct-values((xs:float('1.0'), xs:decimal('1.0000000000100000000001'), xs:double('1.00000000001'))))`, "2"},
+
+		// A decimal equal to a float only after rounding to float precision
+		// must still collapse, which pairwise eq gives and an exact key
+		// would not.
+		{`count(distinct-values((xs:float('1.2'), xs:decimal('1.2'))))`, "1"},
+
+		// Collation-sensitive strings are untouched by the numeric path.
+		{`count(distinct-values(('a', 'A', 'a')))`, "2"},
+	}
+	for _, c := range cases {
+		if got := evalStrXSLT(t, testDoc, c.expr); got != c.want {
+			t.Errorf("%s = %q, want %q", c.expr, got, c.want)
+		}
+	}
+}
+
+// TestDistinctValuesLargeHomogeneous is the regression test for the quadratic
+// blowup: a large run of xs:integer used to be compared pairwise, which was
+// O(n^2) in the number of *distinct* values and allocated a big.Rat per
+// comparison. It must stay linear and stay correct.
+func TestDistinctValuesLargeHomogeneous(t *testing.T) {
+	if got := evalStrXSLT(t, testDoc, `count(distinct-values(1 to 20000))`); got != "20000" {
+		t.Errorf("count(distinct-values(1 to 20000)) = %q, want 20000", got)
+	}
+	// Every value duplicated: still 20000 distinct.
+	if got := evalStrXSLT(t, testDoc, `count(distinct-values((1 to 20000, 1 to 20000)))`); got != "20000" {
+		t.Errorf("duplicated range = %q, want 20000", got)
+	}
+	// A single float anywhere must not silently change the answer for the
+	// exact values around it.
+	if got := evalStrXSLT(t, testDoc, `count(distinct-values((1 to 1000, xs:float(1.0))))`); got != "1000" {
+		t.Errorf("range plus equal float = %q, want 1000", got)
+	}
+}
+
+// benchEvalXSLT is evalStrXSLT for a benchmark, which cannot use the *testing.T
+// helpers.
+func benchEvalXSLT(b *testing.B, expr string) {
+	b.Helper()
+	tree, err := xdm.ParseString(testDoc, xdm.ParseOptions{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	root := tree.Root
+	lib := NewLibrary(Builtins())
+	RegisterXSLTFuncs(lib)
+	if _, err := Eval(expr, NewContext(root, lib), testNS{}); err != nil {
+		b.Fatalf("eval %q: %v", expr, err)
+	}
+}
+
+// BenchmarkDistinctValuesIntegers measures the cost of fn:distinct-values over
+// n distinct xs:integer values, which is the shape an attacker controls with
+// count(distinct-values(/r/v/xs:integer(.))). The pairwise scan made this
+// quadratic in n with a big.Rat allocated per comparison; the exact-rational
+// key makes it linear.
+func BenchmarkDistinctValuesIntegers(b *testing.B) {
+	for _, n := range []int{1000, 10000, 100000} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			expr := fmt.Sprintf("count(distinct-values(1 to %d))", n)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				benchEvalXSLT(b, expr)
+			}
+		})
 	}
 }

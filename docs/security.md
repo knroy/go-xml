@@ -50,10 +50,9 @@ catch it, no deferred function runs, and one request takes the server with it.
 | the process environment is readable | hostile stylesheet, or hostile document through a trusted one | `fn:environment-variable` and `fn:available-environment-variables` have no opt-in; see *Open findings*. |
 | `javascript:` URLs pass through | hostile stylesheet | an XSLT processor is not an HTML sanitiser; see *Open findings*. |
 
-Two further cost findings are recorded in the audit report and not yet acted
-on: `fn:distinct-values` is quadratic on numerics with heavy allocation, and
-the `MaxItems` budget is not reached on the primary XQuery evaluation path.
-A third, the string bomb, is described below.
+One further cost finding is recorded in the audit report and not yet acted
+on: the `MaxItems` budget is not reached on the primary XQuery evaluation
+path. A second, the string bomb, is described below.
 
 **Knowingly incomplete.** One narrowing remains, and it is in an API rather
 than at a copy site. `xdmbuild.Builder.AddAttributeTyped` takes a type
@@ -1258,6 +1257,7 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 
 - **A 62-byte self-applying inline function overflowed the stack and killed the process** — availability, and unrecoverable: `recover()` does not catch a Go stack overflow. The dynamic-call path charged no recursion depth and the inline closure dropped `Depth`; both are fixed, so it refuses with `XPDY0001` like every other recursion. See CHANGELOG.
 - **`TransformOptions.MaxDepth` did not govern expression recursion** — the same finding's second half: the option bounded templates only, so the XPath side kept its package default of 500 however the caller configured it. It now reaches the XPath context, which both honours a lowered bound and stops a legitimate 530-deep continuation-passing function being refused. See CHANGELOG.
+- **`fn:distinct-values` was quadratic on numerics with heavy allocation** — cost, fixed: the pairwise `eq` scan now runs only over the float and double values, because promotion can round only there; integer and decimal key on their exact rational. 100,000 distinct integers fall from 573 s and 480 GB of allocation to 0.15 s and 109 MB. See CHANGELOG.
 
 **Sixth audit.**
 
