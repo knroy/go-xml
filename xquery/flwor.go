@@ -128,11 +128,27 @@ func (f *flwor) eval(ctx *evalContext) (xdm.Sequence, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The tuple stream is the FLWOR's own accumulator, and the one the
+		// documented budget was missing: "for $a in 1 to 1500, $b in 1 to
+		// 1500" multiplies it to 2,250,000 tuples before the return
+		// expression runs once, and every tuple holds a copy of the bindings.
+		// Charging after each clause stops a runaway between clauses rather
+		// than after the whole pipeline has already been built.
+		if err := ctx.xp.ChargeItems(len(stream)); err != nil {
+			return nil, err
+		}
 	}
 	var out xdm.Sequence
 	for _, t := range stream {
 		seq, err := f.evalReturn(t, ctx)
 		if err != nil {
+			return nil, err
+		}
+		// The result is charged as it grows, the way xpath's own evalFor
+		// charges its concatenation: a return expression yielding one item
+		// per tuple is bounded by the stream above, but one yielding a
+		// sequence per tuple is not.
+		if err := ctx.xp.ChargeItems(len(seq)); err != nil {
 			return nil, err
 		}
 		out = append(out, seq...)

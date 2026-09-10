@@ -141,6 +141,7 @@ turn "I could not prove the constraint" into "the constraint holds."*
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| The documented `MaxItems` budget never bound on an XQuery body | A FLWOR is evaluated by `xquery`, not `xpath`, so its tuple stream was charged nothing and `Compiled.Eval` reset the counter once per tuple. `HoldItemBudget` holds it for one query; `flwor.eval` charges both accumulators. | — |
 | Uncompilable content models skipped every constraint on them | A model that would not compile passed silently rather than declining. | [`b6fb5ab`][b6fb5ab] |
 | A budget answered "valid" | Exhausting the budget was reported as success instead of as an inability to decide. | [`2c461c7`][2c461c7] |
 | Budgets counted the wrong thing | A bound over the wrong quantity is not a bound. | [`8dcc4dc`][8dcc4dc] |

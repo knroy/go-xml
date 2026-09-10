@@ -320,6 +320,22 @@ func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 	}
 	out := xdmbuild.New(policy{sc: q.sc})
 	ref := &builderRef{b: out}
+	// The item budget is armed here, for the query body, because this is the
+	// boundary that matches the one xpath.Compiled.Eval draws for an
+	// expression: one evaluation, however many nested expressions it runs.
+	//
+	// It has to be *this* package that arms it. The body is not one compiled
+	// expression — a FLWOR and a constructor are parsed here and evaluated by
+	// this package's own node tree, reaching xpath once per clause and once
+	// per tuple — so leaving the boundary to Compiled.Eval reset the counter
+	// on every iteration and the documented MaxItems was never reached on any
+	// query whose body this package evaluates itself.
+	//
+	// After prepare rather than before, so that a global variable's
+	// initialiser keeps the per-expression budget it has always had: the
+	// prolog is setup, and a query with fifty globals is not one evaluation
+	// that materialised the sum of them.
+	ctx = ctx.HoldItemBudget()
 	ec := &evalContext{xp: ctx, sc: q.sc}
 	for _, n := range q.body {
 		if err := n.eval(ref, ec); err != nil {

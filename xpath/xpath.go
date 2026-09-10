@@ -157,7 +157,13 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	// meaning simple: the limit is on how large a single expression's
 	// intermediate sequences may grow, which is exactly the thing that has to
 	// fit in memory at once.
-	ctx.resetItems()
+	//
+	// Unless a host language has taken the boundary over: a FLWOR reaches
+	// this once per tuple, and resetting there would clear the counter under
+	// the loop that is the thing worth bounding. See Context.HoldItemBudget.
+	if ctx == nil || !ctx.heldItems {
+		ctx.resetItems()
+	}
 	if (c.staticBase != "" && c.staticBase != ctx.StaticBaseURI) ||
 		c.staticCollation != nil || c.compat != ctx.Compat ||
 		c.version != ctx.Version ||

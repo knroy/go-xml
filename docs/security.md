@@ -53,6 +53,8 @@ catch it, no deferred function runs, and one request takes the server with it.
 One further cost finding is recorded in the audit report and not yet acted
 on: the `MaxItems` budget is not reached on the primary XQuery evaluation
 path. A second, the string bomb, is described below.
+on: `fn:distinct-values` is quadratic on numerics with heavy allocation.
+A second, the string bomb, is described below.
 
 **Knowingly incomplete.** One narrowing remains, and it is in an API rather
 than at a copy site. `xdmbuild.Builder.AddAttributeTyped` takes a type
@@ -1258,6 +1260,7 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 - **A 62-byte self-applying inline function overflowed the stack and killed the process** — availability, and unrecoverable: `recover()` does not catch a Go stack overflow. The dynamic-call path charged no recursion depth and the inline closure dropped `Depth`; both are fixed, so it refuses with `XPDY0001` like every other recursion. See CHANGELOG.
 - **`TransformOptions.MaxDepth` did not govern expression recursion** — the same finding's second half: the option bounded templates only, so the XPath side kept its package default of 500 however the caller configured it. It now reaches the XPath context, which both honours a lowered bound and stops a legitimate 530-deep continuation-passing function being refused. See CHANGELOG.
 - **`fn:distinct-values` was quadratic on numerics with heavy allocation** — cost, fixed: the pairwise `eq` scan now runs only over the float and double values, because promotion can round only there; integer and decimal key on their exact rational. 100,000 distinct integers fall from 573 s and 480 GB of allocation to 0.15 s and 109 MB. See CHANGELOG.
+- **The `MaxItems` budget was not reached on the primary XQuery evaluation path** — cost, and worse than an absent budget: a caller read the documented option and it did not bind. A FLWOR is parsed and evaluated by `xquery` rather than by `xpath`, so its tuple stream reached none of the constructs that charge the budget, and the per-expression reset in `Compiled.Eval` cleared the counter once per tuple. `Context.HoldItemBudget` moves the boundary out to one query evaluation and `flwor.eval` charges both accumulators; the two paths now refuse the same expression at the same point. See CHANGELOG.
 
 **Sixth audit.**
 

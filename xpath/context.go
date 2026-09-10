@@ -233,6 +233,13 @@ type Context struct {
 	// gets; NewContext installs a budget.
 	items *int64
 
+	// heldItems suppresses Compiled.Eval's per-expression reset of items,
+	// because a host language is measuring a larger evaluation against the
+	// same counter. Set by HoldItemBudget, and copied along with the rest of
+	// the Context by every scope change, which is what carries the hold into
+	// the nested evaluations it has to cover.
+	heldItems bool
+
 	// Now is the value fn:current-dateTime and its siblings return.
 	//
 	// The spec requires these to be stable for the whole of one evaluation:
@@ -617,6 +624,51 @@ func (c *Context) countItems(n int) error {
 			MaxItems, xdm.ErrResourceLimit)
 	}
 	return nil
+}
+
+// ChargeItems charges n items against the evaluation budget, reporting
+// XPDY0130 when the budget is exhausted.
+//
+// It is exported for a host language that accumulates sequences in its own
+// evaluator rather than through this package's Expr tree. XQuery's FLWOR is
+// the case: §3.10 defines it over a materialised tuple stream, which
+// xquery.flwor builds itself, so none of the accumulation reaches the
+// constructs in this package that charge as they grow. Such a host must also
+// hold the budget across the whole of its evaluation — see HoldItemBudget —
+// or the reset in Compiled.Eval clears the counter under it once per
+// iteration.
+func (c *Context) ChargeItems(n int) error { return c.countItems(n) }
+
+// HoldItemBudget returns a copy of c on which Compiled.Eval will not reset the
+// item budget, and arms a fresh budget for the evaluation about to begin.
+//
+// Compiled.Eval resets per expression because that is the right boundary for
+// XPath and for XSLT, where the host evaluates one expression per node and a
+// budget carried across all of them would refuse a legitimate transform. A
+// host whose own evaluator loops over expressions has the opposite problem: a
+// FLWOR calls Compiled.Eval once per tuple, so the per-expression reset clears
+// the counter two million times and the budget never binds. Holding it moves
+// the boundary out to the host's evaluation, which is where "how large may one
+// evaluation's intermediate sequences grow" is actually asked.
+//
+// The flag rides on the value copy the scope-changing methods make — Descend,
+// WithVar, WithFocus — so every nested evaluation inherits the hold, while the
+// caller's own Context keeps the per-expression boundary it had. The counter
+// itself is shared through the same pointer, so the hold measures the whole
+// tree of nested evaluations against one allowance.
+// A context that already holds the budget is returned unchanged rather than
+// re-armed. Nothing calls it that way today, but an inner evaluation that
+// reset the counter would clear the outer one's charges and hand the outer
+// evaluation an allowance it has already spent — the leak this whole change
+// exists to avoid, arriving from the other side.
+func (c *Context) HoldItemBudget() *Context {
+	if c == nil || c.heldItems {
+		return c
+	}
+	n := *c
+	n.heldItems = true
+	n.resetItems()
+	return &n
 }
 
 // resetItems starts a fresh item budget for one expression evaluation.

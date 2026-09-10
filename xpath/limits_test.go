@@ -208,3 +208,59 @@ func evalOne(t *testing.T, ctx *Context, expr string) string {
 	}
 	return seq[0].(interface{ String() string }).String()
 }
+
+// HoldItemBudget must not change what the caller's own Context does. The flag
+// lives on the copy it returns, so a caller that keeps evaluating through the
+// original still gets the per-expression boundary Compiled.Eval documents --
+// otherwise a host that held the budget once would silently convert every
+// later evaluation on that context into a cumulative one.
+func TestHoldItemBudgetDoesNotAffectTheCallersContext(t *testing.T) {
+	ctx := NewContext(nil, Builtins())
+	held := ctx.HoldItemBudget()
+	if !held.heldItems {
+		t.Fatal("the returned context does not hold the budget")
+	}
+	if ctx.heldItems {
+		t.Error("the hold leaked onto the caller's own Context; every later " +
+			"evaluation through it would accumulate")
+	}
+	// The per-expression boundary still applies through the original: five
+	// evaluations that each materialise a million items must all succeed.
+	e := MustCompile("count(for $x in 1 to 1000, $y in 1 to 1000 return $x)", nil)
+	for i := 0; i < 5; i++ {
+		if _, err := e.Eval(ctx); err != nil {
+			t.Fatalf("evaluation %d through the caller's context failed: %v",
+				i+1, err)
+		}
+	}
+}
+
+// A held context shares the counter with the one it was made from, which is
+// what lets a host measure a tree of nested evaluations against one allowance.
+func TestHoldItemBudgetSharesTheCounter(t *testing.T) {
+	ctx := NewContext(nil, Builtins())
+	held := ctx.HoldItemBudget()
+	if held.items != ctx.items {
+		t.Fatal("the held context has its own counter; a host holding the " +
+			"budget would not see what nested evaluations charge")
+	}
+	if err := held.ChargeItems(MaxItems + 1); err == nil {
+		t.Error("ChargeItems did not refuse a charge past MaxItems")
+	}
+}
+
+// Holding a budget that is already held must not re-arm it: an inner
+// evaluation that reset the counter would clear the outer one's charges and
+// hand it an allowance it has already spent.
+func TestHoldItemBudgetIsIdempotent(t *testing.T) {
+	ctx := NewContext(nil, Builtins())
+	held := ctx.HoldItemBudget()
+	if err := held.ChargeItems(MaxItems - 10); err != nil {
+		t.Fatalf("a charge inside the budget was refused: %v", err)
+	}
+	again := held.HoldItemBudget()
+	if err := again.ChargeItems(100); err == nil {
+		t.Error("re-holding an already-held budget reset it; the outer " +
+			"evaluation's charges were discarded")
+	}
+}
