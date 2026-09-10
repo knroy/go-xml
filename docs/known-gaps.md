@@ -40,9 +40,9 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 1 of 30,346; XSLT 3.0 has 37 of 11,518;
+failures of 6,201; XQuery 3.1 has 1 of 30,346; XSLT 3.0 has 36 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,576. Everything below
-is an account of those 107 cases, or of a decision that produced some of them.
+is an account of those 106 cases, or of a decision that produced some of them.
 
 What this file adds, and that one does not:
 
@@ -173,7 +173,7 @@ free-ranging `group-starting-with` pattern, or a grouping key that is not
 motionless — since neither answer rests on the widening.
 
 **Note what it would and would not buy.** Completing it would move the 15
-cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.68% to about
+cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.69% to about
 99.81%. Nine of those 15 are the unreachable group above, so the reachable
 gain is 6. It would not make the engine stream, and it would not change the result
 of a single transform that currently succeeds — it would convert 15 correct
@@ -181,7 +181,7 @@ answers into 15 refusals to answer. That is the conformant behaviour, and it
 is worth being explicit that the gain is measured in conformance rather than in
 capability.
 
-The remaining 22 are singletons or near-singletons and are catalogued in
+The remaining 21 are singletons or near-singletons and are catalogued in
 [conformance-gaps.md](conformance-gaps.md) rather than here. Only three pairs
 share anything: `merge-097`/`-097s`/`-097sf` all fail on `FODC0002`, and the
 CHANGELOG records them as not interoperable on the test set's own maintainer
@@ -189,9 +189,7 @@ comment — they rely on Saxon's `?select=` collection URIs and declare no
 environment for the harness to honour; `si-copy-117`/`si-copy-of-117` both get
 `XTTE1540` where `XTTE1510` is wanted; and `si-fork-814`/`sx-MapExpr-007` both
 get `XQDY0137` for `XTDE3365`. The rest — `docbook-001` (`XTMM9000`, chunking),
-`validation-0201` (whitespace placement), `transform-004` (a `fn:transform`
-needed during the static phase, which deadlocks on a non-reentrant compile
-mutex — confirmed from a stack trace, and recorded in the CHANGELOG),
+`validation-0201` (whitespace placement),
 `strip-space-009`, `system-property-012` and a scatter of one-off error-code
 disagreements — share no cause with each other at all. That is the useful fact
 about them: after the streamability pass there is no second cluster waiting

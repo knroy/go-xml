@@ -19,6 +19,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | The two ExprSingle scanners bounded a branch with flat counters, which cannot record the nesting order of interleaved `if` and FLWOR | Both keep a nesting stack, so a stop keyword is honoured only when nothing nested is open to claim it; the last branch of `if` and `switch` now scans with the enclosing clause's stops. `RexParser`. 30,344 → 30,345. | — |
+| `fn:transform` from a `static="yes"` variable deadlocked: the nested compile asked for a mutex the outer one held | `Compile` now takes the lock and delegates to `compileLocked`, which the static phase re-enters without it; the static library binds the real function. `transform-004`. 11,481 → 11,482. | — |
 | An end-phase accumulator rule reading its own pre-descent value was refused as circular | The walk now hands back its partial table, and `XTDE3400` fires only for a value not yet recorded. `evaluate-046`. 11,480 → 11,481. | — |
 | `../accumulator-after()` was accepted: the Last Call cascade has no climbing rule | Added the Recommendation's rule — a climbing context posture is free-ranging, the parent's post-descent value being unknown. `accumulator-060`. 11,479 → 11,480. | — |
 | `fn:accumulator-before` was unmodelled, hiding a consuming `accumulator-after` beside it | §19.8.9.2: grounded and motionless with a motionless argument, else roaming. `accumulator-059`'s pre-descent difference is now refused. 11,478 → 11,479. | — |

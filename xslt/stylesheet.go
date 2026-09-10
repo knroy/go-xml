@@ -629,7 +629,55 @@ func stylesheetBase(doc *xdm.Node, opt string) string {
 }
 
 // Compile compiles a stylesheet from a parsed XSLT document.
+//
+// The lock is taken here and only here. compileLocked holds the body, so that
+// a compilation running *inside* another one -- which fn:transform is, when a
+// static variable calls it during the static phase -- can reach the same code
+// without asking for a mutex the outer call has not let go of. See
+// compileNestedLocked.
 func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
+	compileMu.Lock()
+	defer compileMu.Unlock()
+	return compileLocked(doc, opts)
+}
+
+// compileNestedLocked compiles a stylesheet from inside a compilation that is
+// already running on this goroutine.
+//
+// fn:transform called from a static="yes" variable has to compile a second
+// stylesheet while the first is still being compiled. Taking compileMu again
+// would deadlock against the outer Compile, which still holds it; so this
+// entry point skips the lock, which is sound precisely because the nested
+// compilation is synchronous -- it runs on the goroutine that holds the lock,
+// and no other goroutine can be inside compileLocked while it does.
+//
+// It is unexported and has exactly one caller, so the "already holds the
+// lock" precondition cannot be violated from outside this package.
+//
+// Nothing is saved and restored around the nested compilation, and that is a
+// measured claim rather than an assumption. compileLocked writes its package
+// state in its own prologue and clears it on the way out, so the question is
+// only what the OUTER compilation still needs when the nested one returns.
+// The static phase runs at the very top of compileDocument, before
+// compileSchema, compilePackage, packageParent, overridingDecls,
+// dynamicRefCache and composedVisibility are written at all -- so at the one
+// point a nested compilation can start, every one of them is still zero, and
+// restoring a zero is what clearing already does. The two version pins are
+// set earlier, in the prologue, but neither is observable: overrideXPathVersion
+// pinned below 3.1 makes the static expression's own map constructor a syntax
+// error, so fn:transform never runs, and compileMaxVersion is either 0 or 3.0
+// here -- a 2.0 processor refuses static="yes" outright -- and processorAtLeast30
+// reads those two as the same answer.
+//
+// If a later change moves the static phase after any of that state is
+// written, this comment stops being true and a save/restore becomes
+// necessary. TestStaticTransformAfterANestedCompile is what would notice.
+func compileNestedLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
+	return compileLocked(doc, opts)
+}
+
+// compileLocked is Compile's body. The caller holds compileMu.
+func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// See xsd.Schema.Validate: a nil document is a caller's mistake, but a
 	// library that panics on one takes the caller's process with it.
 	if doc == nil {
@@ -663,11 +711,9 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 		},
 	}
 	// compileSchema is package state for the duration of this call; see its
-	// declaration. The lock makes concurrent Compile calls safe, and clearing
-	// it on the way out keeps one compilation from leaking a schema into the
-	// next.
-	compileMu.Lock()
-	defer compileMu.Unlock()
+	// declaration. The lock Compile holds makes concurrent Compile calls
+	// safe, and clearing it on the way out keeps one compilation from leaking
+	// a schema into the next.
 	compileSchema = nil
 	defer func() { compileSchema = nil }()
 	compilePackage = 0

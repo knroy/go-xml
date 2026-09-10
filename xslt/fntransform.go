@@ -445,7 +445,7 @@ func compileNested(rt *runtime, root *xdm.Node, base string) (*Stylesheet, error
 	// stylesheet simply cannot reach further modules, which is the same
 	// refusal a nil resolver gives everywhere else.
 	mr := moduleResolverFor(rt.opts.Documents)
-	sheet, err := Compile(root, CompileOptions{
+	copts := CompileOptions{
 		Resolver: mr,
 		BaseURI:  base,
 		// The nested stylesheet may itself use packages, and it resolves them
@@ -453,7 +453,16 @@ func compileNested(rt *runtime, root *xdm.Node, base string) (*Stylesheet, error
 		// is also what lets a stylesheet loaded BY package-name be found at
 		// all when it in turn names one.
 		PackageResolver: rt.sheet.pkgResolver,
-	})
+	}
+	// A transform reached from the static phase is running INSIDE a Compile
+	// that holds compileMu, so it must not ask for the lock again. rt.static
+	// is set only on the runtime the static phase builds, and is the only
+	// thing that distinguishes the two paths.
+	compile := Compile
+	if rt.static {
+		compile = compileNestedLocked
+	}
+	sheet, err := compile(root, copts)
 	if err != nil {
 		return nil, xdm.Errorf("FOXT0002",
 			"fn:transform: compiling the stylesheet: %v", err)

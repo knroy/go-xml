@@ -31,6 +31,16 @@ type runtime struct {
 	// feature. See fntransform.go.
 	opts TransformOptions
 
+	// static marks the stand-in runtime the static phase builds so that a
+	// static="yes" variable can call fn:transform. Section 9.7 gives a static
+	// expression the whole F&O library and excludes nothing from it, so
+	// fn:transform is in scope there; but the transformation it starts runs
+	// while the outer stylesheet is still COMPILING, which is what the flag
+	// records. Its one consequence is that the nested stylesheet is compiled
+	// through compileNestedLocked rather than Compile, the outer compilation
+	// already holding compileMu. See staticPhase.staticRuntime.
+	static bool
+
 	// funcResults memoises the results of stylesheet functions declared
 	// new-each-time="no". Section 10.3 makes that a promise that two calls
 	// with the same arguments return the SAME result, which for a function
