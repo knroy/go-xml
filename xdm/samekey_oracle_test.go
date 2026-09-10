@@ -1,7 +1,10 @@
 package xdm
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"math/big"
+	"strings"
 	"testing"
 )
 
@@ -112,9 +115,60 @@ func SameKey(a, b *Atomic) bool {
 		return qa.URI == qb.URI && qa.Local == qb.Local
 	}
 
+	// The two binary types are each their own family, but within a type the
+	// value is the OCTET SEQUENCE, not the spelling. XSD Part 2 §3.2.15 gives
+	// xs:hexBinary the value space of finite octet sequences and a lexical
+	// space in which each octet is "two hexadecimal digits" -- case is not
+	// part of the value, so "0F" and "0f" denote the same octet and are one
+	// key. §3.2.16 likewise lets xs:base64Binary carry whitespace between its
+	// characters without changing the octets. xpath/operators.go:511
+	// (binaryOctets) already compares these by decoding for "eq"; the key has
+	// to agree, or a value would fail to find itself in a map.
+	if isBin(a.Type) && isBin(b.Type) {
+		if a.Type != b.Type {
+			return false
+		}
+		oa, oka := decodeBinary(a)
+		ob, okb := decodeBinary(b)
+		if !oka || !okb {
+			return a.String() == b.String()
+		}
+		return string(oa) == string(ob)
+	}
+	if isBin(a.Type) != isBin(b.Type) {
+		return false
+	}
+
 	// Everything else is its type family plus its lexical value; xs:string,
 	// xs:anyURI and xs:untypedAtomic share one family.
+	//
+	// LIMITATION, deliberate and worth knowing before trusting this test.
+	// This line calls typeFamilyOf -- maparray.go:170, the SAME function
+	// production uses. Everything else in this oracle is written from the
+	// specification, but the family grouping is not: it is read out of the
+	// implementation. So no amount of widening this corpus can detect a WRONG
+	// FAMILY grouping. If typeFamilyOf put xs:string and xs:hexBinary in one
+	// family, or split xs:anyURI out of the string family, MapKeyOf and
+	// SameKey would agree on every pair and this test would stay green while
+	// the behaviour was wrong. Only an independently-written family predicate
+	// could catch that, and one is not written here. The guarantee this file
+	// offers stops at the family boundary.
 	return typeFamilyOf(a) == typeFamilyOf(b) && a.String() == b.String()
+}
+
+func isBin(t TypeCode) bool { return t == TypeHexBinary || t == TypeBase64Binary }
+
+// decodeBinary reads a binary value's octets. It decodes rather than
+// consulting the lexical form for the reason above: the spelling is not the
+// value. Whitespace is stripped throughout for base64 (§3.2.16), and hex is
+// folded to one case before decoding.
+func decodeBinary(a *Atomic) ([]byte, bool) {
+	if a.Type == TypeHexBinary {
+		b, err := hex.DecodeString(strings.ToLower(a.String()))
+		return b, err == nil
+	}
+	b, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(a.String()), ""))
+	return b, err == nil
 }
 
 func isDur(t TypeCode) bool {
@@ -165,6 +219,37 @@ func sameKeyCorpus(t *testing.T) []*Atomic {
 	add(NewDouble(inf(1)))
 	add(NewDouble(inf(-1)))
 
+	// Large exact integers. With only 1/0/-1 the Rat()-nil branch at
+	// maparray.go:116 is never reached by a value big enough for exactness to
+	// matter: 2^53+1 and 2^53 are ONE float64 and two integers, so an
+	// encoding that went through Float64 would merge them. 2^63 is past
+	// int64, which is why it is built from a rational rather than NewInteger.
+	add(NewInteger(1 << 53))
+	add(NewInteger(1<<53 + 1))
+	add(NewDouble(1 << 53))
+	if r, ok := new(big.Rat).SetString("9223372036854775808"); ok {
+		add(NewIntegerFromRat(r))
+	}
+	if r, ok := new(big.Rat).SetString("9223372036854775809"); ok {
+		add(NewIntegerFromRat(r))
+	}
+
+	// Negative zero: equal to +0 as a value, distinct as a spelling. The
+	// numeric branch keys on the exact rational, where the sign of zero does
+	// not survive, so these two must collide however they print.
+	add(NewDouble(negZerof()))
+	add(NewFloat(negZerof()))
+
+	// Float boundaries, and the float32/float64 seam. NewFloat rounds to
+	// float32 on construction, so NewFloat(1.1) and NewDouble(1.1) are
+	// DIFFERENT values and must not share a key; NewDouble of the widened
+	// float32 must share one with the float.
+	add(NewDouble(maxFloat64()))
+	add(NewDouble(smallestNonzeroFloat64()))
+	add(NewFloat(1.1))
+	add(NewDouble(1.1))
+	add(NewDouble(float64(float32(1.1))))
+
 	add(NewBoolean(true))
 	add(NewBoolean(false))
 	add(NewString("1"))
@@ -176,6 +261,28 @@ func sameKeyCorpus(t *testing.T) []*Atomic {
 	add(NewQNameValue(QName{URI: "u", Local: "b"}))
 	add(NewQNameValue(QName{URI: "v", Local: "a"}))
 
+	// The two binary types, which had no key coverage at all. Both key
+	// through the typeFamilyOf+String() tail, and both have lexical forms
+	// that spell ONE value more than one way -- hexBinary is case-insensitive
+	// (XSD Part 2 §3.2.15: the value is the octet sequence, and "0F" and "0f"
+	// denote the same octet), and base64Binary admits whitespace between its
+	// characters (§3.2.16). Equal-value/different-spelling pairs are the
+	// whole point of including them; a key built from the raw lexical form
+	// splits values that eq holds identical. The same-type/different-octets
+	// and cross-type pairs come free from the Cartesian product.
+	for _, b := range []struct {
+		s string
+		t TypeCode
+	}{
+		{"0F", TypeHexBinary}, {"0f", TypeHexBinary},
+		{"DEADBEEF", TypeHexBinary}, {"deadbeef", TypeHexBinary},
+		{"DeadBeef", TypeHexBinary}, {"00", TypeHexBinary},
+		{"AQID", TypeBase64Binary}, {"AQ ID", TypeBase64Binary},
+		{"AAAA", TypeBase64Binary},
+	} {
+		add(NewBinary(b.s, b.t))
+	}
+
 	// Durations: one family over (months, seconds); P1Y and P12M collide.
 	for _, d := range []struct {
 		s string
@@ -184,6 +291,13 @@ func sameKeyCorpus(t *testing.T) []*Atomic {
 		{"P1Y", TypeDuration}, {"P12M", TypeYearMonthDuration},
 		{"P0Y", TypeYearMonthDuration}, {"P0D", TypeDayTimeDuration},
 		{"PT1S", TypeDayTimeDuration}, {"-P1Y", TypeDuration},
+		// Negative dayTimeDuration: only positive and zero were covered, and
+		// the key is built from SignedMonths/SignedSeconds, where a dropped
+		// sign would merge -PT1S with PT1S. -PT24H and -P1D are one value
+		// spelled two ways and must collide.
+		{"-PT1S", TypeDayTimeDuration}, {"-P1D", TypeDayTimeDuration},
+		{"-PT24H", TypeDayTimeDuration}, {"-PT0S", TypeDayTimeDuration},
+		{"-P1DT12H", TypeDuration},
 	} {
 		if dv, err := ParseDuration(d.s, d.t); err == nil {
 			add(NewDuration(dv, d.t))
@@ -192,10 +306,21 @@ func sameKeyCorpus(t *testing.T) []*Atomic {
 
 	// The eight calendar types, each with no timezone, with Z, and with two
 	// offsets that name the same instant as Z for the zoned forms.
+	//
+	// Every base here used to be mid-range, so no offset ever crossed an
+	// edge. The near-midnight dateTimes below cross a day, a month and a year
+	// boundary at once: 2001-01-01T00:30:00+01:00 is 2000-12-31T23:30:00Z,
+	// one instant with two spellings in two different years, and the pair is
+	// one key only if the key is the instant rather than the calendar fields.
+	// 23:30 on the last day of a month crosses forward the same way.
 	cal := map[TypeCode][]string{
-		TypeDateTime:   {"2015-04-08T01:30:00", "2015-04-08T02:30:00"},
-		TypeDate:       {"2015-04-08", "2015-04-09"},
-		TypeTime:       {"01:30:00", "17:00:00", "12:00:00"},
+		TypeDateTime: {
+			"2015-04-08T01:30:00", "2015-04-08T02:30:00",
+			"2001-01-01T00:30:00", "2000-12-31T23:30:00",
+			"2000-02-29T23:30:00", "2000-03-01T00:30:00",
+		},
+		TypeDate:       {"2015-04-08", "2015-04-09", "2001-01-01", "2000-12-31"},
+		TypeTime:       {"01:30:00", "17:00:00", "12:00:00", "00:30:00", "23:30:00"},
 		TypeGYear:      {"2015", "2014"},
 		TypeGYearMonth: {"2015-10", "2015-11"},
 		TypeGMonth:     {"--10", "--11"},
@@ -301,6 +426,14 @@ func TestSameKeyIsAnEquivalence(t *testing.T) {
 		}
 	}
 }
+
+// The float boundary constants are spelled out rather than imported from math
+// so that the oracle keeps depending only on the value accessors.
+func negZerof() float64 { z := zerof(); return -z }
+
+func maxFloat64() float64 { return 1.7976931348623157e308 }
+
+func smallestNonzeroFloat64() float64 { return 5e-324 }
 
 func nan() float64 { var z float64; return z / z }
 func inf(s int) float64 {

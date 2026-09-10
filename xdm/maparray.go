@@ -1,10 +1,13 @@
 package xdm
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"math/big"
 	"sort"
+	"strings"
 )
 
 // MapItem is the fourth kind of XDM item, added in XPath 3.1.
@@ -136,6 +139,20 @@ func MapKeyOf(a *Atomic) (string, error) {
 		if dt := a.DateTimeVal(); dt != nil && dt.HasTZ {
 			return a.Type.String() + ":tz:" + dt.ToSeconds(0).RatString(), nil
 		}
+	case a.Type == TypeHexBinary || a.Type == TypeBase64Binary:
+		// A binary value is a sequence of octets, and its spelling is not
+		// part of it: XSD Part 2 §3.2.15 makes xs:hexBinary case-insensitive,
+		// so "0F" and "0f" are one value, and §3.2.16 lets xs:base64Binary
+		// carry whitespace between its characters. Keying on the lexical form
+		// split those apart, so a value parsed from a document could fail to
+		// find its own entry — xdm/node.go:1179 builds these straight from
+		// the element text without canonicalising, and the "eq" operator
+		// already decodes (xpath/operators.go:511), so the key had to as
+		// well. The octets are the key; an undecodable value keeps its
+		// spelling rather than erroring, since MapKeyOf is not a validator.
+		if o, ok := binaryKeyOctets(a); ok {
+			return a.Type.String() + ":bin:" + o, nil
+		}
 	case a.Type == TypeDuration || a.Type == TypeYearMonthDuration ||
 		a.Type == TypeDayTimeDuration:
 		// The three duration types are one key family, and equality is over
@@ -151,6 +168,25 @@ func MapKeyOf(a *Atomic) (string, error) {
 	// family. The type name is part of the key so that xs:date("2001-01-01")
 	// and the string of the same spelling are different keys.
 	return typeFamilyOf(a) + ":" + a.String(), nil
+}
+
+// binaryKeyOctets decodes a binary value to the octets it denotes, returning
+// them in one canonical spelling so that every lexical form of one value
+// produces one key. Reported as a string because that is what the key is.
+func binaryKeyOctets(a *Atomic) (string, bool) {
+	if a.Type == TypeHexBinary {
+		b, err := hex.DecodeString(strings.ToLower(a.String()))
+		if err != nil {
+			return "", false
+		}
+		return string(b), true
+	}
+	// Whitespace is legal between base64 characters, not merely around them.
+	b, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(a.String()), ""))
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
 }
 
 // typeFamilyOf groups the types whose values are interchangeable as keys.
