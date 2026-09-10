@@ -172,12 +172,12 @@ refuses the same grouping for a reason that never consults the call — a
 free-ranging `group-starting-with` pattern, or a grouping key that is not
 motionless — since neither answer rests on the widening.
 
-**Note what it would and would not buy.** Completing it would move the 18
+**Note what it would and would not buy.** Completing it would move the 17
 cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.65% to about
-99.81%. Nine of those 18 are the unreachable group above, so the reachable
-gain is 9. It would not make the engine stream, and it would not change the result
-of a single transform that currently succeeds — it would convert 18 correct
-answers into 18 refusals to answer. That is the conformant behaviour, and it
+99.81%. Nine of those 17 are the unreachable group above, so the reachable
+gain is 8. It would not make the engine stream, and it would not change the result
+of a single transform that currently succeeds — it would convert 17 correct
+answers into 17 refusals to answer. That is the conformant behaviour, and it
 is worth being explicit that the gain is measured in conformance rather than in
 capability.
 

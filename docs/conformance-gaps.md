@@ -156,7 +156,7 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 3.0: 11,478 / 11,518 = 99.65%.**
 
-**18 of the 40 want an `XTSE3430`** — a refusal of a stylesheet as
+**17 of the 40 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles
