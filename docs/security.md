@@ -54,6 +54,7 @@ catch it, no deferred function runs, and one request takes the server with it.
 Two further cost findings are recorded in the audit report and not yet acted
 on: `fn:distinct-values` is quadratic on numerics with heavy allocation, and
 the `MaxItems` budget is not reached on the primary XQuery evaluation path.
+A third, the string bomb, is described below.
 
 **Knowingly incomplete.** One narrowing remains, and it is in an API rather
 than at a copy site. `xdmbuild.Builder.AddAttributeTyped` takes a type
@@ -686,6 +687,12 @@ inline function's `Invoke` closure copies only `Ctx` and `items` from the
 calling context (`xpath/funcitem.go:195-200`), dropping `Depth`. Both halves
 need fixing; either alone leaves it open.
 
+**`TransformOptions.MaxDepth` does not govern this path.** A 268-byte
+stylesheet holding the same inline function in an `xsl:variable` kills the
+process through `Stylesheet.Transform` with `MaxDepth: 50` explicitly set —
+verified. That is the entry point which actually takes untrusted input, and
+the documented defence for it is configured and does not apply.
+
 **Until then, do not compile or evaluate an untrusted expression, query or
 stylesheet in a process you need to keep alive.**
 
@@ -706,6 +713,25 @@ the attack is how long it is.
 Verified triggers: `+`, `or`, unary `-`, `|`, `=>`. The comma operator does
 not. The fix belongs in the optimizer rather than the parser, because the
 parser's counter is structurally blind to a chain that never recurses.
+
+### MEDIUM — a string can be doubled past every budget
+
+`MaxItems` counts items. A string is one item however long it is, so nothing
+bounds the bytes an evaluation produces:
+
+```
+1,009-byte expression  ->  671,088,640 bytes returned, no error
+```
+
+Twenty-six nested `let`s, each concatenating the previous string with itself.
+Reachable from a stylesheet too, as a chain of `xsl:variable` and `concat`,
+where each added line doubles the result.
+
+The limits listed under *Deliberate limits* above bound bytes at **ingress** —
+`FileResolver.MaxBytes`, `MaxModuleBytes`, `MaxExternalBytes`,
+`MaxEntityBytes` — and the list reads as complete. None of them bounds bytes
+**produced during evaluation**, and `xpath` has no `MaxBytes` of any kind.
+A byte budget alongside `MaxItems` is what would close it.
 
 ### MEDIUM — the process environment is readable by any stylesheet or query
 
