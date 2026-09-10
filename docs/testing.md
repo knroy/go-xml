@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,941 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,943 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 13 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -387,9 +387,17 @@ TestXSLT30Suite 11481
 TestXSLTSuite 6193
 VendoredSchemas 185
 XSD10 39358
+XSD10I 24973
+XSD10S 14385
 XSD11 41545
+XSD11I 26196
+XSD11S 15349
 XSpec 225
 ```
+
+`XSD10S`/`XSD10I` and `XSD11S`/`XSD11I` are the schema-validity and instance
+halves of the two XSD totals. They are ratcheted separately because the
+documentation quotes them separately, and a total cannot be split back.
 
 `TestQT3` and `RelaxNGSpectest` were added late: both suites were being run and
 printed, and neither was ratcheted, so an XPath 2.0 or RELAX NG count could
@@ -398,6 +406,35 @@ per language version, so the mark is taken from the **last** of them — the
 full 2.0 run — rather than the first. The spectest driver reports
 `N assertions, M passed` instead of `in-scope: M passed`, so its count is
 extracted in `check.sh` and handed to `ratchetCount`.
+
+## Documented figures
+
+Every conformance figure in `README.md` and `docs/` is a copy of a ratchet
+mark, made by hand -- about thirty copies of eight figures. Nothing used to
+fail when one went stale, and they did: on one day three files carried three
+different unit-test counts, and an XSD split was current in `README.md` while
+`docs/xsd.md` still had the previous measurement.
+
+`tests/docfigures.sh`, run by `check.sh` in the *documented figures* section,
+reads `tests/ratchet.txt` and examines every documentation line that names a
+suite's **in-scope denominator** -- the one number in a figure that does not
+move between runs (11,518 for XSLT 3.0, 30,346 for XQuery, and so on). The
+passing count, failure count and percentage written beside it must equal the
+ratchet's, in every form the documents use: `11,481 of 11,518`,
+`37 of 11,518`, `11,481 / 11,518 (99.68%)`, `= 99.68%`, `(37 failing)`, and
+the `| 11,518 | 11,481 | 99.68% | **37** |` summary-table row. A line stating
+two figures is read as two claims. Failures name the file, line and the value
+wanted.
+
+It anchors on denominators rather than line numbers so that editing prose does
+not break it, and it has no update mode for the same reason `docfigure` has
+none: the number sits inside a sentence, and rewriting the number is the moment
+to check the sentence. A denominator changes only when the suite checkout or
+the scoping changes; when it does, change the table at the top of the script
+in the same commit. Prose that states a count without its denominator ("the
+37 failures") is not guarded, and the unit-test, fuzz and limit counts are
+still asserted at fixed lines by `docfigure` in `check.sh`, whose method is
+printed on failure.
 
 It exists because build-and-test cannot see a silent revert: a stale copy of a
 shared file committed over an additive change leaves a tree that compiles and

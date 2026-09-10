@@ -126,6 +126,13 @@ ratchetXSD() {
 	_t=$1
 	_agree=$(printf '%s' "$2" | sed -n 's/^TOTAL[^0-9]*\([0-9]*\).*/\1/p' | head -1)
 	[ -n "$_agree" ] || return 0
+	# The schema and instance halves are quoted separately in README.md and
+	# docs/, and the TOTAL cannot reconstruct them, so each gets its own mark
+	# (XSD10S, XSD10I, ...) for tests/docfigures.sh to read.
+	_s=$(printf '%s' "$2" | sed -n 's/^SCHEMA[^0-9]*\([0-9]*\).*/\1/p' | head -1)
+	_i=$(printf '%s' "$2" | sed -n 's/^INSTANCE[^0-9]*\([0-9]*\).*/\1/p' | head -1)
+	[ -n "$_s" ] && ratchetCount "${_t}S" "$_s"
+	[ -n "$_i" ] && ratchetCount "${_t}I" "$_i"
 	case "${GOXSLT_RATCHET:-on}" in
 	off) return 0 ;;
 	esac
@@ -334,7 +341,7 @@ docfigure_cmd() {
 
 section "documented figures"
 _docfig_before=$failed
-docfigure "unit test count" 1894 "$(docfigure_tests)" \
+docfigure "unit test count" 1943 "$(docfigure_tests)" \
 	README.md:109 README.md:1228 docs/testing.md:23 docs/todo.md:20
 docfigure "fuzz target count" 8 "$(docfigure_fuzz)" \
 	README.md:1223 docs/testing.md:29
@@ -343,6 +350,17 @@ docfigure "limit boundary test count" 13 "$(docfigure_limits)" \
 if [ "$failed" -eq "$_docfig_before" ]; then
 	printf 'tests %s, fuzz targets %s, limit boundary tests %s — as documented\n' \
 		"$(docfigure_tests)" "$(docfigure_fuzz)" "$(docfigure_limits)"
+fi
+# The conformance figures are checked the other way round: the ratchet has
+# already measured them, so tests/docfigures.sh reads tests/ratchet.txt and
+# looks for every copy in the documentation that disagrees. It anchors on
+# in-scope denominators rather than line numbers; see its header.
+if sh "$ROOT/tests/docfigures.sh"; then
+	printf 'conformance figures in README.md and docs/ agree with tests/ratchet.txt\n'
+else
+	fail "a conformance figure in the documentation disagrees with tests/ratchet.txt (listed above).
+    Re-derive it from the suite run, fix every copy, and check the sentence
+    around it still says something true."
 fi
 
 # GOXSLT_NO_SUITES keeps the conformance suites out of these two steps. They
