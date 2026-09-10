@@ -84,6 +84,30 @@ type analyzer struct {
 	// xsl:for-each-group whose body this walk never assessed. Such a call is
 	// withheld rather than judged: see the current-group case in funcCall.
 	groupOutOfReach bool
+
+	// currentPosture carries §19.8.9.3's answer for a call on fn:current:
+	// "the context posture for evaluation of the outermost containing XPath
+	// expression (that is, the context posture that would obtain if the
+	// entire XPath expression were replaced with '.')". It is set once where
+	// that outermost expression is entered and copied unchanged into every
+	// inner analyzer, so that descending into a predicate -- which does
+	// change ctxPosture -- leaves it alone. Within a pattern §19.8.9.3 fixes
+	// it at striding.
+	//
+	// currentAllowsChildren is the same answer to §19.8.1's question for
+	// that outermost context item, so that absorbing current() is charged
+	// exactly as absorbing "." at the outermost level would be. Without it
+	// "text()[$parts = current()]" -- the accumulator pattern of
+	// stream-200..203, which the catalog expects to run -- would absorb a
+	// node assumed to have children and be rejected, while the equivalent
+	// "text()[$parts = .]" is motionless. stream-204 is the same pattern on
+	// an element step, where the absorption stands and XTSE3430 is right.
+	//
+	// currentInScope is false where no outermost context was recorded; there
+	// a call on fn:current stays unmodelled, as it was before this rule.
+	currentPosture        posture
+	currentAllowsChildren bool
+	currentInScope        bool
 }
 
 // analyzeExpr returns the posture and sweep of e, and whether every construct
@@ -101,6 +125,12 @@ func analyzeExprFuncs(e xpath.Expr, ctx posture, funcs map[funcKey]*streamFunc) 
 		ctxAllowsChildren: true,
 		known:             true,
 		funcs:             funcs,
+		// e is the outermost containing XPath expression, so §19.8.9.3's
+		// "context posture that would obtain if the entire XPath expression
+		// were replaced with '.'" is this analyzer's own starting context.
+		currentPosture:        ctx,
+		currentAllowsChildren: true,
+		currentInScope:        true,
 	}
 	p := a.expr(e)
 	return p, a.known
@@ -241,17 +271,20 @@ func (a *analyzer) expr(e xpath.Expr) props {
 // turns that reference roaming.
 func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
 	inner := &analyzer{
-		ctxPosture:        a.ctxPosture,
-		ctxAllowsChildren: a.ctxAllowsChildren,
-		known:             a.known,
-		funcs:             a.funcs,
-		streamingParam:    a.streamingParam,
-		paramCategory:     a.paramCategory,
-		hasStreamParam:    a.hasStreamParam,
-		higherOrder:       true,
-		currentGroup:      a.currentGroup,
-		groupInScope:      a.groupInScope,
-		groupOutOfReach:   a.groupOutOfReach,
+		ctxPosture:            a.ctxPosture,
+		ctxAllowsChildren:     a.ctxAllowsChildren,
+		known:                 a.known,
+		funcs:                 a.funcs,
+		streamingParam:        a.streamingParam,
+		paramCategory:         a.paramCategory,
+		hasStreamParam:        a.hasStreamParam,
+		higherOrder:           true,
+		currentGroup:          a.currentGroup,
+		groupInScope:          a.groupInScope,
+		groupOutOfReach:       a.groupOutOfReach,
+		currentPosture:        a.currentPosture,
+		currentAllowsChildren: a.currentAllowsChildren,
+		currentInScope:        a.currentInScope,
 	}
 	p := inner.expr(e)
 	a.known = a.known && inner.known
@@ -355,17 +388,20 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 	cur := base
 	for _, p := range x.Predicates {
 		inner := &analyzer{
-			ctxPosture:        cur.posture,
-			ctxAllowsChildren: a.allowsChildren(x.Base),
-			known:             a.known,
-			funcs:             a.funcs,
-			streamingParam:    a.streamingParam,
-			paramCategory:     a.paramCategory,
-			hasStreamParam:    a.hasStreamParam,
-			higherOrder:       a.higherOrder,
-			currentGroup:      a.currentGroup,
-			groupInScope:      a.groupInScope,
-			groupOutOfReach:   a.groupOutOfReach,
+			ctxPosture:            cur.posture,
+			ctxAllowsChildren:     a.allowsChildren(x.Base),
+			known:                 a.known,
+			funcs:                 a.funcs,
+			streamingParam:        a.streamingParam,
+			paramCategory:         a.paramCategory,
+			hasStreamParam:        a.hasStreamParam,
+			higherOrder:           a.higherOrder,
+			currentGroup:          a.currentGroup,
+			groupInScope:          a.groupInScope,
+			groupOutOfReach:       a.groupOutOfReach,
+			currentPosture:        a.currentPosture,
+			currentAllowsChildren: a.currentAllowsChildren,
+			currentInScope:        a.currentInScope,
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
@@ -396,17 +432,20 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 	// roaming and free-ranging.
 	for _, p := range s.Predicates {
 		inner := &analyzer{
-			ctxPosture:        base.posture,
-			ctxAllowsChildren: stepAllowsChildren(s),
-			known:             a.known,
-			funcs:             a.funcs,
-			streamingParam:    a.streamingParam,
-			paramCategory:     a.paramCategory,
-			hasStreamParam:    a.hasStreamParam,
-			higherOrder:       a.higherOrder,
-			currentGroup:      a.currentGroup,
-			groupInScope:      a.groupInScope,
-			groupOutOfReach:   a.groupOutOfReach,
+			ctxPosture:            base.posture,
+			ctxAllowsChildren:     stepAllowsChildren(s),
+			known:                 a.known,
+			funcs:                 a.funcs,
+			streamingParam:        a.streamingParam,
+			paramCategory:         a.paramCategory,
+			hasStreamParam:        a.hasStreamParam,
+			higherOrder:           a.higherOrder,
+			currentGroup:          a.currentGroup,
+			groupInScope:          a.groupInScope,
+			groupOutOfReach:       a.groupOutOfReach,
+			currentPosture:        a.currentPosture,
+			currentAllowsChildren: a.currentAllowsChildren,
+			currentInScope:        a.currentInScope,
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
@@ -478,17 +517,20 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 			// two consuming operands and so roaming, which rejected
 			// streamable-031 -- a case the catalog expects to run.
 			inner := &analyzer{
-				ctxPosture:        cur.posture,
-				ctxAllowsChildren: curAllowsChildren,
-				known:             a.known,
-				funcs:             a.funcs,
-				streamingParam:    a.streamingParam,
-				paramCategory:     a.paramCategory,
-				hasStreamParam:    a.hasStreamParam,
-				higherOrder:       a.higherOrder,
-				currentGroup:      a.currentGroup,
-				groupInScope:      a.groupInScope,
-				groupOutOfReach:   a.groupOutOfReach,
+				ctxPosture:            cur.posture,
+				ctxAllowsChildren:     curAllowsChildren,
+				known:                 a.known,
+				funcs:                 a.funcs,
+				streamingParam:        a.streamingParam,
+				paramCategory:         a.paramCategory,
+				hasStreamParam:        a.hasStreamParam,
+				higherOrder:           a.higherOrder,
+				currentGroup:          a.currentGroup,
+				groupInScope:          a.groupInScope,
+				groupOutOfReach:       a.groupOutOfReach,
+				currentPosture:        a.currentPosture,
+				currentAllowsChildren: a.currentAllowsChildren,
+				currentInScope:        a.currentInScope,
 			}
 			next = inner.expr(e)
 			curAllowsChildren = inner.allowsChildren(e)
@@ -562,17 +604,20 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 			// Using the step's own posture would be circular, and striding
 			// is the posture a scanning expression's steps are reached in.
 			inner := &analyzer{
-				ctxPosture:        postureStriding,
-				ctxAllowsChildren: stepAllowsChildren(s),
-				known:             true,
-				funcs:             a.funcs,
-				streamingParam:    a.streamingParam,
-				paramCategory:     a.paramCategory,
-				hasStreamParam:    a.hasStreamParam,
-				higherOrder:       a.higherOrder,
-				currentGroup:      a.currentGroup,
-				groupInScope:      a.groupInScope,
-				groupOutOfReach:   a.groupOutOfReach,
+				ctxPosture:            postureStriding,
+				ctxAllowsChildren:     stepAllowsChildren(s),
+				known:                 true,
+				funcs:                 a.funcs,
+				streamingParam:        a.streamingParam,
+				paramCategory:         a.paramCategory,
+				hasStreamParam:        a.hasStreamParam,
+				higherOrder:           a.higherOrder,
+				currentGroup:          a.currentGroup,
+				groupInScope:          a.groupInScope,
+				groupOutOfReach:       a.groupOutOfReach,
+				currentPosture:        a.currentPosture,
+				currentAllowsChildren: a.currentAllowsChildren,
+				currentInScope:        a.currentInScope,
 			}
 			sw := inner.expr(p).sweep
 			if !inner.known {
@@ -688,6 +733,19 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		case "last":
 			// §19.8.9.14.
 			return a.lastFunction()
+		case "current":
+			// §19.8.9.3: "The sweep of the function is motionless; the
+			// posture is the context posture for evaluation of the outermost
+			// containing XPath expression (that is, the context posture that
+			// would obtain if the entire XPath expression were replaced with
+			// '.')." Inside a pattern that posture is fixed at striding.
+			//
+			// Where no outermost context was recorded the call stays
+			// unmodelled, so the caller reports nothing rather than guessing.
+			if !a.currentInScope {
+				return a.unknown()
+			}
+			return props{a.currentPosture, sweepMotionless}
 		case "position":
 			// §19.8.9.16: no operands, so the general rules make it
 			// grounded and motionless.
@@ -1030,6 +1088,15 @@ func (a *analyzer) allowsChildren(e xpath.Expr) bool {
 	case *xpath.ContextItem:
 		// "." is whatever the context item is.
 		return a.ctxAllowsChildren
+	case *xpath.FuncCall:
+		// current() denotes the outermost context item, so §19.8.1's
+		// question about it is that item's question -- not the default
+		// "assume children" below. "text()[$parts = current()]" absorbs a
+		// text node, which has none, exactly as "text()[$parts = .]" does.
+		if x.Name.URI == fnNS && x.Name.Local == "current" && len(x.Args) == 0 {
+			return a.currentAllowsChildren
+		}
+		return true
 	case *xpath.Step:
 		return stepAllowsChildren(x)
 	case *xpath.PathExpr:

@@ -27,13 +27,13 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,340 | 99.98% | **6** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,463 | 99.52% | **55** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,473 | 99.61% | **45** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 577 | 577 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **178** |
+| | **Total** | | | | **168** |
 
 The unit-test suite is 1,829 tests.
 
@@ -152,11 +152,11 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 55 failures
+## xslt 3.0 — 45 failures
 
-**XSLT 3.0: 11,463 / 11,518 = 99.52%.**
+**XSLT 3.0: 11,473 / 11,518 = 99.61%.**
 
-**37 of the 59 want an `XTSE3430`** — a refusal of a stylesheet as
+**27 of the 45 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles
@@ -230,6 +230,7 @@ and tested on its own, in `xslt/streamlattice.go` and
 | 19.8.8.9 filter expressions | the motionless-predicate clause; not the numeric-predicate narrowing |
 | 19.8.8.11 variable references | the grounded case (correct wherever no streamable stylesheet function is declared) |
 | 19.8.8.12 context item expression | complete |
+| 19.8.9.3 `fn:current` | complete, both the expression and the pattern clause |
 | 19.8.9 built-in function operand usages | the proforma table, ~150 signatures |
 
 Every rule the lattice implements is tested against the worked examples §19.8.2
@@ -252,10 +253,15 @@ than the numerous ones. Absent entirely:
   quantified expressions, §19.8.8.6 simple mapping (`!`) and §19.8.8.15/16 map
   expressions are implemented.
 - **The 18 per-function sections of §19.8.9** that do not follow the general
-  rules: `fn:current`, `fn:last`, `fn:position`, `fn:root`, `fn:reverse`,
-  `fn:innermost`, `fn:fold-right`, `fn:function-lookup`, the accumulator pair
-  and the merge pair. `fn:outermost` is now modelled: §19.8.9.15 gives it one
-  transmission operand and narrows a crawling argument to a striding result.
+  rules: `fn:last`, `fn:root`, `fn:reverse`, `fn:innermost`, `fn:fold-right`,
+  `fn:function-lookup`, the accumulator pair and the merge pair. Three are now
+  modelled. `fn:outermost` (§19.8.9.15) has one transmission operand and
+  narrows a crawling argument to a striding result. `fn:position` (§19.8.9.16)
+  has no operands, so the general rules already make it grounded and
+  motionless. `fn:current` (§19.8.9.3) takes the context posture of the
+  *outermost* containing XPath expression — striding inside a pattern — and is
+  motionless. An earlier reading priced this rule as a net loss; see
+  *Corrections* in [known-gaps.md](known-gaps.md) for the re-measurement.
 - **Static type inference.** §19.2's U-types are approximated syntactically.
   Where the approximation is uncertain it answers in the direction that widens
   the sweep, which loses precision and never gains a false rejection.

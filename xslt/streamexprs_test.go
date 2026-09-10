@@ -331,3 +331,154 @@ func TestAnalyzeTreatExpr(t *testing.T) {
 			got.posture, got.sweep, known)
 	}
 }
+
+// TestAnalyzeCurrentFunction checks §19.8.9.3: "The sweep of the function is
+// motionless; the posture is the context posture for evaluation of the
+// outermost containing XPath expression (that is, the context posture that
+// would obtain if the entire XPath expression were replaced with '.')."
+//
+// The point of the rule is the word OUTERMOST. Descending into a predicate
+// changes the context posture that "." reports, and current() must not follow
+// it. sf-current-902's "AUTHOR[..[@CAT = current()/../@CAT]]" is the shape
+// that distinguishes the two: inside the inner predicate "." is the parent,
+// while current() is still the AUTHOR the pattern matched.
+func TestAnalyzeCurrentFunction(t *testing.T) {
+	cases := []struct {
+		expr    string
+		ctx     posture
+		want    props
+		comment string
+	}{
+		// The bare call takes the outermost context posture and is
+		// motionless, exactly as "." is.
+		{"current()", postureStriding,
+			props{postureStriding, sweepMotionless},
+			"striding context"},
+		{"current()", postureGrounded,
+			props{postureGrounded, sweepMotionless},
+			"grounded context"},
+		// Absorbing a striding current() is consuming, by the §19.8.1
+		// table -- the same charge "string(.)" carries. This is what makes
+		// sf-current-901's "*[string(.) = string(current())]" unstreamable.
+		{"string(current())", postureStriding,
+			props{postureGrounded, sweepConsuming},
+			"absorption of a striding current() is consuming"},
+		// Inspecting it costs nothing: sf-current-100's
+		// "ITEM[namespace-uri(current()) = '']" is a pattern the catalog
+		// expects to run.
+		{"namespace-uri(current())", postureStriding,
+			groundedMotionless,
+			"inspection of current() is motionless"},
+		// Navigating from it. "current()/@UNIT" stays striding and
+		// motionless -- the attribute axis reads nothing further --
+		// which is sf-current-100's DIMENSIONS rule.
+		{"current()/@UNIT", postureStriding,
+			props{postureStriding, sweepMotionless},
+			"attribute step off current()"},
+		// A grounded outermost context makes even absorption free: the
+		// §19.8.1 rule "If P is grounded, then S' is S".
+		{"string(current())", postureGrounded,
+			groundedMotionless,
+			"absorbing a grounded current() costs nothing"},
+	}
+	for _, c := range cases {
+		expr, err := xpath.ParseVersion(c.expr, nil, xpath.XPath31)
+		if err != nil {
+			t.Fatalf("parsing %q: %v", c.expr, err)
+		}
+		got, known := analyzeExpr(expr, c.ctx)
+		if !known {
+			t.Errorf("%s (%s): the analysis abandoned it, but §19.8.9.3 "+
+				"gives fn:current a rule", c.expr, c.comment)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s in a %v context (%s) = %v and %v, want %v and %v",
+				c.expr, c.ctx, c.comment,
+				got.posture, got.sweep, c.want.posture, c.want.sweep)
+		}
+	}
+}
+
+// TestCurrentPostureIsOutermost checks the one thing a bare-context test
+// cannot: that descending into a predicate leaves current() alone. At the
+// outermost level ctxPosture and currentPosture are equal, so every case
+// above passes just as well if current() reads the wrong one; only a nested
+// context tells them apart.
+//
+// "@x[string(current()) = 'y']" is that shape. Inside the predicate the
+// context item is the attribute, which has no children, so §19.8.1 downgrades
+// the absorption in "string(.)" to inspection and the whole expression is
+// striding and motionless. current() is not the attribute -- it is the
+// outermost context item, an element that may have children -- so absorbing
+// it stands, and a consuming predicate makes the step roaming and
+// free-ranging. The two spellings must therefore disagree, and a current()
+// that followed the inner context would make them agree.
+func TestCurrentPostureIsOutermost(t *testing.T) {
+	for _, c := range []struct {
+		expr    string
+		want    props
+		comment string
+	}{
+		{"@x[string(.) = 'y']", props{postureStriding, sweepMotionless},
+			"absorbing the attribute context item is downgraded to inspection"},
+		{"@x[string(current()) = 'y']", roamingFreeRanging,
+			"current() is the outermost item, not the attribute, so absorbing it consumes"},
+		// The posture half of the same asymmetry. A filter on a variable
+		// gives the predicate a GROUNDED context posture, while the
+		// outermost posture is still striding. §19.8.1 charges nothing for
+		// absorbing a grounded operand, so "string(.)" here is motionless;
+		// current() keeps the striding outermost posture, so absorbing it
+		// consumes. This pair is what pins currentPosture apart from
+		// ctxPosture -- at the outermost level the two are equal, and every
+		// case that does not nest passes either way.
+		{"$v[string(.) = 'y']", groundedMotionless,
+			"the predicate's own context posture is grounded"},
+		{"$v[string(current()) = 'y']", roamingFreeRanging,
+			"current() keeps the striding OUTERMOST posture, so absorbing it consumes"},
+	} {
+		expr, err := xpath.ParseVersion(c.expr, nil, xpath.XPath31)
+		if err != nil {
+			t.Fatalf("parsing %q: %v", c.expr, err)
+		}
+		got, known := analyzeExpr(expr, postureStriding)
+		if !known {
+			t.Errorf("%s: the analysis abandoned a modelled expression", c.expr)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s (%s) = %v and %v, want %v and %v",
+				c.expr, c.comment, got.posture, got.sweep,
+				c.want.posture, c.want.sweep)
+		}
+	}
+
+	// The pattern half of §19.8.9.3, and the reason currentAllowsChildren
+	// exists. "part-name/text()[$selected-parts = current()]" is the
+	// accumulator rule of stream-200..203, which the catalog expects to RUN:
+	// current() there is the text node the pattern matched, which has no
+	// children, so the absorption is downgraded and the predicate is
+	// motionless. stream-204 is the same rule on an element step, which the
+	// catalog expects to be REFUSED with XTSE3430. Both directions are
+	// pinned here, because loosening either one costs the other.
+	for _, c := range []struct {
+		pattern string
+		want    bool // free-ranging?
+	}{
+		{"part-name/text()[$selected-parts = current()]", false},
+		{"part-name[$selected-parts = current()]", true},
+	} {
+		pat, err := xpath.ParseVersion(c.pattern, nil, xpath.XPath31)
+		if err != nil {
+			t.Fatalf("parsing %q: %v", c.pattern, err)
+		}
+		free, known := patternExprFreeRanging(pat, nil)
+		if !known {
+			t.Errorf("%s: the pattern classification abandoned it", c.pattern)
+			continue
+		}
+		if free != c.want {
+			t.Errorf("%s: free-ranging = %v, want %v", c.pattern, free, c.want)
+		}
+	}
+}

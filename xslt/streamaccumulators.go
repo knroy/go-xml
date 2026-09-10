@@ -413,6 +413,15 @@ func patternStepFreeRanging(e xpath.Expr, at *xdm.Node) (bool, bool) {
 			ctxPosture:        postureStriding,
 			ctxAllowsChildren: stepAllowsChildren(s),
 			known:             true,
+			// §19.8.9.3: "The use of the current function within a pattern
+			// is supported with similar restrictions. In this case the
+			// context posture is always striding." current() denotes the
+			// node the pattern is being matched against, which is the node
+			// this step selects, so whether absorbing it reads further from
+			// the stream is that step's question.
+			currentPosture:        postureStriding,
+			currentAllowsChildren: stepAllowsChildren(s),
+			currentInScope:        true,
 		}
 		p := a.expr(pred)
 		if !a.known {

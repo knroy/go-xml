@@ -40,9 +40,9 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 10 of 30,346; XSLT 3.0 has 66 of 11,518;
+failures of 6,201; XQuery 3.1 has 6 of 30,346; XSLT 3.0 has 45 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,576. Everything below
-is an account of those 162 cases, or of a decision that produced some of them.
+is an account of those 120 cases, or of a decision that produced some of them.
 
 What this file adds, and that one does not:
 
@@ -84,7 +84,7 @@ it. So these are not wrong answers, and they are not silent erasure: they are a
 static analysis that is not yet complete.
 
 They cluster by construct rather than by cause, which is what confirms it is
-missing rules and not 37 defects: `su-absorbing`, `su-shallow-descent` and
+missing rules and not 27 defects: `su-absorbing`, `su-shallow-descent` and
 `si-fork`, then a long tail across `su-*`, `si-*`, `sf-*` and `sx-*`.
 
 **A partial analysis is safe here, and the safety is structural.** The worry
@@ -97,6 +97,70 @@ modes are not symmetric: a missing rule leaves a case failing, while a wrong
 rule would reject a valid stylesheet, and it is the second that the
 whole-corpus scan measures at zero.
 
+**Nine of them are not missing rules — they are unreachable under the
+published text.** `su-absorbing-205`, `-901`, `-905`, `-908`;
+`su-inspection-901`, `-902`, `-903`; `su-shallow-descent-902`, `-906`. All nine
+want `XTSE3430` for a declared-streamable `xsl:function` whose body the
+published rules find perfectly streamable. The suite's own descriptions name
+three intended rules, and each of the three is blocked by the spec itself.
+
+*"Not grounded" / "consumes the streamed input"* (`su-absorbing-901`,
+`su-inspection-901`, `-903`). §19.8.8.11's table gives a reference to the
+streaming parameter posture **grounded** for both the absorbing and inspection
+categories — for inspection, whether the reference is singular or not — and
+§19.8.1 then says *"If P is grounded, then S′ is S"*, so absorbing it is
+charged nothing. `su-inspection-901`'s body ends `else string($element)` and
+comes out grounded and motionless, which §19.8.5.3 permits.
+
+The comparison that settles it is `su-inspection-A`, which the catalog expects
+to **run**, against `su-inspection-901`, which it expects **refused**. Their
+functions are the same function; the only difference is the final `else` arm:
+
+    A:   else f:get-inherited-attribute-value-004($element/.., $attribute-name)
+    901: else string($element)
+
+Under §19.8.8.11 both arms are grounded and motionless, so the two bodies are
+indistinguishable. A rule counting references to the streaming parameter does
+not separate them either: `A`'s `f:depth-002` references `$input` twice.
+
+*"First argument allows a sequence"* (`su-inspection-902`,
+`su-shallow-descent-906`). The intended rule is that a streaming parameter
+declared `node()*` — or, in `-906`, with no `as` at all — disqualifies the
+function. **Both §19.8.5.3 and §19.8.5.5 declare exactly that in their own
+worked examples** and call the result guaranteed-streamable:
+
+    <xsl:function name="f:depth" as="xs:integer" streamability="inspection">
+      <xsl:param name="input" as="node()*"/>            <!-- §19.8.5.3 -->
+
+    <xsl:function name="f:alternate-children" streamability="shallow-descent">
+      <xsl:param name="input" as="element()*"/>         <!-- §19.8.5.5 -->
+
+Implementing the rule refuses the specification's own examples, which is the
+spurious-rejection failure mode this analysis exists to avoid.
+
+*"Two consuming references to the variable"* (`su-absorbing-205`, `-905`,
+`-908`). **The suite says outright that this rule is not in the spec.** The
+catalog entry for `su-absorbing-205` reads, verbatim:
+
+> Recursive absorbing function .
+> See https://saxonica.plan.io/issues/4561
+> See https://github.com/w3c/qtspecs/issues/15
+> Analysis suggests there's a rule missing in the spec: multiple references
+> to the streaming parameter, or references within a higher-order operand, should not be allowed.
+
+Saxon 9.8 passes all nine, which is what a submission does when it implements a
+rule its own author has filed against the specification. We do not, and the
+reason is the asymmetry in the note above: the rule cannot be transcribed
+because there is nothing to transcribe, and inventing it means refusing
+stylesheets on a rule no reader of the specification could have anticipated.
+`su-absorbing-205` is additionally withheld for an ordinary reason — its body is
+an `xsl:copy` with children, a sequence-constructor shape `analyzeFunctionBody`
+does not model — so it would still report nothing even if a rule existed.
+
+These nine are recorded here rather than left to be re-derived: the derivation
+above has been done at least twice, and both times the reasoning was correct and
+went unwritten.
+
 One withholding is worth naming, because it looks like a gap and is not.
 §19.8.8.4 widens a union of two striding operands to crawling by its own
 admission rather than by necessity, so a rule applying templates to
@@ -106,11 +170,12 @@ refuses the same grouping for a reason that never consults the call — a
 free-ranging `group-starting-with` pattern, or a grouping key that is not
 motionless — since neither answer rests on the widening.
 
-**Note what it would and would not buy.** Completing it would move the 37
-cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.52% to about
-99.80%. It would not make the engine stream, and it would not change the result
-of a single transform that currently succeeds — it would convert 37 correct
-answers into 37 refusals to answer. That is the conformant behaviour, and it
+**Note what it would and would not buy.** Completing it would move the 27
+cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.61% to about
+99.84%. Nine of those 27 are the unreachable group above, so the reachable
+gain is 18. It would not make the engine stream, and it would not change the result
+of a single transform that currently succeeds — it would convert 27 correct
+answers into 27 refusals to answer. That is the conformant behaviour, and it
 is worth being explicit that the gain is measured in conformance rather than in
 capability.
 
@@ -893,6 +958,50 @@ Verdicts recorded in this file that were **wrong**. Not fixes — a fix leaves n
 trace here — but readings that were believed, quoted, and disproved. They are
 kept because a negative result that was believed for two revisions is more
 dangerous than an open bug, and deleting one invites the same probe again.
+
+### "§19.8.9.3 costs four valid stylesheets" — it gains ten and costs none
+
+An uncommitted verdict, carried between sessions as an oral claim and never
+written down until it was re-measured and found wrong. The claim was that
+implementing §19.8.9.3 — the streamability of `fn:current` — measured `+5` by
+count but `9 passing / 4 regressed` by name, and that the four regressions were
+spurious refusals of `stream-200`..`203`, whose accumulator rule is
+`part-name/text()[$selected-parts = current()]`. On that basis the work was
+said to have been reverted.
+
+**Re-measured from the same baseline: +10 cases, zero regressions.**
+`sf-current-901`..`905` as expected, and five more that came free —
+`si-for-each-904`, `si-iterate-035`, `si-iterate-904`, `stream-204`,
+`streamable-110` — because a `current()` call the analysis could not model used
+to abandon the whole enclosing construct.
+
+**The regression was real, and it was a bug in the implementation rather than a
+cost of the rule.** §19.8.9.3 gives the call the context posture of the
+*outermost* containing XPath expression; what it does not say, because §19.8.1
+already does, is what happens when that call is *absorbed*. `current()` in
+`text()[$parts = current()]` denotes the text node the pattern matched, and a
+text node has no children, so §19.8.1's downgrade — *"If U is absorption and
+the intersection of T with U{element(), document-node()} is U{} … then U′ is
+inspection"* — applies exactly as it does to the equivalent `text()[$parts =
+.]`. An implementation that answers §19.8.1's question for `current()` with the
+blanket "assume children" default makes the predicate consuming and refuses all
+four stylesheets. Answering it from the outermost context item instead — the
+`currentAllowsChildren` field in `xslt/streamability.go` — refuses none of
+them.
+
+The suite pins both directions, which is why the fix is not a loosening:
+`stream-200`..`203` match on `text()` and must **run**, while `stream-204` is
+the same accumulator rule on an element step, where the absorption stands and
+`XTSE3430` is correct. `stream-204` is one of the ten gained.
+
+The lesson is the one this section exists for. **A revert recorded only in
+conversation is a measurement that cannot be checked**: there was no revert
+commit, no residual code and no entry in either gap file, so the claim survived
+purely on retelling while `conformance-gaps.md` went on listing `fn:current`
+among the rules absent entirely. Had the four names been written down beside
+the verdict, the next reader would have seen in one step that the four share a
+`text()` step and that the fifth sibling on an element step is a case the suite
+wants refused — which is the whole diagnosis.
 
 ### A negative result on a bound must prove the loop it bounds actually runs
 

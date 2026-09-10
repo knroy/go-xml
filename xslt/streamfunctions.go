@@ -737,6 +737,12 @@ func (a *analyzer) simpleMap(x *xpath.SimpleMap) props {
 		// note under §19.8.5). Without this the navigation usage would
 		// meet a grounded context and cost nothing.
 		ctxStreamedGrounded: a.isStreamingParamRef(x.Left),
+		// §19.8.9.3 asks about the OUTERMOST containing XPath expression, so
+		// the right-hand side of "!" -- still the same XPath expression --
+		// keeps the answer the left-hand side had.
+		currentPosture:        a.currentPosture,
+		currentAllowsChildren: a.currentAllowsChildren,
+		currentInScope:        a.currentInScope,
 	}
 	p := inner.expr(x.Right)
 	a.known = a.known && inner.known

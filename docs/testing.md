@@ -383,7 +383,7 @@ DocBook 577
 RelaxNGSpectest 965
 TestQT3 30233
 TestQT3XQuery 30340
-TestXSLT30Suite 11463
+TestXSLT30Suite 11473
 TestXSLTSuite 6193
 VendoredSchemas 185
 XSD10 39358

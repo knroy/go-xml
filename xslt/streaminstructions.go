@@ -264,6 +264,11 @@ func (a *instrAnalyzer) exprOperandIn(src string, el *xdm.Node, ctx posture, all
 		groupInScope:      a.groupInScope,
 		groupOutOfReach:   a.groupOutOfReach,
 		funcs:             a.funcs,
+		// expr is the whole of this attribute's XPath expression, so it is
+		// the outermost one §19.8.9.3 asks about.
+		currentPosture:        ctx,
+		currentAllowsChildren: allowsChildren,
+		currentInScope:        true,
 	}
 	p := an.expr(expr)
 	kids := an.allowsChildren(expr)
