@@ -27,7 +27,7 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,340 | 99.98% | **6** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,473 | 99.61% | **45** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,475 | 99.63% | **43** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
@@ -152,11 +152,11 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 45 failures
+## xslt 3.0 — 43 failures
 
-**XSLT 3.0: 11,473 / 11,518 = 99.61%.**
+**XSLT 3.0: 11,475 / 11,518 = 99.63%.**
 
-**27 of the 45 want an `XTSE3430`** — a refusal of a stylesheet as
+**20 of the 43 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles

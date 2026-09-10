@@ -17,6 +17,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | `fn:current` was unmodelled, abandoning every construct containing it | §19.8.9.3 gives the call the outermost expression's context posture (striding in a pattern), and §19.8.1 charges absorbing it by that item's type. 11,463 → 11,473. | — |
+| A streamable template rule could return streamed nodes | §18.1 demands a grounded result of an `xsl:stream` body "or of a streamable template rule"; only the former was checked. Applied it to rule bodies too. 11,463 → 11,464. | — |
+| A path descending from a climbing posture was rescued as a scan | §19.8.8.7's reassessment assumes a striding start, so `for-each select=".."` with a descending body was accepted where `count(../*)` was refused. 11,464 → 11,465. | — |
 | A call on a stylesheet function inside a streamable instruction was never assessed | The §19.8.5 function table reached the body check but not the instruction analyser, so every such call was unmodelled and suppressed the whole body's verdict. Threaded it through. 11,452 → 11,454. | — |
 | `for` expressions were unmodelled, hiding §19.8.8.11 | §19.8.8.1 makes the return clause a higher-order operand, which turns a streaming-parameter reference inside it roaming. The §19.8.8.2 quantified rule is withheld over a streamed binding: faithful, it refuses three valid stylesheets. | — |
 | A schema type's constructor was unreachable through `function-lookup` or `t(?)` | The constructor is registered in no library, so every dynamic route to it reported `XPST0017`. Both now resolve it from the static context, as `t#1` already did. | — |

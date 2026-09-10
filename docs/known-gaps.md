@@ -40,9 +40,9 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 6 of 30,346; XSLT 3.0 has 45 of 11,518;
+failures of 6,201; XQuery 3.1 has 6 of 30,346; XSLT 3.0 has 43 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,576. Everything below
-is an account of those 120 cases, or of a decision that produced some of them.
+is an account of those 118 cases, or of a decision that produced some of them.
 
 What this file adds, and that one does not:
 
@@ -60,16 +60,18 @@ much each costs.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
-**37 of the 59 XSLT 3.0 failures**, and by far the largest single gap in the
+**35 of the 53 XSLT 3.0 failures**, and by far the largest single gap in the
 project. The posture-and-sweep lattice exists, and so now do the rules built on
 it: the §19.8.4 instruction rules, §19.8.5 streamable stylesheet functions,
 §18.2.8 accumulators, the §19.8.8 expression rules, the §19.8.9 function
-classifications, and §19.6's context posture for both
-`xsl:source-document`/`xsl:stream` and the template rules of a streamable mode.
+classifications, §19.6's context posture for both
+`xsl:source-document`/`xsl:stream` and the template rules of a streamable mode,
+and §18.1's grounded demand at both the sites it names — an `xsl:stream` body
+and, by its own parenthetical, a streamable template rule.
 What remains is a long tail of individual constructs rather than a missing body
 of rules.
 
-Every one of the 37 fails in the same direction: the suite expects `XTSE3430` —
+Every one of the 35 fails in the same direction: the suite expects `XTSE3430` —
 *this construct is not guaranteed streamable* — and the transform succeeds
 instead, because the analysis returns `known=false` for a construct it cannot
 yet model and correctly declines to raise an error it has not proved.
@@ -170,12 +172,12 @@ refuses the same grouping for a reason that never consults the call — a
 free-ranging `group-starting-with` pattern, or a grouping key that is not
 motionless — since neither answer rests on the widening.
 
-**Note what it would and would not buy.** Completing it would move the 27
-cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.61% to about
-99.84%. Nine of those 27 are the unreachable group above, so the reachable
-gain is 18. It would not make the engine stream, and it would not change the result
-of a single transform that currently succeeds — it would convert 27 correct
-answers into 27 refusals to answer. That is the conformant behaviour, and it
+**Note what it would and would not buy.** Completing it would move the 20
+cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.63% to about
+99.80%. Nine of those 20 are the unreachable group above, so the reachable
+gain is 11. It would not make the engine stream, and it would not change the result
+of a single transform that currently succeeds — it would convert 20 correct
+answers into 20 refusals to answer. That is the conformant behaviour, and it
 is worth being explicit that the gain is measured in conformance rather than in
 capability.
 

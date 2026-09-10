@@ -3,6 +3,8 @@ package xslt
 import (
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/xpath"
 )
 
 // §19.6's third clause -- "if the focus-setting container of C is a template
@@ -367,6 +369,164 @@ func TestGroupingFunctionsInAStreamableRule(t *testing.T) {
 			t.Fatalf("§19.8.1 refuses a construct with more than one "+
 				"potentially-consuming operand, and two current-group() "+
 				"references are two; want XTSE3430, got: %v", err)
+		}
+	})
+}
+
+// §18.1 closes its worked example with a sentence that names two constructs:
+// "Expressed informally, the result of an xsl:stream instruction (or of a
+// streamable template rule) must not contain streamed nodes." The
+// parenthetical is what carries the grounded demand from xsl:source-document,
+// where checkStreamability already applied it, to a template rule of a
+// streamable mode.
+//
+// The refusing cases below are the shapes that pass the §19.8.4 rules and
+// still hand streamed nodes out; the accepting ones are the same stylesheets
+// with the nodes copied, which is the remedy §18.1's note prescribes -- "If
+// nodes from this document are to be returned, they must first be copied".
+func TestStreamableModeBodyMustBeGrounded(t *testing.T) {
+	// streamable-128. The condition is motionless and the arms are striding
+	// and consuming, so the body is streamable under §19.8.4; it is refused
+	// only because striding means the result IS streamed nodes.
+	t.Run("if-expression returning streamed nodes", func(t *testing.T) {
+		err := compileModeSheet(t, modeSheet(
+			`<xsl:template match="Property" mode="s">`+
+				`<xsl:sequence select="if (lang('en')) then Address else ()"/>`+
+				`</xsl:template>`))
+		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
+			t.Fatalf("§18.1 requires the result of a streamable template "+
+				"rule to be grounded, and \"Address\" is striding, so the "+
+				"rule returns streamed nodes; want XTSE3430, got: %v", err)
+		}
+	})
+
+	// The acceptance direction for the same shape: copy-of() makes the result
+	// grounded, which is exactly the remedy §18.1's note gives.
+	t.Run("the same rule is accepted once the nodes are copied", func(t *testing.T) {
+		if err := compileModeSheet(t, modeSheet(
+			`<xsl:template match="Property" mode="s">`+
+				`<xsl:sequence select="if (lang('en')) then copy-of(Address) else ()"/>`+
+				`</xsl:template>`)); err != nil {
+			t.Fatalf("copy-of() makes the returned nodes grounded, which is "+
+				"the remedy §18.1 prescribes, so the rule must compile; "+
+				"got: %v", err)
+		}
+	})
+
+	// A rule whose body builds new elements is grounded whatever it reads
+	// from the stream, and must keep compiling: this is the ordinary shape of
+	// a streamable template rule and by far the most common one.
+	t.Run("a rule constructing result elements is accepted", func(t *testing.T) {
+		if err := compileModeSheet(t, modeSheet(
+			`<xsl:template match="Property" mode="s">`+
+				`<row><xsl:value-of select="count(Address)"/></row>`+
+				`</xsl:template>`)); err != nil {
+			t.Fatalf("a body that constructs elements is grounded, so §18.1 "+
+				"is satisfied and the rule must compile; got: %v", err)
+		}
+	})
+
+	// An atomizing body is grounded too, and is the other common shape.
+	t.Run("a rule returning atomized values is accepted", func(t *testing.T) {
+		if err := compileModeSheet(t, modeSheet(
+			`<xsl:template match="Property" mode="s">`+
+				`<xsl:sequence select="string(Address)"/>`+
+				`</xsl:template>`)); err != nil {
+			t.Fatalf("string() atomizes, so the result is grounded and the "+
+				"rule must compile; got: %v", err)
+		}
+	})
+}
+
+// §19.8.8.7's reassessment of a roaming path as a scanning expression is
+// stated without a precondition on the context posture, but its note gives
+// the strategy as "examine each descendant of the context node" and every
+// worked example it closes with is prefaced "assume that the context posture
+// is striding". From a climbing posture that strategy is unavailable, because
+// the descendants of an ancestor include the subtree already read.
+func TestScanningRescueNeedsAStridingStart(t *testing.T) {
+	// streamable-126: the parent step gives a climbing posture, and the
+	// child step inside the for-each body then descends from it. Written as
+	// one expression, "count(../*)", this was already refused; split across
+	// the for-each it was rescued as a scan and wrongly accepted.
+	t.Run("descent from a climbing posture is refused", func(t *testing.T) {
+		err := compileModeSheet(t, modeSheet(
+			`<xsl:template match="myroot" mode="s">`+
+				`<chap><xsl:for-each select="..">`+
+				`<xsl:value-of select="count(*)"/>`+
+				`</xsl:for-each></chap>`+
+				`</xsl:template>`))
+		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
+			t.Fatalf("a child step from the climbing posture that \"..\" "+
+				"gives cannot be rescued as a scanning expression; "+
+				"want XTSE3430, got: %v", err)
+		}
+	})
+
+	// The acceptance direction: the identical scan from a striding posture is
+	// what §19.8.8.7's rescue exists for, and must still compile.
+	t.Run("the same scan from a striding posture is accepted", func(t *testing.T) {
+		if err := compileModeSheet(t, modeSheet(
+			`<xsl:template match="myroot" mode="s">`+
+				`<chap><xsl:for-each select="section">`+
+				`<xsl:value-of select="count(*)"/>`+
+				`</xsl:for-each></chap>`+
+				`</xsl:template>`)); err != nil {
+			t.Fatalf("a scan from a striding context is what §19.8.8.7's "+
+				"reassessment is for, so this must compile; got: %v", err)
+		}
+	})
+
+	// A path headed by a streaming parameter does not start from the context
+	// item at all, so the context posture says nothing about it.
+	// function-5016 is exactly this stylesheet, and gating the rescue on the
+	// context posture refused it.
+	t.Run("a scan from a streaming parameter is accepted", func(t *testing.T) {
+		if err := compileModeSheet(t, modeSheet(
+			`<xsl:function name="sf:deep" streamability="deep-descent" `+
+				`as="element()*" xmlns:sf="http://example.com/sf">`+
+				`<xsl:param name="node" as="node()"/>`+
+				`<xsl:sequence select="$node//section"/>`+
+				`</xsl:function>`)); err != nil {
+			t.Fatalf("\"$node//section\" scans from the striding node the "+
+				"streaming parameter denotes, whatever the context posture "+
+				"of the body is, so it must compile; got: %v", err)
+		}
+	})
+}
+
+// §19.8.9 lists fn:lang in two lines -- "fn:lang(x) - Equivalent to
+// fn:lang(x, .)" and "fn:lang(A, I)" -- so the one-argument call is the
+// two-argument call with an implicit context item. Leaving the short form out
+// of the table made every construct containing it unmodelled, which withheld
+// the refusal of streamable-128 rather than reporting it.
+func TestContextDefaultingBuiltinIsModelled(t *testing.T) {
+	langProps := func(t *testing.T, src string) (props, bool) {
+		t.Helper()
+		e, err := xpath.Parse(src, nil)
+		if err != nil {
+			t.Fatalf("parsing %q: %v", src, err)
+		}
+		return analyzeExpr(e, postureStriding)
+	}
+
+	// The defaulted call must be modelled at all -- this is what was missing.
+	t.Run("the one-argument form is modelled", func(t *testing.T) {
+		if _, known := langProps(t, "lang('en')"); !known {
+			t.Fatal("§19.8.9 gives fn:lang(x) as fn:lang(x, .), so the " +
+				"one-argument call must be modelled, not abandoned")
+		}
+	})
+
+	// And must be modelled the same way as the call it is defined to equal.
+	t.Run("it agrees with the spelt-out form", func(t *testing.T) {
+		short, _ := langProps(t, "lang('en')")
+		long, _ := langProps(t, "lang('en', .)")
+		if short != long {
+			t.Fatalf("§19.8.9 defines fn:lang(x) as equivalent to "+
+				"fn:lang(x, .), so the two must be assessed alike; "+
+				"got %v/%v and %v/%v",
+				short.posture, short.sweep, long.posture, long.sweep)
 		}
 	})
 }

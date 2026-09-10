@@ -299,12 +299,26 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 			return true
 		}
 		p, known := analyzeSequenceConstructor(el, postureStriding, sets, funcs)
-		if known && !p.streamable() &&
-			(!bodyCallsCurrentGroup(el) || hasIndependentGroupRefusal(el)) {
+		if !known || (bodyCallsCurrentGroup(el) && !hasIndependentGroupRefusal(el)) {
+			return true
+		}
+		// §18.1 states the grounded demand for xsl:stream and then extends it
+		// in its own words: "Expressed informally, the result of an xsl:stream
+		// instruction (or of a streamable template rule) must not contain
+		// streamed nodes." The parenthetical is the whole of the reason this
+		// runs on a template rule at all. A body that is striding and
+		// consuming passes the §19.8.4 rules and still hands streamed nodes
+		// to a caller with no streamability constraints, which is what §18.1
+		// says cannot be analysed -- streamable-128 returns "if (lang('en'))
+		// then Address else ..." from a rule of a streamable mode.
+		//
+		// checkStreamability applies the same demand to an xsl:source-document
+		// body; this is that rule at the other site §18.1 names.
+		if !p.streamable() || p.posture != postureGrounded {
 			err = fmt.Errorf(
 				"the body of the template rule matching %q in a streamable "+
-					"mode is %v and %v, so it is not "+
-					"guaranteed-streamable (XTSE3430)",
+					"mode is %v and %v, but §18.1 requires it to be grounded, "+
+					"so it is not guaranteed-streamable (XTSE3430)",
 				el.AttrValue("match"), p.posture, p.sweep)
 			return false
 		}

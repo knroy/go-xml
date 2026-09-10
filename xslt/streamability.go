@@ -538,7 +538,18 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 		}
 		if !next.streamable() {
 			prefix := x.Steps[:i+1]
-			if !a.isScanningSteps(prefix) {
+			// §19.8.8.7's reassessment presupposes the scan starts from a
+			// node of the stream that has not yet been passed: its own note
+			// gives the strategy as "examine each descendant of the context
+			// node", and every worked example it closes with is prefaced
+			// "assume that the context posture is striding". From a climbing
+			// posture that strategy is not available -- the descendants of an
+			// ancestor include the whole subtree already read -- so the
+			// provisional roaming verdict stands. Without this guard
+			// "for-each select='..'" with a "count(*)" body came out
+			// grounded and consuming, accepting streamable-126, while the
+			// same navigation written as "count(../*)" was correctly refused.
+			if !a.scanMayStart(prefix) || !a.isScanningSteps(prefix) {
 				return roamingFreeRanging
 			}
 			// A scanning prefix is crawling if it can select an element,
@@ -552,6 +563,32 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 		cur = props{next.posture, wider(cur.sweep, next.sweep)}
 	}
 	return cur
+}
+
+// scanMayStart reports whether §19.8.8.7's reassessment may be applied to this
+// prefix, which turns on the node the scan starts from.
+//
+// The reassessment leaves that precondition implicit: its note gives the
+// strategy as "examine each descendant of the context node", and the worked
+// examples it closes with are prefaced "assume that the context posture is
+// striding". From a climbing or crawling context those descendants include
+// nodes the stream has already delivered, so the provisional roaming verdict
+// has to stand -- which is what makes streamable-126 ("for-each select='..'"
+// with a "count(*)" body) the refusal §18.1 requires rather than a grounded
+// pass.
+//
+// A prefix that begins with a VarRef does not start from the context item at
+// all: "$node//section" scans from the striding node a streaming parameter
+// denotes, whatever the context posture of the function body happens to be.
+// isScanningStep already recognises that head, and gating it on the context
+// posture refused function-5016, a valid deep-descent function.
+func (a *analyzer) scanMayStart(prefix []xpath.Expr) bool {
+	if len(prefix) > 0 {
+		if _, ok := prefix[0].(*xpath.VarRef); ok {
+			return true
+		}
+	}
+	return a.ctxPosture == postureStriding || a.ctxPosture == postureGrounded
 }
 
 // isScanningSteps reports whether every step is a scanning expression in the
@@ -789,6 +826,13 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		return p
 	}
 	usages, ok := builtinOperandUsages(x.Name.Local, len(x.Args))
+	if !ok && contextDefaultingBuiltin[x.Name.Local] {
+		// A call one argument short of a form whose FINAL argument defaults
+		// to the context item. The table holds the spelt-out form, so the
+		// defaulted one is looked up there and the implicit "." operand is
+		// supplied below.
+		usages, ok = builtinOperandUsages(x.Name.Local, len(x.Args)+1)
+	}
 	if !ok {
 		return a.unknown()
 	}
@@ -815,6 +859,26 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		}
 		return combine([]operand{ci}, false)
 	}
+	// A function whose last argument defaults to the context item, called
+	// without it. §19.8.9's list gives both forms: "fn:lang(x) -- Equivalent
+	// to fn:lang(x, .)" followed by "fn:lang(A, I)". The spelt-out call is
+	// modelled by the table, so the defaulted one is modelled by supplying
+	// the implicit "." operand with the usage the table gives its position.
+	// Leaving it unmodelled made the whole enclosing construct unknown,
+	// which withheld the refusal of streamable-128.
+	if len(usages) == len(x.Args)+1 && contextDefaultingBuiltin[x.Name.Local] {
+		ops := make([]operand, 0, len(usages))
+		for i, arg := range x.Args {
+			ops = append(ops, a.operandOf(arg, usages[i]))
+		}
+		ops = append(ops, operand{
+			props:            props{a.ctxPosture, sweepMotionless},
+			usage:            usages[len(usages)-1],
+			allowsChildren:   a.ctxAllowsChildren,
+			streamedGrounded: a.ctxStreamedGrounded,
+		})
+		return combine(ops, singletonBuiltin[x.Name.Local])
+	}
 	if len(usages) != len(x.Args) {
 		return a.unknown()
 	}
@@ -823,6 +887,21 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		ops = append(ops, a.operandOf(arg, usages[i]))
 	}
 	return combine(ops, singletonBuiltin[x.Name.Local])
+}
+
+// contextDefaultingBuiltin names the built-in functions whose FINAL argument
+// defaults to the context item, so that a call one argument short is the same
+// call with an implicit ".". §19.8.9's list gives each of these two entries,
+// the equivalence and the usages: "fn:lang(x) -- Equivalent to fn:lang(x, .)"
+// with "fn:lang(A, I)", and likewise fn:id and fn:idref with "fn:id(A, N)"
+// and "fn:idref(A, N)".
+//
+// fn:key is deliberately absent: §19.8.9 defaults its third argument to "/",
+// not to ".", so the implicit operand is not the context item and the rule
+// here does not describe it. Functions that default their ONLY argument are
+// handled by the zero-arity branch above instead.
+var contextDefaultingBuiltin = map[string]bool{
+	"lang": true, "id": true, "idref": true,
 }
 
 const fnNS = "http://www.w3.org/2005/xpath-functions"
