@@ -342,18 +342,18 @@ func (c *compiler) compileMergeSource(n *xdm.Node, idx int) (*mergeSource, error
 			return nil, fmt.Errorf(
 				"XTSE0020: xsl:merge-source/@streamable must be a boolean, got %q", v)
 		}
-		// XTSE3195's last clause: with for-each-source present, "the only
-		// permitted value ... of the streamable attribute is yes". Unlike the
-		// two clauses relaxed below, this one is about for-each-source rather
-		// than for-each-item, so it survives the reading that reconciles the
-		// draft with the suite. merge-064 is the case and names XTSE0020; it
-		// passed before only because it spells the value "No", which the
-		// lexical check above rejects first.
-		if hasSource && !b {
-			return nil, fmt.Errorf(
-				"XTSE0020: xsl:merge-source/@streamable must be yes when "+
-					"for-each-source is present, got %q", v)
-		}
+		// XTSE3195's last clause -- with for-each-source present, "the only
+		// permitted value ... of the streamable attribute is yes" -- is NOT
+		// enforced, for the same reason as the two clauses below: the suite
+		// contradicts it. merge-065b and merge-066 write for-each-source
+		// beside streamable="false" and expect the transform to run, and
+		// merge-067 expects XTDE3362 from running it. Enforcing the clause
+		// fails all three. merge-064, which looks like the case for it, is
+		// satisfied by the lexical check above: it spells the value "No".
+		//
+		// This was tried and measured: enforcing it cost exactly those three
+		// cases. The clause did not survive the working draft into the
+		// behaviour the suite encodes; do not re-add it.
 		src.streamed = b
 	}
 	// XTSE3195 is enforced only where it excludes for-each-item from

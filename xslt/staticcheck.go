@@ -52,6 +52,14 @@ var standardAttributes = map[string]bool{
 	// never instantiated. Accepting it here and ignoring it is what lets that
 	// run happen at all.
 	"expand-text": true,
+	// default-validation completes section 3.5's list of nine: "There are a
+	// number of standard attributes that may appear on any XSLT element:
+	// specifically default-collation, default-mode, default-validation,
+	// exclude-result-prefixes, expand-text, extension-element-prefixes,
+	// use-when, version, and xpath-default-namespace." It was the only one of
+	// the nine this map did not carry, which went unnoticed for as long as
+	// forwards compatible processing was swallowing the rejection.
+	"default-validation": true,
 }
 
 // checkStaticGrammar verifies one element against the table.
@@ -172,11 +180,22 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			if standardAttributes[a.Name.Local] {
 				continue
 			}
+			// The splice marker is written by rewriteOverride onto a
+			// declaration an xsl:override moved into the used package's top
+			// level. It is the engine's own bookkeeping, not something the
+			// stylesheet author wrote, so the grammar has nothing to say
+			// about it -- the sibling marker at overriddenMarkerNS is exempt
+			// because it carries a namespace, and this one does not.
+			if a.Name.Local == spliced {
+				continue
+			}
 			if forwards && effectiveForwards(el) {
-				// Section 3.9: "An element is processed with forwards
+				// Section 3.9: an element is processed with forwards
 				// compatible behavior if its effective version is greater
-				// than 3.0", and only then is "an attribute that is not
-				// allowed on the element" ignored rather than reported.
+				// than the version the processor implements, and only then is
+				// "an attribute that is not allowed on the element" ignored
+				// rather than reported. effectiveForwards makes that
+				// comparison against CompileOptions.MaxVersion.
 				//
 				// The quotation this guard used to carry was the XSLT 2.0
 				// wording, and the bare forwards flag it tested is measured

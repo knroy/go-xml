@@ -1110,15 +1110,29 @@ func checkLiteralResultXSLAttrValue(el *xdm.Node, a *xdm.Node) error {
 }
 
 // effectiveForwards reports whether el is processed with forwards compatible
-// behavior in section 3.9's sense: its effective version is greater than 3.0.
+// behavior in section 3.9's sense: its effective version is greater than the
+// version of XSLT this processor implements.
 //
 // The effective version is the one on the nearest ancestor-or-self carrying a
 // version attribute, which is a different question from the one forwardsAt
 // answers for this engine, whose baseline is 2.0.
+//
+// The comparison is against the processor's version rather than a fixed 3.0
+// because §3.9 defines the mode relative to what the processor implements, and
+// a host can ask for a 2.0 processor through CompileOptions.MaxVersion. The
+// suite pairs for-each-group-002 and -002a over one stylesheet written
+// version="3.0" to pin exactly this: a 3.0 processor must reject its unknown
+// bind-group attribute with XTSE0090, while a 2.0 processor is in forwards
+// compatible mode, must ignore the attribute, and reaches XPST0008 on the
+// $g the attribute would have bound.
 func effectiveForwards(el *xdm.Node) bool {
+	proc := compileMaxVersion
+	if proc == 0 {
+		proc = 3.0
+	}
 	for cur := el; cur != nil; cur = cur.Parent {
 		if cur.Kind == xdm.KindElement && hasVersionAttr(cur) {
-			return versionAt(cur) > 3.0
+			return versionAt(cur) > proc
 		}
 	}
 	return false

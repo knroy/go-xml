@@ -126,22 +126,33 @@ func TestMergeSourceStreamableDefaultsToYes(t *testing.T) {
 	}
 }
 
-func TestMergeSourceStreamableNoIsRefusedWithForEachSource(t *testing.T) {
-	// XTSE3195: "If the for-each-stream attribute is present, the only
-	// permitted value (and the default value) of the streamable attribute is
-	// yes." merge-064 is the suite case and names XTSE0020 for it.
+func TestMergeSourceStreamableFalseIsAcceptedWithForEachSource(t *testing.T) {
+	// XTSE3195's last clause says "If the for-each-stream attribute is
+	// present, the only permitted value (and the default value) of the
+	// streamable attribute is yes." This engine does NOT enforce it, and the
+	// W3C suite is why: merge-065b and merge-066 write for-each-source beside
+	// streamable="false" and expect the transform to run, and merge-067
+	// expects XTDE3362 from running it. Enforcing the clause fails all three.
 	//
-	// All three lexical spellings of false are refused, not just the one
-	// merge-064 happens to write.
+	// merge-064 looks like the case for enforcing it, but it is satisfied
+	// without: it spells the value "No", which the lexical check refuses
+	// first as not a boolean.
+	//
+	// This is pinned as a test because enforcing the clause is a natural
+	// reading of the working draft, and it has now been tried and measured
+	// twice. The suite is the tiebreak.
 	for _, v := range []string{"no", "false", "0"} {
-		_, err := runMergeSnapshot(t, mergeSnapshotSheet(` streamable="`+v+`"`))
-		if err == nil {
-			t.Errorf(`streamable=%q beside for-each-source compiled; XTSE3195 permits only yes`, v)
-			continue
+		if _, err := runMergeSnapshot(t, mergeSnapshotSheet(` streamable="`+v+`"`)); err != nil {
+			t.Errorf("streamable=%q beside for-each-source was refused: %v", v, err)
 		}
-		if !strings.Contains(err.Error(), "XTSE0020") {
-			t.Errorf("streamable=%q: want XTSE0020, got: %v", v, err)
-		}
+	}
+
+	// "No" is not a boolean, and is refused for that reason alone.
+	_, err := runMergeSnapshot(t, mergeSnapshotSheet(` streamable="No"`))
+	if err == nil {
+		t.Error(`streamable="No" compiled; it is not a lexical boolean`)
+	} else if !strings.Contains(err.Error(), "XTSE0020") {
+		t.Errorf(`streamable="No": want XTSE0020, got: %v`, err)
 	}
 
 	// The constraint is keyed to for-each-source. A for-each-item source

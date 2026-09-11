@@ -239,6 +239,15 @@ var xsltElements = map[string]elementDef{
 		"as":       {},
 		"required": {values: []string{"yes", "no"}},
 		"tunnel":   {values: []string{"yes", "no"}},
+		// export is not in 9.2's signature -- it is a spelling from an
+		// earlier working draft, and the whole suite carries it in exactly
+		// one file. It is accepted and ignored rather than refused for the
+		// reason html-version and suppress-indentation are below: iterate-024
+		// writes it on an xsl:param, and the error the case is actually about
+		// is the xsl:on-completion misplaced further down. Refusing the
+		// attribute reports XTSE0090 before the walk ever reaches the
+		// XTSE0010 the case exists to pin.
+		"export": {},
 		// processor30, not since30: a static parameter is supplied by the
 		// caller, so whether one may be declared follows the processor the
 		// caller is driving rather than the module's own @version.
@@ -539,6 +548,12 @@ var xsltElements = map[string]elementDef{
 		"match":     {required: true},
 		"use":       {},
 		"collation": {},
+		// composite is in 6.3's signature for xsl:key beside use and
+		// collation. It selects whether a multi-item use expression yields
+		// one composite key or one key per item, and the engine reads it --
+		// only the table never listed it, which stayed invisible for as long
+		// as forwards compatible processing was dropping the rejection.
+		"composite": {since30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
 	}},
 	"decimal-format": {attrs: map[string]attrDef{
 		"name":               {},
@@ -654,6 +669,10 @@ var xsltElements = map[string]elementDef{
 		// look alike from the stylesheet. json-node-output-method is read by
 		// the serialiser for both spellings, so declaring it here changes
 		// only whether the name is refused.
+		// parameter-document names a document of serialization parameters,
+		// and is in 26.1's signature for xsl:output. Same story as the three
+		// above: read by the serialiser, absent from the table.
+		"parameter-document":      {processor30: true, avt: true},
 		"json-node-output-method": {processor30: true, avt: true},
 		"allow-duplicate-names":   {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
 		"build-tree":              {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},

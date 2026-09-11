@@ -2307,7 +2307,16 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 		original.Name = xdm.QName{
 			Prefix: original.Name.Prefix, URI: xdm.NSXSL, Local: "variable",
 		}
-		setAttr(original, "required", "no")
+		// required and tunnel belong to xsl:param alone -- 9.2's signature
+		// has them, 9.1's for xsl:variable does not -- so they have to come
+		// off with the rename. The engine used to add required="no" here
+		// itself, and the author may have written either: override-v-015b
+		// declares required="no" on the parameter this renames. Left on, they
+		// are attributes the grammar must reject, and it did once forwards
+		// compatible processing stopped swallowing the report. Dropping them
+		// changes nothing else: compileVariable reads both with yesAttr,
+		// which answers false for an attribute that is not there.
+		dropAttrs(original, "required", "tunnel")
 		if original.AttrValue("select") == "" && len(original.ChildElements()) == 0 {
 			markAbstract(original, "the overridden parameter's default")
 		}
@@ -2351,6 +2360,26 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 // an identity its declarations can be filed under. It is guarded by compileMu
 // with the rest of the compile-time package state.
 var packageSerial int
+
+// dropAttrs removes unprefixed attributes from an element.
+func dropAttrs(el *xdm.Node, names ...string) {
+	kept := el.Attrs[:0]
+	for _, a := range el.Attrs {
+		drop := false
+		if a.Name.URI == "" {
+			for _, n := range names {
+				if a.Name.Local == n {
+					drop = true
+					break
+				}
+			}
+		}
+		if !drop {
+			kept = append(kept, a)
+		}
+	}
+	el.Attrs = kept
+}
 
 // setAttr sets or replaces an unprefixed attribute of an element.
 func setAttr(el *xdm.Node, name, value string) {
