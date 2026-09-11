@@ -17,7 +17,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | Three rooted resolvers checked containment and then opened, so only `xslt` enforced its root at open time | `xsd`, `dtd` and the CLI's RELAX NG resolver open through `os.OpenRoot`; the string check stays as diagnosis, not enforcement. | [`37972d9`][37972d9] |
-| Template recursion and an oversize range refused without the resource sentinel, so a caller could not classify them | Both wrap `xdm.ErrResourceLimit`; the range also carries `XPDY0130`, as its counted twin already did. | [`PLACEHOLDER`][PLACEHOLDER] |
+| Template recursion and an oversize range refused without the resource sentinel, so a caller could not classify them | Both wrap `xdm.ErrResourceLimit`; the range also carries `XPDY0130`, as its counted twin already did. | [`57a2b64`][57a2b64] |
 | `xsl:result-document` followed a symlink out of `-result-dir`, so a stylesheet could write anywhere | The write opens through `os.OpenRoot`, and each directory is made through the same root. | [`17b1c91`][17b1c91] |
 | A function applying itself through its own name recursed uncharged, bypassing `MaxDepth` | Both function-item invocation paths take `Depth` from the call, as the inline path already did. | [`e511421`][e511421] |
 | An attribute value template concatenated past `MaxBytes`, so the byte budget bound `xsl:value-of` and not `{$v}{$v}` | `avt.eval` charges the text before it joins the builder. | [`5c17280`][5c17280] |
@@ -666,6 +666,7 @@ here so every entry in this file sits under a release.
 [b4c4bb2]: https://github.com/knroy/go-xml/commit/b4c4bb2
 [b50b373]: https://github.com/knroy/go-xml/commit/b50b373
 [8e0f44d]: https://github.com/knroy/go-xml/commit/8e0f44d
+[57a2b64]: https://github.com/knroy/go-xml/commit/57a2b64
 [17b1c91]: https://github.com/knroy/go-xml/commit/17b1c91
 [e511421]: https://github.com/knroy/go-xml/commit/e511421
 [5c17280]: https://github.com/knroy/go-xml/commit/5c17280
