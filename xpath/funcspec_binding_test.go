@@ -3,6 +3,8 @@ package xpath
 import (
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 // evalSpec evaluates an XPath 3.1 expression and renders the result.
@@ -177,5 +179,58 @@ func TestAllowsEmptyAndAllowsMany(t *testing.T) {
 		if got := st.AllowsMany(); got != tc.many {
 			t.Errorf("%s.AllowsMany() = %v, want %v", tc.spelling, got, tc.many)
 		}
+	}
+}
+
+// TestPrefixedSpecKeysNameOtherNamespaces pins the widened key format.
+//
+// Before it, buildFunctionSpecs expanded every specSignatures key into the
+// fn: namespace, so the manifest's math:, map: and array: rows were
+// structurally unreachable: a "pi/0" key constrained a non-existent fn:pi,
+// left math:pi untouched, and was rejected by
+// TestMigratedSignaturesMatchManifest as a name the manifest does not
+// describe. This test is what keeps the prefixed path from decaying back into
+// dead code, by asserting the two properties separately: an unprefixed key
+// still means fn:, and a prefixed one resolves to the namespace it names.
+func TestPrefixedSpecKeysNameOtherNamespaces(t *testing.T) {
+	for _, tc := range []struct {
+		key   string
+		want  xdm.QName
+		arity int
+	}{
+		{"substring/2", xdm.QName{URI: xdm.NSFN, Local: "substring"}, 2},
+		{"math:pi/0", xdm.QName{URI: xdm.NSMath, Local: "pi"}, 0},
+		{"math:pow/2", xdm.QName{URI: xdm.NSMath, Local: "pow"}, 2},
+		{"map:get/2", xdm.QName{URI: xdm.NSMap, Local: "get"}, 2},
+		{"array:size/1", xdm.QName{URI: xdm.NSArray, Local: "size"}, 1},
+		// Arity is read as a number, not as one digit: a ten-argument
+		// proforma would otherwise be read as arity 1 and silently skipped.
+		{"fake/10", xdm.QName{URI: xdm.NSFN, Local: "fake"}, 10},
+	} {
+		got, arity, ok := splitSpecEntryKey(tc.key)
+		if !ok {
+			t.Errorf("splitSpecEntryKey(%q) declined the key", tc.key)
+			continue
+		}
+		if got != tc.want || arity != tc.arity {
+			t.Errorf("splitSpecEntryKey(%q) = %v#%d, want %v#%d",
+				tc.key, got, arity, tc.want, tc.arity)
+		}
+	}
+
+	for _, bad := range []string{"nope", "bogus:pi/0", "pi/", "pi/x"} {
+		if _, _, ok := splitSpecEntryKey(bad); ok {
+			t.Errorf("splitSpecEntryKey(%q) accepted a key it cannot map", bad)
+		}
+	}
+
+	// The end-to-end property: math:pi is reachable through lookupSpecParams,
+	// which is what the fn:-only expansion made impossible.
+	if _, ok := lookupSpecParams(xdm.QName{URI: xdm.NSMath, Local: "pi"}, 0); !ok {
+		t.Error("math:pi#0 has a specSignatures entry but lookupSpecParams " +
+			"does not find it; the prefixed key path is not live")
+	}
+	if _, ok := lookupSpecParams(xdm.QName{URI: xdm.NSFN, Local: "pi"}, 0); ok {
+		t.Error("a prefixed key leaked into the fn: namespace as fn:pi")
 	}
 }

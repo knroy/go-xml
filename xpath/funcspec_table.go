@@ -18,15 +18,19 @@ import (
 // remaining families is xpath/spec/function-signatures.json, extracted from
 // the vendored Recommendation by cmd/genfunctions; see funcspec_manifest.go.
 //
-// To migrate a family, a family agent adds its "local/arity" keys to
-// specSignatures below, using the spellings the manifest already holds for
-// them, and runs the QT3 lanes. Nothing else changes: registration, lookup
-// and the callbacks are untouched, because a spec constrains an existing
-// registration rather than replacing it.
+// To migrate a family, a family agent adds its keys to specSignatures below,
+// using the spellings the manifest already holds for them, and runs the QT3
+// lanes. Nothing else changes: registration, lookup and the callbacks are
+// untouched, because a spec constrains an existing registration rather than
+// replacing it.
+//
+// A key is "local/arity" for an fn: function and "prefix:local/arity" for one
+// of the other three namespaces the manifest covers. Both forms are read by
+// splitSpecEntryKey, which the enforcement test reads them through as well.
 
 // specSignatures is the migrated portion of the manifest, keyed by
-// "local/arity" in the fn: namespace, as the return type followed by the
-// parameter types.
+// "local/arity" for fn: and by "prefix:local/arity" for the math:, map: and
+// array: namespaces, as the return type followed by the parameter types.
 //
 // It is seeded from builtinSignatures — the same seventeen entries, in the
 // same spelling and the same order — because those were already written
@@ -356,6 +360,13 @@ var specSignatures = func() map[string][]string {
 	m["error/3"] = []string{"none", "xs:QName?", "xs:string", "item()*"}
 	m["contains-token/2"] = []string{"xs:boolean", "xs:string*", "xs:string"}
 	m["contains-token/3"] = []string{"xs:boolean", "xs:string*", "xs:string", "xs:string"}
+	// math:pi is the first entry to use a prefixed key, and it is what
+	// proves the prefixed path is live rather than dead code: under the
+	// fn:-only expansion this key constrained a non-existent fn:pi. It is
+	// nullary, so it constrains no argument and can change no behaviour,
+	// which is what makes it the safe entry to land with the mechanism
+	// rather than with the math: family.
+	m["math:pi/0"] = []string{"xs:double"}
 	return m
 }()
 
@@ -392,18 +403,55 @@ func lookupSpecParams(name xdm.QName, arity int) ([]SequenceType, bool) {
 func buildFunctionSpecs() {
 	functionSpecs = map[string][]SequenceType{}
 	for key, sig := range specSignatures {
-		slash := strings.IndexByte(key, '/')
-		if slash < 0 || len(sig) < 1 {
+		name, arity, ok := splitSpecEntryKey(key)
+		if !ok || len(sig) < 1 {
 			continue
 		}
-		local, arity := key[:slash], int(key[slash+1]-'0')
-		name := xdm.QName{URI: xdm.NSFN, Local: local}
 		params, ok := parseSpellings(sig[1:]) // sig[0] is the return type
 		if !ok || len(params) != arity {
 			continue
 		}
 		functionSpecs[specKey(name, arity)] = params
 	}
+}
+
+// splitSpecEntryKey reads a specSignatures key into the name it constrains.
+//
+// The key is "local/arity", and an unprefixed local name means fn:, which is
+// why the 207 entries migrated before this existed did not have to change. A
+// key may also carry one of the manifest's own prefixes -- "math:pow/2",
+// "map:get/2", "array:size/1" -- which is what makes the map:, array: and
+// math: rows reachable at all. Before this, every key was expanded into the
+// fn: namespace unconditionally, so a "get/2" meant for map:get constrained a
+// non-existent fn:get, left map:get untouched, and was rejected by
+// TestMigratedSignaturesMatchManifest as a name the manifest does not
+// describe.
+//
+// TestMigratedSignaturesMatchManifest reads keys through this same function,
+// so the table and the test cannot disagree about what a key means. That
+// shared reading is the point: the fn:-only assumption was duplicated in both
+// places, and a fix to one of them alone would have left the other wrong.
+func splitSpecEntryKey(key string) (xdm.QName, int, bool) {
+	slash := strings.IndexByte(key, '/')
+	if slash < 0 || slash+1 >= len(key) {
+		return xdm.QName{}, 0, false
+	}
+	spelling, digits := key[:slash], key[slash+1:]
+	arity := 0
+	for _, c := range digits {
+		if c < '0' || c > '9' {
+			return xdm.QName{}, 0, false
+		}
+		arity = arity*10 + int(c-'0')
+	}
+	if strings.IndexByte(spelling, ':') < 0 {
+		return xdm.QName{URI: xdm.NSFN, Local: spelling}, arity, true
+	}
+	name, ok := parseSpecName(spelling)
+	if !ok {
+		return xdm.QName{}, 0, false
+	}
+	return name, arity, true
 }
 
 // parseSpellings parses a run of sequence-type spellings, answering false if

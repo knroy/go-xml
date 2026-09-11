@@ -23,7 +23,7 @@ let something through, and the column that matters is the last one.
 <!-- BEGIN GENERATED LAYER COUNTS -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** | 2,196 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,197 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -1100,9 +1100,15 @@ GOXSLT_QT3=$PWD/testdata/qt3tests go1.25.1 test ./tests/qt3/ -count=1 -v
 `cmd/genfunctions` from the vendored Recommendation, so the data source is
 offline and deterministic. `xpath/funcspec_table.go` holds the portion that is
 enforced at call binding, and the two are not the same number: a family is
-migrated by adding its `"local/arity"` keys to `specSignatures`, and nothing
-else changes, because a declared type constrains an existing registration
-rather than replacing it.
+migrated by adding its keys to `specSignatures`, and nothing else changes,
+because a declared type constrains an existing registration rather than
+replacing it.
+
+A key is `"local/arity"` for an `fn:` function and `"prefix:local/arity"` —
+`"math:pow/2"`, `"map:get/2"`, `"array:size/1"` — for the other three
+namespaces the manifest covers. `splitSpecEntryKey` reads both forms, and
+`TestMigratedSignaturesMatchManifest` reads keys through that same function,
+so the table and the test cannot disagree about what a key means.
 
 Three tests measure it, and they ask different questions:
 
@@ -1119,21 +1125,21 @@ Three tests measure it, and they ask different questions:
   mechanism exists to prevent, so a hand-edited spelling that disagrees with
   the manifest breaks the build.
 
-The count so far is 207 of 272: the seventeen seeded from `builtinSignatures`,
+The count so far is 208 of 272: the seventeen seeded from `builtinSignatures`,
 `fn:substring` and `fn:subsequence`, then the numeric (14), non-regex string
 (25), temporal (28), node and accessor (34), sequence (14), higher-order (12),
 QName and URI (15), input and document (20), JSON (10) and context, boolean and
-error (14) families.
+error (14) families, and `math:pi`.
 
-Of the 65 that remain, 46 are not reachable by this mechanism as it stands.
-`buildFunctionSpecs` expands every `specSignatures` key into the `fn:`
-namespace, so the manifest's `array:` (21), `map:` (11) and `math:` (14) rows
-cannot be migrated by adding a key: `"get/2"` would constrain a non-existent
-`fn:get` and leave `map:get` untouched, and
-`TestMigratedSignaturesMatchManifest` would reject it as a name the manifest
-does not describe. Migrating those three namespaces means teaching the key
-format a prefix — a change to the mechanism rather than to the data, which is
-why it is not folded into a family commit.
+`math:pi` is the one entry that came with the prefixed-key mechanism rather
+than with a family. It is nullary, so it constrains no argument and can change
+no behaviour, which is exactly what makes it the entry that proves the
+prefixed path is live rather than dead code: under the old fn:-only expansion
+its key constrained a non-existent `fn:pi`. `TestPrefixedSpecKeysNameOtherNamespaces`
+is what keeps that path from decaying back.
+
+Of the 64 that remain, 45 are the rest of the `array:` (21), `map:` (11) and
+`math:` (13) rows, which the prefixed key format has now made reachable.
 
 The other 19 are deliberately deferred to commits that can compare their error
 codes, because both groups change *which* error is raised rather than only

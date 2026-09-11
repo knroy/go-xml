@@ -178,12 +178,12 @@ func TestCallBindingMigrationInventory(t *testing.T) {
 func TestMigratedSignaturesMatchManifest(t *testing.T) {
 	manifest := manifestByKey(t)
 	for key, sig := range specSignatures {
-		local, arity, ok := splitSpecKey(key)
+		name, arity, ok := splitSpecEntryKey(key)
 		if !ok {
-			t.Errorf("specSignatures key %q is not in \"local/arity\" form", key)
+			t.Errorf("specSignatures key %q is not in \"local/arity\" or "+
+				"\"prefix:local/arity\" form", key)
 			continue
 		}
-		name := xdm.QName{URI: xdm.NSFN, Local: local}
 		row, found := manifest[specKey(name, arity)]
 		if !found {
 			t.Errorf("specSignatures has %q, which the F&O manifest does not "+
@@ -218,26 +218,6 @@ func sameDeclaredType(t *testing.T, got, want string) bool {
 		return got == want
 	}
 	return g.Occurrence == w.Occurrence && g.String() == w.String()
-}
-
-// splitSpecKey breaks "substring/3" into its local name and arity.
-func splitSpecKey(key string) (local string, arity int, ok bool) {
-	for i := 0; i < len(key); i++ {
-		if key[i] == '/' {
-			n := 0
-			if i+1 >= len(key) {
-				return "", 0, false
-			}
-			for _, c := range key[i+1:] {
-				if c < '0' || c > '9' {
-					return "", 0, false
-				}
-				n = n*10 + int(c-'0')
-			}
-			return key[:i], n, true
-		}
-	}
-	return "", 0, false
 }
 
 // TestConstructorFunctionsShareOneSignature records why the xs: constructors
