@@ -3,10 +3,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -564,18 +567,64 @@ func writeSecondary(results []xslt.SecondaryResult, dir string) error {
 			return fmt.Errorf(
 				"xsl:result-document href %q resolves outside %s", r.Href, root)
 		}
-		if err := os.MkdirAll(filepath.Dir(clean), 0o755); err != nil {
-			return err
-		}
-		f, err := os.Create(clean)
+		// The prefix test above decides which names are permitted; it does
+		// not decide what gets written. A symlink at the destination -- or
+		// at any directory component of it -- is followed by os.Create, so
+		// the string check passes and the bytes land outside the root. This
+		// is the only path in the program that opens by name after a check,
+		// and it is a WRITE: every read resolver in the library was moved to
+		// os.OpenRoot for exactly this reason. The href may also come from
+		// the source document through an attribute value template, so the
+		// name being joined is not necessarily the stylesheet author's.
+		rel, err := filepath.Rel(root, clean)
 		if err != nil {
 			return err
 		}
+		rt, err := os.OpenRoot(root)
+		if err != nil {
+			return err
+		}
+		if err := mkdirAllIn(rt, filepath.Dir(rel)); err != nil {
+			rt.Close()
+			return fmt.Errorf(
+				"xsl:result-document href %q: %w", r.Href, err)
+		}
+		f, err := rt.Create(rel)
+		if err != nil {
+			rt.Close()
+			return fmt.Errorf(
+				"xsl:result-document href %q: %w", r.Href, err)
+		}
+		defer rt.Close()
 		err = r.Serialize(f, nil)
 		if cerr := f.Close(); err == nil {
 			err = cerr
 		}
 		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mkdirAllIn is os.MkdirAll confined to a root.
+//
+// os.Root deliberately has no MkdirAll: each component must be created
+// through the root so that a symlink planted part-way down is refused rather
+// than followed. Walking them here keeps that property. An existing directory
+// is not an error; an existing *file* is, and Mkdir reports it.
+func mkdirAllIn(rt *os.Root, rel string) error {
+	if rel == "." || rel == "" {
+		return nil
+	}
+	var built string
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if part == "" || part == "." {
+			continue
+		}
+		built = path.Join(built, part)
+		if err := rt.Mkdir(filepath.FromSlash(built), 0o755); err != nil &&
+			!errors.Is(err, fs.ErrExist) {
 			return err
 		}
 	}

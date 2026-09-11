@@ -17,6 +17,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | Three rooted resolvers checked containment and then opened, so only `xslt` enforced its root at open time | `xsd`, `dtd` and the CLI's RELAX NG resolver open through `os.OpenRoot`; the string check stays as diagnosis, not enforcement. | [`37972d9`][37972d9] |
+| `xsl:result-document` followed a symlink out of `-result-dir`, so a stylesheet could write anywhere | The write opens through `os.OpenRoot`, and each directory is made through the same root. | [`PLACEHOLDER`][PLACEHOLDER] |
 | A function applying itself through its own name recursed uncharged, bypassing `MaxDepth` | Both function-item invocation paths take `Depth` from the call, as the inline path already did. | [`e511421`][e511421] |
 | An attribute value template concatenated past `MaxBytes`, so the byte budget bound `xsl:value-of` and not `{$v}{$v}` | `avt.eval` charges the text before it joins the builder. | [`5c17280`][5c17280] |
 | `fn:transform` minted a fresh depth allowance per nesting level, so a self-calling stylesheet killed the process | The charge comes from the call and the nested runtime continues the count, so nesting refuses with `XPDY0001`. | [`8e0f44d`][8e0f44d] |
