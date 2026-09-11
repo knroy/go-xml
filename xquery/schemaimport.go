@@ -395,15 +395,20 @@ func mergeXSDSchema(dst, src *xsd.Schema) {
 	// mergeSchema. A definition without its derivation facts is a type that
 	// no longer knows what it derives from.
 	//
-	// NOT YET OBSERVABLE, and deliberately shipped without a test that claims
-	// otherwise: nothing in xquery reads these facts. Its by-name consumers
-	// are in xpath -- schemaSubsumes, derivedSubtypeOfThroughSchema,
-	// schemaTypeNameMatches -- which call the process-global xdm functions
-	// with no schema in hand, and cannot be handed one, because xsd imports
-	// xpath (assertions and selectors contain XPath) and the dependency
-	// cannot run both ways. Routing those through an environment is the
-	// read-path migration; a test asserting this line works would pass with
-	// or without it until then.
+	// It is observable now, which it was not when it landed. The environment
+	// reaches xpath's by-name consumers ON THE NODE: a validate expression
+	// assesses against this aggregate, xsd stamps the aggregate's environment
+	// on every node it annotates, and schemaTypeNameMatches walks the chain
+	// through xdm.TypeEnvOf rather than through the process-global table. The
+	// dependency problem that made this unobservable -- xsd imports xpath, so
+	// no *xsd.Schema can reach xpath -- is sidestepped rather than solved:
+	// TypeEnvironment lives in xdm, which both import, so the environment
+	// travels where the schema cannot.
+	//
+	// Without this line the aggregate's environment is non-nil but EMPTY, so
+	// every node it validates is stamped with an empty table and a restriction
+	// of xs:decimal stops deriving from anything. TestImportedSchemaDerivation-
+	// SurvivesTheAggregateMerge is that regression.
 	dst.TypeEnv().Merge(src.TypeEnv())
 	for name, t := range src.Types {
 		if _, ok := dst.Types[name]; !ok {

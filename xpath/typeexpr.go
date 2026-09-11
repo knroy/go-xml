@@ -136,10 +136,10 @@ func (t SequenceType) matchesItem(it xdm.Item) bool {
 		// member that accepted it. The two are siblings in no hierarchy the
 		// upward walk can cross, so the member is offered as a second
 		// starting point rather than being reached from the first.
-		if m := a.DerivedMember(); m != "" && schemaTypeNameMatches(m, t.SchemaType) {
+		if m := a.DerivedMember(); m != "" && schemaTypeNameMatches(xdm.TypeEnvOfAtomic(a), m, t.SchemaType) {
 			return true
 		}
-		if schemaTypeNameMatches(a.Derived(), t.SchemaType) {
+		if schemaTypeNameMatches(xdm.TypeEnvOfAtomic(a), a.Derived(), t.SchemaType) {
 			return true
 		}
 		// A pure union type matches by MEMBERSHIP rather than by annotation.
@@ -193,7 +193,11 @@ func (t SequenceType) matchesItem(it xdm.Item) bool {
 // Only an unqualified step is offered to the built-in table: a qualified name
 // is a schema type and is never reachable through the built-in hierarchy, and
 // letting one in would compare local parts across namespaces.
-func derivedSubtypeOfThroughSchema(derived, facet string) bool {
+// env is the environment of the schema that issued the derived annotation,
+// for the reason schemaTypeNameMatches takes one: the chain a name resolves
+// through belongs to the schema that defined the name, not to whichever
+// schema most recently registered something under it.
+func derivedSubtypeOfThroughSchema(env *xdm.TypeEnvironment, derived, facet string) bool {
 	if derivedSubtypeOf(derived, facet) {
 		return true
 	}
@@ -202,9 +206,12 @@ func derivedSubtypeOfThroughSchema(derived, facet string) bool {
 	// a repeated name identifies. The count this replaced answered a definite
 	// "not a subtype" on running out of steps, so a legal acyclic chain of 33
 	// user-defined types decided the subtype relation wrongly.
+	if env == nil {
+		env = xdm.GlobalTypeEnvironment()
+	}
 	seen := map[string]bool{derived: true}
 	for derived != "" {
-		derived = xdm.DerivedBase(derived)
+		derived = env.DerivedBase(derived)
 		if derived == "" || seen[derived] {
 			return false
 		}
@@ -266,7 +273,7 @@ func atomicTypeMatchesFacet(a *xdm.Atomic, want xdm.TypeCode, facet string) bool
 		// is a different case: it is an instance of its own type and of every
 		// type that type derives from, xs:NOTATION included. That is the only
 		// way anything can be an instance of it, since the type is abstract.
-		return schemaTypeNameMatches(a.Derived(), "NOTATION")
+		return schemaTypeNameMatches(xdm.TypeEnvOfAtomic(a), a.Derived(), "NOTATION")
 	case "":
 		return atomicTypeMatches(a.Type, want)
 	}
@@ -275,14 +282,14 @@ func atomicTypeMatchesFacet(a *xdm.Atomic, want xdm.TypeCode, facet string) bool
 	// value validated against a restriction of xs:int, which is the ordinary
 	// case for anything read out of a schema-validated document.
 	if a.Derived() != "" && a.Derived() != facet &&
-		schemaTypeNameMatches(a.Derived(), facet) {
+		schemaTypeNameMatches(xdm.TypeEnvOfAtomic(a), a.Derived(), facet) {
 		return true
 	}
 	if hasRangeFacet(facet) || hasStringFacet(facet) {
 		// A derived type matches only a value that was built as that type or
 		// as one below it. A plain xs:integer literal is the *parent* of
 		// xs:int, so it is not an instance of it.
-		return derivedSubtypeOfThroughSchema(a.Derived(), facet)
+		return derivedSubtypeOfThroughSchema(xdm.TypeEnvOfAtomic(a), a.Derived(), facet)
 	}
 	return atomicTypeMatches(a.Type, want)
 }
@@ -746,7 +753,14 @@ func isLiteralOperand(e Expr) bool {
 // The derivation walk below is unchanged: a value is an instance of every type
 // its own derives from, and the chain the schema recorded is now keyed by the
 // same qualified names, so the walk stays exact end to end.
-func schemaTypeNameMatches(annotation, want string) bool {
+// env is the type environment of the schema that issued the annotation. The
+// chain is walked there rather than in the process-global table, because the
+// two differ exactly when two schemas define the same lexical type name
+// differently -- the global then holds whichever loaded last, so a value
+// annotated by one schema answered with the other's derivation. A nil env
+// falls back to the global table, which is right for an annotation no schema
+// issued.
+func schemaTypeNameMatches(env *xdm.TypeEnvironment, annotation, want string) bool {
 	if annotation == "" {
 		return false
 	}
@@ -781,9 +795,12 @@ func schemaTypeNameMatches(annotation, want string) bool {
 	// name identifies that cycle exactly. The count this replaced stopped
 	// after 32 links and returned false, which is a definite negative on a
 	// legal chain rather than a refusal.
+	if env == nil {
+		env = xdm.GlobalTypeEnvironment()
+	}
 	seen := map[string]bool{a: true}
 	for a != "" {
-		a = xdm.DerivedBase(a)
+		a = env.DerivedBase(a)
 		if a == "" || seen[a] {
 			return false
 		}

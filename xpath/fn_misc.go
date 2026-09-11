@@ -408,12 +408,12 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 			// fn:idref are defined over those properties rather than over
 			// the annotation. Testing only the annotation made both
 			// functions find nothing in a stripped document.
-			if wantID && (n.IsID || isIDAnnotation(n.TypeAnnotation)) {
+			if wantID && (n.IsID || isIDAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation)) {
 				if want[strings.TrimSpace(n.StringValue())] {
 					out = append(out, n)
 				}
 			}
-			if !wantID && (n.IsIDREFS || isIDREFAnnotation(n.TypeAnnotation)) {
+			if !wantID && (n.IsIDREFS || isIDREFAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation)) {
 				for _, v := range strings.Fields(n.StringValue()) {
 					if want[v] {
 						out = append(out, n)
@@ -445,10 +445,10 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 					!isNCName(strings.TrimSpace(a.Value)) {
 					continue
 				}
-				isIDAttr := a.IsID || isIDAnnotation(a.TypeAnnotation) ||
+				isIDAttr := a.IsID || isIDAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation) ||
 					(a.Name.URI == xdm.NSXML && a.Name.Local == "id") ||
 					(a.Name.URI == "" && a.Name.Local == "id")
-				isRefAttr := a.IsIDREFS || isIDREFAnnotation(a.TypeAnnotation) ||
+				isRefAttr := a.IsIDREFS || isIDREFAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation) ||
 					(a.Name.URI == "" &&
 						(a.Name.Local == "idref" || a.Name.Local == "idrefs"))
 
@@ -2374,15 +2374,18 @@ func maxWidth(width string) int {
 // fn:id is defined over attributes "of type xs:ID", which includes every
 // restriction of it — a schema that names its own IDs is the ordinary case,
 // not an exotic one.
-func isIDAnnotation(annotation string) bool {
-	return annotationDerivesFrom(annotation, "ID")
+// env is the environment of the schema that annotated the node, so a schema's
+// own restriction of xs:ID is recognised through ITS chain rather than through
+// whatever another schema registered under the same name.
+func isIDAnnotation(env *xdm.TypeEnvironment, annotation string) bool {
+	return annotationDerivesFrom(env, annotation, "ID")
 }
 
 // isIDREFAnnotation reports whether an annotation names xs:IDREF or xs:IDREFS,
 // or a type derived from either.
-func isIDREFAnnotation(annotation string) bool {
-	return annotationDerivesFrom(annotation, "IDREF") ||
-		annotationDerivesFrom(annotation, "IDREFS")
+func isIDREFAnnotation(env *xdm.TypeEnvironment, annotation string) bool {
+	return annotationDerivesFrom(env, annotation, "IDREF") ||
+		annotationDerivesFrom(env, annotation, "IDREFS")
 }
 
 // annotationDerivesFrom walks the derivation chain a schema recorded.
@@ -2393,14 +2396,17 @@ func isIDREFAnnotation(annotation string) bool {
 // name identifies that cycle exactly. The step count this replaced returned
 // false past 32 links, which made fn:id and fn:idref stop seeing a deep
 // restriction of xs:ID as an ID at all.
-func annotationDerivesFrom(annotation, base string) bool {
+func annotationDerivesFrom(env *xdm.TypeEnvironment, annotation, base string) bool {
+	if env == nil {
+		env = xdm.GlobalTypeEnvironment()
+	}
 	seen := map[string]bool{}
 	for annotation != "" && !seen[annotation] {
 		if annotation == base {
 			return true
 		}
 		seen[annotation] = true
-		annotation = xdm.DerivedBase(annotation)
+		annotation = env.DerivedBase(annotation)
 	}
 	return false
 }

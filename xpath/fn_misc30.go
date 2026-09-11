@@ -132,7 +132,7 @@ func registerMisc30Funcs(l *Library) {
 			// what the identifier names. lookupByID appends the element
 			// itself in both cases, so the property is asked again here to
 			// tell them apart.
-			if n.IsID || isIDAnnotation(n.TypeAnnotation) {
+			if n.IsID || isIDAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation) {
 				// A parentless ID element identifies nothing containing it.
 				// Returning it instead would be fn:id's answer, which is the
 				// one this function exists not to give.

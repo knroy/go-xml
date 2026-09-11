@@ -250,6 +250,28 @@ var atomicAncestors = map[string][]string{
 	"xs:numeric":            {"xs:anyAtomicType"},
 }
 
+// The four process-global type-environment reads in this file are the ONLY
+// ones left in xpath, and they are deliberate rather than overlooked.
+//
+// Everything here relates two type SPELLINGS written in the query text -- a
+// declared function signature against a sequence type, one element test's type
+// argument against another's. There is no node and no atomic value to take an
+// environment from, so xdm.TypeEnvOf and xdm.TypeEnvOfAtomic have nothing to
+// be called on, and the static context carries no environment either: xpath
+// cannot import xsd (xsd imports xpath, because assertions and selectors
+// contain XPath expressions -- see the comment on SchemaTypes in
+// schema_types.go), so no *xsd.Schema reaches here.
+//
+// Answering one of these wrongly needs two schemas defining the same lexical
+// type name differently AND a signature or type test naming it, which is a
+// narrower shape than the node case this migration closed, and which neither
+// suite exercises. Closing it properly means giving the static context a type
+// environment of its own, which is remaining work rather than something to
+// guess at here. Every consumer that HAS a node or a value -- "instance of",
+// "castable as", the element and attribute tests, fn:id and fn:idref,
+// xsl:copy's namespace-sensitivity check, xsl:validate -- goes through
+// xdm.TypeEnvOf or xdm.TypeEnvOfAtomic instead.
+//
 // schemaSubsumes is atomicSubsumes for the types an imported schema defines.
 //
 // The built-in table above cannot reach them: a schema type is whatever the

@@ -258,7 +258,7 @@ func nodeTypeMatches(n *xdm.Node, want string) bool {
 			return true
 		}
 	}
-	if schemaTypeNameMatches(n.TypeAnnotation, want) {
+	if schemaTypeNameMatches(xdm.TypeEnvOf(n), n.TypeAnnotation, want) {
 		return true
 	}
 	// The built-in hierarchy is not in the schema's derivation table — nothing
@@ -289,9 +289,16 @@ func nodeTypeMatches(n *xdm.Node, want string) bool {
 	// exactly the cycle the count was guarding against, and the count decided
 	// a definite "does not match" for any legal chain longer than 32 — a
 	// restriction 33 links deep stopped satisfying element(*, xs:string).
+	// The chain is walked in the environment of the schema that VALIDATED this
+	// node, not in the process-global table. The two differ exactly when two
+	// schemas define the same lexical type name differently, and then the
+	// global holds whichever loaded last -- so a node validated as a
+	// restriction of xs:decimal stopped being one the moment an unrelated
+	// schema declared the same name over xs:string. See xdm.TypeEnvironment.
+	env := xdm.TypeEnvOf(n)
 	seen := map[string]bool{a: true}
 	for a != "" {
-		a = xdm.DerivedBase(a)
+		a = env.DerivedBase(a)
 		if a == "" || seen[a] {
 			break
 		}
@@ -339,9 +346,10 @@ func declaredTypeMatches(n *xdm.Node, want string) bool {
 	// whose derivations formed a cycle must not spin here and a repeated name
 	// is what a cycle is.
 	a := n.TypeAnnotation
+	env := xdm.TypeEnvOf(n)
 	seen := map[string]bool{a: true}
 	for a != "" {
-		a = xdm.DerivedBase(a)
+		a = env.DerivedBase(a)
 		if a == "" || seen[a] {
 			break
 		}

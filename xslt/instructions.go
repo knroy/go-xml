@@ -239,7 +239,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// The prefix in the copied QName would keep pointing at a
 				// binding the new parent element need not declare.
 				if i.validation.mode == validatePreserve &&
-					isNamespaceSensitiveType(v.TypeAnnotation) {
+					isNamespaceSensitiveType(xdm.TypeEnvOf(v), v.TypeAnnotation) {
 					return fmt.Errorf(
 						"XTTE0950: xsl:copy-of with validation=\"preserve\" "+
 							"cannot copy attribute %s on its own, because its "+
@@ -385,14 +385,23 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 // false past 32 links, which is the permissive verdict: a deep restriction of
 // xs:QName was copied without its namespace bindings and XTTE0950 went
 // unreported.
-func isNamespaceSensitiveType(ann string) bool {
+//
+// env is the environment of the schema that issued the annotation, so a
+// schema's own restriction of xs:QName is recognised through ITS chain rather
+// than through whatever another schema registered under the same name. A nil
+// env falls back to the process-global table, which is the unchanged behaviour
+// for an annotation no schema issued.
+func isNamespaceSensitiveType(env *xdm.TypeEnvironment, ann string) bool {
+	if env == nil {
+		env = xdm.GlobalTypeEnvironment()
+	}
 	seen := map[string]bool{}
 	for ann != "" && !seen[ann] {
 		if ann == "QName" || ann == "NOTATION" {
 			return true
 		}
 		seen[ann] = true
-		ann = xdm.DerivedBase(ann)
+		ann = env.DerivedBase(ann)
 	}
 	return false
 }
@@ -407,11 +416,11 @@ func hasNamespaceSensitiveContent(n *xdm.Node) bool {
 	if n == nil {
 		return false
 	}
-	if isNamespaceSensitiveType(n.TypeAnnotation) {
+	if isNamespaceSensitiveType(xdm.TypeEnvOf(n), n.TypeAnnotation) {
 		return true
 	}
 	for _, a := range n.Attrs {
-		if isNamespaceSensitiveType(a.TypeAnnotation) {
+		if isNamespaceSensitiveType(xdm.TypeEnvOf(a), a.TypeAnnotation) {
 			return true
 		}
 	}
