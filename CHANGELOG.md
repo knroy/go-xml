@@ -34,6 +34,12 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Twelve functions accepted an empty sequence for a parameter the spec declares without `?` | F&O 3.1 makes `()` there `XPTY0004`. `fn:round` was the worst: it neither raised nor returned empty but silently substituted precision 0. | [`7668773`][7668773] |
 | Five attributes accepted values no specification defines | `xsl:function/@visibility` excludes `hidden`, and `@streamability`, `@new-each-time`, `@component` and `xsl:copy-of/@validation` each have a closed set the table did not carry. | [`1b7a25a`][1b7a25a] |
 | `validate` accepted a document node with more than one element child | XQuery 3.1 §3.21 requires exactly one element plus zero or more comments and PIs; the operand was returned unchecked instead of raising `XQDY0061`. | [`7e7c766`][7e7c766] |
+| `xdm.Parse` accepted documents that are not well formed | `RawToken` leaves duplicate attributes, namespace well-formedness and document grammar to its caller, and `Parse` was not checking them. An unbound prefix returning an empty URI is not a harmless recovery: it gives the node a different XDM name. | [`4ce4086`][4ce4086] |
+| The XSLT serializer bound one prefix twice, writing XML it could not read back | `xsl:namespace-alias` with competing aliases at different import precedence leaves two namespace nodes for one prefix, and `namespace-alias-2620` emitted two `xmlns:y` attributes on one element. It passed only because the malformed result failed to parse and the judge compared text instead. | [`220b466`][220b466] |
+| Comments and processing instructions were written verbatim, through no character check | `--` inside a comment, `?>` inside a PI, a reserved `xml` target and a C0 control all reached the output. A caller can build XDM directly, so serialization owes its own refusal: `SERE0003`, `SERE0006`. | [`220b466`][220b466] |
+| `relaxng` was the one package with no library-level confined resolver | `xsd`, `dtd` and `xslt` each expose one; `relaxng` had it only inside `cmd/go-xml`. `FileResolver` confines through `os.OpenRoot`, leaving the leaf unresolved so the check-then-open race `37972d9` removed is not reintroduced, and bounds one schema by `MaxBytes`. | [`f3ff553`][f3ff553] |
+| `fn:serialize` parsed `normalization-form` and ignored it | A request for NFC returned the text unchanged and an unsupported form was accepted in silence. Normalization runs at the text-writing site, so a character map's replacement stays written as given. | [`17bcdb6`][17bcdb6] |
+| The `same-key` oracle called the grouping function it was meant to check | It shared `typeFamilyOf` with production, so a wrong family grouping made both agree and the test stayed green. `oracleFamily` is written from `op:same-key` instead. | [`abc8cbc`][abc8cbc] |
 | `<xsl:value-of selct="..."/>` compiled clean and emitted nothing | §3.9 grants forwards-compatible leniency only *above* the version the processor implements; the guard measured against 2.0, so a modern stylesheet got 2.0-era silence for a typo. The leniency and an element table that had never listed `visibility`, `streamability` or `applies-to` each made the other look harmless. | [`6eacc2d`][6eacc2d] |
 | An `intersect`/`except` pattern took the default priority, so the wrong template fired | §6.4 gives such a pattern its first operand's priority; it took 0.5 instead, and `a except b` beat an explicit `priority="0.25"`. | [`6eacc2d`][6eacc2d] |
 | `html-version="7"` was accepted and silently demoted to HTML 4 | The check read `@version`, the fallback, rather than `@html-version`. | [`6eacc2d`][6eacc2d] |
@@ -705,6 +711,11 @@ here so every entry in this file sits under a release.
 [93c5e88]: https://github.com/knroy/go-xml/commit/93c5e88
 [6eacc2d]: https://github.com/knroy/go-xml/commit/6eacc2d
 [75d633e]: https://github.com/knroy/go-xml/commit/75d633e
+[4ce4086]: https://github.com/knroy/go-xml/commit/4ce4086
+[220b466]: https://github.com/knroy/go-xml/commit/220b466
+[f3ff553]: https://github.com/knroy/go-xml/commit/f3ff553
+[17bcdb6]: https://github.com/knroy/go-xml/commit/17bcdb6
+[abc8cbc]: https://github.com/knroy/go-xml/commit/abc8cbc
 [7668773]: https://github.com/knroy/go-xml/commit/7668773
 [7ffd7da]: https://github.com/knroy/go-xml/commit/7ffd7da
 [1b7a25a]: https://github.com/knroy/go-xml/commit/1b7a25a

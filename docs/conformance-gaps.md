@@ -33,9 +33,9 @@ Every figure here comes from a full run of the suite it names, with
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 577 | 577 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **168** |
+| | **Total** | | | | **104** |
 
-The unit-test suite is 1,829 tests.
+The unit-test suite is 2,131 tests.
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
 577 test documents and XSpec's 225 — kept here because they are the only

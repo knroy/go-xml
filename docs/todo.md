@@ -17,7 +17,7 @@ Current position:
 | XSLT 3.0 | 99.70% — 11,484 of 11,518 in scope (34 failing); 14 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,122 `func Test` declarations, clean under `-race` |
+| Tests | 2,131 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -90,8 +90,12 @@ pass and was wrong in a way the audit had not predicted: it suppressed
 indentation document-wide, where `serialize-xml-108` requires the named
 element to keep its own indentation and only its content to be spared.
 
-What remains parsed and unread is **`normalization-form`** and
-**`include-content-type`**.
+**`normalization-form`** is now read too, in both the map and element forms,
+and an unsupported form is `SEPM0017` rather than silence. Normalization is
+applied at the text-writing site so a character map's replacement stays
+untouched, which is what Serialization 3.1 requires.
+
+What remains parsed and unread is **`include-content-type`**.
 
 **`byte-order-mark` and `media-type` are deliberately not implemented** for
 `fn:serialize`, which is a different thing from unread. F&O 3.0
