@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,7 +135,7 @@ func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root string,
 			return nil, fmt.Errorf("parsing %s: %w", rngPath, err)
 		}
 		schema, err := relaxng.CompileWithOptions(tree.Root, relaxng.Options{
-			Resolver: &rngFileResolver{root: root, base: abs},
+			Resolver: cliRNGResolver(root),
 			BaseURI:  abs,
 		})
 		if err != nil {
@@ -197,124 +196,22 @@ func validateOne(path string, popts xdm.ParseOptions, validate func(*xdm.Node) e
 	return validate(tree.Root)
 }
 
-// rngFileResolver loads the schemas named by externalRef and include.
+// DefaultMaxRNGBytes bounds one RELAX NG schema the CLI reads.
 //
-// relaxng ships no file resolver of its own — the package deliberately has no
-// filesystem — so containment is implemented here, on the same terms as
-// xsd.FileResolver: an empty root permits any readable path, which suits a
-// command line, and a named root refuses anything that escapes it through
-// "..", a symlink, or an absolute path.
-type rngFileResolver struct {
-	root string
-	base string
-}
-
-// DefaultMaxRNGBytes bounds one schema this resolver reads.
-//
-// Every other resolver in the library bounds its read -- dtd at 4 MB, xsd at
-// 16 MB, xslt at 64 MB -- and this one did not, so a named file inside the
-// permitted root could be read without limit: a fifo never finishes, and a
-// large regular file is fully held in memory before the parser is given the
-// chance to refuse it. Containment answers *which* files may be read, not how
-// much of one. The figure matches xsd.DefaultMaxSchemaBytes because a RELAX
-// NG grammar and an XML Schema are the same kind of document at the same
-// scale; the W3C's own largest schema is under 200 kB.
+// relaxng.FileResolver's own default is 64 MB, matching xdm's document limit.
+// The command line asks for less, on the same terms as its XML Schema flag: a
+// RELAX NG grammar and an XML Schema are the same kind of document at the same
+// scale, and the W3C's own largest schema is under 200 kB. The figure therefore
+// matches xsd.DefaultMaxSchemaBytes rather than the library ceiling.
 const DefaultMaxRNGBytes = 16 << 20
 
-// readAtMost reads r, refusing at more than DefaultMaxRNGBytes.
+// cliRNGResolver is the resolver the validate path installs.
 //
-// One byte over the limit is requested so that a file exactly at it is
-// accepted and the next one is refused, rather than the bound being
-// discovered by a short read that looks like a truncated document.
-func readAtMost(r io.Reader, what string) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(r, DefaultMaxRNGBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > DefaultMaxRNGBytes {
-		return nil, fmt.Errorf("%s exceeds the %d byte limit: %w",
-			what, int64(DefaultMaxRNGBytes), xdm.ErrResourceLimit)
-	}
-	return data, nil
-}
-
-func (r *rngFileResolver) ResolveSchema(href string) (*xdm.Node, error) {
-	if i := strings.Index(href, "://"); i >= 0 && !strings.HasPrefix(href, "file://") {
-		return nil, fmt.Errorf("scheme %q is not permitted (only local files)",
-			href[:i])
-	}
-	p := strings.TrimPrefix(href, "file://")
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(filepath.Dir(r.base), p)
-	}
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return nil, err
-	}
-	// The final component is deliberately left unresolved when a root is set:
-	// os.Root resolves it at open time, and following the link here first
-	// would leave it nothing to refuse. The parent is resolved so that both
-	// sides of the comparison are spelled alike (/var vs /private/var on
-	// macOS). Unrooted, the whole path is resolved as before — there is no
-	// containment to enforce, and this is the documented command-line case.
-	if r.root == "" {
-		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-			abs = resolved
-		}
-	} else if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
-		abs = filepath.Join(dir, filepath.Base(abs))
-	}
-	var data []byte
-	if r.root != "" {
-		rootAbs, err := filepath.Abs(r.root)
-		if err != nil {
-			return nil, err
-		}
-		if resolved, err := filepath.EvalSymlinks(rootAbs); err == nil {
-			rootAbs = resolved
-		}
-		rel, err := filepath.Rel(rootAbs, abs)
-		if err != nil || rel == ".." ||
-			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return nil, fmt.Errorf("%q is outside %s", href, rootAbs)
-		}
-		// Read through os.Root so containment is enforced at open time by the
-		// kernel rather than by the comparison just above, which a symlink
-		// swapped in afterwards would outlive. Same mechanism as
-		// xsd.FileResolver and xslt.FileResolver.
-		rt, err := os.OpenRoot(rootAbs)
-		if err != nil {
-			return nil, err
-		}
-		f, err := rt.Open(filepath.ToSlash(rel))
-		rt.Close()
-		if err != nil {
-			// os.Root's error is wrapped rather than replaced: it is the
-			// evidence that the open enforced containment, and the only
-			// thing a test can distinguish from the string check above,
-			// since both shapes refuse every statically visible vector.
-			return nil, fmt.Errorf("%q is outside %s: %w", href, rootAbs, err)
-		}
-		data, err = readAtMost(f, href)
-		f.Close()
-		if err != nil {
-			return nil, err
-		}
-		abs = filepath.Join(rootAbs, rel)
-	} else {
-		g, oerr := os.Open(abs)
-		if oerr != nil {
-			return nil, oerr
-		}
-		data, err = readAtMost(g, href)
-		g.Close()
-		if err != nil {
-			return nil, err
-		}
-	}
-	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{BaseURI: abs})
-	if err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", href, err)
-	}
-	return tree.Root, nil
+// It is a function rather than a literal at the call site so that a test can
+// assert on the resolver the CLI really constructs. Asserting on a second copy
+// of the literal would repeat, in the tests, exactly the duplication this
+// resolver was consolidated to remove: the copy would keep passing after the
+// original changed.
+func cliRNGResolver(root string) *relaxng.FileResolver {
+	return &relaxng.FileResolver{Root: root, MaxBytes: DefaultMaxRNGBytes}
 }

@@ -60,6 +60,18 @@ func (r *FileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 	if u.Scheme != "" && u.Scheme != "file" {
 		return nil, fmt.Errorf("relaxng: remote schema URI %q is not permitted", href)
 	}
+	// A file: URL may carry an authority, and only an empty one or "localhost"
+	// names this machine. Anything else names a *remote* host — a UNC share on
+	// Windows, an SMB or NFS mount elsewhere — and reading it is the network
+	// fetch this resolver exists to refuse. Taking u.Path alone would discard
+	// the authority and silently read the same-named local path instead, which
+	// is both a read the caller never asked for and a refusal that never
+	// happened.
+	if u.Scheme == "file" && u.Host != "" && u.Host != "localhost" {
+		return nil, fmt.Errorf(
+			"relaxng: schema URI %q names the remote host %q; only local files "+
+				"are permitted", href, u.Host)
+	}
 	// file: URLs are URI syntax; after this point every path is handled by the
 	// same confinement and byte-accounting path as a bare filesystem reference.
 	p := href

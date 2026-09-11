@@ -1075,8 +1075,8 @@ falls at validation — and every conforming processor loads such a schema.
 
 Every rooted resolver enforces its root by the same **mechanism**: opening
 through `os.OpenRoot`. `xslt.FileResolver`, `xsd.FileResolver`,
-`dtd.FileResolver` and the `relaxng` resolver in `cmd/go-xml` all resolve each
-path component against the root's own descriptor at open time, so containment
+`dtd.FileResolver` and `relaxng.FileResolver` all resolve each path component
+against the root's own descriptor at open time, so containment
 is enforced by the kernel at the moment of the open rather than by a string
 comparison taken beforehand. A symlink swapped in after the check is refused
 rather than followed.
@@ -1091,7 +1091,7 @@ final path component is deliberately *not* pre-resolved. Resolving it would
 hand `os.Root` a path with every link already followed, leaving it nothing to
 refuse, and would reinstate the window this shape exists to close.
 
-Until 2026-09-10 `xsd`, `dtd` and the `relaxng` resolver used check-then-open:
+Until 2026-09-10 `xsd`, `dtd` and the RELAX NG resolver used check-then-open:
 `EvalSymlinks` on both sides, compare, then open the resolved path. That was
 recorded here as an accepted risk, and the reasoning was sound as far as it
 went — because the path opened was the *resolved* one, escaping required
@@ -1210,10 +1210,11 @@ No `unsafe`, no `cgo`, no `reflect` in any non-test file.
    availability implementation-dependent. Setting a document or text resolver
    does not set this.
 5. **Set a `Root`** on `FileResolver`, and an `AllowHost` on `HTTPResolver`, if
-   either resolves locations an attacker can influence. A `relaxng.Resolver` is
-   your own code and has no such field: it receives the href with `..` intact
-   and the scheme filled in, so it must do its own containment check. See the
-   interface's documentation for measured examples.
+   either resolves locations an attacker can influence — `relaxng.FileResolver`
+   has a `Root` too, and `cmd/go-xml` passes `-root` to it. A *custom*
+   `relaxng.Resolver` is your own code and has no such field: it receives the
+   href with `..` intact and the scheme filled in, so it must do its own
+   containment check. See the interface's documentation for measured examples.
 6. **Set a timeout** on the request, and pass the context in. The
    identity-constraint finding above is CPU exhaustion; the depth limit caps it,
    but a `context` deadline is what bounds the general case. Use
