@@ -23,7 +23,7 @@ let something through, and the column that matters is the last one.
 <!-- BEGIN GENERATED LAYER COUNTS -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** | 2,192 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,196 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -807,6 +807,44 @@ and would leave the first test measuring against nothing.
 This is the same failure that let a one-sided soundness property accept a UPA
 budget which skipped its own check. A budget, like an encoding, must be tested
 against the thing it claims to approximate, not against itself.
+
+**A fixed corpus is exhaustive over what it enumerates, and blind to the rest.**
+`xdm/samekey_oracle_test.go` compares every ordered pair and triple of a
+hand-enumerated corpus, which is its strength — randomising over those same
+values would add nothing. What it cannot do is reach a value class nobody
+listed. `xdm/samekey_property_test.go` is the generated lane for exactly that
+gap: negative zero, the two binary types, large exact integers, timezone
+boundary crossings, decimal/float/double aliases, duration aliases, QName
+namespace differences, and malformed internal representations. It reuses the
+`SameKey` oracle rather than writing a second one — a second oracle is a second
+chance to make the same mistake — and asserts reflexivity, symmetry,
+transitivity, agreement with the encoding in both directions, and the map
+behaviour the key exists for: insert, look up, replace, remove.
+
+**Determinism means a failure is reproducible.** The seed is a fixed constant
+so CI runs the same values every time, `GOXSLT_SAMEKEY_SEED` overrides it to
+widen the search, and the seed is printed on **every** failure message rather
+than once at the top of the log, so a truncated log still carries the one fact
+needed to re-run the failing input.
+
+**Generate the equal values in different spellings, or the lane cannot see a
+split.** Three generators here had to be rewritten after sabotage showed them
+green. Sampling a spelling at random meant each octet sequence reached exactly
+one spelling over a class's draws, so no `0f`/`0F` pair existed and a
+case-sensitive key went undetected; the same mistake in the duration class meant
+`P1Y` and `P12M` never appeared together. A class that must catch a *split*
+needs the equal-but-differently-spelled pair to exist **by construction** — the
+binary and duration classes now enumerate spellings from a counter rather than
+sampling them. A class whose every value is one key (the signed zeros) can only
+witness a merge, which is why it also emits values that must *not* collide.
+
+**Check that the sabotage is live, not merely that the source changed.** Two
+sabotage attempts here proved nothing: removing `strings.ToLower` from the hex
+branch is a *no-op*, because Go's `hex.DecodeString` accepts both cases anyway,
+and deleting the branch outright orphaned an import and failed to build. Both
+looked like edits. A mutation must be shown to change *behaviour* — the live
+version keys on the raw spelling while still decoding, so the import stays used
+and `0f` and `0F` genuinely split.
 
 **Say what the case is, and why the answer is what it is.** The tests here
 name the W3C case that motivated them and quote the rule being applied, because

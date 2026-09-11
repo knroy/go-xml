@@ -20,7 +20,7 @@ Current position:
 | XSLT 3.0 | 99.70% — 11,484 of 11,518 in scope (34 failing); 14 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,192 `func Test` declarations, clean under `-race` |
+| Tests | 2,196 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 
 Every one of those failures, and why it is still open, is catalogued in
@@ -835,10 +835,21 @@ find it. `MapKeyOf` now keys on the decoded octets. The lesson is worth more
 than the fix: the gap was known, written down as a coverage note, and the bug
 sat inside it — a family with no cases cannot report that it is wrong.
 
-Still absent, and none known to fail: large exact integers past the
-`Rat()`-nil branch at `maparray.go:116` are seeded now but the branch itself
-wants a case that reaches it deliberately; and the corpus grows quadratically
-in pairs and cubically in triples, so further families cost more than they did.
+The corpus grows quadratically in pairs and cubically in triples, so further
+families cost more there than they did. That is what the generated lane in
+`xdm/samekey_property_test.go` is for: the classes the fixed enumeration misses
+— negative zero, both binary types, large exact integers past the `Rat()`-nil
+branch at `maparray.go:116`, timezone boundary crossings, numeric and duration
+aliases, QName namespace differences, and malformed internal representations —
+are generated from a logged, overridable seed rather than listed, and checked
+against the same oracle plus insert/lookup/replace/remove through `MapItem`.
+
+The `op:same-key-023` workload has a regression test as well
+(`xdm/map_largeworkload_test.go`): 75³ = 421,875 keys built, looked up, and
+removed one at a time. `map_test.go` topped out at 20,000 and the benchmarks
+price one operation against a pre-built map, so a change reintroducing an O(n)
+put would have left the package green and surfaced only as a suite case that
+appeared to hang.
 
 Note the limit of the method, which widening cannot fix: the oracle calls the
 same `typeFamilyOf` as production, so it cannot detect a wrong *family*
