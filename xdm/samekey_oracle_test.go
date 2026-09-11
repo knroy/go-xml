@@ -41,9 +41,22 @@ import (
 //
 // Two zoned values, on the other hand, name one instant regardless of how they
 // spell the offset, and so are one key (same-key-027).
-func SameKey(a, b *Atomic) bool {
+//
+// SameKey returns the relation's verdict AND whether the oracle is entitled to
+// one. ok is false when either operand has a type oracleFamily does not model;
+// the verdict is then meaningless and every call site must fail the test by
+// name rather than use it. That is the fail-closed contract: an oracle that
+// guessed at an unmodelled type would agree with whatever MapKeyOf did and the
+// corpus would stay green over a real defect.
+func SameKey(a, b *Atomic) (same bool, ok bool) {
 	if a == nil || b == nil {
-		return a == b
+		return a == b, true
+	}
+	if _, ok := oracleFamilyOf(a); !ok {
+		return false, false
+	}
+	if _, ok := oracleFamilyOf(b); !ok {
+		return false, false
 	}
 
 	// Numerics form one family across all subtypes: an xs:integer and the
@@ -51,19 +64,19 @@ func SameKey(a, b *Atomic) bool {
 	if a.Type.IsNumeric() && b.Type.IsNumeric() {
 		af, bf := a.Float64(), b.Float64()
 		if isNaNf(af) || isNaNf(bf) {
-			return isNaNf(af) && isNaNf(bf)
+			return isNaNf(af) && isNaNf(bf), true
 		}
 		if isInff(af) || isInff(bf) {
-			return af == bf
+			return af == bf, true
 		}
 		ra, rb := exactRat(a), exactRat(b)
 		if ra == nil || rb == nil {
-			return af == bf
+			return af == bf, true
 		}
-		return ra.Cmp(rb) == 0
+		return ra.Cmp(rb) == 0, true
 	}
 	if a.Type.IsNumeric() != b.Type.IsNumeric() {
-		return false
+		return false, true
 	}
 
 	// The three duration types are one family, compared over the
@@ -71,13 +84,16 @@ func SameKey(a, b *Atomic) bool {
 	if isDur(a.Type) && isDur(b.Type) {
 		da, db := a.DurationVal(), b.DurationVal()
 		if da == nil || db == nil {
-			return a.String() == b.String()
+			// A duration type with no parsed (months, seconds) has no
+			// oracle representation. Refuse rather than compare
+			// spellings: finding 3 is exactly this fallback.
+			return false, false
 		}
 		return da.SignedMonths() == db.SignedMonths() &&
-			da.SignedSeconds().Cmp(db.SignedSeconds()) == 0
+			da.SignedSeconds().Cmp(db.SignedSeconds()) == 0, true
 	}
 	if isDur(a.Type) != isDur(b.Type) {
-		return false
+		return false, true
 	}
 
 	// The eight calendar types each stand alone -- a gYear never collides with
@@ -85,34 +101,42 @@ func SameKey(a, b *Atomic) bool {
 	// are one key, and an unzoned value keys on its own spelling.
 	if isCal(a.Type) && isCal(b.Type) {
 		if a.Type != b.Type {
-			return false
+			return false, true
 		}
 		da, db := a.DateTimeVal(), b.DateTimeVal()
 		if da == nil || db == nil {
-			return a.String() == b.String()
+			// No parsed calendar value means no timezone-presence fact
+			// and no instant, so the oracle has nothing to judge with.
+			return false, false
 		}
 		if da.HasTZ != db.HasTZ {
 			// No implicit timezone is applied: see the commentary above.
-			return false
+			return false, true
 		}
 		if !da.HasTZ {
-			return a.String() == b.String()
+			// An unzoned calendar value keys on its own canonical
+			// spelling. This is not the fail-open tail: the type is
+			// modelled, both operands are the same calendar type, and
+			// the spelling IS the value space here.
+			return a.String() == b.String(), true
 		}
-		return da.ToSeconds(0).Cmp(db.ToSeconds(0)) == 0
+		return da.ToSeconds(0).Cmp(db.ToSeconds(0)) == 0, true
 	}
 	if isCal(a.Type) != isCal(b.Type) {
-		return false
+		return false, true
 	}
 
 	if a.Type == TypeBoolean && b.Type == TypeBoolean {
-		return a.Bool() == b.Bool()
+		return a.Bool() == b.Bool(), true
 	}
 	if a.Type == TypeQName && b.Type == TypeQName {
 		qa, qb := a.QName(), b.QName()
 		if qa == nil || qb == nil {
-			return qa == qb
+			// A QName with no resolved (URI, local) pair has no oracle
+			// representation; its lexical prefix is not the value.
+			return false, false
 		}
-		return qa.URI == qb.URI && qa.Local == qb.Local
+		return qa.URI == qb.URI && qa.Local == qb.Local, true
 	}
 
 	// The two binary types are each their own family, but within a type the
@@ -126,37 +150,148 @@ func SameKey(a, b *Atomic) bool {
 	// to agree, or a value would fail to find itself in a map.
 	if isBin(a.Type) && isBin(b.Type) {
 		if a.Type != b.Type {
-			return false
+			return false, true
 		}
 		oa, oka := decodeBinary(a)
 		ob, okb := decodeBinary(b)
 		if !oka || !okb {
-			return a.String() == b.String()
+			// The value of a binary is its octet sequence. A lexical
+			// form that will not decode has no octets, so the oracle
+			// has no representation to compare.
+			return false, false
 		}
-		return string(oa) == string(ob)
+		return string(oa) == string(ob), true
 	}
 	if isBin(a.Type) != isBin(b.Type) {
-		return false
+		return false, true
 	}
 
-	// Everything else is its type family plus its lexical value; xs:string,
-	// xs:anyURI and xs:untypedAtomic share one family. This predicate is
-	// intentionally independent of MapKeyOf's typeFamilyOf: this test is the
-	// guard that catches an erroneous production family grouping.
-	return oracleFamily(a) == oracleFamily(b) && a.String() == b.String()
+	// Two cases reach here, and both are decided, not guessed.
+	//
+	// The branches above each handle one family and then return false for a
+	// pair that straddles it -- but only for the families whose rule needed a
+	// branch. A pair like xs:boolean("true") vs xs:string("1") straddles two
+	// families neither of which has a straddle test above, so it arrives
+	// here: different families, therefore different keys. That is a real
+	// verdict from the F&O rule that same-key holds only WITHIN a family.
+	//
+	// The other case is a same-family pair in the string family -- xs:string,
+	// xs:anyURI and xs:untypedAtomic -- whose value space IS the character
+	// sequence, so comparing String() is the specified rule and not a
+	// fallback.
+	//
+	// What CANNOT reach here is an unmodelled type: those were refused at the
+	// top. That is the difference from the version this finding was about,
+	// whose tail applied String() to any type at all.
+	//
+	// The family comparison is intentionally independent of MapKeyOf's
+	// typeFamilyOf: this predicate is the guard that catches an erroneous
+	// production family grouping (finding 2).
+	fa, oka := oracleFamilyOf(a)
+	fb, okb := oracleFamilyOf(b)
+	if !oka || !okb {
+		// Unreachable: refused at the top of the function. Asserted rather
+		// than assumed, so a future edit that moves the entry guard cannot
+		// silently restore the fail-open tail this finding was about.
+		return false, false
+	}
+	if fa != fb {
+		return false, true
+	}
+	if fa != "string-family" {
+		// A same-family pair in a MODELLED family that no branch above
+		// decided. Every such family has a branch, so this is an oracle
+		// bug rather than a verdict: refuse rather than fall back to
+		// comparing spellings, which is precisely the fail-open tail.
+		return false, false
+	}
+	return a.String() == b.String(), true
 }
 
-func oracleFamily(a *Atomic) string {
-	switch a.Type {
+// oracleFamily names the op:same-key equality category of a type, and reports
+// whether the oracle models that type at all.
+//
+// The switch is EXHAUSTIVE by construction and fails closed: there is no
+// default arm that invents a family. The earlier version ended in
+//
+//	default: return "type:" + a.Type.String()
+//
+// which made an unmodelled type fall through to a comparison of a type NAME
+// plus String(). That is fail-OPEN -- a type nobody taught the oracle got a
+// plausible-looking verdict, and if MapKeyOf were wrong about it the oracle
+// would agree and the corpus would stay green. An oracle with no opinion must
+// say so; TestOracleModelsEveryCorpusType and the !ok branches at the call
+// sites turn that admission into a named failure.
+//
+// Every family name here is written from F&O 3.1 op:same-key directly. It is
+// deliberately independent of MapKeyOf's typeFamilyOf: this predicate is the
+// guard that catches an erroneous production family grouping (finding 2), so
+// it must not be derived from the thing it checks.
+func oracleFamily(t TypeCode) (string, bool) {
+	switch t {
+	// F&O casts an untyped map key to xs:string, and xs:anyURI compares with
+	// xs:string under "eq"; the three share one family.
 	case TypeString, TypeAnyURI, TypeUntypedAtomic:
-		return "string-family"
-	default:
-		// Every non-special atomic type is its own family under op:same-key.
-		// Type.String is a stable test representation, not the production
-		// grouping helper this oracle is intended to check independently.
-		return "type:" + a.Type.String()
+		return "string-family", true
+
+	// The four numerics are one family across subtypes: xs:integer(1) and
+	// xs:double(1) are one key (same-key-012). The numeric branch of SameKey
+	// handles the value comparison; this is only the grouping.
+	case TypeInteger, TypeDecimal, TypeDouble, TypeFloat:
+		return "numeric-family", true
+
+	// The three duration types are one family, compared over (months,
+	// seconds) rather than lexically (map-get-017).
+	case TypeDuration, TypeYearMonthDuration, TypeDayTimeDuration:
+		return "duration-family", true
+
+	// The eight calendar types each stand alone -- a gYear never collides
+	// with a gMonth -- so each is its own family. Timezone presence is a
+	// property of the VALUE, not of the family, and is handled in SameKey.
+	case TypeDate:
+		return "calendar:date", true
+	case TypeTime:
+		return "calendar:time", true
+	case TypeDateTime:
+		return "calendar:dateTime", true
+	case TypeGYear:
+		return "calendar:gYear", true
+	case TypeGYearMonth:
+		return "calendar:gYearMonth", true
+	case TypeGMonth:
+		return "calendar:gMonth", true
+	case TypeGMonthDay:
+		return "calendar:gMonthDay", true
+	case TypeGDay:
+		return "calendar:gDay", true
+
+	// The two binary types are separate families: "010203" and "AQID" decode
+	// to the same three octets and must not be one key.
+	case TypeHexBinary:
+		return "binary:hexBinary", true
+	case TypeBase64Binary:
+		return "binary:base64Binary", true
+
+	// Singleton families: equality is over the value, not the spelling, and
+	// nothing else shares the family.
+	case TypeBoolean:
+		return "boolean", true
+	case TypeQName:
+		return "qname", true
 	}
+	// Unmodelled. Every TypeCode declared in atomic.go is named above, so
+	// reaching here means a new type code was added without teaching the
+	// oracle its op:same-key category. Say so rather than guess.
+	//
+	// UNMODELLED TYPES: none at present. xs:NOTATION, which the plan lists,
+	// has no TypeCode in this implementation -- see the comment at the head
+	// of atomic.go on why derived and rarely-used types are not distinct
+	// codes. If one is ever added it lands here and fails the test by name.
+	return "", false
 }
+
+// oracleFamilyOf is the *Atomic form, kept so the call sites read as before.
+func oracleFamilyOf(a *Atomic) (string, bool) { return oracleFamily(a.Type) }
 
 func isBin(t TypeCode) bool { return t == TypeHexBinary || t == TypeBase64Binary }
 
@@ -423,7 +558,20 @@ func TestMapKeyOfMatchesSameKey(t *testing.T) {
 	bad := 0
 	for i := range vals {
 		for j := range vals {
-			want := SameKey(vals[i], vals[j])
+			want, ok := SameKey(vals[i], vals[j])
+			if !ok {
+				// Fail closed. The oracle has no op:same-key model for one
+				// of these types, so it is not entitled to a verdict and
+				// MUST NOT supply a guessed one: a corpus judged by a
+				// guessing oracle stays green over a real MapKeyOf defect.
+				t.Fatalf("unsupported oracle representation: no op:same-key model for "+
+					"%s %q vs %s %q.\nThe oracle cannot judge this pair, so this test "+
+					"is measuring nothing for it. Teach oracleFamily and SameKey the "+
+					"type's F&O equality category, or remove the value from the corpus "+
+					"with a stated reason -- do not let it fall through to a lexical "+
+					"comparison.",
+					vals[i].Type, vals[i].String(), vals[j].Type, vals[j].String())
+			}
 			got := keys[i] == keys[j]
 			if want == got {
 				continue
@@ -452,28 +600,96 @@ func TestMapKeyOfMatchesSameKey(t *testing.T) {
 // against nothing.
 func TestSameKeyIsAnEquivalence(t *testing.T) {
 	vals := sameKeyCorpus(t)
+	// same is SameKey with the fail-closed contract enforced: a pair the
+	// oracle cannot judge aborts the test by name rather than contributing a
+	// guessed verdict to an algebraic property.
+	same := func(a, b *Atomic) bool {
+		v, ok := SameKey(a, b)
+		if !ok {
+			t.Fatalf("unsupported oracle representation: no op:same-key model for "+
+				"%s %q vs %s %q; the equivalence properties cannot be checked over "+
+				"a pair the oracle has no opinion about",
+				a.Type, a.String(), b.Type, b.String())
+		}
+		return v
+	}
 	for i := range vals {
-		if !SameKey(vals[i], vals[i]) {
+		if !same(vals[i], vals[i]) {
 			// NaN is the deliberate exception under "eq" but NOT under
 			// op:same-key, which requires every NaN to be one key.
 			t.Errorf("not reflexive: %s %q", vals[i].Type, vals[i].String())
 		}
 		for j := range vals {
-			if SameKey(vals[i], vals[j]) != SameKey(vals[j], vals[i]) {
+			if same(vals[i], vals[j]) != same(vals[j], vals[i]) {
 				t.Errorf("not symmetric: %s %q vs %s %q",
 					vals[i].Type, vals[i].String(), vals[j].Type, vals[j].String())
 			}
-			if !SameKey(vals[i], vals[j]) {
+			if !same(vals[i], vals[j]) {
 				continue
 			}
 			for k := range vals {
-				if SameKey(vals[j], vals[k]) && !SameKey(vals[i], vals[k]) {
+				if same(vals[j], vals[k]) && !same(vals[i], vals[k]) {
 					t.Errorf("not transitive: %q ~ %q ~ %q but not %q ~ %q",
 						vals[i].String(), vals[j].String(), vals[k].String(),
 						vals[i].String(), vals[k].String())
 				}
 			}
 		}
+	}
+}
+
+// TestOracleModelsEveryCorpusType is the fail-closed contract stated directly,
+// separately from any comparison with MapKeyOf.
+//
+// The tests above would catch an unmodelled type only on the pair that happens
+// to contain it, in a message about that pair. This one names the type itself,
+// once, and answers the question the finding actually asks: is there anything
+// in the corpus the oracle has no op:same-key model for? It is also the test
+// that fails first when someone adds a TypeCode to atomic.go without teaching
+// oracleFamily its F&O equality category.
+func TestOracleModelsEveryCorpusType(t *testing.T) {
+	unmodelled := map[TypeCode]string{}
+	for _, v := range sameKeyCorpus(t) {
+		if _, ok := oracleFamilyOf(v); !ok {
+			unmodelled[v.Type] = v.String()
+		}
+	}
+	for typ, example := range unmodelled {
+		t.Errorf("unsupported oracle representation: oracleFamily has no op:same-key "+
+			"family for %s (example value %q).\nThe oracle fails closed, so every pair "+
+			"containing this type is unjudged and the corpus proves nothing about it. "+
+			"Add an explicit case to oracleFamily naming the type's F&O equality "+
+			"category.", typ, example)
+	}
+}
+
+// TestOracleFamilyIsExhaustive walks every TypeCode declared in atomic.go and
+// requires a family for each, independently of what the corpus happens to
+// contain. The corpus could shrink; the type set is the real obligation.
+func TestOracleFamilyIsExhaustive(t *testing.T) {
+	all := []TypeCode{
+		TypeUntypedAtomic, TypeString, TypeBoolean, TypeDecimal, TypeInteger,
+		TypeDouble, TypeFloat, TypeQName, TypeAnyURI, TypeDate, TypeTime,
+		TypeDateTime, TypeDuration, TypeYearMonthDuration, TypeDayTimeDuration,
+		TypeHexBinary, TypeBase64Binary, TypeGYear, TypeGYearMonth, TypeGMonth,
+		TypeGMonthDay, TypeGDay,
+	}
+	// TypeGDay is the last code in the iota run; if a new one is appended,
+	// this catches the omission even before oracleFamily is consulted.
+	if int(TypeGDay) != len(all)-1 {
+		t.Fatalf("the TypeCode run has %d codes but this test lists %d; "+
+			"a type was added to atomic.go without being taught to the oracle",
+			int(TypeGDay)+1, len(all))
+	}
+	for _, typ := range all {
+		if _, ok := oracleFamily(typ); !ok {
+			t.Errorf("unsupported oracle representation: %s has no op:same-key family", typ)
+		}
+	}
+	// And the switch really does fail closed for something outside the run.
+	if _, ok := oracleFamily(TypeCode(len(all) + 100)); ok {
+		t.Error("oracleFamily invented a family for a type code that does not exist; " +
+			"the switch has a guessing default arm again")
 	}
 }
 

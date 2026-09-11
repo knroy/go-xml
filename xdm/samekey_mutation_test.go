@@ -362,7 +362,18 @@ func TestSameKeyMutationLane(t *testing.T) {
 			// Condition 2: the corpus must notice.
 			for i := range vals {
 				for j := range vals {
-					if SameKey(vals[i], vals[j]) != (mutated[i] == mutated[j]) {
+					want, ok := SameKey(vals[i], vals[j])
+					if !ok {
+						// The oracle fails closed. An unjudged pair cannot
+						// witness a mutant either way, and silently skipping
+						// it would let a mutant be reported as surviving (or
+						// as caught) on a comparison that never happened.
+						t.Fatalf("unsupported oracle representation: no op:same-key model "+
+							"for %s %q vs %s %q; the mutation lane cannot measure the "+
+							"corpus over a pair the oracle has no opinion about",
+							vals[i].Type, vals[i].String(), vals[j].Type, vals[j].String())
+					}
+					if want != (mutated[i] == mutated[j]) {
 						// Caught, and the pair is named so a future
 						// narrowing of the corpus can be judged.
 						t.Logf("caught by %s %q vs %s %q (%d of %d keys rewritten)",
@@ -401,7 +412,14 @@ func TestSameKeyMutationLaneBaselineIsClean(t *testing.T) {
 	}
 	for i := range vals {
 		for j := range vals {
-			if SameKey(vals[i], vals[j]) != (keys[i] == keys[j]) {
+			want, ok := SameKey(vals[i], vals[j])
+			if !ok {
+				t.Fatalf("unsupported oracle representation: no op:same-key model for "+
+					"%s %q vs %s %q; the baseline cannot be called clean over a pair "+
+					"the oracle cannot judge",
+					vals[i].Type, vals[i].String(), vals[j].Type, vals[j].String())
+			}
+			if want != (keys[i] == keys[j]) {
 				t.Fatalf("the unmutated baseline already disagrees at %s %q vs %s %q; "+
 					"every mutant above would report as caught for the wrong reason",
 					vals[i].Type, vals[i].String(), vals[j].Type, vals[j].String())
