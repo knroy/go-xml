@@ -50,7 +50,7 @@ import (
 // hand fix now answer the same question, and the hand fix's tests are what
 // prove they answer it the same way.
 var specSignatures = func() map[string][]string {
-	m := make(map[string][]string, len(builtinSignatures)+18)
+	m := make(map[string][]string, len(builtinSignatures)+43)
 	for k, v := range builtinSignatures {
 		m[k] = v
 	}
@@ -81,6 +81,40 @@ var specSignatures = func() map[string][]string {
 	m["max/2"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*", "xs:string"}
 	m["sum/1"] = []string{"xs:anyAtomicType", "xs:anyAtomicType*"}
 	m["sum/2"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*", "xs:anyAtomicType?"}
+
+	// The string family, F&O 3.1 5.2 to 5.6, excluding the regex functions
+	// of 5.6.1 onwards: those take a $flags and a $pattern whose proformas
+	// interact with the regex engine's own diagnostics, so they belong to a
+	// later commit that can compare FORX error codes.
+	//
+	// The rows that constrain anything new are the collation arguments --
+	// $collation is xs:string with no "?" throughout -- and fn:translate/3,
+	// whose $map and $trans are xs:string where $arg is xs:string?.
+	m["upper-case/1"] = []string{"xs:string", "xs:string?"}
+	m["lower-case/1"] = []string{"xs:string", "xs:string?"}
+	m["translate/3"] = []string{"xs:string", "xs:string?", "xs:string", "xs:string"}
+	m["string-join/1"] = []string{"xs:string", "xs:anyAtomicType*"}
+	m["string-join/2"] = []string{"xs:string", "xs:anyAtomicType*", "xs:string"}
+	m["substring-before/2"] = []string{"xs:string", "xs:string?", "xs:string?"}
+	m["substring-before/3"] = []string{"xs:string", "xs:string?", "xs:string?", "xs:string"}
+	m["substring-after/2"] = []string{"xs:string", "xs:string?", "xs:string?"}
+	m["substring-after/3"] = []string{"xs:string", "xs:string?", "xs:string?", "xs:string"}
+	m["contains/2"] = []string{"xs:boolean", "xs:string?", "xs:string?"}
+	m["contains/3"] = []string{"xs:boolean", "xs:string?", "xs:string?", "xs:string"}
+	m["starts-with/2"] = []string{"xs:boolean", "xs:string?", "xs:string?"}
+	m["starts-with/3"] = []string{"xs:boolean", "xs:string?", "xs:string?", "xs:string"}
+	m["ends-with/2"] = []string{"xs:boolean", "xs:string?", "xs:string?"}
+	m["ends-with/3"] = []string{"xs:boolean", "xs:string?", "xs:string?", "xs:string"}
+	m["compare/2"] = []string{"xs:integer?", "xs:string?", "xs:string?"}
+	m["compare/3"] = []string{"xs:integer?", "xs:string?", "xs:string?", "xs:string"}
+	m["codepoint-equal/2"] = []string{"xs:boolean?", "xs:string?", "xs:string?"}
+	m["codepoints-to-string/1"] = []string{"xs:string", "xs:integer*"}
+	m["string-to-codepoints/1"] = []string{"xs:integer*", "xs:string?"}
+	m["normalize-unicode/1"] = []string{"xs:string", "xs:string?"}
+	m["normalize-unicode/2"] = []string{"xs:string", "xs:string?", "xs:string"}
+	m["encode-for-uri/1"] = []string{"xs:string", "xs:string?"}
+	m["iri-to-uri/1"] = []string{"xs:string", "xs:string?"}
+	m["escape-html-uri/1"] = []string{"xs:string", "xs:string?"}
 	return m
 }()
 
