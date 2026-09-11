@@ -943,6 +943,31 @@ func (t *Tree) UnparsedEntity(name string) (systemID, publicID, notation string,
 	return u.systemID, u.publicID, u.notation, true
 }
 
+// HasUnparsedEntities reports whether the document declared any unparsed
+// entity at all.
+//
+// It exists for the one consumer that has to tell "this name is not among the
+// declared unparsed entities" from "this document declares none, so there is
+// nothing to check the name against". XML 1.0 section 3.3.1 makes only an
+// unparsed entity's name a legal ENTITY value, but a schema-aware processor
+// validating a document whose DTD declares no unparsed entity has no table to
+// judge against, and Saxon accepts such a value rather than refusing it. The
+// distinction is the difference between an invalid value and an unchecked one.
+func (t *Tree) HasUnparsedEntities() bool {
+	if t == nil {
+		return false
+	}
+	subset := t.DocType
+	if t.externalSubset != "" {
+		subset += "\n" + t.externalSubset
+	}
+	if subset == "" {
+		return false
+	}
+	tbl := parseInternalEntities(subset)
+	return tbl != nil && len(tbl.unparsed) > 0
+}
+
 // escapeAttrLiteral escapes the characters that would be markup inside an
 // attribute value, so that replacement text spliced there is read as literal
 // characters — XML section 4.4.5, "Included in Literal".

@@ -103,7 +103,7 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.70% of the W3C XSLT suite filtered to 3.0 (11,484 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 14 of the 34 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
-| **XSD 1.1** | 99.90% instance (26,196 of 26,222); **99.97%** schema-validity (15,349 of 15,354); opt-in via `Version11` |
+| **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,349 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
 <!-- BEGIN GENERATED TEST COUNT -->
@@ -978,7 +978,7 @@ Two figures, and the second is the one that matters.
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,349 / 15,354 (99.97%) | 26,196 / 26,222 (99.90%) |
+| XSD 1.1 | 15,349 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
 
 **Earlier revisions of this file reported a single "99.56%" for XSD 1.0 and
 "XSD 1.1: 100%". Both were measured wrongly, and the correction is large enough
@@ -1610,7 +1610,7 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,349 / 15,354 (99.97%) | 26,196 / 26,222 (99.90%) |
+| XSD 1.1 | 15,349 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
 
 Every failure is catalogued in
 [docs/conformance-gaps.md](docs/conformance-gaps.md), with a verdict on whether

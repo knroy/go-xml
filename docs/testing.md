@@ -50,7 +50,7 @@ figures* section, which fails the gate when this table drifts from the tree:
 * **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
 * **W3C conformance suites** — the sum of the in-scope totals in the status
   table: XPath 2.0 15,222 + XQuery 3.1 29,964 + XSLT 2.0 6,201 + XSLT 3.0 11,518
-  + XSD 1.0 39,388 + XSD 1.1 41,576 + RELAX NG 965. XPath 3.0 and 3.1 are not
+  + XSD 1.0 39,388 + XSD 1.1 41,598 + RELAX NG 965. XPath 3.0 and 3.1 are not
   added again — the QT3 catalog is one corpus measured at three versions, and
   the 2.0 figure is the whole of it that this engine claims. An earlier
   revision said "~128,000", which no grouping of these numbers reaches.

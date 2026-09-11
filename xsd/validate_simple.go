@@ -150,6 +150,23 @@ func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *x
 	// is shaped like a QName — true whichever prefixes happen to be in
 	// scope. It needs the node, so it is checked here, where the node is
 	// still in hand, rather than among the facets.
+	// Part 2 §3.3.11: an xs:ENTITY value must match the name of an unparsed
+	// entity declared in the document's DTD. The name is the whole of the
+	// constraint -- an NCName that no <!ENTITY ... NDATA> declared is not a
+	// value of the type at all -- so this cannot be expressed as a facet and
+	// needs the instance, which is why it sits here beside the QName check.
+	//
+	// An xs:ENTITIES list reaches this through validateListValueIn, which
+	// validates each item against ItemType with the same node in hand, so
+	// both spellings are covered by the one arm.
+	//
+	// With no node there is nothing to check against and the value is left
+	// alone: validateSimpleValue is used to validate schema documents' own
+	// literals, where no instance DTD exists and refusing every xs:ENTITY
+	// would make the type unusable rather than merely unchecked.
+	if err := entityIsDeclared(at, lexical, t); err != nil {
+		return "", err
+	}
 	if !qnamePrefixBound(at, lexical, t) {
 		return "", &ParseError{
 			Code: "cvc-datatype-valid.1.2.1",
@@ -1536,4 +1553,68 @@ func qnamePrefixBound(n *xdm.Node, normalized string, t *SimpleType) bool {
 	}
 	_, ok := resolveInstanceQName(n, normalized)
 	return ok
+}
+
+// entityIsDeclared applies Part 2 §3.3.11 to an xs:ENTITY value.
+//
+// A nil node means there is no instance to consult -- a schema document's own
+// default or fixed value, say -- and the check is skipped rather than failed.
+// That is deliberate and is the difference between "unchecked" and "invalid":
+// the type is only meaningful against a document that had the chance to
+// declare an entity.
+func entityIsDeclared(at *xdm.Node, lexical string, t *SimpleType) error {
+	if at == nil {
+		return nil
+	}
+	// xs:ENTITIES is a list of xs:ENTITY, and nearestBuiltinName walks the
+	// BASE chain -- which for the list stops at "ENTITIES", never reaching
+	// the item type. A defaulted list therefore has to be split here; the
+	// written form is split by validateListValueIn, which validates each
+	// item against ItemType with the same node and arrives back at the
+	// atomic arm below. id018 and id021 are the cases: a default naming
+	// entity1 where only entity2 was declared.
+	switch nearestBuiltinName(t) {
+	case "ENTITIES":
+		for _, item := range splitFields(WhiteCollapse.Normalize(lexical)) {
+			if err := entityIsDeclaredName(at, item); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "ENTITY":
+		return entityIsDeclaredName(at, WhiteCollapse.Normalize(lexical))
+	}
+	return nil
+}
+
+// entityIsDeclaredName is entityIsDeclared for one already-normalized name.
+func entityIsDeclaredName(at *xdm.Node, name string) error {
+	tree := at.Tree()
+	if tree == nil {
+		return nil
+	}
+	// A document that declares no unparsed entity at all gives nothing to
+	// judge the name against, and the value is left unchecked rather than
+	// refused. That is not the letter of XML 1.0 section 3.3.1, which makes
+	// only an unparsed entity's name a legal ENTITY value -- but Saxon
+	// validates as-34.xml, whose DTD declares two PARSED entities and whose
+	// my:entities attribute names them both, and the XSLT suite's attr group
+	// assumes that reading throughout (as-33, as-34, schemamatch112,
+	// schemamatch117). Refusing them made as-3401, match-208 and match-209
+	// fail against a conforming processor's own reported results.
+	//
+	// Where the document DOES declare unparsed entities the rule is applied
+	// in full: the saxonData/Id group defaults an xs:ENTITY to a name its
+	// document never declared, and that is the defect this check exists for.
+	if !tree.HasUnparsedEntities() {
+		return nil
+	}
+	if _, _, _, ok := tree.UnparsedEntity(name); ok {
+		return nil
+	}
+	return &ParseError{
+		Code: "cvc-datatype-valid.1.2.1",
+		Message: "\"" + truncate(name) +
+			"\" names no unparsed entity declared in the document",
+	}
 }

@@ -3302,12 +3302,45 @@ func TestDefaultedEntityCannotResolve(t *testing.T) {
 	  </xs:element>
 	</xs:schema>`)
 
-	if err := check11(t, s, `<p/>`); err == nil {
-		t.Error("a defaulted xs:ENTITY names no declared entity")
+	// A document that declares NO unparsed entity gives nothing to judge an
+	// xs:ENTITY value against, and both the defaulted and the written form
+	// are left unchecked rather than refused. That is not XML 1.0 section
+	// 3.3.1's letter, but it is what Saxon does: the XSLT suite's as-34.xml
+	// declares two PARSED entities, names them in an xs:ENTITIES attribute,
+	// and Saxon's own reported results pass as-3401, match-208 and match-209.
+	if err := check11(t, s, `<p/>`); err != nil {
+		t.Errorf("no DTD at all: nothing to check against, got %v", err)
 	}
-	// A written one is not refused; it is simply unchecked.
 	if err := check11(t, s, `<p entity="whatever">x</p>`); err != nil {
-		t.Errorf("a written xs:ENTITY should not be refused: %v", err)
+		t.Errorf("no DTD at all: nothing to check against, got %v", err)
+	}
+
+	// Once the document DOES declare an unparsed entity the rule applies in
+	// full, which is the saxonData/Id group's case: a value naming something
+	// the document never declared is invalid.
+	decl := `<!DOCTYPE p [<!ENTITY entity-ref SYSTEM "u" NDATA GIF>` +
+		`<!NOTATION GIF SYSTEM "g">]>`
+	for _, tc := range []struct {
+		name, doc string
+		wantErr   bool
+	}{
+		{"declared name accepted", decl + `<p entity="entity-ref">x</p>`, false},
+		{"undeclared name refused", decl + `<p entity="nosuch">x</p>`, true},
+		{"defaulted declared name accepted", decl + `<p>x</p>`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tree, err := xdm.ParseString(tc.doc, xdm.ParseOptions{AllowDOCTYPE: true})
+			if err != nil {
+				t.Fatalf("parsing the instance: %v", err)
+			}
+			err = s.Validate(tree.Root, ValidateOptions{})
+			if tc.wantErr && err == nil {
+				t.Error("a value naming no declared unparsed entity should be refused")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("a declared unparsed entity should be accepted: %v", err)
+			}
+		})
 	}
 }
 

@@ -35,7 +35,7 @@ TestQT3XQuery   30346 XQuery-3.1
 TestXSLT30Suite 11518 XSLT-3.0
 TestXSLTSuite   6201  XSLT-2.0
 XSD10           39388 XSD-1.0
-XSD11           41576 XSD-1.1
+XSD11           41598 XSD-1.1
 XSD10S          14388 XSD-1.0-schema
 XSD10I          25000 XSD-1.0-instance
 XSD11S          15354 XSD-1.1-schema
@@ -131,7 +131,7 @@ done
 # XQuery, XSLT 2.0, XSLT 3.0, XSD 1.0 and XSD 1.1. The XSD schema/instance
 # split rows are components of XSD10/XSD11 and must not be added twice.
 want_total=0
-for key_denom in 'TestQT3XQuery 30346' 'TestXSLT30Suite 11518' 'TestXSLTSuite 6201' 'XSD10 39388' 'XSD11 41576'; do
+for key_denom in 'TestQT3XQuery 30346' 'TestXSLT30Suite 11518' 'TestXSLTSuite 6201' 'XSD10 39388' 'XSD11 41598'; do
 	key=${key_denom% *}
 	denom=${key_denom#* }
 	pass=$(sed -n "s/^$key \([0-9]*\)$/\1/p" "$RATCHET" | head -1)

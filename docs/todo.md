@@ -8,7 +8,7 @@ Current position:
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,349 / 15,354 (99.97%) | 26,196 / 26,222 (99.90%) |
+| XSD 1.1 | 15,349 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
 <!-- BEGIN GENERATED STATUS TABLE -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->

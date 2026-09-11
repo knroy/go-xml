@@ -37,13 +37,13 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
 | **xslt** | W3C XSLT 3.0 | 11,518 | 11,484 | 99.70% | **34** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
-| **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** |
+| **xsd** | W3C xsdtests 1.1 | 41,598 | 41,566 | 99.92% | **32** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 577 | 577 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **104** |
+| | **Total** | | | | **105** |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 34 + 30 + 31 + 0 = 104. Measured 2026-09-11.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 34 + 30 + 32 + 0 = 105. Measured 2026-09-11.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
@@ -337,9 +337,9 @@ vocabulary. Flipping the feature flag on without §19.8 would claim streaming
 while never refusing a non-streamable stylesheet, which is why the flag stays
 off.
 
-## xsd — 61 disagreements
+## xsd — 62 disagreements
 
-**XSD 1.0 — 39,358 / 39,388 = 99.92%. XSD 1.1 — 41,545 / 41,576 = 99.93%.**
+**XSD 1.0 — 39,358 / 39,388 = 99.92%. XSD 1.1 — 41,566 / 41,598 = 99.92%.**
 
 The XSD suite measures **agreement with the expected verdict** on each schema
 and instance, which is a different shape from a pass/fail case count. A
