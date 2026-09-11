@@ -356,6 +356,19 @@ type Schema struct {
 	// schema reports stable between runs.
 	allComplexTypes []*ComplexType
 
+	// typeEnv owns this schema's derivation, list and union facts.
+	//
+	// It is per-assembly rather than process-global. The tables in xdm are
+	// keyed by type NAME alone, so two schemas that reuse a lexical name for
+	// different definitions share one entry and the entry holds whatever
+	// schema loaded last. This environment cannot collide that way, because
+	// it belongs to one assembly; and it outlives nothing that can reach it,
+	// because the schema holds it. Nothing evicts from it.
+	//
+	// It is populated alongside the global tables as the schema is assembled,
+	// so the two never disagree about a name only one schema defines.
+	typeEnv *xdm.TypeEnvironment
+
 	// models caches compiled content models, keyed by complex type. It is
 	// a sync.Map because the access pattern is write-once then read-many —
 	// after the first document there are no more writes — and because a
@@ -396,6 +409,7 @@ func NewSchema() *Schema {
 		ModelGroups:         map[xdm.QName]*ModelGroupDef{},
 		Notations:           map[xdm.QName]*NotationDecl{},
 		identityConstraints: map[xdm.QName]*IdentityConstraint{},
+		typeEnv:             xdm.NewTypeEnvironment(),
 	}
 	for name, t := range builtinTypes() {
 		s.Types[name] = t
