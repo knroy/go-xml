@@ -266,6 +266,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	cur := tree.Root
 	depth := 0
 	sawRoot := false
+	sawDecl := false
+	sawPrologToken := false
+	sawDoctype := false
 	// Attribute defaults declared by an ATTLIST in the internal subset. Kept
 	// as a slice because a document rarely declares more than a handful, and
 	// the common case is none at all.
@@ -301,6 +304,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 
 		switch t := tok.(type) {
 		case xml.StartElement:
+			sawPrologToken = true
 			depth++
 			if depth > maxDepth {
 				return nil, fmt.Errorf("parse XML: nesting exceeds %d levels: %w",
@@ -314,6 +318,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			}
 			if len(attDefaults) > 0 {
 				t = applyAttDefaults(t, attDefaults)
+			}
+			if err := validateStartElement(t, cur, dec.IsVersion11()); err != nil {
+				return nil, err
 			}
 			el := buildElement(t, cur, encodeOffset(start, trackPos))
 			// A node written inside an external parsed entity takes its base
@@ -375,20 +382,33 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// CharData is only meaningful inside an element; whitespace at the
 			// document level is legal and carries no information.
 			if cur == tree.Root {
-				if strings.TrimSpace(string(t)) != "" {
+				if !isXMLWhitespace(string(t), dec.IsVersion11()) {
 					return nil, fmt.Errorf("parse XML: character data outside root element")
 				}
+				sawPrologToken = true
 				continue
 			}
 			appendText(cur, string(t))
 
 		case xml.Comment:
+			sawPrologToken = true
 			cur.AppendChild(&Node{Kind: KindComment, Value: string(t)})
 
 		case xml.ProcInst:
 			if strings.EqualFold(t.Target, "xml") {
+				if t.Target != "xml" {
+					return nil, fmt.Errorf("parse XML: processing-instruction target %q is reserved", t.Target)
+				}
+				if sawDecl || sawPrologToken || sawRoot || sawDoctype {
+					return nil, fmt.Errorf("parse XML: XML declaration must appear at the start of the document")
+				}
+				if err := validateXMLDecl(string(t.Inst)); err != nil {
+					return nil, err
+				}
+				sawDecl = true
 				continue // the XML declaration is not a PI node in the XDM
 			}
+			sawPrologToken = true
 			pi := &Node{
 				Kind:  KindPI,
 				Name:  QName{Local: t.Target},
@@ -404,7 +424,13 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 
 		case xml.Directive:
 			d := strings.TrimSpace(string(t))
-			if strings.HasPrefix(d, "DOCTYPE") && !opts.AllowDOCTYPE {
+			if !isDOCTYPEDirective(d) {
+				return nil, fmt.Errorf("parse XML: markup declaration %q is not a DOCTYPE", d)
+			}
+			if sawDoctype || sawRoot || cur != tree.Root {
+				return nil, fmt.Errorf("parse XML: DOCTYPE declaration must appear once before the document element")
+			}
+			if !opts.AllowDOCTYPE {
 				return nil, fmt.Errorf("parse XML: DOCTYPE declaration rejected " +
 					"(set AllowDOCTYPE to permit its internal declarations; " +
 					"reading external entities additionally requires " +
@@ -419,7 +445,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// Only defaults are read. Nothing here expands an entity,
 			// resolves an external identifier, or reads a file, so this does
 			// not widen what AllowDOCTYPE admits.
-			if strings.HasPrefix(d, "DOCTYPE") {
+			if isDOCTYPEDirective(d) {
+				sawDoctype = true
+				sawPrologToken = true
 				// Retained so a caller can validate against the document's
 				// own DTD; see Tree.DocType.
 				tree.DocType = d
