@@ -12,6 +12,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 |---|---|
 | **An independent model for XSD wildcard acceptance and the UPA rule** | The wildcard rules are set membership, so the oracle is the spec text: §3.10.4.2 and §3.10.4.3 as clauses over sets, checked against `AllowsName` and the real `checkUPA` across 60,000 generated pairs with a fixed seed. It calls none of the matcher's own predicates -- a model that consults the implementation can only find inconsistency, never error. |
 | **The foundation of the XSLT 3.0 §19.8 streamability analysis** | §19 infers a posture and sweep for every construct and refuses a free-ranging one with `XTSE3430`. The lattice and the §19.8.8 XPath rules are implemented; an unmodelled construct is "no opinion", not a rejection. |
+| **Three function families bind against their declared types** | The call-binding table carried 21 of the manifest's 272 entries; the numeric, non-regex string and temporal families take it to 88. A parameter F&O 3.1 declares without `?` now refuses an empty sequence at the call rather than in a hand-written guard, and `TestMigratedSignaturesMatchManifest` fails the build on a spelling that disagrees with the Recommendation. |
 
 ### Fixed — engine
 

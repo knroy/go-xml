@@ -50,7 +50,7 @@ import (
 // hand fix now answer the same question, and the hand fix's tests are what
 // prove they answer it the same way.
 var specSignatures = func() map[string][]string {
-	m := make(map[string][]string, len(builtinSignatures)+4)
+	m := make(map[string][]string, len(builtinSignatures)+71)
 	for k, v := range builtinSignatures {
 		m[k] = v
 	}
@@ -58,6 +58,101 @@ var specSignatures = func() map[string][]string {
 	m["substring/3"] = []string{"xs:string", "xs:string?", "xs:double", "xs:double"}
 	m["subsequence/2"] = []string{"item()*", "item()*", "xs:double"}
 	m["subsequence/3"] = []string{"item()*", "item()*", "xs:double", "xs:double"}
+
+	// The numeric family, F&O 3.1 4.4 and 4.5, taken from the manifest.
+	//
+	// Most of its parameters are declared "?" or "*", so they constrain
+	// nothing new; the rows that do are fn:round/2 and
+	// fn:round-half-to-even/2, whose $precision is xs:integer with no "?",
+	// and fn:min/2 and fn:max/2, whose $collation is xs:string with no "?".
+	// Those four are the empty-sequence arm this family adds, and they are
+	// the same defect class commit 7668773 fixed by hand for fn:round/1.
+	m["abs/1"] = []string{"xs:numeric?", "xs:numeric?"}
+	m["ceiling/1"] = []string{"xs:numeric?", "xs:numeric?"}
+	m["floor/1"] = []string{"xs:numeric?", "xs:numeric?"}
+	m["round/1"] = []string{"xs:numeric?", "xs:numeric?"}
+	m["round/2"] = []string{"xs:numeric?", "xs:numeric?", "xs:integer"}
+	m["round-half-to-even/1"] = []string{"xs:numeric?", "xs:numeric?"}
+	m["round-half-to-even/2"] = []string{"xs:numeric?", "xs:numeric?", "xs:integer"}
+	m["avg/1"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*"}
+	m["min/1"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*"}
+	m["min/2"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*", "xs:string"}
+	m["max/1"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*"}
+	m["max/2"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*", "xs:string"}
+	m["sum/1"] = []string{"xs:anyAtomicType", "xs:anyAtomicType*"}
+	m["sum/2"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*", "xs:anyAtomicType?"}
+
+	// The string family, F&O 3.1 5.2 to 5.6, excluding the regex functions
+	// of 5.6.1 onwards: those take a $flags and a $pattern whose proformas
+	// interact with the regex engine's own diagnostics, so they belong to a
+	// later commit that can compare FORX error codes.
+	//
+	// The rows that constrain anything new are the collation arguments --
+	// $collation is xs:string with no "?" throughout -- and fn:translate/3,
+	// whose $map and $trans are xs:string where $arg is xs:string?.
+	m["upper-case/1"] = []string{"xs:string", "xs:string?"}
+	m["lower-case/1"] = []string{"xs:string", "xs:string?"}
+	m["translate/3"] = []string{"xs:string", "xs:string?", "xs:string", "xs:string"}
+	m["string-join/1"] = []string{"xs:string", "xs:anyAtomicType*"}
+	m["string-join/2"] = []string{"xs:string", "xs:anyAtomicType*", "xs:string"}
+	m["substring-before/2"] = []string{"xs:string", "xs:string?", "xs:string?"}
+	m["substring-before/3"] = []string{"xs:string", "xs:string?", "xs:string?", "xs:string"}
+	m["substring-after/2"] = []string{"xs:string", "xs:string?", "xs:string?"}
+	m["substring-after/3"] = []string{"xs:string", "xs:string?", "xs:string?", "xs:string"}
+	m["contains/2"] = []string{"xs:boolean", "xs:string?", "xs:string?"}
+	m["contains/3"] = []string{"xs:boolean", "xs:string?", "xs:string?", "xs:string"}
+	m["starts-with/2"] = []string{"xs:boolean", "xs:string?", "xs:string?"}
+	m["starts-with/3"] = []string{"xs:boolean", "xs:string?", "xs:string?", "xs:string"}
+	m["ends-with/2"] = []string{"xs:boolean", "xs:string?", "xs:string?"}
+	m["ends-with/3"] = []string{"xs:boolean", "xs:string?", "xs:string?", "xs:string"}
+	m["compare/2"] = []string{"xs:integer?", "xs:string?", "xs:string?"}
+	m["compare/3"] = []string{"xs:integer?", "xs:string?", "xs:string?", "xs:string"}
+	m["codepoint-equal/2"] = []string{"xs:boolean?", "xs:string?", "xs:string?"}
+	m["codepoints-to-string/1"] = []string{"xs:string", "xs:integer*"}
+	m["string-to-codepoints/1"] = []string{"xs:integer*", "xs:string?"}
+	m["normalize-unicode/1"] = []string{"xs:string", "xs:string?"}
+	m["normalize-unicode/2"] = []string{"xs:string", "xs:string?", "xs:string"}
+	m["encode-for-uri/1"] = []string{"xs:string", "xs:string?"}
+	m["iri-to-uri/1"] = []string{"xs:string", "xs:string?"}
+	m["escape-html-uri/1"] = []string{"xs:string", "xs:string?"}
+
+	// The temporal family, F&O 3.1 8.2 to 8.4: the component extraction
+	// functions, the timezone adjustments and fn:dateTime.
+	//
+	// Every parameter here is declared "?" except the $timezone of the three
+	// adjustments, which is xs:dayTimeDuration? as well -- the absent
+	// timezone is meaningful for those. So this family adds no
+	// empty-sequence refusal at all; what it adds is the too-many-items arm
+	// for thirty-six functions that previously took a sequence of any length
+	// where the spec declares at most one item.
+	m["year-from-dateTime/1"] = []string{"xs:integer?", "xs:dateTime?"}
+	m["month-from-dateTime/1"] = []string{"xs:integer?", "xs:dateTime?"}
+	m["day-from-dateTime/1"] = []string{"xs:integer?", "xs:dateTime?"}
+	m["hours-from-dateTime/1"] = []string{"xs:integer?", "xs:dateTime?"}
+	m["minutes-from-dateTime/1"] = []string{"xs:integer?", "xs:dateTime?"}
+	m["seconds-from-dateTime/1"] = []string{"xs:decimal?", "xs:dateTime?"}
+	m["timezone-from-dateTime/1"] = []string{"xs:dayTimeDuration?", "xs:dateTime?"}
+	m["year-from-date/1"] = []string{"xs:integer?", "xs:date?"}
+	m["month-from-date/1"] = []string{"xs:integer?", "xs:date?"}
+	m["day-from-date/1"] = []string{"xs:integer?", "xs:date?"}
+	m["timezone-from-date/1"] = []string{"xs:dayTimeDuration?", "xs:date?"}
+	m["hours-from-time/1"] = []string{"xs:integer?", "xs:time?"}
+	m["minutes-from-time/1"] = []string{"xs:integer?", "xs:time?"}
+	m["seconds-from-time/1"] = []string{"xs:decimal?", "xs:time?"}
+	m["timezone-from-time/1"] = []string{"xs:dayTimeDuration?", "xs:time?"}
+	m["years-from-duration/1"] = []string{"xs:integer?", "xs:duration?"}
+	m["months-from-duration/1"] = []string{"xs:integer?", "xs:duration?"}
+	m["days-from-duration/1"] = []string{"xs:integer?", "xs:duration?"}
+	m["hours-from-duration/1"] = []string{"xs:integer?", "xs:duration?"}
+	m["minutes-from-duration/1"] = []string{"xs:integer?", "xs:duration?"}
+	m["seconds-from-duration/1"] = []string{"xs:decimal?", "xs:duration?"}
+	m["adjust-dateTime-to-timezone/1"] = []string{"xs:dateTime?", "xs:dateTime?"}
+	m["adjust-dateTime-to-timezone/2"] = []string{"xs:dateTime?", "xs:dateTime?", "xs:dayTimeDuration?"}
+	m["adjust-date-to-timezone/1"] = []string{"xs:date?", "xs:date?"}
+	m["adjust-date-to-timezone/2"] = []string{"xs:date?", "xs:date?", "xs:dayTimeDuration?"}
+	m["adjust-time-to-timezone/1"] = []string{"xs:time?", "xs:time?"}
+	m["adjust-time-to-timezone/2"] = []string{"xs:time?", "xs:time?", "xs:dayTimeDuration?"}
+	m["dateTime/2"] = []string{"xs:dateTime?", "xs:date?", "xs:time?"}
 	return m
 }()
 
