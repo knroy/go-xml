@@ -100,6 +100,15 @@ func registerHOFuncs(l *Library) {
 			return xdm.Empty(), nil
 		}
 		item := functionItemFor(name, n, fn.Call)
+		// The signature rides along for the same reason the focus does: F&O
+		// 16.4.3 makes this behave like a named function reference, and
+		// NamedFunctionRef.Eval assigns it. Without this line the two ways of
+		// obtaining one function item answer "instance of" differently --
+		// subtype.go judges an item carrying no signature on arity alone,
+		// which is right for an inline function that was never declared and
+		// wrong for fn:abs, whose declaration the manifest holds. Dropping it
+		// let fn:abs#1 match function(xs:date) as xs:integer.
+		item.Signature = fn.Signature
 		// F&O 16.4.3 makes fn:function-lookup behave like a named function
 		// reference in this respect: a context-dependent function it returns
 		// carries the context of the fn:function-lookup call, not of whatever
@@ -318,11 +327,24 @@ func singleBoolean(seq xdm.Sequence, fn string) (bool, error) {
 	return a.Bool(), nil
 }
 
-// maxLookupArity bounds the arity fn:function-lookup will look up.
+// maxVariadicArity bounds the arity at which a variadic function is answered,
+// by EVERY route: fn:function-lookup and the named reference "concat#N".
 //
 // No function item can be built, let alone called, at an arity beyond what a
-// Go argument slice can hold, so a larger arity names nothing and the lookup
+// Go argument slice can hold, so a larger arity names nothing and the answer
 // is empty — which is what F&O 3.0 16.1.1 prescribes for a name and arity
 // that identify no function. The value is far above concatMaxArity, the
 // largest arity anything in the library is registered at.
-const maxLookupArity = 1 << 20
+//
+// It is enforced in synthesizeVariadic, which is where the two routes meet.
+// Enforcing it at fn:function-lookup alone was the earlier shape, and it was
+// wrong in both directions: it made the two routes disagree above 2^20, and
+// it left concat#9223372036854775807 -- the exact saturation value this
+// bound exists to refuse -- reachable through the named reference.
+const maxVariadicArity = 1 << 20
+
+// maxLookupArity is the same bound under the name fn:function-lookup's own
+// range check uses. They are deliberately one value: a lookup that converted
+// exactly but left the range open would answer at an arity synthesizeVariadic
+// then refuses, which is a disagreement inside one expression.
+const maxLookupArity = maxVariadicArity

@@ -228,3 +228,187 @@ func TestFunctionSubtypingAcrossItemKinds(t *testing.T) {
 		}
 	}
 }
+
+// TestFunctionLookupCarriesTheSameSignatureAsANamedReference pins the two ways
+// of obtaining one standard function item against each other.
+//
+// F&O 16.4.3 makes fn:function-lookup return the same function item a named
+// function reference would, so "fn:abs#1" and "function-lookup(xs:QName('fn:abs'),1)"
+// must answer every typed function test identically. They did not:
+// NamedFunctionRef.Eval assigns Signature (funcitem.go) and the
+// fn:function-lookup callback built the item without it, so the looked-up item
+// reached functionItemMatches carrying no signature and was judged on ARITY
+// ALONE -- the permissive branch written for inline functions that were never
+// declared. fn:abs#1 correctly refused function(xs:date) as xs:integer while
+// the looked-up fn:abs accepted it: one function item, two opposite answers.
+//
+// The negative cases are the ones that catch the regression. A test that only
+// asserted the two agree on a type they both match would pass with the
+// signature dropped, because arity-only matching says "true" to everything.
+func TestFunctionLookupCarriesTheSameSignatureAsANamedReference(t *testing.T) {
+	doc, err := xdm.ParseString(`<p>x</p>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// fn:function-lookup is context-dependent, so it needs a focus; the named
+	// reference does not care, and both are evaluated under the same context
+	// so that the focus cannot be what makes them differ.
+	eval := func(expr string) bool {
+		t.Helper()
+		ctx := NewContext(doc.Root, Builtins())
+		ctx.Version = XPath31
+		ctx.LibraryVersion = XPath31
+		seq, err := Eval(expr, ctx, cardinalityNS{})
+		if err != nil {
+			t.Fatalf("%s: %v", expr, err)
+		}
+		if len(seq) != 1 {
+			t.Fatalf("%s: got %d items, want 1", expr, len(seq))
+		}
+		a, ok := seq[0].(*xdm.Atomic)
+		if !ok {
+			t.Fatalf("%s: got %T, want xs:boolean", expr, seq[0])
+		}
+		return a.String() == "true"
+	}
+
+	tests := []struct {
+		test string
+		want bool
+		why  string
+	}{
+		{"function(xs:date) as xs:integer", false,
+			"fn:abs is declared xs:numeric? -> xs:numeric?, which is neither"},
+		{"function(xs:double) as xs:double", false,
+			"xs:numeric? does not subsume the required xs:double return"},
+		{"function(*)", true, "every function item is a function(*)"},
+		{"function(xs:numeric?) as xs:numeric?", true,
+			"fn:abs's own declared signature"},
+	}
+	for _, tc := range tests {
+		named := eval("fn:abs#1 instance of " + tc.test)
+		looked := eval(`function-lookup(xs:QName("fn:abs"),1) instance of ` + tc.test)
+		if named != looked {
+			t.Errorf("fn:abs#1 instance of %s = %v, but the same function "+
+				"item from fn:function-lookup = %v; F&O 16.4.3 makes them the "+
+				"same item, so a typed function test cannot tell them apart",
+				tc.test, named, looked)
+		}
+		if named != tc.want {
+			t.Errorf("fn:abs#1 instance of %s = %v, want %v (%s)",
+				tc.test, named, tc.want, tc.why)
+		}
+	}
+}
+
+// TestFunctionLookupItemCarriesTheManifestSignature reads the field directly,
+// so a regression is reported as the missing signature it is rather than as a
+// downstream "instance of" answer.
+func TestFunctionLookupItemCarriesTheManifestSignature(t *testing.T) {
+	doc, err := xdm.ParseString(`<p>x</p>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewContext(doc.Root, Builtins())
+	ctx.Version = XPath31
+	ctx.LibraryVersion = XPath31
+	seq, err := Eval(`function-lookup(xs:QName("fn:abs"),1)`, ctx, cardinalityNS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seq) != 1 {
+		t.Fatalf("got %d items, want 1", len(seq))
+	}
+	item, ok := seq[0].(*xdm.FunctionItem)
+	if !ok {
+		t.Fatalf("got %T, want *xdm.FunctionItem", seq[0])
+	}
+	// Arity+1: the result type followed by one entry per parameter.
+	if len(item.Signature) != item.Arity+1 {
+		t.Fatalf("fn:function-lookup returned fn:abs#1 with Signature %v "+
+			"(%d entries); want %d, the manifest signature a named function "+
+			"reference carries", item.Signature, len(item.Signature), item.Arity+1)
+	}
+	fn, ok := Builtins().Lookup(xdm.QName{URI: xdm.NSFN, Local: "abs"}, 1)
+	if !ok {
+		t.Fatal("fn:abs#1 is not registered")
+	}
+	for i, want := range fn.Signature {
+		if item.Signature[i] != want {
+			t.Errorf("Signature[%d] = %q, want %q (the registered signature)",
+				i, item.Signature[i], want)
+		}
+	}
+}
+
+// TestVariadicArityBoundIsTheSameByEveryRoute pins the two ways of naming a
+// variadic function against each other.
+//
+// fn:concat is registered over a fixed arity range and SYNTHESISED above it,
+// so both "concat#N" and fn:function-lookup can answer at an arity no entry
+// exists for. The bound on that synthesis used to live at fn:function-lookup
+// only, which was wrong twice over: the two routes disagreed above 2^20
+// (concat#5000000 resolved while the lookup was empty), and the saturation
+// value the bound exists to refuse stayed reachable through the named
+// reference -- concat#9223372036854775807 built a function item claiming an
+// arity of 2^63-1, which no argument slice can hold.
+//
+// The bound now sits in synthesizeVariadic, where both routes meet.
+//
+// The two routes report the refusal differently, and that is correct rather
+// than a leftover: a named function reference to something unknown is a
+// static error (XPST0017), while F&O 3.0 16.1.1 makes fn:function-lookup
+// return the empty sequence. So this asserts "neither yields a function item",
+// not "both raise the same thing".
+func TestVariadicArityBoundIsTheSameByEveryRoute(t *testing.T) {
+	doc, err := xdm.ParseString(`<p>x</p>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answers := func(expr string) bool {
+		t.Helper()
+		ctx := NewContext(doc.Root, Builtins())
+		ctx.Version = XPath31
+		ctx.LibraryVersion = XPath31
+		// The expression is an exists(...), so the answer is the boolean it
+		// yields -- NOT whether one item came back. exists() returns false as
+		// a perfectly good single item, which read as "answered" and made this
+		// helper report the opposite of the truth for every refusal.
+		seq, err := Eval(expr, ctx, cardinalityNS{})
+		if err != nil {
+			return false // XPST0017 from the named route
+		}
+		if len(seq) != 1 {
+			t.Fatalf("%s: got %d items, want 1", expr, len(seq))
+		}
+		a, ok := seq[0].(*xdm.Atomic)
+		if !ok {
+			t.Fatalf("%s: got %T, want xs:boolean", expr, seq[0])
+		}
+		return a.String() == "true"
+	}
+
+	for _, tc := range []struct {
+		arity string
+		want  bool
+		why   string
+	}{
+		{"123456", true, "the QT3 and XSLT 3.0 suites both reference concat#123456"},
+		{"1048576", true, "exactly the bound, which is inclusive"},
+		{"1048577", false, "one past the bound"},
+		{"9223372036854775807", false,
+			"the saturation value; no argument slice can hold it"},
+	} {
+		named := answers("exists(concat#" + tc.arity + ")")
+		looked := answers(`exists(function-lookup(xs:QName("fn:concat"),` + tc.arity + `))`)
+		if named != looked {
+			t.Errorf("concat#%s yields a function item = %v, but "+
+				"function-lookup(fn:concat, %s) = %v; one bound governs both "+
+				"routes, so they cannot disagree", tc.arity, named, tc.arity, looked)
+		}
+		if named != tc.want {
+			t.Errorf("concat#%s yields a function item = %v, want %v (%s)",
+				tc.arity, named, tc.want, tc.why)
+		}
+	}
+}
