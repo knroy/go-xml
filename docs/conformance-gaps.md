@@ -160,6 +160,55 @@ The remaining singleton is read here.
 |---|---|---|
 | `prod-ContextItemDecl/contextDecl-052` | **A W3C fixture defect** | The case registers `ContextItemDecl/libmodule-3.xq` under the namespace `…/libmodule3`, and the file declares `…/libmodule1`. §4.12 makes a module that declares another target namespace a module that was not found, so `XQST0059` is correct and precedes the wanted `XQST0113` — which we do implement, and which `TestContextItemDeclInLibraryModuleRejectsValue` pins. Reordering the two would mean fully compiling a module already known to be the wrong one, and would cost `modules-bad-ns`. |
 
+### Second, independent adjudication of `contextDecl-052` (2026-09-11)
+
+The row above is one reading. This is a separate pass, reached without reading
+it: the verdict below was derived from the fixture, the module file, the
+vendored XQuery 3.1 spec and the engine's observed behaviour, and written down
+before the row was opened. It **agrees** — the case is a W3C fixture defect and
+`XQST0059` is correct — and adds four things the row does not say.
+
+**A counterfactual isolates the cause.** Running the case's query against
+`libmodule-3.xq` verbatim gives `XQST0059: the module found for namespace
+"…/libmodule3" declares the target namespace "…/libmodule1" instead`. Changing
+the module's declaration to say `libmodule3` and *nothing else* gives
+`XQST0113: a context item declaration in a library module may not specify a
+value`. The engine already produces the expected error the moment the fixture
+is self-consistent, so the defect is the registration, not the analysis.
+
+**A sibling control shows the mismatch is a one-off.** `contextDecl-048`
+registers `libmodule-1.xq` under `libmodule1`, which is what that file
+declares, and expects the same `XQST0113` — and passes. `contextDecl-049`,
+`-050` and `-051` are likewise self-consistent on `libmodule2`. Only `-052`
+registers a file under a namespace the file does not declare; `libmodule3`
+occurs nowhere else in the suite. `libmodule-3.xq` is a copy of `libmodule-1.xq`
+whose module declaration was never updated.
+
+**The fixture's intent is sound, only its wiring is broken.** `libmodule-3.xq`
+does contain the `:= 17` initialiser that `XQST0113` exists to forbid, so the
+case is testing something real and is worth repairing upstream rather than
+deleting.
+
+**No shipped result exists to appeal to.** Unlike XSLT, where
+`testdata/xslt30-test/report/results_XSLT*.xml` can settle a dispute, QT3 ships
+no expected-results report: `testdata/qt3tests/` contains no `results_*.xml`,
+`releases/` holds only `QT3_1_0.zip`, and the `Saxon*` files are the SaxonJS
+viewer runtime. The only file in the suite naming `contextDecl` is the fixture.
+This adjudication therefore rests on spec text plus the counterfactual, and no
+Saxon verdict contradicts it.
+
+The ordering the row relies on is visible in the code: `xquery/module.go`
+compares the declared namespace against the requested one right after
+`parseModuleDecl()` and returns `XQST0059` before `parseProlog()` runs, which
+is where `xquery/prolog.go` raises `XQST0113`. §4.12 requires that order.
+
+This second pass is recorded here rather than in
+`tests/conformance/results.json` because that file's `Case` schema carries only
+`id`, `verdict` and `note`, and is decoded with `DisallowUnknownFields`: there
+is no field for a second, separately attributed adjudication, and adding one
+would be inventing schema. The JSON's `note` continues to record the standing
+verdict, which this pass confirms.
+
 ## xslt 2.0 — 8 failures
 
 All eight are deliberate divergences, verified not ours. They are read in
