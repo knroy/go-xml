@@ -689,6 +689,33 @@ there is no validation run to be the episode. The per-element path fixed above
 is the one that scales with document size; this one scales with the number of
 values, and threading a budget to it is a wider change than this entry.
 
+### 2.4 Three spec divergences the ninth audit found and left open
+
+**Open.** The 2026-09-11 line-by-line audit against the five Recommendations
+confirmed these and they are not fixed. None has a W3C suite case, which is
+why every conformance lane stayed green across the four fixes committed beside
+them — see
+[audits/2026-09-11-spec-divergence-full.md](audits/2026-09-11-spec-divergence-full.md).
+
+* **`xsl:output/@normalization-form` and `@json-node-output-method` carry no
+  enumeration** in `xslt/elementtable.go`. Both have a closed set in the REC,
+  so a misspelling is accepted in silence. The sibling attributes on the same
+  element were enumerated in `1b7a25a`; these two were left because
+  `json-node-output-method` is also one of the nine "answered differently
+  depending on how it is spelled" splits — the map path is unvalidated where
+  the element path is checked — and narrowing the element alone would widen
+  that split rather than close it.
+
+* **XQST0104 is raised as XQDY0084** — a dynamic error where XQuery 3.1 wants
+  a static one, for `validate type T` with `T` out of scope. This did *not*
+  reproduce as the audit stated it; the real QT3 case (`validate-as-91011`)
+  imports a schema first, so the defect is a different one than the row
+  describes. It needs re-diagnosis before it needs a fix.
+
+* **`xslt/staticcheck.go:112` hardcodes "is not an XSLT 2.0 element"** in a
+  diagnostic that a 3.0 stylesheet can reach, so the message names the wrong
+  version. Cosmetic, but it is the error text a user sees.
+
 ---
 
 ## 3. Verification gaps
