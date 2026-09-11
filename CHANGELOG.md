@@ -17,7 +17,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | Three rooted resolvers checked containment and then opened, so only `xslt` enforced its root at open time | `xsd`, `dtd` and the CLI's RELAX NG resolver open through `os.OpenRoot`; the string check stays as diagnosis, not enforcement. | [`37972d9`][37972d9] |
-| `fn:transform` accepted the `post-process` option and ignored it, so a pipeline silently ran one stage short | The function is applied to every result document after delivery, and an option name the processor does not know is now `FOXT0002` rather than silence. Reported as issue #5. | [`PLACEHOLDER`][PLACEHOLDER] |
+| `fn:transform` accepted the `post-process` option and ignored it, so a pipeline silently ran one stage short | The function is applied to every result document after delivery, and an option name the processor does not know is now `FOXT0002` rather than silence. Reported as issue #5. | [`e8ebf4b`][e8ebf4b] |
 | `fn:parse-json` and `fn:json-to-xml` recursed once per nesting level with nothing counting them | `maxJSONDepth` bounds nesting at 1000, matching the XML parser's own depth limit. | [`9660e52`][9660e52] |
 | The CLI's RELAX NG resolver read a schema whole, the only resolver in the library with no byte limit | `DefaultMaxRNGBytes` bounds one schema at 16 MB, matching `xsd`. | [`f29b554`][f29b554] |
 | Template recursion and an oversize range refused without the resource sentinel, so a caller could not classify them | Both wrap `xdm.ErrResourceLimit`; the range also carries `XPDY0130`, as its counted twin already did. | [`57a2b64`][57a2b64] |
@@ -669,6 +669,7 @@ here so every entry in this file sits under a release.
 [b4c4bb2]: https://github.com/knroy/go-xml/commit/b4c4bb2
 [b50b373]: https://github.com/knroy/go-xml/commit/b50b373
 [8e0f44d]: https://github.com/knroy/go-xml/commit/8e0f44d
+[e8ebf4b]: https://github.com/knroy/go-xml/commit/e8ebf4b
 [9660e52]: https://github.com/knroy/go-xml/commit/9660e52
 [f29b554]: https://github.com/knroy/go-xml/commit/f29b554
 [57a2b64]: https://github.com/knroy/go-xml/commit/57a2b64
