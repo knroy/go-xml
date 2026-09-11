@@ -385,10 +385,11 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				}
 				opts.method = m
 			case "omit-xml-declaration":
-				if err := checkYesNo(val, p.Name.Local); err != nil {
+				v, err := checkYesNo(val, p.Name.Local)
+				if err != nil {
 					return opts, err
 				}
-				opts.omitXMLDecl = val == "yes"
+				opts.omitXMLDecl = v == "yes"
 			case "standalone":
 				// The parameter's type is xs:boolean, whose lexical space
 				// permits surrounding whitespace, and the serialization spec
@@ -398,15 +399,21 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 					opts.standalone = ""
 					break
 				}
-				if err := checkYesNo(v, p.Name.Local); err != nil {
+				// Normalised rather than stored raw: XML 1.0 section 2.9
+				// admits only "yes" or "no" in an SDDecl, so writing back a
+				// "true" or a "1" the caller wrote here would emit a
+				// declaration no XML parser accepts.
+				v, err := checkYesNo(v, p.Name.Local)
+				if err != nil {
 					return opts, err
 				}
 				opts.standalone = v
 			case "indent":
-				if err := checkYesNo(val, p.Name.Local); err != nil {
+				v, err := checkYesNo(val, p.Name.Local)
+				if err != nil {
 					return opts, err
 				}
-				opts.indent = val == "yes"
+				opts.indent = v == "yes"
 			case "item-separator":
 				opts.itemSeparator, opts.hasItemSep = val, true
 			case "encoding":
@@ -425,10 +432,11 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				// used to ignore it, so the same stylesheet got namespace
 				// undeclarations from xsl:result-document and not from
 				// fn:serialize. See writeNamespaceDecls.
-				if err := checkYesNo(val, p.Name.Local); err != nil {
+				v, err := checkYesNo(val, p.Name.Local)
+				if err != nil {
 					return opts, err
 				}
-				opts.undeclarePrefixes = val == "yes"
+				opts.undeclarePrefixes = v == "yes"
 			case "cdata-section-elements":
 				// The map form honours this parameter, and this one used to
 				// drop it: the same request wrote a CDATA section through
@@ -468,10 +476,11 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 			case "allow-duplicate-names":
 				// The map form raises SERE0022 without this; the element form
 				// could not ask for the same latitude.
-				if err := checkYesNo(val, p.Name.Local); err != nil {
+				v, err := checkYesNo(val, p.Name.Local)
+				if err != nil {
 					return opts, err
 				}
-				opts.allowDuplicateNames = val == "yes"
+				opts.allowDuplicateNames = v == "yes"
 			case "suppress-indentation":
 				// A whitespace-separated list of lexical element names,
 				// resolved against the namespaces in scope on the parameter
@@ -504,22 +513,32 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				opts.doctypeSystem = val
 			case "escape-uri-attributes":
 				// xslt-rec20.xml:26434-26439, "The default value is yes."
-				if err := checkYesNo(val, p.Name.Local); err != nil {
+				norm, err := checkYesNo(val, p.Name.Local)
+				if err != nil {
 					return opts, err
 				}
-				v := val == "yes"
+				v := norm == "yes"
 				opts.escapeURIAttrs = &v
 			case "media-type",
 				"normalization-form",
 				"byte-order-mark", "include-content-type":
-				// Recognised and accepted. byte-order-mark and media-type
-				// describe an octet stream that fn:serialize never produces:
-				// F&O 3.0 14.7.2 (functions-and-operators-rec30.xml:26192)
-				// says "The final stage of serialization, that is, encoding,
-				// is skipped" and the function returns an xs:string, while
-				// xslt-rec20.xml:26373 defines the byte order mark as bytes
-				// written "at the start of the file". There is no file and no
-				// encoding here, so neither parameter has anything to act on.
+				// Recognised and accepted, and deliberately without effect
+				// here.
+				//
+				// fn:serialize returns an xs:string, so it stops short of the
+				// encoding phase that turns a character stream into octets.
+				// Serialization 3.1 section 4
+				// (testdata/xslt30-test/specs/serialization-31.html:2046-2053)
+				// makes skipping that phase an optional vendor extension whose
+				// effect is "implementation-defined", so a byte order mark --
+				// an artefact of the octet stream -- has nothing to attach to
+				// in a result that never becomes one.
+				//
+				// media-type never touches the character stream at all: the
+				// same spec (section 3, lines 1114-1123) says it annotates the
+				// destination, and "MAY be used to set the media type in an
+				// HTTP header". A returned string has no destination to
+				// annotate. xsl:output, which does write to one, honours both.
 				// xsl:output, which does write bytes, honours both.
 			default:
 				// Includes use-character-maps, a real parameter this
@@ -598,18 +617,40 @@ func readCharacterMaps(p *xdm.Node) (map[rune]string, error) {
 	return out, nil
 }
 
-// checkYesNo rejects a parameter value that is not the "yes" or "no" its type
-// allows.
+// serializeBoolAliases are the spellings of "yes" and "no" that a
+// serialization parameter value may use besides those two words themselves.
+//
+// Serialization 3.1 section 3 gives every boolean-valued parameter the
+// enumerated value space "yes, no, true, false, 1 or 0"
+// (testdata/xslt30-test/specs/serialization-31.html:1012 and the parameter
+// entries that repeat it). xslt/mode30.go has the same four-entry mapping for
+// XSLT attributes, but xslt imports xpath rather than the reverse, so it
+// cannot be shared without inverting the dependency.
+var serializeBoolAliases = map[string]string{
+	"true": "yes", "false": "no", "1": "yes", "0": "no",
+}
+
+// checkYesNo normalises a boolean parameter value to "yes" or "no", and
+// rejects a spelling outside the lexical space its type allows.
+//
+// It returns the normalised value because every caller needs it: the six
+// spellings are equal in meaning, so a caller that kept the raw text and
+// compared it against "yes" would read "true" and "1" as false and silently
+// act on the opposite of what was asked.
 //
 // The value is a boolean, so a spelling outside its lexical space means the
 // parameter document is malformed rather than that the caller asked for
 // something unsupported.
-func checkYesNo(val, name string) error {
-	switch strings.TrimSpace(val) {
-	case "yes", "no", "true", "false", "1", "0":
-		return nil
+func checkYesNo(val, name string) (string, error) {
+	v := strings.TrimSpace(val)
+	if alias, ok := serializeBoolAliases[v]; ok {
+		v = alias
 	}
-	return fmt.Errorf(
+	switch v {
+	case "yes", "no":
+		return v, nil
+	}
+	return "", fmt.Errorf(
 		"SEPM0017: serialization parameter %q takes yes or no, got %q", name, val)
 }
 
