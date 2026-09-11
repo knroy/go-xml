@@ -536,8 +536,15 @@ func compareXMLText(serialised, want string, normalizeSpace bool) (bool, string)
 	// The expected value may be a fragment with several top-level nodes,
 	// which is not a document; wrapping both makes them parseable and
 	// compares them on equal terms.
-	gotDoc, err1 := xdm.ParseString("<w>"+got+"</w>", xdm.ParseOptions{})
-	wantDoc, err2 := xdm.ParseString("<w>"+want+"</w>", xdm.ParseOptions{})
+	// The wrapper declares XML 1.1 because a namespace undeclaration,
+	// xmlns:p="", is 1.1 syntax and several namespace-26xx cases expect one in
+	// their result. This is a comparison of two fragments, not a validation of
+	// a document: parsing the expected value under a version that cannot spell
+	// it would drop both sides to the whitespace-sensitive text fallback below
+	// and report a mismatch that does not exist.
+	const wrap = `<?xml version="1.1"?><w>`
+	gotDoc, err1 := xdm.ParseString(wrap+got+"</w>", xdm.ParseOptions{})
+	wantDoc, err2 := xdm.ParseString(wrap+want+"</w>", xdm.ParseOptions{})
 	if err1 != nil || err2 != nil {
 		// Fall back to a text comparison when either side will not parse,
 		// which happens for results that are not well-formed XML by design.

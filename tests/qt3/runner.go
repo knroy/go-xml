@@ -1458,9 +1458,15 @@ func writeNodeXML(sb *strings.Builder, n *xdm.Node) {
 		for _, ns := range n.Namespaces {
 			if ns.Name.Local == "" {
 				sb.WriteString(" xmlns=\"" + escapeAttr(ns.Value) + "\"")
-			} else {
-				sb.WriteString(" xmlns:" + ns.Name.Local + "=\"" + escapeAttr(ns.Value) + "\"")
+				continue
 			}
+			// See writeNodeXMLTop: a prefixed undeclaration is a data-model
+			// marker, not XML 1.0 syntax, and writing it makes this string
+			// unparseable for the infosetEqual comparison below.
+			if ns.Value == "" {
+				continue
+			}
+			sb.WriteString(" xmlns:" + ns.Name.Local + "=\"" + escapeAttr(ns.Value) + "\"")
 		}
 		for _, a := range n.Attrs {
 			sb.WriteString(" " + a.Name.Lexical() + "=\"" + escapeAttr(a.Value) + "\"")
@@ -2458,9 +2464,18 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 	for _, ns := range n.Namespaces {
 		if ns.Name.Local == "" {
 			sb.WriteString(" xmlns=\"" + escapeAttr(ns.Value) + "\"")
-		} else {
-			sb.WriteString(" xmlns:" + ns.Name.Local + "=\"" + escapeAttr(ns.Value) + "\"")
+			continue
 		}
+		// A prefixed undeclaration, xmlns:p="", is XML 1.1 syntax that the
+		// data model uses as a marker for "not in scope here" -- copy-
+		// namespaces no-inherit puts it there. Writing it verbatim produces a
+		// string that is not an XML 1.0 document, so the final infosetEqual
+		// comparison could not parse it. Both real serialisers omit it unless
+		// undeclare-prefixes asks for it; this one does too.
+		if ns.Value == "" {
+			continue
+		}
+		sb.WriteString(" xmlns:" + ns.Name.Local + "=\"" + escapeAttr(ns.Value) + "\"")
 	}
 	for _, prefix := range extra {
 		if prefix == "" {
