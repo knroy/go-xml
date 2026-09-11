@@ -75,6 +75,23 @@ failed to 29,936 / 26.
 cases would fail if they were admitted. The `version` parameter itself now
 reaches the XML declaration there, which it did not before.
 
+`undeclare-prefixes` is not the only one. `fn:serialize` also parses and never
+reads **`indent`**, **`normalization-form`** and **`include-content-type`**.
+The asymmetry is what makes these worth naming: `xslt/serialize.go` implements
+indentation properly, so one stylesheet indents through `xsl:result-document`
+and not through `fn:serialize` — the same request answered two ways by which
+spelling was used. Porting `indent` is not a rider on another change: it needs
+mixed-content detection, subtree suppression, the HTML comment/PI exception
+and `nodeNoIndent`. Found by the 2026-09-11 spec-conformance audit.
+
+**`build-tree` is inert for the principal result.** XSLT 3.0 §26.2 names the
+principal result explicitly, so this is real drift and not an omission the
+spec permits: `xsl:result-document` honours `build-tree="no"`, `xsl:output`
+does not. It is recorded rather than fixed because the principal path defers
+tree-building to `Result.Tree()`, and a fix means deciding what
+`build-tree="no"` does to `Tree()`, `String()` and validation — a change to
+exported behaviour rather than a contained correction. Same audit.
+
 The `keySep = "\x1f"` dependency is also closed. `xsd/identity.go` is now
 length-prefixed and injective for any field content, so it no longer rests on
 U+001F being unreachable in XML 1.0 character data.
