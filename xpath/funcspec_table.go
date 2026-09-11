@@ -50,7 +50,7 @@ import (
 // hand fix now answer the same question, and the hand fix's tests are what
 // prove they answer it the same way.
 var specSignatures = func() map[string][]string {
-	m := make(map[string][]string, len(builtinSignatures)+43)
+	m := make(map[string][]string, len(builtinSignatures)+71)
 	for k, v := range builtinSignatures {
 		m[k] = v
 	}
@@ -115,6 +115,44 @@ var specSignatures = func() map[string][]string {
 	m["encode-for-uri/1"] = []string{"xs:string", "xs:string?"}
 	m["iri-to-uri/1"] = []string{"xs:string", "xs:string?"}
 	m["escape-html-uri/1"] = []string{"xs:string", "xs:string?"}
+
+	// The temporal family, F&O 3.1 8.2 to 8.4: the component extraction
+	// functions, the timezone adjustments and fn:dateTime.
+	//
+	// Every parameter here is declared "?" except the $timezone of the three
+	// adjustments, which is xs:dayTimeDuration? as well -- the absent
+	// timezone is meaningful for those. So this family adds no
+	// empty-sequence refusal at all; what it adds is the too-many-items arm
+	// for thirty-six functions that previously took a sequence of any length
+	// where the spec declares at most one item.
+	m["year-from-dateTime/1"] = []string{"xs:integer?", "xs:dateTime?"}
+	m["month-from-dateTime/1"] = []string{"xs:integer?", "xs:dateTime?"}
+	m["day-from-dateTime/1"] = []string{"xs:integer?", "xs:dateTime?"}
+	m["hours-from-dateTime/1"] = []string{"xs:integer?", "xs:dateTime?"}
+	m["minutes-from-dateTime/1"] = []string{"xs:integer?", "xs:dateTime?"}
+	m["seconds-from-dateTime/1"] = []string{"xs:decimal?", "xs:dateTime?"}
+	m["timezone-from-dateTime/1"] = []string{"xs:dayTimeDuration?", "xs:dateTime?"}
+	m["year-from-date/1"] = []string{"xs:integer?", "xs:date?"}
+	m["month-from-date/1"] = []string{"xs:integer?", "xs:date?"}
+	m["day-from-date/1"] = []string{"xs:integer?", "xs:date?"}
+	m["timezone-from-date/1"] = []string{"xs:dayTimeDuration?", "xs:date?"}
+	m["hours-from-time/1"] = []string{"xs:integer?", "xs:time?"}
+	m["minutes-from-time/1"] = []string{"xs:integer?", "xs:time?"}
+	m["seconds-from-time/1"] = []string{"xs:decimal?", "xs:time?"}
+	m["timezone-from-time/1"] = []string{"xs:dayTimeDuration?", "xs:time?"}
+	m["years-from-duration/1"] = []string{"xs:integer?", "xs:duration?"}
+	m["months-from-duration/1"] = []string{"xs:integer?", "xs:duration?"}
+	m["days-from-duration/1"] = []string{"xs:integer?", "xs:duration?"}
+	m["hours-from-duration/1"] = []string{"xs:integer?", "xs:duration?"}
+	m["minutes-from-duration/1"] = []string{"xs:integer?", "xs:duration?"}
+	m["seconds-from-duration/1"] = []string{"xs:decimal?", "xs:duration?"}
+	m["adjust-dateTime-to-timezone/1"] = []string{"xs:dateTime?", "xs:dateTime?"}
+	m["adjust-dateTime-to-timezone/2"] = []string{"xs:dateTime?", "xs:dateTime?", "xs:dayTimeDuration?"}
+	m["adjust-date-to-timezone/1"] = []string{"xs:date?", "xs:date?"}
+	m["adjust-date-to-timezone/2"] = []string{"xs:date?", "xs:date?", "xs:dayTimeDuration?"}
+	m["adjust-time-to-timezone/1"] = []string{"xs:time?", "xs:time?"}
+	m["adjust-time-to-timezone/2"] = []string{"xs:time?", "xs:time?", "xs:dayTimeDuration?"}
+	m["dateTime/2"] = []string{"xs:dateTime?", "xs:date?", "xs:time?"}
 	return m
 }()
 
