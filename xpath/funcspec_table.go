@@ -201,6 +201,33 @@ var specSignatures = func() map[string][]string {
 	m["element-with-id/2"] = []string{"element()*", "xs:string*", "node()"}
 	m["lang/1"] = []string{"xs:boolean", "xs:string?"}
 	m["lang/2"] = []string{"xs:boolean", "xs:string?", "node()"}
+
+	// The sequence family, F&O 3.1 14.1 to 14.4: the functions over
+	// sequences of items and of atomic values.
+	//
+	// The rows that constrain anything new are the $collation arguments of
+	// fn:distinct-values/2, fn:index-of/3 and fn:deep-equal/3, which are
+	// xs:string with no "?"; the $position of fn:insert-before/3 and
+	// fn:remove/2 and the $target of fn:index-of/2, which are xs:integer
+	// and xs:anyAtomicType respectively and likewise non-nullable; and
+	// fn:trace/2's $label. fn:exactly-one, fn:one-or-more and
+	// fn:zero-or-one take item()*, so they add only the too-many-items arm
+	// -- their own cardinality refusal is FORG0003..0005 raised in the
+	// callback, which this leaves untouched.
+	m["distinct-values/1"] = []string{"xs:anyAtomicType*", "xs:anyAtomicType*"}
+	m["distinct-values/2"] = []string{"xs:anyAtomicType*", "xs:anyAtomicType*", "xs:string"}
+	m["index-of/2"] = []string{"xs:integer*", "xs:anyAtomicType*", "xs:anyAtomicType"}
+	m["index-of/3"] = []string{"xs:integer*", "xs:anyAtomicType*", "xs:anyAtomicType", "xs:string"}
+	m["insert-before/3"] = []string{"item()*", "item()*", "xs:integer", "item()*"}
+	m["remove/2"] = []string{"item()*", "item()*", "xs:integer"}
+	m["unordered/1"] = []string{"item()*", "item()*"}
+	m["exactly-one/1"] = []string{"item()", "item()*"}
+	m["one-or-more/1"] = []string{"item()+", "item()*"}
+	m["zero-or-one/1"] = []string{"item()?", "item()*"}
+	m["deep-equal/2"] = []string{"xs:boolean", "item()*", "item()*"}
+	m["deep-equal/3"] = []string{"xs:boolean", "item()*", "item()*", "xs:string"}
+	m["trace/1"] = []string{"item()*", "item()*"}
+	m["trace/2"] = []string{"item()*", "item()*", "xs:string"}
 	return m
 }()
 
