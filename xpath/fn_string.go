@@ -143,7 +143,7 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(strings.Join(strings.Fields(s), " ")), nil
+		return stringResult(ctx, strings.Join(strings.Fields(s), " "))
 	})
 
 	// fn:upper-case and fn:lower-case are defined in terms of Unicode's *full*
@@ -153,20 +153,20 @@ func registerStringFuncs(l *Library) {
 	upper := cases.Upper(language.Und)
 	lower := cases.Lower(language.Und)
 
-	l.registerFn("upper-case", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("upper-case", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(upper.String(s)), nil
+		return stringResult(ctx, upper.String(s))
 	})
 
-	l.registerFn("lower-case", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("lower-case", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(lower.String(s)), nil
+		return stringResult(ctx, lower.String(s))
 	})
 
 	l.registerFn("contains", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -358,12 +358,12 @@ func registerStringFuncs(l *Library) {
 		return intSeq(int64(coll.Compare(a, b))), nil
 	})
 
-	l.registerFn("encode-for-uri", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("encode-for-uri", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(encodeForURI(s)), nil
+		return stringResult(ctx, encodeForURI(s))
 	})
 }
 

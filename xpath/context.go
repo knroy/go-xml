@@ -782,6 +782,31 @@ func (c *Context) countBytes(n int) error {
 // reaches none of the functions here that charge as they grow.
 func (c *Context) ChargeBytes(n int) error { return c.countBytes(n) }
 
+// stringResult returns one xs:string after charging the bytes it took to build
+// it, and is how a built-in that materialises a NEW string returns it.
+//
+// The charge belongs here rather than at an enclosing evaluator boundary
+// because a host language does not pass through one. LetExpr, evalFor and the
+// range operator each charge what they bind, which covers an expression
+// written in XPath; a caller that resolves a built-in through the function
+// library and invokes it directly -- which xslt and xquery do, and which any
+// embedder may do -- reaches none of them, so an uncharged built-in hands that
+// caller the whole allowance over again. Charging at the allocation makes the
+// invariant local: whoever built the bytes paid for them.
+//
+// It charges the finished string, which is one allocation late. That is the
+// right trade for a result whose size is bounded by its INPUT -- a case
+// mapping grows by a small constant factor at worst, and the input was itself
+// charged when it was built -- so the excess is bounded and the next call is
+// refused. It is the wrong trade where the output has no such bound, which is
+// what serializeSink exists for: see xpath/fn_serialize.go.
+func stringResult(ctx *Context, s string) (xdm.Sequence, error) {
+	if err := ctx.countBytes(len(s)); err != nil {
+		return nil, err
+	}
+	return strSeq(s), nil
+}
+
 // HoldByteBudget returns a copy of c on which Compiled.Eval will not reset the
 // byte budget, and arms a fresh budget for the construction about to begin.
 //

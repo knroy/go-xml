@@ -23,7 +23,7 @@ import (
 
 // registerFormatInteger adds fn:format-integer.
 func registerFormatInteger(l *Library) {
-	l.registerFnSince(XPath30, "format-integer", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFnSince(XPath30, "format-integer", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// $value is declared xs:integer? — a singleton — so two items is
 		// XPTY0004 rather than a request to format the first.
 		a, err := argAtomicOptional(args, 0, "fn:format-integer")
@@ -48,7 +48,7 @@ func registerFormatInteger(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(out), nil
+		return stringResult(ctx, out)
 	})
 }
 

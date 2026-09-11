@@ -766,7 +766,7 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 			// a date depends on the calendar, so there is no picture for
 			// which the substitution goes unnoticed.
 			out = formatDateTimeCalendarFallback(ctx, args) + out
-			return strSeq(out), nil
+			return stringResult(ctx, out)
 		})
 	}
 	format("format-dateTime")

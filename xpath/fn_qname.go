@@ -310,20 +310,20 @@ func registerURIFuncs(l *Library) {
 	// iri-to-uri and escape-html-uri differ from encode-for-uri in what they
 	// leave alone: the former two preserve characters that are already
 	// URI syntax, because they take a whole URI rather than one component.
-	l.registerFn("iri-to-uri", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("iri-to-uri", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(escapeNonURI(s, false)), nil
+		return stringResult(ctx, escapeNonURI(s, false))
 	})
 
-	l.registerFn("escape-html-uri", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("escape-html-uri", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(escapeNonURI(s, true)), nil
+		return stringResult(ctx, escapeNonURI(s, true))
 	})
 
 	l.registerFn("codepoint-equal", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -341,7 +341,7 @@ func registerURIFuncs(l *Library) {
 		return boolSeq(a == b), nil
 	})
 
-	l.registerFn("normalize-unicode", []int{1, 2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("normalize-unicode", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
@@ -366,13 +366,13 @@ func registerURIFuncs(l *Library) {
 		// unchanged would silently claim a normalisation that did not happen.
 		switch form {
 		case "NFC":
-			return strSeq(norm.NFC.String(s)), nil
+			return stringResult(ctx, norm.NFC.String(s))
 		case "NFD":
-			return strSeq(norm.NFD.String(s)), nil
+			return stringResult(ctx, norm.NFD.String(s))
 		case "NFKC":
-			return strSeq(norm.NFKC.String(s)), nil
+			return stringResult(ctx, norm.NFKC.String(s))
 		case "NFKD":
-			return strSeq(norm.NFKD.String(s)), nil
+			return stringResult(ctx, norm.NFKD.String(s))
 		}
 		// FULLY-NORMALIZED is defined by the spec but requires the
 		// construction rules of Unicode UAX #15 beyond the four standard

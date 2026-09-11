@@ -1046,7 +1046,7 @@ func registerFormatNumber(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(out), nil
+		return stringResult(ctx, out)
 	})
 }
 
