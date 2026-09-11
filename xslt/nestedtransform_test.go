@@ -165,3 +165,79 @@ func TestSequentialTransformsDoNotAccumulateDepth(t *testing.T) {
 		t.Errorf("got %d results, want 200 (output %q)", n, res.String())
 	}
 }
+
+// byteHungrySheet transforms itself, and each level concatenates a large
+// string before recursing. The string is discarded, so nothing but the byte
+// budget records that it was ever built.
+//
+// The chain is rooted in $seed -- a stylesheet parameter -- rather than in
+// string literals, because a chain of literal concats is folded to a constant
+// at compile time and charges nothing at runtime at all. Only an expression
+// the optimiser cannot fold reaches ctx.countBytes.
+//
+// One level is sized to stay well inside xpath.MaxBytes on its own, so the
+// only way this nest is ever refused is if the levels are charged against one
+// allowance.
+const byteHungrySheet = `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xsl:param name="sheet" as="xs:string" select="''"/>
+  <xsl:param name="seed" as="xs:string" select="''"/>
+  <xsl:template name="go">
+    <xsl:variable name="a" as="xs:string" select="concat($seed,$seed,$seed,$seed,$seed,$seed,$seed,$seed,$seed,$seed)"/>
+    <xsl:variable name="b" as="xs:string" select="concat($a,$a,$a,$a,$a,$a,$a,$a,$a,$a)"/>
+    <xsl:variable name="c" as="xs:string" select="concat($b,$b,$b,$b,$b,$b,$b,$b,$b,$b)"/>
+    <xsl:variable name="d" as="xs:string" select="concat($c,$c,$c,$c,$c,$c,$c,$c,$c,$c)"/>
+    <xsl:sequence select="string-length($d)"/>
+    <xsl:sequence select="transform(map{
+      'stylesheet-text': $sheet,
+      'initial-template': QName('','go'),
+      'stylesheet-params': map{QName('','sheet'): $sheet, QName('','seed'): $seed},
+      'delivery-format':'raw'})?output"/>
+  </xsl:template>
+</xsl:stylesheet>`
+
+// A nested fn:transform must spend its caller's remaining byte allowance
+// rather than being handed a fresh one.
+//
+// newRuntime calls xpath.NewContext, which mints items and bytes counters from
+// scratch, so before this was fixed every level of a nest got the full
+// xpath.MaxBytes over again: the depth budget inherited (see
+// TransformOptions.nestedDepth) while the item and byte budgets reset, and a
+// stylesheet could build unbounded string content simply by recursing through
+// fn:transform. The house rule the depth budget already follows is that a
+// budget is monotonic -- a nested evaluation may spend the parent's remaining
+// allowance, never reset it.
+//
+// The refusal must be an error. A budget may reject an otherwise valid
+// operation, but it must never be converted into a semantic signal: silently
+// returning a short or empty result here would report a resource limit as a
+// fact about the stylesheet.
+func TestNestedTransformInheritsTheByteBudget(t *testing.T) {
+	_, err := runNested(t, byteHungrySheet, TransformOptions{
+		MaxDepth:        500,
+		InitialTemplate: "go",
+		Params: map[string]xdm.Sequence{
+			"sheet": {xdm.NewString(byteHungrySheet)},
+			"seed":  {xdm.NewString(strings.Repeat("x", 1000))},
+		},
+	})
+	if err == nil {
+		t.Fatal("a nest of transforms each building 10 MB of string content " +
+			"was not refused; the byte budget reset at every level")
+	}
+	// The nesting bound must not be what stopped it: that would mean the
+	// byte budget still resets and the depth limit merely arrived first.
+	if strings.Contains(err.Error(), "fn:transform nesting") {
+		t.Fatalf("the nest was stopped by the DEPTH bound, not the byte "+
+			"budget, so the byte budget still resets per level: %v", err)
+	}
+	if code := xdm.ErrorCode(err); code != "XPDY0130" {
+		t.Errorf("code = %q, want XPDY0130 (error: %v)", code, err)
+	}
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("errors.Is(%v, ErrResourceLimit) = false; a caller cannot "+
+			"tell a refusal to compute from a bad stylesheet", err)
+	}
+	if !strings.Contains(err.Error(), "bytes of string content") {
+		t.Errorf("message %q is not the byte-budget refusal", err)
+	}
+}

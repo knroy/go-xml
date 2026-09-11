@@ -20,7 +20,7 @@ Current position:
 | XSLT 3.0 | 99.70% — 11,484 of 11,518 in scope (34 failing); 14 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,198 `func Test` declarations, clean under `-race` |
+| Tests | 2,202 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 
 Every one of those failures, and why it is still open, is catalogued in
@@ -696,6 +696,20 @@ episode on and seventeen call sites, several of them at schema-load time where
 there is no validation run to be the episode. The per-element path fixed above
 is the one that scales with document size; this one scales with the number of
 values, and threading a budget to it is a wider change than this entry.
+
+Re-examined 2026-09-11 and left as it stands. `validateSimpleValueVersion`, the
+free entry into the chain, is reached from `facet_check.go`, `parse_decl.go` and
+`typevalidate.go` as well as from the validating path -- and those three run at
+schema-load time, where there is no validation run to be the episode and so
+nothing to inherit from. Threading a budget would mean a new parameter through
+several levels of free function with no caller budget to pass at a majority of
+the sites, which buys a bound on the load-time path that has no episode to bound
+it against. The per-element path -- the one that scales with document size -- is
+covered by `assertEpisode`.
+
+The sibling escape at the same seam *was* closed: a nested `fn:transform`
+minted its own item and byte allowances, and now adopts the caller's. See
+`xpath.Context.AdoptBudget` and `TestNestedTransformInheritsTheByteBudget`.
 
 ### 2.4 Three spec divergences the ninth audit found and left open
 

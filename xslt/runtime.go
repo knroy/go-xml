@@ -644,6 +644,11 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		item = nil
 	}
 	xctx := xpath.NewContext(item, s.funcs)
+	// A transform started by fn:transform continues its caller's item and byte
+	// allowances rather than restarting on fresh ones, the same policy the
+	// recursion depth above follows. The counters travel with their held flags;
+	// see xpath.Context.AdoptBudget.
+	xctx = xctx.AdoptBudget(opts.nestedBudget)
 	// A duplicate key in an XPath map constructor is XTDE3365 under XSLT, not
 	// XQuery's XQDY0137: section 17.4 gives the MapExpr its own code, the same
 	// one xsl:map raises for a duplicate among the maps it merges. The two

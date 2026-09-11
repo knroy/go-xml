@@ -293,6 +293,10 @@ func runNestedTransform(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (xdm
 	// The nested runtime picks up where this one left off instead of
 	// restarting at zero. See TransformOptions.nestedDepth.
 	topts.nestedDepth = depth
+	// The nested transformation spends this call's remaining item and byte
+	// allowances rather than a fresh pair, on the same policy. See
+	// TransformOptions.nestedBudget.
+	topts.nestedBudget = ctx
 	// The nested transform is a transformation of its own: the outer one's
 	// entry point, its parameters and its initial mode say nothing about it.
 	// Only what the options map states, plus the resolvers, carries over.
