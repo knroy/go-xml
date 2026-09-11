@@ -685,16 +685,22 @@ var xsltElements = map[string]elementDef{
 	// evaluation, which this engine does not do; 18.1 defines the result as
 	// that of the non-streaming process either way, so the attribute is
 	// accepted and the instruction evaluated conventionally.
-	// xsl:stream is 18.1's instruction in the working draft this repository
-	// vendors, where it appears 160 times and "source-document" appears not
-	// at all. The W3C suite is the mirror image: 500 stylesheets write
-	// xsl:source-document and none writes xsl:stream. The rename happened
-	// between the two, and the table carried only the suite's name -- the
-	// same split as for-each-stream/for-each-source on xsl:merge-source, and
-	// resolved the same way, by accepting both rather than choosing.
+	// xsl:stream is the name the XSLT 3.0 working draft gives this
+	// instruction in 18.1; the Recommendation of 8 June 2017 renamed it.
+	// Its own change log says so (Bug29747): "The xsl:stream instruction has
+	// been generalized to handle both streamed and unstreamed processing,
+	// and it has accordingly been renamed xsl:source-document, and has a
+	// streamable attribute."
 	//
-	// The attribute list is 18.1's own and is NOT source-document's: there is
-	// no @streamable, because xsl:stream streams by definition.
+	// Both are accepted because a stylesheet written against either text is a
+	// legal one. The table carried only the later name, so the draft's
+	// spelling was refused outright -- the same split as
+	// for-each-stream/for-each-source on xsl:merge-source, resolved the same
+	// way.
+	//
+	// The attribute list is 18.1's own and is NOT source-document's: the
+	// draft's xsl:stream has no @streamable, which is precisely what the
+	// rename added when the instruction was generalised.
 	// compileSourceDocument reads attributes and never the element's local
 	// name, so one compiler serves both spellings.
 	//
