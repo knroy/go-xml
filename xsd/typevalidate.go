@@ -436,3 +436,23 @@ func setResolvedAnnotation(n *xdm.Node, annotation string, t Type) {
 	prim, item := resolveAnnotationMeaning(annotation, t)
 	n.SetTypeAnnotationResolved(annotation, prim, item)
 }
+
+// TypeEnv returns the type environment this schema owns: the derivation, list
+// and union facts its own type definitions establish.
+//
+// It is exported so that a caller holding a schema -- xslt's validation
+// instructions are the case in this repository -- can answer a question about
+// one of the schema's type NAMES without going through the process-global
+// table, which is keyed by name across every schema in the process and so
+// answers for whichever loaded last.
+//
+// It is also what an aggregate schema merges: xsl:import-schema and XQuery's
+// "import schema" fold several loaded schemas into one, and the derivation
+// facts have to travel with the type definitions or the aggregate holds types
+// that no longer know what they derive from.
+func (s *Schema) TypeEnv() *xdm.TypeEnvironment {
+	if s == nil {
+		return nil
+	}
+	return s.typeEnv
+}

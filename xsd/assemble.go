@@ -209,6 +209,27 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 // this out for itself — it has no schema — and it cannot ask, because xsd
 // imports xdm and not the other way round. So the schema tells it, once, here.
 func registerDerivedTypes(s *Schema) {
+	// Every fact is recorded twice: into the schema's OWN environment, which
+	// an aggregate merges and a by-name consumer holding this schema reads,
+	// and into the process-global tables, which are what a caller holding no
+	// schema still falls back to. The two receive identical calls, so they
+	// cannot disagree about a name only one schema defines; where two schemas
+	// collide on a name, the schema-owned copy is the one that stays correct
+	// and the global holds the last writer, which is the documented behaviour
+	// of the name-only API.
+	env := s.typeEnv
+	regDerived := func(name, prim string) {
+		env.RegisterDerived(name, prim)
+		xdm.RegisterDerivedType(name, prim)
+	}
+	regList := func(name, item string) {
+		env.RegisterList(name, item)
+		xdm.RegisterListType(name, item)
+	}
+	regUnion := func(name string, members []string) {
+		env.RegisterUnion(name, members)
+		xdm.RegisterUnionType(name, members)
+	}
 	for name, t := range s.Types {
 		if name.Local == "" || name.URI == NSSchema {
 			continue
@@ -230,7 +251,7 @@ func registerDerivedTypes(s *Schema) {
 			if item := listItemTypeOf(ct); item != nil {
 				key := xdm.AnnotationName(name.URI, name.Local)
 				if in := annotationName(item); in != "" && in != key {
-					xdm.RegisterListType(key, in)
+					regList(key, in)
 				}
 			}
 			// A UNION type's base is always xs:anySimpleType — that is what
@@ -247,7 +268,7 @@ func registerDerivedTypes(s *Schema) {
 						names = append(names, mn)
 					}
 				}
-				xdm.RegisterUnionType(key, names)
+				regUnion(key, names)
 			}
 			base, _ = ct.Base.(*SimpleType)
 		case *ComplexType:
@@ -266,7 +287,7 @@ func registerDerivedTypes(s *Schema) {
 				if b, ok := ct.Base.(*ComplexType); ok && b != nil {
 					if bn := b.Name; bn.Local != "" && bn.URI != NSSchema &&
 						!(bn.URI == name.URI && bn.Local == name.Local) {
-						xdm.RegisterDerivedType(
+						regDerived(
 							xdm.AnnotationName(name.URI, name.Local),
 							xdm.AnnotationName(bn.URI, bn.Local))
 					}
@@ -288,7 +309,7 @@ func registerDerivedTypes(s *Schema) {
 							names = append(names, mn)
 						}
 					}
-					xdm.RegisterUnionType(key, names)
+					regUnion(key, names)
 				}
 			}
 			// A simple-content complex type derived from ANOTHER complex
@@ -310,7 +331,7 @@ func registerDerivedTypes(s *Schema) {
 			if b, ok := ct.Base.(*ComplexType); ok && b != nil {
 				if bn := b.Name; bn.Local != "" && bn.URI != NSSchema &&
 					!(bn.URI == name.URI && bn.Local == name.Local) {
-					xdm.RegisterDerivedType(
+					regDerived(
 						xdm.AnnotationName(name.URI, name.Local),
 						xdm.AnnotationName(bn.URI, bn.Local))
 					continue
@@ -325,7 +346,7 @@ func registerDerivedTypes(s *Schema) {
 		if base != nil {
 			key := xdm.AnnotationName(name.URI, name.Local)
 			if prim := annotationName(base); prim != "" && prim != key {
-				xdm.RegisterDerivedType(key, prim)
+				regDerived(key, prim)
 			}
 		}
 	}
