@@ -359,14 +359,14 @@ is the opposite of challenged.
 | | Total | `accepted` | `queried` | `stable` | no status |
 |---|---:|---:|---:|---:|---:|
 | XSD 1.0 | 30 | **2** | 26 | 2 | 0 |
-| XSD 1.1 | 31 | **2** | 27 | 2 | 0 |
+| XSD 1.1 | 32 | **3** | 27 | 2 | 0 |
 
 Those totals are counted from the `<current>` status of each disagreeing case.
 
 | Set | Cases | Status | Why |
 |---|---:|---|---|
 | `MS-Regex2006-07-15` | 22 per version, 44 in all | `queried bug4113` | Every single MS-Regex disagreement is the *same* open W3C bug. The expected results are challenged upstream; agreeing with them would mean agreeing with something the working group does not stand behind. |
-| `MS-Element`, `MS-DataTypes`, `MS-IdentityConstraint`, `MS-Particles`, others | 11 (1.0), 12 (1.1) | `queried`/`stable` + bug | Assorted challenged expectations, almost all across the Microsoft-contributed sets. |
+| `MS-Element`, `MS-DataTypes`, `MS-IdentityConstraint`, `MS-Particles`, `Simple`, `Id`, others | 8 (1.0), 10 (1.1) | `queried`/`stable` + bug, 2 and 3 `accepted` | Assorted challenged expectations, mostly across the Microsoft-contributed sets. Every one is named in the table below and in `tests/conformance/results.json`. |
 
 The `queried` defence was spot-checked on four cases and **held** in each —
 `ste110` (bug 4957, circular unions), `gMonth002`/`004` (bug 6901, withdrawn
@@ -376,9 +376,9 @@ every one we disagree in the direction the filed bug points, which is what
 makes the status a defence rather than a label.
 
 Of the 30 on 1.0, 28 carry a `queried` or `stable` bugzilla reference and 2
-carry `accepted` — `attP031` and `particlesZ001`. Of the 31 on 1.1, 29 are
-`queried` or `stable` and 2 are `accepted`, here `simple093` and
-`particlesZ033_g`. Those four are read individually.
+carry `accepted` — `attP031` and `particlesZ001`. Of the 32 on 1.1, 29 are
+`queried` or `stable` and 3 are `accepted`: `simple093`, `particlesZ033_g` and
+`id017.n01.xml`. Those five are read individually.
 
 | Case | Version | Verdict |
 |---|---|---|
@@ -386,10 +386,59 @@ carry `accepted` — `attP031` and `particlesZ001`. Of the 31 on 1.1, 29 are
 | `particlesZ001` | 1.0 | **Not implementable — suite defect.** It never propagated its instanceTest's version split to its schemaTest. |
 | `simple093` | 1.1 | **Not implementable — the suite contradicts itself.** Expected invalid; the schema unions `xs:QName` with `xs:NOTATION`, and Part 2 §3.2.19 does forbid NOTATION being "used directly in a schema", so the case is a correct reading. But `msData particlesZ007` declares a schema containing `<xsd:union memberTypes="xsd:NOTATION"/>` **valid**, and both carry `status="accepted"`. The rule was implemented and measured: 1.1 trades one for the other (agree 41,519 → 41,518) and 1.0 loses two outright (39,347 → 39,345), because particlesZ007 has a dependent instance test and simple093 is not run under 1.0 at all. Reverted; `xsd/facet_check.go` enforces §3.2.19 in the three places the suite is consistent about. |
 | `particlesZ033_g` | 1.1 | **Costs more than it gains** — read in §2, with its measured cost. |
+| `Id/id017.n01.xml` | 1.1 | **Deliberate divergence, option posture named.** A defaulted `xs:ENTITY` in a document with no DTD at all. Part 2 §3.3.11 read to the letter takes it; the unparsed-entity check deliberately bails when the instance declares no unparsed entity, which is what keeps `as-34` and the XSLT suite's `as-3401`, `match-208` and `match-209` passing. Read below. |
 
-Four XSD 1.0 `SFALSEREJECT` cases in the `queried`/`stable` remainder are a
-suite omission with a measured cost of their own, and are read in §2: the
-`notQName` cases.
+The `notQName` cases are read in §2 with a measured cost of their own. They are
+**not** in the counts above: under the scoping the driver now applies they no
+longer disagree at all, and the sentence that once counted four of them here
+outlived its own fix. The 1.0 `SFALSEREJECT` column is `particlesZ001` and
+`ste110`, and nothing else.
+
+### All 62 are adjudicated case by case
+
+`tests/conformance/results.json` enumerates every one of the 30 and the 32, the
+way it already enumerated XSLT 3.0, so the sum check covers XSD rather than
+stopping at a set-level summary. Each case is classified as exactly one of
+three things, and **none of the 62 is a genuine implementation gap**:
+
+| Bucket | 1.0 | 1.1 | Cases |
+|---|---:|---:|---|
+| **(a) fixture defect** — the suite contradicts itself or a sibling | 2 | 3 | `attP031.i`, `particlesZ001` (1.0); `elemZ026`, `particlesZ026`, `simple093.xsd` (1.1) |
+| **(b) conforming-default divergence** — a documented decision, option named | 0 | 1 | `id017.n01.xml` |
+| **(c) challenged expectation** — `queried`/`stable` against an open W3C bug | 28 | 28 | 22 `MS-Regex` under bug 4113, plus `anyURI_a004`, `gMonth002`, `gMonth004`, `idZ015`, `ste110`, and `anyURI_b006` (1.0 only); `particlesZ033_g` is 1.1's sixth |
+
+Buckets (b) and (c) are both recorded as `deliberate-divergence` in
+`tests/conformance/results.json`, whose vocabulary is closed and has no separate
+token for the two; the JSON therefore tallies 2 `fixture` / 28
+`deliberate-divergence` on 1.0 and 3 / 29 on 1.1. The split between (b) and (c)
+is the prose distinction above: (b) is our own documented decision with the
+option named, (c) is an expectation the W3C has itself challenged.
+
+The **option posture was checked before any verdict**, because a case that
+disagrees only because the driver runs the conforming default is an
+adjudication and not a defect. `tests/xsdsuite/main.go` sets `Version`,
+`Resolver` and `ParseOptions{AllowDOCTYPE:true}`; it leaves `LaxUPA` off, which
+is the conforming strict reading of erratum E1-29, and leaves `XPathVersion` at
+XPath 2.0, which is what XSD 1.1 requires for assertions. **Neither option
+gates a single one of these 62 cases**: no case fails on a Unique Particle
+Attribution complaint, and no assertion or conditional-type-alternative case
+disagrees at all. That bucket is empty, and it is recorded as empty rather than
+filled with a citation the evidence does not support.
+
+**`Id/id017.n01.xml` is the one case in bucket (b).** The schema defaults an
+`xs:ENTITY` attribute to `entity-ref`; `id017.v01` and `v02` declare that
+entity in an internal DTD subset and pass, but `n01` has **no DOCTYPE at all**
+and is expected `invalid` — the default names an entity the document never
+declared. `entityIsDeclaredName` in `xsd/validate_simple.go` deliberately
+returns without complaint when the instance declares no unparsed entity
+whatever. That bail is not an oversight: it is what keeps `as-34.xml` and the
+XSLT suite's `as-3401`, `match-208` and `match-209` passing, whose documents
+name *parsed* entities in `xs:ENTITIES` attributes and which Saxon validates.
+Part 2 §3.3.11 read to the letter would take this case; the cost is the four
+XSLT cases a conforming processor's own reported results depend on. Where a
+document does declare unparsed entities the rule is applied in full, which is
+why `id018` and `id021` — the same defaulting against a DTD that declares the
+names — already agree.
 
 ---
 

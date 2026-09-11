@@ -346,15 +346,22 @@ shapes production schemas favour and no substitute for them, but far from
 nothing. Pairing each new rule with a valid schema that must still load, in
 `xsd/falseaccept_test.go`, is the third.
 
-### XSD instance validation: two remaining, neither addressable
+### XSD instance validation: three remaining, none addressable
 
-The instance list is down to two cases that are genuinely open:
+Three instance cases remain, and "open" overstates all three — each is argued
+and none is tractable work:
 
 - `MS-IdentityConstraint/idZ015` — a field selecting an attribute matched by a
   `lax`/`skip` `anyAttribute`. Open under W3C bug 4063, and left alone until
   the W3C settles it.
 - `MS-Attribute/attP031` — a false *reject*, declined on purpose. The reasoning
   is under *A prohibited attribute use creates no attribute use* below.
+- `saxonData/Id/id017.n01.xml` (1.1 only) — a defaulted `xs:ENTITY` in a
+  document carrying no DTD. Declined on purpose: the unparsed-entity check bails
+  when the instance declares no unparsed entity at all, which is what keeps
+  `as-34` and the XSLT suite's `as-3401`, `match-208` and `match-209` passing.
+  Read in full under *All 62 are adjudicated case by case* in
+  [conformance-gaps.md](conformance-gaps.md).
 
 ### XSD particle restriction: `particlesZ001` and the two-job wrapper
 
@@ -508,7 +515,7 @@ assert that `\p{Lu}` rejects characters that *are* uppercase letters in current
 Unicode. The suite was written against Unicode 3.1; the codepoints in question
 — U+1D7A8 among them — were categorised differently then.
 
-These are **22 of the 30 disagreements on 1.0 and 22 of the 31 on 1.1** — two
+These are **22 of the 30 disagreements on 1.0 and 22 of the 32 on 1.1** — two
 thirds of everything the suite reports against this engine, and the single
 largest reason XSD cannot reach 100% and should not try. The three
 `regex-syntax-xslt20` failures in the XSLT 2.0 lane are the same rule seen from
