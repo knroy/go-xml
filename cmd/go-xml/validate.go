@@ -209,6 +209,35 @@ type rngFileResolver struct {
 	base string
 }
 
+// DefaultMaxRNGBytes bounds one schema this resolver reads.
+//
+// Every other resolver in the library bounds its read -- dtd at 4 MB, xsd at
+// 16 MB, xslt at 64 MB -- and this one did not, so a named file inside the
+// permitted root could be read without limit: a fifo never finishes, and a
+// large regular file is fully held in memory before the parser is given the
+// chance to refuse it. Containment answers *which* files may be read, not how
+// much of one. The figure matches xsd.DefaultMaxSchemaBytes because a RELAX
+// NG grammar and an XML Schema are the same kind of document at the same
+// scale; the W3C's own largest schema is under 200 kB.
+const DefaultMaxRNGBytes = 16 << 20
+
+// readAtMost reads r, refusing at more than DefaultMaxRNGBytes.
+//
+// One byte over the limit is requested so that a file exactly at it is
+// accepted and the next one is refused, rather than the bound being
+// discovered by a short read that looks like a truncated document.
+func readAtMost(r io.Reader, what string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, DefaultMaxRNGBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > DefaultMaxRNGBytes {
+		return nil, fmt.Errorf("%s exceeds the %d byte limit: %w",
+			what, int64(DefaultMaxRNGBytes), xdm.ErrResourceLimit)
+	}
+	return data, nil
+}
+
 func (r *rngFileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 	if i := strings.Index(href, "://"); i >= 0 && !strings.HasPrefix(href, "file://") {
 		return nil, fmt.Errorf("scheme %q is not permitted (only local files)",
@@ -266,14 +295,22 @@ func (r *rngFileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 			// since both shapes refuse every statically visible vector.
 			return nil, fmt.Errorf("%q is outside %s: %w", href, rootAbs, err)
 		}
-		data, err = io.ReadAll(f)
+		data, err = readAtMost(f, href)
 		f.Close()
 		if err != nil {
 			return nil, err
 		}
 		abs = filepath.Join(rootAbs, rel)
-	} else if data, err = os.ReadFile(abs); err != nil {
-		return nil, err
+	} else {
+		g, oerr := os.Open(abs)
+		if oerr != nil {
+			return nil, oerr
+		}
+		data, err = readAtMost(g, href)
+		g.Close()
+		if err != nil {
+			return nil, err
+		}
 	}
 	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{BaseURI: abs})
 	if err != nil {
