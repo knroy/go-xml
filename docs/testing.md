@@ -1125,11 +1125,22 @@ Three tests measure it, and they ask different questions:
   mechanism exists to prevent, so a hand-edited spelling that disagrees with
   the manifest breaks the build.
 
-The count so far is 253 of 272: the seventeen seeded from `builtinSignatures`,
+The count so far is 262 of 272: the seventeen seeded from `builtinSignatures`,
 `fn:substring` and `fn:subsequence`, then the numeric (14), non-regex string
 (25), temporal (28), node and accessor (34), sequence (14), higher-order (12),
 QName and URI (15), input and document (20), JSON (10), context, boolean and
-error (14), `math:` (14), `map:` (11) and `array:` (21) families.
+error (14), `math:` (14), `map:` (11), `array:` (21) and regex (9) families.
+
+The regex family was deferred twice on the belief that declaring `$pattern`
+and `$flags` would change which error code an empty sequence raises -- that
+call binding would answer `XPTY0004` where the hand guard answers `FORX0002`.
+It does not. `FORX0002` is for a *malformed* pattern, a question reached only
+once a pattern exists; an empty sequence in a non-nullable position is a
+*cardinality* refusal. The three QT3 cases that pass `()` in a pattern
+position -- `K-MatchesFunc-1`, `K-ReplaceFunc-2`, `K-TokenizeFunc-2` -- all
+expect `XPTY0004`, as does `K-MatchesFunc-3` for `()` in `$flags`. The
+wording moves, because the refusal now comes from call binding rather than
+from `argFlags`; the code does not.
 
 `math:pi` was the first entry to use a prefixed key, and it landed with the
 mechanism rather than with its family. It is nullary, so it constrains no

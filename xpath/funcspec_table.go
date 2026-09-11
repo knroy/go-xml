@@ -454,6 +454,33 @@ var specSignatures = func() map[string][]string {
 	m["array:subarray/2"] = []string{"array(*)", "array(*)", "xs:integer"}
 	m["array:subarray/3"] = []string{"array(*)", "array(*)", "xs:integer", "xs:integer"}
 	m["array:tail/1"] = []string{"array(*)", "array(*)"}
+
+	// The regex family, F&O 3.1 5.6.1 to 5.6.5.
+	//
+	// These were deferred twice on the belief that a declared type here would
+	// change which error code the empty sequence raises -- that call binding
+	// would answer XPTY0004 where the hand guard answers FORX0002. It does not:
+	// FORX0002 is for a MALFORMED pattern, a question reached only once a
+	// pattern exists, while an empty sequence in a non-nullable position is a
+	// CARDINALITY refusal. The three QT3 cases that pass () in a pattern
+	// position -- K-MatchesFunc-1, K-ReplaceFunc-2, K-TokenizeFunc-2 -- all
+	// expect XPTY0004, which is what this raises, and K-MatchesFunc-3 expects
+	// the same for () in the $flags position.
+	//
+	// The rows that constrain anything new are $pattern and $flags, xs:string
+	// with no "?" throughout, and fn:replace's $replacement. argFlags and the
+	// argStringRequired calls in fn_regex.go guard those by hand today; call
+	// binding now refuses them first, so the wording moves while the code does
+	// not. Removing a guard that this makes unreachable is a separate change.
+	m["matches/2"] = []string{"xs:boolean", "xs:string?", "xs:string"}
+	m["matches/3"] = []string{"xs:boolean", "xs:string?", "xs:string", "xs:string"}
+	m["replace/3"] = []string{"xs:string", "xs:string?", "xs:string", "xs:string"}
+	m["replace/4"] = []string{"xs:string", "xs:string?", "xs:string", "xs:string", "xs:string"}
+	m["tokenize/1"] = []string{"xs:string*", "xs:string?"}
+	m["tokenize/2"] = []string{"xs:string*", "xs:string?", "xs:string"}
+	m["tokenize/3"] = []string{"xs:string*", "xs:string?", "xs:string", "xs:string"}
+	m["analyze-string/2"] = []string{"element(fn:analyze-string-result)", "xs:string?", "xs:string"}
+	m["analyze-string/3"] = []string{"element(fn:analyze-string-result)", "xs:string?", "xs:string", "xs:string"}
 	return m
 }()
 
