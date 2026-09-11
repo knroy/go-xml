@@ -131,6 +131,21 @@ func synthesizeVariadic(ctx *Context, name xdm.QName, arity int) (Function, bool
 	if name.URI != xdm.NSFN || name.Local != "concat" || arity < 2 {
 		return Function{}, false
 	}
+	// The upper bound belongs HERE rather than at either caller, because this
+	// is the one place both routes to a variadic function item meet: the
+	// named reference "concat#N" and fn:function-lookup. Bounding only the
+	// lookup left them disagreeing -- concat#5000000 resolved while
+	// function-lookup(fn:concat, 5000000) was empty -- and worse, it left the
+	// saturation artifact the bound exists to prevent reachable through the
+	// other door: concat#9223372036854775807 built a function item claiming
+	// an arity of 2^63-1, which no argument slice can ever hold.
+	//
+	// An arity past this names no function a call could make, and F&O 3.0
+	// 16.1.1 makes "no such function" the empty sequence rather than an
+	// error, which is what each caller does with the false returned here.
+	if arity > maxVariadicArity {
+		return Function{}, false
+	}
 	// The registered entries carry the real implementation; borrowing one
 	// keeps a single definition of what fn:concat does. Its own arity is
 	// irrelevant, since the call passes whatever arguments it was given.

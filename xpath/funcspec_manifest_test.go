@@ -127,6 +127,59 @@ func TestRegisteredFunctionsHaveManifestMetadata(t *testing.T) {
 	}
 }
 
+// TestManifestFunctionsAreAllRegistered is the other direction, and the one
+// that was missing.
+//
+// TestRegisteredFunctionsHaveManifestMetadata asks "does the specification
+// describe every function we registered?", which catches an invented function.
+// It cannot catch the opposite and more likely regression: a standard function
+// that stops being registered. A family whose registration is dropped in a
+// refactor leaves that test green -- there is simply one fewer thing to check
+// -- while fn:foo#2 quietly becomes XPST0017 for every caller.
+//
+// TestManifestCoversTheSpecExtraction does iterate the manifest, but only
+// validates each row's internal shape and a row-count floor; it never asks the
+// library whether the row is callable. This does.
+//
+// It enforces rather than reports because the gap is already closed: all 272
+// rows resolve today, so any failure here is a genuine loss rather than
+// migration work outstanding.
+func TestManifestFunctionsAreAllRegistered(t *testing.T) {
+	lib := Builtins().(*Library)
+	registered := map[string]bool{}
+	for _, fn := range lib.fns {
+		registered[specKey(fn.Name, fn.Arity)] = true
+	}
+
+	var missing []string
+	for key, row := range manifestByKey(t) {
+		if registered[key] {
+			continue
+		}
+		// fn:concat is registered over a fixed arity range and synthesised
+		// above it, so a manifest row past the range is callable without being
+		// in lib.fns. Ask the resolver rather than the map, which is the same
+		// question a caller asks.
+		name, ok := parseSpecName(row.Name)
+		if !ok {
+			t.Fatalf("unmappable manifest name %q", row.Name)
+		}
+		if _, ok := lookupFor(NewContext(nil, Builtins()), name, row.Arity); ok {
+			continue
+		}
+		missing = append(missing, key)
+	}
+	sort.Strings(missing)
+
+	if len(missing) > 0 {
+		t.Errorf("%d function(s) the F&O manifest defines are not registered "+
+			"and do not resolve:\n\t%v\n"+
+			"Every normative (name, arity) pair must be callable; a row here "+
+			"means a standard function is XPST0017 for every caller.",
+			len(missing), missing)
+	}
+}
+
 // TestCallBindingMigrationInventory reports how far the call-binding
 // migration has got: which manifest entries are enforced at call binding and
 // which are not yet.
