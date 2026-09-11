@@ -111,6 +111,27 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 	// checkOutputSettings, is also what lets a map through: that check exists
 	// to raise SENR0001 for an item the *XML-family* methods have no
 	// rendering for, and a map is precisely what the JSON method renders.
+	// A byte order mark belongs to the file rather than to the markup, so it
+	// is not a parameter of the XML-family methods alone. XSLT 3.0 §27.1
+	// describes byte-order-mark as deciding "whether a byte order mark is
+	// written at the start of the file", and names no method it is confined
+	// to; the json and adaptive methods write a file like any other. These
+	// two branches return before the BOM written for the other methods
+	// below, so a request for one has to be honoured here or not at all --
+	// method="json" byte-order-mark="yes" produced no mark and no error,
+	// which is the accepted-and-ignored shape rather than a rendering
+	// choice. Every byte-order-mark case in the W3C suite selects the xml or
+	// xhtml method, which is why it went unseen.
+	//
+	// It precedes even the XML declaration the adaptive method writes: the
+	// mark is what tells a reader how to decode that declaration.
+	switch strings.ToLower(opts.Method) {
+	case "json", "adaptive":
+		if opts.ByteOrderMark {
+			s.writeString("\uFEFF")
+		}
+	}
+
 	switch strings.ToLower(opts.Method) {
 	case "json":
 		out, err := xpath.SerializeJSON(seq, jsonParams(opts, charMap))
@@ -2010,7 +2031,20 @@ func checkOutputSettings(opts OutputSettings, seq xdm.Sequence) error {
 		// The html method supports the HTML versions it knows how to write.
 		// An unrecognised one would silently get HTML 4 rules, which for a
 		// stylesheet that asked for something else is the wrong document.
-		if v := opts.Version; v != "" && !supportedHTMLVersion(v) {
+		//
+		// The version checked is the EFFECTIVE one, which is html-version
+		// falling back to version -- the same precedence the serialiser
+		// itself applies when it sets s.html5. XSLT 3.0 §27.1 says of
+		// html-version that "the set of permitted values, and the default
+		// value, are implementation-defined. A serialization error will be
+		// reported if the requested version is not supported by the
+		// implementation", and its Note adds that "if it is absent, the html
+		// output method uses the value of the version parameter in its
+		// place". Reading opts.Version alone checked the parameter that only
+		// applies when the other is absent, so html-version="7" -- the
+		// spelling a 3.0 stylesheet actually uses -- was accepted and
+		// quietly demoted to HTML 4 rules with no error.
+		if v := effectiveHTMLVersion(opts); v != "" && !supportedHTMLVersion(v) {
 			return fmt.Errorf(
 				"SESU0013: HTML version %q is not supported", v)
 		}
@@ -2139,6 +2173,24 @@ func supportedEncoding(enc string) bool {
 		return true
 	}
 	return false
+}
+
+// effectiveHTMLVersion returns the version of HTML the html method will apply:
+// html-version, or version when html-version is absent.
+//
+// XSLT 3.0 §27.1, Note: "This serialization parameter is new in version 3.0.
+// If it is absent, the html output method uses the value of the version
+// parameter in its place." The xhtml method is excluded by its callers, since
+// there @version is the version of XML rather than of XHTML.
+//
+// It exists so that the check for a supported version and the choice of which
+// rules to write consult the same value. They were computed separately, and
+// diverged: the check read @version while the choice read @html-version.
+func effectiveHTMLVersion(opts OutputSettings) string {
+	if opts.HTMLVersion != "" {
+		return opts.HTMLVersion
+	}
+	return opts.Version
 }
 
 // supportedHTMLVersion reports whether the html output method knows the rules

@@ -179,6 +179,9 @@ var xsltElements = map[string]elementDef{
 		"initial-value": {required: true},
 		"as":            {},
 		"streamable":    {values: []string{"yes", "no", "true", "false", "1", "0"}},
+		// Added by the 3.0 errata after this table was written; the suite's
+		// accumulator-053 writes it.
+		"applies-to": {},
 	}},
 	"accumulator-rule": {since30: true, attrs: map[string]attrDef{
 		"match":    {required: true},
@@ -271,6 +274,15 @@ var xsltElements = map[string]elementDef{
 		"name":     {required: true},
 		"as":       {},
 		"override": {values: []string{"yes", "no", "true", "false", "1", "0"}},
+		// Both are 3.0 additions that the table had never listed, which went
+		// unnoticed while an unknown attribute on a version="3.0" module was
+		// silently dropped: they were ignored rather than refused, and
+		// ignoring them is indistinguishable from accepting them. @visibility
+		// is section 10.3's component visibility; @streamability is
+		// 19.8.7's declared classification, which the W3C suite writes in
+		// seventy files.
+		"visibility":    {since30: true},
+		"streamability": {since30: true},
 		// 3.0 renamed @override to @override-extension-function and added
 		// @new-each-time, which says whether two calls with the same
 		// arguments may share one result.
@@ -634,6 +646,17 @@ var xsltElements = map[string]elementDef{
 	"output": {attrs: map[string]attrDef{
 		"name":   {},
 		"method": {},
+		// The three XSLT 3.0 serialisation parameters. xsl:result-document
+		// has carried them since they were added; xsl:output, which declares
+		// the very same parameters for the principal result, never listed
+		// them. Nothing noticed while an unknown attribute on a version="3.0"
+		// module was dropped in silence -- being ignored and being accepted
+		// look alike from the stylesheet. json-node-output-method is read by
+		// the serialiser for both spellings, so declaring it here changes
+		// only whether the name is refused.
+		"json-node-output-method": {processor30: true, avt: true},
+		"allow-duplicate-names":   {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"build-tree":              {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
 		// html-version selects between the HTML 4 and HTML 5 serialisation
 		// rules. It was added after XSLT 2.0, but the test suite uses it in
 		// tests declared XSLT20+, and rejecting an attribute a stylesheet may

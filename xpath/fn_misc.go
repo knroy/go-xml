@@ -595,20 +595,37 @@ func deepEqualNode(ctx *Context, a, b *xdm.Node) (bool, error) {
 		}
 		return deepEqualContent(ctx, a, b)
 
-	case xdm.KindAttribute, xdm.KindNamespace:
+	case xdm.KindAttribute:
 		return a.Name.URI == b.Name.URI && a.Name.Local == b.Name.Local &&
 			deepEqualText(ctx, a.Value, b.Value), nil
 
+	case xdm.KindNamespace:
+		// The namespace node is the ONE kind whose string value F&O 3.0
+		// §14.2.2 pins to a fixed collation: "the string value of $i1 is
+		// equal to the string value of $i2 when compared using the Unicode
+		// codepoint collation". Every other kind falls under the general
+		// clause a few paragraphs above — the collation "is used at all
+		// levels of recursion when strings are compared" — so the carve-out
+		// is exhaustive, and a namespace URI must not follow it. Sharing the
+		// attribute branch let a case-blind collation make xmlns:p="http://X"
+		// deep-equal to xmlns:p="http://x", which are different namespaces.
+		return a.Name.URI == b.Name.URI && a.Name.Local == b.Name.Local &&
+			a.Value == b.Value, nil
+
 	case xdm.KindPI:
-		// A processing instruction's content is not text in the sense the
-		// collation governs, so it keeps codepoint comparison.
-		return a.Name.Local == b.Name.Local && a.Value == b.Value, nil
+		// The PI rule ("the string value of $i1 is equal to the string value
+		// of $i2") carries no codepoint carve-out, unlike the namespace rule
+		// directly above it in the spec, so the general collation clause
+		// governs it like any other string comparison.
+		return a.Name.Local == b.Name.Local && deepEqualText(ctx, a.Value, b.Value), nil
 
-	case xdm.KindText:
+	case xdm.KindText, xdm.KindComment:
+		// The spec states text and comment nodes in a single sentence — "if
+		// the two nodes are both text nodes or comment nodes, then they are
+		// deep-equal if and only if their string-values are equal" — so a
+		// comment cannot take codepoint comparison while a text node takes
+		// the collation.
 		return deepEqualText(ctx, a.Value, b.Value), nil
-
-	case xdm.KindComment:
-		return a.Value == b.Value, nil
 	}
 	return false, nil
 }
@@ -738,6 +755,11 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 				pictureUsesNames(pic) {
 				out = "[Language: en]" + out
 			}
+			// Section 9.8.4.3 requires the same admission for the calendar,
+			// and unlike the language it is unconditional: every component of
+			// a date depends on the calendar, so there is no picture for
+			// which the substitution goes unnoticed.
+			out = formatDateTimeCalendarFallback(ctx, args) + out
 			return strSeq(out), nil
 		})
 	}
@@ -798,7 +820,15 @@ func checkFormatDateArgs(ctx *Context, args []xdm.Sequence) error {
 			if err != nil {
 				return err
 			}
-			if inNoNamespace && !supportedCalendar(name) {
+			// Section 9.8.4.3 makes this FOFD1340 only when the name "must
+			// identify a calendar with a designator specified below" and does
+			// not -- that is, when it is not one of the designators the spec
+			// itself tabulates. A designator that IS tabulated but that this
+			// implementation cannot compute is not an error at all: it takes
+			// the fallback, which formatDateTimeCalendarFallback marks.
+			// Conflating the two raised FOFD1340 for "CB", which the W3C suite
+			// (format-date-en-033) expects to yield "[Calendar: AD]03".
+			if inNoNamespace && !isCalendarDesignator(name) {
 				return fmt.Errorf(
 					"FOFD1340: the calendar %q is not supported", cal)
 			}
@@ -864,6 +894,54 @@ func supportedCalendar(s string) bool {
 		return true
 	}
 	return false
+}
+
+// calendarDesignators is the table of calendar designators in F&O 3.0 section
+// 9.8.4.3. A name in no namespace must be one of these or it is FOFD1340;
+// being one of them says nothing about whether this implementation can compute
+// it, which supportedCalendar answers separately.
+var calendarDesignators = map[string]bool{
+	"AD": true, "AH": true, "AME": true, "AM": true, "AP": true,
+	"AS": true, "BE": true, "CB": true, "CE": true, "CL": true,
+	"CS": true, "EE": true, "FE": true, "ISO": true, "JE": true,
+	"KE": true, "KY": true, "ME": true, "MS": true, "NS": true,
+	"OS": true, "RS": true, "SE": true, "SH": true, "SS": true,
+	"TE": true, "VE": true, "VS": true,
+}
+
+// isCalendarDesignator reports whether s is one of the designators the
+// specification tabulates. The empty string is the absent argument.
+func isCalendarDesignator(s string) bool {
+	return s == "" || calendarDesignators[s]
+}
+
+// formatDateTimeCalendarFallback returns the prefix a result must carry when
+// the calendar actually used is not the one requested.
+//
+// Section 9.8.4.3: "If the fallback representation uses a different calendar
+// from that requested, the output string must identify the calendar actually
+// used, for example by prefixing the string with [Calendar: X]". Only the
+// Gregorian calendar is computed here, so every other request -- a tabulated
+// designator this implementation does not have, or an extension calendar in
+// some namespace -- falls back to it and must say so.
+func formatDateTimeCalendarFallback(ctx *Context, args []xdm.Sequence) string {
+	if len(args) < 4 || len(args[3]) == 0 {
+		return ""
+	}
+	cal, err := argString(args, 3)
+	if err != nil || cal == "" {
+		return ""
+	}
+	name, inNoNamespace, err := calendarInNoNamespace(ctx, cal)
+	if err != nil {
+		return ""
+	}
+	// A name in no namespace that this implementation computes is no
+	// fallback at all; anything else is.
+	if inNoNamespace && supportedCalendar(name) {
+		return ""
+	}
+	return "[Calendar: AD]"
 }
 
 // isCalendarName reports whether s is lexically a calendar name.
@@ -1252,9 +1330,14 @@ func padNumber(n int64, pres, width string, ordinal bool) string {
 	case "I":
 		return padSequence(romanNum(n), width)
 	case "w", "W", "Ww":
-		return spellDateNumber(n, pres, ordinal)
+		// Section 9.8.4.1 pads a representation shorter than the minimum
+		// width, "by appending spaces" for anything that is not a decimal
+		// number. Words and letters are such cases just as roman numerals
+		// are, so they take the same padding rather than dropping the
+		// minimum: "[Mw,8]" on September is "nine    ", not "nine".
+		return padSequence(spellDateNumber(n, pres, ordinal), width)
 	case "a", "A":
-		return alphaNum(n, pres == "A")
+		return padSequence(alphaNum(n, pres == "A"), width)
 	}
 
 	// A digit pattern may carry grouping separators — "[Y9,999]" writes 2012
@@ -2152,6 +2235,13 @@ func applyNameCase(name, pres, width string) string {
 			name = abbreviateName(name, max)
 		}
 	}
+	// The minimum width is deliberately NOT applied here, even though section
+	// 9.8.4.1 asks for spaces to be appended to a short value. That rule is a
+	// "should", and for a by-name presentation the W3C suite reads it the
+	// other way: date-064 formats midnight with "[PNn,4-8]" and "[PNn,4-4]"
+	// and expects "12Am", not "12Am  ". A name's chosen abbreviation is taken
+	// to BE its full representation at that width, so there is nothing left
+	// to pad. Padding it cost that case.
 	return name
 }
 

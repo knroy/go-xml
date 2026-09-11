@@ -94,3 +94,68 @@ func TestResultDocumentAdaptiveItemSeparatorNotDoubled(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// TestResultDocumentDuplicateURIAfterResolution covers XTDE1490 being a
+// collision of URIs rather than of href strings.
+//
+// XSLT 3.0 §24.2: "[ERR XTDE1490] It is a dynamic error for a transformation
+// to generate two or more final result trees with the same URI." §24.1 says
+// what that URI is: the href "may be absolute or relative. If it is relative,
+// then it is resolved against the base output URI". So href="out.xml" and
+// href="./out.xml" denote one tree, and writing both is the error. The check
+// compared the raw hrefs, so the pair went through and the second document
+// silently overwrote the first.
+func TestResultDocumentDuplicateURIAfterResolution(t *testing.T) {
+	src := `<xsl:transform version="3.0"
+	    xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+	  <xsl:template name="main">
+	    <xsl:result-document href="out.xml"><a/></xsl:result-document>
+	    <xsl:result-document href="./out.xml"><b/></xsl:result-document>
+	  </xsl:template>
+	</xsl:transform>`
+	sheet, err := Compile(mustParse(t, src), CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	_, err = sheet.Transform(context.Background(), nil, TransformOptions{
+		InitialTemplate: "main",
+		BaseOutputURI:   "file:///w/x.xml",
+	})
+	if err == nil {
+		t.Fatal(`href="out.xml" and href="./out.xml" resolve to one URI: want XTDE1490`)
+	}
+	if !strings.Contains(err.Error(), "XTDE1490") {
+		t.Fatalf("got %v, want XTDE1490", err)
+	}
+}
+
+// TestResultDocumentDistinctURIsStillAllowed guards the narrowing above: two
+// hrefs that resolve to genuinely different URIs must still both be written.
+// Resolution yields "" for every document when no base output URI is known,
+// and treating that as a collision would reject every multi-document
+// stylesheet run without one.
+func TestResultDocumentDistinctURIsStillAllowed(t *testing.T) {
+	src := `<xsl:transform version="3.0"
+	    xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+	  <xsl:template name="main">
+	    <xsl:result-document href="one.xml"><a/></xsl:result-document>
+	    <xsl:result-document href="two.xml"><b/></xsl:result-document>
+	  </xsl:template>
+	</xsl:transform>`
+	sheet, err := Compile(mustParse(t, src), CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, base := range []string{"", "file:///w/x.xml"} {
+		res, err := sheet.Transform(context.Background(), nil, TransformOptions{
+			InitialTemplate: "main",
+			BaseOutputURI:   base,
+		})
+		if err != nil {
+			t.Fatalf("base %q: %v", base, err)
+		}
+		if len(res.Secondary) != 2 {
+			t.Fatalf("base %q: got %d secondary results, want 2", base, len(res.Secondary))
+		}
+	}
+}

@@ -191,6 +191,40 @@ type serializeOptions struct {
 	cdataElements map[xdm.QName]bool
 }
 
+// cdataQName resolves one lexical name from the element form's
+// cdata-section-elements against the namespaces in scope on the parameter
+// element that carried it.
+//
+// The prefix is looked up on the parameter element rather than on the
+// serialization-parameters wrapper, because a binding may be declared on
+// either and the inner one is the narrower scope. An unprefixed name is in no
+// namespace: the default namespace does not apply to this parameter, for the
+// same reason it does not apply to the map form, where the QNames arrive
+// already resolved and an unprefixed one has no URI.
+//
+// The stored key drops the prefix, as the map form's does -- QName equality is
+// namespace URI plus local name, and the picture names an element that may be
+// written with any prefix at all.
+func cdataQName(p *xdm.Node, name string) (xdm.QName, error) {
+	prefix, local, ok := strings.Cut(name, ":")
+	if !ok {
+		prefix, local = "", name
+	}
+	if local == "" {
+		return xdm.QName{}, fmt.Errorf(
+			"SEPM0017: cdata-section-elements: %q is not a valid QName", name)
+	}
+	if prefix == "" {
+		return xdm.QName{Local: local}, nil
+	}
+	uri, found := p.LookupPrefix(prefix)
+	if !found {
+		return xdm.QName{}, fmt.Errorf(
+			"SEPM0017: cdata-section-elements: prefix %q is not declared", prefix)
+	}
+	return xdm.QName{URI: uri, Local: local}, nil
+}
+
 // serializationParams reads the second argument, an element whose children
 // name the parameters.
 //
@@ -352,20 +386,62 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 					return opts, err
 				}
 				opts.undeclarePrefixes = val == "yes"
+			case "cdata-section-elements":
+				// The map form honours this parameter, and this one used to
+				// drop it: the same request wrote a CDATA section through
+				// fn:serialize($n, map{...}) and an escaped run through
+				// fn:serialize($n, $params). It was on the accept-and-ignore
+				// list because the element form carries *lexical* names where
+				// the map form carries resolved QNames -- but the parameter
+				// element is a node in a tree, so the prefixes resolve
+				// against its own in-scope namespaces, which is the only
+				// static context the element form has or needs.
+				//
+				// An unresolvable prefix is refused rather than skipped, for
+				// the reason the whole parameter is no longer skipped: a name
+				// that binds to nothing names no element, and dropping it
+				// silently is how a caller comes to believe the CDATA section
+				// they asked for was written.
+				for _, name := range strings.Fields(val) {
+					qn, err := cdataQName(p, name)
+					if err != nil {
+						return opts, err
+					}
+					if opts.cdataElements == nil {
+						opts.cdataElements = map[xdm.QName]bool{}
+					}
+					opts.cdataElements[qn] = true
+				}
+			case "json-node-output-method":
+				// Honoured for the same reason: the map form acts on it and
+				// the element form announced acceptance and then wrote the
+				// default. checkSerializationMethod is what the map form
+				// validates it with.
+				m, err := checkSerializationMethod(val)
+				if err != nil {
+					return opts, err
+				}
+				opts.jsonNodeOutputMethod = m
+			case "allow-duplicate-names":
+				// The map form raises SERE0022 without this; the element form
+				// could not ask for the same latitude.
+				if err := checkYesNo(val, p.Name.Local); err != nil {
+					return opts, err
+				}
+				opts.allowDuplicateNames = val == "yes"
 			case "media-type",
-				"doctype-public", "doctype-system", "cdata-section-elements",
+				"doctype-public", "doctype-system",
 				"normalization-form",
 				"byte-order-mark", "escape-uri-attributes", "include-content-type",
-				"allow-duplicate-names", "json-node-output-method",
 				"suppress-indentation":
 				// Recognised and accepted; this serialiser does not vary its
 				// output for them.
 			default:
-				// Includes use-character-maps and suppress-indentation, which
-				// are real parameters this implementation does not support.
-				// The spec makes an unsupported parameter an error rather than
-				// something to ignore: accepting one silently would let a
-				// caller believe it had asked for something it did not get.
+				// Includes use-character-maps, a real parameter this
+				// implementation does not support. The spec makes an
+				// unsupported parameter an error rather than something to
+				// ignore: accepting one silently would let a caller believe
+				// it had asked for something it did not get.
 				return opts, fmt.Errorf(
 					"SEPM0017: serialization parameter %q is not supported", p.Name.Local)
 			}
@@ -861,6 +937,25 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 			}
 			opts.jsonNodeOutputMethod = v
 		case "standalone":
+			// standalone is the one boolean here whose declared type is
+			// xs:boolean? rather than xs:boolean: the empty sequence is a
+			// legal value meaning "write no standalone at all", which the
+			// element form spells as value="omit". Routing it through
+			// boolParam made the empty sequence a cardinality error, so
+			// serialize(., map{"standalone":()}) raised XPTY0004 where the
+			// spec asks for a declaration without the attribute
+			// (serialize-xml-131, which the suite does not measure because
+			// its environment is a schema-validated source this engine
+			// skips).
+			//
+			// The string " omit " stays a type error: "omit" is a spelling
+			// the *element* form needs because an attribute can carry
+			// nothing but a string, and the map form, being typed, says the
+			// same thing with () instead (serialize-xml-131a).
+			if len(val) == 0 {
+				opts.standalone = ""
+				break
+			}
 			v, err := boolParam(name, val)
 			if err != nil {
 				return err

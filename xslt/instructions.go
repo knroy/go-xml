@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -1587,14 +1588,22 @@ func (s *sortKey) resolve(rt *runtime) (*sortKey, error) {
 			return nil, err
 		}
 		if v = strings.TrimSpace(v); v != "" {
-			// A computed language tag that names no collation is XTDE0030
-			// rather than a compile-time refusal: the stylesheet is
-			// well-formed and only the value it produced is wrong.
 			coll, err := newCollator(v)
-			if err != nil {
+			switch {
+			case errors.Is(err, errLangUnsupported):
+				// Section 13.1.3 (xslt-lcwd30.xml:18481-18482): an
+				// unsupported language behaves as if @lang were omitted, so
+				// the sort falls back to codepoint order rather than failing.
+				// out.coll stays nil.
+			case err != nil:
+				// A computed value outside the xs:language value space is
+				// XTDE0030 rather than a compile-time refusal: the
+				// stylesheet is well-formed and only the value it produced
+				// is wrong.
 				return nil, fmt.Errorf("XTDE0030: %w", err)
+			default:
+				out.coll = coll
 			}
-			out.coll = coll
 		}
 	}
 	return &out, nil

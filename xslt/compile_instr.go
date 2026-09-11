@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -874,16 +875,25 @@ func (c *compiler) compileSort(n *xdm.Node) (*sortKey, error) {
 		}
 		if a.isLit {
 			coll, err := newCollator(a.literal)
-			if err != nil {
-				// A literal @lang is not an attribute value template, so a
-				// bad value here is the static error XTSE0020 ("an attribute
-				// ... contains a value that is not one of the permitted
-				// values for that attribute"), not the dynamic XTDE0030 that
-				// the AVT branch below reports. The two codes differ only in
-				// whether the value was written or computed.
+			switch {
+			case errors.Is(err, errLangUnsupported):
+				// Section 13.1.3: a language that is a legal xs:language but
+				// is not supported means "the processor behaves as if the
+				// lang attribute were omitted" (xslt-lcwd30.xml:18481-18482).
+				// Leaving s.coll nil is exactly that: the sort falls back to
+				// codepoint order.
+			case err != nil:
+				// A value outside the xs:language value space breaks the
+				// "must" in the same paragraph, so it stays the static error
+				// XTSE0020 ("an attribute ... contains a value that is not
+				// one of the permitted values for that attribute"), not the
+				// dynamic XTDE0030 that the AVT branch below reports. The two
+				// codes differ only in whether the value was written or
+				// computed.
 				return nil, fmt.Errorf("XTSE0020: %w", err)
+			default:
+				s.coll = coll
 			}
-			s.coll = coll
 		} else {
 			s.langAVT = a
 		}

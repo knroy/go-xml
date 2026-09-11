@@ -1226,12 +1226,18 @@ func TestStridingMergeSourceIsStreamable(t *testing.T) {
 
 func TestUnstreamedMergeSourceIsNotCheckedBy154(t *testing.T) {
 	// §15.4's first two conditions select what is in scope, and a source
-	// that does not ask to be streamed is not. Both spellings of "not
-	// streamed" must pass a select that condition 3 would otherwise reject:
-	// an explicit streamable="no", and a for-each-item source, which has no
-	// stream to be striding against at all.
+	// that does not ask to be streamed is not. A for-each-item source has no
+	// stream to be striding against at all, so it must pass a select that
+	// condition 3 would otherwise reject.
+	//
+	// The other spelling of "not streamed" -- for-each-source with an
+	// explicit streamable="no" -- used to be tested here too, and is no
+	// longer writable: XTSE3195's last clause says that with for-each-source
+	// present "the only permitted value (and the default value) of the
+	// streamable attribute is yes", so the combination is refused before any
+	// posture is measured. That refusal is asserted by
+	// TestMergeSourceStreamableNoIsRefusedWithForEachSource.
 	for _, atts := range []string{
-		`for-each-source="'log-file-2.xml'" select="log//record" streamable="no"`,
 		`for-each-item="'log-file-2.xml'" select="log//record"`,
 	} {
 		if err := compileMergeSource(t, atts); err != nil {

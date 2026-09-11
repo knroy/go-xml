@@ -65,8 +65,10 @@ type mergeSource struct {
 	// to the documents this source reads. nil means the attribute was absent,
 	// which leaves every accumulator applicable.
 	accums *modeAccumulators
-	// streamed records streamable="yes", whose only visible consequence here
-	// is that the context size inside the action is absent.
+	// streamed records streamable="yes", explicit or defaulted by the
+	// presence of for-each-source (15.4). Its visible consequences here are
+	// the snapshot wrap collect applies to the selected items and an absent
+	// context size inside the action.
 	streamed bool
 	// sortBeforeMerge records sort-before-merge="yes", which both sorts the
 	// input and suppresses XTDE2220 for it.
@@ -320,11 +322,37 @@ func (c *compiler) compileMergeSource(n *xdm.Node, idx int) (*mergeSource, error
 	hasItem := n.Attr("", "for-each-item") != nil
 	hasSource := n.Attr("", "for-each-source") != nil
 	hasAccum := n.Attr("", "use-accumulators") != nil
+	// 15.4: "Any input to a merging operation, provided it is selected by
+	// means of the xsl:merge-source element with a for-each-stream
+	// attribute, may be designated as streamable ... This is also the default
+	// value when the for-each-stream attribute is present." (for-each-stream
+	// is the working draft's name for for-each-source.) The default is not a
+	// streaming hint this engine may ignore: 15.4 goes on to say the snapshot
+	// wrap applies "whether or not streamed processing is actually used, and
+	// whether or not the processor supports streaming", so it decides what
+	// the merge keys and current-merge-group() can see. Defaulting to false
+	// gave a for-each-source with no @streamable the answers of
+	// streamable="no" -- the unsnapshotted tree, navigable to its ancestors'
+	// other children. No suite case writes for-each-source without the
+	// attribute, so nothing caught it.
+	src.streamed = hasSource
 	if v := strings.TrimSpace(n.AttrValue("streamable")); v != "" {
 		b, ok := parseMergeBoolean(v)
 		if !ok {
 			return nil, fmt.Errorf(
 				"XTSE0020: xsl:merge-source/@streamable must be a boolean, got %q", v)
+		}
+		// XTSE3195's last clause: with for-each-source present, "the only
+		// permitted value ... of the streamable attribute is yes". Unlike the
+		// two clauses relaxed below, this one is about for-each-source rather
+		// than for-each-item, so it survives the reading that reconciles the
+		// draft with the suite. merge-064 is the case and names XTSE0020; it
+		// passed before only because it spells the value "No", which the
+		// lexical check above rejects first.
+		if hasSource && !b {
+			return nil, fmt.Errorf(
+				"XTSE0020: xsl:merge-source/@streamable must be yes when "+
+					"for-each-source is present, got %q", v)
 		}
 		src.streamed = b
 	}

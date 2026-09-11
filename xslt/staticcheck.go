@@ -172,10 +172,23 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			if standardAttributes[a.Name.Local] {
 				continue
 			}
-			if forwards {
-				// "if an element has an attribute that XSLT 2.0 does not
-				// allow the element to have, then the attribute must be
-				// ignored."
+			if forwards && effectiveForwards(el) {
+				// Section 3.9: "An element is processed with forwards
+				// compatible behavior if its effective version is greater
+				// than 3.0", and only then is "an attribute that is not
+				// allowed on the element" ignored rather than reported.
+				//
+				// The quotation this guard used to carry was the XSLT 2.0
+				// wording, and the bare forwards flag it tested is measured
+				// against 2.0 by forwardsAt. That handed 2.0-era leniency to
+				// every version="3.0" module -- the version essentially every
+				// modern stylesheet declares -- so a misspelled attribute
+				// name was dropped in silence: <xsl:value-of selct="..."/>
+				// compiled clean and emitted nothing at all. The three
+				// sibling paths in this function each guard with
+				// effectiveForwards for exactly this reason; see the unknown
+				// element check above. This one was measuring the other
+				// version.
 				continue
 			}
 			return fmt.Errorf(

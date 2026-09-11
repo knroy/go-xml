@@ -238,13 +238,21 @@ func TestSortCaseOrder(t *testing.T) {
 }
 
 func TestSortRejectsUnsupportedCollation(t *testing.T) {
-	// A language tag with no collation data would silently fall back to
-	// root collation, so it is refused rather than quietly mis-sorting.
+	// A @lang outside the value space of xs:language is refused: section
+	// 13.1.3 says the effective value "must either be a string in the value
+	// space of xs:language, or a zero-length string". A space is not a legal
+	// subtag character.
+	//
+	// This used to read lang="zz-not-a-language", which is in fact a legal
+	// xs:language -- every subtag is alphabetic and at most 8 characters --
+	// and merely names no collation. The same paragraph requires that case to
+	// behave as if @lang were omitted rather than to fail, so it is covered by
+	// TestSortLangUnsupportedFallsBack instead.
 	sheet := wrap(`<xsl:template match="/"><out>
-		<xsl:for-each select="//n"><xsl:sort select="." lang="zz-not-a-language"/><i/></xsl:for-each>
+		<xsl:for-each select="//n"><xsl:sort select="." lang="not a language"/><i/></xsl:for-each>
 	</out></xsl:template>`)
 	if _, err := runErr(t, sheet, `<r><n>a</n></r>`); err == nil {
-		t.Error("an invalid xsl:sort/@lang should be refused")
+		t.Error("an xsl:sort/@lang outside the xs:language value space should be refused")
 	}
 
 	sheet = wrap(`<xsl:template match="/"><out>

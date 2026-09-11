@@ -29,6 +29,18 @@ type attributeSet struct {
 	pkg int
 	// streamable records @streamable, for the XTSE0730 check below.
 	streamable bool
+	// visibility is @visibility exactly as written, or "" when the attribute
+	// is absent. It is kept verbatim rather than normalised because 10.2.3
+	// compares the declarations of one set against each other, and "present
+	// on some but not all" is a distinct failure from "present with
+	// disagreeing values".
+	visibility string
+	// declaredStreamable is whether @streamable was written at all, which
+	// 10.2.4 asks about separately from what its value is. streamable above
+	// answers "is this set streamable"; this answers "did this declaration
+	// say so", and only the pair can tell an absent attribute from an
+	// explicit streamable="no".
+	declaredStreamable bool
 }
 
 func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
@@ -47,6 +59,8 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 		pkg:              overridingPackage(el, compilePackage),
 		streamable:       yesAttr(el, "streamable"),
 	}
+	as.visibility = strings.TrimSpace(el.AttrValue("visibility"))
+	as.declaredStreamable = el.Attr("", "streamable") != nil
 	for _, u := range strings.Fields(el.AttrValue("use-attribute-sets")) {
 		uq, err := resolveQNameAttr(el, u)
 		if err != nil {
@@ -526,7 +540,71 @@ func (c *compiler) checkAttributeSetRefs() error {
 				n.Lexical())
 		}
 	}
+	if err := c.checkAttributeSetDeclarationsAgree(); err != nil {
+		return err
+	}
 	return c.checkStreamableAttributeSets()
+}
+
+// checkAttributeSetDeclarationsAgree applies the two rules 10.2.3 and 10.2.4
+// state about the declarations that together make up ONE attribute set.
+//
+// 10.2.3: "If the visibility attribute is present on any of the
+// xsl:attribute-set declarations making up the definition of an attribute set
+// (that is, all declarations within the same package sharing the same name),
+// then it must be present, with the same value, on every xsl:attribute-set
+// declaration making up the definition of that attribute set."
+//
+// 10.2.4: "If any xsl:attribute-set declaration for an attribute set has the
+// attribute streamable="yes", then every xsl:attribute-set declaration for
+// that attribute set must have the attribute streamable="yes"."
+//
+// Neither "must" carries an error code of its own, so both are XTSE0020: the
+// value of an attribute is not one the element permits in this context, which
+// is the code compileFunction already uses for the same shape of rule -- the
+// deprecated @override having to agree with @override-extension-function.
+//
+// The grouping is per package, because 10.2 defines an attribute set as "a set
+// of xsl:attribute-set declarations IN THE SAME PACKAGE that share the same
+// expanded QName". Two packages each declaring a set of one name declare two
+// sets, and neither has anything to say about the other's attributes.
+//
+// The suite does not reach either rule: its streamable cases
+// (attribute-set-0104, -0105) write the same value on every declaration, and
+// its visibility cases declare a name once. Both are nonetheless the shape a
+// stylesheet hits by editing one declaration of a multi-module set and not its
+// siblings, which is exactly when a silent accept is worst -- the set then
+// composes with a streamability or visibility the author never wrote.
+func (c *compiler) checkAttributeSetDeclarationsAgree() error {
+	for _, sets := range c.sheet.attributeSets {
+		byPkg := map[int][]*attributeSet{}
+		for _, as := range sets {
+			byPkg[as.pkg] = append(byPkg[as.pkg], as)
+		}
+		for _, group := range byPkg {
+			first := group[0]
+			for _, as := range group[1:] {
+				if as.visibility != first.visibility {
+					return fmt.Errorf(
+						"XTSE0020: the declarations of xsl:attribute-set %q "+
+							"give it visibility=%q and visibility=%q, but "+
+							"every declaration of one attribute set must "+
+							"carry the same visibility",
+						as.name.Lexical(), first.visibility, as.visibility)
+				}
+				if as.streamable != first.streamable ||
+					as.declaredStreamable != first.declaredStreamable {
+					return fmt.Errorf(
+						"XTSE0020: xsl:attribute-set %q has a declaration "+
+							"with streamable=\"yes\" and another without, "+
+							"but every declaration of one attribute set must "+
+							"specify streamable=\"yes\" if any does",
+						as.name.Lexical())
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // checkStreamableAttributeSets applies XTSE0730: "If an xsl:attribute set

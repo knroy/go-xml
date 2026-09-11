@@ -1012,7 +1012,22 @@ func jsonFallback(ctx *Context, opts jsonOptions) func(string) (string, error) {
 		for _, it := range atoms {
 			b.WriteString(it.(*xdm.Atomic).String())
 		}
-		return b.String(), nil
+		rep := b.String()
+		// The fallback exists to supply a replacement the result CAN hold, so
+		// its answer is subject to the same rule as the character it replaces.
+		// F&O 3.1 §17.4.1: the fallback function "must return a string that
+		// contains no characters that are invalid in XML"; returning one is
+		// err:FOJS0007. Trusting the answer unchecked put a C0 control into
+		// the map fn:parse-json returns and into the tree fn:json-to-xml
+		// builds, where serialisation then dropped it without a word — the
+		// character disappeared instead of being reported.
+		for _, c := range rep {
+			if !deliverableInXML(c) {
+				return "", xdm.Errorf("FOJS0007",
+					"the fallback function returned U+%04X, which no XML document may hold", c)
+			}
+		}
+		return rep, nil
 	}
 }
 

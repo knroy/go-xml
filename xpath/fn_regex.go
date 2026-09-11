@@ -313,6 +313,8 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 	dotAll := false
 	// literal is the "q" flag: the pattern is a plain string, not a pattern.
 	literal := false
+	// stripSpace is the "x" flag, held until every flag has been read.
+	stripSpace := false
 	for _, f := range flags {
 		switch f {
 		case 'i':
@@ -329,8 +331,11 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 			goFlags = append(goFlags, "m")
 		case 'x':
 			// Whitespace in the pattern is ignored. RE2 has no such flag, so
-			// it is applied by stripping unescaped whitespace here.
-			pattern = stripPatternWhitespace(pattern)
+			// it is applied by stripping unescaped whitespace below. It cannot
+			// be applied here, in the flag loop: "q" may appear after "x", and
+			// under "q" this flag must have no effect at all, so the decision
+			// can only be made once every flag letter has been read.
+			stripSpace = true
 		case 'q':
 			// The "q" flag makes every character in the pattern represent
 			// itself, and was introduced in XPath 3.0. Under 2.0 it is simply
@@ -346,6 +351,15 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 		default:
 			return nil, fmt.Errorf("FORX0001: unknown regular expression flag %q", string(f))
 		}
+	}
+
+	// F&O 3.0 5.6.1 says of "q": "If it is used together with the m, s, or x
+	// flag, that flag has no effect." So the whitespace strip only happens
+	// when "q" is absent — stripping first and quoting after would delete
+	// spaces the literal pattern is entitled to keep, and did, which made
+	// matches("a b", "a b", "qx") false where the spec says true.
+	if stripSpace && !literal {
+		pattern = stripPatternWhitespace(pattern)
 	}
 
 	// Under "q" the pattern is not parsed at all: every character stands for

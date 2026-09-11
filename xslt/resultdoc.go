@@ -239,8 +239,26 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 	// Two result documents sharing an href would mean one silently
 	// overwriting the other, so the collision is reported instead.
+	//
+	// The comparison is on the ABSOLUTE URI, not on the href as written.
+	// §24.2: "[ERR XTDE1490] It is a dynamic error for a transformation to
+	// generate two or more final result trees with the same URI." The URI of
+	// a secondary result is the href resolved against the base output URI
+	// (§24.1: "The effective value of the attribute must be a URI Reference,
+	// which may be absolute or relative. If it is relative, then it is
+	// resolved against the base output URI"), so href="out.xml" and
+	// href="./out.xml" name one and the same tree. Comparing the raw strings
+	// let that pair through and wrote one document over the other in silence.
+	// checkReadThenWrite above already keys off the resolved form for the
+	// neighbouring XTDE1500; this is the same URI identity.
+	//
+	// The raw href is still compared as well, for the case where no base
+	// output URI is known: resolution then yields "" for every document, and
+	// the resolved form would neither catch a real collision nor be safe to
+	// treat as one.
 	for _, prev := range *rt.secondary {
-		if prev.Href == href {
+		if prev.Href == href ||
+			(resolvedHref != "" && prev.BaseURI == resolvedHref) {
 			return fmt.Errorf(
 				"XTDE1490: xsl:result-document: href %q was already produced by an earlier "+
 					"result document", href)
