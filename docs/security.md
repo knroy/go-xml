@@ -62,14 +62,22 @@ self-applying function item is charged recursion depth like a named one, and a
 flat operator chain is bounded at the parser where a single limit protects
 evaluation and serialisation as well as optimisation.
 
-**Knowingly incomplete.** One narrowing remains, and it is in an API rather
-than at a copy site. `xdmbuild.Builder.AddAttributeTyped` takes a type
-annotation as a **string**, so an attribute entering a result tree through the
-builder arrives carrying its annotation name and nothing else — `UnionMember`,
-`DerivedPrimitive`, `ListItem`, `IsID`, `IsIDREFS` are all dropped there, on
-every path, and have been since the builder was written. It is the one place
-left where a node's typing is reconstructed from a name instead of copied. The
-node-copy sites themselves no longer do this; see *History*.
+**The last narrowing is closed.** `xdmbuild.Builder.AddAttributeTyped` took a
+type annotation as a **string**, so an attribute entering a result tree through
+the builder arrived carrying its annotation name and nothing else —
+`UnionMember`, `DerivedPrimitive`, `ListItem`, `IsID`, `IsIDREFS` were all
+dropped there, on every path, from the builder being written until audit
+finding 24. It was the one place left where a node's typing was reconstructed
+from a name instead of copied.
+
+`Builder.AddAttributeWithTyping` now takes an `xdm.Typing` — all eight PSVI
+properties — and records them as given. `AddAttributeTyped` remains, unchanged
+in signature and in behaviour, as a documented convenience wrapper over it for
+the callers that genuinely hold nothing but a name. The four sites that DO hold
+resolved typing were moved to the new entry point: `xsl:attribute` after
+assessment, the attribute branch of `xsl:copy-of`, `appendItemChecked`, and
+XQuery's attribute-into-element-content path. The node-copy sites themselves
+had already stopped doing this; see *History*.
 
 **Deliberate limits**, which are resource controls and not bugs — a request
 refused here is refused loudly, and the fallback is conservative in the

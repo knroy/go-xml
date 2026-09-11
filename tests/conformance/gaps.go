@@ -88,6 +88,17 @@ type Results struct {
 
 	Suites  []Suite `json:"suites"`
 	Corpora []Suite `json:"corpora"`
+
+	// Tree holds the figures that are DERIVED FROM THE SOURCE TREE rather
+	// than from a suite run: how many unit tests, fuzz targets and limit
+	// boundary tests there are. Their values are not in this file and cannot
+	// be -- see TreeCount in stats.go -- only the counting method is.
+	Tree []TreeCount `json:"tree"`
+
+	// Breakdowns are named subsets of a suite's disagreements, such as "14 of
+	// the 34 XSLT 3.0 failures want an XTSE3430". Both halves get published,
+	// so both are checked: the subset may not exceed its suite's count.
+	Breakdowns []Breakdown `json:"breakdowns"`
 }
 
 // Load reads and validates a results file.
@@ -163,7 +174,7 @@ func (r *Results) Validate() error {
 			}
 		}
 	}
-	return nil
+	return r.validateExtra()
 }
 
 func validVerdict(v string) bool {

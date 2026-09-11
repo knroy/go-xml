@@ -106,7 +106,11 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 | **XSD 1.1** | 99.90% instance (26,196 of 26,222); **99.97%** schema-validity (15,349 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 2,149 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+<!-- BEGIN GENERATED TEST COUNT -->
+<!-- Generated from tests/conformance/results.json and the source tree by
+     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
+| **Tests** | 2,175 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+<!-- END GENERATED TEST COUNT -->
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -1227,13 +1231,17 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (2,149 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+<!-- BEGIN GENERATED TEST METHODS -->
+<!-- Generated from tests/conformance/results.json and the source tree by
+     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
+| **Unit tests** (2,175 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |
 | **W3C xsdtests suite** | systematic XSD conformance across 25,000 instance and 14,388 schema-validity tests (XSD 1.0; 1.1 adds 26,222 and 15,354) | schemas nobody writes by hand |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
 | **Fuzzing** (9 targets) | a crash, hang or wrong refusal on input no author would write | anything a coverage-guided search does not reach in the time it is given |
+<!-- END GENERATED TEST METHODS -->
 
 **Every suite feeds the parser well-formed input**, which is the gap fuzzing
 exists to close: the targets cover the XML parser, the schema assembler and its

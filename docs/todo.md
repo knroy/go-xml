@@ -9,6 +9,9 @@ Current position:
 |---|---|---|
 | XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
 | XSD 1.1 | 15,349 / 15,354 (99.97%) | 26,196 / 26,222 (99.90%) |
+<!-- BEGIN GENERATED STATUS TABLE -->
+<!-- Generated from tests/conformance/results.json and the source tree by
+     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
 | XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
 | XPath 3.1 | 100.00% — 21,898 of 21,898 in scope (0 failing) |
@@ -17,7 +20,8 @@ Current position:
 | XSLT 3.0 | 99.70% — 11,484 of 11,518 in scope (34 failing); 14 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,149 `func Test` declarations, clean under `-race` |
+| Tests | 2,175 `func Test` declarations, clean under `-race` |
+<!-- END GENERATED STATUS TABLE -->
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what

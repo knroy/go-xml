@@ -20,17 +20,21 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,149 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+<!-- BEGIN GENERATED LAYER COUNTS -->
+<!-- Generated from tests/conformance/results.json and the source tree by
+     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
+| **Unit tests** | 2,175 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
-| **Real-world stylesheets** | 818 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
+| **Real-world stylesheets** | 802 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
 | **Production schema sets** | 65 + CII | what modular published schemas do | industries whose schemas are shaped differently |
 | **Vendored real-world schemas** | 185 of 230 | a schema-validity rule that has become stricter than the spec, on every checkout — no licensed corpus needed | the deep industry vocabularies only UBL and CII carry |
 | **Fuzzing** | 9 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
 | **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no interleaved choices |
 | **Wildcard/UPA model** | 60,000 pairs | a *wrong answer* in wildcard acceptance or in the UPA competition rule | anything outside a single wildcard against a single name, or a pair of terms in one choice |
 | **The ratchet** | 10 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
+<!-- END GENERATED LAYER COUNTS -->
 
 **How the first four counts are counted**, because "how many tests" has several
 honest answers and the one meant here is the narrow one. The three that a
@@ -38,12 +42,12 @@ command can settle are asserted for equality by `tests/check.sh`'s *documented
 figures* section, which fails the gate when this table drifts from the tree:
 
 * **Unit tests** — `func Test` declarations, not subtests and not table rows:
-  `grep -rn "func Test" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
+  `grep -rn "^func Test" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
 * **Limit boundary tests** — `func Test` declarations in the six
   `*/limits_boundary_test.go` files (dtd, relaxng, xdm, xpath, xsd, xslt); most
   are table-driven, so they run rather more than 13 cases:
-  `grep -hc "func Test" ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'`
-* **Fuzzing** — `grep -rn "func Fuzz" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
+  `grep -hc "^func Test" ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'`
+* **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
 * **W3C conformance suites** — the sum of the in-scope totals in the status
   table: XPath 2.0 15,222 + XQuery 3.1 29,964 + XSLT 2.0 6,201 + XSLT 3.0 11,518
   + XSD 1.0 39,388 + XSD 1.1 41,576 + RELAX NG 965. XPath 3.0 and 3.1 are not

@@ -1,5 +1,5 @@
 {
-  "_comment": "The single source of truth for every conformance figure this repository publishes. docs/conformance-gaps.md's summary table is GENERATED from this file by tests/conformance-docs.go; do not edit that table by hand. Re-measure with tests/check.sh, copy the passing counts here together with the run date and command, then regenerate.",
+  "_comment": "The single source of truth for every measured figure this repository publishes. docs/stats.md is generated from this file end to end, and every figure quoted in README.md, docs/conformance-gaps.md, docs/testing.md and docs/todo.md is a generated region fed from it; do not edit those regions by hand. Suite counts are recorded here because a suite run costs minutes: re-measure with tests/check.sh, copy the passing counts here with the run date and command, then run `go run tests/conformance-docs.go`. Counts derived from the source tree are NOT recorded here -- only their counting method is -- because a number typed into a data file is the same defect as a number typed into a sentence.",
   "generated_by": "tests/conformance-docs.go",
   "suites": [
     {
@@ -175,6 +175,35 @@
       "run_date": "2026-09-11",
       "command": "tests/check.sh (XSpec)",
       "cases": []
+    }
+  ],
+  "tree": [
+    {
+      "id": "unit-tests",
+      "label": "Unit tests",
+      "kind": "func-test",
+      "method": "grep -rn '^func Test' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'"
+    },
+    {
+      "id": "fuzz-targets",
+      "label": "Fuzz targets",
+      "kind": "func-fuzz",
+      "method": "grep -rn '^func Fuzz' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'"
+    },
+    {
+      "id": "limit-boundary-tests",
+      "label": "Limit boundary tests",
+      "kind": "limits-boundary",
+      "method": "grep -hc '^func Test' ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'"
+    }
+  ],
+  "breakdowns": [
+    {
+      "id": "xtse3430",
+      "label": "XSLT 3.0 failures wanting an XTSE3430",
+      "suite": "xslt-3.0",
+      "of": 14,
+      "note": "Only the unwritten remainder of the \u00a719.8 posture-and-sweep analysis can emit the refusal; \u00a719.1 does not require a non-streaming processor to assess guaranteed-streamability."
     }
   ]
 }

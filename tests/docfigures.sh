@@ -154,16 +154,32 @@ fi
 
 # The same total also appears in prose that carries no denominator -- "those
 # 104 cases" in docs/known-gaps.md -- which the loop above cannot see, because
-# it has nothing to anchor on. The form is narrow enough to match directly:
-# "those N cases" and "N disagreements in all". A figure written that way is a
-# copy of the generated total and must equal it.
-grep -n -E 'those [0-9,]+ cases|[0-9,]+ disagreements in all' \
+# it has nothing to anchor on. The forms are narrow enough to match directly:
+# "those N cases", "N disagreements in all", and "The N is the sum". A figure
+# written any of those ways is a copy of the generated total and must equal it.
+#
+# "The N is the sum" was added when the figures moved into generated regions.
+# Most published copies of the total now live inside a marked region and are
+# rewritten by tests/conformance-docs.go, but that sentence in
+# docs/known-gaps.md is an ARGUMENT about where the number comes from, not a
+# figure: generating it would leave the surrounding paragraph reasoning about a
+# number a script had silently changed. So it stays prose and is checked here
+# instead, which fails at the moment someone should be re-reading the sentence.
+#
+# Deliberately NOT matched: the historical narrative. docs/conformance-gaps.md
+# and docs/testing.md both recount that this document once printed 168 while
+# its own rows summed to 104. That 104 is a fact about the past and must not
+# follow the current total -- if the suites move, the story of the 168/104 bug
+# is still the story of 168 and 104. The patterns above are worded to match the
+# live claims and miss the narrative ones, which is why they are three narrow
+# forms rather than "any number near the word total".
+grep -n -E 'those [0-9,]+ cases|[0-9,]+ disagreements in all|The [0-9,]+ is the sum' \
 	"$ROOT/README.md" "$ROOT"/docs/*.md 2>/dev/null |
 	awk -F: -v want="$want_total" -v root="$ROOT/" '
 	{
 		file = $1; sub(root, "", file); ln = $2
 		line = $0; sub(/^[^:]*:[0-9]*:/, "", line)
-		while (match(line, /those [0-9,]+ cases|[0-9,]+ disagreements in all/)) {
+		while (match(line, /those [0-9,]+ cases|[0-9,]+ disagreements in all|The [0-9,]+ is the sum/)) {
 			t = substr(line, RSTART, RLENGTH); line = substr(line, RSTART + RLENGTH)
 			n = t; gsub(/[^0-9]/, "", n)
 			if (n != want) {
