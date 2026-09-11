@@ -50,7 +50,7 @@ import (
 // hand fix now answer the same question, and the hand fix's tests are what
 // prove they answer it the same way.
 var specSignatures = func() map[string][]string {
-	m := make(map[string][]string, len(builtinSignatures)+4)
+	m := make(map[string][]string, len(builtinSignatures)+18)
 	for k, v := range builtinSignatures {
 		m[k] = v
 	}
@@ -58,6 +58,29 @@ var specSignatures = func() map[string][]string {
 	m["substring/3"] = []string{"xs:string", "xs:string?", "xs:double", "xs:double"}
 	m["subsequence/2"] = []string{"item()*", "item()*", "xs:double"}
 	m["subsequence/3"] = []string{"item()*", "item()*", "xs:double", "xs:double"}
+
+	// The numeric family, F&O 3.1 4.4 and 4.5, taken from the manifest.
+	//
+	// Most of its parameters are declared "?" or "*", so they constrain
+	// nothing new; the rows that do are fn:round/2 and
+	// fn:round-half-to-even/2, whose $precision is xs:integer with no "?",
+	// and fn:min/2 and fn:max/2, whose $collation is xs:string with no "?".
+	// Those four are the empty-sequence arm this family adds, and they are
+	// the same defect class commit 7668773 fixed by hand for fn:round/1.
+	m["abs/1"] = []string{"xs:numeric?", "xs:numeric?"}
+	m["ceiling/1"] = []string{"xs:numeric?", "xs:numeric?"}
+	m["floor/1"] = []string{"xs:numeric?", "xs:numeric?"}
+	m["round/1"] = []string{"xs:numeric?", "xs:numeric?"}
+	m["round/2"] = []string{"xs:numeric?", "xs:numeric?", "xs:integer"}
+	m["round-half-to-even/1"] = []string{"xs:numeric?", "xs:numeric?"}
+	m["round-half-to-even/2"] = []string{"xs:numeric?", "xs:numeric?", "xs:integer"}
+	m["avg/1"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*"}
+	m["min/1"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*"}
+	m["min/2"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*", "xs:string"}
+	m["max/1"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*"}
+	m["max/2"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*", "xs:string"}
+	m["sum/1"] = []string{"xs:anyAtomicType", "xs:anyAtomicType*"}
+	m["sum/2"] = []string{"xs:anyAtomicType?", "xs:anyAtomicType*", "xs:anyAtomicType?"}
 	return m
 }()
 
