@@ -65,6 +65,12 @@ type attrDef struct {
 	// writes terminate="true" there -- what decides is whether the processor
 	// implements 3.0, not what the module's @version happens to say.
 	processor30 bool
+	// eqnameOK marks an attribute whose type is a UNION of a token
+	// enumeration with an EQName, so a lexically-valid namespaced name is
+	// permitted beyond the listed tokens. xsl:function/@streamability is the
+	// case: REC J.1 unions xsl:streamability-type with
+	// xsl:EQName-in-namespace.
+	eqnameOK bool
 	// removed30 marks a name a working draft of XSLT 3.0 proposed and the
 	// Recommendation removed. The summary does not define it, so it is
 	// XTSE0090 exactly as an invented name would be -- but listing it makes
@@ -72,6 +78,12 @@ type attrDef struct {
 	// ignores every attribute the summary does not define and so cannot
 	// distinguish a withdrawn name from a future one.
 	removed30 bool
+}
+
+// componentKinds is xsl:component-kind-type of REC J.1: the kinds of
+// component xsl:expose and xsl:accept may name, "*" being all of them.
+var componentKinds = []string{
+	"template", "function", "variable", "attribute-set", "mode", "*",
 }
 
 // xsltElements is the grammar, keyed by local name.
@@ -109,13 +121,17 @@ var xsltElements = map[string]elementDef{
 		"package-version": {},
 	}},
 	"expose": {since30: true, attrs: map[string]attrDef{
-		"component": {required: true},
+		// REC J.1 types @component as xsl:component-kind-type, a closed set
+		// of six tokens. Without it "component=\"accumulator\"" was accepted
+		// and silently exposed nothing; expose-906 and expose-907 are the
+		// suite's "unknown component kind" cases, both XTSE0020.
+		"component": {required: true, values: componentKinds},
 		"names":     {required: true},
 		"visibility": {required: true, values: []string{
 			"public", "private", "final", "abstract", "hidden"}},
 	}},
 	"accept": {since30: true, attrs: map[string]attrDef{
-		"component": {required: true},
+		"component": {required: true, values: componentKinds},
 		"names":     {required: true},
 		"visibility": {required: true, values: []string{
 			"public", "private", "final", "abstract", "hidden"}},
@@ -298,8 +314,20 @@ var xsltElements = map[string]elementDef{
 		// is section 10.3's component visibility; @streamability is
 		// 19.8.7's declared classification, which the W3C suite writes in
 		// seventy files.
-		"visibility":    {since30: true},
-		"streamability": {since30: true},
+		// REC J.1 types xsl:function/@visibility as
+		// xsl:visibility-not-hidden-type, which restricts
+		// xsl:visibility-type by EXCLUDING "hidden": a function cannot be
+		// declared hidden, only made so by xsl:expose.
+		"visibility": {since30: true, values: []string{
+			"public", "private", "final", "abstract"}},
+		// REC J.1 types @streamability as xsl:streamability-type, a UNION of
+		// seven tokens with xsl:EQName-in-namespace -- a processor may name
+		// its own classification by a namespaced EQName. eqnameOK lets such a
+		// name through, and avt admits the suite's
+		// streamability="{if ($STREAMABLE) then ... }".
+		"streamability": {since30: true, avt: true, eqnameOK: true,
+			values: []string{"unclassified", "absorbing", "inspection",
+				"filter", "shallow-descent", "deep-descent", "ascent"}},
 		// The third member of the same summary, missed when the two above
 		// were added. xslt-lcwd30.xml:14648 types it
 		// identity-sensitive? = boolean; 10.3.7 (lines 14923-14929) says
@@ -332,8 +360,12 @@ var xsltElements = map[string]elementDef{
 		},
 		// "maybe" is the third value, and the default: it leaves the
 		// processor free to reuse a result or not.
+		// REC J.1 types @new-each-time as xsl:yes-or-no-or-maybe, exactly
+		// these seven spellings. avt admits new-each-time="{$new-each-time}",
+		// which the suite writes.
 		"new-each-time": {
 			processor30: true,
+			avt:         true,
 			values:      []string{"yes", "no", "true", "false", "1", "0", "maybe"},
 		},
 		// @cache is a hint rather than a promise -- 10.3 leaves a processor
@@ -431,7 +463,11 @@ var xsltElements = map[string]elementDef{
 		// copy's own tree is all the document the rules would see.
 		"copy-accumulators": {values: []string{"yes", "no"}},
 		"type":              {},
-		"validation":        {},
+		// REC J.1 types @validation as xsl:validation-type on xsl:copy-of
+		// exactly as on xsl:copy, xsl:element and the rest, which this table
+		// already enumerated -- copy-of alone was left open.
+		"validation": {avt: true, values: []string{
+			"strict", "lax", "preserve", "strip"}},
 	}},
 	// xsl:evaluate is an XSLT 3.0 instruction, listed here for the same reason
 	// xsl:mode is: rejecting it under XTSE0010 is the wrong error at the wrong
