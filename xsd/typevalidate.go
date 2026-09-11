@@ -202,7 +202,7 @@ func (s *Schema) validateNodeAgainstType(n *xdm.Node, typ Type,
 			// on a value rather than on a declared node. Without it an
 			// attribute validated against a named type came out untyped and
 			// "instance of attribute(a, my:t)" answered false for it.
-			setResolvedAnnotation(n,
+			s.setResolvedAnnotation(n,
 				xdm.AnnotationName(typeName.URI, typeName.Local), typ)
 		}
 	default:
@@ -429,12 +429,24 @@ func resolveAnnotationMeaning(key string, t Type) (derivedPrimitive, listItem st
 // calling xdm.SetTypeAnnotation directly. A site that annotates with a name
 // but has no Type in hand keeps using SetTypeAnnotation, which leaves the
 // resolved fields empty and falls back to the registry.
-func setResolvedAnnotation(n *xdm.Node, annotation string, t Type) {
+//
+// It also records THIS schema's TypeEnvironment on the node. The resolved
+// fields answer only for the node's own annotation; every other by-NAME
+// question -- "instance of", "castable as", the element and attribute tests,
+// xsl:copy's namespace-sensitivity check -- walks the annotation's derivation
+// chain, and the chain belongs to the schema that defined the name. Stamping
+// the environment here is what lets those walks reach this schema's
+// definitions rather than whatever a later, unrelated schema registered under
+// the same lexical name.
+func (s *Schema) setResolvedAnnotation(n *xdm.Node, annotation string, t Type) {
 	if annotation == "" {
 		return
 	}
 	prim, item := resolveAnnotationMeaning(annotation, t)
 	n.SetTypeAnnotationResolved(annotation, prim, item)
+	if s != nil {
+		n.SetTypeEnv(s.typeEnv)
+	}
 }
 
 // TypeEnv returns the type environment this schema owns: the derivation, list

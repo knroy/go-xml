@@ -197,6 +197,32 @@ type Node struct {
 	DerivedPrimitive string
 	ListItem         string
 
+	// typeEnv is the TypeEnvironment of the schema whose assessment produced
+	// this node's TypeAnnotation, or nil when no schema did.
+	//
+	// The per-node fields above answer only for the node's OWN annotation.
+	// Every other by-NAME question -- is this annotation derived from
+	// xs:QName, is it an instance of that type, what does the chain two links
+	// up erase to -- has to walk a derivation chain, and the chain lives in a
+	// schema. Under the process-global tables two schemas that reuse one
+	// lexical type name for different definitions shared one chain, so a node
+	// validated by the first answered those questions with the second's
+	// derivations from the moment the second loaded. Carrying the environment
+	// on the node is what keeps the annotation and its meaning together: the
+	// name means what the schema that issued it says it means, for as long as
+	// the node exists.
+	//
+	// It is also what keeps the environment alive. The node holds a strong
+	// reference, so the environment becomes collectable exactly when the last
+	// node that depends on it does, which is the lifetime rule
+	// TypeEnvironment documents and the reason nothing evicts from one.
+	//
+	// nil is not an error. A node annotated by something other than schema
+	// assessment -- a DTD attribute type, an XSLT validation instruction, a
+	// plain struct literal in a test -- has no schema to name, and for those
+	// the global table is exactly the behaviour that was there before.
+	typeEnv *TypeEnvironment
+
 	// IsID and IsIDREFS are the data model's is-id and is-idrefs properties
 	// (XDM §5.2, §6.2). They are deliberately *separate* state from
 	// TypeAnnotation rather than being derived from it, because XSLT 2.0
@@ -849,7 +875,7 @@ func (n *Node) Atomize() *Atomic {
 			// it the value knows only the primitive it erased to, and every
 			// question about the schema type it was validated against
 			// answered false.
-			return a.WithDerived(n.TypeAnnotation)
+			return a.WithDerived(n.TypeAnnotation).WithTypeEnv(n.typeEnv)
 		}
 		// A user-defined type this package cannot construct still atomises:
 		// it is the primitive its schema type derives from, and the schema
@@ -898,7 +924,7 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 		item = n.ListItem
 	}
 	if item == "" {
-		item = listItemType(n.TypeAnnotation)
+		item = listItemType(typeEnvOf(n), n.TypeAnnotation)
 	}
 	if item == "" {
 		// A union whose selected member is a LIST has a sequence for its
@@ -914,19 +940,19 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 		// prefix. Given the whole literal as a single item, "xs ul" is not a
 		// prefix in scope and every stylesheet excluding two prefixes was
 		// reported invalid.
-		if item = listItemType(n.UnionMember); item == "" {
+		if item = listItemType(typeEnvOf(n), n.UnionMember); item == "" {
 			return nil, false
 		}
 	}
 	fields := strings.Fields(n.StringValue())
 	out := make(Sequence, 0, len(fields))
 	for _, f := range fields {
-		if a := atomicForLexical(item, f); a != nil {
+		if a := atomicForLexical(typeEnvOf(n), item, f); a != nil {
 			// The item carries the LIST's item type as its derived name, so
 			// that "data(@nmtokens) instance of xs:NMTOKEN*" is true. Without
 			// it each token is only the xs:string that NMTOKEN erases to and
 			// the instance-of test answers false.
-			out = append(out, a.WithDerived(item))
+			out = append(out, a.WithDerived(item).WithTypeEnv(n.typeEnv))
 			continue
 		}
 		out = append(out, NewUntypedAtomic(f))
@@ -943,7 +969,7 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 // token out of many. The walk is the same, guarded the same way, and the
 // value keeps the ITEM type's own name so that
 // "data(@list) instance of my:itemType*" answers true.
-func atomicForLexical(typeName, value string) *Atomic {
+func atomicForLexical(env *TypeEnvironment, typeName, value string) *Atomic {
 	if a := atomicForAnnotation(typeName, value); a != nil {
 		return a
 	}
@@ -954,7 +980,7 @@ func atomicForLexical(typeName, value string) *Atomic {
 	// deep chains it could not tell apart from a cycle.
 	seen := map[string]bool{name: true}
 	for {
-		prim := globalTypeEnv.DerivedBase(name)
+		prim := env.DerivedBase(name)
 		ok := prim != ""
 		if !ok {
 			return nil
@@ -972,7 +998,7 @@ func atomicForLexical(typeName, value string) *Atomic {
 
 // listItemType maps a list type annotation to the type of its items, or ""
 // when the annotation does not name a list type.
-func listItemType(annotation string) string {
+func listItemType(env *TypeEnvironment, annotation string) string {
 	// Guarded by a visited set rather than a step count: only a cycle a schema
 	// registered can keep this walk going, and the set names that condition
 	// instead of guessing at a depth no legal chain exceeds.
@@ -993,10 +1019,10 @@ func listItemType(annotation string) string {
 		// obtain. It is consulted before the derivation walk so that a list
 		// whose base happens to be registered as something atomic does not
 		// lose its list-ness one step in.
-		if item := ListItemOf(annotation); item != "" {
+		if item := env.ListItemOf(annotation); item != "" {
 			return item
 		}
-		next := DerivedBase(annotation)
+		next := env.DerivedBase(annotation)
 		if next == annotation {
 			return ""
 		}
@@ -1549,15 +1575,15 @@ func atomicForUnionAnnotation(n *Node) *Atomic {
 	switch member {
 	case "QName", "NOTATION":
 		if q, ok := n.resolveQNameValue(); ok {
-			return NewQNameValue(q).WithDerivedUnion(n.TypeAnnotation, member)
+			return NewQNameValue(q).WithDerivedUnion(n.TypeAnnotation, member).WithTypeEnv(n.typeEnv)
 		}
 		return nil
 	}
-	a := atomicForLexical(member, n.StringValue())
+	a := atomicForLexical(typeEnvOf(n), member, n.StringValue())
 	if a == nil {
 		return nil
 	}
-	return a.WithDerivedUnion(n.TypeAnnotation, member)
+	return a.WithDerivedUnion(n.TypeAnnotation, member).WithTypeEnv(n.typeEnv)
 }
 
 // atomicForDerivedAnnotation builds a typed value for a user-defined schema
@@ -1598,7 +1624,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 		if first != "" {
 			prim, ok, first = first, true, ""
 		} else {
-			prim = globalTypeEnv.DerivedBase(name)
+			prim = typeEnvOf(n).DerivedBase(name)
 			ok = prim != ""
 		}
 		if !ok {
@@ -1610,7 +1636,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 		switch prim {
 		case "QName", "NOTATION":
 			if q, ok := n.resolveQNameValue(); ok {
-				return NewQNameValue(q).WithDerived(n.TypeAnnotation)
+				return NewQNameValue(q).WithDerived(n.TypeAnnotation).WithTypeEnv(n.typeEnv)
 			}
 			return nil
 		}
@@ -1619,7 +1645,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 			// intermediate name the walk stopped at: that is what makes
 			// "instance of my:specialPartNumber" true as well as
 			// "instance of my:partNumberType".
-			return a.WithDerived(n.TypeAnnotation)
+			return a.WithDerived(n.TypeAnnotation).WithTypeEnv(n.typeEnv)
 		}
 		if seen[prim] {
 			return nil

@@ -250,3 +250,56 @@ func (e *TypeEnvironment) Merge(src *TypeEnvironment) {
 	}
 	e.unionMu.Unlock()
 }
+
+// typeEnvOf returns the environment to consult for a node: the one the schema
+// that validated it owns, or the process-global fallback when the node carries
+// none.
+//
+// A node carries none when it was annotated by something other than schema
+// assessment -- a DTD attribute type, an XSLT validation instruction, a plain
+// struct literal -- and for those the global table is exactly the behaviour
+// that was there before, which is why the fallback is not an error.
+func typeEnvOf(n *Node) *TypeEnvironment {
+	if n != nil && n.typeEnv != nil {
+		return n.typeEnv
+	}
+	return globalTypeEnv
+}
+
+// TypeEnvOf returns the environment to consult for questions about a node's
+// type: the one the schema that validated it owns, or the process-global
+// fallback when the node carries none.
+//
+// Every by-NAME consumer of a schema's type facts that HOLDS a node should go
+// through this rather than through the package-level DerivedBase, ListItemOf
+// and UnionMembersOf. Those answer from the global table, which is keyed by
+// type name across every schema in the process and so answers for whichever
+// schema loaded last; this answers from the schema that actually produced the
+// node's annotation, which is the only definition that can be correct for it.
+func TypeEnvOf(n *Node) *TypeEnvironment { return typeEnvOf(n) }
+
+// TypeEnv returns the type environment of the schema that validated this node,
+// or nil when no schema did.
+//
+// Unlike TypeEnvOf this does NOT fall back to the global table: it reports
+// what the node actually carries, which is what a test asserting that the
+// stamping happened needs to see.
+func (n *Node) TypeEnv() *TypeEnvironment {
+	if n == nil {
+		return nil
+	}
+	return n.typeEnv
+}
+
+// SetTypeEnv records the type environment of the schema whose assessment
+// produced this node's annotation.
+//
+// The xsd package calls it as it annotates, so that later by-name questions
+// about the node's type reach the definitions that schema actually made rather
+// than whatever a later, unrelated schema registered under the same name.
+func (n *Node) SetTypeEnv(e *TypeEnvironment) {
+	if n == nil {
+		return
+	}
+	n.typeEnv = e
+}

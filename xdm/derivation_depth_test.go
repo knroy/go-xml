@@ -149,7 +149,7 @@ func TestListItemTypeDeepDerivation(t *testing.T) {
 			// A chain of named restrictions standing above the list type.
 			name := registerChain("listitem", depth, base)
 
-			if got := listItemType(name); got != item {
+			if got := listItemType(GlobalTypeEnvironment(), name); got != item {
 				t.Fatalf("depth %d: listItemType(%q) = %q, want %q "+
 					"(the walk gave up before reaching the list)",
 					depth, name, got, item)
@@ -277,10 +277,10 @@ func TestCyclicDerivationTerminates(t *testing.T) {
 				got)
 		}
 
-		if got := atomicForLexical(a, "42"); got != nil {
+		if got := atomicForLexical(GlobalTypeEnvironment(), a, "42"); got != nil {
 			t.Errorf("atomicForLexical on a cyclic chain = %v, want nil", got)
 		}
-		if got := listItemType(cyclicList); got != "" {
+		if got := listItemType(GlobalTypeEnvironment(), cyclicList); got != "" {
 			t.Errorf("listItemType on a cyclic chain = %q, want %q", got, "")
 		}
 		if isID, isRefs := annotationIDKind(a); isID || isRefs {

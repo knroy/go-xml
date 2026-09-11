@@ -2065,11 +2065,11 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 		el.NoTypedValue = true
 	}
 	if n := typ.TypeName(); n.Local != "" {
-		setResolvedAnnotation(el, xdm.AnnotationName(n.URI, n.Local), typ)
+		v.schema.setResolvedAnnotation(el, xdm.AnnotationName(n.URI, n.Local), typ)
 		return
 	}
 	if a := annotationName(typ); a != "" {
-		setResolvedAnnotation(el, a, typ)
+		v.schema.setResolvedAnnotation(el, a, typ)
 		return
 	}
 	if a := anonComplexAnnotation(typ); a != "" {
@@ -2077,7 +2077,7 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 		// so the meaning recorded is that of typ itself -- which, having
 		// element-only or mixed content, resolves to nothing and correctly
 		// leaves the resolved fields empty.
-		setResolvedAnnotation(el, a, typ)
+		v.schema.setResolvedAnnotation(el, a, typ)
 	}
 }
 

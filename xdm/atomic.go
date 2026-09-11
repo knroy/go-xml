@@ -144,6 +144,52 @@ type Atomic struct {
 	//
 	// Empty for every value not validated against a union.
 	derivedMember string
+
+	// typeEnv is the TypeEnvironment of the schema that issued the annotation
+	// `derived` names, or nil when no schema did.
+	//
+	// A derived name alone does not answer "instance of" for this value: that
+	// question walks the name's derivation chain, and the chain belongs to a
+	// schema. A value atomised out of a node validated by one schema must
+	// keep answering with that schema's derivations even after an unrelated
+	// schema registers something else under the same lexical name, and the
+	// environment travelling alongside the name is what makes that so.
+	//
+	// nil falls back to the process-global environment, which is right for a
+	// value built by a constructor function rather than by atomising a
+	// validated node.
+	typeEnv *TypeEnvironment
+}
+
+// TypeEnv returns the type environment of the schema that issued this value's
+// derived annotation, or nil when no schema did.
+func (a *Atomic) TypeEnv() *TypeEnvironment {
+	if a == nil {
+		return nil
+	}
+	return a.typeEnv
+}
+
+// WithTypeEnv returns a copy of a carrying the given type environment, so that
+// questions about its derived type name are answered by the schema that issued
+// the name rather than by the process-global table.
+func (a *Atomic) WithTypeEnv(e *TypeEnvironment) *Atomic {
+	if a == nil {
+		return nil
+	}
+	c := *a
+	c.typeEnv = e
+	return &c
+}
+
+// TypeEnvOfAtomic returns the environment to consult for questions about an
+// atomic value's derived type: the one the schema that issued the annotation
+// owns, or the process-global fallback when the value carries none.
+func TypeEnvOfAtomic(a *Atomic) *TypeEnvironment {
+	if a != nil && a.typeEnv != nil {
+		return a.typeEnv
+	}
+	return globalTypeEnv
 }
 
 // Derived returns the narrower XML Schema type this value was constructed as,
