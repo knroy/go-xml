@@ -322,3 +322,131 @@ func TestEmptyContentTreatsNBSPAsCharacterContent(t *testing.T) {
 			"cvc-complex-type.2.1 must report it")
 	}
 }
+
+// Two lexical paths have been reported as using Unicode whitespace where XML
+// Schema whitespace applies, and NEITHER is a defect. This records why, so the
+// next report can be answered by running a test.
+//
+// Both DO call strings.TrimSpace on a value governed by whiteSpace="collapse",
+// which is what makes them look like the real defects fixed alongside them.
+// The difference is reachability: an earlier check already rejects the
+// no-break space, so the trim never gets to misjudge it.
+//
+//   xsd/parse_type.go  checkAllGroupRefOccurs compares minOccurs against "1"
+//                      for a group reference inside a named xs:all group.
+//                      p-props-correct.1 has already parsed the attribute as
+//                      an xs:nonNegativeInteger and refused "<NBSP>1".
+//   xsd/versioning.go  versionAtLeast trims vc:minVersion before comparing.
+//                      parse.go's vc: handling has already refused
+//                      "<NBSP>1.2" with src-schema.1, "is not an xs:decimal"
+//                      -- a guard added by the earlier pass of this same sweep.
+//
+// Both were measured by applying the change and re-probing: the observable
+// outcome is byte-identical either way.
+//
+// The general rule, which has now produced four false positives across this
+// audit: a strings.TrimSpace on a lexical value is a CANDIDATE, not a finding.
+// It is a defect only where nothing downstream rejects the character it
+// wrongly strips. Establish that reachability before filing -- and before
+// fixing, since an inert change still costs a reviewer the time to verify it.
+//
+// If either guard above is ever removed, the corresponding trim becomes
+// load-bearing and the fix becomes real. These assertions are what would fail.
+func TestOccursAndVersioningRefuseNBSPBeforeTheTrim(t *testing.T) {
+	const nbsp = "\u00a0"
+	if len(nbsp) != 2 {
+		t.Fatalf("the NBSP constant is %q, not U+00A0", nbsp)
+	}
+
+	// A group reference inside a NAMED xs:all group is the only shape that
+	// reaches checkAllGroupRefOccurs; on a complex type's inline xs:all the
+	// check is never called.
+	t.Run("xs:all group reference occurs", func(t *testing.T) {
+		mk := func(occ string) string {
+			return `
+			<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+			           targetNamespace="urn:t" xmlns:t="urn:t">
+			  <xs:group name="inner">
+			    <xs:all><xs:element name="a" type="xs:string"/></xs:all>
+			  </xs:group>
+			  <xs:group name="outer">
+			    <xs:all><xs:group ref="t:inner" minOccurs="` + occ + `"/></xs:all>
+			  </xs:group>
+			  <xs:element name="r">
+			    <xs:complexType><xs:group ref="t:outer"/></xs:complexType>
+			  </xs:element>
+			</xs:schema>`
+		}
+		load := func(src string) error {
+			t.Helper()
+			tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+			if err != nil {
+				t.Fatalf("parsing the schema as XML: %v", err)
+			}
+			_, err = Load(tree.Root, "", Options{Version: Version11})
+			return err
+		}
+		if err := load(mk(" 1 ")); err != nil {
+			t.Errorf(`minOccurs=" 1 " must be accepted: %v`, err)
+		}
+		if err := load(mk("0")); err == nil {
+			t.Error("minOccurs=0 on a group reference inside xs:all must " +
+				"fail cos-all-limited.1")
+		}
+		err := load(mk(nbsp + "1"))
+		if err == nil {
+			t.Fatal(`minOccurs="<NBSP>1" was accepted; some check must ` +
+				`refuse it, whether the occurrence rule or the lexical one`)
+		}
+		if !strings.Contains(err.Error(), "p-props-correct.1") {
+			t.Errorf("minOccurs=\"<NBSP>1\" was refused by %v; it used to be "+
+				"p-props-correct.1, the lexical check. If that guard has "+
+				"moved, checkAllGroupRefOccurs's own trim is now what decides "+
+				"this and must become trimXMLSpace.", err)
+		}
+	})
+
+	// vc:minVersion is an xs:decimal, and parse.go validates the lexical form
+	// before versionAtLeast ever sees it.
+	t.Run("vc:minVersion", func(t *testing.T) {
+		mk := func(v string) string {
+			return `
+			<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+			           xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning">
+			  <xs:element name="r" type="xs:string" vc:minVersion="` + v + `"/>
+			</xs:schema>`
+		}
+		load := func(src string) (*Schema, error) {
+			t.Helper()
+			tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+			if err != nil {
+				t.Fatalf("parsing the schema as XML: %v", err)
+			}
+			return Load(tree.Root, "", Options{Version: Version11})
+		}
+		// A 1.1 processor keeps an element asking for at most 1.1 and drops
+		// one asking for 1.2, with XML whitespace trimmed either way.
+		if s, err := load(mk("1.1")); err != nil {
+			t.Errorf(`vc:minVersion="1.1": %v`, err)
+		} else if _, ok := s.Elements[xdm.QName{Local: "r"}]; !ok {
+			t.Error(`vc:minVersion="1.1" dropped the element on a 1.1 processor`)
+		}
+		if s, err := load(mk(" 1.2 ")); err != nil {
+			t.Errorf(`vc:minVersion=" 1.2 ": %v`, err)
+		} else if _, ok := s.Elements[xdm.QName{Local: "r"}]; ok {
+			t.Error(`vc:minVersion=" 1.2 " kept the element; XML whitespace ` +
+				`is trimmed by the collapse facet, so this asks for 1.2`)
+		}
+		_, err := load(mk(nbsp + "1.2"))
+		if err == nil {
+			t.Fatal(`vc:minVersion="<NBSP>1.2" was accepted; a no-break ` +
+				`space is not an xs:decimal lexical form`)
+		}
+		if !strings.Contains(err.Error(), "src-schema.1") {
+			t.Errorf("vc:minVersion=\"<NBSP>1.2\" was refused by %v; it used "+
+				"to be src-schema.1, the lexical check. If that guard has "+
+				"moved, versionAtLeast's own trim is now what decides this "+
+				"and must become trimXMLSpace.", err)
+		}
+	})
+}
