@@ -2,8 +2,11 @@ package relaxng
 
 import (
 	"fmt"
+	"io"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -25,6 +28,109 @@ import (
 // the nesting itself.
 type Resolver interface {
 	ResolveSchema(href string) (*xdm.Node, error)
+}
+
+// FileResolver is a filesystem-backed Resolver.
+//
+// Root is a capability grant, not a cosmetic path prefix: with it set, every
+// reference must remain below that directory even if a schema uses xml:base,
+// .., an absolute file URL, or a symlink changed between validation and open.
+// os.Root enforces the last property at open time. An empty Root intentionally
+// remains unconfined for command-line callers that explicitly choose it.
+// Network schemes are never fetched; a caller needing them must write a
+// resolver with an explicit host and transport policy.
+type FileResolver struct {
+	// Root confines reads when non-empty.
+	Root string
+	// MaxBytes bounds one fetched schema. Zero uses defaultMaxSchemaBytes.
+	// A negative value refuses every read rather than disabling the bound.
+	MaxBytes int64
+}
+
+// defaultMaxSchemaBytes matches xdm's document limit, so the resolver rejects
+// an oversized file before allocation while Parse remains the backstop.
+const defaultMaxSchemaBytes int64 = 64 << 20
+
+// ResolveSchema implements Resolver.
+func (r *FileResolver) ResolveSchema(href string) (*xdm.Node, error) {
+	u, err := url.Parse(href)
+	if err != nil {
+		return nil, fmt.Errorf("relaxng: invalid schema URI %q: %w", href, err)
+	}
+	if u.Scheme != "" && u.Scheme != "file" {
+		return nil, fmt.Errorf("relaxng: remote schema URI %q is not permitted", href)
+	}
+	// file: URLs are URI syntax; after this point every path is handled by the
+	// same confinement and byte-accounting path as a bare filesystem reference.
+	p := href
+	if u.Scheme == "file" {
+		p = u.Path
+	}
+	var f *os.File
+	if r.Root != "" {
+		root, err := filepath.Abs(r.Root)
+		if err != nil {
+			return nil, err
+		}
+		// Resolve the root once for comparison. Do not resolve the final path:
+		// following its symlink before OpenRoot would recreate a check-then-open
+		// race and let a link point outside after this check succeeds.
+		if root, err = filepath.EvalSymlinks(root); err != nil {
+			return nil, err
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return nil, err
+		}
+		// Compare the parent on the same resolved spelling as Root (macOS /var
+		// commonly aliases /private/var); leave the leaf unresolved so OpenRoot
+		// remains the enforcement against a symlink escape.
+		if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+			abs = filepath.Join(dir, filepath.Base(abs))
+		}
+		rel, err := filepath.Rel(root, abs)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("relaxng: schema URI %q resolves outside root %q", href, root)
+		}
+		rt, err := os.OpenRoot(root)
+		if err != nil {
+			return nil, err
+		}
+		defer rt.Close()
+		f, err = rt.Open(filepath.ToSlash(rel))
+		if err != nil {
+			return nil, fmt.Errorf("relaxng: open %q: %w", href, err)
+		}
+	} else {
+		f, err = os.Open(p)
+		if err != nil {
+			return nil, fmt.Errorf("relaxng: open %q: %w", href, err)
+		}
+	}
+	defer f.Close()
+	// Read one byte over the limit. A truncated schema is never a safe schema:
+	// it can parse as a different grammar, so over-limit is a loud resource error.
+	max := r.MaxBytes
+	if max == 0 {
+		max = defaultMaxSchemaBytes
+	}
+	if max < 0 {
+		return nil, fmt.Errorf("relaxng: schema byte limit is negative")
+	}
+	b, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > max {
+		return nil, fmt.Errorf("relaxng: schema %q exceeds %d bytes: %w", href, max, xdm.ErrResourceLimit)
+	}
+	// Preserve the resolved document location as the base URI. Nested includes
+	// are compiled with this value, so sibling references remain sibling reads.
+	tree, err := xdm.ParseString(string(b), xdm.ParseOptions{BaseURI: p, MaxBytes: max})
+	if err != nil {
+		return nil, fmt.Errorf("relaxng: parse %q: %w", href, err)
+	}
+	return tree.Root, nil
 }
 
 // A Resolver owns containment, and must not assume the href it receives has
