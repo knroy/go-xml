@@ -49,7 +49,7 @@ W3C disagreements: 0 + 0 + 0 + 1 + 8 + 34 + 30 + 32 + 0 = 105. Measured 2026-09-
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 2,213 tests.
+The unit-test suite is 2,218 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
