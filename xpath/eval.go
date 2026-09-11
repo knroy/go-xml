@@ -540,6 +540,25 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 		args = compatCoerceArgs(e.Name, args)
 	}
 
+	// The declared parameter types refuse an argument whose CARDINALITY the
+	// specification does not permit — an empty sequence where the proforma
+	// carries no "?" or "*", or several items where it permits at most one.
+	//
+	// This is the structural form of the twelve hand fixes in commit 7668773,
+	// each of which added the same guard to one function body because no
+	// declared type existed to consult. It runs after compatCoerceArgs, so a
+	// 1.0-compatibility call that the coercion reduces to one item is judged
+	// on what the function actually receives, not on what was written.
+	//
+	// It covers only the functions the manifest has been migrated to; a miss
+	// binds the call exactly as before. See checkArgCardinality for why the
+	// check is cardinality-only and cannot change error precedence.
+	if params, ok := lookupSpecParams(fn.Name, fn.Arity); ok {
+		if err := checkArgCardinality(fn.Name, params, args); err != nil {
+			return nil, err
+		}
+	}
+
 	sub, err := ctx.Descend()
 	if err != nil {
 		return nil, err

@@ -1,0 +1,2265 @@
+[
+  {
+    "name": "array:append",
+    "arity": 2,
+    "params": [
+      "array(*)",
+      "item()*"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:filter",
+    "arity": 2,
+    "params": [
+      "array(*)",
+      "function(item()*) as xs:boolean"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:flatten",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "array:fold-left",
+    "arity": 3,
+    "params": [
+      "array(*)",
+      "item()*",
+      "function(item()*, item()*) as item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "array:fold-right",
+    "arity": 3,
+    "params": [
+      "array(*)",
+      "item()*",
+      "function(item()*, item()*) as item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "array:for-each",
+    "arity": 2,
+    "params": [
+      "array(*)",
+      "function(item()*) as item()*"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:for-each-pair",
+    "arity": 3,
+    "params": [
+      "array(*)",
+      "array(*)",
+      "function(item()*, item()*) as item()*"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:get",
+    "arity": 2,
+    "params": [
+      "array(*)",
+      "xs:integer"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "array:head",
+    "arity": 1,
+    "params": [
+      "array(*)"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "array:insert-before",
+    "arity": 3,
+    "params": [
+      "array(*)",
+      "xs:integer",
+      "item()*"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:join",
+    "arity": 1,
+    "params": [
+      "array(*)*"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:put",
+    "arity": 3,
+    "params": [
+      "array(*)",
+      "xs:integer",
+      "item()*"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:remove",
+    "arity": 2,
+    "params": [
+      "array(*)",
+      "xs:integer*"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:reverse",
+    "arity": 1,
+    "params": [
+      "array(*)"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:size",
+    "arity": 1,
+    "params": [
+      "array(*)"
+    ],
+    "result": "xs:integer"
+  },
+  {
+    "name": "array:sort",
+    "arity": 1,
+    "params": [
+      "array(*)"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:sort",
+    "arity": 2,
+    "params": [
+      "array(*)",
+      "xs:string?"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:sort",
+    "arity": 3,
+    "params": [
+      "array(*)",
+      "xs:string?",
+      "function(item()*) as xs:anyAtomicType*"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:subarray",
+    "arity": 2,
+    "params": [
+      "array(*)",
+      "xs:integer"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:subarray",
+    "arity": 3,
+    "params": [
+      "array(*)",
+      "xs:integer",
+      "xs:integer"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "array:tail",
+    "arity": 1,
+    "params": [
+      "array(*)"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "fn:QName",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:QName"
+  },
+  {
+    "name": "fn:abs",
+    "arity": 1,
+    "params": [
+      "xs:numeric?"
+    ],
+    "result": "xs:numeric?"
+  },
+  {
+    "name": "fn:adjust-date-to-timezone",
+    "arity": 1,
+    "params": [
+      "xs:date?"
+    ],
+    "result": "xs:date?"
+  },
+  {
+    "name": "fn:adjust-date-to-timezone",
+    "arity": 2,
+    "params": [
+      "xs:date?",
+      "xs:dayTimeDuration?"
+    ],
+    "result": "xs:date?"
+  },
+  {
+    "name": "fn:adjust-dateTime-to-timezone",
+    "arity": 1,
+    "params": [
+      "xs:dateTime?"
+    ],
+    "result": "xs:dateTime?"
+  },
+  {
+    "name": "fn:adjust-dateTime-to-timezone",
+    "arity": 2,
+    "params": [
+      "xs:dateTime?",
+      "xs:dayTimeDuration?"
+    ],
+    "result": "xs:dateTime?"
+  },
+  {
+    "name": "fn:adjust-time-to-timezone",
+    "arity": 1,
+    "params": [
+      "xs:time?"
+    ],
+    "result": "xs:time?"
+  },
+  {
+    "name": "fn:adjust-time-to-timezone",
+    "arity": 2,
+    "params": [
+      "xs:time?",
+      "xs:dayTimeDuration?"
+    ],
+    "result": "xs:time?"
+  },
+  {
+    "name": "fn:analyze-string",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "element(fn:analyze-string-result)"
+  },
+  {
+    "name": "fn:analyze-string",
+    "arity": 3,
+    "params": [
+      "xs:string?",
+      "xs:string",
+      "xs:string"
+    ],
+    "result": "element(fn:analyze-string-result)"
+  },
+  {
+    "name": "fn:apply",
+    "arity": 2,
+    "params": [
+      "function(*)",
+      "array(*)"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:available-environment-variables",
+    "arity": 0,
+    "params": [],
+    "result": "xs:string*"
+  },
+  {
+    "name": "fn:avg",
+    "arity": 1,
+    "params": [
+      "xs:anyAtomicType*"
+    ],
+    "result": "xs:anyAtomicType?"
+  },
+  {
+    "name": "fn:base-uri",
+    "arity": 0,
+    "params": [],
+    "result": "xs:anyURI?"
+  },
+  {
+    "name": "fn:base-uri",
+    "arity": 1,
+    "params": [
+      "node()?"
+    ],
+    "result": "xs:anyURI?"
+  },
+  {
+    "name": "fn:boolean",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:ceiling",
+    "arity": 1,
+    "params": [
+      "xs:numeric?"
+    ],
+    "result": "xs:numeric?"
+  },
+  {
+    "name": "fn:codepoint-equal",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string?"
+    ],
+    "result": "xs:boolean?"
+  },
+  {
+    "name": "fn:codepoints-to-string",
+    "arity": 1,
+    "params": [
+      "xs:integer*"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:collation-key",
+    "arity": 1,
+    "params": [
+      "xs:string"
+    ],
+    "result": "xs:base64Binary"
+  },
+  {
+    "name": "fn:collation-key",
+    "arity": 2,
+    "params": [
+      "xs:string",
+      "xs:string"
+    ],
+    "result": "xs:base64Binary"
+  },
+  {
+    "name": "fn:collection",
+    "arity": 0,
+    "params": [],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:collection",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:compare",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:compare",
+    "arity": 3,
+    "params": [
+      "xs:string?",
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:contains",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string?"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:contains",
+    "arity": 3,
+    "params": [
+      "xs:string?",
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:contains-token",
+    "arity": 2,
+    "params": [
+      "xs:string*",
+      "xs:string"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:contains-token",
+    "arity": 3,
+    "params": [
+      "xs:string*",
+      "xs:string",
+      "xs:string"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:count",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "xs:integer"
+  },
+  {
+    "name": "fn:current-date",
+    "arity": 0,
+    "params": [],
+    "result": "xs:date"
+  },
+  {
+    "name": "fn:current-dateTime",
+    "arity": 0,
+    "params": [],
+    "result": "xs:dateTimeStamp"
+  },
+  {
+    "name": "fn:current-time",
+    "arity": 0,
+    "params": [],
+    "result": "xs:time"
+  },
+  {
+    "name": "fn:data",
+    "arity": 0,
+    "params": [],
+    "result": "xs:anyAtomicType*"
+  },
+  {
+    "name": "fn:data",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "xs:anyAtomicType*"
+  },
+  {
+    "name": "fn:dateTime",
+    "arity": 2,
+    "params": [
+      "xs:date?",
+      "xs:time?"
+    ],
+    "result": "xs:dateTime?"
+  },
+  {
+    "name": "fn:day-from-date",
+    "arity": 1,
+    "params": [
+      "xs:date?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:day-from-dateTime",
+    "arity": 1,
+    "params": [
+      "xs:dateTime?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:days-from-duration",
+    "arity": 1,
+    "params": [
+      "xs:duration?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:deep-equal",
+    "arity": 2,
+    "params": [
+      "item()*",
+      "item()*"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:deep-equal",
+    "arity": 3,
+    "params": [
+      "item()*",
+      "item()*",
+      "xs:string"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:default-collation",
+    "arity": 0,
+    "params": [],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:default-language",
+    "arity": 0,
+    "params": [],
+    "result": "xs:language"
+  },
+  {
+    "name": "fn:distinct-values",
+    "arity": 1,
+    "params": [
+      "xs:anyAtomicType*"
+    ],
+    "result": "xs:anyAtomicType*"
+  },
+  {
+    "name": "fn:distinct-values",
+    "arity": 2,
+    "params": [
+      "xs:anyAtomicType*",
+      "xs:string"
+    ],
+    "result": "xs:anyAtomicType*"
+  },
+  {
+    "name": "fn:doc",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "document-node()?"
+  },
+  {
+    "name": "fn:doc-available",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:document-uri",
+    "arity": 0,
+    "params": [],
+    "result": "xs:anyURI?"
+  },
+  {
+    "name": "fn:document-uri",
+    "arity": 1,
+    "params": [
+      "node()?"
+    ],
+    "result": "xs:anyURI?"
+  },
+  {
+    "name": "fn:element-with-id",
+    "arity": 1,
+    "params": [
+      "xs:string*"
+    ],
+    "result": "element()*"
+  },
+  {
+    "name": "fn:element-with-id",
+    "arity": 2,
+    "params": [
+      "xs:string*",
+      "node()"
+    ],
+    "result": "element()*"
+  },
+  {
+    "name": "fn:empty",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:encode-for-uri",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:ends-with",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string?"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:ends-with",
+    "arity": 3,
+    "params": [
+      "xs:string?",
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:environment-variable",
+    "arity": 1,
+    "params": [
+      "xs:string"
+    ],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:error",
+    "arity": 0,
+    "params": [],
+    "result": "none"
+  },
+  {
+    "name": "fn:error",
+    "arity": 1,
+    "params": [
+      "xs:QName?"
+    ],
+    "result": "none"
+  },
+  {
+    "name": "fn:error",
+    "arity": 2,
+    "params": [
+      "xs:QName?",
+      "xs:string"
+    ],
+    "result": "none"
+  },
+  {
+    "name": "fn:error",
+    "arity": 3,
+    "params": [
+      "xs:QName?",
+      "xs:string",
+      "item()*"
+    ],
+    "result": "none"
+  },
+  {
+    "name": "fn:escape-html-uri",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:exactly-one",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "item()"
+  },
+  {
+    "name": "fn:exists",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:false",
+    "arity": 0,
+    "params": [],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:filter",
+    "arity": 2,
+    "params": [
+      "item()*",
+      "function(item()) as xs:boolean"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:floor",
+    "arity": 1,
+    "params": [
+      "xs:numeric?"
+    ],
+    "result": "xs:numeric?"
+  },
+  {
+    "name": "fn:fold-left",
+    "arity": 3,
+    "params": [
+      "item()*",
+      "item()*",
+      "function(item()*, item()) as item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:fold-right",
+    "arity": 3,
+    "params": [
+      "item()*",
+      "item()*",
+      "function(item(), item()*) as item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:for-each",
+    "arity": 2,
+    "params": [
+      "item()*",
+      "function(item()) as item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:for-each-pair",
+    "arity": 3,
+    "params": [
+      "item()*",
+      "item()*",
+      "function(item(), item()) as item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:format-date",
+    "arity": 2,
+    "params": [
+      "xs:date?",
+      "xs:string"
+    ],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:format-date",
+    "arity": 5,
+    "params": [
+      "xs:date?",
+      "xs:string",
+      "xs:string?",
+      "xs:string?",
+      "xs:string?"
+    ],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:format-dateTime",
+    "arity": 2,
+    "params": [
+      "xs:dateTime?",
+      "xs:string"
+    ],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:format-dateTime",
+    "arity": 5,
+    "params": [
+      "xs:dateTime?",
+      "xs:string",
+      "xs:string?",
+      "xs:string?",
+      "xs:string?"
+    ],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:format-integer",
+    "arity": 2,
+    "params": [
+      "xs:integer?",
+      "xs:string"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:format-integer",
+    "arity": 3,
+    "params": [
+      "xs:integer?",
+      "xs:string",
+      "xs:string?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:format-number",
+    "arity": 2,
+    "params": [
+      "xs:numeric?",
+      "xs:string"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:format-number",
+    "arity": 3,
+    "params": [
+      "xs:numeric?",
+      "xs:string",
+      "xs:string?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:format-time",
+    "arity": 2,
+    "params": [
+      "xs:time?",
+      "xs:string"
+    ],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:format-time",
+    "arity": 5,
+    "params": [
+      "xs:time?",
+      "xs:string",
+      "xs:string?",
+      "xs:string?",
+      "xs:string?"
+    ],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:function-arity",
+    "arity": 1,
+    "params": [
+      "function(*)"
+    ],
+    "result": "xs:integer"
+  },
+  {
+    "name": "fn:function-lookup",
+    "arity": 2,
+    "params": [
+      "xs:QName",
+      "xs:integer"
+    ],
+    "result": "function(*)?"
+  },
+  {
+    "name": "fn:function-name",
+    "arity": 1,
+    "params": [
+      "function(*)"
+    ],
+    "result": "xs:QName?"
+  },
+  {
+    "name": "fn:generate-id",
+    "arity": 0,
+    "params": [],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:generate-id",
+    "arity": 1,
+    "params": [
+      "node()?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:has-children",
+    "arity": 0,
+    "params": [],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:has-children",
+    "arity": 1,
+    "params": [
+      "node()?"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:head",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "item()?"
+  },
+  {
+    "name": "fn:hours-from-dateTime",
+    "arity": 1,
+    "params": [
+      "xs:dateTime?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:hours-from-duration",
+    "arity": 1,
+    "params": [
+      "xs:duration?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:hours-from-time",
+    "arity": 1,
+    "params": [
+      "xs:time?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:id",
+    "arity": 1,
+    "params": [
+      "xs:string*"
+    ],
+    "result": "element()*"
+  },
+  {
+    "name": "fn:id",
+    "arity": 2,
+    "params": [
+      "xs:string*",
+      "node()"
+    ],
+    "result": "element()*"
+  },
+  {
+    "name": "fn:idref",
+    "arity": 1,
+    "params": [
+      "xs:string*"
+    ],
+    "result": "node()*"
+  },
+  {
+    "name": "fn:idref",
+    "arity": 2,
+    "params": [
+      "xs:string*",
+      "node()"
+    ],
+    "result": "node()*"
+  },
+  {
+    "name": "fn:implicit-timezone",
+    "arity": 0,
+    "params": [],
+    "result": "xs:dayTimeDuration"
+  },
+  {
+    "name": "fn:in-scope-prefixes",
+    "arity": 1,
+    "params": [
+      "element()"
+    ],
+    "result": "xs:string*"
+  },
+  {
+    "name": "fn:index-of",
+    "arity": 2,
+    "params": [
+      "xs:anyAtomicType*",
+      "xs:anyAtomicType"
+    ],
+    "result": "xs:integer*"
+  },
+  {
+    "name": "fn:index-of",
+    "arity": 3,
+    "params": [
+      "xs:anyAtomicType*",
+      "xs:anyAtomicType",
+      "xs:string"
+    ],
+    "result": "xs:integer*"
+  },
+  {
+    "name": "fn:innermost",
+    "arity": 1,
+    "params": [
+      "node()*"
+    ],
+    "result": "node()*"
+  },
+  {
+    "name": "fn:insert-before",
+    "arity": 3,
+    "params": [
+      "item()*",
+      "xs:integer",
+      "item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:iri-to-uri",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:json-doc",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "item()?"
+  },
+  {
+    "name": "fn:json-doc",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "map(*)"
+    ],
+    "result": "item()?"
+  },
+  {
+    "name": "fn:json-to-xml",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "document-node()?"
+  },
+  {
+    "name": "fn:json-to-xml",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "map(*)"
+    ],
+    "result": "document-node()?"
+  },
+  {
+    "name": "fn:lang",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:lang",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "node()"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:last",
+    "arity": 0,
+    "params": [],
+    "result": "xs:integer"
+  },
+  {
+    "name": "fn:load-xquery-module",
+    "arity": 1,
+    "params": [
+      "xs:string"
+    ],
+    "result": "map(*)"
+  },
+  {
+    "name": "fn:load-xquery-module",
+    "arity": 2,
+    "params": [
+      "xs:string",
+      "map(*)"
+    ],
+    "result": "map(*)"
+  },
+  {
+    "name": "fn:local-name",
+    "arity": 0,
+    "params": [],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:local-name",
+    "arity": 1,
+    "params": [
+      "node()?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:local-name-from-QName",
+    "arity": 1,
+    "params": [
+      "xs:QName?"
+    ],
+    "result": "xs:NCName?"
+  },
+  {
+    "name": "fn:lower-case",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:matches",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:matches",
+    "arity": 3,
+    "params": [
+      "xs:string?",
+      "xs:string",
+      "xs:string"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:max",
+    "arity": 1,
+    "params": [
+      "xs:anyAtomicType*"
+    ],
+    "result": "xs:anyAtomicType?"
+  },
+  {
+    "name": "fn:max",
+    "arity": 2,
+    "params": [
+      "xs:anyAtomicType*",
+      "xs:string"
+    ],
+    "result": "xs:anyAtomicType?"
+  },
+  {
+    "name": "fn:min",
+    "arity": 1,
+    "params": [
+      "xs:anyAtomicType*"
+    ],
+    "result": "xs:anyAtomicType?"
+  },
+  {
+    "name": "fn:min",
+    "arity": 2,
+    "params": [
+      "xs:anyAtomicType*",
+      "xs:string"
+    ],
+    "result": "xs:anyAtomicType?"
+  },
+  {
+    "name": "fn:minutes-from-dateTime",
+    "arity": 1,
+    "params": [
+      "xs:dateTime?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:minutes-from-duration",
+    "arity": 1,
+    "params": [
+      "xs:duration?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:minutes-from-time",
+    "arity": 1,
+    "params": [
+      "xs:time?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:month-from-date",
+    "arity": 1,
+    "params": [
+      "xs:date?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:month-from-dateTime",
+    "arity": 1,
+    "params": [
+      "xs:dateTime?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:months-from-duration",
+    "arity": 1,
+    "params": [
+      "xs:duration?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:name",
+    "arity": 0,
+    "params": [],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:name",
+    "arity": 1,
+    "params": [
+      "node()?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:namespace-uri",
+    "arity": 0,
+    "params": [],
+    "result": "xs:anyURI"
+  },
+  {
+    "name": "fn:namespace-uri",
+    "arity": 1,
+    "params": [
+      "node()?"
+    ],
+    "result": "xs:anyURI"
+  },
+  {
+    "name": "fn:namespace-uri-for-prefix",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "element()"
+    ],
+    "result": "xs:anyURI?"
+  },
+  {
+    "name": "fn:namespace-uri-from-QName",
+    "arity": 1,
+    "params": [
+      "xs:QName?"
+    ],
+    "result": "xs:anyURI?"
+  },
+  {
+    "name": "fn:nilled",
+    "arity": 0,
+    "params": [],
+    "result": "xs:boolean?"
+  },
+  {
+    "name": "fn:nilled",
+    "arity": 1,
+    "params": [
+      "node()?"
+    ],
+    "result": "xs:boolean?"
+  },
+  {
+    "name": "fn:node-name",
+    "arity": 0,
+    "params": [],
+    "result": "xs:QName?"
+  },
+  {
+    "name": "fn:node-name",
+    "arity": 1,
+    "params": [
+      "node()?"
+    ],
+    "result": "xs:QName?"
+  },
+  {
+    "name": "fn:normalize-space",
+    "arity": 0,
+    "params": [],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:normalize-space",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:normalize-unicode",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:normalize-unicode",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:not",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:number",
+    "arity": 0,
+    "params": [],
+    "result": "xs:double"
+  },
+  {
+    "name": "fn:number",
+    "arity": 1,
+    "params": [
+      "xs:anyAtomicType?"
+    ],
+    "result": "xs:double"
+  },
+  {
+    "name": "fn:one-or-more",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "item()+"
+  },
+  {
+    "name": "fn:outermost",
+    "arity": 1,
+    "params": [
+      "node()*"
+    ],
+    "result": "node()*"
+  },
+  {
+    "name": "fn:parse-ietf-date",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:dateTime?"
+  },
+  {
+    "name": "fn:parse-json",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "item()?"
+  },
+  {
+    "name": "fn:parse-json",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "map(*)"
+    ],
+    "result": "item()?"
+  },
+  {
+    "name": "fn:parse-xml",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "document-node(element(*))?"
+  },
+  {
+    "name": "fn:parse-xml-fragment",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "document-node()?"
+  },
+  {
+    "name": "fn:path",
+    "arity": 0,
+    "params": [],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:path",
+    "arity": 1,
+    "params": [
+      "node()?"
+    ],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:position",
+    "arity": 0,
+    "params": [],
+    "result": "xs:integer"
+  },
+  {
+    "name": "fn:prefix-from-QName",
+    "arity": 1,
+    "params": [
+      "xs:QName?"
+    ],
+    "result": "xs:NCName?"
+  },
+  {
+    "name": "fn:random-number-generator",
+    "arity": 0,
+    "params": [],
+    "result": "map(xs:string, item())"
+  },
+  {
+    "name": "fn:random-number-generator",
+    "arity": 1,
+    "params": [
+      "xs:anyAtomicType?"
+    ],
+    "result": "map(xs:string, item())"
+  },
+  {
+    "name": "fn:remove",
+    "arity": 2,
+    "params": [
+      "item()*",
+      "xs:integer"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:replace",
+    "arity": 3,
+    "params": [
+      "xs:string?",
+      "xs:string",
+      "xs:string"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:replace",
+    "arity": 4,
+    "params": [
+      "xs:string?",
+      "xs:string",
+      "xs:string",
+      "xs:string"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:resolve-QName",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "element()"
+    ],
+    "result": "xs:QName?"
+  },
+  {
+    "name": "fn:resolve-uri",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:anyURI?"
+  },
+  {
+    "name": "fn:resolve-uri",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:anyURI?"
+  },
+  {
+    "name": "fn:reverse",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:root",
+    "arity": 0,
+    "params": [],
+    "result": "node()"
+  },
+  {
+    "name": "fn:root",
+    "arity": 1,
+    "params": [
+      "node()?"
+    ],
+    "result": "node()?"
+  },
+  {
+    "name": "fn:round",
+    "arity": 1,
+    "params": [
+      "xs:numeric?"
+    ],
+    "result": "xs:numeric?"
+  },
+  {
+    "name": "fn:round",
+    "arity": 2,
+    "params": [
+      "xs:numeric?",
+      "xs:integer"
+    ],
+    "result": "xs:numeric?"
+  },
+  {
+    "name": "fn:round-half-to-even",
+    "arity": 1,
+    "params": [
+      "xs:numeric?"
+    ],
+    "result": "xs:numeric?"
+  },
+  {
+    "name": "fn:round-half-to-even",
+    "arity": 2,
+    "params": [
+      "xs:numeric?",
+      "xs:integer"
+    ],
+    "result": "xs:numeric?"
+  },
+  {
+    "name": "fn:seconds-from-dateTime",
+    "arity": 1,
+    "params": [
+      "xs:dateTime?"
+    ],
+    "result": "xs:decimal?"
+  },
+  {
+    "name": "fn:seconds-from-duration",
+    "arity": 1,
+    "params": [
+      "xs:duration?"
+    ],
+    "result": "xs:decimal?"
+  },
+  {
+    "name": "fn:seconds-from-time",
+    "arity": 1,
+    "params": [
+      "xs:time?"
+    ],
+    "result": "xs:decimal?"
+  },
+  {
+    "name": "fn:serialize",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:serialize",
+    "arity": 2,
+    "params": [
+      "item()*",
+      "item()?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:sort",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:sort",
+    "arity": 2,
+    "params": [
+      "item()*",
+      "xs:string?"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:sort",
+    "arity": 3,
+    "params": [
+      "item()*",
+      "xs:string?",
+      "function(item()) as xs:anyAtomicType*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:starts-with",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string?"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:starts-with",
+    "arity": 3,
+    "params": [
+      "xs:string?",
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:static-base-uri",
+    "arity": 0,
+    "params": [],
+    "result": "xs:anyURI?"
+  },
+  {
+    "name": "fn:string",
+    "arity": 0,
+    "params": [],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:string",
+    "arity": 1,
+    "params": [
+      "item()?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:string-join",
+    "arity": 1,
+    "params": [
+      "xs:anyAtomicType*"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:string-join",
+    "arity": 2,
+    "params": [
+      "xs:anyAtomicType*",
+      "xs:string"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:string-length",
+    "arity": 0,
+    "params": [],
+    "result": "xs:integer"
+  },
+  {
+    "name": "fn:string-length",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:integer"
+  },
+  {
+    "name": "fn:string-to-codepoints",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:integer*"
+  },
+  {
+    "name": "fn:subsequence",
+    "arity": 2,
+    "params": [
+      "item()*",
+      "xs:double"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:subsequence",
+    "arity": 3,
+    "params": [
+      "item()*",
+      "xs:double",
+      "xs:double"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:substring",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:double"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:substring",
+    "arity": 3,
+    "params": [
+      "xs:string?",
+      "xs:double",
+      "xs:double"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:substring-after",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:substring-after",
+    "arity": 3,
+    "params": [
+      "xs:string?",
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:substring-before",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:substring-before",
+    "arity": 3,
+    "params": [
+      "xs:string?",
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:sum",
+    "arity": 1,
+    "params": [
+      "xs:anyAtomicType*"
+    ],
+    "result": "xs:anyAtomicType"
+  },
+  {
+    "name": "fn:sum",
+    "arity": 2,
+    "params": [
+      "xs:anyAtomicType*",
+      "xs:anyAtomicType?"
+    ],
+    "result": "xs:anyAtomicType?"
+  },
+  {
+    "name": "fn:tail",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:timezone-from-date",
+    "arity": 1,
+    "params": [
+      "xs:date?"
+    ],
+    "result": "xs:dayTimeDuration?"
+  },
+  {
+    "name": "fn:timezone-from-dateTime",
+    "arity": 1,
+    "params": [
+      "xs:dateTime?"
+    ],
+    "result": "xs:dayTimeDuration?"
+  },
+  {
+    "name": "fn:timezone-from-time",
+    "arity": 1,
+    "params": [
+      "xs:time?"
+    ],
+    "result": "xs:dayTimeDuration?"
+  },
+  {
+    "name": "fn:tokenize",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:string*"
+  },
+  {
+    "name": "fn:tokenize",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:string*"
+  },
+  {
+    "name": "fn:tokenize",
+    "arity": 3,
+    "params": [
+      "xs:string?",
+      "xs:string",
+      "xs:string"
+    ],
+    "result": "xs:string*"
+  },
+  {
+    "name": "fn:trace",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:trace",
+    "arity": 2,
+    "params": [
+      "item()*",
+      "xs:string"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:transform",
+    "arity": 1,
+    "params": [
+      "map(*)"
+    ],
+    "result": "map(*)"
+  },
+  {
+    "name": "fn:translate",
+    "arity": 3,
+    "params": [
+      "xs:string?",
+      "xs:string",
+      "xs:string"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:true",
+    "arity": 0,
+    "params": [],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:unordered",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "fn:unparsed-text",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:unparsed-text",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:unparsed-text-available",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:unparsed-text-available",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "fn:unparsed-text-lines",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:string*"
+  },
+  {
+    "name": "fn:unparsed-text-lines",
+    "arity": 2,
+    "params": [
+      "xs:string?",
+      "xs:string"
+    ],
+    "result": "xs:string*"
+  },
+  {
+    "name": "fn:upper-case",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:string"
+  },
+  {
+    "name": "fn:uri-collection",
+    "arity": 0,
+    "params": [],
+    "result": "xs:anyURI*"
+  },
+  {
+    "name": "fn:uri-collection",
+    "arity": 1,
+    "params": [
+      "xs:string?"
+    ],
+    "result": "xs:anyURI*"
+  },
+  {
+    "name": "fn:xml-to-json",
+    "arity": 1,
+    "params": [
+      "node()?"
+    ],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:xml-to-json",
+    "arity": 2,
+    "params": [
+      "node()?",
+      "map(*)"
+    ],
+    "result": "xs:string?"
+  },
+  {
+    "name": "fn:year-from-date",
+    "arity": 1,
+    "params": [
+      "xs:date?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:year-from-dateTime",
+    "arity": 1,
+    "params": [
+      "xs:dateTime?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:years-from-duration",
+    "arity": 1,
+    "params": [
+      "xs:duration?"
+    ],
+    "result": "xs:integer?"
+  },
+  {
+    "name": "fn:zero-or-one",
+    "arity": 1,
+    "params": [
+      "item()*"
+    ],
+    "result": "item()?"
+  },
+  {
+    "name": "map:contains",
+    "arity": 2,
+    "params": [
+      "map(*)",
+      "xs:anyAtomicType"
+    ],
+    "result": "xs:boolean"
+  },
+  {
+    "name": "map:entry",
+    "arity": 2,
+    "params": [
+      "xs:anyAtomicType",
+      "item()*"
+    ],
+    "result": "map(*)"
+  },
+  {
+    "name": "map:find",
+    "arity": 2,
+    "params": [
+      "item()*",
+      "xs:anyAtomicType"
+    ],
+    "result": "array(*)"
+  },
+  {
+    "name": "map:for-each",
+    "arity": 2,
+    "params": [
+      "map(*)",
+      "function(xs:anyAtomicType, item()*) as item()*"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "map:get",
+    "arity": 2,
+    "params": [
+      "map(*)",
+      "xs:anyAtomicType"
+    ],
+    "result": "item()*"
+  },
+  {
+    "name": "map:keys",
+    "arity": 1,
+    "params": [
+      "map(*)"
+    ],
+    "result": "xs:anyAtomicType*"
+  },
+  {
+    "name": "map:merge",
+    "arity": 1,
+    "params": [
+      "map(*)*"
+    ],
+    "result": "map(*)"
+  },
+  {
+    "name": "map:merge",
+    "arity": 2,
+    "params": [
+      "map(*)*",
+      "map(*)"
+    ],
+    "result": "map(*)"
+  },
+  {
+    "name": "map:put",
+    "arity": 3,
+    "params": [
+      "map(*)",
+      "xs:anyAtomicType",
+      "item()*"
+    ],
+    "result": "map(*)"
+  },
+  {
+    "name": "map:remove",
+    "arity": 2,
+    "params": [
+      "map(*)",
+      "xs:anyAtomicType*"
+    ],
+    "result": "map(*)"
+  },
+  {
+    "name": "map:size",
+    "arity": 1,
+    "params": [
+      "map(*)"
+    ],
+    "result": "xs:integer"
+  },
+  {
+    "name": "math:acos",
+    "arity": 1,
+    "params": [
+      "xs:double?"
+    ],
+    "result": "xs:double?"
+  },
+  {
+    "name": "math:asin",
+    "arity": 1,
+    "params": [
+      "xs:double?"
+    ],
+    "result": "xs:double?"
+  },
+  {
+    "name": "math:atan",
+    "arity": 1,
+    "params": [
+      "xs:double?"
+    ],
+    "result": "xs:double?"
+  },
+  {
+    "name": "math:atan2",
+    "arity": 2,
+    "params": [
+      "xs:double",
+      "xs:double"
+    ],
+    "result": "xs:double"
+  },
+  {
+    "name": "math:cos",
+    "arity": 1,
+    "params": [
+      "xs:double?"
+    ],
+    "result": "xs:double?"
+  },
+  {
+    "name": "math:exp",
+    "arity": 1,
+    "params": [
+      "xs:double?"
+    ],
+    "result": "xs:double?"
+  },
+  {
+    "name": "math:exp10",
+    "arity": 1,
+    "params": [
+      "xs:double?"
+    ],
+    "result": "xs:double?"
+  },
+  {
+    "name": "math:log",
+    "arity": 1,
+    "params": [
+      "xs:double?"
+    ],
+    "result": "xs:double?"
+  },
+  {
+    "name": "math:log10",
+    "arity": 1,
+    "params": [
+      "xs:double?"
+    ],
+    "result": "xs:double?"
+  },
+  {
+    "name": "math:pi",
+    "arity": 0,
+    "params": [],
+    "result": "xs:double"
+  },
+  {
+    "name": "math:pow",
+    "arity": 2,
+    "params": [
+      "xs:double?",
+      "xs:numeric"
+    ],
+    "result": "xs:double?"
+  },
+  {
+    "name": "math:sin",
+    "arity": 1,
+    "params": [
+      "xs:double?"
+    ],
+    "result": "xs:double?"
+  },
+  {
+    "name": "math:sqrt",
+    "arity": 1,
+    "params": [
+      "xs:double?"
+    ],
+    "result": "xs:double?"
+  },
+  {
+    "name": "math:tan",
+    "arity": 1,
+    "params": [
+      "xs:double?"
+    ],
+    "result": "xs:double?"
+  }
+]
