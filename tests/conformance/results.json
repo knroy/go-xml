@@ -1,0 +1,180 @@
+{
+  "_comment": "The single source of truth for every conformance figure this repository publishes. docs/conformance-gaps.md's summary table is GENERATED from this file by tests/conformance-docs.go; do not edit that table by hand. Re-measure with tests/check.sh, copy the passing counts here together with the run date and command, then regenerate.",
+  "generated_by": "tests/conformance-docs.go",
+  "suites": [
+    {
+      "id": "xpath-2.0",
+      "component": "xpath",
+      "suite": "QT3 — XPath 2.0",
+      "edition": "XPath 2.0 (Second Edition)",
+      "passed": 15217,
+      "disagreements": 0,
+      "total": 15217,
+      "run_date": "2026-09-11",
+      "command": "tests/check.sh (TestQT3, lane xpath-2.0)",
+      "cases": []
+    },
+    {
+      "id": "xpath-3.0",
+      "component": "xpath",
+      "suite": "QT3 — XPath 3.0",
+      "edition": "XPath 3.0",
+      "passed": 19362,
+      "disagreements": 0,
+      "total": 19362,
+      "run_date": "2026-09-11",
+      "command": "tests/check.sh (TestQT3, lane xpath-3.0)",
+      "cases": []
+    },
+    {
+      "id": "xpath-3.1",
+      "component": "xpath",
+      "suite": "QT3 — XPath 3.1",
+      "edition": "XPath 3.1",
+      "passed": 21898,
+      "disagreements": 0,
+      "total": 21898,
+      "run_date": "2026-09-11",
+      "command": "tests/check.sh (TestQT3, lane xpath-3.1)",
+      "cases": []
+    },
+    {
+      "id": "xquery-3.1",
+      "component": "xquery",
+      "suite": "QT3 — XQuery 3.1",
+      "edition": "XQuery 3.1",
+      "passed": 30345,
+      "disagreements": 1,
+      "total": 30346,
+      "run_date": "2026-09-11",
+      "command": "tests/check.sh (TestQT3XQuery)",
+      "cases": [
+        {
+          "id": "prod-ContextItemDecl/contextDecl-052",
+          "verdict": "fixture",
+          "note": "The catalog registers libmodule-3.xq under …/libmodule3 and the file declares …/libmodule1, so XQST0059 is correct and precedes the wanted XQST0113."
+        }
+      ]
+    },
+    {
+      "id": "xslt-2.0",
+      "component": "xslt",
+      "suite": "W3C XSLT 2.0",
+      "edition": "XSLT 2.0 (Second Edition)",
+      "passed": 6193,
+      "disagreements": 8,
+      "total": 6201,
+      "run_date": "2026-09-11",
+      "command": "tests/check.sh (TestXSLTSuite)",
+      "cases": [
+        {"id": "format-number-070", "verdict": "deliberate-divergence", "note": "Read in §2."},
+        {"id": "docbook-001", "verdict": "deliberate-divergence", "note": "A vendor extension; read in §2."},
+        {"id": "sequence-0132", "verdict": "deliberate-divergence", "note": "Read in §2."},
+        {"id": "import-schema-137", "verdict": "deliberate-divergence", "note": "Declaration ordering; §2.9 declines to settle it."},
+        {"id": "validation-0201", "verdict": "implementation-defined", "note": "Read in §2 and in Corrections."},
+        {"id": "regex-syntax-xslt20-0984", "verdict": "deliberate-divergence", "note": "One of the three regex-syntax cases, ID confirmed by a suite run."},
+        {"id": "regex-syntax-xslt20-0985", "verdict": "deliberate-divergence", "note": "One of the three regex-syntax cases, ID confirmed by a suite run."},
+        {"id": "regex-syntax-xslt20-0987", "verdict": "deliberate-divergence", "note": "One of the three regex-syntax cases, ID confirmed by a suite run."}
+      ]
+    },
+    {
+      "id": "xslt-3.0",
+      "component": "xslt",
+      "suite": "W3C XSLT 3.0",
+      "edition": "XSLT 3.0",
+      "passed": 11484,
+      "disagreements": 34,
+      "total": 11518,
+      "run_date": "2026-09-11",
+      "command": "tests/check.sh (TestXSLT30Suite)",
+      "cases": [
+        {"id": "package-021err", "verdict": "fixture", "note": "A half-applied 2020 erratum (E36); @name is a malformed eqname."},
+        {"id": "package-022err", "verdict": "fixture", "note": "component=\"function#0\" violates the @component enumeration."},
+        {"id": "accept-913", "verdict": "fixture", "note": "The wanted XTDE0040 is unreachable; the suite disagrees with itself against accept-910."},
+        {"id": "package-200", "verdict": "deliberate-divergence", "note": "Costs more than it gains; read in §2."},
+        {"id": "si-copy-117", "verdict": "fixture", "note": "§19.2 keys the code to the attribute written; XTTE1540 is correct."},
+        {"id": "si-copy-of-117", "verdict": "fixture", "note": "Same shape as si-copy-117."},
+        {"id": "validation-0006", "verdict": "fixture", "note": "XTTE1555 is scoped to a document node; a parentless attribute is not one."},
+        {"id": "import-schema-137", "verdict": "deliberate-divergence", "note": "The one genuine ordering case; read in §2."},
+        {"id": "accumulator-038", "verdict": "fixture", "note": "Suite defect; only accumulator-039 carries the 2019 public-visibility repair."},
+        {"id": "strip-space-009", "verdict": "fixture", "note": "§4.4 grants no ancestor-assertion exemption; the case exists to exercise Saxon paths."},
+        {"id": "su-ascent-902", "verdict": "deliberate-divergence", "note": "Withheld — the rule contradicts §19.8.5.7's own worked example."},
+        {"id": "sf-reverse-001", "verdict": "deliberate-divergence", "note": "The catalog's answer is what a streaming evaluator produces; XPath 3.1 §3.3.1.1 binds here."},
+        {"id": "accumulator-061", "verdict": "deliberate-divergence", "note": "Costs more than it gains; read in §2."},
+        {"id": "evaluate-045", "verdict": "deliberate-divergence", "note": "Won't fix; read in §2."},
+        {"id": "streamable-116", "verdict": "implementation-defined", "note": "§3.6.6 permits building the tree; the catalog marks the case _WRONG:wrong-error-code."},
+        {"id": "evaluate-048", "verdict": "not-run", "note": "Needs a network fetch of saxonica.com; the https scheme is not permitted."},
+        {"id": "docbook-001", "verdict": "deliberate-divergence", "note": "A vendor extension; read in §2."},
+        {"id": "merge-097", "verdict": "deliberate-divergence", "note": "Saxon-format collection URIs, which the test set itself calls not interoperable."},
+        {"id": "merge-097s", "verdict": "deliberate-divergence", "note": "Same shape as merge-097."},
+        {"id": "merge-097sf", "verdict": "deliberate-divergence", "note": "Same shape as merge-097."},
+        {"id": "validation-0201", "verdict": "implementation-defined", "note": "Read in §2 and in Corrections."}
+      ],
+      "unenumerated_note": "The balance want an XTSE3430 refusal that only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit. §19.1 does not require a non-streaming processor to assess guaranteed-streamability, so they are read as a block under \"The §19.8 streamability analysis\" rather than case by case."
+    },
+    {
+      "id": "xsd-1.0",
+      "component": "xsd",
+      "suite": "W3C xsdtests 1.0",
+      "edition": "XML Schema 1.0 (Second Edition)",
+      "passed": 39358,
+      "disagreements": 30,
+      "total": 39388,
+      "run_date": "2026-09-11",
+      "command": "tests/check.sh (XSD10)",
+      "cases": [],
+      "unenumerated_note": "Recorded set by set rather than case by case: 22 of the 30 are MS-Regex2006-07-15 under the same open W3C bug 4113, and the balance are assorted queried/stable expectations across the Microsoft-contributed sets. The per-set breakdown is the hand-written table under \"xsd\"."
+    },
+    {
+      "id": "xsd-1.1",
+      "component": "xsd",
+      "suite": "W3C xsdtests 1.1",
+      "edition": "XML Schema 1.1",
+      "passed": 41545,
+      "disagreements": 31,
+      "total": 41576,
+      "run_date": "2026-09-11",
+      "command": "tests/check.sh (XSD11)",
+      "cases": [],
+      "unenumerated_note": "As for 1.0: 22 MS-Regex2006-07-15 cases under bug 4113 and 9 assorted challenged expectations."
+    },
+    {
+      "id": "relaxng",
+      "component": "relaxng",
+      "suite": "Clark spectest",
+      "edition": "RELAX NG 1.0",
+      "passed": 965,
+      "disagreements": 0,
+      "total": 965,
+      "run_date": "2026-09-11",
+      "command": "tests/check.sh (RelaxNGSpectest)",
+      "cases": []
+    }
+  ],
+  "corpora": [
+    {
+      "id": "docbook-xsltng",
+      "component": "xslt",
+      "suite": "DocBook xslTNG",
+      "edition": "real-world corpus",
+      "passed": 577,
+      "disagreements": 0,
+      "total": 577,
+      "run_date": "2026-09-11",
+      "command": "tests/check.sh (DocBook)",
+      "cases": []
+    },
+    {
+      "id": "xspec",
+      "component": "xslt",
+      "suite": "XSpec",
+      "edition": "real-world corpus",
+      "passed": 225,
+      "disagreements": 0,
+      "total": 225,
+      "run_date": "2026-09-11",
+      "command": "tests/check.sh (XSpec)",
+      "cases": []
+    }
+  ]
+}

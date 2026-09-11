@@ -111,3 +111,65 @@ printf '%s\n' "$TABLE" | awk 'NF' | while read -r key denom label; do
 	END { exit bad ? 1 : 0 }' || bad=1
 	[ "$bad" = 0 ] || exit 1
 done
+
+# The Total row is the one figure above that no suite run produces on its own:
+# it is the sum of the others, and it was the one that went wrong. The document
+# once printed 168 while its own rows summed to 104, and every loop above
+# passed, because each individual row agreed with the ratchet. A per-row check
+# cannot see a bad sum.
+#
+# So the total is derived here too, from tests/ratchet.txt via the denominators
+# in TABLE, and compared with the total the generated region prints. The
+# generator (tests/conformance-docs.go) derives its total from
+# tests/conformance/results.json; this derives the same number from the
+# ratchet. They come from two different files by two different routes, which is
+# the point: agreement between them means results.json was re-measured, not
+# merely re-typed.
+#
+# XPath and RELAX NG are not in TABLE -- they have no denominator that has ever
+# drifted, and they contribute zero -- so this sums the suites that can move:
+# XQuery, XSLT 2.0, XSLT 3.0, XSD 1.0 and XSD 1.1. The XSD schema/instance
+# split rows are components of XSD10/XSD11 and must not be added twice.
+want_total=0
+for key_denom in 'TestQT3XQuery 30346' 'TestXSLT30Suite 11518' 'TestXSLTSuite 6201' 'XSD10 39388' 'XSD11 41576'; do
+	key=${key_denom% *}
+	denom=${key_denom#* }
+	pass=$(sed -n "s/^$key \([0-9]*\)$/\1/p" "$RATCHET" | head -1)
+	want_total=$((want_total + denom - pass))
+done
+
+GAPS="$ROOT/docs/conformance-gaps.md"
+got_total=$(sed -n 's/^| | \*\*Total\*\* | | | | \*\*\([0-9]*\)\*\* |$/\1/p' "$GAPS" | head -1)
+if [ -z "$got_total" ]; then
+	printf '  docs/conformance-gaps.md has no generated Total row; run: go run tests/conformance-docs.go\n'
+	exit 1
+fi
+if [ "$got_total" != "$want_total" ]; then
+	printf '  docs/conformance-gaps.md:  Total %s, but tests/ratchet.txt sums to %s.\n' "$got_total" "$want_total"
+	printf '    The Total is generated from tests/conformance/results.json. Bring that\n'
+	printf '    file up to date with the measured run and regenerate:\n'
+	printf '      go run tests/conformance-docs.go\n'
+	exit 1
+fi
+
+# The same total also appears in prose that carries no denominator -- "those
+# 104 cases" in docs/known-gaps.md -- which the loop above cannot see, because
+# it has nothing to anchor on. The form is narrow enough to match directly:
+# "those N cases" and "N disagreements in all". A figure written that way is a
+# copy of the generated total and must equal it.
+grep -n -E 'those [0-9,]+ cases|[0-9,]+ disagreements in all' \
+	"$ROOT/README.md" "$ROOT"/docs/*.md 2>/dev/null |
+	awk -F: -v want="$want_total" -v root="$ROOT/" '
+	{
+		file = $1; sub(root, "", file); ln = $2
+		line = $0; sub(/^[^:]*:[0-9]*:/, "", line)
+		while (match(line, /those [0-9,]+ cases|[0-9,]+ disagreements in all/)) {
+			t = substr(line, RSTART, RLENGTH); line = substr(line, RSTART + RLENGTH)
+			n = t; gsub(/[^0-9]/, "", n)
+			if (n != want) {
+				printf "  %s:%s  free-form total %s (want %s, the sum of the suite rows)\n", file, ln, n, want
+				bad = 1
+			}
+		}
+	}
+	END { exit bad ? 1 : 0 }' || exit 1

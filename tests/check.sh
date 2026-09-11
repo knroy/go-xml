@@ -449,8 +449,8 @@ docfigure_cmd() {
 
 section "documented figures"
 _docfig_before=$failed
-docfigure "unit test count" 2131 "$(docfigure_tests)" \
-	README.md:109 README.md:1230 docs/testing.md:23 docs/todo.md:20 docs/conformance-gaps.md:38
+docfigure "unit test count" 2149 "$(docfigure_tests)" \
+	README.md:109 README.md:1230 docs/testing.md:23 docs/todo.md:20 docs/conformance-gaps.md:49
 docfigure "fuzz target count" 9 "$(docfigure_fuzz)" \
 	README.md:1236 docs/testing.md:30
 docfigure "limit boundary test count" 14 "$(docfigure_limits)" \
@@ -469,6 +469,33 @@ else
 	fail "a conformance figure in the documentation disagrees with tests/ratchet.txt (listed above).
     Re-derive it from the suite run, fix every copy, and check the sentence
     around it still says something true."
+fi
+
+# The summary table at the top of docs/conformance-gaps.md is GENERATED, and
+# this is the step that proves the checked-in copy still matches its source.
+#
+# Everything above guards a figure someone typed. The Total could not be
+# guarded that way: it is the sum of the other rows, so every row can agree
+# with the ratchet while the sum is wrong -- and it was. The document printed
+# 168 disagreements while its own rows summed to 104, and no check anywhere saw
+# it, because no check anywhere did the addition. Now nothing does the addition
+# but tests/conformance-docs.go, reading tests/conformance/results.json, and a
+# hand-edit to the table is a diff rather than a new fact.
+#
+# -check rather than regenerate-then-`git diff`: the tree is dirty in most runs
+# of this gate, so a git diff here would report the user's own work in progress
+# as a failure. -check reads the two files and compares, touching nothing.
+section "generated conformance summary"
+if $GO run ./tests/conformance-docs.go -check; then
+	:
+else
+	fail "docs/conformance-gaps.md does not match tests/conformance/results.json.
+    The summary table and its Total are generated, not written. Record the
+    measured counts in tests/conformance/results.json -- passed, disagreements
+    and total must add up, per suite -- and regenerate:
+        go run tests/conformance-docs.go
+    Then check that the hand-written prose around the table still says
+    something true; only the marked region is regenerated."
 fi
 
 # GOXSLT_NO_SUITES keeps the conformance suites out of these two steps. They
