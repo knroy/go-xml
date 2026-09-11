@@ -140,20 +140,22 @@ func SameKey(a, b *Atomic) bool {
 	}
 
 	// Everything else is its type family plus its lexical value; xs:string,
-	// xs:anyURI and xs:untypedAtomic share one family.
-	//
-	// LIMITATION, deliberate and worth knowing before trusting this test.
-	// This line calls typeFamilyOf -- maparray.go:170, the SAME function
-	// production uses. Everything else in this oracle is written from the
-	// specification, but the family grouping is not: it is read out of the
-	// implementation. So no amount of widening this corpus can detect a WRONG
-	// FAMILY grouping. If typeFamilyOf put xs:string and xs:hexBinary in one
-	// family, or split xs:anyURI out of the string family, MapKeyOf and
-	// SameKey would agree on every pair and this test would stay green while
-	// the behaviour was wrong. Only an independently-written family predicate
-	// could catch that, and one is not written here. The guarantee this file
-	// offers stops at the family boundary.
-	return typeFamilyOf(a) == typeFamilyOf(b) && a.String() == b.String()
+	// xs:anyURI and xs:untypedAtomic share one family. This predicate is
+	// intentionally independent of MapKeyOf's typeFamilyOf: this test is the
+	// guard that catches an erroneous production family grouping.
+	return oracleFamily(a) == oracleFamily(b) && a.String() == b.String()
+}
+
+func oracleFamily(a *Atomic) string {
+	switch a.Type {
+	case TypeString, TypeAnyURI, TypeUntypedAtomic:
+		return "string-family"
+	default:
+		// Every non-special atomic type is its own family under op:same-key.
+		// Type.String is a stable test representation, not the production
+		// grouping helper this oracle is intended to check independently.
+		return "type:" + a.Type.String()
+	}
 }
 
 func isBin(t TypeCode) bool { return t == TypeHexBinary || t == TypeBase64Binary }
