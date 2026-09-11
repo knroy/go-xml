@@ -415,6 +415,45 @@ var specSignatures = func() map[string][]string {
 	m["map:put/3"] = []string{"map(*)", "map(*)", "xs:anyAtomicType", "item()*"}
 	m["map:remove/2"] = []string{"map(*)", "map(*)", "xs:anyAtomicType*"}
 	m["map:size/1"] = []string{"xs:integer", "map(*)"}
+
+	// The array: family, F&O 3.1 17.3, and the last of the three namespaces
+	// the prefixed key format opened. Like math: and map:, argArray and its
+	// neighbours in fn_array.go already raise XPTY0004 for both arms, so
+	// these declared types re-derive refusals rather than adding them.
+	//
+	// array(*) and xs:integer carry no occurrence indicator, so the array
+	// parameter of every one of these except array:flatten and array:join is
+	// the empty-sequence arm, as are the positions of array:get,
+	// array:insert-before, array:put and array:subarray. array:remove's
+	// $positions is xs:integer*, array:join's $arrays is array(*)* and
+	// array:flatten's $input is item()*, which constrain nothing.
+	//
+	// The function parameters are declared with a full proforma --
+	// "function(item()*) as xs:boolean" and its neighbours. This package
+	// parses those to item(), so what they contribute here is the
+	// cardinality F&O declares, exactly one, which is the arm array:filter
+	// and array:for-each already guard by hand.
+	m["array:append/2"] = []string{"array(*)", "array(*)", "item()*"}
+	m["array:filter/2"] = []string{"array(*)", "array(*)", "function(item()*) as xs:boolean"}
+	m["array:flatten/1"] = []string{"item()*", "item()*"}
+	m["array:fold-left/3"] = []string{"item()*", "array(*)", "item()*", "function(item()*, item()*) as item()*"}
+	m["array:fold-right/3"] = []string{"item()*", "array(*)", "item()*", "function(item()*, item()*) as item()*"}
+	m["array:for-each/2"] = []string{"array(*)", "array(*)", "function(item()*) as item()*"}
+	m["array:for-each-pair/3"] = []string{"array(*)", "array(*)", "array(*)", "function(item()*, item()*) as item()*"}
+	m["array:get/2"] = []string{"item()*", "array(*)", "xs:integer"}
+	m["array:head/1"] = []string{"item()*", "array(*)"}
+	m["array:insert-before/3"] = []string{"array(*)", "array(*)", "xs:integer", "item()*"}
+	m["array:join/1"] = []string{"array(*)", "array(*)*"}
+	m["array:put/3"] = []string{"array(*)", "array(*)", "xs:integer", "item()*"}
+	m["array:remove/2"] = []string{"array(*)", "array(*)", "xs:integer*"}
+	m["array:reverse/1"] = []string{"array(*)", "array(*)"}
+	m["array:size/1"] = []string{"xs:integer", "array(*)"}
+	m["array:sort/1"] = []string{"array(*)", "array(*)"}
+	m["array:sort/2"] = []string{"array(*)", "array(*)", "xs:string?"}
+	m["array:sort/3"] = []string{"array(*)", "array(*)", "xs:string?", "function(item()*) as xs:anyAtomicType*"}
+	m["array:subarray/2"] = []string{"array(*)", "array(*)", "xs:integer"}
+	m["array:subarray/3"] = []string{"array(*)", "array(*)", "xs:integer", "xs:integer"}
+	m["array:tail/1"] = []string{"array(*)", "array(*)"}
 	return m
 }()
 

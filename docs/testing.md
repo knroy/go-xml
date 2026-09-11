@@ -1125,11 +1125,11 @@ Three tests measure it, and they ask different questions:
   mechanism exists to prevent, so a hand-edited spelling that disagrees with
   the manifest breaks the build.
 
-The count so far is 232 of 272: the seventeen seeded from `builtinSignatures`,
+The count so far is 253 of 272: the seventeen seeded from `builtinSignatures`,
 `fn:substring` and `fn:subsequence`, then the numeric (14), non-regex string
 (25), temporal (28), node and accessor (34), sequence (14), higher-order (12),
 QName and URI (15), input and document (20), JSON (10), context, boolean and
-error (14), `math:` (14) and `map:` (11) families.
+error (14), `math:` (14), `map:` (11) and `array:` (21) families.
 
 `math:pi` was the first entry to use a prefixed key, and it landed with the
 mechanism rather than with its family. It is nullary, so it constrains no
@@ -1139,8 +1139,8 @@ fn:-only expansion its key constrained a non-existent `fn:pi`.
 `TestPrefixedSpecKeysNameOtherNamespaces` is what keeps that path from
 decaying back.
 
-Of the 40 that remain, 21 are the `array:` rows, which the prefixed key
-format has made reachable.
+The 19 that remain are exactly the deferred group below; every row the
+prefixed key format made reachable has now been migrated.
 
 The `math:`, `map:` and `array:` families differ from the `fn:` ones in what
 migrating them buys. Every parameter of those 46 is already guarded by hand
@@ -1162,7 +1162,12 @@ is XPTY0004 either way and all four QT3 lanes are unmoved, which is what makes
 this a message change rather than a behaviour one. `math:pow`'s message names
 its declared type as `item()`, because this package parses the union spelling
 `xs:numeric` to `item()`; the cardinality it carries — exactly one — is the
-one F&O declares, which is all the check reads.
+one F&O declares, which is all the check reads. The same is true of
+`array(*)` and of the `function(...) as T` proformas, so `array:size(())`
+names its declared type as `item()` too. Only the occurrence indicator is
+load-bearing here: `checkArgCardinality` reads `AllowsEmpty` and `AllowsMany`
+and nothing else, which is why a spelling this package parses loosely still
+constrains the right cardinality.
 
 The other 19 are deliberately deferred to commits that can compare their error
 codes, because both groups change *which* error is raised rather than only
