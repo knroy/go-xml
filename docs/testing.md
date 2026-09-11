@@ -1055,6 +1055,59 @@ go install golang.org/dl/go1.25.1@latest && go1.25.1 download
 GOXSLT_QT3=$PWD/testdata/qt3tests go1.25.1 test ./tests/qt3/ -count=1 -v
 ```
 
+## The function-signature migration
+
+`xpath/spec/function-signatures.json` is the normalized extraction of the F&O
+3.1 function proformas — 272 `(name, arity)` entries, written by
+`cmd/genfunctions` from the vendored Recommendation, so the data source is
+offline and deterministic. `xpath/funcspec_table.go` holds the portion that is
+enforced at call binding, and the two are not the same number: a family is
+migrated by adding its `"local/arity"` keys to `specSignatures`, and nothing
+else changes, because a declared type constrains an existing registration
+rather than replacing it.
+
+Three tests measure it, and they ask different questions:
+
+* `TestRegisteredFunctionsHaveManifestMetadata` — does the specification
+  describe every registered function? This already enforces; a new callback
+  with no proforma fails here unless it is an allowlisted host extension.
+* `TestCallBindingMigrationInventory` — does the cardinality check actually
+  *run* for it? This reports rather than fails, and prints the migrated count.
+  It is the number a family agent works down; flip its `report := t.Logf` to
+  `t.Errorf` when it reaches zero.
+* `TestMigratedSignaturesMatchManifest` — does what has been migrated agree
+  with the Recommendation? This one fails, because it does not depend on how
+  far the migration has got. A mistyped `?` is precisely the defect the
+  mechanism exists to prevent, so a hand-edited spelling that disagrees with
+  the manifest breaks the build.
+
+The count so far is 88 of 272: the seventeen seeded from `builtinSignatures`,
+`fn:substring` and `fn:subsequence`, then the numeric (14), non-regex string
+(25) and temporal (28) families. Two groups are deliberately deferred to
+commits that can compare their error codes: the regex functions of F&O 5.6.1
+onwards, whose `$pattern` and `$flags` interact with the FORX diagnostics, and
+`fn:format-date` and its siblings, whose arity-5 forms carry calendar and place
+arguments tied to FOFD.
+
+Migrate in family-sized commits, and run the full QT3 lanes after each one —
+the four in-scope counts are the check, and any drop is a regression rather
+than a newly-revealed bug:
+
+```sh
+GOXSLT_QT3=$PWD/testdata/qt3tests go test ./tests/qt3/ -count=1 -run TestQT3 -v
+GOXSLT_QT3=$PWD/testdata/qt3tests go test ./tests/qt3/ -count=1 -run TestQT3XQuery -v
+```
+
+Omitting `GOXSLT_QT3` makes the lane skip and still print `ok`, so assert the
+in-scope counts are non-zero before believing a result.
+
+A caution that is specific to this work: if a case changes result after a
+signature is added, establish whether the behaviour is version-gated before
+treating it as a defect. `lookupFor` in `xpath/version.go` hides a function
+whose `Since` exceeds the context's version, so a function legitimately absent
+or differently typed at an earlier F&O version is a configuration posture, not
+a bug. The manifest carries no `since` field; it describes F&O 3.1 alone.
+
 ## Related
 
 * [conformance-gaps.md](conformance-gaps.md) — the current figures and a
