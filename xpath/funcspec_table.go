@@ -367,6 +367,32 @@ var specSignatures = func() map[string][]string {
 	// which is what makes it the safe entry to land with the mechanism
 	// rather than with the math: family.
 	m["math:pi/0"] = []string{"xs:double"}
+
+	// The math: family, F&O 3.1 4.8. Every one of these is already guarded
+	// by hand inside fn_math.go, so the declared types re-derive refusals
+	// that the callbacks already produce rather than adding new ones: the
+	// value here is that the refusal now comes from the manifest, where a
+	// mistyped occurrence indicator fails TestMigratedSignaturesMatchManifest
+	// instead of silently constraining a function wrongly.
+	//
+	// The eleven unary functions and math:sqrt declare xs:double?, so they
+	// constrain nothing. math:atan2 declares both parameters xs:double and
+	// math:pow declares $y as xs:numeric, all three without "?", which is
+	// the empty-sequence arm -- and fn_math.go already raises XPTY0004 for
+	// exactly those three.
+	m["math:acos/1"] = []string{"xs:double?", "xs:double?"}
+	m["math:asin/1"] = []string{"xs:double?", "xs:double?"}
+	m["math:atan/1"] = []string{"xs:double?", "xs:double?"}
+	m["math:atan2/2"] = []string{"xs:double", "xs:double", "xs:double"}
+	m["math:cos/1"] = []string{"xs:double?", "xs:double?"}
+	m["math:exp/1"] = []string{"xs:double?", "xs:double?"}
+	m["math:exp10/1"] = []string{"xs:double?", "xs:double?"}
+	m["math:log/1"] = []string{"xs:double?", "xs:double?"}
+	m["math:log10/1"] = []string{"xs:double?", "xs:double?"}
+	m["math:pow/2"] = []string{"xs:double?", "xs:double?", "xs:numeric"}
+	m["math:sin/1"] = []string{"xs:double?", "xs:double?"}
+	m["math:sqrt/1"] = []string{"xs:double?", "xs:double?"}
+	m["math:tan/1"] = []string{"xs:double?", "xs:double?"}
 	return m
 }()
 

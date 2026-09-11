@@ -1125,21 +1125,33 @@ Three tests measure it, and they ask different questions:
   mechanism exists to prevent, so a hand-edited spelling that disagrees with
   the manifest breaks the build.
 
-The count so far is 208 of 272: the seventeen seeded from `builtinSignatures`,
+The count so far is 221 of 272: the seventeen seeded from `builtinSignatures`,
 `fn:substring` and `fn:subsequence`, then the numeric (14), non-regex string
 (25), temporal (28), node and accessor (34), sequence (14), higher-order (12),
-QName and URI (15), input and document (20), JSON (10) and context, boolean and
-error (14) families, and `math:pi`.
+QName and URI (15), input and document (20), JSON (10), context, boolean and
+error (14) and `math:` (14) families.
 
-`math:pi` is the one entry that came with the prefixed-key mechanism rather
-than with a family. It is nullary, so it constrains no argument and can change
-no behaviour, which is exactly what makes it the entry that proves the
-prefixed path is live rather than dead code: under the old fn:-only expansion
-its key constrained a non-existent `fn:pi`. `TestPrefixedSpecKeysNameOtherNamespaces`
-is what keeps that path from decaying back.
+`math:pi` was the first entry to use a prefixed key, and it landed with the
+mechanism rather than with its family. It is nullary, so it constrains no
+argument and can change no behaviour, which is exactly what makes it the entry
+that proves the prefixed path is live rather than dead code: under the old
+fn:-only expansion its key constrained a non-existent `fn:pi`.
+`TestPrefixedSpecKeysNameOtherNamespaces` is what keeps that path from
+decaying back.
 
-Of the 64 that remain, 45 are the rest of the `array:` (21), `map:` (11) and
-`math:` (13) rows, which the prefixed key format has now made reachable.
+Of the 51 that remain, 32 are the `array:` (21) and `map:` (11) rows, which
+the prefixed key format has made reachable.
+
+The `math:`, `map:` and `array:` families differ from the `fn:` ones in what
+migrating them buys. Every parameter of those 46 is already guarded by hand
+inside `fn_math.go`, `fn_map.go` and `fn_array.go` — `argMap`, `argArray` and
+their neighbours raise XPTY0004 for an empty sequence and for several items
+alike — so a declared type there re-derives a refusal the callback already
+produces rather than adding a new one. The gain is that the refusal becomes a
+property of the manifest, where a mistyped occurrence indicator fails
+`TestMigratedSignaturesMatchManifest` instead of quietly constraining a
+function wrongly, and where the hand guard and the declared type are checked
+against each other by the QT3 lanes.
 
 The other 19 are deliberately deferred to commits that can compare their error
 codes, because both groups change *which* error is raised rather than only
