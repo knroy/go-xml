@@ -436,6 +436,49 @@ func (s *serializer) writeString(str string) {
 	_, s.err = io.WriteString(s.w, str)
 }
 
+// fail keeps the first serialization error. Subsequent writes must not replace
+// it: the first failure identifies the offending node and is the error the
+// Serialization Recommendation requires the caller to receive.
+func (s *serializer) fail(err error) {
+	if s.err == nil {
+		s.err = err
+	}
+}
+
+// validateComment and validatePI cover node kinds written verbatim. Text and
+// attributes pass through escaping and XML-character checks, but these nodes do
+// not. A caller may also construct XDM directly, bypassing Parse entirely;
+// serialization therefore has an independent duty to reject markup it cannot
+// render as a well-formed XML entity (SERE0003/SERE0006).
+func (s *serializer) validateComment(text string) error {
+	if strings.Contains(text, "--") || strings.HasSuffix(text, "-") {
+		return fmt.Errorf("SERE0003: comment content contains a forbidden hyphen sequence")
+	}
+	return s.validateXMLLiteral(text)
+}
+
+func (s *serializer) validatePI(target, text string) error {
+	if strings.EqualFold(target, "xml") {
+		return fmt.Errorf("SERE0003: processing-instruction target %q is reserved", target)
+	}
+	if strings.Contains(text, "?>") {
+		return fmt.Errorf("SERE0003: processing-instruction content contains ?>")
+	}
+	return s.validateXMLLiteral(target + text)
+}
+
+func (s *serializer) validateXMLLiteral(text string) error {
+	for _, r := range text {
+		if !isXMLChar(r) {
+			return fmt.Errorf("SERE0006: character #x%X cannot be output as XML", r)
+		}
+		if s.xml11() && isC0Control(r) {
+			return fmt.Errorf("SERE0006: character #x%X cannot be written literally in XML 1.1", r)
+		}
+	}
+	return nil
+}
+
 // writeDoctypeFor writes the document type declaration naming this element.
 func (s *serializer) writeDoctypeFor(n *xdm.Node) {
 	// HTML5 with no identifiers is the bare form.
@@ -563,10 +606,18 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 		s.escapeText(n.Value)
 
 	case xdm.KindComment:
+		if err := s.validateComment(n.Value); err != nil {
+			s.fail(err)
+			return
+		}
 		s.indent(depth)
 		s.writeString("<!--" + n.Value + "-->")
 
 	case xdm.KindPI:
+		if err := s.validatePI(n.Name.Local, n.Value); err != nil {
+			s.fail(err)
+			return
+		}
 		// The HTML method ends a processing instruction at the first ">"
 		// rather than at "?>", so a ">" inside the data would truncate it.
 		// There is no escape for it in HTML, which is why the spec makes it
@@ -650,6 +701,24 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	declared := map[string]string{}
 	for _, ns := range n.Namespaces {
 		if inScope[ns.Name.Local] == ns.Value {
+			continue
+		}
+		// An element binds each prefix at most once, and the binding its own
+		// name needs is the one that has to survive: without it the name is
+		// unresolvable. A namespace node carrying the element's prefix bound
+		// to some other URI -- which xsl:namespace-alias leaves behind, as
+		// namespace-alias-2620 shows -- is dropped here rather than written
+		// beside the one added below, which produced two xmlns:y attributes
+		// on one element and output that is not well-formed XML.
+		if ns.Name.Local != "" && ns.Name.Local == n.Name.Prefix &&
+			n.Name.URI != "" && ns.Value != n.Name.URI {
+			continue
+		}
+		// An element binds each prefix at most once. A node list can hold the
+		// same prefix twice -- xsl:namespace-alias with competing aliases at
+		// different import precedence leaves two y bindings behind, which is
+		// namespace-alias-2620 -- and writing both is not well-formed XML.
+		if _, dup := declared[ns.Name.Local]; dup {
 			continue
 		}
 		// A namespace undeclaration for a *prefix* -- xmlns:p="" -- is
