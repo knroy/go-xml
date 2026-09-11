@@ -229,7 +229,15 @@ const DefaultMaxDepth = 1000
 func (rt *runtime) descend() error {
 	rt.depth++
 	if rt.maxDepth > 0 && rt.depth > rt.maxDepth {
-		return fmt.Errorf("template recursion exceeded %d levels", rt.maxDepth)
+		// Carries the sentinel for the same reason every other budget does:
+		// a caller deciding whether to abort a walk or report bad input has
+		// only errors.Is to ask with, and this is the limit a runaway
+		// stylesheet actually reaches. fn:transform's nesting refusal in
+		// this same package already wrapped it; this one did not, so the
+		// commonest refusal in the package was the one a caller could not
+		// classify.
+		return fmt.Errorf("template recursion exceeded %d levels: %w",
+			rt.maxDepth, xdm.ErrResourceLimit)
 	}
 	return nil
 }

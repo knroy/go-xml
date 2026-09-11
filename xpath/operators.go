@@ -663,8 +663,15 @@ func (e *BinaryOp) evalRange(ctx *Context) (xdm.Sequence, error) {
 
 	const maxRange = MaxItems
 	if !n.IsInt64() || n.Int64() > maxRange {
+		// Coded and wrapped like ctx.countItems two lines below, which is
+		// the same refusal reached by a range small enough to count. This
+		// one is the early exit for a range too large to hold as an int, so
+		// a caller was told the same fact in two forms -- one classifiable
+		// by errors.Is and one not -- depending on how far over the bound
+		// the expression happened to be.
 		return nil, fmt.Errorf(
-			"range %s to %s exceeds the %d item limit", lo, hi, maxRange)
+			"XPDY0130: range %s to %s exceeds the %d item limit: %w",
+			lo, hi, maxRange, xdm.ErrResourceLimit)
 	}
 	count := int(n.Int64())
 	if err := ctx.countItems(count); err != nil {
