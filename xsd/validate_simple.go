@@ -806,7 +806,7 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 			if lex == nil {
 				return 0, false
 			}
-			lexs := strings.TrimSpace(*lex)
+			lexs := trimXMLSpace(*lex)
 			bound, boundSpecial := 0, false
 			if floating {
 				bound, boundSpecial = specialFloatOrder(lexs)
@@ -1107,7 +1107,7 @@ func checkTemporalBounds(steps []facetStep, normalized, primitive string) error 
 			if lex == nil {
 				return 0, false
 			}
-			b, ok := parseTemporal(strings.TrimSpace(*lex), primitive)
+			b, ok := parseTemporal(trimXMLSpace(*lex), primitive)
 			if !ok {
 				return 0, false
 			}
@@ -1149,7 +1149,7 @@ func checkDurationBounds(steps []facetStep, normalized string) error {
 			if lex == nil {
 				return 0, false
 			}
-			b, ok := parseDuration(strings.TrimSpace(*lex))
+			b, ok := parseDuration(trimXMLSpace(*lex))
 			if !ok {
 				return 0, false
 			}
@@ -1458,7 +1458,7 @@ func listItemKind(item *SimpleType, value string) string {
 // The zero QName is returned when the prefix is not bound, which leaves the
 // comparison to fall back on the lexical forms.
 func expandFacetQName(el *xdm.Node, value string) xdm.QName {
-	value = strings.TrimSpace(value)
+	value = trimXMLSpace(value)
 	prefix, local := "", value
 	if i := strings.IndexByte(value, ':'); i >= 0 {
 		prefix, local = value[:i], value[i+1:]
@@ -1487,7 +1487,7 @@ func expandFacetQName(el *xdm.Node, value string) xdm.QName {
 // same notation as one writing "smokey:mp3" in the schema, and treating it as
 // an absent namespace made those two values differ.
 func resolveInstanceQName(at *xdm.Node, value string) (xdm.QName, bool) {
-	value = strings.TrimSpace(value)
+	value = trimXMLSpace(value)
 	prefix, local := "", value
 	if i := strings.IndexByte(value, ':'); i >= 0 {
 		prefix, local = value[:i], value[i+1:]

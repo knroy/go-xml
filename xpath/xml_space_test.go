@@ -5,8 +5,8 @@ import "testing"
 // XML S, per F&O 3.1 §5.4.5 and XML 1.0 §2.3, is exactly these four.
 const (
 	nbsp = " " // no-break space: Unicode whitespace, not XML S
-	ff   = "" // form feed: Unicode whitespace, not XML S
-	ogh  = " " // ogham space mark: Unicode whitespace, not XML S
+	ff   = ""// form feed: Unicode whitespace, not XML S
+	ogh = " " // ogham space mark: Unicode whitespace, not XML S
 )
 
 // F&O 3.1 §5.4.5 defines the whitespace fn:normalize-space strips and collapses

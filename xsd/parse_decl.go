@@ -1000,6 +1000,16 @@ func isNamespaceListURI(word string) bool {
 // strings.Fields splits on every Unicode space, which would treat U+00A0 as a
 // separator. XML does not, so a namespace list containing one would be split
 // into names that match nothing.
+// trimXMLSpace removes leading and trailing XML S, and nothing wider.
+//
+// The companion to splitFields. strings.TrimSpace uses unicode.IsSpace, which
+// also matches U+00A0 and other separators: those are ordinary characters in a
+// lexical form, so trimming them accepted values the datatype's grammar
+// rejects.
+func trimXMLSpace(s string) string {
+	return strings.Trim(s, " \t\n\r")
+}
+
 func splitFields(s string) []string {
 	var out []string
 	start := -1
