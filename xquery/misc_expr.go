@@ -390,6 +390,22 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		return nil, xdm.Errorf("XQTY0030",
 			"validate requires an element or document node")
 	}
+	// §3.21: "If the operand node is a document node, its children must
+	// consist of exactly one element node and zero or more comment and
+	// processing instruction nodes, in any order; otherwise, a dynamic error
+	// [err:XQDY0061] is raised."
+	//
+	// This is a property of the operand alone, so it is answered before the
+	// schema is consulted -- it is the same error with no import as with
+	// every schema in the world imported, which is why it sits beside the
+	// XQTY0030 checks rather than inside the assessment below. Checking it
+	// only in the schema-imported path left "validate lax { document {
+	// <a/>, <b/> } }" returning its operand.
+	if root.Kind == xdm.KindDocument {
+		if err := checkValidateDocChildren(root); err != nil {
+			return nil, err
+		}
+	}
 	schema := ctx.sc.schema
 	if schema == nil {
 		// No "import schema": the in-scope schema definitions are empty.
@@ -476,6 +492,34 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 			"validate: the operand is not valid: %s", verr.Error())
 	}
 	return xdm.One(root), nil
+}
+
+// checkValidateDocChildren enforces §3.21's shape rule for a document-node
+// operand: exactly one element child, and otherwise only comments and
+// processing instructions. A text child fails it as surely as a second
+// element does -- cbcl-validateexpr-11 validates document { (<e/>, "text") }
+// and cbcl-validateexpr-12 a document with no element at all.
+func checkValidateDocChildren(doc *xdm.Node) error {
+	elems := 0
+	for _, ch := range doc.Children {
+		switch ch.Kind {
+		case xdm.KindElement:
+			elems++
+		case xdm.KindComment, xdm.KindPI:
+			// Permitted in any number and any position.
+		default:
+			return xdm.Errorf("XQDY0061",
+				"validate: the operand document node has a %s child, and "+
+					"§3.21 permits only one element plus comments and "+
+					"processing instructions", ch.Kind)
+		}
+	}
+	if elems != 1 {
+		return xdm.Errorf("XQDY0061",
+			"validate: the operand document node has %d element children, "+
+				"and §3.21 requires exactly one", elems)
+	}
+	return nil
 }
 
 // annotateBuiltinXSIType stamps the type annotation an xsi:type attribute
