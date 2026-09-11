@@ -58,7 +58,7 @@ W3C XSLT sets.
 
 Two suites reach 100% — XPath at all three versions, and RELAX NG.
 
-**The largest block is a single feature, not a long tail.** 13 of the 34
+**The largest block is a single feature, not a long tail.** 14 of the 34
 XSLT 3.0 failures want an `XTSE3430` that only the unwritten remainder of the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable".
@@ -169,7 +169,7 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 3.0: 11,484 / 11,518 = 99.70%.**
 
-**13 of the 34 want an `XTSE3430`** — a refusal of a stylesheet as
+**14 of the 34 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles
