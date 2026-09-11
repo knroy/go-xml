@@ -34,6 +34,13 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Twelve functions accepted an empty sequence for a parameter the spec declares without `?` | F&O 3.1 makes `()` there `XPTY0004`. `fn:round` was the worst: it neither raised nor returned empty but silently substituted precision 0. | [`7668773`][7668773] |
 | Five attributes accepted values no specification defines | `xsl:function/@visibility` excludes `hidden`, and `@streamability`, `@new-each-time`, `@component` and `xsl:copy-of/@validation` each have a closed set the table did not carry. | [`1b7a25a`][1b7a25a] |
 | `validate` accepted a document node with more than one element child | XQuery 3.1 §3.21 requires exactly one element plus zero or more comments and PIs; the operand was returned unchecked instead of raising `XQDY0061`. | [`7e7c766`][7e7c766] |
+| `<xsl:value-of selct="..."/>` compiled clean and emitted nothing | §3.9 grants forwards-compatible leniency only *above* the version the processor implements; the guard measured against 2.0, so a modern stylesheet got 2.0-era silence for a typo. The leniency and an element table that had never listed `visibility`, `streamability` or `applies-to` each made the other look harmless. | [`6eacc2d`][6eacc2d] |
+| An `intersect`/`except` pattern took the default priority, so the wrong template fired | §6.4 gives such a pattern its first operand's priority; it took 0.5 instead, and `a except b` beat an explicit `priority="0.25"`. | [`6eacc2d`][6eacc2d] |
+| `html-version="7"` was accepted and silently demoted to HTML 4 | The check read `@version`, the fallback, rather than `@html-version`. | [`6eacc2d`][6eacc2d] |
+| `XTDE1490` compared `href`s as written, so `out.xml` and `./out.xml` overwrote each other | The two resolve to one URI; the comparison now happens after resolution. | [`6eacc2d`][6eacc2d] |
+| `fn:deep-equal` had its collation carve-out inverted, comparing namespace URIs case-blind | F&O 3.1 exempts names from the supplied collation; the exemption was applied to everything *but* them. | [`6eacc2d`][6eacc2d] |
+| Seven smaller divergences in one audit | A JSON fallback could put a character into the tree that serialization then dropped silently; the regex `q` flag did not suppress `x`; `byte-order-mark` was ignored by the `json` and `adaptive` methods; `fn:serialize` rejected the empty-sequence `standalone`; `cdata-section-elements` worked in the map spelling and not the element one; an uncomputable tabulated calendar was an error rather than the §9.8.4.6 fallback; and a minimum width was parsed and discarded. | [`6eacc2d`][6eacc2d] |
+| `xsl:stream` was rejected though it is the name the Recommendation uses | The element was absent from the table entirely, so every stylesheet using the REC spelling failed to compile. `xsl:source-document`, the withdrawn draft name, stays accepted beside it. | [`75d633e`][75d633e] |
 | Forwards compatible processing was decided against a fixed 3.0, so a 2.0 processor rejected a construct it must ignore | §3.9 measures the effective version against the version the processor implements, which `CompileOptions.MaxVersion` sets. | [`187dfec`][187dfec] |
 | Three rooted resolvers checked containment and then opened, so only `xslt` enforced its root at open time | `xsd`, `dtd` and the CLI's RELAX NG resolver open through `os.OpenRoot`; the string check stays as diagnosis, not enforcement. | [`37972d9`][37972d9] |
 | `fn:transform` accepted the `post-process` option and ignored it, so a pipeline silently ran one stage short | The function is applied to every result document after delivery, and an option name the processor does not know is now `FOXT0002` rather than silence. Reported as issue #5. | [`e8ebf4b`][e8ebf4b] |
@@ -696,6 +703,8 @@ here so every entry in this file sits under a release.
 [e511421]: https://github.com/knroy/go-xml/commit/e511421
 [5c17280]: https://github.com/knroy/go-xml/commit/5c17280
 [93c5e88]: https://github.com/knroy/go-xml/commit/93c5e88
+[6eacc2d]: https://github.com/knroy/go-xml/commit/6eacc2d
+[75d633e]: https://github.com/knroy/go-xml/commit/75d633e
 [7668773]: https://github.com/knroy/go-xml/commit/7668773
 [7ffd7da]: https://github.com/knroy/go-xml/commit/7ffd7da
 [1b7a25a]: https://github.com/knroy/go-xml/commit/1b7a25a
