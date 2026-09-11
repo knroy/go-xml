@@ -175,8 +175,77 @@ func transformParams(m *xdm.MapItem, name string) (map[string]xdm.Sequence, erro
 	return out, nil
 }
 
+// transformOptionNames is every option fn:transform recognises, from F&O 3.1
+// section 14.7.1.
+//
+// The set is checked rather than merely consulted, because an option this
+// implementation does not know is the one case where silence is the worst
+// answer available. A misspelled or unimplemented key used to be dropped
+// without a word, so a stylesheet asking for a processing stage that never
+// ran produced a plausible result with no indication that anything had been
+// skipped -- which is how post-process went unnoticed: the output looked
+// right, one transformation short. FOXT0002 is the code F&O gives for an
+// option that is not valid, and "not a name I know" is the plainest case of
+// that.
+var transformOptionNames = map[string]bool{
+	"base-output-uri":         true,
+	"cache":                   true,
+	"delivery-format":         true,
+	"enable-assertions":       true,
+	"enable-messages":         true,
+	"function-params":         true,
+	"global-context-item":     true,
+	"initial-function":        true,
+	"initial-match-selection": true,
+	"initial-mode":            true,
+	"initial-template":        true,
+	"package-location":        true,
+	"package-name":            true,
+	"package-node":            true,
+	"package-text":            true,
+	"package-version":         true,
+	"post-process":            true,
+	"requested-properties":    true,
+	"serialization-params":    true,
+	"source-node":             true,
+	"static-params":           true,
+	"stylesheet-base-uri":     true,
+	"stylesheet-location":     true,
+	"stylesheet-node":         true,
+	"stylesheet-params":       true,
+	"stylesheet-text":         true,
+	"template-params":         true,
+	"tunnel-params":           true,
+	"vendor-options":          true,
+	"xslt-version":            true,
+}
+
+// checkTransformOptions refuses an option name fn:transform does not know.
+func checkTransformOptions(m *xdm.MapItem) error {
+	if m == nil {
+		return nil
+	}
+	for _, k := range m.Keys() {
+		if k == nil || k.Type != xdm.TypeString {
+			// A non-string key cannot name an option. Leaving it to the
+			// readers, which report the type error against the option they
+			// were looking for, keeps one diagnosis per fault.
+			continue
+		}
+		if !transformOptionNames[k.String()] {
+			return xdm.Errorf("FOXT0002",
+				"fn:transform: %q is not an option this processor "+
+					"recognises", k.String())
+		}
+	}
+	return nil
+}
+
 // runNestedTransform is fn:transform's body.
 func runNestedTransform(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (xdm.Sequence, error) {
+	if err := checkTransformOptions(opts); err != nil {
+		return nil, err
+	}
 	// One level of nesting is charged before the nested stylesheet is even
 	// loaded, so that the refusal happens without adding another frame. The
 	// depth is taken from the CALL rather than from rt, for the same reason
@@ -303,7 +372,7 @@ func runNestedTransform(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (xdm
 	if err != nil {
 		return nil, annotateNested(err, opts)
 	}
-	return transformResultMap(opts, res)
+	return transformResultMap(ctx, opts, res)
 }
 
 // annotateNested names the nested stylesheet in an entry-point error.
@@ -503,7 +572,7 @@ func compileNested(rt *runtime, root *xdm.Node, base string) (*Stylesheet, error
 // there is none, and each secondary result by the URI it was written to.
 // delivery-format decides what the values are: a document node, the
 // serialized string, or the raw sequence.
-func transformResultMap(opts *xdm.MapItem, res *Result) (xdm.Sequence, error) {
+func transformResultMap(ctx *xpath.Context, opts *xdm.MapItem, res *Result) (xdm.Sequence, error) {
 	format, _, err := transformString(opts, "delivery-format")
 	if err != nil {
 		return nil, err
@@ -513,6 +582,14 @@ func transformResultMap(opts *xdm.MapItem, res *Result) (xdm.Sequence, error) {
 	default:
 		return nil, xdm.Errorf("FOXT0002",
 			"fn:transform: unknown delivery-format %q", format)
+	}
+
+	// F&O 3.1 applies post-process to every result document "in whatever
+	// form it would otherwise be delivered", so it is read before anything
+	// is delivered and applied to each entry after its format is chosen.
+	pp, pperr := transformFunc(opts, "post-process", 2)
+	if pperr != nil {
+		return nil, pperr
 	}
 
 	b := xdm.NewMapBuilder()
@@ -545,6 +622,10 @@ func transformResultMap(opts *xdm.MapItem, res *Result) (xdm.Sequence, error) {
 	if u, ok, uerr := transformString(opts, "base-output-uri"); uerr == nil && ok && u != "" {
 		key = u
 	}
+	principal, perr = postProcess(ctx, pp, key, principal)
+	if perr != nil {
+		return nil, perr
+	}
 	if err := b.Set(xdm.NewString(key), principal); err != nil {
 		return nil, err
 	}
@@ -557,11 +638,70 @@ func transformResultMap(opts *xdm.MapItem, res *Result) (xdm.Sequence, error) {
 		if verr != nil {
 			return nil, verr
 		}
+		v, verr = postProcess(ctx, pp, sec.Href, v)
+		if verr != nil {
+			return nil, verr
+		}
 		if err := b.Set(xdm.NewString(sec.Href), v); err != nil {
 			return nil, err
 		}
 	}
 	return xdm.Sequence{b.Build()}, nil
+}
+
+// transformFunc reads a function-valued option.
+//
+// F&O 3.1 gives post-process the type function(xs:string, item()*) as item()*,
+// so arity is part of what makes the option valid: a one-argument function is
+// not a post-processor that was merely given the wrong body, it is the wrong
+// option value, and FOXT0002 is the code for that.
+func transformFunc(m *xdm.MapItem, name string, arity int) (*xdm.FunctionItem, error) {
+	seq, ok := transformOption(m, name)
+	if !ok {
+		return nil, nil
+	}
+	it, err := seq.Single()
+	if err != nil {
+		return nil, xdm.ErrType(
+			"fn:transform: %s must be a single function", name)
+	}
+	f, ok := it.(*xdm.FunctionItem)
+	if !ok {
+		return nil, xdm.ErrType(
+			"fn:transform: %s must be a function, not %T", name, it)
+	}
+	if f.Arity != arity {
+		return nil, xdm.Errorf("FOXT0002",
+			"fn:transform: %s must take %d arguments, not %d",
+			name, arity, f.Arity)
+	}
+	return f, nil
+}
+
+// postProcess applies the post-process option to one delivered result.
+//
+// F&O 3.1: "A function that is used to post-process each result document of
+// the transformation (both the principal result and secondary results), in
+// whatever form it would otherwise be delivered." So it runs after the
+// delivery format has been applied, on every entry of the map, and its return
+// value -- not the original -- is what the entry holds.
+//
+// The call carries the evaluation context so that a post-processor which
+// itself calls fn:transform is charged the nesting it adds. Without it the
+// bound would be escapable by moving the recursion into the post-processor,
+// which is the same hole the depth charge above closes for the direct case.
+func postProcess(ctx *xpath.Context, f *xdm.FunctionItem, key string, val xdm.Sequence) (xdm.Sequence, error) {
+	if f == nil {
+		return val, nil
+	}
+	out, err := f.Invoke(ctx, []xdm.Sequence{
+		{xdm.NewString(key)},
+		val,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // deliverResult renders the principal result in the requested format.
