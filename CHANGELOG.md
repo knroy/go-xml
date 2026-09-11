@@ -10,6 +10,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does |
 |---|---|
+| **An independent model for XSD wildcard acceptance and the UPA rule** | The wildcard rules are set membership, so the oracle is the spec text: §3.10.4.2 and §3.10.4.3 as clauses over sets, checked against `AllowsName` and the real `checkUPA` across 60,000 generated pairs with a fixed seed. It calls none of the matcher's own predicates -- a model that consults the implementation can only find inconsistency, never error. |
 | **The foundation of the XSLT 3.0 §19.8 streamability analysis** | §19 infers a posture and sweep for every construct and refuses a free-ranging one with `XTSE3430`. The lattice and the §19.8.8 XPath rules are implemented; an unmodelled construct is "no opinion", not a rejection. |
 
 ### Fixed — engine
@@ -34,6 +35,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Twelve functions accepted an empty sequence for a parameter the spec declares without `?` | F&O 3.1 makes `()` there `XPTY0004`. `fn:round` was the worst: it neither raised nor returned empty but silently substituted precision 0. | [`7668773`][7668773] |
 | Five attributes accepted values no specification defines | `xsl:function/@visibility` excludes `hidden`, and `@streamability`, `@new-each-time`, `@component` and `xsl:copy-of/@validation` each have a closed set the table did not carry. | [`1b7a25a`][1b7a25a] |
 | `validate` accepted a document node with more than one element child | XQuery 3.1 §3.21 requires exactly one element plus zero or more comments and PIs; the operand was returned unchecked instead of raising `XQDY0061`. | [`7e7c766`][7e7c766] |
+| `fn:analyze-string` refused a backreference pattern its four siblings accepted | It compiled through RE2 alone where `fn:matches`, `fn:replace`, `fn:tokenize` and `xsl:analyze-string` reach the backtracking engine, so `(a)\1` was a static error from one function and a working pattern from the other four. An exhausted step budget mid-scan also built a result element describing an input the engine never finished reading. | [`9ae8c57`][9ae8c57] |
+| The conformance total was typed rather than derived, and said 168 where its rows summed to 104 | Every check in the repository guards a figure against the ratchet, and the total is not such a figure: it is the sum of the rows, so each row could agree with its measurement while the sum was wrong. `tests/conformance/results.json` is now the source and the generator does the addition, refusing a total the document supplies. | [`d683fd8`][d683fd8] |
 | `xdm.Parse` accepted documents that are not well formed | `RawToken` leaves duplicate attributes, namespace well-formedness and document grammar to its caller, and `Parse` was not checking them. An unbound prefix returning an empty URI is not a harmless recovery: it gives the node a different XDM name. | [`4ce4086`][4ce4086] |
 | The XSLT serializer bound one prefix twice, writing XML it could not read back | `xsl:namespace-alias` with competing aliases at different import precedence leaves two namespace nodes for one prefix, and `namespace-alias-2620` emitted two `xmlns:y` attributes on one element. It passed only because the malformed result failed to parse and the judge compared text instead. | [`220b466`][220b466] |
 | Comments and processing instructions were written verbatim, through no character check | `--` inside a comment, `?>` inside a PI, a reserved `xml` target and a C0 control all reached the output. A caller can build XDM directly, so serialization owes its own refusal: `SERE0003`, `SERE0006`. | [`220b466`][220b466] |
@@ -711,6 +714,8 @@ here so every entry in this file sits under a release.
 [93c5e88]: https://github.com/knroy/go-xml/commit/93c5e88
 [6eacc2d]: https://github.com/knroy/go-xml/commit/6eacc2d
 [75d633e]: https://github.com/knroy/go-xml/commit/75d633e
+[9ae8c57]: https://github.com/knroy/go-xml/commit/9ae8c57
+[d683fd8]: https://github.com/knroy/go-xml/commit/d683fd8
 [4ce4086]: https://github.com/knroy/go-xml/commit/4ce4086
 [220b466]: https://github.com/knroy/go-xml/commit/220b466
 [f3ff553]: https://github.com/knroy/go-xml/commit/f3ff553

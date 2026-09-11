@@ -801,6 +801,23 @@ honest pattern in either conformance suite answers in 525 steps, while
 worst case is a fifth of a second of wasted work, not a hang — but it is still
 work an attacker can ask for, which is why the default stands.
 
+**The classification holds through every wrapper, and one of them used to be
+missing.** `errors.Is(err, xdm.ErrResourceLimit)` is only worth asking if the
+answer does not depend on which function was called, and five wrappers reach
+the engine by five different routes: `fn:matches`, `fn:replace`,
+`fn:tokenize`, `fn:analyze-string`, and `xsl:analyze-string`, which re-wraps
+the result in its own `XTDE1140`. `fn:analyze-string` was the odd one out. It
+compiled through RE2 alone, so a backreference pattern never reached the
+backtracking engine at all: `analyze-string($s, "(abc)\1")` raised `FORX0002:
+backreference \1 is not supported` where its four siblings answered normally,
+and no budget was ever charged for it to classify. It now compiles through the
+same `CompileRegexpVersion` the others use and reads `RegexpErr` after the
+scan, since a budget exhausted part way through returns the matches found so
+far — a truncated result element describing an input the engine never finished
+reading. Pinned wrapper by wrapper in `xpath/regex_wrapper_limit_test.go`,
+with the host layers in `xslt/limitsentinel_test.go` and
+`xquery/resourcelimit_test.go`.
+
 ### Internal entities expand; external ones never do
 
 `AllowDOCTYPE` now also enables **internal general entities** — the

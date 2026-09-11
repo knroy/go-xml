@@ -17,7 +17,15 @@ Anything that fit none of the three has been deleted, in particular entries
 whose only content was that something had been fixed.
 
 Every figure here comes from a full run of the suite it names, with
-`tests/check.sh`.
+`tests/check.sh`. The table below is **generated** from
+[tests/conformance/results.json](../tests/conformance/results.json) by
+`tests/conformance-docs.go`; do not edit it by hand. The Total in particular is
+computed there rather than written, because this file once printed 168 while
+its own rows summed to 104 and nothing anywhere did the addition.
+
+<!-- BEGIN GENERATED CONFORMANCE SUMMARY -->
+<!-- Generated from tests/conformance/results.json by tests/conformance-docs.go.
+     Do not edit this region by hand; edit the JSON and regenerate. -->
 
 | Component | Suite | In scope | Passing | Now | Failing |
 |---|---|---:|---:|---|---:|
@@ -35,7 +43,10 @@ Every figure here comes from a full run of the suite it names, with
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
 | | **Total** | | | | **104** |
 
-The unit-test suite is 2,131 tests.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 34 + 30 + 31 + 0 = 104. Measured 2026-09-11.
+<!-- END GENERATED CONFORMANCE SUMMARY -->
+
+The unit-test suite is 2,149 tests.
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
 577 test documents and XSpec's 225 — kept here because they are the only
@@ -47,13 +58,14 @@ W3C XSLT sets.
 
 Two suites reach 100% — XPath at all three versions, and RELAX NG.
 
-**The two largest blocks are single features, not a long tail.** 44 of the 66
+**The largest block is a single feature, not a long tail.** 13 of the 34
 XSLT 3.0 failures want an `XTSE3430` that only the unwritten remainder of the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
-processor "is not required to assess whether constructs are guaranteed-streamable" —
-while 4 of the 10 XQuery failures sit in `prod-CastExpr.schema` and are the
-schema-aware features [todo.md](todo.md) §1.5 deliberately leaves. Neither is a
-backlog of defects.
+processor "is not required to assess whether constructs are guaranteed-streamable".
+That is not a backlog of defects. The 21 that remain are named case by case
+below, and every one of them is recorded with its verdict in
+[tests/conformance/results.json](../tests/conformance/results.json), which is
+where the table above comes from.
 
 ## How to read the verdicts
 
@@ -157,7 +169,7 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 3.0: 11,484 / 11,518 = 99.70%.**
 
-**14 of the 35 want an `XTSE3430`** — a refusal of a stylesheet as
+**13 of the 34 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles

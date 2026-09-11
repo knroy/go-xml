@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,131 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,149 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -28,7 +28,8 @@ let something through, and the column that matters is the last one.
 | **Production schema sets** | 65 + CII | what modular published schemas do | industries whose schemas are shaped differently |
 | **Vendored real-world schemas** | 185 of 230 | a schema-validity rule that has become stricter than the spec, on every checkout — no licensed corpus needed | the deep industry vocabularies only UBL and CII carry |
 | **Fuzzing** | 9 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
-| **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no wildcards, substitution groups, or interleaved choices |
+| **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no interleaved choices |
+| **Wildcard/UPA model** | 60,000 pairs | a *wrong answer* in wildcard acceptance or in the UPA competition rule | anything outside a single wildcard against a single name, or a pair of terms in one choice |
 | **The ratchet** | 10 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
 
 **How the first four counts are counted**, because "how many tests" has several
@@ -72,6 +73,26 @@ shapes whose language falls out of arithmetic; a choice whose branches repeat or
 differ in length needs the same interleaving argument the matcher does, and an
 oracle that reasons the same way is not independent, so those are left out
 deliberately rather than guessed at.
+
+**The wildcard rules are set membership, so the oracle can be the spec text.**
+`xsd/wildcard_model_test.go` restates *Wildcard allows Namespace Name*
+(§3.10.4.2) and *Wildcard allows Expanded Name* (§3.10.4.3) as four clauses over
+sets — variety plus namespaces, then disallowed names, `##defined` and
+`##definedSibling` — and the §3.8.6 competition rule as a case analysis over the
+two varieties. Nothing in the model calls `Wildcard.Allows`, `AllowsName`,
+`Disallows`, `wildcardsOverlap`, `wildcardAdmitsElement` or `positionsCompete`;
+that independence is the whole point, because the grouping-key oracle that
+called the function it was checking stayed green through a wrong answer for
+months. 20,000 generated wildcard/name pairs go through `AllowsName`, and 20,000
+term pairs per version are composed into `<choice><a?/><b?/></choice>` and put
+through the real `checkUPA`. `##definedSibling` is bound by compiling that
+content model rather than by writing the unexported field, so the test walks the
+same `bindSiblings` path a schema does. The seed is fixed at `0x5A1D11` for CI
+and replayable with `-wildcard.seed`; twenty hand-written keyword examples and
+eleven competition examples sit alongside, because a generated failure names a
+case index and not the rule that broke. Sabotaging three live paths — `##other`
+admitting the absent namespace, `##definedSibling` ignored, two negations
+reported disjoint — is caught by both halves.
 
 **An unproven hypothesis is worth testing precisely because it is unproven.**
 The fifth audit could not demonstrate that the `depth > 32` guards on four
@@ -466,6 +487,70 @@ the rate rose while the raw count fell. Say so in the commit message when it
 happens.
 
 ---
+
+## The generated conformance summary
+
+Every check above guards a figure someone typed. One figure could not be
+guarded that way, and it was the one that went wrong: the **Total** row of the
+summary table in `docs/conformance-gaps.md` is the *sum* of the other rows, so
+every row could agree with the ratchet while the sum disagreed with all of
+them. It did. The document printed **168** disagreements while its own rows
+summed to **104**, and nothing failed, because nothing anywhere did the
+addition.
+
+So the total is no longer written anywhere a person can write it.
+`tests/conformance/results.json` is the checked-in source of truth. It records,
+per suite: the suite identifier, the specification edition, the passed count,
+the disagreement count, the total in scope, the run date, the command that
+produced them, and the disagreeing case IDs with a verdict from a closed
+vocabulary — `implementation`, `fixture`, `implementation-defined`, `optional`,
+`deliberate-divergence`, `not-run`.
+
+`tests/conformance-docs.go` reads that file and rewrites exactly one region of
+`docs/conformance-gaps.md`:
+
+```text
+<!-- BEGIN GENERATED CONFORMANCE SUMMARY -->
+…the table and its arithmetic, derived from results.json…
+<!-- END GENERATED CONFORMANCE SUMMARY -->
+```
+
+Everything outside the markers is hand-written analysis — the per-case
+verdicts, the spec citations, the measured costs of each divergence — and is
+never touched. Only the table and the total are generated.
+
+```sh
+go run tests/conformance-docs.go          # rewrite the region
+go run tests/conformance-docs.go -check   # fail if it would change
+```
+
+Two properties are load-bearing:
+
+* **The generator computes the total; it never reads one.** `Total()` sums the
+  suite rows and there is no field a document or a JSON file could use to
+  supply a different answer. Real-world corpora — DocBook xslTNG and XSpec —
+  live in a separate `corpora` list, so they cannot reach the total by
+  accident; the total counts W3C disagreements only.
+* **`passed + disagreements == total`, per suite, or generation fails by
+  name.** An unnamed arithmetic error in a nine-row file is barely better than
+  none; the message names the suite and prints all three numbers.
+
+`check.sh` runs `-check` in its *generated conformance summary* section rather
+than regenerating and diffing with git: the gate is run on a dirty tree far
+more often than on a clean commit, and a `git diff` there would report work in
+progress as a failure.
+
+`tests/docfigures.sh` keeps its per-row denominator check and adds one of its
+own: it derives the total a second time, from `tests/ratchet.txt`, and compares
+it with the total the generated region prints. The two numbers come from two
+different files by two different routes, so agreement between them means
+`results.json` was re-measured rather than merely re-typed.
+
+To record a new measurement: run the suites, copy the passing counts into
+`tests/conformance/results.json` together with the run date and the command,
+regenerate, and check that the prose around the table still says something
+true. The generator will refuse the file if any suite's three numbers do not
+add up.
 
 ## Running one thing
 
