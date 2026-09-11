@@ -667,7 +667,7 @@ func buildElement(t xml.StartElement, parent *Node, offset int32) *Node {
 			// newlines and tabs, so the node was not the one the data model
 			// says the document has.
 			if a.Name.Space == "xml" && a.Name.Local == "id" {
-				attr.Value = strings.Join(strings.Fields(a.Value), " ")
+				attr.Value = strings.Join(SplitXMLSpace(a.Value), " ")
 			}
 			el.AddAttr(attr)
 		}

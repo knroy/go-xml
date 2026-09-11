@@ -944,7 +944,7 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 			return nil, false
 		}
 	}
-	fields := strings.Fields(n.StringValue())
+	fields := SplitXMLSpace(n.StringValue())
 	out := make(Sequence, 0, len(fields))
 	for _, f := range fields {
 		if a := atomicForLexical(typeEnvOf(n), item, f); a != nil {
