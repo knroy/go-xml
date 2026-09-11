@@ -20,6 +20,10 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| `fn:normalize-space` collapsed a no-break space | `strings.Fields` splits on the whole Unicode White_Space set, so `normalize-space("a\u00a0b")` returned `"a b"` with the NBSP replaced. F&O 3.1 §5.4.5 defines the whitespace as exactly XML S, so the NBSP is data and survives. | [`4c06a1f`][4c06a1f] |
+| `fn:id`, `fn:idref` and list tokenization split on a no-break space | An IDREFS value, an `xml:id` and any `xs:list` tokenize by the whiteSpace=collapse rule, whose separators are XML S. `strings.Fields`/`TrimSpace` made an NBSP a token boundary, so `id()` found names the document does not hold and one NMTOKEN became two. | [`a0cf1da`][a0cf1da] |
+| Datatype lexical casts stripped a no-break space | A collapse-faceted type trims XML S only, so an NBSP makes the lexical form invalid. It was stripped instead, and `xs:integer`, the temporal and duration types, `xs:boolean`, `xs:hexBinary`, `xs:base64Binary`, `xs:QName` and `xs:anyURI` all accepted values their grammar rejects. | [`b4a8b53`][b4a8b53] |
+| XSD facet bounds trimmed a no-break space | The bound facets and the two QName resolvers trim before parsing, which is the collapse edge trim and takes XML S only. `strings.TrimSpace` also stripped U+00A0, so a bound written with an NBSP parsed as though it were well formed. | [`4fd0df5`][4fd0df5] |
 | A nested `fn:transform` began its own item and byte allowances | `newRuntime` mints both counters through `xpath.NewContext`, so every level of a nest got the full `MaxBytes` again while the depth budget inherited; 500 levels charged ~5.5 GB with no refusal. The caller's context is adopted now, each counter with its held flag. | [`9f033e2`][9f033e2] |
 | Every derivation walk was decided by whichever schema loaded last | `instance of`, `castable as`, the `element()` and `attribute()` tests, `fn:id` and XTTE0950 all walked the process-global derivation table, so a second schema reusing a type name silently retyped a node the first had validated. A node now carries the validating schema's `TypeEnvironment` and the walks read it off the node. | [`cdba77a`][cdba77a] |
 | `XTTE1545` was decided by whichever schema loaded last | The walk deciding whether a constructed attribute may be validated against a named type read the process-global derivation table, so a second schema reusing the name overwrote the answer — permissively, letting the validation §19.2 forbids proceed. It now walks the environment of the schema being validated against, which `mergeSchema` carries into the stylesheet's aggregate. | [`1e21828`][1e21828] |
@@ -717,6 +721,10 @@ here so every entry in this file sits under a release.
 [17b1c91]: https://github.com/knroy/go-xml/commit/17b1c91
 [e511421]: https://github.com/knroy/go-xml/commit/e511421
 [5c17280]: https://github.com/knroy/go-xml/commit/5c17280
+[4c06a1f]: https://github.com/knroy/go-xml/commit/4c06a1f
+[a0cf1da]: https://github.com/knroy/go-xml/commit/a0cf1da
+[b4a8b53]: https://github.com/knroy/go-xml/commit/b4a8b53
+[4fd0df5]: https://github.com/knroy/go-xml/commit/4fd0df5
 [9f033e2]: https://github.com/knroy/go-xml/commit/9f033e2
 [cdba77a]: https://github.com/knroy/go-xml/commit/cdba77a
 [1e21828]: https://github.com/knroy/go-xml/commit/1e21828
