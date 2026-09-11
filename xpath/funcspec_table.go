@@ -393,6 +393,28 @@ var specSignatures = func() map[string][]string {
 	m["math:sin/1"] = []string{"xs:double?", "xs:double?"}
 	m["math:sqrt/1"] = []string{"xs:double?", "xs:double?"}
 	m["math:tan/1"] = []string{"xs:double?", "xs:double?"}
+
+	// The map: family, F&O 3.1 17.1. Like math:, every one of these is
+	// already guarded inside fn_map.go -- argMap and argMapKey raise
+	// XPTY0004 for an empty sequence and for several items alike -- so the
+	// declared types re-derive refusals rather than adding them.
+	//
+	// map(*) and xs:anyAtomicType carry no occurrence indicator, so the
+	// first parameter of every one of these except map:find and map:merge/1
+	// is the empty-sequence arm, and the keys of map:contains, map:get and
+	// map:put are too. map:remove's $keys is xs:anyAtomicType* and
+	// map:merge/1's $maps is map(*)*, which constrain nothing.
+	m["map:contains/2"] = []string{"xs:boolean", "map(*)", "xs:anyAtomicType"}
+	m["map:entry/2"] = []string{"map(*)", "xs:anyAtomicType", "item()*"}
+	m["map:find/2"] = []string{"array(*)", "item()*", "xs:anyAtomicType"}
+	m["map:for-each/2"] = []string{"item()*", "map(*)", "function(xs:anyAtomicType, item()*) as item()*"}
+	m["map:get/2"] = []string{"item()*", "map(*)", "xs:anyAtomicType"}
+	m["map:keys/1"] = []string{"xs:anyAtomicType*", "map(*)"}
+	m["map:merge/1"] = []string{"map(*)", "map(*)*"}
+	m["map:merge/2"] = []string{"map(*)", "map(*)*", "map(*)"}
+	m["map:put/3"] = []string{"map(*)", "map(*)", "xs:anyAtomicType", "item()*"}
+	m["map:remove/2"] = []string{"map(*)", "map(*)", "xs:anyAtomicType*"}
+	m["map:size/1"] = []string{"xs:integer", "map(*)"}
 	return m
 }()
 

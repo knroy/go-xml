@@ -1125,11 +1125,11 @@ Three tests measure it, and they ask different questions:
   mechanism exists to prevent, so a hand-edited spelling that disagrees with
   the manifest breaks the build.
 
-The count so far is 221 of 272: the seventeen seeded from `builtinSignatures`,
+The count so far is 232 of 272: the seventeen seeded from `builtinSignatures`,
 `fn:substring` and `fn:subsequence`, then the numeric (14), non-regex string
 (25), temporal (28), node and accessor (34), sequence (14), higher-order (12),
 QName and URI (15), input and document (20), JSON (10), context, boolean and
-error (14) and `math:` (14) families.
+error (14), `math:` (14) and `map:` (11) families.
 
 `math:pi` was the first entry to use a prefixed key, and it landed with the
 mechanism rather than with its family. It is nullary, so it constrains no
@@ -1139,8 +1139,8 @@ fn:-only expansion its key constrained a non-existent `fn:pi`.
 `TestPrefixedSpecKeysNameOtherNamespaces` is what keeps that path from
 decaying back.
 
-Of the 51 that remain, 32 are the `array:` (21) and `map:` (11) rows, which
-the prefixed key format has made reachable.
+Of the 40 that remain, 21 are the `array:` rows, which the prefixed key
+format has made reachable.
 
 The `math:`, `map:` and `array:` families differ from the `fn:` ones in what
 migrating them buys. Every parameter of those 46 is already guarded by hand
@@ -1152,6 +1152,17 @@ property of the manifest, where a mistyped occurrence indicator fails
 `TestMigratedSignaturesMatchManifest` instead of quietly constraining a
 function wrongly, and where the hand guard and the declared type are checked
 against each other by the QT3 lanes.
+
+What does change for these three is the WORDING of the refusal, not the code
+or the result. The declared type is consulted at call binding, before the
+callback runs, so `map:get((), 1)` now reads "an empty sequence is not allowed
+as the first argument of map:get(), which is declared map(*)" where `argMap`
+used to say "argument 1: expected a single map, got 0 items". The error code
+is XPTY0004 either way and all four QT3 lanes are unmoved, which is what makes
+this a message change rather than a behaviour one. `math:pow`'s message names
+its declared type as `item()`, because this package parses the union spelling
+`xs:numeric` to `item()`; the cardinality it carries — exactly one — is the
+one F&O declares, which is all the check reads.
 
 The other 19 are deliberately deferred to commits that can compare their error
 codes, because both groups change *which* error is raised rather than only
