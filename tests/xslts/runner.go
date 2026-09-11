@@ -1089,6 +1089,13 @@ func envSchema(set *TestSet, env *Environment) *xsd.Schema {
 
 // mergeInto folds one schema's global components into another.
 func mergeInto(dst, src *xsd.Schema) {
+	// The type ENVIRONMENT travels with the components. Copying the type
+	// DEFINITIONS while leaving the derivation facts behind produces an
+	// aggregate whose types no longer know what they derive from, so every
+	// by-name question -- "instance of", namespace-sensitivity, the NOTATION
+	// chain -- answers from an empty environment, and every node the aggregate
+	// validates is stamped with that empty environment.
+	dst.TypeEnv().Merge(src.TypeEnv())
 	for n, t := range src.Types {
 		if _, ok := dst.Types[n]; !ok {
 			dst.Types[n] = t
