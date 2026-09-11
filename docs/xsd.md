@@ -518,7 +518,7 @@ distinguish from a completed walk. The failure directions were all three kinds:
 * **rejection** — `derivedFrom` refusing a legal `xsi:type`, and `relaxng`'s
   `maxRefDepth = 500` refusing a legal 501-definition grammar outright.
 * **silent erasure**, the worst of the three, because nothing reports an error.
-  The five walks over `derivedPrimitives` in `xdm/node.go` simply delivered the
+  The five walks over the derivation table (now `xdm/typeenv.go`) simply delivered the
   value untyped past 32 links, so a comparison that should have been numeric
   became a string comparison and a transform produced a wrong answer rather
   than a diagnostic. `accumulatorOrigin` in `xslt/accumulator.go` is sharper
