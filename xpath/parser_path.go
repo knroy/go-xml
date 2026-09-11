@@ -1244,7 +1244,7 @@ func foldQNameLiteralIn(ns NamespaceResolver, arg Expr) (*Literal, bool, error) 
 			"xs:QName() requires a string literal: the prefix must be resolvable "+
 				"in the static context of the expression")
 	}
-	lex := strings.TrimSpace(lit.Val.Str())
+	lex := trimSchemaSpace(lit.Val.Str())
 	prefix, local := "", lex
 	if i := strings.Index(lex, ":"); i >= 0 {
 		prefix, local = lex[:i], lex[i+1:]
