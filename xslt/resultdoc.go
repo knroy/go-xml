@@ -320,6 +320,14 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		Output:  settings,
 		charMap: cm,
 	})
+	// The resolved URI is recorded so that a later doc() reading it back is
+	// XTDE1500 too. The error is symmetric in the spec, and until now only
+	// the read-then-write half was detected; see checkWrittenThenRead.
+	// Keyed on the resolved form for the same reason checkReadThenWrite is:
+	// the spec's test is on the absolute URI.
+	if rt.writtenDocs != nil && resolvedHref != "" {
+		(*rt.writtenDocs)[resolvedHref] = true
+	}
 	return nil
 }
 

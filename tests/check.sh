@@ -449,7 +449,7 @@ docfigure_cmd() {
 
 section "documented figures"
 _docfig_before=$failed
-docfigure "unit test count" 2092 "$(docfigure_tests)" \
+docfigure "unit test count" 2098 "$(docfigure_tests)" \
 	README.md:109 README.md:1228 docs/testing.md:23 docs/todo.md:20
 docfigure "fuzz target count" 9 "$(docfigure_fuzz)" \
 	README.md:1234 docs/testing.md:30

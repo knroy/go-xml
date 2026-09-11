@@ -17,7 +17,7 @@ Current position:
 | XSLT 3.0 | 99.70% — 11,484 of 11,518 in scope (34 failing); 14 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,092 `func Test` declarations, clean under `-race` |
+| Tests | 2,098 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -75,22 +75,29 @@ failed to 29,936 / 26.
 cases would fail if they were admitted. The `version` parameter itself now
 reaches the XML declaration there, which it did not before.
 
-`undeclare-prefixes` is not the only one. `fn:serialize` also parses and never
-reads **`indent`**, **`normalization-form`** and **`include-content-type`**.
-The asymmetry is what makes these worth naming: `xslt/serialize.go` implements
-indentation properly, so one stylesheet indents through `xsl:result-document`
-and not through `fn:serialize` — the same request answered two ways by which
-spelling was used. Porting `indent` is not a rider on another change: it needs
-mixed-content detection, subtree suppression, the HTML comment/PI exception
-and `nodeNoIndent`. Found by the 2026-09-11 spec-conformance audit.
+`undeclare-prefixes` is not the only one, but **`indent` is now honoured**:
+Serialization 3.1 §4's rules, including the significant-whitespace rule and
+the html comment/PI exception, so a document indents the same way through
+`fn:serialize` as through `xsl:result-document`. What remains parsed and
+unread there is **`normalization-form`** and **`include-content-type`**.
 
-**`build-tree` is inert for the principal result.** XSLT 3.0 §26.2 names the
-principal result explicitly, so this is real drift and not an omission the
-spec permits: `xsl:result-document` honours `build-tree="no"`, `xsl:output`
-does not. It is recorded rather than fixed because the principal path defers
-tree-building to `Result.Tree()`, and a fix means deciding what
-`build-tree="no"` does to `Tree()`, `String()` and validation — a change to
-exported behaviour rather than a contained correction. Same audit.
+Fixing `indent` exposed a second defect the inertness had hidden: a
+no-namespace `xs:QName` map key was matching a standard parameter name.
+Serialization 3.1 §3 gives those names as `xs:string`, reserving `xs:QName`
+with a non-absent namespace for implementation-defined parameters, and the key
+was compared with `String()` — so `QName('','indent')` read as `indent`.
+Accepting a key and ignoring what it asks for is indistinguishable from
+rejecting it, which is why `serialize-xml-120` and `-120b` only caught this
+once indentation started working.
+
+**`build-tree` now applies to the principal result.** §26.1 covers "the raw
+principal result or secondary result", and §24.1 says what the yes case means:
+"a document node is created ... The tree rooted at this document node forms
+the final result tree." So `build-tree="no"` means no document node, and
+`Result.Tree()` returns nil rather than manufacturing the node the stylesheet
+asked not to have built; `Result.BuildsTree()` distinguishes that from a
+transform that produced nothing. Serialisation is unaffected — writing the raw
+sequence is the point of the attribute.
 
 The `keySep = "\x1f"` dependency is also closed. `xsd/identity.go` is now
 length-prefixed and injective for any field content, so it no longer rests on

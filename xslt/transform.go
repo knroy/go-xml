@@ -381,8 +381,10 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// wrapper goes OUTSIDE the stripping one, so that it sees the document
 	// URI of the tree actually delivered to the stylesheet.
 	readDocs := map[string]bool{}
+	writtenDocs := map[string]bool{}
 	if opts.Documents != nil {
-		opts.Documents = &readDocResolver{inner: opts.Documents, read: readDocs}
+		opts.Documents = &readDocResolver{
+			inner: opts.Documents, read: readDocs, written: writtenDocs}
 	}
 
 	rt, err := newRuntime(s, ctx, source, opts)
@@ -390,6 +392,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		return nil, err
 	}
 	rt.readDocs = &readDocs
+	rt.writtenDocs = &writtenDocs
 	// Bind the runtime so key(), current() and xsl:function can reach it.
 	rt.ctx = rt.ctx.WithVar(runtimeVar,
 		xdm.One(&xdm.Opaque{Label: "runtime", Value: rt}))
@@ -1090,10 +1093,34 @@ func (r *Result) Serialize(w io.Writer) error {
 	return serialize(w, r.Nodes, r.output, r.charMap)
 }
 
+// BuildsTree reports whether this result is normalised into a final result
+// tree, which is XSLT 3.0 section 26.1's build-tree attribute applied to the
+// principal result: "The build-tree attribute controls whether the raw
+// principal result or secondary result is converted to a final result tree."
+//
+// It is exported because Tree returns nil when the answer is no, and a caller
+// needs a way to tell that apart from a transform that produced nothing.
+func (r *Result) BuildsTree() bool {
+	return r.output.buildsTree()
+}
+
 // Tree returns the result as a document node, for callers that want to keep
 // navigating it rather than serialise it — which is what a Schematron driver
 // does with an SVRL report.
 func (r *Result) Tree() *xdm.Node {
+	// Section 24.1 defines what build-tree="yes" means: "a document node is
+	// created, and the result of evaluating the sequence constructor is used
+	// to construct the content of the document ... The tree rooted at this
+	// document node forms the final result tree." With build-tree="no" that
+	// document node is not created, so there is no tree to return and
+	// manufacturing one anyway would be the drift: it would hand back the
+	// very node the stylesheet asked not to have built. Section 26.1 applies
+	// the attribute to "the raw principal result or secondary result", so
+	// the principal result is not exempt. Callers distinguish this nil from
+	// an empty result with BuildsTree.
+	if !r.output.buildsTree() {
+		return nil
+	}
 	tree := xdm.NewTree()
 	// The document node is manufactured here, so it is the only place the
 	// result's own URI can be put on it. Without this base-uri(/) answered

@@ -139,8 +139,19 @@ func treeOf(res *xslt.Result) *xdm.Node {
 	// synthetic root reports a different set of in-scope namespaces than the
 	// one the engine gave it. element-0306 counts exactly that, and rebuilding
 	// unconditionally cost it one namespace node.
+	// A result whose method makes build-tree default to no -- json and
+	// adaptive -- has no final result tree, and Result.Tree now says so by
+	// returning nil, which is XSLT 3.0 section 24.1: with build-tree="no" no
+	// document node is created. The suite still writes tree-shaped assertions
+	// about such a result (arrays-304 and si-fork-119 use method="adaptive",
+	// maps-017 method="json", and all three assert on /out), so the harness
+	// builds the document the assertion is written about rather than asking
+	// the engine to manufacture one it was told not to build. That is the
+	// same thing the catalog's own driver does.
 	if !needsRebuild(res) {
-		return res.Tree()
+		if t := res.Tree(); t != nil {
+			return t
+		}
 	}
 	tree := xdm.NewTree()
 	for _, it := range res.Nodes {
@@ -1015,7 +1026,20 @@ func resultString(res *xslt.Result) string {
 	// every atomic value the stylesheet returned -- an xsl:sequence at the
 	// top of a template routinely returns one -- and reported the empty
 	// string for a transform that had produced the asserted text.
-	return res.Tree().StringValue()
+	// Result.Tree is the normalised document -- it runs the item separator
+	// and the adjacent-atomic join, which is what the string value is
+	// defined over. treeOf's rebuild branch does neither, so routing every
+	// result through it dropped the separators from a result carrying a
+	// document node: seqtor-017 builds one with xsl:document and asserts a
+	// string value whose items are space-separated.
+	//
+	// So the tree is preferred when the engine has one, and treeOf is the
+	// fallback for the json and adaptive methods, where build-tree defaults
+	// to no and there is no final result tree to normalise.
+	if t := res.Tree(); t != nil {
+		return t.StringValue()
+	}
+	return treeOf(res).StringValue()
 }
 
 // stripDecl removes an XML declaration and any leading whitespace.

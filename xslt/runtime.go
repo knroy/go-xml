@@ -165,6 +165,15 @@ type runtime struct {
 	// the runtime is copied on every focus change, and a document read in one
 	// template must be visible to an xsl:result-document in another.
 	readDocs *map[string]bool
+	// writtenDocs is the set of absolute URIs xsl:result-document has
+	// written, the twin of readDocs. XTDE1500 is order-independent -- the
+	// spec says "write to an external resource and read from the same
+	// resource during a single transformation" -- so the read side needs the
+	// writes recorded just as the write side needs the reads. A pointer for
+	// the same reason readDocs is: the runtime is copied on every focus
+	// change, and a document written inside one template has to be visible
+	// to a doc() evaluated anywhere else.
+	writtenDocs *map[string]bool
 
 	// messages collects xsl:message output rather than writing to stderr.
 	//

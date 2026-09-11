@@ -25,6 +25,10 @@ import (
 // absolute form of the same thing.
 type readDocResolver struct {
 	inner xpath.DocumentResolver
+	// written is the set of URIs xsl:result-document has produced, shared
+	// with the runtime for the same reason read is. It is consulted rather
+	// than added to here: this resolver is the read side of XTDE1500.
+	written map[string]bool
 	// read is shared with the runtime rather than copied, because the
 	// resolver is installed once per transform and the runtime is copied on
 	// every focus change. A document read inside a template has to be
@@ -44,7 +48,35 @@ func (r *readDocResolver) record(t *xdm.Tree) {
 func (r *readDocResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 	t, err := r.inner.ResolveDocument(uri, base)
 	r.record(t)
+	if err == nil {
+		if werr := r.checkWrittenThenRead(t); werr != nil {
+			return nil, werr
+		}
+	}
 	return t, err
+}
+
+// checkWrittenThenRead is XTDE1500 in the direction the write side cannot
+// see: a resource this transformation has already produced with
+// xsl:result-document is then read back.
+//
+// The error is symmetric in the spec -- "write to an external resource and
+// read from the same resource during a single transformation, if the same
+// absolute URI is used to access the resource in both cases" -- so it is
+// neither read-then-write nor write-then-read but both. checkReadThenWrite in
+// this file is the other half; between them the pair no longer depends on
+// which instruction the stylesheet happens to reach first.
+func (r *readDocResolver) checkWrittenThenRead(t *xdm.Tree) error {
+	if t == nil || t.Root == nil || r.written == nil {
+		return nil
+	}
+	u := t.Root.DocumentURI
+	if u == "" || !r.written[u] {
+		return nil
+	}
+	return fmt.Errorf(
+		"XTDE1500: this transformation reads %q, which xsl:result-document "+
+			"has already written", u)
 }
 
 // ResolveDocumentIn implements xpath.ContextDocumentResolver, so that wrapping
@@ -57,6 +89,11 @@ func (r *readDocResolver) ResolveDocumentIn(
 	if cr, ok := r.inner.(xpath.ContextDocumentResolver); ok {
 		t, err := cr.ResolveDocumentIn(ctx, uri, base)
 		r.record(t)
+		if err == nil {
+			if werr := r.checkWrittenThenRead(t); werr != nil {
+				return nil, werr
+			}
+		}
 		return t, err
 	}
 	return r.ResolveDocument(uri, base)

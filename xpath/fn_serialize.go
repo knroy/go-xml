@@ -429,11 +429,19 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 					return opts, err
 				}
 				opts.allowDuplicateNames = val == "yes"
+			case "suppress-indentation":
+				// Any non-empty list of element names suppresses indentation
+				// for those elements. This serialiser does not track which
+				// element is which across the recursive walk, so it takes the
+				// conservative reading the spec permits: a named element must
+				// not be re-indented, and suppressing the whole document
+				// never re-indents one that was named. Recorded rather than
+				// ignored, which is what it was before.
+				opts.suppressIndent = strings.TrimSpace(val) != ""
 			case "media-type",
 				"doctype-public", "doctype-system",
 				"normalization-form",
-				"byte-order-mark", "escape-uri-attributes", "include-content-type",
-				"suppress-indentation":
+				"byte-order-mark", "escape-uri-attributes", "include-content-type":
 				// Recognised and accepted; this serialiser does not vary its
 				// output for them.
 			default:
@@ -577,7 +585,7 @@ func serializeItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 			return fmt.Errorf(
 				"SENR0001: an attribute or namespace node cannot be serialized")
 		}
-		serializeNode(sb, v, opts)
+		serializeNode(sb, v, opts, 0)
 		return nil
 	case *xdm.FunctionItem:
 		// A function item has no serialization: SENR0001 is the code for an
@@ -590,8 +598,46 @@ func serializeItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 	return nil
 }
 
+// hasTextChild reports whether an element holds non-whitespace text, which
+// makes indenting its children unsafe: the inserted whitespace would become
+// part of the element's string value.
+func hasTextChild(n *xdm.Node) bool {
+	for _, c := range n.Children {
+		if c.Kind == xdm.KindText && !xdm.IsXMLWhitespace(c.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasCommentOrPIChild reports whether an element holds a comment or a
+// processing instruction, which the html method never indents around.
+func hasCommentOrPIChild(n *xdm.Node) bool {
+	for _, c := range n.Children {
+		if c.Kind == xdm.KindComment || c.Kind == xdm.KindPI {
+			return true
+		}
+	}
+	return false
+}
+
+// writeIndent writes the newline and leading spaces for one nesting level.
+func writeIndent(sb *strings.Builder, depth int) {
+	sb.WriteString("\n")
+	for i := 0; i < depth; i++ {
+		sb.WriteString("  ")
+	}
+}
+
 // serializeNode writes a node and its descendants.
-func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
+//
+// depth is the nesting level used for indentation, which the indent parameter
+// asks for. Serialization 3.1 section 4 makes the exact whitespace
+// implementation-defined -- it constrains where a serialiser may NOT add
+// whitespace rather than prescribing an amount -- so this follows
+// xslt/serialize.go and writes a newline plus two spaces per level, which is
+// what the rest of this library already produces.
+func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions, depth int) {
 	// The text output method writes the string value of what it is given and
 	// no markup at all, so it is answered before the per-kind rendering
 	// below rather than inside it: every branch there emits tags. This is
@@ -606,7 +652,7 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
 	switch n.Kind {
 	case xdm.KindDocument:
 		for _, c := range n.Children {
-			serializeNode(sb, c, opts)
+			serializeNode(sb, c, opts, depth)
 		}
 	case xdm.KindElement:
 		sb.WriteString("<")
@@ -647,7 +693,23 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
 		// a CDATA section instead of with escaping, which is what the
 		// parameter exists to ask for.
 		cdata := opts.cdataElements[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}]
+		// Indentation is suppressed for an element holding non-whitespace
+		// text, because inserting whitespace there would change the element's
+		// string value -- Serialization 3.1 section 4 forbids adding
+		// whitespace "in any place where it is significant". The html method
+		// additionally adds none around a comment or a processing
+		// instruction: neither is markup an HTML parser skips on its way to
+		// the content, so a newline inserted there is one the document did
+		// not have. Both rules are xslt/serialize.go's, kept identical so the
+		// same document indents the same way through either serialiser.
+		indentChildren := opts.indent && !opts.suppressIndent && !hasTextChild(n)
+		if indentChildren && opts.method == "html" && hasCommentOrPIChild(n) {
+			indentChildren = false
+		}
 		for _, c := range n.Children {
+			if indentChildren {
+				writeIndent(sb, depth+1)
+			}
 			if cdata && c.Kind == xdm.KindText {
 				sb.WriteString("<![CDATA[")
 				// A "]]>" inside the text would end the section early, so it
@@ -656,7 +718,10 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
 				sb.WriteString("]]>")
 				continue
 			}
-			serializeNode(sb, c, opts)
+			serializeNode(sb, c, opts, depth+1)
+		}
+		if indentChildren {
+			writeIndent(sb, depth)
 		}
 		sb.WriteString("</")
 		sb.WriteString(elementName(n))
@@ -893,6 +958,27 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 	}
 
 	err := m.Entries(func(key *xdm.Atomic, val xdm.Sequence) error {
+		// Serialization 3.1 §3: the key naming a parameter defined by these
+		// specifications is an xs:string. An xs:QName key is reserved for an
+		// implementation-defined parameter and must carry a non-absent
+		// namespace -- "the key of the entry is an xs:string value in the
+		// cases of parameter names defined in these specifications, or an
+		// xs:QName (with non-absent namespace) in the case of
+		// implementation-defined serialization parameters."
+		//
+		// So QName("", "indent") does NOT name the indent parameter: it is a
+		// no-namespace QName, which is neither of the two permitted forms.
+		// The key was read with String(), which renders that QName as
+		// "indent" and matched it like the string -- invisible for as long as
+		// the indent parameter itself did nothing, and caught by
+		// serialize-xml-120 and -120b the moment it started indenting.
+		// A no-namespace QName is ignored rather than rejected: an
+		// implementation-defined parameter this processor does not recognise
+		// is ignored too, and both cases assert on the output rather than on
+		// an error.
+		if key.Type == xdm.TypeQName {
+			return nil
+		}
 		name := key.String()
 		switch name {
 		case "method":
@@ -1130,7 +1216,7 @@ func writeJSONItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 		if nodeOpts.method == "" {
 			nodeOpts.method = "xml"
 		}
-		serializeNode(&inner, v, nodeOpts)
+		serializeNode(&inner, v, nodeOpts, 0)
 		writeJSONString(sb, inner.String(), opts)
 		return nil
 	case *xdm.Atomic:
@@ -1366,7 +1452,7 @@ func writeAdaptiveItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) 
 		}
 		nodeOpts := opts
 		nodeOpts.method = "xml"
-		serializeNode(sb, v, nodeOpts)
+		serializeNode(sb, v, nodeOpts, 0)
 	case *xdm.Atomic:
 		writeAdaptiveAtomic(sb, v)
 	}

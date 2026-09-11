@@ -16,6 +16,10 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| `fn:serialize` accepted `indent` and never indented | The parameter had two writes and no reads, so one document indented through `xsl:result-document` and not through `fn:serialize`. Serialization 3.1 §4's rules, including the significant-whitespace and html comment/PI exceptions. | [`PENDING`][PENDING] |
+| A no-namespace `xs:QName` map key named a standard serialization parameter | Serialization 3.1 §3 gives parameter names as `xs:string`, reserving `xs:QName` with a non-absent namespace for implementation-defined ones. The key was compared with `String()`, so `QName('','indent')` matched `indent`. | [`PENDING`][PENDING] |
+| `build-tree` was inert for the principal result | §26.1 applies it to "the raw principal result or secondary result"; only `xsl:result-document` honoured it. `Tree()` now reports the absence §24.1 describes, and `BuildsTree()` tells it from an empty result. | [`PENDING`][PENDING] |
+| `XTDE1500` was detected in one direction only | The spec's "write to ... and read from the same resource" is symmetric; a document written and then read back was not caught. The written URIs are recorded beside the read ones. | [`PENDING`][PENDING] |
 | Forwards compatible processing was decided against a fixed 3.0, so a 2.0 processor rejected a construct it must ignore | §3.9 measures the effective version against the version the processor implements, which `CompileOptions.MaxVersion` sets. | [`187dfec`][187dfec] |
 | Three rooted resolvers checked containment and then opened, so only `xslt` enforced its root at open time | `xsd`, `dtd` and the CLI's RELAX NG resolver open through `os.OpenRoot`; the string check stays as diagnosis, not enforcement. | [`37972d9`][37972d9] |
 | `fn:transform` accepted the `post-process` option and ignored it, so a pipeline silently ran one stage short | The function is applied to every result document after delivery, and an option name the processor does not know is now `FOXT0002` rather than silence. Reported as issue #5. | [`e8ebf4b`][e8ebf4b] |
