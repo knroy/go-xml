@@ -18,7 +18,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| `XTTE1545` was decided by whichever schema loaded last | The walk deciding whether a constructed attribute may be validated against a named type read the process-global derivation table, so a second schema reusing the name overwrote the answer — permissively, letting the validation §19.2 forbids proceed. It now walks the environment of the schema being validated against, which `mergeSchema` carries into the stylesheet's aggregate. | [`2d2d7af`][2d2d7af] |
+| `XTTE1545` was decided by whichever schema loaded last | The walk deciding whether a constructed attribute may be validated against a named type read the process-global derivation table, so a second schema reusing the name overwrote the answer — permissively, letting the validation §19.2 forbids proceed. It now walks the environment of the schema being validated against, which `mergeSchema` carries into the stylesheet's aggregate. | [`1e21828`][1e21828] |
 | `fn:serialize` accepted `indent` and never indented | The parameter had two writes and no reads, so one document indented through `xsl:result-document` and not through `fn:serialize`. Serialization 3.1 §4's rules, including the significant-whitespace and html comment/PI exceptions. | [`34908a7`][34908a7] |
 | A no-namespace `xs:QName` map key named a standard serialization parameter | Serialization 3.1 §3 gives parameter names as `xs:string`, reserving `xs:QName` with a non-absent namespace for implementation-defined ones. The key was compared with `String()`, so `QName('','indent')` matched `indent`. | [`34908a7`][34908a7] |
 | `build-tree` was inert for the principal result | §26.1 applies it to "the raw principal result or secondary result"; only `xsl:result-document` honoured it. `Tree()` now reports the absence §24.1 describes, and `BuildsTree()` tells it from an empty result. | [`34908a7`][34908a7] |
@@ -713,7 +713,7 @@ here so every entry in this file sits under a release.
 [17b1c91]: https://github.com/knroy/go-xml/commit/17b1c91
 [e511421]: https://github.com/knroy/go-xml/commit/e511421
 [5c17280]: https://github.com/knroy/go-xml/commit/5c17280
-[2d2d7af]: https://github.com/knroy/go-xml/commit/2d2d7af
+[1e21828]: https://github.com/knroy/go-xml/commit/1e21828
 [93c5e88]: https://github.com/knroy/go-xml/commit/93c5e88
 [6eacc2d]: https://github.com/knroy/go-xml/commit/6eacc2d
 [75d633e]: https://github.com/knroy/go-xml/commit/75d633e
