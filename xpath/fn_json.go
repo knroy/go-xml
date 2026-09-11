@@ -278,7 +278,20 @@ type jsonScanner struct {
 	// or calls the fallback, json-to-xml does the same but must also decide
 	// whether to mark the element escaped.
 	fallbackFn func(string) (string, error)
+	// depth counts the object and array nesting open at this point. The
+	// scanner is recursive descent, so nesting in the text is nesting on the
+	// Go stack, and JSON arrives from the same untrusted places XML does --
+	// fn:parse-json over a string the document supplied, most directly.
+	depth int
 }
+
+// maxJSONDepth bounds how deeply fn:parse-json and fn:json-to-xml will nest.
+//
+// It matches xdm.DefaultMaxDepth because the two limits guard the same thing
+// for the same reason: a document that nests past what the parser will accept
+// should not be reachable through its JSON spelling instead. Real JSON is
+// nowhere near it -- the deepest in the W3C suite is under twenty.
+const maxJSONDepth = 1000
 
 // scanJSON parses text and drives h, returning the first error.
 func scanJSON(text string, opts jsonOptions, h jsonHandler,
@@ -324,6 +337,16 @@ func (s *jsonScanner) value() error {
 	c, ok := s.peek()
 	if !ok {
 		return errFOJS0001("unexpected end of input where a value was expected")
+	}
+	// Charged here rather than in object and array so that the one place
+	// every nested value passes through is the one place that counts.
+	if c == '{' || c == '[' {
+		s.depth++
+		if s.depth > maxJSONDepth {
+			return errFOJS0001(
+				"JSON nests more than %d levels deep", maxJSONDepth)
+		}
+		defer func() { s.depth-- }()
 	}
 	switch {
 	case c == '{':
