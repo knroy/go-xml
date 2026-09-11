@@ -576,8 +576,9 @@ type OutputSettings struct {
 	// character; it is metadata a caller passes on.
 	MediaType string
 	// NormalizationForm names a Unicode normalisation applied to the output.
-	// Only "none" is implemented; any other value the serialiser does not
-	// support is a serialization error rather than something to ignore,
+	// NFC, NFD, NFKC and NFKD are implemented, as is "none"; see
+	// normalizerFor in serialize.go. Any other value -- "fully-normalized"
+	// among them -- is a serialization error rather than something to ignore,
 	// because output that was silently left unnormalised would be accepted
 	// by a consumer that then compares it against a normalised form and
 	// finds a spurious difference.
