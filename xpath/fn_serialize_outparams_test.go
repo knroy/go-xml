@@ -217,3 +217,31 @@ func TestSerializeSuppressIndentationOnlyNamedElements(t *testing.T) {
 		t.Errorf("the named element's content was indented: %q", got)
 	}
 }
+
+// TestSerializeIncludeContentType pins the parameter fn:serialize accepted and
+// discarded. xsl:output has honoured it throughout -- the head branch of
+// writeElement in xslt/serialize.go -- so the two serializers were answering
+// the same request differently, which is the defect shape this library keeps
+// producing wherever one feature has two parameter-parsing paths.
+func TestSerializeIncludeContentType(t *testing.T) {
+	const doc = `parse-xml('<html><head/><body/></html>')`
+	for _, tc := range []struct {
+		name, query string
+		wantMeta    bool
+	}{
+		{"default", `serialize(` + doc + `, map{'method':'html'})`, true},
+		{"map false", `serialize(` + doc + `, map{'method':'html','include-content-type':false()})`, false},
+		{"map true", `serialize(` + doc + `, map{'method':'html','include-content-type':true()})`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := evalSerialize(t, tc.query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if has := strings.Contains(got, "http-equiv"); has != tc.wantMeta {
+				t.Errorf("serialize gave %q; content-type meta present=%v, want %v",
+					got, has, tc.wantMeta)
+			}
+		})
+	}
+}

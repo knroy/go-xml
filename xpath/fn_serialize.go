@@ -194,6 +194,14 @@ type serializeOptions struct {
 	// turns it off -- a plain bool would have defaulted to off and silently
 	// inverted the spec.
 	escapeURIAttrs *bool
+
+	// includeContentType suppresses the http-equiv meta element the html
+	// method writes into head. Serialization 3.1 defaults it to yes, so an
+	// absent parameter is nil rather than false -- the same shape as
+	// escapeURIAttrs above, and for the same reason. xsl:output has honoured
+	// it throughout (xslt/serialize.go, the head branch of writeElement);
+	// only fn:serialize accepted it and wrote the element anyway.
+	includeContentType *bool
 	// standalone is the value of the standalone parameter, "" when it was not
 	// given. It appears in the XML declaration, so asking for it also forces
 	// the declaration to be written.
@@ -529,8 +537,15 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 					return opts, err
 				}
 				opts.normalize = f
+			case "include-content-type":
+				norm, err := checkYesNo(val, p.Name.Local)
+				if err != nil {
+					return opts, err
+				}
+				v := norm == "yes"
+				opts.includeContentType = &v
 			case "media-type",
-				"byte-order-mark", "include-content-type":
+				"byte-order-mark":
 				// Recognised and accepted, and deliberately without effect
 				// here.
 				//
@@ -922,6 +937,9 @@ func xmlDeclVersion(v string) string {
 //
 // The name is matched case-insensitively because HTML element names are.
 func isHTMLContentTypeHead(n *xdm.Node, opts serializeOptions) bool {
+	if opts.includeContentType != nil && !*opts.includeContentType {
+		return false
+	}
 	return opts.method == "html" &&
 		strings.EqualFold(n.Name.Local, "head") &&
 		(n.Name.URI == "" || n.Name.URI == "http://www.w3.org/1999/xhtml")
@@ -1414,8 +1432,14 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 				return err
 			}
 			opts.normalize = f
+		case "include-content-type":
+			v, err := boolParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.includeContentType = &v
 		case "media-type",
-			"byte-order-mark", "include-content-type",
+			"byte-order-mark",
 			"html-version", "parameter-document":
 			// Recognised and accepted. See the element form's arm for why
 			// byte-order-mark and media-type cannot act on a returned string.
