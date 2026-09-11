@@ -213,6 +213,17 @@ func sameKeyCorpus(t *testing.T) []*Atomic {
 	add(NewDouble(1))
 	add(NewFloat(1))
 	add(NewDouble(1.00000000001))
+	// An xs:decimal and the xs:double spelling of the same exact value.
+	// NewDecimal canonicalises its rational at construction, so "1.0" and
+	// "1.00" are not two distinct Atomics and cannot be the witness; a
+	// value with a surviving fractional part is. The decimal prints "1.5"
+	// where the key is the rational 3/2, so an encoder that keyed on the
+	// spelling would split this pair while op:same-key holds it together
+	// (mutation lane: numeric-key-is-lexical).
+	if r, ok := new(big.Rat).SetString("1.5"); ok {
+		add(NewDecimal(r))
+	}
+	add(NewDouble(1.5))
 	if r, ok := new(big.Rat).SetString("1.0000000000100000000001"); ok {
 		add(NewDecimal(r))
 	}
@@ -220,6 +231,13 @@ func sameKeyCorpus(t *testing.T) []*Atomic {
 	add(NewFloat(nan()))
 	add(NewDouble(inf(1)))
 	add(NewDouble(inf(-1)))
+	// The infinities, like NaN, take an early return in MapKeyOf that is
+	// shared across the numeric types. With only the xs:double spellings
+	// present, a key that appended the type to "num:INF" would have been
+	// indistinguishable from the correct one -- the mutation lane caught
+	// exactly that gap (infinities-per-numeric-type).
+	add(NewFloat(inf(1)))
+	add(NewFloat(inf(-1)))
 
 	// Large exact integers. With only 1/0/-1 the Rat()-nil branch at
 	// maparray.go:116 is never reached by a value big enough for exactness to
@@ -258,7 +276,14 @@ func sameKeyCorpus(t *testing.T) []*Atomic {
 	add(NewString("foo"))
 	add(NewUntypedAtomic("foo"))
 	add(NewAnyURI("foo"))
+	// map-get-008: the function conversion rules cast an untyped key to
+	// xs:string, never to a number, so these two must stay distinct. The
+	// xs:integer(12) is the half that was missing -- without it no pair
+	// could contradict an encoder that cast untyped to the numeric family
+	// (mutation lane: merge-untypedAtomic-into-numeric).
 	add(NewUntypedAtomic("12"))
+	add(NewInteger(12))
+	add(NewString("12"))
 	add(NewQNameValue(QName{URI: "u", Local: "a"}))
 	add(NewQNameValue(QName{URI: "u", Local: "b"}))
 	add(NewQNameValue(QName{URI: "v", Local: "a"}))
@@ -281,6 +306,13 @@ func sameKeyCorpus(t *testing.T) []*Atomic {
 		{"DeadBeef", TypeHexBinary}, {"00", TypeHexBinary},
 		{"AQID", TypeBase64Binary}, {"AQ ID", TypeBase64Binary},
 		{"AAAA", TypeBase64Binary},
+		// The two binary types are separate families, and nothing in the
+		// corpus said so until these: "010203" and "AQID" decode to the
+		// SAME three octets, and "000000" and "AAAA" to the same three
+		// zeroes, so a key built over the decoded octets alone -- dropping
+		// the type -- would merge them. Only an equal-octets/different-type
+		// pair can contradict that (mutation lane: merge-binary-types).
+		{"010203", TypeHexBinary}, {"000000", TypeHexBinary},
 	} {
 		add(NewBinary(b.s, b.t))
 	}
@@ -329,6 +361,22 @@ func sameKeyCorpus(t *testing.T) []*Atomic {
 		TypeGMonthDay:  {"--10-10", "--11-11"},
 		TypeGDay:       {"---10", "---11"},
 	}
+	// The eight calendar types stand alone, and until this pair nothing in
+	// the corpus said so. Every base above is mid-range and no two types
+	// share a spelling, so a key that dropped the type name and kept only
+	// the normalised instant -- one "calendar" family -- produced no
+	// collision and went undetected by the mutation lane
+	// (merge-calendar-types). A zoned xs:date and the zoned xs:dateTime at
+	// midnight of the same day normalise to the SAME instant, so they are
+	// one key under that fault and two under the correct encoding; the
+	// unzoned pair does the same job through the lexical tail.
+	if dt, err := ParseDateTime("2015-04-08T00:00:00Z", TypeDateTime); err == nil {
+		add(NewDateTime(dt, TypeDateTime))
+	}
+	if dt, err := ParseDateTime("2015-04-08T00:00:00", TypeDateTime); err == nil {
+		add(NewDateTime(dt, TypeDateTime))
+	}
+
 	for typ, bases := range cal {
 		for _, b := range bases {
 			for _, off := range []string{"", "Z", "+00:00", "-05:00", "+05:30"} {
