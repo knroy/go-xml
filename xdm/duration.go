@@ -27,7 +27,7 @@ type Duration struct {
 // requested subtype does not permit.
 func ParseDuration(s string, t TypeCode) (*Duration, error) {
 	orig := s
-	s = strings.TrimSpace(s)
+	s = TrimXMLSpace(s)
 	d := &Duration{Seconds: new(big.Rat)}
 	if strings.HasPrefix(s, "-") {
 		d.Negative = true

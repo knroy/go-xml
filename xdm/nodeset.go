@@ -2,6 +2,7 @@ package xdm
 
 import (
 	"sort"
+	"strings"
 	"sync/atomic"
 )
 
@@ -249,6 +250,28 @@ func IsXMLWhitespace(s string) bool {
 		}
 	}
 	return true
+}
+
+// isXMLSpaceRune is IsXMLWhitespace for a single rune.
+func isXMLSpaceRune(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\r' || r == '\n'
+}
+
+// SplitXMLSpace splits s on runs of XML whitespace, dropping empty tokens.
+//
+// This is the tokenization XML Schema's whiteSpace="collapse" and every
+// whitespace-separated list type (IDREFS, NMTOKENS, ENTITIES and any xs:list)
+// are defined in terms of. It is deliberately not strings.Fields, which splits
+// on the whole Unicode White_Space set: a no-break space inside a list value
+// is data, not a separator, so Fields turned the one token "a<NBSP>b" into the
+// two tokens "a" and "b".
+func SplitXMLSpace(s string) []string {
+	return strings.FieldsFunc(s, isXMLSpaceRune)
+}
+
+// TrimXMLSpace removes leading and trailing XML whitespace, and nothing wider.
+func TrimXMLSpace(s string) string {
+	return strings.TrimFunc(s, isXMLSpaceRune)
 }
 
 // numberDetachedRoots assigns cross-tree identities to the roots of any

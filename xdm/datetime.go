@@ -35,7 +35,7 @@ type DateTime struct {
 // ParseDateTime parses the lexical form of xs:date, xs:time or xs:dateTime
 // according to the requested type.
 func ParseDateTime(s string, t TypeCode) (*DateTime, error) {
-	s = strings.TrimSpace(s)
+	s = TrimXMLSpace(s)
 	dt := &DateTime{Second: new(big.Rat)}
 	var rest string
 	var err error

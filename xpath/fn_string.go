@@ -143,7 +143,16 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return stringResult(ctx, strings.Join(strings.Fields(s), " "))
+		// splitXMLSpace, not strings.Fields: §5.4.5 defines the whitespace
+		// this collapses as exactly XML S (#x20 #x9 #xD #xA). Go's Fields
+		// splits on the whole Unicode White_Space set, which made a no-break
+		// space a separator and replaced it with an ordinary space, where the
+		// spec makes it data that has to survive.
+		//
+		// The result goes through stringResult so the string it builds is
+		// charged against MaxBytes at the allocation rather than at the
+		// enclosing expression.
+		return stringResult(ctx, strings.Join(splitXMLSpace(s), " "))
 	})
 
 	// fn:upper-case and fn:lower-case are defined in terms of Unicode's *full*

@@ -382,7 +382,7 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 			want[v] = true
 			continue
 		}
-		for _, f := range strings.Fields(v) {
+		for _, f := range splitXMLSpace(v) {
 			want[f] = true
 		}
 	}
@@ -409,12 +409,12 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 			// the annotation. Testing only the annotation made both
 			// functions find nothing in a stripped document.
 			if wantID && (n.IsID || isIDAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation)) {
-				if want[strings.TrimSpace(n.StringValue())] {
+				if want[trimXMLSpace(n.StringValue())] {
 					out = append(out, n)
 				}
 			}
 			if !wantID && (n.IsIDREFS || isIDREFAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation)) {
-				for _, v := range strings.Fields(n.StringValue()) {
+				for _, v := range splitXMLSpace(n.StringValue()) {
 					if want[v] {
 						out = append(out, n)
 						break
@@ -442,7 +442,7 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 				// or one a schema annotated as xs:ID, was validated by
 				// whatever produced it and is taken at its word.
 				if a.Name.URI == xdm.NSXML && a.Name.Local == "id" &&
-					!isNCName(strings.TrimSpace(a.Value)) {
+					!isNCName(trimXMLSpace(a.Value)) {
 					continue
 				}
 				isIDAttr := a.IsID || isIDAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation) ||
@@ -457,11 +457,11 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 				// compared: key241.xml writes xml:id="id3 " and the
 				// stylesheet asks for id(' id3'). The search terms were
 				// already split on whitespace above; this is the other half.
-				if wantID && isIDAttr && want[strings.TrimSpace(a.Value)] {
+				if wantID && isIDAttr && want[trimXMLSpace(a.Value)] {
 					out = append(out, n)
 				}
 				if !wantID && isRefAttr {
-					for _, v := range strings.Fields(a.Value) {
+					for _, v := range splitXMLSpace(a.Value) {
 						if want[v] {
 							// fn:idref returns the nodes that *hold* the
 							// reference, which for an IDREF-typed attribute

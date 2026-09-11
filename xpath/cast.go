@@ -41,7 +41,7 @@ func CastAtomic(a *xdm.Atomic, target xdm.TypeCode) (*xdm.Atomic, error) {
 			// xs:anyURI has whiteSpace="collapse", so leading and trailing
 			// whitespace is not part of the value: xs:anyURI(" ") is the empty
 			// URI, and concat("b", xs:anyURI(" "), "b") is "bb".
-			v := strings.TrimSpace(a.Str())
+			v := trimSchemaSpace(a.Str())
 			if err := validAnyURI(v); err != nil {
 				return nil, err
 			}
@@ -100,7 +100,7 @@ func castToBoolean(a *xdm.Atomic) (*xdm.Atomic, error) {
 	case a.Type == xdm.TypeString || a.Type == xdm.TypeUntypedAtomic:
 		// Only the four canonical lexical forms are accepted; "yes" is an
 		// error rather than true.
-		switch strings.TrimSpace(a.Str()) {
+		switch trimSchemaSpace(a.Str()) {
 		case "true", "1":
 			return xdm.NewBoolean(true), nil
 		case "false", "0":
@@ -149,7 +149,7 @@ func castToNumeric(a *xdm.Atomic, target xdm.TypeCode) (*xdm.Atomic, error) {
 		return makeFloat(a.Float64(), target), nil
 
 	case isStringLike(a.Type):
-		return parseNumericLexical(strings.TrimSpace(a.Str()), target)
+		return parseNumericLexical(trimSchemaSpace(a.Str()), target)
 	}
 	return nil, xdm.ErrCast("cannot cast %s to %s", a.TypeName(), target)
 }
@@ -819,13 +819,13 @@ func castToBinary(a *xdm.Atomic, target xdm.TypeCode) (*xdm.Atomic, error) {
 		}
 		// A string is read in the encoding it is being cast *to*.
 		if target == xdm.TypeHexBinary {
-			octets, err = hex.DecodeString(strings.TrimSpace(a.Str()))
+			octets, err = hex.DecodeString(trimSchemaSpace(a.Str()))
 		} else {
 			// XML Schema's base64Binary permits whitespace *between* the
 			// characters, not merely around them — the canonical form groups
 			// them in fours — so it is removed throughout rather than
 			// trimmed. "aaa a" and " AQID " are both valid.
-			lex := strings.Join(strings.Fields(a.Str()), "")
+			lex := removeSchemaSpace(a.Str())
 			if !validBase64Lexical(lex) {
 				return nil, xdm.ErrCast("invalid %s %q", target, a.Str())
 			}
@@ -973,7 +973,7 @@ func isDurationType(t xdm.TypeCode) bool {
 //
 // The namespace is left empty: resolving a prefix needs the static context.
 func parseLexicalQName(s string) (xdm.QName, error) {
-	s = strings.TrimSpace(s)
+	s = trimSchemaSpace(s)
 	prefix, local := "", s
 	if i := strings.Index(s, ":"); i >= 0 {
 		prefix, local = s[:i], s[i+1:]
@@ -1315,6 +1315,19 @@ func isSchemaDecimalLexical(s string) bool {
 	}
 	return digits > 0 && dots <= 1
 }
+
+// trimSchemaSpace applies the XML Schema whiteSpace="collapse" edge trim.
+//
+// XML Schema S is only U+0020, U+0009, U+000A and U+000D. strings.TrimSpace
+// uses unicode.IsSpace, which also matches U+00A0 and other separators: those
+// are ordinary characters in a lexical form, so trimming them made values the
+// grammar rejects — " 42" with a no-break space — cast successfully.
+func trimSchemaSpace(s string) string { return trimXMLSpace(s) }
+
+// removeSchemaSpace removes XML Schema S wherever a binary lexical grammar
+// permits whitespace between encoded units. It intentionally leaves NBSP and
+// every other Unicode separator in the lexical value.
+func removeSchemaSpace(s string) string { return strings.Join(splitXMLSpace(s), "") }
 
 // collapseXMLSpace replaces runs of XML whitespace with a single space and
 // trims the ends, which is the whiteSpace="collapse" facet.
