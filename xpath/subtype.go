@@ -15,10 +15,13 @@ import (
 // function(element(A)) as xs:string — every element(A) is a node()? — but not
 // of function(item()) as xs:string, since an item() need not be a node.
 //
-// An item that records no signature is judged on arity alone. That is the
-// answer for every function the library does not annotate, and it is the
-// behaviour every function item had before signatures were recorded: a
-// permissive answer rather than a wrong refusal.
+// An item that records no signature is judged on arity alone. Since every
+// standard function now carries its manifest signature, that path is reached
+// only by a function with no F&O declaration to read: an inline function whose
+// parameters were written untyped, a partial application, an EXSLT or host
+// extension. Refusing those would be the wrong answer rather than the strict
+// one -- their declared type is whatever declared them, not "nothing" -- so
+// arity remains the judgement there.
 func functionItemMatches(t SequenceType, fn *xdm.FunctionItem) bool {
 	if !t.HasFunctionArity {
 		return true // function(*)
@@ -27,7 +30,7 @@ func functionItemMatches(t SequenceType, fn *xdm.FunctionItem) bool {
 		return false
 	}
 	if len(fn.Signature) != fn.Arity+1 {
-		return true
+		return true // see the note above: no declared type to be strict about
 	}
 	// Covariance on the result: what the function returns must be within what
 	// the test promises.
@@ -62,10 +65,22 @@ func spellingSubsumes(super, sub string) bool {
 }
 
 // splitOccurrence separates a type's occurrence indicator from its item type.
+//
+// A typed function test is the exception: its spelling ends in its RETURN
+// type, so the trailing indicator of "function(item()) as xs:boolean*"
+// belongs to the xs:boolean, not to the function test. Stripping it here left
+// "function(item()) as xs:boolean" paired with an occurrence of "*", which
+// made the return type compare as exactly-one and answered false for
+// MapTest-054, whose declared parameter is "function(xs:anyAtomicType) as
+// item()*". A function test's own occurrence indicator would have to come
+// after the return type's, and this package never writes one.
 func splitOccurrence(s string) (item, occ string) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "", ""
+	}
+	if strings.HasPrefix(s, "function(") && strings.Contains(s, ") as ") {
+		return s, ""
 	}
 	switch s[len(s)-1] {
 	case '?', '*', '+':
@@ -104,12 +119,30 @@ func itemTypeSubsumes(super, sub string) bool {
 	if sub == "item()" {
 		return false
 	}
+	// A function test in a signature. XPath 3.1 2.5.6.2 makes a map and an
+	// array function items too, so a function test can be wider than either;
+	// the reverse never holds. That asymmetry is why this is asked before the
+	// map and array arms rather than after them: MapTest-052 asks whether
+	// "function(map(*)) as xs:integer" is satisfied by a function declared
+	// "function(function(*)) as xs:integer", which needs function(*) to
+	// subsume map(*).
+	if strings.HasPrefix(super, "function(") {
+		return functionSpellingSubsumes(super, sub)
+	}
+	if strings.HasPrefix(sub, "function(") {
+		return false // only item(), settled above, is wider than a function
+	}
 	// A map test in a signature. "map(*)" covers every map, and a typed one
 	// covers a narrower typed one — the key types are atomic and run the same
 	// way round, while the value types are sequence types compared whole.
 	// MapTest-050 and 051 turn on exactly this.
 	if strings.HasPrefix(super, "map(") || strings.HasPrefix(sub, "map(") {
 		return mapSpellingSubsumes(super, sub)
+	}
+	// An array test. "array(*)" covers every array; a typed one covers a
+	// narrower typed one, comparing member types as whole sequence types.
+	if strings.HasPrefix(super, "array(") || strings.HasPrefix(sub, "array(") {
+		return arraySpellingSubsumes(super, sub)
 	}
 	// A node kind test: node() covers every kind, and a named kind covers
 	// itself and its parameterised forms — element(A) is an element().
@@ -411,53 +444,269 @@ func atomicSubsumesDepth(super, sub string, depth int) bool {
 	return schemaSubsumes(super, sub, depth)
 }
 
-// builtinSignatures records the declared types of library functions, keyed by
-// "local/arity" in the fn: namespace.
+// isManifestNamespace reports whether a function name belongs to one of the
+// four namespaces xpath/spec/function-signatures.json describes.
 //
-// Only the functions a typed function test is realistically written against
-// are listed. An unlisted function is matched on arity alone, which is the
-// permissive answer rather than a wrong refusal — so this table can grow
-// without any entry already here changing meaning.
-//
-// Each entry is the return type followed by the parameter types, which is the
-// order xdm.FunctionItem.Signature uses.
-var builtinSignatures = map[string][]string{
-	"name/1":            {"xs:string", "node()?"},
-	"local-name/1":      {"xs:string", "node()?"},
-	"namespace-uri/1":   {"xs:anyURI", "node()?"},
-	"string/1":          {"xs:string", "item()?"},
-	"number/1":          {"xs:double", "xs:anyAtomicType?"},
-	"boolean/1":         {"xs:boolean", "item()*"},
-	"not/1":             {"xs:boolean", "item()*"},
-	"count/1":           {"xs:integer", "item()*"},
-	"string-length/1":   {"xs:integer", "xs:string?"},
-	"normalize-space/1": {"xs:string", "xs:string?"},
-	"data/1":            {"xs:anyAtomicType*", "item()*"},
-	"root/1":            {"node()?", "node()?"},
-	"reverse/1":         {"item()*", "item()*"},
-	"empty/1":           {"xs:boolean", "item()*"},
-	"exists/1":          {"xs:boolean", "item()*"},
-	"head/1":            {"item()?", "item()*"},
-	"tail/1":            {"item()*", "item()*"},
+// Everything else -- an EXSLT extension, a stylesheet's own function, a host
+// application's registration -- has no F&O signature to look up, and refusing
+// a typed function test against one on that ground would be wrong: XPath 3.1
+// 2.5.5.6 judges a function item against its OWN declared type, and an
+// extension's declared type is whatever its host says it is, not "nothing".
+// Those keep the arity-only judgement.
+func isManifestNamespace(uri string) bool {
+	switch uri {
+	case xdm.NSFN, xdm.NSMath, xdm.NSMap, xdm.NSArray:
+		return true
+	}
+	return false
 }
 
-// applyBuiltinSignatures annotates the library's entries from the table above.
+// applyBuiltinSignatures annotates the library's entries from the manifest.
 //
-// It runs after registration rather than at each call site so that the
-// signatures sit together, where they can be read against the specification's
-// function summary in one pass.
+// specSignatures in funcspec_table.go is the single source of declared types
+// for the whole package. It has TWO consumers, and this is the second one:
+//
+//   - CALL BINDING reads it through lookupSpecParams to decide XPTY0004 on an
+//     argument of the wrong cardinality.
+//   - FUNCTION ITEMS read it here, so that a typed function test --
+//     "fn:concat#2 instance of function(xs:date, xs:date) as xs:integer" --
+//     is judged against fn:concat's ACTUAL type.
+//
+// Before this, function items read a separate seventeen-entry table while
+// call binding read all 272, so migrating a family for call binding left
+// function items unannotated and judging on arity alone. fn:concat#2 then
+// answered TRUE for the test above, because both take two arguments. Those
+// seventeen entries are gone: specSignatures was seeded from them and still
+// carries them verbatim, so nothing they said was lost, and there is now one
+// table to keep right instead of two that could disagree.
+//
+// It runs after registration rather than at each call site so that a
+// function's declared type lives with every other function's, where it can be
+// read against the Recommendation's function summary in one pass.
 func applyBuiltinSignatures(l *Library) {
-	for key, sig := range builtinSignatures {
-		slash := strings.IndexByte(key, '/')
-		local, arity := key[:slash], int(key[slash+1]-'0')
-		name := xdm.QName{URI: xdm.NSFN, Local: local}
+	applyVariadicSignatures(l)
+	for key, sig := range specSignatures {
+		name, arity, ok := splitSpecEntryKey(key)
+		if !ok || len(sig) != arity+1 {
+			continue
+		}
 		fn, ok := l.Lookup(name, arity)
 		if !ok {
-			continue
+			continue // in the Recommendation, not implemented here
 		}
 		fn.Signature = sig
 		l.Add(fn)
 	}
+}
+
+// applyVariadicSignatures annotates the functions whose proforma declares no
+// fixed arity, so no manifest row can describe them.
+//
+// fn:concat is the only one in F&O 3.1. Its proforma -- 5.4.1 --
+// is "fn:concat($arg1 as xs:anyAtomicType?, $arg2 as xs:anyAtomicType?, ...)
+// as xs:string", so while it has no single ARITY it does have a fully
+// determined TYPE at each arity: every parameter is xs:anyAtomicType? and the
+// result is xs:string. cmd/genfunctions excludes it because a row would have
+// to claim one arity and thereby deny the others; nothing about that stops
+// the type being written out per arity here, which is what a typed function
+// test needs.
+//
+// Leaving it to the arity-only fallback was the observable defect: fn:concat#2
+// answered TRUE for "function(xs:date, xs:date) as xs:integer", since the only
+// question asked was whether both take two arguments.
+func applyVariadicSignatures(l *Library) {
+	for arity := 2; ; arity++ {
+		name := xdm.QName{URI: xdm.NSFN, Local: "concat"}
+		fn, ok := l.Lookup(name, arity)
+		if !ok {
+			return // past the highest arity the library registers
+		}
+		sig := make([]string, 0, arity+1)
+		sig = append(sig, "xs:string")
+		for i := 0; i < arity; i++ {
+			sig = append(sig, "xs:anyAtomicType?")
+		}
+		fn.Signature = sig
+		l.Add(fn)
+	}
+}
+
+// functionSpellingSubsumes is itemTypeSubsumes for a function test on the
+// supertype side.
+//
+// "function(*)" covers every function item, which by 2.5.6.2 includes every
+// map and every array. A TYPED function test covers another function type by
+// the ordinary rule -- parameters contravariant, return type covariant -- and
+// covers a map or an array by the function type that map or array has: a
+// map(K, V) is a function(xs:anyAtomicType) as V?, and an array(M) is a
+// function(xs:integer) as M.
+//
+// MapTest-052 and -054 are exactly these two arms, and they are why this
+// exists rather than being left to string equality: both were answered
+// correctly before only because a function test rendered as "item()", which
+// subsumed everything including the things it should not have.
+func functionSpellingSubsumes(super, sub string) bool {
+	superParams, superRet, superTyped, ok := splitFunctionSpelling(super)
+	if !ok {
+		return false
+	}
+	if !superTyped {
+		// function(*): every function item, map and array qualifies.
+		return strings.HasPrefix(sub, "function(") ||
+			strings.HasPrefix(sub, "map(") || strings.HasPrefix(sub, "array(")
+	}
+	subParams, subRet, subTyped, ok := functionViewOf(sub)
+	if !ok || !subTyped {
+		// function(*) on the subtype side is wider than any typed test, so
+		// no typed test subsumes it.
+		return false
+	}
+	if len(superParams) != len(subParams) {
+		return false
+	}
+	if !spellingSubsumes(superRet, subRet) {
+		return false
+	}
+	for i := range superParams {
+		// Contravariance: the SUBTYPE must accept everything the supertype's
+		// parameter admits.
+		if !spellingSubsumes(subParams[i], superParams[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// functionViewOf gives the function type of a spelling, so that a map or an
+// array can be compared against a typed function test.
+//
+// 2.5.6.2: a map(K, V) behaves as function(xs:anyAtomicType) as V?, and an
+// array(M) as function(xs:integer) as M. map(*) and array(*) have no declared
+// member type, so their view is the untyped one.
+func functionViewOf(s string) (params []string, ret string, typed bool, ok bool) {
+	switch {
+	case strings.HasPrefix(s, "function("):
+		p, r, ty, o := splitFunctionSpelling(s)
+		return p, r, ty, o
+	case strings.HasPrefix(s, "map("):
+		k, v, o := splitMapSpelling(s)
+		if !o {
+			return nil, "", false, false
+		}
+		if k == "" {
+			return []string{"xs:anyAtomicType"}, "item()*", true, true
+		}
+		return []string{"xs:anyAtomicType"}, v + "?", true, true
+	case strings.HasPrefix(s, "array("):
+		m, o := splitArraySpelling(s)
+		if !o {
+			return nil, "", false, false
+		}
+		if m == "" {
+			return []string{"xs:integer"}, "item()*", true, true
+		}
+		return []string{"xs:integer"}, m, true, true
+	}
+	return nil, "", false, false
+}
+
+// splitFunctionSpelling breaks "function(P1, P2) as R" into its parts.
+//
+// typed is false for the "function(*)" form, which fixes neither arity nor
+// types. The parameter split is on TOP-LEVEL commas, since a parameter may
+// itself be a function or map test carrying commas of its own --
+// "function(item()*, function(item()) as xs:boolean) as item()*" is precisely
+// the shape instanceof132 and instanceof133 are written in.
+func splitFunctionSpelling(s string) (params []string, ret string, typed bool, ok bool) {
+	if !strings.HasPrefix(s, "function(") {
+		return nil, "", false, false
+	}
+	close := matchingParen(s, len("function(")-1)
+	if close < 0 {
+		return nil, "", false, false
+	}
+	body := strings.TrimSpace(s[len("function("):close])
+	rest := strings.TrimSpace(s[close+1:])
+	if body == "*" {
+		return nil, "", false, rest == ""
+	}
+	if !strings.HasPrefix(rest, "as ") {
+		return nil, "", false, false
+	}
+	ret = strings.TrimSpace(rest[len("as "):])
+	if body != "" {
+		params = splitTopLevel(body)
+	}
+	return params, ret, true, true
+}
+
+// splitArraySpelling breaks "array(M)" into its member type, answering "" for
+// the "array(*)" form.
+func splitArraySpelling(s string) (member string, ok bool) {
+	if !strings.HasPrefix(s, "array(") || !strings.HasSuffix(s, ")") {
+		return "", false
+	}
+	body := strings.TrimSpace(s[len("array(") : len(s)-1])
+	if body == "*" {
+		return "", true
+	}
+	return body, true
+}
+
+// arraySpellingSubsumes is itemTypeSubsumes for two array tests. Only an
+// array is a subtype of an array test; array(*) covers every one, and a typed
+// one covers a narrower typed one by its member type.
+func arraySpellingSubsumes(super, sub string) bool {
+	superMember, superOK := splitArraySpelling(super)
+	subMember, subOK := splitArraySpelling(sub)
+	if !superOK || !subOK {
+		return false
+	}
+	if superMember == "" {
+		return true // array(*) covers every array
+	}
+	if subMember == "" {
+		return false
+	}
+	return spellingSubsumes(superMember, subMember)
+}
+
+// matchingParen returns the index of the ")" closing the "(" at open, or -1.
+func matchingParen(s string, open int) int {
+	depth := 0
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// splitTopLevel splits a parameter list on commas that are not nested inside
+// parentheses.
+func splitTopLevel(body string) []string {
+	var out []string
+	depth, start := 0, 0
+	for i := 0; i < len(body); i++ {
+		switch body[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				out = append(out, strings.TrimSpace(body[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	return append(out, strings.TrimSpace(body[start:]))
 }
 
 // mapSpellingSubsumes is itemTypeSubsumes for the map tests a signature can

@@ -23,7 +23,7 @@ let something through, and the column that matters is the last one.
 <!-- BEGIN GENERATED LAYER COUNTS -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** | 2,208 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,213 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -1098,11 +1098,52 @@ GOXSLT_QT3=$PWD/testdata/qt3tests go1.25.1 test ./tests/qt3/ -count=1 -v
 `xpath/spec/function-signatures.json` is the normalized extraction of the F&O
 3.1 function proformas — 272 `(name, arity)` entries, written by
 `cmd/genfunctions` from the vendored Recommendation, so the data source is
-offline and deterministic. `xpath/funcspec_table.go` holds the portion that is
-enforced at call binding, and the two are not the same number: a family is
-migrated by adding its keys to `specSignatures`, and nothing else changes,
-because a declared type constrains an existing registration rather than
-replacing it.
+offline and deterministic. `xpath/funcspec_table.go` holds `specSignatures`,
+the parsed form of that data, and a family is migrated by adding its keys
+there: nothing else changes, because a declared type constrains an existing
+registration rather than replacing it.
+
+`specSignatures` has **two consumers**, and both read the one table:
+
+* **Call binding**, through `lookupSpecParams`. A parameter F&O declares
+  without `?` refuses an empty sequence at the call, as `XPTY0004`, rather
+  than in a hand-written guard inside the function body.
+* **Function items**, through `applyBuiltinSignatures`, which copies each
+  entry onto the registered `Function.Signature` so a named function
+  reference carries it. That is what a typed function test —
+  `fn:concat#2 instance of function(xs:date, xs:date) as xs:integer` — is
+  judged against, by `functionItemMatches` in `xpath/subtype.go`.
+
+The second consumer is the later of the two. Function items originally read a
+separate seventeen-entry table of their own, so migrating a family for call
+binding left the function item unannotated, and `functionItemMatches` fell
+back to matching on **arity alone** — which made the `instance of` above
+answer `true`, since `fn:concat#2` and the test both take two arguments. That
+is an observably wrong answer rather than a missing diagnostic. The seventeen
+entries now live in `specSignatures` verbatim, and there is one table rather
+than two that could disagree.
+
+Two functions in a manifest namespace carry no manifest row, for reasons the
+enforcement tests hold them to:
+
+* `fn:concat` is **variadic** — its proforma ends in a literal `...`, so no
+  single row can describe it, and `cmd/genfunctions` excludes it.
+  `applyVariadicSignatures` writes its type out per arity instead: every
+  parameter is `xs:anyAtomicType?` and the result is `xs:string`, which is
+  fully determined even though its arity is not.
+* `fn:stream-available` is an **XSLT 3.0 extension**, which F&O does not
+  define at all. It is in `extensionAllowlist` with that reason.
+
+Because a signature is carried as a *spelling* and compared through
+`SequenceType.String()`, that rendering has to be lossless for any type a
+signature can name. Three item types rendered as a bare `item()` until
+function items began reading the manifest: `xs:numeric`, which has no type
+code of its own; an array test; and a typed function test. While every
+function was judged on arity that cost nothing, and it became four wrong QT3
+answers the moment signatures were consulted.
+`TestSequenceTypeSpellingIsLosslessForSubtyping` pins the renderings, and
+`TestFunctionSubtypingAcrossItemKinds` pins the §2.5.6.2 relations that let a
+function test be wider than a map or an array.
 
 A key is `"local/arity"` for an `fn:` function and `"prefix:local/arity"` —
 `"math:pow/2"`, `"map:get/2"`, `"array:size/1"` — for the other three
@@ -1124,10 +1165,18 @@ Three tests measure it, and they ask different questions:
   far the migration has got. A mistyped `?` is precisely the defect the
   mechanism exists to prevent, so a hand-edited spelling that disagrees with
   the manifest breaks the build.
+* `TestEveryStandardBuiltinHasAManifestSignature` — does the *function item*
+  consumer reach every standard function? A function registered in one of the
+  four manifest namespaces with no signature and no `extensionAllowlist`
+  entry fails here. Without it a hole is invisible from outside, because the
+  arity-only answer it produces is a plausible one.
+* `TestFunctionItemSignaturesMatchSpecSignatures` — do the two consumers read
+  the same table? It walks every `specSignatures` entry and checks the
+  registered function carries exactly those spellings, so a family migrated
+  for call binding can never again reach function items unannotated.
 
-The migration is complete at 272 of 272: the seventeen seeded from
-`builtinSignatures`,
-`fn:substring` and `fn:subsequence`, then the numeric (14), non-regex string
+The migration is complete at 272 of 272: the seventeen that function items
+carried before the table was unified, `fn:substring` and `fn:subsequence`, then the numeric (14), non-regex string
 (25), temporal (28), node and accessor (34), sequence (14), higher-order (12),
 QName and URI (15), input and document (20), JSON (10), context, boolean and
 error (14), `math:` (14), `map:` (11), `array:` (21), regex (9) and

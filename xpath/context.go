@@ -524,11 +524,13 @@ type Function struct {
 	// in source spelling. It is what a typed function test — "f#1 instance of
 	// function(element(A)) as xs:string" — is judged against.
 	//
-	// nil for a function whose signature has not been recorded, which is most
-	// of the library: such a function is matched on arity alone, the answer
-	// every function item gave before signatures existed. Annotating one is
-	// therefore a narrowing, and only ever makes a test that wrongly answered
-	// true answer false.
+	// applyBuiltinSignatures fills this from specSignatures for every
+	// function in the four namespaces the F&O manifest covers, so it is nil
+	// only for a function with no declared type to read: a host or EXSLT
+	// extension, or a stylesheet's own. Such a function is matched on arity
+	// alone, which is the right answer there rather than merely the
+	// permissive one -- its declared type is whatever declared it, not
+	// "nothing".
 	Signature []string
 }
 

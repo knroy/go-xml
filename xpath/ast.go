@@ -374,8 +374,9 @@ type SequenceType struct {
 	// FunctionParams and FunctionReturn are the typed test's declared
 	// parameter and return types. They are matched only against a function
 	// item that records its own signature; one that does not is judged on
-	// arity alone, which is what every function item did before signatures
-	// existed.
+	// arity alone. Every standard function now carries its manifest
+	// signature, so that path is reached only by a function with no declared
+	// type to read -- an untyped inline function, or a host extension.
 	FunctionParams []SequenceType
 	FunctionReturn *SequenceType
 	// IsArrayTest marks an "array(*)" or "array(T)" item type, added in 3.1.

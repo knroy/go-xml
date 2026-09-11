@@ -529,6 +529,46 @@ func (t SequenceType) String() string {
 	}
 	base := "item()"
 	switch {
+	case t.IsNumericType:
+		// xs:numeric has no type code of its own -- it is the union of
+		// xs:double, xs:float and xs:decimal -- so it reached the default
+		// "item()" below. That is not a cosmetic loss: functionItemMatches
+		// compares a typed function test's spelling against the signature
+		// spelling a function item carries, and every signature the manifest
+		// gives fn:abs, fn:floor, fn:ceiling and fn:round says "xs:numeric?".
+		// Rendered as "item()?", the test's own xs:numeric? no longer matched
+		// the signature it was written against, and ArrayTest-063 and -083 --
+		// "[floor#1, ceiling#1, round#1] instance of
+		// array(function(xs:numeric?) as xs:numeric?)" -- answered false.
+		base = "xs:numeric"
+	case t.IsArrayTest:
+		// An array test rendered as "item()" for the same reason and with the
+		// same consequence: it is wider than what was written, so a signature
+		// naming array(*) could not be matched against a test naming it.
+		if t.ArrayMember == nil {
+			base = "array(*)"
+		} else {
+			base = "array(" + t.ArrayMember.String() + ")"
+		}
+	case t.IsFunctionTest:
+		// A typed function test likewise. fn:filter's $f is declared
+		// "function(item()) as xs:boolean"; instanceof132 asks whether
+		// fn:filter#2 is a "function(item()*, function(item()) as xs:boolean)
+		// as item()*". With the inner test rendered "item()", the two sides
+		// of an IDENTICAL type disagreed and the answer was false.
+		if !t.HasFunctionArity {
+			base = "function(*)"
+		} else {
+			parts := make([]string, 0, len(t.FunctionParams))
+			for _, p := range t.FunctionParams {
+				parts = append(parts, p.String())
+			}
+			ret := "item()*"
+			if t.FunctionReturn != nil {
+				ret = t.FunctionReturn.String()
+			}
+			base = "function(" + strings.Join(parts, ", ") + ") as " + ret
+		}
 	case t.IsMapTest:
 		// Rendered because convertForParam names the declared type in its
 		// XPTY0004 message, and "item()" there says nothing about why a map

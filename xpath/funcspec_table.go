@@ -32,12 +32,18 @@ import (
 // "local/arity" for fn: and by "prefix:local/arity" for the math:, map: and
 // array: namespaces, as the return type followed by the parameter types.
 //
-// It is seeded from builtinSignatures — the same seventeen entries, in the
-// same spelling and the same order — because those were already written
-// against the specification's function summary and already read by function
-// subtyping. Reusing them means the first family to go through the new path
-// is one whose declared types were reviewed before, so a behaviour change
-// here would be a defect in the mechanism rather than in the data.
+// It is the SINGLE source of declared types for the package, read by two
+// consumers: lookupSpecParams, for call binding, and applyBuiltinSignatures,
+// for the signature a function item carries into a typed function test.
+//
+// The first seventeen entries below are the ones subtype.go's builtinSignatures
+// used to hold, in the same spelling and the same order. They were already
+// written against the specification's function summary and already read by
+// function subtyping, so keeping them verbatim means the seventeen functions
+// that always had a signature still have exactly the one they had. That table
+// is gone: a second table could disagree with this one, and it did -- it was
+// the reason a family migrated for call binding still reached function items
+// unannotated.
 //
 // Every entry below is verified against xpath/spec/function-signatures.json
 // by TestMigratedSignaturesMatchManifest, so a hand-edited spelling that
@@ -54,9 +60,24 @@ import (
 // hand fix now answer the same question, and the hand fix's tests are what
 // prove they answer it the same way.
 var specSignatures = func() map[string][]string {
-	m := make(map[string][]string, len(builtinSignatures)+71)
-	for k, v := range builtinSignatures {
-		m[k] = v
+	m := map[string][]string{
+		"name/1":            {"xs:string", "node()?"},
+		"local-name/1":      {"xs:string", "node()?"},
+		"namespace-uri/1":   {"xs:anyURI", "node()?"},
+		"string/1":          {"xs:string", "item()?"},
+		"number/1":          {"xs:double", "xs:anyAtomicType?"},
+		"boolean/1":         {"xs:boolean", "item()*"},
+		"not/1":             {"xs:boolean", "item()*"},
+		"count/1":           {"xs:integer", "item()*"},
+		"string-length/1":   {"xs:integer", "xs:string?"},
+		"normalize-space/1": {"xs:string", "xs:string?"},
+		"data/1":            {"xs:anyAtomicType*", "item()*"},
+		"root/1":            {"node()?", "node()?"},
+		"reverse/1":         {"item()*", "item()*"},
+		"empty/1":           {"xs:boolean", "item()*"},
+		"exists/1":          {"xs:boolean", "item()*"},
+		"head/1":            {"item()?", "item()*"},
+		"tail/1":            {"item()*", "item()*"},
 	}
 	m["substring/2"] = []string{"xs:string", "xs:string?", "xs:double"}
 	m["substring/3"] = []string{"xs:string", "xs:string?", "xs:double", "xs:double"}
