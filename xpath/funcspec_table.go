@@ -153,6 +153,54 @@ var specSignatures = func() map[string][]string {
 	m["adjust-time-to-timezone/1"] = []string{"xs:time?", "xs:time?"}
 	m["adjust-time-to-timezone/2"] = []string{"xs:time?", "xs:time?", "xs:dayTimeDuration?"}
 	m["dateTime/2"] = []string{"xs:dateTime?", "xs:date?", "xs:time?"}
+
+	// The node and accessor family, F&O 3.1 5.1 and 14: the accessors that
+	// take a node, the zero-argument forms that read the context item, and
+	// the id/idref lookups.
+	//
+	// The rows that constrain anything new are fn:in-scope-prefixes/1,
+	// whose $element is element() with no "?"; fn:id/2, fn:idref/2,
+	// fn:element-with-id/2 and fn:lang/2, whose $node is node() with no
+	// "?"; and fn:namespace-uri-for-prefix/2 and fn:resolve-QName/2, whose
+	// $element is likewise element(). Those seven are this family's
+	// empty-sequence arm. The zero-arity forms declare no parameters at
+	// all, so they add a call-binding row that can only ever succeed --
+	// they are here so the family is the whole of F&O 5.1 and 14 rather
+	// than the part of it that happens to refuse something.
+	m["name/0"] = []string{"xs:string"}
+	m["local-name/0"] = []string{"xs:string"}
+	m["namespace-uri/0"] = []string{"xs:anyURI"}
+	m["string/0"] = []string{"xs:string"}
+	m["number/0"] = []string{"xs:double"}
+	m["string-length/0"] = []string{"xs:integer"}
+	m["normalize-space/0"] = []string{"xs:string"}
+	m["data/0"] = []string{"xs:anyAtomicType*"}
+	m["root/0"] = []string{"node()"}
+	m["node-name/0"] = []string{"xs:QName?"}
+	m["node-name/1"] = []string{"xs:QName?", "node()?"}
+	m["nilled/0"] = []string{"xs:boolean?"}
+	m["nilled/1"] = []string{"xs:boolean?", "node()?"}
+	m["base-uri/0"] = []string{"xs:anyURI?"}
+	m["base-uri/1"] = []string{"xs:anyURI?", "node()?"}
+	m["document-uri/0"] = []string{"xs:anyURI?"}
+	m["document-uri/1"] = []string{"xs:anyURI?", "node()?"}
+	m["path/0"] = []string{"xs:string?"}
+	m["path/1"] = []string{"xs:string?", "node()?"}
+	m["has-children/0"] = []string{"xs:boolean"}
+	m["has-children/1"] = []string{"xs:boolean", "node()?"}
+	m["generate-id/0"] = []string{"xs:string"}
+	m["generate-id/1"] = []string{"xs:string", "node()?"}
+	m["innermost/1"] = []string{"node()*", "node()*"}
+	m["outermost/1"] = []string{"node()*", "node()*"}
+	m["in-scope-prefixes/1"] = []string{"xs:string*", "element()"}
+	m["id/1"] = []string{"element()*", "xs:string*"}
+	m["id/2"] = []string{"element()*", "xs:string*", "node()"}
+	m["idref/1"] = []string{"node()*", "xs:string*"}
+	m["idref/2"] = []string{"node()*", "xs:string*", "node()"}
+	m["element-with-id/1"] = []string{"element()*", "xs:string*"}
+	m["element-with-id/2"] = []string{"element()*", "xs:string*", "node()"}
+	m["lang/1"] = []string{"xs:boolean", "xs:string?"}
+	m["lang/2"] = []string{"xs:boolean", "xs:string?", "node()"}
 	return m
 }()
 
