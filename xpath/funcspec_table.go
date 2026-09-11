@@ -309,6 +309,26 @@ var specSignatures = func() map[string][]string {
 	m["load-xquery-module/1"] = []string{"map(*)", "xs:string"}
 	m["load-xquery-module/2"] = []string{"map(*)", "xs:string", "map(*)"}
 	m["transform/1"] = []string{"map(*)", "map(*)"}
+
+	// The JSON family, F&O 3.1 17.4 to 17.6, plus fn:random-number-generator
+	// of 14.5, which returns a map and belongs to the same map-valued group.
+	//
+	// Every $options here is map(*) with no "?", so this family's
+	// empty-sequence arm is live on all four two-argument forms: an empty
+	// sequence passed where F&O declares a required map is the defect class
+	// the mechanism exists to catch. The $json-text and $input arguments are
+	// nullable -- an empty sequence there yields an empty result rather than
+	// an error -- so they add only the too-many-items arm.
+	m["parse-json/1"] = []string{"item()?", "xs:string?"}
+	m["parse-json/2"] = []string{"item()?", "xs:string?", "map(*)"}
+	m["json-doc/1"] = []string{"item()?", "xs:string?"}
+	m["json-doc/2"] = []string{"item()?", "xs:string?", "map(*)"}
+	m["json-to-xml/1"] = []string{"document-node()?", "xs:string?"}
+	m["json-to-xml/2"] = []string{"document-node()?", "xs:string?", "map(*)"}
+	m["xml-to-json/1"] = []string{"xs:string?", "node()?"}
+	m["xml-to-json/2"] = []string{"xs:string?", "node()?", "map(*)"}
+	m["random-number-generator/0"] = []string{"map(xs:string, item())"}
+	m["random-number-generator/1"] = []string{"map(xs:string, item())", "xs:anyAtomicType?"}
 	return m
 }()
 
