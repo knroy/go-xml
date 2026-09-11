@@ -105,12 +105,12 @@
         {"id": "streamable-116", "verdict": "implementation-defined", "note": "§3.6.6 permits building the tree; the catalog marks the case _WRONG:wrong-error-code."},
         {"id": "evaluate-048", "verdict": "not-run", "note": "Needs a network fetch of saxonica.com; the https scheme is not permitted."},
         {"id": "docbook-001", "verdict": "deliberate-divergence", "note": "A vendor extension; read in §2."},
+        {"id": "system-property-012", "verdict": "deliberate-divergence", "note": "§26.5 requires a non-streaming processor to answer \"no\"; answering \"yes\" would lie to stylesheets that branch on it to pick a fallback."},
         {"id": "merge-097", "verdict": "deliberate-divergence", "note": "Saxon-format collection URIs, which the test set itself calls not interoperable."},
         {"id": "merge-097s", "verdict": "deliberate-divergence", "note": "Same shape as merge-097."},
-        {"id": "merge-097sf", "verdict": "deliberate-divergence", "note": "Same shape as merge-097."},
         {"id": "validation-0201", "verdict": "implementation-defined", "note": "Read in §2 and in Corrections."}
       ],
-      "unenumerated_note": "The balance want an XTSE3430 refusal that only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit. §19.1 does not require a non-streaming processor to assess guaranteed-streamability, so they are read as a block under \"The §19.8 streamability analysis\" rather than case by case."
+      "unenumerated_note": "The balance want an XTSE3430 refusal that only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit. §19.1 does not require a non-streaming processor to assess guaranteed-streamability, so they are read as a block under \"The §19.8 streamability analysis\" rather than case by case. su-ascent-902 belongs to that block and is ALSO enumerated above, because its verdict is not the block's: the analysis does reach it, and the rule the test asserts contradicts §19.8.5.7's own worked example. It is counted once, in the breakdown of 14, so the enumeration and the breakdown overlap by exactly that one case and 20 + 14 = 34. merge-097sf was enumerated here until 2026-09-11 and is not a disagreement at all: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
     },
     {
       "id": "xsd-1.0",
@@ -203,7 +203,8 @@
       "label": "XSLT 3.0 failures wanting an XTSE3430",
       "suite": "xslt-3.0",
       "of": 14,
-      "note": "Only the unwritten remainder of the \u00a719.8 posture-and-sweep analysis can emit the refusal; \u00a719.1 does not require a non-streaming processor to assess guaranteed-streamability."
+      "overlap": 1,
+      "note": "Only the unwritten remainder of the \u00a719.8 posture-and-sweep analysis can emit the refusal; \u00a719.1 does not require a non-streaming processor to assess guaranteed-streamability. The one overlap is su-ascent-902, which is in this block by symptom and enumerated individually because its verdict is not the block's: the analysis does reach it, and the rule the test asserts contradicts \u00a719.8.5.7's own worked example."
     }
   ]
 }

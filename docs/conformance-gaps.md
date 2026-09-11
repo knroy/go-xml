@@ -49,7 +49,7 @@ W3C disagreements: 0 + 0 + 0 + 1 + 8 + 34 + 30 + 31 + 0 = 104. Measured 2026-09-
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 2,176 tests.
+The unit-test suite is 2,177 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -186,8 +186,12 @@ assess whether constructs are guaranteed-streamable". These are the largest
 block in this file and they are not defects. What the analysis covers and what
 it does not is under *The §19.8 streamability analysis* below.
 
-The remaining 21 divide as follows. Several are divergences and are read in §2;
-what is genuinely open is read here.
+The remaining **20** divide as follows. Several are divergences and are read in
+§2; what is genuinely open is read here. One case belonging to the block of 14
+is *also* read individually below — `su-ascent-902`, because its verdict is not
+the block's. The other thirteen fail because the analysis is silent; that one
+fails because the analysis speaks and the test is wrong, so it is argued on its
+own terms rather than deferred with the rest. It is counted once, in the 14.
 
 ### Package composition — 4
 
@@ -219,7 +223,8 @@ what is genuinely open is read here.
 | `streamable-116` | **Not implementable — the spec permits what we do, and the suite marks the case `_WRONG`** | Wants `XPDY0002`: a global variable `select="count(//*)"` reads the context item while the initial mode is streamable and the source is supplied `streaming="true"`, so the case expects the global context item to be *absent*. §3.6.6 says otherwise. Without an `xsl:global-context-item` declaration "the item supplied as the global context item cannot be a node in a streamed document (the transformation API may handle this either by disallowing such an input, **or by building the corresponding tree in memory and supplying the global context item as an unstreamed node**)". This engine builds every tree in memory, so it takes the second option the spec offers: `$size` evaluates and the transform succeeds. The error is reachable only by an API that withholds the global context item whenever the initial mode streams — a choice the spec leaves to the implementation, and one that would touch every global variable of every streamed-mode invocation. The catalog's own keywords carry `_WRONG:wrong-error-code`, the suite authors' mark that the expected code is disputed; and the error is dynamic, not a streamability verdict, so no §19.8 rule reaches it. |
 | `evaluate-048` | **Needs a network fetch** | Fails on `FODC0002: cannot retrieve "https://www.saxonica.com/welcome/welcome.xml": scheme "https" is not permitted`. Not reachable regardless. Its earlier half — `fn:function-lookup`'s dynamic visibility — was a separate reason; see *Corrections*. |
 | `docbook-001` | **Not implementable** | Read in §2 — a vendor extension. |
-| `merge-097`, `-097s`, `-097sf` | **Not implementable** | They call `uri-collection('.?select=merge-097-*.xml')`. The `?select=` query string is a Saxon extension, not something F&O defines, and the test set says so in a comment beside the cases: they "rely on Saxon-format collection URIs … and [are] therefore not interoperable". None of the three declares an `<environment>` or a `<collection>`, so there is nothing for the harness to honour — the harness supplies a collection resolver only where the environment declares one, precisely so that `fn:collection` keeps refusing everywhere else. The resulting `FODC0002: collections are not configured` is the engine failing closed by design: a collection URI that can name a directory is a file-disclosure vector, and returning an empty sequence instead would make "collections are switched off" indistinguishable from "the collection was empty". |
+| `system-property-012` | **Not implementable — conforming is what fails it** | Asserts `system-property('xsl:supports-streaming') = 'yes'`. §26.5 requires a processor that does not conform to the streaming feature to **"return the value `no`"**, and `xslt/sysprops.go` returns `no`. Answering `yes` would not be a fix but a lie: the property exists so a stylesheet can branch on it to pick a fallback, and `use-when="system-property('xsl:supports-streaming')='yes'"` in this very stylesheet is that branch. The case is in scope only because the harness claims the `streaming` *dependency* — correctly, since the engine implements the streaming vocabulary by building the tree — while declining the streaming *conformance* the property reports on, and the suite does not separate the two. Its twin settles the intent: `system-property-013` is the **same stylesheet** with `<feature value="streaming" satisfied="false"/>` and asserts `'no'`, so the pair is a dependency-gated fork of which exactly one is meant to run. This one stays failing for as long as the §19.8 analysis is incomplete, and that is the correct behaviour rather than a cost. Read at greater length in [known-gaps.md](known-gaps.md). |
+| `merge-097`, `-097s` | **Not implementable** | They call `uri-collection('.?select=merge-097-*.xml')`. The `?select=` query string is a Saxon extension, not something F&O defines, and the test set says so in a comment beside the cases: they "rely on Saxon-format collection URIs … and [are] therefore not interoperable". Neither declares an `<environment>` or a `<collection>`, so there is nothing for the harness to honour — the harness supplies a collection resolver only where the environment declares one, precisely so that `fn:collection` keeps refusing everywhere else. The resulting `FODC0002: collections are not configured` is the engine failing closed by design: a collection URI that can name a directory is a file-disclosure vector, and returning an empty sequence instead would make "collections are switched off" indistinguishable from "the collection was empty". **`-097sf` is not a third case**: it declares `<feature value="streaming-fallback"/>`, which this engine does not claim, so it is one of the 7 cases the harness skips for that dependency and never enters the denominator. See *Corrections*. |
 | `validation-0201` | **Implementation-defined** | Read in §2, and see *Corrections* — its recorded cause was wrong five times over. |
 
 ### The §19.8 streamability analysis
@@ -706,6 +711,45 @@ stands behind it*, then *implementation-defined on the indent width*, and now
 *implementation-defined on whitespace placement*. The lesson is not that any one
 answer was right but that **a case can fail for several independent reasons at
 once, and fixing the visible one is what reveals whether there was another**.
+
+## `merge-097sf` was counted as a disagreement and is skipped
+
+**It is not a failure, and never was one under the current dependency table.**
+Three documents read `merge-097`, `-097s` and `-097sf` as one triple failing on
+`FODC0002`, on the strength of their sharing a stylesheet — `merge-097.xsl` — and
+a cause. Two of them do. The third declares
+`<feature value="streaming-fallback"/>` alongside `streaming`, and `deps.go`
+deliberately does not claim `streaming-fallback`: the comment there explains
+that the feature asserts the opposite of the §19.8 analysis, so claiming it
+would score a refusal we make on purpose as a failure. The case is therefore
+**skipped**, one of the 7 the run reports under "unknown feature
+streaming-fallback", and it left the denominator rather than sitting in it.
+
+The error was invisible because nothing checked the two halves against each
+other. `Validate` checks the enumerated cases against the disagreement count as
+an upper bound and the XTSE3430 breakdown against the same count, but never
+their **sum** — so 21 enumerated plus 14 in the block could exceed 34 for a year
+without a gate firing. It did: 21 + 14 = 35.
+
+Two independent errors happened to cancel in that sum, which is why the total
+stayed plausible. `merge-097sf` was one case too many, and `su-ascent-902` was
+counted twice — enumerated individually *and* inside the block of 14. Removing
+the first and stating the second as a deliberate overlap closes the arithmetic
+at 20 + 14 = 34, with the 14 unenumerated cases being exactly the XTSE3430
+block. The lesson is the one this section keeps relearning: **a total that looks
+right is not evidence that its parts are**, and two compensating errors are
+harder to see than one.
+
+## `system-property-012` was adjudicated but never catalogued
+
+Its verdict was correct and complete in [known-gaps.md](known-gaps.md) — §26.5
+requires a non-streaming processor to answer `no` — but it was absent from this
+file's tables and from `results.json`, so the per-case record of the XSLT 3.0
+disagreements named 20 of 21 non-streamability cases and silently dropped the
+one whose reasoning was filed elsewhere. It is now in the *Long tail* table with
+the rest. Nothing about the verdict changed; what was wrong was that a reader
+auditing this file case by case would have found a case missing and no note
+saying where it had gone.
 
 ## `merge-077` — both recorded blockers were false
 

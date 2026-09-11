@@ -548,8 +548,85 @@ func TestShippedXTSE3430Breakdown(t *testing.T) {
 	if b.Of != 14 {
 		t.Errorf("xtse3430 = %d of the XSLT 3.0 failures, want 14", b.Of)
 	}
-	if got := r.Suite(b.Suite).Disagreements; got != 34 {
-		t.Errorf("xslt-3.0 has %d disagreements, want 34", got)
+	s := r.Suite(b.Suite)
+	if s.Disagreements != 34 {
+		t.Errorf("xslt-3.0 has %d disagreements, want 34", s.Disagreements)
+	}
+	// The two published halves must account for the whole, once the declared
+	// overlap is discounted: 20 enumerated + 14 in the block, sharing
+	// su-ascent-902, is exactly 34. This shipped so wrong -- 21 + 14 = 35 --
+	// because each half was only ever checked against the total.
+	if b.Overlap != 1 {
+		t.Errorf("xtse3430 declares overlap %d, want 1 (su-ascent-902)", b.Overlap)
+	}
+	if n := len(s.Cases) + b.Of - b.Overlap; n != s.Disagreements {
+		t.Errorf("%d enumerated + %d in the block - %d overlap = %d, want the suite's %d",
+			len(s.Cases), b.Of, b.Overlap, n, s.Disagreements)
+	}
+	// su-ascent-902 is the overlap, so it must actually be enumerated; and
+	// merge-097sf must not be, because it is skipped for streaming-fallback
+	// rather than failing.
+	var haveAscent, haveSF bool
+	for _, c := range s.Cases {
+		switch c.ID {
+		case "su-ascent-902":
+			haveAscent = true
+		case "merge-097sf":
+			haveSF = true
+		}
+	}
+	if !haveAscent {
+		t.Error("su-ascent-902 is declared as the overlap but is not enumerated")
+	}
+	if haveSF {
+		t.Error("merge-097sf is enumerated as a disagreement; it is skipped for streaming-fallback")
+	}
+}
+
+// The sum check the file lacked. An enumeration and a breakdown are both
+// published as parts of one total, so a reader adds them; if they can sum past
+// the total, the document lies and nothing says so. Undeclared overlap must
+// fail, declared overlap must pass.
+func TestEnumeratedCasesAndBreakdownCannotExceedTheTotal(t *testing.T) {
+	body := func(overlap string) string {
+		return `{
+  "suites": [
+    {"id": "s", "component": "a", "suite": "S", "edition": "S 1.0",
+     "passed": 90, "disagreements": 10, "total": 100,
+     "run_date": "2026-01-02", "command": "run",
+     "cases": [
+       {"id": "c1", "verdict": "fixture"},
+       {"id": "c2", "verdict": "fixture"},
+       {"id": "c3", "verdict": "fixture"}
+     ]}
+  ],
+  "breakdowns": [{"id": "b", "label": "B", "suite": "s", "of": 8` + overlap + `}]
+}`
+	}
+	load := func(overlap string) error {
+		p := filepath.Join(t.TempDir(), "results.json")
+		if err := os.WriteFile(p, []byte(body(overlap)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(p)
+		return err
+	}
+	// 3 enumerated + 8 in the block = 11 against 10 disagreements.
+	err := load("")
+	if err == nil {
+		t.Fatal("Load accepted 3 enumerated cases plus a breakdown of 8 against 10 disagreements")
+	}
+	if !strings.Contains(err.Error(), "only 10") {
+		t.Errorf("the error does not say what the suite actually has: %v", err)
+	}
+	// Declaring the one shared case makes the arithmetic close at exactly 10.
+	if err := load(`, "overlap": 1`); err != nil {
+		t.Fatalf("a declared overlap of 1 closes the sum at 10 and must be accepted: %v", err)
+	}
+	// An overlap larger than the breakdown itself is not a description of
+	// anything, and must not be a way to silence the check.
+	if err := load(`, "overlap": 9`); err == nil {
+		t.Fatal("Load accepted an overlap of 9 against a breakdown of 8")
 	}
 }
 

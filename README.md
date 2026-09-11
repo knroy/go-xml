@@ -109,7 +109,7 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 <!-- BEGIN GENERATED TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Tests** | 2,176 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 2,177 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 <!-- END GENERATED TEST COUNT -->
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
@@ -1234,7 +1234,7 @@ back, is in [docs/testing.md](docs/testing.md).
 <!-- BEGIN GENERATED TEST METHODS -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** (2,176 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (2,177 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |

@@ -23,7 +23,7 @@ claim is only as good as the command behind it.
 
 | figure | count | counted by |
 |---|---:|---|
-| Unit tests | 2,176 | `grep -rn '^func Test' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
+| Unit tests | 2,177 | `grep -rn '^func Test' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
 | Fuzz targets | 9 | `grep -rn '^func Fuzz' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
 | Limit boundary tests | 14 | `grep -hc '^func Test' ./*/limits_boundary_test.go \| awk '{n += $1} END {print n + 0}'` |
 
@@ -71,7 +71,7 @@ its suite's disagreement count on load.
 
 | subset | count | of | note |
 |---|---:|---|---|
-| XSLT 3.0 failures wanting an XTSE3430 | 14 | 34 W3C XSLT 3.0 disagreements | Only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit the refusal; §19.1 does not require a non-streaming processor to assess guaranteed-streamability. |
+| XSLT 3.0 failures wanting an XTSE3430 | 14 | 34 W3C XSLT 3.0 disagreements | Only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit the refusal; §19.1 does not require a non-streaming processor to assess guaranteed-streamability. The one overlap is su-ascent-902, which is in this block by symptom and enumerated individually because its verdict is not the block's: the analysis does reach it, and the rule the test asserts contradicts §19.8.5.7's own worked example. |
 
 ## Where each figure is published
 

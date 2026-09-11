@@ -185,12 +185,15 @@ answers into 14 refusals to answer. That is the conformant behaviour, and it
 is worth being explicit that the gain is measured in conformance rather than in
 capability.
 
-The remaining 21 are singletons or near-singletons and are catalogued in
+The remaining 20 are singletons or near-singletons and are catalogued in
 [conformance-gaps.md](conformance-gaps.md) rather than here. Only three pairs
-share anything: `merge-097`/`-097s`/`-097sf` all fail on `FODC0002`, and the
+share anything: `merge-097`/`-097s` both fail on `FODC0002`, and the
 CHANGELOG records them as not interoperable on the test set's own maintainer
 comment — they rely on Saxon's `?select=` collection URIs and declare no
-environment for the harness to honour; `si-copy-117`/`si-copy-of-117` both get
+environment for the harness to honour. `-097sf` was read here as a third
+member and is not one: it declares `<feature value="streaming-fallback"/>`,
+which this engine does not claim, so it is skipped and never reaches
+`FODC0002` at all. `si-copy-117`/`si-copy-of-117` both get
 `XTTE1540` where `XTTE1510` is wanted; and `si-fork-814`/`sx-MapExpr-007` both
 get `XQDY0137` for `XTDE3365`. The rest — `docbook-001` (`XTMM9000`, chunking),
 `validation-0201` (whitespace placement),

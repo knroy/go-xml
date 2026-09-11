@@ -85,6 +85,20 @@ type Breakdown struct {
 	Suite string `json:"suite"`
 	Of    int    `json:"of"`
 	Note  string `json:"note,omitempty"`
+
+	// Overlap is how many of this breakdown's cases are ALSO enumerated in
+	// the suite's Cases list. It exists because the two halves were checked
+	// only against the suite total and never against each other, and so
+	// summed to 35 of 34 for a year without a gate firing: merge-097sf was
+	// enumerated while actually being skipped, and su-ascent-902 was counted
+	// both individually and in the block. Two errors in opposite directions
+	// left a plausible-looking total, which is the hardest kind to see.
+	//
+	// A real overlap is legitimate -- su-ascent-902 belongs to the XTSE3430
+	// block by symptom and is argued individually because its verdict is not
+	// the block's -- but it must be DECLARED, so that "the parts do not add
+	// up" and "the parts overlap on purpose" cannot be confused.
+	Overlap int `json:"overlap,omitempty"`
 }
 
 // Count fills in every TreeCount by running its method against root.
@@ -255,6 +269,19 @@ func (r *Results) validateExtra() error {
 		if b.Of > s.Disagreements {
 			return fmt.Errorf("breakdown %q: %d of suite %q, which has only %d disagreements",
 				b.ID, b.Of, b.Suite, s.Disagreements)
+		}
+		if b.Overlap < 0 || b.Overlap > b.Of {
+			return fmt.Errorf("breakdown %q: overlap %d must be between 0 and the breakdown's own %d",
+				b.ID, b.Overlap, b.Of)
+		}
+		// The check the file lacked: the enumerated cases and the breakdown
+		// are both published as parts of the same total, so their sum must
+		// fit inside it once the declared overlap is discounted. Checking
+		// each half alone let 21 + 14 stand against 34.
+		if n := len(s.Cases) + b.Of - b.Overlap; n > s.Disagreements {
+			return fmt.Errorf("breakdown %q: %d enumerated cases + %d in the breakdown - %d declared overlap = %d, "+
+				"but suite %q has only %d disagreements",
+				b.ID, len(s.Cases), b.Of, b.Overlap, n, b.Suite, s.Disagreements)
 		}
 	}
 	return nil
