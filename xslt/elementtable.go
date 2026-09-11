@@ -685,6 +685,28 @@ var xsltElements = map[string]elementDef{
 	// evaluation, which this engine does not do; 18.1 defines the result as
 	// that of the non-streaming process either way, so the attribute is
 	// accepted and the instruction evaluated conventionally.
+	// xsl:stream is 18.1's instruction in the working draft this repository
+	// vendors, where it appears 160 times and "source-document" appears not
+	// at all. The W3C suite is the mirror image: 500 stylesheets write
+	// xsl:source-document and none writes xsl:stream. The rename happened
+	// between the two, and the table carried only the suite's name -- the
+	// same split as for-each-stream/for-each-source on xsl:merge-source, and
+	// resolved the same way, by accepting both rather than choosing.
+	//
+	// The attribute list is 18.1's own and is NOT source-document's: there is
+	// no @streamable, because xsl:stream streams by definition.
+	// compileSourceDocument reads attributes and never the element's local
+	// name, so one compiler serves both spellings.
+	//
+	// No suite case writes <xsl:stream, so this is invisible to the ratchet
+	// in both directions; it is here because a stylesheet written against the
+	// vendored spec is a legal one that the grammar rejected.
+	"stream": {since30: true, attrs: map[string]attrDef{
+		"href":             {required: true, avt: true},
+		"use-accumulators": {},
+		"validation":       {values: []string{"strict", "lax", "preserve", "strip"}},
+		"type":             {},
+	}},
 	"source-document": {since30: true, attrs: map[string]attrDef{
 		"href":             {required: true, avt: true},
 		"streamable":       {values: []string{"yes", "no", "true", "false", "1", "0"}},
@@ -878,6 +900,7 @@ var contentModels = map[string]contentModel{
 	"preserve-space":         {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"processing-instruction": {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"result-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"stream":                 {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"source-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"sequence":               {seqCtor30: true, pcdata: false, kids: map[string]bool{"fallback": true}, model: "xsl:fallback*"},
 	"sort":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
@@ -949,6 +972,7 @@ var xsltInstructions = map[string]bool{
 	"processing-instruction": true,
 	"result-document":        true,
 	"sequence":               true,
+	"stream":                 true,
 	"source-document":        true,
 	"text":                   true,
 	"value-of":               true,
@@ -1034,6 +1058,7 @@ var qnameAttrs = map[string]map[string]qnameAttrDef{
 	"output":          {"name": {}, "cdata-section-elements": {list: true}, "use-character-maps": {list: true}},
 	"param":           {"name": {}},
 	"result-document": {"format": {avt: true, code: "XTDE1460"}, "type": {}, "cdata-section-elements": {list: true, avt: true}, "use-character-maps": {list: true}},
+	"stream":          {"type": {}},
 	"source-document": {"type": {}},
 	"template":        {"name": {}},
 	"variable":        {"name": {}},

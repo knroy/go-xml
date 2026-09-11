@@ -546,7 +546,10 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		return &documentInstr{body: body, validation: spec}, nil
 	case "result-document":
 		return c.compileResultDocument(n, ns)
-	case "source-document":
+	case "source-document", "stream":
+		// xsl:stream is the same instruction under the name the vendored
+		// working draft uses; compileSourceDocument reads attributes rather
+		// than the element name, and xsl:stream has no @streamable to read.
 		return c.compileSourceDocument(n)
 	case "fallback":
 		// xsl:fallback is instantiated only when its containing instruction is
