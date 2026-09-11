@@ -519,8 +519,17 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				}
 				v := norm == "yes"
 				opts.escapeURIAttrs = &v
+			case "normalization-form":
+				// Character maps are applied below with normalization interleaved,
+				// so the map replacement itself remains untouched as Serialization
+				// requires. Storing only the form here would invite a later caller
+				// to normalize the finished markup, which is observably wrong.
+				f, err := serializationNormalizer(val)
+				if err != nil {
+					return opts, err
+				}
+				opts.normalize = f
 			case "media-type",
-				"normalization-form",
 				"byte-order-mark", "include-content-type":
 				// Recognised and accepted, and deliberately without effect
 				// here.
@@ -861,7 +870,7 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions, dept
 		sb.WriteString(elementName(n))
 		sb.WriteString(">")
 	case xdm.KindText:
-		sb.WriteString(escapeText(n.Value))
+		sb.WriteString(escapeText(opts.normalized(n.Value)))
 	case xdm.KindComment:
 		sb.WriteString("<!--")
 		sb.WriteString(n.Value)
@@ -1395,7 +1404,17 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 				return err
 			}
 			opts.escapeURIAttrs = &v
-		case "media-type", "normalization-form",
+		case "normalization-form":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			f, err := serializationNormalizer(v)
+			if err != nil {
+				return err
+			}
+			opts.normalize = f
+		case "media-type",
 			"byte-order-mark", "include-content-type",
 			"html-version", "parameter-document":
 			// Recognised and accepted. See the element form's arm for why
@@ -1600,6 +1619,25 @@ func (o serializeOptions) normalized(s string) string {
 		return s
 	}
 	return o.normalize(s)
+}
+
+// serializationNormalizer turns the standardized value into the operation used
+// at every text-writing site. "none" and absence intentionally share nil.
+func serializationNormalizer(form string) (func(string) string, error) {
+	switch strings.TrimSpace(form) {
+	case "", "none":
+		return nil, nil
+	case "NFC":
+		return norm.NFC.String, nil
+	case "NFD":
+		return norm.NFD.String, nil
+	case "NFKC":
+		return norm.NFKC.String, nil
+	case "NFKD":
+		return norm.NFKD.String, nil
+	default:
+		return nil, fmt.Errorf("SEPM0017: unsupported normalization-form %q", form)
+	}
 }
 
 // charMapRun is one stretch of a string that the character map either claimed

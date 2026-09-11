@@ -60,6 +60,23 @@ func TestSerializeDoctypeParameters(t *testing.T) {
 	}
 }
 
+// TestSerializeNormalizationForm keeps fn:serialize aligned with xsl:output:
+// normalization applies to ordinary text, but not to a character-map result.
+func TestSerializeNormalizationForm(t *testing.T) {
+	got, err := evalSerialize(t,
+		`serialize(parse-xml('<a>c&#807;</a>'), map{'normalization-form':'NFC'})`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "ç") {
+		t.Errorf("normalization-form=NFC gave %q, want composed text", got)
+	}
+	if _, err := evalSerialize(t,
+		`serialize(parse-xml('<a/>'), map{'normalization-form':'bogus'})`); err == nil {
+		t.Error("unsupported normalization-form was accepted")
+	}
+}
+
 // TestSerializeEscapeURIAttributes pins escape-uri-attributes, whose default
 // is yes.
 //
