@@ -1164,8 +1164,9 @@ fn:-only expansion its key constrained a non-existent `fn:pi`.
 `TestPrefixedSpecKeysNameOtherNamespaces` is what keeps that path from
 decaying back.
 
-The 19 that remain are exactly the deferred group below; every row the
-prefixed key format made reachable has now been migrated.
+Every row the prefixed key format made reachable has now been migrated, and
+the regex and formatting families that were twice deferred have followed;
+nothing remains.
 
 The `math:`, `map:` and `array:` families differ from the `fn:` ones in what
 migrating them buys. Every parameter of those 46 is already guarded by hand
@@ -1194,20 +1195,14 @@ load-bearing here: `checkArgCardinality` reads `AllowsEmpty` and `AllowsMany`
 and nothing else, which is why a spelling this package parses loosely still
 constrains the right cardinality.
 
-The other 19 are deliberately deferred to commits that can compare their error
-codes, because both groups change *which* error is raised rather than only
-whether one is:
-
-* the regex functions — `fn:matches`, `fn:replace`, `fn:tokenize` and
-  `fn:analyze-string` — whose `$pattern` and `$flags` interact with the FORX
-  diagnostics;
-* `fn:format-date`, `fn:format-time`, `fn:format-dateTime`, `fn:format-integer`
-  and `fn:format-number`, whose `$picture` is `xs:string` with no `?` — a
-  genuinely new refusal — and whose arity-5 forms carry calendar and place
-  arguments tied to FOFD.
-
-A pass/fail count cannot tell a FORX0002 from an XPTY0004, so migrating those
-needs a lane that asserts on the error code.
+The last 19 — the regex and formatting families — were twice held back on the
+belief that they needed a new lane asserting on error codes, because both
+groups looked like they would change *which* error is raised rather than only
+whether one is. They do not, and the lane was never needed: the QT3 driver
+already compares error codes (`tests/qt3/runner.go` reads `xdm.ErrorCode` and
+`sameErrorCode`), so the suite *is* that lane. What settled it was reading the
+cases rather than reasoning about the codes — only four in the whole suite pass
+`()` in a non-nullable position, and every one of them expects `XPTY0004`.
 
 Migrate in family-sized commits, and run the full QT3 lanes after each one —
 the four in-scope counts are the check, and any drop is a regression rather
