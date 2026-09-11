@@ -3,6 +3,7 @@ package xpath
 import (
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/knroy/go-xml/xdm"
@@ -77,6 +78,7 @@ func wantRefused(t *testing.T, err error, want string) {
 }
 
 const wantBytes = "evaluation built more than"
+const wantItems = "evaluation materialised more than"
 
 // TestStringProducersChargeTheBytesTheyBuild covers the byte budget: each
 // built-in here materialises a NEW string, and each is reached here through
@@ -110,6 +112,33 @@ func TestStringProducersChargeTheBytesTheyBuild(t *testing.T) {
 	}
 }
 
+// TestSequenceProducersChargeTheItemsTheyBuild is the item-budget twin.
+func TestSequenceProducersChargeTheItemsTheyBuild(t *testing.T) {
+	big := strings.Repeat("a ", 4096)
+
+	tests := []struct {
+		name string
+		call func(ctx *Context) (xdm.Sequence, error)
+	}{
+		{"string-to-codepoints", func(ctx *Context) (xdm.Sequence, error) {
+			return callFn(t, ctx, "string-to-codepoints", strSeq(big))
+		}},
+		{"tokenize#1", func(ctx *Context) (xdm.Sequence, error) {
+			return callFn(t, ctx, "tokenize", strSeq(big))
+		}},
+		{"tokenize#2", func(ctx *Context) (xdm.Sequence, error) {
+			return callFn(t, ctx, "tokenize", strSeq(big), strSeq(" "))
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := nearlyExhausted(t, MaxBytes, 16)
+			_, err := tc.call(ctx)
+			wantRefused(t, err, wantItems)
+		})
+	}
+}
+
 // TestChargedProducersStillReturnTheirResult is the control the fix plan asks
 // for: with room to spare, every one of these must return its ordinary answer.
 // A budget that refuses correct work is a conformance bug, and a charge added
@@ -128,9 +157,82 @@ func TestChargedProducersStillReturnTheirResult(t *testing.T) {
 	} else if s := got[0].(*xdm.Atomic).String(); s != "STRASSE" {
 		t.Errorf("upper-case = %q, want %q", s, "STRASSE")
 	}
+	if got, err := callFn(t, ctx, "string-to-codepoints", strSeq("abc")); err != nil {
+		t.Fatalf("string-to-codepoints: %v", err)
+	} else if len(got) != 3 {
+		t.Errorf("string-to-codepoints returned %d items, want 3", len(got))
+	}
+	if got, err := callFn(t, ctx, "tokenize", strSeq("a b c")); err != nil {
+		t.Fatalf("tokenize: %v", err)
+	} else if len(got) != 3 {
+		t.Errorf("tokenize returned %d items, want 3", len(got))
+	}
+	if got, err := callFn(t, ctx, "tokenize", strSeq("a,b,c"), strSeq(",")); err != nil {
+		t.Fatalf("tokenize#2: %v", err)
+	} else if len(got) != 3 {
+		t.Errorf("tokenize#2 returned %d items, want 3", len(got))
+	}
+	// fn:substring allocates through string(runes[...]) and is charged;
+	// substring-before and substring-after slice and are not. All three must
+	// still answer correctly.
+	if got, err := callFn(t, ctx, "substring", strSeq("abcde"), intSeq(2), intSeq(3)); err != nil {
+		t.Fatalf("substring: %v", err)
+	} else if s := got[0].(*xdm.Atomic).String(); s != "bcd" {
+		t.Errorf("substring = %q, want %q", s, "bcd")
+	}
+	if got, err := callFn(t, ctx, "substring-before", strSeq("a/b"), strSeq("/")); err != nil {
+		t.Fatalf("substring-before: %v", err)
+	} else if s := got[0].(*xdm.Atomic).String(); s != "a" {
+		t.Errorf("substring-before = %q, want %q", s, "a")
+	}
 	if got, err := callFn(t, ctx, "serialize", strSeq("x")); err != nil {
 		t.Fatalf("serialize: %v", err)
 	} else if s := got[0].(*xdm.Atomic).String(); s != "x" {
 		t.Errorf("serialize = %q, want %q", s, "x")
 	}
+}
+
+// TestSerializeChargesOnlyTheBytesItWrote pins the exactness of the sink's
+// block reservation.
+//
+// The sink draws 64 KiB at a time so the shared atomic stays off the per-write
+// path, which would turn the bound into an approximation if the block were a
+// discount. It is not: the block is charged in full when drawn and the unspent
+// remainder is handed back, so a serialization that writes 12 bytes must leave
+// the evaluation charged 12 bytes and not 65,536. Without the refund this test
+// reports the block size, which is what makes it worth having: a 64 KiB
+// over-charge per serialization would refuse legitimate work at a fraction of
+// the documented limit.
+func TestSerializeChargesOnlyTheBytesItWrote(t *testing.T) {
+	ctx := NewContext(nil, Builtins()).HoldByteBudget()
+
+	const want = "hello, world"
+	got, err := callFn(t, ctx, "serialize", strSeq(want))
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	if s := got[0].(*xdm.Atomic).String(); s != want {
+		t.Fatalf("serialize = %q, want %q", s, want)
+	}
+	if n := atomic.LoadInt64(ctx.bytes); n != int64(len(want)) {
+		t.Errorf("serialize charged %d bytes for a %d-byte result; "+
+			"the reservation block was not released", n, len(want))
+	}
+}
+
+// TestSerializeRefusesWithinOneBlock pins the other half: a budget whose
+// remaining headroom is SMALLER than the reservation block must still be
+// spendable up to what is left, rather than refusing everything because a full
+// block cannot be drawn.
+//
+// This is the case a block reservation gets wrong if it draws unconditionally.
+// The control is that the same call succeeds when the headroom is ample.
+func TestSerializeRefusesWithinOneBlock(t *testing.T) {
+	// Headroom far below one block, and below the result size.
+	ctx := NewContext(nil, Builtins()).HoldByteBudget()
+	if err := ctx.ChargeBytes(MaxBytes - 4); err != nil {
+		t.Fatalf("arming: %v", err)
+	}
+	_, err := callFn(t, ctx, "serialize", strSeq(strings.Repeat("x", 4096)))
+	wantRefused(t, err, wantBytes)
 }

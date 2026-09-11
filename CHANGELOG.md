@@ -20,7 +20,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| `fn:serialize` and nine other string producers built strings against no byte budget | Serialization charged nothing at all, and `normalize-space`, the case mappings, the URI escapes, `normalize-unicode` and the formatters returned newly built strings through `strSeq`. The XML, JSON and adaptive writers charge before each append through `serializeSink`; the rest return through `stringResult`. | PATCH3 |
+| `fn:string-to-codepoints` and all three `fn:tokenize` paths materialised items against no budget | The item charge lived at `LetExpr`, `evalFor` and the range operator, so a host calling a built-in directly got the full `MaxItems` again. Each reserves its known count once through `makeSequence`, before the `make` rather than after. `fn:substring` is charged here too: it allocates through `string(runes[...])` where its `-before` and `-after` siblings only slice. | PATCH4 |
+| `fn:serialize` and nine other string producers built strings against no byte budget | Serialization charged nothing at all, and `normalize-space`, the case mappings, the URI escapes, `normalize-unicode` and the formatters returned newly built strings through `strSeq`. The XML, JSON and adaptive writers charge before each append through `serializeSink`; the rest return through `stringResult`. | [`924ef76`][924ef76] |
 | A nested `fn:transform` began its own item and byte allowances | `newRuntime` mints both counters through `xpath.NewContext`, so every level of a nest got the full `MaxBytes` again while the depth budget inherited; 500 levels charged ~5.5 GB with no refusal. The caller's context is adopted now, each counter with its held flag. | [`9f033e2`][9f033e2] |
 | Every derivation walk was decided by whichever schema loaded last | `instance of`, `castable as`, the `element()` and `attribute()` tests, `fn:id` and XTTE0950 all walked the process-global derivation table, so a second schema reusing a type name silently retyped a node the first had validated. A node now carries the validating schema's `TypeEnvironment` and the walks read it off the node. | [`cdba77a`][cdba77a] |
 | `XTTE1545` was decided by whichever schema loaded last | The walk deciding whether a constructed attribute may be validated against a named type read the process-global derivation table, so a second schema reusing the name overwrote the answer — permissively, letting the validation §19.2 forbids proceed. It now walks the environment of the schema being validated against, which `mergeSchema` carries into the stylesheet's aggregate. | [`1e21828`][1e21828] |
@@ -718,6 +719,7 @@ here so every entry in this file sits under a release.
 [17b1c91]: https://github.com/knroy/go-xml/commit/17b1c91
 [e511421]: https://github.com/knroy/go-xml/commit/e511421
 [5c17280]: https://github.com/knroy/go-xml/commit/5c17280
+[924ef76]: https://github.com/knroy/go-xml/commit/924ef76
 [9f033e2]: https://github.com/knroy/go-xml/commit/9f033e2
 [cdba77a]: https://github.com/knroy/go-xml/commit/cdba77a
 [1e21828]: https://github.com/knroy/go-xml/commit/1e21828

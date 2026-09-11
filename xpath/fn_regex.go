@@ -147,7 +147,7 @@ func registerRegexFuncs(l *Library) {
 	// left between tokens is exact. Registering it as another arity of the
 	// two-argument form would have sent an absent pattern into the regex
 	// compiler.
-	l.registerFnSince(XPath31, "tokenize", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFnSince(XPath31, "tokenize", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
@@ -163,7 +163,10 @@ func registerRegexFuncs(l *Library) {
 			return xdm.Empty(), nil
 		}
 		parts := strings.Split(s, " ")
-		out := make(xdm.Sequence, 0, len(parts))
+		out, err := makeSequence(ctx, len(parts))
+		if err != nil {
+			return nil, err
+		}
 		for _, p := range parts {
 			out = append(out, xdm.NewString(p))
 		}
@@ -184,7 +187,7 @@ func registerRegexFuncs(l *Library) {
 			if btErr != nil {
 				return nil, btErr
 			}
-			return tokenizeBacktrack(bt, s)
+			return tokenizeBacktrack(ctx, bt, s)
 		}
 		if re.MatchString("") {
 			return nil, fmt.Errorf("FORX0003: pattern matches the empty string")
@@ -195,7 +198,10 @@ func registerRegexFuncs(l *Library) {
 			return xdm.Empty(), nil
 		}
 		parts := re.Split(s, -1)
-		out := make(xdm.Sequence, 0, len(parts))
+		out, err := makeSequence(ctx, len(parts))
+		if err != nil {
+			return nil, err
+		}
 		for _, p := range parts {
 			out = append(out, xdm.NewString(p))
 		}
@@ -1501,7 +1507,7 @@ func argBacktrack(args []xdm.Sequence, pat, flags int, orig error, v Version) (*
 // matches the empty string is an error, and the empty input tokenizes to the
 // empty sequence rather than to one empty token — because those are properties
 // of the function, not of the engine.
-func tokenizeBacktrack(bt *btRegexp, s string) (xdm.Sequence, error) {
+func tokenizeBacktrack(ctx *Context, bt *btRegexp, s string) (xdm.Sequence, error) {
 	empty := bt.MatchString("")
 	if e := bt.Err(); e != nil {
 		return nil, e
@@ -1516,7 +1522,10 @@ func tokenizeBacktrack(bt *btRegexp, s string) (xdm.Sequence, error) {
 	if e := bt.Err(); e != nil {
 		return nil, e
 	}
-	out := make(xdm.Sequence, 0, len(parts))
+	out, err := makeSequence(ctx, len(parts))
+	if err != nil {
+		return nil, err
+	}
 	for _, p := range parts {
 		out = append(out, xdm.NewString(p))
 	}

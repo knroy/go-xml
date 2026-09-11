@@ -23,7 +23,7 @@ let something through, and the column that matters is the last one.
 <!-- BEGIN GENERATED LAYER COUNTS -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** | 2,210 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,213 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |

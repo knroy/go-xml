@@ -326,12 +326,20 @@ func registerStringFuncs(l *Library) {
 		return strSeq(sb.String()), nil
 	})
 
-	l.registerFn("string-to-codepoints", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("string-to-codepoints", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		var out xdm.Sequence
+		// The item count is known before the loop -- one per rune -- so the
+		// whole result is reserved once rather than charged per append. A
+		// string near MaxBytes yields a sequence of the same order of
+		// magnitude in items, and reserving first is what refuses it without
+		// building the slice.
+		out, err := makeSequence(ctx, utf8.RuneCountInString(s))
+		if err != nil {
+			return nil, err
+		}
 		for _, r := range s {
 			out = append(out, xdm.NewInteger(int64(r)))
 		}
@@ -374,7 +382,7 @@ func registerStringFuncs(l *Library) {
 // substring("hello", 0) is "hello", substring("hello", -5, 3) is "", and NaN
 // positions yield "". Implementing it as a naive slice with bounds checks gets
 // the edge cases wrong, so the arithmetic follows the spec's formula directly.
-func fnSubstring(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+func fnSubstring(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	src, err := argString(args, 0)
 	if err != nil {
 		return nil, err
@@ -436,7 +444,11 @@ func fnSubstring(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	if hi <= lo {
 		return strSeq(""), nil
 	}
-	return strSeq(string(runes[int(lo)-1 : int(hi)-1])), nil
+	// string(runes[...]) allocates -- unlike substring-before and
+	// substring-after, which slice the argument and share its backing array --
+	// so the result is charged. It cannot exceed its input, which makes it the
+	// bounded-output case stringResult is written for.
+	return stringResult(ctx, string(runes[int(lo)-1:int(hi)-1]))
 }
 
 // translate maps characters of src through the from/to correspondence.
