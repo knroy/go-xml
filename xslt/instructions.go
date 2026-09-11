@@ -262,11 +262,13 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// stripping both read more than the annotation name, so the
 				// node they are handed must carry more than the name.
 				//
-				// What reaches the RESULT is narrower than this, and not
-				// because of anything here: AddAttributeTyped below takes an
-				// annotation string, so only the name survives into the
-				// output tree. That narrowing is the builder's and is
-				// recorded in docs/security.md.
+				// All of it reaches the RESULT: the attribute goes into the
+				// output through AddAttributeWithTyping, which takes the
+				// resolved xdm.Typing rather than an annotation name. The
+				// older AddAttributeTyped took a name only, so a copied
+				// attribute arrived in the output tree with its union member
+				// and its resolved primitive gone, to be guessed at later
+				// from the process-global registries.
 				a := &xdm.Node{
 					Kind:  xdm.KindAttribute,
 					Name:  v.Name,
@@ -276,7 +278,8 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				if err := i.validation.assess(rt, a); err != nil {
 					return err
 				}
-				if err := out.AddAttributeTyped(a.Name, a.Value, a.TypeAnnotation); err != nil {
+				if err := out.AddAttributeWithTyping(a.Name, a.Value,
+					xdm.TypingOf(a)); err != nil {
 					return err
 				}
 				continue
@@ -1158,15 +1161,19 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	// Assessment happens before the attribute joins the output, so that a
 	// failure reports the attribute the stylesheet asked for rather than
-	// leaving an invalid one behind on the element. The assessed node's type
-	// annotation is carried across: assessment is what gives the attribute a
-	// type, and writing an untyped copy instead would make the validation
-	// invisible to "instance of" and to schema-attribute() patterns.
+	// leaving an invalid one behind on the element. The assessed node's whole
+	// typing is carried across, not its annotation name: assessment is what
+	// gives the attribute a type, and writing an untyped copy instead would
+	// make the validation invisible to "instance of" and to
+	// schema-attribute() patterns. The name alone was not enough -- this is
+	// the one place holding the schema that did the assessing, so what it
+	// resolved the name to must travel with the node rather than be looked up
+	// again later against whichever schema happens to have loaded last.
 	assessed := &xdm.Node{Kind: xdm.KindAttribute, Name: qn, Value: value}
 	if err := i.validation.assess(rt, assessed); err != nil {
 		return err
 	}
-	return out.AddAttributeTyped(qn, value, assessed.TypeAnnotation)
+	return out.AddAttributeWithTyping(qn, value, xdm.TypingOf(assessed))
 }
 
 // resolveName turns a computed attribute name into an expanded QName.

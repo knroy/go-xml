@@ -1795,6 +1795,74 @@ func (n *Node) CopyTypingFrom(src *Node) {
 	n.NoTypedValue = src.NoTypedValue
 }
 
+// Typing is the complete set of PSVI properties an assessment concludes about
+// one node, detached from any node.
+//
+// It exists so that a caller who ALREADY KNOWS these facts can hand them over
+// as a unit instead of passing a type name and letting the receiver look the
+// rest up. The lookup is the problem: resolving a name to its base, its item
+// type or its ID kind means consulting derivedPrimitives, listItems and
+// unionMembers, which are process-global and keyed by QName alone, so they
+// answer for whichever schema loaded LAST rather than for the schema that
+// validated this node. The validator holds the right schema at the right
+// moment; Typing is the shape that lets it say so.
+//
+// The field list is CopyTypingFrom's, and deliberately the same one: eight
+// properties travel together or the copy is wrong, and every historical bug in
+// this area was a hand-picked subset of them. A new PSVI property must be
+// added here, to CopyTypingFrom and to CopyTypingStrippedFrom together.
+//
+// The zero Typing means "nothing assessed this node", which is the correct
+// state for an unvalidated node and is what the name-only convenience wrappers
+// produce when given an empty annotation.
+type Typing struct {
+	TypeAnnotation   string
+	UnionMember      string
+	DerivedPrimitive string
+	ListItem         string
+	IsID             bool
+	IsIDREFS         bool
+	IsNilled         bool
+	NoTypedValue     bool
+}
+
+// TypingOf reads a node's PSVI properties out as a Typing. A nil node has none.
+func TypingOf(n *Node) Typing {
+	if n == nil {
+		return Typing{}
+	}
+	return Typing{
+		TypeAnnotation:   n.TypeAnnotation,
+		UnionMember:      n.UnionMember,
+		DerivedPrimitive: n.DerivedPrimitive,
+		ListItem:         n.ListItem,
+		IsID:             n.IsID,
+		IsIDREFS:         n.IsIDREFS,
+		IsNilled:         n.IsNilled,
+		NoTypedValue:     n.NoTypedValue,
+	}
+}
+
+// ApplyTyping writes a Typing's properties onto n, replacing whatever was
+// there.
+//
+// The fields are ASSIGNED, not or-ed, and nothing is derived from the
+// annotation name -- for the reason CopyTypingFrom assigns rather than going
+// through SetTypeAnnotation. The caller already holds every answer, so
+// re-deriving would be redundant where it agreed and wrong where it did not:
+// SetTypeAnnotation only ever turns is-id ON, which would let a node inherit a
+// marking its assessment did not give it.
+func (n *Node) ApplyTyping(t Typing) {
+	n.TypeAnnotation = t.TypeAnnotation
+	n.UnionMember = t.UnionMember
+	n.DerivedPrimitive = t.DerivedPrimitive
+	n.ListItem = t.ListItem
+	n.IsID = t.IsID
+	n.IsIDREFS = t.IsIDREFS
+	n.IsNilled = t.IsNilled
+	n.NoTypedValue = t.NoTypedValue
+}
+
 // CopyTypingStrippedFrom copies onto n the PSVI properties of src that survive
 // input-type-annotations="strip" and validation="strip", and clears the rest.
 //

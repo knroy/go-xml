@@ -297,8 +297,41 @@ func (b *Builder) AddAttribute(name xdm.QName, value string) error {
 // pattern such as schema-attribute(A) matches only a node that was actually
 // validated against the declaration, so an attribute that lost its annotation
 // on the way into the element could never match however it was named.
+//
+// It is a convenience wrapper over AddAttributeWithTyping for the callers that
+// genuinely hold nothing but a name -- a DTD attribute type, a hand-built
+// node, a test. A NAME IS NOT THE WHOLE OF AN ANNOTATION: the other seven PSVI
+// properties are left unset here, so atomisation of the resulting attribute
+// falls back to the process-global derivation registries, which are keyed by
+// QName alone and answer for whichever schema loaded last. A caller that knows
+// what the name means -- above all a validator, which does -- must use
+// AddAttributeWithTyping and say so, or a union-typed attribute atomises to
+// xs:untypedAtomic and a list type erases to another schema's primitive.
 func (b *Builder) AddAttributeTyped(name xdm.QName, value string,
 	typeAnnotation string) error {
+
+	return b.AddAttributeWithTyping(name, value,
+		xdm.Typing{TypeAnnotation: typeAnnotation})
+}
+
+// AddAttributeWithTyping adds an attribute carrying every PSVI property its
+// assessment concluded, rather than only the name of its type.
+//
+// This is the typed entry point finding 24 asks for. The properties are
+// RECORDED as given and nothing is derived from the annotation name, which is
+// the whole point: deriving means asking derivedPrimitives, unionMembers and
+// listItems, and those are process-global, keyed by QName alone, and hold
+// whatever schema registered the name most recently. A caller holding a
+// resolved xdm.Typing -- xsl:attribute after assessing its value, a copy of an
+// already-assessed attribute -- has the right answer in hand and must not have
+// it replaced by a possibly different schema's. An attribute built through this
+// method for a type NO schema ever registered still atomises, casts and
+// compares correctly, because the node carries its own meaning.
+//
+// Typing's zero value is the unassessed node, so AddAttributeWithTyping with
+// an empty Typing is exactly AddAttribute.
+func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
+	typing xdm.Typing) error {
 
 	if b.open == nil {
 		// A parentless attribute is a legal item in the data model, and a
@@ -317,10 +350,8 @@ func (b *Builder) AddAttributeTyped(name xdm.QName, value string,
 		// standalone attribute and requires a prefix to be there, and -55
 		// requires the XML namespace to have got "xml" rather than an
 		// invented one.
-		n := &xdm.Node{
-			Kind: xdm.KindAttribute, Name: name, Value: value,
-			TypeAnnotation: typeAnnotation,
-		}
+		n := &xdm.Node{Kind: xdm.KindAttribute, Name: name, Value: value}
+		n.ApplyTyping(typing)
 		fixupOrphanAttrPrefix(n)
 		b.items = append(b.items, n)
 		return nil
@@ -344,12 +375,13 @@ func (b *Builder) AddAttributeTyped(name xdm.QName, value string,
 				return err
 			}
 			a.Value = value
-			a.TypeAnnotation = typeAnnotation
+			a.ApplyTyping(typing)
 			return nil
 		}
 	}
-	b.open.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: name, Value: value,
-		TypeAnnotation: typeAnnotation})
+	attr := &xdm.Node{Kind: xdm.KindAttribute, Name: name, Value: value}
+	attr.ApplyTyping(typing)
+	b.open.AddAttr(attr)
 	fixupAttrPrefix(b.open, b.open.Attrs[len(b.open.Attrs)-1])
 	return nil
 }

@@ -369,7 +369,7 @@ func appendItem(out *outputBuilder, it xdm.Item) {
 // construction, which is not a thing an attribute may be.
 func appendItemChecked(out *outputBuilder, it xdm.Item) error {
 	if n, ok := it.(*xdm.Node); ok && n.Kind == xdm.KindAttribute {
-		return out.AddAttributeTyped(n.Name, n.Value, n.TypeAnnotation)
+		return out.AddAttributeWithTyping(n.Name, n.Value, xdm.TypingOf(n))
 	}
 	appendItem(out, it)
 	return nil

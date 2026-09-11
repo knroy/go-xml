@@ -241,8 +241,13 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 					// a sequence — "<a>{$attr1, $attr2}</a>" — is exactly the
 					// shape the suite tests, and the error has to reach the
 					// caller to be raised at all.
-					if err := out.b.AddAttributeTyped(
-						v.Name, v.Value, v.TypeAnnotation); err != nil {
+					// The whole typing travels, not the annotation name: an
+					// attribute reaching element content this way is a copy
+					// of an assessed node, and the name alone would leave its
+					// union member and resolved primitive to be guessed at
+					// from the process-global registries.
+					if err := out.b.AddAttributeWithTyping(
+						v.Name, v.Value, xdm.TypingOf(v)); err != nil {
 						return err
 					}
 					continue
