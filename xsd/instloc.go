@@ -175,7 +175,11 @@ func instanceLocations(root *xdm.Node, policy InstanceLocationPolicy) []string {
 				// entries is malformed; the spec says nothing
 				// useful about it, so the trailing one is
 				// dropped rather than paired with nothing.
-				f := strings.Fields(a.Value)
+				// splitFields: xsi:schemaLocation is a list type, and an
+				// XSD list tokenizes on XML S alone. A no-break space is
+				// data inside a token, so strings.Fields turned one URI
+				// into two and paired the halves wrongly.
+				f := splitFields(a.Value)
 				for i := 0; i+1 < len(f); i += 2 {
 					ns, loc := f[i], f[i+1]
 					if policy.AllowNamespace == nil ||
@@ -190,7 +194,7 @@ func instanceLocations(root *xdm.Node, policy InstanceLocationPolicy) []string {
 			}
 			if a := n.Attr(NSInstance, "noNamespaceSchemaLocation"); a != nil &&
 				policy.AllowNoNamespace {
-				for _, loc := range strings.Fields(a.Value) {
+				for _, loc := range splitFields(a.Value) {
 					if !seen[loc] {
 						seen[loc] = true
 						out = append(out, loc)

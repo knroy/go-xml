@@ -550,7 +550,12 @@ func annotateBuiltinXSIType(n *xdm.Node) {
 			// The value is a QName in the element's namespace scope, so the
 			// prefix is resolved rather than assumed to be "xs": a query is
 			// free to bind the XSD namespace to any prefix it likes.
-			prefix, local := "", strings.TrimSpace(a.Value)
+			// xdm.TrimXMLSpace: xsi:type is an xs:QName, whiteSpace
+			// "collapse", so only XML S surrounds the lexical form. A
+			// no-break space is part of the name -- stripping it made
+			// "<NBSP>xs:integer" annotate as xs:integer, a type the document
+			// never named.
+			prefix, local := "", xdm.TrimXMLSpace(a.Value)
 			if i := strings.IndexByte(local, ':'); i >= 0 {
 				prefix, local = local[:i], local[i+1:]
 			}

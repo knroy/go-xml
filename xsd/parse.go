@@ -749,13 +749,13 @@ func (p *parser) checkVersioningAttrs(el *xdm.Node) {
 		// includeElement does: the suite spells minVersion both ways.
 		switch strings.ToLower(a.Name.Local) {
 		case "minversion", "maxversion":
-			if !isDecimalLexical(strings.TrimSpace(a.Value)) {
+			if !isDecimalLexical(trimXMLSpace(a.Value)) {
 				p.errs = append(p.errs, errorAt(el, "src-schema.1",
 					"vc:%s=%q is not an xs:decimal", a.Name.Local, a.Value))
 			}
 		case "typeavailable", "typeunavailable",
 			"facetavailable", "facetunavailable":
-			for _, word := range strings.Fields(a.Value) {
+			for _, word := range splitFields(a.Value) {
 				if _, err := p.resolveQName(el, "vc:"+a.Name.Local, word); err != nil {
 					p.errs = append(p.errs, err)
 					continue
@@ -1043,7 +1043,7 @@ func (p *parser) checkReferenceImported(el *xdm.Node, attr string, name xdm.QNam
 // target namespace is bound to a prefix but not made the default must write
 // type="tns:foo", never type="foo".
 func (p *parser) resolveQName(el *xdm.Node, attr, value string) (xdm.QName, error) {
-	value = strings.TrimSpace(value)
+	value = trimXMLSpace(value)
 	prefix, local := "", value
 	if i := strings.IndexByte(value, ':'); i >= 0 {
 		prefix, local = value[:i], value[i+1:]
@@ -1116,7 +1116,7 @@ func (p *parser) chameleonQName(local string) xdm.QName {
 // would find two distinct saturated values equal; restrict.go consults the
 // exact value where such a comparison is made.
 func occursValue(v string) (int, *big.Int, bool) {
-	v = strings.TrimSpace(v)
+	v = trimXMLSpace(v)
 	if v == "" {
 		return 0, nil, false
 	}
@@ -1280,7 +1280,7 @@ func (p *parser) occurs(el *xdm.Node) (min, max int, err error) {
 		min, p.exactMin = n, exact
 	}
 	if a := el.Attr("", "maxOccurs"); a != nil {
-		v := strings.TrimSpace(a.Value)
+		v := trimXMLSpace(a.Value)
 		if v == "unbounded" {
 			max = Unbounded
 		} else {
@@ -1329,7 +1329,7 @@ func (p *parser) boolAttr(el *xdm.Node, name string, def bool) bool {
 	if a == nil {
 		return def
 	}
-	v := strings.TrimSpace(a.Value)
+	v := trimXMLSpace(a.Value)
 	switch v {
 	case "true", "1":
 		return true
@@ -1343,7 +1343,7 @@ func (p *parser) boolAttr(el *xdm.Node, name string, def bool) bool {
 
 // derivationSet reads a block, final, blockDefault or finalDefault attribute.
 func (p *parser) derivationSet(el *xdm.Node, name string) (DerivationSet, error) {
-	v := strings.TrimSpace(el.AttrValue(name))
+	v := trimXMLSpace(el.AttrValue(name))
 	if v == "" {
 		return 0, nil
 	}
@@ -1374,7 +1374,7 @@ func (p *parser) derivationSet(el *xdm.Node, name string) (DerivationSet, error)
 		(name == "finalDefault" && !blocking)
 
 	var out DerivationSet
-	for _, word := range strings.Fields(v) {
+	for _, word := range splitFields(v) {
 		switch word {
 		case "extension":
 			out = out.With(DerivationExtension)

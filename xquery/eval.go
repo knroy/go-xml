@@ -943,7 +943,14 @@ func evalPITarget(e *compiledExpr, ctx *evalContext) (string, error) {
 	// The value came from an expression rather than from the query text, so
 	// nothing has trimmed it: " name " names the target "name", the way the
 	// name of a computed element does.
-	target := strings.TrimSpace(a.String())
+	//
+	// xdm.TrimXMLSpace, not strings.TrimSpace. The target is an xs:NCName, a
+	// datatype whose whiteSpace facet is "collapse", and XML Schema's
+	// whitespace is exactly #x20 #x9 #xD #xA. strings.TrimSpace uses
+	// unicode.IsSpace, which also matches U+00A0 and the other separators --
+	// those are ordinary characters in a name, so stripping them silently
+	// renamed the target instead of refusing it.
+	target := xdm.TrimXMLSpace(a.String())
 	if !xdm.IsNCName(target) {
 		return "", fmt.Errorf(
 			"XQDY0041: %q is not a valid processing-instruction target",
@@ -1079,7 +1086,13 @@ func evalNodeName(e *compiledExpr, ctx *evalContext, isElement bool) (xdm.QName,
 	// §3.9.3.1 admits either spelling, and either may be surrounded by
 	// whitespace: the value came from an expression, not from the query text,
 	// so nothing has trimmed it yet.
-	lex := strings.TrimSpace(a.String())
+	//
+	// The trim is XML S only. §3.9.3.1 converts the atomized value to an
+	// expanded QName and makes a failed conversion XQDY0074, and xs:QName is
+	// whiteSpace="collapse" -- so a no-break space is PART of the name and
+	// must make that conversion fail. strings.TrimSpace stripped it instead,
+	// and element {"<NBSP>e"} silently constructed <e/>.
+	lex := xdm.TrimXMLSpace(a.String())
 	if uri, local, ok := splitBracedName(lex); ok {
 		if !xdm.IsNCName(local) {
 			return xdm.QName{}, fmt.Errorf(

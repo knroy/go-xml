@@ -587,7 +587,10 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 
 	// xsi:nil permits an empty element where the declaration allows it.
 	if nilAttr := el.Attr(NSInstance, "nil"); nilAttr != nil {
-		val := strings.TrimSpace(nilAttr.Value)
+		// xsi:nil is xs:boolean, whiteSpace="collapse": XML S only. A
+		// no-break space is part of the lexical form and makes it invalid,
+		// where strings.TrimSpace stripped it and honoured the attribute.
+		val := trimXMLSpace(nilAttr.Value)
 		if !decl.Nillable {
 			v.fail(el, "cvc-elt.3.1",
 				"xsi:nil is present but the declaration is not nillable")
@@ -766,7 +769,7 @@ func (v *validator) checkFixedValueConstraint(el *xdm.Node, typ Type, decl *Elem
 
 // resolveXSIType expands an xsi:type value against the namespaces in scope.
 func (v *validator) resolveXSIType(el *xdm.Node, value string) (Type, error) {
-	value = strings.TrimSpace(value)
+	value = trimXMLSpace(value)
 	prefix, local := "", value
 	if i := strings.IndexByte(value, ':'); i >= 0 {
 		prefix, local = value[:i], value[i+1:]
@@ -896,7 +899,11 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 			v.fail(el, "cvc-complex-type.2.1",
 				"element must be empty but has element children")
 		}
-		if s := strings.TrimSpace(el.StringValue()); s != "" {
+		// trimXMLSpace: only XML S is the ignorable whitespace that may
+		// surround content. A no-break space IS character content, so an
+		// element holding one is not empty -- strings.TrimSpace erased it and
+		// validated the element as though it held nothing.
+		if s := trimXMLSpace(el.StringValue()); s != "" {
 			v.fail(el, "cvc-complex-type.2.1",
 				"element must be empty but has character content %q",
 				truncate(s))
@@ -934,7 +941,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 			return nil
 		}
 		if isEmptyContent(t) && v.openContentFor(t) == nil {
-			if s := strings.TrimSpace(el.StringValue()); s != "" {
+			if s := trimXMLSpace(el.StringValue()); s != "" {
 				v.fail(el, "cvc-complex-type.2.1",
 					"element must be empty but has character content %q",
 					truncate(s))

@@ -28,8 +28,21 @@ import (
 // A colon with nothing before it is the case a "prefix != """ guard misses:
 // ":person" splits to an empty prefix, so the prefix goes unchecked and the
 // colon disappears into a QName named "person".
+//
+// The trim is trimXMLSpace, not strings.TrimSpace: xs:QName has
+// whiteSpace="collapse", whose whitespace is exactly XML S -- space, tab,
+// carriage return and newline -- while strings.TrimSpace uses unicode.IsSpace,
+// which also matches U+00A0 and the other Unicode separators.
+//
+// Here that choice does not change which names are refused, because the trim
+// feeds only the colon test and isNCName rejects a no-break space either way.
+// It matters for what the colon test SEES: " :a" is malformed and is caught
+// only because the XML space is removed first, so the trim has to happen --
+// and it must not extend to U+00A0, or "<NBSP>:a" would be read as the
+// well-formed name it is not. The callers' own trims are where the whitespace
+// set decides an answer; this one keeps the helper consistent with them.
 func checkLexicalQName(lex, prefix, local string) error {
-	trimmed := strings.TrimSpace(lex)
+	trimmed := trimXMLSpace(lex)
 	if strings.HasPrefix(trimmed, ":") || strings.HasSuffix(trimmed, ":") {
 		return fmt.Errorf("FOCA0002: %q is not a valid lexical QName", lex)
 	}
@@ -49,7 +62,7 @@ func registerQNameFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		prefix, local := xdm.SplitQName(strings.TrimSpace(lex))
+		prefix, local := xdm.SplitQName(trimXMLSpace(lex))
 		if prefix != "" && uri == "" {
 			return nil, fmt.Errorf("FOCA0002: a prefixed QName requires a non-empty namespace URI")
 		}
@@ -77,7 +90,7 @@ func registerQNameFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		prefix, local := xdm.SplitQName(strings.TrimSpace(lex))
+		prefix, local := xdm.SplitQName(trimXMLSpace(lex))
 		// The first argument is declared xs:string?, not xs:QName, so nothing
 		// has checked its lexical form by the time it arrives. FOCA0002 is
 		// raised before the prefix is looked up because a name like
@@ -354,7 +367,15 @@ func registerURIFuncs(l *Library) {
 			if form, err = argStringRequired(args, 1); err != nil {
 				return nil, err
 			}
-			form = strings.ToUpper(strings.TrimSpace(form))
+			// F&O 5.4.6 defines the effective value of $normalizationForm as
+			// fn:upper-case(fn:normalize-space($normalizationForm)) -- so it
+			// is a collapse, and fn:normalize-space's whitespace is XML S and
+			// nothing wider. strings.TrimSpace stripped U+00A0 too, which made
+			// a form name spelled with a no-break space normalise as if it
+			// were "NFC"; the spec makes that an unrecognised form, so it must
+			// raise FOCH0003 below rather than silently succeed. Collapse also
+			// covers the interior, so "N F C" stays unrecognised.
+			form = strings.ToUpper(collapseXMLSpace(form))
 		}
 		// An empty form name means "no normalisation", which is the one case
 		// that can be honoured exactly.

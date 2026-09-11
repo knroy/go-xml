@@ -436,7 +436,12 @@ func (p *parser) noteFixed(el *xdm.Node, f *FacetSet, kind FacetKind) {
 
 // uintFacet parses a facet value that is an xs:nonNegativeInteger.
 func (p *parser) uintFacet(el *xdm.Node, v string) *uint64 {
-	n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+	// trimXMLSpace, not strings.TrimSpace: a facet value is a lexical form of
+	// xs:nonNegativeInteger, whose whiteSpace facet is "collapse", and XML
+	// Schema's whitespace is XML S alone. A no-break space is a character the
+	// grammar rejects, so trimming it let an invalid facet value silently
+	// become a real bound.
+	n, err := strconv.ParseUint(trimXMLSpace(v), 10, 64)
 	if err != nil {
 		p.errs = append(p.errs, errorAt(el, "",
 			"xs:%s value %q is not a non-negative integer", el.Name.Local, v))
