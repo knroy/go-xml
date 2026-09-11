@@ -228,6 +228,30 @@ var specSignatures = func() map[string][]string {
 	m["deep-equal/3"] = []string{"xs:boolean", "item()*", "item()*", "xs:string"}
 	m["trace/1"] = []string{"item()*", "item()*"}
 	m["trace/2"] = []string{"item()*", "item()*", "xs:string"}
+
+	// The higher-order family, F&O 3.1 16.1 and 16.2, plus the function
+	// reflection of 2.9.
+	//
+	// This is the first family whose parameters are function tests rather
+	// than atomic types, so it is the first to exercise a declared
+	// function(...) spelling at call binding. Every $f here is
+	// non-nullable, as is fn:function-lookup's $name and $arity and
+	// fn:apply's $array, so the empty-sequence arm is live throughout.
+	// fn:sort's $collation is xs:string? -- the one nullable argument in
+	// the family, and deliberately so: an absent collation means the
+	// default, which fn:sort/3's $key cannot say.
+	m["for-each/2"] = []string{"item()*", "item()*", "function(item()) as item()*"}
+	m["filter/2"] = []string{"item()*", "item()*", "function(item()) as xs:boolean"}
+	m["fold-left/3"] = []string{"item()*", "item()*", "item()*", "function(item()*, item()) as item()*"}
+	m["fold-right/3"] = []string{"item()*", "item()*", "item()*", "function(item(), item()*) as item()*"}
+	m["for-each-pair/3"] = []string{"item()*", "item()*", "item()*", "function(item(), item()) as item()*"}
+	m["sort/1"] = []string{"item()*", "item()*"}
+	m["sort/2"] = []string{"item()*", "item()*", "xs:string?"}
+	m["sort/3"] = []string{"item()*", "item()*", "xs:string?", "function(item()) as xs:anyAtomicType*"}
+	m["apply/2"] = []string{"item()*", "function(*)", "array(*)"}
+	m["function-arity/1"] = []string{"xs:integer", "function(*)"}
+	m["function-name/1"] = []string{"xs:QName?", "function(*)"}
+	m["function-lookup/2"] = []string{"function(*)?", "xs:QName", "xs:integer"}
 	return m
 }()
 
