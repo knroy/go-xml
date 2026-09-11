@@ -29,6 +29,11 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | The second presentation modifier `a` and `c` raised `FOFD1340` on valid pictures | `[M1a]` was an error and `[MNna]` silently lost its name presentation and emitted a bare number. All four modifiers the grammar admits are now stripped. | [`93c5e88`][93c5e88] |
 | `fn:default-collation()` reported codepoint whatever the static context said | It ignored its context entirely, so a stylesheet with `default-collation=` got case-blind `contains` and a contradicting `default-collation()`. The URI now travels with the collation from all three hosts. | [`93c5e88`][93c5e88] |
 | `fn:adjust-*-to-timezone` accepted an offset that was not a whole number of minutes | `PT1M30S` was truncated to `+00:01` instead of raising `FODT0003`; the check tested integral seconds where the spec says minutes. | [`93c5e88`][93c5e88] |
+| `fn:serialize` read `indent="true"` as `indent="no"` | `checkYesNo` admitted all six lexical booleans and discarded the normalisation, so five parameters took the affirmative spelling and set the negative. It now returns the normalised value. | [`7ffd7da`][7ffd7da] |
+| `fn:serialize` wrote `standalone="true"` into the XML declaration | XML 1.0 §2.9 admits only `yes` or `no` in an SDDecl, so the output was malformed; `xsl:output` had normalised it all along. | [`7ffd7da`][7ffd7da] |
+| Twelve functions accepted an empty sequence for a parameter the spec declares without `?` | F&O 3.1 makes `()` there `XPTY0004`. `fn:round` was the worst: it neither raised nor returned empty but silently substituted precision 0. | [`7668773`][7668773] |
+| Five attributes accepted values no specification defines | `xsl:function/@visibility` excludes `hidden`, and `@streamability`, `@new-each-time`, `@component` and `xsl:copy-of/@validation` each have a closed set the table did not carry. | [`1b7a25a`][1b7a25a] |
+| `validate` accepted a document node with more than one element child | XQuery 3.1 §3.21 requires exactly one element plus zero or more comments and PIs; the operand was returned unchecked instead of raising `XQDY0061`. | [`7e7c766`][7e7c766] |
 | Forwards compatible processing was decided against a fixed 3.0, so a 2.0 processor rejected a construct it must ignore | §3.9 measures the effective version against the version the processor implements, which `CompileOptions.MaxVersion` sets. | [`187dfec`][187dfec] |
 | Three rooted resolvers checked containment and then opened, so only `xslt` enforced its root at open time | `xsd`, `dtd` and the CLI's RELAX NG resolver open through `os.OpenRoot`; the string check stays as diagnosis, not enforcement. | [`37972d9`][37972d9] |
 | `fn:transform` accepted the `post-process` option and ignored it, so a pipeline silently ran one stage short | The function is applied to every result document after delivery, and an option name the processor does not know is now `FOXT0002` rather than silence. Reported as issue #5. | [`e8ebf4b`][e8ebf4b] |
@@ -691,6 +696,10 @@ here so every entry in this file sits under a release.
 [e511421]: https://github.com/knroy/go-xml/commit/e511421
 [5c17280]: https://github.com/knroy/go-xml/commit/5c17280
 [93c5e88]: https://github.com/knroy/go-xml/commit/93c5e88
+[7668773]: https://github.com/knroy/go-xml/commit/7668773
+[7ffd7da]: https://github.com/knroy/go-xml/commit/7ffd7da
+[1b7a25a]: https://github.com/knroy/go-xml/commit/1b7a25a
+[7e7c766]: https://github.com/knroy/go-xml/commit/7e7c766
 [34908a7]: https://github.com/knroy/go-xml/commit/34908a7
 [187dfec]: https://github.com/knroy/go-xml/commit/187dfec
 [37972d9]: https://github.com/knroy/go-xml/commit/37972d9
