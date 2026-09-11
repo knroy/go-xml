@@ -277,6 +277,38 @@ var specSignatures = func() map[string][]string {
 	m["collation-key/2"] = []string{"xs:base64Binary", "xs:string", "xs:string"}
 	m["environment-variable/1"] = []string{"xs:string?", "xs:string"}
 	m["available-environment-variables/0"] = []string{"xs:string*"}
+
+	// The input and document family, F&O 3.1 13 and 14.5: the functions
+	// that read an external resource and the parse/serialize pair.
+	//
+	// The rows that constrain anything new are the $encoding of
+	// fn:unparsed-text and its two siblings, the $options of
+	// fn:load-xquery-module/2, and fn:load-xquery-module/1's and
+	// fn:transform/1's own argument -- all declared without "?". The $href
+	// and $uri arguments throughout are xs:string?, since an absent URI
+	// selects the default resource rather than being an error, so those
+	// add only the too-many-items arm. fn:serialize/2's $params is
+	// item()?, which is the one row here whose nullability is the point.
+	m["doc/1"] = []string{"document-node()?", "xs:string?"}
+	m["doc-available/1"] = []string{"xs:boolean", "xs:string?"}
+	m["collection/0"] = []string{"item()*"}
+	m["collection/1"] = []string{"item()*", "xs:string?"}
+	m["uri-collection/0"] = []string{"xs:anyURI*"}
+	m["uri-collection/1"] = []string{"xs:anyURI*", "xs:string?"}
+	m["unparsed-text/1"] = []string{"xs:string?", "xs:string?"}
+	m["unparsed-text/2"] = []string{"xs:string?", "xs:string?", "xs:string"}
+	m["unparsed-text-lines/1"] = []string{"xs:string*", "xs:string?"}
+	m["unparsed-text-lines/2"] = []string{"xs:string*", "xs:string?", "xs:string"}
+	m["unparsed-text-available/1"] = []string{"xs:boolean", "xs:string?"}
+	m["unparsed-text-available/2"] = []string{"xs:boolean", "xs:string?", "xs:string"}
+	m["parse-xml/1"] = []string{"document-node(element(*))?", "xs:string?"}
+	m["parse-xml-fragment/1"] = []string{"document-node()?", "xs:string?"}
+	m["parse-ietf-date/1"] = []string{"xs:dateTime?", "xs:string?"}
+	m["serialize/1"] = []string{"xs:string", "item()*"}
+	m["serialize/2"] = []string{"xs:string", "item()*", "item()?"}
+	m["load-xquery-module/1"] = []string{"map(*)", "xs:string"}
+	m["load-xquery-module/2"] = []string{"map(*)", "xs:string", "map(*)"}
+	m["transform/1"] = []string{"map(*)", "map(*)"}
 	return m
 }()
 
