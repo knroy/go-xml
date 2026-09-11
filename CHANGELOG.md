@@ -21,6 +21,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | A nested `fn:transform` began its own item and byte allowances | `newRuntime` mints both counters through `xpath.NewContext`, so every level of a nest got the full `MaxBytes` again while the depth budget inherited; 500 levels charged ~5.5 GB with no refusal. The caller's context is adopted now, each counter with its held flag. | [`9f033e2`][9f033e2] |
+| Every derivation walk was decided by whichever schema loaded last | `instance of`, `castable as`, the `element()` and `attribute()` tests, `fn:id` and XTTE0950 all walked the process-global derivation table, so a second schema reusing a type name silently retyped a node the first had validated. A node now carries the validating schema's `TypeEnvironment` and the walks read it off the node. | [`cdba77a`][cdba77a] |
 | `XTTE1545` was decided by whichever schema loaded last | The walk deciding whether a constructed attribute may be validated against a named type read the process-global derivation table, so a second schema reusing the name overwrote the answer — permissively, letting the validation §19.2 forbids proceed. It now walks the environment of the schema being validated against, which `mergeSchema` carries into the stylesheet's aggregate. | [`1e21828`][1e21828] |
 | `fn:serialize` accepted `indent` and never indented | The parameter had two writes and no reads, so one document indented through `xsl:result-document` and not through `fn:serialize`. Serialization 3.1 §4's rules, including the significant-whitespace and html comment/PI exceptions. | [`34908a7`][34908a7] |
 | A no-namespace `xs:QName` map key named a standard serialization parameter | Serialization 3.1 §3 gives parameter names as `xs:string`, reserving `xs:QName` with a non-absent namespace for implementation-defined ones. The key was compared with `String()`, so `QName('','indent')` matched `indent`. | [`34908a7`][34908a7] |
@@ -717,6 +718,7 @@ here so every entry in this file sits under a release.
 [e511421]: https://github.com/knroy/go-xml/commit/e511421
 [5c17280]: https://github.com/knroy/go-xml/commit/5c17280
 [9f033e2]: https://github.com/knroy/go-xml/commit/9f033e2
+[cdba77a]: https://github.com/knroy/go-xml/commit/cdba77a
 [1e21828]: https://github.com/knroy/go-xml/commit/1e21828
 [93c5e88]: https://github.com/knroy/go-xml/commit/93c5e88
 [6eacc2d]: https://github.com/knroy/go-xml/commit/6eacc2d

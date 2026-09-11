@@ -1164,11 +1164,39 @@ and facets still apply to the substituted type.
   be made to load unbounded *distinct* schemas grows this without bound; one
   that replays the same schemas does not.
 - The semantic risk of a shared registry — two schemas defining `{uri}T`
-  differently, so a node atomises as whichever loaded last — is mitigated
-  separately, by recording the resolved typing on the node at validation time:
-  `xdm.Node.DerivedPrimitive`, `UnionMember` and `ListItem` are a per-node
-  override of the global answer. See the commentary on those fields in
-  `xdm/node.go`.
+  differently, so a node atomises as whichever loaded last — is closed in two
+  layers. The first records the resolved typing on the node at validation
+  time: `xdm.Node.DerivedPrimitive`, `UnionMember` and `ListItem` are a
+  per-node override of the global answer, and they settle atomisation.
+- The second closes everything atomisation does not. A question like "is this
+  an instance of that type", "is this annotation derived from `xs:QName`", or
+  "what does the type two links up erase to" has to WALK a derivation chain,
+  and a chain is a table rather than a single fact, so no node field can hold
+  it. A schema now owns an `xdm.TypeEnvironment` (`xsd.Schema.TypeEnv()`), and
+  every node it validates carries a reference to that environment. The by-name
+  consumers read it through `xdm.TypeEnvOf(n)` and `xdm.TypeEnvOfAtomic(a)`
+  instead of the process-global table: `instance of` and `castable as`, the
+  `element()` and `attribute()` tests, `fn:id` and `fn:idref`, `xsl:copy`'s
+  namespace-sensitivity check (XTTE0950), and `xsl:validate`'s XTTE1545. The
+  aggregate schemas that `xsl:import-schema` and XQuery's `import schema`
+  build merge the imported environments alongside the components, so an
+  imported type keeps knowing what it restricts.
+- The node holds a strong reference to the environment, which is also the
+  retention rule: an environment becomes collectable exactly when the last
+  node depending on it does, and nothing evicts from one. Evicting an entry a
+  live node still depends on would turn a correct answer into a wrong one at
+  an arbitrary later moment, which is strictly worse than the memory it would
+  save.
+- **One reach is deliberately left on the global table.** `xpath/subtype.go`
+  relates two type SPELLINGS written in the query text — a declared function
+  signature against a sequence type — with no node and no atomic value in
+  hand, and the static context carries no environment. It cannot be handed a
+  schema either: `xsd` imports `xpath`, because assertions and selectors
+  contain XPath expressions, so the dependency cannot run the other way.
+  Answering one of these wrongly needs two schemas defining the same lexical
+  name differently AND a signature naming it. Closing it means giving the
+  static context an environment of its own; the four reads are marked in the
+  file.
 - The `xpath` regex cache is bounded at 1024, as is the backtracking engine's
   single-character-atom cache; the UCA collation cache is bounded at 256. All
   three hold their bound under concurrent use, not merely on a single goroutine:
@@ -1279,7 +1307,7 @@ than as a description.
 
 **Sixth audit.**
 
-- **A second schema silently retyped a document the first had validated** — false accept, process-global type registries. `DerivedPrimitive` and `ListItem` are recorded on the node now. See CHANGELOG. *(One gap remains; see* Current status *above.)*
+- **A second schema silently retyped a document the first had validated** — false accept, process-global type registries. `DerivedPrimitive` and `ListItem` are recorded on the node now, and the derivation WALKS that those fields could not cover read the validating schema's `xdm.TypeEnvironment` off the node. See CHANGELOG. *(One reach is deliberately left on the global table; see* Concurrency and retention *above.)*
 - **A circular type longer than 4096 links loaded clean** — false accept, `checkTypeBaseCycles` counter, now a visited set. See CHANGELOG.
 - **A decimal with more than 4096 fraction digits passed a `fractionDigits` or
   `totalDigits` facet it violates** — false accept, `countDigits`'s
