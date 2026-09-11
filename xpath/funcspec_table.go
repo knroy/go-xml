@@ -329,6 +329,33 @@ var specSignatures = func() map[string][]string {
 	m["xml-to-json/2"] = []string{"xs:string?", "node()?", "map(*)"}
 	m["random-number-generator/0"] = []string{"map(xs:string, item())"}
 	m["random-number-generator/1"] = []string{"map(xs:string, item())", "xs:anyAtomicType?"}
+
+	// The context, boolean and error family, F&O 3.1 7.1, 8.1, 14.6 and
+	// 5.3.3 -- the rows that remain once the regex and format-* groups are
+	// set aside.
+	//
+	// Most of these declare no parameters at all: the context accessors and
+	// the two boolean constants take nothing, so their call-binding row can
+	// only ever succeed. They are here so the family is complete rather
+	// than only the part that refuses something. The rows that do constrain
+	// are fn:error/2's $description and /3's $error-object, and
+	// fn:contains-token's $token and $collation, all declared without "?".
+	// fn:error's $code is xs:QName? -- nullable, because fn:error() with no
+	// code is legal and raises FOER0000.
+	m["true/0"] = []string{"xs:boolean"}
+	m["false/0"] = []string{"xs:boolean"}
+	m["position/0"] = []string{"xs:integer"}
+	m["last/0"] = []string{"xs:integer"}
+	m["current-date/0"] = []string{"xs:date"}
+	m["current-time/0"] = []string{"xs:time"}
+	m["current-dateTime/0"] = []string{"xs:dateTimeStamp"}
+	m["implicit-timezone/0"] = []string{"xs:dayTimeDuration"}
+	m["error/0"] = []string{"none"}
+	m["error/1"] = []string{"none", "xs:QName?"}
+	m["error/2"] = []string{"none", "xs:QName?", "xs:string"}
+	m["error/3"] = []string{"none", "xs:QName?", "xs:string", "item()*"}
+	m["contains-token/2"] = []string{"xs:boolean", "xs:string*", "xs:string"}
+	m["contains-token/3"] = []string{"xs:boolean", "xs:string*", "xs:string", "xs:string"}
 	return m
 }()
 
