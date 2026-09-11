@@ -1454,7 +1454,12 @@ func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error
 		// collation-taking functions use when given no collation argument.
 		if r.collation != "" {
 			if coll, err := xpath.ResolveCollation(r.collation); err == nil {
-				c = c.WithDefaultCollation(coll)
+				// The URI travels with the collation because
+				// fn:default-collation() has to report it: section 15.7
+				// returns "the value of the default collation property from
+				// the static context", and a Collation value cannot be
+				// turned back into the URI that named it.
+				c = c.WithDefaultCollationURI(coll, r.collation)
 			}
 		}
 		// XSLT 1.0 backwards compatibility is static in the same way, and

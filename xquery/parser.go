@@ -661,7 +661,23 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		if err != nil {
 			return nil, err
 		}
-		c = c.WithDefaultCollation(coll)
+		// The URI travels with the collation so that fn:default-collation()
+		// reports the declared default rather than the codepoint fallback.
+		//
+		// It is reported in its ABSOLUTE form. XQuery 3.1 lets the
+		// declaration name a relative URI, which is resolved against the
+		// static base URI, and fn:default-collation() returns the collation
+		// property of the static context -- the resolved value, not the
+		// characters the prolog happened to write. K-CollationProlog-1
+		// declares base-uri "http://www.w3.org/2005/xpath-functions/" with
+		// default collation "collation/codepoint" and compares the result
+		// against the absolute form.
+		//
+		// ResolveCollation tolerates the relative spelling by matching a URI
+		// tail, so it answers with the right collation and no absolute URI:
+		// the resolution has to happen here, where the base URI is in scope.
+		c = c.WithDefaultCollationURI(coll,
+			resolveBase(p.sc.baseURI, p.sc.defaultCollation))
 	}
 	return &compiledExpr{src: src, xpc: c, sc: p.sc, ops: opsOut}, nil
 }

@@ -377,8 +377,18 @@ func registerURIFuncs(l *Library) {
 			"FOCH0003: Unicode normalisation form %q is not supported", form)
 	})
 
-	l.registerFn("default-collation", []int{0}, func(_ *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
-		return strSeq("http://www.w3.org/2005/xpath-functions/collation/codepoint"), nil
+	// F&O 3.0 15.7 (functions-and-operators-rec30.xml:26642): "Returns the
+	// value of the default collation property from the static context." It
+	// returned a hardcoded codepoint URI and ignored its context, so a
+	// stylesheet with [xsl:]default-collation set got an answer that
+	// contradicted the collation its own fn:contains and fn:compare were
+	// using. Empty means nothing was set, and codepoint is then the default
+	// the spec states.
+	l.registerFn("default-collation", []int{0}, func(ctx *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
+		if ctx != nil && ctx.collationURI != "" {
+			return strSeq(ctx.collationURI), nil
+		}
+		return strSeq(CodepointCollation), nil
 	})
 }
 

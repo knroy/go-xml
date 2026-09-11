@@ -137,6 +137,12 @@ type Context struct {
 	// however deep in the two sequences that is.
 	collation Collation
 
+	// collationURI is the URI that named collation, when the default came
+	// from the static context. fn:default-collation returns it; every other
+	// collation-taking function needs only the Collation value. Empty means
+	// the codepoint collation, which is the default the spec states.
+	collationURI string
+
 	// ImplicitTimezone is the offset in minutes applied to date/time values
 	// that carry no timezone. The spec requires the dynamic context to supply
 	// one; defaulting to UTC keeps results reproducible across machines,

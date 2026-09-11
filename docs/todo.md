@@ -17,7 +17,7 @@ Current position:
 | XSLT 3.0 | 99.70% — 11,484 of 11,518 in scope (34 failing); 14 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,098 `func Test` declarations, clean under `-race` |
+| Tests | 2,111 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -78,8 +78,28 @@ reaches the XML declaration there, which it did not before.
 `undeclare-prefixes` is not the only one, but **`indent` is now honoured**:
 Serialization 3.1 §4's rules, including the significant-whitespace rule and
 the html comment/PI exception, so a document indents the same way through
-`fn:serialize` as through `xsl:result-document`. What remains parsed and
-unread there is **`normalization-form`** and **`include-content-type`**.
+`fn:serialize` as through `xsl:result-document`.
+
+A later drift audit closed three more. **`doctype-public`, `doctype-system`
+and `escape-uri-attributes`** had no field to write to at all, so a requested
+doctype was never emitted and a URI attribute went unescaped even though the
+parameter defaults to `yes` (`xslt-rec20.xml:26434`). All three are now read,
+the URI escaping ported verbatim from `xslt/serialize.go` so the two
+serialisers cannot disagree. **`suppress-indentation`** was fixed in the same
+pass and was wrong in a way the audit had not predicted: it suppressed
+indentation document-wide, where `serialize-xml-108` requires the named
+element to keep its own indentation and only its content to be spared.
+
+What remains parsed and unread is **`normalization-form`** and
+**`include-content-type`**.
+
+**`byte-order-mark` and `media-type` are deliberately not implemented** for
+`fn:serialize`, which is a different thing from unread. F&O 3.0
+(`functions-and-operators-rec30.xml:26192`) says of this function that "the
+final stage of serialization, that is, encoding, is skipped", and the function
+returns an `xs:string`: there is no octet stream for a byte-order mark to
+precede or a media type to label. `xsl:output`, which does write bytes,
+honours both. Revisit only if a byte-returning entry point is added.
 
 Fixing `indent` exposed a second defect the inertness had hidden: a
 no-namespace `xs:QName` map key was matching a standard parameter name.

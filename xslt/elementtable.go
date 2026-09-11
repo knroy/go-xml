@@ -183,11 +183,19 @@ var xsltElements = map[string]elementDef{
 		// accumulator-053 writes it.
 		"applies-to": {},
 	}},
+	// The summary at xslt-lcwd30.xml:22181 names three attributes and no
+	// more: match, phase? and select?. @priority was accepted here and is
+	// defined nowhere -- no prose associates it with xsl:accumulator-rule,
+	// and no suite case writes it -- so it silently swallowed a misspelling
+	// of @phase instead of raising XTSE0090.
+	//
+	// The suite's schema is stale on this element rather than authoritative:
+	// it also omits @select, which both the summary and this table have. So
+	// the LCWD summary is taken as primary and @priority is dropped.
 	"accumulator-rule": {since30: true, attrs: map[string]attrDef{
-		"match":    {required: true},
-		"phase":    {values: []string{"start", "end"}},
-		"select":   {},
-		"priority": {},
+		"match":  {required: true},
+		"phase":  {values: []string{"start", "end"}},
+		"select": {},
 	}},
 	"template": {attrs: map[string]attrDef{
 		"match":    {},
@@ -292,6 +300,24 @@ var xsltElements = map[string]elementDef{
 		// seventy files.
 		"visibility":    {since30: true},
 		"streamability": {since30: true},
+		// The third member of the same summary, missed when the two above
+		// were added. xslt-lcwd30.xml:14648 types it
+		// identity-sensitive? = boolean; 10.3.7 (lines 14923-14929) says
+		// "the attribute identity-sensitive=\"no\" may be specified (the
+		// default is yes)", and the override-compatibility rule at 4574-4575
+		// reads it back: "If the overridden function specifies
+		// identity-sensitive=\"no\" then the overriding function also
+		// specifies identity-sensitive=\"no\"."
+		//
+		// processor30 for the reason @new-each-time and @cache beside it
+		// are: it says what the processor may do with a call rather than
+		// what the module's grammar contains. Accepted and ignored -- it
+		// licenses optimizations this engine does not perform, and 10.3.7
+		// makes it an assertion by the author rather than a request.
+		"identity-sensitive": {
+			processor30: true,
+			values:      []string{"yes", "no", "true", "false", "1", "0"},
+		},
 		// 3.0 renamed @override to @override-extension-function and added
 		// @new-each-time, which says whether two calls with the same
 		// arguments may share one result.
@@ -315,9 +341,35 @@ var xsltElements = map[string]elementDef{
 		// is ruinous. function-1031 computes fib(92) by naive double
 		// recursion, which is some 2^92 calls without memoisation and
 		// finishes instantly with it.
+		// The enumeration is the UNION of two sources that disagree.
+		//
+		// The prose is unambiguous. xslt-lcwd30.xml:14648 types it
+		// cache? = "full" | "partial" | "no", and 10.3.8 (lines 14963-14970)
+		// spells out all three: "The default value is cache=\"no\".", "The
+		// value cache=\"full\" encourages the processor to retain memory of
+		// all previous calls", "The value cache=\"partial\" encourages the
+		// processor to retain such memory but to discard results if
+		// necessary".
+		//
+		// The W3C suite writes something else. Its schema-for-xslt30.xsd:803
+		// types @cache as xsl:yes-or-no, and nine stylesheets write
+		// cache="yes" -- function-1031, -1034 and -1035 among them.
+		// function-1031 computes fib(92) by naive double recursion and
+		// asserts /out = "7540113804746346429", which is reachable only if
+		// the hint is honoured.
+		//
+		// Listing only the spec's three would reject those nine; listing
+		// only the suite's two would reject a conforming cache="full". Since
+		// @cache is an optimization hint the processor "can use or ignore at
+		// its discretion" (10.3.8), accepting a name from either vocabulary
+		// costs nothing and rejecting one costs a conforming stylesheet. So
+		// both are admitted, and compile.go maps the memoising values onto
+		// the same machinery through cacheMemoises.
 		"cache": {
 			processor30: true,
-			values:      []string{"yes", "no", "true", "false", "1", "0"},
+			values: []string{
+				"full", "partial", "no",
+				"yes", "true", "false", "1", "0"},
 		},
 	}},
 	"namespace-alias": {attrs: map[string]attrDef{
@@ -434,9 +486,23 @@ var xsltElements = map[string]elementDef{
 	// than being told xsl:merge is an element it may use.
 	"merge": {since30: true, attrs: map[string]attrDef{}},
 	"merge-source": {since30: true, attrs: map[string]attrDef{
-		"name":            {},
-		"for-each-item":   {},
+		"name":          {},
+		"for-each-item": {},
+		// Both spellings, because the two sources disagree and the runtime
+		// already reads either one (streaminstructions.go:2096, 2159).
+		//
+		// for-each-source is the Recommendation's name and the one the suite
+		// uses: its schema declares it and 56 files write it. But the
+		// vendored Last Call draft never uses that name -- it says
+		// for-each-stream 33 times (xslt-lcwd30.xml:19881 types it in the
+		// summary, and XTSE3195 at 19904-19910 is written entirely in terms
+		// of it) -- and 6 suite files write the draft's spelling.
+		//
+		// Accepting only one rejects conforming stylesheets written against
+		// the other, so both are listed rather than one swapped for the
+		// other.
 		"for-each-source": {},
+		"for-each-stream": {},
 		// The summary types select without a "?", so it is required: with no
 		// anchor there is nothing else an xsl:merge-source could select, and
 		// merge-032b writes one without it and requires XTSE0010.

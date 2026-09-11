@@ -35,6 +35,13 @@ type Compiled struct {
 	// [xsl:]default-collation sets and which is static for the same reason
 	// the base URI is: it is written in the stylesheet.
 	staticCollation Collation
+	// staticCollationURI is the URI that named staticCollation, kept because
+	// fn:default-collation must return the URI and a Collation value cannot
+	// be turned back into one: a host-registered collation is the embedder's
+	// own type. F&O 3.0 15.7 (functions-and-operators-rec30.xml:26642):
+	// "Returns the value of the default collation property from the static
+	// context."
+	staticCollationURI string
 	// compat is XPath 1.0 compatibility mode, which XSLT 3.8 turns on for the
 	// expressions written within an element whose effective [xsl:]version is
 	// below 2.0. It is static, so it belongs here rather than on the Context.
@@ -52,11 +59,20 @@ type Compiled struct {
 // WithDefaultCollation returns a copy of c whose functions use coll when no
 // collation argument is given.
 func (c *Compiled) WithDefaultCollation(coll Collation) *Compiled {
+	return c.WithDefaultCollationURI(coll, "")
+}
+
+// WithDefaultCollationURI is WithDefaultCollation that also records the URI
+// that named coll, which is what fn:default-collation reports. A caller that
+// resolved a URI to get coll should use this, because the URI cannot be
+// recovered from the Collation value afterwards.
+func (c *Compiled) WithDefaultCollationURI(coll Collation, uri string) *Compiled {
 	if c == nil || coll == nil {
 		return c
 	}
 	n := *c
 	n.staticCollation = coll
+	n.staticCollationURI = uri
 	return &n
 }
 
@@ -197,6 +213,7 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 		sub.Version = c.version
 		if c.staticCollation != nil {
 			sub.collation = c.staticCollation
+			sub.collationURI = c.staticCollationURI
 		}
 		// The compiled expression's mode is authoritative in both
 		// directions. A 2.0 expression evaluated from inside a 1.0 scope --

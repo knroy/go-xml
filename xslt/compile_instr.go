@@ -1746,7 +1746,9 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// under the codepoint collation and answers false three times.
 	if i.ns.collation != "" {
 		if coll, cerr := xpath.ResolveCollation(i.ns.collation); cerr == nil {
-			comp = comp.WithDefaultCollation(coll)
+			// The URI is carried too, so fn:default-collation() inside the
+			// evaluated expression reports the collation actually in force.
+			comp = comp.WithDefaultCollationURI(coll, i.ns.collation)
 		}
 	}
 

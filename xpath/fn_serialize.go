@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -75,6 +77,20 @@ func registerSerialize(l *Library) {
 		// matched, since a prefix is not part of the element's identity.
 		if opts.method == "html" && serializesHTMLDocument(seqArg(args, 0)) {
 			sb.WriteString("<!DOCTYPE html>\n")
+		}
+		// A document type declaration, when either external identifier was
+		// given. XSLT 2.0 (xslt-rec20.xml:26420-26431) gives doctype-system
+		// and doctype-public their effect; both were accepted and ignored, so
+		// the caller's DTD reference vanished from the output.
+		//
+		// It is written only for the XML-family methods. The html method has
+		// its own bare HTML5 declaration above, and writing a second one
+		// would produce two.
+		if (opts.method == "xml" || opts.method == "xhtml") &&
+			(opts.doctypeSystem != "" || opts.doctypePublic != "") {
+			if name := documentElementName(seqArg(args, 0)); name != "" {
+				writeDoctype(&sb, name, opts)
+			}
 		}
 		if opts.method == "xml" && (!opts.omitXMLDecl || opts.standalone != "") {
 			sb.WriteString(`<?xml version="` + xmlDeclVersion(opts.version) +
@@ -145,12 +161,39 @@ func serializesHTMLDocument(seq xdm.Sequence) bool {
 
 // serializeOptions are the serialization parameters this implementation reads.
 type serializeOptions struct {
-	method         string
-	omitXMLDecl    bool
-	indent         bool
-	itemSeparator  string
-	hasItemSep     bool
-	suppressIndent bool
+	method        string
+	omitXMLDecl   bool
+	indent        bool
+	itemSeparator string
+	hasItemSep    bool
+	// suppressIndent names the elements whose children are not indented.
+	// XSLT 2.0 section 20 (testdata/xslt30-test/specs/xslt-rec20.xml:26449)
+	// gives the parameter a list of element names, and the effect is
+	// per-element: the named element is still indented where it sits, only
+	// the content inside it is left exactly as it was. QT3 serialize-xml-008
+	// and -108 pin both halves at once -- "\n\s+<p>" must match, because <p>
+	// is named and still indented, while "\n\s+<code>" must not, because
+	// <code> is <p>'s child. A single bool covering the whole document could
+	// not express that: suppressing everything stops <p> being indented too.
+	// The key drops the prefix, as cdataElements does, because QName equality
+	// is namespace URI plus local name.
+	suppressIndent map[xdm.QName]bool
+	// doctypePublic and doctypeSystem are the external identifiers written in
+	// a document type declaration ahead of the output. XSLT 2.0
+	// (xslt-rec20.xml:26420-26431) gives each one its normative effect: "The
+	// value of the doctype-system attribute provides the value of the
+	// doctype-system parameter to the serialization method." Both sat in an
+	// accept-and-ignore arm, so serialize(<a/>, map{"doctype-system":"a.dtd"})
+	// returned "<a/>" and the caller's DTD reference vanished silently.
+	doctypePublic string
+	doctypeSystem string
+	// escapeURIAttrs percent-escapes the non-ASCII characters in a URI-valued
+	// attribute under the html and xhtml methods. XSLT 2.0
+	// (xslt-rec20.xml:26434-26439): "The default value is yes." It is a
+	// pointer so that "not given" keeps that default while an explicit no
+	// turns it off -- a plain bool would have defaulted to off and silently
+	// inverted the spec.
+	escapeURIAttrs *bool
 	// standalone is the value of the standalone parameter, "" when it was not
 	// given. It appears in the XML declaration, so asking for it also forces
 	// the declaration to be written.
@@ -430,20 +473,54 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				}
 				opts.allowDuplicateNames = val == "yes"
 			case "suppress-indentation":
-				// Any non-empty list of element names suppresses indentation
-				// for those elements. This serialiser does not track which
-				// element is which across the recursive walk, so it takes the
-				// conservative reading the spec permits: a named element must
-				// not be re-indented, and suppressing the whole document
-				// never re-indents one that was named. Recorded rather than
-				// ignored, which is what it was before.
-				opts.suppressIndent = strings.TrimSpace(val) != ""
+				// A whitespace-separated list of lexical element names,
+				// resolved against the namespaces in scope on the parameter
+				// element exactly as cdata-section-elements is: an
+				// unresolvable prefix names no element, and dropping it
+				// silently is how a caller comes to believe indentation was
+				// suppressed where it was not.
+				//
+				// It used to collapse to a single bool -- "any non-empty list
+				// suppresses everything" -- which QT3 serialize-xml-008
+				// contradicts: it asks for "\n\s+<p>" to match with
+				// suppress-indentation="p", so the named element keeps its own
+				// indentation and only its content is left alone.
+				for _, name := range strings.Fields(val) {
+					qn, err := cdataQName(p, name)
+					if err != nil {
+						return opts, err
+					}
+					if opts.suppressIndent == nil {
+						opts.suppressIndent = map[xdm.QName]bool{}
+					}
+					opts.suppressIndent[qn] = true
+				}
+			case "doctype-public":
+				// xslt-rec20.xml:26425-26431. Written ahead of the output by
+				// writeDoctype; see serializeOptions.doctypePublic.
+				opts.doctypePublic = val
+			case "doctype-system":
+				// xslt-rec20.xml:26420-26424.
+				opts.doctypeSystem = val
+			case "escape-uri-attributes":
+				// xslt-rec20.xml:26434-26439, "The default value is yes."
+				if err := checkYesNo(val, p.Name.Local); err != nil {
+					return opts, err
+				}
+				v := val == "yes"
+				opts.escapeURIAttrs = &v
 			case "media-type",
-				"doctype-public", "doctype-system",
 				"normalization-form",
-				"byte-order-mark", "escape-uri-attributes", "include-content-type":
-				// Recognised and accepted; this serialiser does not vary its
-				// output for them.
+				"byte-order-mark", "include-content-type":
+				// Recognised and accepted. byte-order-mark and media-type
+				// describe an octet stream that fn:serialize never produces:
+				// F&O 3.0 14.7.2 (functions-and-operators-rec30.xml:26192)
+				// says "The final stage of serialization, that is, encoding,
+				// is skipped" and the function returns an xs:string, while
+				// xslt-rec20.xml:26373 defines the byte order mark as bytes
+				// written "at the start of the file". There is no file and no
+				// encoding here, so neither parameter has anything to act on.
+				// xsl:output, which does write bytes, honours both.
 			default:
 				// Includes use-character-maps, a real parameter this
 				// implementation does not support. The spec makes an
@@ -664,7 +741,17 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions, dept
 			sb.WriteString(" ")
 			sb.WriteString(elementName(a))
 			sb.WriteString(`="`)
-			sb.WriteString(escapeAttr(a.Value))
+			// A URI-valued attribute under the html or xhtml method has its
+			// non-ASCII characters percent-escaped. XSLT 2.0
+			// (xslt-rec20.xml:26434-26439) gives escape-uri-attributes the
+			// default "yes", and xslt/serialize.go has done this all along --
+			// so the two serialisers disagreed on identical input until now.
+			if opts.escapesURIAttrs() && (opts.method == "html" || opts.method == "xhtml") &&
+				isURIAttribute(n.Name.Local, a) {
+				sb.WriteString(escapeAttr(escapeURIAttribute(a.Value)))
+			} else {
+				sb.WriteString(escapeAttr(a.Value))
+			}
 			sb.WriteString(`"`)
 		}
 		// An empty head still receives the encoding declaration, so it cannot
@@ -702,7 +789,13 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions, dept
 		// the content, so a newline inserted there is one the document did
 		// not have. Both rules are xslt/serialize.go's, kept identical so the
 		// same document indents the same way through either serialiser.
-		indentChildren := opts.indent && !opts.suppressIndent && !hasTextChild(n)
+		// suppress-indentation names THIS element, so its content is written
+		// exactly as it stands. The element itself is still indented where it
+		// sits -- that is decided by its parent, one level up -- which is
+		// what QT3 serialize-xml-008 and -108 assert by requiring
+		// "\n\s+<p>" to match while "\n\s+<code>" does not.
+		indentChildren := opts.indent && !hasTextChild(n) &&
+			!opts.suppressIndent[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}]
 		if indentChildren && opts.method == "html" && hasCommentOrPIChild(n) {
 			indentChildren = false
 		}
@@ -854,6 +947,133 @@ func escapeText(s string) string {
 	r := strings.NewReplacer(
 		"&", "&amp;", "<", "&lt;", ">", "&gt;", "\r", "&#xD;")
 	return r.Replace(s)
+}
+
+// escapesURIAttrs reports whether URI-valued attributes are percent-escaped.
+//
+// XSLT 2.0 (testdata/xslt30-test/specs/xslt-rec20.xml:26434-26439): "The
+// default value is yes." Absent means yes, which is why the field is a
+// pointer rather than a bool.
+func (o serializeOptions) escapesURIAttrs() bool {
+	return o.escapeURIAttrs == nil || *o.escapeURIAttrs
+}
+
+// documentElementName returns the name the document type declaration must
+// name, which is the element the declaration precedes.
+//
+// XML's grammar makes the DOCTYPE name match the document element, so a
+// sequence with no element to be the document element gets no declaration at
+// all rather than one naming nothing.
+func documentElementName(seq xdm.Sequence) string {
+	for _, it := range seq {
+		n, ok := it.(*xdm.Node)
+		if !ok {
+			continue
+		}
+		switch n.Kind {
+		case xdm.KindElement:
+			return elementName(n)
+		case xdm.KindDocument:
+			for _, c := range n.Children {
+				if c.Kind == xdm.KindElement {
+					return elementName(c)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// writeDoctype writes the document type declaration.
+//
+// The shape is XML's: PUBLIC takes both identifiers and SYSTEM only the
+// system one. A public identifier alone cannot be written under an XML-family
+// method -- the grammar puts the system literal after PUBLIC and makes it
+// required -- so it degrades to the SYSTEM form's absence rather than
+// producing markup no parser would accept. This mirrors
+// xslt/serialize.go's writeDoctypeFor, so both serialisers write the same
+// declaration for the same parameters.
+func writeDoctype(sb *strings.Builder, name string, opts serializeOptions) {
+	if opts.doctypeSystem == "" {
+		return
+	}
+	sb.WriteString("<!DOCTYPE " + name)
+	if opts.doctypePublic != "" {
+		sb.WriteString(" PUBLIC " + quoteExternalID(opts.doctypePublic))
+	} else {
+		sb.WriteString(" SYSTEM")
+	}
+	sb.WriteString(" " + quoteExternalID(opts.doctypeSystem) + ">\n")
+}
+
+// quoteExternalID wraps an external identifier in quotes it does not itself
+// contain. XML gives these literals no escaping mechanism, so a value holding
+// a double quote has to be delimited with single quotes instead.
+func quoteExternalID(v string) string {
+	if strings.Contains(v, `"`) {
+		return "'" + v + "'"
+	}
+	return `"` + v + `"`
+}
+
+// uriAttributes are the attributes the HTML DTD declares with type URI, whose
+// values the html and xhtml methods percent-escape. Keyed by element name,
+// the same table xslt/serialize.go carries.
+var uriAttributes = map[string]map[string]bool{
+	"a":          {"href": true, "name": true},
+	"applet":     {"codebase": true, "archive": true},
+	"area":       {"href": true},
+	"base":       {"href": true},
+	"blockquote": {"cite": true},
+	"body":       {"background": true},
+	"del":        {"cite": true},
+	"form":       {"action": true},
+	"frame":      {"src": true, "longdesc": true},
+	"head":       {"profile": true},
+	"iframe":     {"src": true, "longdesc": true},
+	"img":        {"src": true, "longdesc": true, "usemap": true},
+	"input":      {"src": true, "usemap": true},
+	"ins":        {"cite": true},
+	"link":       {"href": true},
+	"object":     {"classid": true, "codebase": true, "data": true, "usemap": true, "archive": true},
+	"q":          {"cite": true},
+	"script":     {"src": true, "for": true},
+}
+
+// isURIAttribute reports whether an attribute carries a URI.
+func isURIAttribute(element string, a *xdm.Node) bool {
+	if a.Name.URI != "" {
+		return false
+	}
+	attrs, ok := uriAttributes[strings.ToLower(element)]
+	if !ok {
+		return false
+	}
+	return attrs[strings.ToLower(a.Name.Local)]
+}
+
+// escapeURIAttribute percent-escapes the characters a URI cannot hold.
+//
+// Only non-ASCII characters are escaped, which is what XSLT 1.0 section 16.2
+// and the Serialization Recommendation delegate to HTML 4.0 appendix B.2.1
+// for: "characters ... outside the range of US-ASCII" and nothing else. The
+// value is put into NFC first, as RFC 3987 section 3.1 requires, so a
+// decomposed and a precomposed spelling escape to the same bytes. This is
+// xslt/serialize.go's function, ported so the two agree.
+func escapeURIAttribute(v string) string {
+	v = norm.NFC.String(v)
+	var sb strings.Builder
+	sb.Grow(len(v))
+	for _, r := range v {
+		if r < 0x80 {
+			sb.WriteRune(r)
+			continue
+		}
+		for _, b := range []byte(string(r)) {
+			fmt.Fprintf(&sb, "%%%02X", b)
+		}
+	}
+	return sb.String()
 }
 
 // escapeAttr escapes the characters that may not appear in an attribute value.
@@ -1095,13 +1315,61 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 				return err
 			}
 			opts.undeclarePrefixes = v
-		case "media-type", "doctype-public",
-			"doctype-system", "normalization-form",
-			"byte-order-mark", "escape-uri-attributes",
-			"include-content-type", "suppress-indentation",
+		case "suppress-indentation":
+			// The value is a sequence of QNames, so the names arrive already
+			// resolved; the element form takes lexical names instead. This
+			// was on the ignore list while the element form acted on it, so
+			// the same request answered differently depending on which
+			// spelling was used -- QT3 serialize-xml-108 is the map-form
+			// case, and it asserts the same three things as -008.
+			for _, it := range val {
+				a, ok := it.(*xdm.Atomic)
+				if !ok || a.Type != xdm.TypeQName {
+					return xdm.ErrType(
+						"XPTY0004: suppress-indentation takes QNames")
+				}
+				if opts.suppressIndent == nil {
+					opts.suppressIndent = map[xdm.QName]bool{}
+				}
+				if qn := a.QName(); qn != nil {
+					opts.suppressIndent[xdm.QName{URI: qn.URI, Local: qn.Local}] = true
+				}
+			}
+		case "doctype-public":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.doctypePublic = v
+		case "doctype-system":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.doctypeSystem = v
+		case "escape-uri-attributes":
+			// Typed here, as every boolean in the map form is.
+			v, err := boolParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.escapeURIAttrs = &v
+		case "media-type", "normalization-form",
+			"byte-order-mark", "include-content-type",
 			"html-version", "parameter-document":
-			// Recognised and accepted; this serialiser does not vary its
-			// output for them.
+			// Recognised and accepted. See the element form's arm for why
+			// byte-order-mark and media-type cannot act on a returned string.
+			//
+			// html-version and parameter-document are accepted rather than
+			// refused because both are real parameters this serialiser has
+			// nothing to do with. html-version selects between HTML 4 and 5
+			// doctype spellings, and the only doctype this method writes on
+			// its own is the bare HTML5 one it already writes. A
+			// parameter-document is resolved by the caller that reads the
+			// document; by the time parameters reach here they are values,
+			// and there is no base URI in an XPath static context to resolve
+			// one against. Refusing them would turn a legal request into
+			// SEPM0017.
 		default:
 			return fmt.Errorf(
 				"SEPM0017: serialization parameter %q is not supported", name)

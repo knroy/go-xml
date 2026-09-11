@@ -1611,8 +1611,14 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 		// Only the explicit "no" obliges anything on the first: 10.3's
 		// default is "maybe", under which reusing a result and recomputing it
 		// are both allowed.
+		//
+		// The hint is read through cacheMemoises rather than isYes because
+		// the spec's spelling of "cache this" is cache="full" (10.3.8,
+		// xslt-lcwd30.xml:14963-14970) while the suite's is cache="yes".
+		// isYes matches only yes/true/1, so a conforming cache="full" got
+		// the unmemoised path -- the opposite of what the value asks for.
 		deterministic: functionDeterminism(el) == "no" ||
-			isYes(el.AttrValue("cache")),
+			cacheMemoises(el.AttrValue("cache")),
 	}
 	// The function's own "as" declaration converts the returned value, which
 	// matters for the same reason the parameter declarations do.

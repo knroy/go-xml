@@ -1078,19 +1078,40 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string, v Version, zone
 			}
 		}
 	}
-	// The second presentation modifier, when present, is the last character
-	// and is either "t" (traditional numbering) or "o" (ordinal form).
+	// The second presentation modifier, when present, is the last character.
+	// The grammar admits four of them, in two independent pairs
+	// (functions-and-operators-rec30.xml:18686-18706 and :18709): "a" or "t"
+	// for alphabetic or traditional numbering, and "c" or "o" for cardinal or
+	// ordinal. Only "t" and "o" were stripped here, so "a" and "c" stayed in
+	// the string: where the first modifier was a digit pattern they reached
+	// parseDigitPattern and raised FOFD1340 on a picture the grammar admits
+	// ("[M1a]"), and where it was not they were swallowed into the sequence
+	// name, which then matched nothing and fell back to the default
+	// ("[MNna]" lost the month name and gave "9").
+	//
+	// The length guard keeps a lone modifier as the FIRST modifier: "[Ma]" is
+	// the alphabetic sequence and "[Mi]" roman, not an empty first modifier
+	// with a second one appended. "o" and "t" are not first modifiers, so a
+	// lone one of those is still read as a second.
 	ordinal, traditional := false, false
 	if n := len(pres); n > 1 || (n == 1 && (pres == "o" || pres == "t")) {
 		switch pres[len(pres)-1] {
 		case 'o':
 			ordinal = true
 			pres = pres[:len(pres)-1]
+		case 'c':
+			// Cardinal is the default numbering everywhere here, so the
+			// modifier only needs stripping for the picture to be accepted.
+			pres = pres[:len(pres)-1]
 		case 't':
 			// Traditional numbering coincides with the default for the
 			// languages implemented here, so for most components the
 			// modifier only needs stripping; the timezone is the exception.
 			traditional = true
+			pres = pres[:len(pres)-1]
+		case 'a':
+			// Alphabetic numbering likewise coincides with the default for
+			// the sequences implemented here.
 			pres = pres[:len(pres)-1]
 		}
 	}

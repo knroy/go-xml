@@ -251,6 +251,13 @@ func registerTimezoneAdjust(l *Library) {
 						d = conv.DurationVal()
 					}
 					secs := d.SignedSeconds()
+					// The error is raised if the timezone "is not an integral
+					// number of minutes" — functions-and-operators-rec30.xml
+					// lines 16654, 16807 and 16955. Integral *seconds* is the
+					// weaker condition: PT1M30S is a whole number of seconds
+					// and not a whole number of minutes, and testing only
+					// IsInt let it through to a division that truncated the
+					// remainder away, yielding +00:01.
 					if !secs.IsInt() {
 						return nil, fmt.Errorf("FODT0003: timezone offset must be a whole number of minutes")
 					}
@@ -258,7 +265,11 @@ func registerTimezoneAdjust(l *Library) {
 					// a narrowed second count by 60 let an offset of
 					// 129127208515966879312 seconds — four trillion years —
 					// wrap into +05:00 and be accepted as an ordinary zone.
-					bigMins := new(big.Int).Quo(secs.Num(), big.NewInt(60))
+					bigMins, remSecs := new(big.Int).QuoRem(
+						secs.Num(), big.NewInt(60), new(big.Int))
+					if remSecs.Sign() != 0 {
+						return nil, fmt.Errorf("FODT0003: timezone offset must be a whole number of minutes")
+					}
 					if bigMins.CmpAbs(big.NewInt(14*60)) > 0 {
 						return nil, fmt.Errorf(
 							"FODT0003: timezone offset %s minutes is out of range", bigMins)

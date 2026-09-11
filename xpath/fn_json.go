@@ -56,7 +56,6 @@ type jsonHandler interface {
 type jsonOptions struct {
 	liberal    bool
 	escape     bool
-	escapeSet  bool
 	duplicates string
 	fallback   *xdm.FunctionItem
 	// validate asks for a typed result. F&O 3.1 §17.5.3: true "indicates
@@ -76,6 +75,34 @@ func errFOJS0001(format string, args ...any) error {
 }
 
 // --- Options ---------------------------------------------------------------
+
+// jsonOptionKeyName reports whether a key spells the NAME of an option.
+//
+// The option maps are ordinary maps, so a key arrives with whatever type the
+// caller's data carried: a key read out of an unvalidated document atomises to
+// xs:untypedAtomic, not xs:string. Looking an option up by name therefore has
+// to follow the same rule map:get does, which xdm.typeFamilyOf documents for
+// this repository: xs:string, xs:anyURI and xs:untypedAtomic are one key
+// family because map:get applies the function conversion rules and casts an
+// untyped key to xs:string -- so the untyped spelling of "duplicates" names
+// the duplicates option, while the cast is to string and never to a number,
+// so an integer key names nothing however it is spelled.
+//
+// Sourcing note: F&O 3.1, which defines these option maps, is not vendored in
+// this repository, and the vendored XSLT 3.0 specs under testdata contain no
+// FOJS* material at all. The evidence for the rule is therefore this
+// repository's own documented conversion rule at xdm/maparray.go (typeFamilyOf,
+// citing map-get-006/007/008) together with the two sibling paths that already
+// follow it: fn:xml-to-json looks its "indent" option up with m.Get, and
+// map:merge its "duplicates" option with opts.Get, both of which route through
+// MapKeyOf and so accept the untyped spelling.
+func jsonOptionKeyName(k *xdm.Atomic) bool {
+	switch k.Type {
+	case xdm.TypeString, xdm.TypeAnyURI, xdm.TypeUntypedAtomic:
+		return true
+	}
+	return false
+}
 
 // jsonOptionsFrom decodes the options map.
 //
@@ -113,9 +140,9 @@ func jsonOptionsFrom(ctx *Context, args []xdm.Sequence, i int, forXML bool) (jso
 		return opts, nil
 	}
 	err = m.Entries(func(k *xdm.Atomic, v xdm.Sequence) error {
-		if k == nil || k.Type != xdm.TypeString {
-			// A non-string key names no option, and the specification says
-			// unknown options are ignored.
+		if k == nil || !jsonOptionKeyName(k) {
+			// A key of some other type names no option, and unknown options
+			// are ignored rather than reported.
 			return nil
 		}
 		switch k.String() {
@@ -130,7 +157,7 @@ func jsonOptionsFrom(ctx *Context, args []xdm.Sequence, i int, forXML bool) (jso
 			if err != nil {
 				return err
 			}
-			opts.escape, opts.escapeSet = b, true
+			opts.escape = b
 		case "validate":
 			b, err := jsonOptionBool(v, "validate")
 			if err != nil {
