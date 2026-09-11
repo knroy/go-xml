@@ -252,6 +252,31 @@ var specSignatures = func() map[string][]string {
 	m["function-arity/1"] = []string{"xs:integer", "function(*)"}
 	m["function-name/1"] = []string{"xs:QName?", "function(*)"}
 	m["function-lookup/2"] = []string{"function(*)?", "xs:QName", "xs:integer"}
+
+	// The QName and URI family, F&O 3.1 5.4, 10.1 and 13, plus the
+	// collation and language accessors of 13.
+	//
+	// The rows that constrain anything new are fn:QName/2's $paramURI,
+	// fn:resolve-QName/2's and fn:namespace-uri-for-prefix/2's $element,
+	// fn:resolve-uri/2's $base, fn:collation-key's $key and $collation,
+	// and fn:environment-variable/1's $name -- all declared without "?".
+	// The three *-from-QName accessors and fn:resolve-uri/1 take a
+	// nullable argument, so they add only the too-many-items arm.
+	m["QName/2"] = []string{"xs:QName", "xs:string?", "xs:string"}
+	m["local-name-from-QName/1"] = []string{"xs:NCName?", "xs:QName?"}
+	m["prefix-from-QName/1"] = []string{"xs:NCName?", "xs:QName?"}
+	m["namespace-uri-from-QName/1"] = []string{"xs:anyURI?", "xs:QName?"}
+	m["resolve-QName/2"] = []string{"xs:QName?", "xs:string?", "element()"}
+	m["namespace-uri-for-prefix/2"] = []string{"xs:anyURI?", "xs:string?", "element()"}
+	m["resolve-uri/1"] = []string{"xs:anyURI?", "xs:string?"}
+	m["resolve-uri/2"] = []string{"xs:anyURI?", "xs:string?", "xs:string"}
+	m["static-base-uri/0"] = []string{"xs:anyURI?"}
+	m["default-collation/0"] = []string{"xs:string"}
+	m["default-language/0"] = []string{"xs:language"}
+	m["collation-key/1"] = []string{"xs:base64Binary", "xs:string"}
+	m["collation-key/2"] = []string{"xs:base64Binary", "xs:string", "xs:string"}
+	m["environment-variable/1"] = []string{"xs:string?", "xs:string"}
+	m["available-environment-variables/0"] = []string{"xs:string*"}
 	return m
 }()
 
