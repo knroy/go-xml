@@ -639,6 +639,22 @@ func namespaceSensitiveType(schema *xsd.Schema, name xdm.QName) (bool, string) {
 	// count was guarding against, and running out of steps returned false —
 	// the permissive verdict, which let a constructed attribute validate
 	// against a type 33 links above xs:QName that section 19.2 forbids.
+	// The chain is walked in the environment of the schema being validated
+	// against, so that a schema's own restriction of xs:QName is recognised
+	// through ITS derivations rather than through whatever another schema
+	// registered under the same name. The process-global table is keyed by
+	// name alone and holds whatever loaded last, so a second schema defining
+	// this name for an unrelated type silently decided the question -- and it
+	// decided it PERMISSIVELY, because a chain that cannot be followed ends
+	// in "not namespace-sensitive" and the validation section 19.2 forbids
+	// then goes ahead.
+	//
+	// A nil schema falls back to the global table, which is the unchanged
+	// behaviour for a caller that names a type without naming a schema.
+	env := schema.TypeEnv()
+	if env == nil {
+		env = xdm.GlobalTypeEnvironment()
+	}
 	local := name.Local
 	seen := map[string]bool{}
 	for local != "" && !seen[local] {
@@ -647,7 +663,7 @@ func namespaceSensitiveType(schema *xsd.Schema, name xdm.QName) (bool, string) {
 			return true, "derived from xs:" + local
 		}
 		seen[local] = true
-		local = xdm.DerivedBase(local)
+		local = env.DerivedBase(local)
 	}
 	return false, ""
 }

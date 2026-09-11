@@ -391,6 +391,20 @@ func mergeXSDSchema(dst, src *xsd.Schema) {
 	if src.Version > dst.Version {
 		dst.Version = src.Version
 	}
+	// The type environment travels with the components, as it does in xslt's
+	// mergeSchema. A definition without its derivation facts is a type that
+	// no longer knows what it derives from.
+	//
+	// NOT YET OBSERVABLE, and deliberately shipped without a test that claims
+	// otherwise: nothing in xquery reads these facts. Its by-name consumers
+	// are in xpath -- schemaSubsumes, derivedSubtypeOfThroughSchema,
+	// schemaTypeNameMatches -- which call the process-global xdm functions
+	// with no schema in hand, and cannot be handed one, because xsd imports
+	// xpath (assertions and selectors contain XPath) and the dependency
+	// cannot run both ways. Routing those through an environment is the
+	// read-path migration; a test asserting this line works would pass with
+	// or without it until then.
+	dst.TypeEnv().Merge(src.TypeEnv())
 	for name, t := range src.Types {
 		if _, ok := dst.Types[name]; !ok {
 			dst.Types[name] = t

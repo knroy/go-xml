@@ -954,9 +954,8 @@ func atomicForLexical(typeName, value string) *Atomic {
 	// deep chains it could not tell apart from a cycle.
 	seen := map[string]bool{name: true}
 	for {
-		derivedMu.RLock()
-		prim, ok := derivedPrimitives[name]
-		derivedMu.RUnlock()
+		prim := globalTypeEnv.DerivedBase(name)
+		ok := prim != ""
 		if !ok {
 			return nil
 		}
@@ -1006,11 +1005,6 @@ func listItemType(annotation string) string {
 	return ""
 }
 
-var (
-	listMu    sync.RWMutex
-	listItems = map[string]string{}
-)
-
 // RegisterListType records that a schema type is a list, and what its items
 // are.
 //
@@ -1027,21 +1021,13 @@ var (
 // itemType is the item type's own name, which may itself be a registered
 // schema type; atomicForAnnotation and the derivation walk resolve it.
 func RegisterListType(name, itemType string) {
-	if name == "" || itemType == "" || name == itemType {
-		return
-	}
-	listMu.Lock()
-	listItems[name] = itemType
-	listMu.Unlock()
+	globalTypeEnv.RegisterList(name, itemType)
 }
 
 // ListItemOf returns the item type registered for a list type, or "" when the
 // name is not a registered list.
 func ListItemOf(name string) string {
-	listMu.RLock()
-	item := listItems[name]
-	listMu.RUnlock()
-	return item
+	return globalTypeEnv.ListItemOf(name)
 }
 
 // atomicForAnnotation builds a typed value from a schema type annotation, or
@@ -1456,29 +1442,23 @@ func (t *Tree) positionAt(off int) (line, col int, ok bool) {
 	return i + 1, off - t.lineStarts[i] + 1, true
 }
 
-// derivedPrimitives maps a schema type annotation to the built-in it erases to.
+// The six functions below are the name-only face of the type derivation
+// facts. They read and write globalTypeEnv, the process-global
+// TypeEnvironment; the tables themselves, their keying and their locking now
+// live in typeenv.go, and a schema that owns an environment records the same
+// facts there as well (see xsd.Schema.TypeEnv).
 //
-// It is keyed by ANNOTATION NAME (see AnnotationName): a built-in under its
-// bare local name, a schema type under {uri}local. Keying it by the bare local
-// name conflated the two, and because this map is package-level and
-// process-global the conflation was permanent — one schema declaring its own
-// type named "QName" rewrote the built-in's entry for every later schema in
-// the process. See TestShadowedBuiltinCoexistsWithItsShadow.
+// Every name is an ANNOTATION NAME (see AnnotationName): a built-in under its
+// bare local name, a schema type under {uri}local. Keying by the bare local
+// name conflated the two, and in a table shared by the whole process the
+// conflation was permanent — one schema declaring its own type named "QName"
+// rewrote the built-in's entry for every later schema. See
+// TestShadowedBuiltinCoexistsWithItsShadow.
 //
-// It is populated by the xsd package when a schema is loaded, which is the
-// only place that knows a user-defined type's base. Keeping it here rather
-// than in xsd is what lets xdm.Node.Atomize consult it without importing xsd,
+// They are populated by the xsd package as a schema loads, which is the only
+// place that knows a user-defined type's base. Keeping them here rather than
+// in xsd is what lets xdm.Node.Atomize consult them without importing xsd,
 // which it cannot: xsd already imports xdm.
-//
-// It is guarded by a mutex because schemas load concurrently — that is the
-// documented use, and xsd has a test for it — while atomisation reads the
-// map on every typed value. A sync.Map is not used because reads vastly
-// outnumber writes only *after* loading, and a plain RWMutex makes the
-// read path a single atomic in the common case where no schema is loaded.
-var (
-	derivedMu         sync.RWMutex
-	derivedPrimitives = map[string]string{}
-)
 
 // RegisterDerivedType records that a schema type erases to a built-in one.
 //
@@ -1492,18 +1472,8 @@ var (
 // true for a value read out of a validated document, because the value would
 // have discarded the annotation on the way out of the tree.
 func RegisterDerivedType(name, primitive string) {
-	if name == "" || primitive == "" || name == primitive {
-		return
-	}
-	derivedMu.Lock()
-	derivedPrimitives[name] = primitive
-	derivedMu.Unlock()
+	globalTypeEnv.RegisterDerived(name, primitive)
 }
-
-var (
-	unionMu      sync.RWMutex
-	unionMembers = map[string][]string{}
-)
 
 // RegisterUnionType records that a schema type is a union, and what its member
 // types are.
@@ -1531,18 +1501,7 @@ func RegisterUnionType(name string, members []string) {
 	if name == "" || len(members) == 0 {
 		return
 	}
-	cp := make([]string, 0, len(members))
-	for _, m := range members {
-		if m != "" && m != name {
-			cp = append(cp, m)
-		}
-	}
-	if len(cp) == 0 {
-		return
-	}
-	unionMu.Lock()
-	unionMembers[name] = cp
-	unionMu.Unlock()
+	globalTypeEnv.RegisterUnion(name, members)
 }
 
 // UnionMembersOf returns the member types of a registered union type, or nil
@@ -1551,10 +1510,7 @@ func RegisterUnionType(name string, members []string) {
 // The result must not be modified: it is the stored slice, shared with every
 // other caller.
 func UnionMembersOf(name string) []string {
-	unionMu.RLock()
-	m := unionMembers[name]
-	unionMu.RUnlock()
-	return m
+	return globalTypeEnv.UnionMembersOf(name)
 }
 
 // DerivedBase returns the type a schema type derives from, or "" if the name
@@ -1566,10 +1522,7 @@ func UnionMembersOf(name string) []string {
 // well as of its own type, and answering that means walking the chain the
 // schema recorded.
 func DerivedBase(name string) string {
-	derivedMu.RLock()
-	base := derivedPrimitives[name]
-	derivedMu.RUnlock()
-	return base
+	return globalTypeEnv.DerivedBase(name)
 }
 
 // atomicForUnionAnnotation builds a typed value for a node whose type is a
@@ -1645,9 +1598,8 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 		if first != "" {
 			prim, ok, first = first, true, ""
 		} else {
-			derivedMu.RLock()
-			prim, ok = derivedPrimitives[name]
-			derivedMu.RUnlock()
+			prim = globalTypeEnv.DerivedBase(name)
+			ok = prim != ""
 		}
 		if !ok {
 			return nil
