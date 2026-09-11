@@ -232,7 +232,12 @@ func fnSubsequence(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			return nil, err
 		}
 		if lenA == nil {
-			return xdm.Empty(), nil
+			// $length is declared xs:double, not xs:double?, exactly as
+			// $startingLoc above is, so it refuses an empty sequence the
+			// same way.
+			return nil, fmt.Errorf(
+				"XPTY0004: an empty sequence is not allowed as the third " +
+					"argument of fn:subsequence()")
 		}
 		end = start + roundHalfEven(lenA.Float64())
 	}

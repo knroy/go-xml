@@ -120,6 +120,16 @@ func roundWithPrecision(args []xdm.Sequence, halfToEven bool) (xdm.Sequence, err
 	}
 	var requested int64
 	if len(args) > 1 {
+		// F&O 3.1 4.4.4 (fn:round) and 4.4.5 (fn:round-half-to-even) declare
+		// $precision as xs:integer, with no "?": an empty sequence is
+		// XPTY0004 under the function conversion rules, not a request for
+		// the default precision. Without this the nil was ignored and
+		// "requested" stayed 0, so round(1.55, ()) quietly answered what
+		// round(1.55) answers instead of being refused.
+		if len(args[1]) == 0 {
+			return nil, xdm.ErrType(
+				"expected exactly one item, got empty sequence")
+		}
 		p, err := argNumber(args, 1)
 		if err != nil {
 			return nil, err
@@ -320,6 +330,14 @@ func registerNodeFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
+		// F&O 3.1 13.4 declares the two-argument form's $node as node() --
+		// the one node-accessor parameter in this file without a "?", unlike
+		// fn:root/fn:name/fn:base-uri and the rest, whose $arg is node()?.
+		// So an explicitly empty $node is XPTY0004 rather than false.
+		if len(args) > 1 && len(args[1]) == 0 {
+			return nil, xdm.ErrType(
+				"expected exactly one item, got empty sequence")
+		}
 		n, err := argNodeOrContext(ctx, args, 1)
 		if err != nil || n == nil {
 			return boolSeq(false), err
@@ -475,7 +493,16 @@ func registerContextFuncs(l *Library) {
 		}
 		msg := "error() called"
 		if len(args) > 1 {
-			if s, err := argString(args, 1); err == nil && s != "" {
+			// F&O 3.1 3.1.1 declares $description as xs:string, with no "?",
+			// so an empty sequence is XPTY0004. Discarding the helper's error
+			// -- which "err == nil" did -- let the call go on to raise the
+			// caller's own code, so the type error was reported as a
+			// successful fn:error instead of as a bad call.
+			s, err := argStringRequired(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if s != "" {
 				msg = s
 			}
 		}
@@ -495,6 +522,14 @@ func registerContextFuncs(l *Library) {
 	l.registerFn("trace", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// The value passes through unchanged; the label is ignored rather
 		// than written to stderr, since a library should not print.
+		//
+		// Ignored is not unchecked: F&O 3.1 3.2.1 declares $label as
+		// xs:string, with no "?", so trace(42, ()) is XPTY0004. Returning
+		// args[0] without looking at the label made the one parameter this
+		// function declares unenforceable.
+		if _, err := argStringRequired(args, 1); err != nil {
+			return nil, err
+		}
 		return args[0], nil
 	})
 	l.registerFnSince(XPath31, "trace", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {

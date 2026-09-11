@@ -224,7 +224,11 @@ func registerURIFuncs(l *Library) {
 		}
 		base := ""
 		if len(args) > 1 {
-			if base, err = argString(args, 1); err != nil {
+			// F&O 3.1 6.1 declares $base as xs:string, with no "?", so an
+			// empty sequence is XPTY0004 rather than "no base", which is
+			// what argString's ("", nil) turned it into: resolve-uri with an
+			// empty base returned the relative reference unresolved.
+			if base, err = argStringRequired(args, 1); err != nil {
 				return nil, err
 			}
 		} else {

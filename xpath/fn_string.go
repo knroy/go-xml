@@ -384,7 +384,11 @@ func fnSubstring(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		return nil, err
 	}
 	if startA == nil {
-		return strSeq(""), nil
+		// $start is declared xs:double, not xs:double?, so an empty
+		// sequence is a type error rather than an empty result.
+		return nil, fmt.Errorf(
+			"XPTY0004: an empty sequence is not allowed as the second " +
+				"argument of fn:substring()")
 	}
 	start := roundHalfEven(startA.Float64())
 
@@ -399,7 +403,10 @@ func fnSubstring(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			return nil, err
 		}
 		if lenA == nil {
-			return strSeq(""), nil
+			// $length is xs:double too, and likewise not nullable.
+			return nil, fmt.Errorf(
+				"XPTY0004: an empty sequence is not allowed as the third " +
+					"argument of fn:substring()")
 		}
 		l := roundHalfEven(lenA.Float64())
 		if isNaNf(l) || isNaNf(start) {

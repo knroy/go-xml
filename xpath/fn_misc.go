@@ -732,7 +732,13 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 			if a.DateTimeVal() == nil {
 				return nil, xdm.ErrType("%s: expected a date/time value", name)
 			}
-			pic, err := argString(args, 1)
+			// $picture is declared xs:string, with no "?", in all three of
+			// F&O 3.1 9.8.1 (format-dateTime), 9.8.2 (format-date) and
+			// 9.8.3 (format-time), so an empty sequence is XPTY0004.
+			// argString answers ("", nil) for it, which formatted the value
+			// against an empty picture and returned "" -- the same declared
+			// type that fn:format-integer already refuses.
+			pic, err := argStringRequired(args, 1)
 			if err != nil {
 				return nil, err
 			}

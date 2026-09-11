@@ -272,9 +272,22 @@ func jsonOptionString(v xdm.Sequence, name string) (string, error) {
 
 // singleMapArg extracts the options map, which is declared map(*) and so may
 // be absent but not empty.
+//
+// The distinction is the whole point of this helper. F&O 3.1 declares the
+// $options parameter of fn:parse-json (§17.5.1), fn:json-doc (§17.5.2),
+// fn:json-to-xml (§17.5.3) and fn:xml-to-json (§17.5.4) as map(*) with no
+// occurrence indicator, so the empty sequence does not match it: OMITTING the
+// argument selects the one-argument form and its defaults, while WRITING ()
+// supplies a value of the wrong cardinality and is XPTY0004. Treating the two
+// as the same thing -- returning a nil map for both -- silently accepted
+// parse-json("1",()) and the three siblings, because registerFn stores only
+// name and arity and no parameter type is enforced on the call path.
 func singleMapArg(args []xdm.Sequence, i int) (*xdm.MapItem, error) {
-	if i >= len(args) || len(args[i]) == 0 {
+	if i >= len(args) {
 		return nil, nil
+	}
+	if len(args[i]) == 0 {
+		return nil, xdm.ErrType("expected exactly one item, got empty sequence")
 	}
 	if len(args[i]) != 1 {
 		return nil, xdm.ErrType("the options argument must be a single map")

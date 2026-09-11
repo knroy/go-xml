@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/knroy/go-xml/xdm"
@@ -80,7 +81,12 @@ func registerMathFuncs(l *Library) {
 			return nil, err
 		}
 		if y == nil {
-			return xdm.Empty(), nil
+			// $y is declared xs:numeric, without the "?" that $x carries,
+			// so an empty sequence is a type error rather than an empty
+			// result.
+			return nil, fmt.Errorf(
+				"XPTY0004: an empty sequence is not allowed as the second " +
+					"argument of math:pow()")
 		}
 		return numSeq(math.Pow(*x, *y)), nil
 	})
@@ -95,12 +101,19 @@ func registerMathFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
+		if y == nil {
+			return nil, fmt.Errorf(
+				"XPTY0004: an empty sequence is not allowed as the first " +
+					"argument of math:atan2()")
+		}
 		x, err := argDoubleOpt(args, 1)
 		if err != nil {
 			return nil, err
 		}
-		if y == nil || x == nil {
-			return xdm.Empty(), nil
+		if x == nil {
+			return nil, fmt.Errorf(
+				"XPTY0004: an empty sequence is not allowed as the second " +
+					"argument of math:atan2()")
 		}
 		return numSeq(math.Atan2(*y, *x)), nil
 	})
