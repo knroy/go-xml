@@ -845,7 +845,9 @@ and runs `tests/check.sh`. This is the only place the suites are fetched
 reproducibly. Without it the published percentages depend on someone
 remembering to run the script, and a number nobody re-measures is a number that
 quietly stops being true. It uploads `tests/last-run.txt` as an artifact named
-`last-run`, on success and on failure alike — see [Provenance](#provenance).
+`last-run`, on success and on failure alike — see [Provenance](#provenance) —
+and `tests/release-record.txt` as `release-record-<ref>`, which is what a
+release points at; see [The release record](#the-release-record).
 
 ---
 
@@ -906,6 +908,75 @@ for the commit; this is provenance for the measurement.
 It is **not** written to `tests/ratchet.txt`. The ratchet rewrites that file in
 place — `grep -v` the line, append the new one, `sort` — so anything else
 living there would be destroyed by the first count that moved.
+
+Provenance also records the **dependency graph**: `go list -m all`, as a digest
+and its expansion, plus a digest of `go.sum`. A release claim that names a Go
+version but not what the build linked against is answerable for only half of
+what produced the figures.
+
+---
+
+## The release record
+
+Provenance says *what was measured*. The release record says *what the
+measurement found*, and it is the single artifact a release points at.
+
+The pieces it collects were all present and all separate: `vet` at its section,
+the full package run at its own, `race` at its own, each W3C driver printing
+its own summary, and provenance in `tests/last-run.txt`. Assembling a release
+claim meant scraping a transcript for nine figures and then arguing that the
+transcript belonged to the commit — the same "measured against what?" that
+provenance exists to answer, one level up.
+
+So `check.sh` writes `tests/release-record.txt`: the provenance block, then
+every lane with its verdict and the figure that lane's own driver produced,
+then one verdict line.
+
+```
+lanes
+build                  PASS go build ./...
+vet                    PASS go vet ./...
+documented figures     PASS tests/docfigures.sh and the documented grep commands
+generated figures      PASS go run ./tests/conformance-docs.go -check
+package tests          PASS GOXSLT_NO_SUITES=1 go test ./... -count=1
+race                   PASS GOXSLT_NO_SUITES=1 go test -race ./... -count=1 -timeout 25m
+w3cschemas             PASS build, vet and test of the separate module
+vendored schemas       PASS vendored schemas: 185 loaded, 38 failed, 7 excluded (of 230)
+W3C QT3 XPath          SKIP suite absent at /nonexistent-qt3
+RELAX NG spectest      PASS spectest_test.go:116: RELAX NG spectest: 965 assertions, 965 passed, 0 failed (100.00%)
+UBL                    SKIP not set; licensed corpus, cannot be cloned in CI (expected)
+DocBook                SKIP stylesheet absent; not fetched in CI (expected)
+
+verdict      VERIFIED WITH GAPS — every lane that ran passed, 10 did not run
+```
+
+**The third column is the point.** A record listing only the lanes that ran is
+a record that lies by omission: the `conformance` job has corpora the `test`
+job does not, and DocBook, XSpec, UBL and CII are deliberately absent from CI.
+"All suites pass" over a run where four never started is indistinguishable from
+one where they did — so every lane declares itself `PASS`, `FAIL` or `SKIP`, a
+skipped lane names *why*, and the verdict counts all three. A run with skips is
+`VERIFIED WITH GAPS`, spelled out rather than left for a reader to notice that
+a suite is missing from a list.
+
+Nothing in the file is typed. Every figure is the string the lane extracted
+from its own driver's output; a number written in by hand would be exactly the
+defect the generated-figures work removed — correct on the day it was pasted
+and unfalsifiable afterwards.
+
+It is written from **both** exits, the `fast` return and the end of a full run.
+A fast run's record is a legitimate record; it simply is not a release one, and
+what distinguishes them is that its external lanes are all present and all say
+`SKIP`.
+
+**`tests/release-record.txt` is gitignored**, for the reason `last-run.txt` is.
+It changes on every run, so committing it would put a diff in the tree every
+time anyone ran the gate, and a committed copy would prove only what the last
+committer happened to run. A release does not point at a file in the working
+tree: it points at the artifact the tagged CI run uploaded, named
+`release-record-<ref>`. Committing one would be provenance for the commit,
+which is what the tag already is. The artifact is uploaded on every run, not
+only on release day, so the mechanism is never first exercised when it matters.
 
 ---
 

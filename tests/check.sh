@@ -257,6 +257,103 @@ XSPEC=$(abspath "${GOXSLT_XSPEC:-testdata/xspec}")
 failed=0
 skipped=""
 
+# The release record. Everything above and below this line already measures
+# something; what did not exist was ONE artifact that says "this tree was
+# verified, here is the toolchain, and here is what every lane reported".
+#
+# The pieces were all present and all separate: vet at its section, the full
+# package run at its own, race at its own, each W3C driver printing its own
+# summary, and provenance in tests/last-run.txt. A reader assembling a release
+# claim had to scrape a transcript for nine figures and then argue that the
+# transcript belonged to the commit -- which is the same "measured against
+# what?" that provenance was written to answer, one level up. Provenance says
+# WHAT was measured; this says WHAT THE MEASUREMENT SAID.
+#
+# The property that makes it worth having is the third column. A record that
+# lists only the lanes that ran is a record that lies by omission: the
+# conformance job has corpora the fast job does not, and DocBook, XSpec, UBL
+# and CII are deliberately absent from CI (ci.yml and the header above). A
+# release note reading "all suites pass" over a run where four never started
+# is worse than no note at all, because it cannot be distinguished from one
+# where they did. So every lane declares itself PASS, FAIL or SKIP, a skipped
+# lane names why, and the verdict line at the end counts all three.
+#
+# NOTHING here is typed. Every figure is the detail string a lane already
+# extracted from its own driver output; `lane` is handed that string and
+# stores it. A number written into this file by hand would be exactly the
+# defect the generated-figures work removed -- a figure with no command behind
+# it, correct on the day it was pasted and unfalsifiable afterwards.
+RECORD_FILE="$ROOT/tests/release-record.txt"
+_record=""
+
+# lane records one verification lane: its name, its verdict, and the measured
+# detail the lane itself produced.
+#
+#   lane vet PASS "go vet ./..."
+#   lane "XSLT 3.0" PASS "in-scope: 11518 cases, 11484 passed"
+#   lane DocBook SKIP "not fetched in CI"
+#
+# Appended in call order, so the file reads in the order the gate ran.
+lane() {
+	_record="${_record}$(printf '%-22s %-4s %s' "$1" "$2" "$3")
+"
+}
+
+# laneFromStatus is lane for a step whose only result is whether it failed.
+# It reads the failure counter around the step rather than a driver summary,
+# so that a lane cannot be recorded PASS by a caller who forgot to check.
+laneFromStatus() {
+	if [ "$2" -eq "$failed" ]; then lane "$1" PASS "$3"; else lane "$1" FAIL "$3"; fi
+}
+
+# emit_record writes the one file. It is called from BOTH exits -- the fast
+# mode return and the end of a full run -- because a record that exists only on
+# the path nobody takes when debugging is a record nobody has.
+#
+# Content is provenance (the same function that fills tests/last-run.txt, so
+# the two can never disagree about what was measured), then the lanes in the
+# order they ran, then a verdict that counts them. The verdict says PASS only
+# when nothing failed AND nothing was skipped; a run with skips is VERIFIED
+# WITH GAPS, spelled out rather than left for a reader to notice that a suite
+# is missing from a list. That distinction is the whole point: "all suites
+# pass" over a run where four never started is indistinguishable from one
+# where they did, unless the file says so itself.
+#
+# tests/release-record.txt is GITIGNORED for the reason tests/last-run.txt is
+# -- see the PROVENANCE_FILE comment above, whose argument this follows. It
+# changes on every run, so committing it would put a diff in the tree every
+# time anyone ran the gate; and a committed copy would prove only what the last
+# person to commit happened to run, which is the weaker claim. A release does
+# not point at a file in the working tree: it points at the artifact this run
+# uploaded, named for the tag, which is a record OF A MEASUREMENT and stays
+# attached to the run that produced it. Committing one would be provenance for
+# the commit, which is the thing the tag already is.
+emit_record() {
+	_skips=$(printf '%s' "$_record" | grep -c ' SKIP ' || true)
+	_fails=$(printf '%s' "$_record" | grep -c ' FAIL ' || true)
+	if [ "$_fails" -gt 0 ]; then
+		_verdict="FAILED — $_fails lane(s) failed, $_skips skipped"
+	elif [ "$_skips" -gt 0 ]; then
+		_verdict="VERIFIED WITH GAPS — every lane that ran passed, $_skips did not run"
+	else
+		_verdict="VERIFIED — every lane ran and passed"
+	fi
+	{
+		printf 'go-xml release verification record\n'
+		printf 'mode         %s\n' "$MODE"
+		provenance
+		printf '\nlanes\n'
+		printf '%s' "$_record"
+		printf '\nverdict      %s\n' "$_verdict"
+	} > "$RECORD_FILE" 2>/dev/null || {
+		printf -- '--- NOT written to tests/release-record.txt (not writable)\n'
+		return 0
+	}
+	section "release record"
+	cat "$RECORD_FILE"
+	printf -- '--- written to tests/release-record.txt\n'
+}
+
 section() { printf '\n=== %s\n' "$1"; }
 fail()    { printf 'FAIL: %s\n' "$1"; failed=1; }
 skip()    { skipped="${skipped}  - $1
@@ -294,6 +391,19 @@ skip()    { skipped="${skipped}  - $1
 # for exactly that reason. A file in git would be provenance for the commit;
 # this is provenance for the measurement.
 PROVENANCE_FILE="$ROOT/tests/last-run.txt"
+
+# digest hashes stdin. The command differs between Linux and macOS, so it is
+# resolved once rather than assumed; a record that says "(no sha256 tool)" is
+# honest, and one that silently prints nothing is not.
+digest() {
+	if command -v sha256sum > /dev/null 2>&1; then
+		sha256sum | cut -c1-16
+	elif command -v shasum > /dev/null 2>&1; then
+		shasum -a 256 | cut -c1-16
+	else
+		cat > /dev/null; printf '(no sha256 tool)'
+	fi
+}
 
 # suiterev prints the revision of one vendored suite. They are separate
 # checkouts under testdata/, not submodules, so each is asked on its own.
@@ -341,6 +451,26 @@ provenance() {
 		"$($GO env GOOS 2>/dev/null)" "$($GO env GOARCH 2>/dev/null)" \
 		"$(uname -sm 2>/dev/null || echo unknown)"
 	printf 'utc          %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+	# The dependency graph, as a digest plus its expansion. ci.yml's upload
+	# step already described the artifact as carrying "the resolved module
+	# graph and its digest" and it did not: provenance recorded the toolchain
+	# and the suites but nothing about what the build linked against. A
+	# release claim that names a Go version and not its dependencies is
+	# answerable only for half of what produced the figures.
+	_mods=$($GO list -m all 2>/dev/null || true)
+	if [ -n "$_mods" ]; then
+		printf 'modules      %s (%s modules)\n' \
+			"$(printf '%s\n' "$_mods" | digest)" \
+			"$(printf '%s\n' "$_mods" | grep -c .)"
+		printf '%s\n' "$_mods" | sed 's/^/  /'
+	else
+		printf 'modules      (unavailable)\n'
+	fi
+	if [ -f "$ROOT/go.sum" ]; then
+		printf 'go.sum       %s\n' "$(digest < "$ROOT/go.sum")"
+	else
+		printf 'go.sum       (absent)\n'
+	fi
 	suiterev qt3tests "$QT3"
 	suiterev xsdtests "$XSDTS"
 	suiterev xslt30 "$XSLTS"
@@ -366,10 +496,14 @@ else
 	printf -- '--- NOT written to tests/last-run.txt (not writable)\n'
 fi
 section "build"
+_f0=$failed
 $GO build ./... || fail "build"
+laneFromStatus build "$_f0" "go build ./..."
 
 section "vet"
+_f0=$failed
 $GO vet ./... || fail "vet"
+laneFromStatus vet "$_f0" "go vet ./..."
 
 # docfigure asserts that a number written in the documentation still equals the
 # number the command beside it produces.
@@ -499,6 +633,7 @@ else
     Re-derive it from the suite run, fix every copy, and check the sentence
     around it still says something true."
 fi
+laneFromStatus "documented figures" "$_docfig_before" "tests/docfigures.sh and the documented grep commands"
 
 # The summary table at the top of docs/conformance-gaps.md is GENERATED, and
 # this is the step that proves the checked-in copy still matches its source.
@@ -522,6 +657,7 @@ fi
 # marked regions fed from the same two sources. A hand-edit to any of them is
 # caught here.
 section "generated conformance summary"
+_f0=$failed
 if $GO run ./tests/conformance-docs.go -check; then
 	:
 else
@@ -539,6 +675,7 @@ else
     something true; only the marked regions are rewritten, and a sentence that
     argues from a number does not update itself."
 fi
+laneFromStatus "generated figures" "$_f0" "go run ./tests/conformance-docs.go -check"
 
 # GOXSLT_NO_SUITES keeps the conformance suites out of these two steps. They
 # are the fast gate, and the suites get their own sections below; without it a
@@ -554,10 +691,14 @@ fi
 # -timeout is therefore set explicitly here as well as in ci.yml, and
 # -count=1 because a cached result cannot show a regression.
 section "unit tests"
+_f0=$failed
 GOXSLT_NO_SUITES=1 $GO test ./... -count=1 || fail "unit tests"
+laneFromStatus "package tests" "$_f0" "GOXSLT_NO_SUITES=1 go test ./... -count=1"
 
 section "race"
+_f0=$failed
 GOXSLT_NO_SUITES=1 $GO test -race ./... -count=1 -timeout 25m || fail "race"
+laneFromStatus race "$_f0" "GOXSLT_NO_SUITES=1 go test -race ./... -count=1 -timeout 25m"
 
 # w3cschemas is a module of its own -- the schemas it bundles are W3C-licensed
 # and the core module is MIT -- so `go list ./...` at the root does not reach
@@ -573,8 +714,10 @@ GOXSLT_NO_SUITES=1 $GO test -race ./... -count=1 -timeout 25m || fail "race"
 # would affect it. Bumping the pin after a release is what closes that gap, and
 # is a release step rather than something to paper over with a workspace file.
 section "w3cschemas (separate module)"
+_f0=$failed
 (cd w3cschemas && $GO build ./... && $GO vet ./... &&
 	$GO test ./... -count=1) || fail "w3cschemas"
+laneFromStatus w3cschemas "$_f0" "build, vet and test of the separate module"
 
 section "vendored real-world schemas"
 # The over-strictness guard that is always available.
@@ -631,19 +774,33 @@ if [ -z "$_vend_ok" ]; then
     These schemas are vendored in testdata/, so unlike UBL and CII this
     check has no legitimate skip. A corpus that is present and reports
     nothing is the failure mode to look for."
+	lane "vendored schemas" FAIL "the corpus produced no result"
 elif [ -n "$_vend_absent" ]; then
 	# A count over fewer roots is not comparable with the recorded mark, so
 	# it is reported and skipped rather than ratcheted. Skipped, not passed:
 	# the guard genuinely did not run over what it was calibrated on.
 	printf '%s\n' "$_vend"
 	skip "vendored schemas: not ratcheted --$_vend_absent absent from testdata/ (the mark covers all three roots)"
+	lane "vendored schemas" SKIP "not ratcheted --$_vend_absent absent from testdata/"
 else
 	printf '%s\n' "$_vend"
 	ratchetVendored "$_vend_ok"
+	lane "vendored schemas" PASS "$_vend"
 fi
 
 if [ "$MODE" = fast ]; then
 	printf '\n=== fast mode: external suites not run\n'
+	# Every external lane is recorded as skipped BY NAME rather than left out.
+	# A fast run's record is a legitimate record -- it just is not a release
+	# one, and the only thing that distinguishes them is that these lines are
+	# present and say SKIP. Dropping them would produce a file whose verdict
+	# line reads the same as a full run's.
+	for _l in "W3C QT3 XPath" "W3C QT3 XQuery" "W3C XSD 1.0" "W3C XSD 1.1" \
+		"RELAX NG spectest" "W3C XSLT 2.0" "W3C XSLT 3.0" \
+		UBL CII DocBook XSpec; do
+		lane "$_l" SKIP "fast mode: tests/check.sh fast does not run external suites"
+	done
+	emit_record
 	if [ "$failed" -eq 0 ]; then printf 'OK\n'; else printf 'FAILED\n'; fi
 	exit "$failed"
 fi
@@ -665,13 +822,28 @@ if [ -f "$QT3/catalog.xml" ]; then
 		# figure to ratchet is the LAST of them (the full 2.0 run), not the
 		# first. ratchet() takes head -1, so the line is selected here.
 		ratchet TestQT3 "$(printf '%s\n' "$out" | grep 'in-scope:' | tail -1)"
+		# TestQT3 logs one "in-scope:" line per language version and all of
+		# them are recorded: a release record carrying only one version
+		# would be silent about the other two the same run measured. The
+		# loop runs in THIS shell rather than a pipeline, because `lane`
+		# appends to a variable and a `while read` behind a pipe would
+		# append it in a subshell and lose every line.
+		_qt3lines=$(printf '%s\n' "$out" | grep 'in-scope:')
+		_oldifs=$IFS; IFS='
+'
+		for _ln in $_qt3lines; do
+			lane "W3C QT3 XPath" PASS "$_ln"
+		done
+		IFS=$_oldifs
 	else
 		fail "QT3 ran but reported no summary — did it skip?"
 		printf '%s\n' "$out" | tail -5
+		lane "W3C QT3 XPath" FAIL "ran but reported no summary"
 	fi
 else
 	skip "QT3 not at $QT3
     git clone --depth 1 https://github.com/w3c/qt3tests.git $QT3"
+	lane "W3C QT3 XPath" SKIP "suite absent at $QT3"
 fi
 
 section "W3C QT3 (XQuery 3.1)"
@@ -684,12 +856,16 @@ if [ -f "$QT3/catalog.xml" ]; then
 	if printf '%s' "$out" | grep -q 'in-scope:'; then
 		printf '%s\n' "$out" | grep -E 'in-scope:'
 		ratchet TestQT3XQuery "$out"
+		lane "W3C QT3 XQuery" PASS \
+			"$(printf '%s\n' "$out" | grep 'in-scope:' | head -1)"
 	else
 		fail "the XQuery suite ran but reported no summary — did it skip?"
 		printf '%s\n' "$out" | tail -5
+		lane "W3C QT3 XQuery" FAIL "ran but reported no summary"
 	fi
 else
 	skip "QT3 not at $QT3 (XQuery)"
+	lane "W3C QT3 XQuery" SKIP "suite absent at $QT3"
 fi
 
 section "W3C xsdtests (XML Schema 1.0 and 1.1)"
@@ -703,14 +879,20 @@ if [ -f "$XSDTS/suite.xml" ]; then
 			# count, so it needs its own ratchet line; see ratchetXSD.
 			if [ -z "$flag" ]; then _n=XSD10; else _n=XSD11; fi
 			ratchetXSD "$_n" "$out"
+			lane "W3C $_n" PASS \
+				"$(printf '%s\n' "$out" | grep '^TOTAL' | head -1)"
 		else
 			fail "xsdtests produced no totals"
 			printf '%s\n' "$out" | tail -5
+			if [ -z "$flag" ]; then _n=XSD10; else _n=XSD11; fi
+			lane "W3C $_n" FAIL "produced no totals"
 		fi
 	done
 else
 	skip "xsdtests not at $XSDTS
     git clone --depth 1 https://github.com/w3c/xsdtests.git $XSDTS"
+	lane "W3C XSD 1.0" SKIP "suite absent at $XSDTS"
+	lane "W3C XSD 1.1" SKIP "suite absent at $XSDTS"
 fi
 
 section "RELAX NG (James Clark's spectest)"
@@ -723,14 +905,18 @@ if [ -f "$RNG" ]; then
 		# extracted here and handed to ratchetCount.
 		_rng=$(printf '%s' "$out" | sed -n 's/.*spectest: [0-9]* assertions, \([0-9]*\) passed.*/\1/p' | head -1)
 		ratchetCount RelaxNGSpectest "$_rng"
+		lane "RELAX NG spectest" PASS \
+			"$(printf '%s\n' "$out" | grep 'spectest:' | head -1 | sed 's/^ *//')"
 	else
 		fail "spectest ran but reported no summary"
 		printf '%s\n' "$out" | tail -5
+		lane "RELAX NG spectest" FAIL "ran but reported no summary"
 	fi
 else
 	skip "spectest.xml not at $RNG
     git clone --depth 1 https://github.com/relaxng/jing-trang.git
     cp jing-trang/mod/rng-validate/test/spectest.xml $RNG"
+	lane "RELAX NG spectest" SKIP "spectest.xml absent at $RNG"
 fi
 
 # Both targets, always. The same catalog measures 2.0 and 3.0, and the question
@@ -748,14 +934,21 @@ if [ -f "$XSLTS/catalog.xml" ]; then
 		if printf '%s' "$out" | grep -q 'in-scope:'; then
 			printf '%s\n' "$out" | grep -E 'XSLT suite:|XSLT 3.0 suite:|in-scope:'
 			ratchet "$t" "$out"
+			if [ "$t" = TestXSLTSuite ]; then _v="2.0"; else _v="3.0"; fi
+			lane "W3C XSLT $_v" PASS \
+				"$(printf '%s\n' "$out" | grep 'in-scope:' | head -1)"
 		else
 			fail "the XSLT suite ran but reported no summary — did it skip?"
 			printf '%s\n' "$out" | tail -5
+			if [ "$t" = TestXSLTSuite ]; then _v="2.0"; else _v="3.0"; fi
+			lane "W3C XSLT $_v" FAIL "ran but reported no summary"
 		fi
 	done
 else
 	skip "the XSLT suite is not at $XSLTS
     git clone --depth 1 https://github.com/w3c/xslt30-test.git $XSLTS"
+	lane "W3C XSLT 2.0" SKIP "suite absent at $XSLTS"
+	lane "W3C XSLT 3.0" SKIP "suite absent at $XSLTS"
 fi
 
 section "production corpora"
@@ -768,19 +961,21 @@ corpus() { # name, mode, dir
 	line=$(printf '%s' "$out" | tail -1)
 	printf '%-6s %s\n' "$1" "$line"
 	case "$line" in
-	*"0 failed") ;;
-	*) fail "$1: $line" ;;
+	*"0 failed") lane "$1" PASS "$line" ;;
+	*) fail "$1: $line"; lane "$1" FAIL "$line" ;;
 	esac
 }
 if [ -n "$UBL" ] && [ -d "$UBL/maindoc" ]; then
 	corpus UBL maindoc "$UBL"
 else
 	skip "UBL not set (expected in CI) — GOXSLT_UBL=<dir holding maindoc/>"
+	lane UBL SKIP "not set; licensed corpus, cannot be cloned in CI (expected)"
 fi
 if [ -n "$CII" ] && [ -d "$CII" ]; then
 	corpus CII walk "$CII"
 else
 	skip "CII not set (expected in CI) — GOXSLT_CII=<dir of .xsd files>"
+	lane CII SKIP "not set; licensed corpus, cannot be cloned in CI (expected)"
 fi
 
 section "real-world stylesheets"
@@ -799,6 +994,7 @@ stylesheetCorpus() { # name, stylesheet, glob, extra flags
 	_name=$1 _xsl=$2 _glob=$3 _flags=${4:-}
 	if [ ! -f "$_xsl" ]; then
 		skip "$_name not at $_xsl (expected in CI; it fetches only the W3C suites)"
+		lane "$_name" SKIP "stylesheet absent; not fetched in CI (expected)"
 		return 0
 	fi
 	_ok=0 _bad=0
@@ -813,10 +1009,12 @@ stylesheetCorpus() { # name, stylesheet, glob, extra flags
 	done
 	if [ "$((_ok + _bad))" -eq 0 ]; then
 		skip "$_name matched no inputs"
+		lane "$_name" SKIP "present but matched no inputs"
 		return 0
 	fi
 	printf '%-8s %s transformed, %s failed\n' "$_name" "$_ok" "$_bad"
 	ratchetCount "$_name" "$_ok"
+	lane "$_name" PASS "$_ok transformed, $_bad failed"
 }
 
 # One build, reused for every input: `go run` per document would dominate the
@@ -846,7 +1044,11 @@ if [ -n "$BIN" ] && $GO build -o "$BIN" ./cmd/go-xml; then
 	rm -f "$BIN"
 else
 	skip "could not build ./cmd/go-xml for the stylesheet corpora"
+	lane DocBook SKIP "could not build ./cmd/go-xml"
+	lane XSpec SKIP "could not build ./cmd/go-xml"
 fi
+
+emit_record
 
 printf '\n'
 if [ -n "$skipped" ]; then

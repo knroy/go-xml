@@ -52,3 +52,13 @@
 # explains -- a CI artifact, or pasted beside a quoted number -- and a copy in
 # git would only ever say what the last committer happened to run.
 /tests/last-run.txt
+
+# The release verification record: the provenance above PLUS the verdict of
+# every lane the gate ran -- vet, package tests, race, and each W3C driver with
+# its in-scope/passed numbers -- and one line saying whether the run verified
+# the tree, verified it with named gaps, or failed. Gitignored for the same
+# reason as tests/last-run.txt, whose argument it follows: it changes on every
+# run, and a committed copy would prove only what the last committer happened
+# to run. A release points at the artifact the tagged CI run uploaded, which is
+# a record of a measurement and stays attached to the run that produced it.
+/tests/release-record.txt

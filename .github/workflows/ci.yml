@@ -153,3 +153,30 @@ jobs:
           name: last-run
           path: tests/last-run.txt
           if-no-files-found: warn
+
+      # The release verification record: the provenance above PLUS what every
+      # lane reported -- vet, the package run, race, and each W3C driver with
+      # its in-scope/passed counts -- under one verdict line.
+      #
+      # It is a SEPARATE artifact from last-run rather than a replacement,
+      # because the two answer different questions and the cheap one should
+      # stay cheap: last-run says what was measured, this says what the
+      # measurement found. Both are uploaded on every run, so the record is
+      # never a thing that only exists on release day and is first exercised
+      # when it matters.
+      #
+      # The name carries the tag when there is one. An artifact called
+      # "release-record" on every run is not something a release can point
+      # AT; one called "release-record-v1.4.0" is, and the ref is the only
+      # part of a run that identifies which release it verified.
+      #
+      # if: always() for the reason above it: a FAILING run is when the
+      # question "verified how?" actually gets asked, and a record that
+      # exists only for green runs cannot answer it.
+      - name: Upload the release verification record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-record-${{ github.ref_name }}
+          path: tests/release-record.txt
+          if-no-files-found: warn
