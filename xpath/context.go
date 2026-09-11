@@ -812,6 +812,45 @@ func (c *Context) HoldByteBudget() *Context {
 	return &n
 }
 
+// AdoptBudget returns a copy of c spending src's item and byte allowances
+// instead of its own, so that a nested evaluation continues its caller's
+// budget rather than being granted a fresh one.
+//
+// It exists for a host language that starts a whole new evaluation inside an
+// existing one and cannot simply pass the caller's Context down. XSLT's
+// fn:transform is the case: the nested transformation builds its own runtime,
+// and newRuntime calls NewContext, which mints both counters from scratch --
+// so every level of a nest got the full MaxItems and MaxBytes over again while
+// the depth budget correctly inherited. The house rule the depth budget
+// already follows is that a budget is monotonic: a nested evaluation may spend
+// the parent's remaining allowance, never reset it.
+//
+// Each counter is carried WITH its held flag, never without. The flag is what
+// says where the budget's boundary is, and a counter forwarded without it
+// would be reset by Compiled.Eval once per expression in the nested
+// evaluation -- which would clear the CALLER's accumulated charges through the
+// shared pointer and hand the caller an allowance it has already spent. That
+// is the same leak HoldItemBudget's and HoldByteBudget's idempotence guards
+// exist to prevent, arriving by another route, and it would be worse than the
+// fresh allowance it replaced.
+//
+// A nil src, or a src with no budget, leaves c's own budget alone: a caller
+// with nothing to inherit from is a fresh root, which is what a top-level
+// evaluation legitimately is.
+func (c *Context) AdoptBudget(src *Context) *Context {
+	if c == nil || src == nil {
+		return c
+	}
+	n := *c
+	if src.items != nil {
+		n.items, n.heldItems = src.items, src.heldItems
+	}
+	if src.bytes != nil {
+		n.bytes, n.heldBytes = src.bytes, src.heldBytes
+	}
+	return &n
+}
+
 // resetBytes starts a fresh byte budget for one expression evaluation.
 func (c *Context) resetBytes() {
 	if c != nil && c.bytes != nil {

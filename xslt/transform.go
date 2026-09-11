@@ -192,6 +192,22 @@ type TransformOptions struct {
 	// on itself exhausted the Go stack -- a runtime fatal, which recover()
 	// cannot catch, so the host process died. See TestSelfCallingTransformIsRefused.
 	nestedDepth int
+
+	// nestedBudget is the caller's evaluation context, whose item and byte
+	// allowances a transform started by fn:transform spends instead of being
+	// granted fresh ones. Unexported for the same reason nestedDepth is: only
+	// runNestedTransform sets it, and only to the context of the call that
+	// reached it.
+	//
+	// It is the same monotonic-budget policy nestedDepth documents, applied to
+	// the other two budgets. newRuntime builds its context with
+	// xpath.NewContext, which mints both counters from scratch, so without this
+	// a stylesheet could build unbounded string content simply by recursing
+	// through fn:transform: each level was handed the full xpath.MaxBytes over
+	// again. See xpath.Context.AdoptBudget for why each counter must travel
+	// with its held flag rather than alone, and
+	// TestNestedTransformInheritsTheByteBudget.
+	nestedBudget *xpath.Context
 }
 
 // Result is the outcome of a transform.
