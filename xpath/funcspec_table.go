@@ -481,6 +481,32 @@ var specSignatures = func() map[string][]string {
 	m["tokenize/3"] = []string{"xs:string*", "xs:string?", "xs:string", "xs:string"}
 	m["analyze-string/2"] = []string{"element(fn:analyze-string-result)", "xs:string?", "xs:string"}
 	m["analyze-string/3"] = []string{"element(fn:analyze-string-result)", "xs:string?", "xs:string", "xs:string"}
+
+	// The formatting family, F&O 3.1 9.8 (format-date and friends) and 4.6
+	// to 4.7 (format-integer, format-number). The last family in the manifest.
+	//
+	// This was deferred alongside the regex family, on the matching belief
+	// that a declared type would pre-empt FOFD1340. It does not, for the same
+	// reason and a stronger one: FOFD1340 is for an invalid PICTURE, and no
+	// QT3 case passes () in a picture position at all. The cases that look
+	// like it pass () in the FIRST argument -- format-integer((), 'Ww'),
+	// format-number((), '###.###') -- which every proforma declares "?", so
+	// they are legal and unaffected.
+	//
+	// $picture is the only non-nullable parameter here: on the arity-5 forms
+	// $language, $calendar and $place are all xs:string?, and so is the third
+	// parameter of format-integer/3 and format-number/3, which is what keeps
+	// format-number(0.4857, '###.###%', ()) legal.
+	m["format-date/2"] = []string{"xs:string?", "xs:date?", "xs:string"}
+	m["format-date/5"] = []string{"xs:string?", "xs:date?", "xs:string", "xs:string?", "xs:string?", "xs:string?"}
+	m["format-dateTime/2"] = []string{"xs:string?", "xs:dateTime?", "xs:string"}
+	m["format-dateTime/5"] = []string{"xs:string?", "xs:dateTime?", "xs:string", "xs:string?", "xs:string?", "xs:string?"}
+	m["format-time/2"] = []string{"xs:string?", "xs:time?", "xs:string"}
+	m["format-time/5"] = []string{"xs:string?", "xs:time?", "xs:string", "xs:string?", "xs:string?", "xs:string?"}
+	m["format-integer/2"] = []string{"xs:string", "xs:integer?", "xs:string"}
+	m["format-integer/3"] = []string{"xs:string", "xs:integer?", "xs:string", "xs:string?"}
+	m["format-number/2"] = []string{"xs:string", "xs:numeric?", "xs:string"}
+	m["format-number/3"] = []string{"xs:string", "xs:numeric?", "xs:string", "xs:string?"}
 	return m
 }()
 

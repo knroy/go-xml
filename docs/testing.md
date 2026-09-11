@@ -1125,11 +1125,16 @@ Three tests measure it, and they ask different questions:
   mechanism exists to prevent, so a hand-edited spelling that disagrees with
   the manifest breaks the build.
 
-The count so far is 262 of 272: the seventeen seeded from `builtinSignatures`,
+The migration is complete at 272 of 272: the seventeen seeded from
+`builtinSignatures`,
 `fn:substring` and `fn:subsequence`, then the numeric (14), non-regex string
 (25), temporal (28), node and accessor (34), sequence (14), higher-order (12),
 QName and URI (15), input and document (20), JSON (10), context, boolean and
-error (14), `math:` (14), `map:` (11), `array:` (21) and regex (9) families.
+error (14), `math:` (14), `map:` (11), `array:` (21), regex (9) and
+formatting (10) families. With `pending` at zero,
+`TestCallBindingMigrationInventory` is ready for its `report := t.Logf` to be
+flipped to `t.Errorf`; that flip is a change of enforcement mode and is left
+as its own commit.
 
 The regex family was deferred twice on the belief that declaring `$pattern`
 and `$flags` would change which error code an empty sequence raises -- that
@@ -1141,6 +1146,15 @@ position -- `K-MatchesFunc-1`, `K-ReplaceFunc-2`, `K-TokenizeFunc-2` -- all
 expect `XPTY0004`, as does `K-MatchesFunc-3` for `()` in `$flags`. The
 wording moves, because the refusal now comes from call binding rather than
 from `argFlags`; the code does not.
+
+The formatting family -- `fn:format-date`, `fn:format-dateTime`,
+`fn:format-time`, `fn:format-integer` and `fn:format-number` -- was deferred
+on the matching belief about `FOFD1340`, and that premise fails for a stronger
+reason: `FOFD1340` is for an invalid *picture*, and no QT3 case passes `()` in
+a picture position at all. The cases that resemble it pass `()` in the first
+argument, which every proforma declares `?`. `$picture` is the only
+non-nullable parameter in the family; on the arity-5 forms `$language`,
+`$calendar` and `$place` are all `xs:string?`.
 
 `math:pi` was the first entry to use a prefixed key, and it landed with the
 mechanism rather than with its family. It is nullary, so it constrains no
