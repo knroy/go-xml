@@ -153,6 +153,209 @@ var specSignatures = func() map[string][]string {
 	m["adjust-time-to-timezone/1"] = []string{"xs:time?", "xs:time?"}
 	m["adjust-time-to-timezone/2"] = []string{"xs:time?", "xs:time?", "xs:dayTimeDuration?"}
 	m["dateTime/2"] = []string{"xs:dateTime?", "xs:date?", "xs:time?"}
+
+	// The node and accessor family, F&O 3.1 5.1 and 14: the accessors that
+	// take a node, the zero-argument forms that read the context item, and
+	// the id/idref lookups.
+	//
+	// The rows that constrain anything new are fn:in-scope-prefixes/1,
+	// whose $element is element() with no "?"; fn:id/2, fn:idref/2,
+	// fn:element-with-id/2 and fn:lang/2, whose $node is node() with no
+	// "?"; and fn:namespace-uri-for-prefix/2 and fn:resolve-QName/2, whose
+	// $element is likewise element(). Those seven are this family's
+	// empty-sequence arm. The zero-arity forms declare no parameters at
+	// all, so they add a call-binding row that can only ever succeed --
+	// they are here so the family is the whole of F&O 5.1 and 14 rather
+	// than the part of it that happens to refuse something.
+	m["name/0"] = []string{"xs:string"}
+	m["local-name/0"] = []string{"xs:string"}
+	m["namespace-uri/0"] = []string{"xs:anyURI"}
+	m["string/0"] = []string{"xs:string"}
+	m["number/0"] = []string{"xs:double"}
+	m["string-length/0"] = []string{"xs:integer"}
+	m["normalize-space/0"] = []string{"xs:string"}
+	m["data/0"] = []string{"xs:anyAtomicType*"}
+	m["root/0"] = []string{"node()"}
+	m["node-name/0"] = []string{"xs:QName?"}
+	m["node-name/1"] = []string{"xs:QName?", "node()?"}
+	m["nilled/0"] = []string{"xs:boolean?"}
+	m["nilled/1"] = []string{"xs:boolean?", "node()?"}
+	m["base-uri/0"] = []string{"xs:anyURI?"}
+	m["base-uri/1"] = []string{"xs:anyURI?", "node()?"}
+	m["document-uri/0"] = []string{"xs:anyURI?"}
+	m["document-uri/1"] = []string{"xs:anyURI?", "node()?"}
+	m["path/0"] = []string{"xs:string?"}
+	m["path/1"] = []string{"xs:string?", "node()?"}
+	m["has-children/0"] = []string{"xs:boolean"}
+	m["has-children/1"] = []string{"xs:boolean", "node()?"}
+	m["generate-id/0"] = []string{"xs:string"}
+	m["generate-id/1"] = []string{"xs:string", "node()?"}
+	m["innermost/1"] = []string{"node()*", "node()*"}
+	m["outermost/1"] = []string{"node()*", "node()*"}
+	m["in-scope-prefixes/1"] = []string{"xs:string*", "element()"}
+	m["id/1"] = []string{"element()*", "xs:string*"}
+	m["id/2"] = []string{"element()*", "xs:string*", "node()"}
+	m["idref/1"] = []string{"node()*", "xs:string*"}
+	m["idref/2"] = []string{"node()*", "xs:string*", "node()"}
+	m["element-with-id/1"] = []string{"element()*", "xs:string*"}
+	m["element-with-id/2"] = []string{"element()*", "xs:string*", "node()"}
+	m["lang/1"] = []string{"xs:boolean", "xs:string?"}
+	m["lang/2"] = []string{"xs:boolean", "xs:string?", "node()"}
+
+	// The sequence family, F&O 3.1 14.1 to 14.4: the functions over
+	// sequences of items and of atomic values.
+	//
+	// The rows that constrain anything new are the $collation arguments of
+	// fn:distinct-values/2, fn:index-of/3 and fn:deep-equal/3, which are
+	// xs:string with no "?"; the $position of fn:insert-before/3 and
+	// fn:remove/2 and the $target of fn:index-of/2, which are xs:integer
+	// and xs:anyAtomicType respectively and likewise non-nullable; and
+	// fn:trace/2's $label. fn:exactly-one, fn:one-or-more and
+	// fn:zero-or-one take item()*, so they add only the too-many-items arm
+	// -- their own cardinality refusal is FORG0003..0005 raised in the
+	// callback, which this leaves untouched.
+	m["distinct-values/1"] = []string{"xs:anyAtomicType*", "xs:anyAtomicType*"}
+	m["distinct-values/2"] = []string{"xs:anyAtomicType*", "xs:anyAtomicType*", "xs:string"}
+	m["index-of/2"] = []string{"xs:integer*", "xs:anyAtomicType*", "xs:anyAtomicType"}
+	m["index-of/3"] = []string{"xs:integer*", "xs:anyAtomicType*", "xs:anyAtomicType", "xs:string"}
+	m["insert-before/3"] = []string{"item()*", "item()*", "xs:integer", "item()*"}
+	m["remove/2"] = []string{"item()*", "item()*", "xs:integer"}
+	m["unordered/1"] = []string{"item()*", "item()*"}
+	m["exactly-one/1"] = []string{"item()", "item()*"}
+	m["one-or-more/1"] = []string{"item()+", "item()*"}
+	m["zero-or-one/1"] = []string{"item()?", "item()*"}
+	m["deep-equal/2"] = []string{"xs:boolean", "item()*", "item()*"}
+	m["deep-equal/3"] = []string{"xs:boolean", "item()*", "item()*", "xs:string"}
+	m["trace/1"] = []string{"item()*", "item()*"}
+	m["trace/2"] = []string{"item()*", "item()*", "xs:string"}
+
+	// The higher-order family, F&O 3.1 16.1 and 16.2, plus the function
+	// reflection of 2.9.
+	//
+	// This is the first family whose parameters are function tests rather
+	// than atomic types, so it is the first to exercise a declared
+	// function(...) spelling at call binding. Every $f here is
+	// non-nullable, as is fn:function-lookup's $name and $arity and
+	// fn:apply's $array, so the empty-sequence arm is live throughout.
+	// fn:sort's $collation is xs:string? -- the one nullable argument in
+	// the family, and deliberately so: an absent collation means the
+	// default, which fn:sort/3's $key cannot say.
+	m["for-each/2"] = []string{"item()*", "item()*", "function(item()) as item()*"}
+	m["filter/2"] = []string{"item()*", "item()*", "function(item()) as xs:boolean"}
+	m["fold-left/3"] = []string{"item()*", "item()*", "item()*", "function(item()*, item()) as item()*"}
+	m["fold-right/3"] = []string{"item()*", "item()*", "item()*", "function(item(), item()*) as item()*"}
+	m["for-each-pair/3"] = []string{"item()*", "item()*", "item()*", "function(item(), item()) as item()*"}
+	m["sort/1"] = []string{"item()*", "item()*"}
+	m["sort/2"] = []string{"item()*", "item()*", "xs:string?"}
+	m["sort/3"] = []string{"item()*", "item()*", "xs:string?", "function(item()) as xs:anyAtomicType*"}
+	m["apply/2"] = []string{"item()*", "function(*)", "array(*)"}
+	m["function-arity/1"] = []string{"xs:integer", "function(*)"}
+	m["function-name/1"] = []string{"xs:QName?", "function(*)"}
+	m["function-lookup/2"] = []string{"function(*)?", "xs:QName", "xs:integer"}
+
+	// The QName and URI family, F&O 3.1 5.4, 10.1 and 13, plus the
+	// collation and language accessors of 13.
+	//
+	// The rows that constrain anything new are fn:QName/2's $paramURI,
+	// fn:resolve-QName/2's and fn:namespace-uri-for-prefix/2's $element,
+	// fn:resolve-uri/2's $base, fn:collation-key's $key and $collation,
+	// and fn:environment-variable/1's $name -- all declared without "?".
+	// The three *-from-QName accessors and fn:resolve-uri/1 take a
+	// nullable argument, so they add only the too-many-items arm.
+	m["QName/2"] = []string{"xs:QName", "xs:string?", "xs:string"}
+	m["local-name-from-QName/1"] = []string{"xs:NCName?", "xs:QName?"}
+	m["prefix-from-QName/1"] = []string{"xs:NCName?", "xs:QName?"}
+	m["namespace-uri-from-QName/1"] = []string{"xs:anyURI?", "xs:QName?"}
+	m["resolve-QName/2"] = []string{"xs:QName?", "xs:string?", "element()"}
+	m["namespace-uri-for-prefix/2"] = []string{"xs:anyURI?", "xs:string?", "element()"}
+	m["resolve-uri/1"] = []string{"xs:anyURI?", "xs:string?"}
+	m["resolve-uri/2"] = []string{"xs:anyURI?", "xs:string?", "xs:string"}
+	m["static-base-uri/0"] = []string{"xs:anyURI?"}
+	m["default-collation/0"] = []string{"xs:string"}
+	m["default-language/0"] = []string{"xs:language"}
+	m["collation-key/1"] = []string{"xs:base64Binary", "xs:string"}
+	m["collation-key/2"] = []string{"xs:base64Binary", "xs:string", "xs:string"}
+	m["environment-variable/1"] = []string{"xs:string?", "xs:string"}
+	m["available-environment-variables/0"] = []string{"xs:string*"}
+
+	// The input and document family, F&O 3.1 13 and 14.5: the functions
+	// that read an external resource and the parse/serialize pair.
+	//
+	// The rows that constrain anything new are the $encoding of
+	// fn:unparsed-text and its two siblings, the $options of
+	// fn:load-xquery-module/2, and fn:load-xquery-module/1's and
+	// fn:transform/1's own argument -- all declared without "?". The $href
+	// and $uri arguments throughout are xs:string?, since an absent URI
+	// selects the default resource rather than being an error, so those
+	// add only the too-many-items arm. fn:serialize/2's $params is
+	// item()?, which is the one row here whose nullability is the point.
+	m["doc/1"] = []string{"document-node()?", "xs:string?"}
+	m["doc-available/1"] = []string{"xs:boolean", "xs:string?"}
+	m["collection/0"] = []string{"item()*"}
+	m["collection/1"] = []string{"item()*", "xs:string?"}
+	m["uri-collection/0"] = []string{"xs:anyURI*"}
+	m["uri-collection/1"] = []string{"xs:anyURI*", "xs:string?"}
+	m["unparsed-text/1"] = []string{"xs:string?", "xs:string?"}
+	m["unparsed-text/2"] = []string{"xs:string?", "xs:string?", "xs:string"}
+	m["unparsed-text-lines/1"] = []string{"xs:string*", "xs:string?"}
+	m["unparsed-text-lines/2"] = []string{"xs:string*", "xs:string?", "xs:string"}
+	m["unparsed-text-available/1"] = []string{"xs:boolean", "xs:string?"}
+	m["unparsed-text-available/2"] = []string{"xs:boolean", "xs:string?", "xs:string"}
+	m["parse-xml/1"] = []string{"document-node(element(*))?", "xs:string?"}
+	m["parse-xml-fragment/1"] = []string{"document-node()?", "xs:string?"}
+	m["parse-ietf-date/1"] = []string{"xs:dateTime?", "xs:string?"}
+	m["serialize/1"] = []string{"xs:string", "item()*"}
+	m["serialize/2"] = []string{"xs:string", "item()*", "item()?"}
+	m["load-xquery-module/1"] = []string{"map(*)", "xs:string"}
+	m["load-xquery-module/2"] = []string{"map(*)", "xs:string", "map(*)"}
+	m["transform/1"] = []string{"map(*)", "map(*)"}
+
+	// The JSON family, F&O 3.1 17.4 to 17.6, plus fn:random-number-generator
+	// of 14.5, which returns a map and belongs to the same map-valued group.
+	//
+	// Every $options here is map(*) with no "?", so this family's
+	// empty-sequence arm is live on all four two-argument forms: an empty
+	// sequence passed where F&O declares a required map is the defect class
+	// the mechanism exists to catch. The $json-text and $input arguments are
+	// nullable -- an empty sequence there yields an empty result rather than
+	// an error -- so they add only the too-many-items arm.
+	m["parse-json/1"] = []string{"item()?", "xs:string?"}
+	m["parse-json/2"] = []string{"item()?", "xs:string?", "map(*)"}
+	m["json-doc/1"] = []string{"item()?", "xs:string?"}
+	m["json-doc/2"] = []string{"item()?", "xs:string?", "map(*)"}
+	m["json-to-xml/1"] = []string{"document-node()?", "xs:string?"}
+	m["json-to-xml/2"] = []string{"document-node()?", "xs:string?", "map(*)"}
+	m["xml-to-json/1"] = []string{"xs:string?", "node()?"}
+	m["xml-to-json/2"] = []string{"xs:string?", "node()?", "map(*)"}
+	m["random-number-generator/0"] = []string{"map(xs:string, item())"}
+	m["random-number-generator/1"] = []string{"map(xs:string, item())", "xs:anyAtomicType?"}
+
+	// The context, boolean and error family, F&O 3.1 7.1, 8.1, 14.6 and
+	// 5.3.3 -- the rows that remain once the regex and format-* groups are
+	// set aside.
+	//
+	// Most of these declare no parameters at all: the context accessors and
+	// the two boolean constants take nothing, so their call-binding row can
+	// only ever succeed. They are here so the family is complete rather
+	// than only the part that refuses something. The rows that do constrain
+	// are fn:error/2's $description and /3's $error-object, and
+	// fn:contains-token's $token and $collation, all declared without "?".
+	// fn:error's $code is xs:QName? -- nullable, because fn:error() with no
+	// code is legal and raises FOER0000.
+	m["true/0"] = []string{"xs:boolean"}
+	m["false/0"] = []string{"xs:boolean"}
+	m["position/0"] = []string{"xs:integer"}
+	m["last/0"] = []string{"xs:integer"}
+	m["current-date/0"] = []string{"xs:date"}
+	m["current-time/0"] = []string{"xs:time"}
+	m["current-dateTime/0"] = []string{"xs:dateTimeStamp"}
+	m["implicit-timezone/0"] = []string{"xs:dayTimeDuration"}
+	m["error/0"] = []string{"none"}
+	m["error/1"] = []string{"none", "xs:QName?"}
+	m["error/2"] = []string{"none", "xs:QName?", "xs:string"}
+	m["error/3"] = []string{"none", "xs:QName?", "xs:string", "item()*"}
+	m["contains-token/2"] = []string{"xs:boolean", "xs:string*", "xs:string"}
+	m["contains-token/3"] = []string{"xs:boolean", "xs:string*", "xs:string", "xs:string"}
 	return m
 }()
 

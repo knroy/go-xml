@@ -1119,13 +1119,36 @@ Three tests measure it, and they ask different questions:
   mechanism exists to prevent, so a hand-edited spelling that disagrees with
   the manifest breaks the build.
 
-The count so far is 88 of 272: the seventeen seeded from `builtinSignatures`,
+The count so far is 207 of 272: the seventeen seeded from `builtinSignatures`,
 `fn:substring` and `fn:subsequence`, then the numeric (14), non-regex string
-(25) and temporal (28) families. Two groups are deliberately deferred to
-commits that can compare their error codes: the regex functions of F&O 5.6.1
-onwards, whose `$pattern` and `$flags` interact with the FORX diagnostics, and
-`fn:format-date` and its siblings, whose arity-5 forms carry calendar and place
-arguments tied to FOFD.
+(25), temporal (28), node and accessor (34), sequence (14), higher-order (12),
+QName and URI (15), input and document (20), JSON (10) and context, boolean and
+error (14) families.
+
+Of the 65 that remain, 46 are not reachable by this mechanism as it stands.
+`buildFunctionSpecs` expands every `specSignatures` key into the `fn:`
+namespace, so the manifest's `array:` (21), `map:` (11) and `math:` (14) rows
+cannot be migrated by adding a key: `"get/2"` would constrain a non-existent
+`fn:get` and leave `map:get` untouched, and
+`TestMigratedSignaturesMatchManifest` would reject it as a name the manifest
+does not describe. Migrating those three namespaces means teaching the key
+format a prefix — a change to the mechanism rather than to the data, which is
+why it is not folded into a family commit.
+
+The other 19 are deliberately deferred to commits that can compare their error
+codes, because both groups change *which* error is raised rather than only
+whether one is:
+
+* the regex functions — `fn:matches`, `fn:replace`, `fn:tokenize` and
+  `fn:analyze-string` — whose `$pattern` and `$flags` interact with the FORX
+  diagnostics;
+* `fn:format-date`, `fn:format-time`, `fn:format-dateTime`, `fn:format-integer`
+  and `fn:format-number`, whose `$picture` is `xs:string` with no `?` — a
+  genuinely new refusal — and whose arity-5 forms carry calendar and place
+  arguments tied to FOFD.
+
+A pass/fail count cannot tell a FORX0002 from an XPTY0004, so migrating those
+needs a lane that asserts on the error code.
 
 Migrate in family-sized commits, and run the full QT3 lanes after each one —
 the four in-scope counts are the check, and any drop is a regression rather
