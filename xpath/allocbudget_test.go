@@ -129,6 +129,21 @@ func TestSequenceProducersChargeTheItemsTheyBuild(t *testing.T) {
 		{"tokenize#2", func(ctx *Context) (xdm.Sequence, error) {
 			return callFn(t, ctx, "tokenize", strSeq(big), strSeq(" "))
 		}},
+		// These three copy their input into a second backing array. The result
+		// is bounded by the argument rather than amplified from it, so the
+		// exposure is a duplicate and not the open-ended growth the two above
+		// are -- but the duplicate is unbounded from a host that invokes the
+		// built-in directly, which is the path callFn takes.
+		{"reverse", func(ctx *Context) (xdm.Sequence, error) {
+			return callFn(t, ctx, "reverse", manyItems(64))
+		}},
+		{"insert-before", func(ctx *Context) (xdm.Sequence, error) {
+			return callFn(t, ctx, "insert-before",
+				manyItems(64), intSeq(1), manyItems(8))
+		}},
+		{"remove", func(ctx *Context) (xdm.Sequence, error) {
+			return callFn(t, ctx, "remove", manyItems(64), intSeq(1))
+		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -235,4 +250,96 @@ func TestSerializeRefusesWithinOneBlock(t *testing.T) {
 	}
 	_, err := callFn(t, ctx, "serialize", strSeq(strings.Repeat("x", 4096)))
 	wantRefused(t, err, wantBytes)
+}
+
+// manyItems builds a sequence of n integers, which is the item-budget twin of
+// the long strings the byte tests use.
+func manyItems(n int) xdm.Sequence {
+	out := make(xdm.Sequence, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, xdm.NewInteger(int64(i)))
+	}
+	return out
+}
+
+// TestRemoveOutOfRangeIsNotCharged pins the one case among the three that does
+// NOT allocate: fn:remove with a position outside the sequence returns its
+// argument unchanged, sharing the backing array. Charging there would bill a
+// caller for a copy that never happened, which is the "paid for twice" error
+// the reservation discipline exists to avoid.
+func TestRemoveOutOfRangeIsNotCharged(t *testing.T) {
+	ctx := NewContext(nil, Builtins()).HoldItemBudget()
+	in := manyItems(64)
+	before := atomic.LoadInt64(ctx.items)
+	got, err := callFn(t, ctx, "remove", in, intSeq(9999))
+	if err != nil {
+		t.Fatalf("remove past the end: %v", err)
+	}
+	if len(got) != len(in) {
+		t.Fatalf("remove past the end returned %d items, want %d", len(got), len(in))
+	}
+	if after := atomic.LoadInt64(ctx.items); after != before {
+		t.Errorf("remove past the end charged %d items for a result that "+
+			"shares its argument's backing array", after-before)
+	}
+}
+
+// TestPathChargesTheStringItBuilds covers the one string producer whose output
+// is bounded by neither its argument nor a constant: fn:path emits one step
+// per ancestor, so its length grows with the depth of the node. A document 500
+// elements deep produced 4,000 bytes against a budget with 16 left, and none
+// of them were charged.
+//
+// fn:generate-id is charged in the same pass for the ownership rule rather
+// than for its size -- "N" plus a decimal integer is a dozen bytes -- so it is
+// asserted here to RETURN, not to refuse. A test that demanded a refusal from
+// it would be asserting something false.
+func TestPathChargesTheStringItBuilds(t *testing.T) {
+	const depth = 500
+	var sb strings.Builder
+	for i := 0; i < depth; i++ {
+		sb.WriteString("<e>")
+	}
+	for i := 0; i < depth; i++ {
+		sb.WriteString("</e>")
+	}
+	doc, err := xdm.ParseString(sb.String(), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deepest := doc.Root
+	for {
+		var kid *xdm.Node
+		for _, k := range deepest.Children {
+			if k.Kind == xdm.KindElement {
+				kid = k
+				break
+			}
+		}
+		if kid == nil {
+			break
+		}
+		deepest = kid
+	}
+
+	ctx := nearlyExhausted(t, 16, MaxItems)
+	_, err = callFn(t, ctx, "path", xdm.One(deepest))
+	wantRefused(t, err, wantBytes)
+
+	// The control: with room to spare the same call returns its ordinary
+	// answer, so the charge refuses oversize work rather than all work.
+	got, err := callFn(t, NewContext(nil, Builtins()), "path", xdm.One(deepest))
+	if err != nil {
+		t.Fatalf("fn:path with an ample budget: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("fn:path returned %d items, want 1", len(got))
+	}
+
+	// fn:generate-id is bounded and must still succeed on a tight budget.
+	if _, err := callFn(t, nearlyExhausted(t, 64, MaxItems),
+		"generate-id", xdm.One(deepest)); err != nil {
+		t.Errorf("fn:generate-id with 64 bytes of headroom: %v; its result is "+
+			"a dozen bytes, so charging it must not refuse it", err)
+	}
 }

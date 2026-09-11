@@ -82,9 +82,24 @@ func registerSeqFuncs(l *Library) {
 		return intSeq(int64(ctx.Size)), nil
 	})
 
-	l.registerFn("reverse", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	// fn:reverse, fn:insert-before and fn:remove each build a SECOND backing
+	// array the size of their input, so each is charged at the construction.
+	//
+	// The result is bounded by the argument, which was itself charged wherever
+	// it was built, so this is not the unbounded amplification
+	// fn:string-to-codepoints is -- it is a duplicate. It is charged anyway
+	// because the host-facing path reaches these directly: a caller that
+	// resolves the built-in through the library and invokes it never passes
+	// an enclosing evaluator, so "the input was already charged" is a
+	// statement about a charge that may never have happened here. Reserving
+	// before the make is what refuses an oversize request without allocating.
+	l.registerFn("reverse", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		in := args[0]
-		out := make(xdm.Sequence, len(in))
+		out, err := makeSequence(ctx, len(in))
+		if err != nil {
+			return nil, err
+		}
+		out = out[:len(in)]
 		for i, it := range in {
 			out[len(in)-1-i] = it
 		}
@@ -93,7 +108,7 @@ func registerSeqFuncs(l *Library) {
 
 	l.registerFn("subsequence", []int{2, 3}, fnSubsequence)
 
-	l.registerFn("insert-before", []int{3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("insert-before", []int{3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		pos, err := argNumber(args, 1)
 		if err != nil {
 			return nil, err
@@ -117,14 +132,17 @@ func registerSeqFuncs(l *Library) {
 		if at > len(target)+1 {
 			at = len(target) + 1
 		}
-		out := make(xdm.Sequence, 0, len(target)+len(args[2]))
+		out, err := makeSequence(ctx, len(target)+len(args[2]))
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, target[:at-1]...)
 		out = append(out, args[2]...)
 		out = append(out, target[at-1:]...)
 		return out, nil
 	})
 
-	l.registerFn("remove", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("remove", []int{2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// The position is declared xs:integer, so a decimal is a type error
 		// rather than a value to truncate: remove(1 to 10, 1.0) is XPTY0004.
 		if err := requireIntegerArg("remove", args, 1); err != nil {
@@ -144,7 +162,10 @@ func registerSeqFuncs(l *Library) {
 		if at < 1 || at > len(in) {
 			return in, nil
 		}
-		out := make(xdm.Sequence, 0, len(in)-1)
+		out, err := makeSequence(ctx, len(in)-1)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, in[:at-1]...)
 		out = append(out, in[at:]...)
 		return out, nil

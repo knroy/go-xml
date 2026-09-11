@@ -75,7 +75,7 @@ func registerAnalyzeString(l *Library) {
 			if err != nil {
 				return nil, err
 			}
-			return strSeq(GenerateID(n)), nil
+			return stringResult(ctx, GenerateID(n))
 		}
 		// An empty argument is the zero-length string rather than an error.
 		if len(args[0]) == 0 {
@@ -90,7 +90,10 @@ func registerAnalyzeString(l *Library) {
 			return nil, xdm.ErrType(
 				"fn:generate-id: expected a node, got %s", it.TypeName())
 		}
-		return strSeq(GenerateID(n)), nil
+		// "N" plus a decimal integer, so this is bounded and small where
+		// fn:path is not -- but it is still a newly built string, and the
+		// ownership rule is that whoever allocates charges.
+		return stringResult(ctx, GenerateID(n))
 	})
 }
 
