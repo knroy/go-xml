@@ -405,15 +405,15 @@ $GO vet ./... || fail "vet"
 # The counting commands. Each excludes .claude/worktrees, which holds agent
 # checkouts of this same repository and would otherwise multiply every count.
 docfigure_tests() {
-	grep -rn "func Test" --include='*_test.go' . |
+	grep -rn "^func Test" --include='*_test.go' . |
 		grep -vc '/\.claude/worktrees/'
 }
 docfigure_fuzz() {
-	grep -rn "func Fuzz" --include='*_test.go' . |
+	grep -rn "^func Fuzz" --include='*_test.go' . |
 		grep -vc '/\.claude/worktrees/'
 }
 docfigure_limits() {
-	grep -hc "func Test" ./*/limits_boundary_test.go |
+	grep -hc "^func Test" ./*/limits_boundary_test.go |
 		awk '{n += $1} END {print n + 0}'
 }
 
@@ -422,41 +422,70 @@ docfigure() {
 	_what=$1 _want=$2 _got=$3
 	shift 3
 	[ "$_want" = "$_got" ] && return 0
-	fail "$_what: the documentation says $_want, the tree has $_got.
+	fail "$_what: the generator counts $_want, the documented grep counts $_got.
     counted by: $(docfigure_cmd "$_what")
-    Update every one of these to $_got, and the same number in
-    tests/check.sh's docfigure section, in the same commit:
+    and by:
 $(for _f in "$@"; do printf '        %s\n' "$_f"; done)
-    There is deliberately no GOXSLT=update affordance here: the ratchet can
-    rewrite tests/ratchet.txt because nothing reads that file but the ratchet,
-    whereas these numbers sit inside English sentences that a script cannot
-    reword. Editing them by hand is the point -- it is the moment someone
-    checks the sentence around the number still says something true."
+    These two must agree. The number published in README.md and docs/ comes
+    from the generator, and the command printed beside it in the prose is the
+    grep -- so a disagreement means the published figure is not reproducible by
+    the command that claims to produce it. Fix whichever of the two is wrong
+    (most often the Go walker's skip list and the grep's exclusions have
+    drifted apart), then regenerate:
+        go run tests/conformance-docs.go"
 }
 
 # The command text for a figure, printed by the failure above so that whoever
-# reads it in CI can re-derive the number without opening this script.
+# reads it in CI can re-derive the number without opening this script. This is
+# the same text quoted beside each figure in docs/stats.md, which is where the
+# published copy of the number comes from.
 docfigure_cmd() {
 	case $1 in
 	"unit test count")
-		printf '%s' "grep -rn 'func Test' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'" ;;
+		printf '%s' "grep -rn '^func Test' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'" ;;
 	"fuzz target count")
-		printf '%s' "grep -rn 'func Fuzz' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'" ;;
+		printf '%s' "grep -rn '^func Fuzz' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'" ;;
 	"limit boundary test count")
-		printf '%s' "grep -hc 'func Test' ./*/limits_boundary_test.go | awk '{n += \$1} END {print n + 0}'" ;;
+		printf '%s' "grep -hc '^func Test' ./*/limits_boundary_test.go | awk '{n += \$1} END {print n + 0}'" ;;
 	esac
 }
 
+# The expected values are no longer typed here either. They used to be -- three
+# integers in this script, alongside the same three in five documents -- and
+# that was the same defect one layer down: on 2026-09-11 the unit-test count
+# was edited 2112 -> 2122 -> 2131 -> 2149 in five files each time, and this
+# script was a sixth place to forget. The figures in the documents are now
+# GENERATED regions fed by tests/conformance-docs.go, which counts the tree
+# itself, so the question this section can still usefully ask is a different
+# one: does the generator's count agree with the grep the documentation quotes?
+#
+# That is worth asking because the two use different implementations on
+# purpose. The generator walks the tree in Go so that the figure is identical
+# on Linux, macOS and Windows; the documentation quotes a grep pipeline a
+# reader can paste. If those ever disagree, one of them is lying to somebody,
+# and which one hardly matters -- the published number is no longer reproducible
+# by the command printed beside it, which is the whole claim.
 section "documented figures"
 _docfig_before=$failed
-docfigure "unit test count" 2149 "$(docfigure_tests)" \
-	README.md:109 README.md:1230 docs/testing.md:23 docs/todo.md:20 docs/conformance-gaps.md:49
-docfigure "fuzz target count" 9 "$(docfigure_fuzz)" \
-	README.md:1236 docs/testing.md:30
-docfigure "limit boundary test count" 14 "$(docfigure_limits)" \
-	docs/testing.md:24
+_gen_counts=$($GO run ./tests/conformance-docs.go -counts 2>/dev/null)
+_gen_tests=$(printf '%s\n' "$_gen_counts" | sed -n 's/^unit-tests \([0-9]*\)$/\1/p')
+_gen_fuzz=$(printf '%s\n' "$_gen_counts" | sed -n 's/^fuzz-targets \([0-9]*\)$/\1/p')
+_gen_limits=$(printf '%s\n' "$_gen_counts" | sed -n 's/^limit-boundary-tests \([0-9]*\)$/\1/p')
+if [ -z "$_gen_tests" ] || [ -z "$_gen_fuzz" ] || [ -z "$_gen_limits" ]; then
+	fail "tests/conformance-docs.go -counts did not report all three tree counts.
+    It is the source of every published test count; without it the figures in
+    README.md and docs/ are unguarded. Run it by hand to see the error:
+        go run tests/conformance-docs.go -counts"
+else
+	docfigure "unit test count" "$_gen_tests" "$(docfigure_tests)" \
+		'tests/conformance/stats.go (countKind "func-test")'
+	docfigure "fuzz target count" "$_gen_fuzz" "$(docfigure_fuzz)" \
+		'tests/conformance/stats.go (countKind "func-fuzz")'
+	docfigure "limit boundary test count" "$_gen_limits" "$(docfigure_limits)" \
+		'tests/conformance/stats.go (countKind "limits-boundary")'
+fi
 if [ "$failed" -eq "$_docfig_before" ]; then
-	printf 'tests %s, fuzz targets %s, limit boundary tests %s — as documented\n' \
+	printf 'tests %s, fuzz targets %s, limit boundary tests %s — the generator and the documented grep agree\n' \
 		"$(docfigure_tests)" "$(docfigure_fuzz)" "$(docfigure_limits)"
 fi
 # The conformance figures are checked the other way round: the ratchet has
@@ -485,17 +514,30 @@ fi
 # -check rather than regenerate-then-`git diff`: the tree is dirty in most runs
 # of this gate, so a git diff here would report the user's own work in progress
 # as a failure. -check reads the two files and compares, touching nothing.
+#
+# It covers every generated region, not only that table. docs/stats.md is
+# generated end to end -- it is the one page carrying every figure with the
+# command that produced it and the date it was measured -- and README.md,
+# docs/conformance-gaps.md, docs/testing.md and docs/todo.md each carry small
+# marked regions fed from the same two sources. A hand-edit to any of them is
+# caught here.
 section "generated conformance summary"
 if $GO run ./tests/conformance-docs.go -check; then
 	:
 else
-	fail "docs/conformance-gaps.md does not match tests/conformance/results.json.
-    The summary table and its Total are generated, not written. Record the
-    measured counts in tests/conformance/results.json -- passed, disagreements
-    and total must add up, per suite -- and regenerate:
+	fail "a generated region no longer matches tests/conformance/results.json and the tree.
+    Every figure this repository publishes is generated: the summary table and
+    its Total, the test, fuzz and limit counts, the status tables, and the
+    whole of docs/stats.md. None of them is written by hand.
+      - A suite figure moved: record the measured counts in
+        tests/conformance/results.json -- passed, disagreements and total must
+        add up, per suite.
+      - A test count moved: nothing to record, the generator counts the tree.
+    Either way, regenerate:
         go run tests/conformance-docs.go
-    Then check that the hand-written prose around the table still says
-    something true; only the marked region is regenerated."
+    Then check that the hand-written prose AROUND each region still says
+    something true; only the marked regions are rewritten, and a sentence that
+    argues from a number does not update itself."
 fi
 
 # GOXSLT_NO_SUITES keeps the conformance suites out of these two steps. They

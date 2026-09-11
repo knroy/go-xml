@@ -138,8 +138,8 @@ jobs:
         run: tests/check.sh
 
       # The provenance of the figures the step above just printed: Go version,
-      # repo commit, GOOS/GOARCH, UTC time, and the revision of each suite
-      # checkout. It is uploaded rather than committed because it describes a
+      # repo commit, the resolved module graph and its digest, GOOS/GOARCH, UTC
+      # time, and the revision of each suite checkout. It is uploaded rather than committed because it describes a
       # MEASUREMENT, not a commit -- attached here it travels with the run
       # whose numbers it explains, which is what nobody could produce when an
       # outside report quoted counts from a tree we could not identify.
