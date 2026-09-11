@@ -709,6 +709,29 @@ func (c *Context) countItems(n int) error {
 // iteration.
 func (c *Context) ChargeItems(n int) error { return c.countItems(n) }
 
+// makeSequence reserves room for n items in the evaluation budget and returns
+// an empty sequence with that capacity.
+//
+// It is the counterpart of stringResult for the item budget, and it exists for
+// the same reason: a built-in that materialises a sequence reaches no
+// enclosing evaluator when a host language calls it directly, so a charge
+// taken only at LetExpr, evalFor or the range operator is one a host can walk
+// past. Reserving here makes the invariant local to the allocation.
+//
+// The reservation is taken BEFORE the make, so a request too large to allow is
+// refused without ever allocating the backing array -- which is the point when
+// n comes from the input, as it does for a codepoint sequence.
+//
+// One ownership rule per result: a caller that reserves with makeSequence must
+// NOT also charge each append, or the sequence is paid for twice and a legal
+// result is refused at half the documented limit.
+func makeSequence(ctx *Context, n int) (xdm.Sequence, error) {
+	if err := ctx.countItems(n); err != nil {
+		return nil, err
+	}
+	return make(xdm.Sequence, 0, n), nil
+}
+
 // HoldItemBudget returns a copy of c on which Compiled.Eval will not reset the
 // item budget, and arms a fresh budget for the evaluation about to begin.
 //
@@ -775,6 +798,25 @@ func (c *Context) countBytes(n int) error {
 	return nil
 }
 
+// refundBytes returns n bytes of an over-reservation to the evaluation budget.
+//
+// It exists for a caller that charges a BLOCK it may not spend in full --
+// serializeSink is the one, drawing 64 KiB at a time to keep the atomic off
+// the per-write path -- and it is the mechanism that keeps that optimisation
+// from turning the bound into an approximation: the block is charged when it
+// is drawn and the unspent remainder is handed back, so the evaluation is
+// charged for the bytes it actually built.
+//
+// It is never a way to un-charge bytes that were really written. The only
+// caller passes a reserve it drew itself and has not spent, which is why this
+// is unexported and takes no decision about what a refund means.
+func (c *Context) refundBytes(n int) {
+	if c == nil || c.bytes == nil || n <= 0 {
+		return
+	}
+	atomic.AddInt64(c.bytes, -int64(n))
+}
+
 // ChargeBytes charges n bytes of built string content against the evaluation
 // budget, reporting XPDY0130 when the budget is exhausted.
 //
@@ -783,6 +825,31 @@ func (c *Context) countBytes(n int) error {
 // joins its selected sequence with xslt's own code, so the text it appends
 // reaches none of the functions here that charge as they grow.
 func (c *Context) ChargeBytes(n int) error { return c.countBytes(n) }
+
+// stringResult returns one xs:string after charging the bytes it took to build
+// it, and is how a built-in that materialises a NEW string returns it.
+//
+// The charge belongs here rather than at an enclosing evaluator boundary
+// because a host language does not pass through one. LetExpr, evalFor and the
+// range operator each charge what they bind, which covers an expression
+// written in XPath; a caller that resolves a built-in through the function
+// library and invokes it directly -- which xslt and xquery do, and which any
+// embedder may do -- reaches none of them, so an uncharged built-in hands that
+// caller the whole allowance over again. Charging at the allocation makes the
+// invariant local: whoever built the bytes paid for them.
+//
+// It charges the finished string, which is one allocation late. That is the
+// right trade for a result whose size is bounded by its INPUT -- a case
+// mapping grows by a small constant factor at worst, and the input was itself
+// charged when it was built -- so the excess is bounded and the next call is
+// refused. It is the wrong trade where the output has no such bound, which is
+// what serializeSink exists for: see xpath/fn_serialize.go.
+func stringResult(ctx *Context, s string) (xdm.Sequence, error) {
+	if err := ctx.countBytes(len(s)); err != nil {
+		return nil, err
+	}
+	return strSeq(s), nil
+}
 
 // HoldByteBudget returns a copy of c on which Compiled.Eval will not reset the
 // byte budget, and arms a fresh budget for the construction about to begin.
