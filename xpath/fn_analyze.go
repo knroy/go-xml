@@ -35,16 +35,35 @@ func registerAnalyzeString(l *Library) {
 				return nil, err
 			}
 		}
-		re, err := compileXPathRegexp(pattern, flags, ctx.Version)
+		// CompileRegexpVersion rather than compileXPathRegexp, so that a
+		// backreference pattern reaches the backtracking engine here exactly
+		// as it does in fn:matches, fn:replace, fn:tokenize and
+		// xsl:analyze-string. Compiling through RE2 alone refused "(a)\\1"
+		// outright while its four siblings answered it, which made the set of
+		// patterns the library accepts depend on which function was asked.
+		re, err := CompileRegexpVersion(pattern, flags, ctx.Version)
 		if err != nil {
 			return nil, err
 		}
 		// A pattern that matches the empty string would divide the input into
 		// infinitely many empty matches.
-		if re.MatchString("") {
+		empty := re.MatchString("")
+		// The backtracking engine reports an exhausted step budget through
+		// Err() rather than through the bool, because MatchString has nowhere
+		// else to put it. Left unchecked, a budget exhaustion here reads as a
+		// pattern that does not match the empty string and the scan proceeds
+		// on an answer that was never computed. See RegexpErr.
+		if err := RegexpErr(re); err != nil {
+			return nil, err
+		}
+		if empty {
 			return nil, fmt.Errorf("FORX0003: pattern matches the empty string")
 		}
-		return xdm.One(analyzeString(in, re, groupParents(pattern, flags))), nil
+		result, err := analyzeString(in, re, groupParents(pattern, flags))
+		if err != nil {
+			return nil, err
+		}
+		return xdm.One(result), nil
 	})
 
 	l.registerFnSince(XPath30, "generate-id", []int{0, 1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -158,7 +177,12 @@ func groupParents(pattern, flags string) []int {
 }
 
 // analyzeString builds the fn:analyze-string-result tree.
-func analyzeString(in string, re Regexp, parents []int) *xdm.Node {
+//
+// It returns an error only for an exhausted backtracking budget: the scan
+// below reads the match list, and a list truncated part way through would
+// build a well-formed result element describing an input the engine never
+// finished reading.
+func analyzeString(in string, re Regexp, parents []int) (*xdm.Node, error) {
 	// The result element and its descendants are in the fn: namespace, and
 	// the root carries the declaration that binds it. Without the namespace
 	// node the tree serialises with no binding at all, so a comparison
@@ -181,8 +205,16 @@ func analyzeString(in string, re Regexp, parents []int) *xdm.Node {
 		return &xdm.Node{Kind: xdm.KindText, Value: s}
 	}
 
+	all := re.FindAllStringSubmatchIndex(in, -1)
+	// A budget exhausted part way through the scan returns the matches found
+	// so far, which is a truncated answer rather than a wrong-shaped one and
+	// so is even easier to mistake for the truth.
+	if err := RegexpErr(re); err != nil {
+		return nil, err
+	}
+
 	last := 0
-	for _, m := range re.FindAllStringSubmatchIndex(in, -1) {
+	for _, m := range all {
 		// Everything between the previous match and this one is a non-match.
 		if m[0] > last {
 			nm := &xdm.Node{Kind: xdm.KindElement,
@@ -203,7 +235,7 @@ func analyzeString(in string, re Regexp, parents []int) *xdm.Node {
 		appendChild(nm, text(in[last:]))
 		appendChild(result, nm)
 	}
-	return result
+	return result, nil
 }
 
 // groupSpan is where one capturing group matched, and its number.
