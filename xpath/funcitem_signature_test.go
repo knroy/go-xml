@@ -484,3 +484,152 @@ func TestSynthesizedConcatArityCarriesItsSignature(t *testing.T) {
 			"signature (= %s)", got)
 	}
 }
+
+// TestConstructorFunctionItemsCarryTheirDeclaredType pins the xs: constructors
+// against a typed function test.
+//
+// F&O 18.1 declares every built-in constructor uniformly --
+// "xs:TYPE($arg as xs:anyAtomicType?) as xs:TYPE?" -- and 18.3 declares the
+// three list types with the ITEM type repeated, "xs:IDREFS(...) as xs:IDREF*".
+// None of that reached the function item: cmd/genfunctions extracts per-type
+// proformas that section 18 never writes, so all 49 registered constructors
+// carried an empty Signature and functionItemMatches fell to its arity-only
+// branch. Every one-argument function test then answered TRUE, however absurd:
+// xs:integer#1 was an instance of function(node()) as xs:integer? and
+// xs:date#1 of function(xs:anyAtomicType?) as xs:integer?.
+//
+// The negatives are what catch a regression. Dropping the annotation restores
+// arity-only matching, which says TRUE to everything, so a test made only of
+// types the constructors really do match would stay green with the fix gone.
+//
+// Both acquisition paths are asserted together for the reason
+// TestFunctionLookupCarriesTheSameSignatureAsANamedReference states: F&O 16.4.3
+// makes fn:function-lookup yield the same function item a named reference
+// does, so no typed function test may tell them apart.
+func TestConstructorFunctionItemsCarryTheirDeclaredType(t *testing.T) {
+	doc, err := xdm.ParseString(`<p>x</p>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eval := func(expr string) bool {
+		t.Helper()
+		ctx := NewContext(doc.Root, Builtins())
+		ctx.Version = XPath31
+		ctx.LibraryVersion = XPath31
+		seq, err := Eval(expr, ctx, cardinalityNS{})
+		if err != nil {
+			t.Fatalf("%s: %v", expr, err)
+		}
+		a, ok := seq[0].(*xdm.Atomic)
+		if len(seq) != 1 || !ok {
+			t.Fatalf("%s: want one xs:boolean", expr)
+		}
+		return a.String() == "true"
+	}
+
+	tests := []struct {
+		ctor string
+		test string
+		want bool
+		why  string
+	}{
+		{"xs:integer", "function(xs:anyAtomicType?) as xs:integer?", true,
+			"the signature F&O 18.1 declares for it"},
+		{"xs:integer", "function(xs:anyAtomicType?) as xs:date?", false,
+			"the integer constructor does not return an xs:date"},
+		{"xs:integer", "function(node()) as xs:integer?", false,
+			"it takes xs:anyAtomicType?, which does not admit a node"},
+		{"xs:integer", "function(item()*) as xs:integer?", false,
+			"an item()* is neither a single argument's type nor atomic"},
+		// Parameters are CONTRAVARIANT, and this pair is the proof. XPath 3.1
+		// 2.5.6.2 tests subtype(Ba_I, Aa_I) on arguments -- the TEST's
+		// parameter against the FUNCTION's, not the reverse -- and notes
+		// "Function arguments are contravariant". So a test naming a NARROWER
+		// parameter than the constructor declares is SATISFIED: a function
+		// accepting any atomic type does accept an xs:date. The widened case
+		// above (node(), item()*) is what must fail.
+		//
+		// Pinned because the direction is easy to invert: an audit, the fix
+		// for it, and the review of that fix each read it backwards and each
+		// called this true case a bug.
+		{"xs:date", "function(xs:date) as xs:date?", true,
+			"a narrower parameter than declared is contravariantly satisfied"},
+		{"xs:integer", "function(xs:date) as xs:integer?", true,
+			"same rule: xs:date is a subtype of the declared xs:anyAtomicType?"},
+		{"xs:date", "function(xs:anyAtomicType?) as xs:integer?", false,
+			"the date constructor does not return an xs:integer"},
+		{"xs:date", "function(xs:anyAtomicType?) as xs:date?", true,
+			"its own declared signature"},
+		// F&O 18.3: the result is the ITEM type, repeated. The minLength=1
+		// facet belongs to the list, not to the return type, which is why the
+		// declared result is "*" and not "+".
+		{"xs:IDREFS", "function(xs:anyAtomicType?) as xs:IDREF*", true,
+			"F&O 18.3 declares xs:IDREFS as returning xs:IDREF*"},
+		{"xs:IDREFS", "function(xs:anyAtomicType?) as xs:IDREF?", false,
+			"xs:IDREF? does not subsume the declared xs:IDREF*"},
+		{"xs:numeric", "function(xs:anyAtomicType?) as xs:numeric?", true,
+			"F&O 18.4 declares the xs:numeric union constructor the same way"},
+		// The one constructor whose result is not its own type optional: the
+		// union type xs:error has no member types, so its value space is
+		// empty and the empty sequence is all it can return. QT3 xs-error-007
+		// asserts this spelling exactly.
+		{"xs:error", "function(xs:anyAtomicType?) as empty-sequence()", true,
+			"F&O 18.4: xs:error has an empty value space"},
+		// No negative is asserted for xs:error. "as xs:error?" is TRUE and
+		// correctly so -- empty-sequence() is within it -- and "as xs:error" is
+		// also true, because ParseSequenceType reads a bare xs:error in TYPE
+		// position as item(), which is a separate and pre-existing question
+		// about the type parser rather than about the signature this fixes.
+		// The positive above is what xs-error-007 asserts, and the derivation
+		// is guarded against regression by that suite case and by
+		// TestEveryConstructorIsAnnotated.
+		{"xs:string", "function(*)", true,
+			"every function item is a function(*)"},
+	}
+	for _, tc := range tests {
+		named := eval(tc.ctor + "#1 instance of " + tc.test)
+		looked := eval(`function-lookup(xs:QName("` + tc.ctor +
+			`"),1) instance of ` + tc.test)
+		if named != looked {
+			t.Errorf("%s#1 instance of %s = %v, but the same item from "+
+				"fn:function-lookup = %v; F&O 16.4.3 makes them one item",
+				tc.ctor, tc.test, named, looked)
+		}
+		if named != tc.want {
+			t.Errorf("%s#1 instance of %s = %v, want %v (%s)",
+				tc.ctor, tc.test, named, tc.want, tc.why)
+		}
+	}
+}
+
+// TestEveryConstructorIsAnnotated is the coverage half of the test above,
+// which names ten constructors out of 49.
+//
+// The defect was uniform across the whole namespace, so a per-name test cannot
+// show it is uniformly fixed. This asserts the invariant instead: every xs:
+// entry carries a two-element signature whose parameter is the one F&O 18.1
+// states for all of them, so a constructor registered later cannot quietly
+// arrive unannotated and fall back to arity-only matching.
+func TestEveryConstructorIsAnnotated(t *testing.T) {
+	lib := Builtins().(*Library)
+	n := 0
+	for _, fn := range lib.fns {
+		if fn.Name.URI != xdm.NSXS {
+			continue
+		}
+		n++
+		if len(fn.Signature) != fn.Arity+1 {
+			t.Errorf("%s carries no declared type, so a typed function test "+
+				"of it is decided on arity alone", displayName(fn.Name))
+			continue
+		}
+		if fn.Signature[1] != "xs:anyAtomicType?" {
+			t.Errorf("%s declares its parameter %q; F&O 18.1 gives every "+
+				"constructor xs:anyAtomicType?", displayName(fn.Name),
+				fn.Signature[1])
+		}
+	}
+	if n == 0 {
+		t.Fatal("no xs: constructors are registered, so this asserts nothing")
+	}
+}

@@ -9,7 +9,7 @@ package xslt
 // (a) no RootedPath, (b) every top-level predicate motionless and
 // non-positional, (c) no streaming-parameter variable reference. What was
 // missing was not the classification but its reach. The rule that makes a
-// pattern's streamability matter is §19.6's third clause -- "if the
+// pattern's streamability matter is §19.5's third clause -- "if the
 // focus-setting container of C is a template rule whose mode is declared with
 // streamable='yes', then the context posture is striding" -- and no code
 // followed a mode declaration to the rules that belong to it.

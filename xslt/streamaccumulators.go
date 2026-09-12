@@ -450,12 +450,28 @@ func patternPredicatesFreeRanging(preds []xpath.Expr, allowsChildren, matchedAll
 			ctxPosture:        postureStriding,
 			ctxAllowsChildren: allowsChildren,
 			known:             true,
-			// §19.8.9.3: "The use of the current function within a pattern
-			// is supported with similar restrictions. In this case the
-			// context posture is always striding." current() denotes the
-			// node the pattern is being matched against, which is the node
-			// this step selects, so whether absorbing it reads further from
-			// the stream is that step's question.
+			// §19.8.9.3 on a call inside a pattern: "If the call appears
+			// within a pattern, then climbing and motionless." (The
+			// wording "the context posture is always striding" is from
+			// the Last Call draft, which Bug30033 superseded.)
+			//
+			// Striding rather than climbing is used here deliberately, and
+			// the two are equivalent for what this function asks. The only
+			// question put to the analyzer is whether the predicate is
+			// MOTIONLESS. Off current(), every axis that is motionless
+			// under climbing -- self, parent, ancestor[-or-self],
+			// attribute, namespace -- is motionless under striding too,
+			// and every axis that is not (child, descendant, the sibling
+			// and document-order axes) is non-motionless under both:
+			// consuming under striding, roaming and free-ranging under
+			// climbing. So no pattern's verdict turns on the choice.
+			//
+			// Striding is what currentAllowsChildren below is stated
+			// against: current() denotes the node the pattern is being
+			// matched against, which is the node this step selects, so
+			// whether absorbing it reads further from the stream is that
+			// step's question -- the distinction that separates
+			// "text()[$parts = current()]" from "p[$parts = current()]".
 			currentPosture:        postureStriding,
 			currentAllowsChildren: matchedAllowsChildren,
 			currentInScope:        true,

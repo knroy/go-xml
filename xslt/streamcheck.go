@@ -2,8 +2,10 @@ package xslt
 
 // The XTSE3430 check driven by the §19.8 streamability analysis.
 //
-// §19.1 says a processor that does not stream "is not required to assess
+// §19.10 says a processor that does not stream "is not required to assess
 // whether constructs are guaranteed-streamable", so nothing here is forced.
+// (Cited as §19.1 until a citation audit; §19.1 is "Determining the Static
+// Type of a Construct".)
 // What forces it is the streaming feature: a processor claiming that feature
 // must reject a stylesheet whose streamable construct is not
 // guaranteed-streamable, and the W3C suite tests exactly that.

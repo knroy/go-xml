@@ -1172,10 +1172,16 @@ func compileMergeSource(t *testing.T, atts string) error {
 }
 
 func TestStreamedMergeSourceRequiresAStridingSelect(t *testing.T) {
-	// §15.4's third condition: "The expression in the select attribute of
-	// that xsl:merge-source element has striding posture." A path with a
-	// descendant step is crawling, not striding, so the source is not
-	// guaranteed-streamable. This is merge-094, whose own description reads
+	// §15.4's third condition, in full: "The expression in the select
+	// attribute of that xsl:merge-source element, assessed with a context
+	// posture of striding and a context item type of U{document-node()}, has
+	// striding or grounded posture and motionless or consuming sweep."
+	//
+	// The comment here used to quote this as "has striding posture", dropping
+	// the grounded alternative and the sweep clause -- a strictly stronger
+	// rule than the spec states. A path with a descendant step is CRAWLING,
+	// which is neither striding nor grounded, so this case fails the
+	// condition either way. This is merge-094, whose own description reads
 	// "not streamable because select expression is crawling".
 	//
 	// §19.8.4.25 cannot catch this: it asks only that the for-each-source
@@ -1231,12 +1237,23 @@ func TestUnstreamedMergeSourceIsNotCheckedBy154(t *testing.T) {
 	// condition 3 would otherwise reject.
 	//
 	// The other spelling of "not streamed" -- for-each-source with an
-	// explicit streamable="no" -- used to be tested here too, and is no
-	// longer writable: XTSE3195's last clause says that with for-each-source
-	// present "the only permitted value (and the default value) of the
-	// streamable attribute is yes", so the combination is refused before any
-	// posture is measured. That refusal is asserted by
-	// TestMergeSourceStreamableNoIsRefusedWithForEachSource.
+	// explicit streamable="no" -- used to be tested here too. The reason
+	// given was XTSE3195, quoted as saying that with for-each-source present
+	// "the only permitted value (and the default value) of the streamable
+	// attribute is yes". XTSE3195 says no such thing; in full it constrains
+	// only which of for-each-item, for-each-source, use-accumulators and
+	// streamable may appear together:
+	//
+	//   "If the for-each-item is present then the for-each-source,
+	//   use-accumulators, and streamable attributes must both be absent. If
+	//   the use-accumulators attribute is present then the for-each-source
+	//   attribute must be present. If the for-each-source attribute is
+	//   present then the for-each-item attribute must be absent."
+	//
+	// The named assertion TestMergeSourceStreamableNoIsRefusedWithForEachSource
+	// does not exist either. Both were recorded by a citation audit; what the
+	// engine actually does with that combination is untested, and stating it
+	// would need a measurement rather than a quotation.
 	for _, atts := range []string{
 		`for-each-item="'log-file-2.xml'" select="log//record"`,
 	} {

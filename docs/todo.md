@@ -20,7 +20,7 @@ Current position:
 | XSLT 3.0 | 99.76% — 11,490 of 11,518 in scope (28 failing); 8 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,248 `func Test` declarations, clean under `-race` |
+| Tests | 2,254 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 
 Every one of those failures, and why it is still open, is catalogued in
@@ -98,6 +98,30 @@ element to keep its own indentation and only its content to be spared.
 and an unsupported form is `SEPM0017` rather than silence. Normalization is
 applied at the text-writing site so a character map's replacement stays
 untouched, which is what Serialization 3.1 requires.
+
+**`html-version`** was the last parsed-and-unread one, and the audit that found
+it also found what its inertness was hiding. The `html` output method wrote
+`<br/>` for every empty element — XML syntax an HTML parser does not accept.
+For a void element the `/` is merely ignored, but for a NON-void one
+(`<div/>`) the parser reads an unclosed start tag and swallows the rest of the
+document, so this was silent corruption rather than a cosmetic divergence. The
+void-element table is version-dependent (`basefont`/`frame`/`isindex` are void
+in HTML 4 only; `keygen`/`source`/`track`/`wbr` in HTML 5 only), which is why
+nothing could be fixed until `html-version` was actually read. It is now read
+in both the map and element forms — previously the map form accepted it and
+the element form returned `SEPM0017` for the same parameter.
+
+The table is duplicated from `xslt/serialize.go` rather than shared, and both
+copies now name the other. No import cycle forbids sharing it (`xslt` imports
+`xpath`, not the reverse); the duplication is an ownership artefact and
+collapsing the two is a clean follow-up.
+
+The **`json`** method escaped only `#x1`–`#x1F`. Serialization 3.1 §9 requires
+"any other codepoint in the range 1-31 or **127-159**" to be written `\uHHHH`,
+so DEL and the C1 controls were emitted raw. `fn:xml-to-json` — governed by the
+same rule and pinned by `xml-to-json-073` — already had the correct range in
+`xpath/fn_json.go`, so this was one rule with two implementations and only one
+of them right.
 
 What remains parsed and unread is **`include-content-type`**.
 

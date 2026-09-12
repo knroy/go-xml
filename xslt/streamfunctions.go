@@ -382,12 +382,22 @@ type bodyRequirement struct {
 // function body must satisfy. The entries are transcribed from the "Rules for
 // the function body" paragraph of each subsection.
 //
-// absorbing (§19.8.5.2) reads "For the function to be grounded, and the sweep
-// of the function result must be motionless or consuming." The sentence is
-// garbled in the LCWD text -- a word is missing -- but the surrounding prose
-// and the worked examples make the intent plain: the posture must be grounded
-// ("The function must not return any streamed nodes"), and the sweep must be
-// motionless or consuming.
+// absorbing (§19.8.5.2). This comment previously quoted the Last Call draft,
+// whose sentence is garbled -- "For the function to be grounded, and the sweep
+// of the function result must be motionless or consuming" -- and reconstructed
+// the intent from the surrounding prose. The Recommendation states it cleanly,
+// so the reconstruction is no longer needed:
+//
+//	"For the function to be guaranteed-streamable, the type-adjusted posture
+//	of the function body with respect to the declared return type must be
+//	grounded, and the type-adjusted sweep of the function body with respect
+//	to the declared return type must be motionless or consuming."
+//
+// Note what the LCWD's missing word cost: the quoted form reads as though
+// GROUNDED were the conclusion, when it is one of the two premises and
+// guaranteed-streamable is the conclusion. The reconstruction reached the
+// right rule anyway, which the informal description confirms -- "The function
+// must not return any streamed nodes".
 var bodyRequirements = map[streamCategory]bodyRequirement{
 	catAbsorbing: {
 		postures: []posture{postureGrounded},

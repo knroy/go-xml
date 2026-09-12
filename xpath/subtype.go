@@ -485,6 +485,7 @@ func isManifestNamespace(uri string) bool {
 // read against the Recommendation's function summary in one pass.
 func applyBuiltinSignatures(l *Library) {
 	applyVariadicSignatures(l)
+	applyConstructorSignatures(l)
 	for key, sig := range specSignatures {
 		name, arity, ok := splitSpecEntryKey(key)
 		if !ok || len(sig) != arity+1 {
@@ -527,6 +528,81 @@ func applyVariadicSignatures(l *Library) {
 			sig = append(sig, "xs:anyAtomicType?")
 		}
 		fn.Signature = sig
+		l.Add(fn)
+	}
+}
+
+// applyConstructorSignatures annotates the xs: constructor functions.
+//
+// They have no manifest row and cannot have one: F&O 18.1 states their
+// signature ONCE for every built-in atomic type -- "eg:TYPE($arg as
+// xs:anyAtomicType?) as eg:TYPE?" -- rather than writing a proforma per type,
+// so cmd/genfunctions has nothing per-type to extract and
+// TestRegisteredFunctionsHaveManifestMetadata excuses the whole namespace.
+// That excuse was read as "these have no declared type", which is the
+// opposite of what 18.1 says: the type is declared uniformly, not absent.
+//
+// The consequence was the permissive branch in functionItemMatches. An item
+// carrying no signature is judged on ARITY ALONE, which is right for an inline
+// function nobody declared and wrong here, so every one of the 49 registered
+// constructors answered TRUE to every one-argument function test.
+//
+// The discriminating cases are the RETURN type and a WIDENED parameter, not a
+// narrowed one. "xs:date#1 instance of function(xs:anyAtomicType?) as
+// xs:integer?" is nonsense -- the date constructor does not return an integer
+// -- and is now false; so is "xs:integer#1 instance of function(item()) as
+// xs:integer?", because item() is not a subtype of the declared
+// xs:anyAtomicType? and 2.5.6.2 tests subtype(Ba_I, Aa_I) on arguments.
+//
+// Note that "xs:integer#1 instance of function(xs:date) as xs:integer?" is
+// TRUE and must stay true: parameters are CONTRAVARIANT, so a test naming a
+// NARROWER parameter than the function declares is satisfied. A function that
+// accepts any atomic type does accept an xs:date. This reading is easy to
+// invert -- an audit, a fix and a review each got it backwards -- so the pair
+// is pinned in the tests rather than left to the reader.
+//
+// Deriving the row instead of listing it is deliberate: 49 hand-written rows
+// saying the same thing is 49 chances to mistype one, and a constructor
+// registered later would silently get none. The parameter is xs:anyAtomicType?
+// for every constructor without exception. Only the RESULT varies, and only in
+// the two cases the switch below names: the three built-in list types of 18.3,
+// and xs:error. Both are stated in the spec and both are pinned by the suite.
+//
+// This does NOT touch the schema constructors of an imported type
+// (lookupSchemaConstructor). Those keep the permissive treatment, and rightly:
+// F&O 18.5 gives a user-defined type's constructor the same shape, but the
+// result spelling is a type name that spellingSubsumes has never heard of --
+// it is in the schema, not in the closed set of built-in spellings -- and an
+// unknown spelling subsumes only itself. Annotating them would make
+// "myType#1 instance of function(xs:anyAtomicType?) as item()*" answer FALSE,
+// turning a permissive wrong answer into a strict wrong one. The 49 here are
+// exactly the ones whose result type this package can actually reason about.
+func applyConstructorSignatures(l *Library) {
+	for _, fn := range l.fns {
+		if fn.Name.URI != xdm.NSXS || fn.Arity != 1 {
+			continue
+		}
+		result := "xs:" + fn.Name.Local + "?"
+		switch {
+		case fn.Name.Local == "error":
+			// xs:error is the one constructor whose result is NOT its own
+			// type optional. F&O 18.4 gives the union type xs:error no member
+			// types at all, so its value space is empty and the only value it
+			// can ever return is the empty sequence; xs-error-007 asserts
+			// exactly "xs:error#1 instance of function(xs:anyAtomicType?) as
+			// empty-sequence()". Deriving "xs:error?" like the other 48 made
+			// that case fail -- the first real evidence that these items are
+			// now judged on their type at all, since it passed vacuously
+			// while every constructor was matched on arity alone.
+			result = "empty-sequence()"
+		case listItemFacet[fn.Name.Local] != "":
+			// F&O 18.3: the three built-in list types return the ITEM type,
+			// repeated -- "xs:IDREFS($arg) as xs:IDREF*". The minLength=1
+			// facet is the list's, not the return type's, which is why the
+			// declared result is "*" and admits the empty sequence.
+			result = "xs:" + listItemFacet[fn.Name.Local] + "*"
+		}
+		fn.Signature = []string{result, "xs:anyAtomicType?"}
 		l.Add(fn)
 	}
 }

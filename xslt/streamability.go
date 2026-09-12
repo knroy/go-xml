@@ -804,11 +804,50 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 			// §19.8.9.14.
 			return a.lastFunction()
 		case "current":
-			// §19.8.9.3: "The sweep of the function is motionless; the
-			// posture is the context posture for evaluation of the outermost
-			// containing XPath expression (that is, the context posture that
-			// would obtain if the entire XPath expression were replaced with
-			// '.')." Inside a pattern that posture is fixed at striding.
+			// §19.8.9.3 gives a four-way cascade. The wording quoted here
+			// before -- "the posture is the context posture for evaluation of
+			// the outermost containing XPath expression (that is, the context
+			// posture that would obtain if the entire XPath expression were
+			// replaced with '.')" -- is from the Last Call draft and is not
+			// in the Recommendation, which reads:
+			//
+			//   "If the call appears within a pattern, then climbing and
+			//   motionless. [...] Otherwise, let E be the outermost
+			//   containing XPath expression of the call to the current
+			//   function. If the context posture of E is grounded, then
+			//   motionless and grounded. If the path in the expression tree
+			//   that connects the call on current to E (excluding E itself)
+			//   contains an expression that is a higher-order operand of its
+			//   parent expression, then motionless and climbing. [...]
+			//   Otherwise, the posture is the context posture, and the sweep
+			//   is motionless."
+			//
+			// The pattern clause is applied by the caller, which sets
+			// currentPosture before entering the pattern. The grounded clause
+			// needs no separate branch: where E's context posture is
+			// grounded, currentPosture is already grounded, so the final
+			// clause returns the same answer.
+			//
+			// The higher-order clause is NOT implemented, deliberately. It
+			// was written (return climbing when a.higherOrder) and reverted,
+			// because nothing could be found that observes it:
+			//
+			//   - instrumenting the branch with a panic and running the whole
+			//     XSLT 3.0 corpus never fired it, and the corpus count is
+			//     identical with and without it (11,490 / 28 either way);
+			//   - the constructs that DO set higherOrder absorb the
+			//     distinction before it can surface. xsl:for-each with a
+			//     grounded select is the obvious candidate, and its body is
+			//     motionless whatever current() returned: "current()/a" and
+			//     "./a" give the same grounded/motionless answer, so no
+			//     assertion over that construct can tell the two readings
+			//     apart. A test written against it passed with the branch
+			//     deleted.
+			//
+			// Adding a rule no test can fail is how dead code enters an
+			// analysis that is otherwise pinned case by case, so the clause
+			// is recorded here rather than written. If a construct is found
+			// that exposes it, this comment is the place to start.
 			//
 			// Where no outermost context was recorded the call stays
 			// unmodelled, so the caller reports nothing rather than guessing.

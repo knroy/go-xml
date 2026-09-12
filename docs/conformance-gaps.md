@@ -49,7 +49,7 @@ W3C disagreements: 0 + 0 + 0 + 1 + 8 + 28 + 30 + 31 + 0 = 98. Measured 2026-09-1
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 2,248 tests.
+The unit-test suite is 2,254 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -330,21 +330,32 @@ Every rule the lattice implements is tested against the worked examples §19.8.2
 gives, cited case by case, so a reader can check the tests against the spec
 rather than against the code they test.
 
-**What does not exist.** Of the 86 rule sections in §19, roughly 13 are covered
-— call it 15%, and the covered ones are deliberately the shared ones rather
-than the numerous ones. Absent entirely:
+**What does not exist.** This paragraph previously read "roughly 13 [sections]
+are covered — call it 15%", and listed the §19.8.6 instruction rules, §19.8.5
+stylesheet functions and §19.8.4 accumulators as "absent entirely". **That was
+three sessions out of date and is corrected here.** The figure is now measured
+rather than estimated: `xslt/stream*.go` cites **92 distinct §19 subsections**,
+and the blocks named as absent are precisely the ones that have since been
+built — `xslt/streaminstructions.go` (2,218 lines) models 48 `xsl:`
+instructions including all four §19.8.6 calls intricate, `streamfunctions.go`
+(1,013 lines) carries §19.8.5 including the streaming-parameter signature rule,
+and `streamaccumulators.go` covers the §19.8.4.x block. Coverage of the rule
+sections is on the order of **85%**, not 15%.
 
-- **All 43 XSLT instruction rules of §19.8.6.** `xsl:for-each`, `xsl:iterate`,
-  `xsl:for-each-group`, `xsl:fork`, `xsl:merge`, `xsl:apply-templates` and the
-  rest each have their own operand roles and their own context-posture
-  contribution.
-- **Streamable stylesheet functions (§19.8.5) and accumulators (§19.8.4).**
-  These are what the `su-*` test families exercise, and they are the largest
-  single block of the remaining cases.
-- **§19.8.8.10 dynamic calls, §19.8.8.14 inline functions, and `let`
-  expressions.** §19.8.8.4 union/intersect/except, §19.8.8.1–2 `for` and
+The estimate is deliberately given as an order and not a percentage to two
+places: §19's subsections are not equal units of work, so a section count
+flatters the wide-and-mechanical blocks and understates the lattice. What the
+count does establish is the direction — the remaining work is the exception
+list below, not the bulk of the chapter.
+
+Still absent or partial:
+
+- **§19.8.8.10 dynamic calls and §19.8.8.14 inline functions**, and `let`
+  expressions. §19.8.8.4 union/intersect/except, §19.8.8.1–2 `for` and
   quantified expressions, §19.8.8.6 simple mapping (`!`) and §19.8.8.15/16 map
   expressions are implemented.
+- **The numeric-predicate narrowing** of §19.8.8.8 and §19.8.8.9, noted in the
+  table above.
 - **The 18 per-function sections of §19.8.9** that do not follow the general
   rules: `fn:last`, `fn:root`, `fn:reverse`, `fn:innermost`, `fn:fold-right`,
   `fn:function-lookup`, the accumulator pair and the merge pair. Three are now
@@ -381,17 +392,17 @@ spurious refusal. XSLT 2.0 is unmoved, which the structure guarantees as well
 as the measurement — no XSLT 2.0 stylesheet in the suite uses a streamable
 container at all.
 
-**What completing it would take.** The remaining work is wide rather than
-deep: the lattice is the part that had to be right, and the per-construct rules
-are mostly mechanical transcription against it. The 43 instruction rules are
-the bulk, and `xsl:for-each-group`, `xsl:iterate`, `xsl:fork` and `xsl:merge`
-are the four that are genuinely intricate, because each defines its own
-context-posture contribution rather than deferring to the general rules.
-Streamable stylesheet functions need the streaming-parameter posture table of
-§19.8.8.11 and a per-function streamability category, and would unlock the
-`su-*` families. A realistic estimate for the remainder is several times the
-work already done, and it should be taken construct family by construct family,
-each with the negative arm the existing tests establish as the pattern.
+**What completing it would take.** This paragraph, too, described the work as
+"the 43 instruction rules are the bulk" and stylesheet functions as unbuilt.
+Both are done: the instruction rules, all four intricate ones among them, and
+the §19.8.5 streaming-parameter signature rule. What remains is the short list
+above — dynamic calls, inline functions, `let`, and the numeric-predicate
+narrowing — plus the residue measured in the `XTSE3430` breakdown, currently
+**8 cases** that want the error and do not get it. That is a far smaller
+remainder than "several times the work already done", which is what the
+previous wording claimed. It should still be taken construct family by
+construct family, each with the negative arm the existing tests establish as
+the pattern.
 
 Streamed *execution* — an incremental parser and pull evaluator — is a separate
 and much larger project, and it would buy almost no conformance, because the
@@ -403,7 +414,7 @@ vocabulary. Flipping the feature flag on without §19.8 would claim streaming
 while never refusing a non-streamable stylesheet, which is why the flag stays
 off.
 
-## xsd — 62 disagreements
+## xsd — 61 disagreements
 
 **XSD 1.0 — 39,358 / 39,388 = 99.92%. XSD 1.1 — 41,567 / 41,598 = 99.93%.**
 
@@ -425,7 +436,7 @@ is the opposite of challenged.
 | | Total | `accepted` | `queried` | `stable` | no status |
 |---|---:|---:|---:|---:|---:|
 | XSD 1.0 | 30 | **2** | 26 | 2 | 0 |
-| XSD 1.1 | 32 | **3** | 27 | 2 | 0 |
+| XSD 1.1 | 31 | **3** | 27 | 1 | 0 |
 
 Those totals are counted from the `<current>` status of each disagreeing case.
 
@@ -442,7 +453,7 @@ every one we disagree in the direction the filed bug points, which is what
 makes the status a defence rather than a label.
 
 Of the 30 on 1.0, 28 carry a `queried` or `stable` bugzilla reference and 2
-carry `accepted` — `attP031` and `particlesZ001`. Of the 32 on 1.1, 29 are
+carry `accepted` — `attP031` and `particlesZ001`. Of the 31 on 1.1, 28 are
 `queried` or `stable` and 3 are `accepted`: `simple093`, `particlesZ033_g` and
 `id017.n01.xml`. Those five are read individually.
 
@@ -460,16 +471,16 @@ longer disagree at all, and the sentence that once counted four of them here
 outlived its own fix. The 1.0 `SFALSEREJECT` column is `particlesZ001` and
 `ste110`, and nothing else.
 
-### All 62 are adjudicated case by case
+### All 61 are adjudicated case by case
 
 `tests/conformance/results.json` enumerates every one of the 30 and the 32, the
 way it already enumerated XSLT 3.0, so the sum check covers XSD rather than
 stopping at a set-level summary. Each case is classified as exactly one of
-three things, and **none of the 62 is a genuine implementation gap**:
+three things, and **none of the 61 is a genuine implementation gap**:
 
 | Bucket | 1.0 | 1.1 | Cases |
 |---|---:|---:|---|
-| **(a) fixture defect** — the suite contradicts itself or a sibling | 2 | 3 | `attP031.i`, `particlesZ001` (1.0); `elemZ026`, `particlesZ026`, `simple093.xsd` (1.1) |
+| **(a) fixture defect** — the suite contradicts itself or a sibling | 2 | 2 | `attP031.i`, `particlesZ001` (1.0); `elemZ026`, `simple093.xsd` (1.1) |
 | **(b) conforming-default divergence** — a documented decision, option named | 0 | 1 | `id017.n01.xml` |
 | **(c) challenged expectation** — `queried`/`stable` against an open W3C bug | 28 | 28 | 22 `MS-Regex` under bug 4113, plus `anyURI_a004`, `gMonth002`, `gMonth004`, `idZ015`, `ste110`, and `anyURI_b006` (1.0 only); `particlesZ033_g` is 1.1's sixth |
 

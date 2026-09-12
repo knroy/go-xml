@@ -367,14 +367,26 @@ and none is tractable work:
   document carrying no DTD. Declined on purpose: the unparsed-entity check bails
   when the instance declares no unparsed entity at all, which is what keeps
   `as-34` and the XSLT suite's `as-3401`, `match-208` and `match-209` passing.
-  Read in full under *All 62 are adjudicated case by case* in
+  Read in full under *All 61 are adjudicated case by case* in
   [conformance-gaps.md](conformance-gaps.md).
 
-### XSD particle restriction: `particlesZ001` and the two-job wrapper
+### XSD particle restriction: the two-job wrapper in `recurseAsIfGroup`
 
-`particlesZ001` is the one remaining addressable XSD 1.0 schema false reject,
-and it is a real gap rather than a divergence: the schema is valid and this
-refuses it. It is a `<sequence>` whose `<element name="element" minOccurs="0"
+**`particlesZ001` itself is a fixture defect, not a gap** — this section once
+called it "the one remaining addressable XSD 1.0 schema false reject", and that
+was wrong. Its `schemaTest` expects `valid` with no `version` attribute, while
+its own `instanceTest` splits `invalid` under 1.0 from `valid` under 1.1, and
+the group's annotation reads "Invalid restriction which becomes valid in XSD
+1.1" under the `xsd1_1-RestrictionComplexTypes-IntensionalRestr` category. The
+version split never reached the `schemaTest`, so under 1.0 the suite demands
+`valid` for a schema it elsewhere describes as invalid. It is adjudicated as
+bucket (a) in [conformance-gaps.md](conformance-gaps.md), and
+`tests/conformance/results.json` records it as `fixture`.
+
+**The wrapper limitation below is real all the same**, and is kept because it
+is a live constraint on `recurseAsIfGroup` that other cases run into — the
+measured cost recorded here is what stops the obvious fix being retried. The
+shape is a `<sequence>` whose `<element name="element" minOccurs="0"
 maxOccurs="unbounded"/>` restricts a base `<choice minOccurs="0"
 maxOccurs="unbounded">` containing that element.
 
@@ -396,8 +408,9 @@ because a group of one repeating N times contributes N elements where the
 original particle contributed its own range. Carrying the range fixes the first
 and breaks the second. **A correct fix needs the two separated rather than one
 range serving both — which is a change to `effectiveTotalRange`'s contract, not
-a change to this wrapper.** That is what makes this an open gap with a known
-shape rather than a patch nobody has tried.
+a change to this wrapper.** That is what makes this a known limitation with a
+known shape rather than a patch nobody has tried; it is not counted as a
+conformance gap, because the case that exposes it is a fixture defect.
 
 Three further 1.1 cases — `particlesHb008`, `particlesHb011` and
 `particlesZ028` — need XSD 1.1's §3.4.6.4 intensional restriction: genuine
@@ -871,8 +884,10 @@ will propose for a neighbouring case.
 
 * **`particlesZ001` under 1.0** is expected valid with no version attribute
   while its own annotation calls the 1.0 rule "ambiguous" and tags it as
-  intensional restriction, a 1.1 feature. It is a genuine false reject all the
-  same, and is written up under *Open gaps* above.
+  intensional restriction, a 1.1 feature — and its `instanceTest` carries the
+  1.0/1.1 split its `schemaTest` is missing. That unpropagated split is the
+  defect; the wrapper limitation it happens to expose is written up under
+  *XSD particle restriction: the two-job wrapper in `recurseAsIfGroup`* above.
 * **`simple004`/`005`** are self-flagged as depending on the resolution of spec
   bug 2074, and `simple006`'s own note says "one could argue for valid".
 
@@ -1002,6 +1017,167 @@ Verdicts recorded in this file that were **wrong**. Not fixes — a fix leaves n
 trace here — but readings that were believed, quoted, and disproved. They are
 kept because a negative result that was believed for two revisions is more
 dangerous than an open bug, and deleting one invites the same probe again.
+
+### "A nilled element must not satisfy a key field" — it must, and the suite says so
+
+An audit reported that `keySequence` (`xsd/identity.go`) lets a nilled element
+contribute a key value, on the reasoning that a nilled element has no
+[schema normalized value] and so no ·key-sequence· member. The fix was
+specified two ways — treat it as ABSENT, or fail it outright — and **both would
+have been conformance regressions.** No change was made.
+
+`idF018` settles it. Its `<field xpath=".">` selects the nilled element itself,
+over two `<uid xsi:nil="true"/>` children, and the suite expects the schema
+**valid** and the instance **invalid**, `accepted` since 2006 with no bugzilla
+history. Invalid is reachable only if both nilled elements DO produce a key
+sequence and those sequences collide — which is the behaviour the audit called
+the bug. Under the "absent" reading neither element would qualify, nothing
+could collide, and `idF018.i` would be accepted. We pass it today *because of*
+the code the audit asked to remove.
+
+The "violation" reading fails separately: `idL098` and `idL102` are `xs:key`
+over three `xsi:nil="true"` elements and are expected **valid**, so nilling is
+not a hard failure either. It is not the `complexTyped` clause — a
+complex-typed element has no simple type at all, whereas a nilled element keeps
+its declared type and is still fully ·assessed· (see `xsd/validate.go:617`).
+
+**One real weakness was found and deliberately left.** The empty key string for
+a nilled element comes from `keyString`'s untyped `StringValue()` fallback, not
+from a decision, so it is indistinguishable from the fallback taken by a node
+that was never annotated. It gives the right verdict for `idF018` because all
+nilled elements collide with each other regardless of type, but a nilled
+`xs:int` silently shares a key with a nilled `xs:string`. Making that
+intentional — an explicit sentinel — is a behaviour change with no oracle in
+the suite, which leaves `key` + `field xpath="."` + a *single* nilled element
+untested. Recorded rather than done.
+
+### "The xs: constructors answer every function test true" — half right, and the fix was reviewed backwards
+
+The finding was real and is fixed (above). What is recorded here is the
+**reasoning that was wrong three times over**, because it is the kind that
+regenerates.
+
+The audit, the fix, and the review of the fix each illustrated the bug with
+`xs:integer#1 instance of function(xs:date) as xs:integer?`, calling its
+`true` answer absurd — "the integer constructor does not take an xs:date".
+**That answer is correct and must stay true.** XPath 3.1 §2.5.6.2 judges
+arguments with `subtype(Ba_I, Aa_I)` — the TEST's parameter against the
+FUNCTION's — and notes "Function arguments are contravariant". A constructor
+declared `xs:anyAtomicType?` does accept an `xs:date`, so a test naming the
+narrower type is satisfied.
+
+The genuine discriminators are the RETURN type and a *widened* parameter:
+`function(xs:anyAtomicType?) as xs:date?` and `function(node()) as xs:integer?`
+are both false. Had the "fix" been written to make the contravariant case
+false, it would have broken conforming behaviour while appearing to close the
+finding. Both directions are now pinned in
+`TestConstructorFunctionItemsCarryTheirDeclaredType`.
+
+### The streamability comments were written against the Last Call draft
+
+A systematic audit of the quoted spec text in `xslt/stream*.go` — 245 distinct
+quotations matched against 465 section headings extracted from
+`testdata/xslt30-test/specs/xslt-30.html` — found roughly **30 defective
+citations**. The large majority of quotations passed; what follows is what did
+not, because the pattern behind them matters more than any single line.
+
+**The cause is a document, not carelessness.** The file family was written
+against the **Last Call Working Draft**, and the Recommendation renumbered and
+rewrote parts of §19. Where the LCWD wording was quoted it is often now absent
+from the spec entirely, and the §18.2.x accumulator range shifted by one when
+`fn:accumulator-before`/`after` were renumbered, so section numbers across
+`streamaccumulators.go` are systematically LCWD-numbered.
+
+Three classes were found, and only the first can mislead the code:
+
+1. **Quotations stating a rule the spec does not state.** §15.4's third
+   condition was quoted as "has striding posture", dropping "**or grounded**"
+   and the entire sweep clause — a strictly stronger rule than the spec's.
+   XTSE3195 was quoted as fixing the permitted values of `@streamable`; it
+   constrains only which attributes may co-occur, and the test named as
+   asserting that refusal does not exist. §19.8.9.3 was quoted in a form that
+   drops two of its four branches. These are corrected.
+2. **Verbatim quotations under the wrong number.** The sweep-ordering sentence
+   is §19.6, cited as §19.7; the context-posture clause is §19.5, cited as
+   §19.6; "is not required to assess whether constructs are
+   guaranteed-streamable" is §19.10 ("Streamability Guarantees"), cited as
+   §19.1 ("Determining the Static Type of a Construct"). Corrected where found.
+3. **Paraphrase inside quotation marks.** Several comments put the
+   implementation's own reading in quotes — `streamfunctions.go:385` renders
+   §19.8.5.2 in a form that swaps the conclusion for a premise, and
+   `streamaccumafter.go:57` presents a climbing clause §19.8.9.1 does not have
+   (the comment below it acknowledges this as Bug 30018, but the quotation
+   marks assert spec text regardless).
+
+**Why this is recorded rather than merely fixed.** A quotation is the one thing
+in a comment a reader will not re-derive — it is read as the authority the code
+answers to. A stale one therefore outlives every other kind of stale comment,
+and a *wrong* one silently licenses a wrong change: the §15.4 rule as quoted
+would have justified rejecting a grounded merge source the spec permits. The
+remaining class-3 items are catalogued but not yet rewritten.
+
+### A §19.8.9.3 quotation that no longer appears in the spec
+
+`xslt/streamaccumulators.go` quoted §19.8.9.3 as "The use of the current
+function within a pattern is supported with similar restrictions. In this case
+the context posture is always striding." **That sentence is not in XSLT 3.0.**
+It is Last Call draft wording, superseded by Bug30033; the Recommendation says
+instead that a `current()` call inside a pattern is *climbing* and motionless.
+
+The code was checked separately from the comment, and the code is right. It
+sets `postureStriding`, and for the one question this function asks — is the
+predicate **motionless**? — striding and climbing are indistinguishable. Off
+`current()`, every axis motionless under climbing (`self`, `parent`,
+`ancestor`, `ancestor-or-self`, `attribute`, `namespace`) is motionless under
+striding, and every axis that is not is non-motionless under both. No
+pattern's verdict turns on the choice. The comment was replaced with the real
+wording plus that argument, rather than the posture being changed to match a
+citation nobody had re-read.
+
+Recorded because a quotation is the one thing in a comment a reader will not
+re-derive, so a stale one outlives every other kind of error.
+
+### 49 `xs:` constructors answered every function test true
+
+`xs:integer#1 instance of function(xs:date) as xs:integer?` was **true**, and
+so was `xs:date#1 instance of function(xs:date) as xs:integer?`. Both are
+nonsense. `functionItemMatches` falls back to judging an item on arity alone
+when it carries no signature — correct for an inline function nobody declared,
+wrong for a constructor whose type F&O 18.1 states.
+
+The cause was a misread exemption. `cmd/genfunctions` builds the manifest from
+the per-function proformas in the spec, and 18.1 does not write one per type:
+it gives the shape **once**, `eg:TYPE($arg as xs:anyAtomicType?) as eg:TYPE?`,
+for every built-in atomic type at once. So the constructors have no manifest
+row, `TestRegisteredFunctionsHaveManifestMetadata` excuses the namespace, and
+that excuse was read as "these have no declared type" when 18.1 declares it
+uniformly.
+
+The signature is now derived rather than listed — 49 hand-written rows saying
+the same thing is 49 chances to mistype one, and a constructor added later
+would silently get none. Constructors of *imported schema* types
+(`lookupSchemaConstructor`) keep the permissive treatment deliberately: their
+result spelling is not in the closed set `spellingSubsumes` knows, and an
+unknown spelling subsumes only itself, so annotating them would turn a
+permissive wrong answer into a strict one.
+
+One constructor is not uniform, and the suite is what said so. `xs:error` is a
+union type with **no member types**, so its value space is empty and the only
+result it can ever have is the empty sequence: F&O 18.4 declares it
+`xs:error($arg as xs:anyAtomicType?) as empty-sequence()`, and QT3
+`xs-error-007` asserts that spelling exactly. Deriving `xs:error?` like the
+other 48 failed that case — the first evidence the items were being judged on
+their type at all, since it had passed *vacuously* for as long as every
+constructor matched on arity alone. The three built-in list types of 18.3 are
+the other exception, returning the **item** type repeated
+(`xs:IDREFS(...) as xs:IDREF*`), because the `minLength=1` facet belongs to the
+list and not to the return type.
+
+That vacuous pass is the reason the regression guard is a unit test rather than
+the suite: removing the annotation leaves QT3 green at 15217/19362/21898 and
+30345, and fails `TestConstructorFunctionItemsCarryTheirDeclaredType` with five
+named nonsense matches. The suites are unmoved in both directions — XSLT 3.0
+stays 11490/28 and XSLT 1.0/2.0 6193/8 — so the fix is a pure tightening.
 
 ### "§19.8.9.3 costs four valid stylesheets" — it gains ten and costs none
 

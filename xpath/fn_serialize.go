@@ -215,6 +215,11 @@ type serializeOptions struct {
 	// given. It appears in the XML declaration, so asking for it also forces
 	// the declaration to be written.
 	standalone string
+	// htmlVersion is the html-version parameter: it selects between the HTML
+	// 4 and HTML 5 void-element lists, which decide whether an empty element
+	// is written with an end tag. It was accepted and dropped, so a caller
+	// asking for version 4 got HTML 5's answer for <wbr> and <frame>.
+	htmlVersion string
 	// version is the XML version announced in the declaration. Only 1.0 and
 	// 1.1 exist; anything else is written as 1.0, because a declaration is a
 	// claim the reading parser acts on rather than an echo of what was asked.
@@ -553,6 +558,13 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				}
 				v := norm == "yes"
 				opts.includeContentType = &v
+			case "html-version":
+				// The same parameter the map form reads, and read here so the
+				// two spellings of the same request answer alike: it fell to
+				// the default arm and came back SEPM0017, while
+				// map{"html-version":4} was accepted. It selects the
+				// void-element list the html method minimises against.
+				opts.htmlVersion = val
 			case "media-type",
 				"byte-order-mark":
 				// Recognised and accepted, and deliberately without effect
@@ -833,6 +845,35 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// a non-void element anyway.
 		htmlHead := isHTMLContentTypeHead(n, opts)
 		if len(n.Children) == 0 && !htmlHead {
+			// HTML has no self-closing syntax, so the html method cannot take
+			// the XML shortcut: a void element takes no end tag at all, and
+			// every other empty element takes an explicit one, because an
+			// HTML parser reads "<div/>" as an unclosed "<div>" and swallows
+			// everything after it into the div. Writing "<br/>" was the same
+			// mistake in the other direction -- the "/" is not syntax an HTML
+			// parser acts on, so it was markup the caller never asked for.
+			//
+			// This is xslt/serialize.go's rule, in the empty-element branch
+			// of writeElement, and the two must stay identical: the same
+			// document went through xsl:result-document as "<br>" and through
+			// fn:serialize as "<br/>".
+			//
+			// The xhtml method is deliberately not handled here. It has a
+			// third rule again -- void elements self-closed with a space,
+			// non-void ones with a full end tag, and recognition gated on the
+			// XHTML namespace under version 4 -- and this serialiser has
+			// never implemented it. Changing xhtml's output is a separate
+			// change with its own cases to answer to.
+			if opts.method == "html" {
+				if opts.isVoidElement(n.Name.Local) {
+					sb.WriteString(">")
+				} else {
+					sb.WriteString("></")
+					sb.WriteString(elementName(n))
+					sb.WriteString(">")
+				}
+				return
+			}
 			sb.WriteString("/>")
 			return
 		}
@@ -1091,6 +1132,75 @@ func quoteExternalID(v string) string {
 		return "'" + v + "'"
 	}
 	return `"` + v + `"`
+}
+
+// voidElements are the HTML elements that take no end tag, in every HTML
+// version this serialiser writes. Three more are void only in HTML 4 and four
+// only in HTML 5, which is what the two maps below are for.
+//
+// This is the same table xslt/serialize.go carries, and the two must move
+// together: an element written "<br/>" by one serialiser and "<br>" by the
+// other is the same request answered two ways, decided by which spelling the
+// caller used. A single shared definition would be better and is not blocked
+// by the import graph -- xslt already imports xpath -- but moving it needs an
+// edit to xslt/serialize.go's call sites, which this change does not own. If
+// you touch either copy, touch both.
+var voidElements = map[string]bool{
+	"area": true, "base": true, "br": true, "col": true, "embed": true,
+	"hr": true, "img": true, "input": true, "link": true, "meta": true,
+	"param": true,
+}
+
+// html4VoidElements are void in HTML 4 and gone from HTML 5, which has no
+// frameset and no isindex at all. Writing "<frame>" unclosed under HTML 5
+// leaves an element an HTML 5 parser reads as open, swallowing what follows.
+// Kept identical to xslt/serialize.go's map of the same name.
+var html4VoidElements = map[string]bool{
+	"basefont": true, "frame": true, "isindex": true,
+}
+
+// html5VoidElements are void in HTML 5 and unknown to HTML 4, where an
+// unclosed one would be an unrecognised start tag rather than an empty
+// element. Kept identical to xslt/serialize.go's map of the same name.
+var html5VoidElements = map[string]bool{
+	"keygen": true, "source": true, "track": true, "wbr": true,
+}
+
+// isVoidElement reports whether an element takes no end tag under the html
+// method.
+//
+// The version decides for seven of the names, so the html-version parameter
+// is read rather than ignored: asking for version 4 and getting <wbr>
+// unclosed, or version 5 and getting <frame> unclosed, is the combined-list
+// mistake xslt/serialize.go's isVoidElement documents -- a serialiser with
+// one merged list answers both versions wrongly the moment a caller names an
+// element from the other one.
+//
+// html-version decides, falling back to version. That fallback is the html
+// method's alone in xslt/serialize.go, because for xhtml @version is the
+// version of XML; this function is only reached from the html method, so the
+// fallback is unconditional here.
+func (o *serializeOptions) isVoidElement(local string) bool {
+	local = strings.ToLower(local)
+	if voidElements[local] {
+		return true
+	}
+	if o.html5() {
+		return html5VoidElements[local]
+	}
+	return html4VoidElements[local]
+}
+
+// html5 reports whether the HTML version asked for is 5 or later, which is
+// what selects between the two version-specific void-element lists. The
+// spelling test is xslt/serialize.go's: a prefix match on "5", so that "5.0"
+// and "5" both say HTML 5 and an absent parameter says HTML 4.
+func (o *serializeOptions) html5() bool {
+	v := o.htmlVersion
+	if v == "" {
+		v = o.version
+	}
+	return strings.HasPrefix(v, "5")
 }
 
 // uriAttributes are the attributes the HTML DTD declares with type URI, whose
@@ -1447,22 +1557,29 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 				return err
 			}
 			opts.includeContentType = &v
+		case "html-version":
+			// Read rather than dropped: it chooses the void-element list the
+			// html method minimises against. Serialization 3.1 types it as a
+			// decimal, but only its leading "5" is ever tested, so it is read
+			// through the same string reader the element form uses and kept
+			// as written.
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.htmlVersion = v
 		case "media-type",
 			"byte-order-mark",
-			"html-version", "parameter-document":
+			"parameter-document":
 			// Recognised and accepted. See the element form's arm for why
 			// byte-order-mark and media-type cannot act on a returned string.
 			//
-			// html-version and parameter-document are accepted rather than
-			// refused because both are real parameters this serialiser has
-			// nothing to do with. html-version selects between HTML 4 and 5
-			// doctype spellings, and the only doctype this method writes on
-			// its own is the bare HTML5 one it already writes. A
-			// parameter-document is resolved by the caller that reads the
-			// document; by the time parameters reach here they are values,
-			// and there is no base URI in an XPath static context to resolve
-			// one against. Refusing them would turn a legal request into
-			// SEPM0017.
+			// parameter-document is accepted rather than refused because it
+			// is a real parameter this serialiser has nothing to do with: it
+			// is resolved by the caller that reads the document, and by the
+			// time parameters reach here they are values, with no base URI in
+			// an XPath static context to resolve one against. Refusing it
+			// would turn a legal request into SEPM0017.
 		default:
 			return fmt.Errorf(
 				"SEPM0017: serialization parameter %q is not supported", name)
@@ -1744,7 +1861,11 @@ func writeJSONRun(sb *serializeSink, s string, opts serializeOptions) {
 		case '\t':
 			sb.WriteString(`\t`)
 		default:
-			if r < 0x20 {
+			// Serialization 3.1 §9: JSON escaping writes "any other codepoint
+			// in the range 1-31 or 127-159" as \uHHHH. The upper range is DEL
+			// and the C1 controls; fn:xml-to-json, which is governed by the
+			// same rule, escapes it too (xml-to-json-073).
+			if r < 0x20 || (r >= 0x7F && r <= 0x9F) {
 				fmt.Fprintf(sb, `\u%04X`, r)
 				continue
 			}

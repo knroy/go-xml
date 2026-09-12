@@ -109,7 +109,7 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 <!-- BEGIN GENERATED TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Tests** | 2,248 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 2,254 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 <!-- END GENERATED TEST COUNT -->
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
@@ -117,11 +117,11 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
 
-1. **Both halves of the XSD numbers carry a residue of disagreements** — 41 on
-   1.0 and 38 on 1.1 — and where they are schema-validity failures, a schema
+1. **Both halves of the XSD numbers carry a residue of disagreements** — 30 on
+   1.0 and 31 on 1.1 — and where they are schema-validity failures, a schema
    invalid in one of those ways is accepted rather than reported. They are
    listed in *Where it fails*, along with what the suite skips and why; **most
-   of them — 71 of 79 — are cases the W3C itself has queried or filed a bug
+   of them — 57 of 61 — are cases the W3C itself has queried or filed a bug
    against**, including every one of the 44 `MS-Regex` disagreements, which
    are a single open bug. A further 16 cases on 1.0 and 14 on 1.1 are excluded
    from both sides of the ratio because the suite marks them
@@ -135,7 +135,7 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.70%, and still
+3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.76%, and still
    the one to check against your own stylesheets first. It no longer has a
    concentration: package composition was about a third of the failures and is
    now 4 of 13, all four documented as unreachable rather than outstanding.
@@ -1234,7 +1234,7 @@ back, is in [docs/testing.md](docs/testing.md).
 <!-- BEGIN GENERATED TEST METHODS -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** (2,248 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (2,254 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |

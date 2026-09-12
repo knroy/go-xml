@@ -17,8 +17,9 @@ import "testing"
 // --- sweep ordering ---------------------------------------------------------
 
 func TestSweepOrderingIsMotionlessConsumingFreeRanging(t *testing.T) {
-	// §19.7: "a free-ranging expression has wider sweep than a consuming
+	// §19.6: "a free-ranging expression has wider sweep than a consuming
 	// expression, which has wider sweep than a motionless expression."
+	// (§19.7 in the Last Call draft; the Recommendation numbers it 19.6.)
 	if !(sweepMotionless < sweepConsuming && sweepConsuming < sweepFreeRanging) {
 		t.Fatal("sweep constants are not in width order")
 	}
