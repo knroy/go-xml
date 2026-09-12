@@ -114,8 +114,8 @@
    "component": "xslt",
    "suite": "W3C XSLT 3.0",
    "edition": "XSLT 3.0",
-   "passed": 11487,
-   "disagreements": 31,
+   "passed": 11490,
+   "disagreements": 28,
    "total": 11518,
    "run_date": "2026-09-11",
    "command": "tests/check.sh (TestXSLT30Suite)",
@@ -204,11 +204,6 @@
      "id": "strip-space-009",
      "verdict": "fixture",
      "note": "§4.4 grants no ancestor-assertion exemption; the case exists to exercise Saxon paths."
-    },
-    {
-     "id": "su-ascent-902",
-     "verdict": "deliberate-divergence",
-     "note": "Withheld — the rule contradicts §19.8.5.7's own worked example."
     },
     {
      "id": "su-ascent-903",
@@ -635,9 +630,9 @@
    "id": "xtse3430",
    "label": "XSLT 3.0 failures wanting an XTSE3430",
    "suite": "xslt-3.0",
-   "of": 11,
-   "overlap": 2,
-   "note": "Only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit the refusal; §19.1 does not require a non-streaming processor to assess guaranteed-streamability. Two overlaps, both su-ascent and both enumerated individually because their verdict is not the block's: su-ascent-902, whose rule contradicts §19.8.5.7's own worked example, and su-ascent-903, which the §19.8.5 streaming-parameter table makes climbing and the ascent category then permits."
+   "of": 8,
+   "overlap": 1,
+   "note": "Only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit the refusal; §19.1 does not require a non-streaming processor to assess guaranteed-streamability. The one overlap is su-ascent-903, enumerated individually because its verdict is not the block's: §19.8.5.7 makes an ascent function's streaming parameter climbing and the category permits a climbing body."
   }
  ]
 }

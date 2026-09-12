@@ -40,10 +40,10 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 1 of 30,346; XSLT 3.0 has 31 of 11,518;
+failures of 6,201; XQuery 3.1 has 1 of 30,346; XSLT 3.0 has 28 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 32 of 41,598. Everything below
-is an account of those 102 cases, or of a decision that produced some of them.
-The 102 is the sum of the nine figures above, computed from
+is an account of those 99 cases, or of a decision that produced some of them.
+The 99 is the sum of the nine figures above, computed from
 [tests/conformance/results.json](../tests/conformance/results.json) rather than
 written: `tests/docfigures.sh` re-derives it from `tests/ratchet.txt` and fails
 if this file and the generated table disagree.

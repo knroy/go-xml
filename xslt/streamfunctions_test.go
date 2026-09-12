@@ -532,3 +532,119 @@ func TestPathOnStreamingParamIsNotStreamable(t *testing.T) {
 			p2.posture, p2.sweep, known2)
 	}
 }
+
+// TestStreamingParameterSignatureRule pins §19.8.5's signature rule, which is
+// a constraint on the DECLARATION rather than on the body.
+//
+// Five of the six categories carry the identical sentence: "If the declared
+// type of the streaming parameter permits more than one node, the function is
+// not guaranteed-streamable" (§19.8.5.3 inspection, .4 filter, .5
+// shallow-descent, .6 deep-descent, .7 ascent). §19.8.5.2 absorbing is the
+// exception -- "there are no constraints" -- so the category is consulted
+// rather than the rule applied uniformly.
+//
+// This rule was missing, and its absence is what left su-inspection-902,
+// su-shallow-descent-906 and su-ascent-902 running when the suite wants
+// XTSE3430; each of their descriptions reads "first arg accepts a sequence".
+//
+// A KNOWN TENSION, recorded rather than hidden: §19.8.5.7 states the rule and
+// then gives a worked example that violates it --
+//
+//	<xsl:function name="f:containing-section" as="element(section)"
+//	              streamability="ascent">
+//	  <xsl:param name="input" as="element(para)*"/>
+//	  <xsl:sequence select="$input/ancestor::section[last()]"/>
+//	</xsl:function>
+//
+// -- of which the spec says "the function body meets the rules for this
+// category". The body does; the signature does not, and the example is silent
+// about the signature rule stated three paragraphs above it. The W3C test
+// suite sides with the rule, not the example: su-ascent-902 is that example's
+// shape and wants XTSE3430. The rule is implemented and the example is
+// therefore refused, which the last subtest states explicitly so that the
+// choice is visible to whoever reads this next.
+func TestStreamingParameterSignatureRule(t *testing.T) {
+	mk := func(t *testing.T, body string) error {
+		t.Helper()
+		doc, err := xdm.ParseString(
+			`<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"`+
+				` xmlns:f="urn:f" xmlns:xs="http://www.w3.org/2001/XMLSchema"`+
+				` version="3.0">`+body+
+				`<xsl:template match="/"><out/></xsl:template>`+
+				`</xsl:stylesheet>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		_, err = Compile(doc.Root, CompileOptions{})
+		return err
+	}
+	// The body has to satisfy each category's OWN body rule, or the negative
+	// arms below would pass for the wrong reason and the positive arms would
+	// fail for it. inspection and filter permit only a motionless sweep, so
+	// their body may not read the stream: name() is motionless where string()
+	// is consuming. ascent must be climbing or grounded, which an ancestor
+	// step gives.
+	bodies := map[string]string{
+		"inspection":      `name($p)`,
+		"filter":          `$p`,
+		"shallow-descent": `$p`,
+		"deep-descent":    `$p`,
+		"ascent":          `$p/ancestor::x[last()]`,
+		"absorbing":       `string($p)`,
+	}
+	fn := func(cat, as string) string {
+		return `<xsl:function name="f:x" streamability="` + cat + `">` +
+			`<xsl:param name="p" as="` + as + `"/>` +
+			`<xsl:sequence select="` + bodies[cat] + `"/></xsl:function>`
+	}
+
+	// The five categories that carry the rule refuse "*" and "+".
+	for _, cat := range []string{
+		"inspection", "filter", "shallow-descent", "deep-descent", "ascent",
+	} {
+		for _, as := range []string{"node()*", "node()+", "element(para)*"} {
+			if err := mk(t, fn(cat, as)); err == nil {
+				t.Errorf("%s with a streaming parameter declared %q was "+
+					"accepted; §19.8.5 makes a type permitting more than one "+
+					"node not guaranteed-streamable", cat, as)
+			}
+		}
+		// ... and accept the singular forms, which is what keeps this a
+		// cardinality rule rather than a blanket refusal.
+		for _, as := range []string{"node()", "node()?", "element(para)"} {
+			if err := mk(t, fn(cat, as)); err != nil {
+				t.Errorf("%s with a streaming parameter declared %q was "+
+					"refused: %v; at most one node is exactly what the rule "+
+					"permits", cat, as, err)
+			}
+		}
+	}
+
+	// absorbing is the exception: §19.8.5.2 says "there are no constraints".
+	for _, as := range []string{"node()*", "node()+", "node()?"} {
+		if err := mk(t, fn("absorbing", as)); err != nil {
+			t.Errorf("absorbing with a streaming parameter declared %q was "+
+				"refused: %v; §19.8.5.2 places no constraint on the signature",
+				as, err)
+		}
+	}
+
+	// A parameter that permits no nodes at all is not a streaming parameter,
+	// so the rule has nothing to say about its cardinality.
+	if err := mk(t, fn("inspection", "xs:string*")); err != nil {
+		t.Errorf("a non-node streaming parameter was refused: %v; the rule "+
+			"is about nodes", err)
+	}
+
+	// The tension above, stated as an assertion so it cannot be forgotten.
+	t.Run("the spec's own §19.8.5.7 example is refused by its own rule", func(t *testing.T) {
+		err := mk(t, `<xsl:function name="f:cs" as="element(section)" `+
+			`streamability="ascent"><xsl:param name="input" as="element(para)*"/>`+
+			`<xsl:sequence select="$input/ancestor::section[last()]"/></xsl:function>`)
+		if err == nil {
+			t.Fatal("the worked example was accepted; if that is now " +
+				"deliberate, su-ascent-902 has changed verdict and this test " +
+				"and the conformance-gaps entry must both be revisited")
+		}
+	})
+}

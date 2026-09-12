@@ -17,10 +17,10 @@ Current position:
 | XPath 3.1 | 100.00% — 21,898 of 21,898 in scope (0 failing) |
 | XQuery 3.1 | 100.00% — 30,345 of 30,346 in scope (1 failing) |
 | XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
-| XSLT 3.0 | 99.73% — 11,487 of 11,518 in scope (31 failing); 11 of those need more of the §19.8 streamability analysis |
+| XSLT 3.0 | 99.76% — 11,490 of 11,518 in scope (28 failing); 8 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,247 `func Test` declarations, clean under `-race` |
+| Tests | 2,248 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 
 Every one of those failures, and why it is still open, is catalogued in

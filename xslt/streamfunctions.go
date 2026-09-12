@@ -181,6 +181,41 @@ func keyOf(q xdm.QName, arity int) funcKey {
 	return funcKey{uri: q.URI, local: q.Local, arity: arity}
 }
 
+// typePermitsSeveralNodes reports whether a declared type permits MORE THAN
+// ONE node, which is the test §19.8.5.3 through §19.8.5.7 make on the
+// streaming parameter: "If the declared type of the streaming parameter
+// permits more than one node, the function is not guaranteed-streamable."
+//
+// It is the occurrence indicator that decides it, not the item type: "*" and
+// "+" permit several, "?" and a bare type permit at most one, and an absent
+// "as" attribute defaults to item()* and so permits several.
+//
+// A type that permits no nodes at all cannot permit several of them, so
+// typePermitsNodes gates the answer -- an xs:string* parameter is not a
+// streaming parameter and this rule has nothing to say about it.
+func typePermitsSeveralNodes(as string) bool {
+	if !typePermitsNodes(as) {
+		return false
+	}
+	if as == "" {
+		// Defaults to item()*.
+		return true
+	}
+	t := as
+	for len(t) > 0 && (t[len(t)-1] == ' ' || t[len(t)-1] == '\t' ||
+		t[len(t)-1] == '\n' || t[len(t)-1] == '\r') {
+		t = t[:len(t)-1]
+	}
+	if len(t) == 0 {
+		return true
+	}
+	switch t[len(t)-1] {
+	case '*', '+':
+		return true
+	}
+	return false
+}
+
 // typePermitsNodes reports whether a declared sequence type permits nodes --
 // the "non-empty intersection with U{N}" of §19.8.8.11.
 //
@@ -430,6 +465,30 @@ func checkStreamableFunctions(root *xdm.Node, funcs map[funcKey]*streamFunc) err
 	for _, f := range funcs {
 		if !f.category.declaredStreamable() {
 			continue
+		}
+		// The signature rule, which is checked before the body rule because
+		// it is a property of the declaration alone and needs no analysis.
+		//
+		// §19.8.5.3 through §19.8.5.7 each carry the identical sentence: "If
+		// the declared type of the streaming parameter permits more than one
+		// node, the function is not guaranteed-streamable." §19.8.5.2
+		// (absorbing) is the one exception -- "there are no constraints" --
+		// which is why the category is consulted rather than the rule applied
+		// to every declared-streamable function.
+		//
+		// This is a rule about the DECLARATION, so unlike the body rule it
+		// cannot be defeated by an unmodelled construct: there is nothing to
+		// model. That makes it the one place in this analysis where a verdict
+		// is reported without first establishing that every construct was
+		// understood.
+		if f.category != catAbsorbing && f.arity() > 0 &&
+			typePermitsSeveralNodes(f.params[0]) {
+			return fmt.Errorf(
+				"the streaming parameter of streamable stylesheet function "+
+					"%s is declared %q, which permits more than one node, so "+
+					"the %s category does not permit it and the function is "+
+					"not guaranteed-streamable (XTSE3430)",
+				f.body.AttrValue("name"), f.params[0], f.category)
 		}
 		req, ok := bodyRequirements[f.category]
 		if !ok {
