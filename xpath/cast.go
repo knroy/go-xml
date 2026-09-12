@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/knroy/go-xml/internal/xmlname"
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -988,11 +989,20 @@ func parseLexicalQName(s string) (xdm.QName, error) {
 }
 
 // isNCName reports whether s is an XML non-colonised name.
+//
+// The colon is excluded HERE rather than in the rune predicates, because it is
+// in the XML Name production and the predicates transcribe that production
+// faithfully. "Non-colonised" is this function's own rule, and stating it here
+// is what keeps the shared predicates usable by the Name and NMTOKEN checks
+// that do permit a colon.
 func isNCName(s string) bool {
 	if s == "" {
 		return false
 	}
 	for i, r := range s {
+		if r == ':' {
+			return false
+		}
 		if i == 0 {
 			if !isNameStartRune(r) {
 				return false
@@ -1006,32 +1016,29 @@ func isNCName(s string) bool {
 	return true
 }
 
-func isNameStartRune(r rune) bool {
-	switch {
-	case r == '_':
-		return true
-	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
-		return true
-	case r >= 0xC0 && r != 0xD7 && r != 0xF7:
-		// The spec's NameStartChar ranges above Latin-1 are contiguous enough
-		// that excluding the two punctuation characters covers them.
-		return true
-	}
-	return false
-}
+// isNameStartRune and isNameRune are the XML NameStartChar and NameChar
+// productions, resolved through internal/xmlname so that this package and the
+// tokeniser cannot drift apart.
+//
+// They used to be approximated here as "anything at or above U+00C0 except the
+// two Latin-1 punctuation characters", on the reasoning that the ranges above
+// Latin-1 are "contiguous enough". They are not, and the gap was not academic:
+// the approximation accepted roughly 140,000 codepoints the production
+// excludes, including every noncharacter (U+FDD0..U+FDEF), the combining marks
+// that are NameChar but never NameStartChar (U+0300), and ZWSP.
+//
+// The consequence reached the output. A computed element name built from one
+// of them serialized to a document this engine's OWN parser then refused:
+//
+//	element {QName("http://x", codepoints-to-string(64976) || "y")} {"v"}
+//	  => <﷐y xmlns="http://x">v</﷐y>
+//	  => parse: invalid XML name
+//
+// The colon is in the XML production and is accepted here; every caller is an
+// NCName or NMTOKEN check that excludes it before or after this call.
+func isNameStartRune(r rune) bool { return xmlname.IsNameStartRune(r) }
 
-func isNameRune(r rune) bool {
-	if isNameStartRune(r) {
-		return true
-	}
-	switch {
-	case r >= '0' && r <= '9':
-		return true
-	case r == '-', r == '.', r == 0xB7:
-		return true
-	}
-	return false
-}
+func isNameRune(r rune) bool { return xmlname.IsNameRune(r) }
 
 // --- Derived-type facets ----------------------------------------------------
 //

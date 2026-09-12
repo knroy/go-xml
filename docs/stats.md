@@ -43,11 +43,11 @@ and `tests/docfigures.sh` cross-checks the same numbers against
 | W3C XSLT 2.0 | XSLT 2.0 (Second Edition) | 6,201 | 6,193 | 99.87% | **8** | 2026-09-11 | `tests/check.sh (TestXSLTSuite)` |
 | W3C XSLT 3.0 | XSLT 3.0 | 11,518 | 11,490 | 99.76% | **28** | 2026-09-11 | `tests/check.sh (TestXSLT30Suite)` |
 | W3C xsdtests 1.0 | XML Schema 1.0 (Second Edition) | 39,388 | 39,358 | 99.92% | **30** | 2026-09-11 | `tests/check.sh (XSD10)` |
-| W3C xsdtests 1.1 | XML Schema 1.1 | 41,598 | 41,566 | 99.92% | **32** | 2026-09-11 | `tests/check.sh (XSD11)` |
+| W3C xsdtests 1.1 | XML Schema 1.1 | 41,598 | 41,567 | 99.93% | **31** | 2026-09-11 | `tests/check.sh (XSD11)` |
 | Clark spectest | RELAX NG 1.0 | 965 | 965 | 100.00% | **0** | 2026-09-11 | `tests/check.sh (RelaxNGSpectest)` |
-| **Total** | | | | | **99** | | |
+| **Total** | | | | | **98** | | |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 28 + 30 + 32 + 0 = 99.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 28 + 30 + 31 + 0 = 98.
 
 ## Real-world corpora
 

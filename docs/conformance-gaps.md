@@ -37,13 +37,13 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
 | **xslt** | W3C XSLT 3.0 | 11,518 | 11,490 | 99.76% | **28** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
-| **xsd** | W3C xsdtests 1.1 | 41,598 | 41,566 | 99.92% | **32** |
+| **xsd** | W3C xsdtests 1.1 | 41,598 | 41,567 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 577 | 577 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **99** |
+| | **Total** | | | | **98** |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 28 + 30 + 32 + 0 = 99. Measured 2026-09-11.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 28 + 30 + 31 + 0 = 98. Measured 2026-09-11.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
@@ -405,7 +405,7 @@ off.
 
 ## xsd — 62 disagreements
 
-**XSD 1.0 — 39,358 / 39,388 = 99.92%. XSD 1.1 — 41,566 / 41,598 = 99.92%.**
+**XSD 1.0 — 39,358 / 39,388 = 99.92%. XSD 1.1 — 41,567 / 41,598 = 99.93%.**
 
 The XSD suite measures **agreement with the expected verdict** on each schema
 and instance, which is a different shape from a pass/fail case count. A

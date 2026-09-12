@@ -397,8 +397,8 @@
    "component": "xsd",
    "suite": "W3C xsdtests 1.1",
    "edition": "XML Schema 1.1",
-   "passed": 41566,
-   "disagreements": 32,
+   "passed": 41567,
+   "disagreements": 31,
    "total": 41598,
    "run_date": "2026-09-11",
    "command": "tests/check.sh (XSD11)",
@@ -407,11 +407,6 @@
      "id": "MS-Element2006-07-15/elemZ026",
      "verdict": "fixture",
      "note": "queried bug4146, keyworded disputedTest: a 1.0 substitution-group rewrite XSD 1.1 deleted. §3.9.6 has no Particle Valid (Restriction)."
-    },
-    {
-     "id": "MS-Particles2006-07-15/particlesZ026",
-     "verdict": "fixture",
-     "note": "stable bug4071; the TSTF concluded its validity was implementation-determined and the WG never decided."
     },
     {
      "id": "MS-Particles2006-07-15/particlesZ033_g",

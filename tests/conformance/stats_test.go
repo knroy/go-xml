@@ -429,8 +429,8 @@ func TestCorporaStayOutOfTheTotal(t *testing.T) {
 	// And the shipped file keeps the two apart as separate lists, which is
 	// what makes the exclusion impossible to undo by an arithmetic change.
 	sr := shipped(t)
-	if got := sr.Total(); got != 99 {
-		t.Fatalf("shipped Total() = %d, want 99", got)
+	if got := sr.Total(); got != 98 {
+		t.Fatalf("shipped Total() = %d, want 98", got)
 	}
 	for _, c := range sr.Corpora {
 		for _, su := range sr.Suites {

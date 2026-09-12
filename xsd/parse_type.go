@@ -1481,7 +1481,41 @@ func (p *parser) inheritAttributesNow(t *ComplexType) {
 			}
 		}
 		for _, u := range base.AttributeUses {
-			if u.Decl == nil || own[u.Decl.Name] {
+			if u.Decl == nil {
+				continue
+			}
+			if own[u.Decl.Name] {
+				// A derived use with the base's name SHADOWS the base's, and
+				// which of the two that is depends on the derivation method.
+				//
+				// For a restriction it is legitimate and is the point: §3.4.6
+				// derivation-ok-restriction is what polices it, and
+				// checkAttributeRestriction below runs for exactly that.
+				//
+				// For an extension it is not. §3.4.6 ct-props-correct.4
+				// forbids two attribute uses with the same name in one type's
+				// {attribute uses}, and an extension's uses are the base's
+				// PLUS its own -- so the clash is in the finished type.
+				// Skipping silently let the extension's declaration replace
+				// the base's: a base attribute declared xs:string was
+				// validated as the extension's xs:int, which is the base's
+				// constraint quietly discarded rather than a diagnostic.
+				//
+				// checkAttributeUsesConsistent cannot catch this. It is
+				// queued against the type's OWN use list, before inheritance
+				// merges the base's in, so at the time it runs there is only
+				// one use of the name.
+				if t.DerivationMethod == DerivationExtension {
+					// No element node is in hand here -- inheritance runs
+					// over components, after parsing -- so the error carries
+					// the type's name instead of a position.
+					p.errs = append(p.errs, errorAt(nil, "ct-props-correct.4",
+						"complex type %q: attribute %q is declared by this "+
+							"extension and inherited from its base type; a "+
+							"complex type may not have two attribute uses "+
+							"with the same name",
+						t.Name.Local, u.Decl.Name.Local))
+				}
 				continue
 			}
 			t.AttributeUses = append(t.AttributeUses, u)

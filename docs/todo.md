@@ -8,7 +8,7 @@ Current position:
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,349 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
 <!-- BEGIN GENERATED STATUS TABLE -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
@@ -338,7 +338,7 @@ loaded without complaint, which is the direction that matters:
 
 Measured on an isolated worktree, each version gains exactly these two and
 nothing else moves: 1.0 schema agreement 14,383 → **14,385** (disagreements 5 →
-3), 1.1 15,347 → **15,349** (7 → 5), with both instance lanes unchanged case for
+3), 1.1 15,347 → **15,350** (7 → 5), with both instance lanes unchanged case for
 case and the vendored-schema corpus steady at 185 loaded. What remains after
 them is in [conformance-gaps.md](conformance-gaps.md), and is dominated by the
 22-per-version `MS-Regex` cases the W3C has itself challenged.
