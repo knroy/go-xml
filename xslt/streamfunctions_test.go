@@ -141,32 +141,66 @@ func TestBodyRequirementsMatchSpec(t *testing.T) {
 	}
 }
 
-// TestVarPostureTable transcribes the table in §19.8.8.11 giving the posture
-// of a reference to a streaming parameter. Both the singular and non-singular
-// rows are asserted, since three categories differ between them.
+// TestVarPostureTable transcribes the "Rules for references to the streaming
+// parameter" sentence from each of §19.8.5.2 through §19.8.5.7.
+//
+// The earlier version of this test cited §19.8.8.11 and asserted a table keyed
+// on singularity, with grounded rows for absorbing and inspection. Both parts
+// were wrong. §19.8.8.11 is *dynamic function calls*; the rule for a variable
+// reference is §19.8.8.12, which says only "see the rules for the streamability
+// category of the containing function, under 19.8.5" -- and every one of those
+// six sections gives a single unconditional answer:
+//
+//	absorbing        striding   (§19.8.5.2, "striding and consuming" / "striding and motionless")
+//	inspection       striding   (§19.8.5.3)
+//	filter           striding   (§19.8.5.4)
+//	shallow-descent  striding   (§19.8.5.5)
+//	deep-descent     striding   (§19.8.5.6)
+//	ascent           climbing   (§19.8.5.7)
+//
+// No section names grounded, and none is keyed on singularity. Reading
+// grounded for absorbing and inspection is what let a function whose body
+// returns the streaming parameter -- a NODE, which in a streamed tree is never
+// grounded -- clear the "must be grounded" requirement its own category
+// imposes. su-absorbing-901/-905 and su-inspection-901/-903 are the cases.
+//
+// Singularity is a real rule, but a different one: §19.8.4.18's note says a
+// reference inside a higher-order operand "will not be singular, which in many
+// cases will make the entire function non-streamable". It overrides the table
+// rather than indexing it, so it is asserted separately below.
 func TestVarPostureTable(t *testing.T) {
 	cases := []struct {
-		cat      streamCategory
-		singular bool
-		want     posture
+		cat  streamCategory
+		want posture
 	}{
-		{catAbsorbing, true, postureGrounded},
-		{catAbsorbing, false, postureRoaming},
-		{catInspection, true, postureGrounded},
-		{catInspection, false, postureGrounded},
-		{catFilter, true, postureStriding},
-		{catFilter, false, postureStriding},
-		{catShallowDescent, true, postureStriding},
-		{catShallowDescent, false, postureRoaming},
-		{catDeepDescent, true, postureStriding},
-		{catDeepDescent, false, postureRoaming},
-		{catAscent, true, postureStriding},
-		{catAscent, false, postureStriding},
+		{catAbsorbing, postureStriding},
+		{catInspection, postureStriding},
+		{catFilter, postureStriding},
+		{catShallowDescent, postureStriding},
+		{catDeepDescent, postureStriding},
+		{catAscent, postureClimbing},
 	}
 	for _, c := range cases {
-		if got := varPosture(c.cat, c.singular); got != c.want {
-			t.Errorf("varPosture(%v, singular=%v) = %v, want %v",
-				c.cat, c.singular, got, c.want)
+		if got := varPosture(c.cat, true); got != c.want {
+			t.Errorf("varPosture(%v, singular) = %v, want %v", c.cat, got, c.want)
+		}
+	}
+}
+
+// A reference that is not singular is roaming whatever its category, which is
+// the override §19.8.4.18's note describes. su-absorbing-906
+// ("for $i in 1 to 3 return name($element[$i])"), su-shallow-descent-903
+// ("(1 to 5) ! $n") and su-ascent-903 each want XTSE3430 and get it only
+// through this rule: deleting it gained four cases and lost three, measured.
+func TestVarPostureNonSingularIsRoaming(t *testing.T) {
+	for _, c := range []streamCategory{
+		catAbsorbing, catInspection, catFilter,
+		catShallowDescent, catDeepDescent, catAscent,
+	} {
+		if got := varPosture(c, false); got != postureRoaming {
+			t.Errorf("varPosture(%v, non-singular) = %v, want roaming; a "+
+				"reference evaluated once per item of a higher-order operand "+
+				"cannot be streamed", c, got)
 		}
 	}
 }

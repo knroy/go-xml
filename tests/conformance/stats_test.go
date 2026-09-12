@@ -429,8 +429,8 @@ func TestCorporaStayOutOfTheTotal(t *testing.T) {
 	// And the shipped file keeps the two apart as separate lists, which is
 	// what makes the exclusion impossible to undo by an arithmetic change.
 	sr := shipped(t)
-	if got := sr.Total(); got != 105 {
-		t.Fatalf("shipped Total() = %d, want 105", got)
+	if got := sr.Total(); got != 102 {
+		t.Fatalf("shipped Total() = %d, want 102", got)
 	}
 	for _, c := range sr.Corpora {
 		for _, su := range sr.Suites {
@@ -545,19 +545,20 @@ func TestUnknownLookupPanics(t *testing.T) {
 func TestShippedXTSE3430Breakdown(t *testing.T) {
 	r := shipped(t)
 	b := r.Breakdown("xtse3430")
-	if b.Of != 14 {
-		t.Errorf("xtse3430 = %d of the XSLT 3.0 failures, want 14", b.Of)
+	if b.Of != 11 {
+		t.Errorf("xtse3430 = %d of the XSLT 3.0 failures, want 11", b.Of)
 	}
 	s := r.Suite(b.Suite)
-	if s.Disagreements != 34 {
-		t.Errorf("xslt-3.0 has %d disagreements, want 34", s.Disagreements)
+	if s.Disagreements != 31 {
+		t.Errorf("xslt-3.0 has %d disagreements, want 31", s.Disagreements)
 	}
 	// The two published halves must account for the whole, once the declared
-	// overlap is discounted: 20 enumerated + 14 in the block, sharing
-	// su-ascent-902, is exactly 34. This shipped so wrong -- 21 + 14 = 35 --
+	// overlap is discounted: 22 enumerated + 11 in the block, sharing the two
+	// su-ascent cases, is exactly 31. This shipped so wrong -- 21 + 14 = 35 --
 	// because each half was only ever checked against the total.
-	if b.Overlap != 1 {
-		t.Errorf("xtse3430 declares overlap %d, want 1 (su-ascent-902)", b.Overlap)
+	if b.Overlap != 2 {
+		t.Errorf("xtse3430 declares overlap %d, want 2 (su-ascent-902 and -903)",
+			b.Overlap)
 	}
 	if n := len(s.Cases) + b.Of - b.Overlap; n != s.Disagreements {
 		t.Errorf("%d enumerated + %d in the block - %d overlap = %d, want the suite's %d",

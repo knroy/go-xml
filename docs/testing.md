@@ -23,7 +23,7 @@ let something through, and the column that matters is the last one.
 <!-- BEGIN GENERATED LAYER COUNTS -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** | 2,246 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,247 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -445,9 +445,9 @@ reads `tests/ratchet.txt` and examines every documentation line that names a
 suite's **in-scope denominator** -- the one number in a figure that does not
 move between runs (11,518 for XSLT 3.0, 30,346 for XQuery, and so on). The
 passing count, failure count and percentage written beside it must equal the
-ratchet's, in every form the documents use: `11,484 of 11,518`,
-`34 of 11,518`, `11,484 / 11,518 (99.70%)`, `= 99.70%`, `(34 failing)`, and
-the `| 11,518 | 11,484 | 99.70% | **34** |` summary-table row. A line stating
+ratchet's, in every form the documents use: `11,487 of 11,518`,
+`31 of 11,518`, `11,487 / 11,518 (99.73%)`, `= 99.73%`, `(31 failing)`, and
+the `| 11,518 | 11,487 | 99.73% | **31** |` summary-table row. A line stating
 two figures is read as two claims. Failures name the file, line and the value
 wanted.
 

@@ -40,10 +40,10 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 1 of 30,346; XSLT 3.0 has 34 of 11,518;
+failures of 6,201; XQuery 3.1 has 1 of 30,346; XSLT 3.0 has 31 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 32 of 41,598. Everything below
-is an account of those 105 cases, or of a decision that produced some of them.
-The 105 is the sum of the nine figures above, computed from
+is an account of those 102 cases, or of a decision that produced some of them.
+The 102 is the sum of the nine figures above, computed from
 [tests/conformance/results.json](../tests/conformance/results.json) rather than
 written: `tests/docfigures.sh` re-derives it from `tests/ratchet.txt` and fails
 if this file and the generated table disagree.
@@ -64,8 +64,15 @@ much each costs.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
-**14 of the 35 XSLT 3.0 failures**, and by far the largest single gap in the
-project. The posture-and-sweep lattice exists, and so now do the rules built on
+**11 of the 31 XSLT 3.0 failures**, and still the largest single gap in the
+project — down from 14 since the §19.8.5 streaming-parameter table was
+corrected. `varPosture` read *grounded* where §19.8.5.2 and §19.8.5.3 say
+*striding*, so a function whose body returned its streaming parameter — a node,
+which in a streamed tree is never grounded — cleared the "must be grounded"
+rule its own category imposes. Four cases moved; `su-ascent-903` moved the
+other way and is now adjudicated individually, since §19.8.5.7 makes an ascent
+function's streaming parameter *climbing* and the ascent category permits a
+climbing body. The posture-and-sweep lattice exists, and so now do the rules built on
 it: the §19.8.4 instruction rules, §19.8.5 streamable stylesheet functions,
 §18.2.8 accumulators, the §19.8.8 expression rules, the §19.8.9 function
 classifications, §19.6's context posture for both

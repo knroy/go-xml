@@ -296,26 +296,38 @@ func typeDeterminedUsage(as string) usage {
 // spelled out rather than collapsed, so that a change to the spec table maps
 // to a change here line for line.
 func varPosture(c streamCategory, singular bool) posture {
+	// A reference that is NOT singular -- one inside a higher-order operand,
+	// so the body may be evaluated once per item -- is roaming whatever the
+	// category says. §19.8.4.18's note states the consequence directly: "any
+	// variable reference within the body that is bound to a streaming
+	// parameter of a containing stylesheet function will not be singular,
+	// which in many cases will make the entire function non-streamable."
+	//
+	// This is checked before the category table because it overrides it.
+	// su-absorbing-906 ("for $i in 1 to 3 return name($element[$i])"),
+	// su-shallow-descent-903 ("(1 to 5) ! $n") and su-ascent-903 are the
+	// three cases that hold it down: each wants XTSE3430, and each gets it
+	// only because a non-singular reference cannot be streamed.
+	if !singular {
+		return postureRoaming
+	}
+	// §19.8.5.2 through §19.8.5.7, "Rules for references to the streaming
+	// parameter", one line per category. Every category gives striding except
+	// ascent, which gives climbing; none gives grounded.
+	//
+	// Reading grounded here was the defect behind the su-absorbing and
+	// su-inspection failures: a function whose body returns the streaming
+	// parameter returns a NODE, and a node in a streamed tree is never
+	// grounded. The body then cleared the "must be grounded" requirement its
+	// own category imposes, and the analysis concluded streamable where
+	// §19.8.5 requires XTSE3430.
 	switch c {
-	case catAbsorbing:
-		if singular {
-			return postureGrounded
-		}
-		return postureRoaming
-	case catInspection:
-		// grounded whether singular or not.
-		return postureGrounded
-	case catFilter:
-		// striding whether singular or not.
+	case catAbsorbing, catInspection, catFilter,
+		catShallowDescent, catDeepDescent:
 		return postureStriding
-	case catShallowDescent, catDeepDescent:
-		if singular {
-			return postureStriding
-		}
-		return postureRoaming
 	case catAscent:
-		// striding whether singular or not.
-		return postureStriding
+		// §19.8.5.7 is the one category that differs.
+		return postureClimbing
 	}
 	return postureGrounded
 }

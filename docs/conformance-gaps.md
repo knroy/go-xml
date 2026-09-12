@@ -35,21 +35,21 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,484 | 99.70% | **34** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,487 | 99.73% | **31** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,598 | 41,566 | 99.92% | **32** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 577 | 577 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **105** |
+| | **Total** | | | | **102** |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 34 + 30 + 32 + 0 = 105. Measured 2026-09-11.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 31 + 30 + 32 + 0 = 102. Measured 2026-09-11.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 2,246 tests.
+The unit-test suite is 2,247 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -62,14 +62,31 @@ W3C XSLT sets.
 
 Two suites reach 100% — XPath at all three versions, and RELAX NG.
 
-**The largest block is a single feature, not a long tail.** 14 of the 34
+**The largest block is a single feature, not a long tail.** 11 of the 31
 XSLT 3.0 failures want an `XTSE3430` that only the unwritten remainder of the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable".
-That is not a backlog of defects. The 21 that remain are named case by case
+That is not a backlog of defects. The 22 that remain are named case by case
 below, and every one of them is recorded with its verdict in
 [tests/conformance/results.json](../tests/conformance/results.json), which is
 where the table above comes from.
+
+The block was 14 until the §19.8.5 streaming-parameter table was corrected.
+`varPosture` read *grounded* for a reference to the streaming parameter of an
+absorbing or inspection function, where §19.8.5.2 and §19.8.5.3 both say
+*striding* — and a function whose body returns that parameter returns a node,
+which in a streamed tree is never grounded. The body therefore cleared the
+"must be grounded" requirement its own category imposes, and the analysis
+concluded streamable where §19.8.5 requires the refusal. Four cases moved:
+`su-absorbing-901`, `su-absorbing-905`, `su-inspection-901`, `su-inspection-903`.
+
+`su-ascent-903` moved the other way and is now enumerated individually rather
+than counted in the block. §19.8.5.7 gives an ascent function's streaming
+parameter the posture *climbing*, and `bodyRequirements` permits a climbing
+ascent body, so the analysis accepts what it used to refuse — it refused it
+before only because the same table wrongly read striding. That is the second
+`su-ascent` case where the suite asks for a refusal §19.8.5.7 does not support;
+`su-ascent-902` is the first, and is argued below.
 
 ## How to read the verdicts
 
@@ -220,12 +237,12 @@ three `regex-syntax-xslt20` cases.
 
 ## xslt 3.0 — 34 failures
 
-**XSLT 3.0: 11,484 / 11,518 = 99.70%.**
+**XSLT 3.0: 11,487 / 11,518 = 99.73%.**
 
 <!-- BEGIN GENERATED XTSE3430 BLOCK -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-**14 of the 34 want an `XTSE3430`** — a refusal of a stylesheet as
+**11 of the 31 want an `XTSE3430`** — a refusal of a stylesheet as
 <!-- END GENERATED XTSE3430 BLOCK -->
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine

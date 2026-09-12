@@ -54,8 +54,22 @@ func TestFunctionStreamabilityWithoutParams(t *testing.T) {
 	})
 
 	t.Run("a param makes any classification legal", func(t *testing.T) {
+		// The body returns string($p), not $p. This subtest is about the
+		// streamability ATTRIBUTE being accepted once the function has a
+		// parameter -- it is not about §19.8.5's body rule, and the two must
+		// not be confused.
+		//
+		// The fixture used to be "select=$p", which is a reference to the
+		// streaming parameter and therefore striding (§19.8.5.2). Absorbing
+		// requires a grounded body, so that function is genuinely not
+		// guaranteed-streamable and XTSE3430 is the right answer for it. The
+		// subtest passed only because varPosture wrongly reported grounded;
+		// once that was corrected to match the spec, the fixture began
+		// failing for a reason that has nothing to do with what it tests.
+		// string() atomizes, which grounds the result and keeps the subtest
+		// on its own subject.
 		if err := compile(t, `<xsl:function name="f:x" streamability="absorbing">`+
-			`<xsl:param name="p"/><xsl:sequence select="$p"/></xsl:function>`); err != nil {
+			`<xsl:param name="p"/><xsl:sequence select="string($p)"/></xsl:function>`); err != nil {
 			t.Errorf("classification with a param refused: %v", err)
 		}
 	})
