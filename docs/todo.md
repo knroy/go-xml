@@ -20,7 +20,7 @@ Current position:
 | XSLT 3.0 | 99.76% — 11,490 of 11,518 in scope (28 failing); 8 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,262 `func Test` declarations, clean under `-race` |
+| Tests | 2,265 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 
 Every one of those failures, and why it is still open, is catalogued in

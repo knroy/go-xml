@@ -219,3 +219,83 @@ func TestValidStylesheetFunctionCallStillCompiles(t *testing.T) {
 		t.Errorf("a valid shallow-descent call was rejected: %v", err)
 	}
 }
+
+// §19.8.8's operand-role table gives the let expression its rule directly
+// rather than by reference to a subsection:
+//
+//	LetExpr [11,11]  let $var := N return T
+//	                 Binding of variables to streamed nodes is not allowed.
+//
+// Navigation on the binding, transmission on the return. The note describes
+// the consequence rather than adding a condition: §19.8.1 gives navigation an
+// adjusted sweep of free-ranging for every non-grounded posture, so a binding
+// that reads the stream makes the whole let roaming.
+//
+// The return is an ORDINARY operand. §19.8.8.1 says of the for expression's
+// return "This is a higher-order operand with usage transmission"; the table
+// gives let a bare T, because the binding is evaluated once rather than once
+// per item. Making it higher-order would refuse a consuming let body the spec
+// permits, which is what the last case here pins.
+func TestLetExpressionStreamability(t *testing.T) {
+	sheet := func(sel string) string {
+		return `
+<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:f="urn:f">
+  <xsl:function name="f:g" as="item()*" streamability="absorbing">
+    <xsl:param name="element" as="node()*"/>
+    <xsl:sequence select="` + sel + `"/>
+  </xsl:function>
+</xsl:stylesheet>`
+	}
+
+	for _, tc := range []struct {
+		name    string
+		sel     string
+		roaming bool
+		why     string
+	}{
+		{
+			name: "grounded binding, grounded return",
+			sel:  "let $n := 1 return $n + 1",
+			why:  "nothing touches the stream, so the general rules ground it",
+		},
+		{
+			name:    "binding reads the streamed parameter",
+			sel:     "let $n := $element/a return count($n)",
+			roaming: true,
+			why: "navigation over a non-grounded posture is free-ranging " +
+				"(§19.8.1), which is what the table's note means by " +
+				`"binding of variables to streamed nodes is not allowed"`,
+		},
+		{
+			name: "multi-clause binding is nested",
+			sel:  "let $a := 1, $b := $a + 1 return $b",
+			why: "the second clause is the first's return expression, so a " +
+				"grounded chain stays grounded",
+		},
+		{
+			name:    "a later clause reaching the stream still counts",
+			sel:     "let $a := 1, $b := $element/x return count($b)",
+			roaming: true,
+			why:     "the nesting must carry the rule into every clause",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := parseSheet(t, sheet(tc.sel))
+			funcs := collectStreamFuncs(doc)
+			f, ok := funcs[funcKey{uri: "urn:f", local: "g", arity: 1}]
+			if !ok {
+				t.Fatal("f:g not collected")
+			}
+			p, known := analyzeFunctionBody(f, funcs)
+			if !known {
+				t.Fatalf("the body was not modelled, so the let rule was "+
+					"never reached: %s", tc.sel)
+			}
+			if got := p.posture == postureRoaming; got != tc.roaming {
+				t.Errorf("%s gave posture %v sweep %v; want roaming=%v — %s",
+					tc.sel, p.posture, p.sweep, tc.roaming, tc.why)
+			}
+		})
+	}
+}

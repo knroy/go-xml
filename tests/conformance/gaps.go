@@ -95,6 +95,23 @@ type Results struct {
 	// be -- see TreeCount in stats.go -- only the counting method is.
 	Tree []TreeCount `json:"tree"`
 
+	// SuiteRevisions is the commit of each vendored W3C suite the figures
+	// above were measured against, keyed by its directory under testdata/.
+	//
+	// Without it a figure in this file is not reproducible. The suites are
+	// separate checkouts that CI clones at --depth 1 from their default
+	// branch, so a suite update can move a count with no change to this
+	// repository at all, and the ratchet would then fail on a commit that
+	// changed nothing. tests/check.sh has always PRINTED these revisions into
+	// its provenance, but that is a per-run artifact which expires; this is
+	// the copy that travels with the numbers it explains.
+	//
+	// A suite that is not its own git checkout is absent rather than wrong:
+	// testdata/relaxng is vendored files, and asking git about it answers
+	// with THIS repository's HEAD, which would be a revision that means
+	// nothing. suiterev in tests/check.sh applies the same containment test.
+	SuiteRevisions map[string]string `json:"suite_revisions,omitempty"`
+
 	// Breakdowns are named subsets of a suite's disagreements, such as "14 of
 	// the 34 XSLT 3.0 failures want an XTSE3430". Both halves get published,
 	// so both are checked: the subset may not exceed its suite's count.

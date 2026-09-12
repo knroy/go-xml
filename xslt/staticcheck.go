@@ -107,8 +107,22 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			// is what makes a stylesheet written for a later version run.
 			return nil
 		}
+		// The version is read from the stylesheet rather than written as a
+		// literal. "2.0" was hardcoded here, so a 3.0 stylesheet reaching
+		// this message was told about a version it had not asked for.
+		//
+		// NOT DEMONSTRATED, and recorded as such. Instrumenting this return
+		// and running the whole xslt suite never reached it: the content-model
+		// check in elementtable.go answers first for every unknown xsl:
+		// element tried, at top level and in a sequence constructor, under
+		// version="2.0", "3.0" and a forwards-compatible "4.0" alike. The
+		// same is true of the sibling message in compile_instr.go. So this is
+		// a correct spelling of a diagnostic that may be unreachable, rather
+		// than a user-visible fix -- which is the more useful finding, and is
+		// why it is written here instead of being claimed as closed.
 		return fmt.Errorf(
-			"xsl:%s is not an XSLT 2.0 element (XTSE0010)", el.Name.Local)
+			"xsl:%s is not an XSLT %s element (XTSE0010)",
+			el.Name.Local, xsltVersionName(xpathVersionAt(el)))
 	}
 
 	for _, a := range el.Attrs {
@@ -996,4 +1010,18 @@ func inPackage(el *xdm.Node) bool {
 	p := el.Parent
 	return p != nil && p.Kind == xdm.KindElement &&
 		p.Name.URI == xdm.NSXSL && p.Name.Local == "package"
+}
+
+// xsltVersionName spells the XSLT version that corresponds to an XPath
+// version, for a diagnostic that has to name one.
+//
+// xpath.Version.String() spells the XPATH version -- "XPath 3.1" -- which is
+// the wrong name in an XTSE message about an xsl: element. The two move
+// together (XSLT 3.0 hosts XPath 3.1, XSLT 2.0 hosts XPath 2.0), so the
+// mapping is total and needs no separate tracking.
+func xsltVersionName(v xpath.Version) string {
+	if v.AtLeast31() {
+		return "3.0"
+	}
+	return "2.0"
 }

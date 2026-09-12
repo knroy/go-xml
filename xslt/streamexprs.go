@@ -249,6 +249,47 @@ func isDocumentNodeWithContent(st xpath.SequenceType) bool {
 // §19.8.8.2 says to rewrite the quantified form: the outer clause's return
 // expression is the rest of the for. The rewriting is done here rather than
 // in the parser because it is a rule about this analysis and nothing else.
+// letExpr applies the §19.8.8 operand-role table to a let expression.
+//
+// The proforma is given directly rather than by reference to a subsection:
+//
+//	LetExpr [11,11]  let $var := N return T
+//	                 Binding of variables to streamed nodes is not allowed.
+//
+// So the binding sequence has usage NAVIGATION and the return has usage
+// TRANSMISSION, and the general rules of §19.8.1 combine them. The note is the
+// rule's whole purpose: §19.8.1 gives navigation an adjusted sweep of
+// free-ranging for every non-grounded posture, so a binding that touches the
+// stream makes the let roaming before anything else is consulted. That is what
+// "binding of variables to streamed nodes is not allowed" means operationally.
+//
+// The return is an ORDINARY operand, not a higher-order one. That is the whole
+// difference from forExpr, and it is normative rather than a judgement call:
+// §19.8.8.1 says of the for expression's return "This is a higher-order
+// operand with usage transmission", because the body is evaluated once per
+// item; §19.8.8's table gives let a bare T, because the binding is evaluated
+// once. Making it higher-order here would refuse a consuming let body that the
+// spec permits.
+//
+// A multi-clause "let $a := X, $b := Y return R" is nested the same way
+// forExpr nests its clauses: the outer binding's return is the rest of the
+// let. Only the first binding is in scope for the second, which is what the
+// nesting expresses.
+func (a *analyzer) letExpr(x *xpath.LetExpr) props {
+	if len(x.Bindings) == 0 {
+		return a.unknown()
+	}
+	seq := a.operandOf(x.Bindings[0].Seq, usageNavigation)
+	ret := x.Return
+	if len(x.Bindings) > 1 {
+		ret = &xpath.LetExpr{Bindings: x.Bindings[1:], Return: x.Return}
+	}
+	return combine([]operand{
+		seq,
+		a.operandOf(ret, usageTransmission),
+	}, false)
+}
+
 func (a *analyzer) forExpr(x *xpath.ForExpr) props {
 	if len(x.Bindings) == 0 {
 		return a.unknown()
@@ -354,4 +395,201 @@ func (a *analyzer) withVar(name xdm.QName, p props) *analyzer {
 	}
 	b.vars[name] = p
 	return &b
+}
+
+// inlineFunction applies §19.8.8.16 to an inline function declaration:
+//
+//	"An inline function declaration that textually contains a variable
+//	reference bound to a streaming parameter (of some containing stylesheet
+//	function) is roaming and free-ranging. All other inline function
+//	declarations are grounded and motionless."
+//
+// Note the parenthetical. The streaming parameter is the one belonging to the
+// enclosing xsl:function -- a.streamingParam -- not a parameter of the inline
+// function itself, which cannot be streaming. An inline function's own
+// parameters are ordinary bindings, which is why no new variable environment
+// is needed here: the spec asks one textual question, and this answers it.
+//
+// The rule is TEXTUAL, so a reference inside a nested inline function still
+// counts: it is still within the outer declaration's text, and the note
+// explains why that matters -- "the only other way an inline function could
+// access a streamed node is by having the streamed node in its closure, and
+// this is prevented by the rule above". A walker that stopped at a nested
+// function boundary would let exactly that closure through.
+func (a *analyzer) inlineFunction(x *xpath.InlineFunctionExpr) props {
+	if !a.hasStreamParam {
+		// With no streaming parameter in scope there is nothing the body
+		// could refer to, so the second sentence applies directly.
+		return groundedMotionless
+	}
+	switch a.bodyMentionsStreamingParam(x.Body) {
+	case mentionYes:
+		return roamingFreeRanging
+	case mentionNo:
+		return groundedMotionless
+	default:
+		// An expression kind the walker does not know. Answering "no
+		// reference" would be a false negative -- a stylesheet accepted whose
+		// inline function does close over a streamed node -- so the analysis
+		// reports no opinion instead and the caller declines to judge.
+		return a.unknown()
+	}
+}
+
+// mention is the three-valued answer bodyMentionsStreamingParam gives.
+//
+// Two values would not do. The walker has to enumerate expression kinds, and
+// the analyzer's own dispatch has 43 of them; a walker that answered "no" for
+// a kind it had not been taught would silently ground an inline function that
+// captures a streamed node. The third value routes that case to unknown(),
+// where the checker reports nothing rather than something wrong.
+type mention int
+
+const (
+	mentionNo mention = iota
+	mentionYes
+	mentionUnknown
+)
+
+// bodyMentionsStreamingParam reports whether e textually contains a reference
+// to the streaming parameter of the containing stylesheet function.
+//
+// It is a plain textual walk, not an analysis: §19.8.8.16 asks only whether
+// the reference is present, not what is done with it, so posture and sweep
+// play no part and no context is threaded.
+func (a *analyzer) bodyMentionsStreamingParam(e xpath.Expr) mention {
+	switch x := e.(type) {
+	case nil:
+		return mentionNo
+
+	case *xpath.VarRef:
+		if a.isStreamingParamRef(x) {
+			return mentionYes
+		}
+		return mentionNo
+
+	// A literal is not a reference, and "." is not a VARIABLE reference --
+	// §19.8.8.16 asks only about the latter. An inline function body does not
+	// inherit the caller's focus, so "." here cannot be the streamed node.
+	case *xpath.Literal, *xpath.ContextItem:
+		return mentionNo
+
+	// A name, not a reference to a variable.
+	case *xpath.NamedFunctionRef:
+		return mentionNo
+
+	// Nested, and still within this declaration's text -- which is the point.
+	// Stopping here would let through exactly the closure the section's note
+	// says the rule exists to prevent.
+	case *xpath.InlineFunctionExpr:
+		return a.bodyMentionsStreamingParam(x.Body)
+
+	case *xpath.LetExpr:
+		return a.mentionAny(append(bindingExprs(x.Bindings), x.Return))
+	case *xpath.ForExpr:
+		return a.mentionAny(append(bindingExprs(x.Bindings), x.Return))
+	case *xpath.QuantifiedExpr:
+		return a.mentionAny(append(bindingExprs(x.Bindings), x.Test))
+
+	case *xpath.FuncCall:
+		return a.mentionAny(x.Args)
+	case *xpath.DynamicCall:
+		return a.mentionAny(append([]xpath.Expr{x.Target}, x.Args...))
+
+	case *xpath.BinaryOp:
+		return a.mentionAny([]xpath.Expr{x.Left, x.Right})
+	case *xpath.UnaryOp:
+		return a.mentionAny([]xpath.Expr{x.Operand})
+	case *xpath.SimpleMap:
+		return a.mentionAny([]xpath.Expr{x.Left, x.Right})
+	case *xpath.IfExpr:
+		return a.mentionAny([]xpath.Expr{x.Cond, x.Then, x.Else})
+
+	case *xpath.InstanceOfExpr:
+		return a.bodyMentionsStreamingParam(x.Operand)
+	case *xpath.CastExpr:
+		return a.bodyMentionsStreamingParam(x.Operand)
+	case *xpath.TreatExpr:
+		return a.bodyMentionsStreamingParam(x.Operand)
+
+	case *xpath.PathExpr:
+		return a.mentionAny(x.Steps)
+	case *xpath.Step:
+		return a.mentionAny(x.Predicates)
+	case *xpath.FilterExpr:
+		return a.mentionAny(append([]xpath.Expr{x.Base}, x.Predicates...))
+	case *xpath.SequenceExpr:
+		return a.mentionAny(x.Items)
+
+	case *xpath.MapConstructor:
+		return a.mentionAny(append(append([]xpath.Expr{}, x.Keys...), x.Values...))
+	case *xpath.ArrayConstructor:
+		return a.mentionAny(x.Members)
+	}
+	return mentionUnknown
+}
+
+// bindingExprs is the sequence expressions of a binding list, which for this
+// walk is all that matters: the bound NAMES are the construct's own, and a
+// reference to one of them is not a reference to the streaming parameter.
+func bindingExprs(bs []xpath.Binding) []xpath.Expr {
+	es := make([]xpath.Expr, 0, len(bs)+1)
+	for _, b := range bs {
+		es = append(es, b.Seq)
+	}
+	return es
+}
+
+// mentionAny is bodyMentionsStreamingParam over a list, with unknown winning
+// over no: one unrecognised subexpression makes the whole answer unreliable,
+// but a definite reference anywhere settles it regardless.
+func (a *analyzer) mentionAny(es []xpath.Expr) mention {
+	worst := mentionNo
+	for _, e := range es {
+		switch a.bodyMentionsStreamingParam(e) {
+		case mentionYes:
+			return mentionYes
+		case mentionUnknown:
+			worst = mentionUnknown
+		}
+	}
+	return worst
+}
+
+// namedFunctionRef applies §19.8.8.15 to a named function reference:
+//
+//	"Let F be the function to which the NamedFunctionRef refers. If F is
+//	focus-dependent and the context posture is not grounded, then the
+//	NamedFunctionRef is roaming and free-ranging. If F is an extension
+//	function, the posture and sweep are implementation-defined. Otherwise,
+//	the NamedFunctionRef is grounded and motionless."
+//
+// Only the last clause is decidable here, and only for part of the surface.
+// The first needs to know whether F is FOCUS-DEPENDENT, and nothing in this
+// repository records that: the manifest
+// (xpath/spec/function-signatures.json) carries name, arity, parameter types
+// and result type, and no flag for it. The engine handles focus dependence
+// behaviourally instead -- a named function reference captures the focus in
+// force where it was written (xpath/funcitem.go, and fn-lang-31/32 pin it) --
+// which is the right answer at evaluation time and no help at analysis time.
+//
+// So the rule is applied where it can be and declined where it cannot:
+//
+//   - context posture grounded: the condition "and the context posture is not
+//     grounded" fails whatever F is, so the last clause applies and the
+//     reference is grounded and motionless. No focus-dependence answer is
+//     needed to reach that.
+//   - otherwise: no opinion. Answering "grounded" without knowing whether F is
+//     focus-dependent would be a false NEGATIVE -- a stylesheet accepted that
+//     §19.8.8.15 makes roaming -- and this analysis exists to avoid exactly
+//     that, at the price of reporting nothing.
+//
+// Closing the second case means classifying the ~272 functions the manifest
+// holds by focus dependence, which is a table to be derived from F&O rather
+// than a rule to be written here.
+func (a *analyzer) namedFunctionRef(_ *xpath.NamedFunctionRef) props {
+	if a.ctxPosture == postureGrounded {
+		return groundedMotionless
+	}
+	return a.unknown()
 }

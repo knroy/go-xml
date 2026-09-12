@@ -593,8 +593,13 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		// With no xsl:fallback, "a static error is reported in the same way as
 		// if forwards-compatible behaviour were not enabled" — XTSE0010.
 	}
+	// The version is read rather than written as a literal, for the reason
+	// given at the sibling message in staticcheck.go -- including that neither
+	// site could be reached from any stylesheet tried, so both are correct
+	// spellings of diagnostics that may be dead.
 	return nil, fmt.Errorf(
-		"xsl:%s is not an XSLT 2.0 element (XTSE0010)", n.Name.Local)
+		"xsl:%s is not an XSLT %s element (XTSE0010)",
+		n.Name.Local, xsltVersionName(xpathVersionAt(n)))
 }
 
 // extensionInstr stands for an extension instruction the processor does not

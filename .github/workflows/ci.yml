@@ -64,9 +64,16 @@ jobs:
       # -timeout is set explicitly rather than left at the 10m default,
       # because the default is what turned a slow run into a panic rather
       # than a slow run.
+      # -race needs cgo, and cgo needs a C toolchain. GitHub's runners have
+      # gcc so this passes here silently, which is the problem: an auditor
+      # reproducing the gate locally with CGO_ENABLED=0, or in a slim
+      # container without gcc, gets a failure whose message is about the
+      # toolchain and reads as a broken test. Setting it explicitly makes the
+      # prerequisite part of the recipe rather than a property of the runner.
       - run: go test ./... -race -count=1 -timeout 25m
         env:
           GOXSLT_NO_SUITES: '1'
+          CGO_ENABLED: '1'
 
       # w3cschemas is a second module -- the schemas it bundles are under W3C
       # terms rather than MIT -- so every step above misses it: `go list ./...`
@@ -124,12 +131,34 @@ jobs:
         run: |
           set -eu
           mkdir -p testdata
-          git clone --depth 1 https://github.com/w3c/qt3tests.git testdata/qt3tests
-          git clone --depth 1 https://github.com/w3c/xsdtests.git testdata/xsdtests
+          # PINNED. These are the revisions tests/conformance/results.json
+          # records the committed figures as measured against, and
+          # TestRecordedSuiteRevisionsMatchTheCheckouts fails if the two
+          # disagree. Cloning the default branch instead made every run
+          # measure against whatever the suite happened to be that day: a
+          # suite update could move a count with no change to this repository,
+          # and the ratchet would fail on a commit that changed nothing, with
+          # nothing to distinguish that from a real regression.
+          #
+          # To adopt a newer suite, change the SHA here, re-run
+          # tests/check.sh, and update results.json in the same commit -- so
+          # the count moves together with the reason it moved.
+          clone_at() {
+            git clone --no-checkout --filter=blob:none "$1" "$2"
+            git -C "$2" fetch --depth 1 origin "$3"
+            git -C "$2" checkout --detach "$3"
+          }
+          clone_at https://github.com/w3c/qt3tests.git testdata/qt3tests \
+            201a6e466940cdfc727f4babfedcde5332b9f578
+          clone_at https://github.com/w3c/xsdtests.git testdata/xsdtests \
+            7bc3365c652a322f3d762021b3879eb92dae7e30
+          clone_at https://github.com/w3c/xslt30-test.git testdata/xslt30-test \
+            fddf1cf920087e791f13315d68dfbe874d97dc56
+          # jing-trang is not recorded: only one file is taken from it, and
+          # spectest.xml is the fixture rather than the checkout.
           mkdir -p testdata/relaxng
           git clone --depth 1 https://github.com/relaxng/jing-trang.git /tmp/jing-trang
           cp /tmp/jing-trang/mod/rng-validate/test/spectest.xml testdata/relaxng/
-          git clone --depth 1 https://github.com/w3c/xslt30-test.git testdata/xslt30-test
 
       # check.sh treats a suite that is present but silent as a failure, which
       # is the property that matters: a check that did not run must not look

@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -688,5 +689,69 @@ func TestTableCellsEscapePipes(t *testing.T) {
 		if strings.Contains(tc.Method, "|") && !strings.Contains(out, cell(tc.Method)) {
 			t.Errorf("method for %q is not published with its pipes escaped", tc.ID)
 		}
+	}
+}
+
+// The suite revisions recorded beside the figures must be the ones the tree
+// actually holds.
+//
+// A figure in results.json is a measurement, and a measurement whose
+// conditions are unrecorded is a number someone later reads as current. The
+// suites are separate checkouts that CI clones at --depth 1 from their
+// default branch, so a suite update can move a count with no change to this
+// repository -- and the ratchet would then fail on a commit that changed
+// nothing, with no way to tell that from a real regression.
+//
+// A stale recorded revision would be worse than none, because it would be
+// believed. This checks each one against the checkout, and skips rather than
+// fails where the suite is absent: a developer without the corpora should not
+// be told their tree is inconsistent.
+func TestRecordedSuiteRevisionsMatchTheCheckouts(t *testing.T) {
+	root := repoRoot(t)
+	res, err := Load(filepath.Join(root, "tests", "conformance", "results.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.SuiteRevisions) == 0 {
+		t.Skip("no suite revisions recorded")
+	}
+	checked := 0
+	for name, want := range res.SuiteRevisions {
+		dir := filepath.Join(root, "testdata", name)
+		if _, err := os.Stat(dir); err != nil {
+			continue // corpus not present in this checkout
+		}
+		// The same containment test suiterev in tests/check.sh applies: a
+		// directory that is not its own checkout answers with THIS
+		// repository's HEAD, which would silently compare a suite revision
+		// against a source commit.
+		top, err := exec.Command("git", "-C", dir, "rev-parse",
+			"--show-toplevel").Output()
+		if err != nil {
+			continue
+		}
+		realTop, err1 := filepath.EvalSymlinks(strings.TrimSpace(string(top)))
+		realDir, err2 := filepath.EvalSymlinks(dir)
+		if err1 != nil || err2 != nil || realTop != realDir {
+			t.Errorf("results.json records a revision for testdata/%s, which "+
+				"is not its own git checkout; the value recorded is this "+
+				"repository's HEAD and means nothing about the suite", name)
+			continue
+		}
+		got, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+		if err != nil {
+			continue
+		}
+		checked++
+		if g := strings.TrimSpace(string(got)); g != want {
+			t.Errorf("testdata/%s is at %s but results.json says the figures "+
+				"were measured against %s.\n    Re-run tests/check.sh and "+
+				"regenerate, or restore the suite to the recorded revision. "+
+				"A count that moved because the SUITE moved is not a "+
+				"regression in this repository.", name, g[:12], want[:12])
+		}
+	}
+	if checked == 0 {
+		t.Skip("no recorded suite is present as its own checkout here")
 	}
 }

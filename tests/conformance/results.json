@@ -5,7 +5,7 @@
   {
    "id": "xpath-2.0",
    "component": "xpath",
-   "suite": "QT3 — XPath 2.0",
+   "suite": "QT3 \u2014 XPath 2.0",
    "edition": "XPath 2.0 (Second Edition)",
    "passed": 15217,
    "disagreements": 0,
@@ -17,7 +17,7 @@
   {
    "id": "xpath-3.0",
    "component": "xpath",
-   "suite": "QT3 — XPath 3.0",
+   "suite": "QT3 \u2014 XPath 3.0",
    "edition": "XPath 3.0",
    "passed": 19362,
    "disagreements": 0,
@@ -29,7 +29,7 @@
   {
    "id": "xpath-3.1",
    "component": "xpath",
-   "suite": "QT3 — XPath 3.1",
+   "suite": "QT3 \u2014 XPath 3.1",
    "edition": "XPath 3.1",
    "passed": 21898,
    "disagreements": 0,
@@ -41,7 +41,7 @@
   {
    "id": "xquery-3.1",
    "component": "xquery",
-   "suite": "QT3 — XQuery 3.1",
+   "suite": "QT3 \u2014 XQuery 3.1",
    "edition": "XQuery 3.1",
    "passed": 30345,
    "disagreements": 1,
@@ -52,7 +52,7 @@
     {
      "id": "prod-ContextItemDecl/contextDecl-052",
      "verdict": "fixture",
-     "note": "The catalog registers libmodule-3.xq under …/libmodule3 and the file declares …/libmodule1, so XQST0059 is correct and precedes the wanted XQST0113."
+     "note": "The catalog registers libmodule-3.xq under \u2026/libmodule3 and the file declares \u2026/libmodule1, so XQST0059 is correct and precedes the wanted XQST0113."
     }
    ]
   },
@@ -70,27 +70,27 @@
     {
      "id": "format-number-070",
      "verdict": "deliberate-divergence",
-     "note": "Read in §2."
+     "note": "Read in \u00a72."
     },
     {
      "id": "docbook-001",
      "verdict": "deliberate-divergence",
-     "note": "A vendor extension; read in §2."
+     "note": "A vendor extension; read in \u00a72."
     },
     {
      "id": "sequence-0132",
      "verdict": "deliberate-divergence",
-     "note": "Read in §2."
+     "note": "Read in \u00a72."
     },
     {
      "id": "import-schema-137",
      "verdict": "deliberate-divergence",
-     "note": "Declaration ordering; §2.9 declines to settle it."
+     "note": "Declaration ordering; \u00a72.9 declines to settle it."
     },
     {
      "id": "validation-0201",
      "verdict": "implementation-defined",
-     "note": "Read in §2 and in Corrections."
+     "note": "Read in \u00a72 and in Corrections."
     },
     {
      "id": "regex-syntax-xslt20-0984",
@@ -133,17 +133,17 @@
     {
      "id": "accumulator-061",
      "verdict": "deliberate-divergence",
-     "note": "Costs more than it gains; read in §2."
+     "note": "Costs more than it gains; read in \u00a72."
     },
     {
      "id": "docbook-001",
      "verdict": "deliberate-divergence",
-     "note": "A vendor extension; read in §2."
+     "note": "A vendor extension; read in \u00a72."
     },
     {
      "id": "evaluate-045",
      "verdict": "deliberate-divergence",
-     "note": "Won't fix; read in §2."
+     "note": "Won't fix; read in \u00a72."
     },
     {
      "id": "evaluate-048",
@@ -153,7 +153,7 @@
     {
      "id": "import-schema-137",
      "verdict": "deliberate-divergence",
-     "note": "The one genuine ordering case; read in §2."
+     "note": "The one genuine ordering case; read in \u00a72."
     },
     {
      "id": "merge-097",
@@ -178,17 +178,17 @@
     {
      "id": "package-200",
      "verdict": "deliberate-divergence",
-     "note": "Costs more than it gains; read in §2."
+     "note": "Costs more than it gains; read in \u00a72."
     },
     {
      "id": "sf-reverse-001",
      "verdict": "deliberate-divergence",
-     "note": "The catalog's answer is what a streaming evaluator produces; XPath 3.1 §3.3.1.1 binds here."
+     "note": "The catalog's answer is what a streaming evaluator produces; XPath 3.1 \u00a73.3.1.1 binds here."
     },
     {
      "id": "si-copy-117",
      "verdict": "fixture",
-     "note": "§19.2 keys the code to the attribute written; XTTE1540 is correct."
+     "note": "\u00a719.2 keys the code to the attribute written; XTTE1540 is correct."
     },
     {
      "id": "si-copy-of-117",
@@ -198,22 +198,22 @@
     {
      "id": "streamable-116",
      "verdict": "implementation-defined",
-     "note": "§3.6.6 permits building the tree; the catalog marks the case _WRONG:wrong-error-code."
+     "note": "\u00a73.6.6 permits building the tree; the catalog marks the case _WRONG:wrong-error-code."
     },
     {
      "id": "strip-space-009",
      "verdict": "fixture",
-     "note": "§4.4 grants no ancestor-assertion exemption; the case exists to exercise Saxon paths."
+     "note": "\u00a74.4 grants no ancestor-assertion exemption; the case exists to exercise Saxon paths."
     },
     {
      "id": "su-ascent-903",
      "verdict": "deliberate-divergence",
-     "note": "§19.8.5.7 makes a reference to the streaming parameter climbing, and the ascent category permits a climbing body, so the analysis accepts it. It refused this case before only because varPosture wrongly read striding."
+     "note": "\u00a719.8.5.7 makes a reference to the streaming parameter climbing, and the ascent category permits a climbing body, so the analysis accepts it. It refused this case before only because varPosture wrongly read striding."
     },
     {
      "id": "system-property-012",
      "verdict": "deliberate-divergence",
-     "note": "§26.5 requires a non-streaming processor to answer \"no\"; answering \"yes\" would lie to stylesheets that branch on it to pick a fallback."
+     "note": "\u00a726.5 requires a non-streaming processor to answer \"no\"; answering \"yes\" would lie to stylesheets that branch on it to pick a fallback."
     },
     {
      "id": "validation-0006",
@@ -223,10 +223,10 @@
     {
      "id": "validation-0201",
      "verdict": "implementation-defined",
-     "note": "Read in §2 and in Corrections."
+     "note": "Read in \u00a72 and in Corrections."
     }
    ],
-   "unenumerated_note": "The balance want an XTSE3430 refusal that only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit. §19.1 does not require a non-streaming processor to assess guaranteed-streamability, so they are read as a block under \"The §19.8 streamability analysis\" rather than case by case. su-ascent-902 belongs to that block and is ALSO enumerated above, because its verdict is not the block's: the analysis does reach it, and the rule the test asserts contradicts §19.8.5.7's own worked example. It is counted once, in the breakdown of 14, so the enumeration and the breakdown overlap by exactly that one case and 20 + 14 = 34. merge-097sf was enumerated here until 2026-09-11 and is not a disagreement at all: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
+   "unenumerated_note": "The balance want an XTSE3430 refusal that only the unwritten remainder of the \u00a719.8 posture-and-sweep analysis can emit. \u00a719.1 does not require a non-streaming processor to assess guaranteed-streamability, so they are read as a block under \"The \u00a719.8 streamability analysis\" rather than case by case. su-ascent-902 belongs to that block and is ALSO enumerated above, because its verdict is not the block's: the analysis does reach it, and the rule the test asserts contradicts \u00a719.8.5.7's own worked example. It is counted once, in the breakdown of 14, so the enumeration and the breakdown overlap by exactly that one case and 20 + 14 = 34. merge-097sf was enumerated here until 2026-09-11 and is not a disagreement at all: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
   },
   {
    "id": "xsd-1.0",
@@ -242,7 +242,7 @@
     {
      "id": "MS-Attribute2006-07-15/attP031.i",
      "verdict": "fixture",
-     "note": "Suite self-contradiction: a prohibited use with a fixed value, expected valid, while attF001 expects invalid. §3.4.2 creates no attribute use."
+     "note": "Suite self-contradiction: a prohibited use with a fixed value, expected valid, while attF001 expects invalid. \u00a73.4.2 creates no attribute use."
     },
     {
      "id": "MS-DataTypes2006-07-15/anyURI_b006_1356",
@@ -406,12 +406,12 @@
     {
      "id": "MS-Element2006-07-15/elemZ026",
      "verdict": "fixture",
-     "note": "queried bug4146, keyworded disputedTest: a 1.0 substitution-group rewrite XSD 1.1 deleted. §3.9.6 has no Particle Valid (Restriction)."
+     "note": "queried bug4146, keyworded disputedTest: a 1.0 substitution-group rewrite XSD 1.1 deleted. \u00a73.9.6 has no Particle Valid (Restriction)."
     },
     {
      "id": "MS-Particles2006-07-15/particlesZ033_g",
      "verdict": "deliberate-divergence",
-     "note": "Costs more than it gains; read in §2."
+     "note": "Costs more than it gains; read in \u00a72."
     },
     {
      "id": "Simple/simple093.xsd",
@@ -620,6 +620,13 @@
    "method": "grep -hc '^func Test' ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'"
   }
  ],
+ "suite_revisions": {
+  "qt3tests": "201a6e466940cdfc727f4babfedcde5332b9f578",
+  "xsdtests": "7bc3365c652a322f3d762021b3879eb92dae7e30",
+  "xslt30-test": "fddf1cf920087e791f13315d68dfbe874d97dc56",
+  "xsltng": "a840909a8c82d23458ba72e61e0eed4185be6b74",
+  "xspec": "799d52a4239931197f5fa71476e79750b3e1d0ee"
+ },
  "breakdowns": [
   {
    "id": "xtse3430",
@@ -627,7 +634,7 @@
    "suite": "xslt-3.0",
    "of": 8,
    "overlap": 1,
-   "note": "Only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit the refusal; §19.1 does not require a non-streaming processor to assess guaranteed-streamability. The one overlap is su-ascent-903, enumerated individually because its verdict is not the block's: §19.8.5.7 makes an ascent function's streaming parameter climbing and the category permits a climbing body."
+   "note": "Only the unwritten remainder of the \u00a719.8 posture-and-sweep analysis can emit the refusal; \u00a719.1 does not require a non-streaming processor to assess guaranteed-streamability. The one overlap is su-ascent-903, enumerated individually because its verdict is not the block's: \u00a719.8.5.7 makes an ascent function's streaming parameter climbing and the category permits a climbing body."
   }
  ]
 }

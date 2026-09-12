@@ -277,6 +277,19 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		// the general rules apply (streamexprs.go).
 		return a.arrayConstructor(x)
 
+	case *xpath.InlineFunctionExpr:
+		// §19.8.8.16: roaming if it textually contains a reference to the
+		// containing stylesheet function's streaming parameter.
+		return a.inlineFunction(x)
+
+	case *xpath.NamedFunctionRef:
+		// §19.8.8.15, to the extent the focus-dependence of the referent is
+		// knowable here.
+		return a.namedFunctionRef(x)
+
+	case *xpath.LetExpr:
+		// §19.8.8's table: "let $var := N return T".
+		return a.letExpr(x)
 	case *xpath.ForExpr:
 		// §19.8.8.1, in streamexprs.go.
 		return a.forExpr(x)
@@ -286,9 +299,9 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		return a.quantifiedExpr(x)
 
 	default:
-		// let, inline functions, dynamic calls and named function
-		// references. Each has its own section in §19.8.8 and none is
-		// modelled yet.
+		// Dynamic function calls (§19.8.8.11), and any expression kind this
+		// switch has not been taught. Reporting no opinion is what keeps an
+		// unmodelled construct from becoming a spurious refusal.
 		return a.unknown()
 	}
 }

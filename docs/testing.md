@@ -23,7 +23,7 @@ let something through, and the column that matters is the last one.
 <!-- BEGIN GENERATED LAYER COUNTS -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** | 2,262 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,265 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -450,6 +450,41 @@ ratchet's, in every form the documents use: `11,490 of 11,518`,
 the `| 11,518 | 11,490 | 99.76% | **28** |` summary-table row. A line stating
 two figures is read as two claims. Failures name the file, line and the value
 wanted.
+
+### The figures name the suite revision they were measured against
+
+`tests/conformance/results.json` records the commit of each vendored W3C
+suite under `suite_revisions`, and
+`TestRecordedSuiteRevisionsMatchTheCheckouts` fails when a recorded revision
+and the checkout disagree.
+
+Without it a figure in that file is not reproducible. The suites are separate
+checkouts, and CI cloned them from their default branch, so **a suite update
+could move a count with no change to this repository at all** — and the
+ratchet would then fail on a commit that changed nothing, with nothing to
+distinguish that from a real regression. `tests/check.sh` had always printed
+the revisions into its provenance, but that is a per-run artifact that
+expires; this is the copy that travels with the numbers it explains. CI now
+clones each suite at the recorded SHA, so adopting a newer suite means
+changing the SHA, re-running the gate and updating `results.json` in one
+commit — the count moves together with the reason it moved.
+
+A suite that is not its own git checkout is recorded as absent rather than
+wrong. `testdata/relaxng` is vendored files, and asking git about it answers
+with *this* repository's HEAD; both the script and the test apply the same
+containment check that `suiterev` does, so that answer is never mistaken for
+a suite revision.
+
+### The race lane says when it cannot run
+
+`-race` needs cgo, and cgo needs a C toolchain. An external audit ran the gate
+without one, got a failure whose message was about the toolchain, and reported
+"race tests failed" — the cause only emerged after installing gcc. The lane
+now tests for a usable compiler and **skips with a reason** instead: a check
+that did not run must not look like one that passed, and must not look like
+one that failed either. `ci.yml` sets `CGO_ENABLED=1` explicitly on the same
+step, so the prerequisite is part of the recipe rather than a property of the
+runner that happens to satisfy it.
 
 ### Spec citations are checked the same way
 

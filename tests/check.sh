@@ -708,10 +708,22 @@ _f0=$failed
 GOXSLT_NO_SUITES=1 $GO test ./... -count=1 || fail "unit tests"
 laneFromStatus "package tests" "$_f0" "GOXSLT_NO_SUITES=1 go test ./... -count=1"
 
+# -race needs cgo, and cgo needs a C toolchain. Where one is absent the
+# failure is about the toolchain and reads as a broken test -- an external
+# audit hit exactly this, reported "race tests failed", and only found the
+# cause after installing gcc. Saying so here turns that into a skip with a
+# reason, which is the honest answer: a check that did not run must not look
+# like a check that passed, and must not look like one that failed either.
 section "race"
 _f0=$failed
-GOXSLT_NO_SUITES=1 $GO test -race ./... -count=1 -timeout 25m || fail "race"
-laneFromStatus race "$_f0" "GOXSLT_NO_SUITES=1 go test -race ./... -count=1 -timeout 25m"
+if [ "$(CGO_ENABLED=1 $GO env CGO_ENABLED 2>/dev/null)" != "1" ] ||
+	! CGO_ENABLED=1 $GO env CC > /dev/null 2>&1; then
+	skip "race detector needs cgo and a C compiler; neither was usable here"
+	lane race SKIP "cgo unavailable (-race needs a C toolchain)"
+else
+CGO_ENABLED=1 GOXSLT_NO_SUITES=1 $GO test -race ./... -count=1 -timeout 25m || fail "race"
+laneFromStatus race "$_f0" "CGO_ENABLED=1 GOXSLT_NO_SUITES=1 go test -race ./... -count=1 -timeout 25m"
+fi
 
 # w3cschemas is a module of its own -- the schemas it bundles are W3C-licensed
 # and the core module is MIT -- so `go list ./...` at the root does not reach
