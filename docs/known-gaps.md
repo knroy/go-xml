@@ -1018,6 +1018,39 @@ trace here — but readings that were believed, quoted, and disproved. They are
 kept because a negative result that was believed for two revisions is more
 dangerous than an open bug, and deleting one invites the same probe again.
 
+### "Remove the 1<<20 arity ceiling" — rejected twice, and it is a memory bug
+
+An audit has twice proposed raising `maxLookupArity` (`xpath/fn_hof.go`) to
+the representable `int` limit, on the reading that the `1<<20` bound is an
+artificial cap on `fn:concat`. It is not: it is the only thing standing
+between a one-line expression and an out-of-memory kill.
+
+`synthesizeVariadic` (`xpath/version.go`) answers an arity by building the
+signature for it — `make([]string, arity+1)`, then a write per parameter. The
+arity comes straight from the caller, so with the bound at `MaxInt` a single
+`fn:function-lookup(xs:QName("fn:concat"), 9223372036854775807)` asks for a
+slice of nine quintillion strings. The ceiling is a resource guard, and
+removing it is a denial-of-service hole rather than a conformance gain.
+
+**The test offered with the proposal cannot fail.** It asserts that
+`concat#1000001` resolves; `1,000,001 < 1,048,576`, so that arity is under the
+current cap and succeeds today, before and after the change alike. Nothing
+about the bound is exercised. The first arity that touches it is `1,048,577`.
+
+**The single shared constant is itself a fix, not an accident.** The comment
+at the declaration records the earlier shape: enforcing the range at
+`fn:function-lookup` alone made the two acquisition routes disagree above
+2^20 and left `concat#9223372036854775807` — the exact saturation value the
+bound exists to refuse — reachable through the named function reference.
+`maxLookupArity = maxVariadicArity` is what keeps one expression from
+answering two ways.
+
+**What a real fix would look like, in order.** The ceiling is a symptom of
+signatures being materialised per arity. Compact variadic signature metadata
+first, then function-type matching taught to read it, and only then is
+removing the bound even a question. Reversing that order trades a documented
+limit for an unbounded allocation.
+
 ### "A nilled element must not satisfy a key field" — it must, and the suite says so
 
 An audit reported that `keySequence` (`xsd/identity.go`) lets a nilled element
