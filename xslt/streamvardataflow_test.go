@@ -81,7 +81,7 @@ func TestQuantifiedOverAStreamedBindingNavigatedFrom(t *testing.T) {
 }
 
 func TestQuantifiedOverAGroundedBindingIsUnchanged(t *testing.T) {
-	// A grounded binding never enters the environment: §19.8.8.11's plain
+	// A grounded binding never enters the environment: §19.8.8.12's plain
 	// answer is already right for it, and this is the shape §19.8.8.2's own
 	// note calls out as allowed -- "some $i in 1 to 3 satisfies @grade = $i".
 	p, known := quantProps(t, `some $i in 1 to 3 satisfies $i gt 2`)
@@ -130,7 +130,7 @@ func TestAStreamedRangeVariableAbsorbedIsStillRefused(t *testing.T) {
 }
 
 func TestAVariableOutsideTheEnvironmentIsStillGrounded(t *testing.T) {
-	// §19.8.8.11's rule is untouched for every variable the environment does
+	// §19.8.8.12's rule is untouched for every variable the environment does
 	// not hold. This is the acceptance direction that matters most: nothing
 	// in a stylesheet's ordinary variable references changed.
 	p, known := quantProps(t, `$anything`)

@@ -26,7 +26,7 @@ func accumSheet(decl string) string {
 		`<xsl:template match="/"><out/></xsl:template></xsl:stylesheet>`
 }
 
-// §18.2.8 lists five conditions an accumulator declared streamable="yes" must
+// §18.2.9 lists five conditions an accumulator declared streamable="yes" must
 // satisfy to be guaranteed-streamable. Conditions 2 and 3 defer to §19.8.10's
 // classification of patterns; conditions 4 and 5 require the initial-value and
 // select expressions to be grounded and motionless.
@@ -45,7 +45,7 @@ func TestAccumulatorStreamabilityXTSE3430(t *testing.T) {
 			</xsl:accumulator>`))
 		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
 			t.Fatalf("match=\"fig[caption]\" has a non-motionless predicate, "+
-				"so §18.2.8 condition 3 fails; want XTSE3430, got: %v", err)
+				"so §18.2.9 condition 3 fails; want XTSE3430, got: %v", err)
 		}
 	})
 
@@ -57,7 +57,7 @@ func TestAccumulatorStreamabilityXTSE3430(t *testing.T) {
 			  <xsl:accumulator-rule match="fig" select="$value + string-length(caption)"/>
 			</xsl:accumulator>`))
 		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
-			t.Fatalf("select reading a child is consuming, so §18.2.8 "+
+			t.Fatalf("select reading a child is consuming, so §18.2.9 "+
 				"condition 5 fails; want XTSE3430, got: %v", err)
 		}
 	})
@@ -75,7 +75,7 @@ func TestAccumulatorStreamabilityXTSE3430(t *testing.T) {
 			</xsl:accumulator>`))
 		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
 			t.Fatalf("select returning \".\" is motionless but not grounded, "+
-				"so §18.2.8 condition 5 fails; want XTSE3430, got: %v", err)
+				"so §18.2.9 condition 5 fails; want XTSE3430, got: %v", err)
 		}
 	})
 
@@ -88,7 +88,7 @@ func TestAccumulatorStreamabilityXTSE3430(t *testing.T) {
 			  <xsl:accumulator-rule match="fig" select="$value + 1"/>
 			</xsl:accumulator>`))
 		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
-			t.Fatalf("applies-to=\"doc[title]\" is free-ranging, so §18.2.8 "+
+			t.Fatalf("applies-to=\"doc[title]\" is free-ranging, so §18.2.9 "+
 				"condition 2 fails; want XTSE3430, got: %v", err)
 		}
 	})
@@ -102,7 +102,7 @@ func TestAccumulatorStreamabilityXTSE3430(t *testing.T) {
 			  <xsl:accumulator-rule match="fig" select="$value + 1"/>
 			</xsl:accumulator>`))
 		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
-			t.Fatalf("initial-value reading the tree is consuming, so §18.2.8 "+
+			t.Fatalf("initial-value reading the tree is consuming, so §18.2.9 "+
 				"condition 4 fails; want XTSE3430, got: %v", err)
 		}
 	})
@@ -114,7 +114,7 @@ func TestAccumulatorStreamabilityXTSE3430(t *testing.T) {
 			<xsl:accumulator name="a" as="xs:integer" initial-value="0">
 			  <xsl:accumulator-rule match="fig[caption]" select="$value + string-length(caption)"/>
 			</xsl:accumulator>`)); err != nil {
-			t.Fatalf("§18.2.8 constrains only streamable=\"yes\"; this must "+
+			t.Fatalf("§18.2.9 constrains only streamable=\"yes\"; this must "+
 				"compile, got: %v", err)
 		}
 	})

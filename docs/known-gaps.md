@@ -1146,8 +1146,52 @@ Three classes were found, and only the first can mislead the code:
 in a comment a reader will not re-derive — it is read as the authority the code
 answers to. A stale one therefore outlives every other kind of stale comment,
 and a *wrong* one silently licenses a wrong change: the §15.4 rule as quoted
-would have justified rejecting a grounded merge source the spec permits. The
-remaining class-3 items are catalogued but not yet rewritten.
+would have justified rejecting a grounded merge source the spec permits.
+
+**All three classes are now closed.** The renumbering was applied in one pass
+over 63 sites, checked against 482 section headings extracted from the local
+Recommendation: §19.8.8.7→.8 (path expressions), §19.8.8.6→.7 (simple map),
+§18.2.8→.9 (streamability of accumulators), §19.8.4.35/.36/.37→.37/.38/.39
+(source-document, text, try), §19.8.8.13→.14 (static function calls), and
+§3.8.2→§3.7.2, the one cited number that names no section at all. Every §
+citation in `xslt/stream*.go` now resolves to a real heading whose title
+matches the code beneath it.
+
+Four quotations that no version of the spec carries were replaced with the
+Recommendation's own words: the positional-predicate note (§19.8.8.8 actually
+says scanning expressions *cannot* use them), the `xsl:stream`
+guaranteed-streamable sentence (§19.9, and the instruction is
+`xsl:source-document`), the "expressed informally" note, and the
+`use="prohibited"` grammar reference. Two more drifted in substance and were
+corrected: the simple-map rule takes the **wider of the two sweeps**, not the
+right operand's, and §3.7.2 says **ancestor-or-self**, not "innermost
+ancestor". In both cases the code was already right and only the quotation was
+wrong — `defaultModeFor` starts its walk at the element itself.
+
+One sentence was kept but taken out of quotation marks: the "declared type
+permits nodes" definition in `streamfunctions_test.go` is this
+implementation's reading of §19.2's U-types, not spec text, and now says so.
+
+**The audit itself missed one, and the repo had already found it.** Variable
+references were cited as §19.8.8.11 at 25 sites; that section is *Dynamic
+Function Calls*, and variable references are **§19.8.8.12**. The correction was
+not new — a comment in `streamfunctions_test.go` records it verbatim, written
+during the `varPosture` work: "§19.8.8.11 is *dynamic function calls*; the rule
+for a variable reference is §19.8.8.12". One test was corrected and the other
+24 sites were never brought along, which is the same failure mode as the
+NCName transcription that existed correctly three times while `cast.go` kept
+its own broken copy. The 24 are corrected; the one site that names §19.8.8.11
+deliberately, to say why it is wrong, is left alone.
+
+The check that finds these is cheap and worth repeating: extract every
+`<hN>` heading from `testdata/xslt30-test/specs/xslt-30.html`, then confirm
+each `§` citation resolves to one and that its title matches the code beneath.
+960 sites over 98 distinct sections currently resolve, with none dangling.
+
+Citations outside `xslt/stream*.go` were checked too and are sound: the 25
+that name no XSLT 3.0 section are attributed to *other* specifications — HTML
+4.01 §9.3.4 and §17.7, F&O §17.5.3, XDM §5.8.3 — or explicitly to XSLT **2.0**
+(`xslt/validate.go`'s §19.2.1.3), where those numbers do exist.
 
 ### A §19.8.9.3 quotation that no longer appears in the spec
 

@@ -1,9 +1,9 @@
 package xslt
 
-// The XTSE3430 check for xsl:accumulator, driven by §18.2.8 "Streamability of
+// The XTSE3430 check for xsl:accumulator, driven by §18.2.9 "Streamability of
 // Accumulators" and §19.8.10 "Classifying Patterns".
 //
-// §18.2.8 gives five conditions, all of which an accumulator declared
+// §18.2.9 gives five conditions, all of which an accumulator declared
 // streamable="yes" must satisfy to be guaranteed-streamable:
 //
 //	1. the declaration has streamable="yes";
@@ -33,11 +33,11 @@ import (
 	"github.com/knroy/go-xml/xpath"
 )
 
-// checkAccumulatorStreamability applies §18.2.8 to every xsl:accumulator in
+// checkAccumulatorStreamability applies §18.2.9 to every xsl:accumulator in
 // the module that declares streamable="yes".
 //
 // It is deliberately independent of whether any mode or source document is
-// itself streamable. §18.2.8 attaches the condition to the accumulator
+// itself streamable. §18.2.9 attaches the condition to the accumulator
 // declaration alone: an accumulator that says streamable="yes" must be
 // guaranteed-streamable, whatever else the stylesheet does with it.
 func checkAccumulatorStreamability(root *xdm.Node) error {
@@ -82,7 +82,7 @@ func checkOneAccumulator(acc *xdm.Node) error {
 	}
 
 	// Condition 4: the initial-value expression must be grounded and
-	// motionless. §18.2.8 evaluates it with a singleton focus on the root of
+	// motionless. §18.2.9 evaluates it with a singleton focus on the root of
 	// the streamed tree, so its context posture is striding.
 	if a := acc.Attr("", "initial-value"); a != nil {
 		if bad, known := exprIsNotGroundedMotionless(a.Value, acc); known && bad {
@@ -149,11 +149,11 @@ func checkOneAccumulator(acc *xdm.Node) error {
 }
 
 // exprIsNotGroundedMotionless reports whether src is positively known to be
-// something other than grounded and motionless, per §18.2.8 conditions 4 and
+// something other than grounded and motionless, per §18.2.9 conditions 4 and
 // 5. The second result is false when the analysis met a construct it does not
 // model, in which case the first must be ignored.
 //
-// The context posture is striding: §18.2.8 evaluates both the initial-value
+// The context posture is striding: §18.2.9 evaluates both the initial-value
 // expression and an accumulator rule's select with a singleton focus on a node
 // of the streamed tree.
 func exprIsNotGroundedMotionless(src string, at *xdm.Node) (bool, bool) {

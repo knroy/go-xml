@@ -21,12 +21,12 @@ package xslt
 // Two supporting rules from §19.8.8 come with it, because §19.8.5 is
 // unreachable without them:
 //
-//   - §19.8.8.11, variable references. A reference to the *first* parameter
+//   - §19.8.8.12, variable references. A reference to the *first* parameter
 //     of a declared-streamable function is not grounded; its posture comes
 //     from the category. This is the rule that makes a function body's
 //     posture depend on its category at all, and without it every body would
 //     be trivially grounded and every category check would pass.
-//   - §19.8.8.6, the simple map operator "!". The dominant call-site shape in
+//   - §19.8.8.7, the simple map operator "!". The dominant call-site shape in
 //     the suite is "path ! f:g(., 'x')", and "!" was previously unmodelled,
 //     so the analysis abandoned the construct before ever reaching the call.
 
@@ -217,7 +217,7 @@ func typePermitsSeveralNodes(as string) bool {
 }
 
 // typePermitsNodes reports whether a declared sequence type permits nodes --
-// the "non-empty intersection with U{N}" of §19.8.8.11.
+// the "non-empty intersection with U{N}" of §19.8.8.12.
 //
 // An absent "as" attribute permits nodes (the default is item()*). Otherwise
 // the answer is decided syntactically, which is enough for the two shapes that
@@ -322,7 +322,7 @@ func typeDeterminedUsage(as string) usage {
 }
 
 // varPosture gives the posture of a reference to the streaming parameter of a
-// declared-streamable function (§19.8.8.11).
+// declared-streamable function (§19.8.8.12).
 //
 // singular says the reference is not inside a higher-order operand of any
 // construct between it and the function body. The table is reproduced exactly
@@ -593,7 +593,7 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 	}
 	// The streaming parameter is the first parameter, and only when the
 	// function is declared-streamable and that parameter's declared type
-	// permits nodes (§19.8.8.11).
+	// permits nodes (§19.8.8.12).
 	if f.category.declaredStreamable() && f.arity() > 0 && typePermitsNodes(f.params[0]) {
 		if q, ok := firstParamName(f.body); ok {
 			a.streamingParam = q
@@ -770,14 +770,14 @@ func firstParamName(fn *xdm.Node) (xdm.QName, bool) {
 	return xdm.QName{}, false
 }
 
-// varRef applies §19.8.8.11 to a variable reference.
+// varRef applies §19.8.8.12 to a variable reference.
 //
 // The sweep is always motionless. The posture is grounded unless the reference
 // is to the streaming parameter -- the first parameter of the
 // declared-streamable function whose body is being analysed -- in which case
 // the category and the reference's singularity decide it.
 // A range variable of a quantified expression is the one exception, and it is
-// data flow rather than a rule of §19.8.8.11: the binding sequence's posture
+// data flow rather than a rule of §19.8.8.12: the binding sequence's posture
 // was recorded when the binding was entered, and the reference is given it.
 // See analyzer.vars and quantifiedExpr. A variable not in that environment is
 // grounded, exactly as before.
@@ -800,16 +800,23 @@ func (a *analyzer) varRef(x *xpath.VarRef) props {
 	return props{varPosture(a.paramCategory, !a.higherOrder), sweepMotionless}
 }
 
-// simpleMap applies §19.8.8.6 to the simple map operator.
+// simpleMap applies §19.8.8.7 to the simple map operator.
 //
-// "The posture and sweep of the expression are the posture and sweep of the
-// right-hand operand, assessed with a context posture and type set to the
-// posture and type of the left-hand operand." The left operand is assessed
+// "The posture of the expression is the posture of the right-hand operand,
+// assessed with a context posture and type set to the posture and type of the
+// left-hand operand. The sweep of the expression is the wider of the sweeps
+// of the two operands."
+//
+// This was quoted as "the posture AND SWEEP of the expression are the posture
+// and sweep of the right-hand operand", which states the sweep half backwards:
+// the sweep is the wider of the two, so a consuming left operand is not
+// discarded by a motionless right one. The code takes the wider sweep; only
+// the quotation was wrong. The left operand is assessed
 // first, in the current context; a left operand that is itself not streamable
 // makes the whole expression so.
 //
 // The right operand is evaluated once per item of the left, which makes it a
-// higher-order operand for the purposes of §19.8.8.11's singularity test.
+// higher-order operand for the purposes of §19.8.8.12's singularity test.
 func (a *analyzer) simpleMap(x *xpath.SimpleMap) props {
 	left := a.expr(x.Left)
 	if !left.streamable() {
@@ -826,7 +833,7 @@ func (a *analyzer) simpleMap(x *xpath.SimpleMap) props {
 		higherOrder:       true,
 		// "$input ! path()" navigates away from the very node $input
 		// denotes, so the context item on the right inherits the left
-		// operand's streamed-but-grounded standing (§19.8.8.11, and the
+		// operand's streamed-but-grounded standing (§19.8.8.12, and the
 		// note under §19.8.5). Without this the navigation usage would
 		// meet a grounded context and cost nothing.
 		ctxStreamedGrounded: a.isStreamingParamRef(x.Left),

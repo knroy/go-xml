@@ -93,7 +93,7 @@ func TestStreamableModeBodyXTSE3430(t *testing.T) {
 		}
 	})
 
-	// §19.8.8.7 rewrites a leading "/" as a call on fn:root, so "//chtitle"
+	// §19.8.8.8 rewrites a leading "/" as a call on fn:root, so "//chtitle"
 	// is a RootedPath reaching the whole document. From inside a streamed
 	// template that is free-ranging. This is streamable-117.
 	t.Run("rooted path", func(t *testing.T) {
@@ -438,7 +438,7 @@ func TestStreamableModeBodyMustBeGrounded(t *testing.T) {
 	})
 }
 
-// §19.8.8.7's reassessment of a roaming path as a scanning expression is
+// §19.8.8.8's reassessment of a roaming path as a scanning expression is
 // stated without a precondition on the context posture, but its note gives
 // the strategy as "examine each descendant of the context node" and every
 // worked example it closes with is prefaced "assume that the context posture
@@ -464,7 +464,7 @@ func TestScanningRescueNeedsAStridingStart(t *testing.T) {
 	})
 
 	// The acceptance direction: the identical scan from a striding posture is
-	// what §19.8.8.7's rescue exists for, and must still compile.
+	// what §19.8.8.8's rescue exists for, and must still compile.
 	t.Run("the same scan from a striding posture is accepted", func(t *testing.T) {
 		if err := compileModeSheet(t, modeSheet(
 			`<xsl:template match="myroot" mode="s">`+
@@ -472,7 +472,7 @@ func TestScanningRescueNeedsAStridingStart(t *testing.T) {
 				`<xsl:value-of select="count(*)"/>`+
 				`</xsl:for-each></chap>`+
 				`</xsl:template>`)); err != nil {
-			t.Fatalf("a scan from a striding context is what §19.8.8.7's "+
+			t.Fatalf("a scan from a striding context is what §19.8.8.8's "+
 				"reassessment is for, so this must compile; got: %v", err)
 		}
 	})

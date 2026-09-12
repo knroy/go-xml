@@ -49,7 +49,7 @@ type analyzer struct {
 
 	// streamingParam names the streaming parameter (§19.8.5) of the function
 	// whose body is being analysed, and paramCategory is that function's
-	// streamability category. Together they drive the §19.8.8.11 rule that
+	// streamability category. Together they drive the §19.8.8.12 rule that
 	// gives a reference to the first parameter of a declared-streamable
 	// function a posture other than grounded. Empty outside such a body.
 	streamingParam xdm.QName
@@ -57,7 +57,7 @@ type analyzer struct {
 	hasStreamParam bool
 
 	// ctxStreamedGrounded says the context item here is a streamed node that
-	// §19.8.8.11 nevertheless reports as grounded — it was reached from a
+	// §19.8.8.12 nevertheless reports as grounded — it was reached from a
 	// bare reference to the streaming parameter, as in "$input ! path()".
 	// It carries operand.streamedGrounded across a change of focus, so that
 	// a navigation usage applied to "." is charged the same way it would be
@@ -66,7 +66,7 @@ type analyzer struct {
 
 	// higherOrder records that the expression now being analysed sits inside
 	// a higher-order operand of some construct between it and the function
-	// body. §19.8.8.11 calls a variable reference "singular" when no such
+	// body. §19.8.8.12 calls a variable reference "singular" when no such
 	// construct intervenes, and gives the two answers different postures.
 	higherOrder bool
 
@@ -86,9 +86,11 @@ type analyzer struct {
 	groupOutOfReach bool
 
 	// currentPosture carries §19.8.9.3's answer for a call on fn:current:
-	// "the context posture for evaluation of the outermost containing XPath
-	// expression (that is, the context posture that would obtain if the
-	// entire XPath expression were replaced with '.')". It is set once where
+	// the context posture of E, where E is "the outermost containing XPath
+	// expression of the call to the current function". (Previously quoted
+	// from the Last Call draft, whose wording -- "the context posture that
+	// would obtain if the entire XPath expression were replaced with '.'" --
+	// the Recommendation does not carry.) It is set once where
 	// that outermost expression is entered and copied unchanged into every
 	// inner analyzer, so that descending into a predicate -- which does
 	// change ctxPosture -- leaves it alone. Within a pattern §19.8.9.3 fixes
@@ -112,7 +114,7 @@ type analyzer struct {
 	// vars is the data-flow environment: for a range variable bound to a
 	// value that is NOT grounded, the posture and sweep that value has.
 	//
-	// §19.8.8.11 says a variable reference is grounded and motionless, and
+	// §19.8.8.12 says a variable reference is grounded and motionless, and
 	// §19.8.8.1's note explains why the rules stop there: separating a
 	// binding that is used harmlessly from one that is navigated from
 	// "requires data flow analysis (tracing from the binding of a variable
@@ -123,7 +125,7 @@ type analyzer struct {
 	// xsl:variable's initialiser is given a navigation usage precisely so
 	// that a streamed node cannot be bound to it at all.
 	//
-	// A binding absent from the map is grounded, which is what §19.8.8.11
+	// A binding absent from the map is grounded, which is what §19.8.8.12
 	// says and what every reference got before. So the map can only make a
 	// reference LESS grounded, never a construct more streamable, and a
 	// construct whose binding this analysis cannot assess never enters it.
@@ -153,9 +155,13 @@ func analyzeExprFuncs(e xpath.Expr, ctx posture, funcs map[funcKey]*streamFunc) 
 		ctxAllowsChildren: true,
 		known:             true,
 		funcs:             funcs,
-		// e is the outermost containing XPath expression, so §19.8.9.3's
-		// "context posture that would obtain if the entire XPath expression
-		// were replaced with '.'" is this analyzer's own starting context.
+		// e is the outermost containing XPath expression -- the E of
+		// §19.8.9.3's "let E be the outermost containing XPath expression of
+		// the call to the current function" -- so its context posture is
+		// this analyzer's own starting context. (The parenthetical once
+		// quoted here, "the context posture that would obtain if the entire
+		// XPath expression were replaced with '.'", is Last Call wording and
+		// is not in the Recommendation.)
 		currentPosture:        ctx,
 		currentAllowsChildren: true,
 		currentInScope:        true,
@@ -188,7 +194,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		return props{a.ctxPosture, sweepMotionless}
 
 	case *xpath.VarRef:
-		// §19.8.8.11: a variable reference is motionless, and grounded
+		// §19.8.8.12: a variable reference is motionless, and grounded
 		// except when bound to a streaming parameter of a
 		// declared-streamable stylesheet function, where the posture comes
 		// from the function's category and whether the reference is
@@ -257,7 +263,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		return a.funcCall(x)
 
 	case *xpath.SimpleMap:
-		// §19.8.8.6: the posture and sweep of "a!b" are those of the right
+		// §19.8.8.7: the posture and sweep of "a!b" are those of the right
 		// operand, assessed with a context posture and type taken from the
 		// left operand.
 		return a.simpleMap(x)
@@ -293,7 +299,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 // Two things follow from the operand being higher-order, and both matter.
 // combine refuses a construct whose one consuming operand is higher-order,
 // because the parent may evaluate it more than once and the input cannot be
-// rewound. And §19.8.8.11 makes a reference to the streaming parameter
+// rewound. And §19.8.8.12 makes a reference to the streaming parameter
 // non-singular once a higher-order operand separates it from the function
 // body, which for the absorbing, shallow-descent and deep-descent categories
 // turns that reference roaming.
@@ -401,7 +407,7 @@ func (a *analyzer) binary(x *xpath.BinaryOp) props {
 		return a.unionExpr(x.Left, x.Right)
 
 	default:
-		// "!" has its own rule in §19.8.8.6.
+		// "!" has its own rule in §19.8.8.7.
 		return a.unknown()
 	}
 }
@@ -487,7 +493,7 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 	return base
 }
 
-// path applies §19.8.8.7 to a relative path expression.
+// path applies §19.8.8.8 to a relative path expression.
 //
 // The spec treats "a/b/c" as the binary tree "(a/b)/c", and gives the sweep as
 // the wider of the two operands and the posture as that of the right-hand
@@ -496,7 +502,7 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 func (a *analyzer) path(x *xpath.PathExpr) props {
 	cur := props{a.ctxPosture, sweepMotionless}
 	if x.Root {
-		// A leading "/" is rewritten to a call on fn:root (§19.8.8.7),
+		// A leading "/" is rewritten to a call on fn:root (§19.8.8.8),
 		// which from a striding posture in a streamed document yields the
 		// document node -- striding and motionless (§19.8.9.18). From any
 		// other context posture the analysis has no opinion.
@@ -509,7 +515,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 			cur = props{postureStriding, sweepMotionless}
 		}
 	}
-	// §19.8.8.7 assesses a path in two phases: a provisional posture folded
+	// §19.8.8.8 assesses a path in two phases: a provisional posture folded
 	// left to right over the steps, and — if that comes out roaming — a
 	// reassessment that recognises a scanning expression.
 	//
@@ -570,7 +576,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 		}
 		if !next.streamable() {
 			prefix := x.Steps[:i+1]
-			// §19.8.8.7's reassessment presupposes the scan starts from a
+			// §19.8.8.8's reassessment presupposes the scan starts from a
 			// node of the stream that has not yet been passed: its own note
 			// gives the strategy as "examine each descendant of the context
 			// node", and every worked example it closes with is prefaced
@@ -597,7 +603,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 	return cur
 }
 
-// scanMayStart reports whether §19.8.8.7's reassessment may be applied to this
+// scanMayStart reports whether §19.8.8.8's reassessment may be applied to this
 // prefix, which turns on the node the scan starts from.
 //
 // The reassessment leaves that precondition implicit: its note gives the
@@ -624,7 +630,7 @@ func (a *analyzer) scanMayStart(prefix []xpath.Expr) bool {
 }
 
 // isScanningSteps reports whether every step is a scanning expression in the
-// sense of §19.8.8.7: an axis step on child, descendant, descendant-or-self or
+// sense of §19.8.8.8: an axis step on child, descendant, descendant-or-self or
 // self, whose predicates are all motionless and non-positional.
 func (a *analyzer) isScanningSteps(steps []xpath.Expr) bool {
 	for _, e := range steps {
@@ -658,13 +664,20 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 			return false
 		}
 		for _, p := range s.Predicates {
-			// §19.8.8.7's own note: "positional predicates (such as [1])
-			// are allowed in the left-hand operand of a relative path
-			// expression if it uses the child axis, but not if it uses the
-			// descendant axis." A positional predicate on child:: picks one
-			// node from a set of peers, which stays a single downward pass;
-			// on descendant:: it picks one from a nested set, which does
-			// not.
+			// §19.8.8.8's note, verbatim: "Scanning expressions cannot use
+			// positional predicates: for example //section/head[1] is not
+			// recognized as a scanning expression because this would require
+			// information about a streamed node (specifically, about its
+			// preceding siblings) that is not retained during streaming."
+			//
+			// This comment previously quoted a sentence that is not in the
+			// spec at all -- "positional predicates (such as [1]) are allowed
+			// in the left-hand operand of a relative path expression if it
+			// uses the child axis, but not if it uses the descendant axis."
+			// The rule the code applies is the real one: a positional
+			// predicate disqualifies a step from being part of a SCANNING
+			// expression, because deciding it needs the preceding siblings
+			// the stream has already passed.
 			if isPositionalPredicate(p) &&
 				s.Axis != xpath.AxisChild && s.Axis != xpath.AxisSelf {
 				return false
@@ -712,7 +725,7 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 }
 
 // isPositionalPredicate reports whether a predicate depends on the position of
-// the item within the sequence being filtered. §19.8.8.7 excludes such
+// the item within the sequence being filtered. §19.8.8.8 excludes such
 // predicates from a scanning expression: "[1]" on the descendant axis selects
 // one node out of a nested set, which cannot be found in a single pass.
 //
@@ -777,7 +790,7 @@ func stepsSelectElements(steps []xpath.Expr) bool {
 // funcCall applies §19.8.9 to a call on a built-in function.
 func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 	if x.Name.URI == xdm.NSXS && len(x.Args) == 1 {
-		// §19.8.8.13: "For a call to a constructor function, the general
+		// §19.8.8.14: "For a call to a constructor function, the general
 		// rules for streamability apply. There is a single operand role
 		// (the argument to the function), with operand usage absorption."
 		// §19.9's own worked example spells this out for xs:date(@timestamp).

@@ -10,7 +10,7 @@ import (
 // Tests for the five §19.8 rules this file's neighbours gained: the
 // group-starting-with / group-ending-with pattern operand and the context
 // posture of the grouping key (§19.8.4.19), the constructor-function operand
-// (§19.8.8.13), the fn:outermost exception (§19.8.9.15), and §18.1's demand
+// (§19.8.8.14), the fn:outermost exception (§19.8.9.15), and §18.1's demand
 // that the body of a streamed document be grounded.
 //
 // Each case states what the spec requires and cites the clause. The expected
@@ -79,10 +79,10 @@ func TestOutermostArgumentIsTransmission(t *testing.T) {
 		"xsl:sequence select=outermost(@code)")
 }
 
-// --- §19.8.8.13 constructor functions ---------------------------------------
+// --- §19.8.8.14 constructor functions ---------------------------------------
 
 func TestConstructorFunctionOperandIsAbsorption(t *testing.T) {
-	// §19.8.8.13: "For a call to a constructor function, the general rules
+	// §19.8.8.14: "For a call to a constructor function, the general rules
 	// for streamability apply. There is a single operand role (the argument
 	// to the function), with operand usage absorption." §19.9's worked
 	// example applies this to xs:date(@timestamp) and finds it motionless,
@@ -102,11 +102,12 @@ func TestConstructorFunctionAbsorbsAConsumingArgument(t *testing.T) {
 		"xsl:value-of select=xs:string(PRICE)")
 }
 
-// --- §18.1 the body of a streamed document must be grounded -----------------
+// --- §19.9 the body of a streamed document must be grounded ----------------
 
 func TestStreamedDocumentBodyMustBeGrounded(t *testing.T) {
-	// §18.1: "The xsl:stream instruction is guaranteed-streamable if the
-	// contained sequence constructor is grounded." Its note makes the
+	// §19.9: "The rules for xsl:source-document say that the instruction
+	// is guaranteed-streamable if the contained sequence constructor is
+	// grounded." §18.1's note makes the
 	// consequence explicit: "it cannot contain the instruction
 	// <xsl:sequence select='//chapter'/>. If nodes from this document are to
 	// be returned, they must first be copied."

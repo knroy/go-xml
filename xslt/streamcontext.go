@@ -26,7 +26,7 @@ package xslt
 // context posture is striding whatever dispatched to it, and each body is
 // judged alone under the §19.8.4 instruction rules.
 //
-// The same reach argument covers xsl:accumulator-rule: §18.2.8 condition 3
+// The same reach argument covers xsl:accumulator-rule: §18.2.9 condition 3
 // requires a streamable accumulator's rule patterns to be motionless, and
 // checkAccumulatorStreamability already enforces it. It is not repeated here.
 
@@ -122,7 +122,7 @@ func streamableModeNames(root *xdm.Node) map[string]bool {
 // STATIC TYPE: it is non-numeric when the intersection of that type with
 // U{xs:decimal, xs:double, xs:float} is empty. isPositionalPredicate answers a
 // different, syntactic question -- "does a numeric literal appear anywhere
-// inside?" -- and §19.8.8.7, its original caller, can afford that: there an
+// inside?" -- and §19.8.8.8, its original caller, can afford that: there an
 // over-broad answer only withholds the scanning-expression rescue, which loses
 // precision and reports nothing.
 //
@@ -316,10 +316,12 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 		if !known || (bodyCallsCurrentGroup(el) && !hasIndependentGroupRefusal(el)) {
 			return true
 		}
-		// §18.1 states the grounded demand for xsl:stream and then extends it
-		// in its own words: "Expressed informally, the result of an xsl:stream
-		// instruction (or of a streamable template rule) must not contain
-		// streamed nodes." The parenthetical is the whole of the reason this
+		// §19.9 states the grounded demand and then extends it in its own
+		// words: "Expressed informally, the result of a declared-streamable
+		// xsl:source-document instruction (or of a declared-streamable
+		// template rule) must not contain streamed nodes." (Quoted as §18.1
+		// and as "xsl:stream" / "a streamable template rule" until a citation
+		// audit.) The parenthetical is the whole of the reason this
 		// runs on a template rule at all. A body that is striding and
 		// consuming passes the §19.8.4 rules and still hands streamed nodes
 		// to a caller with no streamability constraints, which is what §18.1

@@ -144,7 +144,7 @@ func TestBodyRequirementsMatchSpec(t *testing.T) {
 // TestVarPostureTable transcribes the "Rules for references to the streaming
 // parameter" sentence from each of §19.8.5.2 through §19.8.5.7.
 //
-// The earlier version of this test cited §19.8.8.11 and asserted a table keyed
+// The earlier version of this test cited §19.8.8.12 and asserted a table keyed
 // on singularity, with grounded rows for absorbing and inspection. Both parts
 // were wrong. §19.8.8.11 is *dynamic function calls*; the rule for a variable
 // reference is §19.8.8.12, which says only "see the rules for the streamability
@@ -205,10 +205,16 @@ func TestVarPostureNonSingularIsRoaming(t *testing.T) {
 	}
 }
 
-// TestTypePermitsNodes checks the §19.8.8.11 test for whether a parameter's
-// declared type permits nodes: "The declared type permits nodes if the as
-// attribute on the xsl:param element is absent, or if it is a SequenceType
-// that maps to a U-type that has a non-empty intersection with U{N}."
+// TestTypePermitsNodes checks whether a parameter's declared type permits
+// nodes, which is the premise §19.8.5.2-.7 put on the streaming parameter.
+//
+// The sentence once quoted here as spec text -- "The declared type permits
+// nodes if the as attribute on the xsl:param element is absent, or if it is a
+// SequenceType that maps to a U-type that has a non-empty intersection with
+// U{N}" -- is NOT in the Recommendation in that form. It is this
+// implementation's own reading, assembled from §19.2's U-types and the
+// default of item()* for an absent as attribute, and it is stated here as
+// such rather than in quotation marks.
 func TestTypePermitsNodes(t *testing.T) {
 	yes := []string{
 		"", "item()*", "node()", "node()*", "node()?", "element()*",
@@ -430,7 +436,7 @@ func TestTypeDeterminedUsageAtomizes(t *testing.T) {
 // TestNavigationFromStreamingParamIsFreeRanging checks the rule that makes
 // fn:path unstreamable inside a declared-streamable stylesheet function.
 //
-// §19.8.8.11 gives a reference to the streaming parameter of an absorbing
+// §19.8.8.12 gives a reference to the streaming parameter of an absorbing
 // function a *grounded* posture. §19.8.1 would then stop at "If P is grounded,
 // then S' is S" and charge nothing for any usage at all. But the note under
 // §19.8.5 says the nodes such a reference denotes "can only derive from

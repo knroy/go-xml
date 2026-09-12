@@ -85,7 +85,7 @@ func (s sweep) String() string {
 
 // wider returns the wider of two sweeps. §19.7 orders them motionless <
 // consuming < free-ranging, so this is a plain maximum, and it is the whole
-// of the sweep rule for a path expression (§19.8.8.7).
+// of the sweep rule for a path expression (§19.8.8.8).
 func wider(a, b sweep) sweep {
 	if a > b {
 		return a
@@ -189,7 +189,7 @@ type operand struct {
 	// streamedGrounded marks an operand whose posture is grounded but whose
 	// value is nevertheless a node of the streamed document: a reference to
 	// the streaming parameter of an absorbing or inspection stylesheet
-	// function, or a context item standing for one. §19.8.8.11 gives such a
+	// function, or a context item standing for one. §19.8.8.12 gives such a
 	// reference a grounded posture, but the note under §19.8.5 is explicit
 	// that the nodes it denotes "can only derive from streamed nodes passed
 	// in an argument to the function".
@@ -228,7 +228,7 @@ func (o operand) adjustedSweep() sweep {
 	}
 	// Navigation away from a streamed node is free-ranging even when the
 	// posture is grounded: the grounded posture of a streaming-parameter
-	// reference (§19.8.8.11) says the reference yields no streamed node to
+	// reference (§19.8.8.12) says the reference yields no streamed node to
 	// its parent, not that the node it denotes is off the stream. Reaching
 	// its ancestors or siblings still needs part of the document a streaming
 	// processor no longer holds. See operand.streamedGrounded.

@@ -451,6 +451,31 @@ the `| 11,518 | 11,490 | 99.76% | **28** |` summary-table row. A line stating
 two figures is read as two claims. Failures name the file, line and the value
 wanted.
 
+### Spec citations are checked the same way
+
+`tests/speccites.sh`, run by `check.sh` beside the figures check, holds the
+other kind of claim the documents make: a **section number**. The streamability
+files cite the spec on nearly every rule — 960 `§N.N` references across
+`xslt/stream*.go` — and they were written against the **Last Call Working
+Draft**, which the Recommendation renumbered. That produced citations pointing
+at real sections about the wrong subject: `§19.8.8.11` ("Dynamic Function
+Calls") on code implementing variable references, `§18.2.8` ("Importing of
+Accumulators") on their streamability.
+
+A wrong section number is worse than a dangling one. It reads as authority, and
+following it lands on plausible text, so nothing looks amiss. One of them —
+the variable-reference citation — had **already been diagnosed** in a comment
+in `streamfunctions_test.go` and corrected at exactly one of its 25 sites; the
+other 24 stood for as long as the file did.
+
+The script parses the `<hN>` headings out of
+`testdata/xslt30-test/specs/xslt-30.html` and fails on any citation naming no
+section at all, listing file, line and the source line. It refuses to run if
+fewer than 200 headings parse, so a change to the spec's markup cannot make it
+pass vacuously. The other half — a real number about the wrong subject — still
+needs a reader, which is why every site corrected in that pass records the
+number it used to carry.
+
 It anchors on denominators rather than line numbers so that editing prose does
 not break it, and it has no update mode for the same reason `docfigure` has
 none: the number sits inside a sentence, and rewriting the number is the moment

@@ -635,6 +635,19 @@ else
 fi
 laneFromStatus "documented figures" "$_docfig_before" "tests/docfigures.sh and the documented grep commands"
 
+# The streamability files cite the spec by section number on nearly every rule,
+# and they were written against the Last Call draft, which the Recommendation
+# renumbered. A citation that names no section at all is caught here; one that
+# names the WRONG section still needs a reader, which is why each corrected
+# site records the number it used to carry.
+if sh "$ROOT/tests/speccites.sh"; then
+	:
+else
+	fail "a spec citation in xslt/stream*.go names no section of XSLT 3.0 (listed above).
+    Find the real section in testdata/xslt30-test/specs/xslt-30.html and note
+    the old number in the comment, so the next reader sees the correction."
+fi
+
 # The summary table at the top of docs/conformance-gaps.md is GENERATED, and
 # this is the step that proves the checked-in copy still matches its source.
 #

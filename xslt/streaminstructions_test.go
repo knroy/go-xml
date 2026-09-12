@@ -100,10 +100,10 @@ func wantProps(t *testing.T, got props, known bool, wantP posture, wantS sweep, 
 	}
 }
 
-// --- §19.8.4.36 xsl:text: no operands ---------------------------------------
+// --- §19.8.4.38 xsl:text: no operands ---------------------------------------
 
 func TestTextInstructionIsGroundedMotionless(t *testing.T) {
-	// §19.8.4.36: "The posture and sweep of xsl:text follow the general
+	// §19.8.4.38: "The posture and sweep of xsl:text follow the general
 	// streamability rules. There are no operands." §19.8.1 makes a
 	// construct with no operands grounded and motionless.
 	p, known := analyzeInstrSource(t, `<xsl:text>hello</xsl:text>`)
@@ -274,10 +274,10 @@ func TestChooseBranchesMayEachConsume(t *testing.T) {
 		"xsl:choose whose branches both consume")
 }
 
-// --- §19.8.4.37 xsl:try: catch branches are a choice group ------------------
+// --- §19.8.4.39 xsl:try: catch branches are a choice group ------------------
 
 func TestTryAndCatchMayNotBothConsume(t *testing.T) {
-	// §19.8.4.37, note: "either the xsl:try branch or the xsl:catch branch
+	// §19.8.4.39, note: "either the xsl:try branch or the xsl:catch branch
 	// may consume the streamed input, but not both." The try body is not a
 	// member of the catch choice group, so two consuming operands remain.
 	p, known := analyzeInstrSource(t, `<xsl:try>
@@ -662,7 +662,7 @@ func TestUnmodelledInstructionIsReportedUnknown(t *testing.T) {
 func TestUnmodelledPredicateInAScanningPathIsReportedUnknown(t *testing.T) {
 	// The subtle arm of the same guard, and the one that cost si-group-051.
 	//
-	// "//x[...]" is assessed by §19.8.8.7's second phase, which asks whether
+	// "//x[...]" is assessed by §19.8.8.8's second phase, which asks whether
 	// the path is a scanning expression. A predicate the analysis cannot
 	// model makes the answer "no" -- but "no" there is a fact about this
 	// implementation, not about the path, and the roaming verdict that
@@ -1054,10 +1054,10 @@ func TestEvaluateWithLiteralXPathIsStreamable(t *testing.T) {
 		`xsl:evaluate with a literal xpath`)
 }
 
-// --- §19.8.4.35 xsl:stream --------------------------------------------------
+// --- §19.8.4.37 xsl:stream --------------------------------------------------
 
 func TestStreamIsGroundedWithTheSweepOfItsHref(t *testing.T) {
-	// §19.8.4.35's final clause: "Otherwise the posture is grounded and the
+	// §19.8.4.37's final clause: "Otherwise the posture is grounded and the
 	// sweep is the sweep of the href attribute value template." A literal
 	// href is motionless. The posture is grounded whatever the containing
 	// construct: the document xsl:stream opens is assessed separately, by
@@ -1067,7 +1067,7 @@ func TestStreamIsGroundedWithTheSweepOfItsHref(t *testing.T) {
 }
 
 func TestStreamMentioningCurrentGroupIsUnmodelled(t *testing.T) {
-	// §19.8.4.35's first two clauses reject an xsl:stream whose body calls
+	// §19.8.4.37's first two clauses reject an xsl:stream whose body calls
 	// current-group() or current-merge-group() belonging to an instruction
 	// that is an ancestor of the xsl:stream. Which instruction a call binds
 	// to is not tracked here, so such a body is reported unmodelled rather
@@ -1076,12 +1076,12 @@ func TestStreamMentioningCurrentGroupIsUnmodelled(t *testing.T) {
 		`<xsl:stream href="in.xml"><xsl:value-of select="current-group()"/></xsl:stream>`)
 	if known {
 		t.Error("an xsl:stream whose body calls current-group() was reported as modelled; " +
-			"§19.8.4.35 clause 1 turns on which instruction the call binds to, which is not tracked")
+			"§19.8.4.37 clause 1 turns on which instruction the call binds to, which is not tracked")
 	}
 }
 
 func TestNestedSourceDocumentIsGroundedWithTheSweepOfItsHref(t *testing.T) {
-	// §19.8.4.35 applies to xsl:source-document, which is the
+	// §19.8.4.37 applies to xsl:source-document, which is the
 	// Recommendation's name for the instruction this Last Call draft calls
 	// xsl:stream. The clause is the same one, and so is the reason for it:
 	// the document the inner instruction opens is assessed separately by
@@ -1123,7 +1123,7 @@ func TestSourceDocumentSweepFollowsItsHrefValueTemplate(t *testing.T) {
 }
 
 func TestSourceDocumentMentioningCurrentGroupIsUnmodelled(t *testing.T) {
-	// §19.8.4.35's first two clauses reject the instruction when its body
+	// §19.8.4.37's first two clauses reject the instruction when its body
 	// calls current-group() or current-merge-group() belonging to an
 	// instruction that is an ancestor of it. Which instruction such a call
 	// binds to is not tracked, so the body is reported unmodelled rather
@@ -1135,7 +1135,7 @@ func TestSourceDocumentMentioningCurrentGroupIsUnmodelled(t *testing.T) {
 			`<xsl:value-of select="current-group()"/></xsl:source-document>`)
 	if known {
 		t.Error("an xsl:source-document whose body calls current-group() was reported as modelled; " +
-			"§19.8.4.35 clause 1 turns on which instruction the call binds to, which is not tracked")
+			"§19.8.4.37 clause 1 turns on which instruction the call binds to, which is not tracked")
 	}
 }
 
@@ -1300,7 +1300,7 @@ func analyzeFirstInSourceDoc(t *testing.T, src string) (props, bool) {
 }
 
 func TestApplyTemplatesUsesTheDefaultModeInScope(t *testing.T) {
-	// §3.8.2: when the mode attribute is omitted, "the mode is taken from the
+	// §3.7.2: when the mode attribute is omitted, "the mode is taken from the
 	// [xsl:]default-mode attribute of the innermost ancestor element that has
 	// such an attribute". A bare xsl:apply-templates under
 	// default-mode="m" therefore reaches mode m, and §19.8.4.5 clause 3 must

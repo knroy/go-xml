@@ -181,7 +181,7 @@ func (a *analyzer) lastFunction() props {
 //
 // The proforma gives a single operand with usage transmission, and that is the
 // whole rule for almost every type -- it is what makes "root(.) treat as
-// document-node()" motionless in the worked example of §19.8.8.7.
+// document-node()" motionless in the worked example of §19.8.8.8.
 //
 // An item type of the form document-node(element(X)) is different, for the
 // reason §19.8.8.5 gives when it makes the same type absorption for "instance
@@ -213,7 +213,7 @@ func (a *analyzer) treatExpr(x *xpath.TreatExpr) props {
 //
 // A bare document-node(), with no inner test, is not one of them: it matches
 // any document node on sight, so it inspects rather than absorbs. That is the
-// distinction the spec's own worked example in §19.8.8.7 relies on, where
+// distinction the spec's own worked example in §19.8.8.8 relies on, where
 // "root(.) treat as document-node()" is transmission and stays motionless.
 func isDocumentNodeWithContent(st xpath.SequenceType) bool {
 	kt, ok := st.ItemType.(*xpath.KindTest)
@@ -321,7 +321,7 @@ func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 	if !seq.props.streamable() {
 		return roamingFreeRanging
 	}
-	// A grounded binding leaves the environment alone: §19.8.8.11's plain
+	// A grounded binding leaves the environment alone: §19.8.8.12's plain
 	// answer is already right for it, and recording it would only add an
 	// entry that says the same thing.
 	inner := a

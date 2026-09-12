@@ -563,7 +563,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		return combine([]operand{a.bodyOperand(el, usageAbsorption)}, false)
 
 	case "text":
-		// §19.8.4.36: no operands.
+		// §19.8.4.38: no operands.
 		return groundedMotionless
 
 	case "processing-instruction":
@@ -639,7 +639,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		return combine(ops, false)
 
 	case "try":
-		// §19.8.4.37: the xsl:try select or body transmits; the xsl:catch
+		// §19.8.4.39: the xsl:try select or body transmits; the xsl:catch
 		// children transmit and form a choice operand group among
 		// themselves. The try branch is not part of that group -- either
 		// the try or a catch may consume, but not both.
@@ -900,7 +900,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		return combine(ops, false)
 
 	case "stream", "source-document":
-		// §19.8.4.35. xsl:source-document is the Recommendation's name for
+		// §19.8.4.37. xsl:source-document is the Recommendation's name for
 		// the instruction this Last Call draft calls xsl:stream; the test
 		// set uses the later name throughout, and the rule is the same one.
 		//
@@ -1087,7 +1087,9 @@ func attributeSetNames(el *xdm.Node) []xdm.QName {
 // implicit context item operand.
 //
 // §19.8.4.9 words this as use="prohibited", but no such value exists: the
-// grammar in §9.6 gives use? = "required" | "optional" | "absent", and it is
+// grammar gives use? = "required" | "optional" | "absent", and §3.5.6 says of
+// the last that "the global focus (context item, position, and size) will be
+// absent". (The grammar was cited as §9.6 until a citation audit.) It is
 // use="absent" that makes "the global focus (context item, position, and size)
 // absent". Both spellings are accepted here, since the prose and the grammar
 // plainly mean the same thing and si-call-template-002 uses the grammar's.
@@ -1140,7 +1142,7 @@ func calledTemplate(el *xdm.Node) *xdm.Node {
 // bodyCallsAny reports whether any XPath expression held in an attribute of el
 // or of a descendant calls one of the named fn: functions.
 //
-// §19.8.4.35 asks a narrower question than this answers: whether the call's
+// §19.8.4.37 asks a narrower question than this answers: whether the call's
 // nearest containing xsl:for-each-group (or xsl:merge) is an ancestor of the
 // xsl:stream. Answering the narrower question needs the grouping instruction
 // the call binds to; this answers the broader one, which is a superset, so it
@@ -1627,9 +1629,14 @@ func (a *instrAnalyzer) applyTemplates(el *xdm.Node) props {
 }
 
 // defaultModeFor returns the [xsl:]default-mode in scope for el and the element
-// that carried it, per §3.8.2: "the mode is taken from the [xsl:]default-mode
-// attribute of the innermost ancestor element that has such an attribute. If
-// there is no such element, then the default is the unnamed mode."
+// that carried it, per §3.7.2: "the effective value of the mode attribute is
+// taken from the value of the [xsl:]default-mode attribute of the innermost
+// ancestor-or-self element of E that has such an attribute. If there is no
+// such element, then the default is the unnamed mode."
+//
+// Quoted as "innermost ancestor" until a citation audit; the spec says
+// ancestor-or-SELF, which is what makes a default-mode on the element itself
+// apply to it rather than only to its descendants.
 //
 // The attribute is spelt default-mode on the XSLT elements that allow it and
 // xsl:default-mode on a literal result element, so both are looked for.
@@ -1681,7 +1688,7 @@ func (a *instrAnalyzer) modeStreamable(el *xdm.Node) modeVerdict {
 	if root == nil {
 		return modeUnresolved
 	}
-	// §3.8.2: an omitted mode attribute, or "#default", takes the mode from
+	// §3.7.2: an omitted mode attribute, or "#default", takes the mode from
 	// the [xsl:]default-mode of the innermost ancestor that has one, and only
 	// falls back to the unnamed mode when there is none. sf-current-100
 	// declares default-mode="m" on xsl:stylesheet and relies on a bare

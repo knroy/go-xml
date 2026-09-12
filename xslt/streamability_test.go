@@ -58,7 +58,7 @@ func TestAnalyzeExprPathsAndAxes(t *testing.T) {
 		{"ancestor::a/parent::b", props{postureClimbing, sweepMotionless}, true, "climbing twice"},
 
 		// A crawling posture may not descend again by the axis table alone,
-		// but §19.8.8.7's second phase rescues the case: every step is a
+		// but §19.8.8.8's second phase rescues the case: every step is a
 		// scanning step, so the path as a whole crawls.
 		{"descendant::c/child::d", props{postureCrawling, sweepConsuming}, true, "a scanning path crawls"},
 		// The rescue is only for scanning steps. A following:: step is not
@@ -354,7 +354,7 @@ func TestStreamabilityAssessesAForEachBodyInItsOwnPosture(t *testing.T) {
 }
 
 func TestAnalyzeExprScanningExpressions(t *testing.T) {
-	// §19.8.8.7's second phase. A path whose provisional posture is roaming
+	// §19.8.8.8's second phase. A path whose provisional posture is roaming
 	// is reassessed: if every step only descends, with motionless
 	// non-positional predicates, the path scans and is crawling (or striding
 	// where it cannot select an element).
@@ -377,7 +377,7 @@ func TestAnalyzeExprScanningExpressions(t *testing.T) {
 		{"//PRICE/..", props{postureClimbing, sweepConsuming}, "a parent step after a scanning prefix"},
 		{"//PRICE/../@code", props{postureStriding, sweepConsuming}, "and then an attribute"},
 
-		// §19.8.8.7's note: a positional predicate is allowed on the child
+		// §19.8.8.8's note: a positional predicate is allowed on the child
 		// axis but not on the descendant axis.
 		{"a/b[1]//text()", props{postureStriding, sweepConsuming}, "[1] on the child axis still scans"},
 		// "a//b[1]" puts the predicate on the expanded child::b step, so it

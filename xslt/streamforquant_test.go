@@ -115,7 +115,7 @@ func TestQuantifiedSatisfiesIsHigherOrder(t *testing.T) {
 	}
 }
 
-// TestStreamingParamInHigherOrderOperandIsRoaming checks the §19.8.8.11 table
+// TestStreamingParamInHigherOrderOperandIsRoaming checks the §19.8.8.12 table
 // for the "no" (non-singular) row: a reference to the streaming parameter of
 // an absorbing function that sits inside a higher-order operand is roaming,
 // not grounded.
@@ -143,7 +143,7 @@ func TestStreamingParamInHigherOrderOperandIsRoaming(t *testing.T) {
 	}
 	if satisfiesCategory(f, p) {
 		t.Errorf("the body is %v and %v, which was accepted for the absorbing "+
-			"category; §19.8.8.11 makes a reference inside a higher-order "+
+			"category; §19.8.8.12 makes a reference inside a higher-order "+
 			"operand roaming, so the body must fail §19.8.5.2", p.posture, p.sweep)
 	}
 }

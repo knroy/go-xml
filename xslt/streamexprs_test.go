@@ -281,13 +281,13 @@ func TestAnalyzeLastAndPosition(t *testing.T) {
 // §19.8.8.5 exception for document-node(element(X)).
 func TestAnalyzeTreatExpr(t *testing.T) {
 	// The proforma gives a single transmission operand, which is what makes
-	// the worked example in §19.8.8.7 motionless: there, "root(.) treat as
+	// the worked example in §19.8.8.8 motionless: there, "root(.) treat as
 	// document-node()" keeps the striding posture and motionless sweep of
 	// its operand.
 	if got, known := analyze(t, ". treat as document-node()"); !known ||
 		got != (props{postureStriding, sweepMotionless}) {
 		t.Errorf(". treat as document-node() is %v and %v (known=%v), "+
-			"but §19.8.8.7's worked example makes it striding and motionless",
+			"but §19.8.8.8's worked example makes it striding and motionless",
 			got.posture, got.sweep, known)
 	}
 	if got, known := analyze(t, "child::a treat as element(a)"); !known ||
@@ -332,10 +332,15 @@ func TestAnalyzeTreatExpr(t *testing.T) {
 	}
 }
 
-// TestAnalyzeCurrentFunction checks §19.8.9.3: "The sweep of the function is
-// motionless; the posture is the context posture for evaluation of the
-// outermost containing XPath expression (that is, the context posture that
-// would obtain if the entire XPath expression were replaced with '.')."
+// TestAnalyzeCurrentFunction checks §19.8.9.3, whose final clause is: "let E
+// be the outermost containing XPath expression of the call to the current
+// function [...] Otherwise, the posture is the context posture, and the sweep
+// is motionless."
+//
+// (This comment previously quoted the Last Call draft -- "the context posture
+// that would obtain if the entire XPath expression were replaced with '.'" --
+// which the Recommendation does not carry. The rule the test asserts is
+// unchanged; only the wording was never in the spec.)
 //
 // The point of the rule is the word OUTERMOST. Descending into a predicate
 // changes the context posture that "." reports, and current() must not follow
