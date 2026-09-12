@@ -123,7 +123,19 @@ same rule and pinned by `xml-to-json-073` — already had the correct range in
 `xpath/fn_json.go`, so this was one rule with two implementations and only one
 of them right.
 
-What remains parsed and unread is **`include-content-type`**.
+**`include-content-type`** was the last parsed-and-unread one, and it closed in
+the same pass: the `html` method wrote its `<meta http-equiv="Content-Type">`
+into `head` whatever the parameter said. `xsl:output` had honoured it
+throughout, so this was the same shape as the void-element table — one rule,
+two serialisers, one of them ignoring it. `isHTMLContentTypeHead`
+(`xpath/fn_serialize.go`) now consults it, defaulting to `yes` per
+Serialization 3.1, which is why the field is a `*bool` rather than a `bool`.
+
+**Nothing is now parsed and unread.** What is left is the deliberate list
+below, and the `xhtml` method's own empty-element rule — void elements
+self-closed *with a space*, recognition namespace-gated under version 4 —
+which this serialiser has never implemented. `TestSerializeXMLKeepsSelfClosing`
+pins the current behaviour so that changing it is a deliberate act.
 
 **`byte-order-mark` and `media-type` are deliberately not implemented** for
 `fn:serialize`, which is a different thing from unread. F&O 3.0
