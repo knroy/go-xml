@@ -61,7 +61,22 @@ func (e *dynamicQName) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, xdm.ErrType(
 			"xs:QName() takes a string, got %s", a.Type)
 	}
-	lex := strings.TrimSpace(a.String())
+	// trimXMLSpace, not strings.TrimSpace: xs:QName has fixed
+	// whiteSpace="collapse", whose whitespace is XML S alone -- space, tab,
+	// CR, LF. unicode.IsSpace also matches U+00A0, which is lexical DATA in a
+	// QName, so trimming it accepted a name the grammar rejects.
+	//
+	// This path is only reached when the argument is NOT a string literal:
+	// foldQNameConstructor resolves a literal at parse time and never builds a
+	// dynamicQName. That is why three audits in a row read this as a false
+	// positive -- every probe used a literal, folded before it could run, so
+	// xs:QName("<NBSP>xs:string") was correctly refused by the folder while
+	// xs:QName(concat("<NBSP>", "xs:string")) quietly succeeded here.
+	//
+	// collapseXMLSpace would do as well but buys nothing: an interior XML
+	// space leaves an invalid NCName under either helper. The defect is the
+	// edge trim.
+	lex := trimXMLSpace(a.String())
 	q, err := resolveLexicalQName(lex, e.ns)
 	if err != nil {
 		return nil, err

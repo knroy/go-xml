@@ -154,6 +154,41 @@ func synthesizeVariadic(ctx *Context, name xdm.QName, arity int) (Function, bool
 		return Function{}, false
 	}
 	base.Arity = arity
+	// The borrowed entry brings concat#2's THREE-entry signature with it, and
+	// a signature whose length disagrees with the arity is read by
+	// functionItemMatches as "no declared type", which falls back to matching
+	// on arity alone. That is the same defect fn:function-lookup had, arriving
+	// from the other side: concat#101 answered true to
+	// "instance of function(xs:date, ... x101) as xs:integer" while the
+	// registered concat#100 correctly answered false.
+	//
+	// F&O gives the family one shape -- xs:string result, one
+	// xs:anyAtomicType? per argument -- so the signature is materialised to
+	// match the arity being synthesised.
+	//
+	// This allocates arity+1 strings, which is why maxVariadicArity being a
+	// bound rather than an open range matters here as well: at 2^20 the slice
+	// is large but finite, and an arity past it is refused above before
+	// reaching this point. A compact variadic descriptor -- a minimum arity
+	// and a repeated parameter type -- would avoid the allocation entirely,
+	// and is the right shape if this family ever grows a second member.
+	// Both spellings are read from the borrowed entry rather than written as
+	// literals here, so the manifest stays the single source of truth -- but
+	// with a fallback, because an entry registered without a signature must
+	// not panic this path.
+	result, param := "xs:string", "xs:anyAtomicType?"
+	if len(base.Signature) > 0 {
+		result = base.Signature[0]
+	}
+	if len(base.Signature) > 1 {
+		param = base.Signature[1]
+	}
+	sig := make([]string, arity+1)
+	sig[0] = result
+	for i := 1; i <= arity; i++ {
+		sig[i] = param
+	}
+	base.Signature = sig
 	return base, true
 }
 

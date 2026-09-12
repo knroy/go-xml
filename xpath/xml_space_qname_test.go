@@ -181,42 +181,77 @@ func TestLexicalQNameColonCheckTrimsXMLSpaceOnly(t *testing.T) {
 	}
 }
 
-// The dynamic xs:QName() constructor has now been reported twice as trimming
-// Unicode whitespace, and twice it has not been a defect. This pins the
-// behaviour so a third report can be answered by running it.
+// The dynamic xs:QName() constructor, which is the path a COMPUTED argument
+// takes.
 //
-// xpath/qnamedyn.go does call strings.TrimSpace, and swapping it for an XML-S
-// helper is byte-for-byte invisible: resolveLexicalQName splits the result and
-// requires both halves to be NCNames, and no NCName may contain U+00A0. So the
-// trim cannot admit a no-break space in any position -- leading, trailing, or
-// either side of the colon -- and XML whitespace is still accepted, which is
-// what whiteSpace="collapse" requires.
+// This test previously asserted the opposite conclusion and was wrong, in a
+// way worth recording. It probed with string literals, and
+// foldQNameConstructor resolves a literal at parse time into a QName literal
+// -- dynamicQName.Eval never runs. So "xs:QName("<NBSP>xs:string")" was
+// refused by the FOLDER, the test passed, and three consecutive audits were
+// answered "false positive, measured" on evidence that never executed the
+// branch under discussion. The fourth report pointed out the folding, which
+// is what made the defect visible.
 //
-// If this test ever fails, the downstream NCName check has been weakened and
-// the trim becomes load-bearing; fix it then, and not before.
-func TestDynamicQNameConstructorRefusesNBSPWithoutAnXMLSpaceTrim(t *testing.T) {
+// The rule this cost: a probe must be shown to REACH the code it is about.
+// Here the proof is the pairing below -- if the two forms ever agree again on
+// the NBSP cases, one of them has stopped exercising its own path.
+func TestDynamicQNameConstructorUsesXMLWhitespaceOnly(t *testing.T) {
 	const nbsp = "\u00a0"
 	if len(nbsp) != 2 {
 		t.Fatalf("the NBSP constant is %q, not U+00A0", nbsp)
 	}
-	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
-	ctx.LibraryVersion = XPath31
+	ctx := func() *Context {
+		c := NewContext(nil, Builtins())
+		c.Version = XPath31
+		c.LibraryVersion = XPath31
+		return c
+	}
 
-	for _, lex := range []string{
-		nbsp + "xs:string", "xs:string" + nbsp,
-		"xs:" + nbsp + "string", nbsp + "string",
-	} {
-		expr := `xs:QName("` + lex + `")`
-		if _, err := Eval(expr, ctx, cardinalityNS{}); err == nil {
-			t.Errorf("%s was accepted; a no-break space is not an NCName "+
-				"character, so this has no valid lexical form", expr)
+	// Computed arguments. concat() and a let-bound variable both defeat the
+	// constant folder, so each of these executes dynamicQName.Eval.
+	computed := []struct {
+		expr    string
+		wantErr bool
+		why     string
+	}{
+		{`xs:QName(concat("` + nbsp + `", "xs:string"))`, true,
+			"a leading no-break space is lexical data, not padding"},
+		{`xs:QName(concat("xs:string", "` + nbsp + `"))`, true,
+			"a trailing no-break space is lexical data"},
+		{`let $s := "` + nbsp + `xs:string" return xs:QName($s)`, true,
+			"the same through a variable rather than a call"},
+		{`xs:QName(concat(" ", "xs:string", " "))`, false,
+			`whiteSpace="collapse" trims XML S, so this is the valid control`},
+		{"xs:QName(concat(\"\t\", \"xs:string\"))", false,
+			"a tab is XML S and must still be trimmed"},
+	}
+	for _, tc := range computed {
+		_, err := Eval(tc.expr, ctx(), cardinalityNS{})
+		if tc.wantErr && err == nil {
+			t.Errorf("%s was accepted; %s, so FORG0001 is required",
+				tc.expr, tc.why)
+		}
+		if !tc.wantErr && err != nil {
+			t.Errorf("%s: %v; %s", tc.expr, err, tc.why)
 		}
 	}
-	// The control: XML whitespace around the same name is permitted, so a
-	// "fix" that simply deleted the trim would fail here.
-	if _, err := Eval(`xs:QName(" xs:string ")`, ctx, cardinalityNS{}); err != nil {
-		t.Errorf(`xs:QName(" xs:string ") was refused: %v; xs:QName is `+
-			`whiteSpace="collapse", so XML S must be trimmed`, err)
+
+	// The literal forms fold at parse time and are refused by
+	// foldQNameLiteral instead. They are kept because they are the other half
+	// of the surface, and because their agreement with the computed forms
+	// above is what says both paths now apply the same whitespace rule.
+	for _, lex := range []string{
+		nbsp + "xs:string", "xs:string" + nbsp, "xs:" + nbsp + "string",
+	} {
+		expr := `xs:QName("` + lex + `")`
+		if _, err := Eval(expr, ctx(), cardinalityNS{}); err == nil {
+			t.Errorf("%s was accepted; a no-break space is not an NCName "+
+				"character", expr)
+		}
+	}
+	if _, err := Eval(`xs:QName(" xs:string ")`, ctx(), cardinalityNS{}); err != nil {
+		t.Errorf(`xs:QName(" xs:string ") was refused: %v; XML S must be `+
+			`trimmed by the collapse facet`, err)
 	}
 }

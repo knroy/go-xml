@@ -332,14 +332,14 @@ func TestEmptyContentTreatsNBSPAsCharacterContent(t *testing.T) {
 // The difference is reachability: an earlier check already rejects the
 // no-break space, so the trim never gets to misjudge it.
 //
-//   xsd/parse_type.go  checkAllGroupRefOccurs compares minOccurs against "1"
-//                      for a group reference inside a named xs:all group.
-//                      p-props-correct.1 has already parsed the attribute as
-//                      an xs:nonNegativeInteger and refused "<NBSP>1".
-//   xsd/versioning.go  versionAtLeast trims vc:minVersion before comparing.
-//                      parse.go's vc: handling has already refused
-//                      "<NBSP>1.2" with src-schema.1, "is not an xs:decimal"
-//                      -- a guard added by the earlier pass of this same sweep.
+//	xsd/parse_type.go  checkAllGroupRefOccurs compares minOccurs against "1"
+//	                   for a group reference inside a named xs:all group.
+//	                   p-props-correct.1 has already parsed the attribute as
+//	                   an xs:nonNegativeInteger and refused "<NBSP>1".
+//	xsd/versioning.go  versionAtLeast trims vc:minVersion before comparing.
+//	                   parse.go's vc: handling has already refused
+//	                   "<NBSP>1.2" with src-schema.1, "is not an xs:decimal"
+//	                   -- a guard added by the earlier pass of this same sweep.
 //
 // Both were measured by applying the change and re-probing: the observable
 // outcome is byte-identical either way.

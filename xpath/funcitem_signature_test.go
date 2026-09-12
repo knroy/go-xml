@@ -412,3 +412,75 @@ func TestVariadicArityBoundIsTheSameByEveryRoute(t *testing.T) {
 		}
 	}
 }
+
+// A synthesized fn:concat arity must carry the signature its arity implies.
+//
+// fn:concat is registered over a fixed range and synthesized above it, and
+// synthesizeVariadic builds the entry by borrowing concat#2 and changing only
+// the arity. The borrowed THREE-entry signature came with it, so an item whose
+// arity was 101 carried a signature for 2 -- and functionItemMatches reads a
+// signature whose length disagrees with the arity as "no declared type" and
+// matches on arity alone.
+//
+// That is the fn:function-lookup defect arriving from the other side: one more
+// way for a standard function to answer a typed function test as though it had
+// never been declared. The registered and synthesized arities straddle
+// concatMaxArity, so testing across the boundary is what catches it.
+func TestSynthesizedConcatArityCarriesItsSignature(t *testing.T) {
+	ctx := func() *Context {
+		c := NewContext(nil, Builtins())
+		c.Version = XPath31
+		c.LibraryVersion = XPath31
+		return c
+	}
+
+	// The structural half: length must follow arity on both sides of the
+	// registration boundary.
+	for _, n := range []int{2, 100, 101, 150} {
+		fn, ok := lookupFor(ctx(), xdm.QName{URI: xdm.NSFN, Local: "concat"}, n)
+		if !ok {
+			t.Fatalf("fn:concat#%d does not resolve", n)
+		}
+		if len(fn.Signature) != n+1 {
+			t.Errorf("fn:concat#%d carries %d signature entries, want %d "+
+				"(one result plus one per argument); a length that disagrees "+
+				"with the arity is read as no declaration at all",
+				n, len(fn.Signature), n+1)
+		}
+	}
+
+	// The observable half: a typed function test must consult those types.
+	// 101 is past concatMaxArity, so this item is synthesized.
+	params := func(typ string, n int) string {
+		parts := make([]string, n)
+		for i := range parts {
+			parts[i] = typ
+		}
+		return strings.Join(parts, ",")
+	}
+	mismatch := "concat#101 instance of function(" +
+		params("xs:date", 101) + ") as xs:integer"
+	seq, err := Eval(mismatch, ctx(), cardinalityNS{})
+	if err != nil {
+		t.Fatalf("%s: %v", mismatch, err)
+	}
+	if got := seq[0].(*xdm.Atomic).String(); got != "false" {
+		t.Errorf("a synthesized fn:concat#101 matched "+
+			"function(xs:date x101) as xs:integer (= %s); fn:concat is "+
+			"declared xs:anyAtomicType? -> xs:string, so the test must "+
+			"consult those types rather than the arity alone", got)
+	}
+
+	// The control: the item's own declared shape must still match, so the
+	// signature is right and not merely long enough to defeat the fallback.
+	own := "concat#101 instance of function(" +
+		params("xs:anyAtomicType?", 101) + ") as xs:string"
+	seq, err = Eval(own, ctx(), cardinalityNS{})
+	if err != nil {
+		t.Fatalf("%s: %v", own, err)
+	}
+	if got := seq[0].(*xdm.Atomic).String(); got != "true" {
+		t.Errorf("a synthesized fn:concat#101 did not match its own declared "+
+			"signature (= %s)", got)
+	}
+}
