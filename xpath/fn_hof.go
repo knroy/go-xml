@@ -75,17 +75,30 @@ func registerHOFuncs(l *Library) {
 		// F&O 3.0 16.1.1 makes the empty sequence rather than an error.
 		//
 		// The upper bound is not merely a guard on the int conversion:
-		// synthesizeVariadic builds an fn:concat entry at any arity at or
-		// above 2, so converting exactly but leaving the range open would
-		// still answer "function-lookup(fn:concat, 2^63-1)" with a function
-		// item claiming an arity of 9223372036854775807 — the very value the
-		// Float64 narrowing saturated every huge arity onto.
+		// What is refused here is what cannot be REPRESENTED, not what is
+		// merely large. xs:integer is arbitrary precision and Function.Arity
+		// is a Go int, so a value outside that range names no function this
+		// implementation could ever hold; F&O 3.0 16.1.1 makes "no such
+		// function" the empty sequence rather than an error.
+		//
+		// This was a policy ceiling of 2^20 until the variadic descriptor
+		// landed. The ceiling existed because synthesizeVariadic materialised
+		// an arity+1 signature slice, so the arity -- an ARGUMENT to this
+		// function -- sized an allocation: 16 bytes each, 16MB at 2^20, and
+		// unbounded without the cap. The descriptor made that cost constant
+		// (measured: 1,976 bytes at arity 2^40), which is what makes removing
+		// the ceiling a conformance fix rather than a denial-of-service hole.
+		// F&O gives fn:concat no upper arity, so none is imposed.
+		//
+		// The int64 conversion must still be exact in both directions: on a
+		// 32-bit host int is narrower than int64, and a value that survives
+		// IsInt64 can still be truncated by int(v).
 		n64 := r.Num()
 		if !n64.IsInt64() {
 			return xdm.Empty(), nil
 		}
 		v := n64.Int64()
-		if v < 0 || v > maxLookupArity {
+		if v < 0 || int64(int(v)) != v {
 			return xdm.Empty(), nil
 		}
 		n := int(v)
@@ -109,6 +122,7 @@ func registerHOFuncs(l *Library) {
 		// wrong for fn:abs, whose declaration the manifest holds. Dropping it
 		// let fn:abs#1 match function(xs:date) as xs:integer.
 		item.Signature = fn.Signature
+		item.VariadicSignature = fn.VariadicSignature
 		// F&O 16.4.3 makes fn:function-lookup behave like a named function
 		// reference in this respect: a context-dependent function it returns
 		// carries the context of the fn:function-lookup call, not of whatever
@@ -326,25 +340,3 @@ func singleBoolean(seq xdm.Sequence, fn string) (bool, error) {
 	}
 	return a.Bool(), nil
 }
-
-// maxVariadicArity bounds the arity at which a variadic function is answered,
-// by EVERY route: fn:function-lookup and the named reference "concat#N".
-//
-// No function item can be built, let alone called, at an arity beyond what a
-// Go argument slice can hold, so a larger arity names nothing and the answer
-// is empty — which is what F&O 3.0 16.1.1 prescribes for a name and arity
-// that identify no function. The value is far above concatMaxArity, the
-// largest arity anything in the library is registered at.
-//
-// It is enforced in synthesizeVariadic, which is where the two routes meet.
-// Enforcing it at fn:function-lookup alone was the earlier shape, and it was
-// wrong in both directions: it made the two routes disagree above 2^20, and
-// it left concat#9223372036854775807 -- the exact saturation value this
-// bound exists to refuse -- reachable through the named reference.
-const maxVariadicArity = 1 << 20
-
-// maxLookupArity is the same bound under the name fn:function-lookup's own
-// range check uses. They are deliberately one value: a lookup that converted
-// exactly but left the range open would answer at an arity synthesizeVariadic
-// then refuses, which is a disagreement inside one expression.
-const maxLookupArity = maxVariadicArity

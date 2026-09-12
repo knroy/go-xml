@@ -532,6 +532,13 @@ type Function struct {
 	// permissive one -- its declared type is whatever declared it, not
 	// "nothing".
 	Signature []string
+
+	// VariadicSignature carries a variadic function's declared type without
+	// repeating its one parameter, and mirrors the field of the same name on
+	// xdm.FunctionItem -- see the commentary there for why the materialised
+	// form is a liability rather than a convenience. Nil for every
+	// fixed-arity function, which leaves Signature the ordinary path.
+	VariadicSignature *xdm.VariadicSignature
 }
 
 // NewContext returns a context with the given focus and library.

@@ -1045,11 +1045,71 @@ bound exists to refuse — reachable through the named function reference.
 `maxLookupArity = maxVariadicArity` is what keeps one expression from
 answering two ways.
 
-**What a real fix would look like, in order.** The ceiling is a symptom of
-signatures being materialised per arity. Compact variadic signature metadata
-first, then function-type matching taught to read it, and only then is
-removing the bound even a question. Reversing that order trades a documented
-limit for an unbounded allocation.
+**The prerequisite is now done.** The ceiling was a symptom of signatures
+being materialised per arity, so that is what changed: `xdm.VariadicSignature`
+carries a minimum arity, a result type and the one repeated parameter type,
+and `functionItemMatches` reads it in place of indexing a slice.
+`synthesizeVariadic` describes the signature instead of building it —
+**16,806,800 bytes at arity 2²⁰ before, 2,280 after**, measured, and constant
+rather than linear in the arity the caller supplies.
+
+`MinArity` is on the descriptor rather than enforced only at construction
+because it is part of the declared type: F&O 3.1 declares `fn:concat` for two
+arguments or more, so an item claiming `concat#1` must fail a function test of
+arity 1 however it was obtained.
+
+**The ceiling is now gone too, and that closes the conformance gap.** F&O 3.1
+declares `fn:concat` for two arguments or more and states no maximum, so a
+2²⁰ cap made `concat#1048577` answer "no such function" for a function the
+spec says exists. Both enforcement points went — `maxVariadicArity` /
+`maxLookupArity` in `xpath`, and the `maxAvailableArity` that mirrored them in
+`xslt/rtfuncs.go` — leaving only a check that the arity is REPRESENTABLE:
+`int64(int(v)) != v` rather than a bare cast, because `int` is narrower than
+`int64` on a 32-bit host.
+
+The order mattered. Removing the cap first would have been the
+memory-exhaustion hole the audit's version was; removing it after the
+descriptor is a conformance fix, because the arity no longer sizes anything.
+
+The old comment defended the cap as refusing "an arity no argument slice can
+ever hold". Measured, that concern is handled elsewhere: applying such an item
+raises `XPTY0004` from the ordinary arity check before anything is allocated,
+so an item at 2⁶³−1 is inert rather than dangerous. What is still refused is
+what cannot be narrowed — a bignum arity must not saturate onto `MaxInt` and
+resolve, which is a real defect and is pinned separately.
+
+### `fn:function-available` disagreed with `fn:function-lookup`, and the cap hid it
+
+Removing the ceiling exposed a defect older than the ceiling.
+`function-available('concat', 101)` was **false** while
+`fn:function-lookup` at the same arity was **true**. The boundary was
+`concatMaxArity`, not 2²⁰: both answered false above the cap, for different
+reasons, so the disagreement was invisible until the cap went.
+
+The cause is in `xpath.LookupDynamic`. A library implementing
+`DynamicFunctionLibrary` — which both XSLT libraries do — gets to answer for
+itself, and the function returned on its "not found" **before** reaching the
+synthesis. Both XSLT libraries delegate to a plain `Lookup`, which knows only
+the registered arities, so every variadic arity above `concatMaxArity` was
+invisible to `fn:function-available`, `xsl:evaluate` and package-scoped
+lookup alike.
+
+Verified as pre-existing by stashing to `d896236` and re-probing. The fix is
+to fall back to `synthesizeVariadic` at that early return rather than teach
+each library to synthesize, which keeps one definition of what arities
+`fn:concat` has. It cannot leak a hidden function: `synthesizeVariadic`
+borrows the registered `concat#2` through `ctx.Funcs`, so a library that does
+not expose that entry synthesizes nothing.
+
+Three of the tests written for this were **vacuous on the first attempt**, and
+each failed to reach the code it was about — the same trap as the `qnamedyn`
+probes. One used an empty `SequenceType{}`, which spells `item()` and is
+refused by the parameter check before `MinArity` is consulted. Two used
+`concat#3` and `concat#101 instance of function(...)` with a single parameter:
+arity 3 is *registered*, so it carries an ordinary `Signature` and never
+touches the descriptor, and an arity-1 function test is settled by the arity
+check. All three now fail under sabotage, and each carries a comment naming
+the trap so the next reader does not re-fall into it.
 
 ### "A nilled element must not satisfy a key field" — it must, and the suite says so
 

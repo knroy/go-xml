@@ -628,7 +628,14 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 					return xdm.One(xdm.NewBoolean(false)), nil
 				}
 				v := n.Int64()
-				if v < 0 || v > maxAvailableArity {
+				// Representation, not policy: int64 must survive the round
+				// trip through int, which is narrower on a 32-bit host. The
+				// 2^20 ceiling that stood here mirrored xpath's, and both
+				// went when the variadic descriptor removed the allocation
+				// that justified them -- see synthesizeVariadic. Leaving this
+				// one would have made function-available('concat', 1048577)
+				// answer false for a function fn:function-lookup resolves.
+				if v < 0 || int64(int(v)) != v {
 					return xdm.One(xdm.NewBoolean(false)), nil
 				}
 				arity = int(v)
@@ -1702,12 +1709,3 @@ func resolveDocumentIn(ctx *xpath.Context, uri, base string) (*xdm.Tree, error) 
 	}
 	return ctx.Docs.ResolveDocument(uri, base)
 }
-
-// maxAvailableArity bounds the arity fn:function-available will look up.
-//
-// It mirrors xpath's maxLookupArity, and exists for the same reason: no
-// function can be registered, let alone called, at an arity beyond what a Go
-// argument slice can hold, so a larger arity names nothing and the answer is
-// false. Bounding as well as converting exactly is the point -- an exactly
-// converted 2^62 is still not an arity anything is registered at.
-const maxAvailableArity = 1 << 20

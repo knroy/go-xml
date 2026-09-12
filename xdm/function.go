@@ -44,12 +44,47 @@ type FunctionItem struct {
 	// this one cannot import.
 	Signature []string
 
+	// VariadicSignature is the declared type of a VARIADIC function, whose
+	// parameters are all one type however many it is called with. It is nil
+	// for every fixed-arity function, which keeps Signature the ordinary
+	// path and this a compatible extension.
+	//
+	// It exists so that such a signature need not be materialised. fn:concat
+	// is declared at every arity from 2 upwards, and writing Signature for a
+	// call at arity N means an N+1 element slice of one repeated string --
+	// 16 bytes per argument, so 16MB at arity 2^20, measured. The arity is
+	// supplied by the CALLER, so that slice is an allocation an untrusted
+	// expression sizes: this is why the ceiling in xpath.synthesizeVariadic
+	// exists, and why raising it without this field is a memory-exhaustion
+	// hole rather than the conformance fix it looks like.
+	//
+	// MinArity is carried because it is part of the declared type rather
+	// than a fact about construction: F&O 3.1 declares fn:concat as two
+	// arguments or more, so an item claiming concat#1 is not merely
+	// unbuildable, it fails to match a function test of that arity.
+	VariadicSignature *VariadicSignature
+
 	// Invoke calls the function with the given arguments.
 	//
 	// The context is passed as an any because the type that carries it lives
 	// in the xpath package. The closure the xpath package installs here knows
 	// the concrete type and asserts it; no other package calls this directly.
 	Invoke func(ctx any, args []Sequence) (Sequence, error)
+}
+
+// VariadicSignature is the declared type of a function that takes a minimum
+// number of arguments and then any number more, all of one type.
+//
+// Result and Parameter are source spellings, exactly as xdm.FunctionItem's
+// Signature uses -- "xs:string", "item()*" -- so the two forms are read by
+// the same subsumption code.
+type VariadicSignature struct {
+	// MinArity is the fewest arguments the function accepts; 2 for fn:concat.
+	MinArity int
+	// Result is the declared return type.
+	Result string
+	// Parameter is the declared type of EVERY parameter.
+	Parameter string
 }
 
 func (f *FunctionItem) isItem() {}

@@ -190,9 +190,24 @@ func TestFunctionLookupExactArity(t *testing.T) {
 func TestFunctionLookupHugeArityIsNotMaxInt(t *testing.T) {
 	// fn:concat is variadic and is the most likely function to be registered
 	// at a very high arity, so it is the sharpest probe available.
+	//
+	// What this pins is NARROWING, not a ceiling. xs:integer is arbitrary
+	// precision and Function.Arity is a Go int, so the conversion has to
+	// refuse what it cannot represent rather than saturate onto MaxInt --
+	// which is what an earlier Float64 narrowing did, turning every huge
+	// arity into 9223372036854775807 and resolving it.
+	//
+	// 2^63-1 was in this list while a 2^20 policy ceiling stood. It is not
+	// any more: an int can represent it, so it names a function fn:concat is
+	// declared at, and F&O 3.1 gives fn:concat no maximum arity. Calling such
+	// an item is refused by the ordinary arity check before anything is
+	// allocated -- TestHugeArityItemIsInert -- so it is inert, not dangerous.
 	const concat = `QName('http://www.w3.org/2005/xpath-functions','concat')`
+
+	// Beyond int64 entirely: nothing to narrow onto, so the answer is empty.
 	for _, arity := range []string{
-		"9223372036854775807", "100000000000000000000000000000000",
+		"100000000000000000000000000000000",
+		"-100000000000000000000000000000000",
 	} {
 		expr := "exists(function-lookup(" + concat + ", " + arity + "))"
 		got, err := evalBig(t, expr)
@@ -200,9 +215,51 @@ func TestFunctionLookupHugeArityIsNotMaxInt(t *testing.T) {
 			t.Fatalf("arity %s: %v", arity, err)
 		}
 		if got != "false" {
-			t.Errorf("function-lookup(fn:concat, %s) exists = %s, want false",
-				arity, got)
+			t.Errorf("function-lookup(fn:concat, %s) exists = %s, want false; "+
+				"an arity outside the host int range names no function this "+
+				"implementation can hold, and must not narrow onto one that "+
+				"it can", arity, got)
 		}
+	}
+
+	// Exactly MaxInt64 is representable, so it resolves -- and the two
+	// acquisition routes must still agree about it.
+	for _, expr := range []string{
+		"exists(function-lookup(" + concat + ", 9223372036854775807))",
+		"exists(concat#9223372036854775807)",
+	} {
+		got, err := evalBig(t, expr)
+		if err != nil {
+			t.Fatalf("%s: %v", expr, err)
+		}
+		if got != "true" {
+			t.Errorf("%s = %s, want true; int can represent this arity, and "+
+				"fn:concat is declared for two arguments or more with no "+
+				"stated maximum", expr, got)
+		}
+	}
+}
+
+// An item at an arity no call could supply must be INERT rather than refused
+// at construction.
+//
+// This is what makes removing the 2^20 ceiling safe. The old bound was
+// defended as stopping "an arity no argument slice can ever hold", but the
+// holding is checked when the item is APPLIED, not when it is named: the
+// ordinary arity check raises XPTY0004 before any slice is sized. Nothing
+// allocates in proportion to the arity on either path -- the variadic
+// descriptor removed the one place that did.
+func TestHugeArityItemIsInert(t *testing.T) {
+	const concat = `QName('http://www.w3.org/2005/xpath-functions','concat')`
+	expr := "function-lookup(" + concat + ", 9223372036854775807)('a','b')"
+	got, err := evalBig(t, expr)
+	if err == nil {
+		t.Fatalf("applying a concat#2^63-1 item to two arguments returned "+
+			"%s; it must be a type error, since the item takes 2^63-1", got)
+	}
+	if !strings.Contains(err.Error(), "XPTY0004") {
+		t.Errorf("applying a concat#2^63-1 item gave %v, want XPTY0004; the "+
+			"arity mismatch must be caught before anything is allocated", err)
 	}
 }
 

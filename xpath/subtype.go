@@ -29,6 +29,29 @@ func functionItemMatches(t SequenceType, fn *xdm.FunctionItem) bool {
 	if fn.Arity != t.FunctionArity {
 		return false
 	}
+	// A variadic function declares one parameter type for every arity, so it
+	// carries that type rather than a slice repeating it. This branch is
+	// taken before the Signature path and leaves that path untouched.
+	if sig := fn.VariadicSignature; sig != nil {
+		// MinArity is part of the declared type, not a fact about how the
+		// item was built: fn:concat is declared for two arguments or more,
+		// so an item claiming concat#1 matches no function test.
+		if fn.Arity < sig.MinArity {
+			return false
+		}
+		if t.FunctionReturn != nil &&
+			!spellingSubsumes(t.FunctionReturn.String(), sig.Result) {
+			return false
+		}
+		// Every parameter has the same declared type, so the arity has
+		// already been checked above and only the spelling remains.
+		for _, want := range t.FunctionParams {
+			if !spellingSubsumes(sig.Parameter, want.String()) {
+				return false
+			}
+		}
+		return true
+	}
 	if len(fn.Signature) != fn.Arity+1 {
 		return true // see the note above: no declared type to be strict about
 	}

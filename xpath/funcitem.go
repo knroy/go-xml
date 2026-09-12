@@ -45,6 +45,7 @@ func (e *NamedFunctionRef) Eval(ctx *Context) (xdm.Sequence, error) {
 	}
 	item := functionItemFor(e.Name, e.Arity, fn.Call)
 	item.Signature = fn.Signature
+	item.VariadicSignature = fn.VariadicSignature
 	// A named function reference to a context-dependent function retains the
 	// focus in force where the reference was *written*, not where the item is
 	// eventually called (3.1.6: the function item's dynamic context is the one

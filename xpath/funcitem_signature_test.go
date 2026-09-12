@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -394,10 +395,17 @@ func TestVariadicArityBoundIsTheSameByEveryRoute(t *testing.T) {
 		why   string
 	}{
 		{"123456", true, "the QT3 and XSLT 3.0 suites both reference concat#123456"},
-		{"1048576", true, "exactly the bound, which is inclusive"},
-		{"1048577", false, "one past the bound"},
-		{"9223372036854775807", false,
-			"the saturation value; no argument slice can hold it"},
+		{"1048576", true, "what used to be exactly the ceiling"},
+		{"1048577", true,
+			"one past the OLD ceiling of 2^20. F&O 3.1 declares fn:concat " +
+				"for two arguments or more and names no maximum, so this " +
+				"case asserted a non-conformance until the variadic " +
+				"descriptor made the arity stop sizing an allocation"},
+		{"9223372036854775807", true,
+			"an arity int can represent is an arity this can name. Calling " +
+				"such an item is refused by the ordinary arity check " +
+				"(XPTY0004) before anything is allocated, so it is inert " +
+				"rather than dangerous -- see TestHugeArityItemIsInert"},
 	} {
 		named := answers("exists(concat#" + tc.arity + ")")
 		looked := answers(`exists(function-lookup(xs:QName("fn:concat"),` + tc.arity + `))`)
@@ -434,18 +442,41 @@ func TestSynthesizedConcatArityCarriesItsSignature(t *testing.T) {
 		return c
 	}
 
-	// The structural half: length must follow arity on both sides of the
-	// registration boundary.
+	// The structural half. A SYNTHESIZED arity describes its signature rather
+	// than materialising it: the slice used to be arity+1 strings of one
+	// repeated spelling, 16 bytes per argument at an arity the caller picks,
+	// which is what made the ceiling in synthesizeVariadic load-bearing.
+	// Asserting the descriptor rather than the slice is the point of the
+	// change; the observable half below is what did not move.
 	for _, n := range []int{2, 100, 101, 150} {
 		fn, ok := lookupFor(ctx(), xdm.QName{URI: xdm.NSFN, Local: "concat"}, n)
 		if !ok {
 			t.Fatalf("fn:concat#%d does not resolve", n)
 		}
-		if len(fn.Signature) != n+1 {
-			t.Errorf("fn:concat#%d carries %d signature entries, want %d "+
-				"(one result plus one per argument); a length that disagrees "+
-				"with the arity is read as no declaration at all",
-				n, len(fn.Signature), n+1)
+		switch {
+		case fn.VariadicSignature != nil:
+			if len(fn.Signature) != 0 {
+				t.Errorf("fn:concat#%d carries BOTH a variadic descriptor "+
+					"and %d signature entries; the descriptor exists so the "+
+					"slice need not, and two sources of one type will drift",
+					n, len(fn.Signature))
+			}
+			v := fn.VariadicSignature
+			if v.MinArity != 2 {
+				t.Errorf("fn:concat#%d declares MinArity %d, want 2; F&O 3.1 "+
+					"declares fn:concat for two arguments or more", n, v.MinArity)
+			}
+			if v.Result != "xs:string" || v.Parameter != "xs:anyAtomicType?" {
+				t.Errorf("fn:concat#%d describes %s -> %s, want "+
+					"xs:anyAtomicType? -> xs:string", n, v.Parameter, v.Result)
+			}
+		case len(fn.Signature) != n+1:
+			// A REGISTERED arity keeps the ordinary slice, and there the
+			// length must still follow the arity: a length that disagrees is
+			// read as no declaration at all.
+			t.Errorf("fn:concat#%d carries %d signature entries and no "+
+				"variadic descriptor, want %d (one result plus one per "+
+				"argument)", n, len(fn.Signature), n+1)
 		}
 	}
 
@@ -631,5 +662,241 @@ func TestEveryConstructorIsAnnotated(t *testing.T) {
 	}
 	if n == 0 {
 		t.Fatal("no xs: constructors are registered, so this asserts nothing")
+	}
+}
+
+// The variadic descriptor must cost the same at every arity, which is the
+// whole reason it exists.
+//
+// Before it, synthesizeVariadic wrote arity+1 strings of one repeated
+// spelling. Measured, that was 16 bytes per argument: 16,806,800 bytes at
+// arity 2^20 against 2,280 after. The arity is supplied by the CALLER --
+// fn:function-lookup takes it as an argument -- so the slice was an
+// allocation an untrusted expression could size, and the ceiling in
+// synthesizeVariadic was the only thing bounding it.
+//
+// That matters beyond tidiness. An audit twice proposed raising the ceiling
+// to the host int limit as a conformance fix; with the slice in place that
+// turned one function-lookup call into a request for roughly 10^11 GB. This
+// test is what keeps the allocation from creeping back and making that
+// proposal dangerous again.
+func TestVariadicSignatureDoesNotGrowWithArity(t *testing.T) {
+	ctx := func() *Context {
+		c := NewContext(nil, Builtins())
+		c.Version = XPath31
+		c.LibraryVersion = XPath31
+		return c
+	}
+	name := xdm.QName{URI: xdm.NSFN, Local: "concat"}
+
+	// Allocation is measured rather than inferred, but the assertion is on
+	// the DESCRIPTOR rather than on a byte count: a heap delta is noisy
+	// enough that pinning one would make this test flap. What must hold is
+	// that nothing proportional to the arity is retained.
+	for _, n := range []int{2, 1000, 1 << 20} {
+		fn, ok := lookupFor(ctx(), name, n)
+		if !ok {
+			t.Fatalf("fn:concat#%d does not resolve", n)
+		}
+		if fn.Arity != n {
+			t.Errorf("fn:concat#%d reports arity %d", n, fn.Arity)
+		}
+		if n > concatMaxArity {
+			if fn.VariadicSignature == nil {
+				t.Errorf("fn:concat#%d was synthesized without a variadic "+
+					"descriptor; the only other way to carry its type is a "+
+					"slice whose length follows the arity", n)
+			}
+			if len(fn.Signature) != 0 {
+				t.Errorf("fn:concat#%d materialised %d signature entries; "+
+					"that is %d bytes of one repeated spelling, at an arity "+
+					"the caller chooses",
+					n, len(fn.Signature), len(fn.Signature)*16)
+			}
+		}
+	}
+}
+
+// Both acquisition routes must describe the same function.
+//
+// This is the invariant a previous fix established for fn:function-lookup and
+// named function references: F&O 16.4.3 makes the two yield the same function
+// item, so no typed function test may tell them apart. The descriptor is a
+// second thing that has to be copied on both paths, and copying it on only
+// one would reintroduce exactly the divergence that fix closed.
+func TestVariadicDescriptorAgreesOnBothAcquisitionRoutes(t *testing.T) {
+	ctx := func() *Context {
+		c := NewContext(nil, Builtins())
+		c.Version = XPath31
+		c.LibraryVersion = XPath31
+		return c
+	}
+	const lookup = `function-lookup(QName(` +
+		`"http://www.w3.org/2005/xpath-functions","concat"),101)`
+
+	// Two things have to line up or this test says nothing, and the first two
+	// versions of it each missed one. The function test must name the SAME
+	// arity as the item, or the arity check settles it before the descriptor
+	// is read; and the arity must be ABOVE concatMaxArity, or the item is a
+	// registered one carrying an ordinary Signature and the descriptor is not
+	// involved at all. 101 satisfies both: it is synthesized, and every test
+	// below is written at that arity.
+	params := func(typ string, n int) string {
+		parts := make([]string, n)
+		for i := range parts {
+			parts[i] = typ
+		}
+		return strings.Join(parts, ",")
+	}
+	for _, tc := range []struct {
+		test string
+		want string
+		why  string
+	}{
+		{"function(" + params("xs:anyAtomicType?", 101) + ") as xs:string", "true",
+			"this is fn:concat's own declared type, at its own arity"},
+		{"function(" + params("xs:anyAtomicType?", 101) + ") as xs:date", "false",
+			"fn:concat returns xs:string, so the result type must be read"},
+		{"function(" + params("item()", 101) + ") as xs:string", "false",
+			"item() is wider than the declared xs:anyAtomicType?, and " +
+				"parameters are contravariant"},
+	} {
+		for _, expr := range []string{
+			"concat#101 instance of " + tc.test,
+			lookup + " instance of " + tc.test,
+		} {
+			seq, err := Eval(expr, ctx(), cardinalityNS{})
+			if err != nil {
+				t.Fatalf("%s: %v", expr, err)
+			}
+			if got := seq[0].(*xdm.Atomic).String(); got != tc.want {
+				t.Errorf("%s = %s, want %s; %s\n  the two acquisition routes "+
+					"must describe one function (F&O 16.4.3), so a descriptor "+
+					"copied on only one of them is a divergence",
+					expr, got, tc.want, tc.why)
+			}
+		}
+	}
+
+	// The arity a lookup reports must survive the descriptor, since
+	// fn:function-arity reads it from the item rather than from a signature.
+	seq, err := Eval("function-arity("+lookup+")", ctx(), cardinalityNS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := seq[0].(*xdm.Atomic).String(); got != "101" {
+		t.Errorf("function-arity of a looked-up concat#101 = %s, want 101", got)
+	}
+}
+
+// MinArity is part of the declared type, not a fact about construction.
+//
+// F&O 3.1 declares fn:concat for two arguments or more. Carrying that on the
+// descriptor rather than enforcing it only at synthesis is what lets the
+// MATCHER refuse an item claiming concat#1: a function test of arity 1 must
+// not match fn:concat however such an item was obtained.
+func TestVariadicMinArityIsCarriedOnTheDescriptor(t *testing.T) {
+	ctx := NewContext(nil, Builtins())
+	ctx.Version = XPath31
+	ctx.LibraryVersion = XPath31
+
+	item := &xdm.FunctionItem{
+		Name:  xdm.QName{URI: xdm.NSFN, Local: "concat"},
+		Arity: 1,
+		VariadicSignature: &xdm.VariadicSignature{
+			MinArity: 2, Result: "xs:string", Parameter: "xs:anyAtomicType?",
+		},
+	}
+	// The parameter type must be one the descriptor WOULD accept, or the
+	// parameter check rejects the item and the test says nothing about
+	// MinArity. An empty SequenceType{} spells "item()", which
+	// xs:anyAtomicType? does not subsume -- the first version of this test
+	// used it, passed with MinArity deleted, and was therefore vacuous.
+	param, err := ParseSequenceType("xs:anyAtomicType?", cardinalityNS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	typ := SequenceType{
+		HasFunctionArity: true,
+		FunctionArity:    1,
+		FunctionParams:   []SequenceType{param},
+	}
+	// The control: at arity 2 the same item and the same parameter type must
+	// MATCH, which is what proves the refusal below is MinArity's doing.
+	ok := *item
+	ok.Arity = 2
+	okTyp := typ
+	okTyp.FunctionArity = 2
+	okTyp.FunctionParams = []SequenceType{param, param}
+	if !functionItemMatches(okTyp, &ok) {
+		t.Fatal("fn:concat#2 did not match function(xs:anyAtomicType?, " +
+			"xs:anyAtomicType?); the control must pass or the refusal below " +
+			"proves nothing")
+	}
+	if functionItemMatches(typ, item) {
+		t.Error("an item claiming fn:concat#1 matched a function test of " +
+			"arity 1; fn:concat is declared for two arguments or more, so " +
+			"MinArity must be consulted rather than assumed at construction")
+	}
+}
+
+// The two representations must never disagree at the boundary between them.
+//
+// fn:concat is REGISTERED up to concatMaxArity, where applyVariadicSignatures
+// materialises an ordinary Signature, and SYNTHESIZED above it, where
+// synthesizeVariadic describes one instead. That is deliberate -- the
+// registered slices are built once at library construction and bounded by a
+// constant, not by anything a caller supplies -- but it means one function has
+// two type representations, and a typed function test must not be able to tell
+// which side of the boundary it is on.
+//
+// This is the check the earlier vacuous version of the acquisition-route test
+// was missing: it probed concat#3, which is registered, and so never exercised
+// the descriptor at all.
+func TestConcatTypeIsTheSameEitherSideOfTheRegistrationBoundary(t *testing.T) {
+	ctx := func() *Context {
+		c := NewContext(nil, Builtins())
+		c.Version = XPath31
+		c.LibraryVersion = XPath31
+		return c
+	}
+	params := func(typ string, n int) string {
+		parts := make([]string, n)
+		for i := range parts {
+			parts[i] = typ
+		}
+		return strings.Join(parts, ",")
+	}
+
+	// concatMaxArity is registered; one past it is synthesized. Asking the
+	// same three questions on both sides is what proves they agree.
+	for _, n := range []int{concatMaxArity, concatMaxArity + 1} {
+		for _, tc := range []struct {
+			ret  string
+			par  string
+			want string
+		}{
+			{"xs:string", "xs:anyAtomicType?", "true"},
+			{"xs:date", "xs:anyAtomicType?", "false"},
+			{"xs:string", "item()", "false"},
+		} {
+			expr := fmt.Sprintf("concat#%d instance of function(%s) as %s",
+				n, params(tc.par, n), tc.ret)
+			seq, err := Eval(expr, ctx(), cardinalityNS{})
+			if err != nil {
+				t.Fatalf("concat#%d: %v", n, err)
+			}
+			if got := seq[0].(*xdm.Atomic).String(); got != tc.want {
+				kind := "registered"
+				if n > concatMaxArity {
+					kind = "synthesized"
+				}
+				t.Errorf("a %s concat#%d instance of function(%s x%d) as %s "+
+					"= %s, want %s; the registered slice and the variadic "+
+					"descriptor are two spellings of one declared type and "+
+					"must answer alike",
+					kind, n, tc.par, n, tc.ret, got, tc.want)
+			}
+		}
 	}
 }
