@@ -62,9 +62,14 @@ invoke sites, and at every XSD assertion. A seventh followed on 2026-09-13 at
 XInclude's boundary, where the entity-expansion byte budget restarted for every
 included document (above), and an eighth the same day at `fn:parse-xml`, where
 the same budget restarted for every *call* — the case that forced the budget to
-be scoped to an evaluation rather than to a parse. That seam has now produced
-eight findings, so it is the first place to look when a limit is reported as
-not binding.
+be scoped to an evaluation rather than to a parse. A ninth followed on
+2026-09-13 at `xslt.FileResolver`, where the same budget restarted for every
+*resolved module* (below). That seam has now produced nine findings, so it is
+the first place to look when a limit is reported as not binding.
+
+**The seam is closed.** The ninth was the last construct that parsed on a
+caller's behalf without inheriting an allowance; every entry point into
+`xdm.ParseString` that a document or a stylesheet can reach now threads one.
 
 The eighth audit's six other findings are closed and are listed under
 *History*. Two of them ended the process rather than the request — a Go stack
@@ -572,11 +577,11 @@ what actually drives them:
   (`DefaultMaxDocuments = 512`) is the exact fetch-counter analogue, so the
   worst case is a real cap rather than an open-ended one. The budget should be
   threaded onto the assembler beside `a.count`.
-* `xslt/resolver.go:521` (`xsl:import`/`xsl:include`/`fn:doc`) — off unless
-  the host sets `AllowDOCTYPE`. Separately worth noting that
-  `resolverCacheMax = 256` at `:486` **clears on full** rather than evicting,
-  so past 257 distinct URIs it stops being a bound and starts being an
-  amplifier.
+* `xslt/resolver.go` (`xsl:import`/`xsl:include`/`fn:doc`) — **fixed, below.**
+  It was off unless the host set `AllowDOCTYPE`, which the CLI does not do for
+  the resolver. `resolverCacheMax = 256` **cleared on full** rather than
+  evicting, so past 257 distinct URIs it stopped being a bound and became an
+  amplifier; it now evicts one entry at a time, which is also fixed below.
 
 Two further sites — `fn:transform`'s `nestedParseOptions`
 (`xslt/fntransform.go:531`) and `relaxng/resolve.go:141` — have the same shape
@@ -645,14 +650,77 @@ refused if it tries, and it supplies no resolver — so nothing is charged there
 today; it is threaded because that inertness is a property of the options it
 happens to pass, not of the function.
 
-**Still open after this change**, found by re-sweeping every
-`xdm.Parse`/`ParseString` call site: `xslt/resolver.go:521` is the one live
-remaining case. It mints a fresh budget per file and honours `AllowDOCTYPE` and
-`ExternalEntities` when the host sets them, so a stylesheet reached through
-`xsl:import`/`xsl:include`/`fn:doc` gets the full ceiling per module; its
-`resolverCacheMax = 256` **clears on full** rather than evicting, which past
-257 distinct URIs stops being a bound and starts being an amplifier. The
-`xsd/assemble.go` sites remain bounded by `MaxDocuments` as recorded above.
+The one live case this change left open — `xslt/resolver.go` — was closed next
+and is recorded below. The `xsd/assemble.go` sites remain bounded by
+`MaxDocuments` as recorded above.
+
+### The entity budget was re-minted for every resolved module
+
+The ninth instance of the recurring seam, and the last one. `parseUncached`
+built `xdm.ParseOptions{...}` fresh for every file `xslt.FileResolver` read,
+carrying no allowance, so every module reached by `xsl:import`, `xsl:include`,
+`fn:doc` or `fn:document` got the full `maxTotalEntityBytes` ceiling to itself.
+`xsl:import` and `xsl:include` compose, so one compilation resolves a whole
+graph of modules and a per-module ceiling bounds none of it.
+
+**Measured before the fix: 60 imported modules, each expanding 700,000 bytes
+and so each comfortably under the 1 MB ceiling, expanded 42,000,000 bytes in
+total from 234 KB of source and allocated 173.5 MB — and were *accepted*.
+After the fix the same stylesheet is refused with `xdm.ErrResourceLimit` during
+the second module.** The amplification is linear in the module count, as it was
+for `fn:parse-xml`.
+
+**Severity: this is hardening for a library caller that opts in, not a
+default-config hole.** `FileResolver.AllowDOCTYPE` is off by default, and the
+CLI's `-allow-doctype` does not set it — that flag sets the *source document*'s
+parse option, not the resolver's. A host that never turns `AllowDOCTYPE` on was
+never exposed, because a module carrying a DOCTYPE is refused outright.
+
+The scoping question is the whole of the fix, because the three candidate
+lifetimes are not equivalent:
+
+- **Per resolver** is wrong. A `FileResolver` holds a cache and is documented
+  as shareable across transforms, so an allowance living on it would be spent
+  by unrelated runs and would eventually refuse everything — a bound that
+  degrades into a denial of service against its own host.
+- **Per `Transform`** is too late for the module graph. `xsl:import` resolves
+  during *compilation*, and a compiled stylesheet may be transformed many
+  times, so a transform-scoped allowance would never see an import at all.
+- **Per compilation, and per evaluation** is what the code now does, because
+  those are the two operations that actually pull documents in. Modules are
+  resolved by the compilation, so `CompileOptions` gains an unexported
+  `moduleBudget` minted by `compileLocked`; `fn:doc` and `fn:document` are
+  resolved by the evaluation, so they charge `xpath.Context.EntityBudget()` —
+  the same allowance `NewContext` mints and `AdoptBudget` inherits, already the
+  established scope from the eighth finding.
+
+Both are threaded as **optional interfaces**, matching
+`xpath.ContextDocumentResolver` rather than inventing a third mechanism: a
+resolver that does not implement them is called exactly as before, so no
+existing implementation breaks. `xslt.BudgetedModuleResolver` adds
+`ResolveModuleWith`, and `FileResolver` now also implements
+`xpath.ContextDocumentResolver` via `ResolveDocumentIn`. `fn:transform`'s
+nested compilation inherits the calling evaluation's allowance on the same
+house rule the other budgets follow — a nested operation may spend the parent's
+remainder, never reset it — so a stylesheet calling `fn:transform` in a loop
+cannot hand each nested compilation a fresh ceiling.
+
+One reporting defect surfaced with it. A budget refusal raised while expanding
+an entity was **swallowed** at two sites in `xdm/dtd_entities.go`, which left
+the reference as written for the decoder to complain about — so "entity
+expansion exceeds 1048576 bytes in total" reached the caller spelled "XML
+syntax error: invalid character entity", which reads as a malformed document
+rather than as a bound that bound, and `errors.Is(err, ErrResourceLimit)` was
+false. A refused fetch was already reported rather than deferred for exactly
+this reason; a resource-limit refusal now is too.
+
+`TestEntityBudgetSpansImportedModules` pins the defect. Two controls stop the
+fix from being "refuse everything": `TestEntityBudgetAcceptsLegitimateModuleGraph`
+pins that 60 modules expanding 60,000 bytes in total still compile *and
+transform* — real stylesheets import many modules —
+and `TestEntityBudgetDoesNotLeakBetweenCompilations` pins that four
+compilations through one shared resolver each get their own allowance, which is
+the per-resolver failure above stated as a test.
 Neither is fixed here.
 
 None of the three is loop detection, and none is allowed to stand in for it. A loop is

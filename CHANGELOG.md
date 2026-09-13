@@ -20,6 +20,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| The entity-expansion budget restarted for every resolved module | `parseUncached` minted a fresh allowance per file, so 60 imports each under the 1 MB ceiling expanded 42 MB and were accepted; the compilation and the evaluation now share one. |  |
+| The resolver cache cleared itself instead of evicting | Past 256 URIs the whole map was thrown away, so a stylesheet cycling over more documents re-parsed every one; evicting a single entry cut 300 documents × 4 rounds from 1.05s to 0.31s. |  |
 | `xsl:evaluate`'s restriction leaked into the body of a function it called | §10.4.1 governs the names the target expression may reference, not what those functions call. A public function's private callee was refused, costing 512 of 593 DocBook documents. | [`e812277`][e812277] |
 | A private stylesheet function was callable from `xsl:evaluate` | §3.5 makes a plain `xsl:stylesheet` an implicit package, so its undecorated functions are private. `evaluate-045` now passes, and with the leak above fixed it costs no real-world document. | [`e812277`][e812277] |
 | An XQuery clause scan hung forever on a combining mark | `isNameStartByte` accepted every byte ≥ 0x80 while `scanNCName` applied the real rune production, so a name char that may not start a name left the cursor unmoved and the loop spun. The two tests now agree, and a non-advancing scan is refused as `XPST0003`. | [`c2af54f`][c2af54f] |
