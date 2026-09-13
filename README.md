@@ -153,11 +153,16 @@ true here:
    rather than counted as failures. That is the single largest gap, and it is
    architectural rather than a matter of filling in instructions: streaming
    wants a pull parser and a streamability static analysis, not another
-   feature. `xsl:stream` and `xsl:fork` are absent for the same reason. What a
-   streamable stylesheet *computes* is another question — the spec requires it
-   to be the same as a non-streaming evaluation, so the `si-*` sets, which
-   assert results rather than memory behaviour, are in scope and nearly all
-   pass. *Where it fails* sets out the rest.
+   feature. What is absent is streamed *execution*, not the vocabulary:
+   `xsl:stream`, `xsl:fork`, `xsl:source-document`, `xsl:merge` and
+   `xsl:accumulator` all execute, by building the tree instead. §19.1 allows
+   exactly that — a processor not claiming the streaming option "must still
+   process a stylesheet and deliver the correct results, but is not required to
+   use streaming algorithms". What a streamable stylesheet *computes* is
+   another question — the spec requires it to be the same as a non-streaming
+   evaluation, so the `si-*` sets, which assert results rather than memory
+   behaviour, are in scope and nearly all pass. *Where it fails* sets out the
+   rest.
 
 Every remote-reference mechanism — `DOCTYPE`, `fn:doc`, file reads — is off
 unless enabled; see [Security defaults](#security-defaults).
