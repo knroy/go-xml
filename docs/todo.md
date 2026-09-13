@@ -20,7 +20,7 @@ Current position:
 | XSLT 3.0 | 99.76% — 11,490 of 11,518 in scope (28 failing); 8 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,265 `func Test` declarations, clean under `-race` |
+| Tests | 2,266 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 
 Every one of those failures, and why it is still open, is catalogued in
@@ -122,6 +122,24 @@ so DEL and the C1 controls were emitted raw. `fn:xml-to-json` — governed by th
 same rule and pinned by `xml-to-json-073` — already had the correct range in
 `xpath/fn_json.go`, so this was one rule with two implementations and only one
 of them right.
+
+The **XML** method had the same shape, and a worse consequence. Serialization
+3.1 §5 requires "CR, NEL and LINE SEPARATOR characters in text nodes" to be
+written as character references, the same three plus NL and TAB in attribute
+values, and "the non-whitespace control characters #x1 through #x1F and #x7F
+through #x9F" in both. `escapeText` and `escapeAttr` in `xpath/fn_serialize.go`
+were `strings.NewReplacer`s naming CR alone (plus TAB and NL for attributes),
+so NEL, U+2028 and the whole of C0 and C1 went out raw. Because an XML 1.1
+parser normalises NEL and U+2028 to a line feed, serialising and reparsing
+silently replaced the character — which is the corruption the MUST exists to
+prevent, not merely a conformance divergence. `xslt/serialize.go` had the rule
+right all along, so this was again one rule with two implementations.
+
+Both functions now delegate to `escapeXMLRunes`, which walks runes and decides
+by range rather than by a fixed list: adding U+0085 and U+2028 as two more
+replacer entries would have closed the named half and left the ranges open.
+`#x0` is deliberately not escaped — it is not a valid XML character at any
+version and `[66] CharRef` cannot spell it either.
 
 **`include-content-type`** was the last parsed-and-unread one, and it closed in
 the same pass: the `html` method wrote its `<meta http-equiv="Content-Type">`

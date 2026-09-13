@@ -1061,10 +1061,70 @@ func writeNamespaceDecls(sb *serializeSink, n *xdm.Node, opts serializeOptions) 
 // character in a plain string, and asks to see the two spelled differently:
 // "&#13;" for the node, which is serialized as XML inside the JSON string,
 // and "\r" for the string, which is JSON's own escape.
+//
+// A literal CR, NEL or LINE SEPARATOR does not survive that round trip: an
+// XML parser normalises all three to a line feed before the document reaches
+// the data model, so a text node holding one comes back holding something
+// else. The non-whitespace control characters are excluded from the literal
+// text a document may contain at all. Serialization 3.1 §5 states both rules
+// (testdata/xslt30-test/specs/serialization-31.html): "CR, NEL and LINE
+// SEPARATOR characters in text nodes MUST be output respectively as &#xD;,
+// &#x85;, and &#x2028;", and "the non-whitespace control characters #x1
+// through #x1F and #x7F through #x9F in text nodes and attribute nodes MUST
+// be output as character references."
 func escapeText(s string) string {
-	r := strings.NewReplacer(
-		"&", "&amp;", "<", "&lt;", ">", "&gt;", "\r", "&#xD;")
-	return r.Replace(s)
+	return escapeXMLRunes(s, false)
+}
+
+// escapeXMLRunes escapes one string for content or for an attribute value.
+//
+// It walks runes and decides by range rather than matching a fixed list, so
+// the whole of C0 and C1 is covered rather than the handful of characters a
+// replacer would name. attr selects the one place the two positions differ:
+// TAB and LF are ordinary characters in content and are written literally,
+// but in an attribute value a parser would normalise either to a space, so
+// there they are references too.
+//
+// #x0 is deliberately absent. It is not a valid XML character at any version
+// and a character reference cannot spell it either, so there is no escape to
+// emit; it is left to the representability check that rejects it upstream.
+func escapeXMLRunes(s string, attr bool) string {
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '&':
+			sb.WriteString("&amp;")
+			continue
+		case '<':
+			sb.WriteString("&lt;")
+			continue
+		case '>':
+			sb.WriteString("&gt;")
+			continue
+		case '"':
+			if attr {
+				sb.WriteString("&quot;")
+				continue
+			}
+		case '\t', '\n':
+			if !attr {
+				sb.WriteRune(r)
+				continue
+			}
+		}
+		// The line endings a parser would normalise away, and the control
+		// ranges it will not accept as literal text. TAB and LF have already
+		// been written literally above when this is content, so reaching
+		// here with one means attr is set.
+		if r == '\r' || r == '\u0085' || r == '\u2028' ||
+			(r >= 0x1 && r <= 0x1F) || (r >= 0x7F && r <= 0x9F) {
+			fmt.Fprintf(&sb, "&#x%X;", r)
+			continue
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
 }
 
 // escapesURIAttrs reports whether URI-valued attributes are percent-escaped.
@@ -1264,11 +1324,13 @@ func escapeURIAttribute(v string) string {
 }
 
 // escapeAttr escapes the characters that may not appear in an attribute value.
+//
+// It differs from escapeText in the two characters a parser normalises inside
+// an attribute value but not in content: §5 of Serialization 3.1 requires
+// "CR, NL, TAB, NEL and LINE SEPARATOR characters in attribute nodes" to be
+// written as references, where content keeps TAB and NL literal.
 func escapeAttr(s string) string {
-	r := strings.NewReplacer(
-		"&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;",
-		"\t", "&#x9;", "\n", "&#xA;", "\r", "&#xD;")
-	return r.Replace(s)
+	return escapeXMLRunes(s, true)
 }
 
 // applyCharacterMap replaces the mapped characters in the serialised output.

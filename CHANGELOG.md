@@ -20,6 +20,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| The XML output method never escaped NEL, U+2028 or the C0/C1 controls | Serialization 3.1 §5 requires them as references; a literal U+0085 reparsed as a line feed, silently corrupting the round trip. One range-aware escaper now serves both positions. |  |
 | `fn:serialize` with `method="html"` wrote XML syntax for empty elements | `<div/>` made an HTML parser read an unclosed tag and swallow the rest of the document. The void-element table is now read, which needed `html-version` honoured. | `e3cb35a` |
 | The `json` output method escaped only `#x1`–`#x1F` | Serialization 3.1 §9 also requires 127–159, so DEL and the C1 controls went out raw; `fn:xml-to-json` already had the range right. | `e3cb35a` |
 | The 49 `xs:` constructors carried no signature | Arity-only matching made every one-argument function test answer true. Signatures are now derived from F&O 18.1. | `e3cb35a` |
