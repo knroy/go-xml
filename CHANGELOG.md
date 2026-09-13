@@ -138,7 +138,6 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | The body of a template rule in a streamable mode was never assessed | §19.6 makes such a rule a focus-setting container with a striding context posture, so its body is decidable alone — no fixed point over the mode's rules. | [`f9c0cf5`][f9c0cf5] |
 | A union of attribute steps was charged as if it could hold children | §19.8.1 downgrades absorption to inspection when the type has no children, and `@* except @length` returns attributes only; a path step now also carries its context item's type, so `@nr/string()` is motionless. | [`f9c0cf5`][f9c0cf5] |
 | **The XPath expression rules of §19.8.8 the analysis still lacked** | Unions, map and array constructors, `fn:last` and `fn:position` were unmodelled, so any construct holding one got no verdict. All now in `xslt/streamexprs.go`. | [`0634425`][0634425] |
-| **The XSLT instruction rules of §19.8.4, on the streamability lattice** | §19.8.4's operand roles for the 43 XSLT instructions, §19.8.6 attribute sets and §19.8.7 value templates were unimplemented. All now in `xslt/streaminstructions.go`; four instructions stay unmodelled. | [`2cf1ad6`][2cf1ad6] |
 | **§19.4 type-determined usage, and nine more §19.8.4 instruction rules** | Six instruction rules were held to be blocked on type-determined usage, which is decided by the required type alone. `instrTypeDeterminedUsage` reads it, unblocking `xsl:apply-templates`, `xsl:call-template`, `xsl:next-match` and six more. | [`0634425`][0634425] |
 | **A recursive streamable function is assessed, and `fn:reverse`/`fn:innermost` classified** | A recursive `xsl:function` went unassessed, and §19.8.9 had no entry for `fn:reverse` or `fn:innermost`. §19.8.5 resolves a call from its declared category, so one pass is the fixed point. | [`0634425`][0634425] |
 | §19.8.10 classified accumulator patterns but never a template rule's | §19.6 gives a rule in a `streamable="yes"` mode a striding context posture, so its match pattern must be motionless; no code followed a mode declaration to its rules. `checkStreamableModePatterns` does, reusing the existing classifier. | [`0634425`][0634425] |
@@ -251,14 +250,14 @@ what the suites *measured*, not what the library does.
 | `SerializeAsXML` forced 1.0 | Tree assertions compared against the truncated prefix of a discarded error. The version, unlike method and indentation, decides whether a character can be written at all. | [`a45c3a6`][a45c3a6] |
 | Ratchet read a shrinking corpus as a regression | A count taken over fewer roots is not comparable; it is now skipped, not passed, when a root is absent. | [`3b6e685`][3b6e685] |
 | Cases never scored went uncounted | A case that is never scored must still appear in the denominator. | [`c3a52be`][c3a52be] |
-| The XSLT judge matched an expected error code anywhere in the rendered message | A code quoted in the input, or a substring of a longer one, passed a case that failed for another reason. The leading code decides now, with the substring kept for the 351 errors that carry theirs in a trailing parenthetical. In-scope unchanged at 11,490. | — |
+| The XSLT judge matched an expected error code anywhere in the rendered message | A code quoted in the input, or a substring of a longer one, passed a case that failed for another reason. The leading code decides now, with the substring kept for the 351 errors that carry theirs in a trailing parenthetical. In-scope unchanged at 11,490. | [`8b7161f`][8b7161f] |
 
 ### Documentation
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The README called `xsl:stream` and `xsl:fork` absent | Both execute end-to-end by building the tree, as §19.1 permits a non-streaming processor to do. The README now says what is absent is streamed execution, not the vocabulary — matching `docs/conformance-gaps.md`. | — |
-| The `evaluate-045` divergence was justified by a false spec argument | The comment claimed a plain `xsl:stylesheet` has no package boundary; §3.5 makes it an implicit package whose functions default to private. Reframed as a known divergence kept for cost (577 of 593 DocBook documents against 67), with the corpus size corrected from 613 to 593. | — |
+| The README called `xsl:stream` and `xsl:fork` absent | Both execute end-to-end by building the tree, as §19.1 permits a non-streaming processor to do. The README now says what is absent is streamed execution, not the vocabulary — matching `docs/conformance-gaps.md`. | [`a09c936`][a09c936] |
+| The `evaluate-045` divergence was justified by a false spec argument | The comment claimed a plain `xsl:stylesheet` has no package boundary; §3.5 makes it an implicit package whose functions default to private. Reframed as a known divergence kept for cost (577 of 593 DocBook documents against 67), with the corpus size corrected from 613 to 593. | [`c6532ba`][c6532ba] |
 
 ### Investigated — not defects
 
@@ -758,6 +757,7 @@ here so every entry in this file sits under a release.
 [84ad066]: https://github.com/knroy/go-xml/commit/84ad066
 [878f9ed]: https://github.com/knroy/go-xml/commit/878f9ed
 [885f6b7]: https://github.com/knroy/go-xml/commit/885f6b7
+[8b7161f]: https://github.com/knroy/go-xml/commit/8b7161f
 [8dcc4dc]: https://github.com/knroy/go-xml/commit/8dcc4dc
 [8e0f44d]: https://github.com/knroy/go-xml/commit/8e0f44d
 [9113ac4]: https://github.com/knroy/go-xml/commit/9113ac4
@@ -769,6 +769,7 @@ here so every entry in this file sits under a release.
 [9a41bea]: https://github.com/knroy/go-xml/commit/9a41bea
 [9ae8c57]: https://github.com/knroy/go-xml/commit/9ae8c57
 [9f033e2]: https://github.com/knroy/go-xml/commit/9f033e2
+[a09c936]: https://github.com/knroy/go-xml/commit/a09c936
 [a0cf1da]: https://github.com/knroy/go-xml/commit/a0cf1da
 [a3ec25e]: https://github.com/knroy/go-xml/commit/a3ec25e
 [a3f5568]: https://github.com/knroy/go-xml/commit/a3f5568
@@ -793,6 +794,7 @@ here so every entry in this file sits under a release.
 [be2938e]: https://github.com/knroy/go-xml/commit/be2938e
 [c01b98a]: https://github.com/knroy/go-xml/commit/c01b98a
 [c3a52be]: https://github.com/knroy/go-xml/commit/c3a52be
+[c6532ba]: https://github.com/knroy/go-xml/commit/c6532ba
 [c8fc839]: https://github.com/knroy/go-xml/commit/c8fc839
 [cc17983]: https://github.com/knroy/go-xml/commit/cc17983
 [cdba77a]: https://github.com/knroy/go-xml/commit/cdba77a
