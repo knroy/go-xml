@@ -35,7 +35,7 @@ remaining ones have been probed and found sound.
 
 ## Current status
 
-Eight audits have passed over this code. This section is the whole of what is
+Ten passes have been made over this code. This section is the whole of what is
 *live*: everything it names is described in full further down, and everything
 already fixed has been reduced to one line apiece under *History* at the end,
 with the narrative in [CHANGELOG.md](../CHANGELOG.md).
@@ -1420,7 +1420,7 @@ wrong on first framing.
 
 ## History
 
-Eight audits have passed over this code. Every finding below was reproduced,
+Ten passes have been made over this code. Every finding below was reproduced,
 fixed, and pinned by a regression test that fails against the previous code;
 the full narrative for each — what it was, how it was reproduced, why the fix
 took the shape it did — now lives in [CHANGELOG.md](../CHANGELOG.md). They are
@@ -1431,6 +1431,11 @@ already found.
 Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
+
+**Tenth pass — a compile-time complexity defect and an SSRF, 2026-09-13.**
+
+- **Constant folding was quadratic in expression size** — cost, and reachable from document data rather than only from a hostile stylesheet. `isClosed` decides whether folding is legal by walking the whole subtree, and `foldConstant` asks it at every node, so a left-leaning operator chain re-read its entire prefix once per node; `containsCompatSensitive` had the same shape on the XPath 1.0 path. Neither existing guard bounded it: `maxChainLength` caps one chain at 10,000 terms for stack safety and paren nesting caps at 1,000, but both bound *length* rather than *work*, and a composition of sub-limit chains multiplies freely beneath them. Measured on a 640 kB expression built that way: 2.79 s before, 215 ms after, with `isClosed` at 86% of CPU samples beforehand and absent from the profile after. Both predicates now memoise per node in a table that lives for one pass. The memo is exact rather than approximate — each is a pure function of the subtree, and an entry is recorded only after that node's children are final, because folding is bottom-up — so no expression folds that did not fold before. That property is the one that matters: `isClosed` gates folding, so a wrong answer there freezes a focus-dependent expression at compile time, which is a silent wrong result rather than a slow one. Pinned by `xpath/optimize_complexity_test.go`, which bounds the compile and checks the memo against the walk it replaces at every subexpression. See CHANGELOG.
+- **`xsd.HTTPResolver` filtered host names but never addresses** — false accept, and a live SSRF. `AllowHost` is an allowlist of *names*, and a permitted name may resolve to loopback, to an RFC1918 range, or to 169.254.169.254 — the cloud instance metadata address, where a fetch returns credentials. The doc comment was honest that the check was not an address check and told the caller to filter at the dialler, but the default dialler reached all of it, so the safe configuration was the one nobody wrote. The filter now runs in the transport's `Control`, against the IP actually being dialled: that is after the name is resolved and after the address is chosen, which is the only point at which the guarantee can be made, and it closes the DNS-rebinding window a name check leaves open by construction. It covers redirects and every retry for free, because each connection is dialled through the same place, and a host with several A records is checked per address as each is tried. Loopback, unspecified, link-local, multicast, unique-local, RFC1918, carrier-grade NAT and IPv4-mapped forms of all of them are refused; `AllowPrivateAddresses` re-permits them for a caller who genuinely fetches from a private network. `AllowHost` is unchanged and still narrows the namespace, and a caller-supplied `Transport` is left alone, because that is the documented hook for a proxy or a pinned CA set. Pinned by `xsd/resolve_address_test.go`, which asserts the refusal, the opt-out that its own `httptest` server needs, and the range table. See CHANGELOG.
 
 **Eighth audit.**
 

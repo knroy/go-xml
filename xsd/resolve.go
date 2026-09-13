@@ -6,12 +6,15 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -287,13 +290,30 @@ type HTTPResolver struct {
 	// construction. Returning true for "schemas.example.com" says the name is
 	// permitted, not that the connection goes anywhere trustworthy.
 	//
-	// To refuse the addresses an SSRF is aimed at, filter them where they are
-	// known: a Transport with a DialContext (or Control) that inspects the
-	// resolved IP and refuses the ranges you do not want. That check sees the
-	// address actually being dialled, which is the only place the guarantee
-	// can be made. Use AllowHost to narrow the namespace and the dialler to
-	// enforce the boundary.
+	// The addresses themselves are refused by the dialler, at the point they
+	// are known — see AllowPrivateAddresses. Use AllowHost to narrow the
+	// namespace and the dialler to enforce the boundary.
 	AllowHost func(host string) bool
+
+	// AllowPrivateAddresses re-permits the address ranges that are refused by
+	// default: loopback, link-local (including 169.254.169.254, the cloud
+	// instance metadata address), unique-local, and the RFC1918 private
+	// ranges. It is off by default, so the zero value refuses them.
+	//
+	// The check runs in the dialler, against the IP the connection is
+	// actually being made to rather than the name written in the document.
+	// That placement is what makes it a guarantee: a name resolves to an
+	// address only at dial time, so checking the name earlier leaves a
+	// rebinding window in which the name is re-resolved to a refused address
+	// after it was approved. Checking the resolved address closes it, and it
+	// covers redirects and every retry for free, because each connection is
+	// dialled through the same place.
+	//
+	// Turn it on for a caller that genuinely fetches schemas from a private
+	// network — an internal mirror, or a test server on loopback. It widens
+	// what the process can be made to reach by whoever writes the schema, so
+	// it is opt-in rather than a default.
+	AllowPrivateAddresses bool
 
 	// Files handles locations that are not remote. When nil, a FileResolver
 	// with no root is used.
@@ -347,6 +367,22 @@ func (r *HTTPResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 			timeout = DefaultFetchTimeout
 		}
 		client = &http.Client{Timeout: timeout}
+	}
+	// The address filter goes on a copy of the transport, for the same reason
+	// the redirect check goes on a copy of the client: r.Client may be one the
+	// caller uses elsewhere, and installing a dialler on it would change the
+	// behaviour of every other request made through it.
+	//
+	// A caller who supplied their own Transport has already chosen how
+	// connections are made, so theirs is left alone -- that is the documented
+	// hook for a proxy or a pinned CA set, and wrapping it here would silently
+	// override a policy they set deliberately.
+	if !r.AllowPrivateAddresses {
+		c := *client
+		if c.Transport == nil {
+			c.Transport = newGuardedTransport()
+			client = &c
+		}
 	}
 	// A redirect is a second request to a host the caller never named, so
 	// AllowHost has to run again on every hop. Checking only the URL written
@@ -464,4 +500,88 @@ func (r *MapResolver) Resolve(namespace, location, base string) (io.ReadCloser, 
 		return io.NopCloser(strings.NewReader(src)), namespace, nil
 	}
 	return nil, "", nil
+}
+
+// ErrPrivateAddress is returned when a fetch is refused because the host
+// resolved to an address in a range HTTPResolver does not dial by default.
+// It is wrapped by the dial error, so errors.Is finds it through the
+// *url.Error and *net.OpError that net/http puts around it.
+var ErrPrivateAddress = errors.New(
+	"address is in a private range; set AllowPrivateAddresses to permit it")
+
+// newGuardedTransport returns a Transport that refuses to connect to the
+// address ranges an SSRF is aimed at.
+//
+// The check is in Control rather than DialContext because Control runs after
+// the name has been resolved and after the address to dial has been chosen,
+// but before the connection is made. That is the narrowest point at which the
+// real address is known: a host with several A records is checked per address
+// as each is tried, so a name that resolves to both a public and a loopback
+// address cannot reach the loopback one by having the first attempt fail. It
+// is also why this closes the DNS-rebinding window that a name check cannot:
+// the address seen here is the one being connected to, not one resolved
+// earlier and re-resolved since.
+func newGuardedTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	d := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control: func(network, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return fmt.Errorf("parsing dial address %q: %w", address, err)
+			}
+			ip, err := netip.ParseAddr(host)
+			if err != nil {
+				// Control is handed a literal address, never a name. If that
+				// ever stops being true, refusing is the safe direction:
+				// admitting an address that could not be parsed would let
+				// whatever produced it past the check.
+				return fmt.Errorf("dial address %q is not an IP: %w", host, err)
+			}
+			if isPrivateAddr(ip) {
+				return fmt.Errorf("refusing to dial %s: %w", ip, ErrPrivateAddress)
+			}
+			return nil
+		},
+	}
+	t.DialContext = d.DialContext
+	return t
+}
+
+// isPrivateAddr reports whether ip is in a range HTTPResolver refuses by
+// default.
+//
+// The IPv4-mapped form of an IPv6 address is unmapped first, so
+// ::ffff:127.0.0.1 is judged as 127.0.0.1 rather than slipping through as an
+// ordinary global v6 address.
+func isPrivateAddr(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	switch {
+	case ip.IsLoopback(), ip.IsUnspecified(),
+		ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast(),
+		ip.IsInterfaceLocalMulticast(), ip.IsMulticast():
+		// Loopback reaches services bound to the host itself. The
+		// unspecified address (0.0.0.0, ::) is a route to the local host on
+		// most stacks. Link-local covers 169.254.0.0/16, which is where the
+		// cloud instance metadata service lives (169.254.169.254) and is the
+		// single address this filter most exists to refuse.
+		return true
+	case ip.IsPrivate():
+		// 10/8, 172.16/12, 192.168/16, and the v6 unique-local fc00::/7.
+		return true
+	}
+	if ip.Is4() {
+		b := ip.As4()
+		// 100.64.0.0/10, the carrier-grade NAT range, which addresses other
+		// tenants rather than the public internet.
+		if b[0] == 100 && b[1] >= 64 && b[1] <= 127 {
+			return true
+		}
+		// 192.0.0.0/24, IETF protocol assignments.
+		if b[0] == 192 && b[1] == 0 && b[2] == 0 {
+			return true
+		}
+	}
+	return false
 }

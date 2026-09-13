@@ -156,10 +156,18 @@ xsd.Options{Resolver: &xsd.HTTPResolver{
 }}
 ```
 
-`AllowHost` runs *before* the request, which makes it the place to refuse
-loopback and private address ranges. Network resolution is off by default
-because turning it on hands control of what this process fetches to whoever
-wrote the schema.
+`AllowHost` runs *before* the request and narrows the namespace. It is not an
+address check and cannot be one: a name it admits may resolve to loopback or
+into a private range, and a name checked here may resolve to something else by
+the time the connection is made. The addresses are refused by the dialler
+instead, which sees the IP actually being connected to — loopback, link-local
+(including the cloud metadata address `169.254.169.254`), unique-local and the
+RFC1918 ranges are all refused by default. Set `AllowPrivateAddresses: true`
+to re-permit them, which is what a caller fetching from an internal mirror —
+or a test against a server on loopback — needs.
+
+Network resolution is off by default because turning it on hands control of
+what this process fetches to whoever wrote the schema.
 
 In a server, prefer neither:
 

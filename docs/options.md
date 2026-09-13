@@ -259,13 +259,29 @@ symlinks that lead outside:
 }
 ```
 
-`AllowHost` is the SSRF control: it runs before the request **and on every
-redirect hop**, so a permitted host cannot bounce you to a denied one. It sees
-`u.Hostname()`, so userinfo tricks like `http://good.example@127.0.0.1/` do not
-fool it. Use it to refuse loopback, link-local and private ranges.
+The SSRF control is two halves, and they do different jobs.
+
+`AllowHost` narrows the **namespace**: it runs before the request **and on
+every redirect hop**, so a permitted host cannot bounce you to a denied one. It
+sees `u.Hostname()`, so userinfo tricks like `http://good.example@127.0.0.1/`
+do not fool it.
+
+The dialler enforces the **boundary**. A name is not an address, so a permitted
+name that resolves to `127.0.0.1` or to `169.254.169.254` — the cloud instance
+metadata address — would otherwise be fetched. The check runs on the resolved
+IP at dial time, which is the only point where the guarantee holds: it also
+closes the DNS-rebinding window, where a name approved earlier is re-resolved
+to a refused address before the connection is made. Loopback, unspecified,
+link-local, multicast, unique-local, RFC1918, carrier-grade NAT and the
+IPv4-mapped forms of all of them are refused by default.
+
+`AllowPrivateAddresses: true` re-permits them, for a caller that genuinely
+fetches from a private network.
 
 `Client` lets you supply your own `*http.Client`; the redirect check is
-installed on a copy, so your client is not mutated.
+installed on a copy, so your client is not mutated. Supplying your own
+`Transport` disables the address filter, on the reasoning that you have then
+chosen how connections are made — apply your own `Control` if you want both.
 
 ---
 

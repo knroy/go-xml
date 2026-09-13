@@ -462,7 +462,9 @@ func TestHTTPResolverChecksRedirectHosts(t *testing.T) {
 	defer open.Close()
 
 	var asked []string
-	r := &HTTPResolver{AllowHost: func(h string) bool {
+	// The servers are on loopback, which the dialler refuses by default;
+	// this test is about AllowHost running on every redirect hop.
+	r := &HTTPResolver{AllowPrivateAddresses: true, AllowHost: func(h string) bool {
 		asked = append(asked, h)
 		return h == "127.0.0.1"
 	}}

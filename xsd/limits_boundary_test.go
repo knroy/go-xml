@@ -190,7 +190,10 @@ func TestHTTPResolverMaxBytesBoundaries(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := &HTTPResolver{MaxBytes: tt.max}
+			// httptest binds to loopback, which HTTPResolver refuses by
+			// default; this test is about the MaxBytes boundary, not the
+			// address policy.
+			r := &HTTPResolver{MaxBytes: tt.max, AllowPrivateAddresses: true}
 			rc, _, err := r.Resolve("", srv.URL, "")
 			if err != nil {
 				t.Fatalf("Resolve: %v", err)
@@ -229,7 +232,9 @@ func TestHTTPResolverMaxBytesNegativeRefuses(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r := &HTTPResolver{MaxBytes: -1}
+	// See the note in TestHTTPResolverMaxBytesBoundaries: loopback is
+	// refused by default and this test is not about that.
+	r := &HTTPResolver{MaxBytes: -1, AllowPrivateAddresses: true}
 	rc, _, err := r.Resolve("", srv.URL, "")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
