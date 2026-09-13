@@ -21,6 +21,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | `fn:format-number` rounded a tie away from zero | F&O 3.1 §4.7.5 defines the rounding by calling `fn:round-half-to-even`, so `format-number(2.5,'0')` answered 3 where the shared function answered 2. No corpus holds a tie, so only the new test pins it. | [`c01b98a`][c01b98a] |
+| A `format-number` exponent separator was split on what followed it alone | F&O 3.1 §4.7.3 needs an active character on *both* sides, so `'e0'` wrongly split to an empty mantissa and errored naming a picture nobody wrote; it is passive prefix, giving `e1234`. |  |
+| An active character after the `format-number` exponent digits was kept as a suffix | §4.7.3 forbids any following active non-digit, but only a second separator-plus-digits was caught, so `'0e0.0'` gave `1e3.0`; it now raises `FODF1310`, while passive `'0e0xyz'` still formats. |  |
 | The XQuery constructor scan was exponential and skipped the depth bound | A failed skip was re-derived at every nesting level, so 120 bytes took 52s; it is memoised now. The scan also ran before the depth counter, so 20,000 levels were accepted. | [`3ae153c`][3ae153c] |
 | The XML output method never escaped NEL, U+2028 or the C0/C1 controls | Serialization 3.1 §5 requires them as references; a literal U+0085 reparsed as a line feed, silently corrupting the round trip. One range-aware escaper now serves both positions. | [`282953e`][282953e] |
 | `fn:serialize` with `method="html"` wrote XML syntax for empty elements | `<div/>` made an HTML parser read an unclosed tag and swallow the rest of the document. The void-element table is now read, which needed `html-version` honoured. | [`e3cb35a`][e3cb35a] |

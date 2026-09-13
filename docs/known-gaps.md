@@ -1215,6 +1215,76 @@ false, it would have broken conforming behaviour while appearing to close the
 finding. Both directions are now pinned in
 `TestConstructorFunctionItemsCarryTheirDeclaredType`.
 
+### "The format-number exponent rule is narrow, and the suite tests every corner of it" — it tests neither half
+
+`splitExponent` (`xpath/formatnumber.go`) carried that claim in its own doc
+comment, citing `numberformat108`, `113`, `143` and `144` as the corners. Those
+four cases are real and still pass, but they cover only the middle of F&O 3.1
+§4.7.3. **Both edges of the exponent rule were unimplemented, and no case in
+either corpus reaches them** — every exponent picture in
+`testdata/qt3tests/fn/format-number.xml` and in
+`testdata/xslt30-test/tests/fn/format-number/` puts digits before the separator
+and digits-then-passive-text after it. The counted figures do not move with
+either defect in either direction, which is why a comment asserting full
+coverage survived.
+
+**The separator was classified on what followed it alone.** §4.7.3: "A
+character that matches the exponent-separator property is treated as an
+exponent-separator-sign **if it is both preceded and followed** within the
+sub-picture by an active character. Otherwise, it is treated as a passive
+character." Only the *followed* half was tested, so a separator with nothing
+active before it still split the picture and handed `parsePicture` a mantissa
+that was empty or digit-free:
+
+    format-number(1234, 'e0')    => FODF1310: picture "" contains no digit characters
+    format-number(1234, 'xe0')   => FODF1310: picture "x" contains no digit characters
+    format-number(1234, 'abce0') => FODF1310: picture "abc" contains no digit characters
+
+The error message is the tell: it names a picture the caller never wrote,
+because the split had already discarded the rest. Under the rule the `e` in
+each is *passive*, so `'e0'` is the prefix `"e"` over the digit region `"0"`
+and the answer is `e1234`.
+
+**An active non-digit after the exponent digits was kept as a suffix.** The
+same block: the sign "must be followed by one or more characters that are
+members of the decimal digit family, and **it must not be followed by any
+active character that is not a member of the decimal digit family**." The tail
+was scanned only for a *second* separator-plus-digits (`numberformat108`);
+every other active character fell through into `p.expSuffix`:
+
+    format-number(1234, '0e0.0')  => "1e3.0"    (want FODF1310)
+    format-number(1234, '0e0#')   => "1e3#"     (want FODF1310)
+    format-number(1234, '0e00,0') => "1e03,0"   (want FODF1310)
+
+Active is the spec's own list — decimal-separator, exponent-separator,
+grouping-separator, digit, pattern-separator, and the decimal digit family —
+and *followed* means anywhere later in the sub-picture, not immediately after,
+which the spec states explicitly. So `'0e0xy#'` is an error too.
+
+**The fix must not over-reach, and the boundary is the recursive definition.**
+A passive suffix is still legal: `'0e0xyz'` is `1e3xyz`, and `'9.9999e99e'`
+keeps its trailing `e` (`numberformat144`) because that `e` is followed by
+nothing and so is not itself a sign — an exponent-separator in the tail counts
+as active only where digits follow it, which is exactly the pre-existing
+`numberformat108` check. A fix that rejected the character class outright
+would have broken both.
+
+Neither corpus can hold this in either direction, so
+`TestFormatNumberExponentSeparatorNeedsPrecedingActive`,
+`TestFormatNumberActiveCharacterAfterExponentDigits` and
+`TestFormatNumberExponentPassiveSuffixStillFormats` are the only thing that
+does. Each half was sabotage-tested independently: disabling the preceding-active
+check fails exactly the four Defect-1 cases with the original leaked-mantissa
+messages, and disabling the tail check fails exactly the four Defect-2 cases
+with the original wrong outputs, while the other group stays green.
+
+Two further §4.7.3 readings were checked and left alone. A **leading** grouping
+separator (`',0'` gives `1,2,3,4`) is odd but conformant: the spec forbids one
+adjacent to the decimal separator or at the end of the integer part, and says
+nothing about the start. And the exponent/percent conflict message still names
+the mantissa rather than the whole picture (`'#.#e0%'` reports `"#.#"`) — the
+same cosmetic leak as above, on a path where the error code is already correct.
+
 ### The streamability comments were written against the Last Call draft
 
 A systematic audit of the quoted spec text in `xslt/stream*.go` — 245 distinct
