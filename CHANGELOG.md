@@ -20,11 +20,11 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| An XQuery clause scan hung forever on a combining mark | `isNameStartByte` accepted every byte ≥ 0x80 while `scanNCName` applied the real rune production, so a name char that may not start a name left the cursor unmoved and the loop spun. The two tests now agree, and a non-advancing scan is refused as `XPST0003`. |  |
-| A truncated direct constructor in a variable declaration panicked | `scanDeclExpr` discarded `skipDirConstructor`'s error, so the cursor ran one past the end and the closing slice went out of range on input as short as `declare variable$A:=<`. The error is returned now. |  |
+| An XQuery clause scan hung forever on a combining mark | `isNameStartByte` accepted every byte ≥ 0x80 while `scanNCName` applied the real rune production, so a name char that may not start a name left the cursor unmoved and the loop spun. The two tests now agree, and a non-advancing scan is refused as `XPST0003`. | [`c2af54f`][c2af54f] |
+| A truncated direct constructor in a variable declaration panicked | `scanDeclExpr` discarded `skipDirConstructor`'s error, so the cursor ran one past the end and the closing slice went out of range on input as short as `declare variable$A:=<`. The error is returned now. | [`c2af54f`][c2af54f] |
 | `fn:format-number` rounded a tie away from zero | F&O 3.1 §4.7.5 defines the rounding by calling `fn:round-half-to-even`, so `format-number(2.5,'0')` answered 3 where the shared function answered 2. No corpus holds a tie, so only the new test pins it. | [`c01b98a`][c01b98a] |
-| A `format-number` exponent separator was split on what followed it alone | F&O 3.1 §4.7.3 needs an active character on *both* sides, so `'e0'` wrongly split to an empty mantissa and errored naming a picture nobody wrote; it is passive prefix, giving `e1234`. |  |
-| An active character after the `format-number` exponent digits was kept as a suffix | §4.7.3 forbids any following active non-digit, but only a second separator-plus-digits was caught, so `'0e0.0'` gave `1e3.0`; it now raises `FODF1310`, while passive `'0e0xyz'` still formats. |  |
+| A `format-number` exponent separator was split on what followed it alone | F&O 3.1 §4.7.3 needs an active character on *both* sides, so `'e0'` wrongly split to an empty mantissa and errored naming a picture nobody wrote; it is passive prefix, giving `e1234`. | [`4c78fae`][4c78fae] |
+| An active character after the `format-number` exponent digits was kept as a suffix | §4.7.3 forbids any following active non-digit, but only a second separator-plus-digits was caught, so `'0e0.0'` gave `1e3.0`; it now raises `FODF1310`, while passive `'0e0xyz'` still formats. | [`4c78fae`][4c78fae] |
 | The XQuery constructor scan was exponential and skipped the depth bound | A failed skip was re-derived at every nesting level, so 120 bytes took 52s; it is memoised now. The scan also ran before the depth counter, so 20,000 levels were accepted. | [`3ae153c`][3ae153c] |
 | The XML output method never escaped NEL, U+2028 or the C0/C1 controls | Serialization 3.1 §5 requires them as references; a literal U+0085 reparsed as a line feed, silently corrupting the round trip. One range-aware escaper now serves both positions. | [`282953e`][282953e] |
 | `fn:serialize` with `method="html"` wrote XML syntax for empty elements | `<div/>` made an HTML parser read an unclosed tag and swallow the rest of the document. The void-element table is now read, which needed `html-version` honoured. | [`e3cb35a`][e3cb35a] |
@@ -228,7 +228,7 @@ turn "I could not prove the constraint" into "the constraint holds."*
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The entity-expansion budget restarted for every XInclude'd document | Each included parse minted a fresh `entityTable`, so 200 documents got 200 × 1 MB: 95 KB expanded to 149 MB. One `entityBudget` is now shared across the pass, and a refusal is fatal to `xi:fallback`. |  |
+| The entity-expansion budget restarted for every XInclude'd document | Each included parse minted a fresh `entityTable`, so 200 documents got 200 × 1 MB: 95 KB expanded to 149 MB. One `entityBudget` is now shared across the pass, and a refusal is fatal to `xi:fallback`. | [`989e88d`][989e88d] |
 | The documented `MaxItems` budget never bound on an XQuery body | `Compiled.Eval` reset the counter once per tuple; `HoldItemBudget` holds it for one query. | [`fe41f3c`][fe41f3c] |
 | Uncompilable content models skipped every constraint on them | A model that would not compile passed silently rather than declining. | [`b6fb5ab`][b6fb5ab] |
 | A budget answered "valid" | Exhausting the budget was reported as success instead of as an inability to decide. | [`2c461c7`][2c461c7] |
@@ -256,8 +256,8 @@ what the suites *measured*, not what the library does.
 | Ratchet read a shrinking corpus as a regression | A count taken over fewer roots is not comparable; it is now skipped, not passed, when a root is absent. | [`3b6e685`][3b6e685] |
 | Cases never scored went uncounted | A case that is never scored must still appear in the denominator. | [`c3a52be`][c3a52be] |
 | The XSLT judge matched an expected error code anywhere in the rendered message | A code quoted in the input, or a substring of a longer one, passed a case that failed for another reason. The leading code decides now, with the substring kept for the 351 errors that carry theirs in a trailing parenthetical. In-scope unchanged at 11,490. | [`8b7161f`][8b7161f] |
-| The regex budget tests never reached the budget | The backtracking engine is off by default, so the probe pattern died at compile time with the same `FORX0002` the tests asserted on; deleting the guard left them green. They now enable the engine and assert `xdm.ErrResourceLimit`, which only the budget wraps. | |
-| `speccites.sh` passed green while 16 citations named the wrong subject | It checked only that a number names some section, and only in `xslt/stream*.go`. It now covers `xpath/` too (1058 sites) and fails when a citation under a `case "NAME":` names another instruction's §19.8.4 section. | |
+| The regex budget tests never reached the budget | The backtracking engine is off by default, so the probe pattern died at compile time with the same `FORX0002` the tests asserted on; deleting the guard left them green. They now enable the engine and assert `xdm.ErrResourceLimit`, which only the budget wraps. | [`5d1cc6f`][5d1cc6f] |
+| `speccites.sh` passed green while 16 citations named the wrong subject | It checked only that a number names some section, and only in `xslt/stream*.go`. It now covers `xpath/` too (1058 sites) and fails when a citation under a `case "NAME":` names another instruction's §19.8.4 section. | [`ed625d2`][ed625d2] |
 
 ### Documentation
 
@@ -265,7 +265,7 @@ what the suites *measured*, not what the library does.
 |---|---|---|
 | The README called `xsl:stream` and `xsl:fork` absent | Both execute end-to-end by building the tree, as §19.1 permits a non-streaming processor to do. The README now says what is absent is streamed execution, not the vocabulary — matching `docs/conformance-gaps.md`. | [`a09c936`][a09c936] |
 | The `evaluate-045` divergence was justified by a false spec argument | The comment claimed a plain `xsl:stylesheet` has no package boundary; §3.5 makes it an implicit package whose functions default to private. Reframed as a known divergence kept for cost (577 of 593 DocBook documents against 67), with the corpus size corrected from 613 to 593. | [`c6532ba`][c6532ba] |
-| Twelve spec citations named a real section about the wrong subject | The REC renumbered §19.8.4 after the Last Call draft, shifting every instruction after `xsl:text` by two, and four F&O numbers were transcription errors wrong in every version. Each new number was checked against the vendored spec's own heading. | |
+| Twelve spec citations named a real section about the wrong subject | The REC renumbered §19.8.4 after the Last Call draft, shifting every instruction after `xsl:text` by two, and four F&O numbers were transcription errors wrong in every version. Each new number was checked against the vendored spec's own heading. | [`ed625d2`][ed625d2] |
 
 ### Investigated — not defects
 
@@ -729,6 +729,7 @@ here so every entry in this file sits under a release.
 [3f3cce3]: https://github.com/knroy/go-xml/commit/3f3cce3
 [40930d5]: https://github.com/knroy/go-xml/commit/40930d5
 [4c06a1f]: https://github.com/knroy/go-xml/commit/4c06a1f
+[4c78fae]: https://github.com/knroy/go-xml/commit/4c78fae
 [4ce4086]: https://github.com/knroy/go-xml/commit/4ce4086
 [4fd0df5]: https://github.com/knroy/go-xml/commit/4fd0df5
 [5405f36]: https://github.com/knroy/go-xml/commit/5405f36
@@ -738,6 +739,7 @@ here so every entry in this file sits under a release.
 [5c17280]: https://github.com/knroy/go-xml/commit/5c17280
 [5cb5358]: https://github.com/knroy/go-xml/commit/5cb5358
 [5cd6b38]: https://github.com/knroy/go-xml/commit/5cd6b38
+[5d1cc6f]: https://github.com/knroy/go-xml/commit/5d1cc6f
 [5f0df59]: https://github.com/knroy/go-xml/commit/5f0df59
 [600e7c0]: https://github.com/knroy/go-xml/commit/600e7c0
 [6567f8e]: https://github.com/knroy/go-xml/commit/6567f8e
@@ -774,6 +776,7 @@ here so every entry in this file sits under a release.
 [93c5e88]: https://github.com/knroy/go-xml/commit/93c5e88
 [96171c5]: https://github.com/knroy/go-xml/commit/96171c5
 [9660e52]: https://github.com/knroy/go-xml/commit/9660e52
+[989e88d]: https://github.com/knroy/go-xml/commit/989e88d
 [9a41bea]: https://github.com/knroy/go-xml/commit/9a41bea
 [9ae8c57]: https://github.com/knroy/go-xml/commit/9ae8c57
 [9f033e2]: https://github.com/knroy/go-xml/commit/9f033e2
@@ -801,6 +804,7 @@ here so every entry in this file sits under a release.
 [bd0aaf5]: https://github.com/knroy/go-xml/commit/bd0aaf5
 [be2938e]: https://github.com/knroy/go-xml/commit/be2938e
 [c01b98a]: https://github.com/knroy/go-xml/commit/c01b98a
+[c2af54f]: https://github.com/knroy/go-xml/commit/c2af54f
 [c3a52be]: https://github.com/knroy/go-xml/commit/c3a52be
 [c6532ba]: https://github.com/knroy/go-xml/commit/c6532ba
 [c8fc839]: https://github.com/knroy/go-xml/commit/c8fc839
@@ -823,6 +827,7 @@ here so every entry in this file sits under a release.
 [e967628]: https://github.com/knroy/go-xml/commit/e967628
 [ea4681f]: https://github.com/knroy/go-xml/commit/ea4681f
 [eb5ea72]: https://github.com/knroy/go-xml/commit/eb5ea72
+[ed625d2]: https://github.com/knroy/go-xml/commit/ed625d2
 [f0ffb5b]: https://github.com/knroy/go-xml/commit/f0ffb5b
 [f161723]: https://github.com/knroy/go-xml/commit/f161723
 [f29b554]: https://github.com/knroy/go-xml/commit/f29b554
