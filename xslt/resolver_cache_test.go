@@ -120,7 +120,7 @@ func TestResolverCacheKeepsWorkingSetPastTheBound(t *testing.T) {
 		}
 		// Between rounds, touch enough fresh documents to overflow the cache.
 		// A cache that clears wholesale loses the entire window here; one that
-		// evicts a single entry per admission loses at most those 50.
+		// evicts a single entry per admission loses at most this many of it.
 		for _, n := range names[len(names)-100:] {
 			if _, err := res.ResolveDocument(n, base); err != nil {
 				t.Fatal(err)
