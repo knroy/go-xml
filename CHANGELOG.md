@@ -20,6 +20,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| An XQuery clause scan hung forever on a combining mark | `isNameStartByte` accepted every byte ≥ 0x80 while `scanNCName` applied the real rune production, so a name char that may not start a name left the cursor unmoved and the loop spun. The two tests now agree, and a non-advancing scan is refused as `XPST0003`. |  |
+| A truncated direct constructor in a variable declaration panicked | `scanDeclExpr` discarded `skipDirConstructor`'s error, so the cursor ran one past the end and the closing slice went out of range on input as short as `declare variable$A:=<`. The error is returned now. |  |
 | `fn:format-number` rounded a tie away from zero | F&O 3.1 §4.7.5 defines the rounding by calling `fn:round-half-to-even`, so `format-number(2.5,'0')` answered 3 where the shared function answered 2. No corpus holds a tie, so only the new test pins it. | [`c01b98a`][c01b98a] |
 | A `format-number` exponent separator was split on what followed it alone | F&O 3.1 §4.7.3 needs an active character on *both* sides, so `'e0'` wrongly split to an empty mantissa and errored naming a picture nobody wrote; it is passive prefix, giving `e1234`. |  |
 | An active character after the `format-number` exponent digits was kept as a suffix | §4.7.3 forbids any following active non-digit, but only a second separator-plus-digits was caught, so `'0e0.0'` gave `1e3.0`; it now raises `FODF1310`, while passive `'0e0xyz'` still formats. |  |

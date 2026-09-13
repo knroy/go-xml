@@ -1015,9 +1015,19 @@ func (p *parser) scanDeclExpr() (string, error) {
 			// constructor is the only reliable way past it, and the
 			// constructor parser is the only thing that knows where it ends.
 			// skipDirConstructor advances past the constructor itself.
-			if err := p.skipDirConstructor(); err == nil {
-				continue
+			//
+			// Its error is returned rather than ignored. A failed skip has
+			// already moved the cursor -- parseDirElement consumes the "<"
+			// before it reads the name that fails -- so falling through to
+			// the "p.pos++" below could put the cursor past the end of the
+			// source, and the slice at the end of this scan then panicked on
+			// input as short as "declare variable $A := <". Reporting the
+			// constructor's own error also says what is actually wrong,
+			// where the fall-through reported a later confusion or none.
+			if err := p.skipDirConstructor(); err != nil {
+				return "", err
 			}
+			continue
 		case ',':
 			if depth == 0 {
 				return "", p.errorf(

@@ -2,6 +2,7 @@ package xquery
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
@@ -276,7 +277,7 @@ func (p *parser) scanExprSingleSource() (string, error) {
 			continue
 		}
 
-		if !isNameStartByte(c) {
+		if !nameStartsAt(p.src, p.pos) {
 			prev = c
 			p.pos++
 			branchHead = false
@@ -290,6 +291,17 @@ func (p *parser) scanExprSingleSource() (string, error) {
 		// tell a keyword from a name the same way the stop words do.
 		prevBefore := prev
 		w := p.scanNCName()
+		if p.pos == wordStart {
+			// nameStartsAt said a name begins here and scanNCName read none,
+			// so the two disagree. Advancing is what keeps the disagreement a
+			// parse error instead of a hang; the byte is not expression
+			// syntax, so treating it as an ordinary character is also what
+			// the non-name branch above would have done.
+			prev = c
+			p.pos++
+			branchHead = false
+			continue
+		}
 		if depth == 0 && stopWords[w] && canStartClause(prev) &&
 			!p.wordIsName(w) {
 			// A stop keyword ends the scan only when nothing nested inside
@@ -423,6 +435,34 @@ func (p *parser) wordIsName(w string) bool {
 func isNameStartByte(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
 		c >= 0x80
+}
+
+// nameStartsAt reports whether a name begins at src[i], deciding a multi-byte
+// character by the same production scanNCName uses.
+//
+// isNameStartByte admits every byte >= 0x80, because one byte cannot say
+// which character a UTF-8 sequence spells. That is safe wherever the answer
+// only has to be a plausible one, and unsafe wherever the caller then asks
+// scanNCName to read the name and assumes it advanced: a character that is a
+// name character but not a name *start* character -- a combining mark, say --
+// passes the byte test and fails the rune test, so scanNCName returns "" with
+// the cursor where it found it. A loop that advances only by consuming that
+// name then spins on the same byte forever, which is a denial of service on
+// attacker-supplied query text rather than a parse error.
+//
+// So the two tests have to agree wherever non-advancement would be a hang.
+// This is that agreement: the cheap byte test first, the exact rune test only
+// for the bytes it cannot decide.
+func nameStartsAt(src string, i int) bool {
+	if i >= len(src) {
+		return false
+	}
+	c := src[i]
+	if c < 0x80 {
+		return isNameStartByte(c)
+	}
+	r, _ := utf8.DecodeRuneInString(src[i:])
+	return xdm.IsNameStartChar(r) && r != ':'
 }
 
 // skipDirConstructor steps the cursor over a direct constructor without

@@ -46,6 +46,14 @@ with the narrative in [CHANGELOG.md](../CHANGELOG.md).
 |---|---|---|
 | `javascript:` URLs pass through | hostile stylesheet | an XSLT processor is not an HTML sanitiser; see *Open findings*. |
 
+Two crash-level defects found on 2026-09-13 by the XQuery fuzz target — one
+non-terminating input and one panicking input, both reached from
+`xquery.Compile` on about twenty bytes of malformed query text — were fixed
+the same day and are listed under *History*. They are the first crashes any
+fuzz target here has produced, and the argument for keeping the targets in CI:
+neither was reachable by the reasoning that had already been applied to this
+code by hand.
+
 Three defects found on 2026-09-10 while verifying an external report — none of
 them a claim *in* that report — were fixed the same day and are listed under
 *History*. All three were one shape: a budget minted fresh where it should have
@@ -637,14 +645,21 @@ partly missing validates documents against the half that is left.
 
 Every audit finding in this document was reasoned about and then asserted by a
 regression test. Fuzzing is the complement: it searches for the input nobody reasoned
-about. Five targets now do that — over the XML parser, the schema assembler and
+about. Six targets now do that — over the XML parser, the schema assembler and
 its content-model compiler, the stylesheet compiler, the XPath expression
-compiler, and a parse → serialise → parse round trip. See
+compiler, the XQuery compiler, and a parse → serialise → parse round trip. See
 [testing.md](testing.md#fuzzing) for how to run one.
 
-Each was run for 150 seconds and none found a crash. The parser alone took
-about 20 million executions, the schema assembler 4.4 million, and the round
-trip 3.6 million. What that buys, stated precisely:
+**The XQuery target found two crashes, and they are the reason to keep running
+these.** `FuzzCompile` over `xquery.Compile` produced one non-terminating input
+and one panicking input, both from malformed query text of about twenty bytes
+and neither reachable by reasoning that had already been done by hand. Both are
+fixed and recorded under *Fixed — engine* below. A 90-second re-run after the
+fixes, 6.2 million executions, found nothing further.
+
+The other five were run for 150 seconds and none found a crash. The parser
+alone took about 20 million executions, the schema assembler 4.4 million, and
+the round trip 3.6 million. What that buys, stated precisely:
 
 - **`xdm.ParseString` did not panic**, and every refusal came back as an error
   value with no tree beside it. A panic on parse is a denial of service for any
@@ -1319,6 +1334,17 @@ exactly that. The charge is now taken by the code that allocates.
 - **Ten string-producing built-ins returned newly built strings uncharged** — availability, and the same hole in nine smaller instances: `fn:normalize-space`, `fn:upper-case`, `fn:lower-case`, `fn:encode-for-uri`, `fn:iri-to-uri`, `fn:escape-html-uri`, `fn:normalize-unicode`, `fn:format-integer`, `fn:format-number`, `fn:substring` and the `format-dateTime` family each allocated a result and returned it through `strSeq`. They return through `stringResult` now, which charges the bytes first. Only a *newly built* string is charged: `fn:normalize-unicode` with an empty form name returns its input unchanged and is deliberately left alone, as is `fn:string($node)`, because charging a value that was already paid for would refuse legal work at half the documented limit. `fn:substring-before` and `fn:substring-after` are left alone for the same reason and a sharper one: they slice the argument, so the result shares its backing array and no new bytes exist. `fn:substring` does allocate, through `string(runes[...])`, and is charged. See CHANGELOG.
 - **Four sequence-producing built-ins materialised items uncharged** — availability, the item budget's half of the same defect: `fn:string-to-codepoints` and all three `fn:tokenize` paths (the one-argument form, the regex form, and the backtracking form) built an `xdm.Sequence` with no `countItems` call, so a host invoking them directly got the full 5,000,000 items over again. Each knows its count before the loop, so each reserves once through `makeSequence` rather than charging per append — reserving *before* the `make` is what refuses an oversize request without allocating the backing array. One ownership rule per result: a caller that reserves must not also charge each append, or the sequence is paid for twice and legal work is refused at half the documented limit. See CHANGELOG.
 - **`xslt`'s JSON and adaptive serialization reached `xpath` with no budget** — availability, the host boundary underneath the two findings above: `xpath.SerializeJSON` and `xpath.SerializeAdaptive` are the exported entry points `xslt/serialize.go` renders through, and neither took a `Context`. `SerializeParams.Budget` carries one now; nil stays unbounded, which is what both functions did before the field existed and what keeps the addition backward-compatible. `xslt.Serialize` is itself exported and carries no `Context`, so threading one to it is an API change and is **not** done here — the mechanism is available to a caller who has a budget, and the gap is named rather than closed. See CHANGELOG.
+
+**Eleventh pass — the XQuery fuzz target's first two crashes, 2026-09-13.**
+
+Both were found by `FuzzCompile` rather than by reading, both are reached from
+`xquery.Compile` on about twenty bytes of malformed query text, and neither
+needs a document, a schema or an option to be set. For a library that compiles
+a query supplied by its caller, a hang and a panic are the same finding twice:
+the host loses either the goroutine or the process.
+
+- **A name character that may not start a name hung the clause scan forever** — availability, and non-terminating rather than merely slow. `scanExprSingleSource` tested the byte with `isNameStartByte`, which admits every byte `>= 0x80` because one byte cannot say which character a UTF-8 sequence spells, and then called `scanNCName`, which decodes the whole rune and applies the real production. A combining mark — a name character that is not a name *start* character — passes the byte test and fails the rune test, so `scanNCName` returned `""` with the cursor exactly where it found it, and nothing else in the loop body advanced. `for$A in M\x17` + U+0300 + ` 0(00000\xdf` never returns. The two tests now agree: `nameStartsAt` keeps the cheap byte test for ASCII and decodes the rune for the bytes it cannot decide, and the word branch additionally treats a non-advancing scan as an ordinary character, so non-advancement is impossible rather than merely unreached. The query is now refused with `XPST0003`. The sibling `isNameStartByte` in `xpath/fn_stream.go` has the same looseness and is **deliberately left alone**: `reachesStartTag` uses it to answer a yes/no question and returns on that branch, so no loop depends on it advancing. See CHANGELOG.
+- **A truncated direct constructor in a variable initialiser panicked** — availability: `runtime error: slice bounds out of range`, which `recover()` catches only if the host installed one. `scanDeclExpr`'s `"<"` case called `skipDirConstructor` and *discarded* its error. The skip consumes the `"<"` before parsing the name that fails, so on failure the cursor already sat at `len(src)`; the fall-through `p.pos++` then put it one past the end, and the `p.src[start:p.pos]` closing the scan sliced out of range. `declare variable$A:=<` — 21 bytes — is enough. The error is returned now rather than ignored, which both keeps the cursor in range and reports the constructor's own fault instead of a later confusion. Four sibling truncations (`<a`, `<a attr=`, `<!--`, `<?`) panicked identically and are pinned with it. See CHANGELOG.
 
 **Seventh audit.**
 
