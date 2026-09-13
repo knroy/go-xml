@@ -974,8 +974,8 @@ func (c *Context) libraryVersion() Version {
 // implementation and has to be asked for by name.
 //
 // Both methods are answerable as the empty result, and that is what makes the
-// gate conformance-safe: F&O 3.1 section 16.2.1 makes it
-// implementation-dependent which variables are available, and section 16.2.2
+// gate conformance-safe: F&O 3.1 section 14.6.9 makes it
+// implementation-dependent which variables are available, and section 14.6.8
 // returns the empty sequence for a name that is not among them. So a withheld
 // variable and an unset one are indistinguishable by design, and a stylesheet
 // cannot tell the gate from a bare environment.

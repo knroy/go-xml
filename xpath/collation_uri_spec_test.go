@@ -9,7 +9,7 @@ import (
 // the engine's existing behaviour: each case is a worked example or an
 // explicit rule quoted from the vendored specification.
 //
-// The deep-equal node cases are the load-bearing ones. F&O 3.0 §14.2.2 gives
+// The deep-equal node cases are the load-bearing ones. F&O 3.0 §14.2.3 gives
 // exactly one node kind a fixed collation — "the string value of $i1 is equal
 // to the string value of $i2 when compared using the Unicode codepoint
 // collation", for namespace nodes — and leaves every other string comparison

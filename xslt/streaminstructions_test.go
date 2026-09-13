@@ -110,10 +110,10 @@ func TestTextInstructionIsGroundedMotionless(t *testing.T) {
 	wantProps(t, p, known, postureGrounded, sweepMotionless, "xsl:text")
 }
 
-// --- §19.8.4.38 xsl:value-of: select absorbs --------------------------------
+// --- §19.8.4.40 xsl:value-of: select absorbs --------------------------------
 
 func TestValueOfAbsorbsItsSelect(t *testing.T) {
-	// §19.8.4.38 gives the select expression usage absorption. Absorbing a
+	// §19.8.4.40 gives the select expression usage absorption. Absorbing a
 	// striding element operand costs a read of the stream, so by the
 	// single-consuming-operand rule of §19.8.1 the result is grounded and
 	// consuming.
@@ -735,10 +735,10 @@ func TestTypeDeterminedUsageFollowsTheRequiredType(t *testing.T) {
 	}
 }
 
-// --- §19.8.4.39 xsl:variable with a declared type ---------------------------
+// --- §19.8.4.41 xsl:variable with a declared type ---------------------------
 
 func TestVariableWithNodeTypeNavigatesAndIsFreeRanging(t *testing.T) {
-	// §19.8.4.39: with an as attribute, the select expression takes the
+	// §19.8.4.41: with an as attribute, the select expression takes the
 	// type-determined usage based on that type. element(a)* permits nodes,
 	// so §19.4 gives navigation, and §19.8.1 makes navigation from a
 	// striding operand free-ranging. This is the rule that stops a streamed
@@ -750,7 +750,7 @@ func TestVariableWithNodeTypeNavigatesAndIsFreeRanging(t *testing.T) {
 	}
 	if p.streamable() {
 		t.Errorf("binding a streamed selection to as=element(a)* was reported streamable "+
-			"(%v, %v); §19.8.4.39 gives the select navigation usage, which is free-ranging",
+			"(%v, %v); §19.8.4.41 gives the select navigation usage, which is free-ranging",
 			p.posture, p.sweep)
 	}
 }

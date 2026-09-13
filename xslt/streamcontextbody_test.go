@@ -122,7 +122,7 @@ func TestStreamableModeBodyXTSE3430(t *testing.T) {
 		}
 	})
 
-	// §19.8.4.39: with no "as" attribute an xsl:variable's select has usage
+	// §19.8.4.41: with no "as" attribute an xsl:variable's select has usage
 	// navigation, and §19.8.1 makes navigation from a streamed posture
 	// free-ranging. That is the rule that stops a streamed node being held in
 	// a variable and read again later. This is streamable-110.
@@ -133,7 +133,7 @@ func TestStreamableModeBodyXTSE3430(t *testing.T) {
 				`<xsl:value-of select="$this"/>`+
 				`</xsl:template>`))
 		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
-			t.Fatalf("§19.8.4.39 gives an untyped xsl:variable's select "+
+			t.Fatalf("§19.8.4.41 gives an untyped xsl:variable's select "+
 				"usage navigation, which §19.8.1 makes free-ranging from a "+
 				"streamed posture; want XTSE3430, got: %v", err)
 		}

@@ -12,7 +12,7 @@ package xslt
 //
 //	§19.8.8.4  union, intersect, except      unionExpr
 //	§19.8.8.5  the document-node(element(X)) clause, shared with "treat as"
-//	§19.8.8.16 map expressions               mapConstructor
+//	§19.8.8.17 map constructors              mapConstructor
 //	           square/curly array constructors, on the same shape as a map
 //	§19.8.9.14 fn:last                       lastFunction
 //	§19.8.9.16 fn:position                   (grounded and motionless)

@@ -601,7 +601,7 @@ func deepEqualNode(ctx *Context, a, b *xdm.Node) (bool, error) {
 
 	case xdm.KindNamespace:
 		// The namespace node is the ONE kind whose string value F&O 3.0
-		// §14.2.2 pins to a fixed collation: "the string value of $i1 is
+		// §14.2.3 pins to a fixed collation: "the string value of $i1 is
 		// equal to the string value of $i2 when compared using the Unicode
 		// codepoint collation". Every other kind falls under the general
 		// clause a few paragraphs above — the collation "is used at all
@@ -664,7 +664,7 @@ func deepEqualContent(ctx *Context, a, b *xdm.Node) (bool, error) {
 // untyped element.
 //
 // An element in an unvalidated tree is annotated xs:untyped, a complex type
-// whose variety is mixed, and F&O 3.0 §14.1.13 rules that case as: "Both
+// whose variety is mixed, and F&O 3.0 §14.2.3 rules that case as: "Both
 // element nodes have a type annotation that is a complex type with variety
 // mixed, and the sequence $i1/(*|text()) is deep-equal to the sequence
 // $i2/(*|text())". That is a selection over the child axis: comments and

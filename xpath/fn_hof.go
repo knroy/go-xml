@@ -299,7 +299,7 @@ func callFunction(ctx *Context, fn *xdm.FunctionItem, args ...xdm.Sequence) (xdm
 
 // singleBoolean reads the xs:boolean a predicate function must return.
 //
-// F&O 3.1 §14.2.2 declares fn:filter's second argument as
+// F&O 3.1 §16.2.2 declares fn:filter's second argument as
 // "function(item()) as xs:boolean", and XPath 3.0 §3.1.5.2 requires the
 // function conversion rules to be applied to a coerced function's result as
 // well as to its arguments: the returned value is converted to the declared

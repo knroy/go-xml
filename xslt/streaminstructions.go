@@ -528,7 +528,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 	// --- Instructions that are simply a table of operand usages. ---
 
 	case "value-of":
-		// §19.8.4.38.
+		// §19.8.4.40.
 		ops := a.avtOperands(el, "separator")
 		if o, ok := a.selectOperand(el, usageAbsorption); ok {
 			ops = append(ops, o)
@@ -545,7 +545,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		return groundedMotionless
 
 	case "sequence":
-		// §19.8.4.34: select and body both transmit.
+		// §19.8.4.36: select and body both transmit.
 		var ops []operand
 		if o, ok := a.selectOperand(el, usageTransmission); ok {
 			ops = append(ops, o)
@@ -567,7 +567,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		return groundedMotionless
 
 	case "processing-instruction":
-		// §19.8.4.32.
+		// §19.8.4.34.
 		return a.absorbingSelectOrBody(el, []string{"name"})
 
 	case "namespace":
@@ -596,7 +596,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		return combine(ops, false)
 
 	case "result-document":
-		// §19.8.4.33: href and the serialization AVTs absorb, as does the
+		// §19.8.4.35: href and the serialization AVTs absorb, as does the
 		// body. The serialization attributes are all AVTs; treating every
 		// attribute other than the ones with expression values as an AVT
 		// covers them without listing forty names.
@@ -761,7 +761,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		return a.copyInstruction(el)
 
 	case "variable":
-		// §19.8.4.39. With an as attribute both the select expression and
+		// §19.8.4.41. With an as attribute both the select expression and
 		// the contained sequence constructor take the type-determined usage
 		// based on that type; without one the select navigates and the body
 		// absorbs. Navigation from a streamed node is free-ranging, which is
@@ -796,7 +796,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		return combine(ops, false)
 
 	case "perform-sort":
-		// §19.8.4.31: the select navigates, because sorting does not
+		// §19.8.4.33: the select navigates, because sorting does not
 		// preserve order; the xsl:sort AVTs and keys absorb, assessed with
 		// a context posture based on the select expression.
 		var ops []operand
