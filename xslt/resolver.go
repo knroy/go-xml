@@ -527,10 +527,37 @@ func (r *FileResolver) publish(path string, tree *xdm.Tree) {
 	// usable as a plain literal — &FileResolver{Roots: ...} — so a nil map
 	// here is the ordinary case, not a caller's mistake, and writing to one
 	// panics.
-	// Cleared wholesale rather than evicted one at a time: there is no useful
-	// recency signal here, and the same choice is made for the regex cache.
-	if r.cache == nil || len(r.cache) >= resolverCacheMax {
+	if r.cache == nil {
 		r.cache = map[string]*xdm.Tree{}
+	}
+	// Evicted one entry at a time rather than cleared wholesale.
+	//
+	// Clearing the whole map was borrowed from the regex cache, where the
+	// entries are cheap to rebuild. Here they are parsed XML documents, and
+	// throwing all 256 away to make room for the 257th turned the cache into
+	// an amplifier: a stylesheet cycling over more than resolverCacheMax
+	// documents emptied the map on every miss, so the NEXT request for a
+	// document it had just discarded missed as well, and the steady state was
+	// re-parsing every document on every pass instead of caching any of them.
+	//
+	// One eviction keeps the bound exactly as it was -- the map never exceeds
+	// resolverCacheMax -- while leaving the other 255 entries in place, so a
+	// working set that fits still hits. The victim is whichever key the map
+	// yields first, which Go randomises; that is deliberate rather than a
+	// compromise, because random eviction needs no bookkeeping on the hot path
+	// and still retains a working set, whereas the recency metadata an LRU
+	// wants would have to be written on every cache HIT. A false eviction
+	// costs one reparse, which is what a miss cost before.
+	for len(r.cache) >= resolverCacheMax {
+		if _, ok := r.cache[path]; ok {
+			// Replacing an entry that is already present does not grow the
+			// map, so nothing has to be evicted for it.
+			break
+		}
+		for victim := range r.cache {
+			delete(r.cache, victim)
+			break
+		}
 	}
 	r.cache[path] = tree
 }
