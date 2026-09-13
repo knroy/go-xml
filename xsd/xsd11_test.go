@@ -111,6 +111,49 @@ func TestAssertionIsConfinedToSubtree(t *testing.T) {
 	if err := check11(t, s, `<root><marker>m</marker><inner><v>x</v></inner></root>`); err != nil {
 		t.Errorf("the assertion should not see outside its element: %v", err)
 	}
+
+	// The case above passes just as well when assertions are not evaluated at
+	// all, so on its own it pins nothing: switching off <xs:assert> wholesale
+	// left it green. The two below are the control. The first asserts over the
+	// element's own subtree and must fail, which is only possible if the
+	// assertion ran; the second names the parent's marker on an axis that does
+	// reach it if confinement is broken, and must not fail.
+	neg := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="inner">
+	    <xs:complexType>
+	      <xs:sequence><xs:element name="v" type="xs:string"/></xs:sequence>
+	      <xs:assert test="count(v) = 0"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+	err := check11(t, neg, `<inner><v>x</v></inner>`)
+	if err == nil {
+		t.Fatal("an assertion false over the element's own subtree was not " +
+			"evaluated: count(v)=0 must fail on <inner><v>x</v></inner>")
+	}
+	if !strings.Contains(err.Error(), "cvc-assess-elt") &&
+		!strings.Contains(err.Error(), "assert") {
+		t.Errorf("assertion failure should be reported as an assertion: %v", err)
+	}
+
+	// Confinement is what makes the first schema's count(../marker)=0 true.
+	// If the assertion could see the parent, ../marker would be 1 and the
+	// document above would have been refused -- which the first check pins.
+	// Assert the same rule from the other side: the root's own assertion can
+	// see its children, so it is not confined away from its own subtree.
+	own := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence><xs:element name="marker" type="xs:string"/></xs:sequence>
+	      <xs:assert test="count(marker) = 1"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+	if err := check11(t, own, `<root><marker>m</marker></root>`); err != nil {
+		t.Errorf("an assertion must see its own children: %v", err)
+	}
 }
 
 // TestConditionalTypeAssignment covers <xs:alternative>: the element's type is
@@ -1112,6 +1155,38 @@ func TestAssertionDoesNotSeeComments(t *testing.T) {
 	}
 	if err := check11(t, s, `<temp x="1"><?pi go?></temp>`); err != nil {
 		t.Errorf("a PI should not be visible to an assertion: %v", err)
+	}
+
+	// Both cases above are satisfied by an assertion that never runs -- with
+	// <xs:assert> switched off wholesale they still passed, so they pinned
+	// nothing on their own. Asserting the inverse is the control: it can only
+	// hold if the assertion was evaluated AND the comment really is absent
+	// from the tree it saw. A processor that exposed comments would pass this
+	// and fail the two above, which is the distinction being pinned.
+	inv := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="temp">
+	    <xs:complexType>
+	      <xs:sequence/>
+	      <xs:attribute name="x"/>
+	      <xs:assert test="exists(.//comment()) or exists(.//processing-instruction())"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+	for _, doc := range []string{
+		`<temp x="1"><!--hidden--></temp>`,
+		`<temp x="1"><?pi go?></temp>`,
+	} {
+		err := check11(t, inv, doc)
+		if err == nil {
+			t.Errorf("exists(comment()/PI) held for %s: either the assertion "+
+				"was not evaluated, or the node is visible to it", doc)
+			continue
+		}
+		if !strings.Contains(err.Error(), "cvc-assess-elt") &&
+			!strings.Contains(err.Error(), "assert") {
+			t.Errorf("failure for %s should be an assertion failure: %v", doc, err)
+		}
 	}
 }
 

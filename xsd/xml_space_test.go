@@ -10,44 +10,86 @@ import (
 // A bound facet's value is a lexical form of the type it constrains, and every
 // type carrying minInclusive/maxInclusive has whiteSpace="collapse" fixed.
 // Collapse trims XML S only, so a no-break space in a facet value is part of
-// the lexical form and makes it unparsable -- an unparsable bound constrains
-// nothing. strings.TrimSpace stripped the NBSP instead, so a bound the schema
-// wrote invalidly silently acted as a real bound.
+// the lexical form and makes it unparsable.
 //
-// The three bound paths are checked through the parse functions they call,
-// because the facet comparison treats an unparsable bound as "no opinion":
-// going through Validate, a stripped and an unstripped NBSP can produce the
-// same verdict for different reasons, which would not distinguish them.
+// This test is driven through Load rather than through trimXMLSpace. An
+// earlier version composed trimXMLSpace with the parse functions by hand and
+// asserted the result, which is a tautology about the helper rather than a
+// statement about the code under test: reverting all five call sites in
+// validate_simple.go back to strings.TrimSpace left every case green, and left
+// the whole xsd package green.
+//
+// What the subtests below pin is that an NBSP-bearing bound is REFUSED, and
+// refused by the lexical constraint rather than by some unrelated fault.
+//
+// NOTE on what this can and cannot pin. checkBounds's own trim is NOT what
+// decides these cases: checkFacetValueSpace validates every bound facet
+// against the base type's value space at schema load, and that check refuses
+// an NBSP bound on its own. Reverting checkBounds's trim therefore leaves
+// these cases green -- they pin the load-time constraint, not the trim. The
+// trim in checkBounds is defensive for a schema that already errored. The two
+// call sites where the trim IS the whole decision are the QName resolvers,
+// pinned by TestFacetQNameTrimUsesXMLWhitespaceOnly below, which does fail
+// when the fix is reverted.
 func TestBoundLexicalsUseXMLWhitespaceOnly(t *testing.T) {
 	const nbsp = "\u00a0"
+	if len(nbsp) != 2 {
+		t.Fatalf("the NBSP constant is %q, not U+00A0; a mangled literal "+
+			"makes every case below assert nothing", nbsp)
+	}
 
-	t.Run("numeric", func(t *testing.T) {
-		// The numeric bound path trims and then parses as a big.Rat.
-		if got := trimXMLSpace(" \t10\n"); got != "10" {
-			t.Errorf("XML S must be trimmed from a numeric bound: %q", got)
+	// A bound facet on a restriction of base, and an instance value that the
+	// bound (once the NBSP is gone) would refuse.
+	mk := func(base, bound string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="v" type="t"/>
+		  <xs:simpleType name="t">
+		    <xs:restriction base="` + base + `">
+		      <xs:minInclusive value="` + bound + `"/>
+		    </xs:restriction>
+		  </xs:simpleType>
+		</xs:schema>`
+	}
+	load := func(t *testing.T, src string) error {
+		t.Helper()
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parsing the schema as XML: %v", err)
 		}
-		if got := trimXMLSpace(nbsp + "10"); got != nbsp+"10" {
-			t.Errorf("an NBSP must survive in a numeric bound: %q", got)
-		}
-	})
+		_, lerr := Load(tree.Root, "s.xsd", Options{})
+		return lerr
+	}
 
-	t.Run("temporal", func(t *testing.T) {
-		if _, ok := parseTemporal(trimXMLSpace(" 2026-06-15\t"), "date"); !ok {
-			t.Error("XML S around a date bound must be trimmed")
-		}
-		if _, ok := parseTemporal(trimXMLSpace(nbsp+"2026-06-15"), "date"); ok {
-			t.Error("an NBSP must make a date bound unparsable")
-		}
-	})
-
-	t.Run("duration", func(t *testing.T) {
-		if _, ok := parseDuration(trimXMLSpace(" P10D\n")); !ok {
-			t.Error("XML S around a duration bound must be trimmed")
-		}
-		if _, ok := parseDuration(trimXMLSpace(nbsp + "P10D")); ok {
-			t.Error("an NBSP must make a duration bound unparsable")
-		}
-	})
+	for _, c := range []struct{ name, base, bound, xmlS string }{
+		{"numeric", "xs:decimal", "10", " \t10\n"},
+		{"temporal", "xs:date", "2026-06-15", " 2026-06-15\t"},
+		{"duration", "xs:duration", "P10D", " P10D\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			// XML S around the bound is the collapse trim and must be
+			// accepted: the bound is the same bound.
+			if err := load(t, mk(c.base, c.xmlS)); err != nil {
+				t.Errorf("XML S around a %s bound must be trimmed: %v",
+					c.name, err)
+			}
+			// A no-break space is not XML S. It is part of the lexical form,
+			// and no lexical form of the base type contains one, so the bound
+			// is not in the base type's value space.
+			err := load(t, mk(c.base, nbsp+c.bound))
+			if err == nil {
+				t.Fatalf("a %s bound of %q was accepted; a no-break space is "+
+					"not whitespace and makes the bound unparsable",
+					c.name, nbsp+c.bound)
+			}
+			if !strings.Contains(err.Error(), "minInclusive-valid-restriction") {
+				t.Errorf("a %s bound of %q was refused by %v; it used to be "+
+					"minInclusive-valid-restriction, the lexical check. If "+
+					"that guard has moved, checkBounds's own trim is now what "+
+					"decides this and must stay trimXMLSpace.",
+					c.name, nbsp+c.bound, err)
+			}
+		})
+	}
 }
 
 // expandFacetQName and resolveInstanceQName trim their value before splitting
@@ -59,14 +101,77 @@ func TestBoundLexicalsUseXMLWhitespaceOnly(t *testing.T) {
 // validate_attr.go accepts any rune >= 0x80 as a name character, so an NBSP
 // that survives the trim is still accepted as an NCName. That is a separate
 // defect in the NCName grammar and is deliberately not addressed here.
+// These are driven through Validate, not through trimXMLSpace. Asserting the
+// helper's own output is a tautology: it left both call sites free to call
+// strings.TrimSpace, which is exactly what they did before 4fd0df5, and the
+// test stayed green either way. These two subtests are the pair that does
+// fail when the fix is reverted -- with strings.TrimSpace the NBSP is stripped
+// and both NBSP cases below are silently ACCEPTED.
 func TestFacetQNameTrimUsesXMLWhitespaceOnly(t *testing.T) {
 	const nbsp = "\u00a0"
-	if got := trimXMLSpace(" \t a \n"); got != "a" {
-		t.Errorf("XML S must be trimmed: got %q", got)
+	if len(nbsp) != 2 {
+		t.Fatalf("the NBSP constant is %q, not U+00A0; a mangled literal "+
+			"makes every case below assert nothing", nbsp)
 	}
-	if got := trimXMLSpace(nbsp + "a" + nbsp); got != nbsp+"a"+nbsp {
-		t.Errorf("an NBSP must not be trimmed: got %q", got)
-	}
+
+	// resolveInstanceQName: the value of an xs:QName element. XML S around it
+	// is the collapse trim and resolves as normal; an NBSP is part of the
+	// prefix, and no such prefix is in scope.
+	t.Run("resolveInstanceQName", func(t *testing.T) {
+		schema := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="v" type="xs:QName"/>
+		</xs:schema>`
+		if err := validateString(t, schema, `<v xmlns:p="urn:x">p:local</v>`); err != nil {
+			t.Errorf("a plain QName must resolve: %v", err)
+		}
+		if err := validateString(t, schema, `<v xmlns:p="urn:x"> p:local </v>`); err != nil {
+			t.Errorf("XML S around a QName must be trimmed: %v", err)
+		}
+		err := validateString(t, schema, `<v xmlns:p="urn:x">`+nbsp+`p:local</v>`)
+		if err == nil {
+			t.Fatal(`"<NBSP>p:local" was accepted as an xs:QName; the NBSP ` +
+				`is part of the prefix, so no in-scope declaration binds it. ` +
+				`resolveInstanceQName's trim must be trimXMLSpace.`)
+		}
+		if !strings.Contains(err.Error(), "cvc-datatype-valid") {
+			t.Errorf(`"<NBSP>p:local" was refused by %v, not by the datatype `+
+				`check; a different fault is deciding this case`, err)
+		}
+	})
+
+	// expandFacetQName: an enumeration facet value on a QName type. With the
+	// NBSP trimmed the facet would expand to the same name as the instance
+	// and the document would validate, which is the silent acceptance.
+	t.Run("expandFacetQName", func(t *testing.T) {
+		mk := func(enum string) string {
+			return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+			         xmlns:p="urn:x">
+			  <xs:element name="v" type="t"/>
+			  <xs:simpleType name="t">
+			    <xs:restriction base="xs:QName">
+			      <xs:enumeration value="` + enum + `"/>
+			    </xs:restriction>
+			  </xs:simpleType>
+			</xs:schema>`
+		}
+		const doc = `<v xmlns:p="urn:x">p:local</v>`
+		if err := validateString(t, mk("p:local"), doc); err != nil {
+			t.Errorf("a plain QName enumeration must match: %v", err)
+		}
+		if err := validateString(t, mk(" p:local "), doc); err != nil {
+			t.Errorf("XML S around a QName enumeration must be trimmed: %v", err)
+		}
+		err := validateString(t, mk(nbsp+"p:local"), doc)
+		if err == nil {
+			t.Fatal(`an enumeration of "<NBSP>p:local" matched "p:local"; ` +
+				`the NBSP is part of the prefix and the two are different ` +
+				`names. expandFacetQName's trim must be trimXMLSpace.`)
+		}
+		if !strings.Contains(err.Error(), "enumeration") {
+			t.Errorf("the NBSP enumeration was refused by %v, not by the "+
+				"enumeration facet; a different fault is deciding this", err)
+		}
+	})
 }
 
 // splitFields is the XSD package's list tokenizer and already recognizes only
@@ -185,19 +290,43 @@ func TestSchemaDocumentRejectsNBSPLexicals(t *testing.T) {
 		}
 	})
 
+	// This subtest previously had no assertion at all: its whole body was a
+	// t.Log guarded by `if err == nil`, and the schema does NOT load, so the
+	// branch never ran and the subtest passed unconditionally. maxOccurs is
+	// xs:allNNI, whose whiteSpace is a fixed "collapse", so XML S around the
+	// value is trimmed and an NBSP is part of the lexical form -- which
+	// matches neither "unbounded" nor a non-negative integer.
 	t.Run("maxOccurs", func(t *testing.T) {
-		bad, err := parseSchemaString(t, `
-		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
-		  <xs:element name="r">
-		    <xs:complexType><xs:sequence>
-		      <xs:element name="c" type="xs:string" maxOccurs="`+nbsp+`unbounded"/>
-		    </xs:sequence></xs:complexType>
-		  </xs:element>
-		</xs:schema>`)
-		if err == nil && bad != nil {
-			t.Log("maxOccurs=\"<NBSP>unbounded\" parsed; occursValue now " +
-				"refuses the lexical form, so the particle does not become " +
-				"unbounded")
+		mk := func(v string) string {
+			return `
+			<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+			  <xs:element name="r">
+			    <xs:complexType><xs:sequence>
+			      <xs:element name="c" type="xs:string" maxOccurs="` + v + `"/>
+			    </xs:sequence></xs:complexType>
+			  </xs:element>
+			</xs:schema>`
+		}
+		// XML S around either spelling is trimmed by the collapse facet.
+		for _, ok := range []string{"unbounded", " unbounded ", "3", " 3\t"} {
+			if _, err := parseSchemaString(t, mk(ok)); err != nil {
+				t.Errorf("maxOccurs=%q must be accepted: %v", ok, err)
+			}
+		}
+		// A no-break space is not whitespace, in either spelling.
+		for _, bad := range []string{nbsp + "unbounded", nbsp + "3"} {
+			_, err := parseSchemaString(t, mk(bad))
+			if err == nil {
+				t.Errorf("maxOccurs=%q was accepted; a no-break space is not "+
+					"XML whitespace, so this is not a value of xs:allNNI", bad)
+				continue
+			}
+			if !strings.Contains(err.Error(), "p-props-correct.1") {
+				t.Errorf("maxOccurs=%q was refused by %v; it used to be "+
+					"p-props-correct.1, the lexical check. If that guard has "+
+					"moved, occursValue's own trim is now what decides this "+
+					"and must stay trimXMLSpace.", bad, err)
+			}
 		}
 	})
 }

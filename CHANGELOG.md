@@ -265,6 +265,11 @@ what the suites *measured*, not what the library does.
 | `fn:string` on a function item was asserted as `FOTY0013` and is `FOTY0014` | The loop asserted "an error", hiding that F&O gives `fn:string` its own code because it is not atomisation. The three rows are now per-code: `FOTY0014` for `fn:string`, `FOTY0013` for the arithmetic and `fn:data` paths. | |
 | The `branchHead` FLWOR-branch fix was pinned by no test | `TestConditionalBranchFLWOR` only called `Compile`, and its five cases are all bounded before the flag is read; pinning `branchHead` false in both scanners left it green. It asserts result values now and carries branch shapes that reach the flag. | |
 | `speccites.sh` passed green while 16 citations named the wrong subject | It checked only that a number names some section, and only in `xslt/stream*.go`. It now covers `xpath/` too (1058 sites) and fails when a citation under a `case "NAME":` names another instruction's §19.8.4 section. | [`ed625d2`][ed625d2] |
+| Two `xs:assert` tests passed with assertions switched off wholesale | Both asserted only that a valid instance validates, which holds when `checkAssertions` never runs. Each now carries a case that must *fail*, so a disabled assertion is caught. | |
+| The NBSP whitespace tests asserted `trimXMLSpace`'s own output | A tautology about the helper: reverting all five call sites to `strings.TrimSpace` left them, and the whole 954-test package, green. The two QName resolvers are now driven through `Validate`. | |
+| `xmlns` as a QName prefix was pinned by the wrong fault | The instance path answers "no in-scope namespace declaration", the undeclared-prefix fault the test's own comment distinguishes it from; deleting `isQNameLexical`'s `xmlns` clause left it green. Now pinned on a facet value and a schema default. | |
+| The RELAX NG resolver test passed on unrelated errors | It asserted only `err != nil`, and neither probe path existed, so "no such file" satisfied it with both guards deleted. Each refusal is now matched against the message that names it. | |
+| A `maxOccurs` subtest had no assertion at all | Its whole body was a `t.Log` guarded by `if err == nil`, and the schema does not load, so the branch never ran. It now asserts `p-props-correct.1`. | |
 
 ### Documentation
 

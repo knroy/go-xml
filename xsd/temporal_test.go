@@ -1,6 +1,11 @@
 package xsd
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/knroy/go-xml/xdm"
+)
 
 func TestTemporalOrdering(t *testing.T) {
 	cases := []struct {
@@ -189,7 +194,72 @@ func TestXmlnsIsNotAQNamePrefix(t *testing.T) {
 	  <xs:element name="v" type="xs:QName"/>
 	</xs:schema>`
 
-	assertInvalid(t, schema, `<v xmlns:xsi="urn:x">xmlns:xsi</v>`, "cvc-datatype-valid")
+	// The instance path does NOT pin this rule. "xmlns:xsi" as an element's
+	// value is refused with "uses a prefix with no in-scope namespace
+	// declaration" -- the undeclared-prefix fault, the same one an ordinary
+	// "undeclared:x" gets, and the very fault this comment distinguishes the
+	// xmlns rule from. Deleting the `v[:i] != "xmlns"` clause from
+	// isQNameLexical leaves that case green, so it evidences nothing about
+	// the lexical rule.
+	//
+	// The rule is decidable from the literal alone, so it is pinned where the
+	// value is checked lexically and no prefix resolution can mask it: a
+	// facet value and a schema default, both validated at schema load. With
+	// the clause removed both are silently ACCEPTED.
+	load := func(t *testing.T, src string) error {
+		t.Helper()
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parsing the schema as XML: %v", err)
+		}
+		_, lerr := Load(tree.Root, "s.xsd", Options{})
+		return lerr
+	}
+
+	// An enumeration facet on a QName type: checkFacetValueSpace validates the
+	// literal against xs:QName's lexical space.
+	t.Run("enumeration", func(t *testing.T) {
+		err := load(t, `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="urn:x">
+		  <xs:simpleType name="t">
+		    <xs:restriction base="xs:QName">
+		      <xs:enumeration value="xmlns:xsi"/>
+		    </xs:restriction>
+		  </xs:simpleType>
+		</xs:schema>`)
+		if err == nil {
+			t.Fatal(`an enumeration value of "xmlns:xsi" was accepted; ` +
+				`"xmlns" cannot be bound as a prefix, so this is not a QName`)
+		}
+		if !strings.Contains(err.Error(), "is not a valid xs:QName") {
+			t.Errorf(`"xmlns:xsi" was refused by %v; the lexical check `+
+				`reports "is not a valid xs:QName". A different fault `+
+				`deciding this means isQNameLexical's xmlns clause is no `+
+				`longer what refuses it.`, err)
+		}
+	})
+
+	// A default value on a QName-typed element: e-props-correct.2 validates it
+	// against the declared type, again with no instance in sight.
+	t.Run("default", func(t *testing.T) {
+		err := load(t, `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="urn:x">
+		  <xs:element name="v" type="xs:QName" default="xmlns:xsi"/>
+		</xs:schema>`)
+		if err == nil {
+			t.Fatal(`default="xmlns:xsi" was accepted; "xmlns" cannot be ` +
+				`bound as a prefix, so this is not a QName`)
+		}
+		if !strings.Contains(err.Error(), "is not a valid xs:QName") {
+			t.Errorf(`default="xmlns:xsi" was refused by %v; the lexical `+
+				`check reports "is not a valid xs:QName"`, err)
+		}
+	})
+
+	// A prefix that merely happens to be undeclared is a different fault, and
+	// the two must not be conflated: this one is refused only because nothing
+	// binds it here, and binding it would make the value valid.
+	assertInvalid(t, schema, `<v>undeclared:x</v>`, "cvc-datatype-valid")
 	// A declared prefix still resolves, so the check has not swallowed the
 	// ordinary case.
 	assertValid(t, schema, `<v xmlns:p="urn:x">p:local</v>`)

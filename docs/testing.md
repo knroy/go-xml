@@ -980,6 +980,39 @@ looked like edits. A mutation must be shown to change *behaviour* — the live
 version keys on the raw spelling while still decoding, so the import stays used
 and `0f` and `0F` genuinely split.
 
+**Assert the helper's callers, not the helper.** A test that calls the fixed
+function directly — `trimXMLSpace(nbsp+"a")` and friends — states a tautology
+about that function and says nothing about whether the code under test calls
+it. Five call sites in `validate_simple.go` were reverted to
+`strings.TrimSpace` and all three no-break-space tests stayed green, as did the
+other 954 in the package. The rewritten tests drive `Load` and `Validate` and
+fail on the same revert. The same shape appeared in four other places: two
+`xs:assert` tests that only checked that a *valid* instance validates (true
+whenever assertions never run), a resolver test asserting `err != nil` against
+paths that did not exist (so "no such file" satisfied it with both guards
+deleted), and a `maxOccurs` subtest whose whole body was a `t.Log` behind an
+`if err == nil` that could not be reached. **A refusal test must assert the
+specific refusal** — the error code or a distinctive phrase — because a
+confinement check and a failed `open` both merely return non-nil.
+
+**Check which guard actually decides the case.** Two findings here were real
+but mis-attributed, and the replacement has to pin the guard it names. The
+`xmlns` QName rule is refused on the instance path by the *undeclared-prefix*
+check, the very fault the test's comment distinguished it from; deleting
+`isQNameLexical`'s `xmlns` clause left the test green, so the rule is now
+pinned where nothing masks it — an enumeration facet value and a schema
+`default`, both checked lexically at load. In the other direction,
+`checkBounds`'s own trim is *not* what refuses a no-break-space bound:
+`checkFacetValueSpace` validates every bound facet at load and refuses it
+first, so that trim is defensive and those cases cannot pin it. Both facts are
+recorded in the tests rather than left for the next reader to rediscover.
+
+**Write U+00A0 as the escape `\u00a0`, never as a raw byte.** A literal no-break space is
+invisible in source and is silently degraded to an ordinary space by ordinary
+tooling — which happened twice while writing these tests and makes every case
+in the file assert nothing while passing. Each such test opens with a
+`len(nbsp) != 2` guard that fails loudly if the constant is ever mangled.
+
 **Say what the case is, and why the answer is what it is.** The tests here
 name the W3C case that motivated them and quote the rule being applied, because
 a bare assertion is unmaintainable: the next person cannot tell a deliberate
