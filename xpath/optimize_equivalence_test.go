@@ -617,10 +617,10 @@ func TestFocusDependentZeroArityDoesNotFold(t *testing.T) {
 			}
 			// isClosed must agree: it is the other caller, and a focus-dependent
 			// call appearing as a *sub*-expression must keep its parent unfoldable.
-			if isClosed(e) {
+			if isClosed(e, newExprFacts()) {
 				t.Errorf("isClosed(%s) = true", src)
 			}
-			if _, folded := foldConstant(e); folded {
+			if _, folded := foldConstant(e, newExprFacts()); folded {
 				t.Fatalf("%s FOLDED to a constant. A focus-dependent call was "+
 					"frozen at compile time; every stylesheet using it now sees "+
 					"the empty-focus answer.", src)
@@ -652,7 +652,7 @@ func TestFocusDependentZeroArityDoesNotFold(t *testing.T) {
 				t.Fatalf("foldableFunction(%s, %d) = false; the arity check "+
 					"has disabled the one-argument form too", call.Name.Local, len(call.Args))
 			}
-			if _, folded := foldConstant(e); !folded {
+			if _, folded := foldConstant(e, newExprFacts()); !folded {
 				t.Errorf("%s no longer folds", src)
 			}
 		})
@@ -677,7 +677,7 @@ func TestFocusDependentZeroArityDoesNotFold(t *testing.T) {
 				t.Errorf("%s is focus-dependent but foldableFunction admits it; "+
 					"it is then folded only if it happens to raise on an empty focus", src)
 			}
-			if _, folded := foldConstant(e); folded {
+			if _, folded := foldConstant(e, newExprFacts()); folded {
 				t.Fatalf("%s FOLDED to a constant", src)
 			}
 		})
