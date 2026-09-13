@@ -23,7 +23,7 @@ let something through, and the column that matters is the last one.
 <!-- BEGIN GENERATED LAYER COUNTS -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** | 2,292 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,287 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -238,30 +238,6 @@ manufactures a duplicate, took the same sabotage from 0 to 841 disagreements.
 The lesson generalises past this test: when a sabotage check comes back clean,
 the first suspect is the corpus, not the implementation.
 
-**"It failed" is not "it failed for the reason claimed."** An `err != nil`
-assertion under a comment naming a W3C error code pins the comment, not the
-code. `xpath/fn_misc_test.go`'s casting table was the sharpest case: deleting
-`castPermitted`'s body entirely left it green, because a `xs:base64Binary`
-value whose source-type gate is gone is still rejected downstream when its
-lexical form fails to parse as a float — under `FORG0001`, which is precisely
-the code the table exists to distinguish from `XPTY0004`. Eight further tests
-in `xpath/` named a code in prose and asserted only that something went wrong;
-each now compares `xdm.ErrorCode(err)`, and swapping the code at the single
-production site now fails the test that owns it. The same audit found one real
-divergence hiding behind the loose form: `string(concat#3)` is `FOTY0014`, not
-the `FOTY0013` its comment claimed, because F&O gives `fn:string` its own code
-rather than the atomisation one.
-
-The parallel failure is a test that asserts only that something *parsed*.
-`xquery/thenbranch_test.go` called `Compile` and checked for no error, so
-pinning `branchHead` false in both ExprSingle scanners — reverting the fix it
-exists to cover — left it green: a branch boundary placed one clause too early
-often yields a different expression that is still well-formed. It asserts
-result values now. Its five original cases were also all bounded before the
-flag is consulted, since a single binding clause is folded onto the branch
-FLWOR; it takes a *second* clause in the branch for the flag to decide
-anything, which is why the reaching cases had to be added as well.
-
 **Counters say what a stopwatch cannot.** The identity-constraint evaluator's
 problem is not that any one traversal is slow; it is that the same nodes are
 walked once per enclosing scope, and elapsed time cannot distinguish that from
@@ -366,12 +342,23 @@ document. See [options.md](options.md) for the field-by-field rule.
 ## The suites
 
 Third-party and not vendored. Point the variables at your own checkouts, or
-let `tests/check.sh` find them under `testdata/`. The defaults in the table
-below are **check.sh's**, not the tests' own: the suite tests skip unless their
-variable is set, and a relative path resolves against the package directory
-rather than the repository root, so `GOXSLT_QT3=testdata/qt3tests go test
-./tests/qt3/` skips and prints PASS. Run `tests/check.sh`, which passes
-absolute paths and fails a suite that reports no summary.
+let `tests/check.sh` find them under `testdata/`.
+
+Two lanes find a checkout on their own. `tests/qt3` and `tests/xslts` fall back
+to `../../testdata/<suite>` when their variable is unset, so a bare
+`go test ./...` in a tree with the checkouts in place really runs them — QT3
+takes about 80s rather than the 0.3s it used to report. That 0.3s was the
+problem the fallback fixes: an `ok` for a lane that had run none of its 30,345
+cases is indistinguishable from an `ok` for a lane that ran all of them.
+`GOXSLT_NO_SUITES=1` turns both off regardless of what is on disk, which is
+what CI's fast gate and `check.sh`'s unit and race steps set.
+
+Every other lane still skips unless its variable is set, and for those the
+defaults in the table below are **check.sh's**, not the tests' own. A relative
+path resolves against the package directory rather than the repository root,
+so `GOXSLT_XSDTS=testdata/xsdtests go test ./tests/xsd/` skips and prints PASS.
+Run `tests/check.sh`, which passes absolute paths and fails a suite that
+reports no summary.
 
 | suite | variable | default | what it measures |
 |---|---|---|---|
@@ -722,7 +709,8 @@ GOXSLT_XSLTS=$PWD/testdata/xslt30-test \
   GOXSLT_XSLTS_ONLYSET=merge GOXSLT_XSLTS_VERBOSE=1 \
   go test ./tests/xslts/ -run TestXSLT30Suite -count=1 -v
 
-# QT3 equivalents. Without GOXSLT_QT3 these skip and print ok in 0.4s.
+# QT3 equivalents. Without GOXSLT_QT3 these fall back to testdata/qt3tests and
+# run the whole suite; GOXSLT_NO_SUITES=1 is what skips them.
 GOXSLT_QT3=$PWD/testdata/qt3tests GOXSLT_QT3_VERBOSE=1 \
   go test ./tests/qt3/ -count=1 -v
 GOXSLT_QT3=$PWD/testdata/qt3tests GOXSLT_QT3_SET=fn-matches \
@@ -979,39 +967,6 @@ and deleting the branch outright orphaned an import and failed to build. Both
 looked like edits. A mutation must be shown to change *behaviour* — the live
 version keys on the raw spelling while still decoding, so the import stays used
 and `0f` and `0F` genuinely split.
-
-**Assert the helper's callers, not the helper.** A test that calls the fixed
-function directly — `trimXMLSpace(nbsp+"a")` and friends — states a tautology
-about that function and says nothing about whether the code under test calls
-it. Five call sites in `validate_simple.go` were reverted to
-`strings.TrimSpace` and all three no-break-space tests stayed green, as did the
-other 954 in the package. The rewritten tests drive `Load` and `Validate` and
-fail on the same revert. The same shape appeared in four other places: two
-`xs:assert` tests that only checked that a *valid* instance validates (true
-whenever assertions never run), a resolver test asserting `err != nil` against
-paths that did not exist (so "no such file" satisfied it with both guards
-deleted), and a `maxOccurs` subtest whose whole body was a `t.Log` behind an
-`if err == nil` that could not be reached. **A refusal test must assert the
-specific refusal** — the error code or a distinctive phrase — because a
-confinement check and a failed `open` both merely return non-nil.
-
-**Check which guard actually decides the case.** Two findings here were real
-but mis-attributed, and the replacement has to pin the guard it names. The
-`xmlns` QName rule is refused on the instance path by the *undeclared-prefix*
-check, the very fault the test's comment distinguished it from; deleting
-`isQNameLexical`'s `xmlns` clause left the test green, so the rule is now
-pinned where nothing masks it — an enumeration facet value and a schema
-`default`, both checked lexically at load. In the other direction,
-`checkBounds`'s own trim is *not* what refuses a no-break-space bound:
-`checkFacetValueSpace` validates every bound facet at load and refuses it
-first, so that trim is defensive and those cases cannot pin it. Both facts are
-recorded in the tests rather than left for the next reader to rediscover.
-
-**Write U+00A0 as the escape `\u00a0`, never as a raw byte.** A literal no-break space is
-invisible in source and is silently degraded to an ordinary space by ordinary
-tooling — which happened twice while writing these tests and makes every case
-in the file assert nothing while passing. Each such test opens with a
-`len(nbsp) != 2` guard that fails loudly if the constant is ever mangled.
 
 **Say what the case is, and why the answer is what it is.** The tests here
 name the W3C case that motivated them and quote the rule being applied, because

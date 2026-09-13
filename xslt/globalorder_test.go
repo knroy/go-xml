@@ -19,14 +19,20 @@ func TestGlobalOrderingSeesIndirectDependencies(t *testing.T) {
 		// select attribute. globalRefs scanned only Select, so this global
 		// declared no dependency at all and was bound in declaration order --
 		// which xsl:import puts before the module declaring what it needs.
+		//
+		// $v:flag is declared AFTER the global that needs it, so declaration
+		// order and dependency order disagree. Declared first, the fixture
+		// passed whether or not the sequence constructor was scanned at all:
+		// declaration order alone bound $v:flag in time, and returning no
+		// dependencies from globalRefs changed nothing.
 		name: "sequence constructor",
-		sheet: `<xsl:variable name="v:flag" as="xs:boolean" select="true()"/>
-			<xsl:variable name="out" as="xs:string">
+		sheet: `<xsl:variable name="out" as="xs:string">
 			  <xsl:choose>
 			    <xsl:when test="$v:flag"><xsl:sequence select="'yes'"/></xsl:when>
 			    <xsl:otherwise><xsl:sequence select="'no'"/></xsl:otherwise>
 			  </xsl:choose>
-			</xsl:variable>`,
+			</xsl:variable>
+			<xsl:variable name="v:flag" as="xs:boolean" select="true()"/>`,
 		want: "yes",
 	}, {
 		// The dependency is named by the body of a function the global calls,

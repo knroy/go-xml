@@ -302,10 +302,24 @@ func ParseAssert(raw []byte) (Assertion, error) {
 }
 
 // SuiteRoot returns the checkout directory, or "" when the suite is absent.
+//
+// The ./testdata fallback matches the one the XSLT lane has in
+// tests/xslts/xslt30_test.go, and exists for the same reason: without it a
+// bare `go test ./...` reported ok for this package in a fraction of a second
+// having run none of the suite's cases, which looks exactly like 30,345
+// passing. GOXSLT_QT3 still wins when set, which is what tests/check.sh does,
+// so the gate is unaffected either way.
+//
+// GOXSLT_NO_SUITES turns the fallback off regardless of what is on disk, again
+// as the XSLT lane does: a CI stage with a cached checkout would otherwise run
+// the whole suite in the unit-test job as well as in the conformance job.
 func SuiteRoot() string {
+	if os.Getenv("GOXSLT_NO_SUITES") != "" {
+		return ""
+	}
 	root := os.Getenv("GOXSLT_QT3")
 	if root == "" {
-		return ""
+		root = "../../testdata/qt3tests"
 	}
 	if _, err := os.Stat(filepath.Join(root, "catalog.xml")); err != nil {
 		return ""
