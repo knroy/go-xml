@@ -20,6 +20,12 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| `fn:serialize` with `method="html"` wrote XML syntax for empty elements | `<div/>` made an HTML parser read an unclosed tag and swallow the rest of the document. The void-element table is now read, which needed `html-version` honoured. | `e3cb35a` |
+| The `json` output method escaped only `#x1`–`#x1F` | Serialization 3.1 §9 also requires 127–159, so DEL and the C1 controls went out raw; `fn:xml-to-json` already had the range right. | `e3cb35a` |
+| The 49 `xs:` constructors carried no signature | Arity-only matching made every one-argument function test answer true. Signatures are now derived from F&O 18.1. | `e3cb35a` |
+| `fn:concat` was capped at arity 2²⁰ | F&O 3.1 states no maximum, but the synthesizer materialised an `arity+1` slice, so the cap was load-bearing. A compact descriptor made it constant. | `5cb5358` |
+| `fn:function-available` disagreed with `fn:function-lookup` above arity 100 | `LookupDynamic` returned early for a library answering for itself, before reaching the variadic synthesis. Both routes now share it. | `5cb5358` |
+| `let` expressions and inline function declarations had no streamability rule | §19.8.8's table gives `let` `N`/`T`; §19.8.8.16 makes an inline function roaming when it textually mentions a containing function's streaming parameter. | `7f70d40` |
 | Six more instance-level lexical paths read XSD values through Go Unicode whitespace | A facet's `xs:nonNegativeInteger`, `xsi:nil`'s `xs:boolean`, `xsi:schemaLocation`'s list tokenization, XQuery's lax `xsi:type` QName, and the two empty-content checks each reached `strings.TrimSpace` or `strings.Fields`. The sharpest is the content one: an element declared with empty content that held only a no-break space validated as EMPTY, where U+00A0 is character content and `cvc-complex-type.2.1` must report it. | |
 | XQuery computed node names and PI targets trimmed a no-break space as whitespace | §3.9.3.1 converts a computed name through `xs:QName` (a failed conversion is `XQDY0074`) and §3.9.3.5 a PI target through `xs:NCName` (`XQDY0041`); both are `whiteSpace="collapse"`, so U+00A0 is a name character. `strings.TrimSpace` stripped it, and `element {"<NBSP>e"}` silently constructed `<e/>` — an element whose name is not the one the query asked for. Both sites now trim through `xdm.TrimXMLSpace`. | |
 | Nine XSD schema-parsing paths read lexical values through Go Unicode whitespace | `minOccurs`/`maxOccurs`, `nillable` and the other boolean attributes, `block`/`final`, `vc:minVersion`, `vc:typeAvailable`, the QName resolver and `xsi:type` all reached `strings.TrimSpace` or `strings.Fields`, so a no-break space was stripped or treated as a token separator and a schema the grammar rejects was accepted — `maxOccurs="<NBSP>unbounded"` became unbounded, and `block="extension<NBSP>restriction"` set two flags where XML S gives one token. The package's own `trimXMLSpace`/`splitFields` existed already; these nine sites simply did not call them. | |
@@ -231,6 +237,8 @@ what the suites *measured*, not what the library does.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| The W3C suites were cloned unpinned, so a figure could move with no change here | `results.json` records each suite revision, CI clones at that SHA, and a test fails when the two disagree. | `7f70d40` |
+| `-race` never declared that it needs cgo | CI passed only because its runners have gcc; an auditor without one read a toolchain error as a test failure. The lane now skips with a reason. | `7f70d40` |
 | The gate recorded no provenance, so no figure could be tied to the tree that produced it | `check.sh` heads its transcript with Go version, commit, architecture and per-suite revision, and writes `tests/last-run.txt`. | [`03b5942`][03b5942] |
 | CI ran on Linux only, so nothing proved the file handling rule 3 asks for | The fast job runs `ubuntu`/`windows`/`macos`; `conformance` stays Linux, where the corpora are. | [`03b5942`][03b5942] |
 | Nine fuzz targets compiled and replayed seeds but never searched | A nightly matrix gives each 300s, off the per-push gate because the search is nondeterministic. | [`f2aeee8`][f2aeee8] |
