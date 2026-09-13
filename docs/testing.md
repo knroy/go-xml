@@ -521,12 +521,12 @@ runner that happens to satisfy it.
 
 `tests/speccites.sh`, run by `check.sh` beside the figures check, holds the
 other kind of claim the documents make: a **section number**. The streamability
-files cite the spec on nearly every rule — 960 `§N.N` references across
-`xslt/stream*.go` — and they were written against the **Last Call Working
-Draft**, which the Recommendation renumbered. That produced citations pointing
-at real sections about the wrong subject: `§19.8.8.11` ("Dynamic Function
-Calls") on code implementing variable references, `§18.2.8` ("Importing of
-Accumulators") on their streamability.
+files cite the spec on nearly every rule — 1058 `§N.N` references across
+`xslt/stream*.go` and `xpath/*.go` — and they were written against the **Last
+Call Working Draft**, which the Recommendation renumbered. That produced
+citations pointing at real sections about the wrong subject: `§19.8.8.11`
+("Dynamic Function Calls") on code implementing variable references, `§18.2.8`
+("Importing of Accumulators") on their streamability.
 
 A wrong section number is worse than a dangling one. It reads as authority, and
 following it lands on plausible text, so nothing looks amiss. One of them —
@@ -534,13 +534,32 @@ the variable-reference citation — had **already been diagnosed** in a comment
 in `streamfunctions_test.go` and corrected at exactly one of its 25 sites; the
 other 24 stood for as long as the file did.
 
-The script parses the `<hN>` headings out of
-`testdata/xslt30-test/specs/xslt-30.html` and fails on any citation naming no
-section at all, listing file, line and the source line. It refuses to run if
-fewer than 200 headings parse, so a change to the spec's markup cannot make it
-pass vacuously. The other half — a real number about the wrong subject — still
-needs a reader, which is why every site corrected in that pass records the
-number it used to carry.
+The script parses the `<hN>` headings out of the vendored specs under
+`testdata/xslt30-test/specs/` — XSLT 3.0, F&O 3.1, XPath 3.1 and
+Serialization 3.1 — and runs two checks. It refuses to run if fewer than 200
+XSLT headings or 30 `Streamability of xsl:*` headings parse, so a change to the
+spec's markup cannot make either pass vacuously.
+
+1. **Dangling** — complete, over every cited file. A number naming no section
+   of any vendored spec, listed with file, line and source line.
+2. **Wrong subject** — partial, `xslt/stream*.go` only. The 19.8.4 headings are
+   `Streamability of xsl:NAME`, one-to-one with the `case "NAME":` labels the
+   code switches on, so a citation under such a case must name that
+   instruction's section. 30 sites qualify. This is what catches the
+   LCWD-to-REC renumbering, which shifted every entry after `xsl:text` by two.
+
+Being exact about the second check's reach matters, because the first one
+passed green on 978 sites while sixteen of them named the wrong subject. It
+does **not** check: citations outside a `case` block (helper functions, file
+headers, the 19.8.8 expression table — roughly half of `xslt/stream*.go`); any
+citation in `xpath/`, which is prose about functions rather than a switch over
+instruction names; or any spec but XSLT 3.0. Those get the dangling check only,
+and a wrong subject among them still needs a reader — which is why every
+corrected site records the number it used to carry.
+
+The 491 citations in `xsd/` and `xdm/` are not checked at all: the XML 1.0 and
+XSD prose specifications are not vendored here, so there is nothing local to
+check them against. Vendoring those would close the gap.
 
 It anchors on denominators rather than line numbers so that editing prose does
 not break it, and it has no update mode for the same reason `docfigure` has

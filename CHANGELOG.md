@@ -255,6 +255,8 @@ what the suites *measured*, not what the library does.
 | Ratchet read a shrinking corpus as a regression | A count taken over fewer roots is not comparable; it is now skipped, not passed, when a root is absent. | [`3b6e685`][3b6e685] |
 | Cases never scored went uncounted | A case that is never scored must still appear in the denominator. | [`c3a52be`][c3a52be] |
 | The XSLT judge matched an expected error code anywhere in the rendered message | A code quoted in the input, or a substring of a longer one, passed a case that failed for another reason. The leading code decides now, with the substring kept for the 351 errors that carry theirs in a trailing parenthetical. In-scope unchanged at 11,490. | [`8b7161f`][8b7161f] |
+| The regex budget tests never reached the budget | The backtracking engine is off by default, so the probe pattern died at compile time with the same `FORX0002` the tests asserted on; deleting the guard left them green. They now enable the engine and assert `xdm.ErrResourceLimit`, which only the budget wraps. | |
+| `speccites.sh` passed green while 16 citations named the wrong subject | It checked only that a number names some section, and only in `xslt/stream*.go`. It now covers `xpath/` too (1058 sites) and fails when a citation under a `case "NAME":` names another instruction's §19.8.4 section. | |
 
 ### Documentation
 
@@ -262,6 +264,7 @@ what the suites *measured*, not what the library does.
 |---|---|---|
 | The README called `xsl:stream` and `xsl:fork` absent | Both execute end-to-end by building the tree, as §19.1 permits a non-streaming processor to do. The README now says what is absent is streamed execution, not the vocabulary — matching `docs/conformance-gaps.md`. | [`a09c936`][a09c936] |
 | The `evaluate-045` divergence was justified by a false spec argument | The comment claimed a plain `xsl:stylesheet` has no package boundary; §3.5 makes it an implicit package whose functions default to private. Reframed as a known divergence kept for cost (577 of 593 DocBook documents against 67), with the corpus size corrected from 613 to 593. | [`c6532ba`][c6532ba] |
+| Twelve spec citations named a real section about the wrong subject | The REC renumbered §19.8.4 after the Last Call draft, shifting every instruction after `xsl:text` by two, and four F&O numbers were transcription errors wrong in every version. Each new number was checked against the vendored spec's own heading. | |
 
 ### Investigated — not defects
 

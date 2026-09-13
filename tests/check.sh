@@ -637,15 +637,18 @@ laneFromStatus "documented figures" "$_docfig_before" "tests/docfigures.sh and t
 
 # The streamability files cite the spec by section number on nearly every rule,
 # and they were written against the Last Call draft, which the Recommendation
-# renumbered. A citation that names no section at all is caught here; one that
-# names the WRONG section still needs a reader, which is why each corrected
-# site records the number it used to carry.
+# renumbered. A citation that names no section at all is caught here across
+# xslt/stream*.go and xpath/*.go; a citation under a `case "NAME":` that names
+# the wrong 19.8.4 streamability section is caught too. Everything else -- a
+# wrong subject outside a case block, or in any spec but XSLT 3.0 -- still
+# needs a reader. speccites.sh documents the reach of each check.
 if sh "$ROOT/tests/speccites.sh"; then
 	:
 else
-	fail "a spec citation in xslt/stream*.go names no section of XSLT 3.0 (listed above).
-    Find the real section in testdata/xslt30-test/specs/xslt-30.html and note
-    the old number in the comment, so the next reader sees the correction."
+	fail "a spec citation in xslt/stream*.go or xpath/*.go names no section of any
+    vendored spec, or names a streamability section for the wrong instruction
+    (listed above). Find the real section under testdata/xslt30-test/specs/ and
+    note the old number in the comment, so the next reader sees the correction."
 fi
 
 # The summary table at the top of docs/conformance-gaps.md is GENERATED, and
