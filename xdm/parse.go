@@ -105,6 +105,24 @@ type ParseOptions struct {
 	// It is unexported for the same reason as entitiesExpanded: it describes
 	// the source this parse was handed, not a choice a caller makes.
 	entityBases []entityBaseSpan
+
+	// entityBudget is the expansion spend this parse shares with the document
+	// it is part of. Nil means this parse is a document in its own right and
+	// starts with the full maxTotalEntityBytes.
+	//
+	// It exists because a parse is not always a document. ProcessXInclude
+	// parses each included resource with ParseString, and every one of those
+	// parses used to mint its own budget — so the ceiling that bounds one
+	// document bounded each of two hundred of them separately, and 95 KB of
+	// source expanded to 149 MB. Passing the outer budget down makes the
+	// bound say what it is documented to say. The include fetch counter is
+	// shared across the same boundary already, by living on the one
+	// includeProc; this is the same sharing for the counter that has no such
+	// object to live on.
+	//
+	// It is unexported for the same reason as the two fields above: it
+	// describes this parse's place in a larger document, not a knob.
+	entityBudget *entityBudget
 }
 
 // Limits applied when the corresponding ParseOptions field is zero.
@@ -470,7 +488,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				// when a resolver was supplied. With none, this whole block
 				// is skipped and the subset is read exactly as before.
 				if opts.ExternalEntities != nil && !opts.entitiesExpanded {
-					ents = newEntityTable(opts.BaseURI)
+					ents = newEntityTable(opts.BaseURI, opts.entityBudget)
 					// The DOCTYPE follows the XML declaration, so by now the
 					// decoder has read the version and §4.3.4 can be enforced
 					// against it. See entityTable.checkEntityVersion.
@@ -523,7 +541,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 						elementOnly = parseElementOnlyDecls(text)
 					}
 				} else {
-					ents = parseEntityDecls(d, opts.BaseURI)
+					ents = parseEntityDecls(d, opts.BaseURI, opts.entityBudget)
 				}
 				if ents != nil && !opts.entitiesExpanded {
 					ents.version11 = dec.IsVersion11()

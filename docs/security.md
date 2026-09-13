@@ -58,9 +58,10 @@ Three defects found on 2026-09-10 while verifying an external report — none of
 them a claim *in* that report — were fixed the same day and are listed under
 *History*. All three were one shape: a budget minted fresh where it should have
 been inherited, at `fn:transform`'s nesting boundary, at a function item's
-invoke sites, and at every XSD assertion. That seam has now produced six
-findings, so it is the first place to look when a limit is reported as not
-binding.
+invoke sites, and at every XSD assertion. A seventh followed on 2026-09-13 at
+XInclude's boundary, where the entity-expansion byte budget restarted for every
+included document (above). That seam has now produced seven findings, so it is
+the first place to look when a limit is reported as not binding.
 
 The eighth audit's six other findings are closed and are listed under
 *History*. Two of them ended the process rather than the request — a Go stack
@@ -511,13 +512,89 @@ every network scheme against a canary HTTP server that records **zero** hits,
 an end-to-end hostile document whose `xi:include` names an `http://` URL, and
 that an `xi:fallback` cannot be used to launder a refusal into a read.
 
-Two **resource budgets** hold the cost of one pass: at most 200 resources read
-in total, and at most 40 levels of nesting. Both report `resource limit
-exceeded`, and neither substitutes for the other — a fan-out of a thousand
-distinct small files repeats nothing and would otherwise cost a thousand
-parses, while a chain recurses in Go.
+Three **resource budgets** hold the cost of one pass: at most 200 resources
+read in total, at most 40 levels of nesting, and the document's
+`maxTotalEntityBytes` entity-expansion allowance, which spans every included
+document rather than restarting for each. All three report `resource limit
+exceeded`, and none substitutes for another — a fan-out of a thousand distinct
+small files repeats nothing and would otherwise cost a thousand parses, while a
+chain recurses in Go, and neither counts a byte of what the files expand to.
 
-Neither is loop detection, and neither is allowed to stand in for it. A loop is
+The third was the seventh instance of the recurring seam. `ProcessXInclude`
+parses each included resource with `ParseString`, `ParseString` built a fresh
+`entityTable`, and a fresh table restarted the byte count at zero — so the 1 MB
+ceiling documented as bounding "one document" bounded each of two hundred of
+them separately. The include *fetch* counter was already shared, because it
+lives on the one `includeProc`; only the byte budget reset, which is what made
+the gap easy to miss. **Measured: 95,444 bytes of source across 200 documents
+expanded to 156,499,968 bytes and allocated 577 MB — 1640x amplification,
+overrunning the ceiling by 149x — with `MaxBytes: 8192` and `MaxNodes: 50`
+explicitly set.** Neither knob can see it: `MaxBytes` bounds each parse's
+source text and a reference is three bytes, while `MaxNodes` counts nodes and
+an expansion is one text node however long it is. The same 200 documents are
+now refused with `xdm.ErrResourceLimit` after allocating 3.1 MB.
+
+The fix threads the spend rather than the ceiling. `entityBudget` is a single
+counter shared by every parse belonging to one top-level document, carried on
+`includeProc` beside `fetches` for exactly the reason `fetches` is carried
+there, and passed into each included parse through an unexported
+`ParseOptions.entityBudget`. The per-reference accounting in
+`entityChargeReader` charges that shared counter directly — it, not the
+once-per-distinct-entity charge in `resolve`, is what measures what a document
+actually expands, so it is the one that had to span the boundary. The external
+DTD subset's table was minting a fresh budget on the same pattern and now
+shares the including document's.
+
+A budget refusal is also **fatal** across the include boundary now, on the
+terms the fetch and nesting bounds were already fatal on: it is this processor
+declining to spend more, not a condition of the resource, so `xi:fallback` must
+not recover from it. Left recoverable it was measured laundering the refusal —
+eight bombs behind sibling fallbacks expanded 6,291,456 bytes and the document
+was *accepted*, six times the ceiling. Both properties are pinned by
+`TestXIncludeSharesTheEntityBudget` and
+`TestXIncludeBudgetRefusalIsNotRecoverable`, and
+`TestXIncludeLegitimateMultiDocumentStillWorks` pins that an ordinary
+multi-document inclusion using entities is untouched.
+
+**The same reset survives elsewhere, and XInclude is not the worst of it.** A
+sweep of every `xdm.Parse`/`ParseString` call site reachable from inside an
+already-running operation found the seam open in three more places, ranked by
+what actually drives them:
+
+* `fn:parse-xml` — `xpath/fn_misc.go:2885` — passes `AllowDOCTYPE: true`
+  unconditionally and forwards `ctx.Entities`, is registered into the real
+  builtin library (`xpath/builtins.go:35`), and is an ordinary function, so a
+  hostile stylesheet or query calls it **per node** with no fetch counter, no
+  memo and no cache. Each call mints a fresh budget. **Measured: a 453-byte
+  XPath expression — one `parse-xml` of an inlined entity bomb, called 60
+  times in a `for` — expanded 47,185,920 bytes and allocated 222 MB, and was
+  accepted.** This is strictly worse than the XInclude case, which at least
+  caps the pass at 200 fetches: here there is no such bound and no document
+  identity to dedupe on. It is the one to fix next. A proper fix needs an
+  evaluation-scoped budget on `*xpath.Context` and a way to hand it to `xdm`,
+  which is a wider change than this one and is not attempted here.
+* `xsd/assemble.go:375`, `:432`, `:1088` (`xs:import`/`xs:include`/
+  `xs:redefine`) — pass the caller's `opts.ParseOptions`, so a host that
+  enables `AllowDOCTYPE` for a W3C type library enables it for every schema in
+  the assembly. Bounded, though: `a.count` against `MaxDocuments`
+  (`DefaultMaxDocuments = 512`) is the exact fetch-counter analogue, so the
+  worst case is a real cap rather than an open-ended one. The budget should be
+  threaded onto the assembler beside `a.count`.
+* `xslt/resolver.go:521` (`xsl:import`/`xsl:include`/`fn:doc`) — off unless
+  the host sets `AllowDOCTYPE`. Separately worth noting that
+  `resolverCacheMax = 256` at `:486` **clears on full** rather than evicting,
+  so past 257 distinct URIs it stops being a bound and starts being an
+  amplifier.
+
+Three further sites — `fn:parse-xml-fragment` (`xpath/fn_misc.go:2975`),
+`fn:transform`'s `nestedParseOptions` (`xslt/fntransform.go:531`) and
+`relaxng/resolve.go:141` — have the same shape but pass options that leave
+`AllowDOCTYPE` false, so no entity table is built and no budget is minted.
+`fn:parse-xml-fragment` additionally rejects a leading `<!DOCTYPE` outright.
+They are inert today and are recorded because they are one option-change from
+being live.
+
+None of the three is loop detection, and none is allowed to stand in for it. A loop is
 a *semantic* defect and is detected as one: `includeProc.stack` holds the URIs
 of the inclusions currently in progress, and an inclusion whose URI is already
 on that path is refused as `circular xi:include loop`, naming the URI. The

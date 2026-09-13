@@ -48,6 +48,43 @@ const (
 	maxEntityCount = 10000
 )
 
+// entityBudget is the expansion spend shared across every parse that makes up
+// one top-level document.
+//
+// maxTotalEntityBytes is written as a bound on "one document", and for a lone
+// parse the per-table counter said exactly that. It stopped saying it once a
+// document could pull others in: ProcessXInclude calls ParseString per
+// included document, each ParseString built a fresh entityTable, and a fresh
+// table started the count again from zero. Two hundred included documents each
+// expanding 786 KB — every one of them under the ceiling — therefore expanded
+// 149 MB in total, from 95 KB of source, with MaxBytes and MaxNodes set as low
+// as 8192 and 50. Neither of those knobs can see it: MaxBytes bounds the
+// source text, and an expansion is one text node however long it is.
+//
+// Sharing one counter is what makes the ceiling mean what it is documented to
+// mean. See docs/security.md.
+type entityBudget struct {
+	// spent is the expanded size of everything resolved so far across the
+	// whole document, so that a bomb divided among many entities — or among
+	// many included documents — cannot slip under the per-entity cap.
+	spent int
+}
+
+// total reports the shared spend.
+func (t *entityTable) total() int { return t.budget.spent }
+
+// charge adds n to the shared spend and reports whether the document has now
+// expanded past the ceiling.
+func (t *entityTable) charge(n int) error {
+	t.budget.spent += n
+	if t.budget.spent > maxTotalEntityBytes {
+		return fmt.Errorf(
+			"entity expansion exceeds %d bytes in total: %w",
+			maxTotalEntityBytes, ErrResourceLimit)
+	}
+	return nil
+}
+
 // entityTable holds the internal general entities a DOCTYPE declared.
 type entityTable struct {
 	raw      map[string]string // name -> replacement text, unexpanded
@@ -56,9 +93,17 @@ type entityTable struct {
 	// unparsed holds the external entities declared with an NDATA notation,
 	// which fn:unparsed-entity-uri reports. They are recorded, never read.
 	unparsed map[string]unparsedEntity
-	// total is the expanded size of everything resolved so far, so that a
-	// bomb divided among many entities cannot slip under the per-entity cap.
-	total int
+	// budget is the expansion spend shared by every parse that belongs to
+	// one top-level document. It is a POINTER so that a nested parse — an
+	// XInclude'd document, above all — charges the SAME counter rather than
+	// starting a fresh one: maxTotalEntityBytes bounds a document, and a
+	// document that pulls in two hundred others is still one document. It is
+	// never nil; newEntityTable mints one when no caller supplies it.
+	//
+	// This mirrors includeProc.fetches, which is shared across the same
+	// boundary because the proc is one object. The byte budget has no such
+	// object to live on, so it is threaded explicitly instead.
+	budget *entityBudget
 	// resolver, when non-nil, permits external entities to be read. It is
 	// nil by default and is NOT implied by AllowDOCTYPE — see dtd_external.go
 	// for why those two are separate gates.
@@ -119,27 +164,35 @@ type entityTable struct {
 // are expanded inside the DTD itself rather than in content, and reading one
 // would mean interpreting the subset as a grammar rather than scanning it.
 func parseInternalEntities(subset string) *entityTable {
-	return parseEntityDecls(subset, "")
+	return parseEntityDecls(subset, "", nil)
 }
 
 // parseEntityDecls reads entity declarations, recording base as the URI that
 // external system identifiers in them resolve against. Declarations read from
 // an external subset carry that subset's URI, per XML section 4.4.3.
-func parseEntityDecls(subset, base string) *entityTable {
-	t := newEntityTable(base)
+func parseEntityDecls(subset, base string, b *entityBudget) *entityTable {
+	t := newEntityTable(base, b)
 	t.subsetText = subset
 	return t.parseDecls(subset, base)
 }
 
 // newEntityTable returns an empty table whose external system identifiers
-// resolve against base.
-func newEntityTable(base string) *entityTable {
+// resolve against base, sharing the expansion budget b.
+//
+// A nil b mints a fresh budget, which is right for a parse that is nobody's
+// nested document. A caller that IS parsing on behalf of an outer document —
+// XInclude, above all — passes the outer budget so the ceiling spans both.
+func newEntityTable(base string, b *entityBudget) *entityTable {
+	if b == nil {
+		b = &entityBudget{}
+	}
 	return &entityTable{
 		raw:          map[string]string{},
 		expanded:     map[string]string{},
 		external:     map[string]bool{},
 		externalBase: map[string]string{},
 		docBase:      base,
+		budget:       b,
 	}
 }
 
@@ -309,12 +362,9 @@ func (t *entityTable) resolve(name string) (string, error) {
 		delete(t.expanded, name)
 		return "", err
 	}
-	t.total += len(out)
-	if t.total > maxTotalEntityBytes {
+	if err := t.charge(len(out)); err != nil {
 		delete(t.expanded, name)
-		return "", fmt.Errorf(
-			"entity expansion exceeds %d bytes in total: %w",
-			maxTotalEntityBytes, ErrResourceLimit)
+		return "", err
 	}
 	t.expanded[name] = out
 	return out, nil
@@ -499,6 +549,10 @@ func (t *entityTable) hasMarkup() bool {
 	// way out: a document that turns out not to need the rewrite must not
 	// then be handed values memoised for it.
 	t.reparsed = true
+	// The spend is restored to what it was, rather than zeroed: the counter
+	// is shared with the rest of the document now, and zeroing it would
+	// discard everything an OUTER document had already charged.
+	before := t.budget.spent
 	defer func() {
 		t.reparsed = false
 		t.expanded = map[string]string{}
@@ -509,7 +563,7 @@ func (t *entityTable) hasMarkup() bool {
 		// then failed with an error about the wrong thing. The bound that
 		// matters is on what a document actually expands, which the
 		// substitution and the decoder each charge for themselves.
-		t.total = 0
+		t.budget.spent = before
 	}()
 	for name := range t.raw {
 		// The raw text is checked first, and the expansion only when it might
@@ -1022,7 +1076,7 @@ func escapeAttrLiteral(s string) string {
 // the same reasons substituteMarkupEntities does it: a reference inside a
 // CDATA section, comment or PI is not a reference and must not be charged.
 func (t *entityTable) chargeReferences(src string) error {
-	total := t.total
+	total := t.total()
 	for i := endOfInternalSubset(src); i < len(src); {
 		if skip := unscannedRegion(src, i); skip > i {
 			i = skip
@@ -1082,9 +1136,8 @@ func (t *entityTable) chargeReferences(src string) error {
 // pend until the rest of it arrives, so the chunking of the underlying reader
 // cannot hide one.
 type entityChargeReader struct {
-	r     io.Reader
-	t     *entityTable
-	total int
+	r io.Reader
+	t *entityTable
 	// pend holds a partial reference carried over from the previous read.
 	pend []byte
 	// started reports whether the internal subset has been passed.
@@ -1201,11 +1254,14 @@ func (c *entityChargeReader) charge(b []byte) error {
 			// the position, which is more use than one from here.
 			continue
 		}
-		c.total += len(rep)
-		if c.total > maxTotalEntityBytes {
-			return fmt.Errorf(
-				"entity expansion exceeds %d bytes in total: %w",
-				maxTotalEntityBytes, ErrResourceLimit)
+		// Charged against the budget SHARED with the rest of the document,
+		// not a sum private to this reader. This is the accounting that
+		// measures what a document actually expands — resolve charges once
+		// per distinct entity, which for one 16 KB entity referenced 48
+		// times is 16 KB against 786 KB expanded — so it is the one that has
+		// to span an included document and the document that included it.
+		if err := c.t.charge(len(rep)); err != nil {
+			return err
 		}
 	}
 	return nil

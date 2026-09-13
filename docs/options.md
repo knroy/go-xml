@@ -95,7 +95,7 @@ syntax error does *not* carry the sentinel.
 | `MaxDepth` | `xdm/parse.go` | *(none)* | reads as a malformed document |
 | `MaxNodes` | `xdm/parse.go` | *(none)* | as above |
 | `MaxBytes` | `xdm/parse.go` | *(none)* | as above |
-| entity expansion budget | `xdm/dtd_entities.go`, `xdm/dtd_external.go` | *(none)* | as above |
+| entity expansion budget | `xdm/dtd_entities.go`, `xdm/dtd_external.go` | *(none)* | as above; shared across every document one XInclude pass parses, not per parse |
 | `maxIncludeDepth` / `maxIncludeFetches` | `xdm/xinclude.go` | *(none)* | the text already said "resource limit exceeded"; now `errors.Is` agrees |
 | `maxParseDepth` (expression) | `xpath/parser.go` | `XPST0003` | the expression is syntactically invalid |
 | `maxParseDepth` (type) | `xpath/parser_path.go` | `XPST0003` | as above; a *type* nests through a path the expression counter never sees |

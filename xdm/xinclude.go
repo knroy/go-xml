@@ -115,7 +115,7 @@ func ProcessXInclude(tree *Tree, opts XIncludeOptions) error {
 	if base == "" {
 		base = tree.Root.DocumentURI
 	}
-	p := &includeProc{opts: opts}
+	p := &includeProc{opts: opts, budget: &entityBudget{}}
 	// The including document is on the stack from the outset, so that an
 	// inclusion naming the document it appears in is caught as the cycle it
 	// is rather than read a second time. XInclude 1.0 section 4.5: "an
@@ -152,9 +152,19 @@ func fatalIncludeError(err error) bool {
 
 // includeProc carries the state of one pass.
 type includeProc struct {
-	opts    XIncludeOptions
-	stack   []string // URIs currently being included, innermost last
+	opts  XIncludeOptions
+	stack []string // URIs currently being included, innermost last
+	// fetches counts resources read across the WHOLE pass, which is why it
+	// lives here rather than being recomputed per document.
 	fetches int
+	// budget is the entity-expansion spend shared by every document this pass
+	// parses, for exactly the same reason fetches is: an inclusion is part of
+	// the document that asked for it, not a document of its own with its own
+	// allowance. Without this, each ParseString below minted a fresh budget
+	// and maxTotalEntityBytes bounded 200 included documents separately
+	// instead of together — 95 KB of source expanded to 149 MB with
+	// MaxBytes 8192 and MaxNodes 50, neither of which can see an expansion.
+	budget *entityBudget
 }
 
 // expandChildren walks n's children, replacing each xi:include it finds.
@@ -523,9 +533,23 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 	// discarded and its children take its place. Leaving it empty is
 	// therefore the accurate answer rather than a lost one.
 	popts.DocumentURI = ""
+	// The included document expands its entities against the SAME budget as
+	// the including one. See includeProc.budget.
+	popts.entityBudget = p.budget
 	sub, err := ParseString(string(data), popts)
 	if err != nil {
-		return nil, fmt.Errorf("parsing included %s: %w", uri, err)
+		err = fmt.Errorf("parsing included %s: %w", uri, err)
+		// A resource-limit refusal is this processor declining to spend more,
+		// not a condition of the resource, so it is fatal on the same terms
+		// as the fetch and nesting bounds above. Left recoverable, a chain of
+		// xi:fallback elements is a way to keep asking after being told no:
+		// measured, eight sibling includes each falling back to another
+		// entity bomb expanded 6,291,456 bytes — six times the ceiling — and
+		// the document was accepted, the refusal swallowed at every level.
+		if errors.Is(err, ErrResourceLimit) {
+			return nil, fatalInclude{err}
+		}
+		return nil, err
 	}
 
 	// Recurse before selecting, so that an xpointer may address content that
