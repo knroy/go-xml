@@ -151,6 +151,37 @@ into it. The histogram is printed with the result — 3, 4 and 5 sibling scopes
 each occur in hundreds of documents — so a future generator change that stops
 producing them is visible rather than silent.
 
+**A loose comparison hides two opposite defects at once.** The XSLT judge
+decided an expected error code with `strings.Contains(terr.Error(), a.Code)` —
+a substring search over the whole rendered message. Replacing it with a
+structured `xdm.ErrorCode` comparison looks like pure hardening and drops the
+in-scope figure from **11,490 to 11,134**. Instrumenting the judge to log every
+case where the two answers differ found 356, splitting into two groups that
+want opposite treatment:
+
+- **351 carry no structured code at all.** A large family of static errors is
+  built with `fmt.Errorf` and writes the code as a trailing parenthetical —
+  `attribute "as" is not allowed on xsl:call-template (XTSE0090)`.
+  `xdm.ErrorCode` looks for a leading code or one delimited by `": "`, so it
+  answers `""` for all of them.
+- **5 report the correct code but have it read past.** These are built as
+  `fmt.Errorf("%s: %s: %w", code, what, inner)`, so the *outer* code is the
+  engine's verdict while the wrapped inner cause is still an `*xdm.Error`.
+  `errors.As` finds the inner one first: `as-1602` renders `XTTE0505: …:
+  FORG0001: …` and is right to, but a strict swap reads `FORG0001` and fails a
+  case the engine got right. `variable-0115`, `sequence-0132`, `avt-3201` and
+  `error-0340c` have the same shape.
+
+So the outermost code is the authoritative one, and the judge now takes it from
+the message prefix, falling back to `xdm.ErrorCode` and then to the substring
+match for the uncoded family. The count is unchanged at 11,490, which is the
+point: the fix had to tighten the comparison *without* moving the figure in
+either direction. `tests/xslts/errorcode_test.go` pins all three shapes.
+
+The real fix is to move that family to `xdm.Errorf` and give `ErrorCode`
+outermost-wins precedence — but `ErrorCode` also decides `xsl:catch` matching,
+so that is an engine change with its own conformance risk, not a harness one.
+
 **An oracle only covers the shapes its generator makes.** The identity oracles
 run 10,000 documents and agreed throughout while `mergeTables` had a bug that
 made a key resolvable again at three siblings, five siblings, seven. The

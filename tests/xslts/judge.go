@@ -248,6 +248,55 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 			// XTSE0220 and a schema-assembly failure are both defensible.
 			return true, ""
 		}
+		// Judged on the error's own code rather than by searching the whole
+		// rendered message, which also succeeds when the code appears
+		// somewhere other than as the code -- in a quoted fragment of the
+		// input, or as a substring of a longer one -- and so would pass a case
+		// that failed for a different reason.
+		//
+		// The comparison is deliberately not a bare xdm.ErrorCode(terr)
+		// equality. Measured over the full XSLT 3.0 suite, the two disagree on
+		// 356 cases, in two groups that need opposite treatment:
+		//
+		//   - 351 carry no structured code at all. A large family of static
+		//     errors is built with fmt.Errorf and writes the code as a
+		//     trailing parenthetical -- `attribute "as" is not allowed on
+		//     xsl:call-template (XTSE0090)` -- which xdm.ErrorCode cannot
+		//     read: it looks for a leading code, or one delimited by ": ".
+		//     For these it returns "", so a strict swap would fail all 351 and
+		//     drop the in-scope figure from 11,490 to 11,134.
+		//
+		//   - 5 report the correct code but have it read past. The error is
+		//     built as fmt.Errorf("%s: %s: %w", code, what, inner), so the
+		//     OUTER code is the engine's verdict while the wrapped inner cause
+		//     is still an *xdm.Error; errors.As finds the inner one first and
+		//     xdm.ErrorCode answers with it. as-1602 reports "XTTE0505: ...:
+		//     FORG0001: ..." and is right to; a strict swap reads FORG0001 and
+		//     fails a case the engine got right. The same shape covers
+		//     variable-0115, sequence-0132, avt-3201 and error-0340c.
+		//
+		// So the outermost code is the authoritative one, and it is taken from
+		// the message prefix when there is one. xdm.ErrorCode is consulted
+		// only for an error whose rendered form does not lead with a code; the
+		// substring match remains the last resort for the uncoded family.
+		//
+		// Fixing this properly means moving that family to xdm.Errorf and
+		// giving ErrorCode outermost-wins precedence. ErrorCode also decides
+		// xsl:catch matching, so that is an engine change and not this one.
+		if code, _, ok := strings.Cut(terr.Error(), ":"); ok && isErrorCode(code) {
+			if code == a.Code {
+				return true, ""
+			}
+			return false, fmt.Sprintf("expected %s, got %s: %s",
+				a.Code, code, firstLine(terr.Error()))
+		}
+		if code := xdm.ErrorCode(terr); code != "" {
+			if code == a.Code {
+				return true, ""
+			}
+			return false, fmt.Sprintf("expected %s, got %s: %s",
+				a.Code, code, firstLine(terr.Error()))
+		}
 		if strings.Contains(terr.Error(), a.Code) {
 			return true, ""
 		}

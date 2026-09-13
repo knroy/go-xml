@@ -249,6 +249,7 @@ what the suites *measured*, not what the library does.
 | `SerializeAsXML` forced 1.0 | Tree assertions compared against the truncated prefix of a discarded error. The version, unlike method and indentation, decides whether a character can be written at all. | [`a45c3a6`][a45c3a6] |
 | Ratchet read a shrinking corpus as a regression | A count taken over fewer roots is not comparable; it is now skipped, not passed, when a root is absent. | [`3b6e685`][3b6e685] |
 | Cases never scored went uncounted | A case that is never scored must still appear in the denominator. | [`c3a52be`][c3a52be] |
+| The XSLT judge matched an expected error code anywhere in the rendered message | A code quoted in the input, or a substring of a longer one, passed a case that failed for another reason. The leading code decides now, with the substring kept for the 351 errors that carry theirs in a trailing parenthetical. In-scope unchanged at 11,490. | — |
 
 ### Documentation
 
