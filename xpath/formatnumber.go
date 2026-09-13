@@ -717,8 +717,10 @@ func scaleByPowerOfTen(r *big.Rat, n int) *big.Rat {
 	return new(big.Rat).Mul(r, powerOfTen(n))
 }
 
-// roundToPlaces rounds an exact rational to n decimal places, half away from
-// zero — the rounding fn:format-number specifies.
+// roundToPlaces rounds an exact rational to n decimal places, half to even —
+// F&O 3.1 §4.7.5 defines the rounding of fn:format-number by calling
+// fn:round-half-to-even with maximum-fractional-part-size as the precision, so
+// an exact tie goes to the even quotient rather than away from zero.
 func roundToPlaces(r *big.Rat, n int) *big.Rat {
 	if n < 0 {
 		n = 0
@@ -729,7 +731,14 @@ func roundToPlaces(r *big.Rat, n int) *big.Rat {
 	num, den := scaled.Num(), scaled.Denom()
 	q, rem := new(big.Int).QuoRem(num, den, new(big.Int))
 	twice := new(big.Int).Abs(new(big.Int).Mul(rem, big.NewInt(2)))
-	if twice.Cmp(den) >= 0 {
+	// Past the halfway point always rounds away from zero. An exact tie moves
+	// only when the truncated quotient is odd, which is what lands the result
+	// on the even neighbour.
+	away := twice.Cmp(den) > 0
+	if twice.Cmp(den) == 0 {
+		away = q.Bit(0) == 1
+	}
+	if away {
 		if scaled.Sign() < 0 {
 			q.Sub(q, big.NewInt(1))
 		} else {
