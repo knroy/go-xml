@@ -644,24 +644,51 @@ cause; they are recorded under *The `||` operator* above.
 
 ## `evaluate-045` — 1 case gained, 510 real documents lost
 
-**Won't fix.** It asserts that a stylesheet function with no `visibility`
-attribute is private, and so unreachable from `xsl:evaluate`. **The suite is
-right.** §3.6 says verbatim: "When the `xsl:package` element is not used
-explicitly, **the entire stylesheet comprises a single implicit package**."
-§3.6.3.1's ladder ends "Otherwise, private", with no carve-out, and
-`xsl:evaluate`'s static context admits user-defined functions only "provided
-their visibility is not hidden or private". So XTDE3160 is correct and we
-diverge knowingly.
+**A real conformance defect — fixable, deliberately not fixed.** This is not a
+case where the spec fails to reach us. It asserts that a stylesheet function
+with no `visibility` attribute is private, and so unreachable from
+`xsl:evaluate`. **The suite is right**, on every step:
 
-The reason to diverge is real: enforcing it means no stylesheet outside a
-package can call its own functions from its own `xsl:evaluate`, which breaks
-deployed stylesheets, and Saxon diverges the same way (its XSLT 3.0 submission
-records no result for the case at all, while its sibling `evaluate-006` — the
-same stylesheet with `visibility="public"` written on the declaration — passes).
+- §3.5: "When the `xsl:package` element is not used explicitly, **the entire
+  stylesheet comprises a single implicit package**."
+- §3.2: an implicit package, "rooted at an `xsl:stylesheet` or `xsl:transform`
+  element … **is transformed automatically to a package** as described in 3.5
+  Packages."
+- §3.5.3.1's attribute table: "visibility — One of public, private, or final.
+  **The default is private**."
+- And the consequence, stated outright: "**Functions are private by default;
+  private functions can be referenced only within the package where they are
+  declared (and not in `xsl:evaluate` expressions).**"
 
-**Cost, measured:** removing the `isPackage` guard from `evaluateMayCall` and
-re-running the DocBook xslTNG corpus takes it from **577 documents to 67**.
-Conforming here would break 510 real documents to gain one suite case.
+So XTDE3160 is the correct result and we knowingly do not produce it. The
+`isPackage` guard in `evaluateMayCall` means only "the root element was
+literally `xsl:package`", which is strictly narrower than the spec's package
+model — under §3.5 a plain `xsl:stylesheet` *is* a package.
+
+The reason to diverge is cost, measured rather than assumed (2026-09-12, at
+`b6ecafb`, one variable changed — the guard). Rebuilding `./cmd/go-xml` and
+running the DocBook xslTNG lane with its own flags (`tests/check.sh:1060`,
+which globs `$XSLTNG/src/test/resources/xml/*.xml` — **593** documents):
+
+| `isPackage` guard | Documents passing | XTDE3160 raised | `evaluate-045` |
+| --- | --- | --- | --- |
+| present (shipped) | **577** of 593 | 0 | fails |
+| removed (conforming) | **67** of 593 | 512 | passes |
+
+Conforming here would break 510 real documents to gain one suite case. Saxon
+makes the same trade: its XSLT 3.0 submission records no result for the case at
+all, while its sibling `evaluate-006` — the same stylesheet with
+`visibility="public"` written on the declaration — passes.
+
+The 512 failures trace to **one function**, not to breadth of `xsl:evaluate`
+use. Every message names
+`Q{http://docbook.org/ns/docbook/functions/private}pi-from-list` with 3
+arguments. `standalone-functions.xsl` declares `f:pi` with an explicit
+`visibility="public"`, and `f:pi` delegates to `fp:pi-from-list`, which carries
+no `visibility` attribute and so defaults to private. `docbook.xsl`'s pipeline
+config reaches `f:pi` from an evaluated string (`f:is-true(f:pi(…))`), which
+pulls the private callee into the `xsl:evaluate` static context on nearly every
+document in the corpus.
 
 ## `particlesZ033_g` — 1 case gained, 17 valid schemas lost
 

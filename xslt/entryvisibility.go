@@ -151,20 +151,47 @@ func functionVisibilityKey(name xdm.QName, arity int) string {
 // A name the map does not know is not a stylesheet function at all -- it is a
 // builtin, which this rule says nothing about -- so it is callable.
 //
-// The rule is confined to a real xsl:package, for the reason
-// eligibleInitialTemplate and the mode rule are: visibility is a property of a
-// COMPONENT of a package, and a plain xsl:stylesheet has no package boundary
-// for anything to be private with respect to. Applying the private default
-// outside one makes every function a stylesheet declares unreachable from its
-// own xsl:evaluate, which is not a boundary the author drew -- they simply did
-// not write an attribute that has nothing to govern.
+// KNOWN DIVERGENCE. The isPackage guard below is not what the Recommendation
+// says, and evaluate-045 is a real conformance defect that is deliberately not
+// fixed. The spec is unambiguous against us on every step:
 //
-// This is also what the reference implementation does: Saxon's own XSLT 3.0
-// results report evaluate-045 as "wrongError", so no released processor
-// enforces the default outside a package, and the real stylesheets that drive
-// xsl:evaluate from data -- DocBook xslTNG calls its own fp: functions from
-// every one of its 613 test documents -- depend on that reading. Inside an
-// xsl:package the declared visibility is still honoured exactly as before.
+//   - Section 3.5: "When the xsl:package element is not used explicitly, the
+//     entire stylesheet comprises a single implicit package."
+//   - Section 3.2: an implicit package, "rooted at an xsl:stylesheet or
+//     xsl:transform element ... is transformed automatically to a package as
+//     described in 3.5 Packages."
+//   - Section 3.5.3.1's attribute table: "visibility -- One of public,
+//     private, or final. The default is private."
+//   - And the consequence, stated outright: "Functions are private by default;
+//     private functions can be referenced only within the package where they
+//     are declared (and not in xsl:evaluate expressions)."
+//
+// So there is no reading on which a plain xsl:stylesheet escapes the rule: it
+// IS a package, and its undecorated functions ARE private. isPackage here means
+// only "the root element was literally xsl:package", which is strictly narrower
+// than the spec's package model. XTDE3160 is the correct result for
+// evaluate-045 and we knowingly do not produce it.
+//
+// The reason is cost, measured rather than assumed (2026-09-12, at b6ecafb,
+// one variable changed). Removing the guard, rebuilding ./cmd/go-xml and
+// running the DocBook xslTNG lane with its own flags (tests/check.sh:1060):
+//
+//	guard present:  577 of 593 documents pass,   0 XTDE3160
+//	guard removed:   67 of 593 documents pass, 512 XTDE3160
+//
+// Saxon makes the same trade: its XSLT 3.0 submission records no result for
+// evaluate-045 at all, while the sibling evaluate-006 -- the same stylesheet
+// with visibility="public" written out -- passes.
+//
+// The 512 failures come from one function, not from breadth of usage. Every
+// message names Q{http://docbook.org/ns/docbook/functions/private}pi-from-list
+// with 3 arguments. standalone-functions.xsl declares f:pi with an explicit
+// visibility="public" and it delegates to fp:pi-from-list, which carries no
+// visibility attribute and so defaults to private; docbook.xsl's pipeline
+// config then reaches f:pi from an evaluated string ("f:is-true(f:pi(...))"),
+// so the private callee is pulled into the xsl:evaluate static context on
+// nearly every document. Inside an xsl:package the declared visibility is
+// still honoured exactly as before.
 func (s *Stylesheet) evaluateMayCall(name xdm.QName, arity int) bool {
 	if !s.isPackage {
 		return true

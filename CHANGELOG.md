@@ -250,6 +250,12 @@ what the suites *measured*, not what the library does.
 | Ratchet read a shrinking corpus as a regression | A count taken over fewer roots is not comparable; it is now skipped, not passed, when a root is absent. | [`3b6e685`][3b6e685] |
 | Cases never scored went uncounted | A case that is never scored must still appear in the denominator. | [`c3a52be`][c3a52be] |
 
+### Documentation
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| The `evaluate-045` divergence was justified by a false spec argument | The comment claimed a plain `xsl:stylesheet` has no package boundary; §3.5 makes it an implicit package whose functions default to private. Reframed as a known divergence kept for cost (577 of 593 DocBook documents against 67), with the corpus size corrected from 613 to 593. | — |
+
 ### Investigated — not defects
 
 | Finding | Verdict | Commit |

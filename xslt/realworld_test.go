@@ -22,7 +22,7 @@ import (
 // item that is an atomic value or a function item falls under the next
 // sentence instead, which returns the value. Conflating absent with
 // not-a-node made every xsl:copy inside an xsl:for-each over atomics an
-// error, which is how DocBook xslTNG failed on all 613 of its test documents.
+// error, which is how DocBook xslTNG failed on all 593 of its test documents.
 func TestCopyOfNonNodeContextItem(t *testing.T) {
 	sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
 		`<xsl:output omit-xml-declaration="yes"/>` +
