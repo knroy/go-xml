@@ -684,6 +684,14 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("no stylesheet document to compile")
 	}
+	// One entity-expansion allowance for every module this compilation pulls
+	// in, minted here so that the boundary is the compilation. A nested
+	// compilation -- fn:transform from a static variable -- arrives with the
+	// outer one's already set and keeps it, so it spends the remainder rather
+	// than restarting: the same house rule as xpath.Context.AdoptBudget.
+	if opts.moduleBudget == nil {
+		opts.moduleBudget = xdm.NewEntityBudget()
+	}
 	c := &compiler{
 		opts: opts,
 		sheet: &Stylesheet{
@@ -885,6 +893,13 @@ type CompileOptions struct {
 	// Resolver loads xsl:include and xsl:import targets. Nil disables them,
 	// which is the safe default for untrusted stylesheets.
 	Resolver ModuleResolver
+
+	// moduleBudget is the entity-expansion allowance shared by every module
+	// this compilation resolves. It is unexported and minted by compileLocked:
+	// the boundary is the compilation, so a caller has nothing to say about
+	// it, and one it could read or reset would not be a bound. A nested
+	// compilation inherits the outer one's -- see compileLocked.
+	moduleBudget *xdm.EntityBudget
 	// BaseURI of the stylesheet, for resolving relative include paths.
 	BaseURI string
 	// StaticParams supplies values for static stylesheet parameters — a
@@ -957,6 +972,43 @@ type CompileOptions struct {
 // ModuleResolver loads an included or imported stylesheet module.
 type ModuleResolver interface {
 	ResolveModule(href, base string) (*xdm.Node, string, error)
+}
+
+// BudgetedModuleResolver is a ModuleResolver that charges the entity expansion
+// of the modules it parses against an allowance shared across the compilation,
+// rather than minting a fresh one per module.
+//
+// It is a separate optional interface rather than an extra parameter on
+// ResolveModule so that existing implementations keep working: a resolver that
+// does not implement it is called through ResolveModule exactly as before.
+// This is the same arrangement xpath.ContextDocumentResolver uses, and for the
+// same reason.
+//
+// The allowance is scoped to ONE COMPILATION. xsl:import and xsl:include
+// compose, so a single compilation resolves a whole graph of modules, and a
+// per-module ceiling bounds none of it; a per-resolver allowance would be
+// wrong in the other direction, because a FileResolver caches parsed trees and
+// is documented as shareable between transforms, so its allowance would be
+// spent by unrelated runs and would eventually refuse everything. The
+// compilation is the operation that pulls the modules in, so it is the
+// operation the ceiling belongs to.
+type BudgetedModuleResolver interface {
+	ModuleResolver
+	// ResolveModuleWith is ResolveModule charging against b.
+	ResolveModuleWith(
+		b *xdm.EntityBudget, href, base string) (*xdm.Node, string, error)
+}
+
+// resolveModule loads a module through the richer interface when the resolver
+// offers one, and through the plain one otherwise.
+func resolveModule(
+	res ModuleResolver, b *xdm.EntityBudget, href, base string,
+) (*xdm.Node, string, error) {
+
+	if br, ok := res.(BudgetedModuleResolver); ok {
+		return br.ResolveModuleWith(b, href, base)
+	}
+	return res.ResolveModule(href, base)
 }
 
 // sortTemplates orders templates for selection: highest import precedence

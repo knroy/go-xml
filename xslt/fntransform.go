@@ -457,7 +457,7 @@ func nestedStylesheet(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (*Styl
 				"fn:transform: cannot retrieve package %q version %q: %v",
 				name, vers, perr)
 		}
-		return compileNested(rt, root, base)
+		return compileNested(ctx, rt, root, base)
 	}
 
 	if seq, ok := transformOption(opts, "stylesheet-node"); ok {
@@ -471,7 +471,7 @@ func nestedStylesheet(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (*Styl
 			return nil, xdm.Errorf("FOXT0002",
 				"fn:transform: stylesheet-node must be a node")
 		}
-		return compileNested(rt, n, base)
+		return compileNested(ctx, rt, n, base)
 	}
 
 	if text, ok, terr := transformString(opts, "stylesheet-text"); terr != nil {
@@ -482,7 +482,7 @@ func nestedStylesheet(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (*Styl
 			return nil, xdm.Errorf("FOXT0002",
 				"fn:transform: parsing stylesheet-text: %v", perr)
 		}
-		return compileNested(rt, tree.Root, base)
+		return compileNested(ctx, rt, tree.Root, base)
 	}
 
 	if loc, ok, lerr := transformString(opts, "stylesheet-location"); lerr != nil {
@@ -507,20 +507,21 @@ func nestedStylesheet(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (*Styl
 		// Passing the relative location through as the base left "../x.xsl"
 		// inside the nested module with nothing to resolve against.
 		if mr := moduleResolverFor(rt.opts.Documents); mr != nil {
-			root, abs, merr := mr.ResolveModule(loc, base)
+			root, abs, merr := resolveModule(
+				mr, ctx.EntityBudget(), loc, base)
 			if merr != nil {
 				return nil, xdm.Errorf("FOXT0002",
 					"fn:transform: cannot retrieve stylesheet-location %q: %v",
 					loc, merr)
 			}
-			return compileNested(rt, root, abs)
+			return compileNested(ctx, rt, root, abs)
 		}
 		tree, derr := rt.opts.Documents.ResolveDocument(loc, base)
 		if derr != nil {
 			return nil, xdm.Errorf("FOXT0002",
 				"fn:transform: cannot retrieve stylesheet-location %q: %v", loc, derr)
 		}
-		return compileNested(rt, tree.Root, loc)
+		return compileNested(ctx, rt, tree.Root, loc)
 	}
 
 	return nil, xdm.Errorf("FOXT0002",
@@ -538,7 +539,9 @@ func nestedParseOptions(rt *runtime, base string) xdm.ParseOptions {
 // The static errors of the nested stylesheet are its own, and a caller of
 // fn:transform is entitled to see them as "this transformation could not be
 // invoked" rather than as an error of the calling stylesheet.
-func compileNested(rt *runtime, root *xdm.Node, base string) (*Stylesheet, error) {
+func compileNested(
+	ctx *xpath.Context, rt *runtime, root *xdm.Node, base string,
+) (*Stylesheet, error) {
 	// A nested stylesheet may itself xsl:include or xsl:import. The caller's
 	// document resolver is reused when it can also resolve modules --
 	// FileResolver satisfies both interfaces -- and otherwise the nested
@@ -553,6 +556,14 @@ func compileNested(rt *runtime, root *xdm.Node, base string) (*Stylesheet, error
 		// is also what lets a stylesheet loaded BY package-name be found at
 		// all when it in turn names one.
 		PackageResolver: rt.sheet.pkgResolver,
+		// The nested compilation spends the CALLING evaluation's entity
+		// allowance rather than minting its own. Without this, a stylesheet
+		// calling fn:transform in a loop would hand each nested compilation a
+		// fresh ceiling for the modules it imports -- the per-module mint this
+		// change removes, arriving one level up. Same house rule as
+		// xpath.Context.AdoptBudget: a nested operation may spend the parent's
+		// remainder, never reset it.
+		moduleBudget: ctx.EntityBudget(),
 	}
 	// A transform reached from the static phase is running INSIDE a Compile
 	// that holds compileMu, so it must not ask for the lock again. rt.static

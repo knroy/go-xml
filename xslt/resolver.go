@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // FileResolver loads stylesheet modules and documents from the filesystem,
@@ -332,12 +333,32 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 
 // ResolveModule implements ModuleResolver for xsl:include and xsl:import.
 func (r *FileResolver) ResolveModule(href, base string) (*xdm.Node, string, error) {
+	return r.ResolveModuleWith(nil, href, base)
+}
+
+// ResolveModuleWith is ResolveModule charging the entity expansion of whatever
+// it parses against the shared allowance b.
+//
+// It exists because a stylesheet reaches many modules -- xsl:import and
+// xsl:include compose, so one compilation resolves a whole graph of them --
+// and parseUncached minted a fresh xdm allowance for every file it read. The
+// 1 MB ceiling therefore bounded each MODULE separately rather than the
+// compilation: sixty imported modules each expanding 700,000 bytes, every one
+// of them under the ceiling, expanded 42 MB in total from 234 KB of source and
+// allocated 173 MB. This is the same defect as XInclude's and fn:parse-xml's,
+// one boundary further out; see docs/security.md.
+//
+// A nil b leaves the per-document allowance in place, which is what a caller
+// holding no budget of its own gets.
+func (r *FileResolver) ResolveModuleWith(
+	b *xdm.EntityBudget, href, base string) (*xdm.Node, string, error) {
+
 	path, err := r.resolvePath(href, base)
 	if err != nil {
 		return nil, "", err
 	}
 	// A stylesheet module keeps its source positions; see load.
-	tree, err := r.loadTracked(path, true)
+	tree, err := r.loadTracked(path, true, b)
 	if err != nil {
 		return nil, "", err
 	}
@@ -351,7 +372,32 @@ func (r *FileResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 	if err != nil {
 		return nil, err
 	}
-	return r.load(path)
+	return r.load(path, nil)
+}
+
+// ResolveDocumentIn implements xpath.ContextDocumentResolver, charging the
+// entity expansion of whatever it parses against the evaluation's allowance
+// rather than minting a fresh one per document.
+//
+// fn:doc and fn:document are ordinary functions, so an expression calls them
+// once per node, and each call that missed the cache parsed with its own full
+// ceiling -- the per-call mint that xpath.Context.entities exists to close,
+// arriving here through a resolver instead of through fn:parse-xml.
+//
+// The context is the right place to read the allowance from, and the resolver
+// is not: a FileResolver caches parsed trees and is documented as shareable
+// across transforms, so an allowance held on the resolver would be spent by
+// unrelated runs and would eventually refuse everything. The context's
+// allowance is minted by NewContext and inherited by AdoptBudget, so it is
+// scoped to one evaluation exactly as items and bytes are.
+func (r *FileResolver) ResolveDocumentIn(
+	ctx *xpath.Context, uri, base string) (*xdm.Tree, error) {
+
+	path, err := r.resolvePath(uri, base)
+	if err != nil {
+		return nil, err
+	}
+	return r.load(path, ctx.EntityBudget())
 }
 
 // Preload records a tree that has already been parsed as the answer for uri,
@@ -391,8 +437,8 @@ func (r *FileResolver) Preload(uri string, tree *xdm.Tree) {
 // The cache matters for correctness as well as speed: fn:doc is defined to
 // return the *same* node for the same URI within one execution, so that
 // "doc('x') is doc('x')" is true. Re-parsing would break node identity.
-func (r *FileResolver) load(path string) (*xdm.Tree, error) {
-	return r.loadTracked(path, false)
+func (r *FileResolver) load(path string, b *xdm.EntityBudget) (*xdm.Tree, error) {
+	return r.loadTracked(path, false, b)
 }
 
 // loadTracked is load, saying whether the parsed tree should remember where
@@ -406,7 +452,8 @@ func (r *FileResolver) load(path string) (*xdm.Tree, error) {
 // gx:line-number(), which almost nothing calls. catalog-007 is the case that
 // settles it -- it reads several thousand stylesheets through fn:document,
 // and tracking positions on all of them pushed the run past its deadline.
-func (r *FileResolver) loadTracked(path string, trackPos bool) (*xdm.Tree, error) {
+func (r *FileResolver) loadTracked(
+	path string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, error) {
 	// The lock covers the cache and the in-flight table, not the read and the
 	// parse. Holding it across those made concurrent transforms sharing one
 	// resolver load modules one at a time on a cold cache -- the mutex was
@@ -459,7 +506,7 @@ func (r *FileResolver) loadTracked(path string, trackPos bool) (*xdm.Tree, error
 		r.inflight[key] = call
 		r.mu.Unlock()
 
-		tree, err := r.parseUncached(path, trackPos)
+		tree, err := r.parseUncached(path, trackPos, b)
 
 		r.mu.Lock()
 		if err == nil {
@@ -480,7 +527,6 @@ func (r *FileResolver) publish(path string, tree *xdm.Tree) {
 	// usable as a plain literal — &FileResolver{Roots: ...} — so a nil map
 	// here is the ordinary case, not a caller's mistake, and writing to one
 	// panics.
-	//
 	// Cleared wholesale rather than evicted one at a time: there is no useful
 	// recency signal here, and the same choice is made for the regex cache.
 	if r.cache == nil || len(r.cache) >= resolverCacheMax {
@@ -491,7 +537,8 @@ func (r *FileResolver) publish(path string, tree *xdm.Tree) {
 
 // parseUncached reads and parses a file. It holds no lock: this is the work
 // that used to run under r.mu.
-func (r *FileResolver) parseUncached(path string, trackPos bool) (*xdm.Tree, error) {
+func (r *FileResolver) parseUncached(
+	path string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, error) {
 	data, err := r.readConfined(path)
 	if err != nil {
 		return nil, err
@@ -518,7 +565,10 @@ func (r *FileResolver) parseUncached(path string, trackPos bool) (*xdm.Tree, err
 	if r.ExternalEntities {
 		opts.ExternalEntities = r
 	}
-	tree, err := xdm.ParseString(string(data), opts)
+	// The expansion is charged against the caller's shared allowance rather
+	// than a fresh one per file. A nil budget leaves the per-document ceiling
+	// in place. See ResolveModuleWith.
+	tree, err := xdm.ParseString(string(data), opts.WithEntityBudget(b))
 	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}

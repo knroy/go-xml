@@ -457,7 +457,7 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 	if i := strings.IndexByte(href, '#'); i >= 0 {
 		fragment, href = href[i+1:], href[:i]
 	}
-	doc, resolved, err := p.c.opts.Resolver.ResolveModule(href, base)
+	doc, resolved, err := resolveModule(p.c.opts.Resolver, p.c.opts.moduleBudget, href, base)
 	if err != nil {
 		return nil
 	}

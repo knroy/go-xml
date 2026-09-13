@@ -1874,7 +1874,7 @@ func (c *compiler) hoistImportSchema(root *xdm.Node) error {
 			if i := strings.IndexByte(href, '#'); i >= 0 {
 				fragment, href = href[i+1:], href[:i]
 			}
-			doc, resolved, err := c.opts.Resolver.ResolveModule(href, base)
+			doc, resolved, err := resolveModule(c.opts.Resolver, c.opts.moduleBudget, href, base)
 			if err != nil || doc == nil || c.schemaSeen[resolved] {
 				continue
 			}
@@ -1926,7 +1926,7 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 	if i := strings.IndexByte(href, '#'); i >= 0 {
 		fragment, href = href[i+1:], href[:i]
 	}
-	doc, resolved, err := c.opts.Resolver.ResolveModule(href, base)
+	doc, resolved, err := resolveModule(c.opts.Resolver, c.opts.moduleBudget, href, base)
 	if err != nil {
 		// XTSE0165: the processor could not retrieve the resource the href
 		// names, or what it retrieved is not a stylesheet module.
@@ -2031,7 +2031,7 @@ func (c *compiler) numberIncludedImports(root *xdm.Node) error {
 		if i := strings.IndexByte(href, '#'); i >= 0 {
 			fragment, href = href[i+1:], href[:i]
 		}
-		doc, resolved, err := c.opts.Resolver.ResolveModule(href, base)
+		doc, resolved, err := resolveModule(c.opts.Resolver, c.opts.moduleBudget, href, base)
 		if err != nil || doc == nil {
 			// A module that cannot be retrieved is reported by the ordinary
 			// walk, with the error code the spec gives it. Reporting it here
@@ -2060,7 +2060,8 @@ func (c *compiler) numberIncludedImports(root *xdm.Node) error {
 			if c.preNumbered == nil {
 				c.preNumbered = map[string]bool{}
 			}
-			if _, target, err := c.opts.Resolver.ResolveModule(
+			if _, target, err := resolveModule(
+				c.opts.Resolver, c.opts.moduleBudget,
 				importHref(kid), importBase(c, kid)); err == nil {
 				c.preNumbered[target] = true
 			}

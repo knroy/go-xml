@@ -2,6 +2,7 @@ package xdm
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -781,6 +782,17 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 			if t.external[name] {
 				return "", err
 			}
+			// A RESOURCE-LIMIT refusal is reported here for the same reason a
+			// refused fetch is: deferring it to the decoder turns "entity
+			// expansion exceeds 1048576 bytes in total" into "invalid
+			// character entity", which reads as a malformed document rather
+			// than as a bound that bound. The document fails either way, but
+			// only one of the two spellings tells the caller a limit was hit,
+			// and errors.Is(err, ErrResourceLimit) is how every other refusal
+			// here is recognised.
+			if errors.Is(err, ErrResourceLimit) {
+				return "", err
+			}
 			// An entity that cannot be expanded is left as written, so the
 			// decoder reports the reference. Its error names the entity and
 			// the position, which is more use than one from here.
@@ -1289,8 +1301,16 @@ func (c *entityChargeReader) charge(b []byte) error {
 		}
 		rep, err := c.t.resolve(name)
 		if err != nil {
-			// Left for the decoder to report: its error names the entity and
-			// the position, which is more use than one from here.
+			// A resource-limit refusal is reported; anything else is left for
+			// the decoder, whose error names the entity and the position and
+			// is more use than one from here. Deferring the limit instead
+			// spelled "entity expansion exceeds 1048576 bytes in total" as
+			// "invalid character entity", which reads as a malformed document
+			// rather than as a bound that bound -- and errors.Is against
+			// ErrResourceLimit is how every other refusal is recognised.
+			if errors.Is(err, ErrResourceLimit) {
+				return err
+			}
 			continue
 		}
 		// Charged against the budget SHARED with the rest of the document,
