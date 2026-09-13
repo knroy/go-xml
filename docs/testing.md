@@ -238,6 +238,30 @@ manufactures a duplicate, took the same sabotage from 0 to 841 disagreements.
 The lesson generalises past this test: when a sabotage check comes back clean,
 the first suspect is the corpus, not the implementation.
 
+**"It failed" is not "it failed for the reason claimed."** An `err != nil`
+assertion under a comment naming a W3C error code pins the comment, not the
+code. `xpath/fn_misc_test.go`'s casting table was the sharpest case: deleting
+`castPermitted`'s body entirely left it green, because a `xs:base64Binary`
+value whose source-type gate is gone is still rejected downstream when its
+lexical form fails to parse as a float — under `FORG0001`, which is precisely
+the code the table exists to distinguish from `XPTY0004`. Eight further tests
+in `xpath/` named a code in prose and asserted only that something went wrong;
+each now compares `xdm.ErrorCode(err)`, and swapping the code at the single
+production site now fails the test that owns it. The same audit found one real
+divergence hiding behind the loose form: `string(concat#3)` is `FOTY0014`, not
+the `FOTY0013` its comment claimed, because F&O gives `fn:string` its own code
+rather than the atomisation one.
+
+The parallel failure is a test that asserts only that something *parsed*.
+`xquery/thenbranch_test.go` called `Compile` and checked for no error, so
+pinning `branchHead` false in both ExprSingle scanners — reverting the fix it
+exists to cover — left it green: a branch boundary placed one clause too early
+often yields a different expression that is still well-formed. It asserts
+result values now. Its five original cases were also all bounded before the
+flag is consulted, since a single binding clause is folded onto the branch
+FLWOR; it takes a *second* clause in the branch for the flag to decide
+anything, which is why the reaching cases had to be added as well.
+
 **Counters say what a stopwatch cannot.** The identity-constraint evaluator's
 problem is not that any one traversal is slow; it is that the same nodes are
 walked once per enclosing scope, and elapsed time cannot distinguish that from

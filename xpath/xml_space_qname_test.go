@@ -141,9 +141,18 @@ func TestQNameInteriorNBSPStillRefused(t *testing.T) {
 	ctx.Version = XPath31
 	ctx.LibraryVersion = XPath31
 	expr := `fn:QName("http://example.com/eg", "a` + nbsp + `b")`
-	if _, err := Eval(expr, ctx, cardinalityNS{}); err == nil {
-		t.Errorf("%s was accepted; an interior no-break space is not an "+
+	err = func() error { _, e := Eval(expr, ctx, cardinalityNS{}); return e }()
+	if err == nil {
+		t.Fatalf("%s was accepted; an interior no-break space is not an "+
 			"NCName character, so FOCA0002 is required", expr)
+	}
+	// FOCA0002 is "invalid lexical value", which is the reason being pinned.
+	// fn:QName takes two arguments and can fail for reasons that have nothing
+	// to do with the name -- a bad namespace URI, a cardinality mismatch --
+	// so an err-only assertion would go on passing if the lexical check were
+	// removed and something else happened to reject the call.
+	if code := xdm.ErrorCode(err); code != "FOCA0002" {
+		t.Errorf("%s: error code %s (%v), want FOCA0002", expr, code, err)
 	}
 }
 
@@ -174,9 +183,15 @@ func TestLexicalQNameColonCheckTrimsXMLSpaceOnly(t *testing.T) {
 	// trim has to happen for the colon to be seen at the edge.
 	for _, lex := range []string{" :a", "a: ", "\t:a", nbsp + ":a", "a:" + nbsp} {
 		expr := `fn:QName("http://example.com/eg", "` + lex + `")`
-		if err := eval(expr); err == nil {
+		err := eval(expr)
+		if err == nil {
 			t.Errorf("%s was accepted; a leading or trailing colon is not a "+
 				"valid lexical QName, so FOCA0002 is required", expr)
+			continue
+		}
+		if code := xdm.ErrorCode(err); code != "FOCA0002" {
+			t.Errorf("%s: error code %s (%v), want FOCA0002 -- the lexical "+
+				"form was refused, not the call", expr, code, err)
 		}
 	}
 }
@@ -228,11 +243,20 @@ func TestDynamicQNameConstructorUsesXMLWhitespaceOnly(t *testing.T) {
 	}
 	for _, tc := range computed {
 		_, err := Eval(tc.expr, ctx(), cardinalityNS{})
-		if tc.wantErr && err == nil {
+		switch {
+		case tc.wantErr && err == nil:
 			t.Errorf("%s was accepted; %s, so FORG0001 is required",
 				tc.expr, tc.why)
-		}
-		if !tc.wantErr && err != nil {
+		case tc.wantErr:
+			// FORG0001 is the constructor's "not in the value space". The
+			// single-argument xs:QName() can also fail with FOCA0002 or a
+			// cardinality error, and an err-only assertion cannot tell the
+			// whitespace rule being pinned from either of those.
+			if code := xdm.ErrorCode(err); code != "FORG0001" {
+				t.Errorf("%s: error code %s (%v), want FORG0001; %s",
+					tc.expr, code, err, tc.why)
+			}
+		case err != nil:
 			t.Errorf("%s: %v; %s", tc.expr, err, tc.why)
 		}
 	}

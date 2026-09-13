@@ -1,6 +1,10 @@
 package xpath
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/knroy/go-xml/xdm"
+)
 
 func fiOne(t *testing.T, expr string) string {
 	t.Helper()
@@ -95,6 +99,13 @@ func TestFormatIntegerEmpty(t *testing.T) {
 // A malformed digit pattern is FODF1310. An unrecognised but well-formed
 // token is not an error — the spec is explicit that a construct one processor
 // knows and another does not falls back rather than failing.
+//
+// The code is asserted rather than the mere presence of an error. These
+// pictures are rejected by several different checks, and a check that stopped
+// running would leave the picture to be rejected further downstream under some
+// other code -- or by the argument conversion, which never reaches the picture
+// parser at all. "Some error" cannot tell those apart from the FODF1310 the
+// spec names.
 func TestFormatIntegerErrors(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
 	ctx.Version = XPath30
@@ -108,8 +119,13 @@ func TestFormatIntegerErrors(t *testing.T) {
 		// A zero-length primary format token.
 		`format-integer(1, '')`,
 	} {
-		if _, err := Eval(expr, ctx, nil); err == nil {
+		_, err := Eval(expr, ctx, nil)
+		if err == nil {
 			t.Errorf("%s succeeded, want FODF1310", expr)
+			continue
+		}
+		if code := xdm.ErrorCode(err); code != "FODF1310" {
+			t.Errorf("%s: error code %s (%v), want FODF1310", expr, code, err)
 		}
 	}
 
@@ -119,8 +135,13 @@ func TestFormatIntegerErrors(t *testing.T) {
 		`format-integer(1234, 'Ww;o(')`,
 		`format-integer(1234, 'Ww;o()(')`,
 	} {
-		if _, err := Eval(expr, ctx, nil); err == nil {
+		_, err := Eval(expr, ctx, nil)
+		if err == nil {
 			t.Errorf("%s succeeded, want FODF1310", expr)
+			continue
+		}
+		if code := xdm.ErrorCode(err); code != "FODF1310" {
+			t.Errorf("%s: error code %s (%v), want FODF1310", expr, code, err)
 		}
 	}
 
@@ -140,9 +161,18 @@ func TestFormatIntegerErrors(t *testing.T) {
 }
 
 // fn:format-integer is a 3.0 function, so a 2.0 expression must not see it.
+//
+// XPST0017 is "no such function", which is what hiding a function means. An
+// err-only assertion also passes when the function IS visible and merely
+// rejects its arguments -- the opposite of what this pins.
 func TestFormatIntegerHiddenFromXPath20(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	if _, err := Eval(`format-integer(1, '0')`, ctx, nil); err == nil {
-		t.Error("XPath20 resolved fn:format-integer, want XPST0017")
+	_, err := Eval(`format-integer(1, '0')`, ctx, nil)
+	if err == nil {
+		t.Fatal("XPath20 resolved fn:format-integer, want XPST0017")
+	}
+	if code := xdm.ErrorCode(err); code != "XPST0017" {
+		t.Errorf("error code %s (%v), want XPST0017 -- the function must be "+
+			"unknown at 2.0, not merely fail", code, err)
 	}
 }

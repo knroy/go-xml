@@ -7,6 +7,25 @@ import (
 	"github.com/knroy/go-xml/xdm"
 )
 
+// wantErrCode asserts that expr fails with exactly the named error code.
+//
+// The code is the assertion, not the presence of an error. Every expression
+// below is wrong in more than one way at once -- an unknown name is also a
+// wrong arity, a type mismatch is also a cardinality mismatch -- so "it
+// failed" is satisfied by a diagnosis other than the one being pinned, and by
+// a failure from a cause the test is not about at all.
+func wantErrCode(t *testing.T, ctx *Context, expr, code string) {
+	t.Helper()
+	_, err := Eval(expr, ctx, nil)
+	if err == nil {
+		t.Errorf("%s succeeded, want %s", expr, code)
+		return
+	}
+	if got := xdm.ErrorCode(err); got != code {
+		t.Errorf("%s: error code %s (%v), want %s", expr, got, err, code)
+	}
+}
+
 func str30(t *testing.T, expr string) []string {
 	t.Helper()
 	got := eval30(t, expr, nil)
@@ -46,14 +65,12 @@ func TestNamedFunctionRef(t *testing.T) {
 	// A reference to a function that does not exist is a static error.
 	ctx := NewContext(nil, Builtins())
 	ctx.Version = XPath30
-	if _, err := Eval(`no-such-function#1`, ctx, nil); err == nil {
-		t.Error("a reference to an unknown function succeeded, want XPST0017")
-	}
+	wantErrCode(t, ctx, `no-such-function#1`, "XPST0017")
 	// Arity is part of a function's identity, so the wrong one does not
-	// resolve: fn:substring has 2 and 3, not 9.
-	if _, err := Eval(`substring#9`, ctx, nil); err == nil {
-		t.Error("substring#9 resolved, want XPST0017")
-	}
+	// resolve: fn:substring has 2 and 3, not 9. XPST0017 in particular --
+	// "unknown function" -- is what says arity is part of the name, rather
+	// than the reference resolving and failing later for some other reason.
+	wantErrCode(t, ctx, `substring#9`, "XPST0017")
 }
 
 func TestDynamicCall(t *testing.T) {
@@ -98,13 +115,12 @@ func TestInlineFunctionParamTypes(t *testing.T) {
 	}
 	ctx := NewContext(nil, Builtins())
 	ctx.Version = XPath30
-	if _, err := Eval(`(function($x as xs:integer) { $x })("nope")`, ctx, nil); err == nil {
-		t.Error("a string passed to an xs:integer parameter succeeded, want XPTY0004")
-	}
-	// The declared return type is checked too.
-	if _, err := Eval(`(function($x) as xs:integer { "nope" })(1)`, ctx, nil); err == nil {
-		t.Error("a string returned from an xs:integer function succeeded, want XPTY0004")
-	}
+	wantErrCode(t, ctx, `(function($x as xs:integer) { $x })("nope")`, "XPTY0004")
+	// The declared return type is checked too. Without the check the body
+	// still runs, and "nope" + nothing is a different error entirely -- which
+	// is why XPTY0004 rather than "an error" is what says the declared type
+	// was applied at the boundary.
+	wantErrCode(t, ctx, `(function($x) as xs:integer { "nope" })(1)`, "XPTY0004")
 }
 
 // Calling a non-function, or calling with the wrong number of arguments, is
@@ -117,9 +133,7 @@ func TestDynamicCallErrors(t *testing.T) {
 		`let $f := function($x) { $x } return $f(1, 2)`,
 		`let $f := function($x) { $x } return $f()`,
 	} {
-		if _, err := Eval(expr, ctx, nil); err == nil {
-			t.Errorf("%s succeeded, want XPTY0004", expr)
-		}
+		wantErrCode(t, ctx, expr, "XPTY0004")
 	}
 }
 
@@ -200,17 +214,26 @@ func TestFunctionLookup(t *testing.T) {
 }
 
 // Atomising a function item is FOTY0013, and must not silently succeed.
+//
+// Two codes are in play and the loose assertion hid the difference. FOTY0013
+// is atomisation refused; FOTY0014 is fn:string refused, which F&O gives its
+// own code because fn:string is not atomisation -- it is defined on nodes and
+// on atomic values and simply has no definition for a function item. So
+// "string(concat#3)" is FOTY0014 while the arithmetic and fn:data paths, which
+// do atomise, are FOTY0013. Asserting only "an error" passes with the two
+// swapped, and passes if either path stops distinguishing them at all.
 func TestFunctionItemDoesNotAtomize(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
 	ctx.Version = XPath30
-	for _, expr := range []string{
-		`string(concat#3)`,
-		`concat#3 + 1`,
-		`data(concat#3)`,
+	for _, c := range []struct{ expr, code string }{
+		// fn:string has no definition for a function item; that is its own
+		// code, not the atomisation one.
+		{`string(concat#3)`, "FOTY0014"},
+		// Arithmetic and fn:data both atomise, so both are FOTY0013.
+		{`concat#3 + 1`, "FOTY0013"},
+		{`data(concat#3)`, "FOTY0013"},
 	} {
-		if _, err := Eval(expr, ctx, nil); err == nil {
-			t.Errorf("%s succeeded, want an error", expr)
-		}
+		wantErrCode(t, ctx, c.expr, c.code)
 	}
 
 	// The checked path names the error explicitly.

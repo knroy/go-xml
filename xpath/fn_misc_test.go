@@ -440,6 +440,14 @@ func TestRoundKeepsNegativeZero(t *testing.T) {
 // cast functions look mostly at the lexical form, so without a source-type
 // gate the base64Binary "10010101" cast happily to the double 10010101 and
 // "castable as xs:float" answered true. Found by the W3C QT3 suite.
+//
+// The error CODE is what pins the gate, not the mere presence of an error.
+// Deleting castPermitted's body does not make these expressions succeed --
+// the lexical re-parse downstream still rejects "10010101" as an xs:float and
+// raises FORG0001. Asserting only "some error" therefore passes with the gate
+// gone. XPTY0004 is the one the table requires and the only one that says the
+// conversion was refused because it is undefined between those types rather
+// than because this particular value happened not to parse.
 func TestCastTablePermissions(t *testing.T) {
 	forbidden := []string{
 		`xs:base64Binary('10010101') cast as xs:float`,
@@ -449,8 +457,27 @@ func TestCastTablePermissions(t *testing.T) {
 		`xs:dayTimeDuration('PT1H') cast as xs:date`,
 	}
 	for _, expr := range forbidden {
-		if err := evalErr(t, testDoc, expr); err == nil {
+		err := evalErr(t, testDoc, expr)
+		if err == nil {
 			t.Errorf("%s was permitted; the casting table forbids it", expr)
+			continue
+		}
+		if code := xdm.ErrorCode(err); code != "XPTY0004" {
+			t.Errorf("%s: error code %s (%v), want XPTY0004 -- a conversion "+
+				"the table does not define, not a bad value", expr, code, err)
+		}
+	}
+	// "castable as" is the half that reported the original defect: it yields
+	// a boolean rather than an error, so an err-only assertion never sees it
+	// at all. Each forbidden conversion must answer false.
+	for _, expr := range []string{
+		`xs:base64Binary('10010101') castable as xs:float`,
+		`xs:hexBinary('0FB7') castable as xs:integer`,
+		`xs:date('2024-01-01') castable as xs:integer`,
+	} {
+		if got := evalStrXSLT(t, testDoc, expr); got != "false" {
+			t.Errorf("%s = %q, want false; the casting table forbids it",
+				expr, got)
 		}
 	}
 	// Conversions the table does permit must keep working.
