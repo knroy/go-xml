@@ -238,8 +238,8 @@ turn "I could not prove the constraint" into "the constraint holds."*
 | Last unbudgeted load-time algorithm | Now bounded; `Options.MaxContentModelPositions` makes the position budget host-tunable. | [`81e6ee5`][81e6ee5] |
 | Substitution closure unbounded | Bounded, along with the pairwise overlap test it fed. | [`1b027e5`][1b027e5] |
 | A flat operator chain overflowed the stack at compile time | The depth cap counts nesting, and the attack is length. Every infix loop charges `maxChainLength`. | [`106bcdc`][106bcdc] |
-| Constant folding rescanned each subtree per node, so compiling was quadratic in expression size | `isClosed` and `containsCompatSensitive` memoise per node: 640 kB fell from 2.79 s to 215 ms. Reachable from data via `xsl:evaluate`. |  |
-| `xsd.HTTPResolver` checked host *names* only, so a permitted name reaching loopback or 169.254.169.254 was an SSRF | The dialler now refuses private, loopback and link-local addresses by default, closing the rebinding window; `AllowPrivateAddresses` opts out. |  |
+| Constant folding rescanned each subtree per node, so compiling was quadratic in expression size | `isClosed` and `containsCompatSensitive` memoise per node: 640 kB fell from 2.79 s to 215 ms. Reachable from data via `xsl:evaluate`. | [`eb12a69`][eb12a69] |
+| `xsd.HTTPResolver` checked host *names* only, so a permitted name reaching loopback or 169.254.169.254 was an SSRF | The dialler now refuses private, loopback and link-local addresses by default, closing the rebinding window; `AllowPrivateAddresses` opts out. | [`9f69069`][9f69069] |
 
 ### Fixed — test harness
 
@@ -262,11 +262,11 @@ what the suites *measured*, not what the library does.
 | The XSLT judge matched an expected error code anywhere in the rendered message | A code quoted in the input, or a substring of a longer one, passed a case that failed for another reason. The leading code decides now, with the substring kept for the 351 errors that carry theirs in a trailing parenthetical. In-scope unchanged at 11,490. | [`8b7161f`][8b7161f] |
 | The regex budget tests never reached the budget | The backtracking engine is off by default, so the probe pattern died at compile time with the same `FORX0002` the tests asserted on; deleting the guard left them green. They now enable the engine and assert `xdm.ErrResourceLimit`, which only the budget wraps. | [`5d1cc6f`][5d1cc6f] |
 | `speccites.sh` passed green while 16 citations named the wrong subject | It checked only that a number names some section, and only in `xslt/stream*.go`. It now covers `xpath/` too (1058 sites) and fails when a citation under a `case "NAME":` names another instruction's §19.8.4 section. | [`ed625d2`][ed625d2] |
-| `tests/qt3` skipped unless `GOXSLT_QT3` was set, so `go test ./...` printed `ok` in 0.3s having run none of 30,345 cases | It now falls back to `../../testdata/qt3tests` exactly as the XSLT lane does, and honours `GOXSLT_NO_SUITES`. A bare run takes ~82s and does real work. | |
-| The latin-1 charset case asserted only that the parse succeeded | `café` decoding to `cafi` passed. Each case that must parse now names the decoded string, and the high range and the `latin1` alias are covered too. | |
-| The CR round-trip test compared `""` to `""` for its one attribute case | `StringValue()` on the element never reaches an attribute, so writing an attribute CR as a literal LF -- which the next parse normalises away -- looked lossless. The attribute value is read directly now, and a literal CR in the output fails. | |
-| `runtimeFuncNames`'s reverse check was a hand-typed roster of 13 of the 19 names | It could only find a name someone had already added to it. The registered set is enumerated from the library instead, with the three stateless XSLT-defined functions named as a deliberate omission and pinned to `lateBoundFuncNames`. | |
-| The global-ordering fixture was already in declaration order | Binding `$v:flag` before the global that needs it passed whether or not the sequence constructor was scanned at all. The fixture is reordered so declaration order and dependency order disagree. | |
+| `tests/qt3` skipped unless `GOXSLT_QT3` was set, so `go test ./...` printed `ok` in 0.3s having run none of 30,345 cases | It now falls back to `../../testdata/qt3tests` exactly as the XSLT lane does, and honours `GOXSLT_NO_SUITES`. A bare run takes ~82s and does real work. | [`3d5e519`][3d5e519] |
+| The latin-1 charset case asserted only that the parse succeeded | `café` decoding to `cafi` passed. Each case that must parse now names the decoded string, and the high range and the `latin1` alias are covered too. | [`3d5e519`][3d5e519] |
+| The CR round-trip test compared `""` to `""` for its one attribute case | `StringValue()` on the element never reaches an attribute, so writing an attribute CR as a literal LF -- which the next parse normalises away -- looked lossless. The attribute value is read directly now, and a literal CR in the output fails. | [`3d5e519`][3d5e519] |
+| `runtimeFuncNames`'s reverse check was a hand-typed roster of 13 of the 19 names | It could only find a name someone had already added to it. The registered set is enumerated from the library instead, with the three stateless XSLT-defined functions named as a deliberate omission and pinned to `lateBoundFuncNames`. | [`3d5e519`][3d5e519] |
+| The global-ordering fixture was already in declaration order | Binding `$v:flag` before the global that needs it passed whether or not the sequence constructor was scanned at all. The fixture is reordered so declaration order and dependency order disagree. | [`3d5e519`][3d5e519] |
 
 ### Documentation
 
@@ -735,6 +735,7 @@ here so every entry in this file sits under a release.
 [3ae153c]: https://github.com/knroy/go-xml/commit/3ae153c
 [3b4b1e8]: https://github.com/knroy/go-xml/commit/3b4b1e8
 [3b6e685]: https://github.com/knroy/go-xml/commit/3b6e685
+[3d5e519]: https://github.com/knroy/go-xml/commit/3d5e519
 [3f3cce3]: https://github.com/knroy/go-xml/commit/3f3cce3
 [40930d5]: https://github.com/knroy/go-xml/commit/40930d5
 [4c06a1f]: https://github.com/knroy/go-xml/commit/4c06a1f
@@ -789,6 +790,7 @@ here so every entry in this file sits under a release.
 [9a41bea]: https://github.com/knroy/go-xml/commit/9a41bea
 [9ae8c57]: https://github.com/knroy/go-xml/commit/9ae8c57
 [9f033e2]: https://github.com/knroy/go-xml/commit/9f033e2
+[9f69069]: https://github.com/knroy/go-xml/commit/9f69069
 [a09c936]: https://github.com/knroy/go-xml/commit/a09c936
 [a0cf1da]: https://github.com/knroy/go-xml/commit/a0cf1da
 [a3ec25e]: https://github.com/knroy/go-xml/commit/a3ec25e
@@ -836,6 +838,7 @@ here so every entry in this file sits under a release.
 [e8ebf4b]: https://github.com/knroy/go-xml/commit/e8ebf4b
 [e967628]: https://github.com/knroy/go-xml/commit/e967628
 [ea4681f]: https://github.com/knroy/go-xml/commit/ea4681f
+[eb12a69]: https://github.com/knroy/go-xml/commit/eb12a69
 [eb5ea72]: https://github.com/knroy/go-xml/commit/eb5ea72
 [ed625d2]: https://github.com/knroy/go-xml/commit/ed625d2
 [f0ffb5b]: https://github.com/knroy/go-xml/commit/f0ffb5b
