@@ -20,25 +20,27 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The XML output method never escaped NEL, U+2028 or the C0/C1 controls | Serialization 3.1 §5 requires them as references; a literal U+0085 reparsed as a line feed, silently corrupting the round trip. One range-aware escaper now serves both positions. |  |
-| `fn:serialize` with `method="html"` wrote XML syntax for empty elements | `<div/>` made an HTML parser read an unclosed tag and swallow the rest of the document. The void-element table is now read, which needed `html-version` honoured. | `e3cb35a` |
-| The `json` output method escaped only `#x1`–`#x1F` | Serialization 3.1 §9 also requires 127–159, so DEL and the C1 controls went out raw; `fn:xml-to-json` already had the range right. | `e3cb35a` |
-| The 49 `xs:` constructors carried no signature | Arity-only matching made every one-argument function test answer true. Signatures are now derived from F&O 18.1. | `e3cb35a` |
-| `fn:concat` was capped at arity 2²⁰ | F&O 3.1 states no maximum, but the synthesizer materialised an `arity+1` slice, so the cap was load-bearing. A compact descriptor made it constant. | `5cb5358` |
-| `fn:function-available` disagreed with `fn:function-lookup` above arity 100 | `LookupDynamic` returned early for a library answering for itself, before reaching the variadic synthesis. Both routes now share it. | `5cb5358` |
-| `let` expressions and inline function declarations had no streamability rule | §19.8.8's table gives `let` `N`/`T`; §19.8.8.16 makes an inline function roaming when it textually mentions a containing function's streaming parameter. | `7f70d40` |
-| Six more instance-level lexical paths read XSD values through Go Unicode whitespace | Six sites reached `strings.TrimSpace`/`Fields`. The sharpest: an empty-content element holding only U+00A0 validated as EMPTY, where `cvc-complex-type.2.1` must report it. | `0f604be` |
-| XQuery computed node names and PI targets trimmed a no-break space as whitespace | Both are `whiteSpace="collapse"`, so U+00A0 is a name character; `element {"<NBSP>e"}` silently built `<e/>`. Both now trim through `xdm.TrimXMLSpace` (`XQDY0074`/`XQDY0041`). | `0f604be` |
-| Nine XSD schema-parsing paths read lexical values through Go Unicode whitespace | Nine sites reached `strings.TrimSpace`/`Fields`, so `maxOccurs="<NBSP>unbounded"` was accepted. The package's own `trimXMLSpace`/`splitFields` now do the work. | `0f604be` |
-| `fn:path` built a string of unbounded length against no byte budget | Its result carries one step per ancestor, so length grows with the depth of the node rather than with any argument: a document 500 elements deep produced 4,000 bytes against a budget with 16 left. It returns through `stringResult` now, as does `fn:generate-id` — bounded and tiny, but charged under the same rule that whoever allocates charges. | `aa11b38` |
-| `fn:concat` answered at a different maximum arity depending on how it was named | The bound lived at `fn:function-lookup` alone, so `concat#9223372036854775807` built a function item claiming arity 2^63-1. One `maxVariadicArity` now governs both routes. | `84ad066` |
-| The dynamic `xs:QName()` constructor trimmed a no-break space as whitespace | Only a *computed* argument reaches this path, so the literal form was refused by the folder while `concat("<NBSP>","xs:string")` succeeded. Three audits misread that as sound; both forms are now probed. | `5405f36` |
-| A synthesized `fn:concat` arity carried the signature of `fn:concat#2` | It borrowed arity-2's signature and changed only `Arity`, so a length/arity mismatch read as "no declared type" and matched on arity alone. Now materialised to the real arity. | `5405f36` |
-| `fn:function-lookup` returned a function item with no signature | `NamedFunctionRef.Eval` set `Signature` and the lookup callback did not, so the same function item answered `instance of` differently by route. Both now carry it. | `e3e3b3a` |
-| `fn:QName` and `fn:resolve-QName` trimmed a no-break space as whitespace | `xs:QName` is `whiteSpace="collapse"`, whose whitespace is XML `S`; `strings.TrimSpace` also strips U+00A0, so `QName("...", "<NBSP>p:a")` was accepted where F&O 10.1.2 requires `FOCA0002`. Both now trim through `trimXMLSpace`. | `0f604be` |
-| `fn:normalize-unicode` accepted a form name padded with a no-break space | F&O 5.4.6 makes the effective form `fn:upper-case(fn:normalize-space($form))`, which is XML `S` only, so an NBSP-padded `"NFC"` is an unrecognised form and must raise `FOCH0003`; it was normalising as NFC instead. Now collapsed through `collapseXMLSpace`. | `0f604be` |
-| `fn:reverse`, `fn:insert-before` and `fn:remove` built a second sequence against no budget | All three were declared `func(_ *Context, ...)`, so `MaxItems` was never asked about a copy the size of the input — unbounded from a host that invokes the built-in directly rather than through an enclosing evaluator. Each now reserves through `makeSequence` before the `make`; `fn:remove` past the end returns its argument and stays uncharged. | `aa11b38` |
-| Every normative manifest row is now asserted to be registered | Coverage ran one way only — registered functions were checked against the manifest, which cannot catch a standard function that stops being registered. `TestManifestFunctionsAreAllRegistered` closes the other direction at green: 272 rows, 0 unregistered. | `84ad066` |
+| `fn:format-number` rounded a tie away from zero | F&O 3.1 §4.7.5 defines the rounding by calling `fn:round-half-to-even`, so `format-number(2.5,'0')` answered 3 where the shared function answered 2. No corpus holds a tie, so only the new test pins it. | [`c01b98a`][c01b98a] |
+| The XQuery constructor scan was exponential and skipped the depth bound | A failed skip was re-derived at every nesting level, so 120 bytes took 52s; it is memoised now. The scan also ran before the depth counter, so 20,000 levels were accepted. | [`3ae153c`][3ae153c] |
+| The XML output method never escaped NEL, U+2028 or the C0/C1 controls | Serialization 3.1 §5 requires them as references; a literal U+0085 reparsed as a line feed, silently corrupting the round trip. One range-aware escaper now serves both positions. | [`282953e`][282953e] |
+| `fn:serialize` with `method="html"` wrote XML syntax for empty elements | `<div/>` made an HTML parser read an unclosed tag and swallow the rest of the document. The void-element table is now read, which needed `html-version` honoured. | [`e3cb35a`][e3cb35a] |
+| The `json` output method escaped only `#x1`–`#x1F` | Serialization 3.1 §9 also requires 127–159, so DEL and the C1 controls went out raw; `fn:xml-to-json` already had the range right. | [`e3cb35a`][e3cb35a] |
+| The 49 `xs:` constructors carried no signature | Arity-only matching made every one-argument function test answer true. Signatures are now derived from F&O 18.1. | [`e3cb35a`][e3cb35a] |
+| `fn:concat` was capped at arity 2²⁰ | F&O 3.1 states no maximum, but the synthesizer materialised an `arity+1` slice, so the cap was load-bearing. A compact descriptor made it constant. | [`5cb5358`][5cb5358] |
+| `fn:function-available` disagreed with `fn:function-lookup` above arity 100 | `LookupDynamic` returned early for a library answering for itself, before reaching the variadic synthesis. Both routes now share it. | [`5cb5358`][5cb5358] |
+| `let` expressions and inline function declarations had no streamability rule | §19.8.8's table gives `let` `N`/`T`; §19.8.8.16 makes an inline function roaming when it textually mentions a containing function's streaming parameter. | [`7f70d40`][7f70d40] |
+| Six more instance-level lexical paths read XSD values through Go Unicode whitespace | Six sites reached `strings.TrimSpace`/`Fields`. The sharpest: an empty-content element holding only U+00A0 validated as EMPTY, where `cvc-complex-type.2.1` must report it. | [`0f604be`][0f604be] |
+| XQuery computed node names and PI targets trimmed a no-break space as whitespace | Both are `whiteSpace="collapse"`, so U+00A0 is a name character; `element {"<NBSP>e"}` silently built `<e/>`. Both now trim through `xdm.TrimXMLSpace` (`XQDY0074`/`XQDY0041`). | [`0f604be`][0f604be] |
+| Nine XSD schema-parsing paths read lexical values through Go Unicode whitespace | Nine sites reached `strings.TrimSpace`/`Fields`, so `maxOccurs="<NBSP>unbounded"` was accepted. The package's own `trimXMLSpace`/`splitFields` now do the work. | [`0f604be`][0f604be] |
+| `fn:path` built a string of unbounded length against no byte budget | Its result carries one step per ancestor, so length grows with the depth of the node rather than with any argument: a document 500 elements deep produced 4,000 bytes against a budget with 16 left. It returns through `stringResult` now, as does `fn:generate-id` — bounded and tiny, but charged under the same rule that whoever allocates charges. | [`aa11b38`][aa11b38] |
+| `fn:concat` answered at a different maximum arity depending on how it was named | The bound lived at `fn:function-lookup` alone, so `concat#9223372036854775807` built a function item claiming arity 2^63-1. One `maxVariadicArity` now governs both routes. | [`84ad066`][84ad066] |
+| The dynamic `xs:QName()` constructor trimmed a no-break space as whitespace | Only a *computed* argument reaches this path, so the literal form was refused by the folder while `concat("<NBSP>","xs:string")` succeeded. Three audits misread that as sound; both forms are now probed. | [`5405f36`][5405f36] |
+| A synthesized `fn:concat` arity carried the signature of `fn:concat#2` | It borrowed arity-2's signature and changed only `Arity`, so a length/arity mismatch read as "no declared type" and matched on arity alone. Now materialised to the real arity. | [`5405f36`][5405f36] |
+| `fn:function-lookup` returned a function item with no signature | `NamedFunctionRef.Eval` set `Signature` and the lookup callback did not, so the same function item answered `instance of` differently by route. Both now carry it. | [`e3e3b3a`][e3e3b3a] |
+| `fn:QName` and `fn:resolve-QName` trimmed a no-break space as whitespace | `xs:QName` is `whiteSpace="collapse"`, whose whitespace is XML `S`; `strings.TrimSpace` also strips U+00A0, so `QName("...", "<NBSP>p:a")` was accepted where F&O 10.1.2 requires `FOCA0002`. Both now trim through `trimXMLSpace`. | [`0f604be`][0f604be] |
+| `fn:normalize-unicode` accepted a form name padded with a no-break space | F&O 5.4.6 makes the effective form `fn:upper-case(fn:normalize-space($form))`, which is XML `S` only, so an NBSP-padded `"NFC"` is an unrecognised form and must raise `FOCH0003`; it was normalising as NFC instead. Now collapsed through `collapseXMLSpace`. | [`0f604be`][0f604be] |
+| `fn:reverse`, `fn:insert-before` and `fn:remove` built a second sequence against no budget | All three were declared `func(_ *Context, ...)`, so `MaxItems` was never asked about a copy the size of the input — unbounded from a host that invokes the built-in directly rather than through an enclosing evaluator. Each now reserves through `makeSequence` before the `make`; `fn:remove` past the end returns its argument and stays uncharged. | [`aa11b38`][aa11b38] |
+| Every normative manifest row is now asserted to be registered | Coverage ran one way only — registered functions were checked against the manifest, which cannot catch a standard function that stops being registered. `TestManifestFunctionsAreAllRegistered` closes the other direction at green: 272 rows, 0 unregistered. | [`84ad066`][84ad066] |
 | A typed function test was answered on arity alone | `applyBuiltinSignatures` read a seventeen-entry table of its own while call binding read all 272, so `fn:concat#2` satisfied `function(xs:date, xs:date) as xs:integer` -- both take two arguments. Function items now read `specSignatures`, and `fn:concat` gets its per-arity type. | [`a3f5568`][a3f5568] |
 | Three item types rendered as a bare `item()` | `xs:numeric`, an array test and a typed function test lost their identity in `SequenceType.String()`, which is what a signature is compared through, so an identical type failed to match itself once signatures were consulted. | [`a3f5568`][a3f5568] |
 | `fn:string-to-codepoints` and all three `fn:tokenize` paths materialised items against no budget | The item charge lived at `LetExpr`, `evalFor` and the range operator, so a host calling a built-in directly got the full `MaxItems` again. Each reserves its known count once through `makeSequence`, before the `make` rather than after. `fn:substring` is charged here too: it allocates through `string(runes[...])` where its `-before` and `-after` siblings only slice. | [`1e5e26c`][1e5e26c] |
@@ -238,8 +240,8 @@ what the suites *measured*, not what the library does.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The W3C suites were cloned unpinned, so a figure could move with no change here | `results.json` records each suite revision, CI clones at that SHA, and a test fails when the two disagree. | `7f70d40` |
-| `-race` never declared that it needs cgo | CI passed only because its runners have gcc; an auditor without one read a toolchain error as a test failure. The lane now skips with a reason. | `7f70d40` |
+| The W3C suites were cloned unpinned, so a figure could move with no change here | `results.json` records each suite revision, CI clones at that SHA, and a test fails when the two disagree. | [`7f70d40`][7f70d40] |
+| `-race` never declared that it needs cgo | CI passed only because its runners have gcc; an auditor without one read a toolchain error as a test failure. The lane now skips with a reason. | [`7f70d40`][7f70d40] |
 | The gate recorded no provenance, so no figure could be tied to the tree that produced it | `check.sh` heads its transcript with Go version, commit, architecture and per-suite revision, and writes `tests/last-run.txt`. | [`03b5942`][03b5942] |
 | CI ran on Linux only, so nothing proved the file handling rule 3 asks for | The fast job runs `ubuntu`/`windows`/`macos`; `conformance` stays Linux, where the corpora are. | [`03b5942`][03b5942] |
 | Nine fuzz targets compiled and replayed seeds but never searched | A nightly matrix gives each 300s, off the per-push gate because the search is nondeterministic. | [`f2aeee8`][f2aeee8] |
@@ -675,22 +677,32 @@ here so every entry in this file sits under a release.
 | xpath: [Y] on a BCE year is correct, and is now pinned | `format-date`/`format-dateTime` with `[Y]` renders `xs:dateTime( "-1000000-06-15T12:00:00Z")` as `1000000`, with no minus |
 | xsd: an identity field typed as a union compared spellings, not values | Identity-constraint equality is defined on values. `keyString` already builds a type-tagged canonical form for every field before the sequence is joined, so `3.0` and `3` collide as one `xs:decimal`, `007` and `7` as one `xs:integer` |
 
-
 [0048fde]: https://github.com/knroy/go-xml/commit/0048fde
 [01b91ba]: https://github.com/knroy/go-xml/commit/01b91ba
+[03b5942]: https://github.com/knroy/go-xml/commit/03b5942
 [0634425]: https://github.com/knroy/go-xml/commit/0634425
+[0f604be]: https://github.com/knroy/go-xml/commit/0f604be
+[10486a6]: https://github.com/knroy/go-xml/commit/10486a6
 [106bcdc]: https://github.com/knroy/go-xml/commit/106bcdc
 [120e7ec]: https://github.com/knroy/go-xml/commit/120e7ec
 [145d0d1]: https://github.com/knroy/go-xml/commit/145d0d1
 [176ce57]: https://github.com/knroy/go-xml/commit/176ce57
+[17b1c91]: https://github.com/knroy/go-xml/commit/17b1c91
+[17bcdb6]: https://github.com/knroy/go-xml/commit/17bcdb6
 [17ce36c]: https://github.com/knroy/go-xml/commit/17ce36c
+[187dfec]: https://github.com/knroy/go-xml/commit/187dfec
 [18a6d96]: https://github.com/knroy/go-xml/commit/18a6d96
 [1b027e5]: https://github.com/knroy/go-xml/commit/1b027e5
+[1b7a25a]: https://github.com/knroy/go-xml/commit/1b7a25a
 [1c43c4e]: https://github.com/knroy/go-xml/commit/1c43c4e
 [1d10349]: https://github.com/knroy/go-xml/commit/1d10349
+[1e21828]: https://github.com/knroy/go-xml/commit/1e21828
+[1e5e26c]: https://github.com/knroy/go-xml/commit/1e5e26c
+[220b466]: https://github.com/knroy/go-xml/commit/220b466
 [22d2d64]: https://github.com/knroy/go-xml/commit/22d2d64
 [24c4cca]: https://github.com/knroy/go-xml/commit/24c4cca
 [277599e]: https://github.com/knroy/go-xml/commit/277599e
+[282953e]: https://github.com/knroy/go-xml/commit/282953e
 [28699a9]: https://github.com/knroy/go-xml/commit/28699a9
 [28e455a]: https://github.com/knroy/go-xml/commit/28e455a
 [2c461c7]: https://github.com/knroy/go-xml/commit/2c461c7
@@ -699,15 +711,25 @@ here so every entry in this file sits under a release.
 [2eb28b6]: https://github.com/knroy/go-xml/commit/2eb28b6
 [2ef8dba]: https://github.com/knroy/go-xml/commit/2ef8dba
 [30dc68d]: https://github.com/knroy/go-xml/commit/30dc68d
+[34908a7]: https://github.com/knroy/go-xml/commit/34908a7
 [35c2e77]: https://github.com/knroy/go-xml/commit/35c2e77
 [3672fa3]: https://github.com/knroy/go-xml/commit/3672fa3
+[37972d9]: https://github.com/knroy/go-xml/commit/37972d9
 [39f7174]: https://github.com/knroy/go-xml/commit/39f7174
+[3ae153c]: https://github.com/knroy/go-xml/commit/3ae153c
 [3b4b1e8]: https://github.com/knroy/go-xml/commit/3b4b1e8
 [3b6e685]: https://github.com/knroy/go-xml/commit/3b6e685
 [3f3cce3]: https://github.com/knroy/go-xml/commit/3f3cce3
 [40930d5]: https://github.com/knroy/go-xml/commit/40930d5
+[4c06a1f]: https://github.com/knroy/go-xml/commit/4c06a1f
+[4ce4086]: https://github.com/knroy/go-xml/commit/4ce4086
+[4fd0df5]: https://github.com/knroy/go-xml/commit/4fd0df5
+[5405f36]: https://github.com/knroy/go-xml/commit/5405f36
+[57a2b64]: https://github.com/knroy/go-xml/commit/57a2b64
 [5964c0a]: https://github.com/knroy/go-xml/commit/5964c0a
 [59ee9b9]: https://github.com/knroy/go-xml/commit/59ee9b9
+[5c17280]: https://github.com/knroy/go-xml/commit/5c17280
+[5cb5358]: https://github.com/knroy/go-xml/commit/5cb5358
 [5cd6b38]: https://github.com/knroy/go-xml/commit/5cd6b38
 [5f0df59]: https://github.com/knroy/go-xml/commit/5f0df59
 [600e7c0]: https://github.com/knroy/go-xml/commit/600e7c0
@@ -716,96 +738,86 @@ here so every entry in this file sits under a release.
 [694fe29]: https://github.com/knroy/go-xml/commit/694fe29
 [6c8405c]: https://github.com/knroy/go-xml/commit/6c8405c
 [6e03e3d]: https://github.com/knroy/go-xml/commit/6e03e3d
+[6eacc2d]: https://github.com/knroy/go-xml/commit/6eacc2d
 [704222f]: https://github.com/knroy/go-xml/commit/704222f
 [73d547b]: https://github.com/knroy/go-xml/commit/73d547b
+[75d633e]: https://github.com/knroy/go-xml/commit/75d633e
+[7668773]: https://github.com/knroy/go-xml/commit/7668773
 [78f70d5]: https://github.com/knroy/go-xml/commit/78f70d5
 [7ad2845]: https://github.com/knroy/go-xml/commit/7ad2845
 [7b0562a]: https://github.com/knroy/go-xml/commit/7b0562a
 [7c4bef2]: https://github.com/knroy/go-xml/commit/7c4bef2
+[7e7c766]: https://github.com/knroy/go-xml/commit/7e7c766
 [7f2d2d0]: https://github.com/knroy/go-xml/commit/7f2d2d0
+[7f70d40]: https://github.com/knroy/go-xml/commit/7f70d40
+[7ffd7da]: https://github.com/knroy/go-xml/commit/7ffd7da
 [81e6ee5]: https://github.com/knroy/go-xml/commit/81e6ee5
 [830ae11]: https://github.com/knroy/go-xml/commit/830ae11
 [83148b7]: https://github.com/knroy/go-xml/commit/83148b7
 [84735c8]: https://github.com/knroy/go-xml/commit/84735c8
+[84ad066]: https://github.com/knroy/go-xml/commit/84ad066
 [878f9ed]: https://github.com/knroy/go-xml/commit/878f9ed
 [885f6b7]: https://github.com/knroy/go-xml/commit/885f6b7
 [8dcc4dc]: https://github.com/knroy/go-xml/commit/8dcc4dc
+[8e0f44d]: https://github.com/knroy/go-xml/commit/8e0f44d
 [9113ac4]: https://github.com/knroy/go-xml/commit/9113ac4
 [920fd8a]: https://github.com/knroy/go-xml/commit/920fd8a
+[924ef76]: https://github.com/knroy/go-xml/commit/924ef76
+[93c5e88]: https://github.com/knroy/go-xml/commit/93c5e88
 [96171c5]: https://github.com/knroy/go-xml/commit/96171c5
+[9660e52]: https://github.com/knroy/go-xml/commit/9660e52
 [9a41bea]: https://github.com/knroy/go-xml/commit/9a41bea
+[9ae8c57]: https://github.com/knroy/go-xml/commit/9ae8c57
+[9f033e2]: https://github.com/knroy/go-xml/commit/9f033e2
+[a0cf1da]: https://github.com/knroy/go-xml/commit/a0cf1da
 [a3ec25e]: https://github.com/knroy/go-xml/commit/a3ec25e
+[a3f5568]: https://github.com/knroy/go-xml/commit/a3f5568
 [a45c3a6]: https://github.com/knroy/go-xml/commit/a45c3a6
 [a820213]: https://github.com/knroy/go-xml/commit/a820213
 [a883c0a]: https://github.com/knroy/go-xml/commit/a883c0a
+[aa11b38]: https://github.com/knroy/go-xml/commit/aa11b38
 [ab89b76]: https://github.com/knroy/go-xml/commit/ab89b76
+[abc8cbc]: https://github.com/knroy/go-xml/commit/abc8cbc
 [ac743d4]: https://github.com/knroy/go-xml/commit/ac743d4
 [ad2c3dc]: https://github.com/knroy/go-xml/commit/ad2c3dc
 [aeead08]: https://github.com/knroy/go-xml/commit/aeead08
 [b21f5eb]: https://github.com/knroy/go-xml/commit/b21f5eb
 [b361b10]: https://github.com/knroy/go-xml/commit/b361b10
+[b4a8b53]: https://github.com/knroy/go-xml/commit/b4a8b53
 [b4c4bb2]: https://github.com/knroy/go-xml/commit/b4c4bb2
 [b50b373]: https://github.com/knroy/go-xml/commit/b50b373
-[8e0f44d]: https://github.com/knroy/go-xml/commit/8e0f44d
-[e8ebf4b]: https://github.com/knroy/go-xml/commit/e8ebf4b
-[9660e52]: https://github.com/knroy/go-xml/commit/9660e52
-[f29b554]: https://github.com/knroy/go-xml/commit/f29b554
-[57a2b64]: https://github.com/knroy/go-xml/commit/57a2b64
-[17b1c91]: https://github.com/knroy/go-xml/commit/17b1c91
-[e511421]: https://github.com/knroy/go-xml/commit/e511421
-[5c17280]: https://github.com/knroy/go-xml/commit/5c17280
-[1e5e26c]: https://github.com/knroy/go-xml/commit/1e5e26c
-[924ef76]: https://github.com/knroy/go-xml/commit/924ef76
-[a3f5568]: https://github.com/knroy/go-xml/commit/a3f5568
-[4c06a1f]: https://github.com/knroy/go-xml/commit/4c06a1f
-[a0cf1da]: https://github.com/knroy/go-xml/commit/a0cf1da
-[b4a8b53]: https://github.com/knroy/go-xml/commit/b4a8b53
-[4fd0df5]: https://github.com/knroy/go-xml/commit/4fd0df5
-[9f033e2]: https://github.com/knroy/go-xml/commit/9f033e2
-[cdba77a]: https://github.com/knroy/go-xml/commit/cdba77a
-[1e21828]: https://github.com/knroy/go-xml/commit/1e21828
-[93c5e88]: https://github.com/knroy/go-xml/commit/93c5e88
-[6eacc2d]: https://github.com/knroy/go-xml/commit/6eacc2d
-[75d633e]: https://github.com/knroy/go-xml/commit/75d633e
-[9ae8c57]: https://github.com/knroy/go-xml/commit/9ae8c57
-[d683fd8]: https://github.com/knroy/go-xml/commit/d683fd8
-[4ce4086]: https://github.com/knroy/go-xml/commit/4ce4086
-[220b466]: https://github.com/knroy/go-xml/commit/220b466
-[f3ff553]: https://github.com/knroy/go-xml/commit/f3ff553
-[17bcdb6]: https://github.com/knroy/go-xml/commit/17bcdb6
-[abc8cbc]: https://github.com/knroy/go-xml/commit/abc8cbc
-[7668773]: https://github.com/knroy/go-xml/commit/7668773
-[7ffd7da]: https://github.com/knroy/go-xml/commit/7ffd7da
-[1b7a25a]: https://github.com/knroy/go-xml/commit/1b7a25a
-[7e7c766]: https://github.com/knroy/go-xml/commit/7e7c766
-[34908a7]: https://github.com/knroy/go-xml/commit/34908a7
-[187dfec]: https://github.com/knroy/go-xml/commit/187dfec
-[37972d9]: https://github.com/knroy/go-xml/commit/37972d9
-[d63cbb2]: https://github.com/knroy/go-xml/commit/d63cbb2
-[f161723]: https://github.com/knroy/go-xml/commit/f161723
-[10486a6]: https://github.com/knroy/go-xml/commit/10486a6
-[f2aeee8]: https://github.com/knroy/go-xml/commit/f2aeee8
-[03b5942]: https://github.com/knroy/go-xml/commit/03b5942
 [b6fb5ab]: https://github.com/knroy/go-xml/commit/b6fb5ab
 [bb803d5]: https://github.com/knroy/go-xml/commit/bb803d5
 [bc72bed]: https://github.com/knroy/go-xml/commit/bc72bed
 [bd0aaf5]: https://github.com/knroy/go-xml/commit/bd0aaf5
 [be2938e]: https://github.com/knroy/go-xml/commit/be2938e
+[c01b98a]: https://github.com/knroy/go-xml/commit/c01b98a
 [c3a52be]: https://github.com/knroy/go-xml/commit/c3a52be
 [c8fc839]: https://github.com/knroy/go-xml/commit/c8fc839
 [cc17983]: https://github.com/knroy/go-xml/commit/cc17983
+[cdba77a]: https://github.com/knroy/go-xml/commit/cdba77a
 [d0dd99d]: https://github.com/knroy/go-xml/commit/d0dd99d
 [d145807]: https://github.com/knroy/go-xml/commit/d145807
 [d15b6df]: https://github.com/knroy/go-xml/commit/d15b6df
+[d63cbb2]: https://github.com/knroy/go-xml/commit/d63cbb2
+[d683fd8]: https://github.com/knroy/go-xml/commit/d683fd8
 [da1cde6]: https://github.com/knroy/go-xml/commit/da1cde6
 [e049991]: https://github.com/knroy/go-xml/commit/e049991
 [e125888]: https://github.com/knroy/go-xml/commit/e125888
 [e2606cc]: https://github.com/knroy/go-xml/commit/e2606cc
+[e3cb35a]: https://github.com/knroy/go-xml/commit/e3cb35a
+[e3e3b3a]: https://github.com/knroy/go-xml/commit/e3e3b3a
+[e511421]: https://github.com/knroy/go-xml/commit/e511421
 [e51ed3f]: https://github.com/knroy/go-xml/commit/e51ed3f
+[e8ebf4b]: https://github.com/knroy/go-xml/commit/e8ebf4b
 [e967628]: https://github.com/knroy/go-xml/commit/e967628
 [ea4681f]: https://github.com/knroy/go-xml/commit/ea4681f
 [eb5ea72]: https://github.com/knroy/go-xml/commit/eb5ea72
 [f0ffb5b]: https://github.com/knroy/go-xml/commit/f0ffb5b
+[f161723]: https://github.com/knroy/go-xml/commit/f161723
+[f29b554]: https://github.com/knroy/go-xml/commit/f29b554
+[f2aeee8]: https://github.com/knroy/go-xml/commit/f2aeee8
+[f3ff553]: https://github.com/knroy/go-xml/commit/f3ff553
 [f536984]: https://github.com/knroy/go-xml/commit/f536984
 [f88747b]: https://github.com/knroy/go-xml/commit/f88747b
 [f9c0cf5]: https://github.com/knroy/go-xml/commit/f9c0cf5
