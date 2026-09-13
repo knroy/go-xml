@@ -744,6 +744,17 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	// A stylesheet function's body builds a temporary tree, which is
 	// temporary output state for XTDE1480.
 	sub.temporary = true
+	// 10.4.1's restriction governs the names the TARGET EXPRESSION of
+	// xsl:evaluate may reference, not what the functions it names go on to
+	// call. A body reached from a target expression is ordinary stylesheet
+	// code, so it sees the stylesheet's own library: a public function whose
+	// body calls a private one must work, and the private callee is never
+	// named in the expression. See restrictedLibrary.unrestrict.
+	if rl, ok := sub.ctx.Funcs.(restrictedLibrary); ok {
+		c := *sub.ctx
+		c.Funcs = rl.unrestrict()
+		sub.ctx = &c
+	}
 	// Section 24.3: the current output URI is cleared while a stylesheet
 	// function's body is evaluated.
 	sub.ctx = sub.ctx.WithVar(outputURIVar, xdm.Empty())

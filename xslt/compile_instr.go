@@ -1621,6 +1621,26 @@ func (r restrictedLibrary) LookupDynamic(
 	return r.lookupVisible(name, arity)
 }
 
+// unrestrict returns the library this one wraps.
+//
+// 10.4.1 restricts the static context OF THE TARGET EXPRESSION: the names that
+// expression may itself reference. It says nothing about what those functions
+// go on to call. A public function whose body calls a private one is ordinary
+// stylesheet code, and the private callee is not "present in" the target
+// expression at all -- it is never named there.
+//
+// This engine resolves function names when it evaluates them, so the
+// restricted library installed for the target expression stays in the context
+// while a called function's BODY runs, and the restriction reached calls it
+// was never meant to see. DocBook xslTNG is exactly that shape: the evaluated
+// string names f:pi, which carries visibility="public", and f:pi's body calls
+// fp:pi-from-list, which carries none and so defaults to private. Filtering
+// the callee refused 512 of 593 documents for a name the expression never
+// wrote.
+//
+// userFunction.call restores this library for the duration of a body.
+func (r restrictedLibrary) unrestrict() xpath.FunctionLibrary { return r.inner }
+
 // lookupVisible is the part of the restriction both lookups share: a function
 // the stylesheet declares is reachable only if this package may call it.
 func (r restrictedLibrary) lookupVisible(

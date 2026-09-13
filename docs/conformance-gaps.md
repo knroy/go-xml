@@ -35,21 +35,21 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,490 | 99.76% | **28** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,491 | 99.77% | **27** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,598 | 41,567 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 577 | 577 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **98** |
+| | **Total** | | | | **97** |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 28 + 30 + 31 + 0 = 98. Measured 2026-09-11.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 27 + 30 + 31 + 0 = 97. Measured 2026-09-11, 2026-09-13.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 2,266 tests.
+The unit-test suite is 2,286 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -242,7 +242,7 @@ three `regex-syntax-xslt20` cases.
 <!-- BEGIN GENERATED XTSE3430 BLOCK -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-**8 of the 28 want an `XTSE3430`** — a refusal of a stylesheet as
+**8 of the 27 want an `XTSE3430`** — a refusal of a stylesheet as
 <!-- END GENERATED XTSE3430 BLOCK -->
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
@@ -285,7 +285,7 @@ own terms rather than deferred with the rest. It is counted once, in the 14.
 | `su-ascent-902` | **Fixed 2026-09-12 — the verdict below was wrong** | This row read *"Withheld — the rule contradicts the spec"*, on the premise that "no such precondition exists" and that §19.8.5 "adds nothing about cardinality". **That premise is false.** §19.8.5.3, .4, .5, .6 and .7 each carry the identical sentence — *"Rules for the function signature: If the declared type of the streaming parameter permits more than one node, the function is not guaranteed-streamable"* — and §19.8.5.2 (absorbing) is the single exception, "there are no constraints". The rule was simply unimplemented; `typePermitsNodes` already existed and nothing consulted it for this. Implemented now, and the case passes with `su-inspection-902` and `su-shallow-descent-906`, which share the description *"first arg accepts a sequence"*. Zero cases lost. **The tension the old verdict pointed at is real but sits inside the spec, not between the spec and the suite:** §19.8.5.7 states the rule and then gives a worked example that violates it (`<xsl:param name="input" as="element(para)*"/>`, of which it says "the function body meets the rules for this category" — the *body* does; the signature does not, and the example is silent about the rule three paragraphs above it). The W3C suite sides with the rule, so we do too; `TestStreamingParameterSignatureRule` asserts the example is refused, so the choice stays visible rather than becoming folklore. |
 | `sf-reverse-001` | **Not implementable** | Suite verdict for a streaming pipeline, wrong for a non-streaming one. The case runs `reverse(snapshot(/chapter)//section)/@id` under a streamable `xsl:source-document` and expects `1.3 1.2.2 1.2.1 1.2 1.1 1` — the reversed order. XPath 3.1 §3.3.1.1 says of `E1/E2`: when every evaluation of E2 returns nodes, "these sequences are combined, and duplicate nodes are eliminated based on node identity. The resulting node sequence is returned in document order" — however E1 was ordered; only `!` and `for` preserve it, and this engine returns `1 1.1 1.2 1.2.1 1.2.2 1.3`. The catalog's answer is what a *streaming* evaluator produces: §19.11 (An Optimization: Pattern-Based Scanning) says that an implementation "that literally followed the semantics of path expressions as defined in [XPath 3.0] would therefore require to sort the nodes into document order, and sorting is incompatible with streaming", so Saxon-EE 9.7/9.8 and Exselt, which both pass, never sort a streamed path. §19.8.8.7 (streamability of path expressions) prescribes no result order, and the changelog only "clarified that a striding expression ... can deliver a mix of streamed and unstreamed nodes and that the result is not necessarily in document order". QT3 has no `reverse(X)/step` order assertion in either direction. This engine answers `streamable="yes"` by building the tree, so the XPath rule is the only one that binds, and the sort at `xpath/eval.go` `evalStepOver` stays; `TestDocumentOrderAndDedup` pins `reverse(//book)/@id` to document order. The catalog's "see bug 24125" is about groundedness (why `reverse` of a `snapshot` is streamable at all), not order. The only route to this case is a streamed evaluator whose path results are emitted in arrival order, which is the *Streamed execution* item below, not a change to `/`. |
 | `accumulator-061` | **Costs more than it gains** | Read in §2. |
-| `evaluate-045` | **Won't fix** | Read in §2. |
+| `evaluate-045` | **Fixed 2026-09-13** | The 510-document cost was a leak, not the rule. Read in §2. |
 | `streamable-116` | **Not implementable — the spec permits what we do, and the suite marks the case `_WRONG`** | Wants `XPDY0002`: a global variable `select="count(//*)"` reads the context item while the initial mode is streamable and the source is supplied `streaming="true"`, so the case expects the global context item to be *absent*. §3.6.6 says otherwise. Without an `xsl:global-context-item` declaration "the item supplied as the global context item cannot be a node in a streamed document (the transformation API may handle this either by disallowing such an input, **or by building the corresponding tree in memory and supplying the global context item as an unstreamed node**)". This engine builds every tree in memory, so it takes the second option the spec offers: `$size` evaluates and the transform succeeds. The error is reachable only by an API that withholds the global context item whenever the initial mode streams — a choice the spec leaves to the implementation, and one that would touch every global variable of every streamed-mode invocation. The catalog's own keywords carry `_WRONG:wrong-error-code`, the suite authors' mark that the expected code is disputed; and the error is dynamic, not a streamability verdict, so no §19.8 rule reaches it. |
 | `evaluate-048` | **Needs a network fetch** | Fails on `FODC0002: cannot retrieve "https://www.saxonica.com/welcome/welcome.xml": scheme "https" is not permitted`. Not reachable regardless. Its earlier half — `fn:function-lookup`'s dynamic visibility — was a separate reason; see *Corrections*. |
 | `docbook-001` | **Not implementable** | Read in §2 — a vendor extension. |
@@ -642,53 +642,76 @@ against the whole corpus before it could be trusted. `si-fork-902` and
 `si-fork-952` are a fourth and fifth case of the same shape but a different
 cause; they are recorded under *The `||` operator* above.
 
-## `evaluate-045` — 1 case gained, 510 real documents lost
+## `evaluate-045` — fixed; the trade it recorded was an artifact
 
-**A real conformance defect — fixable, deliberately not fixed.** This is not a
-case where the spec fails to reach us. It asserts that a stylesheet function
-with no `visibility` attribute is private, and so unreachable from
-`xsl:evaluate`. **The suite is right**, on every step:
+**Closed 2026-09-13.** This entry recorded a deliberate divergence costing 510
+DocBook documents. The measurement was real and reproducible; its *cause* was
+not what the entry said. With that cause fixed, the rule enforces at no cost.
+
+The spec was never in doubt, on any step:
 
 - §3.5: "When the `xsl:package` element is not used explicitly, **the entire
   stylesheet comprises a single implicit package**."
-- §3.2: an implicit package, "rooted at an `xsl:stylesheet` or `xsl:transform`
-  element … **is transformed automatically to a package** as described in 3.5
-  Packages."
+- §3.2: an implicit package "**is transformed automatically to a package** as
+  described in 3.5 Packages."
 - §3.5.3.1's attribute table: "visibility — One of public, private, or final.
   **The default is private**."
 - And the consequence, stated outright: "**Functions are private by default;
   private functions can be referenced only within the package where they are
   declared (and not in `xsl:evaluate` expressions).**"
 
-So XTDE3160 is the correct result and we knowingly do not produce it. The
-`isPackage` guard in `evaluateMayCall` means only "the root element was
-literally `xsl:package`", which is strictly narrower than the spec's package
-model — under §3.5 a plain `xsl:stylesheet` *is* a package.
+### What the 510 actually were
 
-The reason to diverge is cost, measured rather than assumed (2026-09-12, at
-`b6ecafb`, one variable changed — the guard). Rebuilding `./cmd/go-xml` and
-running the DocBook xslTNG lane with its own flags (`tests/check.sh:1060`,
-which globs `$XSLTNG/src/test/resources/xml/*.xml` — **593** documents):
+Removing the `isPackage` guard alone took the DocBook lane from 577 of 593 to
+67, with 512 `XTDE3160`s. Every one of those named
+`Q{http://docbook.org/ns/docbook/functions/private}pi-from-list` — a function
+**no target expression in that corpus ever writes**. The evaluated string names
+`f:pi`, which `standalone-functions.xsl` declares `visibility="public"`;
+`f:pi`'s body then calls `fp:pi-from-list`, which carries no `visibility`.
 
-| `isPackage` guard | Documents passing | XTDE3160 raised | `evaluate-045` |
-| --- | --- | --- | --- |
-| present (shipped) | **577** of 593 | 0 | fails |
-| removed (conforming) | **67** of 593 | 512 | passes |
+§10.4.1 admits into the target expression's static context "all user-defined
+functions present in the containing package provided their visibility is not
+hidden or private". That governs **the names the expression may reference**, not
+what those functions go on to call. This engine resolves function names when it
+evaluates them, so the restricted library installed for the target expression
+stayed in the context while a *called function's body* ran, and filtered a name
+the expression never used. The corpus was not exercising the visibility rule at
+all — it was tripping over a leak.
 
-Conforming here would break 510 real documents to gain one suite case. Saxon
-makes the same trade: its XSLT 3.0 submission records no result for the case at
-all, while its sibling `evaluate-006` — the same stylesheet with
-`visibility="public"` written on the declaration — passes.
+### Measured, one variable at a time
 
-The 512 failures trace to **one function**, not to breadth of `xsl:evaluate`
-use. Every message names
-`Q{http://docbook.org/ns/docbook/functions/private}pi-from-list` with 3
-arguments. `standalone-functions.xsl` declares `f:pi` with an explicit
-`visibility="public"`, and `f:pi` delegates to `fp:pi-from-list`, which carries
-no `visibility` attribute and so defaults to private. `docbook.xsl`'s pipeline
-config reaches `f:pi` from an evaluated string (`f:is-true(f:pi(…))`), which
-pulls the private callee into the `xsl:evaluate` static context on nearly every
-document in the corpus.
+| build | XSLT 3.0 | DocBook | `XTDE3160` | XSpec | `evaluate-045` |
+| --- | ---: | ---: | ---: | ---: | --- |
+| shipped (guard on, leak present) | 11490 | 577 / 593 | 0 | 225 | fails |
+| guard off, leak present | — | **67** / 593 | **512** | — | passes |
+| guard off, leak fixed | **11491** | **577** / 593 | **0** | **225** | passes |
+
+Both corpora hold exactly, and the suite gains the case.
+
+### Saxon
+
+Saxon applies the rule. Its XSLT 3.0 submission records
+`<test-case name="evaluate-045" result="wrongError" comment="Expected XTDE3160;
+got XTDE0040"/>` — a refusal reported under the wrong code — while the sibling
+`evaluate-006`, byte-identical apart from `visibility="public"`, passes. An
+earlier version of this entry claimed Saxon "records no result for the case at
+all" and "makes the same trade". Both were false.
+
+### What changed
+
+- `restrictedLibrary.unrestrict` (`xslt/compile_instr.go`), restored in
+  `userFunction.call` (`xslt/apply.go`) for the duration of a body.
+- The `if !s.isPackage { return true }` guard removed from `evaluateMayCall`.
+- `TestEvaluateCallsStylesheetFunction` asserted the non-conformance and now
+  asserts `XTDE3160`; two siblings pin the other directions — a `public`
+  function callable by name, and a `public` function's private callee reachable.
+
+### The remaining behaviour change
+
+A stylesheet that calls its own function **by name from an evaluated string**
+must now declare it `visibility="public"`. That is what the specification
+requires and what Saxon does, but it is a change for anyone who relied on the
+old leniency. Nothing in either vendored corpus does.
 
 ## `particlesZ033_g` — 1 case gained, 17 valid schemas lost
 
@@ -997,12 +1020,18 @@ on a network fetch. What is wrong is the claim that it was closed. Same shape as
 ## `evaluate-045` — the spec argument was false
 
 The row claimed visibility is a property of a component of an `xsl:package` and
-"a plain `xsl:stylesheet` is not one". **§3.6 says the opposite verbatim**: "When
+"a plain `xsl:stylesheet` is not one". **§3.5 says the opposite verbatim**: "When
 the `xsl:package` element is not used explicitly, the entire stylesheet comprises
-a single implicit package." The divergence stands and is defensible; it is a
-won't-fix, not a can't-fix, and it was simultaneously described as won't-fix,
-can't-fix and a cost trade-off. Correcting it also removes a latent contradiction
+a single implicit package." Correcting it also removed a latent contradiction
 with `accumulator-038`, whose verdict *depends* on its stylesheet being a package.
+
+**Superseded 2026-09-13.** This correction left the divergence standing as a
+defensible won't-fix, on a measured cost of 510 DocBook documents. That cost was
+an artifact: the 512 failures all named `fp:pi-from-list`, a function no target
+expression writes, because the restricted library leaked out of the target
+expression into the body of a function it called. With the leak fixed the rule
+enforces for free — DocBook 577 of 593 unchanged, XSpec 225 unchanged, XSLT 3.0
+11,490 → 11,491. Read the full entry in §2.
 
 ## `package-021err` — the recorded defect was in the wrong attribute
 

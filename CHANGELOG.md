@@ -20,6 +20,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| `xsl:evaluate`'s restriction leaked into the body of a function it called | §10.4.1 governs the names the target expression may reference, not what those functions call. A public function's private callee was refused, costing 512 of 593 DocBook documents. |  |
+| A private stylesheet function was callable from `xsl:evaluate` | §3.5 makes a plain `xsl:stylesheet` an implicit package, so its undecorated functions are private. `evaluate-045` now passes, and with the leak above fixed it costs no real-world document. |  |
 | An XQuery clause scan hung forever on a combining mark | `isNameStartByte` accepted every byte ≥ 0x80 while `scanNCName` applied the real rune production, so a name char that may not start a name left the cursor unmoved and the loop spun. The two tests now agree, and a non-advancing scan is refused as `XPST0003`. | [`c2af54f`][c2af54f] |
 | A truncated direct constructor in a variable declaration panicked | `scanDeclExpr` discarded `skipDirConstructor`'s error, so the cursor ran one past the end and the closing slice went out of range on input as short as `declare variable$A:=<`. The error is returned now. | [`c2af54f`][c2af54f] |
 | `fn:format-number` rounded a tie away from zero | F&O 3.1 §4.7.5 defines the rounding by calling `fn:round-half-to-even`, so `format-number(2.5,'0')` answered 3 where the shared function answered 2. No corpus holds a tie, so only the new test pins it. | [`c01b98a`][c01b98a] |
