@@ -318,11 +318,16 @@ and tested on its own, in `xslt/streamlattice.go` and
 | 19.8.8.1 `for` expressions | complete; the "S must be grounded" rule is carried by the navigation usage §19.8.1 gives S |
 | 19.8.8.2 quantified expressions | complete |
 | 19.8.8.3 `if` expressions | complete |
-| 19.8.8.7 path expressions | complete, both phases, including the scanning-expression reassessment that makes `//x` streamable |
-| 19.8.8.8 axis steps | the posture table and the predicate rule; not the numeric-predicate narrowing |
-| 19.8.8.9 filter expressions | the motionless-predicate clause; not the numeric-predicate narrowing |
-| 19.8.8.11 variable references | the grounded case, the streaming-parameter case, and a data-flow environment for the range variable of a quantified expression |
-| 19.8.8.12 context item expression | complete |
+| 19.8.8.7 simple mapping (`!`) | complete |
+| 19.8.8.8 path expressions | complete, both phases, including the scanning-expression reassessment that makes `//x` streamable |
+| 19.8.8.9 axis steps | the posture table and the predicate rule; not the numeric-predicate narrowing |
+| 19.8.8.10 filter expressions | the motionless-predicate clause; not the numeric-predicate narrowing |
+| 19.8.8.11 dynamic function calls | **absent** |
+| 19.8.8.12 variable references | the grounded case, the streaming-parameter case, and a data-flow environment for the range variable of a quantified expression |
+| 19.8.8.13 context item expression | complete |
+| 19.8.8.15 named function references | the grounded-context case only; the rest needs a focus-dependence table the manifest does not carry |
+| 19.8.8.16 inline function declarations | complete — the textual streaming-parameter test, descending into nested declarations |
+| 19.8.8 `let` expressions | complete; the table's `let $var := N return T`, with the return an ordinary operand rather than a higher-order one |
 | 19.8.9.3 `fn:current` | complete, both the expression and the pattern clause |
 | 19.8.9 built-in function operand usages | the proforma table, ~150 signatures |
 
@@ -350,12 +355,31 @@ list below, not the bulk of the chapter.
 
 Still absent or partial:
 
-- **§19.8.8.10 dynamic calls and §19.8.8.14 inline functions**, and `let`
-  expressions. §19.8.8.4 union/intersect/except, §19.8.8.1–2 `for` and
-  quantified expressions, §19.8.8.6 simple mapping (`!`) and §19.8.8.15/16 map
-  expressions are implemented.
-- **The numeric-predicate narrowing** of §19.8.8.8 and §19.8.8.9, noted in the
-  table above.
+- **§19.8.8.11 dynamic function calls.** The one expression construct in
+  §19.8.8 with no rule at all: a call on a function item whose identity is not
+  statically known, so the operand usages cannot be read off a signature.
+- **§19.8.8.15 named function references, in part.** The rule turns on whether
+  the referenced function is *focus-dependent*, and nothing records that — the
+  manifest (`xpath/spec/function-signatures.json`) carries name, arity,
+  parameter types and result type, and no such flag; the engine handles focus
+  dependence behaviourally instead, by capturing the focus where the reference
+  is written. Where the context posture is grounded the rule's condition fails
+  whatever the function is, so that case is decided and the rest reports no
+  opinion. Closing it means classifying the manifest's functions against F&O,
+  which is a table to derive rather than a rule to write.
+- **The numeric-predicate narrowing** of §19.8.8.9 axis steps and §19.8.8.10
+  filter expressions, noted in the table above.
+
+`let` expressions and §19.8.8.16 inline function declarations were on this
+list and are now implemented, as are §19.8.8.4 union/intersect/except,
+§19.8.8.1–2 `for` and quantified expressions, and §19.8.8.7 simple mapping
+(`!`). The section numbers in the sentence they replace were the Last Call
+draft's throughout — it called §19.8.8.10 "dynamic calls" where the
+Recommendation makes that *filter expressions*, and §19.8.8.15/16 "map
+expressions" where they are named function references and inline function
+declarations. `tests/speccites.sh` now catches a citation that names no
+section, but not one that names the wrong section about the right subject,
+which is what this was.
 - **The 18 per-function sections of §19.8.9** that do not follow the general
   rules: `fn:last`, `fn:root`, `fn:reverse`, `fn:innermost`, `fn:fold-right`,
   `fn:function-lookup`, the accumulator pair and the merge pair. Three are now

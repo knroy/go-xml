@@ -1018,6 +1018,55 @@ trace here — but readings that were believed, quoted, and disproved. They are
 kept because a negative result that was believed for two revisions is more
 dangerous than an open bug, and deleting one invites the same probe again.
 
+### "An inline function declaration is grounded" — only if it mentions nothing streamed
+
+Three §19.8.8 expression rules were proposed with code to implement them, and
+reading the Recommendation first changed two of them.
+
+**§19.8.8.16 was proposed as an unconditional `return groundedMotionless`.**
+The section says an inline function declaration "that textually contains a
+variable reference bound to a streaming parameter (of some containing
+stylesheet function) is roaming and free-ranging. All other inline function
+declarations are grounded and motionless." Returning grounded unconditionally
+is a **false negative** — a stylesheet accepted whose inline function closes
+over a streamed node, which is the one failure mode this analysis exists to
+avoid.
+
+The parenthetical also decides the implementation. The streaming parameter is
+the enclosing `xsl:function`'s, not one of the inline function's own, which
+cannot be streaming — so the proposed variable-environment model was not
+needed. One textual walk answers the question the spec actually asks.
+
+**The walk descends into nested inline functions, deliberately.** A reference
+to the outer `$element` inside `function($y) { $element }` is still within the
+outer declaration's text, and the section's note says why it must count: "the
+only other way an inline function could access a streamed node is by having
+the streamed node in its closure, and this is prevented by the rule above." A
+walker that stopped at that boundary would let exactly that closure through,
+and sabotage-testing one does.
+
+**The walk is three-valued.** The analyzer dispatches 22 expression kinds; a
+walker answering "no reference" for a kind it had not been taught would ground
+a function that captures a streamed node. An unrecognised kind routes to
+`unknown()`, where the checker reports nothing rather than something wrong.
+
+**§19.8.8.15 was proposed the same way and is also conditional** — roaming iff
+the referenced function is focus-dependent *and* the context posture is not
+grounded. Only the grounded-context half is decidable here: nothing records
+focus dependence, so the rest reports no opinion.
+
+**`let` needed no invention at all.** §19.8.8's operand-role table gives it
+directly — `let $var := N return T` — with the note "Binding of variables to
+streamed nodes is not allowed." The return is an ORDINARY operand, which is
+the whole difference from `for`: §19.8.8.1 calls the for expression's return
+"a higher-order operand with usage transmission", and the table gives let a
+bare T, because the binding is evaluated once rather than once per item.
+Making it higher-order would refuse a consuming let body the spec permits.
+
+None of the three moved a conformance count, which is expected: the remaining
+XSLT 3.0 disagreements are 7 XTSE3430 cases plus 21 that are fixture defects,
+deliberate divergences or implementation-defined.
+
 ### "Remove the 1<<20 arity ceiling" — rejected twice, and it is a memory bug
 
 An audit has twice proposed raising `maxLookupArity` (`xpath/fn_hof.go`) to

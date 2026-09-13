@@ -770,9 +770,19 @@ them — see
   imports a schema first, so the defect is a different one than the row
   describes. It needs re-diagnosis before it needs a fix.
 
-* **`xslt/staticcheck.go:112` hardcodes "is not an XSLT 2.0 element"** in a
-  diagnostic that a 3.0 stylesheet can reach, so the message names the wrong
-  version. Cosmetic, but it is the error text a user sees.
+* **"is not an XSLT 2.0 element" was hardcoded** in two diagnostics —
+  `xslt/staticcheck.go` and `xslt/compile_instr.go` — that a 3.0 stylesheet
+  can reach. Both now read the version from the stylesheet.
+
+  **The fix is not demonstrated, and that is the more useful finding.**
+  Instrumenting each return and running the whole `xslt` suite never reached
+  either: the content-model check in `elementtable.go` answers first for every
+  unknown `xsl:` element tried, at top level and in a sequence constructor,
+  under `version="2.0"`, `"3.0"` and a forwards-compatible `"4.0"` alike. So
+  this entry described "the error text a user sees", and no user was shown to
+  see it. What is left is a correct spelling of a diagnostic that may be dead
+  code; the comments at both sites say so, rather than claiming a user-visible
+  fix that could not be produced.
 
 ---
 
