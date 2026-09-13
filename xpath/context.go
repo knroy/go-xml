@@ -279,6 +279,27 @@ type Context struct {
 	// boundaries -- a FLWOR for items, one constructed value for bytes.
 	heldBytes bool
 
+	// entities is the entity-expansion allowance shared by every parse this
+	// evaluation performs, bounding the one dimension neither items nor bytes
+	// can: fn:parse-xml builds a TREE out of a string, so an expansion is
+	// neither an intermediate sequence nor built string content, and both
+	// counters walk straight past it.
+	//
+	// It exists because a parse is not a document when an expression is the
+	// thing doing the parsing. fn:parse-xml is an ordinary function in the
+	// default library, so an expression calls it once per node, and each call
+	// minted a fresh xdm entity allowance -- so the 1 MB ceiling bounded each
+	// of sixty calls separately rather than together, and 1,328 bytes of XPath
+	// expanded 47,185,920 bytes and allocated 180 MB, accepted. Sharing one
+	// allowance across the evaluation is what makes the ceiling bound the
+	// evaluation rather than the call.
+	//
+	// A pointer for the same reason items and bytes are pointers: the Context
+	// is copied by value on every scope change, and a plain value would let
+	// each copy accumulate its own. Nil means unbounded, which is what a
+	// hand-built Context gets; NewContext installs one.
+	entities *xdm.EntityBudget
+
 	// Now is the value fn:current-dateTime and its siblings return.
 	//
 	// The spec requires these to be stable for the whole of one evaluation:
@@ -552,6 +573,12 @@ func NewContext(item xdm.Item, funcs FunctionLibrary) *Context {
 		Size:     1,
 		items:    new(int64),
 		bytes:    new(int64),
+		// One entity-expansion allowance for the whole evaluation. Unlike
+		// items and bytes it is NOT reset per expression by Compiled.Eval:
+		// the reset is what the per-call mint already amounted to, and a
+		// budget an expression can restart by being a new expression is not
+		// a budget. See Context.entities.
+		entities: xdm.NewEntityBudget(),
 	}
 	if item == nil {
 		c.Position, c.Size = 0, 0
@@ -924,7 +951,28 @@ func (c *Context) AdoptBudget(src *Context) *Context {
 	if src.bytes != nil {
 		n.bytes, n.heldBytes = src.bytes, src.heldBytes
 	}
+	// The entity allowance is inherited on the same house rule as the other
+	// two: a nested evaluation may spend the parent's remainder, never reset
+	// it. Without this a nested transform would hand fn:parse-xml the full
+	// ceiling over again, which is the per-call mint this change removes
+	// arriving one level up.
+	if src.entities != nil {
+		n.entities = src.entities
+	}
 	return &n
+}
+
+// EntityBudget returns the entity-expansion allowance shared by every parse
+// this evaluation performs, for a host that parses on the evaluation's behalf
+// rather than through fn:parse-xml.
+//
+// A nil result means this Context carries no allowance -- a hand-built one --
+// and the parse gets the ordinary per-document ceiling.
+func (c *Context) EntityBudget() *xdm.EntityBudget {
+	if c == nil {
+		return nil
+	}
+	return c.entities
 }
 
 // resetBytes starts a fresh byte budget for one expression evaluation.

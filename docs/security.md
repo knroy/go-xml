@@ -60,8 +60,11 @@ them a claim *in* that report — were fixed the same day and are listed under
 been inherited, at `fn:transform`'s nesting boundary, at a function item's
 invoke sites, and at every XSD assertion. A seventh followed on 2026-09-13 at
 XInclude's boundary, where the entity-expansion byte budget restarted for every
-included document (above). That seam has now produced seven findings, so it is
-the first place to look when a limit is reported as not binding.
+included document (above), and an eighth the same day at `fn:parse-xml`, where
+the same budget restarted for every *call* — the case that forced the budget to
+be scoped to an evaluation rather than to a parse. That seam has now produced
+eight findings, so it is the first place to look when a limit is reported as
+not binding.
 
 The eighth audit's six other findings are closed and are listed under
 *History*. Two of them ended the process rather than the request — a Go stack
@@ -561,18 +564,7 @@ sweep of every `xdm.Parse`/`ParseString` call site reachable from inside an
 already-running operation found the seam open in three more places, ranked by
 what actually drives them:
 
-* `fn:parse-xml` — `xpath/fn_misc.go:2885` — passes `AllowDOCTYPE: true`
-  unconditionally and forwards `ctx.Entities`, is registered into the real
-  builtin library (`xpath/builtins.go:35`), and is an ordinary function, so a
-  hostile stylesheet or query calls it **per node** with no fetch counter, no
-  memo and no cache. Each call mints a fresh budget. **Measured: a 453-byte
-  XPath expression — one `parse-xml` of an inlined entity bomb, called 60
-  times in a `for` — expanded 47,185,920 bytes and allocated 222 MB, and was
-  accepted.** This is strictly worse than the XInclude case, which at least
-  caps the pass at 200 fetches: here there is no such bound and no document
-  identity to dedupe on. It is the one to fix next. A proper fix needs an
-  evaluation-scoped budget on `*xpath.Context` and a way to hand it to `xdm`,
-  which is a wider change than this one and is not attempted here.
+* `fn:parse-xml` — **fixed, below.**
 * `xsd/assemble.go:375`, `:432`, `:1088` (`xs:import`/`xs:include`/
   `xs:redefine`) — pass the caller's `opts.ParseOptions`, so a host that
   enables `AllowDOCTYPE` for a W3C type library enables it for every schema in
@@ -586,13 +578,82 @@ what actually drives them:
   so past 257 distinct URIs it stops being a bound and starts being an
   amplifier.
 
-Three further sites — `fn:parse-xml-fragment` (`xpath/fn_misc.go:2975`),
-`fn:transform`'s `nestedParseOptions` (`xslt/fntransform.go:531`) and
-`relaxng/resolve.go:141` — have the same shape but pass options that leave
-`AllowDOCTYPE` false, so no entity table is built and no budget is minted.
-`fn:parse-xml-fragment` additionally rejects a leading `<!DOCTYPE` outright.
-They are inert today and are recorded because they are one option-change from
-being live.
+Two further sites — `fn:transform`'s `nestedParseOptions`
+(`xslt/fntransform.go:531`) and `relaxng/resolve.go:141` — have the same shape
+but pass options that leave `AllowDOCTYPE` false, so no entity table is built
+and no budget is minted. They are inert today and are recorded because they are
+one option-change from being live.
+
+### The entity budget was re-minted for every `fn:parse-xml` call
+
+The eighth instance of the recurring seam, and the one the XInclude fix named
+as worse than itself. `fn:parse-xml` built `xdm.ParseOptions{AllowDOCTYPE:
+true, ...}` fresh on every call, so every call minted a new
+`maxTotalEntityBytes` allowance. Unlike XInclude it has **no** fetch counter,
+no memo, no cache and no document identity to dedupe on, and it is an ordinary
+function in the default builtin library — so an expression calls it once per
+node and the 1 MB ceiling bounds each call rather than the evaluation.
+
+**Measured before the fix: 1,328 bytes of XPath — one `parse-xml` of an
+inlined entity bomb, called 60 times in a `for` — expanded 47,185,920 bytes
+and allocated 179.9 MB, and was *accepted*.** The amplification is linear in
+the loop count because nothing accumulated: at 300 calls the same expression
+allocated **897.9 MB**. Each individual bomb expands 786,432 bytes and is
+under the ceiling, which is exactly why a per-call budget never sees it.
+**After the fix the same expression is refused with `xdm.ErrResourceLimit`
+after allocating 3.6 MB, and 300 calls allocate the same 3.6 MB** rather than
+five times more — the bound no longer scales with the loop.
+
+The fix threads the spend the way `989e88d` did, but the counter had to be
+scoped to the **evaluation** rather than to a pass, because there is no
+per-pass object for it to live on. `xpath.Context` gains an `entities
+*xdm.EntityBudget`, minted once by `NewContext` beside `items` and `bytes` and
+carried by the same value copy every scope change makes, so every nested
+evaluation charges the same allowance. `AdoptBudget` forwards it on the house
+rule the other two budgets already follow — a nested evaluation may spend the
+parent's remainder, never reset it — so a nested `fn:transform` cannot hand
+`fn:parse-xml` the ceiling over again. `xdm` exports the allowance as an opaque
+`EntityBudget` with `ParseOptions.WithEntityBudget`, which sets the same
+unexported `entityBudget` field XInclude uses: a caller may share a budget
+across parses and may not read or reset it, which is what keeps the bound from
+being negotiable.
+
+Unlike `items` and `bytes` it is deliberately **not** reset per expression by
+`Compiled.Eval`. That reset is precisely what the per-call mint already
+amounted to, and a budget an expression can restart by being a new expression
+is not a budget.
+
+A refusal also keeps its `ErrResourceLimit` sentinel rather than being
+rewritten to `FODC0006`. `FODC0006` means "not a well-formed document", which
+is false of a document the engine simply declined to finish expanding, and a
+`try`/`catch` on that code could swallow it — laundering the refusal the way
+`xi:fallback` was measured doing before `989e88d` made it fatal.
+
+`TestParseXMLBudgetIsSharedAcrossOneEvaluation` pins the per-evaluation
+property and `TestParseXMLBudgetDoesNotScaleWithCallCount` pins that it holds
+at 2, 60 and 600 calls alike. Three controls stop the fix from being "refuse
+everything": `TestParseXMLLegitimateLargeDocumentStillWorks` pins that a single
+legal 786 KB expansion still parses **and is not truncated**,
+`TestParseXMLOrdinaryLoopIsUntouched` pins 500 ordinary small parses in a loop,
+and `TestParseXMLBudgetIsFreshPerEvaluation` pins that 200 separate evaluations
+each get their own allowance — a budget that leaked *across* evaluations would
+poison every later expression, which is the opposite failure and just as wrong.
+
+`fn:parse-xml-fragment` (`xpath/fn_misc.go`) was wired to the same budget in
+the same change. It remains inert — a fragment may not carry a DOCTYPE and is
+refused if it tries, and it supplies no resolver — so nothing is charged there
+today; it is threaded because that inertness is a property of the options it
+happens to pass, not of the function.
+
+**Still open after this change**, found by re-sweeping every
+`xdm.Parse`/`ParseString` call site: `xslt/resolver.go:521` is the one live
+remaining case. It mints a fresh budget per file and honours `AllowDOCTYPE` and
+`ExternalEntities` when the host sets them, so a stylesheet reached through
+`xsl:import`/`xsl:include`/`fn:doc` gets the full ceiling per module; its
+`resolverCacheMax = 256` **clears on full** rather than evicting, which past
+257 distinct URIs stops being a bound and starts being an amplifier. The
+`xsd/assemble.go` sites remain bounded by `MaxDocuments` as recorded above.
+Neither is fixed here.
 
 None of the three is loop detection, and none is allowed to stand in for it. A loop is
 a *semantic* defect and is detected as one: `includeProc.stack` holds the URIs

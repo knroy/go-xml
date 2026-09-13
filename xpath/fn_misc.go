@@ -2882,6 +2882,12 @@ func registerParseXML(l *Library, since Version) {
 		// The base URI of the constructed document is the static base URI of
 		// the call, per the spec. With none available the document simply has
 		// no base URI, which is what document-uri() then reports as empty.
+		//
+		// The entity-expansion allowance is the EVALUATION's, not this call's.
+		// Minting one per call is what made the ceiling meaningless: this is
+		// an ordinary function, so an expression calls it once per node, and
+		// sixty bombs that each stayed under the 1 MB ceiling expanded 47 MB
+		// between them and were accepted. See Context.entities.
 		tree, perr := xdm.ParseString(s, xdm.ParseOptions{
 			AllowDOCTYPE: true,
 			BaseURI:      ctx.StaticBaseURI,
@@ -2892,8 +2898,17 @@ func registerParseXML(l *Library, since Version) {
 			// the default of refusing every one, so an expression parsing
 			// untrusted XML cannot be talked into a file read.
 			ExternalEntities: ctx.Entities,
-		})
+		}.WithEntityBudget(ctx.EntityBudget()))
 		if perr != nil {
+			// A resource refusal is this engine declining to spend more, not a
+			// statement about the argument, so it is reported as the resource
+			// limit it is and keeps the ErrResourceLimit sentinel. Reporting
+			// it as FODC0006 would say the document was malformed -- which is
+			// false, and which a try/catch on that code could then swallow,
+			// laundering the refusal the way xi:fallback was measured doing.
+			if errors.Is(perr, xdm.ErrResourceLimit) {
+				return nil, perr
+			}
 			// FODC0006 is the code the spec gives for a string that is not a
 			// well-formed document, rather than a generic failure.
 			return nil, xdm.Errorf("FODC0006",
@@ -2921,7 +2936,7 @@ func registerParseXML(l *Library, since Version) {
 		if err != nil {
 			return nil, err
 		}
-		frag, perr := parseXMLFragment(s, ctx.StaticBaseURI)
+		frag, perr := parseXMLFragment(s, ctx.StaticBaseURI, ctx.EntityBudget())
 		if perr != nil {
 			return nil, perr
 		}
@@ -2937,7 +2952,14 @@ func registerParseXML(l *Library, since Version) {
 // The declaration, if any, is an XML *text* declaration rather than an XML
 // declaration: it is stripped before wrapping, since it may not appear inside
 // an element.
-func parseXMLFragment(s, base string) (*xdm.Node, error) {
+//
+// The budget b is the evaluation's shared entity-expansion allowance, threaded
+// through for the same reason fn:parse-xml threads it. A fragment may not
+// carry a DOCTYPE and is refused below if it tries, and no resolver is
+// supplied, so no entity table is built and nothing is charged today. It is
+// wired anyway because inertness here is a property of the options this
+// function happens to pass, and one option-change away from being live.
+func parseXMLFragment(s, base string, b *xdm.EntityBudget) (*xdm.Node, error) {
 	body := s
 	if strings.HasPrefix(body, "<?xml") {
 		end := strings.Index(body, "?>")
@@ -2975,8 +2997,13 @@ func parseXMLFragment(s, base string) (*xdm.Node, error) {
 	tree, err := xdm.ParseString("<parse-xml-fragment-wrapper>"+body+"</parse-xml-fragment-wrapper>", xdm.ParseOptions{
 		AllowDOCTYPE: true,
 		BaseURI:      base,
-	})
+	}.WithEntityBudget(b))
 	if err != nil {
+		// A resource refusal keeps its sentinel rather than becoming
+		// FODC0006, on the same terms as fn:parse-xml above.
+		if errors.Is(err, xdm.ErrResourceLimit) {
+			return nil, err
+		}
 		return nil, xdm.Errorf("FODC0006",
 			"fn:parse-xml-fragment: argument is not a well-formed XML fragment: %v", err)
 	}

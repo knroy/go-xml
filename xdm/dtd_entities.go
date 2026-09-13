@@ -70,6 +70,45 @@ type entityBudget struct {
 	spent int
 }
 
+// EntityBudget is an entity-expansion allowance that spans more than one
+// parse, handed to ParseOptions.WithEntityBudget.
+//
+// It exists for a caller OUTSIDE this package that parses repeatedly on behalf
+// of one larger operation, and for which "one document" is therefore the wrong
+// boundary. fn:parse-xml is the case that forced it: it is an ordinary
+// function in the default library, so an expression calls it once per node,
+// and each call built its own entityTable and so its own fresh allowance.
+// Sixty calls to a bomb that each stayed under the 1 MB ceiling therefore
+// expanded 47,185,920 bytes from 1,328 bytes of XPath and were accepted; three
+// hundred allocated 898 MB. Neither xpath's item budget nor its byte budget
+// can see it — an expansion is a tree, not an intermediate sequence and not
+// built string content.
+//
+// The zero value is a fresh allowance. One value shared by many parses is what
+// makes maxTotalEntityBytes bound the whole operation, and it is deliberately
+// opaque: a caller may pass the same budget to several parses and may not read
+// or reset the count, which is what stops the bound from being negotiable.
+//
+// It is NOT safe for concurrent use. One belongs to one evaluation, the same
+// way one includeProc belongs to one XInclude pass.
+type EntityBudget struct{ b entityBudget }
+
+// NewEntityBudget returns a fresh expansion allowance of maxTotalEntityBytes,
+// to be shared across every parse that belongs to one operation.
+func NewEntityBudget() *EntityBudget { return &EntityBudget{} }
+
+// WithEntityBudget returns a copy of opts whose parse charges its entity
+// expansion against the shared allowance b, rather than minting a fresh one.
+//
+// A nil b leaves opts alone, so a caller with no budget to share still gets
+// the per-document allowance it had.
+func (o ParseOptions) WithEntityBudget(b *EntityBudget) ParseOptions {
+	if b != nil {
+		o.entityBudget = &b.b
+	}
+	return o
+}
+
 // total reports the shared spend.
 func (t *entityTable) total() int { return t.budget.spent }
 
