@@ -2,6 +2,7 @@ package xdmbuild
 
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -57,6 +58,37 @@ type Builder struct {
 	// the namespace and type rules a copy is made under. It is never nil: New
 	// requires one, and a nested builder inherits its parent's.
 	policy Policy
+
+	// textBuf is the growable backing array for the trailing text child of
+	// open, and textNode is the node it belongs to. Together they make a run
+	// of adjacent text appends linear rather than quadratic.
+	//
+	// "last.Value += s" allocated a fresh string of the full merged length on
+	// every piece, so merging n pieces copied O(n^2) bytes: a 640 kB document
+	// of 40000 text nodes spent 7.9 GB of allocation to produce 400 kB of
+	// text. The pieces are not under the stylesheet author's control -- a
+	// three-line identity-style transform over a document with many small
+	// text nodes reaches it -- so the cost is driven by input data.
+	//
+	// The buffer is an accumulator, not a deferred write: textNode.Value is
+	// reassigned from it on every append, so the node is fully correct at all
+	// times. That is required rather than merely tidy, because there is no
+	// "close element" call at which a deferred value could be flushed --
+	// StartElement hands back a sub-builder and the element is already
+	// attached to its parent, so XPath in the body, fixupNamespaces and
+	// validation.assess all read the node while it is still being extended.
+	// Correctness therefore cannot depend on a flush, and none is needed: the
+	// saving comes from append's geometric growth, which copies each byte
+	// O(log n) times instead of O(n).
+	//
+	// The string conversion is what makes this work at all. Go's compiler
+	// elides the copy in string(b) only in narrow cases, and this is not one,
+	// so unsafe.String is used to alias the buffer -- sound here because the
+	// bytes already written are never overwritten: append only ever extends,
+	// and a reallocation leaves the old array, which the old string still
+	// aliases, untouched. See appendTextTo.
+	textBuf  []byte
+	textNode *xdm.Node
 }
 
 // SetItemSeparator records the item-separator that applies to the tree this
@@ -210,6 +242,36 @@ func detach(n *xdm.Node) *xdm.Node {
 	return DeepCopy(n)
 }
 
+// appendTextTo extends the text node n by s, keeping n.Value correct.
+//
+// The buffer is only usable when it is the one this very node's text was last
+// built from and n.Value still aliases exactly what it holds. Both checks
+// matter. The first catches a different node -- a sibling text run, or a node
+// from an enclosing element -- and the second catches a node whose Value was
+// replaced behind the builder's back, which would otherwise make the buffer
+// silently authoritative over a value someone else had set. Either way the
+// run simply restarts from n.Value, so a missed reuse costs one copy and
+// never a wrong answer.
+func (b *Builder) appendTextTo(n *xdm.Node, s string) {
+	if s == "" {
+		return
+	}
+	if b.textNode != n || len(b.textBuf) != len(n.Value) {
+		// Restart the run on this node, seeding the buffer with what it
+		// already holds. b.textBuf[:0:0] forces a fresh array rather than
+		// scribbling over one an earlier node's Value may still alias.
+		b.textNode, b.textBuf = n, append(b.textBuf[:0:0], n.Value...)
+	}
+	b.textBuf = append(b.textBuf, s...)
+	// unsafe.String aliases the buffer instead of copying it, which is the
+	// whole point: a copy here would restore the quadratic cost the buffer
+	// exists to remove. It is sound because the bytes under any string handed
+	// out are never written again -- append only extends past them, and when
+	// it reallocates the old array is abandoned intact to the strings that
+	// alias it.
+	b.textNode.Value = unsafe.String(unsafe.SliceData(b.textBuf), len(b.textBuf))
+}
+
 // AppendText adds text, merging with a preceding text node so that the XDM
 // invariant of no adjacent text nodes holds in constructed trees too.
 func (b *Builder) AppendText(s string) {
@@ -234,11 +296,16 @@ func (b *Builder) AppendText(s string) {
 	if b.open != nil {
 		if k := len(b.open.Children); k > 0 {
 			if last := b.open.Children[k-1]; last.Kind == xdm.KindText {
-				last.Value += s
+				b.appendTextTo(last, s)
 				return
 			}
 		}
-		b.open.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: s})
+		n := &xdm.Node{Kind: xdm.KindText, Value: s}
+		b.open.AppendChild(n)
+		// Start a run on the new node rather than only on the second piece,
+		// so that the buffer holds the first piece too and the run never has
+		// to re-copy it.
+		b.textNode, b.textBuf = n, append(b.textBuf[:0:0], s...)
 		return
 	}
 	// At the top level of a sequence constructor the text nodes stay
