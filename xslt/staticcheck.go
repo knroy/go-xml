@@ -590,9 +590,22 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 			}
 		}
 	}
+	// The message lists the spellings the check just accepted, so a 3.0
+	// module is told "yes, no, true, false, 1, 0" and a 2.0 module "yes, no".
+	listed := ad.values
+	if allow {
+		listed = append([]string(nil), ad.values...)
+		for _, alias := range []string{"true", "false", "1", "0"} {
+			for _, want := range ad.values {
+				if boolAliases[alias] == want {
+					listed = append(listed, alias)
+				}
+			}
+		}
+	}
 	return fmt.Errorf(
 		"attribute %s=%q on xsl:%s is not one of %s (XTSE0020)",
-		a.Name.Local, a.Value, el.Name.Local, strings.Join(ad.values, ", "))
+		a.Name.Local, a.Value, el.Name.Local, strings.Join(listed, ", "))
 }
 
 // checkStaticGrammarTree applies the check to every XSLT element in a module.

@@ -27,6 +27,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| The XTSE0020 message for a yes-or-no attribute listed only `yes, no` at 3.0 | The check already accepted `true/false/1/0` there. The message now lists the spellings in force for the module's version. |  |
 | §19.8.8.15 decided a named function reference only under a grounded context | Nothing recorded focus dependence. A table of the 33 focus-dependent (name, arity) pairs, from the F&O and XSLT "Properties" paragraphs, now decides the rest. | [`acdc330`][acdc330] |
 | §19.8.8.11 dynamic function calls had no streamability rule | `$f(child::x)` in a streamed context was accepted for want of an opinion. The base is inspected and each argument navigates, the spec's no-signature fallback, so a streamed argument is refused. | [`a09c437`][a09c437] |
 | The numeric-predicate rules of §19.8.8.9 and §19.8.8.10 were missing | `descendant::section[1]` and `(//x)[3]` came back crawling, though the spec makes a focus-independent numeric predicate striding. Both rules now apply, for statically certain types. | [`f05bea8`][f05bea8] |
