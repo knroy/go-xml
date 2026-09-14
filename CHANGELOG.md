@@ -257,6 +257,7 @@ what the suites *measured*, not what the library does.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| The optimiser timing bound failed on the race lane | `TestOptimizeNotQuadratic` allowed 1.5 s and the race detector took the compile to 1.7 s; the budget is widened sixfold under `-race`, still far below the quadratic figure. | [`d02fc89`][d02fc89] |
 | The W3C suites were cloned unpinned, so a figure could move with no change here | `results.json` records each suite revision, CI clones at that SHA, and a test fails when the two disagree. | [`7f70d40`][7f70d40] |
 | `-race` never declared that it needs cgo | CI passed only because its runners have gcc; an auditor without one read a toolchain error as a test failure. The lane now skips with a reason. | [`7f70d40`][7f70d40] |
 | The gate recorded no provenance, so no figure could be tied to the tree that produced it | `check.sh` heads its transcript with Go version, commit, architecture and per-suite revision, and writes `tests/last-run.txt`. | [`03b5942`][03b5942] |
@@ -836,6 +837,7 @@ here so every entry in this file sits under a release.
 [c8fc839]: https://github.com/knroy/go-xml/commit/c8fc839
 [cc17983]: https://github.com/knroy/go-xml/commit/cc17983
 [cdba77a]: https://github.com/knroy/go-xml/commit/cdba77a
+[d02fc89]: https://github.com/knroy/go-xml/commit/d02fc89
 [d0dd99d]: https://github.com/knroy/go-xml/commit/d0dd99d
 [d145807]: https://github.com/knroy/go-xml/commit/d145807
 [d15b6df]: https://github.com/knroy/go-xml/commit/d15b6df
