@@ -18,6 +18,13 @@ package xslt
 // typed. It is checked by the conformance suite, which is what would catch a
 // mistake in the extraction.
 //
+// The table does not agree with any single document: it unions the
+// Recommendation's summaries with a few Last Call working draft spellings, and
+// narrows or widens an enumeration in a few more places. Every one of those
+// decisions is enumerated, with its evidence, in docs/element-table-policy.md,
+// and elementtable_policy_test.go fails when the table gains a divergence that
+// document does not list.
+//
 // Enumerations here are only those the summary states as a closed set of
 // quoted alternatives. An attribute whose value is an expression, a QName or a
 // URI is recorded as having no enumeration, because its validity is not a

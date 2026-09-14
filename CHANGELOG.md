@@ -310,6 +310,7 @@ what the suites *measured*, not what the library does.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| The element table was reconciled against two documents by hand, with no stated policy | It unions the XSLT 3.0 Recommendation with Last Call draft spellings, and each divergence was decided ad hoc in a scattered comment. `docs/element-table-policy.md` names the Recommendation as authoritative and enumerates all fourteen divergences with their evidence; three had no recorded reason and are listed as such. A test fails on an undeclared one. |  |
 | `xpath/funcspec_table.go` called its table a bootstrap of seventeen entries | It covers the whole F&O manifest and the tests enforce that. The header now states the invariant and names `fn:concat` as the synthesised exception. | [`c5b237c`][c5b237c] |
 | The README called `xsl:stream` and `xsl:fork` absent | Both execute end-to-end by building the tree, as §19.1 permits a non-streaming processor to do. The README now says what is absent is streamed execution, not the vocabulary — matching `docs/conformance-gaps.md`. | [`a09c936`][a09c936] |
 | The `evaluate-045` divergence was justified by a false spec argument | The comment claimed a plain `xsl:stylesheet` has no package boundary; §3.5 makes it an implicit package whose functions default to private. Reframed as a known divergence kept for cost (577 of 593 DocBook documents against 67), with the corpus size corrected from 613 to 593. | [`c6532ba`][c6532ba] |
