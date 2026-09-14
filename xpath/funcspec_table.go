@@ -7,28 +7,33 @@ import (
 	"github.com/knroy/go-xml/xdm"
 )
 
-// This file holds the FunctionSpec table and the families that have been
-// migrated onto it.
+// This file holds the FunctionSpec table: the declared types of every
+// function the F&O 3.1 manifest describes, enforced at call binding.
 //
-// The plan requires this to land "in reviewable family-sized commits, not as
-// an untestable 322-entry hand edit". What is here is therefore the mechanism
-// plus one migrated family — the seventeen entries builtinSignatures already
-// carried — which is what proves the path from a declared type to an
-// XPTY0004 at call binding actually runs. The normalized data source for the
-// remaining families is xpath/spec/function-signatures.json, extracted from
-// the vendored Recommendation by cmd/genfunctions; see funcspec_manifest.go.
+// The invariant is that specSignatures covers the whole of
+// xpath/spec/function-signatures.json, extracted from the vendored
+// Recommendation by cmd/genfunctions (see funcspec_manifest.go), and that
+// every entry agrees with it. TestMigratedSignaturesMatchManifest pins the
+// agreement, entry by entry; TestCallBindingMigrationInventory measures the
+// coverage and reads zero pending. A spec constrains an existing registration
+// rather than replacing it, so registration, lookup and the callbacks know
+// nothing of this table.
 //
-// To migrate a family, a family agent adds its keys to specSignatures below,
-// using the spellings the manifest already holds for them, and runs the QT3
-// lanes. Nothing else changes: registration, lookup and the callbacks are
-// untouched, because a spec constrains an existing registration rather than
-// replacing it.
+// The one function with no row here is fn:concat. Its proforma is variadic,
+// ending in a literal "...", so no fixed-arity row can describe it; the
+// generator leaves it out of the manifest, funcspec_manifest_test.go's
+// variadicAllowlist records why, and version.go's lookupFor synthesises its
+// entry for any arity past the registered range.
+//
+// The table was filled in family-sized commits, starting from the seventeen
+// entries subtype.go's builtinSignatures used to hold, which is why the
+// entries below are grouped by family rather than sorted.
 //
 // A key is "local/arity" for an fn: function and "prefix:local/arity" for one
 // of the other three namespaces the manifest covers. Both forms are read by
 // splitSpecEntryKey, which the enforcement test reads them through as well.
 
-// specSignatures is the migrated portion of the manifest, keyed by
+// specSignatures is the manifest's declared types, keyed by
 // "local/arity" for fn: and by "prefix:local/arity" for the math:, map: and
 // array: namespaces, as the return type followed by the parameter types.
 //
