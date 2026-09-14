@@ -84,8 +84,8 @@ func TestEvaluateCallsStylesheetFunction(t *testing.T) {
 		`</xsl:stylesheet>`
 	_, err := runErr(t, sheet, `<a/>`)
 	if err == nil {
-		t.Fatalf("Q{urn:f}double(21) was callable from xsl:evaluate; " +
-			"f:double declares no visibility, so it is private and 10.4.1 " +
+		t.Fatalf("Q{urn:f}double(21) was callable from xsl:evaluate; "+
+			"f:double declares no visibility, so it is private and 10.4.1 "+
 			"requires XTDE3160")
 	}
 	if !strings.Contains(err.Error(), "XTDE3160") {

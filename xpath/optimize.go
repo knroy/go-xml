@@ -1,10 +1,6 @@
 package xpath
 
-import (
-	"context"
-
-	"github.com/knroy/go-xml/xdm"
-)
+import "github.com/knroy/go-xml/xdm"
 
 // Optimisation runs between parsing and evaluation, rewriting the tree into an
 // equivalent one that is cheaper to evaluate.
@@ -43,56 +39,6 @@ const maxOptimizeDepth = 100000
 // optimize rewrites e and returns the replacement.
 func optimize(e Expr) Expr { return optimizeDepth(e, 0) }
 
-// optimizeContext is optimize with cancellation.
-//
-// The check is deliberately OUTSIDE the folding decision: it runs on a node
-// counter before the walk descends, never on whether a subexpression is
-// closed. isClosed decides whether folding is LEGAL, and an expression that
-// folds differently under load would be a silent wrong answer rather than a
-// slow one -- far worse than the cost this bounds.
-//
-// Checked every optimizeCancelStride nodes rather than at each one: ctx.Err()
-// on a cancelled context is a mutex acquisition, and the ordinary expression
-// compiles in microseconds, so a per-node check would be pure overhead for
-// every caller to bound the one case that is already linear.
-func optimizeContext(ctx context.Context, e Expr) (Expr, error) {
-	if ctx == nil {
-		return optimize(e), nil
-	}
-	f := newExprFacts()
-	f.cancel = &optimizeCanceller{ctx: ctx}
-	out := optimizeDepthFacts(e, 0, f)
-	if f.cancel.err != nil {
-		return nil, compileCancelled(f.cancel.err)
-	}
-	return out, nil
-}
-
-// optimizeCancelStride is how many nodes pass between cancellation checks.
-const optimizeCancelStride = 4096
-
-type optimizeCanceller struct {
-	ctx  context.Context
-	seen int
-	err  error
-}
-
-// tick reports whether the walk should stop.
-func (c *optimizeCanceller) tick() bool {
-	if c.err != nil {
-		return true
-	}
-	c.seen++
-	if c.seen%optimizeCancelStride != 0 {
-		return false
-	}
-	if err := c.ctx.Err(); err != nil {
-		c.err = err
-		return true
-	}
-	return false
-}
-
 // exprFacts memoises the whole-subtree predicates the optimiser consults.
 //
 // Both isClosed and containsCompatSensitive answer a question about an entire
@@ -122,14 +68,6 @@ func (c *optimizeCanceller) tick() bool {
 type exprFacts struct {
 	closed         map[Expr]bool
 	compatSensitiv map[Expr]bool
-
-	// cancel, when non-nil, is consulted as the walk descends. It is held
-	// here because exprFacts already reaches every node of the recursion,
-	// so cancellation needs no second parameter threaded beside it -- and
-	// crucially it stays OUT of foldConstant and isClosed, which decide
-	// whether folding is LEGAL. An expression that folded differently under
-	// load would be a silent wrong answer rather than a slow one.
-	cancel *optimizeCanceller
 }
 
 func newExprFacts() *exprFacts {
@@ -146,12 +84,6 @@ func optimizeDepth(e Expr, depth int) Expr {
 func optimizeDepthFacts(e Expr, depth int, f *exprFacts) Expr {
 	if e == nil {
 		return nil
-	}
-	if f.cancel != nil && f.cancel.tick() {
-		// Cancelled: the subtree is returned unchanged, which is the same
-		// legal outcome as exceeding maxOptimizeDepth. optimizeContext
-		// discards the result and reports the cause.
-		return e
 	}
 	if depth > maxOptimizeDepth {
 		// Deeper than this processor will rewrite. The subtree is returned

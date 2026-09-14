@@ -76,10 +76,8 @@ func (p *parser) readAssert(el *xdm.Node) *Assertion {
 	// is ever in.
 	def, _ := p.xpathDefaultNamespace(el)
 
-	compiled, err := xpath.Compile(test, xpath.CompileOptions{
-		Namespaces: assertResolver{el: el, defaultNS: def},
-		Version:    p.xpathVersion(),
-	})
+	compiled, err := xpath.CompileVersion(test,
+		assertResolver{el: el, defaultNS: def}, p.xpathVersion())
 	if err != nil {
 		p.errs = append(p.errs, errorAt(el, "src-assert",
 			"assertion test %q: %v", test, err))
@@ -197,10 +195,8 @@ func (p *parser) readAlternative(el *xdm.Node) *TypeAlternative {
 		// As for an assertion: the attribute may be inherited and takes
 		// keywords besides a URI.
 		def, _ := p.xpathDefaultNamespace(el)
-		compiled, err := xpath.Compile(alt.Source, xpath.CompileOptions{
-			Namespaces: assertResolver{el: el, defaultNS: def},
-			Version:    p.xpathVersion(),
-		})
+		compiled, err := xpath.CompileVersion(alt.Source,
+			assertResolver{el: el, defaultNS: def}, p.xpathVersion())
 		if err != nil {
 			p.errs = append(p.errs, errorAt(el, "src-type-alternative",
 				"alternative test %q: %v", alt.Source, err))

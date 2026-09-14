@@ -64,7 +64,7 @@ func TestOptimizeNotQuadratic(t *testing.T) {
 
 	src := quadraticSrc(640 * 1024)
 	start := time.Now()
-	_, err := Compile(src, CompileOptions{})
+	_, err := Compile(src, nil)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)

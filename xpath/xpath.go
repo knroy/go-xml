@@ -1,9 +1,6 @@
 package xpath
 
 import (
-	"context"
-	"fmt"
-
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -106,113 +103,52 @@ func (c *Compiled) WithStaticHost(v any) *Compiled {
 	return &n
 }
 
-// CompileOptions configures Compile.
-//
-// The zero value compiles XPath 2.0 with no namespace resolver, no deadline
-// and no size bound, which is what the old Compile(src, CompileOptions{}) did. Version in
-// particular is XPath20 when unset, matching the zero value of Version itself
-// and of Context.Version, so the meaning of an unset version is the same
-// everywhere in this package.
-//
-// An unset Version is safe to get wrong in only one direction: 3.0 and 3.1
-// syntax is REFUSED by the 2.0 grammar rather than silently mis-parsed, so a
-// host that forgets to set it sees a parse error at the call site rather than
-// a wrong answer later. A 3.1 host must still set it.
-type CompileOptions struct {
-	// Namespaces resolves the prefixes in src. Nil admits none, which is what
-	// passing a nil NamespaceResolver did.
-	Namespaces NamespaceResolver
-
-	// Version is the language version. The zero value is XPath20.
-	Version Version
-
-	// RefFloor raises the version at which a named function reference is
-	// admitted, for a host whose own version outruns the expression's. Zero
-	// means Version; see refversion.go.
-	RefFloor Version
-
-	// XQuery parses src by the rule an expression embedded in an XQuery
-	// module follows; see ParseXQuery for the one difference.
-	XQuery bool
-
-	// Context bounds the compile. Nil means no deadline. Cancellation is
-	// observed between parsing and optimisation and periodically inside the
-	// optimiser, so a deadline is honoured at a granularity rather than
-	// instantly -- an expression compiling in microseconds, which is the
-	// ordinary case, never observes it at all.
-	Context context.Context
-
-	// MaxBytes bounds len(src). Zero means unbounded. It is checked before
-	// parsing, so an over-large expression costs nothing but the comparison.
-	// This is the deterministic half of the same protection Context gives:
-	// it refuses the same input every time, where a deadline depends on how
-	// loaded the machine is.
-	MaxBytes int
+// Compile parses src, resolving namespace prefixes with ns.
+func Compile(src string, ns NamespaceResolver) (*Compiled, error) {
+	return CompileVersion(src, ns, XPath20)
 }
 
-// Compile parses src according to opts and optimises the result.
+// CompileVersion is Compile for a given version of the language.
 //
-// Optimisation happens once per compiled expression, and a compiled
-// stylesheet is reused across every node and every document, so anything
-// folded here is work removed from the inner loop rather than deferred.
-func Compile(src string, opts CompileOptions) (*Compiled, error) {
-	if opts.MaxBytes > 0 && len(src) > opts.MaxBytes {
-		return nil, xdm.Errorf("XPST0003",
-			"expression is %d bytes, over the %d-byte limit: "+
-				"processor resource limit exceeded", len(src), opts.MaxBytes)
-	}
-	ctx := opts.Context
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, compileCancelled(err)
-	}
-
-	var (
-		e   Expr
-		err error
-	)
-	switch {
-	case opts.XQuery:
-		e, err = ParseXQuery(src, opts.Namespaces, opts.Version)
-	case opts.RefFloor != opts.Version && opts.RefFloor != 0:
-		e, err = ParseVersionRefFloor(src, opts.Namespaces, opts.Version, opts.RefFloor)
-	default:
-		e, err = ParseVersion(src, opts.Namespaces, opts.Version)
-	}
+// Compile remains the 2.0 spelling so that an existing caller keeps the
+// behaviour it had; a 3.0 host calls this instead. The version is recorded on
+// the result, so evaluating it does not require the caller to set it on the
+// context as well.
+func CompileVersion(src string, ns NamespaceResolver, v Version) (*Compiled, error) {
+	e, err := ParseVersion(src, ns, v)
 	if err != nil {
 		return nil, err
 	}
-	// Between the two phases: parsing is bounded by the grammar's own depth
-	// and chain limits, optimisation is where the remaining work is.
-	if err := ctx.Err(); err != nil {
-		return nil, compileCancelled(err)
-	}
-	opt, err := optimizeContext(ctx, e)
+	// Optimisation happens once per compiled expression, and a compiled
+	// stylesheet is reused across every node and every document, so anything
+	// folded here is work removed from the inner loop rather than deferred.
+	return &Compiled{expr: optimize(e), src: src, ns: ns, version: v}, nil
+}
+
+// CompileXQuery is CompileVersion for an expression taken from an XQuery
+// module; see ParseXQuery for the one rule that differs.
+func CompileXQuery(src string, ns NamespaceResolver, v Version) (*Compiled, error) {
+	e, err := ParseXQuery(src, ns, v)
 	if err != nil {
 		return nil, err
 	}
-	return &Compiled{
-		expr: opt, src: src, ns: opts.Namespaces, version: opts.Version,
-	}, nil
+	return &Compiled{expr: optimize(e), src: src, ns: ns, version: v}, nil
 }
 
-// compileCancelled reports a cancelled or timed-out compile.
-//
-// It carries XPST0003 with the resource-limit sentinel rather than returning
-// ctx.Err() bare, so a caller that classifies failures by error code sees the
-// same shape it does for the depth and chain limits, and errors.Is still
-// finds context.DeadlineExceeded underneath.
-func compileCancelled(err error) error {
-	return fmt.Errorf("XPST0003: compiling the expression was interrupted: "+
-		"processor resource limit exceeded: %w", err)
+// CompileVersionRefFloor is CompileVersion with the named-function-reference
+// floor raised; see ParseVersionRefFloor and refversion.go.
+func CompileVersionRefFloor(src string, ns NamespaceResolver, v, refFloor Version) (*Compiled, error) {
+	e, err := ParseVersionRefFloor(src, ns, v, refFloor)
+	if err != nil {
+		return nil, err
+	}
+	return &Compiled{expr: optimize(e), src: src, ns: ns, version: v}, nil
 }
 
 // MustCompile is Compile, panicking on error. For tests and for expressions
 // that are literals in this package's own source.
 func MustCompile(src string, ns NamespaceResolver) *Compiled {
-	c, err := Compile(src, CompileOptions{Namespaces: ns})
+	c, err := Compile(src, ns)
 	if err != nil {
 		panic(err)
 	}
@@ -328,7 +264,7 @@ func Eval(src string, ctx *Context, ns NamespaceResolver) (xdm.Sequence, error) 
 	if ctx != nil {
 		v = ctx.Version
 	}
-	c, err := Compile(src, CompileOptions{Namespaces: ns, Version: v})
+	c, err := CompileVersion(src, ns, v)
 	if err != nil {
 		return nil, err
 	}

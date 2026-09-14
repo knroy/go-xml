@@ -6,7 +6,7 @@ import "testing"
 // which every case below writes exactly once.
 func callNamed(t *testing.T, expr, local string) StaticCall {
 	t.Helper()
-	comp, err := Compile(expr, CompileOptions{Namespaces: nil, Version: XPath31})
+	comp, err := CompileVersion(expr, nil, XPath31)
 	if err != nil {
 		t.Fatalf("Compile(%q): %v", expr, err)
 	}
@@ -88,7 +88,7 @@ func TestStaticCallStringArgsAbsentWithoutLiterals(t *testing.T) {
 // argument whose literal value could be reported, and a host that reads
 // StringArgs[0] on a Ref must find nothing rather than a stale value.
 func TestStaticCallStringArgsEmptyForRef(t *testing.T) {
-	comp, err := Compile(`concat#3`, CompileOptions{Namespaces: nil, Version: XPath31})
+	comp, err := CompileVersion(`concat#3`, nil, XPath31)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}

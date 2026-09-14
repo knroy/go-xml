@@ -30,7 +30,7 @@ func FuzzCompileNoPanic(f *testing.F) {
 				t.Fatalf("Compile(%q) panicked: %v", src, r)
 			}
 		}()
-		c, err := Compile(src, CompileOptions{Namespaces: ns})
+		c, err := Compile(src, ns)
 		if err != nil {
 			// Every parse error must carry a spec code, not a bare message.
 			if code := xdm.ErrorCode(err); code == "" {

@@ -763,7 +763,7 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 		bindings:  el.InScopeNamespaces(),
 		defaultNS: xpathDefaultNamespace(el),
 	}
-	compiled, err := xpath.Compile(src, xpath.CompileOptions{Namespaces: ns, Version: xpathVersionAt(el)})
+	compiled, err := xpath.CompileVersion(src, ns, xpathVersionAt(el))
 	if err != nil {
 		return nil, err
 	}
