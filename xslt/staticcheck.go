@@ -603,10 +603,28 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 	listed := ad.values
 	if allow {
 		listed = append([]string(nil), ad.values...)
+		has := func(v string) bool {
+			for _, want := range listed {
+				if v == want {
+					return true
+				}
+			}
+			return false
+		}
+		// Only aliases the enumeration does not already spell are added.
+		// Twenty of the enumerations in elementtable.go list all six
+		// spellings themselves, and for those every alias is both present
+		// in ad.values and mapped by boolAliases to a value that is also
+		// present -- so appending on the mapping alone listed each of
+		// true, false, 1 and 0 a second time.
 		for _, alias := range []string{"true", "false", "1", "0"} {
+			if has(alias) {
+				continue
+			}
 			for _, want := range ad.values {
 				if boolAliases[alias] == want {
 					listed = append(listed, alias)
+					break
 				}
 			}
 		}
