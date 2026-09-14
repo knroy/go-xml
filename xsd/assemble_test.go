@@ -714,3 +714,46 @@ func TestTypelessMemberTakesHeadType(t *testing.T) {
 		t.Errorf("a declaration with no head has type %q, want anyType", got)
 	}
 }
+
+// A file: URL may carry an authority, and only an empty one or "localhost"
+// names this machine. Taking u.Path alone discarded any other host and read
+// the same-named local file instead -- a read the caller never asked for, and
+// a refusal that never happened. relaxng.FileResolver refuses it; this pins
+// that the xsd one does too, and that the local spellings still read.
+func TestFileResolverRefusesForeignFileHost(t *testing.T) {
+	dir := t.TempDir()
+	schema := filepath.Join(dir, "s.xsd")
+	if err := os.WriteFile(schema, []byte(
+		`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &FileResolver{}
+	// The message is asserted, not just err != nil: neither remote path
+	// exists, so "no such file" would satisfy a weaker test with the guard
+	// deleted.
+	for _, loc := range []string{
+		"file://evil.example.com/etc/x.xsd",
+		"file://evil.example.com" + filepath.ToSlash(schema),
+	} {
+		_, _, err := r.Resolve("", loc, "")
+		if err == nil || !strings.Contains(err.Error(), "remote host \"evil.example.com\"") {
+			t.Errorf("Resolve(%q) error = %v, want one naming the remote host", loc, err)
+		}
+	}
+	// "/C:/x" is the RFC 8089 spelling of a Windows drive path; the drive
+	// letter must not be mistaken for a host.
+	slashed := strings.TrimPrefix(filepath.ToSlash(schema), "/")
+	for _, loc := range []string{
+		"file:///" + slashed,
+		"file://localhost/" + slashed,
+		"file:///C:/x.xsd",
+	} {
+		rc, _, err := r.Resolve("", loc, "")
+		if err != nil && strings.Contains(err.Error(), "remote host") {
+			t.Errorf("Resolve(%q) was refused as remote: %v", loc, err)
+		}
+		if rc != nil {
+			rc.Close()
+		}
+	}
+}

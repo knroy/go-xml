@@ -797,3 +797,49 @@ func TestPartialSubsetDoesNotInventUndeclaredNotations(t *testing.T) {
 		t.Errorf("Parse: half a DTD cannot say a notation is undeclared: %v", err)
 	}
 }
+
+// A file: URI may carry an authority, and only an empty one or "localhost"
+// names this machine. fileURIToPath took u.Path alone, which discarded any
+// other host and read the same-named local file instead -- a read the caller
+// never asked for, and a refusal that never happened. relaxng.FileResolver
+// refuses it; this pins that the dtd one does too, and that both local
+// spellings still read on every platform.
+func TestFileResolverRefusesForeignFileHost(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "r.dtd"),
+		[]byte("<!ELEMENT r EMPTY>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &FileResolver{Root: root}
+	local := fileURIOf(filepath.Join(root, "r.dtd"))
+	// The message is asserted, not just err != nil: a path under a foreign
+	// host lands outside Root, so the confinement refusal would satisfy a
+	// weaker test with the guard deleted.
+	for _, id := range []string{
+		"file://evil.example.com/etc/x.dtd",
+		strings.Replace(local, "file:///", "file://evil.example.com/", 1),
+	} {
+		_, _, err := r.ResolveExternal(id, "", "")
+		if err == nil || !strings.Contains(err.Error(), `remote host "evil.example.com"`) {
+			t.Errorf("ResolveExternal(%q) error = %v, want one naming the remote host", id, err)
+		}
+	}
+	for _, id := range []string{
+		local,
+		strings.Replace(local, "file:///", "file://localhost/", 1),
+	} {
+		rc, _, err := r.ResolveExternal(id, "", "")
+		if err != nil {
+			t.Errorf("ResolveExternal(%q) = %v, want the local file read", id, err)
+			continue
+		}
+		rc.Close()
+	}
+	// "/C:/x" is the RFC 8089 spelling of a Windows drive path; the drive
+	// letter must not be mistaken for a host. It is outside Root, so the
+	// refusal it gets is the confinement one, never the host one.
+	if _, _, err := r.ResolveExternal("file:///C:/x.dtd", "", ""); err != nil &&
+		strings.Contains(err.Error(), "remote host") {
+		t.Errorf("file:///C:/x.dtd was refused as remote: %v", err)
+	}
+}

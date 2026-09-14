@@ -1302,6 +1302,13 @@ is enforced by the kernel at the moment of the open rather than by a string
 comparison taken beforehand. A symlink swapped in after the check is refused
 rather than followed.
 
+All four also refuse a `file:` URI whose authority is anything but empty or
+`localhost` (`file://evil.example.com/etc/x.dtd`), naming the host in the
+error. `relaxng` always did; `xsd`, `dtd` and `xslt` took the path alone, which
+dropped the authority and silently read the same-named local file — not a
+confinement escape (the path still met the root check), but a read the caller
+never asked for and a refusal that never happened.
+
 Each still performs the earlier `EvalSymlinks` and prefix comparison, and that
 is deliberate: it is the **diagnosis**, not the enforcement. It decides which
 root a path belongs to, produces the error that names the permitted

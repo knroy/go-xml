@@ -116,10 +116,21 @@ func (r *FileResolver) resolvePath(systemID, base string) (root, rel string, err
 	// produces a clear refusal rather than a confusing "no such file". This
 	// is the SSRF gate: this type has no network and must never look as
 	// though it might.
-	if u, err := url.Parse(systemID); err == nil && u.Scheme != "" && u.Scheme != "file" {
-		return "", "", fmt.Errorf(
-			"scheme %q is not permitted (this resolver reads local files only)",
-			u.Scheme)
+	if u, err := url.Parse(systemID); err == nil {
+		if u.Scheme != "" && u.Scheme != "file" {
+			return "", "", fmt.Errorf(
+				"scheme %q is not permitted (this resolver reads local files only)",
+				u.Scheme)
+		}
+		// A file: URI may carry an authority, and only an empty one or
+		// "localhost" names this machine. Anything else names a remote host,
+		// and fileURIToPath would discard it and silently read the same-named
+		// local file instead. relaxng.FileResolver refuses the same way.
+		if u.Scheme == "file" && u.Host != "" && u.Host != "localhost" {
+			return "", "", fmt.Errorf(
+				"system identifier %q names the remote host %q; only local files "+
+					"are permitted", systemID, u.Host)
+		}
 	}
 	p := fileURIToPath(systemID)
 	// A fragment selects within a resource rather than naming another one,

@@ -153,6 +153,16 @@ func (r *FileResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 	// have to work.
 	p := location
 	if u, err := url.Parse(location); err == nil && u.Scheme == "file" {
+		// A file: URL may carry an authority, and only an empty one or
+		// "localhost" names this machine. Anything else names a remote host,
+		// and taking u.Path alone would discard it and silently read the
+		// same-named local file instead. relaxng.FileResolver refuses the
+		// same way.
+		if u.Host != "" && u.Host != "localhost" {
+			return nil, "", fmt.Errorf(
+				"schemaLocation %q names the remote host %q; only local files "+
+					"are permitted", location, u.Host)
+		}
 		p = u.Path
 	}
 

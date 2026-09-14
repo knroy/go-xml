@@ -335,3 +335,48 @@ func TestFileResolverAcceptsRelativeRoots(t *testing.T) {
 		t.Error("a file outside the relative root was accepted")
 	}
 }
+
+// A file: URI may carry an authority, and only an empty one or "localhost"
+// names this machine. fileURIToPath took u.Path alone, which discarded any
+// other host and read the same-named local file instead -- a read the caller
+// never asked for, and a refusal that never happened. relaxng.FileResolver
+// refuses it; this pins that the xslt one does too, and that both local
+// spellings still read on every platform.
+func TestFileResolverRefusesForeignFileHost(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "d.xml"), []byte("<d/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewFileResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := fileURIOf(filepath.Join(root, "d.xml"))
+	// The message is asserted, not just err != nil: a path under a foreign
+	// host lands outside the root, so the confinement refusal would satisfy a
+	// weaker test with the guard deleted.
+	for _, uri := range []string{
+		"file://evil.example.com/etc/x.xml",
+		strings.Replace(local, "file:///", "file://evil.example.com/", 1),
+	} {
+		_, err := r.ResolveDocument(uri, "")
+		if err == nil || !strings.Contains(err.Error(), `remote host "evil.example.com"`) {
+			t.Errorf("ResolveDocument(%q) error = %v, want one naming the remote host", uri, err)
+		}
+	}
+	for _, uri := range []string{
+		local,
+		strings.Replace(local, "file:///", "file://localhost/", 1),
+	} {
+		if _, err := r.ResolveDocument(uri, ""); err != nil {
+			t.Errorf("ResolveDocument(%q) = %v, want the local file read", uri, err)
+		}
+	}
+	// "/C:/x" is the RFC 8089 spelling of a Windows drive path; the drive
+	// letter must not be mistaken for a host. It is outside the root, so the
+	// refusal it gets is the confinement one, never the host one.
+	if _, err := r.ResolveDocument("file:///C:/x.xml", ""); err != nil &&
+		strings.Contains(err.Error(), "remote host") {
+		t.Errorf("file:///C:/x.xml was refused as remote: %v", err)
+	}
+}

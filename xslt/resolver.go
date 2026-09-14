@@ -278,8 +278,18 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 	// Reject anything that names a non-file scheme before touching the
 	// filesystem, so that an http:// URI produces a clear refusal rather than
 	// a confusing "no such file".
-	if u, err := url.Parse(href); err == nil && u.Scheme != "" && u.Scheme != "file" {
-		return "", fmt.Errorf("scheme %q is not permitted (only local files)", u.Scheme)
+	if u, err := url.Parse(href); err == nil {
+		if u.Scheme != "" && u.Scheme != "file" {
+			return "", fmt.Errorf("scheme %q is not permitted (only local files)", u.Scheme)
+		}
+		// A file: URI may carry an authority, and only an empty one or
+		// "localhost" names this machine. Anything else names a remote host,
+		// and fileURIToPath would discard it and silently read the same-named
+		// local file instead. relaxng.FileResolver refuses the same way.
+		if u.Scheme == "file" && u.Host != "" && u.Host != "localhost" {
+			return "", fmt.Errorf("%q names the remote host %q; only local files are permitted",
+				href, u.Host)
+		}
 	}
 	href = fileURIToPath(href)
 
