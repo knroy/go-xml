@@ -62,11 +62,11 @@ W3C XSLT sets.
 
 Two suites reach 100% — XPath at all three versions, and RELAX NG.
 
-**The largest block is a single feature, not a long tail.** 8 of the 28
+**The largest block is a single feature, not a long tail.** 7 of the 26
 XSLT 3.0 failures want an `XTSE3430` that only the unwritten remainder of the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable".
-That is not a backlog of defects. The 21 that remain are named case by case
+That is not a backlog of defects. The 20 that remain are named case by case
 below, and every one of them is recorded with its verdict in
 [tests/conformance/results.json](../tests/conformance/results.json), which is
 where the table above comes from.
@@ -235,7 +235,7 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 34 failures
+## xslt 3.0 — 26 failures
 
 **XSLT 3.0: 11,492 / 11,518 = 99.77%.**
 
@@ -253,11 +253,11 @@ block in this file and they are not defects. What the analysis covers and what
 it does not is under *The §19.8 streamability analysis* below.
 
 The remaining **20** divide as follows. Several are divergences and are read in
-§2; what is genuinely open is read here. One case belonging to the block of 14
-is *also* read individually below — `su-ascent-902`, because its verdict is not
-the block's. The other thirteen fail because the analysis is silent; that one
+§2; what is genuinely open is read here. One case belonging to the block of 7
+is *also* read individually below — `su-ascent-903`, because its verdict is not
+the block's. The other six fail because the analysis is silent; that one
 fails because the analysis speaks and the test is wrong, so it is argued on its
-own terms rather than deferred with the rest. It is counted once, in the 14.
+own terms rather than deferred with the rest. It is counted once, in the 7.
 
 ### Package composition — 4
 
