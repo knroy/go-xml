@@ -1067,8 +1067,13 @@ a function that captures a streamed node. An unrecognised kind routes to
 
 **§19.8.8.15 was proposed the same way and is also conditional** — roaming iff
 the referenced function is focus-dependent *and* the context posture is not
-grounded. Only the grounded-context half is decidable here: nothing records
-focus dependence, so the rest reports no opinion.
+grounded. Focus dependence was the missing half — nothing in the manifest
+records it — and is now a table, `focusDependent` in `xslt/streamfocus.go`:
+33 (name, arity) rows transcribed from the F&O 3.1 and XSLT 3.0 "Properties"
+paragraphs, each citing its sentence. A built-in absent from the table is
+focus-independent and grounded; a stylesheet function is grounded because
+§5.3.3.1 makes its body's focus absent; an extension function is still no
+opinion, as the section leaves it implementation-defined.
 
 **`let` needed no invention at all.** §19.8.8's operand-role table gives it
 directly — `let $var := N return T` — with the note "Binding of variables to

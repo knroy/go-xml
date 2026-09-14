@@ -564,31 +564,32 @@ func (a *analyzer) mentionAny(es []xpath.Expr) mention {
 //	function, the posture and sweep are implementation-defined. Otherwise,
 //	the NamedFunctionRef is grounded and motionless."
 //
-// Only the last clause is decidable here, and only for part of the surface.
-// The first needs to know whether F is FOCUS-DEPENDENT, and nothing in this
-// repository records that: the manifest
-// (xpath/spec/function-signatures.json) carries name, arity, parameter types
-// and result type, and no flag for it. The engine handles focus dependence
-// behaviourally instead -- a named function reference captures the focus in
-// force where it was written (xpath/funcitem.go, and fn-lang-31/32 pin it) --
-// which is the right answer at evaluation time and no help at analysis time.
+// F is resolved from the reference's expanded name and arity, and whether it
+// is focus-dependent is read from focusDependent (streamfocus.go), the table
+// derived from the F&O 3.1 and XSLT 3.0 "Properties" paragraphs:
 //
-// So the rule is applied where it can be and declined where it cannot:
-//
-//   - context posture grounded: the condition "and the context posture is not
-//     grounded" fails whatever F is, so the last clause applies and the
-//     reference is grounded and motionless. No focus-dependence answer is
-//     needed to reach that.
-//   - otherwise: no opinion. Answering "grounded" without knowing whether F is
-//     focus-dependent would be a false NEGATIVE -- a stylesheet accepted that
-//     §19.8.8.15 makes roaming -- and this analysis exists to avoid exactly
-//     that, at the price of reporting nothing.
-//
-// Closing the second case means classifying the ~272 functions the manifest
-// holds by focus dependence, which is a table to be derived from F&O rather
-// than a rule to be written here.
-func (a *analyzer) namedFunctionRef(_ *xpath.NamedFunctionRef) props {
-	if a.ctxPosture == postureGrounded {
+//   - a built-in function (fn:, xs:, map:, array:, math:) in the table, with
+//     a context posture that is not grounded: roaming and free-ranging.
+//   - any other built-in, or any built-in under a grounded context posture:
+//     grounded and motionless. The table classifies every specified
+//     function, so absence from it is a focus-independent answer, not a
+//     missing one.
+//   - a stylesheet function: grounded and motionless. §5.3.3.1: "When a
+//     stylesheet function is called, the focus within the body of the
+//     function is initially absent", so no such function is focus-dependent.
+//   - an extension function, which is any other name: no opinion. The
+//     posture and sweep are implementation-defined, and the note to the
+//     section leaves it to the implementation to know whether the function
+//     depends on the focus; this one does not, so it says nothing.
+func (a *analyzer) namedFunctionRef(x *xpath.NamedFunctionRef) props {
+	key := keyOf(x.Name, x.Arity)
+	switch {
+	case builtinFunctionNS(x.Name.URI):
+		if focusDependent[key] && a.ctxPosture != postureGrounded {
+			return roamingFreeRanging
+		}
+		return groundedMotionless
+	case a.funcs[key] != nil:
 		return groundedMotionless
 	}
 	return a.unknown()

@@ -325,7 +325,7 @@ and tested on its own, in `xslt/streamlattice.go` and
 | 19.8.8.11 dynamic function calls | **absent** |
 | 19.8.8.12 variable references | the grounded case, the streaming-parameter case, and a data-flow environment for the range variable of a quantified expression |
 | 19.8.8.13 context item expression | complete |
-| 19.8.8.15 named function references | the grounded-context case only; the rest needs a focus-dependence table the manifest does not carry |
+| 19.8.8.15 named function references | complete; focus dependence is read from a table transcribed from the F&O 3.1 and XSLT 3.0 "Properties" paragraphs (`xslt/streamfocus.go`) |
 | 19.8.8.16 inline function declarations | complete — the textual streaming-parameter test, descending into nested declarations |
 | 19.8.8 `let` expressions | complete; the table's `let $var := N return T`, with the return an ordinary operand rather than a higher-order one |
 | 19.8.9.3 `fn:current` | complete, both the expression and the pattern clause |
@@ -358,20 +358,11 @@ Still absent or partial:
 - **§19.8.8.11 dynamic function calls.** The one expression construct in
   §19.8.8 with no rule at all: a call on a function item whose identity is not
   statically known, so the operand usages cannot be read off a signature.
-- **§19.8.8.15 named function references, in part.** The rule turns on whether
-  the referenced function is *focus-dependent*, and nothing records that — the
-  manifest (`xpath/spec/function-signatures.json`) carries name, arity,
-  parameter types and result type, and no such flag; the engine handles focus
-  dependence behaviourally instead, by capturing the focus where the reference
-  is written. Where the context posture is grounded the rule's condition fails
-  whatever the function is, so that case is decided and the rest reports no
-  opinion. Closing it means classifying the manifest's functions against F&O,
-  which is a table to derive rather than a rule to write.
 - **The numeric-predicate narrowing** of §19.8.8.9 axis steps and §19.8.8.10
   filter expressions, noted in the table above.
 
-`let` expressions and §19.8.8.16 inline function declarations were on this
-list and are now implemented, as are §19.8.8.4 union/intersect/except,
+`let` expressions, §19.8.8.15 named function references and §19.8.8.16 inline
+function declarations were on this list and are now implemented, as are §19.8.8.4 union/intersect/except,
 §19.8.8.1–2 `for` and quantified expressions, and §19.8.8.7 simple mapping
 (`!`). The section numbers in the sentence they replace were the Last Call
 draft's throughout — it called §19.8.8.10 "dynamic calls" where the
