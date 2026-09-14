@@ -432,7 +432,7 @@ func (r *Results) renderTestingLayers() string {
 		fmt.Sprintf("| **Fuzzing** | %d targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |\n", f.Value) +
 		"| **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no interleaved choices |\n" +
 		"| **Wildcard/UPA model** | 60,000 pairs | a *wrong answer* in wildcard acceptance or in the UPA competition rule | anything outside a single wildcard against a single name, or a pair of terms in one choice |\n" +
-		"| **The ratchet** | 10 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |\n"
+		"| **The ratchet** | 16 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |\n"
 }
 
 func (r *Results) renderReadmeXPath() string {

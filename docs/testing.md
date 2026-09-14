@@ -33,7 +33,7 @@ let something through, and the column that matters is the last one.
 | **Fuzzing** | 11 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
 | **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no interleaved choices |
 | **Wildcard/UPA model** | 60,000 pairs | a *wrong answer* in wildcard acceptance or in the UPA competition rule | anything outside a single wildcard against a single name, or a pair of terms in one choice |
-| **The ratchet** | 10 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
+| **The ratchet** | 16 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
 <!-- END GENERATED LAYER COUNTS -->
 
 **How the first four counts are counted**, because "how many tests" has several
@@ -448,17 +448,19 @@ seen. `check.sh` fails when a count goes **down**.
 ```
 DocBook 577
 RelaxNGSpectest 965
-TestQT3 30233
+TestQT3XPath20 15217
+TestQT3XPath30 19362
+TestQT3XPath31 21898
 TestQT3XQuery 30345
-TestXSLT30Suite 11481
+TestXSLT30Suite 11492
 TestXSLTSuite 6193
 VendoredSchemas 185
 XSD10 39358
 XSD10I 24973
 XSD10S 14385
-XSD11 41545
-XSD11I 26196
-XSD11S 15349
+XSD11 41567
+XSD11I 26217
+XSD11S 15350
 XSpec 225
 ```
 
@@ -466,13 +468,65 @@ XSpec 225
 halves of the two XSD totals. They are ratcheted separately because the
 documentation quotes them separately, and a total cannot be split back.
 
-`TestQT3` and `RelaxNGSpectest` were added late: both suites were being run and
-printed, and neither was ratcheted, so an XPath 2.0 or RELAX NG count could
-fall without `check.sh` saying anything. `TestQT3` logs one `in-scope:` line
-per language version, so the mark is taken from the **last** of them — the
-full 2.0 run — rather than the first. The spectest driver reports
-`N assertions, M passed` instead of `in-scope: M passed`, so its count is
-extracted in `check.sh` and handed to `ratchetCount`.
+`RelaxNGSpectest` was added late: the suite was being run and printed and was
+not ratcheted, so a RELAX NG count could fall without `check.sh` saying
+anything. The spectest driver reports `N assertions, M passed` instead of
+`in-scope: M passed`, so its count is extracted in `check.sh` and handed to
+`ratchetCount`.
+
+**The three XPath versions carry a mark each.** `TestQT3` runs 2.0, 3.0 and
+3.1 as subtests and logs one `in-scope:` line per version, and there used to
+be a single `TestQT3` mark over them. It did not measure any of them. The
+lane invoked `go test -run TestQT3`, which is a *substring* match and so also
+selected `TestQT3XQuery`; the XQuery summary was then the last `in-scope:`
+line in the output, and the mark selected from it recorded the XQuery count
+under an XPath name. All three XPath counts were ratcheted by nothing, and
+XQuery ran twice per gate — once here and once in its own lane. The pattern
+is anchored (`-run '^TestQT3$'`), the `TestQT3` mark is gone, and
+`TestQT3XPath20`, `TestQT3XPath30` and `TestQT3XPath31` each guard their own
+version. The lane reads the version from the `=== RUN TestQT3/XPath_x.y`
+line that precedes each summary rather than from line order, so reordering
+the subtests cannot silently swap two marks.
+
+### The gate does not write the file
+
+`check.sh` **never** rewrites `tests/ratchet.txt`. A figure that has gone
+**up** fails the run with a message saying so and naming the command that
+records it:
+
+```
+GOXSLT_RATCHET=update tests/check.sh
+```
+
+That is the only mode that writes. It used to record a new high
+automatically, which meant an ordinary gate run edited a tracked file: the
+tree went dirty mid-run, and the provenance block that runs later then
+recorded the run as having been made against a dirty tree — an artifact
+describing a state the gate itself had created. Recording a new high is a
+deliberate act with a commit behind it, so it is now a deliberate invocation.
+
+A **missing** mark also fails, rather than bootstrapping itself. Writing it
+once is friendlier for a genuinely new mark, and was rejected for
+consistency: from inside the script a mark missing because it is new and a
+mark missing because someone deleted the line are indistinguishable, and the
+second is exactly the silent-revert case the file exists to catch.
+
+`GOXSLT_RATCHET=off` still skips the check entirely.
+
+### The guards fail closed
+
+Each helper parses a count out of the driver's output. They used to open with
+`[ -n "$count" ] || return 0`: a driver whose wording changed stopped matching
+the parser, the helper returned success without comparing anything, and the
+gate reported **PASS with the ratchet silently disabled**. A guard that turns
+itself off under exactly the conditions it exists to catch is worse than no
+guard, because it reads as a check that ran.
+
+An unreadable count is now a gate failure. The message names the mark, says
+that nothing is guarding it, and prints the input the parser could not read,
+because the fix is always "the driver now says X, teach the parser X". This
+couples the parsers to the drivers' wording deliberately: if one changes, the
+other must be made to match, and the gate says so.
 
 ## Documented figures
 
@@ -494,7 +548,7 @@ two figures is read as two claims. Failures name the file, line and the value
 wanted.
 
 That check anchors on the denominators in its own table, and five ratchet
-marks — `TestQT3`, `RelaxNGSpectest`, `DocBook`, `XSpec` and
+marks — the XPath ones, `RelaxNGSpectest`, `DocBook`, `XSpec` and
 `VendoredSchemas` — were never in it. The figures they measure were guarded
 only where a generated region happened to carry them, and the hand-written
 copies were guarded by nothing: the three XPath rows and the RELAX NG row of
@@ -512,6 +566,24 @@ included, and asserts that `-check` would see it. `VendoredSchemas` is a count
 of the tree, which `results.json` does not record by design, so it went into
 `docfigures.sh`'s table instead with 230 as its denominator: the `185 of 230`
 in the layer table above is checked against the ratchet like any other row.
+
+The three XPath figures are in that table too, one row each:
+
+```
+TestQT3XPath20  15217 XPath-2.0
+TestQT3XPath30  19362 XPath-3.0
+TestQT3XPath31  21898 XPath-3.1
+```
+
+They need a row each because the three are three different scopings of one
+catalog and no single denominator covers them. Until the per-version marks
+existed there was nothing to check them against, so the published
+`15,217 / 19,362 / 21,898` in `README.md`, `docs/conformance-gaps.md`,
+`docs/stats.md` and `docs/todo.md` were guarded by neither the ratchet nor
+this script, and a stale copy of any of them failed nothing. They are at
+100.00% and so contribute zero failures; they are deliberately **not** added
+to the Total-row sum below, which would only create a second place for the
+same denominators to be written down.
 
 ### The figures name the suite revision they were measured against
 
@@ -1128,9 +1200,9 @@ a figure is the file emitted *beside* that figure: attached to the CI run, or
 pasted into the issue that quotes the number. A file in git would be provenance
 for the commit; this is provenance for the measurement.
 
-It is **not** written to `tests/ratchet.txt`. The ratchet rewrites that file in
-place — `grep -v` the line, append the new one, `sort` — so anything else
-living there would be destroyed by the first count that moved.
+It is **not** written to `tests/ratchet.txt`. `GOXSLT_RATCHET=update` rewrites
+that file in place — `grep -v` the line, append the new one, `sort` — so
+anything else living there would be destroyed by the first count recorded.
 
 Provenance also records the **dependency graph**: `go list -m all`, as a digest
 and its expansion, plus a digest of `go.sum`. A release claim that names a Go
@@ -1165,7 +1237,9 @@ package tests          PASS GOXSLT_NO_SUITES=1 go test ./... -count=1
 race                   PASS GOXSLT_NO_SUITES=1 go test -race ./... -count=1 -timeout 25m
 w3cschemas             PASS build, vet and test of the separate module
 vendored schemas       PASS vendored schemas: 185 loaded, 38 failed, 7 excluded (of 230)
-W3C QT3 XPath          SKIP suite absent at /nonexistent-qt3
+W3C QT3 XPath 2.0      SKIP suite absent at /nonexistent-qt3
+W3C QT3 XPath 3.0      SKIP suite absent at /nonexistent-qt3
+W3C QT3 XPath 3.1      SKIP suite absent at /nonexistent-qt3
 RELAX NG spectest      PASS spectest_test.go:116: RELAX NG spectest: 965 assertions, 965 passed, 0 failed (100.00%)
 UBL                    SKIP not set; licensed corpus, cannot be cloned in CI (expected)
 DocBook                SKIP stylesheet absent; not fetched in CI (expected)
@@ -1443,12 +1517,15 @@ the four in-scope counts are the check, and any drop is a regression rather
 than a newly-revealed bug:
 
 ```sh
-GOXSLT_QT3=$PWD/testdata/qt3tests go test ./tests/qt3/ -count=1 -run TestQT3 -v
+GOXSLT_QT3=$PWD/testdata/qt3tests go test ./tests/qt3/ -count=1 -run '^TestQT3$' -v
 GOXSLT_QT3=$PWD/testdata/qt3tests go test ./tests/qt3/ -count=1 -run TestQT3XQuery -v
 ```
 
 Omitting `GOXSLT_QT3` makes the lane skip and still print `ok`, so assert the
-in-scope counts are non-zero before believing a result.
+in-scope counts are non-zero before believing a result. The anchor on the
+first pattern matters: unanchored, `-run TestQT3` also selects
+`TestQT3XQuery`, so the XPath command runs the XQuery suite as well and the
+last `in-scope:` line in its output is XQuery's, not XPath 3.1's.
 
 A caution that is specific to this work: if a case changes result after a
 signature is added, establish whether the behaviour is version-gated before

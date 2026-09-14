@@ -300,6 +300,11 @@ what the suites *measured*, not what the library does.
 | `runtimeFuncNames`'s reverse check was a hand-typed roster of 13 of the 19 names | It could only find a name someone had already added to it. The registered set is enumerated from the library instead, with the three stateless XSLT-defined functions named as a deliberate omission and pinned to `lateBoundFuncNames`. | [`3d5e519`][3d5e519] |
 | The global-ordering fixture was already in declaration order | Binding `$v:flag` before the global that needs it passed whether or not the sequence constructor was scanned at all. The fixture is reordered so declaration order and dependency order disagree. | [`3d5e519`][3d5e519] |
 | Five ratchet marks were in neither figure guard | `TestQT3`, `RelaxNGSpectest`, `DocBook` and `XSpec` copies in README and docs are generated regions now, inline where mid-sentence; `VendoredSchemas` joined `docfigures.sh`'s table. | [`1c7edec`][1c7edec] |
+| The QT3 XPath lane's `-run TestQT3` was unanchored, so it also ran `TestQT3XQuery` | The XQuery summary was the last `in-scope:` line, so the `TestQT3` mark recorded the XQuery count. Anchored to `^TestQT3$`; XQuery now runs once per gate, not twice. |  |
+| The three QT3 XPath versions were ratcheted by nothing | One mark over three subtests measured whichever ran last. `TestQT3XPath20/30/31` guard 15,217 / 19,362 / 21,898 each, attributed by the `=== RUN` line rather than order. |  |
+| The three published XPath figures were outside `docfigures.sh`'s cross-check | Neither the ratchet nor the script guarded them, so a stale `15,217` / `19,362` / `21,898` in README or docs failed nothing. Each version now has a row with its own denominator. |  |
+| All four ratchet helpers failed open on an unparseable count | `[ -n "$c" ] || return 0` meant a driver rewording silently disabled the guard and the gate still reported PASS. An unreadable count now fails, naming the mark and printing the input. |  |
+| The gate rewrote `tests/ratchet.txt` on a new high, dirtying the tree its own provenance then recorded as dirty | An increase now fails with the command to record it; only `GOXSLT_RATCHET=update` writes. A missing mark fails too, since new and deleted are indistinguishable from inside the script. |  |
 
 ### Documentation
 

@@ -88,107 +88,183 @@ abspath() {
 # moves between runs is measurement noise, and recording the high end of it
 # just moves the false failure to the next slow machine.
 #
-# Set GOXSLT_RATCHET=update to record a new high after a deliberate change,
-# or GOXSLT_RATCHET=off to skip the check entirely.
+# The gate NEVER writes tests/ratchet.txt. A figure that went UP fails the run
+# and says so; recording it is GOXSLT_RATCHET=update, which is the only mode
+# that writes. GOXSLT_RATCHET=off skips the check entirely.
 RATCHET_FILE="$ROOT/tests/ratchet.txt"
-ratchet() {
+RATCHET_FILE="$ROOT/tests/ratchet.txt"
+
+# ratchetUnparsed is what every helper does when it cannot read a count out of
+# the driver output it was handed.
+#
+# These guards used to open with `[ -n "$_x" ] || return 0`, which failed OPEN:
+# a driver whose wording changed stopped matching the parser, the helper
+# returned success without comparing anything, and the gate reported PASS with
+# the ratchet silently disabled. The whole point of the mark is to catch a
+# regression that leaves every suite reporting PASS, so a guard that turns
+# itself off under exactly those conditions is worse than no guard -- it reads
+# as a check that ran.
+#
+# Failing closed means the parser and the driver's wording are now coupled, and
+# that coupling is deliberate: if one changes, the other must be made to match,
+# and the gate says so rather than shrugging. The raw input is printed because
+# the fix is always "the driver now says X, teach the parser X", and that
+# cannot be done from the mark name alone.
+ratchetUnparsed() {
+	fail "$1: no count could be read from the driver output.
+    The ratchet parses a figure out of what the driver printed, and this input
+    matched nothing, so there is NOTHING GUARDING THIS MARK. That is a gate
+    failure rather than a pass: the driver's wording has most likely changed
+    and the parser in tests/check.sh must be changed with it.
+    The input was:
+$(printf '%s' "$2" | sed -n '1,20p' | sed 's/^/        /')"
+}
+
+# ratchetCompare is the comparison every helper shares: read the recorded mark,
+# fail if the measured figure is below it, and fail if it is above.
+#
+#   ratchetCompare <mark> <measured> <noun>
+#
+# The <noun> is the word the failure message uses for the figure ("passing",
+# "agreeing", "transformed"), because what a drop MEANS differs per suite and a
+# message that says only "went down" makes the reader open the script.
+#
+# It DOES NOT WRITE unless GOXSLT_RATCHET=update. An increase used to be
+# recorded automatically, which meant an ordinary gate run edited a tracked
+# file: the tree went dirty mid-run, and the provenance block that runs later
+# then recorded the run as having been made against a dirty tree -- an artifact
+# describing a state the gate itself had created. Recording a new high is a
+# deliberate act with a commit behind it, so it is now a deliberate invocation.
+#
+# A MISSING mark also fails rather than bootstrapping itself. The alternative
+# considered was writing it once, which is friendlier for a brand-new mark; it
+# was rejected for consistency, because the two cases are indistinguishable
+# from inside the script. A mark missing because it is new and a mark missing
+# because someone deleted the line look identical, and the second is exactly
+# the silent-revert case this file exists to catch. Both now stop the gate and
+# name the one command that records it.
+ratchetCompare() {
 	_t=$1
-	_passed=$(printf '%s' "$2" | sed -n 's/.*in-scope: \([0-9]*\) passed.*/\1/p' | head -1)
-	[ -n "$_passed" ] || return 0
+	_n=$2
+	_noun=$3
 	case "${GOXSLT_RATCHET:-on}" in
 	off) return 0 ;;
 	esac
 	_best=$(sed -n "s/^$_t \([0-9]*\)$/\1/p" "$RATCHET_FILE" 2>/dev/null | head -1)
-	if [ -n "$_best" ] && [ "$_passed" -lt "$_best" ]; then
-		fail "$_t: $_passed passing, down from $_best.
-    A passing count that went down is a regression even where the suite still
-    reports PASS. If this is deliberate, record it:
+	if [ -z "$_best" ]; then
+		fail "$_t: no mark recorded, measured $_n $_noun.
+    A mark that is absent guards nothing. If this figure is new, record it:
         GOXSLT_RATCHET=update tests/check.sh"
 		return 0
 	fi
-	if [ "${GOXSLT_RATCHET:-on}" = update ] ||
-		{ [ -n "$_passed" ] && [ -z "$_best" ]; } ||
-		{ [ -n "$_best" ] && [ "$_passed" -gt "$_best" ]; }; then
-		touch "$RATCHET_FILE"
-		_tmp="$RATCHET_FILE.tmp"
-		grep -v "^$_t " "$RATCHET_FILE" > "$_tmp" 2>/dev/null || true
-		printf '%s %s\n' "$_t" "$_passed" >> "$_tmp"
-		sort -o "$RATCHET_FILE" "$_tmp"
-		rm -f "$_tmp"
-		printf -- '--- ratchet: %s high-water mark now %s\n' "$_t" "$_passed"
+	if [ "$_n" -lt "$_best" ]; then
+		ratchetDrop "$_t" "$_n" "$_best" "$_noun"
+		return 0
 	fi
+	if [ "$_n" -gt "$_best" ]; then
+		if [ "${GOXSLT_RATCHET:-on}" != update ]; then
+			fail "$_t: $_n $_noun, UP from $_best. This is an improvement.
+    The gate no longer records it for you, because an automatic write dirties
+    the tree the provenance block then reports as dirty. Record it yourself,
+    in the commit that earned it:
+        GOXSLT_RATCHET=update tests/check.sh"
+			return 0
+		fi
+	fi
+	if [ "${GOXSLT_RATCHET:-on}" = update ] && [ "$_n" -ne "$_best" ]; then
+		ratchetWrite "$_t" "$_n"
+	fi
+}
+
+# ratchetDrop is the failure message for a figure below its mark. The vendored
+# corpus gets its own wording, because what a drop THERE means is specific and
+# a generic "went down" makes the reader open the script to find out.
+ratchetDrop() {
+	if [ "$1" = VendoredSchemas ]; then
+		fail "$1: $2 real schemas still load, down from $3.
+    A SCHEMA-VALIDITY RULE HAS BECOME TOO STRICT. These are real schemas that
+    people wrote and shipped, and $(($3 - $2)) of them loaded before your
+    change and do not now. That is over-strictness, and it is the one defect
+    the W3C suite cannot see: the suite scores agreement with its own labels,
+    so a rule stricter than the spec shows up there only if the suite happens
+    to contain a valid schema exercising it.
+    Run the corpus to see which, and read the first error of each:
+        go run ./tests/corpora vendored testdata/xslt30-test \\
+            testdata/qt3tests testdata/xspec
+    Compare like with like: the mark covers all three roots, so a run that
+    omits one reports a smaller count that is not a regression.
+    Fix the rule. Record a new mark ONLY if you have established that
+    rejecting those schemas is correct and the spec requires it:
+        GOXSLT_RATCHET=update tests/check.sh fast"
+		return 0
+	fi
+	fail "$1: $2 $4, down from $3.
+    A $4 count that went down is a regression even where the suite still
+    reports PASS. If this is deliberate, record it:
+        GOXSLT_RATCHET=update tests/check.sh"
+}
+
+# ratchetWrite records a mark. Reached only under GOXSLT_RATCHET=update.
+ratchetWrite() {
+	touch "$RATCHET_FILE"
+	_tmp="$RATCHET_FILE.tmp"
+	grep -v "^$1 " "$RATCHET_FILE" > "$_tmp" 2>/dev/null || true
+	printf '%s %s\n' "$1" "$2" >> "$_tmp"
+	sort -o "$RATCHET_FILE" "$_tmp"
+	rm -f "$_tmp"
+	printf -- '--- ratchet: %s high-water mark now %s\n' "$1" "$2"
+}
+
+ratchet() {
+	_rt=$1
+	_passed=$(printf '%s' "$2" | sed -n 's/.*in-scope: \([0-9]*\) passed.*/\1/p' | head -1)
+	if [ -z "$_passed" ]; then
+		ratchetUnparsed "$_rt" "$2"
+		return 0
+	fi
+	ratchetCompare "$_rt" "$_passed" passing
 }
 
 # ratchetXSD is ratchet for the XSD driver, which reports "TOTAL agree N
 # disagree M" rather than the "in-scope: N passed" the Go suites log. The
 # number that may not go down is the agreement count.
 ratchetXSD() {
-	_t=$1
+	_xt=$1
 	_agree=$(printf '%s' "$2" | sed -n 's/^TOTAL[^0-9]*\([0-9]*\).*/\1/p' | head -1)
-	[ -n "$_agree" ] || return 0
+	if [ -z "$_agree" ]; then
+		ratchetUnparsed "$_xt" "$2"
+		return 0
+	fi
 	# The schema and instance halves are quoted separately in README.md and
 	# docs/, and the TOTAL cannot reconstruct them, so each gets its own mark
 	# (XSD10S, XSD10I, ...) for tests/docfigures.sh to read.
-	# ratchetCount assigns _t itself, and these are POSIX shell functions with
-	# no locals, so the names are built and the calls made before _t is read
-	# again below. Getting this wrong once wrote marks named XSD10SI.
-	_xsdS="${_t}S" _xsdI="${_t}I"
+	# The callees assign their own _t, and these are POSIX shell functions with
+	# no locals, so this function's own mark name is held in _xt rather than
+	# _t. Getting this wrong once wrote marks named XSD10SI.
 	_s=$(printf '%s' "$2" | sed -n 's/^SCHEMA[^0-9]*\([0-9]*\).*/\1/p' | head -1)
 	_i=$(printf '%s' "$2" | sed -n 's/^INSTANCE[^0-9]*\([0-9]*\).*/\1/p' | head -1)
-	[ -n "$_s" ] && ratchetCount "$_xsdS" "$_s"
-	[ -n "$_i" ] && ratchetCount "$_xsdI" "$_i"
-	_t=$1
-	case "${GOXSLT_RATCHET:-on}" in
-	off) return 0 ;;
-	esac
-	_best=$(sed -n "s/^$_t \([0-9]*\)$/\1/p" "$RATCHET_FILE" 2>/dev/null | head -1)
-	if [ -n "$_best" ] && [ "$_agree" -lt "$_best" ]; then
-		fail "$_t: $_agree agreeing, down from $_best.
-    An agreement count that went down is a regression even where the suite
-    still reports totals. If this is deliberate, record it:
-        GOXSLT_RATCHET=update tests/check.sh"
-		return 0
+	# A TOTAL that parsed while its halves did not is still an unreadable
+	# driver: the split marks are published figures too, and skipping them
+	# quietly is the fail-open this change removes.
+	if [ -z "$_s" ] || [ -z "$_i" ]; then
+		ratchetUnparsed "${_xt}S/${_xt}I" "$2"
+	else
+		ratchetCount "${_xt}S" "$_s"
+		ratchetCount "${_xt}I" "$_i"
 	fi
-	if [ "${GOXSLT_RATCHET:-on}" = update ] ||
-		{ [ -n "$_agree" ] && [ -z "$_best" ]; } ||
-		{ [ -n "$_best" ] && [ "$_agree" -gt "$_best" ]; }; then
-		touch "$RATCHET_FILE"
-		_tmp="$RATCHET_FILE.tmp"
-		grep -v "^$_t " "$RATCHET_FILE" > "$_tmp" 2>/dev/null || true
-		printf '%s %s\n' "$_t" "$_agree" >> "$_tmp"
-		sort -o "$RATCHET_FILE" "$_tmp"
-		rm -f "$_tmp"
-		printf -- '--- ratchet: %s high-water mark now %s\n' "$_t" "$_agree"
-	fi
+	ratchetCompare "$_xt" "$_agree" agreeing
 }
 
 # ratchetCount is ratchet for a driver that reports a bare number rather than
 # a suite summary line. The number that may not go down is passed directly.
 ratchetCount() {
-	_t=$1
-	_n=$2
-	[ -n "$_n" ] || return 0
-	case "${GOXSLT_RATCHET:-on}" in
-	off) return 0 ;;
-	esac
-	_best=$(sed -n "s/^$_t \([0-9]*\)$/\1/p" "$RATCHET_FILE" 2>/dev/null | head -1)
-	if [ -n "$_best" ] && [ "$_n" -lt "$_best" ]; then
-		fail "$_t: $_n transformed, down from $_best.
-    A count that went down is a regression. If this is deliberate, record it:
-        GOXSLT_RATCHET=update tests/check.sh"
+	_ct=$1
+	_cn=$2
+	if [ -z "$_cn" ]; then
+		ratchetUnparsed "$_ct" "(the caller passed an empty count)"
 		return 0
 	fi
-	if [ "${GOXSLT_RATCHET:-on}" = update ] ||
-		{ [ -n "$_n" ] && [ -z "$_best" ]; } ||
-		{ [ -n "$_best" ] && [ "$_n" -gt "$_best" ]; }; then
-		touch "$RATCHET_FILE"
-		_tmp="$RATCHET_FILE.tmp"
-		grep -v "^$_t " "$RATCHET_FILE" > "$_tmp" 2>/dev/null || true
-		printf '%s %s\n' "$_t" "$_n" >> "$_tmp"
-		sort -o "$RATCHET_FILE" "$_tmp"
-		rm -f "$_tmp"
-		printf -- '--- ratchet: %s high-water mark now %s\n' "$_t" "$_n"
-	fi
+	ratchetCompare "$_ct" "$_cn" transformed
 }
 
 # ratchetVendored is ratchetCount for the vendored schema corpus. It is a
@@ -205,42 +281,13 @@ ratchetCount() {
 # specific news that a rule added upstream of it now rejects a schema that a
 # human being wrote and shipped.
 ratchetVendored() {
-	_n=$1
-	[ -n "$_n" ] || return 0
-	case "${GOXSLT_RATCHET:-on}" in
-	off) return 0 ;;
-	esac
-	_t=VendoredSchemas
-	_best=$(sed -n "s/^$_t \([0-9]*\)$/\1/p" "$RATCHET_FILE" 2>/dev/null | head -1)
-	if [ -n "$_best" ] && [ "$_n" -lt "$_best" ]; then
-		fail "$_t: $_n real schemas still load, down from $_best.
-    A SCHEMA-VALIDITY RULE HAS BECOME TOO STRICT. These are real schemas that
-    people wrote and shipped, and $((_best - _n)) of them loaded before your
-    change and do not now. That is over-strictness, and it is the one defect
-    the W3C suite cannot see: the suite scores agreement with its own labels,
-    so a rule stricter than the spec shows up there only if the suite happens
-    to contain a valid schema exercising it.
-    Run the corpus to see which, and read the first error of each:
-        go run ./tests/corpora vendored testdata/xslt30-test \\
-            testdata/qt3tests testdata/xspec
-    Compare like with like: the mark covers all three roots, so a run that
-    omits one reports a smaller count that is not a regression.
-    Fix the rule. Record a new mark ONLY if you have established that
-    rejecting those schemas is correct and the spec requires it:
-        GOXSLT_RATCHET=update tests/check.sh fast"
+	if [ -z "$1" ]; then
+		ratchetUnparsed VendoredSchemas "(the corpus driver reported no count)"
 		return 0
 	fi
-	if [ "${GOXSLT_RATCHET:-on}" = update ] ||
-		{ [ -n "$_n" ] && [ -z "$_best" ]; } ||
-		{ [ -n "$_best" ] && [ "$_n" -gt "$_best" ]; }; then
-		touch "$RATCHET_FILE"
-		_tmp="$RATCHET_FILE.tmp"
-		grep -v "^$_t " "$RATCHET_FILE" > "$_tmp" 2>/dev/null || true
-		printf '%s %s\n' "$_t" "$_n" >> "$_tmp"
-		sort -o "$RATCHET_FILE" "$_tmp"
-		rm -f "$_tmp"
-		printf -- '--- ratchet: %s high-water mark now %s\n' "$_t" "$_n"
-	fi
+	# The mark name is what selects the specific message in ratchetDrop, so the
+	# comparison and the update path stay the one shared implementation.
+	ratchetCompare VendoredSchemas "$1" "real schemas still load"
 }
 
 QT3=$(abspath "${GOXSLT_QT3:-testdata/qt3tests}")
@@ -823,7 +870,8 @@ if [ "$MODE" = fast ]; then
 	# one, and the only thing that distinguishes them is that these lines are
 	# present and say SKIP. Dropping them would produce a file whose verdict
 	# line reads the same as a full run's.
-	for _l in "W3C QT3 XPath" "W3C QT3 XQuery" "W3C XSD 1.0" "W3C XSD 1.1" \
+	for _l in "W3C QT3 XPath 2.0" "W3C QT3 XPath 3.0" "W3C QT3 XPath 3.1" \
+		"W3C QT3 XQuery" "W3C XSD 1.0" "W3C XSD 1.1" \
 		"RELAX NG spectest" "W3C XSLT 2.0" "W3C XSLT 3.0" \
 		UBL CII DocBook XSpec; do
 		lane "$_l" SKIP "fast mode: tests/check.sh fast does not run external suites"
@@ -833,12 +881,19 @@ if [ "$MODE" = fast ]; then
 	exit "$failed"
 fi
 
-section "W3C QT3 (XPath 2.0)"
+section "W3C QT3 (XPath 2.0, 3.0 and 3.1)"
 if [ -f "$QT3/catalog.xml" ]; then
 	# The percentage is the result, so it is printed rather than asserted: a
 	# hard threshold would turn every upstream suite update into a build
 	# break. What *is* asserted is that a summary appeared at all.
-	out=$(GOXSLT_QT3="$QT3" $GO test ./tests/qt3/ -count=1 -run TestQT3 -v 2>&1) || true
+	#
+	# The pattern is ANCHORED. `-run TestQT3` is a substring match, so it also
+	# selected TestQT3XQuery: this lane ran the XQuery suite as a fourth test,
+	# the XQuery summary was the last "in-scope:" line in the output, and the
+	# mark recorded below as "TestQT3" was therefore the XQuery count rather
+	# than any XPath count. Anchoring also stops XQuery running twice per
+	# gate, since it has a lane of its own further down.
+	out=$(GOXSLT_QT3="$QT3" $GO test ./tests/qt3/ -count=1 -run '^TestQT3$' -v 2>&1) || true
 	if printf '%s' "$out" | grep -q 'in-scope:'; then
 		printf '%s\n' "$out" | grep -E 'QT3:|in-scope:'
 		# Ratcheted like every other suite. This was the one Go suite whose
@@ -846,32 +901,58 @@ if [ -f "$QT3/catalog.xml" ]; then
 		# above explains why the PERCENTAGE is not asserted, which is a
 		# different thing from letting the count drop silently.
 		#
-		# TestQT3 logs one "in-scope:" line per language version, so the
-		# figure to ratchet is the LAST of them (the full 2.0 run), not the
-		# first. ratchet() takes head -1, so the line is selected here.
-		ratchet TestQT3 "$(printf '%s\n' "$out" | grep 'in-scope:' | tail -1)"
-		# TestQT3 logs one "in-scope:" line per language version and all of
-		# them are recorded: a release record carrying only one version
-		# would be silent about the other two the same run measured. The
-		# loop runs in THIS shell rather than a pipeline, because `lane`
-		# appends to a variable and a `while read` behind a pipe would
-		# append it in a subshell and lose every line.
-		_qt3lines=$(printf '%s\n' "$out" | grep 'in-scope:')
+		# TestQT3 logs one "in-scope:" line per language version, and each
+		# version gets its OWN mark. A single mark over one of the three left
+		# the other two ratcheted by nothing: 3.0 could lose ground while the
+		# recorded figure sat on 2.0 and the gate reported PASS.
+		#
+		# The version is read from the "=== RUN TestQT3/XPath_x.y" line that
+		# precedes each summary rather than from line order, so that a change
+		# to the order the subtests run in cannot silently swap two marks.
+		# The loop runs in THIS shell rather than a pipeline, because both
+		# `ratchet` and `lane` assign to variables the caller reads, and a
+		# `while read` behind a pipe would assign them in a subshell.
+		_qt3lines=$(printf '%s\n' "$out" |
+			sed -n 's/^=== RUN *TestQT3\/XPath_\([0-9.]*\).*/MARK \1/p; s/.*\(in-scope: .*\)/LINE \1/p')
 		_oldifs=$IFS; IFS='
 '
+		_qt3ver=""
 		for _ln in $_qt3lines; do
-			lane "W3C QT3 XPath" PASS "$_ln"
+			case "$_ln" in
+			"MARK "*)
+				_qt3ver=${_ln#MARK }
+				continue
+				;;
+			esac
+			_ln=${_ln#LINE }
+			if [ -z "$_qt3ver" ]; then
+				fail "QT3: an in-scope summary appeared before any
+    \"=== RUN TestQT3/XPath_...\" line, so it cannot be attributed to a
+    language version and cannot be ratcheted. The driver's subtest naming
+    has changed; fix this lane to match it."
+				continue
+			fi
+			# TestQT3XPath20, TestQT3XPath30, TestQT3XPath31.
+			ratchet "TestQT3XPath$(printf '%s' "$_qt3ver" | tr -d .)" "$_ln"
+			# Every version is recorded: a release record carrying only one
+			# would be silent about the other two the same run measured.
+			lane "W3C QT3 XPath $_qt3ver" PASS "$_ln"
+			_qt3ver=""
 		done
 		IFS=$_oldifs
 	else
 		fail "QT3 ran but reported no summary — did it skip?"
 		printf '%s\n' "$out" | tail -5
-		lane "W3C QT3 XPath" FAIL "ran but reported no summary"
+		for _v in 2.0 3.0 3.1; do
+			lane "W3C QT3 XPath $_v" FAIL "ran but reported no summary"
+		done
 	fi
 else
 	skip "QT3 not at $QT3
     git clone --depth 1 https://github.com/w3c/qt3tests.git $QT3"
-	lane "W3C QT3 XPath" SKIP "suite absent at $QT3"
+	for _v in 2.0 3.0 3.1; do
+		lane "W3C QT3 XPath $_v" SKIP "suite absent at $QT3"
+	done
 fi
 
 section "W3C QT3 (XQuery 3.1)"
