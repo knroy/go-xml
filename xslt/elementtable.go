@@ -583,11 +583,15 @@ var xsltElements = map[string]elementDef{
 	"global-context-item": {since30: true, attrs: map[string]attrDef{
 		"as":  {},
 		"use": {values: []string{"required", "optional", "absent"}},
-		// streamable and use-accumulators are accepted and not enforced:
-		// this processor does not stream, and section 19 lets one decline
-		// the analysis.
-		"streamable":       {values: []string{"yes", "no", "true", "false", "1", "0"}},
-		"use-accumulators": {},
+		// @streamable and @use-accumulators were listed here and could never
+		// be consulted: section 3.10's summary gives as? and use? and no
+		// more, and an xsl:global-context-item is checked against the
+		// "context-item" key of this table -- contextitem.go reads the
+		// declaration off that entry for both spellings -- which defines
+		// neither. Both were refused with "not allowed on xsl:context-item"
+		// while the entries here claimed to accept them. Removed rather than
+		// left as a contradiction; TestGlobalContextItemDeadEntries pins the
+		// refusal so they are not restored.
 	}},
 	// XSLT 3.0 section 10.1.1, a child of xsl:template only.
 	"context-item": {since30: true, attrs: map[string]attrDef{
@@ -871,10 +875,18 @@ var xsltElements = map[string]elementDef{
 		"media-type":             {},
 		"normalization-form":     {},
 		"omit-xml-declaration":   {values: []string{"yes", "no"}},
-		"standalone":             {values: []string{"yes", "no", "omit"}},
-		"undeclare-prefixes":     {values: []string{"yes", "no"}},
-		"use-character-maps":     {},
-		"version":                {},
+		// "yes", "no", "omit" and no more, which is the 2.0 vocabulary of REC
+		// J.1's xsl:yes-or-no-or-omit. The three synonym spellings are NOT
+		// listed, and must not be: output-0282 writes standalone="true" in a
+		// version="2.0" module and requires XTSE0020, so at 2.0 the synonyms
+		// are invalid values rather than accepted ones. allowsBoolAliases
+		// admits them once the module is 3.0, exactly as it does for
+		// @indent and @omit-xml-declaration beside this -- the version gate
+		// lives in the check, never in the enumeration.
+		"standalone":         {values: []string{"yes", "no", "omit"}},
+		"undeclare-prefixes": {values: []string{"yes", "no"}},
+		"use-character-maps": {},
+		"version":            {},
 	}},
 	"character-map": {attrs: map[string]attrDef{
 		"name":               {required: true},
