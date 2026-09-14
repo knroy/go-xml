@@ -47,6 +47,13 @@ type TransformOptions struct {
 	// MaxDepth bounds template recursion. Zero means DefaultMaxDepth; a
 	// negative value means no limit.
 	//
+	// "No limit" is not the safe end of the range. Recursion runs on the Go
+	// stack, and exhausting it is a fatal error the runtime does not deliver
+	// as a panic, so recover cannot turn it back into a failed request: the
+	// process dies and every other request in flight dies with it. The bound
+	// is what converts that into an error value. Remove it only for input
+	// you produced yourself.
+	//
 	// The bound catches a stylesheet that recurses without a base case,
 	// which is the common authoring mistake. But it also counts the ordinary
 	// descent of an identity transform, so a limit below the parser's left

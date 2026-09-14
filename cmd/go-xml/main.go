@@ -49,16 +49,58 @@ func (p paramFlag) Set(v string) error {
 	return nil
 }
 
+// registerAllowDir declares -allow-dir on fs and returns its target.
+//
+// It is a function rather than an inline flag.String call so that the help
+// text has exactly one source: TestAllowDirHelpMatchesRoots reads the sentence
+// from here and checks it against what readableRoots actually grants. A copy
+// of the wording in the test would let the two drift, which is the defect the
+// test exists to prevent.
+func registerAllowDir(fs *flag.FlagSet) *string {
+	return fs.String("allow-dir", "",
+		"comma-separated roots that xsl:include, xsl:import, fn:doc and "+
+			"fn:document may read, each covering its subdirectories to any "+
+			"depth. The stylesheet's own directory is always one of them, "+
+			"flag or no flag, since a stylesheet that cannot read the "+
+			"modules beside it is useless; empty adds nothing further. It "+
+			"says where, not what: reading raw text, an external entity or "+
+			"an xi:include also needs the flag for that")
+}
+
+// readableRoots is the complete list of directories the stylesheet resolver
+// may read: the stylesheet's own directory, then whatever -allow-dir named.
+//
+// The stylesheet's own directory is always readable, since a stylesheet that
+// includes a sibling module is the normal case; anything beyond that must be
+// named explicitly.
+//
+// Note what this grants: the directory is one root list shared by xsl:include
+// and by doc()/document(), so a stylesheet can also *read* any file sitting
+// beside it, not only include one. That is wider than -allow-dir alone
+// suggests, and it matters when the stylesheet lives in a directory holding
+// anything the caller would not hand over — put the stylesheet somewhere of
+// its own if that is a concern. Containment is still enforced: nothing outside
+// these roots is reachable, symlinks are resolved before the check, and the
+// roots are the only paths the resolver will open.
+//
+// The -allow-dir help text states this grant, and TestAllowDirHelpMatchesRoots
+// pins the two together so neither can drift from the other.
+func readableRoots(sheetPath, allowDirs string) []string {
+	var roots []string
+	if dir := filepath.Dir(sheetPath); dir != "" {
+		roots = append(roots, dir)
+	}
+	if allowDirs != "" {
+		roots = append(roots, strings.Split(allowDirs, ",")...)
+	}
+	return roots
+}
+
 func run() error {
 	var (
-		sheetPath = flag.String("xsl", "", "stylesheet to apply (required)")
-		outPath   = flag.String("o", "", "write output to this file instead of stdout")
-		allowDirs = flag.String("allow-dir", "",
-			"comma-separated roots that xsl:include, xsl:import, fn:doc and "+
-				"fn:document may read, each covering its subdirectories to any "+
-				"depth; empty disables all of them. It says where, not what: "+
-				"reading raw text, an external entity or an xi:include also "+
-				"needs the flag for that")
+		sheetPath    = flag.String("xsl", "", "stylesheet to apply (required)")
+		outPath      = flag.String("o", "", "write output to this file instead of stdout")
+		allowDirs    = registerAllowDir(flag.CommandLine)
 		allowDoctype = flag.Bool("allow-doctype", false,
 			"permit a DOCTYPE in the source document and expand the entities it "+
 				"declares internally; external entities still require "+
@@ -129,8 +171,12 @@ func run() error {
 				"       go-xml validate -rng SCHEMA.rng [flags] INPUT.xml ...\n\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
-Security defaults: xsl:include, xsl:import, fn:doc and fn:document are all
-disabled unless -allow-dir names the directories they may read. A DOCTYPE in
+Security defaults: xsl:include, xsl:import, fn:doc and fn:document read only
+the stylesheet's own directory, plus whatever -allow-dir names. The stylesheet's
+directory is granted unconditionally because a stylesheet that cannot read the
+modules beside it is useless -- but it is one root list shared by every reader,
+so a file merely sitting beside the stylesheet can also be read by doc(). Give
+the stylesheet a directory of its own if that matters. A DOCTYPE in
 the source document is rejected unless -allow-doctype is given, and even then
 only its internal declarations are expanded: reading an external entity, an
 external DTD subset, or a file through fn:unparsed-text each needs its own
@@ -168,27 +214,7 @@ Exit status: 0 if every input transformed, 1 otherwise.
 				"so it needs an input document")
 	}
 
-	// The stylesheet's own directory is always readable, since a stylesheet
-	// that includes a sibling module is the normal case; anything beyond that
-	// must be named explicitly.
-	//
-	// Note what this grants: the directory is one root list shared by
-	// xsl:include and by doc()/document(), so a stylesheet can also *read*
-	// any file sitting beside it, not only include one. That is wider than
-	// -allow-dir alone suggests, and it matters when the stylesheet lives in
-	// a directory holding anything the caller would not hand over — put the
-	// stylesheet somewhere of its own if that is a concern. Containment is
-	// still enforced: nothing outside that directory is reachable without
-	// -allow-dir, symlinks are resolved before the check, and the roots are
-	// the only paths the resolver will open.
-	var roots []string
-	if dir := filepath.Dir(*sheetPath); dir != "" {
-		roots = append(roots, dir)
-	}
-	if *allowDirs != "" {
-		roots = append(roots, strings.Split(*allowDirs, ",")...)
-	}
-	resolver, err := xslt.NewFileResolver(roots...)
+	resolver, err := xslt.NewFileResolver(readableRoots(*sheetPath, *allowDirs)...)
 	if err != nil {
 		return err
 	}

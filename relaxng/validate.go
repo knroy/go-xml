@@ -38,7 +38,10 @@ func (s *Schema) Validate(doc *xdm.Node) error {
 // ValidateOptions bound one validation run.
 type ValidateOptions struct {
 	// MaxDepth bounds how deep validation will recurse. Zero means
-	// DefaultMaxDepth; a negative value means no limit.
+	// DefaultMaxDepth; a negative value means no limit -- which ends in a
+	// fatal stack overflow rather than an error, since the runtime does not
+	// deliver stack exhaustion as a recoverable panic. Remove the bound only
+	// for input you produced yourself.
 	//
 	// This is not the parser's limit, and the distinction matters more here
 	// than elsewhere: taking derivatives over a nested document costs time and

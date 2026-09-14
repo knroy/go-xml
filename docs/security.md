@@ -1550,7 +1550,40 @@ No `unsafe`, no `cgo`, no `reflect` in any non-test file.
    `xsd.Schema.ValidateContext` rather than `Validate`, and
    `xslt.Stylesheet.Transform`, which already takes one — a deadline the
    library never looks at bounds nothing.
-7. **Raise `MaxDepth` only deliberately.** Past a few hundred thousand levels
+7. **Resolve `xsl:result-document` hrefs yourself, and confine them.** The
+   library never creates a file: there is no `os.Create` anywhere in `xslt`.
+   `xsl:result-document` returns its href to you as a `SecondaryResult.Href`
+   string, and writing it is your decision. That string is *stylesheet*-
+   controlled, so if the stylesheet is not yours it is attacker-controlled, and
+   handing it to `os.Create` unchecked is a directory traversal — `../../` in
+   an href reaches wherever the process can write. The library avoiding the bug
+   does not mean an embedder inherits the avoidance.
+
+   `cmd/go-xml`'s `writeSecondary` is the reference implementation, and none of
+   what it does is redundant. It refuses an href absolute on *any* platform,
+   spelled textually rather than through `filepath.IsAbs` — `C:/out.xml` is
+   relative on Unix, and left to `IsAbs` alone it silently created a directory
+   named `C:` instead of reporting the href it could not honour. It
+   `EvalSymlinks`es the destination root before comparing. It tests containment
+   on the *cleaned* path with a trailing separator, so `/rootsibling` does not
+   pass as a prefix match on `/root`.
+
+   Most importantly, it does not then write by name. The string check decides
+   which *names* are permitted; it does not decide what gets written, because a
+   symlink at the destination — or at any directory component of it — is
+   followed by `os.Create`, so the check passes and the bytes land outside the
+   root anyway. The write goes through `os.OpenRoot`, and the intermediate
+   directories through a `mkdirAllIn` that creates each component through that
+   root, since `os.Root` deliberately has no `MkdirAll` for this reason. This
+   is the one place in the program that opens by name after a check and it is a
+   *write*, which is why it gets the stronger treatment. Note also that an href
+   can come from the source document through an attribute value template, so it
+   is not necessarily even the stylesheet author's string.
+
+   Copy that function rather than reimplementing it: a containment check is
+   easy to write and easy to write one `filepath.Clean` — or one `os.OpenRoot`
+   — short of correct.
+8. **Raise `MaxDepth` only deliberately.** Past a few hundred thousand levels
    the XSD validator trades a clean error for an uncatchable stack overflow,
    and raising it also removes the ceiling on the identity-constraint cost. In
    `relaxng` the cost of depth is *quadratic*, so raising it there is the most

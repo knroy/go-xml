@@ -118,7 +118,8 @@ type ValidateOptions struct {
 	SkipIDConstraints bool
 
 	// MaxDepth bounds how deep validation will recurse. Zero means
-	// DefaultMaxDepth; a negative value means no limit.
+	// DefaultMaxDepth; a negative value means no limit, which gives up the
+	// clean error for a fatal stack overflow that recover() cannot catch.
 	//
 	// This is not the parser's limit. A tree can be built by a transform
 	// rather than parsed, and a caller who raises xdm.ParseOptions.MaxDepth

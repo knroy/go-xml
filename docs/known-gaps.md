@@ -462,6 +462,58 @@ Nothing in the suites scores this. The `XmlVersions` cases reach the parser
 through `xdm`, which is checked; a caller reaching `dtd.Load` directly is the
 uncovered path.
 
+### `xdm` parsing cannot be cancelled, and nesting depth costs quadratically
+
+`xdm` contains no reference to `context`. A parse therefore runs to completion
+or to a resource limit; a caller holding a deadline cannot interrupt one. That
+matters because the cost of a document is not linear in its size.
+
+`Tree.assign` (`xdm/node.go:1388`) calls `n.InScopeNamespaces()` for every
+element, and uses only `len` of the result — it needs the *count* of
+namespace-axis slots to reserve, so that `generate-id()` cannot hand the same
+number to a namespace node and an unrelated attribute. But
+`InScopeNamespaces` (`xdm/node.go:1311`) walks the whole ancestor chain,
+allocating a slice and a map each time. At depth *d* that is O(*d*) per
+element, so a chain of *n* elements is **O(n²)** in both time and allocation,
+and the maps are discarded immediately.
+
+Measured on darwin/arm64 with `MaxDepth` raised and `MaxNodes`/`MaxBytes`
+disabled:
+
+| Input | Depth | Time | Allocated |
+|---|---|---|---|
+| 14 kB | 2,000 | 0.087 s | 47 MB |
+| 28 kB | 4,000 | 0.384 s | 209 MB |
+| 56 kB | 8,000 | 2.10 s | 912 MB |
+| 112 kB | 16,000 | 13.4 s | 4.0 GB |
+| 224 kB | 32,000 | 28.8 s | 17.8 GB |
+
+Allocation quadruples for each doubling of depth, which is the quadratic. A
+*wide* document is the control and is clean: 256 kB of 64,000 siblings parses
+in 0.031 s and 29 MB, so the cost belongs to depth, not to element count or
+byte length.
+
+**`ParseOptions.MaxDepth` is the only lever a caller has, and its default of
+1000 is what bounds this today.** At the default, the worst nesting can do is
+0.018 s and 10.6 MB, and a 1,001-level document is refused before any of that
+work happens. Note that `MaxDepth` clamps `<= 0` to the default
+(`xdm/parse.go:271`), unlike `xslt`, `relaxng` and `xsd`, where a negative
+value does remove the bound: there is no way to disable the parser's depth
+limit, only to raise it. A caller who raises it is opting into the curve above.
+
+An audit reported this as 1.25 s and 1.6 GB for 1 MB of nested input. The
+shape of the finding is right and the severity is if anything understated, but
+those figures do not reproduce: 1 MB of `<e>` nesting is 150,000 levels deep
+and is **rejected outright** under the default limit, and at a raised limit the
+same input would need hundreds of seconds and hundreds of gigabytes — it does
+not complete. The cost quoted corresponds to roughly 63 kB, not 1 MB.
+
+Closing this properly is an O(n) fix rather than a limit: the in-scope count
+can be inherited down the pre-order walk, adjusted by each element's own
+declarations and undeclarations, instead of recomputed by an ancestor walk.
+Adding a `context` parameter is a separate question, since it is an API change
+on `Parse`, and the depth bound already prevents the unbounded case.
+
 ### XML 1.1 external entities and DTD-side rules
 
 XML 1.1 sat outside all of this until the character layer was implemented. The
