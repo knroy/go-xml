@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -546,6 +547,9 @@ func isInstruction(local string) bool {
 // checkAttrValue verifies an attribute against the closed set of values the
 // summary gives for it, when it gives one.
 func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
+	if ad.uri {
+		return checkURIAttr(el, a)
+	}
 	if len(ad.values) == 0 {
 		return nil
 	}
@@ -632,6 +636,27 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 	return fmt.Errorf(
 		"attribute %s=%q on xsl:%s is not one of %s (XTSE0020)",
 		a.Name.Local, a.Value, el.Name.Local, strings.Join(listed, ", "))
+}
+
+// checkURIAttr holds an attribute the summary types "uri" to that lexical
+// space. Nearly every string is a legal relative reference, so this refuses
+// little: a value carrying a character url.Parse cannot place, and a
+// curly-bracket template, which the attribute is not -- the summary writes
+// the name unbraced, so a brace here is a literal brace and no URI has one.
+func checkURIAttr(el *xdm.Node, a *xdm.Node) error {
+	v := strings.TrimSpace(a.Value)
+	if strings.ContainsAny(v, "{}") {
+		return fmt.Errorf(
+			"attribute %s=%q on xsl:%s is not an attribute value template "+
+				"and must be a URI (XTSE0020)",
+			a.Name.Local, a.Value, el.Name.Local)
+	}
+	if _, err := url.Parse(v); err != nil {
+		return fmt.Errorf(
+			"attribute %s=%q on xsl:%s is not a valid URI reference (XTSE0020)",
+			a.Name.Local, a.Value, el.Name.Local)
+	}
+	return nil
 }
 
 // checkStaticGrammarTree applies the check to every XSLT element in a module.

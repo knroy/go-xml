@@ -163,3 +163,64 @@ func TestIteratePlacementOutranksUnknownAttribute(t *testing.T) {
 		t.Errorf("well-placed xsl:on-completion was refused: %v", err)
 	}
 }
+
+// TestOutputTypedAttrs covers the two xsl:output attributes that reached no
+// validator at all. Both were in the table, both were flagged as attribute
+// value templates, and neither had an enumeration or a qnameAttrs entry -- so
+// checkAttrValue returned before consulting anything and accepted every
+// value, an invented method and a value that is no URI alike.
+//
+// json-node-output-method is deliberately narrower than @method: section 26.1
+// writes it "xml" | "html" | "xhtml" | "text" | eqname, withholding the "json"
+// and "adaptive" that @method admits.
+func TestOutputTypedAttrs(t *testing.T) {
+	const head = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	    version="3.0">
+	  <xsl:variable name="x" select="'text'"/>`
+	const tail = `</xsl:stylesheet>`
+	cases := []struct {
+		name, body, code string // code "" means the stylesheet must compile
+	}{
+		// Neither attribute is an attribute value template.
+		{"json-node-output-method avt",
+			`<xsl:output json-node-output-method="{$x}"/>`, "XTSE0020"},
+		{"parameter-document avt",
+			`<xsl:output parameter-document="{$x}"/>`, "XTSE0020"},
+		// Every value the summary lists for json-node-output-method.
+		{"json-node xml", `<xsl:output json-node-output-method="xml"/>`, ""},
+		{"json-node html", `<xsl:output json-node-output-method="html"/>`, ""},
+		{"json-node xhtml", `<xsl:output json-node-output-method="xhtml"/>`, ""},
+		{"json-node text", `<xsl:output json-node-output-method="text"/>`, ""},
+		// The union's second half, as xsl:function/@streamability takes it.
+		{"json-node eqname",
+			`<xsl:output json-node-output-method="Q{http://xxx.com/}mine"/>`, ""},
+		// Outside the list. "json" and "adaptive" are @method's, not this
+		// attribute's, and are refused here exactly as an invented name is.
+		{"json-node invented",
+			`<xsl:output json-node-output-method="nonsense"/>`, "XTSE0020"},
+		{"json-node json", `<xsl:output json-node-output-method="json"/>`, "XTSE0020"},
+		{"json-node adaptive",
+			`<xsl:output json-node-output-method="adaptive"/>`, "XTSE0020"},
+		// parameter-document is a URI: a relative reference and an absolute
+		// one are both legal, and only a value that cannot be a URI is not.
+		{"parameter-document relative",
+			`<xsl:output parameter-document="params.xml"/>`, ""},
+		{"parameter-document absolute",
+			`<xsl:output parameter-document="http://xxx.com/p.xml"/>`, ""},
+		{"parameter-document bad scheme",
+			`<xsl:output parameter-document=":::no scheme"/>`, "XTSE0020"},
+		{"parameter-document bad escape",
+			`<xsl:output parameter-document="p%zzq.xml"/>`, "XTSE0020"},
+		{"parameter-document control character",
+			"<xsl:output parameter-document=\"p\x7fq.xml\"/>", "XTSE0020"},
+	}
+	for _, c := range cases {
+		err := compileDrift(t, head+c.body+tail)
+		switch {
+		case c.code == "" && err != nil:
+			t.Errorf("%s: refused: %v", c.name, err)
+		case c.code != "" && (err == nil || !strings.Contains(err.Error(), c.code)):
+			t.Errorf("%s: want %s, got %v", c.name, c.code, err)
+		}
+	}
+}

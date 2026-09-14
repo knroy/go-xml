@@ -28,6 +28,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | `xsl:output` and `xsl:function` attributes were flagged as attribute value templates | The Recommendation braces only `xsl:result-document`'s, so `build-tree="{$x}"` escaped XTSE0020. Four `avt` flags cleared, on the attributes whose enumeration the flag was suppressing; `streamability` keeps its EQName union. | [`4410604`][4410604] |
+| `xsl:output/@parameter-document` and `@json-node-output-method` reached no validator | Neither had a type, so any value passed. Now `uri` and `"xml"`/`"html"`/`"xhtml"`/`"text"`/eqname; a `{...}` is XTSE0020. |  |
 | `visibility="hidden"` was declarable and `cache="full"` accepted | Hidden is acquired through `xsl:accept`/`xsl:expose`, and `cache? = boolean`. The enumerations now match the summaries; both are XTSE0020. | [`4410604`][4410604] |
 | Three working-draft attributes were tolerated on a 3.0 module | `function/@identity-sensitive`, `accumulator/@applies-to` and `package/@use-package` are now `removed30`: XTSE0090. `param/@export` stays tolerated, so `iterate-024` still reaches its XTSE0010. | [`4410604`][4410604] |
 | A misplaced `xsl:on-completion` was outranked by an unknown attribute | §8.4's placement rule is now read off the tree ahead of the grammar sweep, so a doubly-broken module reports the structural XTSE0010, not XTSE0090. |  |

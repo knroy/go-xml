@@ -71,6 +71,13 @@ type attrDef struct {
 	// case: REC J.1 unions xsl:streamability-type with
 	// xsl:EQName-in-namespace.
 	eqnameOK bool
+	// uri marks an attribute the summary types "uri". There is no closed set
+	// of values to check, only a lexical space: the value must parse as a
+	// URI reference. It is the weakest of the checks here by design -- almost
+	// every string is a legal relative reference -- and exists so that a
+	// value that cannot be one at all is refused rather than carried to the
+	// serialiser.
+	uri bool
 	// removed30 marks a name a working draft of XSLT 3.0 proposed and the
 	// Recommendation removed. The summary does not define it, so it is
 	// XTSE0090 exactly as an invented name would be -- but listing it makes
@@ -797,16 +804,32 @@ var xsltElements = map[string]elementDef{
 		//
 		// None of xsl:output's attributes is an attribute value template:
 		// the summary (section 26.1) writes them without braces, and only
-		// xsl:result-document's are braced. The flag is cleared on the two
-		// with an enumeration, where it was suppressing XTSE0020 on a
-		// "{...}"; on parameter-document and json-node-output-method it has
-		// no reader -- neither has an enumeration or a qnameAttrs entry, so
-		// checkAttrValue returns before consulting it -- and clearing it
-		// there would be a change with no behaviour, so it is left as is.
-		"parameter-document":      {processor30: true, avt: true},
-		"json-node-output-method": {processor30: true, avt: true},
-		"allow-duplicate-names":   {processor30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
-		"build-tree":              {processor30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+		// xsl:result-document's are braced, so none of these carries avt.
+		//
+		// The two below now carry the types the summary states for them.
+		// Until they did, neither had an enumeration nor a qnameAttrs entry,
+		// so checkAttrValue returned before consulting anything and every
+		// value was accepted -- an invented json-node-output-method, and a
+		// parameter-document that is no URI at all, alike. Clearing avt was
+		// what gave the flag a reader: the check it guards now exists.
+		//
+		// json-node-output-method is "xml" | "html" | "xhtml" | "text" |
+		// eqname. It is NOT @method's list: the summary withholds "json" and
+		// "adaptive" from it, because the attribute names the method used for
+		// a node appearing within JSON output, and neither of those
+		// serialises a node. eqnameOK carries the union's second half, as it
+		// does for xsl:function/@streamability.
+		"json-node-output-method": {processor30: true, eqnameOK: true,
+			values: []string{"xml", "html", "xhtml", "text"}},
+		// parameter-document is "uri". The table has held no URI-typed
+		// attribute to a lexical space before -- the note at the head of this
+		// file records URIs as unenumerable -- but a syntactically impossible
+		// value is still "not one of the permitted values for that
+		// attribute", and a "{...}" here is a literal brace in a URI rather
+		// than a template, since the summary writes the name unbraced.
+		"parameter-document":    {processor30: true, uri: true},
+		"allow-duplicate-names": {processor30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"build-tree":            {processor30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
 		// html-version selects between the HTML 4 and HTML 5 serialisation
 		// rules. It was added after XSLT 2.0, but the test suite uses it in
 		// tests declared XSLT20+, and rejecting an attribute a stylesheet may
