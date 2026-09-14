@@ -315,6 +315,7 @@ func (a *instrAnalyzer) exprOperandIn(src string, el *xdm.Node, ctx posture, all
 		ctxPosture:        ctx,
 		ctxAllowsChildren: allowsChildren,
 		known:             a.known,
+		decl:              el,
 		currentGroup:      a.currentGroup,
 		groupInScope:      a.groupInScope,
 		groupOutOfReach:   a.groupOutOfReach,

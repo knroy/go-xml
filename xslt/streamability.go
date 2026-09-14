@@ -138,6 +138,13 @@ type analyzer struct {
 	// from analyzeExpr, say -- stays unmodelled, as it was before this rule
 	// existed. See streamaccumafter.go.
 	accumAfter accumAfterState
+
+	// decl is the stylesheet element whose attribute holds the expression
+	// being analysed, or nil from analyzeExpr. It is what lets a dynamic
+	// function call read the declared type of its function variable
+	// (§19.8.8.11, "where available"): XSLT variable scoping is syntactic
+	// (§9.7), so the declaration is found by walking from here outward.
+	decl *xdm.Node
 }
 
 // analyzeExpr returns the posture and sweep of e, and whether every construct
@@ -337,6 +344,7 @@ func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
 		currentAllowsChildren: a.currentAllowsChildren,
 		currentInScope:        a.currentInScope,
 		vars:                  a.vars,
+		decl:                  a.decl,
 	}
 	p := inner.expr(e)
 	a.known = a.known && inner.known
@@ -465,6 +473,7 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 			currentAllowsChildren: a.currentAllowsChildren,
 			currentInScope:        a.currentInScope,
 			vars:                  a.vars,
+			decl:                  a.decl,
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
@@ -522,6 +531,7 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 			currentAllowsChildren: a.currentAllowsChildren,
 			currentInScope:        a.currentInScope,
 			vars:                  a.vars,
+			decl:                  a.decl,
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
@@ -608,6 +618,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 				currentAllowsChildren: a.currentAllowsChildren,
 				currentInScope:        a.currentInScope,
 				vars:                  a.vars,
+				decl:                  a.decl,
 			}
 			next = inner.expr(e)
 			curAllowsChildren = inner.allowsChildren(e)
@@ -740,6 +751,7 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 				currentAllowsChildren: a.currentAllowsChildren,
 				currentInScope:        a.currentInScope,
 				vars:                  a.vars,
+				decl:                  a.decl,
 			}
 			sw := inner.expr(p).sweep
 			if !inner.known {

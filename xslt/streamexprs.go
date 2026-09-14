@@ -22,6 +22,7 @@ package xslt
 import (
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
+	"strings"
 )
 
 // unionExpr applies §19.8.8.4 to "E | F", "E intersect F" and "E except F".
@@ -607,39 +608,171 @@ func (a *analyzer) namedFunctionRef(x *xpath.NamedFunctionRef) props {
 //	argument expressions excluding any ? placeholders (here X and Y). These
 //	have type-determined usage dependent on ancillary information
 //	associated with the static type of the base expression, where available
-//	[...]. If no function signature is available, then the usage of each of
-//	the argument expressions is navigation."
+//	[...]. If this information indicates that the base expression is a
+//	function with signature function(A, B, ...) as R, then the first
+//	argument X has type-determined usage based on the first argument type
+//	A, the second argument Y has type-determined usage based on the second
+//	argument type B, and so on. If no function signature is available, then
+//	the usage of each of the argument expressions is navigation."
 //
-// No signature is ever available here: the analyzer is built afresh from
-// each attribute's expression text and carries no declared types, so it
-// cannot see the "as" of the xsl:variable that binds $f. The last sentence
-// then applies to every argument, and the section's note says what that
-// costs: a streamed node passed to a function not statically known to be a
-// map or array "will generally be roaming and free-ranging. This means it is
-// desirable to declare the type of any variable holding a map or array."
-// That refusal is the spec's outcome for a processor that knows nothing
-// more, so it is decided rather than withheld. A grounded argument is
-// unaffected either way, because §19.8.1 keeps a grounded operand's own
-// sweep whatever its usage.
+// The one static type this analyzer can read is the "as" of the
+// xsl:variable or xsl:param that binds a function variable, found by the
+// syntactic scoping walk in declaredTypeOf. The section's note settles the
+// map and array types: "it is also known that the argument type is
+// xs:anyAtomicType, and that the operand usage is therefore absorption. A
+// call that passes a streamed node will therefore be grounded and
+// consuming." A declared function(A, B) gives each argument the
+// type-determined usage of its parameter type. Anything else -- no
+// declaration, no "as", function(*), a base that is not a variable -- is
+// the last sentence, and a streamed argument then makes the call roaming,
+// which the note calls the expected outcome: "it is desirable to declare
+// the type of any variable holding a map or array."
 //
-// The refinement the section allows -- absorption for a declared map or
-// array, per-parameter usage for a declared function(A, B) -- needs the
-// binding's declared type, which is the gap conformance-gaps.md records.
+// A grounded argument is unaffected either way, because §19.8.1 keeps a
+// grounded operand's own sweep whatever its usage.
 //
 // The note on focus-dependent function items ("name#0, lang#1, or last#0
 // [...] does not affect the static streamability analysis") is honoured by
 // giving the base expression nothing beyond its inspection usage; what
 // §19.8.8.15 makes of the reference itself is its own affair.
 func (a *analyzer) dynamicCall(x *xpath.DynamicCall) props {
+	usages := a.dynamicCallUsages(x)
 	ops := []operand{a.operandOf(x.Target, usageInspection)}
-	for _, arg := range x.Args {
+	for i, arg := range x.Args {
 		if _, ok := arg.(*xpath.ArgumentPlaceholder); ok {
 			// "excluding any ? placeholders"
 			continue
 		}
-		ops = append(ops, a.operandOf(arg, usageNavigation))
+		u := usageNavigation
+		if i < len(usages) {
+			u = usages[i]
+		}
+		ops = append(ops, a.operandOf(arg, u))
 	}
 	return combine(ops, false)
+}
+
+// dynamicCallUsages reads the argument usages §19.8.8.11 derives from the
+// declared type of the function variable, or returns nil when no signature
+// is available. A nil result, or one shorter than the argument list, leaves
+// the remaining arguments with usage navigation.
+func (a *analyzer) dynamicCallUsages(x *xpath.DynamicCall) []usage {
+	v, ok := x.Target.(*xpath.VarRef)
+	if !ok || a.decl == nil {
+		return nil
+	}
+	if _, bound := a.vars[v.Name]; bound {
+		// Bound inside the expression, where the declaration walk cannot
+		// see it; whatever shares its name outside is not this variable.
+		return nil
+	}
+	as, ok := declaredTypeOf(a.decl, v.Name)
+	if !ok {
+		return nil
+	}
+	as = strings.TrimSpace(as)
+	if n := len(as); n > 0 {
+		switch as[n-1] {
+		case '?', '*', '+':
+			as = strings.TrimSpace(as[:n-1])
+		}
+	}
+	switch {
+	case strings.HasPrefix(as, "map(") || strings.HasPrefix(as, "array("):
+		// The note: the argument type is xs:anyAtomicType, so absorption.
+		return []usage{usageAbsorption}
+	case strings.HasPrefix(as, "function("):
+		params, ok := functionParamTypes(as)
+		if !ok {
+			// function(*): no signature.
+			return nil
+		}
+		us := make([]usage, len(params))
+		for i, t := range params {
+			us[i] = instrTypeDeterminedUsage(t)
+		}
+		return us
+	}
+	return nil
+}
+
+// functionParamTypes splits the parameter list of a declared function type,
+// "function(A, B) as R", at its top-level commas. It reports false for
+// function(*), which declares no signature.
+func functionParamTypes(as string) ([]string, bool) {
+	depth, start := 0, -1
+	var params []string
+	for i, c := range as {
+		switch c {
+		case '(':
+			depth++
+			if depth == 1 {
+				start = i + 1
+			}
+		case ')':
+			depth--
+			if depth == 0 {
+				params = append(params, as[start:i])
+				if len(params) == 1 && strings.TrimSpace(params[0]) == "*" {
+					return nil, false
+				}
+				return params, true
+			}
+		case ',':
+			if depth == 1 {
+				params = append(params, as[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return nil, false
+}
+
+// declaredTypeOf finds the "as" attribute of the declaration that binds the
+// variable name at el, by the syntactic scoping rules of §9.7: a local
+// xsl:variable or xsl:param is in scope for its following siblings and their
+// descendants (which covers the params of an enclosing xsl:function or
+// xsl:template); "$value" inside an xsl:accumulator-rule is the accumulator's
+// own value, typed by its "as" (§18.2.2); and a top-level declaration is in
+// scope everywhere. The innermost binding wins. A declaration without "as"
+// is found but reports "".
+func declaredTypeOf(el *xdm.Node, name xdm.QName) (string, bool) {
+	for n := el; n != nil && n.Parent != nil && n.Parent.Parent != nil; n = n.Parent {
+		if isXSL(n, "accumulator-rule") && name.URI == "" && name.Local == "value" {
+			return n.Parent.AttrValue("as"), true
+		}
+		sibs := n.Parent.ChildElements()
+		for i := range sibs {
+			if sibs[i] == n {
+				sibs = sibs[:i]
+				break
+			}
+		}
+		for i := len(sibs) - 1; i >= 0; i-- {
+			if declaresVar(sibs[i], name) {
+				return sibs[i].AttrValue("as"), true
+			}
+		}
+		if n.Parent.Parent.Parent == nil {
+			// n's parent is the stylesheet element: every top-level
+			// declaration is in scope, following ones included.
+			for _, d := range n.Parent.ChildElements() {
+				if declaresVar(d, name) {
+					return d.AttrValue("as"), true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// declaresVar reports whether d is an xsl:variable or xsl:param binding name.
+func declaresVar(d *xdm.Node, name xdm.QName) bool {
+	if !isXSL(d, "variable") && !isXSL(d, "param") {
+		return false
+	}
+	q, err := resolveQNameAttr(d, d.AttrValue("name"))
+	return err == nil && q == name
 }
 
 // numericFocusFreePredicate reports whether a predicate P satisfies the two

@@ -176,6 +176,7 @@ func exprIsNotGroundedMotionlessCtx(src string, at *xdm.Node, ctxAllowsChildren 
 		ctxPosture:        postureStriding,
 		ctxAllowsChildren: ctxAllowsChildren,
 		known:             true,
+		decl:              at,
 	}
 	p := a.expr(expr)
 	if !a.known {
@@ -197,6 +198,7 @@ func exprSweepCtx(src string, at *xdm.Node, ctxAllowsChildren bool) (sweep, bool
 		ctxPosture:        postureStriding,
 		ctxAllowsChildren: ctxAllowsChildren,
 		known:             true,
+		decl:              at,
 	}
 	p := a.expr(expr)
 	return p.sweep, a.known

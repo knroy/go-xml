@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/xpath"
@@ -105,5 +106,117 @@ func TestDynamicCallOnStreamingParameter(t *testing.T) {
 		t.Errorf("$fn($element) is %v and %v; want roaming and free-ranging: "+
 			"no signature, so the argument navigates from a streamed node",
 			p.posture, p.sweep)
+	}
+}
+
+// §19.8.8.11's signature refinement, through real declarations. "These have
+// type-determined usage dependent on ancillary information associated with
+// the static type of the base expression, where available": the "as" of the
+// xsl:variable or xsl:param binding the function variable. Each case is a
+// whole stylesheet with a streamable mode, so the verdict observed is the one
+// the checker raises, or declines to raise, as XTSE3430.
+func TestDynamicCallDeclaredType(t *testing.T) {
+	rule := func(body string) string {
+		return modeSheet(`<xsl:template match="item" mode="s">` + body + `</xsl:template>`)
+	}
+	for _, tc := range []struct {
+		name   string
+		sheet  string
+		refuse bool
+		why    string
+	}{
+		{
+			name: "map(*) absorbs a streamed attribute",
+			sheet: rule(`<xsl:variable name="m" as="map(*)" select="map{}"/>
+			             <xsl:value-of select="$m(@class)"/>`),
+			why: "the note: a statically known map makes the argument type " +
+				"xs:anyAtomicType, 'and the operand usage is therefore absorption'",
+		},
+		{
+			name: "map(K, V) is a map type too",
+			sheet: rule(`<xsl:variable name="m" as="map(xs:string, xs:integer)" select="map{}"/>
+			             <xsl:value-of select="$m(@class)"/>`),
+			why: "accumulator-054's shape: map(xs:string, xs:integer) is as " +
+				"statically a map as map(*)",
+		},
+		{
+			name: "function(xs:string) atomizes its argument",
+			sheet: rule(`<xsl:variable name="f" as="function(xs:string) as xs:integer"
+			                 select="function($s as xs:string) { 1 }"/>
+			             <xsl:value-of select="$f(@class)"/>`),
+			why: "'the first argument X has type-determined usage based on the " +
+				"first argument type A': xs:string is atomic, so absorption",
+		},
+		{
+			name: "function(node()) navigates from a streamed child",
+			sheet: rule(`<xsl:variable name="f" as="function(node()) as xs:integer"
+			                 select="function($n as node()) { 1 }"/>
+			             <xsl:value-of select="$f(child::x)"/>`),
+			refuse: true,
+			why: "a parameter type that permits nodes gives usage navigation " +
+				"(§19.4), and navigation from a streamed posture is free-ranging",
+		},
+		{
+			name: "no declared type is no signature",
+			sheet: rule(`<xsl:variable name="f" select="function($n) { 1 }"/>
+			             <xsl:value-of select="$f(child::x)"/>`),
+			refuse: true,
+			why: "'If no function signature is available, then the usage of " +
+				"each of the argument expressions is navigation'",
+		},
+		{
+			name: "function(*) is no signature",
+			sheet: rule(`<xsl:variable name="f" as="function(*)" select="function($n) { 1 }"/>
+			             <xsl:value-of select="$f(child::x)"/>`),
+			refuse: true,
+			why:    "function(*) declares no parameter types to read a usage from",
+		},
+		{
+			name: "a declaration out of scope is not consulted",
+			sheet: modeSheet(`<xsl:variable name="m" select="function($n) { 1 }"/>
+			    <xsl:template match="item" mode="s">
+			      <xsl:if test="false()"><xsl:variable name="m" as="map(*)" select="map{}"/></xsl:if>
+			      <xsl:value-of select="$m(child::x)"/>
+			    </xsl:template>`),
+			refuse: true,
+			why: "§9.7: the local map(*) binding is in scope only for its " +
+				"following siblings, of which the call is not one; the " +
+				"reference is to the untyped global, so no signature",
+		},
+		{
+			name: "a global declaration is in scope everywhere",
+			sheet: modeSheet(`<xsl:template match="item" mode="s">
+			      <xsl:value-of select="$m(@class)"/>
+			    </xsl:template>
+			    <xsl:variable name="m" as="map(*)" select="map{}"/>`),
+			why: "a top-level declaration binds throughout the stylesheet, " +
+				"whether it precedes or follows the reference",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := compileModeSheet(t, tc.sheet)
+			refused := err != nil && strings.Contains(err.Error(), "XTSE3430")
+			if err != nil && !refused {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if refused != tc.refuse {
+				t.Errorf("refused=%v, want %v (err=%v) — %s", refused, tc.refuse, err, tc.why)
+			}
+		})
+	}
+}
+
+// §18.2.2 types $value inside an xsl:accumulator-rule by the accumulator's
+// "as", so accumulator-054's "$value(@class)" under as="map(*)" is a call on
+// a statically known map: absorption, and grounded on a streamed attribute.
+// The select is the bare call so that the verdict is this rule's alone; the
+// suite case wraps it in map:put, which is not modelled and would hide it.
+func TestDynamicCallOnAccumulatorValue(t *testing.T) {
+	err := compileAccumSheet(t, accumSheet(`
+		<xsl:accumulator name="a" as="map(*)" initial-value="map{}" streamable="yes">
+		  <xsl:accumulator-rule match="item" select="$value(@class)"/>
+		</xsl:accumulator>`))
+	if err != nil {
+		t.Errorf("a map-typed accumulator's $value(@class) was refused: %v", err)
 	}
 }

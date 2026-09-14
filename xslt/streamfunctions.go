@@ -590,6 +590,7 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 		ctxAllowsChildren: true,
 		known:             true,
 		funcs:             funcs,
+		decl:              instr,
 	}
 	// The streaming parameter is the first parameter, and only when the
 	// function is declared-streamable and that parameter's declared type
@@ -844,6 +845,7 @@ func (a *analyzer) simpleMap(x *xpath.SimpleMap) props {
 		currentAllowsChildren: a.currentAllowsChildren,
 		currentInScope:        a.currentInScope,
 		vars:                  a.vars,
+		decl:                  a.decl,
 	}
 	p := inner.expr(x.Right)
 	a.known = a.known && inner.known
