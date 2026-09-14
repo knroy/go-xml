@@ -27,7 +27,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The XTSE0020 message for a yes-or-no attribute listed only `yes, no` at 3.0 | The check already accepted `true/false/1/0` there. The message now lists the spellings in force for the module's version. |  |
+| The XTSE0020 message for a yes-or-no attribute listed only `yes, no` at 3.0 | The check already accepted `true/false/1/0` there. The message now lists the spellings in force for the module's version. | [`f9d96aa`][f9d96aa] |
 | §19.8.8.15 decided a named function reference only under a grounded context | Nothing recorded focus dependence. A table of the 33 focus-dependent (name, arity) pairs, from the F&O and XSLT "Properties" paragraphs, now decides the rest. | [`acdc330`][acdc330] |
 | §19.8.8.11 dynamic function calls had no streamability rule | `$f(child::x)` in a streamed context was accepted for want of an opinion. The base is inspected and each argument navigates, the spec's no-signature fallback, so a streamed argument is refused. | [`a09c437`][a09c437] |
 | The numeric-predicate rules of §19.8.8.9 and §19.8.8.10 were missing | `descendant::section[1]` and `(//x)[3]` came back crawling, though the spec makes a focus-independent numeric predicate striding. Both rules now apply, for statically certain types. | [`f05bea8`][f05bea8] |
@@ -295,7 +295,7 @@ what the suites *measured*, not what the library does.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| `xpath/funcspec_table.go` called its table a bootstrap of seventeen entries | It covers the whole F&O manifest and the tests enforce that. The header now states the invariant and names `fn:concat` as the synthesised exception. |  |
+| `xpath/funcspec_table.go` called its table a bootstrap of seventeen entries | It covers the whole F&O manifest and the tests enforce that. The header now states the invariant and names `fn:concat` as the synthesised exception. | [`c5b237c`][c5b237c] |
 | The README called `xsl:stream` and `xsl:fork` absent | Both execute end-to-end by building the tree, as §19.1 permits a non-streaming processor to do. The README now says what is absent is streamed execution, not the vocabulary — matching `docs/conformance-gaps.md`. | [`a09c936`][a09c936] |
 | The `evaluate-045` divergence was justified by a false spec argument | The comment claimed a plain `xsl:stylesheet` has no package boundary; §3.5 makes it an implicit package whose functions default to private. Reframed as a known divergence kept for cost (577 of 593 DocBook documents against 67), with the corpus size corrected from 613 to 593. | [`c6532ba`][c6532ba] |
 | Twelve spec citations named a real section about the wrong subject | The REC renumbered §19.8.4 after the Last Call draft, shifting every instruction after `xsl:text` by two, and four F&O numbers were transcription errors wrong in every version. Each new number was checked against the vendored spec's own heading. | [`ed625d2`][ed625d2] |
@@ -851,6 +851,7 @@ here so every entry in this file sits under a release.
 [c01b98a]: https://github.com/knroy/go-xml/commit/c01b98a
 [c2af54f]: https://github.com/knroy/go-xml/commit/c2af54f
 [c3a52be]: https://github.com/knroy/go-xml/commit/c3a52be
+[c5b237c]: https://github.com/knroy/go-xml/commit/c5b237c
 [c6532ba]: https://github.com/knroy/go-xml/commit/c6532ba
 [c8fc839]: https://github.com/knroy/go-xml/commit/c8fc839
 [cc17983]: https://github.com/knroy/go-xml/commit/cc17983
@@ -887,6 +888,7 @@ here so every entry in this file sits under a release.
 [f536984]: https://github.com/knroy/go-xml/commit/f536984
 [f88747b]: https://github.com/knroy/go-xml/commit/f88747b
 [f9c0cf5]: https://github.com/knroy/go-xml/commit/f9c0cf5
+[f9d96aa]: https://github.com/knroy/go-xml/commit/f9d96aa
 [fe41f3c]: https://github.com/knroy/go-xml/commit/fe41f3c
 [0af8592]: https://github.com/knroy/go-xml/commit/0af8592
 [3831726]: https://github.com/knroy/go-xml/commit/3831726
