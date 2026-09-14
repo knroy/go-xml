@@ -27,9 +27,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| §19.8.8.15 decided a named function reference only under a grounded context | Nothing recorded focus dependence. A table of the 33 focus-dependent (name, arity) pairs, from the F&O and XSLT "Properties" paragraphs, now decides the rest. |  |
-| §19.8.8.11 dynamic function calls had no streamability rule | `$f(child::x)` in a streamed context was accepted for want of an opinion. The base is inspected and each argument navigates, the spec's no-signature fallback, so a streamed argument is refused. |  |
-| The numeric-predicate rules of §19.8.8.9 and §19.8.8.10 were missing | `descendant::section[1]` and `(//x)[3]` came back crawling, though the spec makes a focus-independent numeric predicate striding. Both rules now apply, for statically certain types. |  |
+| §19.8.8.15 decided a named function reference only under a grounded context | Nothing recorded focus dependence. A table of the 33 focus-dependent (name, arity) pairs, from the F&O and XSLT "Properties" paragraphs, now decides the rest. | [`acdc330`][acdc330] |
+| §19.8.8.11 dynamic function calls had no streamability rule | `$f(child::x)` in a streamed context was accepted for want of an opinion. The base is inspected and each argument navigates, the spec's no-signature fallback, so a streamed argument is refused. | [`a09c437`][a09c437] |
+| The numeric-predicate rules of §19.8.8.9 and §19.8.8.10 were missing | `descendant::section[1]` and `(//x)[3]` came back crawling, though the spec makes a focus-independent numeric predicate striding. Both rules now apply, for statically certain types. | [`f05bea8`][f05bea8] |
 | The `SERE0007` raw-text guard looked at one text node at a time | Adjacent text nodes are written into one raw run, so `"a<"` + `"/script>"` emitted a contiguous `</script>` under the html method. The guard now spans the boundary. | [`2acbab4`][2acbab4] |
 | 29 cast and type errors rendered their code twice | `xdm.ErrCast` and `xdm.ErrType` already carry `FORG0001`/`XPTY0004` and `Error()` prints it, yet the call sites spelled it again, so `xs:byte(999)` read `FORG0001: FORG0001: …`. The format strings no longer repeat it. | [`0af8592`][0af8592] |
 | Five parser limits reported `XPST0003` for a well-formed expression | §2.3.1 names `XPDY0130` for an implementation-dependent limit; the depth, chain, type-nesting and XQuery nesting caps use it now. Messages and the sentinel are unchanged. | [`75cb3af`][75cb3af] |
@@ -818,6 +818,7 @@ here so every entry in this file sits under a release.
 [9ae8c57]: https://github.com/knroy/go-xml/commit/9ae8c57
 [9f033e2]: https://github.com/knroy/go-xml/commit/9f033e2
 [9f69069]: https://github.com/knroy/go-xml/commit/9f69069
+[a09c437]: https://github.com/knroy/go-xml/commit/a09c437
 [a09c936]: https://github.com/knroy/go-xml/commit/a09c936
 [a0cf1da]: https://github.com/knroy/go-xml/commit/a0cf1da
 [a3ec25e]: https://github.com/knroy/go-xml/commit/a3ec25e
@@ -829,6 +830,7 @@ here so every entry in this file sits under a release.
 [ab89b76]: https://github.com/knroy/go-xml/commit/ab89b76
 [abc8cbc]: https://github.com/knroy/go-xml/commit/abc8cbc
 [ac743d4]: https://github.com/knroy/go-xml/commit/ac743d4
+[acdc330]: https://github.com/knroy/go-xml/commit/acdc330
 [ad2c3dc]: https://github.com/knroy/go-xml/commit/ad2c3dc
 [aeead08]: https://github.com/knroy/go-xml/commit/aeead08
 [b21f5eb]: https://github.com/knroy/go-xml/commit/b21f5eb
@@ -872,6 +874,7 @@ here so every entry in this file sits under a release.
 [eb12a69]: https://github.com/knroy/go-xml/commit/eb12a69
 [eb5ea72]: https://github.com/knroy/go-xml/commit/eb5ea72
 [ed625d2]: https://github.com/knroy/go-xml/commit/ed625d2
+[f05bea8]: https://github.com/knroy/go-xml/commit/f05bea8
 [f0ffb5b]: https://github.com/knroy/go-xml/commit/f0ffb5b
 [f161723]: https://github.com/knroy/go-xml/commit/f161723
 [f29b554]: https://github.com/knroy/go-xml/commit/f29b554
