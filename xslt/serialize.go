@@ -411,6 +411,10 @@ type serializer struct {
 	// which one, so that the error naming it can say so.
 	rawText     bool
 	rawTextName string
+	// rawTextLT marks that the last text written inside the raw-text
+	// element ended with "<", so that a following node starting with "/"
+	// is caught as "</" even though neither node holds both bytes.
+	rawTextLT bool
 	// inCData marks that serialisation is inside an element named in
 	// cdata-section-elements, whose text children are wrapped in CDATA
 	// sections instead of being escaped.
@@ -587,7 +591,8 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 			// <script> body. Escaping is not an option here, so the spec
 			// makes it a serialization error, as it does for "--" in a
 			// comment and "?>" in a processing instruction.
-			if strings.Contains(n.Value, "</") {
+			if strings.Contains(n.Value, "</") ||
+				(s.rawTextLT && strings.HasPrefix(n.Value, "/")) {
 				if s.err == nil {
 					s.err = fmt.Errorf(
 						"SERE0007: %s content contains '</', which would end "+
@@ -597,6 +602,9 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 				return
 			}
 			s.writeString(n.Value)
+			if n.Value != "" {
+				s.rawTextLT = strings.HasSuffix(n.Value, "<")
+			}
 			return
 		}
 		if s.inCData {
@@ -860,9 +868,9 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// suite's expected output escapes "<" and "&" inside a script there, and
 	// a document that did not would not parse as XML at all.
 	if s.html && !s.xhtml && isRawTextElement(n.Name.Local) {
-		saved, savedName := s.rawText, s.rawTextName
-		s.rawText, s.rawTextName = true, n.Name.Local
-		defer func() { s.rawText, s.rawTextName = saved, savedName }()
+		saved, savedName, savedLT := s.rawText, s.rawTextName, s.rawTextLT
+		s.rawText, s.rawTextName, s.rawTextLT = true, n.Name.Local, false
+		defer func() { s.rawText, s.rawTextName, s.rawTextLT = saved, savedName, savedLT }()
 	}
 	// The head this belongs in is an HTML one. Under the html method every
 	// element is HTML by definition, but the xhtml method serialises whatever
