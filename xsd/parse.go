@@ -217,6 +217,12 @@ type parser struct {
 	// callers already expect.
 	exactMin, exactMax *big.Int
 
+	// merged memoises mergedFacets for the load, so that the facet
+	// constraints cost one merge per simple type rather than one chain walk
+	// per ask. Filled lazily, so a schema with no simple types never
+	// allocates it.
+	merged map[*SimpleType]*FacetSet
+
 	// errs accumulates faults rather than stopping at the first, because a
 	// schema author fixing a file wants to see every fault in it.
 	errs []error

@@ -328,7 +328,7 @@ func (p *parser) checkBoundOrder(t, base *SimpleType, el *xdm.Node) {
 		return
 	}
 	name := prim.Name.Local
-	m := mergedFacets(t)
+	m := p.mergedFacets(t)
 
 	cmp := func(a, b *string) (int, bool) {
 		if a == nil || b == nil {
@@ -366,7 +366,7 @@ func (p *parser) checkBoundOrder(t, base *SimpleType, el *xdm.Node) {
 	// The bound "valid restriction" constraints. A derived bound may only
 	// narrow the base's, and each of the four is constrained against both
 	// of the base's bounds on the same side.
-	b := mergedFacets(base)
+	b := p.mergedFacets(base)
 	f := t.Facets
 
 	if c, ok := cmp(f.MaxInclusive, b.MaxInclusive); ok && c > 0 {
@@ -466,7 +466,7 @@ func (p *parser) checkBoundOrder(t, base *SimpleType, el *xdm.Node) {
 // {facets} would miss half the bounds a restriction can widen.
 func (p *parser) checkFacetRestriction(t, base *SimpleType, el *xdm.Node) {
 	f := t.Facets
-	b := mergedFacets(base)
+	b := p.mergedFacets(base)
 
 	if f.Length != nil && b.Length != nil && *f.Length != *b.Length {
 		p.errs = append(p.errs, errorAt(el, "length-valid-restriction",
@@ -646,9 +646,9 @@ func (p *parser) checkFacetApplicable(t *SimpleType, el *xdm.Node) {
 // The {facets} the constraints speak of are the *merged* set — a derivation
 // inherits its base's facets — so length written here conflicts with a
 // minLength written two steps up just as surely as with one written alongside
-// it. mergedFacets does that walk.
+// it. mergedFacets does that merge.
 func (p *parser) checkFacetCombinations(t *SimpleType, el *xdm.Node) {
-	m := mergedFacets(t)
+	m := p.mergedFacets(t)
 
 	// "length and minLength or maxLength" (§4.3.1.4).
 	//
@@ -711,66 +711,114 @@ func (p *parser) checkFacetCombinations(t *SimpleType, el *xdm.Node) {
 // mergedFacets flattens a type's derivation chain into the single {facets} set
 // the Part 2 constraints are written against.
 //
-// Nearest wins: facetChain runs from the type outwards, so a facet already set
-// by a nearer step is not overwritten by the base's. That matters for
+// Nearest wins: the chain is merged from the type outwards, so a facet already
+// set by a nearer step is not overwritten by the base's. That matters for
 // correctness rather than tidiness — comparing a derived minLength against an
 // inherited maxLength is exactly the case the constraint exists to catch, and
 // taking the base's minLength instead would compare the wrong pair.
-func mergedFacets(t *SimpleType) *FacetSet {
-	out := &FacetSet{}
-	// carry copies the {fixed} property along with the value it belongs to.
-	// The flag has to travel with the step that *set* the facet: a later
-	// step that re-states the same value without fixed="true" does not
-	// unfix it, and an earlier step that never set the facet has no say.
-	carry := func(kind FacetKind, f *FacetSet) {
+//
+// The result is memoised on the parser for the load. Every simple type is
+// asked about, and each ask used to walk its whole chain, so N chained
+// restrictions cost O(N²) — 10,000 links took 15 s. Because nearest wins, a
+// type's merged set is its own facets laid over its base's merged set, so the
+// walk stops at the first memoised ancestor and each type is merged once.
+func (p *parser) mergedFacets(t *SimpleType) *FacetSet {
+	if m, ok := p.merged[t]; ok {
+		return m
+	}
+	if p.merged == nil {
+		p.merged = make(map[*SimpleType]*FacetSet)
+	}
+	// Walk up to the first memoised ancestor, collecting the types that
+	// still need an answer; then answer them from the far end back, so each
+	// is built on its base's memoised set.
+	var pending []*SimpleType
+	var tail *FacetSet
+	seen := make(map[*SimpleType]bool)
+	for cur := t; cur != nil && !seen[cur]; {
+		if m, ok := p.merged[cur]; ok {
+			tail = m
+			break
+		}
+		seen[cur] = true
+		pending = append(pending, cur)
+		base, ok := cur.Base.(*SimpleType)
+		if !ok || base == cur {
+			break
+		}
+		cur = base
+	}
+	for i := len(pending) - 1; i >= 0; i-- {
+		out := &FacetSet{}
+		if pending[i].Facets != nil {
+			mergeFacetStep(out, pending[i].Facets)
+		}
+		if tail != nil {
+			mergeFacetStep(out, tail)
+		}
+		p.merged[pending[i]] = out
+		tail = out
+	}
+	if tail == nil {
+		tail = &FacetSet{}
+	}
+	return tail
+}
+
+// mergeFacetStep lays one derivation step's facets under what out already
+// holds: a facet out has is kept, and one it lacks is taken from f.
+//
+// The {fixed} property is copied along with the value it belongs to. The flag
+// has to travel with the step that *set* the facet: a later step that
+// re-states the same value without fixed="true" does not unfix it, and an
+// earlier step that never set the facet has no say. A memoised merged set
+// carries its own {fixed} flags, so it merges as a step like any other.
+func mergeFacetStep(out, f *FacetSet) {
+	carry := func(kind FacetKind) {
 		if f.isFixed(kind) {
 			out.setFixed(kind)
 		}
 	}
-	for _, st := range facetChain(t) {
-		f := st.facets
-		if out.Length == nil {
-			out.Length = f.Length
-			carry(FacetLength, f)
-		}
-		if out.MinLength == nil {
-			out.MinLength = f.MinLength
-			carry(FacetMinLength, f)
-		}
-		if out.MaxLength == nil {
-			out.MaxLength = f.MaxLength
-			carry(FacetMaxLength, f)
-		}
-		if out.TotalDigits == nil {
-			out.TotalDigits = f.TotalDigits
-			carry(FacetTotalDigits, f)
-		}
-		if out.FractionDigits == nil {
-			out.FractionDigits = f.FractionDigits
-			carry(FacetFractionDigits, f)
-		}
-		if out.MinInclusive == nil {
-			out.MinInclusive = f.MinInclusive
-			carry(FacetMinInclusive, f)
-		}
-		if out.MaxInclusive == nil {
-			out.MaxInclusive = f.MaxInclusive
-			carry(FacetMaxInclusive, f)
-		}
-		if out.MinExclusive == nil {
-			out.MinExclusive = f.MinExclusive
-			carry(FacetMinExclusive, f)
-		}
-		if out.MaxExclusive == nil {
-			out.MaxExclusive = f.MaxExclusive
-			carry(FacetMaxExclusive, f)
-		}
-		if out.ExplicitTimezone == nil {
-			out.ExplicitTimezone = f.ExplicitTimezone
-			carry(FacetExplicitTimezone, f)
-		}
+	if out.Length == nil {
+		out.Length = f.Length
+		carry(FacetLength)
 	}
-	return out
+	if out.MinLength == nil {
+		out.MinLength = f.MinLength
+		carry(FacetMinLength)
+	}
+	if out.MaxLength == nil {
+		out.MaxLength = f.MaxLength
+		carry(FacetMaxLength)
+	}
+	if out.TotalDigits == nil {
+		out.TotalDigits = f.TotalDigits
+		carry(FacetTotalDigits)
+	}
+	if out.FractionDigits == nil {
+		out.FractionDigits = f.FractionDigits
+		carry(FacetFractionDigits)
+	}
+	if out.MinInclusive == nil {
+		out.MinInclusive = f.MinInclusive
+		carry(FacetMinInclusive)
+	}
+	if out.MaxInclusive == nil {
+		out.MaxInclusive = f.MaxInclusive
+		carry(FacetMaxInclusive)
+	}
+	if out.MinExclusive == nil {
+		out.MinExclusive = f.MinExclusive
+		carry(FacetMinExclusive)
+	}
+	if out.MaxExclusive == nil {
+		out.MaxExclusive = f.MaxExclusive
+		carry(FacetMaxExclusive)
+	}
+	if out.ExplicitTimezone == nil {
+		out.ExplicitTimezone = f.ExplicitTimezone
+		carry(FacetExplicitTimezone)
+	}
 }
 
 // checkEnumerationValueSpace enforces "enumeration valid restriction"
