@@ -96,20 +96,28 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 
 | | |
 |---|---|
+<!-- BEGIN GENERATED XPATH ROWS -->
+<!-- Generated from tests/conformance/results.json and the source tree by
+     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
 | **XPath 2.0** | 100.00% of the W3C QT3 suite (15,217 of 15,217 in scope) |
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,362 of 19,362 in scope) |
-| **XPath 3.1** | 100% of the W3C QT3 suite (21,898 of 21,898 in scope); maps, arrays, the lookup operator, the JSON family |
+| **XPath 3.1** | 100.00% of the W3C QT3 suite (21,898 of 21,898 in scope); maps, arrays, the lookup operator, the JSON family |
+<!-- END GENERATED XPATH ROWS -->
 | **XQuery 3.1** | 100.00% of the W3C QT3 suite (30,345 of 30,346 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; the 1 remaining failure is the tail catalogued in [todo.md](docs/todo.md) §1.5 |
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.76% of the W3C XSLT suite filtered to 3.0 (11,490 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 8 of the 28 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
-| **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
+<!-- BEGIN GENERATED RELAX NG ROW -->
+<!-- Generated from tests/conformance/results.json and the source tree by
+     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
+| **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
+<!-- END GENERATED RELAX NG ROW -->
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
 <!-- BEGIN GENERATED TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Tests** | 2,311 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 2,312 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 <!-- END GENERATED TEST COUNT -->
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
@@ -880,7 +888,7 @@ reach:
 
 * **[DocBook xslTNG](https://github.com/docbook/xslt3ng)** — 97 stylesheet
   modules using `xsl:evaluate`, accumulators, maps, higher-order functions and
-  a multi-stage `fn:transform` pipeline. **577** of its 593 test documents
+  a multi-stage `fn:transform` pipeline. <!-- BEGIN GENERATED DOCBOOK COUNT -->**577**<!-- END GENERATED DOCBOOK COUNT --> of its 593 test documents
   render (549 before XInclude), and the HTML is byte-identical to the
   Saxon-produced reference output once the timestamp and generator metadata
   (both environment-dependent) are normalised.
@@ -907,7 +915,7 @@ reach:
   which can't have an attribute". Saxon accepts it anyway. Its 75 localisation
   files are generated with this engine too.
 * **[XSpec](https://github.com/xspec/xspec)** — an XSLT compiler written in
-  XSLT. All 225 of its `.xspec` test descriptions that target a stylesheet
+  XSLT. All <!-- BEGIN GENERATED XSPEC COUNT -->225<!-- END GENERATED XSPEC COUNT --> of its `.xspec` test descriptions that target a stylesheet
   compile; the other 59 declare no `@stylesheet` because they drive the
   Schematron and XQuery compilers instead.
 
@@ -1242,7 +1250,7 @@ back, is in [docs/testing.md](docs/testing.md).
 <!-- BEGIN GENERATED TEST METHODS -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** (2,311 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (2,312 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |

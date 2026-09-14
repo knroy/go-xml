@@ -20,7 +20,7 @@ Current position:
 | XSLT 3.0 | 99.77% — 11,491 of 11,518 in scope (27 failing); 8 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,311 `func Test` declarations, clean under `-race` |
+| Tests | 2,312 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 
 Every one of those failures, and why it is still open, is catalogued in
@@ -249,7 +249,7 @@ internal one does. See [security.md](security.md) and
 
 ### 1.3 RELAX NG — compact syntax implemented, unverified against a suite
 
-100% of James Clark's suite (965 of 965 assertions). Both notations are
+100% of James Clark's suite (<!-- BEGIN GENERATED RELAX NG FIGURE -->965 of 965<!-- END GENERATED RELAX NG FIGURE --> assertions). Both notations are
 supported: `CompileCompact` and `ParseCompact` read the compact syntax.
 
 The compact parser translates to the XML syntax and compiles that, so it added

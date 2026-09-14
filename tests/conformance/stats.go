@@ -311,9 +311,17 @@ func (r *Results) Regions() map[string][]Region {
 		"README.md": {
 			{Name: "TEST COUNT", Body: r.renderReadmeTests},
 			{Name: "TEST METHODS", Body: r.renderReadmeMethods},
+			{Name: "XPATH ROWS", Body: r.renderReadmeXPath},
+			{Name: "RELAX NG ROW", Body: r.renderReadmeRelaxNG},
+			{Name: "DOCBOOK COUNT", Inline: true, Body: r.renderDocBookCount},
+			{Name: "XSPEC COUNT", Inline: true, Body: r.renderXSpecCount},
 		},
 		filepath.Join("docs", "todo.md"): {
 			{Name: "STATUS TABLE", Body: r.renderTodoStatus},
+			{Name: "RELAX NG FIGURE", Inline: true, Body: r.renderRelaxNGFigure},
+		},
+		filepath.Join("docs", "validation.md"): {
+			{Name: "RELAX NG FIGURE", Inline: true, Body: r.renderRelaxNGFigure},
 		},
 		filepath.Join("docs", "testing.md"): {
 			{Name: "LAYER COUNTS", Body: r.renderTestingLayers},
@@ -330,6 +338,8 @@ func (r *Results) Regions() map[string][]Region {
 			}},
 			{Name: "UNIT TEST COUNT", Body: r.renderGapsTests},
 			{Name: "XTSE3430 BLOCK", Body: r.renderGapsXtse},
+			{Name: "XPATH FIGURE", Inline: true, Body: r.renderXPathFigure},
+			{Name: "RELAX NG FIGURE", Inline: true, Body: r.renderRelaxNGFigure},
 		},
 	}
 }
@@ -351,6 +361,13 @@ type Region struct {
 	// close. Duplicating a header would be the generator adding noise to a
 	// document on every run, which is the opposite of its contract.
 	Bare bool
+
+	// Inline says the markers sit on the prose line itself, around the
+	// figure, with no header and no line break: an HTML comment on its own
+	// line is a block, and a block inside a paragraph or a list item splits
+	// it in two mid-sentence. A table row can carry the block form; "**577**
+	// of its 593 test documents" cannot.
+	Inline bool
 }
 
 func (g Region) Begin() string { return beginMarkerFor(g.Name) }
@@ -416,6 +433,45 @@ func (r *Results) renderTestingLayers() string {
 		"| **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no interleaved choices |\n" +
 		"| **Wildcard/UPA model** | 60,000 pairs | a *wrong answer* in wildcard acceptance or in the UPA competition rule | anything outside a single wildcard against a single name, or a pair of terms in one choice |\n" +
 		"| **The ratchet** | 10 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |\n"
+}
+
+func (r *Results) renderReadmeXPath() string {
+	var b strings.Builder
+	row := func(label string, s Suite, extra string) {
+		b.WriteString(fmt.Sprintf("| **%s** | %s of the W3C QT3 suite (%s of %s in scope)%s |\n",
+			label, pct(s.Passed, s.Total), commas(s.Passed), commas(s.Total), extra))
+	}
+	row("XPath 2.0", r.Suite("xpath-2.0"), "")
+	row("XPath 3.0", r.Suite("xpath-3.0"), "")
+	row("XPath 3.1", r.Suite("xpath-3.1"), "; maps, arrays, the lookup operator, the JSON family")
+	return b.String()
+}
+
+func (r *Results) renderReadmeRelaxNG() string {
+	s := r.Suite("relaxng")
+	return fmt.Sprintf("| **RELAX NG** | %s of James Clark's spectest (%s of %s assertions); XML and compact syntax |\n",
+		pct(s.Passed, s.Total), commas(s.Passed), commas(s.Total))
+}
+
+// The inline bodies are the figure alone; the sentence around each stays in
+// the document.
+
+func (r *Results) renderDocBookCount() string {
+	return fmt.Sprintf("**%d**", r.Suite("docbook-xsltng").Passed)
+}
+
+func (r *Results) renderXSpecCount() string {
+	return fmt.Sprintf("%d", r.Suite("xspec").Passed)
+}
+
+func (r *Results) renderXPathFigure() string {
+	return fmt.Sprintf("%s / %s / %s",
+		commas(r.Suite("xpath-2.0").Passed), commas(r.Suite("xpath-3.0").Passed), commas(r.Suite("xpath-3.1").Passed))
+}
+
+func (r *Results) renderRelaxNGFigure() string {
+	s := r.Suite("relaxng")
+	return fmt.Sprintf("%s of %s", commas(s.Passed), commas(s.Total))
 }
 
 func (r *Results) renderGapsTests() string {
@@ -567,6 +623,9 @@ func ReplaceRegion(doc string, g Region) (string, error) {
 		header = ""
 	}
 	region := g.Begin() + "\n" + header + body + g.End() + "\n"
+	if g.Inline {
+		region = g.Begin() + body + g.End()
+	}
 	if strings.Contains(doc, "\r\n") {
 		region = strings.ReplaceAll(region, "\n", "\r\n")
 	}
@@ -582,8 +641,10 @@ func ReplaceRegion(doc string, g Region) (string, error) {
 		return "", fmt.Errorf("marker %s precedes %s", g.End(), g.Begin())
 	}
 	tail := doc[j+len(g.End()):]
-	tail = strings.TrimPrefix(tail, "\r")
-	tail = strings.TrimPrefix(tail, "\n")
+	if !g.Inline {
+		tail = strings.TrimPrefix(tail, "\r")
+		tail = strings.TrimPrefix(tail, "\n")
+	}
 	return doc[:i] + region + tail, nil
 }
 

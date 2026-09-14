@@ -40,6 +40,7 @@ XSD10S          14388 XSD-1.0-schema
 XSD10I          25000 XSD-1.0-instance
 XSD11S          15354 XSD-1.1-schema
 XSD11I          26222 XSD-1.1-instance
+VendoredSchemas 230   vendored-schemas
 '
 
 commas() { printf '%s' "$1" | awk '{ s=$0; while (s ~ /[0-9][0-9][0-9][0-9]/) sub(/[0-9][0-9][0-9]$|[0-9][0-9][0-9],/, ",&", s); print s }' | sed 's/,,/,/g'; }

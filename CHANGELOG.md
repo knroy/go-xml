@@ -279,6 +279,7 @@ what the suites *measured*, not what the library does.
 | The CR round-trip test compared `""` to `""` for its one attribute case | `StringValue()` on the element never reaches an attribute, so writing an attribute CR as a literal LF -- which the next parse normalises away -- looked lossless. The attribute value is read directly now, and a literal CR in the output fails. | [`3d5e519`][3d5e519] |
 | `runtimeFuncNames`'s reverse check was a hand-typed roster of 13 of the 19 names | It could only find a name someone had already added to it. The registered set is enumerated from the library instead, with the three stateless XSLT-defined functions named as a deliberate omission and pinned to `lateBoundFuncNames`. | [`3d5e519`][3d5e519] |
 | The global-ordering fixture was already in declaration order | Binding `$v:flag` before the global that needs it passed whether or not the sequence constructor was scanned at all. The fixture is reordered so declaration order and dependency order disagree. | [`3d5e519`][3d5e519] |
+| Five ratchet marks were in neither figure guard | `TestQT3`, `RelaxNGSpectest`, `DocBook` and `XSpec` copies in README and docs are generated regions now, inline where mid-sentence; `VendoredSchemas` joined `docfigures.sh`'s table. |  |
 
 ### Documentation
 

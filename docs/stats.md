@@ -23,7 +23,7 @@ claim is only as good as the command behind it.
 
 | figure | count | counted by |
 |---|---:|---|
-| Unit tests | 2,311 | `grep -rn '^func Test' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
+| Unit tests | 2,312 | `grep -rn '^func Test' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
 | Fuzz targets | 11 | `grep -rn '^func Fuzz' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
 | Limit boundary tests | 14 | `grep -hc '^func Test' ./*/limits_boundary_test.go \| awk '{n += $1} END {print n + 0}'` |
 
@@ -82,12 +82,20 @@ fails if any has been hand-edited, and `tests/check.sh` runs that check.
 |---|---|
 | `README.md` | TEST COUNT |
 | `README.md` | TEST METHODS |
+| `README.md` | XPATH ROWS |
+| `README.md` | RELAX NG ROW |
+| `README.md` | DOCBOOK COUNT |
+| `README.md` | XSPEC COUNT |
 | `docs/conformance-gaps.md` | CONFORMANCE SUMMARY |
 | `docs/conformance-gaps.md` | UNIT TEST COUNT |
 | `docs/conformance-gaps.md` | XTSE3430 BLOCK |
+| `docs/conformance-gaps.md` | XPATH FIGURE |
+| `docs/conformance-gaps.md` | RELAX NG FIGURE |
 | `docs/stats.md` | STATS |
 | `docs/testing.md` | LAYER COUNTS |
 | `docs/todo.md` | STATUS TABLE |
+| `docs/todo.md` | RELAX NG FIGURE |
+| `docs/validation.md` | RELAX NG FIGURE |
 
 ## What is still prose
 

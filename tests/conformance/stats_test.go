@@ -504,6 +504,36 @@ func TestRegionsPreserveLF(t *testing.T) {
 	}
 }
 
+// An inline region keeps its line. The markers sit inside a sentence, so the
+// generator must write the figure alone between them -- no header, no line
+// break -- or every regeneration would split a paragraph mid-sentence.
+func TestInlineRegionStaysOnItsLine(t *testing.T) {
+	r := shipped(t)
+	seen := 0
+	for rel, gs := range r.Regions() {
+		for _, g := range gs {
+			if !g.Inline {
+				continue
+			}
+			seen++
+			doc := "Prose before " + g.Begin() + "stale" + g.End() + " and after.\n"
+			got, err := ReplaceRegion(doc, g)
+			if err != nil {
+				t.Fatalf("%s/%s: %v", rel, g.Name, err)
+			}
+			if strings.Count(got, "\n") != 1 || !strings.HasPrefix(got, "Prose before "+g.Begin()) || !strings.HasSuffix(got, g.End()+" and after.\n") {
+				t.Errorf("%s/%s: the inline region did not stay on its line:\n%q", rel, g.Name, got)
+			}
+			if strings.Contains(got, "Generated from") {
+				t.Errorf("%s/%s: an inline region carried the block header", rel, g.Name)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no inline region; this test would pass over an empty mechanism")
+	}
+}
+
 // A region whose markers are missing, crossed or half-present must fail loudly.
 // Silently skipping it would mean a document quietly stops being guarded.
 func TestReplaceRegionRequiresBothMarkers(t *testing.T) {

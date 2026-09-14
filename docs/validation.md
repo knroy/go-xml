@@ -119,7 +119,7 @@ source rather than globally.
 ## RELAX NG
 
 `relaxng` validates against RELAX NG in both its notations, at 100% of James
-Clark's conformance suite (965 of 965 assertions).
+Clark's conformance suite (<!-- BEGIN GENERATED RELAX NG FIGURE -->965 of 965<!-- END GENERATED RELAX NG FIGURE --> assertions).
 
 ```go
 schema, err := xdm.ParseString(rngSource, xdm.ParseOptions{})

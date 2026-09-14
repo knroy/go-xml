@@ -49,7 +49,7 @@ W3C disagreements: 0 + 0 + 0 + 1 + 8 + 27 + 30 + 31 + 0 = 97. Measured 2026-09-1
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 2,311 tests.
+The unit-test suite is 2,312 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -135,11 +135,11 @@ normalisation, character-set handling, node identity and document order.
 ## xpath — 0 failures
 
 All three XPath versions agree with the suite on every case in scope.
-**XPath: 15,217 / 19,362 / 21,898, all at 100.00%.**
+**XPath: <!-- BEGIN GENERATED XPATH FIGURE -->15,217 / 19,362 / 21,898<!-- END GENERATED XPATH FIGURE -->, all at 100.00%.**
 
 ## relaxng — 0 failures
 
-965 of 965 assertions in James Clark's spectest. **No known gaps.**
+<!-- BEGIN GENERATED RELAX NG FIGURE -->965 of 965<!-- END GENERATED RELAX NG FIGURE --> assertions in James Clark's spectest. **No known gaps.**
 
 ## xquery — 1 failure
 

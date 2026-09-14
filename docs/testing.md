@@ -23,7 +23,7 @@ let something through, and the column that matters is the last one.
 <!-- BEGIN GENERATED LAYER COUNTS -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** | 2,311 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,312 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -492,6 +492,26 @@ ratchet's, in every form the documents use: `11,490 of 11,518`,
 the `| 11,518 | 11,490 | 99.76% | **28** |` summary-table row. A line stating
 two figures is read as two claims. Failures name the file, line and the value
 wanted.
+
+That check anchors on the denominators in its own table, and five ratchet
+marks — `TestQT3`, `RelaxNGSpectest`, `DocBook`, `XSpec` and
+`VendoredSchemas` — were never in it. The figures they measure were guarded
+only where a generated region happened to carry them, and the hand-written
+copies were guarded by nothing: the three XPath rows and the RELAX NG row of
+the README status table, DocBook's **577** and XSpec's 225 in its real-world
+section, and the same XPath and RELAX NG figures in `docs/conformance-gaps.md`,
+`docs/todo.md` §1.3 and `docs/validation.md`. Every one of those is a generated
+region now, fed from `results.json`, which already records those four suites.
+A figure that sits mid-sentence uses the *inline* form — both markers on the
+prose line, around the number alone — because an HTML comment on a line of
+its own is a block, and a block inside a paragraph or a list item splits it
+mid-sentence; a table row takes the ordinary block form.
+`TestInlineRegionStaysOnItsLine` pins the difference, and
+`TestHandEditInsideARegionIsCaught` moves a digit in every region, inline ones
+included, and asserts that `-check` would see it. `VendoredSchemas` is a count
+of the tree, which `results.json` does not record by design, so it went into
+`docfigures.sh`'s table instead with 230 as its denominator: the `185 of 230`
+in the layer table above is checked against the ratchet like any other row.
 
 ### The figures name the suite revision they were measured against
 
