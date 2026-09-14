@@ -719,6 +719,9 @@ Every remote-reference mechanism is off unless you turn it on.
 * **`xs:import` and `xs:include` fail closed**, via `xsd.Options.Resolver`.
   The default reads a schema beside the one it was given and **refuses a
   remote URL outright**; `HTTPResolver` is how you opt in to the network.
+  `go-xml validate` is confined on the same terms for `-xsd` and `-rng`: to
+  `-root` when given, and otherwise to the schema's own directory, as the
+  transform is to its stylesheet's.
   Since schemas name their imports as absolute URLs — the XSLT 3.0 schema
   imports the XSD 1.1 schema for schemas from `w3.org` — the usual answer is
   not to fetch them but to answer from a catalog:

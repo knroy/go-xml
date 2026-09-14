@@ -99,6 +99,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `fn:transform` accepted the `post-process` option and ignored it, so a pipeline silently ran one stage short | The function is applied to every result document after delivery, and an option name the processor does not know is now `FOXT0002` rather than silence. Reported as issue #5. | [`e8ebf4b`][e8ebf4b] |
 | `fn:parse-json` and `fn:json-to-xml` recursed once per nesting level with nothing counting them | `maxJSONDepth` bounds nesting at 1000, matching the XML parser's own depth limit. | [`9660e52`][9660e52] |
 | The CLI's RELAX NG resolver read a schema whole, the only resolver in the library with no byte limit | `DefaultMaxRNGBytes` bounds one schema at 16 MB, matching `xsd`. | [`f29b554`][f29b554] |
+| `go-xml validate` confined nothing unless `-root` was given | A non-nil resolver with an empty `Root` reads anywhere, so the flag's default undid the library's closed one; it now defaults to the schema's directory, as the transform does. | [`0000000`][0000000] |
 | Template recursion and an oversize range refused without the resource sentinel, so a caller could not classify them | Both wrap `xdm.ErrResourceLimit`; the range also carries `XPDY0130`, as its counted twin already did. | [`57a2b64`][57a2b64] |
 | `xsl:result-document` followed a symlink out of `-result-dir`, so a stylesheet could write anywhere | The write opens through `os.OpenRoot`, and each directory is made through the same root. | [`17b1c91`][17b1c91] |
 | A function applying itself through its own name recursed uncharged, bypassing `MaxDepth` | Both function-item invocation paths take `Depth` from the call, as the inline path already did. | [`e511421`][e511421] |
@@ -696,6 +697,7 @@ here so every entry in this file sits under a release.
 | xpath: [Y] on a BCE year is correct, and is now pinned | `format-date`/`format-dateTime` with `[Y]` renders `xs:dateTime( "-1000000-06-15T12:00:00Z")` as `1000000`, with no minus |
 | xsd: an identity field typed as a union compared spellings, not values | Identity-constraint equality is defined on values. `keyString` already builds a type-tagged canonical form for every field before the sequence is joined, so `3.0` and `3` collide as one `xs:decimal`, `007` and `7` as one `xs:integer` |
 
+[0000000]: https://github.com/knroy/go-xml/commit/0000000
 [0048fde]: https://github.com/knroy/go-xml/commit/0048fde
 [01b91ba]: https://github.com/knroy/go-xml/commit/01b91ba
 [03b5942]: https://github.com/knroy/go-xml/commit/03b5942

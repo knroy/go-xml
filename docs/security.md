@@ -1460,10 +1460,14 @@ No `unsafe`, no `cgo`, no `reflect` in any non-test file.
    does not set this.
 5. **Set a `Root`** on `FileResolver`, and an `AllowHost` on `HTTPResolver`, if
    either resolves locations an attacker can influence — `relaxng.FileResolver`
-   has a `Root` too, and `cmd/go-xml` passes `-root` to it. A *custom*
-   `relaxng.Resolver` is your own code and has no such field: it receives the
-   href with `..` intact and the scheme filled in, so it must do its own
-   containment check. See the interface's documentation for measured examples.
+   has a `Root` too, and `cmd/go-xml` passes `-root` to it, or the schema's own
+   directory when the flag is absent. An empty `Root` on a non-nil resolver
+   reads anywhere, and until 2026-09-13 the CLI passed the flag's empty default
+   through, so it was less confined than the library's nil-resolver default. A
+   *custom* `relaxng.Resolver` is your own code and has no such field: it
+   receives the href with `..` intact and the scheme filled in, so it must do
+   its own containment check. See the interface's documentation for measured
+   examples.
 6. **Set a timeout** on the request, and pass the context in. The
    identity-constraint finding above is CPU exhaustion; the depth limit caps it,
    but a `context` deadline is what bounds the general case. Use

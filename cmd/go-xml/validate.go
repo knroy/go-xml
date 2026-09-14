@@ -37,8 +37,9 @@ func runValidate(args []string) error {
 			"permit a DOCTYPE in the instance documents and expand the entities "+
 				"it declares internally")
 		root = fs.String("root", "",
-			"confine schema include/import to this directory; empty permits any "+
-				"readable path, which suits a command line and not a server")
+			"confine schema include/import to this directory; by default the "+
+				"directory of the schema file, as the transform does for its "+
+				"stylesheet")
 		maxErrors = fs.Int("max-errors", 0,
 			"stop after this many failures per document; 0 uses the default")
 		quiet = fs.Bool("quiet", false,
@@ -135,7 +136,7 @@ func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root string,
 			return nil, fmt.Errorf("parsing %s: %w", rngPath, err)
 		}
 		schema, err := relaxng.CompileWithOptions(tree.Root, relaxng.Options{
-			Resolver: cliRNGResolver(root),
+			Resolver: cliRNGResolver(schemaRoot(root, rngPath)),
 			BaseURI:  abs,
 		})
 		if err != nil {
@@ -167,8 +168,16 @@ func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root string,
 	}
 
 	paths := strings.Split(xsdPaths, ",")
+	// With no -root the resolver is left nil so that LoadFiles installs its
+	// own default, which confines to the directory of every named schema
+	// rather than to one of them; a FileResolver with an empty Root would
+	// instead read anywhere.
+	var resolver xsd.Resolver
+	if root != "" {
+		resolver = &xsd.FileResolver{Root: root}
+	}
 	schema, err := xsd.LoadFiles(paths, xsd.Options{
-		Resolver:     &xsd.FileResolver{Root: root},
+		Resolver:     resolver,
 		Version:      v,
 		XPathVersion: xvv,
 	})
@@ -214,4 +223,18 @@ const DefaultMaxRNGBytes = 16 << 20
 // original changed.
 func cliRNGResolver(root string) *relaxng.FileResolver {
 	return &relaxng.FileResolver{Root: root, MaxBytes: DefaultMaxRNGBytes}
+}
+
+// schemaRoot is the directory schema reads are confined to.
+//
+// An explicit -root is taken as given. Without one the grant is the schema's
+// own directory, as the transform grants its stylesheet's: the resolvers read
+// anywhere when their Root is empty, so passing the flag's default through
+// unchanged once left "go-xml validate" less confined than the library, whose
+// nil-resolver default already closes to the schema's directory.
+func schemaRoot(root, schemaPath string) string {
+	if root != "" {
+		return root
+	}
+	return filepath.Dir(schemaPath)
 }

@@ -270,12 +270,12 @@ func TestValidateConfinesIncludesToRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Sanity: unconfined, this very schema compiles. Without this the case
-	// could be passing because the grammar is broken rather than because the
-	// root held.
-	if _, err := schemaValidator("", rng, "1.0", "", "", 1); err != nil {
-		t.Fatalf("the escape schema must compile when unconfined, or the "+
-			"confined case proves nothing: %v", err)
+	// Sanity: rooted at the parent, this very schema compiles. Without this
+	// the case could be passing because the grammar is broken rather than
+	// because the root held.
+	if _, err := schemaValidator("", rng, "1.0", "", parent, 1); err != nil {
+		t.Fatalf("the escape schema must compile under the parent root, or "+
+			"the confined case proves nothing: %v", err)
 	}
 
 	_, err := schemaValidator("", rng, "1.0", "", root, 1)
