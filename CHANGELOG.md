@@ -269,7 +269,7 @@ what the suites *measured*, not what the library does.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The XSLT skip count folded "not implemented" into "out of scope" | Each reason is classed in `deps.go`; the summary line and `docs/stats.md` publish both counts, and an unclassed reason fails a test. |  |
+| The XSLT skip count folded "not implemented" into "out of scope" | Each reason is classed in `deps.go`; the summary line and `docs/stats.md` publish both counts, and an unclassed reason fails a test. | [`1680456`][1680456] |
 | The optimiser timing bound failed on the race lane | `TestOptimizeNotQuadratic` allowed 1.5 s and the race detector took the compile to 1.7 s; the budget is widened sixfold under `-race`, still far below the quadratic figure. | [`d02fc89`][d02fc89] |
 | The W3C suites were cloned unpinned, so a figure could move with no change here | `results.json` records each suite revision, CI clones at that SHA, and a test fails when the two disagree. | [`7f70d40`][7f70d40] |
 | `-race` never declared that it needs cgo | CI passed only because its runners have gcc; an auditor without one read a toolchain error as a test failure. The lane now skips with a reason. | [`7f70d40`][7f70d40] |
@@ -728,6 +728,7 @@ here so every entry in this file sits under a release.
 [106bcdc]: https://github.com/knroy/go-xml/commit/106bcdc
 [120e7ec]: https://github.com/knroy/go-xml/commit/120e7ec
 [145d0d1]: https://github.com/knroy/go-xml/commit/145d0d1
+[1680456]: https://github.com/knroy/go-xml/commit/1680456
 [176ce57]: https://github.com/knroy/go-xml/commit/176ce57
 [17b1c91]: https://github.com/knroy/go-xml/commit/17b1c91
 [17bcdb6]: https://github.com/knroy/go-xml/commit/17bcdb6
