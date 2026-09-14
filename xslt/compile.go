@@ -1612,11 +1612,10 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 		// default is "maybe", under which reusing a result and recomputing it
 		// are both allowed.
 		//
-		// The hint is read through cacheMemoises rather than isYes because
-		// the spec's spelling of "cache this" is cache="full" (10.3.8,
-		// xslt-lcwd30.xml:14963-14970) while the suite's is cache="yes".
-		// isYes matches only yes/true/1, so a conforming cache="full" got
-		// the unmemoised path -- the opposite of what the value asks for.
+		// The hint is read through cacheMemoises, which names the boolean
+		// trues the Recommendation types the attribute with (cache? =
+		// boolean, 10.3); the Last Call draft's cache="full" is refused by
+		// the element table.
 		deterministic: functionDeterminism(el) == "no" ||
 			cacheMemoises(el.AttrValue("cache")),
 	}

@@ -1320,6 +1320,20 @@ from the spec entirely, and the §18.2.x accumulator range shifted by one when
 `fn:accumulator-before`/`after` were renumbered, so section numbers across
 `streamaccumulators.go` are systematically LCWD-numbered.
 
+**The element table drifted the same way.** `xslt/elementtable.go` was
+transcribed from the same draft, and three classes of entry accepted what the
+Recommendation forbids: `avt` flags on attributes the Recommendation writes
+without braces, which suppressed the static XTSE0020 on a `"{...}"`; `hidden`
+in the visibility enumerations of `xsl:template`, `xsl:mode` and friends,
+though a component only ever acquires that visibility through `xsl:accept` or
+`xsl:expose`; and withdrawn draft attributes tolerated in silence, now named
+with `removed30`, the table's mechanism for refusing a withdrawn name where
+forwards-compatible leniency would otherwise ignore it. Two exceptions are
+deliberate: `param/@export` stays tolerated because `iterate-024` must reach
+the XTSE0010 further down its stylesheet, and clearing `avt` on an attribute
+with neither an enumeration nor a `qnameAttrs` entry would change nothing, so
+`xsl:output`'s `parameter-document` and `json-node-output-method` keep theirs.
+
 Three classes were found, and only the first can mislead the code:
 
 1. **Quotations stating a rule the spec does not state.** §15.4's third

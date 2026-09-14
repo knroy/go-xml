@@ -25,11 +25,10 @@ func compileDrift(t *testing.T, src string) error {
 
 // TestFunctionCacheEnumeration covers xsl:function/@cache.
 //
-// The summary at xslt-lcwd30.xml:14648 types it cache? = "full" | "partial" |
-// "no", and 10.3.8 at 14963-14970 names all three values in prose. The W3C
-// suite disagrees: schema-for-xslt30.xsd:803 types @cache as xsl:yes-or-no
-// and nine stylesheets write cache="yes", function-1031 among them. The table
-// carries the union, so a stylesheet written against either source compiles.
+// The Recommendation's summary at 10.3 types it cache? = boolean, and the
+// suite's schema-for-xslt30.xsd:803 agrees. The Last Call draft's "full" |
+// "partial" | "no" was withdrawn, so those two spellings are XTSE0020 like
+// any other value outside the enumeration.
 func TestFunctionCacheEnumeration(t *testing.T) {
 	sheet := func(cache string) string {
 		return `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
@@ -42,37 +41,37 @@ func TestFunctionCacheEnumeration(t *testing.T) {
 		  <xsl:template name="main"><out><xsl:value-of select="x:f(1)"/></out></xsl:template>
 		</xsl:stylesheet>`
 	}
-	// The spec's three and the suite's boolean spellings all compile.
 	for _, v := range []string{
-		`cache="full"`, `cache="partial"`, `cache="no"`,
-		`cache="yes"`, `cache="true"`, `cache="false"`, `cache="1"`, `cache="0"`,
+		`cache="no"`, `cache="yes"`, `cache="true"`, `cache="false"`,
+		`cache="1"`, `cache="0"`,
 	} {
 		if err := compileDrift(t, sheet(v)); err != nil {
 			t.Errorf("%s was refused: %v", v, err)
 		}
 	}
-	// A value from neither vocabulary is still XTSE0020. Without this the
-	// test would pass against an empty enumeration, which accepts everything.
-	err := compileDrift(t, sheet(`cache="sometimes"`))
-	if err == nil || !strings.Contains(err.Error(), "XTSE0020") {
-		t.Errorf("cache=\"sometimes\" should be XTSE0020, got %v", err)
+	// The draft's spellings and an invented one are all XTSE0020. Without
+	// this the test would pass against an empty enumeration, which accepts
+	// everything.
+	for _, v := range []string{`cache="full"`, `cache="partial"`, `cache="sometimes"`} {
+		err := compileDrift(t, sheet(v))
+		if err == nil || !strings.Contains(err.Error(), "XTSE0020") {
+			t.Errorf("%s should be XTSE0020, got %v", v, err)
+		}
 	}
 }
 
-// TestFunctionCacheFullMemoises covers the runtime half of the same fix.
+// TestFunctionCacheMemoises covers the runtime half of @cache.
 //
-// 10.3.8 says cache="full" "encourages the processor to retain memory of all
-// previous calls of this function ... and to reuse results from this memory".
-// Accepting the value in the grammar while reading it with isYes -- which
-// matches yes/true/1 only -- gave a conforming cache="full" the unmemoised
-// path, the opposite of what the value asks for. compile.go reads it through
-// cacheMemoises instead.
+// 10.3.8 says a true value "encourages the processor to retain memory of all
+// previous calls of this function ... and to reuse results from this
+// memory". compile.go reads the hint through cacheMemoises, and every
+// boolean true spelling must reach the memoised path.
 //
 // The assertion is on time rather than on a counter because memoisation has
 // no other observable effect here: fib(27) by naive double recursion is some
 // 600k calls unmemoised and 27 memoised, a difference of four orders of
 // magnitude. The threshold is loose enough to survive a loaded machine.
-func TestFunctionCacheFullMemoises(t *testing.T) {
+func TestFunctionCacheMemoises(t *testing.T) {
 	run := func(t *testing.T, cache string) time.Duration {
 		t.Helper()
 		src := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
@@ -102,50 +101,11 @@ func TestFunctionCacheFullMemoises(t *testing.T) {
 	// default. Measuring the default in the same run is what makes this a
 	// comparison rather than a fixed timing assertion.
 	slow := run(t, `cache="no"`)
-	for _, v := range []string{`cache="full"`, `cache="partial"`, `cache="yes"`} {
+	for _, v := range []string{`cache="yes"`, `cache="true"`, `cache="1"`} {
 		if fast := run(t, v); fast*20 > slow {
 			t.Errorf("%s took %v against cache=\"no\" %v: it did not memoise",
 				v, fast, slow)
 		}
-	}
-}
-
-// TestFunctionIdentitySensitive covers xsl:function/@identity-sensitive,
-// which the table did not define at all.
-//
-// The summary at xslt-lcwd30.xml:14648 types it identity-sensitive? =
-// boolean; 10.3.7 at 14923-14929 says "the attribute identity-sensitive=\"no\"
-// may be specified (the default is yes)"; and the override-compatibility rule
-// at 4574-4575 reads the value back. It sits in the same summary as
-// @visibility and @streamability, and was the third member missed when those
-// were added.
-func TestFunctionIdentitySensitive(t *testing.T) {
-	sheet := func(attr string) string {
-		return `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
-		    xmlns:x="http://xxx.com/" xmlns:xs="http://www.w3.org/2001/XMLSchema"
-		    version="3.0" exclude-result-prefixes="xs x">
-		  <xsl:function name="x:f" ` + attr + ` as="xs:integer">
-		    <xsl:param name="n" as="xs:integer"/>
-		    <xsl:sequence select="$n"/>
-		  </xsl:function>
-		  <xsl:template name="main"><out><xsl:value-of select="x:f(1)"/></out></xsl:template>
-		</xsl:stylesheet>`
-	}
-	for _, v := range []string{
-		`identity-sensitive="no"`, `identity-sensitive="yes"`,
-		`identity-sensitive="true"`, `identity-sensitive="false"`,
-		`identity-sensitive="1"`, `identity-sensitive="0"`,
-	} {
-		if err := compileDrift(t, sheet(v)); err != nil {
-			t.Errorf("%s was refused: %v", v, err)
-		}
-	}
-	// It is a boolean, so a non-boolean is XTSE0020 rather than accepted.
-	// This is what distinguishes "defined as a boolean" from "defined with no
-	// enumeration", which would swallow anything.
-	err := compileDrift(t, sheet(`identity-sensitive="maybe"`))
-	if err == nil || !strings.Contains(err.Error(), "XTSE0020") {
-		t.Errorf("identity-sensitive=\"maybe\" should be XTSE0020, got %v", err)
 	}
 }
 

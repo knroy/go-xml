@@ -79,20 +79,6 @@ func TestAccumulatorStreamabilityXTSE3430(t *testing.T) {
 		}
 	})
 
-	// Condition 2: the applies-to pattern is held to the same rule as a
-	// rule's match pattern.
-	t.Run("applies-to with a consuming predicate", func(t *testing.T) {
-		err := compileAccumSheet(t, accumSheet(`
-			<xsl:accumulator name="a" as="xs:integer" initial-value="0"
-			                 streamable="yes" applies-to="doc[title]">
-			  <xsl:accumulator-rule match="fig" select="$value + 1"/>
-			</xsl:accumulator>`))
-		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
-			t.Fatalf("applies-to=\"doc[title]\" is free-ranging, so §18.2.9 "+
-				"condition 2 fails; want XTSE3430, got: %v", err)
-		}
-	})
-
 	// Condition 4: the initial-value expression must be grounded and
 	// motionless. Reading a child of the root is consuming.
 	t.Run("initial-value that consumes", func(t *testing.T) {

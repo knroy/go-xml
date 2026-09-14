@@ -536,18 +536,15 @@ func isYes(v string) bool {
 // cacheMemoises reports whether an xsl:function/@cache value asks the
 // processor to remember previous calls.
 //
-// Two vocabularies reach here, for the reason elementtable.go's @cache entry
-// gives: the spec spells the memoising values "full" and "partial"
-// (xslt-lcwd30.xml:14963-14970, 10.3.8), the W3C suite spells the same
-// request "yes". Both are accepted, and "partial" is honoured as "full"
-// because 10.3.8 makes the difference a licence to discard entries under
-// memory pressure rather than a different answer.
+// The Recommendation types the attribute cache? = boolean (10.3), so the
+// memoising spellings are the boolean trues. The Last Call draft's "full"
+// and "partial" are refused by the element table and never reach here.
 //
 // An absent attribute, cache="no", and the boolean falses are all "do not
 // memoise" -- the default is cache="no".
 func cacheMemoises(v string) bool {
 	switch strings.TrimSpace(v) {
-	case "full", "partial", "yes", "true", "1":
+	case "yes", "true", "1":
 		return true
 	}
 	return false

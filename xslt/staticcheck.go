@@ -556,6 +556,14 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 	if ad.avt && strings.Contains(v, "{") {
 		return nil
 	}
+	// A union with xsl:EQName-in-namespace admits a namespaced name beyond
+	// the listed tokens; see attrDef.eqnameOK. Before @streamability lost
+	// its avt flag, the "{" of Q{uri}local slipped through the test above,
+	// which is why the flag had no reader.
+	if ad.eqnameOK && (isEQName(v) ||
+		(isLexicalQName(v) && strings.Contains(v, ":"))) {
+		return nil
+	}
 	for _, want := range ad.values {
 		if v == want {
 			return nil

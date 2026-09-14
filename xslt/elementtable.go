@@ -111,7 +111,11 @@ var xsltElements = map[string]elementDef{
 		"default-collation":          {},
 		"default-mode":               {},
 		"input-type-annotations":     {values: []string{"preserve", "strip", "unspecified"}},
-		"use-package":                {},
+		// A working-draft spelling: the Recommendation's xsl:package summary
+		// (section 3.5) has no such attribute; packages are used through the
+		// xsl:use-package child. Listed as removed so that a 3.0 module
+		// naming it is refused rather than tolerated under leniency.
+		"use-package": {removed30: true},
 	}},
 	// The package-composition elements, XSLT 3.0 section 3.5. All carry
 	// since30: an earlier stylesheet using one must be told it is not an
@@ -171,8 +175,10 @@ var xsltElements = map[string]elementDef{
 		"typed": {values: []string{"yes", "no", "true", "false", "1", "0", "lax", "strict", "unspecified"}},
 		// A mode declaration's visibility is drawn from the package
 		// vocabulary minus "abstract": a mode has no signature to leave
-		// unimplemented.
-		"visibility": {values: []string{"public", "private", "final", "hidden"}},
+		// unimplemented. "hidden" is not declared either: the summary gives
+		// "public" | "private" | "final", and hidden is a visibility a
+		// component acquires through xsl:accept or xsl:expose.
+		"visibility": {values: []string{"public", "private", "final"}},
 	}},
 	"include": {attrs: map[string]attrDef{
 		"href": {required: true},
@@ -195,9 +201,12 @@ var xsltElements = map[string]elementDef{
 		"initial-value": {required: true},
 		"as":            {},
 		"streamable":    {values: []string{"yes", "no", "true", "false", "1", "0"}},
-		// Added by the 3.0 errata after this table was written; the suite's
-		// accumulator-053 writes it.
-		"applies-to": {},
+		// A working-draft spelling the Recommendation's summary (section
+		// 18.2.1) does not carry: name, initial-value, as and streamable are
+		// the whole signature. accumulator-053's description still mentions
+		// it, but no stylesheet in the suite writes it. Listed as removed so
+		// a 3.0 module naming it is refused rather than dropped in silence.
+		"applies-to": {removed30: true},
 	}},
 	// The summary at xslt-lcwd30.xml:22181 names three attributes and no
 	// more: match, phase? and select?. @priority was accepted here and is
@@ -222,7 +231,9 @@ var xsltElements = map[string]elementDef{
 		// XSLT 3.0 section 3.5: a package declaration states whether it is
 		// visible outside the package. Accepted and ignored — this processor
 		// compiles a package as a stylesheet, where everything is visible.
-		"visibility": {values: []string{"public", "private", "final", "abstract", "hidden"}},
+		// The summary (section 6.1) stops at "abstract": hidden is acquired
+		// through xsl:accept or xsl:expose, never declared.
+		"visibility": {values: []string{"public", "private", "final", "abstract"}},
 	}},
 	"apply-templates": {attrs: map[string]attrDef{
 		"select": {},
@@ -254,8 +265,10 @@ var xsltElements = map[string]elementDef{
 		"static": {since30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
 		// 9.1's signature carries visibility; 9.2's for xsl:param does not,
 		// which is why the two entries differ. Where the declaration may
-		// appear is varparamattrs.go's rule, not the table's.
-		"visibility": {since30: true, values: []string{"public", "private", "final", "abstract", "hidden"}},
+		// appear is varparamattrs.go's rule, not the table's. The summary
+		// (section 9.1) stops at "abstract": hidden is acquired through
+		// xsl:accept or xsl:expose, never declared.
+		"visibility": {since30: true, values: []string{"public", "private", "final", "abstract"}},
 	}},
 	"param": {attrs: map[string]attrDef{
 		"name":     {required: true},
@@ -265,12 +278,14 @@ var xsltElements = map[string]elementDef{
 		"tunnel":   {values: []string{"yes", "no"}},
 		// export is not in 9.2's signature -- it is a spelling from an
 		// earlier working draft, and the whole suite carries it in exactly
-		// one file. It is accepted and ignored rather than refused for the
-		// reason html-version and suppress-indentation are below: iterate-024
-		// writes it on an xsl:param, and the error the case is actually about
-		// is the xsl:on-completion misplaced further down. Refusing the
-		// attribute reports XTSE0090 before the walk ever reaches the
-		// XTSE0010 the case exists to pin.
+		// one file. It is accepted and ignored rather than listed as
+		// removed, for the reason html-version and suppress-indentation are
+		// below: iterate-024 writes it on an xsl:param, and the error the
+		// case is actually about is the xsl:on-completion misplaced further
+		// down. Making it removed30 reports XTSE0090 before the walk ever
+		// reaches the XTSE0010 the case exists to pin, which was measured:
+		// it cost that case and no other. The three sibling draft
+		// attributes, which no stylesheet in the suite writes, are refused.
 		"export": {},
 		// processor30, not since30: a static parameter is supplied by the
 		// caller, so whether one may be declared follows the processor the
@@ -323,29 +338,18 @@ var xsltElements = map[string]elementDef{
 		// REC J.1 types @streamability as xsl:streamability-type, a UNION of
 		// seven tokens with xsl:EQName-in-namespace -- a processor may name
 		// its own classification by a namespaced EQName. eqnameOK lets such a
-		// name through, and avt admits the suite's
-		// streamability="{if ($STREAMABLE) then ... }".
-		"streamability": {since30: true, avt: true, eqnameOK: true,
+		// name through. It is not an attribute value template: the summary
+		// (section 10.3) writes it without braces, and the suite's
+		// _streamability="{if ($STREAMABLE) then ... }" is a shadow
+		// attribute, expanded by static.go before this table is consulted.
+		"streamability": {since30: true, eqnameOK: true,
 			values: []string{"unclassified", "absorbing", "inspection",
 				"filter", "shallow-descent", "deep-descent", "ascent"}},
-		// The third member of the same summary, missed when the two above
-		// were added. xslt-lcwd30.xml:14648 types it
-		// identity-sensitive? = boolean; 10.3.7 (lines 14923-14929) says
-		// "the attribute identity-sensitive=\"no\" may be specified (the
-		// default is yes)", and the override-compatibility rule at 4574-4575
-		// reads it back: "If the overridden function specifies
-		// identity-sensitive=\"no\" then the overriding function also
-		// specifies identity-sensitive=\"no\"."
-		//
-		// processor30 for the reason @new-each-time and @cache beside it
-		// are: it says what the processor may do with a call rather than
-		// what the module's grammar contains. Accepted and ignored -- it
-		// licenses optimizations this engine does not perform, and 10.3.7
-		// makes it an assertion by the author rather than a request.
-		"identity-sensitive": {
-			processor30: true,
-			values:      []string{"yes", "no", "true", "false", "1", "0"},
-		},
+		// identity-sensitive is a Last Call draft spelling
+		// (xslt-lcwd30.xml:14648) that the Recommendation's summary at 10.3
+		// no longer carries: its role passed to new-each-time. Listed as
+		// removed so a 3.0 module naming it is refused rather than tolerated.
+		"identity-sensitive": {removed30: true},
 		// 3.0 renamed @override to @override-extension-function and added
 		// @new-each-time, which says whether two calls with the same
 		// arguments may share one result.
@@ -361,11 +365,11 @@ var xsltElements = map[string]elementDef{
 		// "maybe" is the third value, and the default: it leaves the
 		// processor free to reuse a result or not.
 		// REC J.1 types @new-each-time as xsl:yes-or-no-or-maybe, exactly
-		// these seven spellings. avt admits new-each-time="{$new-each-time}",
-		// which the suite writes.
+		// these seven spellings. It is not an attribute value template: the
+		// suite's _new-each-time="{$new-each-time}" is a shadow attribute,
+		// expanded before this table is consulted.
 		"new-each-time": {
 			processor30: true,
-			avt:         true,
 			values:      []string{"yes", "no", "true", "false", "1", "0", "maybe"},
 		},
 		// @cache is a hint rather than a promise -- 10.3 leaves a processor
@@ -373,35 +377,15 @@ var xsltElements = map[string]elementDef{
 		// is ruinous. function-1031 computes fib(92) by naive double
 		// recursion, which is some 2^92 calls without memoisation and
 		// finishes instantly with it.
-		// The enumeration is the UNION of two sources that disagree.
 		//
-		// The prose is unambiguous. xslt-lcwd30.xml:14648 types it
-		// cache? = "full" | "partial" | "no", and 10.3.8 (lines 14963-14970)
-		// spells out all three: "The default value is cache=\"no\".", "The
-		// value cache=\"full\" encourages the processor to retain memory of
-		// all previous calls", "The value cache=\"partial\" encourages the
-		// processor to retain such memory but to discard results if
-		// necessary".
-		//
-		// The W3C suite writes something else. Its schema-for-xslt30.xsd:803
-		// types @cache as xsl:yes-or-no, and nine stylesheets write
-		// cache="yes" -- function-1031, -1034 and -1035 among them.
-		// function-1031 computes fib(92) by naive double recursion and
-		// asserts /out = "7540113804746346429", which is reachable only if
-		// the hint is honoured.
-		//
-		// Listing only the spec's three would reject those nine; listing
-		// only the suite's two would reject a conforming cache="full". Since
-		// @cache is an optimization hint the processor "can use or ignore at
-		// its discretion" (10.3.8), accepting a name from either vocabulary
-		// costs nothing and rejecting one costs a conforming stylesheet. So
-		// both are admitted, and compile.go maps the memoising values onto
-		// the same machinery through cacheMemoises.
+		// The Recommendation's summary types it cache? = boolean, and the
+		// suite's schema-for-xslt30.xsd:803 agrees. The Last Call draft's
+		// "full" | "partial" | "no" was withdrawn, so the table no longer
+		// admits those spellings; compile.go reads the hint through
+		// cacheMemoises.
 		"cache": {
 			processor30: true,
-			values: []string{
-				"full", "partial", "no",
-				"yes", "true", "false", "1", "0"},
+			values:      []string{"yes", "no", "true", "false", "1", "0"},
 		},
 	}},
 	"namespace-alias": {attrs: map[string]attrDef{
@@ -802,10 +786,19 @@ var xsltElements = map[string]elementDef{
 		// parameter-document names a document of serialization parameters,
 		// and is in 26.1's signature for xsl:output. Same story as the three
 		// above: read by the serialiser, absent from the table.
+		//
+		// None of xsl:output's attributes is an attribute value template:
+		// the summary (section 26.1) writes them without braces, and only
+		// xsl:result-document's are braced. The flag is cleared on the two
+		// with an enumeration, where it was suppressing XTSE0020 on a
+		// "{...}"; on parameter-document and json-node-output-method it has
+		// no reader -- neither has an enumeration or a qnameAttrs entry, so
+		// checkAttrValue returns before consulting it -- and clearing it
+		// there would be a change with no behaviour, so it is left as is.
 		"parameter-document":      {processor30: true, avt: true},
 		"json-node-output-method": {processor30: true, avt: true},
-		"allow-duplicate-names":   {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
-		"build-tree":              {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"allow-duplicate-names":   {processor30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"build-tree":              {processor30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
 		// html-version selects between the HTML 4 and HTML 5 serialisation
 		// rules. It was added after XSLT 2.0, but the test suite uses it in
 		// tests declared XSLT20+, and rejecting an attribute a stylesheet may

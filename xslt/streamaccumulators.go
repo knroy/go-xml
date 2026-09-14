@@ -71,15 +71,10 @@ func checkAccumulatorStreamability(root *xdm.Node) error {
 func checkOneAccumulator(acc *xdm.Node) error {
 	name := acc.AttrValue("name")
 
-	// Condition 2: the applies-to pattern must be motionless.
-	if a := acc.Attr("", "applies-to"); a != nil {
-		if free, known := patternIsFreeRanging(a.Value, acc); known && free {
-			return fmt.Errorf(
-				"the applies-to pattern %q of streamable accumulator %q is "+
-					"free-ranging, so the accumulator is not "+
-					"guaranteed-streamable (XTSE3430)", a.Value, name)
-		}
-	}
+	// The Last Call draft's applies-to pattern was checked here as its
+	// condition 2; the Recommendation's xsl:accumulator has no such
+	// attribute and the element table refuses it, so its four conditions
+	// are the ones below.
 
 	// Condition 4: the initial-value expression must be grounded and
 	// motionless. §18.2.9 evaluates it with a singleton focus on the root of
