@@ -60,7 +60,13 @@ func TestOptimizeNotQuadratic(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing test")
 	}
-	const budget = 1500 * time.Millisecond
+	// The race detector's instrumentation made the same compile take 1.7 s
+	// on the gate's race lane, so the budget is widened there by more than
+	// the slowdown; the pre-fix figure under it would be near 20 s.
+	budget := 1500 * time.Millisecond
+	if raceEnabled {
+		budget *= 6
+	}
 
 	src := quadraticSrc(640 * 1024)
 	start := time.Now()
