@@ -28,6 +28,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | `media-type` was written into the injected `<meta>` tag unescaped | Every sibling attribute goes through `escapeAttrRunes`; this one was concatenated raw, so `text/html"><script>…` closed the tag and ran in the `<head>`. It is now escaped at the write site. |  |
+| A `doctype-system` value could close its own quoted literal | `a"b'>` was written as `SYSTEM 'a"b'>` and the rest became markup, appending a live entity declaration. Serialization 3.1 §3 forbids both quote kinds: now `SEPM0016`. |  |
 | Two `xsl:global-context-item` attributes were listed but unreachable | `@streamable` and `@use-accumulators` are not in §3.10, and the element is checked against the `context-item` key, so both were already refused — naming an element the stylesheet had not written. Entries deleted; the diagnostic now names `xsl:global-context-item`. | [`c9945c5`][c9945c5] |
 | `xsl:output` and `xsl:function` attributes were flagged as attribute value templates | The Recommendation braces only `xsl:result-document`'s, so `build-tree="{$x}"` escaped XTSE0020. Four `avt` flags cleared, on the attributes whose enumeration the flag was suppressing; `streamability` keeps its EQName union. | [`4410604`][4410604] |
 | `xsl:output/@parameter-document` and `@json-node-output-method` reached no validator | Neither had a type, so any value passed. Now `uri` and `"xml"`/`"html"`/`"xhtml"`/`"text"`/eqname; a `{...}` is XTSE0020. | [`a048213`][a048213] |

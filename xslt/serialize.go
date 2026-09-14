@@ -558,7 +558,9 @@ func (s *serializer) writeDoctypeFor(n *xdm.Node) {
 // quoteLiteral wraps an external identifier in quotes it does not itself
 // contain. XML gives these literals no escaping mechanism, so a value holding
 // a double quote has to be delimited with single quotes instead — the choice
-// is the only way to write it at all.
+// is the only way to write it at all. A value holding both quote kinds cannot
+// be written either way; checkOutputSettings refuses it with SEPM0016 before
+// serialisation starts, which is what makes the choice here total.
 func quoteLiteral(v string) string {
 	if strings.Contains(v, `"`) {
 		return "'" + v + "'"
@@ -2111,6 +2113,25 @@ func checkOutputSettings(opts OutputSettings, seq xdm.Sequence) error {
 	if p := opts.DocTypePublic; p != "" && !isPubidLiteral(p) {
 		return fmt.Errorf(
 			"SEPM0016: %q is not a valid public identifier", p)
+	}
+
+	// Serialization 3.1 §3 gives doctype-system the value space "a string of
+	// Unicode characters that does not include both an apostrophe (#x27) and
+	// a quotation mark (#x22) character", because an external identifier has
+	// no escaping mechanism: the literal is delimited by whichever quote the
+	// value does not contain, and a value containing both cannot be written
+	// at all. §3 makes an invalid parameter value SEPM0016, the same code
+	// the public identifier above raises. Unchecked, such a value closed its
+	// own literal -- `a"b'>` wrote SYSTEM 'a"b'> and left the rest of the
+	// value as markup, so an attacker-supplied system identifier could
+	// append a live entity declaration to the document type declaration.
+	// Only the both-quotes case is refused; a system identifier holding one
+	// quote kind, or ">", is legal and is written with the other delimiter.
+	if d := opts.DocTypeSystem; strings.Contains(d, `"`) &&
+		strings.Contains(d, "'") {
+		return fmt.Errorf("SEPM0016: %q is not a valid system identifier: "+
+			"it contains both an apostrophe and a quotation mark, so it "+
+			"cannot be written as an external identifier literal", d)
 	}
 
 	if method == "html" {

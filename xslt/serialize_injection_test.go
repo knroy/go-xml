@@ -126,6 +126,60 @@ func TestMetaContentTypeLeavesLegitimateMediaTypeAlone(t *testing.T) {
 	}
 }
 
+const docTypeSheet = `<xsl:stylesheet version="3.0"
+    xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:template match="/">
+    <xsl:result-document href="out.xml" method="xml" doctype-system="{/doc/ds}">
+      <out/>
+    </xsl:result-document>
+  </xsl:template>
+</xsl:stylesheet>`
+
+// TestDocTypeSystemBothQuotesIsSEPM0016 pins the refusal of a system
+// identifier that cannot be written at all.
+//
+// Serialization 3.1 §3 gives doctype-system the value space "A string of
+// Unicode characters that does not include both an apostrophe (#x27) and a
+// quotation mark (#x22) character", and makes an invalid parameter value
+// SEPM0016. An external identifier has no escaping mechanism, so the literal
+// is delimited by whichever quote the value lacks; a value holding both has
+// no delimiter left. Unchecked, `a"b'>` was written as SYSTEM 'a"b'> and the
+// rest of the value escaped the literal -- here appending a live entity
+// declaration the stylesheet author never wrote.
+func TestDocTypeSystemBothQuotesIsSEPM0016(t *testing.T) {
+	doc := `<doc><ds>a&quot;b'&gt;&lt;!ENTITY x &quot;PWNED&quot;&gt;</ds></doc>`
+	got, err := runSecondary(t, docTypeSheet, doc)
+	if err == nil {
+		t.Fatalf("a system identifier holding both quote kinds must be "+
+			"refused; got %q", got)
+	}
+	if !strings.Contains(err.Error(), "SEPM0016") {
+		t.Fatalf("got %v, want SEPM0016", err)
+	}
+}
+
+// TestDocTypeSystemLegitimateValuesStillWrite is the control. Only the
+// both-quotes case is outside the spec's value space: a value holding one
+// quote kind, or ">", is legal and is written with the other delimiter.
+func TestDocTypeSystemLegitimateValuesStillWrite(t *testing.T) {
+	for _, tc := range []struct{ ds, want string }{
+		{"about:legacy-compat", `<!DOCTYPE out SYSTEM "about:legacy-compat">`},
+		{"a&gt;b'c", `<!DOCTYPE out SYSTEM "a>b'c">`},
+		{`a&quot;b`, `<!DOCTYPE out SYSTEM 'a"b'>`},
+	} {
+		t.Run(tc.ds, func(t *testing.T) {
+			got, err := runSecondary(t, docTypeSheet,
+				`<doc><ds>`+tc.ds+`</ds></doc>`)
+			if err != nil {
+				t.Fatalf("transform: %v", err)
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("got %q, want it to contain %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // collectElements returns every element with the given local name, in
 // document order.
 func collectElements(n *xdm.Node, local string) []*xdm.Node {
