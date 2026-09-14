@@ -298,10 +298,14 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		// §19.8.8.2, in streamexprs.go.
 		return a.quantifiedExpr(x)
 
+	case *xpath.DynamicCall:
+		// §19.8.8.11, in streamexprs.go.
+		return a.dynamicCall(x)
+
 	default:
-		// Dynamic function calls (§19.8.8.11), and any expression kind this
-		// switch has not been taught. Reporting no opinion is what keeps an
-		// unmodelled construct from becoming a spurious refusal.
+		// Any expression kind this switch has not been taught. Reporting no
+		// opinion is what keeps an unmodelled construct from becoming a
+		// spurious refusal.
 		return a.unknown()
 	}
 }

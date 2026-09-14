@@ -594,3 +594,48 @@ func (a *analyzer) namedFunctionRef(x *xpath.NamedFunctionRef) props {
 	}
 	return a.unknown()
 }
+
+// dynamicCall applies §19.8.8.11 to a call on a function item, "$f(X, Y)" or
+// "X => $f(Y)":
+//
+//	"The posture and sweep of a dynamic function call such as $F(X, Y) are
+//	determined by the 19.8.1 General Rules for Streamability. The operands
+//	and their usages are as follows: The base expression that computes the
+//	function value itself (here $F). This has usage inspection. The
+//	argument expressions excluding any ? placeholders (here X and Y). These
+//	have type-determined usage dependent on ancillary information
+//	associated with the static type of the base expression, where available
+//	[...]. If no function signature is available, then the usage of each of
+//	the argument expressions is navigation."
+//
+// No signature is ever available here: the analyzer is built afresh from
+// each attribute's expression text and carries no declared types, so it
+// cannot see the "as" of the xsl:variable that binds $f. The last sentence
+// then applies to every argument, and the section's note says what that
+// costs: a streamed node passed to a function not statically known to be a
+// map or array "will generally be roaming and free-ranging. This means it is
+// desirable to declare the type of any variable holding a map or array."
+// That refusal is the spec's outcome for a processor that knows nothing
+// more, so it is decided rather than withheld. A grounded argument is
+// unaffected either way, because §19.8.1 keeps a grounded operand's own
+// sweep whatever its usage.
+//
+// The refinement the section allows -- absorption for a declared map or
+// array, per-parameter usage for a declared function(A, B) -- needs the
+// binding's declared type, which is the gap conformance-gaps.md records.
+//
+// The note on focus-dependent function items ("name#0, lang#1, or last#0
+// [...] does not affect the static streamability analysis") is honoured by
+// giving the base expression nothing beyond its inspection usage; what
+// §19.8.8.15 makes of the reference itself is its own affair.
+func (a *analyzer) dynamicCall(x *xpath.DynamicCall) props {
+	ops := []operand{a.operandOf(x.Target, usageInspection)}
+	for _, arg := range x.Args {
+		if _, ok := arg.(*xpath.ArgumentPlaceholder); ok {
+			// "excluding any ? placeholders"
+			continue
+		}
+		ops = append(ops, a.operandOf(arg, usageNavigation))
+	}
+	return combine(ops, false)
+}

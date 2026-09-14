@@ -322,7 +322,7 @@ and tested on its own, in `xslt/streamlattice.go` and
 | 19.8.8.8 path expressions | complete, both phases, including the scanning-expression reassessment that makes `//x` streamable |
 | 19.8.8.9 axis steps | the posture table and the predicate rule; not the numeric-predicate narrowing |
 | 19.8.8.10 filter expressions | the motionless-predicate clause; not the numeric-predicate narrowing |
-| 19.8.8.11 dynamic function calls | **absent** |
+| 19.8.8.11 dynamic function calls | the base operand (inspection) and the no-signature fallback, every argument navigating; not the signature refinement, which needs the binding's declared `as` |
 | 19.8.8.12 variable references | the grounded case, the streaming-parameter case, and a data-flow environment for the range variable of a quantified expression |
 | 19.8.8.13 context item expression | complete |
 | 19.8.8.15 named function references | complete; focus dependence is read from a table transcribed from the F&O 3.1 and XSLT 3.0 "Properties" paragraphs (`xslt/streamfocus.go`) |
@@ -355,9 +355,20 @@ list below, not the bulk of the chapter.
 
 Still absent or partial:
 
-- **§19.8.8.11 dynamic function calls.** The one expression construct in
-  §19.8.8 with no rule at all: a call on a function item whose identity is not
-  statically known, so the operand usages cannot be read off a signature.
+- **§19.8.8.11 dynamic function calls, in part.** The base expression is an
+  inspection operand and the arguments take a *type-determined* usage read off
+  the function item's static signature "where available", falling back to
+  navigation when none is. The fallback is what is implemented: the analyzer
+  is built afresh from each attribute's expression text and carries no
+  declared types, so no signature is ever available to it, every argument
+  navigates, and a streamed argument makes the call roaming — which the
+  section's note names as the outcome for a function "not known statically"
+  to be a map or array ("it is desirable to declare the type of any variable
+  holding a map or array"). The refinement — absorption for a declared
+  `map(*)`/`array(*)`, per-parameter usage for a declared `function(A, B)` —
+  needs the declaring `xsl:variable`/`xsl:param`'s `as`, which nothing threads
+  into the expression analyzer; until it does, `$m(child::x)` is refused even
+  under `$m as map(*)`, where the note says grounded and consuming.
 - **The numeric-predicate narrowing** of §19.8.8.9 axis steps and §19.8.8.10
   filter expressions, noted in the table above.
 

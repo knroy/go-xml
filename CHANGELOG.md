@@ -28,6 +28,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | §19.8.8.15 decided a named function reference only under a grounded context | Nothing recorded focus dependence. A table of the 33 focus-dependent (name, arity) pairs, from the F&O and XSLT "Properties" paragraphs, now decides the rest. |  |
+| §19.8.8.11 dynamic function calls had no streamability rule | `$f(child::x)` in a streamed context was accepted for want of an opinion. The base is inspected and each argument navigates, the spec's no-signature fallback, so a streamed argument is refused. |  |
 | The `SERE0007` raw-text guard looked at one text node at a time | Adjacent text nodes are written into one raw run, so `"a<"` + `"/script>"` emitted a contiguous `</script>` under the html method. The guard now spans the boundary. | [`2acbab4`][2acbab4] |
 | 29 cast and type errors rendered their code twice | `xdm.ErrCast` and `xdm.ErrType` already carry `FORG0001`/`XPTY0004` and `Error()` prints it, yet the call sites spelled it again, so `xs:byte(999)` read `FORG0001: FORG0001: …`. The format strings no longer repeat it. | [`0af8592`][0af8592] |
 | Five parser limits reported `XPST0003` for a well-formed expression | §2.3.1 names `XPDY0130` for an implementation-dependent limit; the depth, chain, type-nesting and XQuery nesting caps use it now. Messages and the sentinel are unchanged. | [`75cb3af`][75cb3af] |
