@@ -64,7 +64,7 @@ func castToListType(a *xdm.Atomic, facet string) (xdm.Sequence, error) {
 	toks := collapseXMLSpaceFields(a.String())
 	if len(toks) == 0 {
 		return nil, xdm.ErrCast(
-			"FORG0001: %q has no tokens, so it is not a value of a list type", a.String())
+			"%q has no tokens, so it is not a value of a list type", a.String())
 	}
 	out := make(xdm.Sequence, 0, len(toks))
 	for _, tok := range toks {

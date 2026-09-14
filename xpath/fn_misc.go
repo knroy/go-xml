@@ -799,7 +799,7 @@ func checkFormatDateArgs(ctx *Context, args []xdm.Sequence) error {
 		}
 		if a != nil && a.Type != xdm.TypeString && a.Type != xdm.TypeUntypedAtomic &&
 			a.Type != xdm.TypeAnyURI {
-			return xdm.ErrType("XPTY0004: the place argument must be an xs:string")
+			return xdm.ErrType("the place argument must be an xs:string")
 		}
 	}
 	if len(args[3]) > 0 {

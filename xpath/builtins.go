@@ -389,7 +389,7 @@ func registerIntegerSubtypes(l *Library) {
 			// that could have wrapped on the way in.
 			n := new(big.Int).Quo(v.Rat().Num(), v.Rat().Denom())
 			if f.min != nil && n.Cmp(f.min) < 0 || f.max != nil && n.Cmp(f.max) > 0 {
-				return nil, xdm.ErrCast("FORG0001: %s is out of range for xs:%s", n, f.name)
+				return nil, xdm.ErrCast("%s is out of range for xs:%s", n, f.name)
 			}
 			// The constructed value remembers the type it was built as, so
 			// that "instance of" can tell it from a plain xs:integer.
@@ -417,7 +417,7 @@ func registerIntegerSubtypes(l *Library) {
 		}
 		if dt := v.DateTimeVal(); dt == nil || !dt.HasTZ {
 			return nil, xdm.ErrCast(
-				"FORG0001: xs:dateTimeStamp requires a timezone")
+				"xs:dateTimeStamp requires a timezone")
 		}
 		return xdm.One(v.WithDerived("dateTimeStamp")), nil
 	})

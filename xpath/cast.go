@@ -1071,7 +1071,7 @@ func CastToDerived(a *xdm.Atomic, target xdm.TypeCode, facet string) (*xdm.Atomi
 		// the constructor, since a cast does not go through that.
 		if dt := out.DateTimeVal(); dt == nil || !dt.HasTZ {
 			return nil, xdm.ErrCast(
-				"FORG0001: xs:dateTimeStamp requires a timezone")
+				"xs:dateTimeStamp requires a timezone")
 		}
 	} else {
 		return out, nil
@@ -1171,7 +1171,7 @@ func applyRangeFacet(a *xdm.Atomic, name string) (*xdm.Atomic, error) {
 	}
 	n := new(big.Int).Quo(a.Rat().Num(), a.Rat().Denom())
 	if r.min != nil && n.Cmp(r.min) < 0 || r.max != nil && n.Cmp(r.max) > 0 {
-		return nil, xdm.ErrCast("FORG0001: %s is out of range for xs:%s", n, name)
+		return nil, xdm.ErrCast("%s is out of range for xs:%s", n, name)
 	}
 	return a, nil
 }
@@ -1217,7 +1217,7 @@ func applyStringFacet(a *xdm.Atomic, name string) (*xdm.Atomic, error) {
 		ok = isNmtoken(v)
 	}
 	if !ok {
-		return nil, xdm.ErrCast("FORG0001: %q is not a valid xs:%s", s, name)
+		return nil, xdm.ErrCast("%q is not a valid xs:%s", s, name)
 	}
 	return xdm.NewString(v), nil
 }

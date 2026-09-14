@@ -295,16 +295,16 @@ func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
 			a, ok := it.(*xdm.Atomic)
 			if !ok {
 				return nil, xdm.ErrType(
-					"XPTY0004: value does not match the declared type %s", st.String())
+					"value does not match the declared type %s", st.String())
 			}
 			if !convertibleToParam(a.Type, st.AtomicType) {
 				return nil, xdm.ErrType(
-					"XPTY0004: value does not match the declared type %s", st.String())
+					"value does not match the declared type %s", st.String())
 			}
 			c, err := CastAtomic(a, st.AtomicType)
 			if err != nil {
 				return nil, xdm.ErrType(
-					"XPTY0004: value does not match the declared type %s", st.String())
+					"value does not match the declared type %s", st.String())
 			}
 			conv = append(conv, c)
 		}
@@ -328,7 +328,7 @@ func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
 			return xdm.One(coerceFunctionItem(fn, st)), nil
 		}
 	}
-	return nil, xdm.ErrType("XPTY0004: value does not match the declared type %s", st.String())
+	return nil, xdm.ErrType("value does not match the declared type %s", st.String())
 }
 
 // coerceFunctionItem wraps fn so that it presents the signature st declares.
@@ -577,7 +577,7 @@ func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 func singleFunctionItem(seq xdm.Sequence) (*xdm.FunctionItem, error) {
 	if len(seq) != 1 {
 		return nil, xdm.ErrType(
-			"XPTY0004: the target of a dynamic call must be a single function item, got %d items",
+			"the target of a dynamic call must be a single function item, got %d items",
 			len(seq))
 	}
 	// A map and an array are function items in the data model, so "$a(1)" and
@@ -587,7 +587,7 @@ func singleFunctionItem(seq xdm.Sequence) (*xdm.FunctionItem, error) {
 	fn := functionItemView(seq[0])
 	if fn == nil {
 		return nil, xdm.ErrType(
-			"XPTY0004: the target of a dynamic call is %s, not a function", seq[0].TypeName())
+			"the target of a dynamic call is %s, not a function", seq[0].TypeName())
 	}
 	return fn, nil
 }

@@ -342,7 +342,7 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 		// name is a malformed parameter document: SEPM0017.
 		if n.Name.URI != nsSerialization {
 			return opts, xdm.ErrType(
-				"XPTY0004: the serialization parameters must be an " +
+				"the serialization parameters must be an " +
 					"output:serialization-parameters element")
 		}
 		// A wrapper with the wrong local name is not the element the
@@ -350,7 +350,7 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 		// rather than a malformed-document one.
 		if n.Name.Local != "serialization-parameters" {
 			return opts, xdm.ErrType(
-				"XPTY0004: %q is not a serialization-parameters element", n.Name.Local)
+				"%q is not a serialization-parameters element", n.Name.Local)
 		}
 		// An attribute on the wrapper is not a parameter either.
 		for _, a := range n.Attrs {
@@ -1386,12 +1386,12 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 	boolParam := func(name string, v xdm.Sequence) (bool, error) {
 		if len(v) != 1 {
 			return false, xdm.ErrType(
-				"XPTY0004: serialization parameter %q takes a single boolean", name)
+				"serialization parameter %q takes a single boolean", name)
 		}
 		a, ok := v[0].(*xdm.Atomic)
 		if !ok {
 			return false, xdm.ErrType(
-				"XPTY0004: serialization parameter %q takes a boolean", name)
+				"serialization parameter %q takes a boolean", name)
 		}
 		// An xs:untypedAtomic is the one non-boolean that is accepted: the
 		// function conversion rules cast it to the declared type, so
@@ -1402,26 +1402,26 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 			conv, err := CastAtomic(a, xdm.TypeBoolean)
 			if err != nil {
 				return false, xdm.ErrType(
-					"XPTY0004: serialization parameter %q takes a boolean, got %q",
+					"serialization parameter %q takes a boolean, got %q",
 					name, a.String())
 			}
 			return conv.Bool(), nil
 		}
 		if a.Type != xdm.TypeBoolean {
 			return false, xdm.ErrType(
-				"XPTY0004: serialization parameter %q takes a boolean", name)
+				"serialization parameter %q takes a boolean", name)
 		}
 		return a.Bool(), nil
 	}
 	strParam := func(name string, v xdm.Sequence) (string, error) {
 		if len(v) != 1 {
 			return "", xdm.ErrType(
-				"XPTY0004: serialization parameter %q takes a single string", name)
+				"serialization parameter %q takes a single string", name)
 		}
 		a, ok := v[0].(*xdm.Atomic)
 		if !ok {
 			return "", xdm.ErrType(
-				"XPTY0004: serialization parameter %q takes a string", name)
+				"serialization parameter %q takes a string", name)
 		}
 		return a.String(), nil
 	}
@@ -1534,7 +1534,7 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 				a, ok := it.(*xdm.Atomic)
 				if !ok || a.Type != xdm.TypeQName {
 					return xdm.ErrType(
-						"XPTY0004: cdata-section-elements takes QNames")
+						"cdata-section-elements takes QNames")
 				}
 				if opts.cdataElements == nil {
 					opts.cdataElements = map[xdm.QName]bool{}
@@ -1575,7 +1575,7 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 				a, ok := it.(*xdm.Atomic)
 				if !ok || a.Type != xdm.TypeQName {
 					return xdm.ErrType(
-						"XPTY0004: suppress-indentation takes QNames")
+						"suppress-indentation takes QNames")
 				}
 				if opts.suppressIndent == nil {
 					opts.suppressIndent = map[xdm.QName]bool{}
@@ -2161,17 +2161,17 @@ func primitiveTypeName(t xdm.TypeCode) string {
 func readCharacterMapsFromMap(val xdm.Sequence) (map[rune]string, error) {
 	if len(val) != 1 {
 		return nil, xdm.ErrType(
-			"XPTY0004: use-character-maps takes a single map")
+			"use-character-maps takes a single map")
 	}
 	m, ok := val[0].(*xdm.MapItem)
 	if !ok {
-		return nil, xdm.ErrType("XPTY0004: use-character-maps takes a map")
+		return nil, xdm.ErrType("use-character-maps takes a map")
 	}
 	out := map[rune]string{}
 	err := m.Entries(func(key *xdm.Atomic, v xdm.Sequence) error {
 		if !isStringLike(key.Type) && key.Type != xdm.TypeUntypedAtomic {
 			return xdm.ErrType(
-				"XPTY0004: a use-character-maps key must be a string, got %s",
+				"a use-character-maps key must be a string, got %s",
 				key.TypeName())
 		}
 		r := []rune(key.String())
@@ -2182,16 +2182,16 @@ func readCharacterMapsFromMap(val xdm.Sequence) (map[rune]string, error) {
 		}
 		if len(v) != 1 {
 			return xdm.ErrType(
-				"XPTY0004: a use-character-maps value must be a single string")
+				"a use-character-maps value must be a single string")
 		}
 		a, ok := v[0].(*xdm.Atomic)
 		if !ok {
 			return xdm.ErrType(
-				"XPTY0004: a use-character-maps value must be a string, got a node")
+				"a use-character-maps value must be a string, got a node")
 		}
 		if !isStringLike(a.Type) && a.Type != xdm.TypeUntypedAtomic {
 			return xdm.ErrType(
-				"XPTY0004: a use-character-maps value must be a string, got %s",
+				"a use-character-maps value must be a string, got %s",
 				a.TypeName())
 		}
 		out[r[0]] = a.String()
