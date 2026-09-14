@@ -22,6 +22,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | The `SERE0007` raw-text guard looked at one text node at a time | Adjacent text nodes are written into one raw run, so `"a<"` + `"/script>"` emitted a contiguous `</script>` under the html method. The guard now spans the boundary. | [`SHA`][SHA] |
+| 29 cast and type errors rendered their code twice | `xdm.ErrCast` and `xdm.ErrType` already carry `FORG0001`/`XPTY0004` and `Error()` prints it, yet the call sites spelled it again, so `xs:byte(999)` read `FORG0001: FORG0001: …`. The format strings no longer repeat it. | [`0af8592`][0af8592] |
 | The entity-expansion budget restarted for every resolved module | `parseUncached` minted a fresh allowance per file, so 60 imports each under the 1 MB ceiling expanded 42 MB and were accepted; the compilation and the evaluation now share one. | [`9681343`][9681343] |
 | The resolver cache cleared itself instead of evicting | Past 256 URIs the whole map was thrown away, so a stylesheet cycling over more documents re-parsed every one; evicting a single entry cut 300 documents × 4 rounds from 1.05s to 0.31s. | [`d1a9131`][d1a9131] |
 | `xsl:evaluate`'s restriction leaked into the body of a function it called | §10.4.1 governs the names the target expression may reference, not what those functions call. A public function's private callee was refused, costing 512 of 593 DocBook documents. | [`e812277`][e812277] |
@@ -859,3 +860,4 @@ here so every entry in this file sits under a release.
 [f88747b]: https://github.com/knroy/go-xml/commit/f88747b
 [f9c0cf5]: https://github.com/knroy/go-xml/commit/f9c0cf5
 [fe41f3c]: https://github.com/knroy/go-xml/commit/fe41f3c
+[0af8592]: https://github.com/knroy/go-xml/commit/0af8592
