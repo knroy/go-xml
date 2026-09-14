@@ -27,16 +27,16 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| Two `xsl:global-context-item` attributes were listed but unreachable | `@streamable` and `@use-accumulators` are not in §3.10, and the element is checked against the `context-item` key, so both were already refused — naming an element the stylesheet had not written. Entries deleted; the diagnostic now names `xsl:global-context-item`. |  |
+| Two `xsl:global-context-item` attributes were listed but unreachable | `@streamable` and `@use-accumulators` are not in §3.10, and the element is checked against the `context-item` key, so both were already refused — naming an element the stylesheet had not written. Entries deleted; the diagnostic now names `xsl:global-context-item`. | [`c9945c5`][c9945c5] |
 | `xsl:output` and `xsl:function` attributes were flagged as attribute value templates | The Recommendation braces only `xsl:result-document`'s, so `build-tree="{$x}"` escaped XTSE0020. Four `avt` flags cleared, on the attributes whose enumeration the flag was suppressing; `streamability` keeps its EQName union. | [`4410604`][4410604] |
-| `xsl:output/@parameter-document` and `@json-node-output-method` reached no validator | Neither had a type, so any value passed. Now `uri` and `"xml"`/`"html"`/`"xhtml"`/`"text"`/eqname; a `{...}` is XTSE0020. |  |
+| `xsl:output/@parameter-document` and `@json-node-output-method` reached no validator | Neither had a type, so any value passed. Now `uri` and `"xml"`/`"html"`/`"xhtml"`/`"text"`/eqname; a `{...}` is XTSE0020. | [`a048213`][a048213] |
 | `visibility="hidden"` was declarable and `cache="full"` accepted | Hidden is acquired through `xsl:accept`/`xsl:expose`, and `cache? = boolean`. The enumerations now match the summaries; both are XTSE0020. | [`4410604`][4410604] |
 | Three working-draft attributes were tolerated on a 3.0 module | `function/@identity-sensitive`, `accumulator/@applies-to` and `package/@use-package` are now `removed30`: XTSE0090. `param/@export` stays tolerated, so `iterate-024` still reaches its XTSE0010. | [`4410604`][4410604] |
-| A misplaced `xsl:on-completion` was outranked by an unknown attribute | §8.4's placement rule is now read off the tree ahead of the grammar sweep, so a doubly-broken module reports the structural XTSE0010, not XTSE0090. |  |
-| `xsl:param/@export` was accepted on a 3.0 module | §9.2's summary stops at `static?`, so the withdrawn draft spelling is now `removed30`: XTSE0090. The ordering fix above keeps `iterate-024` passing. |  |
+| A misplaced `xsl:on-completion` was outranked by an unknown attribute | §8.4's placement rule is now read off the tree ahead of the grammar sweep, so a doubly-broken module reports the structural XTSE0010, not XTSE0090. | [`2bd65b9`][2bd65b9] |
+| `xsl:param/@export` was accepted on a 3.0 module | §9.2's summary stops at `static?`, so the withdrawn draft spelling is now `removed30`: XTSE0090. The ordering fix above keeps `iterate-024` passing. | [`2bd65b9`][2bd65b9] |
 | The XTSE0020 message for a yes-or-no attribute listed only `yes, no` at 3.0 | The check already accepted `true/false/1/0` there. The message now lists the spellings in force for the module's version. | [`f9d96aa`][f9d96aa] |
-| `xsl:merge-source/@for-each-stream` was accepted alongside `for-each-source` | Bug29804 renamed it; the old name survives only in the stale schema appendix. It is now `removed30`, so a 3.0 module naming it gets XTSE0090. |  |
-| The XTSE0020 message listed the boolean spellings twice | The 20 enumerations that already spell all six had `true, false, 1, 0` appended again. An alias the enumeration already carries is no longer added. |  |
+| `xsl:merge-source/@for-each-stream` was accepted alongside `for-each-source` | Bug29804 renamed it; the old name survives only in the stale schema appendix. It is now `removed30`, so a 3.0 module naming it gets XTSE0090. | [`c852de7`][c852de7] |
+| The XTSE0020 message listed the boolean spellings twice | The 20 enumerations that already spell all six had `true, false, 1, 0` appended again. An alias the enumeration already carries is no longer added. | [`bf2ac23`][bf2ac23] |
 | §19.8.8.15 decided a named function reference only under a grounded context | Nothing recorded focus dependence. A table of the 33 focus-dependent (name, arity) pairs, from the F&O and XSLT "Properties" paragraphs, now decides the rest. | [`acdc330`][acdc330] |
 | §19.8.8.11 dynamic function calls had no streamability rule | `$f(child::x)` in a streamed context was accepted for want of an opinion. The base is inspected and each argument navigates, the spec's no-signature fallback, so a streamed argument is refused. | [`a09c437`][a09c437] |
 | The numeric-predicate rules of §19.8.8.9 and §19.8.8.10 were missing | `descendant::section[1]` and `(//x)[3]` came back crawling, though the spec makes a focus-independent numeric predicate striding. Both rules now apply, for statically certain types. | [`f05bea8`][f05bea8] |
@@ -278,7 +278,7 @@ what the suites *measured*, not what the library does.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| A corpus path containing a space mangled `-allow-dir` and matched no files | Both expanded unquoted: the flag truncated at the first space, the glob matched nothing, and the corpus skipped in silence. `set --` and `find`. |  |
+| A corpus path containing a space mangled `-allow-dir` and matched no files | Both expanded unquoted: the flag truncated at the first space, the glob matched nothing, and the corpus skipped in silence. `set --` and `find`. | [`8008194`][8008194] |
 | The XSLT skip count folded "not implemented" into "out of scope" | Each reason is classed in `deps.go`; the summary line and `docs/stats.md` publish both counts, and an unclassed reason fails a test. | [`1680456`][1680456] |
 | The optimiser timing bound failed on the race lane | `TestOptimizeNotQuadratic` allowed 1.5 s and the race detector took the compile to 1.7 s; the budget is widened sixfold under `-race`, still far below the quadratic figure. | [`d02fc89`][d02fc89] |
 | The W3C suites were cloned unpinned, so a figure could move with no change here | `results.json` records each suite revision, CI clones at that SHA, and a test fails when the two disagree. | [`7f70d40`][7f70d40] |
@@ -301,17 +301,17 @@ what the suites *measured*, not what the library does.
 | `runtimeFuncNames`'s reverse check was a hand-typed roster of 13 of the 19 names | It could only find a name someone had already added to it. The registered set is enumerated from the library instead, with the three stateless XSLT-defined functions named as a deliberate omission and pinned to `lateBoundFuncNames`. | [`3d5e519`][3d5e519] |
 | The global-ordering fixture was already in declaration order | Binding `$v:flag` before the global that needs it passed whether or not the sequence constructor was scanned at all. The fixture is reordered so declaration order and dependency order disagree. | [`3d5e519`][3d5e519] |
 | Five ratchet marks were in neither figure guard | `TestQT3`, `RelaxNGSpectest`, `DocBook` and `XSpec` copies in README and docs are generated regions now, inline where mid-sentence; `VendoredSchemas` joined `docfigures.sh`'s table. | [`1c7edec`][1c7edec] |
-| The QT3 XPath lane's `-run TestQT3` was unanchored, so it also ran `TestQT3XQuery` | The XQuery summary was the last `in-scope:` line, so the `TestQT3` mark recorded the XQuery count. Anchored to `^TestQT3$`; XQuery now runs once per gate, not twice. |  |
-| The three QT3 XPath versions were ratcheted by nothing | One mark over three subtests measured whichever ran last. `TestQT3XPath20/30/31` guard 15,217 / 19,362 / 21,898 each, attributed by the `=== RUN` line rather than order. |  |
-| The three published XPath figures were outside `docfigures.sh`'s cross-check | Neither the ratchet nor the script guarded them, so a stale `15,217` / `19,362` / `21,898` in README or docs failed nothing. Each version now has a row with its own denominator. |  |
-| All four ratchet helpers failed open on an unparseable count | `[ -n "$c" ] || return 0` meant a driver rewording silently disabled the guard and the gate still reported PASS. An unreadable count now fails, naming the mark and printing the input. |  |
-| The gate rewrote `tests/ratchet.txt` on a new high, dirtying the tree its own provenance then recorded as dirty | An increase now fails with the command to record it; only `GOXSLT_RATCHET=update` writes. A missing mark fails too, since new and deleted are indistinguishable from inside the script. |  |
+| The QT3 XPath lane's `-run TestQT3` was unanchored, so it also ran `TestQT3XQuery` | The XQuery summary was the last `in-scope:` line, so the `TestQT3` mark recorded the XQuery count. Anchored to `^TestQT3$`; XQuery now runs once per gate, not twice. | [`0d8c028`][0d8c028] |
+| The three QT3 XPath versions were ratcheted by nothing | One mark over three subtests measured whichever ran last. `TestQT3XPath20/30/31` guard 15,217 / 19,362 / 21,898 each, attributed by the `=== RUN` line rather than order. | [`0d8c028`][0d8c028] |
+| The three published XPath figures were outside `docfigures.sh`'s cross-check | Neither the ratchet nor the script guarded them, so a stale `15,217` / `19,362` / `21,898` in README or docs failed nothing. Each version now has a row with its own denominator. | [`0d8c028`][0d8c028] |
+| All four ratchet helpers failed open on an unparseable count | `[ -n "$c" ] || return 0` meant a driver rewording silently disabled the guard and the gate still reported PASS. An unreadable count now fails, naming the mark and printing the input. | [`0d8c028`][0d8c028] |
+| The gate rewrote `tests/ratchet.txt` on a new high, dirtying the tree its own provenance then recorded as dirty | An increase now fails with the command to record it; only `GOXSLT_RATCHET=update` writes. A missing mark fails too, since new and deleted are indistinguishable from inside the script. | [`0d8c028`][0d8c028] |
 
 ### Documentation
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The element table was reconciled against two documents by hand, with no stated policy | Each divergence from the XSLT 3.0 Recommendation was decided ad hoc in a scattered comment. `docs/element-table-policy.md` names the Recommendation as authoritative, enumerates all nine deliberate divergences with their evidence, and gives the rule for a new one; `TestElementTablePolicyDeclaresEveryDivergence` fails on an undeclared divergence and on a fixed one whose row survives. |  |
+| The element table was reconciled against two documents by hand, with no stated policy | Each divergence from the XSLT 3.0 Recommendation was decided ad hoc in a scattered comment. `docs/element-table-policy.md` names the Recommendation as authoritative, enumerates all nine deliberate divergences with their evidence, and gives the rule for a new one; `TestElementTablePolicyDeclaresEveryDivergence` fails on an undeclared divergence and on a fixed one whose row survives. | [`cc47bf9`][cc47bf9] |
 | `xpath/funcspec_table.go` called its table a bootstrap of seventeen entries | It covers the whole F&O manifest and the tests enforce that. The header now states the invariant and names `fn:concat` as the synthesised exception. | [`c5b237c`][c5b237c] |
 | The README called `xsl:stream` and `xsl:fork` absent | Both execute end-to-end by building the tree, as §19.1 permits a non-streaming processor to do. The README now says what is absent is streamed execution, not the vocabulary — matching `docs/conformance-gaps.md`. | [`a09c936`][a09c936] |
 | The `evaluate-045` divergence was justified by a false spec argument | The comment claimed a plain `xsl:stylesheet` has no package boundary; §3.5 makes it an implicit package whose functions default to private. Reframed as a known divergence kept for cost (577 of 593 DocBook documents against 67), with the corpus size corrected from 613 to 593. | [`c6532ba`][c6532ba] |
@@ -739,6 +739,7 @@ here so every entry in this file sits under a release.
 [01b91ba]: https://github.com/knroy/go-xml/commit/01b91ba
 [03b5942]: https://github.com/knroy/go-xml/commit/03b5942
 [0634425]: https://github.com/knroy/go-xml/commit/0634425
+[0d8c028]: https://github.com/knroy/go-xml/commit/0d8c028
 [0f604be]: https://github.com/knroy/go-xml/commit/0f604be
 [10486a6]: https://github.com/knroy/go-xml/commit/10486a6
 [106bcdc]: https://github.com/knroy/go-xml/commit/106bcdc
@@ -764,6 +765,7 @@ here so every entry in this file sits under a release.
 [282953e]: https://github.com/knroy/go-xml/commit/282953e
 [28699a9]: https://github.com/knroy/go-xml/commit/28699a9
 [28e455a]: https://github.com/knroy/go-xml/commit/28e455a
+[2bd65b9]: https://github.com/knroy/go-xml/commit/2bd65b9
 [2c461c7]: https://github.com/knroy/go-xml/commit/2c461c7
 [2cc633e]: https://github.com/knroy/go-xml/commit/2cc633e
 [2cf1ad6]: https://github.com/knroy/go-xml/commit/2cf1ad6
@@ -817,6 +819,7 @@ here so every entry in this file sits under a release.
 [7f2d2d0]: https://github.com/knroy/go-xml/commit/7f2d2d0
 [7f70d40]: https://github.com/knroy/go-xml/commit/7f70d40
 [7ffd7da]: https://github.com/knroy/go-xml/commit/7ffd7da
+[8008194]: https://github.com/knroy/go-xml/commit/8008194
 [81e6ee5]: https://github.com/knroy/go-xml/commit/81e6ee5
 [830ae11]: https://github.com/knroy/go-xml/commit/830ae11
 [83148b7]: https://github.com/knroy/go-xml/commit/83148b7
@@ -840,6 +843,7 @@ here so every entry in this file sits under a release.
 [9ae8c57]: https://github.com/knroy/go-xml/commit/9ae8c57
 [9f033e2]: https://github.com/knroy/go-xml/commit/9f033e2
 [9f69069]: https://github.com/knroy/go-xml/commit/9f69069
+[a048213]: https://github.com/knroy/go-xml/commit/a048213
 [a09c437]: https://github.com/knroy/go-xml/commit/a09c437
 [a09c936]: https://github.com/knroy/go-xml/commit/a09c936
 [a0cf1da]: https://github.com/knroy/go-xml/commit/a0cf1da
@@ -867,13 +871,17 @@ here so every entry in this file sits under a release.
 [bc72bed]: https://github.com/knroy/go-xml/commit/bc72bed
 [bd0aaf5]: https://github.com/knroy/go-xml/commit/bd0aaf5
 [be2938e]: https://github.com/knroy/go-xml/commit/be2938e
+[bf2ac23]: https://github.com/knroy/go-xml/commit/bf2ac23
 [c01b98a]: https://github.com/knroy/go-xml/commit/c01b98a
 [c2af54f]: https://github.com/knroy/go-xml/commit/c2af54f
 [c3a52be]: https://github.com/knroy/go-xml/commit/c3a52be
 [c5b237c]: https://github.com/knroy/go-xml/commit/c5b237c
 [c6532ba]: https://github.com/knroy/go-xml/commit/c6532ba
+[c852de7]: https://github.com/knroy/go-xml/commit/c852de7
 [c8fc839]: https://github.com/knroy/go-xml/commit/c8fc839
+[c9945c5]: https://github.com/knroy/go-xml/commit/c9945c5
 [cc17983]: https://github.com/knroy/go-xml/commit/cc17983
+[cc47bf9]: https://github.com/knroy/go-xml/commit/cc47bf9
 [cdba77a]: https://github.com/knroy/go-xml/commit/cdba77a
 [d02fc89]: https://github.com/knroy/go-xml/commit/d02fc89
 [d0dd99d]: https://github.com/knroy/go-xml/commit/d0dd99d
