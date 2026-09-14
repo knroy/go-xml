@@ -109,15 +109,22 @@ func TestFunctionCacheMemoises(t *testing.T) {
 	}
 }
 
-// TestMergeSourceAcceptsBothSpellings covers xsl:merge-source.
+// TestMergeSourceRefusesForEachStream covers xsl:merge-source.
 //
-// The vendored draft types the attribute for-each-stream at
-// xslt-lcwd30.xml:19881 and uses that name 33 times, never for-each-source.
-// The Recommendation renamed it, and the suite follows the later name: 56
-// files write for-each-source against 6 for for-each-stream. The runtime
-// already reads either spelling (streaminstructions.go:2096, 2159), so the
-// table listing only one was the sole thing rejecting the other.
-func TestMergeSourceAcceptsBothSpellings(t *testing.T) {
+// The draft's spelling was for-each-stream and the Recommendation renamed it.
+// The change log says so: "Bug29804: The for-each-stream attribute of
+// xsl:merge-source has been generalized to handle both streamed and
+// unstreamed processing, and it has accordingly been renamed for-each-source;
+// streaming of the merge input is controlled using the streamable attribute."
+// The Recommendation writes for-each-source 35 times against 3 for
+// for-each-stream, and those three are the change-log entry and the stale
+// RELAX NG schema appendix -- so the old name is withdrawn, not an
+// alternative, and W3C bug 30125 records that it is no longer allowed.
+//
+// So the draft's name is refused the way every other withdrawn draft spelling
+// is, and no suite stylesheet pays for it: the six merge cases that mention
+// for-each-stream do so only in XML comments.
+func TestMergeSourceRefusesForEachStream(t *testing.T) {
 	sheet := func(attr string) string {
 		return `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
 		  <xsl:template name="main">
@@ -132,19 +139,22 @@ func TestMergeSourceAcceptsBothSpellings(t *testing.T) {
 		  </xsl:template>
 		</xsl:stylesheet>`
 	}
-	for _, v := range []string{
-		`for-each-source="'a.xml'"`,
-		`for-each-stream="'a.xml'"`,
-	} {
-		if err := compileDrift(t, sheet(v)); err != nil {
-			t.Errorf("%s was refused: %v", v, err)
-		}
+	// The Recommendation's name must still work: the rename removed one
+	// spelling, it did not break the element.
+	if err := compileDrift(t, sheet(`for-each-source="'a.xml'"`)); err != nil {
+		t.Errorf("for-each-source was refused: %v", err)
 	}
-	// A third spelling is still XTSE0090, so accepting two names is not the
-	// same as accepting any name.
-	err := compileDrift(t, sheet(`for-each-file="'a.xml'"`))
-	if err == nil || !strings.Contains(err.Error(), "XTSE0090") {
-		t.Errorf("for-each-file should be XTSE0090, got %v", err)
+	// The withdrawn name is XTSE0090, exactly as an invented one is. Listing
+	// it as removed30 rather than leaving it out is what makes the error
+	// survive forwards-compatible leniency.
+	for _, v := range []string{
+		`for-each-stream="'a.xml'"`,
+		`for-each-file="'a.xml'"`,
+	} {
+		err := compileDrift(t, sheet(v))
+		if err == nil || !strings.Contains(err.Error(), "XTSE0090") {
+			t.Errorf("%s should be XTSE0090, got %v", v, err)
+		}
 	}
 }
 

@@ -508,21 +508,27 @@ var xsltElements = map[string]elementDef{
 	"merge-source": {since30: true, attrs: map[string]attrDef{
 		"name":          {},
 		"for-each-item": {},
-		// Both spellings, because the two sources disagree and the runtime
-		// already reads either one (streaminstructions.go:2096, 2159).
+		// for-each-source is the only spelling. The Recommendation's change
+		// log records the rename: "Bug29804: The for-each-stream attribute
+		// of xsl:merge-source has been generalized to handle both streamed
+		// and unstreamed processing, and it has accordingly been renamed
+		// for-each-source; streaming of the merge input is controlled using
+		// the streamable attribute." The element summary types the later
+		// name, which the Recommendation uses 35 times against 3 for
+		// for-each-stream -- and all three of those are the change-log entry
+		// itself and the stale RELAX NG schema appendix, which no longer
+		// matches the summary. W3C bug 30125 records that the draft's name
+		// is no longer allowed.
 		//
-		// for-each-source is the Recommendation's name and the one the suite
-		// uses: its schema declares it and 56 files write it. But the
-		// vendored Last Call draft never uses that name -- it says
-		// for-each-stream 33 times (xslt-lcwd30.xml:19881 types it in the
-		// summary, and XTSE3195 at 19904-19910 is written entirely in terms
-		// of it) -- and 6 suite files write the draft's spelling.
-		//
-		// Accepting only one rejects conforming stylesheets written against
-		// the other, so both are listed rather than one swapped for the
-		// other.
+		// It is removed30 rather than merely absent, for the reason
+		// for-each-group/@bind-group is: the summary never defines it, so a
+		// forwards-compatible module would otherwise drop it silently
+		// instead of reporting the XTSE0090 a withdrawn name has earned. No
+		// suite stylesheet writes it -- the six merge cases that mention it
+		// do so only in XML comments, and every xsl:merge-source in the
+		// suite spells the attribute for-each-source.
 		"for-each-source": {},
-		"for-each-stream": {},
+		"for-each-stream": {removed30: true},
 		// The summary types select without a "?", so it is required: with no
 		// anchor there is nothing else an xsl:merge-source could select, and
 		// merge-032b writes one without it and requires XTSE0010.
@@ -714,9 +720,7 @@ var xsltElements = map[string]elementDef{
 	//
 	// Both are accepted because a stylesheet written against either text is a
 	// legal one. The table carried only the later name, so the draft's
-	// spelling was refused outright -- the same split as
-	// for-each-stream/for-each-source on xsl:merge-source, resolved the same
-	// way.
+	// spelling was refused outright.
 	//
 	// The attribute list is 18.1's own and is NOT source-document's: the
 	// draft's xsl:stream has no @streamable, which is precisely what the
