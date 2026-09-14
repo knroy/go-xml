@@ -906,6 +906,15 @@ is declared twice. The baseline binary fails identically, so a count that
 disagrees with CI by exactly one here is a path artifact rather than a
 regression. Document URIs are not canonicalised across symlinks.
 
+**A checkout path may contain a space.** The two stylesheet corpora take their
+confinement root and their input directory as separate arguments, and the
+runner places the root in `"$@"` with `set --` and finds the inputs with
+`find`, so neither is word-split. Expanding them unquoted, as the runner once
+did, truncated `-allow-dir` at the first space and left the remainder as stray
+inputs, and matched no files at all — both silently, since the corpus then
+reported "matched no inputs" and skipped. Only the remaining flags are
+word-split, and those are the literal switches written at the call site.
+
 **Skipped is not failed.** The suites skip cases by declared dependency — a
 specific Unicode version, a spec version not being measured. (Streaming used to
 head that list and no longer does: it was measured and found implemented.) The

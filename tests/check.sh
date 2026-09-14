@@ -1018,23 +1018,38 @@ section "real-world stylesheets"
 #
 # Only stderr decides the outcome: both stylesheets write progress comments to
 # stdout, and a comment is not a failure.
-stylesheetCorpus() { # name, stylesheet, glob, extra flags
-	_name=$1 _xsl=$2 _glob=$3 _flags=${4:-}
+# A checkout path may contain a space, so neither the confinement root nor the
+# name of an input may reach the command through word splitting. The root is
+# its own parameter and is placed in "$@" by set --, which keeps it one word
+# however it is spelled; the files are found by find with the directory and the
+# pattern each quoted, and read a line at a time. Only the remaining flags are
+# word-split, and those are the literal switches written at the call site.
+#
+# Expanding them unquoted instead truncated -allow-dir at the first space and
+# left the rest as stray inputs, and matched no files at all -- both in
+# silence: the corpus reported "matched no inputs" and skipped.
+stylesheetCorpus() { # name, stylesheet, root, input dir, pattern, extra flags
+	_name=$1 _xsl=$2 _root=$3 _dir=$4 _pat=$5 _flags=${6:-}
 	if [ ! -f "$_xsl" ]; then
 		skip "$_name not at $_xsl (expected in CI; it fetches only the W3C suites)"
 		lane "$_name" SKIP "stylesheet absent; not fetched in CI (expected)"
 		return 0
 	fi
+	set -- -allow-dir "$_root" $_flags
 	_ok=0 _bad=0
-	for _f in $_glob; do
+	_list=$(mktemp -t goxmlcorpus.XXXXXX) || return 0
+	find "$_dir" -maxdepth 1 -type f -name "$_pat" 2>/dev/null |
+		LC_ALL=C sort > "$_list" || true
+	while IFS= read -r _f; do
 		[ -f "$_f" ] || continue
-		if _err=$("$BIN" -timeout 120s -xsl "$_xsl" $_flags -o /dev/null "$_f" \
+		if _err=$("$BIN" -timeout 120s -xsl "$_xsl" "$@" -o /dev/null "$_f" \
 			2>&1 >/dev/null) && [ -z "$_err" ]; then
 			_ok=$((_ok + 1))
 		else
 			_bad=$((_bad + 1))
 		fi
-	done
+	done < "$_list"
+	rm -f "$_list"
 	if [ "$((_ok + _bad))" -eq 0 ]; then
 		skip "$_name matched no inputs"
 		lane "$_name" SKIP "present but matched no inputs"
@@ -1062,13 +1077,13 @@ if [ -n "$BIN" ] && $GO build -o "$BIN" ./cmd/go-xml; then
 	# flag landed, and leaving it off held the count at 549.
 	stylesheetCorpus DocBook \
 		"$XSLTNG/src/main/xslt/docbook.xsl" \
-		"$XSLTNG/src/test/resources/xml/*.xml" \
-		"-allow-dir $XSLTNG -allow-unparsed-text -allow-doctype -xinclude \
+		"$XSLTNG" "$XSLTNG/src/test/resources/xml" '*.xml' \
+		"-allow-unparsed-text -allow-doctype -xinclude \
 		 -compat-drop-attributes-on-document"
 	stylesheetCorpus XSpec \
 		"$XSPEC/src/compiler/compile-xslt-tests.xsl" \
-		"$XSPEC/test/*.xspec" \
-		"-allow-dir $XSPEC -allow-unparsed-text"
+		"$XSPEC" "$XSPEC/test" '*.xspec' \
+		"-allow-unparsed-text"
 	rm -f "$BIN"
 else
 	skip "could not build ./cmd/go-xml for the stylesheet corpora"
