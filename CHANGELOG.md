@@ -27,8 +27,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| `media-type` was written into the injected `<meta>` tag unescaped | Every sibling attribute goes through `escapeAttrRunes`; this one was concatenated raw, so `text/html"><script>…` closed the tag and ran in the `<head>`. It is now escaped at the write site. |  |
-| A `doctype-system` value could close its own quoted literal | `a"b'>` was written as `SYSTEM 'a"b'>` and the rest became markup, appending a live entity declaration. Serialization 3.1 §3 forbids both quote kinds: now `SEPM0016`. |  |
+| `media-type` was written into the injected `<meta>` tag unescaped | Every sibling attribute goes through `escapeAttrRunes`; this one was concatenated raw, so `text/html"><script>…` closed the tag and ran in the `<head>`. It is now escaped at the write site. | [`1f638d1`][1f638d1] |
+| A `doctype-system` value could close its own quoted literal | `a"b'>` was written as `SYSTEM 'a"b'>` and the rest became markup, appending a live entity declaration. Serialization 3.1 §3 forbids both quote kinds: now `SEPM0016`. | [`411fdd5`][411fdd5] |
 | Two `xsl:global-context-item` attributes were listed but unreachable | `@streamable` and `@use-accumulators` are not in §3.10, and the element is checked against the `context-item` key, so both were already refused — naming an element the stylesheet had not written. Entries deleted; the diagnostic now names `xsl:global-context-item`. | [`c9945c5`][c9945c5] |
 | `xsl:output` and `xsl:function` attributes were flagged as attribute value templates | The Recommendation braces only `xsl:result-document`'s, so `build-tree="{$x}"` escaped XTSE0020. Four `avt` flags cleared, on the attributes whose enumeration the flag was suppressing; `streamability` keeps its EQName union. | [`4410604`][4410604] |
 | `xsl:output/@parameter-document` and `@json-node-output-method` reached no validator | Neither had a type, so any value passed. Now `uri` and `"xml"`/`"html"`/`"xhtml"`/`"text"`/eqname; a `{...}` is XTSE0020. | [`a048213`][a048213] |
@@ -261,8 +261,8 @@ turn "I could not prove the constraint" into "the constraint holds."*
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The RELAX NG pattern-size bound could not fire on the attribute path | Checked once per element, never between attributes, so a 106-byte document did not finish in 60 s even at `MaxPatternSize: 1`. Now checked per attribute. |  |
-| A nested DTD content model could exhaust the stack and kill the process | `parseCP`/`parseGroup` recursed unbounded, so 2.5M parens were a `fatal error` `recover()` cannot catch; `maxModelDepth` caps nesting at 1000. |  |
+| The RELAX NG pattern-size bound could not fire on the attribute path | Checked once per element, never between attributes, so a 106-byte document did not finish in 60 s even at `MaxPatternSize: 1`. Now checked per attribute. | [`fbe8f3c`][fbe8f3c] |
+| A nested DTD content model could exhaust the stack and kill the process | `parseCP`/`parseGroup` recursed unbounded, so 2.5M parens were a `fatal error` `recover()` cannot catch; `maxModelDepth` caps nesting at 1000. | [`020ef7f`][020ef7f] |
 | The entity-expansion budget restarted for every XInclude'd document | Each included parse minted a fresh `entityTable`, so 200 documents got 200 × 1 MB: 95 KB expanded to 149 MB. One `entityBudget` is now shared across the pass, and a refusal is fatal to `xi:fallback`. | [`989e88d`][989e88d] |
 | The documented `MaxItems` budget never bound on an XQuery body | `Compiled.Eval` reset the counter once per tuple; `HoldItemBudget` holds it for one query. | [`fe41f3c`][fe41f3c] |
 | Uncompilable content models skipped every constraint on them | A model that would not compile passed silently rather than declining. | [`b6fb5ab`][b6fb5ab] |
@@ -315,10 +315,10 @@ what the suites *measured*, not what the library does.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| `-allow-dir` help said "empty disables all of them" while the stylesheet's own directory was always a root | The grant is deliberate — a stylesheet that cannot read the modules beside it is useless — but `-h` denied it, so a service saving uploads beside the stylesheet exposed them to `doc()`. Text corrected, `TestAllowDirHelpMatchesRoots` pins it to `readableRoots`. |  |
-| `MaxDepth`'s "a negative value means no limit" did not say what no limit costs | Stack exhaustion is `fatal error: stack overflow`, which `recover()` cannot catch: the process dies rather than the request failing. Now stated in `xslt`, `relaxng` and `xsd`; `xdm` is unaffected, as it clamps a negative to the default. |  |
-| Embedders were given no guidance on `xsl:result-document` hrefs | The library never writes a file, so the href reaches the host as a stylesheet-controlled string that `os.Create` would treat as a traversal. `docs/security.md` now points at `writeSecondary` as the reference, including why the write goes through `os.OpenRoot`. |  |
-| `xdm` parsing cannot be interrupted, and deep nesting is superlinear | No `context` in the package, so a deadline cannot bound a parse. Recorded in `docs/known-gaps.md` with measurements, naming `ParseOptions.MaxDepth` (default 1000) as the only lever a caller has. |  |
+| `-allow-dir` help said "empty disables all of them" while the stylesheet's own directory was always a root | The grant is deliberate — a stylesheet that cannot read the modules beside it is useless — but `-h` denied it, so a service saving uploads beside the stylesheet exposed them to `doc()`. Text corrected, `TestAllowDirHelpMatchesRoots` pins it to `readableRoots`. | [`74350cf`][74350cf] |
+| `MaxDepth`'s "a negative value means no limit" did not say what no limit costs | Stack exhaustion is `fatal error: stack overflow`, which `recover()` cannot catch: the process dies rather than the request failing. Now stated in `xslt`, `relaxng` and `xsd`; `xdm` is unaffected, as it clamps a negative to the default. | [`74350cf`][74350cf] |
+| Embedders were given no guidance on `xsl:result-document` hrefs | The library never writes a file, so the href reaches the host as a stylesheet-controlled string that `os.Create` would treat as a traversal. `docs/security.md` now points at `writeSecondary` as the reference, including why the write goes through `os.OpenRoot`. | [`74350cf`][74350cf] |
+| `xdm` parsing cannot be interrupted, and deep nesting is superlinear | No `context` in the package, so a deadline cannot bound a parse. Recorded in `docs/known-gaps.md` with measurements, naming `ParseOptions.MaxDepth` (default 1000) as the only lever a caller has. | [`74350cf`][74350cf] |
 | The element table was reconciled against two documents by hand, with no stated policy | Each divergence from the XSLT 3.0 Recommendation was decided ad hoc in a scattered comment. `docs/element-table-policy.md` names the Recommendation as authoritative, enumerates all nine deliberate divergences with their evidence, and gives the rule for a new one; `TestElementTablePolicyDeclaresEveryDivergence` fails on an undeclared divergence and on a fixed one whose row survives. | [`cc47bf9`][cc47bf9] |
 | `xpath/funcspec_table.go` called its table a bootstrap of seventeen entries | It covers the whole F&O manifest and the tests enforce that. The header now states the invariant and names `fn:concat` as the synthesised exception. | [`c5b237c`][c5b237c] |
 | The README called `xsl:stream` and `xsl:fork` absent | Both execute end-to-end by building the tree, as §19.1 permits a non-streaming processor to do. The README now says what is absent is streamed execution, not the vocabulary — matching `docs/conformance-gaps.md`. | [`a09c936`][a09c936] |
@@ -742,6 +742,7 @@ here so every entry in this file sits under a release.
 | xpath: [Y] on a BCE year is correct, and is now pinned | `format-date`/`format-dateTime` with `[Y]` renders `xs:dateTime( "-1000000-06-15T12:00:00Z")` as `1000000`, with no minus |
 | xsd: an identity field typed as a union compared spellings, not values | Identity-constraint equality is defined on values. `keyString` already builds a type-tagged canonical form for every field before the sequence is joined, so `3.0` and `3` collide as one `xs:decimal`, `007` and `7` as one `xs:integer` |
 
+[020ef7f]: https://github.com/knroy/go-xml/commit/020ef7f
 [0aa92ca]: https://github.com/knroy/go-xml/commit/0aa92ca
 [0048fde]: https://github.com/knroy/go-xml/commit/0048fde
 [01b91ba]: https://github.com/knroy/go-xml/commit/01b91ba
@@ -766,6 +767,7 @@ here so every entry in this file sits under a release.
 [1d10349]: https://github.com/knroy/go-xml/commit/1d10349
 [1e21828]: https://github.com/knroy/go-xml/commit/1e21828
 [1e5e26c]: https://github.com/knroy/go-xml/commit/1e5e26c
+[1f638d1]: https://github.com/knroy/go-xml/commit/1f638d1
 [220b466]: https://github.com/knroy/go-xml/commit/220b466
 [22d2d64]: https://github.com/knroy/go-xml/commit/22d2d64
 [24c4cca]: https://github.com/knroy/go-xml/commit/24c4cca
@@ -792,6 +794,7 @@ here so every entry in this file sits under a release.
 [3f3cce3]: https://github.com/knroy/go-xml/commit/3f3cce3
 [40930d5]: https://github.com/knroy/go-xml/commit/40930d5
 [33263c8]: https://github.com/knroy/go-xml/commit/33263c8
+[411fdd5]: https://github.com/knroy/go-xml/commit/411fdd5
 [4410604]: https://github.com/knroy/go-xml/commit/4410604
 [4c06a1f]: https://github.com/knroy/go-xml/commit/4c06a1f
 [4c78fae]: https://github.com/knroy/go-xml/commit/4c78fae
@@ -816,6 +819,7 @@ here so every entry in this file sits under a release.
 [6eacc2d]: https://github.com/knroy/go-xml/commit/6eacc2d
 [704222f]: https://github.com/knroy/go-xml/commit/704222f
 [73d547b]: https://github.com/knroy/go-xml/commit/73d547b
+[74350cf]: https://github.com/knroy/go-xml/commit/74350cf
 [75cb3af]: https://github.com/knroy/go-xml/commit/75cb3af
 [75d633e]: https://github.com/knroy/go-xml/commit/75d633e
 [7668773]: https://github.com/knroy/go-xml/commit/7668773
@@ -924,6 +928,7 @@ here so every entry in this file sits under a release.
 [f88747b]: https://github.com/knroy/go-xml/commit/f88747b
 [f9c0cf5]: https://github.com/knroy/go-xml/commit/f9c0cf5
 [f9d96aa]: https://github.com/knroy/go-xml/commit/f9d96aa
+[fbe8f3c]: https://github.com/knroy/go-xml/commit/fbe8f3c
 [fe41f3c]: https://github.com/knroy/go-xml/commit/fe41f3c
 [0af8592]: https://github.com/knroy/go-xml/commit/0af8592
 [3831726]: https://github.com/knroy/go-xml/commit/3831726
