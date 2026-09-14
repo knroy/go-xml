@@ -9,9 +9,9 @@ import (
 	"github.com/knroy/go-xml/xpath"
 )
 
-// maxNestDepth is a depth cap, and it reported XPST0003 -- "the expression is
-// syntactically invalid" -- about a query that is nothing of the sort. The
-// code stays, because callers and the conformance suites read it, and
+// maxNestDepth is a depth cap, and it once reported XPST0003 -- "the
+// expression is syntactically invalid" -- about a query that is nothing of
+// the sort. It reports XPDY0130 now, the code §2.3.1 names for a limit, and
 // xdm.ErrResourceLimit is added alongside so a caller can tell "your query is
 // malformed" from "this parser declined to read one this deep".
 func TestNestingRefusalCarriesSentinelAndKeepsItsCode(t *testing.T) {
@@ -25,8 +25,8 @@ func TestNestingRefusalCarriesSentinelAndKeepsItsCode(t *testing.T) {
 		t.Errorf("errors.Is(%v, ErrResourceLimit) = false; a caller cannot "+
 			"tell this refusal from a malformed query", err)
 	}
-	if code := xdm.ErrorCode(err); code != "XPST0003" {
-		t.Errorf("code = %q, want XPST0003; the wrap must ADD the sentinel, "+
+	if code := xdm.ErrorCode(err); code != "XPDY0130" {
+		t.Errorf("code = %q, want XPDY0130; the wrap must ADD the sentinel, "+
 			"never replace the code", code)
 	}
 	if !strings.Contains(err.Error(), "expressions nested more than") {

@@ -221,7 +221,7 @@ func TestResourceLimitSentinelKeepsItsCode(t *testing.T) {
 					strings.Repeat(")", 2000), nil)
 				return err
 			},
-			"XPST0003", "nesting exceeds",
+			"XPDY0130", "nesting exceeds",
 		},
 		{
 			"item budget", func() error {

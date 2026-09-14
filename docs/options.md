@@ -44,12 +44,14 @@ over, and `MaxInt`/`MaxInt64`. The largest value a caller can name is always a
 
 "Your expression is malformed" and "this processor declined to do the work"
 are different conditions with different remedies, but they arrive looking
-alike. The specs define an error code for every *semantic* condition and none
-for "I gave up", so a limit has to borrow one: the parser's nesting guard
-reports `XPST0003`, which properly means a syntactically unacceptable
-expression. A caller reading the code alone would tell its user their
-expression was invalid, when in fact it was merely deeper than this processor
-will parse.
+alike. The specs define an error code for every *semantic* condition and,
+outside XPath, none for "I gave up", so most limits have to borrow one: the
+recursion cap reports `XPDY0001`, which properly means no context item is
+defined. XPath's own limits report `XPDY0130`, which §2.3.1 does define for
+an implementation-dependent limit, but the same code covers the parser's
+depth caps and the evaluation budgets alike, so a caller reading the code
+alone still cannot tell which ran out, or that the expression was well-formed
+and merely deeper than this processor will parse.
 
 `xdm.ErrResourceLimit` is a sentinel wrapped into those errors so the two can
 be told apart:
@@ -67,7 +69,7 @@ case err != nil:
 
 The sentinel is **added** to the error, never substituted for it. The spec
 error code and the leading message text are unchanged, so `xdm.ErrorCode`
-still returns `XPST0003`, the conformance suites still match, and existing
+still returns the code, the conformance suites still match, and existing
 code that reads the message keeps working. Wrap a new limit the same way:
 
 ```go
@@ -97,15 +99,16 @@ syntax error does *not* carry the sentinel.
 | `MaxBytes` | `xdm/parse.go` | *(none)* | as above |
 | entity expansion budget | `xdm/dtd_entities.go`, `xdm/dtd_external.go` | *(none)* | as above; shared across every document one XInclude pass parses and every parse one XPath evaluation performs, not per parse |
 | `maxIncludeDepth` / `maxIncludeFetches` | `xdm/xinclude.go` | *(none)* | the text already said "resource limit exceeded"; now `errors.Is` agrees |
-| `maxParseDepth` (expression) | `xpath/parser.go` | `XPST0003` | the expression is syntactically invalid |
-| `maxParseDepth` (type) | `xpath/parser_path.go` | `XPST0003` | as above; a *type* nests through a path the expression counter never sees |
-| `maxChainLength` | `xpath/parser.go` | `XPST0003` | as above; the expression is well-formed, and it is the *length* of one flat operator chain that is refused, not its nesting |
+| `maxParseDepth` (expression) | `xpath/parser.go` | `XPDY0130` | (the code §2.3.1 names for a limit; it borrowed `XPST0003`, "syntactically invalid", until 2026-09-14) |
+| `maxParseDepth` (type) | `xpath/parser_path.go` | `XPDY0130` | as above; a *type* nests through a path the expression counter never sees |
+| `maxChainLength` | `xpath/parser.go` | `XPDY0130` | as above; the expression is well-formed, and it is the *length* of one flat operator chain that is refused, not its nesting |
 | `MaxItems` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own) |
 | `MaxBytes` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own, and the suite already sanctions it for an over-long string — see `fn/codepoints-to-string.xml`. The wording says bytes rather than items, so the two refusals that share the code are still told apart) |
 | `Context.MaxDepth` | `xpath/context.go` | `XPDY0001` | no context item is defined |
 | `backtrackBudget` | `xpath/regex_backtrack.go` | `FORX0002` | the regular expression is invalid |
 | range bound | `xpath/operators.go` | `FOAR0002` | a numeric operation overflowed |
-| `maxNestDepth` | `xquery/nested.go` | `XPST0003` | the query is syntactically invalid |
+| `maxNestDepth` | `xquery/nested.go` | `XPDY0130` | as the XPath caps; it borrowed `XPST0003` until 2026-09-14 |
+| `maxConstructorDepth` | `xquery/enclosed.go` | `XPDY0130` | as above |
 | `MaxModules` / `MaxModuleBytes` | `xquery/module.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the module is not there |
 | `MaxSchemaBytes` | `xquery/schemaimport.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the schema is not there |
 | `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |

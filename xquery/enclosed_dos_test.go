@@ -100,8 +100,8 @@ func TestDeeplyNestedConstructorsAreRefused(t *testing.T) {
 				t.Errorf("n=%d: refused without the sentinel: %v; a caller "+
 					"cannot tell this from a malformed query", n, err)
 			}
-			if code := xdm.ErrorCode(err); code != "XPST0003" {
-				t.Errorf("n=%d: code %q, want XPST0003; the wrap must ADD the "+
+			if code := xdm.ErrorCode(err); code != "XPDY0130" {
+				t.Errorf("n=%d: code %q, want XPDY0130; the wrap must ADD the "+
 					"sentinel, never replace the code", n, code)
 			}
 			if el := time.Since(start); el > 5*time.Second {

@@ -30,32 +30,20 @@ A note on which direction matters. A **false reject** is valid input refused;
 a **false accept** is invalid input allowed. False rejects are the more serious
 kind — they break working documents — so they are listed first throughout.
 
-## The parser's depth and chain limits report `XPST0003`, not `XPDY0130`
+## The parser's depth and chain limits report `XPDY0130` now
 
-**Deliberate divergence, narrow.** XPath 3.1 §2.3.1 says that where "limitations
-may exist on the maximum numbers or sizes of various objects. An error **must**
-be raised if such a limitation is exceeded [err:XPDY0130]", and §F.2 glosses
-that code as "An implementation-dependent limit has been exceeded".
-`XPST0003` is defined as a *parse* error — §2.2.1 raises it when "the XPath
-expression is parsed into an internal representation" and that fails.
+**Fixed 2026-09-14.** XPath 3.1 §2.3.1 says that where "limitations may exist
+on the maximum numbers or sizes of various objects. An error **must** be
+raised if such a limitation is exceeded [err:XPDY0130]". Five limits reported
+the parse error `XPST0003` instead: `maxParseDepth` and the operator chain
+bound in `xpath/parser.go`, the type-nesting twin in `xpath/parser_path.go`,
+and XQuery's constructor and nesting caps. Each refuses a **well-formed**
+expression that is merely deeper or longer than this processor will parse.
 
-Two of this engine's limits report `XPST0003` where the specification names
-`XPDY0130`: `maxParseDepth` (`xpath/parser.go:554`) and the infix chain bound.
-Both refuse a **well-formed** expression that is merely deeper or longer than
-this processor will parse, which is the condition §2.3.1 describes.
-
-The reason is compatibility, and it is recorded at the call site: callers and
-the conformance suites match on `XPST0003` there. Both refusals carry
-`xdm.ErrResourceLimit` alongside the code, so an embedding caller can tell a
-resource refusal from a syntax fault without parsing the message.
-
-**Everything else already uses `XPDY0130`** — the item and byte budgets
-(`xpath/context.go`), and, since `CompileWith` landed, `MaxBytes` and compile
-cancellation, neither of which any suite matches on.
-
-Changing the two parser limits would mean re-checking every suite case that
-expects `XPST0003` for an over-deep expression; it has not been measured and
-is not scheduled.
+The recorded reason for keeping `XPST0003` was that "callers and the
+conformance suites match on it". Measured, no suite case does: QT3 and both
+XSLT suites are unmoved with the code changed. The messages are unchanged and
+every site still wraps `xdm.ErrResourceLimit`.
 
 ## Where the numbers stand
 

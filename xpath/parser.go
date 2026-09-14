@@ -117,16 +117,15 @@ const maxChainLength = 10000
 // rejection this bound exists to avoid. Only one chain's own length matters,
 // because only one chain's length becomes stack depth.
 //
-// XPST0003 is borrowed for the same reason parseExprSingle borrows it: the
-// specs give no code for "I gave up", callers and the conformance suites
-// match on the code, and the expression really is one this processor will not
-// parse. xdm.ErrResourceLimit is wrapped alongside so errors.Is separates the
-// refusal from a genuine syntax fault.
+// XPDY0130 is the code XPath 3.1 §2.3.1 names for an implementation-
+// dependent limit being exceeded, and the chain is well-formed, so a syntax
+// code would misdescribe it. xdm.ErrResourceLimit is wrapped alongside so
+// errors.Is separates the refusal from every other error.
 func chainTooLong(n int, op string) error {
 	if n <= maxChainLength {
 		return nil
 	}
-	return fmt.Errorf("XPST0003: %q operator chain exceeds %d terms: %w",
+	return fmt.Errorf("XPDY0130: %q operator chain exceeds %d terms: %w",
 		op, maxChainLength, xdm.ErrResourceLimit)
 }
 
@@ -552,12 +551,11 @@ func (p *Parser) parseExprSingle() (Expr, error) {
 	p.depth++
 	defer func() { p.depth-- }()
 	if p.depth > maxParseDepth {
-		// XPST0003 is kept because callers and the conformance suites match
-		// on it, but the condition is a resource refusal rather than a
-		// syntax fault: the expression is well-formed, merely deeper than
-		// this processor will parse. The sentinel is added alongside the
-		// code so an embedding caller can tell the two apart.
-		return nil, fmt.Errorf("XPST0003: expression nesting exceeds %d levels: %w",
+		// The expression is well-formed, merely deeper than this processor
+		// will parse, which is the condition §2.3.1 gives XPDY0130 for. The
+		// sentinel is added alongside the code so an embedding caller can
+		// tell a refusal from every other error.
+		return nil, fmt.Errorf("XPDY0130: expression nesting exceeds %d levels: %w",
 			maxParseDepth, xdm.ErrResourceLimit)
 	}
 	t := p.cur()

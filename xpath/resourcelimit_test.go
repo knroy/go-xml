@@ -14,8 +14,10 @@ import (
 //
 //   - XPDY0001 means "no context item is defined". A recursion cap has a
 //     context; it is deep.
-//   - XPST0003 means "the expression is syntactically invalid". A type nested
-//     past the parser's cap is perfectly well-formed.
+//   - XPDY0130 is the one code that fits: §2.3.1 names it for an
+//     implementation-dependent limit. The parser's depth and chain caps
+//     report it now; they once borrowed XPST0003, "syntactically invalid",
+//     about a type or expression that was perfectly well-formed.
 //   - FORX0002 means "invalid regular expression". A pattern that exhausts the
 //     backtracking budget is valid; the budget is what ran out.
 //   - FOAR0002 means "numeric overflow or underflow". Nothing overflowed when
@@ -61,7 +63,7 @@ func TestResourceLimitsCarrySentinelAndKeepTheirCode(t *testing.T) {
 					strings.Repeat(")", 2000), nil)
 				return err
 			},
-			"XPST0003", "type nesting exceeds",
+			"XPDY0130", "type nesting exceeds",
 		},
 		{
 			// xpath/parser.go, chainTooLong. The expression is well-formed
@@ -73,7 +75,7 @@ func TestResourceLimitsCarrySentinelAndKeepTheirCode(t *testing.T) {
 					strings.Repeat("+1", maxChainLength+1), nil)
 				return err
 			},
-			"XPST0003", "operator chain exceeds",
+			"XPDY0130", "operator chain exceeds",
 		},
 		{
 			// xpath/regex_backtrack.go, errBacktrackBudget. The pattern

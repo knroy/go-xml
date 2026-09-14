@@ -49,14 +49,14 @@ type enclosedScan struct {
 
 // errTooDeep reports the nesting refusal.
 //
-// XPST0003 is kept because callers and the conformance suites read the code
-// out of the message, but a query this deep is well-formed rather than
-// malformed: it is merely nested further than this processor will scan. The
-// sentinel is wrapped in alongside the code, never in place of it, so an
-// embedding caller can tell a refusal from a syntax fault. This is the same
-// shape xpath's own depth refusal takes, and the message matches it.
+// A query this deep is well-formed rather than malformed: it is merely
+// nested further than this processor will scan, which is what XPath 3.1
+// §2.3.1 gives XPDY0130 for. The sentinel is wrapped in alongside the code,
+// never in place of it, so an embedding caller can tell a refusal from every
+// other error. This is the same shape xpath's own depth refusal takes, and
+// the message matches it.
 func errTooDeep() error {
-	return fmt.Errorf("XPST0003: expression nesting exceeds %d levels: %w",
+	return fmt.Errorf("XPDY0130: expression nesting exceeds %d levels: %w",
 		maxConstructorDepth, xdm.ErrResourceLimit)
 }
 

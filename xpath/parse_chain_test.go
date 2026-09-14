@@ -46,12 +46,13 @@ func TestLongOperatorChainIsRefusedNotFatal(t *testing.T) {
 			if !strings.Contains(err.Error(), "operator chain exceeds") {
 				t.Fatalf("refused for the wrong reason: %v", err)
 			}
-			// The code is borrowed and the sentinel is what tells a caller
-			// this was a refusal rather than a syntax fault. Both must hold:
-			// the suites read the code out of the message, and an embedding
-			// caller reads the sentinel.
-			if !strings.HasPrefix(err.Error(), "XPST0003:") {
-				t.Errorf("error does not begin with the borrowed code: %v", err)
+			// XPDY0130 is the code §2.3.1 names for a limit, and the
+			// sentinel is what tells a caller this was a refusal rather
+			// than any other error. Both must hold: the suites read the
+			// code out of the message, and an embedding caller reads the
+			// sentinel.
+			if !strings.HasPrefix(err.Error(), "XPDY0130:") {
+				t.Errorf("error does not begin with the limit code: %v", err)
 			}
 			if !errors.Is(err, xdm.ErrResourceLimit) {
 				t.Errorf("error does not wrap xdm.ErrResourceLimit: %v", err)

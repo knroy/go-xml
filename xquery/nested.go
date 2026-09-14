@@ -34,14 +34,14 @@ const maxNestDepth = 200
 // that recurses does so on a strictly shorter substring.
 func (p *parser) parseNestedExpr() ([]node, error) {
 	if p.depth++; p.depth > maxNestDepth {
-		// XPST0003 is kept -- callers and the conformance suites match on
-		// it -- but the query is not malformed: it is well-formed and
-		// merely nested deeper than this parser will read. The sentinel is
-		// wrapped in alongside so a caller can tell a refusal from a syntax
-		// fault. See xdm.ErrResourceLimit. errorf appends its own offset
-		// suffix, so the wrap goes outside it rather than into the format.
+		// The query is not malformed: it is well-formed and merely nested
+		// deeper than this parser will read, which is what XPath 3.1 §2.3.1
+		// gives XPDY0130 for. The sentinel is wrapped in alongside so a
+		// caller can tell a refusal from every other error. See
+		// xdm.ErrResourceLimit. errorf appends its own offset suffix, so
+		// the wrap goes outside it rather than into the format.
 		return nil, fmt.Errorf("%s: %w", p.errorf(
-			"XPST0003: expressions nested more than %d deep", maxNestDepth),
+			"XPDY0130: expressions nested more than %d deep", maxNestDepth),
 			xdm.ErrResourceLimit)
 	}
 	defer func() { p.depth-- }()

@@ -1376,12 +1376,11 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 	defer func() { p.depth-- }()
 	if p.depth > maxParseDepth {
 		// The exact twin of the expression-nesting guard in parser.go, and
-		// it is wrapped the same way: XPST0003 is kept because callers and
-		// the conformance suites match on it, but the type is well-formed
-		// and merely deeper than this processor will parse, so the sentinel
-		// is added alongside. See xdm.ErrResourceLimit.
+		// it is wrapped the same way: the type is well-formed and merely
+		// deeper than this processor will parse, so §2.3.1's XPDY0130 with
+		// the sentinel alongside. See xdm.ErrResourceLimit.
 		return st, resourceLimit(p.errorf(
-			"XPST0003: type nesting exceeds %d levels", maxParseDepth))
+			"XPDY0130: type nesting exceeds %d levels", maxParseDepth))
 	}
 
 	t := p.cur()

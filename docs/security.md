@@ -114,14 +114,18 @@ rejecting direction:
 derivative bound · the XPath regex step and depth budgets ·
 `xpath` `maxChainLength` / `maxOptimizeDepth`.
 
-"Refused loudly" needed qualifying, and now it holds in both halves. A limit
-that raises an error has to borrow a *semantic* error code, because the specs
-define none for "I gave up" — `XPDY0001` for a depth cap, `FORX0002` for a
-valid pattern whose budget ran out, `cvc-elt.1` for a document that was never
-assessed. Read alone, each of those tells the caller something untrue about
-its input. Every such site now also wraps `xdm.ErrResourceLimit`, so
-`errors.Is` separates a refusal from a fault while the code and message stay
-byte-identical for the suites; `docs/options.md` tabulates the sites.
+"Refused loudly" needed qualifying, and now it holds in both halves. Most
+limits that raise an error have to borrow a *semantic* error code, because
+the specs define none for "I gave up" — `XPDY0001` for a depth cap,
+`FORX0002` for a valid pattern whose budget ran out, `cvc-elt.1` for a
+document that was never assessed. Read alone, each of those tells the caller
+something untrue about its input. XPath is the exception: §2.3.1 defines
+`XPDY0130` for an implementation-dependent limit, and the parser's depth,
+chain and type-nesting caps and XQuery's constructor and nesting caps report
+it, having borrowed the syntax code `XPST0003` until 2026-09-14. Every such
+site also wraps `xdm.ErrResourceLimit`, so `errors.Is` separates a refusal
+from a fault while the message stays byte-identical for the suites;
+`docs/options.md` tabulates the sites.
 
 The `subsumeMaxStates`, `subsumeMaxProduct` and `branchLimit` declines are the
 other half, and they are the quiet ones: they raise nothing at all, returning
