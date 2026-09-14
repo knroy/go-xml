@@ -23,7 +23,7 @@ let something through, and the column that matters is the last one.
 <!-- BEGIN GENERATED LAYER COUNTS -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** | 2,332 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,333 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -912,6 +912,40 @@ head that list and no longer does: it was measured and found implemented.) The
 XSLT 3.0 suite has 14,601 cases and 11,518 in scope; counting the difference as
 failures would understate the engine, and counting it as passes would overstate
 it. Both figures are reported separately for that reason.
+
+**But not every skip is the same kind of skip**, and one number for all of them
+hid the difference. Each reason string in `tests/xslts/deps.go` now carries a
+class, and the suite summary prints both: `skipped N: out of scope A,
+unimplemented B`. *Out of scope* is what the suite itself says a conforming
+processor may leave out — the wrong `<spec>` version, a construct that only
+exists in the version not being measured, a Unicode version, an optional
+numbering language or calendar, a document only the network can supply, a case
+that needs a feature this engine *has* to be absent. *Unimplemented* is the rest:
+a gap wearing a skip label. At the last run that is **2,949 out of scope and 134
+unimplemented** of the 3,083 XSLT 3.0 skips, and **8,332 / 68** of the 8,400 at
+the 2.0 target. The XSLT 3.0 unimplemented 134 are: `disabling_output_escaping`
+(33), `xsl-stylesheet-processing-instruction` (18), `enable_assertions` (24),
+`package_version_resolution` (12), `additional_normalization_form` (12),
+`streaming-fallback` (7), `maximum_number_of_decimal_digits` (7),
+`supported_calendars_in_date_formatting_functions` (4), `HTML4`/`HTML5` (6),
+`unparsed_text_encoding` (3), and one or two each of `default_output_encoding`,
+`ignore_doc_failure`, `default_language_for_numbering`,
+`detect_accumulator_cycles`, `extension-function` and
+`recognize_id_as_uri_fragment`. The first two are features this engine does not
+implement; the rest are dependencies the harness does not model, which is the
+same admission from the other side — it cannot run the case under the conditions
+the case asked for.
+
+Folding those 134 into the denominator as failures is a defensible alternative
+reading, and it gives 11,492 of 11,652, or 98.63%. It is **not** the figure this
+repository publishes, for the same reason the other skips are not: an
+unmodelled dependency is not a measured disagreement with the specification, and
+scoring it as one would put a number on cases that were never run. The published
+pass rate stays over the in-scope denominator, and the split is published beside
+it so a reader can do the other arithmetic deliberately rather than be handed it
+silently. A reason string with no class fails
+`TestSkipReasonsAreClassified`, and the two counts failing to sum to the skipped
+total fails the suite test itself.
 
 ---
 

@@ -395,6 +395,29 @@ func TestStatsPageCarriesProvenance(t *testing.T) {
 	}
 }
 
+// The XSLT lanes publish their skips split by class, because a single skipped
+// figure let ninety-odd "not implemented" exclusions read as out of scope. A
+// lane that records no split renders an empty cell rather than "0 / 0".
+func TestXSLTLanesPublishTheSkipSplit(t *testing.T) {
+	r := shipped(t)
+	out := r.renderStats()
+	if !strings.Contains(out, "| skipped: out of scope / unimplemented |") {
+		t.Error("docs/stats.md has no skip-split column")
+	}
+	for _, id := range []string{"xslt-2.0", "xslt-3.0"} {
+		s := r.Suite(id)
+		if s.SkippedOutOfScope == 0 || s.SkippedUnimplemented == 0 {
+			t.Errorf("%s records skips %d / %d; both classes must be filled from a run", id, s.SkippedOutOfScope, s.SkippedUnimplemented)
+		}
+		if want := "| " + skippedCell(s) + " |"; !strings.Contains(out, want) {
+			t.Errorf("%s's skip split %q is not on the page", id, want)
+		}
+	}
+	if got := skippedCell(Suite{}); got != "" {
+		t.Errorf("a lane with no split renders %q, want an empty cell", got)
+	}
+}
+
 // The corpora exclusion is structural and must stay so. 577 and 225 are real
 // measurements, but they are not disagreements with a specification, and a
 // total that swallowed them would be a conformance claim against tests nobody

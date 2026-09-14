@@ -1,5 +1,5 @@
 {
-  "_comment": "The single source of truth for every measured figure this repository publishes. docs/stats.md is generated from this file end to end, and every figure quoted in README.md, docs/conformance-gaps.md, docs/testing.md and docs/todo.md is a generated region fed from it; do not edit those regions by hand. Suite counts are recorded here because a suite run costs minutes: re-measure with tests/check.sh, copy the passing counts here with the run date and command, then run `go run tests/conformance-docs.go`. Counts derived from the source tree are NOT recorded here -- only their counting method is -- because a number typed into a data file is the same defect as a number typed into a sentence.",
+  "_comment": "The single source of truth for every measured figure this repository publishes. docs/stats.md is generated from this file end to end, and every figure quoted in README.md, docs/conformance-gaps.md, docs/testing.md and docs/todo.md is a generated region fed from it; do not edit those regions by hand. The two skip counts on the XSLT lanes come from the same run: the summary line prints \"skipped N: out of scope A, unimplemented B\" and the classification lives in tests/xslts/deps.go. Suite counts are recorded here because a suite run costs minutes: re-measure with tests/check.sh, copy the passing counts here with the run date and command, then run `go run tests/conformance-docs.go`. Counts derived from the source tree are NOT recorded here -- only their counting method is -- because a number typed into a data file is the same defect as a number typed into a sentence.",
   "generated_by": "tests/conformance-docs.go",
   "suites": [
     {
@@ -66,6 +66,8 @@
       "total": 6201,
       "run_date": "2026-09-11",
       "command": "tests/check.sh (TestXSLTSuite)",
+      "skipped_out_of_scope": 8332,
+      "skipped_unimplemented": 68,
       "cases": [
         {
           "id": "format-number-070",
@@ -119,6 +121,8 @@
       "total": 11518,
       "run_date": "2026-09-14",
       "command": "tests/check.sh (TestXSLT30Suite)",
+      "skipped_out_of_scope": 2949,
+      "skipped_unimplemented": 134,
       "cases": [
         {
           "id": "accept-913",

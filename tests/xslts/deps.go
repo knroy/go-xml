@@ -73,6 +73,69 @@ var unsupportedFeatures = map[string]string{
 	"xsl-stylesheet-processing-instruction": "not implemented",
 }
 
+// The two classes of skip.
+//
+// A headline "N skipped" treats every exclusion alike, and they are not: a
+// case the suite itself says a conforming processor may leave out (the wrong
+// spec version, a Unicode version, an optional numbering language) is out of
+// scope, while a case excluded because this engine lacks the feature, or
+// because the harness does not model the dependency, is a gap wearing a skip
+// label. Publishing one number for both let the second hide inside the first.
+const (
+	skipOutOfScope    = "out of scope"
+	skipUnimplemented = "unimplemented"
+)
+
+// skipReasonClasses assigns every reason string inScope and outOfScopeError
+// can produce to a class, by exact text or by the prefix of a parameterised
+// one. It sits beside the strings it classifies so that adding a reason
+// without a class is caught here (TestSkipReasonsAreClassified) rather than
+// silently swelling one class or the other; skipClass returns "" for a
+// string it does not know, and the suite tests fail when the two classes do
+// not sum to the skipped total.
+var skipReasonClasses = []struct {
+	prefix string
+	class  string
+}{
+	// The version gate and the XSLT 3.0-by-construction exclusions: a 2.0
+	// processor is not expected to run them.
+	{"spec ", skipOutOfScope},
+	{"streamability (XSLT 3.0)", skipOutOfScope},
+	{"xsl:package (XSLT 3.0)", skipOutOfScope},
+	{"initial function (XSLT 3.0)", skipOutOfScope},
+	{"adaptive/json output method (XSLT 3.0)", skipOutOfScope},
+	{"fn:current-output-uri (XSLT 3.0)", skipOutOfScope},
+	// A feature the engine has that the case needs absent.
+	{"needs ", skipOutOfScope},
+	// Environment dependencies the suite declares and the harness models but
+	// does not satisfy: a Unicode version, a numbering language, a document
+	// only the network supplies.
+	{"depends on ", skipOutOfScope},
+	// Everything below is a gap. An unsupportedFeatures entry is a feature
+	// this engine does not implement; an unknown feature or an unmodelled
+	// dependency is one the harness cannot even say it lacks; a document the
+	// parser refuses is a limitation the suite never declared.
+	{"unknown feature ", skipUnimplemented},
+	{"unmodelled dependency ", skipUnimplemented},
+	{"document is not UTF-8 or UTF-16", skipUnimplemented},
+}
+
+// skipClass reports which class a skip reason belongs to, or "" if none is
+// recorded for it.
+func skipClass(why string) string {
+	for _, c := range skipReasonClasses {
+		if strings.HasPrefix(why, c.prefix) {
+			return c.class
+		}
+	}
+	for f := range unsupportedFeatures {
+		if strings.HasPrefix(why, f+": ") {
+			return skipUnimplemented
+		}
+	}
+	return ""
+}
+
 // supports reports whether the engine offers an optional feature to a
 // processor of the given version.
 //

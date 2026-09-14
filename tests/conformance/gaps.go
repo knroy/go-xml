@@ -69,6 +69,15 @@ type Suite struct {
 	Command       string `json:"command"`
 	Cases         []Case `json:"cases"`
 
+	// The skipped cases, split by class. Out of scope is what the suite says
+	// a conforming processor may leave out -- the wrong spec version, a
+	// Unicode version, an optional numbering language; unimplemented is a
+	// feature this engine lacks or a dependency the harness does not model.
+	// Only the XSLT lanes record them (tests/xslts/deps.go draws the line);
+	// a lane that does not is rendered with an empty cell, not a zero.
+	SkippedOutOfScope    int `json:"skipped_out_of_scope,omitempty"`
+	SkippedUnimplemented int `json:"skipped_unimplemented,omitempty"`
+
 	// Why a suite's cases are not all enumerated above. Rendered nowhere; it
 	// is here so the JSON explains itself to whoever next edits it.
 	UnenumeratedNote string `json:"unenumerated_note,omitempty"`

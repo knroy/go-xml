@@ -484,6 +484,15 @@ func (r *Results) renderGapsXtse() string {
 	return fmt.Sprintf("**%d of the %d want an `XTSE3430`** — a refusal of a stylesheet as\n", b.Of, x.Disagreements)
 }
 
+// skippedCell renders a suite's skip split, or nothing for a lane that does
+// not record one: a "0 / 0" would read as a lane with no skips.
+func skippedCell(s Suite) string {
+	if s.SkippedOutOfScope == 0 && s.SkippedUnimplemented == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s / %s", commas(s.SkippedOutOfScope), commas(s.SkippedUnimplemented))
+}
+
 // cell escapes a value for a Markdown table cell. A pipe inside a cell ends
 // the cell, even inside backticks, so the counting commands -- which are shell
 // pipelines and full of them -- would silently shred the table they are
@@ -537,14 +546,18 @@ func (r *Results) renderStats() string {
 	b.WriteString("are written to `tests/conformance/results.json` from a run of `tests/check.sh`,\n")
 	b.WriteString("and `tests/docfigures.sh` cross-checks the same numbers against\n")
 	b.WriteString("`tests/ratchet.txt`, which that run rewrites by a different route.\n\n")
-	b.WriteString("| suite | edition | in scope | passing | now | disagreements | measured | command |\n")
-	b.WriteString("|---|---|---:|---:|---|---:|---|---|\n")
+	b.WriteString("| suite | edition | in scope | passing | now | disagreements | skipped: out of scope / unimplemented | measured | command |\n")
+	b.WriteString("|---|---|---:|---:|---|---:|---:|---|---|\n")
 	for _, s := range r.Suites {
-		b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | **%d** | %s | `%s` |\n",
+		b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | **%d** | %s | %s | `%s` |\n",
 			cell(s.Suite), cell(s.Edition), commas(s.Total), commas(s.Passed), pct(s.Passed, s.Total),
-			s.Disagreements, s.RunDate, cell(s.Command)))
+			s.Disagreements, skippedCell(s), s.RunDate, cell(s.Command)))
 	}
-	b.WriteString(fmt.Sprintf("| **Total** | | | | | **%d** | | |\n\n", r.Total()))
+	b.WriteString(fmt.Sprintf("| **Total** | | | | | **%d** | | | |\n\n", r.Total()))
+	b.WriteString("The skipped column is the XSLT lanes' exclusions split by class: cases the\n")
+	b.WriteString("suite says a conforming processor may leave out, and cases excluded because a\n")
+	b.WriteString("feature is not implemented or a dependency is not modelled. Neither is in the\n")
+	b.WriteString("denominator; docs/testing.md explains the line between them.\n\n")
 	b.WriteString(fmt.Sprintf("W3C disagreements: %s.\n\n", sumSentence(r.Suites)))
 
 	b.WriteString("## Real-world corpora\n\n")

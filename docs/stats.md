@@ -23,7 +23,7 @@ claim is only as good as the command behind it.
 
 | figure | count | counted by |
 |---|---:|---|
-| Unit tests | 2,332 | `grep -rn '^func Test' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
+| Unit tests | 2,333 | `grep -rn '^func Test' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
 | Fuzz targets | 11 | `grep -rn '^func Fuzz' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
 | Limit boundary tests | 14 | `grep -hc '^func Test' ./*/limits_boundary_test.go \| awk '{n += $1} END {print n + 0}'` |
 
@@ -34,18 +34,23 @@ are written to `tests/conformance/results.json` from a run of `tests/check.sh`,
 and `tests/docfigures.sh` cross-checks the same numbers against
 `tests/ratchet.txt`, which that run rewrites by a different route.
 
-| suite | edition | in scope | passing | now | disagreements | measured | command |
-|---|---|---:|---:|---|---:|---|---|
-| QT3 — XPath 2.0 | XPath 2.0 (Second Edition) | 15,217 | 15,217 | 100.00% | **0** | 2026-09-11 | `tests/check.sh (TestQT3, lane xpath-2.0)` |
-| QT3 — XPath 3.0 | XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** | 2026-09-11 | `tests/check.sh (TestQT3, lane xpath-3.0)` |
-| QT3 — XPath 3.1 | XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** | 2026-09-11 | `tests/check.sh (TestQT3, lane xpath-3.1)` |
-| QT3 — XQuery 3.1 | XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** | 2026-09-11 | `tests/check.sh (TestQT3XQuery)` |
-| W3C XSLT 2.0 | XSLT 2.0 (Second Edition) | 6,201 | 6,193 | 99.87% | **8** | 2026-09-11 | `tests/check.sh (TestXSLTSuite)` |
-| W3C XSLT 3.0 | XSLT 3.0 | 11,518 | 11,492 | 99.77% | **26** | 2026-09-14 | `tests/check.sh (TestXSLT30Suite)` |
-| W3C xsdtests 1.0 | XML Schema 1.0 (Second Edition) | 39,388 | 39,358 | 99.92% | **30** | 2026-09-11 | `tests/check.sh (XSD10)` |
-| W3C xsdtests 1.1 | XML Schema 1.1 | 41,598 | 41,567 | 99.93% | **31** | 2026-09-11 | `tests/check.sh (XSD11)` |
-| Clark spectest | RELAX NG 1.0 | 965 | 965 | 100.00% | **0** | 2026-09-11 | `tests/check.sh (RelaxNGSpectest)` |
-| **Total** | | | | | **96** | | |
+| suite | edition | in scope | passing | now | disagreements | skipped: out of scope / unimplemented | measured | command |
+|---|---|---:|---:|---|---:|---:|---|---|
+| QT3 — XPath 2.0 | XPath 2.0 (Second Edition) | 15,217 | 15,217 | 100.00% | **0** |  | 2026-09-11 | `tests/check.sh (TestQT3, lane xpath-2.0)` |
+| QT3 — XPath 3.0 | XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |  | 2026-09-11 | `tests/check.sh (TestQT3, lane xpath-3.0)` |
+| QT3 — XPath 3.1 | XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |  | 2026-09-11 | `tests/check.sh (TestQT3, lane xpath-3.1)` |
+| QT3 — XQuery 3.1 | XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** |  | 2026-09-11 | `tests/check.sh (TestQT3XQuery)` |
+| W3C XSLT 2.0 | XSLT 2.0 (Second Edition) | 6,201 | 6,193 | 99.87% | **8** | 8,332 / 68 | 2026-09-11 | `tests/check.sh (TestXSLTSuite)` |
+| W3C XSLT 3.0 | XSLT 3.0 | 11,518 | 11,492 | 99.77% | **26** | 2,949 / 134 | 2026-09-14 | `tests/check.sh (TestXSLT30Suite)` |
+| W3C xsdtests 1.0 | XML Schema 1.0 (Second Edition) | 39,388 | 39,358 | 99.92% | **30** |  | 2026-09-11 | `tests/check.sh (XSD10)` |
+| W3C xsdtests 1.1 | XML Schema 1.1 | 41,598 | 41,567 | 99.93% | **31** |  | 2026-09-11 | `tests/check.sh (XSD11)` |
+| Clark spectest | RELAX NG 1.0 | 965 | 965 | 100.00% | **0** |  | 2026-09-11 | `tests/check.sh (RelaxNGSpectest)` |
+| **Total** | | | | | **96** | | | |
+
+The skipped column is the XSLT lanes' exclusions split by class: cases the
+suite says a conforming processor may leave out, and cases excluded because a
+feature is not implemented or a dependency is not modelled. Neither is in the
+denominator; docs/testing.md explains the line between them.
 
 W3C disagreements: 0 + 0 + 0 + 1 + 8 + 26 + 30 + 31 + 0 = 96.
 

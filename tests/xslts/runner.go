@@ -69,6 +69,10 @@ type Summary struct {
 	// SkipReasons counts why tests were left out, so that the scope of a run
 	// is visible rather than implied by the total.
 	SkipReasons map[string]int
+	// SkippedOutOfScope and SkippedUnimplemented split Skipped by class --
+	// see skipReasonClasses. A reason with no class is counted in neither,
+	// so the two summing to Skipped is what the suite tests assert.
+	SkippedOutOfScope, SkippedUnimplemented int
 	// BySet counts each test-set separately. A single percentage hides which
 	// features work: a set failing 96 of 100 is an unimplemented feature,
 	// while one failing 5 of 300 is a handful of edge cases, and the two want
@@ -146,6 +150,12 @@ func (r *Runner) Run() (*Summary, error) {
 			case out.Skipped:
 				sum.Skipped++
 				sum.SkipReasons[out.Why]++
+				switch skipClass(out.Why) {
+				case skipOutOfScope:
+					sum.SkippedOutOfScope++
+				case skipUnimplemented:
+					sum.SkippedUnimplemented++
+				}
 				st.Skipped++
 			case out.Pass:
 				sum.Passed++
