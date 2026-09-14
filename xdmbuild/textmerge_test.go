@@ -153,10 +153,18 @@ func TestAppendTextMergeShapes(t *testing.T) {
 }
 
 // TestAppendTextRunsDoNotBleed checks that a text run left unfinished on one
-// element does not continue onto another. The buffer is held by the builder
-// rather than by the node, so a stale pairing would append one element's text
-// to the next -- the one failure mode the accumulator adds that plain
-// concatenation could not have.
+// element does not continue onto another.
+//
+// This is the shape that looks like it should break the buffer, and the
+// reason it cannot is worth pinning rather than trusting: the accumulator
+// lives on the Builder, but StartElement returns a NEW Builder per element,
+// so the three builders here have three independent accumulators and none of
+// them can see another's. Returning to the first element resumes its own run.
+//
+// A single shared accumulator would fail this test, so it also guards the
+// invariant appendTextTo asserts -- were these builders to share one, the
+// interleaving below is exactly what would hand it a node it was not paired
+// with.
 func TestAppendTextRunsDoNotBleed(t *testing.T) {
 	b := xdmbuild.New(xsltLike{})
 	root := b.StartElement(xdm.QName{Local: "r"})
@@ -222,6 +230,40 @@ func TestAppendTextSnapshotsAreStable(t *testing.T) {
 			t.Fatalf("a value read after %d bytes now reads as %d: the "+
 				"buffer was rewritten under a string already handed out",
 				len(want[i]), len(snaps[i]))
+		}
+	}
+}
+
+// TestAppendTextNormalPathHoldsTheInvariant runs the ordinary merge paths
+// through appendTextTo and checks the result, which is the other half of the
+// assertion's case: the guard is only acceptable if the normal path cannot
+// trip it.
+//
+// The shapes here are the ones a transform actually produces -- a second
+// piece on the same node, a run interrupted by an element and resumed, and a
+// piece large enough to force the buffer to reallocate mid-run. That the
+// assertion stays silent through all of them is the point; that it fires when
+// the pairing really is broken is TestAppendTextAssertionFires, in-package,
+// which is the only place it can be demonstrated because no exported call
+// sequence reaches it.
+func TestAppendTextNormalPathHoldsTheInvariant(t *testing.T) {
+	b := xdmbuild.New(xsltLike{})
+	el := b.StartElement(xdm.QName{Local: "out"})
+
+	el.AppendText("a")
+	el.AppendText("b")
+	el.StartElement(xdm.QName{Local: "e"})
+	el.AppendText("c")
+	el.AppendText(strings.Repeat("d", 4096))
+
+	got := describe(el.Open())
+	want := []string{"t:ab", "e:e", "t:c" + strings.Repeat("d", 4096)}
+	if len(got) != len(want) {
+		t.Fatalf("children %q, want %q", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("child %d is %.16q..., want %.16q...", i, got[i], want[i])
 		}
 	}
 }

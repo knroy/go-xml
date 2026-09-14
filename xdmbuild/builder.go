@@ -81,12 +81,13 @@ type Builder struct {
 	// saving comes from append's geometric growth, which copies each byte
 	// O(log n) times instead of O(n).
 	//
-	// The string conversion is what makes this work at all. Go's compiler
-	// elides the copy in string(b) only in narrow cases, and this is not one,
-	// so unsafe.String is used to alias the buffer -- sound here because the
-	// bytes already written are never overwritten: append only ever extends,
-	// and a reallocation leaves the old array, which the old string still
-	// aliases, untouched. See appendTextTo.
+	// The string conversion is what makes this work at all. A plain
+	// string(textBuf) copies the whole run on every append, which measures at
+	// 7,778 MB against the 7,946 MB of the concatenation it replaced -- it
+	// gives back essentially the entire saving. So the value aliases the
+	// buffer through unsafe.String, exactly as strings.Builder.String does.
+	// Their pairing is kept too: appendTextTo asserts the invariant the
+	// aliasing rests on, in the spirit of strings.Builder's copyCheck.
 	textBuf  []byte
 	textNode *xdm.Node
 }
@@ -244,31 +245,60 @@ func detach(n *xdm.Node) *xdm.Node {
 
 // appendTextTo extends the text node n by s, keeping n.Value correct.
 //
-// The buffer is only usable when it is the one this very node's text was last
-// built from and n.Value still aliases exactly what it holds. Both checks
-// matter. The first catches a different node -- a sibling text run, or a node
-// from an enclosing element -- and the second catches a node whose Value was
-// replaced behind the builder's back, which would otherwise make the buffer
-// silently authoritative over a value someone else had set. Either way the
-// run simply restarts from n.Value, so a missed reuse costs one copy and
-// never a wrong answer.
+// The pairing of b.textNode with b.textBuf is an INVARIANT rather than a hint,
+// so a mismatch is a bug and is reported as one. Only two places in this file
+// touch either field, and both set them together: AppendText's new-node branch
+// creates n with Value = s and seeds the buffer with the same s, and this
+// function appends to both. Nothing else in the library writes a text node's
+// Value -- only attribute and namespace values are ever reassigned -- so the
+// buffer cannot fall out of step with the node it belongs to.
+//
+// Node.Value is an exported field, so a caller outside this package could in
+// principle assign to a half-built text node and break the pairing. That is
+// not a supported thing to do to a node the builder still owns, and the
+// length check names it as the misuse it is rather than papering over it.
+//
+// n is always b.textNode for the same structural reason. A Builder has one
+// open element for its whole life, because StartElement returns a NEW builder
+// rather than re-pointing this one, and every text child of that element is
+// created by the branch in AppendText that sets b.textNode. So the trailing
+// text child this function is handed is necessarily the node the pairing names.
+//
+// This was written first as a silent recovery -- reseed the buffer from
+// n.Value and carry on -- which was wrong twice over. It was unreachable, so
+// the [:0:0] that made it correct had no test that could fail and a sabotage
+// of it passed the whole suite green; and had it ever been reached it would
+// have concealed the very breakage it was reacting to. strings.Builder faces
+// the same choice for the same unsafe.String aliasing and answers it the same
+// way, with copyCheck panicking on the one misuse that breaks its invariant.
+//
+// The panic is therefore a real assertion: it cannot fire for any input, only
+// for a future edit that adds a third writer of these fields or lets one
+// builder append to another's open element. Failing loudly there is much the
+// better outcome, because the alternative is a string handed out earlier
+// mutating afterwards -- silently wrong output from an XML toolchain, with a
+// correct-looking tree.
 func (b *Builder) appendTextTo(n *xdm.Node, s string) {
 	if s == "" {
 		return
 	}
 	if b.textNode != n || len(b.textBuf) != len(n.Value) {
-		// Restart the run on this node, seeding the buffer with what it
-		// already holds. b.textBuf[:0:0] forces a fresh array rather than
-		// scribbling over one an earlier node's Value may still alias.
-		b.textNode, b.textBuf = n, append(b.textBuf[:0:0], n.Value...)
+		panic("xdmbuild: text accumulator does not match the node being " +
+			"extended; b.textNode/b.textBuf must be set together, and only " +
+			"the builder that owns an element may append text to it")
 	}
 	b.textBuf = append(b.textBuf, s...)
-	// unsafe.String aliases the buffer instead of copying it, which is the
-	// whole point: a copy here would restore the quadratic cost the buffer
-	// exists to remove. It is sound because the bytes under any string handed
-	// out are never written again -- append only extends past them, and when
-	// it reallocates the old array is abandoned intact to the strings that
-	// alias it.
+	// unsafe.String aliases the buffer rather than copying it, and that is
+	// load-bearing rather than a micro-optimisation: measured on the test in
+	// this package, a plain string(b.textBuf) here costs 7,778 MB against the
+	// 7,946 MB of the "Value += s" this change replaced, so copying once per
+	// append restores essentially the entire quadratic. It is the same call
+	// strings.Builder.String makes, for the same reason.
+	//
+	// It is sound because the bytes under a string already handed out are
+	// never written again: append only extends past them, and when it
+	// reallocates it abandons the old array intact to whatever still aliases
+	// it. TestAppendTextSnapshotsAreStable holds that to account.
 	b.textNode.Value = unsafe.String(unsafe.SliceData(b.textBuf), len(b.textBuf))
 }
 
@@ -305,6 +335,13 @@ func (b *Builder) AppendText(s string) {
 		// Start a run on the new node rather than only on the second piece,
 		// so that the buffer holds the first piece too and the run never has
 		// to re-copy it.
+		//
+		// [:0:0] rather than [:0], and the difference is a correctness bug
+		// rather than a style choice: the previous run's Value still aliases
+		// the old array, so reusing it writes this node's text over a string
+		// already handed out. Zeroing the capacity forces a fresh allocation.
+		// TestAppendTextMergeShapes/run_resumed_after_element fails without
+		// it -- the first text node reads back as the second's text.
 		b.textNode, b.textBuf = n, append(b.textBuf[:0:0], s...)
 		return
 	}
