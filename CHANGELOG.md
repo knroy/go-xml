@@ -21,7 +21,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What to do instead | Commit |
 |---|---|---|
-| `xpath.CompileVersion`, `CompileXQuery` and `CompileVersionRefFloor` | They delegate to `CompileWith` and stay for v1; every caller in this repository, 20 sites, now spells the options struct. Use `CompileWith`. |  |
+| `xpath.CompileVersion`, `CompileXQuery` and `CompileVersionRefFloor` | They delegate to `CompileWith` and stay for v1; every caller in this repository, 20 sites, now spells the options struct. Use `CompileWith`. | [`b90c8f5`][b90c8f5] |
 
 ### Fixed — engine
 
@@ -834,6 +834,7 @@ here so every entry in this file sits under a release.
 [b4c4bb2]: https://github.com/knroy/go-xml/commit/b4c4bb2
 [b50b373]: https://github.com/knroy/go-xml/commit/b50b373
 [b6fb5ab]: https://github.com/knroy/go-xml/commit/b6fb5ab
+[b90c8f5]: https://github.com/knroy/go-xml/commit/b90c8f5
 [bb803d5]: https://github.com/knroy/go-xml/commit/bb803d5
 [bc72bed]: https://github.com/knroy/go-xml/commit/bc72bed
 [bd0aaf5]: https://github.com/knroy/go-xml/commit/bd0aaf5
