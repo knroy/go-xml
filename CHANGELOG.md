@@ -23,7 +23,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 |---|---|---|
 | The `SERE0007` raw-text guard looked at one text node at a time | Adjacent text nodes are written into one raw run, so `"a<"` + `"/script>"` emitted a contiguous `</script>` under the html method. The guard now spans the boundary. | [`2acbab4`][2acbab4] |
 | 29 cast and type errors rendered their code twice | `xdm.ErrCast` and `xdm.ErrType` already carry `FORG0001`/`XPTY0004` and `Error()` prints it, yet the call sites spelled it again, so `xs:byte(999)` read `FORG0001: FORG0001: …`. The format strings no longer repeat it. | [`0af8592`][0af8592] |
-| Five parser limits reported `XPST0003` for a well-formed expression | §2.3.1 names `XPDY0130` for an implementation-dependent limit; the depth, chain, type-nesting and XQuery nesting caps use it now. Messages and the sentinel are unchanged. |  |
+| Five parser limits reported `XPST0003` for a well-formed expression | §2.3.1 names `XPDY0130` for an implementation-dependent limit; the depth, chain, type-nesting and XQuery nesting caps use it now. Messages and the sentinel are unchanged. | [`75cb3af`][75cb3af] |
 | The base-cycle check walked the chain once per type | `checkTypeBaseCycles` was the residual O(N²) after the facet merge: 10,000 chained types cost 4.3 s, a 10,001-type ring 7.8 s. Proven-acyclic and on-cycle types are remembered, so both now take under 0.2 s. | [`db0448d`][db0448d] |
 | XSD facet checking was quadratic in the depth of a restriction chain | `mergedFacets` flattened the whole chain for every type asked about, so 10,000 chained restrictions took 15.4 s to load; the merged set is memoised on the parser and the merge is gone from the profile. | [`33263c8`][33263c8] |
 | The entity-expansion budget restarted for every resolved module | `parseUncached` minted a fresh allowance per file, so 60 imports each under the 1 MB ceiling expanded 42 MB and were accepted; the compilation and the evaluation now share one. | [`9681343`][9681343] |
@@ -775,6 +775,7 @@ here so every entry in this file sits under a release.
 [6eacc2d]: https://github.com/knroy/go-xml/commit/6eacc2d
 [704222f]: https://github.com/knroy/go-xml/commit/704222f
 [73d547b]: https://github.com/knroy/go-xml/commit/73d547b
+[75cb3af]: https://github.com/knroy/go-xml/commit/75cb3af
 [75d633e]: https://github.com/knroy/go-xml/commit/75d633e
 [7668773]: https://github.com/knroy/go-xml/commit/7668773
 [78f70d5]: https://github.com/knroy/go-xml/commit/78f70d5
