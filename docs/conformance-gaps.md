@@ -321,7 +321,7 @@ and tested on its own, in `xslt/streamlattice.go` and
 | 19.8.8.7 simple mapping (`!`) | complete |
 | 19.8.8.8 path expressions | complete, both phases, including the scanning-expression reassessment that makes `//x` streamable |
 | 19.8.8.9 axis steps | the posture table, the predicate rule, and the numeric-predicate rule that makes `descendant::section[1]` striding — decided for literals, arithmetic, ranges and the numeric built-ins, not for a variable reference such as the spec's `[$i+1]` |
-| 19.8.8.10 filter expressions | the motionless-predicate clause and the numeric-predicate rule that makes `(//x)[3]` striding, with the same static-type limits as the axis-step rule; both rules are applied only after the motionless one, so a non-motionless numeric predicate stays roaming where the spec's ordering would admit it |
+| 19.8.8.10 filter expressions | the motionless-predicate clause and the numeric-predicate rule that makes `(//x)[3]` striding, with the same static-type limits as the axis-step rule; both rules are applied at the position each section gives them, ahead of the motionless-predicate rule |
 | 19.8.8.11 dynamic function calls | the base operand (inspection) and the no-signature fallback, every argument navigating; not the signature refinement, which needs the binding's declared `as` |
 | 19.8.8.12 variable references | the grounded case, the streaming-parameter case, and a data-flow environment for the range variable of a quantified expression |
 | 19.8.8.13 context item expression | complete |

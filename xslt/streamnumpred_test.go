@@ -99,6 +99,20 @@ func TestAnalyzeFilterNumericPredicate(t *testing.T) {
 			"the spec's $i+1 example is not decided: variable types are not carried"},
 		{"(child::x)[1]", postureStriding, striding,
 			"a base that is not crawling is left to the motionless rule"},
+
+		// "the first of the following that applies": the numeric rule is
+		// the first, ahead of "If P is motionless", so P's own sweep plays
+		// no part. count(current()/foo) is numeric, and focus-free in the
+		// rule's terms -- fn:current is neither a context item expression
+		// nor a focus-dependent function (§19.8.9.3 gives it the outermost
+		// context posture) -- yet it is consuming, since current()/foo
+		// strides. The control below shows that sweep: with a base that is
+		// not crawling the rule fails, the motionless rule fails too, and
+		// "Otherwise, roaming and free-ranging" applies.
+		{"(//x)[count(current()/foo)]", postureStriding, striding,
+			"a numeric focus-free P narrows a crawling base even when not motionless"},
+		{"(child::x)[count(current()/foo)]", postureStriding, roamingFreeRanging,
+			"the same P on a striding base is not motionless, so the filter roams"},
 	})
 }
 
@@ -149,12 +163,19 @@ func TestAnalyzeAxisStepNumericPredicate(t *testing.T) {
 		{"descendant::section[1]", postureCrawling, roamingFreeRanging,
 			"a crawling context posture is outside the rule"},
 
-		// The specification orders this rule before "If the PredicateList
-		// contains a Predicate that is not motionless, then ... roaming",
-		// so read literally it would admit this. It is applied after that
-		// rule here, on purpose: the narrowing never rescues a step the
-		// ordinary rule rejects.
-		{"descendant::section[1][title]", postureStriding, roamingFreeRanging,
-			"a non-motionless predicate still makes the step roaming"},
+		// "the first of the following rules that applies": this is the
+		// fourth rule, and "If the PredicateList contains a Predicate that
+		// is not motionless, then ... roaming" is the fifth, so a step with
+		// one qualifying P is striding whatever its other predicates do.
+		// [title] is child::title from a crawling posture, which the table
+		// makes roaming; on its own it makes the step roaming.
+		{"descendant::section[1][title]", postureStriding, striding,
+			"the fourth rule is taken before the fifth sees the non-motionless [title]"},
+		{"descendant::section[title]", postureStriding, roamingFreeRanging,
+			"and the fifth rule alone makes that step roaming"},
+		{"descendant::section[count(current()/foo)]", postureStriding, striding,
+			"a numeric focus-free P that is itself consuming still satisfies the fourth rule"},
+		{"child::section[count(current()/foo)]", postureStriding, roamingFreeRanging,
+			"the same P on the child axis is outside the fourth rule, and the fifth makes it roaming"},
 	})
 }

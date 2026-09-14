@@ -439,6 +439,16 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 	// posture, and applied in turn.
 	cur := base
 	for _, p := range x.Predicates {
+		// The first rule of §19.8.8.10, "the first of the following that
+		// applies": if B is crawling and P is numeric and independent of
+		// the focus, "the posture is striding and the sweep is the sweep
+		// of B". It comes before the motionless rule, so P's own sweep is
+		// not consulted -- the specification's reasoning is that such a
+		// filter selects at most one node, whatever P reads.
+		if cur.posture == postureCrawling && numericFocusFreePredicate(p) {
+			cur = props{postureStriding, cur.sweep}
+			continue
+		}
 		inner := &analyzer{
 			ctxPosture:            cur.posture,
 			ctxAllowsChildren:     a.allowsChildren(x.Base),
@@ -461,17 +471,7 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 		if pp.sweep != sweepMotionless {
 			return roamingFreeRanging
 		}
-		// A motionless predicate leaves the posture and sweep of the base
-		// -- except under the first rule of §19.8.8.10: if B is crawling
-		// and P is numeric and independent of the focus, "the posture is
-		// striding and the sweep is the sweep of B". The specification
-		// puts that rule before the motionless one, so it would also
-		// admit a P that is not motionless; that is not taken, since a
-		// narrowing can only ever be safe on a predicate the ordinary
-		// rule already accepts.
-		if cur.posture == postureCrawling && numericFocusFreePredicate(p) {
-			cur = props{postureStriding, cur.sweep}
-		}
+		// A motionless predicate leaves the posture and sweep of the base.
 	}
 	return cur
 }
@@ -486,9 +486,25 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 	if !base.streamable() {
 		return base
 	}
-	// A predicate is assessed with the step's own posture as its context
-	// posture. §19.8.8.8: if any predicate is not motionless, the step is
-	// roaming and free-ranging.
+	// §19.8.8.9's fourth rule, ahead of the predicate rule below because the
+	// section takes "the first of the following rules that applies": a
+	// striding context, the descendant or descendant-or-self axis, and a
+	// predicate that is numeric and independent of the focus give "striding
+	// and consuming" -- the step "selects a singleton, and ... the posture
+	// of the result can therefore be striding rather than crawling". The
+	// spec's examples are descendant::section[1] and
+	// descendant::section[count($x)]. The other predicates are not
+	// consulted: the rule asks only that there IS such a P.
+	if ctx == postureStriding && (s.Axis == xpath.AxisDescendant || s.Axis == xpath.AxisDescendantOrSelf) {
+		for _, p := range s.Predicates {
+			if numericFocusFreePredicate(p) {
+				return props{postureStriding, sweepConsuming}
+			}
+		}
+	}
+	// The fifth rule. A predicate is assessed with the step's own posture
+	// as its context posture: if any predicate is not motionless, the step
+	// is roaming and free-ranging.
 	for _, p := range s.Predicates {
 		inner := &analyzer{
 			ctxPosture:            base.posture,
@@ -511,22 +527,6 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 		a.known = a.known && inner.known
 		if pp.sweep != sweepMotionless {
 			return roamingFreeRanging
-		}
-	}
-	// §19.8.8.9's fourth rule: a striding context, the descendant or
-	// descendant-or-self axis, and a predicate that is numeric and
-	// independent of the focus give "striding and consuming" -- the step
-	// "selects a singleton, and ... the posture of the result can therefore
-	// be striding rather than crawling". The spec's examples are
-	// descendant::section[1] and descendant::section[count($x)]. The rule
-	// precedes the motionless-predicate one in the specification; it is
-	// applied after it here, so that it only ever narrows a posture the
-	// ordinary rule has already accepted.
-	if ctx == postureStriding && (s.Axis == xpath.AxisDescendant || s.Axis == xpath.AxisDescendantOrSelf) {
-		for _, p := range s.Predicates {
-			if numericFocusFreePredicate(p) {
-				return props{postureStriding, sweepConsuming}
-			}
 		}
 	}
 	return base

@@ -652,10 +652,12 @@ func (a *analyzer) dynamicCall(x *xpath.DynamicCall) props {
 //	 expression, an axis expression, or a call on a focus-dependent function"
 //
 // A predicate that passes selects at most one node, which is what lets the
-// two rules narrow a crawling posture to striding. Both halves are decided
-// statically and conservatively: a false here costs the narrowing and nothing
-// else, because the caller falls back to the ordinary predicate rule, whereas
-// a wrong true would accept a stylesheet the specification makes roaming.
+// two rules narrow a crawling posture to striding. Each rule sits ahead of
+// its section's motionless-predicate rule, and is applied there. Both halves
+// are decided statically and conservatively: a false here costs the
+// narrowing and nothing else, because the caller falls through to the
+// ordinary predicate rule, whereas a wrong true would accept a stylesheet the
+// specification makes roaming.
 func numericFocusFreePredicate(p xpath.Expr) bool {
 	return staticallyNumeric(p) && focusFree(p)
 }
