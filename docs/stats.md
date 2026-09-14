@@ -23,7 +23,7 @@ claim is only as good as the command behind it.
 
 | figure | count | counted by |
 |---|---:|---|
-| Unit tests | 2,324 | `grep -rn '^func Test' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
+| Unit tests | 2,325 | `grep -rn '^func Test' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
 | Fuzz targets | 11 | `grep -rn '^func Fuzz' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
 | Limit boundary tests | 14 | `grep -hc '^func Test' ./*/limits_boundary_test.go \| awk '{n += $1} END {print n + 0}'` |
 
@@ -41,13 +41,13 @@ and `tests/docfigures.sh` cross-checks the same numbers against
 | QT3 — XPath 3.1 | XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** | 2026-09-11 | `tests/check.sh (TestQT3, lane xpath-3.1)` |
 | QT3 — XQuery 3.1 | XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** | 2026-09-11 | `tests/check.sh (TestQT3XQuery)` |
 | W3C XSLT 2.0 | XSLT 2.0 (Second Edition) | 6,201 | 6,193 | 99.87% | **8** | 2026-09-11 | `tests/check.sh (TestXSLTSuite)` |
-| W3C XSLT 3.0 | XSLT 3.0 | 11,518 | 11,491 | 99.77% | **27** | 2026-09-13 | `tests/check.sh (TestXSLT30Suite)` |
+| W3C XSLT 3.0 | XSLT 3.0 | 11,518 | 11,492 | 99.77% | **26** | 2026-09-14 | `tests/check.sh (TestXSLT30Suite)` |
 | W3C xsdtests 1.0 | XML Schema 1.0 (Second Edition) | 39,388 | 39,358 | 99.92% | **30** | 2026-09-11 | `tests/check.sh (XSD10)` |
 | W3C xsdtests 1.1 | XML Schema 1.1 | 41,598 | 41,567 | 99.93% | **31** | 2026-09-11 | `tests/check.sh (XSD11)` |
 | Clark spectest | RELAX NG 1.0 | 965 | 965 | 100.00% | **0** | 2026-09-11 | `tests/check.sh (RelaxNGSpectest)` |
-| **Total** | | | | | **97** | | |
+| **Total** | | | | | **96** | | |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 27 + 30 + 31 + 0 = 97.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 26 + 30 + 31 + 0 = 96.
 
 ## Real-world corpora
 
@@ -71,7 +71,7 @@ its suite's disagreement count on load.
 
 | subset | count | of | note |
 |---|---:|---|---|
-| XSLT 3.0 failures wanting an XTSE3430 | 8 | 27 W3C XSLT 3.0 disagreements | Only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit the refusal; §19.1 does not require a non-streaming processor to assess guaranteed-streamability. The one overlap is su-ascent-903, enumerated individually because its verdict is not the block's: §19.8.5.7 makes an ascent function's streaming parameter climbing and the category permits a climbing body. |
+| XSLT 3.0 failures wanting an XTSE3430 | 7 | 26 W3C XSLT 3.0 disagreements | Only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit the refusal; §19.1 does not require a non-streaming processor to assess guaranteed-streamability. The one overlap is su-ascent-903, enumerated individually because its verdict is not the block's: §19.8.5.7 makes an ascent function's streaming parameter climbing and the category permits a climbing body. |
 
 ## Where each figure is published
 

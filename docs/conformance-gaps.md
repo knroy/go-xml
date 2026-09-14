@@ -35,21 +35,21 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,491 | 99.77% | **27** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,492 | 99.77% | **26** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,598 | 41,567 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 577 | 577 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **97** |
+| | **Total** | | | | **96** |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 27 + 30 + 31 + 0 = 97. Measured 2026-09-11, 2026-09-13.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 26 + 30 + 31 + 0 = 96. Measured 2026-09-11, 2026-09-14.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 2,324 tests.
+The unit-test suite is 2,325 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -242,7 +242,7 @@ three `regex-syntax-xslt20` cases.
 <!-- BEGIN GENERATED XTSE3430 BLOCK -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-**8 of the 27 want an `XTSE3430`** — a refusal of a stylesheet as
+**7 of the 26 want an `XTSE3430`** — a refusal of a stylesheet as
 <!-- END GENERATED XTSE3430 BLOCK -->
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine

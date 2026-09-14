@@ -114,10 +114,10 @@
       "component": "xslt",
       "suite": "W3C XSLT 3.0",
       "edition": "XSLT 3.0",
-      "passed": 11491,
-      "disagreements": 27,
+      "passed": 11492,
+      "disagreements": 26,
       "total": 11518,
-      "run_date": "2026-09-13",
+      "run_date": "2026-09-14",
       "command": "tests/check.sh (TestXSLT30Suite)",
       "cases": [
         {
@@ -627,7 +627,7 @@
       "id": "xtse3430",
       "label": "XSLT 3.0 failures wanting an XTSE3430",
       "suite": "xslt-3.0",
-      "of": 8,
+      "of": 7,
       "overlap": 1,
       "note": "Only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit the refusal; §19.1 does not require a non-streaming processor to assess guaranteed-streamability. The one overlap is su-ascent-903, enumerated individually because its verdict is not the block's: §19.8.5.7 makes an ascent function's streaming parameter climbing and the category permits a climbing body."
     }

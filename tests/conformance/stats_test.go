@@ -430,8 +430,8 @@ func TestCorporaStayOutOfTheTotal(t *testing.T) {
 	// And the shipped file keeps the two apart as separate lists, which is
 	// what makes the exclusion impossible to undo by an arithmetic change.
 	sr := shipped(t)
-	if got := sr.Total(); got != 97 {
-		t.Fatalf("shipped Total() = %d, want 97", got)
+	if got := sr.Total(); got != 96 {
+		t.Fatalf("shipped Total() = %d, want 96", got)
 	}
 	for _, c := range sr.Corpora {
 		for _, su := range sr.Suites {
@@ -576,12 +576,12 @@ func TestUnknownLookupPanics(t *testing.T) {
 func TestShippedXTSE3430Breakdown(t *testing.T) {
 	r := shipped(t)
 	b := r.Breakdown("xtse3430")
-	if b.Of != 8 {
-		t.Errorf("xtse3430 = %d of the XSLT 3.0 failures, want 8", b.Of)
+	if b.Of != 7 {
+		t.Errorf("xtse3430 = %d of the XSLT 3.0 failures, want 7", b.Of)
 	}
 	s := r.Suite(b.Suite)
-	if s.Disagreements != 27 {
-		t.Errorf("xslt-3.0 has %d disagreements, want 27", s.Disagreements)
+	if s.Disagreements != 26 {
+		t.Errorf("xslt-3.0 has %d disagreements, want 26", s.Disagreements)
 	}
 	// The two published halves must account for the whole, once the declared
 	// overlap is discounted: 20 enumerated + 8 in the block, sharing
