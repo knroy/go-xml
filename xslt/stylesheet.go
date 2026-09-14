@@ -572,8 +572,10 @@ type OutputSettings struct {
 	// serialised with, JSON having no node type of its own. Empty is the
 	// default, "xml".
 	JSONNodeOutputMethod string
-	// MediaType is the media type of the output. It affects no serialised
-	// character; it is metadata a caller passes on.
+	// MediaType is the media type of the output. It is metadata a caller
+	// passes on, with one exception: the html and xhtml methods write it
+	// into the content attribute of the meta element they inject, where it
+	// is escaped like any other attribute value.
 	MediaType string
 	// NormalizationForm names a Unicode normalisation applied to the output.
 	// NFC, NFD, NFKC and NFKD are implemented, as is "none"; see

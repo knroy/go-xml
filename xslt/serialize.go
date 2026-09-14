@@ -922,7 +922,16 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			if s.opts.Indent && !hasTextChild(n) {
 				s.indent(depth + 1)
 			}
-			tag := `<meta http-equiv="Content-Type" content="` + content + `">`
+			// The value is escaped like every other attribute the
+			// serialiser writes. media-type is an attribute value template
+			// on xsl:result-document and a settable top-level parameter, so
+			// a document value reaches it; concatenated raw, a value holding
+			// `">` closed the content attribute and the meta tag, and
+			// everything after it became live markup in the <head>. Nothing
+			// legal is refused here -- a media type containing `<` or `"` is
+			// escaped, as escapeAttrRunes escapes any other value.
+			tag := `<meta http-equiv="Content-Type" content="` +
+				s.escapeAttrRunes(content) + `">`
 			if s.xhtml {
 				// XHTML is XML: an empty element must be closed. The space
 				// before the slash is what the HTML compatibility guidelines

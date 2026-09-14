@@ -1398,7 +1398,9 @@ re-checked after base-URI resolution.
 
 ### Escaping and serialisation
 
-- Text and attribute escaping is correct in the xml, html and text methods.
+- Text and attribute escaping is correct in the xml, html and text methods,
+  including the `content` attribute of the `<meta>` element the html and xhtml
+  methods inject, which is the one write site that once bypassed it.
 - **`disable-output-escaping` is ignored** — the most common XSLT XSS primitive
   is simply absent.
 - Comment breakout (`--`) and PI *content* breakout (`?>`) are both errors.
@@ -1558,9 +1560,10 @@ Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
 
-**Thirteenth pass — a bound that could not fire, 2026-09-14.**
+**Thirteenth pass — a bound that could not fire, and an output-parameter injection, 2026-09-14.**
 
 - **The RELAX NG pattern-size bound was unreachable on the attribute path** — cost, and the bound was already calibrated. `ValidateOptions.MaxPatternSize` was consulted once per element in `childDeriv`, before `startTagOpenDeriv`, and the attribute loop that followed took one derivative per attribute with no check between iterations. A `oneOrMore` nested inside a `oneOrMore` over an `<attribute>` grows the pattern multiplicatively the same way it does over an `<element>`, so a 106-byte document against a 189-byte schema did not finish in sixty seconds — with the default options, and unchanged by setting `MaxPatternSize` to 1, the strictest value the API accepts. The loop moved onto the validator and checks the size before each attribute's derivative; `attDeriv`'s recursion is unchanged, because the pattern accumulates across attributes rather than within one. The same document is now refused in 2 ms, naming the limit. Pinned by `TestAttributePatternSizeIsBounded` and, for the half that matters more, `TestWideAttributesStillValidate`, which holds a 2,000-attribute document valid. See CHANGELOG.
+- **`media-type` was written into the injected `<meta>` tag unescaped** — false accept, and a live XSS. The html and xhtml methods inject `<meta http-equiv="Content-Type" content="...">`, and every other attribute the serialiser writes goes through `escapeAttrRunes` while this one was concatenated raw. A `media-type` of `text/html"><script>alert(document.domain)</script><meta x="` closed the attribute and the tag, and the script was live in the `<head>`. Both routes are untrusted: `media-type` is an attribute value template on `xsl:result-document`, so the source document drives it, and a top-level `xsl:param` drives it too — DocBook XSL 1.79.1, vendored in this repository's testdata, writes `media-type="{$media-type}"` from a caller-settable parameter in `xhtml/chunker.xsl`. The value is now escaped at the write site like any other attribute; nothing legal is refused, since a media type holding `<` or `"` is escaped rather than rejected. Pinned by `TestMetaContentTypeEscapesMediaType`, which re-parses the output and asserts one `meta` element whose `content` holds the payload literally. See CHANGELOG.
 
 **Twelfth pass — the raw-text guard at a text-node boundary, 2026-09-13.**
 
