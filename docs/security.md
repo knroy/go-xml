@@ -1261,6 +1261,24 @@ which is a wrong *verdict*, not a resource question. Removing the count was
 tried; `TestNestedConditionalSections` catches it, naming the leaked
 declaration.
 
+**A content model cannot exhaust the stack.** `parseCP` and `parseGroup` are
+mutually recursive over `(((…)))`, so nesting costs a frame in each and was
+bounded by nothing: 2,500,000 parentheses — a 5 MB declaration — ended the
+process with `fatal error: stack overflow`. That is the reason this one is a
+bound and not a note. A Go stack overflow is not a panic, `recover()` does not
+catch it, and an embedding server does not fail the request but dies outright,
+taking every in-flight request with it, so the blast radius is the process
+rather than the document. `maxModelDepth` caps nesting at 1000, matching
+xpath's `maxParseDepth` and `xdm.DefaultMaxDepth`, which bound the same thing.
+The deepest content model in `testdata` is six levels, in the TEI Lite DTD, so
+the margin over real DTDs is a factor of 160; XML 1.0 sets no limit on
+content-model nesting and requires no processor to survive arbitrary nesting,
+so refusing one past the bound is not a deviation.
+`TestModelDepthRefusesDeepNesting` asserts the clean refusal and
+`TestModelDepthAcceptsRealisticNesting` pins that a model exactly at the bound
+still parses. Removing the counter was tried: it does not fail politely, it
+kills the test binary, which is what the defect looked like.
+
 **No filesystem or network in `dtd` itself.** The package constructs no path
 and opens no socket. `dtd.FileResolver` is the only component that touches a
 disk and is confined to one `Root`: `..`, an absolute path and a symlink

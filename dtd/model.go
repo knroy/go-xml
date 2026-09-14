@@ -8,6 +8,23 @@ import (
 	"github.com/knroy/go-xml/xsd"
 )
 
+// maxModelDepth bounds how deeply a content model may nest.
+//
+// parseCP and parseGroup are mutually recursive, so one level of parentheses
+// costs a frame in each. Without a bound a sufficiently nested model exhausts
+// the goroutine stack, and Go makes that "fatal error: stack overflow" —
+// which recover() cannot catch, so it kills the process rather than failing
+// the request. Measured before this bound existed: 2,500,000 nested
+// parentheses crashed the process at Go's default 1 GB stack ceiling.
+//
+// The limit matches xpath's maxParseDepth and xdm.DefaultMaxDepth, which bound
+// the same thing — how far a recursive descent may go before the stack is at
+// risk. The deepest content model in testdata is six levels, in the TEI Lite
+// DTD, so a real model is nowhere near it. XML 1.0 sets no limit on content
+// model nesting and requires no processor to survive arbitrary nesting, so
+// refusing one this deep is not a deviation.
+const maxModelDepth = 1000
+
 // parseModel compiles a DTD element-only content model into an xsd.Particle.
 //
 // The grammar is small — XML §3.2.1:
@@ -39,6 +56,9 @@ func parseModel(s string) (*xsd.Particle, error) {
 type modelParser struct {
 	src string
 	pos int
+	// depth counts nested groups, so that a deeply nested model is an error
+	// rather than a crash. See maxModelDepth.
+	depth int
 }
 
 func (p *modelParser) skipSpace() {
@@ -80,6 +100,16 @@ func (p *modelParser) parseCP() (*xsd.Particle, error) {
 
 // parseGroup reads a parenthesised choice or sequence.
 func (p *modelParser) parseGroup() (*xsd.Particle, error) {
+	// A group is the only construct that nests, and parseCP reaches a nested
+	// particle through here and nowhere else, so counting at this one point
+	// bounds the mutual recursion between the two.
+	p.depth++
+	defer func() { p.depth-- }()
+	if p.depth > maxModelDepth {
+		return nil, fmt.Errorf(
+			"a content model nests more than %d deep: %w",
+			maxModelDepth, xdm.ErrResourceLimit)
+	}
 	p.pos++ // consume '('
 	var members []*xsd.Particle
 	sep := byte(0)
