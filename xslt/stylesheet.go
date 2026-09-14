@@ -1487,7 +1487,9 @@ func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error
 	if processorAtLeast30() {
 		refFloor = xpath.XPath31
 	}
-	c, err := xpath.CompileVersionRefFloor(src, ns, v, refFloor)
+	c, err := xpath.CompileWith(src, xpath.CompileOptions{
+		Namespaces: ns, Version: v, RefFloor: refFloor,
+	})
 	if err != nil {
 		return nil, err
 	}

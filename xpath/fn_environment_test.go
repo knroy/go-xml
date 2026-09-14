@@ -76,7 +76,7 @@ func TestEnvironmentWithheldByDefault(t *testing.T) {
 
 func mustCompileEnv(t *testing.T, expr string) *xpath.Compiled {
 	t.Helper()
-	c, err := xpath.CompileVersion(expr, nil, xpath.XPath31)
+	c, err := xpath.CompileWith(expr, xpath.CompileOptions{Version: xpath.XPath31})
 	if err != nil {
 		t.Fatalf("compiling %q: %v", expr, err)
 	}

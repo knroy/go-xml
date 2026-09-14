@@ -1743,7 +1743,9 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// code would have been: 10.4 defines the error by *when* it happens, not
 	// by which rule was broken. The version is the module's, exactly as a
 	// statically written expression gets it.
-	comp, err := xpath.CompileVersion(src, ns, ns.xpathVersion)
+	comp, err := xpath.CompileWith(src, xpath.CompileOptions{
+		Namespaces: ns, Version: ns.xpathVersion,
+	})
 	if err != nil {
 		// An xdm.Error, not a wrap: ErrorCode reports the innermost code it
 		// can find, so wrapping would leave the failure carrying the target

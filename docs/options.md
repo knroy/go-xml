@@ -552,6 +552,36 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{})
 
 ---
 
+## xpath.CompileOptions
+
+Passed to `xpath.CompileWith`. `xpath.Compile(src, ns)` is the two-argument
+convenience form and compiles as XPath 2.0; everything else is a field here.
+
+```go
+c, err := xpath.CompileWith(src, xpath.CompileOptions{
+    Namespaces: ns,
+    Version:    xpath.XPath31,
+    Context:    ctx,       // a deadline for the compile itself
+    MaxBytes:   1 << 20,   // refuse a source longer than this
+})
+```
+
+| Field | Type | Zero value | What it does |
+|---|---|---|---|
+| `Namespaces` | `NamespaceResolver` | no prefixes bound | Resolves prefixes in the expression. `nil` is fine for an expression that uses none. |
+| `Version` | `Version` | `XPath20` | Which version of the language to parse. The zero value is 2.0 so that an existing `Compile` caller keeps the behaviour it had. |
+| `RefFloor` | `Version` | same as `Version` | The lowest version whose named-function-reference rules apply; XSLT sets it from the stylesheet's own `version`. |
+| `XQuery` | `bool` | XPath | The expression came from an XQuery module; see `ParseXQuery` for the one rule that differs. |
+| `Context` | `context.Context` | no deadline | A deadline or cancellation for the compile. The optimiser checks it every few thousand nodes; parsing does not, so a refusal can arrive late on a very large source. `XPDY0130` wrapping `xdm.ErrResourceLimit` and the context's error. |
+| `MaxBytes` | `int` | unbounded | Refuse a source longer than this before parsing it, as `XPDY0130` wrapping `xdm.ErrResourceLimit`. |
+
+`CompileVersion`, `CompileXQuery` and `CompileVersionRefFloor` are the older
+positional spellings. They are deprecated as of 2026-09-14, delegate to
+`CompileWith`, and stay for the life of v1; nothing in this repository calls
+them any more.
+
+---
+
 ## xpath.Context
 
 XPath has no `Options` struct; configuration is the evaluation context you build

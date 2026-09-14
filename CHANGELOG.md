@@ -17,6 +17,12 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | **The `map:`, `array:` and `math:` families became expressible at all** | A signature key could only ever name the `fn:` namespace, so 46 entries were unreachable rather than merely unmigrated; a prefixed key format reaches them. The hardcoding was duplicated in the builder and the enforcement test, so fixing one alone would have left the other checking the wrong names. |
 | **The regex and formatting families, deferred twice on a premise that was wrong** | `$pattern`, `$flags` and `$picture` were held back for fear call binding would answer `XPTY0004` where a hand guard answers `FORX0002`. The codes do not compete: `FORX0002` is for a malformed pattern, reached only once a pattern exists. All four QT3 cases passing `()` in such a position expect `XPTY0004`. |
 
+### Deprecated
+
+| Change | What to do instead | Commit |
+|---|---|---|
+| `xpath.CompileVersion`, `CompileXQuery` and `CompileVersionRefFloor` | They delegate to `CompileWith` and stay for v1; every caller in this repository, 20 sites, now spells the options struct. Use `CompileWith`. |  |
+
 ### Fixed — engine
 
 | Change | Problem → solution | Commit |

@@ -256,12 +256,16 @@ func Compile(src string, ns NamespaceResolver) (*Compiled, error) {
 // behaviour it had; a 3.0 host calls this instead. The version is recorded on
 // the result, so evaluating it does not require the caller to set it on the
 // context as well.
+//
+// Deprecated: use CompileWith with CompileOptions.Version set.
 func CompileVersion(src string, ns NamespaceResolver, v Version) (*Compiled, error) {
 	return CompileWith(src, CompileOptions{Namespaces: ns, Version: v})
 }
 
 // CompileXQuery is CompileVersion for an expression taken from an XQuery
 // module; see ParseXQuery for the one rule that differs.
+//
+// Deprecated: use CompileWith with CompileOptions.XQuery set.
 func CompileXQuery(src string, ns NamespaceResolver, v Version) (*Compiled, error) {
 	return CompileWith(src, CompileOptions{
 		Namespaces: ns, Version: v, XQuery: true,
@@ -270,6 +274,8 @@ func CompileXQuery(src string, ns NamespaceResolver, v Version) (*Compiled, erro
 
 // CompileVersionRefFloor is CompileVersion with the named-function-reference
 // floor raised; see ParseVersionRefFloor and refversion.go.
+//
+// Deprecated: use CompileWith with CompileOptions.RefFloor set.
 func CompileVersionRefFloor(src string, ns NamespaceResolver, v, refFloor Version) (*Compiled, error) {
 	return CompileWith(src, CompileOptions{
 		Namespaces: ns, Version: v, RefFloor: refFloor,
@@ -395,7 +401,7 @@ func Eval(src string, ctx *Context, ns NamespaceResolver) (xdm.Sequence, error) 
 	if ctx != nil {
 		v = ctx.Version
 	}
-	c, err := CompileVersion(src, ns, v)
+	c, err := CompileWith(src, CompileOptions{Namespaces: ns, Version: v})
 	if err != nil {
 		return nil, err
 	}

@@ -34,7 +34,7 @@ func xpathLiteral(s string) string {
 // Context, which is one evaluation and therefore one entity allowance.
 func evalAt31(t *testing.T, expr string) (xdm.Sequence, error) {
 	t.Helper()
-	c, err := CompileVersion(expr, nil, XPath31)
+	c, err := CompileWith(expr, CompileOptions{Version: XPath31})
 	if err != nil {
 		t.Fatalf("compiling: %v", err)
 	}
