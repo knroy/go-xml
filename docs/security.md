@@ -974,6 +974,49 @@ back to a heuristic on a large set would be least exact precisely on the inputs
 constructed to make it so, which is a validator that can be talked out of
 validating.
 
+### A calibrated bound is only a bound on the paths that consult it
+
+`relaxng.ValidateOptions.MaxPatternSize` (default `DefaultMaxPatternSize` =
+100,000) bounds the derivative pattern carried during validation. It exists
+because the simplifying constructors in `relaxng/derive.go` keep the pattern
+bounded for ordinary schemas but not for all of them: a `oneOrMore` nested
+inside a `oneOrMore` duplicates its operand on every repetition, so the pattern
+grows multiplicatively in the width of the document, at a depth of two where no
+depth bound can reach it.
+
+The number was right and the check was in one place. `childDeriv` consulted it
+once per element, before `startTagOpenDeriv`, which is the correct position —
+the derivative about to be taken is the expensive one, so a check afterwards
+spends exactly what the bound exists to refuse. But the attribute loop that ran
+next took one derivative per attribute with no check between iterations, and
+`attDeriv` accumulates the same way `startTagOpenDeriv` does when the repetition
+wraps an `<attribute>` rather than an `<element>`. The bound could not fire on
+that path at all, and lowering it did not help: `MaxPatternSize: 1`, the
+strictest value the API accepts, left the timings unchanged.
+
+Measured against a 189-byte schema, with the **default** options:
+
+| attributes | document | before | after |
+|---|---|---|---|
+| 10 | 74 B | 18.8 ms | 2.0 ms |
+| 12 | 90 B | 584 ms | 2.1 ms |
+| 13 | 98 B | 3.99 s | 2.1 ms |
+| 14 | 106 B | did not finish in 60 s | 2.1 ms |
+
+The loop now lives on the validator and checks the size before each attribute's
+derivative, reporting the same limit error the element path reports.
+`attDeriv`'s own recursion is untouched, because the pattern accumulates across
+attributes rather than within one.
+
+The general lesson is the one the *How to read a finding here* table is about:
+a guard's existence, its default, and its reachability are three separate
+facts, and only the third is a property of the call graph. Eight passes read
+this limit and none asked which paths consult it. `TestAttributePatternSizeIsBounded`
+pins the refusal and `TestWideAttributesStillValidate` pins that a legitimately
+wide document — 2,000 attributes under a schema that does not nest the
+repetition — still validates, which is the half that stops the fix becoming a
+conformance regression. The RELAX NG spec test suite is unchanged at 965 of 965.
+
 ### Billion laughs is impossible
 
 Same cause. A 9-level, fan-10 entity bomb fails in 10 µs with `invalid character
@@ -1514,6 +1557,10 @@ already found.
 Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
+
+**Thirteenth pass — a bound that could not fire, 2026-09-14.**
+
+- **The RELAX NG pattern-size bound was unreachable on the attribute path** — cost, and the bound was already calibrated. `ValidateOptions.MaxPatternSize` was consulted once per element in `childDeriv`, before `startTagOpenDeriv`, and the attribute loop that followed took one derivative per attribute with no check between iterations. A `oneOrMore` nested inside a `oneOrMore` over an `<attribute>` grows the pattern multiplicatively the same way it does over an `<element>`, so a 106-byte document against a 189-byte schema did not finish in sixty seconds — with the default options, and unchanged by setting `MaxPatternSize` to 1, the strictest value the API accepts. The loop moved onto the validator and checks the size before each attribute's derivative; `attDeriv`'s recursion is unchanged, because the pattern accumulates across attributes rather than within one. The same document is now refused in 2 ms, naming the limit. Pinned by `TestAttributePatternSizeIsBounded` and, for the half that matters more, `TestWideAttributesStillValidate`, which holds a 2,000-attribute document valid. See CHANGELOG.
 
 **Twelfth pass — the raw-text guard at a text-node boundary, 2026-09-13.**
 
