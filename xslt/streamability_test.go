@@ -384,7 +384,10 @@ func TestAnalyzeExprScanningExpressions(t *testing.T) {
 		// still scans; the descendant axis has to be written out to place a
 		// positional predicate on it.
 		{"a//b[1]/c", props{postureCrawling, sweepConsuming}, "[1] lands on the child step"},
-		{"descendant::b[1]/c", roamingFreeRanging, "[1] on the descendant axis does not scan"},
+		// "descendant::b[1]" is not rescued by the scanning rule either,
+		// and no longer needs to be: §19.8.8.9's numeric-predicate rule
+		// makes the step itself striding, so "/c" strides from there.
+		{"descendant::b[1]/c", props{postureStriding, sweepConsuming}, "[1] on the descendant axis is a §19.8.8.9 singleton"},
 
 		// A step that is not a scanning step stops the rescue.
 		{"//PRICE/following::x", roamingFreeRanging, "following:: never scans"},

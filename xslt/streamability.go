@@ -429,7 +429,7 @@ func (a *analyzer) binary(x *xpath.BinaryOp) props {
 	}
 }
 
-// filter applies §19.8.8.9 to a filter expression.
+// filter applies §19.8.8.10 to a filter expression.
 func (a *analyzer) filter(x *xpath.FilterExpr) props {
 	base := a.expr(x.Base)
 	if !base.streamable() {
@@ -458,14 +458,20 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
-		// The first rule of §19.8.8.9 narrows crawling to striding for a
-		// numeric predicate independent of the focus. It is not
-		// implemented; not applying it costs precision but never
-		// correctness, because the fallback below is stricter.
 		if pp.sweep != sweepMotionless {
 			return roamingFreeRanging
 		}
-		// A motionless predicate leaves the posture and sweep of the base.
+		// A motionless predicate leaves the posture and sweep of the base
+		// -- except under the first rule of §19.8.8.10: if B is crawling
+		// and P is numeric and independent of the focus, "the posture is
+		// striding and the sweep is the sweep of B". The specification
+		// puts that rule before the motionless one, so it would also
+		// admit a P that is not motionless; that is not taken, since a
+		// narrowing can only ever be safe on a predicate the ordinary
+		// rule already accepts.
+		if cur.posture == postureCrawling && numericFocusFreePredicate(p) {
+			cur = props{postureStriding, cur.sweep}
+		}
 	}
 	return cur
 }
@@ -505,6 +511,22 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 		a.known = a.known && inner.known
 		if pp.sweep != sweepMotionless {
 			return roamingFreeRanging
+		}
+	}
+	// §19.8.8.9's fourth rule: a striding context, the descendant or
+	// descendant-or-self axis, and a predicate that is numeric and
+	// independent of the focus give "striding and consuming" -- the step
+	// "selects a singleton, and ... the posture of the result can therefore
+	// be striding rather than crawling". The spec's examples are
+	// descendant::section[1] and descendant::section[count($x)]. The rule
+	// precedes the motionless-predicate one in the specification; it is
+	// applied after it here, so that it only ever narrows a posture the
+	// ordinary rule has already accepted.
+	if ctx == postureStriding && (s.Axis == xpath.AxisDescendant || s.Axis == xpath.AxisDescendantOrSelf) {
+		for _, p := range s.Predicates {
+			if numericFocusFreePredicate(p) {
+				return props{postureStriding, sweepConsuming}
+			}
 		}
 	}
 	return base

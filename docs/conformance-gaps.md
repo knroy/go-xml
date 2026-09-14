@@ -320,8 +320,8 @@ and tested on its own, in `xslt/streamlattice.go` and
 | 19.8.8.3 `if` expressions | complete |
 | 19.8.8.7 simple mapping (`!`) | complete |
 | 19.8.8.8 path expressions | complete, both phases, including the scanning-expression reassessment that makes `//x` streamable |
-| 19.8.8.9 axis steps | the posture table and the predicate rule; not the numeric-predicate narrowing |
-| 19.8.8.10 filter expressions | the motionless-predicate clause; not the numeric-predicate narrowing |
+| 19.8.8.9 axis steps | the posture table, the predicate rule, and the numeric-predicate rule that makes `descendant::section[1]` striding — decided for literals, arithmetic, ranges and the numeric built-ins, not for a variable reference such as the spec's `[$i+1]` |
+| 19.8.8.10 filter expressions | the motionless-predicate clause and the numeric-predicate rule that makes `(//x)[3]` striding, with the same static-type limits as the axis-step rule; both rules are applied only after the motionless one, so a non-motionless numeric predicate stays roaming where the spec's ordering would admit it |
 | 19.8.8.11 dynamic function calls | the base operand (inspection) and the no-signature fallback, every argument navigating; not the signature refinement, which needs the binding's declared `as` |
 | 19.8.8.12 variable references | the grounded case, the streaming-parameter case, and a data-flow environment for the range variable of a quantified expression |
 | 19.8.8.13 context item expression | complete |
@@ -369,8 +369,17 @@ Still absent or partial:
   needs the declaring `xsl:variable`/`xsl:param`'s `as`, which nothing threads
   into the expression analyzer; until it does, `$m(child::x)` is refused even
   under `$m as map(*)`, where the note says grounded and consuming.
-- **The numeric-predicate narrowing** of §19.8.8.9 axis steps and §19.8.8.10
-  filter expressions, noted in the table above.
+- **The numeric-predicate rules of §19.8.8.9 and §19.8.8.10, in part.** The
+  rules are implemented (`xslt/streamexprs.go`, `numericFocusFreePredicate`,
+  tested in `xslt/streamnumpred_test.go`), but "the static type of P is a
+  subtype of U{xs:decimal, xs:double, xs:float}" is decided only where it is
+  certain without a type environment: numeric literals, arithmetic and ranges
+  over them, `count`, `index-of`, `string-length`, `number`, and a filter on
+  any of those. A variable reference has no recorded type, so
+  `descendant::section[$i+1]` — one of the spec's own examples — falls back
+  to the ordinary predicate rule and stays crawling. A call on a function
+  outside the `fn` namespace is treated as focus-dependent for the same
+  reason. Each limit costs precision, never correctness.
 
 `let` expressions, §19.8.8.15 named function references and §19.8.8.16 inline
 function declarations were on this list and are now implemented, as are §19.8.8.4 union/intersect/except,
@@ -422,8 +431,8 @@ container at all.
 "the 43 instruction rules are the bulk" and stylesheet functions as unbuilt.
 Both are done: the instruction rules, all four intricate ones among them, and
 the §19.8.5 streaming-parameter signature rule. What remains is the short list
-above — dynamic calls, inline functions, `let`, and the numeric-predicate
-narrowing — plus the residue measured in the `XTSE3430` breakdown, currently
+above — dynamic calls, inline functions, `let`, and the variable-typed
+half of the numeric-predicate rules — plus the residue measured in the `XTSE3430` breakdown, currently
 **8 cases** that want the error and do not get it. That is a far smaller
 remainder than "several times the work already done", which is what the
 previous wording claimed. It should still be taken construct family by

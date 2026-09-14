@@ -12,6 +12,8 @@ package xslt
 //
 //	§19.8.8.4  union, intersect, except      unionExpr
 //	§19.8.8.5  the document-node(element(X)) clause, shared with "treat as"
+//	§19.8.8.9  the numeric-predicate rule       numericFocusFreePredicate
+//	§19.8.8.10 the numeric-predicate rule       (the same two conditions)
 //	§19.8.8.17 map constructors              mapConstructor
 //	           square/curly array constructors, on the same shape as a map
 //	§19.8.9.14 fn:last                       lastFunction
@@ -638,4 +640,141 @@ func (a *analyzer) dynamicCall(x *xpath.DynamicCall) props {
 		ops = append(ops, a.operandOf(arg, usageNavigation))
 	}
 	return combine(ops, false)
+}
+
+// numericFocusFreePredicate reports whether a predicate P satisfies the two
+// conditions that the fourth rule of §19.8.8.9 (axis steps) and the first rule
+// of §19.8.8.10 (filter expressions) share:
+//
+//	"The static type of P is a subtype of U{xs:decimal, xs:double, xs:float}"
+//	"Neither P, nor any operand of P, at any depth provided it has [the step
+//	 or filter expression] as its focus-setting container, is a context item
+//	 expression, an axis expression, or a call on a focus-dependent function"
+//
+// A predicate that passes selects at most one node, which is what lets the
+// two rules narrow a crawling posture to striding. Both halves are decided
+// statically and conservatively: a false here costs the narrowing and nothing
+// else, because the caller falls back to the ordinary predicate rule, whereas
+// a wrong true would accept a stylesheet the specification makes roaming.
+func numericFocusFreePredicate(p xpath.Expr) bool {
+	return staticallyNumeric(p) && focusFree(p)
+}
+
+// staticallyNumeric reports whether the static type of e is certainly numeric.
+//
+// What it decides: numeric literals; unary and binary arithmetic on numeric
+// operands; "to", whose result is xs:integer* whatever its operands; the
+// built-in functions whose result type is numeric at every arity; and a
+// filter expression on any of those, which keeps its base's item type. A
+// variable reference is never decided, because the analysis carries no
+// variable types -- so the specification's own "descendant::section[$i+1]"
+// is left to the ordinary predicate rule, at the price of precision only.
+func staticallyNumeric(e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.Literal:
+		return x.Val != nil && x.Val.Type.IsNumeric()
+	case *xpath.UnaryOp:
+		return staticallyNumeric(x.Operand)
+	case *xpath.BinaryOp:
+		switch x.Op {
+		case "to":
+			return true
+		case "+", "-", "*", "div", "idiv", "mod":
+			return staticallyNumeric(x.Left) && staticallyNumeric(x.Right)
+		}
+		return false
+	case *xpath.FuncCall:
+		if x.Name.URI != fnNS {
+			return false
+		}
+		switch x.Name.Local {
+		case "position", "last", "count", "index-of", "string-length", "number":
+			return true
+		}
+		return false
+	case *xpath.FilterExpr:
+		return staticallyNumeric(x.Base)
+	}
+	return false
+}
+
+// focusFree reports whether e contains no context item expression, axis
+// expression, or call on a focus-dependent function among the operands that
+// take their focus from the predicate's own container. An operand inside a
+// nested focus-setting container -- a filter's predicates, the steps of a
+// path after its first, the right-hand side of "!" -- is not walked, which
+// is what admits §19.8.8.10's own example "(//x)[index-of($a, $b)[last()]]".
+// An expression kind not listed is not decided, and so not admitted.
+func focusFree(e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.Literal, *xpath.VarRef, *xpath.NamedFunctionRef:
+		return true
+	case *xpath.ContextItem, *xpath.Step:
+		return false
+	case *xpath.PathExpr:
+		// A leading "/" is fn:root(.), a context item expression
+		// (§19.8.8.8). Only the first operand has the outer focus.
+		return !x.Root && len(x.Steps) > 0 && focusFree(x.Steps[0])
+	case *xpath.FilterExpr:
+		return focusFree(x.Base)
+	case *xpath.SimpleMap:
+		return focusFree(x.Left)
+	case *xpath.FuncCall:
+		if focusDependentCall(x) {
+			return false
+		}
+		return allFocusFree(x.Args)
+	case *xpath.UnaryOp:
+		return focusFree(x.Operand)
+	case *xpath.BinaryOp:
+		return focusFree(x.Left) && focusFree(x.Right)
+	case *xpath.IfExpr:
+		return allFocusFree([]xpath.Expr{x.Cond, x.Then, x.Else})
+	case *xpath.SequenceExpr:
+		return allFocusFree(x.Items)
+	case *xpath.InstanceOfExpr:
+		return focusFree(x.Operand)
+	case *xpath.CastExpr:
+		return focusFree(x.Operand)
+	case *xpath.TreatExpr:
+		return focusFree(x.Operand)
+	case *xpath.LetExpr:
+		return allFocusFree(append(bindingExprs(x.Bindings), x.Return))
+	case *xpath.ForExpr:
+		return allFocusFree(append(bindingExprs(x.Bindings), x.Return))
+	case *xpath.QuantifiedExpr:
+		return allFocusFree(append(bindingExprs(x.Bindings), x.Test))
+	}
+	return false
+}
+
+func allFocusFree(es []xpath.Expr) bool {
+	for _, e := range es {
+		if !focusFree(e) {
+			return false
+		}
+	}
+	return true
+}
+
+// focusDependentCall reports whether a call is on a focus-dependent function,
+// for the arity written. Only the fn namespace is classified; a call on
+// anything else -- an xsl:function, an extension, a constructor -- is treated
+// as focus-dependent, because nothing here records that it is not.
+func focusDependentCall(x *xpath.FuncCall) bool {
+	if x.Name.URI != fnNS {
+		return true
+	}
+	switch x.Name.Local {
+	case "position", "last":
+		return true
+	case "name", "local-name", "namespace-uri", "string", "data", "number",
+		"string-length", "normalize-space", "root", "base-uri",
+		"document-uri", "path", "has-children", "generate-id", "node-name",
+		"nilled":
+		return len(x.Args) == 0
+	case "lang", "id", "idref", "element-with-id":
+		return len(x.Args) == 1
+	}
+	return false
 }
