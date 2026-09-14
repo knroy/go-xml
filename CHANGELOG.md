@@ -251,7 +251,7 @@ turn "I could not prove the constraint" into "the constraint holds."*
 | A flat operator chain overflowed the stack at compile time | The depth cap counts nesting, and the attack is length. Every infix loop charges `maxChainLength`. | [`106bcdc`][106bcdc] |
 | Constant folding rescanned each subtree per node, so compiling was quadratic in expression size | `isClosed` and `containsCompatSensitive` memoise per node: 640 kB fell from 2.79 s to 215 ms. Reachable from data via `xsl:evaluate`. | [`eb12a69`][eb12a69] |
 | `xsd.HTTPResolver` checked host *names* only, so a permitted name reaching loopback or 169.254.169.254 was an SSRF | The dialler now refuses private, loopback and link-local addresses by default, closing the rebinding window; `AllowPrivateAddresses` opts out. | [`9f69069`][9f69069] |
-| `file://evil.example.com/etc/x.dtd` read the local `/etc/x.dtd` in `xsd`, `dtd` and `xslt` | The resolvers took the URI path alone, dropping the authority; a `file:` URI naming any host but `localhost` is now refused, as `relaxng` already did. |  |
+| `file://evil.example.com/etc/x.dtd` read the local `/etc/x.dtd` in `xsd`, `dtd` and `xslt` | The resolvers took the URI path alone, dropping the authority; a `file:` URI naming any host but `localhost` is now refused, as `relaxng` already did. | [`3831726`][3831726] |
 
 ### Fixed — test harness
 
@@ -867,4 +867,8 @@ here so every entry in this file sits under a release.
 [f88747b]: https://github.com/knroy/go-xml/commit/f88747b
 [f9c0cf5]: https://github.com/knroy/go-xml/commit/f9c0cf5
 [fe41f3c]: https://github.com/knroy/go-xml/commit/fe41f3c
+<<<<<<< HEAD
 [0af8592]: https://github.com/knroy/go-xml/commit/0af8592
+=======
+[3831726]: https://github.com/knroy/go-xml/commit/3831726
+>>>>>>> e5e9ad1 (docs: link the file-host commit)
