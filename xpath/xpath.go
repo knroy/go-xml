@@ -175,9 +175,20 @@ type CompileOptions struct {
 // folded here is work removed from the inner loop rather than deferred.
 func CompileWith(src string, opts CompileOptions) (*Compiled, error) {
 	if opts.MaxBytes > 0 && len(src) > opts.MaxBytes {
-		return nil, xdm.Errorf("XPST0003",
-			"expression is %d bytes, over the %d-byte limit: "+
-				"processor resource limit exceeded", len(src), opts.MaxBytes)
+		// XPDY0130, not XPST0003. XPath 3.1 2.3.1: "limitations may exist on
+		// the maximum numbers or sizes of various objects. An error must be
+		// raised if such a limitation is exceeded [err:XPDY0130]", and F.2
+		// glosses the code as "An implementation-dependent limit has been
+		// exceeded". XPST0003 is a PARSE error, and this expression may parse
+		// perfectly well -- it is merely larger than this caller admits.
+		//
+		// The parser's own depth and chain limits report XPST0003 instead,
+		// and say why at parser.go: the conformance suites match on it there.
+		// Nothing matches on these two, so they carry the code the
+		// specification names, which is also the one this engine already uses
+		// for its evaluation-time budgets (context.go).
+		return nil, fmt.Errorf("XPDY0130: expression is %d bytes, over the "+
+			"%d-byte limit: %w", len(src), opts.MaxBytes, xdm.ErrResourceLimit)
 	}
 	ctx := opts.Context
 	if ctx != nil {
@@ -220,13 +231,15 @@ func CompileWith(src string, opts CompileOptions) (*Compiled, error) {
 
 // compileCancelled reports a cancelled or timed-out compile.
 //
-// It carries XPST0003 with the resource-limit wording rather than returning
+// It carries XPDY0130 -- the code XPath 3.1 2.3.1 requires when "an
+// implementation-dependent limit has been exceeded" -- rather than returning
 // ctx.Err() bare, so a caller that classifies failures by error code sees the
-// same shape it does for the depth and chain limits, and errors.Is still
-// finds context.DeadlineExceeded or context.Canceled underneath.
+// same code this engine already uses for its evaluation budgets. Both
+// xdm.ErrResourceLimit and the context cause stay reachable through
+// errors.Is, so a caller can still tell a deadline from a cancellation.
 func compileCancelled(err error) error {
-	return fmt.Errorf("XPST0003: compiling the expression was interrupted: "+
-		"processor resource limit exceeded: %w", err)
+	return fmt.Errorf("XPDY0130: compiling the expression was interrupted: "+
+		"%w: %w", xdm.ErrResourceLimit, err)
 }
 
 // Compile parses src, resolving namespace prefixes with ns.

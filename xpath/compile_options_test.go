@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 // The four positional spellings must keep answering exactly as they did, now
@@ -72,8 +74,12 @@ func TestCompileWithMaxBytes(t *testing.T) {
 	src := "1" + strings.Repeat("+1", 500)
 	if _, err := CompileWith(src, CompileOptions{MaxBytes: len(src) - 1}); err == nil {
 		t.Error("an expression over MaxBytes was compiled")
-	} else if !strings.Contains(err.Error(), "XPST0003") {
-		t.Errorf("got %v, want XPST0003", err)
+	} else if code := xdm.ErrorCode(err); code != "XPDY0130" {
+		t.Errorf("code = %q, want XPDY0130 -- XPath 3.1 2.3.1 requires it "+
+			"when an implementation-dependent limit is exceeded, and "+
+			"XPST0003 is a parse error", code)
+	} else if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Error("the refusal must carry xdm.ErrResourceLimit")
 	}
 	if _, err := CompileWith(src, CompileOptions{MaxBytes: len(src)}); err != nil {
 		t.Errorf("an expression exactly at MaxBytes was refused: %v", err)
@@ -95,8 +101,12 @@ func TestCompileWithHonoursACancelledContext(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("got %v, want it to wrap context.Canceled", err)
 	}
-	if !strings.Contains(err.Error(), "XPST0003") {
-		t.Errorf("got %v, want the XPST0003 code the other limits carry", err)
+	if code := xdm.ErrorCode(err); code != "XPDY0130" {
+		t.Errorf("code = %q, want XPDY0130", code)
+	}
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Error("the refusal must carry xdm.ErrResourceLimit too, so a " +
+			"caller can classify it without parsing the message")
 	}
 }
 
