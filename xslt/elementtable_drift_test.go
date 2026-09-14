@@ -43,10 +43,11 @@ func TestElementTableRecommendationDrift(t *testing.T) {
 		{"attribute-set visibility hidden", `<xsl:attribute-set name="a" visibility="hidden"/>`, "XTSE0020"},
 		{"function cache full", fn(`cache="full"`), "XTSE0020"},
 		// X5: working-draft attributes the Recommendation does not define.
-		// param/@export is deliberately not among them: it is accepted and
-		// ignored so that iterate-024 still reaches the XTSE0010 it exists
-		// to pin. See the table's comment on the entry.
-		{"param export tolerated", `<xsl:param name="p" export="yes"/>`, ""},
+		// 9.2's summary for xsl:param stops at "static?", so @export is one
+		// of them. It was tolerated until the xsl:on-completion placement
+		// rule moved ahead of the attribute sweep; see
+		// TestIteratePlacementOutranksUnknownAttribute below.
+		{"param export removed", `<xsl:param name="p" export="yes"/>`, "XTSE0090"},
 		{"function identity-sensitive", fn(`identity-sensitive="no"`), "XTSE0090"},
 		{"accumulator applies-to",
 			`<xsl:accumulator name="a" initial-value="0" applies-to="x"/>`, "XTSE0090"},
@@ -97,5 +98,68 @@ func TestPackageUsePackageRemoved(t *testing.T) {
 	err = compileDrift(t, strings.Replace(pkg, "%s", "", 1))
 	if err != nil && strings.Contains(err.Error(), "XTSE0020") {
 		t.Errorf("accept/@visibility=\"hidden\" was refused: %v", err)
+	}
+}
+
+// TestIteratePlacementOutranksUnknownAttribute pins the ordering the export
+// entry depends on.
+//
+// A stylesheet that misplaces an xsl:on-completion AND writes an attribute
+// the summaries do not allow is a static error either way; the question is
+// only which error it is told about. Section 8.4's content model for
+// xsl:iterate is the structural fact, so it is read first and the module is
+// refused for the shape of its tree rather than for a stray attribute inside
+// it. suite case iterate-024 is exactly this stylesheet, and expects
+// XTSE0010.
+//
+// The controls matter as much as the case: a module with only one of the two
+// faults must still report that one, so the reordering cannot be moving
+// errors around for stylesheets that are broken in a single way.
+func TestIteratePlacementOutranksUnknownAttribute(t *testing.T) {
+	sheet := func(param, onCompletion string) string {
+		return `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		    version="3.0">
+		  <xsl:template name="main">
+		    <out>
+		      <xsl:iterate select="1 to 3">
+		        <xsl:param name="count" select="0" ` + param + `/>
+		        <xsl:sequence select="$count"/>
+		      </xsl:iterate>
+		      ` + onCompletion + `
+		    </out>
+		  </xsl:template>
+		</xsl:stylesheet>`
+	}
+	const misplaced = `<xsl:on-completion><done/></xsl:on-completion>`
+	cases := []struct {
+		name, param, onCompletion, code string
+	}{
+		{"both faults report the structural one", `export="yes"`, misplaced, "XTSE0010"},
+		{"misplaced element alone", "", misplaced, "XTSE0010"},
+		{"unknown attribute alone", `export="yes"`, "", "XTSE0090"},
+		{"neither fault compiles", "", "", ""},
+	}
+	for _, c := range cases {
+		err := compileDrift(t, sheet(c.param, c.onCompletion))
+		switch {
+		case c.code == "" && err != nil:
+			t.Errorf("%s: refused: %v", c.name, err)
+		case c.code != "" && (err == nil || !strings.Contains(err.Error(), c.code)):
+			t.Errorf("%s: want %s, got %v", c.name, c.code, err)
+		}
+	}
+	// An xsl:on-completion correctly placed as a child of xsl:iterate is not
+	// touched by the pre-pass.
+	const wellPlaced = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	    version="3.0">
+	  <xsl:template name="main">
+	    <xsl:iterate select="1 to 3">
+	      <xsl:on-completion><done/></xsl:on-completion>
+	      <xsl:sequence select="."/>
+	    </xsl:iterate>
+	  </xsl:template>
+	</xsl:stylesheet>`
+	if err := compileDrift(t, wellPlaced); err != nil {
+		t.Errorf("well-placed xsl:on-completion was refused: %v", err)
 	}
 }

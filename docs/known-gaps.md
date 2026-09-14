@@ -1328,11 +1328,16 @@ in the visibility enumerations of `xsl:template`, `xsl:mode` and friends,
 though a component only ever acquires that visibility through `xsl:accept` or
 `xsl:expose`; and withdrawn draft attributes tolerated in silence, now named
 with `removed30`, the table's mechanism for refusing a withdrawn name where
-forwards-compatible leniency would otherwise ignore it. Two exceptions are
-deliberate: `param/@export` stays tolerated because `iterate-024` must reach
-the XTSE0010 further down its stylesheet, and clearing `avt` on an attribute
-with neither an enumeration nor a `qnameAttrs` entry would change nothing, so
-`xsl:output`'s `parameter-document` and `json-node-output-method` keep theirs.
+forwards-compatible leniency would otherwise ignore it. `param/@export` was
+the one withdrawn attribute left tolerated, because `iterate-024` must reach
+the XTSE0010 further down its stylesheet and the attribute sweep reported
+XTSE0090 first. That was a check-ordering defect rather than a reason to
+accept the attribute: §8.4's placement rule for `xsl:on-completion` is now
+read off the tree ahead of the grammar sweep, so the structural error wins and
+`@export` is `removed30` like the rest. One exception remains deliberate:
+clearing `avt` on an attribute with neither an enumeration nor a `qnameAttrs`
+entry would change nothing, so `xsl:output`'s `parameter-document` and
+`json-node-output-method` keep theirs.
 
 Three classes were found, and only the first can mislead the code:
 

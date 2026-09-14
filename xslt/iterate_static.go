@@ -281,3 +281,38 @@ func checkDuplicateWithParams(el *xdm.Node) error {
 	}
 	return nil
 }
+
+// checkIteratePlacement is XTSE0010 for an xsl:on-completion that is not a
+// child of an xsl:iterate.
+//
+// Section 8.4's summary gives xsl:iterate the content model
+// "(xsl:param*, xsl:on-completion?, sequence-constructor)", and unlike
+// xsl:break and xsl:next-iteration the element carries no "Category:
+// instruction" comment: it is defined nowhere but as that one child, so an
+// xsl:on-completion anywhere else is an element appearing where the grammar
+// does not allow it.
+//
+// The rule is a placement rule, not an attribute rule, so it is run as a
+// pre-pass ahead of the element grammar sweep -- the same treatment
+// checkOverrideTemplates gets, and for the same reason. A module whose
+// xsl:on-completion is misplaced AND which carries an attribute the
+// summaries do not allow is in error either way; running the structural
+// rule first only decides which of the two errors is reported, and reports
+// the one about the shape of the tree rather than the one about a stray
+// attribute inside it. Nothing is accepted that was refused before, and a
+// module with only one of the two faults is unaffected.
+func checkIteratePlacement(n *xdm.Node) error {
+	if n.Kind == xdm.KindElement && isXSL(n, "on-completion") {
+		if p := n.Parent; p == nil || !isXSL(p, "iterate") {
+			return fmt.Errorf(
+				"XTSE0010: xsl:on-completion may only appear as a child of " +
+					"xsl:iterate")
+		}
+	}
+	for _, c := range n.Children {
+		if err := checkIteratePlacement(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -276,17 +276,21 @@ var xsltElements = map[string]elementDef{
 		"as":       {},
 		"required": {values: []string{"yes", "no"}},
 		"tunnel":   {values: []string{"yes", "no"}},
-		// export is not in 9.2's signature -- it is a spelling from an
-		// earlier working draft, and the whole suite carries it in exactly
-		// one file. It is accepted and ignored rather than listed as
-		// removed, for the reason html-version and suppress-indentation are
-		// below: iterate-024 writes it on an xsl:param, and the error the
-		// case is actually about is the xsl:on-completion misplaced further
-		// down. Making it removed30 reports XTSE0090 before the walk ever
-		// reaches the XTSE0010 the case exists to pin, which was measured:
-		// it cost that case and no other. The three sibling draft
-		// attributes, which no stylesheet in the suite writes, are refused.
-		"export": {},
+		// export is not in 9.2's signature -- the summary reads
+		// "<xsl:param name = eqname select? = expression as? = sequence-type
+		// required? = boolean tunnel? = boolean static? = boolean>" -- so it
+		// is a spelling from an earlier working draft, listed as removed for
+		// the reason bind-group is below.
+		//
+		// It was previously accepted and ignored, because the one suite file
+		// that writes it, iterate-024, exists to pin the XTSE0010 for an
+		// xsl:on-completion misplaced further down, and the attribute sweep
+		// reported XTSE0090 before the walk ever reached it. That was a
+		// check-ordering defect, not a reason to tolerate a withdrawn
+		// attribute: the placement rule is now read off the tree ahead of
+		// the grammar sweep, so the structural error wins and the attribute
+		// can be refused. See checkIteratePlacement in iterate_static.go.
+		"export": {removed30: true},
 		// processor30, not since30: a static parameter is supplied by the
 		// caller, so whether one may be declared follows the processor the
 		// caller is driving rather than the module's own @version.

@@ -365,6 +365,15 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 	// The grammar checks run after conditional inclusion and before anything
 	// is compiled, so that an element excluded by use-when is never asked
 	// about — section 3.12 forbids reporting an error for one.
+	// Section 8.4's placement rule for xsl:on-completion is read off the tree
+	// first, for the reason checkOverrideTemplates is: it is purely
+	// structural. A module that misplaces the element and also writes an
+	// attribute the summaries do not allow is refused either way; asking the
+	// structural question first only settles which error is reported, and the
+	// shape of the tree is the more useful answer. See iterate_static.go.
+	if err := checkIteratePlacement(root); err != nil {
+		return err
+	}
 	if err := checkStaticGrammarTree(root, false); err != nil {
 		return err
 	}
