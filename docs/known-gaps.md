@@ -55,10 +55,10 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 1 of 30,346; XSLT 3.0 has 27 of 11,518;
+failures of 6,201; XQuery 3.1 has 1 of 30,346; XSLT 3.0 has 26 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,598. Everything below
-is an account of those 97 cases, or of a decision that produced some of them.
-The 97 is the sum of the nine figures above, computed from
+is an account of those 96 cases, or of a decision that produced some of them.
+The 96 is the sum of the nine figures above, computed from
 [tests/conformance/results.json](../tests/conformance/results.json) rather than
 written: `tests/docfigures.sh` re-derives it from `tests/ratchet.txt` and fails
 if this file and the generated table disagree.
@@ -133,7 +133,7 @@ published rules find perfectly streamable. The suite's own descriptions name
 three intended rules, and each of the three is blocked by the spec itself.
 
 *"Not grounded" / "consumes the streamed input"* (`su-absorbing-901`,
-`su-inspection-901`, `-903`). §19.8.8.11's table gives a reference to the
+`su-inspection-901`, `-903`). §19.8.8.12's table gives a reference to the
 streaming parameter posture **grounded** for both the absorbing and inspection
 categories — for inspection, whether the reference is singular or not — and
 §19.8.1 then says *"If P is grounded, then S′ is S"*, so absorbing it is
@@ -147,7 +147,7 @@ functions are the same function; the only difference is the final `else` arm:
     A:   else f:get-inherited-attribute-value-004($element/.., $attribute-name)
     901: else string($element)
 
-Under §19.8.8.11 both arms are grounded and motionless, so the two bodies are
+Under §19.8.8.12 both arms are grounded and motionless, so the two bodies are
 indistinguishable. A rule counting references to the streaming parameter does
 not separate them either: `A`'s `f:depth-002` references `$input` twice.
 
