@@ -18,7 +18,7 @@ import (
 func TestDeepExpressionIsRefusedNotFatal(t *testing.T) {
 	for _, depth := range []int{maxParseDepth + 1, 200000} {
 		expr := strings.Repeat("(", depth) + "1" + strings.Repeat(")", depth)
-		_, err := Compile(expr, nil)
+		_, err := Compile(expr, CompileOptions{})
 		if err == nil {
 			t.Fatalf("depth %d was accepted; the bound did not apply", depth)
 		}
@@ -47,7 +47,7 @@ func TestDeepTypeIsRefusedNotFatal(t *testing.T) {
 		"map":           nest("map(xs:string, ", ")", 5000, "item()"),
 	}
 	for name, expr := range cases {
-		_, err := CompileVersion(expr, nil, XPath31)
+		_, err := Compile(expr, CompileOptions{Namespaces: nil, Version: XPath31})
 		if err == nil {
 			t.Errorf("%s: accepted; the bound did not apply", name)
 			continue
@@ -69,7 +69,7 @@ func TestOrdinaryTypeNestingStillCompiles(t *testing.T) {
 		"$m instance of map(xs:string, array(xs:integer))",
 		"$f instance of (function(item()) as item())",
 	} {
-		if _, err := CompileVersion(expr, nil, XPath31); err != nil {
+		if _, err := Compile(expr, CompileOptions{Namespaces: nil, Version: XPath31}); err != nil {
 			t.Errorf("%s: %v", expr, err)
 		}
 	}
@@ -88,7 +88,7 @@ func TestOrdinaryNestingStillCompiles(t *testing.T) {
 		"for": strings.Repeat("for $x in 1 return ", 100) + "$x",
 	}
 	for name, expr := range cases {
-		if _, err := Compile(expr, nil); err != nil {
+		if _, err := Compile(expr, CompileOptions{}); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

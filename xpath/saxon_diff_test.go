@@ -252,7 +252,7 @@ func TestSpecErrorCodes(t *testing.T) {
 	}
 	for _, c := range cases {
 		var err error
-		if compiled, cerr := Compile(c.expr, ns); cerr != nil {
+		if compiled, cerr := Compile(c.expr, CompileOptions{Namespaces: ns}); cerr != nil {
 			err = cerr
 		} else {
 			_, err = compiled.Eval(NewContext(nil, Builtins()))
@@ -284,7 +284,7 @@ func TestStringParametersAreTypeChecked(t *testing.T) {
 	}
 	for _, expr := range refused {
 		var err error
-		if c, cerr := Compile(expr, ns); cerr != nil {
+		if c, cerr := Compile(expr, CompileOptions{Namespaces: ns}); cerr != nil {
 			err = cerr
 		} else {
 			_, err = c.Eval(NewContext(nil, Builtins()))
@@ -338,7 +338,7 @@ func TestStrictLexicalForms(t *testing.T) {
 		{"and an unpadded one", `'AAAA' castable as xs:base64Binary`, "true"},
 	}
 	for _, c := range cases {
-		compiled, err := Compile(c.expr, ns)
+		compiled, err := Compile(c.expr, CompileOptions{Namespaces: ns})
 		if err != nil {
 			t.Errorf("%s: %v", c.expr, err)
 			continue
@@ -385,7 +385,7 @@ func TestValueComparisonUntypedIsString(t *testing.T) {
 		`xs:untypedAtomic("0") lt xs:float(1)`,
 	}
 	for _, expr := range refused {
-		c, err := Compile(expr, ns)
+		c, err := Compile(expr, CompileOptions{Namespaces: ns})
 		if err == nil {
 			_, err = c.Eval(NewContext(nil, Builtins()))
 		}
@@ -426,7 +426,7 @@ func TestMinMaxPromotionAndValidation(t *testing.T) {
 		{`min((1, 2, 3))`, "1"},
 		{`min(("a", "b"))`, "a"},
 	} {
-		compiled, err := Compile(c.expr, ns)
+		compiled, err := Compile(c.expr, CompileOptions{Namespaces: ns})
 		if err != nil {
 			t.Errorf("%s: %v", c.expr, err)
 			continue
@@ -448,7 +448,7 @@ func TestMinMaxPromotionAndValidation(t *testing.T) {
 		`min(("a string", 1))`,
 		`max((1, "a string"))`,
 	} {
-		compiled, cerr := Compile(expr, ns)
+		compiled, cerr := Compile(expr, CompileOptions{Namespaces: ns})
 		var err error = cerr
 		if cerr == nil {
 			_, err = compiled.Eval(ctx)
@@ -482,7 +482,7 @@ func TestCastTargetMustBeSingleAtomicType(t *testing.T) {
 		{`'string' castable as xs:anyAtomicType`, "XPST0080"},
 	}
 	for _, c := range cases {
-		_, err := Compile(c.expr, ns)
+		_, err := Compile(c.expr, CompileOptions{Namespaces: ns})
 		if err == nil {
 			t.Errorf("%s compiled; it is not a valid cast target", c.expr)
 			continue
@@ -493,7 +493,7 @@ func TestCastTargetMustBeSingleAtomicType(t *testing.T) {
 	}
 	// The legal forms must still compile.
 	for _, expr := range []string{`'1' castable as xs:integer`, `'1' castable as xs:integer?`} {
-		if _, err := Compile(expr, ns); err != nil {
+		if _, err := Compile(expr, CompileOptions{Namespaces: ns}); err != nil {
 			t.Errorf("%s was refused: %v", expr, err)
 		}
 	}
@@ -554,7 +554,7 @@ func TestCollationsAreApplied(t *testing.T) {
 		{`compare('a', 'b', 'collation/codepoint')`, "-1"},
 	}
 	for _, c := range cases {
-		compiled, err := Compile(c.expr, ns)
+		compiled, err := Compile(c.expr, CompileOptions{Namespaces: ns})
 		if err != nil {
 			t.Errorf("%s: %v", c.expr, err)
 			continue
@@ -878,7 +878,7 @@ func TestStaticErrorCodes(t *testing.T) {
 		{`document-node(schema-element(notBound:ncname))`, "XPST0081"},
 		{`3 treat as xs:noSuchType`, "XPST0051"},
 	} {
-		_, err := Compile(c.expr, ns)
+		_, err := Compile(c.expr, CompileOptions{Namespaces: ns})
 		if err == nil {
 			t.Errorf("%s compiled, want %s", c.expr, c.code)
 			continue
@@ -898,7 +898,7 @@ func TestStaticErrorCodes(t *testing.T) {
 		`3 treat as item()`,
 		`3 instance of item()*`,
 	} {
-		if _, err := Compile(expr, ns); err != nil {
+		if _, err := Compile(expr, CompileOptions{Namespaces: ns}); err != nil {
 			t.Errorf("%s was refused: %v", expr, err)
 		}
 	}
@@ -1076,7 +1076,7 @@ func TestAssortedOperatorRules(t *testing.T) {
 	// not "10 div 3".
 	ns := testResolver{"xs": xdm.NSXS}
 	for _, expr := range []string{`10div 3`, `10idiv 3`, `1eq 2`} {
-		if _, err := Compile(expr, ns); xdm.ErrorCode(err) != "XPST0003" {
+		if _, err := Compile(expr, CompileOptions{Namespaces: ns}); xdm.ErrorCode(err) != "XPST0003" {
 			t.Errorf("%s gave %v, want XPST0003", expr, err)
 		}
 	}
@@ -1110,13 +1110,13 @@ func TestAssortedStaticAndStringRules(t *testing.T) {
 	// An unterminated comment silently discarded the rest of the expression,
 	// so "1(: unterminated" evaluated to 1.
 	for _, expr := range []string{`1(: this comment does not end`, `(: nor this`} {
-		if _, err := Compile(expr, ns); xdm.ErrorCode(err) != "XPST0003" {
+		if _, err := Compile(expr, CompileOptions{Namespaces: ns}); xdm.ErrorCode(err) != "XPST0003" {
 			t.Errorf("%s gave %v, want XPST0003", expr, err)
 		}
 	}
 	// A closed comment is still skipped, and they nest.
 	for _, expr := range []string{`(:***:)1`, `1 (: a (: nested :) comment :)`} {
-		if _, err := Compile(expr, ns); err != nil {
+		if _, err := Compile(expr, CompileOptions{Namespaces: ns}); err != nil {
 			t.Errorf("%s was refused: %v", expr, err)
 		}
 	}
@@ -1478,7 +1478,7 @@ func TestOccurrenceIndicatorAmbiguity(t *testing.T) {
 		{`count(/* | /*)`, "1"},
 	} {
 		root := mustParse(t, `<r/>`)
-		compiled, err := Compile(c.expr, ns)
+		compiled, err := Compile(c.expr, CompileOptions{Namespaces: ns})
 		if err != nil {
 			t.Errorf("%s: %v", c.expr, err)
 			continue
@@ -1560,7 +1560,7 @@ func TestParameterTypesAreEnforced(t *testing.T) {
 		{`1 instance of xs:noSuchType`, "XPST0051"},
 		{`1 instance of document-node()`, ""},
 	} {
-		_, err := Compile(c.expr, ns)
+		_, err := Compile(c.expr, CompileOptions{Namespaces: ns})
 		if c.code == "" {
 			if err != nil {
 				t.Errorf("%s was refused: %v", c.expr, err)
@@ -1652,7 +1652,7 @@ func TestOversizedNumericLiterals(t *testing.T) {
 	}
 	// A malformed literal is still XPST0003.
 	for _, expr := range []string{`1e`, `1.2.3`} {
-		if _, err := Compile(expr, testResolver{}); err == nil {
+		if _, err := Compile(expr, CompileOptions{Namespaces: testResolver{}}); err == nil {
 			t.Errorf("%s compiled; it is not a valid literal", expr)
 		}
 	}
@@ -1920,7 +1920,7 @@ func TestQNameCastResolvesPrefix(t *testing.T) {
 	// An unbound prefix is FONS0004 — the namespace-function code — rather
 	// than the static XPST0081, because the prefix arrives as a string
 	// argument rather than written in the expression.
-	if _, err := Compile(`"nope:x" cast as xs:QName`, ns); xdm.ErrorCode(err) != "FONS0004" {
+	if _, err := Compile(`"nope:x" cast as xs:QName`, CompileOptions{Namespaces: ns}); xdm.ErrorCode(err) != "FONS0004" {
 		t.Errorf("unbound prefix in a cast gave %v, want FONS0004", err)
 	}
 	// Both halves must be NCNames, and an unusable lexical form is FORG0001:
@@ -1931,7 +1931,7 @@ func TestQNameCastResolvesPrefix(t *testing.T) {
 		`xs:QName("")`, `xs:QName(":x")`, `xs:QName("a:")`,
 		`xs:QName("1bad")`, `"" cast as xs:QName`, `":x" cast as xs:QName`,
 	} {
-		if _, err := Compile(expr, ns); xdm.ErrorCode(err) != "FORG0001" {
+		if _, err := Compile(expr, CompileOptions{Namespaces: ns}); xdm.ErrorCode(err) != "FORG0001" {
 			t.Errorf("%s gave %v, want FORG0001", expr, err)
 		}
 	}
@@ -1940,7 +1940,7 @@ func TestQNameCastResolvesPrefix(t *testing.T) {
 		`xs:QName("ncname")`, `xs:QName("myPrefix:ncname")`,
 		`"ncname" cast as xs:QName`,
 	} {
-		if _, err := Compile(expr, ns); err != nil {
+		if _, err := Compile(expr, CompileOptions{Namespaces: ns}); err != nil {
 			t.Errorf("%s was refused: %v", expr, err)
 		}
 	}

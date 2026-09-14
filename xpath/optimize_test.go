@@ -29,7 +29,7 @@ func TestConstantFoldingPreservesValues(t *testing.T) {
 		{`abs(-5)`, "5"},
 	}
 	for _, c := range cases {
-		compiled, err := Compile(c.expr, ns)
+		compiled, err := Compile(c.expr, CompileOptions{Namespaces: ns})
 		if err != nil {
 			t.Errorf("%s: %v", c.expr, err)
 			continue
@@ -60,7 +60,7 @@ func TestFoldingDefersErrors(t *testing.T) {
 		`xs:date('not-a-date')`,
 	} {
 		// Compilation must succeed...
-		compiled, err := Compile(expr, ns)
+		compiled, err := Compile(expr, CompileOptions{Namespaces: ns})
 		if err != nil {
 			t.Errorf("%s failed to compile: %v — the error should be deferred "+
 				"to evaluation", expr, err)
@@ -73,7 +73,7 @@ func TestFoldingDefersErrors(t *testing.T) {
 	}
 
 	// The branch that is never taken must not raise at all.
-	compiled, err := Compile(`if (true()) then 1 else (1 idiv 0)`, ns)
+	compiled, err := Compile(`if (true()) then 1 else (1 idiv 0)`, CompileOptions{Namespaces: ns})
 	if err != nil {
 		t.Fatalf("compiling a guarded division failed: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestFoldingSkipsContextDependentExpressions(t *testing.T) {
 		`string(.)`,
 		`count(//a)`,
 	} {
-		compiled, err := Compile(expr, ns)
+		compiled, err := Compile(expr, CompileOptions{Namespaces: ns})
 		if err != nil {
 			continue // a parse error is not what this test is about
 		}
@@ -111,7 +111,7 @@ func TestFoldingSkipsContextDependentExpressions(t *testing.T) {
 func TestFoldingActuallyReplacesTheTree(t *testing.T) {
 	ns := testResolver{"xs": "http://www.w3.org/2001/XMLSchema"}
 	for _, expr := range []string{`1 + 2`, `count(1 to 10)`, `concat('a','b')`} {
-		compiled, err := Compile(expr, ns)
+		compiled, err := Compile(expr, CompileOptions{Namespaces: ns})
 		if err != nil {
 			t.Fatalf("%s: %v", expr, err)
 		}
@@ -125,7 +125,7 @@ func TestFoldingActuallyReplacesTheTree(t *testing.T) {
 // library it resolves through is supplied by the caller and can change.
 func TestFoldingSkipsUnknownFunctions(t *testing.T) {
 	ns := testResolver{"my": "urn:example", "xs": "http://www.w3.org/2001/XMLSchema"}
-	compiled, err := Compile(`my:f(1)`, ns)
+	compiled, err := Compile(`my:f(1)`, CompileOptions{Namespaces: ns})
 	if err != nil {
 		t.Skipf("parse: %v", err)
 	}

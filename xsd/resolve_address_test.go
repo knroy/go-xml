@@ -94,9 +94,9 @@ func TestIsPrivateAddr(t *testing.T) {
 		// passes as an ordinary global v6 address.
 		"::ffff:127.0.0.1", "::ffff:169.254.169.254",
 		"100.64.0.1", "100.127.255.255", // carrier-grade NAT
-		"192.0.0.1",  // IETF protocol assignments
-		"224.0.0.1",  // multicast
-		"fe80::1",    // v6 link-local
+		"192.0.0.1", // IETF protocol assignments
+		"224.0.0.1", // multicast
+		"fe80::1",   // v6 link-local
 	}
 	for _, s := range private {
 		ip, err := netip.ParseAddr(s)

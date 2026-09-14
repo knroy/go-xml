@@ -49,7 +49,7 @@ func TestLiftedOperandReachesEveryEvaluator(t *testing.T) {
 
 	compile := func(expr string) *compiledExpr {
 		t.Helper()
-		c, err := xpath.CompileXQuery(expr, sc, 31)
+		c, err := xpath.Compile(expr, xpath.CompileOptions{Namespaces: sc, Version: 31, XQuery: true})
 		if err != nil {
 			t.Fatalf("compiling %q: %v", expr, err)
 		}
@@ -104,7 +104,7 @@ func TestLiftedOperandReachesEveryEvaluator(t *testing.T) {
 // it does with the absent case rather than dereferencing a nil.
 func TestInspectDoesNotEvaluate(t *testing.T) {
 	sc := newStaticContext()
-	c, err := xpath.CompileXQuery("fn:count((1,2))", sc, 31)
+	c, err := xpath.Compile("fn:count((1,2))", xpath.CompileOptions{Namespaces: sc, Version: 31, XQuery: true})
 	if err != nil {
 		t.Fatalf("compiling: %v", err)
 	}

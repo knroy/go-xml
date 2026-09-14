@@ -37,7 +37,7 @@ func TestDefaultCollationReportsStaticDefault(t *testing.T) {
 
 	compile := func(t *testing.T, expr string) *Compiled {
 		t.Helper()
-		c, err := Compile(expr, nil)
+		c, err := Compile(expr, CompileOptions{})
 		if err != nil {
 			t.Fatalf("compile %q: %v", expr, err)
 		}

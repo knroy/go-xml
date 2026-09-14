@@ -41,7 +41,7 @@ func TestItemBudgetStopsRunaways(t *testing.T) {
 // way through.
 func TestItemBudgetResetsPerEvaluation(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	compiled, err := Compile(`count(1 to 500)`, nil)
+	compiled, err := Compile(`count(1 to 500)`, CompileOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

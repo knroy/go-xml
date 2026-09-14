@@ -24,7 +24,7 @@ func TestMapConstructorDuplicateKeyCode(t *testing.T) {
 		{"a host may select the XSLT code", "XTDE3365", "XTDE3365"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c, err := CompileVersion(`map{'a':1,'a':2}`, nil, XPath31)
+			c, err := Compile(`map{'a':1,'a':2}`, CompileOptions{Version: XPath31})
 			if err != nil {
 				t.Fatalf("compile: %v", err)
 			}

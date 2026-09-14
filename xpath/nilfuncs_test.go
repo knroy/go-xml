@@ -21,7 +21,7 @@ func TestNamedFunctionRefWithNoLibrary(t *testing.T) {
 	ctx := xpath.NewContext(tree.Root, nil)
 
 	for _, expr := range []string{"fn:count#1", "count#1", "concat#3"} {
-		c, err := xpath.CompileVersion(expr, nil, xpath.XPath30)
+		c, err := xpath.Compile(expr, xpath.CompileOptions{Namespaces: nil, Version: xpath.XPath30})
 		if err != nil {
 			t.Fatalf("%s: compile: %v", expr, err)
 		}

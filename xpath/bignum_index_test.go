@@ -128,7 +128,7 @@ func TestLookupLiteralRoundTrips(t *testing.T) {
 		"1", "2147483648", "9007199254740993", "1000000000000000001",
 		"9223372036854775808", "100000000000000000000000000000000",
 	} {
-		c, err := CompileVersion("$a?"+lit, nil, XPath31)
+		c, err := Compile("$a?"+lit, CompileOptions{Namespaces: nil, Version: XPath31})
 		if err != nil {
 			t.Fatalf("compile ?%s: %v", lit, err)
 		}

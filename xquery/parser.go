@@ -626,7 +626,7 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		return nil, err
 	}
 	var opsOut []liftedOperand
-	c, err := xpath.CompileXQuery(expanded, p.sc, p.version)
+	c, err := xpath.Compile(expanded, xpath.CompileOptions{Namespaces: p.sc, Version: p.version, XQuery: true})
 	if err != nil {
 		// The source handed here is XQuery this parser has already rewritten
 		// around — the trailing half of "(...)/S", a call's rewritten
@@ -641,7 +641,7 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		if serr != nil || len(ops) == 0 {
 			return nil, err
 		}
-		sub, serr := xpath.CompileXQuery(rewritten, p.sc, p.version)
+		sub, serr := xpath.Compile(rewritten, xpath.CompileOptions{Namespaces: p.sc, Version: p.version, XQuery: true})
 		if serr != nil {
 			return nil, err
 		}

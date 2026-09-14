@@ -40,7 +40,7 @@ func TestHyphenIsANameChar(t *testing.T) {
 		{`foo-bar`, true, "one name test"},
 		{`foo - 1`, true, "subtraction"},
 	} {
-		_, err := Compile(tc.expr, nil)
+		_, err := Compile(tc.expr, CompileOptions{})
 		switch {
 		case tc.valid && err != nil:
 			t.Errorf("%q should compile (%s), got %v", tc.expr, tc.why, err)

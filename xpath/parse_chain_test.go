@@ -39,7 +39,7 @@ func TestLongOperatorChainIsRefusedNotFatal(t *testing.T) {
 		{"unary", strings.Repeat("-", n) + "1"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := Compile(c.src, nil)
+			_, err := Compile(c.src, CompileOptions{})
 			if err == nil {
 				t.Fatalf("a chain of %d terms was accepted; the bound did not apply", n)
 			}
@@ -92,7 +92,7 @@ func TestLongButLegalChainsStillCompile(t *testing.T) {
 		{"and", "true()" + strings.Repeat(" and true()", 5000)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := Compile(c.src, nil); err != nil {
+			if _, err := Compile(c.src, CompileOptions{}); err != nil {
 				t.Fatalf("a legal %d-byte chain was refused: %v", len(c.src), err)
 			}
 		})
@@ -111,7 +111,7 @@ func TestManyShortChainsAreNotRefused(t *testing.T) {
 		parts = append(parts, "(1+1)")
 	}
 	src := "count((" + strings.Join(parts, ",") + "))"
-	if _, err := Compile(src, nil); err != nil {
+	if _, err := Compile(src, CompileOptions{}); err != nil {
 		t.Fatalf("%d separate two-term chains were refused: %v", len(parts), err)
 	}
 }
