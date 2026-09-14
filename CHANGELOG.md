@@ -27,9 +27,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| `xsl:output` and `xsl:function` attributes were flagged as attribute value templates | The Recommendation braces only `xsl:result-document`'s, so `build-tree="{$x}"` escaped XTSE0020. Four `avt` flags cleared, on the attributes whose enumeration the flag was suppressing; `streamability` keeps its EQName union. |  |
-| `visibility="hidden"` was declarable and `cache="full"` accepted | Hidden is acquired through `xsl:accept`/`xsl:expose`, and `cache? = boolean`. The enumerations now match the summaries; both are XTSE0020. |  |
-| Three working-draft attributes were tolerated on a 3.0 module | `function/@identity-sensitive`, `accumulator/@applies-to` and `package/@use-package` are now `removed30`: XTSE0090. `param/@export` stays tolerated, so `iterate-024` still reaches its XTSE0010. |  |
+| `xsl:output` and `xsl:function` attributes were flagged as attribute value templates | The Recommendation braces only `xsl:result-document`'s, so `build-tree="{$x}"` escaped XTSE0020. Four `avt` flags cleared, on the attributes whose enumeration the flag was suppressing; `streamability` keeps its EQName union. | [`4410604`][4410604] |
+| `visibility="hidden"` was declarable and `cache="full"` accepted | Hidden is acquired through `xsl:accept`/`xsl:expose`, and `cache? = boolean`. The enumerations now match the summaries; both are XTSE0020. | [`4410604`][4410604] |
+| Three working-draft attributes were tolerated on a 3.0 module | `function/@identity-sensitive`, `accumulator/@applies-to` and `package/@use-package` are now `removed30`: XTSE0090. `param/@export` stays tolerated, so `iterate-024` still reaches its XTSE0010. | [`4410604`][4410604] |
 | The XTSE0020 message for a yes-or-no attribute listed only `yes, no` at 3.0 | The check already accepted `true/false/1/0` there. The message now lists the spellings in force for the module's version. | [`f9d96aa`][f9d96aa] |
 | §19.8.8.15 decided a named function reference only under a grounded context | Nothing recorded focus dependence. A table of the 33 focus-dependent (name, arity) pairs, from the F&O and XSLT "Properties" paragraphs, now decides the rest. | [`acdc330`][acdc330] |
 | §19.8.8.11 dynamic function calls had no streamability rule | `$f(child::x)` in a streamed context was accepted for want of an opinion. The base is inspected and each argument navigates, the spec's no-signature fallback, so a streamed argument is refused. | [`a09c437`][a09c437] |
@@ -769,6 +769,7 @@ here so every entry in this file sits under a release.
 [3f3cce3]: https://github.com/knroy/go-xml/commit/3f3cce3
 [40930d5]: https://github.com/knroy/go-xml/commit/40930d5
 [33263c8]: https://github.com/knroy/go-xml/commit/33263c8
+[4410604]: https://github.com/knroy/go-xml/commit/4410604
 [4c06a1f]: https://github.com/knroy/go-xml/commit/4c06a1f
 [4c78fae]: https://github.com/knroy/go-xml/commit/4c78fae
 [4ce4086]: https://github.com/knroy/go-xml/commit/4ce4086
