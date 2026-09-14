@@ -2351,9 +2351,32 @@ func (p *parser) checkTypeBaseCycles() {
 		return names[i].Local < names[j].Local
 	})
 
+	// acyclic holds every type whose chain has already been walked to its
+	// terminator without returning to it. Each type's walk is otherwise
+	// independent, so N chained types cost N walks of up to N steps: a
+	// 10,000-link restriction chain spent 2.8 s here after the facet merge
+	// was memoised. A walk that reaches a type in this set can stop, since
+	// a chain that terminates cannot lead back to its start, and every type
+	// it passed is then in the set too.
+	acyclic := map[Type]bool{}
+	// onCycle is the complement: every type a walk passed on its way back
+	// to its start lies on that cycle, and is reported when its own turn
+	// comes without walking the ring again.
+	onCycle := map[Type]bool{}
+
 	for _, name := range names {
 		t := p.schema.Types[name]
 		if t == nil {
+			continue
+		}
+		if onCycle[t] {
+			p.errs = append(p.errs, &ParseError{
+				Code: "ct-props-correct.3",
+				Message: fmt.Sprintf(
+					"type %q is circular: it is reachable from "+
+						"itself by following base type definitions",
+					name.Local),
+			})
 			continue
 		}
 		// "except for the ur-type definition": xs:anyType is its own
@@ -2397,6 +2420,7 @@ func (p *parser) checkTypeBaseCycles() {
 		// stops, leaving the report to the pass over the type that is
 		// actually on the cycle.
 		seen := map[Type]bool{}
+		terminated := false
 		cur := baseOf(t)
 		for cur != nil {
 			if cur == t {
@@ -2407,6 +2431,13 @@ func (p *parser) checkTypeBaseCycles() {
 							"itself by following base type definitions",
 						name.Local),
 				})
+				for st := range seen {
+					onCycle[st] = true
+				}
+				break
+			}
+			if acyclic[cur] {
+				terminated = true
 				break
 			}
 			if seen[cur] {
@@ -2418,9 +2449,16 @@ func (p *parser) checkTypeBaseCycles() {
 				// xs:anyType and xs:anySimpleType are their own
 				// base; that is the chain's terminator, not a
 				// cycle.
+				terminated = true
 				break
 			}
 			cur = next
+		}
+		if terminated || cur == nil {
+			acyclic[t] = true
+			for st := range seen {
+				acyclic[st] = true
+			}
 		}
 	}
 }

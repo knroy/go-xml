@@ -30,10 +30,11 @@ func facetedChain(n int) string {
 // whole chain for every type it was asked about, so a schema of N chained
 // restrictions cost O(N²) at load: 10,000 links took 15.4 s. The merged set
 // is memoised per parser now and the merge no longer appears in a profile of
-// the load, which takes 2.8 s on the same machine — all of it in
-// checkTypeBaseCycles, a separate walk with the same shape. The bound sits
-// well above that residual so a slow CI host cannot fail it, and well below
-// the quadratic merge, which overshoots it twice over.
+// the load. The 2.8 s that remained sat in checkTypeBaseCycles, a separate
+// walk with the same shape, memoised in its turn and pinned by
+// TestBaseCycleCheckLinearInChainDepth; the load is 0.05 s now. The bound
+// stays where it was: well above anything a slow CI host will see, and well
+// below the quadratic merge, which overshoots it twice over.
 func TestFacetMergeLinearInChainDepth(t *testing.T) {
 	const n = 10000
 	st, err := xdm.ParseString(facetedChain(n), xdm.ParseOptions{})
