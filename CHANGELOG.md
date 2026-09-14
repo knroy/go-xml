@@ -263,7 +263,8 @@ turn "I could not prove the constraint" into "the constraint holds."*
 |---|---|---|
 | The RELAX NG pattern-size bound could not fire on the attribute path | Checked once per element, never between attributes, so a 106-byte document did not finish in 60 s even at `MaxPatternSize: 1`. Now checked per attribute. | [`fbe8f3c`][fbe8f3c] |
 | A nested DTD content model could exhaust the stack and kill the process | `parseCP`/`parseGroup` recursed unbounded, so 2.5M parens were a `fatal error` `recover()` cannot catch; `maxModelDepth` caps nesting at 1000. | [`020ef7f`][020ef7f] |
-| Merging adjacent text nodes was quadratic in their number | `AppendText` re-concatenated the whole run per piece, so 40,000 source text nodes cost 7,946 MB; it now accumulates in a buffer, 171 MB. | |
+| Merging adjacent text nodes was quadratic in their number | `AppendText` re-concatenated the whole run per piece, so 40,000 source text nodes cost 7,946 MB; it now accumulates in a buffer, 171 MB. | [`41ca5dc`][41ca5dc] |
+| The text accumulator recovered silently from a state it cannot reach | The restart branch was never entered in 308,423 calls, so its aliasing guard had no test that could fail; it asserts the invariant now, as `strings.Builder` does. | [`33572e9`][33572e9] |
 | The entity-expansion budget restarted for every XInclude'd document | Each included parse minted a fresh `entityTable`, so 200 documents got 200 × 1 MB: 95 KB expanded to 149 MB. One `entityBudget` is now shared across the pass, and a refusal is fatal to `xi:fallback`. | [`989e88d`][989e88d] |
 | The documented `MaxItems` budget never bound on an XQuery body | `Compiled.Eval` reset the counter once per tuple; `HoldItemBudget` holds it for one query. | [`fe41f3c`][fe41f3c] |
 | Uncompilable content models skipped every constraint on them | A model that would not compile passed silently rather than declining. | [`b6fb5ab`][b6fb5ab] |
@@ -783,6 +784,7 @@ here so every entry in this file sits under a release.
 [2eb28b6]: https://github.com/knroy/go-xml/commit/2eb28b6
 [2ef8dba]: https://github.com/knroy/go-xml/commit/2ef8dba
 [30dc68d]: https://github.com/knroy/go-xml/commit/30dc68d
+[33572e9]: https://github.com/knroy/go-xml/commit/33572e9
 [34908a7]: https://github.com/knroy/go-xml/commit/34908a7
 [35c2e77]: https://github.com/knroy/go-xml/commit/35c2e77
 [3672fa3]: https://github.com/knroy/go-xml/commit/3672fa3
@@ -796,6 +798,7 @@ here so every entry in this file sits under a release.
 [40930d5]: https://github.com/knroy/go-xml/commit/40930d5
 [33263c8]: https://github.com/knroy/go-xml/commit/33263c8
 [411fdd5]: https://github.com/knroy/go-xml/commit/411fdd5
+[41ca5dc]: https://github.com/knroy/go-xml/commit/41ca5dc
 [4410604]: https://github.com/knroy/go-xml/commit/4410604
 [4c06a1f]: https://github.com/knroy/go-xml/commit/4c06a1f
 [4c78fae]: https://github.com/knroy/go-xml/commit/4c78fae
