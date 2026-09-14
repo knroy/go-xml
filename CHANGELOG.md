@@ -21,13 +21,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-<<<<<<< HEAD
-| The `SERE0007` raw-text guard looked at one text node at a time | Adjacent text nodes are written into one raw run, so `"a<"` + `"/script>"` emitted a contiguous `</script>` under the html method. The guard now spans the boundary. | [`SHA`][SHA] |
+| The `SERE0007` raw-text guard looked at one text node at a time | Adjacent text nodes are written into one raw run, so `"a<"` + `"/script>"` emitted a contiguous `</script>` under the html method. The guard now spans the boundary. | [`2acbab4`][2acbab4] |
 | 29 cast and type errors rendered their code twice | `xdm.ErrCast` and `xdm.ErrType` already carry `FORG0001`/`XPTY0004` and `Error()` prints it, yet the call sites spelled it again, so `xs:byte(999)` read `FORG0001: FORG0001: …`. The format strings no longer repeat it. | [`0af8592`][0af8592] |
-| XSD facet checking was quadratic in the depth of a restriction chain | `mergedFacets` flattened the whole chain for every type asked about, so 10,000 chained restrictions took 15.4 s to load; the merged set is memoised on the parser and the merge is gone from the profile. |  |
-=======
 | XSD facet checking was quadratic in the depth of a restriction chain | `mergedFacets` flattened the whole chain for every type asked about, so 10,000 chained restrictions took 15.4 s to load; the merged set is memoised on the parser and the merge is gone from the profile. | [`33263c8`][33263c8] |
->>>>>>> 3747ca1 (docs: link the facet merge row)
 | The entity-expansion budget restarted for every resolved module | `parseUncached` minted a fresh allowance per file, so 60 imports each under the 1 MB ceiling expanded 42 MB and were accepted; the compilation and the evaluation now share one. | [`9681343`][9681343] |
 | The resolver cache cleared itself instead of evicting | Past 256 URIs the whole map was thrown away, so a stylesheet cycling over more documents re-parsed every one; evicting a single entry cut 300 documents × 4 rounds from 1.05s to 0.31s. | [`d1a9131`][d1a9131] |
 | `xsl:evaluate`'s restriction leaked into the body of a function it called | §10.4.1 governs the names the target expression may reference, not what those functions call. A public function's private callee was refused, costing 512 of 593 DocBook documents. | [`e812277`][e812277] |
@@ -106,7 +102,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `fn:transform` accepted the `post-process` option and ignored it, so a pipeline silently ran one stage short | The function is applied to every result document after delivery, and an option name the processor does not know is now `FOXT0002` rather than silence. Reported as issue #5. | [`e8ebf4b`][e8ebf4b] |
 | `fn:parse-json` and `fn:json-to-xml` recursed once per nesting level with nothing counting them | `maxJSONDepth` bounds nesting at 1000, matching the XML parser's own depth limit. | [`9660e52`][9660e52] |
 | The CLI's RELAX NG resolver read a schema whole, the only resolver in the library with no byte limit | `DefaultMaxRNGBytes` bounds one schema at 16 MB, matching `xsd`. | [`f29b554`][f29b554] |
-| `go-xml validate` confined nothing unless `-root` was given | A non-nil resolver with an empty `Root` reads anywhere, so the flag's default undid the library's closed one; it now defaults to the schema's directory, as the transform does. | [`0000000`][0000000] |
+| `go-xml validate` confined nothing unless `-root` was given | A non-nil resolver with an empty `Root` reads anywhere, so the flag's default undid the library's closed one; it now defaults to the schema's directory, as the transform does. | [`0aa92ca`][0aa92ca] |
 | Template recursion and an oversize range refused without the resource sentinel, so a caller could not classify them | Both wrap `xdm.ErrResourceLimit`; the range also carries `XPDY0130`, as its counted twin already did. | [`57a2b64`][57a2b64] |
 | `xsl:result-document` followed a symlink out of `-result-dir`, so a stylesheet could write anywhere | The write opens through `os.OpenRoot`, and each directory is made through the same root. | [`17b1c91`][17b1c91] |
 | A function applying itself through its own name recursed uncharged, bypassing `MaxDepth` | Both function-item invocation paths take `Depth` from the call, as the inline path already did. | [`e511421`][e511421] |
@@ -706,7 +702,7 @@ here so every entry in this file sits under a release.
 | xpath: [Y] on a BCE year is correct, and is now pinned | `format-date`/`format-dateTime` with `[Y]` renders `xs:dateTime( "-1000000-06-15T12:00:00Z")` as `1000000`, with no minus |
 | xsd: an identity field typed as a union compared spellings, not values | Identity-constraint equality is defined on values. `keyString` already builds a type-tagged canonical form for every field before the sequence is joined, so `3.0` and `3` collide as one `xs:decimal`, `007` and `7` as one `xs:integer` |
 
-[0000000]: https://github.com/knroy/go-xml/commit/0000000
+[0aa92ca]: https://github.com/knroy/go-xml/commit/0aa92ca
 [0048fde]: https://github.com/knroy/go-xml/commit/0048fde
 [01b91ba]: https://github.com/knroy/go-xml/commit/01b91ba
 [03b5942]: https://github.com/knroy/go-xml/commit/03b5942
@@ -803,7 +799,7 @@ here so every entry in this file sits under a release.
 [96171c5]: https://github.com/knroy/go-xml/commit/96171c5
 [9660e52]: https://github.com/knroy/go-xml/commit/9660e52
 [9681343]: https://github.com/knroy/go-xml/commit/9681343
-[SHA]: https://github.com/knroy/go-xml/commit/SHA
+[2acbab4]: https://github.com/knroy/go-xml/commit/2acbab4
 [989e88d]: https://github.com/knroy/go-xml/commit/989e88d
 [9a41bea]: https://github.com/knroy/go-xml/commit/9a41bea
 [9ae8c57]: https://github.com/knroy/go-xml/commit/9ae8c57
@@ -869,8 +865,5 @@ here so every entry in this file sits under a release.
 [f88747b]: https://github.com/knroy/go-xml/commit/f88747b
 [f9c0cf5]: https://github.com/knroy/go-xml/commit/f9c0cf5
 [fe41f3c]: https://github.com/knroy/go-xml/commit/fe41f3c
-<<<<<<< HEAD
 [0af8592]: https://github.com/knroy/go-xml/commit/0af8592
-=======
 [3831726]: https://github.com/knroy/go-xml/commit/3831726
->>>>>>> e5e9ad1 (docs: link the file-host commit)
