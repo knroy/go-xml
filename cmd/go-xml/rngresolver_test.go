@@ -1,12 +1,13 @@
 package main
 
 import (
+	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/knroy/go-xml/internal/uripath"
 	"github.com/knroy/go-xml/relaxng"
 	"github.com/knroy/go-xml/xdm"
 )
@@ -23,20 +24,56 @@ import (
 // resolves every href against the base URI in force before the Resolver is
 // ever called (relaxng.resolveHref). cliResolve reproduces exactly that join,
 // so these cases exercise the same strings the CLI's compiler really produces.
+//
+// "Exactly" is the load-bearing word, and an earlier spelling of this helper
+// did not manage it. It split the base with strings.LastIndexByte(dir, '/') --
+// forward slash only -- while the base handed to it is an OS path from
+// filepath.Join. On Unix the two coincide and the helper looked right. On
+// Windows the base is C:\...\001\main.rng, which contains no forward slash at
+// all, so the directory came out empty and every href resolved to a bare name:
+// "top.rng" instead of the file beside the schema. That is not what the CLI
+// does. validate.go hands the compiler fileURI(rngPath) -- an absolute file:
+// URI -- and relaxng.joinRef then takes its URI branch, url.ResolveReference,
+// never the relative-base split that the old helper had copied. The helper had
+// copied the wrong half of joinRef.
+//
+// So the base is spelled as a file: URI first, exactly as validate.go spells
+// it, and the join is the URI resolution the compiler really performs. The
+// href stays a URI reference throughout -- its separator is "/" on every
+// platform, which is true of the href and was never true of the base.
 func cliResolve(base, href string) string {
-	if u := strings.Index(href, "://"); u >= 0 {
+	return cliResolveURI(fileURI(base), href)
+}
+
+// cliResolveURI is cliResolve with the base already spelled as a file: URI.
+//
+// It is split out for the same reason absPathToFileURI is split out of
+// fileURI: fileURI calls filepath.Abs, which is host-relative, so a
+// C:\...\main.rng base cannot be spelled on darwin and the Windows shape of
+// this join would be untestable anywhere but Windows. Everything below is
+// pure string work over a URI, so both platforms' bases can be driven through
+// it from any host -- which is what TestCLIResolveJoinsAgainstOSPathBase does.
+func cliResolveURI(baseURI, href string) string {
+	// An href that names a scheme, or is absolute in any spelling the resolver
+	// must judge for itself -- a drive path, a UNC name, a rooted Unix path --
+	// is passed through untouched, so the refusal under test is the resolver's
+	// and not an artefact of this join.
+	if u, err := url.Parse(href); err == nil && u.IsAbs() {
 		return href
 	}
-	if filepath.IsAbs(href) || strings.HasPrefix(href, "/") {
+	if uripath.IsDriveLetterPath(href) || filepath.IsAbs(href) ||
+		strings.HasPrefix(href, "/") || strings.HasPrefix(href, `\\`) {
 		return href
 	}
-	dir := base
-	if i := strings.LastIndexByte(dir, '/'); i >= 0 {
-		dir = dir[:i+1]
-	} else {
-		dir = ""
+	b, err := url.Parse(baseURI)
+	if err != nil || !b.IsAbs() {
+		return href
 	}
-	return path.Clean(dir + href)
+	r, err := url.Parse(href)
+	if err != nil {
+		return href
+	}
+	return b.ResolveReference(r).String()
 }
 
 // A grammar inside the root loads; the root is enforced at open time.
@@ -314,5 +351,81 @@ func TestValidateAdmitsIncludesInsideRoot(t *testing.T) {
 	}
 	if err := validate(doc.Root); err != nil {
 		t.Errorf("a document matching the included grammar should validate: %v", err)
+	}
+}
+
+// The Windows half of cliResolve's join, proved on any host.
+//
+// This case exists because the defect it guards was invisible to every darwin
+// and Linux run of the suite above. Those cases build their base with
+// filepath.Join(t.TempDir(), "main.rng"), so on this host the base is
+// /tmp/.../main.rng and the old forward-slash split found its directory; the
+// same code met C:\...\001\main.rng on Windows, found no "/" at all, and
+// resolved "top.rng" to "top.rng". The whole suite was green here and five
+// cases failed there.
+//
+// A host cannot be changed, so the host-relative step is removed instead:
+// cliResolveURI takes the base already spelled as a URI, and the two spellings
+// -- file:///tmp/T/001/main.rng and file:///C:/Users/.../001/main.rng -- are
+// written out literally, which any platform can do. absPathToFileURI is the
+// same function fileURI uses to produce them, so the Windows string here is
+// the string Windows really produces, not an approximation of it.
+//
+// The assertion that matters is the first one: the result must still carry the
+// base's directory. A join that discarded it returns the bare href, which is
+// exactly the CI failure -- "top.rng" resolving outside the root.
+func TestCLIResolveJoinsAgainstOSPathBase(t *testing.T) {
+	for _, base := range []struct {
+		name, dir string
+	}{
+		{"unix", "/tmp/T/001"},
+		{"windows", "/C:/Users/runneradmin/AppData/Local/Temp/T/001"},
+	} {
+		t.Run(base.name, func(t *testing.T) {
+			baseURI := absPathToFileURI(base.dir + "/main.rng")
+			dirURI := absPathToFileURI(base.dir) + "/"
+			for _, c := range []struct{ href, want string }{
+				{"top.rng", dirURI + "top.rng"},
+				{"sub/in.rng", dirURI + "sub/in.rng"},
+				{"./sub/in.rng", dirURI + "sub/in.rng"},
+				{"sub/../top.rng", dirURI + "top.rng"},
+			} {
+				got := cliResolveURI(baseURI, c.href)
+				if got != c.want {
+					t.Errorf("cliResolveURI(%q, %q) = %q, want %q",
+						baseURI, c.href, got, c.want)
+				}
+				// The directory is the half the bug dropped, so assert it in
+				// its own right: a future join that returned the href
+				// unchanged would fail above, but a join that returned some
+				// other rooted string should fail too.
+				if !strings.HasPrefix(got, dirURI) {
+					t.Errorf("cliResolveURI(%q, %q) = %q, which does not sit "+
+						"under the base directory %q -- the base was discarded",
+						baseURI, c.href, got, dirURI)
+				}
+			}
+			// An escape must still compose as an escape rather than being
+			// clamped, or the refusal cases above would be passing because
+			// this helper quietly made every href safe.
+			if got := cliResolveURI(baseURI, "../secret.rng"); strings.HasPrefix(got, dirURI) {
+				t.Errorf("cliResolveURI(%q, %q) = %q, which was clamped inside "+
+					"the base directory instead of escaping it",
+					baseURI, "../secret.rng", got)
+			}
+			// And an absolute or scheme-bearing href reaches the resolver
+			// untouched, so the resolver's own refusal is what the vector
+			// cases observe.
+			for _, href := range []string{
+				`C:\Windows\win.ini`, "C:/Windows/win.ini", "/etc/passwd",
+				`\\server\share\secret.rng`, "http://example.invalid/s.rng",
+				"file://remote-host/etc/passwd", "data:text/xml,<empty/>",
+			} {
+				if got := cliResolveURI(baseURI, href); got != href {
+					t.Errorf("cliResolveURI(%q, %q) = %q, want it passed through "+
+						"unchanged so the resolver judges it", baseURI, href, got)
+				}
+			}
+		})
 	}
 }
