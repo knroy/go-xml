@@ -990,6 +990,56 @@ feed it Windows-shaped input on every platform — the property that the old
 hand-written concatenation could not have, since `filepath.ToSlash` is a no-op
 off Windows and an absolute path elsewhere already begins with a slash.
 
+### A base URI that does not parse is merged, never dropped
+
+The fix above stopped one *producer* of a malformed base URI. This is about
+what the *consumer* did with one, because that half was the more dangerous of
+the two and it survived the producer's fix.
+
+`xdm.resolveBase` merges an `xml:base` value with the base already in force.
+When the base did not parse as an absolute URI it returned the bare reference
+and said nothing:
+
+    base  file://C:\...\level1\element.xml   (url.Parse: invalid port)
+    ref   "deeper/"
+    ->    "deeper/"
+
+The base is gone. `"deeper/"` is not a location under the document — it is a
+relative reference, and every consumer that later resolves it does so against
+whatever base it finds next, which at the top is the process's working
+directory. That is the failure Windows CI reported verbatim.
+
+Two properties made it worse than a single wrong node. The result is
+**non-empty**, and `xpath`'s `inheritedBaseURI` walks up only until it finds a
+non-empty `BaseURI`, so the relocated element is where the walk stops: the
+ancestor whose base *is* usable is never reached, and the whole subtree
+beneath resolves to the wrong place. And nothing reported it — parsing
+succeeded, `fn:base-uri` returned a plausible string, and the only symptom was
+a document read from somewhere other than where the document said.
+
+**The fallback is kept, not turned into an error.** Raising one here would be
+wrong on three counts: XML Base permits a *relative* `xml:base` and a document
+parsed with no `BaseURI` legitimately has one, so the unparseable case and the
+ordinary relative case are not distinguishable at this point; XSLT and XPath
+locate URI errors at `fn:base-uri` and `fn:resolve-uri`, where the value is
+used and a real error code exists; and a parse that fails on a base it could
+have merged turns a correctness bug into a denial of service for every
+document carrying an unusual `xml:base`.
+
+What changed is that the fallback no longer *discards*. A base that is not a
+URI is still a string with path structure, and RFC 3986 §5.2.3's merge is
+defined on that structure alone, so `"sub/"` and `"deeper/"` merge to
+`"sub/deeper/"` whether or not `"sub/"` has a scheme. The result stays
+underneath whatever the unusable base named instead of escaping to the working
+directory. The scheme and authority are withheld from §5.2.4's dot removal so
+that a `../` cannot climb past the drive letter or the host — §5.2.4 forbids a
+leading `..` in its output for exactly that reason.
+
+The merge is a pure function of two strings, calling nothing from `filepath`
+or `os`, so its Windows behaviour is not a platform behaviour: the table test
+in `xdm/basereuri_test.go` feeds it the CI spelling literally and asserts the
+answer on every platform.
+
 ### A content model cannot make the matcher allocate without a ceiling
 
 Deciding whether an element's children match a content model needs the *set* of
