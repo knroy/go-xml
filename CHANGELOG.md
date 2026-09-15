@@ -262,6 +262,7 @@ turn "I could not prove the constraint" into "the constraint holds."*
 | Change | Problem → solution | Commit |
 |---|---|---|
 | XSD validation allocated 16 MB per KB against a long restriction chain | Three base-chain walks ran per validated value, so a 500-link chain cost 999 MB for 64 KB; memoised per type, 2.7 MB. |  |
+| The namespace count rebuilt the whole ancestor chain per element | `Tree.assign` took `len(InScopeNamespaces())` per element, making Finalize O(depth²): 224 kB nested 32,000 deep allocated 17.8 GB. The scope is now threaded down the walk; 13.4 MB. |  |
 | The RELAX NG pattern-size bound could not fire on the attribute path | Checked once per element, never between attributes, so a 106-byte document did not finish in 60 s even at `MaxPatternSize: 1`. Now checked per attribute. | [`fbe8f3c`][fbe8f3c] |
 | A nested DTD content model could exhaust the stack and kill the process | `parseCP`/`parseGroup` recursed unbounded, so 2.5M parens were a `fatal error` `recover()` cannot catch; `maxModelDepth` caps nesting at 1000. | [`020ef7f`][020ef7f] |
 | Merging adjacent text nodes was quadratic in their number | `AppendText` re-concatenated the whole run per piece, so 40,000 source text nodes cost 7,946 MB; it now accumulates in a buffer, 171 MB. | [`41ca5dc`][41ca5dc] |

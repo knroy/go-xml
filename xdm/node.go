@@ -1382,10 +1382,22 @@ func (n *Node) AddNamespace(prefix, uri string) {
 // any node comparison; every parser entry point in this package does so.
 func (t *Tree) Finalize() {
 	t.counter = 0
-	t.assign(t.Root)
+	// The in-scope bindings are carried down the walk rather than recomputed
+	// per element. Rebuilding them from the ancestor chain, as
+	// InScopeNamespaces does, costs the depth of the element, which made
+	// Finalize quadratic in nesting depth: a 32,000-level document allocated
+	// 17 GB and took 20 s, against 29 MB for a document of the same byte size
+	// that was wide rather than deep. Threading the scope makes each element
+	// cost only the declarations it carries itself.
+	scope := map[string]string{"xml": NSXML}
+	t.assign(t.Root, scope)
 }
 
-func (t *Tree) assign(n *Node) {
+// assign numbers n and its subtree. scope holds the namespace bindings in
+// force at n's parent, keyed as InScopeNamespaces keys them; assign applies
+// n's own declarations to it for the descent and restores it on the way out,
+// so a sibling sees the scope its parent had.
+func (t *Tree) assign(n *Node, scope map[string]string) {
 	n.tree = t
 	n.order = t.counter
 	t.counter++
@@ -1403,8 +1415,26 @@ func (t *Tree) assign(n *Node) {
 	// generate-id() answered the same string for a namespace node and an
 	// unrelated attribute — which is what snapshot-0112 detects when it
 	// compares the count of distinct identities against the node count.
+	//
+	// saved records, for each prefix this element declares, the binding its
+	// parent had, so the scope can be restored once the subtree is numbered.
+	// An absent entry is recorded as missing rather than as the empty string:
+	// the empty string is itself a value a caller can bind, and conflating
+	// the two would leave a stale entry in scope for a later sibling.
+	var saved []nsSave
 	if n.Kind == KindElement {
-		reserved := len(n.InScopeNamespaces())
+		for _, ns := range n.Namespaces {
+			prev, had := scope[ns.Name.Local]
+			saved = append(saved, nsSave{prefix: ns.Name.Local, uri: prev, had: had})
+			// An empty value undeclares the prefix, which takes it out of
+			// scope; InScopeNamespaces deletes it for the same reason.
+			if ns.Value == "" {
+				delete(scope, ns.Name.Local)
+			} else {
+				scope[ns.Name.Local] = ns.Value
+			}
+		}
+		reserved := len(scope)
 		for _, ns := range n.Namespaces {
 			ns.tree = t
 			ns.order = t.counter
@@ -1431,8 +1461,23 @@ func (t *Tree) assign(n *Node) {
 		t.counter++
 	}
 	for _, c := range n.Children {
-		t.assign(c)
+		t.assign(c, scope)
 	}
+	for i := len(saved) - 1; i >= 0; i-- {
+		if saved[i].had {
+			scope[saved[i].prefix] = saved[i].uri
+		} else {
+			delete(scope, saved[i].prefix)
+		}
+	}
+}
+
+// nsSave is one entry of the namespace scope Tree.assign shadows while it
+// numbers an element's subtree.
+type nsSave struct {
+	prefix string
+	uri    string
+	had    bool
 }
 
 // HasPositions reports whether the tree was parsed with TrackPositions, and so
