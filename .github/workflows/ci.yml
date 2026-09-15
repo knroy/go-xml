@@ -217,13 +217,40 @@ jobs:
       # AT; one called "release-record-v1.4.0" is, and the ref is the only
       # part of a run that identifies which release it verified.
       #
+      # The ref is sanitised in a shell step rather than inline, because an
+      # artifact name may not contain "/" (nor ":", "<", ">", "|", "*", "?",
+      # "\\", CR or LF): upload-artifact refuses them so that a download
+      # cannot produce a path NTFS rejects. On a pull_request the ref_name is
+      # "<number>/merge", which is exactly that case, and the step failed the
+      # whole job on it -- after a green run, which is the worst time to lose
+      # the record of one.
+      #
+      # Expressions cannot do this: GitHub's expression language has no
+      # replace() function, only contains/startsWith/endsWith/format/join/
+      # toJSON/fromJSON/hashFiles. tr in a step is the portable way, and it
+      # substitutes EVERY illegal character rather than only the one that
+      # happened to break, so a tag or branch carrying another of them does
+      # not fail the job the same way later. Keeping the ref and replacing
+      # its separators preserves what the name is FOR; dropping the ref would
+      # make every artifact indistinguishable again.
+      #
       # if: always() for the reason above it: a FAILING run is when the
       # question "verified how?" actually gets asked, and a record that
       # exists only for green runs cannot answer it.
+      - name: Name the release verification record
+        if: always()
+        shell: bash
+        run: |
+          safe=$(printf '%s' "$REF" | tr '/:<>|*?\\\r\n' '-')
+          echo "artifact=release-record-$safe" >> "$GITHUB_OUTPUT"
+        id: recordname
+        env:
+          REF: ${{ github.ref_name }}
+
       - name: Upload the release verification record
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-record-${{ github.ref_name }}
+          name: ${{ steps.recordname.outputs.artifact }}
           path: tests/release-record.txt
           if-no-files-found: warn
