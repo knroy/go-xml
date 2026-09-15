@@ -92,6 +92,16 @@ Requires Go 1.25 or later. The floor is measured, not nominal: `regexp`
 learned the Unicode category `Cn` in 1.25, and building on 1.24 costs four
 conformance cases. See [docs/testing.md](docs/testing.md).
 
+## Live test
+
+[**go-xml fiddle**](https://martin-honnen.github.io/go-xml-fiddle/index-ace.html)
+runs XSLT and XQuery against this library in the browser, with no Go toolchain
+to install — the shortest path from "does this do what I need" to an answer.
+
+It is built and maintained independently by
+[Martin Honnen](https://github.com/martin-honnen), so what it runs is whichever
+build he has deployed rather than this repository's `dev`.
+
 ## Status
 
 | | |
@@ -1686,9 +1696,8 @@ identified neither — which is what made the real defect findable. The
 `format-dateTime` report turned out to be one of seventeen rows across three
 distinct classes, none of which any suite case reaches.
 
-He also maintains [go-xml fiddle](https://martin-honnen.github.io/go-xml-fiddle/index-ace.html),
-a browser playground for running XSLT and XQuery against this library, built
-independently of this project.
+He also maintains the browser playground linked under
+[Live test](#live-test) above.
 
 ## Licence
 
