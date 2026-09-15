@@ -27,6 +27,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| `Result.String()` dropped the serialization error the injection fixes raise | An embedder writing output through the inviting call got `""` where `Serialize` reports `SEPM0016`. The check stays in `Serialize` — XSLT 3.0 §2.10 puts it after the transform — and the doc comment now names the discard. |  |
 | `media-type` was written into the injected `<meta>` tag unescaped | Every sibling attribute goes through `escapeAttrRunes`; this one was concatenated raw, so `text/html"><script>…` closed the tag and ran in the `<head>`. It is now escaped at the write site. | [`1f638d1`][1f638d1] |
 | A `doctype-system` value could close its own quoted literal | `a"b'>` was written as `SYSTEM 'a"b'>` and the rest became markup, appending a live entity declaration. Serialization 3.1 §3 forbids both quote kinds: now `SEPM0016`. | [`411fdd5`][411fdd5] |
 | Two `xsl:global-context-item` attributes were listed but unreachable | `@streamable` and `@use-accumulators` are not in §3.10, and the element is checked against the `context-item` key, so both were already refused — naming an element the stylesheet had not written. Entries deleted; the diagnostic now names `xsl:global-context-item`. | [`c9945c5`][c9945c5] |

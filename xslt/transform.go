@@ -1101,7 +1101,22 @@ func (s *Stylesheet) spaceDeclsFor(pkg int) (strip, preserve []xdm.QName) {
 	return ps.strip, ps.preserve
 }
 
-// String renders the result using the stylesheet's output settings.
+// String renders the result using the stylesheet's output settings,
+// DISCARDING any serialization error and returning "" in its place.
+//
+// Serialization errors are not incidental: checkOutputSettings raises them for
+// an encoding this serialiser cannot produce, for a sequence holding a map or
+// a function, and -- the reason this warning is here -- for a doctype-system
+// or media-type value that cannot be written safely. Those last two are
+// reachable from a SOURCE DOCUMENT through an attribute value template, so a
+// caller serialising untrusted input through this method gets "" where it
+// expected a document and no indication that anything was refused.
+//
+// String cannot report the error and stay a fmt.Stringer, and the error is
+// not raised any earlier: XSLT 3.0 section 2.10 places a serialization error
+// on the principal result "after the transformation has finished", so
+// Transform returns nil for a stylesheet whose output settings are invalid.
+// Use Serialize for anything whose failure you need to see.
 func (r *Result) String() string {
 	var sb strings.Builder
 	_ = r.Serialize(&sb)
