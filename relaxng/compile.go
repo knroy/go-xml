@@ -868,8 +868,13 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 			"relaxng: <include href=%q> names a <%s>, not a <grammar>",
 			href, root.Name.Local)
 	}
+	// Both checks below describe a construct, not a document: "<zeroOrMore1>
+	// is not a RELAX NG element" is true of whichever file it was written in.
+	// Read from an <include>, that leaves the author auditing the schema they
+	// wrote, which is correct, with nothing to say the fault is a level down.
+	// The href is the one fact the message is missing, and it is in hand here.
 	if err := checkSyntax(root); err != nil {
-		return err
+		return fmt.Errorf("in <include href=%q>: %w", href, err)
 	}
 	// An included grammar is a schema document like any other, and section 7
 	// applies to it. Checking only its syntax would let a construct the
@@ -877,7 +882,7 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	// inside a <list> — reach the deriver, which assumes it has already been
 	// refused. The top-level and <externalRef> paths both check it here.
 	if err := checkRestrictions(root); err != nil {
-		return err
+		return fmt.Errorf("in <include href=%q>: %w", href, err)
 	}
 
 	// What the include overrides: the names it defines itself, and whether it
@@ -988,11 +993,13 @@ func (c *compiler) compileExternalRef(n *xdm.Node) (pattern, error) {
 			"relaxng: <externalRef href=%q>: the document has no root element",
 			href)
 	}
+	// As for <include>: the fault is in the referenced document, and only the
+	// href says so.
 	if err := checkSyntax(root); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("in <externalRef href=%q>: %w", href, err)
 	}
 	if err := checkRestrictions(root); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("in <externalRef href=%q>: %w", href, err)
 	}
 	// The referenced schema is a document of its own: its definitions are its
 	// own. But the ns= in force where the reference is written *does* reach

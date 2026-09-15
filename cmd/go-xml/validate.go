@@ -37,8 +37,9 @@ func runValidate(args []string) error {
 			"permit a DOCTYPE in the instance documents and expand the entities "+
 				"it declares internally")
 		root = fs.String("root", "",
-			"confine schema include/import to this directory; empty permits any "+
-				"readable path, which suits a command line and not a server")
+			"confine schema include/import to this directory; by default the "+
+				"directory of the schema file, as the transform does for its "+
+				"stylesheet")
 		maxErrors = fs.Int("max-errors", 0,
 			"stop after this many failures per document; 0 uses the default")
 		quiet = fs.Bool("quiet", false,
@@ -129,13 +130,13 @@ func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root string,
 		if err != nil {
 			return nil, err
 		}
-		abs, _ := filepath.Abs(rngPath)
+		abs := fileURI(rngPath)
 		tree, err := xdm.ParseString(string(data), xdm.ParseOptions{BaseURI: abs})
 		if err != nil {
 			return nil, fmt.Errorf("parsing %s: %w", rngPath, err)
 		}
 		schema, err := relaxng.CompileWithOptions(tree.Root, relaxng.Options{
-			Resolver: &rngFileResolver{root: root, base: abs},
+			Resolver: cliRNGResolver(schemaRoot(root, rngPath)),
 			BaseURI:  abs,
 		})
 		if err != nil {
@@ -167,8 +168,16 @@ func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root string,
 	}
 
 	paths := strings.Split(xsdPaths, ",")
+	// With no -root the resolver is left nil so that LoadFiles installs its
+	// own default, which confines to the directory of every named schema
+	// rather than to one of them; a FileResolver with an empty Root would
+	// instead read anywhere.
+	var resolver xsd.Resolver
+	if root != "" {
+		resolver = &xsd.FileResolver{Root: root}
+	}
 	schema, err := xsd.LoadFiles(paths, xsd.Options{
-		Resolver:     &xsd.FileResolver{Root: root},
+		Resolver:     resolver,
 		Version:      v,
 		XPathVersion: xvv,
 	})
@@ -186,7 +195,7 @@ func validateOne(path string, popts xdm.ParseOptions, validate func(*xdm.Node) e
 	if err != nil {
 		return err
 	}
-	abs, _ := filepath.Abs(path)
+	abs := fileURI(path)
 	popts.BaseURI = abs
 	popts.DocumentURI = abs
 	tree, err := xdm.ParseString(string(data), popts)
@@ -196,57 +205,36 @@ func validateOne(path string, popts xdm.ParseOptions, validate func(*xdm.Node) e
 	return validate(tree.Root)
 }
 
-// rngFileResolver loads the schemas named by externalRef and include.
+// DefaultMaxRNGBytes bounds one RELAX NG schema the CLI reads.
 //
-// relaxng ships no file resolver of its own — the package deliberately has no
-// filesystem — so containment is implemented here, on the same terms as
-// xsd.FileResolver: an empty root permits any readable path, which suits a
-// command line, and a named root refuses anything that escapes it through
-// "..", a symlink, or an absolute path.
-type rngFileResolver struct {
-	root string
-	base string
+// relaxng.FileResolver's own default is 64 MB, matching xdm's document limit.
+// The command line asks for less, on the same terms as its XML Schema flag: a
+// RELAX NG grammar and an XML Schema are the same kind of document at the same
+// scale, and the W3C's own largest schema is under 200 kB. The figure therefore
+// matches xsd.DefaultMaxSchemaBytes rather than the library ceiling.
+const DefaultMaxRNGBytes = 16 << 20
+
+// cliRNGResolver is the resolver the validate path installs.
+//
+// It is a function rather than a literal at the call site so that a test can
+// assert on the resolver the CLI really constructs. Asserting on a second copy
+// of the literal would repeat, in the tests, exactly the duplication this
+// resolver was consolidated to remove: the copy would keep passing after the
+// original changed.
+func cliRNGResolver(root string) *relaxng.FileResolver {
+	return &relaxng.FileResolver{Root: root, MaxBytes: DefaultMaxRNGBytes}
 }
 
-func (r *rngFileResolver) ResolveSchema(href string) (*xdm.Node, error) {
-	if i := strings.Index(href, "://"); i >= 0 && !strings.HasPrefix(href, "file://") {
-		return nil, fmt.Errorf("scheme %q is not permitted (only local files)",
-			href[:i])
+// schemaRoot is the directory schema reads are confined to.
+//
+// An explicit -root is taken as given. Without one the grant is the schema's
+// own directory, as the transform grants its stylesheet's: the resolvers read
+// anywhere when their Root is empty, so passing the flag's default through
+// unchanged once left "go-xml validate" less confined than the library, whose
+// nil-resolver default already closes to the schema's directory.
+func schemaRoot(root, schemaPath string) string {
+	if root != "" {
+		return root
 	}
-	p := strings.TrimPrefix(href, "file://")
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(filepath.Dir(r.base), p)
-	}
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return nil, err
-	}
-	// Symlinks are resolved before the containment check, so a link inside
-	// the root cannot be used to reach outside it.
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = resolved
-	}
-	if r.root != "" {
-		rootAbs, err := filepath.Abs(r.root)
-		if err != nil {
-			return nil, err
-		}
-		if resolved, err := filepath.EvalSymlinks(rootAbs); err == nil {
-			rootAbs = resolved
-		}
-		rel, err := filepath.Rel(rootAbs, abs)
-		if err != nil || rel == ".." ||
-			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return nil, fmt.Errorf("%q is outside %s", href, rootAbs)
-		}
-	}
-	data, err := os.ReadFile(abs)
-	if err != nil {
-		return nil, err
-	}
-	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{BaseURI: abs})
-	if err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", href, err)
-	}
-	return tree.Root, nil
+	return filepath.Dir(schemaPath)
 }

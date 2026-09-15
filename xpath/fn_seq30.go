@@ -117,15 +117,18 @@ func registerSeq30Funcs(l *Library) {
 		if len(nodes) == 0 {
 			return xdm.Empty(), nil
 		}
-		member := make(map[*xdm.Node]bool, len(nodes))
+		// Keyed on Identity, not the pointer: the input may hold namespace
+		// nodes, which the axis synthesizes afresh per walk, so two
+		// references to one binding must count as one member.
+		member := make(map[xdm.IdentityKey]bool, len(nodes))
 		for _, n := range nodes {
-			member[n] = true
+			member[n.Identity()] = true
 		}
 		out := make(xdm.Sequence, 0, len(nodes))
 		for _, n := range nodes {
 			covered := false
 			for p := parentOf(n); p != nil; p = parentOf(p) {
-				if member[p] {
+				if member[p.Identity()] {
 					covered = true
 					break
 				}

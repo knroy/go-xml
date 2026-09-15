@@ -56,18 +56,18 @@ func chainNS(label string, n int) string {
 func TestDeepChainDerivedSubtypeOfThroughSchema(t *testing.T) {
 	for _, n := range annotationChainDepths {
 		top := registerChain(chainNS("through", n), "integer", n)
-		if !derivedSubtypeOfThroughSchema(top, "integer") {
+		if !derivedSubtypeOfThroughSchema(xdm.GlobalTypeEnvironment(), top, "integer") {
 			t.Errorf("depth %d: a type %d links above xs:integer is not a "+
 				"subtype of it", n, n)
 		}
 		// One further step, through the built-in table: integer restricts
 		// decimal. This is the crossing the function exists for.
-		if !derivedSubtypeOfThroughSchema(top, "decimal") {
+		if !derivedSubtypeOfThroughSchema(xdm.GlobalTypeEnvironment(), top, "decimal") {
 			t.Errorf("depth %d: a type %d links above xs:integer is not a "+
 				"subtype of xs:decimal", n, n)
 		}
 		// The relation must not become vacuously true either.
-		if derivedSubtypeOfThroughSchema(top, "date") {
+		if derivedSubtypeOfThroughSchema(xdm.GlobalTypeEnvironment(), top, "date") {
 			t.Errorf("depth %d: an integer-derived type reported as a subtype "+
 				"of xs:date", n)
 		}
@@ -89,7 +89,7 @@ func TestDeepChainSchemaTypeNameMatches(t *testing.T) {
 			xdm.AnnotationName(ns, fmt.Sprintf("T%d", n)),
 			"integer",
 		} {
-			if !schemaTypeNameMatches(top, want) {
+			if !schemaTypeNameMatches(xdm.GlobalTypeEnvironment(), top, want) {
 				t.Errorf("depth %d: a value annotated %s is not an instance "+
 					"of %s", n, top, want)
 			}
@@ -97,7 +97,7 @@ func TestDeepChainSchemaTypeNameMatches(t *testing.T) {
 		// A sibling namespace at the same depth must not match: the visited
 		// set must not have widened the relation.
 		other := registerChain(chainNS("atomic-other", n), "integer", n)
-		if schemaTypeNameMatches(top, other) {
+		if schemaTypeNameMatches(xdm.GlobalTypeEnvironment(), top, other) {
 			t.Errorf("depth %d: %s reported as an instance of an unrelated "+
 				"chain's %s", n, top, other)
 		}
@@ -111,20 +111,20 @@ func TestDeepChainSchemaTypeNameMatches(t *testing.T) {
 func TestDeepChainAnnotationDerivesFrom(t *testing.T) {
 	for _, n := range annotationChainDepths {
 		top := registerChain(chainNS("id", n), "ID", n)
-		if !isIDAnnotation(top) {
+		if !isIDAnnotation(xdm.GlobalTypeEnvironment(), top) {
 			t.Errorf("depth %d: a type %d links above xs:ID is not an ID, so "+
 				"fn:id cannot see it", n, n)
 		}
-		if isIDREFAnnotation(top) {
+		if isIDREFAnnotation(xdm.GlobalTypeEnvironment(), top) {
 			t.Errorf("depth %d: an ID-derived type reported as an IDREF", n)
 		}
 
 		ref := registerChain(chainNS("idref", n), "IDREF", n)
-		if !isIDREFAnnotation(ref) {
+		if !isIDREFAnnotation(xdm.GlobalTypeEnvironment(), ref) {
 			t.Errorf("depth %d: a type %d links above xs:IDREF is not an "+
 				"IDREF, so fn:idref cannot see it", n, n)
 		}
-		if isIDAnnotation(ref) {
+		if isIDAnnotation(xdm.GlobalTypeEnvironment(), ref) {
 			t.Errorf("depth %d: an IDREF-derived type reported as an ID", n)
 		}
 	}
@@ -212,13 +212,13 @@ func TestCyclicAnnotationChainTerminates(t *testing.T) {
 		// Nothing in the ring is grounded in a built-in, so every one of these
 		// is a question the ring cannot answer yes to. The requirement is that
 		// each returns at all.
-		if derivedSubtypeOfThroughSchema(top, "date") {
+		if derivedSubtypeOfThroughSchema(xdm.GlobalTypeEnvironment(), top, "date") {
 			t.Errorf("n=%d: a cyclic chain reported as a subtype of xs:date", n)
 		}
-		if schemaTypeNameMatches(top, "date") {
+		if schemaTypeNameMatches(xdm.GlobalTypeEnvironment(), top, "date") {
 			t.Errorf("n=%d: a cyclic chain reported as an instance of xs:date", n)
 		}
-		if isIDAnnotation(top) || isIDREFAnnotation(top) {
+		if isIDAnnotation(xdm.GlobalTypeEnvironment(), top) || isIDREFAnnotation(xdm.GlobalTypeEnvironment(), top) {
 			t.Errorf("n=%d: a cyclic chain reported as an ID or IDREF", n)
 		}
 		if nodeTypeMatches(node, "date") {
@@ -230,7 +230,7 @@ func TestCyclicAnnotationChainTerminates(t *testing.T) {
 
 		// The ring still relates its own members to each other: a cycle is a
 		// reason to stop, not a reason to answer nothing.
-		if n > 1 && !schemaTypeNameMatches(top, names[1]) {
+		if n > 1 && !schemaTypeNameMatches(xdm.GlobalTypeEnvironment(), top, names[1]) {
 			t.Errorf("n=%d: %s is not an instance of its own base %s",
 				n, top, names[1])
 		}

@@ -194,7 +194,7 @@ func (v *validator) applyAttributeDefault(el *xdm.Node, use *AttributeUse) {
 	}
 	if use.Decl.Type != nil {
 		if a := annotationName(use.Decl.Type); a != "" {
-			setResolvedAnnotation(attr, a, use.Decl.Type)
+			v.schema.setResolvedAnnotation(attr, a, use.Decl.Type)
 		}
 	}
 	el.AddAttr(attr)
@@ -258,15 +258,14 @@ func (v *validator) recordDefaultID(el *xdm.Node, use *AttributeUse) {
 		// schema was read; there is no binding to record.
 		return
 	}
-	// A defaulted xs:ENTITY can never resolve. The type requires the value
-	// to name an unparsed entity declared in the document's DTD, and this
-	// parser refuses a DOCTYPE unless the caller opts in and records no
-	// entities when it does — so there is no table for the name to be in.
-	// A written xs:ENTITY is left alone: the document at least had the
-	// chance to declare one, and refusing it would make the type unusable
-	// rather than merely unchecked. A defaulted one had no such chance,
-	// since the schema supplied it.
-	if nearestBuiltinName(use.Decl.Type) == "ENTITY" {
+	// Part 2 §3.3.11 applies to a defaulted xs:ENTITY exactly as to a written
+	// one: the value must name an unparsed entity the document declared. This
+	// used to fail every defaulted xs:ENTITY outright, on the reasoning that
+	// the parser "records no entities" — which stopped being true once the
+	// DOCTYPE's unparsed declarations were retained for
+	// fn:unparsed-entity-uri. id017 is the case that showed the cost: a
+	// document declaring the very entity the schema defaults to was rejected.
+	if err := entityIsDeclared(el, normalized, use.Decl.Type); err != nil {
 		v.fail(el, "cvc-attribute.3",
 			"attribute %s defaults to %q, which names no declared unparsed "+
 				"entity", attrName(use.Decl.Name), normalized)
@@ -369,7 +368,7 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 		// input-type-annotations="strip" clears the annotation while
 		// requiring them to survive, and fn:id/fn:idref are defined over
 		// them rather than over the annotation.
-		setResolvedAnnotation(a,
+		v.schema.setResolvedAnnotation(a,
 			xdm.AnnotationName(decl.Type.Name.URI, decl.Type.Name.Local),
 			decl.Type)
 	}

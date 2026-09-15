@@ -74,9 +74,16 @@ var (
 // spaces: xs:NMTOKENS("a b c") is three items. That is why they cannot go in
 // the table above, which casts one item to one item.
 //
-// The item type is not carried in the result — this engine's type codes have
-// no list types — so each token becomes the atomic type the list is of, which
-// is what every operation on the result then sees.
+// F&O 3.0 17.3 makes the semantics "equivalent to casting to the corresponding
+// types from xs:string", so the body is castToListType rather than a second
+// splitting loop. It had been one, and the two drifted in every way the
+// difference can show: the tokens came back as plain xs:string rather than as
+// the xs:IDREF*, xs:NMTOKEN* and xs:ENTITY* the signatures in 17.3 declare,
+// the minLength=1 facet all three carry went unchecked so xs:IDREFS("") was
+// the empty sequence instead of FORG0001, the item type's own facet went
+// unapplied so xs:ENTITIES(" a b c 12 ") accepted the non-NCName "12", and
+// strings.Fields split on every Unicode space where XML Schema splits on four
+// characters alone. Delegating is what keeps one set of rules.
 //
 // All three carry Since: XPath30, because that is where they were introduced.
 // F&O 2.0 section 5.1 gives a constructor to "every built-in *atomic* type",
@@ -90,35 +97,25 @@ var (
 // rather than F&O's and has always been available; castable-007 asserts it
 // under a 2.0 stylesheet.
 func registerListTypes(l *Library) {
-	lists := map[string]xdm.TypeCode{
-		"NMTOKENS": xdm.TypeString,
-		"IDREFS":   xdm.TypeString,
-		"ENTITIES": xdm.TypeString,
-	}
-	for name, code := range lists {
-		target := code
+	for name := range listItemFacet {
+		facet := listItemFacet[name]
 		body := func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
+				// The signatures return xs:IDREF* and its siblings precisely
+				// so that an empty argument can give an empty result, which
+				// the minLength=1 facet would otherwise forbid. 17.3 says so.
 				return xdm.Empty(), nil
 			}
 			it, err := atoms.Single()
 			if err != nil {
 				return nil, err
 			}
-			s, err := stringArgValue(it.(*xdm.Atomic), 0)
-			if err != nil {
+			a := it.(*xdm.Atomic)
+			if _, err := listSourceValue(a); err != nil {
 				return nil, err
 			}
-			out := xdm.Sequence{}
-			for _, tok := range strings.Fields(s) {
-				v, err := CastAtomic(xdm.NewString(tok), target)
-				if err != nil {
-					return nil, err
-				}
-				out = append(out, v)
-			}
-			return out, nil
+			return castToListType(a, facet)
 		}
 		l.Add(Function{
 			Name:  xdm.QName{URI: xdm.NSXS, Local: name},
@@ -392,7 +389,7 @@ func registerIntegerSubtypes(l *Library) {
 			// that could have wrapped on the way in.
 			n := new(big.Int).Quo(v.Rat().Num(), v.Rat().Denom())
 			if f.min != nil && n.Cmp(f.min) < 0 || f.max != nil && n.Cmp(f.max) > 0 {
-				return nil, xdm.ErrCast("FORG0001: %s is out of range for xs:%s", n, f.name)
+				return nil, xdm.ErrCast("%s is out of range for xs:%s", n, f.name)
 			}
 			// The constructed value remembers the type it was built as, so
 			// that "instance of" can tell it from a plain xs:integer.
@@ -420,7 +417,7 @@ func registerIntegerSubtypes(l *Library) {
 		}
 		if dt := v.DateTimeVal(); dt == nil || !dt.HasTZ {
 			return nil, xdm.ErrCast(
-				"FORG0001: xs:dateTimeStamp requires a timezone")
+				"xs:dateTimeStamp requires a timezone")
 		}
 		return xdm.One(v.WithDerived("dateTimeStamp")), nil
 	})

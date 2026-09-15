@@ -419,7 +419,12 @@ func main() {
 				// element's base URI ends in the instance's file
 				// name. Parsing from a reader without it left
 				// every node's base URI empty.
-				dt, err := xdm.Parse(df, xdm.ParseOptions{BaseURI: docPath})
+				// AllowDOCTYPE for the same reason the schema load takes it
+				// (see above): a conformance corpus on disk is not an untrusted
+				// source, and the Id group's instances declare unparsed entities
+				// in an internal subset that xs:ENTITY validation must see. Only
+				// the internal subset is read; external entities stay off.
+				dt, err := xdm.Parse(df, xdm.ParseOptions{BaseURI: docPath, AllowDOCTYPE: true})
 				df.Close()
 				if err != nil {
 					// Likewise for a document the parser cannot

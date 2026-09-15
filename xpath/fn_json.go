@@ -56,7 +56,6 @@ type jsonHandler interface {
 type jsonOptions struct {
 	liberal    bool
 	escape     bool
-	escapeSet  bool
 	duplicates string
 	fallback   *xdm.FunctionItem
 	// validate asks for a typed result. F&O 3.1 §17.5.3: true "indicates
@@ -76,6 +75,34 @@ func errFOJS0001(format string, args ...any) error {
 }
 
 // --- Options ---------------------------------------------------------------
+
+// jsonOptionKeyName reports whether a key spells the NAME of an option.
+//
+// The option maps are ordinary maps, so a key arrives with whatever type the
+// caller's data carried: a key read out of an unvalidated document atomises to
+// xs:untypedAtomic, not xs:string. Looking an option up by name therefore has
+// to follow the same rule map:get does, which xdm.typeFamilyOf documents for
+// this repository: xs:string, xs:anyURI and xs:untypedAtomic are one key
+// family because map:get applies the function conversion rules and casts an
+// untyped key to xs:string -- so the untyped spelling of "duplicates" names
+// the duplicates option, while the cast is to string and never to a number,
+// so an integer key names nothing however it is spelled.
+//
+// Sourcing note: F&O 3.1, which defines these option maps, is not vendored in
+// this repository, and the vendored XSLT 3.0 specs under testdata contain no
+// FOJS* material at all. The evidence for the rule is therefore this
+// repository's own documented conversion rule at xdm/maparray.go (typeFamilyOf,
+// citing map-get-006/007/008) together with the two sibling paths that already
+// follow it: fn:xml-to-json looks its "indent" option up with m.Get, and
+// map:merge its "duplicates" option with opts.Get, both of which route through
+// MapKeyOf and so accept the untyped spelling.
+func jsonOptionKeyName(k *xdm.Atomic) bool {
+	switch k.Type {
+	case xdm.TypeString, xdm.TypeAnyURI, xdm.TypeUntypedAtomic:
+		return true
+	}
+	return false
+}
 
 // jsonOptionsFrom decodes the options map.
 //
@@ -113,9 +140,9 @@ func jsonOptionsFrom(ctx *Context, args []xdm.Sequence, i int, forXML bool) (jso
 		return opts, nil
 	}
 	err = m.Entries(func(k *xdm.Atomic, v xdm.Sequence) error {
-		if k == nil || k.Type != xdm.TypeString {
-			// A non-string key names no option, and the specification says
-			// unknown options are ignored.
+		if k == nil || !jsonOptionKeyName(k) {
+			// A key of some other type names no option, and unknown options
+			// are ignored rather than reported.
 			return nil
 		}
 		switch k.String() {
@@ -130,7 +157,7 @@ func jsonOptionsFrom(ctx *Context, args []xdm.Sequence, i int, forXML bool) (jso
 			if err != nil {
 				return err
 			}
-			opts.escape, opts.escapeSet = b, true
+			opts.escape = b
 		case "validate":
 			b, err := jsonOptionBool(v, "validate")
 			if err != nil {
@@ -245,9 +272,22 @@ func jsonOptionString(v xdm.Sequence, name string) (string, error) {
 
 // singleMapArg extracts the options map, which is declared map(*) and so may
 // be absent but not empty.
+//
+// The distinction is the whole point of this helper. F&O 3.1 declares the
+// $options parameter of fn:parse-json (§17.5.1), fn:json-doc (§17.5.2),
+// fn:json-to-xml (§17.5.3) and fn:xml-to-json (§17.5.4) as map(*) with no
+// occurrence indicator, so the empty sequence does not match it: OMITTING the
+// argument selects the one-argument form and its defaults, while WRITING ()
+// supplies a value of the wrong cardinality and is XPTY0004. Treating the two
+// as the same thing -- returning a nil map for both -- silently accepted
+// parse-json("1",()) and the three siblings, because registerFn stores only
+// name and arity and no parameter type is enforced on the call path.
 func singleMapArg(args []xdm.Sequence, i int) (*xdm.MapItem, error) {
-	if i >= len(args) || len(args[i]) == 0 {
+	if i >= len(args) {
 		return nil, nil
+	}
+	if len(args[i]) == 0 {
+		return nil, xdm.ErrType("expected exactly one item, got empty sequence")
 	}
 	if len(args[i]) != 1 {
 		return nil, xdm.ErrType("the options argument must be a single map")
@@ -278,7 +318,20 @@ type jsonScanner struct {
 	// or calls the fallback, json-to-xml does the same but must also decide
 	// whether to mark the element escaped.
 	fallbackFn func(string) (string, error)
+	// depth counts the object and array nesting open at this point. The
+	// scanner is recursive descent, so nesting in the text is nesting on the
+	// Go stack, and JSON arrives from the same untrusted places XML does --
+	// fn:parse-json over a string the document supplied, most directly.
+	depth int
 }
+
+// maxJSONDepth bounds how deeply fn:parse-json and fn:json-to-xml will nest.
+//
+// It matches xdm.DefaultMaxDepth because the two limits guard the same thing
+// for the same reason: a document that nests past what the parser will accept
+// should not be reachable through its JSON spelling instead. Real JSON is
+// nowhere near it -- the deepest in the W3C suite is under twenty.
+const maxJSONDepth = 1000
 
 // scanJSON parses text and drives h, returning the first error.
 func scanJSON(text string, opts jsonOptions, h jsonHandler,
@@ -324,6 +377,16 @@ func (s *jsonScanner) value() error {
 	c, ok := s.peek()
 	if !ok {
 		return errFOJS0001("unexpected end of input where a value was expected")
+	}
+	// Charged here rather than in object and array so that the one place
+	// every nested value passes through is the one place that counts.
+	if c == '{' || c == '[' {
+		s.depth++
+		if s.depth > maxJSONDepth {
+			return errFOJS0001(
+				"JSON nests more than %d levels deep", maxJSONDepth)
+		}
+		defer func() { s.depth-- }()
 	}
 	switch {
 	case c == '{':
@@ -677,6 +740,33 @@ func (s *jsonScanner) hex4() (int, error) {
 	return v, nil
 }
 
+// deliverableInXML reports whether a codepoint can be carried literally by the
+// text node fn:json-to-xml and fn:parse-json produce.
+//
+// This is the XML 1.0 Char production, which is narrower than isXMLChar: that
+// one is the XML 1.1 range, where the C0 controls other than NUL are legal
+// because 1.1 lets them be written as character references. JSON delivery has
+// no such escape hatch — the string is the text node's value — so a C0 control
+// is a character the result "cannot represent", and gets the escaped spelling
+// under escape=true or the fallback/U+FFFD substitution under escape=false.
+//
+// json-to-xml-045 is the case: "-\b-\t--" must come back as itself under
+// escape=true and as "-<FFFD>-<tab>-<FFFD>-" under escape=false. Using the 1.1
+// range let U+0008 and U+0001 through raw on both.
+func deliverableInXML(c rune) bool {
+	switch {
+	case c == 0x09 || c == 0x0A || c == 0x0D:
+		return true
+	case c >= 0x20 && c <= 0xD7FF:
+		return true
+	case c >= 0xE000 && c <= 0xFFFD:
+		return true
+	case c >= 0x10000 && c <= 0x10FFFF:
+		return true
+	}
+	return false
+}
+
 // finishString turns the scanned codepoints into the delivered string.
 func (s *jsonScanner) finishString(rs []rune) (string, error) {
 	if s.opts.escape {
@@ -688,7 +778,7 @@ func (s *jsonScanner) finishString(rs []rune) (string, error) {
 		if c >= escapedBias {
 			c -= escapedBias
 		}
-		if isXMLChar(int64(c)) {
+		if deliverableInXML(c) {
 			b.WriteRune(c)
 			continue
 		}
@@ -774,7 +864,7 @@ func escapeJSONRunes(rs []rune) (string, error) {
 			b.WriteByte('/')
 			continue
 		}
-		if isXMLChar(int64(c)) {
+		if deliverableInXML(c) {
 			b.WriteRune(c)
 			continue
 		}
@@ -962,7 +1052,22 @@ func jsonFallback(ctx *Context, opts jsonOptions) func(string) (string, error) {
 		for _, it := range atoms {
 			b.WriteString(it.(*xdm.Atomic).String())
 		}
-		return b.String(), nil
+		rep := b.String()
+		// The fallback exists to supply a replacement the result CAN hold, so
+		// its answer is subject to the same rule as the character it replaces.
+		// F&O 3.1 §17.4.1: the fallback function "must return a string that
+		// contains no characters that are invalid in XML"; returning one is
+		// err:FOJS0007. Trusting the answer unchecked put a C0 control into
+		// the map fn:parse-json returns and into the tree fn:json-to-xml
+		// builds, where serialisation then dropped it without a word — the
+		// character disappeared instead of being reported.
+		for _, c := range rep {
+			if !deliverableInXML(c) {
+				return "", xdm.Errorf("FOJS0007",
+					"the fallback function returned U+%04X, which no XML document may hold", c)
+			}
+		}
+		return rep, nil
 	}
 }
 

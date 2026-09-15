@@ -739,3 +739,107 @@ func TestExternalLimitBoundaries(t *testing.T) {
 		t.Errorf("every bound unlimited should load: %v", err)
 	}
 }
+
+// A notation or unparsed entity declared in the external subset satisfies an
+// attribute list declared in the internal one, and the reverse. The check is
+// over the merged DTD, or a modular DTD — where the notations live in one
+// module and the attribute lists in another — would fail wholesale.
+func TestNotationsAndEntitiesSpanBothSubsets(t *testing.T) {
+	opts := mapOpts(map[string]string{
+		"r.dtd": `<!ELEMENT r EMPTY>
+<!NOTATION gif SYSTEM "g">
+<!ENTITY logo SYSTEM "logo.gif" NDATA gif>`,
+	})
+	const doc = `<!DOCTYPE r SYSTEM "r.dtd" [
+<!ATTLIST r n NOTATION (gif) #IMPLIED e ENTITY #IMPLIED>
+]>`
+	if err := loadCheck(t, doc+`<r n="gif" e="logo"/>`, opts); err != nil {
+		t.Errorf("declarations from the external subset should satisfy the "+
+			"internal attribute list: %v", err)
+	}
+	// And the check still bites across the join: a name neither subset
+	// declares is still undeclared.
+	if err := loadCheck(t, `<!DOCTYPE r SYSTEM "r.dtd" [
+<!ATTLIST r n NOTATION (gif|jpeg) #IMPLIED>
+]><r n="gif"/>`, opts); err == nil {
+		t.Error("jpeg is declared in neither subset and must be reported")
+	}
+}
+
+// With no resolver a DOCTYPE naming an external subset is refused outright, so
+// the only way to hold half a DTD is to ask for it. Having asked, a caller
+// must not then be told that every notation and entity is undeclared: the
+// declarations may be in the half that was never read. Reporting them would
+// reject a valid document, which is worse than the missing check.
+func TestPartialSubsetDoesNotInventUndeclaredNotations(t *testing.T) {
+	const doc = `<!DOCTYPE r SYSTEM "r.dtd" [
+<!ELEMENT r EMPTY>
+<!ATTLIST r n NOTATION (gif) #IMPLIED e ENTITY #IMPLIED>
+]><r n="gif" e="logo"/>`
+	tree, err := xdm.ParseString(doc, xdm.ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := Load(tree.DocType, LoadOptions{InternalSubsetOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(tree.Root, d, Options{}); err != nil {
+		t.Errorf("half a DTD cannot say a notation is undeclared: %v", err)
+	}
+	// Parse reads the internal subset alone and must reach the same
+	// conclusion, since it records the same HasExternalSubset.
+	p, err := Parse(tree.DocType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(tree.Root, p, Options{}); err != nil {
+		t.Errorf("Parse: half a DTD cannot say a notation is undeclared: %v", err)
+	}
+}
+
+// A file: URI may carry an authority, and only an empty one or "localhost"
+// names this machine. fileURIToPath took u.Path alone, which discarded any
+// other host and read the same-named local file instead -- a read the caller
+// never asked for, and a refusal that never happened. relaxng.FileResolver
+// refuses it; this pins that the dtd one does too, and that both local
+// spellings still read on every platform.
+func TestFileResolverRefusesForeignFileHost(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "r.dtd"),
+		[]byte("<!ELEMENT r EMPTY>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &FileResolver{Root: root}
+	local := fileURIOf(filepath.Join(root, "r.dtd"))
+	// The message is asserted, not just err != nil: a path under a foreign
+	// host lands outside Root, so the confinement refusal would satisfy a
+	// weaker test with the guard deleted.
+	for _, id := range []string{
+		"file://evil.example.com/etc/x.dtd",
+		strings.Replace(local, "file:///", "file://evil.example.com/", 1),
+	} {
+		_, _, err := r.ResolveExternal(id, "", "")
+		if err == nil || !strings.Contains(err.Error(), `remote host "evil.example.com"`) {
+			t.Errorf("ResolveExternal(%q) error = %v, want one naming the remote host", id, err)
+		}
+	}
+	for _, id := range []string{
+		local,
+		strings.Replace(local, "file:///", "file://localhost/", 1),
+	} {
+		rc, _, err := r.ResolveExternal(id, "", "")
+		if err != nil {
+			t.Errorf("ResolveExternal(%q) = %v, want the local file read", id, err)
+			continue
+		}
+		rc.Close()
+	}
+	// "/C:/x" is the RFC 8089 spelling of a Windows drive path; the drive
+	// letter must not be mistaken for a host. It is outside Root, so the
+	// refusal it gets is the confinement one, never the host one.
+	if _, _, err := r.ResolveExternal("file:///C:/x.dtd", "", ""); err != nil &&
+		strings.Contains(err.Error(), "remote host") {
+		t.Errorf("file:///C:/x.dtd was refused as remote: %v", err)
+	}
+}

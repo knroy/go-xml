@@ -34,14 +34,14 @@ const maxNestDepth = 200
 // that recurses does so on a strictly shorter substring.
 func (p *parser) parseNestedExpr() ([]node, error) {
 	if p.depth++; p.depth > maxNestDepth {
-		// XPST0003 is kept -- callers and the conformance suites match on
-		// it -- but the query is not malformed: it is well-formed and
-		// merely nested deeper than this parser will read. The sentinel is
-		// wrapped in alongside so a caller can tell a refusal from a syntax
-		// fault. See xdm.ErrResourceLimit. errorf appends its own offset
-		// suffix, so the wrap goes outside it rather than into the format.
+		// The query is not malformed: it is well-formed and merely nested
+		// deeper than this parser will read, which is what XPath 3.1 §2.3.1
+		// gives XPDY0130 for. The sentinel is wrapped in alongside so a
+		// caller can tell a refusal from every other error. See
+		// xdm.ErrResourceLimit. errorf appends its own offset suffix, so
+		// the wrap goes outside it rather than into the format.
 		return nil, fmt.Errorf("%s: %w", p.errorf(
-			"XPST0003: expressions nested more than %d deep", maxNestDepth),
+			"XPDY0130: expressions nested more than %d deep", maxNestDepth),
 			xdm.ErrResourceLimit)
 	}
 	defer func() { p.depth-- }()
@@ -340,6 +340,19 @@ func (p *parser) withTrailingPath(n node) (node, error) {
 	save := p.pos
 	p.skipSpaceAndComments()
 	if p.eof() || (p.src[p.pos] != '/' && p.src[p.pos] != '[') {
+		p.pos = save
+		return n, nil
+	}
+	// A validate expression is not a primary, so no step and no predicate may
+	// follow it. [102] ValidateExpr sits with the other ExprSingle forms, well
+	// outside the [128] PrimaryExpr alternatives a StepExpr reaches through
+	// [121] PostfixExpr -- unlike [136] OrderedExpr and [137] UnorderedExpr,
+	// which are primaries and which "/ordered{bid}" of PathExpr-21 relies on.
+	// So "validate { ... }/*" is a syntax error, and taking the "/" as a step
+	// silently returned the children of the validated element instead
+	// (qischema90007). Left for the caller to report, which is what turns the
+	// leftover into the XPST0003 that "validate { ... } bogusword" already got.
+	if _, ok := n.(*validateExpr); ok {
 		p.pos = save
 		return n, nil
 	}

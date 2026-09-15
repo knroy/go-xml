@@ -241,6 +241,23 @@ func (p *parser) substituteOperands(src string) ([]liftedOperand, string, error)
 			// left to the caller, whose error names the construct.
 			return nil, "", nil
 		}
+		// A validate expression is not a primary, so no step and no predicate
+		// may follow it -- see withTrailingPath, which refuses the same shape
+		// on the path it owns. Substituting one leaves a call in its place,
+		// and a call IS a primary, so "validate { ... }/*" would become
+		// "f()/*" and parse cleanly as the path the grammar forbids
+		// (qischema90007). Abandoning the substitution leaves the "/" for the
+		// caller to report as the XPST0003 it is.
+		if _, isValidate := n.(*validateExpr); isValidate {
+			j := sub.pos
+			for j < len(src) && (src[j] == ' ' || src[j] == '\t' ||
+				src[j] == '\r' || src[j] == '\n') {
+				j++
+			}
+			if j < len(src) && (src[j] == '/' || src[j] == '[') {
+				return nil, "", nil
+			}
+		}
 		out.WriteString(src[copied:start])
 		out.WriteString(callArgPrefix + ":" + stepFn(len(ops)) + "()")
 		ops = append(ops, liftedOperand{n: n})

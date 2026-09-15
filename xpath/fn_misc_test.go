@@ -1,8 +1,11 @@
 package xpath
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 // These cover the functions added after auditing the library against the
@@ -437,6 +440,14 @@ func TestRoundKeepsNegativeZero(t *testing.T) {
 // cast functions look mostly at the lexical form, so without a source-type
 // gate the base64Binary "10010101" cast happily to the double 10010101 and
 // "castable as xs:float" answered true. Found by the W3C QT3 suite.
+//
+// The error CODE is what pins the gate, not the mere presence of an error.
+// Deleting castPermitted's body does not make these expressions succeed --
+// the lexical re-parse downstream still rejects "10010101" as an xs:float and
+// raises FORG0001. Asserting only "some error" therefore passes with the gate
+// gone. XPTY0004 is the one the table requires and the only one that says the
+// conversion was refused because it is undefined between those types rather
+// than because this particular value happened not to parse.
 func TestCastTablePermissions(t *testing.T) {
 	forbidden := []string{
 		`xs:base64Binary('10010101') cast as xs:float`,
@@ -446,8 +457,27 @@ func TestCastTablePermissions(t *testing.T) {
 		`xs:dayTimeDuration('PT1H') cast as xs:date`,
 	}
 	for _, expr := range forbidden {
-		if err := evalErr(t, testDoc, expr); err == nil {
+		err := evalErr(t, testDoc, expr)
+		if err == nil {
 			t.Errorf("%s was permitted; the casting table forbids it", expr)
+			continue
+		}
+		if code := xdm.ErrorCode(err); code != "XPTY0004" {
+			t.Errorf("%s: error code %s (%v), want XPTY0004 -- a conversion "+
+				"the table does not define, not a bad value", expr, code, err)
+		}
+	}
+	// "castable as" is the half that reported the original defect: it yields
+	// a boolean rather than an error, so an err-only assertion never sees it
+	// at all. Each forbidden conversion must answer false.
+	for _, expr := range []string{
+		`xs:base64Binary('10010101') castable as xs:float`,
+		`xs:hexBinary('0FB7') castable as xs:integer`,
+		`xs:date('2024-01-01') castable as xs:integer`,
+	} {
+		if got := evalStrXSLT(t, testDoc, expr); got != "false" {
+			t.Errorf("%s = %q, want false; the casting table forbids it",
+				expr, got)
 		}
 	}
 	// Conversions the table does permit must keep working.
@@ -875,5 +905,145 @@ func TestNamespaceAxisOrderIsStable(t *testing.T) {
 		if got := evalStr(t, doc, `name(/r/namespace::*[1])`); got != "a" {
 			t.Fatalf("namespace::*[1] = %q, want %q", got, "a")
 		}
+	}
+}
+
+// TestCodepointsToStringAdmitsC0 pins the XML 1.1 half of the character model.
+//
+// isXMLChar used the XML 1.0 [2] Char production, which starts its first range
+// at #x20, so codepoints-to-string(8) was FOCH0001. That contradicted
+// tests/xslts/deps.go, which claims the XML_1.1 feature to the conformance
+// harness; XSLT 3.0 4.1 makes the version implementation-defined, and having
+// chosen 1.1 the C0 controls are Char. The three codepoints below are the ones
+// xml-to-json-D015, -D017 and -D018 construct -- backspace, bell and form feed
+// -- each of which Saxon 9.8 accepts.
+//
+// U+0000 stays out at either version, and TestCodepointsToStringValidates keeps
+// it there: XML 1.1 [2] Char begins at #x1, not #x0.
+func TestCodepointsToStringAdmitsC0(t *testing.T) {
+	for _, cp := range []int{7, 8, 12, 1, 0x1F} {
+		expr := fmt.Sprintf("string-to-codepoints(codepoints-to-string(%d))", cp)
+		if got := evalStr(t, testDoc, expr); got != fmt.Sprint(cp) {
+			t.Errorf("%s = %q, want %d", expr, got, cp)
+		}
+	}
+}
+
+// TestDistinctValuesExactNumericKey pins the correctness of the exact-rational
+// fast path in fnDistinctValues, and the boundary at which it must give way.
+//
+// The fast path may only be taken where numeric "eq" is transitive. It is
+// transitive among xs:integer and xs:decimal, which compareNumeric compares
+// through big.Rat without loss, and it is *not* transitive once a float or
+// double is in play, because promotion rounds. Every case below is chosen to
+// fail if that boundary moves.
+func TestDistinctValuesExactNumericKey(t *testing.T) {
+	cases := []struct{ expr, want string }{
+		// Cross-type equality across all four numeric types: one value.
+		{`count(distinct-values((xs:integer(1), xs:decimal(1.0), xs:double(1.0e0), xs:float(1.0))))`, "1"},
+		// The exact types alone, which is the hashed path.
+		{`count(distinct-values((xs:integer(1), xs:decimal(1.0))))`, "1"},
+		{`count(distinct-values((xs:integer(1), xs:integer(1), xs:integer(2))))`, "2"},
+
+		// Large integers beyond float64's 53-bit mantissa must stay distinct.
+		// Keying these through a float64 would collapse them.
+		{`count(distinct-values((9007199254740993, 9007199254740992)))`, "2"},
+		{`count(distinct-values((xs:integer(9007199254740993), xs:decimal(9007199254740992))))`, "2"},
+		// The same at a magnitude past int64, where the key must still be exact.
+		{`count(distinct-values((9223372036854775807, 9223372036854775806)))`, "2"},
+
+		// Decimals differing below double precision stay distinct.
+		{`count(distinct-values((xs:decimal('1.0000000000000000001'), xs:decimal('1.0000000000000000002'))))`, "2"},
+
+		// Signed zero: -0.0 eq 0.0, so one value. Spans exact and inexact.
+		{`count(distinct-values((xs:double('-0'), xs:double('0'))))`, "1"},
+		{`count(distinct-values((xs:decimal('-0'), xs:decimal('0'), xs:integer(0))))`, "1"},
+		{`count(distinct-values((xs:float('-0'), xs:double('0'), xs:integer(0))))`, "1"},
+
+		// NaN is equal to itself for distinct-values even though NaN eq NaN
+		// is false, and never equal to a number.
+		{`count(distinct-values((xs:double('NaN'), xs:float('NaN'), xs:double('NaN'))))`, "1"},
+		{`count(distinct-values((xs:double('NaN'), 1, 2)))`, "3"},
+		// Infinities are ordinary distinct values.
+		{`count(distinct-values((xs:double('INF'), xs:double('-INF'), xs:double('INF'))))`, "2"},
+
+		// Mixed numeric and non-numeric: the key spaces must not bleed. The
+		// string "1" is not the number 1.
+		{`count(distinct-values((1, '1', xs:decimal(1.0), 'a', true())))`, "4"},
+		{`count(distinct-values((1, xs:untypedAtomic('1'))))`, "2"},
+
+		// Empty sequence.
+		{`count(distinct-values(()))`, "0"},
+
+		// The non-transitive triple of fn-distinct-values-1, which is exactly
+		// why float and double may not be hashed. Under pairwise eq this keeps
+		// two of the three; a single key space would give a different answer.
+		{`count(distinct-values((xs:float('1.0'), xs:decimal('1.0000000000100000000001'), xs:double('1.00000000001'))))`, "2"},
+
+		// A decimal equal to a float only after rounding to float precision
+		// must still collapse, which pairwise eq gives and an exact key
+		// would not.
+		{`count(distinct-values((xs:float('1.2'), xs:decimal('1.2'))))`, "1"},
+
+		// Collation-sensitive strings are untouched by the numeric path.
+		{`count(distinct-values(('a', 'A', 'a')))`, "2"},
+	}
+	for _, c := range cases {
+		if got := evalStrXSLT(t, testDoc, c.expr); got != c.want {
+			t.Errorf("%s = %q, want %q", c.expr, got, c.want)
+		}
+	}
+}
+
+// TestDistinctValuesLargeHomogeneous is the regression test for the quadratic
+// blowup: a large run of xs:integer used to be compared pairwise, which was
+// O(n^2) in the number of *distinct* values and allocated a big.Rat per
+// comparison. It must stay linear and stay correct.
+func TestDistinctValuesLargeHomogeneous(t *testing.T) {
+	if got := evalStrXSLT(t, testDoc, `count(distinct-values(1 to 20000))`); got != "20000" {
+		t.Errorf("count(distinct-values(1 to 20000)) = %q, want 20000", got)
+	}
+	// Every value duplicated: still 20000 distinct.
+	if got := evalStrXSLT(t, testDoc, `count(distinct-values((1 to 20000, 1 to 20000)))`); got != "20000" {
+		t.Errorf("duplicated range = %q, want 20000", got)
+	}
+	// A single float anywhere must not silently change the answer for the
+	// exact values around it.
+	if got := evalStrXSLT(t, testDoc, `count(distinct-values((1 to 1000, xs:float(1.0))))`); got != "1000" {
+		t.Errorf("range plus equal float = %q, want 1000", got)
+	}
+}
+
+// benchEvalXSLT is evalStrXSLT for a benchmark, which cannot use the *testing.T
+// helpers.
+func benchEvalXSLT(b *testing.B, expr string) {
+	b.Helper()
+	tree, err := xdm.ParseString(testDoc, xdm.ParseOptions{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	root := tree.Root
+	lib := NewLibrary(Builtins())
+	RegisterXSLTFuncs(lib)
+	if _, err := Eval(expr, NewContext(root, lib), testNS{}); err != nil {
+		b.Fatalf("eval %q: %v", expr, err)
+	}
+}
+
+// BenchmarkDistinctValuesIntegers measures the cost of fn:distinct-values over
+// n distinct xs:integer values, which is the shape an attacker controls with
+// count(distinct-values(/r/v/xs:integer(.))). The pairwise scan made this
+// quadratic in n with a big.Rat allocated per comparison; the exact-rational
+// key makes it linear.
+func BenchmarkDistinctValuesIntegers(b *testing.B) {
+	for _, n := range []int{1000, 10000, 100000} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			expr := fmt.Sprintf("count(distinct-values(1 to %d))", n)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				benchEvalXSLT(b, expr)
+			}
+		})
 	}
 }

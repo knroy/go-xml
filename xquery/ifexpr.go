@@ -83,7 +83,15 @@ func (p *parser) parseIf() (node, bool, error) {
 		return nil, true, p.errorf("XPST0003: expected %q after the %q branch",
 			"else", "then")
 	}
-	els, err := p.scanExprSingle()
+	// The else branch is the last thing in the conditional, so no keyword of
+	// this construct follows it -- but a clause of an enclosing FLWOR may, and
+	// its keyword ends this ExprSingle just as "else" ended the branch before
+	// it. Scanned with no stops at all it ran to the end of the source and
+	// swallowed that clause, which is the RexParser refusal: the else branch
+	// of p:transition ends at the "let" of the enclosing FLWOR's next clause.
+	// See enclosingClauseStops, and typeswitch.go, whose default branch is
+	// the same shape.
+	els, err := p.scanExprSingle(enclosingClauseStops...)
 	if err != nil {
 		return nil, true, err
 	}

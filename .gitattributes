@@ -1,0 +1,26 @@
+# Windows CI checked the tree out with core.autocrlf=true, which rewrote every
+# .go file's LF into CRLF on disk. gofmt treats a carriage return as
+# non-canonical formatting, so the gofmt step failed listing essentially every
+# Go file in the repository -- a line-ending artifact reported as a formatting
+# error. The blobs were LF in the repository the whole time.
+#
+# `text eol=lf` pins the working-tree ending regardless of the runner's
+# autocrlf setting, so the bytes gofmt sees on Windows are the bytes that were
+# committed. Go source is LF by definition -- gofmt emits it and will not
+# accept anything else -- so this records a fact rather than imposing a style.
+*.go text eol=lf
+
+# The same reasoning for the rest of what the gate reads. A shell script with
+# CRLF fails on a Unix runner at the shebang, and go.mod/go.sum are compared
+# byte-for-byte by the toolchain.
+*.sh  text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.yml text eol=lf
+*.md  text eol=lf
+
+# Everything else: let Git detect text and leave the ending alone. testdata/ is
+# not tracked here, but XML fixtures are a case where a CRLF can be the thing
+# under test -- an XML parser must normalise it per the Recommendation -- so
+# nothing in this file may rewrite one.
+* text=auto

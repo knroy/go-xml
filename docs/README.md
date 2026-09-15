@@ -36,6 +36,11 @@
   learn. The diagnosis behind the verdicts above. A finding that is merely
   *fixed* is not here — it is in [CHANGELOG.md](../CHANGELOG.md); what stays is
   the reasoning that still guides a decision.
+* **[Element table policy](element-table-policy.md)** — which document the
+  XSLT element grammar is transcribed from, the exhaustive list of places it
+  deliberately disagrees with the Recommendation and the evidence for each,
+  what every annotation flag means, and the rule for deciding a new
+  divergence. An undeclared divergence is a test failure.
 * **[Reaching 100%](reaching-100.md)** — what the remaining distance to a
   perfect score actually consists of, and which parts of it are worth buying.
 * **[TODO](todo.md)** — what is left: features, the measured bug tail, and

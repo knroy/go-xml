@@ -82,7 +82,7 @@ type wherePopulatedInstr struct {
 // they have been appended to the real output they have been merged into the
 // tree under construction and can no longer be inspected one by one.
 func (i *wherePopulatedInstr) Execute(rt *runtime, out *outputBuilder) error {
-	sub := newOutputBuilder()
+	sub := newOutputBuilder(rt)
 	if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 		// valid: splicing at a low index would shift everything after it.
 		for i := len(l) - 1; i >= 0; i-- {
 			p := l[i]
-			sub := newOutputBuilder()
+			sub := newOutputBuilder(rt)
 			if err := p.instr.Execute(p.rt, sub); err != nil {
 				return err
 			}
@@ -278,7 +278,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 		switch ci := unwrapInstr(instr).(type) {
 		case *onNonEmptyInstr:
 			if f {
-				sub := newOutputBuilder()
+				sub := newOutputBuilder(rt)
 				if err := ci.Execute(rt, sub); err != nil {
 					return err
 				}
@@ -300,7 +300,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 			continue
 		}
 
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := instr.Execute(rt, sub); err != nil {
 			return stampPosition(err, instr)
 		}
@@ -323,7 +323,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 		// evaluated, and its results are appended to R". Everything collected
 		// so far was vacuous by definition, so nothing observable is lost.
 		r = nil
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := onEmpty.Execute(rt, sub); err != nil {
 			return err
 		}
@@ -369,7 +369,7 @@ func appendItem(out *outputBuilder, it xdm.Item) {
 // construction, which is not a thing an attribute may be.
 func appendItemChecked(out *outputBuilder, it xdm.Item) error {
 	if n, ok := it.(*xdm.Node); ok && n.Kind == xdm.KindAttribute {
-		return out.AddAttributeTyped(n.Name, n.Value, n.TypeAnnotation)
+		return out.AddAttributeWithTyping(n.Name, n.Value, xdm.TypingOf(n))
 	}
 	appendItem(out, it)
 	return nil

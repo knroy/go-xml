@@ -1,8 +1,11 @@
 package qt3
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/internal/fileuri"
 
 	"github.com/knroy/go-xml/xpath"
 )
@@ -16,7 +19,7 @@ func TestEntityResolverConfinement(t *testing.T) {
 		t.Skip("set GOXSLT_QT3")
 	}
 	res := suiteEntityResolver{text: suiteTextResolver{root: root, dir: "fn"}}
-	base := "file://" + root + "/fn/"
+	base := fileuri.Dir(filepath.Join(root, "fn"))
 	for _, sysID := range []string{
 		"../../../../../../etc/passwd",
 		"parse-xml/../../../../go.mod",

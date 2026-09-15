@@ -42,22 +42,98 @@ var supportedFeatures = map[string]bool{
 	// listed unsupported long after it stopped being so, which excluded two
 	// hundred cases that pass.
 	"higher_order_functions": true,
+	// Streaming is accepted: the engine builds the tree and evaluates the
+	// streamable construct against it. That answers every streaming case
+	// whose result does not depend on bounded memory, which is what the
+	// suite's assertions test.
+	"streaming": true,
+	// streaming-fallback is NOT claimed. It asserts the opposite of the
+	// §19.8 analysis: that a construct which is not guaranteed-streamable is
+	// evaluated unstreamed rather than refused. streaming-fallback-001 makes
+	// the conflict literal -- it runs si-value-of-101.xsl, the very file
+	// si-value-of-101 uses to require XTSE3430, and asserts its output. Now
+	// that the analysis raises that error the claim is false, and claiming it
+	// would score a refusal we make on purpose as a failure.
+	// XML 1.1 documents are parsed; the version declaration is accepted.
+	"XML_1.1": true,
+	// XPath_3.1 is not listed here: like XSD_1.1 it is answered by supports,
+	// because whether the processor has it is a question about the XSLT
+	// version being measured. See the commentary there.
 }
 
 // unsupportedFeatures are the ones this engine does not implement, listed so
 // that the reason is recorded rather than inferred from absence.
 var unsupportedFeatures = map[string]string{
-	"streaming":                 "XSLT 3.0",
-	"streaming-fallback":        "XSLT 3.0",
-	"XPath_3.1":                 "XPath 3.1",
 	"disabling_output_escaping": "not implemented; the serializer escapes always",
-	"XML_1.1":                   "the parser implements XML 1.0",
 	// XSD_1.1 is not listed: it is answered by supports, because whether the
 	// processor has it is a question about the XSLT version being measured
 	// rather than about the engine. See the commentary there.
 	"HTML4":                                 "the HTML output method targets HTML5",
 	"HTML5":                                 "not implemented",
 	"xsl-stylesheet-processing-instruction": "not implemented",
+}
+
+// The two classes of skip.
+//
+// A headline "N skipped" treats every exclusion alike, and they are not: a
+// case the suite itself says a conforming processor may leave out (the wrong
+// spec version, a Unicode version, an optional numbering language) is out of
+// scope, while a case excluded because this engine lacks the feature, or
+// because the harness does not model the dependency, is a gap wearing a skip
+// label. Publishing one number for both let the second hide inside the first.
+const (
+	skipOutOfScope    = "out of scope"
+	skipUnimplemented = "unimplemented"
+)
+
+// skipReasonClasses assigns every reason string inScope and outOfScopeError
+// can produce to a class, by exact text or by the prefix of a parameterised
+// one. It sits beside the strings it classifies so that adding a reason
+// without a class is caught here (TestSkipReasonsAreClassified) rather than
+// silently swelling one class or the other; skipClass returns "" for a
+// string it does not know, and the suite tests fail when the two classes do
+// not sum to the skipped total.
+var skipReasonClasses = []struct {
+	prefix string
+	class  string
+}{
+	// The version gate and the XSLT 3.0-by-construction exclusions: a 2.0
+	// processor is not expected to run them.
+	{"spec ", skipOutOfScope},
+	{"streamability (XSLT 3.0)", skipOutOfScope},
+	{"xsl:package (XSLT 3.0)", skipOutOfScope},
+	{"initial function (XSLT 3.0)", skipOutOfScope},
+	{"adaptive/json output method (XSLT 3.0)", skipOutOfScope},
+	{"fn:current-output-uri (XSLT 3.0)", skipOutOfScope},
+	// A feature the engine has that the case needs absent.
+	{"needs ", skipOutOfScope},
+	// Environment dependencies the suite declares and the harness models but
+	// does not satisfy: a Unicode version, a numbering language, a document
+	// only the network supplies.
+	{"depends on ", skipOutOfScope},
+	// Everything below is a gap. An unsupportedFeatures entry is a feature
+	// this engine does not implement; an unknown feature or an unmodelled
+	// dependency is one the harness cannot even say it lacks; a document the
+	// parser refuses is a limitation the suite never declared.
+	{"unknown feature ", skipUnimplemented},
+	{"unmodelled dependency ", skipUnimplemented},
+	{"document is not UTF-8 or UTF-16", skipUnimplemented},
+}
+
+// skipClass reports which class a skip reason belongs to, or "" if none is
+// recorded for it.
+func skipClass(why string) string {
+	for _, c := range skipReasonClasses {
+		if strings.HasPrefix(why, c.prefix) {
+			return c.class
+		}
+	}
+	for f := range unsupportedFeatures {
+		if strings.HasPrefix(why, f+": ") {
+			return skipUnimplemented
+		}
+	}
+	return ""
 }
 
 // supports reports whether the engine offers an optional feature to a
@@ -90,6 +166,15 @@ var unsupportedFeatures = map[string]string{
 // construction and the engine's actual answer decides each.
 func supports(feature string, target Target) bool {
 	if feature == "XSD_1.1" {
+		return target == XSLT30
+	}
+	// XPath_3.1 is the same shape of question. An XSLT 3.0 processor hosts
+	// XPath 3.1 -- maps, arrays and the 3.1 function library are what the 3.0
+	// Recommendation is written against -- while an XSLT 2.0 processor hosts
+	// XPath 2.0 and cannot claim it. Answering yes at both targets would
+	// count 3.1 cases against a 2.0 processor that was never meant to pass
+	// them.
+	if feature == "XPath_3.1" {
 		return target == XSLT30
 	}
 	return supportedFeatures[feature]

@@ -28,8 +28,21 @@ import (
 // A colon with nothing before it is the case a "prefix != """ guard misses:
 // ":person" splits to an empty prefix, so the prefix goes unchecked and the
 // colon disappears into a QName named "person".
+//
+// The trim is trimXMLSpace, not strings.TrimSpace: xs:QName has
+// whiteSpace="collapse", whose whitespace is exactly XML S -- space, tab,
+// carriage return and newline -- while strings.TrimSpace uses unicode.IsSpace,
+// which also matches U+00A0 and the other Unicode separators.
+//
+// Here that choice does not change which names are refused, because the trim
+// feeds only the colon test and isNCName rejects a no-break space either way.
+// It matters for what the colon test SEES: " :a" is malformed and is caught
+// only because the XML space is removed first, so the trim has to happen --
+// and it must not extend to U+00A0, or "<NBSP>:a" would be read as the
+// well-formed name it is not. The callers' own trims are where the whitespace
+// set decides an answer; this one keeps the helper consistent with them.
 func checkLexicalQName(lex, prefix, local string) error {
-	trimmed := strings.TrimSpace(lex)
+	trimmed := trimXMLSpace(lex)
 	if strings.HasPrefix(trimmed, ":") || strings.HasSuffix(trimmed, ":") {
 		return fmt.Errorf("FOCA0002: %q is not a valid lexical QName", lex)
 	}
@@ -49,7 +62,7 @@ func registerQNameFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		prefix, local := xdm.SplitQName(strings.TrimSpace(lex))
+		prefix, local := xdm.SplitQName(trimXMLSpace(lex))
 		if prefix != "" && uri == "" {
 			return nil, fmt.Errorf("FOCA0002: a prefixed QName requires a non-empty namespace URI")
 		}
@@ -77,7 +90,7 @@ func registerQNameFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		prefix, local := xdm.SplitQName(strings.TrimSpace(lex))
+		prefix, local := xdm.SplitQName(trimXMLSpace(lex))
 		// The first argument is declared xs:string?, not xs:QName, so nothing
 		// has checked its lexical form by the time it arrives. FOCA0002 is
 		// raised before the prefix is looked up because a name like
@@ -224,7 +237,11 @@ func registerURIFuncs(l *Library) {
 		}
 		base := ""
 		if len(args) > 1 {
-			if base, err = argString(args, 1); err != nil {
+			// F&O 3.1 6.1 declares $base as xs:string, with no "?", so an
+			// empty sequence is XPTY0004 rather than "no base", which is
+			// what argString's ("", nil) turned it into: resolve-uri with an
+			// empty base returned the relative reference unresolved.
+			if base, err = argStringRequired(args, 1); err != nil {
 				return nil, err
 			}
 		} else {
@@ -306,20 +323,20 @@ func registerURIFuncs(l *Library) {
 	// iri-to-uri and escape-html-uri differ from encode-for-uri in what they
 	// leave alone: the former two preserve characters that are already
 	// URI syntax, because they take a whole URI rather than one component.
-	l.registerFn("iri-to-uri", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("iri-to-uri", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(escapeNonURI(s, false)), nil
+		return stringResult(ctx, escapeNonURI(s, false))
 	})
 
-	l.registerFn("escape-html-uri", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("escape-html-uri", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(escapeNonURI(s, true)), nil
+		return stringResult(ctx, escapeNonURI(s, true))
 	})
 
 	l.registerFn("codepoint-equal", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -337,7 +354,7 @@ func registerURIFuncs(l *Library) {
 		return boolSeq(a == b), nil
 	})
 
-	l.registerFn("normalize-unicode", []int{1, 2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("normalize-unicode", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
@@ -350,7 +367,15 @@ func registerURIFuncs(l *Library) {
 			if form, err = argStringRequired(args, 1); err != nil {
 				return nil, err
 			}
-			form = strings.ToUpper(strings.TrimSpace(form))
+			// F&O 5.4.6 defines the effective value of $normalizationForm as
+			// fn:upper-case(fn:normalize-space($normalizationForm)) -- so it
+			// is a collapse, and fn:normalize-space's whitespace is XML S and
+			// nothing wider. strings.TrimSpace stripped U+00A0 too, which made
+			// a form name spelled with a no-break space normalise as if it
+			// were "NFC"; the spec makes that an unrecognised form, so it must
+			// raise FOCH0003 below rather than silently succeed. Collapse also
+			// covers the interior, so "N F C" stays unrecognised.
+			form = strings.ToUpper(collapseXMLSpace(form))
 		}
 		// An empty form name means "no normalisation", which is the one case
 		// that can be honoured exactly.
@@ -362,13 +387,13 @@ func registerURIFuncs(l *Library) {
 		// unchanged would silently claim a normalisation that did not happen.
 		switch form {
 		case "NFC":
-			return strSeq(norm.NFC.String(s)), nil
+			return stringResult(ctx, norm.NFC.String(s))
 		case "NFD":
-			return strSeq(norm.NFD.String(s)), nil
+			return stringResult(ctx, norm.NFD.String(s))
 		case "NFKC":
-			return strSeq(norm.NFKC.String(s)), nil
+			return stringResult(ctx, norm.NFKC.String(s))
 		case "NFKD":
-			return strSeq(norm.NFKD.String(s)), nil
+			return stringResult(ctx, norm.NFKD.String(s))
 		}
 		// FULLY-NORMALIZED is defined by the spec but requires the
 		// construction rules of Unicode UAX #15 beyond the four standard
@@ -377,8 +402,18 @@ func registerURIFuncs(l *Library) {
 			"FOCH0003: Unicode normalisation form %q is not supported", form)
 	})
 
-	l.registerFn("default-collation", []int{0}, func(_ *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
-		return strSeq("http://www.w3.org/2005/xpath-functions/collation/codepoint"), nil
+	// F&O 3.0 15.7 (functions-and-operators-rec30.xml:26642): "Returns the
+	// value of the default collation property from the static context." It
+	// returned a hardcoded codepoint URI and ignored its context, so a
+	// stylesheet with [xsl:]default-collation set got an answer that
+	// contradicted the collation its own fn:contains and fn:compare were
+	// using. Empty means nothing was set, and codepoint is then the default
+	// the spec states.
+	l.registerFn("default-collation", []int{0}, func(ctx *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
+		if ctx != nil && ctx.collationURI != "" {
+			return strSeq(ctx.collationURI), nil
+		}
+		return strSeq(CodepointCollation), nil
 	})
 }
 

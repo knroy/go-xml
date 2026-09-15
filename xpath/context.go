@@ -3,6 +3,9 @@ package xpath
 import (
 	"context"
 	"fmt"
+	"os"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -134,6 +137,12 @@ type Context struct {
 	// however deep in the two sequences that is.
 	collation Collation
 
+	// collationURI is the URI that named collation, when the default came
+	// from the static context. fn:default-collation returns it; every other
+	// collation-taking function needs only the Collation value. Empty means
+	// the codepoint collation, which is the default the spec states.
+	collationURI string
+
 	// ImplicitTimezone is the offset in minutes applied to date/time values
 	// that carry no timezone. The spec requires the dynamic context to supply
 	// one; defaulting to UTC keeps results reproducible across machines,
@@ -172,6 +181,18 @@ type Context struct {
 	// Confinement is entirely the resolver's; see xdm.EntityResolver.
 	Entities xdm.EntityResolver
 
+	// Environment answers fn:environment-variable and
+	// fn:available-environment-variables. Nil withholds the process
+	// environment from both, which is the default and the safe one: the
+	// environment of a server process routinely holds credentials, and
+	// nothing about evaluating an expression implies consent to read them.
+	//
+	// Setting Docs or Texts does not set this, and this does not set those:
+	// those grant reads of a URI space the caller has confined, while this
+	// grants reads of the process's own state, which no resolver root
+	// bounds. Withholding costs no conformance — see EnvironmentResolver.
+	Environment EnvironmentResolver
+
 	// Validator validates a tree fn:json-to-xml has just built, when the
 	// call asked for validate=true. Nil means the processor cannot do it,
 	// which is FOJS0004 rather than a silent untyped result; see
@@ -189,6 +210,22 @@ type Context struct {
 	// It defaults to false and is set only by a Compiled that was given it, so
 	// ordinary 2.0 evaluation never sees it.
 	Compat bool
+
+	// MapDuplicateCode overrides the error code raised when a map constructor
+	// names the same key twice.
+	//
+	// The construct is one expression with two spellings of the same failure,
+	// because the code is the host language's rather than XPath's. XQuery 3.1
+	// section 3.11.1 calls it XQDY0137, which is the default and what the QT3
+	// suite requires. XSLT 3.0 section 17.4 says of the very same MapExpr that
+	// "if two or more entries have the same key then a dynamic error occurs
+	// [see ERR XTDE3365]", so an XSLT host sets this to XTDE3365 -- matching
+	// the code xsl:map already raises for a duplicate, which is the point: in
+	// XSLT the two ways of writing a map agree on how they fail.
+	//
+	// The zero value keeps XQDY0137, so a host that does not set it behaves
+	// exactly as it did.
+	MapDuplicateCode string
 
 	// Depth guards against unbounded recursion in user-defined functions and
 	// named templates, which the spec does not bound.
@@ -216,6 +253,75 @@ type Context struct {
 	// Nil means unbounded, which is what a caller building a Context by hand
 	// gets; NewContext installs a budget.
 	items *int64
+
+	// heldItems suppresses Compiled.Eval's per-expression reset of items,
+	// because a host language is measuring a larger evaluation against the
+	// same counter. Set by HoldItemBudget, and copied along with the rest of
+	// the Context by every scope change, which is what carries the hold into
+	// the nested evaluations it has to cover.
+	heldItems bool
+
+	// bytes counts the bytes of string content this evaluation has built,
+	// bounding the one dimension items cannot: a string is a single item
+	// however long it is, so a chain of concatenations that doubles its
+	// result each step passes the item budget untouched. See MaxBytes.
+	//
+	// A pointer for the same reason items is one -- the Context is copied by
+	// value on every scope change, and a plain counter would let each copy
+	// accumulate its own. Nil means unbounded, which is what a hand-built
+	// Context gets.
+	bytes *int64
+
+	// heldBytes suppresses Compiled.Eval's per-expression reset of bytes,
+	// because a host language is measuring a larger evaluation against the
+	// same counter. Set by HoldByteBudget; the same mechanism as heldItems,
+	// and separate from it because the two budgets have different natural
+	// boundaries -- a FLWOR for items, one constructed value for bytes.
+	heldBytes bool
+
+	// entities is the entity-expansion allowance shared by every parse this
+	// evaluation performs, bounding the one dimension neither items nor bytes
+	// can: fn:parse-xml builds a TREE out of a string, so an expansion is
+	// neither an intermediate sequence nor built string content, and both
+	// counters walk straight past it.
+	//
+	// It exists because a parse is not a document when an expression is the
+	// thing doing the parsing. fn:parse-xml is an ordinary function in the
+	// default library, so an expression calls it once per node, and each call
+	// minted a fresh xdm entity allowance -- so the 1 MB ceiling bounded each
+	// of sixty calls separately rather than together, and 1,328 bytes of XPath
+	// expanded 47,185,920 bytes and allocated 180 MB, accepted. Sharing one
+	// allowance across the evaluation is what makes the ceiling bound the
+	// evaluation rather than the call.
+	//
+	// A pointer for the same reason items and bytes are pointers: the Context
+	// is copied by value on every scope change, and a plain value would let
+	// each copy accumulate its own. Nil means unbounded, which is what a
+	// hand-built Context gets; NewContext installs one.
+	entities *xdm.EntityBudget
+
+	// nodes counts the nodes constructed into result trees during this
+	// evaluation, bounding the one dimension neither items nor bytes sees.
+	//
+	// A result tree is not an intermediate sequence and not string content, so
+	// it passed both budgets untouched: two nested xsl:for-each over //i is a
+	// three-line stylesheet whose result is the SQUARE of the input's node
+	// count, and 24 kB of input built nine million nodes and allocated 44 GB
+	// before returning. Each loop is individually far under MaxItems, and the
+	// item budget measures sequences rather than tree construction, so nothing
+	// counted the product.
+	//
+	// Like entities and unlike items and bytes, it is NOT reset per expression
+	// by Compiled.Eval. The tree under construction outlives the expression
+	// that contributed to it -- that is what makes it a result tree -- so a
+	// budget an expression could restart by being a new expression would never
+	// see the growth. See MaxNodes.
+	//
+	// A pointer for the same reason the others are: the Context is copied by
+	// value on every scope change, and a plain counter would let each copy
+	// accumulate its own. Nil means unbounded, which is what a hand-built
+	// Context gets; NewContext installs a budget.
+	nodes *int64
 
 	// Now is the value fn:current-dateTime and its siblings return.
 	//
@@ -269,6 +375,86 @@ func (c *Context) depthLimit() int {
 // works in thousands of nodes, not tens of millions, so this only fires on
 // input designed to exhaust memory or on a genuine runaway.
 const MaxItems = 5_000_000
+
+// MaxBytes bounds the string content one evaluation may build.
+//
+// MaxItems bounds how many items an evaluation materialises, and a string is
+// one item however long it is, so nothing bounded the bytes: twenty-six
+// nested "let"s, each concatenating the previous string with itself, is a
+// 1,009-byte expression that returned 671,088,640 bytes without complaint.
+// Four more lines is ten gigabytes. The limits in docs/security.md all bound
+// bytes at ingress -- what a parse, a module or an external entity may read --
+// and none of them sees a string produced during evaluation.
+//
+// The bound is set from measurement rather than taste. Instrumenting the
+// charge points and running the suites and the real-world corpora, the
+// largest legitimate accumulation was 14,516,346 bytes, in the XSLT 3.0
+// suite. The XQuery suite peaked at 4,382,554 -- Constr-cont-document-3,
+// codepoints-to-string over every valid XML codepoint -- the XPath suite at
+// 4,194,304, XSLT 2.0 at 753,560, and the DocBook xslTNG and XSpec corpora,
+// 877 real documents through two large real stylesheets, at 1,031,269.
+// A gibibyte is 74 times the largest of those, so a transform that serialises
+// a big document into one text node or joins a whole corpus is unaffected,
+// which matters more than the bound being tight: a false rejection is a
+// conformance bug, and refusing legitimate work would be worse than the
+// runaway this guards.
+//
+// The charge is cumulative over the evaluation, not per string, so the
+// doubling chain is refused while it is still doubling -- the step that would
+// cross the bound never allocates.
+const MaxBytes = 1 << 30
+
+// MaxNodes bounds the number of nodes one evaluation may construct into
+// result trees.
+//
+// MaxItems bounds the items an expression materialises and MaxBytes the string
+// content it builds, and a result tree is neither. It is not an intermediate
+// sequence -- it outlives the expression that contributed to it, which is what
+// makes it a result -- and its size is in nodes rather than characters. So a
+// stylesheet whose result is the CROSS PRODUCT of its input passed both
+// budgets without being charged anything: two nested xsl:for-each over //i, a
+// three-line stylesheet, squares the input's node count. Measured, 811 bytes
+// of input built 10,000 nodes, and 24 kB built 9,000,000 nodes and allocated
+// 44 GB over 49 seconds before returning a result. Nothing refused it, because
+// each loop is individually a few thousand items and the limit that could have
+// seen the product does not measure trees.
+//
+// This memory differs from the other two in being RETAINED rather than
+// transient: the tree is the caller's result and is live until the caller
+// discards it, so no amount of garbage collection reclaims it while it is
+// being built. That is what the bound is drawn from. A constructed node costs
+// on the order of a few hundred bytes of live heap, measured by building trees
+// at two sizes and reading HeapAlloc across a forced collection: 328 bytes per
+// constructed element on darwin/arm64, stable to a tenth of a byte between
+// 160,000 and 640,000 nodes. So two million nodes caps a result tree near
+// 0.6 GB. An earlier note here recorded 672 bytes and a 1.3 GB cap; that
+// figure did not reproduce and no test pinned it. The discrepancy is in the
+// safe direction -- the real ceiling is half what was claimed, so the bound
+// binds sooner than advertised rather than later -- but the number is stated
+// here as an order of magnitude for future reasoning, not as a constant to
+// compute against. Per-node cost varies with node kind, name length and
+// platform, so re-measure before drawing a new bound from it.
+//
+// Setting it from a margin over legitimate work instead is the instructive
+// failure. Fifty million is a much larger multiple of anything real, and it
+// let the measured case allocate 128 GB over seven minutes before refusing,
+// which is not a memory bound at all; ten million still reached 6.7 GB
+// retained. The bound has to come from the memory it caps.
+//
+// It is nonetheless far above real work, which is the constraint that matters
+// on the other side. Instrumenting this charge point and running the suites
+// and the real-world corpora, the largest legitimate result tree was 274,719
+// nodes, in the XSLT suites; the XSpec corpus peaked at 52,607, the XQuery QT3
+// lane at 35,328, and the DocBook xslTNG corpus at 35,104 across 577 real
+// documents through a large real stylesheet. Two million is seven times the
+// largest of those and thirty-eight times the largest real-world one. A false
+// rejection is a conformance bug, and refusing legitimate work would be worse
+// than the runaway this guards, so the margin is deliberate.
+//
+// The charge is cumulative over the whole evaluation, not per instruction or
+// per expression, and is never reset -- entities is the precedent. A budget an
+// expression could restart by being a new expression would never see a loop.
+const MaxNodes = 2_000_000
 
 // DocumentResolver loads a document by URI for fn:doc and fn:document.
 type DocumentResolver interface {
@@ -434,12 +620,21 @@ type Function struct {
 	// in source spelling. It is what a typed function test — "f#1 instance of
 	// function(element(A)) as xs:string" — is judged against.
 	//
-	// nil for a function whose signature has not been recorded, which is most
-	// of the library: such a function is matched on arity alone, the answer
-	// every function item gave before signatures existed. Annotating one is
-	// therefore a narrowing, and only ever makes a test that wrongly answered
-	// true answer false.
+	// applyBuiltinSignatures fills this from specSignatures for every
+	// function in the four namespaces the F&O manifest covers, so it is nil
+	// only for a function with no declared type to read: a host or EXSLT
+	// extension, or a stylesheet's own. Such a function is matched on arity
+	// alone, which is the right answer there rather than merely the
+	// permissive one -- its declared type is whatever declared it, not
+	// "nothing".
 	Signature []string
+
+	// VariadicSignature carries a variadic function's declared type without
+	// repeating its one parameter, and mirrors the field of the same name on
+	// xdm.FunctionItem -- see the commentary there for why the materialised
+	// form is a liability rather than a convenience. Nil for every
+	// fixed-arity function, which leaves Signature the ordinary path.
+	VariadicSignature *xdm.VariadicSignature
 }
 
 // NewContext returns a context with the given focus and library.
@@ -452,6 +647,14 @@ func NewContext(item xdm.Item, funcs FunctionLibrary) *Context {
 		Position: 1,
 		Size:     1,
 		items:    new(int64),
+		bytes:    new(int64),
+		// One entity-expansion allowance for the whole evaluation. Unlike
+		// items and bytes it is NOT reset per expression by Compiled.Eval:
+		// the reset is what the per-call mint already amounted to, and a
+		// budget an expression can restart by being a new expression is not
+		// a budget. See Context.entities.
+		entities: xdm.NewEntityBudget(),
+		nodes:    new(int64),
 	}
 	if item == nil {
 		c.Position, c.Size = 0, 0
@@ -603,10 +806,299 @@ func (c *Context) countItems(n int) error {
 	return nil
 }
 
+// ChargeItems charges n items against the evaluation budget, reporting
+// XPDY0130 when the budget is exhausted.
+//
+// It is exported for a host language that accumulates sequences in its own
+// evaluator rather than through this package's Expr tree. XQuery's FLWOR is
+// the case: §3.10 defines it over a materialised tuple stream, which
+// xquery.flwor builds itself, so none of the accumulation reaches the
+// constructs in this package that charge as they grow. Such a host must also
+// hold the budget across the whole of its evaluation — see HoldItemBudget —
+// or the reset in Compiled.Eval clears the counter under it once per
+// iteration.
+func (c *Context) ChargeItems(n int) error { return c.countItems(n) }
+
+// makeSequence reserves room for n items in the evaluation budget and returns
+// an empty sequence with that capacity.
+//
+// It is the counterpart of stringResult for the item budget, and it exists for
+// the same reason: a built-in that materialises a sequence reaches no
+// enclosing evaluator when a host language calls it directly, so a charge
+// taken only at LetExpr, evalFor or the range operator is one a host can walk
+// past. Reserving here makes the invariant local to the allocation.
+//
+// The reservation is taken BEFORE the make, so a request too large to allow is
+// refused without ever allocating the backing array -- which is the point when
+// n comes from the input, as it does for a codepoint sequence.
+//
+// One ownership rule per result: a caller that reserves with makeSequence must
+// NOT also charge each append, or the sequence is paid for twice and a legal
+// result is refused at half the documented limit.
+func makeSequence(ctx *Context, n int) (xdm.Sequence, error) {
+	if err := ctx.countItems(n); err != nil {
+		return nil, err
+	}
+	return make(xdm.Sequence, 0, n), nil
+}
+
+// HoldItemBudget returns a copy of c on which Compiled.Eval will not reset the
+// item budget, and arms a fresh budget for the evaluation about to begin.
+//
+// Compiled.Eval resets per expression because that is the right boundary for
+// XPath and for XSLT, where the host evaluates one expression per node and a
+// budget carried across all of them would refuse a legitimate transform. A
+// host whose own evaluator loops over expressions has the opposite problem: a
+// FLWOR calls Compiled.Eval once per tuple, so the per-expression reset clears
+// the counter two million times and the budget never binds. Holding it moves
+// the boundary out to the host's evaluation, which is where "how large may one
+// evaluation's intermediate sequences grow" is actually asked.
+//
+// The flag rides on the value copy the scope-changing methods make — Descend,
+// WithVar, WithFocus — so every nested evaluation inherits the hold, while the
+// caller's own Context keeps the per-expression boundary it had. The counter
+// itself is shared through the same pointer, so the hold measures the whole
+// tree of nested evaluations against one allowance.
+// A context that already holds the budget is returned unchanged rather than
+// re-armed. Nothing calls it that way today, but an inner evaluation that
+// reset the counter would clear the outer one's charges and hand the outer
+// evaluation an allowance it has already spent — the leak this whole change
+// exists to avoid, arriving from the other side.
+func (c *Context) HoldItemBudget() *Context {
+	if c == nil || c.heldItems {
+		return c
+	}
+	n := *c
+	n.heldItems = true
+	n.resetItems()
+	return &n
+}
+
 // resetItems starts a fresh item budget for one expression evaluation.
 func (c *Context) resetItems() {
 	if c != nil && c.items != nil {
 		atomic.StoreInt64(c.items, 0)
+	}
+}
+
+// countBytes charges n bytes of built string content against the evaluation
+// budget.
+//
+// The constructs that concatenate call it as they build, so a runaway is
+// stopped while it is running rather than after it has already allocated. A
+// Context with no budget -- one assembled by hand rather than through
+// NewContext -- is unbounded, which keeps the type usable as a plain value.
+func (c *Context) countBytes(n int) error {
+	if c == nil || c.bytes == nil || n <= 0 {
+		return nil
+	}
+	if atomic.AddInt64(c.bytes, int64(n)) > MaxBytes {
+		// XPDY0130 is this engine's own code for "the evaluation asked for
+		// more than I will allocate", and the wording says bytes rather than
+		// items so the two refusals are not confused. The suite sanctions it
+		// for exactly this shape: fn/codepoints-to-string.xml's overflow case
+		// builds an impossibly long string and accepts XPDY0130 for it. The
+		// sentinel is added alongside so a caller can tell a refusal from a
+		// fault. See xdm.ErrResourceLimit.
+		return fmt.Errorf(
+			"XPDY0130: evaluation built more than %d bytes of string "+
+				"content; the expression is building a string too large to "+
+				"hold: %w", MaxBytes, xdm.ErrResourceLimit)
+	}
+	return nil
+}
+
+// refundBytes returns n bytes of an over-reservation to the evaluation budget.
+//
+// It exists for a caller that charges a BLOCK it may not spend in full --
+// serializeSink is the one, drawing 64 KiB at a time to keep the atomic off
+// the per-write path -- and it is the mechanism that keeps that optimisation
+// from turning the bound into an approximation: the block is charged when it
+// is drawn and the unspent remainder is handed back, so the evaluation is
+// charged for the bytes it actually built.
+//
+// It is never a way to un-charge bytes that were really written. The only
+// caller passes a reserve it drew itself and has not spent, which is why this
+// is unexported and takes no decision about what a refund means.
+func (c *Context) refundBytes(n int) {
+	if c == nil || c.bytes == nil || n <= 0 {
+		return
+	}
+	atomic.AddInt64(c.bytes, -int64(n))
+}
+
+// ChargeBytes charges n bytes of built string content against the evaluation
+// budget, reporting XPDY0130 when the budget is exhausted.
+//
+// It is exported for a host language that concatenates in its own evaluator
+// rather than through this package's Expr tree. XSLT is the case: xsl:value-of
+// joins its selected sequence with xslt's own code, so the text it appends
+// reaches none of the functions here that charge as they grow.
+func (c *Context) ChargeBytes(n int) error { return c.countBytes(n) }
+
+// countNodes charges n constructed result-tree nodes against the evaluation
+// budget.
+//
+// The builder calls it as it constructs, so a runaway is stopped while it is
+// running rather than after it has already allocated -- which is the whole
+// point here, the unbounded case having allocated 44 GB before it returned. A
+// Context with no budget -- one assembled by hand rather than through
+// NewContext -- is unbounded, which keeps the type usable as a plain value.
+func (c *Context) countNodes(n int) error {
+	if c == nil || c.nodes == nil || n <= 0 {
+		return nil
+	}
+	if atomic.AddInt64(c.nodes, int64(n)) > MaxNodes {
+		// XPDY0130 again, and the wording says nodes so that the three
+		// refusals are not confused with one another. XPath 3.1 §2.3.1
+		// sanctions exactly this: "limitations may exist on the maximum
+		// numbers or sizes of various objects... An error must be raised if
+		// such a limitation is exceeded [err:XPDY0130]". The sentinel is
+		// added alongside so a caller can tell a refusal from a fault. See
+		// xdm.ErrResourceLimit.
+		return fmt.Errorf(
+			"XPDY0130: evaluation constructed more than %d result-tree "+
+				"nodes; the transformation is building a tree too large to "+
+				"hold: %w", MaxNodes, xdm.ErrResourceLimit)
+	}
+	return nil
+}
+
+// ChargeNodes charges n constructed result-tree nodes against the evaluation
+// budget, reporting XPDY0130 when the budget is exhausted.
+//
+// It is exported because the construction happens in xdmbuild, which names
+// neither host language and imports neither this package nor any other beyond
+// xdm. A host passes the charge in through xdmbuild.Policy instead, which is
+// already the seam for everything the builder cannot know by itself.
+func (c *Context) ChargeNodes(n int) error { return c.countNodes(n) }
+
+// stringResult returns one xs:string after charging the bytes it took to build
+// it, and is how a built-in that materialises a NEW string returns it.
+//
+// The charge belongs here rather than at an enclosing evaluator boundary
+// because a host language does not pass through one. LetExpr, evalFor and the
+// range operator each charge what they bind, which covers an expression
+// written in XPath; a caller that resolves a built-in through the function
+// library and invokes it directly -- which xslt and xquery do, and which any
+// embedder may do -- reaches none of them, so an uncharged built-in hands that
+// caller the whole allowance over again. Charging at the allocation makes the
+// invariant local: whoever built the bytes paid for them.
+//
+// It charges the finished string, which is one allocation late. That is the
+// right trade for a result whose size is bounded by its INPUT -- a case
+// mapping grows by a small constant factor at worst, and the input was itself
+// charged when it was built -- so the excess is bounded and the next call is
+// refused. It is the wrong trade where the output has no such bound, which is
+// what serializeSink exists for: see xpath/fn_serialize.go.
+func stringResult(ctx *Context, s string) (xdm.Sequence, error) {
+	if err := ctx.countBytes(len(s)); err != nil {
+		return nil, err
+	}
+	return strSeq(s), nil
+}
+
+// HoldByteBudget returns a copy of c on which Compiled.Eval will not reset the
+// byte budget, and arms a fresh budget for the construction about to begin.
+//
+// Compiled.Eval resets per expression because that is the right boundary for a
+// bare XPath expression. A host that builds one result out of many expressions
+// has the opposite problem: a query's "let" chain and a template's run of
+// xsl:variable declarations each reach xpath once per binding, so the
+// per-expression reset clears the counter between the doublings and a chain
+// that doubles its result per line is never charged for the doubling. Holding
+// it moves the boundary out to one query evaluation or one transform, which is
+// where "how much string content must fit in memory at once" is actually
+// asked.
+//
+// The flag rides on the value copy the scope-changing methods make, so every
+// nested evaluation inherits the hold while the caller's own Context keeps the
+// per-expression boundary it had. A context that already holds the budget is
+// returned unchanged rather than re-armed: an inner construction that reset
+// the counter would clear the outer one's charges and hand it an allowance it
+// has already spent, which is the leak this exists to avoid arriving from the
+// other side.
+func (c *Context) HoldByteBudget() *Context {
+	if c == nil || c.heldBytes {
+		return c
+	}
+	n := *c
+	n.heldBytes = true
+	n.resetBytes()
+	return &n
+}
+
+// AdoptBudget returns a copy of c spending src's item and byte allowances
+// instead of its own, so that a nested evaluation continues its caller's
+// budget rather than being granted a fresh one.
+//
+// It exists for a host language that starts a whole new evaluation inside an
+// existing one and cannot simply pass the caller's Context down. XSLT's
+// fn:transform is the case: the nested transformation builds its own runtime,
+// and newRuntime calls NewContext, which mints both counters from scratch --
+// so every level of a nest got the full MaxItems and MaxBytes over again while
+// the depth budget correctly inherited. The house rule the depth budget
+// already follows is that a budget is monotonic: a nested evaluation may spend
+// the parent's remaining allowance, never reset it.
+//
+// Each counter is carried WITH its held flag, never without. The flag is what
+// says where the budget's boundary is, and a counter forwarded without it
+// would be reset by Compiled.Eval once per expression in the nested
+// evaluation -- which would clear the CALLER's accumulated charges through the
+// shared pointer and hand the caller an allowance it has already spent. That
+// is the same leak HoldItemBudget's and HoldByteBudget's idempotence guards
+// exist to prevent, arriving by another route, and it would be worse than the
+// fresh allowance it replaced.
+//
+// A nil src, or a src with no budget, leaves c's own budget alone: a caller
+// with nothing to inherit from is a fresh root, which is what a top-level
+// evaluation legitimately is.
+func (c *Context) AdoptBudget(src *Context) *Context {
+	if c == nil || src == nil {
+		return c
+	}
+	n := *c
+	if src.items != nil {
+		n.items, n.heldItems = src.items, src.heldItems
+	}
+	if src.bytes != nil {
+		n.bytes, n.heldBytes = src.bytes, src.heldBytes
+	}
+	// The entity allowance is inherited on the same house rule as the other
+	// two: a nested evaluation may spend the parent's remainder, never reset
+	// it. Without this a nested transform would hand fn:parse-xml the full
+	// ceiling over again, which is the per-call mint this change removes
+	// arriving one level up.
+	if src.entities != nil {
+		n.entities = src.entities
+	}
+	// The result-tree allowance inherits on the same house rule, and for the
+	// sharper reason: fn:transform's nested transformation builds a whole
+	// result tree of its own, so a nested transform granted a fresh ceiling
+	// could build MaxNodes again at every level of the nest.
+	if src.nodes != nil {
+		n.nodes = src.nodes
+	}
+	return &n
+}
+
+// EntityBudget returns the entity-expansion allowance shared by every parse
+// this evaluation performs, for a host that parses on the evaluation's behalf
+// rather than through fn:parse-xml.
+//
+// A nil result means this Context carries no allowance -- a hand-built one --
+// and the parse gets the ordinary per-document ceiling.
+func (c *Context) EntityBudget() *xdm.EntityBudget {
+	if c == nil {
+		return nil
+	}
+	return c.entities
+}
+
+// resetBytes starts a fresh byte budget for one expression evaluation.
+func (c *Context) resetBytes() {
+	if c != nil && c.bytes != nil {
+		atomic.StoreInt64(c.bytes, 0)
 	}
 }
 
@@ -636,4 +1128,62 @@ func (c *Context) libraryVersion() Version {
 		return c.LibraryVersion
 	}
 	return c.Version
+}
+
+// EnvironmentResolver answers fn:environment-variable and
+// fn:available-environment-variables. Nil disables both, which is the default
+// and the safe one: the process environment routinely holds credentials, and
+// nothing about running a stylesheet implies consent to read them.
+//
+// It is an interface rather than a bool for the same reason the other resource
+// gates are. A caller who wants these functions to work usually wants a
+// *chosen* set of variables visible, not the whole process environment — the
+// grant is which names, not merely on or off. OSEnvironment is the widest
+// implementation and has to be asked for by name.
+//
+// Both methods are answerable as the empty result, and that is what makes the
+// gate conformance-safe: F&O 3.1 section 14.6.9 makes it
+// implementation-dependent which variables are available, and section 14.6.8
+// returns the empty sequence for a name that is not among them. So a withheld
+// variable and an unset one are indistinguishable by design, and a stylesheet
+// cannot tell the gate from a bare environment.
+type EnvironmentResolver interface {
+	// LookupEnvironment returns the value of name and whether it is
+	// available. A resolver that hides a variable returns ok false, which is
+	// the same answer an unset variable gives.
+	LookupEnvironment(name string) (value string, ok bool)
+
+	// EnvironmentNames returns the names LookupEnvironment will answer, in
+	// any order. An empty result is legal and means no variable is exposed.
+	EnvironmentNames() []string
+}
+
+// OSEnvironment is an EnvironmentResolver over the real process environment,
+// exposing every variable the process holds.
+//
+// It is the widest grant this library offers and is never installed by
+// default: a caller who sets it is saying that whatever runs in this context
+// is trusted with the process's own secrets. Prefer a resolver over a fixed
+// map of the variables a stylesheet actually needs.
+type OSEnvironment struct{}
+
+// LookupEnvironment reads the process environment.
+func (OSEnvironment) LookupEnvironment(name string) (string, bool) {
+	return os.LookupEnv(name)
+}
+
+// EnvironmentNames returns every variable name in the process environment,
+// sorted. The order is fixed only so that two calls in one query agree; the
+// spec fixes none, and an unstable one would make a test comparing two calls
+// flap.
+func (OSEnvironment) EnvironmentNames() []string {
+	env := os.Environ()
+	names := make([]string, 0, len(env))
+	for _, kv := range env {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			names = append(names, kv[:i])
+		}
+	}
+	sort.Strings(names)
+	return names
 }

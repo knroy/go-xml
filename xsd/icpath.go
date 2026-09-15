@@ -426,8 +426,38 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 			p.errs = append(p.errs, err)
 			return nil
 		}
+		// The document that wrote this refer=, captured now because the
+		// fixup below runs after the whole assembly, when p.doc no
+		// longer points here.
+		decl := p.doc
 		p.fixups = append(p.fixups, func() error {
 			key, ok := p.schema.identityConstraints[target]
+			// identityConstraints is one flat map over the whole
+			// assembly, so a lookup that ignores which document
+			// asked can cross a namespace boundary the asking
+			// document never imported. §4.2.6.1 src-resolve scopes
+			// the licence an import grants to the document that
+			// wrote it, which is why doc.imports exists alongside
+			// the per-assembly set.
+			//
+			// idC019 is exactly that: its import brings in
+			// idC017a.xsd, whose targetNamespace is "diffNS" and
+			// whose unprefixed refer="keyName" resolves to the
+			// *absent* namespace (§3.11.2 -- an unprefixed QName
+			// takes the default namespace, not the target one).
+			// Nothing in diffNS declares that key; the match came
+			// from the importing document's own absent namespace,
+			// which idC017a.xsd does not import. resolveQName's
+			// own import check cannot catch it, because an
+			// unprefixed name with no default namespace in scope
+			// returns early through chameleonQName.
+			//
+			// A constraint in the declaring document's own target
+			// namespace, or in one it imports, stays reachable.
+			if ok && decl != nil && key.Name.URI != decl.targetNS &&
+				!decl.imports[key.Name.URI] {
+				ok = false
+			}
 			if !ok {
 				return errorAt(el, "src-resolve",
 					"keyref refer=%q names no key or unique constraint", refer)

@@ -52,6 +52,11 @@ type Parser struct {
 	// difference — xgc:leading-lone-slash, in startsStep — so this is a flag
 	// rather than a second parser.
 	xquery bool
+	// singleType restricts the occurrence indicators a type may carry to "?",
+	// which is the whole of the difference between SingleType and
+	// SequenceType. It is set only while the target of "cast as" or
+	// "castable as" is being parsed. See parseSingleType.
+	singleType bool
 }
 
 // maxParseDepth bounds expression nesting.
@@ -72,6 +77,57 @@ type Parser struct {
 // expression is not refused. An expression this nested is machine-generated
 // whatever its intent.
 const maxParseDepth = 1000
+
+// maxChainLength bounds the length of a flat infix operator chain.
+//
+// maxParseDepth counts how deeply an expression NESTS, and that is blind to
+// how LONG one is. Every infix level here — "or", "and", "+", "*", "|",
+// "intersect", "||", "=>", and prefix "-" — is parsed by a left-associative
+// LOOP, so "1 or 1 or 1 ..." never re-enters parseExprSingle and the depth
+// stays at 1 while the AST's left spine grows one node per term. Three
+// separate walkers then descend that spine by recursion — optimize
+// (xpath/optimize.go), BinaryOp.Eval (xpath/operators.go) and String()
+// (xpath/ast_string.go) — so the stack cost is linear in the chain's length
+// however the tree is later used. Measured before this bound: an "or" chain
+// crashed the process at 60,000 terms under an 8 MB goroutine stack and at
+// 200,000 under a 32 MB one, about 200 bytes of stack per term. A 300 KB
+// attribute value should not be able to take a service down, and a Go stack
+// overflow is fatal — recover() does not catch it.
+//
+// The bound is charged in the parser rather than only in the optimiser
+// because the parser is the one place that protects all three walkers: an
+// over-long chain refused here never becomes an AST for any of them to walk.
+//
+// 10,000 is set from measurement, not from feel. The longest flat chain in
+// any suite or corpus this library is tested against is 190 — a union of 190
+// self:: steps in the DocBook round-trip stylesheet under
+// tests/misc/docbook in the XSLT 3.0 suite — with 56 in DocBook xslTNG, 28 in
+// XSpec and 17 in the QT3 tools. The bound is fifty times the longest real
+// chain and four times below the smallest measured crash, which leaves it
+// safe on a stack far smaller than any of those tested. Refusing a legal
+// stylesheet would be the worse bug of the two.
+const maxChainLength = 10000
+
+// chainTooLong reports whether an infix loop has built a spine longer than
+// maxChainLength, and yields the error to return when it has.
+//
+// The count is local to each loop rather than cumulative over the parse: a
+// stylesheet holding a thousand separate ten-term predicates has a thousand
+// short spines and no deep recursion, and refusing it would be the false
+// rejection this bound exists to avoid. Only one chain's own length matters,
+// because only one chain's length becomes stack depth.
+//
+// XPDY0130 is the code XPath 3.1 §2.3.1 names for an implementation-
+// dependent limit being exceeded, and the chain is well-formed, so a syntax
+// code would misdescribe it. xdm.ErrResourceLimit is wrapped alongside so
+// errors.Is separates the refusal from every other error.
+func chainTooLong(n int, op string) error {
+	if n <= maxChainLength {
+		return nil
+	}
+	return fmt.Errorf("XPDY0130: %q operator chain exceeds %d terms: %w",
+		op, maxChainLength, xdm.ErrResourceLimit)
+}
 
 // Parse compiles an XPath 2.0 expression.
 func Parse(src string, ns NamespaceResolver) (Expr, error) {
@@ -194,17 +250,131 @@ func (b bracedResolver) ResolvePrefix(prefix string) (string, bool) {
 // against a static context that had imported one, while the same test written
 // with an ordinary prefix resolved fine. Carrying the inner SchemaTypes
 // through restores the one property the wrapper was never meant to change.
+// bracedSchemaResolver is bracedResolver for a resolver that also carries a
+// schema.
+//
+// Embedding only NamespaceResolver promotes only that interface's methods, so
+// the wrapper answered ResolvePrefix and nothing else: a resolver that
+// implemented SchemaTypes stopped implementing it the moment an expression
+// contained a braced URI literal, and every schema lookup in schema_types.go
+// took its "no schema in the static context" branch. That made
+// schema-element(Q{uri}local) report XPST0008 -- "no schema is imported" --
+// against a static context that had imported one, while the same test written
+// with an ordinary prefix resolved fine.
+//
+// SchemaTypes was the first interface found through that trap and is not the
+// only one the static context answers. schema_types.go type-asserts the
+// resolver for six, and carrying one while dropping five left the same defect
+// in five more places: "() instance of Q{uri}pureUnion" reported XPST0051,
+// "only a pure union type is an item type", about a union that IS pure,
+// because SchemaUnionTypes had gone missing and the purity walk was never
+// reached. CastAs-UnionType-28, -29 and -30 are the suite's cases.
+//
+// The inner resolver is held as one value and the six methods delegate to it,
+// rather than embedding six interfaces. An EMBEDDED interface that is nil
+// still makes the struct satisfy that interface, so a caller's
+// "v, ok := ns.(SchemaUnionTypes)" would succeed and then dereference nil --
+// turning a resolver that implements some but not all of the six from a
+// missed lookup into a panic. Delegating keeps each answer exactly the one
+// the inner resolver would have given.
 type bracedSchemaResolver struct {
 	bracedResolver
-	SchemaTypes
+	inner NamespaceResolver
+}
+
+func (b bracedSchemaResolver) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bool, bool) {
+	if v, ok := b.inner.(SchemaTypes); ok {
+		return v.LookupSchemaType(name)
+	}
+	return 0, false, false
+}
+
+func (b bracedSchemaResolver) ValidateSchemaValue(name xdm.QName, value string) (bool, error) {
+	if v, ok := b.inner.(SchemaTypes); ok {
+		return v.ValidateSchemaValue(name, value)
+	}
+	return false, nil
+}
+
+func (b bracedSchemaResolver) SchemaDeclarationType(name xdm.QName, attribute bool) (string, bool) {
+	if v, ok := b.inner.(SchemaTypes); ok {
+		return v.SchemaDeclarationType(name, attribute)
+	}
+	return "", false
+}
+
+func (b bracedSchemaResolver) SubstitutionGroupMembers(name xdm.QName) []xdm.QName {
+	if v, ok := b.inner.(SchemaTypes); ok {
+		return v.SubstitutionGroupMembers(name)
+	}
+	return nil
+}
+
+func (b bracedSchemaResolver) LookupSchemaDeclaration(name xdm.QName, attribute bool) bool {
+	if v, ok := b.inner.(SchemaTypes); ok {
+		return v.LookupSchemaDeclaration(name, attribute)
+	}
+	return false
+}
+
+func (b bracedSchemaResolver) SchemaUnionMemberTypes(name xdm.QName) ([]xdm.TypeCode, bool) {
+	if v, ok := b.inner.(SchemaUnionTypes); ok {
+		return v.SchemaUnionMemberTypes(name)
+	}
+	return nil, false
+}
+
+func (b bracedSchemaResolver) SchemaTypeIsList(name xdm.QName) (xdm.QName, bool) {
+	if v, ok := b.inner.(SchemaListTypes); ok {
+		return v.SchemaTypeIsList(name)
+	}
+	return xdm.QName{}, false
+}
+
+func (b bracedSchemaResolver) SchemaUnionMemberNames(name xdm.QName) ([]string, bool) {
+	if v, ok := b.inner.(SchemaUnionNames); ok {
+		return v.SchemaUnionMemberNames(name)
+	}
+	return nil, false
+}
+
+func (b bracedSchemaResolver) SchemaUnionAtomicMemberTypes(name xdm.QName) ([]xdm.TypeCode, bool) {
+	if v, ok := b.inner.(SchemaImpureUnionTypes); ok {
+		return v.SchemaUnionAtomicMemberTypes(name)
+	}
+	return nil, false
+}
+
+func (b bracedSchemaResolver) SchemaUnionMemberFacetNames(name xdm.QName) ([]string, bool) {
+	if v, ok := b.inner.(SchemaUnionMemberFacets); ok {
+		return v.SchemaUnionMemberFacetNames(name)
+	}
+	return nil, false
+}
+
+func (b bracedSchemaResolver) SchemaUnionAtomicMemberFacetNames(name xdm.QName) ([]string, bool) {
+	if v, ok := b.inner.(SchemaUnionMemberFacets); ok {
+		return v.SchemaUnionAtomicMemberFacetNames(name)
+	}
+	return nil, false
+}
+
+func (b bracedSchemaResolver) SchemaUnionListMemberNames(name xdm.QName) ([]xdm.QName, bool) {
+	if v, ok := b.inner.(SchemaUnionListMembers); ok {
+		return v.SchemaUnionListMemberNames(name)
+	}
+	return nil, false
 }
 
 // wrapBraced wraps ns so the synthetic prefixes resolve, preserving the inner
-// resolver's schema when it has one.
+// resolver's schema interfaces when it has any.
 func wrapBraced(ns NamespaceResolver, uris []string) NamespaceResolver {
 	b := bracedResolver{NamespaceResolver: ns, uris: uris}
-	if st, ok := ns.(SchemaTypes); ok {
-		return bracedSchemaResolver{bracedResolver: b, SchemaTypes: st}
+	switch ns.(type) {
+	case SchemaTypes, SchemaUnionTypes, SchemaListTypes,
+		SchemaUnionNames, SchemaImpureUnionTypes, SchemaUnionListMembers,
+		SchemaUnionMemberFacets:
+		return bracedSchemaResolver{bracedResolver: b, inner: ns}
 	}
 	return b
 }
@@ -381,12 +551,11 @@ func (p *Parser) parseExprSingle() (Expr, error) {
 	p.depth++
 	defer func() { p.depth-- }()
 	if p.depth > maxParseDepth {
-		// XPST0003 is kept because callers and the conformance suites match
-		// on it, but the condition is a resource refusal rather than a
-		// syntax fault: the expression is well-formed, merely deeper than
-		// this processor will parse. The sentinel is added alongside the
-		// code so an embedding caller can tell the two apart.
-		return nil, fmt.Errorf("XPST0003: expression nesting exceeds %d levels: %w",
+		// The expression is well-formed, merely deeper than this processor
+		// will parse, which is the condition §2.3.1 gives XPDY0130 for. The
+		// sentinel is added alongside the code so an embedding caller can
+		// tell a refusal from every other error.
+		return nil, fmt.Errorf("XPDY0130: expression nesting exceeds %d levels: %w",
 			maxParseDepth, xdm.ErrResourceLimit)
 	}
 	t := p.cur()
@@ -587,8 +756,13 @@ func (p *Parser) parseOr() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for p.peekIs(TokOp, "or") {
 		p.pos++
+		n++
+		if err := chainTooLong(n, "or"); err != nil {
+			return nil, err
+		}
 		right, err := p.parseAnd()
 		if err != nil {
 			return nil, err
@@ -603,8 +777,13 @@ func (p *Parser) parseAnd() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for p.peekIs(TokOp, "and") {
 		p.pos++
+		n++
+		if err := chainTooLong(n, "and"); err != nil {
+			return nil, err
+		}
 		right, err := p.parseComparison()
 		if err != nil {
 			return nil, err
@@ -674,9 +853,14 @@ func (p *Parser) parseStringConcat() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		if _, ok := p.acceptOp("||"); !ok {
 			return left, nil
+		}
+		n++
+		if err := chainTooLong(n, "||"); err != nil {
+			return nil, err
 		}
 		right, err := p.parseRange()
 		if err != nil {
@@ -707,10 +891,15 @@ func (p *Parser) parseAdditive() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		op, ok := p.acceptOp("+", "-")
 		if !ok {
 			return left, nil
+		}
+		n++
+		if err := chainTooLong(n, op); err != nil {
+			return nil, err
 		}
 		right, err := p.parseMultiplicative()
 		if err != nil {
@@ -725,6 +914,7 @@ func (p *Parser) parseMultiplicative() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		op, ok := p.acceptOp("*", "div", "idiv", "mod")
 		if !ok {
@@ -748,6 +938,10 @@ func (p *Parser) parseMultiplicative() (Expr, error) {
 			p.pos++
 			op = "*"
 		}
+		n++
+		if err := chainTooLong(n, op); err != nil {
+			return nil, err
+		}
 		right, err := p.parseUnion()
 		if err != nil {
 			return nil, err
@@ -761,10 +955,15 @@ func (p *Parser) parseUnion() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		// "union" and "|" are synonyms, so both normalise to one Op.
 		if _, ok := p.acceptOp("union", "|"); !ok {
 			return left, nil
+		}
+		n++
+		if err := chainTooLong(n, "union"); err != nil {
+			return nil, err
 		}
 		right, err := p.parseIntersectExcept()
 		if err != nil {
@@ -779,10 +978,15 @@ func (p *Parser) parseIntersectExcept() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		op, ok := p.acceptOp("intersect", "except")
 		if !ok {
 			return left, nil
+		}
+		n++
+		if err := chainTooLong(n, op); err != nil {
+			return nil, err
 		}
 		right, err := p.parseInstanceOf()
 		if err != nil {
@@ -846,7 +1050,7 @@ func (p *Parser) parseCastable() (Expr, error) {
 		if err := p.expectKeyword("as"); err != nil {
 			return nil, err
 		}
-		st, err := p.parseSequenceType()
+		st, err := p.parseSingleType()
 		if err != nil {
 			return nil, p.castTargetTypeError(err)
 		}
@@ -868,7 +1072,7 @@ func (p *Parser) parseCast() (Expr, error) {
 		if err := p.expectKeyword("as"); err != nil {
 			return nil, err
 		}
-		st, err := p.parseSequenceType()
+		st, err := p.parseSingleType()
 		if err != nil {
 			return nil, p.castTargetTypeError(err)
 		}
@@ -898,14 +1102,32 @@ func (p *Parser) parseCast() (Expr, error) {
 // had it the other way round — the arrow consumed the bare literal and the
 // negation was applied to the call's result, so that expression answered -1.
 func (p *Parser) parseUnary() (Expr, error) {
-	if op, ok := p.acceptOp("-", "+"); ok {
-		operand, err := p.parseUnary()
-		if err != nil {
+	// A run of signs is the one chain in the ladder that recurses rather than
+	// loops, so it grows p's own stack as well as the AST spine. The run is
+	// counted here and the recursion rewritten as a loop, which bounds both:
+	// "-----1" is a UnaryOp per sign whatever the parser's shape, and
+	// optimize and Eval descend that spine exactly as they descend an "or".
+	ops := make([]string, 0, 8)
+	for {
+		op, ok := p.acceptOp("-", "+")
+		if !ok {
+			break
+		}
+		ops = append(ops, op)
+		if err := chainTooLong(len(ops), op); err != nil {
 			return nil, err
 		}
-		return &UnaryOp{Op: op, Operand: operand}, nil
 	}
-	return p.parseSimpleMap()
+	e, err := p.parseSimpleMap()
+	if err != nil {
+		return nil, err
+	}
+	// Applied right to left, so the innermost sign is nearest the operand and
+	// the tree is the one the recursion built.
+	for i := len(ops) - 1; i >= 0; i-- {
+		e = &UnaryOp{Op: ops[i], Operand: e}
+	}
+	return e, nil
 }
 
 // parseArrow parses the arrow operator:
@@ -930,9 +1152,14 @@ func (p *Parser) parseArrow() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		if _, ok := p.acceptOp("=>"); !ok {
 			return left, nil
+		}
+		n++
+		if err := chainTooLong(n, "=>"); err != nil {
+			return nil, err
 		}
 		switch {
 		case p.cur().Kind == TokName:
@@ -1002,9 +1229,14 @@ func (p *Parser) parseSimpleMap() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	n := 0
 	for {
 		if _, ok := p.acceptOp("!"); !ok {
 			return left, nil
+		}
+		n++
+		if err := chainTooLong(n, "!"); err != nil {
+			return nil, err
 		}
 		right, err := p.parsePath()
 		if err != nil {
@@ -1074,6 +1306,13 @@ func (e *StringConcat) Eval(ctx *Context) (xdm.Sequence, error) {
 	}
 	rs, err := argAnyAtomicString(args, 1)
 	if err != nil {
+		return nil, err
+	}
+	// The "||" operator is fn:concat($a, $b) by definition, and it is charged
+	// here rather than routed through concat because it evaluates its operands
+	// directly. Without this the operator is a doubling primitive that the
+	// budget on concat does not see.
+	if err := ctx.countBytes(len(ls) + len(rs)); err != nil {
 		return nil, err
 	}
 	return strSeq(ls + rs), nil
@@ -1193,6 +1432,16 @@ func checkCastTarget(st SequenceType) error {
 	if st.SchemaListType {
 		return nil
 	}
+	// An impure or restricted union is a legal cast target too. XPath 3.1
+	// 3.14.2 admits any simple type in the in-scope schema types as a
+	// SingleType; the purity rule of 2.5 governs ItemType positions --
+	// "instance of", "treat as", a function signature -- and not this one,
+	// because a cast has the lexical form in hand and can put the union's own
+	// facets to the schema. cbcl-castable-impure-001 asserts
+	// "xs:date('2001-01-01') castable as s:impureUnionType" is true.
+	if st.SchemaSimpleType {
+		return nil
+	}
 	if !st.HasAtomicType {
 		return xdm.Errorf("XPST0003",
 			"a cast target must be an atomic type, got %s", st)
@@ -1242,7 +1491,36 @@ func (p *Parser) foldQNameCast(operand Expr, st SequenceType) (Expr, bool, error
 // instanceof111 asks "xs:NMTOKEN('abc') instance of xs:NMTOKENS" and
 // FunctionCall-027 declares a parameter "as xs:NMTOKENS"; both require
 // XPST0051, the code for a type name that is not in scope as an item type.
+//
+// The same rule reaches an imported schema's types, and for the same reason.
+// §2.5.4 admits an AtomicOrUnionType in an ItemType only when it is a
+// *generalized atomic type*: an atomic type, or a pure union type. A
+// schema-defined list is excluded by the sentence above; an impure or
+// restricted union is excluded by §2.5.5, which writes union membership as a
+// clause of derives-from for a *pure* union alone. Both arrive here already
+// classified -- SchemaListType and SchemaSimpleType are set at parse time
+// precisely for the cases the purity walk refused -- so the check is a
+// question about the flags rather than a second walk over the schema.
+//
+// The distinction that keeps this from over-reaching is the one §3.14.2 draws
+// on the other side: those same types ARE legal *cast* targets, because a cast
+// has the lexical form in hand and can put the union's own facets to the
+// schema. That is why the cast-target check a few lines above lets both
+// through, and why extending it to this position would be wrong in the
+// opposite direction. FunctionCall-032, -033, -034 and -039 declare
+// lu:unionOfListType, lu:restrictedUnionType and lu:listType in signature
+// positions and each requires XPST0051.
 func checkNotListType(st SequenceType, where string) error {
+	if st.SchemaListType {
+		return xdm.Errorf("XPST0051",
+			"a list type cannot be used in %s: %s is not an item type",
+			where, st.SchemaType)
+	}
+	if st.SchemaSimpleType {
+		return xdm.Errorf("XPST0051",
+			"%s cannot be used in %s: only a pure union type is an item type",
+			st.SchemaType, where)
+	}
 	if st.ListItemFacet == "" {
 		return nil
 	}

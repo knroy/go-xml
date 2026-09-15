@@ -102,6 +102,41 @@ type Options struct {
 	// xdm.ErrResourceLimit, on the same reasoning as MaxModules: a truncated
 	// module is a module whose declarations are partly missing.
 	MaxModuleBytes int64
+
+	// Schemas are schemas available to "import schema" (§4.11), registered
+	// by target namespace.
+	//
+	// This is the schema store the specification leaves to the
+	// implementation, and it is the only way to import a schema that grants
+	// the query no reach whatever: the caller supplies the components or the
+	// text, so nothing is opened and nothing is fetched. An import with no
+	// "at" clause names a namespace and nothing else, and resolves against
+	// this.
+	//
+	// The store is consulted before SchemaResolver, so a registered schema
+	// shadows any location a query might name for that namespace.
+	Schemas []Schema
+
+	// SchemaResolver locates a schema document that Schemas does not have.
+	// When nil, NOTHING IS FETCHED: an "at" location is never opened, and an
+	// import that the store cannot answer raises XQST0059.
+	//
+	// It is off by default for the same reason ModuleResolver is: an "at"
+	// location is a string chosen by the query's author, and a query is
+	// untrusted input. The same resolver is handed to xsd for the imported
+	// schema's own xs:include and xs:import, so an imported schema can reach
+	// no further than the query's import was granted.
+	SchemaResolver SchemaResolver
+
+	// MaxSchemaBytes bounds the total schema source text one compilation may
+	// read through SchemaResolver and Schemas, cumulatively rather than per
+	// import. Zero means DefaultMaxSchemaBytes.
+	//
+	// Exceeding it fails the compilation with an error wrapping
+	// xdm.ErrResourceLimit rather than XQST0059: a truncated schema is a
+	// schema whose components are partly missing, and compiling against a
+	// partial static context is what this package refuses to do.
+	MaxSchemaBytes int64
 }
 
 // A Query is a compiled query, safe for concurrent use.
@@ -166,9 +201,12 @@ type Query struct {
 // public functions and variables. Nothing is fetched unless a resolver was
 // configured -- see Options.ModuleResolver.
 //
-// "import schema" still parses and is then refused rather than mis-parsed. It
-// needs the in-scope schema definitions in the static context, which this
-// package does not have, so it raises XQST0059 and validate raises XQDY0084.
+// "import schema" is implemented (§4.11): a schema is found in Options.Schemas
+// or through Options.SchemaResolver, and its type and declaration names reach
+// the static context before the query body is parsed, so "cast as my:t",
+// "instance of my:t", "element(*, my:t)", "schema-element(my:e)" and
+// "validate" are all judged against it. Nothing is fetched unless a resolver
+// was configured -- see Options.SchemaResolver.
 func Compile(src string, opts Options) (*Query, error) {
 	sc := newStaticContext()
 	sc.baseURI = opts.BaseURI
@@ -197,7 +235,7 @@ func Compile(src string, opts Options) (*Query, error) {
 	// declared XQuery version implies -- the default until parseVersionDecl
 	// says otherwise, which it does before anything else is read.
 	p := &parser{src: src, sc: sc, version: sc.xqVersion.xpathVersion(),
-		declaredNS: map[string]bool{}}
+		declaredNS: map[string]bool{}, opts: opts}
 	// The version declaration, the prolog and the body are read in that order
 	// because each changes how the next is read: a version declaration can
 	// refuse the whole query, and every prolog declaration is applied to the
@@ -280,8 +318,29 @@ func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := xdmbuild.New(policy{sc: q.sc})
+	out := xdmbuild.New(policy{sc: q.sc, xp: ctx})
 	ref := &builderRef{b: out}
+	// The item budget is armed here, for the query body, because this is the
+	// boundary that matches the one xpath.Compiled.Eval draws for an
+	// expression: one evaluation, however many nested expressions it runs.
+	//
+	// It has to be *this* package that arms it. The body is not one compiled
+	// expression — a FLWOR and a constructor are parsed here and evaluated by
+	// this package's own node tree, reaching xpath once per clause and once
+	// per tuple — so leaving the boundary to Compiled.Eval reset the counter
+	// on every iteration and the documented MaxItems was never reached on any
+	// query whose body this package evaluates itself.
+	//
+	// After prepare rather than before, so that a global variable's
+	// initialiser keeps the per-expression budget it has always had: the
+	// prolog is setup, and a query with fifty globals is not one evaluation
+	// that materialised the sum of them.
+	ctx = ctx.HoldItemBudget()
+	// The byte budget needs the same boundary for the same reason. A chain of
+	// "let"s, each concatenating the previous string with itself, reaches
+	// xpath once per binding, so the per-expression reset cleared the counter
+	// between the doublings and the whole 640 MB was built uncharged.
+	ctx = ctx.HoldByteBudget()
 	ec := &evalContext{xp: ctx, sc: q.sc}
 	for _, n := range q.body {
 		if err := n.eval(ref, ec); err != nil {
@@ -305,6 +364,15 @@ func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 // and the query's own declarations sit in front.
 func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 	sub := *ctx
+	// Installed unconditionally, as xslt does: whether the processor *can*
+	// validate is a property of the processor, and this one always can --
+	// F&O 3.1 §17.5.3 reserves FOJS0004 for one that cannot. Whether the
+	// query may then write "instance of element(j:map, j:mapType)" is the
+	// separate question "import schema" answers. A caller that installed its
+	// own validator keeps it.
+	if sub.Validator == nil {
+		sub.Validator = jsonTreeValidator{}
+	}
 	if len(q.funcs) > 0 || len(q.formats) > 0 || len(q.modules) > 0 {
 		if ctx.Funcs == nil || ctx.Funcs == xpath.FunctionLibrary(q.lib.Parent) {
 			sub.Funcs = q.lib
@@ -343,6 +411,16 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 			b.rebase(out)
 		}
 	}
+	// §4.16 lets a library module constrain the context item's type without
+	// supplying its value, and that constraint binds on the value the main
+	// module ends up with: "the context item declarations in all modules must
+	// be consistent", and the item must match each. So this runs whether or
+	// not the main module declared one -- an importer that declares nothing
+	// still owes the imported type -- and it runs after the declaration
+	// above, because that is what settles which value is being checked.
+	if err := q.checkImportedContextItemTypes(out); err != nil {
+		return nil, err
+	}
 	if b == nil {
 		return out, nil
 	}
@@ -352,6 +430,43 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 		}
 	}
 	return b.ctx, nil
+}
+
+// checkImportedContextItemTypes applies the context item type declared by
+// each imported library module (§4.16).
+//
+// A library module's declaration carries no value — XQST0113 forbids one — so
+// the only thing it contributes is a type, and that type has to be satisfied
+// by whatever context item the query is evaluated with. The check is a match
+// rather than a conversion, on the same rule bindContextItem follows: §4.16
+// says the value must *match* the declared type, and the function conversion
+// rules are not applied to the context item.
+//
+// An absent context item is not this check's complaint. A module that
+// declares a type says what the item must be IF there is one; whether there
+// has to be one at all is bindContextItem's XPDY0002, and reporting an
+// absence here would blame the import for a value the main module never
+// supplied.
+//
+// contextDecl-050 and -051 are the cases. Both import a module declaring
+// "context item as xs:date external" and then supply an xs:integer and an
+// element respectively; both want XPTY0004. Before this the module's
+// declaration was parsed and thrown away with the rest of its prolog, so the
+// queries returned true and false instead of failing.
+func (q *Query) checkImportedContextItemTypes(ctx *xpath.Context) error {
+	if ctx == nil || ctx.Item == nil {
+		return nil
+	}
+	for _, m := range q.modules {
+		if m.contextItem == nil || m.contextItem.typ == nil {
+			continue
+		}
+		if _, err := m.contextItem.typ.match(xdm.Sequence{ctx.Item},
+			"the context item"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // bindContextItem applies "declare context item" (§4.16).

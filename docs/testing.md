@@ -20,16 +20,21 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,576 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
-| **Limit boundary tests** | 13 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
+<!-- BEGIN GENERATED LAYER COUNTS -->
+<!-- Generated from tests/conformance/results.json and the source tree by
+     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
+| **Unit tests** | 2,404 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
-| **Real-world stylesheets** | 818 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
+| **Real-world stylesheets** | 802 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
 | **Production schema sets** | 65 + CII | what modular published schemas do | industries whose schemas are shaped differently |
 | **Vendored real-world schemas** | 185 of 230 | a schema-validity rule that has become stricter than the spec, on every checkout — no licensed corpus needed | the deep industry vocabularies only UBL and CII carry |
-| **Fuzzing** | 7 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
-| **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no wildcards, substitution groups, or interleaved choices |
-| **The ratchet** | 10 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
+| **Fuzzing** | 11 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
+| **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no interleaved choices |
+| **Wildcard/UPA model** | 60,000 pairs | a *wrong answer* in wildcard acceptance or in the UPA competition rule | anything outside a single wildcard against a single name, or a pair of terms in one choice |
+| **The ratchet** | 16 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
+<!-- END GENERATED LAYER COUNTS -->
 
 **How the first four counts are counted**, because "how many tests" has several
 honest answers and the one meant here is the narrow one. The three that a
@@ -37,15 +42,15 @@ command can settle are asserted for equality by `tests/check.sh`'s *documented
 figures* section, which fails the gate when this table drifts from the tree:
 
 * **Unit tests** — `func Test` declarations, not subtests and not table rows:
-  `grep -rn "func Test" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
+  `grep -rn "^func Test" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
 * **Limit boundary tests** — `func Test` declarations in the six
   `*/limits_boundary_test.go` files (dtd, relaxng, xdm, xpath, xsd, xslt); most
   are table-driven, so they run rather more than 13 cases:
-  `grep -hc "func Test" ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'`
-* **Fuzzing** — `grep -rn "func Fuzz" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
+  `grep -hc "^func Test" ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'`
+* **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
 * **W3C conformance suites** — the sum of the in-scope totals in the status
-  table: XPath 2.0 15,183 + XQuery 3.1 29,918 + XSLT 2.0 6,157 + XSLT 3.0 8,625
-  + XSD 1.0 39,388 + XSD 1.1 41,576 + RELAX NG 965. XPath 3.0 and 3.1 are not
+  table: XPath 2.0 15,222 + XQuery 3.1 29,964 + XSLT 2.0 6,201 + XSLT 3.0 11,518
+  + XSD 1.0 39,388 + XSD 1.1 41,598 + RELAX NG 965. XPath 3.0 and 3.1 are not
   added again — the QT3 catalog is one corpus measured at three versions, and
   the 2.0 figure is the whole of it that this engine claims. An earlier
   revision said "~128,000", which no grouping of these numbers reaches.
@@ -72,6 +77,26 @@ shapes whose language falls out of arithmetic; a choice whose branches repeat or
 differ in length needs the same interleaving argument the matcher does, and an
 oracle that reasons the same way is not independent, so those are left out
 deliberately rather than guessed at.
+
+**The wildcard rules are set membership, so the oracle can be the spec text.**
+`xsd/wildcard_model_test.go` restates *Wildcard allows Namespace Name*
+(§3.10.4.2) and *Wildcard allows Expanded Name* (§3.10.4.3) as four clauses over
+sets — variety plus namespaces, then disallowed names, `##defined` and
+`##definedSibling` — and the §3.8.6 competition rule as a case analysis over the
+two varieties. Nothing in the model calls `Wildcard.Allows`, `AllowsName`,
+`Disallows`, `wildcardsOverlap`, `wildcardAdmitsElement` or `positionsCompete`;
+that independence is the whole point, because the grouping-key oracle that
+called the function it was checking stayed green through a wrong answer for
+months. 20,000 generated wildcard/name pairs go through `AllowsName`, and 20,000
+term pairs per version are composed into `<choice><a?/><b?/></choice>` and put
+through the real `checkUPA`. `##definedSibling` is bound by compiling that
+content model rather than by writing the unexported field, so the test walks the
+same `bindSiblings` path a schema does. The seed is fixed at `0x5A1D11` for CI
+and replayable with `-wildcard.seed`; twenty hand-written keyword examples and
+eleven competition examples sit alongside, because a generated failure names a
+case index and not the rule that broke. Sabotaging three live paths — `##other`
+admitting the absent namespace, `##definedSibling` ignored, two negations
+reported disjoint — is caught by both halves.
 
 **An unproven hypothesis is worth testing precisely because it is unproven.**
 The fifth audit could not demonstrate that the `depth > 32` guards on four
@@ -125,6 +150,37 @@ is rare, and a corpus that does not deliberately generate it will not stumble
 into it. The histogram is printed with the result — 3, 4 and 5 sibling scopes
 each occur in hundreds of documents — so a future generator change that stops
 producing them is visible rather than silent.
+
+**A loose comparison hides two opposite defects at once.** The XSLT judge
+decided an expected error code with `strings.Contains(terr.Error(), a.Code)` —
+a substring search over the whole rendered message. Replacing it with a
+structured `xdm.ErrorCode` comparison looks like pure hardening and drops the
+in-scope figure from **11,490 to 11,134**. Instrumenting the judge to log every
+case where the two answers differ found 356, splitting into two groups that
+want opposite treatment:
+
+- **351 carry no structured code at all.** A large family of static errors is
+  built with `fmt.Errorf` and writes the code as a trailing parenthetical —
+  `attribute "as" is not allowed on xsl:call-template (XTSE0090)`.
+  `xdm.ErrorCode` looks for a leading code or one delimited by `": "`, so it
+  answers `""` for all of them.
+- **5 report the correct code but have it read past.** These are built as
+  `fmt.Errorf("%s: %s: %w", code, what, inner)`, so the *outer* code is the
+  engine's verdict while the wrapped inner cause is still an `*xdm.Error`.
+  `errors.As` finds the inner one first: `as-1602` renders `XTTE0505: …:
+  FORG0001: …` and is right to, but a strict swap reads `FORG0001` and fails a
+  case the engine got right. `variable-0115`, `sequence-0132`, `avt-3201` and
+  `error-0340c` have the same shape.
+
+So the outermost code is the authoritative one, and the judge now takes it from
+the message prefix, falling back to `xdm.ErrorCode` and then to the substring
+match for the uncoded family. The count is unchanged at 11,490, which is the
+point: the fix had to tighten the comparison *without* moving the figure in
+either direction. `tests/xslts/errorcode_test.go` pins all three shapes.
+
+The real fix is to move that family to `xdm.Errorf` and give `ErrorCode`
+outermost-wins precedence — but `ErrorCode` also decides `xsl:catch` matching,
+so that is an engine change with its own conformance risk, not a harness one.
 
 **An oracle only covers the shapes its generator makes.** The identity oracles
 run 10,000 documents and agreed throughout while `mergeTables` had a bug that
@@ -286,12 +342,23 @@ document. See [options.md](options.md) for the field-by-field rule.
 ## The suites
 
 Third-party and not vendored. Point the variables at your own checkouts, or
-let `tests/check.sh` find them under `testdata/`. The defaults in the table
-below are **check.sh's**, not the tests' own: the suite tests skip unless their
-variable is set, and a relative path resolves against the package directory
-rather than the repository root, so `GOXSLT_QT3=testdata/qt3tests go test
-./tests/qt3/` skips and prints PASS. Run `tests/check.sh`, which passes
-absolute paths and fails a suite that reports no summary.
+let `tests/check.sh` find them under `testdata/`.
+
+Two lanes find a checkout on their own. `tests/qt3` and `tests/xslts` fall back
+to `../../testdata/<suite>` when their variable is unset, so a bare
+`go test ./...` in a tree with the checkouts in place really runs them — QT3
+takes about 80s rather than the 0.3s it used to report. That 0.3s was the
+problem the fallback fixes: an `ok` for a lane that had run none of its 30,345
+cases is indistinguishable from an `ok` for a lane that ran all of them.
+`GOXSLT_NO_SUITES=1` turns both off regardless of what is on disk, which is
+what CI's fast gate and `check.sh`'s unit and race steps set.
+
+Every other lane still skips unless its variable is set, and for those the
+defaults in the table below are **check.sh's**, not the tests' own. A relative
+path resolves against the package directory rather than the repository root,
+so `GOXSLT_XSDTS=testdata/xsdtests go test ./tests/xsd/` skips and prints PASS.
+Run `tests/check.sh`, which passes absolute paths and fails a suite that
+reports no summary.
 
 | suite | variable | default | what it measures |
 |---|---|---|---|
@@ -381,23 +448,231 @@ seen. `check.sh` fails when a count goes **down**.
 ```
 DocBook 577
 RelaxNGSpectest 965
-TestQT3 29901
-TestQT3XQuery 29901
-TestXSLT30Suite 8640
-TestXSLTSuite 6149
+TestQT3XPath20 15217
+TestQT3XPath30 19362
+TestQT3XPath31 21898
+TestQT3XQuery 30345
+TestXSLT30Suite 11492
+TestXSLTSuite 6193
 VendoredSchemas 185
-XSD10 39356
-XSD11 41543
+XSD10 39358
+XSD10I 24973
+XSD10S 14385
+XSD11 41567
+XSD11I 26217
+XSD11S 15350
 XSpec 225
 ```
 
-`TestQT3` and `RelaxNGSpectest` were added late: both suites were being run and
-printed, and neither was ratcheted, so an XPath 2.0 or RELAX NG count could
-fall without `check.sh` saying anything. `TestQT3` logs one `in-scope:` line
-per language version, so the mark is taken from the **last** of them — the
-full 2.0 run — rather than the first. The spectest driver reports
-`N assertions, M passed` instead of `in-scope: M passed`, so its count is
-extracted in `check.sh` and handed to `ratchetCount`.
+`XSD10S`/`XSD10I` and `XSD11S`/`XSD11I` are the schema-validity and instance
+halves of the two XSD totals. They are ratcheted separately because the
+documentation quotes them separately, and a total cannot be split back.
+
+`RelaxNGSpectest` was added late: the suite was being run and printed and was
+not ratcheted, so a RELAX NG count could fall without `check.sh` saying
+anything. The spectest driver reports `N assertions, M passed` instead of
+`in-scope: M passed`, so its count is extracted in `check.sh` and handed to
+`ratchetCount`.
+
+**The three XPath versions carry a mark each.** `TestQT3` runs 2.0, 3.0 and
+3.1 as subtests and logs one `in-scope:` line per version, and there used to
+be a single `TestQT3` mark over them. It did not measure any of them. The
+lane invoked `go test -run TestQT3`, which is a *substring* match and so also
+selected `TestQT3XQuery`; the XQuery summary was then the last `in-scope:`
+line in the output, and the mark selected from it recorded the XQuery count
+under an XPath name. All three XPath counts were ratcheted by nothing, and
+XQuery ran twice per gate — once here and once in its own lane. The pattern
+is anchored (`-run '^TestQT3$'`), the `TestQT3` mark is gone, and
+`TestQT3XPath20`, `TestQT3XPath30` and `TestQT3XPath31` each guard their own
+version. The lane reads the version from the `=== RUN TestQT3/XPath_x.y`
+line that precedes each summary rather than from line order, so reordering
+the subtests cannot silently swap two marks.
+
+### The gate does not write the file
+
+`check.sh` **never** rewrites `tests/ratchet.txt`. A figure that has gone
+**up** fails the run with a message saying so and naming the command that
+records it:
+
+```
+GOXSLT_RATCHET=update tests/check.sh
+```
+
+That is the only mode that writes. It used to record a new high
+automatically, which meant an ordinary gate run edited a tracked file: the
+tree went dirty mid-run, and the provenance block that runs later then
+recorded the run as having been made against a dirty tree — an artifact
+describing a state the gate itself had created. Recording a new high is a
+deliberate act with a commit behind it, so it is now a deliberate invocation.
+
+A **missing** mark also fails, rather than bootstrapping itself. Writing it
+once is friendlier for a genuinely new mark, and was rejected for
+consistency: from inside the script a mark missing because it is new and a
+mark missing because someone deleted the line are indistinguishable, and the
+second is exactly the silent-revert case the file exists to catch.
+
+`GOXSLT_RATCHET=off` still skips the check entirely.
+
+### The guards fail closed
+
+Each helper parses a count out of the driver's output. They used to open with
+`[ -n "$count" ] || return 0`: a driver whose wording changed stopped matching
+the parser, the helper returned success without comparing anything, and the
+gate reported **PASS with the ratchet silently disabled**. A guard that turns
+itself off under exactly the conditions it exists to catch is worse than no
+guard, because it reads as a check that ran.
+
+An unreadable count is now a gate failure. The message names the mark, says
+that nothing is guarding it, and prints the input the parser could not read,
+because the fix is always "the driver now says X, teach the parser X". This
+couples the parsers to the drivers' wording deliberately: if one changes, the
+other must be made to match, and the gate says so.
+
+## Documented figures
+
+Every conformance figure in `README.md` and `docs/` is a copy of a ratchet
+mark, made by hand -- about thirty copies of eight figures. Nothing used to
+fail when one went stale, and they did: on one day three files carried three
+different unit-test counts, and an XSD split was current in `README.md` while
+`docs/xsd.md` still had the previous measurement.
+
+`tests/docfigures.sh`, run by `check.sh` in the *documented figures* section,
+reads `tests/ratchet.txt` and examines every documentation line that names a
+suite's **in-scope denominator** -- the one number in a figure that does not
+move between runs (11,518 for XSLT 3.0, 30,346 for XQuery, and so on). The
+passing count, failure count and percentage written beside it must equal the
+ratchet's, in every form the documents use: `11,492 of 11,518`,
+`26 of 11,518`, `11,492 / 11,518 (99.77%)`, `= 99.77%`, `(26 failing)`, and
+the `| 11,518 | 11,492 | 99.77% | **26** |` summary-table row. A line stating
+two figures is read as two claims. Failures name the file, line and the value
+wanted.
+
+That check anchors on the denominators in its own table, and five ratchet
+marks — the XPath ones, `RelaxNGSpectest`, `DocBook`, `XSpec` and
+`VendoredSchemas` — were never in it. The figures they measure were guarded
+only where a generated region happened to carry them, and the hand-written
+copies were guarded by nothing: the three XPath rows and the RELAX NG row of
+the README status table, DocBook's **577** and XSpec's 225 in its real-world
+section, and the same XPath and RELAX NG figures in `docs/conformance-gaps.md`,
+`docs/todo.md` §1.3 and `docs/validation.md`. Every one of those is a generated
+region now, fed from `results.json`, which already records those four suites.
+A figure that sits mid-sentence uses the *inline* form — both markers on the
+prose line, around the number alone — because an HTML comment on a line of
+its own is a block, and a block inside a paragraph or a list item splits it
+mid-sentence; a table row takes the ordinary block form.
+`TestInlineRegionStaysOnItsLine` pins the difference, and
+`TestHandEditInsideARegionIsCaught` moves a digit in every region, inline ones
+included, and asserts that `-check` would see it. `VendoredSchemas` is a count
+of the tree, which `results.json` does not record by design, so it went into
+`docfigures.sh`'s table instead with 230 as its denominator: the `185 of 230`
+in the layer table above is checked against the ratchet like any other row.
+
+The three XPath figures are in that table too, one row each:
+
+```
+TestQT3XPath20  15217 XPath-2.0
+TestQT3XPath30  19362 XPath-3.0
+TestQT3XPath31  21898 XPath-3.1
+```
+
+They need a row each because the three are three different scopings of one
+catalog and no single denominator covers them. Until the per-version marks
+existed there was nothing to check them against, so the published
+`15,217 / 19,362 / 21,898` in `README.md`, `docs/conformance-gaps.md`,
+`docs/stats.md` and `docs/todo.md` were guarded by neither the ratchet nor
+this script, and a stale copy of any of them failed nothing. They are at
+100.00% and so contribute zero failures; they are deliberately **not** added
+to the Total-row sum below, which would only create a second place for the
+same denominators to be written down.
+
+### The figures name the suite revision they were measured against
+
+`tests/conformance/results.json` records the commit of each vendored W3C
+suite under `suite_revisions`, and
+`TestRecordedSuiteRevisionsMatchTheCheckouts` fails when a recorded revision
+and the checkout disagree.
+
+Without it a figure in that file is not reproducible. The suites are separate
+checkouts, and CI cloned them from their default branch, so **a suite update
+could move a count with no change to this repository at all** — and the
+ratchet would then fail on a commit that changed nothing, with nothing to
+distinguish that from a real regression. `tests/check.sh` had always printed
+the revisions into its provenance, but that is a per-run artifact that
+expires; this is the copy that travels with the numbers it explains. CI now
+clones each suite at the recorded SHA, so adopting a newer suite means
+changing the SHA, re-running the gate and updating `results.json` in one
+commit — the count moves together with the reason it moved.
+
+A suite that is not its own git checkout is recorded as absent rather than
+wrong. `testdata/relaxng` is vendored files, and asking git about it answers
+with *this* repository's HEAD; both the script and the test apply the same
+containment check that `suiterev` does, so that answer is never mistaken for
+a suite revision.
+
+### The race lane says when it cannot run
+
+`-race` needs cgo, and cgo needs a C toolchain. An external audit ran the gate
+without one, got a failure whose message was about the toolchain, and reported
+"race tests failed" — the cause only emerged after installing gcc. The lane
+now tests for a usable compiler and **skips with a reason** instead: a check
+that did not run must not look like one that passed, and must not look like
+one that failed either. `ci.yml` sets `CGO_ENABLED=1` explicitly on the same
+step, so the prerequisite is part of the recipe rather than a property of the
+runner that happens to satisfy it.
+
+### Spec citations are checked the same way
+
+`tests/speccites.sh`, run by `check.sh` beside the figures check, holds the
+other kind of claim the documents make: a **section number**. The streamability
+files cite the spec on nearly every rule — 1058 `§N.N` references across
+`xslt/stream*.go` and `xpath/*.go` — and they were written against the **Last
+Call Working Draft**, which the Recommendation renumbered. That produced
+citations pointing at real sections about the wrong subject: `§19.8.8.11`
+("Dynamic Function Calls") on code implementing variable references, `§18.2.8`
+("Importing of Accumulators") on their streamability.
+
+A wrong section number is worse than a dangling one. It reads as authority, and
+following it lands on plausible text, so nothing looks amiss. One of them —
+the variable-reference citation — had **already been diagnosed** in a comment
+in `streamfunctions_test.go` and corrected at exactly one of its 25 sites; the
+other 24 stood for as long as the file did.
+
+The script parses the `<hN>` headings out of the vendored specs under
+`testdata/xslt30-test/specs/` — XSLT 3.0, F&O 3.1, XPath 3.1 and
+Serialization 3.1 — and runs two checks. It refuses to run if fewer than 200
+XSLT headings or 30 `Streamability of xsl:*` headings parse, so a change to the
+spec's markup cannot make either pass vacuously.
+
+1. **Dangling** — complete, over every cited file. A number naming no section
+   of any vendored spec, listed with file, line and source line.
+2. **Wrong subject** — partial, `xslt/stream*.go` only. The 19.8.4 headings are
+   `Streamability of xsl:NAME`, one-to-one with the `case "NAME":` labels the
+   code switches on, so a citation under such a case must name that
+   instruction's section. 30 sites qualify. This is what catches the
+   LCWD-to-REC renumbering, which shifted every entry after `xsl:text` by two.
+
+Being exact about the second check's reach matters, because the first one
+passed green on 978 sites while sixteen of them named the wrong subject. It
+does **not** check: citations outside a `case` block (helper functions, file
+headers, the 19.8.8 expression table — roughly half of `xslt/stream*.go`); any
+citation in `xpath/`, which is prose about functions rather than a switch over
+instruction names; or any spec but XSLT 3.0. Those get the dangling check only,
+and a wrong subject among them still needs a reader — which is why every
+corrected site records the number it used to carry.
+
+The 491 citations in `xsd/` and `xdm/` are not checked at all: the XML 1.0 and
+XSD prose specifications are not vendored here, so there is nothing local to
+check them against. Vendoring those would close the gap.
+
+It anchors on denominators rather than line numbers so that editing prose does
+not break it, and it has no update mode for the same reason `docfigure` has
+none: the number sits inside a sentence, and rewriting the number is the moment
+to check the sentence. A denominator changes only when the suite checkout or
+the scoping changes; when it does, change the table at the top of the script
+in the same commit. Prose that states a count without its denominator ("the
+37 failures") is not guarded, and the unit-test, fuzz and limit counts are
+still asserted at fixed lines by `docfigure` in `check.sh`, whose method is
+printed on failure.
 
 It exists because build-and-test cannot see a silent revert: a stale copy of a
 shared file committed over an additive change leaves a tree that compiles and
@@ -429,6 +704,70 @@ the rate rose while the raw count fell. Say so in the commit message when it
 happens.
 
 ---
+
+## The generated conformance summary
+
+Every check above guards a figure someone typed. One figure could not be
+guarded that way, and it was the one that went wrong: the **Total** row of the
+summary table in `docs/conformance-gaps.md` is the *sum* of the other rows, so
+every row could agree with the ratchet while the sum disagreed with all of
+them. It did. The document printed **168** disagreements while its own rows
+summed to **104**, and nothing failed, because nothing anywhere did the
+addition.
+
+So the total is no longer written anywhere a person can write it.
+`tests/conformance/results.json` is the checked-in source of truth. It records,
+per suite: the suite identifier, the specification edition, the passed count,
+the disagreement count, the total in scope, the run date, the command that
+produced them, and the disagreeing case IDs with a verdict from a closed
+vocabulary — `implementation`, `fixture`, `implementation-defined`, `optional`,
+`deliberate-divergence`, `not-run`.
+
+`tests/conformance-docs.go` reads that file and rewrites exactly one region of
+`docs/conformance-gaps.md`:
+
+```text
+<!-- BEGIN GENERATED CONFORMANCE SUMMARY -->
+…the table and its arithmetic, derived from results.json…
+<!-- END GENERATED CONFORMANCE SUMMARY -->
+```
+
+Everything outside the markers is hand-written analysis — the per-case
+verdicts, the spec citations, the measured costs of each divergence — and is
+never touched. Only the table and the total are generated.
+
+```sh
+go run tests/conformance-docs.go          # rewrite the region
+go run tests/conformance-docs.go -check   # fail if it would change
+```
+
+Two properties are load-bearing:
+
+* **The generator computes the total; it never reads one.** `Total()` sums the
+  suite rows and there is no field a document or a JSON file could use to
+  supply a different answer. Real-world corpora — DocBook xslTNG and XSpec —
+  live in a separate `corpora` list, so they cannot reach the total by
+  accident; the total counts W3C disagreements only.
+* **`passed + disagreements == total`, per suite, or generation fails by
+  name.** An unnamed arithmetic error in a nine-row file is barely better than
+  none; the message names the suite and prints all three numbers.
+
+`check.sh` runs `-check` in its *generated conformance summary* section rather
+than regenerating and diffing with git: the gate is run on a dirty tree far
+more often than on a clean commit, and a `git diff` there would report work in
+progress as a failure.
+
+`tests/docfigures.sh` keeps its per-row denominator check and adds one of its
+own: it derives the total a second time, from `tests/ratchet.txt`, and compares
+it with the total the generated region prints. The two numbers come from two
+different files by two different routes, so agreement between them means
+`results.json` was re-measured rather than merely re-typed.
+
+To record a new measurement: run the suites, copy the passing counts into
+`tests/conformance/results.json` together with the run date and the command,
+regenerate, and check that the prose around the table still says something
+true. The generator will refuse the file if any suite's three numbers do not
+add up.
 
 ## Running one thing
 
@@ -462,7 +801,8 @@ GOXSLT_XSLTS=$PWD/testdata/xslt30-test \
   GOXSLT_XSLTS_ONLYSET=merge GOXSLT_XSLTS_VERBOSE=1 \
   go test ./tests/xslts/ -run TestXSLT30Suite -count=1 -v
 
-# QT3 equivalents. Without GOXSLT_QT3 these skip and print ok in 0.4s.
+# QT3 equivalents. Without GOXSLT_QT3 these fall back to testdata/qt3tests and
+# run the whole suite; GOXSLT_NO_SUITES=1 is what skips them.
 GOXSLT_QT3=$PWD/testdata/qt3tests GOXSLT_QT3_VERBOSE=1 \
   go test ./tests/qt3/ -count=1 -v
 GOXSLT_QT3=$PWD/testdata/qt3tests GOXSLT_QT3_SET=fn-matches \
@@ -531,28 +871,35 @@ The rule this leaves: a test in a `go test ./...` package is a unit test, and a
 unit test that costs minutes is a bug in the test. Drive a budget's edges at a
 forced budget and assert the production value separately.
 
-One case does not pass at any deadline. `op:same-key-023` builds 75³ = 421,875
-keys and calls `map:put` and `map:remove` once for each; both are O(n) in this
-representation, so the case is quadratic and does not finish in ten minutes. It
-is a real performance defect and is recorded as one in
-[conformance-gaps.md](conformance-gaps.md) — not a timeout to be raised past.
+`op:same-key-023` was the case that proved the rule from the other side: it
+builds 75³ = 421,875 keys and calls `map:put` and `map:remove` once for each,
+and while `MapItem` was an entries slice plus a rebuilt index both were O(n),
+so the case was quadratic and finished in no deadline at all. It was recorded
+as a performance defect rather than raised past, and fixing the defect — a
+persistent hash array mapped trie — is what made it pass.
 
 ---
 
 ## Fuzzing
 
-Five targets, using Go's native `testing.F` and no framework:
+Nine targets, using Go's native `testing.F` and no framework:
 
 | target | package | asserts |
 |---|---|---|
 | `FuzzParseNoPanic` | `xdm` | `ParseString` never panics; a refusal is an error and never a tree beside it; an accepted tree walks with its parent links intact |
+| `FuzzParseDOCTYPE` | `xdm` | the DTD subset parser never panics on a malformed `<!DOCTYPE>` |
 | `FuzzLoadSchemaNoPanic` | `xsd` | `Load` never panics at either XSD version, and every content model it accepts compiles to an automaton that answers total |
+| `FuzzSchemaComplexity` | `xsd` | the complexity limits refuse a pathological schema rather than running unbounded |
 | `FuzzSerializeRoundTrip` | `xslt` | parse → serialise → parse yields the same document, compared on expanded names, kinds and string values |
 | `FuzzCompileStylesheetNoPanic` | `xslt` | `Compile` never panics and never returns a stylesheet beside an error |
 | `FuzzCompileNoPanic` | `xpath` | the expression compiler never panics, and every parse error carries a spec code |
+| `FuzzParseCompactNoPanic` | `relaxng` | the compact-syntax parser never panics |
+| `FuzzTokenNoPanic` | `internal/xmlfork` | the forked tokeniser never panics and terminates on any byte string |
 
-A target lives in `zz_fuzz_test.go` in the package it exercises. The `zz_`
-prefix is only to sort it last.
+Most targets live in `zz_fuzz_test.go` in the package they exercise; the `zz_`
+prefix is only to sort it last. Four sit beside the code they cover instead,
+in `internal/xmlfork/fuzz_test.go`, `relaxng/compact_fuzz_test.go` and
+`xsd/complexity_fuzz_test.go`.
 
 ```sh
 # Run one target's search. -run '^$' suppresses the ordinary tests so that
@@ -567,8 +914,18 @@ restriction, not this repository's.
 
 **A plain `go test` runs the seed corpus and nothing else.** That is why the
 seeds are kept short and few — a Go fuzz target replays every seed on every
-ordinary test run, so a large corpus is a tax on every build. The five targets
+ordinary test run, so a large corpus is a tax on every build. The nine targets
 together add well under a second.
+
+**The search itself runs nightly, not on every push.**
+`.github/workflows/fuzz.yml` runs all nine at `-fuzztime 300s`, one per matrix
+leg, on a `schedule:` cron and on `workflow_dispatch` for a run by hand. It is
+kept out of the per-push gate on purpose: a coverage-guided search is
+nondeterministic, so the same commit can pass one run and fail the next when
+the mutator reaches further, and a five-minute job that blocks every merge on
+that is a job that gets disabled rather than fixed. What `ci.yml` guarantees is
+narrower and deterministic — every seed replays, so a target that stops
+compiling is caught in a minute.
 
 **A limit firing is not a failure.** The parser's `MaxDepth`, `MaxBytes` and
 `MaxNodes` exist precisely to refuse the input a fuzzer is good at generating,
@@ -621,11 +978,55 @@ is declared twice. The baseline binary fails identically, so a count that
 disagrees with CI by exactly one here is a path artifact rather than a
 regression. Document URIs are not canonicalised across symlinks.
 
-**Skipped is not failed.** The suites skip cases by declared dependency —
-streaming, a specific Unicode version, a spec version not being measured. The
-XSLT 3.0 suite has 14,601 cases and 8,625 in scope; counting the difference as
+**A checkout path may contain a space.** The two stylesheet corpora take their
+confinement root and their input directory as separate arguments, and the
+runner places the root in `"$@"` with `set --` and finds the inputs with
+`find`, so neither is word-split. Expanding them unquoted, as the runner once
+did, truncated `-allow-dir` at the first space and left the remainder as stray
+inputs, and matched no files at all — both silently, since the corpus then
+reported "matched no inputs" and skipped. Only the remaining flags are
+word-split, and those are the literal switches written at the call site.
+
+**Skipped is not failed.** The suites skip cases by declared dependency — a
+specific Unicode version, a spec version not being measured. (Streaming used to
+head that list and no longer does: it was measured and found implemented.) The
+XSLT 3.0 suite has 14,601 cases and 11,518 in scope; counting the difference as
 failures would understate the engine, and counting it as passes would overstate
 it. Both figures are reported separately for that reason.
+
+**But not every skip is the same kind of skip**, and one number for all of them
+hid the difference. Each reason string in `tests/xslts/deps.go` now carries a
+class, and the suite summary prints both: `skipped N: out of scope A,
+unimplemented B`. *Out of scope* is what the suite itself says a conforming
+processor may leave out — the wrong `<spec>` version, a construct that only
+exists in the version not being measured, a Unicode version, an optional
+numbering language or calendar, a document only the network can supply, a case
+that needs a feature this engine *has* to be absent. *Unimplemented* is the rest:
+a gap wearing a skip label. At the last run that is **2,949 out of scope and 134
+unimplemented** of the 3,083 XSLT 3.0 skips, and **8,332 / 68** of the 8,400 at
+the 2.0 target. The XSLT 3.0 unimplemented 134 are: `disabling_output_escaping`
+(33), `xsl-stylesheet-processing-instruction` (18), `enable_assertions` (24),
+`package_version_resolution` (12), `additional_normalization_form` (12),
+`streaming-fallback` (7), `maximum_number_of_decimal_digits` (7),
+`supported_calendars_in_date_formatting_functions` (4), `HTML4`/`HTML5` (6),
+`unparsed_text_encoding` (3), and one or two each of `default_output_encoding`,
+`ignore_doc_failure`, `default_language_for_numbering`,
+`detect_accumulator_cycles`, `extension-function` and
+`recognize_id_as_uri_fragment`. The first two are features this engine does not
+implement; the rest are dependencies the harness does not model, which is the
+same admission from the other side — it cannot run the case under the conditions
+the case asked for.
+
+Folding those 134 into the denominator as failures is a defensible alternative
+reading, and it gives 11,492 of 11,652, or 98.63%. It is **not** the figure this
+repository publishes, for the same reason the other skips are not: an
+unmodelled dependency is not a measured disagreement with the specification, and
+scoring it as one would put a number on cases that were never run. The published
+pass rate stays over the in-scope denominator, and the split is published beside
+it so a reader can do the other arithmetic deliberately rather than be handed it
+silently. A reason string with no class fails
+`TestSkipReasonsAreClassified`, and the two counts failing to sum to the skipped
+total fails the suite test itself.
 
 ---
 
@@ -664,6 +1065,44 @@ This is the same failure that let a one-sided soundness property accept a UPA
 budget which skipped its own check. A budget, like an encoding, must be tested
 against the thing it claims to approximate, not against itself.
 
+**A fixed corpus is exhaustive over what it enumerates, and blind to the rest.**
+`xdm/samekey_oracle_test.go` compares every ordered pair and triple of a
+hand-enumerated corpus, which is its strength — randomising over those same
+values would add nothing. What it cannot do is reach a value class nobody
+listed. `xdm/samekey_property_test.go` is the generated lane for exactly that
+gap: negative zero, the two binary types, large exact integers, timezone
+boundary crossings, decimal/float/double aliases, duration aliases, QName
+namespace differences, and malformed internal representations. It reuses the
+`SameKey` oracle rather than writing a second one — a second oracle is a second
+chance to make the same mistake — and asserts reflexivity, symmetry,
+transitivity, agreement with the encoding in both directions, and the map
+behaviour the key exists for: insert, look up, replace, remove.
+
+**Determinism means a failure is reproducible.** The seed is a fixed constant
+so CI runs the same values every time, `GOXSLT_SAMEKEY_SEED` overrides it to
+widen the search, and the seed is printed on **every** failure message rather
+than once at the top of the log, so a truncated log still carries the one fact
+needed to re-run the failing input.
+
+**Generate the equal values in different spellings, or the lane cannot see a
+split.** Three generators here had to be rewritten after sabotage showed them
+green. Sampling a spelling at random meant each octet sequence reached exactly
+one spelling over a class's draws, so no `0f`/`0F` pair existed and a
+case-sensitive key went undetected; the same mistake in the duration class meant
+`P1Y` and `P12M` never appeared together. A class that must catch a *split*
+needs the equal-but-differently-spelled pair to exist **by construction** — the
+binary and duration classes now enumerate spellings from a counter rather than
+sampling them. A class whose every value is one key (the signed zeros) can only
+witness a merge, which is why it also emits values that must *not* collide.
+
+**Check that the sabotage is live, not merely that the source changed.** Two
+sabotage attempts here proved nothing: removing `strings.ToLower` from the hex
+branch is a *no-op*, because Go's `hex.DecodeString` accepts both cases anyway,
+and deleting the branch outright orphaned an import and failed to build. Both
+looked like edits. A mutation must be shown to change *behaviour* — the live
+version keys on the raw spelling while still decoding, so the import stays used
+and `0f` and `0F` genuinely split.
+
 **Say what the case is, and why the answer is what it is.** The tests here
 name the W3C case that motivated them and quote the rule being applied, because
 a bare assertion is unmaintainable: the next person cannot tell a deliberate
@@ -681,11 +1120,160 @@ Two jobs, in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 `GOXSLT_NO_SUITES=1` throughout. About a minute; catches a broken commit fast.
 gofmt is enforced rather than advisory.
 
+It runs on **`ubuntu-latest`, `windows-latest` and `macos-latest`**. This
+library resolves schema and DTD references by path, and path separators,
+symlink support, case sensitivity and the confinement rules `os.Root` enforces
+all differ on Windows — so a cross-OS matrix is the only thing that
+demonstrates the file handling actually works everywhere, rather than working
+on the one platform anybody ran it on. `fail-fast` is off: one platform's
+failure must not hide what the other two report.
+
+The matrix stops at this job. `conformance` stays `ubuntu-latest` alone,
+because it clones about 944M of W3C corpora and running that three times costs
+three times as much for almost no signal the Linux run does not already give.
+The steps that are shell scripts rather than a single `go` invocation are
+pinned to `shell: bash`, since a Windows runner would otherwise hand them to
+PowerShell.
+
 **`conformance`** — fetches the four W3C suites into a cache keyed `suites-v2`
 and runs `tests/check.sh`. This is the only place the suites are fetched
 reproducibly. Without it the published percentages depend on someone
 remembering to run the script, and a number nobody re-measures is a number that
-quietly stops being true.
+quietly stops being true. It uploads `tests/last-run.txt` as an artifact named
+`last-run`, on success and on failure alike — see [Provenance](#provenance) —
+and `tests/release-record.txt` as `release-record-<ref>`, which is what a
+release points at; see [The release record](#the-release-record).
+
+---
+
+## Provenance
+
+Every figure the gate prints is a measurement, and a measurement whose
+conditions are not recorded is a number someone will later read as current.
+
+That is not hypothetical. An external audit report was written against a tree
+nobody can now identify, quoted counts that no longer matched, and was read as
+a description of this repository — and the reason it could not be refuted on
+the spot is that **this repository could not prove what it had measured
+either**. `tests/ratchet.txt` holds bare `<name> <count>` pairs, and the CI
+cache key is the static string `suites-v2`, so even the suite revision behind a
+CI figure was unrecoverable. Two counts from different trees, different Go
+versions and different suite checkouts looked exactly alike.
+
+So `check.sh` opens with a *provenance* section, printed into the transcript
+and written to `tests/last-run.txt`:
+
+```
+go           go version go1.25.0 linux/amd64
+commit       f2117cc30374fee7e545fa97a0e741954d96f70e
+platform     linux/amd64 (Linux x86_64)
+utc          2026-09-10T16:16:52Z
+qt3tests     201a6e466940cdfc727f4babfedcde5332b9f578
+xsdtests     7bc3365c652a322f3d762021b3879eb92dae7e30
+xslt30       fddf1cf920087e791f13315d68dfbe874d97dc56
+relaxng      (not a git checkout of its own)
+xsltng       a840909a8c82d23458ba72e61e0eed4185be6b74
+xspec        799d52a4239931197f5fa71476e79750b3e1d0ee
+```
+
+A tree with uncommitted changes is recorded as `(dirty)` rather than refused:
+the gate is run on work in progress far more often than on a clean commit, and
+a figure measured on uncommitted changes is precisely the one that must not be
+quoted as that commit's.
+
+`relaxng` reads `(not a git checkout of its own)` because `testdata/relaxng`
+holds a copied `spectest.xml` rather than a clone. That wording is load-bearing.
+`git -C` in a directory that is not itself a repository does not fail — it
+walks *up* and answers with the enclosing repository's HEAD, which would record
+a go-xml commit as the RelaxNG suite revision and look entirely plausible. So
+`suiterev` records a revision only when `--show-toplevel` resolves to the suite
+directory itself. Comparing against the repository root is not sufficient: in
+an agent worktree `testdata/` is a symlink to the primary checkout, so the
+enclosing repository is a different path than the root and the bogus answer
+survives that test.
+
+**`tests/last-run.txt` is gitignored, deliberately.** It changes on every run,
+so committing it would put a diff in the tree every time anyone ran the gate
+and make the ratchet's own commits unreadable — and a committed copy would
+still only ever say what the last person to commit happened to run. What proves
+a figure is the file emitted *beside* that figure: attached to the CI run, or
+pasted into the issue that quotes the number. A file in git would be provenance
+for the commit; this is provenance for the measurement.
+
+It is **not** written to `tests/ratchet.txt`. `GOXSLT_RATCHET=update` rewrites
+that file in place — `grep -v` the line, append the new one, `sort` — so
+anything else living there would be destroyed by the first count recorded.
+
+Provenance also records the **dependency graph**: `go list -m all`, as a digest
+and its expansion, plus a digest of `go.sum`. A release claim that names a Go
+version but not what the build linked against is answerable for only half of
+what produced the figures.
+
+---
+
+## The release record
+
+Provenance says *what was measured*. The release record says *what the
+measurement found*, and it is the single artifact a release points at.
+
+The pieces it collects were all present and all separate: `vet` at its section,
+the full package run at its own, `race` at its own, each W3C driver printing
+its own summary, and provenance in `tests/last-run.txt`. Assembling a release
+claim meant scraping a transcript for nine figures and then arguing that the
+transcript belonged to the commit — the same "measured against what?" that
+provenance exists to answer, one level up.
+
+So `check.sh` writes `tests/release-record.txt`: the provenance block, then
+every lane with its verdict and the figure that lane's own driver produced,
+then one verdict line.
+
+```
+lanes
+build                  PASS go build ./...
+vet                    PASS go vet ./...
+documented figures     PASS tests/docfigures.sh and the documented grep commands
+generated figures      PASS go run ./tests/conformance-docs.go -check
+package tests          PASS GOXSLT_NO_SUITES=1 go test ./... -count=1
+race                   PASS GOXSLT_NO_SUITES=1 go test -race ./... -count=1 -timeout 25m
+w3cschemas             PASS build, vet and test of the separate module
+vendored schemas       PASS vendored schemas: 185 loaded, 38 failed, 7 excluded (of 230)
+W3C QT3 XPath 2.0      SKIP suite absent at /nonexistent-qt3
+W3C QT3 XPath 3.0      SKIP suite absent at /nonexistent-qt3
+W3C QT3 XPath 3.1      SKIP suite absent at /nonexistent-qt3
+RELAX NG spectest      PASS spectest_test.go:116: RELAX NG spectest: 965 assertions, 965 passed, 0 failed (100.00%)
+UBL                    SKIP not set; licensed corpus, cannot be cloned in CI (expected)
+DocBook                SKIP stylesheet absent; not fetched in CI (expected)
+
+verdict      VERIFIED WITH GAPS — every lane that ran passed, 10 did not run
+```
+
+**The third column is the point.** A record listing only the lanes that ran is
+a record that lies by omission: the `conformance` job has corpora the `test`
+job does not, and DocBook, XSpec, UBL and CII are deliberately absent from CI.
+"All suites pass" over a run where four never started is indistinguishable from
+one where they did — so every lane declares itself `PASS`, `FAIL` or `SKIP`, a
+skipped lane names *why*, and the verdict counts all three. A run with skips is
+`VERIFIED WITH GAPS`, spelled out rather than left for a reader to notice that
+a suite is missing from a list.
+
+Nothing in the file is typed. Every figure is the string the lane extracted
+from its own driver's output; a number written in by hand would be exactly the
+defect the generated-figures work removed — correct on the day it was pasted
+and unfalsifiable afterwards.
+
+It is written from **both** exits, the `fast` return and the end of a full run.
+A fast run's record is a legitimate record; it simply is not a release one, and
+what distinguishes them is that its external lanes are all present and all say
+`SKIP`.
+
+**`tests/release-record.txt` is gitignored**, for the reason `last-run.txt` is.
+It changes on every run, so committing it would put a diff in the tree every
+time anyone ran the gate, and a committed copy would prove only what the last
+committer happened to run. A release does not point at a file in the working
+tree: it points at the artifact the tagged CI run uploaded, named
+`release-record-<ref>`. Committing one would be provenance for the commit,
+which is what the tag already is. The artifact is uploaded on every run, not
+only on release day, so the mechanism is never first exercised when it matters.
 
 ---
 
@@ -763,6 +1351,188 @@ was 1.26, and Go builds with what is installed. CI, which honours
 go install golang.org/dl/go1.25.1@latest && go1.25.1 download
 GOXSLT_QT3=$PWD/testdata/qt3tests go1.25.1 test ./tests/qt3/ -count=1 -v
 ```
+
+## The function-signature migration
+
+`xpath/spec/function-signatures.json` is the normalized extraction of the F&O
+3.1 function proformas — 272 `(name, arity)` entries, written by
+`cmd/genfunctions` from the vendored Recommendation, so the data source is
+offline and deterministic. `xpath/funcspec_table.go` holds `specSignatures`,
+the parsed form of that data, and a family is migrated by adding its keys
+there: nothing else changes, because a declared type constrains an existing
+registration rather than replacing it.
+
+`specSignatures` has **two consumers**, and both read the one table:
+
+* **Call binding**, through `lookupSpecParams`. A parameter F&O declares
+  without `?` refuses an empty sequence at the call, as `XPTY0004`, rather
+  than in a hand-written guard inside the function body.
+* **Function items**, through `applyBuiltinSignatures`, which copies each
+  entry onto the registered `Function.Signature` so a named function
+  reference carries it. That is what a typed function test —
+  `fn:concat#2 instance of function(xs:date, xs:date) as xs:integer` — is
+  judged against, by `functionItemMatches` in `xpath/subtype.go`.
+
+The second consumer is the later of the two. Function items originally read a
+separate seventeen-entry table of their own, so migrating a family for call
+binding left the function item unannotated, and `functionItemMatches` fell
+back to matching on **arity alone** — which made the `instance of` above
+answer `true`, since `fn:concat#2` and the test both take two arguments. That
+is an observably wrong answer rather than a missing diagnostic. The seventeen
+entries now live in `specSignatures` verbatim, and there is one table rather
+than two that could disagree.
+
+Two functions in a manifest namespace carry no manifest row, for reasons the
+enforcement tests hold them to:
+
+* `fn:concat` is **variadic** — its proforma ends in a literal `...`, so no
+  single row can describe it, and `cmd/genfunctions` excludes it.
+  `applyVariadicSignatures` writes its type out per arity instead: every
+  parameter is `xs:anyAtomicType?` and the result is `xs:string`, which is
+  fully determined even though its arity is not.
+* `fn:stream-available` is an **XSLT 3.0 extension**, which F&O does not
+  define at all. It is in `extensionAllowlist` with that reason.
+
+Because a signature is carried as a *spelling* and compared through
+`SequenceType.String()`, that rendering has to be lossless for any type a
+signature can name. Three item types rendered as a bare `item()` until
+function items began reading the manifest: `xs:numeric`, which has no type
+code of its own; an array test; and a typed function test. While every
+function was judged on arity that cost nothing, and it became four wrong QT3
+answers the moment signatures were consulted.
+`TestSequenceTypeSpellingIsLosslessForSubtyping` pins the renderings, and
+`TestFunctionSubtypingAcrossItemKinds` pins the §2.5.6.2 relations that let a
+function test be wider than a map or an array.
+
+A key is `"local/arity"` for an `fn:` function and `"prefix:local/arity"` —
+`"math:pow/2"`, `"map:get/2"`, `"array:size/1"` — for the other three
+namespaces the manifest covers. `splitSpecEntryKey` reads both forms, and
+`TestMigratedSignaturesMatchManifest` reads keys through that same function,
+so the table and the test cannot disagree about what a key means.
+
+Three tests measure it, and they ask different questions:
+
+* `TestRegisteredFunctionsHaveManifestMetadata` — does the specification
+  describe every registered function? This already enforces; a new callback
+  with no proforma fails here unless it is an allowlisted host extension.
+* `TestCallBindingMigrationInventory` — does the cardinality check actually
+  *run* for it? This reports rather than fails, and prints the migrated count.
+  It is the number a family agent works down; flip its `report := t.Logf` to
+  `t.Errorf` when it reaches zero.
+* `TestMigratedSignaturesMatchManifest` — does what has been migrated agree
+  with the Recommendation? This one fails, because it does not depend on how
+  far the migration has got. A mistyped `?` is precisely the defect the
+  mechanism exists to prevent, so a hand-edited spelling that disagrees with
+  the manifest breaks the build.
+* `TestEveryStandardBuiltinHasAManifestSignature` — does the *function item*
+  consumer reach every standard function? A function registered in one of the
+  four manifest namespaces with no signature and no `extensionAllowlist`
+  entry fails here. Without it a hole is invisible from outside, because the
+  arity-only answer it produces is a plausible one.
+* `TestFunctionItemSignaturesMatchSpecSignatures` — do the two consumers read
+  the same table? It walks every `specSignatures` entry and checks the
+  registered function carries exactly those spellings, so a family migrated
+  for call binding can never again reach function items unannotated.
+
+The migration is complete at 272 of 272: the seventeen that function items
+carried before the table was unified, `fn:substring` and `fn:subsequence`, then the numeric (14), non-regex string
+(25), temporal (28), node and accessor (34), sequence (14), higher-order (12),
+QName and URI (15), input and document (20), JSON (10), context, boolean and
+error (14), `math:` (14), `map:` (11), `array:` (21), regex (9) and
+formatting (10) families. With `pending` at zero,
+`TestCallBindingMigrationInventory` is ready for its `report := t.Logf` to be
+flipped to `t.Errorf`; that flip is a change of enforcement mode and is left
+as its own commit.
+
+The regex family was deferred twice on the belief that declaring `$pattern`
+and `$flags` would change which error code an empty sequence raises -- that
+call binding would answer `XPTY0004` where the hand guard answers `FORX0002`.
+It does not. `FORX0002` is for a *malformed* pattern, a question reached only
+once a pattern exists; an empty sequence in a non-nullable position is a
+*cardinality* refusal. The three QT3 cases that pass `()` in a pattern
+position -- `K-MatchesFunc-1`, `K-ReplaceFunc-2`, `K-TokenizeFunc-2` -- all
+expect `XPTY0004`, as does `K-MatchesFunc-3` for `()` in `$flags`. The
+wording moves, because the refusal now comes from call binding rather than
+from `argFlags`; the code does not.
+
+The formatting family -- `fn:format-date`, `fn:format-dateTime`,
+`fn:format-time`, `fn:format-integer` and `fn:format-number` -- was deferred
+on the matching belief about `FOFD1340`, and that premise fails for a stronger
+reason: `FOFD1340` is for an invalid *picture*, and no QT3 case passes `()` in
+a picture position at all. The cases that resemble it pass `()` in the first
+argument, which every proforma declares `?`. `$picture` is the only
+non-nullable parameter in the family; on the arity-5 forms `$language`,
+`$calendar` and `$place` are all `xs:string?`.
+
+`math:pi` was the first entry to use a prefixed key, and it landed with the
+mechanism rather than with its family. It is nullary, so it constrains no
+argument and can change no behaviour, which is exactly what makes it the entry
+that proves the prefixed path is live rather than dead code: under the old
+fn:-only expansion its key constrained a non-existent `fn:pi`.
+`TestPrefixedSpecKeysNameOtherNamespaces` is what keeps that path from
+decaying back.
+
+Every row the prefixed key format made reachable has now been migrated, and
+the regex and formatting families that were twice deferred have followed;
+nothing remains.
+
+The `math:`, `map:` and `array:` families differ from the `fn:` ones in what
+migrating them buys. Every parameter of those 46 is already guarded by hand
+inside `fn_math.go`, `fn_map.go` and `fn_array.go` — `argMap`, `argArray` and
+their neighbours raise XPTY0004 for an empty sequence and for several items
+alike — so a declared type there re-derives a refusal the callback already
+produces rather than adding a new one. The gain is that the refusal becomes a
+property of the manifest, where a mistyped occurrence indicator fails
+`TestMigratedSignaturesMatchManifest` instead of quietly constraining a
+function wrongly, and where the hand guard and the declared type are checked
+against each other by the QT3 lanes.
+
+What does change for these three is the WORDING of the refusal, not the code
+or the result. The declared type is consulted at call binding, before the
+callback runs, so `map:get((), 1)` now reads "an empty sequence is not allowed
+as the first argument of map:get(), which is declared map(*)" where `argMap`
+used to say "argument 1: expected a single map, got 0 items". The error code
+is XPTY0004 either way and all four QT3 lanes are unmoved, which is what makes
+this a message change rather than a behaviour one. `math:pow`'s message names
+its declared type as `item()`, because this package parses the union spelling
+`xs:numeric` to `item()`; the cardinality it carries — exactly one — is the
+one F&O declares, which is all the check reads. The same is true of
+`array(*)` and of the `function(...) as T` proformas, so `array:size(())`
+names its declared type as `item()` too. Only the occurrence indicator is
+load-bearing here: `checkArgCardinality` reads `AllowsEmpty` and `AllowsMany`
+and nothing else, which is why a spelling this package parses loosely still
+constrains the right cardinality.
+
+The last 19 — the regex and formatting families — were twice held back on the
+belief that they needed a new lane asserting on error codes, because both
+groups looked like they would change *which* error is raised rather than only
+whether one is. They do not, and the lane was never needed: the QT3 driver
+already compares error codes (`tests/qt3/runner.go` reads `xdm.ErrorCode` and
+`sameErrorCode`), so the suite *is* that lane. What settled it was reading the
+cases rather than reasoning about the codes — only four in the whole suite pass
+`()` in a non-nullable position, and every one of them expects `XPTY0004`.
+
+Migrate in family-sized commits, and run the full QT3 lanes after each one —
+the four in-scope counts are the check, and any drop is a regression rather
+than a newly-revealed bug:
+
+```sh
+GOXSLT_QT3=$PWD/testdata/qt3tests go test ./tests/qt3/ -count=1 -run '^TestQT3$' -v
+GOXSLT_QT3=$PWD/testdata/qt3tests go test ./tests/qt3/ -count=1 -run TestQT3XQuery -v
+```
+
+Omitting `GOXSLT_QT3` makes the lane skip and still print `ok`, so assert the
+in-scope counts are non-zero before believing a result. The anchor on the
+first pattern matters: unanchored, `-run TestQT3` also selects
+`TestQT3XQuery`, so the XPath command runs the XQuery suite as well and the
+last `in-scope:` line in its output is XQuery's, not XPath 3.1's.
+
+A caution that is specific to this work: if a case changes result after a
+signature is added, establish whether the behaviour is version-gated before
+treating it as a defect. `lookupFor` in `xpath/version.go` hides a function
+whose `Since` exceeds the context's version, so a function legitimately absent
+or differently typed at an earlier F&O version is a configuration posture, not
+a bug. The manifest carries no `since` field; it describes F&O 3.1 alone.
 
 ## Related
 

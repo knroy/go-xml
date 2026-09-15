@@ -1,7 +1,10 @@
 # XQuery
 
-XQuery 3.1, measured at **99.94%** of the W3C QT3 suite (29,901 of 29,918 in
-scope). What is here is the language on top of XPath: constructors, FLWOR, the
+XQuery 3.1, measured at **100.00%** of the W3C QT3 suite (30,345 of 30,346 in
+scope). That percentage fell from 99.96% when `import schema` was implemented:
+416 previously-skipped cases entered the denominator and 315 of them pass, so
+the passing count rose by 315 while the rate fell. No case that passed before
+fails now. What is here is the language on top of XPath: constructors, FLWOR, the
 prolog, and the expression forms that are XQuery's alone. Expressions
 themselves are compiled by [`xpath`](../xpath/), which is at 100% of the same
 suite for 2.0, 3.0 and 3.1.
@@ -245,29 +248,111 @@ opts := xquery.Options{ModuleResolver: xquery.MapModuleResolver{
 Writing one that reads the filesystem or the network is a deliberate grant to
 whoever wrote the query. See [security.md](security.md).
 
+## Importing schemas
+
+`import schema` finds a schema by its **target namespace** (§4.11), and the
+`at` clause is a set of location *hints* on exactly the same terms `import
+module`'s is: with no resolver configured they are never opened.
+
+What an import buys is the schema's components in the **static context** —
+§2.1.1's in-scope schema definitions — which is what `cast as`, `castable as`,
+`instance of`, `element(*, T)`, `schema-element(E)` and `validate` are all
+judged against:
+
+```go
+q, err := xquery.Compile(
+    `import schema namespace h = "http://example.org/hats";
+     8 cast as h:hatsize`,
+    xquery.Options{Schemas: []xquery.Schema{
+        {Namespace: "http://example.org/hats", Source: hatsXSD},
+    }})
+```
+
+The components reach the static context **as each import is read**, which is
+what makes the feature work at all: XQuery resolves type names while parsing
+rather than after, so `h:hatsize` is decided by whether the static context
+knows the name at the moment the parser reaches it. That is why the import is
+followed where it stands rather than at the end of the prolog — a function
+signature is parsed where *it* stands, so
+
+```
+import schema namespace h = "http://example.org/hats";
+declare function local:f($a as h:hatsize) { $a };
+```
+
+needs the schema installed by the second line, not merely by the body.
+(`import module` is followed *after* the body, because a module contributes
+functions and variables, and those are resolved late.)
+
+The facets the schema author wrote are applied, not merely the base type: a
+`hatsize` restricted to 4–12 makes `99 castable as h:hatsize` false.
+
+### Casting to a schema type
+
+An imported simple type is a **cast target** and a **constructor function**,
+which are the same thing: §3.14.2 admits any simple type in the in-scope schema
+types as a cast target, and a constructor is *defined* as that cast. So
+`h:hatsize("8")` and `"8" cast as h:hatsize?` are one expression, and both
+apply the schema's facets.
+
+The rules that are easy to get subtly wrong, and what this implementation
+does:
+
+| Target | Behaviour |
+|---|---|
+| An atomic restriction | Cast to the nearest **built-in ancestor**, not to the XSD primitive, then check the facets. A restriction of `xs:integer` yields an `xs:integer`, so `instance of xs:integer` is true of what the cast just produced. |
+| A **pure** union | Member types are tried in declaration order and the first that accepts the value wins, so the result is an instance of a *member*, never of the union. The member cast runs **first** and the schema is asked about **its** result: `123.12 cast as` a union over `xs:integer` yields `123`, because a cast converts. A member that is itself a restriction still has its own facets applied. |
+| An **impure** or **restricted** union — one carrying facets, or holding a list type | A legal cast target, decided by the schema's own validation. `castable as` answers `true` or `false`; `cast as` raises `FORG0001`. A source that is not `xs:string` or `xs:untypedAtomic` may reach only the union's **atomic** members, because F&O §18.3 defines the cast to a list type from a string alone. |
+| A list type | Castable is the schema's answer over the whole value; the result is one item per whitespace-separated token. |
+
+The purity rule of §2.5 is a rule about **item types**, not about casts. A
+union carrying facets is still refused in `instance of`, in `treat as` and in a
+function signature — a value must not stand in for a faceted union it may not
+satisfy, which is the XSD 1.0 error XSD 1.1 §3.16.6.3 corrected — while the
+same union is a perfectly good cast target, because a cast has a lexical form
+in hand and can put the facets to the schema.
+
+`import schema default element namespace "…"` additionally makes the imported
+namespace the default element **and type** namespace for the rest of the
+module, so the type is nameable with no prefix.
+
+A `validate` expression is assessed against the imported schema and the result
+is **annotated**, so `validate strict { <hat>8</hat> } instance of element(*,
+hatsize)` is true. Strict assessment of an element the schema does not declare
+at top level is `XQDY0084`; an element that is declared and found invalid is
+`XQDY0027`. A query that imported no schema is unchanged: `validate strict` is
+`XQDY0084` and `validate lax` is a skipped assessment that yields its operand.
+
+A `Schema` may carry already-assembled `Components` (an `*xsd.Schema` from
+`xsd.Load`, or from a stylesheet's `Schema()`) instead of `Source`, which is
+how one schema is shared between a stylesheet and a query without loading it
+twice and risking the two disagreeing.
+
+`SchemaResolver` supplies a schema the store does not have. It is
+`xsd.Resolver`, deliberately: the **same** resolver is handed to `xsd` for the
+imported schema's own `xs:include` and `xs:import`, so an imported schema can
+reach no further than the query's import was granted. `MaxSchemaBytes` bounds
+the total schema text one compilation reads, cumulatively across every import,
+and exceeding it **fails** the compilation with an error wrapping
+`xdm.ErrResourceLimit` rather than compiling against a truncated schema.
+
+**Not implemented on this path.** Typed *input*: a source document does not
+arrive schema-validated, so a node still atomises as untyped however the query
+imported. `SchemaUnionTypes` and `SchemaListTypes` — the two optional
+interfaces `xslt` also implements — are not implemented here, so a union or
+list type an imported schema defines resolves as a name but does not match a
+value.
+
 ## What is not implemented
 
-One declaration parses and is then refused, rather than being mis-parsed:
-
-* **`import schema`** leaves the in-scope schema definitions empty, so
-  `validate { … }` raises `XQDY0084`. It needs the imported components to
-  reach the static context, which this package has nowhere to put; see
-  [todo.md](todo.md) §1.5.
-
-Everything else in 3.1 is implemented, `import module` included: every FLWOR clause — `for`, `let`,
+Everything in 3.1 is implemented, `import module` and `import schema` included: every FLWOR clause — `for`, `let`,
 `where`, `group by`, `order by`, `count`, and both the tumbling and sliding
 window clauses; direct and computed
 constructors; `try`/`catch`; `switch`; `typeswitch`; quantified expressions;
 `ordered`/`unordered`; the extension expression; and the string constructor.
 
-The remaining 3 failures are a long tail rather than a missing feature, and
-each is understood:
-
-* **Pathological map cost.** `same-key-023` builds 421,875 keys and performs an
-  O(n) `map:put` and `map:remove` per key. `MapItem` is an entries slice plus a
-  rebuilt index, so both are linear in the map's size no matter how small the
-  constant factor is made; terminating needs a persistent map — a HAMT, or a
-  copy-on-write overlay. Its sibling `same-key-024`, at 11,250 keys, passes.
+The remaining failure is a long tail rather than a missing feature, and it
+is understood:
 
 * **`K2-sequenceExprTypeswitch-5`** wants a static `XPST0008` for a variable
   named in an unreached `typeswitch` branch. A check restricted to
@@ -276,13 +361,8 @@ each is understood:
   binding — so seeing it free proves nothing. A sound check needs the parser to
   track in-scope variables, which it does not do today.
 
-* **One demo query.** `app-Demos/RexParser` fails to parse at offset 0 with
-  `XPST0003`. Its sibling `sudoku` was fixed by making a FLWOR in a conditional
-  branch belong to that branch; this one still fails for a different reason in
-  the same family. It is a large real-world query rather than a targeted case,
-  which is what makes it worth keeping in view.
-
-The groups this section used to list have all been fixed: schema-aware
+The groups this section used to list have all been fixed: the `RexParser`
+demo, schema-aware
 `validate lax`, namespace non-inheritance on constructed elements, zero-length
 text in `document {}`, the `sudoku` demo, a prolog base URI that is relative,
 and `eqname-007`'s prefix bound by an enclosing element constructor.
@@ -294,10 +374,13 @@ which the suite does not cover.
 
 The same defaults as the rest of the library. A query cannot read a file or
 open a socket unless you give it something that can: `fn:doc`, `fn:collection`
-and `import module` all resolve through a resolver that is **nil by default**,
-and a nil resolver fetches nothing. An `import module ... at "/etc/passwd"` is
-not attempted and refused — it is never opened, and the import fails with
-`XQST0059`. See [security.md](security.md).
+`import module` and `import schema` all resolve through a resolver that is
+**nil by default**, and a nil resolver fetches nothing. An `import module ...
+at "/etc/passwd"` is not attempted and refused — it is never opened, and the
+import fails with `XQST0059`. The same holds word for word for `import schema
+... at "/etc/passwd"`, and the refusal names `Options.SchemaResolver` rather
+than the path, which is what distinguishes "nothing was configured" from "that
+file could not be read". See [security.md](security.md).
 
 Note that a query is *code*. Compiling one from untrusted input is closer to
 `eval` than to parsing a document — the sandbox above bounds what it can

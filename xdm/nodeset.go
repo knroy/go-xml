@@ -2,6 +2,7 @@ package xdm
 
 import (
 	"sort"
+	"strings"
 	"sync/atomic"
 )
 
@@ -58,8 +59,12 @@ func SortDocumentOrder(seq Sequence) Sequence {
 	})
 	out := make(Sequence, 0, len(nodes))
 	var prev *Node
+	// Is, not ==: the sort has already placed nodes the engine considers the
+	// same adjacently, and for a namespace node "the same" is not the same
+	// pointer -- the axis synthesizes a fresh one per walk, so a union of two
+	// namespace:: steps over one element kept both copies of every binding.
 	for _, n := range nodes {
-		if prev != nil && n == prev {
+		if prev != nil && prev.Is(n) {
 			continue
 		}
 		out = append(out, n)
@@ -75,15 +80,17 @@ func Union(a, b Sequence) Sequence {
 
 // Intersect returns the nodes present in both sequences, in document order.
 func Intersect(a, b Sequence) Sequence {
-	in := make(map[*Node]bool, len(b))
+	// Keyed on Identity rather than the pointer so that the set operators
+	// agree with the "is" operator about what one node is.
+	in := make(map[IdentityKey]bool, len(b))
 	for _, it := range b {
 		if n, ok := it.(*Node); ok {
-			in[n] = true
+			in[n.Identity()] = true
 		}
 	}
 	var out Sequence
 	for _, it := range a {
-		if n, ok := it.(*Node); ok && in[n] {
+		if n, ok := it.(*Node); ok && in[n.Identity()] {
 			out = append(out, n)
 		}
 	}
@@ -92,15 +99,15 @@ func Intersect(a, b Sequence) Sequence {
 
 // Except returns the nodes of a that are not in b, in document order.
 func Except(a, b Sequence) Sequence {
-	in := make(map[*Node]bool, len(b))
+	in := make(map[IdentityKey]bool, len(b))
 	for _, it := range b {
 		if n, ok := it.(*Node); ok {
-			in[n] = true
+			in[n.Identity()] = true
 		}
 	}
 	var out Sequence
 	for _, it := range a {
-		if n, ok := it.(*Node); ok && !in[n] {
+		if n, ok := it.(*Node); ok && !in[n.Identity()] {
 			out = append(out, n)
 		}
 	}
@@ -188,6 +195,20 @@ func Atomize(seq Sequence) Sequence {
 func AtomizeChecked(seq Sequence) (Sequence, error) {
 	for _, it := range seq {
 		switch v := it.(type) {
+		case *Node:
+			// XDM 3.1 6.2.4 leaves dm:typed-value undefined for an element
+			// validated against a complex type with element-only content, and
+			// F&O makes demanding one FOTY0012. Atomize cannot report it and
+			// falls back to the string value as xs:untypedAtomic, which is a
+			// confidently wrong answer rather than a missing one; the split
+			// between the two functions is the same one FunctionItem makes
+			// above, and for the same reason.
+			if v.NoTypedValue {
+				return nil, Errorf("FOTY0012",
+					"the element %s has no typed value: it was validated "+
+						"against a complex type with element-only content",
+					v.Name.Lexical())
+			}
 		case *FunctionItem:
 			return nil, Errorf("FOTY0013",
 				"a function item (%s) cannot be atomized", v.String())
@@ -229,6 +250,28 @@ func IsXMLWhitespace(s string) bool {
 		}
 	}
 	return true
+}
+
+// isXMLSpaceRune is IsXMLWhitespace for a single rune.
+func isXMLSpaceRune(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\r' || r == '\n'
+}
+
+// SplitXMLSpace splits s on runs of XML whitespace, dropping empty tokens.
+//
+// This is the tokenization XML Schema's whiteSpace="collapse" and every
+// whitespace-separated list type (IDREFS, NMTOKENS, ENTITIES and any xs:list)
+// are defined in terms of. It is deliberately not strings.Fields, which splits
+// on the whole Unicode White_Space set: a no-break space inside a list value
+// is data, not a separator, so Fields turned the one token "a<NBSP>b" into the
+// two tokens "a" and "b".
+func SplitXMLSpace(s string) []string {
+	return strings.FieldsFunc(s, isXMLSpaceRune)
+}
+
+// TrimXMLSpace removes leading and trailing XML whitespace, and nothing wider.
+func TrimXMLSpace(s string) string {
+	return strings.TrimFunc(s, isXMLSpaceRune)
 }
 
 // numberDetachedRoots assigns cross-tree identities to the roots of any

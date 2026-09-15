@@ -105,11 +105,78 @@ func compileGeneralPattern(src string, ns xpath.NamespaceResolver) (*generalPatt
 		expr:             expr,
 		rooted:           startsFromOwnRoot(trimmed),
 		anchorsAboveRoot: startsWithNameStep(trimmed),
-		// Every form that reaches here is a multi-step or operator pattern,
-		// which section 6.4 scores 0.5 like any other complex pattern.
-		prio: 0.5,
+		// Most forms that reach here are multi-step or operator patterns,
+		// which section 6.5 scores 0.5 like any other complex pattern. The
+		// IntersectExceptExprP is the exception; see intersectExceptPriority.
+		prio: intersectExceptPriority(trimmed, ns),
 		src:  trimmed,
 	}, nil
+}
+
+// intersectExceptPriority gives an IntersectExceptExprP the default priority
+// section 6.5 assigns it, falling back to the 0.5 every other general pattern
+// form scores.
+//
+// Section 6.5: "If the top-level pattern is an IntersectExceptExprP
+// containing two or more PathExprP operands separated by intersect or
+// except operators, then the priority of the pattern is that of the first
+// PathExprP." So "a except b" ranks with "a" at 0, and "* except b" with "*"
+// at -0.5 — not at the 0.5 a complex pattern gets. Scoring the whole form
+// 0.5 put "a except b" above an explicit priority="0.25" rule that the spec
+// makes the winner.
+//
+// The first operand is scored by compiling it as a pattern in its own right,
+// which is what "the priority of that PathExprP" means: whatever the ordinary
+// rules give it, including the -0.5 of a bare kind test or the 0.5 of a
+// multi-step path. Grammar rule [4] chains the operators left to right, so
+// only the text before the FIRST top-level operator is that operand.
+//
+// A first operand that will not compile as a pattern on its own leaves the
+// 0.5 default in place rather than failing: the whole pattern has already
+// compiled as an expression, and a priority is not worth rejecting it over.
+func intersectExceptPriority(src string, ns xpath.NamespaceResolver) float64 {
+	cut := -1
+	for _, op := range []string{" intersect ", " except "} {
+		if i := indexTopLevel(src, op); i >= 0 && (cut < 0 || i < cut) {
+			cut = i
+		}
+	}
+	if cut < 0 {
+		return 0.5
+	}
+	p, err := CompilePattern(strings.TrimSpace(src[:cut]), ns)
+	if err != nil {
+		return 0.5
+	}
+	return p.Priority()
+}
+
+// indexTopLevel returns the offset of sub in s outside any bracket, paren or
+// string literal, or -1. It is containsTopLevel with the position kept.
+func indexTopLevel(s, sub string) int {
+	depth, quote := 0, byte(0)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '(', '[':
+			depth++
+		case ')', ']':
+			depth--
+		default:
+			if depth == 0 && strings.HasPrefix(s[i:], sub) {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // isGeneralPatternForm reports whether src is one of the XSLT 3.0 pattern
@@ -445,6 +512,42 @@ func applyToAtomic(rt *runtime, item xdm.Item, mode string,
 
 	t, next := rt.sheet.findAtomicTemplateFrom(item, mode, rt.ctx, 0)
 	if t == nil {
+		// The built-in rule for an ARRAY applies templates to its members.
+		//
+		// It runs only when no explicit rule matched, which is the whole of
+		// the distinction. square-array-019 writes
+		// match=".[. instance of array(*)]" and expects that rule to fire on
+		// the array itself, so the array cannot be unwrapped before rule
+		// matching; arrays-301 and arrays-302 write no rule for the array and
+		// expect its four member elements to be processed, so it cannot be
+		// left unprocessed either.
+		//
+		// The unwrapping happens ahead of the on-no-match switch below
+		// because it is not the "no match" behaviour of the members --
+		// arrays-302 declares on-no-match="shallow-skip" and still expects
+		// the four <element> results its explicit match="*" rule produces.
+		// 6.7.5 makes shallow-skip empty "for atomic values and functions
+		// (including maps)"; an array is neither, and the members go on to
+		// find their own rules in the same mode.
+		if arr, ok := item.(*xdm.ArrayItem); ok {
+			members := xdm.Flatten(xdm.Sequence{arr})
+			size := len(members)
+			for idx, m := range members {
+				sub := rt.withCurrent(m, idx+1, size)
+				if node, ok := m.(*xdm.Node); ok {
+					if err := applyToNode(sub, node, mode,
+						params, tunnels, out); err != nil {
+						return err
+					}
+					continue
+				}
+				if err := applyToAtomic(sub, m, mode,
+					params, tunnels, out); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		// The built-in rule for an atomic value copies it, which is what
 		// text-only-copy does for a text node. @on-no-match replaces that
 		// wholesale, exactly as it does for a node: match-256 selects an
@@ -1059,6 +1162,20 @@ func stripXPathComments(src string) string {
 func variablePatternAllowed(src string) bool {
 	return processorAtLeast30() &&
 		strings.HasPrefix(strings.TrimSpace(stripXPathComments(src)), "$")
+}
+
+// predicatePatternAllowed is variablePatternAllowed for the other 3.0 pattern
+// form the module's version would otherwise withhold, "." with an optional
+// PredicateList.
+//
+// The reasoning is the one variablePatternAllowed sets out, and si-fork-115 is
+// the case: a version="2.0" module, scoped XSLT30+, whose xsl:mode and
+// xsl:source-document are 3.0 throughout and whose template rule is written
+// match=".". It is the only match="." in a module below 3.0 anywhere in the
+// suite, and no test asks for XTSE0340 on one, so nothing depends on the
+// module's version deciding this form.
+func predicatePatternAllowed(src string) bool {
+	return processorAtLeast30() && isPredicatePatternForm(src)
 }
 
 // failMultipleMatchAtomic is failMultipleMatch for an atomic value.

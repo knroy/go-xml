@@ -35,11 +35,6 @@ import (
 type mergeInstr struct {
 	sources []*mergeSource
 	action  []Instruction
-	// streamed records that some xsl:merge-source asked for streaming, which
-	// section 15.7 makes the context size absent inside the action. That is
-	// observable — last() must raise XPDY0002 — so it is carried even though
-	// nothing else about streaming is.
-	streamed bool
 }
 
 // mergeSource is a compiled xsl:merge-source: one merge source definition.
@@ -70,8 +65,10 @@ type mergeSource struct {
 	// to the documents this source reads. nil means the attribute was absent,
 	// which leaves every accumulator applicable.
 	accums *modeAccumulators
-	// streamed records streamable="yes", whose only visible consequence here
-	// is that the context size inside the action is absent.
+	// streamed records streamable="yes", explicit or defaulted by the
+	// presence of for-each-source (15.4). Its visible consequences here are
+	// the snapshot wrap collect applies to the selected items and an absent
+	// context size inside the action.
 	streamed bool
 	// sortBeforeMerge records sort-before-merge="yes", which both sorts the
 	// input and suppresses XTDE2220 for it.
@@ -208,9 +205,6 @@ func (c *compiler) compileMerge(n *xdm.Node, ns xpath.NamespaceResolver) (Instru
 			}
 			seenNames[src.name] = true
 		}
-		if src.streamable() {
-			instr.streamed = true
-		}
 	}
 
 	// XTDE2210 compares the key attributes across sources. The attributes are
@@ -222,6 +216,18 @@ func (c *compiler) compileMerge(n *xdm.Node, ns xpath.NamespaceResolver) (Instru
 		return nil, err
 	}
 
+	// XTDE3490 asks whether the name a current-merge-group() call is written
+	// with is one of the sources. Where the name is a string literal that is
+	// decidable now, and the error says it "may be reported statically if it
+	// can be detected statically" -- the same licence checkMergeKeyCompatibility
+	// takes above. Deciding it here is what makes the error reachable at all
+	// for a stylesheet whose input the runtime rejects first: merge-077 names
+	// a source that does not exist, and its input also trips XTDE2220, so the
+	// action it would be reported from never runs.
+	if err := checkMergeGroupNames(actionElem, seenNames); err != nil {
+		return nil, err
+	}
+
 	action, err := c.compileSequence(actionElem, actionElem)
 	if err != nil {
 		return nil, err
@@ -230,8 +236,66 @@ func (c *compiler) compileMerge(n *xdm.Node, ns xpath.NamespaceResolver) (Instru
 	return instr, nil
 }
 
-// streamable reports whether the source asked for streamed evaluation.
-func (s *mergeSource) streamable() bool { return s.streamed }
+// checkMergeGroupNames reports XTDE3490 for a current-merge-group() call in the
+// merge action whose source name is a string literal naming no merge source.
+//
+// Only @select is scanned. It is where an expression is written in the form
+// this check can decide, and scanning it is enough to reach the error without
+// having to know which of every other attribute is an XPath expression, an
+// attribute value template or a pattern. A call written anywhere else is left
+// to the runtime check in registerMergeFuncs, which is the normative one; this
+// is an early report of the same error, never a different one.
+//
+// A name reached through a nested xsl:merge belongs to that merge, not this
+// one, so the walk stops there: 15.6.1 scopes the current merge group to the
+// innermost xsl:merge-action containing the call.
+func checkMergeGroupNames(action *xdm.Node, names map[string]bool) error {
+	var walk func(n *xdm.Node) error
+	walk = func(n *xdm.Node) error {
+		if n.Kind == xdm.KindElement {
+			if a := n.Attr("", "select"); a != nil {
+				comp, err := compileExpr(a.Value, newNSResolver(n, ""))
+				// A select that does not compile is not this check's error to
+				// report; compileSequence reports it with its own context.
+				if err == nil {
+					if err := checkMergeGroupCalls(comp, names); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		for _, ch := range n.Children {
+			if ch.Kind == xdm.KindElement && isXSL(ch, "merge") {
+				continue // a nested merge rebinds the group; not ours
+			}
+			if err := walk(ch); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return walk(action)
+}
+
+// checkMergeGroupCalls tests one compiled expression's current-merge-group()
+// calls against the declared source names.
+func checkMergeGroupCalls(comp *xpath.Compiled, names map[string]bool) error {
+	for _, call := range comp.StaticCalls() {
+		if call.Ref || call.Arity != 1 ||
+			call.Name.URI != xdm.NSFN || call.Name.Local != "current-merge-group" {
+			continue
+		}
+		if len(call.StringArgs) == 0 || call.StringArgs[0] == nil {
+			continue // computed: only the runtime can decide it
+		}
+		if !names[*call.StringArgs[0]] {
+			return fmt.Errorf(
+				"XTDE3490: %q does not name any xsl:merge-source of the current "+
+					"merge operation", *call.StringArgs[0])
+		}
+	}
+	return nil
+}
 
 func (c *compiler) compileMergeSource(n *xdm.Node, idx int) (*mergeSource, error) {
 	ns := newNSResolver(n, "")
@@ -258,12 +322,38 @@ func (c *compiler) compileMergeSource(n *xdm.Node, idx int) (*mergeSource, error
 	hasItem := n.Attr("", "for-each-item") != nil
 	hasSource := n.Attr("", "for-each-source") != nil
 	hasAccum := n.Attr("", "use-accumulators") != nil
+	// 15.4: "Any input to a merging operation, provided it is selected by
+	// means of the xsl:merge-source element with a for-each-stream
+	// attribute, may be designated as streamable ... This is also the default
+	// value when the for-each-stream attribute is present." (for-each-stream
+	// is the working draft's name for for-each-source.) The default is not a
+	// streaming hint this engine may ignore: 15.4 goes on to say the snapshot
+	// wrap applies "whether or not streamed processing is actually used, and
+	// whether or not the processor supports streaming", so it decides what
+	// the merge keys and current-merge-group() can see. Defaulting to false
+	// gave a for-each-source with no @streamable the answers of
+	// streamable="no" -- the unsnapshotted tree, navigable to its ancestors'
+	// other children. No suite case writes for-each-source without the
+	// attribute, so nothing caught it.
+	src.streamed = hasSource
 	if v := strings.TrimSpace(n.AttrValue("streamable")); v != "" {
 		b, ok := parseMergeBoolean(v)
 		if !ok {
 			return nil, fmt.Errorf(
 				"XTSE0020: xsl:merge-source/@streamable must be a boolean, got %q", v)
 		}
+		// XTSE3195's last clause -- with for-each-source present, "the only
+		// permitted value ... of the streamable attribute is yes" -- is NOT
+		// enforced, for the same reason as the two clauses below: the suite
+		// contradicts it. merge-065b and merge-066 write for-each-source
+		// beside streamable="false" and expect the transform to run, and
+		// merge-067 expects XTDE3362 from running it. Enforcing the clause
+		// fails all three. merge-064, which looks like the case for it, is
+		// satisfied by the lexical check above: it spells the value "No".
+		//
+		// This was tried and measured: enforcing it cost exactly those three
+		// cases. The clause did not survive the working draft into the
+		// behaviour the suite encodes; do not re-add it.
 		src.streamed = b
 	}
 	// XTSE3195 is enforced only where it excludes for-each-item from
@@ -575,13 +665,14 @@ func (i *mergeInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 	}
 
+	// 15.7 states the size unconditionally: "The context size is the number
+	// of groups, that is, the number of distinct sets of merge key values."
+	// There is no streaming exception — the section's focus rules say nothing
+	// about streamability, and the phrase "context size is absent" appears
+	// nowhere in the specification. Forcing a zero size for a streamed merge
+	// made last() raise XPDY0002 inside an action that is entitled to it,
+	// which is bug 29120 and what merge-084 tests.
 	size := len(groups)
-	if i.streamed {
-		// 15.7: with any streamable source the context size is absent, so
-		// last() inside the action raises XPDY0002. A size of zero is how
-		// this engine spells an absent one.
-		size = 0
-	}
 	for g, grp := range groups {
 		binding := &mergeGroupBinding{names: names, named: named,
 			items: make([]xdm.Sequence, len(i.sources))}
@@ -772,6 +863,30 @@ func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
 		seq, err := s.sel.Eval(sub.ctx)
 		if err != nil {
 			return nil, err
+		}
+		// 15.4: with streamable="yes" the select expression "is implicitly
+		// used as the argument of a call on the snapshot function ... whether
+		// or not streamed processing is actually used, and whether or not the
+		// processor supports streaming". So this is not a streaming
+		// optimisation that a non-streaming engine may skip — it changes the
+		// answer, and the same section says how: "An attempt to navigate
+		// outside the portion of the source document delivered by the
+		// snapshot function will typically not cause an error, but will
+		// return empty results."
+		//
+		// The wrap goes here, before the merge keys are computed, because the
+		// section requires both to see it: "merge keys for each selected node
+		// are computed with reference to this snapshot, and the
+		// current-merge-group function ... delivers snapshots of the selected
+		// nodes". merge-079 selects city-list/record/city and then reads
+		// $g/ancestor::record[1]//temp from the action; a snapshot keeps the
+		// ancestors but none of their other children, so that step is empty.
+		if s.streamed {
+			snap := make(xdm.Sequence, len(seq))
+			for j, it := range seq {
+				snap[j] = noteCopy(rt, it, snapshotItem(it))
+			}
+			seq = snap
 		}
 		entries := make([]mergeEntry, len(seq))
 		for p, it := range seq {

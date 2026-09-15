@@ -324,6 +324,26 @@ func (p *parser) parseFunctionDeclBody(private bool) error {
 			"{", "external")
 	}
 
+	// XQST0034 reaches the constructor functions too. §4.15 forbids a
+	// declaration whose expanded QName and arity are those of a function
+	// already in the static context, and importing a schema puts one
+	// constructor per simple type there -- so "import schema namespace
+	// myType='...'; declare function myType:sizeType($a as xs:integer) {...}"
+	// declares a myType:sizeType#1 that already exists. Nothing registered
+	// the constructor in a library (foldSchemaConstructor resolves each call
+	// as the cast it is defined to be, on demand), so the loop below has
+	// nothing to compare against and the declaration simply shadowed the
+	// constructor. user-defined-11 is the case.
+	if len(d.params) == 1 && d.name.URI != xdm.NSXS && p.sc != nil {
+		if _, atomic, ok := p.sc.LookupSchemaType(
+			xdm.QName{URI: d.name.URI, Local: d.name.Local}); ok && atomic {
+			return p.errorf(
+				"XQST0034: the function %s#1 has the name and arity of the "+
+					"constructor function of an imported schema type",
+				d.name.Lexical())
+		}
+	}
+
 	// XQST0034: two functions may not share a name and arity. Unlike XSLT
 	// there is no import precedence to break the tie, so any repeat is an
 	// error.
@@ -626,7 +646,7 @@ func (q *Query) registerFunctions(parent xpath.FunctionLibrary) *xpath.Library {
 		parent = xpath.Builtins()
 	}
 	lib := xpath.NewLibrary(parent)
-	q.registerFormatNumber(lib)
+	q.registerFormatNumber(lib, q.sc, q.formats)
 	// The imported functions are registered before this module's own, so that
 	// a name declared in both is this module's. That order cannot actually be
 	// observed -- checkImportedNames has already refused the clash as
@@ -732,6 +752,13 @@ func (q *Query) buildModuleLibs() {
 	q.modLibs = make(map[*staticContext]*xpath.Library, len(q.modules))
 	for _, m := range q.modules {
 		lib := xpath.NewLibrary(q.lib)
+		// Ahead of this module's own functions, so that a format-number
+		// written in it resolves its format names against its own prolog
+		// rather than the importing query's. Registered only when the module
+		// declares a format: otherwise the parent's — the main module's —
+		// remains reachable, which is what a module with no decimal-format
+		// declaration of its own should see.
+		q.registerFormatNumber(lib, m.sc, m.formats)
 		for _, d := range m.funcs {
 			lib.Add(xpath.Function{
 				Name:      d.name,
@@ -757,9 +784,30 @@ func declaredSignature(d *funcDecl) []string {
 	return sig
 }
 
+// typeSource renders a declared type the way a typed function test renders the
+// type it is compared against.
+//
+// The COMPILED type, not t.src. The two sides of that comparison are written in
+// different alphabets: a schema type in a sequence type is resolved at parse
+// time into the key the data model records annotations under -- Clark notation,
+// "{uri}local" -- while the source text keeps whatever prefix the query author
+// bound, "s:myUnionType1". Comparing one against the other is comparing a name
+// against a different spelling of the same name, so it answered false for two
+// types that were not merely related but IDENTICAL: instanceof135 declares
+// local:f taking s:myUnionType1 and asks whether it is a
+// function(s:myUnionType1), which is the same type named twice.
+//
+// Rendering through the compiled type puts both sides in the annotation-key
+// alphabet, which is the one the resolution actually happened in. For a
+// built-in the two forms coincide -- "xs:integer" compiles and renders back to
+// "xs:integer" -- so nothing that was passing changes; only a schema-defined
+// name, which could not previously match even itself, does.
 func typeSource(t *sequenceType) string {
 	if t == nil {
 		return "item()*"
+	}
+	if s := t.stype.String(); s != "" {
+		return s
 	}
 	return t.src
 }
@@ -861,7 +909,7 @@ func (q *Query) evalBody(body []node, expr *compiledExpr, ctx *xpath.Context,
 	if body == nil {
 		return nil, nil
 	}
-	out := xdmbuild.New(policy{sc: sc})
+	out := xdmbuild.New(policy{sc: sc, xp: ctx})
 	ref := &builderRef{b: out}
 	ec := &evalContext{xp: ctx, sc: sc}
 	for _, n := range body {

@@ -166,3 +166,50 @@ func TestHTMLPreIndentSuppressionCoversTheSubtree(t *testing.T) {
 			want, out)
 	}
 }
+
+// TestXHTMLIndentsBeforeStyleWithTextContent pins a deliberate divergence from
+// Saxon that the conformance docs twice mis-described as an indent width.
+//
+// validation-0201 in the XSLT 2.0 suite asserts a serialisation whose <head>
+// reads
+//
+//	<meta .../><style type="text/css">
+//
+// with no newline between the two, because Saxon declines to indent before an
+// element whose own content is significant text. This serialiser writes the
+// newline, and the decision is the PARENT's: hasTextChild(<head>) is false, so
+// indentChildren stays on for every child of <head>, <style> included. It is
+// not htmlPreserveWhitespaceElement's doing -- that set governs indenting
+// INSIDE an element, so adding "style" to it changes nothing here (verified by
+// sabotage: the case still passes). <style> is absent from that set
+// deliberately in any event, since HTML 4.01 §9.3.4 and HTML5's default style
+// sheet name <pre>, <listing>, <plaintext>, <textarea> and <xmp>, not <style>.
+//
+// Both readings are permitted. Serialization 3.1 §5 licenses added whitespace
+// "only where the effect is not significant", which constrains where a
+// serialiser MAY NOT indent, not where it must; and XSLT 2.0 §20 makes "the
+// amount of indentation to be used when indent="yes" is specified"
+// implementation-defined. So this is a choice, and this test makes it a
+// recorded one: validation-0201 is unreachable for THIS reason and not, as the
+// docs used to say, because this serialiser indents two spaces where Saxon
+// indents three. Setting the width to three was measured across the whole
+// XSLT 2.0 lane and gained nothing -- 6193 passed / 8 failed either way, with
+// the case's reported offset merely moving from 46 to 134.
+func TestXHTMLIndentsBeforeStyleWithTextContent(t *testing.T) {
+	body := `<html xmlns="http://www.w3.org/1999/xhtml"><head>` +
+		`<meta http-equiv="Content-Type" content="text/html"/>` +
+		`<style type="text/css">&#10;H1 { color: black }&#10;</style>` +
+		`</head></html>`
+
+	out := run(t, htmlIndentSheet("xhtml", "", body), `<r/>`)
+
+	// The positive fact: a newline and indentation precede <style>.
+	if !strings.Contains(out, "/>\n    <style") {
+		t.Errorf("xhtml: want a newline and indent before <style>, got:\n%s", out)
+	}
+	// The <style> text is handed through unaltered -- the divergence concerns
+	// what precedes the tag, never the content inside it.
+	if !strings.Contains(out, "<style type=\"text/css\">\nH1 { color: black }\n</style>") {
+		t.Errorf("xhtml: <style> content must be verbatim, got:\n%s", out)
+	}
+}

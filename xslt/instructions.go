@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -58,7 +59,7 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		seq = v
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
@@ -104,7 +105,17 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := checkAtomizable(seq); err != nil {
 		return err
 	}
-	out.AppendText(constructedText(seq, sep))
+	text := constructedText(seq, sep)
+	// xsl:value-of is where a doubled string is realised in a stylesheet: a
+	// chain of xsl:variable bodies, each holding two xsl:value-of of the
+	// previous one, doubles its result per declaration and none of it reaches
+	// the functions in xpath that charge as they build. Charging the text
+	// here, against the budget evalVariableRaw holds across the body, is what
+	// stops that chain while it is still doubling.
+	if err := rt.ctx.ChargeBytes(len(text)); err != nil {
+		return err
+	}
+	out.AppendText(text)
 	return nil
 }
 
@@ -168,6 +179,15 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
+	// Flatten before copying: an array is a single item holding a sequence of
+	// members, and xsl:copy-of copies what those members are. Unlike
+	// xsl:value-of it does not atomize -- an array of nodes copies the nodes
+	// -- but the flattening step is the same one, and it comes first.
+	//
+	// The switch below matches *xdm.Node and *xdm.Atomic; an *ArrayItem
+	// matched neither and fell off the end, so copy-of over an array produced
+	// nothing at all.
+	seq = xdm.Flatten(seq)
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
@@ -219,7 +239,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// The prefix in the copied QName would keep pointing at a
 				// binding the new parent element need not declare.
 				if i.validation.mode == validatePreserve &&
-					isNamespaceSensitiveType(v.TypeAnnotation) {
+					isNamespaceSensitiveType(xdm.TypeEnvOf(v), v.TypeAnnotation) {
 					return fmt.Errorf(
 						"XTTE0950: xsl:copy-of with validation=\"preserve\" "+
 							"cannot copy attribute %s on its own, because its "+
@@ -242,11 +262,13 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// stripping both read more than the annotation name, so the
 				// node they are handed must carry more than the name.
 				//
-				// What reaches the RESULT is narrower than this, and not
-				// because of anything here: AddAttributeTyped below takes an
-				// annotation string, so only the name survives into the
-				// output tree. That narrowing is the builder's and is
-				// recorded in docs/security.md.
+				// All of it reaches the RESULT: the attribute goes into the
+				// output through AddAttributeWithTyping, which takes the
+				// resolved xdm.Typing rather than an annotation name. The
+				// older AddAttributeTyped took a name only, so a copied
+				// attribute arrived in the output tree with its union member
+				// and its resolved primitive gone, to be guessed at later
+				// from the process-global registries.
 				a := &xdm.Node{
 					Kind:  xdm.KindAttribute,
 					Name:  v.Name,
@@ -256,7 +278,8 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				if err := i.validation.assess(rt, a); err != nil {
 					return err
 				}
-				if err := out.AddAttributeTyped(a.Name, a.Value, a.TypeAnnotation); err != nil {
+				if err := out.AddAttributeWithTyping(a.Name, a.Value,
+					xdm.TypingOf(a)); err != nil {
 					return err
 				}
 				continue
@@ -281,6 +304,15 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 					"XTTE0950: xsl:copy-of with copy-namespaces=\"no\" and "+
 						"validation=\"preserve\" cannot copy %s, whose "+
 						"content is namespace-sensitive", describeNode(v))
+			}
+			// Charged before the copy is made, so a refusal allocates
+			// none of it. xsl:copy-of copies here rather than letting the
+			// builder do it -- it has to rebase and strip namespaces on its
+			// own copy first -- so the builder's charge never sees this
+			// node, and copying a large subtree once per node of a large
+			// document would otherwise build the cross product uncharged.
+			if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
+				return err
 			}
 			c := deepCopy(v)
 			if i.copyAccumulators {
@@ -326,6 +358,17 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 		case *xdm.Atomic:
 			out.AppendValue(v)
+		default:
+			// What survives Flatten and is neither a node nor an atomic value
+			// is a map or a function item. Neither has a representation
+			// inside element content, and dropping one silently is what hid
+			// this whole defect: appendOpaqueItem accepts it at the top level
+			// of a sequence and raises XTDE0450 under an open element, which
+			// is what §5.8.1 requires ("it is a dynamic error if the result
+			// sequence contains a function item").
+			if err := appendOpaqueItem(out, it); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -351,14 +394,23 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 // false past 32 links, which is the permissive verdict: a deep restriction of
 // xs:QName was copied without its namespace bindings and XTTE0950 went
 // unreported.
-func isNamespaceSensitiveType(ann string) bool {
+//
+// env is the environment of the schema that issued the annotation, so a
+// schema's own restriction of xs:QName is recognised through ITS chain rather
+// than through whatever another schema registered under the same name. A nil
+// env falls back to the process-global table, which is the unchanged behaviour
+// for an annotation no schema issued.
+func isNamespaceSensitiveType(env *xdm.TypeEnvironment, ann string) bool {
+	if env == nil {
+		env = xdm.GlobalTypeEnvironment()
+	}
 	seen := map[string]bool{}
 	for ann != "" && !seen[ann] {
 		if ann == "QName" || ann == "NOTATION" {
 			return true
 		}
 		seen[ann] = true
-		ann = xdm.DerivedBase(ann)
+		ann = env.DerivedBase(ann)
 	}
 	return false
 }
@@ -373,11 +425,11 @@ func hasNamespaceSensitiveContent(n *xdm.Node) bool {
 	if n == nil {
 		return false
 	}
-	if isNamespaceSensitiveType(n.TypeAnnotation) {
+	if isNamespaceSensitiveType(xdm.TypeEnvOf(n), n.TypeAnnotation) {
 		return true
 	}
 	for _, a := range n.Attrs {
-		if isNamespaceSensitiveType(a.TypeAnnotation) {
+		if isNamespaceSensitiveType(xdm.TypeEnvOf(a), a.TypeAnnotation) {
 			return true
 		}
 	}
@@ -683,6 +735,21 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if i.noInherit {
 			blockNamespaceInheritance(sub.Open())
 		}
+		if i.noNamespaces {
+			// §5.8.3 namespace fixup still applies: dropping the source's
+			// namespace nodes does not license a tree where the copy's own
+			// name, or an attribute name the body wrote, has no namespace
+			// node to resolve its prefix. The serialiser writes the
+			// declaration a name needs whether the tree carries it or not,
+			// so the omission was invisible in the output -- but the
+			// namespace axis reads the tree, and in-scope-prefixes() on the
+			// copy answered with only the bindings it inherited from wherever
+			// it landed. si-copy-020 and si-copy-026 ask exactly that.
+			// xsl:element already repairs its result this way; xsl:copy did
+			// not, because with copy-namespaces="yes" the copied nodes cover
+			// every name and there was nothing left to repair.
+			fixupNamespaces(sub.Open())
+		}
 		// The copy is assessed once it is complete, since validity is a
 		// property of the whole element and its content.
 		return i.validation.assess(rt, sub.Open())
@@ -695,7 +762,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// into a result tree — a document node's children are flattened into
 		// the parent either way — but it is exactly what a variable declared
 		// as="document-node()*" is asking about.
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt, sub); err != nil {
 			return err
 		}
@@ -797,6 +864,12 @@ type literalElemInstr struct {
 	// validation carries xsl:validation and xsl:type, which a literal result
 	// element may have exactly as xsl:element may.
 	validation validationSpec
+	// noInherit records xsl:inherit-namespaces="no". Section 11.1 gives a
+	// literal result element the same property xsl:element and xsl:copy
+	// carry under an unprefixed name, and with the same effect: the
+	// namespace nodes created for this element are not copied down to its
+	// children, which under XML 1.1 output is written as an undeclaration.
+	noInherit bool
 }
 
 type attrTemplate struct {
@@ -903,6 +976,9 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	if err := execSequence(i.body, rt, sub); err != nil {
 		return err
+	}
+	if i.noInherit {
+		blockNamespaceInheritance(sub.Open())
 	}
 	// §5.8.3: an element in a namespace must carry a namespace node for it.
 	// exclude-result-prefixes is what makes this reachable -- it drops the
@@ -1089,25 +1165,33 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err != nil {
 			return err
 		}
-		value = constructedText(seq, sep)
+		if value, err = constructedTextChecked(seq, sep); err != nil {
+			return err
+		}
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
-		value = constructedText(sub.Sequence(), sep)
+		if value, err = constructedTextChecked(sub.Sequence(), sep); err != nil {
+			return err
+		}
 	}
 	// Assessment happens before the attribute joins the output, so that a
 	// failure reports the attribute the stylesheet asked for rather than
-	// leaving an invalid one behind on the element. The assessed node's type
-	// annotation is carried across: assessment is what gives the attribute a
-	// type, and writing an untyped copy instead would make the validation
-	// invisible to "instance of" and to schema-attribute() patterns.
+	// leaving an invalid one behind on the element. The assessed node's whole
+	// typing is carried across, not its annotation name: assessment is what
+	// gives the attribute a type, and writing an untyped copy instead would
+	// make the validation invisible to "instance of" and to
+	// schema-attribute() patterns. The name alone was not enough -- this is
+	// the one place holding the schema that did the assessing, so what it
+	// resolved the name to must travel with the node rather than be looked up
+	// again later against whichever schema happens to have loaded last.
 	assessed := &xdm.Node{Kind: xdm.KindAttribute, Name: qn, Value: value}
 	if err := i.validation.assess(rt, assessed); err != nil {
 		return err
 	}
-	return out.AddAttributeTyped(qn, value, assessed.TypeAnnotation)
+	return out.AddAttributeWithTyping(qn, value, xdm.TypingOf(assessed))
 }
 
 // resolveName turns a computed attribute name into an expanded QName.
@@ -1174,7 +1258,7 @@ func (i *commentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		text = constructedText(seq, " ")
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
@@ -1236,7 +1320,7 @@ func (i *piInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		text = constructedText(seq, " ")
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
@@ -1385,7 +1469,7 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 			value, text = seq, stringJoin(seq, " ")
 		}
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			if !i.xslt30 {
 				return err
@@ -1529,14 +1613,22 @@ func (s *sortKey) resolve(rt *runtime) (*sortKey, error) {
 			return nil, err
 		}
 		if v = strings.TrimSpace(v); v != "" {
-			// A computed language tag that names no collation is XTDE0030
-			// rather than a compile-time refusal: the stylesheet is
-			// well-formed and only the value it produced is wrong.
 			coll, err := newCollator(v)
-			if err != nil {
+			switch {
+			case errors.Is(err, errLangUnsupported):
+				// Section 13.1.3 (xslt-lcwd30.xml:18481-18482): an
+				// unsupported language behaves as if @lang were omitted, so
+				// the sort falls back to codepoint order rather than failing.
+				// out.coll stays nil.
+			case err != nil:
+				// A computed value outside the xs:language value space is
+				// XTDE0030 rather than a compile-time refusal: the
+				// stylesheet is well-formed and only the value it produced
+				// is wrong.
 				return nil, fmt.Errorf("XTDE0030: %w", err)
+			default:
+				out.coll = coll
 			}
-			out.coll = coll
 		}
 	}
 	return &out, nil
@@ -1979,7 +2071,7 @@ type documentInstr struct {
 }
 
 func (i *documentInstr) Execute(rt *runtime, out *outputBuilder) error {
-	sub := newOutputBuilder()
+	sub := newOutputBuilder(rt)
 	if err := execSequence(i.body, rt, sub); err != nil {
 		return err
 	}

@@ -25,6 +25,11 @@ type applyTemplatesInstr struct {
 	// can match an atomic value, so accepting it would silently drop the
 	// item the author meant to process.
 	atomicOK bool
+	// streamed records that the instruction is written inside a
+	// declared-streamable construct, which makes it an invocation construct
+	// that sets the current group and current grouping key to absent. See
+	// inDeclaredStreamable.
+	streamed bool
 }
 
 func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -78,6 +83,17 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	defer rt.ascend()
 
+	// The select expression and the parameters were evaluated above, in this
+	// instruction's own context, where the grouping is still in scope.
+	// Section 14.4 takes the group away only from the template rule being
+	// entered. A separate variable, not a reassignment: withoutGroupingScope
+	// copies the runtime, and the deferred ascend must decrement the depth on
+	// the one descend incremented.
+	disp := rt
+	if i.streamed {
+		disp = rt.withoutGroupingScope()
+	}
+
 	size := len(seq)
 	for idx, it := range seq {
 		if err := rt.ctx.Err(); err != nil {
@@ -89,7 +105,7 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// patterns that can match one. Its built-in rule, section 6.7.1,
 			// is to copy it to the result — which is also what a 2.0 module
 			// did for the values it let through.
-			sub := rt.withCurrent(it, idx+1, size)
+			sub := disp.withCurrent(it, idx+1, size)
 			if err := applyToAtomic(sub, it, i.effectiveMode(rt),
 				params, tunnels, out); err != nil {
 				return err
@@ -99,7 +115,7 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := rt.sheet.checkModeTyped(node, i.effectiveMode(rt)); err != nil {
 			return err
 		}
-		sub := rt.withCurrent(node, idx+1, size)
+		sub := disp.withCurrent(node, idx+1, size)
 		if err := applyToNode(sub, node, i.effectiveMode(rt), params, tunnels, out); err != nil {
 			return err
 		}
@@ -127,6 +143,30 @@ func (i *applyTemplatesInstr) effectiveMode(rt *runtime) string {
 func applyToNode(rt *runtime, node *xdm.Node, mode string,
 	params map[string]xdm.Sequence, tunnels map[string]xdm.Sequence,
 	out *outputBuilder) error {
+
+	// XTTE3100/XTTE3110 are stated against "an xsl:apply-templates
+	// instruction in a particular mode", and every way a node reaches a rule
+	// is one. 2.3.3 defines the initial match selection so: "the processing
+	// then corresponds to the effect of the xsl:apply-templates
+	// instruction". 6.7.3 writes the shallow-copy built-in rule out as a
+	// template whose body is literally
+	//
+	//   <xsl:apply-templates select="@*" mode="M"/>
+	//   <xsl:apply-templates select="node()" mode="M"/>
+	//
+	// so the recursion into a copied element's attributes and children is
+	// two more apply-templates in the same mode, and the nodes it selects
+	// are within the error's reach. Checking here rather than at each
+	// selection site covers the initial selection, the built-in descents and
+	// the array-member unwrapping with one test; the two callers that
+	// already checked before calling now merely repeat it. mode-1438
+	// declares typed="yes" over an untyped source and has no
+	// xsl:apply-templates of its own: the document node it starts from
+	// carries no type annotation to object to, and only the descent into
+	// <book> reaches an element that does.
+	if err := rt.sheet.checkModeTyped(node, mode); err != nil {
+		return err
+	}
 
 	t, next, err := rt.sheet.findTemplateFrom(node, mode, rt.ctx, 0)
 	if err != nil {
@@ -522,7 +562,7 @@ func runTemplate(rt *runtime, t *Template,
 	// to the required type, and a value that will not convert is an error.
 	// The body builds into its own builder so that the conversion sees the
 	// whole result rather than each instruction's contribution.
-	tmp := newOutputBuilder()
+	tmp := newOutputBuilder(rt)
 	if err := execSequence(t.Body, sub, tmp); err != nil {
 		return err
 	}
@@ -581,6 +621,10 @@ type callTemplateInstr struct {
 	// compat records that the xsl:call-template was written in a 1.0 scope,
 	// which exempts it from XTSE0680. See checkCallTemplateParams.
 	compat bool
+	// streamed records that the call is written inside a declared-streamable
+	// construct, which makes it an invocation construct that sets the current
+	// group and current grouping key to absent. See inDeclaredStreamable.
+	streamed bool
 }
 
 func (i *callTemplateInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -596,9 +640,21 @@ func (i *callTemplateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 	defer rt.ascend()
+	// The parameters were evaluated above, in the caller's context, where the
+	// grouping is still in scope: section 14.4 takes the group away from the
+	// template being entered, not from the expressions the caller writes to
+	// supply it.
+	//
+	// A separate variable, not a reassignment of rt: withoutGroupingScope
+	// copies the runtime, and the deferred ascend above must decrement the
+	// depth on the one descend incremented.
+	sub := rt
+	if i.streamed {
+		sub = rt.withoutGroupingScope()
+	}
 	// Unlike apply-templates, call-template does not change the focus: the
 	// context node, position and size carry into the called template.
-	return runTemplate(rt, t, params, tunnels, out)
+	return runTemplate(sub, t, params, tunnels, out)
 }
 
 // userFunction is a compiled xsl:function.
@@ -688,11 +744,22 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	// A stylesheet function's body builds a temporary tree, which is
 	// temporary output state for XTDE1480.
 	sub.temporary = true
+	// 10.4.1's restriction governs the names the TARGET EXPRESSION of
+	// xsl:evaluate may reference, not what the functions it names go on to
+	// call. A body reached from a target expression is ordinary stylesheet
+	// code, so it sees the stylesheet's own library: a public function whose
+	// body calls a private one must work, and the private callee is never
+	// named in the expression. See restrictedLibrary.unrestrict.
+	if rl, ok := sub.ctx.Funcs.(restrictedLibrary); ok {
+		c := *sub.ctx
+		c.Funcs = rl.unrestrict()
+		sub.ctx = &c
+	}
 	// Section 24.3: the current output URI is cleared while a stylesheet
 	// function's body is evaluated.
 	sub.ctx = sub.ctx.WithVar(outputURIVar, xdm.Empty())
 
-	out := newOutputBuilder()
+	out := newOutputBuilder(rt)
 	if err := execSequence(f.body, sub, out); err != nil {
 		return nil, err
 	}
@@ -942,7 +1009,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		// children flatten into the parent either way, but a function
 		// declared as="document-node()" gets its result rejected — which is
 		// exactly what merge-096 does.
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := builtInDescend(rt, node, mode, params, tunnels, sub, false); err != nil {
 			return err
 		}

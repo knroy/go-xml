@@ -111,6 +111,27 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 	// checkOutputSettings, is also what lets a map through: that check exists
 	// to raise SENR0001 for an item the *XML-family* methods have no
 	// rendering for, and a map is precisely what the JSON method renders.
+	// A byte order mark belongs to the file rather than to the markup, so it
+	// is not a parameter of the XML-family methods alone. XSLT 3.0 §27.1
+	// describes byte-order-mark as deciding "whether a byte order mark is
+	// written at the start of the file", and names no method it is confined
+	// to; the json and adaptive methods write a file like any other. These
+	// two branches return before the BOM written for the other methods
+	// below, so a request for one has to be honoured here or not at all --
+	// method="json" byte-order-mark="yes" produced no mark and no error,
+	// which is the accepted-and-ignored shape rather than a rendering
+	// choice. Every byte-order-mark case in the W3C suite selects the xml or
+	// xhtml method, which is why it went unseen.
+	//
+	// It precedes even the XML declaration the adaptive method writes: the
+	// mark is what tells a reader how to decode that declaration.
+	switch strings.ToLower(opts.Method) {
+	case "json", "adaptive":
+		if opts.ByteOrderMark {
+			s.writeString("\uFEFF")
+		}
+	}
+
 	switch strings.ToLower(opts.Method) {
 	case "json":
 		out, err := xpath.SerializeJSON(seq, jsonParams(opts, charMap))
@@ -151,7 +172,7 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 			if enc == "" {
 				enc = "UTF-8"
 			}
-			decl := `<?xml version="1.0" encoding="` + enc + `"`
+			decl := `<?xml version="` + xmlDeclVersion(opts) + `" encoding="` + enc + `"`
 			if opts.Standalone != "" {
 				decl += ` standalone="` + opts.Standalone + `"`
 			}
@@ -294,7 +315,7 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		if enc == "" {
 			enc = "UTF-8"
 		}
-		decl := `<?xml version="1.0" encoding="` + enc + `"`
+		decl := `<?xml version="` + xmlDeclVersion(opts) + `" encoding="` + enc + `"`
 		if opts.Standalone != "" {
 			decl += ` standalone="` + opts.Standalone + `"`
 		}
@@ -390,6 +411,10 @@ type serializer struct {
 	// which one, so that the error naming it can say so.
 	rawText     bool
 	rawTextName string
+	// rawTextLT marks that the last text written inside the raw-text
+	// element ended with "<", so that a following node starting with "/"
+	// is caught as "</" even though neither node holds both bytes.
+	rawTextLT bool
 	// inCData marks that serialisation is inside an element named in
 	// cdata-section-elements, whose text children are wrapped in CDATA
 	// sections instead of being escaped.
@@ -413,6 +438,49 @@ func (s *serializer) writeString(str string) {
 		return
 	}
 	_, s.err = io.WriteString(s.w, str)
+}
+
+// fail keeps the first serialization error. Subsequent writes must not replace
+// it: the first failure identifies the offending node and is the error the
+// Serialization Recommendation requires the caller to receive.
+func (s *serializer) fail(err error) {
+	if s.err == nil {
+		s.err = err
+	}
+}
+
+// validateComment and validatePI cover node kinds written verbatim. Text and
+// attributes pass through escaping and XML-character checks, but these nodes do
+// not. A caller may also construct XDM directly, bypassing Parse entirely;
+// serialization therefore has an independent duty to reject markup it cannot
+// render as a well-formed XML entity (SERE0003/SERE0006).
+func (s *serializer) validateComment(text string) error {
+	if strings.Contains(text, "--") || strings.HasSuffix(text, "-") {
+		return fmt.Errorf("SERE0003: comment content contains a forbidden hyphen sequence")
+	}
+	return s.validateXMLLiteral(text)
+}
+
+func (s *serializer) validatePI(target, text string) error {
+	if strings.EqualFold(target, "xml") {
+		return fmt.Errorf("SERE0003: processing-instruction target %q is reserved", target)
+	}
+	if strings.Contains(text, "?>") {
+		return fmt.Errorf("SERE0003: processing-instruction content contains ?>")
+	}
+	return s.validateXMLLiteral(target + text)
+}
+
+func (s *serializer) validateXMLLiteral(text string) error {
+	for _, r := range text {
+		if !isXMLChar(r) {
+			return fmt.Errorf("SERE0006: character #x%X cannot be output as XML", r)
+		}
+		if s.xml11() && isC0Control(r) {
+			return fmt.Errorf("SERE0006: character #x%X cannot be written literally in XML 1.1", r)
+		}
+	}
+	return nil
 }
 
 // writeDoctypeFor writes the document type declaration naming this element.
@@ -490,7 +558,9 @@ func (s *serializer) writeDoctypeFor(n *xdm.Node) {
 // quoteLiteral wraps an external identifier in quotes it does not itself
 // contain. XML gives these literals no escaping mechanism, so a value holding
 // a double quote has to be delimited with single quotes instead — the choice
-// is the only way to write it at all.
+// is the only way to write it at all. A value holding both quote kinds cannot
+// be written either way; checkOutputSettings refuses it with SEPM0016 before
+// serialisation starts, which is what makes the choice here total.
 func quoteLiteral(v string) string {
 	if strings.Contains(v, `"`) {
 		return "'" + v + "'"
@@ -523,7 +593,8 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 			// <script> body. Escaping is not an option here, so the spec
 			// makes it a serialization error, as it does for "--" in a
 			// comment and "?>" in a processing instruction.
-			if strings.Contains(n.Value, "</") {
+			if strings.Contains(n.Value, "</") ||
+				(s.rawTextLT && strings.HasPrefix(n.Value, "/")) {
 				if s.err == nil {
 					s.err = fmt.Errorf(
 						"SERE0007: %s content contains '</', which would end "+
@@ -533,6 +604,9 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 				return
 			}
 			s.writeString(n.Value)
+			if n.Value != "" {
+				s.rawTextLT = strings.HasSuffix(n.Value, "<")
+			}
 			return
 		}
 		if s.inCData {
@@ -542,10 +616,18 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 		s.escapeText(n.Value)
 
 	case xdm.KindComment:
+		if err := s.validateComment(n.Value); err != nil {
+			s.fail(err)
+			return
+		}
 		s.indent(depth)
 		s.writeString("<!--" + n.Value + "-->")
 
 	case xdm.KindPI:
+		if err := s.validatePI(n.Name.Local, n.Value); err != nil {
+			s.fail(err)
+			return
+		}
 		// The HTML method ends a processing instruction at the first ">"
 		// rather than at "?>", so a ">" inside the data would truncate it.
 		// There is no escape for it in HTML, which is why the spec makes it
@@ -629,6 +711,24 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	declared := map[string]string{}
 	for _, ns := range n.Namespaces {
 		if inScope[ns.Name.Local] == ns.Value {
+			continue
+		}
+		// An element binds each prefix at most once, and the binding its own
+		// name needs is the one that has to survive: without it the name is
+		// unresolvable. A namespace node carrying the element's prefix bound
+		// to some other URI -- which xsl:namespace-alias leaves behind, as
+		// namespace-alias-2620 shows -- is dropped here rather than written
+		// beside the one added below, which produced two xmlns:y attributes
+		// on one element and output that is not well-formed XML.
+		if ns.Name.Local != "" && ns.Name.Local == n.Name.Prefix &&
+			n.Name.URI != "" && ns.Value != n.Name.URI {
+			continue
+		}
+		// An element binds each prefix at most once. A node list can hold the
+		// same prefix twice -- xsl:namespace-alias with competing aliases at
+		// different import precedence leaves two y bindings behind, which is
+		// namespace-alias-2620 -- and writing both is not well-formed XML.
+		if _, dup := declared[ns.Name.Local]; dup {
 			continue
 		}
 		// A namespace undeclaration for a *prefix* -- xmlns:p="" -- is
@@ -770,9 +870,9 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// suite's expected output escapes "<" and "&" inside a script there, and
 	// a document that did not would not parse as XML at all.
 	if s.html && !s.xhtml && isRawTextElement(n.Name.Local) {
-		saved, savedName := s.rawText, s.rawTextName
-		s.rawText, s.rawTextName = true, n.Name.Local
-		defer func() { s.rawText, s.rawTextName = saved, savedName }()
+		saved, savedName, savedLT := s.rawText, s.rawTextName, s.rawTextLT
+		s.rawText, s.rawTextName, s.rawTextLT = true, n.Name.Local, false
+		defer func() { s.rawText, s.rawTextName, s.rawTextLT = saved, savedName, savedLT }()
 	}
 	// The head this belongs in is an HTML one. Under the html method every
 	// element is HTML by definition, but the xhtml method serialises whatever
@@ -824,7 +924,16 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			if s.opts.Indent && !hasTextChild(n) {
 				s.indent(depth + 1)
 			}
-			tag := `<meta http-equiv="Content-Type" content="` + content + `">`
+			// The value is escaped like every other attribute the
+			// serialiser writes. media-type is an attribute value template
+			// on xsl:result-document and a settable top-level parameter, so
+			// a document value reaches it; concatenated raw, a value holding
+			// `">` closed the content attribute and the meta tag, and
+			// everything after it became live markup in the <head>. Nothing
+			// legal is refused here -- a media type containing `<` or `"` is
+			// escaped, as escapeAttrRunes escapes any other value.
+			tag := `<meta http-equiv="Content-Type" content="` +
+				s.escapeAttrRunes(content) + `">`
 			if s.xhtml {
 				// XHTML is XML: an empty element must be closed. The space
 				// before the slash is what the HTML compatibility guidelines
@@ -1192,6 +1301,32 @@ func (s *serializer) escapeTextRun(sb *strings.Builder, text string) {
 				fmt.Fprintf(sb, "&#%d;", r)
 				continue
 			}
+			// The C0 controls other than TAB, LF and CR. XML 1.0 has no
+			// spelling for them at all -- they are outside [2] Char, and a
+			// character reference does not help, because [66] CharRef is
+			// constrained to Char too. XML 1.1 admits them, but only written
+			// as references: [2a] RestrictedChar excludes them from the
+			// literal text a document may contain.
+			//
+			// So the version decides between a reference and an error, and
+			// there is no third option where the character is written as
+			// itself. It was: the range fell past every arm above into
+			// WriteRune, and the output held a raw \x01 that no parser at
+			// either version will read back. SERE0006 is the code for a
+			// character the chosen version cannot represent, which is what
+			// xml-version-030 asserts for a BEL under version="1.0".
+			if r < 0x20 && r != '\t' && r != '\n' {
+				if !s.xml11() {
+					if s.err == nil {
+						s.err = fmt.Errorf("SERE0006: character #x%X cannot "+
+							"be output as XML 1.0; it is not a valid XML "+
+							"character at that version", r)
+					}
+					return
+				}
+				fmt.Fprintf(sb, "&#%d;", r)
+				continue
+			}
 		}
 		switch r {
 		case '&':
@@ -1277,6 +1412,27 @@ func (s *serializer) writeCData(text string) {
 // representable reports whether the declared encoding can hold this
 // character. Only the ASCII-limited encodings restrict anything; the Unicode
 // ones hold every character by construction.
+// xmlDeclVersion is the version the XML declaration announces.
+//
+// Only "1.1" is distinguished. xsl:output/@version is a token the specification
+// leaves open -- a processor may be asked for a version it does not implement,
+// and §serialization "XML Output Method: the version parameter" says the
+// declaration states the version of XML being produced. This serializer
+// produces 1.0 unless asked for 1.1, so anything else is written as 1.0 rather
+// than echoed back: announcing "3.7" would describe the output falsely, and a
+// declaration is a claim a parser acts on.
+func xmlDeclVersion(opts OutputSettings) string {
+	if strings.TrimSpace(opts.Version) == "1.1" {
+		return "1.1"
+	}
+	return "1.0"
+}
+
+// xml11 reports whether the output method is producing XML 1.1.
+func (s *serializer) xml11() bool {
+	return strings.TrimSpace(s.opts.Version) == "1.1"
+}
+
 func (s *serializer) representable(r rune) bool {
 	if r < 0x80 {
 		return true
@@ -1453,7 +1609,13 @@ func (s *serializer) escapeAttrMapped(v string, uri bool) (string, bool) {
 			// language="Jack&amp;Jill", written before the raw content
 			// begins, keeps its escape.
 			sb.WriteString(run)
-		case len(s.charMap) == 0 && !s.html && s.encodingHoldsAll():
+		case len(s.charMap) == 0 && !s.html && s.encodingHoldsAll() &&
+			!strings.ContainsFunc(run, isC0Control):
+			// The run-at-once spelling needs one more condition than the
+			// encoding: escapeAttr is a free function and cannot see the
+			// output version, so a run holding a C0 control goes the
+			// per-rune way where the version is known. Same asymmetry the
+			// comment above describes for the encoding.
 			sb.WriteString(escapeAttr(run))
 		default:
 			s.writeAttrRuns(&sb, run)
@@ -1516,8 +1678,32 @@ func (s *serializer) escapeURIs() bool {
 // browsers have historically remapped to windows-1252 characters, so a
 // reference — which names a Unicode code point unambiguously — is the only
 // spelling that survives being read back.
+// isC0Control reports whether r is a C0 control that needs the version-aware
+// treatment -- the block minus TAB, LF and CR, which are legal in both
+// versions and escaped for an unrelated reason.
+func isC0Control(r rune) bool {
+	return r < 0x20 && r != '\t' && r != '\n' && r != '\r'
+}
+
 func (s *serializer) escapeAttrRune(r rune) string {
 	if s.html && r >= 0x7F && r <= 0x9F || !s.representable(r) {
+		return fmt.Sprintf("&#%d;", r)
+	}
+	// The C0 controls, on the same terms as element text: 1.1 writes them as
+	// references, 1.0 has no spelling for them and the attempt is SERE0006.
+	// TAB, LF and CR are excluded because escapeAttr already writes all three
+	// as references -- an attribute value normaliser would otherwise turn
+	// them into spaces -- so they never reach this arm as a problem.
+	// xml-version-007 and -008 assert the reference spelling here.
+	if r < 0x20 && r != '\t' && r != '\n' && r != '\r' && (!s.html || s.xhtml) {
+		if !s.xml11() {
+			if s.err == nil {
+				s.err = fmt.Errorf("SERE0006: character #x%X cannot be "+
+					"output as XML 1.0; it is not a valid XML character "+
+					"at that version", r)
+			}
+			return ""
+		}
 		return fmt.Sprintf("&#%d;", r)
 	}
 	if s.html && r == '"' {
@@ -1929,11 +2115,43 @@ func checkOutputSettings(opts OutputSettings, seq xdm.Sequence) error {
 			"SEPM0016: %q is not a valid public identifier", p)
 	}
 
+	// Serialization 3.1 §3 gives doctype-system the value space "a string of
+	// Unicode characters that does not include both an apostrophe (#x27) and
+	// a quotation mark (#x22) character", because an external identifier has
+	// no escaping mechanism: the literal is delimited by whichever quote the
+	// value does not contain, and a value containing both cannot be written
+	// at all. §3 makes an invalid parameter value SEPM0016, the same code
+	// the public identifier above raises. Unchecked, such a value closed its
+	// own literal -- `a"b'>` wrote SYSTEM 'a"b'> and left the rest of the
+	// value as markup, so an attacker-supplied system identifier could
+	// append a live entity declaration to the document type declaration.
+	// Only the both-quotes case is refused; a system identifier holding one
+	// quote kind, or ">", is legal and is written with the other delimiter.
+	if d := opts.DocTypeSystem; strings.Contains(d, `"`) &&
+		strings.Contains(d, "'") {
+		return fmt.Errorf("SEPM0016: %q is not a valid system identifier: "+
+			"it contains both an apostrophe and a quotation mark, so it "+
+			"cannot be written as an external identifier literal", d)
+	}
+
 	if method == "html" {
 		// The html method supports the HTML versions it knows how to write.
 		// An unrecognised one would silently get HTML 4 rules, which for a
 		// stylesheet that asked for something else is the wrong document.
-		if v := opts.Version; v != "" && !supportedHTMLVersion(v) {
+		//
+		// The version checked is the EFFECTIVE one, which is html-version
+		// falling back to version -- the same precedence the serialiser
+		// itself applies when it sets s.html5. XSLT 3.0 §27.1 says of
+		// html-version that "the set of permitted values, and the default
+		// value, are implementation-defined. A serialization error will be
+		// reported if the requested version is not supported by the
+		// implementation", and its Note adds that "if it is absent, the html
+		// output method uses the value of the version parameter in its
+		// place". Reading opts.Version alone checked the parameter that only
+		// applies when the other is absent, so html-version="7" -- the
+		// spelling a 3.0 stylesheet actually uses -- was accepted and
+		// quietly demoted to HTML 4 rules with no error.
+		if v := effectiveHTMLVersion(opts); v != "" && !supportedHTMLVersion(v) {
 			return fmt.Errorf(
 				"SESU0013: HTML version %q is not supported", v)
 		}
@@ -2062,6 +2280,24 @@ func supportedEncoding(enc string) bool {
 		return true
 	}
 	return false
+}
+
+// effectiveHTMLVersion returns the version of HTML the html method will apply:
+// html-version, or version when html-version is absent.
+//
+// XSLT 3.0 §27.1, Note: "This serialization parameter is new in version 3.0.
+// If it is absent, the html output method uses the value of the version
+// parameter in its place." The xhtml method is excluded by its callers, since
+// there @version is the version of XML rather than of XHTML.
+//
+// It exists so that the check for a supported version and the choice of which
+// rules to write consult the same value. They were computed separately, and
+// diverged: the check read @version while the choice read @html-version.
+func effectiveHTMLVersion(opts OutputSettings) string {
+	if opts.HTMLVersion != "" {
+		return opts.HTMLVersion
+	}
+	return opts.Version
 }
 
 // supportedHTMLVersion reports whether the html output method knows the rules

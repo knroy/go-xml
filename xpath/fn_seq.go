@@ -82,9 +82,24 @@ func registerSeqFuncs(l *Library) {
 		return intSeq(int64(ctx.Size)), nil
 	})
 
-	l.registerFn("reverse", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	// fn:reverse, fn:insert-before and fn:remove each build a SECOND backing
+	// array the size of their input, so each is charged at the construction.
+	//
+	// The result is bounded by the argument, which was itself charged wherever
+	// it was built, so this is not the unbounded amplification
+	// fn:string-to-codepoints is -- it is a duplicate. It is charged anyway
+	// because the host-facing path reaches these directly: a caller that
+	// resolves the built-in through the library and invokes it never passes
+	// an enclosing evaluator, so "the input was already charged" is a
+	// statement about a charge that may never have happened here. Reserving
+	// before the make is what refuses an oversize request without allocating.
+	l.registerFn("reverse", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		in := args[0]
-		out := make(xdm.Sequence, len(in))
+		out, err := makeSequence(ctx, len(in))
+		if err != nil {
+			return nil, err
+		}
+		out = out[:len(in)]
 		for i, it := range in {
 			out[len(in)-1-i] = it
 		}
@@ -93,7 +108,7 @@ func registerSeqFuncs(l *Library) {
 
 	l.registerFn("subsequence", []int{2, 3}, fnSubsequence)
 
-	l.registerFn("insert-before", []int{3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("insert-before", []int{3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		pos, err := argNumber(args, 1)
 		if err != nil {
 			return nil, err
@@ -117,14 +132,17 @@ func registerSeqFuncs(l *Library) {
 		if at > len(target)+1 {
 			at = len(target) + 1
 		}
-		out := make(xdm.Sequence, 0, len(target)+len(args[2]))
+		out, err := makeSequence(ctx, len(target)+len(args[2]))
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, target[:at-1]...)
 		out = append(out, args[2]...)
 		out = append(out, target[at-1:]...)
 		return out, nil
 	})
 
-	l.registerFn("remove", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("remove", []int{2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// The position is declared xs:integer, so a decimal is a type error
 		// rather than a value to truncate: remove(1 to 10, 1.0) is XPTY0004.
 		if err := requireIntegerArg("remove", args, 1); err != nil {
@@ -144,7 +162,10 @@ func registerSeqFuncs(l *Library) {
 		if at < 1 || at > len(in) {
 			return in, nil
 		}
-		out := make(xdm.Sequence, 0, len(in)-1)
+		out, err := makeSequence(ctx, len(in)-1)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, in[:at-1]...)
 		out = append(out, in[at:]...)
 		return out, nil
@@ -232,7 +253,12 @@ func fnSubsequence(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			return nil, err
 		}
 		if lenA == nil {
-			return xdm.Empty(), nil
+			// $length is declared xs:double, not xs:double?, exactly as
+			// $startingLoc above is, so it refuses an empty sequence the
+			// same way.
+			return nil, fmt.Errorf(
+				"XPTY0004: an empty sequence is not allowed as the third " +
+					"argument of fn:subsequence()")
 		}
 		end = start + roundHalfEven(lenA.Float64())
 	}
@@ -287,16 +313,45 @@ func fnSubsequence(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 // precision whenever a single xs:float appeared anywhere in the input and so
 // merged values that a pairwise eq keeps apart (cbcl-distinct-values-002b).
 //
-// The pairwise scan is quadratic, but only in the number of *distinct numeric*
-// values; every non-numeric keeps the hash path, and so does the common case of
-// a numeric that repeats a value already kept being found early.
+// The pairwise scan is quadratic in the number of *distinct numeric* values,
+// which an attacker controls directly: count(distinct-values(/r/v/xs:integer(.)))
+// over a document of n distinct integers cost O(n^2) compareValues calls, each
+// allocating a big.Rat. At n=100000 -- well under a megabyte of input -- that
+// was 9.5 minutes and 480 GB of allocation churn, which exhausts memory long
+// before the CPU cost is noticed.
+//
+// The non-transitivity above is entirely an artefact of *lossy promotion*: it
+// needs a float or a double to round one operand into agreement with another.
+// Among xs:integer and xs:decimal there is no rounding at all -- NumericPromote
+// gives integer or decimal, and compareNumeric then compares exact big.Rats --
+// so over those two types "eq" is a genuine equivalence relation, and a key
+// that is the exact rational makes precisely the equal values collide. Nothing
+// is lost to float64, so 9007199254740993 and 9007199254740992 stay distinct.
+//
+// So the exact types take the hash path and the inexact ones do not. Because eq
+// is not transitive across that boundary, an exact value may still be equal to
+// a float or double already kept -- xs:decimal("1.2") eq xs:float("1.2") -- so
+// an exact value is hashed only after it has been compared pairwise against the
+// *inexact* values kept so far, and inexact values are compared pairwise
+// against everything. That keeps the two constraints of §14.1.7 intact: a value
+// is kept only when it equals nothing already kept, and dropped only when it
+// equals something kept.
+//
+// The scan is therefore quadratic only in the number of distinct *float and
+// double* values, and linear in distinct integers and decimals. A sequence
+// mixing many distinct floats with many distinct integers still pays
+// O(distinct-integers * distinct-floats); only a large number of distinct
+// inexact values remains quadratic, and float and double have finitely many
+// values in a range an attacker can reach cheaply only by widening the input.
 func fnDistinctValues(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	atoms := xdm.Atomize(args[0])
 	var out xdm.Sequence
 	seen := map[string]bool{}
-	// The distinct numerics kept so far, held separately so the pairwise scan
-	// does not walk the non-numeric results as well.
-	var numerics []*xdm.Atomic
+	// The distinct *inexact* numerics kept so far -- the floats and doubles,
+	// the only values against which promotion can round. Held separately so
+	// the pairwise scan walks neither the non-numeric results nor the exact
+	// numerics, which the hash key already settles.
+	var inexact []*xdm.Atomic
 
 	for _, it := range atoms {
 		a := it.(*xdm.Atomic)
@@ -314,8 +369,11 @@ func fnDistinctValues(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 				out = append(out, a)
 				continue
 			}
+			// Every numeric is compared against the inexact values kept so
+			// far, because promotion can round it into equality with one of
+			// them however it is typed.
 			dup := false
-			for _, k := range numerics {
+			for _, k := range inexact {
 				eq, err := compareValues(ctx, a, k, "eq", false)
 				if err != nil {
 					return nil, err
@@ -328,7 +386,46 @@ func fnDistinctValues(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			if dup {
 				continue
 			}
-			numerics = append(numerics, a)
+			if r := a.Rat(); r != nil {
+				// An exact value: integer or decimal. Its exact rational is a
+				// sound key against the other exact values, so it needs no
+				// scan over them. RatString is canonical -- it is the reduced
+				// fraction -- so xs:integer(1), xs:decimal(1.0) and a decimal
+				// written -0 all render alike.
+				key := "x\x00" + r.RatString()
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				// A later double is compared against this value by promoting
+				// it to double, so record which double it promotes to as
+				// well. That is the key the double will look itself up under,
+				// and it is what makes xs:decimal("1.2") and xs:double(1.2)
+				// one value whichever order they arrive in.
+				f, _ := r.Float64()
+				seen["xd\x00"+strconv.FormatFloat(f, 'g', 17, 64)] = true
+				seen["xf\x00"+strconv.FormatFloat(
+					float64(float32(f)), 'g', 17, 32)] = true
+				out = append(out, a)
+				continue
+			}
+			// A float or a double. It must also be checked against the
+			// exact values already kept, which live in the map rather than in
+			// the scan. An exact value e is equal to this value under eq
+			// exactly when e promoted to this type equals it -- so the double
+			// (or float) that e promotes to is the key to look up, and each
+			// exact value recorded both when it was kept.
+			var key string
+			if a.Type == xdm.TypeFloat {
+				key = "xf\x00" + strconv.FormatFloat(
+					float64(float32(a.Float64())), 'g', 17, 32)
+			} else {
+				key = "xd\x00" + strconv.FormatFloat(a.Float64(), 'g', 17, 64)
+			}
+			if seen[key] {
+				continue
+			}
+			inexact = append(inexact, a)
 			out = append(out, a)
 			continue
 		}

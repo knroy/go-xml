@@ -5,6 +5,7 @@ import (
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // inlineFunc is an InlineFunctionExpr whose body this package had to parse.
@@ -29,6 +30,47 @@ type inlineFunc struct {
 	returns *sequenceType
 	body    []node
 	expr    *compiledExpr
+}
+
+// schemaTypedSignature reports whether any declared parameter or return type
+// is a schema simple type whose conversion rules xpath's own converter does
+// not implement.
+//
+// There are two inline-function implementations, and they do not agree. This
+// package's applies sequenceType.convert, which knows §3.1.5 in full: an
+// xs:untypedAtomic supplied for a pure union is *cast* to a member type, and a
+// namespace-sensitive target refuses the conversion with XPTY0117 because the
+// prefix bindings needed to resolve it are not in scope at the call site.
+// xpath's convertForParam knows neither and reports XPTY0004 for both.
+//
+// Which one runs was decided purely by the *body*: a body of ordinary XPath
+// was handed back to xpath along with its signature. So the same declared type
+// behaved differently depending on whether it was written on an inline
+// function or a declared one — FunctionCall-031 wanted the union cast and
+// FunctionCall-041 the XPTY0117, and both got XPTY0004 only because their
+// bodies happened to need no XQuery syntax.
+//
+// Keeping ownership when a schema type is in the signature fixes that
+// divergence rather than duplicating the union logic into xpath, which would
+// make a third copy of it. The body still goes to xpath; only the conversion
+// moves.
+func (n *inlineFunc) schemaTypedSignature() bool {
+	for _, pm := range n.params {
+		if schemaTypedConversion(pm.typ) {
+			return true
+		}
+	}
+	return schemaTypedConversion(n.returns)
+}
+
+// schemaTypedConversion reports whether a declared type needs the
+// schema-aware converter. See schemaTypedSignature.
+func schemaTypedConversion(t *sequenceType) bool {
+	if t == nil {
+		return false
+	}
+	st := t.stype
+	return st.SchemaUnionMembers != nil || st.SchemaSimpleType || st.SchemaListType
 }
 
 // parseInlineFunc reads "function (ParamList) [as SequenceType] { ... }".
@@ -75,7 +117,7 @@ func (p *parser) parseInlineFunc() (node, bool, error) {
 		return nil, false, nil
 	}
 	src := p.src[p.pos+1 : end]
-	if !needsXQueryParser(src) {
+	if !needsXQueryParser(src) && !n.schemaTypedSignature() {
 		// Ordinary XPath. Hand the whole construct back so that the
 		// expression parser reads it, signature and all.
 		p.pos = start
@@ -133,12 +175,20 @@ func (n *inlineFunc) sequence(ctx *evalContext) (xdm.Sequence, error) {
 				len(n.params), len(args))
 		}
 		// The body runs in the captured scope rather than the caller's,
-		// which is what makes this a closure. callCtx names the context the
-		// call was made from and is deliberately unused: the only thing it
-		// could contribute is the per-evaluation resource accounting, and
-		// this package cannot reach the unexported fields that carry it.
-		_ = callCtx
+		// which is what makes this a closure. Two things still have to come
+		// from the call. The item and byte counters ride the captured
+		// context as pointers, so they arrive on their own. The recursion
+		// depth does not: Depth is an int, so the closure carries the depth
+		// it was *written* at, which for a function applying itself is the
+		// same shallow depth every time round. The charge would never
+		// accumulate and the recursion would reach a Go stack overflow,
+		// which is fatal and uncatchable. Depth and MaxDepth are exported,
+		// so they can be taken here even though the counters cannot; xpath's
+		// own two invocation paths take them for the same reason.
 		sub := captured
+		if c, ok := callCtx.(*xpath.Context); ok && c != nil {
+			sub.Depth, sub.MaxDepth = c.Depth, c.MaxDepth
+		}
 		for i, pm := range n.params {
 			v := args[i]
 			conv, err := pm.typ.convert(v, fmt.Sprintf(
@@ -165,7 +215,7 @@ func (n *inlineFunc) evalBody(ctx *evalContext) (xdm.Sequence, error) {
 	if n.body == nil {
 		return nil, nil
 	}
-	out := xdmbuild.New(policy{sc: ctx.sc})
+	out := xdmbuild.New(policy{sc: ctx.sc, xp: ctx.xp})
 	ref := &builderRef{b: out}
 	for _, item := range n.body {
 		if err := item.eval(ref, ctx); err != nil {

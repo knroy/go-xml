@@ -368,16 +368,25 @@ func TestBuiltinTypeNeedsNoImport(t *testing.T) {
 // spellings the formatter actually implements.
 func TestFormatDateCalendarArgument(t *testing.T) {
 	const date = `xs:date('2026-08-24')`
-	// A calendar in a namespace names another implementation's extension and
-	// is left alone; a name in no namespace that is not supported is
-	// FOFD1340, whether or not it appears in the specification's list.
+	// F&O 3.0 9.8.4.3 separates two conditions this table used to conflate.
+	// FOFD1340 is for a name in no namespace that is not one of the
+	// designators tabulated at 19142-19260 -- ZODIAC, or a malformed name. A
+	// designator that IS tabulated but that this processor cannot compute is
+	// not an error at all: 9.8.4.1 says the result falls back to a calendar
+	// it can compute and "must identify the calendar actually used, for
+	// example by prefixing the string with [Calendar: X]". OS is in that
+	// table, so it takes the fallback and the marker; the suite's
+	// format-date-en-033 pins the same behaviour for CB.
+	//
+	// A calendar in a namespace names another implementation's extension.
+	// It cannot be computed here either, so it takes the same fallback.
 	cases := []struct{ cal, want, errCode string }{
 		{`'AD'`, "2026-08-24", ""},
 		{`'ISO'`, "2026-08-24", ""},
 		{`'Q{}ISO'`, "2026-08-24", ""},
 		{`()`, "2026-08-24", ""},
-		{`'Q{http://example.com/cal}OS'`, "2026-08-24", ""},
-		{`'OS'`, "", "FOFD1340"},
+		{`'Q{http://example.com/cal}OS'`, "[Calendar: AD]2026-08-24", ""},
+		{`'OS'`, "[Calendar: AD]2026-08-24", ""},
 		{`'ZODIAC'`, "", "FOFD1340"},
 		{`':w'`, "", "FOFD1340"},
 	}

@@ -151,24 +151,32 @@ func functionVisibilityKey(name xdm.QName, arity int) string {
 // A name the map does not know is not a stylesheet function at all -- it is a
 // builtin, which this rule says nothing about -- so it is callable.
 //
-// The rule is confined to a real xsl:package, for the reason
-// eligibleInitialTemplate and the mode rule are: visibility is a property of a
-// COMPONENT of a package, and a plain xsl:stylesheet has no package boundary
-// for anything to be private with respect to. Applying the private default
-// outside one makes every function a stylesheet declares unreachable from its
-// own xsl:evaluate, which is not a boundary the author drew -- they simply did
-// not write an attribute that has nothing to govern.
+// The rule applies to a plain xsl:stylesheet as much as to an xsl:package.
+// 3.5: "When the xsl:package element is not used explicitly, the entire
+// stylesheet comprises a single implicit package", and 3.2 adds that such a
+// package "is transformed automatically to a package". 3.5.3.1 gives the
+// default visibility as private, and the specification states the consequence
+// itself: "Functions are private by default; private functions can be
+// referenced only within the package where they are declared (and not in
+// xsl:evaluate expressions)."
 //
-// This is also what the reference implementation does: Saxon's own XSLT 3.0
-// results report evaluate-045 as "wrongError", so no released processor
-// enforces the default outside a package, and the real stylesheets that drive
-// xsl:evaluate from data -- DocBook xslTNG calls its own fp: functions from
-// every one of its 613 test documents -- depend on that reading. Inside an
-// xsl:package the declared visibility is still honoured exactly as before.
+// This was long guarded by "if !s.isPackage { return true }", on the argument
+// that a plain stylesheet had no boundary for anything to be private with
+// respect to. That argument was wrong, and the measurement offered for it was
+// wrong about its own cause. Removing the guard alone took the DocBook xslTNG
+// lane from 577 of 593 documents to 67, with 512 XTDE3160s -- but every one of
+// those named Q{...functions/private}pi-from-list, which no target expression
+// in that corpus ever writes. The evaluated string names f:pi, which carries
+// visibility="public"; f:pi's body calls fp:pi-from-list, which carries none.
+// The restriction was leaking out of the target expression and into the body
+// of a function it called. With that fixed (restrictedLibrary.unrestrict), the
+// rule enforces at no cost: DocBook holds at 577 of 593 with zero XTDE3160,
+// XSpec holds at 225, and evaluate-045 passes where it used to fail.
+//
+// Saxon applies the rule too. Its XSLT 3.0 submission records evaluate-045 as
+// wrongError, "Expected XTDE3160; got XTDE0040" -- a refusal, reported under
+// the wrong code -- while the sibling evaluate-006 passes.
 func (s *Stylesheet) evaluateMayCall(name xdm.QName, arity int) bool {
-	if !s.isPackage {
-		return true
-	}
 	vis, ok := s.functionVisibility[functionVisibilityKey(name, arity)]
 	if !ok {
 		return true

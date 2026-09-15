@@ -4,28 +4,41 @@ import "testing"
 
 // A declared encoding is honoured only where this package can decode it
 // exactly. Everything else must stay an error rather than being guessed at.
+// A case that must parse names the text it has to decode to. Asserting only
+// that err is nil let a decoder that mangled every byte pass: "café" coming
+// back as "cafi" is a successful parse and a wrong answer.
 func TestCharsetReaderAcceptsOnlyExactEncodings(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		doc  string
-		want string // substring of the expected value, "" when it must parse
+		text string // the decoded string value, when the document must parse
+		want string // substring of the expected error, "" when it must parse
 	}{
-		{"ascii", `<?xml version="1.0" encoding="US-ASCII"?><a>hi</a>`, ""},
-		{"ascii lowercase", `<?xml version="1.0" encoding="us-ascii"?><a>hi</a>`, ""},
-		{"latin1", "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><a>caf\xe9</a>", ""},
-		{"utf8 still works", `<?xml version="1.0" encoding="UTF-8"?><a>café</a>`, ""},
-		{"unsupported is refused", `<?xml version="1.0" encoding="Shift_JIS"?><a>x</a>`, "unsupported encoding"},
-		{"utf16 is refused", `<?xml version="1.0" encoding="UTF-16"?><a>x</a>`, "unsupported encoding"},
+		{name: "ascii", doc: `<?xml version="1.0" encoding="US-ASCII"?><a>hi</a>`, text: "hi"},
+		{name: "ascii lowercase", doc: `<?xml version="1.0" encoding="us-ascii"?><a>hi</a>`, text: "hi"},
+		{name: "latin1", doc: "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><a>caf\xe9</a>", text: "café"},
+		{name: "latin1 whole high range", doc: "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><a>\xa0\xbf\xe0\xff</a>", text: " ¿àÿ"},
+		{name: "latin1 alias", doc: "<?xml version=\"1.0\" encoding=\"latin1\"?><a>\xe9</a>", text: "é"},
+		{name: "utf8 still works", doc: `<?xml version="1.0" encoding="UTF-8"?><a>café</a>`, text: "café"},
+		{name: "unsupported is refused", doc: `<?xml version="1.0" encoding="Shift_JIS"?><a>x</a>`, want: "unsupported encoding"},
+		{name: "utf16 is refused", doc: `<?xml version="1.0" encoding="UTF-16"?><a>x</a>`, want: "unsupported encoding"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ParseString(tc.doc, ParseOptions{})
-			switch {
-			case tc.want == "" && err != nil:
+			tree, err := ParseString(tc.doc, ParseOptions{})
+			if tc.want != "" {
+				if err == nil {
+					t.Fatalf("%s parsed; it must be refused", tc.name)
+				}
+				if !contains(err.Error(), tc.want) {
+					t.Fatalf("%s: got %v, want mention of %q", tc.name, err, tc.want)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("parsing %s: %v", tc.name, err)
-			case tc.want != "" && err == nil:
-				t.Fatalf("%s parsed; it must be refused", tc.name)
-			case tc.want != "" && !contains(err.Error(), tc.want):
-				t.Fatalf("%s: got %v, want mention of %q", tc.name, err, tc.want)
+			}
+			if got := tree.Root.StringValue(); got != tc.text {
+				t.Fatalf("%s decoded to %q, want %q", tc.name, got, tc.text)
 			}
 		})
 	}

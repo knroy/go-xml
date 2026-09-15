@@ -382,7 +382,7 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 			want[v] = true
 			continue
 		}
-		for _, f := range strings.Fields(v) {
+		for _, f := range splitXMLSpace(v) {
 			want[f] = true
 		}
 	}
@@ -408,13 +408,13 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 			// fn:idref are defined over those properties rather than over
 			// the annotation. Testing only the annotation made both
 			// functions find nothing in a stripped document.
-			if wantID && (n.IsID || isIDAnnotation(n.TypeAnnotation)) {
-				if want[strings.TrimSpace(n.StringValue())] {
+			if wantID && (n.IsID || isIDAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation)) {
+				if want[trimXMLSpace(n.StringValue())] {
 					out = append(out, n)
 				}
 			}
-			if !wantID && (n.IsIDREFS || isIDREFAnnotation(n.TypeAnnotation)) {
-				for _, v := range strings.Fields(n.StringValue()) {
+			if !wantID && (n.IsIDREFS || isIDREFAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation)) {
+				for _, v := range splitXMLSpace(n.StringValue()) {
 					if want[v] {
 						out = append(out, n)
 						break
@@ -442,13 +442,13 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 				// or one a schema annotated as xs:ID, was validated by
 				// whatever produced it and is taken at its word.
 				if a.Name.URI == xdm.NSXML && a.Name.Local == "id" &&
-					!isNCName(strings.TrimSpace(a.Value)) {
+					!isNCName(trimXMLSpace(a.Value)) {
 					continue
 				}
-				isIDAttr := a.IsID || isIDAnnotation(a.TypeAnnotation) ||
+				isIDAttr := a.IsID || isIDAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation) ||
 					(a.Name.URI == xdm.NSXML && a.Name.Local == "id") ||
 					(a.Name.URI == "" && a.Name.Local == "id")
-				isRefAttr := a.IsIDREFS || isIDREFAnnotation(a.TypeAnnotation) ||
+				isRefAttr := a.IsIDREFS || isIDREFAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation) ||
 					(a.Name.URI == "" &&
 						(a.Name.Local == "idref" || a.Name.Local == "idrefs"))
 
@@ -457,11 +457,11 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 				// compared: key241.xml writes xml:id="id3 " and the
 				// stylesheet asks for id(' id3'). The search terms were
 				// already split on whitespace above; this is the other half.
-				if wantID && isIDAttr && want[strings.TrimSpace(a.Value)] {
+				if wantID && isIDAttr && want[trimXMLSpace(a.Value)] {
 					out = append(out, n)
 				}
 				if !wantID && isRefAttr {
-					for _, v := range strings.Fields(a.Value) {
+					for _, v := range splitXMLSpace(a.Value) {
 						if want[v] {
 							// fn:idref returns the nodes that *hold* the
 							// reference, which for an IDREF-typed attribute
@@ -595,20 +595,37 @@ func deepEqualNode(ctx *Context, a, b *xdm.Node) (bool, error) {
 		}
 		return deepEqualContent(ctx, a, b)
 
-	case xdm.KindAttribute, xdm.KindNamespace:
+	case xdm.KindAttribute:
 		return a.Name.URI == b.Name.URI && a.Name.Local == b.Name.Local &&
 			deepEqualText(ctx, a.Value, b.Value), nil
 
+	case xdm.KindNamespace:
+		// The namespace node is the ONE kind whose string value F&O 3.0
+		// §14.2.3 pins to a fixed collation: "the string value of $i1 is
+		// equal to the string value of $i2 when compared using the Unicode
+		// codepoint collation". Every other kind falls under the general
+		// clause a few paragraphs above — the collation "is used at all
+		// levels of recursion when strings are compared" — so the carve-out
+		// is exhaustive, and a namespace URI must not follow it. Sharing the
+		// attribute branch let a case-blind collation make xmlns:p="http://X"
+		// deep-equal to xmlns:p="http://x", which are different namespaces.
+		return a.Name.URI == b.Name.URI && a.Name.Local == b.Name.Local &&
+			a.Value == b.Value, nil
+
 	case xdm.KindPI:
-		// A processing instruction's content is not text in the sense the
-		// collation governs, so it keeps codepoint comparison.
-		return a.Name.Local == b.Name.Local && a.Value == b.Value, nil
+		// The PI rule ("the string value of $i1 is equal to the string value
+		// of $i2") carries no codepoint carve-out, unlike the namespace rule
+		// directly above it in the spec, so the general collation clause
+		// governs it like any other string comparison.
+		return a.Name.Local == b.Name.Local && deepEqualText(ctx, a.Value, b.Value), nil
 
-	case xdm.KindText:
+	case xdm.KindText, xdm.KindComment:
+		// The spec states text and comment nodes in a single sentence — "if
+		// the two nodes are both text nodes or comment nodes, then they are
+		// deep-equal if and only if their string-values are equal" — so a
+		// comment cannot take codepoint comparison while a text node takes
+		// the collation.
 		return deepEqualText(ctx, a.Value, b.Value), nil
-
-	case xdm.KindComment:
-		return a.Value == b.Value, nil
 	}
 	return false, nil
 }
@@ -647,7 +664,7 @@ func deepEqualContent(ctx *Context, a, b *xdm.Node) (bool, error) {
 // untyped element.
 //
 // An element in an unvalidated tree is annotated xs:untyped, a complex type
-// whose variety is mixed, and F&O 3.0 §14.1.13 rules that case as: "Both
+// whose variety is mixed, and F&O 3.0 §14.2.3 rules that case as: "Both
 // element nodes have a type annotation that is a complex type with variety
 // mixed, and the sequence $i1/(*|text()) is deep-equal to the sequence
 // $i2/(*|text())". That is a selection over the child axis: comments and
@@ -715,7 +732,13 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 			if a.DateTimeVal() == nil {
 				return nil, xdm.ErrType("%s: expected a date/time value", name)
 			}
-			pic, err := argString(args, 1)
+			// $picture is declared xs:string, with no "?", in all three of
+			// F&O 3.1 9.8.1 (format-dateTime), 9.8.2 (format-date) and
+			// 9.8.3 (format-time), so an empty sequence is XPTY0004.
+			// argString answers ("", nil) for it, which formatted the value
+			// against an empty picture and returned "" -- the same declared
+			// type that fn:format-integer already refuses.
+			pic, err := argStringRequired(args, 1)
 			if err != nil {
 				return nil, err
 			}
@@ -738,7 +761,12 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 				pictureUsesNames(pic) {
 				out = "[Language: en]" + out
 			}
-			return strSeq(out), nil
+			// Section 9.8.4.3 requires the same admission for the calendar,
+			// and unlike the language it is unconditional: every component of
+			// a date depends on the calendar, so there is no picture for
+			// which the substitution goes unnoticed.
+			out = formatDateTimeCalendarFallback(ctx, args) + out
+			return stringResult(ctx, out)
 		})
 	}
 	format("format-dateTime")
@@ -771,7 +799,7 @@ func checkFormatDateArgs(ctx *Context, args []xdm.Sequence) error {
 		}
 		if a != nil && a.Type != xdm.TypeString && a.Type != xdm.TypeUntypedAtomic &&
 			a.Type != xdm.TypeAnyURI {
-			return xdm.ErrType("XPTY0004: the place argument must be an xs:string")
+			return xdm.ErrType("the place argument must be an xs:string")
 		}
 	}
 	if len(args[3]) > 0 {
@@ -798,7 +826,15 @@ func checkFormatDateArgs(ctx *Context, args []xdm.Sequence) error {
 			if err != nil {
 				return err
 			}
-			if inNoNamespace && !supportedCalendar(name) {
+			// Section 9.8.4.3 makes this FOFD1340 only when the name "must
+			// identify a calendar with a designator specified below" and does
+			// not -- that is, when it is not one of the designators the spec
+			// itself tabulates. A designator that IS tabulated but that this
+			// implementation cannot compute is not an error at all: it takes
+			// the fallback, which formatDateTimeCalendarFallback marks.
+			// Conflating the two raised FOFD1340 for "CB", which the W3C suite
+			// (format-date-en-033) expects to yield "[Calendar: AD]03".
+			if inNoNamespace && !isCalendarDesignator(name) {
 				return fmt.Errorf(
 					"FOFD1340: the calendar %q is not supported", cal)
 			}
@@ -864,6 +900,54 @@ func supportedCalendar(s string) bool {
 		return true
 	}
 	return false
+}
+
+// calendarDesignators is the table of calendar designators in F&O 3.0 section
+// 9.8.4.3. A name in no namespace must be one of these or it is FOFD1340;
+// being one of them says nothing about whether this implementation can compute
+// it, which supportedCalendar answers separately.
+var calendarDesignators = map[string]bool{
+	"AD": true, "AH": true, "AME": true, "AM": true, "AP": true,
+	"AS": true, "BE": true, "CB": true, "CE": true, "CL": true,
+	"CS": true, "EE": true, "FE": true, "ISO": true, "JE": true,
+	"KE": true, "KY": true, "ME": true, "MS": true, "NS": true,
+	"OS": true, "RS": true, "SE": true, "SH": true, "SS": true,
+	"TE": true, "VE": true, "VS": true,
+}
+
+// isCalendarDesignator reports whether s is one of the designators the
+// specification tabulates. The empty string is the absent argument.
+func isCalendarDesignator(s string) bool {
+	return s == "" || calendarDesignators[s]
+}
+
+// formatDateTimeCalendarFallback returns the prefix a result must carry when
+// the calendar actually used is not the one requested.
+//
+// Section 9.8.4.3: "If the fallback representation uses a different calendar
+// from that requested, the output string must identify the calendar actually
+// used, for example by prefixing the string with [Calendar: X]". Only the
+// Gregorian calendar is computed here, so every other request -- a tabulated
+// designator this implementation does not have, or an extension calendar in
+// some namespace -- falls back to it and must say so.
+func formatDateTimeCalendarFallback(ctx *Context, args []xdm.Sequence) string {
+	if len(args) < 4 || len(args[3]) == 0 {
+		return ""
+	}
+	cal, err := argString(args, 3)
+	if err != nil || cal == "" {
+		return ""
+	}
+	name, inNoNamespace, err := calendarInNoNamespace(ctx, cal)
+	if err != nil {
+		return ""
+	}
+	// A name in no namespace that this implementation computes is no
+	// fallback at all; anything else is.
+	if inNoNamespace && supportedCalendar(name) {
+		return ""
+	}
+	return "[Calendar: AD]"
 }
 
 // isCalendarName reports whether s is lexically a calendar name.
@@ -1000,19 +1084,40 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string, v Version, zone
 			}
 		}
 	}
-	// The second presentation modifier, when present, is the last character
-	// and is either "t" (traditional numbering) or "o" (ordinal form).
+	// The second presentation modifier, when present, is the last character.
+	// The grammar admits four of them, in two independent pairs
+	// (functions-and-operators-rec30.xml:18686-18706 and :18709): "a" or "t"
+	// for alphabetic or traditional numbering, and "c" or "o" for cardinal or
+	// ordinal. Only "t" and "o" were stripped here, so "a" and "c" stayed in
+	// the string: where the first modifier was a digit pattern they reached
+	// parseDigitPattern and raised FOFD1340 on a picture the grammar admits
+	// ("[M1a]"), and where it was not they were swallowed into the sequence
+	// name, which then matched nothing and fell back to the default
+	// ("[MNna]" lost the month name and gave "9").
+	//
+	// The length guard keeps a lone modifier as the FIRST modifier: "[Ma]" is
+	// the alphabetic sequence and "[Mi]" roman, not an empty first modifier
+	// with a second one appended. "o" and "t" are not first modifiers, so a
+	// lone one of those is still read as a second.
 	ordinal, traditional := false, false
 	if n := len(pres); n > 1 || (n == 1 && (pres == "o" || pres == "t")) {
 		switch pres[len(pres)-1] {
 		case 'o':
 			ordinal = true
 			pres = pres[:len(pres)-1]
+		case 'c':
+			// Cardinal is the default numbering everywhere here, so the
+			// modifier only needs stripping for the picture to be accepted.
+			pres = pres[:len(pres)-1]
 		case 't':
 			// Traditional numbering coincides with the default for the
 			// languages implemented here, so for most components the
 			// modifier only needs stripping; the timezone is the exception.
 			traditional = true
+			pres = pres[:len(pres)-1]
+		case 'a':
+			// Alphabetic numbering likewise coincides with the default for
+			// the sequences implemented here.
 			pres = pres[:len(pres)-1]
 		}
 	}
@@ -1252,9 +1357,14 @@ func padNumber(n int64, pres, width string, ordinal bool) string {
 	case "I":
 		return padSequence(romanNum(n), width)
 	case "w", "W", "Ww":
-		return spellDateNumber(n, pres, ordinal)
+		// Section 9.8.4.1 pads a representation shorter than the minimum
+		// width, "by appending spaces" for anything that is not a decimal
+		// number. Words and letters are such cases just as roman numerals
+		// are, so they take the same padding rather than dropping the
+		// minimum: "[Mw,8]" on September is "nine    ", not "nine".
+		return padSequence(spellDateNumber(n, pres, ordinal), width)
 	case "a", "A":
-		return alphaNum(n, pres == "A")
+		return padSequence(alphaNum(n, pres == "A"), width)
 	}
 
 	// A digit pattern may carry grouping separators — "[Y9,999]" writes 2012
@@ -2152,6 +2262,13 @@ func applyNameCase(name, pres, width string) string {
 			name = abbreviateName(name, max)
 		}
 	}
+	// The minimum width is deliberately NOT applied here, even though section
+	// 9.8.4.1 asks for spaces to be appended to a short value. That rule is a
+	// "should", and for a by-name presentation the W3C suite reads it the
+	// other way: date-064 formats midnight with "[PNn,4-8]" and "[PNn,4-4]"
+	// and expects "12Am", not "12Am  ". A name's chosen abbreviation is taken
+	// to BE its full representation at that width, so there is nothing left
+	// to pad. Padding it cost that case.
 	return name
 }
 
@@ -2257,15 +2374,18 @@ func maxWidth(width string) int {
 // fn:id is defined over attributes "of type xs:ID", which includes every
 // restriction of it — a schema that names its own IDs is the ordinary case,
 // not an exotic one.
-func isIDAnnotation(annotation string) bool {
-	return annotationDerivesFrom(annotation, "ID")
+// env is the environment of the schema that annotated the node, so a schema's
+// own restriction of xs:ID is recognised through ITS chain rather than through
+// whatever another schema registered under the same name.
+func isIDAnnotation(env *xdm.TypeEnvironment, annotation string) bool {
+	return annotationDerivesFrom(env, annotation, "ID")
 }
 
 // isIDREFAnnotation reports whether an annotation names xs:IDREF or xs:IDREFS,
 // or a type derived from either.
-func isIDREFAnnotation(annotation string) bool {
-	return annotationDerivesFrom(annotation, "IDREF") ||
-		annotationDerivesFrom(annotation, "IDREFS")
+func isIDREFAnnotation(env *xdm.TypeEnvironment, annotation string) bool {
+	return annotationDerivesFrom(env, annotation, "IDREF") ||
+		annotationDerivesFrom(env, annotation, "IDREFS")
 }
 
 // annotationDerivesFrom walks the derivation chain a schema recorded.
@@ -2276,14 +2396,17 @@ func isIDREFAnnotation(annotation string) bool {
 // name identifies that cycle exactly. The step count this replaced returned
 // false past 32 links, which made fn:id and fn:idref stop seeing a deep
 // restriction of xs:ID as an ID at all.
-func annotationDerivesFrom(annotation, base string) bool {
+func annotationDerivesFrom(env *xdm.TypeEnvironment, annotation, base string) bool {
+	if env == nil {
+		env = xdm.GlobalTypeEnvironment()
+	}
 	seen := map[string]bool{}
 	for annotation != "" && !seen[annotation] {
 		if annotation == base {
 			return true
 		}
 		seen[annotation] = true
-		annotation = xdm.DerivedBase(annotation)
+		annotation = env.DerivedBase(annotation)
 	}
 	return false
 }
@@ -2759,6 +2882,12 @@ func registerParseXML(l *Library, since Version) {
 		// The base URI of the constructed document is the static base URI of
 		// the call, per the spec. With none available the document simply has
 		// no base URI, which is what document-uri() then reports as empty.
+		//
+		// The entity-expansion allowance is the EVALUATION's, not this call's.
+		// Minting one per call is what made the ceiling meaningless: this is
+		// an ordinary function, so an expression calls it once per node, and
+		// sixty bombs that each stayed under the 1 MB ceiling expanded 47 MB
+		// between them and were accepted. See Context.entities.
 		tree, perr := xdm.ParseString(s, xdm.ParseOptions{
 			AllowDOCTYPE: true,
 			BaseURI:      ctx.StaticBaseURI,
@@ -2769,8 +2898,17 @@ func registerParseXML(l *Library, since Version) {
 			// the default of refusing every one, so an expression parsing
 			// untrusted XML cannot be talked into a file read.
 			ExternalEntities: ctx.Entities,
-		})
+		}.WithEntityBudget(ctx.EntityBudget()))
 		if perr != nil {
+			// A resource refusal is this engine declining to spend more, not a
+			// statement about the argument, so it is reported as the resource
+			// limit it is and keeps the ErrResourceLimit sentinel. Reporting
+			// it as FODC0006 would say the document was malformed -- which is
+			// false, and which a try/catch on that code could then swallow,
+			// laundering the refusal the way xi:fallback was measured doing.
+			if errors.Is(perr, xdm.ErrResourceLimit) {
+				return nil, perr
+			}
 			// FODC0006 is the code the spec gives for a string that is not a
 			// well-formed document, rather than a generic failure.
 			return nil, xdm.Errorf("FODC0006",
@@ -2798,7 +2936,7 @@ func registerParseXML(l *Library, since Version) {
 		if err != nil {
 			return nil, err
 		}
-		frag, perr := parseXMLFragment(s, ctx.StaticBaseURI)
+		frag, perr := parseXMLFragment(s, ctx.StaticBaseURI, ctx.EntityBudget())
 		if perr != nil {
 			return nil, perr
 		}
@@ -2814,7 +2952,14 @@ func registerParseXML(l *Library, since Version) {
 // The declaration, if any, is an XML *text* declaration rather than an XML
 // declaration: it is stripped before wrapping, since it may not appear inside
 // an element.
-func parseXMLFragment(s, base string) (*xdm.Node, error) {
+//
+// The budget b is the evaluation's shared entity-expansion allowance, threaded
+// through for the same reason fn:parse-xml threads it. A fragment may not
+// carry a DOCTYPE and is refused below if it tries, and no resolver is
+// supplied, so no entity table is built and nothing is charged today. It is
+// wired anyway because inertness here is a property of the options this
+// function happens to pass, and one option-change away from being live.
+func parseXMLFragment(s, base string, b *xdm.EntityBudget) (*xdm.Node, error) {
 	body := s
 	if strings.HasPrefix(body, "<?xml") {
 		end := strings.Index(body, "?>")
@@ -2852,8 +2997,13 @@ func parseXMLFragment(s, base string) (*xdm.Node, error) {
 	tree, err := xdm.ParseString("<parse-xml-fragment-wrapper>"+body+"</parse-xml-fragment-wrapper>", xdm.ParseOptions{
 		AllowDOCTYPE: true,
 		BaseURI:      base,
-	})
+	}.WithEntityBudget(b))
 	if err != nil {
+		// A resource refusal keeps its sentinel rather than becoming
+		// FODC0006, on the same terms as fn:parse-xml above.
+		if errors.Is(err, xdm.ErrResourceLimit) {
+			return nil, err
+		}
 		return nil, xdm.Errorf("FODC0006",
 			"fn:parse-xml-fragment: argument is not a well-formed XML fragment: %v", err)
 	}

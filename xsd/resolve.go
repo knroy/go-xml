@@ -4,13 +4,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -149,6 +153,16 @@ func (r *FileResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 	// have to work.
 	p := location
 	if u, err := url.Parse(location); err == nil && u.Scheme == "file" {
+		// A file: URL may carry an authority, and only an empty one or
+		// "localhost" names this machine. Anything else names a remote host,
+		// and taking u.Path alone would discard it and silently read the
+		// same-named local file instead. relaxng.FileResolver refuses the
+		// same way.
+		if u.Host != "" && u.Host != "localhost" {
+			return nil, "", fmt.Errorf(
+				"schemaLocation %q names the remote host %q; only local files "+
+					"are permitted", location, u.Host)
+		}
 		p = u.Path
 	}
 
@@ -166,44 +180,68 @@ func (r *FileResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 		if err != nil {
 			return nil, "", err
 		}
-		// Symlinks are resolved on both sides before the comparison, or a
-		// link planted inside the root reads whatever it points at: the
-		// path passes the containment check and os.Open then follows the
-		// link out. xslt's FileResolver has always done this; this one
-		// documented it and did not.
+		// The root is resolved; the final component of the path deliberately is
+		// NOT. os.Root below resolves every component against the root's own
+		// descriptor at open time, and that is what makes containment hold
+		// against a link swapped in after this check. Pre-resolving the leaf
+		// here would hand os.Root a path with the link already followed, which
+		// reintroduces exactly the window this shape exists to close. This now
+		// matches xslt/resolver.go readConfined; see the note there.
 		//
-		// A path that does not exist keeps its unresolved form so that the
-		// failure is a clean "no such file" from os.Open rather than an
-		// error from EvalSymlinks. The root is resolved the same way, since
-		// a root reached through a symlink would otherwise never match the
-		// resolved target.
+		// The parent directory IS resolved, and only so that like is compared
+		// with like: on macOS /var is itself a link to /private/var, so a root
+		// that resolved and a path that did not would never share a prefix.
 		//
-		// This resolves and then opens, which is the shape a TOCTOU race
-		// attacks — xslt's resolver uses os.OpenRoot instead and enforces at
-		// open time. The window does not close here because what gets opened
-		// is the RESOLVED path (p = abs below): every link has already been
-		// followed, so a link that passed the check is not traversed again
-		// and cannot be swung underneath. Exploiting what remains means
-		// replacing a directory component of the resolved path between the
-		// two steps, which needs write access inside the root — and an
-		// attacker holding that can just write the file. The hostile party
-		// here is a *document*, which names a location and cannot touch the
-		// filesystem at all. See docs/security.md, "All resolution defaults
-		// are closed".
+		// Until 2026-09-10 this resolved both sides and opened the resolved
+		// path, recorded in docs/security.md as an accepted risk on the grounds
+		// that exploiting the remainder needs write access inside the root.
+		// That position is withdrawn: two rooted resolvers enforcing one
+		// property by two mechanisms cost more to keep explaining than to
+		// unify. The string check below is retained as the DIAGNOSIS — it is
+		// what produces the errRefusedByPolicy message naming the root, and
+		// what §4.2.1 needs in order to tell a deliberate refusal from a miss.
+		// os.Root is the ENFORCEMENT.
 		if x, err := filepath.EvalSymlinks(root); err == nil {
 			root = x
 		}
-		if x, err := filepath.EvalSymlinks(abs); err == nil {
-			abs = x
+		if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+			abs = filepath.Join(dir, filepath.Base(abs))
 		}
 		// The separator matters: without it, a Root of "/srv/a" would
 		// also admit "/srv/anything".
-		if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
+		rel, err := filepath.Rel(root, abs)
+		if err != nil || rel == ".." ||
+			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return nil, "", fmt.Errorf(
 				"schemaLocation %q resolves outside the permitted root: %w",
 				location, errRefusedByPolicy)
 		}
-		p = abs
+		rt, err := os.OpenRoot(root)
+		if err != nil {
+			return nil, "", err
+		}
+		f, err := rt.Open(filepath.ToSlash(rel))
+		rt.Close()
+		if err != nil {
+			// A miss and an escape must stay distinguishable. §4.2.1 lets an
+			// include that was looked for and not found be dropped, and the
+			// W3C suite depends on that; a path os.Root refused for leaving
+			// the root is a decision and must surface as src-resolve. Only
+			// the second is errRefusedByPolicy — see assemble.go queueRef.
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, "", err
+			}
+			// os.Root's own error is wrapped rather than replaced. It is the
+			// evidence that containment was enforced HERE, at open time, and
+			// not merely by the string comparison above — which is the whole
+			// difference between this and the check-then-open shape it
+			// replaced, and the only thing a test can hold on to, since both
+			// shapes refuse every statically visible vector alike.
+			return nil, "", fmt.Errorf(
+				"schemaLocation %q resolves outside the permitted root: %w: %w",
+				location, errRefusedByPolicy, err)
+		}
+		return f, filepath.Join(root, rel), nil
 	}
 
 	f, err := os.Open(p)
@@ -262,13 +300,30 @@ type HTTPResolver struct {
 	// construction. Returning true for "schemas.example.com" says the name is
 	// permitted, not that the connection goes anywhere trustworthy.
 	//
-	// To refuse the addresses an SSRF is aimed at, filter them where they are
-	// known: a Transport with a DialContext (or Control) that inspects the
-	// resolved IP and refuses the ranges you do not want. That check sees the
-	// address actually being dialled, which is the only place the guarantee
-	// can be made. Use AllowHost to narrow the namespace and the dialler to
-	// enforce the boundary.
+	// The addresses themselves are refused by the dialler, at the point they
+	// are known — see AllowPrivateAddresses. Use AllowHost to narrow the
+	// namespace and the dialler to enforce the boundary.
 	AllowHost func(host string) bool
+
+	// AllowPrivateAddresses re-permits the address ranges that are refused by
+	// default: loopback, link-local (including 169.254.169.254, the cloud
+	// instance metadata address), unique-local, and the RFC1918 private
+	// ranges. It is off by default, so the zero value refuses them.
+	//
+	// The check runs in the dialler, against the IP the connection is
+	// actually being made to rather than the name written in the document.
+	// That placement is what makes it a guarantee: a name resolves to an
+	// address only at dial time, so checking the name earlier leaves a
+	// rebinding window in which the name is re-resolved to a refused address
+	// after it was approved. Checking the resolved address closes it, and it
+	// covers redirects and every retry for free, because each connection is
+	// dialled through the same place.
+	//
+	// Turn it on for a caller that genuinely fetches schemas from a private
+	// network — an internal mirror, or a test server on loopback. It widens
+	// what the process can be made to reach by whoever writes the schema, so
+	// it is opt-in rather than a default.
+	AllowPrivateAddresses bool
 
 	// Files handles locations that are not remote. When nil, a FileResolver
 	// with no root is used.
@@ -322,6 +377,22 @@ func (r *HTTPResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 			timeout = DefaultFetchTimeout
 		}
 		client = &http.Client{Timeout: timeout}
+	}
+	// The address filter goes on a copy of the transport, for the same reason
+	// the redirect check goes on a copy of the client: r.Client may be one the
+	// caller uses elsewhere, and installing a dialler on it would change the
+	// behaviour of every other request made through it.
+	//
+	// A caller who supplied their own Transport has already chosen how
+	// connections are made, so theirs is left alone -- that is the documented
+	// hook for a proxy or a pinned CA set, and wrapping it here would silently
+	// override a policy they set deliberately.
+	if !r.AllowPrivateAddresses {
+		c := *client
+		if c.Transport == nil {
+			c.Transport = newGuardedTransport()
+			client = &c
+		}
 	}
 	// A redirect is a second request to a host the caller never named, so
 	// AllowHost has to run again on every hop. Checking only the URL written
@@ -439,4 +510,88 @@ func (r *MapResolver) Resolve(namespace, location, base string) (io.ReadCloser, 
 		return io.NopCloser(strings.NewReader(src)), namespace, nil
 	}
 	return nil, "", nil
+}
+
+// ErrPrivateAddress is returned when a fetch is refused because the host
+// resolved to an address in a range HTTPResolver does not dial by default.
+// It is wrapped by the dial error, so errors.Is finds it through the
+// *url.Error and *net.OpError that net/http puts around it.
+var ErrPrivateAddress = errors.New(
+	"address is in a private range; set AllowPrivateAddresses to permit it")
+
+// newGuardedTransport returns a Transport that refuses to connect to the
+// address ranges an SSRF is aimed at.
+//
+// The check is in Control rather than DialContext because Control runs after
+// the name has been resolved and after the address to dial has been chosen,
+// but before the connection is made. That is the narrowest point at which the
+// real address is known: a host with several A records is checked per address
+// as each is tried, so a name that resolves to both a public and a loopback
+// address cannot reach the loopback one by having the first attempt fail. It
+// is also why this closes the DNS-rebinding window that a name check cannot:
+// the address seen here is the one being connected to, not one resolved
+// earlier and re-resolved since.
+func newGuardedTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	d := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control: func(network, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return fmt.Errorf("parsing dial address %q: %w", address, err)
+			}
+			ip, err := netip.ParseAddr(host)
+			if err != nil {
+				// Control is handed a literal address, never a name. If that
+				// ever stops being true, refusing is the safe direction:
+				// admitting an address that could not be parsed would let
+				// whatever produced it past the check.
+				return fmt.Errorf("dial address %q is not an IP: %w", host, err)
+			}
+			if isPrivateAddr(ip) {
+				return fmt.Errorf("refusing to dial %s: %w", ip, ErrPrivateAddress)
+			}
+			return nil
+		},
+	}
+	t.DialContext = d.DialContext
+	return t
+}
+
+// isPrivateAddr reports whether ip is in a range HTTPResolver refuses by
+// default.
+//
+// The IPv4-mapped form of an IPv6 address is unmapped first, so
+// ::ffff:127.0.0.1 is judged as 127.0.0.1 rather than slipping through as an
+// ordinary global v6 address.
+func isPrivateAddr(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	switch {
+	case ip.IsLoopback(), ip.IsUnspecified(),
+		ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast(),
+		ip.IsInterfaceLocalMulticast(), ip.IsMulticast():
+		// Loopback reaches services bound to the host itself. The
+		// unspecified address (0.0.0.0, ::) is a route to the local host on
+		// most stacks. Link-local covers 169.254.0.0/16, which is where the
+		// cloud instance metadata service lives (169.254.169.254) and is the
+		// single address this filter most exists to refuse.
+		return true
+	case ip.IsPrivate():
+		// 10/8, 172.16/12, 192.168/16, and the v6 unique-local fc00::/7.
+		return true
+	}
+	if ip.Is4() {
+		b := ip.As4()
+		// 100.64.0.0/10, the carrier-grade NAT range, which addresses other
+		// tenants rather than the public internet.
+		if b[0] == 100 && b[1] >= 64 && b[1] <= 127 {
+			return true
+		}
+		// 192.0.0.0/24, IETF protocol assignments.
+		if b[0] == 192 && b[1] == 0 && b[2] == 0 {
+			return true
+		}
+	}
+	return false
 }

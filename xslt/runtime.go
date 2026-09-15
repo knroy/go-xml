@@ -31,6 +31,16 @@ type runtime struct {
 	// feature. See fntransform.go.
 	opts TransformOptions
 
+	// static marks the stand-in runtime the static phase builds so that a
+	// static="yes" variable can call fn:transform. Section 9.7 gives a static
+	// expression the whole F&O library and excludes nothing from it, so
+	// fn:transform is in scope there; but the transformation it starts runs
+	// while the outer stylesheet is still COMPILING, which is what the flag
+	// records. Its one consequence is that the nested stylesheet is compiled
+	// through compileNestedLocked rather than Compile, the outer compilation
+	// already holding compileMu. See staticPhase.staticRuntime.
+	static bool
+
 	// funcResults memoises the results of stylesheet functions declared
 	// new-each-time="no". Section 10.3 makes that a promise that two calls
 	// with the same arguments return the SAME result, which for a function
@@ -81,11 +91,16 @@ type runtime struct {
 	keyBuilding map[keyCacheKey]bool
 
 	// accumValues caches each accumulator's value at every node of a tree,
-	// and accumBuilding guards the circular case. Both mirror keyIndex and
-	// keyBuilding, and for the same reason: computing one value means
-	// walking everything before it, so the walk is done once per pair.
+	// and accumBuilding holds the values recorded so far by a walk still in
+	// progress. Both mirror keyIndex and keyBuilding, and for the same
+	// reason: computing one value means walking everything before it, so
+	// the walk is done once per pair. Unlike keyBuilding, the in-progress
+	// entry is the partial table rather than a flag, because a rule is
+	// allowed to read values the walk has already recorded (§18.2.4: an
+	// end-phase rule may read the pre-descent value of its own node), and
+	// only a value not yet recorded is circular.
 	accumValues   map[accumCacheKey]*accumulatorValues
-	accumBuilding map[accumCacheKey]bool
+	accumBuilding map[accumCacheKey]*accumulatorValues
 	// accumOrigin maps a node produced by a copy-accumulators="yes" copy to
 	// the node it was copied from, which is the only thing that can say what
 	// an accumulator's value at the copy should be. It is a map on the
@@ -150,6 +165,15 @@ type runtime struct {
 	// the runtime is copied on every focus change, and a document read in one
 	// template must be visible to an xsl:result-document in another.
 	readDocs *map[string]bool
+	// writtenDocs is the set of absolute URIs xsl:result-document has
+	// written, the twin of readDocs. XTDE1500 is order-independent -- the
+	// spec says "write to an external resource and read from the same
+	// resource during a single transformation" -- so the read side needs the
+	// writes recorded just as the write side needs the reads. A pointer for
+	// the same reason readDocs is: the runtime is copied on every focus
+	// change, and a document written inside one template has to be visible
+	// to a doc() evaluated anywhere else.
+	writtenDocs *map[string]bool
 
 	// messages collects xsl:message output rather than writing to stderr.
 	//
@@ -214,7 +238,15 @@ const DefaultMaxDepth = 1000
 func (rt *runtime) descend() error {
 	rt.depth++
 	if rt.maxDepth > 0 && rt.depth > rt.maxDepth {
-		return fmt.Errorf("template recursion exceeded %d levels", rt.maxDepth)
+		// Carries the sentinel for the same reason every other budget does:
+		// a caller deciding whether to abort a walk or report bad input has
+		// only errors.Is to ask with, and this is the limit a runaway
+		// stylesheet actually reaches. fn:transform's nesting refusal in
+		// this same package already wrapped it; this one did not, so the
+		// commonest refusal in the package was the one a caller could not
+		// classify.
+		return fmt.Errorf("template recursion exceeded %d levels: %w",
+			rt.maxDepth, xdm.ErrResourceLimit)
 	}
 	return nil
 }
@@ -289,6 +321,16 @@ func execSequence(body []Instruction, rt *runtime, out *outputBuilder) error {
 		if err := rt.ctx.Err(); err != nil {
 			return err
 		}
+		// The result-tree budget is reported here rather than where it was
+		// spent, because the constructing calls -- AppendText, StartElement
+		// -- return no error and threading one through all of them would be a
+		// far larger change than the bound is worth. This loop is the one
+		// every sequence constructor runs through, so a refusal latched by
+		// any of them is returned within one instruction of the node that
+		// crossed the bound. See xdmbuild.Builder.Refused and xpath.MaxNodes.
+		if err := out.Refused(); err != nil {
+			return err
+		}
 		// A variable declared mid-sequence is in scope for the instructions
 		// that follow it, so it rebinds the runtime for the rest of the loop
 		// rather than only for its own execution.
@@ -356,7 +398,7 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	// This builder is the one that turns a sequence constructor into the
 	// document node a variable without "as" holds, so it is where
 	// XTDE0420 is decided and where the compatibility switch has to reach.
-	out := newOutputBuilderFor(rt.sheet)
+	out := newOutputBuilderFor(rt, rt.sheet)
 	if err := execSequence(v.Body, sub, out); err != nil {
 		return nil, err
 	}
@@ -468,9 +510,56 @@ func stringJoin(seq xdm.Sequence, sep string) string {
 // separator behave as the specification's own example describes — five text
 // nodes concatenate to "12345" while five atomic values become "1 2 3 4 5" —
 // so it cannot be skipped by joining the raw items.
+// constructedTextChecked is constructedText for a caller that must report the
+// dynamic error step 3 allows rather than let a function item vanish.
+//
+// Section 5.8.2 builds simple content in seven steps, and the third is "the
+// sequence is atomized (which may cause a dynamic error)". Atomizing a
+// function item is FOTY0013, so xsl:attribute over a sequence holding one is
+// required to fail. constructedText cannot say so — it has no error return and
+// fourteen call sites — and its switch matched neither arm for a function
+// item, so the item was dropped in silence and select="1, 2, false#0" built
+// a="1 2" instead of failing.
+func constructedTextChecked(seq xdm.Sequence, sep string) (string, error) {
+	if _, err := xdm.AtomizeChecked(nonTextItems(seq)); err != nil {
+		return "", err
+	}
+	return constructedText(seq, sep), nil
+}
+
+// nonTextItems drops the text nodes from a sequence, leaving what step 3
+// actually atomizes.
+//
+// Steps 1 and 2 handle text nodes on their own terms — dropped when empty,
+// merged when adjacent — and constructedText already implements that. Passing
+// them to AtomizeChecked would be harmless but pointless; what matters is that
+// every other item is offered to it, so a function item anywhere in the
+// sequence is reported.
+func nonTextItems(seq xdm.Sequence) xdm.Sequence {
+	out := make(xdm.Sequence, 0, len(seq))
+	for _, it := range xdm.Flatten(seq) {
+		if n, ok := it.(*xdm.Node); ok && n.Kind == xdm.KindText {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
 func constructedText(seq xdm.Sequence, sep string) string {
 	var parts []string
 	inText := false
+	// An array is one item holding a sequence of members, and it has to be
+	// replaced by those members before any of the rules below apply: XDM 3.1
+	// defines the atomization of an array as the atomization of its members,
+	// flattened, so data([1,[2,3]]) is (1,2,3) and the three values are then
+	// three separate strings for the joiner to put a separator between.
+	//
+	// Without this the switch below matched neither arm for an *ArrayItem and
+	// dropped it in silence, so xsl:value-of over an array produced the empty
+	// string -- and over ('a',[1,2],'b') produced "a b", losing the members
+	// from the middle of the sequence without any error to say so.
+	seq = xdm.Flatten(seq)
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
@@ -516,13 +605,17 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		maxDepth = DefaultMaxDepth
 	}
 	rt := &runtime{
-		sheet:       s,
+		sheet: s,
+		// A transform started by fn:transform continues its caller's
+		// recursion count rather than restarting at zero; see
+		// TransformOptions.nestedDepth for why the budget is inherited.
+		depth:       opts.nestedDepth,
 		maxDepth:    maxDepth,
 		keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
 		keyBuilding: map[keyCacheKey]bool{},
 
 		accumValues:   map[accumCacheKey]*accumulatorValues{},
-		accumBuilding: map[accumCacheKey]bool{},
+		accumBuilding: map[accumCacheKey]*accumulatorValues{},
 		accumOrigin:   map[*xdm.Node]*xdm.Node{},
 		treeAccums:    map[*xdm.Node]*modeAccumulators{},
 		streamedTrees: map[*xdm.Node]bool{},
@@ -561,6 +654,17 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		item = nil
 	}
 	xctx := xpath.NewContext(item, s.funcs)
+	// A transform started by fn:transform continues its caller's item and byte
+	// allowances rather than restarting on fresh ones, the same policy the
+	// recursion depth above follows. The counters travel with their held flags;
+	// see xpath.Context.AdoptBudget.
+	xctx = xctx.AdoptBudget(opts.nestedBudget)
+	// A duplicate key in an XPath map constructor is XTDE3365 under XSLT, not
+	// XQuery's XQDY0137: section 17.4 gives the MapExpr its own code, the same
+	// one xsl:map raises for a duplicate among the maps it merges. The two
+	// spellings of a map thus fail alike, which is what si-fork-814 and
+	// sx-MapExpr-007 check.
+	xctx.MapDuplicateCode = "XTDE3365"
 	// The regular-expression dialect follows the processor, not the module.
 	// A pattern is a string read by fn:matches at the point of call rather
 	// than by the parser, so a version="2.0" stylesheet run by a 3.0
@@ -578,9 +682,19 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		xctx.LibraryVersion = xpath.XPath31
 	}
 	xctx.Ctx = ctx
+	// TransformOptions.MaxDepth bounds recursion in the transform, and an
+	// expression recurses as surely as a template does: a continuation-passing
+	// function like higher-order-functions-068's fibonacci nests one dynamic
+	// call per unit of the result, 707 levels for fib(11). Left unset, the
+	// XPath side kept its own package default of 500 whatever the caller
+	// asked for, so a caller that raised the bound was refused at 500 and the
+	// message named a limit it had not chosen. Passing it through is what
+	// makes the documented option govern this path.
+	xctx.MaxDepth = rt.maxDepth
 	xctx.Docs = opts.Documents
 	xctx.Collections = opts.Collections
 	xctx.Texts = opts.Texts
+	xctx.Environment = opts.Environment
 	// fn:json-to-xml with validate=true needs the schema layer to type the
 	// tree it builds, and reaches it through this hook rather than by
 	// importing xsd from xpath, which the dependency direction forbids. It is
@@ -603,7 +717,18 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		now = time.Now()
 	}
 	xctx = xctx.WithNow(now)
-	rt.ctx = xctx
+	// One transform is the unit the byte budget is measured over. The chain
+	// that defeats a narrower boundary is a run of SIBLING xsl:variable
+	// declarations, each holding two xsl:value-of of the one before it: no
+	// single variable is large, and Compiled.Eval's per-expression reset
+	// clears the counter between every one of them, so a bound drawn at the
+	// expression or at one constructed value never sees the doubling. The
+	// transform is also the honest unit -- its constructed string content is
+	// what has to fit in memory at once -- and it is far above what real work
+	// reaches: the largest a whole document took through the DocBook xslTNG
+	// and XSpec corpora was 1,031,269 bytes, and the largest in the XSLT 3.0
+	// suite 14,516,346. See xpath.MaxBytes.
+	rt.ctx = xctx.HoldByteBudget()
 	// A variable reference resolves against the package the expression was
 	// written in, so that two packages' globals of one name stay distinct.
 	// See globalBindingName.

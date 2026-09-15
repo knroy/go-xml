@@ -1,9 +1,74 @@
 package xquery
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/knroy/go-xml/xdm"
 )
+
+// maxConstructorDepth bounds how deeply direct constructors and the enclosed
+// expressions inside them may nest while this scanner walks them.
+//
+// It matches xpath's maxParseDepth, and deliberately: both bound the same
+// thing, how far a mutual recursion may descend before the goroutine stack is
+// at risk, and a query refused here would have been refused by that bound had
+// it ever reached the parser. It did not. This scanner runs BEFORE any
+// expression text is handed to xpath, so the parser's counter was never
+// charged for a constructor's nesting and "<a>{" repeated 20,000 times
+// compiled without complaint while the same depth of parentheses was refused
+// at 1,000. The two routes now agree.
+const maxConstructorDepth = 1000
+
+// enclosedScan carries the state the constructor scan needs across the mutual
+// recursion between findEnclosed, skipDirectConstructor and skipStartTag.
+//
+// The three functions call each other, and neither of the two things that
+// keep the scan bounded can be held by any one of them alone:
+//
+//   - depth counts how far the recursion has descended, so nesting is refused
+//     rather than run until the stack gives out. Every entry to a nested
+//     expression or constructor charges it.
+//
+//   - failed remembers the offsets at which skipDirectConstructor has already
+//     reported "no constructor here". That answer is a pure function of the
+//     source and the offset -- the function reads nothing else -- so a second
+//     ask at the same offset cannot get a different answer, and re-deriving it
+//     is what made the scan exponential. findEnclosed advanced by one byte on
+//     a false report and re-entered the same recursion, each level re-scanning
+//     the whole remaining input and recursing again from every position in it,
+//     so the work multiplied per level instead of adding. 120 bytes of
+//     "<a>{" repeated cost 53 seconds. Memoising the refusal makes each
+//     offset's answer derived once.
+type enclosedScan struct {
+	src    string
+	depth  int
+	failed map[int]bool
+}
+
+// errTooDeep reports the nesting refusal.
+//
+// A query this deep is well-formed rather than malformed: it is merely
+// nested further than this processor will scan, which is what XPath 3.1
+// §2.3.1 gives XPDY0130 for. The sentinel is wrapped in alongside the code,
+// never in place of it, so an embedding caller can tell a refusal from every
+// other error. This is the same shape xpath's own depth refusal takes, and
+// the message matches it.
+func errTooDeep() error {
+	return fmt.Errorf("XPDY0130: expression nesting exceeds %d levels: %w",
+		maxConstructorDepth, xdm.ErrResourceLimit)
+}
+
+// enter charges one level of nesting, reporting the refusal at the bound.
+func (s *enclosedScan) enter() error {
+	if s.depth++; s.depth > maxConstructorDepth {
+		return errTooDeep()
+	}
+	return nil
+}
+
+func (s *enclosedScan) leave() { s.depth-- }
 
 // findEnclosed returns the index of the "}" closing the enclosed expression
 // that opens at src[open], which must be a "{".
@@ -30,9 +95,19 @@ import (
 // braces of an inner map constructor, and treating them as an escape would
 // swallow the map.
 func findEnclosed(src string, open int) (int, error) {
+	s := &enclosedScan{src: src, failed: map[int]bool{}}
+	return s.findEnclosed(open)
+}
+
+func (s *enclosedScan) findEnclosed(open int) (int, error) {
+	src := s.src
 	if open >= len(src) || src[open] != '{' {
 		return 0, fmt.Errorf("XPST0003: expected %q at offset %d", "{", open)
 	}
+	if err := s.enter(); err != nil {
+		return 0, err
+	}
+	defer s.leave()
 	depth := 0
 	for i := open; i < len(src); i++ {
 		// A string literal, a comment, a pragma or a string constructor is
@@ -63,7 +138,18 @@ func findEnclosed(src string, open int) (int, error) {
 			// query. Only the markup is stepped over here; a "{" inside it
 			// puts the scan back on expression text, which is what makes
 			// "<a>{ 'x}y' }</a>" still find its own brace.
-			if end, ok := skipDirectConstructor(src, i); ok {
+			//
+			// A false report leaves i where it is and the loop's own i++
+			// steps over the "<" as the operator it then is. What must NOT
+			// happen is re-deriving that false a second time: the answer is
+			// a pure function of the offset, so it is remembered, and the
+			// rescan that made this exponential cannot recur. See
+			// enclosedScan.failed.
+			end, ok, err := s.skipDirectConstructor(i)
+			if err != nil {
+				return 0, err
+			}
+			if ok {
 				i = end
 			}
 		}
@@ -83,10 +169,41 @@ func findEnclosed(src string, open int) (int, error) {
 // A false report is deliberately cheap: "a < b" is a comparison and there is
 // no constructor to skip, so the caller carries on reading expression text and
 // the "<" is just an operator.
+//
+// The error return is the nesting refusal and nothing else. It has to be
+// distinct from a false report: false means "this is not a constructor, carry
+// on reading expression text", which is a normal outcome the caller recovers
+// from, while the refusal must stop the scan and reach the caller as an error
+// rather than being mistaken for a "<" that turned out to be an operator.
 func skipDirectConstructor(src string, i int) (int, bool) {
+	s := &enclosedScan{src: src, failed: map[int]bool{}}
+	end, ok, _ := s.skipDirectConstructor(i)
+	return end, ok
+}
+
+func (s *enclosedScan) skipDirectConstructor(i int) (int, bool, error) {
+	src := s.src
 	if i+1 >= len(src) || !isNameStartByte(src[i+1]) {
-		return 0, false
+		return 0, false, nil
 	}
+	// An offset already known not to begin a constructor cannot begin one
+	// now: the answer depends on nothing but the source and the offset.
+	if s.failed[i] {
+		return 0, false, nil
+	}
+	if err := s.enter(); err != nil {
+		return 0, false, err
+	}
+	defer s.leave()
+	end, ok, err := s.scanDirectConstructor(i)
+	if err == nil && !ok {
+		s.failed[i] = true
+	}
+	return end, ok, err
+}
+
+func (s *enclosedScan) scanDirectConstructor(i int) (int, bool, error) {
+	src := s.src
 	depth := 0
 	for j := i; j < len(src); j++ {
 		switch {
@@ -98,12 +215,12 @@ func skipDirectConstructor(src string, i int) (int, bool) {
 				k++
 			}
 			if k >= len(src) {
-				return 0, false
+				return 0, false, nil
 			}
 			depth--
 			j = k
 			if depth == 0 {
-				return j, true
+				return j, true, nil
 			}
 		case src[j] == '<' && j+1 < len(src) && src[j+1] == '!':
 			// A comment or CDATA section: neither holds anything the scan
@@ -114,74 +231,98 @@ func skipDirectConstructor(src string, i int) (int, bool) {
 			} else if strings.HasPrefix(src[j:], "<![CDATA[") {
 				close = "]]>"
 			} else {
-				return 0, false
+				return 0, false, nil
 			}
 			k := strings.Index(src[j:], close)
 			if k < 0 {
-				return 0, false
+				return 0, false, nil
 			}
 			j += k + len(close) - 1
 		case src[j] == '<' && j+1 < len(src) && src[j+1] == '?':
 			k := strings.Index(src[j:], "?>")
 			if k < 0 {
-				return 0, false
+				return 0, false, nil
 			}
 			j += k + 1
 		case src[j] == '<':
 			if j+1 >= len(src) || !isNameStartByte(src[j+1]) {
-				return 0, false
+				return 0, false, nil
 			}
 			// A start tag. Quotes inside it delimit attribute values, and an
 			// attribute value may itself hold an enclosed expression, so the
 			// tag is walked rather than skipped wholesale.
-			k, selfClosing, ok := skipStartTag(src, j)
+			k, selfClosing, ok, err := s.skipStartTag(j)
+			if err != nil {
+				return 0, false, err
+			}
 			if !ok {
-				return 0, false
+				return 0, false, nil
 			}
 			j = k
 			if !selfClosing {
 				depth++
 			} else if depth == 0 {
-				return j, true
+				return j, true, nil
 			}
 		case src[j] == '{':
 			// Element content is back to expression text inside the braces.
-			end, err := findEnclosed(src, j)
+			end, err := s.findEnclosed(j)
 			if err != nil {
-				return 0, false
+				// A malformed enclosed expression means this "<" did not
+				// begin a constructor after all, and the caller recovers by
+				// reading it as an operator. A nesting refusal is not that:
+				// it must reach the caller as an error rather than be
+				// mistaken for ordinary expression text.
+				if errors.Is(err, xdm.ErrResourceLimit) {
+					return 0, false, err
+				}
+				return 0, false, nil
 			}
 			j = end
 		}
 	}
-	return 0, false
+	return 0, false, nil
 }
 
 // skipStartTag returns the index of the ">" ending the start tag that opens at
 // src[i], and whether the tag closed the element itself.
 func skipStartTag(src string, i int) (end int, selfClosing bool, ok bool) {
+	s := &enclosedScan{src: src, failed: map[int]bool{}}
+	end, selfClosing, ok, _ = s.skipStartTag(i)
+	return end, selfClosing, ok
+}
+
+func (s *enclosedScan) skipStartTag(i int) (end int, selfClosing, ok bool, err error) {
+	src := s.src
 	for j := i + 1; j < len(src); j++ {
 		switch src[j] {
 		case '\'', '"':
 			e, err := skipString(src, j)
 			if err != nil {
-				return 0, false, false
+				return 0, false, false, nil
 			}
 			j = e
 		case '{':
-			e, err := findEnclosed(src, j)
+			e, err := s.findEnclosed(j)
 			if err != nil {
-				return 0, false, false
+				// As in scanDirectConstructor: a malformed attribute value
+				// means this was not a start tag, which the caller recovers
+				// from, while a nesting refusal must reach it as an error.
+				if errors.Is(err, xdm.ErrResourceLimit) {
+					return 0, false, false, err
+				}
+				return 0, false, false, nil
 			}
 			j = e
 		case '/':
 			if j+1 < len(src) && src[j+1] == '>' {
-				return j + 1, true, true
+				return j + 1, true, true, nil
 			}
 		case '>':
-			return j, false, true
+			return j, false, true, nil
 		}
 	}
-	return 0, false, false
+	return 0, false, false, nil
 }
 
 // skipString returns the index of the quote closing the literal that opens at

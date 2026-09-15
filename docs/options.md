@@ -44,12 +44,14 @@ over, and `MaxInt`/`MaxInt64`. The largest value a caller can name is always a
 
 "Your expression is malformed" and "this processor declined to do the work"
 are different conditions with different remedies, but they arrive looking
-alike. The specs define an error code for every *semantic* condition and none
-for "I gave up", so a limit has to borrow one: the parser's nesting guard
-reports `XPST0003`, which properly means a syntactically unacceptable
-expression. A caller reading the code alone would tell its user their
-expression was invalid, when in fact it was merely deeper than this processor
-will parse.
+alike. The specs define an error code for every *semantic* condition and,
+outside XPath, none for "I gave up", so most limits have to borrow one: the
+recursion cap reports `XPDY0001`, which properly means no context item is
+defined. XPath's own limits report `XPDY0130`, which §2.3.1 does define for
+an implementation-dependent limit, but the same code covers the parser's
+depth caps and the evaluation budgets alike, so a caller reading the code
+alone still cannot tell which ran out, or that the expression was well-formed
+and merely deeper than this processor will parse.
 
 `xdm.ErrResourceLimit` is a sentinel wrapped into those errors so the two can
 be told apart:
@@ -67,7 +69,7 @@ case err != nil:
 
 The sentinel is **added** to the error, never substituted for it. The spec
 error code and the leading message text are unchanged, so `xdm.ErrorCode`
-still returns `XPST0003`, the conformance suites still match, and existing
+still returns the code, the conformance suites still match, and existing
 code that reads the message keeps working. Wrap a new limit the same way:
 
 ```go
@@ -95,17 +97,23 @@ syntax error does *not* carry the sentinel.
 | `MaxDepth` | `xdm/parse.go` | *(none)* | reads as a malformed document |
 | `MaxNodes` | `xdm/parse.go` | *(none)* | as above |
 | `MaxBytes` | `xdm/parse.go` | *(none)* | as above |
-| entity expansion budget | `xdm/dtd_entities.go`, `xdm/dtd_external.go` | *(none)* | as above |
+| entity expansion budget | `xdm/dtd_entities.go`, `xdm/dtd_external.go` | *(none)* | as above; shared across every document one XInclude pass parses and every parse one XPath evaluation performs, not per parse |
 | `maxIncludeDepth` / `maxIncludeFetches` | `xdm/xinclude.go` | *(none)* | the text already said "resource limit exceeded"; now `errors.Is` agrees |
-| `maxParseDepth` (expression) | `xpath/parser.go` | `XPST0003` | the expression is syntactically invalid |
-| `maxParseDepth` (type) | `xpath/parser_path.go` | `XPST0003` | as above; a *type* nests through a path the expression counter never sees |
+| `maxParseDepth` (expression) | `xpath/parser.go` | `XPDY0130` | (the code §2.3.1 names for a limit; it borrowed `XPST0003`, "syntactically invalid", until 2026-09-14) |
+| `maxParseDepth` (type) | `xpath/parser_path.go` | `XPDY0130` | as above; a *type* nests through a path the expression counter never sees |
+| `maxChainLength` | `xpath/parser.go` | `XPDY0130` | as above; the expression is well-formed, and it is the *length* of one flat operator chain that is refused, not its nesting |
 | `MaxItems` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own) |
+| `MaxBytes` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own, and the suite already sanctions it for an over-long string — see `fn/codepoints-to-string.xml`. The wording says bytes rather than items, so the two refusals that share the code are still told apart) |
+| `MaxNodes` (result tree) | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own. Distinct from `xdm/parse.go`'s `MaxNodes`, which bounds a *parse*: this one bounds the nodes a transform or query **constructs**, and the wording says "result-tree nodes" so the three refusals that share the code are told apart) |
 | `Context.MaxDepth` | `xpath/context.go` | `XPDY0001` | no context item is defined |
 | `backtrackBudget` | `xpath/regex_backtrack.go` | `FORX0002` | the regular expression is invalid |
 | range bound | `xpath/operators.go` | `FOAR0002` | a numeric operation overflowed |
-| `maxNestDepth` | `xquery/nested.go` | `XPST0003` | the query is syntactically invalid |
+| `maxNestDepth` | `xquery/nested.go` | `XPDY0130` | as the XPath caps; it borrowed `XPST0003` until 2026-09-14 |
+| `maxConstructorDepth` | `xquery/enclosed.go` | `XPDY0130` | as above |
 | `MaxModules` / `MaxModuleBytes` | `xquery/module.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the module is not there |
+| `MaxSchemaBytes` | `xquery/schemaimport.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the schema is not there |
 | `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |
+| `fn:transform` nesting | `xslt/fntransform.go` | `XPDY0001` | no context item is defined; the depth is `TransformOptions.MaxDepth`, charged from the call so that a stylesheet transforming itself accumulates it |
 
 The XSD case reaches a caller through `xsd.ValidationErrors`, which now
 unwraps to the individual `*ValidationError`s, so `errors.Is` over the whole
@@ -255,13 +263,29 @@ symlinks that lead outside:
 }
 ```
 
-`AllowHost` is the SSRF control: it runs before the request **and on every
-redirect hop**, so a permitted host cannot bounce you to a denied one. It sees
-`u.Hostname()`, so userinfo tricks like `http://good.example@127.0.0.1/` do not
-fool it. Use it to refuse loopback, link-local and private ranges.
+The SSRF control is two halves, and they do different jobs.
+
+`AllowHost` narrows the **namespace**: it runs before the request **and on
+every redirect hop**, so a permitted host cannot bounce you to a denied one. It
+sees `u.Hostname()`, so userinfo tricks like `http://good.example@127.0.0.1/`
+do not fool it.
+
+The dialler enforces the **boundary**. A name is not an address, so a permitted
+name that resolves to `127.0.0.1` or to `169.254.169.254` — the cloud instance
+metadata address — would otherwise be fetched. The check runs on the resolved
+IP at dial time, which is the only point where the guarantee holds: it also
+closes the DNS-rebinding window, where a name approved earlier is re-resolved
+to a refused address before the connection is made. Loopback, unspecified,
+link-local, multicast, unique-local, RFC1918, carrier-grade NAT and the
+IPv4-mapped forms of all of them are refused by default.
+
+`AllowPrivateAddresses: true` re-permits them, for a caller that genuinely
+fetches from a private network.
 
 `Client` lets you supply your own `*http.Client`; the redirect check is
-installed on a copy, so your client is not mutated.
+installed on a copy, so your client is not mutated. Supplying your own
+`Transport` disables the address filter, on the reasoning that you have then
+chosen how connections are made — apply your own `Control` if you want both.
 
 ---
 
@@ -379,7 +403,7 @@ sty, err := xslt.Compile(sheet.Root, xslt.CompileOptions{
 | Field | Type | Zero value | What it does |
 |---|---|---|---|
 | `BaseURI` | `string` | none | What relative `xsl:include` and `xsl:import` resolve against. |
-| `Resolver` | `ModuleResolver` | disabled | Loads included and imported modules. **Nil means a stylesheet cannot pull in another file** — the safe default. `xslt.NewFileResolver(roots...)` confines it to directories you name, each covering its subdirectories to any depth; a symlink out of a root is resolved before the containment check, so it does not escape. |
+| `Resolver` | `ModuleResolver` | disabled | Loads included and imported modules. **Nil means a stylesheet cannot pull in another file** — the safe default. `xslt.NewFileResolver(roots...)` confines it to directories you name, each covering its subdirectories to any depth; a symlink out of a root is refused at the open by `os.Root`, so it does not escape. |
 | `StaticParams` | `map[string]xdm.Sequence` | none | Values for `xsl:param static="yes"`, keyed by the parameter's `{uri}local` name. A static parameter is bound before static analysis begins, so its value must come from the caller rather than from `Transform`'s runtime `Params`. |
 | `SchemaResolver` | `xsd.Resolver` | disabled | Loads schemas for `xsl:import-schema`. |
 | `XPathVersion` | `*xpath.Version` | derive | Pins the XPath version for every expression in the stylesheet, overriding what the stylesheet declares. Nil derives it from the `version` attribute. See [Choosing a language version](#choosing-a-language-version). |
@@ -467,7 +491,7 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{
 | `Params` | `map[string]xdm.Sequence` | none | Values for top-level `xsl:param`, keyed by Clark name (`{uri}local`, or plain `local` for no namespace). |
 | `Documents` | `xpath.DocumentResolver` | disabled | Resolves `fn:doc` and `fn:document`. **Nil disables them**, which is the default: a stylesheet that can open arbitrary URIs is an SSRF and file-disclosure vector. |
 | `Collections` | `xpath.CollectionResolver` | disabled | Resolves `fn:collection`. **Nil disables it**, and setting `Documents` does not set this — the two are separate switches on purpose. |
-| `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Template recursion limit. Catches a stylesheet with no base case. |
+| `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Template recursion limit, and the bound on `fn:transform` nesting. Catches a stylesheet with no base case. |
 | `DisableAssertions` | `bool` | `false` — assertions enabled | Turns off `xsl:assert` checking for the whole transformation. XSLT 3.0 §22.2: "By default, assertions are enabled." |
 | `InitialMode` | `string` | default mode | Mode for the initial `apply-templates`. |
 | `InitialTemplate` | `string` | match the root | Invokes a named template instead, which is how a stylesheet of only named templates is entered. |
@@ -480,6 +504,16 @@ It is not only "a template calling itself". An identity transform recurses once
 per level of the document, so a limit below the parser's would refuse documents
 you had just successfully parsed. The default matches `xdm.DefaultMaxDepth` for
 that reason. Raise it only alongside the parser's.
+
+It also bounds `fn:transform` **nesting**, and that count is inherited rather
+than restarted. A nested transform is a transformation of its own in every
+other respect — its own entry point, parameters and initial mode — but a budget
+that began again at each level would not be a budget: a stylesheet applying
+`fn:transform` to itself would spend the full allowance at every level and
+reach the stack instead of the limit, which is a Go runtime fatal that
+`recover()` does not catch. So the depth is charged from the call rather than
+from the runtime the stylesheet was entered with, and the refusal is
+`XPDY0001` wrapping `xdm.ErrResourceLimit`.
 
 ### DisableAssertions
 
@@ -516,6 +550,36 @@ ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{})
 ```
+
+---
+
+## xpath.CompileOptions
+
+Passed to `xpath.CompileWith`. `xpath.Compile(src, ns)` is the two-argument
+convenience form and compiles as XPath 2.0; everything else is a field here.
+
+```go
+c, err := xpath.CompileWith(src, xpath.CompileOptions{
+    Namespaces: ns,
+    Version:    xpath.XPath31,
+    Context:    ctx,       // a deadline for the compile itself
+    MaxBytes:   1 << 20,   // refuse a source longer than this
+})
+```
+
+| Field | Type | Zero value | What it does |
+|---|---|---|---|
+| `Namespaces` | `NamespaceResolver` | no prefixes bound | Resolves prefixes in the expression. `nil` is fine for an expression that uses none. |
+| `Version` | `Version` | `XPath20` | Which version of the language to parse. The zero value is 2.0 so that an existing `Compile` caller keeps the behaviour it had. |
+| `RefFloor` | `Version` | same as `Version` | The lowest version whose named-function-reference rules apply; XSLT sets it from the stylesheet's own `version`. |
+| `XQuery` | `bool` | XPath | The expression came from an XQuery module; see `ParseXQuery` for the one rule that differs. |
+| `Context` | `context.Context` | no deadline | A deadline or cancellation for the compile. The optimiser checks it every few thousand nodes; parsing does not, so a refusal can arrive late on a very large source. `XPDY0130` wrapping `xdm.ErrResourceLimit` and the context's error. |
+| `MaxBytes` | `int` | unbounded | Refuse a source longer than this before parsing it, as `XPDY0130` wrapping `xdm.ErrResourceLimit`. |
+
+`CompileVersion`, `CompileXQuery` and `CompileVersionRefFloor` are the older
+positional spellings. They are deprecated as of 2026-09-14, delegate to
+`CompileWith`, and stay for the life of v1; nothing in this repository calls
+them any more.
 
 ---
 
@@ -607,6 +671,45 @@ hands back the raw bytes of any file inside the roots.
 implied by nothing else. On the command line it is `-allow-unparsed-text`,
 reading from the `-allow-dir` roots.
 
+### fn:environment-variable
+
+Off by default, with a switch of its own: `TransformOptions.Environment` in
+`xslt`, `Context.Environment` in `xpath`. Nil withholds the process environment
+from both `fn:environment-variable($name)` and
+`fn:available-environment-variables()`. Setting the document or text resolver
+does not set it — those confine reads to a URI space you chose, while this
+reads process state no root bounds, and a server's environment routinely holds
+credentials.
+
+Withholding is not an error. `fn:environment-variable` returns the empty
+sequence and `fn:available-environment-variables` returns the empty sequence,
+which is the answer an unset variable and an empty environment give. That is
+deliberate and costs no conformance: F&O 3.1 §16.2.1 makes it
+implementation-dependent which variables are available, so a withheld variable
+is indistinguishable from an unset one by design. The other resource gates
+raise instead (`FODC0002`, `FOUT1170`) because there a stylesheet cannot
+otherwise tell "no documents" from "switched off"; here the spec has already
+said the two are the same thing.
+
+`xpath.EnvironmentResolver` is the interface — a lookup and an enumeration.
+It is an interface rather than a bool because the useful grant is *which*
+names, not on or off: a stylesheet that needs `REPORT_MODE` should not thereby
+see `AWS_SECRET_ACCESS_KEY`.
+
+```go
+type environment map[string]string
+
+func (e environment) LookupEnvironment(n string) (string, bool) { v, ok := e[n]; return v, ok }
+func (e environment) EnvironmentNames() []string { /* the keys */ }
+
+ctx.Environment = environment{"REPORT_MODE": "summary"}   // xpath
+opts.Environment = environment{"REPORT_MODE": "summary"}  // xslt.TransformOptions
+```
+
+`xpath.OSEnvironment{}` is the widest implementation, exposing every variable
+the process holds. It is never installed by default and has to be named; reach
+for it only where whatever runs is trusted with the process's own secrets.
+
 ### xslt.FileResolver
 
 `xslt.NewFileResolver(roots...)` is the one confinement every read goes
@@ -616,7 +719,7 @@ only the roots.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `Roots` | `[]string` | the constructor's arguments | The directories a path may resolve inside. A path escaping all of them is refused, and a symlink is resolved before the check. |
+| `Roots` | `[]string` | the constructor's arguments | The directories a path may resolve inside. A path escaping all of them is refused, and confinement is enforced at the open by `os.Root`. |
 | `AllowDOCTYPE` | `bool` | refuse | Permits a `DOCTYPE` in the documents this resolver parses. |
 | `ExternalEntities` | `bool` | refuse | Permits those documents to read external entities, through this same resolver. Separate from `AllowDOCTYPE`. |
 | `UnparsedText` | `bool` | refuse | Permits `fn:unparsed-text` to read through this resolver. |
@@ -664,8 +767,8 @@ so node identities must not be held across the call.
 no network; it can read only what a resolver hands it. `xslt.FileResolver`
 implements `xdm.IncludeResolver` through the same `resolvePath` that gates
 `fn:doc`, `xsl:include` and external entities — a non-file scheme is rejected
-before the filesystem is touched, symlinks are resolved before the containment
-check, and a path outside the roots is refused. An inclusion therefore reaches
+before the filesystem is touched, confinement is enforced at the open by
+`os.Root`, and a path outside the roots is refused. An inclusion therefore reaches
 nothing `fn:doc` could not already reach. A **nil** resolver refuses every
 inclusion, which is not the same as doing nothing: the include still fails, so
 it still uses its `xi:fallback` or is a fatal error.
@@ -797,6 +900,9 @@ seq, err := q.Eval(xpath.NewContext(nil, xpath.Builtins()))
 | `ModuleResolver` | `ModuleResolver` | *(none)* | Locates a module `Modules` does not have. **Nil by default: with no resolver an `at` location is never opened** and an import that cannot be answered is `XQST0059`. |
 | `MaxModules` | `int` | *(none)* | Modules one compilation may load, transitively. Zero means `DefaultMaxModules` (512). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
 | `MaxModuleBytes` | `int64` | *(none)* | Total module source one compilation may read, cumulatively. Zero means `DefaultMaxModuleBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
+| `Schemas` | `[]Schema` | *(the schema store)* | Schemas `import schema` may find, registered by target namespace with their source or their assembled `*xsd.Schema` components. Consulted before `SchemaResolver`, and reads nothing. |
+| `SchemaResolver` | `xsd.Resolver` | *(none)* | Locates a schema `Schemas` does not have. **Nil by default: with no resolver an `at` location is never opened** and an import that cannot be answered is `XQST0059`. The same resolver is handed to `xsd` for the imported schema's own `xs:include` and `xs:import`. |
+| `MaxSchemaBytes` | `int64` | *(none)* | Total schema source one compilation may read, cumulatively across every import. Zero means `DefaultMaxSchemaBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
 
 Nine prefixes are bound before `Namespaces` is consulted and never need to be
 listed: `xml`, `xs`, `xsi`, `fn`, `local`, `math`, `map` and `array` from
@@ -812,12 +918,13 @@ without a resolver, and so does `import module` — but an untrusted query can
 still spend arbitrary CPU and memory, so bound it with `ctx.Ctx` and a timeout
 the way [server.md](server.md) does for stylesheets.
 
-`import module` follows that rule exactly. `ModuleResolver` is nil in the zero
-value, so an `at` location is **never opened** and a query cannot read a file
-by naming one; `Modules` and `MapModuleResolver` supply modules from memory
-without reading anything. See [security.md](security.md) for why the two
-bounds refuse the compilation rather than compiling against the modules that
-fitted.
+`import module` and `import schema` follow that rule exactly.
+`ModuleResolver` and `SchemaResolver` are nil in the zero value, so an `at`
+location is **never opened** and a query cannot read a file by naming one;
+`Modules`, `MapModuleResolver` and `Schemas` supply what an import needs from
+memory without reading anything. See [security.md](security.md) for why the
+bounds refuse the compilation rather than compiling against the modules — or
+the half of a schema — that fitted.
 
 See [xquery.md](xquery.md) for the guide.
 

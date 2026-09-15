@@ -1,6 +1,7 @@
 package xquery
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -201,6 +202,20 @@ done:
 	if err != nil {
 		return xpath.SequenceType{}, p.errorAt(start, "%v", err)
 	}
+	// §3.14.2 gives a CaseClause a SequenceType, so its item type is bound by
+	// the rule every other ItemType position obeys: only a generalized atomic
+	// type — an atomic type or a *pure* union — may appear. "instance of",
+	// "treat as" and a function signature all apply this already; typeswitch
+	// parsed the type raw and so accepted a list type, or a union derived by
+	// restriction, that names a type but not an item type. The clause then
+	// simply failed to match and the default branch answered, turning a static
+	// error into a wrong value. That is typeswitch-113/-114/-115.
+	//
+	// A pure union is still admitted, which is what keeps typeswitch-116
+	// passing: the check is on purity, not on being a union.
+	if err := xpath.CheckItemTypePurity(st, "a typeswitch case"); err != nil {
+		return xpath.SequenceType{}, p.errorAt(start, "%v", err)
+	}
 	return st, nil
 }
 
@@ -230,6 +245,9 @@ func (n *typeswitchExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 // untouched. It is not treated-as or cast to the matched type — the value
 // already conforms, so there is nothing to convert.
 func (n *typeswitchExpr) run(ctx *evalContext) (xdm.Sequence, error) {
+	if err := n.checkClauseVars(ctx); err != nil {
+		return nil, err
+	}
 	seq, err := n.operand.sequence(ctx)
 	if err != nil {
 		return nil, err
@@ -252,4 +270,64 @@ func bindCaseVar(ctx *evalContext, name *xdm.QName, seq xdm.Sequence) *evalConte
 		return ctx
 	}
 	return &evalContext{xp: ctx.xp.WithVar(*name, seq), sc: ctx.sc}
+}
+
+// checkClauseVars reports XPST0008 for a variable a clause's return expression
+// names and nothing binds.
+//
+// §3.14.2 scopes a CaseClause's variable to that clause's own return
+// expression and to nothing else, so "case node() return $i case $i as
+// xs:integer return 1" names an $i that is out of scope where it is written,
+// even though the very next clause binds that name. The same holds of the
+// default clause's variable. Both are static errors, and neither shows itself
+// by evaluating: a clause whose type does not match is never entered, so the
+// reference is never reached and the typeswitch quietly answers from another
+// branch. K2-sequenceExprTypeswitch-5, -6 and -7 are exactly those three
+// shapes.
+//
+// The check runs against the LIVE evaluation context rather than a static
+// scope the parser tracked, for the reason checkBodyVars gives: only the
+// context knows the whole set of names in scope, which includes what an
+// enclosing FLWOR bound and what the host bound directly. Judging a name
+// against a lexical guess would refuse "let $i := 1 return typeswitch (...)
+// case $i as xs:integer return 1 default return $i", where the default's $i
+// is the let's and is perfectly bound.
+//
+// Only a clause that compiled wholly to an XPath expression is checked. One
+// this package had to parse holds XQuery's own binding forms, which
+// FreeVariables cannot see through, and a name they bind would be reported as
+// free -- the same trade checkBodyVars makes, and for the same reason: a case
+// missed costs less than a valid query refused.
+func (n *typeswitchExpr) checkClauseVars(ctx *evalContext) error {
+	for _, c := range n.cases {
+		if err := checkBranchVars(c.ret, c.variable, ctx); err != nil {
+			return err
+		}
+	}
+	return checkBranchVars(n.deflt, n.defltVar, ctx)
+}
+
+// checkBranchVars is checkClauseVars for one branch, whose own variable --
+// the only name the branch adds to what the context already holds -- is bound
+// where it is written and so is never free.
+func checkBranchVars(ret node, own *xdm.QName, ctx *evalContext) error {
+	e, ok := ret.(*enclosed)
+	if !ok || ctx == nil || ctx.xp == nil {
+		return nil
+	}
+	body := e.expr.inspect()
+	if body == nil || len(e.expr.ops) > 0 {
+		return nil
+	}
+	for _, name := range body.FreeVariables() {
+		if own != nil && name == *own {
+			continue
+		}
+		if _, bound := ctx.xp.LookupVar(name); bound {
+			continue
+		}
+		return fmt.Errorf("XPST0008: undeclared variable $%s",
+			name.Lexical())
+	}
+	return nil
 }

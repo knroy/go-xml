@@ -139,8 +139,19 @@ func treeOf(res *xslt.Result) *xdm.Node {
 	// synthetic root reports a different set of in-scope namespaces than the
 	// one the engine gave it. element-0306 counts exactly that, and rebuilding
 	// unconditionally cost it one namespace node.
+	// A result whose method makes build-tree default to no -- json and
+	// adaptive -- has no final result tree, and Result.Tree now says so by
+	// returning nil, which is XSLT 3.0 section 24.1: with build-tree="no" no
+	// document node is created. The suite still writes tree-shaped assertions
+	// about such a result (arrays-304 and si-fork-119 use method="adaptive",
+	// maps-017 method="json", and all three assert on /out), so the harness
+	// builds the document the assertion is written about rather than asking
+	// the engine to manufacture one it was told not to build. That is the
+	// same thing the catalog's own driver does.
 	if !needsRebuild(res) {
-		return res.Tree()
+		if t := res.Tree(); t != nil {
+			return t
+		}
 	}
 	tree := xdm.NewTree()
 	for _, it := range res.Nodes {
@@ -237,6 +248,55 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 			// XTSE0220 and a schema-assembly failure are both defensible.
 			return true, ""
 		}
+		// Judged on the error's own code rather than by searching the whole
+		// rendered message, which also succeeds when the code appears
+		// somewhere other than as the code -- in a quoted fragment of the
+		// input, or as a substring of a longer one -- and so would pass a case
+		// that failed for a different reason.
+		//
+		// The comparison is deliberately not a bare xdm.ErrorCode(terr)
+		// equality. Measured over the full XSLT 3.0 suite, the two disagree on
+		// 356 cases, in two groups that need opposite treatment:
+		//
+		//   - 351 carry no structured code at all. A large family of static
+		//     errors is built with fmt.Errorf and writes the code as a
+		//     trailing parenthetical -- `attribute "as" is not allowed on
+		//     xsl:call-template (XTSE0090)` -- which xdm.ErrorCode cannot
+		//     read: it looks for a leading code, or one delimited by ": ".
+		//     For these it returns "", so a strict swap would fail all 351 and
+		//     drop the in-scope figure from 11,490 to 11,134.
+		//
+		//   - 5 report the correct code but have it read past. The error is
+		//     built as fmt.Errorf("%s: %s: %w", code, what, inner), so the
+		//     OUTER code is the engine's verdict while the wrapped inner cause
+		//     is still an *xdm.Error; errors.As finds the inner one first and
+		//     xdm.ErrorCode answers with it. as-1602 reports "XTTE0505: ...:
+		//     FORG0001: ..." and is right to; a strict swap reads FORG0001 and
+		//     fails a case the engine got right. The same shape covers
+		//     variable-0115, sequence-0132, avt-3201 and error-0340c.
+		//
+		// So the outermost code is the authoritative one, and it is taken from
+		// the message prefix when there is one. xdm.ErrorCode is consulted
+		// only for an error whose rendered form does not lead with a code; the
+		// substring match remains the last resort for the uncoded family.
+		//
+		// Fixing this properly means moving that family to xdm.Errorf and
+		// giving ErrorCode outermost-wins precedence. ErrorCode also decides
+		// xsl:catch matching, so that is an engine change and not this one.
+		if code, _, ok := strings.Cut(terr.Error(), ":"); ok && isErrorCode(code) {
+			if code == a.Code {
+				return true, ""
+			}
+			return false, fmt.Sprintf("expected %s, got %s: %s",
+				a.Code, code, firstLine(terr.Error()))
+		}
+		if code := xdm.ErrorCode(terr); code != "" {
+			if code == a.Code {
+				return true, ""
+			}
+			return false, fmt.Sprintf("expected %s, got %s: %s",
+				a.Code, code, firstLine(terr.Error()))
+		}
 		if strings.Contains(terr.Error(), a.Code) {
 			return true, ""
 		}
@@ -304,6 +364,32 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		return evalAssert(res, root,
 			"$result instance of "+strings.TrimSpace(a.Value), a.NS, schema,
 			rawVar)
+
+	case "assert-count":
+		if terr != nil {
+			return false, "transform failed: " + firstLine(terr.Error())
+		}
+		// assert.xsl is "count($result) = number(.)", and it is written that
+		// way here for the same reason assert-type is: the count is of the
+		// result sequence, which is exactly what $result binds. Counting
+		// res.Nodes in Go instead would be right only for the raw cases and
+		// would silently answer 1 for every tree case.
+		return evalAssert(res, root,
+			"count($result) = "+strings.TrimSpace(a.Value), a.NS, schema,
+			rawVar)
+
+	case "assert-deep-eq":
+		if terr != nil {
+			return false, "transform failed: " + firstLine(terr.Error())
+		}
+		// assert.xsl evaluates the assertion's content as an XPath
+		// expression and compares with deep-equal. The content is a sequence
+		// constructor -- initial-function-002 writes "1234,5678" -- so it is
+		// parenthesised rather than pasted in bare, which would otherwise
+		// make deep-equal($result, 1234, 5678) a three-argument call.
+		return evalAssert(res, root,
+			"deep-equal($result, ("+strings.TrimSpace(a.Value)+"))", a.NS,
+			schema, rawVar)
 
 	case "assert-string-value":
 		if terr != nil {
@@ -499,8 +585,15 @@ func compareXMLText(serialised, want string, normalizeSpace bool) (bool, string)
 	// The expected value may be a fragment with several top-level nodes,
 	// which is not a document; wrapping both makes them parseable and
 	// compares them on equal terms.
-	gotDoc, err1 := xdm.ParseString("<w>"+got+"</w>", xdm.ParseOptions{})
-	wantDoc, err2 := xdm.ParseString("<w>"+want+"</w>", xdm.ParseOptions{})
+	// The wrapper declares XML 1.1 because a namespace undeclaration,
+	// xmlns:p="", is 1.1 syntax and several namespace-26xx cases expect one in
+	// their result. This is a comparison of two fragments, not a validation of
+	// a document: parsing the expected value under a version that cannot spell
+	// it would drop both sides to the whitespace-sensitive text fallback below
+	// and report a mismatch that does not exist.
+	const wrap = `<?xml version="1.1"?><w>`
+	gotDoc, err1 := xdm.ParseString(wrap+got+"</w>", xdm.ParseOptions{})
+	wantDoc, err2 := xdm.ParseString(wrap+want+"</w>", xdm.ParseOptions{})
 	if err1 != nil || err2 != nil {
 		// Fall back to a text comparison when either side will not parse,
 		// which happens for results that are not well-formed XML by design.
@@ -787,7 +880,7 @@ func (s schemaNS) SubstitutionGroupMembers(name xdm.QName) []xdm.QName {
 	if !ok {
 		return nil
 	}
-	members := head.Substitutable()
+	members := head.SchemaElementMembers()
 	if len(members) == 0 {
 		return nil
 	}
@@ -861,22 +954,43 @@ func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]str
 	// which is the tree the assertion is written about. It admits both shapes
 	// because it never goes through a serialiser, and it is what the suite's
 	// own driver evaluates against.
-	if root == nil {
+	// A raw-result assertion needs no tree: it is written about the sequence
+	// bound below, and asking for a tree of "the xs:integer 986572" has no
+	// answer. Only the tree-shaped assertions need the context item, so the
+	// absence is reported for them alone.
+	if root == nil && rawVar == "" {
 		return false, "the transform produced no result tree"
 	}
 	ctx := xpath.NewContext(root, xpath.Builtins())
+	// The assertion language is not the language of the stylesheet under
+	// test: the catalog's own driver evaluates assertions with the full
+	// function library, and sx-arithmetic-004 writes
+	// "not(has-children(/out))" -- an XPath 3.0 function -- to check a result
+	// produced by a stylesheet the 2.0 rules would otherwise judge. Raising
+	// the library version alone leaves the grammar where evalAssertExpr's
+	// comment puts it, so only which functions exist changes.
+	ctx.LibraryVersion = xpath.XPath31
 	// The suite's own driver binds $result to the result of the
 	// transformation. That is the document node the assertions are written
 	// about, the same tree the context item is: on-empty-115b asks
 	// $result/child::foo of it and seqtor-043b asserts it is a
 	// document-node(). Binding the raw result sequence instead would leave
 	// both without the wrapper the suite expects.
-	ctx = ctx.WithVar(xdm.QName{Local: "result"}, xdm.One(root))
-	// A test declaring <output tree="no" result-var="v"/> asks for the raw
-	// result sequence instead of the document node wrapping it. The two are
-	// not interchangeable: a sequence of atomic values has no tree form, and
-	// wrapping it turns eight xs:decimal items into one text node, against
-	// which the deep-equal the test writes can never hold.
+	if root != nil {
+		ctx = ctx.WithVar(xdm.QName{Local: "result"}, xdm.One(root))
+	}
+	// A test declaring <output tree="no"/> without serialize="yes" asks for
+	// the raw result sequence instead of the document node wrapping it. The
+	// two are not interchangeable: a sequence of atomic values has no tree
+	// form, and wrapping it turns eight xs:decimal items into one text node,
+	// against which the deep-equal the test writes can never hold — nor can
+	// the "instance of xs:integer" that initial-function-100b writes, which
+	// a text node answers false to however right the value is.
+	//
+	// This is bound after the document-node binding above, so a raw variable
+	// that is itself named "result" — which is the ordinary case, the suite
+	// naming it explicitly only once — replaces it rather than sitting
+	// alongside it.
 	if rawVar != "" {
 		ctx = ctx.WithVar(xdm.QName{Local: rawVar}, res.Nodes)
 	}
@@ -968,7 +1082,20 @@ func resultString(res *xslt.Result) string {
 	// every atomic value the stylesheet returned -- an xsl:sequence at the
 	// top of a template routinely returns one -- and reported the empty
 	// string for a transform that had produced the asserted text.
-	return res.Tree().StringValue()
+	// Result.Tree is the normalised document -- it runs the item separator
+	// and the adjacent-atomic join, which is what the string value is
+	// defined over. treeOf's rebuild branch does neither, so routing every
+	// result through it dropped the separators from a result carrying a
+	// document node: seqtor-017 builds one with xsl:document and asserts a
+	// string value whose items are space-separated.
+	//
+	// So the tree is preferred when the engine has one, and treeOf is the
+	// fallback for the json and adaptive methods, where build-tree defaults
+	// to no and there is no final result tree to normalise.
+	if t := res.Tree(); t != nil {
+		return t.StringValue()
+	}
+	return treeOf(res).StringValue()
 }
 
 // stripDecl removes an XML declaration and any leading whitespace.

@@ -248,25 +248,6 @@ func TestDuplicateAttributeIsAnError(t *testing.T) {
 	}
 }
 
-// Only "import schema" is still refused by name. "import module" was refused
-// the same way until it was implemented; what it does now — including the
-// XQST0059 it raises for a module nothing supplies — is in module_test.go.
-func TestUnimplementedIsNamed(t *testing.T) {
-	for _, c := range []struct{ src, want string }{
-		{`import schema namespace s = "urn:x"; 1`, "import"},
-	} {
-		_, err := run(t, c.src, xquery.Options{})
-		if err == nil {
-			t.Errorf("%s: want an error naming %q", c.src, c.want)
-			continue
-		}
-		if !strings.Contains(err.Error(), c.want) ||
-			!strings.Contains(err.Error(), "not implemented") {
-			t.Errorf("%s: want a clear %q error, got %v", c.src, c.want, err)
-		}
-	}
-}
-
 // The prolog was refused by name until it was implemented. These two are what
 // that refusal used to cover, kept as a check that the boundary moved rather
 // than as a regression test for a message.

@@ -1074,8 +1074,21 @@ func (p *Parser) parseFunctionCallWith(first Expr) (Expr, error) {
 		return nil, err
 	}
 	// A partial application is a function item, not a call, so the
-	// constructor folds below must not claim it.
+	// constructor folds below must not claim it -- with one exception. The
+	// constructor function of an imported schema type is registered nowhere,
+	// so "s:myType(?)" would look the function up in the library, find
+	// nothing and report XPST0017. It denotes the same function item
+	// "s:myType#1" does, and XPath 3.0 3.1.6 makes a one-placeholder partial
+	// application of an arity-1 function exactly that item: no argument is
+	// supplied, so there is nothing to evaluate eagerly and the two forms
+	// cannot differ. CastAs-UnionType-9 and -15 write it.
 	if hasPlaceholder(args) {
+		if len(args) == 1 {
+			if c, ok := p.foldSchemaConstructor(
+				name, []Expr{&VarRef{Name: ConstructorArgVar}}); ok {
+				return &NamedFunctionRef{Name: name, Arity: 1, Cast: c}, nil
+			}
+		}
 		return &FuncCall{Name: name, Args: args}, nil
 	}
 	if q, ok, err := p.foldQNameConstructor(name, args); err != nil {
@@ -1102,6 +1115,15 @@ func (p *Parser) parseFunctionCallWith(first Expr) (Expr, error) {
 // Only a one-argument call qualifies. A built-in xs: name never reaches here:
 // those are registered in the library and resolved before this point.
 func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool) {
+	return schemaConstructorCast(name, args, p.ns, p.version)
+}
+
+// schemaConstructorCast is the body of foldSchemaConstructor with the static
+// context passed explicitly, so that the same resolution is reachable from
+// fn:function-lookup -- which runs after parsing and holds the resolver on the
+// evaluation context rather than on a parser. See lookupSchemaConstructor.
+func schemaConstructorCast(name xdm.QName, args []Expr,
+	ns NamespaceResolver, version Version) (Expr, bool) {
 	if len(args) != 1 || name.URI == xdm.NSXS {
 		return nil, false
 	}
@@ -1109,64 +1131,20 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 	if name.Prefix != "" {
 		lex = name.Prefix + ":" + name.Local
 	}
-	prim, isAtomic, found := schemaTypeOf(lex, p.ns)
+	// The constructor is defined as a cast, so its target is resolved exactly
+	// as a type name in type position is -- atomic, pure union, list, or an
+	// impure or restricted union -- and F&O 3.0 17.5 is why the two cannot
+	// disagree: myType:sizeType is an xs:integer restricted to 1..19, so
+	// "20 cast as myType:sizeType" fails on maxInclusive and
+	// "myType:sizeType(20)" must too (user-defined-2 requires FORG0001).
+	// Castable-UnionType-10 and Castable-ListType-10 need the union and list
+	// constructors to exist before the outer castable can be asked at all.
+	st, found := schemaTypeCastTarget(lex, ns)
 	if !found {
 		return nil, false
 	}
-	if !isAtomic {
-		// A *pure union type* has a constructor for the same reason an atomic
-		// type does: the constructor is defined as a cast, and a cast to a
-		// pure union is legal — it tries the member types in order. Only a
-		// pure union qualifies, because SchemaUnionMembers is nil for any
-		// other, and an impure one has no cast to be defined as.
-		//
-		// Castable-UnionType-10 is "s:myUnionType1('2001-01-01') castable as
-		// s:myUnionType1", which needs the inner constructor to exist at all.
-		members, pure := schemaUnionMembersOf(lex, p.ns)
-		if !pure {
-			// A list type has a constructor for the same reason: it is
-			// defined as a cast, and a cast to a list type is legal (F&O 3.0
-			// 18.3). Castable-ListType-10 is
-			// "s:intListType1('1 2 3') castable as s:intListType1", which
-			// needs the inner constructor to exist before the outer castable
-			// can be asked at all.
-			if item, isList := schemaTypeIsList(lex, p.ns); isList {
-				st := SequenceType{
-					SchemaType:         annotationKeyOf(lex, p.ns),
-					SchemaListType:     true,
-					SchemaListItemType: item,
-					Occurrence:         "?",
-				}
-				if lex, ns := lex, p.ns; true {
-					st.SchemaValueValid = func(value string) error {
-						known, err := schemaValueValid(lex, ns, value)
-						if !known {
-							return nil
-						}
-						return err
-					}
-				}
-				return &CastExpr{Operand: args[0], Type: st}, true
-			}
-			return nil, false
-		}
-		st := SequenceType{
-			SchemaType:         annotationKeyOf(lex, p.ns),
-			SchemaUnionMembers: members,
-			Occurrence:         "?",
-		}
-		if lex, ns := lex, p.ns; true {
-			st.SchemaValueValid = func(value string) error {
-				known, err := schemaValueValid(lex, ns, value)
-				if !known {
-					return nil
-				}
-				return err
-			}
-		}
-		return &CastExpr{Operand: args[0], Type: st}, true
-	}
-	if prim == xdm.TypeQName {
+	st.Occurrence = "?"
+	if st.HasAtomicType && st.AtomicType == xdm.TypeQName {
 		// A type derived from xs:NOTATION (or from xs:QName) has the QName
 		// value space, so its constructor has to resolve the prefix here,
 		// while the static context still exists — the same reason xs:QName()
@@ -1174,7 +1152,7 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 		// QName with no namespace URI, which made two notation values with
 		// different prefixes for the same namespace compare unequal and two
 		// values with the same prefix for different namespaces compare equal.
-		if q, ok, err := p.foldQNameLiteral(args[0]); err == nil && ok {
+		if q, ok, err := foldQNameLiteralIn(ns, args[0]); err == nil && ok {
 			// The fold resolves the prefix but says nothing about the facets
 			// the schema author wrote, so z:notat('z:de') built a NOTATION
 			// value for a notation the enumeration does not admit. The check
@@ -1189,7 +1167,7 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 			// that is never taken must not stop the stylesheet compiling.
 			expanded := q.Val.QName()
 			clark := "{" + expanded.URI + "}" + expanded.Local
-			if known, verr := schemaValueValid(lex, p.ns, clark); known && verr != nil {
+			if known, verr := schemaValueValid(lex, ns, clark); known && verr != nil {
 				return &errorExpr{err: xdm.Errorf("FORG0001", "%v", verr)}, true
 			}
 			// The ANNOTATION KEY, not the lexical name: the derived name is
@@ -1197,7 +1175,7 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 			// matches none of them. Leaving it lexical made the constructor's
 			// own result fail "instance of" against the very type it was
 			// built for.
-			q.Val = q.Val.WithDerived(annotationKeyOf(lex, p.ns))
+			q.Val = q.Val.WithDerived(annotationKeyOf(lex, ns))
 			return q, true
 		}
 		// XPath 3.0 admits a computed string here for the same reason it does
@@ -1206,25 +1184,17 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 		// still have to be checked, but only once the value exists, so both
 		// the resolver and the type's name are carried to run time.
 		// notation-0001..0004 cast a computed string to a NOTATION subtype.
-		if p.version.atLeast30() {
+		if version.atLeast30() {
 			return &dynamicQName{
 				arg:     args[0],
-				ns:      p.ns,
+				ns:      ns,
 				lexType: lex,
-				derived: annotationKeyOf(lex, p.ns),
+				derived: annotationKeyOf(lex, ns),
 			}, true
 		}
 		return nil, false
 	}
-	return &CastExpr{
-		Operand: args[0],
-		Type: SequenceType{
-			AtomicType:    prim,
-			HasAtomicType: true,
-			SchemaType:    annotationKeyOf(lex, p.ns),
-			Occurrence:    "?",
-		},
-	}, true
+	return &CastExpr{Operand: args[0], Type: st}, true
 }
 
 // foldQNameConstructor rewrites xs:QName("prefix:local") into a QName literal.
@@ -1264,13 +1234,17 @@ func (p *Parser) foldQNameConstructor(name xdm.QName, args []Expr) (Expr, bool, 
 // value space is the QName one, because both have to bind the prefix while the
 // namespace declarations of the expression are still reachable.
 func (p *Parser) foldQNameLiteral(arg Expr) (*Literal, bool, error) {
+	return foldQNameLiteralIn(p.ns, arg)
+}
+
+func foldQNameLiteralIn(ns NamespaceResolver, arg Expr) (*Literal, bool, error) {
 	lit, ok := arg.(*Literal)
 	if !ok || lit.Val.Type != xdm.TypeString {
 		return nil, false, xdm.Errorf("XPTY0004",
 			"xs:QName() requires a string literal: the prefix must be resolvable "+
 				"in the static context of the expression")
 	}
-	lex := strings.TrimSpace(lit.Val.Str())
+	lex := trimSchemaSpace(lit.Val.Str())
 	prefix, local := "", lex
 	if i := strings.Index(lex, ":"); i >= 0 {
 		prefix, local = lex[:i], lex[i+1:]
@@ -1290,7 +1264,7 @@ func (p *Parser) foldQNameLiteral(arg Expr) (*Literal, bool, error) {
 	}
 	uri := ""
 	if prefix != "" {
-		u, found := p.ns.ResolvePrefix(prefix)
+		u, found := ns.ResolvePrefix(prefix)
 		if !found {
 			// FONS0004 is the namespace-function code for a prefix with no
 			// binding. XPST0081 is the *static* form, used where an
@@ -1305,7 +1279,7 @@ func (p *Parser) foldQNameLiteral(arg Expr) (*Literal, bool, error) {
 	// contexts; for xs:QName the spec says it takes the default namespace for
 	// elements and types, which is what DefaultElementNamespace reports.
 	if prefix == "" {
-		uri = p.ns.DefaultElementNamespace()
+		uri = ns.DefaultElementNamespace()
 	}
 	return &Literal{Val: xdm.NewQNameValue(
 		xdm.QName{URI: uri, Prefix: prefix, Local: local})}, true, nil
@@ -1402,12 +1376,11 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 	defer func() { p.depth-- }()
 	if p.depth > maxParseDepth {
 		// The exact twin of the expression-nesting guard in parser.go, and
-		// it is wrapped the same way: XPST0003 is kept because callers and
-		// the conformance suites match on it, but the type is well-formed
-		// and merely deeper than this processor will parse, so the sentinel
-		// is added alongside. See xdm.ErrResourceLimit.
+		// it is wrapped the same way: the type is well-formed and merely
+		// deeper than this processor will parse, so §2.3.1's XPDY0130 with
+		// the sentinel alongside. See xdm.ErrResourceLimit.
 		return st, resourceLimit(p.errorf(
-			"XPST0003: type nesting exceeds %d levels", maxParseDepth))
+			"XPDY0130: type nesting exceeds %d levels", maxParseDepth))
 	}
 
 	t := p.cur()
@@ -1558,47 +1531,8 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 			// point of not returning here. Returning early gave an imported
 			// schema type no occurrence indicator at all, so "foo:testType*"
 			// reported a syntax error at the "*" while "xs:integer*" parsed.
-			if prim, isAtomic, found := schemaTypeOf(t.Val, p.ns); found {
-				st.SchemaType = annotationKeyOf(t.Val, p.ns)
-				// The facets of an imported simple type are only in the
-				// schema, so the check is captured here rather than being
-				// reconstructed from the type code at cast time.
-				if lex, ns := t.Val, p.ns; true {
-					st.SchemaValueValid = func(value string) error {
-						known, err := schemaValueValid(lex, ns, value)
-						if !known {
-							return nil
-						}
-						return err
-					}
-					// A NOTATION-derived type has the QName value space, so a
-					// cast to it has to expand the operand's prefix here,
-					// where the bindings are. See SchemaExpandQName.
-					if prim == xdm.TypeQName {
-						st.SchemaExpandQName = func(lexical string) (xdm.QName, bool) {
-							q, err := resolveLexicalQName(lexical, ns)
-							if err != nil {
-								return xdm.QName{}, false
-							}
-							return q, true
-						}
-					}
-				}
-				if isAtomic {
-					st.AtomicType, st.HasAtomicType = prim, true
-				} else if members, pure := schemaUnionMembersOf(t.Val, p.ns); pure {
-					// A pure union has no single primitive to erase to, so it
-					// arrives here as "known but not atomic". Its members are
-					// what makes it matchable at all.
-					st.SchemaUnionMembers = members
-				} else if item, isList := schemaTypeIsList(t.Val, p.ns); isList {
-					// A list type has no single primitive either, for the
-					// other reason: its value is a sequence of tokens. Marking
-					// it keeps a cast to it off the atomic-target error, and
-					// SchemaValueValid above is what actually checks a value.
-					st.SchemaListType = true
-					st.SchemaListItemType = item
-				}
+			if sst, found := schemaTypeCastTarget(t.Val, p.ns); found {
+				st = sst
 				goto occurrence
 			}
 			return st, p.errorf("XPST0051: unknown type %q", t.Val)
@@ -1618,8 +1552,11 @@ occurrence:
 	// "xs:integer ? * 3" is an optional integer multiplied by 3, not an
 	// occurrence indicator followed by a second one: taking both left the "3"
 	// with no operator in front of it.
-	if occ, ok := p.acceptOp("?", "*", "+"); ok {
+	if occ, ok := p.acceptOp(p.occurrenceIndicators()...); ok {
 		st.Occurrence = occ
+		return st, nil
+	}
+	if p.singleType {
 		return st, nil
 	}
 	// "*" after a type name is the occurrence indicator, but the lexer cannot
@@ -1759,12 +1696,50 @@ func (p *Parser) parseMapTest(st *SequenceType) error {
 	return p.expectOp(")")
 }
 
+// parseSingleType parses the target of "cast as" and "castable as", which is a
+// SingleType and not a SequenceType.
+//
+//	[77] SingleType ::= SimpleTypeName "?"?
+//
+// The distinction is not cosmetic. A SequenceType's occurrence indicator may be
+// "*" or "+", and parseSequenceType consumes one greedily, so in
+//
+//	15 cast as t:sizeType + 15 cast as t:floatBased
+//
+// the additive "+" was eaten as an occurrence indicator and the expression
+// reported XPST0003 — the operator vanished before the additive parser could
+// see it. That is op-numeric-add-13/-14/-15. Stopping the scan at "?" leaves
+// the "+" in the token stream as the binary operator it is.
+//
+// A cast target written with a genuine "*" or "+" is still a syntax error, as
+// K-SeqExprCast-1 and -2 require: the indicator is no longer part of the type,
+// so it is left behind as an operator with no right operand and the expression
+// fails to parse. The diagnosis moves, but the error code does not.
+func (p *Parser) parseSingleType() (SequenceType, error) {
+	saved := p.singleType
+	p.singleType = true
+	defer func() { p.singleType = saved }()
+	return p.parseSequenceType()
+}
+
+// occurrenceIndicators returns the indicators a type in the current position
+// may carry: "?" alone inside a cast target, all three anywhere else.
+func (p *Parser) occurrenceIndicators() []string {
+	if p.singleType {
+		return []string{"?"}
+	}
+	return []string{"?", "*", "+"}
+}
+
 // finishOccurrence applies a trailing occurrence indicator to a type that was
 // parsed by a path returning early, rather than falling through to the shared
 // label.
 func (p *Parser) finishOccurrence(st SequenceType) (SequenceType, error) {
-	if occ, ok := p.acceptOp("?", "*", "+"); ok {
+	if occ, ok := p.acceptOp(p.occurrenceIndicators()...); ok {
 		st.Occurrence = occ
+		return st, nil
+	}
+	if p.singleType {
 		return st, nil
 	}
 	if p.cur().Kind == TokWildcard && p.cur().Val == "*" {

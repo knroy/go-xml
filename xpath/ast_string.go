@@ -258,7 +258,7 @@ func nodeTypeMatches(n *xdm.Node, want string) bool {
 			return true
 		}
 	}
-	if schemaTypeNameMatches(n.TypeAnnotation, want) {
+	if schemaTypeNameMatches(xdm.TypeEnvOf(n), n.TypeAnnotation, want) {
 		return true
 	}
 	// The built-in hierarchy is not in the schema's derivation table — nothing
@@ -289,9 +289,16 @@ func nodeTypeMatches(n *xdm.Node, want string) bool {
 	// exactly the cycle the count was guarding against, and the count decided
 	// a definite "does not match" for any legal chain longer than 32 — a
 	// restriction 33 links deep stopped satisfying element(*, xs:string).
+	// The chain is walked in the environment of the schema that VALIDATED this
+	// node, not in the process-global table. The two differ exactly when two
+	// schemas define the same lexical type name differently, and then the
+	// global holds whichever loaded last -- so a node validated as a
+	// restriction of xs:decimal stopped being one the moment an unrelated
+	// schema declared the same name over xs:string. See xdm.TypeEnvironment.
+	env := xdm.TypeEnvOf(n)
 	seen := map[string]bool{a: true}
 	for a != "" {
-		a = xdm.DerivedBase(a)
+		a = env.DerivedBase(a)
 		if a == "" || seen[a] {
 			break
 		}
@@ -339,9 +346,10 @@ func declaredTypeMatches(n *xdm.Node, want string) bool {
 	// whose derivations formed a cycle must not spin here and a repeated name
 	// is what a cycle is.
 	a := n.TypeAnnotation
+	env := xdm.TypeEnvOf(n)
 	seen := map[string]bool{a: true}
 	for a != "" {
-		a = xdm.DerivedBase(a)
+		a = env.DerivedBase(a)
 		if a == "" || seen[a] {
 			break
 		}
@@ -363,12 +371,12 @@ func (t *KindTest) String() string {
 	}
 	if t.HasName && t.Name != nil {
 		if t.TypeName != "" {
-			return base + "(" + t.Name.Lexical() + ", " + t.TypeNameLexical + ")"
+			return base + "(" + t.Name.Lexical() + ", " + t.typeSpelling() + ")"
 		}
 		return base + "(" + t.Name.Lexical() + ")"
 	}
 	if t.TypeName != "" {
-		return base + "(*, " + t.TypeNameLexical + ")"
+		return base + "(*, " + t.typeSpelling() + ")"
 	}
 	return base + "()"
 }
@@ -521,6 +529,46 @@ func (t SequenceType) String() string {
 	}
 	base := "item()"
 	switch {
+	case t.IsNumericType:
+		// xs:numeric has no type code of its own -- it is the union of
+		// xs:double, xs:float and xs:decimal -- so it reached the default
+		// "item()" below. That is not a cosmetic loss: functionItemMatches
+		// compares a typed function test's spelling against the signature
+		// spelling a function item carries, and every signature the manifest
+		// gives fn:abs, fn:floor, fn:ceiling and fn:round says "xs:numeric?".
+		// Rendered as "item()?", the test's own xs:numeric? no longer matched
+		// the signature it was written against, and ArrayTest-063 and -083 --
+		// "[floor#1, ceiling#1, round#1] instance of
+		// array(function(xs:numeric?) as xs:numeric?)" -- answered false.
+		base = "xs:numeric"
+	case t.IsArrayTest:
+		// An array test rendered as "item()" for the same reason and with the
+		// same consequence: it is wider than what was written, so a signature
+		// naming array(*) could not be matched against a test naming it.
+		if t.ArrayMember == nil {
+			base = "array(*)"
+		} else {
+			base = "array(" + t.ArrayMember.String() + ")"
+		}
+	case t.IsFunctionTest:
+		// A typed function test likewise. fn:filter's $f is declared
+		// "function(item()) as xs:boolean"; instanceof132 asks whether
+		// fn:filter#2 is a "function(item()*, function(item()) as xs:boolean)
+		// as item()*". With the inner test rendered "item()", the two sides
+		// of an IDENTICAL type disagreed and the answer was false.
+		if !t.HasFunctionArity {
+			base = "function(*)"
+		} else {
+			parts := make([]string, 0, len(t.FunctionParams))
+			for _, p := range t.FunctionParams {
+				parts = append(parts, p.String())
+			}
+			ret := "item()*"
+			if t.FunctionReturn != nil {
+				ret = t.FunctionReturn.String()
+			}
+			base = "function(" + strings.Join(parts, ", ") + ") as " + ret
+		}
 	case t.IsMapTest:
 		// Rendered because convertForParam names the declared type in its
 		// XPTY0004 message, and "item()" there says nothing about why a map
@@ -566,4 +614,25 @@ func (e *CastExpr) String() string {
 
 func (e *TreatExpr) String() string {
 	return e.Operand.String() + " treat as " + e.Type.String()
+}
+
+// typeSpelling renders a kind test's type argument for String().
+//
+// A BUILT-IN type is rendered as the author wrote it, "xs:date", because that
+// is the spelling the built-in signatures and the subtype tables are written
+// in and the one an error message should show.
+//
+// A SCHEMA type is rendered as its resolved {uri}local key instead. String()
+// is not only a pretty-printer: xdm.FunctionItem.Signature is built from it,
+// and functionItemMatches compares two signatures as strings. Rendering the
+// author's prefix there made the comparison a comparison of PREFIXES -- two
+// tests naming the same type through differently-bound prefixes answered
+// "not a subtype", and the schema registries, which are keyed on {uri}local,
+// could never be reached from a spelling at all. That is the half of
+// FunctionCall-051 that derivesByRestriction alone could not fix.
+func (t *KindTest) typeSpelling() string {
+	if strings.HasPrefix(t.TypeName, "{") {
+		return t.TypeName
+	}
+	return t.TypeNameLexical
 }

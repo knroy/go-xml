@@ -22,7 +22,7 @@ import (
 // item that is an atomic value or a function item falls under the next
 // sentence instead, which returns the value. Conflating absent with
 // not-a-node made every xsl:copy inside an xsl:for-each over atomics an
-// error, which is how DocBook xslTNG failed on all 613 of its test documents.
+// error, which is how DocBook xslTNG failed on all 593 of its test documents.
 func TestCopyOfNonNodeContextItem(t *testing.T) {
 	sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
 		`<xsl:output omit-xml-declaration="yes"/>` +
@@ -52,15 +52,28 @@ func TestCopyWithAbsentContextItemStillFails(t *testing.T) {
 // TestEvaluateCallsStylesheetFunction covers a stylesheet function reached
 // from the target expression of xsl:evaluate.
 //
-// 10.4.1 admits "all user-defined functions ... present in the containing
-// package provided their visibility is not hidden or private", and a
-// declaration with no visibility attribute defaults to private. That default
-// belongs to a package, though, and a plain xsl:stylesheet is not one -- so
-// applying it here made a stylesheet's own functions unreachable from its own
-// xsl:evaluate. Saxon does not apply it either: its XSLT 3.0 results report
-// evaluate-045 as "wrongError". Every stylesheet that evaluates XPath taken
-// from data and calls its own functions from it -- DocBook xslTNG throughout
-// -- depends on this.
+// 10.4.1 admits into the target expression's static context "all user-defined
+// functions ... present in the containing package provided their visibility is
+// not hidden or private", and a declaration with no visibility attribute
+// defaults to private. 3.5 makes a plain xsl:stylesheet an implicit package --
+// "the entire stylesheet comprises a single implicit package", which 3.2 then
+// says "is transformed automatically to a package" -- so the default applies
+// there too, and f:double below is private.
+//
+// This test previously asserted the opposite and was wrong three times over.
+// It claimed a plain xsl:stylesheet is not a package (3.5 says it is); that
+// Saxon does not apply the rule (its XSLT 3.0 submission records evaluate-045
+// as wrongError, "Expected XTDE3160; got XTDE0040" -- it applies the rule and
+// misreports the code); and that DocBook xslTNG depends on the leniency
+// (measured: 577 of 593 documents pass with the rule enforced, unchanged, and
+// XSpec holds at 225).
+//
+// What DocBook actually depended on was a separate defect, now fixed: the
+// restricted library installed for the target expression stayed in the context
+// while a CALLED function's body ran, so f:pi -- which is visibility="public"
+// -- could not reach fp:pi-from-list, which is private and which the evaluated
+// string never names. That cost 512 documents and had nothing to do with this
+// rule. See restrictedLibrary.unrestrict.
 func TestEvaluateCallsStylesheetFunction(t *testing.T) {
 	sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" ` +
 		`xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:f="urn:f">` +
@@ -69,8 +82,57 @@ func TestEvaluateCallsStylesheetFunction(t *testing.T) {
 		`<xsl:sequence select="$n*2"/></xsl:function>` +
 		`<xsl:template match="/"><r><xsl:evaluate xpath="'Q{urn:f}double(21)'"/></r></xsl:template>` +
 		`</xsl:stylesheet>`
+	_, err := runErr(t, sheet, `<a/>`)
+	if err == nil {
+		t.Fatalf("Q{urn:f}double(21) was callable from xsl:evaluate; " +
+			"f:double declares no visibility, so it is private and 10.4.1 " +
+			"requires XTDE3160")
+	}
+	if !strings.Contains(err.Error(), "XTDE3160") {
+		t.Errorf("got %v, want XTDE3160", err)
+	}
+}
+
+// The other half of the rule: the same stylesheet with the visibility written
+// out is admitted. Paired with the test above, this is what says the fix reads
+// the attribute rather than refusing every stylesheet function -- exactly the
+// difference between the suite's evaluate-045 and evaluate-006, which are byte
+// identical apart from this attribute.
+func TestEvaluateCallsPublicStylesheetFunction(t *testing.T) {
+	sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" ` +
+		`xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:f="urn:f">` +
+		`<xsl:output omit-xml-declaration="yes"/>` +
+		`<xsl:function name="f:double" as="xs:integer" visibility="public">` +
+		`<xsl:param name="n" as="xs:integer"/>` +
+		`<xsl:sequence select="$n*2"/></xsl:function>` +
+		`<xsl:template match="/"><r><xsl:evaluate xpath="'Q{urn:f}double(21)'"/></r></xsl:template>` +
+		`</xsl:stylesheet>`
 	if got := run(t, sheet, `<a/>`); !strings.Contains(got, ">42<") {
-		t.Errorf("got %q, want the stylesheet function to be callable", got)
+		t.Errorf("got %q, want a public stylesheet function to be callable", got)
+	}
+}
+
+// A public function whose body calls a private one, reached from a target
+// expression that names only the public one. 10.4.1 governs what the
+// EXPRESSION may reference; fp-style helpers a public function calls
+// internally are ordinary stylesheet code and are not in its scope.
+//
+// This is DocBook xslTNG's shape, reduced: it cost 512 of 593 documents.
+func TestEvaluateReachesPrivateCalleeOfPublicFunction(t *testing.T) {
+	sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" ` +
+		`xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:p="urn:p" xmlns:q="urn:q">` +
+		`<xsl:output omit-xml-declaration="yes"/>` +
+		`<xsl:function name="p:outer" as="xs:integer" visibility="public">` +
+		`<xsl:param name="n" as="xs:integer"/>` +
+		`<xsl:sequence select="q:inner($n)"/></xsl:function>` +
+		`<xsl:function name="q:inner" as="xs:integer">` +
+		`<xsl:param name="n" as="xs:integer"/>` +
+		`<xsl:sequence select="$n*2"/></xsl:function>` +
+		`<xsl:template match="/"><r><xsl:evaluate xpath="'Q{urn:p}outer(21)'"/></r></xsl:template>` +
+		`</xsl:stylesheet>`
+	if got := run(t, sheet, `<a/>`); !strings.Contains(got, ">42<") {
+		t.Errorf("got %q, want the private callee of a public function to be "+
+			"reachable; the target expression never names it", got)
 	}
 }
 

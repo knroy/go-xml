@@ -23,6 +23,7 @@ func (xsltLike) InheritNamespaces() bool  { return true }
 func (xsltLike) PreserveNamespaces() bool { return true }
 func (xsltLike) PreserveTypes() bool      { return true }
 func (xsltLike) DropEmptyText() bool      { return false }
+func (xsltLike) CountNodes(int) error     { return nil }
 
 // xqueryLike is the policy XQuery uses: a duplicate attribute is XQDY0025.
 type xqueryLike struct{}
@@ -40,6 +41,7 @@ func (xqueryLike) InheritNamespaces() bool  { return true }
 func (xqueryLike) PreserveNamespaces() bool { return true }
 func (xqueryLike) PreserveTypes() bool      { return true }
 func (xqueryLike) DropEmptyText() bool      { return true }
+func (xqueryLike) CountNodes(int) error     { return nil }
 
 func qn(local string) xdm.QName { return xdm.QName{Local: local} }
 

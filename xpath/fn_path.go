@@ -18,6 +18,12 @@ import (
 // makes the result independent of whatever prefixes happened to be in scope
 // where the node was written. A path built from prefixes would only work in
 // a context that bound the same ones.
+// The result goes out through stringResult rather than strSeq because
+// nodePath BUILDS a string: one step per ancestor, so its length grows with
+// the depth of the node and is not bounded by any argument. That is the shape
+// MaxBytes exists to bound, and it is the same case as the string producers
+// charged alongside it -- a document 500 elements deep yielded 4,000 bytes
+// against a budget with 16 left, and the budget never saw them.
 func registerPathFunc(l *Library) {
 	l.registerFnSince(XPath30, "path", []int{0, 1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		if len(args) == 0 {
@@ -25,7 +31,7 @@ func registerPathFunc(l *Library) {
 			if err != nil {
 				return nil, err
 			}
-			return strSeq(nodePath(n)), nil
+			return stringResult(ctx, nodePath(n))
 		}
 		// The empty sequence gives the empty sequence, not an error: the
 		// parameter is node()? and asking for the path of nothing is a
@@ -42,7 +48,7 @@ func registerPathFunc(l *Library) {
 			return nil, xdm.ErrType(
 				"fn:path: expected a node, got %s", it.TypeName())
 		}
-		return strSeq(nodePath(n)), nil
+		return stringResult(ctx, nodePath(n))
 	})
 }
 

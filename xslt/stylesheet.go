@@ -40,6 +40,12 @@ type Stylesheet struct {
 	// reference against when there is no context node to take one from — a
 	// transform started from a named template has none.
 	baseURI string
+	// pkgResolver is CompileOptions.PackageResolver, kept so that a
+	// stylesheet fn:transform loads by package-name can be resolved the same
+	// way xsl:use-package resolves one. The options map names a package
+	// rather than locating it, so without the resolver the outer transform
+	// was given there is nothing to look it up in.
+	pkgResolver PackageResolver
 	// maxVersion is CompileOptions.MaxVersion, the XSLT version this
 	// processor is acting as. Zero means uncapped, and so 3.0.
 	//
@@ -566,12 +572,15 @@ type OutputSettings struct {
 	// serialised with, JSON having no node type of its own. Empty is the
 	// default, "xml".
 	JSONNodeOutputMethod string
-	// MediaType is the media type of the output. It affects no serialised
-	// character; it is metadata a caller passes on.
+	// MediaType is the media type of the output. It is metadata a caller
+	// passes on, with one exception: the html and xhtml methods write it
+	// into the content attribute of the meta element they inject, where it
+	// is escaped like any other attribute value.
 	MediaType string
 	// NormalizationForm names a Unicode normalisation applied to the output.
-	// Only "none" is implemented; any other value the serialiser does not
-	// support is a serialization error rather than something to ignore,
+	// NFC, NFD, NFKC and NFKD are implemented, as is "none"; see
+	// normalizerFor in serialize.go. Any other value -- "fully-normalized"
+	// among them -- is a serialization error rather than something to ignore,
 	// because output that was silently left unnormalised would be accepted
 	// by a consumer that then compares it against a normalised form and
 	// finds a spurious difference.
@@ -623,11 +632,67 @@ func stylesheetBase(doc *xdm.Node, opt string) string {
 }
 
 // Compile compiles a stylesheet from a parsed XSLT document.
+//
+// The lock is taken here and only here. compileLocked holds the body, so that
+// a compilation running *inside* another one -- which fn:transform is, when a
+// static variable calls it during the static phase -- can reach the same code
+// without asking for a mutex the outer call has not let go of. See
+// compileNestedLocked.
 func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
+	compileMu.Lock()
+	defer compileMu.Unlock()
+	return compileLocked(doc, opts)
+}
+
+// compileNestedLocked compiles a stylesheet from inside a compilation that is
+// already running on this goroutine.
+//
+// fn:transform called from a static="yes" variable has to compile a second
+// stylesheet while the first is still being compiled. Taking compileMu again
+// would deadlock against the outer Compile, which still holds it; so this
+// entry point skips the lock, which is sound precisely because the nested
+// compilation is synchronous -- it runs on the goroutine that holds the lock,
+// and no other goroutine can be inside compileLocked while it does.
+//
+// It is unexported and has exactly one caller, so the "already holds the
+// lock" precondition cannot be violated from outside this package.
+//
+// Nothing is saved and restored around the nested compilation, and that is a
+// measured claim rather than an assumption. compileLocked writes its package
+// state in its own prologue and clears it on the way out, so the question is
+// only what the OUTER compilation still needs when the nested one returns.
+// The static phase runs at the very top of compileDocument, before
+// compileSchema, compilePackage, packageParent, overridingDecls,
+// dynamicRefCache and composedVisibility are written at all -- so at the one
+// point a nested compilation can start, every one of them is still zero, and
+// restoring a zero is what clearing already does. The two version pins are
+// set earlier, in the prologue, but neither is observable: overrideXPathVersion
+// pinned below 3.1 makes the static expression's own map constructor a syntax
+// error, so fn:transform never runs, and compileMaxVersion is either 0 or 3.0
+// here -- a 2.0 processor refuses static="yes" outright -- and processorAtLeast30
+// reads those two as the same answer.
+//
+// If a later change moves the static phase after any of that state is
+// written, this comment stops being true and a save/restore becomes
+// necessary. TestStaticTransformAfterANestedCompile is what would notice.
+func compileNestedLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
+	return compileLocked(doc, opts)
+}
+
+// compileLocked is Compile's body. The caller holds compileMu.
+func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// See xsd.Schema.Validate: a nil document is a caller's mistake, but a
 	// library that panics on one takes the caller's process with it.
 	if doc == nil {
 		return nil, fmt.Errorf("no stylesheet document to compile")
+	}
+	// One entity-expansion allowance for every module this compilation pulls
+	// in, minted here so that the boundary is the compilation. A nested
+	// compilation -- fn:transform from a static variable -- arrives with the
+	// outer one's already set and keeps it, so it spends the remainder rather
+	// than restarting: the same house rule as xpath.Context.AdoptBudget.
+	if opts.moduleBudget == nil {
+		opts.moduleBudget = xdm.NewEntityBudget()
 	}
 	c := &compiler{
 		opts: opts,
@@ -643,6 +708,7 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 			funcs:            newStylesheetFuncs(),
 			baseURI:          stylesheetBase(doc, opts.BaseURI),
 			compat:           opts.Compat,
+			pkgResolver:      opts.PackageResolver,
 			maxVersion:       opts.MaxVersion,
 			// Method is deliberately left empty. Its default is not "xml"
 			// but a choice made from the result tree — a document whose
@@ -656,11 +722,9 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 		},
 	}
 	// compileSchema is package state for the duration of this call; see its
-	// declaration. The lock makes concurrent Compile calls safe, and clearing
-	// it on the way out keeps one compilation from leaking a schema into the
-	// next.
-	compileMu.Lock()
-	defer compileMu.Unlock()
+	// declaration. The lock Compile holds makes concurrent Compile calls
+	// safe, and clearing it on the way out keeps one compilation from leaking
+	// a schema into the next.
 	compileSchema = nil
 	defer func() { compileSchema = nil }()
 	compilePackage = 0
@@ -831,6 +895,13 @@ type CompileOptions struct {
 	// Resolver loads xsl:include and xsl:import targets. Nil disables them,
 	// which is the safe default for untrusted stylesheets.
 	Resolver ModuleResolver
+
+	// moduleBudget is the entity-expansion allowance shared by every module
+	// this compilation resolves. It is unexported and minted by compileLocked:
+	// the boundary is the compilation, so a caller has nothing to say about
+	// it, and one it could read or reset would not be a bound. A nested
+	// compilation inherits the outer one's -- see compileLocked.
+	moduleBudget *xdm.EntityBudget
 	// BaseURI of the stylesheet, for resolving relative include paths.
 	BaseURI string
 	// StaticParams supplies values for static stylesheet parameters — a
@@ -903,6 +974,43 @@ type CompileOptions struct {
 // ModuleResolver loads an included or imported stylesheet module.
 type ModuleResolver interface {
 	ResolveModule(href, base string) (*xdm.Node, string, error)
+}
+
+// BudgetedModuleResolver is a ModuleResolver that charges the entity expansion
+// of the modules it parses against an allowance shared across the compilation,
+// rather than minting a fresh one per module.
+//
+// It is a separate optional interface rather than an extra parameter on
+// ResolveModule so that existing implementations keep working: a resolver that
+// does not implement it is called through ResolveModule exactly as before.
+// This is the same arrangement xpath.ContextDocumentResolver uses, and for the
+// same reason.
+//
+// The allowance is scoped to ONE COMPILATION. xsl:import and xsl:include
+// compose, so a single compilation resolves a whole graph of modules, and a
+// per-module ceiling bounds none of it; a per-resolver allowance would be
+// wrong in the other direction, because a FileResolver caches parsed trees and
+// is documented as shareable between transforms, so its allowance would be
+// spent by unrelated runs and would eventually refuse everything. The
+// compilation is the operation that pulls the modules in, so it is the
+// operation the ceiling belongs to.
+type BudgetedModuleResolver interface {
+	ModuleResolver
+	// ResolveModuleWith is ResolveModule charging against b.
+	ResolveModuleWith(
+		b *xdm.EntityBudget, href, base string) (*xdm.Node, string, error)
+}
+
+// resolveModule loads a module through the richer interface when the resolver
+// offers one, and through the plain one otherwise.
+func resolveModule(
+	res ModuleResolver, b *xdm.EntityBudget, href, base string,
+) (*xdm.Node, string, error) {
+
+	if br, ok := res.(BudgetedModuleResolver); ok {
+		return br.ResolveModuleWith(b, href, base)
+	}
+	return res.ResolveModule(href, base)
 }
 
 // sortTemplates orders templates for selection: highest import precedence
@@ -1104,7 +1212,7 @@ func (r *nsResolver) SubstitutionGroupMembers(name xdm.QName) []xdm.QName {
 	if !ok {
 		return nil
 	}
-	members := head.Substitutable()
+	members := head.SchemaElementMembers()
 	if len(members) == 0 {
 		return nil
 	}
@@ -1381,7 +1489,9 @@ func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error
 	if processorAtLeast30() {
 		refFloor = xpath.XPath31
 	}
-	c, err := xpath.CompileVersionRefFloor(src, ns, v, refFloor)
+	c, err := xpath.CompileWith(src, xpath.CompileOptions{
+		Namespaces: ns, Version: v, RefFloor: refFloor,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1400,7 +1510,12 @@ func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error
 		// collation-taking functions use when given no collation argument.
 		if r.collation != "" {
 			if coll, err := xpath.ResolveCollation(r.collation); err == nil {
-				c = c.WithDefaultCollation(coll)
+				// The URI travels with the collation because
+				// fn:default-collation() has to report it: section 15.7
+				// returns "the value of the default collation property from
+				// the static context", and a Collation value cannot be
+				// turned back into the URI that named it.
+				c = c.WithDefaultCollationURI(coll, r.collation)
 			}
 		}
 		// XSLT 1.0 backwards compatibility is static in the same way, and

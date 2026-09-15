@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -198,5 +199,45 @@ func TestBaseCycleUrTypeStillTerminates(t *testing.T) {
 		`<xs:element name="root" type="C"/></xs:schema>`)
 	if s.Types[xdm.QName{Local: "C"}] == nil {
 		t.Fatal("C did not load")
+	}
+}
+
+// TestBaseCycleCheckLinearInChainDepth pins the cost, not only the verdict.
+// Each type's walk was independent, so N chained types cost N walks of up to
+// N links: a 10,000-link chain spent 2.8 s in this check alone once the facet
+// merge stopped dominating the load. Types already walked to a terminator are
+// remembered now, so a later walk stops on reaching one and the whole check is
+// one pass over the chain. The ring case guards the other direction: a cycle
+// must still be reported for every type on it; the types a walk passed on its
+// way back to its start are remembered as on that cycle, so they are reported
+// without walking the ring once per member.
+func TestBaseCycleCheckLinearInChainDepth(t *testing.T) {
+	const n = 10000
+	st, err := xdm.ParseString(baseCycleChain(n), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	start := time.Now()
+	if _, err := Load(st.Root, "", Options{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("loading a %d-link extension chain took %v, want under 2s", n, d)
+	}
+
+	st, err = xdm.ParseString(baseCycleRing(n), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parse ring: %v", err)
+	}
+	start = time.Now()
+	_, err = Load(st.Root, "", Options{})
+	if err == nil {
+		t.Fatal("ring of 10001 types accepted")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("rejecting a ring of %d types took %v, want under 2s", n+1, d)
+	}
+	if got := strings.Count(err.Error(), "ct-props-correct.3"); got < n+1 {
+		t.Errorf("ring of %d types: %d links reported, want every one", n+1, got)
 	}
 }

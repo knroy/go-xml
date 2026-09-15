@@ -365,6 +365,15 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 	// The grammar checks run after conditional inclusion and before anything
 	// is compiled, so that an element excluded by use-when is never asked
 	// about — section 3.12 forbids reporting an error for one.
+	// Section 8.4's placement rule for xsl:on-completion is read off the tree
+	// first, for the reason checkOverrideTemplates is: it is purely
+	// structural. A module that misplaces the element and also writes an
+	// attribute the summaries do not allow is refused either way; asking the
+	// structural question first only settles which error is reported, and the
+	// shape of the tree is the more useful answer. See iterate_static.go.
+	if err := checkIteratePlacement(root); err != nil {
+		return err
+	}
 	if err := checkStaticGrammarTree(root, false); err != nil {
 		return err
 	}
@@ -1339,6 +1348,16 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 	if v := value("version"); v != "" {
 		o.Version = v
 	}
+	// xsl:result-document spells it "output-version": §3.5 renames the
+	// attribute there because "version" on that element would collide with
+	// the xsl:version an XSLT element may carry. It sets the same parameter,
+	// so it is read into the same field. Read after "version" and not before,
+	// because only one of the two can appear on any given element -- the
+	// order matters only in that a caller merging both spellings gets the
+	// result-document one, which is the more specific.
+	if v := value("output-version"); v != "" {
+		o.Version = v
+	}
 	if v := value("html-version"); v != "" {
 		o.HTMLVersion = strings.TrimSpace(v)
 	}
@@ -1493,6 +1512,28 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	if name == "" {
 		return fmt.Errorf("xsl:function requires a name attribute")
 	}
+	// XTSE3155: a function with no xsl:param children may only declare
+	// streamability="unclassified". The other classifications describe how a
+	// function consumes its streamed ARGUMENT, so a function that takes none
+	// cannot be any of them -- the rule holds without any streamability
+	// analysis, which is why a non-streaming processor can enforce it. Only
+	// the presence of the attribute is read; §19 decides nothing here.
+	if sa := el.Attr("", "streamability"); sa != nil {
+		v := strings.TrimSpace(sa.Value)
+		hasParam := false
+		for _, ch := range el.ChildElements() {
+			if isXSL(ch, "param") {
+				hasParam = true
+				break
+			}
+		}
+		if v != "unclassified" && !hasParam {
+			return fmt.Errorf(
+				"XTSE3155: xsl:function %s has no xsl:param children, so its "+
+					"streamability may only be \"unclassified\", not %q",
+				name, v)
+		}
+	}
 	qn, err := resolveQNameAttr(el, name)
 	if err != nil {
 		return err
@@ -1579,8 +1620,13 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 		// Only the explicit "no" obliges anything on the first: 10.3's
 		// default is "maybe", under which reusing a result and recomputing it
 		// are both allowed.
+		//
+		// The hint is read through cacheMemoises, which names the boolean
+		// trues the Recommendation types the attribute with (cache? =
+		// boolean, 10.3); the Last Call draft's cache="full" is refused by
+		// the element table.
 		deterministic: functionDeterminism(el) == "no" ||
-			isYes(el.AttrValue("cache")),
+			cacheMemoises(el.AttrValue("cache")),
 	}
 	// The function's own "as" declaration converts the returned value, which
 	// matters for the same reason the parameter declarations do.
@@ -1836,7 +1882,7 @@ func (c *compiler) hoistImportSchema(root *xdm.Node) error {
 			if i := strings.IndexByte(href, '#'); i >= 0 {
 				fragment, href = href[i+1:], href[:i]
 			}
-			doc, resolved, err := c.opts.Resolver.ResolveModule(href, base)
+			doc, resolved, err := resolveModule(c.opts.Resolver, c.opts.moduleBudget, href, base)
 			if err != nil || doc == nil || c.schemaSeen[resolved] {
 				continue
 			}
@@ -1888,7 +1934,7 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 	if i := strings.IndexByte(href, '#'); i >= 0 {
 		fragment, href = href[i+1:], href[:i]
 	}
-	doc, resolved, err := c.opts.Resolver.ResolveModule(href, base)
+	doc, resolved, err := resolveModule(c.opts.Resolver, c.opts.moduleBudget, href, base)
 	if err != nil {
 		// XTSE0165: the processor could not retrieve the resource the href
 		// names, or what it retrieved is not a stylesheet module.
@@ -1993,7 +2039,7 @@ func (c *compiler) numberIncludedImports(root *xdm.Node) error {
 		if i := strings.IndexByte(href, '#'); i >= 0 {
 			fragment, href = href[i+1:], href[:i]
 		}
-		doc, resolved, err := c.opts.Resolver.ResolveModule(href, base)
+		doc, resolved, err := resolveModule(c.opts.Resolver, c.opts.moduleBudget, href, base)
 		if err != nil || doc == nil {
 			// A module that cannot be retrieved is reported by the ordinary
 			// walk, with the error code the spec gives it. Reporting it here
@@ -2022,7 +2068,8 @@ func (c *compiler) numberIncludedImports(root *xdm.Node) error {
 			if c.preNumbered == nil {
 				c.preNumbered = map[string]bool{}
 			}
-			if _, target, err := c.opts.Resolver.ResolveModule(
+			if _, target, err := resolveModule(
+				c.opts.Resolver, c.opts.moduleBudget,
 				importHref(kid), importBase(c, kid)); err == nil {
 				c.preNumbered[target] = true
 			}

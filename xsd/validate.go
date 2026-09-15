@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // ValidationError reports one reason a document is not valid.
@@ -117,7 +118,8 @@ type ValidateOptions struct {
 	SkipIDConstraints bool
 
 	// MaxDepth bounds how deep validation will recurse. Zero means
-	// DefaultMaxDepth; a negative value means no limit.
+	// DefaultMaxDepth; a negative value means no limit, which gives up the
+	// clean error for a fatal stack overflow that recover() cannot catch.
 	//
 	// This is not the parser's limit. A tree can be built by a transform
 	// rather than parsed, and a caller who raises xdm.ParseOptions.MaxDepth
@@ -255,6 +257,12 @@ type validator struct {
 	schema *Schema
 	opts   ValidateOptions
 	errs   []*ValidationError
+
+	// assertCtx is the one XPath context every assertion and type
+	// alternative in this run shares, so that the item and byte budgets
+	// bound the whole validation rather than each assertion separately.
+	// Built on first use by assertEpisode; nil for a schema with none.
+	assertCtx *xpath.Context
 
 	// path is the element path to the node being validated, for messages.
 	path []string
@@ -580,7 +588,10 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 
 	// xsi:nil permits an empty element where the declaration allows it.
 	if nilAttr := el.Attr(NSInstance, "nil"); nilAttr != nil {
-		val := strings.TrimSpace(nilAttr.Value)
+		// xsi:nil is xs:boolean, whiteSpace="collapse": XML S only. A
+		// no-break space is part of the lexical form and makes it invalid,
+		// where strings.TrimSpace stripped it and honoured the attribute.
+		val := trimXMLSpace(nilAttr.Value)
 		if !decl.Nillable {
 			v.fail(el, "cvc-elt.3.1",
 				"xsi:nil is present but the declaration is not nillable")
@@ -759,7 +770,7 @@ func (v *validator) checkFixedValueConstraint(el *xdm.Node, typ Type, decl *Elem
 
 // resolveXSIType expands an xsi:type value against the namespaces in scope.
 func (v *validator) resolveXSIType(el *xdm.Node, value string) (Type, error) {
-	value = strings.TrimSpace(value)
+	value = trimXMLSpace(value)
 	prefix, local := "", value
 	if i := strings.IndexByte(value, ':'); i >= 0 {
 		prefix, local = value[:i], value[i+1:]
@@ -889,7 +900,11 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 			v.fail(el, "cvc-complex-type.2.1",
 				"element must be empty but has element children")
 		}
-		if s := strings.TrimSpace(el.StringValue()); s != "" {
+		// trimXMLSpace: only XML S is the ignorable whitespace that may
+		// surround content. A no-break space IS character content, so an
+		// element holding one is not empty -- strings.TrimSpace erased it and
+		// validated the element as though it held nothing.
+		if s := trimXMLSpace(el.StringValue()); s != "" {
 			v.fail(el, "cvc-complex-type.2.1",
 				"element must be empty but has character content %q",
 				truncate(s))
@@ -927,7 +942,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 			return nil
 		}
 		if isEmptyContent(t) && v.openContentFor(t) == nil {
-			if s := strings.TrimSpace(el.StringValue()); s != "" {
+			if s := trimXMLSpace(el.StringValue()); s != "" {
 				v.fail(el, "cvc-complex-type.2.1",
 					"element must be empty but has character content %q",
 					truncate(s))
@@ -2041,12 +2056,28 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 	if !v.opts.Annotate || typ == nil {
 		return
 	}
+	// XDM 3.1 6.2.4 leaves dm:typed-value UNDEFINED for an element whose type
+	// is a complex type with ELEMENT-ONLY content: there is no simple value
+	// and the string value is not one either, so atomizing it is FOTY0012.
+	// The annotation cannot carry that fact -- an anonymous complex type
+	// annotates as "anyType", exactly as a mixed-content one does, and mixed
+	// content DOES have a typed value -- so the assessment records it here,
+	// which is the only place that knows the content kind.
+	//
+	// Only element-only. The same section gives EMPTY content the empty
+	// sequence and MIXED content the string value as xs:untypedAtomic; both
+	// atomize without error, and marking either would turn a defined value
+	// into an error.
+	if ct, ok := typ.(*ComplexType); ok && ct != nil &&
+		ct.Content == ContentElementOnly {
+		el.NoTypedValue = true
+	}
 	if n := typ.TypeName(); n.Local != "" {
-		setResolvedAnnotation(el, xdm.AnnotationName(n.URI, n.Local), typ)
+		v.schema.setResolvedAnnotation(el, xdm.AnnotationName(n.URI, n.Local), typ)
 		return
 	}
 	if a := annotationName(typ); a != "" {
-		setResolvedAnnotation(el, a, typ)
+		v.schema.setResolvedAnnotation(el, a, typ)
 		return
 	}
 	if a := anonComplexAnnotation(typ); a != "" {
@@ -2054,7 +2085,7 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 		// so the meaning recorded is that of typ itself -- which, having
 		// element-only or mixed content, resolves to nothing and correctly
 		// leaves the resolved fields empty.
-		setResolvedAnnotation(el, a, typ)
+		v.schema.setResolvedAnnotation(el, a, typ)
 	}
 }
 

@@ -174,7 +174,7 @@ result, err := sheet.Transform(ctx, doc.Root, xslt.TransformOptions{
 ```
 
 The same resolver serves both. It confines reads to the named directories,
-resolves symlinks *before* the containment check, and refuses every non-`file`
+enforces that confinement at the open through `os.Root`, and refuses every non-`file`
 scheme. There is no network option.
 
 ## Write a custom resolver

@@ -98,6 +98,67 @@ func FuzzParseNoPanic(f *testing.F) {
 	})
 }
 
+// dtdSeeds are DOCTYPE-bearing, because FuzzParseNoPanic cannot reach the DTD
+// at all: it parses with AllowDOCTYPE left false, so every execution it has
+// ever run stopped at the gate. That left the entity machinery -- the part of
+// the parser an attacker most wants to reach -- unfuzzed, which an audit on
+// 2026-09-10 found and closed with 3.7M executions and no crashes. This target
+// keeps it closed.
+var dtdSeeds = []string{
+	`<!DOCTYPE r [<!ENTITY e "x">]><r>&e;</r>`,
+	`<!DOCTYPE r [<!ENTITY % p "<!ENTITY e 'x'>">%p;]><r>&e;</r>`,
+	`<!DOCTYPE r [<!ENTITY a "&b;"><!ENTITY b "&a;">]><r>&a;</r>`,
+	`<!DOCTYPE r [<!ENTITY e SYSTEM "file:///etc/passwd">]><r>&e;</r>`,
+	`<!DOCTYPE r SYSTEM "http://example.invalid/d.dtd"><r/>`,
+	`<!DOCTYPE r [<!ELEMENT r (#PCDATA)><!ATTLIST r a CDATA #IMPLIED>]><r a="v"/>`,
+	`<!DOCTYPE r [<!NOTATION n PUBLIC "p"><!ENTITY u SYSTEM "x" NDATA n>]><r/>`,
+	`<!DOCTYPE r [<!ENTITY e "&#xD800;">]><r>&e;</r>`,
+	`<!DOCTYPE r [`,
+	`<!DOCTYPE`,
+}
+
+// FuzzParseDOCTYPE is FuzzParseNoPanic with the DTD gate open.
+//
+// AllowDOCTYPE is what an embedder sets when its documents are trusted enough
+// to carry a doctype -- loading UBL needs it -- so the machinery behind the
+// gate is reachable in production and has to hold up to the same standard.
+// The assertions are the same: a refusal is an error and nothing else, an
+// acceptance is a walkable document, and neither may panic.
+func FuzzParseDOCTYPE(f *testing.F) {
+	for _, s := range parseSeeds {
+		f.Add(s)
+	}
+	for _, s := range dtdSeeds {
+		f.Add(s)
+	}
+	opts := fuzzParseOptions
+	opts.AllowDOCTYPE = true
+	f.Fuzz(func(t *testing.T, src string) {
+		if len(src) > 4096 {
+			return
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("ParseString(%q) with AllowDOCTYPE panicked: %v", src, r)
+			}
+		}()
+		tree, err := ParseString(src, opts)
+		if err != nil {
+			if tree != nil {
+				t.Fatalf("ParseString(%q) returned both a tree and an error %v", src, err)
+			}
+			return
+		}
+		if tree == nil || tree.Root == nil {
+			t.Fatalf("ParseString(%q) returned no error and no tree", src)
+		}
+		if k := tree.Root.Kind; k != KindDocument {
+			t.Fatalf("ParseString(%q) root is %v, want a document node", src, k)
+		}
+		walkNode(t, src, tree.Root, 0)
+	})
+}
+
 // walkNode exercises the node accessors over a whole tree and checks the
 // structural invariants that every consumer of a tree relies on.
 func walkNode(t *testing.T, src string, n *Node, depth int) {

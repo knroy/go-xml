@@ -276,6 +276,25 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		// need nothing.
 		if spec.typeName != nil && spec.typeName.URI == xdm.NSXS {
 			schema = xsd.NewSchema()
+		} else if spec.typeName == nil && spec.mode == validateLax {
+			// XTSE1660 names the values a non-schema-aware processor must
+			// refuse, and lax is not among them: the error fires for "an
+			// [xsl:]type attribute; or an [xsl:]validation or
+			// [xsl:]default-validation attribute with a value other than
+			// strip, preserve, or lax". Lax assessment validates against a
+			// declaration only if one is available, so with no schema at all
+			// there is nothing available, nothing is assessed, and the node
+			// comes out untyped — which is exactly what si-copy-024 and its
+			// seven siblings assert with
+			// "/out/* instance of element(*, xs:untyped)". Raising the static
+			// error here refused stylesheets the spec says must run.
+			//
+			// strict still falls through to the error below: it "indicates
+			// that the stylesheet is expecting to deal with typed data, and
+			// therefore cannot be processed without performing the
+			// validation".
+			stripAnnotations(n)
+			return nil
 		} else {
 			return fmt.Errorf(
 				"XTSE1660: validation requires a schema; none was imported")
@@ -620,6 +639,22 @@ func namespaceSensitiveType(schema *xsd.Schema, name xdm.QName) (bool, string) {
 	// count was guarding against, and running out of steps returned false —
 	// the permissive verdict, which let a constructed attribute validate
 	// against a type 33 links above xs:QName that section 19.2 forbids.
+	// The chain is walked in the environment of the schema being validated
+	// against, so that a schema's own restriction of xs:QName is recognised
+	// through ITS derivations rather than through whatever another schema
+	// registered under the same name. The process-global table is keyed by
+	// name alone and holds whatever loaded last, so a second schema defining
+	// this name for an unrelated type silently decided the question -- and it
+	// decided it PERMISSIVELY, because a chain that cannot be followed ends
+	// in "not namespace-sensitive" and the validation section 19.2 forbids
+	// then goes ahead.
+	//
+	// A nil schema falls back to the global table, which is the unchanged
+	// behaviour for a caller that names a type without naming a schema.
+	env := schema.TypeEnv()
+	if env == nil {
+		env = xdm.GlobalTypeEnvironment()
+	}
 	local := name.Local
 	seen := map[string]bool{}
 	for local != "" && !seen[local] {
@@ -628,7 +663,7 @@ func namespaceSensitiveType(schema *xsd.Schema, name xdm.QName) (bool, string) {
 			return true, "derived from xs:" + local
 		}
 		seen[local] = true
-		local = xdm.DerivedBase(local)
+		local = env.DerivedBase(local)
 	}
 	return false, ""
 }

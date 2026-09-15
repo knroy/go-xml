@@ -103,6 +103,9 @@ func registerRegexFuncs(l *Library) {
 			if e := bt.Err(); e != nil {
 				return nil, e
 			}
+			if err := ctx.countBytes(len(out)); err != nil {
+				return nil, err
+			}
 			return strSeq(out), nil
 		}
 		if br != nil {
@@ -113,7 +116,11 @@ func registerRegexFuncs(l *Library) {
 			if err != nil {
 				return nil, err
 			}
-			return strSeq(br.ReplaceAllString(s, goRepl)), nil
+			out := br.ReplaceAllString(s, goRepl)
+			if err := ctx.countBytes(len(out)); err != nil {
+				return nil, err
+			}
+			return strSeq(out), nil
 		}
 		// A pattern that matches the empty string would loop forever in some
 		// engines and produce surprising output here; the spec makes it an
@@ -125,7 +132,11 @@ func registerRegexFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(re.ReplaceAllString(s, goRepl)), nil
+		out := re.ReplaceAllString(s, goRepl)
+		if err := ctx.countBytes(len(out)); err != nil {
+			return nil, err
+		}
+		return strSeq(out), nil
 	})
 
 	// fn:tokenize($input as xs:string?) as xs:string*, added in 3.1.
@@ -136,7 +147,7 @@ func registerRegexFuncs(l *Library) {
 	// left between tokens is exact. Registering it as another arity of the
 	// two-argument form would have sent an absent pattern into the regex
 	// compiler.
-	l.registerFnSince(XPath31, "tokenize", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFnSince(XPath31, "tokenize", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
@@ -152,7 +163,10 @@ func registerRegexFuncs(l *Library) {
 			return xdm.Empty(), nil
 		}
 		parts := strings.Split(s, " ")
-		out := make(xdm.Sequence, 0, len(parts))
+		out, err := makeSequence(ctx, len(parts))
+		if err != nil {
+			return nil, err
+		}
 		for _, p := range parts {
 			out = append(out, xdm.NewString(p))
 		}
@@ -173,7 +187,7 @@ func registerRegexFuncs(l *Library) {
 			if btErr != nil {
 				return nil, btErr
 			}
-			return tokenizeBacktrack(bt, s)
+			return tokenizeBacktrack(ctx, bt, s)
 		}
 		if re.MatchString("") {
 			return nil, fmt.Errorf("FORX0003: pattern matches the empty string")
@@ -184,7 +198,10 @@ func registerRegexFuncs(l *Library) {
 			return xdm.Empty(), nil
 		}
 		parts := re.Split(s, -1)
-		out := make(xdm.Sequence, 0, len(parts))
+		out, err := makeSequence(ctx, len(parts))
+		if err != nil {
+			return nil, err
+		}
 		for _, p := range parts {
 			out = append(out, xdm.NewString(p))
 		}
@@ -302,6 +319,8 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 	dotAll := false
 	// literal is the "q" flag: the pattern is a plain string, not a pattern.
 	literal := false
+	// stripSpace is the "x" flag, held until every flag has been read.
+	stripSpace := false
 	for _, f := range flags {
 		switch f {
 		case 'i':
@@ -318,8 +337,11 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 			goFlags = append(goFlags, "m")
 		case 'x':
 			// Whitespace in the pattern is ignored. RE2 has no such flag, so
-			// it is applied by stripping unescaped whitespace here.
-			pattern = stripPatternWhitespace(pattern)
+			// it is applied by stripping unescaped whitespace below. It cannot
+			// be applied here, in the flag loop: "q" may appear after "x", and
+			// under "q" this flag must have no effect at all, so the decision
+			// can only be made once every flag letter has been read.
+			stripSpace = true
 		case 'q':
 			// The "q" flag makes every character in the pattern represent
 			// itself, and was introduced in XPath 3.0. Under 2.0 it is simply
@@ -335,6 +357,15 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 		default:
 			return nil, fmt.Errorf("FORX0001: unknown regular expression flag %q", string(f))
 		}
+	}
+
+	// F&O 3.0 5.6.1 says of "q": "If it is used together with the m, s, or x
+	// flag, that flag has no effect." So the whitespace strip only happens
+	// when "q" is absent — stripping first and quoting after would delete
+	// spaces the literal pattern is entitled to keep, and did, which made
+	// matches("a b", "a b", "qx") false where the spec says true.
+	if stripSpace && !literal {
+		pattern = stripPatternWhitespace(pattern)
 	}
 
 	// Under "q" the pattern is not parsed at all: every character stands for
@@ -1476,7 +1507,7 @@ func argBacktrack(args []xdm.Sequence, pat, flags int, orig error, v Version) (*
 // matches the empty string is an error, and the empty input tokenizes to the
 // empty sequence rather than to one empty token — because those are properties
 // of the function, not of the engine.
-func tokenizeBacktrack(bt *btRegexp, s string) (xdm.Sequence, error) {
+func tokenizeBacktrack(ctx *Context, bt *btRegexp, s string) (xdm.Sequence, error) {
 	empty := bt.MatchString("")
 	if e := bt.Err(); e != nil {
 		return nil, e
@@ -1491,7 +1522,10 @@ func tokenizeBacktrack(bt *btRegexp, s string) (xdm.Sequence, error) {
 	if e := bt.Err(); e != nil {
 		return nil, e
 	}
-	out := make(xdm.Sequence, 0, len(parts))
+	out, err := makeSequence(ctx, len(parts))
+	if err != nil {
+		return nil, err
+	}
 	for _, p := range parts {
 		out = append(out, xdm.NewString(p))
 	}

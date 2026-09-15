@@ -136,15 +136,16 @@ func looksLikeErrorCode(s string) bool {
 //
 // "This XPath is malformed" and "this document would have cost more than the
 // processor is willing to spend" are different conditions with different
-// remedies, but they arrive looking alike: a nesting guard reports XPST0003
-// because that is the code the specs give for a syntactically unacceptable
-// expression, and an embedding caller reading the code alone concludes the
-// user's expression was invalid when in fact it was merely deep. The specs
-// give no code for "I gave up", so the code cannot say this; a sentinel can.
+// remedies, but they arrive looking alike: most limits have no code of
+// their own and borrow a semantic one, so an embedding caller reading the
+// code alone concludes the input was wrong when in fact it was merely
+// expensive. XPath's nesting guards report XPDY0130, which §2.3.1 does
+// define for a limit, but that code also covers evaluation budgets, so
+// even there the code alone does not say which limit; a sentinel can.
 //
 // Wrap with %w to add it, never to replace the code:
 //
-//	fmt.Errorf("XPST0003: expression nesting exceeds %d levels: %w",
+//	fmt.Errorf("XPDY0130: expression nesting exceeds %d levels: %w",
 //		maxParseDepth, ErrResourceLimit)
 //
 // The rendered message still begins with the code, so ErrorCode and the

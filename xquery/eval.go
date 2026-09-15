@@ -78,7 +78,12 @@ type builderRef struct{ b *xdmbuild.Builder }
 // and this is XQuery's half of that. The behaviour is the duplicate
 // attribute: XSLT discards the earlier one silently, and XQuery raises
 // XQDY0025, so this returns an error where the XSLT policy returns nil.
-type policy struct{ sc *staticContext }
+type policy struct {
+	sc *staticContext
+	// xp is the evaluation the constructed nodes are charged against, or nil
+	// where no budget is in force. See CountNodes.
+	xp *xpath.Context
+}
 
 func (p policy) Err(f xdmbuild.Fault, detail string) error {
 	switch f {
@@ -126,6 +131,14 @@ func (p policy) PreserveTypes() bool {
 // which would turn the empty string literals into something XQuery does not
 // have. Inside a code block they are left alone.
 func (policy) DropEmptyText() bool { return true }
+
+// CountNodes charges constructed nodes against the evaluation's node budget.
+//
+// A direct element constructor inside a FLWOR builds a tree whose size is the
+// product of the clauses, which neither the item budget nor the byte budget
+// sees -- the same hole XSLT's nested xsl:for-each fell through. A nil xp is
+// unbounded, which is what a policy built without one gets.
+func (p policy) CountNodes(n int) error { return p.xp.ChargeNodes(n) }
 
 func (n *literalText) eval(out *builderRef, ctx *evalContext) error {
 	out.b.AppendText(n.text)
@@ -191,7 +204,7 @@ func (n *enclosed) sequence(ctx *evalContext) (xdm.Sequence, error) {
 			return v.sequence(ctx)
 		}
 	}
-	inner := xdmbuild.New(policy{sc: ctx.sc})
+	inner := xdmbuild.New(policy{sc: ctx.sc, xp: ctx.xp})
 	ref := &builderRef{b: inner}
 	for _, it := range n.items {
 		if err := it.eval(ref, ctx); err != nil {
@@ -241,8 +254,13 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 					// a sequence — "<a>{$attr1, $attr2}</a>" — is exactly the
 					// shape the suite tests, and the error has to reach the
 					// caller to be raised at all.
-					if err := out.b.AddAttributeTyped(
-						v.Name, v.Value, v.TypeAnnotation); err != nil {
+					// The whole typing travels, not the annotation name: an
+					// attribute reaching element content this way is a copy
+					// of an assessed node, and the name alone would leave its
+					// union member and resolved primitive to be guessed at
+					// from the process-global registries.
+					if err := out.b.AddAttributeWithTyping(
+						v.Name, v.Value, xdm.TypingOf(v)); err != nil {
 						return err
 					}
 					continue
@@ -790,7 +808,7 @@ func (a *attribute) eval(out *builderRef, ctx *evalContext) error {
 				// separator on each side and must not be skipped — which is
 				// what ignoring the unrecognised part did, giving "1 2" where
 				// the answer is "1  2".
-				inner := xdmbuild.New(policy{sc: ctx.sc})
+				inner := xdmbuild.New(policy{sc: ctx.sc, xp: ctx.xp})
 				if err := v.eval(&builderRef{b: inner}, ctx); err != nil {
 					return err
 				}
@@ -938,7 +956,14 @@ func evalPITarget(e *compiledExpr, ctx *evalContext) (string, error) {
 	// The value came from an expression rather than from the query text, so
 	// nothing has trimmed it: " name " names the target "name", the way the
 	// name of a computed element does.
-	target := strings.TrimSpace(a.String())
+	//
+	// xdm.TrimXMLSpace, not strings.TrimSpace. The target is an xs:NCName, a
+	// datatype whose whiteSpace facet is "collapse", and XML Schema's
+	// whitespace is exactly #x20 #x9 #xD #xA. strings.TrimSpace uses
+	// unicode.IsSpace, which also matches U+00A0 and the other separators --
+	// those are ordinary characters in a name, so stripping them silently
+	// renamed the target instead of refusing it.
+	target := xdm.TrimXMLSpace(a.String())
 	if !xdm.IsNCName(target) {
 		return "", fmt.Errorf(
 			"XQDY0041: %q is not a valid processing-instruction target",
@@ -970,7 +995,7 @@ func (n *textNode) eval(out *builderRef, ctx *evalContext) error {
 }
 
 func (n *document) eval(out *builderRef, ctx *evalContext) error {
-	inner := xdmbuild.New(policy{sc: ctx.sc})
+	inner := xdmbuild.New(policy{sc: ctx.sc, xp: ctx.xp})
 	sub := &builderRef{b: inner}
 	for _, c := range n.content {
 		if err := c.eval(sub, ctx); err != nil {
@@ -1074,7 +1099,13 @@ func evalNodeName(e *compiledExpr, ctx *evalContext, isElement bool) (xdm.QName,
 	// §3.9.3.1 admits either spelling, and either may be surrounded by
 	// whitespace: the value came from an expression, not from the query text,
 	// so nothing has trimmed it yet.
-	lex := strings.TrimSpace(a.String())
+	//
+	// The trim is XML S only. §3.9.3.1 converts the atomized value to an
+	// expanded QName and makes a failed conversion XQDY0074, and xs:QName is
+	// whiteSpace="collapse" -- so a no-break space is PART of the name and
+	// must make that conversion fail. strings.TrimSpace stripped it instead,
+	// and element {"<NBSP>e"} silently constructed <e/>.
+	lex := xdm.TrimXMLSpace(a.String())
 	if uri, local, ok := splitBracedName(lex); ok {
 		if !xdm.IsNCName(local) {
 			return xdm.QName{}, fmt.Errorf(

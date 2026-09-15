@@ -47,7 +47,7 @@ func TestDeepTypeIsRefusedNotFatal(t *testing.T) {
 		"map":           nest("map(xs:string, ", ")", 5000, "item()"),
 	}
 	for name, expr := range cases {
-		_, err := CompileVersion(expr, nil, XPath31)
+		_, err := CompileWith(expr, CompileOptions{Version: XPath31})
 		if err == nil {
 			t.Errorf("%s: accepted; the bound did not apply", name)
 			continue
@@ -69,7 +69,7 @@ func TestOrdinaryTypeNestingStillCompiles(t *testing.T) {
 		"$m instance of map(xs:string, array(xs:integer))",
 		"$f instance of (function(item()) as item())",
 	} {
-		if _, err := CompileVersion(expr, nil, XPath31); err != nil {
+		if _, err := CompileWith(expr, CompileOptions{Version: XPath31}); err != nil {
 			t.Errorf("%s: %v", expr, err)
 		}
 	}

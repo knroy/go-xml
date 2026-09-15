@@ -283,22 +283,42 @@ type OutputRef struct {
 	File      string `xml:"file,attr"`
 	Serialize string `xml:"serialize,attr"`
 	// Tree="no" asks the driver not to wrap the transformation's result in a
-	// document node, and ResultVar names the variable the raw result sequence
-	// is then bound to for the assertions. Together they let a test assert
-	// about a sequence of atomic values, which no tree can represent:
-	// initial-template-004 returns eight xs:decimal values and compares them
-	// with deep-equal, which a tree would have turned into one text node.
+	// document node, so the assertions see 2.3.5's raw result sequence
+	// instead. That is what lets a test assert about a sequence of atomic
+	// values, which no tree can represent: initial-template-004 returns
+	// eight xs:decimal values and compares them with deep-equal, which a
+	// tree would have turned into one text node, and initial-function-100b
+	// asserts its result is an xs:integer, which a tree makes a text node.
+	//
+	// ResultVar names the variable to bind it to. It is the suite's own
+	// spelling in one case and absent everywhere else; the reference driver
+	// does not read it at all — "result-var" appears nowhere in
+	// runner/run-tests.xsl — so an absent one means the ordinary name.
 	Tree      string `xml:"tree,attr"`
 	ResultVar string `xml:"result-var,attr"`
 }
 
 // rawResultVar returns the variable name the raw result sequence must be
 // bound to, or "" when the ordinary document-node binding applies.
+//
+// The condition is the reference driver's, verbatim from run-tests.xsl:
+//
+//	<xsl:if test="c:test/c:output/(@tree='no' and not(@serialize='yes'))">
+//	  <xsl:map-entry key="'delivery-format'" select="'raw'"/>
+//
+// serialize="yes" is the exclusion that matters. Those cases — the
+// result-document-14xx and output-07xx families — ask for the serialized
+// delivery format on the line above, and they assert about the text with
+// assert-serialization rather than about a sequence; handing them a raw
+// binding would answer a question they never ask.
 func (o *OutputRef) rawResultVar() string {
-	if o == nil || o.Tree != "no" || o.ResultVar == "" {
+	if o == nil || o.Tree != "no" || o.Serialize == "yes" {
 		return ""
 	}
-	return o.ResultVar
+	if o.ResultVar != "" {
+		return o.ResultVar
+	}
+	return "result"
 }
 
 // Result is the assertion tree, kept as raw XML.

@@ -105,6 +105,24 @@ type ParseOptions struct {
 	// It is unexported for the same reason as entitiesExpanded: it describes
 	// the source this parse was handed, not a choice a caller makes.
 	entityBases []entityBaseSpan
+
+	// entityBudget is the expansion spend this parse shares with the document
+	// it is part of. Nil means this parse is a document in its own right and
+	// starts with the full maxTotalEntityBytes.
+	//
+	// It exists because a parse is not always a document. ProcessXInclude
+	// parses each included resource with ParseString, and every one of those
+	// parses used to mint its own budget — so the ceiling that bounds one
+	// document bounded each of two hundred of them separately, and 95 KB of
+	// source expanded to 149 MB. Passing the outer budget down makes the
+	// bound say what it is documented to say. The include fetch counter is
+	// shared across the same boundary already, by living on the one
+	// includeProc; this is the same sharing for the counter that has no such
+	// object to live on.
+	//
+	// It is unexported for the same reason as the two fields above: it
+	// describes this parse's place in a larger document, not a knob.
+	entityBudget *entityBudget
 }
 
 // Limits applied when the corresponding ParseOptions field is zero.
@@ -266,6 +284,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	cur := tree.Root
 	depth := 0
 	sawRoot := false
+	sawDecl := false
+	sawPrologToken := false
+	sawDoctype := false
 	// Attribute defaults declared by an ATTLIST in the internal subset. Kept
 	// as a slice because a document rarely declares more than a handful, and
 	// the common case is none at all.
@@ -301,6 +322,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 
 		switch t := tok.(type) {
 		case xml.StartElement:
+			sawPrologToken = true
 			depth++
 			if depth > maxDepth {
 				return nil, fmt.Errorf("parse XML: nesting exceeds %d levels: %w",
@@ -314,6 +336,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			}
 			if len(attDefaults) > 0 {
 				t = applyAttDefaults(t, attDefaults)
+			}
+			if err := validateStartElement(t, cur, dec.IsVersion11()); err != nil {
+				return nil, err
 			}
 			el := buildElement(t, cur, encodeOffset(start, trackPos))
 			// A node written inside an external parsed entity takes its base
@@ -375,20 +400,33 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// CharData is only meaningful inside an element; whitespace at the
 			// document level is legal and carries no information.
 			if cur == tree.Root {
-				if strings.TrimSpace(string(t)) != "" {
+				if !isXMLWhitespace(string(t), dec.IsVersion11()) {
 					return nil, fmt.Errorf("parse XML: character data outside root element")
 				}
+				sawPrologToken = true
 				continue
 			}
 			appendText(cur, string(t))
 
 		case xml.Comment:
+			sawPrologToken = true
 			cur.AppendChild(&Node{Kind: KindComment, Value: string(t)})
 
 		case xml.ProcInst:
 			if strings.EqualFold(t.Target, "xml") {
+				if t.Target != "xml" {
+					return nil, fmt.Errorf("parse XML: processing-instruction target %q is reserved", t.Target)
+				}
+				if sawDecl || sawPrologToken || sawRoot || sawDoctype {
+					return nil, fmt.Errorf("parse XML: XML declaration must appear at the start of the document")
+				}
+				if err := validateXMLDecl(string(t.Inst)); err != nil {
+					return nil, err
+				}
+				sawDecl = true
 				continue // the XML declaration is not a PI node in the XDM
 			}
+			sawPrologToken = true
 			pi := &Node{
 				Kind:  KindPI,
 				Name:  QName{Local: t.Target},
@@ -404,7 +442,13 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 
 		case xml.Directive:
 			d := strings.TrimSpace(string(t))
-			if strings.HasPrefix(d, "DOCTYPE") && !opts.AllowDOCTYPE {
+			if !isDOCTYPEDirective(d) {
+				return nil, fmt.Errorf("parse XML: markup declaration %q is not a DOCTYPE", d)
+			}
+			if sawDoctype || sawRoot || cur != tree.Root {
+				return nil, fmt.Errorf("parse XML: DOCTYPE declaration must appear once before the document element")
+			}
+			if !opts.AllowDOCTYPE {
 				return nil, fmt.Errorf("parse XML: DOCTYPE declaration rejected " +
 					"(set AllowDOCTYPE to permit its internal declarations; " +
 					"reading external entities additionally requires " +
@@ -419,7 +463,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// Only defaults are read. Nothing here expands an entity,
 			// resolves an external identifier, or reads a file, so this does
 			// not widen what AllowDOCTYPE admits.
-			if strings.HasPrefix(d, "DOCTYPE") {
+			if isDOCTYPEDirective(d) {
+				sawDoctype = true
+				sawPrologToken = true
 				// Retained so a caller can validate against the document's
 				// own DTD; see Tree.DocType.
 				tree.DocType = d
@@ -442,7 +488,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				// when a resolver was supplied. With none, this whole block
 				// is skipped and the subset is read exactly as before.
 				if opts.ExternalEntities != nil && !opts.entitiesExpanded {
-					ents = newEntityTable(opts.BaseURI)
+					ents = newEntityTable(opts.BaseURI, opts.entityBudget)
 					// The DOCTYPE follows the XML declaration, so by now the
 					// decoder has read the version and §4.3.4 can be enforced
 					// against it. See entityTable.checkEntityVersion.
@@ -495,7 +541,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 						elementOnly = parseElementOnlyDecls(text)
 					}
 				} else {
-					ents = parseEntityDecls(d, opts.BaseURI)
+					ents = parseEntityDecls(d, opts.BaseURI, opts.entityBudget)
 				}
 				if ents != nil && !opts.entitiesExpanded {
 					ents.version11 = dec.IsVersion11()
@@ -639,7 +685,7 @@ func buildElement(t xml.StartElement, parent *Node, offset int32) *Node {
 			// newlines and tabs, so the node was not the one the data model
 			// says the document has.
 			if a.Name.Space == "xml" && a.Name.Local == "id" {
-				attr.Value = strings.Join(strings.Fields(a.Value), " ")
+				attr.Value = strings.Join(SplitXMLSpace(a.Value), " ")
 			}
 			el.AddAttr(attr)
 		}
@@ -798,26 +844,152 @@ func parseExpanded(src string, ents *entityTable, opts ParseOptions) (*Tree, err
 // resolveBase resolves an xml:base value against the base already in force.
 //
 // An absolute reference replaces the base outright; a relative one is merged
-// with it by the ordinary RFC 3986 rules. A base that is not usable as one is
-// left alone rather than reported: parsing is not the place to raise a URI
-// error, and fn:base-uri and fn:resolve-uri report it themselves when the
-// value is actually used.
+// with it by the ordinary RFC 3986 rules. Parsing is not the place to raise a
+// URI error — fn:base-uri and fn:resolve-uri report one themselves when the
+// value is actually used — so a base this cannot parse is not an error here.
+// What it must not do is DISCARD one.
+//
+// Returning the bare reference when the base was unusable was the failure
+// mode, and it is worse than it looks. A Windows base URI that had been
+// concatenated rather than built — file://C:\dir\doc.xml — does not survive
+// url.Parse at all (a backslash after the host reads as a port), so
+// resolveBase(that, "deeper/") returned "deeper/": the element's base URI
+// became a bare relative reference pointing at the process's working
+// directory rather than at the document's. Nothing reported it. And because
+// the result is non-empty, xpath's inheritedBaseURI stops walking there and
+// never reaches an ancestor whose base IS usable, so one bad link poisons the
+// whole subtree beneath it. A base URI decides where a relative reference
+// resolves TO, so silently relocating it is the wrong failure.
+//
+// mergeRelative is what replaces the discard: when the base does not parse as
+// an absolute URI it is still a string with path structure, and RFC 3986
+// section 5.2.3's merge is defined on that structure alone. "sub/" and
+// "deeper/" merge to "sub/deeper/" whether or not "sub/" has a scheme. The
+// caller gets a base that still names the right place relative to whatever
+// the unusable base named, instead of one that has forgotten it.
 func resolveBase(base, ref string) string {
 	if ref == "" {
 		return base
 	}
+	if base == "" {
+		return ref
+	}
 	r, err := url.Parse(ref)
 	if err != nil {
+		// The reference itself is not a URI reference. There is nothing to
+		// resolve against the base, and the raw value is what fn:base-uri
+		// must report so that it can raise the error the caller will see.
 		return ref
 	}
-	if r.IsAbs() || base == "" {
+	if r.IsAbs() {
 		return ref
 	}
-	b, err := url.Parse(base)
-	if err != nil || !b.IsAbs() {
-		return ref
+	if b, err := url.Parse(base); err == nil && b.IsAbs() {
+		return b.ResolveReference(r).String()
 	}
-	return b.ResolveReference(r).String()
+	return mergeRelative(base, ref)
+}
+
+// mergeRelative applies RFC 3986 section 5.2.3's merge and 5.2.4's
+// remove_dot_segments to two references neither of which need be absolute.
+//
+// It exists for the case url.ResolveReference refuses: a base with no usable
+// scheme. That is not a case to be optimistic about — it means something
+// upstream produced a base URI it should not have — but the containment
+// question is "where does a relative reference under this base point", and
+// dropping the base answers it with the working directory, which is both
+// wrong and unbounded. Merging answers it with a location still underneath
+// whatever the base named.
+//
+// A ref that begins with "/" is path-absolute and replaces the base's path
+// outright, per 5.2.2; anything else is appended to the base's directory.
+//
+// "Directory" is taken at the last separator of EITHER kind. A base that did
+// not parse is very often one written with backslashes — that is the whole
+// reason this path exists — and file://C:\dir\doc.xml has no forward slash
+// after the scheme's own, so cutting at "/" alone would take the directory to
+// be "file:/" and produce file:/deeper/, which has lost the drive and the
+// directories both. That is the original discard wearing a scheme.
+func mergeRelative(base, ref string) string {
+	if strings.HasPrefix(ref, "/") {
+		return removeDotSegments(ref)
+	}
+	dir := ""
+	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
+		dir = base[:i+1]
+	}
+	// 5.2.4 runs over the join, because a ".." in the reference has to be
+	// able to climb out of the base's directory — "a/b/c.xml" with "../d/"
+	// is "a/d/". What is withheld from it is the scheme-and-authority
+	// prefix, which a ".." may not climb past: 5.2.4's output path is never
+	// allowed to begin with one, and letting it run would eat the drive
+	// letter or the host. That prefix is left byte-for-byte, so a base this
+	// function could not parse is not reinterpreted on the way past.
+	keep, climb := splitClimbable(dir)
+	return keep + removeDotSegments(climb+ref)
+}
+
+// splitClimbable divides a base's directory into the prefix a "../" may not
+// climb past and the segments it may.
+//
+// It recognises the scheme and authority textually, because this function is
+// reached precisely when url.Parse would not do it for us.
+func splitClimbable(dir string) (keep, climb string) {
+	if i := strings.Index(dir, "://"); i >= 0 {
+		// Past the authority: the next separator of either kind starts the
+		// path, and everything before it is untouchable.
+		if j := strings.IndexAny(dir[i+3:], `/\`); j >= 0 {
+			return dir[:i+3+j+1], dir[i+3+j+1:]
+		}
+		return dir, ""
+	}
+	if i := strings.Index(dir, ":"); i >= 0 {
+		// A scheme with no authority — "file:/path", or the Windows base
+		// "file://C:\dir\" once the two-slash form has been consumed above.
+		if j := strings.IndexAny(dir[i+1:], `/\`); j >= 0 {
+			return dir[:i+1+j+1], dir[i+1+j+1:]
+		}
+		return dir, ""
+	}
+	if strings.HasPrefix(dir, "/") {
+		return "/", dir[1:]
+	}
+	return "", dir
+}
+
+// removeDotSegments is RFC 3986 section 5.2.4, which url.URL applies for
+// itself but does not export. Without it a merged "a/b/../c" keeps the "..".
+func removeDotSegments(p string) string {
+	// The algorithm is defined on the path only; a merged relative reference
+	// may still carry a query or fragment, which take no part in it.
+	tail := ""
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p, tail = p[:i], p[i:]
+	}
+	var out []string
+	rooted := strings.HasPrefix(p, "/")
+	trailing := strings.HasSuffix(p, "/")
+	for _, seg := range strings.Split(p, "/") {
+		switch seg {
+		case "", ".":
+			// An empty segment is the one either side of a separator that
+			// Split produces; the trailing slash is restored below.
+		case "..":
+			if n := len(out); n > 0 {
+				out = out[:n-1]
+			}
+		default:
+			out = append(out, seg)
+		}
+	}
+	res := strings.Join(out, "/")
+	if rooted {
+		res = "/" + res
+	}
+	if trailing && res != "" && !strings.HasSuffix(res, "/") {
+		res += "/"
+	}
+	return res + tail
 }
 
 // lexicalName reassembles the QName as written, given a RawToken name whose

@@ -6,7 +6,7 @@ import (
 )
 
 // psviProperties is the set CopyTypingFrom and CopyTypingStrippedFrom carry
-// between them: the seven the PSVI records about a node.
+// between them: the eight the PSVI records about a node.
 //
 // It is written out rather than derived so that the census below compares two
 // independently maintained lists. Deriving it from either operation would make
@@ -19,6 +19,7 @@ var psviProperties = map[string]bool{
 	"IsID":             true,
 	"IsIDREFS":         true,
 	"IsNilled":         true,
+	"NoTypedValue":     true,
 }
 
 // nonPSVIProperties are the exported fields of Node that are deliberately NOT
@@ -47,9 +48,9 @@ var nonPSVIProperties = map[string]string{
 // TestPSVIPropertyCensus is the guard on the guard: it fails when a field is
 // added to Node and classified as neither PSVI nor structure.
 //
-// CopyTypingFrom exists because seven properties travel together and every
+// CopyTypingFrom exists because eight properties travel together and every
 // hand-written field list eventually dropped one. That argument only holds
-// while "seven" is still the whole set -- a property added to Node later and
+// while "eight" is still the whole set -- a property added to Node later and
 // never added to the operation would be dropped by all ten copy sites at once,
 // silently, which is exactly the shape of every defect in this family.
 func TestPSVIPropertyCensus(t *testing.T) {

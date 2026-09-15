@@ -22,9 +22,13 @@ import (
 // reads the document and evaluates the body, which is what a conforming
 // non-streaming processor does with streamable="yes".
 //
-// use-accumulators is accepted and ignored for the same kind of reason: it
-// names which accumulators apply to the document, and an engine that applies
-// none is not made wrong by being told which ones to apply.
+// use-accumulators, by contrast, is enforced. It is not a statement about
+// memory: 18.2.2 makes it the set of accumulators *applicable* to the document
+// this instruction reads, and XTDE3362 makes reading an inapplicable one a
+// dynamic error whether or not the document is streamed — which is the whole
+// point of non-stream-201, whose own description is "use-accumulators applies
+// even when not streaming". The same set and the same enforcement already
+// serve xsl:merge-source/@use-accumulators; see merge.go.
 
 type sourceDocumentInstr struct {
 	href       *avt
@@ -34,6 +38,17 @@ type sourceDocumentInstr struct {
 	// but XTDE3362 bars a non-streamable accumulator from being read over a
 	// document the stylesheet asked to stream, so the request is recorded.
 	streamed bool
+	// accums is @use-accumulators: the accumulators 18.2.2 makes applicable
+	// to the document this instruction reads. Nil means the attribute was
+	// absent, which leaves the tree unrestricted.
+	accums *modeAccumulators
+	// baseURI is the base URI of the xsl:source-document element itself,
+	// which is the stylesheet module's own unless an xml:base on the element
+	// or an ancestor overrides it. 18.1 resolves @href "as for the doc
+	// function", and fn:doc resolves against the static base URI of the
+	// expression -- a per-element property, not a per-module one. Taking the
+	// module's base instead ignored xml:base, which non-stream-004 catches.
+	baseURI string
 }
 
 func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
@@ -42,7 +57,8 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 		return nil, fmt.Errorf(
 			"XTSE0010: xsl:source-document requires an href attribute")
 	}
-	href, err := compileAVT(hrefSrc, newNSResolver(n, ""))
+	ns := newNSResolver(n, "")
+	href, err := compileAVT(hrefSrc, ns)
 	if err != nil {
 		return nil, fmt.Errorf("in xsl:source-document/@href: %w", err)
 	}
@@ -54,8 +70,16 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &sourceDocumentInstr{href: href, validation: spec, body: body,
-		streamed: isYes(n.AttrValue("streamable"))}, nil
+	instr := &sourceDocumentInstr{href: href, validation: spec, body: body,
+		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI}
+	if n.Attr("", "use-accumulators") != nil {
+		accums, err := parseUseAccumulators(n)
+		if err != nil {
+			return nil, err
+		}
+		instr.accums = accums
+	}
+	return instr, nil
 }
 
 func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -74,6 +98,9 @@ func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if i.streamed {
 		rt.streamedTrees[root] = true
 	}
+	if i.accums != nil {
+		rt.treeAccums[root] = i.accums
+	}
 	sub := rt.withCurrent(root, 1, 1).clearCurrentRule()
 	return execSequence(i.body, sub, out)
 }
@@ -87,13 +114,29 @@ func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 // document in place would change what a later fn:doc of the same URI — or a
 // second xsl:source-document over it — sees.
 func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) {
+	// A URI that is not a URI at all is FODC0005, and it is reported before
+	// any retrieval is attempted -- so it does not depend on whether a
+	// resolver is configured, and it is not the FODC0002 that a resource
+	// which merely could not be fetched raises. non-stream-006 asks for
+	// "c:\my\doc\books.xml": a Windows filename, whose backslashes are not
+	// legal URI characters, so it is rejected here rather than being read as
+	// a "c" scheme.
+	if err := validSourceDocumentURI(href); err != nil {
+		return nil, err
+	}
 	docs := rt.ctx.Docs
 	if docs == nil {
 		return nil, fmt.Errorf(
 			"FODC0002: document access is disabled (no resolver configured): %q",
 			href)
 	}
-	base := rt.ctx.StaticBaseURI
+	// 18.1 resolves @href as fn:doc does, against the static base URI of the
+	// expression -- the base URI of the xsl:source-document element, which an
+	// xml:base on it or an ancestor may move.
+	base := i.baseURI
+	if base == "" {
+		base = rt.ctx.StaticBaseURI
+	}
 	if base == "" {
 		if n, ok := rt.ctx.Item.(*xdm.Node); ok {
 			base = n.BaseURI
@@ -104,7 +147,7 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 		return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", href, err)
 	}
 	if i.validation.isDefault() {
-		return fragmentOf(tree.Root, href)
+		return fragmentOf(rt.sheet.stripInputAnnotations(tree.Root), href)
 	}
 	copied := xdm.NewTree()
 	copied.Root.BaseURI = tree.Root.BaseURI
@@ -115,7 +158,14 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 	if err := i.validation.assess(rt, copied.Root); err != nil {
 		return nil, err
 	}
-	return fragmentOf(copied.Root, href)
+	// Stripping happens after assessment, not instead of it. 3.5 scopes
+	// input-type-annotations to the source trees of 4.4, and "any document
+	// read using xsl:stream" — this instruction's former name — is one of
+	// them. validation="strict" still has to run: an invalid document is an
+	// error whether or not the annotations it would have produced survive.
+	// Only the annotations go, which is what makes
+	// "data(.) instance of xs:decimal" false over a validated document.
+	return fragmentOf(rt.sheet.stripInputAnnotations(copied.Root), href)
 }
 
 // fragmentOf applies the fragment identifier of href, if there is one, to the
@@ -168,4 +218,38 @@ func fragmentOf(root *xdm.Node, href string) (*xdm.Node, error) {
 // conformance harness's preloaded sources already do.
 func (s validationSpec) isDefault() bool {
 	return s.typeName == nil && s.mode == validateStrip
+}
+
+// validSourceDocumentURI rejects an @href that is not a usable URI reference,
+// with the FODC0005 that F&O reserves for exactly that: "the resource ... is
+// not a valid URI". It is a distinct condition from FODC0002, which is what a
+// well-formed URI that could not be retrieved raises -- the difference being
+// whether retrieval was ever attempted.
+//
+// Two forms are caught. A "%" that does not introduce a two-digit escape is
+// not a legal percent-encoding, and a backslash is not a legal URI character
+// at all: it appears in an href only when a native Windows filename has been
+// written where a URI belongs ("c:\my\doc\books.xml"). That case matters
+// beyond tidiness, because the leading "c:" otherwise parses as a URI scheme,
+// and the failure is then reported as an unsupported scheme -- a retrieval
+// error for something that was never a URI. The check is on the string, not on
+// the host filesystem, so it behaves identically on Windows, macOS and Linux:
+// a Windows path is not a URI anywhere, including on Windows.
+func validSourceDocumentURI(href string) error {
+	if strings.ContainsRune(href, '\\') {
+		return fmt.Errorf(
+			"FODC0005: %q is not a valid URI: a backslash is not a legal URI "+
+				"character (a filesystem path is not a URI reference)", href)
+	}
+	for i := 0; i < len(href); i++ {
+		if href[i] != '%' {
+			continue
+		}
+		if i+2 >= len(href) || !isHexByte(href[i+1]) || !isHexByte(href[i+2]) {
+			return fmt.Errorf("FODC0005: %q is not a valid URI: %% must "+
+				"introduce a two-digit escape", href)
+		}
+		i += 2
+	}
+	return nil
 }

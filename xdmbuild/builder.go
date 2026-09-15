@@ -2,6 +2,7 @@ package xdmbuild
 
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -57,6 +58,87 @@ type Builder struct {
 	// the namespace and type rules a copy is made under. It is never nil: New
 	// requires one, and a nested builder inherits its parent's.
 	policy Policy
+
+	// textBuf is the growable backing array for the trailing text child of
+	// open, and textNode is the node it belongs to. Together they make a run
+	// of adjacent text appends linear rather than quadratic.
+	//
+	// "last.Value += s" allocated a fresh string of the full merged length on
+	// every piece, so merging n pieces copied O(n^2) bytes: a 640 kB document
+	// of 40000 text nodes spent 7.9 GB of allocation to produce 400 kB of
+	// text. The pieces are not under the stylesheet author's control -- a
+	// three-line identity-style transform over a document with many small
+	// text nodes reaches it -- so the cost is driven by input data.
+	//
+	// The buffer is an accumulator, not a deferred write: textNode.Value is
+	// reassigned from it on every append, so the node is fully correct at all
+	// times. That is required rather than merely tidy, because there is no
+	// "close element" call at which a deferred value could be flushed --
+	// StartElement hands back a sub-builder and the element is already
+	// attached to its parent, so XPath in the body, fixupNamespaces and
+	// validation.assess all read the node while it is still being extended.
+	// Correctness therefore cannot depend on a flush, and none is needed: the
+	// saving comes from append's geometric growth, which copies each byte
+	// O(log n) times instead of O(n).
+	//
+	// The string conversion is what makes this work at all. A plain
+	// string(textBuf) copies the whole run on every append, which measures at
+	// 7,778 MB against the 7,946 MB of the concatenation it replaced -- it
+	// gives back essentially the entire saving. So the value aliases the
+	// buffer through unsafe.String, exactly as strings.Builder.String does.
+	// Their pairing is kept too: appendTextTo asserts the invariant the
+	// aliasing rests on, in the spirit of strings.Builder's copyCheck.
+	textBuf  []byte
+	textNode *xdm.Node
+
+	// refused latches the first budget refusal CountNodes returned, so that
+	// construction stops at the node that crossed the bound rather than
+	// carrying on to the end of the sequence constructor.
+	//
+	// It is latched rather than returned because the constructing calls --
+	// AppendText, AppendValue, StartElement -- return no error, and giving
+	// eighty-seven call sites across two host languages an error to thread
+	// would be a far larger change than the bound is worth. Every one of
+	// those calls is reached from a loop that already checks an error each
+	// iteration (execSequence for XSLT), so Refused() there stops a runaway
+	// within one iteration of the node that crossed it -- which is what
+	// "bounded memory" needs, not what an exact error site would buy.
+	//
+	// The pointer is shared with every sub-builder StartElement makes, so a
+	// refusal inside a deeply nested element is seen by the root: the latch
+	// belongs to the construction, not to one level of it.
+	refused *error
+}
+
+// Refused reports the first budget refusal this construction met, or nil.
+//
+// A host calls it from the loop that drives the sequence constructor, which is
+// where an error can still be returned; see the refused field.
+func (b *Builder) Refused() error {
+	if b == nil || b.refused == nil {
+		return nil
+	}
+	return *b.refused
+}
+
+// countNodes charges n nodes about to be constructed, latching a refusal.
+//
+// It reports whether construction may proceed, so a caller that has something
+// to skip can skip it; callers that simply must not allocate return early on
+// false. Once latched the answer is false for every later call, which is what
+// stops the rest of the sequence constructor rather than only the one node.
+func (b *Builder) countNodes(n int) bool {
+	if b.refused == nil {
+		return true
+	}
+	if *b.refused != nil {
+		return false
+	}
+	if err := b.policy.CountNodes(n); err != nil {
+		*b.refused = err
+		return false
+	}
+	return true
 }
 
 // SetItemSeparator records the item-separator that applies to the tree this
@@ -71,7 +153,7 @@ func New(p Policy) *Builder {
 	if p == nil {
 		panic("xdmbuild.New: nil Policy")
 	}
-	return &Builder{tree: xdm.NewTree(), policy: p}
+	return &Builder{tree: xdm.NewTree(), policy: p, refused: new(error)}
 }
 
 // AppendNode adds a node to the current output position.
@@ -130,7 +212,7 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 		// Copying is only needed when the node is about to be re-parented:
 		// AppendChild rewrites Parent and tree pointers, so adopting a source
 		// node in place would mutate the source document.
-		n = detach(n)
+		n = b.detach(n)
 		Rebase(n, b.open.BaseURI)
 		b.open.AppendChild(n)
 		return
@@ -203,11 +285,99 @@ func RebaseDetached(n *xdm.Node, instrBase string) {
 
 // detach returns a node safe to re-parent: n itself when it is freshly
 // constructed, a deep copy when it belongs to a tree already.
-func detach(n *xdm.Node) *xdm.Node {
+// CountSubtree returns the number of nodes DeepCopy would make for n,
+// counting the attributes and namespaces that travel with each element.
+//
+// A copy is charged for what it builds, not for one node: xsl:copy-of of a
+// large element inside a loop reaches the same runaway as a nested for-each,
+// and charging it a single node would leave that route open.
+//
+// It is exported because a host may copy a node BEFORE handing it to the
+// builder -- xsl:copy-of does, so that it can rebase and strip namespaces on
+// its own copy -- and such a host has to charge what it is about to allocate
+// itself. Keeping the counting rule here is what stops the two charges
+// disagreeing about what a subtree costs.
+func CountSubtree(n *xdm.Node) int {
+	if n == nil {
+		return 0
+	}
+	c := 1 + len(n.Attrs) + len(n.Namespaces)
+	for _, ch := range n.Children {
+		c += CountSubtree(ch)
+	}
+	return c
+}
+
+func (b *Builder) detach(n *xdm.Node) *xdm.Node {
 	if n == nil || (n.Tree() == nil && n.Parent == nil) {
 		return n
 	}
+	// Counted before the copy is made, so a refusal allocates none of it.
+	// The walk is over the SOURCE, which already exists, so it costs a
+	// traversal rather than memory.
+	if !b.countNodes(CountSubtree(n)) {
+		return n
+	}
 	return DeepCopy(n)
+}
+
+// appendTextTo extends the text node n by s, keeping n.Value correct.
+//
+// The pairing of b.textNode with b.textBuf is an INVARIANT rather than a hint,
+// so a mismatch is a bug and is reported as one. Only two places in this file
+// touch either field, and both set them together: AppendText's new-node branch
+// creates n with Value = s and seeds the buffer with the same s, and this
+// function appends to both. Nothing else in the library writes a text node's
+// Value -- only attribute and namespace values are ever reassigned -- so the
+// buffer cannot fall out of step with the node it belongs to.
+//
+// Node.Value is an exported field, so a caller outside this package could in
+// principle assign to a half-built text node and break the pairing. That is
+// not a supported thing to do to a node the builder still owns, and the
+// length check names it as the misuse it is rather than papering over it.
+//
+// n is always b.textNode for the same structural reason. A Builder has one
+// open element for its whole life, because StartElement returns a NEW builder
+// rather than re-pointing this one, and every text child of that element is
+// created by the branch in AppendText that sets b.textNode. So the trailing
+// text child this function is handed is necessarily the node the pairing names.
+//
+// This was written first as a silent recovery -- reseed the buffer from
+// n.Value and carry on -- which was wrong twice over. It was unreachable, so
+// the [:0:0] that made it correct had no test that could fail and a sabotage
+// of it passed the whole suite green; and had it ever been reached it would
+// have concealed the very breakage it was reacting to. strings.Builder faces
+// the same choice for the same unsafe.String aliasing and answers it the same
+// way, with copyCheck panicking on the one misuse that breaks its invariant.
+//
+// The panic is therefore a real assertion: it cannot fire for any input, only
+// for a future edit that adds a third writer of these fields or lets one
+// builder append to another's open element. Failing loudly there is much the
+// better outcome, because the alternative is a string handed out earlier
+// mutating afterwards -- silently wrong output from an XML toolchain, with a
+// correct-looking tree.
+func (b *Builder) appendTextTo(n *xdm.Node, s string) {
+	if s == "" {
+		return
+	}
+	if b.textNode != n || len(b.textBuf) != len(n.Value) {
+		panic("xdmbuild: text accumulator does not match the node being " +
+			"extended; b.textNode/b.textBuf must be set together, and only " +
+			"the builder that owns an element may append text to it")
+	}
+	b.textBuf = append(b.textBuf, s...)
+	// unsafe.String aliases the buffer rather than copying it, and that is
+	// load-bearing rather than a micro-optimisation: measured on the test in
+	// this package, a plain string(b.textBuf) here costs 7,778 MB against the
+	// 7,946 MB of the "Value += s" this change replaced, so copying once per
+	// append restores essentially the entire quadratic. It is the same call
+	// strings.Builder.String makes, for the same reason.
+	//
+	// It is sound because the bytes under a string already handed out are
+	// never written again: append only extends past them, and when it
+	// reallocates it abandons the old array intact to whatever still aliases
+	// it. TestAppendTextSnapshotsAreStable holds that to account.
+	b.textNode.Value = unsafe.String(unsafe.SliceData(b.textBuf), len(b.textBuf))
 }
 
 // AppendText adds text, merging with a preceding text node so that the XDM
@@ -234,11 +404,28 @@ func (b *Builder) AppendText(s string) {
 	if b.open != nil {
 		if k := len(b.open.Children); k > 0 {
 			if last := b.open.Children[k-1]; last.Kind == xdm.KindText {
-				last.Value += s
+				b.appendTextTo(last, s)
 				return
 			}
 		}
-		b.open.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: s})
+		// A merge into the run above makes no node and costs nothing; only
+		// this branch, which starts a new one, is a node to charge.
+		if !b.countNodes(1) {
+			return
+		}
+		n := &xdm.Node{Kind: xdm.KindText, Value: s}
+		b.open.AppendChild(n)
+		// Start a run on the new node rather than only on the second piece,
+		// so that the buffer holds the first piece too and the run never has
+		// to re-copy it.
+		//
+		// [:0:0] rather than [:0], and the difference is a correctness bug
+		// rather than a style choice: the previous run's Value still aliases
+		// the old array, so reusing it writes this node's text over a string
+		// already handed out. Zeroing the capacity forces a fresh allocation.
+		// TestAppendTextMergeShapes/run_resumed_after_element fails without
+		// it -- the first text node reads back as the second's text.
+		b.textNode, b.textBuf = n, append(b.textBuf[:0:0], s...)
 		return
 	}
 	// At the top level of a sequence constructor the text nodes stay
@@ -248,6 +435,9 @@ func (b *Builder) AppendText(s string) {
 	// is three text instructions "returns a sequence of three text nodes".
 	// Merging them here made xsl:perform-sort over such a body see a single
 	// item and sort nothing.
+	if !b.countNodes(1) {
+		return
+	}
 	b.items = append(b.items, &xdm.Node{Kind: xdm.KindText, Value: s})
 }
 
@@ -297,8 +487,41 @@ func (b *Builder) AddAttribute(name xdm.QName, value string) error {
 // pattern such as schema-attribute(A) matches only a node that was actually
 // validated against the declaration, so an attribute that lost its annotation
 // on the way into the element could never match however it was named.
+//
+// It is a convenience wrapper over AddAttributeWithTyping for the callers that
+// genuinely hold nothing but a name -- a DTD attribute type, a hand-built
+// node, a test. A NAME IS NOT THE WHOLE OF AN ANNOTATION: the other seven PSVI
+// properties are left unset here, so atomisation of the resulting attribute
+// falls back to the process-global derivation registries, which are keyed by
+// QName alone and answer for whichever schema loaded last. A caller that knows
+// what the name means -- above all a validator, which does -- must use
+// AddAttributeWithTyping and say so, or a union-typed attribute atomises to
+// xs:untypedAtomic and a list type erases to another schema's primitive.
 func (b *Builder) AddAttributeTyped(name xdm.QName, value string,
 	typeAnnotation string) error {
+
+	return b.AddAttributeWithTyping(name, value,
+		xdm.Typing{TypeAnnotation: typeAnnotation})
+}
+
+// AddAttributeWithTyping adds an attribute carrying every PSVI property its
+// assessment concluded, rather than only the name of its type.
+//
+// This is the typed entry point finding 24 asks for. The properties are
+// RECORDED as given and nothing is derived from the annotation name, which is
+// the whole point: deriving means asking derivedPrimitives, unionMembers and
+// listItems, and those are process-global, keyed by QName alone, and hold
+// whatever schema registered the name most recently. A caller holding a
+// resolved xdm.Typing -- xsl:attribute after assessing its value, a copy of an
+// already-assessed attribute -- has the right answer in hand and must not have
+// it replaced by a possibly different schema's. An attribute built through this
+// method for a type NO schema ever registered still atomises, casts and
+// compares correctly, because the node carries its own meaning.
+//
+// Typing's zero value is the unassessed node, so AddAttributeWithTyping with
+// an empty Typing is exactly AddAttribute.
+func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
+	typing xdm.Typing) error {
 
 	if b.open == nil {
 		// A parentless attribute is a legal item in the data model, and a
@@ -317,10 +540,11 @@ func (b *Builder) AddAttributeTyped(name xdm.QName, value string,
 		// standalone attribute and requires a prefix to be there, and -55
 		// requires the XML namespace to have got "xml" rather than an
 		// invented one.
-		n := &xdm.Node{
-			Kind: xdm.KindAttribute, Name: name, Value: value,
-			TypeAnnotation: typeAnnotation,
+		if !b.countNodes(1) {
+			return b.Refused()
 		}
+		n := &xdm.Node{Kind: xdm.KindAttribute, Name: name, Value: value}
+		n.ApplyTyping(typing)
 		fixupOrphanAttrPrefix(n)
 		b.items = append(b.items, n)
 		return nil
@@ -344,12 +568,16 @@ func (b *Builder) AddAttributeTyped(name xdm.QName, value string,
 				return err
 			}
 			a.Value = value
-			a.TypeAnnotation = typeAnnotation
+			a.ApplyTyping(typing)
 			return nil
 		}
 	}
-	b.open.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: name, Value: value,
-		TypeAnnotation: typeAnnotation})
+	if !b.countNodes(1) {
+		return b.Refused()
+	}
+	attr := &xdm.Node{Kind: xdm.KindAttribute, Name: name, Value: value}
+	attr.ApplyTyping(typing)
+	b.open.AddAttr(attr)
 	fixupAttrPrefix(b.open, b.open.Attrs[len(b.open.Attrs)-1])
 	return nil
 }
@@ -455,6 +683,9 @@ func freshPrefixOn(el *xdm.Node, want string) string {
 // if it were a child would silently vanish from the result.
 func (b *Builder) AddNamespace(prefix, uri string) error {
 	if b.open == nil {
+		if !b.countNodes(1) {
+			return b.Refused()
+		}
 		b.items = append(b.items, &xdm.Node{
 			Kind:  xdm.KindNamespace,
 			Name:  xdm.QName{Local: prefix},
@@ -581,9 +812,17 @@ func (b *Builder) NoteDeclared(prefix, uri string) {
 
 // StartElement opens a new element, returning a builder scoped to it.
 func (b *Builder) StartElement(name xdm.QName) *Builder {
+	// Charged before the node exists, so a refusal costs no allocation. The
+	// element is still constructed when the budget is spent -- the sub-builder
+	// has to be returned for the caller's body to run into, and returning nil
+	// would panic every one of the twenty-three call sites -- but the latch is
+	// set, so the loop driving the construction stops on its next check and
+	// nothing further is appended to it.
+	b.countNodes(1)
 	el := &xdm.Node{Kind: xdm.KindElement, Name: name}
 	b.AppendNode(el)
-	return &Builder{open: el, parent: b, tree: b.tree, policy: b.policy}
+	return &Builder{open: el, parent: b, tree: b.tree, policy: b.policy,
+		refused: b.refused}
 }
 
 // Sequence returns the accumulated items.
@@ -807,8 +1046,39 @@ func (b *Builder) Items() xdm.Sequence { return b.items }
 // inside element content, so it is accepted at the top level and refused
 // under an open element. Both languages refuse it; they differ only in the
 // code, which is why the fault is reported rather than named here.
+// An ARRAY is the exception, and only under an open element. XTDE0450 is
+// worded against a function item — "It is a dynamic error if the result
+// sequence contains a function item" (XSLT 3.0 §5.7.1) — and an array is not
+// one for this rule: content construction flattens it and contributes its
+// members. The XSLT 3.0 test suite says so in as many words, naming
+// output-0713/0714/0715 "An array is flattened by the XML output method",
+// and arrays-304/305 build element content from xsl:sequence over an array
+// and assert the members' values. Flattening is recursive, because a member
+// may itself be an array, which is exactly what xdm.Flatten does.
+//
+// At the TOP level the array stays an array: that is what lets an
+// xsl:variable declared as="array(*)" be built by a sequence constructor, and
+// what an xsl:function returning an array depends on.
 func (b *Builder) AppendOpaque(it xdm.Item) error {
 	if b.open != nil {
+		if arr, ok := it.(*xdm.ArrayItem); ok {
+			for _, m := range xdm.Flatten(xdm.Sequence{arr}) {
+				switch v := m.(type) {
+				case *xdm.Node:
+					b.AppendNode(v)
+				case *xdm.Atomic:
+					b.AppendValue(v)
+				default:
+					// A function item or a map among the members is still
+					// what XTDE0450 is about, and Flatten has already
+					// unwrapped every array around it.
+					if err := b.AppendOpaque(m); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}
 		return b.policy.Err(FaultFunctionItem,
 			fmt.Sprintf("a %s cannot be added to the content of element %s",
 				it.TypeName(), b.open.Name.Lexical()))

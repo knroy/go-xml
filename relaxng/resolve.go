@@ -2,10 +2,15 @@ package relaxng
 
 import (
 	"fmt"
+	"io"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
+	"github.com/knroy/go-xml/internal/fileuri"
+	"github.com/knroy/go-xml/internal/uripath"
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -27,6 +32,135 @@ type Resolver interface {
 	ResolveSchema(href string) (*xdm.Node, error)
 }
 
+// FileResolver is a filesystem-backed Resolver.
+//
+// Root is a capability grant, not a cosmetic path prefix: with it set, every
+// reference must remain below that directory even if a schema uses xml:base,
+// .., an absolute file URL, or a symlink changed between validation and open.
+// os.Root enforces the last property at open time. An empty Root intentionally
+// remains unconfined for command-line callers that explicitly choose it.
+// Network schemes are never fetched; a caller needing them must write a
+// resolver with an explicit host and transport policy.
+type FileResolver struct {
+	// Root confines reads when non-empty.
+	Root string
+	// MaxBytes bounds one fetched schema. Zero uses defaultMaxSchemaBytes.
+	// A negative value refuses every read rather than disabling the bound.
+	MaxBytes int64
+}
+
+// defaultMaxSchemaBytes matches xdm's document limit, so the resolver rejects
+// an oversized file before allocation while Parse remains the backstop.
+const defaultMaxSchemaBytes int64 = 64 << 20
+
+// ResolveSchema implements Resolver.
+func (r *FileResolver) ResolveSchema(href string) (*xdm.Node, error) {
+	u, err := url.Parse(href)
+	if err != nil {
+		return nil, fmt.Errorf("relaxng: invalid schema URI %q: %w", href, err)
+	}
+	// A Windows absolute path parses as a one-letter scheme:
+	// url.Parse(`C:\dir\s.rng`) returns Scheme "c". Checking the scheme first
+	// would refuse every absolute path on Windows. uripath makes the
+	// distinction on the raw string, because a drive path and the "c:///x"
+	// escape are indistinguishable after url.Parse; see the rule there.
+	if u.Scheme != "" && u.Scheme != "file" && !uripath.IsDriveLetterPath(href) {
+		return nil, fmt.Errorf("relaxng: remote schema URI %q is not permitted", href)
+	}
+	// A file: URL may carry an authority, and only an empty one or "localhost"
+	// names this machine. Anything else names a *remote* host — a UNC share on
+	// Windows, an SMB or NFS mount elsewhere — and reading it is the network
+	// fetch this resolver exists to refuse. Taking u.Path alone would discard
+	// the authority and silently read the same-named local path instead, which
+	// is both a read the caller never asked for and a refusal that never
+	// happened.
+	if u.Scheme == "file" && u.Host != "" && u.Host != "localhost" {
+		return nil, fmt.Errorf(
+			"relaxng: schema URI %q names the remote host %q; only local files "+
+				"are permitted", href, u.Host)
+	}
+	// file: URLs are URI syntax; after this point every path is handled by the
+	// same confinement and byte-accounting path as a bare filesystem reference.
+	p := href
+	if u.Scheme == "file" {
+		// fileuri.ToPath rather than u.Path: the RFC 8089 three-slash form
+		// puts the drive INSIDE the path, so u.Path is "/C:/dir/s.rng" and
+		// that leading slash belongs to the URI, not to the filesystem. Left
+		// on, filepath.Abs read it as a rooted path with no volume, Rel
+		// against a "C:\..." root could not relate the two, and every
+		// grammar inside the root was refused as outside it. It also decodes
+		// the percent-escapes a URI carries and a filesystem call does not.
+		// The host check above stays above it, because ToPath keeps only the
+		// path and would silently drop a remote authority.
+		p = fileuri.ToPath(href)
+	}
+	var f *os.File
+	if r.Root != "" {
+		root, err := filepath.Abs(r.Root)
+		if err != nil {
+			return nil, err
+		}
+		// Resolve the root once for comparison. Do not resolve the final path:
+		// following its symlink before OpenRoot would recreate a check-then-open
+		// race and let a link point outside after this check succeeds.
+		if root, err = filepath.EvalSymlinks(root); err != nil {
+			return nil, err
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return nil, err
+		}
+		// Compare the parent on the same resolved spelling as Root (macOS /var
+		// commonly aliases /private/var); leave the leaf unresolved so OpenRoot
+		// remains the enforcement against a symlink escape.
+		if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+			abs = filepath.Join(dir, filepath.Base(abs))
+		}
+		rel, err := filepath.Rel(root, abs)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("relaxng: schema URI %q resolves outside root %q", href, root)
+		}
+		rt, err := os.OpenRoot(root)
+		if err != nil {
+			return nil, err
+		}
+		defer rt.Close()
+		f, err = rt.Open(filepath.ToSlash(rel))
+		if err != nil {
+			return nil, fmt.Errorf("relaxng: open %q: %w", href, err)
+		}
+	} else {
+		f, err = os.Open(p)
+		if err != nil {
+			return nil, fmt.Errorf("relaxng: open %q: %w", href, err)
+		}
+	}
+	defer f.Close()
+	// Read one byte over the limit. A truncated schema is never a safe schema:
+	// it can parse as a different grammar, so over-limit is a loud resource error.
+	max := r.MaxBytes
+	if max == 0 {
+		max = defaultMaxSchemaBytes
+	}
+	if max < 0 {
+		return nil, fmt.Errorf("relaxng: schema byte limit is negative")
+	}
+	b, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > max {
+		return nil, fmt.Errorf("relaxng: schema %q exceeds %d bytes: %w", href, max, xdm.ErrResourceLimit)
+	}
+	// Preserve the resolved document location as the base URI. Nested includes
+	// are compiled with this value, so sibling references remain sibling reads.
+	tree, err := xdm.ParseString(string(b), xdm.ParseOptions{BaseURI: p, MaxBytes: max})
+	if err != nil {
+		return nil, fmt.Errorf("relaxng: parse %q: %w", href, err)
+	}
+	return tree.Root, nil
+}
+
 // A Resolver owns containment, and must not assume the href it receives has
 // been made safe.
 //
@@ -45,6 +179,15 @@ type Resolver interface {
 // So ".." survives, a scheme-relative reference inherits the scheme and
 // reaches a host of the schema's choosing, and URI resolution flattens a path
 // only as far as the base allows.
+//
+// An xml:base goes further than either: it replaces the base outright, scheme
+// included. A schema loaded from "file:///srv/schemas/main.rng" that carries
+//
+//	xml:base="http://169.254.169.254/latest/"   href="meta.rng"
+//	  ->  http://169.254.169.254/latest/meta.rng
+//
+// hands the resolver an http URL, so a resolver that decides by prefix-testing
+// the string for "file://" is testing something the schema controls.
 //
 // That is deliberate: this package cannot know whether a caller's schemas live
 // in one directory, several, or behind an HTTP endpoint where ".." is

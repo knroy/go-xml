@@ -64,6 +64,27 @@ type parser struct {
 	// answers for a prefix the module level does not have.
 	ctorPrefixes map[string]string
 
+	// opts are the compilation options, carried here for one purpose: the
+	// schema loader needs the store, the resolver and the budget at the end
+	// of the prolog, which is inside the parser rather than after it. The
+	// module loader takes them as an argument instead, because it runs after
+	// parsing and the call site has them in hand.
+	opts Options
+
+	// schemaImports accumulates the prolog's "import schema" declarations.
+	// Each is followed by loadSchemaImport WHERE IT IS READ, unlike
+	// moduleImports, which are followed after the body: a schema contributes
+	// type names, and the parser resolves a type name as it reaches it -- so
+	// the prolog's own function signatures need the schema installed by the
+	// time they are parsed, not merely by the time the body is.
+	// See schemaimport.go.
+	schemaImports []schemaImport
+
+	// schemaLoader is built on the first "import schema" and kept for the
+	// whole prolog, so that each import consults the resolver once and the
+	// components fold into one merged schema. nil for a query with no import.
+	schemaLoader *schemaLoader
+
 	// vars and funcs accumulate the prolog's declarations. They are on the
 	// parser rather than returned from parseProlog because a declaration
 	// later in the prolog may name one earlier — a function body calling
@@ -605,7 +626,9 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		return nil, err
 	}
 	var opsOut []liftedOperand
-	c, err := xpath.CompileXQuery(expanded, p.sc, p.version)
+	c, err := xpath.CompileWith(expanded, xpath.CompileOptions{
+		Namespaces: p.sc, Version: p.version, XQuery: true,
+	})
 	if err != nil {
 		// The source handed here is XQuery this parser has already rewritten
 		// around — the trailing half of "(...)/S", a call's rewritten
@@ -620,7 +643,9 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		if serr != nil || len(ops) == 0 {
 			return nil, err
 		}
-		sub, serr := xpath.CompileXQuery(rewritten, p.sc, p.version)
+		sub, serr := xpath.CompileWith(rewritten, xpath.CompileOptions{
+			Namespaces: p.sc, Version: p.version, XQuery: true,
+		})
 		if serr != nil {
 			return nil, err
 		}
@@ -640,7 +665,23 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		if err != nil {
 			return nil, err
 		}
-		c = c.WithDefaultCollation(coll)
+		// The URI travels with the collation so that fn:default-collation()
+		// reports the declared default rather than the codepoint fallback.
+		//
+		// It is reported in its ABSOLUTE form. XQuery 3.1 lets the
+		// declaration name a relative URI, which is resolved against the
+		// static base URI, and fn:default-collation() returns the collation
+		// property of the static context -- the resolved value, not the
+		// characters the prolog happened to write. K-CollationProlog-1
+		// declares base-uri "http://www.w3.org/2005/xpath-functions/" with
+		// default collation "collation/codepoint" and compares the result
+		// against the absolute form.
+		//
+		// ResolveCollation tolerates the relative spelling by matching a URI
+		// tail, so it answers with the right collation and no absolute URI:
+		// the resolution has to happen here, where the base URI is in scope.
+		c = c.WithDefaultCollationURI(coll,
+			resolveBase(p.sc.baseURI, p.sc.defaultCollation))
 	}
 	return &compiledExpr{src: src, xpc: c, sc: p.sc, ops: opsOut}, nil
 }

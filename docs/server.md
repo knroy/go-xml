@@ -493,12 +493,14 @@ read any file, and it can spend your whole timeout doing it. Never compile a
 stylesheet uploaded by a user; ship rule sets with the service. If you must
 accept one, run it in a separate process with its own filesystem view.
 
-`xsd.FileResolver` resolves symlinks *before* the containment check, so a link
-inside a permitted directory cannot reach outside it; `xslt.FileResolver`
-enforces the same containment by a different mechanism, opening through
-`os.OpenRoot` so no path is resolved and then re-opened. The difference is
-deliberate and is explained in
-[docs/security.md](security.md). Ten traversal vectors are covered by tests.
+`xsd.FileResolver`, `xslt.FileResolver` and `dtd.FileResolver` all enforce
+their roots the same way: they open through `os.OpenRoot`, so each path
+component is resolved against the root's own descriptor at open time and a
+symlink swapped in after the check is refused rather than followed. Nothing is
+resolved and then re-opened by name. The earlier containment check remains as
+the diagnosis — it names the permitted directory in the error — and is
+explained in [docs/security.md](security.md). Traversal vectors are covered by
+tests, including ones that need no symlink privilege and so run on Windows.
 
 ## Observability
 

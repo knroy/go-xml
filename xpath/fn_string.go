@@ -64,12 +64,18 @@ func registerStringFuncs(l *Library) {
 	for n := 2; n <= concatMaxArity; n++ {
 		concatArities = append(concatArities, n)
 	}
-	l.registerFn("concat", concatArities, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("concat", concatArities, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		var sb strings.Builder
 		for i := range args {
 			// fn:concat takes xs:anyAtomicType, not xs:string.
 			s, err := argAnyAtomicString(args, i)
 			if err != nil {
+				return nil, err
+			}
+			// Charged as it builds, not after: this is the doubling
+			// chain's own step, and charging the finished string would
+			// mean the allocation had already happened.
+			if err := ctx.countBytes(len(s)); err != nil {
 				return nil, err
 			}
 			sb.WriteString(s)
@@ -113,6 +119,11 @@ func registerStringFuncs(l *Library) {
 			}
 			parts = append(parts, v)
 		}
+		for _, p := range parts {
+			if err := ctx.countBytes(len(p) + len(sep)); err != nil {
+				return nil, err
+			}
+		}
 		return strSeq(strings.Join(parts, sep)), nil
 	}
 	l.registerFn("string-join", []int{2}, stringJoin)
@@ -132,7 +143,16 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(strings.Join(strings.Fields(s), " ")), nil
+		// splitXMLSpace, not strings.Fields: §5.4.5 defines the whitespace
+		// this collapses as exactly XML S (#x20 #x9 #xD #xA). Go's Fields
+		// splits on the whole Unicode White_Space set, which made a no-break
+		// space a separator and replaced it with an ordinary space, where the
+		// spec makes it data that has to survive.
+		//
+		// The result goes through stringResult so the string it builds is
+		// charged against MaxBytes at the allocation rather than at the
+		// enclosing expression.
+		return stringResult(ctx, strings.Join(splitXMLSpace(s), " "))
 	})
 
 	// fn:upper-case and fn:lower-case are defined in terms of Unicode's *full*
@@ -142,20 +162,20 @@ func registerStringFuncs(l *Library) {
 	upper := cases.Upper(language.Und)
 	lower := cases.Lower(language.Und)
 
-	l.registerFn("upper-case", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("upper-case", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(upper.String(s)), nil
+		return stringResult(ctx, upper.String(s))
 	})
 
-	l.registerFn("lower-case", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("lower-case", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(lower.String(s)), nil
+		return stringResult(ctx, lower.String(s))
 	})
 
 	l.registerFn("contains", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -251,7 +271,7 @@ func registerStringFuncs(l *Library) {
 
 	l.registerFn("substring", []int{2, 3}, fnSubstring)
 
-	l.registerFn("translate", []int{3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("translate", []int{3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// Only the first argument is xs:string?. The two mapping arguments are
 		// xs:string, so an empty sequence there is a type error rather than an
 		// empty map.
@@ -267,10 +287,14 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(translate(src, from, to)), nil
+		out := translate(src, from, to)
+		if err := ctx.countBytes(len(out)); err != nil {
+			return nil, err
+		}
+		return strSeq(out), nil
 	})
 
-	l.registerFn("codepoints-to-string", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("codepoints-to-string", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		var sb strings.Builder
 		for _, it := range xdm.Atomize(args[0]) {
 			// The parameter is xs:integer*, so a string is a type error
@@ -303,17 +327,28 @@ func registerStringFuncs(l *Library) {
 				return nil, fmt.Errorf(
 					"FOCH0001: %d is not a valid XML character", cp)
 			}
+			if err := ctx.countBytes(utf8.RuneLen(rune(cp))); err != nil {
+				return nil, err
+			}
 			sb.WriteRune(rune(cp))
 		}
 		return strSeq(sb.String()), nil
 	})
 
-	l.registerFn("string-to-codepoints", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("string-to-codepoints", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		var out xdm.Sequence
+		// The item count is known before the loop -- one per rune -- so the
+		// whole result is reserved once rather than charged per append. A
+		// string near MaxBytes yields a sequence of the same order of
+		// magnitude in items, and reserving first is what refuses it without
+		// building the slice.
+		out, err := makeSequence(ctx, utf8.RuneCountInString(s))
+		if err != nil {
+			return nil, err
+		}
 		for _, r := range s {
 			out = append(out, xdm.NewInteger(int64(r)))
 		}
@@ -340,12 +375,12 @@ func registerStringFuncs(l *Library) {
 		return intSeq(int64(coll.Compare(a, b))), nil
 	})
 
-	l.registerFn("encode-for-uri", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("encode-for-uri", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(encodeForURI(s)), nil
+		return stringResult(ctx, encodeForURI(s))
 	})
 }
 
@@ -356,7 +391,7 @@ func registerStringFuncs(l *Library) {
 // substring("hello", 0) is "hello", substring("hello", -5, 3) is "", and NaN
 // positions yield "". Implementing it as a naive slice with bounds checks gets
 // the edge cases wrong, so the arithmetic follows the spec's formula directly.
-func fnSubstring(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+func fnSubstring(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	src, err := argString(args, 0)
 	if err != nil {
 		return nil, err
@@ -366,7 +401,11 @@ func fnSubstring(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		return nil, err
 	}
 	if startA == nil {
-		return strSeq(""), nil
+		// $start is declared xs:double, not xs:double?, so an empty
+		// sequence is a type error rather than an empty result.
+		return nil, fmt.Errorf(
+			"XPTY0004: an empty sequence is not allowed as the second " +
+				"argument of fn:substring()")
 	}
 	start := roundHalfEven(startA.Float64())
 
@@ -381,7 +420,10 @@ func fnSubstring(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			return nil, err
 		}
 		if lenA == nil {
-			return strSeq(""), nil
+			// $length is xs:double too, and likewise not nullable.
+			return nil, fmt.Errorf(
+				"XPTY0004: an empty sequence is not allowed as the third " +
+					"argument of fn:substring()")
 		}
 		l := roundHalfEven(lenA.Float64())
 		if isNaNf(l) || isNaNf(start) {
@@ -411,7 +453,11 @@ func fnSubstring(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	if hi <= lo {
 		return strSeq(""), nil
 	}
-	return strSeq(string(runes[int(lo)-1 : int(hi)-1])), nil
+	// string(runes[...]) allocates -- unlike substring-before and
+	// substring-after, which slice the argument and share its backing array --
+	// so the result is charged. It cannot exceed its input, which makes it the
+	// bounded-output case stringResult is written for.
+	return stringResult(ctx, string(runes[int(lo)-1:int(hi)-1]))
 }
 
 // translate maps characters of src through the from/to correspondence.
@@ -460,19 +506,34 @@ func encodeForURI(s string) string {
 	return sb.String()
 }
 
-// isXMLChar reports whether a codepoint may appear in an XML 1.0 document.
+// isXMLChar reports whether a codepoint may appear in an XML document, at the
+// version of XML this engine implements.
 //
-// The excluded ranges are not arbitrary: most C0 controls, the surrogate block
-// (which has no meaning outside UTF-16 encoding), and the two permanently
-// unassigned characters at the end of the BMP. Writing an excluded codepoint
-// with WriteRune silently produced U+FFFD instead of failing, so a stylesheet
+// The excluded ranges are not arbitrary: U+0000, the surrogate block (which has
+// no meaning outside UTF-16 encoding), and the two permanently unassigned
+// characters at the end of the BMP. Writing an excluded codepoint with
+// WriteRune silently produced U+FFFD instead of failing, so a stylesheet
 // building a string from computed codepoints got a replacement character where
 // it expected an error.
+//
+// The C0 controls other than TAB, LF and CR are admitted, because this engine
+// implements XML 1.1: [2] Char there is [#x1-#xD7FF] | [#xE000-#xFFFD] |
+// [#x10000-#x10FFFF], where XML 1.0 starts the first range at #x20. XSLT 3.0
+// 4.1 makes the choice ours -- "Implementations may support any version ... it
+// is thus implementation-defined which versions and editions of XML and XML
+// Namespaces are supported" -- and tests/xslts/deps.go already claims XML_1.1,
+// so refusing #x8 here contradicted a promise the harness makes on our behalf.
+// Saxon 9.8 passes xml-to-json-D015, -D017 and -D018 on the same reading; the
+// three cases construct a backspace, a bell and a form feed by codepoint.
+//
+// The version does still decide whether such a character can be WRITTEN DOWN,
+// and that decision lives in the serializer, not here: XDM makes no distinction
+// between an XML 1.0 and an XML 1.1 tree (XSLT 3.0 4.1), so a C0 control is a
+// string value at either version and only becomes SERE0006 when an XML 1.0
+// serialization is asked to spell it. See xslt/serialize.go.
 func isXMLChar(c int64) bool {
 	switch {
-	case c == 0x9, c == 0xA, c == 0xD:
-		return true
-	case c >= 0x20 && c <= 0xD7FF:
+	case c >= 0x1 && c <= 0xD7FF:
 		return true
 	case c >= 0xE000 && c <= 0xFFFD:
 		return true

@@ -3,10 +3,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -46,16 +49,58 @@ func (p paramFlag) Set(v string) error {
 	return nil
 }
 
+// registerAllowDir declares -allow-dir on fs and returns its target.
+//
+// It is a function rather than an inline flag.String call so that the help
+// text has exactly one source: TestAllowDirHelpMatchesRoots reads the sentence
+// from here and checks it against what readableRoots actually grants. A copy
+// of the wording in the test would let the two drift, which is the defect the
+// test exists to prevent.
+func registerAllowDir(fs *flag.FlagSet) *string {
+	return fs.String("allow-dir", "",
+		"comma-separated roots that xsl:include, xsl:import, fn:doc and "+
+			"fn:document may read, each covering its subdirectories to any "+
+			"depth. The stylesheet's own directory is always one of them, "+
+			"flag or no flag, since a stylesheet that cannot read the "+
+			"modules beside it is useless; empty adds nothing further. It "+
+			"says where, not what: reading raw text, an external entity or "+
+			"an xi:include also needs the flag for that")
+}
+
+// readableRoots is the complete list of directories the stylesheet resolver
+// may read: the stylesheet's own directory, then whatever -allow-dir named.
+//
+// The stylesheet's own directory is always readable, since a stylesheet that
+// includes a sibling module is the normal case; anything beyond that must be
+// named explicitly.
+//
+// Note what this grants: the directory is one root list shared by xsl:include
+// and by doc()/document(), so a stylesheet can also *read* any file sitting
+// beside it, not only include one. That is wider than -allow-dir alone
+// suggests, and it matters when the stylesheet lives in a directory holding
+// anything the caller would not hand over — put the stylesheet somewhere of
+// its own if that is a concern. Containment is still enforced: nothing outside
+// these roots is reachable, symlinks are resolved before the check, and the
+// roots are the only paths the resolver will open.
+//
+// The -allow-dir help text states this grant, and TestAllowDirHelpMatchesRoots
+// pins the two together so neither can drift from the other.
+func readableRoots(sheetPath, allowDirs string) []string {
+	var roots []string
+	if dir := filepath.Dir(sheetPath); dir != "" {
+		roots = append(roots, dir)
+	}
+	if allowDirs != "" {
+		roots = append(roots, strings.Split(allowDirs, ",")...)
+	}
+	return roots
+}
+
 func run() error {
 	var (
-		sheetPath = flag.String("xsl", "", "stylesheet to apply (required)")
-		outPath   = flag.String("o", "", "write output to this file instead of stdout")
-		allowDirs = flag.String("allow-dir", "",
-			"comma-separated roots that xsl:include, xsl:import, fn:doc and "+
-				"fn:document may read, each covering its subdirectories to any "+
-				"depth; empty disables all of them. It says where, not what: "+
-				"reading raw text, an external entity or an xi:include also "+
-				"needs the flag for that")
+		sheetPath    = flag.String("xsl", "", "stylesheet to apply (required)")
+		outPath      = flag.String("o", "", "write output to this file instead of stdout")
+		allowDirs    = registerAllowDir(flag.CommandLine)
 		allowDoctype = flag.Bool("allow-doctype", false,
 			"permit a DOCTYPE in the source document and expand the entities it "+
 				"declares internally; external entities still require "+
@@ -126,8 +171,12 @@ func run() error {
 				"       go-xml validate -rng SCHEMA.rng [flags] INPUT.xml ...\n\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
-Security defaults: xsl:include, xsl:import, fn:doc and fn:document are all
-disabled unless -allow-dir names the directories they may read. A DOCTYPE in
+Security defaults: xsl:include, xsl:import, fn:doc and fn:document read only
+the stylesheet's own directory, plus whatever -allow-dir names. The stylesheet's
+directory is granted unconditionally because a stylesheet that cannot read the
+modules beside it is useless -- but it is one root list shared by every reader,
+so a file merely sitting beside the stylesheet can also be read by doc(). Give
+the stylesheet a directory of its own if that matters. A DOCTYPE in
 the source document is rejected unless -allow-doctype is given, and even then
 only its internal declarations are expanded: reading an external entity, an
 external DTD subset, or a file through fn:unparsed-text each needs its own
@@ -165,27 +214,7 @@ Exit status: 0 if every input transformed, 1 otherwise.
 				"so it needs an input document")
 	}
 
-	// The stylesheet's own directory is always readable, since a stylesheet
-	// that includes a sibling module is the normal case; anything beyond that
-	// must be named explicitly.
-	//
-	// Note what this grants: the directory is one root list shared by
-	// xsl:include and by doc()/document(), so a stylesheet can also *read*
-	// any file sitting beside it, not only include one. That is wider than
-	// -allow-dir alone suggests, and it matters when the stylesheet lives in
-	// a directory holding anything the caller would not hand over — put the
-	// stylesheet somewhere of its own if that is a concern. Containment is
-	// still enforced: nothing outside that directory is reachable without
-	// -allow-dir, symlinks are resolved before the check, and the roots are
-	// the only paths the resolver will open.
-	var roots []string
-	if dir := filepath.Dir(*sheetPath); dir != "" {
-		roots = append(roots, dir)
-	}
-	if *allowDirs != "" {
-		roots = append(roots, strings.Split(*allowDirs, ",")...)
-	}
-	resolver, err := xslt.NewFileResolver(roots...)
+	resolver, err := xslt.NewFileResolver(readableRoots(*sheetPath, *allowDirs)...)
 	if err != nil {
 		return err
 	}
@@ -496,6 +525,34 @@ func splitSecondary(results []xslt.SecondaryResult) (principal, secondary []xslt
 // Each href is resolved inside dir and checked for containment, because an
 // href is stylesheet-controlled and "../../etc/thing" would otherwise let a
 // transform write anywhere the process can reach.
+// isPlatformAbsolute reports whether an href is absolute on ANY platform,
+// spelled textually so the answer does not change with the host.
+//
+// filepath.IsAbs answers for the operating system it was compiled for, which
+// is the wrong question for a stylesheet: "C:/out.xml" is absolute on Windows
+// and, on Unix, an ordinary relative name. Left to IsAbs alone the same
+// stylesheet was refused on one platform and, on the other, quietly made a
+// directory called "C:" inside the result directory -- writing a file nobody
+// named rather than reporting the href it could not honour.
+//
+// Three spellings are absolute somewhere: a leading slash (POSIX), a
+// drive-letter prefix, and a UNC path. The check is on the href as written
+// rather than on the filesystem, so a host with no C: drive answers the same
+// as one with.
+func isPlatformAbsolute(href string) bool {
+	if strings.HasPrefix(href, "/") || strings.HasPrefix(href, `\\`) {
+		return true
+	}
+	// A drive letter: one ASCII letter, a colon, then a separator or nothing.
+	if len(href) >= 2 && href[1] == ':' {
+		c := href[0]
+		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' {
+			return true
+		}
+	}
+	return false
+}
+
 func writeSecondary(results []xslt.SecondaryResult, dir string) error {
 	if len(results) == 0 {
 		return nil
@@ -525,7 +582,7 @@ func writeSecondary(results []xslt.SecondaryResult, dir string) error {
 		// safely contained but writes somewhere the stylesheet did not name —
 		// and a caller reading the href back would look in the wrong place.
 		href := filepath.FromSlash(r.Href)
-		if filepath.IsAbs(href) || strings.HasPrefix(r.Href, "/") {
+		if filepath.IsAbs(href) || isPlatformAbsolute(r.Href) {
 			return fmt.Errorf(
 				"xsl:result-document href %q is absolute; it must be relative to -result-dir",
 				r.Href)
@@ -536,18 +593,64 @@ func writeSecondary(results []xslt.SecondaryResult, dir string) error {
 			return fmt.Errorf(
 				"xsl:result-document href %q resolves outside %s", r.Href, root)
 		}
-		if err := os.MkdirAll(filepath.Dir(clean), 0o755); err != nil {
-			return err
-		}
-		f, err := os.Create(clean)
+		// The prefix test above decides which names are permitted; it does
+		// not decide what gets written. A symlink at the destination -- or
+		// at any directory component of it -- is followed by os.Create, so
+		// the string check passes and the bytes land outside the root. This
+		// is the only path in the program that opens by name after a check,
+		// and it is a WRITE: every read resolver in the library was moved to
+		// os.OpenRoot for exactly this reason. The href may also come from
+		// the source document through an attribute value template, so the
+		// name being joined is not necessarily the stylesheet author's.
+		rel, err := filepath.Rel(root, clean)
 		if err != nil {
 			return err
 		}
+		rt, err := os.OpenRoot(root)
+		if err != nil {
+			return err
+		}
+		if err := mkdirAllIn(rt, filepath.Dir(rel)); err != nil {
+			rt.Close()
+			return fmt.Errorf(
+				"xsl:result-document href %q: %w", r.Href, err)
+		}
+		f, err := rt.Create(rel)
+		if err != nil {
+			rt.Close()
+			return fmt.Errorf(
+				"xsl:result-document href %q: %w", r.Href, err)
+		}
+		defer rt.Close()
 		err = r.Serialize(f, nil)
 		if cerr := f.Close(); err == nil {
 			err = cerr
 		}
 		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mkdirAllIn is os.MkdirAll confined to a root.
+//
+// os.Root deliberately has no MkdirAll: each component must be created
+// through the root so that a symlink planted part-way down is refused rather
+// than followed. Walking them here keeps that property. An existing directory
+// is not an error; an existing *file* is, and Mkdir reports it.
+func mkdirAllIn(rt *os.Root, rel string) error {
+	if rel == "." || rel == "" {
+		return nil
+	}
+	var built string
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if part == "" || part == "." {
+			continue
+		}
+		built = path.Join(built, part)
+		if err := rt.Mkdir(filepath.FromSlash(built), 0o755); err != nil &&
+			!errors.Is(err, fs.ErrExist) {
 			return err
 		}
 	}
@@ -613,11 +716,32 @@ func baseOutputURI(outPath, resultDir string) string {
 // dirURI is fileURI for a directory, which differs only in the trailing
 // slash that makes a relative reference resolve inside it.
 func dirURI(path string) string {
-	u := fileURI(path)
+	if path == "" || strings.HasPrefix(path, "file:") {
+		return dirSlash(fileURI(path))
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	return slashedDirURI(filepath.ToSlash(abs))
+}
+
+// dirSlash appends the single trailing slash that distinguishes a directory
+// URI from a file one, leaving an already-slashed value alone.
+func dirSlash(u string) string {
 	if u != "" && !strings.HasSuffix(u, "/") {
 		u += "/"
 	}
 	return u
+}
+
+// slashedDirURI is dirURI for a path that is already absolute and already
+// slash-separated -- dirURI's rule with filepath.Abs already applied. It is
+// split out for the same reason absPathToFileURI is: Abs is host-relative, so
+// a C:/... or D:/... spelling can only be tested off Windows at the layer
+// below it.
+func slashedDirURI(slashed string) string {
+	return dirSlash(absPathToFileURI(slashed))
 }
 
 // fileURI turns a filesystem path into an absolute file: URI.

@@ -300,8 +300,20 @@ func checkChildren(n *xdm.Node, spec elementSpec) error {
 					n.Name.Local)
 			}
 		}
-		if strings.TrimSpace(n.StringValue()) != "" && n.Name.Local != "value" {
-			return fmt.Errorf("relaxng: <%s> takes no content", n.Name.Local)
+		// Only this element's own character data counts. StringValue()
+		// would gather text out of a foreign child too, and §5.2 strips
+		// foreign elements — with everything inside them — before any
+		// content-model rule is applied, so text belonging to an annotation
+		// is not text belonging to the element it annotates. Reading it as
+		// such refused <ref><a:documentation>..</a:documentation></ref>,
+		// which is the shape the compatibility specification's own
+		// documentation annotation takes; the branch below, for elements
+		// that do hold patterns, already looks only at direct children.
+		for _, kid := range n.Children {
+			if kid.Kind == xdm.KindText && !whitespaceOnly(kid.Value) &&
+				n.Name.Local != "value" {
+				return fmt.Errorf("relaxng: <%s> takes no content", n.Name.Local)
+			}
 		}
 		return nil
 	}

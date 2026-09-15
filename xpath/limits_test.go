@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -207,4 +208,115 @@ func evalOne(t *testing.T, ctx *Context, expr string) string {
 		return ""
 	}
 	return seq[0].(interface{ String() string }).String()
+}
+
+// HoldItemBudget must not change what the caller's own Context does. The flag
+// lives on the copy it returns, so a caller that keeps evaluating through the
+// original still gets the per-expression boundary Compiled.Eval documents --
+// otherwise a host that held the budget once would silently convert every
+// later evaluation on that context into a cumulative one.
+func TestHoldItemBudgetDoesNotAffectTheCallersContext(t *testing.T) {
+	ctx := NewContext(nil, Builtins())
+	held := ctx.HoldItemBudget()
+	if !held.heldItems {
+		t.Fatal("the returned context does not hold the budget")
+	}
+	if ctx.heldItems {
+		t.Error("the hold leaked onto the caller's own Context; every later " +
+			"evaluation through it would accumulate")
+	}
+	// The per-expression boundary still applies through the original: five
+	// evaluations that each materialise a million items must all succeed.
+	e := MustCompile("count(for $x in 1 to 1000, $y in 1 to 1000 return $x)", nil)
+	for i := 0; i < 5; i++ {
+		if _, err := e.Eval(ctx); err != nil {
+			t.Fatalf("evaluation %d through the caller's context failed: %v",
+				i+1, err)
+		}
+	}
+}
+
+// A held context shares the counter with the one it was made from, which is
+// what lets a host measure a tree of nested evaluations against one allowance.
+func TestHoldItemBudgetSharesTheCounter(t *testing.T) {
+	ctx := NewContext(nil, Builtins())
+	held := ctx.HoldItemBudget()
+	if held.items != ctx.items {
+		t.Fatal("the held context has its own counter; a host holding the " +
+			"budget would not see what nested evaluations charge")
+	}
+	if err := held.ChargeItems(MaxItems + 1); err == nil {
+		t.Error("ChargeItems did not refuse a charge past MaxItems")
+	}
+}
+
+// Holding a budget that is already held must not re-arm it: an inner
+// evaluation that reset the counter would clear the outer one's charges and
+// hand it an allowance it has already spent.
+func TestHoldItemBudgetIsIdempotent(t *testing.T) {
+	ctx := NewContext(nil, Builtins())
+	held := ctx.HoldItemBudget()
+	if err := held.ChargeItems(MaxItems - 10); err != nil {
+		t.Fatalf("a charge inside the budget was refused: %v", err)
+	}
+	again := held.HoldItemBudget()
+	if err := again.ChargeItems(100); err == nil {
+		t.Error("re-holding an already-held budget reset it; the outer " +
+			"evaluation's charges were discarded")
+	}
+}
+
+// AdoptBudget must carry each counter together with its held flag.
+//
+// A counter forwarded without its flag is reset by Compiled.Eval once per
+// expression in the nested evaluation, and because the pointer is shared that
+// reset clears the CALLER's charges too -- handing the caller an allowance it
+// has already spent. That is worse than the fresh allowance adopting replaces,
+// which is why the flag travels with the counter.
+func TestAdoptBudgetCarriesTheHeldFlags(t *testing.T) {
+	caller := NewContext(nil, Builtins()).HoldItemBudget().HoldByteBudget()
+	nested := NewContext(nil, Builtins()).AdoptBudget(caller)
+	if !nested.heldItems {
+		t.Error("heldItems was not carried; Compiled.Eval will reset the " +
+			"item counter under the caller")
+	}
+	if !nested.heldBytes {
+		t.Error("heldBytes was not carried; Compiled.Eval will reset the " +
+			"byte counter under the caller")
+	}
+}
+
+// Adopting must share the counters, so the nested evaluation spends the
+// caller's remaining allowance rather than a fresh one.
+func TestAdoptBudgetSharesTheCounters(t *testing.T) {
+	caller := NewContext(nil, Builtins())
+	nested := NewContext(nil, Builtins()).AdoptBudget(caller)
+	if err := nested.ChargeItems(7); err != nil {
+		t.Fatalf("charging the nested context: %v", err)
+	}
+	if err := nested.ChargeBytes(9); err != nil {
+		t.Fatalf("charging the nested context: %v", err)
+	}
+	if got := atomic.LoadInt64(caller.items); got != 7 {
+		t.Errorf("caller items = %d, want 7; the nested evaluation spent an "+
+			"allowance of its own", got)
+	}
+	if got := atomic.LoadInt64(caller.bytes); got != 9 {
+		t.Errorf("caller bytes = %d, want 9; the nested evaluation spent an "+
+			"allowance of its own", got)
+	}
+}
+
+// A caller with nothing to inherit from is a fresh root, and adopting from it
+// must leave the context's own budget alone rather than unbinding it.
+func TestAdoptBudgetFromNilIsAFreshRoot(t *testing.T) {
+	ctx := NewContext(nil, Builtins())
+	got := ctx.AdoptBudget(nil)
+	if got != ctx {
+		t.Fatal("adopting from a nil source returned a different context")
+	}
+	if got.items == nil || got.bytes == nil {
+		t.Error("adopting from a nil source unbound the context's own " +
+			"budget, leaving the evaluation unbounded")
+	}
 }

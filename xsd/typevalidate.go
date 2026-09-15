@@ -45,12 +45,24 @@ func (s *Schema) ValidateElement(el *xdm.Node, opts ValidateOptions) error {
 // describe is not thereby invalid. It is the mode that lets a stylesheet
 // validate the parts of its output that are described without having to
 // describe all of it.
+//
+// "Does not describe" is not the same as "has no declaration", though. XSD 1.0
+// §3.3.4 clause 1.2.1.2 resolves an xsi:type attribute and assesses the element
+// against the type it names whether or not a declaration exists, and lax
+// assessment takes that path as readily as strict does -- CanAssessStrictly
+// below states the same rule for the strict side. Skipping on the declaration
+// alone let an element that named its own type escape the assessment it had
+// asked for: "validate lax { <z:person xsi:type='xs:NCName'>abc 123</z:person> }"
+// returned the element instead of the XQDY0027 the invalid NCName owes
+// (qischema90621-err).
 func (s *Schema) ValidateElementLax(el *xdm.Node, opts ValidateOptions) error {
 	if el == nil || el.Kind != xdm.KindElement {
 		return fmt.Errorf("xsd: ValidateElementLax needs an element")
 	}
 	if _, ok := s.Elements[bareName(el.Name)]; !ok {
-		return nil
+		if el.Attr(NSInstance, "type") == nil {
+			return nil
+		}
 	}
 	return s.Validate(el, opts)
 }
@@ -190,7 +202,7 @@ func (s *Schema) validateNodeAgainstType(n *xdm.Node, typ Type,
 			// on a value rather than on a declared node. Without it an
 			// attribute validated against a named type came out untyped and
 			// "instance of attribute(a, my:t)" answered false for it.
-			setResolvedAnnotation(n,
+			s.setResolvedAnnotation(n,
 				xdm.AnnotationName(typeName.URI, typeName.Local), typ)
 		}
 	default:
@@ -417,10 +429,42 @@ func resolveAnnotationMeaning(key string, t Type) (derivedPrimitive, listItem st
 // calling xdm.SetTypeAnnotation directly. A site that annotates with a name
 // but has no Type in hand keeps using SetTypeAnnotation, which leaves the
 // resolved fields empty and falls back to the registry.
-func setResolvedAnnotation(n *xdm.Node, annotation string, t Type) {
+//
+// It also records THIS schema's TypeEnvironment on the node. The resolved
+// fields answer only for the node's own annotation; every other by-NAME
+// question -- "instance of", "castable as", the element and attribute tests,
+// xsl:copy's namespace-sensitivity check -- walks the annotation's derivation
+// chain, and the chain belongs to the schema that defined the name. Stamping
+// the environment here is what lets those walks reach this schema's
+// definitions rather than whatever a later, unrelated schema registered under
+// the same lexical name.
+func (s *Schema) setResolvedAnnotation(n *xdm.Node, annotation string, t Type) {
 	if annotation == "" {
 		return
 	}
 	prim, item := resolveAnnotationMeaning(annotation, t)
 	n.SetTypeAnnotationResolved(annotation, prim, item)
+	if s != nil {
+		n.SetTypeEnv(s.typeEnv)
+	}
+}
+
+// TypeEnv returns the type environment this schema owns: the derivation, list
+// and union facts its own type definitions establish.
+//
+// It is exported so that a caller holding a schema -- xslt's validation
+// instructions are the case in this repository -- can answer a question about
+// one of the schema's type NAMES without going through the process-global
+// table, which is keyed by name across every schema in the process and so
+// answers for whichever loaded last.
+//
+// It is also what an aggregate schema merges: xsl:import-schema and XQuery's
+// "import schema" fold several loaded schemas into one, and the derivation
+// facts have to travel with the type definitions or the aggregate holds types
+// that no longer know what they derive from.
+func (s *Schema) TypeEnv() *xdm.TypeEnvironment {
+	if s == nil {
+		return nil
+	}
+	return s.typeEnv
 }

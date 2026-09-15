@@ -218,7 +218,7 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// would not do: out may already have an open element whose attributes the
 	// body added, and there is no record of where the body's contribution
 	// began.
-	sub := newOutputBuilder()
+	sub := newOutputBuilder(rt)
 	err := i.run(rt, sub)
 	if err == nil {
 		return appendSequence(sub.Sequence(), out)

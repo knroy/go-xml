@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -52,6 +53,14 @@ var standardAttributes = map[string]bool{
 	// never instantiated. Accepting it here and ignoring it is what lets that
 	// run happen at all.
 	"expand-text": true,
+	// default-validation completes section 3.5's list of nine: "There are a
+	// number of standard attributes that may appear on any XSLT element:
+	// specifically default-collation, default-mode, default-validation,
+	// exclude-result-prefixes, expand-text, extension-element-prefixes,
+	// use-when, version, and xpath-default-namespace." It was the only one of
+	// the nine this map did not carry, which went unnoticed for as long as
+	// forwards compatible processing was swallowing the rejection.
+	"default-validation": true,
 }
 
 // checkStaticGrammar verifies one element against the table.
@@ -99,8 +108,22 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			// is what makes a stylesheet written for a later version run.
 			return nil
 		}
+		// The version is read from the stylesheet rather than written as a
+		// literal. "2.0" was hardcoded here, so a 3.0 stylesheet reaching
+		// this message was told about a version it had not asked for.
+		//
+		// NOT DEMONSTRATED, and recorded as such. Instrumenting this return
+		// and running the whole xslt suite never reached it: the content-model
+		// check in elementtable.go answers first for every unknown xsl:
+		// element tried, at top level and in a sequence constructor, under
+		// version="2.0", "3.0" and a forwards-compatible "4.0" alike. The
+		// same is true of the sibling message in compile_instr.go. So this is
+		// a correct spelling of a diagnostic that may be unreachable, rather
+		// than a user-visible fix -- which is the more useful finding, and is
+		// why it is written here instead of being claimed as closed.
 		return fmt.Errorf(
-			"xsl:%s is not an XSLT 2.0 element (XTSE0010)", el.Name.Local)
+			"xsl:%s is not an XSLT %s element (XTSE0010)",
+			el.Name.Local, xsltVersionName(xpathVersionAt(el)))
 	}
 
 	for _, a := range el.Attrs {
@@ -172,10 +195,34 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			if standardAttributes[a.Name.Local] {
 				continue
 			}
-			if forwards {
-				// "if an element has an attribute that XSLT 2.0 does not
-				// allow the element to have, then the attribute must be
-				// ignored."
+			// The splice marker is written by rewriteOverride onto a
+			// declaration an xsl:override moved into the used package's top
+			// level. It is the engine's own bookkeeping, not something the
+			// stylesheet author wrote, so the grammar has nothing to say
+			// about it -- the sibling marker at overriddenMarkerNS is exempt
+			// because it carries a namespace, and this one does not.
+			if a.Name.Local == spliced {
+				continue
+			}
+			if forwards && effectiveForwards(el) {
+				// Section 3.9: an element is processed with forwards
+				// compatible behavior if its effective version is greater
+				// than the version the processor implements, and only then is
+				// "an attribute that is not allowed on the element" ignored
+				// rather than reported. effectiveForwards makes that
+				// comparison against CompileOptions.MaxVersion.
+				//
+				// The quotation this guard used to carry was the XSLT 2.0
+				// wording, and the bare forwards flag it tested is measured
+				// against 2.0 by forwardsAt. That handed 2.0-era leniency to
+				// every version="3.0" module -- the version essentially every
+				// modern stylesheet declares -- so a misspelled attribute
+				// name was dropped in silence: <xsl:value-of selct="..."/>
+				// compiled clean and emitted nothing at all. The three
+				// sibling paths in this function each guard with
+				// effectiveForwards for exactly this reason; see the unknown
+				// element check above. This one was measuring the other
+				// version.
 				continue
 			}
 			return fmt.Errorf(
@@ -500,6 +547,9 @@ func isInstruction(local string) bool {
 // checkAttrValue verifies an attribute against the closed set of values the
 // summary gives for it, when it gives one.
 func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
+	if ad.uri {
+		return checkURIAttr(el, a)
+	}
 	if len(ad.values) == 0 {
 		return nil
 	}
@@ -508,6 +558,14 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 	// runs, so a "{...}" here is checked then rather than now. Rejecting it
 	// would refuse the legal order="{$dir}".
 	if ad.avt && strings.Contains(v, "{") {
+		return nil
+	}
+	// A union with xsl:EQName-in-namespace admits a namespaced name beyond
+	// the listed tokens; see attrDef.eqnameOK. Before @streamability lost
+	// its avt flag, the "{" of Q{uri}local slipped through the test above,
+	// which is why the flag had no reader.
+	if ad.eqnameOK && (isEQName(v) ||
+		(isLexicalQName(v) && strings.Contains(v, ":"))) {
 		return nil
 	}
 	for _, want := range ad.values {
@@ -526,6 +584,17 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 	if isXSL(el, "message") && a.Name.Local == "terminate" {
 		allow = allow || processorAtLeast30()
 	}
+	// The serialization attributes of xsl:result-document are the same case:
+	// §3.5 declares each as { boolean }, and the schema-for-stylesheets types
+	// them xsl:yes-or-no, "the values 'true' or 'false', or '1' or '0' are
+	// accepted as synonyms". result-document-0304 writes
+	// omit-xml-declaration="true" in a version="2.0" module and is scoped
+	// XSLT30+, exactly as message-0009 writes terminate="true" there -- and
+	// beside build-tree="false", which this table already admits. So what
+	// decides is whether the processor implements 3.0.
+	if isXSL(el, "result-document") {
+		allow = allow || processorAtLeast30()
+	}
 	if alias, ok := boolAliases[v]; ok && allow {
 		for _, want := range ad.values {
 			if alias == want {
@@ -533,9 +602,61 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 			}
 		}
 	}
+	// The message lists the spellings the check just accepted, so a 3.0
+	// module is told "yes, no, true, false, 1, 0" and a 2.0 module "yes, no".
+	listed := ad.values
+	if allow {
+		listed = append([]string(nil), ad.values...)
+		has := func(v string) bool {
+			for _, want := range listed {
+				if v == want {
+					return true
+				}
+			}
+			return false
+		}
+		// Only aliases the enumeration does not already spell are added.
+		// Twenty of the enumerations in elementtable.go list all six
+		// spellings themselves, and for those every alias is both present
+		// in ad.values and mapped by boolAliases to a value that is also
+		// present -- so appending on the mapping alone listed each of
+		// true, false, 1 and 0 a second time.
+		for _, alias := range []string{"true", "false", "1", "0"} {
+			if has(alias) {
+				continue
+			}
+			for _, want := range ad.values {
+				if boolAliases[alias] == want {
+					listed = append(listed, alias)
+					break
+				}
+			}
+		}
+	}
 	return fmt.Errorf(
 		"attribute %s=%q on xsl:%s is not one of %s (XTSE0020)",
-		a.Name.Local, a.Value, el.Name.Local, strings.Join(ad.values, ", "))
+		a.Name.Local, a.Value, el.Name.Local, strings.Join(listed, ", "))
+}
+
+// checkURIAttr holds an attribute the summary types "uri" to that lexical
+// space. Nearly every string is a legal relative reference, so this refuses
+// little: a value carrying a character url.Parse cannot place, and a
+// curly-bracket template, which the attribute is not -- the summary writes
+// the name unbraced, so a brace here is a literal brace and no URI has one.
+func checkURIAttr(el *xdm.Node, a *xdm.Node) error {
+	v := strings.TrimSpace(a.Value)
+	if strings.ContainsAny(v, "{}") {
+		return fmt.Errorf(
+			"attribute %s=%q on xsl:%s is not an attribute value template "+
+				"and must be a URI (XTSE0020)",
+			a.Name.Local, a.Value, el.Name.Local)
+	}
+	if _, err := url.Parse(v); err != nil {
+		return fmt.Errorf(
+			"attribute %s=%q on xsl:%s is not a valid URI reference (XTSE0020)",
+			a.Name.Local, a.Value, el.Name.Local)
+	}
+	return nil
 }
 
 // checkStaticGrammarTree applies the check to every XSLT element in a module.
@@ -953,4 +1074,18 @@ func inPackage(el *xdm.Node) bool {
 	p := el.Parent
 	return p != nil && p.Kind == xdm.KindElement &&
 		p.Name.URI == xdm.NSXSL && p.Name.Local == "package"
+}
+
+// xsltVersionName spells the XSLT version that corresponds to an XPath
+// version, for a diagnostic that has to name one.
+//
+// xpath.Version.String() spells the XPATH version -- "XPath 3.1" -- which is
+// the wrong name in an XTSE message about an xsl: element. The two move
+// together (XSLT 3.0 hosts XPath 3.1, XSLT 2.0 hosts XPath 2.0), so the
+// mapping is total and needs no separate tracking.
+func xsltVersionName(v xpath.Version) string {
+	if v.AtLeast31() {
+		return "3.0"
+	}
+	return "2.0"
 }

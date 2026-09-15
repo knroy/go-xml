@@ -127,7 +127,7 @@ func (t *entityTable) fetchExternal(systemID, publicID, base string) (string, st
 	// at the limit is distinguishable from one over it — without it a file
 	// of precisely the remaining budget would be truncated silently, which
 	// is worse than refusing it.
-	room := maxTotalEntityBytes - t.total
+	room := maxTotalEntityBytes - t.total()
 	if room > maxExternalFetchBytes {
 		room = maxExternalFetchBytes
 	}
@@ -143,8 +143,9 @@ func (t *entityTable) fetchExternal(systemID, publicID, base string) (string, st
 			"external entity %q exceeds the remaining %d byte expansion budget: %w",
 			systemID, room, ErrResourceLimit)
 	}
-	// Charged before expansion, per the note above.
-	t.total += len(data)
+	// Charged before expansion, per the note above. The room computed above
+	// already left the shared budget's remainder, so this cannot overshoot.
+	t.budget.spent += len(data)
 	if resolved == "" {
 		resolved = systemID
 	}
@@ -420,7 +421,11 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 	// reads out of it: those only exist once parameter entities have been
 	// substituted, which is what the text above now is.
 	t.subsetText += "\n" + text
-	sub := parseEntityDecls(text, resolved)
+	// The subset's table shares this document's expansion budget: declarations
+	// reached through an external subset are still this document's expansion,
+	// and a fresh budget here would be the same per-parse reset that XInclude
+	// had.
+	sub := parseEntityDecls(text, resolved, t.budget)
 	if sub == nil {
 		return nil
 	}
@@ -551,11 +556,8 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 			// An internal parameter entity costs no fetch, so it is charged
 			// here instead: without this a subset made of internal parameter
 			// entities referring to one another would expand unbounded.
-			t.total += len(text)
-			if t.total > maxTotalEntityBytes {
-				return "", fmt.Errorf(
-					"entity expansion exceeds %d bytes in total: %w",
-					maxTotalEntityBytes, ErrResourceLimit)
+			if err := t.charge(len(text)); err != nil {
+				return "", err
 			}
 		}
 		// The substituted text may itself declare and reference further

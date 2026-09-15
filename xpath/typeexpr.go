@@ -136,10 +136,10 @@ func (t SequenceType) matchesItem(it xdm.Item) bool {
 		// member that accepted it. The two are siblings in no hierarchy the
 		// upward walk can cross, so the member is offered as a second
 		// starting point rather than being reached from the first.
-		if m := a.DerivedMember(); m != "" && schemaTypeNameMatches(m, t.SchemaType) {
+		if m := a.DerivedMember(); m != "" && schemaTypeNameMatches(xdm.TypeEnvOfAtomic(a), m, t.SchemaType) {
 			return true
 		}
-		if schemaTypeNameMatches(a.Derived(), t.SchemaType) {
+		if schemaTypeNameMatches(xdm.TypeEnvOfAtomic(a), a.Derived(), t.SchemaType) {
 			return true
 		}
 		// A pure union type matches by MEMBERSHIP rather than by annotation.
@@ -193,7 +193,11 @@ func (t SequenceType) matchesItem(it xdm.Item) bool {
 // Only an unqualified step is offered to the built-in table: a qualified name
 // is a schema type and is never reachable through the built-in hierarchy, and
 // letting one in would compare local parts across namespaces.
-func derivedSubtypeOfThroughSchema(derived, facet string) bool {
+// env is the environment of the schema that issued the derived annotation,
+// for the reason schemaTypeNameMatches takes one: the chain a name resolves
+// through belongs to the schema that defined the name, not to whichever
+// schema most recently registered something under it.
+func derivedSubtypeOfThroughSchema(env *xdm.TypeEnvironment, derived, facet string) bool {
 	if derivedSubtypeOf(derived, facet) {
 		return true
 	}
@@ -202,9 +206,12 @@ func derivedSubtypeOfThroughSchema(derived, facet string) bool {
 	// a repeated name identifies. The count this replaced answered a definite
 	// "not a subtype" on running out of steps, so a legal acyclic chain of 33
 	// user-defined types decided the subtype relation wrongly.
+	if env == nil {
+		env = xdm.GlobalTypeEnvironment()
+	}
 	seen := map[string]bool{derived: true}
 	for derived != "" {
-		derived = xdm.DerivedBase(derived)
+		derived = env.DerivedBase(derived)
 		if derived == "" || seen[derived] {
 			return false
 		}
@@ -266,7 +273,7 @@ func atomicTypeMatchesFacet(a *xdm.Atomic, want xdm.TypeCode, facet string) bool
 		// is a different case: it is an instance of its own type and of every
 		// type that type derives from, xs:NOTATION included. That is the only
 		// way anything can be an instance of it, since the type is abstract.
-		return schemaTypeNameMatches(a.Derived(), "NOTATION")
+		return schemaTypeNameMatches(xdm.TypeEnvOfAtomic(a), a.Derived(), "NOTATION")
 	case "":
 		return atomicTypeMatches(a.Type, want)
 	}
@@ -275,14 +282,14 @@ func atomicTypeMatchesFacet(a *xdm.Atomic, want xdm.TypeCode, facet string) bool
 	// value validated against a restriction of xs:int, which is the ordinary
 	// case for anything read out of a schema-validated document.
 	if a.Derived() != "" && a.Derived() != facet &&
-		schemaTypeNameMatches(a.Derived(), facet) {
+		schemaTypeNameMatches(xdm.TypeEnvOfAtomic(a), a.Derived(), facet) {
 		return true
 	}
 	if hasRangeFacet(facet) || hasStringFacet(facet) {
 		// A derived type matches only a value that was built as that type or
 		// as one below it. A plain xs:integer literal is the *parent* of
 		// xs:int, so it is not an instance of it.
-		return derivedSubtypeOfThroughSchema(a.Derived(), facet)
+		return derivedSubtypeOfThroughSchema(xdm.TypeEnvOfAtomic(a), a.Derived(), facet)
 	}
 	return atomicTypeMatches(a.Type, want)
 }
@@ -371,7 +378,18 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	// separated token, so it cannot go through CastAtomic, which maps one
 	// item to one. See listtype.go.
 	if e.Type.ListItemFacet != "" {
-		out, err := castToListType(atoms[0].(*xdm.Atomic), e.Type.ListItemFacet)
+		a := atoms[0].(*xdm.Atomic)
+		// The operand type is checked before the tokens are, because 18.3.6
+		// admits only xs:string and xs:untypedAtomic as a source. That is a
+		// type error rather than a cast failure, so "castable as" is false
+		// rather than the error escaping.
+		if _, err := listSourceValue(a); err != nil {
+			if e.Castable {
+				return xdm.One(xdm.NewBoolean(false)), nil
+			}
+			return nil, err
+		}
+		out, err := castToListType(a, e.Type.ListItemFacet)
 		if e.Castable {
 			return xdm.One(xdm.NewBoolean(err == nil)), nil
 		}
@@ -415,23 +433,123 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// The value is valid, so the result is one item per whitespace-
 		// separated token, each cast to the item type -- the same shape
 		// castToListType produces for a built-in list type.
-		toks := collapseXMLSpaceFields(atoms[0].(*xdm.Atomic).String())
-		out := make(xdm.Sequence, 0, len(toks))
-		for _, tok := range toks {
-			if e.Type.SchemaListItemType == 0 {
-				// An item type with no built-in code: the tokens keep their
-				// lexical form, which is all that can be said about them
-				// without the schema's own value constructor.
-				out = append(out, xdm.NewString(tok))
+		return castListTokens(ctx, atoms[0].(*xdm.Atomic), e.Type)
+	}
+
+	// A cast to an impure or restricted union is decided entirely by the
+	// schema: ValidateValue tries the member types and then applies the
+	// union's own facets, which is exactly the validity question the cast
+	// asks. The result keeps the operand's own atomic type, because a union
+	// contributes no value space of its own -- a cast to it neither
+	// canonicalises nor re-types. See SchemaSimpleType.
+	if e.Type.SchemaSimpleType {
+		src := atoms[0].(*xdm.Atomic)
+		var verr error
+		if e.Type.SchemaValueValid != nil {
+			verr = e.Type.SchemaValueValid(src.String())
+		}
+		// A cast to a LIST member is defined from xs:string and
+		// xs:untypedAtomic only (F&O 3.0 18.3), so a source that is neither
+		// may reach the union's ATOMIC members and nothing else. Validation
+		// alone cannot see the difference -- it is handed a lexical form and
+		// "1" is a valid one-item list of decimals whatever produced it --
+		// so the source's own type is what decides.
+		//
+		// cbcl-castable-impure-009 is exactly this: xs:decimal("1") against a
+		// union of xs:date and a list of xs:decimal is FALSE, where the same
+		// lexical form as an xs:untypedAtomic (-005) is true.
+		if verr == nil && !isStringLike(src.Type) && src.Type != xdm.TypeUntypedAtomic {
+			reachable := false
+			for _, m := range e.Type.SchemaSimpleAtomicMembers {
+				if _, err := CastAtomic(src, m); err == nil {
+					reachable = true
+					break
+				}
+			}
+			if !reachable {
+				verr = fmt.Errorf(
+					"a %s reaches no atomic member, and a cast to a list "+
+						"member is defined only from a string", src.Type)
+			}
+		}
+		if e.Castable {
+			return xdm.One(xdm.NewBoolean(verr == nil)), nil
+		}
+		if verr != nil {
+			return nil, xdm.Errorf("FORG0001",
+				"%q is not castable to %s: %v", src.String(), e.Type, verr)
+		}
+		// A value admitted through the union's LIST member casts to that
+		// list, and a cast to a list type is a SEQUENCE -- one value per
+		// whitespace-separated token (F&O 3.0 18.3.6, whose own example has
+		// my:coordinates("2 -1") return two xs:integer values). Returning the
+		// single string instead made "s:impureUnionType('1 2 3')" one item,
+		// and the outer castable in cbcl-castable-impure-010 true where the
+		// three-item sequence it owes is castable to nothing.
+		//
+		// The atomic members are tried FIRST, because the members of a union
+		// are tried in declaration order and an atomic match is not a list
+		// match: "s:impureUnionType('2001-01-01')" is the xs:date member and
+		// stays one item. Only a value no atomic member accepts falls through
+		// to the list -- and only from a string-like source, which is the
+		// same rule SchemaSimpleAtomicMembers enforces above.
+		if len(e.Type.SchemaSimpleListMembers) > 0 &&
+			(isStringLike(src.Type) || src.Type == xdm.TypeUntypedAtomic) {
+			atomicTook := false
+			for _, m := range e.Type.SchemaSimpleAtomicMembers {
+				if _, err := CastAtomic(src, m); err == nil {
+					atomicTook = true
+					break
+				}
+			}
+			if !atomicTook {
+				out, err := castToListMember(ctx, src, e.Type.SchemaSimpleListMembers)
+				if err != nil {
+					return nil, xdm.Errorf("FORG0001",
+						"%q is not castable to %s: %v",
+						src.String(), e.Type, err)
+				}
+				return out, nil
+			}
+		}
+		// The value belongs to a MEMBER of the union, and F&O 3.0 18.3.2 makes
+		// the cast's result an instance of that member -- the same rule
+		// castToUnion applies to a pure union, and it does not stop applying
+		// because the union carries a facet of its own. Returning the source
+		// untouched made "s:restrictedUnion('2012-10-08')" an xs:string where
+		// CastAs-UnionType-34 requires an xs:date, and left the result of
+		// s:lowercaseName('candlewick') failing "instance of xs:NCName"
+		// (CastAs-UnionType-26).
+		//
+		// The union's own facets have already been applied above, through
+		// SchemaValueValid; what is left is only to give the value the member's
+		// type. The members are tried in declaration order, which is the order
+		// the schema reports them in, and the first that accepts the value
+		// wins. A source that is already one of the members is left alone --
+		// casting it onwards would canonicalise it away, exactly as in
+		// castToUnion.
+		for i, m := range e.Type.SchemaSimpleAtomicMembers {
+			facet := ""
+			if i < len(e.Type.SchemaSimpleAtomicFacets) {
+				facet = e.Type.SchemaSimpleAtomicFacets[i]
+			}
+			// Already the member, with nothing further for the member to add:
+			// leave it alone. The facet is what "nothing further" turns on --
+			// xs:NCName erases to xs:string, so an xs:string source LOOKS like
+			// the member while satisfying none of its constraints and carrying
+			// none of its annotation. Breaking on the code alone left
+			// s:lowercaseName('candlewick') a bare xs:string, failing the
+			// "instance of xs:NCName" CastAs-UnionType-26 asserts.
+			if src.Type == m && facet == "" {
+				break
+			}
+			out, err := CastToDerived(src, m, facet)
+			if err != nil {
 				continue
 			}
-			v, err := CastAtomic(xdm.NewString(tok), e.Type.SchemaListItemType)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, v)
+			return xdm.One(out), nil
 		}
-		return out, nil
+		return xdm.One(src), nil
 	}
 
 	if !e.Type.HasAtomicType {
@@ -485,9 +603,24 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// are a further constraint, and without applying them a cast to a
 		// restriction of xs:integer accepted every integer.
 		//
-		// The *source* lexical form is checked rather than the cast result,
-		// because a facet such as a pattern constrains the lexical space and
-		// the cast may have canonicalised it away.
+		// The source lexical form is what a facet is checked against for
+		// every type whose canonical form fn:string already writes -- the
+		// pattern constrains the lexical space, and for those the two agree.
+		//
+		// The numeric primitives are the exception, and F&O 18.3.3 is
+		// explicit: where a cast crosses a branch of the hierarchy the
+		// pattern is tested against "the canonical lexical representation of
+		// the value". W3C bug 26865 settled that this means the CAST RESULT,
+		// in the target's own primitive, and CastableAs653-658 pin it -- each
+		// titled "Pattern must match canonical representation (not the result
+		// of string())". "12 castable as d:canonicalDecimal", against a
+		// pattern of "-?[0-9]+\.[0-9]+", is true because the canonical
+		// decimal is "12.0"; testing the source's "12" made it false.
+		//
+		// out is already in the target's primitive, so its canonical form is
+		// the one the rule asks for. canonicalLexical answers only for the
+		// numerics whose canonical form differs from fn:string, so every
+		// other type keeps the source form it had.
 		//
 		// A QName-valued type is the exception, and has to be: xs:QName and
 		// xs:NOTATION have QNames rather than strings for their value space,
@@ -500,6 +633,11 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// in the Clark spelling no lexical QName can have. This mirrors what
 		// the constructor path does in qnamedyn.go.
 		lex := src.String()
+		if out != nil {
+			if canon, ok := canonicalLexical(out); ok {
+				lex = canon
+			}
+		}
 		if e.Type.AtomicType == xdm.TypeQName {
 			q := out.QName()
 			// A cast from a STRING produces a QName with no URI, because
@@ -517,7 +655,24 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			}
 		}
 		if verr := e.Type.SchemaValueValid(lex); verr != nil {
+			// The schema layer reports a facet violation as a plain error --
+			// it validates documents, where an XPath error code means
+			// nothing. Here the same fact is a failed CAST, and F&O 3.0 17.5
+			// names the error: "If the value passed to a constructor is not
+			// in the lexical space of the datatype to be constructed, and
+			// cannot be converted to a value in the value space ... a dynamic
+			// error is raised [err:FORG0001]". 18.3.1 says the same for the
+			// cast form.
+			//
+			// Left uncoded, the failure was still a failure, so the QT3
+			// harness scored it correct: an error carrying no code at all is
+			// the one case it accepts against any expected code. That is its
+			// documented weak spot, and passing through it is not the same as
+			// being right.
 			err = verr
+			if xdm.ErrorCode(verr) == "" {
+				err = xdm.Errorf("FORG0001", "%v", verr)
+			}
 			out = nil
 		}
 	}
@@ -598,7 +753,14 @@ func isLiteralOperand(e Expr) bool {
 // The derivation walk below is unchanged: a value is an instance of every type
 // its own derives from, and the chain the schema recorded is now keyed by the
 // same qualified names, so the walk stays exact end to end.
-func schemaTypeNameMatches(annotation, want string) bool {
+// env is the type environment of the schema that issued the annotation. The
+// chain is walked there rather than in the process-global table, because the
+// two differ exactly when two schemas define the same lexical type name
+// differently -- the global then holds whichever loaded last, so a value
+// annotated by one schema answered with the other's derivation. A nil env
+// falls back to the global table, which is right for an annotation no schema
+// issued.
+func schemaTypeNameMatches(env *xdm.TypeEnvironment, annotation, want string) bool {
 	if annotation == "" {
 		return false
 	}
@@ -633,9 +795,12 @@ func schemaTypeNameMatches(annotation, want string) bool {
 	// name identifies that cycle exactly. The count this replaced stopped
 	// after 32 links and returned false, which is a definite negative on a
 	// legal chain rather than a refusal.
+	if env == nil {
+		env = xdm.GlobalTypeEnvironment()
+	}
 	seen := map[string]bool{a: true}
 	for a != "" {
-		a = xdm.DerivedBase(a)
+		a = env.DerivedBase(a)
 		if a == "" || seen[a] {
 			return false
 		}
@@ -645,6 +810,82 @@ func schemaTypeNameMatches(annotation, want string) bool {
 		}
 	}
 	return false
+}
+
+// castListTokens builds the sequence a cast to a schema-defined list type
+// produces from a value the schema has already admitted: one item per
+// whitespace-separated token, each cast to the list's item type.
+//
+// F&O 3.0 18.3.6 makes each item "an instance of the item type of L", which
+// is more than a built-in primitive can carry. A list of xs:IDREF owes
+// xs:IDREF values and a list of a union owes values of whichever member
+// accepted each token, so when the item type is known in full (see
+// SchemaListItem) each token goes through the same cast an expression written
+// against that type would -- facet applied, member chosen, annotation
+// recorded. The built-in code is the fallback for a resolver that answers only
+// the older question, and a token keeps its lexical form when neither is
+// known, which is all that can be said about it without the schema's own
+// value constructor.
+func castListTokens(ctx *Context, a *xdm.Atomic, list SequenceType) (xdm.Sequence, error) {
+	toks := collapseXMLSpaceFields(a.String())
+	out := make(xdm.Sequence, 0, len(toks))
+	for _, tok := range toks {
+		switch {
+		case list.SchemaListItem != nil:
+			item := &CastExpr{Operand: &Literal{Val: xdm.NewString(tok)},
+				Type: *list.SchemaListItem}
+			v, err := item.Eval(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v...)
+		case list.SchemaListItemType != 0:
+			v, err := CastAtomic(xdm.NewString(tok), list.SchemaListItemType)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		default:
+			out = append(out, xdm.NewString(tok))
+		}
+	}
+	return out, nil
+}
+
+// castToListMember casts a string-like value to the first of a union's list
+// members that accepts it, in declaration order -- the rule for every union.
+//
+// A built-in list member (xs:IDREFS) is cast as the built-in list it is; a
+// schema-defined one is put to its own validity check first, because the
+// list's facets and its item type are the schema's to apply, and only then
+// shredded into items. CastAs-UnionType-28 is a union over xs:IDREFS and a
+// list of a namespace-sensitive union handed "a b xs:integer": the first
+// member refuses the QName, the second admits it, and the result is three
+// values of the second's item type.
+func castToListMember(ctx *Context, a *xdm.Atomic, members []SequenceType) (xdm.Sequence, error) {
+	var last error
+	for _, m := range members {
+		var out xdm.Sequence
+		var err error
+		if m.ListItemFacet != "" {
+			out, err = castToListType(a, m.ListItemFacet)
+		} else {
+			if m.SchemaValueValid != nil {
+				err = m.SchemaValueValid(a.String())
+			}
+			if err == nil {
+				out, err = castListTokens(ctx, a, m)
+			}
+		}
+		if err == nil {
+			return out, nil
+		}
+		last = err
+	}
+	if last == nil {
+		last = fmt.Errorf("no list member accepts it")
+	}
+	return nil, last
 }
 
 // castToUnion casts a value to a named pure union type.
@@ -673,9 +914,39 @@ func castToUnion(a *xdm.Atomic, st SequenceType) (*xdm.Atomic, error) {
 	// An item that is already an instance of one of the members needs no
 	// conversion. xs:untypedAtomic is excluded: it is the type a cast is
 	// there to resolve, and it is never itself a member.
-	if a.Type != xdm.TypeUntypedAtomic {
+	//
+	// The shortcut is taken only when the schema has nothing further to say.
+	// A member may be a RESTRICTION whose facets the member's type code
+	// cannot express -- myUnionType2 is a union of xs:integer and a pattern-
+	// restricted xs:string -- and for such a union "already an xs:string" is
+	// not "already a member": the pattern still has to hold. Returning early
+	// there made "'AD123456789' cast as s:myUnionType2" succeed where
+	// CastAs-UnionType-5a requires FORG0001. With SchemaValueValid present
+	// the loop below reaches the same answer for a value that IS valid,
+	// because CastAtomic to its own type is the identity.
+	if a.Type != xdm.TypeUntypedAtomic && st.SchemaValueValid == nil {
 		for _, m := range st.SchemaUnionMembers {
 			if a.Type == m {
+				return a, nil
+			}
+		}
+	}
+	// An xs:QName operand takes the shortcut even when the schema has more to
+	// say, because for it "the loop reaches the same answer" is false. A QName
+	// value carries a namespace binding that no lexical form holds, and the
+	// loop takes the FIRST member the value casts to -- so a union over
+	// xs:NCName and xs:QName handed an actual QName matched the NCName member,
+	// cast the namespace away, and left local-name-from-QName with no QName to
+	// read (CastAs-UnionType-20 and -33). Re-validating it is not an option
+	// either: the schema is asked about a LEXICAL value, the written form of a
+	// QName matches prefixes rather than namespaces, and the expanded
+	// "{uri}local" spelling is in no type's lexical space, so every QName
+	// shown to the validator was rejected. Nor is there anything to re-check
+	// -- SchemaUnionMembers is non-nil only for a PURE union, which by XPath
+	// 3.1 2.5 carries no facets of its own.
+	if a.Type == xdm.TypeQName {
+		for _, m := range st.SchemaUnionMembers {
+			if m == xdm.TypeQName {
 				return a, nil
 			}
 		}
@@ -684,17 +955,57 @@ func castToUnion(a *xdm.Atomic, st SequenceType) (*xdm.Atomic, error) {
 	// union is defined over the lexical space: "12:00:00" is an xs:time and
 	// not an xs:date, and only the written form says so.
 	lex := a.String()
-	for _, m := range st.SchemaUnionMembers {
-		out, err := CastAtomic(a, m)
+	for i, m := range st.SchemaUnionMembers {
+		// The member's NAME, not just its code. XPath erases every derived
+		// string type to xs:string, so a union over xs:NCName and xs:QName
+		// reports xs:string for the first member; casting to that code
+		// returned a bare string that applied none of the member's facets and
+		// satisfied "instance of xs:NCName" not at all. F&O 3.0 18.3.2 makes
+		// the result of a cast to a union an instance of the member that
+		// accepted it -- CastAs-UnionType-18 and -26 assert exactly that -- so
+		// the facet has to be applied and the annotation recorded, which is
+		// what CastToDerived does. See SchemaUnionMemberFacets.
+		facet := ""
+		if i < len(st.SchemaUnionMemberFacets) {
+			facet = st.SchemaUnionMemberFacets[i]
+		}
+		out, err := CastToDerived(a, m, facet)
 		if err != nil {
 			continue
 		}
-		// The built-in cast settles the lexical form of the member. The
-		// union's *declared* validity is a further question when the member
-		// is a restriction carrying facets the type code cannot express, so
-		// the schema is asked as well when it is reachable.
-		if st.SchemaValueValid != nil {
-			if st.SchemaValueValid(lex) != nil {
+		// A QName-valued member carries a namespace that CastToDerived cannot
+		// supply: it has no static context, so it built a QName with no URI
+		// and namespace-uri-from-QName on the result was empty. The bindings
+		// that apply are the ones in scope where the TYPE NAME was written --
+		// which is why CastAs-UnionType-13..15 expect FORG0001 rather than the
+		// caller's own binding for the prefix -- and they were captured there.
+		// See SchemaExpandQName.
+		if m == xdm.TypeQName && a.Type != xdm.TypeQName {
+			if st.SchemaExpandQName == nil {
+				continue
+			}
+			q, ok := st.SchemaExpandQName(a.String())
+			if !ok {
+				continue
+			}
+			out = xdm.NewQNameValue(q)
+		}
+		// The built-in cast settles the lexical form of the member, and it is
+		// THAT form the schema is asked about -- not the operand's. A cast
+		// converts a value, so "123.12 cast as s:myUnionType1" over a union of
+		// xs:integer and xs:date is the integer 123: the decimal-to-integer
+		// cast truncates, and 123 is what the union then has to admit.
+		// Validating the operand's own "123.12" asked whether the SOURCE was
+		// already in the member's lexical space, which is the question
+		// validation asks and not the one a cast asks -- CastAs-UnionType-3
+		// expects 123 where that reading raised FORG0001.
+		//
+		// A QName result is exempt for the same reason the shortcut above
+		// exempts one: there is no lexical spelling to hand the validator that
+		// means what the value means, and a pure union has no facets of its
+		// own for the validator to apply.
+		if st.SchemaValueValid != nil && m != xdm.TypeQName {
+			if st.SchemaValueValid(out.String()) != nil {
 				continue
 			}
 		}

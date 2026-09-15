@@ -151,10 +151,11 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	s.xpathVersion = opts.XPathVersion
 	s.maxPositions = opts.MaxContentModelPositions
 	a := &assembler{
-		schema: s,
-		opts:   opts,
-		seen:   map[docKey]bool{},
-		p:      &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
+		schema:    s,
+		opts:      opts,
+		seen:      map[docKey]bool{},
+		rootBases: map[string]bool{},
+		p:         &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
 	}
 	// The root document is marked seen before anything else runs. Without
 	// it a schema that is imported back by one of its own imports — legal,
@@ -163,6 +164,7 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	if baseURI != "" {
 		a.seen[docKey{location: baseURI}] = true
 	}
+	a.rootBases[baseURI] = true
 	a.push(root, baseURI, "", false)
 	if err := a.run(); err != nil {
 		return nil, err
@@ -207,6 +209,27 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 // this out for itself — it has no schema — and it cannot ask, because xsd
 // imports xdm and not the other way round. So the schema tells it, once, here.
 func registerDerivedTypes(s *Schema) {
+	// Every fact is recorded twice: into the schema's OWN environment, which
+	// an aggregate merges and a by-name consumer holding this schema reads,
+	// and into the process-global tables, which are what a caller holding no
+	// schema still falls back to. The two receive identical calls, so they
+	// cannot disagree about a name only one schema defines; where two schemas
+	// collide on a name, the schema-owned copy is the one that stays correct
+	// and the global holds the last writer, which is the documented behaviour
+	// of the name-only API.
+	env := s.typeEnv
+	regDerived := func(name, prim string) {
+		env.RegisterDerived(name, prim)
+		xdm.RegisterDerivedType(name, prim)
+	}
+	regList := func(name, item string) {
+		env.RegisterList(name, item)
+		xdm.RegisterListType(name, item)
+	}
+	regUnion := func(name string, members []string) {
+		env.RegisterUnion(name, members)
+		xdm.RegisterUnionType(name, members)
+	}
 	for name, t := range s.Types {
 		if name.Local == "" || name.URI == NSSchema {
 			continue
@@ -228,7 +251,7 @@ func registerDerivedTypes(s *Schema) {
 			if item := listItemTypeOf(ct); item != nil {
 				key := xdm.AnnotationName(name.URI, name.Local)
 				if in := annotationName(item); in != "" && in != key {
-					xdm.RegisterListType(key, in)
+					regList(key, in)
 				}
 			}
 			// A UNION type's base is always xs:anySimpleType — that is what
@@ -245,7 +268,7 @@ func registerDerivedTypes(s *Schema) {
 						names = append(names, mn)
 					}
 				}
-				xdm.RegisterUnionType(key, names)
+				regUnion(key, names)
 			}
 			base, _ = ct.Base.(*SimpleType)
 		case *ComplexType:
@@ -264,7 +287,7 @@ func registerDerivedTypes(s *Schema) {
 				if b, ok := ct.Base.(*ComplexType); ok && b != nil {
 					if bn := b.Name; bn.Local != "" && bn.URI != NSSchema &&
 						!(bn.URI == name.URI && bn.Local == name.Local) {
-						xdm.RegisterDerivedType(
+						regDerived(
 							xdm.AnnotationName(name.URI, name.Local),
 							xdm.AnnotationName(bn.URI, bn.Local))
 					}
@@ -286,7 +309,32 @@ func registerDerivedTypes(s *Schema) {
 							names = append(names, mn)
 						}
 					}
-					xdm.RegisterUnionType(key, names)
+					regUnion(key, names)
+				}
+			}
+			// A simple-content complex type derived from ANOTHER complex
+			// type records that step, exactly as the complex-content
+			// branch above does, rather than jumping straight to the
+			// simple type it atomises as.
+			//
+			// Both facts are wanted and one chain carries both: the step
+			// to the named base answers element(E, thatBase), and the
+			// base's own registration continues to the built-in, so
+			// atomisation still reaches it one link later.
+			//
+			// Registering only the atomisation target lost every
+			// intermediate name. j:stringWithinMapType extends
+			// j:stringType extends xs:string, and recording it as
+			// "-> xs:string" made "instance of element(fn:string,
+			// fn:stringType)" false for a validated map's child, which is
+			// json-to-xml-046's first assertion.
+			if b, ok := ct.Base.(*ComplexType); ok && b != nil {
+				if bn := b.Name; bn.Local != "" && bn.URI != NSSchema &&
+					!(bn.URI == name.URI && bn.Local == name.Local) {
+					regDerived(
+						xdm.AnnotationName(name.URI, name.Local),
+						xdm.AnnotationName(bn.URI, bn.Local))
+					continue
 				}
 			}
 			base = ct.SimpleContent
@@ -298,7 +346,7 @@ func registerDerivedTypes(s *Schema) {
 		if base != nil {
 			key := xdm.AnnotationName(name.URI, name.Local)
 			if prim := annotationName(base); prim != "" && prim != key {
-				xdm.RegisterDerivedType(key, prim)
+				regDerived(key, prim)
 			}
 		}
 	}
@@ -366,10 +414,11 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 	s.maxPositions = opts.MaxContentModelPositions
 	s.sourcePaths = append([]string(nil), paths...)
 	a := &assembler{
-		schema: s,
-		opts:   opts,
-		seen:   map[docKey]bool{},
-		p:      &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
+		schema:    s,
+		opts:      opts,
+		seen:      map[docKey]bool{},
+		rootBases: map[string]bool{},
+		p:         &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
 	}
 
 	for _, path := range paths {
@@ -391,6 +440,9 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		if resolved != "" {
 			a.seen[docKey{location: canonicalLocation(resolved)}] = true
 		}
+		// Named on the command line, so the caller knows about it: its
+		// faults are not attributed to a file they did not expect.
+		a.rootBases[resolved] = true
 		a.push(tree.Root, resolved, "", false)
 	}
 
@@ -532,6 +584,13 @@ type assembler struct {
 	queue  []pending
 	p      *parser
 	count  int
+
+	// rootBases holds the locations of the documents the caller named
+	// directly. Faults in those are reported without naming the file — the
+	// caller is already looking at it — which is what confines the
+	// attribution to documents they would not otherwise think to open.
+	// LoadFiles names several, so this is a set rather than one string.
+	rootBases map[string]bool
 
 	// pendingOverrides are the XSD 1.1 <xs:override> elements awaiting the
 	// same treatment, minus the self-reference binding: an override's
@@ -764,6 +823,11 @@ func (a *assembler) run() error {
 // readOne reads one document's components and queues what it references.
 func (a *assembler) readOne(root *xdm.Node, item pending) error {
 	doc := &schemaDoc{root: root, baseURI: item.base}
+	// A fault in this document should name it — unless it is the document
+	// the caller handed to Load, which they are already looking at.
+	if !a.rootBases[item.base] {
+		a.p.noteDocument(root, item.base)
+	}
 	if attr := root.Attr("", "targetNamespace"); attr != nil {
 		// §3.15.2 (schema-namespace): targetNamespace names a
 		// namespace, and "" names none. A document meaning "no target

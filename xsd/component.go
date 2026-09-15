@@ -52,6 +52,7 @@ package xsd
 import (
 	"fmt"
 	"math/big"
+	"sync/atomic"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -225,6 +226,50 @@ type ElementDecl struct {
 	// computed after the whole schema is assembled, because a member may be
 	// declared in a document that has not been read yet.
 	substitutable []*ElementDecl
+}
+
+// SchemaElementMembers returns the members of this declaration's substitution
+// group that a schema-element() test admits, transitively and not including
+// the declaration itself.
+//
+// It is NOT the same set as Substitutable(). That set answers a content-model
+// question -- which declarations may appear where a particle names this one --
+// and a *validation episode* checks each candidate against the instance in
+// front of it. A type test has no instance to check: schema-element(E) is
+// asked whether some already-validated node could have been validated against
+// E or something substitutable for it, so the members that could never yield
+// such a node have to be dropped up front. Two do.
+//
+// An ABSTRACT member is dropped because no element is ever validated against
+// an abstract declaration (§3.3.6: an abstract declaration cannot itself
+// validate an element, only its non-abstract substitutes can). It still has to
+// stay in Substitutable(), which is why the filter lives here and not there: a
+// content model naming the head admits the abstract member's own substitutes,
+// so pruning the walk at the abstract declaration would lose them.
+//
+// A member that is NOT nillable is dropped when the head IS. XPath 3.1
+// §2.5.5.3 makes the nilled property part of the element test: a test derived
+// from a nillable declaration admits a nilled node, and a declaration that
+// forbids nilling can never produce one, so it cannot stand in for the head
+// across the whole of what the head's test accepts. The comparison is one-way
+// -- a nillable member under a non-nillable head is fine, since it only ever
+// yields nodes the head's test already admits.
+//
+// substitution-020 through 025 are the four-and-two of exactly this: A is
+// abstract and matches neither head, C is non-nillable under nillable heads
+// and matches neither, while the plain member B matches both.
+func (d *ElementDecl) SchemaElementMembers() []*ElementDecl {
+	var out []*ElementDecl
+	for _, m := range d.substitutable {
+		if m.Abstract {
+			continue
+		}
+		if d.Nillable && !m.Nillable {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // ComponentKind implements Component.
@@ -502,6 +547,117 @@ type SimpleType struct {
 	// builtin marks the types this package defines rather than a schema
 	// document. Built-ins are exempt from a few schema-construction rules.
 	builtin bool
+
+	// chainMemo caches the three answers that are fixed once the base
+	// chain is resolved but were recomputed for every value validated
+	// against the type. Each walks from the type to its terminator, so on
+	// a schema shaped like a real industry vocabulary — UBL and CII derive
+	// through hundreds of restriction steps — the per-value cost is the
+	// chain's length, and the allocations are pure transient churn: a
+	// 500-link chain validating 8,000 values allocated 999 MB while live
+	// heap never moved off 5 MB. See chainFacts for what is cached and why
+	// each answer is fixed.
+	//
+	// It is an atomic pointer, not a plain field, because a Schema is
+	// documented as safe to validate from any number of goroutines (see
+	// the package comment) and the memo is filled lazily on the first
+	// value that reaches the type. Two goroutines racing here compute the
+	// same answer from the same immutable chain, so whichever store lands
+	// second is storing an equal value; the atomic is what keeps that a
+	// benign duplicate rather than a data race.
+	//
+	// Lazily rather than at load: primitiveOf's comment records that a
+	// redefinition is read while its base is still resolving, so a fact
+	// derived from the chain during assembly can be derived from a chain
+	// that is not there yet. Nothing validates a value until Load has
+	// returned, so the first call cannot land mid-load.
+	chainMemo atomic.Pointer[chainFacts]
+}
+
+// chainFacts are the base-chain answers memoised on a SimpleType.
+//
+// All three are properties of the chain alone, which is immutable once the
+// schema is loaded, so one computation serves every value ever validated
+// against the type. None of them depends on the schema version or on the
+// value, which is why they can live on a type that the built-in singleton
+// shares between schemas of different versions — the hazard
+// validateSimpleValueVersion's comment describes does not reach these.
+type chainFacts struct {
+	// steps is the derivation chain facetChain returns. Its callers only
+	// range over it, so the one slice is shared rather than copied.
+	steps []facetStep
+
+	// integer records whether xs:integer is on the chain, which decides
+	// whether the integer lexical space applies.
+	integer bool
+
+	// idName is the local name of the nearest xs:ID, xs:IDREF or xs:IDREFS
+	// on the chain, or "" for a type that derives from none of them. Only
+	// idKind's *atomic* walk is cached: the union and list branches look
+	// through to whichever member validates the value, so their answer
+	// varies per value and is not a fact about the chain.
+	idName string
+}
+
+// chainFactsOf returns t's memoised base-chain facts, computing them on first
+// ask.
+//
+// The three walks are done together rather than one memo each, so a type pays
+// one traversal and one allocation instead of three, and so the cycle guard
+// they all need is built once.
+func chainFactsOf(t *SimpleType) *chainFacts {
+	if f := t.chainMemo.Load(); f != nil {
+		return f
+	}
+	f := computeChainFacts(t)
+	t.chainMemo.Store(f)
+	return f
+}
+
+// computeChainFacts walks the base chain once, collecting every answer.
+//
+// The three walks are done together rather than one memo each, so a type pays
+// one traversal instead of three, and so the cycle guard they all need is
+// built once.
+//
+// The guard stays a seen-set, unchanged from the walks this replaces. It was
+// the guard's *allocation* that showed up in the profile, but that was because
+// the walk ran once per validated value; running once per type makes one map
+// per type, which is noise beside the schema itself. A cheaper approximate
+// guard was tried and rejected: facetChain's result is length-sensitive, so
+// stopping a step late changes which facets are applied, and that changes a
+// validation verdict. Exactness is worth more here than the allocation.
+//
+// The guard is needed even though checkTypeBaseCycles rejects a circular
+// schema at load: that check roots only at *named global* types, so an
+// anonymous type on a cycle never reaches it, and the package's own tests
+// build cyclic types directly to pin that these walks terminate.
+func computeChainFacts(t *SimpleType) *chainFacts {
+	f := &chainFacts{}
+	seen := make(map[*SimpleType]bool)
+	for cur := t; cur != nil && !seen[cur]; {
+		seen[cur] = true
+		if cur.Facets != nil {
+			f.steps = append(f.steps, facetStep{typ: cur, facets: cur.Facets})
+		}
+		if cur.Name.URI == NSSchema {
+			if cur.Name.Local == "integer" {
+				f.integer = true
+			}
+			if f.idName == "" {
+				switch cur.Name.Local {
+				case "ID", "IDREF", "IDREFS":
+					f.idName = cur.Name.Local
+				}
+			}
+		}
+		base, ok := cur.Base.(*SimpleType)
+		if !ok || base == cur {
+			break
+		}
+		cur = base
+	}
+	return f
 }
 
 // ComponentKind implements Component.

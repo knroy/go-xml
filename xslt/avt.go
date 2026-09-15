@@ -245,7 +245,17 @@ func (a *avt) eval(rt *runtime) (string, error) {
 		// text nodes are dropped and adjacent text nodes merged before the
 		// separator is inserted, so a function returning a sequence of text
 		// nodes contributes one string rather than one per node.
-		sb.WriteString(constructedText(seq, " "))
+		// Charged for the same reason xsl:value-of is, and against the same
+		// held budget: an attribute value template concatenates as it builds,
+		// so a chain of xsl:variable bodies each holding <x a="{$v}{$v}"/>
+		// doubles per declaration exactly as the xsl:value-of form does. The
+		// text is charged before it joins the builder, so the refusal arrives
+		// while the chain is still doubling rather than after the allocation.
+		text := constructedText(seq, " ")
+		if err := rt.ctx.ChargeBytes(len(text)); err != nil {
+			return "", err
+		}
+		sb.WriteString(text)
 	}
 	return sb.String(), nil
 }

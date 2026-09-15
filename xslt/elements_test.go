@@ -238,13 +238,21 @@ func TestSortCaseOrder(t *testing.T) {
 }
 
 func TestSortRejectsUnsupportedCollation(t *testing.T) {
-	// A language tag with no collation data would silently fall back to
-	// root collation, so it is refused rather than quietly mis-sorting.
+	// A @lang outside the value space of xs:language is refused: section
+	// 13.1.3 says the effective value "must either be a string in the value
+	// space of xs:language, or a zero-length string". A space is not a legal
+	// subtag character.
+	//
+	// This used to read lang="zz-not-a-language", which is in fact a legal
+	// xs:language -- every subtag is alphabetic and at most 8 characters --
+	// and merely names no collation. The same paragraph requires that case to
+	// behave as if @lang were omitted rather than to fail, so it is covered by
+	// TestSortLangUnsupportedFallsBack instead.
 	sheet := wrap(`<xsl:template match="/"><out>
-		<xsl:for-each select="//n"><xsl:sort select="." lang="zz-not-a-language"/><i/></xsl:for-each>
+		<xsl:for-each select="//n"><xsl:sort select="." lang="not a language"/><i/></xsl:for-each>
 	</out></xsl:template>`)
 	if _, err := runErr(t, sheet, `<r><n>a</n></r>`); err == nil {
-		t.Error("an invalid xsl:sort/@lang should be refused")
+		t.Error("an xsl:sort/@lang outside the xs:language value space should be refused")
 	}
 
 	sheet = wrap(`<xsl:template match="/"><out>
@@ -939,5 +947,42 @@ func TestRawTextCannotEndItsElement(t *testing.T) {
 	// "<", ">" and "&&" must still pass through untouched.
 	if err := serialize(`<d><n>a &lt; b &amp;&amp; c &gt; d</n></d>`); err != nil {
 		t.Errorf("ordinary script content should serialise: %v", err)
+	}
+}
+
+// TestRawTextGuardSpansTextNodes covers the same rule at a text-node boundary.
+//
+// Adjacent text nodes are written into one raw run, so "</" split across two
+// of them is byte-contiguous in the output while neither node contains it.
+// Parsing and Transform both coalesce adjacent text, so only a tree built by
+// the caller and handed to Serialize reaches this.
+func TestRawTextGuardSpansTextNodes(t *testing.T) {
+	serialize := func(texts ...string) error {
+		t.Helper()
+		sc := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "script"}}
+		for _, v := range texts {
+			sc.Children = append(sc.Children, &xdm.Node{Kind: xdm.KindText, Value: v})
+		}
+		var sb strings.Builder
+		err := Serialize(&sb, xdm.Sequence{sc}, OutputSettings{Method: "html", OmitXMLDecl: true}, nil)
+		if err == nil && strings.Contains(sb.String(), "</script><") {
+			t.Errorf("wrote an early close: %q", sb.String())
+		}
+		return err
+	}
+
+	err := serialize("var a=1<", "/script><svg onload=alert(1)>")
+	if err == nil || !strings.Contains(err.Error(), "SERE0007") {
+		t.Errorf(`"</" split across two text nodes should be SERE0007, got %v`, err)
+	}
+	if err := serialize("var a=1</script>"); err == nil || !strings.Contains(err.Error(), "SERE0007") {
+		t.Errorf(`"</" inside one text node should still be SERE0007, got %v`, err)
+	}
+	// "<" at the end of a node is only a problem when "/" follows it.
+	if err := serialize("a<", "b"); err != nil {
+		t.Errorf("a boundary that does not form \"</\" should serialise: %v", err)
+	}
+	if err := serialize("a<", "", "/b"); err == nil {
+		t.Error(`an empty node between "<" and "/" should not hide the sequence`)
 	}
 }

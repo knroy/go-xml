@@ -20,6 +20,15 @@
 //   - ID, IDREF and IDREFS are the same document-scoped uniqueness and
 //     reference checks XSD defines.
 //
+// Two rules have no XSD counterpart and are checked here directly, because
+// both point from an attribute at a declaration somewhere else in the DTD
+// rather than at the attribute's own value space (XML 1.0 §3.3.1): every
+// name in a NOTATION attribute's enumeration must be declared by a
+// <!NOTATION>, and an ENTITY or ENTITIES attribute must name entities
+// declared with an NDATA notation. Both are skipped when only half the DTD
+// was read, since neither can distinguish an undeclared name from an unread
+// declaration.
+//
 // What DTD has that XSD does not is the *external* subset, which is a file
 // reference, along with the parameter entities and conditional sections that
 // only exist there.

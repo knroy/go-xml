@@ -63,7 +63,21 @@ func LookupDynamic(ctx *Context, name xdm.QName, arity int) (Function, bool) {
 		if dl, ok := ctx.Funcs.(DynamicFunctionLibrary); ok {
 			fn, found := dl.LookupDynamic(ctx, name, arity)
 			if !found {
-				return Function{}, false
+				// A variadic function is not REGISTERED at every arity, so a
+				// library answering from its own map has nothing to find
+				// above the arities that were. Both XSLT libraries delegate
+				// to a plain Lookup, which is why
+				// function-available('concat', 101) answered false while
+				// fn:function-lookup at the same arity answered true: the
+				// synthesis lives past this early return.
+				//
+				// Falling back here rather than teaching each library to
+				// synthesize keeps one definition of what arities fn:concat
+				// has. A library that genuinely means to hide the function
+				// has already done so -- synthesizeVariadic borrows the
+				// registered concat#2 through ctx.Funcs, so a library that
+				// does not expose that entry synthesizes nothing.
+				return synthesizeVariadic(ctx, name, arity)
 			}
 			if fn.Since > ctx.libraryVersion() {
 				return Function{}, false
@@ -131,6 +145,27 @@ func synthesizeVariadic(ctx *Context, name xdm.QName, arity int) (Function, bool
 	if name.URI != xdm.NSFN || name.Local != "concat" || arity < 2 {
 		return Function{}, false
 	}
+	// There is NO upper arity bound. F&O 3.1 declares fn:concat for two
+	// arguments or more and names no maximum, so imposing one made
+	// concat#1048577 answer "no such function" for a function the spec says
+	// exists.
+	//
+	// A ceiling of 2^20 stood here until the variadic descriptor landed, and
+	// it was load-bearing while it did: this function used to materialise an
+	// arity+1 signature slice, so the arity -- supplied by the caller, and by
+	// fn:function-lookup as an ARGUMENT -- sized an allocation of 16 bytes
+	// per unit. Removing the cap then would have turned one lookup into a
+	// request for roughly 10^11 GB. Describing the signature instead made the
+	// cost constant (measured: 16,806,800 bytes at arity 2^20 before, 2,280
+	// after, and 1,976 at 2^40), which is what makes the cap removable.
+	//
+	// This is also still the one place both routes meet -- the named
+	// reference "concat#N" and fn:function-lookup -- so whatever is decided
+	// here is decided for both. That mattered when a bound existed: enforcing
+	// it at the lookup alone once left concat#5000000 resolving while
+	// function-lookup(fn:concat, 5000000) was empty. It matters now in the
+	// other direction, as the reason nothing further needs adding at either
+	// caller.
 	// The registered entries carry the real implementation; borrowing one
 	// keeps a single definition of what fn:concat does. Its own arity is
 	// irrelevant, since the call passes whatever arguments it was given.
@@ -139,6 +174,50 @@ func synthesizeVariadic(ctx *Context, name xdm.QName, arity int) (Function, bool
 		return Function{}, false
 	}
 	base.Arity = arity
+	// The borrowed entry brings concat#2's THREE-entry signature with it, and
+	// a signature whose length disagrees with the arity is read by
+	// functionItemMatches as "no declared type", which falls back to matching
+	// on arity alone. That is the same defect fn:function-lookup had, arriving
+	// from the other side: concat#101 answered true to
+	// "instance of function(xs:date, ... x101) as xs:integer" while the
+	// registered concat#100 correctly answered false.
+	//
+	// F&O gives the family one shape -- xs:string result, one
+	// xs:anyAtomicType? per argument -- so the signature is materialised to
+	// match the arity being synthesised.
+	//
+	// The signature is DESCRIBED rather than materialised. The previous
+	// version of this code allocated arity+1 strings here and a comment
+	// predicted its own replacement: "a compact variadic descriptor -- a
+	// minimum arity and a repeated parameter type -- would avoid the
+	// allocation entirely". Measured, the slice cost 16 bytes per argument,
+	// so 16MB at 2^20, and the arity is chosen by the CALLER.
+	//
+	// That is what made the ceiling load-bearing: an audit twice proposed
+	// raising it to the host int limit as a conformance fix, which with the
+	// slice in place turns one function-lookup call into a request for
+	// ~10^11 GB. The ceiling stays for now regardless -- this removes the
+	// allocation, not the other reasons an arity past 2^20 names no function
+	// a call could make -- but it is no longer the only thing standing
+	// between a lookup and an out-of-memory kill.
+	//
+	// Both spellings are read from the borrowed entry rather than written as
+	// literals here, so the manifest stays the single source of truth -- but
+	// with a fallback, because an entry registered without a signature must
+	// not panic this path.
+	result, param := "xs:string", "xs:anyAtomicType?"
+	if len(base.Signature) > 0 {
+		result = base.Signature[0]
+	}
+	if len(base.Signature) > 1 {
+		param = base.Signature[1]
+	}
+	base.Signature = nil
+	base.VariadicSignature = &xdm.VariadicSignature{
+		MinArity:  2,
+		Result:    result,
+		Parameter: param,
+	}
 	return base, true
 }
 

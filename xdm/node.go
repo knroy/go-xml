@@ -197,6 +197,32 @@ type Node struct {
 	DerivedPrimitive string
 	ListItem         string
 
+	// typeEnv is the TypeEnvironment of the schema whose assessment produced
+	// this node's TypeAnnotation, or nil when no schema did.
+	//
+	// The per-node fields above answer only for the node's OWN annotation.
+	// Every other by-NAME question -- is this annotation derived from
+	// xs:QName, is it an instance of that type, what does the chain two links
+	// up erase to -- has to walk a derivation chain, and the chain lives in a
+	// schema. Under the process-global tables two schemas that reuse one
+	// lexical type name for different definitions shared one chain, so a node
+	// validated by the first answered those questions with the second's
+	// derivations from the moment the second loaded. Carrying the environment
+	// on the node is what keeps the annotation and its meaning together: the
+	// name means what the schema that issued it says it means, for as long as
+	// the node exists.
+	//
+	// It is also what keeps the environment alive. The node holds a strong
+	// reference, so the environment becomes collectable exactly when the last
+	// node that depends on it does, which is the lifetime rule
+	// TypeEnvironment documents and the reason nothing evicts from one.
+	//
+	// nil is not an error. A node annotated by something other than schema
+	// assessment -- a DTD attribute type, an XSLT validation instruction, a
+	// plain struct literal in a test -- has no schema to name, and for those
+	// the global table is exactly the behaviour that was there before.
+	typeEnv *TypeEnvironment
+
 	// IsID and IsIDREFS are the data model's is-id and is-idrefs properties
 	// (XDM §5.2, §6.2). They are deliberately *separate* state from
 	// TypeAnnotation rather than being derived from it, because XSLT 2.0
@@ -239,6 +265,24 @@ type Node struct {
 	// A node whose type was never determined leaves this false, which is the
 	// correct answer for an unvalidated document.
 	IsNilled bool
+
+	// NoTypedValue is the data model's "typed value is absent" property (XDM
+	// 3.1 §6.2.4): an element validated against a complex type with
+	// element-only or empty content HAS no typed value, and fn:data applied
+	// to one is FOTY0012.
+	//
+	// It is separate state from TypeAnnotation for the reason IsNilled is:
+	// the annotation cannot answer it. An anonymous complex type annotates
+	// with the nearest named base, ordinarily "anyType" -- which is also what
+	// a MIXED-content type and a genuine xs:anyType element carry, and both
+	// of those DO have a typed value (their string value). Only the validator
+	// knows which of the three it assessed, so only the validator can record
+	// it.
+	//
+	// A node nothing assessed leaves this false, which is correct: an
+	// unvalidated element is xs:untypedAtomic of its string value and
+	// atomizes without complaint.
+	NoTypedValue bool
 
 	// detachedID numbers a node that roots a tree which was never finalized,
 	// assigned on the first cross-tree comparison. Zero means unassigned.
@@ -343,7 +387,7 @@ func (n *Node) Order() int {
 		for root.Parent != nil {
 			root = root.Parent
 		}
-		base = int(detachedRootID(root)) + detachedIDBias
+		base = int(detachedRootID(root))
 		// Within the tree the root identity is only half the answer: every
 		// node under it still carries the zero order it was built with, so
 		// they all reduced to the same number. fn:generate-id() is built on
@@ -370,10 +414,6 @@ func (n *Node) Order() int {
 // treeIDStride separates one tree's identity range from the next.
 const treeIDStride = 1 << 20
 
-// detachedIDBias keeps identities handed to unfinalized roots clear of the
-// tree ids, which are drawn from a separate counter starting at one.
-const detachedIDBias = 1 << 20
-
 // SetSynthesizedOrder places a node the parser did not build into the document
 // order of an existing tree, immediately after owner.
 //
@@ -399,6 +439,78 @@ func (n *Node) SetSynthesizedOrder(owner *Node, offset int) {
 // Tree returns the containing tree.
 func (n *Node) Tree() *Tree { return n.tree }
 
+// Is reports whether n and o are the same node, which is what the "is"
+// operator asks and what XDM means by node identity.
+//
+// For every node the parser builds this is pointer equality, because each such
+// node exists exactly once. Namespace nodes are the exception: they are not
+// stored, they are synthesized on demand from the element's in-scope bindings,
+// so a second walk over the same axis hands back a fresh pointer for a binding
+// that is, by every other measure the engine applies, the same node. Comparing
+// those pointers made "/*/namespace::xlink is /*/namespace::*[. = '...']"
+// answer false where the spec requires true.
+//
+// Order() is the identity the rest of the engine already uses — fn:generate-id
+// is defined as "N" plus this number, and Compare reads the same field — and
+// SetSynthesizedOrder derives it from the owning element and the binding's
+// position in the sorted prefix list. So two synthesized nodes for one
+// element and prefix already share it, and two for different elements, or
+// different prefixes on one element, already do not. Deferring to it here
+// makes "is" agree with generate-id, with "<<" and ">>", and with the
+// document-order deduplication a path expression performs, rather than
+// standing alone as the only operator that could see one node as two.
+func (n *Node) Is(o *Node) bool {
+	if n == o {
+		return true
+	}
+	if n == nil || o == nil {
+		return false
+	}
+	// Only namespace nodes are synthesized, so only they can be the same node
+	// behind two pointers. Widening this to every kind would make two distinct
+	// parentless nodes — which share tree nil and order zero until something
+	// numbers them — compare identical.
+	if n.Kind != KindNamespace || o.Kind != KindNamespace {
+		return false
+	}
+	// A parentless namespace node is identical only to itself, which the
+	// pointer test above has already ruled out: with no owning element there
+	// is no binding for a second walk to re-derive.
+	if n.Parent == nil || o.Parent == nil {
+		return false
+	}
+	return n.Parent == o.Parent && n.Name.Local == o.Name.Local
+}
+
+// IdentityKey is a comparable value equal for two node references exactly when
+// Is reports them the same node, for use as a map key where a bare *Node
+// pointer would split one synthesized namespace node into two entries.
+//
+// Set membership — fn:intersect, fn:except, fn:innermost, fn:outermost — is
+// keyed on this rather than on the pointer so that the set operators agree
+// with "is". Every kind but namespace keys on the pointer itself, so this
+// costs nothing and changes nothing for them.
+type IdentityKey struct {
+	ptr    *Node
+	parent *Node
+	prefix string
+}
+
+// Identity returns the key that stands for this node's identity.
+func (n *Node) Identity() IdentityKey {
+	if n == nil {
+		return IdentityKey{}
+	}
+	// A parentless namespace node has nothing to key on but itself: without
+	// an owning element there is no binding for a second walk to re-derive,
+	// and keying every such node on the same zero parent would merge nodes
+	// that are genuinely distinct.
+	if n.Kind == KindNamespace && n.Parent != nil {
+		return IdentityKey{parent: n.Parent, prefix: n.Name.Local}
+	}
+	return IdentityKey{ptr: n}
+}
+
 // Compare orders two nodes in document order, returning -1, 0 or 1. Nodes in
 // different trees are ordered by tree id, which is stable within a transform.
 func (n *Node) Compare(o *Node) int {
@@ -420,13 +532,7 @@ func (n *Node) Compare(o *Node) int {
 		return compareDetached(n, o)
 	}
 	if n.tree != o.tree {
-		ni, oi := 0, 0
-		if n.tree != nil {
-			ni = n.tree.id
-		}
-		if o.tree != nil {
-			oi = o.tree.id
-		}
+		ni, oi := crossTreeRank(n), crossTreeRank(o)
 		switch {
 		case ni < oi:
 			return -1
@@ -505,8 +611,17 @@ func compareDetached(n, o *Node) int {
 // The numbers are handed out on first comparison rather than at construction:
 // the vast majority of constructed nodes are never compared across trees, and
 // the alternative is a counter increment on every element a transform builds.
-var detachedIDNext int64
-
+//
+// They come from nextTreeID, the counter the parser draws a Tree's id from,
+// rather than from one of their own. A separate counter has to be kept clear
+// of the tree ids by a fixed offset, and a fixed offset is only ever right
+// until a long enough run overruns it: with detachedIDBias at 1<<20, the
+// xslt30 suite reached tree id 1272658 and parsed documents began sorting
+// after constructed ones again, which is what left "(...PRICE union
+// $insertion)" with the variable's elements first in a full run and correct
+// when the test-set ran alone. One counter has no offset to overrun, and it
+// orders the two kinds of tree by the sequence in which they were actually
+// made.
 func detachedRootID(root *Node) int64 {
 	// The number lives on the node rather than in a side table so that it
 	// dies with the node: a table keyed by *Node would pin every constructed
@@ -514,11 +629,34 @@ func detachedRootID(root *Node) int64 {
 	if id := atomic.LoadInt64(&root.detachedID); id != 0 {
 		return id
 	}
-	id := atomic.AddInt64(&detachedIDNext, 1)
+	id := int64(nextTreeID())
 	if !atomic.CompareAndSwapInt64(&root.detachedID, 0, id) {
 		return atomic.LoadInt64(&root.detachedID)
 	}
 	return id
+}
+
+// crossTreeRank returns the number that orders n's tree against another's.
+//
+// A node the parser built carries its Tree's id. A node built by a sequence
+// constructor carries no Tree at all, and reading its id as the zero value
+// put every such node ahead of every parsed document -- so
+// "(/BOOKLIST/BOOKS/ITEM/PRICE union $insertion)" came back with the
+// variable's two elements first. Asking detachedRootID instead gives it a
+// number from the same counter the parser draws tree ids from, so the two
+// kinds of tree are ordered by when each was made. The spec leaves the
+// relative order of nodes in different trees implementation-dependent and
+// requires only that it be stable; this makes it so, and makes Compare agree
+// with the identity Order() hands out.
+func crossTreeRank(n *Node) int {
+	if n.tree != nil {
+		return n.tree.id
+	}
+	root := n
+	for root.Parent != nil {
+		root = root.Parent
+	}
+	return int(detachedRootID(root))
 }
 
 // numberDetachedRoot stamps an identity number on the root of the untracked
@@ -737,7 +875,7 @@ func (n *Node) Atomize() *Atomic {
 			// it the value knows only the primitive it erased to, and every
 			// question about the schema type it was validated against
 			// answered false.
-			return a.WithDerived(n.TypeAnnotation)
+			return a.WithDerived(n.TypeAnnotation).WithTypeEnv(n.typeEnv)
 		}
 		// A user-defined type this package cannot construct still atomises:
 		// it is the primitive its schema type derives from, and the schema
@@ -786,7 +924,7 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 		item = n.ListItem
 	}
 	if item == "" {
-		item = listItemType(n.TypeAnnotation)
+		item = listItemType(typeEnvOf(n), n.TypeAnnotation)
 	}
 	if item == "" {
 		// A union whose selected member is a LIST has a sequence for its
@@ -802,19 +940,19 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 		// prefix. Given the whole literal as a single item, "xs ul" is not a
 		// prefix in scope and every stylesheet excluding two prefixes was
 		// reported invalid.
-		if item = listItemType(n.UnionMember); item == "" {
+		if item = listItemType(typeEnvOf(n), n.UnionMember); item == "" {
 			return nil, false
 		}
 	}
-	fields := strings.Fields(n.StringValue())
+	fields := SplitXMLSpace(n.StringValue())
 	out := make(Sequence, 0, len(fields))
 	for _, f := range fields {
-		if a := atomicForLexical(item, f); a != nil {
+		if a := atomicForLexical(typeEnvOf(n), item, f); a != nil {
 			// The item carries the LIST's item type as its derived name, so
 			// that "data(@nmtokens) instance of xs:NMTOKEN*" is true. Without
 			// it each token is only the xs:string that NMTOKEN erases to and
 			// the instance-of test answers false.
-			out = append(out, a.WithDerived(item))
+			out = append(out, a.WithDerived(item).WithTypeEnv(n.typeEnv))
 			continue
 		}
 		out = append(out, NewUntypedAtomic(f))
@@ -831,7 +969,7 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 // token out of many. The walk is the same, guarded the same way, and the
 // value keeps the ITEM type's own name so that
 // "data(@list) instance of my:itemType*" answers true.
-func atomicForLexical(typeName, value string) *Atomic {
+func atomicForLexical(env *TypeEnvironment, typeName, value string) *Atomic {
 	if a := atomicForAnnotation(typeName, value); a != nil {
 		return a
 	}
@@ -842,9 +980,8 @@ func atomicForLexical(typeName, value string) *Atomic {
 	// deep chains it could not tell apart from a cycle.
 	seen := map[string]bool{name: true}
 	for {
-		derivedMu.RLock()
-		prim, ok := derivedPrimitives[name]
-		derivedMu.RUnlock()
+		prim := env.DerivedBase(name)
+		ok := prim != ""
 		if !ok {
 			return nil
 		}
@@ -861,7 +998,7 @@ func atomicForLexical(typeName, value string) *Atomic {
 
 // listItemType maps a list type annotation to the type of its items, or ""
 // when the annotation does not name a list type.
-func listItemType(annotation string) string {
+func listItemType(env *TypeEnvironment, annotation string) string {
 	// Guarded by a visited set rather than a step count: only a cycle a schema
 	// registered can keep this walk going, and the set names that condition
 	// instead of guessing at a depth no legal chain exceeds.
@@ -882,10 +1019,10 @@ func listItemType(annotation string) string {
 		// obtain. It is consulted before the derivation walk so that a list
 		// whose base happens to be registered as something atomic does not
 		// lose its list-ness one step in.
-		if item := ListItemOf(annotation); item != "" {
+		if item := env.ListItemOf(annotation); item != "" {
 			return item
 		}
-		next := DerivedBase(annotation)
+		next := env.DerivedBase(annotation)
 		if next == annotation {
 			return ""
 		}
@@ -893,11 +1030,6 @@ func listItemType(annotation string) string {
 	}
 	return ""
 }
-
-var (
-	listMu    sync.RWMutex
-	listItems = map[string]string{}
-)
 
 // RegisterListType records that a schema type is a list, and what its items
 // are.
@@ -915,21 +1047,13 @@ var (
 // itemType is the item type's own name, which may itself be a registered
 // schema type; atomicForAnnotation and the derivation walk resolve it.
 func RegisterListType(name, itemType string) {
-	if name == "" || itemType == "" || name == itemType {
-		return
-	}
-	listMu.Lock()
-	listItems[name] = itemType
-	listMu.Unlock()
+	globalTypeEnv.RegisterList(name, itemType)
 }
 
 // ListItemOf returns the item type registered for a list type, or "" when the
 // name is not a registered list.
 func ListItemOf(name string) string {
-	listMu.RLock()
-	item := listItems[name]
-	listMu.RUnlock()
-	return item
+	return globalTypeEnv.ListItemOf(name)
 }
 
 // atomicForAnnotation builds a typed value from a schema type annotation, or
@@ -1258,10 +1382,22 @@ func (n *Node) AddNamespace(prefix, uri string) {
 // any node comparison; every parser entry point in this package does so.
 func (t *Tree) Finalize() {
 	t.counter = 0
-	t.assign(t.Root)
+	// The in-scope bindings are carried down the walk rather than recomputed
+	// per element. Rebuilding them from the ancestor chain, as
+	// InScopeNamespaces does, costs the depth of the element, which made
+	// Finalize quadratic in nesting depth: a 32,000-level document allocated
+	// 17 GB and took 20 s, against 29 MB for a document of the same byte size
+	// that was wide rather than deep. Threading the scope makes each element
+	// cost only the declarations it carries itself.
+	scope := map[string]string{"xml": NSXML}
+	t.assign(t.Root, scope)
 }
 
-func (t *Tree) assign(n *Node) {
+// assign numbers n and its subtree. scope holds the namespace bindings in
+// force at n's parent, keyed as InScopeNamespaces keys them; assign applies
+// n's own declarations to it for the descent and restores it on the way out,
+// so a sibling sees the scope its parent had.
+func (t *Tree) assign(n *Node, scope map[string]string) {
 	n.tree = t
 	n.order = t.counter
 	t.counter++
@@ -1279,8 +1415,26 @@ func (t *Tree) assign(n *Node) {
 	// generate-id() answered the same string for a namespace node and an
 	// unrelated attribute — which is what snapshot-0112 detects when it
 	// compares the count of distinct identities against the node count.
+	//
+	// saved records, for each prefix this element declares, the binding its
+	// parent had, so the scope can be restored once the subtree is numbered.
+	// An absent entry is recorded as missing rather than as the empty string:
+	// the empty string is itself a value a caller can bind, and conflating
+	// the two would leave a stale entry in scope for a later sibling.
+	var saved []nsSave
 	if n.Kind == KindElement {
-		reserved := len(n.InScopeNamespaces())
+		for _, ns := range n.Namespaces {
+			prev, had := scope[ns.Name.Local]
+			saved = append(saved, nsSave{prefix: ns.Name.Local, uri: prev, had: had})
+			// An empty value undeclares the prefix, which takes it out of
+			// scope; InScopeNamespaces deletes it for the same reason.
+			if ns.Value == "" {
+				delete(scope, ns.Name.Local)
+			} else {
+				scope[ns.Name.Local] = ns.Value
+			}
+		}
+		reserved := len(scope)
 		for _, ns := range n.Namespaces {
 			ns.tree = t
 			ns.order = t.counter
@@ -1307,8 +1461,23 @@ func (t *Tree) assign(n *Node) {
 		t.counter++
 	}
 	for _, c := range n.Children {
-		t.assign(c)
+		t.assign(c, scope)
 	}
+	for i := len(saved) - 1; i >= 0; i-- {
+		if saved[i].had {
+			scope[saved[i].prefix] = saved[i].uri
+		} else {
+			delete(scope, saved[i].prefix)
+		}
+	}
+}
+
+// nsSave is one entry of the namespace scope Tree.assign shadows while it
+// numbers an element's subtree.
+type nsSave struct {
+	prefix string
+	uri    string
+	had    bool
 }
 
 // HasPositions reports whether the tree was parsed with TrackPositions, and so
@@ -1344,29 +1513,23 @@ func (t *Tree) positionAt(off int) (line, col int, ok bool) {
 	return i + 1, off - t.lineStarts[i] + 1, true
 }
 
-// derivedPrimitives maps a schema type annotation to the built-in it erases to.
+// The six functions below are the name-only face of the type derivation
+// facts. They read and write globalTypeEnv, the process-global
+// TypeEnvironment; the tables themselves, their keying and their locking now
+// live in typeenv.go, and a schema that owns an environment records the same
+// facts there as well (see xsd.Schema.TypeEnv).
 //
-// It is keyed by ANNOTATION NAME (see AnnotationName): a built-in under its
-// bare local name, a schema type under {uri}local. Keying it by the bare local
-// name conflated the two, and because this map is package-level and
-// process-global the conflation was permanent — one schema declaring its own
-// type named "QName" rewrote the built-in's entry for every later schema in
-// the process. See TestShadowedBuiltinCoexistsWithItsShadow.
+// Every name is an ANNOTATION NAME (see AnnotationName): a built-in under its
+// bare local name, a schema type under {uri}local. Keying by the bare local
+// name conflated the two, and in a table shared by the whole process the
+// conflation was permanent — one schema declaring its own type named "QName"
+// rewrote the built-in's entry for every later schema. See
+// TestShadowedBuiltinCoexistsWithItsShadow.
 //
-// It is populated by the xsd package when a schema is loaded, which is the
-// only place that knows a user-defined type's base. Keeping it here rather
-// than in xsd is what lets xdm.Node.Atomize consult it without importing xsd,
+// They are populated by the xsd package as a schema loads, which is the only
+// place that knows a user-defined type's base. Keeping them here rather than
+// in xsd is what lets xdm.Node.Atomize consult them without importing xsd,
 // which it cannot: xsd already imports xdm.
-//
-// It is guarded by a mutex because schemas load concurrently — that is the
-// documented use, and xsd has a test for it — while atomisation reads the
-// map on every typed value. A sync.Map is not used because reads vastly
-// outnumber writes only *after* loading, and a plain RWMutex makes the
-// read path a single atomic in the common case where no schema is loaded.
-var (
-	derivedMu         sync.RWMutex
-	derivedPrimitives = map[string]string{}
-)
 
 // RegisterDerivedType records that a schema type erases to a built-in one.
 //
@@ -1380,18 +1543,8 @@ var (
 // true for a value read out of a validated document, because the value would
 // have discarded the annotation on the way out of the tree.
 func RegisterDerivedType(name, primitive string) {
-	if name == "" || primitive == "" || name == primitive {
-		return
-	}
-	derivedMu.Lock()
-	derivedPrimitives[name] = primitive
-	derivedMu.Unlock()
+	globalTypeEnv.RegisterDerived(name, primitive)
 }
-
-var (
-	unionMu      sync.RWMutex
-	unionMembers = map[string][]string{}
-)
 
 // RegisterUnionType records that a schema type is a union, and what its member
 // types are.
@@ -1419,18 +1572,7 @@ func RegisterUnionType(name string, members []string) {
 	if name == "" || len(members) == 0 {
 		return
 	}
-	cp := make([]string, 0, len(members))
-	for _, m := range members {
-		if m != "" && m != name {
-			cp = append(cp, m)
-		}
-	}
-	if len(cp) == 0 {
-		return
-	}
-	unionMu.Lock()
-	unionMembers[name] = cp
-	unionMu.Unlock()
+	globalTypeEnv.RegisterUnion(name, members)
 }
 
 // UnionMembersOf returns the member types of a registered union type, or nil
@@ -1439,10 +1581,7 @@ func RegisterUnionType(name string, members []string) {
 // The result must not be modified: it is the stored slice, shared with every
 // other caller.
 func UnionMembersOf(name string) []string {
-	unionMu.RLock()
-	m := unionMembers[name]
-	unionMu.RUnlock()
-	return m
+	return globalTypeEnv.UnionMembersOf(name)
 }
 
 // DerivedBase returns the type a schema type derives from, or "" if the name
@@ -1454,10 +1593,7 @@ func UnionMembersOf(name string) []string {
 // well as of its own type, and answering that means walking the chain the
 // schema recorded.
 func DerivedBase(name string) string {
-	derivedMu.RLock()
-	base := derivedPrimitives[name]
-	derivedMu.RUnlock()
-	return base
+	return globalTypeEnv.DerivedBase(name)
 }
 
 // atomicForUnionAnnotation builds a typed value for a node whose type is a
@@ -1484,15 +1620,15 @@ func atomicForUnionAnnotation(n *Node) *Atomic {
 	switch member {
 	case "QName", "NOTATION":
 		if q, ok := n.resolveQNameValue(); ok {
-			return NewQNameValue(q).WithDerivedUnion(n.TypeAnnotation, member)
+			return NewQNameValue(q).WithDerivedUnion(n.TypeAnnotation, member).WithTypeEnv(n.typeEnv)
 		}
 		return nil
 	}
-	a := atomicForLexical(member, n.StringValue())
+	a := atomicForLexical(typeEnvOf(n), member, n.StringValue())
 	if a == nil {
 		return nil
 	}
-	return a.WithDerivedUnion(n.TypeAnnotation, member)
+	return a.WithDerivedUnion(n.TypeAnnotation, member).WithTypeEnv(n.typeEnv)
 }
 
 // atomicForDerivedAnnotation builds a typed value for a user-defined schema
@@ -1533,9 +1669,8 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 		if first != "" {
 			prim, ok, first = first, true, ""
 		} else {
-			derivedMu.RLock()
-			prim, ok = derivedPrimitives[name]
-			derivedMu.RUnlock()
+			prim = typeEnvOf(n).DerivedBase(name)
+			ok = prim != ""
 		}
 		if !ok {
 			return nil
@@ -1546,7 +1681,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 		switch prim {
 		case "QName", "NOTATION":
 			if q, ok := n.resolveQNameValue(); ok {
-				return NewQNameValue(q).WithDerived(n.TypeAnnotation)
+				return NewQNameValue(q).WithDerived(n.TypeAnnotation).WithTypeEnv(n.typeEnv)
 			}
 			return nil
 		}
@@ -1555,7 +1690,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 			// intermediate name the walk stopped at: that is what makes
 			// "instance of my:specialPartNumber" true as well as
 			// "instance of my:partNumberType".
-			return a.WithDerived(n.TypeAnnotation)
+			return a.WithDerived(n.TypeAnnotation).WithTypeEnv(n.typeEnv)
 		}
 		if seen[prim] {
 			return nil
@@ -1648,9 +1783,9 @@ func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem 
 // answers each of them exactly as the original does.
 //
 // It exists because there is no such thing as "the important half" of a node's
-// typing. Seven properties record what an assessment concluded --
+// typing. Eight properties record what an assessment concluded --
 // TypeAnnotation, UnionMember, DerivedPrimitive, ListItem, IsID, IsIDREFS,
-// IsNilled -- and each one of them has, at some point in this repository, been
+// IsNilled, NoTypedValue -- and each one of them has, at some point in this repository, been
 // dropped by a copy site that hand-picked the fields it thought mattered. Each
 // omission was silent and each produced a confidently wrong answer rather than
 // a missing one: a union-typed value atomising to xs:untypedAtomic, fn:id
@@ -1671,7 +1806,7 @@ func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem 
 // is-idrefs ON, which would make a copy of a non-ID node inherit a marking the
 // original does not have. The invariant SetTypeAnnotation protects is upheld
 // here by construction: the resolved fields cannot outlive their annotation,
-// because src is a coherent node and all seven fields travel together.
+// because src is a coherent node and all eight fields travel together.
 func (n *Node) CopyTypingFrom(src *Node) {
 	n.TypeAnnotation = src.TypeAnnotation
 	n.UnionMember = src.UnionMember
@@ -1680,6 +1815,75 @@ func (n *Node) CopyTypingFrom(src *Node) {
 	n.IsID = src.IsID
 	n.IsIDREFS = src.IsIDREFS
 	n.IsNilled = src.IsNilled
+	n.NoTypedValue = src.NoTypedValue
+}
+
+// Typing is the complete set of PSVI properties an assessment concludes about
+// one node, detached from any node.
+//
+// It exists so that a caller who ALREADY KNOWS these facts can hand them over
+// as a unit instead of passing a type name and letting the receiver look the
+// rest up. The lookup is the problem: resolving a name to its base, its item
+// type or its ID kind means consulting derivedPrimitives, listItems and
+// unionMembers, which are process-global and keyed by QName alone, so they
+// answer for whichever schema loaded LAST rather than for the schema that
+// validated this node. The validator holds the right schema at the right
+// moment; Typing is the shape that lets it say so.
+//
+// The field list is CopyTypingFrom's, and deliberately the same one: eight
+// properties travel together or the copy is wrong, and every historical bug in
+// this area was a hand-picked subset of them. A new PSVI property must be
+// added here, to CopyTypingFrom and to CopyTypingStrippedFrom together.
+//
+// The zero Typing means "nothing assessed this node", which is the correct
+// state for an unvalidated node and is what the name-only convenience wrappers
+// produce when given an empty annotation.
+type Typing struct {
+	TypeAnnotation   string
+	UnionMember      string
+	DerivedPrimitive string
+	ListItem         string
+	IsID             bool
+	IsIDREFS         bool
+	IsNilled         bool
+	NoTypedValue     bool
+}
+
+// TypingOf reads a node's PSVI properties out as a Typing. A nil node has none.
+func TypingOf(n *Node) Typing {
+	if n == nil {
+		return Typing{}
+	}
+	return Typing{
+		TypeAnnotation:   n.TypeAnnotation,
+		UnionMember:      n.UnionMember,
+		DerivedPrimitive: n.DerivedPrimitive,
+		ListItem:         n.ListItem,
+		IsID:             n.IsID,
+		IsIDREFS:         n.IsIDREFS,
+		IsNilled:         n.IsNilled,
+		NoTypedValue:     n.NoTypedValue,
+	}
+}
+
+// ApplyTyping writes a Typing's properties onto n, replacing whatever was
+// there.
+//
+// The fields are ASSIGNED, not or-ed, and nothing is derived from the
+// annotation name -- for the reason CopyTypingFrom assigns rather than going
+// through SetTypeAnnotation. The caller already holds every answer, so
+// re-deriving would be redundant where it agreed and wrong where it did not:
+// SetTypeAnnotation only ever turns is-id ON, which would let a node inherit a
+// marking its assessment did not give it.
+func (n *Node) ApplyTyping(t Typing) {
+	n.TypeAnnotation = t.TypeAnnotation
+	n.UnionMember = t.UnionMember
+	n.DerivedPrimitive = t.DerivedPrimitive
+	n.ListItem = t.ListItem
+	n.IsID = t.IsID
+	n.IsIDREFS = t.IsIDREFS
+	n.IsNilled = t.IsNilled
+	n.NoTypedValue = t.NoTypedValue
 }
 
 // CopyTypingStrippedFrom copies onto n the PSVI properties of src that survive
@@ -1722,6 +1926,10 @@ func (n *Node) CopyTypingStrippedFrom(src *Node) {
 	n.IsID = src.IsID
 	n.IsIDREFS = src.IsIDREFS
 	n.IsNilled = false
+	// Cleared for the same reason IsNilled is: the absence of a typed value
+	// is a conclusion of an assessment, and a stripped tree is one nothing
+	// assessed. Every element of it is xs:untypedAtomic and atomizes.
+	n.NoTypedValue = false
 }
 
 // StripTyping clears in place every PSVI property that stripping removes,

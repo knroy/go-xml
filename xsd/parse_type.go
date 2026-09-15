@@ -436,7 +436,12 @@ func (p *parser) noteFixed(el *xdm.Node, f *FacetSet, kind FacetKind) {
 
 // uintFacet parses a facet value that is an xs:nonNegativeInteger.
 func (p *parser) uintFacet(el *xdm.Node, v string) *uint64 {
-	n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+	// trimXMLSpace, not strings.TrimSpace: a facet value is a lexical form of
+	// xs:nonNegativeInteger, whose whiteSpace facet is "collapse", and XML
+	// Schema's whitespace is XML S alone. A no-break space is a character the
+	// grammar rejects, so trimming it let an invalid facet value silently
+	// become a real bound.
+	n, err := strconv.ParseUint(trimXMLSpace(v), 10, 64)
 	if err != nil {
 		p.errs = append(p.errs, errorAt(el, "",
 			"xs:%s value %q is not a non-negative integer", el.Name.Local, v))
@@ -1476,7 +1481,41 @@ func (p *parser) inheritAttributesNow(t *ComplexType) {
 			}
 		}
 		for _, u := range base.AttributeUses {
-			if u.Decl == nil || own[u.Decl.Name] {
+			if u.Decl == nil {
+				continue
+			}
+			if own[u.Decl.Name] {
+				// A derived use with the base's name SHADOWS the base's, and
+				// which of the two that is depends on the derivation method.
+				//
+				// For a restriction it is legitimate and is the point: §3.4.6
+				// derivation-ok-restriction is what polices it, and
+				// checkAttributeRestriction below runs for exactly that.
+				//
+				// For an extension it is not. §3.4.6 ct-props-correct.4
+				// forbids two attribute uses with the same name in one type's
+				// {attribute uses}, and an extension's uses are the base's
+				// PLUS its own -- so the clash is in the finished type.
+				// Skipping silently let the extension's declaration replace
+				// the base's: a base attribute declared xs:string was
+				// validated as the extension's xs:int, which is the base's
+				// constraint quietly discarded rather than a diagnostic.
+				//
+				// checkAttributeUsesConsistent cannot catch this. It is
+				// queued against the type's OWN use list, before inheritance
+				// merges the base's in, so at the time it runs there is only
+				// one use of the name.
+				if t.DerivationMethod == DerivationExtension {
+					// No element node is in hand here -- inheritance runs
+					// over components, after parsing -- so the error carries
+					// the type's name instead of a position.
+					p.errs = append(p.errs, errorAt(nil, "ct-props-correct.4",
+						"complex type %q: attribute %q is declared by this "+
+							"extension and inherited from its base type; a "+
+							"complex type may not have two attribute uses "+
+							"with the same name",
+						t.Name.Local, u.Decl.Name.Local))
+				}
 				continue
 			}
 			t.AttributeUses = append(t.AttributeUses, u)
@@ -2312,9 +2351,32 @@ func (p *parser) checkTypeBaseCycles() {
 		return names[i].Local < names[j].Local
 	})
 
+	// acyclic holds every type whose chain has already been walked to its
+	// terminator without returning to it. Each type's walk is otherwise
+	// independent, so N chained types cost N walks of up to N steps: a
+	// 10,000-link restriction chain spent 2.8 s here after the facet merge
+	// was memoised. A walk that reaches a type in this set can stop, since
+	// a chain that terminates cannot lead back to its start, and every type
+	// it passed is then in the set too.
+	acyclic := map[Type]bool{}
+	// onCycle is the complement: every type a walk passed on its way back
+	// to its start lies on that cycle, and is reported when its own turn
+	// comes without walking the ring again.
+	onCycle := map[Type]bool{}
+
 	for _, name := range names {
 		t := p.schema.Types[name]
 		if t == nil {
+			continue
+		}
+		if onCycle[t] {
+			p.errs = append(p.errs, &ParseError{
+				Code: "ct-props-correct.3",
+				Message: fmt.Sprintf(
+					"type %q is circular: it is reachable from "+
+						"itself by following base type definitions",
+					name.Local),
+			})
 			continue
 		}
 		// "except for the ur-type definition": xs:anyType is its own
@@ -2358,6 +2420,7 @@ func (p *parser) checkTypeBaseCycles() {
 		// stops, leaving the report to the pass over the type that is
 		// actually on the cycle.
 		seen := map[Type]bool{}
+		terminated := false
 		cur := baseOf(t)
 		for cur != nil {
 			if cur == t {
@@ -2368,6 +2431,13 @@ func (p *parser) checkTypeBaseCycles() {
 							"itself by following base type definitions",
 						name.Local),
 				})
+				for st := range seen {
+					onCycle[st] = true
+				}
+				break
+			}
+			if acyclic[cur] {
+				terminated = true
 				break
 			}
 			if seen[cur] {
@@ -2379,9 +2449,16 @@ func (p *parser) checkTypeBaseCycles() {
 				// xs:anyType and xs:anySimpleType are their own
 				// base; that is the chain's terminator, not a
 				// cycle.
+				terminated = true
 				break
 			}
 			cur = next
+		}
+		if terminated || cur == nil {
+			acyclic[t] = true
+			for st := range seen {
+				acyclic[st] = true
+			}
 		}
 	}
 }

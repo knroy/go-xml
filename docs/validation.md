@@ -46,7 +46,10 @@ err = dtd.Validate(tree.Root, d, dtd.Options{})
 ```
 
 That checks `<!ELEMENT>` content models, attribute presence (`#REQUIRED` and
-`#FIXED`), enumerated values, and `ID`/`IDREF`. The content models go through
+`#FIXED`), enumerated values, `ID`/`IDREF`, and §3.3.1's two cross-referencing
+rules — a `NOTATION` attribute's enumeration must name only declared
+`<!NOTATION>`s, and an `ENTITY`/`ENTITIES` attribute must name entities
+declared with `NDATA`. The content models go through
 the same Glushkov automaton the XSD validator uses — a DTD model is a strict
 subset of what an `xsd.Particle` expresses, so there is no second engine.
 
@@ -67,7 +70,7 @@ and its declarations bind), a `%pe;` in the external subset may expand to whole
 declarations, and conditional sections — `<![INCLUDE[` and `<![IGNORE[`, §3.4 —
 are resolved, including nested ones.
 
-Three things to know before relying on it:
+Four things to know before relying on it:
 
 * **Nothing is fetched without a `Resolver`, and with none the load is
   refused.** `dtd.Load` returns an error wrapping `dtd.ErrNoResolver` rather
@@ -86,10 +89,28 @@ Three things to know before relying on it:
   as undeclared, which is strictly correct and useless. `Options.AllowUndeclared`
   skips those; what *is* declared stays enforced. `DTD.HasExternalSubset`
   records that a DOCTYPE named one.
+* **A declaration outside XML 1.0 §3.3's closed sets is reported, not
+  skipped.** The attribute type is one of ten names or an enumeration, and the
+  default declaration is `#REQUIRED`, `#IMPLIED`, `#FIXED AttValue` or a
+  literal. A one-character typo — `IDREFF`, `#REQUIRE` — used to leave the
+  attribute unconstrained and silent, so `<!ATTLIST r a CDATA #REQUIRE>` on a
+  document omitting `a` passed. Validate now says which attribute went
+  unchecked and why, for the reason `HasExternalSubset` exists: a caller has to
+  be able to tell a validated attribute from an unexamined one. The
+  declaration is kept rather than the parse failed, so the rest of the subset
+  still applies.
 
 `ID`/`IDREF` are checked as a *validity* constraint, but the attribute types
 are not fed back into the data model, which is why `fn:id` still falls back to
 `xml:id` and a conventional `id` attribute.
+
+`NOTATION` and `ENTITY`/`ENTITIES` are checked against the rest of the DTD
+rather than against a value space, so both are skipped when only half the DTD
+was read — `dtd.Parse`, or `dtd.Load` with `InternalSubsetOnly`. A name absent
+from an internal subset may simply be declared in the external one, and
+reporting it would reject a document that is valid. An undeclared notation is
+also reported once per `<!ATTLIST>`, not once per element, because the fault
+is in the declaration.
 
 The default is off for a reason beyond that: a DTD is the entry point for
 entity expansion and XXE, so permitting one is a decision to make per document
@@ -98,7 +119,7 @@ source rather than globally.
 ## RELAX NG
 
 `relaxng` validates against RELAX NG in both its notations, at 100% of James
-Clark's conformance suite (965 of 965 assertions).
+Clark's conformance suite (<!-- BEGIN GENERATED RELAX NG FIGURE -->965 of 965<!-- END GENERATED RELAX NG FIGURE --> assertions).
 
 ```go
 schema, err := xdm.ParseString(rngSource, xdm.ParseOptions{})
@@ -215,8 +236,8 @@ if err := schema.Validate(doc.Root, xsd.ValidateOptions{}); err != nil {
 }
 ```
 
-Measured against the W3C XSD test suite: **99.89%** agreement on 24,995
-instance tests, and **99.91%** on its 14,393 schema-validity tests — the
+Measured against the W3C XSD test suite: **99.89%** agreement on 25,000
+instance tests, and **99.98%** on its 14,388 schema-validity tests — the
 second figure is the honest one to quote, and [xsd.md](xsd.md) explains why
 earlier revisions reported neither.
 

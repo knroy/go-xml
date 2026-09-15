@@ -154,14 +154,6 @@ func applyAfter(f func(pattern) pattern, p pattern) pattern {
 	return notAllowedPat{}
 }
 
-// attsDeriv is the derivative with respect to an element's attributes.
-func attsDeriv(p pattern, attrs []attr, ctx nsContext) pattern {
-	for _, a := range attrs {
-		p = attDeriv(p, a, ctx)
-	}
-	return p
-}
-
 type attr struct {
 	name  xdm.QName
 	value string

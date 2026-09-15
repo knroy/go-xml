@@ -7,17 +7,21 @@ Current position:
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,380 / 14,393 (99.91%) | 24,967 / 24,995 (99.89%) |
-| XSD 1.1 | 15,343 / 15,354 (99.93%) | 26,189 / 26,216 (99.90%) |
-| XPath 2.0 | 100.00% — 15,183 of 15,183 in scope |
-| XPath 3.0 | 100.00% — 19,244 of 19,244 in scope |
-| XPath 3.1 | 100.00% — 21,786 of 21,786 in scope (0 failing) |
-| XQuery 3.1 | 99.94% — 29,901 of 29,918 in scope (17 failing) |
-| XSLT 2.0 | 99.87% — 6,149 of 6,157 in scope (8 failing) |
-| XSLT 3.0 | 99.73% — 8,640 of 8,663 in scope (23 failing, one deliberate); streaming out of scope, though 92% of those cases pass anyway |
+| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
+<!-- BEGIN GENERATED STATUS TABLE -->
+<!-- Generated from tests/conformance/results.json and the source tree by
+     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
+| XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
+| XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
+| XPath 3.1 | 100.00% — 21,898 of 21,898 in scope (0 failing) |
+| XQuery 3.1 | 100.00% — 30,345 of 30,346 in scope (1 failing) |
+| XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
+| XSLT 3.0 | 99.77% — 11,492 of 11,518 in scope (26 failing); 7 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 1,576 `func Test` declarations, clean under `-race` |
+| Tests | 2,404 `func Test` declarations, clean under `-race` |
+<!-- END GENERATED STATUS TABLE -->
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -44,6 +48,147 @@ translator, which had been budgeted as the widest-reaching item: `classdiff.go`'
 ranges were compared against `internal/xmlname` across the whole Unicode scalar
 range and disagree nowhere, so the translator is version-independent and correct
 for both.
+
+`fn:codepoints-to-string` follows the same version. `xpath.isXMLChar` used the
+XML 1.0 `[2] Char` production, whose first range starts at `#x20`, so building a
+backspace or a form feed from its codepoint was `FOCH0001` on an engine that had
+already chosen 1.1 everywhere else -- and `tests/xslts/deps.go` claims the
+`XML_1.1` feature to the XSLT harness on our behalf. It now starts at `#x1`, as
+1.1 does; `#x0` and the surrogates stay out at either version. XSLT 3.0 4.1
+makes the choice ours in as many words: "Implementations may support any
+version ... it is thus implementation-defined which versions and editions of XML
+and XML Namespaces are supported." Saxon 9.8 reads it the same way and passes
+`xml-to-json-D015`, `-D017` and `-D018`, which this now does too.
+
+The version still decides whether such a character can be *written down*, and
+that decision stays in the serializer: XDM makes no distinction between a 1.0
+and a 1.1 tree (4.1), so a C0 control is an ordinary string value and only
+becomes `SERE0006` when an XML 1.0 serialization is asked to spell it.
+
+The QT3 harness records the split rather than picking a side. Both ends of the
+`xml-version` dependency are out of scope, because the suite pairs them --
+`K-CodepointToStringFunc-8` carries the 1.0 dependency and says why in its
+description, "Codepoint 8 is invalid in XML 1.0 but valid in XML 1.1" -- and
+this engine has 1.1's character model but not the rest of 1.1. Admitting the
+1.1 half was measured and rejected: it takes XQuery from 29,952 passed / 12
+failed to 29,936 / 26.
+
+**What is still missing beyond `dtd` is `fn:serialize`'s `undeclare-prefixes`.**
+`xslt/serialize.go` implements it (11.7); `xpath/fn_serialize.go` writes
+`xmlns:p=""` unconditionally, so the 1.1-only `serialize-xml-035/036/135/136`
+cases would fail if they were admitted. The `version` parameter itself now
+reaches the XML declaration there, which it did not before.
+
+`undeclare-prefixes` is not the only one, but **`indent` is now honoured**:
+Serialization 3.1 §4's rules, including the significant-whitespace rule and
+the html comment/PI exception, so a document indents the same way through
+`fn:serialize` as through `xsl:result-document`.
+
+A later drift audit closed three more. **`doctype-public`, `doctype-system`
+and `escape-uri-attributes`** had no field to write to at all, so a requested
+doctype was never emitted and a URI attribute went unescaped even though the
+parameter defaults to `yes` (`xslt-rec20.xml:26434`). All three are now read,
+the URI escaping ported verbatim from `xslt/serialize.go` so the two
+serialisers cannot disagree. **`suppress-indentation`** was fixed in the same
+pass and was wrong in a way the audit had not predicted: it suppressed
+indentation document-wide, where `serialize-xml-108` requires the named
+element to keep its own indentation and only its content to be spared.
+
+**`normalization-form`** is now read too, in both the map and element forms,
+and an unsupported form is `SEPM0017` rather than silence. Normalization is
+applied at the text-writing site so a character map's replacement stays
+untouched, which is what Serialization 3.1 requires.
+
+**`html-version`** was the last parsed-and-unread one, and the audit that found
+it also found what its inertness was hiding. The `html` output method wrote
+`<br/>` for every empty element — XML syntax an HTML parser does not accept.
+For a void element the `/` is merely ignored, but for a NON-void one
+(`<div/>`) the parser reads an unclosed start tag and swallows the rest of the
+document, so this was silent corruption rather than a cosmetic divergence. The
+void-element table is version-dependent (`basefont`/`frame`/`isindex` are void
+in HTML 4 only; `keygen`/`source`/`track`/`wbr` in HTML 5 only), which is why
+nothing could be fixed until `html-version` was actually read. It is now read
+in both the map and element forms — previously the map form accepted it and
+the element form returned `SEPM0017` for the same parameter.
+
+The table is duplicated from `xslt/serialize.go` rather than shared, and both
+copies now name the other. No import cycle forbids sharing it (`xslt` imports
+`xpath`, not the reverse); the duplication is an ownership artefact and
+collapsing the two is a clean follow-up.
+
+The **`json`** method escaped only `#x1`–`#x1F`. Serialization 3.1 §9 requires
+"any other codepoint in the range 1-31 or **127-159**" to be written `\uHHHH`,
+so DEL and the C1 controls were emitted raw. `fn:xml-to-json` — governed by the
+same rule and pinned by `xml-to-json-073` — already had the correct range in
+`xpath/fn_json.go`, so this was one rule with two implementations and only one
+of them right.
+
+The **XML** method had the same shape, and a worse consequence. Serialization
+3.1 §5 requires "CR, NEL and LINE SEPARATOR characters in text nodes" to be
+written as character references, the same three plus NL and TAB in attribute
+values, and "the non-whitespace control characters #x1 through #x1F and #x7F
+through #x9F" in both. `escapeText` and `escapeAttr` in `xpath/fn_serialize.go`
+were `strings.NewReplacer`s naming CR alone (plus TAB and NL for attributes),
+so NEL, U+2028 and the whole of C0 and C1 went out raw. Because an XML 1.1
+parser normalises NEL and U+2028 to a line feed, serialising and reparsing
+silently replaced the character — which is the corruption the MUST exists to
+prevent, not merely a conformance divergence. `xslt/serialize.go` had the rule
+right all along, so this was again one rule with two implementations.
+
+Both functions now delegate to `escapeXMLRunes`, which walks runes and decides
+by range rather than by a fixed list: adding U+0085 and U+2028 as two more
+replacer entries would have closed the named half and left the ranges open.
+`#x0` is deliberately not escaped — it is not a valid XML character at any
+version and `[66] CharRef` cannot spell it either.
+
+**`include-content-type`** was the last parsed-and-unread one, and it closed in
+the same pass: the `html` method wrote its `<meta http-equiv="Content-Type">`
+into `head` whatever the parameter said. `xsl:output` had honoured it
+throughout, so this was the same shape as the void-element table — one rule,
+two serialisers, one of them ignoring it. `isHTMLContentTypeHead`
+(`xpath/fn_serialize.go`) now consults it, defaulting to `yes` per
+Serialization 3.1, which is why the field is a `*bool` rather than a `bool`.
+
+**Nothing is now parsed and unread.** What is left is the deliberate list
+below, and the `xhtml` method's own empty-element rule — void elements
+self-closed *with a space*, recognition namespace-gated under version 4 —
+which this serialiser has never implemented. `TestSerializeXMLKeepsSelfClosing`
+pins the current behaviour so that changing it is a deliberate act.
+
+**`byte-order-mark` and `media-type` are deliberately not implemented** for
+`fn:serialize`, which is a different thing from unread. F&O 3.0
+(`functions-and-operators-rec30.xml:26192`) says of this function that "the
+final stage of serialization, that is, encoding, is skipped", and the function
+returns an `xs:string`: there is no octet stream for a byte-order mark to
+precede or a media type to label. `xsl:output`, which does write bytes,
+honours both. Revisit only if a byte-returning entry point is added.
+
+Fixing `indent` exposed a second defect the inertness had hidden: a
+no-namespace `xs:QName` map key was matching a standard parameter name.
+Serialization 3.1 §3 gives those names as `xs:string`, reserving `xs:QName`
+with a non-absent namespace for implementation-defined parameters, and the key
+was compared with `String()` — so `QName('','indent')` read as `indent`.
+Accepting a key and ignoring what it asks for is indistinguishable from
+rejecting it, which is why `serialize-xml-120` and `-120b` only caught this
+once indentation started working.
+
+**`xsl:stream` is accepted beside `xsl:source-document`.** The vendored
+working draft (§18.1) names the instruction `xsl:stream` and never mentions
+`source-document`; the W3C suite writes `xsl:source-document` in 500
+stylesheets and `xsl:stream` in none. The table carried the suite's spelling
+alone, so a stylesheet written against the vendored specification was refused
+with `XTSE0010`. Both are now accepted, with §18.1's attribute list for
+`xsl:stream` — which has no `@streamable`, since it streams by definition.
+No suite case exercises it, so the change is invisible to the ratchet.
+
+**`build-tree` now applies to the principal result.** §26.1 covers "the raw
+principal result or secondary result", and §24.1 says what the yes case means:
+"a document node is created ... The tree rooted at this document node forms
+the final result tree." So `build-tree="no"` means no document node, and
+`Result.Tree()` returns nil rather than manufacturing the node the stylesheet
+asked not to have built; `Result.BuildsTree()` distinguishes that from a
+transform that produced nothing. Serialisation is unaffected — writing the raw
+sequence is the point of the attribute.
 
 The `keySep = "\x1f"` dependency is also closed. `xsd/identity.go` is now
 length-prefixed and injective for any field content, so it no longer rests on
@@ -104,7 +249,7 @@ internal one does. See [security.md](security.md) and
 
 ### 1.3 RELAX NG — compact syntax implemented, unverified against a suite
 
-100% of James Clark's suite (965 of 965 assertions). Both notations are
+100% of James Clark's suite (<!-- BEGIN GENERATED RELAX NG FIGURE -->965 of 965<!-- END GENERATED RELAX NG FIGURE --> assertions). Both notations are
 supported: `CompileCompact` and `ParseCompact` read the compact syntax.
 
 The compact parser translates to the XML syntax and compiles that, so it added
@@ -219,43 +364,236 @@ schemas are marked invalid-by-design and skipped either way". That was true of
 the test driver, not of the suite: skipping them was a measurement bug, and
 they are roughly 14,000 real tests. See the correction in [xsd.md](xsd.md).
 
-What is left: **nothing measurable.** Schema-validity agreement is now 99.86%
-on 1.0 and 99.88% on 1.1, and none of the remaining disagreements is a fixable
-defect — see [conformance-gaps.md](conformance-gaps.md). The area table that
-stood here counted roughly 470 false accepts across attribute declarations,
-wildcards, identity constraints and notations; all of it has since landed.
+What is left: **two rules, and they have now landed.** The entry that stood
+here said "nothing measurable" and that none of the remaining disagreements was
+a fixable defect. Both halves were wrong, and *known-gaps.md* said so at the
+same time — its table marked `elemM002` and `idC019` "open" while this file
+called the area finished. Two entries drifted apart because the figures were
+re-measured and the prose was not.
+
+Both are now closed, and both were false *accepts* — invalid schemas this
+loaded without complaint, which is the direction that matters:
+
+- **`MS-Element/elemM002`** — `type="foo"` naming an `<xsd:attribute
+  name="foo"/>`. §3.3.2 requires `type=` to resolve to a type definition, and
+  this resolves to a component of the wrong kind. What hid it was the deferral
+  §3.3.3 grants an element declaration: the unprefixed name lands in the absent
+  namespace, `deferrableMiss` answers true, and the reference was carried on the
+  declaration instead of reported. The deferral exists because a document read
+  later might supply the type — but no document can turn an attribute
+  declaration into one, so here there is nothing to wait for.
+- **`MS-IdentityConstraint/idC019`** — a `keyref` whose `refer=` reaches a key
+  its own document never imported. §4.2.6.1 scopes an import's licence to the
+  document that wrote it, which is why `doc.imports` exists beside the
+  per-assembly set; the `refer=` fixup was reading the flat assembly-wide map
+  and ignoring who asked. `resolveQName`'s own import check could not catch it,
+  because an unprefixed name with no default namespace in scope returns early
+  through `chameleonQName`.
+
+Measured on an isolated worktree, each version gains exactly these two and
+nothing else moves: 1.0 schema agreement 14,383 → **14,385** (disagreements 5 →
+3), 1.1 15,347 → **15,350** (7 → 5), with both instance lanes unchanged case for
+case and the vendored-schema corpus steady at 185 loaded. What remains after
+them is in [conformance-gaps.md](conformance-gaps.md), and is dominated by the
+22-per-version `MS-Regex` cases the W3C has itself challenged.
 
 ---
 
-### 1.5 XQuery schema import — the last structural gap in `xquery`
+### 1.5 XQuery schema import — **implemented; a schema-aware tail remains**
 
-`import module` is **implemented** (§4.12) — see
-[CHANGELOG.md](../CHANGELOG.md). What remains here is `import schema`, which
-still parses and is then refused with `XQST0059`, leaving the in-scope schema
-definitions empty so that `validate { … }` raises `XQDY0084`. It is not
-mis-parsed; it is refused by name.
+`import schema` is implemented (§4.11). A schema is found in
+`Options.Schemas` or through `Options.SchemaResolver`, and its components reach
+the static context **before the query body is parsed** — which is the whole of
+what made the feature look large and is in fact what made it small. XQuery
+resolves type names while parsing, so `8 cast as h:hatsize` is decided by
+whether the static context knows the name at the moment the parser reads it;
+the imports are therefore followed at the end of the prolog, where `parseProlog`
+already sits, rather than after the body where the *module* loader runs.
 
-**What `import module` cost, for calibration.** A module store
-(`Options.Modules`), a resolver (`Options.ModuleResolver`, nil by default like
-every other one here), two bounds that refuse rather than truncate, and a
-loader that publishes a module before following its imports — because a cycle
-of module imports is *not* an error at XQuery 3.0 and later, which the suite
-settles by carrying the identical module pair under two spec dependencies with
-opposite expected results.
+The PSVI plumbing the old entry budgeted for turned out to be already built.
+`xpath.SchemaTypes` exists, and `xslt` already implements it over an
+`*xsd.Schema` for `xsl:import-schema`; the seam is cut on the **xpath** side
+because `xsd` cannot import `xpath` (a schema's assertions and selectors *are*
+XPath expressions). What this needed was the loader, the store, and the same
+five method bodies on `staticContext` — which is already the
+`xpath.NamespaceResolver` every expression in the module compiles against. The
+optional `SchemaUnionTypes` and `SchemaListTypes` were ported too, which is
+what makes `castable as` against a pure union or a list type answer rather than
+raise the atomic-target static error.
 
-**What `import schema` costs, and why it is a bigger job than it looks.** Not
-a resolver — `xsd` already has one, and the module loader's shape transfers.
-The cost is that the imported components have to reach the *static context*:
-§2.1.1's in-scope schema definitions are what `validate`, `instance of` and a
-`SchemaElementTest` are judged against, and this package's `staticContext`
-has nowhere to put them. That is PSVI plumbing between `xsd` and `xquery`
-rather than another loader, and it is the reason the two halves of `import`
-were separated rather than done together.
+Security is the module import's pattern applied without exception:
+`SchemaResolver` is nil in the zero value, an `at` location is never opened
+without one, and `MaxSchemaBytes` refuses rather than truncates. It is
+`xsd.Resolver` deliberately, so the **same** resolver follows the imported
+schema's own `xs:include` and `xs:import` — an imported schema reaches no
+further than the query's import was granted. See
+[security.md](security.md).
 
-**What it buys.** The `validate` expression, the schema-aware type tests, and
-the QT3 cases that depend on a typed input. It does **not** unblock
-`fn:load-xquery-module`; that needed the module half, which now exists — see
-[reaching-100.md](reaching-100.md) for what actually changed there.
+**What it moved.** The `schemaImport` feature gate came off the QT3 harness and
+the blanket "schema-aware environment" skip was narrowed to the cases that
+actually need typed *input*:
+
+| Lane | in scope | passed | failed |
+|---|---|---|---|
+| XPath 2.0 | 15,217 → 15,217 | 15,217 | 0 → 0 |
+| XPath 3.0 | 19,302 → 19,362 | 19,362 | 0 → 0 |
+| XPath 3.1 | 21,838 → 21,898 | 21,898 | 0 → 0 |
+| XQuery 3.1 | 29,930 → 30,346 | 29,918 → 30,263 | 12 → 83 |
+
+416 cases came into scope at XQuery and 335 more pass. The 81 added failures
+are a real tail and are listed below rather than hidden: a lift that admits
+failing cases has to be visible, which is why the in-scope count is quoted
+first. `prod-SchemaImport` itself is 15 of 73.
+
+**The cast tail, closed.** Two of the bullets below were worked and are gone;
+`prod-CastableExpr` fell 49 → 8 and `prod-CastExpr.schema` 47 → 37, taking the
+XQuery lane 30,143 → 30,233 with every other lane unmoved. Five root causes,
+all of them in how a *schema-defined* type reaches a cast:
+
+**The ItemType tail, closed.** The other side of the first bullet below, worked
+after it and worth stating separately because it moves in the opposite
+direction. Having made an impure union a legal *cast* target, nothing had made
+it an illegal *ItemType*: the purity check covered only the three built-in list
+types, so a schema-defined list or an impure union in `instance of`, `treat as`
+or a function signature was accepted statically and failed later at the value
+binding as `XPTY0004` — a dynamic error for a static defect. Extending that
+check to `SchemaListType` and `SchemaSimpleType` gives `XPST0051`, which is
+what `FunctionCall-032`, `-033`, `-034` and `-039` require. Two conversions
+closed with it: a pure union declared as a return type now converts an
+`xs:untypedAtomic` by trying its members (`FunctionCall-037`, `-038`), and a
+union with an `xs:QName` member is recognised as namespace-sensitive so that
+the same conversion is refused with `XPTY0117` (`FunctionCall-041`).
+`prod-FunctionCall` fell 9 → 2 and `prod-InstanceofExpr` 12 → 7, taking the
+XQuery lane 30,233 → 30,245 with every other lane unmoved and nothing newly
+failing.
+
+* **The purity rule was applied to the wrong question.** §2.5 admits only a
+  *pure* union as an **ItemType**, because `instance of` and a function
+  signature must answer from a value's own annotation and a member of a
+  faceted union does not necessarily satisfy that union's facets — the XSD 1.0
+  error XSD 1.1 §3.16.6.3 corrected. But §3.14.2 admits **any** simple type in
+  the in-scope schema types as a **cast target**, and a cast has the lexical
+  form in hand, so the union's own facets can actually be checked. The rule was
+  gating both, so `castable as s:impureUnionType` raised `XPST0003` where
+  `cbcl-castable-impure-001` asserts `true`. The two contexts are now separate:
+  `SchemaSimpleType` marks a cast target the schema decides, and the ItemType
+  positions still refuse an impure union exactly as before. **This is the entry
+  that predicted `xslt` refuses these identically and called it a joint gap —
+  it was wrong.** The suite's own assertion is `<assert-true/>`, not an error,
+  and re-reading §3.14.2 against §2.5 shows why: `xslt`'s refusal is correct
+  where it stands (an ItemType) and was never a statement about casts.
+* **A schema was installed too late for the prolog's own declarations.** The
+  imports were followed at the *end* of the prolog. That is early enough for
+  the query body but not for a function signature, which is parsed where it
+  stands — so `declare function local:f($a as s:dateOrDateTime)` one line below
+  the import that defines it was `XPST0051`. Each import is now followed where
+  it is read. §4.11 requires imports to precede variable and function
+  declarations, so no declaration can see an import it should not.
+* **A cast to a union validated the operand instead of the result.** A cast
+  *converts*; validation asks whether a value is already in a type's lexical
+  space. `castToUnion` put the operand's `"123.12"` to the schema after the
+  member cast had already produced `"123"`, so `123.12 cast as s:myUnionType1`
+  raised where `CastAs-UnionType-3` expects the integer `123`.
+* **A member's own facets were skipped by a shortcut.** An item whose type code
+  already matched a member's was returned untouched — right only when the
+  schema has nothing further to say. A member that is a *restriction* carries
+  facets its type code cannot express, so `"AD123456789"` (a fine `xs:string`)
+  cast to a union over a pattern-restricted `xs:string` succeeded where
+  `CastAs-UnionType-5a` requires `FORG0001`.
+* **A list member is reachable only from a string.** F&O §18.3 defines the cast
+  to a list type from `xs:string` and `xs:untypedAtomic` only, so a source that
+  is neither may reach a union's *atomic* members and no others. Validation
+  alone cannot see this — it is handed a lexical form, and `"1"` is a perfectly
+  good one-item list of decimals whatever produced it. This is the difference
+  between `cbcl-castable-impure-005` (`xs:untypedAtomic("1 2 3")`, true) and
+  `-009` (`xs:decimal("1")`, false) against the *same* union, and without it the
+  first fix above was too permissive in exactly those two cases.
+
+**The canonical form and the list member, closed.** `prod-CastableExpr` went
+8 → 0 (946 / 946) and the XQuery lane 30,255 → 30,263, with the failing set
+diffed by name in both directions: exactly those 8 newly pass and **nothing
+newly fails**. The two groups failed in opposite directions and were **two
+different bugs** that happen to share the cast path:
+
+* **A pattern facet was tested against the source, not the canonical result.**
+  F&O 3.0 §18.3.3 says that where a cast crosses a branch of the hierarchy the
+  pattern is tested against "the canonical lexical representation of the
+  value", and W3C bug 26865 — which revised `CastableAs653`–`658` twice —
+  settled that this means the **cast result**, in the target's own primitive.
+  The cases carry the rule in their titles: "Pattern must match canonical
+  representation (not the result of `string()`)". The engine passed the
+  *source* value's `fn:string` form to the schema, so `12 castable as
+  d:canonicalDecimal` tested `"12"` against `-?[0-9]+\.[0-9]+` and answered
+  false where the canonical `"12.0"` matches. `fn:string` is XPath's
+  serialization and is **not** XSD's canonical form — they disagree exactly
+  here, and `string(xs:double(93.7))` is `"93.7"` where the canonical double
+  is `"9.37E1"`. A new `canonicalLexical` in `xpath/cast.go` answers for the
+  numeric primitives alone, so every other type keeps the lexical form it had.
+  Note this is **not** a rule inside `xsd`, as the old entry predicted:
+  validation is handed a lexical form, and the defect was in *which* form the
+  cast chose to hand it. `xs:integer` is deliberately excluded — F&O §18.3.1
+  names it a primitive in its own right and its canonical form is the bare
+  digits, so a pattern written for integers must keep seeing `"12"`.
+* **A cast to a union's list member returned one item instead of a sequence.**
+  F&O 3.0 §18.3.6 makes a cast to a list type a **sequence**, one value per
+  whitespace-separated token — "the effect … is the same as … validating it
+  using `L` as the governing type, and atomizing the resulting node", with its
+  own example returning two `xs:integer` values from `my:coordinates("2 -1")`.
+  A union holding a list member is *impure*, so the cast is decided by the
+  schema and took a branch that returned the operand unchanged. So
+  `s:impureUnionType("1 2 3")` was one `xs:string` where it owes **three**
+  `xs:decimal` values — and a three-item sequence is castable to nothing,
+  which is why `cbcl-castable-impure-010` and `-020` both want false and why
+  the `?` on `-020` changes nothing. The atomic members are tried first, so
+  `s:impureUnionType("2001-01-01")` still yields one item. This needed a
+  result **shape**, not the annotation the old entry predicted.
+
+**What is left in the cast sets: nothing.** `prod-CastExpr.schema` is at
+88 / 88. Its last three cases were the list half of the union-member fix:
+`"a b c" cast as s:unionOfLists` has to be an `xs:IDREF*`, and a list whose
+item type is a union owes an instance of the accepting member per token.
+The item type — and each list member of a union over lists — is now resolved
+as a full cast target rather than an erased code, so this was not annotation
+propagation from `validate` after all; it was the cast carrying the name the
+code loses, one level further in.
+*(`prod-CastableExpr` is no longer on this list. It was 8 and is now **0** —
+`prod-CastableExpr` is at 946 / 946. Both halves are described under "The
+canonical form and the list member" below, and **both of this entry's
+predictions about them were wrong**: the pattern rule is not a facet-
+application rule inside `xsd`, and the impure pair needed a result **shape**
+rather than an annotation.)*
+
+**What is still missing, and it is not one thing.** Each of these is a separate
+small feature rather than a bug in the import:
+
+* **Typed input.** A source document does not arrive schema-validated, so a
+  node still atomises as untyped however the query imported. That is what the
+  `schemaValidation` and `typedData` dependencies name, and the harness still
+  skips on them; `prod-CastExpr.schema`'s `(a, b, c) is not an instance of
+  xs:IDREF*` is the shape it takes.
+* ~~**Constructor functions for schema types.**~~ **Done.** An imported simple
+  type is now a callable constructor, impure union and list type included,
+  because the constructor is *defined* as a cast and a cast to any simple type
+  in the in-scope schema types is legal.
+* ~~**Impure and restricted unions.**~~ **Done, and the entry's reasoning was
+  wrong.** See "The cast tail, closed" above: the purity rule governs ItemType
+  positions, not cast targets, and the suite asserts `true` rather than an
+  error. `xslt`'s identical refusal is correct where it stands and was never a
+  claim about casts, so this was never a joint gap.
+* **Annotation propagation.** A validated element that is then copied into a
+  constructor loses the annotation the assessment stamped, so
+  `qischema007`-style cases that validate and then wrap fail.
+* **Substitution groups on validated content.** `schema-element(s:H1)`
+  matching a substituted child needs the *node* to have been validated against
+  the head's group, which needs the assessment to record which declaration
+  accepted each child.
+
+**What it buys, delivered.** `validate` against a real schema, with the result
+annotated; `cast as` and `castable as` with the schema author's **facets**
+applied rather than only the base type; `instance of`, `element(*, T)` and
+`schema-element(E)` over imported names; and
+`import schema default element namespace`, which makes the imported namespace
+the default element and type namespace for the rest of the module.
 
 ### 1.6 A host API for JSON, and a context item that is not a node
 
@@ -338,10 +676,131 @@ indirect: pass the map through `TransformOptions.Params` to a top-level
 
 ## 2. Bugs
 
-None open. Every entry this section used to carry is fixed or was retracted as
-not a defect; the reasoning that is still worth keeping lives in
-[known-gaps.md](known-gaps.md) and the CHANGELOG, not here. A todo list that
-records its own successes stops being a todo list.
+None open. Four were found on 2026-09-10 while verifying an external audit
+report — none of them a claim *in* that report — and all four are fixed. Three
+shared one theme: a budget minted fresh where it should be inherited. The
+fourth was a map key that disagreed with `eq`. They are kept here rather than
+deleted because the seam that produced three of them recurs; a todo list that
+records its own successes stops being a todo list, but a seam that has now bitten
+five times is worth naming. Full reasoning in `docs/audits/VERDICTS.md`.
+
+### 2.1 `fn:transform` recursion is unbounded — **was P0**
+
+**Done**, `8e0f44d`. `rt.depth` is per-runtime, and every nested `fn:transform`
+built a new runtime at zero, so `MaxDepth` bounded recursion within a level and
+never across one. A stylesheet calling `fn:transform` on itself exhausted the
+Go stack — a runtime fatal, which `recover()` cannot catch, so the host process
+died — with `MaxDepth: 5` explicitly set.
+
+The charge now comes from the call (`ctx.Depth`) rather than the entry runtime,
+for the same reason `xpath/funcitem.go` takes depth from the caller and not the
+closure: a stylesheet that transforms itself re-enters at the same shallow
+`rt.depth` every time round, so only the call's depth accumulates. The nested
+runtime continues the count through an unexported `TransformOptions.nestedDepth`
+instead of restarting. Refusal is `XPDY0001` wrapping `xdm.ErrResourceLimit`,
+matching `xpath.Context.Descend`. See `xslt/nestedtransform_test.go`, whose
+sabotage showed both halves are independently load-bearing: removing either the
+charge or the inheritance brings the fatal back.
+
+### 2.2 A function item does not inherit the byte budget
+
+**Done**, `d63cbb2`. `xpath/funcitem.go` forwarded the caller's `items` and
+`Depth` at both invoke sites and left `bytes` behind, so work wrapped in a
+closure escaped `MaxBytes`. Reachable through the public API, though not from
+ordinary XSLT or XQuery, where the closure captures the same counter pointer
+lexically.
+
+Forwarding the counter alone would have been worse than the gap: `heldBytes`
+rides the same value copy, so a closure captured outside a host's hold would
+carry "not held" into a held call, and the first `Compiled.Eval` under the body
+would reset the caller's counter and discard charges already made — the leak
+`HoldByteBudget`'s idempotence guard exists to prevent, arriving through the
+closure instead of through re-arming. Each budget now travels with the flag
+that marks its boundary, `items` included: the same latent bug sat on that
+side, shipped and unnoticed. See `xpath/funcitem_bytebudget_test.go`.
+
+### 2.3 `xsd/assert.go` mints a context per assertion
+
+**Done.** `xsd/assert.go` called `xpath.NewContext` for every assertion on
+every element, each a fresh 5M-item / 1 GiB allowance, so a schema with many
+assertions over a large document had no aggregate bound at all.
+
+There is no caller budget to inherit: nothing carries an `*xpath.Context`
+across this package's boundary — `ValidateOptions` has no such field, and
+`xslt/validate.go` and `xquery/misc_expr.go` both enter through
+`Schema.Validate` with a freshly built options value. So the budget is owned by
+the validation episode instead, a third instance of the boundary
+`xslt/runtime.go` draws at "one transform" and `xquery/xquery.go` at "one
+query": `validator.assertEpisode` arms one held context per run and
+`assertContext` focuses it per assertion, both budgets held because
+`Compiled.Eval` resets each one per expression and an assertion is exactly one
+expression.
+
+The refusal also had to stop being laundered. XSD 1.1 makes an evaluation error
+a false result, which would have reported `XPDY0130` as `cvc-assertion.3` "not
+satisfied" — calling the document invalid on a ground the schema never stated,
+and letting the walk carry on spending a budget already gone. A resource
+refusal now goes through `failLimit` and sets `stopped`, as the depth and error
+limits do. See `xsd/assert_budget_test.go`.
+
+Not covered: `checkSimpleAssertions`, the `<xs:assertion>` facet of a simple
+type, still mints a context per assertion. It is reached through
+`validateSimpleValueIn`, a chain of free functions with no validator to hang an
+episode on and seventeen call sites, several of them at schema-load time where
+there is no validation run to be the episode. The per-element path fixed above
+is the one that scales with document size; this one scales with the number of
+values, and threading a budget to it is a wider change than this entry.
+
+Re-examined 2026-09-11 and left as it stands. `validateSimpleValueVersion`, the
+free entry into the chain, is reached from `facet_check.go`, `parse_decl.go` and
+`typevalidate.go` as well as from the validating path -- and those three run at
+schema-load time, where there is no validation run to be the episode and so
+nothing to inherit from. Threading a budget would mean a new parameter through
+several levels of free function with no caller budget to pass at a majority of
+the sites, which buys a bound on the load-time path that has no episode to bound
+it against. The per-element path -- the one that scales with document size -- is
+covered by `assertEpisode`.
+
+The sibling escape at the same seam *was* closed: a nested `fn:transform`
+minted its own item and byte allowances, and now adopts the caller's. See
+`xpath.Context.AdoptBudget` and `TestNestedTransformInheritsTheByteBudget`.
+
+### 2.4 Three spec divergences the ninth audit found and left open
+
+**Open.** The 2026-09-11 line-by-line audit against the five Recommendations
+confirmed these and they are not fixed. None has a W3C suite case, which is
+why every conformance lane stayed green across the four fixes committed beside
+them — see
+[audits/2026-09-11-spec-divergence-full.md](audits/2026-09-11-spec-divergence-full.md).
+
+* **`xsl:output/@normalization-form` and `@json-node-output-method` carry no
+  enumeration** in `xslt/elementtable.go`. Both have a closed set in the REC,
+  so a misspelling is accepted in silence. The sibling attributes on the same
+  element were enumerated in `1b7a25a`; these two were left because
+  `json-node-output-method` is also one of the nine "answered differently
+  depending on how it is spelled" splits — the map path is unvalidated where
+  the element path is checked — and narrowing the element alone would widen
+  that split rather than close it.
+
+* **XQST0104 is raised as XQDY0084** — a dynamic error where XQuery 3.1 wants
+  a static one, for `validate type T` with `T` out of scope. This did *not*
+  reproduce as the audit stated it; the real QT3 case (`validate-as-91011`)
+  imports a schema first, so the defect is a different one than the row
+  describes. It needs re-diagnosis before it needs a fix.
+
+* **"is not an XSLT 2.0 element" was hardcoded** in two diagnostics —
+  `xslt/staticcheck.go` and `xslt/compile_instr.go` — that a 3.0 stylesheet
+  can reach. Both now read the version from the stylesheet.
+
+  **The fix is not demonstrated, and that is the more useful finding.**
+  Instrumenting each return and running the whole `xslt` suite never reached
+  either: the content-model check in `elementtable.go` answers first for every
+  unknown `xsl:` element tried, at top level and in a sequence constructor,
+  under `version="2.0"`, `"3.0"` and a forwards-compatible `"4.0"` alike. So
+  this entry described "the error text a user sees", and no user was shown to
+  see it. What is left is a correct spelling of a diagnostic that may be dead
+  code; the comments at both sites say so, rather than claiming a user-visible
+  fix that could not be produced.
 
 ---
 
@@ -403,7 +862,7 @@ cannot see:
   `recover()` cannot catch it;
 - and, by differential fuzzing against a brute-force reference, a
   content-model bug that decided a whole class of schemas wrongly in both
-  directions ([known-gaps.md](known-gaps.md)).
+  directions ([xsd.md](xsd.md#limits)).
 
 All four are fixed. The last needed the matcher's counter runtime replaced —
 a set of whole count vectors rather than a bracketed reading per scope, so that
@@ -416,6 +875,64 @@ hand. It earned its keep twice: a second sweep over the same family found a surv
 region — an emptiable inner particle, whose outer scope has to be credited for
 an iteration that consumed nothing — that the first fix had left rejecting valid
 documents, and again no suite case moved.
+
+**Coverage-guided fuzzing now runs nightly.** `.github/workflows/fuzz.yml`
+fuzzes all nine targets — one per matrix leg, since `go test -fuzz` takes one
+target per invocation — at `-fuzztime 300s`, on a `schedule:` cron and on
+`workflow_dispatch`. It is deliberately *not* in the per-push gate: a
+coverage-guided search is nondeterministic, and a five-minute job that can fail
+on a commit that would have passed a second time is one people disable rather
+than fix. `ci.yml` still replays every seed corpus as an ordinary unit test, so
+a target that stops compiling is caught in a minute, and `check.sh` still only
+*counts* the targets, to keep a README figure honest. Each of the nine was run
+locally for 20s before the job was wired in — roughly 24 million executions in
+total, no crasher — so the job did not start red. A crasher the job finds is
+uploaded as an artifact from the package's own `testdata/fuzz/<Target>/`, which
+is not the gitignored top-level `testdata/`; committing it there makes it a
+permanent seed.
+
+This matters more than it looks: fuzzing here has already found *two* unbounded
+recursions that killed the process, and a third of exactly that class
+(`fn:transform`, §2.1) was found on 2026-09-10 by reading rather than fuzzing.
+A target exercising nested `fn:transform` would likely have reached it first.
+
+### 3.1a `SameKey` corpus — the two types with no coverage had a live bug
+
+**Largely done**, `10486a6`. The differential corpus
+(`xdm/samekey_oracle_test.go`) is generated rather than hand-written, and it
+now carries 178 values over 31,684 ordered pairs — all eight Gregorian types,
+five timezone forms, and the six families that were missing.
+
+The entry that said one of those families "could be hiding a live bug" was
+right. `hexBinary` and `base64Binary` had no key coverage at all and keyed
+through the `typeFamilyOf + String()` tail, so `0F` and `0f` — one value under
+XSD Part 2 §3.2.15 — took different keys, as did base64 values differing only
+by the whitespace §3.2.16 permits between characters. A value built from
+element text could compare equal to a map entry under `eq` and still fail to
+find it. `MapKeyOf` now keys on the decoded octets. The lesson is worth more
+than the fix: the gap was known, written down as a coverage note, and the bug
+sat inside it — a family with no cases cannot report that it is wrong.
+
+The corpus grows quadratically in pairs and cubically in triples, so further
+families cost more there than they did. That is what the generated lane in
+`xdm/samekey_property_test.go` is for: the classes the fixed enumeration misses
+— negative zero, both binary types, large exact integers past the `Rat()`-nil
+branch at `maparray.go:116`, timezone boundary crossings, numeric and duration
+aliases, QName namespace differences, and malformed internal representations —
+are generated from a logged, overridable seed rather than listed, and checked
+against the same oracle plus insert/lookup/replace/remove through `MapItem`.
+
+The `op:same-key-023` workload has a regression test as well
+(`xdm/map_largeworkload_test.go`): 75³ = 421,875 keys built, looked up, and
+removed one at a time. `map_test.go` topped out at 20,000 and the benchmarks
+price one operation against a pre-built map, so a change reintroducing an O(n)
+put would have left the package green and surfaced only as a suite case that
+appeared to hang.
+
+Note the limit of the method, which widening cannot fix: the oracle calls the
+same `typeFamilyOf` as production, so it cannot detect a wrong *family*
+grouping however many values are added. Only an independently written family
+predicate could, and none exists.
 
 ### 3.2 Deep-nesting and pathological schemas
 

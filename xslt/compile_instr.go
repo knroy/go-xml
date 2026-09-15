@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -223,6 +224,12 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	instr := &literalElemInstr{
 		name: n.Name, attrSets: sets, baseURI: n.BaseURI,
 		pkg: compilePackage,
+		// §11.1: the property is spelled xsl:inherit-namespaces here,
+		// because an unprefixed name on a literal result element is an
+		// output attribute rather than a directive. It applies to this
+		// element alone -- unlike exclude-result-prefixes, it is not
+		// inherited from an ancestor.
+		noInherit: noXSLAttr(n, "inherit-namespaces"),
 	}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
@@ -539,7 +546,10 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		return &documentInstr{body: body, validation: spec}, nil
 	case "result-document":
 		return c.compileResultDocument(n, ns)
-	case "source-document":
+	case "source-document", "stream":
+		// xsl:stream is the same instruction under the name the vendored
+		// working draft uses; compileSourceDocument reads attributes rather
+		// than the element name, and xsl:stream has no @streamable to read.
 		return c.compileSourceDocument(n)
 	case "fallback":
 		// xsl:fallback is instantiated only when its containing instruction is
@@ -583,8 +593,13 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		// With no xsl:fallback, "a static error is reported in the same way as
 		// if forwards-compatible behaviour were not enabled" — XTSE0010.
 	}
+	// The version is read rather than written as a literal, for the reason
+	// given at the sibling message in staticcheck.go -- including that neither
+	// site could be reached from any stylesheet tried, so both are correct
+	// spellings of diagnostics that may be dead.
 	return nil, fmt.Errorf(
-		"xsl:%s is not an XSLT 2.0 element (XTSE0010)", n.Name.Local)
+		"xsl:%s is not an XSLT %s element (XTSE0010)",
+		n.Name.Local, xsltVersionName(xpathVersionAt(n)))
 }
 
 // extensionInstr stands for an extension instruction the processor does not
@@ -660,7 +675,7 @@ func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 }
 
 func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
-	instr := &applyTemplatesInstr{}
+	instr := &applyTemplatesInstr{streamed: inDeclaredStreamable(n)}
 	if sel := n.AttrValue("select"); sel != "" {
 		comp, err := compileExpr(sel, ns)
 		if err != nil {
@@ -748,7 +763,8 @@ func (c *compiler) compileCallTemplate(n *xdm.Node, ns xpath.NamespaceResolver) 
 	if err != nil {
 		return nil, err
 	}
-	instr := &callTemplateInstr{name: qn, params: params, compat: compatModeAt(n)}
+	instr := &callTemplateInstr{name: qn, params: params, compat: compatModeAt(n),
+		streamed: inDeclaredStreamable(n)}
 	// XTSE0680 is checked after every module has compiled, because the
 	// template being called may be declared below this call or in a module
 	// imported afterwards. The call is recorded here, where the source
@@ -867,16 +883,25 @@ func (c *compiler) compileSort(n *xdm.Node) (*sortKey, error) {
 		}
 		if a.isLit {
 			coll, err := newCollator(a.literal)
-			if err != nil {
-				// A literal @lang is not an attribute value template, so a
-				// bad value here is the static error XTSE0020 ("an attribute
-				// ... contains a value that is not one of the permitted
-				// values for that attribute"), not the dynamic XTDE0030 that
-				// the AVT branch below reports. The two codes differ only in
-				// whether the value was written or computed.
+			switch {
+			case errors.Is(err, errLangUnsupported):
+				// Section 13.1.3: a language that is a legal xs:language but
+				// is not supported means "the processor behaves as if the
+				// lang attribute were omitted" (xslt-lcwd30.xml:18481-18482).
+				// Leaving s.coll nil is exactly that: the sort falls back to
+				// codepoint order.
+			case err != nil:
+				// A value outside the xs:language value space breaks the
+				// "must" in the same paragraph, so it stays the static error
+				// XTSE0020 ("an attribute ... contains a value that is not
+				// one of the permitted values for that attribute"), not the
+				// dynamic XTDE0030 that the AVT branch below reports. The two
+				// codes differ only in whether the value was written or
+				// computed.
 				return nil, fmt.Errorf("XTSE0020: %w", err)
+			default:
+				s.coll = coll
 			}
-			s.coll = coll
 		} else {
 			s.langAVT = a
 		}
@@ -1559,6 +1584,68 @@ func (r restrictedLibrary) Lookup(name xdm.QName, arity int) (xpath.Function, bo
 	if name.URI == xdm.NSFN && xsltOnlyFunctions[name.Local] {
 		return xpath.Function{}, false
 	}
+	return r.lookupVisible(name, arity)
+}
+
+// LookupDynamic implements xpath.DynamicFunctionLibrary: it answers for
+// fn:function-lookup and the other places that resolve a name against the
+// *dynamic* context rather than the static one.
+//
+// The xsltOnlyFunctions hiding is deliberately not applied here. 10.4.1 places
+// that exclusion in the target expression's static context -- under "Function
+// signatures", beside the in-scope variables and the statically known
+// collations -- so it governs a call written out in the expression, which is
+// what Lookup above answers and what evaluate-047 asserts when it writes
+// document('http://www.w3.org') and requires XTDE3160. 10.4.2 then says of the
+// dynamic context that "all other aspects [...] are the same as the dynamic
+// context for the xsl:evaluate instruction itself", and its own note takes for
+// granted that fn:document can be reached from inside a target expression: "a
+// processor may disallow access using the doc or document functions to
+// documents in local filestore" would have nothing to disallow otherwise.
+//
+// F&O 16.1.1 resolves fn:function-lookup against "the named functions
+// component of the dynamic context", and adds that where a function is absent
+// from the static context "the results depend on what is present in the
+// dynamic context, which is implementation-defined". evaluate-048 is the case
+// this settles -- it looks fn:document up dynamically, is titled "A dynamic
+// call to fn:document() may or may not succeed (spec bug 30049)", and accepts
+// either the document or XTDE3160, but not the XPTY0004 that calling an empty
+// sequence produced.
+//
+// The stylesheet's own private functions stay hidden either way: that rule is
+// about which components this package may see at all, not about when the name
+// is resolved.
+func (r restrictedLibrary) LookupDynamic(
+	_ *xpath.Context, name xdm.QName, arity int,
+) (xpath.Function, bool) {
+	return r.lookupVisible(name, arity)
+}
+
+// unrestrict returns the library this one wraps.
+//
+// 10.4.1 restricts the static context OF THE TARGET EXPRESSION: the names that
+// expression may itself reference. It says nothing about what those functions
+// go on to call. A public function whose body calls a private one is ordinary
+// stylesheet code, and the private callee is not "present in" the target
+// expression at all -- it is never named there.
+//
+// This engine resolves function names when it evaluates them, so the
+// restricted library installed for the target expression stays in the context
+// while a called function's BODY runs, and the restriction reached calls it
+// was never meant to see. DocBook xslTNG is exactly that shape: the evaluated
+// string names f:pi, which carries visibility="public", and f:pi's body calls
+// fp:pi-from-list, which carries none and so defaults to private. Filtering
+// the callee refused 512 of 593 documents for a name the expression never
+// wrote.
+//
+// userFunction.call restores this library for the duration of a body.
+func (r restrictedLibrary) unrestrict() xpath.FunctionLibrary { return r.inner }
+
+// lookupVisible is the part of the restriction both lookups share: a function
+// the stylesheet declares is reachable only if this package may call it.
+func (r restrictedLibrary) lookupVisible(
+	name xdm.QName, arity int,
+) (xpath.Function, bool) {
 	if r.sheetFuncs != nil && r.sheetFuncs.Declares(name, arity) &&
 		r.sheet != nil && !r.sheet.evaluateMayCall(name, arity) {
 		return xpath.Function{}, false
@@ -1656,7 +1743,9 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// code would have been: 10.4 defines the error by *when* it happens, not
 	// by which rule was broken. The version is the module's, exactly as a
 	// statically written expression gets it.
-	comp, err := xpath.CompileVersion(src, ns, ns.xpathVersion)
+	comp, err := xpath.CompileWith(src, xpath.CompileOptions{
+		Namespaces: ns, Version: ns.xpathVersion,
+	})
 	if err != nil {
 		// An xdm.Error, not a wrap: ErrorCode reports the innermost code it
 		// can find, so wrapping would leave the failure carrying the target
@@ -1687,7 +1776,9 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// under the codepoint collation and answers false three times.
 	if i.ns.collation != "" {
 		if coll, cerr := xpath.ResolveCollation(i.ns.collation); cerr == nil {
-			comp = comp.WithDefaultCollation(coll)
+			// The URI is carried too, so fn:default-collation() inside the
+			// evaluated expression reports the collation actually in force.
+			comp = comp.WithDefaultCollationURI(coll, i.ns.collation)
 		}
 	}
 

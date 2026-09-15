@@ -49,6 +49,31 @@ type seenDecl struct {
 // with no prolog at all reaches the loop's first iteration, matches nothing,
 // and returns immediately.
 func (p *parser) parseProlog() error {
+	// The duplicate-schema-import rule is decided over the WHOLE prolog
+	// before any of it is followed. §4.11 forbids importing one target
+	// namespace twice, and that is a fault of the prolog's text: the two
+	// imports would contribute the same components whether or not either
+	// schema can be found. Deciding it per-import as the loop below reaches
+	// them cannot work, because each "import schema" is loaded where it is
+	// read -- so an unresolvable FIRST import raises XQST0059 and the second
+	// import is never looked at. That is exactly what
+	// misc-CombinedErrorCodes/XQST0058 and prod-SchemaImport/schema-import-2
+	// hit: both import an unresolvable namespace twice and both saw
+	// XQST0059. A static error is owed regardless of the input, so the
+	// query's own fault outranks the environment's.
+	if err := p.checkDuplicateSchemaImports(); err != nil {
+		return err
+	}
+	// Each "import schema" is followed where it is READ, not here. A type
+	// name resolves against the static context at the moment the parser
+	// reaches it, and the prolog's own function signatures are parsed where
+	// they stand -- so a schema installed after the loop is a schema those
+	// signatures never see. See parser.loadSchemaImport.
+	return p.parsePrologDecls()
+}
+
+// parsePrologDecls reads the declarations themselves. See parseProlog.
+func (p *parser) parsePrologDecls() error {
 	once := map[string]*seenDecl{
 		"boundary-space":      {code: "XQST0068"},
 		"construction":        {code: "XQST0067"},
@@ -120,14 +145,21 @@ func (p *parser) parseProlog() error {
 				}
 				continue
 			}
-			// A schema import needs the in-scope schema definitions in the
-			// static context, which this package does not have: there is
-			// nowhere to put the components a schema would contribute, so an
-			// import that appeared to succeed would leave "validate" judging
-			// against an empty set. It is refused by name rather than
-			// half-honoured. See docs/todo.md §1.5.
-			p.pos = save
-			return p.errorf("XQST0059: schema import is not implemented yet")
+			// The import is recorded here and resolved by the schema loader
+			// at the END of this prolog, before the query body is parsed.
+			// That ordering is the whole feature: XQuery resolves type names
+			// while parsing, so "8 cast as hat:hatsize" is decided by whether
+			// the static context knows the name at the moment the parser
+			// reads it. See schemaimport.go.
+			if err := p.parseSchemaImport(); err != nil {
+				return err
+			}
+			p.skipSpaceAndComments()
+			if !p.consume(";") {
+				return p.errorf(
+					"XPST0003: expected %q after a declaration", ";")
+			}
+			continue
 		}
 
 		what := p.peekKeyword()
@@ -651,6 +683,18 @@ func (p *parser) parseContextItemDecl(once map[string]*seenDecl, inSecond *bool)
 		return p.errorf("XPST0003: expected %q or %q in a context item declaration",
 			":=", "external")
 	}
+	// §4.16: "A context item declaration in a library module must not specify
+	// a value, and must not be declared external with a default value." A
+	// library module does not own the context item — the main module supplies
+	// it, and the library may only constrain its type — so an initialiser
+	// there would be a value nothing could use. It is a static error whether
+	// the declaration says "external" or not, which is why the check is on the
+	// initialiser rather than on the keyword: contextDecl-048's module writes
+	// "external := 17" and contextDecl-052's writes ":= 17".
+	if p.inLibrary && (decl.init != nil || decl.body != nil) {
+		return p.errorf("XQST0113: a context item declaration in a library " +
+			"module may not specify a value")
+	}
 	p.contextItem = decl
 	return nil
 }
@@ -762,6 +806,22 @@ func (p *parser) parseOptionDecl() error {
 		return err
 	}
 	if name.URI == nsSerialization {
+		// §2.2.4: "It is a static error [err:XQST0108] if an output
+		// declaration occurs in a library module." Serialization is a
+		// property of the query's RESULT, and a library module has no
+		// result — it has no query body at all — so an output declaration
+		// there could never take effect. The rule is not merely that it is
+		// ignored: two imported modules could each declare a different
+		// output:method with nothing to arbitrate between them, so the
+		// declaration is refused where it is written. Serialization-003
+		// imports such a module and asks for XQST0108; before this the
+		// module was parsed happily and its options silently dropped, so the
+		// query returned <result>ok</result> instead of an error.
+		if p.inLibrary {
+			return p.errorf(
+				"XQST0108: an output declaration may not appear in a "+
+					"library module (output:%s)", name.Local)
+		}
 		// §2.2.4: "It is a static error [err:XQST0109] if the local name of
 		// an output declaration in the ... serialization namespace is not
 		// one of the serialization parameter names." An unknown name here is
@@ -955,9 +1015,19 @@ func (p *parser) scanDeclExpr() (string, error) {
 			// constructor is the only reliable way past it, and the
 			// constructor parser is the only thing that knows where it ends.
 			// skipDirConstructor advances past the constructor itself.
-			if err := p.skipDirConstructor(); err == nil {
-				continue
+			//
+			// Its error is returned rather than ignored. A failed skip has
+			// already moved the cursor -- parseDirElement consumes the "<"
+			// before it reads the name that fails -- so falling through to
+			// the "p.pos++" below could put the cursor past the end of the
+			// source, and the slice at the end of this scan then panicked on
+			// input as short as "declare variable $A := <". Reporting the
+			// constructor's own error also says what is actually wrong,
+			// where the fall-through reported a later confusion or none.
+			if err := p.skipDirConstructor(); err != nil {
+				return "", err
 			}
+			continue
 		case ',':
 			if depth == 0 {
 				return "", p.errorf(
@@ -1249,6 +1319,160 @@ func (p *parser) checkImportSyntax(what string) error {
 		"must name a target namespace", prefix)
 }
 
+// checkDuplicateSchemaImports reports XQST0058 when the prolog imports one
+// schema target namespace twice (§4.11).
+//
+// It reads the prolog's text without acting on any of it, and restores the
+// cursor before returning: its only job is to answer a question that the
+// declarations' own order would otherwise hide. See parseProlog for why the
+// scan has to be a separate pass.
+//
+// The scan is deliberately conservative. It walks only the leading run of
+// "import" and "declare" declarations, stops at anything it does not
+// recognise, and records a namespace only where it can read one unambiguously.
+// A missed import costs the XQST0058 this raises and nothing else — the
+// declaration is still parsed and loaded normally afterwards — so stopping
+// early is always safe, while guessing would not be.
+func (p *parser) checkDuplicateSchemaImports() error {
+	save := p.pos
+	defer func() { p.pos = save }()
+
+	seen := map[string]bool{}
+	for {
+		p.skipSpaceAndComments()
+		start := p.pos
+		if !p.consume("import") {
+			// Not an import. A "declare" may still be followed by one, so
+			// the scan steps over the whole declaration and continues; see
+			// skipToDeclEnd.
+			if !p.consume("declare") {
+				return nil
+			}
+			p.pos = start
+			if !p.skipToDeclEnd() {
+				return nil
+			}
+			continue
+		}
+		if !p.skipSpaceAndComments() {
+			// "importfoo" is a name, not a declaration.
+			p.pos = start
+			return nil
+		}
+		what := p.peekKeyword()
+		if what != "schema" && what != "module" {
+			// §4.11 admits no other import, so this "import" was never a
+			// declaration and the prolog ended before it.
+			p.pos = start
+			return nil
+		}
+		if what == "module" {
+			p.pos = start
+			if !p.skipToDeclEnd() {
+				return nil
+			}
+			continue
+		}
+		ns, ok := p.scanSchemaImportNS()
+		if ok && ns != "" {
+			if seen[ns] {
+				// errorf reports at the cursor, which the scan has left
+				// inside the offending import — the right place to point.
+				return p.errorf(
+					"XQST0058: the schema namespace %q is imported twice", ns)
+			}
+			seen[ns] = true
+		}
+		p.pos = start
+		if !p.skipToDeclEnd() {
+			return nil
+		}
+	}
+}
+
+// scanSchemaImportNS reads the target namespace of the "import schema" the
+// cursor sits on, with the cursor just past "import".
+//
+// It reports false where the namespace cannot be read from the text alone,
+// which the caller treats as "nothing to record" rather than as an error.
+func (p *parser) scanSchemaImportNS() (string, bool) {
+	if !p.consumeKeyword("schema") {
+		return "", false
+	}
+	p.skipSpaceAndComments()
+	switch {
+	case p.consumeKeyword("namespace"):
+		// "import schema namespace P = URI".
+		p.skipSpaceAndComments()
+		if p.scanNCName() == "" {
+			return "", false
+		}
+		p.skipSpaceAndComments()
+		if !p.consume("=") {
+			return "", false
+		}
+		p.skipSpaceAndComments()
+	case p.consumeKeyword("default"):
+		// "import schema default element namespace URI".
+		p.skipSpaceAndComments()
+		if !p.consumeKeyword("element") {
+			return "", false
+		}
+		p.skipSpaceAndComments()
+		if !p.consumeKeyword("namespace") {
+			return "", false
+		}
+		p.skipSpaceAndComments()
+	}
+	uri, err := p.parseStringLiteral()
+	if err != nil {
+		return "", false
+	}
+	return collapseURI(uri), true
+}
+
+// skipToDeclEnd advances the cursor past the ";" that ends the declaration it
+// starts on, reporting false when there is none.
+//
+// String literals are stepped over whole so that a ";" inside a URI does not
+// end the declaration early, and comments likewise. Nothing else in a prolog
+// declaration can hide one.
+func (p *parser) skipToDeclEnd() bool {
+	for !p.eof() {
+		p.skipSpaceAndComments()
+		if p.eof() {
+			return false
+		}
+		switch c := p.src[p.pos]; c {
+		case ';':
+			p.pos++
+			return true
+		case '"', '\'':
+			if _, err := p.parseStringLiteral(); err != nil {
+				return false
+			}
+		default:
+			p.pos++
+		}
+	}
+	return false
+}
+
+// collapseURI applies the xs:anyURI whitespace facet to a URI literal.
+//
+// A URILiteral has type xs:anyURI, whose whitespace facet is "collapse", not
+// "replace" and not a trim: leading and trailing whitespace is removed *and*
+// every internal run of whitespace becomes a single space. Trimming alone
+// satisfied module-URIs-1 and -2, which only pad the ends, and left
+// module-URIs-3 failing — it imports "Test    Modules" where the module is
+// registered as "Test Modules", and the two must name the same module.
+//
+// strings.Fields splits on exactly the whitespace the facet names (space, tab,
+// CR, LF are all Unicode space), so the join reproduces the facet directly.
+func collapseURI(uri string) string {
+	return strings.Join(strings.Fields(uri), " ")
+}
+
 // parseModuleImport reads "import module [namespace P =] URI [at L1, L2, ...]"
 // (§4.12), with the cursor just past "import".
 //
@@ -1284,10 +1508,10 @@ func (p *parser) parseModuleImport() error {
 	if err != nil {
 		return err
 	}
-	// §4.12 trims the URI literal of leading and trailing whitespace before
-	// it is used as a namespace, which module-URIs-1 asserts by importing
-	// through a literal padded on both sides.
-	imp.ns = strings.TrimSpace(uri)
+	// §4.12 normalises the URI literal before it is used as a namespace,
+	// which module-URIs-1 asserts by importing through a literal padded on
+	// both sides. See collapseURI: trimming is only half the rule.
+	imp.ns = collapseURI(uri)
 	if imp.ns == "" {
 		return p.errorf("XQST0088: the target namespace of a module import " +
 			"may not be a zero-length string")
@@ -1377,7 +1601,9 @@ func (p *parser) parseModuleDecl() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	uri = strings.TrimSpace(uri)
+	// Normalised the same way an import's namespace is, so that a declaration
+	// and an import written with different whitespace still name one module.
+	uri = collapseURI(uri)
 	if uri == "" {
 		// §4.12: "the module declaration must not specify a zero-length
 		// string as the target namespace", because nothing could then import
@@ -1395,4 +1621,126 @@ func (p *parser) parseModuleDecl() (string, error) {
 		return "", p.errorf("XPST0003: expected %q after a module declaration", ";")
 	}
 	return uri, nil
+}
+
+// parseSchemaImport reads [21] SchemaImport ::= "import schema" SchemaPrefix?
+// URILiteral ("at" URILiteral ("," URILiteral)*)? (§4.11), with the cursor
+// just past "import".
+//
+// The declaration is recorded rather than acted on, exactly as a module import
+// is, and for one of the same two reasons and one different one. The same:
+// the prefix binding is applied immediately, so that a later declaration in
+// this prolog can use it, while nothing is fetched until the loader runs with
+// a budget in hand. The different: the loader runs at the end of THIS method's
+// caller rather than after the body, because a schema contributes TYPE NAMES
+// and those are resolved while the body is parsed. See schemaimport.go.
+//
+// The syntax errors this can raise have already been reported by
+// checkImportSyntax, which the prolog runs first.
+func (p *parser) parseSchemaImport() error {
+	p.skipSpaceAndComments()
+	if !p.consumeKeyword("schema") {
+		return p.errorf("XPST0003: expected %q", "schema")
+	}
+	p.skipSpaceAndComments()
+	imp := schemaImport{}
+	// [22] SchemaPrefix ::= ("namespace" NCName "=") | ("default" "element"
+	// "namespace"). Both are optional, and an import with neither names a
+	// target namespace and binds nothing.
+	prefix := ""
+	defaultElement := false
+	switch {
+	case p.consumeKeyword("namespace"):
+		p.skipSpaceAndComments()
+		prefix = p.scanNCName()
+		if prefix == "" {
+			return p.errorf("XPST0003: expected a prefix after %q",
+				"import schema namespace")
+		}
+		p.skipSpaceAndComments()
+		if !p.consume("=") {
+			return p.errorf("XPST0003: expected %q in a schema import", "=")
+		}
+		p.skipSpaceAndComments()
+	case p.consumeKeyword("default"):
+		p.skipSpaceAndComments()
+		if !p.consumeKeyword("element") {
+			return p.errorf("XPST0003: expected %q in a schema import",
+				"default element namespace")
+		}
+		p.skipSpaceAndComments()
+		if !p.consumeKeyword("namespace") {
+			return p.errorf("XPST0003: expected %q in a schema import",
+				"default element namespace")
+		}
+		p.skipSpaceAndComments()
+		defaultElement = true
+	}
+	uri, err := p.parseURILiteral()
+	if err != nil {
+		return err
+	}
+	// §4.11 normalises the URI literal before it is used as a namespace, on
+	// the same rule that governs a module import's. See collapseURI.
+	imp.ns = collapseURI(uri)
+	if prefix != "" {
+		// §4.11: two imports may not bind the same prefix, and neither may an
+		// import and a "declare namespace". The check is the prolog's own
+		// XQST0033 rather than a code of the import's, because the fault is
+		// the double binding and not the import.
+		if p.declaredNS[prefix] {
+			return p.errorf(
+				"XQST0033: the prefix %q is already bound in this prolog",
+				prefix)
+		}
+		if err := p.sc.bind(prefix, imp.ns); err != nil {
+			return p.errorf("%s", err.Error())
+		}
+		p.declaredNS[prefix] = true
+	}
+	if defaultElement {
+		// "import schema default element namespace URI" additionally makes
+		// the imported namespace the default element and type namespace for
+		// the rest of the module (§4.11), which is what lets qischema002
+		// write "8 cast as hatsize" with no prefix at all.
+		//
+		// Whether a SECOND such import is XQST0066 is deliberately not
+		// enforced. The suite writes no case for it, and the once-only rule
+		// this package tracks is keyed to "declare default element
+		// namespace"; asserting the same rule for an import on no evidence
+		// would be a refusal invented rather than measured.
+		p.sc.defaultElementNS = imp.ns
+	}
+	p.skipSpaceAndComments()
+	if p.consumeKeyword("at") {
+		// The "at" clause is a list of location HINTS (§4.11), and this
+		// parser's only job is to collect them. Whether any is opened is
+		// decided by Options.SchemaResolver, which fetches nothing when the
+		// caller configured nothing -- see noSchemaResolver.
+		for {
+			p.skipSpaceAndComments()
+			loc, err := p.parseURILiteral()
+			if err != nil {
+				return err
+			}
+			imp.hints = append(imp.hints, strings.TrimSpace(loc))
+			p.skipSpaceAndComments()
+			if !p.consume(",") {
+				break
+			}
+		}
+	}
+	// §4.11 forbids importing one target namespace twice in one prolog. The
+	// two imports would contribute the same components, so the second is
+	// XQST0058 rather than a harmless repeat -- which is schema-import-2.
+	for _, prev := range p.schemaImports {
+		if prev.ns == imp.ns {
+			return p.errorf(
+				"XQST0058: the schema namespace %q is imported twice", imp.ns)
+		}
+	}
+	p.schemaImports = append(p.schemaImports, imp)
+	// Followed now rather than at the end of the prolog, so that a function
+	// or variable declaration BELOW this import can name the types it brings.
+	return p.loadSchemaImport(imp, p.sc.baseURI)
 }

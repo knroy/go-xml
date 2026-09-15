@@ -73,7 +73,25 @@ const DefaultMaxErrors = 100
 // since without it the parse fails before this is reachable.
 //
 // What is checked: element content models, attribute presence (#REQUIRED and
-// #FIXED), enumerated attribute values, and ID/IDREF.
+// #FIXED), enumerated attribute values, ID/IDREF, and the two §3.3.1 rules
+// that tie an attribute to a declaration elsewhere in the DTD — every name in
+// a NOTATION attribute's enumeration must be declared by a <!NOTATION>, and
+// the value of an ENTITY or ENTITIES attribute must name an entity declared
+// with an NDATA notation.
+//
+// Those last two turn on a name being ABSENT from the DTD, so they are
+// skipped when the DTD is only half of one: a DOCTYPE that named an external
+// subset which was not read (HasExternalSubset with no ExternalSubset, which
+// only LoadOptions.InternalSubsetOnly or Parse produces) may be missing the
+// very declarations they look for, and reporting them would reject a valid
+// document.
+//
+// An attribute whose declared type or default declaration is outside the sets
+// XML 1.0 §3.3 closes is reported here rather than skipped. Such a declaration
+// constrains the attribute somehow and this package cannot say how, so leaving
+// it silent would report an unexamined attribute as valid — the one thing this
+// package must never do. Compare HasExternalSubset, which says the same about
+// declarations that were never read.
 //
 // Which declarations reach here is decided by how the DTD was read, not by
 // this function. Parse reads the internal subset alone, and a DTD from it
@@ -97,6 +115,14 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 		allowUndec: opts.AllowUndeclared,
 		matchers:   map[string]*xsd.SequenceMatcher{},
 		ids:        map[string]bool{},
+
+		// A DTD assembled by a caller rather than by Parse or Load may have
+		// nil name sets — the maps are exported and the zero value is a
+		// legal one. Reading a nil map is safe but would make every notation
+		// undeclared, so an absent set means "not recorded", not "empty".
+		partial: d.HasExternalSubset && d.ExternalSubset == "" ||
+			d.Notations == nil && d.Unparsed == nil,
+		notationsChecked: map[string]bool{},
 	}
 	root := doc
 	if root.Kind == xdm.KindDocument {
@@ -123,6 +149,15 @@ type validator struct {
 	matchers   map[string]*xsd.SequenceMatcher
 	// ids are every ID value seen, for uniqueness and for resolving IDREF.
 	ids map[string]bool
+	// partial records that the DTD was read from the internal subset alone
+	// while a DOCTYPE named an external one. The checks that turn on a name
+	// being ABSENT — notations and unparsed entities — are then unsound and
+	// are skipped; the checks that turn on a name being present are not.
+	partial bool
+	// notationsChecked keys the declarations whose enumeration has already
+	// been reported on, so that a fault in the DTD is reported once rather
+	// than once per element.
+	notationsChecked map[string]bool
 	// refs are IDREF values and where they appeared, checked once the whole
 	// document has been read — a reference may point forward.
 	refs []idref
@@ -253,6 +288,10 @@ func (v *validator) checkAttributes(el *xdm.Node, path string) {
 				v.fail(path, "attribute %s is #FIXED %q but is %q",
 					d.Name, d.Value, val)
 			}
+		case AttrInvalid:
+			v.fail(path, "attribute %s has an unrecognised default "+
+				"declaration %s, so its presence was not checked",
+				d.Name, d.Value)
 		}
 		if !have {
 			continue
@@ -262,6 +301,32 @@ func (v *validator) checkAttributes(el *xdm.Node, path string) {
 				d.Name, val, strings.Join(d.Enum, ", "))
 		}
 		switch d.Type {
+		case "NOTATION":
+			// §3.3.1's Notation Attributes constraint has two halves. The
+			// value must be one of the names in the enumeration, which the
+			// Enum check above has already applied, and every name in that
+			// enumeration must be a declared notation. Only the second is
+			// new here, and it is a property of the DECLARATION rather than
+			// of this element's value — so it is reported once per
+			// declaration, not once per occurrence.
+			v.checkNotationDecl(path, d)
+		case "ENTITY":
+			// §3.3.1: the value must be the name of an unparsed entity —
+			// declared, and declared with an NDATA notation. A parsed
+			// entity's name is as wrong here as an undeclared one.
+			v.checkEntityValue(path, d.Name, val)
+		case "ENTITIES":
+			// The same rule over a whitespace-separated list. An empty list
+			// is not a Names, so it fails the type as surely as an unknown
+			// name would.
+			names := strings.Fields(val)
+			if len(names) == 0 {
+				v.fail(path, "attribute %s is ENTITIES but is empty, which "+
+					"names no unparsed entity", d.Name)
+			}
+			for _, n := range names {
+				v.checkEntityValue(path, d.Name, n)
+			}
 		case "ID":
 			if v.ids[val] {
 				v.fail(path, "duplicate ID %q", val)
@@ -273,7 +338,58 @@ func (v *validator) checkAttributes(el *xdm.Node, path string) {
 			for _, r := range strings.Fields(val) {
 				v.refs = append(v.refs, idref{r, path})
 			}
+		case "CDATA", "NMTOKEN", "NMTOKENS", "ENUMERATION":
+			// Declared, and either unconstrained (CDATA) or constrained by
+			// something this package does not yet check. Silence here is a
+			// deliberate gap in coverage, not a failure to recognise the
+			// declaration.
+		default:
+			// XML 1.0 §3.3.1 closes the type position to the names above.
+			// Without this branch an unrecognised type — "IDREFF" for
+			// "IDREFS" — falls through to no check at all, and the caller
+			// cannot tell an attribute that passed from one never examined.
+			v.fail(path, "attribute %s is declared with the unrecognised "+
+				"type %s, so its value was not checked", d.Name, d.Type)
 		}
+	}
+}
+
+// checkNotationDecl applies the half of §3.3.1's Notation Attributes
+// constraint that is about the declaration: every name in the enumeration of
+// a NOTATION attribute must be declared by a <!NOTATION>.
+//
+// It is reported once per declaration rather than once per element carrying
+// the attribute, because the fault is in the DTD and repeating it for every
+// instance would bury the finding under its own copies.
+func (v *validator) checkNotationDecl(path string, d *Attribute) {
+	if v.partial {
+		// The declarations were never all read, so a name absent from
+		// Notations may simply be in the half that was not fetched.
+		// Reporting it would reject a valid document, which is the one
+		// failure worse than a missing check.
+		return
+	}
+	key := d.Element + " " + d.Name
+	if v.notationsChecked[key] {
+		return
+	}
+	v.notationsChecked[key] = true
+	for _, n := range d.Enum {
+		if !v.dtd.Notations[n] {
+			v.fail(path, "attribute %s permits the notation %s, which no "+
+				"<!NOTATION> declares", d.Name, n)
+		}
+	}
+}
+
+// checkEntityValue applies §3.3.1's Entity Name constraint to one name.
+func (v *validator) checkEntityValue(path, attr, name string) {
+	if v.partial {
+		// As for notations: half a DTD cannot say an entity is undeclared.
+		return
+	}
+	if !v.dtd.Unparsed[name] {
+		v.fail(path, "attribute %s = %q names no unparsed entity", attr, name)
 	}
 }
 

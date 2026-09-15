@@ -96,28 +96,40 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 
 | | |
 |---|---|
-| **XPath 2.0** | 100.00% of the W3C QT3 suite (15,183 of 15,183 in scope) |
-| **XPath 3.0** | 100.00% of the W3C QT3 suite (19,244 of 19,244 in scope) |
-| **XPath 3.1** | 100% of the W3C QT3 suite (21,786 in scope); maps, arrays, the lookup operator, the JSON family |
-| **XQuery 3.1** | 99.94% of the W3C QT3 suite (29,901 of 29,918 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
-| **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,157 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.73% of the W3C XSLT suite filtered to 3.0 (8,640 of 8,663 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
-| **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,967 of 24,995); **99.91%** of its *schema-validity* tests (14,380 of 14,393) |
-| **XSD 1.1** | 99.90% instance (26,189 of 26,216); **99.93%** schema-validity (15,343 of 15,354); opt-in via `Version11` |
-| **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
+<!-- BEGIN GENERATED XPATH ROWS -->
+<!-- Generated from tests/conformance/results.json and the source tree by
+     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
+| **XPath 2.0** | 100.00% of the W3C QT3 suite (15,217 of 15,217 in scope) |
+| **XPath 3.0** | 100.00% of the W3C QT3 suite (19,362 of 19,362 in scope) |
+| **XPath 3.1** | 100.00% of the W3C QT3 suite (21,898 of 21,898 in scope); maps, arrays, the lookup operator, the JSON family |
+<!-- END GENERATED XPATH ROWS -->
+| **XQuery 3.1** | 100.00% of the W3C QT3 suite (30,345 of 30,346 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; the 1 remaining failure is the tail catalogued in [todo.md](docs/todo.md) §1.5 |
+| **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
+| **XSLT 3.0** | 99.77% of the W3C XSLT suite filtered to 3.0 (11,492 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 8 of the 28 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
+| **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
+<!-- BEGIN GENERATED RELAX NG ROW -->
+<!-- Generated from tests/conformance/results.json and the source tree by
+     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
+| **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
+<!-- END GENERATED RELAX NG ROW -->
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 1,576 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+<!-- BEGIN GENERATED TEST COUNT -->
+<!-- Generated from tests/conformance/results.json and the source tree by
+     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
+| **Tests** | 2,404 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+<!-- END GENERATED TEST COUNT -->
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
 
-1. **Both halves of the XSD numbers carry a residue of disagreements** — 41 on
-   1.0 and 38 on 1.1 — and where they are schema-validity failures, a schema
+1. **Both halves of the XSD numbers carry a residue of disagreements** — 30 on
+   1.0 and 31 on 1.1 — and where they are schema-validity failures, a schema
    invalid in one of those ways is accepted rather than reported. They are
    listed in *Where it fails*, along with what the suite skips and why; **most
-   of them — 71 of 79 — are cases the W3C itself has queried or filed a bug
+   of them — 57 of 61 — are cases the W3C itself has queried or filed a bug
    against**, including every one of the 44 `MS-Regex` disagreements, which
    are a single open bug. A further 16 cases on 1.0 and 14 on 1.1 are excluded
    from both sides of the ratio because the suite marks them
@@ -131,7 +143,7 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.73%, and still
+3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.77%, and still
    the one to check against your own stylesheets first. It no longer has a
    concentration: package composition was about a third of the failures and is
    now 4 of 13, all four documented as unreachable rather than outstanding.
@@ -149,11 +161,16 @@ true here:
    rather than counted as failures. That is the single largest gap, and it is
    architectural rather than a matter of filling in instructions: streaming
    wants a pull parser and a streamability static analysis, not another
-   feature. `xsl:stream` and `xsl:fork` are absent for the same reason. What a
-   streamable stylesheet *computes* is another question — the spec requires it
-   to be the same as a non-streaming evaluation, so the `si-*` sets, which
-   assert results rather than memory behaviour, are in scope and nearly all
-   pass. *Where it fails* sets out the rest.
+   feature. What is absent is streamed *execution*, not the vocabulary:
+   `xsl:stream`, `xsl:fork`, `xsl:source-document`, `xsl:merge` and
+   `xsl:accumulator` all execute, by building the tree instead. §19.1 allows
+   exactly that — a processor not claiming the streaming option "must still
+   process a stylesheet and deliver the correct results, but is not required to
+   use streaming algorithms". What a streamable stylesheet *computes* is
+   another question — the spec requires it to be the same as a non-streaming
+   evaluation, so the `si-*` sets, which assert results rather than memory
+   behaviour, are in scope and nearly all pass. *Where it fails* sets out the
+   rest.
 
 Every remote-reference mechanism — `DOCTYPE`, `fn:doc`, file reads — is off
 unless enabled; see [Security defaults](#security-defaults).
@@ -686,10 +703,12 @@ Every remote-reference mechanism is off unless you turn it on.
   read any file beside it, not only include one — keep stylesheets in a
   directory of their own if that matters. Everything outside stays refused.
   `xslt.FileResolver` confines reads to directories you name and refuses every
-  non-`file` scheme; there is no network option. In `xslt`, confinement is
-  enforced by `os.Root` at the moment of opening rather than by resolving a
-  path and checking it first, so a symlink swapped between the check and the open cannot
-  escape — the older resolve-then-check design had that gap. Each read is
+  non-`file` scheme; there is no network option. Confinement is enforced by
+  `os.Root` at the moment of opening rather than by resolving a path and
+  checking it first, so a symlink swapped between the check and the open cannot
+  escape — the older resolve-then-check design had that gap. Every rooted
+  resolver works this way: `xslt`, `xsd`, `dtd` and the `relaxng` resolver in
+  `cmd/go-xml`, which the other three joined on 2026-09-10. Each read is
   bounded by `FileResolver.MaxBytes`, 64 MB by default, and a larger file is
   refused rather than truncated.
 * **`xsl:include` and `xsl:import` fail closed** the same way, via
@@ -708,6 +727,9 @@ Every remote-reference mechanism is off unless you turn it on.
 * **`xs:import` and `xs:include` fail closed**, via `xsd.Options.Resolver`.
   The default reads a schema beside the one it was given and **refuses a
   remote URL outright**; `HTTPResolver` is how you opt in to the network.
+  `go-xml validate` is confined on the same terms for `-xsd` and `-rng`: to
+  `-root` when given, and otherwise to the schema's own directory, as the
+  transform is to its stylesheet's.
   Since schemas name their imports as absolute URLs — the XSLT 3.0 schema
   imports the XSD 1.1 schema for schemas from `w3.org` — the usual answer is
   not to fetch them but to answer from a catalog:
@@ -866,7 +888,7 @@ reach:
 
 * **[DocBook xslTNG](https://github.com/docbook/xslt3ng)** — 97 stylesheet
   modules using `xsl:evaluate`, accumulators, maps, higher-order functions and
-  a multi-stage `fn:transform` pipeline. **577** of its 593 test documents
+  a multi-stage `fn:transform` pipeline. <!-- BEGIN GENERATED DOCBOOK COUNT -->**577**<!-- END GENERATED DOCBOOK COUNT --> of its 593 test documents
   render (549 before XInclude), and the HTML is byte-identical to the
   Saxon-produced reference output once the timestamp and generator metadata
   (both environment-dependent) are normalised.
@@ -893,7 +915,7 @@ reach:
   which can't have an attribute". Saxon accepts it anyway. Its 75 localisation
   files are generated with this engine too.
 * **[XSpec](https://github.com/xspec/xspec)** — an XSLT compiler written in
-  XSLT. All 225 of its `.xspec` test descriptions that target a stylesheet
+  XSLT. All <!-- BEGIN GENERATED XSPEC COUNT -->225<!-- END GENERATED XSPEC COUNT --> of its `.xspec` test descriptions that target a stylesheet
   compile; the other 59 declare no `@stylesheet` because they drive the
   Schematron and XQuery compilers instead.
 
@@ -908,7 +930,7 @@ What they found, none of which the suites covered:
 
 **One deliberate divergence.** Confining the private-function default to a real
 `xsl:package` costs W3C `evaluate-045`, which asserts the strict reading — one
-case the engine gives up on purpose, and the reason 8,640 is not 8,641. Saxon
+case the engine gives up on purpose, and the reason 11,348 is not 11,349. Saxon
 does not enforce it either: its own XSLT 3.0 results report `evaluate-045` as
 `wrongError`. Inside an `xsl:package`, declared visibility is honoured exactly
 as before. The alternative was that no stylesheet outside a package can call
@@ -940,8 +962,8 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2. Where the QT3 suite still disagrees
 
-**It does not: 15,183 of 15,183 in-scope cases pass, and so do 19,244 on 3.0
-and 21,786 on 3.1.**
+**It does not: 15,222 of 15,222 in-scope cases pass, and so do 19,307 on 3.0
+and 21,863 on 3.1.**
 
 The last case to fall was `fn-matches-51`:
 `fn:matches("ab()cd()ef()gh", "^(ab)([()]*)(cd)([)(]*)ef\4gh$")`. It names
@@ -971,8 +993,8 @@ Two figures, and the second is the one that matters.
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,380 / 14,393 (99.91%) | 24,967 / 24,995 (99.89%) |
-| XSD 1.1 | 15,343 / 15,354 (99.93%) | 26,189 / 26,216 (99.90%) |
+| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
 
 **Earlier revisions of this file reported a single "99.56%" for XSD 1.0 and
 "XSD 1.1: 100%". Both were measured wrongly, and the correction is large enough
@@ -1225,13 +1247,17 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (1,576 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+<!-- BEGIN GENERATED TEST METHODS -->
+<!-- Generated from tests/conformance/results.json and the source tree by
+     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
+| **Unit tests** (2,404 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |
-| **W3C xsdtests suite** | systematic XSD conformance across 24,995 instance and 14,393 schema-validity tests (XSD 1.0; 1.1 adds 26,216 and 15,354) | schemas nobody writes by hand |
+| **W3C xsdtests suite** | systematic XSD conformance across 25,000 instance and 14,388 schema-validity tests (XSD 1.0; 1.1 adds 26,222 and 15,354) | schemas nobody writes by hand |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
-| **Fuzzing** (7 targets) | a crash, hang or wrong refusal on input no author would write | anything a coverage-guided search does not reach in the time it is given |
+| **Fuzzing** (11 targets) | a crash, hang or wrong refusal on input no author would write | anything a coverage-guided search does not reach in the time it is given |
+<!-- END GENERATED TEST METHODS -->
 
 **Every suite feeds the parser well-formed input**, which is the gap fuzzing
 exists to close: the targets cover the XML parser, the schema assembler and its
@@ -1416,8 +1442,8 @@ unaffected.
 ```
 $ git clone --depth 1 https://github.com/w3c/qt3tests.git testdata/qt3tests
 $ GOXSLT_QT3=$PWD/testdata/qt3tests go test ./tests/qt3/ -v -timeout 1800s
-QT3: 31821 cases, 15183 in scope, 16638 skipped
-in-scope: 15183 passed, 0 failed (100.00%)
+QT3: 31821 cases, 15222 in scope, 16599 skipped
+in-scope: 15221 passed, 1 failed (99.99%)
 ```
 
 ### The W3C XSLT suite
@@ -1431,8 +1457,8 @@ each — so an XSLT 2.0 run is a *filtered* run of the 3.0 suite.
 ```
 $ git clone --depth 1 https://github.com/w3c/xslt30-test.git testdata/xslt30-test
 $ GOXSLT_XSLTS=$PWD/testdata/xslt30-test go test ./tests/xslts/ -v -timeout 1800s
-XSLT suite: 14601 cases, 6157 in scope, 8444 skipped
-in-scope: 6149 passed, 8 failed (99.87%)
+XSLT suite: 14601 cases, 6201 in scope, 8400 skipped
+in-scope: 6193 passed, 8 failed (99.87%)
 ```
 
 `TestXSLT30Suite` measures the same catalog at the 3.0 target; both run on every
@@ -1442,7 +1468,7 @@ but "how much 3.0 works without costing 2.0".
 The filter decides what the number means, so each run prints its own
 exclusions: at the 2.0 target 6,027 cases need XSLT 3.0, 1,580 depend on a
 Unicode version and 421 need packages; at the 3.0 target 2,646 need streaming,
-1,580 depend on a Unicode version and 1,098 are XSLT 2.0 only. A dependency the
+1,590 depend on a Unicode version and 1,098 are XSLT 2.0 only. A dependency the
 runner does not model excludes the test rather than being ignored — running a test under conditions it did not ask for reports
 the mismatch as a failure of the engine.
 
@@ -1476,7 +1502,7 @@ by 461 in one step.
 FOTS 3.1 and covers XQuery as well as XPath 3.0/3.1. Each is measured on its
 own denominator, because a case that needs a language the target does not
 claim says nothing about that target's conformance: the XPath targets exclude
-the XQuery-only cases, and the XQuery target runs 29,918 of the suite's 31,821
+the XQuery-only cases, and the XQuery target runs 29964 of the suite's 31,821
 with 1,903 skipped. Counting an out-of-scope case as a pass is how a
 conformance number becomes meaningless.
 
@@ -1599,8 +1625,8 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,380 / 14,393 (99.91%) | 24,967 / 24,995 (99.89%) |
-| XSD 1.1 | 15,343 / 15,354 (99.93%) | 26,189 / 26,216 (99.90%) |
+| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
+| XSD 1.1 | 15,350 / 15,354 (99.97%) | 26,217 / 26,222 (99.98%) |
 
 Every failure is catalogued in
 [docs/conformance-gaps.md](docs/conformance-gaps.md), with a verdict on whether
@@ -1630,7 +1656,7 @@ include.
 ## Where this is going
 
 The conformance tail is no longer the interesting work. XPath is at 100% on all
-three versions, XQuery has 3 failures left and XSLT 21 across both targets —
+three versions, XQuery has 1 failure left and XSLT 42 across both targets —
 cases where the suite disagrees with the specification, where matching it would
 cost XSD tests, or which want byte-identical reproduction of another
 processor's indentation. That leaves **none genuinely open**: the last two were

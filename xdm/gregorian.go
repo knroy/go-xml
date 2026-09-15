@@ -24,7 +24,7 @@ import (
 // date. Getting the hyphen count wrong silently reinterprets the value, so
 // each form is matched exactly rather than by a permissive scan.
 func ParseGregorian(s string, t TypeCode) (*DateTime, error) {
-	s = strings.TrimSpace(s)
+	s = TrimXMLSpace(s)
 	dt := &DateTime{Second: new(big.Rat), Month: 1, Day: 1}
 
 	var rest string

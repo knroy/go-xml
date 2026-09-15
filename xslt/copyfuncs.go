@@ -76,7 +76,7 @@ func checkParentlessQName(it xdm.Item) error {
 	if !ok || n.Kind != xdm.KindAttribute {
 		return nil
 	}
-	if !isNamespaceSensitiveType(n.TypeAnnotation) {
+	if !isNamespaceSensitiveType(xdm.TypeEnvOf(n), n.TypeAnnotation) {
 		return nil
 	}
 	return fmt.Errorf("XTTE0950: fn:copy-of cannot copy attribute %s on its "+

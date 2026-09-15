@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/knroy/go-xml/internal/fileuri"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 	"github.com/knroy/go-xml/xsd"
@@ -69,6 +70,10 @@ type Summary struct {
 	// SkipReasons counts why tests were left out, so that the scope of a run
 	// is visible rather than implied by the total.
 	SkipReasons map[string]int
+	// SkippedOutOfScope and SkippedUnimplemented split Skipped by class --
+	// see skipReasonClasses. A reason with no class is counted in neither,
+	// so the two summing to Skipped is what the suite tests assert.
+	SkippedOutOfScope, SkippedUnimplemented int
 	// BySet counts each test-set separately. A single percentage hides which
 	// features work: a set failing 96 of 100 is an unimplemented feature,
 	// while one failing 5 of 300 is a handful of edge cases, and the two want
@@ -146,6 +151,12 @@ func (r *Runner) Run() (*Summary, error) {
 			case out.Skipped:
 				sum.Skipped++
 				sum.SkipReasons[out.Why]++
+				switch skipClass(out.Why) {
+				case skipOutOfScope:
+					sum.SkippedOutOfScope++
+				case skipUnimplemented:
+					sum.SkippedUnimplemented++
+				}
 				st.Skipped++
 			case out.Pass:
 				sum.Passed++
@@ -478,9 +489,23 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	// mergeInto keeps what xsl:import-schema already put there: a declaration
 	// the stylesheet imported by name is the one it asked for, and an
 	// environment schema for the same name must not displace it.
-	if sch := ss.Schema(); sch != nil {
-		if es := envSchema(set, r.environment(set, tc)); es != nil {
+	//
+	// When the stylesheet declared no xsl:import-schema at all the
+	// environment's schema is installed as the stylesheet's own rather than
+	// merged into a schema that does not exist. The suite's reference driver
+	// does exactly this: c:validated-document builds its stylesheet with one
+	// synthesised <xsl:import-schema> per environment <schema>, unconditionally
+	// and without consulting the stylesheet under test. streamable-021, -042
+	// and -043 each declare the "loans" environment with its loans.xsd and then
+	// validate with validation="strict" while importing nothing themselves --
+	// streamable-021 has the import commented out -- so without this the
+	// components were loaded and discarded and every one reported XTSE1660,
+	// validation requires a schema and none was imported.
+	if es := envSchema(set, r.environment(set, tc)); es != nil {
+		if sch := ss.Schema(); sch != nil {
 			mergeInto(sch, es)
+		} else {
+			ss.SetSchemaIfAbsent(es)
 		}
 	}
 
@@ -973,15 +998,12 @@ func firstLine(s string) string {
 // documents the suite parses get one; the resolvers are given paths, because
 // they join with filepath and a URI turns into a directory called "file:".
 func fileURI(path string) string {
-	if path == "" || strings.HasPrefix(path, "file:") {
-		return path
-	}
-	if !filepath.IsAbs(path) {
-		if abs, err := filepath.Abs(path); err == nil {
-			path = abs
-		}
-	}
-	return "file://" + filepath.ToSlash(path)
+	// internal/fileuri does exactly this, and does the two things the
+	// hand-written "file://" + filepath.ToSlash(path) got wrong on Windows:
+	// an absolute path there is C:\dir\s.xsl, which has no leading slash of
+	// its own, so two slashes made the DRIVE the URI authority and every case
+	// in the run resolved against a base naming a file that is not there.
+	return fileuri.Of(path)
 }
 
 // annotate validates a source against the environment's schema so that the
@@ -1075,6 +1097,13 @@ func envSchema(set *TestSet, env *Environment) *xsd.Schema {
 
 // mergeInto folds one schema's global components into another.
 func mergeInto(dst, src *xsd.Schema) {
+	// The type ENVIRONMENT travels with the components. Copying the type
+	// DEFINITIONS while leaving the derivation facts behind produces an
+	// aggregate whose types no longer know what they derive from, so every
+	// by-name question -- "instance of", namespace-sensitivity, the NOTATION
+	// chain -- answers from an empty environment, and every node the aggregate
+	// validates is stamped with that empty environment.
+	dst.TypeEnv().Merge(src.TypeEnv())
 	for n, t := range src.Types {
 		if _, ok := dst.Types[n]; !ok {
 			dst.Types[n] = t

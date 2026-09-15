@@ -45,6 +45,7 @@ func (e *NamedFunctionRef) Eval(ctx *Context) (xdm.Sequence, error) {
 	}
 	item := functionItemFor(e.Name, e.Arity, fn.Call)
 	item.Signature = fn.Signature
+	item.VariadicSignature = fn.VariadicSignature
 	// A named function reference to a context-dependent function retains the
 	// focus in force where the reference was *written*, not where the item is
 	// eventually called (3.1.6: the function item's dynamic context is the one
@@ -107,7 +108,29 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 		p := &sub
 		if c, ok := callCtx.(invokeContext); ok && c != nil {
 			sub.Ctx = c.Ctx
-			sub.items = c.items
+			// Both budgets come from the call, and each with the flag that
+			// says where its boundary is. The counter alone is not enough:
+			// heldBytes rides on the value copy, so a closure captured
+			// outside a host's hold would carry "not held" into a call that
+			// is held, and the first Compiled.Eval under the body would
+			// reset the caller's counter and discard charges the caller had
+			// already made -- the leak HoldByteBudget's idempotence guard
+			// exists to prevent, arriving through the closure instead. The
+			// item budget is forwarded the same way for the same reason.
+			sub.items, sub.heldItems = c.items, c.heldItems
+			sub.bytes, sub.heldBytes = c.bytes, c.heldBytes
+			// The recursion depth comes from the call for the same reason,
+			// and it is the one budget that cannot survive on its own: items
+			// and bytes are pointers that ride the value copy, while Depth is
+			// an int, so a captured context carries the depth the reference
+			// was *written* at. For a function that applies itself through
+			// its own name -- local:f(local:f#2, 1) -- that is the same
+			// shallow depth every time round, so the charge never
+			// accumulates and the recursion runs to a Go stack overflow,
+			// which is fatal and uncatchable. InlineFunctionExpr.Eval takes
+			// it from the call below for exactly this reason; a named
+			// reference reaches the body through here instead.
+			sub.Depth, sub.MaxDepth = c.Depth, c.MaxDepth
 			// Only the *focus* is retained from the reference point; the
 			// variable bindings come from the call. The two parts of the
 			// captured context have opposite lifetimes in a prolog, where a
@@ -196,7 +219,22 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		if c, ok := callCtx.(invokeContext); ok && c != nil {
 			s := *captured
 			s.Ctx = c.Ctx
-			s.items = c.items
+			// Both budgets come from the call, each with the flag that says
+			// where its boundary is -- see withRetainedFocus for why the
+			// counter alone would let a closure reset the caller's charges.
+			s.items, s.heldItems = c.items, c.heldItems
+			s.bytes, s.heldBytes = c.bytes, c.heldBytes
+			// The recursion depth is one of those per-evaluation limits, and
+			// it has to come from the CALL rather than the closure: a closure
+			// captures the depth it was written at, which for a function that
+			// applies itself is the same shallow depth every time round. With
+			// the captured value the charge could never accumulate however
+			// diligently the call site charged it, so the body would recurse
+			// until the stack overflowed. Taking the caller's makes the nest
+			// count, and taking MaxDepth with it keeps a caller that raised
+			// its own bound from having the package default reimposed inside
+			// a closure written before it was set.
+			s.Depth, s.MaxDepth = c.Depth, c.MaxDepth
 			sub = &s
 		}
 		for i, p := range e.Params {
@@ -257,16 +295,16 @@ func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
 			a, ok := it.(*xdm.Atomic)
 			if !ok {
 				return nil, xdm.ErrType(
-					"XPTY0004: value does not match the declared type %s", st.String())
+					"value does not match the declared type %s", st.String())
 			}
 			if !convertibleToParam(a.Type, st.AtomicType) {
 				return nil, xdm.ErrType(
-					"XPTY0004: value does not match the declared type %s", st.String())
+					"value does not match the declared type %s", st.String())
 			}
 			c, err := CastAtomic(a, st.AtomicType)
 			if err != nil {
 				return nil, xdm.ErrType(
-					"XPTY0004: value does not match the declared type %s", st.String())
+					"value does not match the declared type %s", st.String())
 			}
 			conv = append(conv, c)
 		}
@@ -290,7 +328,7 @@ func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
 			return xdm.One(coerceFunctionItem(fn, st)), nil
 		}
 	}
-	return nil, xdm.ErrType("XPTY0004: value does not match the declared type %s", st.String())
+	return nil, xdm.ErrType("value does not match the declared type %s", st.String())
 }
 
 // coerceFunctionItem wraps fn so that it presents the signature st declares.
@@ -514,7 +552,22 @@ func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, fmt.Errorf("XPTY0004: %s takes %d argument(s), got %d",
 			fn.String(), fn.Arity, len(args))
 	}
-	return fn.Invoke(clearHostVars(ctx), args)
+	// A dynamic call recurses exactly as a named one does, so it is charged
+	// exactly as a named one is -- FuncCall.Eval descends before Function.Call
+	// and this descends before Invoke. Without it a function item that applies
+	// itself, "let $f := function($g) { $g($g) } return $f($f)", never passed
+	// through the bound at all and overflowed the stack, which in Go is a
+	// fatal runtime error the host cannot recover from.
+	//
+	// The charge is on the *nesting*, not on the call: sub is a copy, so it
+	// is released when this call returns and a thousand sequential calls from
+	// fn:for-each are a thousand calls at the caller's depth rather than one
+	// nest a thousand deep.
+	sub, err := ctx.Descend()
+	if err != nil {
+		return nil, err
+	}
+	return fn.Invoke(clearHostVars(sub), args)
 }
 
 // singleFunctionItem extracts the one function item a sequence must hold.
@@ -524,7 +577,7 @@ func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 func singleFunctionItem(seq xdm.Sequence) (*xdm.FunctionItem, error) {
 	if len(seq) != 1 {
 		return nil, xdm.ErrType(
-			"XPTY0004: the target of a dynamic call must be a single function item, got %d items",
+			"the target of a dynamic call must be a single function item, got %d items",
 			len(seq))
 	}
 	// A map and an array are function items in the data model, so "$a(1)" and
@@ -534,7 +587,7 @@ func singleFunctionItem(seq xdm.Sequence) (*xdm.FunctionItem, error) {
 	fn := functionItemView(seq[0])
 	if fn == nil {
 		return nil, xdm.ErrType(
-			"XPTY0004: the target of a dynamic call is %s, not a function", seq[0].TypeName())
+			"the target of a dynamic call is %s, not a function", seq[0].TypeName())
 	}
 	return fn, nil
 }
@@ -560,4 +613,39 @@ func inlineSignature(e *InlineFunctionExpr) []string {
 		sig = append(sig, anyType)
 	}
 	return sig
+}
+
+// lookupSchemaConstructor resolves a DYNAMIC reference to the constructor
+// function of an imported schema type.
+//
+// Nothing registers such a function in the library -- the set of them is not
+// known until a schema is imported -- so an ordinary call is folded into the
+// cast the constructor is defined to be while the parser's schema hook is in
+// reach (foldSchemaConstructor). fn:function-lookup asks the same question
+// after parsing, with a name that is already expanded, and found nothing:
+// CastAs-UnionType-8 looks up {…/unionListDefined}myUnionType1 and got
+// XPST0017 where F&O 16.4.3 owes it the constructor's function item.
+//
+// The static context survives on Context.StaticNamespaces, which is the very
+// resolver the parser used, so the same resolution is available here. The name
+// is fed back through it as a lexical one because every schema hook is keyed
+// on a lexical name plus a resolver; wrapBraced supplies a synthetic prefix
+// for the URI, exactly as the lexer does for a Q{…} literal in source.
+//
+// A name that is not a simple type in the static context yields false, which
+// fn:function-lookup reports as the empty sequence -- the answer F&O 16.1.1
+// gives for any name that is not in scope.
+func lookupSchemaConstructor(ctx *Context, name xdm.QName, arity int) (*xdm.FunctionItem, bool) {
+	if arity != 1 || ctx == nil || ctx.StaticNamespaces == nil {
+		return nil, false
+	}
+	ns := wrapBraced(ctx.StaticNamespaces, []string{name.URI})
+	prefix := fmt.Sprintf("%s0", bracedURIPrefix)
+	cast, ok := schemaConstructorCast(
+		xdm.QName{URI: name.URI, Prefix: prefix, Local: name.Local},
+		[]Expr{&VarRef{Name: ConstructorArgVar}}, ns, ctx.Version)
+	if !ok {
+		return nil, false
+	}
+	return schemaConstructorItem(name, cast), true
 }

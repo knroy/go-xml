@@ -420,13 +420,21 @@ func (s *Stylesheet) checkModeTyped(node *xdm.Node, mode string) error {
 	untyped := node.TypeAnnotation == "" ||
 		node.TypeAnnotation == "{"+xdm.NSXS+"}untyped" ||
 		node.TypeAnnotation == "{"+xdm.NSXS+"}untypedAtomic"
+	// @typed is "boolean | strict | lax | unspecified", and a boolean in this
+	// language is any of yes/no, true/false, 1/0 -- mode-1445 writes
+	// typed=" false " and mode-1446 typed="0", both of which mean "no" and
+	// both of which asserted the opposite while only the literal spelling was
+	// tested. "unspecified" is the fourth value and makes no assertion at
+	// all, so it belongs with neither arm rather than with the default one.
 	switch want {
-	case "no":
+	case "no", "false", "0":
 		if !untyped {
 			return fmt.Errorf(
-				"XTTE3110: mode %s declares typed=\"no\" but %s has type %s",
-				modeLabel(mode), nodeLabel(node), node.TypeAnnotation)
+				"XTTE3110: mode %s declares typed=%q but %s has type %s",
+				modeLabel(mode), want, nodeLabel(node), node.TypeAnnotation)
 		}
+	case "unspecified":
+		return nil
 	default:
 		if untyped {
 			return fmt.Errorf(

@@ -173,7 +173,7 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// The body builds into its own builder, so nothing it produces reaches
 	// the principal result. Passing `out` here is exactly the merging bug
 	// this instruction used to be rejected to avoid.
-	sub := newOutputBuilder()
+	sub := newOutputBuilder(rt)
 	// The separator this document's output definition asks for is part of
 	// sequence normalisation, so the builder applies it as the tree is
 	// formed rather than the serialiser painting it on afterwards. The
@@ -239,8 +239,26 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 	// Two result documents sharing an href would mean one silently
 	// overwriting the other, so the collision is reported instead.
+	//
+	// The comparison is on the ABSOLUTE URI, not on the href as written.
+	// §24.2: "[ERR XTDE1490] It is a dynamic error for a transformation to
+	// generate two or more final result trees with the same URI." The URI of
+	// a secondary result is the href resolved against the base output URI
+	// (§24.1: "The effective value of the attribute must be a URI Reference,
+	// which may be absolute or relative. If it is relative, then it is
+	// resolved against the base output URI"), so href="out.xml" and
+	// href="./out.xml" name one and the same tree. Comparing the raw strings
+	// let that pair through and wrote one document over the other in silence.
+	// checkReadThenWrite above already keys off the resolved form for the
+	// neighbouring XTDE1500; this is the same URI identity.
+	//
+	// The raw href is still compared as well, for the case where no base
+	// output URI is known: resolution then yields "" for every document, and
+	// the resolved form would neither catch a real collision nor be safe to
+	// treat as one.
 	for _, prev := range *rt.secondary {
-		if prev.Href == href {
+		if prev.Href == href ||
+			(resolvedHref != "" && prev.BaseURI == resolvedHref) {
 			return fmt.Errorf(
 				"XTDE1490: xsl:result-document: href %q was already produced by an earlier "+
 					"result document", href)
@@ -257,7 +275,20 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// its assertions against these nodes, not against the serialised text,
 	// so a separator that existed only in the document node toDocument built
 	// would be invisible to /text() = '+++'.
-	nodes := insertItemSeparator(sub.Sequence(), settings.ItemSeparator)
+	// ...except under the adaptive and json methods, which are not subject to
+	// sequence normalisation at all (Serialization 3.1 §2 applies it to "the
+	// XML, XHTML, HTML and Text output methods" only) and which separate
+	// their own items -- adaptive with this very parameter, §10. Inserting it
+	// here as well wrote it twice: result-document-0304 asks for
+	// map{"a":22}|<elem/>|a="5" and got the "|" as an inserted text item and
+	// again as adaptive's own join, around its default newline. serialize.go
+	// dispatches both methods ahead of insertItemSeparator for this reason;
+	// this is the same rule on the path that builds the recorded nodes.
+	sepMethod := strings.ToLower(settings.Method)
+	nodes := sub.Sequence()
+	if sepMethod != "adaptive" && sepMethod != "json" {
+		nodes = insertItemSeparator(nodes, settings.ItemSeparator)
+	}
 	if resolvedHref != "" {
 		for _, it := range nodes {
 			if n, ok := it.(*xdm.Node); ok {
@@ -276,8 +307,12 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		cm = settings.InlineCharMap
 	}
 	// Normalisation has already run over these nodes, so the serialiser must
-	// not run it a second time and double every separator.
-	settings.ItemSeparator = nil
+	// not run it a second time and double every separator. The adaptive and
+	// json methods are the exception: nothing was inserted above, so their
+	// separator has to survive for the serialiser to apply.
+	if sepMethod != "adaptive" && sepMethod != "json" {
+		settings.ItemSeparator = nil
+	}
 	*rt.secondary = append(*rt.secondary, SecondaryResult{
 		Href:    href,
 		BaseURI: resolvedHref,
@@ -285,6 +320,14 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		Output:  settings,
 		charMap: cm,
 	})
+	// The resolved URI is recorded so that a later doc() reading it back is
+	// XTDE1500 too. The error is symmetric in the spec, and until now only
+	// the read-then-write half was detected; see checkWrittenThenRead.
+	// Keyed on the resolved form for the same reason checkReadThenWrite is:
+	// the spec's test is on the absolute URI.
+	if rt.writtenDocs != nil && resolvedHref != "" {
+		(*rt.writtenDocs)[resolvedHref] = true
+	}
 	return nil
 }
 
@@ -303,7 +346,26 @@ func (sr *SecondaryResult) Serialize(w io.Writer, charMap map[rune]string) error
 	return serialize(w, sr.Nodes, sr.Output, charMap)
 }
 
-// String renders the secondary document using its own output settings.
+// String renders the secondary document using its own output settings,
+// DISCARDING any serialization error and returning "" in its place.
+//
+// The same trade as Result.String, and the more exposed of the two: the
+// serialization attributes of xsl:result-document are attribute value
+// templates, so doctype-system and media-type can be supplied by the SOURCE
+// DOCUMENT rather than by the stylesheet author. Those are exactly the two
+// values checkOutputSettings refuses -- SEPM0016 for a system identifier
+// holding both quote kinds, and the escaping that keeps media-type inside the
+// <meta> attribute it is written into -- so this is the method where untrusted
+// input most directly reaches a refusal that String drops on the floor. A
+// caller writing result documents through it gets "" for a refused document
+// and no indication that anything was wrong.
+//
+// String cannot report the error and stay a fmt.Stringer, and the error is not
+// raised any earlier: XSLT 3.0 section 26 makes a serialization error on a
+// secondary result a dynamic error in the evaluation of xsl:result-document,
+// which is where it is raised, not at the end of the transformation. Use
+// Serialize for anything whose failure you need to see; it takes a character
+// map because a secondary document carries its own.
 func (sr *SecondaryResult) String() string {
 	var sb strings.Builder
 	_ = sr.Serialize(&sb, nil)

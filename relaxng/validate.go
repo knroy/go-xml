@@ -38,7 +38,10 @@ func (s *Schema) Validate(doc *xdm.Node) error {
 // ValidateOptions bound one validation run.
 type ValidateOptions struct {
 	// MaxDepth bounds how deep validation will recurse. Zero means
-	// DefaultMaxDepth; a negative value means no limit.
+	// DefaultMaxDepth; a negative value means no limit -- which ends in a
+	// fatal stack overflow rather than an error, since the runtime does not
+	// deliver stack exhaustion as a recoverable panic. Remove the bound only
+	// for input you produced yourself.
 	//
 	// This is not the parser's limit, and the distinction matters more here
 	// than elsewhere: taking derivatives over a nested document costs time and
@@ -203,6 +206,35 @@ func (v *validator) textDeriv(p pattern, s string, ctx nsContext) pattern {
 	return textDeriv(p, s, ctx)
 }
 
+// attsDeriv is the derivative with respect to an element's attributes.
+//
+// The loop lives on the validator rather than beside attDeriv so that the
+// pattern bound can be checked between attributes. It has to be: attDeriv
+// grows the pattern multiplicatively too — a oneOrMore nested inside a
+// oneOrMore over an attribute duplicates its operand on every attribute, just
+// as it does on every child — and the element path's single check before
+// startTagOpenDeriv is taken before any of that happens. Measured, a 189-byte
+// schema and a 98-byte instance of thirteen attributes cost 3.8 s even with
+// MaxPatternSize set to 1, growing about sixfold for every attribute added:
+// the bound existed and could not fire.
+//
+// The check is placed before each derivative for the same reason the element
+// path places it before startTagOpenDeriv: the derivative about to be computed
+// is the expensive one, so noticing afterwards would spend exactly what the
+// bound exists to refuse. attDeriv's own recursion is left untouched — the
+// pattern only accumulates across attributes, not within one.
+func (v *validator) attsDeriv(p pattern, attrs []attr, ctx nsContext, el *xdm.Node) pattern {
+	for _, a := range attrs {
+		if v.maxPattern >= 0 && patternSize(p, v.maxPattern+1) > v.maxPattern {
+			v.tooBig = true
+			v.deepPath = tailPath(v.path, el.Name.Local)
+			return notAllowedPat{}
+		}
+		p = attDeriv(p, a, ctx)
+	}
+	return p
+}
+
 // childDeriv takes the derivative with respect to one node of content.
 func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 	switch n.Kind {
@@ -248,7 +280,7 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 			v.note(fmt.Sprintf("element %s is not permitted here", n.Name.Local))
 			return notAllowedPat{}
 		}
-		p1 = attsDeriv(p1, elementAttrs(n), nsContextOf(n))
+		p1 = v.attsDeriv(p1, elementAttrs(n), nsContextOf(n), n)
 		if isNotAllowed(p1) {
 			v.note(fmt.Sprintf("the attributes of %s do not match", n.Name.Local))
 			return notAllowedPat{}

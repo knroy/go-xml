@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/internal/fileuri"
 )
 
 // These tests exist because external entity resolution is the XXE boundary.
@@ -28,7 +30,7 @@ type dirResolver struct {
 func (d *dirResolver) ResolveEntity(sys, pub, base string) (io.ReadCloser, string, error) {
 	dir := d.root
 	if base != "" {
-		dir = filepath.Dir(strings.TrimPrefix(base, "file://"))
+		dir = filepath.Dir(fileuri.ToPath(base))
 	}
 	p := filepath.Join(dir, sys)
 	// The containment check the real resolver performs, in miniature: a
@@ -47,7 +49,7 @@ func (d *dirResolver) ResolveEntity(sys, pub, base string) (io.ReadCloser, strin
 		return nil, "", err
 	}
 	d.fetched = append(d.fetched, sys)
-	return f, "file://" + abs, nil
+	return f, fileuri.Of(abs), nil
 }
 
 func writeFiles(t *testing.T, files map[string]string) string {
@@ -85,7 +87,7 @@ func TestExternalEntityStillRefusedWithAllowDOCTYPEAlone(t *testing.T) {
 	// the file's contents must not appear in the tree.
 	tree, err := ParseString(string(src), ParseOptions{
 		AllowDOCTYPE: true,
-		BaseURI:      "file://" + filepath.Join(dir, "doc.xml"),
+		BaseURI:      fileuri.Of(filepath.Join(dir, "doc.xml")),
 	})
 	if err == nil {
 		if got := tree.Root.StringValue(); strings.Contains(got, "leaked") {
@@ -127,7 +129,7 @@ func mustParseExternal(t *testing.T, dir, name string) *Tree {
 	tree, err := ParseString(string(src), ParseOptions{
 		AllowDOCTYPE:     true,
 		ExternalEntities: &dirResolver{root: dir},
-		BaseURI:          "file://" + p,
+		BaseURI:          fileuri.Of(p),
 	})
 	if err != nil {
 		t.Fatalf("parse %s: %v", name, err)
@@ -145,7 +147,7 @@ func parseExternalErr(t *testing.T, dir, name string) error {
 	_, err = ParseString(string(src), ParseOptions{
 		AllowDOCTYPE:     true,
 		ExternalEntities: &dirResolver{root: dir},
-		BaseURI:          "file://" + p,
+		BaseURI:          fileuri.Of(p),
 	})
 	return err
 }
@@ -291,7 +293,7 @@ func TestSystemIdentifierOutsideRootIsRefused(t *testing.T) {
 	tree, err := ParseString(doc, ParseOptions{
 		AllowDOCTYPE:     true,
 		ExternalEntities: &dirResolver{root: inner},
-		BaseURI:          "file://" + p,
+		BaseURI:          fileuri.Of(p),
 	})
 	if err == nil {
 		if got := tree.Root.StringValue(); strings.Contains(got, "leaked") {
@@ -324,7 +326,7 @@ func TestExternalSubsetOutsideRootIsRefused(t *testing.T) {
 	_, err := ParseString(doc, ParseOptions{
 		AllowDOCTYPE:     true,
 		ExternalEntities: &dirResolver{root: inner},
-		BaseURI:          "file://" + p,
+		BaseURI:          fileuri.Of(p),
 	})
 	if err == nil {
 		t.Fatal("an external subset outside the root was accepted")

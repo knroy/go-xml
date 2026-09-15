@@ -3,6 +3,7 @@ package xsd
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -1563,16 +1564,49 @@ func TestElementNamesOverlapIsLinearInClosureSize(t *testing.T) {
 	const iters = 200
 	// Warm up, so the first measurement does not pay for lazy allocation.
 	cost(1024, 10)
-	small := cost(1024, iters)
-	large := cost(4096, iters)
+
+	// BEST OF SEVERAL TRIALS, not a single pair of measurements.
+	//
+	// Contention and cache pressure can only ever make a timing LONGER, never
+	// shorter, so across repeated trials the smallest ratio is the least
+	// contaminated estimate of the algorithm's real growth. A single pair has
+	// no way to tell a slow runner from a slow algorithm.
+	//
+	// This is not a hypothetical. On a shared macOS CI runner under -race this
+	// test measured 124.67ms at 1024 and 1364.89ms at 4096 -- a ratio of 10.9x
+	// against an 8x threshold -- while the same commit measured 3.35x to 4.39x
+	// across five consecutive local trials. The algorithm had not changed: the
+	// map intersection was still in place, and a genuine nested-loop
+	// regression lands near 16x, not between the two. What moved was the
+	// measurement. -race adds shadow-memory traffic to every map access, and
+	// that traffic scales with the working set: the 4096 closure is roughly
+	// 192 kB of keys plus its string bodies against 48 kB at 1024, so on a
+	// contended core the LARGER side falls out of cache and the smaller one
+	// does not. The ratio inflates with nothing algorithmic behind it.
+	//
+	// Raising the threshold toward 16x was the other option and is worse: it
+	// would buy CI stability by blinding the test to the very regression it
+	// exists to catch, since the quadratic form it guards against lands at
+	// about 16x itself.
+	const trials = 5
+	best := math.MaxFloat64
+	var bestSmall, bestLarge time.Duration
+	for i := 0; i < trials; i++ {
+		small := cost(1024, iters)
+		large := cost(4096, iters)
+		if r := float64(large) / float64(small); r < best {
+			best, bestSmall, bestLarge = r, small, large
+		}
+	}
 	// A 4x increase in closure size. Linear predicts ~4x cost; the old
 	// nested form predicts ~16x. 8x is the midpoint, and a generous
 	// allowance for timer noise on a loaded machine.
-	if large > small*8 {
+	if best > 8 {
 		t.Errorf("elementNamesOverlap cost grew from %v at closure 1024 to %v at "+
-			"closure 4096 — more than the 8x that separates linear from "+
-			"quadratic growth over a 4x size increase. The map intersection has "+
-			"regressed to a nested loop, and checkUPA's pair budget does not "+
-			"bound the difference.", small, large)
+			"closure 4096 — a ratio of %.2fx, the best of %d trials, and more "+
+			"than the 8x that separates linear from quadratic growth over a 4x "+
+			"size increase. The map intersection has regressed to a nested "+
+			"loop, and checkUPA's pair budget does not bound the difference.",
+			bestSmall, bestLarge, best, trials)
 	}
 }

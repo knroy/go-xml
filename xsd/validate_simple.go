@@ -150,6 +150,23 @@ func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *x
 	// is shaped like a QName — true whichever prefixes happen to be in
 	// scope. It needs the node, so it is checked here, where the node is
 	// still in hand, rather than among the facets.
+	// Part 2 §3.3.11: an xs:ENTITY value must match the name of an unparsed
+	// entity declared in the document's DTD. The name is the whole of the
+	// constraint -- an NCName that no <!ENTITY ... NDATA> declared is not a
+	// value of the type at all -- so this cannot be expressed as a facet and
+	// needs the instance, which is why it sits here beside the QName check.
+	//
+	// An xs:ENTITIES list reaches this through validateListValueIn, which
+	// validates each item against ItemType with the same node in hand, so
+	// both spellings are covered by the one arm.
+	//
+	// With no node there is nothing to check against and the value is left
+	// alone: validateSimpleValue is used to validate schema documents' own
+	// literals, where no instance DTD exists and refusing every xs:ENTITY
+	// would make the type unusable rather than merely unchecked.
+	if err := entityIsDeclared(at, lexical, t); err != nil {
+		return "", err
+	}
 	if !qnamePrefixBound(at, lexical, t) {
 		return "", &ParseError{
 			Code: "cvc-datatype-valid.1.2.1",
@@ -789,7 +806,7 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 			if lex == nil {
 				return 0, false
 			}
-			lexs := strings.TrimSpace(*lex)
+			lexs := trimXMLSpace(*lex)
 			bound, boundSpecial := 0, false
 			if floating {
 				bound, boundSpecial = specialFloatOrder(lexs)
@@ -1033,22 +1050,11 @@ func idKind(t *SimpleType, value string) string {
 		return listItemKind(t.ItemType, value)
 	}
 
-	seen := map[*SimpleType]bool{}
-	for cur := t; cur != nil && !seen[cur]; {
-		seen[cur] = true
-		switch cur.Name.Local {
-		case "ID", "IDREF", "IDREFS":
-			if cur.Name.URI == NSSchema {
-				return cur.Name.Local
-			}
-		}
-		base, ok := cur.Base.(*SimpleType)
-		if !ok || base == cur {
-			return ""
-		}
-		cur = base
-	}
-	return ""
+	// The atomic walk is a property of the base chain alone, so it is
+	// memoised with the type's other chain facts. The union and list
+	// branches above are not: they look through to whichever member
+	// validates *this* value, so their answer varies per value.
+	return chainFactsOf(t).idName
 }
 
 // checkIDs applies Validation Root Valid (ID/IDREF) (§3.3.4).
@@ -1090,7 +1096,7 @@ func checkTemporalBounds(steps []facetStep, normalized, primitive string) error 
 			if lex == nil {
 				return 0, false
 			}
-			b, ok := parseTemporal(strings.TrimSpace(*lex), primitive)
+			b, ok := parseTemporal(trimXMLSpace(*lex), primitive)
 			if !ok {
 				return 0, false
 			}
@@ -1132,7 +1138,7 @@ func checkDurationBounds(steps []facetStep, normalized string) error {
 			if lex == nil {
 				return 0, false
 			}
-			b, ok := parseDuration(strings.TrimSpace(*lex))
+			b, ok := parseDuration(trimXMLSpace(*lex))
 			if !ok {
 				return 0, false
 			}
@@ -1255,20 +1261,15 @@ func checkIntegerLexical(normalized string, t *SimpleType) error {
 }
 
 // descendsFromInteger reports whether xs:integer is on the type's base chain.
+//
+// Memoised on the type: the answer cannot change once the schema is loaded,
+// and the walk — which allocated a map per call purely as a cycle guard — was
+// running once per validated value.
 func descendsFromInteger(t *SimpleType) bool {
-	seen := map[*SimpleType]bool{}
-	for cur := t; cur != nil && !seen[cur]; {
-		seen[cur] = true
-		if cur.Name.URI == NSSchema && cur.Name.Local == "integer" {
-			return true
-		}
-		base, ok := cur.Base.(*SimpleType)
-		if !ok || base == cur {
-			return false
-		}
-		cur = base
+	if t == nil {
+		return false
 	}
-	return false
+	return chainFactsOf(t).integer
 }
 
 // nearestBuiltinName returns the local name of the nearest ancestor of t that
@@ -1441,7 +1442,7 @@ func listItemKind(item *SimpleType, value string) string {
 // The zero QName is returned when the prefix is not bound, which leaves the
 // comparison to fall back on the lexical forms.
 func expandFacetQName(el *xdm.Node, value string) xdm.QName {
-	value = strings.TrimSpace(value)
+	value = trimXMLSpace(value)
 	prefix, local := "", value
 	if i := strings.IndexByte(value, ':'); i >= 0 {
 		prefix, local = value[:i], value[i+1:]
@@ -1470,7 +1471,7 @@ func expandFacetQName(el *xdm.Node, value string) xdm.QName {
 // same notation as one writing "smokey:mp3" in the schema, and treating it as
 // an absent namespace made those two values differ.
 func resolveInstanceQName(at *xdm.Node, value string) (xdm.QName, bool) {
-	value = strings.TrimSpace(value)
+	value = trimXMLSpace(value)
 	prefix, local := "", value
 	if i := strings.IndexByte(value, ':'); i >= 0 {
 		prefix, local = value[:i], value[i+1:]
@@ -1536,4 +1537,68 @@ func qnamePrefixBound(n *xdm.Node, normalized string, t *SimpleType) bool {
 	}
 	_, ok := resolveInstanceQName(n, normalized)
 	return ok
+}
+
+// entityIsDeclared applies Part 2 §3.3.11 to an xs:ENTITY value.
+//
+// A nil node means there is no instance to consult -- a schema document's own
+// default or fixed value, say -- and the check is skipped rather than failed.
+// That is deliberate and is the difference between "unchecked" and "invalid":
+// the type is only meaningful against a document that had the chance to
+// declare an entity.
+func entityIsDeclared(at *xdm.Node, lexical string, t *SimpleType) error {
+	if at == nil {
+		return nil
+	}
+	// xs:ENTITIES is a list of xs:ENTITY, and nearestBuiltinName walks the
+	// BASE chain -- which for the list stops at "ENTITIES", never reaching
+	// the item type. A defaulted list therefore has to be split here; the
+	// written form is split by validateListValueIn, which validates each
+	// item against ItemType with the same node and arrives back at the
+	// atomic arm below. id018 and id021 are the cases: a default naming
+	// entity1 where only entity2 was declared.
+	switch nearestBuiltinName(t) {
+	case "ENTITIES":
+		for _, item := range splitFields(WhiteCollapse.Normalize(lexical)) {
+			if err := entityIsDeclaredName(at, item); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "ENTITY":
+		return entityIsDeclaredName(at, WhiteCollapse.Normalize(lexical))
+	}
+	return nil
+}
+
+// entityIsDeclaredName is entityIsDeclared for one already-normalized name.
+func entityIsDeclaredName(at *xdm.Node, name string) error {
+	tree := at.Tree()
+	if tree == nil {
+		return nil
+	}
+	// A document that declares no unparsed entity at all gives nothing to
+	// judge the name against, and the value is left unchecked rather than
+	// refused. That is not the letter of XML 1.0 section 3.3.1, which makes
+	// only an unparsed entity's name a legal ENTITY value -- but Saxon
+	// validates as-34.xml, whose DTD declares two PARSED entities and whose
+	// my:entities attribute names them both, and the XSLT suite's attr group
+	// assumes that reading throughout (as-33, as-34, schemamatch112,
+	// schemamatch117). Refusing them made as-3401, match-208 and match-209
+	// fail against a conforming processor's own reported results.
+	//
+	// Where the document DOES declare unparsed entities the rule is applied
+	// in full: the saxonData/Id group defaults an xs:ENTITY to a name its
+	// document never declared, and that is the defect this check exists for.
+	if !tree.HasUnparsedEntities() {
+		return nil
+	}
+	if _, _, _, ok := tree.UnparsedEntity(name); ok {
+		return nil
+	}
+	return &ParseError{
+		Code: "cvc-datatype-valid.1.2.1",
+		Message: "\"" + truncate(name) +
+			"\" names no unparsed entity declared in the document",
+	}
 }

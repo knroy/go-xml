@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -30,25 +32,19 @@ func registerSerialize(l *Library) {
 		// XML path rather than inside it.
 		switch opts.method {
 		case "json":
-			out, err := serializeJSON(seqArg(args, 0), opts)
+			out, err := serializeJSON(ctx, seqArg(args, 0), opts)
 			if err != nil {
 				return nil, err
 			}
-			if len(opts.charMap) > 0 {
-				out = applyCharacterMap(out, opts.charMap)
-			}
-			return strSeq(out), nil
+			return charMappedResult(ctx, out, opts)
 		case "adaptive":
-			out, err := serializeAdaptiveSeq(seqArg(args, 0), opts)
+			out, err := serializeAdaptiveSeq(ctx, seqArg(args, 0), opts)
 			if err != nil {
 				return nil, err
 			}
-			if len(opts.charMap) > 0 {
-				out = applyCharacterMap(out, opts.charMap)
-			}
-			return strSeq(out), nil
+			return charMappedResult(ctx, out, opts)
 		}
-		var sb strings.Builder
+		sb := newSink(ctx)
 		// omit-xml-declaration defaults to yes here, since a serialised
 		// fragment is more often embedded than written as a document. Asking
 		// for it back produces the declaration the XML output method defines.
@@ -76,8 +72,23 @@ func registerSerialize(l *Library) {
 		if opts.method == "html" && serializesHTMLDocument(seqArg(args, 0)) {
 			sb.WriteString("<!DOCTYPE html>\n")
 		}
+		// A document type declaration, when either external identifier was
+		// given. XSLT 2.0 (xslt-rec20.xml:26420-26431) gives doctype-system
+		// and doctype-public their effect; both were accepted and ignored, so
+		// the caller's DTD reference vanished from the output.
+		//
+		// It is written only for the XML-family methods. The html method has
+		// its own bare HTML5 declaration above, and writing a second one
+		// would produce two.
+		if (opts.method == "xml" || opts.method == "xhtml") &&
+			(opts.doctypeSystem != "" || opts.doctypePublic != "") {
+			if name := documentElementName(seqArg(args, 0)); name != "" {
+				writeDoctype(sb, name, opts)
+			}
+		}
 		if opts.method == "xml" && (!opts.omitXMLDecl || opts.standalone != "") {
-			sb.WriteString(`<?xml version="1.0" encoding="UTF-8"`)
+			sb.WriteString(`<?xml version="` + xmlDeclVersion(opts.version) +
+				`" encoding="UTF-8"`)
 			if opts.standalone != "" {
 				sb.WriteString(` standalone="` + opts.standalone + `"`)
 			}
@@ -98,14 +109,29 @@ func registerSerialize(l *Library) {
 			case !opts.hasItemSep && atomic && prevAtomic:
 				sb.WriteString(" ")
 			}
-			if err := serializeItem(&sb, it, opts); err != nil {
+			if err := serializeItem(sb, it, opts); err != nil {
 				return nil, err
 			}
 			prevAtomic = atomic
 		}
+		if err := sb.err(); err != nil {
+			return nil, err
+		}
 		out := sb.String()
 		if len(opts.charMap) > 0 {
-			out = applyCharacterMap(out, opts.charMap)
+			// The mapped text is a new string whose length the sink never
+			// saw, so it is charged here rather than left uncounted. Only
+			// the growth is charged: the bytes it replaces were paid for on
+			// the way into the builder.
+			if n := len(out); n > 0 {
+				mapped := applyCharacterMap(out, opts.charMap)
+				if g := len(mapped) - n; g > 0 {
+					if err := ctx.countBytes(g); err != nil {
+						return nil, err
+					}
+				}
+				out = mapped
+			}
 		}
 		return strSeq(out), nil
 	})
@@ -144,16 +170,65 @@ func serializesHTMLDocument(seq xdm.Sequence) bool {
 
 // serializeOptions are the serialization parameters this implementation reads.
 type serializeOptions struct {
-	method         string
-	omitXMLDecl    bool
-	indent         bool
-	itemSeparator  string
-	hasItemSep     bool
-	suppressIndent bool
+	method        string
+	omitXMLDecl   bool
+	indent        bool
+	itemSeparator string
+	hasItemSep    bool
+	// suppressIndent names the elements whose children are not indented.
+	// XSLT 2.0 section 20 (testdata/xslt30-test/specs/xslt-rec20.xml:26449)
+	// gives the parameter a list of element names, and the effect is
+	// per-element: the named element is still indented where it sits, only
+	// the content inside it is left exactly as it was. QT3 serialize-xml-008
+	// and -108 pin both halves at once -- "\n\s+<p>" must match, because <p>
+	// is named and still indented, while "\n\s+<code>" must not, because
+	// <code> is <p>'s child. A single bool covering the whole document could
+	// not express that: suppressing everything stops <p> being indented too.
+	// The key drops the prefix, as cdataElements does, because QName equality
+	// is namespace URI plus local name.
+	suppressIndent map[xdm.QName]bool
+	// doctypePublic and doctypeSystem are the external identifiers written in
+	// a document type declaration ahead of the output. XSLT 2.0
+	// (xslt-rec20.xml:26420-26431) gives each one its normative effect: "The
+	// value of the doctype-system attribute provides the value of the
+	// doctype-system parameter to the serialization method." Both sat in an
+	// accept-and-ignore arm, so serialize(<a/>, map{"doctype-system":"a.dtd"})
+	// returned "<a/>" and the caller's DTD reference vanished silently.
+	doctypePublic string
+	doctypeSystem string
+	// escapeURIAttrs percent-escapes the non-ASCII characters in a URI-valued
+	// attribute under the html and xhtml methods. XSLT 2.0
+	// (xslt-rec20.xml:26434-26439): "The default value is yes." It is a
+	// pointer so that "not given" keeps that default while an explicit no
+	// turns it off -- a plain bool would have defaulted to off and silently
+	// inverted the spec.
+	escapeURIAttrs *bool
+
+	// includeContentType suppresses the http-equiv meta element the html
+	// method writes into head. Serialization 3.1 defaults it to yes, so an
+	// absent parameter is nil rather than false -- the same shape as
+	// escapeURIAttrs above, and for the same reason. xsl:output has honoured
+	// it throughout (xslt/serialize.go, the head branch of writeElement);
+	// only fn:serialize accepted it and wrote the element anyway.
+	includeContentType *bool
 	// standalone is the value of the standalone parameter, "" when it was not
 	// given. It appears in the XML declaration, so asking for it also forces
 	// the declaration to be written.
 	standalone string
+	// htmlVersion is the html-version parameter: it selects between the HTML
+	// 4 and HTML 5 void-element lists, which decide whether an empty element
+	// is written with an end tag. It was accepted and dropped, so a caller
+	// asking for version 4 got HTML 5's answer for <wbr> and <frame>.
+	htmlVersion string
+	// version is the XML version announced in the declaration. Only 1.0 and
+	// 1.1 exist; anything else is written as 1.0, because a declaration is a
+	// claim the reading parser acts on rather than an echo of what was asked.
+	version string
+	// undeclarePrefixes emits namespace undeclarations -- xmlns:p="" -- for a
+	// prefix the element binds to no namespace. The syntax exists only in XML
+	// 1.1, so asking for it with version 1.0 is SEPM0010; without it the
+	// binding is left out of the output, as the XSLT serializer does.
+	undeclarePrefixes bool
 	// charMap maps a character to the string that replaces it on output.
 	charMap map[rune]string
 	// normalize applies the Unicode normalization form the serialization
@@ -181,6 +256,40 @@ type serializeOptions struct {
 	cdataElements map[xdm.QName]bool
 }
 
+// cdataQName resolves one lexical name from the element form's
+// cdata-section-elements against the namespaces in scope on the parameter
+// element that carried it.
+//
+// The prefix is looked up on the parameter element rather than on the
+// serialization-parameters wrapper, because a binding may be declared on
+// either and the inner one is the narrower scope. An unprefixed name is in no
+// namespace: the default namespace does not apply to this parameter, for the
+// same reason it does not apply to the map form, where the QNames arrive
+// already resolved and an unprefixed one has no URI.
+//
+// The stored key drops the prefix, as the map form's does -- QName equality is
+// namespace URI plus local name, and the picture names an element that may be
+// written with any prefix at all.
+func cdataQName(p *xdm.Node, name string) (xdm.QName, error) {
+	prefix, local, ok := strings.Cut(name, ":")
+	if !ok {
+		prefix, local = "", name
+	}
+	if local == "" {
+		return xdm.QName{}, fmt.Errorf(
+			"SEPM0017: cdata-section-elements: %q is not a valid QName", name)
+	}
+	if prefix == "" {
+		return xdm.QName{Local: local}, nil
+	}
+	uri, found := p.LookupPrefix(prefix)
+	if !found {
+		return xdm.QName{}, fmt.Errorf(
+			"SEPM0017: cdata-section-elements: prefix %q is not declared", prefix)
+	}
+	return xdm.QName{URI: uri, Local: local}, nil
+}
+
 // serializationParams reads the second argument, an element whose children
 // name the parameters.
 //
@@ -189,6 +298,27 @@ type serializeOptions struct {
 // error, and accepting one silently would let a stylesheet believe it had
 // asked for something it did not get.
 func serializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, error) {
+	opts, err := readSerializationParams(ctx, args)
+	if err != nil {
+		return opts, err
+	}
+	// undeclare-prefixes needs the xmlns:p="" syntax, which only XML 1.1
+	// permits, so asking for it with version 1.0 is a request the output
+	// cannot express. The XSLT serializer raises the same code for the same
+	// combination; see its checkOutputParams, which gates the check on the
+	// method the same way -- text, html and json write no namespace
+	// declaration at all, so the parameter asks nothing of them.
+	if (opts.method == "xml" || opts.method == "xhtml") &&
+		opts.undeclarePrefixes && xmlDeclVersion(opts.version) != "1.1" {
+		return opts, fmt.Errorf("SEPM0010: undeclare-prefixes requires XML 1.1, " +
+			"but the output version is 1.0")
+	}
+	return opts, nil
+}
+
+// readSerializationParams reads the parameters without validating them
+// against each other; serializationParams wraps it.
+func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, error) {
 	opts := serializeOptions{method: "xml", omitXMLDecl: true}
 	if len(args) < 2 {
 		return opts, nil
@@ -212,7 +342,7 @@ func serializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, e
 		// name is a malformed parameter document: SEPM0017.
 		if n.Name.URI != nsSerialization {
 			return opts, xdm.ErrType(
-				"XPTY0004: the serialization parameters must be an " +
+				"the serialization parameters must be an " +
 					"output:serialization-parameters element")
 		}
 		// A wrapper with the wrong local name is not the element the
@@ -220,7 +350,7 @@ func serializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, e
 		// rather than a malformed-document one.
 		if n.Name.Local != "serialization-parameters" {
 			return opts, xdm.ErrType(
-				"XPTY0004: %q is not a serialization-parameters element", n.Name.Local)
+				"%q is not a serialization-parameters element", n.Name.Local)
 		}
 		// An attribute on the wrapper is not a parameter either.
 		for _, a := range n.Attrs {
@@ -277,10 +407,11 @@ func serializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, e
 				}
 				opts.method = m
 			case "omit-xml-declaration":
-				if err := checkYesNo(val, p.Name.Local); err != nil {
+				v, err := checkYesNo(val, p.Name.Local)
+				if err != nil {
 					return opts, err
 				}
-				opts.omitXMLDecl = val == "yes"
+				opts.omitXMLDecl = v == "yes"
 			case "standalone":
 				// The parameter's type is xs:boolean, whose lexical space
 				// permits surrounding whitespace, and the serialization spec
@@ -290,15 +421,21 @@ func serializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, e
 					opts.standalone = ""
 					break
 				}
-				if err := checkYesNo(v, p.Name.Local); err != nil {
+				// Normalised rather than stored raw: XML 1.0 section 2.9
+				// admits only "yes" or "no" in an SDDecl, so writing back a
+				// "true" or a "1" the caller wrote here would emit a
+				// declaration no XML parser accepts.
+				v, err := checkYesNo(v, p.Name.Local)
+				if err != nil {
 					return opts, err
 				}
 				opts.standalone = v
 			case "indent":
-				if err := checkYesNo(val, p.Name.Local); err != nil {
+				v, err := checkYesNo(val, p.Name.Local)
+				if err != nil {
 					return opts, err
 				}
-				opts.indent = val == "yes"
+				opts.indent = v == "yes"
 			case "item-separator":
 				opts.itemSeparator, opts.hasItemSep = val, true
 			case "encoding":
@@ -307,20 +444,153 @@ func serializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, e
 				// character the named encoding could not have held, so the
 				// name is kept rather than dropped.
 				opts.encoding = val
-			case "version", "media-type",
-				"doctype-public", "doctype-system", "cdata-section-elements",
-				"normalization-form", "undeclare-prefixes",
-				"byte-order-mark", "escape-uri-attributes", "include-content-type",
-				"allow-duplicate-names", "json-node-output-method",
-				"suppress-indentation":
-				// Recognised and accepted; this serialiser does not vary its
-				// output for them.
+			case "version":
+				// xslt/serialize.go carries this through for the XSLT
+				// serializer; this is its twin. On the accept-and-ignore list
+				// it announced 1.0 over output the caller asked to be 1.1.
+				opts.version = val
+			case "undeclare-prefixes":
+				// The XSLT serializer honours this parameter and this one
+				// used to ignore it, so the same stylesheet got namespace
+				// undeclarations from xsl:result-document and not from
+				// fn:serialize. See writeNamespaceDecls.
+				v, err := checkYesNo(val, p.Name.Local)
+				if err != nil {
+					return opts, err
+				}
+				opts.undeclarePrefixes = v == "yes"
+			case "cdata-section-elements":
+				// The map form honours this parameter, and this one used to
+				// drop it: the same request wrote a CDATA section through
+				// fn:serialize($n, map{...}) and an escaped run through
+				// fn:serialize($n, $params). It was on the accept-and-ignore
+				// list because the element form carries *lexical* names where
+				// the map form carries resolved QNames -- but the parameter
+				// element is a node in a tree, so the prefixes resolve
+				// against its own in-scope namespaces, which is the only
+				// static context the element form has or needs.
+				//
+				// An unresolvable prefix is refused rather than skipped, for
+				// the reason the whole parameter is no longer skipped: a name
+				// that binds to nothing names no element, and dropping it
+				// silently is how a caller comes to believe the CDATA section
+				// they asked for was written.
+				for _, name := range strings.Fields(val) {
+					qn, err := cdataQName(p, name)
+					if err != nil {
+						return opts, err
+					}
+					if opts.cdataElements == nil {
+						opts.cdataElements = map[xdm.QName]bool{}
+					}
+					opts.cdataElements[qn] = true
+				}
+			case "json-node-output-method":
+				// Honoured for the same reason: the map form acts on it and
+				// the element form announced acceptance and then wrote the
+				// default. checkSerializationMethod is what the map form
+				// validates it with.
+				m, err := checkSerializationMethod(val)
+				if err != nil {
+					return opts, err
+				}
+				opts.jsonNodeOutputMethod = m
+			case "allow-duplicate-names":
+				// The map form raises SERE0022 without this; the element form
+				// could not ask for the same latitude.
+				v, err := checkYesNo(val, p.Name.Local)
+				if err != nil {
+					return opts, err
+				}
+				opts.allowDuplicateNames = v == "yes"
+			case "suppress-indentation":
+				// A whitespace-separated list of lexical element names,
+				// resolved against the namespaces in scope on the parameter
+				// element exactly as cdata-section-elements is: an
+				// unresolvable prefix names no element, and dropping it
+				// silently is how a caller comes to believe indentation was
+				// suppressed where it was not.
+				//
+				// It used to collapse to a single bool -- "any non-empty list
+				// suppresses everything" -- which QT3 serialize-xml-008
+				// contradicts: it asks for "\n\s+<p>" to match with
+				// suppress-indentation="p", so the named element keeps its own
+				// indentation and only its content is left alone.
+				for _, name := range strings.Fields(val) {
+					qn, err := cdataQName(p, name)
+					if err != nil {
+						return opts, err
+					}
+					if opts.suppressIndent == nil {
+						opts.suppressIndent = map[xdm.QName]bool{}
+					}
+					opts.suppressIndent[qn] = true
+				}
+			case "doctype-public":
+				// xslt-rec20.xml:26425-26431. Written ahead of the output by
+				// writeDoctype; see serializeOptions.doctypePublic.
+				opts.doctypePublic = val
+			case "doctype-system":
+				// xslt-rec20.xml:26420-26424.
+				opts.doctypeSystem = val
+			case "escape-uri-attributes":
+				// xslt-rec20.xml:26434-26439, "The default value is yes."
+				norm, err := checkYesNo(val, p.Name.Local)
+				if err != nil {
+					return opts, err
+				}
+				v := norm == "yes"
+				opts.escapeURIAttrs = &v
+			case "normalization-form":
+				// Character maps are applied below with normalization interleaved,
+				// so the map replacement itself remains untouched as Serialization
+				// requires. Storing only the form here would invite a later caller
+				// to normalize the finished markup, which is observably wrong.
+				f, err := serializationNormalizer(val)
+				if err != nil {
+					return opts, err
+				}
+				opts.normalize = f
+			case "include-content-type":
+				norm, err := checkYesNo(val, p.Name.Local)
+				if err != nil {
+					return opts, err
+				}
+				v := norm == "yes"
+				opts.includeContentType = &v
+			case "html-version":
+				// The same parameter the map form reads, and read here so the
+				// two spellings of the same request answer alike: it fell to
+				// the default arm and came back SEPM0017, while
+				// map{"html-version":4} was accepted. It selects the
+				// void-element list the html method minimises against.
+				opts.htmlVersion = val
+			case "media-type",
+				"byte-order-mark":
+				// Recognised and accepted, and deliberately without effect
+				// here.
+				//
+				// fn:serialize returns an xs:string, so it stops short of the
+				// encoding phase that turns a character stream into octets.
+				// Serialization 3.1 section 4
+				// (testdata/xslt30-test/specs/serialization-31.html:2046-2053)
+				// makes skipping that phase an optional vendor extension whose
+				// effect is "implementation-defined", so a byte order mark --
+				// an artefact of the octet stream -- has nothing to attach to
+				// in a result that never becomes one.
+				//
+				// media-type never touches the character stream at all: the
+				// same spec (section 3, lines 1114-1123) says it annotates the
+				// destination, and "MAY be used to set the media type in an
+				// HTTP header". A returned string has no destination to
+				// annotate. xsl:output, which does write to one, honours both.
+				// xsl:output, which does write bytes, honours both.
 			default:
-				// Includes use-character-maps and suppress-indentation, which
-				// are real parameters this implementation does not support.
-				// The spec makes an unsupported parameter an error rather than
-				// something to ignore: accepting one silently would let a
-				// caller believe it had asked for something it did not get.
+				// Includes use-character-maps, a real parameter this
+				// implementation does not support. The spec makes an
+				// unsupported parameter an error rather than something to
+				// ignore: accepting one silently would let a caller believe
+				// it had asked for something it did not get.
 				return opts, fmt.Errorf(
 					"SEPM0017: serialization parameter %q is not supported", p.Name.Local)
 			}
@@ -392,18 +662,40 @@ func readCharacterMaps(p *xdm.Node) (map[rune]string, error) {
 	return out, nil
 }
 
-// checkYesNo rejects a parameter value that is not the "yes" or "no" its type
-// allows.
+// serializeBoolAliases are the spellings of "yes" and "no" that a
+// serialization parameter value may use besides those two words themselves.
+//
+// Serialization 3.1 section 3 gives every boolean-valued parameter the
+// enumerated value space "yes, no, true, false, 1 or 0"
+// (testdata/xslt30-test/specs/serialization-31.html:1012 and the parameter
+// entries that repeat it). xslt/mode30.go has the same four-entry mapping for
+// XSLT attributes, but xslt imports xpath rather than the reverse, so it
+// cannot be shared without inverting the dependency.
+var serializeBoolAliases = map[string]string{
+	"true": "yes", "false": "no", "1": "yes", "0": "no",
+}
+
+// checkYesNo normalises a boolean parameter value to "yes" or "no", and
+// rejects a spelling outside the lexical space its type allows.
+//
+// It returns the normalised value because every caller needs it: the six
+// spellings are equal in meaning, so a caller that kept the raw text and
+// compared it against "yes" would read "true" and "1" as false and silently
+// act on the opposite of what was asked.
 //
 // The value is a boolean, so a spelling outside its lexical space means the
 // parameter document is malformed rather than that the caller asked for
 // something unsupported.
-func checkYesNo(val, name string) error {
-	switch strings.TrimSpace(val) {
-	case "yes", "no", "true", "false", "1", "0":
-		return nil
+func checkYesNo(val, name string) (string, error) {
+	v := strings.TrimSpace(val)
+	if alias, ok := serializeBoolAliases[v]; ok {
+		v = alias
 	}
-	return fmt.Errorf(
+	switch v {
+	case "yes", "no":
+		return v, nil
+	}
+	return "", fmt.Errorf(
 		"SEPM0017: serialization parameter %q takes yes or no, got %q", name, val)
 }
 
@@ -437,7 +729,7 @@ func paramValue(p *xdm.Node) (string, error) {
 }
 
 // serializeItem writes one item.
-func serializeItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) error {
+func serializeItem(sb *serializeSink, it xdm.Item, opts serializeOptions) error {
 	switch v := it.(type) {
 	case *xdm.Node:
 		// Sequence normalization rejects an attribute or namespace node in
@@ -456,7 +748,7 @@ func serializeItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 			return fmt.Errorf(
 				"SENR0001: an attribute or namespace node cannot be serialized")
 		}
-		serializeNode(sb, v, opts)
+		serializeNode(sb, v, opts, 0)
 		return nil
 	case *xdm.FunctionItem:
 		// A function item has no serialization: SENR0001 is the code for an
@@ -469,8 +761,46 @@ func serializeItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 	return nil
 }
 
+// hasTextChild reports whether an element holds non-whitespace text, which
+// makes indenting its children unsafe: the inserted whitespace would become
+// part of the element's string value.
+func hasTextChild(n *xdm.Node) bool {
+	for _, c := range n.Children {
+		if c.Kind == xdm.KindText && !xdm.IsXMLWhitespace(c.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasCommentOrPIChild reports whether an element holds a comment or a
+// processing instruction, which the html method never indents around.
+func hasCommentOrPIChild(n *xdm.Node) bool {
+	for _, c := range n.Children {
+		if c.Kind == xdm.KindComment || c.Kind == xdm.KindPI {
+			return true
+		}
+	}
+	return false
+}
+
+// writeIndent writes the newline and leading spaces for one nesting level.
+func writeIndent(sb *serializeSink, depth int) {
+	sb.WriteString("\n")
+	for i := 0; i < depth; i++ {
+		sb.WriteString("  ")
+	}
+}
+
 // serializeNode writes a node and its descendants.
-func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
+//
+// depth is the nesting level used for indentation, which the indent parameter
+// asks for. Serialization 3.1 section 4 makes the exact whitespace
+// implementation-defined -- it constrains where a serialiser may NOT add
+// whitespace rather than prescribing an amount -- so this follows
+// xslt/serialize.go and writes a newline plus two spaces per level, which is
+// what the rest of this library already produces.
+func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth int) {
 	// The text output method writes the string value of what it is given and
 	// no markup at all, so it is answered before the per-kind rendering
 	// below rather than inside it: every branch there emits tags. This is
@@ -485,42 +815,109 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
 	switch n.Kind {
 	case xdm.KindDocument:
 		for _, c := range n.Children {
-			serializeNode(sb, c, opts)
+			serializeNode(sb, c, opts, depth)
 		}
 	case xdm.KindElement:
 		sb.WriteString("<")
 		sb.WriteString(elementName(n))
-		writeNamespaceDecls(sb, n)
+		writeNamespaceDecls(sb, n, opts)
 		// Attributes are written in the order the document had them, which is
 		// what a round-trip test compares against.
 		for _, a := range n.Attrs {
 			sb.WriteString(" ")
 			sb.WriteString(elementName(a))
 			sb.WriteString(`="`)
-			sb.WriteString(escapeAttr(a.Value))
+			// A URI-valued attribute under the html or xhtml method has its
+			// non-ASCII characters percent-escaped. XSLT 2.0
+			// (xslt-rec20.xml:26434-26439) gives escape-uri-attributes the
+			// default "yes", and xslt/serialize.go has done this all along --
+			// so the two serialisers disagreed on identical input until now.
+			if opts.escapesURIAttrs() && (opts.method == "html" || opts.method == "xhtml") &&
+				isURIAttribute(n.Name.Local, a) {
+				sb.WriteString(escapeAttr(escapeURIAttribute(a.Value)))
+			} else {
+				sb.WriteString(escapeAttr(a.Value))
+			}
 			sb.WriteString(`"`)
 		}
 		// An empty head still receives the encoding declaration, so it cannot
 		// take the self-closing shortcut. HTML has no self-closing syntax for
 		// a non-void element anyway.
-		htmlHead := opts.method == "html" && n.Name.Local == "head" && n.Name.URI == ""
+		htmlHead := isHTMLContentTypeHead(n, opts)
 		if len(n.Children) == 0 && !htmlHead {
+			// HTML has no self-closing syntax, so the html method cannot take
+			// the XML shortcut: a void element takes no end tag at all, and
+			// every other empty element takes an explicit one, because an
+			// HTML parser reads "<div/>" as an unclosed "<div>" and swallows
+			// everything after it into the div. Writing "<br/>" was the same
+			// mistake in the other direction -- the "/" is not syntax an HTML
+			// parser acts on, so it was markup the caller never asked for.
+			//
+			// This is xslt/serialize.go's rule, in the empty-element branch
+			// of writeElement, and the two must stay identical: the same
+			// document went through xsl:result-document as "<br>" and through
+			// fn:serialize as "<br/>".
+			//
+			// The xhtml method is deliberately not handled here. It has a
+			// third rule again -- void elements self-closed with a space,
+			// non-void ones with a full end tag, and recognition gated on the
+			// XHTML namespace under version 4 -- and this serialiser has
+			// never implemented it. Changing xhtml's output is a separate
+			// change with its own cases to answer to.
+			if opts.method == "html" {
+				if opts.isVoidElement(n.Name.Local) {
+					sb.WriteString(">")
+				} else {
+					sb.WriteString("></")
+					sb.WriteString(elementName(n))
+					sb.WriteString(">")
+				}
+				return
+			}
 			sb.WriteString("/>")
 			return
 		}
 		sb.WriteString(">")
-		// The HTML method declares the output encoding inside head. The
-		// serialization spec words this as an http-equiv meta element, but
-		// HTML5 replaced it with meta/@charset and the suite accepts either;
-		// the modern spelling is what a browser reading this would expect.
-		if opts.method == "html" && n.Name.Local == "head" && n.Name.URI == "" {
-			sb.WriteString(`<meta charset="UTF-8">`)
+		// The HTML method declares the output encoding inside head, as an
+		// http-equiv meta element. The HTML5 meta/@charset spelling was used
+		// here on the belief that the suite accepts either; it does not.
+		// output-0716 asks for the serialization to match
+		// "<head>...<meta http-equiv=\"Content-Type\"" and output-0702 the
+		// same with a content attribute, and neither regex admits a charset
+		// attribute in its place. The full serializer already writes this
+		// form -- see the meta branch of writeElement in xslt/serialize.go --
+		// so the two spellings were also disagreeing with each other.
+		if htmlHead {
+			sb.WriteString(
+				`<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">`)
 		}
 		// An element named by cdata-section-elements has its text written as
 		// a CDATA section instead of with escaping, which is what the
 		// parameter exists to ask for.
 		cdata := opts.cdataElements[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}]
+		// Indentation is suppressed for an element holding non-whitespace
+		// text, because inserting whitespace there would change the element's
+		// string value -- Serialization 3.1 section 4 forbids adding
+		// whitespace "in any place where it is significant". The html method
+		// additionally adds none around a comment or a processing
+		// instruction: neither is markup an HTML parser skips on its way to
+		// the content, so a newline inserted there is one the document did
+		// not have. Both rules are xslt/serialize.go's, kept identical so the
+		// same document indents the same way through either serialiser.
+		// suppress-indentation names THIS element, so its content is written
+		// exactly as it stands. The element itself is still indented where it
+		// sits -- that is decided by its parent, one level up -- which is
+		// what QT3 serialize-xml-008 and -108 assert by requiring
+		// "\n\s+<p>" to match while "\n\s+<code>" does not.
+		indentChildren := opts.indent && !hasTextChild(n) &&
+			!opts.suppressIndent[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}]
+		if indentChildren && opts.method == "html" && hasCommentOrPIChild(n) {
+			indentChildren = false
+		}
 		for _, c := range n.Children {
+			if indentChildren {
+				writeIndent(sb, depth+1)
+			}
 			if cdata && c.Kind == xdm.KindText {
 				sb.WriteString("<![CDATA[")
 				// A "]]>" inside the text would end the section early, so it
@@ -529,13 +926,16 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
 				sb.WriteString("]]>")
 				continue
 			}
-			serializeNode(sb, c, opts)
+			serializeNode(sb, c, opts, depth+1)
+		}
+		if indentChildren {
+			writeIndent(sb, depth)
 		}
 		sb.WriteString("</")
 		sb.WriteString(elementName(n))
 		sb.WriteString(">")
 	case xdm.KindText:
-		sb.WriteString(escapeText(n.Value))
+		sb.WriteString(escapeText(opts.normalized(n.Value)))
 	case xdm.KindComment:
 		sb.WriteString("<!--")
 		sb.WriteString(n.Value)
@@ -558,6 +958,43 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
 	}
 }
 
+// xmlDeclVersion is the version an XML declaration may announce.
+//
+// Only 1.0 and 1.1 are XML versions, so an unimplemented one is written as 1.0
+// rather than echoed back: the declaration is a claim the reading parser acts
+// on, and announcing a version nothing implements would be worse than
+// announcing the one the output actually conforms to.
+func xmlDeclVersion(v string) string {
+	// Trimmed, as the XSLT twin does: the parameter's lexical space permits
+	// surrounding whitespace, and the two serializers must not disagree about
+	// whether version=" 1.1 " is 1.1.
+	if strings.TrimSpace(v) == "1.1" {
+		return "1.1"
+	}
+	return "1.0"
+}
+
+// isHTMLContentTypeHead reports whether this element is the <head> that the
+// html output method injects a content-type meta into.
+//
+// The namespace test mirrors the full serializer's: under the html method
+// every element is HTML by definition, so no namespace and the XHTML one both
+// count. output-0702 builds its <head> under a default xmlns of
+// http://www.w3.org/1999/xhtml and asks to see the meta; a stricter test on
+// no-namespace alone left it out. output-0214 and -0215, which build a <head>
+// in a deliberately alien namespace and assert no meta appears, run through
+// the full serializer rather than this one, and are excluded here anyway.
+//
+// The name is matched case-insensitively because HTML element names are.
+func isHTMLContentTypeHead(n *xdm.Node, opts serializeOptions) bool {
+	if opts.includeContentType != nil && !*opts.includeContentType {
+		return false
+	}
+	return opts.method == "html" &&
+		strings.EqualFold(n.Name.Local, "head") &&
+		(n.Name.URI == "" || n.Name.URI == "http://www.w3.org/1999/xhtml")
+}
+
 // elementName renders a node's name with its prefix, when it has one.
 func elementName(n *xdm.Node) string {
 	return n.Name.Lexical()
@@ -568,7 +1005,7 @@ func elementName(n *xdm.Node) string {
 // Only those not already in force on the parent: repeating an inherited
 // declaration on every descendant is legal but makes the output differ from
 // what the round-trip tests expect.
-func writeNamespaceDecls(sb *strings.Builder, n *xdm.Node) {
+func writeNamespaceDecls(sb *serializeSink, n *xdm.Node, opts serializeOptions) {
 	inherited := map[string]string{}
 	for p := n.Parent; p != nil; p = p.Parent {
 		for _, ns := range p.Namespaces {
@@ -581,6 +1018,19 @@ func writeNamespaceDecls(sb *strings.Builder, n *xdm.Node) {
 	var decls []decl
 	for _, ns := range n.Namespaces {
 		if inherited[ns.Name.Local] == ns.Value {
+			continue
+		}
+		// A namespace undeclaration for a *prefix* -- xmlns:p="" -- is syntax
+		// only XML 1.1 has, and the parameter that asks for it is
+		// undeclare-prefixes. Without it the binding is left out of the
+		// output, which loses nothing a 1.0 reader can express: a prefix no
+		// name in the subtree uses cannot be missed. The XSLT serializer
+		// makes the same choice in the same words.
+		//
+		// The default-namespace undeclaration xmlns="" is a separate matter:
+		// it is legal in XML 1.0 and is written regardless, since omitting it
+		// would move an element into a namespace it is not in.
+		if ns.Value == "" && ns.Name.Local != "" && !opts.undeclarePrefixes {
 			continue
 		}
 		decls = append(decls, decl{ns.Name.Local, ns.Value})
@@ -611,18 +1061,276 @@ func writeNamespaceDecls(sb *strings.Builder, n *xdm.Node) {
 // character in a plain string, and asks to see the two spelled differently:
 // "&#13;" for the node, which is serialized as XML inside the JSON string,
 // and "\r" for the string, which is JSON's own escape.
+//
+// A literal CR, NEL or LINE SEPARATOR does not survive that round trip: an
+// XML parser normalises all three to a line feed before the document reaches
+// the data model, so a text node holding one comes back holding something
+// else. The non-whitespace control characters are excluded from the literal
+// text a document may contain at all. Serialization 3.1 §5 states both rules
+// (testdata/xslt30-test/specs/serialization-31.html): "CR, NEL and LINE
+// SEPARATOR characters in text nodes MUST be output respectively as &#xD;,
+// &#x85;, and &#x2028;", and "the non-whitespace control characters #x1
+// through #x1F and #x7F through #x9F in text nodes and attribute nodes MUST
+// be output as character references."
 func escapeText(s string) string {
-	r := strings.NewReplacer(
-		"&", "&amp;", "<", "&lt;", ">", "&gt;", "\r", "&#xD;")
-	return r.Replace(s)
+	return escapeXMLRunes(s, false)
+}
+
+// escapeXMLRunes escapes one string for content or for an attribute value.
+//
+// It walks runes and decides by range rather than matching a fixed list, so
+// the whole of C0 and C1 is covered rather than the handful of characters a
+// replacer would name. attr selects the one place the two positions differ:
+// TAB and LF are ordinary characters in content and are written literally,
+// but in an attribute value a parser would normalise either to a space, so
+// there they are references too.
+//
+// #x0 is deliberately absent. It is not a valid XML character at any version
+// and a character reference cannot spell it either, so there is no escape to
+// emit; it is left to the representability check that rejects it upstream.
+func escapeXMLRunes(s string, attr bool) string {
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '&':
+			sb.WriteString("&amp;")
+			continue
+		case '<':
+			sb.WriteString("&lt;")
+			continue
+		case '>':
+			sb.WriteString("&gt;")
+			continue
+		case '"':
+			if attr {
+				sb.WriteString("&quot;")
+				continue
+			}
+		case '\t', '\n':
+			if !attr {
+				sb.WriteRune(r)
+				continue
+			}
+		}
+		// The line endings a parser would normalise away, and the control
+		// ranges it will not accept as literal text. TAB and LF have already
+		// been written literally above when this is content, so reaching
+		// here with one means attr is set.
+		if r == '\r' || r == '\u0085' || r == '\u2028' ||
+			(r >= 0x1 && r <= 0x1F) || (r >= 0x7F && r <= 0x9F) {
+			fmt.Fprintf(&sb, "&#x%X;", r)
+			continue
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
+}
+
+// escapesURIAttrs reports whether URI-valued attributes are percent-escaped.
+//
+// XSLT 2.0 (testdata/xslt30-test/specs/xslt-rec20.xml:26434-26439): "The
+// default value is yes." Absent means yes, which is why the field is a
+// pointer rather than a bool.
+func (o serializeOptions) escapesURIAttrs() bool {
+	return o.escapeURIAttrs == nil || *o.escapeURIAttrs
+}
+
+// documentElementName returns the name the document type declaration must
+// name, which is the element the declaration precedes.
+//
+// XML's grammar makes the DOCTYPE name match the document element, so a
+// sequence with no element to be the document element gets no declaration at
+// all rather than one naming nothing.
+func documentElementName(seq xdm.Sequence) string {
+	for _, it := range seq {
+		n, ok := it.(*xdm.Node)
+		if !ok {
+			continue
+		}
+		switch n.Kind {
+		case xdm.KindElement:
+			return elementName(n)
+		case xdm.KindDocument:
+			for _, c := range n.Children {
+				if c.Kind == xdm.KindElement {
+					return elementName(c)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// writeDoctype writes the document type declaration.
+//
+// The shape is XML's: PUBLIC takes both identifiers and SYSTEM only the
+// system one. A public identifier alone cannot be written under an XML-family
+// method -- the grammar puts the system literal after PUBLIC and makes it
+// required -- so it degrades to the SYSTEM form's absence rather than
+// producing markup no parser would accept. This mirrors
+// xslt/serialize.go's writeDoctypeFor, so both serialisers write the same
+// declaration for the same parameters.
+func writeDoctype(sb *serializeSink, name string, opts serializeOptions) {
+	if opts.doctypeSystem == "" {
+		return
+	}
+	sb.WriteString("<!DOCTYPE " + name)
+	if opts.doctypePublic != "" {
+		sb.WriteString(" PUBLIC " + quoteExternalID(opts.doctypePublic))
+	} else {
+		sb.WriteString(" SYSTEM")
+	}
+	sb.WriteString(" " + quoteExternalID(opts.doctypeSystem) + ">\n")
+}
+
+// quoteExternalID wraps an external identifier in quotes it does not itself
+// contain. XML gives these literals no escaping mechanism, so a value holding
+// a double quote has to be delimited with single quotes instead.
+func quoteExternalID(v string) string {
+	if strings.Contains(v, `"`) {
+		return "'" + v + "'"
+	}
+	return `"` + v + `"`
+}
+
+// voidElements are the HTML elements that take no end tag, in every HTML
+// version this serialiser writes. Three more are void only in HTML 4 and four
+// only in HTML 5, which is what the two maps below are for.
+//
+// This is the same table xslt/serialize.go carries, and the two must move
+// together: an element written "<br/>" by one serialiser and "<br>" by the
+// other is the same request answered two ways, decided by which spelling the
+// caller used. A single shared definition would be better and is not blocked
+// by the import graph -- xslt already imports xpath -- but moving it needs an
+// edit to xslt/serialize.go's call sites, which this change does not own. If
+// you touch either copy, touch both.
+var voidElements = map[string]bool{
+	"area": true, "base": true, "br": true, "col": true, "embed": true,
+	"hr": true, "img": true, "input": true, "link": true, "meta": true,
+	"param": true,
+}
+
+// html4VoidElements are void in HTML 4 and gone from HTML 5, which has no
+// frameset and no isindex at all. Writing "<frame>" unclosed under HTML 5
+// leaves an element an HTML 5 parser reads as open, swallowing what follows.
+// Kept identical to xslt/serialize.go's map of the same name.
+var html4VoidElements = map[string]bool{
+	"basefont": true, "frame": true, "isindex": true,
+}
+
+// html5VoidElements are void in HTML 5 and unknown to HTML 4, where an
+// unclosed one would be an unrecognised start tag rather than an empty
+// element. Kept identical to xslt/serialize.go's map of the same name.
+var html5VoidElements = map[string]bool{
+	"keygen": true, "source": true, "track": true, "wbr": true,
+}
+
+// isVoidElement reports whether an element takes no end tag under the html
+// method.
+//
+// The version decides for seven of the names, so the html-version parameter
+// is read rather than ignored: asking for version 4 and getting <wbr>
+// unclosed, or version 5 and getting <frame> unclosed, is the combined-list
+// mistake xslt/serialize.go's isVoidElement documents -- a serialiser with
+// one merged list answers both versions wrongly the moment a caller names an
+// element from the other one.
+//
+// html-version decides, falling back to version. That fallback is the html
+// method's alone in xslt/serialize.go, because for xhtml @version is the
+// version of XML; this function is only reached from the html method, so the
+// fallback is unconditional here.
+func (o *serializeOptions) isVoidElement(local string) bool {
+	local = strings.ToLower(local)
+	if voidElements[local] {
+		return true
+	}
+	if o.html5() {
+		return html5VoidElements[local]
+	}
+	return html4VoidElements[local]
+}
+
+// html5 reports whether the HTML version asked for is 5 or later, which is
+// what selects between the two version-specific void-element lists. The
+// spelling test is xslt/serialize.go's: a prefix match on "5", so that "5.0"
+// and "5" both say HTML 5 and an absent parameter says HTML 4.
+func (o *serializeOptions) html5() bool {
+	v := o.htmlVersion
+	if v == "" {
+		v = o.version
+	}
+	return strings.HasPrefix(v, "5")
+}
+
+// uriAttributes are the attributes the HTML DTD declares with type URI, whose
+// values the html and xhtml methods percent-escape. Keyed by element name,
+// the same table xslt/serialize.go carries.
+var uriAttributes = map[string]map[string]bool{
+	"a":          {"href": true, "name": true},
+	"applet":     {"codebase": true, "archive": true},
+	"area":       {"href": true},
+	"base":       {"href": true},
+	"blockquote": {"cite": true},
+	"body":       {"background": true},
+	"del":        {"cite": true},
+	"form":       {"action": true},
+	"frame":      {"src": true, "longdesc": true},
+	"head":       {"profile": true},
+	"iframe":     {"src": true, "longdesc": true},
+	"img":        {"src": true, "longdesc": true, "usemap": true},
+	"input":      {"src": true, "usemap": true},
+	"ins":        {"cite": true},
+	"link":       {"href": true},
+	"object":     {"classid": true, "codebase": true, "data": true, "usemap": true, "archive": true},
+	"q":          {"cite": true},
+	"script":     {"src": true, "for": true},
+}
+
+// isURIAttribute reports whether an attribute carries a URI.
+func isURIAttribute(element string, a *xdm.Node) bool {
+	if a.Name.URI != "" {
+		return false
+	}
+	attrs, ok := uriAttributes[strings.ToLower(element)]
+	if !ok {
+		return false
+	}
+	return attrs[strings.ToLower(a.Name.Local)]
+}
+
+// escapeURIAttribute percent-escapes the characters a URI cannot hold.
+//
+// Only non-ASCII characters are escaped, which is what XSLT 1.0 section 16.2
+// and the Serialization Recommendation delegate to HTML 4.0 appendix B.2.1
+// for: "characters ... outside the range of US-ASCII" and nothing else. The
+// value is put into NFC first, as RFC 3987 section 3.1 requires, so a
+// decomposed and a precomposed spelling escape to the same bytes. This is
+// xslt/serialize.go's function, ported so the two agree.
+func escapeURIAttribute(v string) string {
+	v = norm.NFC.String(v)
+	var sb strings.Builder
+	sb.Grow(len(v))
+	for _, r := range v {
+		if r < 0x80 {
+			sb.WriteRune(r)
+			continue
+		}
+		for _, b := range []byte(string(r)) {
+			fmt.Fprintf(&sb, "%%%02X", b)
+		}
+	}
+	return sb.String()
 }
 
 // escapeAttr escapes the characters that may not appear in an attribute value.
+//
+// It differs from escapeText in the two characters a parser normalises inside
+// an attribute value but not in content: §5 of Serialization 3.1 requires
+// "CR, NL, TAB, NEL and LINE SEPARATOR characters in attribute nodes" to be
+// written as references, where content keeps TAB and NL literal.
 func escapeAttr(s string) string {
-	r := strings.NewReplacer(
-		"&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;",
-		"\t", "&#x9;", "\n", "&#xA;", "\r", "&#xD;")
-	return r.Replace(s)
+	return escapeXMLRunes(s, true)
 }
 
 // applyCharacterMap replaces the mapped characters in the serialised output.
@@ -678,12 +1386,12 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 	boolParam := func(name string, v xdm.Sequence) (bool, error) {
 		if len(v) != 1 {
 			return false, xdm.ErrType(
-				"XPTY0004: serialization parameter %q takes a single boolean", name)
+				"serialization parameter %q takes a single boolean", name)
 		}
 		a, ok := v[0].(*xdm.Atomic)
 		if !ok {
 			return false, xdm.ErrType(
-				"XPTY0004: serialization parameter %q takes a boolean", name)
+				"serialization parameter %q takes a boolean", name)
 		}
 		// An xs:untypedAtomic is the one non-boolean that is accepted: the
 		// function conversion rules cast it to the declared type, so
@@ -694,31 +1402,52 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 			conv, err := CastAtomic(a, xdm.TypeBoolean)
 			if err != nil {
 				return false, xdm.ErrType(
-					"XPTY0004: serialization parameter %q takes a boolean, got %q",
+					"serialization parameter %q takes a boolean, got %q",
 					name, a.String())
 			}
 			return conv.Bool(), nil
 		}
 		if a.Type != xdm.TypeBoolean {
 			return false, xdm.ErrType(
-				"XPTY0004: serialization parameter %q takes a boolean", name)
+				"serialization parameter %q takes a boolean", name)
 		}
 		return a.Bool(), nil
 	}
 	strParam := func(name string, v xdm.Sequence) (string, error) {
 		if len(v) != 1 {
 			return "", xdm.ErrType(
-				"XPTY0004: serialization parameter %q takes a single string", name)
+				"serialization parameter %q takes a single string", name)
 		}
 		a, ok := v[0].(*xdm.Atomic)
 		if !ok {
 			return "", xdm.ErrType(
-				"XPTY0004: serialization parameter %q takes a string", name)
+				"serialization parameter %q takes a string", name)
 		}
 		return a.String(), nil
 	}
 
 	err := m.Entries(func(key *xdm.Atomic, val xdm.Sequence) error {
+		// Serialization 3.1 §3: the key naming a parameter defined by these
+		// specifications is an xs:string. An xs:QName key is reserved for an
+		// implementation-defined parameter and must carry a non-absent
+		// namespace -- "the key of the entry is an xs:string value in the
+		// cases of parameter names defined in these specifications, or an
+		// xs:QName (with non-absent namespace) in the case of
+		// implementation-defined serialization parameters."
+		//
+		// So QName("", "indent") does NOT name the indent parameter: it is a
+		// no-namespace QName, which is neither of the two permitted forms.
+		// The key was read with String(), which renders that QName as
+		// "indent" and matched it like the string -- invisible for as long as
+		// the indent parameter itself did nothing, and caught by
+		// serialize-xml-120 and -120b the moment it started indenting.
+		// A no-namespace QName is ignored rather than rejected: an
+		// implementation-defined parameter this processor does not recognise
+		// is ignored too, and both cases assert on the output rather than on
+		// an error.
+		if key.Type == xdm.TypeQName {
+			return nil
+		}
 		name := key.String()
 		switch name {
 		case "method":
@@ -763,6 +1492,25 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 			}
 			opts.jsonNodeOutputMethod = v
 		case "standalone":
+			// standalone is the one boolean here whose declared type is
+			// xs:boolean? rather than xs:boolean: the empty sequence is a
+			// legal value meaning "write no standalone at all", which the
+			// element form spells as value="omit". Routing it through
+			// boolParam made the empty sequence a cardinality error, so
+			// serialize(., map{"standalone":()}) raised XPTY0004 where the
+			// spec asks for a declaration without the attribute
+			// (serialize-xml-131, which the suite does not measure because
+			// its environment is a schema-validated source this engine
+			// skips).
+			//
+			// The string " omit " stays a type error: "omit" is a spelling
+			// the *element* form needs because an attribute can carry
+			// nothing but a string, and the map form, being typed, says the
+			// same thing with () instead (serialize-xml-131a).
+			if len(val) == 0 {
+				opts.standalone = ""
+				break
+			}
 			v, err := boolParam(name, val)
 			if err != nil {
 				return err
@@ -786,7 +1534,7 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 				a, ok := it.(*xdm.Atomic)
 				if !ok || a.Type != xdm.TypeQName {
 					return xdm.ErrType(
-						"XPTY0004: cdata-section-elements takes QNames")
+						"cdata-section-elements takes QNames")
 				}
 				if opts.cdataElements == nil {
 					opts.cdataElements = map[xdm.QName]bool{}
@@ -802,13 +1550,98 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 				return err
 			}
 			opts.encoding = v
-		case "version", "media-type", "doctype-public",
-			"doctype-system", "normalization-form",
-			"undeclare-prefixes", "byte-order-mark", "escape-uri-attributes",
-			"include-content-type", "suppress-indentation",
-			"html-version", "parameter-document":
-			// Recognised and accepted; this serialiser does not vary its
-			// output for them.
+		case "version":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.version = v
+		case "undeclare-prefixes":
+			// Typed here, as every boolean in the map form is: the parameter
+			// holds an xs:boolean, not the string "yes".
+			v, err := boolParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.undeclarePrefixes = v
+		case "suppress-indentation":
+			// The value is a sequence of QNames, so the names arrive already
+			// resolved; the element form takes lexical names instead. This
+			// was on the ignore list while the element form acted on it, so
+			// the same request answered differently depending on which
+			// spelling was used -- QT3 serialize-xml-108 is the map-form
+			// case, and it asserts the same three things as -008.
+			for _, it := range val {
+				a, ok := it.(*xdm.Atomic)
+				if !ok || a.Type != xdm.TypeQName {
+					return xdm.ErrType(
+						"suppress-indentation takes QNames")
+				}
+				if opts.suppressIndent == nil {
+					opts.suppressIndent = map[xdm.QName]bool{}
+				}
+				if qn := a.QName(); qn != nil {
+					opts.suppressIndent[xdm.QName{URI: qn.URI, Local: qn.Local}] = true
+				}
+			}
+		case "doctype-public":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.doctypePublic = v
+		case "doctype-system":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.doctypeSystem = v
+		case "escape-uri-attributes":
+			// Typed here, as every boolean in the map form is.
+			v, err := boolParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.escapeURIAttrs = &v
+		case "normalization-form":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			f, err := serializationNormalizer(v)
+			if err != nil {
+				return err
+			}
+			opts.normalize = f
+		case "include-content-type":
+			v, err := boolParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.includeContentType = &v
+		case "html-version":
+			// Read rather than dropped: it chooses the void-element list the
+			// html method minimises against. Serialization 3.1 types it as a
+			// decimal, but only its leading "5" is ever tested, so it is read
+			// through the same string reader the element form uses and kept
+			// as written.
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.htmlVersion = v
+		case "media-type",
+			"byte-order-mark",
+			"parameter-document":
+			// Recognised and accepted. See the element form's arm for why
+			// byte-order-mark and media-type cannot act on a returned string.
+			//
+			// parameter-document is accepted rather than refused because it
+			// is a real parameter this serialiser has nothing to do with: it
+			// is resolved by the caller that reads the document, and by the
+			// time parameters reach here they are values, with no base URI in
+			// an XPath static context to resolve one against. Refusing it
+			// would turn a legal request into SEPM0017.
 		default:
 			return fmt.Errorf(
 				"SEPM0017: serialization parameter %q is not supported", name)
@@ -824,7 +1657,7 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 // JSON has exactly one value at the top, so the argument must be a single item
 // or empty; a sequence of two is SERE0023 rather than something to concatenate
 // (serialize-json-130). The empty sequence is the JSON null.
-func serializeJSON(seq xdm.Sequence, opts serializeOptions) (string, error) {
+func serializeJSON(ctx *Context, seq xdm.Sequence, opts serializeOptions) (string, error) {
 	if len(seq) == 0 {
 		return "null", nil
 	}
@@ -832,8 +1665,11 @@ func serializeJSON(seq xdm.Sequence, opts serializeOptions) (string, error) {
 		return "", fmt.Errorf(
 			"SERE0023: the JSON output method takes a single item, got %d", len(seq))
 	}
-	var sb strings.Builder
-	if err := writeJSONItem(&sb, seq[0], opts); err != nil {
+	sb := newSink(ctx)
+	if err := writeJSONItem(sb, seq[0], opts); err != nil {
+		return "", err
+	}
+	if err := sb.err(); err != nil {
 		return "", err
 	}
 	return sb.String(), nil
@@ -844,7 +1680,7 @@ func serializeJSON(seq xdm.Sequence, opts serializeOptions) (string, error) {
 // The same "one value" rule applies at every level, not only the top: a map
 // whose entry holds (1 to 10) has no JSON rendering, and that is SERE0023
 // (serialize-json-131).
-func writeJSONValue(sb *strings.Builder, seq xdm.Sequence, opts serializeOptions) error {
+func writeJSONValue(sb *serializeSink, seq xdm.Sequence, opts serializeOptions) error {
 	switch len(seq) {
 	case 0:
 		sb.WriteString("null")
@@ -856,7 +1692,7 @@ func writeJSONValue(sb *strings.Builder, seq xdm.Sequence, opts serializeOptions
 		"SERE0023: a JSON value must be a single item, got %d", len(seq))
 }
 
-func writeJSONItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) error {
+func writeJSONItem(sb *serializeSink, it xdm.Item, opts serializeOptions) error {
 	switch v := it.(type) {
 	case *xdm.ArrayItem:
 		sb.WriteString("[")
@@ -917,13 +1753,25 @@ func writeJSONItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 		}
 		// JSON has no node type, so a node is written as a string holding its
 		// serialization under the json-node-output-method (default xml).
-		var inner strings.Builder
+		//
+		// The inner sink spends the SAME budget as the outer one, so the
+		// node's markup is charged twice: once as it is built here, and again
+		// as writeJSONString escapes it into the outer result. That is
+		// deliberate rather than an oversight -- both strings are resident at
+		// the same time, and MaxBytes bounds what an evaluation must hold in
+		// memory at once, which is what the doubling chain it was written for
+		// also measures. Charging once would understate a nesting that really
+		// does allocate twice.
+		inner := newSink(sb.ctx)
 		nodeOpts := opts
 		nodeOpts.method = opts.jsonNodeOutputMethod
 		if nodeOpts.method == "" {
 			nodeOpts.method = "xml"
 		}
-		serializeNode(&inner, v, nodeOpts)
+		serializeNode(inner, v, nodeOpts, 0)
+		if err := inner.err(); err != nil {
+			return err
+		}
 		writeJSONString(sb, inner.String(), opts)
 		return nil
 	case *xdm.Atomic:
@@ -970,7 +1818,7 @@ func writeJSONItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 // character map -- a stylesheet declares one to put a specific sequence in
 // the output -- and escaping it would defeat exactly the substitution it
 // asked for.
-func writeJSONString(sb *strings.Builder, s string, opts serializeOptions) {
+func writeJSONString(sb *serializeSink, s string, opts serializeOptions) {
 	sb.WriteString(`"`)
 	// Unicode normalisation is interleaved with the character map rather than
 	// applied to the finished document, for the reason xslt's mapSegments
@@ -998,6 +1846,25 @@ func (o serializeOptions) normalized(s string) string {
 		return s
 	}
 	return o.normalize(s)
+}
+
+// serializationNormalizer turns the standardized value into the operation used
+// at every text-writing site. "none" and absence intentionally share nil.
+func serializationNormalizer(form string) (func(string) string, error) {
+	switch strings.TrimSpace(form) {
+	case "", "none":
+		return nil, nil
+	case "NFC":
+		return norm.NFC.String, nil
+	case "NFD":
+		return norm.NFD.String, nil
+	case "NFKC":
+		return norm.NFKC.String, nil
+	case "NFKD":
+		return norm.NFKD.String, nil
+	default:
+		return nil, fmt.Errorf("SEPM0017: unsupported normalization-form %q", form)
+	}
 }
 
 // charMapRun is one stretch of a string that the character map either claimed
@@ -1036,7 +1903,7 @@ func splitOnCharMap(s string, m map[rune]string) []charMapRun {
 
 // writeJSONRun writes one unmapped run of a JSON string with the escapes the
 // method requires.
-func writeJSONRun(sb *strings.Builder, s string, opts serializeOptions) {
+func writeJSONRun(sb *serializeSink, s string, opts serializeOptions) {
 	for _, r := range s {
 		switch r {
 		case '"':
@@ -1056,7 +1923,11 @@ func writeJSONRun(sb *strings.Builder, s string, opts serializeOptions) {
 		case '\t':
 			sb.WriteString(`\t`)
 		default:
-			if r < 0x20 {
+			// Serialization 3.1 §9: JSON escaping writes "any other codepoint
+			// in the range 1-31 or 127-159" as \uHHHH. The upper range is DEL
+			// and the C1 controls; fn:xml-to-json, which is governed by the
+			// same rule, escapes it too (xml-to-json-073).
+			if r < 0x20 || (r >= 0x7F && r <= 0x9F) {
 				fmt.Fprintf(sb, `\u%04X`, r)
 				continue
 			}
@@ -1095,22 +1966,25 @@ func writeJSONRun(sb *strings.Builder, s string, opts serializeOptions) {
 // item-separator, which defaults to a newline rather than to nothing. Unlike
 // the XML method it has a rendering for maps, arrays and function items, so
 // nothing in it can fail.
-func serializeAdaptiveSeq(seq xdm.Sequence, opts serializeOptions) (string, error) {
+func serializeAdaptiveSeq(ctx *Context, seq xdm.Sequence, opts serializeOptions) (string, error) {
 	sep := "\n"
 	if opts.hasItemSep {
 		sep = opts.itemSeparator
 	}
-	var sb strings.Builder
+	sb := newSink(ctx)
 	for i, it := range seq {
 		if i > 0 {
 			sb.WriteString(sep)
 		}
-		writeAdaptiveItem(&sb, it, opts)
+		writeAdaptiveItem(sb, it, opts)
+	}
+	if err := sb.err(); err != nil {
+		return "", err
 	}
 	return sb.String(), nil
 }
 
-func writeAdaptiveItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) {
+func writeAdaptiveItem(sb *serializeSink, it xdm.Item, opts serializeOptions) {
 	switch v := it.(type) {
 	case *xdm.MapItem:
 		sb.WriteString("map{")
@@ -1159,7 +2033,7 @@ func writeAdaptiveItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) 
 		}
 		nodeOpts := opts
 		nodeOpts.method = "xml"
-		serializeNode(sb, v, nodeOpts)
+		serializeNode(sb, v, nodeOpts, 0)
 	case *xdm.Atomic:
 		writeAdaptiveAtomic(sb, v)
 	}
@@ -1167,7 +2041,7 @@ func writeAdaptiveItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) 
 
 // writeAdaptiveValue writes a sequence nested inside a map or array, which
 // adaptive parenthesises when it is not a single item.
-func writeAdaptiveValue(sb *strings.Builder, seq xdm.Sequence, opts serializeOptions) {
+func writeAdaptiveValue(sb *serializeSink, seq xdm.Sequence, opts serializeOptions) {
 	if len(seq) == 1 {
 		writeAdaptiveItem(sb, seq[0], opts)
 		return
@@ -1185,7 +2059,7 @@ func writeAdaptiveValue(sb *strings.Builder, seq xdm.Sequence, opts serializeOpt
 // writeAdaptiveAtomic writes an atomic value in a form that could be typed
 // back into an expression: a string quoted, a boolean as a function call, a
 // number bare, and anything else as a constructor.
-func writeAdaptiveAtomic(sb *strings.Builder, a *xdm.Atomic) {
+func writeAdaptiveAtomic(sb *serializeSink, a *xdm.Atomic) {
 	switch {
 	case a.Type == xdm.TypeBoolean:
 		if a.Bool() {
@@ -1287,17 +2161,17 @@ func primitiveTypeName(t xdm.TypeCode) string {
 func readCharacterMapsFromMap(val xdm.Sequence) (map[rune]string, error) {
 	if len(val) != 1 {
 		return nil, xdm.ErrType(
-			"XPTY0004: use-character-maps takes a single map")
+			"use-character-maps takes a single map")
 	}
 	m, ok := val[0].(*xdm.MapItem)
 	if !ok {
-		return nil, xdm.ErrType("XPTY0004: use-character-maps takes a map")
+		return nil, xdm.ErrType("use-character-maps takes a map")
 	}
 	out := map[rune]string{}
 	err := m.Entries(func(key *xdm.Atomic, v xdm.Sequence) error {
 		if !isStringLike(key.Type) && key.Type != xdm.TypeUntypedAtomic {
 			return xdm.ErrType(
-				"XPTY0004: a use-character-maps key must be a string, got %s",
+				"a use-character-maps key must be a string, got %s",
 				key.TypeName())
 		}
 		r := []rune(key.String())
@@ -1308,16 +2182,16 @@ func readCharacterMapsFromMap(val xdm.Sequence) (map[rune]string, error) {
 		}
 		if len(v) != 1 {
 			return xdm.ErrType(
-				"XPTY0004: a use-character-maps value must be a single string")
+				"a use-character-maps value must be a single string")
 		}
 		a, ok := v[0].(*xdm.Atomic)
 		if !ok {
 			return xdm.ErrType(
-				"XPTY0004: a use-character-maps value must be a string, got a node")
+				"a use-character-maps value must be a string, got a node")
 		}
 		if !isStringLike(a.Type) && a.Type != xdm.TypeUntypedAtomic {
 			return xdm.ErrType(
-				"XPTY0004: a use-character-maps value must be a string, got %s",
+				"a use-character-maps value must be a string, got %s",
 				a.TypeName())
 		}
 		out[r[0]] = a.String()
@@ -1365,6 +2239,15 @@ type SerializeParams struct {
 	// encoding could not have held, and only the caller knows which was
 	// asked for.
 	Encoding string
+	// Budget is the evaluation whose MaxBytes allowance the serialized bytes
+	// are charged against. These two entry points are a host boundary --
+	// xslt's own serializer reaches the JSON and adaptive methods through
+	// them, carrying no Context of its own -- so without it the bytes a
+	// transform serializes are the one string production nothing charges.
+	//
+	// Nil is unbounded, which is what a caller who does not set it gets and
+	// what both functions did before the field existed.
+	Budget *Context
 }
 
 func (p SerializeParams) opts() serializeOptions {
@@ -1399,7 +2282,7 @@ func SerializeJSON(seq xdm.Sequence, p SerializeParams) (string, error) {
 	// and digits between the strings are structure, not the method's text,
 	// and a map naming one of those over the finished document would rewrite
 	// the JSON rather than its content.
-	return serializeJSON(seq, p.opts())
+	return serializeJSON(p.Budget, seq, p.opts())
 }
 
 // SerializeAdaptive renders a sequence with the adaptive output method of the
@@ -1407,12 +2290,18 @@ func SerializeJSON(seq xdm.Sequence, p SerializeParams) (string, error) {
 func SerializeAdaptive(seq xdm.Sequence, p SerializeParams) (string, error) {
 	opts := p.opts()
 	opts.method = "adaptive"
-	out, err := serializeAdaptiveSeq(seq, opts)
+	out, err := serializeAdaptiveSeq(p.Budget, seq, opts)
 	if err != nil {
 		return "", err
 	}
 	if len(opts.charMap) > 0 {
-		out = applyCharacterMap(out, opts.charMap)
+		mapped := applyCharacterMap(out, opts.charMap)
+		if g := len(mapped) - len(out); g > 0 {
+			if err := p.Budget.countBytes(g); err != nil {
+				return "", err
+			}
+		}
+		out = mapped
 	}
 	return out, nil
 }
@@ -1433,4 +2322,164 @@ func jsonEncodingHolds(encoding string, r rune) bool {
 		return true
 	}
 	return r < 0x80
+}
+
+// serializeSink is the strings.Builder the serializer writes through, with the
+// evaluation's byte budget applied to every append.
+//
+// Serialization is the one string producer whose output has no bound in terms
+// of its input: a small sequence of nodes can name a document of any size, and
+// the character-map and indent paths grow the result further. Charging the
+// finished string, the way stringResult does, would mean the whole of it had
+// already been allocated before the budget was consulted -- which is exactly
+// the allocation MaxBytes exists to refuse. So the charge happens before each
+// append, and the step that would cross the bound never writes.
+//
+// The write methods return nothing, and the first refusal is LATCHED instead.
+// That keeps the ninety-odd call sites and the void recursion in serializeNode
+// as they are, and it is sound for one reason that has to stay true: once err
+// is set every later write is dropped, so the builder holds a TRUNCATED
+// string -- and a truncated serialization returned as a success would be a
+// budget silently changing a result, which is the one thing a resource limit
+// must never do. It is not returned. Every root caller checks err() and
+// returns the error instead of the string, and the tests below assert on the
+// error rather than on the length of what was built.
+type serializeSink struct {
+	ctx *Context
+	b   strings.Builder
+	e   error
+	// reserve is allowance drawn from the shared counter and not yet spent.
+	// See sinkReserveBlock.
+	reserve int
+}
+
+// sinkReserveBlock is how much allowance the sink draws from the shared
+// counter at a time.
+//
+// The counter is an atomic shared across a whole evaluation, and serialization
+// writes to the sink far more often than any other producer -- a start tag
+// alone is four or five writes, most of them a handful of bytes. Charging each
+// one separately measured 9.92 ms against 6.08 ms for the uncharged builder on
+// a 2,000-element document, a 63% regression that is all atomic traffic and no
+// useful work. Drawing a block amortises it to one atomic per 64 KiB.
+//
+// The bound stays exact rather than approximate, because the block is a
+// RESERVATION and not a discount: it is charged in full when drawn, and
+// whatever is left unspent is returned by release when the sink is finished.
+// A serialization that ends mid-block has therefore paid for exactly the bytes
+// it wrote, and one that would cross MaxBytes cannot draw the block it needs.
+const sinkReserveBlock = 64 << 10
+
+// charge reserves n bytes, latching the refusal. It reports whether the write
+// may proceed.
+//
+// Spending is local to the reserve the sink already holds; the shared counter
+// is touched only when that runs out. A single write larger than the block
+// draws exactly what it needs, so a big text node is not split into blocks.
+func (s *serializeSink) charge(n int) bool {
+	// Small enough to inline, which matters: this is called several times per
+	// element and a call here costs more than the subtraction it guards. The
+	// latched-error case folds into the reserve test because the refusal path
+	// sets reserve to zero, so a sink that has failed takes the slow path for
+	// every write of one byte or more and is refused there again.
+	//
+	// A zero-length write is the one that does not: n=0 satisfies 0 <= 0 and
+	// returns true without consulting s.e. That is harmless rather than a
+	// hole, because it writes no bytes -- the builder is unchanged, the latch
+	// still holds, and err() still returns the refusal -- and keeping the
+	// branch this small is what lets the method inline.
+	if n <= s.reserve {
+		s.reserve -= n
+		return true
+	}
+	return s.chargeSlow(n)
+}
+
+// chargeSlow draws a new block, or refuses. Split from charge so that the
+// common case stays inlinable.
+func (s *serializeSink) chargeSlow(n int) bool {
+	if s.e != nil {
+		return false
+	}
+	want := sinkReserveBlock
+	if n > want {
+		want = n
+	}
+	if err := s.ctx.countBytes(want); err != nil {
+		s.e = err
+		s.reserve = 0
+		return false
+	}
+	s.reserve += want - n
+	return true
+}
+
+// release hands back the part of the reserve the serialization never wrote, so
+// the evaluation is charged for the bytes it actually built and not for the
+// rounding. It must be called once the sink is finished with; err() and
+// String() are the points every root caller already reaches, so release is
+// called from err().
+func (s *serializeSink) release() {
+	if s.reserve > 0 {
+		s.ctx.refundBytes(s.reserve)
+		s.reserve = 0
+	}
+}
+
+func (s *serializeSink) WriteString(v string) {
+	if s.charge(len(v)) {
+		s.b.WriteString(v)
+	}
+}
+
+func (s *serializeSink) WriteRune(r rune) {
+	if s.charge(utf8.RuneLen(r)) {
+		s.b.WriteRune(r)
+	}
+}
+
+// err returns the first budget refusal, if any, and returns the unspent
+// reserve. A caller that ignores it returns a truncated string; see the type's
+// comment. Every root caller checks it, which is what makes it the right place
+// to settle the reservation.
+func (s *serializeSink) err() error {
+	s.release()
+	return s.e
+}
+
+// String returns what was written. It is only meaningful when err() is nil.
+func (s *serializeSink) String() string { return s.b.String() }
+
+// newSink returns a sink spending ctx's byte budget.
+func newSink(ctx *Context) *serializeSink { return &serializeSink{ctx: ctx} }
+
+// charMappedResult applies a character map to an already-charged serialization
+// and returns it, charging whatever the mapping ADDED.
+//
+// The replacement text is a string the sink never saw: it is substituted after
+// the builder is finished, and a map that turns one character into a thousand
+// grows the result by as much again. Only the growth is charged, because the
+// bytes being replaced were paid for on the way in.
+func charMappedResult(ctx *Context, out string, opts serializeOptions) (xdm.Sequence, error) {
+	if len(opts.charMap) == 0 {
+		return strSeq(out), nil
+	}
+	mapped := applyCharacterMap(out, opts.charMap)
+	if g := len(mapped) - len(out); g > 0 {
+		if err := ctx.countBytes(g); err != nil {
+			return nil, err
+		}
+	}
+	return strSeq(mapped), nil
+}
+
+// Write implements io.Writer so the formatting helpers can use fmt.Fprintf
+// against the sink. It charges and latches exactly as WriteString does, and
+// never reports a short write: a refusal is carried in err(), not in n, since
+// fmt would turn a short count into its own error and lose the sentinel.
+func (s *serializeSink) Write(p []byte) (int, error) {
+	if s.charge(len(p)) {
+		s.b.Write(p)
+	}
+	return len(p), nil
 }

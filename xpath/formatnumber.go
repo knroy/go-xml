@@ -460,9 +460,52 @@ func splitPicture(pic string, sep rune) []string {
 // (numberformat144). But "9.99e99e99" is an error, because the text after the
 // exponent digits then contains a separator followed by digits, which is a
 // second exponent part rather than a suffix (numberformat108).
+//
+// Two halves of §4.7.3 gate the split, and both are conditions on the
+// *separator*, not on what follows it alone:
+//
+//   - "A character that matches the exponent-separator property is treated as
+//     an exponent-separator-sign if it is both preceded and followed within
+//     the sub-picture by an active character. Otherwise, it is treated as a
+//     passive character." Testing only what follows split "e0" into an empty
+//     mantissa and reported an error naming a picture the caller never wrote.
+//     The "e" there has no active character before it, so it is passive and
+//     "e0" is the prefix "e" over the digit region "0".
+//
+//   - "If a sub-picture contains a character treated as an
+//     exponent-separator-sign then this must be followed by one or more
+//     characters that are members of the decimal digit family, and it must
+//     not be followed by any active character that is not a member of the
+//     decimal digit family." Only a second separator-plus-digits was caught
+//     before, so "0e0.0", "0e0#" and "0e00,0" kept an active character as a
+//     suffix instead of raising the error.
+//
+// "Active" is the spec's own list: decimal-separator, exponent-separator,
+// grouping-separator, digit, pattern-separator and the decimal digit family.
+// An exponent-separator in the tail counts only when it is itself treated as
+// a sign, which is why "9.9999e99e" — whose trailing "e" is followed by
+// nothing — remains a legal passive suffix while "9.99e99e99" does not.
 func splitExponent(runes []rune, df *DecimalFormat) (mantissa, exp []rune, has bool, err error) {
+	isActive := func(r rune) bool {
+		return r == df.DecimalSeparator || r == df.GroupingSeparator ||
+			r == df.Digit || r == df.PatternSeparator ||
+			r == df.ExponentSeparator || isDigitOfFamily(r, df.ZeroDigit)
+	}
 	for i, r := range runes {
 		if r != df.ExponentSeparator {
+			continue
+		}
+		// The separator is a sign only when an active character precedes it
+		// somewhere in the sub-picture. Without this the mantissa handed on
+		// can be empty or digit-free.
+		precededByActive := false
+		for _, q := range runes[:i] {
+			if isActive(q) {
+				precededByActive = true
+				break
+			}
+		}
+		if !precededByActive {
 			continue
 		}
 		rest := runes[i+1:]
@@ -477,14 +520,22 @@ func splitExponent(runes []rune, df *DecimalFormat) (mantissa, exp []rune, has b
 			continue
 		}
 		tail := rest[n:]
-		// A second separator-plus-digits in the tail is a second exponent
-		// part, which the spec makes an error rather than passive text.
+		// Nothing active may follow the exponent digits. A tail
+		// exponent-separator is active only where it would itself be a sign,
+		// that is where digits follow it too; otherwise it is passive text.
 		for j, t := range tail {
-			if t == df.ExponentSeparator && j+1 < len(tail) &&
-				isDigitOfFamily(tail[j+1], df.ZeroDigit) {
+			if t == df.ExponentSeparator {
+				if j+1 < len(tail) && isDigitOfFamily(tail[j+1], df.ZeroDigit) {
+					return nil, nil, false, fmt.Errorf(
+						"XTDE1310: picture %q contains more than one exponent separator",
+						string(runes))
+				}
+				continue
+			}
+			if isActive(t) {
 				return nil, nil, false, fmt.Errorf(
-					"XTDE1310: picture %q contains more than one exponent separator",
-					string(runes))
+					"XTDE1310: picture %q has the active character %q after "+
+						"the exponent digits", string(runes), string(t))
 			}
 		}
 		return runes[:i], rest[:n], true, nil
@@ -717,8 +768,10 @@ func scaleByPowerOfTen(r *big.Rat, n int) *big.Rat {
 	return new(big.Rat).Mul(r, powerOfTen(n))
 }
 
-// roundToPlaces rounds an exact rational to n decimal places, half away from
-// zero — the rounding fn:format-number specifies.
+// roundToPlaces rounds an exact rational to n decimal places, half to even —
+// F&O 3.1 §4.7.5 defines the rounding of fn:format-number by calling
+// fn:round-half-to-even with maximum-fractional-part-size as the precision, so
+// an exact tie goes to the even quotient rather than away from zero.
 func roundToPlaces(r *big.Rat, n int) *big.Rat {
 	if n < 0 {
 		n = 0
@@ -729,7 +782,14 @@ func roundToPlaces(r *big.Rat, n int) *big.Rat {
 	num, den := scaled.Num(), scaled.Denom()
 	q, rem := new(big.Int).QuoRem(num, den, new(big.Int))
 	twice := new(big.Int).Abs(new(big.Int).Mul(rem, big.NewInt(2)))
-	if twice.Cmp(den) >= 0 {
+	// Past the halfway point always rounds away from zero. An exact tie moves
+	// only when the truncated quotient is odd, which is what lands the result
+	// on the even neighbour.
+	away := twice.Cmp(den) > 0
+	if twice.Cmp(den) == 0 {
+		away = q.Bit(0) == 1
+	}
+	if away {
 		if scaled.Sign() < 0 {
 			q.Sub(q, big.NewInt(1))
 		} else {
@@ -1046,7 +1106,7 @@ func registerFormatNumber(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(out), nil
+		return stringResult(ctx, out)
 	})
 }
 

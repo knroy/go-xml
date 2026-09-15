@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/knroy/go-xml/internal/xmlname"
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -41,7 +42,7 @@ func CastAtomic(a *xdm.Atomic, target xdm.TypeCode) (*xdm.Atomic, error) {
 			// xs:anyURI has whiteSpace="collapse", so leading and trailing
 			// whitespace is not part of the value: xs:anyURI(" ") is the empty
 			// URI, and concat("b", xs:anyURI(" "), "b") is "bb".
-			v := strings.TrimSpace(a.Str())
+			v := trimSchemaSpace(a.Str())
 			if err := validAnyURI(v); err != nil {
 				return nil, err
 			}
@@ -100,7 +101,7 @@ func castToBoolean(a *xdm.Atomic) (*xdm.Atomic, error) {
 	case a.Type == xdm.TypeString || a.Type == xdm.TypeUntypedAtomic:
 		// Only the four canonical lexical forms are accepted; "yes" is an
 		// error rather than true.
-		switch strings.TrimSpace(a.Str()) {
+		switch trimSchemaSpace(a.Str()) {
 		case "true", "1":
 			return xdm.NewBoolean(true), nil
 		case "false", "0":
@@ -149,7 +150,7 @@ func castToNumeric(a *xdm.Atomic, target xdm.TypeCode) (*xdm.Atomic, error) {
 		return makeFloat(a.Float64(), target), nil
 
 	case isStringLike(a.Type):
-		return parseNumericLexical(strings.TrimSpace(a.Str()), target)
+		return parseNumericLexical(trimSchemaSpace(a.Str()), target)
 	}
 	return nil, xdm.ErrCast("cannot cast %s to %s", a.TypeName(), target)
 }
@@ -819,13 +820,13 @@ func castToBinary(a *xdm.Atomic, target xdm.TypeCode) (*xdm.Atomic, error) {
 		}
 		// A string is read in the encoding it is being cast *to*.
 		if target == xdm.TypeHexBinary {
-			octets, err = hex.DecodeString(strings.TrimSpace(a.Str()))
+			octets, err = hex.DecodeString(trimSchemaSpace(a.Str()))
 		} else {
 			// XML Schema's base64Binary permits whitespace *between* the
 			// characters, not merely around them — the canonical form groups
 			// them in fours — so it is removed throughout rather than
 			// trimmed. "aaa a" and " AQID " are both valid.
-			lex := strings.Join(strings.Fields(a.Str()), "")
+			lex := removeSchemaSpace(a.Str())
 			if !validBase64Lexical(lex) {
 				return nil, xdm.ErrCast("invalid %s %q", target, a.Str())
 			}
@@ -973,7 +974,7 @@ func isDurationType(t xdm.TypeCode) bool {
 //
 // The namespace is left empty: resolving a prefix needs the static context.
 func parseLexicalQName(s string) (xdm.QName, error) {
-	s = strings.TrimSpace(s)
+	s = trimSchemaSpace(s)
 	prefix, local := "", s
 	if i := strings.Index(s, ":"); i >= 0 {
 		prefix, local = s[:i], s[i+1:]
@@ -988,11 +989,20 @@ func parseLexicalQName(s string) (xdm.QName, error) {
 }
 
 // isNCName reports whether s is an XML non-colonised name.
+//
+// The colon is excluded HERE rather than in the rune predicates, because it is
+// in the XML Name production and the predicates transcribe that production
+// faithfully. "Non-colonised" is this function's own rule, and stating it here
+// is what keeps the shared predicates usable by the Name and NMTOKEN checks
+// that do permit a colon.
 func isNCName(s string) bool {
 	if s == "" {
 		return false
 	}
 	for i, r := range s {
+		if r == ':' {
+			return false
+		}
 		if i == 0 {
 			if !isNameStartRune(r) {
 				return false
@@ -1006,32 +1016,29 @@ func isNCName(s string) bool {
 	return true
 }
 
-func isNameStartRune(r rune) bool {
-	switch {
-	case r == '_':
-		return true
-	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
-		return true
-	case r >= 0xC0 && r != 0xD7 && r != 0xF7:
-		// The spec's NameStartChar ranges above Latin-1 are contiguous enough
-		// that excluding the two punctuation characters covers them.
-		return true
-	}
-	return false
-}
+// isNameStartRune and isNameRune are the XML NameStartChar and NameChar
+// productions, resolved through internal/xmlname so that this package and the
+// tokeniser cannot drift apart.
+//
+// They used to be approximated here as "anything at or above U+00C0 except the
+// two Latin-1 punctuation characters", on the reasoning that the ranges above
+// Latin-1 are "contiguous enough". They are not, and the gap was not academic:
+// the approximation accepted roughly 140,000 codepoints the production
+// excludes, including every noncharacter (U+FDD0..U+FDEF), the combining marks
+// that are NameChar but never NameStartChar (U+0300), and ZWSP.
+//
+// The consequence reached the output. A computed element name built from one
+// of them serialized to a document this engine's OWN parser then refused:
+//
+//	element {QName("http://x", codepoints-to-string(64976) || "y")} {"v"}
+//	  => <﷐y xmlns="http://x">v</﷐y>
+//	  => parse: invalid XML name
+//
+// The colon is in the XML production and is accepted here; every caller is an
+// NCName or NMTOKEN check that excludes it before or after this call.
+func isNameStartRune(r rune) bool { return xmlname.IsNameStartRune(r) }
 
-func isNameRune(r rune) bool {
-	if isNameStartRune(r) {
-		return true
-	}
-	switch {
-	case r >= '0' && r <= '9':
-		return true
-	case r == '-', r == '.', r == 0xB7:
-		return true
-	}
-	return false
-}
+func isNameRune(r rune) bool { return xmlname.IsNameRune(r) }
 
 // --- Derived-type facets ----------------------------------------------------
 //
@@ -1064,7 +1071,7 @@ func CastToDerived(a *xdm.Atomic, target xdm.TypeCode, facet string) (*xdm.Atomi
 		// the constructor, since a cast does not go through that.
 		if dt := out.DateTimeVal(); dt == nil || !dt.HasTZ {
 			return nil, xdm.ErrCast(
-				"FORG0001: xs:dateTimeStamp requires a timezone")
+				"xs:dateTimeStamp requires a timezone")
 		}
 	} else {
 		return out, nil
@@ -1164,7 +1171,7 @@ func applyRangeFacet(a *xdm.Atomic, name string) (*xdm.Atomic, error) {
 	}
 	n := new(big.Int).Quo(a.Rat().Num(), a.Rat().Denom())
 	if r.min != nil && n.Cmp(r.min) < 0 || r.max != nil && n.Cmp(r.max) > 0 {
-		return nil, xdm.ErrCast("FORG0001: %s is out of range for xs:%s", n, name)
+		return nil, xdm.ErrCast("%s is out of range for xs:%s", n, name)
 	}
 	return a, nil
 }
@@ -1210,7 +1217,7 @@ func applyStringFacet(a *xdm.Atomic, name string) (*xdm.Atomic, error) {
 		ok = isNmtoken(v)
 	}
 	if !ok {
-		return nil, xdm.ErrCast("FORG0001: %q is not a valid xs:%s", s, name)
+		return nil, xdm.ErrCast("%q is not a valid xs:%s", s, name)
 	}
 	return xdm.NewString(v), nil
 }
@@ -1316,6 +1323,19 @@ func isSchemaDecimalLexical(s string) bool {
 	return digits > 0 && dots <= 1
 }
 
+// trimSchemaSpace applies the XML Schema whiteSpace="collapse" edge trim.
+//
+// XML Schema S is only U+0020, U+0009, U+000A and U+000D. strings.TrimSpace
+// uses unicode.IsSpace, which also matches U+00A0 and other separators: those
+// are ordinary characters in a lexical form, so trimming them made values the
+// grammar rejects — " 42" with a no-break space — cast successfully.
+func trimSchemaSpace(s string) string { return trimXMLSpace(s) }
+
+// removeSchemaSpace removes XML Schema S wherever a binary lexical grammar
+// permits whitespace between encoded units. It intentionally leaves NBSP and
+// every other Unicode separator in the lexical value.
+func removeSchemaSpace(s string) string { return strings.Join(splitXMLSpace(s), "") }
+
 // collapseXMLSpace replaces runs of XML whitespace with a single space and
 // trims the ends, which is the whiteSpace="collapse" facet.
 //
@@ -1356,4 +1376,137 @@ func ratFitsInt(r *big.Rat) bool {
 // bigFitsInt reports whether n is representable as an int.
 func bigFitsInt(n *big.Int) bool {
 	return n.IsInt64() && n.Int64() <= math.MaxInt && n.Int64() >= math.MinInt
+}
+
+// canonicalLexical renders a value in the CANONICAL LEXICAL REPRESENTATION of
+// XML Schema, which is the form a pattern facet is tested against when a cast
+// crosses a branch of the type hierarchy.
+//
+// F&O 3.0 18.3.3 says the pattern is tested against "the canonical lexical
+// representation of the value", and W3C bug 26865 settled which value that is:
+// the CAST RESULT, in the target's own primitive, rather than the source. The
+// suite pins it as CastableAs653-658, whose titles read "Pattern must match
+// canonical representation (not the result of string())" -- because fn:string
+// is XPath's serialization and not XSD's canonical form. The two disagree
+// exactly where these cases live: string(xs:decimal(12)) is "12" where the
+// canonical decimal is "12.0", and string(xs:double(93.7)) is "93.7" where the
+// canonical double is "9.37E1".
+//
+// Only the numeric primitives whose canonical form differs from fn:string are
+// given one here. Everything else returns false and the caller keeps the
+// lexical form it already had, which for those types is the canonical one.
+func canonicalLexical(a *xdm.Atomic) (string, bool) {
+	switch a.Type {
+	case xdm.TypeDecimal:
+		// XSD 1.0 Part 2 3.2.3.1: a canonical xs:decimal always carries a
+		// decimal point with at least one digit on each side. An xs:integer
+		// cast to a decimal target is the case bug 26865 turns on, and it is
+		// why "12" has to become "12.0" before the pattern sees it.
+		//
+		// xs:integer is deliberately NOT here. It is a separate primitive for
+		// this purpose (F&O 18.3.1 names it as one), and 3.3.13.1 makes its
+		// canonical form the bare digits: a pattern on a restriction of
+		// xs:integer must keep seeing "12", not "12.0".
+		r := a.Rat()
+		if r == nil {
+			return "", false
+		}
+		return canonicalRatDecimal(r), true
+	case xdm.TypeDouble, xdm.TypeFloat:
+		f := a.Float64()
+		switch {
+		case math.IsNaN(f):
+			return "NaN", true
+		case math.IsInf(f, 1):
+			return "INF", true
+		case math.IsInf(f, -1):
+			return "-INF", true
+		}
+		return canonicalFloatExponential(f), true
+	}
+	return "", false
+}
+
+// canonicalRatDecimal writes an exact rational in canonical xs:decimal form.
+//
+// big.Rat.FloatString rounds to a fixed number of places, so the number of
+// digits actually needed is computed first: a decimal value is a rational
+// whose denominator divides a power of ten, and the smallest such power is the
+// count of fractional digits its canonical form carries. Trailing zeros are
+// then dropped back to the one digit the canonical form must keep.
+func canonicalRatDecimal(r *big.Rat) string {
+	s := r.FloatString(canonicalDecimalPlaces(r))
+	if strings.Contains(s, ".") {
+		s = strings.TrimRight(s, "0")
+		if strings.HasSuffix(s, ".") {
+			s += "0"
+		}
+	} else {
+		s += ".0"
+	}
+	return s
+}
+
+// canonicalDecimalPlaces is the number of fractional digits the canonical form
+// of r needs, found by multiplying out powers of ten until the denominator
+// divides evenly.
+//
+// The bound is not a guess about precision: a denominator that never divides a
+// power of ten is not a decimal at all, and 40 places is past anything a
+// lexical xs:decimal can have produced.
+func canonicalDecimalPlaces(r *big.Rat) int {
+	den := new(big.Int).Set(r.Denom())
+	if den.Sign() == 0 {
+		return 1
+	}
+	ten := big.NewInt(10)
+	acc := big.NewInt(1)
+	rem := new(big.Int)
+	for i := 0; i <= 40; i++ {
+		if rem.Mod(acc, den).Sign() == 0 {
+			if i == 0 {
+				return 1
+			}
+			return i
+		}
+		acc.Mul(acc, ten)
+	}
+	return 40
+}
+
+// canonicalFloatExponential writes a finite float in canonical xs:double or
+// xs:float form: a mantissa in [1,10) -- or exactly 0 -- with a decimal point,
+// an uppercase E, and an exponent with no leading zeros.
+//
+// The uppercase E is not cosmetic. canonicalDouble in fn_serialize.go writes a
+// lowercase "e" for the adaptive serialization method, which is a different
+// job with a different rule; the schema pattern these cases carry is
+// "-?[0-9]+\.[0-9]+E-?[0-9]+", so a lowercase e would not match and
+// CastableAs655-658 would stay false for a new reason.
+func canonicalFloatExponential(f float64) string {
+	// 'E' with -1 precision gives the shortest mantissa that round-trips,
+	// already normalised to one digit before the point.
+	s := strconv.FormatFloat(f, 'E', -1, 64)
+	i := strings.IndexByte(s, 'E')
+	if i < 0 {
+		return s
+	}
+	mant, exp := s[:i], s[i+1:]
+	if !strings.Contains(mant, ".") {
+		// FormatFloat drops a zero fraction ("1E+00"), and the canonical
+		// form requires a digit after the point.
+		mant += ".0"
+	}
+	// Strip the sign and leading zeros FormatFloat pads the exponent with:
+	// "E+01" is written "E1", and "E-05" is written "E-5".
+	neg := strings.HasPrefix(exp, "-")
+	exp = strings.TrimLeft(exp, "+-")
+	exp = strings.TrimLeft(exp, "0")
+	if exp == "" {
+		exp = "0"
+	}
+	if neg && exp != "0" {
+		exp = "-" + exp
+	}
+	return mant + "E" + exp
 }

@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -456,7 +457,7 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 	if i := strings.IndexByte(href, '#'); i >= 0 {
 		fragment, href = href[i+1:], href[:i]
 	}
-	doc, resolved, err := p.c.opts.Resolver.ResolveModule(href, base)
+	doc, resolved, err := resolveModule(p.c.opts.Resolver, p.c.opts.moduleBudget, href, base)
 	if err != nil {
 		return nil
 	}
@@ -525,6 +526,23 @@ func isStaticDecl(el *xdm.Node) bool {
 
 // isYes reads an attribute whose value space is XSLT's boolean vocabulary.
 func isYes(v string) bool {
+	switch strings.TrimSpace(v) {
+	case "yes", "true", "1":
+		return true
+	}
+	return false
+}
+
+// cacheMemoises reports whether an xsl:function/@cache value asks the
+// processor to remember previous calls.
+//
+// The Recommendation types the attribute cache? = boolean (10.3), so the
+// memoising spellings are the boolean trues. The Last Call draft's "full"
+// and "partial" are refused by the element table and never reach here.
+//
+// An absent attribute, cache="no", and the boolean falses are all "do not
+// memoise" -- the default is cache="no".
+func cacheMemoises(v string) bool {
 	switch strings.TrimSpace(v) {
 	case "yes", "true", "1":
 		return true
@@ -698,6 +716,39 @@ func (p *staticPhase) valueTemplate(el *xdm.Node, src string) (string, error) {
 	return sb.String(), nil
 }
 
+// staticRuntime is the stand-in runtime fn:transform is given during the
+// static phase.
+//
+// runNestedTransform reads exactly three things from a runtime: the document
+// resolver it inherits, the package resolver, and the Go context. There is no
+// transform in progress to take them from -- the outer stylesheet is still
+// being compiled -- so they come from the compilation's own options, which is
+// the same sandbox by a different name: a static expression reaches documents
+// and packages through the resolvers the HOST supplied to Compile, and
+// through no others. A host that supplied none gets the same refusal here as
+// everywhere else, and nothing is fetched by default.
+//
+// The rest of the runtime stays zero. Every field beyond these belongs to a
+// transformation that is running, and a static expression has none: 9.7
+// denies it a context item, a source document and the stylesheet's own
+// functions alike, so there is nothing for the zero values to withhold that
+// the specification does not already withhold.
+func (p *staticPhase) staticRuntime() *runtime {
+	rt := &runtime{
+		static: true,
+		sheet:  p.c.sheet,
+		goCtx:  context.Background(),
+	}
+	// Only a ModuleResolver that is also a DocumentResolver can answer
+	// stylesheet-location, which is the same pairing eval already requires
+	// for fn:doc, and for the same reason: FileResolver is both, and a
+	// resolver that is only one of them resolves nothing here.
+	if docs, ok := p.c.opts.Resolver.(xpath.DocumentResolver); ok {
+		rt.opts.Documents = docs
+	}
+	return rt
+}
+
 // eval evaluates one static expression written on el.
 //
 // The static context is the one 9.7 tabulates: the in-scope namespaces of the
@@ -709,11 +760,47 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 		bindings:  el.InScopeNamespaces(),
 		defaultNS: xpathDefaultNamespace(el),
 	}
-	compiled, err := xpath.CompileVersion(src, ns, xpathVersionAt(el))
+	compiled, err := xpath.CompileWith(src, xpath.CompileOptions{
+		Namespaces: ns, Version: xpathVersionAt(el),
+	})
 	if err != nil {
 		return nil, err
 	}
-	ctx := xpath.NewContext(nil, useWhenFuncs(ns.bindings))
+	lib := useWhenFuncs(ns.bindings)
+	// fn:transform is part of "the core functions defined in [Functions and
+	// Operators]" that 9.7 puts in a static expression's scope, and 9.7
+	// excludes nothing from that library -- what it restricts is the rest of
+	// the context: no context item, no stylesheet functions, no source
+	// document. xpath registers a stub that declines with FOXT0004, because
+	// xpath cannot depend on xslt; this replaces it here for the same reason
+	// registerRuntimeFuncs replaces it during a transform. transform-004 is
+	// the case: a static="yes" variable whose select calls fn:transform and
+	// binds the FUNCTION the nested transformation returns.
+	var staticRT *runtime
+	if processorAtLeast30() {
+		staticRT = p.staticRuntime()
+		registerTransformFunc(lib, staticRT)
+	}
+	ctx := xpath.NewContext(nil, lib)
+	if staticRT != nil {
+		// A function ITEM the nested transformation returned is an
+		// xsl:function of the nested stylesheet, and userFunction.call reads
+		// the runtime it needs from the context it is called in -- not from
+		// one captured when it was made. transform-004 binds such an item to
+		// a static variable and then CALLS it from a use-when, one static
+		// expression later, so without this binding the call reported that
+		// it was made outside a transform and the whole point of the case
+		// was lost.
+		//
+		// This binding grants nothing else. useWhenFuncs registers no
+		// runtime-bound function -- no key(), no current(), no
+		// accumulator -- so nothing in a static expression's own library can
+		// reach it; the only thing that ever finds it is a function item
+		// that crossed the fn:transform boundary, which is exactly the case
+		// the specification's unrestricted function library allows in.
+		ctx = ctx.WithVar(runtimeVar,
+			xdm.One(&xdm.Opaque{Label: "runtime", Value: staticRT}))
+	}
 	// 3.12's table gives a static expression "the core functions defined in
 	// [Functions and Operators]" -- the whole library, not a 2.0 subset of
 	// it. Which functions exist follows the PROCESSOR, exactly as it does at

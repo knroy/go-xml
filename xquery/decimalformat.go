@@ -224,13 +224,20 @@ func checkDecimalFormatDistinct(df *xpath.DecimalFormat) error {
 }
 
 // registerFormatNumber installs an fn:format-number that can see the formats
-// this query declared.
+// declared by the module whose static context is sc.
 //
 // xpath's own always uses the default format, because a bare expression has
 // no prolog; the third argument names a format that only the query knows
 // about, so the function has to be replaced rather than configured.
-func (q *Query) registerFormatNumber(lib *xpath.Library) {
-	if len(q.formats) == 0 {
+//
+// The formats are the DECLARING module's, not the calling one's. §4.4 scopes
+// a decimal-format declaration to the module that writes it, so a library
+// module's format-number must resolve "df001" against its own prolog even
+// though the call is reached from an importing query that declared a df001 of
+// its own. decimal-format-21 is the case: the main module's separators are
+// "!" and the library's are "'", and each must format with its own.
+func (q *Query) registerFormatNumber(lib *xpath.Library, sc *staticContext, formats map[string]*xpath.DecimalFormat) {
+	if len(formats) == 0 {
 		return
 	}
 	call := func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -247,7 +254,7 @@ func (q *Query) registerFormatNumber(lib *xpath.Library) {
 		if err != nil {
 			return nil, err
 		}
-		df := q.formats[""]
+		df := formats[""]
 		if df == nil {
 			df = xpath.DefaultDecimalFormat()
 		}
@@ -256,13 +263,13 @@ func (q *Query) registerFormatNumber(lib *xpath.Library) {
 			if err != nil {
 				return nil, err
 			}
-			name, err := q.sc.resolveFormatName(lex)
+			name, err := sc.resolveFormatName(lex)
 			if err != nil {
 				return nil, err
 			}
 			// FODF1280 is the error for naming a format that was never
 			// declared, which is dynamic because the name is a value.
-			f, ok := q.formats[name.Clark()]
+			f, ok := formats[name.Clark()]
 			if !ok {
 				return nil, fmt.Errorf(
 					"FODF1280: no decimal format is named %q", lex)
@@ -275,7 +282,7 @@ func (q *Query) registerFormatNumber(lib *xpath.Library) {
 		// was a bare xpath.XPath31 literal while nothing recorded the
 		// module's version; now that something does, it follows the module.
 		out, err := xpath.FormatNumberVersion(
-			num, pic, df, q.sc.xqVersion.xpathVersion())
+			num, pic, df, sc.xqVersion.xpathVersion())
 		if err != nil {
 			return nil, err
 		}

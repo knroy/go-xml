@@ -136,13 +136,28 @@ func TestCurrentOutputURIReportsTheDestination(t *testing.T) {
 
 // TestCurrentOutputURIDirectoryEndsInSlash pins the property that makes a
 // relative href resolve inside -result-dir rather than beside it.
+//
+// The expectations are built from fileURI rather than written out as
+// "file:///tmp/results/", because dirURI runs its argument through
+// filepath.Abs and "/tmp/results" is not an absolute path on Windows: it has
+// no drive, so Abs prepends the current one and the answer is
+// file:///D:/tmp/results/. That is correct -- a path with no volume genuinely
+// is relative there -- and hard-coding the unix spelling asserted the host's
+// path syntax instead of the trailing-slash property this test exists for.
+// So the drive letter is factored out by comparing against fileURI of the
+// same path, leaving exactly the slash under test.
 func TestCurrentOutputURIDirectoryEndsInSlash(t *testing.T) {
-	if got := dirURI("/tmp/results"); got != "file:///tmp/results/" {
-		t.Errorf("dirURI = %q, want a trailing slash", got)
+	const dir = "/tmp/results"
+	if got, want := dirURI(dir), fileURI(dir)+"/"; got != want {
+		t.Errorf("dirURI = %q, want a trailing slash: %q", got, want)
 	}
-	// Already slashed stays single-slashed.
-	if got := dirURI("/tmp/results/"); got != "file:///tmp/results/" {
-		t.Errorf("dirURI doubled the slash: %q", got)
+	// Already slashed stays single-slashed. filepath.Abs cleans the trailing
+	// separator off, so this is dirURI re-adding exactly one.
+	if got, want := dirURI(dir+"/"), fileURI(dir)+"/"; got != want {
+		t.Errorf("dirURI doubled the slash: %q, want %q", got, want)
+	}
+	if got := dirURI(dir); strings.HasSuffix(got, "//") {
+		t.Errorf("dirURI ended in a doubled slash: %q", got)
 	}
 	// A Windows path must still be a well-formed file URI with an empty
 	// authority. dirURI runs the path through filepath.Abs, which is relative
@@ -157,13 +172,21 @@ func TestCurrentOutputURIDirectoryEndsInSlash(t *testing.T) {
 // TestBaseOutputURIPrefersTheOutputFile checks the precedence directly: -o
 // names the principal result, so it wins over -result-dir, which only says
 // where the *secondary* documents land.
+// As above, the expectations come from fileURI/dirURI of the same paths
+// rather than from a written-out unix spelling: what is under test is which
+// flag wins and whether a directory keeps its trailing slash, not whether the
+// host puts a drive letter in front.
 func TestBaseOutputURIPrefersTheOutputFile(t *testing.T) {
-	got := baseOutputURI("/tmp/out.xml", "/tmp/results")
-	if want := "file:///tmp/out.xml"; got != want {
+	const out, results = "/tmp/out.xml", "/tmp/results"
+	got := baseOutputURI(out, results)
+	if want := fileURI(out); got != want {
 		t.Errorf("baseOutputURI = %q, want %q", got, want)
 	}
-	if got := baseOutputURI("", "/tmp/results"); got != "file:///tmp/results/" {
-		t.Errorf("baseOutputURI with only -result-dir = %q", got)
+	if strings.HasSuffix(got, "/") {
+		t.Errorf("baseOutputURI named a file but ended in a slash: %q", got)
+	}
+	if got, want := baseOutputURI("", results), dirURI(results); got != want {
+		t.Errorf("baseOutputURI with only -result-dir = %q, want %q", got, want)
 	}
 }
 

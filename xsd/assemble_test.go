@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/knroy/go-xml/internal/fileuri"
+
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -252,6 +254,102 @@ func TestSubstitutionGroupClosure(t *testing.T) {
 	}
 }
 
+// TestSchemaElementMembersExcludesAbstractAndNonNillable asserts the two ways
+// SchemaElementMembers is narrower than Substitutable.
+//
+// A schema-element(E) test asks whether a node could have been validated
+// against E or something substitutable for it. Two kinds of member could never
+// yield such a node and so are not in the answer, while both remain in
+// Substitutable because a content model naming E still admits what they lead
+// to:
+//
+//   - an ABSTRACT member, which §3.3.6 forbids from validating any element
+//     itself;
+//   - a member that forbids nilling under a head that permits it, since the
+//     head's test admits a nilled node and the member can never produce one.
+//
+// The shape is the one prod/SchemaImport/substitution11.xsd uses for QT3's
+// substitution-020 through 025.
+func TestSchemaElementMembersExcludesAbstractAndNonNillable(t *testing.T) {
+	docs := map[string]string{
+		"main.xsd": `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           xmlns:t="urn:t" targetNamespace="urn:t" elementFormDefault="qualified">
+		  <xs:element name="head" type="xs:string" nillable="true"/>
+		  <xs:element name="abs" type="xs:string" abstract="true"
+		              nillable="true" substitutionGroup="t:head"/>
+		  <xs:element name="plain" type="xs:string" nillable="true"
+		              substitutionGroup="t:abs"/>
+		  <xs:element name="notNillable" type="xs:string" nillable="false"
+		              substitutionGroup="t:abs"/>
+		</xs:schema>`,
+	}
+	s, err := loadFromMap(t, "main.xsd", docs)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	head := s.Elements[xdm.QName{URI: "urn:t", Local: "head"}]
+	if head == nil {
+		t.Fatal("head was not declared")
+	}
+
+	// Substitutable keeps every member: the abstract one is the only route to
+	// the two below it, so dropping it there would lose them.
+	all := map[string]bool{}
+	for _, d := range head.Substitutable() {
+		all[d.Name.Local] = true
+	}
+	for _, want := range []string{"abs", "plain", "notNillable"} {
+		if !all[want] {
+			t.Errorf("Substitutable() is missing %q; it is %v", want, all)
+		}
+	}
+
+	// SchemaElementMembers keeps only what could validate a node against the
+	// head's test.
+	got := map[string]bool{}
+	for _, d := range head.SchemaElementMembers() {
+		got[d.Name.Local] = true
+	}
+	if !got["plain"] {
+		t.Errorf("schema-element(head) must admit plain; members are %v", got)
+	}
+	if got["abs"] {
+		t.Errorf("an abstract declaration can validate no element, so it must "+
+			"not be a schema-element(head) member; members are %v", got)
+	}
+	if got["notNillable"] {
+		t.Errorf("a non-nillable member cannot stand in for a nillable head, "+
+			"so it must not be a schema-element(head) member; members are %v", got)
+	}
+}
+
+// TestSchemaElementMembersKeepsNillableUnderNonNillableHead asserts the
+// nillability clause runs one way only. A member that permits nilling under a
+// head that does not is fine: it only ever yields nodes the head's own test
+// already admits, so excluding it would reject a legitimate substitution.
+func TestSchemaElementMembersKeepsNillableUnderNonNillableHead(t *testing.T) {
+	docs := map[string]string{
+		"main.xsd": `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           xmlns:t="urn:t" targetNamespace="urn:t" elementFormDefault="qualified">
+		  <xs:element name="head" type="xs:string" nillable="false"/>
+		  <xs:element name="member" type="xs:string" nillable="true"
+		              substitutionGroup="t:head"/>
+		</xs:schema>`,
+	}
+	s, err := loadFromMap(t, "main.xsd", docs)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	head := s.Elements[xdm.QName{URI: "urn:t", Local: "head"}]
+	members := head.SchemaElementMembers()
+	if len(members) != 1 || members[0].Name.Local != "member" {
+		t.Errorf("a nillable member under a non-nillable head must still "+
+			"substitute; members are %v", members)
+	}
+}
+
 // TestSubstitutionGroupCycleTerminates guards the closure against a circular
 // substitution group. The spec bans them, but a malformed schema can still
 // write one and the closure must not hang before the ban can be reported.
@@ -366,7 +464,9 @@ func TestHTTPResolverChecksRedirectHosts(t *testing.T) {
 	defer open.Close()
 
 	var asked []string
-	r := &HTTPResolver{AllowHost: func(h string) bool {
+	// The servers are on loopback, which the dialler refuses by default;
+	// this test is about AllowHost running on every redirect hop.
+	r := &HTTPResolver{AllowPrivateAddresses: true, AllowHost: func(h string) bool {
 		asked = append(asked, h)
 		return h == "127.0.0.1"
 	}}
@@ -614,5 +714,54 @@ func TestTypelessMemberTakesHeadType(t *testing.T) {
 	lone := s.Elements[xdm.QName{URI: "urn:t", Local: "lone"}]
 	if got := lone.Type.TypeName().Local; got != "anyType" {
 		t.Errorf("a declaration with no head has type %q, want anyType", got)
+	}
+}
+
+// A file: URL may carry an authority, and only an empty one or "localhost"
+// names this machine. Taking u.Path alone discarded any other host and read
+// the same-named local file instead -- a read the caller never asked for, and
+// a refusal that never happened. relaxng.FileResolver refuses it; this pins
+// that the xsd one does too, and that the local spellings still read.
+func TestFileResolverRefusesForeignFileHost(t *testing.T) {
+	dir := t.TempDir()
+	schema := filepath.Join(dir, "s.xsd")
+	if err := os.WriteFile(schema, []byte(
+		`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &FileResolver{}
+	// The message is asserted, not just err != nil: neither remote path
+	// exists, so "no such file" would satisfy a weaker test with the guard
+	// deleted.
+	// fileuri.OnHost, not "file://evil.example.com" + the path: a Windows
+	// absolute path has no leading slash, so the drive fused onto the
+	// authority and the URI named the host "evil.example.comC:". The refusal
+	// still happened, but on a host this test never wrote -- so the case that
+	// is the whole point here, a foreign host in front of a path that DOES
+	// exist locally, was not being put to the resolver at all.
+	for _, loc := range []string{
+		"file://evil.example.com/etc/x.xsd",
+		fileuri.OnHost("evil.example.com", schema),
+	} {
+		_, _, err := r.Resolve("", loc, "")
+		if err == nil || !strings.Contains(err.Error(), "remote host \"evil.example.com\"") {
+			t.Errorf("Resolve(%q) error = %v, want one naming the remote host", loc, err)
+		}
+	}
+	// "/C:/x" is the RFC 8089 spelling of a Windows drive path; the drive
+	// letter must not be mistaken for a host.
+	slashed := strings.TrimPrefix(filepath.ToSlash(schema), "/")
+	for _, loc := range []string{
+		"file:///" + slashed,
+		"file://localhost/" + slashed,
+		"file:///C:/x.xsd",
+	} {
+		rc, _, err := r.Resolve("", loc, "")
+		if err != nil && strings.Contains(err.Error(), "remote host") {
+			t.Errorf("Resolve(%q) was refused as remote: %v", loc, err)
+		}
+		if rc != nil {
+			rc.Close()
+		}
 	}
 }

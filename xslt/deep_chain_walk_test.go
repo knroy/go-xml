@@ -42,7 +42,7 @@ func TestDeepChainIsNamespaceSensitiveType(t *testing.T) {
 		for _, base := range []string{"QName", "NOTATION"} {
 			ns := fmt.Sprintf("http://example.com/xsltchain/nss-%s/%d", base, n)
 			top := registerXSLTChain(ns, base, n)
-			if !isNamespaceSensitiveType(top) {
+			if !isNamespaceSensitiveType(xdm.GlobalTypeEnvironment(), top) {
 				t.Errorf("depth %d: a type %d links above xs:%s is not "+
 					"namespace-sensitive, so XTTE0950 goes unreported",
 					n, n, base)
@@ -53,7 +53,7 @@ func TestDeepChainIsNamespaceSensitiveType(t *testing.T) {
 		plain := registerXSLTChain(
 			fmt.Sprintf("http://example.com/xsltchain/nss-plain/%d", n),
 			"Name", n)
-		if isNamespaceSensitiveType(plain) {
+		if isNamespaceSensitiveType(xdm.GlobalTypeEnvironment(), plain) {
 			t.Errorf("depth %d: a type derived from xs:Name reported as "+
 				"namespace-sensitive", n)
 		}
@@ -107,7 +107,7 @@ func TestCyclicChainTerminatesXSLT(t *testing.T) {
 			xdm.RegisterDerivedType(names[i], names[i-1])
 		}
 		xdm.RegisterDerivedType(names[1], names[n])
-		if isNamespaceSensitiveType(names[n]) {
+		if isNamespaceSensitiveType(xdm.GlobalTypeEnvironment(), names[n]) {
 			t.Errorf("n=%d: a cyclic chain touching no QName reported as "+
 				"namespace-sensitive", n)
 		}

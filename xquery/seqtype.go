@@ -229,7 +229,18 @@ func (t *sequenceType) convertWith(seq xdm.Sequence, what string, cast bool) (xd
 	// against it must still be converted. Barring it here left "declare
 	// function local:f($n as xs:numeric) ... ; local:f(<a>255</a>)" refusing
 	// the untypedAtomic that atomising the element gives (xs-numeric-020).
-	if !t.stype.HasAtomicType && !t.stype.IsNumericType {
+	// A pure union type carries no atomic type code of its own -- a union has
+	// no single primitive to erase to -- so it too fails the test above while
+	// being exactly a type the conversion rules convert into. §3.1.5 casts an
+	// xs:untypedAtomic to the declared type whatever that type is, and for a
+	// union the cast is defined by §3.14.2 as trying the members in order,
+	// which is what castOne's CastToUnion already does. Barring it here left
+	// "declare function local:makeDate($in as xs:string) as lu:unionOfUnionType
+	// { ... xs:untypedAtomic($in) ... }" refusing the untypedAtomic that the
+	// rules exist to convert -- FunctionCall-037 and -038, both of which assert
+	// the result is an xs:date.
+	if !t.stype.HasAtomicType && !t.stype.IsNumericType &&
+		len(t.stype.SchemaUnionMembers) == 0 {
 		return nil, fmt.Errorf("XPTY0004: %s does not match its declared type %s",
 			what, t.src)
 	}
@@ -303,8 +314,21 @@ func (t *sequenceType) convertWith(seq xdm.Sequence, what string, cast bool) (xd
 func (t *sequenceType) castOne(a *xdm.Atomic) (xdm.Item, error) {
 	// A pure union type is converted by trying its members in order, which is
 	// a different rule from the single-target cast below.
-	if c, ok := xpath.CastToUnion(a, t.stype); ok {
-		return c, nil
+	//
+	// Only an xs:untypedAtomic is cast this way. §3.1.5 offers a typed value
+	// exactly two conversions — the untypedAtomic cast and numeric/anyURI
+	// promotion — and promotion is defined against a single target type, not a
+	// union, so a typed value that does not already match a union member has
+	// no conversion available and is an error. Casting unconditionally let
+	// xs:decimal 12.3 through "as lu:unionType" as an xs:integer or xs:float,
+	// which is the promotion FunctionCall-030 exists to forbid. That case only
+	// passed before because its inline function took xpath's schema-blind
+	// converter; the declared form gave the wrong answer, and this is the
+	// defect rather than the routing.
+	if a.Type == xdm.TypeUntypedAtomic {
+		if c, ok := xpath.CastToUnion(a, t.stype); ok {
+			return c, nil
+		}
 	}
 	// xs:numeric behaves as it does in a cast: the identity on a value that
 	// already is numeric, and a cast to xs:double on anything else. Only an
@@ -337,7 +361,32 @@ func (t *sequenceType) castOne(a *xdm.Atomic) (xdm.Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c, nil
+	// An imported schema type constrains the value beyond the built-in it
+	// derives from, and the value it produces is an instance of that type
+	// rather than of the bare primitive. Both halves have to be applied here
+	// for the same reason the "cast as" path applies them: CastToDerived
+	// knows only the built-in facet tables, so a restriction of xs:date came
+	// back unconstrained and unannotated.
+	//
+	// Without the annotation the result failed the very type it was converted
+	// to. §3.1.5 atomises a returned element and casts the untypedAtomic to
+	// the declared type, so "declare function hat:purchase(...) as hat:date2003
+	// { <yr>{'2003-06-30' cast as hat:date2003}</yr> }" produced a correct
+	// xs:date and then rejected it, because matching a schema type asks for
+	// the value's annotation and a bare primitive carries none (qischema040,
+	// qischema040a).
+	if t.stype.SchemaType == "" {
+		return c, nil
+	}
+	if t.stype.SchemaValueValid != nil {
+		// The cast result's own lexical form is what the facets are checked
+		// against: c is already in the target's primitive, so for every type
+		// whose canonical form fn:string writes the two agree.
+		if verr := t.stype.SchemaValueValid(c.String()); verr != nil {
+			return nil, verr
+		}
+	}
+	return c.WithDerived(t.stype.SchemaType), nil
 }
 
 // promotes reports whether the conversion rules promote from to to.
@@ -370,6 +419,18 @@ func promotes(from, to xdm.TypeCode) bool {
 func (t *sequenceType) namespaceSensitive() bool {
 	if t.stype.AtomicType == xdm.TypeQName {
 		return true
+	}
+	// A pure union is namespace-sensitive when any member is, because the
+	// cast to it tries the members in order and reaching the QName one would
+	// need exactly the prefix bindings §3.1.5 says are not available. The
+	// union carries no atomic code of its own, so the test above cannot see
+	// it. FunctionCall-041 declares "as lu:namespaceSensitiveUnionType" over
+	// xs:date, xs:QName and a numeric union, returns xs:untypedAtomic
+	// ('xsi:type'), and requires XPTY0117 rather than an ordinary mismatch.
+	for _, m := range t.stype.SchemaUnionMembers {
+		if m == xdm.TypeQName {
+			return true
+		}
 	}
 	return t.stype.FacetName == "NOTATION"
 }

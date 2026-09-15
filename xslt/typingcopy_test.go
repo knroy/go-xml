@@ -273,12 +273,12 @@ func TestSnapshotPreservesResolvedTyping(t *testing.T) {
 // attribute node on its own rather than as part of an element.
 //
 // It asserts on the copied ITEM rather than on a transform's output, because
-// putting a parentless attribute into a result tree goes through
-// xdmbuild.Builder.AddAttributeTyped, whose signature carries a type
-// annotation STRING and nothing else. Everything but the name is dropped
-// there, on every path, for every field including UnionMember -- a separate
-// and pre-existing narrowing of the builder API, not of this copy site. The
-// copy itself is what this test is about.
+// putting a parentless attribute into a result tree is a separate step from
+// the copy: it goes through the builder's attribute entry point, which is
+// pinned by the tests in typed_attr_output_test.go. (Until audit finding 24
+// that entry point took a type annotation STRING and dropped everything but
+// the name, so the distinction was not observable here either way; it now
+// takes the resolved xdm.Typing.) The copy itself is what this test is about.
 func TestCopyItemAttributePreservesResolvedTyping(t *testing.T) {
 	src := &xdm.Node{Kind: xdm.KindAttribute,
 		Name: xdm.QName{Local: "a"}, Value: "10 20"}

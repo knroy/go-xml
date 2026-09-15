@@ -43,7 +43,7 @@ func TestContextMaxDepthBoundaries(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, err := CompileXQuery(src, nil, XPath31)
+			c, err := CompileWith(src, CompileOptions{Version: XPath31, XQuery: true})
 			if err != nil {
 				t.Fatalf("compiling: %v", err)
 			}

@@ -35,8 +35,24 @@ type TransformOptions struct {
 	// of whatever the resolver will open. See xpath.TextResolver.
 	Texts xpath.TextResolver
 
+	// Environment answers fn:environment-variable and
+	// fn:available-environment-variables. Nil withholds the process
+	// environment from both, which is the default: a stylesheet that can
+	// read the environment can read whatever credentials the process was
+	// started with, and no resolver root bounds that. Setting Documents or
+	// Texts does not set this. See xpath.EnvironmentResolver, and
+	// xpath.OSEnvironment for the widest grant.
+	Environment xpath.EnvironmentResolver
+
 	// MaxDepth bounds template recursion. Zero means DefaultMaxDepth; a
 	// negative value means no limit.
+	//
+	// "No limit" is not the safe end of the range. Recursion runs on the Go
+	// stack, and exhausting it is a fatal error the runtime does not deliver
+	// as a panic, so recover cannot turn it back into a failed request: the
+	// process dies and every other request in flight dies with it. The bound
+	// is what converts that into an error value. Remove it only for input
+	// you produced yourself.
 	//
 	// The bound catches a stylesheet that recurses without a base case,
 	// which is the common authoring mistake. But it also counts the ordinary
@@ -166,6 +182,39 @@ type TransformOptions struct {
 	// sequence everywhere, and a relative @href on xsl:result-document
 	// resolves against the stylesheet's own location instead.
 	BaseOutputURI string
+
+	// nestedDepth seeds the runtime's recursion depth, so that a transform
+	// started by fn:transform continues its caller's count instead of
+	// starting a fresh one. It is unexported because it is not a caller's
+	// choice: only runNestedTransform sets it, and only to the depth of the
+	// call that reached it.
+	//
+	// Inheriting rather than granting a fresh allowance is a deliberate
+	// policy. XSLT 3.0 section 27.7 does not bound fn:transform nesting, so
+	// what happens here is a resource budget rather than a conformance
+	// question, and the house rule in docs/audits/VERDICTS.md is that a
+	// budget must be monotonic: a nested evaluation may spend the parent's
+	// remaining allowance, never reset it. Without that, MaxDepth bounded
+	// recursion only within one level, and a stylesheet calling fn:transform
+	// on itself exhausted the Go stack -- a runtime fatal, which recover()
+	// cannot catch, so the host process died. See TestSelfCallingTransformIsRefused.
+	nestedDepth int
+
+	// nestedBudget is the caller's evaluation context, whose item and byte
+	// allowances a transform started by fn:transform spends instead of being
+	// granted fresh ones. Unexported for the same reason nestedDepth is: only
+	// runNestedTransform sets it, and only to the context of the call that
+	// reached it.
+	//
+	// It is the same monotonic-budget policy nestedDepth documents, applied to
+	// the other two budgets. newRuntime builds its context with
+	// xpath.NewContext, which mints both counters from scratch, so without this
+	// a stylesheet could build unbounded string content simply by recursing
+	// through fn:transform: each level was handed the full xpath.MaxBytes over
+	// again. See xpath.Context.AdoptBudget for why each counter must travel
+	// with its held flag rather than alone, and
+	// TestNestedTransformInheritsTheByteBudget.
+	nestedBudget *xpath.Context
 }
 
 // Result is the outcome of a transform.
@@ -355,8 +404,10 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// wrapper goes OUTSIDE the stripping one, so that it sees the document
 	// URI of the tree actually delivered to the stylesheet.
 	readDocs := map[string]bool{}
+	writtenDocs := map[string]bool{}
 	if opts.Documents != nil {
-		opts.Documents = &readDocResolver{inner: opts.Documents, read: readDocs}
+		opts.Documents = &readDocResolver{
+			inner: opts.Documents, read: readDocs, written: writtenDocs}
 	}
 
 	rt, err := newRuntime(s, ctx, source, opts)
@@ -364,6 +415,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		return nil, err
 	}
 	rt.readDocs = &readDocs
+	rt.writtenDocs = &writtenDocs
 	// Bind the runtime so key(), current() and xsl:function can reach it.
 	rt.ctx = rt.ctx.WithVar(runtimeVar,
 		xdm.One(&xdm.Opaque{Label: "runtime", Value: rt}))
@@ -374,7 +426,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// clears the current output URI while a global is evaluated.
 	rt = rt.withOutputURI(opts.BaseOutputURI)
 
-	out := newOutputBuilder()
+	out := newOutputBuilder(rt)
 
 	// rawResult carries the initial function's return value, which is a
 	// sequence rather than a tree. It is kept beside the output builder
@@ -1049,7 +1101,22 @@ func (s *Stylesheet) spaceDeclsFor(pkg int) (strip, preserve []xdm.QName) {
 	return ps.strip, ps.preserve
 }
 
-// String renders the result using the stylesheet's output settings.
+// String renders the result using the stylesheet's output settings,
+// DISCARDING any serialization error and returning "" in its place.
+//
+// Serialization errors are not incidental: checkOutputSettings raises them for
+// an encoding this serialiser cannot produce, for a sequence holding a map or
+// a function, and -- the reason this warning is here -- for a doctype-system
+// or media-type value that cannot be written safely. Those last two are
+// reachable from a SOURCE DOCUMENT through an attribute value template, so a
+// caller serialising untrusted input through this method gets "" where it
+// expected a document and no indication that anything was refused.
+//
+// String cannot report the error and stay a fmt.Stringer, and the error is
+// not raised any earlier: XSLT 3.0 section 2.10 places a serialization error
+// on the principal result "after the transformation has finished", so
+// Transform returns nil for a stylesheet whose output settings are invalid.
+// Use Serialize for anything whose failure you need to see.
 func (r *Result) String() string {
 	var sb strings.Builder
 	_ = r.Serialize(&sb)
@@ -1064,10 +1131,34 @@ func (r *Result) Serialize(w io.Writer) error {
 	return serialize(w, r.Nodes, r.output, r.charMap)
 }
 
+// BuildsTree reports whether this result is normalised into a final result
+// tree, which is XSLT 3.0 section 26.1's build-tree attribute applied to the
+// principal result: "The build-tree attribute controls whether the raw
+// principal result or secondary result is converted to a final result tree."
+//
+// It is exported because Tree returns nil when the answer is no, and a caller
+// needs a way to tell that apart from a transform that produced nothing.
+func (r *Result) BuildsTree() bool {
+	return r.output.buildsTree()
+}
+
 // Tree returns the result as a document node, for callers that want to keep
 // navigating it rather than serialise it — which is what a Schematron driver
 // does with an SVRL report.
 func (r *Result) Tree() *xdm.Node {
+	// Section 24.1 defines what build-tree="yes" means: "a document node is
+	// created, and the result of evaluating the sequence constructor is used
+	// to construct the content of the document ... The tree rooted at this
+	// document node forms the final result tree." With build-tree="no" that
+	// document node is not created, so there is no tree to return and
+	// manufacturing one anyway would be the drift: it would hand back the
+	// very node the stylesheet asked not to have built. Section 26.1 applies
+	// the attribute to "the raw principal result or secondary result", so
+	// the principal result is not exempt. Callers distinguish this nil from
+	// an empty result with BuildsTree.
+	if !r.output.buildsTree() {
+		return nil
+	}
 	tree := xdm.NewTree()
 	// The document node is manufactured here, so it is the only place the
 	// result's own URI can be put on it. Without this base-uri(/) answered
@@ -1107,6 +1198,19 @@ func (r *Result) Tree() *xdm.Node {
 	}
 	tree.Finalize()
 	return tree.Root
+}
+
+// stripInputAnnotations applies input-type-annotations="strip" to a source
+// tree loaded at run time, and returns root unchanged when the stylesheet did
+// not ask for stripping.
+//
+// The principal input is stripped in Transform; this is the same rule for the
+// other trees 4.4 lists, which xsl:source-document reads.
+func (s *Stylesheet) stripInputAnnotations(root *xdm.Node) *xdm.Node {
+	if root == nil || root.Kind != xdm.KindDocument || !s.stripTypeAnnotations {
+		return root
+	}
+	return s.stripTypeAnnotationsFrom(root)
 }
 
 // stripTypeAnnotations returns a copy of the tree with every type annotation
@@ -1200,9 +1304,20 @@ func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
 //
 // Indentation and the other settings are deliberately left at their defaults
 // rather than inherited, for the same reason.
+//
+// The version is the one exception, and it is not a rendering choice: XML 1.1
+// [2] Char admits the C0 controls and 1.0 does not, so the version decides
+// whether a character can be written down at all rather than how it looks. A
+// tree holding &#x1; is a legal 1.1 document and has no 1.0 spelling, so
+// serialising it as 1.0 does not render it differently -- it fails, which is
+// SERE0006 and correct. Forcing 1.0 here made the harness compare an assertion
+// against the truncated prefix of an error it had discarded (xml-version-002
+// and -020 stopped at "<out>"), reporting a defect in the transform where the
+// only defect was in how the comparison asked for the text.
 func SerializeAsXML(r *Result) string {
 	var sb strings.Builder
-	_ = serialize(&sb, r.Nodes, OutputSettings{Method: "xml"}, r.charMap)
+	_ = serialize(&sb, r.Nodes,
+		OutputSettings{Method: "xml", Version: r.output.Version}, r.charMap)
 	return sb.String()
 }
 
