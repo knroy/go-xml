@@ -293,6 +293,7 @@ what the suites *measured*, not what the library does.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| A growth-rate test read CI contention as a quadratic regression | `elementNamesOverlap` measured 10.9x on a shared macOS runner under `-race` against an 8x bound, and 3.4-4.4x locally; the larger closure falls out of cache, not into a nested loop. Best of five trials now, since contention only lengthens a timing. |  |
 | `cmd/go-xml`'s `cliResolve` split its base with `strings.LastIndexByte(dir, '/')`, so five RNG resolver cases failed on Windows | The base is an OS path: `C:\...\001\main.rng` has no forward slash, so the directory came out empty and `"top.rng"` resolved outside the root. It now spells the base as a `file:` URI and joins with `url.ResolveReference`, which is the branch of `relaxng.joinRef` the CLI really takes. |  |
 | The QT3 and XSLTS runners built every base URI as `"file://" + ToSlash(path)`, so a Windows lane would mis-resolve every case | On Windows the path has no leading slash, making the drive the URI authority; the static base URI, the entity URI and the test-set URI now go through `internal/fileuri`, as do the two `TrimPrefix` inverses that unbuilt them. |  |
 | Four refusal tests spelled their hostile `file:` URI by concatenation, so on Windows each was refused for the wrong reason | `"file://evil.example.com" + path` named the host `evil.example.comC:`, and `"file://" + path` does not parse at all. `fileuri.OnHost` and `fileuri.Of` build both shapes; the vectors now reach the guards they name. |  |
