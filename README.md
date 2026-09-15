@@ -1683,19 +1683,11 @@ modes it catches are the ones no suite covers.
 
 ## Acknowledgements
 
-[Martin Honnen](https://github.com/martin-honnen) has reported most of the
-user-facing XSLT defects this project has fixed, each with a reduced test case
-and a comparison against Saxon's behaviour: `xsl:result-document` with no
-`href`, `fn:transform`'s `initial-function` and `post-process` options,
-`fn:current-output-uri`, and the `xs:untypedAtomic` function-conversion rule
-that `format-dateTime` exposed.
-
-Two of those reports did more than describe a symptom. The `fn:transform` one
-worked out that the error came from a second transformation, running inside the
-first, complaining about a stylesheet neither the message nor the stack named —
-without that the bug was close to unfindable. The `format-dateTime` one looked
-like a single function and turned out to be seventeen, none of which any test in
-the W3C suites reaches.
+[Martin Honnen](https://github.com/martin-honnen) has found most of the
+user-facing XSLT bugs this project has fixed, and found them the hard way: a
+reduced test case, the same stylesheet run through Saxon for comparison, and
+often the diagnosis as well. More than one of them was a defect the W3C suites
+do not reach at all, which is the kind only a real user hits.
 
 He also maintains the playground under [Live test](#live-test).
 
