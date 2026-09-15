@@ -454,11 +454,28 @@ work at all.
 `checkArgCardinality` already consults it at call binding — but only for
 *cardinality*. Nothing applies the conversion from the declared type, so each
 function that needs it implements the rule in its own body. There are around
-forty-five such sites. `format-dateTime`, `format-date`, `format-time` and the
-duration component accessors were simply missing theirs — the XPTY0004 bug
-reported against v1.3.0 and fixed by giving those four sites the cast — and the
-next function added with a castable declared type can be missing it the same
-way.
+forty-five such sites, and the next function added with a castable declared
+type can get its copy wrong the same way the known ones did.
+
+A sweep of all 80 (function, parameter) pairs whose declared type is castable
+found 17 defective rows, in three classes, all since fixed; the sweep is kept
+as `xpath/untyped_conversion_sweep_test.go`, which pins every one of the 80.
+
+  - **No cast at all** (12 rows): `format-dateTime`, `format-date`,
+    `format-time` at both arities and the six duration component accessors
+    refused an untyped argument outright. This is the `XPTY0004` bug reported
+    against v1.3.0.
+  - **The cast reached, with the wrong code** (4 rows): `fn:error/1,2,3`
+    parameter 1 and `fn:function-lookup/2` parameter 1 declare `xs:QName`,
+    which is namespace-sensitive. §3.1.5.2 gives that case `XPTY0117` — from
+    XPath 3.0; 2.0 has no such code — and all four reported `XPTY0004`.
+    `argQName` could not have decided this: it had no `Context`, so it could
+    not see the version, which is why it got the code wrong rather than merely
+    forgetting the rule.
+  - **A cast to the wrong target** (1 row): `fn:function-lookup/2` parameter 2
+    declares `xs:integer`, but `$arity` was read through `argNumber`, which
+    casts an untyped value to `xs:double` and then refused it for not being an
+    integer. The conversion happened; the target type was wrong.
 
 Applying the conversion centrally from the declared types was considered and
 **rejected on evidence**, not deferred for effort. The declared type is not a
@@ -482,9 +499,13 @@ is a new field and a migration across 188 of the 255 manifest entries, and a
 half-done migration leaving two conversion paths that can disagree would be
 worse than the per-function duplication it replaces.
 
-Nothing in the suites scores this: QT3 has no untyped-argument case for any of
-the four functions that were broken, which is why the gap survived to be
-reported against a release.
+Nothing in the suites scores this, which is why the gap survived to be reported
+against a release and why all three classes above were found by sweeping the
+manifest rather than by a red lane. QT3 has no untyped-argument case for any of
+the twelve functions that never cast. It does carry `XPTY0117` cases —
+`FunctionCall-016` through `-019` in `prod/FunctionCall.xml` — but every one of
+them depends on the `schemaValidation` feature and is therefore skipped, so the
+four wrong-code rows were unscored too; fixing them moved no lane.
 
 One inconsistency is left standing deliberately. `dateAccessorArg`, the
 component accessors' own copy of the rule, rewraps a failed cast as
