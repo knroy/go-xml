@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/knroy/go-xml/internal/fileuri"
+
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -238,7 +240,7 @@ func TestResolverContainmentAttacks(t *testing.T) {
 		{"repeated traversal", "../../etc/hosts"},
 		{"an absolute path outside the root", filepath.Join(outside, "secret.xml")},
 		{"an absolute system path", "/etc/hosts"},
-		{"a file: URI is still a path", "file://" + filepath.Join(outside, "secret.xml")},
+		{"a file: URI is still a path", fileuri.Of(filepath.Join(outside, "secret.xml"))},
 		{"traversal disguised by a same-directory prefix", "./../" +
 			filepath.Base(outside) + "/secret.xml"},
 		{"a non-file scheme is refused before touching the disk", "http://example.com/x.xml"},

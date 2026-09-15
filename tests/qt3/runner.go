@@ -16,6 +16,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/knroy/go-xml/internal/fileuri"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 	"github.com/knroy/go-xml/xquery"
@@ -790,7 +791,11 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// comparing it with static-base-uri() gave () rather than true. A case
 	// that wants no base URI says so with "#UNDEFINED" below.
 	if abs, err := filepath.Abs(filepath.Join(r.Root, filepath.FromSlash(ts.Dir))); err == nil {
-		ctx.StaticBaseURI = "file://" + filepath.ToSlash(abs) + "/"
+		// fileuri.Dir, not "file://" + ToSlash(abs) + "/": a Windows absolute
+		// path has no leading slash, so two slashes made the drive the URI
+		// AUTHORITY and every relative reference in the test set resolved
+		// against a base with the drive letter missing.
+		ctx.StaticBaseURI = fileuri.Dir(abs)
 	}
 	// The environment may declare the base URI of the expression itself,
 	// which is distinct from the base URI of any document it is applied to.
@@ -1953,7 +1958,7 @@ func (t suiteTextResolver) ResolveText(uri, base, encoding string) (string, erro
 	// cannot reach the rest of the filesystem by spelling its fixture as a
 	// file: URI.
 	if strings.HasPrefix(full, "file://") {
-		cand := unescapePath(filepath.FromSlash(strings.TrimPrefix(full, "file://")))
+		cand := unescapePath(fileuri.ToPath(full))
 		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
 			return t.read(cand, uri, encoding)
 		}
@@ -2018,7 +2023,10 @@ func (e suiteEntityResolver) ResolveEntity(systemID, publicID, base string) (io.
 		return nil, "", fmt.Errorf("external entity %q is not relative to the suite", systemID)
 	}
 	full := resolveAgainst(base, systemID)
-	path := filepath.FromSlash(strings.TrimPrefix(full, "file://"))
+	// fileuri.ToPath, not a textual TrimPrefix: the three-slash form leaves
+	// "/C:/dir/x.xml", which no filesystem call accepts, and an escaped
+	// space stays "%20".
+	path := fileuri.ToPath(full)
 	// read() applies the containment check and returns the decoded text; the
 	// entity's own encoding declaration is not consulted, which is fine for
 	// the suite's fixtures because they are all UTF-8.
@@ -2030,7 +2038,7 @@ func (e suiteEntityResolver) ResolveEntity(systemID, publicID, base string) (io.
 	if err != nil {
 		return nil, "", err
 	}
-	return io.NopCloser(strings.NewReader(s)), "file://" + filepath.ToSlash(abs), nil
+	return io.NopCloser(strings.NewReader(s)), fileuri.Of(abs), nil
 }
 
 // read loads one file, refusing any path that escapes the checkout.
@@ -2673,7 +2681,7 @@ func (r *Runner) testSetURI(ts *TestSet) string {
 	if err != nil {
 		return ""
 	}
-	return "file://" + filepath.ToSlash(abs)
+	return fileuri.Of(abs)
 }
 
 // Options.BaseURI is deliberately NOT supplied here, though §2.1.2 requires a

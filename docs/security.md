@@ -1039,6 +1039,21 @@ The merge is a pure function of two strings, calling nothing from `filepath`
 or `os`, so its Windows behaviour is not a platform behaviour: the table test
 in `xdm/basereuri_test.go` feeds it the CI spelling literally and asserts the
 answer on every platform.
+The same concatenation appeared on the *testing* side of the authority check,
+and there it cost assurance rather than availability. Four tests that assert a
+foreign host or an outside path is refused built their hostile URI by hand, so
+on Windows the vector each one names was not the vector the resolver saw:
+`"file://evil.example.com" + path` fuses the drive onto the authority and names
+the host `evil.example.comC:`, and `"file://" + path` does not parse at all —
+`url.Parse` reads the backslash run after the host as a port, so the scheme and
+authority guards have nothing to inspect and any refusal observed comes from a
+later check. Every one of them still refused, which is why this was invisible;
+what they stopped doing was *proving the guard they name*. They now build both
+shapes through `internal/fileuri` — `OnHost` for an authority-carrying URI,
+`Of` for a local one — and the xsd case is the one that matters most, because
+it is the only one whose path also exists locally: with the foreign-host guard
+removed it reads the file and returns no error, which is precisely the silent
+same-named-local-file read the guard exists to prevent.
 
 ### A content model cannot make the matcher allocate without a ceiling
 

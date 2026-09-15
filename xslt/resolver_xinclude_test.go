@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/knroy/go-xml/internal/fileuri"
+
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -35,7 +37,10 @@ func TestResolveIncludeRefusesPathsOutsideRoots(t *testing.T) {
 
 	for _, href := range []string{
 		secret,
-		"file://" + secret,
+		// A well-formed file: URI, built by fileuri.Of. "file://" + secret is
+		// unparseable on Windows -- the backslashes read as a port -- so the
+		// refusal would not be the containment check this test names.
+		fileuri.Of(secret),
 		"../" + filepath.Base(outside) + "/secret.txt",
 		"./../../" + filepath.Base(outside) + "/secret.txt",
 		"/etc/passwd",

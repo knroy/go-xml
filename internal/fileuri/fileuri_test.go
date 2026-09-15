@@ -191,3 +191,101 @@ func TestOfConvertsBackslashesOnEveryPlatform(t *testing.T) {
 			"/dir/sub/s.xsl with the backslashes converted", in, got, u.Path)
 	}
 }
+
+// TestOnHostKeepsHostAndPathSeparate is the assertion the four hostile-href
+// tests were making by hand and getting wrong on Windows.
+//
+// A test that asserts a foreign host is refused has to actually NAME that
+// host. Concatenating a Windows path onto "file://evil.example.com" fuses the
+// drive onto the authority, so the URI names "evil.example.comC:" -- a host
+// the test never wrote, and the assertion on the host name fails.
+func TestOnHostKeepsHostAndPathSeparate(t *testing.T) {
+	cases := []struct{ host, path, want string }{
+		{"evil.example.com", "/tmp/x/s.xsd", "file://evil.example.com/tmp/x/s.xsd"},
+		{"evil.example.com", "C:/Users/r/s.xsd", "file://evil.example.com/C:/Users/r/s.xsd"},
+		{"evil.example.com", `C:\Users\r\s.xsd`, "file://evil.example.com/C:/Users/r/s.xsd"},
+		{"localhost", "C:/Users/r/s.xsd", "file://localhost/C:/Users/r/s.xsd"},
+	}
+	for _, c := range cases {
+		got := OnHost(c.host, c.path)
+		if got != c.want {
+			t.Errorf("OnHost(%q, %q) = %q, want %q", c.host, c.path, got, c.want)
+		}
+		u, err := url.Parse(got)
+		if err != nil {
+			t.Errorf("OnHost(%q, %q) = %q, which does not parse: %v",
+				c.host, c.path, got, err)
+			continue
+		}
+		if u.Host != c.host {
+			t.Errorf("OnHost(%q, %q) = %q, whose host is %q: the path fused "+
+				"onto the authority", c.host, c.path, got, u.Host)
+		}
+	}
+}
+
+// TestOnHostBeatsTheConcatenation states the defect directly, so that going
+// back to the concatenation fails here rather than in Windows CI.
+func TestOnHostBeatsTheConcatenation(t *testing.T) {
+	const host, win = "evil.example.com", "C:/Users/r/s.xsd"
+
+	// The premise: what the hand-written form produces on Windows.
+	fused := "file://" + host + win
+	u, err := url.Parse(fused)
+	if err != nil {
+		t.Fatalf("premise wrong: %q did not parse: %v", fused, err)
+	}
+	if u.Host != "evil.example.comC:" {
+		t.Fatalf("premise wrong: %q parsed with host %q, expected the drive "+
+			"to have fused onto the authority", fused, u.Host)
+	}
+
+	// And what OnHost produces instead.
+	v, err := url.Parse(OnHost(host, win))
+	if err != nil {
+		t.Fatalf("OnHost did not parse: %v", err)
+	}
+	if v.Host != host {
+		t.Errorf("host is %q, want %q", v.Host, host)
+	}
+	if v.Path != "/C:/Users/r/s.xsd" {
+		t.Errorf("path is %q, want /C:/Users/r/s.xsd", v.Path)
+	}
+}
+
+// TestOfIsParseableWhereConcatenationIsNot covers the empty-host form of the
+// same fusion, which is what the three xslt refusal tests were building.
+//
+// "file://" + a Windows path is not merely a URI with the wrong host: with
+// backslashes it is not a URI at all. A resolver that refuses foreign hosts
+// and non-file schemes by inspecting the PARSED url sees nothing to inspect,
+// so the refusal such a test observes comes from some later check.
+func TestOfIsParseableWhereConcatenationIsNot(t *testing.T) {
+	const win = `C:\Users\r\outside\secret.txt`
+
+	if _, err := url.Parse("file://" + win); err == nil {
+		t.Fatalf("premise wrong: %q parsed cleanly; expected url.Parse to "+
+			"reject the backslashes", "file://"+win)
+	}
+	// Forward slashes parse, but make the drive the authority.
+	slashed := "file://" + ToSlash(win)
+	u, err := url.Parse(slashed)
+	if err != nil {
+		t.Fatalf("premise wrong: %q did not parse: %v", slashed, err)
+	}
+	if u.Host != "C:" {
+		t.Fatalf("premise wrong: %q parsed with host %q, want the drive read "+
+			"as the authority", slashed, u.Host)
+	}
+
+	v, err := url.Parse(Of(win))
+	if err != nil {
+		t.Fatalf("Of(%q) = %q does not parse: %v", win, Of(win), err)
+	}
+	if v.Host != "" {
+		t.Errorf("Of(%q) has host %q, want empty", win, v.Host)
+	}
+	if v.Scheme != "file" {
+		t.Errorf("Of(%q) has scheme %q, want file", win, v.Scheme)
+	}
+}

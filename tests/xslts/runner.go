@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/knroy/go-xml/internal/fileuri"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 	"github.com/knroy/go-xml/xsd"
@@ -997,15 +998,12 @@ func firstLine(s string) string {
 // documents the suite parses get one; the resolvers are given paths, because
 // they join with filepath and a URI turns into a directory called "file:".
 func fileURI(path string) string {
-	if path == "" || strings.HasPrefix(path, "file:") {
-		return path
-	}
-	if !filepath.IsAbs(path) {
-		if abs, err := filepath.Abs(path); err == nil {
-			path = abs
-		}
-	}
-	return "file://" + filepath.ToSlash(path)
+	// internal/fileuri does exactly this, and does the two things the
+	// hand-written "file://" + filepath.ToSlash(path) got wrong on Windows:
+	// an absolute path there is C:\dir\s.xsl, which has no leading slash of
+	// its own, so two slashes made the DRIVE the URI authority and every case
+	// in the run resolved against a base naming a file that is not there.
+	return fileuri.Of(path)
 }
 
 // annotate validates a source against the environment's schema so that the

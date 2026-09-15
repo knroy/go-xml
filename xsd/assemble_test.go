@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/knroy/go-xml/internal/fileuri"
+
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -731,9 +733,15 @@ func TestFileResolverRefusesForeignFileHost(t *testing.T) {
 	// The message is asserted, not just err != nil: neither remote path
 	// exists, so "no such file" would satisfy a weaker test with the guard
 	// deleted.
+	// fileuri.OnHost, not "file://evil.example.com" + the path: a Windows
+	// absolute path has no leading slash, so the drive fused onto the
+	// authority and the URI named the host "evil.example.comC:". The refusal
+	// still happened, but on a host this test never wrote -- so the case that
+	// is the whole point here, a foreign host in front of a path that DOES
+	// exist locally, was not being put to the resolver at all.
 	for _, loc := range []string{
 		"file://evil.example.com/etc/x.xsd",
-		"file://evil.example.com" + filepath.ToSlash(schema),
+		fileuri.OnHost("evil.example.com", schema),
 	} {
 		_, _, err := r.Resolve("", loc, "")
 		if err == nil || !strings.Contains(err.Error(), "remote host \"evil.example.com\"") {

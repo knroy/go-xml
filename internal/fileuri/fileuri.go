@@ -121,3 +121,30 @@ func FromSlashedAbs(slashed string) string {
 	u := url.URL{Scheme: "file", Path: slashed}
 	return u.String()
 }
+
+// OnHost spells a filesystem path as a file: URI carrying the given authority.
+//
+// It exists for the tests that assert a foreign host is REFUSED. Of cannot
+// build one: a local file's authority is empty by RFC 8089, which is the whole
+// of what Of spells. Those tests were writing "file://evil.example.com" + path
+// by hand, and on Windows the path has no leading slash of its own, so the
+// drive fused onto the host and the URI named the host "evil.example.comC:".
+// The refusal still happened, but for a host the test never wrote -- so the
+// assertion on the host name failed, and, worse, a test whose subject is the
+// authority check was no longer exercising the authority the vector uses.
+//
+// The same fusion has a nastier form when the host is empty. "file://" + a
+// Windows path yields "file://C:/dir/s.xsl", whose authority is the DRIVE, and
+// `file://C:\dir\s.xsl` does not parse at all -- url.Parse reads the backslash
+// run after the host as a port. A resolver that rejects foreign hosts and
+// non-file schemes by inspecting the parsed URL sees neither in that case,
+// because there is nothing to inspect; any refusal that follows comes from a
+// later check and proves something other than what the test claims.
+func OnHost(host, path string) string {
+	slashed := ToSlash(path)
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed
+	}
+	u := url.URL{Scheme: "file", Host: host, Path: slashed}
+	return u.String()
+}

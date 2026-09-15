@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/internal/fileuri"
 )
 
 // fn:unparsed-text hands a stylesheet the raw bytes of whatever it names, so
@@ -55,7 +57,12 @@ func TestFileResolverRefusesTextOutsideRoots(t *testing.T) {
 	for _, href := range []string{
 		secret,
 		"../" + filepath.Base(outside) + "/secret.txt",
-		"file://" + secret,
+		// fileuri.Of, not "file://" + secret. On Windows the latter is not a
+		// URI at all: url.Parse reads the backslash run after the host as a
+		// port, so resolvePath's scheme and authority guards never see it and
+		// the refusal observed here would come from some later check. The
+		// vector is a well-formed file: URI naming a file outside the roots.
+		fileuri.Of(secret),
 	} {
 		got, err := r.ResolveText(href, base, "")
 		if err == nil {
