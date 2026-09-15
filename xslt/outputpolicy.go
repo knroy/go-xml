@@ -5,6 +5,7 @@ import (
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // outputBuilder is the result-tree builder, which lives in xdmbuild because
@@ -16,9 +17,17 @@ import (
 // already know.
 type outputBuilder = xdmbuild.Builder
 
-// newOutputBuilder returns a builder that reports faults with XSLT's codes.
-func newOutputBuilder() *outputBuilder {
-	return xdmbuild.New(xsltPolicy{})
+// newOutputBuilder returns a builder that reports faults with XSLT's codes,
+// charging the nodes it constructs against rt's result-tree budget.
+//
+// The runtime is threaded in for the budget alone. Every temporary tree a
+// transform builds -- a variable's content, an xsl:try body rolled back, a
+// group's key -- is allocated for real while it is being built, so a bound
+// that saw only the principal result tree would miss a runaway written into a
+// variable. A nil runtime is unbounded, which is what the internal callers
+// that build a throwaway tree outside a transform get.
+func newOutputBuilder(rt *runtime) *outputBuilder {
+	return xdmbuild.New(xsltPolicy{nodes: rt.nodeBudget()})
 }
 
 // newOutputBuilderFor returns a builder configured for one stylesheet.
@@ -28,11 +37,12 @@ func newOutputBuilder() *outputBuilder {
 // what the internal callers that build a throwaway tree pass -- gets the
 // strict policy, because nothing about those trees reaches a caller who could
 // have asked for anything else.
-func newOutputBuilderFor(s *Stylesheet) *outputBuilder {
+func newOutputBuilderFor(rt *runtime, s *Stylesheet) *outputBuilder {
 	if s == nil || !s.compat.DropAttributesOnDocumentNode {
-		return xdmbuild.New(xsltPolicy{})
+		return xdmbuild.New(xsltPolicy{nodes: rt.nodeBudget()})
 	}
-	return xdmbuild.New(xsltPolicy{dropAttrOnDocument: true})
+	return xdmbuild.New(xsltPolicy{
+		dropAttrOnDocument: true, nodes: rt.nodeBudget()})
 }
 
 // xsltPolicy names the structural faults of content construction the way XSLT
@@ -45,6 +55,12 @@ func newOutputBuilderFor(s *Stylesheet) *outputBuilder {
 // executed rather than here — see xsl:element and xsl:copy. A policy that
 // needed to vary would be constructed per builder instead.
 type xsltPolicy struct {
+	// nodes is the evaluation the constructed nodes are charged against, or
+	// nil where no budget is in force. It is the one thing about a policy
+	// that does vary per transform -- the comment above says such a policy is
+	// constructed per builder, and this is that case. See CountNodes.
+	nodes *xpath.Context
+
 	// dropAttrOnDocument discards an attribute or namespace node that
 	// reaches the content of a document node, instead of raising XTDE0420.
 	// Set from Compatibility.DropAttributesOnDocumentNode; off by default,
@@ -116,6 +132,14 @@ func (xsltPolicy) PreserveTypes() bool { return true }
 // " | | " where dropping the empties would give "||".
 func (xsltPolicy) DropEmptyText() bool { return false }
 
+// CountNodes charges constructed nodes against the transform's node budget.
+//
+// The transform is the unit, not the instruction and not the expression: the
+// runaway this bounds is a LOOP, and every narrower boundary is one the loop
+// resets. Two nested xsl:for-each over //i build the square of the input's
+// node count, and no single iteration of either is large. See xpath.MaxNodes.
+func (p xsltPolicy) CountNodes(n int) error { return p.nodes.ChargeNodes(n) }
+
 // Compile-time proof that the alias and the policy still satisfy what the
 // builder asks for. Both are cheap to get wrong silently.
 var (
@@ -128,8 +152,36 @@ var (
 // call sites read as they always did.
 func deepCopy(n *xdm.Node) *xdm.Node { return xdmbuild.DeepCopy(n) }
 
+// countSubtree is xdmbuild.CountSubtree under this package's spelling, beside
+// deepCopy because the two are used together: a caller that copies a subtree
+// itself charges what that copy will cost first. See xsl:copy-of.
+func countSubtree(n *xdm.Node) int { return xdmbuild.CountSubtree(n) }
+
 func resolveAgainst(base, ref string) string { return xdmbuild.ResolveAgainst(base, ref) }
 
 func rebase(n *xdm.Node, parentBase string) { xdmbuild.Rebase(n, parentBase) }
 
 func rebaseDetached(n *xdm.Node, instrBase string) { xdmbuild.RebaseDetached(n, instrBase) }
+
+// nodeBudget returns the context whose result-tree allowance this transform's
+// constructed nodes are charged against.
+//
+// One budget per transform, taken from the runtime's own context, which
+// newRuntime already inherits from an enclosing transform through
+// AdoptBudget -- so a nested fn:transform spends the outer one's remainder
+// rather than being granted MaxNodes over again.
+//
+// globalCtx is not used even for a builder running during global-variable
+// evaluation: the counter is shared through the same pointer either way, and
+// reaching for whichever context is in scope would only make the source of the
+// allowance harder to see.
+//
+// A nil runtime is unbounded. That is not a gap but the same answer
+// newOutputBuilderFor already gives a nil Stylesheet: a builder constructed
+// outside any transform has no transform to charge.
+func (rt *runtime) nodeBudget() *xpath.Context {
+	if rt == nil {
+		return nil
+	}
+	return rt.ctx
+}

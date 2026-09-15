@@ -47,7 +47,7 @@ func assessedAttr() *xdm.Node {
 // TestAppendItemCheckedForwardsResolvedTyping pins onempty.go's re-offer path.
 func TestAppendItemCheckedForwardsResolvedTyping(t *testing.T) {
 	src := assessedAttr()
-	out := newOutputBuilder()
+	out := newOutputBuilder(nil)
 	el := out.StartElement(xdm.QName{Local: "e"})
 	if err := appendItemChecked(el, src); err != nil {
 		t.Fatalf("appendItemChecked failed: %v", err)

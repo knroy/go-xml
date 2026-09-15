@@ -90,6 +90,55 @@ type Builder struct {
 	// aliasing rests on, in the spirit of strings.Builder's copyCheck.
 	textBuf  []byte
 	textNode *xdm.Node
+
+	// refused latches the first budget refusal CountNodes returned, so that
+	// construction stops at the node that crossed the bound rather than
+	// carrying on to the end of the sequence constructor.
+	//
+	// It is latched rather than returned because the constructing calls --
+	// AppendText, AppendValue, StartElement -- return no error, and giving
+	// eighty-seven call sites across two host languages an error to thread
+	// would be a far larger change than the bound is worth. Every one of
+	// those calls is reached from a loop that already checks an error each
+	// iteration (execSequence for XSLT), so Refused() there stops a runaway
+	// within one iteration of the node that crossed it -- which is what
+	// "bounded memory" needs, not what an exact error site would buy.
+	//
+	// The pointer is shared with every sub-builder StartElement makes, so a
+	// refusal inside a deeply nested element is seen by the root: the latch
+	// belongs to the construction, not to one level of it.
+	refused *error
+}
+
+// Refused reports the first budget refusal this construction met, or nil.
+//
+// A host calls it from the loop that drives the sequence constructor, which is
+// where an error can still be returned; see the refused field.
+func (b *Builder) Refused() error {
+	if b == nil || b.refused == nil {
+		return nil
+	}
+	return *b.refused
+}
+
+// countNodes charges n nodes about to be constructed, latching a refusal.
+//
+// It reports whether construction may proceed, so a caller that has something
+// to skip can skip it; callers that simply must not allocate return early on
+// false. Once latched the answer is false for every later call, which is what
+// stops the rest of the sequence constructor rather than only the one node.
+func (b *Builder) countNodes(n int) bool {
+	if b.refused == nil {
+		return true
+	}
+	if *b.refused != nil {
+		return false
+	}
+	if err := b.policy.CountNodes(n); err != nil {
+		*b.refused = err
+		return false
+	}
+	return true
 }
 
 // SetItemSeparator records the item-separator that applies to the tree this
@@ -104,7 +153,7 @@ func New(p Policy) *Builder {
 	if p == nil {
 		panic("xdmbuild.New: nil Policy")
 	}
-	return &Builder{tree: xdm.NewTree(), policy: p}
+	return &Builder{tree: xdm.NewTree(), policy: p, refused: new(error)}
 }
 
 // AppendNode adds a node to the current output position.
@@ -163,7 +212,7 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 		// Copying is only needed when the node is about to be re-parented:
 		// AppendChild rewrites Parent and tree pointers, so adopting a source
 		// node in place would mutate the source document.
-		n = detach(n)
+		n = b.detach(n)
 		Rebase(n, b.open.BaseURI)
 		b.open.AppendChild(n)
 		return
@@ -236,8 +285,37 @@ func RebaseDetached(n *xdm.Node, instrBase string) {
 
 // detach returns a node safe to re-parent: n itself when it is freshly
 // constructed, a deep copy when it belongs to a tree already.
-func detach(n *xdm.Node) *xdm.Node {
+// CountSubtree returns the number of nodes DeepCopy would make for n,
+// counting the attributes and namespaces that travel with each element.
+//
+// A copy is charged for what it builds, not for one node: xsl:copy-of of a
+// large element inside a loop reaches the same runaway as a nested for-each,
+// and charging it a single node would leave that route open.
+//
+// It is exported because a host may copy a node BEFORE handing it to the
+// builder -- xsl:copy-of does, so that it can rebase and strip namespaces on
+// its own copy -- and such a host has to charge what it is about to allocate
+// itself. Keeping the counting rule here is what stops the two charges
+// disagreeing about what a subtree costs.
+func CountSubtree(n *xdm.Node) int {
+	if n == nil {
+		return 0
+	}
+	c := 1 + len(n.Attrs) + len(n.Namespaces)
+	for _, ch := range n.Children {
+		c += CountSubtree(ch)
+	}
+	return c
+}
+
+func (b *Builder) detach(n *xdm.Node) *xdm.Node {
 	if n == nil || (n.Tree() == nil && n.Parent == nil) {
+		return n
+	}
+	// Counted before the copy is made, so a refusal allocates none of it.
+	// The walk is over the SOURCE, which already exists, so it costs a
+	// traversal rather than memory.
+	if !b.countNodes(CountSubtree(n)) {
 		return n
 	}
 	return DeepCopy(n)
@@ -330,6 +408,11 @@ func (b *Builder) AppendText(s string) {
 				return
 			}
 		}
+		// A merge into the run above makes no node and costs nothing; only
+		// this branch, which starts a new one, is a node to charge.
+		if !b.countNodes(1) {
+			return
+		}
 		n := &xdm.Node{Kind: xdm.KindText, Value: s}
 		b.open.AppendChild(n)
 		// Start a run on the new node rather than only on the second piece,
@@ -352,6 +435,9 @@ func (b *Builder) AppendText(s string) {
 	// is three text instructions "returns a sequence of three text nodes".
 	// Merging them here made xsl:perform-sort over such a body see a single
 	// item and sort nothing.
+	if !b.countNodes(1) {
+		return
+	}
 	b.items = append(b.items, &xdm.Node{Kind: xdm.KindText, Value: s})
 }
 
@@ -454,6 +540,9 @@ func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
 		// standalone attribute and requires a prefix to be there, and -55
 		// requires the XML namespace to have got "xml" rather than an
 		// invented one.
+		if !b.countNodes(1) {
+			return b.Refused()
+		}
 		n := &xdm.Node{Kind: xdm.KindAttribute, Name: name, Value: value}
 		n.ApplyTyping(typing)
 		fixupOrphanAttrPrefix(n)
@@ -482,6 +571,9 @@ func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
 			a.ApplyTyping(typing)
 			return nil
 		}
+	}
+	if !b.countNodes(1) {
+		return b.Refused()
 	}
 	attr := &xdm.Node{Kind: xdm.KindAttribute, Name: name, Value: value}
 	attr.ApplyTyping(typing)
@@ -591,6 +683,9 @@ func freshPrefixOn(el *xdm.Node, want string) string {
 // if it were a child would silently vanish from the result.
 func (b *Builder) AddNamespace(prefix, uri string) error {
 	if b.open == nil {
+		if !b.countNodes(1) {
+			return b.Refused()
+		}
 		b.items = append(b.items, &xdm.Node{
 			Kind:  xdm.KindNamespace,
 			Name:  xdm.QName{Local: prefix},
@@ -717,9 +812,17 @@ func (b *Builder) NoteDeclared(prefix, uri string) {
 
 // StartElement opens a new element, returning a builder scoped to it.
 func (b *Builder) StartElement(name xdm.QName) *Builder {
+	// Charged before the node exists, so a refusal costs no allocation. The
+	// element is still constructed when the budget is spent -- the sub-builder
+	// has to be returned for the caller's body to run into, and returning nil
+	// would panic every one of the twenty-three call sites -- but the latch is
+	// set, so the loop driving the construction stops on its next check and
+	// nothing further is appended to it.
+	b.countNodes(1)
 	el := &xdm.Node{Kind: xdm.KindElement, Name: name}
 	b.AppendNode(el)
-	return &Builder{open: el, parent: b, tree: b.tree, policy: b.policy}
+	return &Builder{open: el, parent: b, tree: b.tree, policy: b.policy,
+		refused: b.refused}
 }
 
 // Sequence returns the accumulated items.

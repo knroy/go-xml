@@ -321,6 +321,16 @@ func execSequence(body []Instruction, rt *runtime, out *outputBuilder) error {
 		if err := rt.ctx.Err(); err != nil {
 			return err
 		}
+		// The result-tree budget is reported here rather than where it was
+		// spent, because the constructing calls -- AppendText, StartElement
+		// -- return no error and threading one through all of them would be a
+		// far larger change than the bound is worth. This loop is the one
+		// every sequence constructor runs through, so a refusal latched by
+		// any of them is returned within one instruction of the node that
+		// crossed the bound. See xdmbuild.Builder.Refused and xpath.MaxNodes.
+		if err := out.Refused(); err != nil {
+			return err
+		}
 		// A variable declared mid-sequence is in scope for the instructions
 		// that follow it, so it rebinds the runtime for the rest of the loop
 		// rather than only for its own execution.
@@ -388,7 +398,7 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	// This builder is the one that turns a sequence constructor into the
 	// document node a variable without "as" holds, so it is where
 	// XTDE0420 is decided and where the compatibility switch has to reach.
-	out := newOutputBuilderFor(rt.sheet)
+	out := newOutputBuilderFor(rt, rt.sheet)
 	if err := execSequence(v.Body, sub, out); err != nil {
 		return nil, err
 	}

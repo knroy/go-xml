@@ -909,7 +909,7 @@ func (q *Query) evalBody(body []node, expr *compiledExpr, ctx *xpath.Context,
 	if body == nil {
 		return nil, nil
 	}
-	out := xdmbuild.New(policy{sc: sc})
+	out := xdmbuild.New(policy{sc: sc, xp: ctx})
 	ref := &builderRef{b: out}
 	ec := &evalContext{xp: ctx, sc: sc}
 	for _, n := range body {

@@ -239,7 +239,7 @@ func (i *namespaceInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		uri = stringJoin(seq, " ")
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
@@ -407,7 +407,7 @@ func (i *performSortInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		seq = v
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}

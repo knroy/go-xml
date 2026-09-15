@@ -300,6 +300,29 @@ type Context struct {
 	// hand-built Context gets; NewContext installs one.
 	entities *xdm.EntityBudget
 
+	// nodes counts the nodes constructed into result trees during this
+	// evaluation, bounding the one dimension neither items nor bytes sees.
+	//
+	// A result tree is not an intermediate sequence and not string content, so
+	// it passed both budgets untouched: two nested xsl:for-each over //i is a
+	// three-line stylesheet whose result is the SQUARE of the input's node
+	// count, and 24 kB of input built nine million nodes and allocated 44 GB
+	// before returning. Each loop is individually far under MaxItems, and the
+	// item budget measures sequences rather than tree construction, so nothing
+	// counted the product.
+	//
+	// Like entities and unlike items and bytes, it is NOT reset per expression
+	// by Compiled.Eval. The tree under construction outlives the expression
+	// that contributed to it -- that is what makes it a result tree -- so a
+	// budget an expression could restart by being a new expression would never
+	// see the growth. See MaxNodes.
+	//
+	// A pointer for the same reason the others are: the Context is copied by
+	// value on every scope change, and a plain counter would let each copy
+	// accumulate its own. Nil means unbounded, which is what a hand-built
+	// Context gets; NewContext installs a budget.
+	nodes *int64
+
 	// Now is the value fn:current-dateTime and its siblings return.
 	//
 	// The spec requires these to be stable for the whole of one evaluation:
@@ -380,6 +403,50 @@ const MaxItems = 5_000_000
 // doubling chain is refused while it is still doubling -- the step that would
 // cross the bound never allocates.
 const MaxBytes = 1 << 30
+
+// MaxNodes bounds the number of nodes one evaluation may construct into
+// result trees.
+//
+// MaxItems bounds the items an expression materialises and MaxBytes the string
+// content it builds, and a result tree is neither. It is not an intermediate
+// sequence -- it outlives the expression that contributed to it, which is what
+// makes it a result -- and its size is in nodes rather than characters. So a
+// stylesheet whose result is the CROSS PRODUCT of its input passed both
+// budgets without being charged anything: two nested xsl:for-each over //i, a
+// three-line stylesheet, squares the input's node count. Measured, 811 bytes
+// of input built 10,000 nodes, and 24 kB built 9,000,000 nodes and allocated
+// 44 GB over 49 seconds before returning a result. Nothing refused it, because
+// each loop is individually a few thousand items and the limit that could have
+// seen the product does not measure trees.
+//
+// This memory differs from the other two in being RETAINED rather than
+// transient: the tree is the caller's result and is live until the caller
+// discards it, so no amount of garbage collection reclaims it while it is
+// being built. That is what the bound is drawn from. A constructed node costs
+// 672 bytes of live heap, measured by building trees of 640,000 and 2,560,000
+// nodes and reading HeapAlloc across a forced collection -- the two agreed to
+// the byte -- so two million nodes caps a result tree near 1.3 GB.
+//
+// Setting it from a margin over legitimate work instead is the instructive
+// failure. Fifty million is a much larger multiple of anything real, and it
+// let the measured case allocate 128 GB over seven minutes before refusing,
+// which is not a memory bound at all; ten million still reached 6.7 GB
+// retained. The bound has to come from the memory it caps.
+//
+// It is nonetheless far above real work, which is the constraint that matters
+// on the other side. Instrumenting this charge point and running the suites
+// and the real-world corpora, the largest legitimate result tree was 274,719
+// nodes, in the XSLT suites; the XSpec corpus peaked at 52,607, the XQuery QT3
+// lane at 35,328, and the DocBook xslTNG corpus at 35,104 across 577 real
+// documents through a large real stylesheet. Two million is seven times the
+// largest of those and thirty-eight times the largest real-world one. A false
+// rejection is a conformance bug, and refusing legitimate work would be worse
+// than the runaway this guards, so the margin is deliberate.
+//
+// The charge is cumulative over the whole evaluation, not per instruction or
+// per expression, and is never reset -- entities is the precedent. A budget an
+// expression could restart by being a new expression would never see a loop.
+const MaxNodes = 2_000_000
 
 // DocumentResolver loads a document by URI for fn:doc and fn:document.
 type DocumentResolver interface {
@@ -579,6 +646,7 @@ func NewContext(item xdm.Item, funcs FunctionLibrary) *Context {
 		// budget an expression can restart by being a new expression is not
 		// a budget. See Context.entities.
 		entities: xdm.NewEntityBudget(),
+		nodes:    new(int64),
 	}
 	if item == nil {
 		c.Position, c.Size = 0, 0
@@ -860,6 +928,43 @@ func (c *Context) refundBytes(n int) {
 // reaches none of the functions here that charge as they grow.
 func (c *Context) ChargeBytes(n int) error { return c.countBytes(n) }
 
+// countNodes charges n constructed result-tree nodes against the evaluation
+// budget.
+//
+// The builder calls it as it constructs, so a runaway is stopped while it is
+// running rather than after it has already allocated -- which is the whole
+// point here, the unbounded case having allocated 44 GB before it returned. A
+// Context with no budget -- one assembled by hand rather than through
+// NewContext -- is unbounded, which keeps the type usable as a plain value.
+func (c *Context) countNodes(n int) error {
+	if c == nil || c.nodes == nil || n <= 0 {
+		return nil
+	}
+	if atomic.AddInt64(c.nodes, int64(n)) > MaxNodes {
+		// XPDY0130 again, and the wording says nodes so that the three
+		// refusals are not confused with one another. XPath 3.1 §2.3.1
+		// sanctions exactly this: "limitations may exist on the maximum
+		// numbers or sizes of various objects... An error must be raised if
+		// such a limitation is exceeded [err:XPDY0130]". The sentinel is
+		// added alongside so a caller can tell a refusal from a fault. See
+		// xdm.ErrResourceLimit.
+		return fmt.Errorf(
+			"XPDY0130: evaluation constructed more than %d result-tree "+
+				"nodes; the transformation is building a tree too large to "+
+				"hold: %w", MaxNodes, xdm.ErrResourceLimit)
+	}
+	return nil
+}
+
+// ChargeNodes charges n constructed result-tree nodes against the evaluation
+// budget, reporting XPDY0130 when the budget is exhausted.
+//
+// It is exported because the construction happens in xdmbuild, which names
+// neither host language and imports neither this package nor any other beyond
+// xdm. A host passes the charge in through xdmbuild.Policy instead, which is
+// already the seam for everything the builder cannot know by itself.
+func (c *Context) ChargeNodes(n int) error { return c.countNodes(n) }
+
 // stringResult returns one xs:string after charging the bytes it took to build
 // it, and is how a built-in that materialises a NEW string returns it.
 //
@@ -958,6 +1063,13 @@ func (c *Context) AdoptBudget(src *Context) *Context {
 	// arriving one level up.
 	if src.entities != nil {
 		n.entities = src.entities
+	}
+	// The result-tree allowance inherits on the same house rule, and for the
+	// sharper reason: fn:transform's nested transformation builds a whole
+	// result tree of its own, so a nested transform granted a fresh ceiling
+	// could build MaxNodes again at every level of the nest.
+	if src.nodes != nil {
+		n.nodes = src.nodes
 	}
 	return &n
 }

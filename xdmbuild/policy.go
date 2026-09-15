@@ -158,4 +158,19 @@ type Policy interface {
 	// So this is a real difference in the languages rather than a gap, which
 	// is why it is asked rather than decided in the builder.
 	DropEmptyText() bool
+
+	// CountNodes charges n newly constructed nodes against whatever budget
+	// the host is measuring result-tree size against, returning an error to
+	// refuse the construction.
+	//
+	// It is asked rather than decided here for the same reason the faults
+	// are: the builder knows how many nodes it is about to make, and nothing
+	// else does, but what a budget IS belongs to the host. This package
+	// imports nothing but xdm precisely so that it names neither language,
+	// and a counter reached through the Policy keeps it that way.
+	//
+	// Returning nil always is the unbounded behaviour, which is what a host
+	// with no budget -- and every existing test policy -- wants. The charge
+	// is made BEFORE the node is allocated, so a refusal costs nothing.
+	CountNodes(n int) error
 }

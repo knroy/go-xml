@@ -562,7 +562,7 @@ func runTemplate(rt *runtime, t *Template,
 	// to the required type, and a value that will not convert is an error.
 	// The body builds into its own builder so that the conversion sees the
 	// whole result rather than each instruction's contribution.
-	tmp := newOutputBuilder()
+	tmp := newOutputBuilder(rt)
 	if err := execSequence(t.Body, sub, tmp); err != nil {
 		return err
 	}
@@ -759,7 +759,7 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	// function's body is evaluated.
 	sub.ctx = sub.ctx.WithVar(outputURIVar, xdm.Empty())
 
-	out := newOutputBuilder()
+	out := newOutputBuilder(rt)
 	if err := execSequence(f.body, sub, out); err != nil {
 		return nil, err
 	}
@@ -1009,7 +1009,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		// children flatten into the parent either way, but a function
 		// declared as="document-node()" gets its result rejected — which is
 		// exactly what merge-096 does.
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := builtInDescend(rt, node, mode, params, tunnels, sub, false); err != nil {
 			return err
 		}

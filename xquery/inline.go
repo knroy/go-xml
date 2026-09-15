@@ -215,7 +215,7 @@ func (n *inlineFunc) evalBody(ctx *evalContext) (xdm.Sequence, error) {
 	if n.body == nil {
 		return nil, nil
 	}
-	out := xdmbuild.New(policy{sc: ctx.sc})
+	out := xdmbuild.New(policy{sc: ctx.sc, xp: ctx.xp})
 	ref := &builderRef{b: out}
 	for _, item := range n.body {
 		if err := item.eval(ref, ctx); err != nil {

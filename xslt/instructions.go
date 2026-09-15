@@ -59,7 +59,7 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		seq = v
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
@@ -304,6 +304,15 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 					"XTTE0950: xsl:copy-of with copy-namespaces=\"no\" and "+
 						"validation=\"preserve\" cannot copy %s, whose "+
 						"content is namespace-sensitive", describeNode(v))
+			}
+			// Charged before the copy is made, so a refusal allocates
+			// none of it. xsl:copy-of copies here rather than letting the
+			// builder do it -- it has to rebase and strip namespaces on its
+			// own copy first -- so the builder's charge never sees this
+			// node, and copying a large subtree once per node of a large
+			// document would otherwise build the cross product uncharged.
+			if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
+				return err
 			}
 			c := deepCopy(v)
 			if i.copyAccumulators {
@@ -753,7 +762,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// into a result tree — a document node's children are flattened into
 		// the parent either way — but it is exactly what a variable declared
 		// as="document-node()*" is asking about.
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt, sub); err != nil {
 			return err
 		}
@@ -1160,7 +1169,7 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 			return err
 		}
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
@@ -1249,7 +1258,7 @@ func (i *commentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		text = constructedText(seq, " ")
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
@@ -1311,7 +1320,7 @@ func (i *piInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		text = constructedText(seq, " ")
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
@@ -1460,7 +1469,7 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 			value, text = seq, stringJoin(seq, " ")
 		}
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			if !i.xslt30 {
 				return err
@@ -2062,7 +2071,7 @@ type documentInstr struct {
 }
 
 func (i *documentInstr) Execute(rt *runtime, out *outputBuilder) error {
-	sub := newOutputBuilder()
+	sub := newOutputBuilder(rt)
 	if err := execSequence(i.body, rt, sub); err != nil {
 		return err
 	}

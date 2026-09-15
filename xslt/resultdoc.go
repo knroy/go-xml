@@ -173,7 +173,7 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// The body builds into its own builder, so nothing it produces reaches
 	// the principal result. Passing `out` here is exactly the merging bug
 	// this instruction used to be rejected to avoid.
-	sub := newOutputBuilder()
+	sub := newOutputBuilder(rt)
 	// The separator this document's output definition asks for is part of
 	// sequence normalisation, so the builder applies it as the tree is
 	// formed rather than the serialiser painting it on afterwards. The

@@ -426,7 +426,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// clears the current output URI while a global is evaluated.
 	rt = rt.withOutputURI(opts.BaseOutputURI)
 
-	out := newOutputBuilder()
+	out := newOutputBuilder(rt)
 
 	// rawResult carries the initial function's return value, which is a
 	// sequence rather than a tree. It is kept beside the output builder

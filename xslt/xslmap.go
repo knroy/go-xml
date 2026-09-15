@@ -32,7 +32,7 @@ type mapInstr struct {
 // and the merge is done here rather than by calling that function because the
 // error code differs: a duplicate is XTDE3365 in this context.
 func (i *mapInstr) Execute(rt *runtime, out *outputBuilder) error {
-	sub := newOutputBuilder()
+	sub := newOutputBuilder(rt)
 	if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
 		return err
 	}
@@ -125,7 +125,7 @@ func (i *mapEntryInstr) Execute(rt *runtime, out *outputBuilder) error {
 			return err
 		}
 	} else {
-		sub := newOutputBuilder()
+		sub := newOutputBuilder(rt)
 		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
 			return err
 		}

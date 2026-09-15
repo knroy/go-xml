@@ -57,3 +57,4 @@ func (assertPolicy) InheritNamespaces() bool  { return true }
 func (assertPolicy) PreserveNamespaces() bool { return true }
 func (assertPolicy) PreserveTypes() bool      { return true }
 func (assertPolicy) DropEmptyText() bool      { return false }
+func (assertPolicy) CountNodes(int) error     { return nil }

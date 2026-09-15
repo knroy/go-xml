@@ -318,7 +318,7 @@ func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := xdmbuild.New(policy{sc: q.sc})
+	out := xdmbuild.New(policy{sc: q.sc, xp: ctx})
 	ref := &builderRef{b: out}
 	// The item budget is armed here, for the query body, because this is the
 	// boundary that matches the one xpath.Compiled.Eval draws for an

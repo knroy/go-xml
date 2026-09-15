@@ -1178,7 +1178,7 @@ func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*x
 	// expression form, so the same key definition reads the same way.
 	sub := rt.temporaryOutput()
 	sub.ctx = ctx.WithFocus(n, 1, 1)
-	out := newOutputBuilder()
+	out := newOutputBuilder(rt)
 	if err := execSequence(def.body, sub, out); err != nil {
 		return nil, err
 	}

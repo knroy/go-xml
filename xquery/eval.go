@@ -78,7 +78,12 @@ type builderRef struct{ b *xdmbuild.Builder }
 // and this is XQuery's half of that. The behaviour is the duplicate
 // attribute: XSLT discards the earlier one silently, and XQuery raises
 // XQDY0025, so this returns an error where the XSLT policy returns nil.
-type policy struct{ sc *staticContext }
+type policy struct {
+	sc *staticContext
+	// xp is the evaluation the constructed nodes are charged against, or nil
+	// where no budget is in force. See CountNodes.
+	xp *xpath.Context
+}
 
 func (p policy) Err(f xdmbuild.Fault, detail string) error {
 	switch f {
@@ -126,6 +131,14 @@ func (p policy) PreserveTypes() bool {
 // which would turn the empty string literals into something XQuery does not
 // have. Inside a code block they are left alone.
 func (policy) DropEmptyText() bool { return true }
+
+// CountNodes charges constructed nodes against the evaluation's node budget.
+//
+// A direct element constructor inside a FLWOR builds a tree whose size is the
+// product of the clauses, which neither the item budget nor the byte budget
+// sees -- the same hole XSLT's nested xsl:for-each fell through. A nil xp is
+// unbounded, which is what a policy built without one gets.
+func (p policy) CountNodes(n int) error { return p.xp.ChargeNodes(n) }
 
 func (n *literalText) eval(out *builderRef, ctx *evalContext) error {
 	out.b.AppendText(n.text)
@@ -191,7 +204,7 @@ func (n *enclosed) sequence(ctx *evalContext) (xdm.Sequence, error) {
 			return v.sequence(ctx)
 		}
 	}
-	inner := xdmbuild.New(policy{sc: ctx.sc})
+	inner := xdmbuild.New(policy{sc: ctx.sc, xp: ctx.xp})
 	ref := &builderRef{b: inner}
 	for _, it := range n.items {
 		if err := it.eval(ref, ctx); err != nil {
@@ -795,7 +808,7 @@ func (a *attribute) eval(out *builderRef, ctx *evalContext) error {
 				// separator on each side and must not be skipped — which is
 				// what ignoring the unrecognised part did, giving "1 2" where
 				// the answer is "1  2".
-				inner := xdmbuild.New(policy{sc: ctx.sc})
+				inner := xdmbuild.New(policy{sc: ctx.sc, xp: ctx.xp})
 				if err := v.eval(&builderRef{b: inner}, ctx); err != nil {
 					return err
 				}
@@ -982,7 +995,7 @@ func (n *textNode) eval(out *builderRef, ctx *evalContext) error {
 }
 
 func (n *document) eval(out *builderRef, ctx *evalContext) error {
-	inner := xdmbuild.New(policy{sc: ctx.sc})
+	inner := xdmbuild.New(policy{sc: ctx.sc, xp: ctx.xp})
 	sub := &builderRef{b: inner}
 	for _, c := range n.content {
 		if err := c.eval(sub, ctx); err != nil {
