@@ -129,9 +129,17 @@ func TestSourceDocumentResolvesAgainstXMLBase(t *testing.T) {
 			</xsl:source-document>
 		</xsl:template>
 	</xsl:transform>`
-	// A file: URI, not a bare path: xml:base is resolved as a URI reference,
-	// and filepath.ToSlash keeps that correct where the separator is "\\".
-	path := "file://" + filepath.ToSlash(filepath.Join(deep, "s.xsl"))
+	// A file: URI, not a bare path: xml:base is resolved as a URI reference.
+	//
+	// Built with fileURIOf rather than "file://" + ToSlash, which is wrong on
+	// Windows: an absolute path there is C:\... with no leading slash, so the
+	// two-slash form yields file://C:/Users/..., and url.Parse reads "C:" as
+	// the *authority*. The drive letter is then gone from u.Path, filepath.Abs
+	// re-anchors the drive-less remainder onto the process's current drive,
+	// and the file is looked for on D: while the resolver root is on C: --
+	// which is exactly how this test failed in CI. fileURIOf writes the
+	// RFC 8089 three-slash form that keeps the drive in the path.
+	path := fileURIOf(filepath.Join(deep, "s.xsl"))
 	r, err := NewFileResolver(root)
 	if err != nil {
 		t.Fatal(err)

@@ -716,11 +716,32 @@ func baseOutputURI(outPath, resultDir string) string {
 // dirURI is fileURI for a directory, which differs only in the trailing
 // slash that makes a relative reference resolve inside it.
 func dirURI(path string) string {
-	u := fileURI(path)
+	if path == "" || strings.HasPrefix(path, "file:") {
+		return dirSlash(fileURI(path))
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	return slashedDirURI(filepath.ToSlash(abs))
+}
+
+// dirSlash appends the single trailing slash that distinguishes a directory
+// URI from a file one, leaving an already-slashed value alone.
+func dirSlash(u string) string {
 	if u != "" && !strings.HasSuffix(u, "/") {
 		u += "/"
 	}
 	return u
+}
+
+// slashedDirURI is dirURI for a path that is already absolute and already
+// slash-separated -- dirURI's rule with filepath.Abs already applied. It is
+// split out for the same reason absPathToFileURI is: Abs is host-relative, so
+// a C:/... or D:/... spelling can only be tested off Windows at the layer
+// below it.
+func slashedDirURI(slashed string) string {
+	return dirSlash(absPathToFileURI(slashed))
 }
 
 // fileURI turns a filesystem path into an absolute file: URI.

@@ -291,7 +291,8 @@ what the suites *measured*, not what the library does.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| A corpus path containing a space mangled `-allow-dir` and matched no files | Both expanded unquoted: the flag truncated at the first space, the glob matched nothing, and the corpus skipped in silence. `set --` and `find`. | [`8008194`][8008194] |
+| `TestSourceDocumentResolvesAgainstXMLBase` built a base URI as `"file://" + path`, failing on Windows | Two slashes make the drive the URI authority, so `u.Path` loses `C:` and `filepath.Abs` re-anchors it onto the current drive — the file was sought on `D:` while the root was on `C:`. It uses `fileURIOf`, which writes the RFC 8089 three-slash form. |  |
+| The `dirURI` and `baseOutputURI` tests hard-coded `file:///tmp/...`, which is not what Windows returns | `/tmp/results` has no drive, so `filepath.Abs` prepends one and the answer is `file:///D:/tmp/results/`. They now assert the trailing-slash and `-o`-precedence properties against `fileURI` of the same path, with the drive spellings covered host-independently. |  | Both expanded unquoted: the flag truncated at the first space, the glob matched nothing, and the corpus skipped in silence. `set --` and `find`. | [`8008194`][8008194] |
 | The XSLT skip count folded "not implemented" into "out of scope" | Each reason is classed in `deps.go`; the summary line and `docs/stats.md` publish both counts, and an unclassed reason fails a test. | [`1680456`][1680456] |
 | The optimiser timing bound failed on the race lane | `TestOptimizeNotQuadratic` allowed 1.5 s and the race detector took the compile to 1.7 s; the budget is widened sixfold under `-race`, still far below the quadratic figure. | [`d02fc89`][d02fc89] |
 | The W3C suites were cloned unpinned, so a figure could move with no change here | `results.json` records each suite revision, CI clones at that SHA, and a test fails when the two disagree. | [`7f70d40`][7f70d40] |

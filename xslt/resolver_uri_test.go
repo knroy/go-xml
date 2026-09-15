@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -96,5 +97,38 @@ func TestFileURIOfIsThreeSlashed(t *testing.T) {
 	}
 	if got := fileURIToPath(fileURIOf(abs)); got != abs {
 		t.Errorf("round trip: %q -> %q -> %q", abs, fileURIOf(abs), got)
+	}
+}
+
+// TestTwoSlashFileURILosesTheDriveLetter pins why a base URI must be built
+// with fileURIOf rather than by hand.
+//
+// "file://" + "C:/dir/s.xsl" is the natural-looking mistake, and it is silent:
+// url.Parse reads "C:" as the *authority*, so u.Path is "/dir/s.xsl" with the
+// drive gone. A relative href joined against that names a drive-less path,
+// which filepath.Abs then re-anchors onto whatever drive the process happens
+// to be on -- so the file is looked for on D: while the resolver root is on
+// C:, and containment refuses a document that is plainly inside the root.
+// That is how TestSourceDocumentResolvesAgainstXMLBase failed on Windows CI,
+// and this states the cause where it can be checked from any host: neither
+// url.Parse nor fileURIToPath consults the filesystem.
+func TestTwoSlashFileURILosesTheDriveLetter(t *testing.T) {
+	const win = "C:/Users/RUNNER~1/AppData/Local/Temp/001/sub/deep/s.xsl"
+
+	// The mistake: the drive letter does not survive.
+	if got := fileURIToPath("file://" + win); got == filepath.FromSlash(win) {
+		t.Fatalf("the two-slash form unexpectedly kept the drive: %q", got)
+	} else if strings.HasPrefix(got, "C:") {
+		t.Errorf("the two-slash form kept %q; the test below is then pointless", got)
+	}
+
+	// The three-slash form fileURIOf writes keeps the drive, and it round
+	// trips. fileURIOf is not called on this input: it runs filepath.IsAbs,
+	// which is false for a C: path off Windows, so the host's working
+	// directory would be prepended and the drive letter would stop being one.
+	// The spelling it produces for an absolute path is what matters here, and
+	// TestFileURIOfIsThreeSlashed pins that it produces it.
+	if got, want := fileURIToPath("file:///"+win), filepath.FromSlash(win); got != want {
+		t.Errorf("round trip lost the drive: %q -> %q", win, got)
 	}
 }

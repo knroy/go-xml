@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -61,5 +62,42 @@ func TestFileURIIsIdempotent(t *testing.T) {
 	}
 	if got := fileURI(""); got != "" {
 		t.Errorf("fileURI(\"\") = %q, want empty", got)
+	}
+}
+
+// TestDirURISlashRuleOnWindowsShapes exercises the trailing-slash rule against
+// Windows-shaped inputs on any host.
+//
+// dirURI itself cannot be asked this question off Windows: it runs its
+// argument through filepath.Abs, and "C:/x" is not absolute on unix, so the
+// host's working directory is prepended and the drive letter stops being a
+// drive letter. The rule under test is the part *after* Abs -- take an
+// absolute slash-separated path, spell it as a file: URI, ensure exactly one
+// trailing slash -- so that is what is applied here directly, with the
+// drive-letter spellings the CI runner actually produced.
+func TestDirURISlashRuleOnWindowsShapes(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"D:/tmp/results", "file:///D:/tmp/results/"},
+		{"D:/tmp/results/", "file:///D:/tmp/results/"},
+		{"C:/Users/runneradmin/AppData/Local/Temp/001", "file:///C:/Users/runneradmin/AppData/Local/Temp/001/"},
+		{"/tmp/results", "file:///tmp/results/"},
+		{"/tmp/results/", "file:///tmp/results/"},
+	} {
+		got := slashedDirURI(c.in)
+		if got != c.want {
+			t.Errorf("slashedDirURI(%q) = %q, want %q", c.in, got, c.want)
+		}
+		if strings.HasSuffix(got, "//") {
+			t.Errorf("slashedDirURI(%q) doubled the trailing slash: %q", c.in, got)
+		}
+		// The drive letter must survive as part of the path, never as the
+		// authority -- that is the defect file://C:/... would reintroduce.
+		u, err := url.Parse(got)
+		if err != nil {
+			t.Fatalf("slashedDirURI(%q) = %q is not a URI: %v", c.in, got, err)
+		}
+		if u.Host != "" {
+			t.Errorf("slashedDirURI(%q) = %q has authority %q, want empty", c.in, got, u.Host)
+		}
 	}
 }
