@@ -974,6 +974,72 @@ back to a heuristic on a large set would be least exact precisely on the inputs
 constructed to make it so, which is a validator that can be talked out of
 validating.
 
+### A fact fixed by the schema must not be recomputed per value
+
+XSD validation allocated **16 MB per KB of input** against a schema with a long
+restriction chain, which is the shape a real industry vocabulary has: UBL and
+CII derive their types through hundreds of restriction steps. A 500-link chain
+validating a 64 KB document of 8,000 one-byte values allocated **999 MB in
+527 ms**. The amplification is linear in document size and linear again in
+chain length, so a 1 MB invoice batch against that schema would cost about
+16 GB.
+
+No limit fired, and none should have: every value was valid and the work was
+real. **None of it was retained** — live heap was 5 MB before and 5 MB after —
+so this is not a leak and not an exhaustion of the kind `MaxBytes` exists to
+refuse. It is transient churn, and transient churn is still fatal to a
+container: a gigabyte allocated in half a second is peak RSS, because the
+collector cannot keep up with the rate.
+
+An allocation profile named three functions holding 98% of it, each walking the
+type's base chain **once per validated value** to answer something the schema
+fixed at load: `facetChain` rebuilt the whole derivation chain as a slice,
+`descendsFromInteger` allocated a `map[*SimpleType]bool` per call purely as a
+cycle guard, and `idKind` walked for the nearest `xs:ID`, `xs:IDREF` or
+`xs:IDREFS`. The three answers are memoised together on the type as `chainFacts`,
+so a type is walked once however many values it validates.
+
+Measured through `Schema.Validate`, allocation for 8,000 values:
+
+| chain | before | after |
+|---|---|---|
+| 50 | 67.3 MB | 2.6 MB |
+| 100 | 138.3 MB | 2.6 MB |
+| 200 | 287.5 MB | 2.6 MB |
+| 500 | 999.9 MB | 2.7 MB |
+| 1000 | 1970.5 MB | 2.7 MB |
+
+The row that matters is the last: the constant **stopped scaling with chain
+length**, which is the property the fix is about. What remains is the document
+tree, not the chain — the three names are gone from the profile entirely.
+
+Two things constrain where such a memo may live. A `Schema` is documented as
+safe to validate from any number of goroutines, so the cache is an
+`atomic.Pointer` rather than a plain field: two goroutines racing to fill it
+compute the same answer from the same immutable chain, and the atomic makes
+whichever store lands second a benign duplicate rather than a data race. And it
+is filled lazily rather than at load, because `primitiveOf` records that a
+redefinition is read while its base is still resolving — a fact derived from
+the chain during assembly can be derived from a chain that is not there yet.
+Nothing validates a value until `Load` has returned, which is what makes the
+lazy fill safe.
+
+The cycle guard was kept, and deliberately kept exact. `checkTypeBaseCycles`
+rejects a circular schema at load, but it roots only at *named global* types,
+so an anonymous type on a cycle never reaches it. A cheaper approximate guard
+was tried and rejected: `facetChain`'s result is length-sensitive, so stopping a
+step late changes which facets are applied, and that changes a validation
+verdict. One map per type is noise; one per value was the defect.
+
+`TestValidateAllocationFlatInChainDepth` pins the cost, bounding *allocation*
+rather than time — the figure does not move with machine load and the race
+detector does not inflate it, so the gate's race lane needs no separate budget.
+It asserts the ratio between a 500-link and a 50-link chain as well as a
+ceiling, because the ratio is what distinguishes a memo that stopped working
+from a machine that got slower. Reverting each of the three memos in turn fails
+it. Both W3C XSD suites are unchanged — 39358 agreements under 1.0 and 41567
+under 1.1 — as are the 185 vendored real-world schemas.
+
 ### A calibrated bound is only a bound on the paths that consult it
 
 `relaxng.ValidateOptions.MaxPatternSize` (default `DefaultMaxPatternSize` =

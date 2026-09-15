@@ -1050,22 +1050,11 @@ func idKind(t *SimpleType, value string) string {
 		return listItemKind(t.ItemType, value)
 	}
 
-	seen := map[*SimpleType]bool{}
-	for cur := t; cur != nil && !seen[cur]; {
-		seen[cur] = true
-		switch cur.Name.Local {
-		case "ID", "IDREF", "IDREFS":
-			if cur.Name.URI == NSSchema {
-				return cur.Name.Local
-			}
-		}
-		base, ok := cur.Base.(*SimpleType)
-		if !ok || base == cur {
-			return ""
-		}
-		cur = base
-	}
-	return ""
+	// The atomic walk is a property of the base chain alone, so it is
+	// memoised with the type's other chain facts. The union and list
+	// branches above are not: they look through to whichever member
+	// validates *this* value, so their answer varies per value.
+	return chainFactsOf(t).idName
 }
 
 // checkIDs applies Validation Root Valid (ID/IDREF) (§3.3.4).
@@ -1272,20 +1261,15 @@ func checkIntegerLexical(normalized string, t *SimpleType) error {
 }
 
 // descendsFromInteger reports whether xs:integer is on the type's base chain.
+//
+// Memoised on the type: the answer cannot change once the schema is loaded,
+// and the walk — which allocated a map per call purely as a cycle guard — was
+// running once per validated value.
 func descendsFromInteger(t *SimpleType) bool {
-	seen := map[*SimpleType]bool{}
-	for cur := t; cur != nil && !seen[cur]; {
-		seen[cur] = true
-		if cur.Name.URI == NSSchema && cur.Name.Local == "integer" {
-			return true
-		}
-		base, ok := cur.Base.(*SimpleType)
-		if !ok || base == cur {
-			return false
-		}
-		cur = base
+	if t == nil {
+		return false
 	}
-	return false
+	return chainFactsOf(t).integer
 }
 
 // nearestBuiltinName returns the local name of the nearest ancestor of t that

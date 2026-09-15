@@ -470,21 +470,17 @@ type facetStep struct {
 // Collecting the chain rather than merging the facets is what lets the
 // evaluator apply patterns conjunctively across steps while treating the
 // patterns within one step as alternatives.
+//
+// The chain is memoised on the type, because it is fixed once the schema is
+// loaded and this was rebuilt for every value validated: it was the largest
+// single allocator in a profile of validating a document against a long
+// restriction chain. Callers only range over the result, so they share the one
+// slice; a caller that needed to modify it would have to copy first.
 func facetChain(t *SimpleType) []facetStep {
-	var out []facetStep
-	seen := make(map[*SimpleType]bool)
-	for cur := t; cur != nil && !seen[cur]; {
-		seen[cur] = true
-		if cur.Facets != nil {
-			out = append(out, facetStep{typ: cur, facets: cur.Facets})
-		}
-		base, ok := cur.Base.(*SimpleType)
-		if !ok || base == cur {
-			break
-		}
-		cur = base
+	if t == nil {
+		return nil
 	}
-	return out
+	return chainFactsOf(t).steps
 }
 
 // checkLengthFacets applies length, minLength and maxLength.
