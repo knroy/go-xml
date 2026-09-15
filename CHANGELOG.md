@@ -27,6 +27,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| `format-dateTime`, `format-date`, `format-time` and the duration accessors refused an attribute node | They atomized their argument but never applied the XPath 3.1 §3.1.5.2 cast, so an `xs:untypedAtomic` — any unvalidated attribute — raised `XPTY0004`. They now cast to the declared type; an `xs:string` is still refused, and a failed cast is `FORG0001`. |  |
 | A Windows absolute path parsed as a one-letter scheme, so every local-file resolver refused it | `url.Parse("C:/x")` gives Scheme `"c"`, and the guard refusing non-`file` schemes ran before `fileURIToPath`. `internal/uripath` exempts a drive path textually — a scheme-colon not followed by `//` — keeping `c:///secret.rng` refused. |  |
 | A `file:` base URI was built by concatenating `"file://"` with an OS path | On Windows that made the drive the URI *authority* and left backslashes, so the base did not parse and every relative reference against it was refused. Both halves now go through `internal/fileuri`, tested with Windows shapes on every platform. |  |
 | `resolveBase` discarded an `xml:base`'s base URI without a word when the base did not parse | It returned the bare reference, so a Windows base made the element's base `"deeper/"` — the working directory, not the document's — and `inheritedBaseURI` stops at it, poisoning the subtree. It now merges by RFC 3986 §5.2.3 on path structure alone. |  |
