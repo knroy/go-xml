@@ -4,7 +4,7 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased
+## v1.3.0 — 2026-09-14
 
 ### Added
 
