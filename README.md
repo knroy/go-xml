@@ -92,6 +92,10 @@ Requires Go 1.25 or later. The floor is measured, not nominal: `regexp`
 learned the Unicode category `Cn` in 1.25, and building on 1.24 costs four
 conformance cases. See [docs/testing.md](docs/testing.md).
 
+> **Try it in the browser:** [go-xml fiddle](https://martin-honnen.github.io/go-xml-fiddle/index-ace.html) —
+> an XSLT and XQuery playground for this library, built and maintained
+> independently by [Martin Honnen](https://github.com/martin-honnen).
+
 ## Status
 
 | | |
