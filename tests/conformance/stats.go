@@ -309,22 +309,29 @@ func (r *Results) Regions() map[string][]Region {
 			{Name: "STATS", Whole: true, Body: r.renderStats},
 		},
 		"README.md": {
-			{Name: "TEST COUNT", Body: r.renderReadmeTests},
-			{Name: "TEST METHODS", Body: r.renderReadmeMethods},
-			{Name: "XPATH ROWS", Body: r.renderReadmeXPath},
-			{Name: "RELAX NG ROW", Body: r.renderReadmeRelaxNG},
+			// The table regions are Inline so the markers ride ON the first
+			// and last generated row rather than sitting on lines of their
+			// own between rows. A Markdown table ends at the first line that
+			// is not a row, and an HTML comment is not one: with the markers
+			// on separate lines GitHub rendered the Status table as a header
+			// with no body and every row below it as plain text. Inline keeps
+			// each line a valid row, and the comments stay invisible.
+			{Name: "TEST COUNT", Inline: true, Body: r.renderReadmeTests},
+			{Name: "TEST METHODS", Inline: true, Body: r.renderReadmeMethods},
+			{Name: "XPATH ROWS", Inline: true, Body: r.renderReadmeXPath},
+			{Name: "RELAX NG ROW", Inline: true, Body: r.renderReadmeRelaxNG},
 			{Name: "DOCBOOK COUNT", Inline: true, Body: r.renderDocBookCount},
 			{Name: "XSPEC COUNT", Inline: true, Body: r.renderXSpecCount},
 		},
 		filepath.Join("docs", "todo.md"): {
-			{Name: "STATUS TABLE", Body: r.renderTodoStatus},
+			{Name: "STATUS TABLE", Inline: true, Body: r.renderTodoStatus},
 			{Name: "RELAX NG FIGURE", Inline: true, Body: r.renderRelaxNGFigure},
 		},
 		filepath.Join("docs", "validation.md"): {
 			{Name: "RELAX NG FIGURE", Inline: true, Body: r.renderRelaxNGFigure},
 		},
 		filepath.Join("docs", "testing.md"): {
-			{Name: "LAYER COUNTS", Body: r.renderTestingLayers},
+			{Name: "LAYER COUNTS", Inline: true, Body: r.renderTestingLayers},
 		},
 		filepath.Join("docs", "conformance-gaps.md"): {
 			{Name: "CONFORMANCE SUMMARY", Bare: true, Body: func() string {
@@ -637,7 +644,15 @@ func ReplaceRegion(doc string, g Region) (string, error) {
 	}
 	region := g.Begin() + "\n" + header + body + g.End() + "\n"
 	if g.Inline {
-		region = g.Begin() + body + g.End()
+		// An Inline region's markers ride ON the content lines rather than
+		// sitting on lines of their own. For a table that is not cosmetic: a
+		// Markdown table ends at the first line that is not a row, and an HTML
+		// comment is not one, so a marker on its own line between rows renders
+		// the table as a header with no body and every row below it as plain
+		// text. Trimming the body's trailing newline is what fuses the END
+		// marker to the last row; without it the marker lands on its own line
+		// and ends the table there anyway.
+		region = g.Begin() + strings.TrimSuffix(body, "\n") + g.End()
 	}
 	if strings.Contains(doc, "\r\n") {
 		region = strings.ReplaceAll(region, "\n", "\r\n")
