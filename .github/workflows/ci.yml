@@ -47,6 +47,24 @@ jobs:
         run: |
           unformatted=$(gofmt -l . | grep -v '^testdata/' || true)
           if [ -n "$unformatted" ]; then
+            # A CRLF working tree makes gofmt flag EVERY file, because a
+            # carriage return is not canonical Go formatting. That once failed
+            # this step on Windows with a list of the whole repository, which
+            # reads as catastrophic drift and is really one checkout setting.
+            # .gitattributes pins *.go to eol=lf so it cannot recur; this says
+            # so when the list is implausibly long, rather than leaving the
+            # next reader to work it out from a wall of filenames.
+            count=$(echo "$unformatted" | wc -l | tr -d ' ')
+            if [ "$count" -gt 50 ]; then
+              echo "gofmt flagged $count files, which is almost certainly a"
+              echo "line-ending artifact rather than real formatting drift."
+              echo "Checking the first flagged file for CRLF:"
+              first=$(echo "$unformatted" | head -1)
+              if grep -qU $'\r' "$first" 2>/dev/null; then
+                echo "  $first contains CRLF -- the checkout rewrote line"
+                echo "  endings. Confirm .gitattributes has: *.go text eol=lf"
+              fi
+            fi
             echo "not gofmt'd:"; echo "$unformatted"; exit 1
           fi
       - run: go vet ./...
