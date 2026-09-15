@@ -92,10 +92,6 @@ Requires Go 1.25 or later. The floor is measured, not nominal: `regexp`
 learned the Unicode category `Cn` in 1.25, and building on 1.24 costs four
 conformance cases. See [docs/testing.md](docs/testing.md).
 
-> **Try it in the browser:** [go-xml fiddle](https://martin-honnen.github.io/go-xml-fiddle/index-ace.html) —
-> an XSLT and XQuery playground for this library, built and maintained
-> independently by [Martin Honnen](https://github.com/martin-honnen).
-
 ## Status
 
 | | |
@@ -1674,6 +1670,25 @@ things are open, in rough order of how much they would change:
 Contributions are welcome, particularly a differential against a corpus this
 has not seen — that is how most of the bugs above were found, and the failure
 modes it catches are the ones no suite covers.
+
+## Acknowledgements
+
+[Martin Honnen](https://github.com/martin-honnen) has reported most of the
+user-facing XSLT defects this project has fixed, each with a reduced test case
+and a comparison against Saxon's behaviour: `xsl:result-document` with no
+`href`, `fn:transform`'s `initial-function` and `post-process` options,
+`fn:current-output-uri`, and the `xs:untypedAtomic` function-conversion rule
+that `format-dateTime` exposed.
+
+Several were diagnosis rather than symptom. The `fn:transform` report named a
+second transformation reporting on a different stylesheet, in a message that
+identified neither — which is what made the real defect findable. The
+`format-dateTime` report turned out to be one of seventeen rows across three
+distinct classes, none of which any suite case reaches.
+
+He also maintains [go-xml fiddle](https://martin-honnen.github.io/go-xml-fiddle/index-ace.html),
+a browser playground for running XSLT and XQuery against this library, built
+independently of this project.
 
 ## Licence
 
