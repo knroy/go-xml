@@ -262,9 +262,10 @@ turn "I could not prove the constraint" into "the constraint holds."*
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| XSD validation allocated 16 MB per KB against a long restriction chain | Three base-chain walks ran per validated value, so a 500-link chain cost 999 MB for 64 KB; memoised per type, 2.7 MB. |  |
-| The namespace count rebuilt the whole ancestor chain per element | `Tree.assign` took `len(InScopeNamespaces())` per element, making Finalize O(depth²): 224 kB nested 32,000 deep allocated 17.8 GB. The scope is now threaded down the walk; 13.4 MB. |  |
-| A transform's result tree was bounded by nothing | Two nested `xsl:for-each` squared the input: 24 kB built 9M nodes, 44 GB. `xpath.MaxNodes` charges construction. |  |
+| XSD validation allocated 16 MB per KB against a long restriction chain | Three base-chain walks ran per validated value, so a 500-link chain cost 999 MB for 64 KB; memoised per type, 2.7 MB. | [`b9c5a5a`][b9c5a5a] |
+| The namespace count rebuilt the whole ancestor chain per element | `Tree.assign` took `len(InScopeNamespaces())` per element, making Finalize O(depth²): 224 kB nested 32,000 deep allocated 17.8 GB. The scope is now threaded down the walk; 13.4 MB. | [`eff4094`][eff4094] |
+| The per-node cost behind the `MaxNodes` default did not reproduce | The comment claimed 672 bytes of live heap per node and a 1.3 GB cap; measured independently it is 328, capping ~0.6 GB. Safe direction, default unchanged. | [`7c81c60`][7c81c60] |
+| A transform's result tree was bounded by nothing | Two nested `xsl:for-each` squared the input: 24 kB built 9M nodes, 44 GB. `xpath.MaxNodes` charges construction. | [`9908bbe`][9908bbe] |
 | The RELAX NG pattern-size bound could not fire on the attribute path | Checked once per element, never between attributes, so a 106-byte document did not finish in 60 s even at `MaxPatternSize: 1`. Now checked per attribute. | [`fbe8f3c`][fbe8f3c] |
 | A nested DTD content model could exhaust the stack and kill the process | `parseCP`/`parseGroup` recursed unbounded, so 2.5M parens were a `fatal error` `recover()` cannot catch; `maxModelDepth` caps nesting at 1000. | [`020ef7f`][020ef7f] |
 | Merging adjacent text nodes was quadratic in their number | `AppendText` re-concatenated the whole run per piece, so 40,000 source text nodes cost 7,946 MB; it now accumulates in a buffer, 171 MB. | [`41ca5dc`][41ca5dc] |
@@ -774,6 +775,10 @@ here so every entry in this file sits under a release.
 [1e21828]: https://github.com/knroy/go-xml/commit/1e21828
 [1e5e26c]: https://github.com/knroy/go-xml/commit/1e5e26c
 [56adce5]: https://github.com/knroy/go-xml/commit/56adce5
+[b9c5a5a]: https://github.com/knroy/go-xml/commit/b9c5a5a
+[eff4094]: https://github.com/knroy/go-xml/commit/eff4094
+[9908bbe]: https://github.com/knroy/go-xml/commit/9908bbe
+[7c81c60]: https://github.com/knroy/go-xml/commit/7c81c60
 [1f638d1]: https://github.com/knroy/go-xml/commit/1f638d1
 [220b466]: https://github.com/knroy/go-xml/commit/220b466
 [22d2d64]: https://github.com/knroy/go-xml/commit/22d2d64
