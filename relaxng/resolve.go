@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/knroy/go-xml/internal/fileuri"
 	"github.com/knroy/go-xml/internal/uripath"
 	"github.com/knroy/go-xml/xdm"
 )
@@ -82,7 +83,16 @@ func (r *FileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 	// same confinement and byte-accounting path as a bare filesystem reference.
 	p := href
 	if u.Scheme == "file" {
-		p = u.Path
+		// fileuri.ToPath rather than u.Path: the RFC 8089 three-slash form
+		// puts the drive INSIDE the path, so u.Path is "/C:/dir/s.rng" and
+		// that leading slash belongs to the URI, not to the filesystem. Left
+		// on, filepath.Abs read it as a rooted path with no volume, Rel
+		// against a "C:\..." root could not relate the two, and every
+		// grammar inside the root was refused as outside it. It also decodes
+		// the percent-escapes a URI carries and a filesystem call does not.
+		// The host check above stays above it, because ToPath keeps only the
+		// path and would silently drop a remote authority.
+		p = fileuri.ToPath(href)
 	}
 	var f *os.File
 	if r.Root != "" {

@@ -144,18 +144,33 @@ func TestOfRoundTripsOnThisPlatform(t *testing.T) {
 // directory without one names a sibling of that directory rather than a file
 // inside it.
 func TestDirEndsInASlash(t *testing.T) {
-	got := Dir(filepath.FromSlash("/srv/schemas"))
-	if !strings.HasSuffix(got, "/") {
+	// The slash itself is all Dir adds, and that much is host-independent.
+	if got := Dir(filepath.FromSlash("/srv/schemas")); !strings.HasSuffix(got, "/") {
 		t.Errorf("Dir = %q, want a trailing slash", got)
 	}
-	base, err := url.Parse(Dir(filepath.FromSlash("/srv/schemas")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ref, _ := url.Parse("main.rng")
-	if got, want := base.ResolveReference(ref).String(),
-		"file:///srv/schemas/main.rng"; got != want {
-		t.Errorf("resolved to %q, want %q", got, want)
+
+	// The RESOLUTION is asserted through FromSlashedAbs rather than Dir,
+	// because Dir goes through Of, and Of calls filepath.Abs. A path that is
+	// absolute on Unix is RELATIVE on Windows -- "/srv/schemas" has no drive
+	// -- so Abs prepends the process's current drive and the answer there is
+	// "file:///D:/srv/schemas/main.rng". Asserting the Unix spelling made
+	// this test fail on Windows CI for the same reason the bugs it guards
+	// against were invisible on darwin: the host decides, and the assertion
+	// pretended it did not. FromSlashedAbs takes the spelling already made,
+	// so both platforms' answers can be checked from either.
+	for _, c := range []struct{ dir, want string }{
+		{"/srv/schemas", "file:///srv/schemas/main.rng"},
+		{"C:/srv/schemas", "file:///C:/srv/schemas/main.rng"},
+		{"D:/srv/schemas", "file:///D:/srv/schemas/main.rng"},
+	} {
+		base, err := url.Parse(FromSlashedAbs(c.dir) + "/")
+		if err != nil {
+			t.Fatalf("%s: %v", c.dir, err)
+		}
+		ref, _ := url.Parse("main.rng")
+		if got := base.ResolveReference(ref).String(); got != c.want {
+			t.Errorf("resolved against %q: got %q, want %q", c.dir, got, c.want)
+		}
 	}
 }
 
