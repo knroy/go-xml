@@ -346,7 +346,26 @@ func (sr *SecondaryResult) Serialize(w io.Writer, charMap map[rune]string) error
 	return serialize(w, sr.Nodes, sr.Output, charMap)
 }
 
-// String renders the secondary document using its own output settings.
+// String renders the secondary document using its own output settings,
+// DISCARDING any serialization error and returning "" in its place.
+//
+// The same trade as Result.String, and the more exposed of the two: the
+// serialization attributes of xsl:result-document are attribute value
+// templates, so doctype-system and media-type can be supplied by the SOURCE
+// DOCUMENT rather than by the stylesheet author. Those are exactly the two
+// values checkOutputSettings refuses -- SEPM0016 for a system identifier
+// holding both quote kinds, and the escaping that keeps media-type inside the
+// <meta> attribute it is written into -- so this is the method where untrusted
+// input most directly reaches a refusal that String drops on the floor. A
+// caller writing result documents through it gets "" for a refused document
+// and no indication that anything was wrong.
+//
+// String cannot report the error and stay a fmt.Stringer, and the error is not
+// raised any earlier: XSLT 3.0 section 26 makes a serialization error on a
+// secondary result a dynamic error in the evaluation of xsl:result-document,
+// which is where it is raised, not at the end of the transformation. Use
+// Serialize for anything whose failure you need to see; it takes a character
+// map because a secondary document carries its own.
 func (sr *SecondaryResult) String() string {
 	var sb strings.Builder
 	_ = sr.Serialize(&sb, nil)
