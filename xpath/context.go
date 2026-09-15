@@ -423,9 +423,17 @@ const MaxBytes = 1 << 30
 // transient: the tree is the caller's result and is live until the caller
 // discards it, so no amount of garbage collection reclaims it while it is
 // being built. That is what the bound is drawn from. A constructed node costs
-// 672 bytes of live heap, measured by building trees of 640,000 and 2,560,000
-// nodes and reading HeapAlloc across a forced collection -- the two agreed to
-// the byte -- so two million nodes caps a result tree near 1.3 GB.
+// on the order of a few hundred bytes of live heap, measured by building trees
+// at two sizes and reading HeapAlloc across a forced collection: 328 bytes per
+// constructed element on darwin/arm64, stable to a tenth of a byte between
+// 160,000 and 640,000 nodes. So two million nodes caps a result tree near
+// 0.6 GB. An earlier note here recorded 672 bytes and a 1.3 GB cap; that
+// figure did not reproduce and no test pinned it. The discrepancy is in the
+// safe direction -- the real ceiling is half what was claimed, so the bound
+// binds sooner than advertised rather than later -- but the number is stated
+// here as an order of magnitude for future reasoning, not as a constant to
+// compute against. Per-node cost varies with node kind, name length and
+// platform, so re-measure before drawing a new bound from it.
 //
 // Setting it from a margin over legitimate work instead is the instructive
 // failure. Fifty million is a much larger multiple of anything real, and it
