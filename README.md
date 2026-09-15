@@ -95,12 +95,13 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 ## Live test
 
 [**go-xml fiddle**](https://martin-honnen.github.io/go-xml-fiddle/index-ace.html)
-runs XSLT and XQuery against this library in the browser, with no Go toolchain
-to install — the shortest path from "does this do what I need" to an answer.
+runs a stylesheet against a document in the browser and shows you the result.
+No Go toolchain, no checkout — paste the XSLT or XQuery you already have and
+see what this engine makes of it.
 
-It is built and maintained independently by
-[Martin Honnen](https://github.com/martin-honnen), so what it runs is whichever
-build he has deployed rather than this repository's `dev`.
+[Martin Honnen](https://github.com/martin-honnen) built it and maintains it
+independently, so it runs the build he has deployed rather than the tip of this
+repository.
 
 ## Status
 
@@ -1690,14 +1691,14 @@ and a comparison against Saxon's behaviour: `xsl:result-document` with no
 `fn:current-output-uri`, and the `xs:untypedAtomic` function-conversion rule
 that `format-dateTime` exposed.
 
-Several were diagnosis rather than symptom. The `fn:transform` report named a
-second transformation reporting on a different stylesheet, in a message that
-identified neither — which is what made the real defect findable. The
-`format-dateTime` report turned out to be one of seventeen rows across three
-distinct classes, none of which any suite case reaches.
+Two of those reports did more than describe a symptom. The `fn:transform` one
+worked out that the error came from a second transformation, running inside the
+first, complaining about a stylesheet neither the message nor the stack named —
+without that the bug was close to unfindable. The `format-dateTime` one looked
+like a single function and turned out to be seventeen, none of which any test in
+the W3C suites reaches.
 
-He also maintains the browser playground linked under
-[Live test](#live-test) above.
+He also maintains the playground under [Live test](#live-test).
 
 ## Licence
 
