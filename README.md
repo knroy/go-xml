@@ -99,9 +99,8 @@ runs a stylesheet against a document in the browser and shows you the result.
 No Go toolchain, no checkout — paste the XSLT or XQuery you already have and
 see what this engine makes of it.
 
-[Martin Honnen](https://github.com/martin-honnen) built it and maintains it
-independently, so it runs the build he has deployed rather than the tip of this
-repository.
+It is the work of [Martin Honnen](https://github.com/martin-honnen), who built
+and maintains it as a project of his own.
 
 ## Status
 
