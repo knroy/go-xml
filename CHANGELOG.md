@@ -27,6 +27,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| A Windows absolute path parsed as a one-letter scheme, so every local-file resolver refused it | `url.Parse("C:/x")` gives Scheme `"c"`, and the guard refusing non-`file` schemes ran before `fileURIToPath`. `internal/uripath` exempts a drive path textually — a scheme-colon not followed by `//` — keeping `c:///secret.rng` refused. |  |
 | `SecondaryResult.String()` dropped it too, on the path the source document reaches | Missed when the primary one was documented: a grep used the wrong receiver name. `xsl:result-document`'s serialization attributes are AVTs, so this is where untrusted input lands. | [`6aa8324`][6aa8324] |
 | `Result.String()` dropped the serialization error the injection fixes raise | An embedder writing output through the inviting call got `""` where `Serialize` reports `SEPM0016`. The check stays in `Serialize` — XSLT 3.0 §2.10 puts it after the transform — and the doc comment now names the discard. | [`56adce5`][56adce5] |
 | `media-type` was written into the injected `<meta>` tag unescaped | Every sibling attribute goes through `escapeAttrRunes`; this one was concatenated raw, so `text/html"><script>…` closed the tag and ran in the `<head>`. It is now escaped at the write site. | [`1f638d1`][1f638d1] |

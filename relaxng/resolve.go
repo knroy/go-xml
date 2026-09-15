@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/knroy/go-xml/internal/uripath"
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -57,7 +58,12 @@ func (r *FileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 	if err != nil {
 		return nil, fmt.Errorf("relaxng: invalid schema URI %q: %w", href, err)
 	}
-	if u.Scheme != "" && u.Scheme != "file" {
+	// A Windows absolute path parses as a one-letter scheme:
+	// url.Parse(`C:\dir\s.rng`) returns Scheme "c". Checking the scheme first
+	// would refuse every absolute path on Windows. uripath makes the
+	// distinction on the raw string, because a drive path and the "c:///x"
+	// escape are indistinguishable after url.Parse; see the rule there.
+	if u.Scheme != "" && u.Scheme != "file" && !uripath.IsDriveLetterPath(href) {
 		return nil, fmt.Errorf("relaxng: remote schema URI %q is not permitted", href)
 	}
 	// A file: URL may carry an authority, and only an empty one or "localhost"

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/knroy/go-xml/internal/uripath"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 )
@@ -279,7 +280,13 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 	// filesystem, so that an http:// URI produces a clear refusal rather than
 	// a confusing "no such file".
 	if u, err := url.Parse(href); err == nil {
-		if u.Scheme != "" && u.Scheme != "file" {
+		// A Windows absolute path parses as a one-letter scheme:
+		// url.Parse("C:/dir/s.xsl") returns Scheme "c". Checking the scheme
+		// first would refuse every absolute path on Windows before
+		// fileURIToPath, which handles drive letters, ever ran. uripath makes
+		// the distinction on the raw string, because the drive path and the
+		// "c:///x" escape are identical after url.Parse; see the rule there.
+		if u.Scheme != "" && u.Scheme != "file" && !uripath.IsDriveLetterPath(href) {
 			return "", fmt.Errorf("scheme %q is not permitted (only local files)", u.Scheme)
 		}
 		// A file: URI may carry an authority, and only an empty one or

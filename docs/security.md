@@ -12,7 +12,7 @@ exposed.
 
 ## How to read a finding here
 
-Eight audits have passed over this code, and the categories below are not
+Nine audits have passed over this code, and the categories below are not
 interchangeable. Conflating them is how a fixed bug stayed filed as live for a
 release, and how an unproven suspicion was twice reported as a confirmed
 vulnerability.
@@ -35,7 +35,7 @@ remaining ones have been probed and found sound.
 
 ## Current status
 
-Ten passes have been made over this code. This section is the whole of what is
+Eleven passes have been made over this code. This section is the whole of what is
 *live*: everything it names is described in full further down, and everything
 already fixed has been reduced to one line apiece under *History* at the end,
 with the narrative in [CHANGELOG.md](../CHANGELOG.md).
@@ -1669,7 +1669,7 @@ wrong on first framing.
 
 ## History
 
-Ten passes have been made over this code. Every finding below was reproduced,
+Eleven passes have been made over this code. Every finding below was reproduced,
 fixed, and pinned by a regression test that fails against the previous code;
 the full narrative for each — what it was, how it was reproduced, why the fix
 took the shape it did — now lives in [CHANGELOG.md](../CHANGELOG.md). They are
@@ -1680,6 +1680,10 @@ already found.
 Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
+
+**Fifteenth pass — a Windows absolute path parsed as a one-letter scheme, 2026-09-14.**
+
+- **Every local-file resolver refused every absolute path on Windows** — false reject, and the fix carried a false-accept trap that had to be avoided rather than traded for it. A system identifier is a URI, so `xslt.FileResolver.resolvePath`, `relaxng.FileResolver.ResolveSchema` and `dtd.FileResolver.resolvePath` each parse the reference and refuse any scheme but `file` before touching the filesystem — the SSRF gate that makes `http://` a clear refusal rather than a confusing "no such file". But `url.Parse(`C:\Users\x\big.rng`)` returns Scheme `"c"`, so on Windows that gate refused the ordinary case with `scheme "c" is not permitted (only local files)`, and ~16 tests failed on Windows CI alone. The guard sat *upstream* of `fileURIToPath`, which already handled drive letters correctly and never ran. The trap is that a drive letter and a genuine one-letter scheme are indistinguishable not merely in spelling but **after parsing**: `url.Parse("C:/Users/x")` and `url.Parse("c:///secret.rng")` both yield Scheme `"c"`, Host `""` and a rooted `Path`, differing only in the path text. So the obvious fix — "a single-letter scheme is a drive letter" — makes Windows CI green *and* admits `c:///secret.rng`, a rooted path outside any grant, reopening the confinement hole the `cmd/go-xml` include tests plant against. The discriminator therefore cannot read the `*url.URL` at all, and is made on the raw string in `internal/uripath.IsDriveLetterPath`: a reference is a drive path iff its first byte is an ASCII letter, its second is `:`, and what follows the colon does **not** begin with `//`. RFC 3986 §3 is what makes that sound — `//` after the scheme's colon is the delimiter introducing an authority, and a filesystem drive path has no authority and cannot produce one, `C://x` being a path no Windows API accepts. The rule is deliberately **not** gated on `runtime.GOOS`, for two reasons. Admitting `c:/x` on a Unix host concedes nothing, because it is not absolute there and is joined against the base and then met by the same root check as any relative reference: the scheme guard is not the confinement boundary, `filepath.Rel` against the root is, and that is unchanged everywhere. And a security branch that executes on one OS only is one the host running most of the suite never tests — which matters more here than narrowing a surface confinement already covers, and keeps the tree's near-total absence of non-test `runtime.GOOS` branching intact. The neighbouring authority check is untouched: `file://remote-host/etc/passwd` is still refused as a remote host rather than silently read as the same-named local file. Pinned in four places, all of which run and are decided identically on darwin: `internal/uripath.TestIsDriveLetterPath` tables the rule with the escape beside the drive paths; `TestDrivePathAndEscapeAreIdenticalAfterParse` pins the premise that no parse-based fix can be sound; and one resolver test per package asserts that a drive path clears the *scheme* gate while `c:///`, `c://host/`, `http://`, `https://`, `ftp://` and `data:` do not. `dtd.TestResolvePathConfinesADrivePathAnyway` is the one that justifies the ungated rule, holding that clearing the scheme gate does not clear the root. Two sabotages were run: replacing the rule with the naive "one-letter scheme means drive letter" fails the escape cases in all four packages, and reverting it entirely reproduces `scheme "c" is not permitted (only local files)` verbatim in all three resolvers. See CHANGELOG.
 
 **Fourteenth pass — the namespace count rebuilt the ancestor chain, 2026-09-14.**
 

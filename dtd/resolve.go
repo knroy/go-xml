@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/knroy/go-xml/internal/uripath"
 )
 
 // FileResolver reads an external subset from the filesystem, confined to a
@@ -117,7 +119,13 @@ func (r *FileResolver) resolvePath(systemID, base string) (root, rel string, err
 	// is the SSRF gate: this type has no network and must never look as
 	// though it might.
 	if u, err := url.Parse(systemID); err == nil {
-		if u.Scheme != "" && u.Scheme != "file" {
+		// A Windows absolute path parses as a one-letter scheme:
+		// url.Parse("C:/dtd/r.dtd") returns Scheme "c". Checking the scheme
+		// first would refuse every absolute path on Windows before
+		// fileURIToPath, which handles drive letters, ever ran. uripath makes
+		// the distinction on the raw string, because a drive path and the
+		// "c:///x" escape are identical after url.Parse; see the rule there.
+		if u.Scheme != "" && u.Scheme != "file" && !uripath.IsDriveLetterPath(systemID) {
 			return "", "", fmt.Errorf(
 				"scheme %q is not permitted (this resolver reads local files only)",
 				u.Scheme)
