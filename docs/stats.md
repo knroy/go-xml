@@ -85,10 +85,6 @@ fails if any has been hand-edited, and `tests/check.sh` runs that check.
 
 | file | region |
 |---|---|
-| `README.md` | TEST COUNT |
-| `README.md` | TEST METHODS |
-| `README.md` | XPATH ROWS |
-| `README.md` | RELAX NG ROW |
 | `README.md` | DOCBOOK COUNT |
 | `README.md` | XSPEC COUNT |
 | `docs/conformance-gaps.md` | CONFORMANCE SUMMARY |
@@ -97,7 +93,6 @@ fails if any has been hand-edited, and `tests/check.sh` runs that check.
 | `docs/conformance-gaps.md` | XPATH FIGURE |
 | `docs/conformance-gaps.md` | RELAX NG FIGURE |
 | `docs/stats.md` | STATS |
-| `docs/testing.md` | LAYER COUNTS |
 | `docs/todo.md` | STATUS TABLE |
 | `docs/todo.md` | RELAX NG FIGURE |
 | `docs/validation.md` | RELAX NG FIGURE |

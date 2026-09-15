@@ -309,30 +309,30 @@ func (r *Results) Regions() map[string][]Region {
 			{Name: "STATS", Whole: true, Body: r.renderStats},
 		},
 		"README.md": {
-			// The table regions are Inline so the markers ride ON the first
-			// and last generated row rather than sitting on lines of their
-			// own between rows. A Markdown table ends at the first line that
-			// is not a row, and an HTML comment is not one: with the markers
-			// on separate lines GitHub rendered the Status table as a header
-			// with no body and every row below it as plain text. Inline keeps
-			// each line a valid row, and the comments stay invisible.
-			{Name: "TEST COUNT", Inline: true, Body: r.renderReadmeTests},
-			{Name: "TEST METHODS", Inline: true, Body: r.renderReadmeMethods},
-			{Name: "XPATH ROWS", Inline: true, Body: r.renderReadmeXPath},
-			{Name: "RELAX NG ROW", Inline: true, Body: r.renderReadmeRelaxNG},
+			// NOTE: the Status and test-method tables carry NO generated
+			// regions. A Markdown table row must begin with "|", so every
+			// placement of an HTML comment marker in or around a row ends the
+			// table: on its own line between rows, fused to the front of a
+			// row, and bracketing the whole table all render as a header with
+			// no body and the rows below as plain text. Those figures are
+			// maintained by hand and cross-checked by tests/docfigures.sh,
+			// which greps the published numbers against ratchet.txt and does
+			// not depend on a marker being present.
 			{Name: "DOCBOOK COUNT", Inline: true, Body: r.renderDocBookCount},
 			{Name: "XSPEC COUNT", Inline: true, Body: r.renderXSpecCount},
 		},
 		filepath.Join("docs", "todo.md"): {
-			{Name: "STATUS TABLE", Inline: true, Body: r.renderTodoStatus},
+			// The markers bracket the WHOLE table, header and all, so none of
+			// them lands between rows -- a marker on its own line inside a
+			// table ends it there, and one fused to the front of a row is not
+			// a row either. The renderer therefore emits the header too.
+			{Name: "STATUS TABLE", Body: r.renderTodoStatus},
 			{Name: "RELAX NG FIGURE", Inline: true, Body: r.renderRelaxNGFigure},
 		},
 		filepath.Join("docs", "validation.md"): {
 			{Name: "RELAX NG FIGURE", Inline: true, Body: r.renderRelaxNGFigure},
 		},
-		filepath.Join("docs", "testing.md"): {
-			{Name: "LAYER COUNTS", Inline: true, Body: r.renderTestingLayers},
-		},
+		filepath.Join("docs", "testing.md"): {},
 		filepath.Join("docs", "conformance-gaps.md"): {
 			{Name: "CONFORMANCE SUMMARY", Bare: true, Body: func() string {
 				// The original region, whose markers predate the name scheme.
@@ -405,6 +405,9 @@ func (r *Results) renderReadmeMethods() string {
 
 func (r *Results) renderTodoStatus() string {
 	var b strings.Builder
+	// The header is generated with the rows so the region can bracket the
+	// whole table and keep every marker outside it.
+	b.WriteString("| | |\n|---|---|\n")
 	row := func(label string, s Suite, extra string) {
 		b.WriteString(fmt.Sprintf("| %s | %s — %s of %s in scope%s |\n",
 			label, pct(s.Passed, s.Total), commas(s.Passed), commas(s.Total), extra))
@@ -469,6 +472,30 @@ func (r *Results) renderDocBookCount() string {
 
 func (r *Results) renderXSpecCount() string {
 	return fmt.Sprintf("%d", r.Suite("xspec").Passed)
+}
+
+// renderTestCountFigure is the unit-test count alone, for a figure wrapped
+// inside a hand-written row rather than a generated row.
+func (r *Results) renderTestCountFigure() string {
+	return commas(r.TreeCount("unit-tests").Value)
+}
+
+// renderXPath20Figure and its siblings render one suite's "P of T in scope"
+// clause, for the same reason.
+func (r *Results) renderXPath20Figure() string { return r.readmeSuiteFigure("xpath-2.0") }
+func (r *Results) renderXPath30Figure() string { return r.readmeSuiteFigure("xpath-3.0") }
+func (r *Results) renderXPath31Figure() string { return r.readmeSuiteFigure("xpath-3.1") }
+
+func (r *Results) readmeSuiteFigure(id string) string {
+	s := r.Suite(id)
+	return fmt.Sprintf("%s of the W3C QT3 suite (%s of %s in scope)",
+		pct(s.Passed, s.Total), commas(s.Passed), commas(s.Total))
+}
+
+func (r *Results) renderRelaxNGRowFigure() string {
+	s := r.Suite("relaxng")
+	return fmt.Sprintf("%s of James Clark's spectest (%s of %s assertions)",
+		pct(s.Passed, s.Total), commas(s.Passed), commas(s.Total))
 }
 
 func (r *Results) renderXPathFigure() string {
