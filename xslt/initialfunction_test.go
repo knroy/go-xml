@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/knroy/go-xml/internal/fileuri"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xslt"
 )
@@ -283,7 +284,7 @@ func TestFnTransformInitialFunction(t *testing.T) {
 	  </xsl:template>
 	</xsl:stylesheet>`
 
-	base := "file://" + dir + "/outer.xsl"
+	base := fileuri.Of(filepath.Join(dir, "outer.xsl"))
 	tree, err := xdm.ParseString(outer, xdm.ParseOptions{BaseURI: base})
 	if err != nil {
 		t.Fatal(err)
@@ -337,7 +338,7 @@ func TestFnTransformInitialFunctionKeepsTheNamespace(t *testing.T) {
 	  </xsl:template>
 	</xsl:stylesheet>`
 
-	base := "file://" + dir + "/outer.xsl"
+	base := fileuri.Of(filepath.Join(dir, "outer.xsl"))
 	tree, err := xdm.ParseString(outer, xdm.ParseOptions{BaseURI: base})
 	if err != nil {
 		t.Fatal(err)
@@ -376,7 +377,7 @@ func TestFnTransformFunctionParamsWithoutFunction(t *testing.T) {
 	  </xsl:template>
 	</xsl:stylesheet>`
 
-	base := "file://" + dir + "/outer.xsl"
+	base := fileuri.Of(filepath.Join(dir, "outer.xsl"))
 	tree, _ := xdm.ParseString(outer, xdm.ParseOptions{BaseURI: base})
 	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{BaseURI: base})
 	if err != nil {
@@ -420,7 +421,7 @@ func TestFnTransformNamesTheNestedStylesheet(t *testing.T) {
 	  </xsl:template>
 	</xsl:stylesheet>`
 
-	base := "file://" + dir + "/outer.xsl"
+	base := fileuri.Of(filepath.Join(dir, "outer.xsl"))
 	tree, _ := xdm.ParseString(outer, xdm.ParseOptions{BaseURI: base})
 	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{BaseURI: base})
 	if err != nil {

@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/internal/fileuri"
 )
 
 // TestFileURIToPathHandlesBothPlatforms covers the conversion that used to be
@@ -88,6 +90,26 @@ func TestFileURIToPathWindowsSpellingsOnEveryPlatform(t *testing.T) {
 func TestFileURIOfIsThreeSlashed(t *testing.T) {
 	if got := fileURIOf("file:///C:/dir/s.xsl"); got != "file:///C:/dir/s.xsl" {
 		t.Errorf("fileURIOf left a URI alone as %q", got)
+	}
+	// The Windows spelling itself, which the round trip below cannot reach:
+	// on darwin and Linux filepath.Abs never produces a drive letter and
+	// ToSlash never has a backslash to convert, so the branch that adds the
+	// third slash is unreachable here through fileURIOf's own argument. The
+	// pure half is exercised directly instead, and internal/fileuri tests it
+	// across the full table.
+	if got := fileuri.FromSlashedAbs("C:/dir/s.xsl"); got != "file:///C:/dir/s.xsl" {
+		t.Errorf("a Windows path spelled as %q, want file:///C:/dir/s.xsl", got)
+	}
+	// And that fileURIOf really is that function rather than a second copy of
+	// it. Escaping is the half of the difference darwin CAN see: the
+	// hand-written concatenation this replaced left a space raw, so a
+	// stylesheet in a directory whose name contains one produced a base URI
+	// that was not a URI. A drive letter is unreachable here; a space is not.
+	dir := t.TempDir()
+	withSpace := filepath.Join(dir, "a b", "s.xsl")
+	if got := fileURIOf(withSpace); strings.Contains(got, " ") {
+		t.Errorf("fileURIOf(%q) = %q, which leaves the space unescaped; a "+
+			"base URI has to be a URI", withSpace, got)
 	}
 	// A round trip through both helpers has to land back on the same path,
 	// whatever the platform spells absolute.

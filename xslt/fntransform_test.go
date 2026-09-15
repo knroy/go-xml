@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/knroy/go-xml/internal/fileuri"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xsd"
 	"github.com/knroy/go-xml/xslt"
@@ -50,7 +51,7 @@ func TestFnTransform(t *testing.T) {
 	  </xsl:template>
 	</xsl:stylesheet>`
 
-	base := "file://" + dir + "/outer.xsl"
+	base := fileuri.Of(filepath.Join(dir, "outer.xsl"))
 	tree, err := xdm.ParseString(outer, xdm.ParseOptions{BaseURI: base})
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +238,7 @@ func TestFnTransformOptionFromTextNode(t *testing.T) {
 	    <o><xsl:sequence select="transform($opts)?output"/></o>
 	  </xsl:template>
 	</xsl:stylesheet>`
-	base := "file://" + dir + "/outer.xsl"
+	base := fileuri.Of(filepath.Join(dir, "outer.xsl"))
 	tree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: base})
 	if err != nil {
 		t.Fatal(err)
@@ -289,7 +290,7 @@ func TestFnTransformHreflessResultDocumentIsPrincipal(t *testing.T) {
 	      'delivery-format': 'serialized'})?output"/></o>
 	  </xsl:template>
 	</xsl:stylesheet>`
-	base := "file://" + dir + "/outer.xsl"
+	base := fileuri.Of(filepath.Join(dir, "outer.xsl"))
 	tree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: base})
 	if err != nil {
 		t.Fatal(err)
@@ -446,7 +447,7 @@ func TestStaticTransform(t *testing.T) {
 	    <out xsl:use-when="not($decider(-1))">24</out>
 	  </xsl:template>
 	</xsl:stylesheet>`
-	base := "file://" + dir + "/outer.xsl"
+	base := fileuri.Of(filepath.Join(dir, "outer.xsl"))
 	tree, err := xdm.ParseString(outer, xdm.ParseOptions{BaseURI: base})
 	if err != nil {
 		t.Fatal(err)

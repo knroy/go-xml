@@ -951,6 +951,45 @@ This matters because real callers must set `AllowDOCTYPE: true` — UBL depends 
 the W3C XML Signature schema, which carries a DOCTYPE. **That escape hatch does
 not reopen XXE.**
 
+### A malformed Windows base URI fails closed, not open
+
+A `file:` base URI built by concatenating `"file://"` with an OS path is wrong
+on Windows in two ways at once, and both were live until this fix: the drive
+letter becomes the URI *authority* rather than part of the path, and the
+backslashes are never converted to the forward slashes a URI path uses. The
+base URI that reached Windows CI was
+`file://C:\Users\RUNNER~1\...\level1\element.xml`.
+
+The question a base URI raises is where a relative reference resolves *to*, so
+the malformed form was measured against the correct one rather than reasoned
+about:
+
+    base                     file://C:/srv/root/sub/doc.xml   (malformed)
+    "sibling.xml"        ->  file://C:/srv/root/sub/sibling.xml
+    "../up.xml"          ->  file://C:/srv/root/up.xml
+    "/abs.xml"           ->  file://C:/abs.xml
+
+The path components resolve as they should; what the malformed base changes is
+that every result keeps `C:` as its authority. That is the direction that
+matters, because `xslt`, `dtd`, `relaxng` and `xsd` all refuse a `file:` URI
+whose authority is neither empty nor `localhost` — the check described under
+*All resolution defaults are closed*, which exists so that a URI naming a
+remote host is not silently read as the same-named local file. A reference
+resolved against the malformed base therefore hits that refusal and is
+**rejected**, and the fully-backslashed spelling does not survive `url.Parse`
+at all.
+
+So this was a correctness and availability defect on Windows — relative
+references failed where they should have resolved — and not a containment
+escape: no spelling of it widened what could be read, and the containment
+check never ran on a path it should have refused. It is recorded here because
+a base URI decides where a document resolves to, and a future change that made
+the same construction fail *open* would not be obvious from the diff. The
+construction now lives in one tested place, `internal/fileuri`, whose tests
+feed it Windows-shaped input on every platform — the property that the old
+hand-written concatenation could not have, since `filepath.ToSlash` is a no-op
+off Windows and an absolute path elsewhere already begins with a slash.
+
 ### A content model cannot make the matcher allocate without a ceiling
 
 Deciding whether an element's children match a content model needs the *set* of

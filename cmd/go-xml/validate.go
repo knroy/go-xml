@@ -130,7 +130,7 @@ func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root string,
 		if err != nil {
 			return nil, err
 		}
-		abs, _ := filepath.Abs(rngPath)
+		abs := fileURI(rngPath)
 		tree, err := xdm.ParseString(string(data), xdm.ParseOptions{BaseURI: abs})
 		if err != nil {
 			return nil, fmt.Errorf("parsing %s: %w", rngPath, err)
@@ -195,7 +195,7 @@ func validateOne(path string, popts xdm.ParseOptions, validate func(*xdm.Node) e
 	if err != nil {
 		return err
 	}
-	abs, _ := filepath.Abs(path)
+	abs := fileURI(path)
 	popts.BaseURI = abs
 	popts.DocumentURI = abs
 	tree, err := xdm.ParseString(string(data), popts)

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/knroy/go-xml/internal/fileuri"
 	"github.com/knroy/go-xml/internal/uripath"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
@@ -669,11 +670,12 @@ func fileURIOf(path string) string {
 		}
 		path = abs
 	}
-	slashed := filepath.ToSlash(path)
-	if !strings.HasPrefix(slashed, "/") {
-		slashed = "/" + slashed
-	}
-	return "file://" + slashed
+	// The leading slash and the escaping are fileuri's, so that the spelling
+	// this returns is the one internal/fileuri tests with Windows-shaped
+	// input on every platform. Written out here it was untestable off
+	// Windows: filepath.ToSlash is a no-op on darwin and Linux, and an
+	// absolute path there already begins with a slash.
+	return fileuri.FromSlashedAbs(fileuri.ToSlash(path))
 }
 
 // ResolveEntity implements xdm.EntityResolver, so that a document this

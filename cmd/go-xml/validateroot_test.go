@@ -129,3 +129,54 @@ func TestValidateDefaultRootIsFilepathDirOfTheSchema(t *testing.T) {
 		t.Errorf("an explicit -root was replaced: %q", got)
 	}
 }
+
+// TestValidateOneGivesTheDocumentAURIBase pins that the validate path spells
+// its base and document URIs as URIs, the way the transform path at
+// compileStylesheet and transformOne already did.
+//
+// The two paths sit in one binary and disagreed: the transform called fileURI
+// and the validator called filepath.Abs, so a document validated from the
+// command line carried a bare path where the same document transformed
+// carried a file: URI. A bare path is not an absolute URI reference — it has
+// no scheme — so fn:document-uri reported something fn:resolve-uri cannot
+// resolve against, and on Windows it carried backslashes as well.
+func TestValidateOneGivesTheDocumentAURIBase(t *testing.T) {
+	// A directory with a space in its name, because that is the half of the
+	// difference this platform can observe: a bare path leaves it raw, a URI
+	// escapes it.
+	dir := filepath.Join(t.TempDir(), "a b")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "doc.xml")
+	if err := os.WriteFile(path, []byte(`<r/>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var got *xdm.Node
+	err := validateOne(path, xdm.ParseOptions{}, func(n *xdm.Node) error {
+		got = n
+		return nil
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("the validator was never called")
+	}
+	for _, c := range []struct{ what, uri string }{
+		{"base URI", got.BaseURI},
+		{"document URI", got.DocumentURI},
+	} {
+		if !strings.HasPrefix(c.uri, "file:///") {
+			t.Errorf("%s = %q, want an absolute file: URI", c.what, c.uri)
+		}
+		if strings.Contains(c.uri, " ") {
+			t.Errorf("%s = %q, which leaves the space unescaped; it is not a URI",
+				c.what, c.uri)
+		}
+		if strings.Contains(c.uri, `\`) {
+			t.Errorf("%s = %q, which still contains a backslash", c.what, c.uri)
+		}
+	}
+}
