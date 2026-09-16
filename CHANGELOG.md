@@ -4,6 +4,14 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| `method="json"` honours `indent="yes"` | JSON output was always compact. Serialization 3.1 §9.1.4 makes indentation optional — `indent=yes` MAY add whitespace, `indent=no` MUST NOT — and a result of any size is hard to check by eye on one line. Two-space indent matching Saxon and the XML method; a map or array of leaves stays inline, so `[ 3, 2, 1 ]` keeps its shape. `indent="no"` output is unchanged. | [`7e39f35`][7e39f35] |
+
 ## v1.3.1 — 2026-09-16
 
 ### Fixed — engine
@@ -989,3 +997,4 @@ here so every entry in this file sits under a release.
 [8fcd0d5]: https://github.com/knroy/go-xml/commit/8fcd0d5
 [7f7fc4e]: https://github.com/knroy/go-xml/commit/7f7fc4e
 [cb43c76]: https://github.com/knroy/go-xml/commit/cb43c76
+[7e39f35]: https://github.com/knroy/go-xml/commit/7e39f35

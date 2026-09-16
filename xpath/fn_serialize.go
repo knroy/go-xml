@@ -1666,7 +1666,7 @@ func serializeJSON(ctx *Context, seq xdm.Sequence, opts serializeOptions) (strin
 			"SERE0023: the JSON output method takes a single item, got %d", len(seq))
 	}
 	sb := newSink(ctx)
-	if err := writeJSONItem(sb, seq[0], opts); err != nil {
+	if err := writeJSONItem(sb, seq[0], opts, 0); err != nil {
 		return "", err
 	}
 	if err := sb.err(); err != nil {
@@ -1680,34 +1680,128 @@ func serializeJSON(ctx *Context, seq xdm.Sequence, opts serializeOptions) (strin
 // The same "one value" rule applies at every level, not only the top: a map
 // whose entry holds (1 to 10) has no JSON rendering, and that is SERE0023
 // (serialize-json-131).
-func writeJSONValue(sb *serializeSink, seq xdm.Sequence, opts serializeOptions) error {
+func writeJSONValue(sb *serializeSink, seq xdm.Sequence, opts serializeOptions, depth int) error {
 	switch len(seq) {
 	case 0:
 		sb.WriteString("null")
 		return nil
 	case 1:
-		return writeJSONItem(sb, seq[0], opts)
+		return writeJSONItem(sb, seq[0], opts, depth)
 	}
 	return fmt.Errorf(
 		"SERE0023: a JSON value must be a single item, got %d", len(seq))
 }
 
-func writeJSONItem(sb *serializeSink, it xdm.Item, opts serializeOptions) error {
+// jsonIndentStep is the two spaces per level that the indented JSON output
+// method writes.
+//
+// Two rather than four because the XML output method already writes two
+// (see the serializer in the xslt package), and one processor indenting its
+// two output methods differently is a difference a reader has to explain.
+// Saxon writes two here as well, which matters because comparing the two
+// processors' output is the reason the parameter is wanted at all.
+const jsonIndentStep = "  "
+
+// writeJSONNewline breaks the line and indents to depth, when indenting.
+func writeJSONNewline(sb *serializeSink, opts serializeOptions, depth int) {
+	if opts.indent {
+		sb.WriteString("\n")
+		for i := 0; i < depth; i++ {
+			sb.WriteString(jsonIndentStep)
+		}
+	}
+}
+
+// jsonFitsInline reports whether a map or array should be written on one line.
+//
+// An array or map whose members are all leaves -- no nested map or array --
+// stays inline, so [ 3, 2, 1 ] keeps its shape instead of becoming four lines
+// holding one number each. This is what Saxon does, and it is the difference
+// between indentation that helps and indentation that merely makes the output
+// taller: the grouping results that prompted the request are lists of strings
+// nested in maps, where the maps are what a reader needs broken apart and the
+// string lists are what they need kept together.
+//
+// A node member counts as nested rather than a leaf: it is serialized as a
+// string that may itself be long markup, and splitting the line at least
+// keeps the markup starting at a predictable column.
+func jsonFitsInline(seqs []xdm.Sequence) bool {
+	for _, seq := range seqs {
+		if len(seq) != 1 {
+			continue
+		}
+		switch seq[0].(type) {
+		case *xdm.ArrayItem, *xdm.MapItem, *xdm.Node:
+			return false
+		}
+	}
+	return true
+}
+
+func writeJSONItem(sb *serializeSink, it xdm.Item, opts serializeOptions, depth int) error {
 	switch v := it.(type) {
 	case *xdm.ArrayItem:
+		members := v.Members()
+		// An empty array is "[]" whether indenting or not: a line break with
+		// nothing between the brackets is whitespace that helps no one read
+		// anything.
+		if len(members) == 0 {
+			sb.WriteString("[]")
+			return nil
+		}
+		inline := !opts.indent || jsonFitsInline(members)
 		sb.WriteString("[")
-		for i, m := range v.Members() {
+		if inline && opts.indent {
+			sb.WriteString(" ")
+		}
+		for i, m := range members {
 			if i > 0 {
 				sb.WriteString(",")
+				if inline && opts.indent {
+					sb.WriteString(" ")
+				}
 			}
-			if err := writeJSONValue(sb, m, opts); err != nil {
+			if !inline {
+				writeJSONNewline(sb, opts, depth+1)
+			}
+			if err := writeJSONValue(sb, m, opts, depth+1); err != nil {
 				return err
 			}
+		}
+		if inline {
+			if opts.indent {
+				sb.WriteString(" ")
+			}
+		} else {
+			writeJSONNewline(sb, opts, depth)
 		}
 		sb.WriteString("]")
 		return nil
 	case *xdm.MapItem:
+		// Whether the map fits on one line needs every value before the first
+		// is written, and Entries is the only way to read them, so they are
+		// collected first. The entries are walked twice over -- once here and
+		// once below -- rather than buffering the rendered output, because
+		// rendering charges the budget and a discarded render would charge it
+		// for bytes nobody received.
+		var vals []xdm.Sequence
+		if opts.indent {
+			if err := v.Entries(func(_ *xdm.Atomic, val xdm.Sequence) error {
+				vals = append(vals, val)
+				return nil
+			}); err != nil {
+				return err
+			}
+			if len(vals) == 0 {
+				sb.WriteString("{}")
+				return nil
+			}
+		}
+		inline := !opts.indent || jsonFitsInline(vals)
 		sb.WriteString("{")
+		if inline && opts.indent {
+			sb.WriteString(" ")
+		}
 		first := true
 		// Two keys that are distinct as XDM values can still render to the
 		// same JSON name — xs:QName("foo") and the string "foo" both write
@@ -1724,14 +1818,30 @@ func writeJSONItem(sb *serializeSink, it xdm.Item, opts serializeOptions) error 
 			seen[name] = true
 			if !first {
 				sb.WriteString(",")
+				if inline && opts.indent {
+					sb.WriteString(" ")
+				}
 			}
 			first = false
+			if !inline {
+				writeJSONNewline(sb, opts, depth+1)
+			}
 			writeJSONString(sb, name, opts)
 			sb.WriteString(":")
-			return writeJSONValue(sb, val, opts)
+			if opts.indent {
+				sb.WriteString(" ")
+			}
+			return writeJSONValue(sb, val, opts, depth+1)
 		})
 		if err != nil {
 			return err
+		}
+		if inline {
+			if opts.indent {
+				sb.WriteString(" ")
+			}
+		} else {
+			writeJSONNewline(sb, opts, depth)
 		}
 		sb.WriteString("}")
 		return nil
@@ -2216,6 +2326,13 @@ type SerializeParams struct {
 	// AllowDuplicateNames permits a JSON object to be written with two keys
 	// that render to the same string; without it that is SERE0022.
 	AllowDuplicateNames bool
+	// Indent asks for whitespace around the JSON structural tokens.
+	//
+	// Serialization 3.1 section 9.1.4 makes this the one parameter of the two
+	// that is optional in a direction: for indent=yes the serializer MAY add
+	// whitespace, and for indent=no it MUST NOT. So compact output was always
+	// conformant, and remains exactly what is written when this is false.
+	Indent bool
 	// JSONNodeOutputMethod is the method a node nested inside a JSON value is
 	// serialised with, since JSON itself has no node type. Empty means the
 	// default, "xml".
@@ -2255,6 +2372,7 @@ func (p SerializeParams) opts() serializeOptions {
 		method:               "json",
 		omitXMLDecl:          true,
 		allowDuplicateNames:  p.AllowDuplicateNames,
+		indent:               p.Indent,
 		jsonNodeOutputMethod: p.JSONNodeOutputMethod,
 		itemSeparator:        p.ItemSeparator,
 		hasItemSep:           p.HasItemSeparator,
