@@ -1,0 +1,356 @@
+name: Release
+
+# TAG PUSH ONLY. This is the whole of the trust boundary, so it is worth
+# saying why rather than leaving it to be inferred:
+#
+# This workflow is the only thing in the repository that runs with write
+# permission, and the rule that keeps it safe is that nothing a stranger can
+# cause may reach it. `push: tags` fires only when a ref is pushed to THIS
+# repository, which requires push access to it. A pull request -- including
+# one from a fork, which is the untrusted case -- cannot push a tag here, and
+# a `pull_request` event would run this workflow's definition from the BASE
+# branch but with a fork's code in the tree.
+#
+# So there is deliberately no `pull_request` trigger, and no
+# `pull_request_target`, and no `workflow_dispatch`: a dispatch is
+# collaborator-only today, but it is one settings change away from being a
+# button that runs the write-scoped job on an arbitrary ref, and this
+# workflow's entire safety argument is "only a tag push reaches it". Keeping
+# that sentence true is worth more than the convenience of a manual re-run;
+# a failed release is re-run by deleting the tag and pushing it again.
+#
+# CI (ci.yml) keeps `permissions: contents: read` and is unchanged. The write
+# grant below is on the one job in this file, not at the top level, so even
+# the checks in this workflow that could in principle run elsewhere do not
+# carry it.
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Repository-wide default for this workflow: read. The single job that needs
+# more asks for it itself. Stated explicitly rather than omitted, because an
+# omitted `permissions` block inherits the repository's default token scope,
+# which may be read-write, and this file must not depend on a setting in the
+# web UI.
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    # The ONLY write grant in this repository.
+    #
+    # contents: write is needed for three things and nothing else: pushing the
+    # w3cschemas/go.mod bump commit, pushing the w3cschemas/vX.Y.Z tag, and
+    # creating the GitHub release. No packages, no id-token, no pull-requests,
+    # no actions -- an over-broad token is not made safe by a job that happens
+    # not to use the extra scopes.
+    #
+    # It is reachable only from `push: tags`, i.e. only from someone who can
+    # already push to this repository, and therefore already could do all
+    # three of these things by hand. The workflow grants no capability that
+    # its trigger does not already imply.
+    permissions:
+      contents: write
+
+    steps:
+      # fetch-depth: 0 so the tag being released is actually present as a tag:
+      # a shallow checkout of a tag push gives the commit but not the tag
+      # graph, and the w3cschemas step below needs to push a tag from here.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          check-latest: true
+
+      # ---------------------------------------------------------------
+      # THE PRE-TAG CHECKS. Everything that can refuse the release refuses
+      # it here, BEFORE anything is pushed or created.
+      #
+      # The ordering trap this design avoids: version.go must be committed
+      # before the tag, or the tag points at a commit claiming the previous
+      # version. The temptation is to have the workflow fix that up -- amend
+      # the commit, or move the tag. It does not. Rewriting history from CI
+      # turns a loud, local, recoverable mistake into a silent one that has
+      # already been published. Refusing is the answer: delete the tag, fix
+      # the commit, tag again.
+      # ---------------------------------------------------------------
+      - name: The tag must match the committed constant
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          # The constant is the source of truth and the tag follows it, so
+          # this reads version.go and compares, rather than deriving the
+          # constant from the tag. Extracting with sed rather than running Go
+          # keeps the check ahead of the build: a tree that does not compile
+          # should fail at the gate with a compiler error, not here with a
+          # confusing version mismatch.
+          constant=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
+          if [ -z "$constant" ]; then
+            echo "::error::cannot read the Version constant from internal/version/version.go."
+            echo "The line must be exactly: const Version = \"X.Y.Z\""
+            exit 1
+          fi
+          echo "tag=$tag  version.Version=$constant"
+          if [ "$tag" != "v$constant" ]; then
+            echo "::error::tag $tag does not match version.Version ($constant)."
+            echo ""
+            echo "The constant is the source of truth; the tag follows it."
+            echo "fn:system-property('xsl:product-version') answers the"
+            echo "constant, so releasing this tag would ship a build that"
+            echo "reports $constant under the name $tag."
+            echo ""
+            echo "Nothing has been pushed or created. To fix:"
+            echo "  git tag -d $tag && git push --delete origin $tag"
+            echo "  # then either correct internal/version/version.go and commit,"
+            echo "  # or re-tag the right commit as v$constant"
+            exit 1
+          fi
+
+      - name: The changelog must have a section for this version
+        id: changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="${GITHUB_REF_NAME#v}"
+          if ! grep -qE "^## v${v}( |$)" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no \"## v${v}\" section."
+            echo "The convention is: ## v${v} — $(date -u +%Y-%m-%d)"
+            echo "Rename the \"## Unreleased\" heading as part of the release"
+            echo "commit. The release body is built from that section, so"
+            echo "without it the release would ship empty notes."
+            exit 1
+          fi
+          # An "## Unreleased" heading BELOW this version's section means the
+          # release heading was never renamed -- which is how v1.2.2 was
+          # tagged. One ABOVE it is the next cycle's notes and is fine, so
+          # this compares line numbers rather than merely grepping.
+          rel=$(grep -nE "^## v${v}( |$)" CHANGELOG.md | head -1 | cut -d: -f1)
+          # `|| true`: grep exits 1 when it finds nothing, and no Unreleased
+          # heading is the ordinary case, not an error. Without this, set -e
+          # fails the step on the good path.
+          unrel=$(grep -niE '^##[[:space:]]+unreleased' CHANGELOG.md | head -1 | cut -d: -f1 || true)
+          if [ -n "$unrel" ] && [ "$unrel" -gt "$rel" ]; then
+            echo "::error::CHANGELOG.md has an \"## Unreleased\" heading at line"
+            echo "$unrel, below the \"## v${v}\" section at line $rel. The release"
+            echo "heading was never renamed."
+            exit 1
+          fi
+          # The section body: from this version's heading to the next "## "
+          # heading, exclusive of both. This becomes the GitHub release body.
+          awk -v v="## v${v}" '
+            $0 ~ "^" v "( |$)" { inside = 1; next }
+            inside && /^## / { exit }
+            inside { print }
+          ' CHANGELOG.md > /tmp/release-body.md
+          if [ ! -s /tmp/release-body.md ]; then
+            echo "::error::the \"## v${v}\" section of CHANGELOG.md is empty."
+            exit 1
+          fi
+          echo "extracted $(wc -l < /tmp/release-body.md) lines of release notes"
+
+      # ---------------------------------------------------------------
+      # THE GATE, on the tagged commit. A release that was not measured is a
+      # release whose claims are untested; the suites are what the README's
+      # figures rest on.
+      # ---------------------------------------------------------------
+      - name: Cache the conformance suites
+        id: suites
+        uses: actions/cache@v4
+        with:
+          path: testdata
+          key: suites-v2
+
+      # The same four suites at the same pinned revisions as ci.yml. They are
+      # duplicated rather than factored into a composite action because the
+      # pins are the thing being reviewed: a reviewer comparing this file with
+      # results.json can see the SHAs, and an indirection would hide the one
+      # detail that matters. If they drift apart, the recorded-revisions test
+      # inside check.sh fails here, which is the intended alarm.
+      - name: Fetch the conformance suites
+        if: steps.suites.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          mkdir -p testdata
+          clone_at() {
+            git clone --no-checkout --filter=blob:none "$1" "$2"
+            git -C "$2" fetch --depth 1 origin "$3"
+            git -C "$2" checkout --detach "$3"
+          }
+          clone_at https://github.com/w3c/qt3tests.git testdata/qt3tests \
+            201a6e466940cdfc727f4babfedcde5332b9f578
+          clone_at https://github.com/w3c/xsdtests.git testdata/xsdtests \
+            7bc3365c652a322f3d762021b3879eb92dae7e30
+          clone_at https://github.com/w3c/xslt30-test.git testdata/xslt30-test \
+            fddf1cf920087e791f13315d68dfbe874d97dc56
+          mkdir -p testdata/relaxng
+          git clone --depth 1 https://github.com/relaxng/jing-trang.git /tmp/jing-trang
+          cp /tmp/jing-trang/mod/rng-validate/test/spectest.xml testdata/relaxng/
+
+      - name: tests/check.sh
+        run: tests/check.sh
+
+      # ci.yml sanitises the ref before using it as an artifact name, because
+      # on a pull_request the ref_name is "<number>/merge" and upload-artifact
+      # refuses a "/". No sanitising here: this workflow runs only on a `v*`
+      # TAG push, so ref_name is the bare tag and cannot contain any of the
+      # characters that are refused. The reason the two files differ is the
+      # trigger, not an oversight.
+      - name: Upload the release verification record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-record-${{ github.ref_name }}
+          path: tests/release-record.txt
+          if-no-files-found: warn
+
+      # The w3cschemas module is published SEPARATELY, under W3C terms rather
+      # than MIT, and its version is INDEPENDENT of this one. That is not a
+      # guess: v1.1.0 paired with w3cschemas/v0.1.0, v1.2.2 with
+      # w3cschemas/v0.2.0, and v1.3.0 with w3cschemas/v0.3.0 -- while v1.2.0
+      # and v1.2.1 got no w3cschemas release at all. The minor number counts
+      # w3cschemas releases, not go-xml ones, so it CANNOT be derived from the
+      # tag, and a workflow that assumed it tracked would have tagged
+      # w3cschemas/v1.3.0 and burned a version number permanently.
+      #
+      # So it is an explicit input, in the tag message, and the step is
+      # SKIPPED rather than guessed when it is absent -- because skipping is
+      # recoverable (tag w3cschemas by hand afterwards) and guessing is not.
+      # Put a line in the annotated tag message:
+      #
+      #     w3cschemas: v0.4.0
+      #
+      # or omit it to release go-xml alone, which is the common case: the
+      # schemas module only needs a release when its own content changed.
+      # ---------------------------------------------------------------
+      # THE WRITES. Nothing above this line has changed anything, which is
+      # the property that makes a failed release a no-op rather than a mess
+      # to unwind: every check that can refuse the release has already run.
+      # ---------------------------------------------------------------
+
+      # BEFORE the w3cschemas steps, not after. The GitHub release is the
+      # PRIMARY artifact of this workflow; the w3cschemas pin bump is a
+      # follow-up that happens to be automatable. With the order reversed, a
+      # w3cschemas failure -- a protected default branch, a proxy hiccup, a
+      # version number already taken -- would block the release of go-xml
+      # itself, which is the thing everyone is waiting for and the thing that
+      # is already fully verified by the gate above.
+      #
+      # This way round, a w3cschemas failure leaves go-xml released and one
+      # follow-up commit to make by hand. The reverse leaves a pushed tag with
+      # no release and nothing wrong with it.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file /tmp/release-body.md \
+            --verify-tag
+
+      - name: Read the requested w3cschemas version from the tag message
+        id: schemas
+        shell: bash
+        run: |
+          set -euo pipefail
+          # An annotated tag has a message; a lightweight one does not, and
+          # `git tag -l --format` prints an empty contents for it rather than
+          # failing. Either way an absent line means "do not release it".
+          msg=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME" || true)
+          want=$(printf '%s\n' "$msg" | sed -n 's/^w3cschemas:[[:space:]]*\(v[0-9][0-9.]*\)[[:space:]]*$/\1/p' | head -1)
+          if [ -z "$want" ]; then
+            echo "no 'w3cschemas: vX.Y.Z' line in the tag message; not releasing w3cschemas"
+            echo "release=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! printf '%s' "$want" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::w3cschemas version '$want' is not vX.Y.Z"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/w3cschemas/$want" >/dev/null; then
+            echo "::error::tag w3cschemas/$want already exists."
+            echo "A version number is permanent once published to the module"
+            echo "proxy; pick the next one rather than moving this."
+            exit 1
+          fi
+          echo "will release w3cschemas/$want"
+          echo "release=$want" >> "$GITHUB_OUTPUT"
+
+      - name: Bump, test and tag w3cschemas
+        if: steps.schemas.outputs.release != ''
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          SCHEMAS: ${{ steps.schemas.outputs.release }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          cd w3cschemas
+          # Until this release the pin named the PREVIOUS go-xml, so what
+          # w3cschemas' tests exercised was the module cache rather than this
+          # tree. Bumping it is what closes that, and it is a release step:
+          # ci.yml's comment on the w3cschemas job says so.
+          #
+          # GOFLAGS is cleared for these two commands specifically: ci.yml
+          # runs this module with -mod=readonly, which is right for a gate and
+          # wrong here, where editing go.mod is the point.
+          go mod edit -require="github.com/knroy/go-xml@${TAG}"
+          # The tag was pushed minutes ago, and proxy.golang.org may not have
+          # fetched it yet: `go mod tidy` would then fail with "unknown
+          # revision" on a tag that demonstrably exists. GOFLAGS is also
+          # cleared here -- ci.yml runs this module with -mod=readonly, which
+          # is right for a gate and wrong where editing go.mod is the point.
+          #
+          # GOPROXY=direct bypasses the proxy and reads the tag from the
+          # repository, which is where it certainly is. GONOSUMDB/GONOSUMCHECK
+          # are not used; GONOSUMDB is not a thing and disabling the checksum
+          # database wholesale would be a real weakening. GOPRIVATE for this
+          # one module path is the narrow form: it turns off both the proxy
+          # and the sum database for github.com/knroy/go-xml alone, leaving
+          # every other dependency verified as usual.
+          export GOPROXY=direct GOPRIVATE=github.com/knroy/go-xml
+          GOFLAGS= go mod tidy
+          GOFLAGS= go build ./...
+          GOFLAGS= go vet ./...
+          GOFLAGS= go test ./... -count=1
+          cd ..
+          if git diff --quiet -- w3cschemas/go.mod w3cschemas/go.sum; then
+            echo "::error::w3cschemas/go.mod already pins ${TAG}; nothing to commit."
+            echo "That means the bump was made by hand before tagging. Tag"
+            echo "w3cschemas/${SCHEMAS} by hand too, or revert the pin and"
+            echo "let this step make it."
+            exit 1
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add w3cschemas/go.mod w3cschemas/go.sum
+          git commit -m "w3cschemas: pin go-xml ${TAG}"
+          # Onto the DEFAULT BRANCH, explicitly, not onto the detached tag
+          # checkout: HEAD here is the tagged commit, and pushing HEAD would
+          # either be refused or land nowhere useful. The bump belongs after
+          # the release on the branch that carries development.
+          #
+          # The w3cschemas tag points at THIS new commit, which is correct:
+          # the module released as w3cschemas/vX.Y.Z is the one whose go.mod
+          # names the go-xml release it was tested against.
+          git tag "w3cschemas/${SCHEMAS}"
+          # The default branch by name, from the event payload, rather than a
+          # hardcoded "main": a repository that renames it would otherwise
+          # have this step push a branch into existence under the old name.
+          # If the default branch is protected against direct pushes, this
+          # push is REFUSED and the step fails -- deliberately not worked
+          # around. The alternatives are to weaken the protection or to have
+          # the workflow force past it, and both are worse than a failed step
+          # with a clear message: the tag and the GitHub release are the
+          # release, and the pin bump is a follow-up commit anyone can make by
+          # hand from the log above.
+          git push origin "HEAD:refs/heads/${DEFAULT_BRANCH}"
+          git push origin "w3cschemas/${SCHEMAS}"
