@@ -215,6 +215,8 @@ Seven packages, each usable on its own:
   including the one left open.
 * **[CHANGELOG.md](CHANGELOG.md)** — what each release contains, and what the
   1.0 stability promise does and does not cover.
+* **[RELEASE.md](RELEASE.md)** — how a release is cut: the manual steps in the
+  order that matters, and what the tag-push workflow checks and refuses.
 * **[docs/known-gaps.md](docs/known-gaps.md)** — every measured failure and why
   it is still open, including the fix attempts that were reverted because they
   cost more than they gained.

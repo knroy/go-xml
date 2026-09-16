@@ -1,75 +1,71 @@
 package xslt
 
 import (
-	"runtime/debug"
 	"sort"
-	"strings"
 
+	"github.com/knroy/go-xml/internal/version"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 )
 
 // productVersion is what fn:system-property('xsl:product-version') answers.
 //
-// It is read from the build rather than written here, because a constant in
-// this file is a constant nobody edits: the property said "0.1" through the
-// 1.0, 1.1 and 1.2 releases, and a stylesheet dispatching on it -- which is
-// the only reason section 18.2 defines it -- got an answer that had been
-// wrong for three tags. It was reported from the field, against 1.2.0.
+// It is the constant version.Version (internal/version), NOT a value read from the
+// build. Both of the earlier answers were wrong, in opposite directions, and
+// the reasons are worth keeping:
 //
-// debug.ReadBuildInfo reports the module version when the binary was built
-// by `go install module@version`, and a pseudo-version derived from the last
-// tag when built inside the module. Anything that is not a bare N.N.N release
-// triple answers 0.0.0, which is the shape the property has to have: a
-// stylesheet may write it straight into xsl:package/@package-version, and
-// "unreleased" or a commit hash is not a version anyone can compare.
+// A hand-typed constant said "0.1" through the 1.0, 1.1 and 1.2 releases,
+// because a constant nobody edits is a constant nobody edits. A stylesheet
+// dispatching on the property -- which is the only reason section 18.2
+// defines it -- got an answer three tags out of date. It was reported from
+// the field against 1.2.0.
+//
+// Reading debug.ReadBuildInfo replaced it, and is wrong for a LIBRARY.
+// bi.Main.Version is the version of the MAIN module: the program being built,
+// not this one. go-xml is the main module only for cmd/go-xml and for every
+// test in this repository, which is exactly why no test caught it. Any
+// program that embeds go-xml reports its OWN version here, and a program
+// under development reports "(devel)", so the property answered 0.0.0 for
+// every embedder. Reported from a browser wasm build whose go.mod said
+// `require github.com/knroy/go-xml v1.3.0` and whose Main.Version said
+// "(devel)".
+//
+// bi.Deps would carry the real answer in the one case where the importer
+// built against a published module -- and in no other. Under a `replace`
+// directive, inside a vendor/ tree, in a fork, and in trimmed or wasm builds
+// where the module graph is not embedded, bi.Deps is empty or absent. So it
+// is not kept as a fallback: it would fire precisely in the cases where it
+// cannot answer, and a fallback to bi.Main.Version would be a fallback to the
+// bug. A constant is correct in every one of those builds, which is why
+// golang.org/x/text answers the same question the same way: unicode/norm
+// declares its Version as a constant in the source rather than asking the
+// build. (golang.org/x/telemetry DOES call ReadBuildInfo, because it asks the
+// other question -- the version of the PROGRAM, which is exactly what
+// bi.Main.Version answers.)
+//
+// What makes a constant admissible again, when it was not the first time, is
+// that this one is CHECKED. The 0.1-for-three-releases failure was an
+// unchecked constant, not a constant: nothing in the build could tell a right
+// value from a wrong one. Now TestVersionIsReleasedAndDescribed fails every
+// push and pull request unless version.Version is a release triple that
+// CHANGELOG.md has a section for, and release.yml refuses a tag that disagrees with it.
+// See internal/version for the full argument, including why the constant
+// lives there and not here: it is the MODULE's version, and xsd, relaxng and
+// xpath ship under the same tag.
+//
+// The 0.0.0 for a non-triple is kept. Version should never be one -- CI fails
+// the build if it is -- but the shape of the answer is a CONTRACT rather than
+// an internal invariant: package-version-010 writes this property straight
+// into xsl:package/@package-version through a replace() that strips
+// everything but digits and dots, so a pre-release or build suffix does not
+// merely look untidy: its digits are spliced onto the triple and the package
+// version is then invalid. The case says so in its own description: "this
+// test may fail if the product version is not a valid package version".
 func productVersion() string {
-	const unknown = "0.0.0"
-	bi, ok := debug.ReadBuildInfo()
-	if !ok {
-		return unknown
+	if !version.IsReleaseTriple(version.Version) {
+		return "0.0.0"
 	}
-	v := strings.TrimPrefix(bi.Main.Version, "v")
-	// A pseudo-version carries the commit and a timestamp after the triple,
-	// and a tag may carry a pre-release or build suffix. Both are dropped:
-	// what is left is the release this build descends from, which is the
-	// question section 18.2 asks. package-version-010 is why it matters --
-	// it writes the property into xsl:package/@package-version through
-	// replace(., '[^0-9\.]', ''), so a suffix does not merely look untidy,
-	// it becomes digits spliced onto the triple and the package version is
-	// then invalid. The case says so in its own description: "this test may
-	// fail if the product version is not a valid package version".
-	if i := strings.IndexAny(v, "-+"); i >= 0 {
-		v = v[:i]
-	}
-	if !isReleaseTriple(v) {
-		return unknown
-	}
-	return v
-}
-
-// isReleaseTriple reports whether v is N.N.N with no empty component.
-//
-// The check is here rather than left to the caller because every route into
-// productVersion can produce something that is not one: "(devel)" from a
-// working-tree build, "" from a GOPATH checkout, and a tag someone pushed in
-// a shape Go accepts and a package version does not.
-func isReleaseTriple(v string) bool {
-	parts := strings.Split(v, ".")
-	if len(parts) != 3 {
-		return false
-	}
-	for _, p := range parts {
-		if p == "" {
-			return false
-		}
-		for _, r := range p {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-	}
-	return true
+	return version.Version
 }
 
 // systemProperties is every system property this processor defines, keyed by

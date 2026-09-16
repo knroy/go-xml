@@ -24,6 +24,10 @@
   regex backtracking), and what a caller must still do. Opens with the current
   status rather than the history; the fixed findings are one line each, with
   the detail in [CHANGELOG.md](../CHANGELOG.md).
+* **[Releasing](../RELEASE.md)** — the four manual steps, in the order that
+  matters, and what the tag-push workflow then does. Also why `internal/version.Version` is
+  a hand-edited constant rather than something read from the build or
+  generated, and why the `w3cschemas` version cannot be derived from this one.
 * **[Testing](testing.md)** — how the engine is tested, how to run any layer of
   it, what the ratchet is for, and how to read a result without being misled by
   a count that did not move.

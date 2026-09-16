@@ -1320,7 +1320,10 @@ something nobody can install.
 The consequence is worth stating rather than papering over: this step catches a
 broken w3cschemas, and it does **not** catch an API break in this tree that
 would affect it. Bumping the pin after a release is what closes that gap, and
-that is a release step.
+that is a release step — now an automated one: `.github/workflows/release.yml`
+makes the bump, tests it and tags the module, when the release tag's message
+asks for it. See [RELEASE.md](../RELEASE.md), which also records why the
+w3cschemas version cannot be derived from this one.
 
 The general shape of this: *a module that is in no gate cannot regress, and a
 module pinned to a release is not testing your working tree even when it is.*
