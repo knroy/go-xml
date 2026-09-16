@@ -4,7 +4,7 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased
+## v1.3.1 — 2026-09-16
 
 ### Fixed — engine
 
@@ -14,6 +14,20 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `format-dateTime`, `format-date`, `format-time` and the duration accessors refused an attribute node | They atomized their argument but never applied the XPath 3.1 §3.1.5.2 cast, so an `xs:untypedAtomic` — any unvalidated attribute — raised `XPTY0004`. They now cast to the declared type; an `xs:string` is still refused, and a failed cast is `FORG0001`. | [`8c0f570`][8c0f570] |
 | `fn:error` and `fn:function-lookup` reported the wrong code for an untyped `xs:QName` argument | Both parameters are namespace-sensitive, which XPath 3.1 §3.1.5.2 gives `XPTY0117` rather than the general type error. `argQName` had no `Context`, so it could not see that the code exists only from XPath 3.0; it takes one now, and a genuinely wrong type stays `XPTY0004`. | [`ab80fb1`][ab80fb1] |
 | `fn:function-lookup` refused an untyped `$arity` for not being an integer | `$arity` is declared `xs:integer` but was read through `argNumber`, which casts an untyped value to `xs:double`: the §3.1.5.2 cast happened, to the wrong target. It now casts to `xs:integer`, so a non-integral lexical is `FORG0001` — a bad value, not a bad type. | [`ab80fb1`][ab80fb1] |
+
+### Fixed — documentation
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| Every generated table in the README and docs rendered as raw text on GitHub | The `<!-- BEGIN GENERATED ... -->` markers sat between table rows, and a Markdown row must begin with `|` — a comment between rows ends the table. The figures are spliced without markers inside a table now, and `stats_test.go` guards the shape. | [`291f67e`][291f67e], [`8fcd0d5`][8fcd0d5] |
+| Four fixes were listed under the released `## v1.3.0` heading | They shipped after that tag, so the changelog claimed v1.3.0 contained them. Moved to this section, each with its commit link. | [`7f7fc4e`][7f7fc4e] |
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| `RELEASE.md` and a tag-push release workflow | The release procedure was never written down, which is why the version constant went stale for three releases. The tag push now runs the full gate, refuses a tag that disagrees with the committed constant, and builds the release notes from this file. | [`ca3ff70`][ca3ff70] |
+| A link to the browser playground, and an Acknowledgements section | Credits the independently built and maintained go-xml fiddle. | [`cb43c76`][cb43c76] |
 
 ## v1.3.0 — 2026-09-14
 
@@ -971,3 +985,7 @@ here so every entry in this file sits under a release.
 [ca3ff70]: https://github.com/knroy/go-xml/commit/ca3ff70
 [8c0f570]: https://github.com/knroy/go-xml/commit/8c0f570
 [ab80fb1]: https://github.com/knroy/go-xml/commit/ab80fb1
+[291f67e]: https://github.com/knroy/go-xml/commit/291f67e
+[8fcd0d5]: https://github.com/knroy/go-xml/commit/8fcd0d5
+[7f7fc4e]: https://github.com/knroy/go-xml/commit/7f7fc4e
+[cb43c76]: https://github.com/knroy/go-xml/commit/cb43c76
