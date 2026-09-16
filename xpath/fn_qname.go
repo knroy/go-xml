@@ -17,6 +17,39 @@ import (
 // part of its value, so a stylesheet that needs the prefix — to reproduce a
 // name in output, or to resolve one from document content — has no way to get
 // at it except through these.
+// errNotQName reports the failure of an argument whose declared type is
+// xs:QName, choosing between the two codes the Recommendation distinguishes.
+//
+// XPath 3.1 3.1.5.2 applies the function conversion rules by casting every
+// xs:untypedAtomic item to the expected generalized atomic type, and then
+// says: "If the item is of type xs:untypedAtomic and the expected type is
+// namespace-sensitive, a type error [err:XPTY0117] is raised." xs:QName is
+// namespace-sensitive, because the cast would need the in-scope namespaces of
+// the EXPRESSION and an untyped value carries only those of the node it came
+// from. So the spec gives that one case a code of its own.
+//
+// The narrowness is the point. XPTY0117 is for xs:untypedAtomic and nothing
+// else: an xs:integer supplied where xs:QName is declared never enters the
+// cast at all, and falls through to the clause that ends 3.1.5.2 -- "if the
+// resulting value does not match the expected type ... a type error is raised
+// [err:XPTY0004]". Widening this to every wrong type would report a
+// conversion failure for a value that was never converted.
+//
+// The version gate is not decoration. XPath 3.0 introduced XPTY0117; 2.0 has
+// no such code and reports the general type error, and the suite asserts both
+// in cases that differ only by version.
+//
+// a may be nil (an empty sequence, or a non-atomic item), which is never the
+// untypedAtomic case and so always the general error.
+func errNotQName(ctx *Context, a *xdm.Atomic, format string, args ...any) error {
+	if a != nil && a.Type == xdm.TypeUntypedAtomic &&
+		ctx != nil && ctx.Version.atLeast30() {
+		return xdm.Errorf("XPTY0117",
+			"%s", fmt.Sprintf(format, args...))
+	}
+	return xdm.ErrType("%s", fmt.Sprintf(format, args...))
+}
+
 // checkLexicalQName reports FOCA0002 when lex is not a well formed lexical
 // QName, given the prefix and local part xdm.SplitQName produced from it.
 //
@@ -125,11 +158,12 @@ func registerQNameFuncs(l *Library) {
 				// XPath 3.0 gives this case a code of its own; 2.0 has no
 				// such code and reports the general type error. The suite
 				// asserts both, in cases that differ only by version.
-				if ok && a.Type == xdm.TypeUntypedAtomic && ctx.Version.atLeast30() {
-					return nil, xdm.Errorf("XPTY0117",
+				// errNotQName makes that choice; see its comment.
+				if ok && a.Type == xdm.TypeUntypedAtomic {
+					return nil, errNotQName(ctx, a,
 						"%s: an untyped node cannot be converted to an xs:QName", name)
 				}
-				return nil, xdm.ErrType("%s: expected an xs:QName", name)
+				return nil, errNotQName(ctx, nil, "%s: expected an xs:QName", name)
 			}
 			v, present := get(*a.QName())
 			if !present {

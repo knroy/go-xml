@@ -4,6 +4,17 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+### Fixed — engine
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `system-property('xsl:product-version')` answered `0.0.0` in every program that embeds go-xml | It read `debug.ReadBuildInfo().Main.Version` — the version of the MAIN module, i.e. the importing program, which is `(devel)` under development. It is the constant `version.Version` (`internal/version`) now, checked each CI run against `CHANGELOG.md` and on a tag push against the tag. | [`ca3ff70`][ca3ff70] |
+| `format-dateTime`, `format-date`, `format-time` and the duration accessors refused an attribute node | They atomized their argument but never applied the XPath 3.1 §3.1.5.2 cast, so an `xs:untypedAtomic` — any unvalidated attribute — raised `XPTY0004`. They now cast to the declared type; an `xs:string` is still refused, and a failed cast is `FORG0001`. | [`8c0f570`][8c0f570] |
+| `fn:error` and `fn:function-lookup` reported the wrong code for an untyped `xs:QName` argument | Both parameters are namespace-sensitive, which XPath 3.1 §3.1.5.2 gives `XPTY0117` rather than the general type error. `argQName` had no `Context`, so it could not see that the code exists only from XPath 3.0; it takes one now, and a genuinely wrong type stays `XPTY0004`. | [`ab80fb1`][ab80fb1] |
+| `fn:function-lookup` refused an untyped `$arity` for not being an integer | `$arity` is declared `xs:integer` but was read through `argNumber`, which casts an untyped value to `xs:double`: the §3.1.5.2 cast happened, to the wrong target. It now casts to `xs:integer`, so a non-integral lexical is `FORG0001` — a bad value, not a bad type. | [`ab80fb1`][ab80fb1] |
+
 ## v1.3.0 — 2026-09-14
 
 ### Added
@@ -957,3 +968,6 @@ here so every entry in this file sits under a release.
 [fe41f3c]: https://github.com/knroy/go-xml/commit/fe41f3c
 [0af8592]: https://github.com/knroy/go-xml/commit/0af8592
 [3831726]: https://github.com/knroy/go-xml/commit/3831726
+[ca3ff70]: https://github.com/knroy/go-xml/commit/ca3ff70
+[8c0f570]: https://github.com/knroy/go-xml/commit/8c0f570
+[ab80fb1]: https://github.com/knroy/go-xml/commit/ab80fb1

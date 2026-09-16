@@ -442,6 +442,81 @@ The remaining schema false reject on both versions, `queried` against W3C bug
 reading has been recorded for it either way: it is a false reject, which is the
 direction that matters, and it has not been diagnosed.
 
+### The function conversion rules are applied per function, not centrally
+
+XPath 3.1 §3.1.5.2 says an argument of type `xs:untypedAtomic` supplied to a
+parameter whose declared type is an atomic type is *cast* to that type. An
+unvalidated document's attributes and element content atomize to
+`xs:untypedAtomic`, so this is the rule that makes `format-dateTime(@date, $p)`
+work at all.
+
+`xpath/funcspec_table.go` already records every declared parameter type, and
+`checkArgCardinality` already consults it at call binding — but only for
+*cardinality*. Nothing applies the conversion from the declared type, so each
+function that needs it implements the rule in its own body. There are around
+forty-five such sites, and the next function added with a castable declared
+type can get its copy wrong the same way the known ones did.
+
+A sweep of all 80 (function, parameter) pairs whose declared type is castable
+found 17 defective rows, in three classes, all since fixed; the sweep is kept
+as `xpath/untyped_conversion_sweep_test.go`, which pins every one of the 80.
+
+  - **No cast at all** (12 rows): `format-dateTime`, `format-date`,
+    `format-time` at both arities and the six duration component accessors
+    refused an untyped argument outright. This is the `XPTY0004` bug reported
+    against v1.3.0.
+  - **The cast reached, with the wrong code** (4 rows): `fn:error/1,2,3`
+    parameter 1 and `fn:function-lookup/2` parameter 1 declare `xs:QName`,
+    which is namespace-sensitive. §3.1.5.2 gives that case `XPTY0117` — from
+    XPath 3.0; 2.0 has no such code — and all four reported `XPTY0004`.
+    `argQName` could not have decided this: it had no `Context`, so it could
+    not see the version, which is why it got the code wrong rather than merely
+    forgetting the rule.
+  - **A cast to the wrong target** (1 row): `fn:function-lookup/2` parameter 2
+    declares `xs:integer`, but `$arity` was read through `argNumber`, which
+    casts an untyped value to `xs:double` and then refused it for not being an
+    integer. The conversion happened; the target type was wrong.
+
+Applying the conversion centrally from the declared types was considered and
+**rejected on evidence**, not deferred for effort. The declared type is not a
+sufficient basis for the cast, because several functions deliberately convert
+to something else:
+
+  - `min/1`, `max/1`, `avg/1` and `sum/1` are declared `xs:anyAtomicType*`, for
+    which a cast is a no-op. `fn_seq.go` casts an untyped item to `xs:double`
+    instead, which is what makes `min(xs:untypedAtomic("3"))` answer 3 and
+    `min(xs:untypedAtomic("three"))` raise `FORG0001` (QT3 `K-SeqMINFunc-35`).
+  - `format-number/2` is declared `xs:numeric?`, but `formatnumber.go` turns a
+    *failed* cast into `NaN` rather than an error, because that is what
+    §4.7.4 requires of it.
+
+A central cast obeying the manifest would change both. `funcspec.go` records
+the same conclusion for the same reason — that the conversion rules are
+per-signature, so an item-type check at the binding layer is the "eager check"
+its design note rules out. Closing this properly means giving the manifest a
+way to say *how* each parameter converts, not just what it is declared as; that
+is a new field and a migration across 188 of the 255 manifest entries, and a
+half-done migration leaving two conversion paths that can disagree would be
+worse than the per-function duplication it replaces.
+
+Nothing in the suites scores this, which is why the gap survived to be reported
+against a release and why all three classes above were found by sweeping the
+manifest rather than by a red lane. QT3 has no untyped-argument case for any of
+the twelve functions that never cast. It does carry `XPTY0117` cases —
+`FunctionCall-016` through `-019` in `prod/FunctionCall.xml` — but every one of
+them depends on the `schemaValidation` feature and is therefore skipped, so the
+four wrong-code rows were unscored too; fixing them moved no lane.
+
+One inconsistency is left standing deliberately. `dateAccessorArg`, the
+component accessors' own copy of the rule, rewraps a failed cast as
+`XPTY0004`, so `year-from-dateTime(@bad)` reports a type error where
+`days-from-duration(@bad)` now reports `FORG0001` for the same bad value. The
+`FORG0001` reading is the right one — the cast was attempted, so the value is
+what was wrong — but changing the accessors is a separate behaviour change to
+a path that has been stable across releases, and no suite case scores either
+code. It is recorded here rather than folded into a bug fix aimed at four
+other functions.
+
 ### The `dtd` package cannot enforce XML §4.3.4
 
 `xdm` checks an external entity's declared version against the including

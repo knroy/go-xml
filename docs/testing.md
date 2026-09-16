@@ -20,10 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-<!-- BEGIN GENERATED LAYER COUNTS -->
-<!-- Generated from tests/conformance/results.json and the source tree by
-     tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-| **Unit tests** | 2,404 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,416 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -34,8 +31,6 @@ let something through, and the column that matters is the last one.
 | **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no interleaved choices |
 | **Wildcard/UPA model** | 60,000 pairs | a *wrong answer* in wildcard acceptance or in the UPA competition rule | anything outside a single wildcard against a single name, or a pair of terms in one choice |
 | **The ratchet** | 16 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
-<!-- END GENERATED LAYER COUNTS -->
-
 **How the first four counts are counted**, because "how many tests" has several
 honest answers and the one meant here is the narrow one. The three that a
 command can settle are asserted for equality by `tests/check.sh`'s *documented
@@ -1325,7 +1320,10 @@ something nobody can install.
 The consequence is worth stating rather than papering over: this step catches a
 broken w3cschemas, and it does **not** catch an API break in this tree that
 would affect it. Bumping the pin after a release is what closes that gap, and
-that is a release step.
+that is a release step — now an automated one: `.github/workflows/release.yml`
+makes the bump, tests it and tags the module, when the release tag's message
+asks for it. See [RELEASE.md](../RELEASE.md), which also records why the
+w3cschemas version cannot be derived from this one.
 
 The general shape of this: *a module that is in no gate cannot regress, and a
 module pinned to a release is not testing your working tree even when it is.*

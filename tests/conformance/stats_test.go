@@ -544,8 +544,26 @@ func TestInlineRegionStaysOnItsLine(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s/%s: %v", rel, g.Name, err)
 			}
-			if strings.Count(got, "\n") != 1 || !strings.HasPrefix(got, "Prose before "+g.Begin()) || !strings.HasSuffix(got, g.End()+" and after.\n") {
-				t.Errorf("%s/%s: the inline region did not stay on its line:\n%q", rel, g.Name, got)
+			// The markers must stay FUSED to the content: nothing of the
+			// region's own may sit on a line by itself. A single-figure
+			// region is one line, but a table region's body is several rows
+			// and legitimately spans lines -- what matters either way is that
+			// the BEGIN marker is followed immediately by content and the END
+			// marker immediately preceded by it, because a marker alone on a
+			// line inside a Markdown table ends the table there.
+			if !strings.HasPrefix(got, "Prose before "+g.Begin()) ||
+				!strings.HasSuffix(got, g.End()+" and after.\n") {
+				t.Errorf("%s/%s: the inline region did not stay fused to its line:\n%q", rel, g.Name, got)
+			}
+			if i := strings.Index(got, g.Begin()); i >= 0 {
+				if rest := got[i+len(g.Begin()):]; strings.HasPrefix(rest, "\n") {
+					t.Errorf("%s/%s: a newline follows the BEGIN marker, so the "+
+						"marker sits alone on its line and ends any table it is in", rel, g.Name)
+				}
+			}
+			if j := strings.Index(got, g.End()); j > 0 && got[j-1] == '\n' {
+				t.Errorf("%s/%s: a newline precedes the END marker, so the "+
+					"marker sits alone on its line and ends any table it is in", rel, g.Name)
 			}
 			if strings.Contains(got, "Generated from") {
 				t.Errorf("%s/%s: an inline region carried the block header", rel, g.Name)

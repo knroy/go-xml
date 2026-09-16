@@ -729,6 +729,15 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 			if a == nil {
 				return xdm.Empty(), nil
 			}
+			// $value is declared xs:dateTime?/xs:date?/xs:time?, so an
+			// xs:untypedAtomic -- which is what an attribute of an
+			// unvalidated document atomizes to -- is cast to that type by
+			// the function conversion rules rather than refused. See
+			// untypedArg; argAtomicOptional atomizes but does not cast.
+			a, err = untypedArg(a, formatDateTimeTarget(name))
+			if err != nil {
+				return nil, err
+			}
 			if a.DateTimeVal() == nil {
 				return nil, xdm.ErrType("%s: expected a date/time value", name)
 			}
@@ -772,6 +781,21 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 	format("format-dateTime")
 	format("format-date")
 	format("format-time")
+}
+
+// formatDateTimeTarget is the declared type of the $value parameter of each
+// of the three formatting functions, which is the type an xs:untypedAtomic
+// argument is cast to. F&O 3.1 9.8.1-9.8.3 declare them xs:dateTime?,
+// xs:date? and xs:time? respectively.
+func formatDateTimeTarget(name string) xdm.TypeCode {
+	switch name {
+	case "format-date":
+		return xdm.TypeDate
+	case "format-time":
+		return xdm.TypeTime
+	default:
+		return xdm.TypeDateTime
+	}
 }
 
 // checkFormatDateArgs validates the language, calendar and place arguments of

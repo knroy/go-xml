@@ -53,11 +53,11 @@ func registerHOFuncs(l *Library) {
 	// empty sequence rather than an error, which is what lets a stylesheet
 	// test for a function's availability.
 	l.registerFnSince(XPath30, "function-lookup", []int{2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		name, err := argQName(args, 0, "fn:function-lookup")
+		name, err := argQName(ctx, args, 0, "fn:function-lookup")
 		if err != nil {
 			return nil, err
 		}
-		arity, err := argNumber(args, 1)
+		arity, err := argInteger(args, 1, "fn:function-lookup")
 		if err != nil {
 			return nil, err
 		}
@@ -272,16 +272,59 @@ func argFunction(args []xdm.Sequence, i int, fn string) (*xdm.FunctionItem, erro
 }
 
 // argQName returns argument i as the single xs:QName it must be.
-func argQName(args []xdm.Sequence, i int, fn string) (xdm.QName, error) {
+//
+// ctx is needed rather than ornamental: xs:QName is namespace-sensitive, so
+// XPath 3.1 3.1.5.2 gives an xs:untypedAtomic argument the code XPTY0117
+// rather than the general type error -- but only from XPath 3.0, which is a
+// decision this helper could not make while it had no view of the version.
+// That omission is why fn:function-lookup reported XPTY0004 for an untyped
+// attribute. See errNotQName.
+func argQName(ctx *Context, args []xdm.Sequence, i int, fn string) (xdm.QName, error) {
 	atoms := xdm.Atomize(seqArg(args, i))
 	if len(atoms) != 1 {
 		return xdm.QName{}, xdm.ErrType("%s: expected a single xs:QName", fn)
 	}
 	a, ok := atoms[0].(*xdm.Atomic)
 	if !ok || a.Type != xdm.TypeQName || a.QName() == nil {
-		return xdm.QName{}, xdm.ErrType("%s: argument is not an xs:QName", fn)
+		var bad *xdm.Atomic
+		if ok {
+			bad = a
+		}
+		return xdm.QName{}, errNotQName(ctx, bad,
+			"%s: argument is not an xs:QName", fn)
 	}
 	return *a.QName(), nil
+}
+
+// argInteger returns argument i converted to the xs:integer its parameter
+// declares, or nil when the argument is absent or the empty sequence.
+//
+// It exists because argNumber converts an xs:untypedAtomic to xs:double, which
+// is the right target only where the declared type is xs:double. Under XPath
+// 3.1 3.1.5.2 the untypedAtomic is cast to "the expected generalized atomic
+// type" -- the one the signature names -- so a parameter declared xs:integer
+// must cast to xs:integer. Routing $arity through argNumber made
+// function-lookup(xs:QName("fn:abs"), /r/@i) with @i="2" produce the xs:double
+// 2.0e0 and then refuse it for not being an integer: the cast happened, to the
+// wrong type.
+//
+// A lexical that is not a valid xs:integer -- "2.5", "zzz" -- is a cast that
+// was attempted and failed, which CastAtomic reports as FORG0001: the value is
+// at fault, not the type. That is the same split 3.1.5.2 draws for every other
+// castable parameter type, and the reason the code is not XPTY0004.
+//
+// A value that is already numeric is left alone rather than truncated: an
+// xs:double passed here is not an xs:integer, and the caller's own IsInt check
+// is what rejects it, preserving the diagnostic it had before.
+func argInteger(args []xdm.Sequence, i int, fn string) (*xdm.Atomic, error) {
+	a, err := argAtomicOptional(args, i, fn)
+	if err != nil || a == nil {
+		return nil, err
+	}
+	if a.Type == xdm.TypeUntypedAtomic {
+		return CastAtomic(a, xdm.TypeInteger)
+	}
+	return toNumeric(a)
 }
 
 // callFunction invokes a function item, checking its arity first.

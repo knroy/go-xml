@@ -309,23 +309,30 @@ func (r *Results) Regions() map[string][]Region {
 			{Name: "STATS", Whole: true, Body: r.renderStats},
 		},
 		"README.md": {
-			{Name: "TEST COUNT", Body: r.renderReadmeTests},
-			{Name: "TEST METHODS", Body: r.renderReadmeMethods},
-			{Name: "XPATH ROWS", Body: r.renderReadmeXPath},
-			{Name: "RELAX NG ROW", Body: r.renderReadmeRelaxNG},
+			// NOTE: the Status and test-method tables carry NO generated
+			// regions. A Markdown table row must begin with "|", so every
+			// placement of an HTML comment marker in or around a row ends the
+			// table: on its own line between rows, fused to the front of a
+			// row, and bracketing the whole table all render as a header with
+			// no body and the rows below as plain text. Those figures are
+			// maintained by hand and cross-checked by tests/docfigures.sh,
+			// which greps the published numbers against ratchet.txt and does
+			// not depend on a marker being present.
 			{Name: "DOCBOOK COUNT", Inline: true, Body: r.renderDocBookCount},
 			{Name: "XSPEC COUNT", Inline: true, Body: r.renderXSpecCount},
 		},
 		filepath.Join("docs", "todo.md"): {
+			// The markers bracket the WHOLE table, header and all, so none of
+			// them lands between rows -- a marker on its own line inside a
+			// table ends it there, and one fused to the front of a row is not
+			// a row either. The renderer therefore emits the header too.
 			{Name: "STATUS TABLE", Body: r.renderTodoStatus},
 			{Name: "RELAX NG FIGURE", Inline: true, Body: r.renderRelaxNGFigure},
 		},
 		filepath.Join("docs", "validation.md"): {
 			{Name: "RELAX NG FIGURE", Inline: true, Body: r.renderRelaxNGFigure},
 		},
-		filepath.Join("docs", "testing.md"): {
-			{Name: "LAYER COUNTS", Body: r.renderTestingLayers},
-		},
+		filepath.Join("docs", "testing.md"): {},
 		filepath.Join("docs", "conformance-gaps.md"): {
 			{Name: "CONFORMANCE SUMMARY", Bare: true, Body: func() string {
 				// The original region, whose markers predate the name scheme.
@@ -398,6 +405,9 @@ func (r *Results) renderReadmeMethods() string {
 
 func (r *Results) renderTodoStatus() string {
 	var b strings.Builder
+	// The header is generated with the rows so the region can bracket the
+	// whole table and keep every marker outside it.
+	b.WriteString("| | |\n|---|---|\n")
 	row := func(label string, s Suite, extra string) {
 		b.WriteString(fmt.Sprintf("| %s | %s — %s of %s in scope%s |\n",
 			label, pct(s.Passed, s.Total), commas(s.Passed), commas(s.Total), extra))
@@ -462,6 +472,30 @@ func (r *Results) renderDocBookCount() string {
 
 func (r *Results) renderXSpecCount() string {
 	return fmt.Sprintf("%d", r.Suite("xspec").Passed)
+}
+
+// renderTestCountFigure is the unit-test count alone, for a figure wrapped
+// inside a hand-written row rather than a generated row.
+func (r *Results) renderTestCountFigure() string {
+	return commas(r.TreeCount("unit-tests").Value)
+}
+
+// renderXPath20Figure and its siblings render one suite's "P of T in scope"
+// clause, for the same reason.
+func (r *Results) renderXPath20Figure() string { return r.readmeSuiteFigure("xpath-2.0") }
+func (r *Results) renderXPath30Figure() string { return r.readmeSuiteFigure("xpath-3.0") }
+func (r *Results) renderXPath31Figure() string { return r.readmeSuiteFigure("xpath-3.1") }
+
+func (r *Results) readmeSuiteFigure(id string) string {
+	s := r.Suite(id)
+	return fmt.Sprintf("%s of the W3C QT3 suite (%s of %s in scope)",
+		pct(s.Passed, s.Total), commas(s.Passed), commas(s.Total))
+}
+
+func (r *Results) renderRelaxNGRowFigure() string {
+	s := r.Suite("relaxng")
+	return fmt.Sprintf("%s of James Clark's spectest (%s of %s assertions)",
+		pct(s.Passed, s.Total), commas(s.Passed), commas(s.Total))
 }
 
 func (r *Results) renderXPathFigure() string {
@@ -637,7 +671,15 @@ func ReplaceRegion(doc string, g Region) (string, error) {
 	}
 	region := g.Begin() + "\n" + header + body + g.End() + "\n"
 	if g.Inline {
-		region = g.Begin() + body + g.End()
+		// An Inline region's markers ride ON the content lines rather than
+		// sitting on lines of their own. For a table that is not cosmetic: a
+		// Markdown table ends at the first line that is not a row, and an HTML
+		// comment is not one, so a marker on its own line between rows renders
+		// the table as a header with no body and every row below it as plain
+		// text. Trimming the body's trailing newline is what fuses the END
+		// marker to the last row; without it the marker lands on its own line
+		// and ends the table there anyway.
+		region = g.Begin() + strings.TrimSuffix(body, "\n") + g.End()
 	}
 	if strings.Contains(doc, "\r\n") {
 		region = strings.ReplaceAll(region, "\n", "\r\n")

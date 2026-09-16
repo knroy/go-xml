@@ -57,6 +57,36 @@ func dateAccessorArg(a *xdm.Atomic, want xdm.TypeCode, name string) (*xdm.Atomic
 	return a, nil
 }
 
+// untypedArg applies the XPath 3.1 §3.1.5.2 function conversion rule for a
+// parameter whose declared type is a single atomic type: "Each item in the
+// atomic sequence that is of type xs:untypedAtomic is cast to the expected
+// generalized atomic type."
+//
+// An attribute or an element in an unvalidated document is xs:untypedAtomic,
+// so format-dateTime(@date, $p) and days-from-duration(@d) must cast and then
+// format, rather than refuse. dateAccessorArg already did this for the
+// component accessors; the formatting and duration-component functions read
+// their argument through argAtomicOptional and Atomize, which atomize but
+// never cast, so they raised XPTY0004 on exactly the input the rule converts.
+//
+// Two properties are load-bearing:
+//
+//   - Only xs:untypedAtomic is converted. The same clause promotes numerics
+//     and anyURI and nothing else, so an xs:string is NOT cast:
+//     format-dateTime("2026-08-26T10:00:00", "[Y]") stays XPTY0004, which is
+//     what the declared xs:dateTime? signature requires.
+//
+//   - A cast that fails propagates the cast's own FORG0001 rather than being
+//     rewrapped as a type error. The conversion was defined and the VALUE was
+//     bad, which is FORG0001 — the distinction QT3 pins for the same rule on
+//     fn:min (K-SeqMINFunc-35, min(xs:untypedAtomic("three")) is FORG0001).
+func untypedArg(a *xdm.Atomic, want xdm.TypeCode) (*xdm.Atomic, error) {
+	if a == nil || a.Type != xdm.TypeUntypedAtomic {
+		return a, nil
+	}
+	return CastAtomic(a, want)
+}
+
 // registerDateFuncs adds the date/time accessor and adjustment functions.
 func registerDateFuncs(l *Library) {
 	// The component accessors. Each returns the empty sequence for an empty
@@ -140,6 +170,13 @@ func registerDateFuncs(l *Library) {
 				return nil, err
 			}
 			a := it.(*xdm.Atomic)
+			// $arg is declared xs:duration?, so an xs:untypedAtomic is cast
+			// to xs:duration by the function conversion rules before the
+			// component is taken. See untypedArg.
+			a, err = untypedArg(a, xdm.TypeDuration)
+			if err != nil {
+				return nil, err
+			}
 			if a.DurationVal() == nil {
 				return nil, xdm.ErrType("%s(): expected a duration, got %s", name, a.TypeName())
 			}

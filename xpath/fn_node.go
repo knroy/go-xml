@@ -482,7 +482,11 @@ func registerContextFuncs(l *Library) {
 				return nil, err
 			}
 			if a == nil || a.Type != xdm.TypeQName {
-				return nil, xdm.ErrType(
+				// xs:QName is namespace-sensitive, so an xs:untypedAtomic
+				// here is XPTY0117 rather than the general type error from
+				// XPath 3.0 on. Anything else -- a string, an integer -- is
+				// still XPTY0004. See errNotQName.
+				return nil, errNotQName(ctx, a,
 					"fn:error: the first argument is xs:QName?, got %s",
 					args[0][0].TypeName())
 			}
