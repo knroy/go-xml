@@ -13,6 +13,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `method="json"` honours `indent="yes"` | JSON output was always compact. Serialization 3.1 §9.1.4 makes indentation optional — `indent=yes` MAY add whitespace, `indent=no` MUST NOT — and a result of any size is hard to check by eye on one line. Two-space indent matching Saxon and the XML method; a map or array of leaves stays inline, so `[ 3, 2, 1 ]` keeps its shape. `indent="no"` output is unchanged. | [`7dda133`][7dda133] |
 | Package `c14n`: Canonical XML 1.0, 1.1 and Exclusive C14N | XML-DSig, SAML and WS-Security digest a byte-exact canonical form, which go-xml could not produce. Streams over any node set; no default algorithm. | [`48651cf`][48651cf] |
 | `xdm.Tree.XMLVersion` | Records the version an XML declaration names, `1.0` when there is none. Canonical XML is not defined for XML 1.1, and `c14n` uses it to refuse such input. | [`48651cf`][48651cf] |
+| `c14n` differential against `xmlsec1` | 870 node-set comparisons against libxml2's signer, in CI on Linux and locally via Docker (`tests/c14n-xmlsec1.sh`). The 80 differences are 12 inputs where `xmlsec1` departs from the specifications; each is listed and asserted. | pending |
+| `c14n.FromXPathFilter` and `c14n.NamespaceSet` | The XML-DSig XPath Filter transform, namespace nodes included, so a filter may keep part of an element's namespace axis. It was the one input `c14n` could not express; C14N 1.0 §2.3 and Exclusive C14N §3 now apply literally. | pending |
 
 ### Fixed — engine
 
@@ -28,6 +30,13 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | `tests/check.sh` recorded a failing lane as PASS after an earlier failure | `failed` was a flag, and a lane is judged by whether it moved, so a second failure moved nothing. It counts failures now. | [`1803696`][1803696] |
+
+### Fixed — documentation
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| The README's link to the XML 1.1 row of `docs/todo.md` went nowhere | The heading had been renamed, so the anchor matched nothing. It points at the heading as it now reads. | pending |
+| `docs/testing.md` listed ten fuzz targets where there are twelve | The two `xquery` targets were missing, and nothing said why the nightly run omits them. Both are listed, with the reason. | pending |
 
 ## v1.3.1 — 2026-09-16
 

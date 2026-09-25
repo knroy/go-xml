@@ -84,9 +84,12 @@ jobs:
       # there (Chocolatey's xsltproc package bundles libxml2, but whether it
       # puts xmllint on the PATH is unconfirmed), so the variable is empty and
       # the differential runs only if xmllint happens to be present.
-      - name: Install xmllint
+      # The xmlsec1 differential follows the same pattern with
+      # GOXML_C14N_XMLSEC1, on Linux only: it is installed from apt beside
+      # xmllint, and no install route has been verified on macOS or Windows.
+      - name: Install xmllint and xmlsec1
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libxml2-utils
+        run: sudo apt-get update && sudo apt-get install -y libxml2-utils xmlsec1
       # The W3C Canonical XML interop cases are third-party, so they are
       # downloaded rather than committed: tests/fetch-c14n.sh fetches the files
       # tests/c14n-corpus.txt lists and checks each against its pinned digest.
@@ -98,6 +101,7 @@ jobs:
         env:
           GOXSLT_NO_SUITES: '1'
           GOXML_C14N_XMLLINT: ${{ runner.os != 'Windows' && '1' || '' }}
+          GOXML_C14N_XMLSEC1: ${{ runner.os == 'Linux' && '1' || '' }}
           GOXML_C14N_W3C: '1'
       # -timeout is set explicitly rather than left at the 10m default,
       # because the default is what turned a slow run into a panic rather

@@ -877,7 +877,7 @@ persistent hash array mapped trie — is what made it pass.
 
 ## Fuzzing
 
-Ten targets, using Go's native `testing.F` and no framework:
+Twelve targets, using Go's native `testing.F` and no framework:
 
 | target | package | asserts |
 |---|---|---|
@@ -890,12 +890,20 @@ Ten targets, using Go's native `testing.F` and no framework:
 | `FuzzCompileNoPanic` | `xpath` | the expression compiler never panics, and every parse error carries a spec code |
 | `FuzzParseCompactNoPanic` | `relaxng` | the compact-syntax parser never panics |
 | `FuzzTokenNoPanic` | `internal/xmlfork` | the forked tokeniser never panics and terminates on any byte string |
-| `FuzzCanonicalizeNoPanic` | `c14n` | parse then canonicalize never panics or hangs |
+| `FuzzCanonicalizeNoPanic` | `c14n` | parse then canonicalize never panics or hangs; a parsed document is refused only for depth, a relative namespace URI or XML 1.1; inclusive canonical forms re-canonicalize unchanged; `FromXPathFilter(doc, "true()")` reproduces the whole document exactly, and filters that split namespace axes canonicalize |
+| `FuzzCompileNoPanic` | `xquery` | `xquery.Compile` never panics or hangs |
+| `FuzzConstructorDepthIsBounded` | `xquery` | a query nested past the constructor-depth bound is refused, and one inside it compiles |
 
 Most targets live in `zz_fuzz_test.go` in the package they exercise; the `zz_`
-prefix is only to sort it last. Five sit beside the code they cover instead,
+prefix is only to sort it last. Four sit beside the code they cover instead,
 in `internal/xmlfork/fuzz_test.go`, `relaxng/compact_fuzz_test.go`,
 `xsd/complexity_fuzz_test.go` and `c14n/fuzz_test.go`.
+
+The nightly workflow runs ten of the twelve. The two `xquery` targets are left
+out on purpose: `FuzzCompileNoPanic` rediscovers two known, still-open
+faults in the prolog scanner within about a minute each (its doc comment
+names them), so a nightly run would fail every night on bugs already
+recorded. Run them by hand while working on `xquery`.
 
 ```sh
 # Run one target's search. -run '^$' suppresses the ordinary tests so that
@@ -985,6 +993,35 @@ for subsets the second implementation is the W3C interop round above — twenty
 cases, five implementations — and beyond those the Recommendations' own
 examples; [c14n.md](c14n.md#the-v140-release-gate-is-not-yet-met) lists what
 that leaves open.
+
+**The `xmlsec1` differential.** `TestC14NDifferentialXMLSec1` takes node sets
+to `xmlsec1`, which has no canonicalize command but digests a node set for
+every signature reference: each comparison is a `ds:Reference` in an enveloped
+signature template, and `xmlsec1 --sign --store-references` prints the octets
+it digests, which are checked against the digest it printed and then compared
+byte for byte with this package's output for the same node set. It covers the
+`xmllint` corpus under all six algorithms, the enveloped-signature transform
+(`ExcludeSubtree`, including two documents in `tests/c14n/testdata/xmlsec1/`
+with the signature mid-document), XPath filter transforms over the
+Recommendations' subset examples and the W3C interop inputs, five inputs
+whose filters split namespace axes (`FromXPathFilter`, a `NamespaceSet`), and
+Exclusive C14N with an `InclusiveNamespaces` PrefixList. It skips without `xmlsec1` on
+the `PATH`; `GOXML_C14N_XMLSEC1=1` makes that a failure, and CI sets it on
+Linux, where it installs `xmlsec1` from apt. Without a local `xmlsec1`, a
+script runs it in a Debian container and needs only Docker:
+
+```sh
+tests/c14n-xmlsec1.sh         # the differential
+tests/c14n-xmlsec1.sh bench   # and the throughput comparison (about a minute)
+```
+
+Where `xmlsec1` is known to differ, the case is listed in
+`xmlsec1Differences` in `tests/c14n/xmlsec1_test.go` with its reason, and
+[c14n.md](c14n.md#where-xmlsec1-differs) states each one. An entry derives the
+exact octets `xmlsec1` produces (or names the error it stops with), so it
+fails both when `xmlsec1` changes and when it starts agreeing. Any other
+difference is a failure. An entry needs a reason grounded in a Recommendation;
+one is never added to make the test pass.
 
 **Fuzzing.** `FuzzCanonicalizeNoPanic` parses its input and canonicalizes
 what parses, asserting no panic and no hang; it runs nightly with the

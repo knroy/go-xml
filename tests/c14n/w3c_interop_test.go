@@ -11,7 +11,6 @@ import (
 
 	"github.com/knroy/go-xml/c14n"
 	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
 )
 
 // TestW3CC14N11Interop runs the XML Security WG's Canonical XML 1.1 interop
@@ -66,18 +65,12 @@ func TestW3CC14N11Interop(t *testing.T) {
 					input = a.Value
 				}
 			}
-			expr, err := xpath.Compile(xp.StringValue(), nsMap(xp.InScopeNamespaces()))
+			// The template's transform is the XML-DSig XPath Filter, which
+			// FromXPathFilter implements: namespace nodes included.
+			set, err := c14n.FromXPathFilter(parse(input), xp.StringValue(), xp.InScopeNamespaces())
 			if err != nil {
 				t.Fatal(err)
 			}
-			doc := parse(input)
-			set := c14n.Func(doc, func(n *xdm.Node) bool {
-				ok, err := expr.EvalBool(xpath.NewContext(n, xpath.Builtins()))
-				if err != nil {
-					t.Fatalf("XPath at %v: %v", n.Name, err)
-				}
-				return ok
-			})
 			got, err := c14n.BytesNodeSet(set, c14n.Options{Algorithm: c14n.Inclusive11})
 			if err != nil {
 				t.Fatal(err)
@@ -132,11 +125,3 @@ func firstElement(n *xdm.Node, local string) *xdm.Node {
 	}
 	return nil
 }
-
-// nsMap resolves the XPath filter's prefixes from the bindings in scope on
-// the template's XPath element.
-type nsMap map[string]string
-
-func (m nsMap) ResolvePrefix(p string) (string, bool) { u, ok := m[p]; return u, ok }
-func (nsMap) DefaultElementNamespace() string         { return "" }
-func (nsMap) DefaultFunctionNamespace() string        { return xdm.NSFN }

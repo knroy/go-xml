@@ -32,14 +32,15 @@
 // # Namespace nodes
 //
 // The specifications define their input as an XPath 1.0 node-set, which
-// can contain some of an element's namespace nodes and not others. The
-// data model xdm implements has no namespace nodes in a node set, so here
-// an element's namespace declarations participate exactly when the element
-// itself is in the set. That makes one input inexpressible — an element
-// with some of its namespace axis removed — and no consuming specification
-// constructs it: a same-document reference produces a subtree, and the
-// enveloped-signature transform's //namespace::* keeps every namespace node
-// of every kept element, which is exactly this rule.
+// can contain some of an element's namespace nodes and not others. By
+// default an element's namespace declarations participate exactly when the
+// element itself is in the set: that is what a same-document reference, the
+// enveloped-signature transform and every constructor here except one
+// produce. A node set that decides namespace-node membership itself
+// implements NamespaceSet, and then canonicalization follows the
+// specifications' namespace-node rules literally — a partial namespace axis,
+// and the namespace nodes of an element outside the set. FromXPathFilter,
+// the XML-DSig XPath Filter transform, is the constructor that does.
 package c14n
 
 import (
@@ -355,6 +356,86 @@ func FromXPath(doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error
 		}
 	}
 	return funcSet{top(doc), func(n *xdm.Node) bool { return m[n] }}, nil
+}
+
+// NamespaceSet is a NodeSet that decides namespace-node membership itself,
+// rather than letting each element's namespace declarations follow the
+// element. Canonicalization then applies C14N 1.0 section 2.3 and Exclusive
+// C14N section 3 to namespace nodes as members in their own right: an
+// element may keep some of its namespace nodes and not others, and an
+// element outside the set still renders the namespace nodes of it that are
+// in the set.
+//
+// Most callers never need it; FromXPathFilter returns one.
+type NamespaceSet interface {
+	NodeSet
+
+	// ContainsNamespace reports whether the namespace node binding prefix
+	// on elem is a member. The empty prefix is the default namespace, which
+	// in the XPath 1.0 data model has a namespace node only while a
+	// non-empty default is in scope.
+	ContainsNamespace(elem *xdm.Node, prefix string) bool
+}
+
+// FromXPathFilter is the XML-DSig XPath Filter transform
+// (http://www.w3.org/TR/1999/REC-xpath-19991116): filter is evaluated as a
+// boolean with each node of doc's tree as the context node — element,
+// attribute, text, comment, processing instruction and namespace nodes
+// alike — and the node set holds the nodes for which it is true.
+//
+// Because namespace nodes are filtered like any other, the result is a
+// NamespaceSet and may keep part of an element's namespace axis. FromXPath,
+// by contrast, takes the nodes an expression returns and lets namespace
+// declarations follow their elements. The filter is compiled as XPath 2.0,
+// with ns supplying its prefix bindings; the XML-DSig here() function is not
+// provided.
+func FromXPathFilter(doc *xdm.Node, filter string, ns map[string]string) (NodeSet, error) {
+	c, err := xpath.Compile(filter, prefixMap(ns))
+	if err != nil {
+		return nil, err
+	}
+	root := top(doc)
+	seq, err := allNodes.Eval(xpath.NewContext(root, xpath.Builtins()))
+	if err != nil {
+		return nil, err
+	}
+	set := filterSet{root: root, nodes: map[*xdm.Node]bool{}, ns: map[nsKey]bool{}}
+	for _, it := range seq {
+		n := it.(*xdm.Node) // a union of path expressions yields only nodes
+		keep, err := c.EvalBool(xpath.NewContext(n, xpath.Builtins()))
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case !keep:
+		case n.Kind == xdm.KindNamespace:
+			set.ns[nsKey{n.Parent, n.Name.Local}] = true
+		default:
+			set.nodes[n] = true
+		}
+	}
+	return set, nil
+}
+
+// allNodes is XML-DSig's input node-set for a same-document XPath Filter:
+// every node of the document, namespace nodes included.
+var allNodes = xpath.MustCompile("//. | //@* | //namespace::*", prefixMap(nil))
+
+type nsKey struct {
+	elem   *xdm.Node
+	prefix string
+}
+
+type filterSet struct {
+	root  *xdm.Node
+	nodes map[*xdm.Node]bool
+	ns    map[nsKey]bool
+}
+
+func (s filterSet) Root() *xdm.Node           { return s.root }
+func (s filterSet) Contains(x *xdm.Node) bool { return s.nodes[x] }
+func (s filterSet) ContainsNamespace(e *xdm.Node, prefix string) bool {
+	return s.ns[nsKey{e, prefix}]
 }
 
 type subtree struct{ n *xdm.Node }

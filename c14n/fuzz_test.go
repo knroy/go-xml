@@ -2,6 +2,7 @@ package c14n
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/knroy/go-xml/xdm"
@@ -25,6 +26,19 @@ var fuzzSeeds = []string{
 	`<a><b><c><d><e><f/></e></d></c></b></a>`,
 	`<!DOCTYPE a><a/>`,
 	`<a><b></a>`,
+	// Parsed, then refused: a relative namespace URI (the input the fuzzer
+	// found once that refusal existed) and XML 1.1.
+	`<a xmlns="0"/>`,
+	`<?xml version="1.1"?><a/>`,
+	// Partial namespace axes for the FromXPathFilter checks.
+	`<e1 xmlns="a:b"><p xmlns:p="urn:p" xmlns=""><p:e3/></p></e1>`,
+	`<r xmlns="urn:1"><a xmlns="urn:2"><b/></a></r>`,
+}
+
+// refused reports whether err is a refusal the specifications require or
+// allow for a document the parser accepted, rather than a failure.
+func refused(err error) bool {
+	return errors.Is(err, ErrDepthExceeded) || errors.Is(err, ErrRelativeNamespaceURI) || errors.Is(err, ErrXML11)
 }
 
 // FuzzCanonicalizeNoPanic: whatever the parser accepts with its defaults,
@@ -61,24 +75,48 @@ func FuzzCanonicalizeNoPanic(f *testing.F) {
 				}
 			}
 		}
+		// The namespace-node path: keeping every node must reproduce the
+		// default path exactly, and filters that split namespace axes must
+		// canonicalize without panicking.
+		all, errAll := FromXPathFilter(doc, "true()", nil)
+		split1, err1 := FromXPathFilter(doc, "not(name()='p')", nil)
+		split2, err2 := FromXPathFilter(doc, "count(ancestor::*) mod 2 = 0", nil)
+		if errAll != nil || err1 != nil || err2 != nil {
+			t.Fatalf("FromXPathFilter: %v %v %v", errAll, err1, err2)
+		}
+		for _, alg := range allAlgorithms {
+			opts := Options{Algorithm: alg, InclusiveNamespacePrefixes: []string{"", "p"}}
+			want, wantErr := Bytes(doc, opts)
+			got, gotErr := BytesNodeSet(all, opts)
+			if (wantErr == nil) != (gotErr == nil) || !bytes.Equal(got, want) {
+				t.Fatalf("%s: true() filter differs from the document\n in   %q\n doc  %q %v\n all  %q %v", alg, src, want, wantErr, got, gotErr)
+			}
+			for _, set := range []NodeSet{split1, split2} {
+				if _, err := BytesNodeSet(set, opts); err != nil && !refused(err) {
+					t.Fatalf("%s split: %v", alg, err)
+				}
+			}
+		}
+
 		for _, alg := range allAlgorithms {
 			opts := Options{Algorithm: alg, InclusiveNamespacePrefixes: []string{"", "p"}}
 			out, err := Bytes(doc, opts)
 			if err != nil {
-				// The only legitimate refusal for a parsed document is depth,
-				// and the parser's limit is above ours.
-				if err != ErrDepthExceeded { //nolint:errorlint
+				// A parsed document may still be refused: nesting past
+				// MaxDepth, a relative namespace URI (C14N section 2.1), or
+				// XML 1.1, for which canonical XML is not defined.
+				if !refused(err) {
 					t.Fatalf("%s: %v", alg, err)
 				}
 				continue
 			}
 			if elem != nil {
-				if _, err := Bytes(elem, opts); err != nil && err != ErrDepthExceeded { //nolint:errorlint
+				if _, err := Bytes(elem, opts); err != nil && !refused(err) {
 					t.Fatalf("%s subtree: %v", alg, err)
 				}
 			}
 			if first != nil {
-				if _, err := BytesNodeSet(ExcludeSubtree(doc, first), opts); err != nil && err != ErrDepthExceeded { //nolint:errorlint
+				if _, err := BytesNodeSet(ExcludeSubtree(doc, first), opts); err != nil && !refused(err) {
 					t.Fatalf("%s exclude: %v", alg, err)
 				}
 			}

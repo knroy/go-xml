@@ -904,8 +904,9 @@ Canonical XML 1.0 with its InclusiveNamespaces PrefixList, and Canonical XML
 document, a subtree, the enveloped-signature subset or any XPath-selected
 node set. Two inputs the specifications leave undefined are refused rather
 than guessed at: an XML 1.1 document, and a relative namespace URI. See
-[docs/c14n.md](docs/c14n.md) for the one documented refusal (partial namespace
-axes) and the one interop-driven divergence from libxml2.
+[docs/c14n.md](docs/c14n.md) for how namespace nodes are handled, including
+XPath filters that keep part of an element's namespace axis, and for where it
+follows the W3C interop results over a literal reading of the text.
 
 ## Real-world stylesheets
 
@@ -1064,7 +1065,7 @@ accepting invalid input only fails to catch their mistake.
 One note on the denominator, and one on the numerator. The `XmlVersions` schemas carry
 `version="1.1"` and this parser accepts and loads all of them, but reads them
 under XML 1.0 rules, so what they test is not what is measured. See
-[todo.md](docs/todo.md#11-xml-11-documents--the-largest-single-win).
+[todo.md](docs/todo.md#11-xml-11-documents--implemented-one-layer-outstanding).
 
 And some of the suite is disputed. `status="queried"` on a test means the W3C
 has challenged the expected result, usually with a bugzilla reference, so those

@@ -76,7 +76,22 @@ type canon struct {
 	path     []ancestor
 	attrs    []*xdm.Node // scratch: the attribute axis being rendered
 	nsOut    []binding   // scratch: the namespace axis being rendered
+
+	// nsSet is the node set when it decides namespace-node membership
+	// itself (a NamespaceSet), else nil. Only then are axes and util used.
+	// axes holds, for each output element on the path, its namespace nodes
+	// that are in the set: what the Canonical XML rule compares against.
+	// util maps a prefix to the in-set namespace node value of the nearest
+	// output ancestor that visibly utilised it (noNode when that ancestor's
+	// node was not in the set): what the exclusive rule compares against.
+	nsSet NamespaceSet
+	axes  []map[string]string
+	util  bindings
 }
+
+// noNode records in util that the utilising ancestor had no namespace node
+// for the prefix in the set. No URI contains a NUL.
+const noNode = "\x00"
 
 func canonicalize(w io.Writer, ns NodeSet, opts Options) error {
 	root := ns.Root()
@@ -103,6 +118,8 @@ func canonicalize(w io.Writer, ns NodeSet, opts Options) error {
 	if c.excl {
 		c.prefixes = opts.InclusiveNamespacePrefixes
 	}
+	c.nsSet, _ = ns.(NamespaceSet)
+	c.util = bindings{m: map[string]string{}}
 	if t := root.Tree(); t != nil && t.XMLVersion == "1.1" {
 		return ErrXML11
 	}
@@ -153,6 +170,15 @@ func (s *stickyWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// put and putByte discard each write's result on purpose. The bufio.Writer
+// keeps the first error it meets and fails every later write the same way,
+// so checking after each byte would add a branch per byte and learn nothing:
+// the kept error is read at every element boundary (element returns
+// c.sw.err) and at the final Flush, and returned unwrapped from there.
+// writeQName and writeEscaped follow the same rule.
+func (c *canon) put(s string)   { _, _ = c.w.WriteString(s) }
+func (c *canon) putByte(b byte) { _ = c.w.WriteByte(b) }
+
 func (c *canon) contains(n *xdm.Node) bool { return c.all || c.set.Contains(n) }
 
 // document renders the children of the document node. Comments and PIs
@@ -172,11 +198,11 @@ func (c *canon) document(d *xdm.Node) error {
 			continue
 		}
 		if after {
-			c.w.WriteByte('\n')
+			c.putByte('\n')
 		}
 		c.leaf(ch)
 		if !after {
-			c.w.WriteByte('\n')
+			c.putByte('\n')
 		}
 	}
 	return nil
@@ -197,7 +223,7 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 		return ErrDepthExceeded
 	}
 	in := c.contains(e)
-	scopeMark, renderedMark := len(c.scope.undo), len(c.rendered.undo)
+	scopeMark, renderedMark, utilMark := len(c.scope.undo), len(c.rendered.undo), len(c.util.undo)
 	for _, ns := range e.Namespaces {
 		if err := checkNamespaceURI(ns.Name.Local, ns.Value); err != nil {
 			return err
@@ -212,13 +238,26 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 			c.attrs = append(c.attrs, a)
 		}
 	}
-	if in {
-		c.w.WriteByte('<')
+	axesMark := len(c.axes)
+	switch {
+	case in:
+		c.putByte('<')
 		writeQName(c.w, e.Name)
-		c.namespaces(e, parentIn)
+		if c.nsSet != nil {
+			c.namespaceNodes(e, true)
+		} else {
+			c.namespaces(e, parentIn)
+		}
 		if !parentIn && !c.excl {
 			c.inherit(e)
 		}
+	case c.nsSet != nil:
+		// C14N 1.0 §2.3: an element outside the set still processes its
+		// namespace axis, so its namespace nodes that ARE in the set are
+		// rendered, into the parent's content. Under Exclusive C14N that
+		// holds for the PrefixList's prefixes, which §3 hands to Canonical
+		// XML's rules; its own rule needs the parent element in the set.
+		c.namespaceNodes(e, false)
 	}
 	// C14N 1.0 §2.3: an element outside the set still processes its
 	// attribute axis. Only a Func or FromXPath set can reach this with a
@@ -226,7 +265,7 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 	// the specification says.
 	c.writeAttrs()
 	if in {
-		c.w.WriteByte('>')
+		c.putByte('>')
 	}
 
 	for _, ch := range e.Children {
@@ -239,12 +278,14 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 		}
 	}
 	if in {
-		c.w.WriteString("</")
+		c.put("</")
 		writeQName(c.w, e.Name)
-		c.w.WriteByte('>')
+		c.putByte('>')
 	}
 	c.scope.restore(scopeMark)
 	c.rendered.restore(renderedMark)
+	c.util.restore(utilMark)
+	c.axes = c.axes[:axesMark]
 	c.path = c.path[:len(c.path)-1]
 	return c.sw.err
 }
@@ -289,22 +330,146 @@ func (c *canon) namespaces(e *xdm.Node, parentIn bool) {
 		}
 		c.consider("")
 	}
+	c.writeNamespaces()
+}
+
+// writeNamespaces renders c.nsOut, sorted by prefix, and records it as
+// rendered.
+func (c *canon) writeNamespaces() {
 	// Candidates can repeat (a prefix used by the element and an attribute,
 	// or listed too); sorting brings repeats together to drop them.
 	slices.SortFunc(c.nsOut, func(a, b binding) int { return strings.Compare(a.prefix, b.prefix) })
 	c.nsOut = slices.CompactFunc(c.nsOut, func(a, b binding) bool { return a.prefix == b.prefix })
 	for _, b := range c.nsOut {
-		c.w.WriteString(" xmlns")
+		c.put(" xmlns")
 		if b.prefix != "" {
-			c.w.WriteByte(':')
-			c.w.WriteString(b.prefix)
+			c.putByte(':')
+			c.put(b.prefix)
 		}
-		c.w.WriteString(`="`)
+		c.put(`="`)
 		writeEscaped(c.w, b.uri, true)
-		c.w.WriteByte('"')
+		c.putByte('"')
 	}
 	for _, b := range c.nsOut {
 		c.rendered.set(b.prefix, b.uri)
+	}
+}
+
+// namespaceNodes renders e's namespace axis when the node set decides
+// namespace-node membership itself; in says whether e is in the set.
+//
+// Two rules apply, by prefix. Canonical XML's (C14N 1.0 §2.3) covers every
+// prefix under the inclusive algorithms and the PrefixList's prefixes under
+// Exclusive C14N, which §3 hands to it: a namespace node of e that is in the
+// set renders unless "the nearest ancestor element of the node's parent
+// element that is in the node-set has a namespace node in the node-set with
+// the same local name and value". That ancestor's in-set nodes are the top
+// of c.axes; with partial axes they are not what was rendered, so this path
+// cannot use c.rendered. Exclusive C14N's own rule covers the rest: a
+// visibly utilised prefix renders when "its parent element is in the
+// node-set" and the nearest output ancestor that visibly utilises it "does
+// not have a namespace node in the node-set with the same namespace prefix
+// and value" — membership of the node itself is not a condition.
+func (c *canon) namespaceNodes(e *xdm.Node, in bool) {
+	c.nsOut = c.nsOut[:0]
+	listed := func(prefix string) bool { return !c.excl || slices.Contains(c.prefixes, prefix) }
+	var anc map[string]string
+	if n := len(c.axes); n > 0 {
+		anc = c.axes[n-1]
+	}
+	var axis map[string]string
+	if in {
+		axis = map[string]string{}
+	}
+	hasDefault := false
+	for prefix, uri := range c.scope.m {
+		// An empty URI is an undeclaration: no namespace node exists for it.
+		// The xml node is never rendered ("omit namespace node with local
+		// name xml").
+		if uri == "" || prefix == "xml" || !c.nsSet.ContainsNamespace(e, prefix) {
+			continue
+		}
+		if in {
+			axis[prefix] = uri
+		}
+		if prefix == "" {
+			hasDefault = true
+		}
+		if !listed(prefix) {
+			continue
+		}
+		if v, ok := anc[prefix]; ok && v == uri {
+			continue
+		}
+		c.nsOut = append(c.nsOut, binding{prefix, uri})
+	}
+	// xmlns="" under Canonical XML's rule: e in the set, no default
+	// namespace node of e in the set, and the nearest ancestor in the set
+	// has one.
+	if in && listed("") && !hasDefault && anc[""] != "" {
+		c.nsOut = append(c.nsOut, binding{"", ""})
+	}
+	if c.excl && in {
+		c.exclusiveUtilised(e, axis)
+	}
+	if in {
+		c.axes = append(c.axes, axis)
+	}
+	c.writeNamespaces()
+}
+
+// exclusiveUtilised applies Exclusive C14N §3's own rule to the prefixes e
+// visibly utilises that the PrefixList does not name, and records what e
+// utilised for its descendants. axis is e's in-set namespace nodes.
+func (c *canon) exclusiveUtilised(e *xdm.Node, axis map[string]string) {
+	var used []string
+	add := func(p string) {
+		if p != "xml" && !slices.Contains(c.prefixes, p) && !slices.Contains(used, p) {
+			used = append(used, p)
+		}
+	}
+	add(e.Name.Prefix)
+	for _, a := range c.attrs {
+		if a.Name.Prefix != "" {
+			add(a.Name.Prefix)
+		}
+	}
+	for _, p := range used {
+		uri := c.scope.m[p]
+		node, inSet := axis[p]
+		// The value the nearest utilising output ancestor had for p, as
+		// its in-set node; absent when no output ancestor utilised p.
+		prev, seen := c.util.m[p]
+		switch {
+		case uri != "":
+			// The namespace node exists (in the set or not). It renders
+			// unless the nearest utilising ancestor has the same node in
+			// the set; with no such ancestor, unless the prefix is already
+			// rendered with this value.
+			if (seen && prev != uri) || (!seen && c.rendered.m[p] != uri) {
+				c.nsOut = append(c.nsOut, binding{p, uri})
+			}
+		case p == "":
+			// No default namespace node at all. xmlns="" when e utilises
+			// the default namespace, has no default node in the set, and
+			// the nearest utilising output ancestor has one.
+			if seen && prev != noNode && prev != "" {
+				c.nsOut = append(c.nsOut, binding{"", ""})
+			}
+		}
+		if p == "" && uri != "" && !inSet {
+			// A default namespace in scope whose node is outside the set:
+			// e has no default node in the set, so the xmlns="" rule
+			// applies too, when the namespace node itself did not render.
+			if seen && prev != noNode && prev == uri {
+				c.nsOut = append(c.nsOut, binding{"", ""})
+			}
+		}
+		if inSet {
+			c.util.set(p, node)
+		} else {
+			c.util.set(p, noNode)
+		}
 	}
 }
 
@@ -351,9 +516,8 @@ func hasScheme(s string) bool {
 // of XML canonicalization MUST report an operation failure on documents
 // containing relative namespace URIs". It is applied to every declaration
 // the walk visits and every binding in scope above its start — everything
-// whose declarations can reach the output, which is stricter than libxml2's
-// check of rendered elements only. An empty URI is an undeclaration, not a
-// URI. The parser still accepts relative URIs, which Namespaces in XML
+// whose declarations can reach the output. An empty URI is an undeclaration,
+// not a URI. The parser still accepts relative URIs, which Namespaces in XML
 // deprecates rather than forbids; only canonicalization refuses them.
 func checkNamespaceURI(prefix, uri string) error {
 	if uri == "" || hasScheme(uri) {
@@ -379,10 +543,11 @@ func (c *canon) inherit(e *xdm.Node) {
 		// The apex keeps its OWN simple inheritable attributes and xml:base
 		// even when the node set excludes them. Section 2.4 read literally
 		// merges only "the nodes of E's attribute axis that are in the
-		// node-set", and libxml2 does that; the XML Security WG's interop
-		// case xmlbase-c14n11spec3-103 expects <a xml:base="foo/bar"> for
-		// a kept without its attribute, and all five implementations in
-		// that round signed exactly that. The WG's result is followed.
+		// node-set"; the XML Security WG's interop case
+		// xmlbase-c14n11spec3-103 expects <a xml:base="foo/bar"> for a kept
+		// without its attribute, all five implementations in that round
+		// signed exactly that, and xmlsec1 1.2.41 was measured doing the
+		// same. The WG's result is followed.
 		for _, at := range e.Attrs {
 			if at.Name.URI == xdm.NSXML && (c.inheritable(at.Name.Local) || at.Name.Local == "base") &&
 				!hasXMLAttr(c.attrs, at.Name.Local) {
@@ -481,11 +646,11 @@ func (c *canon) writeAttrs() {
 		return strings.Compare(a.Name.Local, b.Name.Local)
 	})
 	for _, a := range c.attrs {
-		c.w.WriteByte(' ')
+		c.putByte(' ')
 		writeQName(c.w, a.Name)
-		c.w.WriteString(`="`)
+		c.put(`="`)
 		writeEscaped(c.w, a.Value, true)
-		c.w.WriteByte('"')
+		c.putByte('"')
 	}
 }
 
@@ -494,26 +659,26 @@ func (c *canon) leaf(n *xdm.Node) {
 	case xdm.KindText:
 		writeEscaped(c.w, n.Value, false)
 	case xdm.KindComment:
-		c.w.WriteString("<!--")
-		c.w.WriteString(n.Value)
-		c.w.WriteString("-->")
+		c.put("<!--")
+		c.put(n.Value)
+		c.put("-->")
 	case xdm.KindPI:
-		c.w.WriteString("<?")
-		c.w.WriteString(n.Name.Local)
+		c.put("<?")
+		c.put(n.Name.Local)
 		if n.Value != "" {
-			c.w.WriteByte(' ')
-			c.w.WriteString(n.Value)
+			c.putByte(' ')
+			c.put(n.Value)
 		}
-		c.w.WriteString("?>")
+		c.put("?>")
 	}
 }
 
 func writeQName(w *bufio.Writer, q xdm.QName) {
 	if q.Prefix != "" {
-		w.WriteString(q.Prefix)
-		w.WriteByte(':')
+		_, _ = w.WriteString(q.Prefix)
+		_ = w.WriteByte(':')
 	}
-	w.WriteString(q.Local)
+	_, _ = w.WriteString(q.Local)
 }
 
 // writeEscaped writes s with the text or attribute escaping of C14N 1.0
@@ -553,11 +718,11 @@ func writeEscaped(w *bufio.Writer, s string, attr bool) {
 		default:
 			continue
 		}
-		w.WriteString(s[start:i])
-		w.WriteString(rep)
+		_, _ = w.WriteString(s[start:i])
+		_, _ = w.WriteString(rep)
 		start = i + 1
 	}
-	w.WriteString(s[start:])
+	_, _ = w.WriteString(s[start:])
 }
 
 // uriRE is RFC 3986 appendix B's reference-splitting expression.
