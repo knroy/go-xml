@@ -617,6 +617,10 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		// point into.
 		tree.src = srcBuf.String()
 	}
+	tree.XMLVersion = "1.0"
+	if dec.IsVersion11() {
+		tree.XMLVersion = "1.1"
+	}
 	tree.Finalize()
 	return tree, nil
 }

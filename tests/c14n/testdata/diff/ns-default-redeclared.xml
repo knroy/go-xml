@@ -1,0 +1,1 @@
+<root xmlns="http://example.com/a"><child xmlns="http://example.com/b"><leaf xmlns="http://example.com/a"/></child></root>

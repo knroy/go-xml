@@ -25,7 +25,7 @@ Two sets of exceptions, both verified by the boundary tests described in
 [testing.md](testing.md):
 
 * **A negative `MaxDepth` means the default, not "no limit"**, in
-  `xdm.ParseOptions` and `xpath.Context` — a depth bound of zero or below would
+  `xdm.ParseOptions`, `xpath.Context` and `c14n.MaxDepth` — a depth bound of zero or below would
   reject every document, so there is no useful reading of a negative value
   other than "the caller set nothing". Elsewhere — `xsd.ValidateOptions`,
   `relaxng.ValidateOptions`, `xslt.TransformOptions` — a negative `MaxDepth`
@@ -34,6 +34,12 @@ Two sets of exceptions, both verified by the boundary tests described in
   refuses every fetch, with an error naming the limit. That is deliberate: a
   schema is not a stream, so an unbounded read is a way to be handed an
   unbounded allocation. Use a large number, not `-1`.
+
+One struct departs from "the zero value is the answer" on purpose:
+**`c14n.Options{}` is an error**, `ErrNoAlgorithm`. Canonicalizing with the
+wrong algorithm produces a signature no peer accepts and no local test
+catches, so there is no default to fall back to; see
+[c14n.Options](#c14noptions-and-c14nmaxdepth).
 
 Every limit is tested at `0`, negative, `1`, exactly at the limit, exactly one
 over, and `MaxInt`/`MaxInt64`. The largest value a caller can name is always a
@@ -927,6 +933,37 @@ bounds refuse the compilation rather than compiling against the modules — or
 the half of a schema — that fitted.
 
 See [xquery.md](xquery.md) for the guide.
+
+---
+
+## c14n.Options and c14n.MaxDepth
+
+The one option struct with no usable zero value: `Algorithm` is required, and
+`c14n.Options{}` fails with `ErrNoAlgorithm`. Every specification that uses
+canonicalization names its algorithm, so the choice is always the caller's.
+
+```go
+out, err := c14n.Bytes(elem, c14n.Options{
+	Algorithm:                  c14n.Exclusive10,
+	InclusiveNamespacePrefixes: c14n.ParsePrefixList("#default xsi"),
+})
+```
+
+| Field | Type | What it does |
+|---|---|---|
+| `Algorithm` | `c14n.Algorithm` | **Required.** One of the six W3C URIs, as constants (`Inclusive10`, `Exclusive10`, `Inclusive11`, each with a `WithComments` twin). A value read from a `ds:CanonicalizationMethod` passes through unchanged; anything else is `ErrUnsupportedAlgorithm`. |
+| `InclusiveNamespacePrefixes` | `[]string` | The Exclusive C14N `PrefixList`: prefixes to render even where not visibly used. `""` is the default namespace (`#default` on the wire; `ParsePrefixList` maps it). Ignored by the inclusive algorithms, so a caller forwarding a transform's parameters need not branch. |
+
+`c14n.MaxDepth` is the package's one limit, a package variable rather than a
+field. It bounds element nesting below the node canonicalization starts from;
+deeper input fails with `c14n.ErrDepthExceeded`. The default is
+`c14n.DefaultMaxDepth` (500), and zero or negative means that default, as it
+does for `xdm.ParseOptions.MaxDepth`. There is no unlimited setting — the walk
+recurses — so raise it with a number, before canonicalizing and not
+concurrently with a canonicalization. The parser's own `MaxDepth` applies
+first.
+
+See [c14n.md](c14n.md) for the guide.
 
 ---
 

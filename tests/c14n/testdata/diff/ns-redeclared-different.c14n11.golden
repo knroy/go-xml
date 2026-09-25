@@ -1,0 +1,1 @@
+<p:root xmlns:p="http://example.com/p1"><p:child xmlns:p="http://example.com/p2"><p:leaf></p:leaf></p:child></p:root>

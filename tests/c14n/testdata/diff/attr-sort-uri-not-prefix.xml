@@ -1,0 +1,1 @@
+<root xmlns:z="http://example.com/a" xmlns:a="http://example.com/z"><e a:attr="az" z:attr="za" attr="none"/></root>

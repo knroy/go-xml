@@ -1680,6 +1680,22 @@ and facets still apply to the substituted type.
 - A compiled `Schema` and `Stylesheet` are safe for concurrent use, verified
   under `-race`.
 
+### Canonicalization reads only the tree it is given
+
+`c14n` takes an already-parsed `xdm` tree, so the parser's defaults — DOCTYPE
+refused, entity expansion budgeted, size, node and depth limits — apply before
+it runs. It fetches nothing: C14N 1.1's `xml:base` fix-up is string
+arithmetic, not resolution. Its own walk is bounded by `c14n.MaxDepth` (500;
+zero or negative means that default, and there is no unlimited setting, since
+the walk recurses), failing with `ErrDepthExceeded`. Its cost is linear in its output, but
+Inclusive C14N over a subset makes that output grow as apexes × namespace
+bindings in scope — 127 KB in, 198 MB out, with 1,000 declarations and 10,000
+leaf apexes — so a verifier of untrusted signatures should restrict XPath
+Filter transforms over inclusive canonicalization; see
+[c14n.md](c14n.md#security). It produces octets and verifies nothing:
+choosing the node set a signature covers, and so resisting signature wrapping,
+is the verifier's job. See [c14n.md](c14n.md#security).
+
 ### No unsafe code
 
 No `unsafe`, no `cgo`, no `reflect` in any non-test file.

@@ -24,3 +24,15 @@
 # under test -- an XML parser must normalise it per the Recommendation -- so
 # nothing in this file may rewrite one.
 * text=auto
+
+# c14n's golden files are canonical XML, compared byte for byte: a canonical
+# form is LF by definition, and a CR in one is written as &#xD;. Under
+# `* text=auto` above, a Windows checkout with core.autocrlf=true would rewrite
+# their LF to CRLF and every golden comparison would fail on a line-ending
+# artifact. -text keeps Git's hands off the bytes. It comes after `* text=auto`
+# because the last matching line wins.
+tests/c14n/testdata/** -text
+
+# The c14n fetch manifest is read line by line by tests/fetch-c14n.sh; a CRLF
+# checkout would leave a carriage return on every URL and digest.
+tests/c14n-corpus.txt text eol=lf

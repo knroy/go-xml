@@ -11,6 +11,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | What it does | Commit |
 |---|---|---|
 | `method="json"` honours `indent="yes"` | JSON output was always compact. Serialization 3.1 §9.1.4 makes indentation optional — `indent=yes` MAY add whitespace, `indent=no` MUST NOT — and a result of any size is hard to check by eye on one line. Two-space indent matching Saxon and the XML method; a map or array of leaves stays inline, so `[ 3, 2, 1 ]` keeps its shape. `indent="no"` output is unchanged. | [`7dda133`][7dda133] |
+| Package `c14n`: Canonical XML 1.0, 1.1 and Exclusive C14N | XML-DSig, SAML and WS-Security digest a byte-exact canonical form, which go-xml could not produce. Streams over any node set; no default algorithm. | pending |
+| `xdm.Tree.XMLVersion` | Records the version an XML declaration names, `1.0` when there is none. Canonical XML is not defined for XML 1.1, and `c14n` uses it to refuse such input. | pending |
 
 ### Fixed — engine
 

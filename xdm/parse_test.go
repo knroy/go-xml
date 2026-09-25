@@ -356,3 +356,25 @@ func TestParseLimits(t *testing.T) {
 		t.Errorf("negative limits should disable the checks: %v", err)
 	}
 }
+
+// TestTreeXMLVersion checks the declared version is recorded, and that a
+// document without a declaration is 1.0, the version it is read as.
+func TestTreeXMLVersion(t *testing.T) {
+	for doc, want := range map[string]string{
+		`<a/>`:                        "1.0",
+		`<?xml version="1.0"?><a/>`:   "1.0",
+		`<?xml version="1.1"?><a/>`:   "1.1",
+		"<?xml version='1.1'?>\n<a/>": "1.1",
+	} {
+		tr, err := ParseString(doc, ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tr.XMLVersion != want {
+			t.Errorf("%s: XMLVersion %q, want %q", doc, tr.XMLVersion, want)
+		}
+	}
+	if v := NewTree().XMLVersion; v != "" {
+		t.Errorf("NewTree: XMLVersion %q, want empty", v)
+	}
+}

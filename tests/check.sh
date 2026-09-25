@@ -758,6 +758,17 @@ laneFromStatus "generated figures" "$_f0" "go run ./tests/conformance-docs.go -c
 #
 # -timeout is therefore set explicitly here as well as in ci.yml, and
 # -count=1 because a cached result cannot show a regression.
+# The W3C Canonical XML interop cases are third-party and untracked, like the
+# suites below, but small and unchanging, so they are fetched here when absent
+# rather than left to a manual clone. Once fetched, GOXML_C14N_W3C=1 makes the
+# c14n tests fail rather than skip if they go missing: a check that did not
+# run must not look like one that passed.
+section "W3C Canonical XML corpus"
+_f0=$failed
+bash tests/fetch-c14n.sh || fail "W3C Canonical XML corpus (tests/fetch-c14n.sh)"
+laneFromStatus "c14n corpus" "$_f0" "tests/fetch-c14n.sh"
+export GOXML_C14N_W3C=1
+
 section "unit tests"
 _f0=$failed
 GOXSLT_NO_SUITES=1 $GO test ./... -count=1 || fail "unit tests"

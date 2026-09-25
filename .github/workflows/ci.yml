@@ -76,9 +76,29 @@ jobs:
       # is slow enough to hit go test's 10m default and fail the build. The
       # figures those runs produce are ignored here in any case: this job
       # exists to catch a broken commit in about a minute.
+      # c14n's differential test runs xmllint when it is on the PATH and skips
+      # when it is not, which makes a CI run without it a pass that checked
+      # nothing. GOXML_C14N_XMLLINT=1 turns the skip into a failure. macOS
+      # ships /usr/bin/xmllint; Ubuntu's image is not promised to, so it is
+      # installed. Windows is left out: no install route has been verified
+      # there (Chocolatey's xsltproc package bundles libxml2, but whether it
+      # puts xmllint on the PATH is unconfirmed), so the variable is empty and
+      # the differential runs only if xmllint happens to be present.
+      - name: Install xmllint
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxml2-utils
+      # The W3C Canonical XML interop cases are third-party, so they are
+      # downloaded rather than committed: tests/fetch-c14n.sh fetches the files
+      # tests/c14n-corpus.txt lists and checks each against its pinned digest.
+      # GOXML_C14N_W3C=1 then makes their absence a failure rather than a skip.
+      - name: Fetch the W3C Canonical XML corpus
+        shell: bash
+        run: bash tests/fetch-c14n.sh
       - run: go test ./... -count=1
         env:
           GOXSLT_NO_SUITES: '1'
+          GOXML_C14N_XMLLINT: ${{ runner.os != 'Windows' && '1' || '' }}
+          GOXML_C14N_W3C: '1'
       # -timeout is set explicitly rather than left at the 10m default,
       # because the default is what turned a slow run into a panic rather
       # than a slow run.
@@ -92,6 +112,7 @@ jobs:
         env:
           GOXSLT_NO_SUITES: '1'
           CGO_ENABLED: '1'
+          GOXML_C14N_W3C: '1'
 
       # w3cschemas is a second module -- the schemas it bundles are under W3C
       # terms rather than MIT -- so every step above misses it: `go list ./...`

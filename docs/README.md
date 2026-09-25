@@ -12,7 +12,11 @@
   and how to combine it with the pieces it does not provide.
 * **[XSD](xsd.md)** — the schema validator in detail: versions, resolvers,
   limits, the PSVI, concurrency, and where conformance stands.
-* **[Options](options.md)** — every configuration field in the four packages,
+* **[Canonical XML](c14n.md)** — the `c14n` package: C14N 1.0 and 1.1 and
+  Exclusive C14N for XML-DSig, SAML and WS-Security; choosing an algorithm,
+  node sets with worked examples, the one documented refusal, the `xdm` audit
+  behind it, and the release gate it has not yet met.
+* **[Options](options.md)** — every configuration field in the library,
   what its zero value means, and worked examples. Start here when you want to
   know what you can change.
 * **[CHANGELOG.md](../CHANGELOG.md)** — every fixed finding, with what was
