@@ -12,6 +12,14 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 |---|---|---|
 | `method="json"` honours `indent="yes"` | JSON output was always compact. Serialization 3.1 §9.1.4 makes indentation optional — `indent=yes` MAY add whitespace, `indent=no` MUST NOT — and a result of any size is hard to check by eye on one line. Two-space indent matching Saxon and the XML method; a map or array of leaves stays inline, so `[ 3, 2, 1 ]` keeps its shape. `indent="no"` output is unchanged. | [`7dda133`][7dda133] |
 
+### Fixed — engine
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| A non-CDATA attribute declared in the internal subset kept its spaces | XML 1.0 §3.3.3 collapses spaces in `NMTOKENS`, `ID` and other non-CDATA values; they were kept. Now collapsed, and a `NOTATION` list is no longer read as the default. | pending |
+| A character reference in an entity value was expanded one level short | `<!ENTITY a "&#38;#38;">` gave `&#38;`, not `&` (XML 1.0 Appendix D). References are now decoded at declaration and the replacement text parsed as content. | pending |
+| A DTD default `xmlns:p` did not reach an element named `p:doc` | The ATTLIST was matched by local name only, so the element failed the Prefix Declared check. It now matches the name as written. | pending |
+
 ## v1.3.1 — 2026-09-16
 
 ### Fixed — engine

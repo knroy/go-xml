@@ -397,7 +397,7 @@ func (t *entityTable) resolve(name string) (string, error) {
 	// A placeholder guards against a cycle: an entity that refers to itself,
 	// directly or through others, would otherwise recurse forever.
 	t.expanded[name] = ""
-	out, err := t.expand(raw, 0, map[string]bool{name: true})
+	out, err := t.expand(replacementText(raw), 0, map[string]bool{name: true})
 	if err != nil {
 		delete(t.expanded, name)
 		return "", err
@@ -430,24 +430,21 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 			continue
 		}
 		name := s[i+1 : i+j]
-		// A character reference is decoded here. The decoder would do it for
-		// text it reads directly, but replacement text arriving through
-		// dec.Entity is substituted rather than re-scanned, so "&#xA0;" in an
-		// entity would otherwise reach the value literally.
-		// A character reference is always decoded, on both paths.
-		//
-		// Through dec.Entity it must be, since the decoder does not re-scan
-		// replacement text. Through the rewrite it must be too, and for a
-		// different reason: a character reference may form part of a *name*,
-		// as <!ENTITY dii "<&#xE14;&#xE35;/>"> does, and a name is not a
-		// place a reference can survive to be decoded later. Leaving it
-		// encoded produces "<&#xE14;" — not an element at all.
-		//
-		// This is the opposite of what the five predefined entities need
-		// below, and the difference is exactly that: a character reference
-		// denotes a character, while "&amp;" denotes escaped data whose
-		// escaping the second parse will undo.
+		// s is replacement text: the character references written in the
+		// entity VALUE were decoded at declaration (replacementText), so a
+		// character reference here is one the replacement text itself holds,
+		// at content level — "&#38;#38;" declares "&#38;", which content
+		// reads as "&" (XML 1.0 Appendix D). It is decoded on the dec.Entity
+		// path, whose substitution is never re-scanned, and left encoded on
+		// the rewrite path for the second parse to decode, exactly as the
+		// predefined entities below are. Decoding it there too would read
+		// "&#38;#38;" as a bare "&" and break the document.
 		if name != "" && name[0] == '#' {
+			if t.reparsed {
+				sb.WriteString(s[i : i+j+1])
+				i += j + 1
+				continue
+			}
 			if r, ok := decodeCharRef(name); ok {
 				sb.WriteRune(r)
 				i += j + 1
@@ -510,7 +507,7 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 			return "", fmt.Errorf("entity %q is not declared", name)
 		}
 		seen[name] = true
-		sub, err := t.expand(raw, depth+1, seen)
+		sub, err := t.expand(replacementText(raw), depth+1, seen)
 		delete(seen, name)
 		if err != nil {
 			return "", err
@@ -524,6 +521,33 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 		i += j + 1
 	}
 	return sb.String(), nil
+}
+
+// replacementText is XML 1.0 §4.5: an entity's replacement text is its
+// literal value with character references decoded — and nothing else, since
+// general entity references are bypassed at declaration and expanded only
+// where the replacement text is used. Decoding here, once, is also what lets
+// a character reference form part of a name: <!ENTITY dii "<&#xE14;&#xE35;/>">
+// declares an element whose name the references spell.
+func replacementText(raw string) string {
+	if !strings.Contains(raw, "&#") {
+		return raw
+	}
+	var sb strings.Builder
+	for i := 0; i < len(raw); {
+		if strings.HasPrefix(raw[i:], "&#") {
+			if j := strings.IndexByte(raw[i:], ';'); j > 0 {
+				if r, ok := decodeCharRef(raw[i+1 : i+j]); ok {
+					sb.WriteRune(r)
+					i += j + 1
+					continue
+				}
+			}
+		}
+		sb.WriteByte(raw[i])
+		i++
+	}
+	return sb.String()
 }
 
 // predefinedRune returns the character one of XML's five predefined entities
@@ -1080,8 +1104,9 @@ func (t *Tree) HasUnparsedEntities() bool {
 // Only three are escaped. "&" is deliberately not: on the rewrite path expand
 // leaves "&amp;" as written for the second parse to decode (see the
 // t.reparsed branch there), so escaping "&" here would turn it into "&amp;amp;"
-// and change what the document says. That leaves a decoded "&#38;" as a bare
-// "&", which is the same reading the content path already gives it.
+// and change what the document says. A "&" that replacementText decoded from
+// "&#38;" at declaration is markup by XML 1.0 Appendix D, not data, so it is
+// left for the second parse as well.
 func escapeAttrLiteral(s string) string {
 	if !strings.ContainsAny(s, `"'<`) {
 		return s
