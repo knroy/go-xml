@@ -11,23 +11,23 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | What it does | Commit |
 |---|---|---|
 | `method="json"` honours `indent="yes"` | JSON output was always compact. Serialization 3.1 §9.1.4 makes indentation optional — `indent=yes` MAY add whitespace, `indent=no` MUST NOT — and a result of any size is hard to check by eye on one line. Two-space indent matching Saxon and the XML method; a map or array of leaves stays inline, so `[ 3, 2, 1 ]` keeps its shape. `indent="no"` output is unchanged. | [`7dda133`][7dda133] |
-| Package `c14n`: Canonical XML 1.0, 1.1 and Exclusive C14N | XML-DSig, SAML and WS-Security digest a byte-exact canonical form, which go-xml could not produce. Streams over any node set; no default algorithm. | pending |
-| `xdm.Tree.XMLVersion` | Records the version an XML declaration names, `1.0` when there is none. Canonical XML is not defined for XML 1.1, and `c14n` uses it to refuse such input. | pending |
+| Package `c14n`: Canonical XML 1.0, 1.1 and Exclusive C14N | XML-DSig, SAML and WS-Security digest a byte-exact canonical form, which go-xml could not produce. Streams over any node set; no default algorithm. | [`48651cf`][48651cf] |
+| `xdm.Tree.XMLVersion` | Records the version an XML declaration names, `1.0` when there is none. Canonical XML is not defined for XML 1.1, and `c14n` uses it to refuse such input. | [`48651cf`][48651cf] |
 
 ### Fixed — engine
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| A non-CDATA attribute declared in the internal subset kept its spaces | XML 1.0 §3.3.3 collapses spaces in `NMTOKENS`, `ID` and other non-CDATA values; they were kept. Now collapsed, and a `NOTATION` list is no longer read as the default. | pending |
-| A character reference in an entity value was expanded one level short | `<!ENTITY a "&#38;#38;">` gave `&#38;`, not `&` (XML 1.0 Appendix D). References are now decoded at declaration and the replacement text parsed as content. | pending |
-| A DTD default `xmlns:p` did not reach an element named `p:doc` | The ATTLIST was matched by local name only, so the element failed the Prefix Declared check. It now matches the name as written. | pending |
-| Line ends were folded late, and not at all in comments and PIs | A CR survived in comment and PI values, and CR-LF in an attribute became two spaces. XML 1.0 §2.11 is now applied on input, before parsing. | pending |
+| A non-CDATA attribute declared in the internal subset kept its spaces | XML 1.0 §3.3.3 collapses spaces in `NMTOKENS`, `ID` and other non-CDATA values; they were kept. Now collapsed, and a `NOTATION` list is no longer read as the default. | [`01e9f50`][01e9f50] |
+| A character reference in an entity value was expanded one level short | `<!ENTITY a "&#38;#38;">` gave `&#38;`, not `&` (XML 1.0 Appendix D). References are now decoded at declaration and the replacement text parsed as content. | [`01e9f50`][01e9f50] |
+| A DTD default `xmlns:p` did not reach an element named `p:doc` | The ATTLIST was matched by local name only, so the element failed the Prefix Declared check. It now matches the name as written. | [`01e9f50`][01e9f50] |
+| Line ends were folded late, and not at all in comments and PIs | A CR survived in comment and PI values, and CR-LF in an attribute became two spaces. XML 1.0 §2.11 is now applied on input, before parsing. | [`67c960b`][67c960b] |
 
 ### Fixed — tooling
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| `tests/check.sh` recorded a failing lane as PASS after an earlier failure | `failed` was a flag, and a lane is judged by whether it moved, so a second failure moved nothing. It counts failures now. | pending |
+| `tests/check.sh` recorded a failing lane as PASS after an earlier failure | `failed` was a flag, and a lane is judged by whether it moved, so a second failure moved nothing. It counts failures now. | [`1803696`][1803696] |
 
 ## v1.3.1 — 2026-09-16
 
@@ -1015,3 +1015,7 @@ here so every entry in this file sits under a release.
 [7f7fc4e]: https://github.com/knroy/go-xml/commit/7f7fc4e
 [cb43c76]: https://github.com/knroy/go-xml/commit/cb43c76
 [7dda133]: https://github.com/knroy/go-xml/commit/7dda133
+[01e9f50]: https://github.com/knroy/go-xml/commit/01e9f50
+[67c960b]: https://github.com/knroy/go-xml/commit/67c960b
+[1803696]: https://github.com/knroy/go-xml/commit/1803696
+[48651cf]: https://github.com/knroy/go-xml/commit/48651cf
