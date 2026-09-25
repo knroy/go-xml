@@ -4,7 +4,9 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased
+## v1.4.0 — 2026-09-25
+
+New package `c14n`: Canonical XML 1.0, 1.1 and Exclusive C14N. It ships ahead of the full verification gate in its design: it is checked against the Recommendations' examples, the W3C C14N 1.1 interop cases, `xmllint` and `xmlsec1`, while the Apache Santuario differential, the Merlin corpus and captured Peppol and SAML messages are still to come ([docs/c14n.md](docs/c14n.md#the-v140-release-gate-is-not-yet-met)).
 
 ### Added
 
