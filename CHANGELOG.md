@@ -21,6 +21,12 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A DTD default `xmlns:p` did not reach an element named `p:doc` | The ATTLIST was matched by local name only, so the element failed the Prefix Declared check. It now matches the name as written. | pending |
 | Line ends were folded late, and not at all in comments and PIs | A CR survived in comment and PI values, and CR-LF in an attribute became two spaces. XML 1.0 §2.11 is now applied on input, before parsing. | pending |
 
+### Fixed — tooling
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `tests/check.sh` recorded a failing lane as PASS after an earlier failure | `failed` was a flag, and a lane is judged by whether it moved, so a second failure moved nothing. It counts failures now. | pending |
+
 ## v1.3.1 — 2026-09-16
 
 ### Fixed — engine

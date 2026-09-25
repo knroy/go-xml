@@ -402,7 +402,12 @@ emit_record() {
 }
 
 section() { printf '\n=== %s\n' "$1"; }
-fail()    { printf 'FAIL: %s\n' "$1"; failed=1; }
+# failed COUNTS failures rather than flagging one. laneFromStatus decides a
+# lane by whether the count moved across the step, and a flag cannot move
+# twice: once any earlier lane had failed, every later failing step left it at
+# 1 and was recorded PASS -- the unit-test and race lanes both read PASS over
+# failing tests on a run whose generated-figures lane had failed first.
+fail()    { printf 'FAIL: %s\n' "$1"; failed=$((failed + 1)); }
 skip()    { skipped="${skipped}  - $1
 "; }
 
@@ -878,7 +883,7 @@ if [ "$MODE" = fast ]; then
 	done
 	emit_record
 	if [ "$failed" -eq 0 ]; then printf 'OK\n'; else printf 'FAILED\n'; fi
-	exit "$failed"
+	exit $((failed > 0))
 fi
 
 section "W3C QT3 (XPath 2.0, 3.0 and 3.1)"
@@ -1179,4 +1184,4 @@ if [ -n "$skipped" ]; then
 	printf 'Checks skipped (not run, not passed):\n%s' "$skipped"
 fi
 if [ "$failed" -eq 0 ]; then printf 'OK\n'; else printf 'FAILED\n'; fi
-exit "$failed"
+exit $((failed > 0))
