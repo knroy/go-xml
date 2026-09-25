@@ -228,10 +228,10 @@ func (a *attNormReader) step(in []byte, i int) (int, byte) {
 			break
 		}
 		// The rewrite itself, and the only place in this file that changes a
-		// byte. A carriage return is handled here rather than left to the
-		// decoder's line-ending normalization: section 3.3.3 normalizes every
-		// literal whitespace character in a value to a space, and CR-LF in a
-		// value must become TWO spaces, not one.
+		// byte. A document's line ends were already folded to LF by
+		// lineEndReader (section 2.11), so a CR-LF reaches here as one LF
+		// and becomes one space. A CR can still arrive from a caller that
+		// wraps this reader directly, or before a NEL; it is whitespace too.
 		if c == '\t' || c == '\n' || c == '\r' {
 			return 1, ' '
 		}
