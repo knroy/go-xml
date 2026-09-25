@@ -991,7 +991,7 @@ and in CI is the wrong one — so `GOXML_C14N_XMLLINT=1` turns a missing
 `xmllint` into a failure, and CI sets it. `xmllint` cannot take a node set, so
 for subsets the second implementation is the W3C interop round above — twenty
 cases, five implementations — and beyond those the Recommendations' own
-examples; [c14n.md](c14n.md#the-v140-release-gate-is-not-yet-met) lists what
+examples; [c14n.md](c14n.md#verification-still-to-do) lists what
 that leaves open.
 
 **The `xmlsec1` differential.** `TestC14NDifferentialXMLSec1` takes node sets

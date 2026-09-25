@@ -208,10 +208,11 @@ Eight packages, each usable on its own:
   rendering, parameters, custom resolvers, standalone XPath.
 * **[docs/c14n.md](docs/c14n.md)** — Canonical XML for XML-DSig, SAML and
   WS-Security: choosing an algorithm, node sets, the enveloped-signature
-  transform, and what is still missing before the release gate is met.
+  transform, and the verification still to do.
 * **[docs/options.md](docs/options.md)** — every option in `xdm`, `xpath`,
-  `xsd` and `xslt`: what each field does, what the zero value means, and the
-  limits that bound a parse, a validation and a transform.
+  `xsd`, `xslt`, `xquery`, `dtd` and `c14n`: what each field does, what the
+  zero value means, and the limits that bound a parse, a validation and a
+  transform.
 * **[SECURITY.md](SECURITY.md)** — how to report a vulnerability, and what
   counts as one.
 * **[docs/security.md](docs/security.md)** — threat model and the results of

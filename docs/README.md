@@ -14,8 +14,8 @@
   limits, the PSVI, concurrency, and where conformance stands.
 * **[Canonical XML](c14n.md)** — the `c14n` package: C14N 1.0 and 1.1 and
   Exclusive C14N for XML-DSig, SAML and WS-Security; choosing an algorithm,
-  node sets with worked examples, the one documented refusal, the `xdm` audit
-  behind it, and the release gate it has not yet met.
+  node sets with worked examples, namespace nodes, the `xdm` audit behind it,
+  and the verification still to do.
 * **[Options](options.md)** — every configuration field in the library,
   what its zero value means, and worked examples. Start here when you want to
   know what you can change.
