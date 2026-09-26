@@ -72,6 +72,13 @@ type budgetStats struct {
 	// BranchStructural counts allBranchCounts declines caused by a term
 	// that has no per-name count, such as a wildcard.
 	BranchStructural atomic.Uint64
+
+	// The two below are not declines but work: the groups cycleFrom and
+	// badNestedAll each expanded. A memoised walk expands each group once,
+	// a path-walking one once per route to it, which is the difference
+	// TestGroupDAGLoadsInGraphTime asserts on.
+	GroupCycleSteps atomic.Uint64
+	NestedAllSteps  atomic.Uint64
 }
 
 // budgetStatsHook lets a caller observe the declines of the next schema loads.
@@ -106,6 +113,16 @@ func declineBranchBudget() {
 
 func declineBranchStructural() {
 	declined(func(s *budgetStats) *atomic.Uint64 { return &s.BranchStructural })
+}
+
+// countGroupCycleStep and countNestedAllStep reuse declined as the adder; what
+// they count is work, not a decline.
+func countGroupCycleStep() {
+	declined(func(s *budgetStats) *atomic.Uint64 { return &s.GroupCycleSteps })
+}
+
+func countNestedAllStep() {
+	declined(func(s *budgetStats) *atomic.Uint64 { return &s.NestedAllSteps })
 }
 
 // subsumeMaxStates caps the unrolled NFA for either side.

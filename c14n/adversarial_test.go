@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -601,40 +600,29 @@ func TestDOCTYPERefused(t *testing.T) {
 // bindings) — linear in either alone, but both grow with the input, so it is
 // quadratic in the document all the same.
 //
-// The work is CPU, not allocation, so the test compares times — as a RATIO of
-// best-of-five runs at 100 and 1,000 bindings, which machine speed and load
-// cancel out of. Measured: about 1.6x now; 10.8x with the per-element scan
-// restored; about 70x for the original stacks. The bound separates all three.
+// The work is CPU, not allocation, so the test counts it: calls to consider,
+// one per binding examined. At 1,000 bindings over 20,000 elements that is
+// about 1,000 now, and 20 million with the per-element scan restored; the
+// bound is the element count plus the declarations. It used to compare a
+// ratio of times, which a loaded runner can still skew; a count cannot be.
 func TestNamespaceScopeNotQuadratic(t *testing.T) {
-	if testing.Short() {
-		t.Skip("cost test")
+	const decls, elements = 1000, 20000
+	var b strings.Builder
+	b.WriteString("<r")
+	for i := 0; i < decls; i++ {
+		fmt.Fprintf(&b, ` xmlns:p%d="urn:%d"`, i, i)
 	}
-	build := func(decls int) *xdm.Node {
-		var b strings.Builder
-		b.WriteString("<r")
-		for i := 0; i < decls; i++ {
-			fmt.Fprintf(&b, ` xmlns:p%d="urn:%d"`, i, i)
-		}
-		b.WriteString(">")
-		for i := 0; i < 10000; i++ {
-			b.WriteString("<c><d/></c>")
-		}
-		b.WriteString("</r>")
-		return parse(t, b.String())
+	b.WriteString(">")
+	for i := 0; i < elements/2; i++ {
+		b.WriteString("<c><d/></c>")
 	}
-	best := func(doc *xdm.Node) time.Duration {
-		min := time.Duration(math.MaxInt64)
-		for range 5 {
-			s := time.Now()
-			if err := Write(io.Discard, doc, Options{Algorithm: Inclusive10}); err != nil {
-				t.Fatal(err)
-			}
-			min = time.Duration(math.Min(float64(min), float64(time.Since(s))))
-		}
-		return min
+	b.WriteString("</r>")
+	c, err := run(io.Discard, Document(parse(t, b.String())), Options{Algorithm: Inclusive10})
+	if err != nil {
+		t.Fatal(err)
 	}
-	small, large := best(build(100)), best(build(1000))
-	if ratio := float64(large) / float64(small); ratio > 4 {
-		t.Errorf("10x the bindings in scope cost %.1fx the time (%v -> %v); want near 1x", ratio, small, large)
+	if bound := elements + decls; c.considered > bound {
+		t.Errorf("%d bindings over %d elements examined %d bindings, bound %d: "+
+			"elements that declare nothing are scanning the scope again", decls, elements, c.considered, bound)
 	}
 }

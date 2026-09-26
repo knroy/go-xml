@@ -775,27 +775,30 @@ func FuzzSchemaComplexity(f *testing.F) {
 			t.Skipf("generated schema did not parse: %v", err)
 		}
 
-		start := time.Now()
 		// The resolver refuses so that no generated schemaLocation can
 		// make the target read the filesystem, matching the discipline
 		// in zz_fuzz_test.go.
+		var m0, m1 runtime.MemStats
+		runtime.ReadMemStats(&m0)
 		_, _ = Load(doc.Root, "", Options{
 			Resolver:     refusingResolver{},
 			MaxDocuments: 4,
 		})
-		elapsed := time.Since(start)
+		runtime.ReadMemStats(&m1)
 
-		// The oracle: a schema this small must load quickly whatever
-		// its shape. The ceiling is generous because a fuzz worker
-		// shares a machine with fifteen others, but it is far below
-		// what the cubic path costs even at these sizes if a new
-		// superlinear term appears.
-		const ceiling = 5 * time.Second
-		if elapsed > ceiling {
-			t.Errorf("a %d-byte schema (shape=%d n=%d extra=%d) took %v to load, "+
-				"ceiling %v: this is a schema-complexity denial of service, since "+
-				"the cost is wildly out of proportion to the input.",
-				len(src), shape%8, n, extra%4, elapsed, ceiling)
+		// The oracle: a schema this small must load cheaply whatever its
+		// shape. It is bytes allocated rather than wall time, for the
+		// reason TestAdversarialShapesStayBounded gives: a fuzz worker
+		// shares a machine with fifteen others, and allocation does not
+		// vary with load. A grid over every shape and extra and the
+		// whole size range measured 1.1MB at worst; the ceiling is ~8x
+		// that, the headroom TestAdversarialShapesStayBounded allows.
+		const ceiling = 8 << 20
+		if alloc := m1.TotalAlloc - m0.TotalAlloc; alloc > ceiling {
+			t.Errorf("a %d-byte schema (shape=%d n=%d extra=%d) allocated %dKB to "+
+				"load, ceiling %dKB: this is a schema-complexity denial of service, "+
+				"since the cost is wildly out of proportion to the input.",
+				len(src), shape%8, n, extra%4, alloc/1024, ceiling/1024)
 		}
 	})
 }

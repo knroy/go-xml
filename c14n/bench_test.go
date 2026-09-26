@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -50,13 +49,14 @@ func cachedDoc(tb testing.TB, size int) *xdm.Node {
 // for a whole canonicalization must not grow with the document. Comparing a
 // 1 MB and a 10 MB document states that directly; the fixed bound catches a
 // constant that has crept up. The counts were measured identical under
-// -race (18 and 17), so the test does not skip there.
+// -race (18 and 17), so the test does not skip there. It skips under -short
+// alone: building the 10 MB document is the slow part, and whether to skip is
+// decided by the flag rather than by how long the build happened to take.
 func TestStreamingAllocations(t *testing.T) {
-	start := time.Now()
-	small, large := cachedDoc(t, 1<<20), cachedDoc(t, 10<<20)
-	if testing.Short() && time.Since(start) > 5*time.Second {
-		t.Skip("building the 10 MB document is slow here")
+	if testing.Short() {
+		t.Skip("building the 10 MB document is slow")
 	}
+	small, large := cachedDoc(t, 1<<20), cachedDoc(t, 10<<20)
 	const bound = 64
 	for _, alg := range allAlgorithms {
 		opts := Options{Algorithm: alg, InclusiveNamespacePrefixes: []string{"q"}}

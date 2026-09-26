@@ -2216,6 +2216,7 @@ func cycleFrom(g *ModelGroup, path, done map[*ModelGroup]bool) bool {
 	if done[g] {
 		return false
 	}
+	countGroupCycleStep()
 	path[g] = true
 	defer func() {
 		delete(path, g)

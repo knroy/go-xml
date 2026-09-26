@@ -87,6 +87,10 @@ type canon struct {
 	nsSet NamespaceSet
 	axes  []map[string]string
 	util  bindings
+
+	// considered counts calls to consider: the work the namespace axis
+	// costs, which TestNamespaceScopeNotQuadratic bounds.
+	considered int
 }
 
 // noNode records in util that the utilising ancestor had no namespace node
@@ -94,9 +98,15 @@ type canon struct {
 const noNode = "\x00"
 
 func canonicalize(w io.Writer, ns NodeSet, opts Options) error {
+	_, err := run(w, ns, opts)
+	return err
+}
+
+// run is canonicalize, returning the walker so a test can read its counts.
+func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 	root := ns.Root()
 	if root == nil {
-		return ErrUnsupportedNode
+		return nil, ErrUnsupportedNode
 	}
 	sw := &stickyWriter{w: w}
 	_, all := ns.(subtree)
@@ -121,14 +131,14 @@ func canonicalize(w io.Writer, ns NodeSet, opts Options) error {
 	c.nsSet, _ = ns.(NamespaceSet)
 	c.util = bindings{m: map[string]string{}}
 	if t := root.Tree(); t != nil && t.XMLVersion == "1.1" {
-		return ErrXML11
+		return nil, ErrXML11
 	}
 	// Bindings declared above the root are in scope for it. Their order here
 	// is irrelevant: each prefix appears once, and output is sorted.
 	if p := root.Parent; p != nil {
 		for prefix, uri := range p.InScopeNamespaces() {
 			if err := checkNamespaceURI(prefix, uri); err != nil {
-				return err
+				return nil, err
 			}
 			c.scope.m[prefix] = uri
 		}
@@ -144,15 +154,15 @@ func canonicalize(w io.Writer, ns NodeSet, opts Options) error {
 			c.leaf(root)
 		}
 	default:
-		return ErrUnsupportedNode
+		return nil, ErrUnsupportedNode
 	}
 	if err == nil {
 		err = c.w.Flush()
 	}
 	if c.sw.err != nil {
-		return c.sw.err // unwrapped, as Write documents
+		return c, c.sw.err // unwrapped, as Write documents
 	}
-	return err
+	return c, err
 }
 
 // stickyWriter remembers the first write error, so the walk can stop at the
@@ -474,6 +484,7 @@ func (c *canon) exclusiveUtilised(e *xdm.Node, axis map[string]string) {
 }
 
 func (c *canon) consider(prefix string) {
+	c.considered++
 	// The xml prefix is bound by definition and never rendered (C14N 1.0
 	// §2.3, "omit namespace node with local name xml").
 	if prefix == "xml" {

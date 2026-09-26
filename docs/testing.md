@@ -873,6 +873,26 @@ so the case was quadratic and finished in no deadline at all. It was recorded
 as a performance defect rather than raised past, and fixing the defect — a
 persistent hash array mapped trie — is what made it pass.
 
+A cost test counts work; it never compares against the clock. Fixed
+wall-clock budgets failed on loaded CI runners (an `xsd` chain load took
+2.7 s against 2 s on Windows, where it takes well under a second idle), and a
+budget loose enough to survive load is too loose to catch a regression. Each
+cost test instead asserts one of three measures, and each was shown to fail
+with the guarded mechanism disabled:
+
+- a work counter: `TestOptimizeNotQuadratic` counts the optimiser's uncached
+  predicate walks, `TestNamespaceScopeNotQuadratic` the namespace bindings
+  `c14n` examines, `TestGroupDAGLoadsInGraphTime` the groups each walk expands;
+- bytes allocated (`runtime.MemStats.TotalAlloc`), which does not vary with
+  load: the `relaxng` pattern-size tests, the `xquery` scanner and depth tests,
+  `TestSubsumeLargeOccursTerminates`, `TestAdversarialShapesStayBounded`;
+- the growth exponent of allocation between n and 2n, for costs that are
+  linear by design: `TestBaseCycleCheckLinearInChainDepth`,
+  `TestFacetMergeLinearInChainDepth`.
+
+`TestValidateContextCancels` uses a context that expires on its Nth poll rather
+than on a timer, so where cancellation lands no longer depends on speed.
+
 ---
 
 ## Fuzzing
@@ -884,14 +904,14 @@ Twelve targets, using Go's native `testing.F` and no framework:
 | `FuzzParseNoPanic` | `xdm` | `ParseString` never panics; a refusal is an error and never a tree beside it; an accepted tree walks with its parent links intact |
 | `FuzzParseDOCTYPE` | `xdm` | the DTD subset parser never panics on a malformed `<!DOCTYPE>` |
 | `FuzzLoadSchemaNoPanic` | `xsd` | `Load` never panics at either XSD version, and every content model it accepts compiles to an automaton that answers total |
-| `FuzzSchemaComplexity` | `xsd` | the complexity limits refuse a pathological schema rather than running unbounded |
+| `FuzzSchemaComplexity` | `xsd` | the complexity limits refuse a pathological schema rather than running unbounded: no load of a small schema allocates more than 8 MB |
 | `FuzzSerializeRoundTrip` | `xslt` | parse → serialise → parse yields the same document, compared on expanded names, kinds and string values |
 | `FuzzCompileStylesheetNoPanic` | `xslt` | `Compile` never panics and never returns a stylesheet beside an error |
 | `FuzzCompileNoPanic` | `xpath` | the expression compiler never panics, and every parse error carries a spec code |
 | `FuzzParseCompactNoPanic` | `relaxng` | the compact-syntax parser never panics |
 | `FuzzTokenNoPanic` | `internal/xmlfork` | the forked tokeniser never panics and terminates on any byte string |
 | `FuzzCanonicalizeNoPanic` | `c14n` | parse then canonicalize never panics or hangs; a parsed document is refused only for depth, a relative namespace URI or XML 1.1; inclusive canonical forms re-canonicalize unchanged; `FromXPathFilter(doc, "true()")` reproduces the whole document exactly, and filters that split namespace axes canonicalize |
-| `FuzzCompileNoPanic` | `xquery` | `xquery.Compile` never panics or hangs |
+| `FuzzCompileNoPanic` | `xquery` | `xquery.Compile` never panics, and no compile of a 400-byte input allocates more than 64 MiB |
 | `FuzzConstructorDepthIsBounded` | `xquery` | a query nested past the constructor-depth bound is refused, and one inside it compiles |
 
 Most targets live in `zz_fuzz_test.go` in the package they exercise; the `zz_`
@@ -900,9 +920,10 @@ in `internal/xmlfork/fuzz_test.go`, `relaxng/compact_fuzz_test.go`,
 `xsd/complexity_fuzz_test.go` and `c14n/fuzz_test.go`.
 
 The nightly workflow runs ten of the twelve. The two `xquery` targets are left
-out on purpose: `FuzzCompileNoPanic` rediscovers two known, still-open
-faults in the prolog scanner within about a minute each (its doc comment
-names them), so a nightly run would fail every night on bugs already
+out on purpose: `FuzzCompileNoPanic` rediscovers three known, still-open
+faults within about a minute each: two in the prolog scanner, and a range such
+as `0 to 700000` folded at compile time into 213 MB (its doc comment names
+them), so a nightly run would fail every night on bugs already
 recorded. Run them by hand while working on `xquery`.
 
 ```sh

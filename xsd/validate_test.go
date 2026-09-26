@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -1000,6 +999,13 @@ func TestRepeatedSequenceMinOccurs(t *testing.T) {
 // runs. The schema is the one docs/security.md names as the quadratic case: a
 // recursive element carrying a key with a ".//" selector, where the cost grows
 // as the square of the nesting depth.
+//
+// The deadline is a pollCtx that expires on a chosen Err() call rather than a
+// timer, and promptness is counted in icStats work rather than elapsed time: a
+// 20ms timeout with a 1s bound depended on how fast the host ran. A run
+// cancelled halfway through its polls must have done at most half the work of
+// a full one (measured 898 against 4496); one that only reports the deadline
+// at the end does all of it.
 func TestValidateContextCancels(t *testing.T) {
 	const src = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
 	  <xs:element name="r" type="R">
@@ -1028,29 +1034,45 @@ func TestValidateContextCancels(t *testing.T) {
 	}
 	opts := ValidateOptions{MaxDepth: depth + 10}
 
+	// A live context still validates the document normally, and counts how
+	// often a full run looks at it. A deadline nobody looks at until the end
+	// is not a bound: the context must be consulted throughout the walk.
+	live := &pollCtx{Context: context.Background()}
+	full := &icStats{}
+	icStatsHook = func() *icStats { return full }
+	err = s.ValidateContext(live, dt.Root, opts)
+	icStatsHook = nil
+	if err != nil {
+		t.Errorf("an uncancelled run should accept the document: %v", err)
+	}
+	if live.polls < depth {
+		t.Fatalf("a full run polled the context %d times for %d elements; "+
+			"it is not consulted during the walk", live.polls, depth)
+	}
+
 	// The document is valid, so a run that completes returns nil — which is
 	// what makes a context error here unambiguous evidence of cancellation.
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	start := time.Now()
+	ctx := &pollCtx{Context: context.Background(), expireAt: live.polls / 2}
+	st := &icStats{}
+	icStatsHook = func() *icStats { return st }
 	err = s.ValidateContext(ctx, dt.Root, opts)
-	elapsed := time.Since(start)
+	icStatsHook = nil
 
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("ValidateContext returned %v, want context.DeadlineExceeded", err)
 	}
-	// A deadline nobody looks at until the end is not a bound: the whole point
-	// is to stop mid-walk, not to report afterwards that time had run out.
-	if elapsed > time.Second {
-		t.Errorf("cancellation took %v; the deadline was not honoured promptly",
-			elapsed)
+	// The whole point is to stop mid-walk, not to report afterwards that
+	// time had run out.
+	work := func(s *icStats) uint64 {
+		return s.NodesVisited + s.FieldEvals + s.Targets + s.TableOps
+	}
+	if work(st) > work(full)/2 {
+		t.Errorf("cancelled on poll %d of %d, the run still did %d of a full "+
+			"run's %d units of work; the deadline was not honoured promptly",
+			ctx.expireAt, live.polls, work(st), work(full))
 	}
 
-	// A live context still validates the document normally, and the
-	// no-context entry point is unchanged.
-	if err := s.ValidateContext(context.Background(), dt.Root, opts); err != nil {
-		t.Errorf("an uncancelled run should accept the document: %v", err)
-	}
+	// The no-context entry point is unchanged.
 	if err := s.Validate(dt.Root, opts); err != nil {
 		t.Errorf("Validate should accept the document: %v", err)
 	}
@@ -1062,4 +1084,20 @@ func TestValidateContextCancels(t *testing.T) {
 		err, context.Canceled) {
 		t.Errorf("a cancelled context gave %v, want context.Canceled", err)
 	}
+}
+
+// pollCtx is a context whose deadline passes on its expireAt-th Err() call
+// (never, when expireAt is 0). It counts the calls, which is how the validator
+// learns of a deadline, so a test can cancel mid-walk without a clock.
+type pollCtx struct {
+	context.Context
+	polls, expireAt int
+}
+
+func (c *pollCtx) Err() error {
+	c.polls++
+	if c.expireAt > 0 && c.polls >= c.expireAt {
+		return context.DeadlineExceeded
+	}
+	return nil
 }

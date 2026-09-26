@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -32,21 +31,29 @@ func facetedChain(n int) string {
 // is memoised per parser now and the merge no longer appears in a profile of
 // the load. The 2.8 s that remained sat in checkTypeBaseCycles, a separate
 // walk with the same shape, memoised in its turn and pinned by
-// TestBaseCycleCheckLinearInChainDepth; the load is 0.05 s now. The bound
-// stays where it was: well above anything a slow CI host will see, and well
-// below the quadratic merge, which overshoots it twice over.
+// TestBaseCycleCheckLinearInChainDepth; the load is 0.05 s now.
+//
+// The cost is asserted as the growth of bytes allocated from n=2000 to 4000
+// rather than as wall time, which does not survive a loaded CI runner. Each
+// unmemoised flatten builds a merged set per step it walks, so the quadratic
+// merge allocates quadratically: measured ~1.0, and ~2 without the memo.
 func TestFacetMergeLinearInChainDepth(t *testing.T) {
 	const n = 10000
 	st, err := xdm.ParseString(facetedChain(n), xdm.ParseOptions{})
 	if err != nil {
 		t.Fatalf("parse schema: %v", err)
 	}
-	start := time.Now()
 	if _, err := Load(st.Root, "", Options{}); err != nil {
 		t.Fatalf("load schema: %v", err)
 	}
-	if d := time.Since(start); d > 8*time.Second {
-		t.Fatalf("loading a %d-link restriction chain took %v, want under 8s", n, d)
+
+	const small, large, ceiling = 2000, 4000, 1.4
+	_, aSmall := measureLoad(t, facetedChain(small))
+	_, aLarge := measureLoad(t, facetedChain(large))
+	if exp := growthExponent(float64(aSmall), float64(aLarge)); exp > ceiling {
+		t.Fatalf("restriction chain: allocation grows as n^%.2f, ceiling n^%.2f "+
+			"(%dKB -> %dKB): the facet merge is flattening the chain per type again",
+			exp, ceiling, aSmall/1024, aLarge/1024)
 	}
 }
 

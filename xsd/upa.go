@@ -978,6 +978,7 @@ func badNestedAll(p *Particle, where string, version Version, seen map[*ModelGro
 	if seen[g] {
 		return nil
 	}
+	countNestedAllStep()
 	seen[g] = true
 	if g.Compositor == CompositorAll {
 		return []error{fmt.Errorf(
