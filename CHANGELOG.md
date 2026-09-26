@@ -34,7 +34,7 @@ New package `c14n`: Canonical XML 1.0, 1.1 and Exclusive C14N. It ships ahead of
 | `tests/check.sh` recorded a failing lane as PASS after an earlier failure | `failed` was a flag, and a lane is judged by whether it moved, so a second failure moved nothing. It counts failures now. | [`1803696`][1803696] |
 | The `c14n` `xmllint` differential failed on Windows | `xmllint` writes stdout in text mode there, so every LF came back CR-LF. The translation is undone; a canonical form never holds a literal CR. | [`20214e7`][20214e7] |
 | Complexity tests failed on loaded CI runners | They asserted fixed wall-clock budgets. `TestOptimizeNotQuadratic` now counts optimiser predicate walks; the xsd shapes keep only their allocation ceilings. | [`32609d4`][32609d4] |
-| The other 15 cost tests still timed themselves | In `xsd`, `relaxng`, `xquery` and `c14n`. Each now counts work, allocation or allocation growth, and was shown to fail with its guard disabled ([docs/testing.md](docs/testing.md#a-unit-test-may-not-cost-minutes)). | pending |
+| The other 15 cost tests still timed themselves | In `xsd`, `relaxng`, `xquery` and `c14n`. Each now counts work, allocation or allocation growth, and was shown to fail with its guard disabled ([docs/testing.md](docs/testing.md#a-unit-test-may-not-cost-minutes)). | [`1c7e368`][1c7e368] |
 
 ### Fixed — documentation
 
@@ -1031,6 +1031,7 @@ here so every entry in this file sits under a release.
 [7dda133]: https://github.com/knroy/go-xml/commit/7dda133
 [01e9f50]: https://github.com/knroy/go-xml/commit/01e9f50
 [20214e7]: https://github.com/knroy/go-xml/commit/20214e7
+[1c7e368]: https://github.com/knroy/go-xml/commit/1c7e368
 [32609d4]: https://github.com/knroy/go-xml/commit/32609d4
 [67c960b]: https://github.com/knroy/go-xml/commit/67c960b
 [1803696]: https://github.com/knroy/go-xml/commit/1803696
