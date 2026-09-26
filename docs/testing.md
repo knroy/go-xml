@@ -1223,8 +1223,11 @@ failure must not hide what the other two report.
 
 The unit-test step sets `GOXML_C14N_XMLLINT=1` on Linux and macOS, so the
 `c14n` differential against `xmllint` fails rather than skips when the tool is
-missing; Linux installs it from `libxml2-utils`, macOS ships it. Windows runs
-the differential only if `xmllint` happens to be on the `PATH`. Before the
+missing; Linux installs it from `libxml2-utils`, macOS ships it. Windows is not
+required to have it, but GitHub's Windows runner does carry an `xmllint` on the
+`PATH`, so the differential runs there too. That `xmllint` writes its output in
+text mode, turning every LF into CR-LF; a canonical form never holds a literal
+CR, so the tests undo that translation before comparing. Before the
 tests, a step runs `tests/fetch-c14n.sh` on all three platforms, and
 `GOXML_C14N_W3C=1` makes the W3C interop cases fail rather than skip if the
 fetch left them absent — see [Canonical XML](#canonical-xml-c14n).

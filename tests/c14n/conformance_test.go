@@ -284,7 +284,11 @@ func runXMLLint(t *testing.T, bin, flag, file string) []byte {
 	if err != nil {
 		t.Fatalf("xmllint %s %s: %v", flag, file, err)
 	}
-	return out
+	// On Windows xmllint writes stdout in text mode, which turns every LF
+	// into CR-LF. A canonical form never holds a literal CR (C14N writes
+	// one as &#xD;, and the parser folds line ends before that), so undoing
+	// the translation cannot hide a real difference.
+	return bytes.ReplaceAll(out, []byte("\r\n"), []byte("\n"))
 }
 
 func canonFile(t *testing.T, file string, alg c14n.Algorithm) []byte {

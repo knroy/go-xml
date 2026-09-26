@@ -48,6 +48,11 @@ func crossCheck(t *testing.T, doc string, alg Algorithm, want string) {
 		t.Logf("xmllint %s: %v (not a failure)", xmllintFlag[alg], err)
 		return
 	}
+	// On Windows xmllint writes stdout in text mode, which turns every LF
+	// into CR-LF. A canonical form never holds a literal CR (C14N writes
+	// one as &#xD;, and the parser folds line ends before that), so undoing
+	// the translation cannot hide a real difference.
+	out = bytes.ReplaceAll(out, []byte("\r\n"), []byte("\n"))
 	if string(out) != want {
 		t.Errorf("xmllint %s disagrees with the hand-derived form:\nxmllint %q\n   want %q", xmllintFlag[alg], out, want)
 	}
