@@ -32,6 +32,7 @@ untrusted document can make validation expensive. See
 | [`xpath`](xpath/) | XPath 2.0: lexer, parser, evaluator, `fn:` library |
 | [`xquery`](xquery/) | XQuery 3.1: constructors, FLWOR, the prolog |
 | [`xslt`](xslt/) | XSLT 2.0: templates, modes, keys, grouping, serialisation |
+| [`c14n`](c14n/) | Canonical XML 1.0 and 1.1, Exclusive C14N: the octets XML signatures digest |
 
 ### Safe by default
 
@@ -175,7 +176,7 @@ unless enabled; see [Security defaults](#security-defaults).
 
 ## What this is
 
-Seven packages, each usable on its own:
+Eight packages, each usable on its own:
 
 | Package | What it holds |
 |---|---|
@@ -186,6 +187,7 @@ Seven packages, each usable on its own:
 | [`xsd`](xsd/) | XML Schema 1.0 and 1.1: the component model, schema assembly, content models, facets, identity constraints |
 | [`dtd`](dtd/) | DTD validation: content models, attribute defaults, `ID`/`IDREF`, external subsets |
 | [`relaxng`](relaxng/) | RELAX NG: the derivative algorithm, the section 7 restrictions, the XSD datatype library, the compact syntax |
+| [`c14n`](c14n/) | Canonical XML 1.0, Exclusive Canonical XML 1.0 and Canonical XML 1.1, over any node set, streamed |
 | [`cmd/go-xml`](cmd/go-xml/) | A command-line transformer |
 
 ## Documentation
@@ -204,9 +206,13 @@ Seven packages, each usable on its own:
   limits, hot-reloading rule sets.
 * **[docs/recipes.md](docs/recipes.md)** — batching, splitting, HTML
   rendering, parameters, custom resolvers, standalone XPath.
+* **[docs/c14n.md](docs/c14n.md)** — Canonical XML for XML-DSig, SAML and
+  WS-Security: choosing an algorithm, node sets, the enveloped-signature
+  transform, and the verification still to do.
 * **[docs/options.md](docs/options.md)** — every option in `xdm`, `xpath`,
-  `xsd` and `xslt`: what each field does, what the zero value means, and the
-  limits that bound a parse, a validation and a transform.
+  `xsd`, `xslt`, `xquery`, `dtd` and `c14n`: what each field does, what the
+  zero value means, and the limits that bound a parse, a validation and a
+  transform.
 * **[SECURITY.md](SECURITY.md)** — how to report a vulnerability, and what
   counts as one.
 * **[docs/security.md](docs/security.md)** — threat model and the results of
@@ -349,6 +355,20 @@ than guessing.
 
 See [docs/xquery.md](docs/xquery.md) for options, external variables and what
 is not implemented.
+
+Canonical XML, for a signature digest or a semantic comparison. There is no
+default algorithm: the specification you are implementing names one.
+
+```go
+sum, err := c14n.Digest(sha256.New(), elem, c14n.Options{
+    Algorithm:                  c14n.Exclusive10,
+    InclusiveNamespacePrefixes: c14n.ParsePrefixList("#default xsi"),
+})
+same, err := c14n.Equal(a.Root, b.Root, c14n.Options{Algorithm: c14n.Inclusive11})
+```
+
+See [docs/c14n.md](docs/c14n.md) for node sets, the enveloped-signature
+transform, and the xml:base and xml:id rules that separate 1.0 from 1.1.
 
 CLI:
 
@@ -879,6 +899,16 @@ collation data is refused rather than quietly falling back to codepoint order,
 and `@collation` accepts only the codepoint URI — a language-sensitive
 collation is spelled with `@lang`.
 
+**Canonical XML.** All three W3C algorithms — Canonical XML 1.0, Exclusive
+Canonical XML 1.0 with its InclusiveNamespaces PrefixList, and Canonical XML
+1.1 with its `xml:base` fix-up — each with and without comments, over a whole
+document, a subtree, the enveloped-signature subset or any XPath-selected
+node set. Two inputs the specifications leave undefined are refused rather
+than guessed at: an XML 1.1 document, and a relative namespace URI. See
+[docs/c14n.md](docs/c14n.md) for how namespace nodes are handled, including
+XPath filters that keep part of an element's namespace axis, and for where it
+follows the W3C interop results over a literal reading of the text.
+
 ## Real-world stylesheets
 
 The W3C suites test the language a rule at a time. They do not test what a
@@ -1036,7 +1066,7 @@ accepting invalid input only fails to catch their mistake.
 One note on the denominator, and one on the numerator. The `XmlVersions` schemas carry
 `version="1.1"` and this parser accepts and loads all of them, but reads them
 under XML 1.0 rules, so what they test is not what is measured. See
-[todo.md](docs/todo.md#11-xml-11-documents--the-largest-single-win).
+[todo.md](docs/todo.md#11-xml-11-documents--implemented-one-layer-outstanding).
 
 And some of the suite is disputed. `status="queried"` on a test means the W3C
 has challenged the expected result, usually with a bugzilla reference, so those

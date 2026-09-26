@@ -1,0 +1,1 @@
+<!DOCTYPE doc [<!ENTITY greet "Hello"><!ENTITY amp2 "&#38;#38;">]><doc>&greet;, world &amp2;</doc>

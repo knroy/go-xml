@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -51,12 +50,18 @@ func dagSchema(n int) string {
 // its content-model constraints had been checked. Restoring honesty there made
 // the unsatisfiable half of this assertion visible.
 //
-// So the two halves are now separated. The timing bound is what this test was
+// So the two halves are now separated. The graph bound is what this test was
 // written for and it applies at EVERY n: path-walking cycle detection would
 // blow up on the graph long before the automaton is ever built, and it is the
 // regression that matters. The verdict is asserted only where it is
 // meaningful — a model within the position budget must genuinely load, and one
 // beyond it must be refused as a resource limit rather than accepted unchecked.
+//
+// The bound is on groups expanded, counted through budgetStats, not on wall
+// time, which failed on loaded CI runners. A memoised walk expands each of the
+// n+1 groups (the n definitions and C's own sequence) at most once; a
+// path-walking one expands some 2^n at n=8 already, and the fatal stops the
+// loop there rather than hanging at n=40.
 func TestGroupDAGLoadsInGraphTime(t *testing.T) {
 	for _, n := range []int{8, 16, 24, 32, 40} {
 		src := dagSchema(n)
@@ -69,15 +74,23 @@ func TestGroupDAGLoadsInGraphTime(t *testing.T) {
 		positions := 1 << (n - 1)
 		fits := positions <= DefaultMaxContentModelPositions
 
-		start := time.Now()
-		_, lerr := Load(st.Root, "", Options{})
-		d := time.Since(start)
+		var lerr error
+		stats := withStats(func() { _, lerr = Load(st.Root, "", Options{}) })
 
 		// The guarantee this test exists for: graph-proportional, at
 		// every n, whether the answer is acceptance or refusal.
-		if d > 5*time.Second {
-			t.Errorf("n=%d (%d bytes): load took %v, want graph-proportional time",
-				n, len(src), d)
+		for _, c := range []struct {
+			walk  string
+			steps uint64
+		}{
+			{"cycleFrom", stats.GroupCycleSteps.Load()},
+			{"badNestedAll", stats.NestedAllSteps.Load()},
+		} {
+			if c.steps > uint64(n+1) {
+				t.Fatalf("n=%d (%d bytes): %s expanded %d groups, want at most %d: "+
+					"it is walking paths rather than the graph",
+					n, len(src), c.walk, c.steps, n+1)
+			}
 		}
 		switch {
 		case fits && lerr != nil:

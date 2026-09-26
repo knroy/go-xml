@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -26,11 +25,12 @@ import (
 //     bypassing the parser's own depth bound, and returned a valid query.
 //     Nothing about that looks like a fault to a target watching for crashes.
 //
-// So this target asserts a time budget as well. A fuzzer explores exactly the
-// nested-delimiter shapes that make a scanner superlinear, and a budget is
-// what turns "it finished" into a result worth having. See
-// xsd/complexity_fuzz_test.go, which measures growth rates for the same
-// reason.
+// So this target asserts a work budget as well, counted in bytes allocated
+// rather than wall time so that a loaded machine cannot trip it. A fuzzer
+// explores exactly the nested-delimiter shapes that make a scanner
+// superlinear, and a budget is what turns "it finished" into a result worth
+// having. See xsd/complexity_fuzz_test.go, which measures growth rates for
+// the same reason.
 //
 // KNOWN OPEN FINDING, not caught by the budget below. The first 60-second run
 // of this target (1.58M executions) found a SEPARATE non-terminating loop
@@ -69,6 +69,12 @@ import (
 // not claim to fix. Fuzzing this target rediscovers them in about a minute
 // each, which is the point: nine existing targets and ~16M executions never
 // covered xquery.Compile at all.
+//
+// A THIRD, surfaced when the budget moved from wall time to allocation:
+// Compile("0 to 700000") allocates 213 MB, and "0 to 4999999" 1.5 GB in
+// 0.65 s, because the range is folded at compile time up to xpath.MaxItems.
+// It is bounded, so the time budget passed it on a fast machine; the
+// allocation budget reports it within seconds.
 func FuzzCompileNoPanic(f *testing.F) {
 	for _, s := range []string{
 		`1 + 2`, `<a>{1}</a>`, `<a b="{1}">t</a>`, `<a/>`,
@@ -92,16 +98,17 @@ func FuzzCompileNoPanic(f *testing.F) {
 				t.Fatalf("Compile(%q) panicked: %v", src, r)
 			}
 		}()
-		start := time.Now()
-		q, err := Compile(src, Options{})
-		// 400 bytes is a trivial amount of text. Anything approaching a
-		// second on it is a superlinear scan, which is the finding this
+		var q *Query
+		var err error
+		// 400 bytes is a trivial amount of text. Tens of megabytes allocated
+		// compiling it is a superlinear scan, which is the finding this
 		// target exists to catch -- the unterminated constructor took 53
-		// seconds on 120 bytes and returned the correct error. The bound is
-		// loose enough not to be flaky on a loaded fuzzing machine.
-		if el := time.Since(start); el > 2*time.Second {
-			t.Fatalf("Compile(%q) took %v on %d bytes; superlinear scan",
-				src, el, len(src))
+		// seconds on 120 bytes and returned the correct error, allocating
+		// 168 MB by 88 bytes. Bytes allocated rather than wall time, so a
+		// loaded fuzzing machine cannot trip it.
+		if b := allocated(func() { q, err = Compile(src, Options{}) }); b > 64<<20 {
+			t.Fatalf("Compile(%q) allocated %d bytes on %d bytes; superlinear "+
+				"scan", src, b, len(src))
 		}
 		if err != nil {
 			// Every compile error must carry a spec code, not a bare message.
@@ -148,10 +155,13 @@ func FuzzConstructorDepthIsBounded(f *testing.F) {
 				t.Fatalf("Compile at depth %d panicked: %v", n, r)
 			}
 		}()
-		start := time.Now()
-		_, err := Compile(src, Options{})
-		if el := time.Since(start); el > 5*time.Second {
-			t.Fatalf("depth %d took %v", n, el)
+		// The cost of reaching the verdict, as bytes allocated so that load
+		// cannot move it: about 560 KB at the deepest depth that compiles,
+		// under 5 KB for a refusal, and 5.6 MB at depth 5000 when nothing
+		// refuses it.
+		var err error
+		if b := allocated(func() { _, err = Compile(src, Options{}) }); b > 2<<20 {
+			t.Fatalf("depth %d allocated %d bytes", n, b)
 		}
 		// Comfortably past the ceiling: must be refused, and as a resource
 		// limit rather than as a syntax fault.

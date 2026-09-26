@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -211,33 +210,44 @@ func TestBaseCycleUrTypeStillTerminates(t *testing.T) {
 // must still be reported for every type on it; the types a walk passed on its
 // way back to its start are remembered as on that cycle, so they are reported
 // without walking the ring once per member.
+//
+// The cost is asserted as the growth of bytes allocated from n=2000 to 4000,
+// not as wall time, which failed on a loaded CI runner. Every walk fills a
+// seen set as long as the walk, so the quadratic form allocates quadratically:
+// measured ~1.0 for both shapes, and ~2 with either memo removed.
 func TestBaseCycleCheckLinearInChainDepth(t *testing.T) {
 	const n = 10000
 	st, err := xdm.ParseString(baseCycleChain(n), xdm.ParseOptions{})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	start := time.Now()
 	if _, err := Load(st.Root, "", Options{}); err != nil {
 		t.Fatalf("load: %v", err)
-	}
-	if d := time.Since(start); d > 2*time.Second {
-		t.Fatalf("loading a %d-link extension chain took %v, want under 2s", n, d)
 	}
 
 	st, err = xdm.ParseString(baseCycleRing(n), xdm.ParseOptions{})
 	if err != nil {
 		t.Fatalf("parse ring: %v", err)
 	}
-	start = time.Now()
 	_, err = Load(st.Root, "", Options{})
 	if err == nil {
 		t.Fatal("ring of 10001 types accepted")
 	}
-	if d := time.Since(start); d > 2*time.Second {
-		t.Fatalf("rejecting a ring of %d types took %v, want under 2s", n+1, d)
-	}
 	if got := strings.Count(err.Error(), "ct-props-correct.3"); got < n+1 {
 		t.Errorf("ring of %d types: %d links reported, want every one", n+1, got)
+	}
+
+	const small, large, ceiling = 2000, 4000, 1.4
+	for _, c := range []struct {
+		name string
+		gen  func(int) string
+	}{{"extension chain", baseCycleChain}, {"ring", baseCycleRing}} {
+		_, aSmall := measureLoad(t, c.gen(small))
+		_, aLarge := measureLoad(t, c.gen(large))
+		if exp := growthExponent(float64(aSmall), float64(aLarge)); exp > ceiling {
+			t.Errorf("%s: allocation grows as n^%.2f, ceiling n^%.2f (%dKB -> %dKB): "+
+				"the base-cycle check is walking the chain once per type again",
+				c.name, exp, ceiling, aSmall/1024, aLarge/1024)
+		}
 	}
 }

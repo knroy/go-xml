@@ -143,3 +143,41 @@ func TestAttListMalformed(t *testing.T) {
 		_, _ = ParseString(src, ParseOptions{AllowDOCTYPE: true})
 	}
 }
+
+// TestNonCDATAAttributeCollapse pins XML 1.0 §3.3.3: once the declaration has
+// been read, a non-CDATA value loses leading, trailing and repeated spaces,
+// while a character-referenced tab and a CDATA value are left alone. It is
+// Canonical XML 1.0 example 3.4's normNames/normId case.
+func TestNonCDATAAttributeCollapse(t *testing.T) {
+	tr, err := ParseString(`<!DOCTYPE d [<!ATTLIST d n NMTOKENS #IMPLIED i ID #IMPLIED c CDATA #IMPLIED`+
+		` x NOTATION (a|b) #IMPLIED e (p|q) 'p'>]><d n="  A   B  " i=" id1 " c="  A   B  " x=" a " t="&#9;A"/>`,
+		ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, a := range tr.Root.Children[0].Attrs {
+		got[a.Name.Local] = a.Value
+	}
+	want := map[string]string{"n": "A B", "i": "id1", "c": "  A   B  ", "x": "a", "e": "p", "t": "\tA"}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+// TestDefaultedNamespaceOnPrefixedElement: an ATTLIST for "p:doc" defaulting
+// xmlns:p must bind the prefix the element's own name uses. It matched on the
+// local name only, so the element failed the Prefix Declared check.
+func TestDefaultedNamespaceOnPrefixedElement(t *testing.T) {
+	tr, err := ParseString(`<!DOCTYPE p:doc [<!ATTLIST p:doc xmlns:p CDATA #FIXED "urn:p" p:a CDATA "v">]><p:doc/>`,
+		ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := tr.Root.Children[0]
+	if d.Name.URI != "urn:p" || len(d.Attrs) != 1 || d.Attrs[0].Name.URI != "urn:p" || d.Attrs[0].Value != "v" {
+		t.Fatalf("got name %v attrs %v", d.Name, d.Attrs)
+	}
+}

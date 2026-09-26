@@ -131,6 +131,11 @@ type exprFacts struct {
 	// crucially it stays OUT of foldConstant and isClosed, which decide
 	// whether folding is legal.
 	cancel *optimizeCanceller
+
+	// walks counts uncached predicate evaluations. The cache bounds it by
+	// twice the node count; TestOptimizeNotQuadratic asserts that, since a
+	// count does not vary with machine load the way a compile time does.
+	walks int
 }
 
 func newExprFacts() *exprFacts {
@@ -301,6 +306,7 @@ func isClosed(e Expr, f *exprFacts) bool {
 }
 
 func isClosedUncached(e Expr, f *exprFacts) bool {
+	f.walks++
 	switch v := e.(type) {
 	case *Literal:
 		return true
@@ -454,6 +460,7 @@ func containsCompatSensitive(e Expr, f *exprFacts) bool {
 }
 
 func containsCompatSensitiveUncached(e Expr, f *exprFacts) bool {
+	f.walks++
 	switch v := e.(type) {
 	case *UnaryOp:
 		return true

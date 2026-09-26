@@ -15,10 +15,19 @@ import (
 // jsonParams carries the settings the JSON and adaptive output methods read
 // across to xpath, which owns their rendering. Only the parameters those two
 // methods consult are passed: the rest of xsl:output describes an XML
-// declaration, indentation and escaping that neither method has.
+// declaration and escaping that neither method has.
+//
+// Indent is one of the ones they do consult, for JSON. Serialization 3.1
+// section 9.1.4 leaves it optional in one direction -- indent=yes MAY add
+// whitespace around the structural tokens, indent=no MUST NOT -- so compact
+// output was conformant, and is still exactly what indent=no writes. It is
+// passed now because the permitted behaviour is the useful one: a JSON result
+// of any size is hard for a person to check by eye on one line, which is what
+// the parameter exists to fix.
 func jsonParams(opts OutputSettings, charMap map[rune]string) xpath.SerializeParams {
 	p := xpath.SerializeParams{
 		AllowDuplicateNames:  opts.AllowDuplicateNames,
+		Indent:               opts.Indent,
 		JSONNodeOutputMethod: opts.JSONNodeOutputMethod,
 		CharMap:              charMap,
 		Normalize:            normalizerFor(opts.NormalizationForm),

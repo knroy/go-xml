@@ -533,3 +533,30 @@ func TestReplacementQuotesDoNotDesynchroniseTheScanner(t *testing.T) {
 		t.Errorf("second child is %q, want b", kids[1].Name.Local)
 	}
 }
+
+// TestEntityValueTwoLevelExpansion is XML 1.0 Appendix D: a character
+// reference in an entity value is decoded at declaration, and the replacement
+// text is then parsed as content. "&#38;#38;" therefore yields "&", not
+// "&#38;". Both paths are covered: the dec.Entity path, and the rewrite path a
+// markup-bearing entity forces.
+func TestEntityValueTwoLevelExpansion(t *testing.T) {
+	for _, tc := range []struct{ doc, want string }{
+		{`<!DOCTYPE d [<!ENTITY a "&#38;#38;"><!ENTITY c "&#65;&#x42;">]><d>&a;|&c;</d>`, "&|AB"},
+		{`<!DOCTYPE d [<!ENTITY a "&#38;#38;"><!ENTITY m "<b/>">]><d>&a;&m;</d>`, "&"},
+		{`<!DOCTYPE d [<!ENTITY a "&#38;#60;"><!ENTITY m "<b/>">]><d>&a;&m;</d>`, "<"},
+		{`<!DOCTYPE d [<!ENTITY a "&#38;#38;"><!ENTITY m "<b/>">]><d x="&a;">&m;</d>`, ""},
+	} {
+		tr, err := ParseString(tc.doc, ParseOptions{AllowDOCTYPE: true})
+		if err != nil {
+			t.Errorf("%s: %v", tc.doc, err)
+			continue
+		}
+		d := tr.Root.Children[0]
+		if got := d.StringValue(); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.doc, got, tc.want)
+		}
+		if len(d.Attrs) == 1 && d.Attrs[0].Value != "&" {
+			t.Errorf("%s: attribute %q, want %q", tc.doc, d.Attrs[0].Value, "&")
+		}
+	}
+}

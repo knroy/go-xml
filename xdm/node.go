@@ -325,6 +325,15 @@ type Tree struct {
 	// nothing. The dtd package parses it; this package applies only the two
 	// declarations whose absence is visible in the data model.
 	DocType string
+	// XMLVersion is the version the document's XML declaration names: "1.0"
+	// or "1.1", and "1.0" when there is no declaration, since that is the
+	// version such a document is read as. It is empty for a tree that was
+	// not parsed from text, which has no declaration to name one.
+	//
+	// It is recorded because some consumers are defined for one version
+	// only: Canonical XML is not defined for XML 1.1, and package c14n
+	// refuses a tree this reports as 1.1.
+	XMLVersion string
 	// externalSubset is the text of the external DTD subset, and of any
 	// parameter-entity module it pulled in, when one was read.
 	//

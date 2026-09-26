@@ -1,0 +1,1 @@
+<!DOCTYPE p:doc [<!ATTLIST p:doc xmlns:p CDATA #FIXED "http://example.com/p" p:a CDATA "v">]><p:doc/>

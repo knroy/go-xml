@@ -2,8 +2,8 @@ package xsd
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
-	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -17,6 +17,11 @@ import (
 // Removing it must not make a large bound expensive: the state budget has to
 // stop the unroll instead. These load in milliseconds rather than declining
 // early, and a bound no budget can hold declines through the budget.
+//
+// The cost is asserted as bytes allocated, which a loaded CI runner cannot
+// move, rather than as wall time. The budget caps the unroll at 4096 states,
+// so maxOccurs=100000 and 1000000 allocate what 1000 does (measured under
+// 600KB each); an unroll the budget does not stop allocates per copy.
 func TestSubsumeLargeOccursTerminates(t *testing.T) {
 	for _, max := range []string{"64", "65", "100", "1000", "100000", "1000000", "unbounded"} {
 		src := fmt.Sprintf(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:t="urn:t" targetNamespace="urn:t">
@@ -32,12 +37,16 @@ func TestSubsumeLargeOccursTerminates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("maxOccurs=%s: parse: %v", max, err)
 		}
-		start := time.Now()
+		var m0, m1 runtime.MemStats
+		runtime.ReadMemStats(&m0)
 		if _, err := Load(st.Root, "", Options{Version: Version11}); err != nil {
 			t.Errorf("maxOccurs=%s: a restriction to maxOccurs=1 is legal, got %v", max, err)
 		}
-		if d := time.Since(start); d > 5*time.Second {
-			t.Errorf("maxOccurs=%s: load took %v; the state budget did not bound the unroll", max, d)
+		runtime.ReadMemStats(&m1)
+		const ceiling = 4 << 20
+		if a := m1.TotalAlloc - m0.TotalAlloc; a > ceiling {
+			t.Errorf("maxOccurs=%s: load allocated %dKB, ceiling %dKB; the state "+
+				"budget did not bound the unroll", max, a/1024, ceiling/1024)
 		}
 	}
 }

@@ -1,0 +1,1 @@
+<!DOCTYPE doc [<!ATTLIST e toks NMTOKENS #IMPLIED>]><doc><e toks="   a   b    c  "/></doc>

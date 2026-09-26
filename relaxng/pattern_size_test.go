@@ -1,10 +1,10 @@
 package relaxng
 
 import (
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -17,6 +17,13 @@ import (
 //
 // MaxDepth could not bound it — the document is two levels deep whatever its
 // width, so the depth bound is never approached.
+//
+// The pattern's growth IS its allocation, so the bound is asserted on bytes
+// allocated rather than on wall time, which a loaded runner inflates. Measured:
+// about 5 MB once the bound fires, at twelve children and at forty alike;
+// 142 MB at twelve children with MaxPatternSize disabled. Twelve is checked
+// first because it is the largest width the unbounded code still finishes, so
+// a lost bound fails here with a figure instead of hanging at forty.
 func TestNestedOneOrMoreIsBounded(t *testing.T) {
 	const sch = `<element name="r" xmlns="http://relaxng.org/ns/structure/1.0">
   <oneOrMore><oneOrMore><oneOrMore>
@@ -32,28 +39,39 @@ func TestNestedOneOrMoreIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Well past the point that used to take a gigabyte.
-	doc, err := xdm.ParseString("<r>"+strings.Repeat("<a/>", 40)+"</r>",
-		xdm.ParseOptions{})
-	if err != nil {
-		t.Fatal(err)
+	// Forty is well past the point that used to take a gigabyte.
+	for _, n := range []int{12, 40} {
+		doc, err := xdm.ParseString("<r>"+strings.Repeat("<a/>", n)+"</r>",
+			xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var verr error
+		if b := allocated(func() { verr = s.Validate(doc.Root) }); b > 32<<20 {
+			t.Fatalf("%d children allocated %d bytes; the pattern bound did "+
+				"not apply", n, b)
+		}
+		// The bound is reported as a limit, not as a validity verdict: the
+		// document is in fact valid, and answering "invalid" would be a wrong
+		// answer rather than a refusal to answer.
+		if verr == nil {
+			continue // bounded and still answered correctly
+		}
+		if !strings.Contains(verr.Error(), "exceeds") {
+			t.Fatalf("refused for the wrong reason: %v", verr)
+		}
 	}
-	start := time.Now()
-	verr := s.Validate(doc.Root)
-	elapsed := time.Since(start)
+}
 
-	if elapsed > 5*time.Second {
-		t.Fatalf("validation took %v; the pattern bound did not apply", elapsed)
-	}
-	// The bound is reported as a limit, not as a validity verdict: the
-	// document is in fact valid, and answering "invalid" would be a wrong
-	// answer rather than a refusal to answer.
-	if verr == nil {
-		return // bounded and still answered correctly
-	}
-	if !strings.Contains(verr.Error(), "exceeds") {
-		t.Fatalf("refused for the wrong reason: %v", verr)
-	}
+// allocated reports the bytes f allocates. TotalAlloc is cumulative, so the
+// figure depends on the work done and not on when the collector runs or how
+// loaded the machine is.
+func allocated(f func()) uint64 {
+	var m0, m1 runtime.MemStats
+	runtime.ReadMemStats(&m0)
+	f()
+	runtime.ReadMemStats(&m1)
+	return m1.TotalAlloc - m0.TotalAlloc
 }
 
 // The bound must not refuse the ordinary use of oneOrMore, which is common.
@@ -85,6 +103,11 @@ func TestPlainOneOrMoreStillValidates(t *testing.T) {
 // MaxPatternSize to 1, the strictest value the API accepts, changed none of
 // those figures: the guard was unreachable, not miscalibrated. With the check
 // in the loop every one of them is refused in about 2 ms.
+//
+// As above, the bound is asserted on bytes allocated, not on wall time:
+// about 2.4 MB for every width here once the bound fires, against 85 MB at
+// eleven attributes without it. The check is fatal so that a lost bound stops
+// at twelve, which still finishes, rather than hanging at fourteen.
 func TestAttributePatternSizeIsBounded(t *testing.T) {
 	const sch = `<element name="r" xmlns="http://relaxng.org/ns/structure/1.0">
 <oneOrMore><oneOrMore><attribute><anyName/></attribute></oneOrMore></oneOrMore><text/></element>`
@@ -110,15 +133,12 @@ func TestAttributePatternSizeIsBounded(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		start := time.Now()
 		// Default options: the point is that the limit the package already
 		// ships is the one that fires.
-		verr := s.Validate(doc.Root)
-		elapsed := time.Since(start)
-
-		if elapsed > 500*time.Millisecond {
-			t.Errorf("%d attributes took %v; the pattern bound did not apply",
-				n, elapsed)
+		var verr error
+		if b := allocated(func() { verr = s.Validate(doc.Root) }); b > 16<<20 {
+			t.Fatalf("%d attributes allocated %d bytes; the pattern bound did "+
+				"not apply", n, b)
 		}
 		// The refusal must name the limit. A validity failure here would be a
 		// wrong answer rather than a refusal to answer: the document does in

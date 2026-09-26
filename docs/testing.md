@@ -814,8 +814,8 @@ go test ./xsd/ -run TestOccursOracle -count=1 -v
 # than 0.4s, so it is opt-in rather than part of every `go test ./...`
 GOXSLT_OCCURS_WIDE=1 go test ./xsd/ -run TestOccursOracle -count=1 -v
 
-# Every configurable limit at its boundaries, across all six packages
-go test ./xdm/ ./xsd/ ./xpath/ ./xslt/ ./relaxng/ ./dtd/ \
+# Every configurable limit at its boundaries, across all seven packages
+go test ./xdm/ ./xsd/ ./xpath/ ./xslt/ ./relaxng/ ./dtd/ ./c14n/ \
   -run Boundaries -count=1 -v
 ```
 
@@ -873,28 +873,58 @@ so the case was quadratic and finished in no deadline at all. It was recorded
 as a performance defect rather than raised past, and fixing the defect — a
 persistent hash array mapped trie — is what made it pass.
 
+A cost test counts work; it never compares against the clock. Fixed
+wall-clock budgets failed on loaded CI runners (an `xsd` chain load took
+2.7 s against 2 s on Windows, where it takes well under a second idle), and a
+budget loose enough to survive load is too loose to catch a regression. Each
+cost test instead asserts one of three measures, and each was shown to fail
+with the guarded mechanism disabled:
+
+- a work counter: `TestOptimizeNotQuadratic` counts the optimiser's uncached
+  predicate walks, `TestNamespaceScopeNotQuadratic` the namespace bindings
+  `c14n` examines, `TestGroupDAGLoadsInGraphTime` the groups each walk expands;
+- bytes allocated (`runtime.MemStats.TotalAlloc`), which does not vary with
+  load: the `relaxng` pattern-size tests, the `xquery` scanner and depth tests,
+  `TestSubsumeLargeOccursTerminates`, `TestAdversarialShapesStayBounded`;
+- the growth exponent of allocation between n and 2n, for costs that are
+  linear by design: `TestBaseCycleCheckLinearInChainDepth`,
+  `TestFacetMergeLinearInChainDepth`.
+
+`TestValidateContextCancels` uses a context that expires on its Nth poll rather
+than on a timer, so where cancellation lands no longer depends on speed.
+
 ---
 
 ## Fuzzing
 
-Nine targets, using Go's native `testing.F` and no framework:
+Twelve targets, using Go's native `testing.F` and no framework:
 
 | target | package | asserts |
 |---|---|---|
 | `FuzzParseNoPanic` | `xdm` | `ParseString` never panics; a refusal is an error and never a tree beside it; an accepted tree walks with its parent links intact |
 | `FuzzParseDOCTYPE` | `xdm` | the DTD subset parser never panics on a malformed `<!DOCTYPE>` |
 | `FuzzLoadSchemaNoPanic` | `xsd` | `Load` never panics at either XSD version, and every content model it accepts compiles to an automaton that answers total |
-| `FuzzSchemaComplexity` | `xsd` | the complexity limits refuse a pathological schema rather than running unbounded |
+| `FuzzSchemaComplexity` | `xsd` | the complexity limits refuse a pathological schema rather than running unbounded: no load of a small schema allocates more than 8 MB |
 | `FuzzSerializeRoundTrip` | `xslt` | parse → serialise → parse yields the same document, compared on expanded names, kinds and string values |
 | `FuzzCompileStylesheetNoPanic` | `xslt` | `Compile` never panics and never returns a stylesheet beside an error |
 | `FuzzCompileNoPanic` | `xpath` | the expression compiler never panics, and every parse error carries a spec code |
 | `FuzzParseCompactNoPanic` | `relaxng` | the compact-syntax parser never panics |
 | `FuzzTokenNoPanic` | `internal/xmlfork` | the forked tokeniser never panics and terminates on any byte string |
+| `FuzzCanonicalizeNoPanic` | `c14n` | parse then canonicalize never panics or hangs; a parsed document is refused only for depth, a relative namespace URI or XML 1.1; inclusive canonical forms re-canonicalize unchanged; `FromXPathFilter(doc, "true()")` reproduces the whole document exactly, and filters that split namespace axes canonicalize |
+| `FuzzCompileNoPanic` | `xquery` | `xquery.Compile` never panics, and no compile of a 400-byte input allocates more than 64 MiB |
+| `FuzzConstructorDepthIsBounded` | `xquery` | a query nested past the constructor-depth bound is refused, and one inside it compiles |
 
 Most targets live in `zz_fuzz_test.go` in the package they exercise; the `zz_`
 prefix is only to sort it last. Four sit beside the code they cover instead,
-in `internal/xmlfork/fuzz_test.go`, `relaxng/compact_fuzz_test.go` and
-`xsd/complexity_fuzz_test.go`.
+in `internal/xmlfork/fuzz_test.go`, `relaxng/compact_fuzz_test.go`,
+`xsd/complexity_fuzz_test.go` and `c14n/fuzz_test.go`.
+
+The nightly workflow runs ten of the twelve. The two `xquery` targets are left
+out on purpose: `FuzzCompileNoPanic` rediscovers three known, still-open
+faults within about a minute each: two in the prolog scanner, and a range such
+as `0 to 700000` folded at compile time into 213 MB (its doc comment names
+them), so a nightly run would fail every night on bugs already
+recorded. Run them by hand while working on `xquery`.
 
 ```sh
 # Run one target's search. -run '^$' suppresses the ordinary tests so that
@@ -909,11 +939,11 @@ restriction, not this repository's.
 
 **A plain `go test` runs the seed corpus and nothing else.** That is why the
 seeds are kept short and few — a Go fuzz target replays every seed on every
-ordinary test run, so a large corpus is a tax on every build. The nine targets
+ordinary test run, so a large corpus is a tax on every build. The ten targets
 together add well under a second.
 
 **The search itself runs nightly, not on every push.**
-`.github/workflows/fuzz.yml` runs all nine at `-fuzztime 300s`, one per matrix
+`.github/workflows/fuzz.yml` runs all ten at `-fuzztime 300s`, one per matrix
 leg, on a `schedule:` cron and on `workflow_dispatch` for a run by hand. It is
 kept out of the per-push gate on purpose: a coverage-guided search is
 nondeterministic, so the same commit can pass one run and fail the next when
@@ -932,6 +962,95 @@ Crashers Go finds are written to `testdata/fuzz/<Target>/` inside the package
 directory. That path is this repository's own, unrelated to the third-party
 suite checkouts elsewhere under `testdata/`; a minimised crasher worth keeping
 is committed there and replays as a seed thereafter.
+
+---
+
+## Canonical XML (`c14n`)
+
+The tests are in two places. `c14n/` holds the unit, adversarial, fuzz and
+benchmark tests, whose inputs are written inline. `tests/c14n/` holds the
+conformance harnesses — the Recommendations' worked examples, the `xmllint`
+differential and the W3C interop cases — with the corpus they read in
+`tests/c14n/testdata/`, beside the other suite harnesses rather than inside
+the library package. The interop cases are a small download, which
+`tests/fetch-c14n.sh` fetches into `testdata/c14n/`:
+
+```sh
+tests/fetch-c14n.sh               # once; a no-op when the files are present
+go test ./c14n/ ./tests/c14n/ -count=1
+```
+
+**The W3C interop cases.** `TestW3CC14N11Interop` runs the 20 cases the XML
+Security Working Group used for the C14N 1.1 interop round: an input
+document, an XPath filter, C14N 1.1 and a SHA-1 digest. The expected results
+are the five implementations' own — each case's digest is checked against the
+`DigestValue` IAIK, IBM, Oracle, Sun and UPC each signed, and the octets
+against the canonical form IAIK published. They are third-party material, so
+like the other W3C suites they are fetched, not committed; the files, their
+URLs and a SHA-256 per file are pinned in `tests/c14n-corpus.txt`, and a file
+that does not match its digest fails the fetch. The test skips when the files
+are absent; `GOXML_C14N_W3C=1` makes absence a failure, and `tests/check.sh`
+(which runs the fetch itself) and CI both set it. The same script fetches the
+three Recommendations into `testdata/c14n/specs/` for reference.
+
+**Golden files.** Canonical outputs are compared byte for byte against files
+in `tests/c14n/testdata/`, which is tracked (unlike the top-level `testdata/`) and
+marked `-text` in `.gitattributes` so a Windows checkout cannot rewrite their
+line endings. The golden files are regenerated **only from `xmllint`**, never
+from this package's own output — a golden file written by the code under test
+checks nothing:
+
+```sh
+go test ./tests/c14n/ -update -count=1   # needs xmllint
+```
+
+**The `xmllint` differential.** When `xmllint` is on the `PATH`, whole-document
+cases are also canonicalized live by `xmllint --c14n`, `--exc-c14n` and
+`--c14n11` (libxml2, the canonicalizer `xmlsec1` is built on) and compared.
+Without it the test skips, which on a developer machine is the right default
+and in CI is the wrong one — so `GOXML_C14N_XMLLINT=1` turns a missing
+`xmllint` into a failure, and CI sets it. `xmllint` cannot take a node set, so
+for subsets the second implementation is the W3C interop round above — twenty
+cases, five implementations — and beyond those the Recommendations' own
+examples; [c14n.md](c14n.md#verification-still-to-do) lists what
+that leaves open.
+
+**The `xmlsec1` differential.** `TestC14NDifferentialXMLSec1` takes node sets
+to `xmlsec1`, which has no canonicalize command but digests a node set for
+every signature reference: each comparison is a `ds:Reference` in an enveloped
+signature template, and `xmlsec1 --sign --store-references` prints the octets
+it digests, which are checked against the digest it printed and then compared
+byte for byte with this package's output for the same node set. It covers the
+`xmllint` corpus under all six algorithms, the enveloped-signature transform
+(`ExcludeSubtree`, including two documents in `tests/c14n/testdata/xmlsec1/`
+with the signature mid-document), XPath filter transforms over the
+Recommendations' subset examples and the W3C interop inputs, five inputs
+whose filters split namespace axes (`FromXPathFilter`, a `NamespaceSet`), and
+Exclusive C14N with an `InclusiveNamespaces` PrefixList. It skips without `xmlsec1` on
+the `PATH`; `GOXML_C14N_XMLSEC1=1` makes that a failure, and CI sets it on
+Linux, where it installs `xmlsec1` from apt. Without a local `xmlsec1`, a
+script runs it in a Debian container and needs only Docker:
+
+```sh
+tests/c14n-xmlsec1.sh         # the differential
+tests/c14n-xmlsec1.sh bench   # and the throughput comparison (about a minute)
+```
+
+Where `xmlsec1` is known to differ, the case is listed in
+`xmlsec1Differences` in `tests/c14n/xmlsec1_test.go` with its reason, and
+[c14n.md](c14n.md#where-xmlsec1-differs) states each one. An entry derives the
+exact octets `xmlsec1` produces (or names the error it stops with), so it
+fails both when `xmlsec1` changes and when it starts agreeing. Any other
+difference is a failure. An entry needs a reason grounded in a Recommendation;
+one is never added to make the test pass.
+
+**Fuzzing.** `FuzzCanonicalizeNoPanic` parses its input and canonicalizes
+what parses, asserting no panic and no hang; it runs nightly with the
+other targets ([Fuzzing](#fuzzing)):
+
+```sh
+GOXSLT_NO_SUITES=1 go test ./c14n/ -run '^$' -fuzz FuzzCanonicalizeNoPanic -fuzztime 120s
+```
 
 ---
 
@@ -1122,6 +1241,17 @@ all differ on Windows — so a cross-OS matrix is the only thing that
 demonstrates the file handling actually works everywhere, rather than working
 on the one platform anybody ran it on. `fail-fast` is off: one platform's
 failure must not hide what the other two report.
+
+The unit-test step sets `GOXML_C14N_XMLLINT=1` on Linux and macOS, so the
+`c14n` differential against `xmllint` fails rather than skips when the tool is
+missing; Linux installs it from `libxml2-utils`, macOS ships it. Windows is not
+required to have it, but GitHub's Windows runner does carry an `xmllint` on the
+`PATH`, so the differential runs there too. That `xmllint` writes its output in
+text mode, turning every LF into CR-LF; a canonical form never holds a literal
+CR, so the tests undo that translation before comparing. Before the
+tests, a step runs `tests/fetch-c14n.sh` on all three platforms, and
+`GOXML_C14N_W3C=1` makes the W3C interop cases fail rather than skip if the
+fetch left them absent — see [Canonical XML](#canonical-xml-c14n).
 
 The matrix stops at this job. `conformance` stays `ubuntu-latest` alone,
 because it clones about 944M of W3C corpora and running that three times costs

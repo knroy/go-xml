@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- before the document element -->
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="r1" Version="2.0" IssueInstant="2026-01-01T00:00:00Z">
+  <saml:Issuer>https://idp.example.com</saml:Issuer>
+  <?signature?>
+  <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>
+  <!-- inside -->
+  <saml:Assertion ID="a1" xml:lang="en"><saml:Subject>alice &amp; bob</saml:Subject></saml:Assertion>
+</samlp:Response>

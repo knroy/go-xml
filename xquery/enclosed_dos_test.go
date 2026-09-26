@@ -2,9 +2,9 @@ package xquery
 
 import (
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -34,36 +34,34 @@ import (
 // which is why no test asserting that a malformed query is refused ever
 // caught it: the cost is paid before the right answer is returned.
 //
-// The bound is deliberately loose. A correct scan finishes these in well
-// under a millisecond, so a second is orders of magnitude of headroom on a
-// loaded machine while still failing decisively against doubling: the
-// unfixed scan needs ~53s for the last case alone.
+// The work is measured as bytes allocated, not wall time, which a loaded
+// runner inflates: every rescan that gives up allocates its error, so the
+// allocation doubles with the time. Measured: 5 KB at n=22 and 12 KB at n=60
+// with the memo; 168 MB at n=22 and 2.7 GB at n=26 without it. The check is
+// fatal so that a lost memo stops at n=22 instead of running on to n=30.
 func TestUnterminatedConstructorScanIsNotExponential(t *testing.T) {
 	for _, n := range []int{22, 26, 30, 40, 60} {
 		src := strings.Repeat("<a>{", n)
-		done := make(chan error, 1)
-		start := time.Now()
-		go func() {
-			_, err := Compile(src, Options{})
-			done <- err
-		}()
-		select {
-		case err := <-done:
-			if err == nil {
-				t.Errorf("n=%d: %q was accepted; it is unterminated", n, src)
-				continue
-			}
-			if el := time.Since(start); el > time.Second {
-				t.Errorf("n=%d: %d bytes took %v; the scan is superlinear again",
-					n, len(src), el)
-			}
-		case <-time.After(10 * time.Second):
-			// Reporting rather than hanging the package: an exponential scan
-			// at n=60 would not finish in the lifetime of the run.
-			t.Fatalf("n=%d: %d bytes did not compile within 10s; the scan is "+
-				"exponential again", n, len(src))
+		var err error
+		if b := allocated(func() { _, err = Compile(src, Options{}) }); b > 256<<10 {
+			t.Fatalf("n=%d: %d bytes of query allocated %d bytes; the scan is "+
+				"superlinear again", n, len(src), b)
+		}
+		if err == nil {
+			t.Errorf("n=%d: %q was accepted; it is unterminated", n, src)
 		}
 	}
+}
+
+// allocated reports the bytes f allocates. TotalAlloc is cumulative, so the
+// figure depends on the work done and not on when the collector runs or how
+// loaded the machine is.
+func allocated(f func()) uint64 {
+	var m0, m1 runtime.MemStats
+	runtime.ReadMemStats(&m0)
+	f()
+	runtime.ReadMemStats(&m1)
+	return m1.TotalAlloc - m0.TotalAlloc
 }
 
 // Finding B: the parser's depth limit was bypassed entirely.
@@ -76,7 +74,11 @@ func TestUnterminatedConstructorScanIsNotExponential(t *testing.T) {
 // amount of stack getting there.
 //
 // The refusal must carry the same code and the same sentinel as the
-// parenthetical route, or an embedder cannot treat the two alike.
+// parenthetical route, or an embedder cannot treat the two alike. It must
+// also come early, at the bound rather than after compiling what lies past
+// it, so its cost is asserted too -- as bytes allocated, which load does not
+// move. Measured: under 3 KB at every depth here with the bound; without it,
+// the query is compiled level by level before anything can refuse it.
 func TestDeeplyNestedConstructorsAreRefused(t *testing.T) {
 	// The depths are written as literals rather than as maxConstructorDepth+1
 	// so that this test still COMPILES against a tree without the fix, and so
@@ -84,31 +86,22 @@ func TestDeeplyNestedConstructorsAreRefused(t *testing.T) {
 	// A test that cannot build proves nothing about a revert.
 	for _, n := range []int{1001, 5000, 20000} {
 		src := strings.Repeat("<a>{", n) + "1" + strings.Repeat("}</a>", n)
-		done := make(chan error, 1)
-		start := time.Now()
-		go func() {
-			_, err := Compile(src, Options{})
-			done <- err
-		}()
-		select {
-		case err := <-done:
-			if err == nil {
-				t.Errorf("n=%d: accepted; the depth bound did not apply", n)
-				continue
-			}
-			if !errors.Is(err, xdm.ErrResourceLimit) {
-				t.Errorf("n=%d: refused without the sentinel: %v; a caller "+
-					"cannot tell this from a malformed query", n, err)
-			}
-			if code := xdm.ErrorCode(err); code != "XPDY0130" {
-				t.Errorf("n=%d: code %q, want XPDY0130; the wrap must ADD the "+
-					"sentinel, never replace the code", n, code)
-			}
-			if el := time.Since(start); el > 5*time.Second {
-				t.Errorf("n=%d: refused only after %v", n, el)
-			}
-		case <-time.After(30 * time.Second):
-			t.Fatalf("n=%d: did not terminate", n)
+		var err error
+		if b := allocated(func() { _, err = Compile(src, Options{}) }); b > 256<<10 {
+			t.Errorf("n=%d: allocated %d bytes; the refusal did not come at "+
+				"the bound", n, b)
+		}
+		if err == nil {
+			t.Errorf("n=%d: accepted; the depth bound did not apply", n)
+			continue
+		}
+		if !errors.Is(err, xdm.ErrResourceLimit) {
+			t.Errorf("n=%d: refused without the sentinel: %v; a caller "+
+				"cannot tell this from a malformed query", n, err)
+		}
+		if code := xdm.ErrorCode(err); code != "XPDY0130" {
+			t.Errorf("n=%d: code %q, want XPDY0130; the wrap must ADD the "+
+				"sentinel, never replace the code", n, code)
 		}
 	}
 }

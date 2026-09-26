@@ -7,7 +7,8 @@ import (
 )
 
 // attDeclaredType is one attribute whose ATTLIST declaration gives it a type
-// the data model can observe: ID, IDREF or IDREFS.
+// other than CDATA. ID, IDREF and IDREFS are observable as annotations; every
+// non-CDATA type is observable as a collapsed value (XML 1.0 §3.3.3).
 //
 // Section 4.5 of the XSLT specification and F&O's fn:id both work from the
 // attribute's *type*, not its name, and a DTD is the other way — besides a
@@ -78,9 +79,18 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 		for i := 1; i+1 < len(fields); {
 			name, decl := fields[i], fields[i+1]
 			i += 2
-			switch decl {
-			case "ID", "IDREF", "IDREFS":
+			switch {
+			case decl == "CDATA", decl == "#REQUIRED", decl == "#IMPLIED", decl == "#FIXED",
+				strings.HasPrefix(decl, `"`), strings.HasPrefix(decl, `'`):
+			default:
+				// Every non-CDATA type is recorded, not only the ID family:
+				// XML 1.0 §3.3.3 requires a processor that has read the
+				// declaration to collapse the value's spaces, whatever the
+				// type. applyAttTypes annotates only ID, IDREF and IDREFS.
 				types = append(types, attDeclaredType{element, name, decl})
+			}
+			if decl == "NOTATION" && i < len(fields) {
+				i++ // the parenthesised notation list is part of the type
 			}
 			switch {
 			case decl == "#REQUIRED", decl == "#IMPLIED":
@@ -166,7 +176,11 @@ func unquote(s string) string {
 func applyAttDefaults(t xml.StartElement, defs []attDefault) xml.StartElement {
 	var add []xml.Attr
 	for _, d := range defs {
-		if d.element != t.Name.Local {
+		// A DTD is not namespace-aware: an ATTLIST names the element as
+		// written, prefix included. Matching the local name alone missed
+		// "p:doc", and with it a defaulted xmlns:p the element's own name
+		// needs. The local-name match stays, as applyAttTypes has it.
+		if d.element != attrLexical(t.Name) && d.element != t.Name.Local {
 			continue
 		}
 		if hasAttrNamed(t.Attr, d.name) {
@@ -220,7 +234,8 @@ func attrLexical(n xml.Name) string {
 	return n.Space + ":" + n.Local
 }
 
-// applyAttTypes stamps the ID, IDREF and IDREFS annotations a DTD declares.
+// applyAttTypes stamps the ID, IDREF and IDREFS annotations a DTD declares,
+// and collapses the spaces in every attribute declared with a non-CDATA type.
 //
 // A DTD is one of the two ways a document says which of its attributes are
 // IDs, and fn:id is defined over the attribute's type rather than its name.
@@ -234,6 +249,15 @@ func applyAttTypes(el *Node, types []attDeclaredType) {
 		}
 		for _, a := range el.Attrs {
 			if a.Name.Lexical() != t.attr && a.Name.Local != t.attr {
+				continue
+			}
+			// XML 1.0 §3.3.3: a value whose declared type is not CDATA
+			// loses leading and trailing spaces, and each run of spaces
+			// becomes one. Only #x20: a tab written as &#9; survives.
+			a.Value = strings.Join(strings.FieldsFunc(a.Value, func(r rune) bool { return r == ' ' }), " ")
+			switch t.typ {
+			case "ID", "IDREF", "IDREFS":
+			default:
 				continue
 			}
 			if a.TypeAnnotation == "" {

@@ -4,6 +4,45 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## v1.4.0 — 2026-09-25
+
+New package `c14n`: Canonical XML 1.0, 1.1 and Exclusive C14N. It ships ahead of the full verification gate in its design: it is checked against the Recommendations' examples, the W3C C14N 1.1 interop cases, `xmllint` and `xmlsec1`, while the Apache Santuario differential, the Merlin corpus and captured Peppol and SAML messages are still to come ([docs/c14n.md](docs/c14n.md#verification-still-to-do)).
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| `method="json"` honours `indent="yes"` | JSON output was always compact. Serialization 3.1 §9.1.4 makes indentation optional — `indent=yes` MAY add whitespace, `indent=no` MUST NOT — and a result of any size is hard to check by eye on one line. Two-space indent matching Saxon and the XML method; a map or array of leaves stays inline, so `[ 3, 2, 1 ]` keeps its shape. `indent="no"` output is unchanged. | [`7dda133`][7dda133] |
+| Package `c14n`: Canonical XML 1.0, 1.1 and Exclusive C14N | XML-DSig, SAML and WS-Security digest a byte-exact canonical form, which go-xml could not produce. Streams over any node set; no default algorithm. | [`48651cf`][48651cf] |
+| `xdm.Tree.XMLVersion` | Records the version an XML declaration names, `1.0` when there is none. Canonical XML is not defined for XML 1.1, and `c14n` uses it to refuse such input. | [`48651cf`][48651cf] |
+| `c14n` differential against `xmlsec1` | 870 node-set comparisons against libxml2's signer, in CI on Linux and locally via Docker (`tests/c14n-xmlsec1.sh`). The 80 differences are 12 inputs where `xmlsec1` departs from the specifications; each is listed and asserted. | [`1a3cf7f`][1a3cf7f] |
+| `c14n.FromXPathFilter` and `c14n.NamespaceSet` | The XML-DSig XPath Filter transform, namespace nodes included, so a filter may keep part of an element's namespace axis. It was the one input `c14n` could not express; C14N 1.0 §2.3 and Exclusive C14N §3 now apply literally. | [`1a3cf7f`][1a3cf7f] |
+
+### Fixed — engine
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| A non-CDATA attribute declared in the internal subset kept its spaces | XML 1.0 §3.3.3 collapses spaces in `NMTOKENS`, `ID` and other non-CDATA values; they were kept. Now collapsed, and a `NOTATION` list is no longer read as the default. | [`01e9f50`][01e9f50] |
+| A character reference in an entity value was expanded one level short | `<!ENTITY a "&#38;#38;">` gave `&#38;`, not `&` (XML 1.0 Appendix D). References are now decoded at declaration and the replacement text parsed as content. | [`01e9f50`][01e9f50] |
+| A DTD default `xmlns:p` did not reach an element named `p:doc` | The ATTLIST was matched by local name only, so the element failed the Prefix Declared check. It now matches the name as written. | [`01e9f50`][01e9f50] |
+| Line ends were folded late, and not at all in comments and PIs | A CR survived in comment and PI values, and CR-LF in an attribute became two spaces. XML 1.0 §2.11 is now applied on input, before parsing. | [`67c960b`][67c960b] |
+
+### Fixed — tooling
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `tests/check.sh` recorded a failing lane as PASS after an earlier failure | `failed` was a flag, and a lane is judged by whether it moved, so a second failure moved nothing. It counts failures now. | [`1803696`][1803696] |
+| The `c14n` `xmllint` differential failed on Windows | `xmllint` writes stdout in text mode there, so every LF came back CR-LF. The translation is undone; a canonical form never holds a literal CR. | [`20214e7`][20214e7] |
+| Complexity tests failed on loaded CI runners | They asserted fixed wall-clock budgets. `TestOptimizeNotQuadratic` now counts optimiser predicate walks; the xsd shapes keep only their allocation ceilings. | [`32609d4`][32609d4] |
+| The other 15 cost tests still timed themselves | In `xsd`, `relaxng`, `xquery` and `c14n`. Each now counts work, allocation or allocation growth, and was shown to fail with its guard disabled ([docs/testing.md](docs/testing.md#a-unit-test-may-not-cost-minutes)). | [`1c7e368`][1c7e368] |
+
+### Fixed — documentation
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| The README's link to the XML 1.1 row of `docs/todo.md` went nowhere | The heading had been renamed, so the anchor matched nothing. It points at the heading as it now reads. | [`1a3cf7f`][1a3cf7f] |
+| `docs/testing.md` listed ten fuzz targets where there are twelve | The two `xquery` targets were missing, and nothing said why the nightly run omits them. Both are listed, with the reason. | [`1a3cf7f`][1a3cf7f] |
+
 ## v1.3.1 — 2026-09-16
 
 ### Fixed — engine
@@ -989,3 +1028,12 @@ here so every entry in this file sits under a release.
 [8fcd0d5]: https://github.com/knroy/go-xml/commit/8fcd0d5
 [7f7fc4e]: https://github.com/knroy/go-xml/commit/7f7fc4e
 [cb43c76]: https://github.com/knroy/go-xml/commit/cb43c76
+[7dda133]: https://github.com/knroy/go-xml/commit/7dda133
+[01e9f50]: https://github.com/knroy/go-xml/commit/01e9f50
+[20214e7]: https://github.com/knroy/go-xml/commit/20214e7
+[1c7e368]: https://github.com/knroy/go-xml/commit/1c7e368
+[32609d4]: https://github.com/knroy/go-xml/commit/32609d4
+[67c960b]: https://github.com/knroy/go-xml/commit/67c960b
+[1803696]: https://github.com/knroy/go-xml/commit/1803696
+[48651cf]: https://github.com/knroy/go-xml/commit/48651cf
+[1a3cf7f]: https://github.com/knroy/go-xml/commit/1a3cf7f

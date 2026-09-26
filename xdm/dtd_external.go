@@ -195,6 +195,10 @@ func (t *entityTable) resolveExternalText(name string) (string, error) {
 	// replacement text. XML 1.0 section 4.3.1: it is stripped, or it would
 	// reach the including document as a processing instruction in a place
 	// no XML document may have one.
+	// Section 2.11 applies to every external parsed entity, not only the
+	// document entity, and this text never passes through Parse's reader.
+	folded, _ := foldLineEnds([]byte(text), true)
+	text = string(folded)
 	text, version := stripTextDecl(text)
 	if err := t.checkEntityVersion(name, version); err != nil {
 		return "", err
@@ -407,6 +411,10 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 	if err != nil {
 		return err
 	}
+	// Section 2.11 applies to every external parsed entity, not only the
+	// document entity, and this text never passes through Parse's reader.
+	folded, _ := foldLineEnds([]byte(text), true)
+	text = string(folded)
 	text, version := stripTextDecl(text)
 	if err := t.checkEntityVersion("(external subset)", version); err != nil {
 		return err

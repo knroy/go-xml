@@ -198,6 +198,11 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	}
 	r = decoded
 
+	// XML 1.0 section 2.11: line ends are normalized on input, before
+	// parsing, and before the attribute rewrite below, which must see a
+	// CR-LF as the one line end it is. See xdm/lineend.go.
+	r = newLineEndReader(r)
+
 	// XML 1.0 section 3.3.3 normalizes a literal TAB, LF or CR inside an
 	// attribute value to a single space, while a character reference to the
 	// same character survives. That distinction only exists in the raw bytes
@@ -611,6 +616,10 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		// tee holds everything up to there — which is all any offset can
 		// point into.
 		tree.src = srcBuf.String()
+	}
+	tree.XMLVersion = "1.0"
+	if dec.IsVersion11() {
+		tree.XMLVersion = "1.1"
 	}
 	tree.Finalize()
 	return tree, nil

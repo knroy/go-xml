@@ -3,7 +3,6 @@ package xpath
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 // quadraticSrc builds an expression whose optimiser cost was quadratic in its
@@ -43,7 +42,7 @@ func quadraticSrc(target int) string {
 	return b.String()
 }
 
-// TestOptimizeNotQuadratic bounds the compile time of a large expression.
+// TestOptimizeNotQuadratic bounds the optimiser's work on a large expression.
 //
 // It matters beyond compile latency because the expression need not be written
 // by whoever wrote the stylesheet: xsl:evaluate compiles its target expression
@@ -51,35 +50,39 @@ func quadraticSrc(target int) string {
 // transformed. A quadratic compile there is a denial of service driven by
 // input data.
 //
-// Measured on this machine: 160 kB took 736 ms before the fix and 64 ms after,
-// and 640 kB took 2.79 s before and 251 ms after, with isClosed at 86% of CPU
-// samples beforehand. The bound below is many times the post-fix figure so
-// that a loaded machine does not fail it, and far under the pre-fix one so
-// that a return to quadratic behaviour fails it decisively.
+// It counts work rather than timing it. A wall-clock budget failed on loaded
+// CI runners (9.18 s against 9 s under -race, where an idle run takes 1.7 s),
+// and a size-ratio test cannot see this hazard: the rescan is bounded by the
+// 2000-term inner chain, so before the fix 160 kB took 736 ms and 640 kB
+// 2.79 s, linear growth with a large constant. The count shows it directly.
+// With the cache each node's predicates are evaluated at most once, so walks
+// is at most twice the node count; without it every node re-walks its left
+// spine and the count is hundreds of times that.
 func TestOptimizeNotQuadratic(t *testing.T) {
-	if testing.Short() {
-		t.Skip("timing test")
-	}
-	// The race detector's instrumentation made the same compile take 1.7 s
-	// on the gate's race lane, so the budget is widened there by more than
-	// the slowdown; the pre-fix figure under it would be near 20 s.
-	budget := 1500 * time.Millisecond
-	if raceEnabled {
-		budget *= 6
-	}
-
-	src := quadraticSrc(640 * 1024)
-	start := time.Now()
-	_, err := Compile(src, nil)
-	elapsed := time.Since(start)
+	src := quadraticSrc(64 * 1024)
+	e, err := Parse(src, nil)
 	if err != nil {
-		t.Fatalf("Compile: %v", err)
+		t.Fatalf("Parse: %v", err)
 	}
-	if elapsed > budget {
-		t.Errorf("compiling %d bytes took %v, over the %v budget.\n"+
-			"A whole-subtree predicate is being re-walked per node again, "+
-			"which is O(n^2) in expression size and reachable from document "+
-			"data through xsl:evaluate.", len(src), elapsed.Round(time.Millisecond), budget)
+	nodes := 0
+	var count func(Expr)
+	count = func(n Expr) {
+		if n == nil {
+			return
+		}
+		nodes++
+		optimizeWith(n, func(c Expr) Expr { count(c); return c })
+	}
+	count(e)
+
+	f := newExprFacts()
+	optimizeDepthFacts(e, 0, f)
+	if f.walks > 2*nodes {
+		t.Errorf("optimising %d bytes (%d nodes) evaluated a whole-subtree "+
+			"predicate %d times, over the %d a cached pass needs.\n"+
+			"A predicate is being re-walked per node again, which is O(n^2) "+
+			"in expression size and reachable from document data through "+
+			"xsl:evaluate.", len(src), nodes, f.walks, 2*nodes)
 	}
 }
 
