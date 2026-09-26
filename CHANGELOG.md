@@ -33,7 +33,7 @@ New package `c14n`: Canonical XML 1.0, 1.1 and Exclusive C14N. It ships ahead of
 |---|---|---|
 | `tests/check.sh` recorded a failing lane as PASS after an earlier failure | `failed` was a flag, and a lane is judged by whether it moved, so a second failure moved nothing. It counts failures now. | [`1803696`][1803696] |
 | The `c14n` `xmllint` differential failed on Windows | `xmllint` writes stdout in text mode there, so every LF came back CR-LF. The translation is undone; a canonical form never holds a literal CR. | [`20214e7`][20214e7] |
-| Two complexity tests failed on loaded CI runners | They asserted fixed wall-clock budgets. `TestOptimizeNotQuadratic` now counts optimiser predicate walks; the xsd shapes keep only their allocation ceilings. | pending |
+| Two complexity tests failed on loaded CI runners | They asserted fixed wall-clock budgets. `TestOptimizeNotQuadratic` now counts optimiser predicate walks; the xsd shapes keep only their allocation ceilings. | [`32609d4`][32609d4] |
 
 ### Fixed — documentation
 
@@ -1030,6 +1030,7 @@ here so every entry in this file sits under a release.
 [7dda133]: https://github.com/knroy/go-xml/commit/7dda133
 [01e9f50]: https://github.com/knroy/go-xml/commit/01e9f50
 [20214e7]: https://github.com/knroy/go-xml/commit/20214e7
+[32609d4]: https://github.com/knroy/go-xml/commit/32609d4
 [67c960b]: https://github.com/knroy/go-xml/commit/67c960b
 [1803696]: https://github.com/knroy/go-xml/commit/1803696
 [48651cf]: https://github.com/knroy/go-xml/commit/48651cf
