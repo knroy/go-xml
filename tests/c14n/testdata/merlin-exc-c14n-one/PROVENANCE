@@ -1,0 +1,21 @@
+Baltimore Technologies "merlin-exc-c14n-one" interop signature
+(Merlin Hughes, 14 January 2002). Every file here except this one is
+verbatim, fetched raw; none contains a carriage return. .gitattributes marks
+tests/c14n/testdata/** -text so no checkout rewrites a byte.
+
+Source:  https://github.com/apache/santuario-xml-security-java
+Path:    src/test/resources/ie/baltimore/merlin-examples/merlin-exc-c14n-one/
+Commit:  497d3fb4c8b5654a9951a3de4682c6ed48038173 (main when fetched);
+         the files are unchanged since 8e803fdbaf0476b730eb33fb49ffc9fd17524b17
+         (2011-01-26).
+License: Apache License 2.0 (Apache Santuario).
+Also in: lsh123/xmlsec tests/merlin-exc-c14n-one/ at f49dbd61: Readme.txt and
+         exc-signature.xml byte-identical; xmlsec has no c14n-N.txt files and
+         adds an exc-signature.tmpl.
+
+Files:   exc-signature.xml  4 references to #xpointer(id('to-be-signed')), a
+                            ds:Object: Exclusive C14N and #WithComments, each
+                            without and with PrefixList="bar #default"
+         c14n-N.txt         the digest input of reference N
+         c14n-4.txt         the canonical SignedInfo (Exclusive C14N)
+Test:    tests/c14n/merlin_test.go (TestMerlinExcC14NOne)

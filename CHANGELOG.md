@@ -10,6 +10,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
+| `fn:transform` option `source-location` (#12) | Saxon's option, standard in F&O 4.0, was refused. The document is read through the `fn:doc` resolver and becomes the initial match selection; never streamed. | |
+| `go-xml xquery` | The CLI could not run XQuery. `go-xml xquery -q Q.xq [INPUT.xml]` honours `output:*` options, takes `-p`, `-o`, `-now`; module and `doc()` reads confined to `-allow-dir`. | |
+| Merlin C14N interop corpora | `merlin-c14n-three` (27 references) and `merlin-exc-c14n-one` (4) were untested; octets and signed digests now checked, both vendored with provenance. | |
 | `xdm.Node.Walk` and `xdm.Node.FirstElement` | Finding an element by expanded name needed XPath or a hand-written loop. `Walk` visits elements in document order with early stop; `FirstElement` returns the first match. | [`ba09cac`][ba09cac] |
 | `c14n` differential: a PrefixList prefix bound nowhere | The `xmlsec1` differential never named one. `nosuchprefix` lists added (1250 comparisons); expected differences now key on input and list. | [`ba09cac`][ba09cac] |
 
@@ -17,6 +20,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| `fn:transform` refused option names it did not know | F&O 3.1 §1.7 says such entries must be ignored; they raised `FOXT0002`. String and QName names F&O does not define are now ignored (#12). | |
+| Exclusive C14N rendered namespace nodes outside the node set | A visibly utilised prefix rendered after an XPath filter removed its node; Exc-C14N §1.1 forbids it. Now dropped, matching Baltimore's Merlin signatures. | |
+| `new-each-time="no"` rebuilt nodes for node arguments (#13) | `f(.) is f(.)` was false. Calls are now cached per F&O 1.7.4-identical arguments: nodes by identity, atomics by exact type. DocBook `table-cals.049` no longer times out (578). | |
 | A numeric predicate calling a focus-dependent function was striding | `key#2`, `current#0`, `copy-of#0` and others passed §19.8.8.9's focus-free test. It now reads the `focusDependent` table. | [`ba09cac`][ba09cac] |
 | `descendant::x[$i + 1]` was refused `XTSE3430` | A variable declared `as="xs:integer"` was never numeric (§19.8.8.9). A declared numeric type now counts; `let`, `for` and `some` bindings shadow it. | [`ba09cac`][ba09cac] |
 | `key(k, v)` gave no streamability verdict | §19.8.9 defines it as `key(k, v, /)`; the call is now assessed in that form. | [`ba09cac`][ba09cac] |
@@ -25,7 +31,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
-| `c14n` figures | The join-URI row is 67 / 67, not 69; `xmlsec1` differences are split into reference defects and a difference of reading under Exclusive C14N §3. | [`ba09cac`][ba09cac] |
+| `c14n` figures | The join-URI row is 67 / 67, not 69; the `xmlsec1` differences are each tied to the clause `xmlsec1` departs from. | [`ba09cac`][ba09cac] |
 | Go 1.25 floor in `RELEASE.md` and `README.md` | The floor, and that `golang.org/x/text` v0.35+ requires 1.25 on its own. | [`ba09cac`][ba09cac] |
 
 ## v1.4.0 — 2026-09-25

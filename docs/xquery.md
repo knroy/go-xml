@@ -370,6 +370,22 @@ and `eqname-007`'s prefix bound by an enclosing element constructor.
 See [known-gaps.md](known-gaps.md) for the variable-name/subtraction defect,
 which the suite does not cover.
 
+## Command line
+
+```
+go-xml xquery -q QUERY.xq [flags] [INPUT.xml]
+```
+
+`INPUT.xml`, when given, is the context item; without it the query has none.
+`-p name=value` binds an external variable as `xs:string`, and the result is
+written through `xslt.Serialize` with the parameters from
+`SerializationOptions` — an unstated method is chosen from the result.
+`import module ... at`, `fn:doc` and (with `-allow-unparsed-text`)
+`fn:unparsed-text` read only the query's own directory and the `-allow-dir`
+roots; a location hint outside them is refused with `XQST0059`. `import
+schema ... at` is not resolved from the command line. Run
+`go-xml xquery -h` for every flag.
+
 ## Security
 
 The same defaults as the rest of the library. A query cannot read a file or

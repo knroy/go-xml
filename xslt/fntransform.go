@@ -175,77 +175,27 @@ func transformParams(m *xdm.MapItem, name string) (map[string]xdm.Sequence, erro
 	return out, nil
 }
 
-// transformOptionNames is every option fn:transform recognises, from F&O 3.1
-// section 14.7.1.
-//
-// The set is checked rather than merely consulted, because an option this
-// implementation does not know is the one case where silence is the worst
-// answer available. A misspelled or unimplemented key used to be dropped
-// without a word, so a stylesheet asking for a processing stage that never
-// ran produced a plausible result with no indication that anything had been
-// skipped -- which is how post-process went unnoticed: the output looked
-// right, one transformation short. FOXT0002 is the code F&O gives for an
-// option that is not valid, and "not a name I know" is the plainest case of
-// that.
-var transformOptionNames = map[string]bool{
-	"base-output-uri":         true,
-	"cache":                   true,
-	"delivery-format":         true,
-	"enable-assertions":       true,
-	"enable-messages":         true,
-	"function-params":         true,
-	"global-context-item":     true,
-	"initial-function":        true,
-	"initial-match-selection": true,
-	"initial-mode":            true,
-	"initial-template":        true,
-	"package-location":        true,
-	"package-name":            true,
-	"package-node":            true,
-	"package-text":            true,
-	"package-version":         true,
-	"post-process":            true,
-	"requested-properties":    true,
-	"serialization-params":    true,
-	"source-node":             true,
-	"static-params":           true,
-	"stylesheet-base-uri":     true,
-	"stylesheet-location":     true,
-	"stylesheet-node":         true,
-	"stylesheet-params":       true,
-	"stylesheet-text":         true,
-	"template-params":         true,
-	"tunnel-params":           true,
-	"vendor-options":          true,
-	"xslt-version":            true,
-}
-
-// checkTransformOptions refuses an option name fn:transform does not know.
-func checkTransformOptions(m *xdm.MapItem) error {
-	if m == nil {
-		return nil
-	}
-	for _, k := range m.Keys() {
-		if k == nil || k.Type != xdm.TypeString {
-			// A non-string key cannot name an option. Leaving it to the
-			// readers, which report the type error against the option they
-			// were looking for, keeps one diagnosis per fault.
-			continue
-		}
-		if !transformOptionNames[k.String()] {
-			return xdm.Errorf("FOXT0002",
-				"fn:transform: %q is not an option this processor "+
-					"recognises", k.String())
-		}
-	}
-	return nil
-}
-
 // runNestedTransform is fn:transform's body.
+//
+// Option names F&O does not define are ignored. F&O 3.1 says the option
+// parameter conventions apply to this map, and they say: "It is not an error
+// if the options map contains options with names other than those described
+// in this specification. ... Implementations must ignore such entries unless
+// they have a specific implementation-defined meaning." F&O 4.0 repeats it
+// per XSLT version: "if anything else is present, it is ignored". So a
+// misspelled key, a QName-named vendor option and an option from a later
+// edition all fall through without a word.
+//
+// Unknown names were refused as FOXT0002 for a while, after post-process was
+// found accepted and never run: the output looked right, one transformation
+// short. That lesson stands, but it is about the options F&O defines -- one
+// the spec names must be implemented or refused, not read and dropped -- and
+// a name check never enforced it, since every spec name passes it. What it
+// did do was refuse a conformant caller's extension keys, Saxon's
+// source-location among them, which F&O 4.0 has since standardised and which
+// is read below. The spec-defined options still accepted without effect are
+// listed in docs/known-gaps.md.
 func runNestedTransform(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (xdm.Sequence, error) {
-	if err := checkTransformOptions(opts); err != nil {
-		return nil, err
-	}
 	// One level of nesting is charged before the nested stylesheet is even
 	// loaded, so that the refusal happens without adding another frame. The
 	// depth is taken from the CALL rather than from rt, for the same reason
@@ -287,6 +237,15 @@ func runNestedTransform(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (xdm
 				"fn:transform: source-node must be a node, got %s", it.TypeName())
 		}
 		source = n
+	}
+	if loc, ok, lerr := transformString(opts, "source-location"); lerr != nil {
+		return nil, lerr
+	} else if ok {
+		doc, derr := transformSourceLocation(ctx, rt, opts, source, loc)
+		if derr != nil {
+			return nil, derr
+		}
+		source = doc
 	}
 
 	topts := rt.opts
@@ -377,6 +336,58 @@ func runNestedTransform(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (xdm
 		return nil, annotateNested(err, opts)
 	}
 	return transformResultMap(ctx, opts, res)
+}
+
+// transformSourceLocation loads the document the source-location option
+// names. Saxon has read it since 9.8; F&O 4.0 standardises it: "If relative,
+// it is resolved against the static base URI of the fn:transform function
+// call. The document at this location is parsed, and the document node acts
+// as the initial-match-selection". It is used exactly where source-node would
+// be, so it is also the global context item.
+//
+// It resolves through the caller's document resolver, the one fn:doc uses,
+// for the reason the sandbox comment on registerTransformFunc gives: no
+// resolver refuses it, and so does a location outside the resolver's roots.
+// The refusal is FOXT0002, as it is for stylesheet-location. The wrappers the
+// outer Transform installed are peeled off first -- the outer stylesheet's
+// xsl:strip-space is not the nested one's, and the nested Transform strips
+// the source by its own declarations.
+//
+// The document is parsed whole. F&O 4.0 allows streaming it when the initial
+// mode is streamable; fn:transform here never streams.
+func transformSourceLocation(
+	ctx *xpath.Context, rt *runtime, opts *xdm.MapItem, source *xdm.Node, loc string,
+) (*xdm.Node, error) {
+	// F&O 4.0 asks for "exactly one of source-node, source-location, or
+	// initial-match-selection".
+	if source != nil {
+		return nil, xdm.Errorf("FOXT0002",
+			"fn:transform: source-location and source-node are mutually exclusive")
+	}
+	if _, ok := transformOption(opts, "initial-match-selection"); ok {
+		return nil, xdm.Errorf("FOXT0002",
+			"fn:transform: source-location and initial-match-selection "+
+				"are mutually exclusive")
+	}
+	docs := callerDocuments(rt.opts.Documents)
+	if docs == nil {
+		return nil, xdm.Errorf("FOXT0002",
+			"fn:transform: document access is disabled "+
+				"(no resolver configured): source-location %q", loc)
+	}
+	var tree *xdm.Tree
+	var err error
+	if cr, ok := docs.(xpath.ContextDocumentResolver); ok {
+		// Charged to the calling evaluation's entity allowance, as fn:doc is.
+		tree, err = cr.ResolveDocumentIn(ctx, loc, ctx.StaticBaseURI)
+	} else {
+		tree, err = docs.ResolveDocument(loc, ctx.StaticBaseURI)
+	}
+	if err != nil {
+		return nil, xdm.Errorf("FOXT0002",
+			"fn:transform: cannot retrieve source-location %q: %v", loc, err)
+	}
+	return tree.Root, nil
 }
 
 // annotateNested names the nested stylesheet in an entry-point error.
@@ -785,6 +796,21 @@ func moduleResolverFor(d xpath.DocumentResolver) ModuleResolver {
 			d = v.inner
 		default:
 			return nil
+		}
+	}
+}
+
+// callerDocuments returns the DocumentResolver the caller supplied, beneath
+// the per-transform wrappers moduleResolverFor also looks through.
+func callerDocuments(d xpath.DocumentResolver) xpath.DocumentResolver {
+	for {
+		switch v := d.(type) {
+		case *readDocResolver:
+			d = v.inner
+		case *stripSpaceResolver:
+			d = v.inner
+		default:
+			return d
 		}
 	}
 }

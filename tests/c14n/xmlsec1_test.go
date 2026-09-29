@@ -87,10 +87,13 @@ var xmlsec1Differences = []xsDifference{
 
 	// Partial namespace axes (NamespaceSet). libxml2's exclusive canonicalizer
 	// decides namespaces from its own stack of rendered declarations rather
-	// than from the node set, which is the non-normative "constrained
-	// implementation" of Exclusive C14N §3.1: it assumes an element's whole
-	// namespace axis is in the set exactly when the element is. These inputs
-	// are the ones where that assumption fails.
+	// than from the node set, as the non-normative "constrained
+	// implementation" of Exclusive C14N §3.1 does: it assumes an element's
+	// whole namespace axis is in the set exactly when the element is. These
+	// inputs are the ones where that assumption fails, and Exclusive C14N
+	// §1.1 ("A node that is excluded from the set is not rendered") and the
+	// Baltimore merlin-c14n-three signatures (tests/c14n/merlin_test.go)
+	// decide against it.
 	{input: "undeclaring-element-dropped",
 		reason: "libxml2 models e2's xmlns=\"\" as a namespace node and, e2 being outside the set, renders it as text; XPath 1.0 §5.4 gives an undeclaration no namespace node (the §4.7 difference above, reached through a partial axis)",
 		xmlsec1: func(r xsRef, ours string) string {
@@ -111,20 +114,20 @@ var xmlsec1Differences = []xsDifference{
 			return strings.Replace(ours, `<a xmlns=""><b xmlns="urn:d">`, `<a><b>`, 1)
 		}},
 	{input: "default-node-dropped-rebound",
-		reason: "Exclusive C14N §3 renders a's default namespace node (urn:2) although it is outside the set: the rule asks that a be in the set and utilise the default namespace, and that its nearest utilising output ancestor r not have the same node, which it does not (urn:1); libxml2 renders a prefixed node outside the set in that position (see prefix-node-dropped-everywhere) but not the default one. With #default listed, the Canonical XML rule gives xmlsec1's own inclusive output, which is ours; libxml2's exclusive output drops b's urn:2 altogether",
+		reason: "a's default namespace node (urn:2) is outside the set, so it does not render (Exclusive C14N §1.1); a then has no default namespace node in the set and its nearest utilising output ancestor r has one (urn:1), so §3 renders xmlns=\"\" on a, as in default-node-dropped-on-one-element; libxml2's stack-based exclusive path omits it. With #default listed, the Canonical XML rule gives xmlsec1's own inclusive output, which is ours; libxml2's exclusive output drops b's urn:2 altogether",
 		xmlsec1: func(r xsRef, ours string) string {
 			switch {
 			case !r.alg.Exclusive():
 				return ours
 			case !slices.Contains(r.prefixes, ""):
-				return strings.Replace(ours, `<a xmlns="urn:2">`, `<a>`, 1)
+				return strings.Replace(ours, `<a xmlns="">`, `<a>`, 1)
 			}
 			return strings.Replace(ours, `<a xmlns=""><b xmlns="urn:2">`, `<a><b>`, 1)
 		}},
 	{input: "prefix-node-dropped-everywhere",
-		reason: "with bar on the PrefixList, Exclusive C14N §3 hands its namespace nodes to Canonical XML's rule, which renders only nodes in the set, and the filter removed every bar node; xmlsec1's own inclusive output for this input matches ours. libxml2 renders the visibly utilised prefix from its stack regardless of the list",
+		reason: "the filter removed every bar namespace node, and a node excluded from the set is not rendered \"even if its parent node is included\" (Exclusive C14N §1.1), listed or not: Canonical XML's rule for a listed prefix renders only nodes in the set too, and xmlsec1's own inclusive output for this input matches ours. libxml2 renders the visibly utilised prefix from its stack regardless of the set",
 		xmlsec1: func(r xsRef, ours string) string {
-			if !r.alg.Exclusive() || !slices.Contains(r.prefixes, "bar") {
+			if !r.alg.Exclusive() {
 				return ours
 			}
 			return strings.Replace(ours, `<foo:a `, `<foo:a xmlns:bar="urn:bar" `, 1)

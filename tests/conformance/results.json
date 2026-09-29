@@ -579,10 +579,10 @@
       "component": "xslt",
       "suite": "DocBook xslTNG",
       "edition": "real-world corpus",
-      "passed": 577,
+      "passed": 578,
       "disagreements": 0,
-      "total": 577,
-      "run_date": "2026-09-11",
+      "total": 578,
+      "run_date": "2026-09-29",
       "command": "tests/check.sh (DocBook)",
       "cases": []
     },

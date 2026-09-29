@@ -48,7 +48,10 @@ type runtime struct {
 	// so the promise is only kept by evaluating once and reusing. Keyed by
 	// functionCallKey; see apply.go.
 	funcResults map[string]xdm.Sequence
-	ctx         *xpath.Context
+	// itemIDs numbers the nodes and function items functionCallKey keys by
+	// identity; see identityNumber.
+	itemIDs map[any]int
+	ctx     *xpath.Context
 
 	// deferredErr holds the failure of a global whose evaluation is not by
 	// itself the transform's failure -- an abstract variable, whose body
@@ -621,6 +624,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		streamedTrees: map[*xdm.Node]bool{},
 		tunnel:        map[string]xdm.Sequence{},
 		funcResults:   map[string]xdm.Sequence{},
+		itemIDs:       map[any]int{},
 		messages:      new([]string),
 		warnings:      new([]string),
 		secondary:     new([]SecondaryResult),

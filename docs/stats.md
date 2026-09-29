@@ -23,7 +23,7 @@ claim is only as good as the command behind it.
 
 | figure | count | counted by |
 |---|---:|---|
-| Unit tests | 2,488 | `grep -rn '^func Test' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
+| Unit tests | 2,501 | `grep -rn '^func Test' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
 | Fuzz targets | 12 | `grep -rn '^func Fuzz' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
 | Limit boundary tests | 14 | `grep -hc '^func Test' ./*/limits_boundary_test.go \| awk '{n += $1} END {print n + 0}'` |
 
@@ -65,7 +65,7 @@ different list in the generator -- so no arithmetic can merge them by accident.
 
 | corpus | in scope | passing | now | failing | measured | command |
 |---|---:|---:|---|---:|---|---|
-| DocBook xslTNG | 577 | 577 | 100.00% | 0 | 2026-09-11 | `tests/check.sh (DocBook)` |
+| DocBook xslTNG | 578 | 578 | 100.00% | 0 | 2026-09-29 | `tests/check.sh (DocBook)` |
 | XSpec | 225 | 225 | 100.00% | 0 | 2026-09-11 | `tests/check.sh (XSpec)` |
 
 ## Named subsets of a suite's disagreements

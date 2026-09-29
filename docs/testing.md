@@ -970,7 +970,7 @@ is committed there and replays as a seed thereafter.
 The tests are in two places. `c14n/` holds the unit, adversarial, fuzz and
 benchmark tests, whose inputs are written inline. `tests/c14n/` holds the
 conformance harnesses — the Recommendations' worked examples, the `xmllint`
-differential and the W3C interop cases — with the corpus they read in
+differential, the W3C interop cases and the Merlin signatures — with the corpus they read in
 `tests/c14n/testdata/`, beside the other suite harnesses rather than inside
 the library package. The interop cases are a small download, which
 `tests/fetch-c14n.sh` fetches into `testdata/c14n/`:
@@ -992,6 +992,17 @@ that does not match its digest fails the fetch. The test skips when the files
 are absent; `GOXML_C14N_W3C=1` makes absence a failure, and `tests/check.sh`
 (which runs the fetch itself) and CI both set it. The same script fetches the
 three Recommendations into `testdata/c14n/specs/` for reference.
+
+**The Merlin interop signatures.** `TestMerlinC14NThree` and
+`TestMerlinExcC14NOne` follow every `ds:Reference` of two Baltimore signatures
+from the XML-DSig interop round (Merlin Hughes, 2002) through its transforms
+and check the canonical octets against the `c14n-N.txt` Baltimore published
+and their SHA-1 against the signed `DigestValue`: 27 references in
+`merlin-c14n-three`, whose XPath filters keep some of an element's namespace
+nodes and drop others, and 4 in `merlin-exc-c14n-one`. Baltimore's
+implementation is independent of this package and of libxml2. The files are
+small and vendored verbatim, with a `PROVENANCE` file each, under
+`tests/c14n/testdata/merlin-*`; they never skip.
 
 **Golden files.** Canonical outputs are compared byte for byte against files
 in `tests/c14n/testdata/`, which is tracked (unlike the top-level `testdata/`) and

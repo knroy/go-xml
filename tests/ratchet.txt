@@ -1,4 +1,4 @@
-DocBook 577
+DocBook 578
 RelaxNGSpectest 965
 TestQT3XPath20 15217
 TestQT3XPath30 19362

@@ -39,21 +39,21 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,598 | 41,567 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
-| **xslt** | DocBook xslTNG *(real-world)* | 577 | 577 | 100.00% | 0 |
+| **xslt** | DocBook xslTNG *(real-world)* | 578 | 578 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
 | | **Total** | | | | **96** |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 26 + 30 + 31 + 0 = 96. Measured 2026-09-11, 2026-09-14.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 26 + 30 + 31 + 0 = 96. Measured 2026-09-11, 2026-09-14, 2026-09-29.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 2,488 tests.
+The unit-test suite is 2,501 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
-577 test documents and XSpec's 225 — kept here because they are the only
+578 test documents and XSpec's 225 — kept here because they are the only
 measurement in this file taken against stylesheets nobody wrote for a test
 harness, and because four defects the W3C suites missed were found by them.
 They are not in the *Total*, which counts W3C disagreements only. Note that

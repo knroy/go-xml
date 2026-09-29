@@ -469,6 +469,33 @@ The remaining schema false reject on both versions, `queried` against W3C bug
 reading has been recorded for it either way: it is a false reject, which is the
 direction that matters, and it has not been diagnosed.
 
+### `fn:transform` options F&O defines but this processor does not act on (XSLT 3.0)
+
+`fn:transform` reads `stylesheet-*`, `package-name`/`package-version`,
+`source-node`, `source-location`, `initial-*`, `function-params`,
+`stylesheet-params`, `template-params`, `tunnel-params`, `base-output-uri`,
+`delivery-format` and `post-process`. These F&O-defined options are accepted
+and have no effect:
+
+- `global-context-item`: the global context item comes only from
+  `source-node` or `source-location`.
+- `static-params`, `serialization-params`, `requested-properties`,
+  `xslt-version`, `enable-messages`, `vendor-options`, `cache`.
+- `enable-assertions`: the nested transform inherits the caller's
+  `DisableAssertions`, so assertions run by default where F&O defaults to off.
+- `package-location`, `package-node`, `package-text`: alone they identify no
+  stylesheet (`FOXT0002`); beside a `stylesheet-*` option they are ignored.
+
+Refusing them would be the post-process lesson applied, but it is a separate
+decision: the QT3 cases that use them (`serialization-params` in 13,
+`requested-properties` in 11, `xslt-version` in 8) are all skipped, since the
+driver does not claim `fn-transform-XSLT`, so no suite measures either
+answer. Option names F&O does **not** define are
+ignored, as F&O 3.1's option parameter conventions require: "It is not an
+error if the options map contains options with names other than those
+described in this specification." `source-location` (Saxon since 9.8, F&O
+4.0) resolves through the `fn:doc` resolver and is never streamed.
+
 ### The function conversion rules are applied per function, not centrally
 
 XPath 3.1 §3.1.5.2 says an argument of type `xs:untypedAtomic` supplied to a
@@ -543,6 +570,18 @@ what was wrong — but changing the accessors is a separate behaviour change to
 a path that has been stable across releases, and no suite case scores either
 code. It is recorded here rather than folded into a bug fix aimed at four
 other functions.
+
+### `xsl:function` determinism: what the result cache does not yet key
+
+A `new-each-time="no"` function is deterministic (§10.3.7), so calls with
+F&O 1.7.4-*identical* arguments return identical results: the result is cached
+per argument list, atomics keyed by exact type and `eq`, nodes by identity,
+maps and arrays by content (issue #13). Two residuals, no suite case scoring
+either: a function item is keyed by the item, so two distinct but identical
+items (`concat#2` evaluated twice) recompute; and `cache="yes"` memoises
+without regard to §10.3.7's default, which is *proactive*, so a node-building
+function carrying only that hint returns the same nodes where fresh ones are
+due. `functionDeterminism` still reads the absent attribute as `"maybe"`.
 
 ### The `dtd` package cannot enforce XML §4.3.4
 

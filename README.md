@@ -189,7 +189,7 @@ Eight packages, each usable on its own:
 | [`dtd`](dtd/) | DTD validation: content models, attribute defaults, `ID`/`IDREF`, external subsets |
 | [`relaxng`](relaxng/) | RELAX NG: the derivative algorithm, the section 7 restrictions, the XSD datatype library, the compact syntax |
 | [`c14n`](c14n/) | Canonical XML 1.0, Exclusive Canonical XML 1.0 and Canonical XML 1.1, over any node set, streamed |
-| [`cmd/go-xml`](cmd/go-xml/) | A command-line transformer |
+| [`cmd/go-xml`](cmd/go-xml/) | A command-line transformer, validator and XQuery runner |
 
 ## Documentation
 
@@ -413,6 +413,21 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 | `-keep-going` | continue a batch past a failure, still exiting non-zero |
 
 The exit status is 0 only if every input transformed.
+
+`go-xml xquery` runs an XQuery main module. The optional input document is
+the context item; the result is serialized with the query's own
+`declare option output:*` parameters.
+
+```
+go-xml xquery -q report.xq -p year=2024 -o out.xml invoice.xml
+go-xml xquery -q generate.xq -now 2024-01-15T09:00:00Z
+```
+
+It takes `-o`, `-p` (an external variable, as `xs:string`), `-allow-dir`,
+`-allow-doctype`, `-allow-external-entities`, `-allow-unparsed-text`,
+`-timeout` and `-now`, with the transform's meanings and defaults: `import
+module ... at`, `doc()` and `unparsed-text()` read only the query's own
+directory and the `-allow-dir` roots.
 
 ## Design notes
 
@@ -733,6 +748,9 @@ Every remote-reference mechanism is off unless you turn it on.
   `cmd/go-xml`, which the other three joined on 2026-09-10. Each read is
   bounded by `FileResolver.MaxBytes`, 64 MB by default, and a larger file is
   refused rather than truncated.
+  `fn:transform`'s `stylesheet-location` and `source-location` read through
+  the same resolver, so a nested transformation reaches nothing `fn:doc`
+  could not.
 * **`xsl:include` and `xsl:import` fail closed** the same way, via
   `CompileOptions.Resolver`.
 * **XInclude is off** unless a caller runs `xdm.ProcessXInclude` explicitly.
@@ -752,6 +770,8 @@ Every remote-reference mechanism is off unless you turn it on.
   `go-xml validate` is confined on the same terms for `-xsd` and `-rng`: to
   `-root` when given, and otherwise to the schema's own directory, as the
   transform is to its stylesheet's.
+  `go-xml xquery` confines `import module ... at` and `doc()` to the query's
+  own directory plus `-allow-dir`, as the transform does its stylesheet.
   Since schemas name their imports as absolute URLs — the XSLT 3.0 schema
   imports the XSD 1.1 schema for schemas from `w3.org` — the usual answer is
   not to fetch them but to answer from a catalog:
@@ -920,7 +940,7 @@ reach:
 
 * **[DocBook xslTNG](https://github.com/docbook/xslt3ng)** — 97 stylesheet
   modules using `xsl:evaluate`, accumulators, maps, higher-order functions and
-  a multi-stage `fn:transform` pipeline. <!-- BEGIN GENERATED DOCBOOK COUNT -->**577**<!-- END GENERATED DOCBOOK COUNT --> of its 593 test documents
+  a multi-stage `fn:transform` pipeline. <!-- BEGIN GENERATED DOCBOOK COUNT -->**578**<!-- END GENERATED DOCBOOK COUNT --> of its 593 test documents
   render (549 before XInclude), and the HTML is byte-identical to the
   Saxon-produced reference output once the timestamp and generator metadata
   (both environment-dependent) are normalised.
