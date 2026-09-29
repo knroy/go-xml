@@ -232,6 +232,33 @@ branches on it to choose a fallback. It is the same gap as the 40 above, seen
 from the other side, and it stays failing for as long as the analysis is
 missing — which is the correct behaviour, not a cost.
 
+### §19.8: holes in the expression analysis (XSLT 3.0)
+
+Verified in `xslt/stream*.go`. All but the `functionParamTypes` item return
+unknown, so a required `XTSE3430` is missed; that one is a spurious refusal.
+None is a wrong verdict.
+
+- `builtinOperandUsages` lists `"concat": {3}` only, so `fn:concat` at any
+  other arity is unmodelled.
+- `*xpath.LookupExpr` (`?`) is handled by neither `expr()` nor the
+  inline-function walker `bodyMentionsStreamingParam`, and the walker also
+  lacks `*xpath.StringConcat` and `*xpath.ArgumentPlaceholder`. The
+  dispatcher half of `||` is measured and reverted; see
+  [*The `||` operator*](conformance-gaps.md#the--operator--2-cases-gained-18-lost).
+- `functionParamTypes` splits a declared function type by hand: the comma in
+  `function(Q{urn:a,b}t, xs:string)` makes three parameters, and
+  `dynamicCallUsages` does not recognise `function (xs:string)` with a space.
+  Either way a streamed argument gets navigation instead of absorption, and
+  `$f(.)` in a streamable template is refused with `XTSE3430`; spelled
+  `function(xs:string)` it compiles.
+- `xsl:where-populated`, `xsl:on-empty` and `xsl:on-non-empty` return
+  unknown, which also hides a refusal their content would get unwrapped.
+- A leading `/` is modelled only from a striding or grounded context, so
+  inside the predicate of a crawling step it is unknown. That covers
+  `key(k, v)`, which §19.8.9 defines as `key(k, v, /)`:
+  `descendant::x[count(key('k', 'v'))]` gets no verdict, where outside a
+  predicate the same call is refused.
+
 ### XQuery schema awareness: a tail of features `import schema` made reachable (XQuery 3.1)
 
 **1 failure of 30,346, and not a regression.** This entry exists

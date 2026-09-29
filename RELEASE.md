@@ -220,6 +220,16 @@ already do all three of those things by hand. There is deliberately no
 settings change away from running the write-scoped job on an arbitrary ref,
 and "only a tag push reaches it" is the entire safety argument.
 
+## The Go floor
+
+`go.mod` says `go 1.25.0`, and a release must not lower it. The floor is
+measured: `regexp` learned `\p{Cn}` in 1.25, and building on 1.24 costs four
+conformance cases (XPath 3.0 and 3.1, XQuery, XSD 1.0). `golang.org/x/text`
+v0.35 and later also require 1.25 on their own. A lowered directive still
+builds and passes most packages, which is how it was lowered once before; see
+*The Go version is a conformance dependency* in
+[docs/testing.md](docs/testing.md).
+
 ## Checklist
 
 - [ ] `internal/version/version.go` bumped

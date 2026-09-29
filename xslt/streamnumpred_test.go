@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/xpath"
@@ -96,21 +97,18 @@ func TestAnalyzeFilterNumericPredicate(t *testing.T) {
 		{"(//x)[number(.)]", postureStriding, roamingFreeRanging,
 			"number(.) is numeric but contains the context item expression, which it absorbs"},
 		{"(//x)[$i + 1]", postureStriding, crawling,
-			"the spec's $i+1 example is not decided: variable types are not carried"},
+			"with no declaration in reach, $i is U{*}: not numeric"},
 		{"(child::x)[1]", postureStriding, striding,
 			"a base that is not crawling is left to the motionless rule"},
 
-		// "the first of the following that applies": the numeric rule is
-		// the first, ahead of "If P is motionless", so P's own sweep plays
-		// no part. count(current()/foo) is numeric, and focus-free in the
-		// rule's terms -- fn:current is neither a context item expression
-		// nor a focus-dependent function (§19.8.9.3 gives it the outermost
-		// context posture) -- yet it is consuming, since current()/foo
-		// strides. The control below shows that sweep: with a base that is
-		// not crawling the rule fails, the motionless rule fails too, and
-		// "Otherwise, roaming and free-ranging" applies.
-		{"(//x)[count(current()/foo)]", postureStriding, striding,
-			"a numeric focus-free P narrows a crawling base even when not motionless"},
+		// count(current()/foo) is numeric but not focus-free: XSLT §20.4.1
+		// says fn:current "is deterministic, context-dependent, and
+		// focus-dependent". The rule fails, P is consuming since
+		// current()/foo strides, so the motionless rule fails too, and
+		// "Otherwise, roaming and free-ranging" applies -- as it does below
+		// with a base that is not crawling.
+		{"(//x)[count(current()/foo)]", postureStriding, roamingFreeRanging,
+			"fn:current is focus-dependent, so the numeric rule does not narrow"},
 		{"(child::x)[count(current()/foo)]", postureStriding, roamingFreeRanging,
 			"the same P on a striding base is not motionless, so the filter roams"},
 	})
@@ -153,7 +151,7 @@ func TestAnalyzeAxisStepNumericPredicate(t *testing.T) {
 		{"descendant::section[last()]", postureStriding, roamingFreeRanging,
 			"last() is numeric but focus-dependent, and §19.8.9.14 makes it roaming from a crawling context"},
 		{"descendant::section[$i + 1]", postureStriding, crawling,
-			"the spec's $i+1 example is not decided: variable types are not carried"},
+			"with no declaration in reach, $i is U{*}: not numeric"},
 
 		// The rule's other conditions: the axis and the context posture.
 		{"child::section[1]", postureStriding, striding,
@@ -173,9 +171,74 @@ func TestAnalyzeAxisStepNumericPredicate(t *testing.T) {
 			"the fourth rule is taken before the fifth sees the non-motionless [title]"},
 		{"descendant::section[title]", postureStriding, roamingFreeRanging,
 			"and the fifth rule alone makes that step roaming"},
-		{"descendant::section[count(current()/foo)]", postureStriding, striding,
-			"a numeric focus-free P that is itself consuming still satisfies the fourth rule"},
+		{"descendant::section[count(current()/foo)]", postureStriding, roamingFreeRanging,
+			"fn:current is focus-dependent (§20.4.1), so the fourth rule fails and the fifth applies"},
 		{"child::section[count(current()/foo)]", postureStriding, roamingFreeRanging,
 			"the same P on the child axis is outside the fourth rule, and the fifth makes it roaming"},
 	})
+}
+
+// numericPredicateSheet declares a global xsl:param $i with the given "as"
+// (none when empty) and a key, and iterates sel from a template rule in the
+// streamable mode "s".
+func numericPredicateSheet(as, sel string) string {
+	if as != "" {
+		as = ` as="` + as + `"`
+	}
+	return modeSheet(`<xsl:param name="i"` + as + ` select="1"/>
+		<xsl:key name="k" match="x" use="@id"/>
+		<xsl:template match="/" mode="s">
+			<xsl:for-each select="` + sel + `"><xsl:value-of select="."/></xsl:for-each>
+		</xsl:template>`)
+}
+
+// TestStreamableNumericPredicateFocusDependentCall pins the second condition
+// of §19.8.8.9's fourth rule against the whole focusDependent table: key#2,
+// current#0 and the rest are focus-dependent by their Properties paragraphs,
+// so a numeric predicate calling one leaves the step crawling, and iterating
+// it in a streamable template is XTSE3430 exactly as it is for name#0.
+func TestStreamableNumericPredicateFocusDependentCall(t *testing.T) {
+	for _, pred := range []string{"count(name())", "count(current())", "count(copy-of())"} {
+		err := compileModeSheet(t, numericPredicateSheet("", "descendant::x["+pred+"]"))
+		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
+			t.Errorf("descendant::x[%s] calls a focus-dependent function; want XTSE3430, got: %v", pred, err)
+		}
+	}
+	// key#2 and unparsed-entity-uri#1 are not modelled as operands, so the
+	// verdict is no opinion rather than XTSE3430; what matters is that the
+	// numeric rule no longer answers striding for them without looking.
+	for _, pred := range []string{"count(key('k', '1'))", "count(unparsed-entity-uri('e'))"} {
+		src := "descendant::x[" + pred + "]"
+		if got, known := analyzeIn(t, src, postureStriding); known && got.posture == postureStriding {
+			t.Errorf("%s calls a focus-dependent function; the numeric rule must not make it striding", src)
+		}
+	}
+	// The control: a focus-free numeric predicate is still narrowed.
+	if err := compileModeSheet(t, numericPredicateSheet("", "descendant::x[1 + 1]")); err != nil {
+		t.Errorf("descendant::x[1 + 1] is numeric and focus-free; got: %v", err)
+	}
+}
+
+// TestStreamableNumericPredicateDeclaredVariable checks the spec's own
+// "descendant::section[$i+1]": the static type of $i is its declared type
+// (§19.1, VarRef), so a numeric "as" makes the predicate numeric whatever
+// its occurrence indicator. A variable without one is U{*}, a string is not
+// numeric, and a range variable shadowing $i is not the declared $i.
+func TestStreamableNumericPredicateDeclaredVariable(t *testing.T) {
+	for _, as := range []string{"xs:integer", "xs:double?", "xs:positiveInteger", "xs:numeric"} {
+		if err := compileModeSheet(t, numericPredicateSheet(as, "descendant::x[$i + 1]")); err != nil {
+			t.Errorf("descendant::x[$i + 1] with $i as %s is numeric; got: %v", as, err)
+		}
+	}
+	for _, c := range []struct{ as, sel string }{
+		{"", "descendant::x[$i + 1]"},
+		{"xs:string", "descendant::x[$i]"},
+		{"xs:integer", "let $i := 'a' return descendant::x[$i]"},
+		{"xs:integer", "for $i in 'a' return descendant::x[$i]"},
+	} {
+		err := compileModeSheet(t, numericPredicateSheet(c.as, c.sel))
+		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
+			t.Errorf("%s with $i as %q is not numeric; want XTSE3430, got: %v", c.sel, c.as, err)
+		}
+	}
 }

@@ -52,9 +52,9 @@ var allAlgs = []c14n.Algorithm{
 
 // xsDifference is an input on which xmlsec1 is known to differ from this
 // package, with the reason. xmlsec1 derives xmlsec1's exact octets from this
-// package's for one reference; returning them unchanged means the difference
-// does not arise under that reference. refusal, instead, is the error xmlsec1
-// stops with on the input.
+// package's for one reference, algorithm and PrefixList included; returning
+// them unchanged means the difference does not arise under that reference.
+// refusal, instead, is the error xmlsec1 stops with on the input.
 type xsDifference struct {
 	input, reason string
 	xmlsec1       func(r xsRef, ours string) string
@@ -79,7 +79,7 @@ var xmlsec1Differences = []xsDifference{
 	{input: "c14n10/4.7-default-ns-a",
 		reason: "libxml2 models e2's xmlns=\"\" as a namespace node and, e2 being outside the node set, renders it as text; XPath 1.0 §5.4 gives an undeclaration no namespace node, so there is nothing to render (C14N 1.0 §4.7 expects only that e3 not take on e1's default namespace)",
 		xmlsec1: func(r xsRef, ours string) string {
-			if r.alg.Exclusive() && r.prefixes == nil {
+			if r.alg.Exclusive() && !slices.Contains(r.prefixes, "") {
 				return ours // exclusive C14N renders only visibly utilised namespaces
 			}
 			return strings.Replace(ours, `<e1 xmlns="a:b"><e3`, `<e1 xmlns="a:b"> xmlns=""<e3`, 1)
@@ -94,10 +94,10 @@ var xmlsec1Differences = []xsDifference{
 	{input: "undeclaring-element-dropped",
 		reason: "libxml2 models e2's xmlns=\"\" as a namespace node and, e2 being outside the set, renders it as text; XPath 1.0 §5.4 gives an undeclaration no namespace node (the §4.7 difference above, reached through a partial axis)",
 		xmlsec1: func(r xsRef, ours string) string {
-			if r.alg.Exclusive() && r.prefixes == nil {
-				return ours // no PrefixList: e2, outside the set, renders nothing
+			if r.alg.Exclusive() && !slices.Contains(r.prefixes, "") {
+				return ours // #default not listed: e2, outside the set, renders nothing
 			}
-			return strings.Replace(ours, `<e1 xmlns="a:b"> xmlns:foo`, `<e1 xmlns="a:b"> xmlns="" xmlns:foo`, 1)
+			return strings.Replace(ours, `<e1 xmlns="a:b">`, `<e1 xmlns="a:b"> xmlns=""`, 1)
 		}},
 	{input: "default-node-dropped-on-one-element",
 		reason: "Exclusive C14N §3 renders xmlns=\"\" on a, which utilises the default namespace, has no default namespace node in the set, and whose nearest utilising output ancestor r has one; with #default listed, the Canonical XML rule does the same, and xmlsec1's own inclusive output for this input matches ours. libxml2's stack-based exclusive path omits it",
@@ -105,7 +105,7 @@ var xmlsec1Differences = []xsDifference{
 			switch {
 			case !r.alg.Exclusive():
 				return ours
-			case r.prefixes == nil:
+			case !slices.Contains(r.prefixes, ""):
 				return strings.Replace(ours, `<a xmlns="">`, `<a>`, 1)
 			}
 			return strings.Replace(ours, `<a xmlns=""><b xmlns="urn:d">`, `<a><b>`, 1)
@@ -116,7 +116,7 @@ var xmlsec1Differences = []xsDifference{
 			switch {
 			case !r.alg.Exclusive():
 				return ours
-			case r.prefixes == nil:
+			case !slices.Contains(r.prefixes, ""):
 				return strings.Replace(ours, `<a xmlns="urn:2">`, `<a>`, 1)
 			}
 			return strings.Replace(ours, `<a xmlns=""><b xmlns="urn:2">`, `<a><b>`, 1)
@@ -124,10 +124,10 @@ var xmlsec1Differences = []xsDifference{
 	{input: "prefix-node-dropped-everywhere",
 		reason: "with bar on the PrefixList, Exclusive C14N §3 hands its namespace nodes to Canonical XML's rule, which renders only nodes in the set, and the filter removed every bar node; xmlsec1's own inclusive output for this input matches ours. libxml2 renders the visibly utilised prefix from its stack regardless of the list",
 		xmlsec1: func(r xsRef, ours string) string {
-			if !r.alg.Exclusive() || r.prefixes == nil {
+			if !r.alg.Exclusive() || !slices.Contains(r.prefixes, "bar") {
 				return ours
 			}
-			return strings.Replace(ours, `<foo:a bar:x`, `<foo:a xmlns:bar="urn:bar" bar:x`, 1)
+			return strings.Replace(ours, `<foo:a `, `<foo:a xmlns:bar="urn:bar" `, 1)
 		}},
 }
 
@@ -402,18 +402,49 @@ func declaredPrefixes(doc *xdm.Node) []string {
 	})
 }
 
-// withPrefixLists appends the two exclusive algorithms carrying a PrefixList.
+// absentPrefix is bound nowhere in the corpus. Exclusive C14N §3 applies the
+// PrefixList to namespace nodes, and there is none with this prefix, so naming
+// it must change nothing.
+const absentPrefix = "nosuchprefix"
+
+// withPrefixLists appends the two exclusive algorithms carrying a PrefixList:
+// prefixes, then absentPrefix alone, after #default, and after the first
+// declared prefix other than the default.
 func withPrefixLists(refs []xsRef, prefixes []string) []xsRef {
-	for _, a := range []c14n.Algorithm{c14n.Exclusive10, c14n.Exclusive10WithComments} {
-		r := refs[0]
-		r.alg, r.prefixes = a, prefixes
-		refs = append(refs, r)
+	lists := [][]string{prefixes, {absentPrefix}, {"", absentPrefix}}
+	if i := slices.IndexFunc(prefixes, func(p string) bool { return p != "" }); i >= 0 {
+		lists = append(lists, []string{prefixes[i], absentPrefix})
+	}
+	for _, l := range lists {
+		for _, a := range []c14n.Algorithm{c14n.Exclusive10, c14n.Exclusive10WithComments} {
+			r := refs[0]
+			r.alg, r.prefixes = a, l
+			refs = append(refs, r)
+		}
 	}
 	return refs
 }
 
+// checkAbsentInert fails when naming absentPrefix changes this package's
+// output: the list with it must canonicalize as the list without it.
+func checkAbsentInert(t *testing.T, input string, set c14n.NodeSet, r xsRef) {
+	t.Helper()
+	if !slices.Contains(r.prefixes, absentPrefix) {
+		return
+	}
+	without := slices.DeleteFunc(slices.Clone(r.prefixes), func(p string) bool { return p == absentPrefix })
+	with, err1 := c14n.BytesNodeSet(set, c14n.Options{Algorithm: r.alg, InclusiveNamespacePrefixes: r.prefixes})
+	want, err2 := c14n.BytesNodeSet(set, c14n.Options{Algorithm: r.alg, InclusiveNamespacePrefixes: without})
+	if err1 != nil || err2 != nil || !bytes.Equal(with, want) {
+		t.Errorf("%s %s: naming %s changed the output (%v, %v)\n   with: %q\nwithout: %q", input, refName(r), absentPrefix, err1, err2, with, want)
+	}
+}
+
 func refName(r xsRef) string {
-	if r.prefixes != nil {
+	switch {
+	case slices.Contains(r.prefixes, absentPrefix):
+		return algName(r.alg) + "+prefixlist=" + c14n.FormatPrefixList(r.prefixes)
+	case r.prefixes != nil:
 		return algName(r.alg) + "+prefixlist"
 	}
 	return algName(r.alg)
@@ -558,6 +589,7 @@ func TestC14NDifferentialXMLSec1(t *testing.T) {
 		for i, r := range refs {
 			opts := c14n.Options{Algorithm: r.alg, InclusiveNamespacePrefixes: r.prefixes}
 			if r.prefixes != nil {
+				checkAbsentInert(t, base, c14n.Document(doc), r)
 				x.compare(t, "prefixlist", base, r, at(bufs, i), refused, func() ([]byte, error) { return c14n.Bytes(doc, opts) })
 				continue
 			}
@@ -607,6 +639,7 @@ func TestC14NDifferentialXMLSec1(t *testing.T) {
 			if r.prefixes != nil {
 				group = "prefixlist"
 			}
+			checkAbsentInert(t, c.name, set, r)
 			opts := c14n.Options{Algorithm: r.alg, InclusiveNamespacePrefixes: r.prefixes}
 			x.compare(t, group, c.name, r, at(bufs, i), refused, func() ([]byte, error) { return c14n.BytesNodeSet(set, opts) })
 		}

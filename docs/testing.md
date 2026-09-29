@@ -1026,7 +1026,9 @@ byte for byte with this package's output for the same node set. It covers the
 with the signature mid-document), XPath filter transforms over the
 Recommendations' subset examples and the W3C interop inputs, five inputs
 whose filters split namespace axes (`FromXPathFilter`, a `NamespaceSet`), and
-Exclusive C14N with an `InclusiveNamespaces` PrefixList. It skips without `xmlsec1` on
+Exclusive C14N with an `InclusiveNamespaces` PrefixList (every declared
+prefix, and a prefix bound nowhere alone, after `#default` and after one
+declared prefix; naming it must not change this package's output). It skips without `xmlsec1` on
 the `PATH`; `GOXML_C14N_XMLSEC1=1` makes that a failure, and CI sets it on
 Linux, where it installs `xmlsec1` from apt. Without a local `xmlsec1`, a
 script runs it in a Debian container and needs only Docker:
@@ -1039,7 +1041,8 @@ tests/c14n-xmlsec1.sh bench   # and the throughput comparison (about a minute)
 Where `xmlsec1` is known to differ, the case is listed in
 `xmlsec1Differences` in `tests/c14n/xmlsec1_test.go` with its reason, and
 [c14n.md](c14n.md#where-xmlsec1-differs) states each one. An entry derives the
-exact octets `xmlsec1` produces (or names the error it stops with), so it
+exact octets `xmlsec1` produces for each reference, algorithm and PrefixList
+included (or names the error it stops with), so it
 fails both when `xmlsec1` changes and when it starts agreeing. Any other
 difference is a failure. An entry needs a reason grounded in a Recommendation;
 one is never added to make the test pass.
@@ -1465,6 +1468,8 @@ tidy default. `regexp` learned the Unicode category `Cn` (unassigned) in 1.25;
 on 1.24 the pattern `^(?:\p{Cn}*)$` fails to compile, and `re00175` raises
 FORX0002 where it should match. The cost of building on 1.24 is four cases:
 XPath 3.0 and 3.1 fall off 100%, XQuery loses one, and XSD 1.0 loses two.
+Independently of that, `golang.org/x/text` v0.35 and later declare
+`go 1.25.0`, so the pinned dependency sets the same floor.
 
 That was found the hard way. The floor was lowered to 1.24 on the reasoning
 that nothing in the code imports anything newer — true, and irrelevant, because

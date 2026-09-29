@@ -846,8 +846,8 @@ func (p *Parser) qnameResolver() func(string) (string, bool) {
 // XPath 3.0 introduced it, and it sits between comparison and range so that
 // "$a || $b eq $c" concatenates before it compares. It is exactly fn:concat
 // on two arguments, including concat's treatment of the empty sequence as the
-// zero-length string, so it compiles to a call rather than to an operator of
-// its own.
+// zero-length string. It compiles to a *StringConcat node, whose Eval gives
+// that call's result, rather than to a general BinaryOp.
 func (p *Parser) parseStringConcat() (Expr, error) {
 	left, err := p.parseRange()
 	if err != nil {

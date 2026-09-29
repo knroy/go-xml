@@ -91,7 +91,8 @@ One dependency: `golang.org/x/text`, for Unicode normalisation and
 language-sensitive collation. Nothing else is outside the standard library.
 Requires Go 1.25 or later. The floor is measured, not nominal: `regexp`
 learned the Unicode category `Cn` in 1.25, and building on 1.24 costs four
-conformance cases. See [docs/testing.md](docs/testing.md).
+conformance cases; `golang.org/x/text` v0.35 and later require 1.25 as well.
+See [docs/testing.md](docs/testing.md).
 
 ## Live test
 
@@ -205,7 +206,8 @@ Eight packages, each usable on its own:
   (measured against XXE, billion-laughs and resource exhaustion), timeouts,
   limits, hot-reloading rule sets.
 * **[docs/recipes.md](docs/recipes.md)** — batching, splitting, HTML
-  rendering, parameters, custom resolvers, standalone XPath.
+  rendering, parameters, custom resolvers, standalone XPath, finding elements
+  without XPath.
 * **[docs/c14n.md](docs/c14n.md)** — Canonical XML for XML-DSig, SAML and
   WS-Security: choosing an algorithm, node sets, the enveloped-signature
   transform, and the verification still to do.
