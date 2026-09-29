@@ -10,23 +10,23 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
-| `xdm.Node.Walk` and `xdm.Node.FirstElement` | Finding an element by expanded name needed XPath or a hand-written loop. `Walk` visits elements in document order with early stop; `FirstElement` returns the first match. | |
-| `c14n` differential: a PrefixList prefix bound nowhere | The `xmlsec1` differential never named one. `nosuchprefix` lists added (1250 comparisons); expected differences now key on input and list. | |
+| `xdm.Node.Walk` and `xdm.Node.FirstElement` | Finding an element by expanded name needed XPath or a hand-written loop. `Walk` visits elements in document order with early stop; `FirstElement` returns the first match. | [`ba09cac`][ba09cac] |
+| `c14n` differential: a PrefixList prefix bound nowhere | The `xmlsec1` differential never named one. `nosuchprefix` lists added (1250 comparisons); expected differences now key on input and list. | [`ba09cac`][ba09cac] |
 
 ### Fixed — engine
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| A numeric predicate calling a focus-dependent function was striding | `key#2`, `current#0`, `copy-of#0` and others passed §19.8.8.9's focus-free test. It now reads the `focusDependent` table. | |
-| `descendant::x[$i + 1]` was refused `XTSE3430` | A variable declared `as="xs:integer"` was never numeric (§19.8.8.9). A declared numeric type now counts; `let`, `for` and `some` bindings shadow it. | |
-| `key(k, v)` gave no streamability verdict | §19.8.9 defines it as `key(k, v, /)`; the call is now assessed in that form. | |
+| A numeric predicate calling a focus-dependent function was striding | `key#2`, `current#0`, `copy-of#0` and others passed §19.8.8.9's focus-free test. It now reads the `focusDependent` table. | [`ba09cac`][ba09cac] |
+| `descendant::x[$i + 1]` was refused `XTSE3430` | A variable declared `as="xs:integer"` was never numeric (§19.8.8.9). A declared numeric type now counts; `let`, `for` and `some` bindings shadow it. | [`ba09cac`][ba09cac] |
+| `key(k, v)` gave no streamability verdict | §19.8.9 defines it as `key(k, v, /)`; the call is now assessed in that form. | [`ba09cac`][ba09cac] |
 
 ### Documentation
 
 | Change | What it does | Commit |
 |---|---|---|
-| `c14n` figures | The join-URI row is 67 / 67, not 69; `xmlsec1` differences are split into reference defects and a difference of reading under Exclusive C14N §3. | |
-| Go 1.25 floor in `RELEASE.md` and `README.md` | The floor, and that `golang.org/x/text` v0.35+ requires 1.25 on its own. | |
+| `c14n` figures | The join-URI row is 67 / 67, not 69; `xmlsec1` differences are split into reference defects and a difference of reading under Exclusive C14N §3. | [`ba09cac`][ba09cac] |
+| Go 1.25 floor in `RELEASE.md` and `README.md` | The floor, and that `golang.org/x/text` v0.35+ requires 1.25 on its own. | [`ba09cac`][ba09cac] |
 
 ## v1.4.0 — 2026-09-25
 
@@ -1060,4 +1060,5 @@ here so every entry in this file sits under a release.
 [67c960b]: https://github.com/knroy/go-xml/commit/67c960b
 [1803696]: https://github.com/knroy/go-xml/commit/1803696
 [48651cf]: https://github.com/knroy/go-xml/commit/48651cf
+[ba09cac]: https://github.com/knroy/go-xml/commit/ba09cac
 [1a3cf7f]: https://github.com/knroy/go-xml/commit/1a3cf7f
