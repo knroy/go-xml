@@ -20,8 +20,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| An accumulator applied without `use-accumulators` (#16) | An initial `xsl:mode` with no list left every accumulator readable on the source. Its absent list is now empty (§18.2.2), so a read is `XTDE3362`; `accumulator-073` diverges, as Saxon does. | |
-| `fn:transform` ignored `static-params` (#15) | A nested stylesheet's static parameter kept its default. The map now binds them at the nested compilation. | |
+| An accumulator applied without `use-accumulators` (#16) | An initial `xsl:mode` with no list left every accumulator readable on the source. Its absent list is now empty (§18.2.2), so a read is `XTDE3362`; `accumulator-073` diverges, as Saxon does. | [`5549c2f`][5549c2f] |
+| `fn:transform` ignored `static-params` (#15) | A nested stylesheet's static parameter kept its default. The map now binds them at the nested compilation. | [`5549c2f`][5549c2f] |
 | `fn:transform` refused option names it did not know | F&O 3.1 §1.7 says such entries must be ignored; they raised `FOXT0002`. String and QName names F&O does not define are now ignored (#12). | [`900cece`][900cece] |
 | Exclusive C14N rendered namespace nodes outside the node set | A visibly utilised prefix rendered after an XPath filter removed its node; Exc-C14N §1.1 forbids it. Now dropped, matching Baltimore's Merlin signatures. | [`900cece`][900cece] |
 | `new-each-time="no"` rebuilt nodes for node arguments (#13) | `f(.) is f(.)` was false. Calls are now cached per F&O 1.7.4-identical arguments: nodes by identity, atomics by exact type. DocBook `table-cals.049` no longer times out (578). | [`900cece`][900cece] |
@@ -1068,6 +1068,7 @@ here so every entry in this file sits under a release.
 [67c960b]: https://github.com/knroy/go-xml/commit/67c960b
 [1803696]: https://github.com/knroy/go-xml/commit/1803696
 [48651cf]: https://github.com/knroy/go-xml/commit/48651cf
+[5549c2f]: https://github.com/knroy/go-xml/commit/5549c2f
 [900cece]: https://github.com/knroy/go-xml/commit/900cece
 [ba09cac]: https://github.com/knroy/go-xml/commit/ba09cac
 [1a3cf7f]: https://github.com/knroy/go-xml/commit/1a3cf7f
