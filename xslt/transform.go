@@ -1383,30 +1383,19 @@ var emptyModeAccumulators = &modeAccumulators{names: map[string]bool{}}
 // fail, while mode-1106c starts in one declared use-accumulators="#all" and
 // expects it to succeed.
 //
-// A mode that says nothing is the interesting case, and the suite splits it
-// on whether an xsl:mode declaration exists at all. 18.2.2's "in the absence
-// of an xsl:mode declaration, no accumulators are applicable" is taken at its
-// word: copy-3002 declares no mode, copies from the initial match selection
-// with copy-accumulators="yes", and expects XTDE3362 -- and copy-3003, which
-// is the same stylesheet with <xsl:mode use-accumulators="latest-pick"/>
-// added, expects it to work. But a mode that IS declared and merely omits
-// @use-accumulators is left permissive, because the suite requires that too:
-// accumulator-073 declares <xsl:mode on-no-match="shallow-copy"/> with no
-// accumulator list, copies from the initial match selection the same way, and
-// asserts the copied accumulator values. Reading the absent attribute as an
-// empty list would fail it.
+// A mode that says nothing -- whether or not an xsl:mode declares it -- has
+// the empty list, which is the attribute's default: "The list may be empty,
+// and the default value is an empty list." copy-3002 declares no mode and
+// expects XTDE3362; issue #16 declares <xsl:mode on-no-match="shallow-copy"/>
+// and Saxon reports the accumulator "not applicable to the current document".
+// Only the initial mode's declaration counts: a use-accumulators list on a
+// mode entered later neither grants nor withholds anything.
 func noteInitialAccumulators(rt *runtime, mode string, node *xdm.Node) {
 	if node == nil {
 		return
 	}
 	set, ok := rt.sheet.modeAccums[mode]
 	if !ok {
-		// The mode says nothing about accumulators. Whether that means
-		// "all" or "none" turns on whether the mode was declared at all;
-		// see the comment above.
-		if rt.sheet.declaredModeNames[mode] {
-			return
-		}
 		set = emptyModeAccumulators
 	}
 	root := node.Root()

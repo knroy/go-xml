@@ -113,7 +113,7 @@ and maintains it as a project of his own.
 | **XPath 3.1** | 100.00% of the W3C QT3 suite (21,898 of 21,898 in scope); maps, arrays, the lookup operator, the JSON family |
 | **XQuery 3.1** | 100.00% of the W3C QT3 suite (30,345 of 30,346 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; the 1 remaining failure is the tail catalogued in [todo.md](docs/todo.md) §1.5 |
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.77% of the W3C XSLT suite filtered to 3.0 (11,492 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 8 of the 28 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSLT 3.0** | 99.77% of the W3C XSLT suite filtered to 3.0 (11,491 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 7 of the 27 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
@@ -879,6 +879,17 @@ literal.
 `from`), `output` (the `xml`, `html` and `text` methods, named as well as
 unnamed), `result-document`, `as` type declarations, attribute value templates,
 and the simplified literal-result-element stylesheet form.
+
+**Accumulator applicability.** §18.2.2 decides which accumulators a tree has,
+and reading any other is `XTDE3362`. For the document of the initial match
+selection the set is the *initial* mode's `xsl:mode/@use-accumulators`, whose
+default is the empty list: a stylesheet reading `accumulator-before` over its
+source document must declare `<xsl:mode use-accumulators="#all"/>` or name the
+accumulator, as Saxon also requires. `xsl:source-document` and
+`xsl:merge-source` apply their own list when they give one; a
+`copy-accumulators="yes"` copy or a `snapshot()` inherits its original's; trees
+from `doc()`, `document()`, `collection()` and `xsl:variable`, and the global
+context item under an initial template, have every accumulator.
 
 **XQuery 3.1.** Everything the language adds on top of XPath, since the
 expression half is `xpath`'s and already at 100%: direct and computed

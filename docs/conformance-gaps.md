@@ -35,21 +35,21 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,492 | 99.77% | **26** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,491 | 99.77% | **27** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,598 | 41,567 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 578 | 578 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **96** |
+| | **Total** | | | | **97** |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 26 + 30 + 31 + 0 = 96. Measured 2026-09-11, 2026-09-14, 2026-09-29.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 27 + 30 + 31 + 0 = 97. Measured 2026-09-11, 2026-09-29, 2026-09-30.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 2,501 tests.
+The unit-test suite is 2,504 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -62,11 +62,11 @@ W3C XSLT sets.
 
 Two suites reach 100% — XPath at all three versions, and RELAX NG.
 
-**The largest block is a single feature, not a long tail.** 7 of the 26
+**The largest block is a single feature, not a long tail.** 7 of the 27
 XSLT 3.0 failures want an `XTSE3430` that only the unwritten remainder of the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable".
-That is not a backlog of defects. The 20 that remain are named case by case
+That is not a backlog of defects. The 21 that remain are named case by case
 below, and every one of them is recorded with its verdict in
 [tests/conformance/results.json](../tests/conformance/results.json), which is
 where the table above comes from.
@@ -235,14 +235,14 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 26 failures
+## xslt 3.0 — 27 failures
 
-**XSLT 3.0: 11,492 / 11,518 = 99.77%.**
+**XSLT 3.0: 11,491 / 11,518 = 99.77%.**
 
 <!-- BEGIN GENERATED XTSE3430 BLOCK -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-**7 of the 26 want an `XTSE3430`** — a refusal of a stylesheet as
+**7 of the 27 want an `XTSE3430`** — a refusal of a stylesheet as
 <!-- END GENERATED XTSE3430 BLOCK -->
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
@@ -252,7 +252,7 @@ assess whether constructs are guaranteed-streamable". These are the largest
 block in this file and they are not defects. What the analysis covers and what
 it does not is under *The §19.8 streamability analysis* below.
 
-The remaining **20** divide as follows. Several are divergences and are read in
+The remaining **21** divide as follows. Several are divergences and are read in
 §2; what is genuinely open is read here. One case belonging to the block of 7
 is *also* read individually below — `su-ascent-903`, because its verdict is not
 the block's. The other six fail because the analysis is silent; that one
@@ -285,6 +285,7 @@ own terms rather than deferred with the rest. It is counted once, in the 7.
 | `su-ascent-902` | **Fixed 2026-09-12 — the verdict below was wrong** | This row read *"Withheld — the rule contradicts the spec"*, on the premise that "no such precondition exists" and that §19.8.5 "adds nothing about cardinality". **That premise is false.** §19.8.5.3, .4, .5, .6 and .7 each carry the identical sentence — *"Rules for the function signature: If the declared type of the streaming parameter permits more than one node, the function is not guaranteed-streamable"* — and §19.8.5.2 (absorbing) is the single exception, "there are no constraints". The rule was simply unimplemented; `typePermitsNodes` already existed and nothing consulted it for this. Implemented now, and the case passes with `su-inspection-902` and `su-shallow-descent-906`, which share the description *"first arg accepts a sequence"*. Zero cases lost. **The tension the old verdict pointed at is real but sits inside the spec, not between the spec and the suite:** §19.8.5.7 states the rule and then gives a worked example that violates it (`<xsl:param name="input" as="element(para)*"/>`, of which it says "the function body meets the rules for this category" — the *body* does; the signature does not, and the example is silent about the rule three paragraphs above it). The W3C suite sides with the rule, so we do too; `TestStreamingParameterSignatureRule` asserts the example is refused, so the choice stays visible rather than becoming folklore. |
 | `sf-reverse-001` | **Not implementable** | Suite verdict for a streaming pipeline, wrong for a non-streaming one. The case runs `reverse(snapshot(/chapter)//section)/@id` under a streamable `xsl:source-document` and expects `1.3 1.2.2 1.2.1 1.2 1.1 1` — the reversed order. XPath 3.1 §3.3.1.1 says of `E1/E2`: when every evaluation of E2 returns nodes, "these sequences are combined, and duplicate nodes are eliminated based on node identity. The resulting node sequence is returned in document order" — however E1 was ordered; only `!` and `for` preserve it, and this engine returns `1 1.1 1.2 1.2.1 1.2.2 1.3`. The catalog's answer is what a *streaming* evaluator produces: §19.11 (An Optimization: Pattern-Based Scanning) says that an implementation "that literally followed the semantics of path expressions as defined in [XPath 3.0] would therefore require to sort the nodes into document order, and sorting is incompatible with streaming", so Saxon-EE 9.7/9.8 and Exselt, which both pass, never sort a streamed path. §19.8.8.7 (streamability of path expressions) prescribes no result order, and the changelog only "clarified that a striding expression ... can deliver a mix of streamed and unstreamed nodes and that the result is not necessarily in document order". QT3 has no `reverse(X)/step` order assertion in either direction. This engine answers `streamable="yes"` by building the tree, so the XPath rule is the only one that binds, and the sort at `xpath/eval.go` `evalStepOver` stays; `TestDocumentOrderAndDedup` pins `reverse(//book)/@id` to document order. The catalog's "see bug 24125" is about groundedness (why `reverse` of a `snapshot` is streamable at all), not order. The only route to this case is a streamed evaluator whose path results are emitted in arrival order, which is the *Streamed execution* item below, not a change to `/`. |
 | `accumulator-061` | **Costs more than it gains** | Read in §2. |
+| `accumulator-073` | **Withheld — the case contradicts §18.2.2** | Declares `<xsl:mode on-no-match="shallow-copy"/>` with no `use-accumulators`, copies from the initial match selection with `copy-accumulators="yes"`, and asserts the copied values. §18.2.2 makes the initial mode's list decide, "the default value is an empty list", and a copy is applicable "if and only if it is applicable to S" — so the read is `XTDE3362`. Saxon-HE 12.7 raises `XTDE3362` for the same shape, run locally (issue #16). See *known-gaps.md*, deliberate divergences. |
 | `evaluate-045` | **Fixed 2026-09-13** | The 510-document cost was a leak, not the rule. Read in §2. |
 | `streamable-116` | **Not implementable — the spec permits what we do, and the suite marks the case `_WRONG`** | Wants `XPDY0002`: a global variable `select="count(//*)"` reads the context item while the initial mode is streamable and the source is supplied `streaming="true"`, so the case expects the global context item to be *absent*. §3.6.6 says otherwise. Without an `xsl:global-context-item` declaration "the item supplied as the global context item cannot be a node in a streamed document (the transformation API may handle this either by disallowing such an input, **or by building the corresponding tree in memory and supplying the global context item as an unstreamed node**)". This engine builds every tree in memory, so it takes the second option the spec offers: `$size` evaluates and the transform succeeds. The error is reachable only by an API that withholds the global context item whenever the initial mode streams — a choice the spec leaves to the implementation, and one that would touch every global variable of every streamed-mode invocation. The catalog's own keywords carry `_WRONG:wrong-error-code`, the suite authors' mark that the expected code is disputed; and the error is dynamic, not a streamability verdict, so no §19.8 rule reaches it. |
 | `evaluate-048` | **Needs a network fetch** | Fails on `FODC0002: cannot retrieve "https://www.saxonica.com/welcome/welcome.xml": scheme "https" is not permitted`. Not reachable regardless. Its earlier half — `fn:function-lookup`'s dynamic visibility — was a separate reason; see *Corrections*. |

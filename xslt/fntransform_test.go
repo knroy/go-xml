@@ -717,3 +717,42 @@ func TestFnTransformIgnoresUnknownOptions(t *testing.T) {
 		t.Errorf("got %q, want the nested result <ok/>", got)
 	}
 }
+
+// static-params binds the nested stylesheet's static parameters at its
+// compilation (GitHub issue #15); it was read and dropped, so a static
+// parameter kept its default. An unsupplied one still takes its select.
+func TestFnTransformStaticParams(t *testing.T) {
+	for _, tc := range []struct{ name, params, want string }{
+		{"QName key", `map{QName('', 'p'): 'given'}`, "<o>given</o>"},
+		{"string key", `map{'p': 'given'}`, "<o>given</o>"},
+		{"absent", `map{}`, "<o>default</o>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+			    xmlns:xs="http://www.w3.org/2001/XMLSchema" version="3.0">
+			  <xsl:variable name="inner" as="xs:string"><![CDATA[
+			    <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+			      <xsl:param name="p" static="yes" select="'default'"/>
+			      <xsl:template match="/"><o><xsl:value-of select="$p"/></o></xsl:template>
+			    </xsl:stylesheet>]]></xsl:variable>
+			  <xsl:template match="/">
+			    <xsl:sequence select="transform(map{'stylesheet-text': $inner,
+			        'source-node': /, 'static-params': ` + tc.params + `})?output"/>
+			  </xsl:template>
+			</xsl:stylesheet>`
+			tree, _ := xdm.ParseString(src, xdm.ParseOptions{})
+			sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, _ := xdm.ParseString(`<r/>`, xdm.ParseOptions{})
+			res, err := sheet.Transform(context.Background(), doc.Root, xslt.TransformOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := xslt.SerializeAsXML(res); !strings.Contains(got, tc.want) {
+				t.Fatalf("got %s, want %s", got, tc.want)
+			}
+		})
+	}
+}

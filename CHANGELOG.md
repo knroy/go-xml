@@ -20,6 +20,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| An accumulator applied without `use-accumulators` (#16) | An initial `xsl:mode` with no list left every accumulator readable on the source. Its absent list is now empty (§18.2.2), so a read is `XTDE3362`; `accumulator-073` diverges, as Saxon does. | |
+| `fn:transform` ignored `static-params` (#15) | A nested stylesheet's static parameter kept its default. The map now binds them at the nested compilation. | |
 | `fn:transform` refused option names it did not know | F&O 3.1 §1.7 says such entries must be ignored; they raised `FOXT0002`. String and QName names F&O does not define are now ignored (#12). | [`900cece`][900cece] |
 | Exclusive C14N rendered namespace nodes outside the node set | A visibly utilised prefix rendered after an XPath filter removed its node; Exc-C14N §1.1 forbids it. Now dropped, matching Baltimore's Merlin signatures. | [`900cece`][900cece] |
 | `new-each-time="no"` rebuilt nodes for node arguments (#13) | `f(.) is f(.)` was false. Calls are now cached per F&O 1.7.4-identical arguments: nodes by identity, atomics by exact type. DocBook `table-cals.049` no longer times out (578). | [`900cece`][900cece] |

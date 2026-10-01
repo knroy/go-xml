@@ -116,10 +116,10 @@
       "component": "xslt",
       "suite": "W3C XSLT 3.0",
       "edition": "XSLT 3.0",
-      "passed": 11492,
-      "disagreements": 26,
+      "passed": 11491,
+      "disagreements": 27,
       "total": 11518,
-      "run_date": "2026-09-14",
+      "run_date": "2026-09-30",
       "command": "tests/check.sh (TestXSLT30Suite)",
       "skipped_out_of_scope": 2949,
       "skipped_unimplemented": 134,
@@ -138,6 +138,11 @@
           "id": "accumulator-061",
           "verdict": "deliberate-divergence",
           "note": "Costs more than it gains; read in §2."
+        },
+        {
+          "id": "accumulator-073",
+          "verdict": "deliberate-divergence",
+          "note": "§18.2.2: an initial mode without use-accumulators makes none applicable, and a copy inherits that; Saxon-HE 12.7 raises XTDE3362 for the same shape."
         },
         {
           "id": "docbook-001",
@@ -225,7 +230,7 @@
           "note": "Read in §2 and in Corrections."
         }
       ],
-      "unenumerated_note": "The balance want an XTSE3430 refusal that only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit. §19.1 does not require a non-streaming processor to assess guaranteed-streamability, so they are read as a block under \"The §19.8 streamability analysis\" rather than case by case. su-ascent-903 belongs to that block and is ALSO enumerated above, because its verdict is not the block's: the analysis does reach it, and the rule the test asserts contradicts §19.8.5.7's own worked example. It is counted once, in the breakdown of 7, so the enumeration and the breakdown overlap by exactly that one case and 20 + 7 - 1 = 26. merge-097sf was enumerated here until 2026-09-11 and is not a disagreement at all: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
+      "unenumerated_note": "The balance want an XTSE3430 refusal that only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit. §19.1 does not require a non-streaming processor to assess guaranteed-streamability, so they are read as a block under \"The §19.8 streamability analysis\" rather than case by case. su-ascent-903 belongs to that block and is ALSO enumerated above, because its verdict is not the block's: the analysis does reach it, and the rule the test asserts contradicts §19.8.5.7's own worked example. It is counted once, in the breakdown of 7, so the enumeration and the breakdown overlap by exactly that one case and 21 + 7 - 1 = 27. merge-097sf was enumerated here until 2026-09-11 and is not a disagreement at all: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
     },
     {
       "id": "xsd-1.0",

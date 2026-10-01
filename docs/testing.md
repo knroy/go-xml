@@ -536,9 +536,9 @@ reads `tests/ratchet.txt` and examines every documentation line that names a
 suite's **in-scope denominator** -- the one number in a figure that does not
 move between runs (11,518 for XSLT 3.0, 30,346 for XQuery, and so on). The
 passing count, failure count and percentage written beside it must equal the
-ratchet's, in every form the documents use: `11,492 of 11,518`,
-`26 of 11,518`, `11,492 / 11,518 (99.77%)`, `= 99.77%`, `(26 failing)`, and
-the `| 11,518 | 11,492 | 99.77% | **26** |` summary-table row. A line stating
+ratchet's, in every form the documents use: `11,491 of 11,518`,
+`27 of 11,518`, `11,491 / 11,518 (99.77%)`, `= 99.77%`, `(27 failing)`, and
+the `| 11,518 | 11,491 | 99.77% | **27** |` summary-table row. A line stating
 two figures is read as two claims. Failures name the file, line and the value
 wanted.
 

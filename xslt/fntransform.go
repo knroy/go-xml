@@ -468,7 +468,7 @@ func nestedStylesheet(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (*Styl
 				"fn:transform: cannot retrieve package %q version %q: %v",
 				name, vers, perr)
 		}
-		return compileNested(ctx, rt, root, base)
+		return compileNested(ctx, rt, opts, root, base)
 	}
 
 	if seq, ok := transformOption(opts, "stylesheet-node"); ok {
@@ -482,7 +482,7 @@ func nestedStylesheet(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (*Styl
 			return nil, xdm.Errorf("FOXT0002",
 				"fn:transform: stylesheet-node must be a node")
 		}
-		return compileNested(ctx, rt, n, base)
+		return compileNested(ctx, rt, opts, n, base)
 	}
 
 	if text, ok, terr := transformString(opts, "stylesheet-text"); terr != nil {
@@ -493,7 +493,7 @@ func nestedStylesheet(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (*Styl
 			return nil, xdm.Errorf("FOXT0002",
 				"fn:transform: parsing stylesheet-text: %v", perr)
 		}
-		return compileNested(ctx, rt, tree.Root, base)
+		return compileNested(ctx, rt, opts, tree.Root, base)
 	}
 
 	if loc, ok, lerr := transformString(opts, "stylesheet-location"); lerr != nil {
@@ -525,14 +525,14 @@ func nestedStylesheet(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (*Styl
 					"fn:transform: cannot retrieve stylesheet-location %q: %v",
 					loc, merr)
 			}
-			return compileNested(ctx, rt, root, abs)
+			return compileNested(ctx, rt, opts, root, abs)
 		}
 		tree, derr := rt.opts.Documents.ResolveDocument(loc, base)
 		if derr != nil {
 			return nil, xdm.Errorf("FOXT0002",
 				"fn:transform: cannot retrieve stylesheet-location %q: %v", loc, derr)
 		}
-		return compileNested(ctx, rt, tree.Root, loc)
+		return compileNested(ctx, rt, opts, tree.Root, loc)
 	}
 
 	return nil, xdm.Errorf("FOXT0002",
@@ -551,8 +551,15 @@ func nestedParseOptions(rt *runtime, base string) xdm.ParseOptions {
 // fn:transform is entitled to see them as "this transformation could not be
 // invoked" rather than as an error of the calling stylesheet.
 func compileNested(
-	ctx *xpath.Context, rt *runtime, root *xdm.Node, base string,
+	ctx *xpath.Context, rt *runtime, opts *xdm.MapItem, root *xdm.Node, base string,
 ) (*Stylesheet, error) {
+	// static-params binds the nested stylesheet's static parameters, which
+	// are fixed before static analysis and so belong to the compilation, not
+	// to the run (F&O 3.1 14.7.1; GitHub issue #15).
+	static, err := transformParams(opts, "static-params")
+	if err != nil {
+		return nil, err
+	}
 	// A nested stylesheet may itself xsl:include or xsl:import. The caller's
 	// document resolver is reused when it can also resolve modules --
 	// FileResolver satisfies both interfaces -- and otherwise the nested
@@ -575,6 +582,7 @@ func compileNested(
 		// xpath.Context.AdoptBudget: a nested operation may spend the parent's
 		// remainder, never reset it.
 		moduleBudget: ctx.EntityBudget(),
+		StaticParams: static,
 	}
 	// A transform reached from the static phase is running INSIDE a Compile
 	// that holds compileMu, so it must not ask for the lock again. rt.static

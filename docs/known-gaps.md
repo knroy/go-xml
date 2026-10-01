@@ -55,10 +55,10 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 1 of 30,346; XSLT 3.0 has 26 of 11,518;
+failures of 6,201; XQuery 3.1 has 1 of 30,346; XSLT 3.0 has 27 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,598. Everything below
-is an account of those 96 cases, or of a decision that produced some of them.
-The 96 is the sum of the nine figures above, computed from
+is an account of those 97 cases, or of a decision that produced some of them.
+The 97 is the sum of the nine figures above, computed from
 [tests/conformance/results.json](../tests/conformance/results.json) rather than
 written: `tests/docfigures.sh` re-derives it from `tests/ratchet.txt` and fails
 if this file and the generated table disagree.
@@ -479,8 +479,8 @@ and have no effect:
 
 - `global-context-item`: the global context item comes only from
   `source-node` or `source-location`.
-- `static-params`, `serialization-params`, `requested-properties`,
-  `xslt-version`, `enable-messages`, `vendor-options`, `cache`.
+- `serialization-params`, `requested-properties`, `xslt-version`,
+  `enable-messages`, `vendor-options`, `cache`.
 - `enable-assertions`: the nested transform inherits the caller's
   `DisableAssertions`, so assertions run by default where F&O defaults to off.
 - `package-location`, `package-node`, `package-text`: alone they identify no
@@ -725,6 +725,21 @@ leaving external entities off. The default itself is unchanged.
 Honouring it lets the document choose the schema it is validated against, which
 defeats the purpose of validating. `WithInstanceLocations` opts in, with a
 policy that names which namespaces may be resolved.
+
+### An initial mode without `use-accumulators` makes no accumulator applicable (`accumulator-073`)
+
+**Cost: one case,** `accumulator-073`; DocBook, XSpec and the XSLT 2.0 lane
+are unchanged.
+
+§18.2.2: for the document of the initial match selection "the accumulators
+that are applicable are those determined by the xsl:mode declaration of the
+initial mode", and of `use-accumulators` "the default value is an empty list".
+A declared `<xsl:mode/>` that omits the attribute therefore makes none
+applicable, and `accumulator-before` over the source document is `XTDE3362`
+-- what Saxon reports for issue #16's stylesheet. `accumulator-073` asserts
+the opposite for a declared mode with no list; it is the only suite case that
+does, and `copy-3002` (no `xsl:mode` at all) expects the error. The engine
+used to read a declared-but-silent mode as "all" to pass it.
 
 ### `fn:collection()` raises an error rather than returning empty
 
