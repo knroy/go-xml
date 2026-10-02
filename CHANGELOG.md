@@ -10,8 +10,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
-| `fn:load-xquery-module` | It always raised `FOQM0006`. `xquery` now registers a loader reachable from XQuery, XPath and XSLT, reading modules only through the caller's resolver and budgets. | |
-| `fn:transform` from XQuery and XPath | It raised `FOXT0004` outside a stylesheet. Linking `xslt` registers a sandboxed, depth-bounded processor; `go-xml xquery` runs it. QT3 now measures its 124 cases. | |
+| `fn:load-xquery-module` | It always raised `FOQM0006`. `xquery` now registers a loader reachable from XQuery, XPath and XSLT, reading modules only through the caller's resolver and budgets. | [`6e6fa8a`][6e6fa8a] |
+| `fn:transform` from XQuery and XPath | It raised `FOXT0004` outside a stylesheet. Linking `xslt` registers a sandboxed, depth-bounded processor; `go-xml xquery` runs it. QT3 now measures its 124 cases. | [`6e6fa8a`][6e6fa8a] |
 | `internal/xmltok`, an original XML tokeniser | `xdm` read through a fork of `encoding/xml` that had to be re-applied each Go release. Replaced after a zero-difference differential over 59,984 corpus files; 2-5x faster. | [`f18912e`][f18912e] |
 | `fn:transform` option `source-location` (#12) | Saxon's option, standard in F&O 4.0, was refused. The document is read through the `fn:doc` resolver and becomes the initial match selection; never streamed. | [`900cece`][900cece] |
 | `go-xml xquery` | The CLI could not run XQuery. `go-xml xquery -q Q.xq [INPUT.xml]` honours `output:*` options, takes `-p`, `-o`, `-now`; module and `doc()` reads confined to `-allow-dir`. | [`900cece`][900cece] |
@@ -23,7 +23,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| A module importing its own namespace raised `XQST0073` | XQuery 3.1 §4.12: "A module may import its own target namespace". The rule is removed. | |
+| A module importing its own namespace raised `XQST0073` | XQuery 3.1 §4.12: "A module may import its own target namespace". The rule is removed. | [`6e6fa8a`][6e6fa8a] |
 | An accumulator applied without `use-accumulators` (#16) | An initial `xsl:mode` with no list left every accumulator readable on the source. Its absent list is now empty (§18.2.2), so a read is `XTDE3362`; `accumulator-073` diverges, as Saxon does. | [`5549c2f`][5549c2f] |
 | `fn:transform` ignored `static-params` (#15) | A nested stylesheet's static parameter kept its default. The map now binds them at the nested compilation. | [`5549c2f`][5549c2f] |
 | `fn:transform` refused option names it did not know | F&O 3.1 §1.7 says such entries must be ignored; they raised `FOXT0002`. String and QName names F&O does not define are now ignored (#12). | [`900cece`][900cece] |
@@ -1072,6 +1072,7 @@ here so every entry in this file sits under a release.
 [67c960b]: https://github.com/knroy/go-xml/commit/67c960b
 [1803696]: https://github.com/knroy/go-xml/commit/1803696
 [48651cf]: https://github.com/knroy/go-xml/commit/48651cf
+[6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e
 [5549c2f]: https://github.com/knroy/go-xml/commit/5549c2f
 [900cece]: https://github.com/knroy/go-xml/commit/900cece
