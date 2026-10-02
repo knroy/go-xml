@@ -32,8 +32,8 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xdm** | *(no external suite)* | — | — | — | — |
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |
-| **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
-| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** |
+| **xpath** | QT3 — XPath 3.1 | 22,054 | 22,033 | 99.90% | **21** |
+| **xquery** | QT3 — XQuery 3.1 | 30,517 | 30,495 | 99.93% | **22** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
 | **xslt** | W3C XSLT 3.0 | 11,518 | 11,491 | 99.77% | **27** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
@@ -41,15 +41,15 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 578 | 578 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **97** |
+| | **Total** | | | | **139** |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 27 + 30 + 31 + 0 = 97. Measured 2026-09-11, 2026-09-29, 2026-09-30.
+W3C disagreements: 0 + 0 + 21 + 22 + 8 + 27 + 30 + 31 + 0 = 139. Measured 2026-09-11, 2026-09-29, 2026-09-30, 2026-10-01.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 2,514 tests.
+The unit-test suite is 2,526 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -60,7 +60,7 @@ They are not in the *Total*, which counts W3C disagreements only. Note that
 they are unrelated to the `docbook-001` case read below, which belongs to the
 W3C XSLT sets.
 
-Two suites reach 100% — XPath at all three versions, and RELAX NG.
+Three suites reach 100% — XPath 2.0, XPath 3.0 and RELAX NG.
 
 **The largest block is a single feature, not a long tail.** 7 of the 27
 XSLT 3.0 failures want an `XTSE3430` that only the unwritten remainder of the
@@ -132,18 +132,22 @@ normalisation, character-set handling, node identity and document order.
 
 **No known gaps.**
 
-## xpath — 0 failures
+## xpath — 21 failures
 
-All three XPath versions agree with the suite on every case in scope.
-**XPath: <!-- BEGIN GENERATED XPATH FIGURE -->15,217 / 19,362 / 21,898<!-- END GENERATED XPATH FIGURE -->, all at 100.00%.**
+XPath 2.0 and 3.0 agree with the suite on every case in scope. XPath 3.1
+fails 21 `fn:transform` cases, measured since `fn:transform` became callable
+from XPath; they are classified in tests/conformance/results.json and
+[known-gaps.md](known-gaps.md).
+**XPath: <!-- BEGIN GENERATED XPATH FIGURE -->15,217 / 19,362 / 22,033<!-- END GENERATED XPATH FIGURE -->, against in-scope totals of 15,217 / 19,362 / 22,054.**
 
 ## relaxng — 0 failures
 
 <!-- BEGIN GENERATED RELAX NG FIGURE -->965 of 965<!-- END GENERATED RELAX NG FIGURE --> assertions in James Clark's spectest. **No known gaps.**
 
-## xquery — 1 failure
+## xquery — 22 failures
 
-**XQuery 3.1: 30,345 / 30,346 = 100.00%.**
+**XQuery 3.1: 30,495 / 30,517 = 99.93%.** 21 are the XPath 3.1 `fn:transform`
+cases; the one below is the rest.
 
 What remains is one singleton, `prod-ContextItemDecl`. `app-Demos/RexParser`
 is closed: the two ExprSingle scanners now keep a nesting stack rather than

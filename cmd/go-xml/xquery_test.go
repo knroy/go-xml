@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -136,5 +137,98 @@ func TestXQueryRejectsSecondInput(t *testing.T) {
 	writeFile(t, q, `1`)
 	if err := runXQuery([]string{"-q", q, "a.xml", "b.xml"}); err == nil {
 		t.Error("two inputs were accepted; only one can be the context item")
+	}
+}
+
+// fn:load-xquery-module reads its module through the same confined resolver as
+// import module, from a query and from a stylesheet alike: a hint beside the
+// caller is read, one outside the roots is refused until -allow-dir names it.
+func TestLoadXQueryModuleIsConfinedToAllowDir(t *testing.T) {
+	dir := t.TempDir()
+	qdir := filepath.Join(dir, "q")
+	writeFile(t, filepath.Join(qdir, "near.xqm"),
+		`module namespace u = "urn:u"; declare function u:d($x) { $x * 2 };`)
+	writeFile(t, filepath.Join(dir, "far.xqm"),
+		`module namespace u = "urn:u"; declare function u:d($x) { $x * 3 };`)
+	call := func(hint string) string {
+		return `load-xquery-module("urn:u", map{"location-hints": "` + hint +
+			`"})("functions")(QName("urn:u", "d"))(1)(21)`
+	}
+
+	q := filepath.Join(qdir, "near.xq")
+	writeFile(t, q, call("near.xqm"))
+	if got, err := runQuery(t, dir, "-q", q); err != nil || !strings.Contains(got, "42") {
+		t.Errorf("query, module beside it: %q, %v; want 42", got, err)
+	}
+	q = filepath.Join(qdir, "far.xq")
+	writeFile(t, q, call("../far.xqm"))
+	if _, err := runQuery(t, dir, "-q", q); err == nil ||
+		!strings.Contains(err.Error(), "outside the permitted directories") {
+		t.Errorf("query, module outside the roots: err = %v, want a confinement refusal", err)
+	}
+	if got, err := runQuery(t, dir, "-q", q, "-allow-dir", dir); err != nil || !strings.Contains(got, "63") {
+		t.Errorf("query with -allow-dir: %q, %v; want 63", got, err)
+	}
+
+	bin := buildCLI(t)
+	sheet := func(hint string) string {
+		xsl := filepath.Join(qdir, "s.xsl")
+		writeFile(t, xsl, `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+  <xsl:template name="xsl:initial-template"><n><xsl:value-of select='`+call(hint)+`'/></n></xsl:template>
+</xsl:stylesheet>`)
+		return xsl
+	}
+	out, err := exec.Command(bin, "-xsl", sheet("near.xqm"),
+		"-initial-template", initialTemplate).CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "<n>42</n>") {
+		t.Errorf("stylesheet, module beside it: %v\n%s", err, out)
+	}
+	out, err = exec.Command(bin, "-xsl", sheet("../far.xqm"),
+		"-initial-template", initialTemplate).CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "FOQM0002") {
+		t.Errorf("stylesheet, module outside the roots was read: %v\n%s", err, out)
+	}
+}
+
+// fn:transform from a query reads its stylesheet and source through the
+// query's confined resolver, exactly as fn:doc does: beside the query with no
+// flag, and outside it only once -allow-dir names the directory.
+func TestXQueryFnTransformIsConfinedToAllowDir(t *testing.T) {
+	dir := t.TempDir()
+	qdir := filepath.Join(dir, "q")
+	sheet := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+  <xsl:template match="/"><got><xsl:value-of select="/r"/></got></xsl:template>
+</xsl:stylesheet>`
+	writeFile(t, filepath.Join(qdir, "s.xsl"), sheet)
+	writeFile(t, filepath.Join(qdir, "in.xml"), `<r>near</r>`)
+	writeFile(t, filepath.Join(dir, "far.xsl"), sheet)
+	writeFile(t, filepath.Join(dir, "far.xml"), `<r>far</r>`)
+	query := func(name, xsl, src string) string {
+		q := filepath.Join(qdir, name)
+		writeFile(t, q, `transform(map{'stylesheet-location': '`+xsl+
+			`', 'source-location': '`+src+`'})?output`)
+		return q
+	}
+
+	got, err := runQuery(t, dir, "-q", query("near.xq", "s.xsl", "in.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "<got>near</got>") {
+		t.Errorf("output = %q, want <got>near</got>", got)
+	}
+
+	for name, q := range map[string]string{
+		"stylesheet-location": query("xsl.xq", "../far.xsl", "in.xml"),
+		"source-location":     query("src.xq", "s.xsl", "../far.xml"),
+	} {
+		_, err := runQuery(t, dir, "-q", q)
+		if err == nil || !strings.Contains(err.Error(), "FOXT0002") ||
+			!strings.Contains(err.Error(), "outside the permitted directories") {
+			t.Errorf("%s outside the roots: err = %v, want a FOXT0002 confinement refusal", name, err)
+		}
+		if _, err := runQuery(t, dir, "-q", q, "-allow-dir", dir); err != nil {
+			t.Errorf("%s with -allow-dir: %v", name, err)
+		}
 	}
 }

@@ -44,6 +44,13 @@ type TransformOptions struct {
 	// xpath.OSEnvironment for the widest grant.
 	Environment xpath.EnvironmentResolver
 
+	// Modules locates the XQuery library modules fn:load-xquery-module
+	// loads. Nil reads nothing, which is the default, so the function
+	// raises FOQM0002 for every module. The function itself is present only
+	// when the program imports the xquery package (a blank import is
+	// enough); without it the call is FOQM0006. See xpath.ModuleResolver.
+	Modules xpath.ModuleResolver
+
 	// MaxDepth bounds template recursion. Zero means DefaultMaxDepth; a
 	// negative value means no limit.
 	//

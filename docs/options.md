@@ -521,6 +521,13 @@ reach the stack instead of the limit, which is a Go runtime fatal that
 from the runtime the stylesheet was entered with, and the refusal is
 `XPDY0001` wrapping `xdm.ErrResourceLimit`.
 
+The nested transform's XPath context starts at that depth too, not at zero, so
+the count survives a hop through another language: an XQuery query or
+`xpath.Eval` caller (which reaches `fn:transform` when the program links
+`xslt`) is charged from its own `Context.Depth` and bounded by its
+`Context.MaxDepth`, and a stylesheet that calls back into a query that
+transforms again keeps accumulating rather than restarting.
+
 ### DisableAssertions
 
 XSLT 3.0 §22.2 asks for it: "An implementation *should* provide an external
@@ -715,6 +722,16 @@ opts.Environment = environment{"REPORT_MODE": "summary"}  // xslt.TransformOptio
 `xpath.OSEnvironment{}` is the widest implementation, exposing every variable
 the process holds. It is never installed by default and has to be named; reach
 for it only where whatever runs is trusted with the process's own secrets.
+
+### fn:load-xquery-module
+
+`TransformOptions.Modules` in `xslt`, `Context.Modules` in `xpath`: an
+`xpath.ModuleResolver`, which any `xquery.ModuleResolver` (such as
+`xquery.MapModuleResolver`) satisfies. Nil reads nothing and every call is
+`FOQM0002`. A query sets it from its own `Options.Modules` and
+`Options.ModuleResolver` unless the caller already did. The function needs the
+program to import `xquery`; without it the call is `FOQM0006`. See
+[xquery.md](xquery.md#loading-a-module-at-run-time).
 
 ### xslt.FileResolver
 

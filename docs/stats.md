@@ -23,7 +23,7 @@ claim is only as good as the command behind it.
 
 | figure | count | counted by |
 |---|---:|---|
-| Unit tests | 2,514 | `grep -rn '^func Test' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
+| Unit tests | 2,526 | `grep -rn '^func Test' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
 | Fuzz targets | 12 | `grep -rn '^func Fuzz' --include='*_test.go' . \| grep -vc '/\.claude/worktrees/'` |
 | Limit boundary tests | 14 | `grep -hc '^func Test' ./*/limits_boundary_test.go \| awk '{n += $1} END {print n + 0}'` |
 
@@ -38,21 +38,21 @@ and `tests/docfigures.sh` cross-checks the same numbers against
 |---|---|---:|---:|---|---:|---:|---|---|
 | QT3 — XPath 2.0 | XPath 2.0 (Second Edition) | 15,217 | 15,217 | 100.00% | **0** |  | 2026-09-11 | `tests/check.sh (TestQT3, lane xpath-2.0)` |
 | QT3 — XPath 3.0 | XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |  | 2026-09-11 | `tests/check.sh (TestQT3, lane xpath-3.0)` |
-| QT3 — XPath 3.1 | XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |  | 2026-09-11 | `tests/check.sh (TestQT3, lane xpath-3.1)` |
-| QT3 — XQuery 3.1 | XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** |  | 2026-09-11 | `tests/check.sh (TestQT3XQuery)` |
+| QT3 — XPath 3.1 | XPath 3.1 | 22,054 | 22,033 | 99.90% | **21** |  | 2026-10-01 | `tests/check.sh (TestQT3, lane xpath-3.1)` |
+| QT3 — XQuery 3.1 | XQuery 3.1 | 30,517 | 30,495 | 99.93% | **22** |  | 2026-10-01 | `tests/check.sh (TestQT3XQuery)` |
 | W3C XSLT 2.0 | XSLT 2.0 (Second Edition) | 6,201 | 6,193 | 99.87% | **8** | 8,332 / 68 | 2026-09-11 | `tests/check.sh (TestXSLTSuite)` |
 | W3C XSLT 3.0 | XSLT 3.0 | 11,518 | 11,491 | 99.77% | **27** | 2,949 / 134 | 2026-09-30 | `tests/check.sh (TestXSLT30Suite)` |
 | W3C xsdtests 1.0 | XML Schema 1.0 (Second Edition) | 39,388 | 39,358 | 99.92% | **30** |  | 2026-09-11 | `tests/check.sh (XSD10)` |
 | W3C xsdtests 1.1 | XML Schema 1.1 | 41,598 | 41,567 | 99.93% | **31** |  | 2026-09-11 | `tests/check.sh (XSD11)` |
 | Clark spectest | RELAX NG 1.0 | 965 | 965 | 100.00% | **0** |  | 2026-09-11 | `tests/check.sh (RelaxNGSpectest)` |
-| **Total** | | | | | **97** | | | |
+| **Total** | | | | | **139** | | | |
 
 The skipped column is the XSLT lanes' exclusions split by class: cases the
 suite says a conforming processor may leave out, and cases excluded because a
 feature is not implemented or a dependency is not modelled. Neither is in the
 denominator; docs/testing.md explains the line between them.
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 27 + 30 + 31 + 0 = 97.
+W3C disagreements: 0 + 0 + 21 + 22 + 8 + 27 + 30 + 31 + 0 = 139.
 
 ## Real-world corpora
 

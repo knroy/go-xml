@@ -134,47 +134,25 @@ trades. None is counted as fixable — the earlier revision counted its marginal
 cases the less flattering way, and every one of those has since been fixed or
 settled.
 
-### 0 — `fn:load-xquery-module` (still out of scope, and now for one reason only)
+### 0 — `fn:load-xquery-module` (resolved: implemented)
 
-`fn-load-xquery-module-003`, `-004`, `fn-function-lookup-764`.
+The function is implemented (`xquery/loadmodule.go`), so the harness now
+declares the `fn-load-xquery-module` feature satisfied. The set's own cases
+are in scope and pass — 54 at XPath 3.1 and 62 at XQuery, with the
+schema-aware ones still out because they want a schema-validated input
+document — along with `fn-function-lookup-760`/`-763` and the three Walmsley
+cases that call it.
 
-These still do not count against anything: the set declares the feature
-`satisfied="true"` and then overrides fourteen cases to `satisfied="false"`, so
-the harness treats `fn-load-xquery-module` as an unsupported feature and the
-cases fall out of scope. That is what took XPath 3.1 to 100%.
+The contradiction this section used to describe resolves the way the
+dependency says: `-003` and `-004` (`FOQM0002`) are written for a processor
+that has the function, and `-901..914` plus `fn-function-lookup-761`/`-764`
+(`FOQM0006`) override the feature to `satisfied="false"` and are written for
+one that does not. With the feature satisfied the second group is out of
+scope, so both halves are answered by a processor that has the function.
 
-**The module store now exists.** `xquery` implements `import module` (§4.12) —
-a store, a resolver, transitive loading and the cycle rule — so the reason
-given here previously ("there is no module store for this function to load
-from") no longer holds. Measured after that work, the three cases are
-**unchanged: still out of scope, neither passing nor failing.** XPath 3.1 stayed
-at 21786/21786 then, and the XQuery mark rose from 29800 to 29901.
-
-Both figures have since moved for an unrelated reason: two stale feature
-labels, `namespace-axis` and `infoset-dtd`, were lifted from the same
-unsupported list, putting XPath 3.1 at 21863/21863 and XQuery at 29952/29964.
-`Axes123` (namespace-node identity across two axis walks) was the single XPath
-failure that lift exposed, and is now fixed — see `xdm.Node.Is`. The
-`fn-load-xquery-module` cases discussed here are unaffected — that label stays
-on the list, for the reason the rest of this section gives.
-
-What is left is not a missing engine but the suite's own contradiction, which
-was always the second half of the reason. `-003` and `-004` want **FOQM0002**
-("the module cannot be located") for `fn:load-xquery-module("http://nonexistent/module")`,
-while `-903` wants **FOQM0006** ("the implementation does not support
-load-xquery-module") for an expression of the same shape. A processor can
-satisfy one set or the other and not both, and F&O 3.1 defines FOQM0006
-precisely so that a processor without the function may say so — raising it is
-the conforming answer, and it is what the fourteen overridden cases assert.
-
-Bridging the function to the new module store would therefore trade three
-out-of-scope cases for a different three, and would additionally require
-deciding what a *dynamically* named module URI may fetch. That is the same
-question `Options.ModuleResolver` answers statically by fetching nothing
-without a resolver, and a function that resolved a URI computed at run time
-would need its own answer to it. **To fix: not the engine, and not the store —
-a policy for run-time module URIs, plus a choice about which half of the suite
-to satisfy.**
+The policy question for run-time module URIs is answered by not giving the
+function any reach of its own: it reads through the resolver `import module`
+uses, nil by default. See [xquery.md](xquery.md#loading-a-module-at-run-time).
 
 ### 3 — the suite contradicts itself
 
@@ -461,7 +439,7 @@ execution proper would buy almost none of it. See
 [conformance-gaps.md](conformance-gaps.md) for the breakdown.
 
 **EXSLT is not on this list.** It is a separate product. XQuery was, and is
-now implemented in [`xquery`](../xquery/) at 30,345 of 30,346; what remains of
+now implemented in [`xquery`](../xquery/) at 30,495 of 30,517; what remains of
 it there is tracked in [xquery.md](xquery.md) rather than here, because this
 file is about the XPath and XSLT figures.
 

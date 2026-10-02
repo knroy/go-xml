@@ -663,6 +663,12 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// recursion depth above follows. The counters travel with their held flags;
 	// see xpath.Context.AdoptBudget.
 	xctx = xctx.AdoptBudget(opts.nestedBudget)
+	// The expression depth continues the count too. rt.depth alone bounds a
+	// stylesheet that calls fn:transform on itself, but not one that leaves
+	// XSLT on the way round -- fn:load-xquery-module into a query that calls
+	// fn:transform again -- since the query sees only its Context, and a
+	// Context starting at zero here restarted the count at every hop.
+	xctx.Depth = opts.nestedDepth
 	// A duplicate key in an XPath map constructor is XTDE3365 under XSLT, not
 	// XQuery's XQDY0137: section 17.4 gives the MapExpr its own code, the same
 	// one xsl:map raises for a duplicate among the maps it merges. The two
@@ -699,6 +705,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	xctx.Collections = opts.Collections
 	xctx.Texts = opts.Texts
 	xctx.Environment = opts.Environment
+	xctx.Modules = opts.Modules
 	// fn:json-to-xml with validate=true needs the schema layer to type the
 	// tree it builds, and reaches it through this hook rather than by
 	// importing xsd from xpath, which the dependency direction forbids. It is

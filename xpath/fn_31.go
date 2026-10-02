@@ -34,30 +34,35 @@ func register31Funcs(l *Library) {
 // The function runs a transformation described by an options map and returns
 // its results as a map. Doing that needs an XSLT processor, and this package
 // does not depend on xslt — the layering is one-directional and stays that
-// way. So what is registered here is a stub that declines, which is the
-// honest answer for a caller evaluating a bare XPath expression: there is no
-// transformation to run.
+// way. So what is registered here is a stub: it checks the argument and hands
+// it to the processor registered through RegisterTransformProcessor (see
+// processors.go), which importing xslt installs. An XQuery query or a plain
+// xpath.Eval caller in such a program gets a working fn:transform, confined
+// to the resolvers on its Context.
 //
-// xslt/fntransform.go overrides it for the duration of a transform, the same
-// way key() and current() are bound per transform. A stylesheet therefore has
-// fn:transform and a plain xpath.Eval caller does not, which is the
-// separation every other XSLT-only function here already draws.
+// Inside a stylesheet xslt/fntransform.go overrides the stub for the duration
+// of the transform, the same way key() and current() are bound per
+// transform, so the nested transformation inherits the outer one's state.
 //
-// FOXT0004 is the code the specification gives for a processor that cannot
-// run the transformation: "the implementation does not support the
-// transformation". The two cases in scope assert it, both declaring the
-// fn-transform-XSLT feature unsatisfied.
+// A program that does not link xslt has no processor, and the stub declines
+// with FOXT0004, the code the specification gives for a processor that
+// cannot run the transformation: "the implementation does not support the
+// transformation".
 func registerTransform(l *Library) {
-	l.registerFnSince(XPath31, "transform", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFnSince(XPath31, "transform", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// The argument is still checked: a call passing something that is not
 		// a map is wrong whatever the implementation supports.
 		it, err := args[0].Single()
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := it.(*xdm.MapItem); !ok {
+		opts, ok := it.(*xdm.MapItem)
+		if !ok {
 			return nil, xdm.ErrType(
 				"fn:transform: the options must be a map, got %s", it.TypeName())
+		}
+		if transformProcessor != nil {
+			return transformProcessor(ctx, opts)
 		}
 		return nil, xdm.Errorf("FOXT0004",
 			"fn:transform: this implementation does not support the requested transformation")
@@ -91,33 +96,51 @@ func registerDefaultLanguage(l *Library) {
 // registerLoadXQueryModule adds fn:load-xquery-module, F&O 3.1 section 14.6.1.
 //
 // The function compiles an XQuery library module and hands back its variables
-// and functions. This engine implements XPath and XSLT and has no XQuery
-// processor, which the specification anticipates: FOQM0006 is defined as
-// "the implementation does not support the load-xquery-module function", and
-// raising it is the conforming answer rather than a gap.
+// and functions. This package has no XQuery processor of its own and cannot
+// import one (xquery imports xpath), so the work is done by the loader the
+// xquery package registers when it is initialised; see processors.go. A
+// program that imports xquery -- a blank import is enough, and the go-xml
+// command does -- has the function in XPath, XQuery and XSLT alike, reading
+// modules only through Context.Modules.
 //
-// Every code this can raise describes the missing processor, so it reports
-// that and nothing else. The suite's apparent contradictions all dissolve once
-// the feature dependency is read: the set declares
-// fn-load-xquery-module satisfied="true" and overrides fourteen cases to
-// satisfied="false", and only those fourteen describe a processor without one.
-//
-// So -001/-002 want FOQM0001 for an empty URI and -003/-004 want FOQM0002 for
-// a module that cannot be located, but all four are written for an
-// implementation that has a processor and are out of scope here. The cases
-// that do apply — -901, -902, -903 and function-lookup-764 — accept FOQM0006
-// throughout, and -901/-902 accept either that or FOQM0001. Reporting the
-// absent processor uniformly satisfies all of them, and it is the only claim
-// this function can make truthfully: it never looked for the module, so it
-// cannot say the module was not found.
+// A program that does not import xquery has no processor, and FOQM0006 is
+// the code the specification defines for exactly that: "No XQuery processor
+// is available". The suite's cases written for such a processor -- 901..914
+// and function-lookup-761/764, which override the set's feature to
+// satisfied="false" -- accept FOQM0006 throughout.
 func registerLoadXQueryModule(l *Library) {
-	l.registerFnSince(XPath31, "load-xquery-module", []int{1, 2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		// Not even the empty-URI check runs first. Rejecting the argument
-		// would claim the call got far enough to inspect it, and
+	l.registerFnSince(XPath31, "load-xquery-module", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		if xqueryModuleLoader != nil {
+			it, err := args[0].Single()
+			if err != nil {
+				return nil, err
+			}
+			var opts *xdm.MapItem
+			if len(args) == 2 {
+				o, err := args[1].Single()
+				if err != nil {
+					return nil, err
+				}
+				m, ok := o.(*xdm.MapItem)
+				if !ok {
+					return nil, xdm.ErrType(
+						"fn:load-xquery-module: the options must be a map, got %s", o.TypeName())
+				}
+				opts = m
+			}
+			uri, ok := it.(*xdm.Atomic)
+			if !ok || (uri.Type != xdm.TypeString && uri.Type != xdm.TypeAnyURI &&
+				uri.Type != xdm.TypeUntypedAtomic) {
+				return nil, xdm.ErrType(
+					"fn:load-xquery-module: the module URI must be a string, got %s", it.TypeName())
+			}
+			return xqueryModuleLoader(ctx, uri.String(), opts)
+		}
+		// With no processor not even the arguments are checked: rejecting
+		// one would claim the call got far enough to inspect it, and
 		// function-lookup-761 passes an integer where a string is declared
-		// and still wants FOQM0006 — the absent processor outranks the
-		// argument. -901 and -902 accept FOQM0001 here as well, so nothing
-		// is lost by reporting the one true thing.
+		// and still wants FOQM0006 -- the absent processor outranks the
+		// argument.
 		return nil, xdm.Errorf("FOQM0006",
 			"fn:load-xquery-module: this implementation has no XQuery processor")
 	})

@@ -25,16 +25,16 @@ import (
 //
 // The security surface is the transform's, flag for flag: the same resolver,
 // rooted at the query's own directory plus -allow-dir, answers import module,
-// fn:doc and (when asked) fn:unparsed-text, and the context document is
-// parsed under the same DOCTYPE and external-entity gates.
+// fn:load-xquery-module, fn:doc and (when asked) fn:unparsed-text, and the
+// context document is parsed under the same DOCTYPE and external-entity gates.
 func runXQuery(args []string) error {
 	fs := flag.NewFlagSet("go-xml xquery", flag.ContinueOnError)
 	var (
 		queryPath = fs.String("q", "", "query to run (required)")
 		outPath   = fs.String("o", "", "write output to this file instead of stdout")
 		allowDirs = fs.String("allow-dir", "",
-			"comma-separated roots that import module, fn:doc and "+
-				"fn:unparsed-text may read, each covering its subdirectories to "+
+			"comma-separated roots that import module, fn:load-xquery-module, "+
+				"fn:doc and fn:unparsed-text may read, each covering its subdirectories to "+
 				"any depth. The query's own directory is always one of them, "+
 				"flag or no flag; empty adds nothing further")
 		allowDoctype = fs.Bool("allow-doctype", false,

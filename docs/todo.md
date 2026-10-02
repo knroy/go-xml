@@ -17,13 +17,13 @@ Current position:
 |---|---|
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
 | XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
-| XPath 3.1 | 100.00% — 21,898 of 21,898 in scope (0 failing) |
-| XQuery 3.1 | 100.00% — 30,345 of 30,346 in scope (1 failing) |
+| XPath 3.1 | 99.90% — 22,033 of 22,054 in scope (21 failing) |
+| XQuery 3.1 | 99.93% — 30,495 of 30,517 in scope (22 failing) |
 | XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
 | XSLT 3.0 | 99.77% — 11,491 of 11,518 in scope (27 failing); 7 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,514 `func Test` declarations, clean under `-race` |
+| Tests | 2,526 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -703,6 +703,13 @@ instead of restarting. Refusal is `XPDY0001` wrapping `xdm.ErrResourceLimit`,
 matching `xpath.Context.Descend`. See `xslt/nestedtransform_test.go`, whose
 sabotage showed both halves are independently load-bearing: removing either the
 charge or the inheritance brings the fatal back.
+
+The guarantee extends to `fn:transform` called from XQuery or `xpath.Eval`
+(the processor `xslt` registers with `xpath`): that path charges from
+`ctx.Depth` under `ctx.MaxDepth`, and the nested runtime's XPath context now
+starts at the inherited depth, so a cycle through another host language
+accumulates too. `TestTransformRecursionThroughAnotherHostIsBounded`; removing
+the seed fails it.
 
 ### 2.2 A function item does not inherit the byte budget
 

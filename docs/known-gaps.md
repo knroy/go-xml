@@ -53,12 +53,13 @@ by `tests/check.sh`. They are deliberately not repeated here: this file explains
 *why* the hard gaps are hard, and a percentage copied into two places drifts in one
 of them.
 
-For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
-3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 1 of 30,346; XSLT 3.0 has 27 of 11,518;
+For orientation only, and re-derived rather than inherited: XPath 2.0 and 3.0
+and RELAX NG are at **100%** with no failures at all; XPath 3.1 has 21 failures
+of 22,054, all `fn:transform`; XSLT 2.0 has 8 failures of 6,201; XQuery 3.1 has
+22 of 30,517, 21 of them the same `fn:transform` cases; XSLT 3.0 has 27 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,598. Everything below
-is an account of those 97 cases, or of a decision that produced some of them.
-The 97 is the sum of the nine figures above, computed from
+is an account of those 139 cases, or of a decision that produced some of them.
+The 139 is the sum of the nine figures above, computed from
 [tests/conformance/results.json](../tests/conformance/results.json) rather than
 written: `tests/docfigures.sh` re-derives it from `tests/ratchet.txt` and fails
 if this file and the generated table disagree.
@@ -261,7 +262,8 @@ None is a wrong verdict.
 
 ### XQuery schema awareness: a tail of features `import schema` made reachable (XQuery 3.1)
 
-**1 failure of 30,346, and not a regression.** This entry exists
+**1 failure of 30,346 when written, and not a regression** (the 21 `fn:transform`
+cases measured since are a different matter; see the `fn:transform` entry). This entry exists
 because the number is easy to misread. `import schema` was implemented, and
 implementing it brought **416 previously-skipped cases into scope**, of which
 339 now pass. The in-scope count went 29,930 → 30,346 and the passing count
@@ -487,10 +489,25 @@ and have no effect:
   stylesheet (`FOXT0002`); beside a `stylesheet-*` option they are ignored.
 
 Refusing them would be the post-process lesson applied, but it is a separate
-decision: the QT3 cases that use them (`serialization-params` in 13,
-`requested-properties` in 11, `xslt-version` in 8) are all skipped, since the
-driver does not claim `fn-transform-XSLT`, so no suite measures either
-answer. Option names F&O does **not** define are
+decision. The QT3 driver now claims `fn-transform-XSLT` and
+`fn-transform-XSLT30` (the `xslt` package registers a processor for XQuery
+and `xpath.Eval` callers), so `fn/transform.xml` is measured: 119 cases in
+scope at XPath 3.1 and 121 at XQuery, 21 failing in each. Seventeen of the
+21 are these options: `serialization-params` (29, 30, 32, 36, 65, 66, 67,
+80), `requested-properties` (69, 71, 73, 75, 77), `xslt-version` (61, 82e,
+err-4), `global-context-item` (82c). The rest:
+
+- `err-1`: no entry point gives `XTDE0044`; F&O's invocation rule defaults
+  to call-template `xsl:initial-template`, which would be `XTDE0040`.
+  `TestFnTransformNamesTheNestedStylesheet` pins the current code.
+- `err-16`: `initial-function` without `function-params` calls the nullary
+  function (`XTDE0041`); F&O 3.1's table requires both (`FOXT0002`).
+- `err-18`: `stylesheet-params` keyed by strings is accepted; the declared
+  type is `map(xs:QName, item()*)` and the case wants `FOXT0002`.
+- `43`: a principal result that is empty while secondaries were written is
+  still delivered, serialized as an empty string, which the case parses.
+
+Option names F&O does **not** define are
 ignored, as F&O 3.1's option parameter conventions require: "It is not an
 error if the options map contains options with names other than those
 described in this specification." `source-location` (Saxon since 9.8, F&O
@@ -1816,8 +1833,8 @@ verdict is only as good as the last time someone re-derived it.**
 ### "The fixable column is empty on every suite" was scoped to one audit
 
 That sentence was true of the population the audit covered — the XSD and XPath
-disagreements standing at the time — and is still true of those: XPath is 100%
-at all three versions, and the XSD remainder is argued case by case above. It
+disagreements standing at the time — and is still true of those: XPath 2.0 and 3.0 are at 100%, 3.1 fails only
+`fn:transform` cases, and the XSD remainder is argued case by case above. It
 was never true of the suites as a whole. **XSLT 3.0 carries 126 failures of
 which 45 are one missing analysis, and XQuery 3.1 carries 42, and both are
 eminently fixable.** A sentence scoped to one audit and left standing after the

@@ -21,6 +21,7 @@ import (
 	"github.com/knroy/go-xml/xpath"
 	"github.com/knroy/go-xml/xquery"
 	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/xslt"
 )
 
 // SuiteClock is the fixed value fn:current-dateTime returns during a run.
@@ -252,6 +253,15 @@ func unsupportedSpec(deps []Dependency, target TargetVersion) string {
 			// re-measured, not a record of what was once true. Lifting one is
 			// verified by the IN-SCOPE count moving, not the passing count.
 			switch d.Value {
+			// fn:transform has an XSLT 3.0 processor: this package links
+			// xslt, whose init registers one for a caller with no stylesheet
+			// of its own. So the features are claimed, and the cases written
+			// for a processor WITHOUT one -- satisfied="false", 901 and 902,
+			// which assert FOXT0004 -- are the out-of-scope ones.
+			case "fn-transform-XSLT", "fn-transform-XSLT30":
+				if d.Satisfied == "false" {
+					return "needs no feature " + d.Value
+				}
 			// schemaImport is NOT on this list. "import schema" is
 			// implemented (xquery/schemaimport.go): a schema registered by
 			// the environment reaches the static context, so a type name it
@@ -266,30 +276,21 @@ func unsupportedSpec(deps []Dependency, target TargetVersion) string {
 			// reason.
 			case "schemaValidation", "typedData",
 				"staticTyping", "moduleImport",
-				"xpath-1.0-compatibility",
-				"fn-transform-XSLT", "fn-transform-XSLT30", "fn-format-integer-CLDR",
-				// fn:load-xquery-module compiles an XQuery library module,
-				// which needs an XQuery processor this engine does not have.
-				// The set declares the feature satisfied="true" and then
-				// overrides fourteen cases -- 901..914 -- to
-				// satisfied="false": those fourteen are the ones written for
-				// a processor without it, and they are in scope. The rest
-				// describe what a processor that has one would do, and are
-				// out of scope for the same reason the XQuery specs above
-				// are.
-				//
-				// The fourteen were long claimed here to pass, which was a
-				// claim about cases that never ran: the merge was additive,
-				// so the set's satisfied="true" copy survived alongside the
-				// case's "false" one and this test skipped on the former.
-				// They run now -- see mergeDeps -- and they do pass, which is
-				// what the +14 in the XQuery figure is.
-				"fn-load-xquery-module",
+				"xpath-1.0-compatibility", "fn-format-integer-CLDR",
 				"non_empty_sequence_collection", "collection-stability",
 				"directory-as-collection-uri", "simple-uca-fallback",
 				"advanced-uca-fallback", "remote_http":
 				if d.Satisfied != "false" {
 					return "needs feature " + d.Value
+				}
+			// fn:load-xquery-module is implemented (xquery/loadmodule.go), so
+			// the polarity is the reverse: the fourteen cases -- 901..914 --
+			// that override the set to satisfied="false" are the ones written
+			// for a processor WITHOUT it, asserting FOQM0006, and they are out
+			// of scope now. They used to be the only ones that ran.
+			case "fn-load-xquery-module":
+				if d.Satisfied == "false" {
+					return "written for a processor without " + d.Value
 				}
 			}
 		case "xsd-version":
@@ -526,7 +527,10 @@ func (r *Runner) loadDocURI(file, uri string) (*xdm.Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	base := filepath.Join(r.Root, file)
+	// An absolute URI, not a path: a base URI is resolved against, and a
+	// path is not an absolute URI -- xsl:result-document in a stylesheet read
+	// this way raised FORG0002 (fn-transform-39).
+	base := fileuri.Of(filepath.Join(r.Root, file))
 	if uri != "" {
 		base = uri
 	}
@@ -946,7 +950,20 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 			res.seq, res.err = q.Eval(ctx)
 		}
 	} else {
-		res.seq, res.err = xpath.Eval(tc.Test.Query, ctx, ns)
+		// fn:load-xquery-module finds a case's <module> elements the way an
+		// XQuery case's "import module" does: from memory, never from a
+		// location. An XQuery case gets them through Options.Modules above.
+		var mods []xquery.Module
+		if mods, res.err = r.caseModules(ts, tc); len(mods) > 0 {
+			table := map[string]string{}
+			for _, m := range mods {
+				table[m.Namespace] = m.Source
+			}
+			ctx.Modules = xquery.MapModuleResolver{Modules: table}
+		}
+		if res.err == nil {
+			res.seq, res.err = xpath.Eval(tc.Test.Query, ctx, ns)
+		}
 	}
 
 	want, err := ParseAssert(tc.Result.Raw)
@@ -2204,7 +2221,7 @@ func envDocs(r *Runner, dir string, env Environment) *envDocResolver {
 		// uri made "doc-available(document-uri(/))" false for every source
 		// that had none: document-uri answered with the path the parser was
 		// given, and the resolver had never heard of it.
-		byURI[filepath.Join(r.Root, src.File)] = src.File
+		byURI[fileuri.Of(filepath.Join(r.Root, src.File))] = src.File
 	}
 	// A collection's members are documents too, and collection-009 walks from
 	// fn:collection through document-uri() back through fn:doc expecting to
@@ -2217,13 +2234,35 @@ func envDocs(r *Runner, dir string, env Environment) *envDocResolver {
 			if src.URI != "" {
 				byURI[src.URI] = src.File
 			}
-			byURI[filepath.Join(r.Root, src.File)] = src.File
+			byURI[fileuri.Of(filepath.Join(r.Root, src.File))] = src.File
 		}
 	}
 	// The resolver is returned even with nothing declared, because it can
 	// still find a document by its path under the test-set directory; see
 	// ResolveDocument.
 	return &envDocResolver{r: r, byURI: byURI, dir: dir}
+}
+
+// ResolveModule lets fn:transform's nested stylesheets -- and the modules
+// they xsl:include -- load through this resolver, which is the one the
+// engine's sandbox routes them through. A stylesheet the environment names by
+// URI is found as fn:doc finds it; anything else is a file under the suite
+// root, read by the engine's own confined FileResolver.
+func (d *envDocResolver) ResolveModule(href, base string) (*xdm.Node, string, error) {
+	// A relative href with no base has nothing to resolve against, which
+	// XSLT reports as XTSE0165 (fn-transform-err-9). ResolveDocument's
+	// test-set-directory fallback is for fn:doc, not for this.
+	if base == "" && !strings.Contains(href, ":") {
+		return nil, "", fmt.Errorf("relative module href %q with no base URI", href)
+	}
+	if t, err := d.ResolveDocument(href, base); err == nil {
+		return t.Root, t.Root.BaseURI, nil
+	}
+	files, err := xslt.NewFileResolver(d.r.Root)
+	if err != nil {
+		return nil, "", err
+	}
+	return files.ResolveModule(href, base)
 }
 
 func (d *envDocResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {

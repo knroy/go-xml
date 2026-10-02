@@ -2,8 +2,8 @@ DocBook 578
 RelaxNGSpectest 965
 TestQT3XPath20 15217
 TestQT3XPath30 19362
-TestQT3XPath31 21898
-TestQT3XQuery 30345
+TestQT3XPath31 22033
+TestQT3XQuery 30495
 TestXSLT30Suite 11491
 TestXSLTSuite 6193
 VendoredSchemas 185

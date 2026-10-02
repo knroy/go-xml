@@ -287,8 +287,8 @@ func TestShippedResults(t *testing.T) {
 	want := map[string]int{
 		"xpath-2.0":  0,
 		"xpath-3.0":  0,
-		"xpath-3.1":  0,
-		"xquery-3.1": 1,
+		"xpath-3.1":  21,
+		"xquery-3.1": 22,
 		"xslt-2.0":   8,
 		"xslt-3.0":   27,
 		"xsd-1.0":    30,
@@ -307,8 +307,8 @@ func TestShippedResults(t *testing.T) {
 	if len(got) != len(want) {
 		t.Errorf("results.json has %d suites, want %d", len(got), len(want))
 	}
-	if total := r.Total(); total != 97 {
-		t.Errorf("Total() = %d, want 97", total)
+	if total := r.Total(); total != 139 {
+		t.Errorf("Total() = %d, want 139", total)
 	}
 }
 
