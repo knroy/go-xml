@@ -53,13 +53,12 @@ by `tests/check.sh`. They are deliberately not repeated here: this file explains
 *why* the hard gaps are hard, and a percentage copied into two places drifts in one
 of them.
 
-For orientation only, and re-derived rather than inherited: XPath 2.0 and 3.0
-and RELAX NG are at **100%** with no failures at all; XPath 3.1 has 21 failures
-of 22,054, all `fn:transform`; XSLT 2.0 has 8 failures of 6,201; XQuery 3.1 has
-22 of 30,517, 21 of them the same `fn:transform` cases; XSLT 3.0 has 27 of 11,518;
+For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
+3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
+failures of 6,201; XQuery 3.1 has 1 of 30,517; XSLT 3.0 has 23 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,598. Everything below
-is an account of those 139 cases, or of a decision that produced some of them.
-The 139 is the sum of the nine figures above, computed from
+is an account of those 93 cases, or of a decision that produced some of them.
+The 93 is the sum of the nine figures above, computed from
 [tests/conformance/results.json](../tests/conformance/results.json) rather than
 written: `tests/docfigures.sh` re-derives it from `tests/ratchet.txt` and fails
 if this file and the generated table disagree.
@@ -85,10 +84,8 @@ project — down from 14 since the §19.8.5 streaming-parameter table was
 corrected. `varPosture` read *grounded* where §19.8.5.2 and §19.8.5.3 say
 *striding*, so a function whose body returned its streaming parameter — a node,
 which in a streamed tree is never grounded — cleared the "must be grounded"
-rule its own category imposes. Four cases moved; `su-ascent-903` moved the
-other way and is now adjudicated individually, since §19.8.5.7 makes an ascent
-function's streaming parameter *climbing* and the ascent category permits a
-climbing body. The posture-and-sweep lattice exists, and so now do the rules built on
+rule its own category imposes. Four cases moved. (`su-ascent-903`, adjudicated
+here afterwards as a suite defect, now passes: see conformance-gaps.md.) The posture-and-sweep lattice exists, and so now do the rules built on
 it: the §19.8.4 instruction rules, §19.8.5 streamable stylesheet functions,
 §18.2.8 accumulators, the §19.8.8 expression rules, the §19.8.9 function
 classifications, §19.6's context posture for both
@@ -241,9 +238,9 @@ None is a wrong verdict.
 
 - `builtinOperandUsages` lists `"concat": {3}` only, so `fn:concat` at any
   other arity is unmodelled.
-- `*xpath.LookupExpr` (`?`) is handled by neither `expr()` nor the
-  inline-function walker `bodyMentionsStreamingParam`, and the walker also
-  lacks `*xpath.StringConcat` and `*xpath.ArgumentPlaceholder`. The
+- `*xpath.LookupExpr` (`?`) is modelled in `expr()` (§19.8.8.18), but the
+  inline-function walker `bodyMentionsStreamingParam` still lacks it, along
+  with `*xpath.StringConcat` and `*xpath.ArgumentPlaceholder`. The
   dispatcher half of `||` is measured and reverted; see
   [*The `||` operator*](conformance-gaps.md#the--operator--2-cases-gained-18-lost).
 - `functionParamTypes` splits a declared function type by hand: the comma in
@@ -262,7 +259,7 @@ None is a wrong verdict.
 
 ### XQuery schema awareness: a tail of features `import schema` made reachable (XQuery 3.1)
 
-**1 failure of 30,346 when written, and not a regression** (the 21 `fn:transform`
+**1 failure of 30,346 when written, and not a regression** (the `fn:transform`
 cases measured since are a different matter; see the `fn:transform` entry). This entry exists
 because the number is easy to misread. `import schema` was implemented, and
 implementing it brought **416 previously-skipped cases into scope**, of which
@@ -476,13 +473,14 @@ direction that matters, and it has not been diagnosed.
 `fn:transform` reads `stylesheet-*`, `package-name`/`package-version`,
 `source-node`, `source-location`, `initial-*`, `function-params`,
 `stylesheet-params`, `template-params`, `tunnel-params`, `base-output-uri`,
-`delivery-format` and `post-process`. These F&O-defined options are accepted
+`delivery-format`, `serialization-params` (principal result only, as F&O
+states), `requested-properties`, `xslt-version`, `global-context-item` and
+`post-process`. A requested property is
+met only when it equals what `fn:system-property` reports (`xsl:version` is
+ignored); an unmet one is `FOXT0001`. These F&O-defined options are accepted
 and have no effect:
 
-- `global-context-item`: the global context item comes only from
-  `source-node` or `source-location`.
-- `serialization-params`, `requested-properties`, `xslt-version`,
-  `enable-messages`, `vendor-options`, `cache`.
+- `enable-messages`, `vendor-options`, `cache`.
 - `enable-assertions`: the nested transform inherits the caller's
   `DisableAssertions`, so assertions run by default where F&O defaults to off.
 - `package-location`, `package-node`, `package-text`: alone they identify no
@@ -492,20 +490,25 @@ Refusing them would be the post-process lesson applied, but it is a separate
 decision. The QT3 driver now claims `fn-transform-XSLT` and
 `fn-transform-XSLT30` (the `xslt` package registers a processor for XQuery
 and `xpath.Eval` callers), so `fn/transform.xml` is measured: 119 cases in
-scope at XPath 3.1 and 121 at XQuery, 21 failing in each. Seventeen of the
-21 are these options: `serialization-params` (29, 30, 32, 36, 65, 66, 67,
-80), `requested-properties` (69, 71, 73, 75, 77), `xslt-version` (61, 82e,
-err-4), `global-context-item` (82c). The rest:
+scope at XPath 3.1 and 121 at XQuery, all passing. The four parameter options
+(`stylesheet-params`, `static-params`, `template-params`, `tunnel-params`) are
+typed `map(xs:QName, item()*)`, so a string key is `FOXT0002`, as
+`fn-transform-err-18` and Saxon have it.
 
-- `err-1`: no entry point gives `XTDE0044`; F&O's invocation rule defaults
-  to call-template `xsl:initial-template`, which would be `XTDE0040`.
-  `TestFnTransformNamesTheNestedStylesheet` pins the current code.
-- `err-16`: `initial-function` without `function-params` calls the nullary
-  function (`XTDE0041`); F&O 3.1's table requires both (`FOXT0002`).
-- `err-18`: `stylesheet-params` keyed by strings is accepted; the declared
-  type is `map(xs:QName, item()*)` and the case wants `FOXT0002`.
-- `43`: a principal result that is empty while secondaries were written is
-  still delivered, serialized as an empty string, which the case parses.
+`xslt-version` selects the processor: up to 2.0 (1.0 included, 2.0 being the
+nearest later version) the XSLT 2.0 one, `CompileOptions.MaxVersion` 2.0,
+which ignores every option outside F&O's 2.0 list and reports
+`xsl:version` 2.0; up to 3.0 the 3.0 one; later, `FOXT0001`. A non-decimal
+value is `XPTY0004`. An absent `xslt-version` runs the 3.0 processor. F&O
+takes the request from the stylesheet's own `version` and uses "a processor
+that implements the requested XSLT version"; XSLT 3.0 §3.9.2 makes a 3.0
+processor exactly that for 2.0 ("no differences are defined for XSLT 2.0
+behavior"), and Saxon, which has only a 3.0 processor, reads it the same way.
+Choosing 2.0 instead would silently drop 3.0 options such as
+`global-context-item` for every `version="2.0"` stylesheet; a caller who wants
+2.0 rules asks with `xslt-version: 2.0`. No QT3 case exercises the default. One
+limit remains: `global-context-item` must be a node -- `Transform` takes the
+global item as its source -- so an atomic or function item is `FOXT0001`.
 
 Option names F&O does **not** define are
 ignored, as F&O 3.1's option parameter conventions require: "It is not an
@@ -689,6 +692,39 @@ wrong language's rules. The version now reaches the tokeniser, and [2] `Char`,
 is in the external-entity and DTD layers, and is described in
 [todo.md](todo.md#11-xml-11-documents--character-rules-done-dtd-side-rules-outstanding).
 
+### The tokeniser keeps six leniencies
+
+`internal/xmltok` still carries these `parity:` behaviours from the
+`encoding/xml` fork it replaced; the others were corrected against the W3C XML
+Conformance Test Suite (see [testing.md](testing.md#tokeniser-differential)).
+
+* Comment and PI bodies are not newline-normalised, though §2.11 applies to the
+  whole entity: `\r\n` in a comment reaches the tree, and so a C14N digest,
+  as written. Changing it changes output, so it waits on its own c14n check.
+* Attribute values leave the tokeniser raw; `xdm` applies §3.3.3 after it, so a
+  literal tab or newline in a value reaches the tree as a space.
+* A PI with target `xml` is taken as the XML declaration wherever it appears,
+  and the declaration's pseudo-attributes are found by substring search;
+  `xdm` validates the declaration's syntax and placement itself.
+* Entity replacement text is substituted without newline normalisation.
+* The DOCTYPE is returned raw, and a comment inside it is not checked for `--`.
+* A character error is reported against the line where the run ended.
+
+### An undeclared entity after a parameter-entity reference is still an error (xmlconf `rmt-e3e-13`)
+
+XML 1.0 §4.1 makes an undeclared general entity a well-formedness error only in
+a document with no parameter-entity references (or `standalone="yes"`);
+otherwise it is a validity error, and a non-validating processor parses on.
+`xdm` reports `&ent2;` as undeclared whatever the subset holds, and the error is
+raised by the tokeniser's entity lookup, not in the DTD code. Accepting it would
+mean choosing what an unresolvable reference becomes in the tree (`xmllint
+--noent` prints "Entity 'ent2' not defined" and keeps an empty reference node), so it stays until a
+caller needs the other answer.
+
+Related: internal parameter entities are expanded only when
+`ParseOptions.ExternalEntities` is set, so with `AllowDOCTYPE` alone xmlconf
+`v-pe02` (Appendix D's `%xx;` example) still reports `&tricky;` undeclared.
+
 ---
 
 ## Deliberate divergences
@@ -697,32 +733,6 @@ Not gaps. Each is a behaviour that disagrees with a test, or with a reading
 someone will propose, on purpose — and each carries the spec clause it rests on
 and the **measured** cost of changing it. The number is the point of the entry:
 without it, the trade gets re-attempted.
-
-### A duplicate attribute is accepted, as `encoding/xml` accepts it
-
-XML 1.0 §3.1 makes `<r b="safe" b="evil"/>` fatally malformed, and Namespaces
-in XML §6.3 says the same of two prefixes bound to one namespace producing the
-same expanded name. This parser accepts both. Each attribute survives in
-`el.Attrs`; `Attr()` returns the first, and `xsl:copy-of` re-serialises both.
-
-The divergence is inherited rather than chosen: Go's `encoding/xml` accepts the
-same document — `xml.Token()` returns no error, verified — and this package
-reads tokens from it. The check **was** implemented and reverted: it rejected
-this library's own serialiser output for an element that undeclares the default
-namespace, which is a worse failure than the one it prevented
-(`xdm/parse.go:286-293`).
-
-Two things bound the consequence. XSD validation checks *both* attributes, so
-nothing passes the schema path silently — `<r b="1" b="notanint"/>` fails
-`cvc-attribute.3`. And nothing here smuggles markup: both values are parsed
-attribute values, not text.
-
-What remains is a parser differential, and it is recorded here because
-`SECURITY.md` tells a reader that "a document accepted that the schema forbids"
-is in scope. A pipeline that authorises on `Attr()` while something downstream
-reads `Attrs[1]`, or re-parses the round-tripped output with a stricter parser,
-will not agree with itself about what the document said. If that shape is in
-your design, reject duplicates before this parser sees them.
 
 ### DOCTYPE is refused by default
 
@@ -1833,8 +1843,8 @@ verdict is only as good as the last time someone re-derived it.**
 ### "The fixable column is empty on every suite" was scoped to one audit
 
 That sentence was true of the population the audit covered — the XSD and XPath
-disagreements standing at the time — and is still true of those: XPath 2.0 and 3.0 are at 100%, 3.1 fails only
-`fn:transform` cases, and the XSD remainder is argued case by case above. It
+disagreements standing at the time — and is still true of those: XPath is 100%
+at all three versions, and the XSD remainder is argued case by case above. It
 was never true of the suites as a whole. **XSLT 3.0 carries 126 failures of
 which 45 are one missing analysis, and XQuery 3.1 carries 42, and both are
 eminently fixable.** A sentence scoped to one audit and left standing after the

@@ -339,10 +339,10 @@ func varPosture(c streamCategory, singular bool) posture {
 	// which in many cases will make the entire function non-streamable."
 	//
 	// This is checked before the category table because it overrides it.
-	// su-absorbing-906 ("for $i in 1 to 3 return name($element[$i])"),
-	// su-shallow-descent-903 ("(1 to 5) ! $n") and su-ascent-903 are the
-	// three cases that hold it down: each wants XTSE3430, and each gets it
-	// only because a non-singular reference cannot be streamed.
+	// su-absorbing-906 ("for $i in 1 to 3 return name($element[$i])") and
+	// su-shallow-descent-903 ("(1 to 5) ! $n") are the cases that hold it
+	// down: each wants XTSE3430, and gets it only because a non-singular
+	// reference cannot be streamed.
 	if !singular {
 		return postureRoaming
 	}
@@ -412,7 +412,9 @@ var bodyRequirements = map[streamCategory]bodyRequirement{
 		sweeps:   []sweep{sweepMotionless},
 	},
 	catShallowDescent: {
-		postures: []posture{postureStriding, postureGrounded},
+		// §19.8.5.5: the body "must be striding"; unlike filter and ascent,
+		// shallow-descent admits no grounded body.
+		postures: []posture{postureStriding},
 		sweeps:   []sweep{sweepMotionless, sweepConsuming},
 	},
 	catDeepDescent: {
@@ -568,18 +570,12 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 	// no call site re-enters analyzeFunctionBody. Mutual recursion is covered
 	// by the same argument, whatever the length of the cycle.
 	//
-	// What a single pass cannot do is decide that a recursive function is
-	// *invalid*. §19.10 makes XTSE3430 optional: a processor may instead run
-	// a declared-streamable construct without streaming, and the W3C catalog
-	// takes that option for su-ascent-A, a recursive ascent function whose
-	// body these rules find striding where §19.8.5.7 permits only climbing or
-	// grounded, yet whose stylesheet the suite expects to run. So a recursive
-	// body may confirm that a function meets its category, never that it
-	// fails: the verdict below is reported when it clears the category and
-	// discarded when it does not, which keeps the analysis from inventing a
-	// rejection. Dropping that asymmetry costs su-ascent-005 and -006 and
-	// gains nothing, measured.
-	recursive := callsItself(f, sel.Value)
+	// The analysis used to withhold a failing verdict on a recursive body,
+	// because §19.10 makes XTSE3430 optional and su-ascent-A's recursive
+	// bodies came out striding where §19.8.5.7 permits climbing. With the
+	// ascent call rule read by intent (callAscent) those bodies are climbing,
+	// and a recursive function is judged like any other: su-absorbing-908
+	// needs the refusal, and removing the asymmetry measured neutral.
 
 	// §19.6 gives the body of a stylesheet function no context item, so a
 	// reference to "." inside it is an error some other check reports. The
@@ -600,6 +596,7 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 			a.streamingParam = q
 			a.paramCategory = f.category
 			a.hasStreamParam = true
+			a.paramSeveral = typePermitsSeveralNodes(f.params[0])
 		}
 	}
 	p := a.expr(expr)
@@ -631,12 +628,6 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 	// children, what turns motionless into consuming.
 	res := typeAdjust(p, f.asType, bodyAllowsChildren(instr, expr))
 
-	// A recursive body reports its verdict only when that verdict clears the
-	// category, for the §19.10 reason given above: the analysis may confirm
-	// streamability through a recursive call but may not reject on one.
-	if recursive && !satisfiesCategory(f, res) {
-		return roamingFreeRanging, false
-	}
 	return res, true
 }
 
@@ -697,56 +688,6 @@ func bodyAllowsChildren(instr *xdm.Node, e xpath.Expr) bool {
 	return a.allowsChildren(e)
 }
 
-// callsItself reports whether the body expression contains a call on the
-// function it is the body of, at any depth.
-//
-// Only direct recursion is detected, and that is all this needs to detect.
-// The answer no longer decides whether the body is analysed -- the §19.8.5
-// call rules resolve a call from its declared category, so recursion of any
-// shape terminates -- but only whether a *failing* verdict may be reported,
-// which §19.10 forbids for a recursive function. Mutual recursion is analysed
-// just as safely; it merely keeps the right to report a failure, which is the
-// same right every non-recursive function has.
-// The expression is not available as a tree walk here -- xpath exposes no
-// public visitor -- so the body's source text is searched for the function's
-// own lexical name followed by "(". That over-reports rather than under-
-// reports: a name appearing in a string literal would be counted, and the
-// consequence of a false positive is only that a failing verdict is withheld,
-// which is the same conservative direction the rest of this analysis takes.
-func callsItself(f *streamFunc, src string) bool {
-	name := strings.TrimSpace(f.body.AttrValue("name"))
-	if name == "" {
-		return false
-	}
-	// Compare on the local part as well as the whole lexical name: the call
-	// site inside the body uses the same prefix as the declaration in every
-	// stylesheet the suite contains, but the local part alone is the part
-	// that cannot differ.
-	for _, n := range []string{name, localOf(name)} {
-		if n == "" {
-			continue
-		}
-		i := 0
-		for {
-			j := strings.Index(src[i:], n)
-			if j < 0 {
-				break
-			}
-			k := i + j + len(n)
-			// Skip any space between the name and the parenthesis.
-			for k < len(src) && (src[k] == ' ' || src[k] == '\t' ||
-				src[k] == '\n' || src[k] == '\r') {
-				k++
-			}
-			if k < len(src) && src[k] == '(' {
-				return true
-			}
-			i = i + j + 1
-		}
-	}
-	return false
-}
-
 // localOf returns the part of a lexical QName after the prefix.
 func localOf(lex string) string {
 	if i := strings.LastIndexByte(lex, ':'); i >= 0 {
@@ -798,6 +739,12 @@ func (a *analyzer) varRef(x *xpath.VarRef) props {
 		// a global variable, nor to an xsl:variable in a streamable context.
 		return groundedMotionless
 	}
+	// §19.8.5.2: "If the declared type of the streaming parameter permits
+	// more than one node, then a variable reference referring to the
+	// streaming parameter is striding and consuming." su-absorbing-908.
+	if a.paramCategory == catAbsorbing && a.paramSeveral && !a.higherOrder {
+		return props{postureStriding, sweepConsuming}
+	}
 	return props{varPosture(a.paramCategory, !a.higherOrder), sweepMotionless}
 }
 
@@ -831,6 +778,7 @@ func (a *analyzer) simpleMap(x *xpath.SimpleMap) props {
 		streamingParam:    a.streamingParam,
 		paramCategory:     a.paramCategory,
 		hasStreamParam:    a.hasStreamParam,
+		paramSeveral:      a.paramSeveral,
 		higherOrder:       true,
 		// "$input ! path()" navigates away from the very node $input
 		// denotes, so the context item on the right inherits the left
@@ -939,7 +887,17 @@ func (a *analyzer) callAscent(x *xpath.FuncCall, f *streamFunc) (props, bool) {
 	if !ok {
 		return roamingFreeRanging, false
 	}
-	return a.ascentFromP0(p0), true
+	r := a.ascentFromP0(p0)
+	// The general rules give an all-motionless call grounded, which would
+	// leave §19.8.5.7's last clause, "Otherwise, the function call is climbing
+	// and motionless", unreachable. Read by its evident intent, a streamed
+	// first argument makes the call climbing (su-ascent-903).
+	if r == groundedMotionless {
+		if arg := a.expr(x.Args[0]); arg.posture != postureGrounded {
+			return props{postureClimbing, sweepMotionless}, true
+		}
+	}
+	return r, true
 }
 
 // ascentFromP0 applies the tests §19.8.5.7 makes on P0 and S0 once they have

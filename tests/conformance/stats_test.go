@@ -453,8 +453,8 @@ func TestCorporaStayOutOfTheTotal(t *testing.T) {
 	// And the shipped file keeps the two apart as separate lists, which is
 	// what makes the exclusion impossible to undo by an arithmetic change.
 	sr := shipped(t)
-	if got := sr.Total(); got != 139 {
-		t.Fatalf("shipped Total() = %d, want 139", got)
+	if got := sr.Total(); got != 93 {
+		t.Fatalf("shipped Total() = %d, want 93", got)
 	}
 	for _, c := range sr.Corpora {
 		for _, su := range sr.Suites {
@@ -617,38 +617,31 @@ func TestUnknownLookupPanics(t *testing.T) {
 func TestShippedXTSE3430Breakdown(t *testing.T) {
 	r := shipped(t)
 	b := r.Breakdown("xtse3430")
-	if b.Of != 7 {
-		t.Errorf("xtse3430 = %d of the XSLT 3.0 failures, want 7", b.Of)
+	if b.Of != 3 {
+		t.Errorf("xtse3430 = %d of the XSLT 3.0 failures, want 3", b.Of)
 	}
 	s := r.Suite(b.Suite)
-	if s.Disagreements != 27 {
-		t.Errorf("xslt-3.0 has %d disagreements, want 27", s.Disagreements)
+	if s.Disagreements != 23 {
+		t.Errorf("xslt-3.0 has %d disagreements, want 23", s.Disagreements)
 	}
 	// The two published halves must account for the whole, once the declared
-	// overlap is discounted: 21 enumerated + 7 in the block, sharing
-	// su-ascent-903, is exactly 27. This shipped so wrong -- 21 + 14 = 35 --
-	// because each half was only ever checked against the total.
-	if b.Overlap != 1 {
-		t.Errorf("xtse3430 declares overlap %d, want 1 (su-ascent-903)", b.Overlap)
+	// overlap is discounted: 20 enumerated + 3 in the block is exactly 23.
+	// This shipped so wrong -- 21 + 14 = 35 -- because each half was only
+	// ever checked against the total.
+	if b.Overlap != 0 {
+		t.Errorf("xtse3430 declares overlap %d, want 0", b.Overlap)
 	}
 	if n := len(s.Cases) + b.Of - b.Overlap; n != s.Disagreements {
 		t.Errorf("%d enumerated + %d in the block - %d overlap = %d, want the suite's %d",
 			len(s.Cases), b.Of, b.Overlap, n, s.Disagreements)
 	}
-	// su-ascent-902 is the overlap, so it must actually be enumerated; and
-	// merge-097sf must not be, because it is skipped for streaming-fallback
-	// rather than failing.
-	var haveAscent, haveSF bool
+	// merge-097sf must not be enumerated: it is skipped for
+	// streaming-fallback rather than failing.
+	var haveSF bool
 	for _, c := range s.Cases {
-		switch c.ID {
-		case "su-ascent-903":
-			haveAscent = true
-		case "merge-097sf":
+		if c.ID == "merge-097sf" {
 			haveSF = true
 		}
-	}
-	if !haveAscent {
-		t.Error("su-ascent-903 is declared as the overlap but is not enumerated")
 	}
 	if haveSF {
 		t.Error("merge-097sf is enumerated as a disagreement; it is skipped for streaming-fallback")

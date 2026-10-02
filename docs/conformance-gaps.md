@@ -32,24 +32,24 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xdm** | *(no external suite)* | — | — | — | — |
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |
-| **xpath** | QT3 — XPath 3.1 | 22,054 | 22,033 | 99.90% | **21** |
-| **xquery** | QT3 — XQuery 3.1 | 30,517 | 30,495 | 99.93% | **22** |
+| **xpath** | QT3 — XPath 3.1 | 22,054 | 22,054 | 100.00% | **0** |
+| **xquery** | QT3 — XQuery 3.1 | 30,517 | 30,516 | 100.00% | **1** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,491 | 99.77% | **27** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,495 | 99.80% | **23** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,598 | 41,567 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 578 | 578 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **139** |
+| | **Total** | | | | **93** |
 
-W3C disagreements: 0 + 0 + 21 + 22 + 8 + 27 + 30 + 31 + 0 = 139. Measured 2026-09-11, 2026-09-29, 2026-09-30, 2026-10-01.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 23 + 30 + 31 + 0 = 93. Measured 2026-09-11, 2026-09-29, 2026-10-01, 2026-10-02.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 2,526 tests.
+The unit-test suite is 2,545 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -60,13 +60,13 @@ They are not in the *Total*, which counts W3C disagreements only. Note that
 they are unrelated to the `docbook-001` case read below, which belongs to the
 W3C XSLT sets.
 
-Three suites reach 100% — XPath 2.0, XPath 3.0 and RELAX NG.
+Two suites reach 100% — XPath at all three versions, and RELAX NG.
 
-**The largest block is a single feature, not a long tail.** 7 of the 27
+**The largest block is a single feature, not a long tail.** 3 of the 23
 XSLT 3.0 failures want an `XTSE3430` that only the unwritten remainder of the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable".
-That is not a backlog of defects. The 21 that remain are named case by case
+That is not a backlog of defects. The 20 that remain are named case by case
 below, and every one of them is recorded with its verdict in
 [tests/conformance/results.json](../tests/conformance/results.json), which is
 where the table above comes from.
@@ -80,13 +80,13 @@ which in a streamed tree is never grounded. The body therefore cleared the
 concluded streamable where §19.8.5 requires the refusal. Four cases moved:
 `su-absorbing-901`, `su-absorbing-905`, `su-inspection-901`, `su-inspection-903`.
 
-`su-ascent-903` moved the other way and is now enumerated individually rather
-than counted in the block. §19.8.5.7 gives an ascent function's streaming
-parameter the posture *climbing*, and `bodyRequirements` permits a climbing
-ascent body, so the analysis accepts what it used to refuse — it refused it
-before only because the same table wrongly read striding. That is the second
-`su-ascent` case where the suite asks for a refusal §19.8.5.7 does not support;
-`su-ascent-902` is the first, and is argued below.
+`su-ascent-903` was then argued here as a suite defect, and that was half
+right. Its body is climbing and motionless, which §19.8.5.7 permits; but the
+general rules make the call grounded, which leaves the rule's last clause
+("Otherwise, the function call is climbing and motionless") unreachable. Read
+by that clause's intent, a streamed argument makes the call climbing, `<out>`
+absorbing climbing nodes is free-ranging, and the refusal stands. It passes
+since 2026-10-02.
 
 ## How to read the verdicts
 
@@ -132,22 +132,19 @@ normalisation, character-set handling, node identity and document order.
 
 **No known gaps.**
 
-## xpath — 21 failures
+## xpath — 0 failures
 
-XPath 2.0 and 3.0 agree with the suite on every case in scope. XPath 3.1
-fails 21 `fn:transform` cases, measured since `fn:transform` became callable
-from XPath; they are classified in tests/conformance/results.json and
-[known-gaps.md](known-gaps.md).
-**XPath: <!-- BEGIN GENERATED XPATH FIGURE -->15,217 / 19,362 / 22,033<!-- END GENERATED XPATH FIGURE -->, against in-scope totals of 15,217 / 19,362 / 22,054.**
+All three XPath versions agree with the suite on every case in scope,
+`fn:transform` included.
+**XPath: <!-- BEGIN GENERATED XPATH FIGURE -->15,217 / 19,362 / 22,054<!-- END GENERATED XPATH FIGURE -->, against in-scope totals of 15,217 / 19,362 / 22,054.**
 
 ## relaxng — 0 failures
 
 <!-- BEGIN GENERATED RELAX NG FIGURE -->965 of 965<!-- END GENERATED RELAX NG FIGURE --> assertions in James Clark's spectest. **No known gaps.**
 
-## xquery — 22 failures
+## xquery — 1 failure
 
-**XQuery 3.1: 30,495 / 30,517 = 99.93%.** 21 are the XPath 3.1 `fn:transform`
-cases; the one below is the rest.
+**XQuery 3.1: 30,516 / 30,517 = 100.00%.**
 
 What remains is one singleton, `prod-ContextItemDecl`. `app-Demos/RexParser`
 is closed: the two ExprSingle scanners now keep a nesting stack rather than
@@ -239,14 +236,14 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 27 failures
+## xslt 3.0 — 23 failures
 
-**XSLT 3.0: 11,491 / 11,518 = 99.77%.**
+**XSLT 3.0: 11,495 / 11,518 = 99.80%.**
 
 <!-- BEGIN GENERATED XTSE3430 BLOCK -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-**7 of the 27 want an `XTSE3430`** — a refusal of a stylesheet as
+**3 of the 23 want an `XTSE3430`** — a refusal of a stylesheet as
 <!-- END GENERATED XTSE3430 BLOCK -->
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
@@ -256,12 +253,12 @@ assess whether constructs are guaranteed-streamable". These are the largest
 block in this file and they are not defects. What the analysis covers and what
 it does not is under *The §19.8 streamability analysis* below.
 
-The remaining **21** divide as follows. Several are divergences and are read in
-§2; what is genuinely open is read here. One case belonging to the block of 7
-is *also* read individually below — `su-ascent-903`, because its verdict is not
-the block's. The other six fail because the analysis is silent; that one
-fails because the analysis speaks and the test is wrong, so it is argued on its
-own terms rather than deferred with the rest. It is counted once, in the 7.
+The remaining **20** divide as follows. Several are divergences and are read in
+§2; what is genuinely open is read here. The block of 3 is measured, not
+merely unmodelled: refusing `si-fork-902`/`-952` (`||`) costs 18 `sx-union`
+cases (+2/−18), and refusing `su-absorbing-205` costs 61 `si-copy` cases
+(+1/−61), because those cases expect stylesheets that XSLT 3.0's literal rules
+refuse to be accepted.
 
 ### Package composition — 4
 

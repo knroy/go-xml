@@ -453,6 +453,17 @@ observable behaviour, quirks included — each is marked `parity:` in the
 source — so a conformance change to the tokeniser is now a deliberate, tested
 edit rather than a side effect of a Go upgrade.
 
+Six have since been made, against the W3C XML Conformance Test Suite
+(`xmlts20130923`, run through `xdm.Parse` beside `xmllint`): white space is
+required between attributes (§3.1 [40]/[44]) and after a PI target (§2.6
+[16]); comment and PI bodies are checked against [2] `Char` (§2.5 [15], §2.6
+[16]); a version `1.x` other than `1.1` is read as 1.0 (§2.8, Fifth Edition);
+and `Decoder.Literal` lets `xdm` refuse character data outside the document
+element that came from a reference or a CDATA section (§2.1 [1], [27] `Misc`),
+which `&#32;` or `<![CDATA[]]>` did not reveal by its text. None of them
+changed a result in the corpora above. The kept leniencies are listed in
+[known-gaps.md](known-gaps.md#the-tokeniser-keeps-six-leniencies).
+
 ---
 
 ## The ratchet
@@ -556,9 +567,9 @@ reads `tests/ratchet.txt` and examines every documentation line that names a
 suite's **in-scope denominator** -- the one number in a figure that does not
 move between runs (11,518 for XSLT 3.0, 30,346 for XQuery, and so on). The
 passing count, failure count and percentage written beside it must equal the
-ratchet's, in every form the documents use: `11,491 of 11,518`,
-`27 of 11,518`, `11,491 / 11,518 (99.77%)`, `= 99.77%`, `(27 failing)`, and
-the `| 11,518 | 11,491 | 99.77% | **27** |` summary-table row. A line stating
+ratchet's, in every form the documents use: `11,495 of 11,518`,
+`23 of 11,518`, `11,495 / 11,518 (99.80%)`, `= 99.80%`, `(23 failing)`, and
+the `| 11,518 | 11,495 | 99.80% | **23** |` summary-table row. A line stating
 two figures is read as two claims. Failures name the file, line and the value
 wanted.
 

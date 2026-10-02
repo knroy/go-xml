@@ -112,9 +112,10 @@ func TestBodyRequirementsMatchSpec(t *testing.T) {
 		{catFilter, props{postureStriding, sweepConsuming}, false, "filter may not consume"},
 		{catFilter, props{postureCrawling, sweepMotionless}, false, "crawling not permitted"},
 
-		// §19.8.5.5 shallow-descent: striding or grounded; motionless or consuming.
+		// §19.8.5.5 shallow-descent: "must be striding" -- grounded is not
+		// admitted, unlike filter and ascent; motionless or consuming.
 		{catShallowDescent, props{postureStriding, sweepConsuming}, true, "striding+consuming"},
-		{catShallowDescent, props{postureGrounded, sweepMotionless}, true, "grounded+motionless"},
+		{catShallowDescent, props{postureGrounded, sweepMotionless}, false, "grounded is not striding"},
 		{catShallowDescent, props{postureCrawling, sweepConsuming}, false, "crawling not permitted"},
 
 		// §19.8.5.6 deep-descent: crawling, striding or grounded; motionless
@@ -189,9 +190,8 @@ func TestVarPostureTable(t *testing.T) {
 
 // A reference that is not singular is roaming whatever its category, which is
 // the override §19.8.4.18's note describes. su-absorbing-906
-// ("for $i in 1 to 3 return name($element[$i])"), su-shallow-descent-903
-// ("(1 to 5) ! $n") and su-ascent-903 each want XTSE3430 and get it only
-// through this rule: deleting it gained four cases and lost three, measured.
+// ("for $i in 1 to 3 return name($element[$i])") and su-shallow-descent-903
+// ("(1 to 5) ! $n") each want XTSE3430 and get it only through this rule.
 func TestVarPostureNonSingularIsRoaming(t *testing.T) {
 	for _, c := range []streamCategory{
 		catAbsorbing, catInspection, catFilter,

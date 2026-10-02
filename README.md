@@ -110,10 +110,10 @@ and maintains it as a project of his own.
 |---|---|
 | **XPath 2.0** | 100.00% of the W3C QT3 suite (15,217 of 15,217 in scope) |
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,362 of 19,362 in scope) |
-| **XPath 3.1** | 99.90% of the W3C QT3 suite (22,033 of 22,054 in scope); maps, arrays, the lookup operator, the JSON family. All 21 failures are `fn:transform` cases, measured since it became callable from XPath; see [known-gaps.md](docs/known-gaps.md) |
-| **XQuery 3.1** | 99.93% of the W3C QT3 suite (30,495 of 30,517 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; of the 22 failures, 21 are the same `fn:transform` cases as XPath 3.1 and 1 is the tail catalogued in [todo.md](docs/todo.md) §1.5 |
+| **XPath 3.1** | 100.00% of the W3C QT3 suite (22,054 of 22,054 in scope); maps, arrays, the lookup operator, the JSON family, and `fn:transform`, measured since it became callable from XPath |
+| **XQuery 3.1** | 100.00% of the W3C QT3 suite (30,516 of 30,517 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows, and both halves of `import` — `module` and `schema`. Schema import brought 416 cases into scope and 318 more passes; the 1 remaining failure is the tail catalogued in [todo.md](docs/todo.md) §1.5 |
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.77% of the W3C XSLT suite filtered to 3.0 (11,491 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 7 of the 27 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSLT 3.0** | 99.80% of the W3C XSLT suite filtered to 3.0 (11,495 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 3 of the 23 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
@@ -1719,9 +1719,8 @@ include.
 
 ## Where this is going
 
-The conformance tail is no longer the interesting work. XPath 2.0 and 3.0 are at
-100%, XPath 3.1 and XQuery fail only on `fn:transform` options (and one XQuery
-fixture), and XSLT 35 across both targets —
+The conformance tail is no longer the interesting work. XPath is at 100% on all
+three versions, XQuery has one fixture case left, and XSLT 31 across both targets —
 cases where the suite disagrees with the specification, where matching it would
 cost XSD tests, or which want byte-identical reproduction of another
 processor's indentation. That leaves **none genuinely open**: the last two were

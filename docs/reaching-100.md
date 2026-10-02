@@ -286,19 +286,19 @@ bare-name fragment against the retrieved document.
 
 ### 8 — features deliberately not implemented
 
-Seven want an `XTSE3430` refusal that only the unwritten remainder of the
-§19.8 posture-and-sweep analysis can emit: `si-fork-902`, `si-fork-952`,
-`su-absorbing-205`, `su-absorbing-908`, `su-ascent-903`,
-`su-shallow-descent-902` and `sx-square-array-201`. This list used to be
-defined by cases that needed a feature not yet built, and these are that:
-the engine computes the right answer and the test wants it to decline. §19.1
+Three want an `XTSE3430` refusal that only more of the §19.8 posture-and-sweep
+analysis can emit: `si-fork-902`, `si-fork-952` and `su-absorbing-205`. Each
+fix was measured and costs more than it gains: modelling `||` refuses the two
+`si-fork` cases but loses 18 `sx-union` cases (+2/−18), and the §19.8.4.12
+higher-order reading of `xsl:copy` that `su-absorbing-205` needs loses 61
+`si-copy` cases (+1/−61). Those cases expect stylesheets XSLT 3.0's literal
+rules refuse to be accepted, so closing these three wants the finer rules
+Saxon-EE evidently applies, which the Recommendation does not contain. §19.1
 settles whether the refusal is owed — a processor that does not stream "is not
 required to assess whether constructs are guaranteed-streamable" — so they are
-not defects. One of the seven, `su-ascent-903`, is also argued on its own in
-[conformance-gaps.md](conformance-gaps.md) because its verdict is not the
-block's: there the analysis speaks and the test is wrong, since §19.8.5.7
-makes an ascent function's streaming parameter climbing and permits a climbing
-body. It is counted once, here.
+not defects. Four former members of this list (`su-absorbing-908`,
+`su-ascent-903`, `su-shallow-descent-902`, `sx-square-array-201`) pass since
+2026-10-02.
 
 The eighth is `sf-reverse-001`, which wants `reverse(snapshot(/chapter)//section)`
 in reversed order. XPath 3.1 §3.3.1.1 returns a path's nodes in document order
@@ -439,7 +439,7 @@ execution proper would buy almost none of it. See
 [conformance-gaps.md](conformance-gaps.md) for the breakdown.
 
 **EXSLT is not on this list.** It is a separate product. XQuery was, and is
-now implemented in [`xquery`](../xquery/) at 30,495 of 30,517; what remains of
+now implemented in [`xquery`](../xquery/) at 30,516 of 30,517; what remains of
 it there is tracked in [xquery.md](xquery.md) rather than here, because this
 file is about the XPath and XSLT figures.
 

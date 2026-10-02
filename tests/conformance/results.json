@@ -31,235 +31,24 @@
       "component": "xpath",
       "suite": "QT3 — XPath 3.1",
       "edition": "XPath 3.1",
-      "passed": 22033,
-      "disagreements": 21,
+      "passed": 22054,
+      "disagreements": 0,
       "total": 22054,
       "run_date": "2026-10-01",
       "command": "tests/check.sh (TestQT3, lane xpath-3.1)",
-      "cases": [
-        {
-          "id": "fn-transform/fn-transform-29",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-30",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-32",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-36",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-43",
-          "verdict": "implementation",
-          "note": "An empty principal result is delivered as an empty string, which the case then parses."
-        },
-        {
-          "id": "fn-transform/fn-transform-61",
-          "verdict": "implementation",
-          "note": "fn:transform option xslt-version is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-65",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-66",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-67",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-69",
-          "verdict": "implementation",
-          "note": "fn:transform option requested-properties is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-71",
-          "verdict": "implementation",
-          "note": "fn:transform option requested-properties is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-73",
-          "verdict": "implementation",
-          "note": "fn:transform option requested-properties is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-75",
-          "verdict": "implementation",
-          "note": "fn:transform option requested-properties is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-77",
-          "verdict": "implementation",
-          "note": "fn:transform option requested-properties is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-80",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-82c",
-          "verdict": "implementation",
-          "note": "fn:transform option global-context-item is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-82e",
-          "verdict": "implementation",
-          "note": "fn:transform option xslt-version is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-err-1",
-          "verdict": "implementation",
-          "note": "Raises XTDE0044 where the case wants XTDE0040."
-        },
-        {
-          "id": "fn-transform/fn-transform-err-16",
-          "verdict": "implementation",
-          "note": "initial-function without function-params is defaulted to no arguments; F&O requires function-params."
-        },
-        {
-          "id": "fn-transform/fn-transform-err-18",
-          "verdict": "deliberate-divergence",
-          "note": "String keys in parameter maps are accepted as no-namespace QNames, on purpose (also static-params, #15)."
-        },
-        {
-          "id": "fn-transform/fn-transform-err-4",
-          "verdict": "implementation",
-          "note": "fn:transform option xslt-version is accepted but not acted on; see known-gaps.md."
-        }
-      ]
+      "cases": []
     },
     {
       "id": "xquery-3.1",
       "component": "xquery",
       "suite": "QT3 — XQuery 3.1",
       "edition": "XQuery 3.1",
-      "passed": 30495,
-      "disagreements": 22,
+      "passed": 30516,
+      "disagreements": 1,
       "total": 30517,
       "run_date": "2026-10-01",
       "command": "tests/check.sh (TestQT3XQuery)",
       "cases": [
-        {
-          "id": "fn-transform/fn-transform-29",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-30",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-32",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-36",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-43",
-          "verdict": "implementation",
-          "note": "An empty principal result is delivered as an empty string, which the case then parses."
-        },
-        {
-          "id": "fn-transform/fn-transform-61",
-          "verdict": "implementation",
-          "note": "fn:transform option xslt-version is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-65",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-66",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-67",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-69",
-          "verdict": "implementation",
-          "note": "fn:transform option requested-properties is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-71",
-          "verdict": "implementation",
-          "note": "fn:transform option requested-properties is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-73",
-          "verdict": "implementation",
-          "note": "fn:transform option requested-properties is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-75",
-          "verdict": "implementation",
-          "note": "fn:transform option requested-properties is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-77",
-          "verdict": "implementation",
-          "note": "fn:transform option requested-properties is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-80",
-          "verdict": "implementation",
-          "note": "fn:transform option serialization-params is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-82c",
-          "verdict": "implementation",
-          "note": "fn:transform option global-context-item is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-82e",
-          "verdict": "implementation",
-          "note": "fn:transform option xslt-version is accepted but not acted on; see known-gaps.md."
-        },
-        {
-          "id": "fn-transform/fn-transform-err-1",
-          "verdict": "implementation",
-          "note": "Raises XTDE0044 where the case wants XTDE0040."
-        },
-        {
-          "id": "fn-transform/fn-transform-err-16",
-          "verdict": "implementation",
-          "note": "initial-function without function-params is defaulted to no arguments; F&O requires function-params."
-        },
-        {
-          "id": "fn-transform/fn-transform-err-18",
-          "verdict": "deliberate-divergence",
-          "note": "String keys in parameter maps are accepted as no-namespace QNames, on purpose (also static-params, #15)."
-        },
-        {
-          "id": "fn-transform/fn-transform-err-4",
-          "verdict": "implementation",
-          "note": "fn:transform option xslt-version is accepted but not acted on; see known-gaps.md."
-        },
         {
           "id": "prod-ContextItemDecl/contextDecl-052",
           "verdict": "fixture",
@@ -327,10 +116,10 @@
       "component": "xslt",
       "suite": "W3C XSLT 3.0",
       "edition": "XSLT 3.0",
-      "passed": 11491,
-      "disagreements": 27,
+      "passed": 11495,
+      "disagreements": 23,
       "total": 11518,
-      "run_date": "2026-09-30",
+      "run_date": "2026-10-02",
       "command": "tests/check.sh (TestXSLT30Suite)",
       "skipped_out_of_scope": 2949,
       "skipped_unimplemented": 134,
@@ -421,11 +210,6 @@
           "note": "§4.4 grants no ancestor-assertion exemption; the case exists to exercise Saxon paths."
         },
         {
-          "id": "su-ascent-903",
-          "verdict": "deliberate-divergence",
-          "note": "§19.8.5.7 makes a reference to the streaming parameter climbing, and the ascent category permits a climbing body, so the analysis accepts it. It refused this case before only because varPosture wrongly read striding."
-        },
-        {
           "id": "system-property-012",
           "verdict": "deliberate-divergence",
           "note": "§26.5 requires a non-streaming processor to answer \"no\"; answering \"yes\" would lie to stylesheets that branch on it to pick a fallback."
@@ -441,7 +225,7 @@
           "note": "Read in §2 and in Corrections."
         }
       ],
-      "unenumerated_note": "The balance want an XTSE3430 refusal that only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit. §19.1 does not require a non-streaming processor to assess guaranteed-streamability, so they are read as a block under \"The §19.8 streamability analysis\" rather than case by case. su-ascent-903 belongs to that block and is ALSO enumerated above, because its verdict is not the block's: the analysis does reach it, and the rule the test asserts contradicts §19.8.5.7's own worked example. It is counted once, in the breakdown of 7, so the enumeration and the breakdown overlap by exactly that one case and 21 + 7 - 1 = 27. merge-097sf was enumerated here until 2026-09-11 and is not a disagreement at all: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
+      "unenumerated_note": "The balance want an XTSE3430 refusal: si-fork-902 and si-fork-952 need the || operator modelled, which §19.8.8.4's literal union rule makes cost 18 sx-union cases (measured +2/-18); su-absorbing-205 needs the §19.8.4.12 higher-order reading of xsl:copy, measured +1/-61 against si-copy-A. They are read as a block under \"The §19.8 streamability analysis\". 20 enumerated + 3 in the block = 23. su-ascent-903, the former overlap, passes since the ascent call rule was applied by intent (§19.8.5.7's last clause is otherwise unreachable). merge-097sf is not a disagreement: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
     },
     {
       "id": "xsd-1.0",
@@ -847,9 +631,9 @@
       "id": "xtse3430",
       "label": "XSLT 3.0 failures wanting an XTSE3430",
       "suite": "xslt-3.0",
-      "of": 7,
-      "overlap": 1,
-      "note": "Only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit the refusal; §19.1 does not require a non-streaming processor to assess guaranteed-streamability. The one overlap is su-ascent-903, enumerated individually because its verdict is not the block's: §19.8.5.7 makes an ascent function's streaming parameter climbing and the category permits a climbing body."
+      "of": 3,
+      "overlap": 0,
+      "note": "Only more of the §19.8 posture-and-sweep analysis can emit the refusal, and each fix found so far costs more passing cases than it gains: si-fork-902/952 (||, measured +2/-18 against sx-union) and su-absorbing-205 (xsl:copy higher-order operand, +1/-61 against si-copy-A). §19.1 does not require a non-streaming processor to assess guaranteed-streamability."
     }
   ]
 }

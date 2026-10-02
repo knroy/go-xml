@@ -55,6 +55,10 @@ type analyzer struct {
 	streamingParam xdm.QName
 	paramCategory  streamCategory
 	hasStreamParam bool
+	// paramSeveral says the streaming parameter's declared type permits more
+	// than one node, which §19.8.5.2 turns into a striding, consuming
+	// reference in an absorbing function.
+	paramSeveral bool
 
 	// ctxStreamedGrounded says the context item here is a streamed node that
 	// §19.8.8.12 nevertheless reports as grounded — it was reached from a
@@ -235,6 +239,19 @@ func (a *analyzer) expr(e xpath.Expr) props {
 	case *xpath.BinaryOp:
 		return a.binary(x)
 
+	case *xpath.LookupExpr:
+		// §19.8.8.18: E?K -- E inspection, a parenthesised K absorption;
+		// unary ?K is .?K.
+		var base xpath.Expr = x.Base
+		if base == nil {
+			base = &xpath.ContextItem{}
+		}
+		ops := []operand{a.operandOf(base, usageInspection)}
+		if x.Expr != nil {
+			ops = append(ops, a.operandOf(x.Expr, usageAbsorption))
+		}
+		return combine(ops, false)
+
 	case *xpath.UnaryOp:
 		// Arithmetic negation atomizes its operand.
 		return combine([]operand{a.operandOf(x.Operand, usageAbsorption)}, false)
@@ -336,6 +353,7 @@ func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
 		streamingParam:        a.streamingParam,
 		paramCategory:         a.paramCategory,
 		hasStreamParam:        a.hasStreamParam,
+		paramSeveral:          a.paramSeveral,
 		higherOrder:           true,
 		currentGroup:          a.currentGroup,
 		groupInScope:          a.groupInScope,
@@ -465,6 +483,7 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 			streamingParam:        a.streamingParam,
 			paramCategory:         a.paramCategory,
 			hasStreamParam:        a.hasStreamParam,
+			paramSeveral:          a.paramSeveral,
 			higherOrder:           a.higherOrder,
 			currentGroup:          a.currentGroup,
 			groupInScope:          a.groupInScope,
@@ -523,6 +542,7 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 			streamingParam:        a.streamingParam,
 			paramCategory:         a.paramCategory,
 			hasStreamParam:        a.hasStreamParam,
+			paramSeveral:          a.paramSeveral,
 			higherOrder:           a.higherOrder,
 			currentGroup:          a.currentGroup,
 			groupInScope:          a.groupInScope,
@@ -610,6 +630,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 				streamingParam:        a.streamingParam,
 				paramCategory:         a.paramCategory,
 				hasStreamParam:        a.hasStreamParam,
+				paramSeveral:          a.paramSeveral,
 				higherOrder:           a.higherOrder,
 				currentGroup:          a.currentGroup,
 				groupInScope:          a.groupInScope,
@@ -743,6 +764,7 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 				streamingParam:        a.streamingParam,
 				paramCategory:         a.paramCategory,
 				hasStreamParam:        a.hasStreamParam,
+				paramSeveral:          a.paramSeveral,
 				higherOrder:           a.higherOrder,
 				currentGroup:          a.currentGroup,
 				groupInScope:          a.groupInScope,
