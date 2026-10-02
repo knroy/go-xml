@@ -720,11 +720,12 @@ func TestFnTransformIgnoresUnknownOptions(t *testing.T) {
 
 // static-params binds the nested stylesheet's static parameters at its
 // compilation (GitHub issue #15); it was read and dropped, so a static
-// parameter kept its default. An unsupplied one still takes its select.
+// parameter kept its default. An unsupplied one still takes its select, and a
+// string key is FOXT0002: the option is map(xs:QName, item()*).
 func TestFnTransformStaticParams(t *testing.T) {
 	for _, tc := range []struct{ name, params, want string }{
 		{"QName key", `map{QName('', 'p'): 'given'}`, "<o>given</o>"},
-		{"string key", `map{'p': 'given'}`, "<o>given</o>"},
+		{"string key", `map{'p': 'given'}`, "FOXT0002"},
 		{"absent", `map{}`, "<o>default</o>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -747,6 +748,12 @@ func TestFnTransformStaticParams(t *testing.T) {
 			}
 			doc, _ := xdm.ParseString(`<r/>`, xdm.ParseOptions{})
 			res, err := sheet.Transform(context.Background(), doc.Root, xslt.TransformOptions{})
+			if strings.HasPrefix(tc.want, "FOXT") {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("err = %v, want %s", err, tc.want)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -754,5 +761,86 @@ func TestFnTransformStaticParams(t *testing.T) {
 				t.Fatalf("got %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// fnTransformWith runs fn:transform over a nested stylesheet that has a
+// template named xsl:initial-template, a match="/" template and a public
+// function f:two, with the options the caller adds.
+func fnTransformWith(t *testing.T, extra string) (string, error) {
+	t.Helper()
+	src := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+	  <xsl:variable name="inner"><![CDATA[
+	    <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	        xmlns:f="urn:f" exclude-result-prefixes="f" version="3.0">
+	      <xsl:template name="xsl:initial-template"><ok/></xsl:template>
+	      <xsl:template match="/"><matched/></xsl:template>
+	      <xsl:function name="f:two" visibility="public"><two/></xsl:function>
+	    </xsl:stylesheet>]]></xsl:variable>
+	  <xsl:template match="/">
+	    <xsl:sequence select="transform(map:merge((map{'stylesheet-text': string($inner)}, ` + extra + `)))?output"
+	        xmlns:map="http://www.w3.org/2005/xpath-functions/map"/>
+	  </xsl:template>
+	</xsl:stylesheet>`
+	return runPP(t, src, `<r/>`)
+}
+
+// requested-properties is matched against what fn:system-property reports;
+// F&O 3.1 leaves an unmet request implementation-defined and this processor
+// refuses it with FOXT0001. true() and false() stand for yes and no, and
+// xsl:version is ignored.
+func TestFnTransformRequestedProperties(t *testing.T) {
+	const xsl = `'http://www.w3.org/1999/XSL/Transform'`
+	for _, tc := range []struct{ name, req, code string }{
+		{"met boolean", `QName(` + xsl + `, 'supports-streaming'): false()`, ""},
+		{"met string", `QName(` + xsl + `, 'xpath-version'): '3.1'`, ""},
+		{"version ignored", `QName(` + xsl + `, 'version'): '9.9'`, ""},
+		{"product", `QName(` + xsl + `, 'product-name'): 'Xalan'`, "FOXT0001"},
+		{"unmet boolean", `QName(` + xsl + `, 'supports-namespace-axis'): false()`, "FOXT0001"},
+		{"streaming", `QName(` + xsl + `, 'supports-streaming'): 'yes'`, "FOXT0001"},
+		{"schema-aware", `QName(` + xsl + `, 'is-schema-aware'): false()`, "FOXT0001"},
+		{"other namespace", `QName('urn:x', 'p'): 'v'`, "FOXT0001"},
+		{"string key", `'product-name': 'go-xml'`, "XPTY0004"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := fnTransformWith(t, `map{'requested-properties': map{`+tc.req+`}}`)
+			if tc.code == "" {
+				if err != nil || !strings.Contains(got, "<ok/>") {
+					t.Fatalf("got %q, %v; want <ok/>", got, err)
+				}
+				return
+			}
+			if code := xdm.ErrorCode(err); code != tc.code {
+				t.Fatalf("got %v, want %s", err, tc.code)
+			}
+		})
+	}
+}
+
+// F&O 3.1: with no initial-function, initial-template, source-node or
+// initial-match-selection, the invocation is call-template on
+// xsl:initial-template, so a stylesheet without one is XTDE0040
+// (fn-transform-err-1) rather than an apply-templates with no selection.
+// source-node still means apply-templates.
+func TestFnTransformDefaultEntryPoint(t *testing.T) {
+	if got, err := fnTransformWith(t, `map{}`); err != nil || !strings.Contains(got, "<ok/>") {
+		t.Fatalf("no options: got %q, %v; want <ok/>", got, err)
+	}
+	if got, err := fnTransformWith(t, `map{'source-node': /}`); err != nil || !strings.Contains(got, "<matched/>") {
+		t.Fatalf("source-node: got %q, %v; want <matched/>", got, err)
+	}
+}
+
+// F&O 3.1 requires function-params with initial-function; without it the
+// options identify no invocation, FOXT0002 (fn-transform-err-16), rather than
+// a call of the nullary function.
+func TestFnTransformInitialFunctionNeedsParams(t *testing.T) {
+	_, err := fnTransformWith(t, `map{'initial-function': QName('urn:f', 'two')}`)
+	if code := xdm.ErrorCode(err); code != "FOXT0002" {
+		t.Fatalf("got %v, want FOXT0002", err)
+	}
+	got, err := fnTransformWith(t, `map{'initial-function': QName('urn:f', 'two'), 'function-params': []}`)
+	if err != nil || !strings.Contains(got, "<two/>") {
+		t.Fatalf("with function-params: got %q, %v; want <two/>", got, err)
 	}
 }

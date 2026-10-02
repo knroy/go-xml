@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -117,6 +119,16 @@ func transformOption(m *xdm.MapItem, name string) (xdm.Sequence, bool) {
 	return seq, true
 }
 
+// transformHasAny reports whether any of the named options is present.
+func transformHasAny(m *xdm.MapItem, names ...string) bool {
+	for _, n := range names {
+		if _, ok := transformOption(m, n); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // transformString reads a string-valued option.
 func transformString(m *xdm.MapItem, name string) (string, bool, error) {
 	seq, ok := transformOption(m, name)
@@ -208,7 +220,9 @@ func transformArray(m *xdm.MapItem, name string) ([]xdm.Sequence, bool, error) {
 //
 // A key is a QName in the data model, and the bindings the engine takes are
 // keyed by Clark name, so an unprefixed name and one in a namespace both
-// arrive in the form the runtime looks them up by.
+// arrive in the form the runtime looks them up by. F&O 3.1 types each of these
+// options map(xs:QName, item()*), and coercion does not convert map keys, so
+// a string key is FOXT0002 (fn-transform-err-18), as other processors report.
 func transformParams(m *xdm.MapItem, name string) (map[string]xdm.Sequence, error) {
 	seq, ok := transformOption(m, name)
 	if !ok {
@@ -225,19 +239,76 @@ func transformParams(m *xdm.MapItem, name string) (map[string]xdm.Sequence, erro
 	}
 	out := map[string]xdm.Sequence{}
 	err = sub.Entries(func(key *xdm.Atomic, value xdm.Sequence) error {
-		if q := key.QName(); q != nil {
-			out[q.Clark()] = value
-			return nil
+		q := key.QName()
+		if q == nil {
+			return xdm.Errorf("FOXT0002",
+				"fn:transform: %s keys must be xs:QName, got %s %q",
+				name, key.TypeName(), key.String())
 		}
-		// A key that is not a QName is a string naming one in no namespace,
-		// which is how most callers write it.
-		out[xdm.QName{Local: key.String()}.Clark()] = value
+		out[q.Clark()] = value
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// checkRequestedProperties applies requested-properties (F&O 3.1 14.7.1). A
+// key is a name fn:system-property answers for and its value the setting
+// asked for, true() and false() standing for yes and no. A request is met
+// when it equals what this processor reports; a name system-property does not
+// define reports "", as system-property itself does. F&O leaves an unmet
+// request implementation-defined, and with no other processor to offer it is
+// FOXT0001, "no suitable XSLT processor is available". xsl:version is skipped,
+// as F&O directs.
+func checkRequestedProperties(opts *xdm.MapItem) error {
+	seq, ok := transformOption(opts, "requested-properties")
+	if !ok {
+		return nil
+	}
+	it, err := seq.Single()
+	if err != nil {
+		return xdm.ErrType("fn:transform: requested-properties must be a single map")
+	}
+	m, ok := it.(*xdm.MapItem)
+	if !ok {
+		return xdm.ErrType(
+			"fn:transform: requested-properties must be a map, got %s", it.TypeName())
+	}
+	return m.Entries(func(key *xdm.Atomic, value xdm.Sequence) error {
+		q := key.QName()
+		if q == nil {
+			return xdm.ErrType(
+				"fn:transform: requested-properties key %q is not a QName", key.String())
+		}
+		if q.URI == xdm.NSXSL && q.Local == "version" {
+			return nil
+		}
+		v, verr := value.Single()
+		a, ok := v.(*xdm.Atomic)
+		if verr != nil || !ok {
+			return xdm.ErrType(
+				"fn:transform: requested property %s must be a single atomic value", q.Clark())
+		}
+		want := a.String()
+		if a.Type == xdm.TypeBoolean {
+			want = "no"
+			if a.Bool() {
+				want = "yes"
+			}
+		}
+		have := ""
+		if q.URI == xdm.NSXSL {
+			have = systemProperties[q.Local]
+		}
+		if want != have {
+			return xdm.Errorf("FOXT0001",
+				"fn:transform: requested property %s = %q cannot be met "+
+					"(this processor reports %q)", q.Clark(), want, have)
+		}
+		return nil
+	})
 }
 
 // runNestedTransform is fn:transform's body.
@@ -285,6 +356,18 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 			rt.maxDepth, xdm.ErrResourceLimit)
 	}
 
+	// xslt-version selects the processor, and a 2.0 one ignores the options
+	// 3.0 added; see transformXSLTVersion.
+	maxVersion, err := transformXSLTVersion(opts)
+	if err != nil {
+		return nil, err
+	}
+	if maxVersion == 2.0 {
+		if opts, err = optionsFor20(opts); err != nil {
+			return nil, err
+		}
+	}
+
 	// F&O 3.1 lists the invocation methods as "exactly one of the following
 	// combinations", and initial-mode belongs only to apply-templates; FOXT0002
 	// is its code for "two mutually-exclusive parameters".
@@ -302,6 +385,10 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 				"fn:transform: source-node and initial-match-selection "+
 					"are mutually exclusive")
 		}
+	}
+
+	if err := checkRequestedProperties(opts); err != nil {
+		return nil, err
 	}
 
 	sheet, err := nestedStylesheet(ctx, rt, opts)
@@ -377,21 +464,31 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 		return nil, verr
 	} else if ok {
 		topts.InitialTemplate, topts.InitialTemplateURI = q.Local, q.URI
+	} else if !transformHasAny(opts, "initial-function", "initial-mode",
+		"source-node", "source-location", "initial-match-selection") {
+		// F&O 3.1's invocation rule: with none of these the method is
+		// call-template on xsl:initial-template, so a stylesheet without one
+		// is XTDE0040 (fn-transform-err-1), not the XTDE0044 of an
+		// apply-templates that has nothing to select.
+		topts.InitialTemplate, topts.InitialTemplateURI = "initial-template", xdm.NSXSL
 	}
 	// initial-function and function-params are read as a pair. 2.3.5 infers
 	// the arity from "the length of the parameter list", so the arguments are
-	// not merely values but half the entry point's identity, and an absent
-	// function-params is the empty list -- an invocation of the nullary
-	// function of that name, which is XTDE0041 if the stylesheet has none.
-	// That is why the array is read even when the option is absent rather
-	// than left nil to mean "unspecified".
+	// not merely values but half the entry point's identity. F&O 3.1 lists
+	// both as required for call-function invocation, so one without the
+	// other is FOXT0002 (fn-transform-err-16): defaulting an absent list to
+	// empty would quietly call the nullary function instead.
 	if fname, ok, ferr := transformQName(opts, "initial-function"); ferr != nil {
 		return nil, ferr
 	} else if ok {
 		topts.InitialFunction = fname
-		args, _, aerr := transformArray(opts, "function-params")
+		args, present, aerr := transformArray(opts, "function-params")
 		if aerr != nil {
 			return nil, aerr
+		}
+		if !present {
+			return nil, xdm.Errorf("FOXT0002",
+				"fn:transform: initial-function was supplied without function-params")
 		}
 		topts.InitialFunctionParams = args
 	} else if _, present, aerr := transformArray(opts, "function-params"); aerr != nil {
@@ -427,6 +524,36 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 		if topts.InitialTemplate == "" && topts.InitialFunction.Local == "" {
 			topts.InitialMatchSelection = xdm.Sequence{sourceNode}
 		}
+	}
+	// global-context-item replaces the global context item source-node and
+	// source-location supply, while what they select stays the initial match
+	// selection (fn-transform-82c). Given alone, it is option (a) for
+	// starting at xsl:initial-template "while also supplying a context item
+	// for use when evaluating global variables".
+	if seq, ok := transformOption(opts, "global-context-item"); ok {
+		it, gerr := seq.Single()
+		if gerr != nil {
+			return nil, xdm.ErrType(
+				"fn:transform: global-context-item must be a single item")
+		}
+		// Transform takes the global context item as its source document,
+		// so an atomic or function item has nowhere to go.
+		n, ok := it.(*xdm.Node)
+		if !ok {
+			return nil, xdm.Errorf("FOXT0001",
+				"fn:transform: a global-context-item that is not a node "+
+					"(%s) is not supported", it.TypeName())
+		}
+		if topts.InitialTemplate == "" && topts.InitialFunction.Local == "" &&
+			topts.InitialMatchSelection == nil {
+			if source != nil {
+				topts.InitialMatchSelection = xdm.Sequence{source}
+			} else if topts.InitialMode == "" {
+				topts.InitialTemplate, topts.InitialTemplateURI =
+					"initial-template", xdm.NSXSL
+			}
+		}
+		source = n
 	}
 
 	res, err := sheet.Transform(rt.goCtx, source, topts)
@@ -675,6 +802,10 @@ func compileNested(
 	if err != nil {
 		return nil, err
 	}
+	maxVersion, err := transformXSLTVersion(opts)
+	if err != nil {
+		return nil, err
+	}
 	// A nested stylesheet may itself xsl:include or xsl:import. The caller's
 	// document resolver is reused when it can also resolve modules --
 	// FileResolver satisfies both interfaces -- and otherwise the nested
@@ -698,6 +829,7 @@ func compileNested(
 		// remainder, never reset it.
 		moduleBudget: ctx.EntityBudget(),
 		StaticParams: static,
+		MaxVersion:   maxVersion,
 	}
 	// A transform reached from the static phase is running INSIDE a Compile
 	// that holds compileMu, so it must not ask for the lock again. rt.static
@@ -744,10 +876,30 @@ func transformResultMap(ctx *xpath.Context, opts *xdm.MapItem, res *Result) (xdm
 		return nil, pperr
 	}
 
+	// serialization-params is read whatever the delivery format, so a bad
+	// value is refused rather than ignored, and acts only on the serialized
+	// principal result: F&O 3.1 gives it as "Serialization parameters for the
+	// principal result document", so a secondary keeps its own settings.
+	pres := *res
+	pres.output, pres.charMap, err = transformSerializationParams(opts, res.output, res.charMap)
+	if err != nil {
+		return nil, err
+	}
+
 	b := xdm.NewMapBuilder()
-	principal, perr := deliverResult(format, res.Nodes, res)
+	principal, perr := deliverResult(format, res.Nodes, &pres)
 	if perr != nil {
 		return nil, perr
+	}
+	// XSLT 3.0 2.3.6.2 keeps, for APIs that want it, the earlier rule that an
+	// empty raw result yields a result tree "if and only if the transformation
+	// generates no secondary results". fn-transform-43 asserts it: its 2.0
+	// stylesheet writes only result documents, and an empty principal entry
+	// delivered beside them is a serialized "" that parse-xml rejects. Raw
+	// delivery is exempt, since there the empty sequence is the result.
+	hasPrincipal := format == "raw" || len(res.Nodes) > 0 || len(res.Secondary) == 0
+	for _, sec := range res.Secondary {
+		hasPrincipal = hasPrincipal || sec.Href == ""
 	}
 	// An xsl:result-document with no href IS the principal output. Section
 	// 24.3 changes the current output URI only "during execution of an
@@ -762,6 +914,10 @@ func transformResultMap(ctx *xpath.Context, opts *xdm.MapItem, res *Result) (xdm
 		if sec.Href != "" {
 			continue
 		}
+		sec.Output, sec.charMap, err = transformSerializationParams(opts, sec.Output, sec.charMap)
+		if err != nil {
+			return nil, err
+		}
 		v, verr := deliverSecondary(format, sec)
 		if verr != nil {
 			return nil, verr
@@ -774,12 +930,14 @@ func transformResultMap(ctx *xpath.Context, opts *xdm.MapItem, res *Result) (xdm
 	if u, ok, uerr := transformString(opts, "base-output-uri"); uerr == nil && ok && u != "" {
 		key = u
 	}
-	principal, perr = postProcess(ctx, pp, key, principal)
-	if perr != nil {
-		return nil, perr
-	}
-	if err := b.Set(xdm.NewString(key), principal); err != nil {
-		return nil, err
+	if hasPrincipal {
+		principal, perr = postProcess(ctx, pp, key, principal)
+		if perr != nil {
+			return nil, perr
+		}
+		if err := b.Set(xdm.NewString(key), principal); err != nil {
+			return nil, err
+		}
 	}
 	for _, sec := range res.Secondary {
 		// The href-less document was folded into the principal entry above.
@@ -807,6 +965,139 @@ func transformResultMap(ctx *xpath.Context, opts *xdm.MapItem, res *Result) (xdm
 		}
 	}
 	return xdm.Sequence{b.Build()}, nil
+}
+
+// transformSerializationParams applies the serialization-params option over
+// the unnamed output definition o and its character map cm.
+//
+// F&O 3.1: the map "follows the same rules that apply to a map supplied as the
+// second argument of fn:serialize", so a value of the wrong type is XPTY0004
+// and a well-typed but invalid one SEPM0016; a QName key names an
+// implementation-defined parameter, of which there are none here. A supplied
+// value "overrides or augments" xsl:output "following the same rules as when
+// one xsl:output declaration overrides another with lower import precedence":
+// cdata-section-elements and suppress-indentation take the union, a character
+// map supplements the stylesheet's and wins where both map a character, and
+// anything else replaces. An empty sequence restores the default.
+func transformSerializationParams(
+	opts *xdm.MapItem, o OutputSettings, cm map[rune]string,
+) (OutputSettings, map[rune]string, error) {
+	seq, ok := transformOption(opts, "serialization-params")
+	if !ok {
+		return o, cm, nil
+	}
+	it, err := seq.Single()
+	if err != nil {
+		return o, cm, xdm.ErrType("fn:transform: serialization-params must be a single map")
+	}
+	m, ok := it.(*xdm.MapItem)
+	if !ok {
+		return o, cm, xdm.ErrType(
+			"fn:transform: serialization-params must be a map, got %s", it.TypeName())
+	}
+	err = m.Entries(func(key *xdm.Atomic, val xdm.Sequence) error {
+		if key.Type == xdm.TypeQName {
+			return nil
+		}
+		name := key.String()
+		if len(val) == 0 {
+			switch name {
+			case "cdata-section-elements":
+				o.CDataElements = nil
+			case "suppress-indentation":
+				o.SuppressIndentation = nil
+			case "use-character-maps":
+				cm = nil
+			case "escape-uri-attributes":
+				o.EscapeURIAttributes = nil
+			case "include-content-type":
+				o.IncludeContentType = nil
+			case "item-separator":
+				o.ItemSeparator = nil
+			case "build-tree":
+				o.BuildTree = nil
+			default:
+				return SetSerializationParam(&o, name, "")
+			}
+			return nil
+		}
+		switch name {
+		case "use-character-maps":
+			add, err := xpath.CharacterMapParam(val)
+			if err != nil {
+				return err
+			}
+			merged := maps.Clone(cm)
+			if merged == nil {
+				merged = map[rune]string{}
+			}
+			maps.Copy(merged, add)
+			cm = merged
+			return nil
+		case "cdata-section-elements", "suppress-indentation":
+			var names []xdm.QName
+			for _, v := range val {
+				a, ok := v.(*xdm.Atomic)
+				if !ok || a.Type != xdm.TypeQName {
+					return xdm.ErrType("serialization parameter %q takes QNames", name)
+				}
+				names = append(names, *a.QName())
+			}
+			// Concat, not append: the slices are the stylesheet's own.
+			if name == "cdata-section-elements" {
+				o.CDataElements = slices.Concat(o.CDataElements, names)
+			} else {
+				o.SuppressIndentation = slices.Concat(o.SuppressIndentation, names)
+			}
+			return nil
+		}
+		if len(val) != 1 {
+			return xdm.ErrType("serialization parameter %q takes a single value", name)
+		}
+		a, ok := val[0].(*xdm.Atomic)
+		if !ok {
+			return xdm.ErrType("serialization parameter %q takes an atomic value", name)
+		}
+		v := a.String()
+		switch name {
+		case "allow-duplicate-names", "byte-order-mark", "escape-uri-attributes",
+			"include-content-type", "indent", "omit-xml-declaration", "standalone",
+			"undeclare-prefixes":
+			if a.Type != xdm.TypeBoolean && a.Type != xdm.TypeUntypedAtomic {
+				return xdm.ErrType("serialization parameter %q takes a boolean", name)
+			}
+			b, err := xpath.CastAtomic(a, xdm.TypeBoolean)
+			if err != nil {
+				return xdm.ErrType("serialization parameter %q takes a boolean", name)
+			}
+			v = "no"
+			if b.Bool() {
+				v = "yes"
+			}
+		case "html-version":
+			// xs:decimal, read through its lexical form.
+		default:
+			// A QName method names a user-defined method, and there are none.
+			isMethod := name == "method" || name == "json-node-output-method"
+			if isMethod && a.Type == xdm.TypeQName {
+				return xdm.Errorf("SEPM0016",
+					"serialization parameter %q: unsupported method %s", name, v)
+			}
+			if a.Type != xdm.TypeString && a.Type != xdm.TypeAnyURI && a.Type != xdm.TypeUntypedAtomic {
+				return xdm.ErrType("serialization parameter %q takes a string", name)
+			}
+			switch v {
+			case "xml", "html", "xhtml", "text", "json", "adaptive":
+			default:
+				if isMethod {
+					return xdm.Errorf("SEPM0016",
+						"serialization parameter %q: unsupported method %q", name, v)
+				}
+			}
+		}
+		return SetSerializationParam(&o, name, v)
+	})
+	return o, cm, err
 }
 
 // transformFunc reads a function-valued option.

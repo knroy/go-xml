@@ -70,7 +70,7 @@ func useWhenFuncs(bindings map[string]string) *xpath.Library {
 	}
 	// No schema: 3.12 makes the in-scope type definitions of a use-when
 	// those available "in the absence of any xsl:import-schema".
-	registerStaticFuncs(l, fnRes, typeRes, elemRes, nil)
+	registerStaticFuncs(l, fnRes, typeRes, elemRes, nil, processorAtLeast30())
 	return l
 }
 

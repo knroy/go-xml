@@ -177,3 +177,65 @@ func TestStaticTransformUnderA20ProcessorIsRefused(t *testing.T) {
 		t.Fatal("Compile deadlocked on fn:transform in a use-when")
 	}
 }
+
+// serialization-params overrides the unnamed xsl:output for the serialized
+// principal result, merging list parameters and character maps as one
+// xsl:output merges with another (F&O 3.1 14.7.1; QT3 fn-transform-29..80).
+func TestTransformSerializationParams(t *testing.T) {
+	const sheet = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+<xsl:output cdata-section-elements="a" use-character-maps="m" standalone="yes"/>
+<xsl:character-map name="m"><xsl:output-character character="-" string="(hyphen)"/><xsl:output-character character="*" string="(asterisk)"/></xsl:character-map>
+<xsl:template name="xsl:initial-template"><html><a>x</a><b>y</b><br/><c>-*</c></html></xsl:template>
+</xsl:stylesheet>`
+	run := func(params string) (string, error) {
+		got, err := xpath.Eval(`transform(map{'stylesheet-text': $s, 'delivery-format': 'serialized',
+			'serialization-params': `+params+`})?output`, plainContext(nil, "s", sheet), nil)
+		return str(got), err
+	}
+	for _, tc := range []struct{ params, want, not string }{
+		{`map{}`, `<br>`, `CDATA`},
+		{`map{'method': 'xml'}`, `<br/>`, ``},
+		{`map{'method': 'xml', 'cdata-section-elements': QName('', 'b')}`, `<![CDATA[y]]>`, `<a>x</a>`},
+		{`map{'method': 'xml', 'cdata-section-elements': ()}`, `<a>x</a>`, `CDATA`},
+		{`map{'use-character-maps': map{'*': '(star)'}}`, `(hyphen)(star)`, `(asterisk)`},
+		{`map{'method': 'xml', 'indent': true()}`, "\n", ``},
+		{`map{'method': 'xml', 'omit-xml-declaration': false(), 'standalone': ()}`, `<?xml`, `standalone`},
+	} {
+		got, err := run(tc.params)
+		if err != nil {
+			t.Errorf("%s: %v", tc.params, err)
+			continue
+		}
+		if !strings.Contains(got, tc.want) || (tc.not != "" && strings.Contains(got, tc.not)) {
+			t.Errorf("%s: output = %q, want %q and not %q", tc.params, got, tc.want, tc.not)
+		}
+	}
+	for _, tc := range []struct{ params, code string }{
+		{`'indent'`, "XPTY0004"},
+		{`map{'indent': 'yes'}`, "XPTY0004"},
+		{`map{'cdata-section-elements': 'a'}`, "XPTY0004"},
+		{`map{'use-character-maps': map{'ab': 'x'}}`, "SEPM0016"},
+		{`map{'method': 'nonsense'}`, "SEPM0016"},
+	} {
+		if _, err := run(tc.params); xdm.ErrorCode(err) != tc.code {
+			t.Errorf("%s: err = %v, want %s", tc.params, err, tc.code)
+		}
+	}
+}
+
+// An empty principal result beside xsl:result-document output is no result
+// tree at all, as XSLT 2.0 had it; fn-transform-43 parses every entry.
+func TestTransformOmitsEmptyPrincipal(t *testing.T) {
+	const sheet = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="2.0">
+<xsl:template name="main"><xsl:result-document href="s.xml"><s/></xsl:result-document></xsl:template>
+</xsl:stylesheet>`
+	got, err := xpath.Eval(`transform(map{'stylesheet-text': $s, 'initial-template': QName('', 'main'),
+		'base-output-uri': 'http://example.com/out.xml', 'delivery-format': 'serialized'}) => Q{http://www.w3.org/2005/xpath-functions/map}keys()`,
+		plainContext(nil, "s", sheet), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || str(got) != "http://example.com/s.xml" {
+		t.Errorf("keys = %v, want only the secondary http://example.com/s.xml", got)
+	}
+}

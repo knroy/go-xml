@@ -178,10 +178,18 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			// the module's declared version.
 			ok = false
 		}
-		if ok && ad.since30 && !moduleAtLeast30(el) {
+		if ok && ad.since30 && !moduleAtLeast30(el) && !processorAtLeast30() {
 			// An attribute XSLT 3.0 added to an older element is not one that
-			// element has, to a stylesheet declaring an earlier version. It is
-			// treated exactly as a name the summary never defined.
+			// element has, to an XSLT 2.0 processor reading a stylesheet that
+			// declares an earlier version. It is treated exactly as a name the
+			// summary never defined.
+			//
+			// A 3.0 processor accepts it: section 3.9.2 defines no
+			// differences for XSLT 2.0 behavior, so "an XSLT 3.0 processor
+			// will therefore produce the same results whether the effective
+			// version of an element is set to 2.0 or 3.0". fn-transform-61
+			// runs a version="2.0" xsl:function carrying visibility="public"
+			// under xslt-version 3.0.
 			//
 			// What decides is the version on the MODULE element, not the
 			// nearest one in scope. A version attribute written lower down
