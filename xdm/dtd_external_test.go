@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/knroy/go-xml/internal/fileuri"
 )
@@ -544,5 +545,96 @@ func TestEntityUnknownVersionIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported XML version") {
 		t.Fatalf("refused for the wrong reason: %v", err)
+	}
+}
+
+// utf16Bytes encodes s as UTF-16, optionally preceded by a byte order mark.
+// The test inputs are generated rather than checked in, so no line-ending
+// conversion on any OS can corrupt them.
+func utf16Bytes(s string, bigEndian, bom bool) string {
+	units := utf16.Encode([]rune(s))
+	if bom {
+		units = append([]uint16{0xFEFF}, units...)
+	}
+	b := make([]byte, 0, 2*len(units))
+	for _, u := range units {
+		if bigEndian {
+			b = append(b, byte(u>>8), byte(u))
+		} else {
+			b = append(b, byte(u), byte(u>>8))
+		}
+	}
+	return string(b)
+}
+
+// An external parsed entity carries its own encoding (XML §4.3.3), so a UTF-16
+// entity included by a UTF-8 document is decoded as UTF-16. It was read as
+// UTF-8 and failed with "invalid UTF-8" (W3C xmlconf valid-ext-sa-007, -008,
+// -014, ext02, invalid-bo-1/2/4/5). The byte order mark is not part of the
+// replacement text; a second one is a ZERO WIDTH NO-BREAK SPACE and stays.
+func TestExternalEntityEncoding(t *testing.T) {
+	cases := []struct {
+		name, ent, want string
+		wantErr         bool
+	}{
+		{"UTF-16LE with BOM", utf16Bytes("<f>caf\u00e9</f>", false, true), "caf\u00e9", false},
+		{"UTF-16BE with BOM", utf16Bytes("<f>caf\u00e9</f>", true, true), "caf\u00e9", false},
+		{"UTF-16 with a text declaration", utf16Bytes(`<?xml encoding="UTF-16"?><f>x</f>`, false, true), "x", false},
+		{"UTF-16 with two BOMs keeps one as content", utf16Bytes("\uFEFF<f/>", true, true), "\uFEFF", false},
+		{"UTF-8 BOM is dropped", "\uFEFF<f>x</f>", "x", false},
+		{"UTF-8 unchanged", "<f>x</f>", "x", false},
+		{"BOM then a reversed BOM is an illegal character", utf16Bytes("\uFFFE<f/>", true, true), "", true},
+		{"odd byte count is not UTF-16", utf16Bytes("<f/>", true, true) + "x", "", true},
+	}
+	for _, c := range cases {
+		dir := writeFiles(t, map[string]string{
+			"e.ent":   c.ent,
+			"doc.xml": `<!DOCTYPE r [<!ENTITY e SYSTEM "e.ent">]><r>&e;</r>`,
+		})
+		p := filepath.Join(dir, "doc.xml")
+		src, _ := os.ReadFile(p)
+		tree, err := ParseString(string(src), ParseOptions{
+			AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: dir}, BaseURI: fileuri.Of(p)})
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("%s: parsed, want an error", c.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: parse: %v", c.name, err)
+			continue
+		}
+		if got := tree.Root.StringValue(); got != c.want {
+			t.Errorf("%s: text %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// Parameter entities are scoped to the DTD, not to the text that declared
+// them, and an external one resolves against the entity its DECLARATION is in
+// (XML §4.2.2). Both shapes are the W3C xmlconf's: v-pe02 (Appendix D, a
+// character reference in a parameter entity value that becomes a reference
+// when substituted) and rmt-e2e-18 (a parameter entity declared in one module
+// and referenced from the internal subset).
+func TestParameterEntityScopeAndBase(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"pe02.xml": `<!DOCTYPE r [
+<!ENTITY % xx '&#37;zz;'>
+<!ENTITY % zz '&#60;!ENTITY tricky "error-prone" >' >
+%xx;
+]><r>&tricky;</r>`,
+		"e18.xml": `<!DOCTYPE r [
+<!ENTITY % pe SYSTEM "sub1/pe.ent">
+%pe;
+%intpe;
+]><r>&ent;</r>`,
+		"sub1/pe.ent":    `<!ENTITY % extpe SYSTEM "../sub2/extpe.ent"><!ENTITY % intpe "%extpe;">`,
+		"sub2/extpe.ent": `<!ENTITY ent "from sub2">`,
+	})
+	for name, want := range map[string]string{"pe02.xml": "error-prone", "e18.xml": "from sub2"} {
+		if got := mustParseExternal(t, dir, name).Root.StringValue(); got != want {
+			t.Errorf("%s: text %q, want %q", name, got, want)
+		}
 	}
 }

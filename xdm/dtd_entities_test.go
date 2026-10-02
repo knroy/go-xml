@@ -560,3 +560,31 @@ func TestEntityValueTwoLevelExpansion(t *testing.T) {
 		}
 	}
 }
+
+// "&foo;" inside a CDATA section in replacement text is text, not a reference,
+// so the entity is well formed with no foo declared (W3C xmlconf valid-sa-114).
+// It was expanded as a reference, failed, and dropped the whole entity. Outside
+// CDATA the undeclared reference is still an error.
+func TestEntityValueCDATAIsNotExpanded(t *testing.T) {
+	cases := []struct{ value, want string }{
+		{`<![CDATA[&foo;]]>`, "&foo;"},
+		{`<!--&foo;-->x`, "x"},
+		{`&foo;`, ""},
+	}
+	for _, c := range cases {
+		tree, err := ParseString(`<!DOCTYPE r [<!ENTITY e "`+c.value+`">]><r>&e;</r>`, ParseOptions{AllowDOCTYPE: true})
+		if c.want == "" {
+			if err == nil {
+				t.Errorf("%s: parsed, want undeclared foo reported", c.value)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: parse: %v", c.value, err)
+			continue
+		}
+		if got := tree.Root.StringValue(); got != c.want {
+			t.Errorf("%s: text %q, want %q", c.value, got, c.want)
+		}
+	}
+}

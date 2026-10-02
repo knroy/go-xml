@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"unicode/utf16"
 )
@@ -52,6 +53,10 @@ func decodeReader(r io.Reader) (io.Reader, error) {
 		// before the root element, which is not well formed.
 		if _, err := br.Discard(3); err != nil {
 			return nil, err
+		}
+		decl, _ := br.Peek(declPeek)
+		if enc := declaredEncoding(string(decl)); enc != "" && !strings.EqualFold(enc, "UTF-8") {
+			return nil, fmt.Errorf("UTF-8 byte order mark contradicts encoding=%q", enc)
 		}
 		return br, nil
 
@@ -148,6 +153,10 @@ func (u *utf16Reader) fill() error {
 	}
 
 	text := string(utf16.Decode(units))
+	if enc := declaredEncoding(text); enc != "" && !strings.HasPrefix(strings.ToUpper(enc), "UTF-16") {
+		u.err = fmt.Errorf("UTF-16 input contradicts encoding=%q", enc)
+		return u.err
+	}
 	// Only the ENCODING declaration is rewritten: the text really is UTF-8
 	// now, so a declaration naming UTF-16 has become false. The VERSION is
 	// left exactly as written — the tokeniser reads it, and a 1.1 document
@@ -155,6 +164,21 @@ func (u *utf16Reader) fill() error {
 	u.buf.WriteString(rewriteEncodingDecl(text))
 	u.err = io.EOF
 	return nil
+}
+
+// encodingDecl finds [80] EncodingDecl in an XML declaration at the start of s.
+var encodingDecl = regexp.MustCompile(`^<\?xml[ \t\r\n][^?>]*?encoding[ \t\r\n]*=[ \t\r\n]*["']([A-Za-z][A-Za-z0-9._-]*)["']`)
+
+// declaredEncoding returns the encoding an XML declaration names, or "".
+// XML 1.0 §4.3.3 makes it a fatal error for an entity to be presented in an
+// encoding other than the one its declaration names, and a byte order mark
+// is that presentation (Appendix F): a UTF-8 BOM before encoding="ISO-8859-1"
+// leaves two readings of the same bytes, so the document is refused.
+func declaredEncoding(s string) string {
+	if m := encodingDecl.FindStringSubmatch(s); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // rewriteEncodingDecl removes an encoding declaration from an XML declaration.

@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"strings"
@@ -138,6 +139,24 @@ func (t *entityTable) fetchExternal(systemID, publicID, base string) (string, st
 	if err != nil {
 		return "", "", fmt.Errorf("reading external entity %q: %w", systemID, err)
 	}
+	if len(data) > room {
+		return "", "", fmt.Errorf(
+			"external entity %q exceeds the remaining %d byte expansion budget: %w",
+			systemID, room, ErrResourceLimit)
+	}
+	// An external parsed entity carries its own encoding (XML §4.3.3): a
+	// UTF-16 entity included by a UTF-8 document is UTF-16 still. The same
+	// detection the document entity goes through decodes it, and drops the
+	// byte order mark, which is not part of the replacement text.
+	dec, err := decodeReader(bytes.NewReader(data))
+	if err == nil {
+		data, err = io.ReadAll(dec)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("decoding external entity %q: %w", systemID, err)
+	}
+	// Decoding UTF-16 can lengthen the text, so the decoded size is checked
+	// against the same room: the budget bounds what the expander is handed.
 	if len(data) > room {
 		return "", "", fmt.Errorf(
 			"external entity %q exceeds the remaining %d byte expansion budget: %w",
@@ -550,7 +569,10 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 		refBase := base
 		if p.external {
 			var resolved string
-			text, resolved, err = t.fetchExternal(p.systemID, p.publicID, base)
+			// The system identifier resolves against the entity the
+			// DECLARATION is in (XML §4.2.2), not the one the reference is in:
+			// "%intpe;" may be used far from where "%extpe;" was declared.
+			text, resolved, err = t.fetchExternal(p.systemID, p.publicID, p.base)
 			if err != nil {
 				return "", err
 			}
@@ -592,6 +614,7 @@ type paramEntity struct {
 	external bool
 	systemID string
 	publicID string
+	base     string
 }
 
 // parseParameterDecls reads the "<!ENTITY % name ...>" declarations out of a
@@ -600,8 +623,16 @@ type paramEntity struct {
 // These are the declarations parseEntityDecls deliberately skips: a parameter
 // entity is expanded inside the DTD rather than in content, so it is only
 // meaningful to the subset-level machinery here.
+//
+// The declarations accumulate on t rather than per subset: a parameter entity
+// declared inside one module is in scope for the rest of the DTD, which is how
+// "%pe;" can declare an entity that a later "%intpe;" in the including subset
+// then references.
 func (t *entityTable) parseParameterDecls(subset, base string) (map[string]paramEntity, error) {
-	out := map[string]paramEntity{}
+	if t.params == nil {
+		t.params = map[string]paramEntity{}
+	}
+	out := t.params
 	rest := subset
 	for len(out) < maxEntityCount {
 		i := strings.Index(rest, "<!ENTITY")
@@ -640,11 +671,15 @@ func (t *entityTable) parseParameterDecls(subset, base string) (map[string]param
 				external: true,
 				systemID: d.systemID,
 				publicID: d.publicID,
+				base:     d.base,
 			}
 		default:
 			v := fields[1]
 			if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') {
-				out[name] = paramEntity{text: unquote(v)}
+				// The replacement text, not the literal: character references
+				// are decoded at declaration (XML §4.5), which is how
+				// '&#37;zz;' becomes a reference to %zz; when substituted.
+				out[name] = paramEntity{text: replacementText(unquote(v))}
 			}
 		}
 	}

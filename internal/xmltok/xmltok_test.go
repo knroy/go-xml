@@ -127,7 +127,14 @@ func TestXML11(t *testing.T) {
 		{name: "NEL ref kept", src: v11 + "<a>&#x85;</a>", want: pi + `<a>"\u0085"</a>`},
 		{name: "NEL 1.0 kept", src: "<a>x\u0085y</a>", want: `<a>"x\u0085y"</a>`},
 		{name: "NEL in attr", src: v11 + "<a b='\u0085'/>", want: pi + `<a b="\n"></a>`},
-		{name: "unsupported", src: `<?xml version="1.2"?><a/>`, wantErr: `xml: unsupported version "1.2"; only versions 1.0 and 1.1 are supported`},
+		{name: "1.x is 1.0", src: `<?xml version="1.7"?><a>&#x7;</a>`, wantErr: syntax(1, "illegal character code U+0007")},
+		{name: "1.10 is 1.0", src: `<?xml version="1.10"?><a/>`, want: `<?xml version="1.10"?><a></a>`},
+		{name: "unsupported", src: `<?xml version="2.0"?><a/>`, wantErr: `xml: unsupported version "2.0"; only versions 1.x are supported`},
+		{name: "no digits", src: `<?xml version="1."?><a/>`, wantErr: `xml: unsupported version "1."; only versions 1.x are supported`},
+		{name: "not digits", src: `<?xml version="1.1a"?><a/>`, wantErr: `xml: unsupported version "1.1a"; only versions 1.x are supported`},
+		{name: "restricted literal in comment", src: v11 + "<!--\x07-->", wantErr: syntax(1, "illegal character code U+0007")},
+		{name: "restricted literal in pi", src: v11 + "<?t \x07?>", wantErr: syntax(1, "illegal character code U+0007")},
+		{name: "NEL in comment", src: v11 + "<!--\u0085-->", want: pi + "<!--\u0085-->"},
 		{name: "stray decl", src: `<?xml version="1.0"?><a>` + `<?xml version="1.1"?>` + "\x07</a>",
 			wantErr: syntax(1, "illegal character code U+0007")},
 	})
@@ -147,7 +154,11 @@ func TestTags(t *testing.T) {
 		{name: "attr ws kept", src: "<a b='\t\r\nc'/>", want: `<a b="\t\nc"></a>`},
 		{name: "attr refs", src: `<a b="&lt;&#65;"/>`, want: `<a b="<A"></a>`},
 		{name: "attr ]]>", src: `<a b="]]>"/>`, want: `<a b="]]>"></a>`},
-		{name: "no space between attrs", src: `<a b="1"c="2"/>`, want: `<a b="1" c="2"></a>`},
+		{name: "no space between attrs", src: `<a b="1"c="2"/>`, wantErr: syntax(1, "expected white space between attributes")},
+		{name: "no space between attrs, single quotes", src: `<a b='1'c='2'>`, wantErr: syntax(1, "expected white space between attributes")},
+		{name: "any S between attrs", src: "<a b='1'\tc='2'\nd='3'\r\ne='4'/>", want: `<a b="1" c="2" d="3" e="4"></a>`},
+		{name: "no space before >", src: `<a b="1">`, want: `<a b="1">`},
+		{name: "no space before />", src: `<a b="1"/>`, want: `<a b="1"></a>`},
 		{name: "5e name", src: "<Dĳkstra/>", want: "<Dĳkstra></Dĳkstra>"},
 		{name: "end tag space", src: "<a></a \n>", want: "<a></a>"},
 		{name: "two colons", src: `<a:b:c/>`, wantErr: syntax(1, "expected element name after <")},
@@ -175,9 +186,23 @@ func TestMarkup(t *testing.T) {
 		{name: "double dash", src: "<!-- a -- b -->", wantErr: syntax(1, `invalid sequence "--" not allowed in comments`)},
 		{name: "bad comment open", src: "<!-a-->", wantErr: syntax(1, "invalid sequence <!- not part of <!--")},
 		{name: "eof in comment", src: "<!-- a -", wantErr: syntax(1, "unexpected EOF")},
+		{name: "comment ending --->", src: "<!-- a --->", wantErr: syntax(1, `invalid sequence "--" not allowed in comments`)},
+		{name: "comment form feed", src: "<!-- \f -->", wantErr: syntax(1, "illegal character code U+000C")},
+		{name: "comment NUL", src: "<!--\n\x00-->", wantErr: syntax(2, "illegal character code U+0000")},
+		{name: "comment U+FFFF", src: "<!-- \uffff -->", wantErr: syntax(1, "illegal character code U+FFFF")},
+		{name: "comment invalid utf-8", src: "<!-- \xc3 -->", wantErr: syntax(1, "invalid UTF-8")},
+		{name: "comment non-ascii", src: "<!-- é\t\U0001F600 -->", want: "<!-- é\t\U0001F600 -->"},
 		{name: "pi", src: "<?t  some ? data?>", want: "<?t some ? data?>"},
 		{name: "pi empty", src: "<?t?>", want: "<?t ?>"},
 		{name: "pi no target", src: "<? t?>", wantErr: syntax(1, "expected target name after <?")},
+		{name: "pi no space after target", src: "<?t+++?>", wantErr: syntax(1, "expected white space after processing instruction target t")},
+		{name: "pi target runs into data", src: "<?xmlversion='1.0'?>", wantErr: syntax(1, "expected white space after processing instruction target xmlversion")},
+		{name: "pi ? after target", src: "<?t?x?>", wantErr: syntax(1, "expected white space after processing instruction target t")},
+		{name: "pi tab after target", src: "<?t\tx?>", want: "<?t x?>"},
+		{name: "pi form feed", src: "<?t a\fb?>", wantErr: syntax(1, "illegal character code U+000C")},
+		{name: "pi U+FFFF", src: "<?t \uffff?>", wantErr: syntax(1, "illegal character code U+FFFF")},
+		{name: "pi invalid utf-8", src: "<?t \xff?>", wantErr: syntax(1, "invalid UTF-8")},
+		{name: "pi non-ascii", src: "<?t é\U0001F600?>", want: "<?t é\U0001F600?>"},
 		{name: "cdata", src: "<a><![CDATA[<b>&amp;\r\n]]]></a>", want: `<a>"<b>&amp;\n]"</a>`},
 		{name: "empty cdata", src: "<![CDATA[]]>", want: `""`},
 		{name: "cdata checked", src: "<![CDATA[\x01]]>", wantErr: syntax(1, "illegal character code U+0001")},
@@ -212,6 +237,47 @@ func TestEntityIsLazy(t *testing.T) {
 	got, err := render(d)
 	if err != nil || got != `<a>"<b/>"</a>` {
 		t.Errorf("got %s, %v", got, err)
+	}
+}
+
+// TestLiteral: CharData written out as it stands is Literal; a reference
+// anywhere in it, or a CDATA section, is not, whatever text results.
+func TestLiteral(t *testing.T) {
+	cases := []struct {
+		src  string
+		want []bool // Literal after each CharData
+	}{
+		{" \t\r\n<a/>x", []bool{true, true}},
+		{"&#32;<a/>&#x20;", []bool{false, false}},
+		{"<a/> &amp; ", []bool{false}},
+		{"<a/>&e;", []bool{false}},
+		{"<![CDATA[]]><a/><![CDATA[ ]]> ", []bool{false, false, true}},
+		{" <![CDATA[]]><a/>", []bool{true, false}},
+		{"<a b='&#32;'/> ", []bool{true}},
+		{"<a>&lt;</a>\n", []bool{false, true}},
+	}
+	for _, c := range cases {
+		for _, oneByte := range []bool{false, true} {
+			var r io.Reader = strings.NewReader(c.src)
+			if oneByte {
+				r = iotest.OneByteReader(r)
+			}
+			d := NewDecoder(r)
+			d.Entity = map[string]string{"e": ""}
+			var got []bool
+			for {
+				tok, err := d.RawToken()
+				if err != nil {
+					break
+				}
+				if _, ok := tok.(CharData); ok {
+					got = append(got, d.Literal())
+				}
+			}
+			if fmt.Sprint(got) != fmt.Sprint(c.want) {
+				t.Errorf("%q (one byte %v): Literal %v, want %v", c.src, oneByte, got, c.want)
+			}
+		}
 	}
 }
 
@@ -330,6 +396,7 @@ var seeds = []string{
 	`<!DOCTYPE a [<!ENTITY e "x>y"><!-- > --><!ATTLIST a b CDATA '>'>]><a>&e;</a>`,
 	"<!DOCTYPE a [<<<!-x>]>",
 	"<a>&e;&bad;&br;>&u;&hi;</a>",
+	`<a b="1"c="2"/>`, "<?t+?>", "<!--\f-->", "<?t \f?>", "&#32;<![CDATA[]]><a/>",
 }
 
 // FuzzRawTokenNoPanic drives the tokeniser to exhaustion over arbitrary

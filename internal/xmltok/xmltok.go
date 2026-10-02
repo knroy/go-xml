@@ -8,8 +8,11 @@
 // observable behaviour — token boundaries, error text and line numbers,
 // InputOffset — so that the switch is invisible to xdm. Where that behaviour
 // departs from the Recommendations the departure is kept on purpose and is
-// marked "parity:" below; correcting it is a separate step, taken only once
-// the swap has been proven safe.
+// marked "parity:" below. Six have since been corrected, each measured
+// against the W3C XML Conformance Test Suite: white space between attributes,
+// white space after a PI target, [2] Char in comments and PI bodies, version
+// 1.x read as 1.0, and Literal, which lets xdm refuse a reference or CDATA
+// section outside the document element.
 //
 // What each part implements:
 //
@@ -24,9 +27,9 @@
 //     XML 1.0 §3 [7] QName, as written, with no binding.
 //   - comment: §2.5 Comments. procInst: §2.6 Processing Instructions.
 //   - cdata: §2.7 CDATA Sections.
-//   - xmlDecl: §2.8 [23] XMLDecl, [24] VersionInfo (1.0 and 1.1 only), and
-//     §4.3.3 [80] EncodingDecl, which hands a non-UTF-8 stream to
-//     CharsetReader.
+//   - xmlDecl: §2.8 [23] XMLDecl, [24] VersionInfo (1.1, or any other 1.x
+//     read as 1.0), and §4.3.3 [80] EncodingDecl, which hands a non-UTF-8
+//     stream to CharsetReader.
 //   - directive: §2.8 [28] doctypedecl, returned unparsed for xdm to read.
 //   - startTag, endTag: §3.1 [40] STag, [41] Attribute, [42] ETag, [44]
 //     EmptyElemTag. Tags are not paired here; xdm does that.
@@ -154,6 +157,8 @@ type Decoder struct {
 
 	v11      bool // the XML declaration said version="1.1"
 	declSeen bool // the first <?xml?> has been read; the version is fixed
+
+	literal bool // the last CharData had no reference and was not CDATA
 }
 
 // NewDecoder returns a Decoder reading from r.
@@ -166,6 +171,13 @@ func NewDecoder(r io.Reader) *Decoder {
 // setter: a caller able to assert a version could give a 1.0 document 1.1's
 // relaxations. It is meaningful once the declaration has been read.
 func (d *Decoder) IsVersion11() bool { return d.v11 }
+
+// Literal reports whether the CharData last returned was written out as it
+// stands: no reference was expanded in it and it is not a CDATA section.
+// Outside the document element [27] Misc admits only literal S, so a caller
+// needs this as well as the text to tell "&#32;" or "<![CDATA[]]>" there from
+// a space.
+func (d *Decoder) Literal() bool { return d.literal }
 
 // InputOffset returns the stream offset just past the last token returned,
 // counted in the bytes the tokeniser read — after CharsetReader conversion,
@@ -248,23 +260,25 @@ func (d *Decoder) peek() (byte, bool) {
 	return d.buf[d.pos], true
 }
 
-// space skips XML white space, [3] S. Running out of input is not an error
-// here; the caller's next mustgetc reports it.
-func (d *Decoder) space() {
+// space skips XML white space, [3] S, and reports whether there was any.
+// Running out of input is not an error here; the caller's next mustgetc
+// reports it.
+func (d *Decoder) space() bool {
+	from := d.InputOffset()
 	for {
 		for d.pos < len(d.buf) {
 			switch d.buf[d.pos] {
 			case ' ', '\t', '\n', '\r':
 				d.pos++
 			default:
-				return
+				return d.InputOffset() > from
 			}
 		}
 		if _, ok := d.peek(); !ok {
 			if d.err == nil {
 				d.err = d.srcErr
 			}
-			return
+			return d.InputOffset() > from
 		}
 	}
 }
@@ -286,6 +300,7 @@ func (d *Decoder) RawToken() (Token, error) {
 	}
 	if b != '<' {
 		d.ungetc()
+		d.literal = true // until reference says otherwise
 		data, ok := d.text(0, false)
 		if !ok {
 			return nil, d.err
@@ -332,11 +347,9 @@ func (d *Decoder) orSyntaxError(msg string) error {
 	return d.err
 }
 
-// startTag reads [40] STag or [44] EmptyElemTag after "<".
-//
-// parity: [40] requires white space between attributes; none is required
-// here, so <a b="1"c="2"> is accepted. Duplicate attributes are xdm's to
-// reject.
+// startTag reads [40] STag or [44] EmptyElemTag after "<". Each attribute
+// follows white space, so <a b="1"c="2"> is refused. Duplicate attributes are
+// xdm's to reject.
 func (d *Decoder) startTag() (Token, error) {
 	name, ok := d.nsname()
 	if !ok {
@@ -344,7 +357,7 @@ func (d *Decoder) startTag() (Token, error) {
 	}
 	attrs := []Attr{}
 	for {
-		d.space()
+		spaced := d.space()
 		b, ok := d.mustgetc()
 		if !ok {
 			return nil, d.err
@@ -361,6 +374,9 @@ func (d *Decoder) startTag() (Token, error) {
 			}
 			d.endPending, d.endName = true, name
 			break
+		}
+		if !spaced && len(attrs) > 0 {
+			return nil, d.syntaxError("expected white space between attributes")
 		}
 		d.ungetc()
 		an, ok := d.nsname()
@@ -391,21 +407,28 @@ func (d *Decoder) startTag() (Token, error) {
 }
 
 // procInst reads [16] PI after "<?", and treats target "xml" as [23] XMLDecl.
+// The target is followed by white space or "?>", and the body is checked
+// against [2] Char.
 //
-// parity: the body is returned raw — neither checked against [2] Char nor
-// newline-normalised — and a target of "xml" is the declaration wherever it
-// appears, not only at the start of the document.
+// parity: the body is not newline-normalised, and a target of "xml" is the
+// declaration wherever it appears, not only at the start of the document.
 func (d *Decoder) procInst() (Token, error) {
 	target, ok := d.name()
 	if !ok {
 		return nil, d.orSyntaxError("expected target name after <?")
 	}
-	d.space()
+	spaced := d.space()
 	data, ok := d.until("?>", d.scratch[:0])
 	if !ok {
 		return nil, d.err
 	}
 	d.scratch = data
+	if !spaced && len(data) > 0 {
+		return nil, d.syntaxError("expected white space after processing instruction target " + target)
+	}
+	if !d.checkChars(data, nil) {
+		return nil, d.err
+	}
 	if target == "xml" {
 		if err := d.xmlDecl(string(data)); err != nil {
 			d.err = err
@@ -418,14 +441,17 @@ func (d *Decoder) procInst() (Token, error) {
 // xmlDecl applies the version and encoding of an XML declaration whose
 // pseudo-attributes are decl.
 //
+// A version of 1.x other than 1.1 is read as 1.0, as §2.8 asks of a 1.0
+// processor since the Fifth Edition.
+//
 // parity: an unrecognised version or encoding is a plain error, not a
 // SyntaxError, and the pseudo-attributes are found by declValue's substring
 // search rather than parsed by [24] and [80]. The version is taken from the
 // first <?xml?> only; the encoding from every one.
 func (d *Decoder) xmlDecl(decl string) error {
 	ver := declValue(decl, "version")
-	if ver != "" && ver != "1.0" && ver != "1.1" {
-		return fmt.Errorf("xml: unsupported version %q; only versions 1.0 and 1.1 are supported", ver)
+	if ver != "" && !isVersionNum(ver) {
+		return fmt.Errorf("xml: unsupported version %q; only versions 1.x are supported", ver)
 	}
 	if !d.declSeen {
 		d.declSeen, d.v11 = true, ver == "1.1"
@@ -450,6 +476,20 @@ func (d *Decoder) xmlDecl(decl string) error {
 	d.buf, d.pos = d.buf[:0], 0
 	d.src, d.srcErr = r, nil
 	return nil
+}
+
+// isVersionNum reports whether v is [26] VersionNum, '1.' [0-9]+.
+func isVersionNum(v string) bool {
+	digits, ok := strings.CutPrefix(v, "1.")
+	if !ok || digits == "" {
+		return false
+	}
+	for _, c := range digits {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // unread returns the rest of the stream: what is left in the window, then the
@@ -513,6 +553,7 @@ func (d *Decoder) bang() (Token, error) {
 				return nil, d.syntaxError("invalid <![ sequence")
 			}
 		}
+		d.literal = false
 		data, ok := d.text(0, true)
 		if !ok {
 			return nil, d.err
@@ -522,9 +563,9 @@ func (d *Decoder) bang() (Token, error) {
 	return d.directive(b)
 }
 
-// comment reads [15] Comment after "<!-".
+// comment reads [15] Comment after "<!-", checking the body against [2] Char.
 //
-// parity: the body is returned raw, as for a PI.
+// parity: the body is not newline-normalised, as for a PI.
 func (d *Decoder) comment() (Token, error) {
 	b, ok := d.mustgetc()
 	if !ok {
@@ -543,6 +584,9 @@ func (d *Decoder) comment() (Token, error) {
 	}
 	if b != '>' {
 		return nil, d.syntaxError(`invalid sequence "--" not allowed in comments`)
+	}
+	if !d.checkChars(data, nil) {
+		return nil, d.err
 	}
 	return Comment(data), nil
 }
@@ -898,6 +942,7 @@ func (d *Decoder) finishText(out []byte, spans []refSpan) ([]byte, bool) {
 // parity: an entity's replacement text is not newline-normalised, but
 // checkChars does see it, as if it had been literal.
 func (d *Decoder) reference(out []byte, spans []refSpan) ([]byte, []refSpan, bool) {
+	d.literal = false
 	start := len(out)
 	out = append(out, '&')
 	b, ok := d.mustgetc()

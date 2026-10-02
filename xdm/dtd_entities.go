@@ -166,6 +166,9 @@ type entityTable struct {
 	// fetching marks the external entities currently being read, so a cycle
 	// through them is an error rather than an unbounded chain of fetches.
 	fetching map[string]bool
+	// params holds the parameter entities declared so far, first declaration
+	// winning; see parseParameterDecls.
+	params map[string]paramEntity
 	// fetches counts external resources read, bounded by maxExternalFetches.
 	fetches int
 	// externalDepth is the current nesting of external subset inclusion.
@@ -418,6 +421,17 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 	var sb strings.Builder
 	for i := 0; i < len(s); {
 		c := s[i]
+		// "&foo;" inside a CDATA section or a comment is text, not a
+		// reference, so it is copied as it stands rather than expanded:
+		// <!ENTITY e "<![CDATA[&foo;]]>"> is well formed with no foo declared
+		// (XML 1.0 §2.7, §2.5).
+		if c == '<' {
+			if end := endOfLiteralMarkup(s[i:]); end > 0 {
+				sb.WriteString(s[i : i+end])
+				i += end
+				continue
+			}
+		}
 		if c != '&' {
 			sb.WriteByte(c)
 			i++
@@ -548,6 +562,20 @@ func replacementText(raw string) string {
 		i++
 	}
 	return sb.String()
+}
+
+// endOfLiteralMarkup returns the length of the CDATA section or comment s
+// begins with, or 0 when it begins with neither or the construct is unclosed.
+func endOfLiteralMarkup(s string) int {
+	for _, m := range [...][2]string{{"<![CDATA[", "]]>"}, {"<!--", "-->"}} {
+		if strings.HasPrefix(s, m[0]) {
+			if j := strings.Index(s[len(m[0]):], m[1]); j >= 0 {
+				return len(m[0]) + j + len(m[1])
+			}
+			return 0
+		}
+	}
+	return 0
 }
 
 // predefinedRune returns the character one of XML's five predefined entities

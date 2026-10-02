@@ -312,11 +312,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		//
 		// The one well-formedness check Token performs and RawToken does not
 		// is matching each end tag against its start tag, and that is done at
-		// xml.EndElement below. Token does NOT reject a duplicated attribute
-		// — verified against the standard library — so nothing is lost there
-		// either, and adding the check here would be new strictness rather
-		// than parity: it was tried, and it rejected our own serialiser's
-		// output for an element that undeclares the default namespace.
+		// xml.EndElement below. A duplicated attribute is refused by
+		// validateStartElement (wellformed.go), keyed on expanded names with
+		// namespace declarations kept out of the key.
 		tok, err := dec.RawToken()
 		if err == io.EOF {
 			break
@@ -341,6 +339,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			}
 			if len(attDefaults) > 0 {
 				t = applyAttDefaults(t, attDefaults)
+			}
+			if len(attTypes) > 0 {
+				t = normalizeAttTokens(t, attTypes)
 			}
 			if err := validateStartElement(t, cur, dec.IsVersion11()); err != nil {
 				return nil, err
@@ -403,9 +404,10 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 
 		case xml.CharData:
 			// CharData is only meaningful inside an element; whitespace at the
-			// document level is legal and carries no information.
+			// document level is legal and carries no information. It must be
+			// written as such: [27] Misc admits no reference or CDATA section.
 			if cur == tree.Root {
-				if !isXMLWhitespace(string(t), dec.IsVersion11()) {
+				if !dec.Literal() || !isXMLWhitespace(string(t), dec.IsVersion11()) {
 					return nil, fmt.Errorf("parse XML: character data outside root element")
 				}
 				sawPrologToken = true
@@ -430,6 +432,10 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				}
 				sawDecl = true
 				continue // the XML declaration is not a PI node in the XDM
+			}
+			// Namespaces in XML §7: no PI target contains a colon.
+			if strings.Contains(t.Target, ":") {
+				return nil, fmt.Errorf("parse XML: processing-instruction target %q contains a colon", t.Target)
 			}
 			sawPrologToken = true
 			pi := &Node{
