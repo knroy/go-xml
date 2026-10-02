@@ -23,14 +23,14 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| Four XSLT 3.0 stylesheets that §19.8 refuses were compiled | `?` lookups modelled (§19.8.8.18), a multi-node streaming parameter consumes (§19.8.5.2), shallow-descent bodies must stride (§19.8.5.5), a streamed ascent call climbs (§19.8.5.7). XSLT 3.0 11,491 → 11,495. | |
-| `fn:transform` accepted string keys in parameter maps | `stylesheet-params`, `static-params`, `template-params` and `tunnel-params` are `map(xs:QName, item()*)`; a string key is now `FOXT0002`, as F&O and Saxon have it. XPath 3.1 reaches 100%. | |
-| The parser accepted 20 not-well-formed documents from the W3C XML suite | Missing space between attributes, bad comment/PI characters, `<?pi+?>`, QName colons, text outside the root via references or CDATA, a BOM contradicting the encoding. All refused now (XML 1.0 §2.5–3.1, Namespaces §3/§7). | |
-| The parser rejected 16 well-formed documents | Duplicate ATTLIST (first wins, §3.3), UTF-16 external entities (§4.3.3), parameter-entity scope and base (§4.2.2), CDATA in entity values, and `version="1.x"` (§2.8). | |
-| `fn:transform` ignored `serialization-params`, `requested-properties`, `xslt-version` and `global-context-item` | They now apply per F&O 3.1 §14.7.1: params merge over `xsl:output`, unmet properties are `FOXT0001`, `xslt-version` picks the 2.0 or 3.0 processor. QT3 +20 per lane. | |
-| `fn:transform` entry-point and result edge cases | No entry point is `XTDE0040` (via `xsl:initial-template`), `initial-function` needs `function-params` (`FOXT0002`), and an empty principal result beside result documents is omitted. | |
-| `system-property('xsl:is-schema-aware')` said `no` | The processor implements `xsl:import-schema` and schema-aware validation; it now says `yes`. | |
-| A 3.0 processor refused XSLT 3.0 attributes on `version="2.0"` modules | XSLT 3.0 §3.9.2 defines no difference for 2.0 behaviour; only a 2.0 processor (`MaxVersion` 2.0) refuses them now. | |
+| Four XSLT 3.0 stylesheets that §19.8 refuses were compiled | `?` lookups modelled (§19.8.8.18), a multi-node streaming parameter consumes (§19.8.5.2), shallow-descent bodies must stride (§19.8.5.5), a streamed ascent call climbs (§19.8.5.7). XSLT 3.0 11,491 → 11,495. | [`7798acd`][7798acd] |
+| `fn:transform` accepted string keys in parameter maps | `stylesheet-params`, `static-params`, `template-params` and `tunnel-params` are `map(xs:QName, item()*)`; a string key is now `FOXT0002`, as F&O and Saxon have it. XPath 3.1 reaches 100%. | [`d029347`][d029347] |
+| The parser accepted 20 not-well-formed documents from the W3C XML suite | Missing space between attributes, bad comment/PI characters, `<?pi+?>`, QName colons, text outside the root via references or CDATA, a BOM contradicting the encoding. All refused now (XML 1.0 §2.5–3.1, Namespaces §3/§7). | [`8cf4584`][8cf4584] |
+| The parser rejected 16 well-formed documents | Duplicate ATTLIST (first wins, §3.3), UTF-16 external entities (§4.3.3), parameter-entity scope and base (§4.2.2), CDATA in entity values, and `version="1.x"` (§2.8). | [`8cf4584`][8cf4584] |
+| `fn:transform` ignored `serialization-params`, `requested-properties`, `xslt-version` and `global-context-item` | They now apply per F&O 3.1 §14.7.1: params merge over `xsl:output`, unmet properties are `FOXT0001`, `xslt-version` picks the 2.0 or 3.0 processor. QT3 +20 per lane. | [`d029347`][d029347] |
+| `fn:transform` entry-point and result edge cases | No entry point is `XTDE0040` (via `xsl:initial-template`), `initial-function` needs `function-params` (`FOXT0002`), and an empty principal result beside result documents is omitted. | [`d029347`][d029347] |
+| `system-property('xsl:is-schema-aware')` said `no` | The processor implements `xsl:import-schema` and schema-aware validation; it now says `yes`. | [`d029347`][d029347] |
+| A 3.0 processor refused XSLT 3.0 attributes on `version="2.0"` modules | XSLT 3.0 §3.9.2 defines no difference for 2.0 behaviour; only a 2.0 processor (`MaxVersion` 2.0) refuses them now. | [`d029347`][d029347] |
 | A module importing its own namespace raised `XQST0073` | XQuery 3.1 §4.12: "A module may import its own target namespace". The rule is removed. | [`6e6fa8a`][6e6fa8a] |
 | An accumulator applied without `use-accumulators` (#16) | An initial `xsl:mode` with no list left every accumulator readable on the source. Its absent list is now empty (§18.2.2), so a read is `XTDE3362`; `accumulator-073` diverges, as Saxon does. | [`5549c2f`][5549c2f] |
 | `fn:transform` ignored `static-params` (#15) | A nested stylesheet's static parameter kept its default. The map now binds them at the nested compilation. | [`5549c2f`][5549c2f] |
@@ -1080,6 +1080,9 @@ here so every entry in this file sits under a release.
 [67c960b]: https://github.com/knroy/go-xml/commit/67c960b
 [1803696]: https://github.com/knroy/go-xml/commit/1803696
 [48651cf]: https://github.com/knroy/go-xml/commit/48651cf
+[7798acd]: https://github.com/knroy/go-xml/commit/7798acd
+[8cf4584]: https://github.com/knroy/go-xml/commit/8cf4584
+[d029347]: https://github.com/knroy/go-xml/commit/d029347
 [6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e
 [5549c2f]: https://github.com/knroy/go-xml/commit/5549c2f
