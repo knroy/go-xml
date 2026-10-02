@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	xml "github.com/knroy/go-xml/internal/xmlfork"
+	xml "github.com/knroy/go-xml/internal/xmltok"
 )
 
 // xmlDeclSyntax is productions [23]-[26] reduced to the declarations this
@@ -32,7 +32,7 @@ var xmlDeclSyntax = regexp.MustCompile(
 // RawToken deliberately exposes it as a PI so clients that want a token stream
 // can decide what to do with it; Parse, however, promises an XML document.
 func validateXMLDecl(inst string) error {
-	// xmlfork's PI scanner consumes the required separating space between the
+	// xmltok's PI scanner consumes the required separating space between the
 	// target and its data, so Inst begins directly with "version=".
 	if inst == "" {
 		return fmt.Errorf("parse XML: XML declaration must contain VersionInfo")

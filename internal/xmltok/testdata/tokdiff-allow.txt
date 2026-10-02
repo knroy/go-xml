@@ -1,4 +1,0 @@
-# Files TestTokenDifferential expects xmltok and xmlfork to tokenise
-# differently, one per line: "<corpus>/<path> <reason>". The path uses forward
-# slashes and is relative to the corpus root (e.g. xsdtests/msData/a.xsd). An
-# entry whose file no longer differs fails the test: remove it.

@@ -2,7 +2,7 @@
 //
 // They live in their own leaf package because two packages need them and
 // neither may import the other: xdm exports them to the sibling parsers, and
-// internal/xmlfork — the forked encoding/xml tokeniser — resolves its name
+// internal/xmltok — the tokeniser xdm drives — resolves its name
 // check through them. A tokeniser that imported xdm would close a cycle,
 // since xdm is what drives the tokeniser.
 package xmlname

@@ -433,6 +433,26 @@ documentation schemas, thinner exactly where those corpora are thick. It
 catches an over-strict rule that breaks *any* real schema; it does not catch
 one that breaks only commercial vocabularies.
 
+### Tokeniser differential
+
+`internal/xmltok` is this library's own tokeniser. It replaced
+`internal/xmlfork`, a fork of `encoding/xml` that had to be re-applied by hand
+on every Go release, and the switch was gated by a differential:
+`TestTokenDifferential` tokenised every file in every corpus above, plus
+`testdata/c14n` and `tests/c14n/testdata`, with both decoders configured as
+`xdm` configures its own, a second time with each DOCTYPE's internal general
+entities installed, and compared every token byte for byte, `InputOffset` and
+`IsVersion11` before every token, and how each stream ended.
+
+On 2026-10-01 it read 59,984 files with **zero differences**, the 175 that
+both reject rejected at the same token with the same message; a perturbation
+of each compared property was reported, so the harness could fail. The
+harness compared against the fork and went with it; it is in the history in
+the commit that added `internal/xmltok`. xmltok reproduces the fork's
+observable behaviour, quirks included — each is marked `parity:` in the
+source — so a conformance change to the tokeniser is now a deliberate, tested
+edit rather than a side effect of a Go upgrade.
+
 ---
 
 ## The ratchet
@@ -441,13 +461,13 @@ one that breaks only commercial vocabularies.
 seen. `check.sh` fails when a count goes **down**.
 
 ```
-DocBook 577
+DocBook 578
 RelaxNGSpectest 965
 TestQT3XPath20 15217
 TestQT3XPath30 19362
 TestQT3XPath31 21898
 TestQT3XQuery 30345
-TestXSLT30Suite 11492
+TestXSLT30Suite 11491
 TestXSLTSuite 6193
 VendoredSchemas 185
 XSD10 39358
@@ -909,14 +929,14 @@ Twelve targets, using Go's native `testing.F` and no framework:
 | `FuzzCompileStylesheetNoPanic` | `xslt` | `Compile` never panics and never returns a stylesheet beside an error |
 | `FuzzCompileNoPanic` | `xpath` | the expression compiler never panics, and every parse error carries a spec code |
 | `FuzzParseCompactNoPanic` | `relaxng` | the compact-syntax parser never panics |
-| `FuzzTokenNoPanic` | `internal/xmlfork` | the forked tokeniser never panics and terminates on any byte string |
+| `FuzzRawTokenNoPanic` | `internal/xmltok` | the tokeniser never panics and terminates on any byte string |
 | `FuzzCanonicalizeNoPanic` | `c14n` | parse then canonicalize never panics or hangs; a parsed document is refused only for depth, a relative namespace URI or XML 1.1; inclusive canonical forms re-canonicalize unchanged; `FromXPathFilter(doc, "true()")` reproduces the whole document exactly, and filters that split namespace axes canonicalize |
 | `FuzzCompileNoPanic` | `xquery` | `xquery.Compile` never panics, and no compile of a 400-byte input allocates more than 64 MiB |
 | `FuzzConstructorDepthIsBounded` | `xquery` | a query nested past the constructor-depth bound is refused, and one inside it compiles |
 
 Most targets live in `zz_fuzz_test.go` in the package they exercise; the `zz_`
 prefix is only to sort it last. Four sit beside the code they cover instead,
-in `internal/xmlfork/fuzz_test.go`, `relaxng/compact_fuzz_test.go`,
+in `internal/xmltok/xmltok_test.go`, `relaxng/compact_fuzz_test.go`,
 `xsd/complexity_fuzz_test.go` and `c14n/fuzz_test.go`.
 
 The nightly workflow runs ten of the twelve. The two `xquery` targets are left

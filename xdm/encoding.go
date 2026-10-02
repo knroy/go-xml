@@ -69,7 +69,7 @@ func decodeReader(r io.Reader) (io.Reader, error) {
 	}
 	// A UTF-8 stream is handed to the tokeniser as it stands. The version
 	// declaration used to be rewritten here; it is now the tokeniser's to
-	// read, which is the whole point — see internal/xmlfork's version11.
+	// read, which is the whole point — see internal/xmltok's IsVersion11.
 	return br, nil
 }
 

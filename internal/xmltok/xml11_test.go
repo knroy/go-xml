@@ -1,4 +1,4 @@
-package xmlfork
+package xmltok
 
 import (
 	"io"
@@ -29,7 +29,7 @@ func readAll(t *testing.T, doc string) (string, error) {
 	d := NewDecoder(strings.NewReader(doc))
 	var sb strings.Builder
 	for {
-		tok, err := d.Token()
+		tok, err := d.RawToken()
 		if err == io.EOF {
 			return sb.String(), nil
 		}

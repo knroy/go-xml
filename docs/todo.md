@@ -23,7 +23,7 @@ Current position:
 | XSLT 3.0 | 99.77% — 11,491 of 11,518 in scope (27 failing); 7 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,504 `func Test` declarations, clean under `-race` |
+| Tests | 2,514 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -36,7 +36,7 @@ to build next and what it would cost.
 ### 1.1 XML 1.1 documents — **implemented; one layer outstanding**
 
 XML 1.1 documents are read as XML 1.1. The declaration's version is kept in
-`internal/xmlfork.Decoder`, [2] `Char` and [2a] `RestrictedChar` are enforced
+`internal/xmltok.Decoder`, [2] `Char` and [2a] `RestrictedChar` are enforced
 per version, and §2.11 makes `NEL` and U+2028 line ends. External entities are
 checked against XML §4.3.4: a 1.0 document may not include a 1.1 entity, and an
 unrecognised version is refused rather than assumed compatible. See CHANGELOG.md

@@ -5,8 +5,8 @@ import "testing"
 // XML 1.0 Fifth Edition redefined NameStartChar [4] and NameChar [4a] from the
 // First Edition's enumerated Letter/Digit/Extender lists into a broad range
 // formulation with explicit exclusions. Go's encoding/xml ships the First
-// Edition tables, which is why this package tokenises through
-// internal/xmlfork; see internal/xmlfork/NOTICE.
+// Edition tables, which is one reason this package tokenises through its own
+// internal/xmltok rather than encoding/xml.
 //
 // The acceptances below are all 5e-legal and 1e-illegal, so every one of them
 // fails against an unpatched encoding/xml.

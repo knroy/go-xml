@@ -3,7 +3,7 @@ package xdm
 import (
 	"strings"
 
-	xml "github.com/knroy/go-xml/internal/xmlfork"
+	xml "github.com/knroy/go-xml/internal/xmltok"
 )
 
 // attDeclaredType is one attribute whose ATTLIST declaration gives it a type

@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	xml "github.com/knroy/go-xml/internal/xmlfork"
+	xml "github.com/knroy/go-xml/internal/xmltok"
 )
 
 // ParseOptions controls document construction.

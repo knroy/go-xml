@@ -264,12 +264,12 @@ functions were already there and already at 100%.
   └────────────────────────────────────────────────┘
 ```
 
-**XDM is the centre, not a wrapper over `encoding/xml`.** The Go decoder is
-used as a *tokeniser only*: it resolves prefixes into `Name.Space` and then
-discards both the prefix and the `xmlns` declarations, and XSLT needs both —
-namespace nodes are addressable on the namespace axis, and a literal result
-element must serialise with the prefix its author wrote. So the tree is built
-here. `encoding/xml` appears in exactly one file.
+**XDM is the centre, not a wrapper over `encoding/xml`.** Documents are read by
+this library's own tokeniser, `internal/xmltok`, which reports names exactly as
+written: XSLT needs the prefix and the `xmlns` declarations, because namespace
+nodes are addressable on the namespace axis and a literal result element must
+serialise with the prefix its author wrote. The tree is built here, and no
+library code imports `encoding/xml`.
 
 **Three types carry the model.** `Item` is a closed interface over `*Node`,
 `*Atomic`, and `*Opaque` (engine-internal state threaded through the same
@@ -516,12 +516,13 @@ declaration order) at compile time. Default priorities follow the spec's
 values, since getting them wrong silently selects the wrong rule — a much
 harder failure to debug than a crash.
 
-**The parser separates namespace nodes from attributes.** Go's
-`encoding/xml` resolves prefixes into `Name.Space` and then discards both the
-prefix and the `xmlns` declarations. XSLT needs both: namespace nodes are
-addressable on the namespace axis, and a literal result element must serialise
-with the prefix its author wrote. So `encoding/xml` is used as a tokeniser only
-and the tree is built here.
+**The parser separates namespace nodes from attributes.** `internal/xmltok`
+hands `xdm` each name with its prefix and every `xmlns` declaration as an
+attribute; `xdm` resolves prefixes itself and turns the declarations into
+namespace nodes, which XSLT addresses on the namespace axis and serialises
+with the prefix the author wrote. `encoding/xml` would discard both, and its
+name tables are XML 1.0 First Edition, which is why the library owns its
+tokeniser.
 
 **Instructions write to a builder, not to a string.** A sequence constructor
 produces a stream of nodes and atomic values: `xsl:element` opens a node that

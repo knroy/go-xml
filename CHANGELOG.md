@@ -10,6 +10,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
+| `internal/xmltok`, an original XML tokeniser | `xdm` read through a fork of `encoding/xml` that had to be re-applied each Go release. Replaced after a zero-difference differential over 59,984 corpus files; 2-5x faster. | |
 | `fn:transform` option `source-location` (#12) | Saxon's option, standard in F&O 4.0, was refused. The document is read through the `fn:doc` resolver and becomes the initial match selection; never streamed. | [`900cece`][900cece] |
 | `go-xml xquery` | The CLI could not run XQuery. `go-xml xquery -q Q.xq [INPUT.xml]` honours `output:*` options, takes `-p`, `-o`, `-now`; module and `doc()` reads confined to `-allow-dir`. | [`900cece`][900cece] |
 | Merlin C14N interop corpora | `merlin-c14n-three` (27 references) and `merlin-exc-c14n-one` (4) were untested; octets and signed digests now checked, both vendored with provenance. | [`900cece`][900cece] |
