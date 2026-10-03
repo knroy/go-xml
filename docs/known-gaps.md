@@ -79,113 +79,48 @@ much each costs.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
-**11 of the 31 XSLT 3.0 failures**, and still the largest single gap in the
-project — down from 14 since the §19.8.5 streaming-parameter table was
-corrected. `varPosture` read *grounded* where §19.8.5.2 and §19.8.5.3 say
-*striding*, so a function whose body returned its streaming parameter — a node,
-which in a streamed tree is never grounded — cleared the "must be grounded"
-rule its own category imposes. Four cases moved. (`su-ascent-903`, adjudicated
-here afterwards as a suite defect, now passes: see conformance-gaps.md.) The posture-and-sweep lattice exists, and so now do the rules built on
-it: the §19.8.4 instruction rules, §19.8.5 streamable stylesheet functions,
-§18.2.8 accumulators, the §19.8.8 expression rules, the §19.8.9 function
-classifications, §19.6's context posture for both
+**3 of the 23 XSLT 3.0 failures** — `si-fork-902`, `si-fork-952` and
+`su-absorbing-205` — and no longer the largest gap by much. The block stood at
+14, then 11 when the §19.8.5 streaming-parameter table was corrected
+(`varPosture` read *grounded* where §19.8.5.2 and §19.8.5.3 say *striding*),
+then 7 when §19.8.5's signature rule was implemented, and 3 since four more
+refusals landed on 2026-10-02: `?` lookups (§19.8.8.18), a multi-node
+streaming parameter (§19.8.5.2), a striding shallow-descent body (§19.8.5.5)
+and a climbing ascent call (§19.8.5.7). The posture-and-sweep lattice exists,
+and so do the rules built on it: the §19.8.4 instruction rules, §19.8.5
+streamable stylesheet functions, §18.2.8 accumulators, the §19.8.8 expression
+rules, the §19.8.9 function classifications, §19.6's context posture for both
 `xsl:source-document`/`xsl:stream` and the template rules of a streamable mode,
-and §18.1's grounded demand at both the sites it names — an `xsl:stream` body
-and, by its own parenthetical, a streamable template rule.
-What remains is a long tail of individual constructs rather than a missing body
-of rules.
+and §18.1's grounded demand at both the sites it names.
 
-Every one of the 14 fails in the same direction: the suite expects `XTSE3430` —
-*this construct is not guaranteed streamable* — and the transform succeeds
-instead, because the analysis returns `known=false` for a construct it cannot
-yet model and correctly declines to raise an error it has not proved.
+All three fail in the same direction: the suite expects `XTSE3430` — *this
+construct is not guaranteed streamable* — and the transform succeeds instead.
+The engine builds a tree and streams nothing, so it produces the **right
+answer** for all three; what it does not produce is the static refusal §19.8
+requires a streaming processor to make before running anything. These are not
+wrong answers; they are a static analysis that is not complete.
 
-That direction is the whole diagnosis. The engine builds a tree and streams
-nothing, so every construct the analysis would reject is one it simply
-executes. It produces the **right answer** for all 37; what it does not
-produce is the static refusal §19.8 requires a streaming processor to make
-before running anything. A construct that is not guaranteed streamable is still
-a construct with a well-defined result, and a tree-building processor reaches
-it. So these are not wrong answers, and they are not silent erasure: they are a
-static analysis that is not yet complete.
+**A partial analysis is safe here, and the safety is structural.** The analysis
+reports whether it *modelled* every construct it met separately from what it
+concluded, and an error is raised only on a fully-modelled verdict; anything
+else is "no opinion". A missing rule leaves a case failing, while a wrong rule
+would reject a valid stylesheet, and it is the second that the whole-corpus
+scan measures at zero.
 
-They cluster by construct rather than by cause, which is what confirms it is
-missing rules and not 27 defects: `su-absorbing`, `su-shallow-descent` and
-`si-fork`, then a long tail across `su-*`, `si-*`, `sf-*` and `sx-*`.
+**All three are measured, and each known fix costs more than it gains.**
+Modelling `||` refuses `si-fork-902`/`-952` and costs 18 `sx-union` cases
+(+2/−18), because §19.8.8.4 makes a union of striding operands crawling.
+Reading `xsl:copy`'s content as a higher-order operand refuses
+`su-absorbing-205` and costs 61 `si-copy` cases (+1/−61). The catalog entry
+for `su-absorbing-205` also says outright that the rule it wants is missing
+from the spec ("Analysis suggests there's a rule missing in the spec: multiple
+references to the streaming parameter, or references within a higher-order
+operand, should not be allowed"; qtspecs issue 15). See
+[conformance-gaps.md](conformance-gaps.md) for both measurements.
 
-**A partial analysis is safe here, and the safety is structural.** The worry
-that a partial analysis is worse than none — a processor raising `XTSE3430` on
-some unstreamable constructs and not others tells the caller nothing — is
-answered by never guessing. The analysis reports whether it *modelled* every
-construct it met separately from what it concluded, and an error is raised only
-on a fully-modelled verdict; anything else is "no opinion". So the two failure
-modes are not symmetric: a missing rule leaves a case failing, while a wrong
-rule would reject a valid stylesheet, and it is the second that the
-whole-corpus scan measures at zero.
-
-**Nine of them are not missing rules — they are unreachable under the
-published text.** `su-absorbing-205`, `-901`, `-905`, `-908`;
-`su-inspection-901`, `-902`, `-903`; `su-shallow-descent-902`, `-906`. All nine
-want `XTSE3430` for a declared-streamable `xsl:function` whose body the
-published rules find perfectly streamable. The suite's own descriptions name
-three intended rules, and each of the three is blocked by the spec itself.
-
-*"Not grounded" / "consumes the streamed input"* (`su-absorbing-901`,
-`su-inspection-901`, `-903`). §19.8.8.12's table gives a reference to the
-streaming parameter posture **grounded** for both the absorbing and inspection
-categories — for inspection, whether the reference is singular or not — and
-§19.8.1 then says *"If P is grounded, then S′ is S"*, so absorbing it is
-charged nothing. `su-inspection-901`'s body ends `else string($element)` and
-comes out grounded and motionless, which §19.8.5.3 permits.
-
-The comparison that settles it is `su-inspection-A`, which the catalog expects
-to **run**, against `su-inspection-901`, which it expects **refused**. Their
-functions are the same function; the only difference is the final `else` arm:
-
-    A:   else f:get-inherited-attribute-value-004($element/.., $attribute-name)
-    901: else string($element)
-
-Under §19.8.8.12 both arms are grounded and motionless, so the two bodies are
-indistinguishable. A rule counting references to the streaming parameter does
-not separate them either: `A`'s `f:depth-002` references `$input` twice.
-
-*"First argument allows a sequence"* (`su-inspection-902`,
-`su-shallow-descent-906`). The intended rule is that a streaming parameter
-declared `node()*` — or, in `-906`, with no `as` at all — disqualifies the
-function. **Both §19.8.5.3 and §19.8.5.5 declare exactly that in their own
-worked examples** and call the result guaranteed-streamable:
-
-    <xsl:function name="f:depth" as="xs:integer" streamability="inspection">
-      <xsl:param name="input" as="node()*"/>            <!-- §19.8.5.3 -->
-
-    <xsl:function name="f:alternate-children" streamability="shallow-descent">
-      <xsl:param name="input" as="element()*"/>         <!-- §19.8.5.5 -->
-
-Implementing the rule refuses the specification's own examples, which is the
-spurious-rejection failure mode this analysis exists to avoid.
-
-*"Two consuming references to the variable"* (`su-absorbing-205`, `-905`,
-`-908`). **The suite says outright that this rule is not in the spec.** The
-catalog entry for `su-absorbing-205` reads, verbatim:
-
-> Recursive absorbing function .
-> See https://saxonica.plan.io/issues/4561
-> See https://github.com/w3c/qtspecs/issues/15
-> Analysis suggests there's a rule missing in the spec: multiple references
-> to the streaming parameter, or references within a higher-order operand, should not be allowed.
-
-Saxon 9.8 passes all nine, which is what a submission does when it implements a
-rule its own author has filed against the specification. We do not, and the
-reason is the asymmetry in the note above: the rule cannot be transcribed
-because there is nothing to transcribe, and inventing it means refusing
-stylesheets on a rule no reader of the specification could have anticipated.
-`su-absorbing-205` is additionally withheld for an ordinary reason — its body is
-an `xsl:copy` with children, a sequence-constructor shape `analyzeFunctionBody`
-does not model — so it would still report nothing even if a rule existed.
-
-These nine are recorded here rather than left to be re-derived: the derivation
-above has been done at least twice, and both times the reasoning was correct and
-went unwritten.
+An earlier revision of this entry argued that nine `su-*` cases were
+unreachable under the published text. Eight of them now pass, by the
+corrections named above; the argument is kept in the history, not here.
 
 One withholding is worth naming, because it looks like a gap and is not.
 §19.8.8.4 widens a union of two striding operands to crawling by its own
@@ -196,14 +131,11 @@ refuses the same grouping for a reason that never consults the call — a
 free-ranging `group-starting-with` pattern, or a grouping key that is not
 motionless — since neither answer rests on the widening.
 
-**Note what it would and would not buy.** Completing it would move the 14
-cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.70% to about
-99.82%. Nine of those 14 are the unreachable group above, so the reachable
-gain is 5. It would not make the engine stream, and it would not change the result
-of a single transform that currently succeeds — it would convert 14 correct
-answers into 14 refusals to answer. That is the conformant behaviour, and it
-is worth being explicit that the gain is measured in conformance rather than in
-capability.
+**Note what it would and would not buy.** Completing it would move 3 cases
+and take XSLT 3.0 from 99.80% to 99.83%. It would not make the engine stream,
+and it would convert three correct answers into three refusals to answer. That
+is the conformant behaviour, and the gain is measured in conformance rather
+than in capability.
 
 The remaining 20 are singletons or near-singletons and are catalogued in
 [conformance-gaps.md](conformance-gaps.md) rather than here. Only three pairs
@@ -226,7 +158,7 @@ behind it.
 that `system-property('xsl:supports-streaming')` answers `yes`. §26.5 requires a
 processor that does not conform to the streaming feature to answer `no`, which
 is what this answers. Passing it would mean lying to every stylesheet that
-branches on it to choose a fallback. It is the same gap as the 40 above, seen
+branches on it to choose a fallback. It is the same gap as the block above, seen
 from the other side, and it stays failing for as long as the analysis is
 missing — which is the correct behaviour, not a cost.
 
@@ -1326,7 +1258,7 @@ bare T, because the binding is evaluated once rather than once per item.
 Making it higher-order would refuse a consuming let body the spec permits.
 
 None of the three moved a conformance count, which is expected: the remaining
-XSLT 3.0 disagreements are 7 XTSE3430 cases plus 21 that are fixture defects,
+XSLT 3.0 disagreements are 3 XTSE3430 cases plus 20 that are fixture defects,
 deliberate divergences or implementation-defined.
 
 ### "Remove the 1<<20 arity ceiling" — rejected twice, and it is a memory bug

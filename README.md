@@ -118,7 +118,7 @@ and maintains it as a project of his own.
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 2,416 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 2,545 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -143,25 +143,25 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.77%, and still
-   the one to check against your own stylesheets first. It no longer has a
-   concentration: package composition was about a third of the failures and is
-   now 4 of 13, all four documented as unreachable rather than outstanding.
-   What is left is a long tail of one or two cases across thirty test sets,
-   which is harder to summarise but easier to live with — no single feature is
-   systematically weak. The corpus differential against Saxon remains stronger
-   evidence for real stylesheets than the percentage.
+3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.80%, and still
+   the one to check against your own stylesheets first. It has no
+   concentration left: 3 of the 23 failures want the `XTSE3430` refusal that
+   more of the §19.8 streamability analysis would emit, and the other 20 are
+   fixture defects, deliberate divergences or implementation-defined, each
+   recorded with its verdict. No single feature is systematically weak. The
+   corpus differential against Saxon remains stronger evidence for real
+   stylesheets than the percentage.
 
    Neither XSLT number is directly comparable to the XPath and XSD ones. There
    is no maintained XSLT 2.0 suite, so both are the XSLT 3.0 suite filtered by
    each test's declared version dependency — a different kind of measurement
    from running a suite written for the version under test.
 
-   **Streaming is not implemented**, and its 2,646 cases are out of scope
-   rather than counted as failures. That is the single largest gap, and it is
-   architectural rather than a matter of filling in instructions: streaming
-   wants a pull parser and a streamability static analysis, not another
-   feature. What is absent is streamed *execution*, not the vocabulary:
+   **Streamed execution is not implemented**, but the streaming cases are in
+   scope and counted: the stylesheet-level half of streaming, the §19.8
+   streamability analysis that refuses a construct with `XTSE3430`, is
+   implemented and measured. What is absent is streamed *execution*, not the
+   vocabulary or the analysis:
    `xsl:stream`, `xsl:fork`, `xsl:source-document`, `xsl:merge` and
    `xsl:accumulator` all execute, by building the tree instead. §19.1 allows
    exactly that — a processor not claiming the streaming option "must still
@@ -1316,13 +1316,13 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (2,416 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (2,545 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
-| **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |
+| **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |
 | **W3C xsdtests suite** | systematic XSD conformance across 25,000 instance and 14,388 schema-validity tests (XSD 1.0; 1.1 adds 26,222 and 15,354) | schemas nobody writes by hand |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
-| **Fuzzing** (11 targets) | a crash, hang or wrong refusal on input no author would write | anything a coverage-guided search does not reach in the time it is given |
+| **Fuzzing** (12 targets) | a crash, hang or wrong refusal on input no author would write | anything a coverage-guided search does not reach in the time it is given |
 **Every suite feeds the parser well-formed input**, which is the gap fuzzing
 exists to close: the targets cover the XML parser, the schema assembler and its
 content-model compiler, the stylesheet compiler, and a parse → serialise →
