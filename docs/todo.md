@@ -822,8 +822,8 @@ These are places where the tests are thinner than the claims.
 
 ### 3.1 Fuzzing beyond the parser
 
-**Largely done.** There are now five targets, not one. Alongside
-`FuzzCompileNoPanic` over the XPath expression compiler:
+**Largely done.** There are now twelve targets, not one. The first four added,
+alongside `FuzzCompileNoPanic` over the XPath expression compiler:
 
 - `FuzzParseNoPanic` (`xdm`) over `ParseString`, the front door for every
   untrusted document the engine reads;
@@ -889,12 +889,13 @@ an iteration that consumed nothing — that the first fix had left rejecting val
 documents, and again no suite case moved.
 
 **Coverage-guided fuzzing now runs nightly.** `.github/workflows/fuzz.yml`
-fuzzes all nine targets — one per matrix leg, since `go test -fuzz` takes one
-target per invocation — at `-fuzztime 300s`, on a `schedule:` cron and on
-`workflow_dispatch`. It is deliberately *not* in the per-push gate: a
-coverage-guided search is nondeterministic, and a five-minute job that can fail
-on a commit that would have passed a second time is one people disable rather
-than fix. `ci.yml` still replays every seed corpus as an ordinary unit test, so
+fuzzes ten of the twelve targets (not the two in `xquery`) — one per matrix
+leg, since `go test -fuzz` takes one target per invocation — at `-fuzztime
+300s`, on a `schedule:` cron and on `workflow_dispatch`. It is deliberately
+*not* in the per-push gate: a coverage-guided search is nondeterministic, and a
+five-minute job that can fail on a commit that would have passed a second time
+is one people disable rather than fix. `ci.yml` still replays every seed
+corpus as an ordinary unit test, so
 a target that stops compiling is caught in a minute, and `check.sh` still only
 *counts* the targets, to keep a README figure honest. Each of the nine was run
 locally for 20s before the job was wired in — roughly 24 million executions in

@@ -138,7 +138,7 @@ is the conformant behaviour, and the gain is measured in conformance rather
 than in capability.
 
 The remaining 20 are singletons or near-singletons and are catalogued in
-[conformance-gaps.md](conformance-gaps.md) rather than here. Only three pairs
+[conformance-gaps.md](conformance-gaps.md) rather than here. Only two pairs
 share anything: `merge-097`/`-097s` both fail on `FODC0002`, and the
 CHANGELOG records them as not interoperable on the test set's own maintainer
 comment — they rely on Saxon's `?select=` collection URIs and declare no
@@ -146,8 +146,7 @@ environment for the harness to honour. `-097sf` was read here as a third
 member and is not one: it declares `<feature value="streaming-fallback"/>`,
 which this engine does not claim, so it is skipped and never reaches
 `FODC0002` at all. `si-copy-117`/`si-copy-of-117` both get
-`XTTE1540` where `XTTE1510` is wanted; and `si-fork-814`/`sx-MapExpr-007` both
-get `XQDY0137` for `XTDE3365`. The rest — `docbook-001` (`XTMM9000`, chunking),
+`XTTE1540` where `XTTE1510` is wanted. The rest — `docbook-001` (`XTMM9000`, chunking),
 `validation-0201` (whitespace placement),
 `strip-space-009`, `system-property-012` and a scatter of one-off error-code
 disagreements — share no cause with each other at all. That is the useful fact
@@ -159,8 +158,8 @@ that `system-property('xsl:supports-streaming')` answers `yes`. §26.5 requires 
 processor that does not conform to the streaming feature to answer `no`, which
 is what this answers. Passing it would mean lying to every stylesheet that
 branches on it to choose a fallback. It is the same gap as the block above, seen
-from the other side, and it stays failing for as long as the analysis is
-missing — which is the correct behaviour, not a cost.
+from the other side, and it stays failing for as long as the engine does not
+stream — which is the correct behaviour, not a cost.
 
 ### §19.8: holes in the expression analysis (XSLT 3.0)
 
@@ -191,8 +190,8 @@ None is a wrong verdict.
 
 ### XQuery schema awareness: a tail of features `import schema` made reachable (XQuery 3.1)
 
-**1 failure of 30,346 when written, and not a regression** (the `fn:transform`
-cases measured since are a different matter; see the `fn:transform` entry). This entry exists
+**1 failure of 30,346 when written, and not a regression** (the cases measured
+since, `fn:transform`'s among them, all pass; see the `fn:transform` entry). This entry exists
 because the number is easy to misread. `import schema` was implemented, and
 implementing it brought **416 previously-skipped cases into scope**, of which
 339 now pass. The in-scope count went 29,930 → 30,346 and the passing count
@@ -404,8 +403,8 @@ direction that matters, and it has not been diagnosed.
 
 `fn:transform` reads `stylesheet-*`, `package-name`/`package-version`,
 `source-node`, `source-location`, `initial-*`, `function-params`,
-`stylesheet-params`, `template-params`, `tunnel-params`, `base-output-uri`,
-`delivery-format`, `serialization-params` (principal result only, as F&O
+`stylesheet-params`, `static-params`, `template-params`, `tunnel-params`,
+`base-output-uri`, `delivery-format`, `serialization-params` (principal result only, as F&O
 states), `requested-properties`, `xslt-version`, `global-context-item` and
 `post-process`. A requested property is
 met only when it equals what `fn:system-property` reports (`xsl:version` is
@@ -724,7 +723,7 @@ assert that `\p{Lu}` rejects characters that *are* uppercase letters in current
 Unicode. The suite was written against Unicode 3.1; the codepoints in question
 — U+1D7A8 among them — were categorised differently then.
 
-These are **22 of the 30 disagreements on 1.0 and 22 of the 32 on 1.1** — two
+These are **22 of the 30 disagreements on 1.0 and 22 of the 31 on 1.1** — two
 thirds of everything the suite reports against this engine, and the single
 largest reason XSD cannot reach 100% and should not try. The three
 `regex-syntax-xslt20` failures in the XSLT 2.0 lane are the same rule seen from
@@ -973,9 +972,9 @@ applied in exactly one place.
 
 **Measured cost of the default: one QT3 case.** `fn-matches-51` names a group
 whose width can vary *and* places the backreference mid-pattern; it passes with
-`xpath.SetBacktrackingRegex(true)`, which takes that lane to 15,222 of 15,222.
-That figure is not the headline one, because the switch is off by default and
-the headline number reports the default configuration. Closing the last case by
+`xpath.SetBacktrackingRegex(true)`. The conformance harnesses set the switch,
+since a suite's patterns are trusted input, so the headline figures count the
+case; a run in the default configuration does not. Closing the last case by
 default would cost the linear-time guarantee, which is a worse trade than the
 case is worth.
 
@@ -1100,7 +1099,7 @@ Moving an optional element's range onto the wrapper works only where the base
 does not repeat: in `effectiveTotalRange` a group of one repeating N times
 contributes N elements, so the same range means two different things. **This is
 what broke `particlesV020`**, and it is the same collision recorded under
-*XSD particle restriction: `particlesZ001` and the two-job wrapper* above.
+*XSD particle restriction: the two-job wrapper in `recurseAsIfGroup`* above.
 
 **The derived minimum must already satisfy the base's.** Without that
 condition, moving a `minOccurs` of 0 onto the wrapper made it violate a base
@@ -1777,8 +1776,8 @@ verdict is only as good as the last time someone re-derived it.**
 That sentence was true of the population the audit covered — the XSD and XPath
 disagreements standing at the time — and is still true of those: XPath is 100%
 at all three versions, and the XSD remainder is argued case by case above. It
-was never true of the suites as a whole. **XSLT 3.0 carries 126 failures of
-which 45 are one missing analysis, and XQuery 3.1 carries 42, and both are
+was never true of the suites as a whole. **XSLT 3.0 then carried 126 failures
+of which 45 were one missing analysis, and XQuery 3.1 carried 42, and both were
 eminently fixable.** A sentence scoped to one audit and left standing after the
 scope changed is the same decay this file keeps recording.
 

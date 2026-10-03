@@ -12,11 +12,11 @@ import (
 // classes are expanded into codepoint ranges here, the difference is computed,
 // and the result is emitted as an ordinary class.
 //
-// Literal characters, ranges, and the multi-character escapes whose definitions
-// are fixed and small — \d \D \w \W \s \S \i \I \c \C — are expanded
-// exactly. A subtraction involving \p{...} is still refused: expanding a
-// Unicode category means embedding the tables that decide it, and a class that
-// silently matched the wrong set would be worse than an error.
+// Literal characters, ranges, the multi-character escapes \d \D \w \W \s \S
+// \i \I \c \C, and \p{...} categories and blocks (from Go's own Unicode
+// tables; see propertyRanges) are expanded exactly. Anything that cannot be
+// expanded exactly is refused, since a class that silently matched the wrong
+// set would be worse than an error.
 
 type cpRange struct{ lo, hi rune }
 

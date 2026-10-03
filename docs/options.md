@@ -210,8 +210,9 @@ xdm.ParseOptions{MaxBytes: -1, MaxNodes: -1}
 
 Off by default because a DOCTYPE is the entry point for XXE and
 entity-expansion attacks. **Turning it on does not reopen either** —
-`encoding/xml` never parses the internal subset, so no DTD-declared entity ever
-exists (see [security.md](security.md)) — but it is still the wider setting.
+internal entities expand under depth and size bounds, and an external entity is
+refused unless `ExternalEntities` supplies a resolver (see
+[security.md](security.md)) — but it is still the wider setting.
 
 You need it for UBL, whose dependency graph reaches the W3C XML Signature
 schema, and that file carries a DOCTYPE:

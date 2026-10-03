@@ -1,6 +1,6 @@
 # What reaching 100% would take
 
-Measured at commit `23570de`, 2026-09-14. The short answer: **100% is not
+Measured at commit `7798acd`, 2026-10-02. The short answer: **100% is not
 reachable on any of these suites**, and the great majority of what remains are
 cases where passing would mean shipping something *less* correct. What follows
 separates the work that exists from the work that does not.
@@ -14,18 +14,18 @@ case by case; this file is about what buying them would cost.
 | XPath 3.1 | 0 | 0 | 0 | 0 |
 | XQuery 3.1 | 1 | 0 | 0 | 1 |
 | XSLT 2.0 | 8 | 0 | 0 | 8 |
-| XSLT 3.0 | 26 | 0 | 0 | 26 |
+| XSLT 3.0 | 23 | 0 | 0 | 23 |
 | XSD 1.0 | 30 | 0 | 0 | 30 |
 | XSD 1.1 | 31 | 0 | 0 | 31 |
-| **Total** | **96** | **0** | **0** | **96** |
+| **Total** | **93** | **0** | **0** | **93** |
 
 XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
-Seven of the XSLT 3.0 cases sit in the "cannot fix" column on a weaker claim
-than the rest: they want an `XTSE3430` refusal that only the unwritten
-remainder of the §19.8 streamability analysis can emit, and §19.1 says a
-non-streaming processor "is not required to assess whether constructs are
-guaranteed-streamable". They are not owed, which is not the same as not
+Three of the XSLT 3.0 cases sit in the "cannot fix" column on a weaker claim
+than the rest: they want an `XTSE3430` refusal that the §19.8 streamability
+analysis could emit only through rules measured to cost more cases than they
+gain, and §19.1 says a non-streaming processor "is not required to assess
+whether constructs are guaranteed-streamable". They are not owed, which is not the same as not
 buildable; Part 2 files them under features deliberately not implemented.
 
 For XSD the fixable/cannot-fix split is not a judgement call: it is the suite's
@@ -53,7 +53,7 @@ cases in Part 2, not a defect. The two the suite itself declared out of scope
 left the denominator, and the harness scoring defects — chiefly the eight XSD
 `indeterminate` expectations per version that were silently scored as "must be
 invalid" — were fixed in the harness. What stands between here and 100% is
-the 96 in Part 2.
+the 93 in Part 2.
 
 The last four to fall are worth recording, because they are the shape of what
 "fixable" meant:
@@ -100,7 +100,7 @@ A ceiling bounds what the suite asks, not what the code does.
 
 ---
 
-## Part 2 — the 96 that are not work
+## Part 2 — the 93 that are not work
 
 Grouped by what would actually have to change.
 
@@ -247,6 +247,18 @@ cases disagree.
 
 **To fix: accept invalid stylesheets, or broken fixtures.**
 
+### 1 — the case contradicts the spec
+
+`accumulator-073` declares `<xsl:mode on-no-match="shallow-copy"/>` with no
+`use-accumulators`, copies with `copy-accumulators="yes"`, and asserts the
+copied values. §18.2.2 lets the initial mode's list decide which accumulators
+apply to the initial match selection, and "the default value is an empty
+list", so the read is `XTDE3362`. `copy-3002` expects that error, and
+Saxon-HE 12.7 raises it for the same shape.
+
+**To fix: read a declared mode with no list as "all", as the engine once did.**
+That is the reading §18.2.2 rules out. See [known-gaps.md](known-gaps.md).
+
 ### 1 — network access
 
 `evaluate-048` fails on
@@ -284,7 +296,7 @@ part of a resource rather than a different one — and nothing then applied it,
 so the whole document was returned. `xslt/sourcedoc.go` now resolves the
 bare-name fragment against the retrieved document.
 
-### 8 — features deliberately not implemented
+### 4 — features deliberately not implemented
 
 Three want an `XTSE3430` refusal that only more of the §19.8 posture-and-sweep
 analysis can emit: `si-fork-902`, `si-fork-952` and `su-absorbing-205`. Each
@@ -300,7 +312,7 @@ not defects. Four former members of this list (`su-absorbing-908`,
 `su-ascent-903`, `su-shallow-descent-902`, `sx-square-array-201`) pass since
 2026-10-02.
 
-The eighth is `sf-reverse-001`, which wants `reverse(snapshot(/chapter)//section)`
+The fourth is `sf-reverse-001`, which wants `reverse(snapshot(/chapter)//section)`
 in reversed order. XPath 3.1 §3.3.1.1 returns a path's nodes in document order
 however the left operand was ordered; the catalog's answer is what a
 *streaming* evaluator produces, since §19.11 says sorting is incompatible with
@@ -386,11 +398,12 @@ lands after all, by a route that had to be walked to be believed. See
 
 ## Part 3 — the honest bottom line
 
-**Reaching 100% is not a goal that survives contact with the suites.** All 96
-remaining disagreements would require agreeing with a disputed result, shipping
-a second language implementation, freezing a stale Unicode table, accepting
-invalid input, weakening a security default, finishing an analysis §19.1 says
-a non-streaming processor need not perform, or reproducing another
+**Reaching 100% is not a goal that survives contact with the suites.** All 93
+remaining disagreements would require agreeing with a disputed result,
+contradicting §18.2.2, implementing vendor extensions, freezing a stale Unicode
+table, accepting invalid input, weakening a security default, refining an
+analysis past the rules the Recommendation states, which §19.1 says a
+non-streaming processor need not perform, or reproducing another
 implementation's choice where the spec declines to make one. None is now an
 open question about our own correctness — the last two, `validation-0201` on
 both targets, were settled by fixing the defect behind them, which turned out
@@ -427,15 +440,15 @@ visibility carried on the function component and checked at the call site.
 `xsl:assert` and **XInclude** were the other two; XInclude took DocBook xslTNG
 from 549 to 577 of 593.
 
-Streaming has the largest denominator, 2,646 cases out of scope, but it is not
-the project it looks like. Measured with the gate lifted and nothing else
-changed, 2,424 of those pass already: §19.1 lets a processor answer a request
+Streaming had the largest denominator, 2,646 cases out of scope, and it was
+not the project it looked like. Measured with the gate lifted and nothing else
+changed, 2,424 of those passed already: §19.1 lets a processor answer a request
 for streamed evaluation by building the tree, and this engine does. Of the 222
 that fail, 150 want XTSE3430 -- a *refusal* of a non-streamable stylesheet,
 which needs the §19.8 posture and sweep analysis and no runtime change at all.
-Those three gate-lifted figures were not re-measured at `23570de`; the
-in-scope residue at this commit is the block of seven in Part 2. Streamed
-execution proper would buy almost none of it. See
+Those cases are in scope now, and the residue is the block of three in
+Part 2, each measured to cost more than it gains. Streamed execution proper
+would buy none of it. See
 [conformance-gaps.md](conformance-gaps.md) for the breakdown.
 
 **EXSLT is not on this list.** It is a separate product. XQuery was, and is

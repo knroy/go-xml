@@ -35,8 +35,8 @@ declarations are applied — the two whose absence is visible in the data model:
   attribute is declared more than once, the first declaration binds and later
   ones are ignored (XML 1.0 §3.3), its type included.
 * **`<!ENTITY>` internal general entities.** `&name;` expands. External
-  entities — `SYSTEM` or `PUBLIC` — are never resolved, and expansion is
-  bounded; see [security.md](security.md). A reference inside a CDATA section
+  entities — `SYSTEM` or `PUBLIC` — are never resolved unless
+  `ExternalEntities` is set, and expansion is bounded; see [security.md](security.md). A reference inside a CDATA section
   or comment in replacement text is text, not a reference.
 * **With `ExternalEntities` set**, each external entity is decoded by its own
   byte order mark (UTF-8 or UTF-16, §4.3.3; the mark itself is dropped), a
@@ -273,8 +273,8 @@ That brings in `xs:assert`, conditional type assignment with
 `xs:alternative` and inheritable attributes, `xs:openContent` and
 `xs:defaultOpenContent`, `xs:override`, the `notNamespace` and `notQName`
 wildcard forms, `explicitTimezone`, conditional inclusion through the
-versioning attributes, and the 1.1 built-ins. It measures **99.90%** on the
-26,204 instance tests that apply to a 1.1 processor and **99.92%** on the
+versioning attributes, and the 1.1 built-ins. It measures **99.98%** on the
+26,222 instance tests that apply to a 1.1 processor and **99.97%** on the
 15,354 schema-validity tests. An earlier revision claimed 100%; that was
 measured over the explicitly-marked 1.1 groups only, about a sixteenth of the
 tests a 1.1 processor is meant to run. See [xsd.md](xsd.md).

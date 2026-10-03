@@ -62,7 +62,7 @@ W3C XSLT sets.
 
 Two suites reach 100% — XPath at all three versions, and RELAX NG.
 
-**The largest block is a single feature, not a long tail.** 3 of the 23
+**One block is a single feature, not a long tail.** 3 of the 23
 XSLT 3.0 failures want an `XTSE3430` that only the unwritten remainder of the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable".
@@ -124,7 +124,7 @@ failures at all.
 
 `xdm` has no external conformance suite: XDM is a data model, not a language
 with a test corpus. It is measured **indirectly and continuously** — every one
-of the 84,000-odd cases above builds, navigates and atomises XDM instances, so
+of the 150,000-odd cases above builds, navigates and atomises XDM instances, so
 a defect in the model surfaces as a failure in XPath, XSLT or XSD rather than
 in a suite of its own. It carries 18 unit-test files of its own covering the
 parts the language suites exercise thinly: type annotation, attribute-value
@@ -249,9 +249,9 @@ non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles
 whether that is owed: a processor that does not stream "is not required to
-assess whether constructs are guaranteed-streamable". These are the largest
-block in this file and they are not defects. What the analysis covers and what
-it does not is under *The §19.8 streamability analysis* below.
+assess whether constructs are guaranteed-streamable". They are not defects.
+What the analysis covers and what it does not is under *The §19.8
+streamability analysis* below.
 
 The remaining **20** divide as follows. Several are divergences and are read in
 §2; what is genuinely open is read here. The block of 3 is measured, not
@@ -500,7 +500,7 @@ outlived its own fix. The 1.0 `SFALSEREJECT` column is `particlesZ001` and
 
 ### All 61 are adjudicated case by case
 
-`tests/conformance/results.json` enumerates every one of the 30 and the 32, the
+`tests/conformance/results.json` enumerates every one of the 30 and the 31, the
 way it already enumerated XSLT 3.0, so the sum check covers XSD rather than
 stopping at a set-level summary. Each case is classified as exactly one of
 three things, and **none of the 61 is a genuine implementation gap**:
@@ -514,7 +514,7 @@ three things, and **none of the 61 is a genuine implementation gap**:
 Buckets (b) and (c) are both recorded as `deliberate-divergence` in
 `tests/conformance/results.json`, whose vocabulary is closed and has no separate
 token for the two; the JSON therefore tallies 2 `fixture` / 28
-`deliberate-divergence` on 1.0 and 3 / 29 on 1.1. The split between (b) and (c)
+`deliberate-divergence` on 1.0 and 2 / 29 on 1.1. The split between (b) and (c)
 is the prose distinction above: (b) is our own documented decision with the
 option named, (c) is an expectation the W3C has itself challenged.
 
@@ -524,7 +524,7 @@ adjudication and not a defect. `tests/xsdsuite/main.go` sets `Version`,
 `Resolver` and `ParseOptions{AllowDOCTYPE:true}`; it leaves `LaxUPA` off, which
 is the conforming strict reading of erratum E1-29, and leaves `XPathVersion` at
 XPath 2.0, which is what XSD 1.1 requires for assertions. **Neither option
-gates a single one of these 62 cases**: no case fails on a Unique Particle
+gates a single one of these 61 cases**: no case fails on a Unique Particle
 Attribution complaint, and no assertion or conditional-type-alternative case
 disagrees at all. That bucket is empty, and it is recorded as empty rather than
 filled with a citation the evidence does not support.
@@ -615,6 +615,11 @@ the argument to `count((author | editor))` is **crawling and consuming**. Two
 sibling child name tests are exactly the shape it exempted. It was reverted.
 
 ## Two streamability cases that need data-flow analysis
+
+**Both now pass, and neither needed it.** They came free in `ab89b76`, when
+§19.8.9.3 (`fn:current`) was modelled: a `current()` call the analysis could
+not model used to abandon the whole enclosing construct. See *Corrections* in
+[known-gaps.md](known-gaps.md). The diagnosis below is the one recorded before.
 
 **Diagnosed, not fixable syntactically.** `si-iterate-035` and `si-iterate-904`
 both want `XTSE3430` for a streamed node reaching a place it may not, and in
@@ -1191,7 +1196,8 @@ excluded by *declared dependency*, not by failure.
 | 12 | `package_version_resolution` — unmodelled |
 | 12 | `additional_normalization_form` — unmodelled |
 | 7 | `maximum_number_of_decimal_digits` — unmodelled |
-| **3,030** | **listed above; the remaining 46 are single-case reasons** |
+| 7 | `streaming-fallback` — deliberately not claimed; see *Corrections* |
+| **3,037** | **listed above; the remaining 46 are single-case reasons** |
 
 Counting these as failures would understate the engine; counting them as passes
 would overstate it. They are reported separately for that reason.

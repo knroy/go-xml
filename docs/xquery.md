@@ -423,17 +423,17 @@ window clauses; direct and computed
 constructors; `try`/`catch`; `switch`; `typeswitch`; quantified expressions;
 `ordered`/`unordered`; the extension expression; and the string constructor.
 
-The remaining failure is a long tail rather than a missing feature, and it
-is understood:
+The remaining failure is not a missing feature, and it is understood:
 
-* **`K2-sequenceExprTypeswitch-5`** wants a static `XPST0008` for a variable
-  named in an unreached `typeswitch` branch. A check restricted to
-  sibling-clause variables passed eleven tests and then broke
-  `K2-ForExprWithout-8`, where a sibling's name is shadowed by an outer
-  binding — so seeing it free proves nothing. A sound check needs the parser to
-  track in-scope variables, which it does not do today.
+* **`prod-ContextItemDecl/contextDecl-052`** is a W3C fixture defect: the
+  catalog registers `libmodule-3.xq` under one namespace and the file declares
+  another, so `XQST0059` is correct and precedes the wanted `XQST0113`. See
+  [conformance-gaps.md](conformance-gaps.md).
 
-The groups this section used to list have all been fixed: the `RexParser`
+`K2-sequenceExprTypeswitch-5`, which this section used to list, now passes:
+the `XPST0008` for a variable named in an unreached `typeswitch` branch is
+judged against the live scope. The groups this section used to list have all
+been fixed: the `RexParser`
 demo, schema-aware
 `validate lax`, namespace non-inheritance on constructed elements, zero-length
 text in `document {}`, the `sudoku` demo, a prolog base URI that is relative,

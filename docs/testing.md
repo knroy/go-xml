@@ -476,9 +476,9 @@ DocBook 578
 RelaxNGSpectest 965
 TestQT3XPath20 15217
 TestQT3XPath30 19362
-TestQT3XPath31 21898
-TestQT3XQuery 30345
-TestXSLT30Suite 11491
+TestQT3XPath31 22054
+TestQT3XQuery 30516
+TestXSLT30Suite 11495
 TestXSLTSuite 6193
 VendoredSchemas 185
 XSD10 39358
@@ -598,7 +598,7 @@ The three XPath figures are in that table too, one row each:
 ```
 TestQT3XPath20  15217 XPath-2.0
 TestQT3XPath30  19362 XPath-3.0
-TestQT3XPath31  21898 XPath-3.1
+TestQT3XPath31  22054 XPath-3.1
 ```
 
 They need a row each because the three are three different scopings of one
@@ -951,11 +951,11 @@ in `internal/xmltok/xmltok_test.go`, `relaxng/compact_fuzz_test.go`,
 `xsd/complexity_fuzz_test.go` and `c14n/fuzz_test.go`.
 
 The nightly workflow runs ten of the twelve. The two `xquery` targets are left
-out on purpose: `FuzzCompileNoPanic` rediscovers three known, still-open
-faults within about a minute each: two in the prolog scanner, and a range such
-as `0 to 700000` folded at compile time into 213 MB (its doc comment names
-them), so a nightly run would fail every night on bugs already
-recorded. Run them by hand while working on `xquery`.
+out on purpose: `FuzzCompileNoPanic` rediscovers a known, still-open fault
+within seconds: a range such as `0 to 700000` folded at compile time into
+213 MB (its doc comment names it; the two prolog-scanner faults it found
+beside it were fixed on 2026-09-13, see [security.md](security.md)), so a
+nightly run would fail every night on a bug already recorded. Run them by hand while working on `xquery`.
 
 ```sh
 # Run one target's search. -run '^$' suppresses the ordinary tests so that
@@ -1177,7 +1177,7 @@ same admission from the other side — it cannot run the case under the conditio
 the case asked for.
 
 Folding those 134 into the denominator as failures is a defensible alternative
-reading, and it gives 11,492 of 11,652, or 98.63%. It is **not** the figure this
+reading, and it gives 11,495 of 11,652, or 98.65%. It is **not** the figure this
 repository publishes, for the same reason the other skips are not: an
 unmodelled dependency is not a measured disagreement with the specification, and
 scoring it as one would put a number on cases that were never run. The published
