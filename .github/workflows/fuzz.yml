@@ -31,7 +31,7 @@ jobs:
       matrix:
         include:
           - {pkg: ./xpath, target: FuzzCompileNoPanic}
-          - {pkg: ./internal/xmlfork, target: FuzzTokenNoPanic}
+          - {pkg: ./internal/xmltok, target: FuzzRawTokenNoPanic}
           - {pkg: ./xdm, target: FuzzParseNoPanic}
           - {pkg: ./xdm, target: FuzzParseDOCTYPE}
           - {pkg: ./relaxng, target: FuzzParseCompactNoPanic}

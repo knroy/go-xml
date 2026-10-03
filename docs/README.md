@@ -54,7 +54,8 @@
 * **[TODO](todo.md)** — what is left: features, the measured bug tail, and
   the non-goals recorded so they are not proposed again as oversights.
 * **[Recipes](recipes.md)** — batch validation, splitting documents, reporting
-  line numbers, rendering to HTML, custom document resolvers.
+  line numbers, rendering to HTML, custom document resolvers, finding elements
+  without XPath.
 
 Start with [validation.md](validation.md) if you are here to check documents
 rather than to transform them. It begins with what this library is *not*,

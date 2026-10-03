@@ -48,7 +48,10 @@ type runtime struct {
 	// so the promise is only kept by evaluating once and reusing. Keyed by
 	// functionCallKey; see apply.go.
 	funcResults map[string]xdm.Sequence
-	ctx         *xpath.Context
+	// itemIDs numbers the nodes and function items functionCallKey keys by
+	// identity; see identityNumber.
+	itemIDs map[any]int
+	ctx     *xpath.Context
 
 	// deferredErr holds the failure of a global whose evaluation is not by
 	// itself the transform's failure -- an abstract variable, whose body
@@ -621,6 +624,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		streamedTrees: map[*xdm.Node]bool{},
 		tunnel:        map[string]xdm.Sequence{},
 		funcResults:   map[string]xdm.Sequence{},
+		itemIDs:       map[any]int{},
 		messages:      new([]string),
 		warnings:      new([]string),
 		secondary:     new([]SecondaryResult),
@@ -659,6 +663,12 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// recursion depth above follows. The counters travel with their held flags;
 	// see xpath.Context.AdoptBudget.
 	xctx = xctx.AdoptBudget(opts.nestedBudget)
+	// The expression depth continues the count too. rt.depth alone bounds a
+	// stylesheet that calls fn:transform on itself, but not one that leaves
+	// XSLT on the way round -- fn:load-xquery-module into a query that calls
+	// fn:transform again -- since the query sees only its Context, and a
+	// Context starting at zero here restarted the count at every hop.
+	xctx.Depth = opts.nestedDepth
 	// A duplicate key in an XPath map constructor is XTDE3365 under XSLT, not
 	// XQuery's XQDY0137: section 17.4 gives the MapExpr its own code, the same
 	// one xsl:map raises for a duplicate among the maps it merges. The two
@@ -695,6 +705,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	xctx.Collections = opts.Collections
 	xctx.Texts = opts.Texts
 	xctx.Environment = opts.Environment
+	xctx.Modules = opts.Modules
 	// fn:json-to-xml with validate=true needs the schema layer to type the
 	// tree it builds, and reaches it through this hook rather than by
 	// importing xsd from xpath, which the dependency direction forbids. It is

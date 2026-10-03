@@ -74,7 +74,6 @@ func registerHOFuncs(l *Library) {
 		// An arity that names no callable function matches nothing, which
 		// F&O 3.0 16.1.1 makes the empty sequence rather than an error.
 		//
-		// The upper bound is not merely a guard on the int conversion:
 		// What is refused here is what cannot be REPRESENTED, not what is
 		// merely large. xs:integer is arbitrary precision and Function.Arity
 		// is a Go int, so a value outside that range names no function this

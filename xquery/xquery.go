@@ -184,6 +184,11 @@ type Query struct {
 	// not the importer's, and merging them would lose the context each one
 	// has to be evaluated in.
 	modules []*libModule
+
+	// modSrc is where this query's fn:load-xquery-module calls find their
+	// modules: its own module store and resolver, installed on the context
+	// by prepare. Nil when the query was given neither.
+	modSrc xpath.ModuleResolver
 }
 
 // Compile compiles a query.
@@ -278,6 +283,9 @@ func Compile(src string, opts Options) (*Query, error) {
 	q := &Query{body: body, sc: sc, src: src, vars: p.vars, funcs: p.funcs,
 		contextItem: p.contextItem, formats: p.formats,
 		serialization: p.serialization, modules: mods}
+	if len(opts.Modules) > 0 || opts.ModuleResolver != nil {
+		q.modSrc = queryModules{opts}
+	}
 	// §4.12 adds the imported declarations to this module's static context,
 	// so a clash between an import and this module -- or between two imports
 	// -- is the same error a duplicate declaration within one module is.
@@ -372,6 +380,11 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 	// own validator keeps it.
 	if sub.Validator == nil {
 		sub.Validator = jsonTreeValidator{}
+	}
+	// fn:load-xquery-module reaches what "import module" reaches, unless the
+	// caller said otherwise.
+	if sub.Modules == nil {
+		sub.Modules = q.modSrc
 	}
 	if len(q.funcs) > 0 || len(q.formats) > 0 || len(q.modules) > 0 {
 		if ctx.Funcs == nil || ctx.Funcs == xpath.FunctionLibrary(q.lib.Parent) {

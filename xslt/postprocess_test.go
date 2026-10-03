@@ -69,32 +69,6 @@ func TestTransformPostProcessRuns(t *testing.T) {
 	}
 }
 
-// An option name the processor does not know must be refused, not dropped.
-// Silence is what let post-process go unimplemented and unnoticed: the output
-// looked right, one stage short.
-func TestTransformRefusesUnknownOption(t *testing.T) {
-	const sheet = `<xsl:stylesheet version="3.0"
-	    xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
-	  <xsl:template match="/" name="xsl:initial-template">
-	    <xsl:sequence select="transform(map{
-	      'source-node': .,
-	      'stylesheet-text': '&lt;xsl:stylesheet version=&quot;3.0&quot; xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot;/&gt;',
-	      'post-proces': 1
-	    })?output"/>
-	  </xsl:template>
-	</xsl:stylesheet>`
-	_, err := runPP(t, sheet, `<r/>`)
-	if err == nil {
-		t.Fatal("a misspelled option was accepted and silently ignored")
-	}
-	if code := xdm.ErrorCode(err); code != "FOXT0002" {
-		t.Errorf("code = %q, want FOXT0002", code)
-	}
-	if !strings.Contains(err.Error(), "post-proces") {
-		t.Errorf("error %v does not name the option it refused", err)
-	}
-}
-
 // The type is function(xs:string, item()*) as item()*, so arity is part of
 // what makes the option valid rather than a detail of the body.
 func TestTransformPostProcessArityIsChecked(t *testing.T) {

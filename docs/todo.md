@@ -17,13 +17,13 @@ Current position:
 |---|---|
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
 | XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
-| XPath 3.1 | 100.00% — 21,898 of 21,898 in scope (0 failing) |
-| XQuery 3.1 | 100.00% — 30,345 of 30,346 in scope (1 failing) |
+| XPath 3.1 | 100.00% — 22,054 of 22,054 in scope (0 failing) |
+| XQuery 3.1 | 100.00% — 30,516 of 30,517 in scope (1 failing) |
 | XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
-| XSLT 3.0 | 99.77% — 11,492 of 11,518 in scope (26 failing); 7 of those need more of the §19.8 streamability analysis |
+| XSLT 3.0 | 99.80% — 11,495 of 11,518 in scope (23 failing); 3 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,483 `func Test` declarations, clean under `-race` |
+| Tests | 2,545 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -36,10 +36,12 @@ to build next and what it would cost.
 ### 1.1 XML 1.1 documents — **implemented; one layer outstanding**
 
 XML 1.1 documents are read as XML 1.1. The declaration's version is kept in
-`internal/xmlfork.Decoder`, [2] `Char` and [2a] `RestrictedChar` are enforced
+`internal/xmltok.Decoder`, [2] `Char` and [2a] `RestrictedChar` are enforced
 per version, and §2.11 makes `NEL` and U+2028 line ends. External entities are
 checked against XML §4.3.4: a 1.0 document may not include a 1.1 entity, and an
-unrecognised version is refused rather than assumed compatible. See CHANGELOG.md
+unrecognised version is refused rather than assumed compatible. A document
+declaring a `1.x` other than `1.1` is read as 1.0, as §2.8 (Fifth Edition)
+asks. See CHANGELOG.md
 for the mechanism and why the version is not a caller-settable option.
 
 Two items the old entry listed as blocking turned out not to be. XML 1.0 Fifth
@@ -206,9 +208,10 @@ means giving `dtd` a way to be told the including document's version, which is a
 new API surface rather than a gap closure, and it should not be invented before
 a caller needs it.
 
-Scoping the remainder properly still wants the W3C `xmlconf` suite, which this
-repository does not vendor. The `XmlVersions` cases in the XSD suite are the
-only 1.1 measurement currently available — xv003, xv006, xv008 and xv009 pass.
+The W3C `xmlconf` suite (xmlts20130923) was measured on 2026-10-02 with a
+scratch harness against `xmllint`; it is not yet vendored or run in CI, so the
+`XmlVersions` cases in the XSD suite (xv003, xv006, xv008, xv009 pass) remain
+the only 1.1 measurement the gate repeats.
 
 ### 1.2 DTD validation — notations and entity-typed attributes outstanding
 
@@ -243,11 +246,11 @@ internal one does. See [security.md](security.md) and
   unparsed entities actually declared, for the same reason: the notion of a
   declared-but-unparsed entity lives in `xdm`, and the check would have to
   read it back out.
-* **The W3C `xmlconf` suite is not vendored**, so there is no external
-  measurement of any of this — `testdata/` holds the QT3, XSD, XSLT 3.0,
-  RELAX NG, DocBook xslTNG and XSpec corpora and no XML conformance suite.
-  Vendoring it is the one thing that would turn "the tests we wrote pass" into
-  a number.
+* **The W3C `xmlconf` suite is not vendored.** It was measured once, on
+  2026-10-02, against `xmllint`: under default options the parser now refuses
+  every not-well-formed case that applies, and with DOCTYPEs enabled most of
+  what it still accepts is DTD declaration grammar it never checks. Vendoring
+  it with a CI test is what would keep that number from drifting.
 
 ### 1.3 RELAX NG — compact syntax implemented, unverified against a suite
 
@@ -704,6 +707,13 @@ matching `xpath.Context.Descend`. See `xslt/nestedtransform_test.go`, whose
 sabotage showed both halves are independently load-bearing: removing either the
 charge or the inheritance brings the fatal back.
 
+The guarantee extends to `fn:transform` called from XQuery or `xpath.Eval`
+(the processor `xslt` registers with `xpath`): that path charges from
+`ctx.Depth` under `ctx.MaxDepth`, and the nested runtime's XPath context now
+starts at the inherited depth, so a cycle through another host language
+accumulates too. `TestTransformRecursionThroughAnotherHostIsBounded`; removing
+the seed fails it.
+
 ### 2.2 A function item does not inherit the byte budget
 
 **Done**, `d63cbb2`. `xpath/funcitem.go` forwarded the caller's `items` and
@@ -812,8 +822,8 @@ These are places where the tests are thinner than the claims.
 
 ### 3.1 Fuzzing beyond the parser
 
-**Largely done.** There are now five targets, not one. Alongside
-`FuzzCompileNoPanic` over the XPath expression compiler:
+**Largely done.** There are now twelve targets, not one. The first four added,
+alongside `FuzzCompileNoPanic` over the XPath expression compiler:
 
 - `FuzzParseNoPanic` (`xdm`) over `ParseString`, the front door for every
   untrusted document the engine reads;
@@ -879,12 +889,13 @@ an iteration that consumed nothing — that the first fix had left rejecting val
 documents, and again no suite case moved.
 
 **Coverage-guided fuzzing now runs nightly.** `.github/workflows/fuzz.yml`
-fuzzes all nine targets — one per matrix leg, since `go test -fuzz` takes one
-target per invocation — at `-fuzztime 300s`, on a `schedule:` cron and on
-`workflow_dispatch`. It is deliberately *not* in the per-push gate: a
-coverage-guided search is nondeterministic, and a five-minute job that can fail
-on a commit that would have passed a second time is one people disable rather
-than fix. `ci.yml` still replays every seed corpus as an ordinary unit test, so
+fuzzes ten of the twelve targets (not the two in `xquery`) — one per matrix
+leg, since `go test -fuzz` takes one target per invocation — at `-fuzztime
+300s`, on a `schedule:` cron and on `workflow_dispatch`. It is deliberately
+*not* in the per-push gate: a coverage-guided search is nondeterministic, and a
+five-minute job that can fail on a commit that would have passed a second time
+is one people disable rather than fix. `ci.yml` still replays every seed
+corpus as an ordinary unit test, so
 a target that stops compiling is caught in a minute, and `check.sh` still only
 *counts* the targets, to keep a README figure honest. Each of the nine was run
 locally for 20s before the job was wired in — roughly 24 million executions in

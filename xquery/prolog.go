@@ -1559,13 +1559,11 @@ func (p *parser) parseModuleImport() error {
 				"XQST0047: the module namespace %q is imported twice", imp.ns)
 		}
 	}
-	// §4.12: a module may not import itself, which is the one cycle that is
-	// an error at every version -- it is not mutual recursion but a module
-	// whose own declarations would be added to itself twice.
-	if p.inLibrary && imp.ns == p.moduleNS {
-		return p.errorf(
-			"XQST0073: the module %q imports itself", imp.ns)
-	}
+	// A module importing its own target namespace is NOT an error. §4.12:
+	// "A module may import its own target namespace (this is interpreted as
+	// importing an implementation-defined set of other modules that share its
+	// target namespace.)" The loader sees the revisit as a cycle and returns
+	// the module being loaded. fn-load-xquery-module-029 is the case.
 	p.moduleImports = append(p.moduleImports, imp)
 	return nil
 }
@@ -1615,7 +1613,6 @@ func (p *parser) parseModuleDecl() (string, error) {
 		return "", p.errorf("%s", err.Error())
 	}
 	p.declaredNS[prefix] = true
-	p.moduleNS = uri
 	p.skipSpaceAndComments()
 	if !p.consume(";") {
 		return "", p.errorf("XPST0003: expected %q after a module declaration", ";")

@@ -118,12 +118,6 @@ type parser struct {
 	// import must not contribute.
 	inLibrary bool
 
-	// moduleNS is the target namespace a library module declared, empty in a
-	// main module. It is read by one rule: §4.12 forbids a module importing
-	// itself, and self-import is the one cycle that is an error at every
-	// version of XQuery.
-	moduleNS string
-
 	// moduleImports records the "import module" declarations, in source
 	// order, so that the module loader can follow them.
 	//

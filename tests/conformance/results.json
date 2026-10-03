@@ -31,10 +31,10 @@
       "component": "xpath",
       "suite": "QT3 — XPath 3.1",
       "edition": "XPath 3.1",
-      "passed": 21898,
+      "passed": 22054,
       "disagreements": 0,
-      "total": 21898,
-      "run_date": "2026-09-11",
+      "total": 22054,
+      "run_date": "2026-10-01",
       "command": "tests/check.sh (TestQT3, lane xpath-3.1)",
       "cases": []
     },
@@ -43,10 +43,10 @@
       "component": "xquery",
       "suite": "QT3 — XQuery 3.1",
       "edition": "XQuery 3.1",
-      "passed": 30345,
+      "passed": 30516,
       "disagreements": 1,
-      "total": 30346,
-      "run_date": "2026-09-11",
+      "total": 30517,
+      "run_date": "2026-10-01",
       "command": "tests/check.sh (TestQT3XQuery)",
       "cases": [
         {
@@ -116,10 +116,10 @@
       "component": "xslt",
       "suite": "W3C XSLT 3.0",
       "edition": "XSLT 3.0",
-      "passed": 11492,
-      "disagreements": 26,
+      "passed": 11495,
+      "disagreements": 23,
       "total": 11518,
-      "run_date": "2026-09-14",
+      "run_date": "2026-10-02",
       "command": "tests/check.sh (TestXSLT30Suite)",
       "skipped_out_of_scope": 2949,
       "skipped_unimplemented": 134,
@@ -138,6 +138,11 @@
           "id": "accumulator-061",
           "verdict": "deliberate-divergence",
           "note": "Costs more than it gains; read in §2."
+        },
+        {
+          "id": "accumulator-073",
+          "verdict": "deliberate-divergence",
+          "note": "§18.2.2: an initial mode without use-accumulators makes none applicable, and a copy inherits that; Saxon-HE 12.7 raises XTDE3362 for the same shape."
         },
         {
           "id": "docbook-001",
@@ -205,11 +210,6 @@
           "note": "§4.4 grants no ancestor-assertion exemption; the case exists to exercise Saxon paths."
         },
         {
-          "id": "su-ascent-903",
-          "verdict": "deliberate-divergence",
-          "note": "§19.8.5.7 makes a reference to the streaming parameter climbing, and the ascent category permits a climbing body, so the analysis accepts it. It refused this case before only because varPosture wrongly read striding."
-        },
-        {
           "id": "system-property-012",
           "verdict": "deliberate-divergence",
           "note": "§26.5 requires a non-streaming processor to answer \"no\"; answering \"yes\" would lie to stylesheets that branch on it to pick a fallback."
@@ -225,7 +225,7 @@
           "note": "Read in §2 and in Corrections."
         }
       ],
-      "unenumerated_note": "The balance want an XTSE3430 refusal that only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit. §19.1 does not require a non-streaming processor to assess guaranteed-streamability, so they are read as a block under \"The §19.8 streamability analysis\" rather than case by case. su-ascent-903 belongs to that block and is ALSO enumerated above, because its verdict is not the block's: the analysis does reach it, and the rule the test asserts contradicts §19.8.5.7's own worked example. It is counted once, in the breakdown of 7, so the enumeration and the breakdown overlap by exactly that one case and 20 + 7 - 1 = 26. merge-097sf was enumerated here until 2026-09-11 and is not a disagreement at all: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
+      "unenumerated_note": "The balance want an XTSE3430 refusal: si-fork-902 and si-fork-952 need the || operator modelled, which §19.8.8.4's literal union rule makes cost 18 sx-union cases (measured +2/-18); su-absorbing-205 needs the §19.8.4.12 higher-order reading of xsl:copy, measured +1/-61 against si-copy-A. They are read as a block under \"The §19.8 streamability analysis\". 20 enumerated + 3 in the block = 23. su-ascent-903, the former overlap, passes since the ascent call rule was applied by intent (§19.8.5.7's last clause is otherwise unreachable). merge-097sf is not a disagreement: it declares the streaming-fallback feature, which this engine does not claim, so the harness skips it."
     },
     {
       "id": "xsd-1.0",
@@ -579,10 +579,10 @@
       "component": "xslt",
       "suite": "DocBook xslTNG",
       "edition": "real-world corpus",
-      "passed": 577,
+      "passed": 578,
       "disagreements": 0,
-      "total": 577,
-      "run_date": "2026-09-11",
+      "total": 578,
+      "run_date": "2026-09-29",
       "command": "tests/check.sh (DocBook)",
       "cases": []
     },
@@ -631,9 +631,9 @@
       "id": "xtse3430",
       "label": "XSLT 3.0 failures wanting an XTSE3430",
       "suite": "xslt-3.0",
-      "of": 7,
-      "overlap": 1,
-      "note": "Only the unwritten remainder of the §19.8 posture-and-sweep analysis can emit the refusal; §19.1 does not require a non-streaming processor to assess guaranteed-streamability. The one overlap is su-ascent-903, enumerated individually because its verdict is not the block's: §19.8.5.7 makes an ascent function's streaming parameter climbing and the category permits a climbing body."
+      "of": 3,
+      "overlap": 0,
+      "note": "Only more of the §19.8 posture-and-sweep analysis can emit the refusal, and each fix found so far costs more passing cases than it gains: si-fork-902/952 (||, measured +2/-18 against sx-union) and su-absorbing-205 (xsl:copy higher-order operand, +1/-61 against si-copy-A). §19.1 does not require a non-streaming processor to assess guaranteed-streamability."
     }
   ]
 }

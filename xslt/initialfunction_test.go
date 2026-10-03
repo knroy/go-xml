@@ -433,8 +433,10 @@ func TestFnTransformNamesTheNestedStylesheet(t *testing.T) {
 	if err == nil {
 		t.Fatal("got nil, want an entry-point error")
 	}
-	if !strings.Contains(err.Error(), "XTDE0044") {
-		t.Fatalf("got %v, want XTDE0044", err)
+	// F&O 3.1 defaults the invocation to call-template on
+	// xsl:initial-template, which this stylesheet lacks.
+	if !strings.Contains(err.Error(), "XTDE0040") {
+		t.Fatalf("got %v, want XTDE0040", err)
 	}
 	// The identifying half: without it the message is the one from issue #4.
 	if !strings.Contains(err.Error(), "fn:transform") ||

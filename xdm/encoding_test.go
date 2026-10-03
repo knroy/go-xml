@@ -182,3 +182,29 @@ func TestDripFedReaderParses(t *testing.T) {
 		t.Errorf("parsed to %q, want %q", got, "text")
 	}
 }
+
+// TestParseBOMContradictsDeclaration pins XML 1.0 §4.3.3 and Appendix F: a
+// byte order mark presents the document in one encoding, and a declaration
+// naming another is a fatal error (hst-lhs-007, -008). libxml2 exits 0.
+func TestParseBOMContradictsDeclaration(t *testing.T) {
+	decl := func(enc string) string { return `<?xml version="1.0" encoding="` + enc + `"?><r/>` }
+	for _, c := range []struct {
+		name string
+		src  []byte
+		ok   bool
+	}{
+		{"utf8-bom latin1", append([]byte("\xEF\xBB\xBF"), decl("ISO-8859-1")...), false},
+		{"utf8-bom utf16", append([]byte("\xEF\xBB\xBF"), decl("UTF-16")...), false},
+		{"utf16le-bom utf8", encodeUTF16(decl("utf-8"), false), false},
+		{"utf16be-bom utf8", encodeUTF16(decl("UTF-8"), true), false},
+		{"utf8-bom utf8", append([]byte("\xEF\xBB\xBF"), decl("utf-8")...), true},
+		{"utf8-bom no encoding", []byte("\xEF\xBB\xBF<?xml version='1.0'?><r/>"), true},
+		{"utf16le-bom utf16", encodeUTF16(decl("utf-16"), false), true},
+		{"utf16be-bom utf16be", encodeUTF16(decl("UTF-16BE"), true), true},
+	} {
+		_, err := Parse(bytes.NewReader(c.src), ParseOptions{})
+		if (err == nil) != c.ok {
+			t.Errorf("%s: err = %v, want ok=%v", c.name, err, c.ok)
+		}
+	}
+}

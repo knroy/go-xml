@@ -376,10 +376,10 @@ func (c *canon) writeNamespaces() {
 // the same local name and value". That ancestor's in-set nodes are the top
 // of c.axes; with partial axes they are not what was rendered, so this path
 // cannot use c.rendered. Exclusive C14N's own rule covers the rest: a
-// visibly utilised prefix renders when "its parent element is in the
-// node-set" and the nearest output ancestor that visibly utilises it "does
-// not have a namespace node in the node-set with the same namespace prefix
-// and value" — membership of the node itself is not a condition.
+// namespace node in the set whose prefix e visibly utilises renders unless
+// the nearest output ancestor that visibly utilises it has "a namespace node
+// in the node-set with the same namespace prefix and value". A node outside
+// the set never renders, "even if its parent node is included" (§1.1).
 func (c *canon) namespaceNodes(e *xdm.Node, in bool) {
 	c.nsOut = c.nsOut[:0]
 	listed := func(prefix string) bool { return !c.excl || slices.Contains(c.prefixes, prefix) }
@@ -451,27 +451,20 @@ func (c *canon) exclusiveUtilised(e *xdm.Node, axis map[string]string) {
 		// its in-set node; absent when no output ancestor utilised p.
 		prev, seen := c.util.m[p]
 		switch {
-		case uri != "":
-			// The namespace node exists (in the set or not). It renders
-			// unless the nearest utilising ancestor has the same node in
-			// the set; with no such ancestor, unless the prefix is already
-			// rendered with this value.
+		case inSet:
+			// The namespace node is in the set. It renders unless the
+			// nearest utilising ancestor has the same node in the set; with
+			// no such ancestor, unless the prefix is already rendered with
+			// this value. A node outside the set never renders (§1.1).
 			if (seen && prev != uri) || (!seen && c.rendered.m[p] != uri) {
 				c.nsOut = append(c.nsOut, binding{p, uri})
 			}
 		case p == "":
-			// No default namespace node at all. xmlns="" when e utilises
-			// the default namespace, has no default node in the set, and
-			// the nearest utilising output ancestor has one.
+			// No default namespace node in the set (none in scope, or one
+			// outside the set). xmlns="" when e utilises the default
+			// namespace and the nearest utilising output ancestor has a
+			// non-empty default node in the set.
 			if seen && prev != noNode && prev != "" {
-				c.nsOut = append(c.nsOut, binding{"", ""})
-			}
-		}
-		if p == "" && uri != "" && !inSet {
-			// A default namespace in scope whose node is outside the set:
-			// e has no default node in the set, so the xmlns="" rule
-			// applies too, when the namespace node itself did not render.
-			if seen && prev != noNode && prev == uri {
 				c.nsOut = append(c.nsOut, binding{"", ""})
 			}
 		}

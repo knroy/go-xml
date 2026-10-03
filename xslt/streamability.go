@@ -55,6 +55,10 @@ type analyzer struct {
 	streamingParam xdm.QName
 	paramCategory  streamCategory
 	hasStreamParam bool
+	// paramSeveral says the streaming parameter's declared type permits more
+	// than one node, which §19.8.5.2 turns into a striding, consuming
+	// reference in an absorbing function.
+	paramSeveral bool
 
 	// ctxStreamedGrounded says the context item here is a streamed node that
 	// §19.8.8.12 nevertheless reports as grounded — it was reached from a
@@ -235,6 +239,19 @@ func (a *analyzer) expr(e xpath.Expr) props {
 	case *xpath.BinaryOp:
 		return a.binary(x)
 
+	case *xpath.LookupExpr:
+		// §19.8.8.18: E?K -- E inspection, a parenthesised K absorption;
+		// unary ?K is .?K.
+		var base xpath.Expr = x.Base
+		if base == nil {
+			base = &xpath.ContextItem{}
+		}
+		ops := []operand{a.operandOf(base, usageInspection)}
+		if x.Expr != nil {
+			ops = append(ops, a.operandOf(x.Expr, usageAbsorption))
+		}
+		return combine(ops, false)
+
 	case *xpath.UnaryOp:
 		// Arithmetic negation atomizes its operand.
 		return combine([]operand{a.operandOf(x.Operand, usageAbsorption)}, false)
@@ -336,6 +353,7 @@ func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
 		streamingParam:        a.streamingParam,
 		paramCategory:         a.paramCategory,
 		hasStreamParam:        a.hasStreamParam,
+		paramSeveral:          a.paramSeveral,
 		higherOrder:           true,
 		currentGroup:          a.currentGroup,
 		groupInScope:          a.groupInScope,
@@ -453,7 +471,7 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 		// of B". It comes before the motionless rule, so P's own sweep is
 		// not consulted -- the specification's reasoning is that such a
 		// filter selects at most one node, whatever P reads.
-		if cur.posture == postureCrawling && numericFocusFreePredicate(p) {
+		if cur.posture == postureCrawling && a.numericFocusFreePredicate(p) {
 			cur = props{postureStriding, cur.sweep}
 			continue
 		}
@@ -465,6 +483,7 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 			streamingParam:        a.streamingParam,
 			paramCategory:         a.paramCategory,
 			hasStreamParam:        a.hasStreamParam,
+			paramSeveral:          a.paramSeveral,
 			higherOrder:           a.higherOrder,
 			currentGroup:          a.currentGroup,
 			groupInScope:          a.groupInScope,
@@ -506,7 +525,7 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 	// consulted: the rule asks only that there IS such a P.
 	if ctx == postureStriding && (s.Axis == xpath.AxisDescendant || s.Axis == xpath.AxisDescendantOrSelf) {
 		for _, p := range s.Predicates {
-			if numericFocusFreePredicate(p) {
+			if a.numericFocusFreePredicate(p) {
 				return props{postureStriding, sweepConsuming}
 			}
 		}
@@ -523,6 +542,7 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 			streamingParam:        a.streamingParam,
 			paramCategory:         a.paramCategory,
 			hasStreamParam:        a.hasStreamParam,
+			paramSeveral:          a.paramSeveral,
 			higherOrder:           a.higherOrder,
 			currentGroup:          a.currentGroup,
 			groupInScope:          a.groupInScope,
@@ -610,6 +630,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 				streamingParam:        a.streamingParam,
 				paramCategory:         a.paramCategory,
 				hasStreamParam:        a.hasStreamParam,
+				paramSeveral:          a.paramSeveral,
 				higherOrder:           a.higherOrder,
 				currentGroup:          a.currentGroup,
 				groupInScope:          a.groupInScope,
@@ -743,6 +764,7 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 				streamingParam:        a.streamingParam,
 				paramCategory:         a.paramCategory,
 				hasStreamParam:        a.hasStreamParam,
+				paramSeveral:          a.paramSeveral,
 				higherOrder:           a.higherOrder,
 				currentGroup:          a.currentGroup,
 				groupInScope:          a.groupInScope,
@@ -992,6 +1014,14 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		return groundedMotionless
 	}
 
+	// §19.8.9: "fn:key(x, x) -- Equivalent to fn:key(x, x, /)". The default
+	// is "/", not ".", so contextDefaultingBuiltin does not describe it; the
+	// spelt-out call is assessed instead. Left unmodelled, a key#2 call gave
+	// no verdict and a streamable construct navigating through it compiled.
+	if x.Name.Local == "key" && len(x.Args) == 2 {
+		return a.funcCall(&xpath.FuncCall{Name: x.Name, Args: []xpath.Expr{x.Args[0], x.Args[1], &xpath.PathExpr{Root: true}}})
+	}
+
 	usages, ok := builtinOperandUsages(x.Name.Local, len(x.Args))
 	if !ok && contextDefaultingBuiltin[x.Name.Local] {
 		// A call one argument short of a form whose FINAL argument defaults
@@ -1065,7 +1095,7 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 //
 // fn:key is deliberately absent: §19.8.9 defaults its third argument to "/",
 // not to ".", so the implicit operand is not the context item and the rule
-// here does not describe it. Functions that default their ONLY argument are
+// here does not describe it; funcCall spells that call out instead. Functions that default their ONLY argument are
 // handled by the zero-arity branch above instead.
 var contextDefaultingBuiltin = map[string]bool{
 	"lang": true, "id": true, "idref": true,

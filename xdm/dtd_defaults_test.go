@@ -181,3 +181,40 @@ func TestDefaultedNamespaceOnPrefixedElement(t *testing.T) {
 		t.Fatalf("got name %v attrs %v", d.Name, d.Attrs)
 	}
 }
+
+// XML 1.0 §3.3: when an attribute is declared more than once, the first
+// declaration binds and later ones are ignored. Both defaults used to be added,
+// and the element then failed as carrying a duplicate attribute (W3C xmlconf
+// valid-sa-045, valid-not-sa-026, sa04, not-sa04).
+func TestAttListFirstDeclarationBinds(t *testing.T) {
+	cases := []struct{ name, subset, elem, attr, want string }{
+		{"second default ignored", `<!ATTLIST r a CDATA "v1"><!ATTLIST r a CDATA "z1">`, `<r/>`, "a", "v1"},
+		{"later default for a declared attribute ignored, new one kept",
+			`<!ATTLIST r a1 CDATA "w1"><!ATTLIST r a1 CDATA "x1" a2 CDATA "x2">`, `<r/>`, "a1", "w1"},
+		{"new attribute in a later list still defaulted",
+			`<!ATTLIST r a1 CDATA "w1"><!ATTLIST r a1 CDATA "x1" a2 CDATA "x2">`, `<r/>`, "a2", "x2"},
+		{"#IMPLIED first means no default", `<!ATTLIST r a CDATA #IMPLIED><!ATTLIST r a CDATA "z1">`, `<r/>`, "a", ""},
+		{"first type binds: CDATA is not collapsed", `<!ATTLIST r a CDATA #IMPLIED><!ATTLIST r a NMTOKENS #IMPLIED>`,
+			`<r a=" x  y "/>`, "a", " x  y "},
+		{"same attribute on another element is separate", `<!ATTLIST r a CDATA "v1"><!ATTLIST s a CDATA "z1">`,
+			`<r><s/></r>`, "a", "v1"},
+	}
+	for _, c := range cases {
+		tr, err := ParseString(`<!DOCTYPE r [`+c.subset+`]>`+c.elem, ParseOptions{AllowDOCTYPE: true})
+		if err != nil {
+			t.Errorf("%s: parse: %v", c.name, err)
+			continue
+		}
+		if got := tr.Root.ChildElements()[0].AttrValue(c.attr); got != c.want {
+			t.Errorf("%s: %s = %q, want %q", c.name, c.attr, got, c.want)
+		}
+	}
+	tr, err := ParseString(`<!DOCTYPE r [<!ATTLIST r a CDATA "v1"><!ATTLIST s a CDATA "z1">]><r><s/></r>`,
+		ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tr.Root.ChildElements()[0].ChildElements()[0].AttrValue("a"); got != "z1" {
+		t.Errorf("s/@a = %q, want z1: the first-binds rule is per element", got)
+	}
+}

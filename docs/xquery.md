@@ -1,6 +1,6 @@
 # XQuery
 
-XQuery 3.1, measured at **100.00%** of the W3C QT3 suite (30,345 of 30,346 in
+XQuery 3.1, measured at **100.00%** of the W3C QT3 suite (30,516 of 30,517 in
 scope). That percentage fell from 99.96% when `import schema` was implemented:
 416 previously-skipped cases entered the denominator and 315 of them pass, so
 the passing count rose by 315 while the rate fell. No case that passed before
@@ -248,6 +248,49 @@ opts := xquery.Options{ModuleResolver: xquery.MapModuleResolver{
 Writing one that reads the filesystem or the network is a deliberate grant to
 whoever wrote the query. See [security.md](security.md).
 
+A module may import its own target namespace; §4.12 allows it in as many
+words, and the loader treats the revisit like any other cycle.
+
+### Loading a module at run time
+
+`fn:load-xquery-module` (F&O 3.1 §14.6.1) is implemented. It returns
+`map{"variables": map{QName: value}, "functions": map{QName: map{arity:
+function}}}` for the public declarations of the module whose target namespace
+it is given, and the function items run in the module's own context wherever
+they are called:
+
+```xquery
+load-xquery-module("http://example.com/util")("functions")
+    (QName("http://example.com/util", "double"))(1)(21)   (: 42 :)
+```
+
+It reads modules through exactly what `import module` reads through, and
+nothing else. From a query that is the query's own `Options.Modules` and
+`Options.ModuleResolver`; from XPath it is `xpath.Context.Modules`, and from
+XSLT `xslt.TransformOptions.Modules` — both nil by default, so a call finds
+nothing and raises `FOQM0002`, the same answer an import gives as `XQST0059`.
+The `location-hints` option is passed to the resolver, resolved against the
+caller's static base URI. Loading charges the caller's module budgets
+(`MaxModules`, `MaxModuleBytes`) and the module's evaluation spends the
+caller's item, byte, entity and node budgets; running out is a resource-limit
+error, never `FOQM0003`.
+
+The options are all honoured: `xquery-version` (anything up to 3.1;
+higher is `FOQM0006`), `location-hints`, `context-item`, `variables` (also for
+external variables of modules the loaded one imports) and `vendor-options`,
+which is checked and then ignored because no vendor option is recognised. A
+supplied variable or context item that does not match its declared type is
+`FOQM0005`; a static error in the module is `FOQM0003`; an empty URI is
+`FOQM0001`.
+
+The function lives in `xpath`'s library, but the processor behind it lives
+here, and `xpath` cannot import `xquery`. So **a Go program gets it by
+importing this package** — a blank `import _ "github.com/knroy/go-xml/xquery"`
+is enough for a stylesheet or an XPath expression to use it. A program that
+does not import `xquery` gets `FOQM0006`, which the specification defines for
+a processor without the function. The `go-xml` command links `xquery`, so both
+`go-xml -xsl` and `go-xml xquery` have it.
+
 ## Importing schemas
 
 `import schema` finds a schema by its **target namespace** (§4.11), and the
@@ -343,6 +386,35 @@ interfaces `xslt` also implements — are not implemented here, so a union or
 list type an imported schema defines resolves as a name but does not match a
 value.
 
+## Running XSLT from a query: `fn:transform`
+
+`fn:transform` (F&O 3.1 §14.7.1) runs an XSLT 3.0 transformation when the
+program links the `xslt` package — importing it registers the processor with
+`xpath`, which cannot import `xslt` itself. `go-xml xquery` links it. A program
+that imports only `xpath` or `xquery` gets `FOXT0004`, the specification's code
+for "no processor".
+
+```go
+import "github.com/knroy/go-xml/xslt" // linking xslt registers the processor
+
+res, err := xslt.NewFileResolver("/srv/xsl") // all the transformation may read
+ctx := xpath.NewContext(nil, xpath.Builtins())
+ctx.Docs = res
+seq, err := xquery.Eval(`transform(map{
+    'stylesheet-location': 'render.xsl', 'source-location': 'in.xml'})?output`,
+    ctx, xquery.Options{BaseURI: "file:///srv/xsl/"}) // relative locations resolve here
+```
+
+The nested transformation inherits the query's `Context` and nothing else:
+`stylesheet-location`, `source-location`, its `xsl:include`s and its own
+`fn:doc` resolve through `ctx.Docs` only, so a query with no resolver gets the
+same `FOXT0002` refusal a stylesheet with none gets, and `package-name` is
+refused (there is no package resolver). Its recursion depth continues the
+query's and is bounded by `ctx.MaxDepth`, so a stylesheet that calls back into
+a query that transforms again is refused with `XPDY0001` rather than
+exhausting the stack. The options F&O defines that are accepted without effect
+are listed in [known-gaps.md](known-gaps.md).
+
 ## What is not implemented
 
 Everything in 3.1 is implemented, `import module` and `import schema` included: every FLWOR clause — `for`, `let`,
@@ -351,17 +423,17 @@ window clauses; direct and computed
 constructors; `try`/`catch`; `switch`; `typeswitch`; quantified expressions;
 `ordered`/`unordered`; the extension expression; and the string constructor.
 
-The remaining failure is a long tail rather than a missing feature, and it
-is understood:
+The remaining failure is not a missing feature, and it is understood:
 
-* **`K2-sequenceExprTypeswitch-5`** wants a static `XPST0008` for a variable
-  named in an unreached `typeswitch` branch. A check restricted to
-  sibling-clause variables passed eleven tests and then broke
-  `K2-ForExprWithout-8`, where a sibling's name is shadowed by an outer
-  binding — so seeing it free proves nothing. A sound check needs the parser to
-  track in-scope variables, which it does not do today.
+* **`prod-ContextItemDecl/contextDecl-052`** is a W3C fixture defect: the
+  catalog registers `libmodule-3.xq` under one namespace and the file declares
+  another, so `XQST0059` is correct and precedes the wanted `XQST0113`. See
+  [conformance-gaps.md](conformance-gaps.md).
 
-The groups this section used to list have all been fixed: the `RexParser`
+`K2-sequenceExprTypeswitch-5`, which this section used to list, now passes:
+the `XPST0008` for a variable named in an unreached `typeswitch` branch is
+judged against the live scope. The groups this section used to list have all
+been fixed: the `RexParser`
 demo, schema-aware
 `validate lax`, namespace non-inheritance on constructed elements, zero-length
 text in `document {}`, the `sudoku` demo, a prolog base URI that is relative,
@@ -370,12 +442,33 @@ and `eqname-007`'s prefix bound by an enclosing element constructor.
 See [known-gaps.md](known-gaps.md) for the variable-name/subtraction defect,
 which the suite does not cover.
 
+## Command line
+
+```
+go-xml xquery -q QUERY.xq [flags] [INPUT.xml]
+```
+
+`INPUT.xml`, when given, is the context item; without it the query has none.
+`-p name=value` binds an external variable as `xs:string`, and the result is
+written through `xslt.Serialize` with the parameters from
+`SerializationOptions` — an unstated method is chosen from the result.
+`import module ... at`, `fn:load-xquery-module`, `fn:doc` and (with
+`-allow-unparsed-text`) `fn:unparsed-text` read only the query's own directory
+and the `-allow-dir` roots; a location hint outside them is refused with
+`XQST0059` (`FOQM0002` from `fn:load-xquery-module`). `fn:transform` reads its
+stylesheet and source through the same roots, and a location outside them is
+refused with `FOXT0002`. A stylesheet run by `go-xml -xsl` reads
+`fn:load-xquery-module` modules from its `-allow-dir` roots the same way. `import
+schema ... at` is not resolved from the command line. Run
+`go-xml xquery -h` for every flag.
+
 ## Security
 
 The same defaults as the rest of the library. A query cannot read a file or
-open a socket unless you give it something that can: `fn:doc`, `fn:collection`
-`import module` and `import schema` all resolve through a resolver that is
-**nil by default**, and a nil resolver fetches nothing. An `import module ...
+open a socket unless you give it something that can: `fn:doc`, `fn:collection`,
+`fn:transform`, `import module`, `fn:load-xquery-module` and `import schema`
+all resolve through a resolver that is **nil by default**, and a nil resolver
+fetches nothing. An `import module ...
 at "/etc/passwd"` is not attempted and refused — it is never opened, and the
 import fails with `XQST0059`. The same holds word for word for `import schema
 ... at "/etc/passwd"`, and the refusal names `Options.SchemaResolver` rather

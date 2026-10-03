@@ -1,6 +1,6 @@
 # What reaching 100% would take
 
-Measured at commit `23570de`, 2026-09-14. The short answer: **100% is not
+Measured at commit `7798acd`, 2026-10-02. The short answer: **100% is not
 reachable on any of these suites**, and the great majority of what remains are
 cases where passing would mean shipping something *less* correct. What follows
 separates the work that exists from the work that does not.
@@ -14,18 +14,18 @@ case by case; this file is about what buying them would cost.
 | XPath 3.1 | 0 | 0 | 0 | 0 |
 | XQuery 3.1 | 1 | 0 | 0 | 1 |
 | XSLT 2.0 | 8 | 0 | 0 | 8 |
-| XSLT 3.0 | 26 | 0 | 0 | 26 |
+| XSLT 3.0 | 23 | 0 | 0 | 23 |
 | XSD 1.0 | 30 | 0 | 0 | 30 |
 | XSD 1.1 | 31 | 0 | 0 | 31 |
-| **Total** | **96** | **0** | **0** | **96** |
+| **Total** | **93** | **0** | **0** | **93** |
 
 XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
-Seven of the XSLT 3.0 cases sit in the "cannot fix" column on a weaker claim
-than the rest: they want an `XTSE3430` refusal that only the unwritten
-remainder of the §19.8 streamability analysis can emit, and §19.1 says a
-non-streaming processor "is not required to assess whether constructs are
-guaranteed-streamable". They are not owed, which is not the same as not
+Three of the XSLT 3.0 cases sit in the "cannot fix" column on a weaker claim
+than the rest: they want an `XTSE3430` refusal that the §19.8 streamability
+analysis could emit only through rules measured to cost more cases than they
+gain, and §19.1 says a non-streaming processor "is not required to assess
+whether constructs are guaranteed-streamable". They are not owed, which is not the same as not
 buildable; Part 2 files them under features deliberately not implemented.
 
 For XSD the fixable/cannot-fix split is not a judgement call: it is the suite's
@@ -53,7 +53,7 @@ cases in Part 2, not a defect. The two the suite itself declared out of scope
 left the denominator, and the harness scoring defects — chiefly the eight XSD
 `indeterminate` expectations per version that were silently scored as "must be
 invalid" — were fixed in the harness. What stands between here and 100% is
-the 96 in Part 2.
+the 93 in Part 2.
 
 The last four to fall are worth recording, because they are the shape of what
 "fixable" meant:
@@ -100,7 +100,7 @@ A ceiling bounds what the suite asks, not what the code does.
 
 ---
 
-## Part 2 — the 96 that are not work
+## Part 2 — the 93 that are not work
 
 Grouped by what would actually have to change.
 
@@ -134,47 +134,25 @@ trades. None is counted as fixable — the earlier revision counted its marginal
 cases the less flattering way, and every one of those has since been fixed or
 settled.
 
-### 0 — `fn:load-xquery-module` (still out of scope, and now for one reason only)
+### 0 — `fn:load-xquery-module` (resolved: implemented)
 
-`fn-load-xquery-module-003`, `-004`, `fn-function-lookup-764`.
+The function is implemented (`xquery/loadmodule.go`), so the harness now
+declares the `fn-load-xquery-module` feature satisfied. The set's own cases
+are in scope and pass — 54 at XPath 3.1 and 62 at XQuery, with the
+schema-aware ones still out because they want a schema-validated input
+document — along with `fn-function-lookup-760`/`-763` and the three Walmsley
+cases that call it.
 
-These still do not count against anything: the set declares the feature
-`satisfied="true"` and then overrides fourteen cases to `satisfied="false"`, so
-the harness treats `fn-load-xquery-module` as an unsupported feature and the
-cases fall out of scope. That is what took XPath 3.1 to 100%.
+The contradiction this section used to describe resolves the way the
+dependency says: `-003` and `-004` (`FOQM0002`) are written for a processor
+that has the function, and `-901..914` plus `fn-function-lookup-761`/`-764`
+(`FOQM0006`) override the feature to `satisfied="false"` and are written for
+one that does not. With the feature satisfied the second group is out of
+scope, so both halves are answered by a processor that has the function.
 
-**The module store now exists.** `xquery` implements `import module` (§4.12) —
-a store, a resolver, transitive loading and the cycle rule — so the reason
-given here previously ("there is no module store for this function to load
-from") no longer holds. Measured after that work, the three cases are
-**unchanged: still out of scope, neither passing nor failing.** XPath 3.1 stayed
-at 21786/21786 then, and the XQuery mark rose from 29800 to 29901.
-
-Both figures have since moved for an unrelated reason: two stale feature
-labels, `namespace-axis` and `infoset-dtd`, were lifted from the same
-unsupported list, putting XPath 3.1 at 21863/21863 and XQuery at 29952/29964.
-`Axes123` (namespace-node identity across two axis walks) was the single XPath
-failure that lift exposed, and is now fixed — see `xdm.Node.Is`. The
-`fn-load-xquery-module` cases discussed here are unaffected — that label stays
-on the list, for the reason the rest of this section gives.
-
-What is left is not a missing engine but the suite's own contradiction, which
-was always the second half of the reason. `-003` and `-004` want **FOQM0002**
-("the module cannot be located") for `fn:load-xquery-module("http://nonexistent/module")`,
-while `-903` wants **FOQM0006** ("the implementation does not support
-load-xquery-module") for an expression of the same shape. A processor can
-satisfy one set or the other and not both, and F&O 3.1 defines FOQM0006
-precisely so that a processor without the function may say so — raising it is
-the conforming answer, and it is what the fourteen overridden cases assert.
-
-Bridging the function to the new module store would therefore trade three
-out-of-scope cases for a different three, and would additionally require
-deciding what a *dynamically* named module URI may fetch. That is the same
-question `Options.ModuleResolver` answers statically by fetching nothing
-without a resolver, and a function that resolved a URI computed at run time
-would need its own answer to it. **To fix: not the engine, and not the store —
-a policy for run-time module URIs, plus a choice about which half of the suite
-to satisfy.**
+The policy question for run-time module URIs is answered by not giving the
+function any reach of its own: it reads through the resolver `import module`
+uses, nil by default. See [xquery.md](xquery.md#loading-a-module-at-run-time).
 
 ### 3 — the suite contradicts itself
 
@@ -269,6 +247,18 @@ cases disagree.
 
 **To fix: accept invalid stylesheets, or broken fixtures.**
 
+### 1 — the case contradicts the spec
+
+`accumulator-073` declares `<xsl:mode on-no-match="shallow-copy"/>` with no
+`use-accumulators`, copies with `copy-accumulators="yes"`, and asserts the
+copied values. §18.2.2 lets the initial mode's list decide which accumulators
+apply to the initial match selection, and "the default value is an empty
+list", so the read is `XTDE3362`. `copy-3002` expects that error, and
+Saxon-HE 12.7 raises it for the same shape.
+
+**To fix: read a declared mode with no list as "all", as the engine once did.**
+That is the reading §18.2.2 rules out. See [known-gaps.md](known-gaps.md).
+
 ### 1 — network access
 
 `evaluate-048` fails on
@@ -306,23 +296,23 @@ part of a resource rather than a different one — and nothing then applied it,
 so the whole document was returned. `xslt/sourcedoc.go` now resolves the
 bare-name fragment against the retrieved document.
 
-### 8 — features deliberately not implemented
+### 4 — features deliberately not implemented
 
-Seven want an `XTSE3430` refusal that only the unwritten remainder of the
-§19.8 posture-and-sweep analysis can emit: `si-fork-902`, `si-fork-952`,
-`su-absorbing-205`, `su-absorbing-908`, `su-ascent-903`,
-`su-shallow-descent-902` and `sx-square-array-201`. This list used to be
-defined by cases that needed a feature not yet built, and these are that:
-the engine computes the right answer and the test wants it to decline. §19.1
+Three want an `XTSE3430` refusal that only more of the §19.8 posture-and-sweep
+analysis can emit: `si-fork-902`, `si-fork-952` and `su-absorbing-205`. Each
+fix was measured and costs more than it gains: modelling `||` refuses the two
+`si-fork` cases but loses 18 `sx-union` cases (+2/−18), and the §19.8.4.12
+higher-order reading of `xsl:copy` that `su-absorbing-205` needs loses 61
+`si-copy` cases (+1/−61). Those cases expect stylesheets XSLT 3.0's literal
+rules refuse to be accepted, so closing these three wants the finer rules
+Saxon-EE evidently applies, which the Recommendation does not contain. §19.1
 settles whether the refusal is owed — a processor that does not stream "is not
 required to assess whether constructs are guaranteed-streamable" — so they are
-not defects. One of the seven, `su-ascent-903`, is also argued on its own in
-[conformance-gaps.md](conformance-gaps.md) because its verdict is not the
-block's: there the analysis speaks and the test is wrong, since §19.8.5.7
-makes an ascent function's streaming parameter climbing and permits a climbing
-body. It is counted once, here.
+not defects. Four former members of this list (`su-absorbing-908`,
+`su-ascent-903`, `su-shallow-descent-902`, `sx-square-array-201`) pass since
+2026-10-02.
 
-The eighth is `sf-reverse-001`, which wants `reverse(snapshot(/chapter)//section)`
+The fourth is `sf-reverse-001`, which wants `reverse(snapshot(/chapter)//section)`
 in reversed order. XPath 3.1 §3.3.1.1 returns a path's nodes in document order
 however the left operand was ordered; the catalog's answer is what a
 *streaming* evaluator produces, since §19.11 says sorting is incompatible with
@@ -408,11 +398,12 @@ lands after all, by a route that had to be walked to be believed. See
 
 ## Part 3 — the honest bottom line
 
-**Reaching 100% is not a goal that survives contact with the suites.** All 96
-remaining disagreements would require agreeing with a disputed result, shipping
-a second language implementation, freezing a stale Unicode table, accepting
-invalid input, weakening a security default, finishing an analysis §19.1 says
-a non-streaming processor need not perform, or reproducing another
+**Reaching 100% is not a goal that survives contact with the suites.** All 93
+remaining disagreements would require agreeing with a disputed result,
+contradicting §18.2.2, implementing vendor extensions, freezing a stale Unicode
+table, accepting invalid input, weakening a security default, refining an
+analysis past the rules the Recommendation states, which §19.1 says a
+non-streaming processor need not perform, or reproducing another
 implementation's choice where the spec declines to make one. None is now an
 open question about our own correctness — the last two, `validation-0201` on
 both targets, were settled by fixing the defect behind them, which turned out
@@ -449,19 +440,19 @@ visibility carried on the function component and checked at the call site.
 `xsl:assert` and **XInclude** were the other two; XInclude took DocBook xslTNG
 from 549 to 577 of 593.
 
-Streaming has the largest denominator, 2,646 cases out of scope, but it is not
-the project it looks like. Measured with the gate lifted and nothing else
-changed, 2,424 of those pass already: §19.1 lets a processor answer a request
+Streaming had the largest denominator, 2,646 cases out of scope, and it was
+not the project it looked like. Measured with the gate lifted and nothing else
+changed, 2,424 of those passed already: §19.1 lets a processor answer a request
 for streamed evaluation by building the tree, and this engine does. Of the 222
 that fail, 150 want XTSE3430 -- a *refusal* of a non-streamable stylesheet,
 which needs the §19.8 posture and sweep analysis and no runtime change at all.
-Those three gate-lifted figures were not re-measured at `23570de`; the
-in-scope residue at this commit is the block of seven in Part 2. Streamed
-execution proper would buy almost none of it. See
+Those cases are in scope now, and the residue is the block of three in
+Part 2, each measured to cost more than it gains. Streamed execution proper
+would buy none of it. See
 [conformance-gaps.md](conformance-gaps.md) for the breakdown.
 
 **EXSLT is not on this list.** It is a separate product. XQuery was, and is
-now implemented in [`xquery`](../xquery/) at 30,345 of 30,346; what remains of
+now implemented in [`xquery`](../xquery/) at 30,516 of 30,517; what remains of
 it there is tracked in [xquery.md](xquery.md) rather than here, because this
 file is about the XPath and XSLT figures.
 

@@ -55,10 +55,10 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 1 of 30,346; XSLT 3.0 has 26 of 11,518;
+failures of 6,201; XQuery 3.1 has 1 of 30,517; XSLT 3.0 has 23 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,598. Everything below
-is an account of those 96 cases, or of a decision that produced some of them.
-The 96 is the sum of the nine figures above, computed from
+is an account of those 93 cases, or of a decision that produced some of them.
+The 93 is the sum of the nine figures above, computed from
 [tests/conformance/results.json](../tests/conformance/results.json) rather than
 written: `tests/docfigures.sh` re-derives it from `tests/ratchet.txt` and fails
 if this file and the generated table disagree.
@@ -79,115 +79,48 @@ much each costs.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
-**11 of the 31 XSLT 3.0 failures**, and still the largest single gap in the
-project — down from 14 since the §19.8.5 streaming-parameter table was
-corrected. `varPosture` read *grounded* where §19.8.5.2 and §19.8.5.3 say
-*striding*, so a function whose body returned its streaming parameter — a node,
-which in a streamed tree is never grounded — cleared the "must be grounded"
-rule its own category imposes. Four cases moved; `su-ascent-903` moved the
-other way and is now adjudicated individually, since §19.8.5.7 makes an ascent
-function's streaming parameter *climbing* and the ascent category permits a
-climbing body. The posture-and-sweep lattice exists, and so now do the rules built on
-it: the §19.8.4 instruction rules, §19.8.5 streamable stylesheet functions,
-§18.2.8 accumulators, the §19.8.8 expression rules, the §19.8.9 function
-classifications, §19.6's context posture for both
+**3 of the 23 XSLT 3.0 failures** — `si-fork-902`, `si-fork-952` and
+`su-absorbing-205` — and no longer the largest gap by much. The block stood at
+14, then 11 when the §19.8.5 streaming-parameter table was corrected
+(`varPosture` read *grounded* where §19.8.5.2 and §19.8.5.3 say *striding*),
+then 7 when §19.8.5's signature rule was implemented, and 3 since four more
+refusals landed on 2026-10-02: `?` lookups (§19.8.8.18), a multi-node
+streaming parameter (§19.8.5.2), a striding shallow-descent body (§19.8.5.5)
+and a climbing ascent call (§19.8.5.7). The posture-and-sweep lattice exists,
+and so do the rules built on it: the §19.8.4 instruction rules, §19.8.5
+streamable stylesheet functions, §18.2.8 accumulators, the §19.8.8 expression
+rules, the §19.8.9 function classifications, §19.6's context posture for both
 `xsl:source-document`/`xsl:stream` and the template rules of a streamable mode,
-and §18.1's grounded demand at both the sites it names — an `xsl:stream` body
-and, by its own parenthetical, a streamable template rule.
-What remains is a long tail of individual constructs rather than a missing body
-of rules.
+and §18.1's grounded demand at both the sites it names.
 
-Every one of the 14 fails in the same direction: the suite expects `XTSE3430` —
-*this construct is not guaranteed streamable* — and the transform succeeds
-instead, because the analysis returns `known=false` for a construct it cannot
-yet model and correctly declines to raise an error it has not proved.
+All three fail in the same direction: the suite expects `XTSE3430` — *this
+construct is not guaranteed streamable* — and the transform succeeds instead.
+The engine builds a tree and streams nothing, so it produces the **right
+answer** for all three; what it does not produce is the static refusal §19.8
+requires a streaming processor to make before running anything. These are not
+wrong answers; they are a static analysis that is not complete.
 
-That direction is the whole diagnosis. The engine builds a tree and streams
-nothing, so every construct the analysis would reject is one it simply
-executes. It produces the **right answer** for all 37; what it does not
-produce is the static refusal §19.8 requires a streaming processor to make
-before running anything. A construct that is not guaranteed streamable is still
-a construct with a well-defined result, and a tree-building processor reaches
-it. So these are not wrong answers, and they are not silent erasure: they are a
-static analysis that is not yet complete.
+**A partial analysis is safe here, and the safety is structural.** The analysis
+reports whether it *modelled* every construct it met separately from what it
+concluded, and an error is raised only on a fully-modelled verdict; anything
+else is "no opinion". A missing rule leaves a case failing, while a wrong rule
+would reject a valid stylesheet, and it is the second that the whole-corpus
+scan measures at zero.
 
-They cluster by construct rather than by cause, which is what confirms it is
-missing rules and not 27 defects: `su-absorbing`, `su-shallow-descent` and
-`si-fork`, then a long tail across `su-*`, `si-*`, `sf-*` and `sx-*`.
+**All three are measured, and each known fix costs more than it gains.**
+Modelling `||` refuses `si-fork-902`/`-952` and costs 18 `sx-union` cases
+(+2/−18), because §19.8.8.4 makes a union of striding operands crawling.
+Reading `xsl:copy`'s content as a higher-order operand refuses
+`su-absorbing-205` and costs 61 `si-copy` cases (+1/−61). The catalog entry
+for `su-absorbing-205` also says outright that the rule it wants is missing
+from the spec ("Analysis suggests there's a rule missing in the spec: multiple
+references to the streaming parameter, or references within a higher-order
+operand, should not be allowed"; qtspecs issue 15). See
+[conformance-gaps.md](conformance-gaps.md) for both measurements.
 
-**A partial analysis is safe here, and the safety is structural.** The worry
-that a partial analysis is worse than none — a processor raising `XTSE3430` on
-some unstreamable constructs and not others tells the caller nothing — is
-answered by never guessing. The analysis reports whether it *modelled* every
-construct it met separately from what it concluded, and an error is raised only
-on a fully-modelled verdict; anything else is "no opinion". So the two failure
-modes are not symmetric: a missing rule leaves a case failing, while a wrong
-rule would reject a valid stylesheet, and it is the second that the
-whole-corpus scan measures at zero.
-
-**Nine of them are not missing rules — they are unreachable under the
-published text.** `su-absorbing-205`, `-901`, `-905`, `-908`;
-`su-inspection-901`, `-902`, `-903`; `su-shallow-descent-902`, `-906`. All nine
-want `XTSE3430` for a declared-streamable `xsl:function` whose body the
-published rules find perfectly streamable. The suite's own descriptions name
-three intended rules, and each of the three is blocked by the spec itself.
-
-*"Not grounded" / "consumes the streamed input"* (`su-absorbing-901`,
-`su-inspection-901`, `-903`). §19.8.8.12's table gives a reference to the
-streaming parameter posture **grounded** for both the absorbing and inspection
-categories — for inspection, whether the reference is singular or not — and
-§19.8.1 then says *"If P is grounded, then S′ is S"*, so absorbing it is
-charged nothing. `su-inspection-901`'s body ends `else string($element)` and
-comes out grounded and motionless, which §19.8.5.3 permits.
-
-The comparison that settles it is `su-inspection-A`, which the catalog expects
-to **run**, against `su-inspection-901`, which it expects **refused**. Their
-functions are the same function; the only difference is the final `else` arm:
-
-    A:   else f:get-inherited-attribute-value-004($element/.., $attribute-name)
-    901: else string($element)
-
-Under §19.8.8.12 both arms are grounded and motionless, so the two bodies are
-indistinguishable. A rule counting references to the streaming parameter does
-not separate them either: `A`'s `f:depth-002` references `$input` twice.
-
-*"First argument allows a sequence"* (`su-inspection-902`,
-`su-shallow-descent-906`). The intended rule is that a streaming parameter
-declared `node()*` — or, in `-906`, with no `as` at all — disqualifies the
-function. **Both §19.8.5.3 and §19.8.5.5 declare exactly that in their own
-worked examples** and call the result guaranteed-streamable:
-
-    <xsl:function name="f:depth" as="xs:integer" streamability="inspection">
-      <xsl:param name="input" as="node()*"/>            <!-- §19.8.5.3 -->
-
-    <xsl:function name="f:alternate-children" streamability="shallow-descent">
-      <xsl:param name="input" as="element()*"/>         <!-- §19.8.5.5 -->
-
-Implementing the rule refuses the specification's own examples, which is the
-spurious-rejection failure mode this analysis exists to avoid.
-
-*"Two consuming references to the variable"* (`su-absorbing-205`, `-905`,
-`-908`). **The suite says outright that this rule is not in the spec.** The
-catalog entry for `su-absorbing-205` reads, verbatim:
-
-> Recursive absorbing function .
-> See https://saxonica.plan.io/issues/4561
-> See https://github.com/w3c/qtspecs/issues/15
-> Analysis suggests there's a rule missing in the spec: multiple references
-> to the streaming parameter, or references within a higher-order operand, should not be allowed.
-
-Saxon 9.8 passes all nine, which is what a submission does when it implements a
-rule its own author has filed against the specification. We do not, and the
-reason is the asymmetry in the note above: the rule cannot be transcribed
-because there is nothing to transcribe, and inventing it means refusing
-stylesheets on a rule no reader of the specification could have anticipated.
-`su-absorbing-205` is additionally withheld for an ordinary reason — its body is
-an `xsl:copy` with children, a sequence-constructor shape `analyzeFunctionBody`
-does not model — so it would still report nothing even if a rule existed.
-
-These nine are recorded here rather than left to be re-derived: the derivation
-above has been done at least twice, and both times the reasoning was correct and
-went unwritten.
+An earlier revision of this entry argued that nine `su-*` cases were
+unreachable under the published text. Eight of them now pass, by the
+corrections named above; the argument is kept in the history, not here.
 
 One withholding is worth naming, because it looks like a gap and is not.
 §19.8.8.4 widens a union of two striding operands to crawling by its own
@@ -198,17 +131,14 @@ refuses the same grouping for a reason that never consults the call — a
 free-ranging `group-starting-with` pattern, or a grouping key that is not
 motionless — since neither answer rests on the widening.
 
-**Note what it would and would not buy.** Completing it would move the 14
-cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.70% to about
-99.82%. Nine of those 14 are the unreachable group above, so the reachable
-gain is 5. It would not make the engine stream, and it would not change the result
-of a single transform that currently succeeds — it would convert 14 correct
-answers into 14 refusals to answer. That is the conformant behaviour, and it
-is worth being explicit that the gain is measured in conformance rather than in
-capability.
+**Note what it would and would not buy.** Completing it would move 3 cases
+and take XSLT 3.0 from 99.80% to 99.83%. It would not make the engine stream,
+and it would convert three correct answers into three refusals to answer. That
+is the conformant behaviour, and the gain is measured in conformance rather
+than in capability.
 
 The remaining 20 are singletons or near-singletons and are catalogued in
-[conformance-gaps.md](conformance-gaps.md) rather than here. Only three pairs
+[conformance-gaps.md](conformance-gaps.md) rather than here. Only two pairs
 share anything: `merge-097`/`-097s` both fail on `FODC0002`, and the
 CHANGELOG records them as not interoperable on the test set's own maintainer
 comment — they rely on Saxon's `?select=` collection URIs and declare no
@@ -216,8 +146,7 @@ environment for the harness to honour. `-097sf` was read here as a third
 member and is not one: it declares `<feature value="streaming-fallback"/>`,
 which this engine does not claim, so it is skipped and never reaches
 `FODC0002` at all. `si-copy-117`/`si-copy-of-117` both get
-`XTTE1540` where `XTTE1510` is wanted; and `si-fork-814`/`sx-MapExpr-007` both
-get `XQDY0137` for `XTDE3365`. The rest — `docbook-001` (`XTMM9000`, chunking),
+`XTTE1540` where `XTTE1510` is wanted. The rest — `docbook-001` (`XTMM9000`, chunking),
 `validation-0201` (whitespace placement),
 `strip-space-009`, `system-property-012` and a scatter of one-off error-code
 disagreements — share no cause with each other at all. That is the useful fact
@@ -228,13 +157,41 @@ behind it.
 that `system-property('xsl:supports-streaming')` answers `yes`. §26.5 requires a
 processor that does not conform to the streaming feature to answer `no`, which
 is what this answers. Passing it would mean lying to every stylesheet that
-branches on it to choose a fallback. It is the same gap as the 40 above, seen
-from the other side, and it stays failing for as long as the analysis is
-missing — which is the correct behaviour, not a cost.
+branches on it to choose a fallback. It is the same gap as the block above, seen
+from the other side, and it stays failing for as long as the engine does not
+stream — which is the correct behaviour, not a cost.
+
+### §19.8: holes in the expression analysis (XSLT 3.0)
+
+Verified in `xslt/stream*.go`. All but the `functionParamTypes` item return
+unknown, so a required `XTSE3430` is missed; that one is a spurious refusal.
+None is a wrong verdict.
+
+- `builtinOperandUsages` lists `"concat": {3}` only, so `fn:concat` at any
+  other arity is unmodelled.
+- `*xpath.LookupExpr` (`?`) is modelled in `expr()` (§19.8.8.18), but the
+  inline-function walker `bodyMentionsStreamingParam` still lacks it, along
+  with `*xpath.StringConcat` and `*xpath.ArgumentPlaceholder`. The
+  dispatcher half of `||` is measured and reverted; see
+  [*The `||` operator*](conformance-gaps.md#the--operator--2-cases-gained-18-lost).
+- `functionParamTypes` splits a declared function type by hand: the comma in
+  `function(Q{urn:a,b}t, xs:string)` makes three parameters, and
+  `dynamicCallUsages` does not recognise `function (xs:string)` with a space.
+  Either way a streamed argument gets navigation instead of absorption, and
+  `$f(.)` in a streamable template is refused with `XTSE3430`; spelled
+  `function(xs:string)` it compiles.
+- `xsl:where-populated`, `xsl:on-empty` and `xsl:on-non-empty` return
+  unknown, which also hides a refusal their content would get unwrapped.
+- A leading `/` is modelled only from a striding or grounded context, so
+  inside the predicate of a crawling step it is unknown. That covers
+  `key(k, v)`, which §19.8.9 defines as `key(k, v, /)`:
+  `descendant::x[count(key('k', 'v'))]` gets no verdict, where outside a
+  predicate the same call is refused.
 
 ### XQuery schema awareness: a tail of features `import schema` made reachable (XQuery 3.1)
 
-**1 failure of 30,346, and not a regression.** This entry exists
+**1 failure of 30,346 when written, and not a regression** (the cases measured
+since, `fn:transform`'s among them, all pass; see the `fn:transform` entry). This entry exists
 because the number is easy to misread. `import schema` was implemented, and
 implementing it brought **416 previously-skipped cases into scope**, of which
 339 now pass. The in-scope count went 29,930 → 30,346 and the passing count
@@ -442,6 +399,54 @@ The remaining schema false reject on both versions, `queried` against W3C bug
 reading has been recorded for it either way: it is a false reject, which is the
 direction that matters, and it has not been diagnosed.
 
+### `fn:transform` options F&O defines but this processor does not act on (XSLT 3.0)
+
+`fn:transform` reads `stylesheet-*`, `package-name`/`package-version`,
+`source-node`, `source-location`, `initial-*`, `function-params`,
+`stylesheet-params`, `static-params`, `template-params`, `tunnel-params`,
+`base-output-uri`, `delivery-format`, `serialization-params` (principal result only, as F&O
+states), `requested-properties`, `xslt-version`, `global-context-item` and
+`post-process`. A requested property is
+met only when it equals what `fn:system-property` reports (`xsl:version` is
+ignored); an unmet one is `FOXT0001`. These F&O-defined options are accepted
+and have no effect:
+
+- `enable-messages`, `vendor-options`, `cache`.
+- `enable-assertions`: the nested transform inherits the caller's
+  `DisableAssertions`, so assertions run by default where F&O defaults to off.
+- `package-location`, `package-node`, `package-text`: alone they identify no
+  stylesheet (`FOXT0002`); beside a `stylesheet-*` option they are ignored.
+
+Refusing them would be the post-process lesson applied, but it is a separate
+decision. The QT3 driver now claims `fn-transform-XSLT` and
+`fn-transform-XSLT30` (the `xslt` package registers a processor for XQuery
+and `xpath.Eval` callers), so `fn/transform.xml` is measured: 119 cases in
+scope at XPath 3.1 and 121 at XQuery, all passing. The four parameter options
+(`stylesheet-params`, `static-params`, `template-params`, `tunnel-params`) are
+typed `map(xs:QName, item()*)`, so a string key is `FOXT0002`, as
+`fn-transform-err-18` and Saxon have it.
+
+`xslt-version` selects the processor: up to 2.0 (1.0 included, 2.0 being the
+nearest later version) the XSLT 2.0 one, `CompileOptions.MaxVersion` 2.0,
+which ignores every option outside F&O's 2.0 list and reports
+`xsl:version` 2.0; up to 3.0 the 3.0 one; later, `FOXT0001`. A non-decimal
+value is `XPTY0004`. An absent `xslt-version` runs the 3.0 processor. F&O
+takes the request from the stylesheet's own `version` and uses "a processor
+that implements the requested XSLT version"; XSLT 3.0 §3.9.2 makes a 3.0
+processor exactly that for 2.0 ("no differences are defined for XSLT 2.0
+behavior"), and Saxon, which has only a 3.0 processor, reads it the same way.
+Choosing 2.0 instead would silently drop 3.0 options such as
+`global-context-item` for every `version="2.0"` stylesheet; a caller who wants
+2.0 rules asks with `xslt-version: 2.0`. No QT3 case exercises the default. One
+limit remains: `global-context-item` must be a node -- `Transform` takes the
+global item as its source -- so an atomic or function item is `FOXT0001`.
+
+Option names F&O does **not** define are
+ignored, as F&O 3.1's option parameter conventions require: "It is not an
+error if the options map contains options with names other than those
+described in this specification." `source-location` (Saxon since 9.8, F&O
+4.0) resolves through the `fn:doc` resolver and is never streamed.
+
 ### The function conversion rules are applied per function, not centrally
 
 XPath 3.1 §3.1.5.2 says an argument of type `xs:untypedAtomic` supplied to a
@@ -516,6 +521,18 @@ what was wrong — but changing the accessors is a separate behaviour change to
 a path that has been stable across releases, and no suite case scores either
 code. It is recorded here rather than folded into a bug fix aimed at four
 other functions.
+
+### `xsl:function` determinism: what the result cache does not yet key
+
+A `new-each-time="no"` function is deterministic (§10.3.7), so calls with
+F&O 1.7.4-*identical* arguments return identical results: the result is cached
+per argument list, atomics keyed by exact type and `eq`, nodes by identity,
+maps and arrays by content (issue #13). Two residuals, no suite case scoring
+either: a function item is keyed by the item, so two distinct but identical
+items (`concat#2` evaluated twice) recompute; and `cache="yes"` memoises
+without regard to §10.3.7's default, which is *proactive*, so a node-building
+function carrying only that hint returns the same nodes where fresh ones are
+due. `functionDeterminism` still reads the absent attribute as `"maybe"`.
 
 ### The `dtd` package cannot enforce XML §4.3.4
 
@@ -606,6 +623,39 @@ wrong language's rules. The version now reaches the tokeniser, and [2] `Char`,
 is in the external-entity and DTD layers, and is described in
 [todo.md](todo.md#11-xml-11-documents--character-rules-done-dtd-side-rules-outstanding).
 
+### The tokeniser keeps six leniencies
+
+`internal/xmltok` still carries these `parity:` behaviours from the
+`encoding/xml` fork it replaced; the others were corrected against the W3C XML
+Conformance Test Suite (see [testing.md](testing.md#tokeniser-differential)).
+
+* Comment and PI bodies are not newline-normalised, though §2.11 applies to the
+  whole entity: `\r\n` in a comment reaches the tree, and so a C14N digest,
+  as written. Changing it changes output, so it waits on its own c14n check.
+* Attribute values leave the tokeniser raw; `xdm` applies §3.3.3 after it, so a
+  literal tab or newline in a value reaches the tree as a space.
+* A PI with target `xml` is taken as the XML declaration wherever it appears,
+  and the declaration's pseudo-attributes are found by substring search;
+  `xdm` validates the declaration's syntax and placement itself.
+* Entity replacement text is substituted without newline normalisation.
+* The DOCTYPE is returned raw, and a comment inside it is not checked for `--`.
+* A character error is reported against the line where the run ended.
+
+### An undeclared entity after a parameter-entity reference is still an error (xmlconf `rmt-e3e-13`)
+
+XML 1.0 §4.1 makes an undeclared general entity a well-formedness error only in
+a document with no parameter-entity references (or `standalone="yes"`);
+otherwise it is a validity error, and a non-validating processor parses on.
+`xdm` reports `&ent2;` as undeclared whatever the subset holds, and the error is
+raised by the tokeniser's entity lookup, not in the DTD code. Accepting it would
+mean choosing what an unresolvable reference becomes in the tree (`xmllint
+--noent` prints "Entity 'ent2' not defined" and keeps an empty reference node), so it stays until a
+caller needs the other answer.
+
+Related: internal parameter entities are expanded only when
+`ParseOptions.ExternalEntities` is set, so with `AllowDOCTYPE` alone xmlconf
+`v-pe02` (Appendix D's `%xx;` example) still reports `&tricky;` undeclared.
+
 ---
 
 ## Deliberate divergences
@@ -614,32 +664,6 @@ Not gaps. Each is a behaviour that disagrees with a test, or with a reading
 someone will propose, on purpose — and each carries the spec clause it rests on
 and the **measured** cost of changing it. The number is the point of the entry:
 without it, the trade gets re-attempted.
-
-### A duplicate attribute is accepted, as `encoding/xml` accepts it
-
-XML 1.0 §3.1 makes `<r b="safe" b="evil"/>` fatally malformed, and Namespaces
-in XML §6.3 says the same of two prefixes bound to one namespace producing the
-same expanded name. This parser accepts both. Each attribute survives in
-`el.Attrs`; `Attr()` returns the first, and `xsl:copy-of` re-serialises both.
-
-The divergence is inherited rather than chosen: Go's `encoding/xml` accepts the
-same document — `xml.Token()` returns no error, verified — and this package
-reads tokens from it. The check **was** implemented and reverted: it rejected
-this library's own serialiser output for an element that undeclares the default
-namespace, which is a worse failure than the one it prevented
-(`xdm/parse.go:286-293`).
-
-Two things bound the consequence. XSD validation checks *both* attributes, so
-nothing passes the schema path silently — `<r b="1" b="notanint"/>` fails
-`cvc-attribute.3`. And nothing here smuggles markup: both values are parsed
-attribute values, not text.
-
-What remains is a parser differential, and it is recorded here because
-`SECURITY.md` tells a reader that "a document accepted that the schema forbids"
-is in scope. A pipeline that authorises on `Attr()` while something downstream
-reads `Attrs[1]`, or re-parses the round-tripped output with a stricter parser,
-will not agree with itself about what the document said. If that shape is in
-your design, reject duplicates before this parser sees them.
 
 ### DOCTYPE is refused by default
 
@@ -659,6 +683,21 @@ leaving external entities off. The default itself is unchanged.
 Honouring it lets the document choose the schema it is validated against, which
 defeats the purpose of validating. `WithInstanceLocations` opts in, with a
 policy that names which namespaces may be resolved.
+
+### An initial mode without `use-accumulators` makes no accumulator applicable (`accumulator-073`)
+
+**Cost: one case,** `accumulator-073`; DocBook, XSpec and the XSLT 2.0 lane
+are unchanged.
+
+§18.2.2: for the document of the initial match selection "the accumulators
+that are applicable are those determined by the xsl:mode declaration of the
+initial mode", and of `use-accumulators` "the default value is an empty list".
+A declared `<xsl:mode/>` that omits the attribute therefore makes none
+applicable, and `accumulator-before` over the source document is `XTDE3362`
+-- what Saxon reports for issue #16's stylesheet. `accumulator-073` asserts
+the opposite for a declared mode with no list; it is the only suite case that
+does, and `copy-3002` (no `xsl:mode` at all) expects the error. The engine
+used to read a declared-but-silent mode as "all" to pass it.
 
 ### `fn:collection()` raises an error rather than returning empty
 
@@ -684,7 +723,7 @@ assert that `\p{Lu}` rejects characters that *are* uppercase letters in current
 Unicode. The suite was written against Unicode 3.1; the codepoints in question
 — U+1D7A8 among them — were categorised differently then.
 
-These are **22 of the 30 disagreements on 1.0 and 22 of the 32 on 1.1** — two
+These are **22 of the 30 disagreements on 1.0 and 22 of the 31 on 1.1** — two
 thirds of everything the suite reports against this engine, and the single
 largest reason XSD cannot reach 100% and should not try. The three
 `regex-syntax-xslt20` failures in the XSLT 2.0 lane are the same rule seen from
@@ -933,9 +972,9 @@ applied in exactly one place.
 
 **Measured cost of the default: one QT3 case.** `fn-matches-51` names a group
 whose width can vary *and* places the backreference mid-pattern; it passes with
-`xpath.SetBacktrackingRegex(true)`, which takes that lane to 15,222 of 15,222.
-That figure is not the headline one, because the switch is off by default and
-the headline number reports the default configuration. Closing the last case by
+`xpath.SetBacktrackingRegex(true)`. The conformance harnesses set the switch,
+since a suite's patterns are trusted input, so the headline figures count the
+case; a run in the default configuration does not. Closing the last case by
 default would cost the linear-time guarantee, which is a worse trade than the
 case is worth.
 
@@ -1060,7 +1099,7 @@ Moving an optional element's range onto the wrapper works only where the base
 does not repeat: in `effectiveTotalRange` a group of one repeating N times
 contributes N elements, so the same range means two different things. **This is
 what broke `particlesV020`**, and it is the same collision recorded under
-*XSD particle restriction: `particlesZ001` and the two-job wrapper* above.
+*XSD particle restriction: the two-job wrapper in `recurseAsIfGroup`* above.
 
 **The derived minimum must already satisfy the base's.** Without that
 condition, moving a `minOccurs` of 0 onto the wrapper made it violate a base
@@ -1218,7 +1257,7 @@ bare T, because the binding is evaluated once rather than once per item.
 Making it higher-order would refuse a consuming let body the spec permits.
 
 None of the three moved a conformance count, which is expected: the remaining
-XSLT 3.0 disagreements are 7 XTSE3430 cases plus 21 that are fixture defects,
+XSLT 3.0 disagreements are 3 XTSE3430 cases plus 20 that are fixture defects,
 deliberate divergences or implementation-defined.
 
 ### "Remove the 1<<20 arity ceiling" — rejected twice, and it is a memory bug
@@ -1737,8 +1776,8 @@ verdict is only as good as the last time someone re-derived it.**
 That sentence was true of the population the audit covered — the XSD and XPath
 disagreements standing at the time — and is still true of those: XPath is 100%
 at all three versions, and the XSD remainder is argued case by case above. It
-was never true of the suites as a whole. **XSLT 3.0 carries 126 failures of
-which 45 are one missing analysis, and XQuery 3.1 carries 42, and both are
+was never true of the suites as a whole. **XSLT 3.0 then carried 126 failures
+of which 45 were one missing analysis, and XQuery 3.1 carried 42, and both were
 eminently fixable.** A sentence scoped to one audit and left standing after the
 scope changed is the same decay this file keeps recording.
 

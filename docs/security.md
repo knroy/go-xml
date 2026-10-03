@@ -778,6 +778,16 @@ asserts both halves — that the error is `XQST0059`, and that it does *not* nam
 the location, since a message quoting a parse failure or a permission error
 would mean the file had been read.
 
+`fn:load-xquery-module` names a module at run time, and it is given no reach
+of its own: it reads only through the resolver `import module` would use —
+the query's `Options.Modules` and `Options.ModuleResolver`, or
+`xpath.Context.Modules` / `xslt.TransformOptions.Modules`, all nil by default
+— so with nothing configured it raises `FOQM0002` without opening anything.
+`TestLoadXQueryModuleReadsOnlyThroughTheResolver` names a module file that
+exists and asserts it is not read; sabotaging the loader to open the hint
+directly makes it fail. The load is charged against the caller's module
+budgets below.
+
 **The two bounds refuse; they never truncate.** `MaxModules` (512, following
 `xsd.DefaultMaxDocuments` in shape and value) bounds the modules one
 compilation may load transitively, because a module that imports two modules
@@ -855,9 +865,10 @@ partly missing validates documents against the half that is left.
 
 Every audit finding in this document was reasoned about and then asserted by a
 regression test. Fuzzing is the complement: it searches for the input nobody reasoned
-about. Six targets now do that — over the XML parser, the schema assembler and
-its content-model compiler, the stylesheet compiler, the XPath expression
-compiler, the XQuery compiler, and a parse → serialise → parse round trip. See
+about. Twelve targets now do that — over the XML parser and its tokeniser, the
+schema assembler and its content-model compiler, the stylesheet compiler, the
+XPath expression compiler, the XQuery compiler, the RELAX NG compact parser,
+canonicalization, and a parse → serialise → parse round trip. See
 [testing.md](testing.md#fuzzing) for how to run one.
 
 **The XQuery target found two crashes, and they are the reason to keep running
@@ -867,7 +878,7 @@ and neither reachable by reasoning that had already been done by hand. Both are
 fixed and recorded under *Fixed — engine* below. A 90-second re-run after the
 fixes, 6.2 million executions, found nothing further.
 
-The other five were run for 150 seconds and none found a crash. The parser
+The other five of the first six were run for 150 seconds and none found a crash. The parser
 alone took about 20 million executions, the schema assembler 4.4 million, and
 the round trip 3.6 million. What that buys, stated precisely:
 
@@ -937,15 +948,18 @@ Each of these was demonstrated by execution, not inferred from reading the code.
 ### XXE is absent, even with `AllowDOCTYPE: true`
 
 This is the important result, and it is stronger than the code comments claimed.
-`encoding/xml` never parses the DTD internal subset — it hands the whole
-DOCTYPE over as one opaque `Directive` token. No DTD-declared entity ever
-exists, so every reference to one is a hard syntax error.
+When it was first verified, the parser (then built on `encoding/xml`) never
+parsed the DTD internal subset — it handed the whole DOCTYPE over as one opaque
+`Directive` token, so every reference to a DTD-declared entity was a hard
+syntax error. Internal entities now expand, bounded; an external one is still
+never fetched unless the caller supplies `ParseOptions.ExternalEntities` — see
+[Internal entities expand; external ones never do](#internal-entities-expand-external-ones-never-do).
 
 Tested across external general entities (`file://`, bare paths, `/etc/passwd`,
 `http://`), external parameter entities, PUBLIC identifiers, external DTD
 subsets, entities in attribute values, and NDATA/NOTATION: **zero file reads,
 zero network requests**, with a canary HTTP server recording `hits=0`. Even
-*internal* entities fail.
+*internal* entities failed then; they now expand under the bounds in that section.
 
 This matters because real callers must set `AllowDOCTYPE: true` — UBL depends on
 the W3C XML Signature schema, which carries a DOCTYPE. **That escape hatch does
@@ -1189,9 +1203,12 @@ conformance regression. The RELAX NG spec test suite is unchanged at 965 of 965.
 
 ### Billion laughs is impossible
 
-Same cause. A 9-level, fan-10 entity bomb fails in 10 µs with `invalid character
-entity &e9;` — the expansion is never attempted, with or without
-`AllowDOCTYPE`.
+Same cause, originally: a 9-level, fan-10 entity bomb failed in 10 µs with
+`invalid character entity &e9;`, the expansion never attempted. Internal
+entities now expand, so the bomb is refused by the expansion bounds instead —
+`entity expansion exceeds 65536 bytes` with `AllowDOCTYPE`, and the DOCTYPE
+itself is rejected without it. See
+[Internal entities expand; external ones never do](#internal-entities-expand-external-ones-never-do).
 
 ### Regular expressions cannot backtrack catastrophically
 
@@ -1276,7 +1293,9 @@ The line that does not move is **external** entities. One declared `SYSTEM` or
 `PUBLIC` names something outside the document, and fetching it is XXE. Those
 are recorded as refused rather than resolved, so a reference to one is an error
 and never a fetch — including when reached indirectly through an internal
-entity. Parameter entities are not read either.
+entity. Parameter entities are not read either. Both change only when a caller
+supplies `ParseOptions.ExternalEntities`, a resolver, which is never the
+default (see `xdm/dtd_external.go`).
 
 Expansion is bounded three ways, because nesting is exactly how billion-laughs
 works:
@@ -1292,7 +1311,7 @@ A cycle — direct or mutual — is detected and refused rather than recursed.
 The 1 MB total is charged *before* expansion, by `entityChargeReader` in
 `xdm/dtd_entities.go`, and that ordering is the control. Checking afterwards
 reports the same verdict at a cost that makes reporting it pointless:
-`encoding/xml` coalesces a run of substitutions into one token, so a document
+the tokeniser coalesces a run of substitutions into one token, so a document
 whose references expand to gigabytes has allocated them all before any
 post-parse check can look. The bound therefore caps *peak memory* near the
 budget, not merely the accepted result.

@@ -20,10 +20,14 @@ import (
 )
 
 func main() {
-	// "validate" is a subcommand; everything else keeps the original
+	// "validate" and "xquery" are subcommands; everything else keeps the original
 	// invocation, so a command line that worked before still works.
-	if len(os.Args) > 1 && os.Args[1] == "validate" {
-		if err := runValidate(os.Args[2:]); err != nil {
+	if len(os.Args) > 1 && (os.Args[1] == "validate" || os.Args[1] == "xquery") {
+		sub := runValidate
+		if os.Args[1] == "xquery" {
+			sub = runXQuery
+		}
+		if err := sub(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "go-xml:", err)
 			os.Exit(1)
 		}
@@ -58,8 +62,9 @@ func (p paramFlag) Set(v string) error {
 // test exists to prevent.
 func registerAllowDir(fs *flag.FlagSet) *string {
 	return fs.String("allow-dir", "",
-		"comma-separated roots that xsl:include, xsl:import, fn:doc and "+
-			"fn:document may read, each covering its subdirectories to any "+
+		"comma-separated roots that xsl:include, xsl:import, fn:doc, "+
+			"fn:document and fn:load-xquery-module may read, each covering its "+
+			"subdirectories to any "+
 			"depth. The stylesheet's own directory is always one of them, "+
 			"flag or no flag, since a stylesheet that cannot read the "+
 			"modules beside it is useless; empty adds nothing further. It "+
@@ -168,7 +173,8 @@ func run() error {
 			"usage: go-xml -xsl STYLESHEET [flags] INPUT.xml [INPUT.xml ...]\n"+
 				"       go-xml -xsl STYLESHEET -initial-template NAME [flags]\n"+
 				"       go-xml validate -xsd SCHEMA.xsd [flags] INPUT.xml ...\n"+
-				"       go-xml validate -rng SCHEMA.rng [flags] INPUT.xml ...\n\n")
+				"       go-xml validate -rng SCHEMA.rng [flags] INPUT.xml ...\n"+
+				"       go-xml xquery -q QUERY.xq [flags] [INPUT.xml]\n\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
 Security defaults: xsl:include, xsl:import, fn:doc and fn:document read only
@@ -430,6 +436,9 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		// -allow-unparsed-text turned it on. Passing it unconditionally keeps
 		// the gate in one place rather than two.
 		Texts: cfg.resolver,
+		// fn:load-xquery-module reads modules through the same confined
+		// resolver, as "import module" does in the xquery subcommand.
+		Modules: moduleFiles{cfg.resolver},
 		// Section 19.1 leaves the base output URI implementation-defined, and
 		// notes that it "will often be convenient" for it to be "the same as
 		// the location to which the principal result document is serialized".

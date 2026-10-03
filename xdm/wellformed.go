@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	xml "github.com/knroy/go-xml/internal/xmlfork"
+	xml "github.com/knroy/go-xml/internal/xmltok"
 )
 
 // xmlDeclSyntax is productions [23]-[26] reduced to the declarations this
@@ -32,7 +32,7 @@ var xmlDeclSyntax = regexp.MustCompile(
 // RawToken deliberately exposes it as a PI so clients that want a token stream
 // can decide what to do with it; Parse, however, promises an XML document.
 func validateXMLDecl(inst string) error {
-	// xmlfork's PI scanner consumes the required separating space between the
+	// xmltok's PI scanner consumes the required separating space between the
 	// target and its data, so Inst begins directly with "version=".
 	if inst == "" {
 		return fmt.Errorf("parse XML: XML declaration must contain VersionInfo")
@@ -85,6 +85,18 @@ func isDOCTYPEDirective(d string) bool {
 // callers: duplicate attributes and namespace well-formedness. It runs before
 // buildElement so an invalid document cannot become an XDM tree.
 func validateStartElement(t xml.StartElement, parent *Node, xml11 bool) error {
+	// Namespaces in XML §3 [7] QName. The tokeniser splits a name at its colon
+	// but leaves "p:", ":l" and "xmlns:" whole in Local, so a colon still there
+	// is a prefix or local part that is empty, which no QName has.
+	if err := requireQName(t.Name); err != nil {
+		return err
+	}
+	for _, a := range t.Attr {
+		if err := requireQName(a.Name); err != nil {
+			return err
+		}
+	}
+
 	// Build the in-scope environment before looking at ordinary attributes. A
 	// declaration on this start tag is in scope for its own element and attrs.
 	bindings := map[string]string{"xml": NSXML}
@@ -140,6 +152,40 @@ func validateStartElement(t xml.StartElement, parent *Node, xml11 bool) error {
 		seen[key] = true
 	}
 	return nil
+}
+
+func requireQName(n xml.Name) error {
+	if strings.Contains(n.Local, ":") {
+		return fmt.Errorf("parse XML: %q is not a QName", lexicalName(n))
+	}
+	return nil
+}
+
+// normalizeAttTokens applies the XML 1.0 §3.3.3 collapse for DTD-typed
+// attributes to the raw tag, ahead of validateStartElement. Namespaces in
+// XML §3 binds a prefix to the attribute's *normalized* value, so xmlns:b
+// declared NMTOKEN and written " urn:x " binds urn:x — and p:a, b:a collide.
+func normalizeAttTokens(t xml.StartElement, types []attDeclaredType) xml.StartElement {
+	var attrs []xml.Attr
+	for _, d := range types {
+		if d.element != lexicalName(t.Name) && d.element != t.Name.Local {
+			continue
+		}
+		for i, a := range t.Attr {
+			if lexicalName(a.Name) != d.attr && a.Name.Local != d.attr {
+				continue
+			}
+			if attrs == nil {
+				// Copy: the tokeniser's attribute slice is not ours to write.
+				attrs = append([]xml.Attr(nil), t.Attr...)
+			}
+			attrs[i].Value = strings.Join(strings.FieldsFunc(a.Value, func(r rune) bool { return r == ' ' }), " ")
+		}
+	}
+	if attrs != nil {
+		t.Attr = attrs
+	}
+	return t
 }
 
 // namespaceDecl recognizes the lexical representation RawToken preserves.

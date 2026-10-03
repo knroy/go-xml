@@ -582,3 +582,265 @@ func TestStaticTransformAfterANestedCompile(t *testing.T) {
 		t.Fatalf("got %s, want an <out> holding x", b.String())
 	}
 }
+
+// sourceLocationSheet runs an outer stylesheet, whose base URI is
+// dir/outer.xsl, with a FileResolver rooted at root -- or with none when root
+// is empty. The outer stylesheet has no source; everything the nested one
+// sees arrives through the options map.
+func sourceLocationSheet(t *testing.T, dir, root, options string) (string, error) {
+	t.Helper()
+	// xsl:strip-space is the outer stylesheet's, not the nested one's, so it
+	// must not reach the document source-location loads. It is declared here
+	// so the resolver is wrapped the way it is in real use.
+	outer := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+	  <xsl:strip-space elements="*"/>
+	  <xsl:template name="xsl:initial-template">
+	    <o><xsl:sequence select="transform(` + options + `)?output"/></o>
+	  </xsl:template>
+	</xsl:stylesheet>`
+	base := fileuri.Of(filepath.Join(dir, "outer.xsl"))
+	tree, err := xdm.ParseString(outer, xdm.ParseOptions{BaseURI: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{BaseURI: base})
+	if err != nil {
+		t.Fatalf("compiling: %v", err)
+	}
+	topts := xslt.TransformOptions{}
+	if root != "" {
+		topts.Documents = mustFileResolver(t, root)
+	}
+	res, err := sheet.Transform(context.Background(), nil, topts)
+	if err != nil {
+		return "", err
+	}
+	return xslt.SerializeAsXML(res), nil
+}
+
+// sourceLocationDir writes a nested stylesheet and the document it runs over.
+// The global variable proves the document is the global context item, and
+// the text-node count that the outer xsl:strip-space was not applied to it.
+func sourceLocationDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "src.xml"),
+		[]byte(`<r> <v>7</v></r>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "inner.xsl"), []byte(
+		`<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+		  <xsl:variable name="g" select="string(//v)"/>
+		  <xsl:template match="/"><w><xsl:value-of select="$g, //v, count(r/text())" separator=":"/></w></xsl:template>
+		</xsl:stylesheet>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// source-location names a document by URI, resolved against the static base
+// URI of the call when relative, and templates are applied to it. GitHub
+// issue #12; F&O 4.0 standardises what Saxon has read since 9.8.
+func TestFnTransformSourceLocation(t *testing.T) {
+	dir := sourceLocationDir(t)
+	abs := fileuri.Of(filepath.Join(dir, "src.xml"))
+	for name, loc := range map[string]string{"relative": "src.xml", "absolute": abs} {
+		t.Run(name, func(t *testing.T) {
+			got, err := sourceLocationSheet(t, dir, dir,
+				`map{'stylesheet-location': 'inner.xsl', 'source-location': '`+loc+`'}`)
+			if err != nil {
+				t.Fatalf("transforming: %v", err)
+			}
+			if !strings.Contains(got, "<w>7:7:1</w>") {
+				t.Fatalf("got %s, want <w>7:7:1</w>", got)
+			}
+		})
+	}
+}
+
+// source-location reads through the same resolver as fn:doc, so it is
+// refused with no resolver and outside the resolver's roots.
+func TestFnTransformSourceLocationSandbox(t *testing.T) {
+	dir := sourceLocationDir(t)
+	opts := `map{'stylesheet-text': '&lt;xsl:stylesheet version=&quot;3.0&quot; xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot;/&gt;',
+	  'source-location': 'src.xml'}`
+	_, err := sourceLocationSheet(t, dir, "", opts)
+	if code := xdm.ErrorCode(err); code != "FOXT0002" || !strings.Contains(err.Error(), "no resolver") {
+		t.Errorf("no resolver: got %v, want FOXT0002 refusing document access", err)
+	}
+	// Rooted at a sibling directory, the document is outside every root.
+	_, err = sourceLocationSheet(t, dir, t.TempDir(), opts)
+	if code := xdm.ErrorCode(err); code != "FOXT0002" || !strings.Contains(err.Error(), "cannot retrieve source-location") {
+		t.Errorf("outside the roots: got %v, want FOXT0002 refusing source-location", err)
+	}
+}
+
+// F&O 4.0 asks for "exactly one of source-node, source-location, or
+// initial-match-selection".
+func TestFnTransformSourceLocationConflicts(t *testing.T) {
+	dir := sourceLocationDir(t)
+	for name, extra := range map[string]string{
+		"source-node":             `'source-node': doc('src.xml')`,
+		"initial-match-selection": `'initial-match-selection': doc('src.xml')`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := sourceLocationSheet(t, dir, dir,
+				`map{'stylesheet-location': 'inner.xsl', 'source-location': 'src.xml', `+extra+`}`)
+			if code := xdm.ErrorCode(err); code != "FOXT0002" || !strings.Contains(err.Error(), "mutually exclusive") {
+				t.Fatalf("got %v, want FOXT0002 for mutually exclusive options", err)
+			}
+		})
+	}
+}
+
+// F&O 3.1 applies the option parameter conventions to fn:transform's map: "It
+// is not an error if the options map contains options with names other than
+// those described in this specification." A misspelled string key and a
+// vendor QName key are both ignored rather than refused.
+func TestFnTransformIgnoresUnknownOptions(t *testing.T) {
+	const sheet = `<xsl:stylesheet version="3.0"
+	    xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+	  <xsl:template match="/">
+	    <xsl:sequence select="transform(map{
+	      'source-node': .,
+	      'stylesheet-text': '&lt;xsl:stylesheet version=&quot;3.0&quot; xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot;&gt;&lt;xsl:template match=&quot;/&quot;&gt;&lt;ok/&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;',
+	      'post-proces': 1,
+	      QName('http://example.com/vendor', 'v:tuning'): 2
+	    })?output"/>
+	  </xsl:template>
+	</xsl:stylesheet>`
+	got, err := runPP(t, sheet, `<r/>`)
+	if err != nil {
+		t.Fatalf("an option F&O does not define was refused: %v", err)
+	}
+	if !strings.Contains(got, "<ok/>") {
+		t.Errorf("got %q, want the nested result <ok/>", got)
+	}
+}
+
+// static-params binds the nested stylesheet's static parameters at its
+// compilation (GitHub issue #15); it was read and dropped, so a static
+// parameter kept its default. An unsupplied one still takes its select, and a
+// string key is FOXT0002: the option is map(xs:QName, item()*).
+func TestFnTransformStaticParams(t *testing.T) {
+	for _, tc := range []struct{ name, params, want string }{
+		{"QName key", `map{QName('', 'p'): 'given'}`, "<o>given</o>"},
+		{"string key", `map{'p': 'given'}`, "FOXT0002"},
+		{"absent", `map{}`, "<o>default</o>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+			    xmlns:xs="http://www.w3.org/2001/XMLSchema" version="3.0">
+			  <xsl:variable name="inner" as="xs:string"><![CDATA[
+			    <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+			      <xsl:param name="p" static="yes" select="'default'"/>
+			      <xsl:template match="/"><o><xsl:value-of select="$p"/></o></xsl:template>
+			    </xsl:stylesheet>]]></xsl:variable>
+			  <xsl:template match="/">
+			    <xsl:sequence select="transform(map{'stylesheet-text': $inner,
+			        'source-node': /, 'static-params': ` + tc.params + `})?output"/>
+			  </xsl:template>
+			</xsl:stylesheet>`
+			tree, _ := xdm.ParseString(src, xdm.ParseOptions{})
+			sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, _ := xdm.ParseString(`<r/>`, xdm.ParseOptions{})
+			res, err := sheet.Transform(context.Background(), doc.Root, xslt.TransformOptions{})
+			if strings.HasPrefix(tc.want, "FOXT") {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("err = %v, want %s", err, tc.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := xslt.SerializeAsXML(res); !strings.Contains(got, tc.want) {
+				t.Fatalf("got %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// fnTransformWith runs fn:transform over a nested stylesheet that has a
+// template named xsl:initial-template, a match="/" template and a public
+// function f:two, with the options the caller adds.
+func fnTransformWith(t *testing.T, extra string) (string, error) {
+	t.Helper()
+	src := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+	  <xsl:variable name="inner"><![CDATA[
+	    <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	        xmlns:f="urn:f" exclude-result-prefixes="f" version="3.0">
+	      <xsl:template name="xsl:initial-template"><ok/></xsl:template>
+	      <xsl:template match="/"><matched/></xsl:template>
+	      <xsl:function name="f:two" visibility="public"><two/></xsl:function>
+	    </xsl:stylesheet>]]></xsl:variable>
+	  <xsl:template match="/">
+	    <xsl:sequence select="transform(map:merge((map{'stylesheet-text': string($inner)}, ` + extra + `)))?output"
+	        xmlns:map="http://www.w3.org/2005/xpath-functions/map"/>
+	  </xsl:template>
+	</xsl:stylesheet>`
+	return runPP(t, src, `<r/>`)
+}
+
+// requested-properties is matched against what fn:system-property reports;
+// F&O 3.1 leaves an unmet request implementation-defined and this processor
+// refuses it with FOXT0001. true() and false() stand for yes and no, and
+// xsl:version is ignored.
+func TestFnTransformRequestedProperties(t *testing.T) {
+	const xsl = `'http://www.w3.org/1999/XSL/Transform'`
+	for _, tc := range []struct{ name, req, code string }{
+		{"met boolean", `QName(` + xsl + `, 'supports-streaming'): false()`, ""},
+		{"met string", `QName(` + xsl + `, 'xpath-version'): '3.1'`, ""},
+		{"version ignored", `QName(` + xsl + `, 'version'): '9.9'`, ""},
+		{"product", `QName(` + xsl + `, 'product-name'): 'Xalan'`, "FOXT0001"},
+		{"unmet boolean", `QName(` + xsl + `, 'supports-namespace-axis'): false()`, "FOXT0001"},
+		{"streaming", `QName(` + xsl + `, 'supports-streaming'): 'yes'`, "FOXT0001"},
+		{"schema-aware", `QName(` + xsl + `, 'is-schema-aware'): false()`, "FOXT0001"},
+		{"other namespace", `QName('urn:x', 'p'): 'v'`, "FOXT0001"},
+		{"string key", `'product-name': 'go-xml'`, "XPTY0004"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := fnTransformWith(t, `map{'requested-properties': map{`+tc.req+`}}`)
+			if tc.code == "" {
+				if err != nil || !strings.Contains(got, "<ok/>") {
+					t.Fatalf("got %q, %v; want <ok/>", got, err)
+				}
+				return
+			}
+			if code := xdm.ErrorCode(err); code != tc.code {
+				t.Fatalf("got %v, want %s", err, tc.code)
+			}
+		})
+	}
+}
+
+// F&O 3.1: with no initial-function, initial-template, source-node or
+// initial-match-selection, the invocation is call-template on
+// xsl:initial-template, so a stylesheet without one is XTDE0040
+// (fn-transform-err-1) rather than an apply-templates with no selection.
+// source-node still means apply-templates.
+func TestFnTransformDefaultEntryPoint(t *testing.T) {
+	if got, err := fnTransformWith(t, `map{}`); err != nil || !strings.Contains(got, "<ok/>") {
+		t.Fatalf("no options: got %q, %v; want <ok/>", got, err)
+	}
+	if got, err := fnTransformWith(t, `map{'source-node': /}`); err != nil || !strings.Contains(got, "<matched/>") {
+		t.Fatalf("source-node: got %q, %v; want <matched/>", got, err)
+	}
+}
+
+// F&O 3.1 requires function-params with initial-function; without it the
+// options identify no invocation, FOXT0002 (fn-transform-err-16), rather than
+// a call of the nullary function.
+func TestFnTransformInitialFunctionNeedsParams(t *testing.T) {
+	_, err := fnTransformWith(t, `map{'initial-function': QName('urn:f', 'two')}`)
+	if code := xdm.ErrorCode(err); code != "FOXT0002" {
+		t.Fatalf("got %v, want FOXT0002", err)
+	}
+	got, err := fnTransformWith(t, `map{'initial-function': QName('urn:f', 'two'), 'function-params': []}`)
+	if err != nil || !strings.Contains(got, "<two/>") {
+		t.Fatalf("with function-params: got %q, %v; want <two/>", got, err)
+	}
+}
