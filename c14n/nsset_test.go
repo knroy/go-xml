@@ -59,9 +59,9 @@ func TestNamespaceSetUtilisedNodeOutsideSet(t *testing.T) {
 		// the output does not declare the prefix bar:x uses. That is the
 		// node set's doing, and the specification's result.
 		{Inclusive10, nil, `<r xmlns:foo="urn:foo"><foo:a bar:x="1"><b></b></foo:a></r>`},
-		// Exclusive §3's own rule does not ask whether the node is in the
-		// set, only whether its element is and utilises the prefix.
-		{Exclusive10, nil, `<r><foo:a xmlns:bar="urn:bar" xmlns:foo="urn:foo" bar:x="1"><b></b></foo:a></r>`},
+		// Exclusive C14N too: a node outside the set is not rendered
+		// "even if its parent node is included" (§1.1), utilised or not.
+		{Exclusive10, nil, `<r><foo:a xmlns:foo="urn:foo" bar:x="1"><b></b></foo:a></r>`},
 		// Listed, bar goes back to Canonical XML's rule.
 		{Exclusive10, []string{"bar"}, `<r><foo:a xmlns:foo="urn:foo" bar:x="1"><b></b></foo:a></r>`},
 	} {
@@ -89,11 +89,11 @@ func TestNamespaceSetDefaultNodeDropped(t *testing.T) {
 		t.Errorf("exclusive, #default listed:\n got %s\nwant %s", got, want)
 	}
 
-	// The dropped node binds a different URI from the ancestor's: under
-	// Exclusive §3 it still renders, because r's in-set node has another
-	// value; b's then renders because a has no node in the set.
+	// The dropped node binds a different URI from the ancestor's. It is
+	// outside the set, so it does not render (§1.1); a has no default node
+	// in the set and r has one, so xmlns=""; b's renders because a has none.
 	src = `<r xmlns="urn:1"><a xmlns="urn:2"><b/></a></r>`
-	want = `<r xmlns="urn:1"><a xmlns="urn:2"><b xmlns="urn:2"></b></a></r>`
+	want = `<r xmlns="urn:1"><a xmlns=""><b xmlns="urn:2"></b></a></r>`
 	if got := canonFilter(t, src, filter, nil, Exclusive10); got != want {
 		t.Errorf("rebound, exclusive:\n got %s\nwant %s", got, want)
 	}

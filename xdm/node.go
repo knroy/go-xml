@@ -1288,6 +1288,42 @@ func (n *Node) ChildElements() []*Node {
 	return out
 }
 
+// Walk calls fn for n and every element in document order beneath it. fn
+// returning false stops the walk. n itself is visited whatever its kind, so a
+// document node can be walked directly; below n only elements are visited,
+// never text, comments, processing instructions, attributes or namespaces.
+// Recursion depth is the element depth, which the parser bounds with
+// ParseOptions.MaxDepth.
+func (n *Node) Walk(fn func(*Node) bool) {
+	n.walk(fn)
+}
+
+func (n *Node) walk(fn func(*Node) bool) bool {
+	if !fn(n) {
+		return false
+	}
+	for _, c := range n.Children {
+		if c.Kind == KindElement && !c.walk(fn) {
+			return false
+		}
+	}
+	return true
+}
+
+// FirstElement returns the first element in document order at or beneath n
+// with the given namespace URI and local name, or nil. The name matches as
+// in IsElement.
+func (n *Node) FirstElement(uri, local string) *Node {
+	var found *Node
+	n.Walk(func(e *Node) bool {
+		if e.IsElement(uri, local) {
+			found = e
+		}
+		return found == nil
+	})
+	return found
+}
+
 // LookupPrefix resolves a namespace prefix against the in-scope namespaces of
 // n, walking up the tree. Returns the URI and whether the prefix was bound.
 func (n *Node) LookupPrefix(prefix string) (string, bool) {

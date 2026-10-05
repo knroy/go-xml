@@ -2260,6 +2260,14 @@ func primitiveTypeName(t xdm.TypeCode) string {
 	return t.String()
 }
 
+// CharacterMapParam reads a use-character-maps value in the map form, with the
+// errors fn:serialize raises for it. fn:transform's serialization-params
+// follows "the same rules that apply to a map supplied as the second argument
+// of fn:serialize" (F&O 3.1 14.7.1), so it reads the parameter through this.
+func CharacterMapParam(val xdm.Sequence) (map[rune]string, error) {
+	return readCharacterMapsFromMap(val)
+}
+
 // readCharacterMapsFromMap reads use-character-maps given in the map form,
 // where the parameter is itself a map from character to replacement.
 //

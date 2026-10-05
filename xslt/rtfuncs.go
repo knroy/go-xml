@@ -446,15 +446,24 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 
 	// The static functions are registered separately so that use-when, whose
 	// context has no runtime at all, can have exactly these and nothing else.
+	// rt is nil only in the tests that list what this function binds.
+	proc30 := rt == nil || sheetAtLeast30(rt.sheet)
 	registerStaticFuncs(l, rt.resolveFunctionName, rt.resolveTypeName,
-		rt.resolveElementName, rt.schemaHasType)
+		rt.resolveElementName, rt.schemaHasType, proc30)
 }
 
 // registerStaticFuncs adds the four functions section 3.12 makes available to
 // a use-when expression: they answer questions about the *processor* rather
 // than about the stylesheet or the source, so they need no runtime and are
 // legal in a context that has none.
-func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement prefixResolver, schemaHasType func(xdm.QName) bool) {
+//
+// proc30 is whether the processor is acting as XSLT 3.0. An XSLT 2.0
+// processor -- CompileOptions.MaxVersion 2.0, which fn:transform selects for
+// xslt-version 2.0 -- reports xsl:version 2.0 whatever the stylesheet
+// declares: the "2.0" fn-transform-82e asserts of a version="3.0" stylesheet.
+// xsl:xpath-version still follows the XPath actually in force, which
+// function-available-1018 checks against the functions it finds.
+func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement prefixResolver, schemaHasType func(xdm.QName) bool, proc30 bool) {
 	// fn:available-system-properties answers from the same table
 	// fn:system-property does, and is available wherever it is -- including
 	// a use-when, which section 3.12 makes a static context like any other.
@@ -485,6 +494,12 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 			if err != nil {
 				return nil, err
 			}
+			prop := func(local string) (string, bool) {
+				if !proc30 && local == "version" {
+					return "2.0", true
+				}
+				return systemPropertyValue(local, ctx.Version)
+			}
 			// XTDE1390: the argument must be a valid QName. A malformed one
 			// would otherwise fall through to the empty string, which is
 			// what a *valid* name for an unknown property returns — so the
@@ -497,8 +512,7 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 				if name[2:end] != xdm.NSXSL {
 					return xdm.One(xdm.NewString("")), nil
 				}
-				if val, ok := systemPropertyValue(
-					name[end+1:], ctx.Version); ok {
+				if val, ok := prop(name[end+1:]); ok {
 					return xdm.One(xdm.NewString(val)), nil
 				}
 				return xdm.One(xdm.NewString("")), nil
@@ -548,7 +562,7 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 			// The table is in sysprops.go, shared with
 			// fn:available-system-properties: section 18.2 requires the two
 			// to agree, and a switch here plus a list there would drift.
-			if val, ok := systemPropertyValue(local, ctx.Version); ok {
+			if val, ok := prop(local); ok {
 				return xdm.One(xdm.NewString(val)), nil
 			}
 			return xdm.One(xdm.NewString("")), nil

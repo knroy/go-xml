@@ -1,0 +1,20 @@
+Baltimore Technologies "merlin-c14n-three" interop signature
+(Merlin Hughes, 31 May 2002). Every file here except this one is verbatim,
+fetched raw; none contains a carriage return. .gitattributes marks
+tests/c14n/testdata/** -text so no checkout rewrites a byte.
+
+Source:  https://github.com/lsh123/xmlsec
+Path:    tests/merlin-c14n-three/
+Commit:  f49dbd610db91d25656cfef7d12fa5a9f4f3b58d (master when fetched);
+         the files are unchanged since fb947e62b727b83391d44f9af1b59067cb71d316
+         (2002-08-01). Apache Santuario does not carry this corpus.
+License: xmlsec's Copyright file (MIT-style), Copyright (C) 2002-2026
+         Aleksey Sanin; the corpus itself is Baltimore's interop material.
+
+Files:   signature.xml   27 same-document references (URI="") with an XPath
+                         filter; refs 0-8 then implicit Canonical XML 1.0,
+                         9-17 Exclusive C14N, 18-26 Exclusive C14N with
+                         PrefixList="#default"
+         c14n-N.txt      the digest input of reference N (15, 16, 25 empty)
+         c14n-27.txt     the canonical SignedInfo
+Test:    tests/c14n/merlin_test.go (TestMerlinC14NThree)

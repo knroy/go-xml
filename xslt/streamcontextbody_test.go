@@ -530,3 +530,28 @@ func TestContextDefaultingBuiltinIsModelled(t *testing.T) {
 		}
 	})
 }
+
+// §19.8.9 gives "fn:key(x, x) - Equivalent to fn:key(x, x, /)". The default
+// is "/", not ".", so the context-defaulting rule does not cover it; left out,
+// the two-argument call gave no verdict and the construct around it compiled.
+func TestKeyTwoArgumentIsModelled(t *testing.T) {
+	keyProps := func(t *testing.T, src string) (props, bool) {
+		t.Helper()
+		e, err := xpath.Parse(src, nil)
+		if err != nil {
+			t.Fatalf("parsing %q: %v", src, err)
+		}
+		return analyzeExpr(e, postureStriding)
+	}
+	short, known := keyProps(t, "key('k', 'v')")
+	if !known {
+		t.Fatal("§19.8.9 gives fn:key(x, x) as fn:key(x, x, /), so the " +
+			"two-argument call must be modelled, not abandoned")
+	}
+	long, _ := keyProps(t, "key('k', 'v', /)")
+	if short != long || short != roamingFreeRanging {
+		t.Fatalf("want key('k','v') assessed as key('k','v',/), roaming and "+
+			"free-ranging from a striding context; got %v/%v and %v/%v",
+			short.posture, short.sweep, long.posture, long.sweep)
+	}
+}

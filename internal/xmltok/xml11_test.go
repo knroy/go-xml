@@ -1,4 +1,4 @@
-package xmlfork
+package xmltok
 
 import (
 	"io"
@@ -29,7 +29,7 @@ func readAll(t *testing.T, doc string) (string, error) {
 	d := NewDecoder(strings.NewReader(doc))
 	var sb strings.Builder
 	for {
-		tok, err := d.Token()
+		tok, err := d.RawToken()
 		if err == io.EOF {
 			return sb.String(), nil
 		}
@@ -158,12 +158,21 @@ func TestXML11ReferencedLineEndNotNormalised(t *testing.T) {
 }
 
 // TestUnsupportedVersionRefused records that widening to 1.1 did not widen to
-// anything else: a version this tokeniser does not implement is still refused
-// outright rather than read under whichever rules happen to be nearest.
+// anything else: a version outside [26] VersionNum is refused outright, and a
+// 1.x other than 1.1 is read as 1.0 (§2.8, Fifth Edition), not under 1.1's
+// relaxations.
 func TestUnsupportedVersionRefused(t *testing.T) {
-	for _, ver := range []string{"1.2", "2.0", "0.9"} {
+	for _, ver := range []string{"2.0", "0.9", "1.", "1.x"} {
 		if _, err := readAll(t, `<?xml version="`+ver+`"?><doc/>`); err == nil {
 			t.Errorf("version %q is not supported and must be refused", ver)
+		}
+	}
+	for _, ver := range []string{"1.2", "1.7", "1.10"} {
+		if _, err := readAll(t, `<?xml version="`+ver+`"?><doc/>`); err != nil {
+			t.Errorf("version %q must be read as 1.0: %v", ver, err)
+		}
+		if _, err := readAll(t, `<?xml version="`+ver+`"?><doc>&#x7;</doc>`); err == nil {
+			t.Errorf("version %q admitted a 1.1 RestrictedChar reference", ver)
 		}
 	}
 }

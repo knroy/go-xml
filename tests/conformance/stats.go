@@ -414,7 +414,7 @@ func (r *Results) renderTodoStatus() string {
 	}
 	row("XPath 2.0", r.Suite("xpath-2.0"), "")
 	row("XPath 3.0", r.Suite("xpath-3.0"), "")
-	row("XPath 3.1", r.Suite("xpath-3.1"), " (0 failing)")
+	row("XPath 3.1", r.Suite("xpath-3.1"), fmt.Sprintf(" (%d failing)", r.Suite("xpath-3.1").Disagreements))
 	row("XQuery 3.1", r.Suite("xquery-3.1"), fmt.Sprintf(" (%d failing)", r.Suite("xquery-3.1").Disagreements))
 	row("XSLT 2.0", r.Suite("xslt-2.0"), fmt.Sprintf(" (%d failing)", r.Suite("xslt-2.0").Disagreements))
 	x := r.Suite("xslt-3.0")

@@ -3,6 +3,7 @@ package xslt
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -663,11 +664,12 @@ type userFunction struct {
 	params  []*Variable
 	body    []Instruction
 	returns *sequenceType
-	// deterministic is @new-each-time="no": a promise that two calls with
-	// the same arguments may return the SAME nodes rather than merely equal
-	// ones, which lets the result be computed once and reused. 10.3 makes
-	// the default "maybe", under which either is allowed, so only the
-	// explicit "no" obliges anything.
+	// deterministic is @new-each-time="no" (or @cache="yes"): the result is
+	// computed once per identical argument list and reused. For "no" that is
+	// an obligation, not a licence: 10.3.7 makes such a function
+	// deterministic in F&O 1.7.4's sense, so two calls with identical
+	// arguments must return identical results -- the SAME nodes, not merely
+	// equal ones.
 	deterministic bool
 }
 
@@ -697,9 +699,8 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	if f.deterministic {
 		switch k, err := rt.functionCallKey(f, args); {
 		case errors.Is(err, errNotCacheable):
-			// No value-based key for these arguments, so this call is
-			// evaluated afresh. That is always permitted: "no" licenses
-			// reuse, it does not require it.
+			// An argument functionCallKey cannot key, so this call is
+			// evaluated afresh; see there for which ones.
 		case err != nil:
 			return nil, err
 		default:
@@ -783,39 +784,106 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 // functionCallKey identifies one call of a deterministic function by its
 // arguments.
 //
-// The arguments are atomized and joined through the same grouping keys the
-// key and grouping machinery uses, so that the equality this caches under is
-// the one XPath already means by "the same value" -- 1 and 1.0 are one
-// argument list, and a collation-sensitive comparison stays collation
-// sensitive.
+// Two calls share a key when their arguments are "identical" as F&O 1.7.4
+// defines it, which is what 10.3.7 says "the same arguments" means:
 //
-// A call carrying a node, a map, an array or a function item is NOT cached.
-// Those have no value-based key: two nodes are the same argument only if they
-// are the same node, and answering that here would need identity plumbing the
-// atomizer does not offer. Declining to cache is the safe direction, since
-// "maybe" is always a permitted behaviour for a call this cannot key.
+//   - atomic values of precisely the same type that are equal under "eq".
+//     The grouping key supplies the "eq" part and the type is written in front
+//     of it, so 1 and 1.0, or "Paris" as xs:string and as xs:untypedAtomic,
+//     are different argument lists;
+//   - the same node. Nodes are keyed by identity, so a function that copies
+//     its argument returns the one copy however often it is asked -- GitHub
+//     issue #13, where every call built a fresh tree and "is" said false;
+//   - maps and arrays with identical content, keyed recursively;
+//   - function items, keyed by the item itself. Two distinct function items
+//     that 1.7.4 would still call identical (concat#2 evaluated twice) key
+//     apart, and such a call is evaluated afresh.
+//
+// Any other item -- an Opaque, which never reaches a stylesheet function --
+// is errNotCacheable.
 func (rt *runtime) functionCallKey(f *userFunction, args []xdm.Sequence) (string, error) {
 	var b strings.Builder
 	b.WriteString(f.name.Clark())
 	for _, a := range args {
 		b.WriteByte(0x1d)
-		for _, it := range a {
-			at, ok := it.(*xdm.Atomic)
-			if !ok {
-				return "", errNotCacheable
-			}
-			k, err := xpath.GroupingKey(at, nil, rt.ctx.ImplicitTimezone)
-			if err != nil {
-				return "", err
-			}
-			b.WriteByte(0x1e)
-			b.WriteString(k)
+		if err := rt.writeIdenticalKey(&b, a); err != nil {
+			return "", err
 		}
 	}
 	return b.String(), nil
 }
 
-// errNotCacheable marks a call whose arguments have no value-based key.
+// writeIdenticalKey appends the key of one sequence to b. Every atomic key is
+// length-prefixed, so a string holding a delimiter cannot pass for structure.
+func (rt *runtime) writeIdenticalKey(b *strings.Builder, s xdm.Sequence) error {
+	for _, it := range s {
+		b.WriteByte(0x1e)
+		switch it := it.(type) {
+		case *xdm.Atomic:
+			k, err := xpath.GroupingKey(it, nil, rt.ctx.ImplicitTimezone)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(b, "a%d/%s/%d:%s", it.Type, it.Derived(), len(k), k)
+		case *xdm.Node:
+			fmt.Fprintf(b, "n%d", rt.identityNumber(it.Identity()))
+		case *xdm.FunctionItem:
+			fmt.Fprintf(b, "f%d", rt.identityNumber(it))
+		case *xdm.ArrayItem:
+			b.WriteByte('[')
+			for _, m := range it.Members() {
+				b.WriteByte(0x1f)
+				if err := rt.writeIdenticalKey(b, m); err != nil {
+					return err
+				}
+			}
+			b.WriteByte(']')
+		case *xdm.MapItem:
+			// Entries are keyed in "same key" order, not insertion order,
+			// which identity does not depend on.
+			type entry struct {
+				key string
+				val xdm.Sequence
+			}
+			var es []entry
+			err := it.Entries(func(k *xdm.Atomic, v xdm.Sequence) error {
+				mk, err := xdm.MapKeyOf(k)
+				es = append(es, entry{mk, v})
+				return err
+			})
+			if err != nil {
+				return err
+			}
+			sort.Slice(es, func(i, j int) bool { return es[i].key < es[j].key })
+			b.WriteByte('{')
+			for _, e := range es {
+				fmt.Fprintf(b, "%d:%s", len(e.key), e.key)
+				if err := rt.writeIdenticalKey(b, e.val); err != nil {
+					return err
+				}
+				b.WriteByte(0x1f)
+			}
+			b.WriteByte('}')
+		default:
+			return errNotCacheable
+		}
+	}
+	return nil
+}
+
+// identityNumber numbers an item that is keyed by identity. The table holds
+// the item itself, so a number cannot be reused by a later node at a recycled
+// address; it lives as long as the transform's runtime, as funcResults does.
+func (rt *runtime) identityNumber(id any) int {
+	n, ok := rt.itemIDs[id]
+	if !ok {
+		n = len(rt.itemIDs) + 1
+		rt.itemIDs[id] = n
+	}
+	return n
+}
+
+// errNotCacheable marks a call whose arguments have no identity key.
 var errNotCacheable = errors.New("call is not cacheable")
 
 // sameFocusItem reports whether the focus still holds the item a template

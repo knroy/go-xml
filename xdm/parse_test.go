@@ -152,6 +152,33 @@ func TestMalformedRejected(t *testing.T) {
 	}
 }
 
+// TestMiscIsLiteralSpace: outside the document element [27] Misc admits S as
+// written, so a reference or a CDATA section there is refused even when it
+// yields white space or nothing at all.
+func TestMiscIsLiteralSpace(t *testing.T) {
+	for _, doc := range []string{
+		"<a/>&#32;", "&#x20;<a/>", "<a/><![CDATA[]]>", "<a/>\n<![CDATA[]]>", "<!--c--><![CDATA[ ]]><a/>",
+		"<?xml version='1.0'?>\n&#10;<a/>", "<?xml version='1.1'?><a/>&#x85;",
+	} {
+		_, err := ParseString(doc, ParseOptions{})
+		if err == nil || !strings.Contains(err.Error(), "character data outside root element") {
+			t.Errorf("%q: %v, want character data outside root element", doc, err)
+		}
+	}
+	_, err := ParseString("<!DOCTYPE a [<!ENTITY e ''>]><a/>&e;", ParseOptions{AllowDOCTYPE: true})
+	if err == nil || !strings.Contains(err.Error(), "character data outside root element") {
+		t.Errorf("entity reference after the root: %v", err)
+	}
+	for _, doc := range []string{
+		" \t\r\n<a/> \t\r\n", "<!--c-->\n<a>&#32;<![CDATA[x]]></a>\n",
+		"<?xml version='1.1'?>\u0085<a/>\u2028",
+	} {
+		if _, err := ParseString(doc, ParseOptions{}); err != nil {
+			t.Errorf("%q: %v", doc, err)
+		}
+	}
+}
+
 func TestDocumentOrder(t *testing.T) {
 	tree, err := ParseString(`<a><b/><c><d/></c></a>`, ParseOptions{})
 	if err != nil {

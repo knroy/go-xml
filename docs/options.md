@@ -210,8 +210,9 @@ xdm.ParseOptions{MaxBytes: -1, MaxNodes: -1}
 
 Off by default because a DOCTYPE is the entry point for XXE and
 entity-expansion attacks. **Turning it on does not reopen either** —
-`encoding/xml` never parses the internal subset, so no DTD-declared entity ever
-exists (see [security.md](security.md)) — but it is still the wider setting.
+internal entities expand under depth and size bounds, and an external entity is
+refused unless `ExternalEntities` supplies a resolver (see
+[security.md](security.md)) — but it is still the wider setting.
 
 You need it for UBL, whose dependency graph reaches the W3C XML Signature
 schema, and that file carries a DOCTYPE:
@@ -495,7 +496,7 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{
 | Field | Type | Zero value | What it does |
 |---|---|---|---|
 | `Params` | `map[string]xdm.Sequence` | none | Values for top-level `xsl:param`, keyed by Clark name (`{uri}local`, or plain `local` for no namespace). |
-| `Documents` | `xpath.DocumentResolver` | disabled | Resolves `fn:doc` and `fn:document`. **Nil disables them**, which is the default: a stylesheet that can open arbitrary URIs is an SSRF and file-disclosure vector. |
+| `Documents` | `xpath.DocumentResolver` | disabled | Resolves `fn:doc` and `fn:document`, and `fn:transform`'s `stylesheet-location` and `source-location`. **Nil disables them**, which is the default: a stylesheet that can open arbitrary URIs is an SSRF and file-disclosure vector. |
 | `Collections` | `xpath.CollectionResolver` | disabled | Resolves `fn:collection`. **Nil disables it**, and setting `Documents` does not set this — the two are separate switches on purpose. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Template recursion limit, and the bound on `fn:transform` nesting. Catches a stylesheet with no base case. |
 | `DisableAssertions` | `bool` | `false` — assertions enabled | Turns off `xsl:assert` checking for the whole transformation. XSLT 3.0 §22.2: "By default, assertions are enabled." |
@@ -520,6 +521,13 @@ reach the stack instead of the limit, which is a Go runtime fatal that
 `recover()` does not catch. So the depth is charged from the call rather than
 from the runtime the stylesheet was entered with, and the refusal is
 `XPDY0001` wrapping `xdm.ErrResourceLimit`.
+
+The nested transform's XPath context starts at that depth too, not at zero, so
+the count survives a hop through another language: an XQuery query or
+`xpath.Eval` caller (which reaches `fn:transform` when the program links
+`xslt`) is charged from its own `Context.Depth` and bounded by its
+`Context.MaxDepth`, and a stylesheet that calls back into a query that
+transforms again keeps accumulating rather than restarting.
 
 ### DisableAssertions
 
@@ -715,6 +723,16 @@ opts.Environment = environment{"REPORT_MODE": "summary"}  // xslt.TransformOptio
 `xpath.OSEnvironment{}` is the widest implementation, exposing every variable
 the process holds. It is never installed by default and has to be named; reach
 for it only where whatever runs is trusted with the process's own secrets.
+
+### fn:load-xquery-module
+
+`TransformOptions.Modules` in `xslt`, `Context.Modules` in `xpath`: an
+`xpath.ModuleResolver`, which any `xquery.ModuleResolver` (such as
+`xquery.MapModuleResolver`) satisfies. Nil reads nothing and every call is
+`FOQM0002`. A query sets it from its own `Options.Modules` and
+`Options.ModuleResolver` unless the caller already did. The function needs the
+program to import `xquery`; without it the call is `FOQM0006`. See
+[xquery.md](xquery.md#loading-a-module-at-run-time).
 
 ### xslt.FileResolver
 

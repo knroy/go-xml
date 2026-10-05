@@ -4,6 +4,50 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## v1.5.0 — 2026-10-04
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| `fn:load-xquery-module` | It always raised `FOQM0006`. `xquery` now registers a loader reachable from XQuery, XPath and XSLT, reading modules only through the caller's resolver and budgets. | [`6e6fa8a`][6e6fa8a] |
+| `fn:transform` from XQuery and XPath | It raised `FOXT0004` outside a stylesheet. Linking `xslt` registers a sandboxed, depth-bounded processor; `go-xml xquery` runs it. QT3 now measures its 124 cases. | [`6e6fa8a`][6e6fa8a] |
+| `internal/xmltok`, an original XML tokeniser | `xdm` read through a fork of `encoding/xml` that had to be re-applied each Go release. Replaced after a zero-difference differential over 59,984 corpus files; 2-5x faster. | [`f18912e`][f18912e] |
+| `fn:transform` option `source-location` (#12) | Saxon's option, standard in F&O 4.0, was refused. The document is read through the `fn:doc` resolver and becomes the initial match selection; never streamed. | [`900cece`][900cece] |
+| `go-xml xquery` | The CLI could not run XQuery. `go-xml xquery -q Q.xq [INPUT.xml]` honours `output:*` options, takes `-p`, `-o`, `-now`; module and `doc()` reads confined to `-allow-dir`. | [`900cece`][900cece] |
+| Merlin C14N interop corpora | `merlin-c14n-three` (27 references) and `merlin-exc-c14n-one` (4) were untested; octets and signed digests now checked, both vendored with provenance. | [`900cece`][900cece] |
+| `xdm.Node.Walk` and `xdm.Node.FirstElement` | Finding an element by expanded name needed XPath or a hand-written loop. `Walk` visits elements in document order with early stop; `FirstElement` returns the first match. | [`ba09cac`][ba09cac] |
+| `c14n` differential: a PrefixList prefix bound nowhere | The `xmlsec1` differential never named one. `nosuchprefix` lists added (1250 comparisons); expected differences now key on input and list. | [`ba09cac`][ba09cac] |
+
+### Fixed — engine
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| Four XSLT 3.0 stylesheets that §19.8 refuses were compiled | `?` lookups modelled (§19.8.8.18), a multi-node streaming parameter consumes (§19.8.5.2), shallow-descent bodies must stride (§19.8.5.5), a streamed ascent call climbs (§19.8.5.7). XSLT 3.0 11,491 → 11,495. | [`7798acd`][7798acd] |
+| `fn:transform` accepted string keys in parameter maps | `stylesheet-params`, `static-params`, `template-params` and `tunnel-params` are `map(xs:QName, item()*)`; a string key is now `FOXT0002`, as F&O and Saxon have it. XPath 3.1 reaches 100%. | [`d029347`][d029347] |
+| The parser accepted 20 not-well-formed documents from the W3C XML suite | Missing space between attributes, bad comment/PI characters, `<?pi+?>`, QName colons, text outside the root via references or CDATA, a BOM contradicting the encoding. All refused now (XML 1.0 §2.5–3.1, Namespaces §3/§7). | [`8cf4584`][8cf4584] |
+| The parser rejected 16 well-formed documents | Duplicate ATTLIST (first wins, §3.3), UTF-16 external entities (§4.3.3), parameter-entity scope and base (§4.2.2), CDATA in entity values, and `version="1.x"` (§2.8). | [`8cf4584`][8cf4584] |
+| `fn:transform` ignored `serialization-params`, `requested-properties`, `xslt-version` and `global-context-item` | They now apply per F&O 3.1 §14.7.1: params merge over `xsl:output`, unmet properties are `FOXT0001`, `xslt-version` picks the 2.0 or 3.0 processor. QT3 +20 per lane. | [`d029347`][d029347] |
+| `fn:transform` entry-point and result edge cases | No entry point is `XTDE0040` (via `xsl:initial-template`), `initial-function` needs `function-params` (`FOXT0002`), and an empty principal result beside result documents is omitted. | [`d029347`][d029347] |
+| `system-property('xsl:is-schema-aware')` said `no` | The processor implements `xsl:import-schema` and schema-aware validation; it now says `yes`. | [`d029347`][d029347] |
+| A 3.0 processor refused XSLT 3.0 attributes on `version="2.0"` modules | XSLT 3.0 §3.9.2 defines no difference for 2.0 behaviour; only a 2.0 processor (`MaxVersion` 2.0) refuses them now. | [`d029347`][d029347] |
+| A module importing its own namespace raised `XQST0073` | XQuery 3.1 §4.12: "A module may import its own target namespace". The rule is removed. | [`6e6fa8a`][6e6fa8a] |
+| An accumulator applied without `use-accumulators` (#16) | An initial `xsl:mode` with no list left every accumulator readable on the source. Its absent list is now empty (§18.2.2), so a read is `XTDE3362`; `accumulator-073` diverges, as Saxon does. | [`5549c2f`][5549c2f] |
+| `fn:transform` ignored `static-params` (#15) | A nested stylesheet's static parameter kept its default. The map now binds them at the nested compilation. | [`5549c2f`][5549c2f] |
+| `fn:transform` refused option names it did not know | F&O 3.1 §1.7 says such entries must be ignored; they raised `FOXT0002`. String and QName names F&O does not define are now ignored (#12). | [`900cece`][900cece] |
+| Exclusive C14N rendered namespace nodes outside the node set | A visibly utilised prefix rendered after an XPath filter removed its node; Exc-C14N §1.1 forbids it. Now dropped, matching Baltimore's Merlin signatures. | [`900cece`][900cece] |
+| `new-each-time="no"` rebuilt nodes for node arguments (#13) | `f(.) is f(.)` was false. Calls are now cached per F&O 1.7.4-identical arguments: nodes by identity, atomics by exact type. DocBook `table-cals.049` no longer times out (578). | [`900cece`][900cece] |
+| A numeric predicate calling a focus-dependent function was striding | `key#2`, `current#0`, `copy-of#0` and others passed §19.8.8.9's focus-free test. It now reads the `focusDependent` table. | [`ba09cac`][ba09cac] |
+| `descendant::x[$i + 1]` was refused `XTSE3430` | A variable declared `as="xs:integer"` was never numeric (§19.8.8.9). A declared numeric type now counts; `let`, `for` and `some` bindings shadow it. | [`ba09cac`][ba09cac] |
+| `key(k, v)` gave no streamability verdict | §19.8.9 defines it as `key(k, v, /)`; the call is now assessed in that form. | [`ba09cac`][ba09cac] |
+
+### Documentation
+
+| Change | What it does | Commit |
+|---|---|---|
+| `c14n` figures | The join-URI row is 67 / 67, not 69; the `xmlsec1` differences are each tied to the clause `xmlsec1` departs from. | [`ba09cac`][ba09cac] |
+| Go 1.25 floor in `RELEASE.md` and `README.md` | The floor, and that `golang.org/x/text` v0.35+ requires 1.25 on its own. | [`ba09cac`][ba09cac] |
+
 ## v1.4.0 — 2026-09-25
 
 New package `c14n`: Canonical XML 1.0, 1.1 and Exclusive C14N. It ships ahead of the full verification gate in its design: it is checked against the Recommendations' examples, the W3C C14N 1.1 interop cases, `xmllint` and `xmlsec1`, while the Apache Santuario differential, the Merlin corpus and captured Peppol and SAML messages are still to come ([docs/c14n.md](docs/c14n.md#verification-still-to-do)).
@@ -1036,4 +1080,12 @@ here so every entry in this file sits under a release.
 [67c960b]: https://github.com/knroy/go-xml/commit/67c960b
 [1803696]: https://github.com/knroy/go-xml/commit/1803696
 [48651cf]: https://github.com/knroy/go-xml/commit/48651cf
+[7798acd]: https://github.com/knroy/go-xml/commit/7798acd
+[8cf4584]: https://github.com/knroy/go-xml/commit/8cf4584
+[d029347]: https://github.com/knroy/go-xml/commit/d029347
+[6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
+[f18912e]: https://github.com/knroy/go-xml/commit/f18912e
+[5549c2f]: https://github.com/knroy/go-xml/commit/5549c2f
+[900cece]: https://github.com/knroy/go-xml/commit/900cece
+[ba09cac]: https://github.com/knroy/go-xml/commit/ba09cac
 [1a3cf7f]: https://github.com/knroy/go-xml/commit/1a3cf7f

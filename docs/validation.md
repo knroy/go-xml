@@ -12,6 +12,15 @@ Being precise about which one you need saves the most time:
 | the XML matches a **RELAX NG** schema | a different validator | ✅ `relaxng.Compile` + `Schema.Validate` |
 | the XML satisfies **business rules** — cross-field arithmetic, code lists, conditional requirements | Schematron, compiled to XSLT | ✅ this is the use case |
 
+"Well-formed" here means **namespace-well-formed**: `xdm.ParseString` is always
+namespace-aware, so it also refuses what Namespaces in XML forbids — a name with
+an empty prefix or local part (`<foo:>`, `<:foo>`, `xmlns:=`), a colon in a
+processing-instruction target (§7), and two attributes whose prefixes bind the
+same URI once the declaration's value is normalised by its DTD type (§3). A byte
+order mark that contradicts the declared encoding is refused too (XML §4.3.3).
+`xmllint` reports each of these and still exits 0; a pipeline comparing the two
+will see go-xml refuse documents libxml2 builds a tree for.
+
 ### DTD
 
 The DTD case needs care because the work is split between parsing and
@@ -22,10 +31,19 @@ declarations are applied — the two whose absence is visible in the data model:
 
 * **`<!ATTLIST>` defaults.** A `#FIXED` or literal default is added to every
   matching element, including a namespace declaration, since
-  `xmlns:p CDATA #FIXED "..."` is how a DTD supplies a binding.
+  `xmlns:p CDATA #FIXED "..."` is how a DTD supplies a binding. Where an
+  attribute is declared more than once, the first declaration binds and later
+  ones are ignored (XML 1.0 §3.3), its type included.
 * **`<!ENTITY>` internal general entities.** `&name;` expands. External
-  entities — `SYSTEM` or `PUBLIC` — are never resolved, and expansion is
-  bounded; see [security.md](security.md).
+  entities — `SYSTEM` or `PUBLIC` — are never resolved unless
+  `ExternalEntities` is set, and expansion is bounded; see [security.md](security.md). A reference inside a CDATA section
+  or comment in replacement text is text, not a reference.
+* **With `ExternalEntities` set**, each external entity is decoded by its own
+  byte order mark (UTF-8 or UTF-16, §4.3.3; the mark itself is dropped), a
+  parameter entity declared in one module is in scope for the rest of the DTD,
+  an external one resolves against the entity its declaration is in (§4.2.2),
+  and a parameter entity's value has its character references decoded at
+  declaration (§4.5).
 
 **Parsing still does not check anything else.** `AllowDOCTYPE` buys
 parseability, not validation — a document that violates its own DTD parses
@@ -255,8 +273,8 @@ That brings in `xs:assert`, conditional type assignment with
 `xs:alternative` and inheritable attributes, `xs:openContent` and
 `xs:defaultOpenContent`, `xs:override`, the `notNamespace` and `notQName`
 wildcard forms, `explicitTimezone`, conditional inclusion through the
-versioning attributes, and the 1.1 built-ins. It measures **99.90%** on the
-26,204 instance tests that apply to a 1.1 processor and **99.92%** on the
+versioning attributes, and the 1.1 built-ins. It measures **99.98%** on the
+26,222 instance tests that apply to a 1.1 processor and **99.97%** on the
 15,354 schema-validity tests. An earlier revision claimed 100%; that was
 measured over the explicitly-marked 1.1 groups only, about a sixteenth of the
 tests a 1.1 processor is meant to run. See [xsd.md](xsd.md).

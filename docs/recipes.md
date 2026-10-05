@@ -226,3 +226,29 @@ for _, tree := range trees {
     seq, err := compiled.Eval(xpath.NewContext(tree.Root, xpath.Builtins()))
 }
 ```
+
+## Find elements without XPath
+
+For a fixed expanded name, walking the tree is cheaper than compiling an
+expression. `FirstElement` returns the first match in document order, at or
+beneath the node it is called on; the name matches as in `IsElement`, so a
+namespaced element needs its URI, not its prefix:
+
+```go
+tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+item := tree.Root.FirstElement("urn:inv", "Total") // nil if absent
+```
+
+`Walk` visits the node itself, then every element beneath it in document
+order — never text, comments, attributes or namespaces. Returning false stops
+the whole walk, not just the current subtree:
+
+```go
+var totals []*xdm.Node
+tree.Root.Walk(func(n *xdm.Node) bool {
+    if n.IsElement("urn:inv", "Total") {
+        totals = append(totals, n)
+    }
+    return true
+})
+```

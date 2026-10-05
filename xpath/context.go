@@ -3,6 +3,7 @@ package xpath
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -192,6 +193,14 @@ type Context struct {
 	// grants reads of the process's own state, which no resolver root
 	// bounds. Withholding costs no conformance — see EnvironmentResolver.
 	Environment EnvironmentResolver
+
+	// Modules locates the XQuery library modules fn:load-xquery-module
+	// loads. Nil reads nothing, so every module is FOQM0002, which is the
+	// default for the reason Docs is nil by default: the module URI and its
+	// location hints are strings the expression chose. An XQuery query
+	// fills this from its own Options.Modules and Options.ModuleResolver
+	// when the caller left it nil. See ModuleResolver.
+	Modules ModuleResolver
 
 	// Validator validates a tree fn:json-to-xml has just built, when the
 	// call asked for validate=true. Nil means the processor cannot do it,
@@ -543,6 +552,18 @@ type TextResolver interface {
 	// ResolveText returns the text of uri, resolved against base, decoded
 	// using encoding when one is named and as UTF-8 when it is empty.
 	ResolveText(uri, base, encoding string) (string, error)
+}
+
+// ModuleResolver locates the source of an XQuery library module for
+// fn:load-xquery-module. It has the shape of xquery.ModuleResolver, so any
+// value of that type serves here; it is declared in this package because
+// xpath cannot import xquery.
+type ModuleResolver interface {
+	// Resolve returns the source of the library module whose target
+	// namespace is namespace; hints are the caller's location hints and base
+	// is what they resolve against. A nil reader and a nil error mean "no
+	// such module".
+	Resolve(namespace string, hints []string, base string) (io.ReadCloser, string, error)
 }
 
 // FunctionLibrary resolves and calls functions.

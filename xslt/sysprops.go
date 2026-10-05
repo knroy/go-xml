@@ -83,7 +83,7 @@ var systemProperties = map[string]string{
 	"vendor-url":                       "https://github.com/knroy/go-xml",
 	"product-name":                     "go-xml",
 	"product-version":                  productVersion(),
-	"is-schema-aware":                  "no",
+	"is-schema-aware":                  "yes",
 	"supports-serialization":           "yes",
 	"supports-backwards-compatibility": "yes",
 

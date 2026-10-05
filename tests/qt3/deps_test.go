@@ -59,10 +59,14 @@ func TestMergeDepsOverridesFeaturePerValue(t *testing.T) {
 		t.Error("the set's unrelated feature was dropped")
 	}
 
-	// And the gate agrees: the case is in scope for XQuery 3.1, where an
-	// additive merge would skip it.
-	if why := unsupportedSpec(got, XQuery31); why != "" {
-		t.Errorf("case skipped as %q, want in scope", why)
+	// And the gate agrees with the override rather than the set: the feature
+	// is implemented, so a case written for a processor WITHOUT it is out of
+	// scope, while the set's own declaration admits the other cases.
+	if why := unsupportedSpec(got, XQuery31); why == "" {
+		t.Error("a satisfied=\"false\" case is in scope; want skipped")
+	}
+	if why := unsupportedSpec(set, XQuery31); why != "" {
+		t.Errorf("the set's cases skipped as %q, want in scope", why)
 	}
 }
 

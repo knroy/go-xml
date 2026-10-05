@@ -288,9 +288,7 @@ func (c *compiler) compileAccumulatorRule(el *xdm.Node) (*accumulatorRule, error
 // modeAccumulators is the set of accumulators xsl:mode/@use-accumulators makes
 // available in a mode, or nil when the mode names none.
 //
-// A nil entry and an absent one differ: an absent mode has no declaration and
-// so no accumulators, while "#all" is recorded as the whole set. Both are
-// answered by accumulatorInScope.
+// Only the initial mode's set counts (18.2.2); see noteInitialAccumulators.
 type modeAccumulators struct {
 	all   bool
 	names map[string]bool
@@ -324,21 +322,6 @@ func (c *compiler) compileModeAccumulators(el *xdm.Node, mode string) error {
 	}
 	c.sheet.modeAccums[mode] = set
 	return nil
-}
-
-// accumulatorInScope reports whether an accumulator may be read in a mode.
-//
-// Section 18.2 raises XTDE3400 for a call naming an accumulator the current
-// mode does not use. Since this processor never streams, restricting the
-// answer costs nothing but conformance — but a stylesheet that declares no
-// modes at all clearly means every accumulator to be usable, so an
-// undeclared mode is permissive rather than empty.
-func (s *Stylesheet) accumulatorInScope(mode, name string) bool {
-	set, ok := s.modeAccums[mode]
-	if !ok {
-		return true
-	}
-	return set.all || set.names[name]
 }
 
 // accumulatorValuesFor computes, and caches, one accumulator's value at every
@@ -555,14 +538,6 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 		return nil, fmt.Errorf(
 			"XTDE3340: no xsl:accumulator is named %q", lex)
 	}
-	// XTDE3400 also covers reading an accumulator the current mode does not
-	// list in @use-accumulators.
-	if !rt.sheet.accumulatorInScope(rt.sel.mode, name) {
-		return nil, fmt.Errorf(
-			"XTDE3400: accumulator %q is not available in the current mode, "+
-				"which does not name it in use-accumulators", lex)
-	}
-
 	// 18.2 splits the focus errors three ways: an absent context item is
 	// XTDE3350, while a context item that is not a node — or is an attribute
 	// or namespace node, neither of which an accumulator rule can match — is

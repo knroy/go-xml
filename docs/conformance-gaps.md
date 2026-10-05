@@ -32,28 +32,28 @@ its own rows summed to 104 and nothing anywhere did the addition.
 | **xdm** | *(no external suite)* | — | — | — | — |
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |
-| **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
-| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** |
+| **xpath** | QT3 — XPath 3.1 | 22,054 | 22,054 | 100.00% | **0** |
+| **xquery** | QT3 — XQuery 3.1 | 30,517 | 30,516 | 100.00% | **1** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,492 | 99.77% | **26** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,495 | 99.80% | **23** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,598 | 41,567 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
-| **xslt** | DocBook xslTNG *(real-world)* | 577 | 577 | 100.00% | 0 |
+| **xslt** | DocBook xslTNG *(real-world)* | 578 | 578 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **96** |
+| | **Total** | | | | **93** |
 
-W3C disagreements: 0 + 0 + 0 + 1 + 8 + 26 + 30 + 31 + 0 = 96. Measured 2026-09-11, 2026-09-14.
+W3C disagreements: 0 + 0 + 0 + 1 + 8 + 23 + 30 + 31 + 0 = 93. Measured 2026-09-11, 2026-09-29, 2026-10-01, 2026-10-02.
 <!-- END GENERATED CONFORMANCE SUMMARY -->
 
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 2,483 tests.
+The unit-test suite is 2,545 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
-577 test documents and XSpec's 225 — kept here because they are the only
+578 test documents and XSpec's 225 — kept here because they are the only
 measurement in this file taken against stylesheets nobody wrote for a test
 harness, and because four defects the W3C suites missed were found by them.
 They are not in the *Total*, which counts W3C disagreements only. Note that
@@ -62,7 +62,7 @@ W3C XSLT sets.
 
 Two suites reach 100% — XPath at all three versions, and RELAX NG.
 
-**The largest block is a single feature, not a long tail.** 7 of the 26
+**One block is a single feature, not a long tail.** 3 of the 23
 XSLT 3.0 failures want an `XTSE3430` that only the unwritten remainder of the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable".
@@ -80,13 +80,13 @@ which in a streamed tree is never grounded. The body therefore cleared the
 concluded streamable where §19.8.5 requires the refusal. Four cases moved:
 `su-absorbing-901`, `su-absorbing-905`, `su-inspection-901`, `su-inspection-903`.
 
-`su-ascent-903` moved the other way and is now enumerated individually rather
-than counted in the block. §19.8.5.7 gives an ascent function's streaming
-parameter the posture *climbing*, and `bodyRequirements` permits a climbing
-ascent body, so the analysis accepts what it used to refuse — it refused it
-before only because the same table wrongly read striding. That is the second
-`su-ascent` case where the suite asks for a refusal §19.8.5.7 does not support;
-`su-ascent-902` is the first, and is argued below.
+`su-ascent-903` was then argued here as a suite defect, and that was half
+right. Its body is climbing and motionless, which §19.8.5.7 permits; but the
+general rules make the call grounded, which leaves the rule's last clause
+("Otherwise, the function call is climbing and motionless") unreachable. Read
+by that clause's intent, a streamed argument makes the call climbing, `<out>`
+absorbing climbing nodes is free-ranging, and the refusal stands. It passes
+since 2026-10-02.
 
 ## How to read the verdicts
 
@@ -124,7 +124,7 @@ failures at all.
 
 `xdm` has no external conformance suite: XDM is a data model, not a language
 with a test corpus. It is measured **indirectly and continuously** — every one
-of the 84,000-odd cases above builds, navigates and atomises XDM instances, so
+of the 150,000-odd cases above builds, navigates and atomises XDM instances, so
 a defect in the model surfaces as a failure in XPath, XSLT or XSD rather than
 in a suite of its own. It carries 18 unit-test files of its own covering the
 parts the language suites exercise thinly: type annotation, attribute-value
@@ -134,8 +134,9 @@ normalisation, character-set handling, node identity and document order.
 
 ## xpath — 0 failures
 
-All three XPath versions agree with the suite on every case in scope.
-**XPath: <!-- BEGIN GENERATED XPATH FIGURE -->15,217 / 19,362 / 21,898<!-- END GENERATED XPATH FIGURE -->, all at 100.00%.**
+All three XPath versions agree with the suite on every case in scope,
+`fn:transform` included.
+**XPath: <!-- BEGIN GENERATED XPATH FIGURE -->15,217 / 19,362 / 22,054<!-- END GENERATED XPATH FIGURE -->, against in-scope totals of 15,217 / 19,362 / 22,054.**
 
 ## relaxng — 0 failures
 
@@ -143,7 +144,7 @@ All three XPath versions agree with the suite on every case in scope.
 
 ## xquery — 1 failure
 
-**XQuery 3.1: 30,345 / 30,346 = 100.00%.**
+**XQuery 3.1: 30,516 / 30,517 = 100.00%.**
 
 What remains is one singleton, `prod-ContextItemDecl`. `app-Demos/RexParser`
 is closed: the two ExprSingle scanners now keep a nesting stack rather than
@@ -235,29 +236,29 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 26 failures
+## xslt 3.0 — 23 failures
 
-**XSLT 3.0: 11,492 / 11,518 = 99.77%.**
+**XSLT 3.0: 11,495 / 11,518 = 99.80%.**
 
 <!-- BEGIN GENERATED XTSE3430 BLOCK -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-**7 of the 26 want an `XTSE3430`** — a refusal of a stylesheet as
+**3 of the 23 want an `XTSE3430`** — a refusal of a stylesheet as
 <!-- END GENERATED XTSE3430 BLOCK -->
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles
 whether that is owed: a processor that does not stream "is not required to
-assess whether constructs are guaranteed-streamable". These are the largest
-block in this file and they are not defects. What the analysis covers and what
-it does not is under *The §19.8 streamability analysis* below.
+assess whether constructs are guaranteed-streamable". They are not defects.
+What the analysis covers and what it does not is under *The §19.8
+streamability analysis* below.
 
 The remaining **20** divide as follows. Several are divergences and are read in
-§2; what is genuinely open is read here. One case belonging to the block of 7
-is *also* read individually below — `su-ascent-903`, because its verdict is not
-the block's. The other six fail because the analysis is silent; that one
-fails because the analysis speaks and the test is wrong, so it is argued on its
-own terms rather than deferred with the rest. It is counted once, in the 7.
+§2; what is genuinely open is read here. The block of 3 is measured, not
+merely unmodelled: refusing `si-fork-902`/`-952` (`||`) costs 18 `sx-union`
+cases (+2/−18), and refusing `su-absorbing-205` costs 61 `si-copy` cases
+(+1/−61), because those cases expect stylesheets that XSLT 3.0's literal rules
+refuse to be accepted.
 
 ### Package composition — 4
 
@@ -285,6 +286,7 @@ own terms rather than deferred with the rest. It is counted once, in the 7.
 | `su-ascent-902` | **Fixed 2026-09-12 — the verdict below was wrong** | This row read *"Withheld — the rule contradicts the spec"*, on the premise that "no such precondition exists" and that §19.8.5 "adds nothing about cardinality". **That premise is false.** §19.8.5.3, .4, .5, .6 and .7 each carry the identical sentence — *"Rules for the function signature: If the declared type of the streaming parameter permits more than one node, the function is not guaranteed-streamable"* — and §19.8.5.2 (absorbing) is the single exception, "there are no constraints". The rule was simply unimplemented; `typePermitsNodes` already existed and nothing consulted it for this. Implemented now, and the case passes with `su-inspection-902` and `su-shallow-descent-906`, which share the description *"first arg accepts a sequence"*. Zero cases lost. **The tension the old verdict pointed at is real but sits inside the spec, not between the spec and the suite:** §19.8.5.7 states the rule and then gives a worked example that violates it (`<xsl:param name="input" as="element(para)*"/>`, of which it says "the function body meets the rules for this category" — the *body* does; the signature does not, and the example is silent about the rule three paragraphs above it). The W3C suite sides with the rule, so we do too; `TestStreamingParameterSignatureRule` asserts the example is refused, so the choice stays visible rather than becoming folklore. |
 | `sf-reverse-001` | **Not implementable** | Suite verdict for a streaming pipeline, wrong for a non-streaming one. The case runs `reverse(snapshot(/chapter)//section)/@id` under a streamable `xsl:source-document` and expects `1.3 1.2.2 1.2.1 1.2 1.1 1` — the reversed order. XPath 3.1 §3.3.1.1 says of `E1/E2`: when every evaluation of E2 returns nodes, "these sequences are combined, and duplicate nodes are eliminated based on node identity. The resulting node sequence is returned in document order" — however E1 was ordered; only `!` and `for` preserve it, and this engine returns `1 1.1 1.2 1.2.1 1.2.2 1.3`. The catalog's answer is what a *streaming* evaluator produces: §19.11 (An Optimization: Pattern-Based Scanning) says that an implementation "that literally followed the semantics of path expressions as defined in [XPath 3.0] would therefore require to sort the nodes into document order, and sorting is incompatible with streaming", so Saxon-EE 9.7/9.8 and Exselt, which both pass, never sort a streamed path. §19.8.8.7 (streamability of path expressions) prescribes no result order, and the changelog only "clarified that a striding expression ... can deliver a mix of streamed and unstreamed nodes and that the result is not necessarily in document order". QT3 has no `reverse(X)/step` order assertion in either direction. This engine answers `streamable="yes"` by building the tree, so the XPath rule is the only one that binds, and the sort at `xpath/eval.go` `evalStepOver` stays; `TestDocumentOrderAndDedup` pins `reverse(//book)/@id` to document order. The catalog's "see bug 24125" is about groundedness (why `reverse` of a `snapshot` is streamable at all), not order. The only route to this case is a streamed evaluator whose path results are emitted in arrival order, which is the *Streamed execution* item below, not a change to `/`. |
 | `accumulator-061` | **Costs more than it gains** | Read in §2. |
+| `accumulator-073` | **Withheld — the case contradicts §18.2.2** | Declares `<xsl:mode on-no-match="shallow-copy"/>` with no `use-accumulators`, copies from the initial match selection with `copy-accumulators="yes"`, and asserts the copied values. §18.2.2 makes the initial mode's list decide, "the default value is an empty list", and a copy is applicable "if and only if it is applicable to S" — so the read is `XTDE3362`. Saxon-HE 12.7 raises `XTDE3362` for the same shape, run locally (issue #16). See *known-gaps.md*, deliberate divergences. |
 | `evaluate-045` | **Fixed 2026-09-13** | The 510-document cost was a leak, not the rule. Read in §2. |
 | `streamable-116` | **Not implementable — the spec permits what we do, and the suite marks the case `_WRONG`** | Wants `XPDY0002`: a global variable `select="count(//*)"` reads the context item while the initial mode is streamable and the source is supplied `streaming="true"`, so the case expects the global context item to be *absent*. §3.6.6 says otherwise. Without an `xsl:global-context-item` declaration "the item supplied as the global context item cannot be a node in a streamed document (the transformation API may handle this either by disallowing such an input, **or by building the corresponding tree in memory and supplying the global context item as an unstreamed node**)". This engine builds every tree in memory, so it takes the second option the spec offers: `$size` evaluates and the transform succeeds. The error is reachable only by an API that withholds the global context item whenever the initial mode streams — a choice the spec leaves to the implementation, and one that would touch every global variable of every streamed-mode invocation. The catalog's own keywords carry `_WRONG:wrong-error-code`, the suite authors' mark that the expected code is disputed; and the error is dynamic, not a streamability verdict, so no §19.8 rule reaches it. |
 | `evaluate-048` | **Needs a network fetch** | Fails on `FODC0002: cannot retrieve "https://www.saxonica.com/welcome/welcome.xml": scheme "https" is not permitted`. Not reachable regardless. Its earlier half — `fn:function-lookup`'s dynamic visibility — was a separate reason; see *Corrections*. |
@@ -320,7 +322,7 @@ and tested on its own, in `xslt/streamlattice.go` and
 | 19.8.8.3 `if` expressions | complete |
 | 19.8.8.7 simple mapping (`!`) | complete |
 | 19.8.8.8 path expressions | complete, both phases, including the scanning-expression reassessment that makes `//x` streamable |
-| 19.8.8.9 axis steps | the posture table, the predicate rule, and the numeric-predicate rule that makes `descendant::section[1]` striding — decided for literals, arithmetic, ranges and the numeric built-ins, not for a variable reference such as the spec's `[$i+1]` |
+| 19.8.8.9 axis steps | the posture table, the predicate rule, and the numeric-predicate rule that makes `descendant::section[1]` striding — decided for literals, arithmetic, ranges, the numeric built-ins, and a reference to an `xsl:variable`/`xsl:param` whose `as` is numeric, such as the spec's `[$i+1]`; the focus-dependent calls are the `focusDependent` table's |
 | 19.8.8.10 filter expressions | the motionless-predicate clause and the numeric-predicate rule that makes `(//x)[3]` striding, with the same static-type limits as the axis-step rule; both rules are applied at the position each section gives them, ahead of the motionless-predicate rule |
 | 19.8.8.11 dynamic function calls | complete for a function variable: the base operand (inspection), absorption under a declared `map`/`array` type, per-parameter usage under a declared `function(A, B)`, navigation otherwise; a base expression that is not a variable reference takes the no-signature fallback |
 | 19.8.8.12 variable references | the grounded case, the streaming-parameter case, and a data-flow environment for the range variable of a quantified expression |
@@ -370,17 +372,6 @@ Still absent or partial:
   inference this analyzer does not do; that takes the no-signature fallback,
   navigation, which refuses a streamed argument. A variable bound inside the
   expression (`let`, `for`, a quantifier) is never looked up outside it.
-- **The numeric-predicate rules of §19.8.8.9 and §19.8.8.10, in part.** The
-  rules are implemented (`xslt/streamexprs.go`, `numericFocusFreePredicate`,
-  tested in `xslt/streamnumpred_test.go`), but "the static type of P is a
-  subtype of U{xs:decimal, xs:double, xs:float}" is decided only where it is
-  certain without a type environment: numeric literals, arithmetic and ranges
-  over them, `count`, `index-of`, `string-length`, `number`, and a filter on
-  any of those. A variable reference has no recorded type, so
-  `descendant::section[$i+1]` — one of the spec's own examples — falls back
-  to the ordinary predicate rule and stays crawling. A call on a function
-  outside the `fn` namespace is treated as focus-dependent for the same
-  reason. Each limit costs precision, never correctness.
 
 `let` expressions, §19.8.8.15 named function references and §19.8.8.16 inline
 function declarations were on this list and are now implemented, as are §19.8.8.4 union/intersect/except,
@@ -432,9 +423,9 @@ container at all.
 "the 43 instruction rules are the bulk" and stylesheet functions as unbuilt.
 Both are done: the instruction rules, all four intricate ones among them, and
 the §19.8.5 streaming-parameter signature rule. What remains is the short list
-above — dynamic calls, inline functions, `let`, and the variable-typed
-half of the numeric-predicate rules — plus the residue measured in the `XTSE3430` breakdown, currently
-**8 cases** that want the error and do not get it. That is a far smaller
+above plus the residue counted
+in the generated `XTSE3430` block above: the cases that want the error and do
+not get it. That is a far smaller
 remainder than "several times the work already done", which is what the
 previous wording claimed. It should still be taken construct family by
 construct family, each with the negative arm the existing tests establish as
@@ -509,7 +500,7 @@ outlived its own fix. The 1.0 `SFALSEREJECT` column is `particlesZ001` and
 
 ### All 61 are adjudicated case by case
 
-`tests/conformance/results.json` enumerates every one of the 30 and the 32, the
+`tests/conformance/results.json` enumerates every one of the 30 and the 31, the
 way it already enumerated XSLT 3.0, so the sum check covers XSD rather than
 stopping at a set-level summary. Each case is classified as exactly one of
 three things, and **none of the 61 is a genuine implementation gap**:
@@ -523,7 +514,7 @@ three things, and **none of the 61 is a genuine implementation gap**:
 Buckets (b) and (c) are both recorded as `deliberate-divergence` in
 `tests/conformance/results.json`, whose vocabulary is closed and has no separate
 token for the two; the JSON therefore tallies 2 `fixture` / 28
-`deliberate-divergence` on 1.0 and 3 / 29 on 1.1. The split between (b) and (c)
+`deliberate-divergence` on 1.0 and 2 / 29 on 1.1. The split between (b) and (c)
 is the prose distinction above: (b) is our own documented decision with the
 option named, (c) is an expectation the W3C has itself challenged.
 
@@ -533,7 +524,7 @@ adjudication and not a defect. `tests/xsdsuite/main.go` sets `Version`,
 `Resolver` and `ParseOptions{AllowDOCTYPE:true}`; it leaves `LaxUPA` off, which
 is the conforming strict reading of erratum E1-29, and leaves `XPathVersion` at
 XPath 2.0, which is what XSD 1.1 requires for assertions. **Neither option
-gates a single one of these 62 cases**: no case fails on a Unique Particle
+gates a single one of these 61 cases**: no case fails on a Unique Particle
 Attribution complaint, and no assertion or conditional-type-alternative case
 disagrees at all. That bucket is empty, and it is recorded as empty rather than
 filled with a citation the evidence does not support.
@@ -624,6 +615,11 @@ the argument to `count((author | editor))` is **crawling and consuming**. Two
 sibling child name tests are exactly the shape it exempted. It was reverted.
 
 ## Two streamability cases that need data-flow analysis
+
+**Both now pass, and neither needed it.** They came free in `ab89b76`, when
+§19.8.9.3 (`fn:current`) was modelled: a `current()` call the analysis could
+not model used to abandon the whole enclosing construct. See *Corrections* in
+[known-gaps.md](known-gaps.md). The diagnosis below is the one recorded before.
 
 **Diagnosed, not fixable syntactically.** `si-iterate-035` and `si-iterate-904`
 both want `XTSE3430` for a streamed node reaching a place it may not, and in
@@ -1200,7 +1196,8 @@ excluded by *declared dependency*, not by failure.
 | 12 | `package_version_resolution` — unmodelled |
 | 12 | `additional_normalization_form` — unmodelled |
 | 7 | `maximum_number_of_decimal_digits` — unmodelled |
-| **3,030** | **listed above; the remaining 46 are single-case reasons** |
+| 7 | `streaming-fallback` — deliberately not claimed; see *Corrections* |
+| **3,037** | **listed above; the remaining 46 are single-case reasons** |
 
 Counting these as failures would understate the engine; counting them as passes
 would overstate it. They are reported separately for that reason.

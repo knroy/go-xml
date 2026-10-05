@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
@@ -68,6 +69,12 @@ type staticPhase struct {
 	// re-evaluating its use-when expressions would not, since the second
 	// evaluation would see static variables the first could not.
 	done map[*xdm.Node]bool
+	// now is the clock every static expression reads. 9.7 makes the current
+	// dateTime implementation-defined there and evaluates all static
+	// expressions "in a single execution scope", so it is read once, on
+	// first use; without one, a static variable selecting current-dateTime()
+	// was FODC0001 (fn-transform-26, -27).
+	now time.Time
 }
 
 // runStaticPhase performs conditional element inclusion and static variable
@@ -780,6 +787,20 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 	if processorAtLeast30() {
 		staticRT = p.staticRuntime()
 		registerTransformFunc(lib, staticRT)
+	} else {
+		// A 2.0 processor runs no nested transformation. Left to the xpath
+		// stub, the call would reach the processor this package's init
+		// registers, which compiles under the compileMu this Compile already
+		// holds -- a deadlock -- so the stub's FOXT0004 is given here instead.
+		lib.Add(xpath.Function{
+			Name:  xdm.QName{URI: xdm.NSFN, Local: "transform"},
+			Arity: 1,
+			Since: xpath.XPath31,
+			Call: func(*xpath.Context, []xdm.Sequence) (xdm.Sequence, error) {
+				return nil, xdm.Errorf("FOXT0004",
+					"fn:transform: this implementation does not support the requested transformation")
+			},
+		})
 	}
 	ctx := xpath.NewContext(nil, lib)
 	if staticRT != nil {
@@ -812,6 +833,10 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 		ctx.RegexVersion = xpath.XPath31
 	}
 	ctx.StaticBaseURI = el.BaseURI
+	if p.now.IsZero() {
+		p.now = time.Now()
+	}
+	ctx = ctx.WithNow(p.now)
 	// Whether a static expression can read a document follows the PROCESSOR
 	// version, and the two specifications say opposite things about it.
 	//

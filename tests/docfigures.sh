@@ -11,7 +11,7 @@
 #
 # This script does not anchor on line numbers, which move. It anchors on the
 # one number in each figure that does NOT move between runs: the in-scope
-# denominator (11,518 for XSLT 3.0, 30,346 for XQuery, ...). Every line in the
+# denominator (11,518 for XSLT 3.0, 30,517 for XQuery, ...). Every line in the
 # documentation that names a denominator is examined, and the passing count,
 # failure count and percentage written beside it must agree with the ratchet.
 # The forms recognised are the ones the documents actually use:
@@ -32,14 +32,14 @@ RATCHET="$ROOT/tests/ratchet.txt"
 # ratchet mark | in-scope denominator | label
 #
 # The three XPath versions each carry their own denominator, because they are
-# three different scopings of one catalog (15,217 / 19,362 / 21,898 cases in
+# three different scopings of one catalog (15,217 / 19,362 / 22,054 cases in
 # scope) and no single row can check all three. They were outside this table
 # entirely until the marks existed to check them against.
 TABLE='
 TestQT3XPath20  15217 XPath-2.0
 TestQT3XPath30  19362 XPath-3.0
-TestQT3XPath31  21898 XPath-3.1
-TestQT3XQuery   30346 XQuery-3.1
+TestQT3XPath31  22054 XPath-3.1
+TestQT3XQuery   30517 XQuery-3.1
 TestXSLT30Suite 11518 XSLT-3.0
 TestXSLTSuite   6201  XSLT-2.0
 XSD10           39388 XSD-1.0
@@ -135,15 +135,16 @@ done
 # the point: agreement between them means results.json was re-measured, not
 # merely re-typed.
 #
-# The sum is over the suites that can move: XQuery, XSLT 2.0, XSLT 3.0, XSD 1.0
-# and XSD 1.1. RELAX NG is not in TABLE at all, and the three XPath rows are in
-# TABLE but deliberately not in this sum: they are at 100.00%, so they
+# The sum is over the suites that can move: XPath 3.1, XQuery, XSLT 2.0, XSLT
+# 3.0, XSD 1.0 and XSD 1.1. RELAX NG is not in TABLE at all, and the XPath 2.0
+# and 3.0 rows are in TABLE but deliberately not in this sum: they are at
+# 100.00%, so they
 # contribute zero failures, and adding a zero to the total would only create a
 # second place for the XPath denominators to be written down. The XSD
 # schema/instance split rows are components of XSD10/XSD11 and must not be
 # added twice.
 want_total=0
-for key_denom in 'TestQT3XQuery 30346' 'TestXSLT30Suite 11518' 'TestXSLTSuite 6201' 'XSD10 39388' 'XSD11 41598'; do
+for key_denom in 'TestQT3XPath31 22054' 'TestQT3XQuery 30517' 'TestXSLT30Suite 11518' 'TestXSLTSuite 6201' 'XSD10 39388' 'XSD11 41598'; do
 	key=${key_denom% *}
 	denom=${key_denom#* }
 	pass=$(sed -n "s/^$key \([0-9]*\)$/\1/p" "$RATCHET" | head -1)

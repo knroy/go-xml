@@ -287,10 +287,15 @@ func (a *analyzer) letExpr(x *xpath.LetExpr) props {
 	if len(x.Bindings) > 1 {
 		ret = &xpath.LetExpr{Bindings: x.Bindings[1:], Return: x.Return}
 	}
-	return combine([]operand{
+	// The variable is recorded as grounded, which is what §19.8.8.12 gives
+	// it anyway, so that a declared variable it shadows is not consulted.
+	inner := a.withVar(x.Bindings[0].Var, groundedMotionless)
+	p := combine([]operand{
 		seq,
-		a.operandOf(ret, usageTransmission),
+		inner.operandOf(ret, usageTransmission),
 	}, false)
+	a.known = a.known && inner.known
+	return p
 }
 
 func (a *analyzer) forExpr(x *xpath.ForExpr) props {
@@ -302,10 +307,14 @@ func (a *analyzer) forExpr(x *xpath.ForExpr) props {
 	if len(x.Bindings) > 1 {
 		ret = &xpath.ForExpr{Bindings: x.Bindings[1:], Return: x.Return}
 	}
-	return combine([]operand{
+	// Recorded as grounded for the reason letExpr gives.
+	inner := a.withVar(x.Bindings[0].Var, groundedMotionless)
+	p := combine([]operand{
 		seq,
-		a.higherOrderOperand(ret, usageTransmission),
+		inner.higherOrderOperand(ret, usageTransmission),
 	}, false)
+	a.known = a.known && inner.known
+	return p
 }
 
 // quantifiedExpr applies §19.8.8.2 to "some|every $v in S satisfies C".
@@ -365,13 +374,10 @@ func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 	if !seq.props.streamable() {
 		return roamingFreeRanging
 	}
-	// A grounded binding leaves the environment alone: §19.8.8.12's plain
-	// answer is already right for it, and recording it would only add an
-	// entry that says the same thing.
-	inner := a
-	if seq.props.posture != postureGrounded {
-		inner = a.withVar(x.Bindings[0].Var, seq.props)
-	}
+	// A grounded binding is recorded too: its entry gives §19.8.8.12's plain
+	// answer, and it is what tells staticallyNumeric and dynamicCallUsages
+	// that the name no longer refers to a declared xsl:variable or xsl:param.
+	inner := a.withVar(x.Bindings[0].Var, seq.props)
 	op := inner.higherOrderOperand(test, usageInspection)
 	a.known = a.known && inner.known
 	p := combine([]operand{seq, op}, false)
@@ -791,8 +797,8 @@ func declaresVar(d *xdm.Node, name xdm.QName) bool {
 // narrowing and nothing else, because the caller falls through to the
 // ordinary predicate rule, whereas a wrong true would accept a stylesheet the
 // specification makes roaming.
-func numericFocusFreePredicate(p xpath.Expr) bool {
-	return staticallyNumeric(p) && focusFree(p)
+func (a *analyzer) numericFocusFreePredicate(p xpath.Expr) bool {
+	return a.staticallyNumeric(p) && focusFree(p)
 }
 
 // staticallyNumeric reports whether the static type of e is certainly numeric.
@@ -800,22 +806,25 @@ func numericFocusFreePredicate(p xpath.Expr) bool {
 // What it decides: numeric literals; unary and binary arithmetic on numeric
 // operands; "to", whose result is xs:integer* whatever its operands; the
 // built-in functions whose result type is numeric at every arity; and a
-// filter expression on any of those, which keeps its base's item type. A
-// variable reference is never decided, because the analysis carries no
-// variable types -- so the specification's own "descendant::section[$i+1]"
-// is left to the ordinary predicate rule, at the price of precision only.
-func staticallyNumeric(e xpath.Expr) bool {
+// filter expression on any of those, which keeps its base's item type; and a
+// reference to an xsl:variable or xsl:param whose "as" names a numeric atomic
+// type or xs:numeric, which admits the specification's own
+// "descendant::section[$i+1]". The static type of such a reference is its
+// declared type, and the mapping to U-types (§19.1) ignores the occurrence
+// indicator, so xs:integer* qualifies as xs:integer does. A variable bound
+// inside the expression, or declared without "as", is not decided.
+func (a *analyzer) staticallyNumeric(e xpath.Expr) bool {
 	switch x := e.(type) {
 	case *xpath.Literal:
 		return x.Val != nil && x.Val.Type.IsNumeric()
 	case *xpath.UnaryOp:
-		return staticallyNumeric(x.Operand)
+		return a.staticallyNumeric(x.Operand)
 	case *xpath.BinaryOp:
 		switch x.Op {
 		case "to":
 			return true
 		case "+", "-", "*", "div", "idiv", "mod":
-			return staticallyNumeric(x.Left) && staticallyNumeric(x.Right)
+			return a.staticallyNumeric(x.Left) && a.staticallyNumeric(x.Right)
 		}
 		return false
 	case *xpath.FuncCall:
@@ -828,7 +837,18 @@ func staticallyNumeric(e xpath.Expr) bool {
 		}
 		return false
 	case *xpath.FilterExpr:
-		return staticallyNumeric(x.Base)
+		return a.staticallyNumeric(x.Base)
+	case *xpath.VarRef:
+		if _, bound := a.vars[x.Name]; bound || a.decl == nil {
+			return false
+		}
+		as, ok := declaredTypeOf(a.decl, x.Name)
+		if !ok {
+			return false
+		}
+		st, err := xpath.ParseSequenceType(as, nil)
+		return err == nil && !st.Empty &&
+			(st.IsNumericType || st.HasAtomicType && st.AtomicType.IsNumeric())
 	}
 	return false
 }
@@ -893,23 +913,10 @@ func allFocusFree(es []xpath.Expr) bool {
 }
 
 // focusDependentCall reports whether a call is on a focus-dependent function,
-// for the arity written. Only the fn namespace is classified; a call on
-// anything else -- an xsl:function, an extension, a constructor -- is treated
-// as focus-dependent, because nothing here records that it is not.
+// for the arity written, by the focusDependent table (streamfocus.go). Only
+// the fn namespace is classified here; a call on anything else -- an
+// xsl:function, an extension, a constructor -- is treated as focus-dependent,
+// because nothing here records that it is not.
 func focusDependentCall(x *xpath.FuncCall) bool {
-	if x.Name.URI != fnNS {
-		return true
-	}
-	switch x.Name.Local {
-	case "position", "last":
-		return true
-	case "name", "local-name", "namespace-uri", "string", "data", "number",
-		"string-length", "normalize-space", "root", "base-uri",
-		"document-uri", "path", "has-children", "generate-id", "node-name",
-		"nilled":
-		return len(x.Args) == 0
-	case "lang", "id", "idref", "element-with-id":
-		return len(x.Args) == 1
-	}
-	return false
+	return x.Name.URI != fnNS || focusDependent[keyOf(x.Name, len(x.Args))]
 }

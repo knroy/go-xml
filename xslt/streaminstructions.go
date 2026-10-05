@@ -928,8 +928,8 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 
 	default:
 		// xsl:where-populated, xsl:on-empty, xsl:on-non-empty and the
-		// declarations. Each needs a rule not written here; see the coverage
-		// note in docs/conformance-gaps.md.
+		// declarations. Each needs a rule not written here; the first three
+		// are recorded in docs/known-gaps.md.
 		return a.unknown()
 	}
 }

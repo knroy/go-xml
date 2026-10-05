@@ -20,14 +20,14 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,416 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,545 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
-| **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
-| **Real-world stylesheets** | 802 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
+| **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
+| **Real-world stylesheets** | 803 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
 | **Production schema sets** | 65 + CII | what modular published schemas do | industries whose schemas are shaped differently |
 | **Vendored real-world schemas** | 185 of 230 | a schema-validity rule that has become stricter than the spec, on every checkout — no licensed corpus needed | the deep industry vocabularies only UBL and CII carry |
-| **Fuzzing** | 11 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
+| **Fuzzing** | 12 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
 | **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no interleaved choices |
 | **Wildcard/UPA model** | 60,000 pairs | a *wrong answer* in wildcard acceptance or in the UPA competition rule | anything outside a single wildcard against a single name, or a pair of terms in one choice |
 | **The ratchet** | 16 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
@@ -44,10 +44,10 @@ figures* section, which fails the gate when this table drifts from the tree:
   `grep -hc "^func Test" ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'`
 * **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
 * **W3C conformance suites** — the sum of the in-scope totals in the status
-  table: XPath 2.0 15,222 + XQuery 3.1 29,964 + XSLT 2.0 6,201 + XSLT 3.0 11,518
-  + XSD 1.0 39,388 + XSD 1.1 41,598 + RELAX NG 965. XPath 3.0 and 3.1 are not
-  added again — the QT3 catalog is one corpus measured at three versions, and
-  the 2.0 figure is the whole of it that this engine claims. An earlier
+  table: XPath 3.1 22,054 + XQuery 3.1 30,517 + XSLT 2.0 6,201 + XSLT 3.0 11,518
+  + XSD 1.0 39,388 + XSD 1.1 41,598 + RELAX NG 965. XPath 2.0 and 3.0 are not
+  added again — the QT3 catalog is one corpus measured at three XPath versions,
+  and the 3.1 lane is the widest of them. An earlier
   revision said "~128,000", which no grouping of these numbers reaches.
 
 **The suites are the weakest of these where it counts most.** Every one of
@@ -433,6 +433,37 @@ documentation schemas, thinner exactly where those corpora are thick. It
 catches an over-strict rule that breaks *any* real schema; it does not catch
 one that breaks only commercial vocabularies.
 
+### Tokeniser differential
+
+`internal/xmltok` is this library's own tokeniser. It replaced
+`internal/xmlfork`, a fork of `encoding/xml` that had to be re-applied by hand
+on every Go release, and the switch was gated by a differential:
+`TestTokenDifferential` tokenised every file in every corpus above, plus
+`testdata/c14n` and `tests/c14n/testdata`, with both decoders configured as
+`xdm` configures its own, a second time with each DOCTYPE's internal general
+entities installed, and compared every token byte for byte, `InputOffset` and
+`IsVersion11` before every token, and how each stream ended.
+
+On 2026-10-01 it read 59,984 files with **zero differences**, the 175 that
+both reject rejected at the same token with the same message; a perturbation
+of each compared property was reported, so the harness could fail. The
+harness compared against the fork and went with it; it is in the history in
+the commit that added `internal/xmltok`. xmltok reproduces the fork's
+observable behaviour, quirks included — each is marked `parity:` in the
+source — so a conformance change to the tokeniser is now a deliberate, tested
+edit rather than a side effect of a Go upgrade.
+
+Six have since been made, against the W3C XML Conformance Test Suite
+(`xmlts20130923`, run through `xdm.Parse` beside `xmllint`): white space is
+required between attributes (§3.1 [40]/[44]) and after a PI target (§2.6
+[16]); comment and PI bodies are checked against [2] `Char` (§2.5 [15], §2.6
+[16]); a version `1.x` other than `1.1` is read as 1.0 (§2.8, Fifth Edition);
+and `Decoder.Literal` lets `xdm` refuse character data outside the document
+element that came from a reference or a CDATA section (§2.1 [1], [27] `Misc`),
+which `&#32;` or `<![CDATA[]]>` did not reveal by its text. None of them
+changed a result in the corpora above. The kept leniencies are listed in
+[known-gaps.md](known-gaps.md#the-tokeniser-keeps-six-leniencies).
+
 ---
 
 ## The ratchet
@@ -441,13 +472,13 @@ one that breaks only commercial vocabularies.
 seen. `check.sh` fails when a count goes **down**.
 
 ```
-DocBook 577
+DocBook 578
 RelaxNGSpectest 965
 TestQT3XPath20 15217
 TestQT3XPath30 19362
-TestQT3XPath31 21898
-TestQT3XQuery 30345
-TestXSLT30Suite 11492
+TestQT3XPath31 22054
+TestQT3XQuery 30516
+TestXSLT30Suite 11495
 TestXSLTSuite 6193
 VendoredSchemas 185
 XSD10 39358
@@ -536,9 +567,9 @@ reads `tests/ratchet.txt` and examines every documentation line that names a
 suite's **in-scope denominator** -- the one number in a figure that does not
 move between runs (11,518 for XSLT 3.0, 30,346 for XQuery, and so on). The
 passing count, failure count and percentage written beside it must equal the
-ratchet's, in every form the documents use: `11,492 of 11,518`,
-`26 of 11,518`, `11,492 / 11,518 (99.77%)`, `= 99.77%`, `(26 failing)`, and
-the `| 11,518 | 11,492 | 99.77% | **26** |` summary-table row. A line stating
+ratchet's, in every form the documents use: `11,495 of 11,518`,
+`23 of 11,518`, `11,495 / 11,518 (99.80%)`, `= 99.80%`, `(23 failing)`, and
+the `| 11,518 | 11,495 | 99.80% | **23** |` summary-table row. A line stating
 two figures is read as two claims. Failures name the file, line and the value
 wanted.
 
@@ -567,7 +598,7 @@ The three XPath figures are in that table too, one row each:
 ```
 TestQT3XPath20  15217 XPath-2.0
 TestQT3XPath30  19362 XPath-3.0
-TestQT3XPath31  21898 XPath-3.1
+TestQT3XPath31  22054 XPath-3.1
 ```
 
 They need a row each because the three are three different scopings of one
@@ -909,22 +940,22 @@ Twelve targets, using Go's native `testing.F` and no framework:
 | `FuzzCompileStylesheetNoPanic` | `xslt` | `Compile` never panics and never returns a stylesheet beside an error |
 | `FuzzCompileNoPanic` | `xpath` | the expression compiler never panics, and every parse error carries a spec code |
 | `FuzzParseCompactNoPanic` | `relaxng` | the compact-syntax parser never panics |
-| `FuzzTokenNoPanic` | `internal/xmlfork` | the forked tokeniser never panics and terminates on any byte string |
+| `FuzzRawTokenNoPanic` | `internal/xmltok` | the tokeniser never panics and terminates on any byte string |
 | `FuzzCanonicalizeNoPanic` | `c14n` | parse then canonicalize never panics or hangs; a parsed document is refused only for depth, a relative namespace URI or XML 1.1; inclusive canonical forms re-canonicalize unchanged; `FromXPathFilter(doc, "true()")` reproduces the whole document exactly, and filters that split namespace axes canonicalize |
 | `FuzzCompileNoPanic` | `xquery` | `xquery.Compile` never panics, and no compile of a 400-byte input allocates more than 64 MiB |
 | `FuzzConstructorDepthIsBounded` | `xquery` | a query nested past the constructor-depth bound is refused, and one inside it compiles |
 
 Most targets live in `zz_fuzz_test.go` in the package they exercise; the `zz_`
 prefix is only to sort it last. Four sit beside the code they cover instead,
-in `internal/xmlfork/fuzz_test.go`, `relaxng/compact_fuzz_test.go`,
+in `internal/xmltok/xmltok_test.go`, `relaxng/compact_fuzz_test.go`,
 `xsd/complexity_fuzz_test.go` and `c14n/fuzz_test.go`.
 
 The nightly workflow runs ten of the twelve. The two `xquery` targets are left
-out on purpose: `FuzzCompileNoPanic` rediscovers three known, still-open
-faults within about a minute each: two in the prolog scanner, and a range such
-as `0 to 700000` folded at compile time into 213 MB (its doc comment names
-them), so a nightly run would fail every night on bugs already
-recorded. Run them by hand while working on `xquery`.
+out on purpose: `FuzzCompileNoPanic` rediscovers a known, still-open fault
+within seconds: a range such as `0 to 700000` folded at compile time into
+213 MB (its doc comment names it; the two prolog-scanner faults it found
+beside it were fixed on 2026-09-13, see [security.md](security.md)), so a
+nightly run would fail every night on a bug already recorded. Run them by hand while working on `xquery`.
 
 ```sh
 # Run one target's search. -run '^$' suppresses the ordinary tests so that
@@ -970,7 +1001,7 @@ is committed there and replays as a seed thereafter.
 The tests are in two places. `c14n/` holds the unit, adversarial, fuzz and
 benchmark tests, whose inputs are written inline. `tests/c14n/` holds the
 conformance harnesses — the Recommendations' worked examples, the `xmllint`
-differential and the W3C interop cases — with the corpus they read in
+differential, the W3C interop cases and the Merlin signatures — with the corpus they read in
 `tests/c14n/testdata/`, beside the other suite harnesses rather than inside
 the library package. The interop cases are a small download, which
 `tests/fetch-c14n.sh` fetches into `testdata/c14n/`:
@@ -992,6 +1023,17 @@ that does not match its digest fails the fetch. The test skips when the files
 are absent; `GOXML_C14N_W3C=1` makes absence a failure, and `tests/check.sh`
 (which runs the fetch itself) and CI both set it. The same script fetches the
 three Recommendations into `testdata/c14n/specs/` for reference.
+
+**The Merlin interop signatures.** `TestMerlinC14NThree` and
+`TestMerlinExcC14NOne` follow every `ds:Reference` of two Baltimore signatures
+from the XML-DSig interop round (Merlin Hughes, 2002) through its transforms
+and check the canonical octets against the `c14n-N.txt` Baltimore published
+and their SHA-1 against the signed `DigestValue`: 27 references in
+`merlin-c14n-three`, whose XPath filters keep some of an element's namespace
+nodes and drop others, and 4 in `merlin-exc-c14n-one`. Baltimore's
+implementation is independent of this package and of libxml2. The files are
+small and vendored verbatim, with a `PROVENANCE` file each, under
+`tests/c14n/testdata/merlin-*`; they never skip.
 
 **Golden files.** Canonical outputs are compared byte for byte against files
 in `tests/c14n/testdata/`, which is tracked (unlike the top-level `testdata/`) and
@@ -1026,7 +1068,9 @@ byte for byte with this package's output for the same node set. It covers the
 with the signature mid-document), XPath filter transforms over the
 Recommendations' subset examples and the W3C interop inputs, five inputs
 whose filters split namespace axes (`FromXPathFilter`, a `NamespaceSet`), and
-Exclusive C14N with an `InclusiveNamespaces` PrefixList. It skips without `xmlsec1` on
+Exclusive C14N with an `InclusiveNamespaces` PrefixList (every declared
+prefix, and a prefix bound nowhere alone, after `#default` and after one
+declared prefix; naming it must not change this package's output). It skips without `xmlsec1` on
 the `PATH`; `GOXML_C14N_XMLSEC1=1` makes that a failure, and CI sets it on
 Linux, where it installs `xmlsec1` from apt. Without a local `xmlsec1`, a
 script runs it in a Debian container and needs only Docker:
@@ -1039,7 +1083,8 @@ tests/c14n-xmlsec1.sh bench   # and the throughput comparison (about a minute)
 Where `xmlsec1` is known to differ, the case is listed in
 `xmlsec1Differences` in `tests/c14n/xmlsec1_test.go` with its reason, and
 [c14n.md](c14n.md#where-xmlsec1-differs) states each one. An entry derives the
-exact octets `xmlsec1` produces (or names the error it stops with), so it
+exact octets `xmlsec1` produces for each reference, algorithm and PrefixList
+included (or names the error it stops with), so it
 fails both when `xmlsec1` changes and when it starts agreeing. Any other
 difference is a failure. An entry needs a reason grounded in a Recommendation;
 one is never added to make the test pass.
@@ -1132,7 +1177,7 @@ same admission from the other side — it cannot run the case under the conditio
 the case asked for.
 
 Folding those 134 into the denominator as failures is a defensible alternative
-reading, and it gives 11,492 of 11,652, or 98.63%. It is **not** the figure this
+reading, and it gives 11,495 of 11,652, or 98.65%. It is **not** the figure this
 repository publishes, for the same reason the other skips are not: an
 unmodelled dependency is not a measured disagreement with the specification, and
 scoring it as one would put a number on cases that were never run. The published
@@ -1465,6 +1510,8 @@ tidy default. `regexp` learned the Unicode category `Cn` (unassigned) in 1.25;
 on 1.24 the pattern `^(?:\p{Cn}*)$` fails to compile, and `re00175` raises
 FORX0002 where it should match. The cost of building on 1.24 is four cases:
 XPath 3.0 and 3.1 fall off 100%, XQuery loses one, and XSD 1.0 loses two.
+Independently of that, `golang.org/x/text` v0.35 and later declare
+`go 1.25.0`, so the pinned dependency sets the same floor.
 
 That was found the hard way. The floor was lowered to 1.24 on the reasoning
 that nothing in the code imports anything newer — true, and irrelevant, because

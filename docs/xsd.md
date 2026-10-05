@@ -652,11 +652,9 @@ the test applies to every processor**. Comparing the attribute for equality
 with `"1.1"` restricted the 1.1 run to the explicitly-marked groups: 888 schema
 tests instead of 15,365.
 
-The dominant remaining gap is schema false-accepts — Schema Component
-Constraints not yet enforced — across facet consistency, regular-expression
-syntax, particles and model groups, complex-type derivation and identity
-constraints. Instance false-rejects and false-accepts together are in the low
-hundreds.
+What remains is seven schema-validity disagreements (three under 1.0, four
+under 1.1) and 32 instance disagreements (27 under 1.0, five under 1.1), which
+are read in [conformance-gaps.md](conformance-gaps.md).
 
 Some disagreements are suite defects rather than bugs here: `anyURI_a004` is
 marked `status="queried"` against an open W3C bug, and its own group annotation
@@ -668,9 +666,8 @@ most of those are correct behaviour rather than gaps: five use 1.1 constructs
 under 1.0 and are *meant* to fail; two need a DOCTYPE, refused by default; and
 several name a document that is deliberately absent. The `XmlVersions` group is
 not among them — those schemas carry `version="1.1"` and every one of them
-parses and loads, because the parser accepts the declaration and then applies
-XML 1.0 rules. They are measured, but what they measure is not what they
-test.
+parses and loads, and the parser reads each under XML 1.1's own character and
+line-end rules, so what they measure is what they test.
 
 Beyond the suite, the validator is run against production schema sets — UBL
 2.1, UN/CEFACT CII, Peppol BIS Billing 3.0, Factur-X/ZUGFeRD. Those found bugs

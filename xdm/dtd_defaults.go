@@ -3,7 +3,7 @@ package xdm
 import (
 	"strings"
 
-	xml "github.com/knroy/go-xml/internal/xmlfork"
+	xml "github.com/knroy/go-xml/internal/xmltok"
 )
 
 // attDeclaredType is one attribute whose ATTLIST declaration gives it a type
@@ -54,6 +54,10 @@ func parseAttListDefaults(subset string) []attDefault {
 func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 	var out []attDefault
 	var types []attDeclaredType
+	// XML 1.0 §3.3: when an attribute is declared more than once, the first
+	// declaration is binding and later ones are ignored. The subset arrives
+	// internal part first, so first in the text is first in the DTD.
+	seen := map[string]bool{}
 	for {
 		i := strings.Index(subset, "<!ATTLIST")
 		if i < 0 {
@@ -79,6 +83,7 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 		for i := 1; i+1 < len(fields); {
 			name, decl := fields[i], fields[i+1]
 			i += 2
+			key, nOut, nTypes := element+" "+name, len(out), len(types)
 			switch {
 			case decl == "CDATA", decl == "#REQUIRED", decl == "#IMPLIED", decl == "#FIXED",
 				strings.HasPrefix(decl, `"`), strings.HasPrefix(decl, `'`):
@@ -119,6 +124,10 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 					}
 				}
 			}
+			if seen[key] {
+				out, types = out[:nOut], types[:nTypes]
+			}
+			seen[key] = true
 		}
 	}
 }

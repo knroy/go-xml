@@ -277,18 +277,18 @@ import module namespace b="http://x/pp2"; 1`,
 	}
 }
 
-// TestModuleSelfImport is XQST0073: a module that imports itself. This is the
-// one cycle that is an error at every version, because it is not mutual
-// recursion — the module's own declarations would be contributed to it twice.
+// TestModuleSelfImport: a module importing its own target namespace is legal.
+// XQuery 3.1 §4.12 says so in as many words, and fn-load-xquery-module-029
+// asserts the module's variable comes back.
 func TestModuleSelfImport(t *testing.T) {
 	self := xquery.Module{Namespace: "http://x/self",
 		Source: `module namespace s="http://x/self";
 import module namespace s2="http://x/self";
 declare variable $s:v := 1;`}
-	_, err := run(t, `import module namespace s="http://x/self"; $s:v`,
+	got, err := run(t, `import module namespace s="http://x/self"; $s:v`,
 		xquery.Options{Modules: []xquery.Module{self}})
-	if err == nil || !strings.Contains(err.Error(), "XQST0073") {
-		t.Errorf("want XQST0073 for a module importing itself, got %v", err)
+	if err != nil || got != "1" {
+		t.Errorf("a module importing itself: got %q, %v; want 1", got, err)
 	}
 }
 
