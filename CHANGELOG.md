@@ -4,6 +4,14 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+### Fixed — engine
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `html` and `xhtml` output was never indented by default (#17) | XSLT 3.0 §26 defaults `indent` to `yes` for both methods, including when an `<html>` root selects the method. A stylesheet's unstated `indent` now follows the method; XQuery's default stays `no`. | |
+
 ## v1.5.0 — 2026-10-04
 
 ### Added

@@ -109,6 +109,12 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		opts.Method = defaultMethod(seq, opts.Version10Implicit)
 		s.opts.Method = opts.Method
 	}
+	if opts.indentByMethod {
+		switch strings.ToLower(opts.Method) {
+		case "html", "xhtml":
+			opts.Indent, s.opts.Indent = true, true
+		}
+	}
 
 	// The json and adaptive methods do not serialise item by item and do not
 	// go through sequence normalisation at all: json renders the whole result

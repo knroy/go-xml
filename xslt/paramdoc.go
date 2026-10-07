@@ -187,6 +187,7 @@ func SetSerializationParam(o *OutputSettings, name, val string) error {
 		o.Method = strings.TrimSpace(val)
 	case "indent":
 		o.Indent = yes(val)
+		o.indentByMethod = false
 	case "encoding":
 		o.Encoding = val
 	case "media-type":
