@@ -61,7 +61,7 @@ var specs = map[string]elementSpec{
 	"data":        {attrs: []string{"type"}, required: []string{"type"}, maxPatterns: -1, maxExcept: 1},
 	"externalRef": {attrs: []string{"href"}, required: []string{"href"}, maxPatterns: 0},
 	"grammar":     {maxPatterns: -1},
-	"start":       {attrs: []string{"combine"}, minPatterns: 1, maxPatterns: -1},
+	"start":       {attrs: []string{"combine"}, minPatterns: 1, maxPatterns: 1},
 	"define":      {attrs: []string{"name", "combine"}, required: []string{"name"}, minPatterns: 1, maxPatterns: -1},
 	"include":     {attrs: []string{"href"}, required: []string{"href"}, maxPatterns: -1},
 	"div":         {maxPatterns: -1},

@@ -528,6 +528,20 @@ func TestGrammarHoldsOnlyDefinitions(t *testing.T) {
 		`<element`+rngNS+` name="foo"><div><empty/></div></element>`)
 }
 
+// Shapes the section 3 grammar does not produce, each refused.
+func TestFullSyntaxShapes(t *testing.T) {
+	for _, c := range []struct{ name, want, src string }{
+		{"start with two patterns", "at most 1",
+			`<grammar` + rngNS + `><start><element name="a"><empty/></element>
+				<element name="b"><empty/></element></start></grammar>`},
+	} {
+		_, err := compileSrc(t, c.src)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want an error containing %q", c.name, err, c.want)
+		}
+	}
+}
+
 // A reference that names nothing is an error wherever it stands, including in
 // a definition nothing refers to.
 func TestUnresolvedRefsAreFound(t *testing.T) {
