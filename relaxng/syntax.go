@@ -95,11 +95,12 @@ func checkGrammarChildren(n *xdm.Node) error {
 	switch scope {
 	case "grammar", "include":
 	case "div":
-		// A <div> groups whatever its parent groups. Inside a grammar it
-		// holds definitions; written where a pattern belongs it holds
-		// patterns, and the grammar rule does not apply to it.
+		// §3 has <div> only in grammarContent and includeContent; it is not
+		// a pattern, so one written where a pattern belongs is refused.
 		if scope = divScope(n); scope == "" {
-			return nil
+			return fmt.Errorf(
+				"relaxng: <div> belongs in a <grammar> or <include>, not " +
+					"where a pattern does (section 3)")
 		}
 	default:
 		return nil

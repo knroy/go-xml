@@ -586,9 +586,7 @@ func (c *compiler) compilePattern(n *xdm.Node) (pattern, error) {
 		}
 		return attributePat{Name: nc, Pattern: body}, nil
 
-	case "group", "div":
-		// <div> groups for documentation and has no effect on the grammar,
-		// so as a pattern it is simply its children.
+	case "group":
 		return c.compileChildren(n)
 
 	case "interleave":

@@ -522,10 +522,6 @@ func TestGrammarHoldsOnlyDefinitions(t *testing.T) {
 			<element name="foo"><empty/></element>
 			<start><element name="foo"><empty/></element></start></grammar>`)
 
-	// A <div> outside a grammar groups patterns, so the rule does not reach
-	// it.
-	mustAccept(t, "div grouping patterns",
-		`<element`+rngNS+` name="foo"><div><empty/></div></element>`)
 }
 
 // Shapes the section 3 grammar does not produce, each refused.
@@ -544,6 +540,8 @@ func TestFullSyntaxShapes(t *testing.T) {
 		{"include holding an include", "an <include> takes only",
 			`<grammar` + rngNS + `><include href="x.rng"><div><include href="y.rng"/></div></include>
 				<start><element name="a"><empty/></element></start></grammar>`},
+		{"div where a pattern belongs", "<div> belongs in",
+			`<element` + rngNS + ` name="foo"><div><empty/></div></element>`},
 	} {
 		_, err := compileSrc(t, c.src)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
