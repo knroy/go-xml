@@ -37,14 +37,22 @@ and depending on these files is an explicit choice. See [NOTICE](NOTICE).
 
 ## What is bundled
 
-| File | Namespace |
-|---|---|
-| `schemas/XMLSchema.xsd` | `http://www.w3.org/2001/XMLSchema` (XSD 1.1 schema for schemas) |
-| `schemas/xml.xsd` | `http://www.w3.org/XML/1998/namespace` (`xml:lang`, `xml:space`, `xml:base`, `xml:id`) |
+| File | Namespace | Source |
+|---|---|---|
+| `schemas/XMLSchema.xsd` | `http://www.w3.org/2001/XMLSchema` (XSD 1.1 schema for schemas, REC 2012-04-05) | <https://www.w3.org/2012/04/XMLSchema.xsd> |
+| `schemas/xml.xsd` | `http://www.w3.org/XML/1998/namespace` (`xml:lang`, `xml:space`, `xml:base`, `xml:id`) | <https://www.w3.org/2001/xml.xsd> |
 
 Each is registered under its namespace and under every `schemaLocation`
 spelling it is referred to by, so an `xs:import` finds it whether it names the
 `TR/` URL, the `2001/` URL, a bare relative path, or only the namespace.
+
+Two of those spellings are served by the W3C as *different* documents:
+`http://www.w3.org/2001/XMLSchema.xsd` is the XSD 1.0 schema for schemas, and
+`http://www.w3.org/XML/1998/namespace.xsd` an older schema for the `xml:`
+namespace. The catalog answers both with the files above.
+
+The bundled schema for schemas is the 1.1 one and loads only with
+`xsd.Version11`; a schema that imports it needs that version too.
 
 ## What it does not do
 
@@ -55,6 +63,13 @@ schemas from disk:
 ```go
 r.SetFallback(&xsd.FileResolver{Root: "schemas"})
 ```
+
+With a fallback set, an absolute alias or a `www.w3.org` location still gets
+the bundled copy. Any other location the catalog matches only by spelling — a
+bare `xml.xsd`, a file name, or the namespace of an `xs:import` that also names
+a location — is read through the fallback first, so a schema set's own
+`xml.xsd` is not shadowed; the bundled copy answers only if the fallback cannot.
+An `xs:import` with no location still gets the bundled copy.
 
 If you need a specific reviewed copy of these schemas, do not use this module.
 Build the catalog from your own files instead; that is what

@@ -793,9 +793,12 @@ Every remote-reference mechanism is off unless you turn it on.
   `schemaLocation` spelling it is referred to by, so one entry answers the
   `TR/` URL, the `2001/` URL, a bare relative path and a location-less
   `xs:import` alike. A reference to something not in the table is an error
-  rather than a request. The companion module
-  [`w3cschemas`](w3cschemas/README.md) ships the W3C documents themselves —
-  separate because they are under W3C rather than MIT terms.
+  rather than a request; with a fallback resolver set, a local file a schema
+  names (its own `xml.xsd`, say) is read rather than shadowed. The companion
+  module [`w3cschemas`](w3cschemas/README.md) ships the W3C documents
+  themselves — separate because they are under W3C rather than MIT terms —
+  and its schema for schemas is the XSD 1.1 one, so it loads under
+  `xsd.Version11`.
 * **Nesting and recursion are bounded** — parse depth, XPath recursion and
   template recursion each have a limit that produces an error rather than a
   stack overflow.

@@ -14,19 +14,46 @@ Bundled documents
       Namespace: http://www.w3.org/XML/1998/namespace
 
   schemas/XMLSchema.xsd
-      The XSD 1.1 schema for schemas.
+      The XSD 1.1 schema for schemas, from the W3C Recommendation of
+      2012-04-05 (XML Schema Definition Language 1.1 Part 1: Structures).
+      Source:    https://www.w3.org/2012/04/XMLSchema.xsd
       Namespace: http://www.w3.org/2001/XMLSchema
+
+Two of the locations the catalog answers with these files are served by the
+W3C as different documents: http://www.w3.org/2001/XMLSchema.xsd is the XSD 1.0
+schema for schemas, and http://www.w3.org/XML/1998/namespace.xsd is an older
+schema for the xml: namespace. The catalog answers both with the files above.
 
 Terms
 -----
 
-W3C documents are published under the W3C Software and Document License:
+Neither bundled file carries a licence notice of its own. W3C documents are
+published under the W3C Software and Document License. Its 2015 version, at
 
-  https://www.w3.org/Consortium/Legal/2015/copyright-software-and-document
+  https://www.w3.org/copyright/software-license-2015/
 
-That licence permits redistribution of a document, with or without
-modification, provided the copyright notice, the licence, and a notice of any
-changes are retained. These files are redistributed unmodified.
+(formerly https://www.w3.org/Consortium/Legal/2015/copyright-software-and-document,
+which now redirects there) states that it was in effect from 13 May 2015 to
+31 December 2022 and was replaced by
+
+  https://www.w3.org/copyright/software-license-2023/
+
+Which version governs these files has not been verified here, and nothing in
+this file is legal advice. The 2015 text grants permission "to copy, modify, and
+distribute this work, with or without modification, for any purpose and without
+fee or royalty", "provided that you include the following on ALL copies of the
+work or portions thereof, including modifications":
+
+  - "The full text of this NOTICE in a location viewable to users of the
+    redistributed or derivative work."
+  - "Any pre-existing intellectual property disclaimers, notices, or terms and
+    conditions. If none exist, the W3C Software and Document Short Notice
+    should be included."
+  - "Notice of any changes or modifications, through a copyright statement on
+    the new code or document [...]"
+
+Read the licence itself rather than this summary. These files are redistributed
+unmodified.
 
 Verifying and updating
 ----------------------
