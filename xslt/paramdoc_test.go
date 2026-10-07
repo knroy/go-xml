@@ -62,6 +62,25 @@ func TestParameterDocumentChecksValues(t *testing.T) {
 	}
 }
 
+// TestParameterDocumentMergesNameLists pins XSLT 3.0 §26.1: the parameter
+// document's cdata-section-elements and suppress-indentation merge with the
+// output definition's lists instead of replacing them.
+func TestParameterDocumentMergesNameLists(t *testing.T) {
+	o := OutputSettings{
+		CDataElements:       []xdm.QName{{Local: "a"}},
+		SuppressIndentation: []xdm.QName{{Local: "p"}},
+	}
+	if err := ApplyParameterDocument(paramDoc(t,
+		`<output:cdata-section-elements value="b"/>`+
+			`<output:suppress-indentation value="q"/>`), &o); err != nil {
+		t.Fatal(err)
+	}
+	if len(o.CDataElements) != 2 || len(o.SuppressIndentation) != 2 {
+		t.Errorf("cdata=%v suppress=%v, want both lists merged",
+			o.CDataElements, o.SuppressIndentation)
+	}
+}
+
 // TestParameterDocumentCharacterMapSchema pins the two places the readers
 // were stricter than the schema: map-string is optional (§3.1 reads it with
 // string(), so a missing one maps to ""), and an element in another namespace

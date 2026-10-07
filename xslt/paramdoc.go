@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -164,8 +165,20 @@ func ApplyParameterDocument(root *xdm.Node, o *OutputSettings) error {
 				return err
 			}
 		}
+		// The two list parameters MERGE with the ones already set rather
+		// than replace them: XSLT 3.0 §26.1 and §25.1 have every other
+		// parameter in the document take precedence, "except that the values
+		// of the cdata-section-elements and suppress-indentation attributes
+		// are merged". For XQuery the settings are still empty here.
+		cdata, suppress := o.CDataElements, o.SuppressIndentation
 		if err := setSerializationParam(o, p.Name.Local, val, "SEPM0017"); err != nil {
 			return err
+		}
+		switch p.Name.Local {
+		case "cdata-section-elements":
+			o.CDataElements = slices.Concat(cdata, o.CDataElements)
+		case "suppress-indentation":
+			o.SuppressIndentation = slices.Concat(suppress, o.SuppressIndentation)
 		}
 	}
 	return nil
