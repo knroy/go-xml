@@ -539,8 +539,14 @@ func checkNameClassExcept(n *xdm.Node) error {
 	}
 	var excepts int
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS || kid.Name.Local != "except" {
+		if kid.Name.URI != NS {
 			continue
+		}
+		// §3: <anyName> [exceptNameClass] </anyName>, and the same for
+		// nsName. Anything else here would be silently ignored.
+		if kid.Name.Local != "except" {
+			return fmt.Errorf("relaxng: <%s> holds <%s>; it takes only <except>",
+				n.Name.Local, kid.Name.Local)
 		}
 		excepts++
 		if excepts > 1 {
