@@ -29,7 +29,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | RELAX NG compact `string` and `token` were not keywords | `{ string }` became a reference to an undefined pattern. Both are built-in datatypes now, and every compact keyword is reserved. | [`4d90e69`][4d90e69] |
 | A RELAX NG nested `<grammar>` inside `<define>` was refused under §7.1.5 | Its `start` was taken for the schema's own. It now stands where the grammar does, as §4.18 says; `schema-for-xslt30.rnc` compiles. | [`27f1945`][27f1945] |
 | The RELAX NG checker accepted shapes the §3 grammar forbids | `start` with two patterns, `anyName`/`nsName` with non-`except` children, patterns in `include`, `div` as a pattern, `param` after `except`, a bad `combine`. Now refused. | [`4df1399`][4df1399] |
-| A RELAX NG include resolved against a Windows path base became `c:///…` | `url.Parse` read the drive letter as a scheme, so the include was refused as remote. A drive-path base is now joined as a path. | |
+| A RELAX NG include resolved against a Windows path base became `c:///…` | `url.Parse` read the drive letter as a scheme, so the include was refused as remote. A drive-path base is now joined as a path. | [`d3ce46f`][d3ce46f] |
 | `fn:element-with-id` was unavailable at XPath 2.0 | F&O 2.0 §15.5.7 defines it; it was registered from 3.0. | [`5cfe76f`][5cfe76f] |
 | The `w3cschemas` catalog shadowed a schema set's own `xml.xsd` | A bare file name or namespace match beat the fallback. A local copy the fallback can read is now read; W3C URLs and namespace-only imports still get the bundled schema. | [`3c743f4`][3c743f4] |
 
@@ -1135,6 +1135,7 @@ here so every entry in this file sits under a release.
 [eec3464]: https://github.com/knroy/go-xml/commit/eec3464
 [fb64893]: https://github.com/knroy/go-xml/commit/fb64893
 [fee47ab]: https://github.com/knroy/go-xml/commit/fee47ab
+[d3ce46f]: https://github.com/knroy/go-xml/commit/d3ce46f
 [d029347]: https://github.com/knroy/go-xml/commit/d029347
 [6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e
