@@ -152,6 +152,13 @@ func (r *FileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 	if int64(len(b)) > max {
 		return nil, fmt.Errorf("relaxng: schema %q exceeds %d bytes: %w", href, max, xdm.ErrResourceLimit)
 	}
+	if compactSyntax(b) {
+		root, err := ParseCompact(strings.TrimPrefix(string(b), "\uFEFF"))
+		if err != nil {
+			return nil, fmt.Errorf("relaxng: parse %q: %w", href, err)
+		}
+		return root, nil
+	}
 	// Preserve the resolved document location as the base URI. Nested includes
 	// are compiled with this value, so sibling references remain sibling reads.
 	tree, err := xdm.ParseString(string(b), xdm.ParseOptions{BaseURI: p, MaxBytes: max})
@@ -159,6 +166,19 @@ func (r *FileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 		return nil, fmt.Errorf("relaxng: parse %q: %w", href, err)
 	}
 	return tree.Root, nil
+}
+
+// compactSyntax reports whether a fetched schema is written in the compact
+// syntax. It is decided by content rather than by name: a well-formed XML
+// document begins with "<" once a byte order mark and whitespace are skipped,
+// and "<" is not a token of the compact syntax, so the first significant
+// character settles it whatever the file is called. That is what lets
+// `include "common.rnc"` in a compact schema, or an <include> of one from an
+// XML schema, reach the parser it needs.
+func compactSyntax(b []byte) bool {
+	s := strings.TrimPrefix(string(b), "\uFEFF")
+	s = strings.TrimLeft(s, " \t\r\n")
+	return !strings.HasPrefix(s, "<")
 }
 
 // A Resolver owns containment, and must not assume the href it receives has

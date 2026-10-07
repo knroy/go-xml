@@ -115,9 +115,9 @@ func ParseCompact(src string) (*xdm.Node, error) {
 //
 // One asymmetry is worth naming: a Resolver returns an *xdm.Node, an XML
 // syntax document. A compact schema that includes another compact schema
-// therefore needs a Resolver that parses .rnc — ParseCompact is exported so
-// that such a Resolver can be written in a few lines, and CompactResolver does
-// it for the common case.
+// therefore needs a Resolver that parses .rnc. FileResolver does: it reads a
+// fetched schema in whichever syntax its content is written in, and
+// ParseCompact is exported so that any other Resolver can do the same.
 func CompileCompact(src string, opts Options) (*Schema, error) {
 	doc, err := ParseCompact(src)
 	if err != nil {

@@ -180,3 +180,47 @@ func TestValidateOneGivesTheDocumentAURIBase(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateRNGReadsTheCompactSyntax pins that "-rng" takes a .rnc schema.
+// The CLI read the schema as XML whatever it was, so a compact schema failed
+// to parse. Its includes are compact too, and are still confined: a compact
+// include climbing out of the schema's directory is refused like an XML one.
+// The schema sits in a directory with a space in its name, so the file: URI
+// the schema is read through has to be decoded back to a path on every OS.
+func TestValidateRNGReadsTheCompactSyntax(t *testing.T) {
+	parent := t.TempDir()
+	writeSchema(t, filepath.Join(parent, "far", "deep.rnc"),
+		"card = element card { attribute name { text } }\n")
+	main := filepath.Join(parent, "a b", "main.rnc")
+	writeSchema(t, filepath.Join(parent, "a b", "common.rnc"),
+		"card = element card { attribute name { text } }\n")
+	writeSchema(t, main, "include \"common.rnc\"\nstart = element book { card* }\n")
+
+	validate, err := schemaValidator("", main, "1.0", "", "", 1)
+	if err != nil {
+		t.Fatalf("a compact schema with a compact include did not load: %v", err)
+	}
+	for _, c := range []struct {
+		doc   string
+		valid bool
+	}{
+		{`<book><card name="a"/></book>`, true},
+		{`<book><card/></book>`, false},
+	} {
+		doc, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := validate(doc.Root) == nil; got != c.valid {
+			t.Errorf("%s: valid = %v, want %v", c.doc, got, c.valid)
+		}
+	}
+
+	escape := filepath.Join(parent, "d", "escape.rnc")
+	writeSchema(t, escape, "include \"../far/deep.rnc\"\nstart = element book { card* }\n")
+	_, err = schemaValidator("", escape, "1.0", "", "", 1)
+	if err == nil || !strings.Contains(err.Error(), "resolves outside root") {
+		t.Errorf("a compact include climbing out of the schema's directory: "+
+			"err = %v, want the containment refusal", err)
+	}
+}

@@ -6,6 +6,12 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| RELAX NG compact syntax from the CLI and in includes | `go-xml validate -rng` read every schema as XML, and `FileResolver` parsed every include as XML, so a `.rnc` schema failed from the CLI and a modular one failed everywhere. Both now read either syntax, decided by content. | |
+
 ### Fixed — engine
 
 | Change | Problem → solution | Commit |

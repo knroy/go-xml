@@ -173,7 +173,7 @@ func run() error {
 			"usage: go-xml -xsl STYLESHEET [flags] INPUT.xml [INPUT.xml ...]\n"+
 				"       go-xml -xsl STYLESHEET -initial-template NAME [flags]\n"+
 				"       go-xml validate -xsd SCHEMA.xsd [flags] INPUT.xml ...\n"+
-				"       go-xml validate -rng SCHEMA.rng [flags] INPUT.xml ...\n"+
+				"       go-xml validate -rng SCHEMA.rng|SCHEMA.rnc [flags] INPUT.xml ...\n"+
 				"       go-xml xquery -q QUERY.xq [flags] [INPUT.xml]\n\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `

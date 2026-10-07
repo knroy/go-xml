@@ -175,7 +175,17 @@ must produce structurally identical trees.
 `include` and `external` reach a `Resolver` exactly as `<include>` and
 `<externalRef>` do, and are refused when none is supplied. A `Resolver`
 returns an XML-syntax document, so one serving compact schemas calls
-`ParseCompact` itself.
+`ParseCompact` itself. `FileResolver` does: it reads each fetched schema in
+the syntax its content is written in, decided by whether the first significant
+character is `<`, so a modular `.rnc` schema, or an XML schema including a
+`.rnc`, needs nothing extra.
+
+From the command line, `go-xml validate -rng` takes either syntax the same
+way:
+
+```
+go-xml validate -rng schema.rnc doc.xml
+```
 
 It is a separate engine rather than a use of the XSD automaton, because RELAX
 NG validates by a different model: a schema *is* a pattern, and validation
