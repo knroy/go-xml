@@ -542,6 +542,9 @@ func TestFullSyntaxShapes(t *testing.T) {
 				<start><element name="a"><empty/></element></start></grammar>`},
 		{"div where a pattern belongs", "<div> belongs in",
 			`<element` + rngNS + ` name="foo"><div><empty/></div></element>`},
+		{"param after except", "after its <except>",
+			`<element` + rngNS + ` name="a" datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+				<data type="string"><except><value>x</value></except><param name="length">1</param></data></element>`},
 	} {
 		_, err := compileSrc(t, c.src)
 		if err == nil || !strings.Contains(err.Error(), c.want) {

@@ -186,6 +186,11 @@ func checkSyntax(n *xdm.Node) error {
 			if kid.Name.URI == NS && kid.Name.Local == "except" {
 				n_except++
 			}
+			// §3: <data type="NCName"> param* [exceptPattern] </data>.
+			if kid.Name.URI == NS && kid.Name.Local == "param" && n_except > 0 {
+				return fmt.Errorf("relaxng: <%s> has a <param> after its <except>",
+					n.Name.Local)
+			}
 		}
 		if n_except > spec.maxExcept {
 			return fmt.Errorf(
