@@ -75,6 +75,16 @@ Note the `declare namespace` line. `output` is **not** one of the predeclared
 prefixes, so a query that uses `output:method` without binding it first gets
 `XPST0081`.
 
+The map holds the values as written. A name that is not a serialization
+parameter is `XQST0109` when the query compiles; a value outside the
+parameter's type in the Serialization 3.1 schema — `standalone "maybe"`,
+`method "foo"`, `json-node-output-method "json"` — is `SEPM0016` when
+`xslt.SetSerializationParam` reads it, which is how the command line and the
+test harness serialize. A parameter document named by
+`output:parameter-document` is held to the same schema through
+`xslt.ApplyParameterDocument`, with `SEPM0017` for a bad value;
+`fn:serialize` uses the same check.
+
 ## Querying a document
 
 Bind the document as the context item and paths work as they do in XPath:

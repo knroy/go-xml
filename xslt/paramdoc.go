@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // nsSerialization is the namespace of a serialization parameter document.
@@ -115,7 +116,7 @@ func ApplyParameterDocument(root *xdm.Node, o *OutputSettings) error {
 			continue
 		}
 		if p.Name.Local == "use-character-maps" {
-			m, err := readParamCharacterMaps(p)
+			m, err := xpath.ReadCharacterMaps(p)
 			if err != nil {
 				return err
 			}
@@ -152,7 +153,7 @@ func ApplyParameterDocument(root *xdm.Node, o *OutputSettings) error {
 				return err
 			}
 		}
-		if err := SetSerializationParam(o, p.Name.Local, val); err != nil {
+		if err := setSerializationParam(o, p.Name.Local, val, "SEPM0017"); err != nil {
 			return err
 		}
 	}
@@ -171,10 +172,34 @@ func ApplyParameterDocument(root *xdm.Node, o *OutputSettings) error {
 // xsl:output is not routed through here, because its values arrive already
 // separated into attributes with their own AVT and QName-expansion rules.
 //
-// An unsupported parameter is SEPM0017 rather than something to ignore:
-// accepting one silently would let a caller believe it had asked for
-// something it did not get.
+// The value is checked against the parameter's type by
+// xpath.CheckSerializationParam, the check fn:serialize uses too, and an
+// invalid one is SEPM0016 (Serialization 3.1 §3). An unsupported parameter is
+// an error rather than something to ignore: accepting one silently would let
+// a caller believe it had asked for something it did not get.
+//
+// build-tree is accepted although it is no serialization parameter, because
+// fn:transform's serialization-params map carries xsl:output's attributes and
+// it is one of them; a parameter document refuses it.
 func SetSerializationParam(o *OutputSettings, name, val string) error {
+	if name == "build-tree" {
+		return applySerializationParam(o, name, val)
+	}
+	return setSerializationParam(o, name, val, "SEPM0016")
+}
+
+// setSerializationParam is SetSerializationParam reporting an invalid value
+// with code, which is SEPM0017 when the value came from a parameter document.
+func setSerializationParam(o *OutputSettings, name, val, code string) error {
+	v, err := xpath.CheckSerializationParam(name, val)
+	if err != nil {
+		return fmt.Errorf("%s: %w", code, err)
+	}
+	return applySerializationParam(o, name, v)
+}
+
+// applySerializationParam stores a parameter's value without checking it.
+func applySerializationParam(o *OutputSettings, name, val string) error {
 	yes := func(v string) bool {
 		v = strings.TrimSpace(v)
 		if alias, ok := boolAliases[v]; ok {
@@ -278,55 +303,6 @@ func paramDocValue(p *xdm.Node) (string, error) {
 	}
 	return "", fmt.Errorf(
 		"SEPM0017: serialization parameter %q has no value", p.Name.Local)
-}
-
-// readParamCharacterMaps reads a use-character-maps parameter, whose entries
-// are output:character-map children rather than a value. Two of them mapping
-// the same character is SEPM0018 -- a conflict the caller cannot have meant.
-func readParamCharacterMaps(p *xdm.Node) (map[rune]string, error) {
-	out := map[rune]string{}
-	for _, c := range p.Children {
-		if c.Kind != xdm.KindElement {
-			continue
-		}
-		if c.Name.URI != nsSerialization || c.Name.Local != "character-map" {
-			return nil, fmt.Errorf(
-				"SEPM0017: %q is not a character-map element", c.Name.Local)
-		}
-		ch, to := "", ""
-		haveChar, haveTo := false, false
-		for _, a := range c.Attrs {
-			if a.Name.URI != "" {
-				continue
-			}
-			switch a.Name.Local {
-			case "character":
-				ch, haveChar = a.Value, true
-			case "map-string":
-				to, haveTo = a.Value, true
-			default:
-				return nil, fmt.Errorf(
-					"SEPM0017: unexpected attribute %q on character-map",
-					a.Name.Local)
-			}
-		}
-		if !haveChar || !haveTo {
-			return nil, fmt.Errorf(
-				"SEPM0017: a character-map needs both character and map-string")
-		}
-		r := []rune(ch)
-		if len(r) != 1 {
-			return nil, fmt.Errorf(
-				"SEPM0017: a character-map must name exactly one character, "+
-					"got %q", ch)
-		}
-		if _, seen := out[r[0]]; seen {
-			return nil, fmt.Errorf(
-				"SEPM0018: character %q is mapped more than once", ch)
-		}
-		out[r[0]] = to
-	}
-	return out, nil
 }
 
 // qnameListParam names the serialization parameters whose value is a list of
