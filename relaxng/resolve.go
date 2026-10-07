@@ -277,6 +277,14 @@ func joinRef(base, ref string) string {
 	if u, err := url.Parse(ref); err == nil && u.IsAbs() {
 		return ref
 	}
+	// A Windows drive path is a path, not a URI: url.Parse reads "C:" as a
+	// scheme, and resolving against it turned "common.rnc" beside
+	// C:\s\main.rnc into "c:///common.rnc", which FileResolver then refused as
+	// remote. It joins on its own separators and is left for the resolver's
+	// filepath handling to clean.
+	if uripath.IsDriveLetterPath(base) {
+		return base[:strings.LastIndexAny(base, `/\`)+1] + ref
+	}
 	if b, err := url.Parse(base); err == nil && b.IsAbs() {
 		if r, err := url.Parse(ref); err == nil {
 			return b.ResolveReference(r).String()
