@@ -233,3 +233,80 @@ func TestCatalogReportsOneNamePerEntry(t *testing.T) {
 		t.Errorf("canonical name is %q, want the absolute alias", names[0])
 	}
 }
+
+// With a fallback, a location the catalog matches only by spelling is read
+// from the fallback when it can be. Both shapes were shadowed before: a schema
+// set's own xml.xsd (DocBook slides declares xml:space1 in one) answered by the
+// bundled copy because of its file name, and an explicit local schemaLocation
+// for the xml: namespace (msData/additional/test264908_1.xsd) answered by the
+// namespace entry.
+func TestCatalogFallbackReadsLocalCopies(t *testing.T) {
+	const stub = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	targetNamespace="http://www.w3.org/XML/1998/namespace">
+	<xs:attribute name="lang" type="xs:string"/></xs:schema>`
+	dir := t.TempDir()
+	write := func(name, src string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	local := func(attr string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	targetNamespace="http://www.w3.org/XML/1998/namespace">
+	<xs:attribute name="` + attr + `" type="xs:string"/></xs:schema>`
+	}
+	importer := func(loc, attr string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	xmlns:xml="http://www.w3.org/XML/1998/namespace">
+	<xs:import namespace="http://www.w3.org/XML/1998/namespace" schemaLocation="` + loc + `"/>
+	<xs:element name="e"><xs:complexType>
+	<xs:attribute ref="xml:` + attr + `"/></xs:complexType></xs:element></xs:schema>`
+	}
+	write("xml.xsd", local("space1"))
+	write("mine.xsd", local("blah"))
+
+	catalog := func() *CatalogResolver {
+		r := NewCatalogResolver()
+		r.Add(NSXML, []byte(stub), "http://www.w3.org/2001/xml.xsd", "xml.xsd")
+		r.SetFallback(&FileResolver{})
+		return r
+	}
+	for _, c := range []struct{ file, loc, attr string }{
+		{"own-xml.xsd", "xml.xsd", "space1"},
+		{"explicit.xsd", "mine.xsd", "blah"},
+	} {
+		p := write(c.file, importer(c.loc, c.attr))
+		if _, err := LoadFile(p, Options{Resolver: catalog()}); err != nil {
+			t.Errorf("%s: the local %s was shadowed: %v", c.file, c.loc, err)
+		}
+	}
+
+	// The bundled copy still answers a W3C spelling and a namespace-only
+	// import whatever the fallback holds, and anything the fallback cannot
+	// read.
+	everything := catalog()
+	everything.SetFallback(resolverFunc(func(ns, loc, base string) (io.ReadCloser, string, error) {
+		return io.NopCloser(strings.NewReader("<from-fallback/>")), loc, nil
+	}))
+	base := filepath.Join(dir, "own-xml.xsd")
+	for _, look := range []struct {
+		r       *CatalogResolver
+		ns, loc string
+	}{
+		{everything, "", "http://www.w3.org/2009/01/xml.xsd"},
+		{everything, NSXML, ""},
+		{catalog(), NSXML, "missing.xsd"},
+	} {
+		rc, _, err := look.r.Resolve(look.ns, look.loc, base)
+		if err != nil || rc == nil {
+			t.Fatalf("resolve(%q, %q): %v", look.ns, look.loc, err)
+		}
+		b, _ := io.ReadAll(rc)
+		rc.Close()
+		if string(b) != stub {
+			t.Errorf("resolve(%q, %q) did not answer the bundled copy", look.ns, look.loc)
+		}
+	}
+}

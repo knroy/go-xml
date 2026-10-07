@@ -210,6 +210,22 @@ is an error rather than a silent nil, because a catalog quietly smaller than
 the caller asked for fails later and somewhere less obvious; `SetFallback`
 names a resolver to consult instead.
 
+With a fallback set, the lookup order is:
+
+1. A location matching an absolute alias — as written, or after resolving
+   against the referring document's base — is the catalog's copy.
+2. A location on `www.w3.org` matched by its file name (say
+   `http://www.w3.org/2012/04/XMLSchema.xsd`) is the catalog's copy too.
+3. Any other location the catalog matches only by spelling — a bare relative
+   alias such as `xml.xsd`, a last path segment, or the namespace of an
+   `xs:import` that also names a location — goes to the fallback first, and
+   the catalog answers only if the fallback cannot. A schema set's own,
+   different `xml.xsd`, or an `xs:import` of the `xml:` namespace naming a
+   local file, is read rather than shadowed by the bundled copy.
+4. An `xs:import` with a namespace and no location gets the catalog's copy.
+
+With no fallback the catalog answers whatever it matches, in the same order.
+
 This matters more than it looks. Schemas published by the W3C import each other
 by absolute URL, and those fetches are throttled: the W3C's own copy of the
 XSLT 3.0 schema in the XSLT test suite was edited in 2021 to use a relative
