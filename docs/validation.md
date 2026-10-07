@@ -347,7 +347,8 @@ namespace allowlist; see [xsd.md](xsd.md#xsischemalocation-is-ignored-by-default
 ## xsl:import-schema
 
 A stylesheet can declare a schema, which makes its type names available and
-lets a caller validate the source against the same components:
+lets a caller validate the source against the same components. Validated with
+`Annotate`, the source carries its schema types into the transform:
 
 ```go
 sheet, err := xslt.Compile(styleTree.Root, xslt.CompileOptions{
@@ -360,18 +361,29 @@ if err != nil {
     return err
 }
 if s := sheet.Schema(); s != nil {
-    if err := s.Validate(srcTree.Root, xsd.ValidateOptions{}); err != nil {
+    // Annotate writes each node's type into the tree. Without it the
+    // schema only checks the document, and the stylesheet sees it untyped.
+    if err := s.Validate(srcTree.Root, xsd.ValidateOptions{Annotate: true}); err != nil {
         return err
     }
 }
 ```
 
-One boundary worth stating plainly: importing a schema makes type *names*
-known, but it does not change how a node atomises. A `<price>10.50</price>`
-annotated as `xs:decimal` still atomises as untyped, because the typed value
-would have to be carried on the node rather than its name. A stylesheet
-relying on schema-aware *arithmetic* will behave as it does without a schema;
-one relying on type assertions will not.
+A validated node atomises to its typed value, as XPath's atomization rule
+requires. A `<price>10.50</price>` declared `xs:decimal` atomises to an
+`xs:decimal`, so `price * 2` is decimal arithmetic and `sum(price)` an
+`xs:decimal`, with no cast in the stylesheet. Inside a stylesheet,
+`validation="strict"` or `"lax"` on `xsl:copy-of`, `xsl:source-document` and
+the other constructing instructions has the same effect on what it builds.
+
+Importing a schema does not validate anything by itself: a source the caller
+did not validate stays untyped, which is correct. From the command line,
+`go-xml -xsl sheet.xsl -validate strict in.xml` validates and annotates the
+source against the stylesheet's imported schema before the transform.
+
+An earlier revision of this section said a validated node still atomised as
+untyped. That was never the engine's behaviour once annotation existed; the
+example above simply omitted `Annotate`, which is what made it look true.
 
 Most real "invoice validation" pipelines need the first and third, and use the
 second mainly as a cheap early filter. The rules that actually reject documents

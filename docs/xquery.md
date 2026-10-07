@@ -379,9 +379,11 @@ the total schema text one compilation reads, cumulatively across every import,
 and exceeding it **fails** the compilation with an error wrapping
 `xdm.ErrResourceLimit` rather than compiling against a truncated schema.
 
-**Not implemented on this path.** Typed *input*: a source document does not
-arrive schema-validated, so a node still atomises as untyped however the query
-imported. `SchemaUnionTypes` and `SchemaListTypes` — the two optional
+**Not implemented on this path.** Automatic validation of the input: a source
+document is not validated because the query imported a schema, so it stays
+untyped until the query asks. `validate strict { . }` types it, as does a
+caller that validates it first with `xsd.ValidateOptions{Annotate: true}`; a
+validated node then atomises to its typed value. `SchemaUnionTypes` and `SchemaListTypes` — the two optional
 interfaces `xslt` also implements — are not implemented here, so a union or
 list type an imported schema defines resolves as a name but does not match a
 value.

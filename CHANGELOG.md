@@ -11,12 +11,19 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | What it does | Commit |
 |---|---|---|
 | RELAX NG compact syntax from the CLI and in includes | `go-xml validate -rng` read every schema as XML, and `FileResolver` parsed every include as XML, so a `.rnc` schema failed from the CLI and a modular one failed everywhere. Both now read either syntax, decided by content. | [`6e13dee`][6e13dee] |
+| Schema-aware processing from the CLI | `xsl:import-schema` and `import schema ... at` had no resolver in `go-xml`, so they failed to compile. Both now read through the confined resolver (`-allow-dir`), and `-validate strict\|lax` types the source so it atomises to schema types. | |
 
 ### Fixed — engine
 
 | Change | Problem → solution | Commit |
 |---|---|---|
 | `html` and `xhtml` output was never indented by default (#17) | XSLT 3.0 §26 defaults `indent` to `yes` for both methods, including when an `<html>` root selects the method. A stylesheet's unstated `indent` now follows the method; XQuery's default stays `no`. | [`701239a`][701239a] |
+
+### Documentation
+
+| Change | What it does | Commit |
+|---|---|---|
+| Validated nodes have typed values | `docs/validation.md`, the README, `xquery.md` and `todo.md` said a validated node still atomised as untyped; it never did once annotated. The example now sets `Annotate`, which is what types the source. | |
 
 ## v1.5.0 — 2026-10-04
 
