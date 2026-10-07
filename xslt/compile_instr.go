@@ -1343,6 +1343,17 @@ func checkSortOrder(v string) error {
 	return nil
 }
 
+// checkDataType validates a computed xsl:sort or xsl:merge-key @data-type.
+// A literal one is checked against the element table, as XTSE0020.
+func checkDataType(v string) error {
+	if v == "" || v == "text" || v == "number" || isEQName(v) ||
+		(isLexicalQName(v) && strings.Contains(v, ":")) {
+		return nil
+	}
+	return fmt.Errorf("XTDE0030: invalid @data-type %q: it must be text, "+
+		"number or a prefixed QName", v)
+}
+
 // checkCaseOrder validates xsl:sort/@case-order.
 func checkCaseOrder(v string) error {
 	if v != "upper-first" && v != "lower-first" {

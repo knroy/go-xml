@@ -41,9 +41,6 @@ type policyDivergence struct {
 	values []string
 	// avt records a flag the Recommendation's braces do not justify.
 	avt bool
-	// notRequired records an attribute the summary requires and the table
-	// does not.
-	notRequired bool
 }
 
 // declaredDivergences is the document's list. Keep it sorted by element.
@@ -64,11 +61,6 @@ var declaredDivergences = []policyDivergence{
 	{element: "merge-source", attr: "for-each-stream", removed30: true},
 	{element: "param", attr: "export", removed30: true},
 
-	// An enumeration wider than the summary: xsl:expose confers "hidden",
-	// which is the element's principal use, so the prose beats the summary.
-	{element: "expose", attr: "visibility", values: []string{
-		"public", "private", "final", "abstract", "hidden"}},
-
 	// One avt flag the braces do not justify, and it is inert: xsl:copy-of's
 	// @validation is refused by validate.go before the flag is consulted.
 	// xsl:output's @parameter-document and @json-node-output-method were
@@ -85,21 +77,6 @@ var declaredDivergences = []policyDivergence{
 	// value. An empty, non-nil values records "no enumeration".
 	{element: "evaluate", attr: "schema-aware", values: []string{}},
 	{element: "output", attr: "method", values: []string{}},
-
-	// A standard attribute the summary also lists as required on the
-	// package; see "Required-ness that differs" in the document.
-	{element: "package", attr: "version", notRequired: true},
-}
-
-// recPending are the summary disagreements the 2026-10-07 drift audit
-// reported and that are not fixed yet. Each is removed with its fix; it is
-// not a place to park a new divergence -- that belongs in
-// declaredDivergences, with its justification in the document.
-var recPending = map[string]bool{
-	"sort/data-type":                          true,
-	"merge-key/data-type":                     true,
-	"result-document/method":                  true,
-	"result-document/json-node-output-method": true,
 }
 
 // declaredExtraElements are the two elements with no syntax summary at all:
@@ -137,10 +114,6 @@ func TestElementTablePolicyDeclaresEveryDivergence(t *testing.T) {
 		if ad.removed30 != d.removed30 {
 			t.Errorf("%s/@%s: removed30 is %v, the document says %v",
 				d.element, d.attr, ad.removed30, d.removed30)
-		}
-		if d.notRequired && ad.required {
-			t.Errorf("%s/@%s: required, the document says it is not",
-				d.element, d.attr)
 		}
 		if d.avt && !ad.avt {
 			t.Errorf("%s/@%s: avt is %v, the document says %v",
@@ -280,9 +253,6 @@ func TestElementTableMatchesRecommendation(t *testing.T) {
 		}
 		for attr, ad := range def.attrs {
 			d, isDeclared := declared[el+"/"+attr]
-			if recPending[el+"/"+attr] {
-				continue
-			}
 			r, ok := ra[attr]
 			if !ok {
 				if !isDeclared || !d.removed30 {
@@ -290,8 +260,7 @@ func TestElementTableMatchesRecommendation(t *testing.T) {
 				}
 				continue
 			}
-			if req := ad.required && !ad.optional30; req != r.required &&
-				!(isDeclared && d.notRequired) {
+			if req := ad.required && !ad.optional30; req != r.required {
 				t.Errorf("xsl:%s/@%s: required is %v, the summary says %v", el, attr, req, r.required)
 			}
 			if ad.avt != r.avt && !(isDeclared && d.avt) {
@@ -346,18 +315,17 @@ func recValuesDiffer(ad attrDef, r recAttr) string {
 	return ""
 }
 
-// TestElementTablePolicyVisibilityEnumerations pins the one enumeration the
-// document says is wider than the Recommendation's, against the four that are
-// not. xsl:expose confers "hidden"; every other visibility attribute stops at
-// "abstract", because a component acquires hidden through xsl:accept or
-// xsl:expose and never declares it. Without this, widening any of the four to
-// match xsl:expose would look like a consistency fix.
+// TestElementTablePolicyVisibilityEnumerations pins which visibility
+// enumerations carry "hidden": only xsl:accept's summary does. Every other
+// one stops at "abstract" -- xsl:expose included, whose summary gives four
+// values -- so widening any of them to match xsl:accept would look like a
+// consistency fix and is not one.
 func TestElementTablePolicyVisibilityEnumerations(t *testing.T) {
 	for _, c := range []struct {
 		element string
 		hidden  bool
 	}{
-		{"expose", true},
+		{"expose", false},
 		{"accept", true}, // the summary itself carries hidden here
 		{"template", false},
 		{"variable", false},
@@ -442,7 +410,7 @@ func TestGlobalContextItemDeadEntries(t *testing.T) {
 // TestStandaloneStaysNarrowAtTwoPointZero pins @standalone on both elements
 // that carry it, and the asymmetry between them.
 //
-// REC appendix J.1 types it xsl:yes-or-no-or-omit, whose enumeration is seven
+// REC appendix H.1 types it xsl:yes-or-no-or-omit, whose enumeration is seven
 // values: "yes", "no", "omit", with true/false and 1/0 as synonyms of the
 // first two. The table lists three, and that is deliberate -- the version
 // gate belongs in checkAttrValue and never in the enumeration.
