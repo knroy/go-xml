@@ -711,8 +711,6 @@ func TestCompactParsesRealSchemas(t *testing.T) {
 	//     finished after 140 s; maxRefExpansions now stops it at a fifth of a
 	//     second with a message that says so. Sharing the compiled pattern
 	//     between <ref>s is the real fix — see docs/todo.md.
-	//   - schema-for-xslt30.rnc writes start = any inside a nested <grammar>,
-	//     where any admits an <attribute>; §7.1.5 forbids start//attribute.
 	//   - xspec.rnc sequences xml-ns-attributes with common-attributes, which
 	//     itself begins with xml-ns-attributes, so attribute xml:* {text}*
 	//     appears twice in one group. §7.3's first clause refuses that. Two
@@ -736,7 +734,6 @@ func TestCompactParsesRealSchemas(t *testing.T) {
 		if _, err := Compile(doc); err != nil {
 			if strings.Contains(err.Error(), "Resolver") ||
 				strings.Contains(err.Error(), "<ref> expansions") ||
-				strings.Contains(err.Error(), "section 7.1.5") ||
 				strings.Contains(err.Error(), "required twice") {
 				continue // see above; none of these is this parser's doing
 			}

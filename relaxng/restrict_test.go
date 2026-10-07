@@ -126,6 +126,32 @@ func TestSimplificationBeforeRestrictions(t *testing.T) {
 	}
 }
 
+// Section 4.18 replaces a nested grammar by its start's pattern where the
+// grammar stands, so section 7.1.5 reaches a nested start only when that place
+// is under the schema's own start; and the nested grammar's definitions are
+// its own scope.
+func TestNestedGrammarStartStandsWhereTheGrammarDoes(t *testing.T) {
+	const nested = `<define name="any"><grammar><start><ref name="any"/></start>
+			<define name="any"><zeroOrMore><attribute><anyName/></attribute></zeroOrMore></define>
+		</grammar></define>`
+	mustAccept(t, "nested grammar in a define, used inside an element",
+		`<grammar`+rngNS+`><start><element name="a"><ref name="any"/></element></start>`+
+			nested+`</grammar>`)
+	mustReject(t, "nested grammar in a define, used as the schema start", "7.1.5",
+		`<grammar`+rngNS+`><start><ref name="any"/></start>`+nested+`</grammar>`)
+	mustReject(t, "nested grammar as the schema start", "7.1.5",
+		`<grammar`+rngNS+`><start><grammar><start><text/></start></grammar></start></grammar>`)
+	mustAccept(t, "nested definitions do not leak outward",
+		`<grammar`+rngNS+`>
+			<start><grammar>
+				<start><element name="c"><ref name="x"/></element></start>
+				<define name="x"><attribute name="q"/></define>
+			</grammar></start>
+			<define name="x"><data type="token"/></define>
+			<define name="y"><element name="a"><list><ref name="x"/></list></element></define>
+		</grammar>`)
+}
+
 // A ref is expanded in place, so a definition is legal or not according to
 // where it is referenced from.
 func TestRefExpandsIntoContext(t *testing.T) {
