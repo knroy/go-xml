@@ -415,6 +415,40 @@ func TestExplicitTimezone(t *testing.T) {
 	}
 }
 
+// TestDurationSubtypes covers the pattern facets Part 2 gives
+// xs:yearMonthDuration and xs:dayTimeDuration: each refuses the other's
+// components, in an instance and in a facet value of a derived type.
+func TestDurationSubtypes(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="ym" type="xs:yearMonthDuration"/>
+	  <xs:element name="dt" type="xs:dayTimeDuration"/>
+	</xs:schema>`)
+	for _, doc := range []string{`<ym>-P1Y2M</ym>`, `<dt>PT0S</dt>`, `<dt>P1DT2H</dt>`} {
+		if err := check11(t, s, doc); err != nil {
+			t.Errorf("%s should be valid: %v", doc, err)
+		}
+	}
+	for _, doc := range []string{`<ym>P1D</ym>`, `<ym>P1YT1H</ym>`, `<dt>P1Y</dt>`, `<dt>P1M2D</dt>`} {
+		if err := check11(t, s, doc); err == nil {
+			t.Errorf("%s should be invalid", doc)
+		}
+	}
+
+	tree, err := xdm.ParseString(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="t">
+	    <xs:restriction base="xs:dayTimeDuration"><xs:maxInclusive value="P1Y"/></xs:restriction>
+	  </xs:simpleType>
+	</xs:schema>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(tree.Root, "s.xsd", Options{Version: Version11}); err == nil {
+		t.Error("maxInclusive P1Y is not a dayTimeDuration")
+	}
+}
+
 // TestIDThroughUnion covers a bug that affected XSD 1.0 as much as 1.1.
 //
 // An ID declared through a union was never recorded, because idKind walked the

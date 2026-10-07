@@ -71,7 +71,9 @@ schema written for 1.0 must not acquire its relaxations by accident. Under
 `xs:alternative` and inheritable attributes, `xs:openContent` and
 `xs:defaultOpenContent`, `xs:override`, the `notNamespace` and `notQName`
 wildcard forms, `explicitTimezone`, conditional inclusion through the
-versioning attributes, and the 1.1 built-in types.
+versioning attributes, and the 1.1 built-in types. `xs:yearMonthDuration` and
+`xs:dayTimeDuration` carry the pattern facets Part 2 defines them by, so `P1D`
+is not a year-month duration, in an instance or in a derived type's facet value.
 
 The 1.1 constructs are always *parsed*, whichever version is selected — a
 schema that uses one is not rejected for it. Whether it is *honoured* is what

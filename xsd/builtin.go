@@ -218,9 +218,18 @@ func buildBuiltins() {
 	derive("dateTimeStamp", dateTime, &FacetSet{ExplicitTimezone: &required})
 
 	// The two duration subtypes XPath has always had and XSD 1.0 left out.
+	// Part 2 §3.4.26-27 define each by a pattern facet on xs:duration: no
+	// day or time part in one, no year or month part in the other.
 	duration := builtinMap[xsName("duration")].(*SimpleType)
-	derive("yearMonthDuration", duration, nil)
-	derive("dayTimeDuration", duration, nil)
+	durationPattern := func(src string) *FacetSet {
+		p, err := compilePattern(src)
+		if err != nil {
+			panic(err)
+		}
+		return &FacetSet{Patterns: []*Pattern{p}}
+	}
+	derive("yearMonthDuration", duration, durationPattern(`[^DT]*`))
+	derive("dayTimeDuration", duration, durationPattern(`[^YM]*[DT].*`))
 
 	// xs:error has an empty value space: nothing is ever valid against it,
 	// which is how a 1.1 schema says "this branch must not be taken".
