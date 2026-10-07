@@ -62,7 +62,7 @@ func manifestByKey(t *testing.T) map[string]manifestRow {
 // test would defeat the test's whole purpose.
 var extensionAllowlist = map[string]string{
 	"{http://www.w3.org/2005/xpath-functions}stream-available#1": "XSLT 3.0 " +
-		"19.3 defines fn:stream-available for streamability; F&O 3.1 defines " +
+		"18.1.3 defines fn:stream-available for streamability; F&O 3.1 defines " +
 		"no function of that name, so it has no proforma to extract.",
 }
 
@@ -87,9 +87,9 @@ var variadicAllowlist = map[string]bool{
 // does not define — fails here, which is what makes a thirteenth
 // hand-signature impossible to add unnoticed.
 //
-// What is deliberately partial is the CALL-BINDING migration, not this
-// coverage: the plan requires that to land "in reviewable family-sized
-// commits". TestCallBindingMigrationInventory tracks it and carries the flip.
+// The CALL-BINDING migration, which the plan required to land "in reviewable
+// family-sized commits", is complete; TestCallBindingMigrationInventory
+// enforces it.
 func TestRegisteredFunctionsHaveManifestMetadata(t *testing.T) {
 	manifest := manifestByKey(t)
 	lib := Builtins().(*Library)
@@ -180,9 +180,8 @@ func TestManifestFunctionsAreAllRegistered(t *testing.T) {
 	}
 }
 
-// TestCallBindingMigrationInventory reports how far the call-binding
-// migration has got: which manifest entries are enforced at call binding and
-// which are not yet.
+// TestCallBindingMigrationInventory checks that every manifest entry is
+// enforced at call binding.
 //
 // The enforcement test above asks "does the specification describe every
 // registered function?", and already enforces. This one asks the narrower
@@ -190,15 +189,10 @@ func TestManifestFunctionsAreAllRegistered(t *testing.T) {
 // number a family agent works down, and which reads 0 remaining only when the
 // last family has been added to specSignatures.
 //
-// It reports rather than fails because 251 entries are not yet migrated and a
-// hard failure now would block every family-sized commit until all of them
-// existed.
-//
-// TO FLIP IT TO HARD-FAIL, change the `report := t.Logf` line below to
-// `report := t.Errorf`. That is the whole change; nothing else in this test
-// is conditional on the mode. Flip it when `pending` reaches zero.
+// It used to report rather than fail while entries remained unmigrated; none
+// does now, so it enforces.
 func TestCallBindingMigrationInventory(t *testing.T) {
-	report := t.Logf // FLIP: change to t.Errorf to make this test enforce.
+	report := t.Errorf
 
 	manifest := manifestByKey(t)
 	var pending []string
