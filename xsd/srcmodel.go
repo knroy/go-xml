@@ -320,7 +320,7 @@ func (p *parser) checkAttrs(el *xdm.Node) {
 		// happily under a name no reference could ever be written for.
 		//
 		// The value is trimmed first. NCName derives from xs:token, so
-		// its whiteSpace facet is a fixed "collapse" and leading and
+		// its whiteSpace facet is "collapse" and leading and
 		// trailing space is gone before the value is ever matched
 		// against the NCName production. addB193 declares
 		// name="sub2-elem " with a trailing space and the suite expects

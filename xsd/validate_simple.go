@@ -247,10 +247,10 @@ func validateAtomicValueBoundsIn(lexical string, t *SimpleType, version Version,
 		return "", err
 	}
 	// The string branch's derived types narrow the lexical space rather
-	// than the value space, and they do it with patterns the spec states
-	// in prose. xs:ID is an xs:NCName, so "87123_" is not one — it starts
-	// with a digit — and nothing in the facets would have said so, since
-	// these types carry none.
+	// than the value space, with the pattern facets Part 2 gives them.
+	// The built-ins here carry those as name-keyed checks rather than as
+	// facets, so xs:ID's NCName rule is applied here: "87123_" starts
+	// with a digit and is not one.
 	if err := checkStringSubtype(normalized, t); err != nil {
 		return "", err
 	}
@@ -1202,11 +1202,10 @@ func valueEqual(a, b, primitive string) bool {
 // checkStringSubtype applies the lexical constraints of the xs:string branch's
 // named subtypes.
 //
-// Part 2 defines xs:Name, xs:NCName and their descendants by pattern, but
-// states those patterns in prose rather than as facets on the type, so a schema
-// that restricts xs:ID inherits nothing that would reject a value which is not
-// an NCName. The check walks to the nearest built-in ancestor, since a
-// user-defined restriction of xs:ID is still an xs:ID.
+// Part 2 gives xs:language, xs:NMTOKEN, xs:Name and xs:NCName pattern facets.
+// The built-ins here are constructed without them, so these checks stand in
+// for the patterns, keyed by name. The check walks to the nearest built-in
+// ancestor, since a user-defined restriction of xs:ID is still an xs:ID.
 func checkStringSubtype(normalized string, t *SimpleType) error {
 	name := nearestBuiltinName(t)
 	if name == "" {
