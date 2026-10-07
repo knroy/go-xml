@@ -21,9 +21,9 @@ func paramDoc(t *testing.T, body string) *xdm.Node {
 
 // TestParameterDocumentChecksValues pins that a parameter document is held to
 // the schema fn:serialize holds its element form to (Serialization 3.1
-// appendix B): a value outside the parameter's type is SEPM0017, and
-// build-tree -- an xsl:output attribute, not a serialization parameter -- is
-// refused. standalone="maybe" used to reach the
+// appendix B): a value outside the parameter's type is SEPM0017, a repeated
+// parameter SEPM0019, and build-tree -- an xsl:output attribute, not a
+// serialization parameter -- is refused. standalone="maybe" used to reach the
 // XML declaration as written.
 func TestParameterDocumentChecksValues(t *testing.T) {
 	for _, tc := range []struct{ body, code string }{
@@ -37,6 +37,8 @@ func TestParameterDocumentChecksValues(t *testing.T) {
 		{`<output:cdata-section-elements value="::x"/>`, "SEPM0017"},
 		{`<output:build-tree value="yes"/>`, "SEPM0017"},
 		{`<output:use-character-maps value="x"/>`, "SEPM0017"},
+		{`<output:indent value="yes"/><output:indent value="no"/>`, "SEPM0019"},
+		{`<f:x value="1"/><f:x value="2"/>`, "SEPM0019"},
 	} {
 		var o OutputSettings
 		err := ApplyParameterDocument(paramDoc(t, tc.body), &o)

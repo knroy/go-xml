@@ -103,10 +103,21 @@ func docElement(n *xdm.Node) *xdm.Node {
 // and XQuery against the query's static base URI, and neither rule belongs to
 // the reading of a document already in hand.
 func ApplyParameterDocument(root *xdm.Node, o *OutputSettings) error {
+	seen := map[string]bool{}
 	for _, p := range root.Children {
 		if p.Kind != xdm.KindElement {
 			continue
 		}
+		// Serialization 3.1 §3.1: a document that "specifies the value of
+		// the same parameter more than once" is SEPM0019. An extension
+		// parameter may not be repeated either.
+		key := p.Name.Clark()
+		if seen[key] {
+			return fmt.Errorf(
+				"SEPM0019: serialization parameter %q appears more than once",
+				p.Name.Local)
+		}
+		seen[key] = true
 		if p.Name.URI != nsSerialization {
 			if p.Name.URI == "" {
 				return fmt.Errorf(

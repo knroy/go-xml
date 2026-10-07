@@ -82,8 +82,8 @@ parameter's type in the Serialization 3.1 schema — `standalone "maybe"`,
 `xslt.SetSerializationParam` reads it, which is how the command line and the
 test harness serialize. A parameter document named by
 `output:parameter-document` is held to the same schema through
-`xslt.ApplyParameterDocument`, with `SEPM0017` for a bad value;
-`fn:serialize` uses the same check.
+`xslt.ApplyParameterDocument`, with `SEPM0017` for a bad value and `SEPM0019`
+for a parameter given twice; `fn:serialize` uses the same check.
 
 ## Querying a document
 
