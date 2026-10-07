@@ -85,13 +85,15 @@ func buildBuiltins() {
 	preserve, collapse := WhitePreserve, WhiteCollapse
 
 	// The 19 primitives. Every one except xs:string collapses whitespace,
-	// and the facet is fixed on all of them.
+	// and the facet is fixed on all of them but xs:string: the
+	// schema-for-schemas leaves string's preserve open, so a restriction
+	// may tighten it to replace or collapse.
 	primitive := func(local string, ws WhiteSpace) *SimpleType {
 		t := &SimpleType{
 			Name:    xsName(local),
 			Base:    anyAtomic,
 			Variety: VarietyAtomic,
-			Facets:  &FacetSet{WhiteSpace: &ws, WhiteSpaceFixed: true},
+			Facets:  &FacetSet{WhiteSpace: &ws, WhiteSpaceFixed: local != "string"},
 			builtin: true,
 		}
 		t.Primitive = t
@@ -139,9 +141,9 @@ func buildBuiltins() {
 
 	replace := WhiteReplace
 	normalized := derive("normalizedString", str,
-		&FacetSet{WhiteSpace: &replace, WhiteSpaceFixed: true})
+		&FacetSet{WhiteSpace: &replace})
 	token := derive("token", normalized,
-		&FacetSet{WhiteSpace: &collapse, WhiteSpaceFixed: true})
+		&FacetSet{WhiteSpace: &collapse})
 
 	derive("language", token, nil)
 	nmtoken := derive("NMTOKEN", token, nil)
