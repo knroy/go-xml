@@ -538,6 +538,12 @@ func TestFullSyntaxShapes(t *testing.T) {
 			`<element` + rngNS + `><anyName><anyName/></anyName><empty/></element>`},
 		{"nsName holding a name", "takes only <except>",
 			`<element` + rngNS + `><nsName ns=""><name>x</name></nsName><empty/></element>`},
+		{"include holding a pattern", "an <include> takes only",
+			`<grammar` + rngNS + `><include href="x.rng"><element name="a"><empty/></element></include>
+				<start><element name="a"><empty/></element></start></grammar>`},
+		{"include holding an include", "an <include> takes only",
+			`<grammar` + rngNS + `><include href="x.rng"><div><include href="y.rng"/></div></include>
+				<start><element name="a"><empty/></element></start></grammar>`},
 	} {
 		_, err := compileSrc(t, c.src)
 		if err == nil || !strings.Contains(err.Error(), c.want) {

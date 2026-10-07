@@ -88,15 +88,17 @@ var grammarChildren = map[string]bool{
 	"start": true, "define": true, "div": true, "include": true,
 }
 
-// checkGrammarChildren applies §4.18 to <grammar> and <div>.
+// checkGrammarChildren applies §4.18 to <grammar> and <div>, and §3's
+// includeContent to <include>, which is the same less <include> itself.
 func checkGrammarChildren(n *xdm.Node) error {
-	switch n.Name.Local {
-	case "grammar":
+	scope := n.Name.Local
+	switch scope {
+	case "grammar", "include":
 	case "div":
 		// A <div> groups whatever its parent groups. Inside a grammar it
 		// holds definitions; written where a pattern belongs it holds
 		// patterns, and the grammar rule does not apply to it.
-		if !inGrammar(n) {
+		if scope = divScope(n); scope == "" {
 			return nil
 		}
 	default:
@@ -105,6 +107,13 @@ func checkGrammarChildren(n *xdm.Node) error {
 	for _, kid := range n.ChildElements() {
 		if kid.Name.URI != NS {
 			continue
+		}
+		if scope == "include" && (kid.Name.Local == "include" ||
+			!grammarChildren[kid.Name.Local]) {
+			return fmt.Errorf(
+				"relaxng: <%s> holds <%s>; an <include> takes only "+
+					"<start>, <define> and <div> (section 3)",
+				n.Name.Local, kid.Name.Local)
 		}
 		if !grammarChildren[kid.Name.Local] {
 			return fmt.Errorf(
@@ -116,22 +125,22 @@ func checkGrammarChildren(n *xdm.Node) error {
 	return nil
 }
 
-// inGrammar reports whether n sits inside a <grammar>, with only <div>
-// between.
-func inGrammar(n *xdm.Node) bool {
+// divScope returns "grammar" or "include" for the element a <div> sits in,
+// with only <div> between, or "" when it sits anywhere else.
+func divScope(n *xdm.Node) string {
 	for cur := n.Parent; cur != nil && cur.Kind == xdm.KindElement; cur = cur.Parent {
 		if cur.Name.URI != NS {
-			return false
+			return ""
 		}
 		switch cur.Name.Local {
 		case "grammar", "include":
-			return true
+			return cur.Name.Local
 		case "div":
 			continue
 		}
-		return false
+		return ""
 	}
-	return false
+	return ""
 }
 
 // checkSyntax walks a schema document and reports the first violation.
