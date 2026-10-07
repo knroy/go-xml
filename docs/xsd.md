@@ -112,6 +112,13 @@ Valid (Restriction) are all applied when the schema is loaded. Each is a
 property of the schema alone, so a document violating one *is not a schema* in
 the spec's terms, and it fails to load rather than validating clean.
 
+The same holds for the schema document's own shape. Its element order, the
+children and attributes each XSD element may carry, and positional rules such
+as "a top-level `xs:element` has no `ref`, `form` or occurrence range" and
+"`xs:import` and `xs:include` come before every declaration" are checked
+against the schema for schemas (the union of 1.0 and 1.1), and a document that
+breaks one fails to load.
+
 This is not the Xerces arrangement, which gates the first two behind
 `schema-full-checking`, off by default. That precedent governs whether a
 *validator* pays the cost; it is the wrong analogy for a loader asked "is this
