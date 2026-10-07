@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -68,5 +69,47 @@ func TestForwardsCompatibleFollowsProcessorVersion(t *testing.T) {
 				t.Errorf("MaxVersion %g: got %v, want %s", tc.maxVersion, err, tc.want)
 			}
 		})
+	}
+}
+
+// TestMisplacedTopLevelFollowsProcessorVersion pins section 3.9's first rule
+// against the same comparison: a top-level element XSLT 3.0 does not allow
+// there is ignored only when the module's version exceeds the processor's.
+// A version="3.0" module on a 3.0 processor used to be treated as forwards
+// compatible because the test was "greater than 2.0", so a stray
+// xsl:output-character at the top level compiled and was dropped in silence.
+func TestMisplacedTopLevelFollowsProcessorVersion(t *testing.T) {
+	const sheet = `<xsl:stylesheet version="%s" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:%s/>
+  <xsl:template name="main"><out/></xsl:template>
+</xsl:stylesheet>`
+	for _, tc := range []struct {
+		version, element string
+		maxVersion       float64
+		wantErr          bool
+	}{
+		{"3.0", "output-character", 0, true},
+		{"3.0", "accept", 0, true},
+		{"3.0", "merge-key", 0, true},
+		{"3.0", "no-such-element", 0, true},
+		{"2.0", "output-character", 0, true},
+		// Forwards compatible: the module's version exceeds the processor's.
+		{"4.0", "output-character", 0, false},
+		{"4.0", "no-such-element", 0, false},
+		{"3.0", "output-character", 2.0, false},
+	} {
+		doc, err := xdm.ParseString(fmt.Sprintf(sheet, tc.version, tc.element), xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		_, err = Compile(doc.Root, CompileOptions{MaxVersion: tc.maxVersion})
+		if tc.wantErr && (err == nil || !strings.Contains(err.Error(), "XTSE0010")) {
+			t.Errorf("version %s, xsl:%s, MaxVersion %g: got %v, want XTSE0010",
+				tc.version, tc.element, tc.maxVersion, err)
+		}
+		if !tc.wantErr && err != nil {
+			t.Errorf("version %s, xsl:%s, MaxVersion %g: got %v, want it ignored",
+				tc.version, tc.element, tc.maxVersion, err)
+		}
 	}
 }

@@ -358,7 +358,7 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 			// covered -- inside a sequence constructor the third rule
 			// applies instead, and that one demands an xsl:fallback.
 			if isModuleElement(el) && forwardsAt(ch, forwards) &&
-				!inPackage(ch) {
+				effectiveForwards(ch) && !inPackage(ch) {
 				continue
 			}
 			if cm.seqCtor && isInstruction(ch.Name.Local) {
@@ -682,8 +682,8 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 		// nested xsl:transform with no version attribute, and reporting the
 		// missing attribute would be reporting an error about an element the
 		// processor was told to pretend it never saw.
-		if forwards && n.Name.URI == xdm.NSXSL && isTopLevel(n) &&
-			!xsltDeclarations[n.Name.Local] && !inPackage(n) {
+		if forwards && effectiveForwards(n) && n.Name.URI == xdm.NSXSL &&
+			isTopLevel(n) && !xsltDeclarations[n.Name.Local] && !inPackage(n) {
 			return nil
 		}
 		if err := checkStaticGrammar(n, forwards); err != nil {
@@ -701,7 +701,8 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 		// content", so the walk must not descend into it. Checking inside
 		// rejected a stylesheet for a required attribute missing from an
 		// element the processor was told to pretend it never saw.
-		if forwards && n.Name.URI == xdm.NSXSL && isTopLevel(n) {
+		if forwards && effectiveForwards(n) && n.Name.URI == xdm.NSXSL &&
+			isTopLevel(n) {
 			// Unknown in the same sense checkStaticGrammar means it: an
 			// element of a later version is unknown to this stylesheet's.
 			def, known := xsltElements[n.Name.Local]
