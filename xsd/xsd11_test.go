@@ -302,6 +302,44 @@ func TestXSD11FeaturesAreOffUnderVersion10(t *testing.T) {
 	}
 }
 
+// TestXSD11ConstructsUnderVersion10 covers the rest of the 1.0 policy: the
+// assertion facet, explicitTimezone and defaultAttributes are parsed and not
+// honoured, and notNamespace, which narrows a wildcard, is an error as
+// notQName is.
+func TestXSD11ConstructsUnderVersion10(t *testing.T) {
+	load := func(src string, v Version) (*Schema, error) {
+		tree, err := xdm.ParseString(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" `+src+`</xs:schema>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Load(tree.Root, "s.xsd", Options{Version: v})
+	}
+	for _, c := range []struct{ schema, doc string }{
+		{`><xs:element name="e"><xs:simpleType><xs:restriction base="xs:string">
+		  <xs:assertion test="false()"/></xs:restriction></xs:simpleType></xs:element>`, `<e/>`},
+		{`><xs:element name="e"><xs:simpleType><xs:restriction base="xs:date">
+		  <xs:explicitTimezone value="required"/></xs:restriction></xs:simpleType></xs:element>`, `<e>2020-01-01</e>`},
+		{`defaultAttributes="g"><xs:attributeGroup name="g"><xs:attribute name="a"/></xs:attributeGroup>
+		  <xs:element name="e"><xs:complexType/></xs:element>`, `<e a="1"/>`},
+	} {
+		s10, err := load(c.schema, Version10)
+		if err != nil {
+			t.Fatalf("%s: %v", c.schema, err)
+		}
+		s11, err := load(c.schema, Version11)
+		if err != nil {
+			t.Fatalf("%s: %v", c.schema, err)
+		}
+		if (check11(t, s10, c.doc) == nil) == (check11(t, s11, c.doc) == nil) {
+			t.Errorf("%s: 1.0 and 1.1 agree on %s", c.schema, c.doc)
+		}
+	}
+	if _, err := load(`><xs:element name="e"><xs:complexType><xs:sequence>
+	  <xs:any notNamespace="##local" minOccurs="0"/></xs:sequence></xs:complexType></xs:element>`, Version10); err == nil {
+		t.Error("notNamespace should be an error under 1.0")
+	}
+}
+
 // TestAssertionCompileErrorIsReported records that a malformed test is a schema
 // error rather than something discovered per document.
 func TestAssertionCompileErrorIsReported(t *testing.T) {

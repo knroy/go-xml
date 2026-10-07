@@ -93,14 +93,17 @@ schema10.Validate(doc.Root, xsd.ValidateOptions{})   // nil — the assertion is
 schema11.Validate(doc.Root, xsd.ValidateOptions{})   // cvc-assertion.3
 ```
 
-So loading a 1.1 schema under the default version gives you a working 1.0
-validator for it, silently missing the 1.1 constraints. **If a schema uses 1.1
-features, select `Version11`.** Nothing warns you.
+The same holds for the `xs:assertion` and `xs:explicitTimezone` facets, for
+`xs:alternative`, and for `defaultAttributes` (a dangling group name is still
+reported). So loading a 1.1 schema under the default version gives you a
+working 1.0 validator for it, silently missing the 1.1 constraints. **If a
+schema uses 1.1 features, select `Version11`.** Nothing warns you.
 
-The exception is `notQName`, which is an error under 1.0 rather than ignored,
-because it *narrows* a wildcard: ignoring it would accept documents the schema
-means to exclude, where ignoring an assertion only fails to reject them. The
-asymmetry is not principled — it is where the line happens to fall today.
+The exceptions are the wildcard forms `notNamespace` and `notQName`, which are
+errors under 1.0 rather than ignored: the attribute is the wildcard's whole
+namespace constraint, so dropping it would leave a wildcard that admits what
+the schema means to exclude, where ignoring an assertion only fails to add a
+check on top of a declaration that still stands.
 
 ## Checking the schema itself
 

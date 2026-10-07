@@ -771,6 +771,13 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 	// XSD 1.1 notNamespace: the complement of a namespace list, which 1.0
 	// could only express for a single namespace with ##other.
 	if not := el.AttrValue("notNamespace"); not != "" {
+		// Under 1.0 it is an error, as notQName is: it narrows the
+		// wildcard, so ignoring it would accept what the schema excludes.
+		if p.schema.Version < Version11 {
+			p.errs = append(p.errs, errorAt(el, "",
+				"notNamespace requires XSD 1.1"))
+			return w
+		}
 		// §3.10.2: namespace and notNamespace are alternative spellings
 		// of the same {namespace constraint} property, and the schema
 		// for schemas marks them mutually exclusive. Present together

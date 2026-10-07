@@ -298,7 +298,8 @@ The version is opt-in rather than automatic because 1.1 changes which
 documents are valid, so a 1.0 schema must not acquire its behaviour by
 accident. The 1.1 constructs are always *parsed* — a schema that uses one is
 not made valid by pretending it is absent — but only honoured under
-`Version11`.
+`Version11`. `notNamespace` and `notQName` are errors under 1.0 instead; see
+[xsd.md](xsd.md#choosing-the-version).
 
 ### Checking the schema itself
 
