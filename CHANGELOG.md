@@ -10,7 +10,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
-| RELAX NG compact syntax from the CLI and in includes | `go-xml validate -rng` read every schema as XML, and `FileResolver` parsed every include as XML, so a `.rnc` schema failed from the CLI and a modular one failed everywhere. Both now read either syntax, decided by content. | |
+| RELAX NG compact syntax from the CLI and in includes | `go-xml validate -rng` read every schema as XML, and `FileResolver` parsed every include as XML, so a `.rnc` schema failed from the CLI and a modular one failed everywhere. Both now read either syntax, decided by content. | [`6e13dee`][6e13dee] |
 
 ### Fixed — engine
 
@@ -1097,6 +1097,7 @@ here so every entry in this file sits under a release.
 [7798acd]: https://github.com/knroy/go-xml/commit/7798acd
 [8cf4584]: https://github.com/knroy/go-xml/commit/8cf4584
 [701239a]: https://github.com/knroy/go-xml/commit/701239a
+[6e13dee]: https://github.com/knroy/go-xml/commit/6e13dee
 [d029347]: https://github.com/knroy/go-xml/commit/d029347
 [6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e
