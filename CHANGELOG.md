@@ -10,7 +10,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| `html` and `xhtml` output was never indented by default (#17) | XSLT 3.0 §26 defaults `indent` to `yes` for both methods, including when an `<html>` root selects the method. A stylesheet's unstated `indent` now follows the method; XQuery's default stays `no`. | |
+| `html` and `xhtml` output was never indented by default (#17) | XSLT 3.0 §26 defaults `indent` to `yes` for both methods, including when an `<html>` root selects the method. A stylesheet's unstated `indent` now follows the method; XQuery's default stays `no`. | [`701239a`][701239a] |
 
 ## v1.5.0 — 2026-10-04
 
@@ -1090,6 +1090,7 @@ here so every entry in this file sits under a release.
 [48651cf]: https://github.com/knroy/go-xml/commit/48651cf
 [7798acd]: https://github.com/knroy/go-xml/commit/7798acd
 [8cf4584]: https://github.com/knroy/go-xml/commit/8cf4584
+[701239a]: https://github.com/knroy/go-xml/commit/701239a
 [d029347]: https://github.com/knroy/go-xml/commit/d029347
 [6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e
