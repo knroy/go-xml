@@ -545,6 +545,11 @@ func TestFullSyntaxShapes(t *testing.T) {
 		{"param after except", "after its <except>",
 			`<element` + rngNS + ` name="a" datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
 				<data type="string"><except><value>x</value></except><param name="length">1</param></data></element>`},
+		{"lone start with a bad combine", "neither choice nor interleave",
+			`<grammar` + rngNS + `><start combine="foo"><element name="a"><empty/></element></start></grammar>`},
+		{"lone define with a bad combine", "neither choice nor interleave",
+			`<grammar` + rngNS + `><start><element name="a"><ref name="x"/></element></start>
+				<define name="x" combine="bogus"><empty/></define></grammar>`},
 	} {
 		_, err := compileSrc(t, c.src)
 		if err == nil || !strings.Contains(err.Error(), c.want) {

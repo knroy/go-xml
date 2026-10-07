@@ -376,6 +376,20 @@ func checkAttrValues(n *xdm.Node) error {
 			return err
 		}
 	}
+	// §3: method ::= choice | interleave, on a lone <start> or <define> as
+	// much as on one of several.
+	if n.Name.Local == "start" || n.Name.Local == "define" {
+		for _, a := range n.Attrs {
+			if a.Name.URI != "" || a.Name.Local != "combine" {
+				continue
+			}
+			if c := normalizeToken(a.Value); c != "choice" && c != "interleave" {
+				return fmt.Errorf(
+					"relaxng: <%s> has combine=%q, which is neither choice nor interleave",
+					n.Name.Local, a.Value)
+			}
+		}
+	}
 	switch n.Name.Local {
 	case "element", "attribute":
 		if v := n.AttrValue("name"); v != "" {
