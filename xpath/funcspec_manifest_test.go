@@ -249,6 +249,10 @@ func TestMigratedSignaturesMatchManifest(t *testing.T) {
 				key, len(sig)-1, len(row.Params))
 			continue
 		}
+		if !sameDeclaredType(t, sig[0], row.Result) {
+			t.Errorf("%s result: table declares %q, F&O declares %q",
+				key, sig[0], row.Result)
+		}
 		for i, want := range row.Params {
 			got := sig[i+1]
 			if !sameDeclaredType(t, got, want) {
