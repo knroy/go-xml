@@ -449,6 +449,34 @@ func TestDurationSubtypes(t *testing.T) {
 	}
 }
 
+// TestOnly11BuiltinsUnderVersion10 covers which 1.1 built-in names a 1.0
+// schema may use: not xs:dateTimeStamp or xs:error, which only XSD 1.1
+// defines, but the three the XPath data model also defines.
+func TestOnly11BuiltinsUnderVersion10(t *testing.T) {
+	load := func(typ string, v Version) error {
+		tree, err := xdm.ParseString(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="e" type="`+typ+`"/></xs:schema>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Load(tree.Root, "s.xsd", Options{Version: v})
+		return err
+	}
+	for _, typ := range []string{"xs:dateTimeStamp", "xs:error"} {
+		if load(typ, Version10) == nil {
+			t.Errorf("%s should not resolve under 1.0", typ)
+		}
+		if err := load(typ, Version11); err != nil {
+			t.Errorf("%s under 1.1: %v", typ, err)
+		}
+	}
+	for _, typ := range []string{"xs:anyAtomicType", "xs:yearMonthDuration", "xs:dayTimeDuration"} {
+		if err := load(typ, Version10); err != nil {
+			t.Errorf("%s under 1.0: %v", typ, err)
+		}
+	}
+}
+
 // TestIDThroughUnion covers a bug that affected XSD 1.0 as much as 1.1.
 //
 // An ID declared through a union was never recorded, because idKind walked the

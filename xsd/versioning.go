@@ -263,6 +263,28 @@ func availableIn10(local string) bool {
 	return true
 }
 
+// lookupType resolves a type reference in a schema document.
+//
+// Under 1.0 it refuses the two built-ins that exist only in XSD 1.1:
+// xs:dateTimeStamp and xs:error. The other three 1.1 additions --
+// xs:anyAtomicType, xs:yearMonthDuration, xs:dayTimeDuration -- still resolve:
+// the XPath data model defines them in the schema namespace for every
+// XPath 2.0+ host, and a schema imported into XQuery, which is read as 1.0,
+// may name them (QT3 ValidateExpr/xq-e18.xsd derives from both durations).
+func (p *parser) lookupType(name xdm.QName) (Type, bool) {
+	if p.schema.Version < Version11 && only11Builtin(name) {
+		return nil, false
+	}
+	t, ok := p.schema.Types[name]
+	return t, ok
+}
+
+// only11Builtin reports whether a name is a built-in that neither XSD 1.0 nor
+// the XPath data model defines.
+func only11Builtin(name xdm.QName) bool {
+	return name.URI == NSSchema && (name.Local == "dateTimeStamp" || name.Local == "error")
+}
+
 // facetAvailable answers whether one named facet is one this processor
 // implements, with the same three-way result as typeAvailable.
 func facetAvailable(el *xdm.Node, word string, version Version) availability {

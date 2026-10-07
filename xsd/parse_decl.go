@@ -1053,7 +1053,7 @@ func (p *parser) resolveTypeRefLazy(el *xdm.Node, ref string, set func(Type), mi
 		return
 	}
 	p.fixups = append(p.fixups, func() error {
-		t, ok := p.schema.Types[name]
+		t, ok := p.lookupType(name)
 		if !ok {
 			// A name the assembly does define, as something other
 			// than a type, is wrong rather than missing. The

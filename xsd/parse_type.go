@@ -213,7 +213,7 @@ func (p *parser) readSimpleUnion(el *xdm.Node, t *SimpleType) {
 			slot := len(t.MemberTypes)
 			t.MemberTypes = append(t.MemberTypes, nil)
 			p.fixups = append(p.fixups, func() error {
-				bt, ok := p.schema.Types[name]
+				bt, ok := p.lookupType(name)
 				if !ok {
 					// §3.14.6 / src-resolve: a member type
 					// that names no definition cannot be

@@ -75,6 +75,14 @@ versioning attributes, and the 1.1 built-in types. `xs:yearMonthDuration` and
 `xs:dayTimeDuration` carry the pattern facets Part 2 defines them by, so `P1D`
 is not a year-month duration, in an instance or in a derived type's facet value.
 
+Of the five 1.1 built-in types, a 1.0 schema cannot name `xs:dateTimeStamp` or
+`xs:error` (in `type=`, `base=`, `itemType=`, `memberTypes=` or `xsi:type`).
+`xs:anyAtomicType`, `xs:yearMonthDuration` and `xs:dayTimeDuration` resolve
+under 1.0 as well: the XPath data model defines them for every XPath 2.0+ host,
+and schemas imported into XQuery, which are read as 1.0, use them. This is a
+deliberate leniency; `vc:typeAvailable` still reports all five unavailable
+under 1.0.
+
 The 1.1 constructs are always *parsed*, whichever version is selected — a
 schema that uses one is not rejected for it. Whether it is *honoured* is what
 the version selects, and the distinction matters:
