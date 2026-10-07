@@ -11,7 +11,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | What it does | Commit |
 |---|---|---|
 | RELAX NG compact syntax from the CLI and in includes | `go-xml validate -rng` read every schema as XML, and `FileResolver` parsed every include as XML, so a `.rnc` schema failed from the CLI and a modular one failed everywhere. Both now read either syntax, decided by content. | [`6e13dee`][6e13dee] |
-| Schema-aware processing from the CLI | `xsl:import-schema` and `import schema ... at` had no resolver in `go-xml`, so they failed to compile. Both now read through the confined resolver (`-allow-dir`), and `-validate strict\|lax` types the source so it atomises to schema types. | |
+| Schema-aware processing from the CLI | `xsl:import-schema` and `import schema ... at` had no resolver in `go-xml`, so they failed to compile. Both now read through the confined resolver (`-allow-dir`), and `-validate strict\|lax` types the source so it atomises to schema types. | [`4658352`][4658352] |
 
 ### Fixed — engine
 
@@ -23,7 +23,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
-| Validated nodes have typed values | `docs/validation.md`, the README, `xquery.md` and `todo.md` said a validated node still atomised as untyped; it never did once annotated. The example now sets `Annotate`, which is what types the source. | |
+| Validated nodes have typed values | `docs/validation.md`, the README, `xquery.md` and `todo.md` said a validated node still atomised as untyped; it never did once annotated. The example now sets `Annotate`, which is what types the source. | [`4658352`][4658352] |
 
 ## v1.5.0 — 2026-10-04
 
@@ -1105,6 +1105,7 @@ here so every entry in this file sits under a release.
 [8cf4584]: https://github.com/knroy/go-xml/commit/8cf4584
 [701239a]: https://github.com/knroy/go-xml/commit/701239a
 [6e13dee]: https://github.com/knroy/go-xml/commit/6e13dee
+[4658352]: https://github.com/knroy/go-xml/commit/4658352
 [d029347]: https://github.com/knroy/go-xml/commit/d029347
 [6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e
