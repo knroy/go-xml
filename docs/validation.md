@@ -172,6 +172,11 @@ tree and the two notations cannot come to disagree about what a schema means.
 A test asserts that directly: for a schema written both ways, the two parsers
 must produce structurally identical trees.
 
+The keywords are reserved as the compact grammar says (Appendix A.1):
+`string` and `token` name the built-in library's types — `token "a"` is
+`<value type="token" datatypeLibrary="">` — and no keyword may name a
+definition or a reference unless escaped, as `\string`.
+
 `include` and `external` reach a `Resolver` exactly as `<include>` and
 `<externalRef>` do, and are refused when none is supplied. A `Resolver`
 returns an XML-syntax document, so one serving compact schemas calls

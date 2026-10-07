@@ -291,6 +291,18 @@ func TestCompactMatchesXMLSyntax(t *testing.T) {
 			</grammar>`,
 		},
 		{
+			// Appendix A.1: datatypeName ::= ... | "string" | "token", in the
+			// built-in library even under an inherited one.
+			"built-in datatype keywords",
+			`datatypes xsd = "http://www.w3.org/2001/XMLSchema-datatypes"
+			 element foo { string, token "a", string { p = "1" } - "b" }`,
+			`<element name="foo"` + rngNS + ` datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes"><group>
+				<data type="string" datatypeLibrary=""/>
+				<value type="token" datatypeLibrary="">a</value>
+				<data type="string" datatypeLibrary=""><param name="p">1</param><except><value>b</value></except></data>
+			</group></element>`,
+		},
+		{
 			"comments are not content",
 			`# a comment
 			 element foo { text } # another`,
@@ -362,6 +374,8 @@ func TestCompactRefusesWhatItCannotParse(t *testing.T) {
 		{"unbound datatype prefix", `element foo { dt:string }`, "not bound"},
 		{"trailing junk", `element foo { text } element bar { text }`, "unexpected"},
 		{"bare keyword as define", `text = element foo { empty }`, "unexpected"},
+		{"keyword as define in a grammar", "start = element foo { text }\nstring = empty", "keyword"},
+		{"keyword as ref", `start = element foo { start }`, "keyword"},
 		{"mixed infix operators", `element foo { text | empty, text }`, "do not associate"},
 		{"bad escape", `\1foo = element foo { empty }`, "identifier"},
 		{"unterminated hex escape", `element foo { "\x{41" }`, "unterminated"},
@@ -697,8 +711,6 @@ func TestCompactParsesRealSchemas(t *testing.T) {
 	//     finished after 140 s; maxRefExpansions now stops it at a fifth of a
 	//     second with a message that says so. Sharing the compiled pattern
 	//     between <ref>s is the real fix — see docs/todo.md.
-	//   - svrl.rnc uses the built-in datatype keyword "string", which this
-	//     parser translates into a <ref> rather than a <data>.
 	//   - schema-for-xslt30.rnc writes start = any inside a nested <grammar>,
 	//     where any admits an <attribute>; §7.1.5 forbids start//attribute.
 	//   - xspec.rnc sequences xml-ns-attributes with common-attributes, which
@@ -724,7 +736,6 @@ func TestCompactParsesRealSchemas(t *testing.T) {
 		if _, err := Compile(doc); err != nil {
 			if strings.Contains(err.Error(), "Resolver") ||
 				strings.Contains(err.Error(), "<ref> expansions") ||
-				strings.Contains(err.Error(), `names "string"`) ||
 				strings.Contains(err.Error(), "section 7.1.5") ||
 				strings.Contains(err.Error(), "required twice") {
 				continue // see above; none of these is this parser's doing

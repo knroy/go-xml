@@ -283,11 +283,6 @@ parameters; `#` comments and the `\` identifier escape.
   760KB, the largest being the DocBook 5.1 schema at 356KB — all of which
   parse, plus the round-trip property against the XML syntax. That is
   circumstantial where a suite would be decisive.
-* **The built-in datatype keywords `string` and `token` are translated as
-  `<ref>`.** `svrl.rnc` writes `attribute xml:* { string }`, and the compact
-  parser emits `<ref name="string"/>` rather than a `<data>`, so compilation
-  fails with `<ref> names "string", which no <define> provides`. Section 7.3
-  used to refuse that schema first, which is why this had not been seen.
 * **Annotations are parsed and discarded.** A `[ ... ]` or `>> name [ ... ]`
   annotation is checked for well-formedness and then dropped rather than
   carried onto the tree as a foreign element. Nothing downstream reads them —

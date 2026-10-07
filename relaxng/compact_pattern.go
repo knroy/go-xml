@@ -212,9 +212,9 @@ func (p *compactParser) parsePrimaryInner() (*xdm.Node, error) {
 	if p.tok.kind == tokLiteral {
 		return p.parseValue("", "")
 	}
-	// A prefixed name here is a datatype: "xsd:string", optionally with
-	// parameters or a value.
-	if p.tok.kind == tokCName {
+	// A prefixed name, or the built-in "string" or "token", is a datatype:
+	// "xsd:string", optionally with parameters or a value.
+	if p.tok.kind == tokCName || p.atKeyword("string") || p.atKeyword("token") {
 		return p.parseDatatypeName()
 	}
 	if p.tok.kind == tokIdent || p.tok.kind == tokEscapedIdent {
@@ -253,9 +253,13 @@ func (p *compactParser) parseBracedPattern(local string) (*xdm.Node, error) {
 
 // parseRef reads a reference to a definition.
 func (p *compactParser) parseRef() (*xdm.Node, error) {
+	name, err := p.identifier("a definition name")
+	if err != nil {
+		return nil, err
+	}
 	n := p.b.el("ref")
-	p.b.attr(n, "name", p.tok.text)
-	return n, p.advance()
+	p.b.attr(n, "name", name)
+	return n, nil
 }
 
 // parseParentRef reads `parent name`.
@@ -267,12 +271,13 @@ func (p *compactParser) parseParentRef() (*xdm.Node, error) {
 	if err := p.advance(); err != nil { // "parent"
 		return nil, err
 	}
-	if p.tok.kind != tokIdent && p.tok.kind != tokEscapedIdent {
-		return nil, p.errorf(`expected a definition name after "parent", found %s`, p.tok)
+	name, err := p.identifier(`a definition name after "parent"`)
+	if err != nil {
+		return nil, err
 	}
 	n := p.b.el("parentRef")
-	p.b.attr(n, "name", p.tok.text)
-	return n, p.advance()
+	p.b.attr(n, "name", name)
+	return n, nil
 }
 
 // parseExternalRef reads `external "uri" [inherit = prefix]`.
