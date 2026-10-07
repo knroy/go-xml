@@ -1507,10 +1507,12 @@ the XTSE0010 further down its stylesheet and the attribute sweep reported
 XTSE0090 first. That was a check-ordering defect rather than a reason to
 accept the attribute: §8.4's placement rule for `xsl:on-completion` is now
 read off the tree ahead of the grammar sweep, so the structural error wins and
-`@export` is `removed30` like the rest. One exception remains deliberate:
-clearing `avt` on an attribute with neither an enumeration nor a `qnameAttrs`
-entry would change nothing, so `xsl:output`'s `parameter-document` and
-`json-node-output-method` keep theirs.
+`@export` is `removed30` like the rest. The table is now checked against the
+Recommendation itself: `TestElementTableMatchesRecommendation` parses the
+vendored summaries and fails on any divergence `docs/element-table-policy.md`
+does not declare, which is how the 2026-10-07 drift audit's remaining
+findings (`hidden` on `xsl:expose`, open `@method`/`@data-type` AVTs, an
+optional `xsl:package/@version`) were closed.
 
 Three classes were found, and only the first can mislead the code:
 
