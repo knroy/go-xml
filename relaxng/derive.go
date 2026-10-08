@@ -22,7 +22,70 @@ func choice(a, b pattern) pattern {
 	if _, ok := b.(notAllowedPat); ok {
 		return a
 	}
+	// A choice between a pattern and itself is that pattern. Without this the
+	// derivative of a oneOrMore nested in a oneOrMore carries two copies of
+	// the same continuation per item, so the pattern doubles with every
+	// child: DocBook's xref.001, valid, hit the 100,000-node bound on that
+	// alone. Equality is structural and conservative (see patEq), which
+	// catches the copies the derivative makes; hash-consing would make it a
+	// pointer comparison.
+	if patEq(a, b) || inChoice(a, b) {
+		return a
+	}
 	return choicePat{a, b}
+}
+
+// inChoice reports whether b is already one of a's alternatives. A chain of
+// choices is built leftwards, so the alternatives are the Right of each link
+// and the Left of the last.
+func inChoice(a, b pattern) bool {
+	for {
+		c, ok := a.(choicePat)
+		if !ok {
+			return patEq(a, b)
+		}
+		if patEq(c.Right, b) {
+			return true
+		}
+		a = c.Left
+	}
+}
+
+// patEq reports whether two patterns are structurally equal. It may answer
+// false for equal patterns but never true for different ones: values and
+// data, whose fields hold maps and slices, always compare unequal, and a
+// refPat is equal only to itself.
+func patEq(a, b pattern) bool {
+	switch x := a.(type) {
+	case choicePat:
+		y, ok := b.(choicePat)
+		return ok && patEq(x.Left, y.Left) && patEq(x.Right, y.Right)
+	case groupPat:
+		y, ok := b.(groupPat)
+		return ok && patEq(x.Left, y.Left) && patEq(x.Right, y.Right)
+	case interleavePat:
+		y, ok := b.(interleavePat)
+		return ok && patEq(x.Left, y.Left) && patEq(x.Right, y.Right)
+	case afterPat:
+		y, ok := b.(afterPat)
+		return ok && patEq(x.Left, y.Left) && patEq(x.Right, y.Right)
+	case oneOrMorePat:
+		y, ok := b.(oneOrMorePat)
+		return ok && patEq(x.Pattern, y.Pattern)
+	case listPat:
+		y, ok := b.(listPat)
+		return ok && patEq(x.Pattern, y.Pattern)
+	case elementPat:
+		y, ok := b.(elementPat)
+		return ok && x.Name == y.Name && patEq(x.Pattern, y.Pattern)
+	case attributePat:
+		y, ok := b.(attributePat)
+		return ok && x.Name == y.Name && patEq(x.Pattern, y.Pattern)
+	case valuePat, dataPat:
+		return false
+	}
+	// notAllowedPat, emptyPat, textPat and *refPat are comparable.
+	return a == b
 }
 
 func group(a, b pattern) pattern {
