@@ -235,6 +235,19 @@ func (s *Stylesheet) findTemplate(node *xdm.Node, mode string, ctx *xpath.Contex
 func (s *Stylesheet) findTemplateFrom(node *xdm.Node, mode string,
 	ctx *xpath.Context, start int) (*Template, int, error) {
 
+	if cand, ok := s.candidates(node, mode); ok {
+		for _, i := range cand[sort.SearchInts(cand, start):] {
+			t := s.templates[i]
+			ok, err := t.Match.Matches(node, ctx)
+			if err != nil {
+				return nil, 0, err
+			}
+			if ok {
+				return t, i + 1, nil
+			}
+		}
+		return nil, len(s.templates), nil
+	}
 	for i := start; i < len(s.templates); i++ {
 		t := s.templates[i]
 		if !t.matchesMode(mode) {

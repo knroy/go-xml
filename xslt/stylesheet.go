@@ -23,6 +23,8 @@ type Stylesheet struct {
 	// templates are the match templates, pre-sorted by descending priority so
 	// that selection is a linear scan that stops at the first match.
 	templates []*Template
+	// rules indexes templates by mode, node kind and name; see ruleIndex.
+	rules ruleIndex
 	// named indexes templates that have a name, for xsl:call-template.
 	named map[string]*Template
 	// globals are top-level variables and parameters, in declaration order.
@@ -770,6 +772,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 		return nil, err
 	}
 	c.sheet.sortTemplates()
+	c.sheet.buildRuleIndex()
 	// A global variable overridden by a higher-precedence declaration is not
 	// evaluated at all, so the overridden bindings are dropped before the
 	// stylesheet is handed back.
