@@ -10,7 +10,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| Benchmark harness in `bench/` | Comparisons with other engines were one-off and unreproducible. Pinned, checksummed engines; outputs checked for agreement before timing; cold and warm modes. | |
+| Benchmark harness in `bench/` | Comparisons with other engines were one-off and unreproducible. Pinned, checksummed engines; outputs checked for agreement before timing; cold and warm modes. | [`565321c`][565321c] |
 
 ### Fixed — release process
 
@@ -1153,6 +1153,7 @@ here so every entry in this file sits under a release.
 [d3ce46f]: https://github.com/knroy/go-xml/commit/d3ce46f
 [549d113]: https://github.com/knroy/go-xml/commit/549d113
 [78c47fb]: https://github.com/knroy/go-xml/commit/78c47fb
+[565321c]: https://github.com/knroy/go-xml/commit/565321c
 [d029347]: https://github.com/knroy/go-xml/commit/d029347
 [6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e
