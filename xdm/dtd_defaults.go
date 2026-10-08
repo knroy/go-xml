@@ -58,19 +58,7 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 	// declaration is binding and later ones are ignored. The subset arrives
 	// internal part first, so first in the text is first in the DTD.
 	seen := map[string]bool{}
-	for {
-		i := strings.Index(subset, "<!ATTLIST")
-		if i < 0 {
-			return out, types
-		}
-		subset = subset[i+len("<!ATTLIST"):]
-		end := strings.IndexByte(subset, '>')
-		if end < 0 {
-			return out, types
-		}
-		body := subset[:end]
-		subset = subset[end+1:]
-
+	for body := range markupDecls(subset, "ATTLIST") {
 		fields := attListFields(body)
 		if len(fields) < 2 {
 			continue
@@ -130,6 +118,7 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 			seen[key] = true
 		}
 	}
+	return out, types
 }
 
 // attListFields splits an ATTLIST body into tokens, keeping a quoted value or
@@ -299,19 +288,7 @@ func applyAttTypes(el *Node, types []attDeclaredType) {
 // misparse loses the optimisation rather than deleting content.
 func parseElementOnlyDecls(subset string) map[string]bool {
 	var out map[string]bool
-	for {
-		i := strings.Index(subset, "<!ELEMENT")
-		if i < 0 {
-			return out
-		}
-		subset = subset[i+len("<!ELEMENT"):]
-		end := strings.IndexByte(subset, '>')
-		if end < 0 {
-			return out
-		}
-		body := subset[:end]
-		subset = subset[end+1:]
-
+	for body := range markupDecls(subset, "ELEMENT") {
 		fields := strings.Fields(body)
 		if len(fields) < 2 {
 			continue
@@ -326,6 +303,7 @@ func parseElementOnlyDecls(subset string) map[string]bool {
 		}
 		out[name] = true
 	}
+	return out
 }
 
 // isElementOnlyModel reports whether a content model is element content.

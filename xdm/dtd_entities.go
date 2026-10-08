@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"strconv"
 	"strings"
 )
@@ -240,24 +241,11 @@ func newEntityTable(base string, b *entityBudget) *entityTable {
 }
 
 func (t *entityTable) parseDecls(subset, base string) *entityTable {
-	rest := subset
-	for len(t.raw)+len(t.external) < maxEntityCount {
-		i := strings.Index(rest, "<!ENTITY")
-		if i < 0 {
+	for body := range markupDecls(subset, "ENTITY") {
+		if len(t.raw)+len(t.external) >= maxEntityCount {
 			break
 		}
-		rest = rest[i+len("<!ENTITY"):]
-		// The declaration ends at the first ">" *outside* a quoted value.
-		// Scanning for a bare ">" truncates any entity whose replacement text
-		// contains one — which is every entity that holds markup, and the
-		// reason <!ENTITY e "<b/>"> was read as the value "<b/".
-		end := endOfDeclaration(rest)
-		if end < 0 {
-			break
-		}
-		body := strings.TrimSpace(rest[:end])
-		rest = rest[end+1:]
-
+		body = strings.TrimSpace(body)
 		// A parameter entity declaration begins with "%".
 		if strings.HasPrefix(body, "%") {
 			continue
@@ -322,6 +310,60 @@ func (t *entityTable) parseDecls(subset, base string) *entityTable {
 		return nil
 	}
 	return t
+}
+
+// markupDecls yields the body of each markup declaration in a DTD subset whose
+// keyword is kw — for "<!ENTITY e 'x'>", kw "ENTITY", the text " e 'x'" — in
+// document order. It is the one scanner every reader of declarations goes
+// through, so that what counts as a declaration is decided in one place.
+//
+// Comments and processing instructions are skipped whole, and so is a quoted
+// literal outside a declaration (a DOCTYPE's system identifier): none of them
+// is markup, and a declaration written inside one is text. A declaration ends
+// at the first ">" outside its own quoted literals. "<![" opening a
+// conditional section is stepped over, so the declarations inside it are
+// seen, as they were before.
+func markupDecls(subset, kw string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		s := subset
+		for i := 0; i < len(s); {
+			rest := s[i:]
+			switch {
+			case strings.HasPrefix(rest, "<!--"):
+				i = skipPast(s, i+len("<!--"), "-->")
+			case strings.HasPrefix(rest, "<?"):
+				i = skipPast(s, i+len("<?"), "?>")
+			case strings.HasPrefix(rest, "<!["):
+				i += len("<![")
+			case strings.HasPrefix(rest, "<!"):
+				j := i + len("<!")
+				for j < len(s) && 'A' <= s[j] && s[j] <= 'Z' {
+					j++
+				}
+				end := endOfDeclaration(s[j:])
+				if end < 0 {
+					return
+				}
+				if s[i+len("<!"):j] == kw && !yield(s[j:j+end]) {
+					return
+				}
+				i = j + end + 1
+			case s[i] == '"' || s[i] == '\'':
+				i = skipPast(s, i+1, s[i:i+1])
+			default:
+				i++
+			}
+		}
+	}
+}
+
+// skipPast returns the offset just past the first end at or after i, or
+// len(s) when there is none.
+func skipPast(s string, i int, end string) int {
+	if j := strings.Index(s[i:], end); j >= 0 {
+		return i + j + len(end)
+	}
+	return len(s)
 }
 
 // endOfDeclaration returns the offset of the ">" that closes a declaration,
