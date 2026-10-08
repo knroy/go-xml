@@ -316,7 +316,110 @@ about 3% of CPU, and a cache that stays correct when a library changes after
 first use cost more allocations than it saved.
 
 Still open: Tier 3 (T20–T23, which need v2). The benchmark has not been
-re-run; docs/benchmark.md still shows the `4e0496f` figures.
+re-run; docs/benchmark.md still shows the `4e0496f` figures. Round 2 below
+re-profiles the result and ranks what is left.
+
+## Round 2: after the fixes (`73a2963`)
+
+All workloads were re-profiled on `dev` at `73a2963`, cold and warm, with the
+committed `bench/` harness for go-xml and round 1's figures for the reference
+engines (same machine). Four lanes ran at once, so wall times are noisy; the
+claims rest on allocation counts, CPU time, GOGC=off A/B runs and back-to-back
+pairs. Every prototype below was checked for byte-identical outputs and its
+packages' unit tests; the parser and XSLT prototypes also against the XSLT,
+QT3 and xsdtests suites.
+
+### Where it stands
+
+| Workload | Warm now (was) | Warm vs reference | Cold now (was) | Cold vs reference |
+|---|---|---|---|---|
+| Peppol CEN | 7.9 ms (38.4) | Saxon 4.9× slower (was 24×) | 60 ms (94) | Saxon 12× faster |
+| Peppol PEPPOL | 5.5 ms (27.1) | 4.2× (was 21×) | 31 ms (52) | 20× faster |
+| XRechnung xr | 14.4 ms (23.9) | 5.8× (was 9.6×) | 40 ms (44) | 14× faster |
+| DocBook, 42 items | 21.4 ms (68.6) | **0.66×**; faster on 29 of 40 | 165 ms (165) | 6.5× faster |
+| XMark 0.1, q1–q20 | 63–245 ms (152–7,189) | 0.29–2.9× Saxon; faster on q1, q5, q8, q9, q17 | 83–290 ms (168–6,351) | 3–10× faster |
+| XSD catalog | 0.97 ms (2.8) | Xerces **0.69×** | 9.1 ms (11.5) | xmllint 2.0× slower |
+| RELAX NG DocBook | 0.20 ms per document | Jing 6.7× slower | 39.9 ms (494) | xmllint 1.4× slower; Jing 4.5× faster |
+| DocBook 5.2 compile | 35.7 ms (496) | Jing 3× faster | — | — |
+| Parse 10 MB | 127 ms (268) | — | 160–178 ms (298) | `xmllint --c14n` about level |
+
+The steady-state gap that is left is in Schematron-shaped XSLT (4–6× Saxon),
+and in XMark queries that walk `//name` or still join pairwise. Cold, go-xml is
+ahead of the JVMs everywhere and level with libxml2 on large inputs. The
+remaining cold gap is on small inputs, where start-up and compile dominate.
+
+### Where cold time goes
+
+| Phase | Cost | Cause |
+|---|---|---|
+| Process start | 4.6–6 ms (xsltproc 2.2–2.9, empty Go binary 2.5) | `xsd.HTTPResolver` imports `net/http`, which links `crypto/tls` and, on macOS, the Security framework: about 1.7 ms. Package init is only 0.6–0.7 ms in total |
+| Parsing (input, stylesheet modules, schema documents) | 5.5–11 ms of a RELAX NG compile; 16.7 of DocBook's 75 ms compile; 67 ms of every 11 MB XMark query | `validateStartElement` builds two maps per start tag, so with more than 8 namespaces in scope they go to the heap (`xdm/wellformed.go:106–131`): 13–22% of compile and load bytes. With `AllowDOCTYPE` set and no DOCTYPE, the source is still copied twice (cause L3 below) |
+| Stylesheet compile | DocBook 70 ms, CEN 30 ms | `InScopeNamespaces` rebuilt per element (`xdm/node.go:1393`, through `newNSResolver`): 32–35% of compile bytes, about 10 ms per compile |
+| Schema load | XSD 1.1 schema for schemas 4.4–5.4 ms; `schema-for-xslt30.xsd` with `-catalog` 7.3–9.4 ms | DTD attribute typing rebuilds `prefix:local` per ATTLIST per element, quadratically (`xdm/dtd_defaults.go:265`, `xdm/wellformed.go:196`): 30% of the schema-for-schemas load |
+| Garbage collection in a cold CLI | 50–55% of CPU, 7–13% of wall | The heap only grows during a parse or compile, but GC cycles keep re-marking it |
+| Output | q10 0.36 s, of which 0.21 s is system time | `xslt.Serialize` writes unbuffered to the `-o` file, one syscall per token (`xslt/serialize.go:60`) |
+
+### Steady-state causes
+
+| Cause | Where | Evidence |
+|---|---|---|
+| `//name` builds the whole `descendant-or-self::node()` sequence, sorts it, then visits every node again | `xpath/eval.go:75`, `:149`, `:264` | XMark q7 eval 112 ms, q6 44 ms; 27% of CEN's bytes |
+| XSLT clears seven absent context components on every template and function call; patterns with no predicate still bind `current()` | `xslt/merge.go:1224`, `xslt/grouping_absent.go:30`, `xslt/pattern.go:466` | `clearMergeContext` is 91% of CEN's `withVar` bytes |
+| GC is now most of the XSLT CPU: 52–72% warm | — | Every collection re-marks the retained stylesheet (CEN 19.7 MB). Round 1's "allocation is the cost, not collection" no longer holds for XSLT |
+| `current()` is not a leaf call | `xpath/context.go:824` | 18% of XRechnung's bytes |
+| The T14 join casts the untyped outer key once per pair, and checks its cache in O(\|S\|) | `xquery/join.go:283`, `:315` | q11/q12: 62% of objects; q9 at factor 1 grows 53× for 10× data |
+| `Compiled.scope` copies the 496 B context on every XQuery expression | `xpath/xpath.go:335` | Fires on every evaluation measured; this is the T20 problem by another route |
+| RELAX NG `startTagCloseDeriv` rebuilds the pattern for every element, and each rebuilt choice goes back through B2's dedupe | `relaxng/derive.go:337` | `patEq` 18% of validation samples |
+| Text, attribute values and comments are one heap object each | `xdm/parse.go:870`, `internal/xmltok/xmltok.go:440` | 371k mallocs and 185k live objects per 10 MB parse |
+| Node size | `xdm/node.go` | 280 B; heap about 13–22 B per input byte against libxml2's ~14 and Saxon's ~2.5–7. Below the 256 B size class needs T21 (v2) |
+
+### Fix candidates, ranked
+
+Every fix keeps the v1 API unless marked v2. "Measured" means prototyped and
+timed on a copy of `73a2963`.
+
+| # | Fix | Measured gain | Risk |
+|---|---|---|---|
+| R1 | **Look namespace prefixes up instead of building maps per start tag** (fall back to a map above 8–16 attributes) | DocBook RNG parse 11.3 → 5.5 ms; `validateStartElement` 9.5 → 3.5% of parse CPU; 13–17% of XSLT compile bytes | low |
+| R2 | **Share one in-scope namespace map per declaring element during compile** | with R1: DocBook compile 70 → 51 ms, CEN 39 → 27 ms; retained stylesheet −14–23% | low |
+| R3 | **Fuse `//T` into `descendant::T`** when neither step has a predicate | q7 112 → 28 ms, q6 50 → 15, q14 44 → 18; at factor 1 q7 2.46 → 0.48 s; CEN −8% bytes | low |
+| R4 | **Join: cast the outer key once; range lookup for `< <= > >=`; identity check in `sameBindings`; `return $v` reads the tuple** | q11 173 → 29 ms, q12 172 → 30; q9 at factor 1 1,018 → 103 ms | low–medium |
+| R5 | **Buffer `xslt.Serialize`** | CLI q10 0.36 → 0.12 s | low |
+| R6 | **The CLI turns GC down while it parses and compiles** (`SetGCPercent`, never in the library) | CEN cold 58.7 → 41.9 ms, DocBook 129 → 95; 10 MB parse CPU 172 → 82 ms | memory: chapter.003 peak RSS 122 → 138 MB at 200 |
+| R7 | **Stop the source copies once the root opens with no DOCTYPE** | −105 MB allocated per 10 MB parse; peak RSS 2.97 → 2.31 GB at 100 MB | low |
+| R8 | **XSLT: skip clearing absent components; no bindings for predicate-free patterns; `current()` as a leaf** | CEN −14% wall, −23% CPU; PEPPOL −18%; DocBook −10% wall | low–medium |
+| R9 | **DTD attribute typing builds names once per tag** | schema-for-schemas load −25%; `-catalog` XSLT 3.0 schema 8.5–9.4 → 6.6–7.0 ms | low |
+| R10 | **RELAX NG: `startTagCloseDeriv` returns its input when nothing changed** | warm validation 2.2× faster, allocations ÷5 | low |
+| R11 | String arenas for text and attribute values; 1,024-node chunks | mallocs 371k → 14k per 10 MB parse | low–medium |
+| R12 | C14N: escape through lookup tables, 64 KiB output buffer | 10 MB C14N 22.4 → 16.5 ms | low |
+| R13 | Small items: cache `canonicalLocation` per load; no character counting without a length facet; `nonSpaceText` before `Trim` | catalog load −5–7%; XSD validate −6% | low |
+| E1 | XSLT dynamic state on one pointer instead of the variable chain (estimate) | 8–15% of XSLT bytes that R8 cannot reach | medium |
+| E2 | Element-name index per tree for `descendant::name` (estimate) | q6/q7/q14 eval −60–80% after R3 | medium |
+| E3 | Bitset NFA states in XSD 1.1 restriction checks (estimate) | −15–20% of XSD 1.1 schema loads | medium |
+| v2 | Move `HTTPResolver` out of `xsd` (exported `Client *http.Client`); T20 context split; T21/T22 node slimming | start-up −1.7 ms; heap 13 → 5–7 B per byte | v2 |
+
+Together on a copy of the tree, the XSLT prototypes (R1, R2, R3, R8) took
+CEN from 6.56 to 5.64 ms and DocBook from 38.6 to 34.6 ms per item. The
+XQuery ones (R3, R4, R5) took the worst warm ratio to Saxon from 2.94× to
+1.52×, after which parse is 55–90% of every 11 MB item. The parse ones (R1,
+R6, R7, R11) took a cold 10 MB transform to xsltproc's CPU time.
+
+T23 (RELAX NG hash-consing) is not worth it yet: R10 removes most of B2's
+cost in about 60 lines, and a cold run is dominated by the compile.
+
+### Bugs found in round 2
+
+| # | Bug | Status |
+|---|---|---|
+| X1 | A FLWOR join charges \|S\| items per outer tuple against `MaxItems` (5,000,000, not configurable), so XMark q8, q9, q11 and q12 fail at factor 1 with `XPDY0130`. The nested loop it replaced charged the same | open; R4's accounting fix (charge S once) resolves it |
+| X2 | A pattern predicate that is numeric through a function call, as in `item[number(@n)]`, is evaluated with position fixed at 1, so it matches `@n = 1` rather than position `@n`. Saxon-HE 12.10 gives the positional answer | open (`xslt/pattern.go:1000`) |
+| X3 | `-catalog` read a schema's sibling `XMLSchema.xsd` before the catalog's, and that copy's DOCTYPE was refused | fixed in `8aa5ab7` |
+| X4 | With `AllowDOCTYPE` set and no DOCTYPE, the parser keeps two extra full copies of the document; `fn:doc` and `fn:parse-xml` always set it | open; R7 |
+
+The benchmark harness has an inconsistency: its cold parse helper sets
+`AllowDOCTYPE` and its warm loop does not, so the two columns time different
+code paths. `docs/benchmark.md` still shows the `22f4b04` figures; a full
+re-run, with the JVM engines, should follow the fixes above.
 
 ## Correctness bugs found while profiling
 

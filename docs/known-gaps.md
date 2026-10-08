@@ -649,6 +649,30 @@ resolver so that the external subset is read. For the same reason, entity and
 ATTLIST declarations that follow an unread parameter-entity reference are
 ignored (§5.1); libxml2 2.9.13 still processes them.
 
+### A pattern predicate that is numeric through a function call is not positional
+
+`match="item[number(@n)]"` matches the `item` whose `@n` is 1, not the one
+whose position equals `@n`. `needsPosition` (`xslt/pattern.go`) treats every
+function call other than `position()` and `last()` as position-free, so the
+predicate runs with position and size fixed at 1. `count()`, `xs:integer()` and
+`string-length()` behave the same. Saxon-HE 12.10 gives the positional answer.
+Found in profiling round 2 ([profiling.md](profiling.md#bugs-found-in-round-2),
+X2).
+
+### A FLWOR join charges the item budget once per outer tuple
+
+The `for … where` join (and the nested loop before it) charges the size of the
+inner sequence against `MaxItems` for every outer tuple, although the join
+holds it once. XMark q8, q9, q11 and q12 at factor 1 fail with `XPDY0130`,
+and `MaxItems` cannot be raised. Profiling round 2, X1.
+
+### `AllowDOCTYPE` keeps two copies of a document that has no DOCTYPE
+
+The re-parse buffer and the entity-charge backlog grow to the whole document
+even when no DOCTYPE arrives: +670 MB peak RSS on a 100 MB input. `fn:doc`
+and `fn:parse-xml` always set the option. Results are correct. Profiling
+round 2, X4.
+
 ---
 
 ## Deliberate divergences
