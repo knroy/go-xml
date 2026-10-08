@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 	"unsafe"
@@ -494,5 +495,54 @@ func TestParseSharesRepeatedStrings(t *testing.T) {
 	}
 	if want := "item[id=1,b=2] item[id=3] f[]"; strings.Join(got, " ") != want {
 		t.Errorf("attributes: got %q, want %q", strings.Join(got, " "), want)
+	}
+}
+
+// TestParseTextRunIsLinear pins that character data split across many tokens
+// -- CDATA sections between text -- is joined once per text node rather than
+// copied again for every piece, which made untrusted input of n sections cost
+// O(n^2). It also pins what joining must not change: CDATA merges with its
+// neighbours, while a comment or PI between two runs keeps them separate
+// nodes, and whitespace stripping still sees the joined value.
+func TestParseTextRunIsLinear(t *testing.T) {
+	children := func(doc string, opts ParseOptions) string {
+		t.Helper()
+		tree, err := ParseString(doc, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, k := range tree.Root.Children[0].Children {
+			got = append(got, k.Kind.String()+k.Value)
+		}
+		return strings.Join(got, " ")
+	}
+	for _, c := range []struct {
+		doc  string
+		opts ParseOptions
+		want string
+	}{
+		{`<r>a<![CDATA[b]]>c&amp;d<![CDATA[]]><![CDATA[e]]></r>`, ParseOptions{}, "text()abc&de"},
+		{`<r>a<!--c-->b<?p x?>c</r>`, ParseOptions{},
+			"text()a comment()c text()b processing-instruction()x text()c"},
+		{"<r> <![CDATA[ ]]> <e/></r>", ParseOptions{StripSpace: func(QName) bool { return true }},
+			"element()"},
+	} {
+		if got := children(c.doc, c.opts); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.doc, got, c.want)
+		}
+	}
+
+	// 20,000 one-byte sections between one-byte texts: joined piece by piece,
+	// this allocated ~800 MB; joined once, a few hundred KB.
+	doc := "<r>" + strings.Repeat("a<![CDATA[b]]>", 20000) + "</r>"
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if _, err := ParseString(doc, ParseOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	if mb := (after.TotalAlloc - before.TotalAlloc) >> 20; mb > 50 {
+		t.Errorf("parsing 20,000 CDATA sections allocated %d MB, want at most 50", mb)
 	}
 }

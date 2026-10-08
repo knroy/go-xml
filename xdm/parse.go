@@ -287,6 +287,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	tree := NewTree()
 	var chunk nodeChunk
 	var spaces spaceTable
+	var run textRun
 	tree.Root.BaseURI = opts.BaseURI
 	tree.Root.DocumentURI = opts.DocumentURI
 	cur := tree.Root
@@ -324,6 +325,12 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		}
 		if err != nil {
 			return nil, fmt.Errorf("parse XML: %w", err)
+		}
+		// Any other token ends a run of character data, and its node must
+		// hold its value before anything -- whitespace stripping at an end
+		// tag, a new sibling -- can look at it.
+		if _, text := tok.(xml.CharData); !text {
+			run.flush(&spaces)
 		}
 
 		switch t := tok.(type) {
@@ -416,7 +423,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				sawPrologToken = true
 				continue
 			}
-			appendText(&chunk, cur, spaces.text(t))
+			run.add(&chunk, cur, t)
 
 		case xml.Comment:
 			sawPrologToken = true
@@ -759,25 +766,42 @@ func resolvePrefix(el *Node, prefix string, isElement bool) string {
 	return ""
 }
 
-// appendText adds character data, merging into a preceding text node.
+// textRun gathers the character data of one text node, which arrives as
+// several tokens when a CDATA section adjoins other text, and sets the node's
+// value once when the run ends.
 //
-// The XDM requires that no two text nodes be adjacent. encoding/xml splits
-// character data at entity references and buffer boundaries, so without
-// merging, "a&amp;b" would produce three text nodes and fn:count(text()) would
-// return 3 instead of 1.
-func appendText(chunk *nodeChunk, parent *Node, s string) {
-	if s == "" {
+// The XDM requires that no two text nodes be adjacent, so "a<![CDATA[b]]>c"
+// is one node. Joining each piece onto the node's value as it arrived copied
+// the whole value every time, which made a text node of n pieces cost O(n^2)
+// -- a 100,000-section document took a second.
+type textRun struct {
+	node *Node // the text node being built, nil between runs
+	buf  []byte
+}
+
+// add appends b to the text node at the end of parent's children, creating
+// it when parent does not end in one.
+func (r *textRun) add(chunk *nodeChunk, parent *Node, b []byte) {
+	if len(b) == 0 {
 		return
 	}
-	if n := len(parent.Children); n > 0 {
-		if last := parent.Children[n-1]; last.Kind == KindText {
-			last.Value += s
-			return
-		}
+	if r.node == nil {
+		// Every token inside an element other than character data adds a
+		// node, so a run never resumes after a flush.
+		r.node = chunk.alloc()
+		r.node.Kind = KindText
+		parent.AppendChild(r.node)
+		r.buf = r.buf[:0]
 	}
-	n := chunk.alloc()
-	n.Kind, n.Value = KindText, s
-	parent.AppendChild(n)
+	r.buf = append(r.buf, b...)
+}
+
+// flush sets the value of the node being built, if any, and ends the run.
+func (r *textRun) flush(spaces *spaceTable) {
+	if r.node != nil {
+		r.node.Value = spaces.text(r.buf)
+		r.node = nil
+	}
 }
 
 // spaceTable shares one string among the whitespace-only text values of a
