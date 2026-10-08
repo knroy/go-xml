@@ -152,3 +152,28 @@ func TestParseNormalizesAttributeValues(t *testing.T) {
 		t.Fatalf("character reference not preserved: got %q", got)
 	}
 }
+
+// TestAttNormReaderReusesBuffer pins T10: the reader keeps one buffer for the
+// whole stream rather than allocating a scratch buffer per Read and growing
+// its pending slice by append, which cost ~19 MB per 10 MB parse. It also
+// checks that the output is still byte for byte the normalized input when
+// the reads hold back a delimiter prefix at every boundary.
+func TestAttNormReaderReusesBuffer(t *testing.T) {
+	src := strings.Repeat("<e a=\"x\ny\"><!-- c --></e>", 40000) // ~1 MB
+	want := strings.ReplaceAll(src, "x\ny", "x y")
+	if got := normalizeAll(t, src, 4093, 4096); got != want {
+		t.Fatalf("output differs from the normalized input")
+	}
+	b := make([]byte, 4096)
+	allocs := testing.AllocsPerRun(3, func() {
+		r := newAttNormReader(strings.NewReader(src))
+		for {
+			if _, err := r.Read(b); err != nil {
+				break
+			}
+		}
+	})
+	if allocs > 2 {
+		t.Errorf("reading 1 MB took %.0f allocations, want at most 2", allocs)
+	}
+}

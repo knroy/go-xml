@@ -36,8 +36,8 @@ func readAll(t *testing.T, doc string) (string, error) {
 		if err != nil {
 			return sb.String(), err
 		}
-		if c, ok := tok.(CharData); ok {
-			sb.Write(c)
+		if c, ok := tok.(*CharData); ok {
+			sb.Write(*c)
 		}
 	}
 }

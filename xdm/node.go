@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 // NodeKind enumerates the seven node kinds of the XDM.
@@ -197,6 +198,11 @@ type Node struct {
 	DerivedPrimitive string
 	ListItem         string
 
+	// ext holds the state that almost no node carries -- the type
+	// environment below, and the identity of a detached root -- out of line,
+	// created on first use. Inline, those 20 bytes put every node of a parsed
+	// document in the 320-byte size class instead of 288. See nodeExt.
+	//
 	// typeEnv is the TypeEnvironment of the schema whose assessment produced
 	// this node's TypeAnnotation, or nil when no schema did.
 	//
@@ -221,7 +227,7 @@ type Node struct {
 	// assessment -- a DTD attribute type, an XSLT validation instruction, a
 	// plain struct literal in a test -- has no schema to name, and for those
 	// the global table is exactly the behaviour that was there before.
-	typeEnv *TypeEnvironment
+	ext *nodeExt
 
 	// IsID and IsIDREFS are the data model's is-id and is-idrefs properties
 	// (XDM §5.2, §6.2). They are deliberately *separate* state from
@@ -293,16 +299,6 @@ type Node struct {
 	// typed mixed content, where it is significant -- so the serializers
 	// read it. Unvalidated nodes leave it false.
 	MixedContent bool
-
-	// detachedID numbers a node that roots a tree which was never finalized,
-	// assigned on the first cross-tree comparison. Zero means unassigned.
-	detachedID int64
-
-	// numbered guards the one-shot pre-order walk that gives the nodes of an
-	// unfinalized tree distinct order values. It sits beside detachedID
-	// because both are properties of a root that has no Tree of its own, and
-	// both are set at most once however many callers ask.
-	numbered int32
 
 	// offset is the byte position where this node starts in the source text,
 	// stored one greater than the true offset so that the zero value means
@@ -645,12 +641,13 @@ func detachedRootID(root *Node) int64 {
 	// The number lives on the node rather than in a side table so that it
 	// dies with the node: a table keyed by *Node would pin every constructed
 	// root for the life of the process.
-	if id := atomic.LoadInt64(&root.detachedID); id != 0 {
+	ext := root.ownExt()
+	if id := ext.detachedID.Load(); id != 0 {
 		return id
 	}
 	id := int64(nextTreeID())
-	if !atomic.CompareAndSwapInt64(&root.detachedID, 0, id) {
-		return atomic.LoadInt64(&root.detachedID)
+	if !ext.detachedID.CompareAndSwap(0, id) {
+		return ext.detachedID.Load()
 	}
 	return id
 }
@@ -704,7 +701,7 @@ func numberDetachedRoot(n *Node) {
 // stamps n.tree, which would claim these nodes for a tree they do not belong
 // to and change what Compare says about them.
 func numberDetachedSubtree(root *Node) {
-	if !atomic.CompareAndSwapInt32(&root.numbered, 0, 1) {
+	if !root.ownExt().numbered.CompareAndSwap(0, 1) {
 		return
 	}
 	var counter int32
@@ -904,7 +901,7 @@ func (n *Node) Atomize() *Atomic {
 			// it the value knows only the primitive it erased to, and every
 			// question about the schema type it was validated against
 			// answered false.
-			return a.WithDerived(n.TypeAnnotation).WithTypeEnv(n.typeEnv)
+			return a.WithDerived(n.TypeAnnotation).WithTypeEnv(n.TypeEnv())
 		}
 		// A user-defined type this package cannot construct still atomises:
 		// it is the primitive its schema type derives from, and the schema
@@ -981,7 +978,7 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 			// that "data(@nmtokens) instance of xs:NMTOKEN*" is true. Without
 			// it each token is only the xs:string that NMTOKEN erases to and
 			// the instance-of test answers false.
-			out = append(out, a.WithDerived(item).WithTypeEnv(n.typeEnv))
+			out = append(out, a.WithDerived(item).WithTypeEnv(n.TypeEnv()))
 			continue
 		}
 		out = append(out, NewUntypedAtomic(f))
@@ -1685,7 +1682,7 @@ func atomicForUnionAnnotation(n *Node) *Atomic {
 	switch member {
 	case "QName", "NOTATION":
 		if q, ok := n.resolveQNameValue(); ok {
-			return NewQNameValue(q).WithDerivedUnion(n.TypeAnnotation, member).WithTypeEnv(n.typeEnv)
+			return NewQNameValue(q).WithDerivedUnion(n.TypeAnnotation, member).WithTypeEnv(n.TypeEnv())
 		}
 		return nil
 	}
@@ -1693,7 +1690,7 @@ func atomicForUnionAnnotation(n *Node) *Atomic {
 	if a == nil {
 		return nil
 	}
-	return a.WithDerivedUnion(n.TypeAnnotation, member).WithTypeEnv(n.typeEnv)
+	return a.WithDerivedUnion(n.TypeAnnotation, member).WithTypeEnv(n.TypeEnv())
 }
 
 // atomicForDerivedAnnotation builds a typed value for a user-defined schema
@@ -1746,7 +1743,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 		switch prim {
 		case "QName", "NOTATION":
 			if q, ok := n.resolveQNameValue(); ok {
-				return NewQNameValue(q).WithDerived(n.TypeAnnotation).WithTypeEnv(n.typeEnv)
+				return NewQNameValue(q).WithDerived(n.TypeAnnotation).WithTypeEnv(n.TypeEnv())
 			}
 			return nil
 		}
@@ -1755,7 +1752,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 			// intermediate name the walk stopped at: that is what makes
 			// "instance of my:specialPartNumber" true as well as
 			// "instance of my:partNumberType".
-			return a.WithDerived(n.TypeAnnotation).WithTypeEnv(n.typeEnv)
+			return a.WithDerived(n.TypeAnnotation).WithTypeEnv(n.TypeEnv())
 		}
 		if seen[prim] {
 			return nil
@@ -2085,4 +2082,89 @@ func isBuiltinSimpleTypeName(name string) bool {
 		return true
 	}
 	return false
+}
+
+// nodeExt is the out-of-line part of a Node: state that only a schema-typed
+// node or the root of a detached tree ever sets.
+//
+// The Node holds it through a plain pointer read and written with
+// sync/atomic's pointer functions rather than through an atomic.Pointer,
+// because atomic.Pointer carries a no-copy marker and Node is copied by value
+// -- "c := *n" is how this repository and its callers clone a node -- so go
+// vet would flag every such copy.
+//
+// A copy made that way shares its original's nodeExt, and owner is how the
+// two are told apart. typeEnv belongs to the node's content and is inherited
+// by the copy, as it was when the field was inline. detachedID and numbered
+// identify one particular root and must not be: a copy that took its
+// original's id would compare equal to a different tree. So the first time a
+// node that does not own its nodeExt needs one, it gets a fresh one carrying
+// only typeEnv; see ownExt.
+//
+// Because a nodeExt may be shared, its typeEnv is never written in place:
+// SetTypeEnv installs a new nodeExt (replaceExt), so setting the environment
+// of one node never changes what a copy of it reports.
+type nodeExt struct {
+	owner   *Node
+	typeEnv *TypeEnvironment
+
+	// detachedID numbers a node that roots a tree which was never finalized,
+	// assigned on the first cross-tree comparison. Zero means unassigned.
+	detachedID atomic.Int64
+
+	// numbered guards the one-shot pre-order walk that gives the nodes of an
+	// unfinalized tree distinct order values. It sits beside detachedID
+	// because both are properties of a root that has no Tree of its own, and
+	// both are set at most once however many callers ask.
+	numbered atomic.Int32
+}
+
+// extAddr returns the address of n.ext as the type sync/atomic's pointer
+// functions take.
+func (n *Node) extAddr() *unsafe.Pointer { return (*unsafe.Pointer)(unsafe.Pointer(&n.ext)) }
+
+// loadExt returns n's nodeExt, which may be one n shares with the node it was
+// copied from, or nil when nothing has needed one.
+func (n *Node) loadExt() *nodeExt { return (*nodeExt)(atomic.LoadPointer(n.extAddr())) }
+
+// ownExt returns the nodeExt that belongs to n, creating it on first use or
+// replacing one inherited by a struct copy.
+//
+// It is safe to call concurrently, as the atomic fields it replaced were: the
+// pointer is installed by compare-and-swap, so concurrent callers all end up
+// with the one that won, and the counters inside it keep their own atomicity.
+func (n *Node) ownExt() *nodeExt {
+	for {
+		old := n.loadExt()
+		if old != nil && old.owner == n {
+			return old
+		}
+		e := &nodeExt{owner: n}
+		if old != nil {
+			e.typeEnv = old.typeEnv
+		}
+		if atomic.CompareAndSwapPointer(n.extAddr(), unsafe.Pointer(old), unsafe.Pointer(e)) {
+			return e
+		}
+	}
+}
+
+// replaceExt installs a new nodeExt carrying typeEnv e, and the root identity
+// of the one it replaces when n owns that one.
+//
+// ponytail: an id assigned by a detachedRootID racing this exact call on the
+// same node can be lost. SetTypeEnv runs while a validator builds the node,
+// before any other goroutine can reach it, so the window is not reachable.
+func (n *Node) replaceExt(e *TypeEnvironment) {
+	for {
+		old := n.loadExt()
+		ext := &nodeExt{owner: n, typeEnv: e}
+		if old != nil && old.owner == n {
+			ext.detachedID.Store(old.detachedID.Load())
+			ext.numbered.Store(old.numbered.Load())
+		}
+		if atomic.CompareAndSwapPointer(n.extAddr(), unsafe.Pointer(old), unsafe.Pointer(ext)) {
+			return
+		}
+	}
 }

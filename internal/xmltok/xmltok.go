@@ -75,8 +75,13 @@ type Attr struct {
 	Value string
 }
 
-// A Token is one of StartElement, EndElement, CharData, Comment, ProcInst or
-// Directive.
+// A Token is one of *StartElement, *EndElement, *CharData, *Comment,
+// *ProcInst or *Directive. It points into the Decoder, which reuses the same
+// value for the next token of its kind, so a token -- like the byte slices
+// and attribute slice it holds -- is valid only until the next call to
+// RawToken. Handing out pointers rather than values is what keeps a token
+// from costing an allocation: a struct or slice stored in an interface is
+// copied to the heap, a pointer is not.
 type Token any
 
 // A StartElement is a start tag. An empty-element tag is returned as a
@@ -115,9 +120,8 @@ const bufSize = 4096
 
 // A Decoder reads tokens from an XML byte stream.
 //
-// Byte slices in a returned token — CharData, Comment, ProcInst.Inst,
-// Directive — alias the Decoder's scratch space and are valid only until the
-// next call to RawToken.
+// A returned token, and the byte and attribute slices in it, alias the
+// Decoder's own storage and are valid only until the next call to RawToken.
 type Decoder struct {
 	// Strict is kept for the caller's sake, which sets it; the Decoder is
 	// strict whatever its value. xdm has never read a document any other way.
@@ -151,6 +155,12 @@ type Decoder struct {
 	scratch []byte    // the bytes of the token being built
 	spans   []refSpan // in scratch, the extents produced by character references
 	carry   []byte    // a name that straddled a refill
+	attrs   []Attr    // backs StartElement.Attr, reused tag to tag
+
+	// names interns the names this Decoder has returned, so that a document
+	// repeating a few element and attribute names thousands of times
+	// allocates each once. Only valid names are entered.
+	names map[string]string
 
 	endPending bool // the last tag was empty; its EndElement is owed
 	endName    Name
@@ -159,6 +169,14 @@ type Decoder struct {
 	declSeen bool // the first <?xml?> has been read; the version is fixed
 
 	literal bool // the last CharData had no reference and was not CDATA
+
+	// The values RawToken returns pointers to, one per kind, reused.
+	tokStart   StartElement
+	tokEnd     EndElement
+	tokText    CharData
+	tokComment Comment
+	tokPI      ProcInst
+	tokDir     Directive
 }
 
 // NewDecoder returns a Decoder reading from r.
@@ -292,7 +310,8 @@ func (d *Decoder) RawToken() (Token, error) {
 	}
 	if d.endPending {
 		d.endPending = false
-		return EndElement{d.endName}, nil
+		d.tokEnd = EndElement{d.endName}
+		return &d.tokEnd, nil
 	}
 	b, ok := d.getc()
 	if !ok {
@@ -305,7 +324,8 @@ func (d *Decoder) RawToken() (Token, error) {
 		if !ok {
 			return nil, d.err
 		}
-		return CharData(data), nil
+		d.tokText = CharData(data)
+		return &d.tokText, nil
 	}
 	if b, ok = d.mustgetc(); !ok {
 		return nil, d.err
@@ -336,7 +356,8 @@ func (d *Decoder) endTag() (Token, error) {
 	if b != '>' {
 		return nil, d.syntaxError("invalid characters between </" + name.Local + " and >")
 	}
-	return EndElement{name}, nil
+	d.tokEnd = EndElement{name}
+	return &d.tokEnd, nil
 }
 
 // orSyntaxError reports msg unless a more specific error is already recorded.
@@ -355,7 +376,7 @@ func (d *Decoder) startTag() (Token, error) {
 	if !ok {
 		return nil, d.orSyntaxError("expected element name after <")
 	}
-	attrs := []Attr{}
+	attrs := d.attrs[:0]
 	for {
 		spaced := d.space()
 		b, ok := d.mustgetc()
@@ -403,7 +424,9 @@ func (d *Decoder) startTag() (Token, error) {
 		}
 		attrs = append(attrs, Attr{an, string(v)})
 	}
-	return StartElement{name, attrs}, nil
+	d.attrs = attrs
+	d.tokStart = StartElement{name, attrs}
+	return &d.tokStart, nil
 }
 
 // procInst reads [16] PI after "<?", and treats target "xml" as [23] XMLDecl.
@@ -435,7 +458,8 @@ func (d *Decoder) procInst() (Token, error) {
 			return nil, err
 		}
 	}
-	return ProcInst{target, data}, nil
+	d.tokPI = ProcInst{target, data}
+	return &d.tokPI, nil
 }
 
 // xmlDecl applies the version and encoding of an XML declaration whose
@@ -558,7 +582,8 @@ func (d *Decoder) bang() (Token, error) {
 		if !ok {
 			return nil, d.err
 		}
-		return CharData(data), nil
+		d.tokText = CharData(data)
+		return &d.tokText, nil
 	}
 	return d.directive(b)
 }
@@ -588,7 +613,8 @@ func (d *Decoder) comment() (Token, error) {
 	if !d.checkChars(data, nil) {
 		return nil, d.err
 	}
-	return Comment(data), nil
+	d.tokComment = Comment(data)
+	return &d.tokComment, nil
 }
 
 // directive reads a markup declaration after "<!", whose first byte b has
@@ -654,7 +680,8 @@ func (d *Decoder) directive(b byte) (Token, error) {
 		}
 	}
 	d.scratch = out
-	return Directive(out), nil
+	d.tokDir = Directive(out)
+	return &d.tokDir, nil
 }
 
 // until consumes input up to and including the first occurrence of term,
@@ -709,12 +736,27 @@ func (d *Decoder) name() (string, bool) {
 	if !ok {
 		return "", false
 	}
+	if s, ok := d.names[string(b)]; ok {
+		return s, true
+	}
 	if !isName(b) {
 		d.syntaxError("invalid XML name: " + string(b))
 		return "", false
 	}
-	return string(b), true
+	s := string(b)
+	// ponytail: entries stop at maxInternedNames, so a document of unique
+	// names costs a bounded map; later names are allocated as before.
+	if len(d.names) < maxInternedNames {
+		if d.names == nil {
+			d.names = make(map[string]string)
+		}
+		d.names[s] = s
+	}
+	return s, true
 }
+
+// maxInternedNames bounds the name table of one Decoder.
+const maxInternedNames = 4096
 
 // nameBytes consumes a run of bytes that may belong to a name: the ASCII name
 // characters and every non-ASCII byte, whose validity isName decides once the

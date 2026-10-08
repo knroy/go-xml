@@ -75,6 +75,10 @@ type attNormReader struct {
 	// the middle of a delimiter — "<!--" and "<![CDATA[" are up to nine
 	// bytes — and the scan must not depend on where it fell.
 	buf []byte
+	// scratch backs buf: the held-back bytes (fewer than maxAttNormPending)
+	// are moved to its front and the next read lands after them, so a parse
+	// reuses one buffer instead of allocating one per Read.
+	scratch [attNormReadSize + maxAttNormPending]byte
 	// declDepth counts "[" in a markup declaration, so that "]" closing an
 	// internal subset is told apart from one inside it.
 	declDepth int
@@ -93,6 +97,9 @@ func newAttNormReader(r io.Reader) *attNormReader {
 // maxAttNormPending is the longest delimiter the scanner must hold: len("<![CDATA[").
 const maxAttNormPending = 9
 
+// attNormReadSize caps one read of the wrapped reader.
+const attNormReadSize = 4096
+
 func (a *attNormReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -110,18 +117,17 @@ func (a *attNormReader) Read(p []byte) (int, error) {
 		// Read into a scratch buffer no larger than the caller's, so one
 		// Read of the wrapped reader yields at most one Read out of this
 		// one: every byte maps to exactly one byte.
-		size := len(p)
-		if size > 4096 {
-			size = 4096
-		}
-		buf := make([]byte, size)
-		n, err := a.src.Read(buf)
+		//
+		// drain emitted nothing, so what it left is a held-back delimiter
+		// prefix shorter than maxAttNormPending; it moves to the front of
+		// scratch and the read lands right after it.
+		size := min(len(p), attNormReadSize)
+		held := copy(a.scratch[:], a.buf)
+		n, err := a.src.Read(a.scratch[held : held+size])
 		if err != nil {
 			a.err = err
 		}
-		if n > 0 {
-			a.buf = append(a.buf, buf[:n]...)
-		}
+		a.buf = a.scratch[:held+n]
 		if n == 0 && a.err != nil && len(a.buf) == 0 {
 			return 0, a.err
 		}
@@ -148,9 +154,6 @@ func (a *attNormReader) drain(p []byte) int {
 		i += consumed
 	}
 	a.buf = a.buf[i:]
-	if len(a.buf) == 0 {
-		a.buf = a.buf[:0]
-	}
 	return out
 }
 
