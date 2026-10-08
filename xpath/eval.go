@@ -289,6 +289,10 @@ func (e *FilterExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, error) {
 	var out xdm.Sequence
 	size := len(seq)
+	var h *comparisonHoist
+	if size > 1 {
+		h = newComparisonHoist(ctx, pred)
+	}
 
 	for i, it := range seq {
 		if err := ctx.Err(); err != nil {
@@ -296,6 +300,19 @@ func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, er
 		}
 		pos := i + 1
 		sub := ctx.WithFocus(it, pos, size)
+		if h != nil {
+			keep, ok, err := h.holds(sub)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				if keep {
+					out = append(out, it)
+				}
+				continue
+			}
+			h = nil // the hoisted operand failed: evaluate as written from here
+		}
 		v, err := pred.Eval(sub)
 		if err != nil {
 			return nil, err
@@ -310,6 +327,99 @@ func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, er
 		}
 	}
 	return out, nil
+}
+
+// comparisonHoist evaluates a predicate "A op B", a general or value
+// comparison, whose one operand reads no focus and calls only pure built-ins
+// (hoistable and callsBuiltins, as the XQuery join uses them): that operand is
+// evaluated and atomized once per application of the predicate rather than
+// once per item. A comparison is never numeric, so no positional predicate is
+// affected. "$letters/l[. = substring($term, 1, 2)]" is the motivating shape.
+type comparisonHoist struct {
+	cmp   *BinaryOp
+	left  bool         // the hoisted operand is the left one
+	value xdm.Sequence // its atomized value, once ready
+	ready bool
+}
+
+// newComparisonHoist returns nil when pred is not such a comparison, under
+// XPath 1.0 compatibility (whose conversions need the raw operands), and for
+// "A = (M to N)", which evalGeneralComparison answers from the bounds.
+func newComparisonHoist(ctx *Context, pred Expr) *comparisonHoist {
+	b, ok := pred.(*BinaryOp)
+	if !ok {
+		return nil
+	}
+	switch b.Op {
+	case "eq", "ne", "lt", "le", "gt", "ge":
+	case "=", "!=", "<", "<=", ">", ">=":
+		if r, isRange := b.Right.(*BinaryOp); ctx.Compat || (isRange && r.Op == "to") {
+			return nil
+		}
+	default:
+		return nil
+	}
+	side, left := b.Right, false
+	if !hoistable(side, false) {
+		side, left = b.Left, true
+		if !hoistable(side, false) {
+			return nil
+		}
+	}
+	if !callsBuiltins(side, ctx) {
+		return nil
+	}
+	return &comparisonHoist{cmp: b, left: left}
+}
+
+// holds reports whether the predicate selects sub's context item. The hoisted
+// operand is evaluated on the first item, so an empty sequence never raises
+// its error. ok is false when it raised one: the caller then evaluates the
+// predicate as written from this item on, which raises whichever error the
+// comparison raises first. Once it has succeeded it cannot fail on a later
+// item, so every error left comes from the other operand or the comparison,
+// in the order evaluating "A op B" would raise them.
+func (h *comparisonHoist) holds(sub *Context) (keep, ok bool, err error) {
+	b := h.cmp
+	other := b.Left
+	if h.left {
+		other = b.Right
+	}
+	if !h.ready {
+		side := b.Right
+		if h.left {
+			side = b.Left
+		}
+		v, err := side.Eval(sub)
+		if err == nil {
+			v, err = xdm.AtomizeChecked(v)
+		}
+		if err != nil {
+			return false, false, nil
+		}
+		h.value, h.ready = v, true
+	}
+	v, err := other.Eval(sub)
+	if err != nil {
+		return false, true, err
+	}
+	a, err := xdm.AtomizeChecked(v)
+	if err != nil {
+		return false, true, err
+	}
+	la, ra := a, h.value
+	if h.left {
+		la, ra = h.value, a
+	}
+	if generalValueOp(b.Op) != "" {
+		keep, err = b.comparePairs(sub, la, ra)
+		return keep, true, err
+	}
+	r, err := b.compareSingletons(sub, la, ra)
+	if err != nil || len(r) == 0 {
+		return false, true, err
+	}
+	return r[0].(*xdm.Atomic).Bool(), true, nil
 }
 
 // predicateHolds decides whether a predicate value selects the item at pos.

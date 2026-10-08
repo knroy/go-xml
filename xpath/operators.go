@@ -165,6 +165,13 @@ func (e *BinaryOp) evalValueComparison(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
+	return e.compareSingletons(ctx, la, ra)
+}
+
+// compareSingletons is the tail of a value comparison over operands already
+// evaluated and atomized, split out so that a predicate holding one operand
+// constant (see comparisonHoist) raises the same errors in the same order.
+func (e *BinaryOp) compareSingletons(ctx *Context, la, ra xdm.Sequence) (xdm.Sequence, error) {
 	if len(la) == 0 || len(ra) == 0 {
 		return xdm.Empty(), nil
 	}
