@@ -171,7 +171,7 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 			return fmt.Errorf("xsl:import-schema %q resolved to nothing", location)
 		}
 		defer rc.Close()
-		tree, perr := xdm.Parse(rc, xdm.ParseOptions{})
+		tree, perr := xsd.ParseDocument(rc, opts.ParseOptions)
 		if perr != nil {
 			return fmt.Errorf("xsl:import-schema %q: %w", location, perr)
 		}
@@ -327,7 +327,11 @@ func (c *compiler) tryResolveSchemaByNamespace(ns string) *xsd.Schema {
 		return nil
 	}
 	defer rc.Close()
-	tree, err := xdm.Parse(rc, xdm.ParseOptions{})
+	opts := xsd.Options{
+		Resolver:     c.opts.SchemaResolver,
+		ParseOptions: c.opts.SchemaParseOptions,
+	}
+	tree, err := xsd.ParseDocument(rc, opts.ParseOptions)
 	if err != nil || tree.Root == nil {
 		return nil
 	}
@@ -338,7 +342,7 @@ func (c *compiler) tryResolveSchemaByNamespace(ns string) *xsd.Schema {
 	if checkImportedNamespace(nil, tree.Root, ns) != nil {
 		return nil
 	}
-	loaded, err := xsd.Load(tree.Root, resolved, xsd.Options{Resolver: c.opts.SchemaResolver})
+	loaded, err := xsd.Load(tree.Root, resolved, opts)
 	if err != nil {
 		return nil
 	}
