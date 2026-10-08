@@ -96,10 +96,15 @@ func checkStylesheetElement(root *xdm.Node) error {
 		}
 	}
 
-	// The version declared on the module element, not the processor's, decides
-	// which content model this module is judged by: a version="2.0" module is
-	// one every conforming 2.0 processor rejects for a late xsl:import.
-	importAnywhere := versionAt(root) >= 3.0
+	// A late xsl:import is refused only by a 2.0 processor (MaxVersion 2.0)
+	// reading a module that declares version 2.0 or lower: every conforming
+	// 2.0 processor rejects it. XSLT 3.0 removed the rule ("The rule
+	// requiring xsl:import declarations to precede all other declarations in
+	// a stylesheet module has been removed", appendix J.1), and section 3.9.2
+	// defines no differences for XSLT 2.0 behavior, so a 3.0 processor
+	// accepts the late import in a version="2.0" module too, as Saxon does
+	// for XRechnung's xrechnung-html.xsl.
+	importAnywhere := versionAt(root) >= 3.0 || processorAtLeast30()
 
 	seenNonImport := false
 	for _, c := range root.Children {

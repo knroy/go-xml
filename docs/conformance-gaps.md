@@ -253,6 +253,14 @@ OuterFunctionName admits no unprefixed name but `doc`, `id`,
 `element-with-id`, `key` and `root`, so `copy-of($x)//a` is XTSE0340
 (`match-077`).
 
+The same holds for `xsl:import` placement. XTSE0200 (an `xsl:import` after
+another declaration) is an XSLT 2.0 rule that 3.0 dropped ("The rule
+requiring xsl:import declarations to precede all other declarations in a
+stylesheet module has been removed", J.1), so only the 2.0 processor applies
+it, and only to a module declaring 2.0 or lower. XRechnung's
+`xrechnung-html.xsl` puts `xsl:output` before `xsl:import` at
+`version="2.0"`.
+
 ## xslt 3.0 — 23 failures
 
 **XSLT 3.0: 11,495 / 11,518 = 99.80%.**
