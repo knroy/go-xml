@@ -60,15 +60,22 @@ type transformCaller struct {
 	depth, maxDepth int
 	goCtx           context.Context
 	static          bool
+	// cache is the outer stylesheet's compiled-stylesheet cache, or nil for
+	// a caller with no stylesheet and for the static phase.
+	cache *nestedCache
 }
 
 // callerOf is the caller a running (or static-phase) stylesheet makes.
 func callerOf(rt *runtime) transformCaller {
-	return transformCaller{
+	c := transformCaller{
 		opts: rt.opts, pkgs: rt.sheet.pkgResolver,
 		depth: rt.depth, maxDepth: rt.maxDepth,
 		goCtx: rt.goCtx, static: rt.static,
 	}
+	if !rt.static {
+		c.cache = &rt.sheet.nested
+	}
+	return c
 }
 
 // fn:transform for a caller with no transformation of its own. xpath cannot
@@ -391,7 +398,7 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 		return nil, err
 	}
 
-	sheet, err := nestedStylesheet(ctx, rt, opts)
+	sheet, err := cachedNestedStylesheet(ctx, rt, opts)
 	if err != nil {
 		return nil, err
 	}
