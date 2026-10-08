@@ -262,3 +262,26 @@ func TestLocalSimpleTypeForm(t *testing.T) {
 		})
 	}
 }
+
+// TestWhiteSpaceFixed covers whiteSpace's {fixed}: a restriction may not
+// change a whiteSpace its base fixed, while xs:string, xs:normalizedString
+// and xs:token leave theirs open, as the schema-for-schemas does.
+func TestWhiteSpaceFixed(t *testing.T) {
+	for _, base := range []string{"xs:string", "xs:normalizedString", "xs:token"} {
+		mustLoadOK(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="b">
+	    <xs:restriction base="`+base+`"><xs:whiteSpace value="collapse"/></xs:restriction>
+	  </xs:simpleType>
+	</xs:schema>`)
+	}
+	mustLoadFail(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="a">
+	    <xs:restriction base="xs:string"><xs:whiteSpace value="replace" fixed="true"/></xs:restriction>
+	  </xs:simpleType>
+	  <xs:simpleType name="b">
+	    <xs:restriction base="a"><xs:whiteSpace value="collapse"/></xs:restriction>
+	  </xs:simpleType>
+	</xs:schema>`, "fixed-facet-value")
+}

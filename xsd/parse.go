@@ -881,6 +881,13 @@ func (p *parser) readTopLevel(el *xdm.Node) {
 		p.doc.appliesToEmpty = p.boolAttr(el, "appliesToEmpty", false)
 
 	case "override", "include", "import", "redefine":
+		// The same ordering puts every composition element before the
+		// first declaration.
+		if p.doc.sawDeclaration {
+			p.errs = append(p.errs, errorAt(el, "src-schema.1",
+				"xs:%s must come before every declaration and definition",
+				el.Name.Local))
+		}
 		// Assembling several documents is the caller's concern; see the
 		// note on ParseSchema. A single-document parse records nothing
 		// for these, and a reference into the un-read document will be

@@ -1,7 +1,8 @@
 package xslt
 
-// The XSLT 2.0 element grammar, from the element syntax summaries of the
-// specification.
+// The XSLT element grammar, transcribed by hand from the element syntax
+// summaries of the XSLT 3.0 Recommendation, which section 2.2 makes
+// normative.
 //
 // Every XSLT element is defined there by a summary naming its attributes, which
 // are required or optional, and for many of them the exact set of values
@@ -12,17 +13,17 @@ package xslt
 //   - XTSE0020, an attribute whose value is not one the summary permits;
 //   - XTSE0090, an attribute the summary does not allow on that element.
 //
-// Hand-writing 49 elements and 170 attributes invites exactly the kind of
-// transcription error that is hard to see in review, so this table was
-// extracted mechanically from the specification"s own markup rather than
-// typed. It is checked by the conformance suite, which is what would catch a
-// mistake in the extraction.
+// It holds the 78 elements the Recommendation summarises plus xsl:original
+// and the draft's xsl:stream. A hand transcription invites errors that are
+// hard to see in review, so TestElementTableMatchesRecommendation reads the
+// summaries out of the vendored testdata/xslt30-test/specs/xslt-30.html and
+// compares every element, attribute, required and avt flag and enumeration.
 //
-// The table does not agree with any single document: it unions the
-// Recommendation's summaries with a few Last Call working draft spellings, and
-// narrows or widens an enumeration in a few more places. Every one of those
-// decisions is enumerated, with its evidence, in docs/element-table-policy.md,
-// and elementtable_policy_test.go fails when the table gains a divergence that
+// The table does not agree with the summaries everywhere: it refuses a few
+// Last Call working draft spellings by name, and leaves a few attributes to
+// a check that owns their error code. Every one of those decisions is
+// enumerated, with its evidence, in docs/element-table-policy.md, and
+// elementtable_policy_test.go fails when the table gains a divergence that
 // document does not list.
 //
 // Enumerations here are only those the summary states as a closed set of
@@ -75,7 +76,7 @@ type attrDef struct {
 	// eqnameOK marks an attribute whose type is a UNION of a token
 	// enumeration with an EQName, so a lexically-valid namespaced name is
 	// permitted beyond the listed tokens. xsl:function/@streamability is the
-	// case: REC J.1 unions xsl:streamability-type with
+	// case: REC H.1 unions xsl:streamability-type with
 	// xsl:EQName-in-namespace.
 	eqnameOK bool
 	// uri marks an attribute the summary types "uri". There is no closed set
@@ -85,6 +86,11 @@ type attrDef struct {
 	// value that cannot be one at all is refused rather than carried to the
 	// serialiser.
 	uri bool
+	// nmtoken marks the summary's "nmtoken" alternative: no closed set, but
+	// a literal value must still be an NMTOKEN. normalization-form is the
+	// case; a well-formed form this engine does not support is SESU0011 when
+	// serialising, which is a different question.
+	nmtoken bool
 	// removed30 marks a name a working draft of XSLT 3.0 proposed and the
 	// Recommendation removed. The summary does not define it, so it is
 	// XTSE0090 exactly as an invented name would be -- but listing it makes
@@ -94,7 +100,7 @@ type attrDef struct {
 	removed30 bool
 }
 
-// componentKinds is xsl:component-kind-type of REC J.1: the kinds of
+// componentKinds is xsl:component-kind-type of REC H.1: the kinds of
 // component xsl:expose and xsl:accept may name, "*" being all of them.
 var componentKinds = []string{
 	"template", "function", "variable", "attribute-set", "mode", "*",
@@ -116,7 +122,7 @@ var xsltElements = map[string]elementDef{
 		"id":                         {},
 		"name":                       {},
 		"package-version":            {},
-		"version":                    {},
+		"version":                    {required: true},
 		"declared-modes":             {values: []string{"yes", "no", "true", "false", "1", "0"}},
 		"extension-element-prefixes": {},
 		"exclude-result-prefixes":    {},
@@ -139,14 +145,16 @@ var xsltElements = map[string]elementDef{
 		"package-version": {},
 	}},
 	"expose": {since30: true, attrs: map[string]attrDef{
-		// REC J.1 types @component as xsl:component-kind-type, a closed set
+		// REC H.1 types @component as xsl:component-kind-type, a closed set
 		// of six tokens. Without it "component=\"accumulator\"" was accepted
 		// and silently exposed nothing; expose-906 and expose-907 are the
 		// suite's "unknown component kind" cases, both XTSE0020.
 		"component": {required: true, values: componentKinds},
 		"names":     {required: true},
+		// The summary (section 3.5.3.1) stops at "abstract"; unlike
+		// xsl:accept's, it carries no "hidden".
 		"visibility": {required: true, values: []string{
-			"public", "private", "final", "abstract", "hidden"}},
+			"public", "private", "final", "abstract"}},
 	}},
 	"accept": {since30: true, attrs: map[string]attrDef{
 		"component": {required: true, values: componentKinds},
@@ -222,15 +230,11 @@ var xsltElements = map[string]elementDef{
 		// a 3.0 module naming it is refused rather than dropped in silence.
 		"applies-to": {removed30: true},
 	}},
-	// The summary at xslt-lcwd30.xml:22181 names three attributes and no
-	// more: match, phase? and select?. @priority was accepted here and is
-	// defined nowhere -- no prose associates it with xsl:accumulator-rule,
-	// and no suite case writes it -- so it silently swallowed a misspelling
-	// of @phase instead of raising XTSE0090.
-	//
-	// The suite's schema is stale on this element rather than authoritative:
-	// it also omits @select, which both the summary and this table have. So
-	// the LCWD summary is taken as primary and @priority is dropped.
+	// The summary (section 18.2.1) names three attributes and no more:
+	// match, phase? and select?. @priority was accepted here and is defined
+	// nowhere -- no prose associates it with xsl:accumulator-rule, and no
+	// suite case writes it -- so it silently swallowed a misspelling of
+	// @phase instead of raising XTSE0090.
 	"accumulator-rule": {since30: true, attrs: map[string]attrDef{
 		"match":  {required: true},
 		"phase":  {values: []string{"start", "end"}},
@@ -247,7 +251,7 @@ var xsltElements = map[string]elementDef{
 		// compiles a package as a stylesheet, where everything is visible.
 		// The summary (section 6.1) stops at "abstract": hidden is acquired
 		// through xsl:accept or xsl:expose, never declared.
-		"visibility": {values: []string{"public", "private", "final", "abstract"}},
+		"visibility": {since30: true, values: []string{"public", "private", "final", "abstract"}},
 	}},
 	"apply-templates": {attrs: map[string]attrDef{
 		"select": {},
@@ -337,9 +341,11 @@ var xsltElements = map[string]elementDef{
 			"yes", "no", "true", "false", "1", "0"}},
 	}},
 	"function": {attrs: map[string]attrDef{
-		"name":     {required: true},
-		"as":       {},
-		"override": {values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"name": {required: true},
+		"as":   {},
+		// A 2.0 attribute, so the 2.0 pair: allowsBoolAliases admits the
+		// other four spellings in a 3.0 module.
+		"override": {values: []string{"yes", "no"}},
 		// Both are 3.0 additions that the table had never listed, which went
 		// unnoticed while an unknown attribute on a version="3.0" module was
 		// silently dropped: they were ignored rather than refused, and
@@ -347,13 +353,13 @@ var xsltElements = map[string]elementDef{
 		// is section 10.3's component visibility; @streamability is
 		// 19.8.7's declared classification, which the W3C suite writes in
 		// seventy files.
-		// REC J.1 types xsl:function/@visibility as
+		// REC H.1 types xsl:function/@visibility as
 		// xsl:visibility-not-hidden-type, which restricts
 		// xsl:visibility-type by EXCLUDING "hidden": a function cannot be
 		// declared hidden, only made so by xsl:expose.
 		"visibility": {since30: true, values: []string{
 			"public", "private", "final", "abstract"}},
-		// REC J.1 types @streamability as xsl:streamability-type, a UNION of
+		// REC H.1 types @streamability as xsl:streamability-type, a UNION of
 		// seven tokens with xsl:EQName-in-namespace -- a processor may name
 		// its own classification by a namespaced EQName. eqnameOK lets such a
 		// name through. It is not an attribute value template: the summary
@@ -382,7 +388,7 @@ var xsltElements = map[string]elementDef{
 		},
 		// "maybe" is the third value, and the default: it leaves the
 		// processor free to reuse a result or not.
-		// REC J.1 types @new-each-time as xsl:yes-or-no-or-maybe, exactly
+		// REC H.1 types @new-each-time as xsl:yes-or-no-or-maybe, exactly
 		// these seven spellings. It is not an attribute value template: the
 		// suite's _new-each-time="{$new-each-time}" is a shadow attribute,
 		// expanded before this table is consulted.
@@ -463,9 +469,9 @@ var xsltElements = map[string]elementDef{
 		// XSLT 3.0 section 18.3: the copy carries the accumulator values of
 		// the node it was copied from, which nothing else can supply — the
 		// copy's own tree is all the document the rules would see.
-		"copy-accumulators": {values: []string{"yes", "no"}},
+		"copy-accumulators": {since30: true, values: []string{"yes", "no"}},
 		"type":              {},
-		// REC J.1 types @validation as xsl:validation-type on xsl:copy-of
+		// REC H.1 types @validation as xsl:validation-type on xsl:copy-of
 		// exactly as on xsl:copy, xsl:element and the rest, which this table
 		// already enumerated -- copy-of alone was left open.
 		"validation": {avt: true, values: []string{
@@ -567,7 +573,9 @@ var xsltElements = map[string]elementDef{
 		"order":      {values: []string{"ascending", "descending"}, avt: true},
 		"collation":  {avt: true},
 		"case-order": {values: []string{"upper-first", "lower-first"}, avt: true},
-		"data-type":  {avt: true},
+		// { "text" | "number" | eqname }: a prefixed name selects an
+		// implementation-defined type, so it passes as eqnameOK.
+		"data-type": {values: []string{"text", "number"}, eqnameOK: true, avt: true},
 	}},
 	"merge-action": {since30: true, attrs: map[string]attrDef{}},
 	"evaluate": {attrs: map[string]attrDef{
@@ -622,7 +630,9 @@ var xsltElements = map[string]elementDef{
 		"collation":  {avt: true},
 		"stable":     {values: []string{"yes", "no"}, avt: true},
 		"case-order": {values: []string{"upper-first", "lower-first"}, avt: true},
-		"data-type":  {avt: true},
+		// { "text" | "number" | eqname }: a prefixed name selects an
+		// implementation-defined type, so it passes as eqnameOK.
+		"data-type": {values: []string{"text", "number"}, eqnameOK: true, avt: true},
 	}},
 	"perform-sort": {attrs: map[string]attrDef{
 		"select": {},
@@ -695,13 +705,12 @@ var xsltElements = map[string]elementDef{
 		// applied by allowsBoolAliases rather than listed here, so the
 		// enumeration stays the 2.0 pair and a 2.0 module is held to it.
 		"terminate": {values: []string{"yes", "no"}, avt: true},
-		// Not marked since30: message-0009 writes @error-code on a
+		// processor30, not since30: message-0009 writes @error-code on a
 		// version="2.0" module and is scoped XSLT30+, so the attribute
-		// follows the processor's version rather than the module's. The
-		// XSLT 2.0 run rejects it because that processor's own suite has no
-		// such case, and the 2.0 grammar is unchanged for every module a 2.0
-		// processor sees.
-		"error-code": {avt: true},
+		// follows the processor's version rather than the module's. A 2.0
+		// processor (MaxVersion 2.0) refuses it, as XSLT 2.0's summary has
+		// no such attribute.
+		"error-code": {processor30: true, avt: true},
 	}},
 	// xsl:assert, 22.2. The syntax summary is
 	//
@@ -770,33 +779,37 @@ var xsltElements = map[string]elementDef{
 		// build-tree says whether the raw result is normalised into a final
 		// result tree or serialised as the sequence it is; see 2.3.6. XSLT
 		// 3.0 added it, along with the two JSON serialisation parameters.
-		"build-tree":              {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
-		"allow-duplicate-names":   {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
-		"json-node-output-method": {processor30: true, avt: true},
-		"parameter-document":      {processor30: true, avt: true},
-		"item-separator":          {avt: true},
-		"html-version":            {avt: true},
-		"suppress-indentation":    {avt: true},
-		"format":                  {avt: true},
-		"href":                    {avt: true},
-		"validation":              {values: []string{"strict", "lax", "preserve", "strip"}},
-		"type":                    {},
-		"method":                  {avt: true},
-		"byte-order-mark":         {values: []string{"yes", "no"}, avt: true},
-		"cdata-section-elements":  {avt: true},
-		"doctype-public":          {avt: true},
-		"doctype-system":          {avt: true},
-		"encoding":                {avt: true},
-		"escape-uri-attributes":   {values: []string{"yes", "no"}, avt: true},
-		"include-content-type":    {values: []string{"yes", "no"}, avt: true},
-		"indent":                  {values: []string{"yes", "no"}, avt: true},
-		"media-type":              {avt: true},
-		"normalization-form":      {avt: true},
-		"omit-xml-declaration":    {values: []string{"yes", "no"}, avt: true},
-		"standalone":              {values: []string{"yes", "no", "omit"}, avt: true},
-		"undeclare-prefixes":      {values: []string{"yes", "no"}, avt: true},
-		"use-character-maps":      {},
-		"output-version":          {avt: true},
+		"build-tree":            {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"allow-duplicate-names": {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+		// Both enumerate as on xsl:output, plus braces: a literal outside
+		// the set is XTSE0020 here, a computed one XTDE0030 in resultdoc.go.
+		"json-node-output-method": {processor30: true, avt: true, eqnameOK: true,
+			values: []string{"xml", "html", "xhtml", "text"}},
+		"parameter-document":   {processor30: true, avt: true},
+		"item-separator":       {avt: true},
+		"html-version":         {avt: true},
+		"suppress-indentation": {avt: true},
+		"format":               {avt: true},
+		"href":                 {avt: true},
+		"validation":           {values: []string{"strict", "lax", "preserve", "strip"}},
+		"type":                 {},
+		"method": {avt: true, eqnameOK: true, values: []string{
+			"xml", "html", "xhtml", "text", "json", "adaptive"}},
+		"byte-order-mark":        {values: []string{"yes", "no"}, avt: true},
+		"cdata-section-elements": {avt: true},
+		"doctype-public":         {avt: true},
+		"doctype-system":         {avt: true},
+		"encoding":               {avt: true},
+		"escape-uri-attributes":  {values: []string{"yes", "no"}, avt: true},
+		"include-content-type":   {values: []string{"yes", "no"}, avt: true},
+		"indent":                 {values: []string{"yes", "no"}, avt: true},
+		"media-type":             {avt: true},
+		"normalization-form":     {avt: true, nmtoken: true},
+		"omit-xml-declaration":   {values: []string{"yes", "no"}, avt: true},
+		"standalone":             {values: []string{"yes", "no", "omit"}, avt: true},
+		"undeclare-prefixes":     {values: []string{"yes", "no"}, avt: true},
+		"use-character-maps":     {},
+		"output-version":         {avt: true},
 	}},
 	"output": {attrs: map[string]attrDef{
 		"name":   {},
@@ -873,10 +886,10 @@ var xsltElements = map[string]elementDef{
 		"include-content-type":   {values: []string{"yes", "no"}},
 		"indent":                 {values: []string{"yes", "no"}},
 		"media-type":             {},
-		"normalization-form":     {},
+		"normalization-form":     {nmtoken: true},
 		"omit-xml-declaration":   {values: []string{"yes", "no"}},
 		// "yes", "no", "omit" and no more, which is the 2.0 vocabulary of REC
-		// J.1's xsl:yes-or-no-or-omit. The three synonym spellings are NOT
+		// H.1's xsl:yes-or-no-or-omit. The three synonym spellings are NOT
 		// listed, and must not be: output-0282 writes standalone="true" in a
 		// version="2.0" module and requires XTSE0020, so at 2.0 the synonyms
 		// are invalid values rather than accepted ones. allowsBoolAliases
@@ -899,8 +912,7 @@ var xsltElements = map[string]elementDef{
 }
 
 // contentModels records what each XSLT element may contain, taken from the
-// Content line of the specification's element syntax summaries and extracted
-// mechanically from the same markup as the attribute table above.
+// Content line of the specification's element syntax summaries.
 //
 // seqCtor means a sequence constructor is allowed, which admits any
 // instruction, any literal result element and text. kids lists the XSLT

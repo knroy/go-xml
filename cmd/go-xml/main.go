@@ -16,6 +16,7 @@ import (
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/xsd"
 	"github.com/knroy/go-xml/xslt"
 )
 
@@ -62,8 +63,9 @@ func (p paramFlag) Set(v string) error {
 // test exists to prevent.
 func registerAllowDir(fs *flag.FlagSet) *string {
 	return fs.String("allow-dir", "",
-		"comma-separated roots that xsl:include, xsl:import, fn:doc, "+
-			"fn:document and fn:load-xquery-module may read, each covering its "+
+		"comma-separated roots that xsl:include, xsl:import, "+
+			"xsl:import-schema, fn:doc, fn:document and fn:load-xquery-module "+
+			"may read, each covering its "+
 			"subdirectories to any "+
 			"depth. The stylesheet's own directory is always one of them, "+
 			"flag or no flag, since a stylesheet that cannot read the "+
@@ -162,6 +164,13 @@ func run() error {
 				"bound (the default guards against a stylesheet that recurses "+
 				"without a base case)")
 
+		validate = flag.String("validate", "",
+			"validate each source document against the schema the stylesheet "+
+				"imports with xsl:import-schema, before the transform: strict "+
+				"requires the document element to be declared, lax checks it "+
+				"only if it is. Validated nodes carry their schema types, so "+
+				"they atomise to typed values. Empty does not validate")
+
 		keepGoing = flag.Bool("keep-going", false,
 			"with several inputs, report failures and continue instead of stopping")
 		params = paramFlag{}
@@ -173,12 +182,13 @@ func run() error {
 			"usage: go-xml -xsl STYLESHEET [flags] INPUT.xml [INPUT.xml ...]\n"+
 				"       go-xml -xsl STYLESHEET -initial-template NAME [flags]\n"+
 				"       go-xml validate -xsd SCHEMA.xsd [flags] INPUT.xml ...\n"+
-				"       go-xml validate -rng SCHEMA.rng [flags] INPUT.xml ...\n"+
+				"       go-xml validate -rng SCHEMA.rng|SCHEMA.rnc [flags] INPUT.xml ...\n"+
 				"       go-xml xquery -q QUERY.xq [flags] [INPUT.xml]\n\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
-Security defaults: xsl:include, xsl:import, fn:doc and fn:document read only
-the stylesheet's own directory, plus whatever -allow-dir names. The stylesheet's
+Security defaults: xsl:include, xsl:import, xsl:import-schema, fn:doc and
+fn:document read only the stylesheet's own directory, plus whatever -allow-dir
+names. The stylesheet's
 directory is granted unconditionally because a stylesheet that cannot read the
 modules beside it is useless -- but it is one root list shared by every reader,
 so a file merely sitting beside the stylesheet can also be read by doc(). Give
@@ -250,6 +260,15 @@ Exit status: 0 if every input transformed, 1 otherwise.
 	if err != nil {
 		return err
 	}
+	switch *validate {
+	case "", "strict", "lax":
+	default:
+		return fmt.Errorf("-validate %q: expected strict or lax", *validate)
+	}
+	if *validate != "" && sheet.Schema() == nil {
+		return fmt.Errorf("-validate needs a schema, and the stylesheet " +
+			"imports none with xsl:import-schema")
+	}
 
 	// A fixed clock makes a run reproducible, which is what a golden-file
 	// comparison needs; without it fn:current-dateTime follows wall time.
@@ -285,6 +304,7 @@ Exit status: 0 if every input transformed, 1 otherwise.
 		externalEnts: *allowExternalEnts,
 		xinclude:     *xinclude,
 		maxDepth:     *maxDepth,
+		validate:     *validate,
 
 		baseOutputURI: baseOutputURI(*outPath, *resultDir),
 	}
@@ -339,15 +359,35 @@ func compileStylesheet(path string, resolver *xslt.FileResolver,
 		return nil, err
 	}
 	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{
-		Resolver:     resolver,
-		BaseURI:      abs,
-		XPathVersion: v,
-		Compat:       compat,
+		Resolver:       resolver,
+		SchemaResolver: schemaFiles{resolver},
+		BaseURI:        abs,
+		XPathVersion:   v,
+		Compat:         compat,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("compiling stylesheet: %w", err)
 	}
 	return sheet, nil
+}
+
+// validateSource assesses a source document against the stylesheet's imported
+// schema and annotates it, which is what makes a validated <price> atomise to
+// an xs:decimal rather than to xs:untypedAtomic. Without Annotate the schema
+// would only check the document, and the stylesheet would see it untyped.
+// Lax assessment skips a document element the schema does not declare, as
+// validation="lax" does in a stylesheet.
+func validateSource(schema *xsd.Schema, doc *xdm.Node, mode string) error {
+	opts := xsd.ValidateOptions{Annotate: true}
+	if mode == "strict" {
+		return schema.Validate(doc, opts)
+	}
+	for _, c := range doc.Children {
+		if c.Kind == xdm.KindElement {
+			return schema.ValidateElementLax(c, opts)
+		}
+	}
+	return nil
 }
 
 type transformCfg struct {
@@ -366,6 +406,7 @@ type transformCfg struct {
 	externalEnts bool
 	xinclude     bool
 	maxDepth     int
+	validate     string
 	// baseOutputURI is where this run's output is actually going, as a URI.
 	// Unlike the library, the CLI knows that destination, so it supplies one
 	// rather than leaving fn:current-output-uri absent everywhere.
@@ -415,6 +456,11 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 				// was held to.
 				Parse: popts,
 			}); err != nil {
+				return err
+			}
+		}
+		if cfg.validate != "" {
+			if err := validateSource(sheet.Schema(), tree.Root, cfg.validate); err != nil {
 				return err
 			}
 		}

@@ -116,7 +116,10 @@ func registerMisc30Funcs(l *Library) {
 	//
 	// A document with no schema-declared IDs cannot tell the difference: its
 	// only IDs are xml:id and DTD-declared ones, and both are attributes.
-	l.registerFnSince(XPath30, "element-with-id", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	//
+	// It is an XPath 2.0 function: erratum FO.E31 added it, and F&O 2.0
+	// Second Edition defines it in 15.5.7.
+	l.registerFnSince(XPath20, "element-with-id", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		seq, err := lookupByID(ctx, args, true)
 		if err != nil {
 			return nil, err

@@ -1594,6 +1594,9 @@ func (s *sortKey) resolve(rt *runtime) (*sortKey, error) {
 			return nil, err
 		}
 		out.dataType = strings.TrimSpace(v)
+		if err := checkDataType(out.dataType); err != nil {
+			return nil, err
+		}
 	}
 	if s.caseOrderAVT != nil {
 		v, err := s.caseOrderAVT.eval(rt)

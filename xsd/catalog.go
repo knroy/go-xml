@@ -110,7 +110,8 @@ func (r *CatalogResolver) Add(namespace string, src []byte, aliases ...string) {
 	}
 }
 
-// SetFallback names a resolver to consult when the catalog has no entry.
+// SetFallback names a resolver to consult when the catalog has no entry, or
+// has one matched only by spelling (see Resolve).
 //
 // Nil, the default, makes a miss an error, which is what a server wants. A
 // command-line tool that should still read a schema beside the one it was
@@ -123,15 +124,29 @@ func (r *CatalogResolver) SetFallback(f Resolver) {
 }
 
 // Resolve implements Resolver.
+//
+// With no fallback the catalog answers only from its table. With one, a
+// location the table matched only by spelling -- a bare relative alias, a last
+// path segment, or the namespace -- is offered to the fallback first, and the
+// table answers only if the fallback cannot: a schema set's own xml.xsd, or an
+// xs:import naming a namespace and a local file, is then read rather than
+// shadowed. An absolute alias, and any location on www.w3.org, is the bundled
+// document whatever the fallback holds.
 func (r *CatalogResolver) Resolve(namespace, location, base string) (io.ReadCloser, string, error) {
 	r.mu.RLock()
-	if doc, ok := r.lookup(namespace, location, base); ok {
-		r.mu.RUnlock()
-		return io.NopCloser(strings.NewReader(string(doc.src))), doc.name, nil
-	}
+	doc, sure := r.lookup(namespace, location, base)
 	f := r.fallback
 	r.mu.RUnlock()
 
+	if f != nil && location != "" && !sure {
+		rc, name, err := f.Resolve(namespace, location, base)
+		if doc == nil || (err == nil && rc != nil) {
+			return rc, name, err
+		}
+	}
+	if doc != nil {
+		return io.NopCloser(strings.NewReader(string(doc.src))), doc.name, nil
+	}
 	if f != nil {
 		return f.Resolve(namespace, location, base)
 	}
@@ -148,21 +163,25 @@ func (r *CatalogResolver) Resolve(namespace, location, base string) (io.ReadClos
 		"no catalog entry for %s, and no fallback resolver is set", what)
 }
 
-// lookup runs the three lookups in order of how specific they are. The caller
-// holds at least a read lock.
+// lookup runs the three lookups in order of how specific they are, and
+// reports whether the match is sure: an absolute alias, matched as written or
+// after resolving against the base, or a location on the W3C's own host. A
+// match by bare relative alias, last segment or namespace is only a guess at
+// what the location means. The caller holds at least a read lock.
 func (r *CatalogResolver) lookup(namespace, location, base string) (*catalogDoc, bool) {
 	if location != "" {
+		abs := resolveAgainst(base, location)
 		if doc, ok := r.byAlias[location]; ok {
-			return doc, true
+			return doc, strings.Contains(location, ":") || onW3C(abs)
 		}
-		if abs := resolveAgainst(base, location); abs != "" && abs != location {
+		if abs != "" && abs != location {
 			if doc, ok := r.byAlias[abs]; ok {
 				return doc, true
 			}
 		}
 		if seg := lastSegment(location); seg != "" && seg != location {
 			if doc, ok := r.byAlias[seg]; ok {
-				return doc, true
+				return doc, onW3C(location) || onW3C(abs)
 			}
 		}
 	}
@@ -172,7 +191,7 @@ func (r *CatalogResolver) lookup(namespace, location, base string) (*catalogDoc,
 	// nothing else to go on, which is the case this exists for.
 	if namespace != "" {
 		if doc, ok := r.byNS[namespace]; ok {
-			return doc, true
+			return doc, false
 		}
 	}
 	return nil, false
@@ -194,6 +213,13 @@ func resolveAgainst(base, ref string) string {
 		return ""
 	}
 	return b.ResolveReference(u).String()
+}
+
+// onW3C reports whether a URI names the W3C's own host, where a document
+// named XMLSchema.xsd or xml.xsd is the published one rather than a copy.
+func onW3C(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && u.Host == "www.w3.org"
 }
 
 // lastSegment returns the final path segment of a URI reference.

@@ -65,7 +65,8 @@ var fnRequired = strings.Fields(`
 	deep-equal/2 deep-equal/3 count/1 avg/1 max/1 max/2 min/1 min/2
 	sum/1 sum/2
 
-	id/1 id/2 idref/1 idref/2 doc/1 doc-available/1 collection/0 collection/1
+	id/1 id/2 idref/1 idref/2 element-with-id/1 element-with-id/2
+	doc/1 doc-available/1 collection/0 collection/1
 
 	position/0 last/0 current-dateTime/0 current-date/0 current-time/0
 	implicit-timezone/0 default-collation/0 static-base-uri/0 dateTime/2
@@ -95,11 +96,15 @@ var xsRequired = strings.Fields(`
 
 func TestFunctionInventory(t *testing.T) {
 	lib := Builtins()
+	ctx20 := NewContext(nil, Builtins())
 	var missing []string
 
+	// These are the XPath 2.0 functions, so a 2.0 expression must reach
+	// them: a lookup that ignored the version would pass one registered
+	// Since XPath30 by mistake, as fn:element-with-id once was.
 	for _, spec := range fnRequired {
 		local, arity := splitArity(t, spec)
-		if _, ok := lib.Lookup(xdm.QName{URI: xdm.NSFN, Local: local}, arity); !ok {
+		if _, ok := lookupFor(ctx20, xdm.QName{URI: xdm.NSFN, Local: local}, arity); !ok {
 			missing = append(missing, "fn:"+spec)
 		}
 	}
@@ -117,7 +122,6 @@ func TestFunctionInventory(t *testing.T) {
 	// of these — the format-dateTime family — are also XPath 3.0 functions,
 	// and so are registered in the builtin library marked Since XPath30. What
 	// must stay true is that a *2.0* expression cannot reach them.
-	ctx20 := NewContext(nil, Builtins())
 	xsltLib := NewLibrary(Builtins())
 	RegisterXSLTFuncs(xsltLib)
 	for _, spec := range xsltOnlyFunctions {

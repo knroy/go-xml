@@ -780,6 +780,9 @@ func (v *validator) resolveXSIType(el *xdm.Node, value string) (Type, error) {
 		return nil, fmt.Errorf("xsi:type %q uses undeclared prefix %q", value, prefix)
 	}
 	t, ok := v.schema.Types[xdm.QName{URI: uri, Local: local}]
+	if v.schema.Version < Version11 && only11Builtin(xdm.QName{URI: uri, Local: local}) {
+		ok = false // see lookupType
+	}
 	if !ok {
 		return nil, fmt.Errorf("xsi:type %q names no type definition", value)
 	}

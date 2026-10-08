@@ -1017,7 +1017,9 @@ func transformSerializationParams(
 			case "build-tree":
 				o.BuildTree = nil
 			default:
-				return SetSerializationParam(&o, name, "")
+				// An empty sequence leaves the parameter absent, which
+				// no lexical value spells, so it is stored unchecked.
+				return applySerializationParam(&o, name, "")
 			}
 			return nil
 		}

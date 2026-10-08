@@ -8,8 +8,9 @@ import (
 )
 
 // The element table is transcribed from the element syntax summaries of the
-// vendored Last Call draft, testdata/xslt30-test/specs/xslt-lcwd30.xml. These
-// tests pin four places where the transcription had drifted from it, each of
+// XSLT 3.0 Recommendation (the Last Call draft, xslt-lcwd30.xml, agrees on the
+// cases here). These tests pin four places where the transcription had
+// drifted, each of
 // which either rejected a conforming stylesheet or accepted a name the
 // grammar does not define.
 
@@ -165,10 +166,6 @@ func TestMergeSourceRefusesForEachStream(t *testing.T) {
 // nothing else, and no prose in the draft associates a priority with an
 // accumulator rule. No suite case writes one. Accepting it silently swallowed
 // a misspelling of @phase.
-//
-// The suite's schema is stale on this element rather than authoritative: it
-// omits @select too, which both the summary and this table have -- so the
-// summary is taken as primary.
 func TestAccumulatorRulePriorityRejected(t *testing.T) {
 	sheet := func(attr string) string {
 		return `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">

@@ -4,6 +4,42 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## v1.6.0 — 2026-10-07
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| RELAX NG compact syntax from the CLI and in includes | `go-xml validate -rng` read every schema as XML, and `FileResolver` parsed every include as XML, so a `.rnc` schema failed from the CLI and a modular one failed everywhere. Both now read either syntax, decided by content. | [`6e13dee`][6e13dee] |
+| Schema-aware processing from the CLI | `xsl:import-schema` and `import schema ... at` had no resolver in `go-xml`, so they failed to compile. Both now read through the confined resolver (`-allow-dir`), and `-validate strict\|lax` types the source so it atomises to schema types. | [`4658352`][4658352] |
+
+### Fixed — engine
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `html` and `xhtml` output was never indented by default (#17) | XSLT 3.0 §26 defaults `indent` to `yes` for both methods, including when an `<html>` root selects the method. A stylesheet's unstated `indent` now follows the method; XQuery's default stays `no`. | [`701239a`][701239a] |
+| A `version="3.0"` stylesheet ignored misplaced top-level XSLT elements | Forwards-compatible leniency applied to any version above 2.0; XSLT 3.0 §3.9 grants it only above the processor's. Now `XTSE0010`. | [`abb33c7`][abb33c7] |
+| The XSLT element table accepted values the syntax summaries forbid | `hidden` on `xsl:expose`, `xsl:expose` outside a package, any `method`/`data-type`, bad standard attributes, `xsl:package` without `version`. Now refused; a test diffs the table against the Recommendation. | [`d758fa2`][d758fa2] |
+| `xs:yearMonthDuration` / `xs:dayTimeDuration` accepted any duration in XSD validation | `P1D` was a valid year-month duration. Both now carry the Part 2 pattern facets, in values and facet values alike. | [`a0d6a58`][a0d6a58] |
+| `whiteSpace fixed="true"` was never enforced | A restriction could override it. Enforced now; `xs:string`, `normalizedString` and `token` no longer mark it fixed, matching the schema for schemas. | [`eec3464`][eec3464] |
+| XSD 1.0 mode honoured some 1.1 constructs and accepted 1.1-only names | The assertion facet, `explicitTimezone` and `defaultAttributes` are now ignored under 1.0, `notNamespace` and `xs:dateTimeStamp`/`xs:error` refused; see docs/xsd.md for the one leniency kept. | [`5a20c7b`][5a20c7b] |
+| Schema documents the schema for schemas forbids were loaded | Facet attributes, top-level element `minOccurs`/`ref`/`form`, `xs:import` after declarations and five more shapes are now refused. | [`5eb354f`][5eb354f] |
+| Serialization settings from a parameter document or `declare option output:*` were not validated | `standalone="maybe"` reached the XML declaration. Values are now checked against the Serialization 3.1 schema (`SEPM0016`/`SEPM0017`); a repeat is `SEPM0019`. | [`fee47ab`][fee47ab] |
+| A parameter document replaced `cdata-section-elements` and `suppress-indentation` | XSLT 3.0 §26.1 merges them with `xsl:output`'s lists; they now merge. | [`448683d`][448683d] |
+| RELAX NG compact `string` and `token` were not keywords | `{ string }` became a reference to an undefined pattern. Both are built-in datatypes now, and every compact keyword is reserved. | [`4d90e69`][4d90e69] |
+| A RELAX NG nested `<grammar>` inside `<define>` was refused under §7.1.5 | Its `start` was taken for the schema's own. It now stands where the grammar does, as §4.18 says; `schema-for-xslt30.rnc` compiles. | [`27f1945`][27f1945] |
+| The RELAX NG checker accepted shapes the §3 grammar forbids | `start` with two patterns, `anyName`/`nsName` with non-`except` children, patterns in `include`, `div` as a pattern, `param` after `except`, a bad `combine`. Now refused. | [`4df1399`][4df1399] |
+| A RELAX NG include resolved against a Windows path base became `c:///…` | `url.Parse` read the drive letter as a scheme, so the include was refused as remote. A drive-path base is now joined as a path. | [`d3ce46f`][d3ce46f] |
+| `fn:element-with-id` was unavailable at XPath 2.0 | F&O 2.0 §15.5.7 defines it; it was registered from 3.0. | [`5cfe76f`][5cfe76f] |
+| The `w3cschemas` catalog shadowed a schema set's own `xml.xsd` | A bare file name or namespace match beat the fallback. A local copy the fallback can read is now read; W3C URLs and namespace-only imports still get the bundled schema. | [`3c743f4`][3c743f4] |
+
+### Documentation
+
+| Change | What it does | Commit |
+|---|---|---|
+| Validated nodes have typed values | `docs/validation.md`, the README, `xquery.md` and `todo.md` said a validated node still atomised as untyped; it never did once annotated. The example now sets `Annotate`, which is what types the source. | [`4658352`][4658352] |
+| Schema drift audit | `w3cschemas` NOTICE gives each file's source and licence terms; the element-table policy, `docs/xsd.md` and `docs/validation.md` describe current behaviour; `check.sh` runs the w3cschemas suite test. | [`fb64893`][fb64893] |
+
 ## v1.5.0 — 2026-10-04
 
 ### Added
@@ -1082,6 +1118,24 @@ here so every entry in this file sits under a release.
 [48651cf]: https://github.com/knroy/go-xml/commit/48651cf
 [7798acd]: https://github.com/knroy/go-xml/commit/7798acd
 [8cf4584]: https://github.com/knroy/go-xml/commit/8cf4584
+[701239a]: https://github.com/knroy/go-xml/commit/701239a
+[6e13dee]: https://github.com/knroy/go-xml/commit/6e13dee
+[4658352]: https://github.com/knroy/go-xml/commit/4658352
+[27f1945]: https://github.com/knroy/go-xml/commit/27f1945
+[3c743f4]: https://github.com/knroy/go-xml/commit/3c743f4
+[448683d]: https://github.com/knroy/go-xml/commit/448683d
+[4d90e69]: https://github.com/knroy/go-xml/commit/4d90e69
+[4df1399]: https://github.com/knroy/go-xml/commit/4df1399
+[5a20c7b]: https://github.com/knroy/go-xml/commit/5a20c7b
+[5cfe76f]: https://github.com/knroy/go-xml/commit/5cfe76f
+[5eb354f]: https://github.com/knroy/go-xml/commit/5eb354f
+[a0d6a58]: https://github.com/knroy/go-xml/commit/a0d6a58
+[abb33c7]: https://github.com/knroy/go-xml/commit/abb33c7
+[d758fa2]: https://github.com/knroy/go-xml/commit/d758fa2
+[eec3464]: https://github.com/knroy/go-xml/commit/eec3464
+[fb64893]: https://github.com/knroy/go-xml/commit/fb64893
+[fee47ab]: https://github.com/knroy/go-xml/commit/fee47ab
+[d3ce46f]: https://github.com/knroy/go-xml/commit/d3ce46f
 [d029347]: https://github.com/knroy/go-xml/commit/d029347
 [6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e

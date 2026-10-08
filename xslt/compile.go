@@ -1280,6 +1280,7 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 	}
 	if v := value("indent"); v != "" {
 		o.Indent = yes(v)
+		o.indentByMethod = false
 	}
 	if v := value("omit-xml-declaration"); v != "" {
 		o.OmitXMLDecl = yes(v)

@@ -81,8 +81,8 @@ func TestExternalRefResolvesAgainstBase(t *testing.T) {
 		"http://example.com/sub/other.rng": `<element` + rngNS +
 			` name="foo"><empty/></element>`,
 	}}
-	const src = `<div` + rngNS + ` xml:base="sub/">
-		<externalRef href="other.rng"/></div>`
+	const src = `<group` + rngNS + ` xml:base="sub/">
+		<externalRef href="other.rng"/></group>`
 	if _, err := compileWith(t, src, Options{
 		Resolver: r, BaseURI: "http://example.com/schema.rng",
 	}); err != nil {

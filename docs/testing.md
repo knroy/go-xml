@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,545 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,574 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -1470,7 +1470,8 @@ commits old. An API break in `xsd` or `xdm` could not have failed them.
 
 Two things fix it:
 
-* **The `require` names v1.2.1, not v1.1.0.** v1.1.0 and v1.2.0 both declare
+* **The `require` moved off v1.1.0** — to v1.2.1 at the time; the current pin
+  is whatever `w3cschemas/go.mod` names. v1.1.0 and v1.2.0 both declare
   `go 1.26`, and that is inherited: a 1.25 toolchain refuses the module
   outright, because MVS reads the required version's own `go.mod` before
   anything else gets a say. Since CI pins 1.25, the old pin made the module
@@ -1481,7 +1482,11 @@ Two things fix it:
   showing through.
 * **A step of its own**, in `check.sh` and in `ci.yml`'s fast job. `go list
   ./...` at the root still excludes it, by design, so without an explicit step
-  nothing runs it at all.
+  nothing runs it at all. `check.sh` passes `GOXSLT_XSLTS` to it when the XSLT
+  suite is present, so `TestLoadsSchemaForXSLT30WithoutTheNetwork` — the test
+  of the module's reason to exist — runs there instead of skipping, including
+  in the CI job that clones the suites and runs `check.sh`. The fast job's own
+  w3cschemas step has no suite checkout and still skips it.
 
 What the step measures is **the module against the go-xml release its `go.mod`
 names, not against this tree** — and that is a deliberate choice rather than an

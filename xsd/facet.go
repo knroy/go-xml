@@ -173,8 +173,8 @@ type FacetSet struct {
 	FractionDigits *uint64
 
 	// WhiteSpace is the whiteSpace facet, and Fixed records whether the
-	// schema wrote fixed="true" on it. The built-in types fix it, which is
-	// why a user type cannot loosen xs:token back to preserve.
+	// schema wrote fixed="true" on it. The built-in primitives other than
+	// xs:string, and every list, fix it.
 	WhiteSpace      *WhiteSpace
 	WhiteSpaceFixed bool
 

@@ -152,6 +152,13 @@ func (r *FileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 	if int64(len(b)) > max {
 		return nil, fmt.Errorf("relaxng: schema %q exceeds %d bytes: %w", href, max, xdm.ErrResourceLimit)
 	}
+	if compactSyntax(b) {
+		root, err := ParseCompact(strings.TrimPrefix(string(b), "\uFEFF"))
+		if err != nil {
+			return nil, fmt.Errorf("relaxng: parse %q: %w", href, err)
+		}
+		return root, nil
+	}
 	// Preserve the resolved document location as the base URI. Nested includes
 	// are compiled with this value, so sibling references remain sibling reads.
 	tree, err := xdm.ParseString(string(b), xdm.ParseOptions{BaseURI: p, MaxBytes: max})
@@ -159,6 +166,19 @@ func (r *FileResolver) ResolveSchema(href string) (*xdm.Node, error) {
 		return nil, fmt.Errorf("relaxng: parse %q: %w", href, err)
 	}
 	return tree.Root, nil
+}
+
+// compactSyntax reports whether a fetched schema is written in the compact
+// syntax. It is decided by content rather than by name: a well-formed XML
+// document begins with "<" once a byte order mark and whitespace are skipped,
+// and "<" is not a token of the compact syntax, so the first significant
+// character settles it whatever the file is called. That is what lets
+// `include "common.rnc"` in a compact schema, or an <include> of one from an
+// XML schema, reach the parser it needs.
+func compactSyntax(b []byte) bool {
+	s := strings.TrimPrefix(string(b), "\uFEFF")
+	s = strings.TrimLeft(s, " \t\r\n")
+	return !strings.HasPrefix(s, "<")
 }
 
 // A Resolver owns containment, and must not assume the href it receives has
@@ -256,6 +276,14 @@ func resolveHref(n *xdm.Node, href, docBase string) (string, error) {
 func joinRef(base, ref string) string {
 	if u, err := url.Parse(ref); err == nil && u.IsAbs() {
 		return ref
+	}
+	// A Windows drive path is a path, not a URI: url.Parse reads "C:" as a
+	// scheme, and resolving against it turned "common.rnc" beside
+	// C:\s\main.rnc into "c:///common.rnc", which FileResolver then refused as
+	// remote. It joins on its own separators and is left for the resolver's
+	// filepath handling to clean.
+	if uripath.IsDriveLetterPath(base) {
+		return base[:strings.LastIndexAny(base, `/\`)+1] + ref
 	}
 	if b, err := url.Parse(base); err == nil && b.IsAbs() {
 		if r, err := url.Parse(ref); err == nil {

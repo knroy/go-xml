@@ -302,6 +302,44 @@ func TestXSD11FeaturesAreOffUnderVersion10(t *testing.T) {
 	}
 }
 
+// TestXSD11ConstructsUnderVersion10 covers the rest of the 1.0 policy: the
+// assertion facet, explicitTimezone and defaultAttributes are parsed and not
+// honoured, and notNamespace, which narrows a wildcard, is an error as
+// notQName is.
+func TestXSD11ConstructsUnderVersion10(t *testing.T) {
+	load := func(src string, v Version) (*Schema, error) {
+		tree, err := xdm.ParseString(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" `+src+`</xs:schema>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Load(tree.Root, "s.xsd", Options{Version: v})
+	}
+	for _, c := range []struct{ schema, doc string }{
+		{`><xs:element name="e"><xs:simpleType><xs:restriction base="xs:string">
+		  <xs:assertion test="false()"/></xs:restriction></xs:simpleType></xs:element>`, `<e/>`},
+		{`><xs:element name="e"><xs:simpleType><xs:restriction base="xs:date">
+		  <xs:explicitTimezone value="required"/></xs:restriction></xs:simpleType></xs:element>`, `<e>2020-01-01</e>`},
+		{`defaultAttributes="g"><xs:attributeGroup name="g"><xs:attribute name="a"/></xs:attributeGroup>
+		  <xs:element name="e"><xs:complexType/></xs:element>`, `<e a="1"/>`},
+	} {
+		s10, err := load(c.schema, Version10)
+		if err != nil {
+			t.Fatalf("%s: %v", c.schema, err)
+		}
+		s11, err := load(c.schema, Version11)
+		if err != nil {
+			t.Fatalf("%s: %v", c.schema, err)
+		}
+		if (check11(t, s10, c.doc) == nil) == (check11(t, s11, c.doc) == nil) {
+			t.Errorf("%s: 1.0 and 1.1 agree on %s", c.schema, c.doc)
+		}
+	}
+	if _, err := load(`><xs:element name="e"><xs:complexType><xs:sequence>
+	  <xs:any notNamespace="##local" minOccurs="0"/></xs:sequence></xs:complexType></xs:element>`, Version10); err == nil {
+		t.Error("notNamespace should be an error under 1.0")
+	}
+}
+
 // TestAssertionCompileErrorIsReported records that a malformed test is a schema
 // error rather than something discovered per document.
 func TestAssertionCompileErrorIsReported(t *testing.T) {
@@ -412,6 +450,68 @@ func TestExplicitTimezone(t *testing.T) {
 	}
 	if err := check11(t, s, `<stamp>2024-01-01T00:00:00</stamp>`); err == nil {
 		t.Error("xs:dateTimeStamp requires a timezone")
+	}
+}
+
+// TestDurationSubtypes covers the pattern facets Part 2 gives
+// xs:yearMonthDuration and xs:dayTimeDuration: each refuses the other's
+// components, in an instance and in a facet value of a derived type.
+func TestDurationSubtypes(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="ym" type="xs:yearMonthDuration"/>
+	  <xs:element name="dt" type="xs:dayTimeDuration"/>
+	</xs:schema>`)
+	for _, doc := range []string{`<ym>-P1Y2M</ym>`, `<dt>PT0S</dt>`, `<dt>P1DT2H</dt>`} {
+		if err := check11(t, s, doc); err != nil {
+			t.Errorf("%s should be valid: %v", doc, err)
+		}
+	}
+	for _, doc := range []string{`<ym>P1D</ym>`, `<ym>P1YT1H</ym>`, `<dt>P1Y</dt>`, `<dt>P1M2D</dt>`} {
+		if err := check11(t, s, doc); err == nil {
+			t.Errorf("%s should be invalid", doc)
+		}
+	}
+
+	tree, err := xdm.ParseString(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="t">
+	    <xs:restriction base="xs:dayTimeDuration"><xs:maxInclusive value="P1Y"/></xs:restriction>
+	  </xs:simpleType>
+	</xs:schema>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(tree.Root, "s.xsd", Options{Version: Version11}); err == nil {
+		t.Error("maxInclusive P1Y is not a dayTimeDuration")
+	}
+}
+
+// TestOnly11BuiltinsUnderVersion10 covers which 1.1 built-in names a 1.0
+// schema may use: not xs:dateTimeStamp or xs:error, which only XSD 1.1
+// defines, but the three the XPath data model also defines.
+func TestOnly11BuiltinsUnderVersion10(t *testing.T) {
+	load := func(typ string, v Version) error {
+		tree, err := xdm.ParseString(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="e" type="`+typ+`"/></xs:schema>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Load(tree.Root, "s.xsd", Options{Version: v})
+		return err
+	}
+	for _, typ := range []string{"xs:dateTimeStamp", "xs:error"} {
+		if load(typ, Version10) == nil {
+			t.Errorf("%s should not resolve under 1.0", typ)
+		}
+		if err := load(typ, Version11); err != nil {
+			t.Errorf("%s under 1.1: %v", typ, err)
+		}
+	}
+	for _, typ := range []string{"xs:anyAtomicType", "xs:yearMonthDuration", "xs:dayTimeDuration"} {
+		if err := load(typ, Version10); err != nil {
+			t.Errorf("%s under 1.0: %v", typ, err)
+		}
 	}
 }
 

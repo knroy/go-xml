@@ -33,8 +33,8 @@ func runXQuery(args []string) error {
 		queryPath = fs.String("q", "", "query to run (required)")
 		outPath   = fs.String("o", "", "write output to this file instead of stdout")
 		allowDirs = fs.String("allow-dir", "",
-			"comma-separated roots that import module, fn:load-xquery-module, "+
-				"fn:doc and fn:unparsed-text may read, each covering its subdirectories to "+
+			"comma-separated roots that import module, import schema, "+
+				"fn:load-xquery-module, fn:doc and fn:unparsed-text may read, each covering its subdirectories to "+
 				"any depth. The query's own directory is always one of them, "+
 				"flag or no flag; empty adds nothing further")
 		allowDoctype = fs.Bool("allow-doctype", false,
@@ -97,6 +97,7 @@ Exit status: 0 if the query ran, 1 otherwise.
 		BaseURI:            base,
 		DeclarationBaseURI: base,
 		ModuleResolver:     moduleFiles{resolver},
+		SchemaResolver:     schemaFiles{resolver},
 	})
 	if err != nil {
 		return fmt.Errorf("compiling query: %w", err)
@@ -198,4 +199,18 @@ func (m moduleFiles) Resolve(_ string, hints []string, base string) (io.ReadClos
 		}
 	}
 	return nil, "", err
+}
+
+// schemaFiles answers xsl:import-schema, "import schema ... at" and the
+// imported schemas' own xs:include and xs:import from the same confined
+// resolver, so a schema reaches no further than the stylesheet or query that
+// named it. A request with no location -- an import naming a namespace alone
+// -- finds no document, which both languages treat as "no schema here".
+type schemaFiles struct{ r *xslt.FileResolver }
+
+func (s schemaFiles) Resolve(_, location, base string) (io.ReadCloser, string, error) {
+	if location == "" {
+		return nil, "", nil
+	}
+	return s.r.ResolveEntity(location, "", base)
 }

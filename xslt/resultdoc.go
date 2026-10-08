@@ -124,6 +124,11 @@ func (i *resultDocumentInstr) settings(rt *runtime) (OutputSettings, error) {
 			}
 			return v
 		}
+		for _, name := range []string{"method", "json-node-output-method"} {
+			if err := checkComputedMethod(name, value(name)); err != nil {
+				return out, err
+			}
+		}
 		if err := applyOutputValues(i.overrides, value, &out); err != nil {
 			return out, err
 		}
@@ -414,4 +419,22 @@ func (o OutputSettings) buildsTree() bool {
 		return false
 	}
 	return true
+}
+
+// checkComputedMethod applies XTDE0030 to the effective value of
+// xsl:result-document/@method or @json-node-output-method: the summary
+// enumerates both, with a prefixed QName for an implementation-defined
+// method. A literal value was already checked against the table (XTSE0020).
+func checkComputedMethod(name, v string) error {
+	v = strings.TrimSpace(v)
+	if v == "" || isEQName(v) || (isLexicalQName(v) && strings.Contains(v, ":")) {
+		return nil
+	}
+	for _, want := range xsltElements["result-document"].attrs[name].values {
+		if v == want {
+			return nil
+		}
+	}
+	return fmt.Errorf("XTDE0030: xsl:result-document/@%s evaluated to %q, "+
+		"which is not a serialization method", name, v)
 }

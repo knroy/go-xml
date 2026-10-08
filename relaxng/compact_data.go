@@ -4,7 +4,12 @@ import "github.com/knroy/go-xml/xdm"
 
 // Datatypes, values and annotations in the compact syntax.
 
-// parseDatatypeName reads a prefixed datatype name and whatever follows it.
+// parseDatatypeName reads a datatype name and whatever follows it.
+//
+// The name is prefixed ("xsd:string") or one of the keywords "string" and
+// "token", which name the built-in library's types: compact syntax Appendix
+// A.1 maps them to datatypeAttributes("", ...), so datatypeLibrary="" is
+// written explicitly to override any inherited library.
 //
 // Three constructs begin the same way. "xsd:string" alone is a <data>;
 // "xsd:string { minLength = "1" }" is a <data> with parameters; and
@@ -13,9 +18,12 @@ import "github.com/knroy/go-xml/xdm"
 // that would each have to look ahead.
 func (p *compactParser) parseDatatypeName() (*xdm.Node, error) {
 	prefix, local := p.tok.prefix, p.tok.text
-	library, ok := p.datatypeLibraryFor(prefix)
-	if !ok {
-		return nil, p.errorf("the datatype prefix %q is not bound", prefix)
+	library := ""
+	if p.tok.kind == tokCName {
+		var ok bool
+		if library, ok = p.datatypeLibraryFor(prefix); !ok {
+			return nil, p.errorf("the datatype prefix %q is not bound", prefix)
+		}
 	}
 	if err := p.advance(); err != nil {
 		return nil, err

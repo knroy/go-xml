@@ -116,9 +116,9 @@ and maintains it as a project of his own.
 | **XSLT 3.0** | 99.80% of the W3C XSLT suite filtered to 3.0 (11,495 of 11,518 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 3 of the 23 failures want the XTSE3430 that more of the §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.98%** of its *schema-validity* tests (14,385 of 14,388) |
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
-| **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
+| **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 2,545 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 2,574 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -403,7 +403,7 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 | `-xsl` | the stylesheet to apply (required) |
 | `-o` | write to a file instead of stdout |
 | `-p name=value` | supply a top-level `xsl:param`; repeatable |
-| `-allow-dir` | open `xsl:include`/`xsl:import`/`doc()`/`document()` to further directories, each covering its subdirectories to any depth; the stylesheet's own directory is always readable. It says *where*, not *what*: raw text, external entities and XInclude each need their own flag as well |
+| `-allow-dir` | open `xsl:include`/`xsl:import`/`xsl:import-schema`/`doc()`/`document()` to further directories, each covering its subdirectories to any depth; the stylesheet's own directory is always readable. It says *where*, not *what*: raw text, external entities and XInclude each need their own flag as well |
 | `-allow-doctype` | permit a `DOCTYPE` in the source |
 | `-timeout` | bound the transform (default 60s) |
 | `-initial-template` | start at a named template instead of matching the root; no input document is then needed |
@@ -412,6 +412,7 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 | `-now` | pin `fn:current-dateTime` (RFC 3339) |
 | `-timezone` | implicit timezone in minutes |
 | `-track-positions` | record source line/column; see below |
+| `-validate strict\|lax` | validate each source against the schema the stylesheet imports with `xsl:import-schema` before the transform, so its nodes carry schema types and atomise to typed values; `lax` skips an undeclared document element |
 | `-result-dir` | where `xsl:result-document` outputs with an `href` are written; one with no `href` goes to the principal output instead |
 | `-keep-going` | continue a batch past a failure, still exiting non-zero |
 
@@ -429,8 +430,9 @@ go-xml xquery -q generate.xq -now 2024-01-15T09:00:00Z
 It takes `-o`, `-p` (an external variable, as `xs:string`), `-allow-dir`,
 `-allow-doctype`, `-allow-external-entities`, `-allow-unparsed-text`,
 `-timeout` and `-now`, with the transform's meanings and defaults: `import
-module ... at`, `doc()` and `unparsed-text()` read only the query's own
-directory and the `-allow-dir` roots.
+module ... at`, `import schema ... at`, `doc()` and `unparsed-text()` read only
+the query's own directory and the `-allow-dir` roots. A query types its input
+with the language's own `validate { . }`, so it needs no `-validate` flag.
 
 ## Design notes
 
@@ -791,9 +793,12 @@ Every remote-reference mechanism is off unless you turn it on.
   `schemaLocation` spelling it is referred to by, so one entry answers the
   `TR/` URL, the `2001/` URL, a bare relative path and a location-less
   `xs:import` alike. A reference to something not in the table is an error
-  rather than a request. The companion module
-  [`w3cschemas`](w3cschemas/README.md) ships the W3C documents themselves —
-  separate because they are under W3C rather than MIT terms.
+  rather than a request; with a fallback resolver set, a local file a schema
+  names (its own `xml.xsd`, say) is read rather than shadowed. The companion
+  module [`w3cschemas`](w3cschemas/README.md) ships the W3C documents
+  themselves — separate because they are under W3C rather than MIT terms —
+  and its schema for schemas is the XSD 1.1 one, so it loads under
+  `xsd.Version11`.
 * **Nesting and recursion are bounded** — parse depth, XPath recursion and
   template recursion each have a limit that produces an error rather than a
   stack overflow.
@@ -1318,7 +1323,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (2,545 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (2,574 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |
@@ -1729,20 +1734,13 @@ cost more passing cases than they gain. That leaves **none genuinely open**: the
 union's selected member type dropped on every tree copy, so that
 `xsl:strip-space` silently untyped a validated document — is fixed. The case
 still fails, on the indent width alone, which is implementation-defined.
-The full catalogue is [docs/known-gaps.md](docs/known-gaps.md). Three larger
+The full catalogue is [docs/known-gaps.md](docs/known-gaps.md). Two larger
 things are open, in rough order of how much they would change:
 
 * **Receiver-based output.** The runtime builds a result tree and serialises
   it. Emitting events to a receiver instead is what makes streaming possible
   and would cut peak memory on large documents — it is the one change here that
   is architectural rather than additive.
-* **Schema-aware atomisation.** `xsl:import-schema` loads a schema and makes
-  its type names available, and a value's selected union member now survives a
-  tree copy, so type assertions hold across `xsl:strip-space` and `xsl:copy-of`.
-  What is still missing is the typed value itself: a validated
-  `<price>10.50</price>` atomises as untyped, because the value would have to be
-  carried on the node rather than its name. Stylesheets relying on type
-  assertions work; ones relying on schema-aware arithmetic do not.
 * **A differential harness as a standing target.** The suites feed well-formed
   input and measure what happens after. The nested-occurrence defect — a schema
   admitting 5 children where only 10 were valid, and rejecting 10 — was found by

@@ -26,7 +26,7 @@ func runValidate(args []string) error {
 		xsdPaths = fs.String("xsd", "",
 			"comma-separated XML Schema documents to validate against")
 		rngPath = fs.String("rng", "",
-			"RELAX NG schema to validate against")
+			"RELAX NG schema to validate against, in the XML or the compact syntax")
 		version = fs.String("xsd-version", "1.0",
 			"XSD version to apply: 1.0 or 1.1")
 		xpathVersion = fs.String("xpath-version", "2.0",
@@ -51,11 +51,13 @@ func runValidate(args []string) error {
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr,
 			"usage: go-xml validate -xsd SCHEMA.xsd [flags] INPUT.xml [INPUT.xml ...]\n"+
-				"       go-xml validate -rng SCHEMA.rng [flags] INPUT.xml [INPUT.xml ...]\n\n")
+				"       go-xml validate -rng SCHEMA.rng|SCHEMA.rnc [flags] INPUT.xml [INPUT.xml ...]\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
 Exactly one of -xsd and -rng is required; a document is checked against one
 schema language at a time, since the two report failures in different terms.
+A RELAX NG schema, and each schema it includes, may be in either syntax: the
+content decides, not the file name.
 
 Line and column are reported for every failure, so the instance is parsed with
 position tracking on.
@@ -126,16 +128,17 @@ func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root string,
 	func(*xdm.Node) error, error) {
 
 	if rngPath != "" {
-		data, err := os.ReadFile(rngPath)
-		if err != nil {
-			return nil, err
-		}
+		// The schema itself is read through the resolver its includes use,
+		// so the XML and compact syntaxes take one path and the size bound
+		// applies to both. Unconfined, as the os.ReadFile it replaces was:
+		// -allow-dir confines what the schema reaches, not the file named on
+		// the command line.
 		abs := fileURI(rngPath)
-		tree, err := xdm.ParseString(string(data), xdm.ParseOptions{BaseURI: abs})
+		doc, err := (&relaxng.FileResolver{MaxBytes: DefaultMaxRNGBytes}).ResolveSchema(abs)
 		if err != nil {
 			return nil, fmt.Errorf("parsing %s: %w", rngPath, err)
 		}
-		schema, err := relaxng.CompileWithOptions(tree.Root, relaxng.Options{
+		schema, err := relaxng.CompileWithOptions(doc, relaxng.Options{
 			Resolver: cliRNGResolver(schemaRoot(root, rngPath)),
 			BaseURI:  abs,
 		})

@@ -213,7 +213,7 @@ func (p *parser) readSimpleUnion(el *xdm.Node, t *SimpleType) {
 			slot := len(t.MemberTypes)
 			t.MemberTypes = append(t.MemberTypes, nil)
 			p.fixups = append(p.fixups, func() error {
-				bt, ok := p.schema.Types[name]
+				bt, ok := p.lookupType(name)
 				if !ok {
 					// §3.14.6 / src-resolve: a member type
 					// that names no definition cannot be
@@ -381,29 +381,36 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 		case "assertion":
 			// XSD 1.1: an assertion on a simple type is a facet
 			// rather than a component, but compiles identically.
-			if a := p.readAssert(c); a != nil {
+			// Under 1.0 it is compiled and dropped, as xs:assert is
+			// not run.
+			if a := p.readAssert(c); a != nil && p.schema.Version >= Version11 {
 				f.Assertions = append(f.Assertions, a)
 			}
 
 		case "explicitTimezone":
 			// XSD 1.1: constrains whether a date or time value must
-			// carry a timezone.
+			// carry a timezone. Under 1.0 the value is checked and
+			// the facet dropped.
+			var tz *Timezone
 			switch v {
 			case "required":
-				tz := TimezoneRequired
-				f.ExplicitTimezone = &tz
+				t := TimezoneRequired
+				tz = &t
 			case "prohibited":
-				tz := TimezoneProhibited
-				f.ExplicitTimezone = &tz
+				t := TimezoneProhibited
+				tz = &t
 			case "optional":
-				tz := TimezoneOptional
-				f.ExplicitTimezone = &tz
+				t := TimezoneOptional
+				tz = &t
 			default:
 				p.errs = append(p.errs, errorAt(c, "",
 					"explicitTimezone=%q is not one of required, "+
 						"prohibited or optional", v))
 			}
-			p.noteFixed(c, f, FacetExplicitTimezone)
+			if p.schema.Version >= Version11 {
+				f.ExplicitTimezone = tz
+				p.noteFixed(c, f, FacetExplicitTimezone)
+			}
 
 		case "simpleType", "annotation", "assert", "openContent",
 			"attribute", "attributeGroup", "anyAttribute",
@@ -1656,9 +1663,9 @@ func (p *parser) readOpenContent(el *xdm.Node) *OpenContent {
 // attribute everywhere without repeating it. A type opts out with
 // defaultAttributesApply="false".
 //
-// It is read whatever the version, for the same reason the other 1.1
-// constructs are: a schema that uses it is not made valid by pretending it is
-// absent. A 1.0 schema simply never writes the attribute.
+// Under 1.0 the name is still resolved, so a dangling one is reported, but
+// the group is not applied: it is parsed and not honoured, like the other 1.1
+// constructs.
 func (p *parser) applyDefaultAttributes(el *xdm.Node, t *ComplexType) {
 	if p.doc.defaultAttributes == "" || p.inOverride {
 		return
@@ -1683,6 +1690,9 @@ func (p *parser) applyDefaultAttributes(el *xdm.Node, t *ComplexType) {
 			return errorAt(el, "src-resolve",
 				"defaultAttributes names no attribute group %q",
 				spelling)
+		}
+		if p.schema.Version < Version11 {
+			return nil
 		}
 		// The type's own uses win: a declaration that names the same
 		// attribute overrides the default rather than colliding.

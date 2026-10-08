@@ -69,10 +69,9 @@ func buildBuiltins() {
 	// then refused as a type that does not derive from its declaration
 	// (simple050).
 	//
-	// XSD 1.0 has no such type. Nothing is lost by defining it in both
-	// versions: a 1.0 schema cannot name it, since it is not in the 1.0
-	// schema for schemas, and the extra step in the base chain is
-	// transparent to every rule that walks it.
+	// XSD 1.0 has no such type, but the XPath data model does, so a 1.0
+	// schema may name it (see lookupType), and the extra step in the base
+	// chain is transparent to every rule that walks it.
 	anyAtomic := &SimpleType{
 		Name:    xsName("anyAtomicType"),
 		Base:    anySimple,
@@ -85,13 +84,15 @@ func buildBuiltins() {
 	preserve, collapse := WhitePreserve, WhiteCollapse
 
 	// The 19 primitives. Every one except xs:string collapses whitespace,
-	// and the facet is fixed on all of them.
+	// and the facet is fixed on all of them but xs:string: the
+	// schema-for-schemas leaves string's preserve open, so a restriction
+	// may tighten it to replace or collapse.
 	primitive := func(local string, ws WhiteSpace) *SimpleType {
 		t := &SimpleType{
 			Name:    xsName(local),
 			Base:    anyAtomic,
 			Variety: VarietyAtomic,
-			Facets:  &FacetSet{WhiteSpace: &ws, WhiteSpaceFixed: true},
+			Facets:  &FacetSet{WhiteSpace: &ws, WhiteSpaceFixed: local != "string"},
 			builtin: true,
 		}
 		t.Primitive = t
@@ -139,9 +140,9 @@ func buildBuiltins() {
 
 	replace := WhiteReplace
 	normalized := derive("normalizedString", str,
-		&FacetSet{WhiteSpace: &replace, WhiteSpaceFixed: true})
+		&FacetSet{WhiteSpace: &replace})
 	token := derive("token", normalized,
-		&FacetSet{WhiteSpace: &collapse, WhiteSpaceFixed: true})
+		&FacetSet{WhiteSpace: &collapse})
 
 	derive("language", token, nil)
 	nmtoken := derive("NMTOKEN", token, nil)
@@ -210,6 +211,7 @@ func buildBuiltins() {
 	// either in the schema namespace or it is not; whether a *schema* may
 	// use them is a version question, and refusing to define them here
 	// would only turn a version error into a confusing "no such type".
+	// lookupType answers that question for xs:dateTimeStamp and xs:error.
 	//
 	// xs:dateTimeStamp is xs:dateTime with explicitTimezone="required" —
 	// the type that says "an instant, not a wall-clock reading".
@@ -218,9 +220,18 @@ func buildBuiltins() {
 	derive("dateTimeStamp", dateTime, &FacetSet{ExplicitTimezone: &required})
 
 	// The two duration subtypes XPath has always had and XSD 1.0 left out.
+	// Part 2 §3.4.26-27 define each by a pattern facet on xs:duration: no
+	// day or time part in one, no year or month part in the other.
 	duration := builtinMap[xsName("duration")].(*SimpleType)
-	derive("yearMonthDuration", duration, nil)
-	derive("dayTimeDuration", duration, nil)
+	durationPattern := func(src string) *FacetSet {
+		p, err := compilePattern(src)
+		if err != nil {
+			panic(err)
+		}
+		return &FacetSet{Patterns: []*Pattern{p}}
+	}
+	derive("yearMonthDuration", duration, durationPattern(`[^DT]*`))
+	derive("dayTimeDuration", duration, durationPattern(`[^YM]*[DT].*`))
 
 	// xs:error has an empty value space: nothing is ever valid against it,
 	// which is how a 1.1 schema says "this branch must not be taken".

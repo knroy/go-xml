@@ -804,10 +804,16 @@ fi
 # catches a broken w3cschemas; it does NOT catch an API break in this tree that
 # would affect it. Bumping the pin after a release is what closes that gap, and
 # is a release step rather than something to paper over with a workspace file.
+#
+# TestLoadsSchemaForXSLT30WithoutTheNetwork -- the module's reason to exist --
+# reads schema-for-xslt30.xsd from the XSLT suite and skips without it, so the
+# suite is passed in whenever it is present.
 section "w3cschemas (separate module)"
 _f0=$failed
+_w3cEnv=""
+[ -d "$XSLTS/tests" ] && _w3cEnv="GOXSLT_XSLTS=$XSLTS"
 (cd w3cschemas && $GO build ./... && $GO vet ./... &&
-	$GO test ./... -count=1) || fail "w3cschemas"
+	env $_w3cEnv $GO test ./... -count=1) || fail "w3cschemas"
 laneFromStatus w3cschemas "$_f0" "build, vet and test of the separate module"
 
 section "vendored real-world schemas"

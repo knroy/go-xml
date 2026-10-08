@@ -61,7 +61,7 @@ var specs = map[string]elementSpec{
 	"data":        {attrs: []string{"type"}, required: []string{"type"}, maxPatterns: -1, maxExcept: 1},
 	"externalRef": {attrs: []string{"href"}, required: []string{"href"}, maxPatterns: 0},
 	"grammar":     {maxPatterns: -1},
-	"start":       {attrs: []string{"combine"}, minPatterns: 1, maxPatterns: -1},
+	"start":       {attrs: []string{"combine"}, minPatterns: 1, maxPatterns: 1},
 	"define":      {attrs: []string{"name", "combine"}, required: []string{"name"}, minPatterns: 1, maxPatterns: -1},
 	"include":     {attrs: []string{"href"}, required: []string{"href"}, maxPatterns: -1},
 	"div":         {maxPatterns: -1},
@@ -88,16 +88,19 @@ var grammarChildren = map[string]bool{
 	"start": true, "define": true, "div": true, "include": true,
 }
 
-// checkGrammarChildren applies §4.18 to <grammar> and <div>.
+// checkGrammarChildren applies §4.18 to <grammar> and <div>, and §3's
+// includeContent to <include>, which is the same less <include> itself.
 func checkGrammarChildren(n *xdm.Node) error {
-	switch n.Name.Local {
-	case "grammar":
+	scope := n.Name.Local
+	switch scope {
+	case "grammar", "include":
 	case "div":
-		// A <div> groups whatever its parent groups. Inside a grammar it
-		// holds definitions; written where a pattern belongs it holds
-		// patterns, and the grammar rule does not apply to it.
-		if !inGrammar(n) {
-			return nil
+		// §3 has <div> only in grammarContent and includeContent; it is not
+		// a pattern, so one written where a pattern belongs is refused.
+		if scope = divScope(n); scope == "" {
+			return fmt.Errorf(
+				"relaxng: <div> belongs in a <grammar> or <include>, not " +
+					"where a pattern does (section 3)")
 		}
 	default:
 		return nil
@@ -105,6 +108,13 @@ func checkGrammarChildren(n *xdm.Node) error {
 	for _, kid := range n.ChildElements() {
 		if kid.Name.URI != NS {
 			continue
+		}
+		if scope == "include" && (kid.Name.Local == "include" ||
+			!grammarChildren[kid.Name.Local]) {
+			return fmt.Errorf(
+				"relaxng: <%s> holds <%s>; an <include> takes only "+
+					"<start>, <define> and <div> (section 3)",
+				n.Name.Local, kid.Name.Local)
 		}
 		if !grammarChildren[kid.Name.Local] {
 			return fmt.Errorf(
@@ -116,22 +126,22 @@ func checkGrammarChildren(n *xdm.Node) error {
 	return nil
 }
 
-// inGrammar reports whether n sits inside a <grammar>, with only <div>
-// between.
-func inGrammar(n *xdm.Node) bool {
+// divScope returns "grammar" or "include" for the element a <div> sits in,
+// with only <div> between, or "" when it sits anywhere else.
+func divScope(n *xdm.Node) string {
 	for cur := n.Parent; cur != nil && cur.Kind == xdm.KindElement; cur = cur.Parent {
 		if cur.Name.URI != NS {
-			return false
+			return ""
 		}
 		switch cur.Name.Local {
 		case "grammar", "include":
-			return true
+			return cur.Name.Local
 		case "div":
 			continue
 		}
-		return false
+		return ""
 	}
-	return false
+	return ""
 }
 
 // checkSyntax walks a schema document and reports the first violation.
@@ -175,6 +185,11 @@ func checkSyntax(n *xdm.Node) error {
 		for _, kid := range n.ChildElements() {
 			if kid.Name.URI == NS && kid.Name.Local == "except" {
 				n_except++
+			}
+			// §3: <data type="NCName"> param* [exceptPattern] </data>.
+			if kid.Name.URI == NS && kid.Name.Local == "param" && n_except > 0 {
+				return fmt.Errorf("relaxng: <%s> has a <param> after its <except>",
+					n.Name.Local)
 			}
 		}
 		if n_except > spec.maxExcept {
@@ -361,6 +376,20 @@ func checkAttrValues(n *xdm.Node) error {
 			return err
 		}
 	}
+	// §3: method ::= choice | interleave, on a lone <start> or <define> as
+	// much as on one of several.
+	if n.Name.Local == "start" || n.Name.Local == "define" {
+		for _, a := range n.Attrs {
+			if a.Name.URI != "" || a.Name.Local != "combine" {
+				continue
+			}
+			if c := normalizeToken(a.Value); c != "choice" && c != "interleave" {
+				return fmt.Errorf(
+					"relaxng: <%s> has combine=%q, which is neither choice nor interleave",
+					n.Name.Local, a.Value)
+			}
+		}
+	}
 	switch n.Name.Local {
 	case "element", "attribute":
 		if v := n.AttrValue("name"); v != "" {
@@ -539,8 +568,14 @@ func checkNameClassExcept(n *xdm.Node) error {
 	}
 	var excepts int
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS || kid.Name.Local != "except" {
+		if kid.Name.URI != NS {
 			continue
+		}
+		// §3: <anyName> [exceptNameClass] </anyName>, and the same for
+		// nsName. Anything else here would be silently ignored.
+		if kid.Name.Local != "except" {
+			return fmt.Errorf("relaxng: <%s> holds <%s>; it takes only <except>",
+				n.Name.Local, kid.Name.Local)
 		}
 		excepts++
 		if excepts > 1 {

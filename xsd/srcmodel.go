@@ -148,7 +148,7 @@ var srcModels = map[string][]srcTerm{
 // rejecting it here would pre-empt that decision for every one of them at once.
 var srcAttrs = map[string][]string{
 	"schema": {"attributeFormDefault", "blockDefault", "elementFormDefault",
-		"finalDefault", "targetNamespace", "version", "lang",
+		"finalDefault", "targetNamespace", "version",
 		"defaultAttributes", "xpathDefaultNamespace"},
 	"element": {"abstract", "block", "default", "final", "fixed", "form",
 		"maxOccurs", "minOccurs", "name", "nillable", "ref",
@@ -189,6 +189,27 @@ var srcAttrs = map[string][]string{
 	"alternative":        {"test", "type", "xpathDefaultNamespace"},
 	"assert":             {"test", "xpathDefaultNamespace"},
 	"assertion":          {"test", "xpathDefaultNamespace"},
+
+	// The constraining facets: every one takes value and fixed, except
+	// that pattern and enumeration have no {fixed} (noFixedFacet).
+	"minExclusive":     {"value", "fixed"},
+	"minInclusive":     {"value", "fixed"},
+	"maxExclusive":     {"value", "fixed"},
+	"maxInclusive":     {"value", "fixed"},
+	"totalDigits":      {"value", "fixed"},
+	"fractionDigits":   {"value", "fixed"},
+	"length":           {"value", "fixed"},
+	"minLength":        {"value", "fixed"},
+	"maxLength":        {"value", "fixed"},
+	"whiteSpace":       {"value", "fixed"},
+	"explicitTimezone": {"value", "fixed"},
+	"enumeration":      {"value"},
+	"pattern":          {"value"},
+
+	// appinfo and documentation take source (and xml:lang, which is
+	// namespaced) and, unlike every other XSD element, no id.
+	"appinfo":       {"source"},
+	"documentation": {"source"},
 }
 
 // srcAnyURIAttrs names the attributes the schema for schemas types as
@@ -274,7 +295,8 @@ func (p *parser) checkAttrs(el *xdm.Node) {
 				el.Name.Local))
 			continue
 		}
-		if a.Name.Local == "id" {
+		if a.Name.Local == "id" && el.Name.Local != "appinfo" &&
+			el.Name.Local != "documentation" {
 			continue
 		}
 		found := false
@@ -284,7 +306,7 @@ func (p *parser) checkAttrs(el *xdm.Node) {
 				break
 			}
 		}
-		if !found {
+		if !found || prohibitedHere(el, a.Name.Local) {
 			p.errs = append(p.errs, errorAt(el, "",
 				"attribute %q is not allowed on xs:%s",
 				a.Name.Local, el.Name.Local))
@@ -298,7 +320,7 @@ func (p *parser) checkAttrs(el *xdm.Node) {
 		// happily under a name no reference could ever be written for.
 		//
 		// The value is trimmed first. NCName derives from xs:token, so
-		// its whiteSpace facet is a fixed "collapse" and leading and
+		// its whiteSpace facet is "collapse" and leading and
 		// trailing space is gone before the value is ever matched
 		// against the NCName production. addB193 declares
 		// name="sub2-elem " with a trailing space and the suite expects
@@ -308,6 +330,28 @@ func (p *parser) checkAttrs(el *xdm.Node) {
 				"name=%q is not a valid NCName", a.Value))
 		}
 	}
+}
+
+// prohibitedHere reports an attribute srcAttrs allows on the element name but
+// the schema for schemas prohibits in el's position: a top-level element
+// (topLevelElement) takes no ref, form, targetNamespace or occurrence range,
+// and an attribute group that has a name (namedAttributeGroup) takes no ref.
+func prohibitedHere(el *xdm.Node, attr string) bool {
+	switch el.Name.Local {
+	case "element":
+		parent := el.Parent
+		if parent == nil || parent.Name.URI != NSSchema ||
+			(parent.Name.Local != "schema" && parent.Name.Local != "override") {
+			return false
+		}
+		switch attr {
+		case "ref", "form", "targetNamespace", "minOccurs", "maxOccurs":
+			return true
+		}
+	case "attributeGroup":
+		return attr == "ref" && el.Attr("", "name") != nil
+	}
+	return false
 }
 
 // srcModelFor returns the content model for el, whose parent is parent.
@@ -343,8 +387,7 @@ func srcModelFor(el, parent *xdm.Node) ([]srcTerm, bool) {
 		case "simpleContent":
 			// Simple content may re-state the base's simple type and
 			// narrow it with facets, then redeclare attributes.
-			terms := []srcTerm{annot, opt("simpleType"), star(facetNames...),
-				opt("openContent")}
+			terms := []srcTerm{annot, opt("simpleType"), star(facetNames...)}
 			terms = append(terms, attrDecls...)
 			return append(terms, star("assert")), true
 		case "complexContent":
@@ -359,7 +402,7 @@ func srcModelFor(el, parent *xdm.Node) ([]srcTerm, bool) {
 	case "extension":
 		switch parentName {
 		case "simpleContent":
-			terms := []srcTerm{annot, opt("openContent")}
+			terms := []srcTerm{annot}
 			terms = append(terms, attrDecls...)
 			return append(terms, star("assert")), true
 		case "complexContent":
@@ -431,6 +474,7 @@ func (p *parser) checkSourceModel(el *xdm.Node) {
 	// Their own source= is checked, though: it is the one attribute the
 	// schema for schemas declares on them, and its type is xs:anyURI.
 	if el.Name.Local == "appinfo" || el.Name.Local == "documentation" {
+		p.checkAttrs(el)
 		p.checkAnyURIAttrs(el)
 		return
 	}

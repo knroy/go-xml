@@ -581,6 +581,26 @@ func (p *parser) checkFixedFacets(t, base *SimpleType, el *xdm.Node, b *FacetSet
 			"xs:explicitTimezone %s differs from the base's fixed %s",
 			*f.ExplicitTimezone, *b.ExplicitTimezone))
 	}
+
+	// whiteSpace is not in the merged set: its {fixed} flag belongs to
+	// the nearest step on the base chain that states the facet.
+	if f.WhiteSpace != nil {
+		for cur := base; cur != nil; {
+			if cur.Facets != nil && cur.Facets.WhiteSpace != nil {
+				if w := cur.Facets.WhiteSpace; cur.Facets.WhiteSpaceFixed && *w != *f.WhiteSpace {
+					p.errs = append(p.errs, errorAt(el, "fixed-facet-value",
+						"xs:whiteSpace %s differs from the base's fixed xs:whiteSpace %s",
+						*f.WhiteSpace, *cur.Facets.WhiteSpace))
+				}
+				break
+			}
+			next, ok := cur.Base.(*SimpleType)
+			if !ok || next == cur {
+				break
+			}
+			cur = next
+		}
+	}
 }
 
 // checkFacetApplicable enforces "applicable facets" (§4.1.5): the table of

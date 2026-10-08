@@ -1843,3 +1843,48 @@ func TestNotQNameRejectsEmptyPrefix(t *testing.T) {
 		t.Error(`notQName=":stylesheet" was accepted; an empty prefix is not a QName`)
 	}
 }
+
+// TestSchemaForSchemasDrift covers shapes the schema for schemas forbids that
+// used to load: each case is one constraint the source-model check missed.
+func TestSchemaForSchemasDrift(t *testing.T) {
+	const xs = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"`
+	for name, src := range map[string]string{
+		"openContent in simpleContent": xs + `><xs:complexType name="t"><xs:simpleContent>
+		  <xs:extension base="xs:string"><xs:openContent><xs:any/></xs:openContent></xs:extension>
+		  </xs:simpleContent></xs:complexType></xs:schema>`,
+		"unqualified lang on schema": xs + ` lang="en"/>`,
+		"unknown attribute on a facet": xs + `><xs:simpleType name="t"><xs:restriction base="xs:string">
+		  <xs:maxLength value="5" bogus="1"/></xs:restriction></xs:simpleType></xs:schema>`,
+		"fixed on pattern": xs + `><xs:simpleType name="t"><xs:restriction base="xs:string">
+		  <xs:pattern value="a" fixed="true"/></xs:restriction></xs:simpleType></xs:schema>`,
+		"fixed on enumeration": xs + `><xs:simpleType name="t"><xs:restriction base="xs:string">
+		  <xs:enumeration value="a" fixed="true"/></xs:restriction></xs:simpleType></xs:schema>`,
+		"id on appinfo":            xs + `><xs:annotation><xs:appinfo id="a"/></xs:annotation></xs:schema>`,
+		"id on documentation":      xs + `><xs:annotation><xs:documentation id="a"/></xs:annotation></xs:schema>`,
+		"minOccurs on top element": xs + `><xs:element name="e" minOccurs="1"/></xs:schema>`,
+		"form on top element":      xs + `><xs:element name="e" form="qualified"/></xs:schema>`,
+		"ref on top element":       xs + `><xs:element name="e"/><xs:element name="f" ref="e"/></xs:schema>`,
+		"ref on named attributeGroup": xs + `><xs:attributeGroup name="g"/>
+		  <xs:attributeGroup name="h" ref="g"/></xs:schema>`,
+		"import after a declaration":  xs + `><xs:element name="e"/><xs:import namespace="urn:x"/></xs:schema>`,
+		"include after a declaration": xs + `><xs:element name="e"/><xs:include schemaLocation="x.xsd"/></xs:schema>`,
+	} {
+		if _, err := parseSchemaString(t, src); err == nil {
+			t.Errorf("%s: should not load", name)
+		}
+	}
+	// The allowed neighbours of those shapes still load.
+	for name, src := range map[string]string{
+		"xml:lang on schema": xs + ` xml:lang="en"/>`,
+		"fixed on maxLength": xs + `><xs:simpleType name="t"><xs:restriction base="xs:string">
+		  <xs:maxLength value="5" fixed="true"/></xs:restriction></xs:simpleType></xs:schema>`,
+		"source on appinfo": xs + `><xs:annotation><xs:appinfo source="a"/></xs:annotation></xs:schema>`,
+		"local element with occurrence": xs + `><xs:element name="e"><xs:complexType><xs:sequence>
+		  <xs:element name="c" minOccurs="0" form="qualified"/></xs:sequence></xs:complexType></xs:element></xs:schema>`,
+		"annotation then import": xs + `><xs:annotation/><xs:import namespace="urn:x"/><xs:element name="e"/></xs:schema>`,
+	} {
+		if _, err := parseSchemaString(t, src); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

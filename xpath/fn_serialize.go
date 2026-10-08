@@ -387,7 +387,7 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 
 			// use-character-maps carries child elements rather than a value.
 			if p.Name.Local == "use-character-maps" {
-				m, err := readCharacterMaps(p)
+				m, err := ReadCharacterMaps(p)
 				if err != nil {
 					return opts, err
 				}
@@ -399,43 +399,25 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 			if err != nil {
 				return opts, err
 			}
+			// Checked against the parameter's schema type before anything
+			// reads it; the value comes back normalised, so a boolean below
+			// is always "yes" or "no".
+			if val, err = CheckSerializationParam(p.Name.Local, val); err != nil {
+				return opts, fmt.Errorf("SEPM0017: %w", err)
+			}
 			switch p.Name.Local {
 			case "method":
-				m, err := checkSerializationMethod(val)
-				if err != nil {
-					return opts, err
-				}
-				opts.method = m
+				opts.method = val
 			case "omit-xml-declaration":
-				v, err := checkYesNo(val, p.Name.Local)
-				if err != nil {
-					return opts, err
-				}
-				opts.omitXMLDecl = v == "yes"
+				opts.omitXMLDecl = val == "yes"
 			case "standalone":
-				// The parameter's type is xs:boolean, whose lexical space
-				// permits surrounding whitespace, and the serialization spec
-				// adds "omit" for "write no standalone at all".
-				v := strings.TrimSpace(val)
-				if v == "omit" {
-					opts.standalone = ""
-					break
+				// "omit" writes no standalone at all.
+				if val == "omit" {
+					val = ""
 				}
-				// Normalised rather than stored raw: XML 1.0 section 2.9
-				// admits only "yes" or "no" in an SDDecl, so writing back a
-				// "true" or a "1" the caller wrote here would emit a
-				// declaration no XML parser accepts.
-				v, err := checkYesNo(v, p.Name.Local)
-				if err != nil {
-					return opts, err
-				}
-				opts.standalone = v
+				opts.standalone = val
 			case "indent":
-				v, err := checkYesNo(val, p.Name.Local)
-				if err != nil {
-					return opts, err
-				}
-				opts.indent = v == "yes"
+				opts.indent = val == "yes"
 			case "item-separator":
 				opts.itemSeparator, opts.hasItemSep = val, true
 			case "encoding":
@@ -454,11 +436,7 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				// used to ignore it, so the same stylesheet got namespace
 				// undeclarations from xsl:result-document and not from
 				// fn:serialize. See writeNamespaceDecls.
-				v, err := checkYesNo(val, p.Name.Local)
-				if err != nil {
-					return opts, err
-				}
-				opts.undeclarePrefixes = v == "yes"
+				opts.undeclarePrefixes = val == "yes"
 			case "cdata-section-elements":
 				// The map form honours this parameter, and this one used to
 				// drop it: the same request wrote a CDATA section through
@@ -488,21 +466,12 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 			case "json-node-output-method":
 				// Honoured for the same reason: the map form acts on it and
 				// the element form announced acceptance and then wrote the
-				// default. checkSerializationMethod is what the map form
-				// validates it with.
-				m, err := checkSerializationMethod(val)
-				if err != nil {
-					return opts, err
-				}
-				opts.jsonNodeOutputMethod = m
+				// default.
+				opts.jsonNodeOutputMethod = val
 			case "allow-duplicate-names":
 				// The map form raises SERE0022 without this; the element form
 				// could not ask for the same latitude.
-				v, err := checkYesNo(val, p.Name.Local)
-				if err != nil {
-					return opts, err
-				}
-				opts.allowDuplicateNames = v == "yes"
+				opts.allowDuplicateNames = val == "yes"
 			case "suppress-indentation":
 				// A whitespace-separated list of lexical element names,
 				// resolved against the namespaces in scope on the parameter
@@ -535,11 +504,7 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				opts.doctypeSystem = val
 			case "escape-uri-attributes":
 				// xslt-rec20.xml:26434-26439, "The default value is yes."
-				norm, err := checkYesNo(val, p.Name.Local)
-				if err != nil {
-					return opts, err
-				}
-				v := norm == "yes"
+				v := val == "yes"
 				opts.escapeURIAttrs = &v
 			case "normalization-form":
 				// Character maps are applied below with normalization interleaved,
@@ -552,11 +517,7 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				}
 				opts.normalize = f
 			case "include-content-type":
-				norm, err := checkYesNo(val, p.Name.Local)
-				if err != nil {
-					return opts, err
-				}
-				v := norm == "yes"
+				v := val == "yes"
 				opts.includeContentType = &v
 			case "html-version":
 				// The same parameter the map form reads, and read here so the
@@ -585,26 +546,25 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				// HTTP header". A returned string has no destination to
 				// annotate. xsl:output, which does write to one, honours both.
 				// xsl:output, which does write bytes, honours both.
-			default:
-				// Includes use-character-maps, a real parameter this
-				// implementation does not support. The spec makes an
-				// unsupported parameter an error rather than something to
-				// ignore: accepting one silently would let a caller believe
-				// it had asked for something it did not get.
-				return opts, fmt.Errorf(
-					"SEPM0017: serialization parameter %q is not supported", p.Name.Local)
 			}
 		}
 	}
 	return opts, nil
 }
 
-// readCharacterMaps reads a use-character-maps parameter.
+// ReadCharacterMaps reads a use-character-maps parameter element, for this
+// package's fn:serialize and for xslt's parameter-document reader alike.
 //
 // It carries output:character-map children rather than a value, each naming a
 // character and the string to write in its place. Two of them mapping the same
 // character is SEPM0018 — a conflict the caller could not have meant.
-func readCharacterMaps(p *xdm.Node) (map[rune]string, error) {
+//
+// The schema (Serialization 3.1 appendix B) makes both attributes optional
+// and allows an element in another namespace after the maps. §3.1 reads a map
+// as string(@map-string) for each @character, so a missing map-string maps
+// the character to "", one with no character maps nothing, and the foreign
+// element is an extension that is ignored.
+func ReadCharacterMaps(p *xdm.Node) (map[rune]string, error) {
 	out := map[rune]string{}
 	// The parameter carries its maps as children, so it has no attributes of
 	// its own: "use-character-maps value='yes'" is not this parameter written
@@ -619,15 +579,16 @@ func readCharacterMaps(p *xdm.Node) (map[rune]string, error) {
 		if c.Kind != xdm.KindElement {
 			continue
 		}
-		// Only output:character-map may appear here. A child of another name
-		// — or in another namespace — is not a character map, and ignoring it
-		// would accept a document that says something this does not do.
+		if c.Name.URI != "" && c.Name.URI != nsSerialization {
+			continue
+		}
+		// Otherwise only output:character-map may appear here.
 		if c.Name.URI != nsSerialization || c.Name.Local != "character-map" {
 			return nil, fmt.Errorf(
 				"SEPM0017: %q is not a character-map element", c.Name.Local)
 		}
 		ch, to := "", ""
-		haveChar, haveTo := false, false
+		haveChar := false
 		for _, a := range c.Attrs {
 			if a.Name.URI != "" {
 				continue
@@ -636,15 +597,14 @@ func readCharacterMaps(p *xdm.Node) (map[rune]string, error) {
 			case "character":
 				ch, haveChar = a.Value, true
 			case "map-string":
-				to, haveTo = a.Value, true
+				to = a.Value
 			default:
 				return nil, fmt.Errorf(
 					"SEPM0017: unexpected attribute %q on character-map", a.Name.Local)
 			}
 		}
-		if !haveChar || !haveTo {
-			return nil, fmt.Errorf(
-				"SEPM0017: a character-map needs both character and map-string")
+		if !haveChar {
+			continue
 		}
 		// The character attribute holds exactly one character; anything else
 		// does not name a character to map.
@@ -675,28 +635,113 @@ var serializeBoolAliases = map[string]string{
 	"true": "yes", "false": "no", "1": "yes", "0": "no",
 }
 
-// checkYesNo normalises a boolean parameter value to "yes" or "no", and
-// rejects a spelling outside the lexical space its type allows.
+// CheckSerializationParam checks one serialization parameter's lexical value
+// against the type the schema for serialization parameters gives it
+// (Serialization 3.1 appendix B), and returns the value as a reader should
+// use it: a boolean as "yes" or "no" (standalone may also be "omit"), and an
+// xs:token value with its whitespace collapsed.
 //
-// It returns the normalised value because every caller needs it: the six
-// spellings are equal in meaning, so a caller that kept the raw text and
-// compared it against "yes" would read "true" and "1" as false and silently
-// act on the opposite of what was asked.
+// It is the one check for every reader of a parameter's string form -- the
+// element form of fn:serialize here, and xslt.SetSerializationParam for a
+// parameter document, an XQuery output declaration and fn:transform -- so
+// that a value one of them refuses is not accepted by another. The error
+// carries no code because the code depends on the source: a value read from a
+// parameter element is SEPM0017 (§3.1), one given directly SEPM0016 (§3).
 //
-// The value is a boolean, so a spelling outside its lexical space means the
-// parameter document is malformed rather than that the caller asked for
-// something unsupported.
-func checkYesNo(val, name string) (string, error) {
-	v := strings.TrimSpace(val)
-	if alias, ok := serializeBoolAliases[v]; ok {
-		v = alias
+// use-character-maps is not checked here, since its value is markup. A name
+// the schema does not declare is refused: build-tree, for one, is an
+// xsl:output attribute and not a serialization parameter.
+func CheckSerializationParam(name, val string) (string, error) {
+	tok := strings.Join(strings.Fields(val), " ")
+	bad := func() (string, error) {
+		return "", fmt.Errorf("%q is not a valid value for serialization parameter %q", val, name)
 	}
-	switch v {
-	case "yes", "no":
-		return v, nil
+	switch name {
+	case "allow-duplicate-names", "byte-order-mark", "escape-uri-attributes",
+		"include-content-type", "indent", "omit-xml-declaration",
+		"standalone", "undeclare-prefixes":
+		if alias, ok := serializeBoolAliases[tok]; ok {
+			tok = alias
+		}
+		if tok == "yes" || tok == "no" || (tok == "omit" && name == "standalone") {
+			return tok, nil
+		}
+		return bad()
+	case "method", "json-node-output-method":
+		// A method in a namespace would be an implementation-defined one,
+		// and there are none; json and adaptive are not node output methods.
+		v := strings.TrimPrefix(tok, "Q{}")
+		switch v {
+		case "xml", "html", "xhtml", "text":
+			return v, nil
+		case "json", "adaptive":
+			if name == "method" {
+				return v, nil
+			}
+		}
+		return bad()
+	case "encoding":
+		for i, r := range tok {
+			if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' ||
+				i > 0 && (r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-')) {
+				return bad()
+			}
+		}
+		if tok == "" {
+			return bad()
+		}
+		return tok, nil
+	case "doctype-public":
+		for _, r := range tok {
+			if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' ||
+				strings.ContainsRune(" \r\n\t-'()+,./:=?;!*#@$_%", r)) {
+				return bad()
+			}
+		}
+		return tok, nil
+	case "doctype-system":
+		// No escaping exists inside a system literal, so it may hold one
+		// kind of quote but not both.
+		if strings.Contains(val, "'") && strings.Contains(val, `"`) {
+			return bad()
+		}
+		return val, nil
+	case "html-version":
+		if _, err := CastAtomic(xdm.NewString(tok), xdm.TypeDecimal); err != nil {
+			return bad()
+		}
+		return tok, nil
+	case "normalization-form":
+		if !isNmtoken(tok) {
+			return bad()
+		}
+		return tok, nil
+	case "cdata-section-elements", "suppress-indentation":
+		// Each name is a lexical QName or an EQName. The prefixes are left
+		// for the caller, which holds the bindings.
+		for _, n := range strings.Fields(val) {
+			if strings.HasPrefix(n, "Q{") {
+				end := strings.IndexByte(n, '}')
+				if end < 0 || strings.ContainsRune(n[2:end], '{') || !isNCName(n[end+1:]) {
+					return bad()
+				}
+				continue
+			}
+			prefix, local, ok := strings.Cut(n, ":")
+			if !ok {
+				prefix, local = "", n
+			}
+			if !isNCName(local) || ok && !isNCName(prefix) {
+				return bad()
+			}
+		}
+		return val, nil
+	case "media-type", "version":
+		return tok, nil
+	case "item-separator":
+		return val, nil
 	}
-	return "", fmt.Errorf(
-		"SEPM0017: serialization parameter %q takes yes or no, got %q", name, val)
+	return "", fmt.Errorf("%q is not a serialization parameter", name)
 }
 
 // nsSerialization is the namespace a serialization parameter document uses.
@@ -1349,26 +1394,6 @@ func applyCharacterMap(s string, m map[rune]string) string {
 		sb.WriteRune(r)
 	}
 	return sb.String()
-}
-
-// checkSerializationMethod validates the "method" serialization parameter.
-//
-// Serialization 3.1 §3 lists the output methods, and §2 makes an unsupported
-// one an error: "It is a serialization error [err:SEPM0017] if the value of
-// the method parameter is not one of the values permitted". The permitted set
-// does not depend on how the parameters were written. fn:serialize's second
-// argument may be given either as an output:serialization-parameters element
-// or as a map, and F&O 3.1 §14.7.2 defines the element form by converting it
-// to the map form before use — so the two spellings must accept exactly the
-// same methods. "json" and "adaptive" are therefore as valid in the element
-// form as in the map form (app-Walmsley/d1e78807h serializes a map through a
-// method="json" element).
-func checkSerializationMethod(v string) (string, error) {
-	switch v {
-	case "xml", "text", "xhtml", "html", "json", "adaptive":
-		return v, nil
-	}
-	return "", fmt.Errorf("SEPM0017: unsupported serialization method %q", v)
 }
 
 // mapSerializationParams reads the parameters from the map form the 3.1

@@ -952,27 +952,16 @@ func isModuleElement(el *xdm.Node) bool {
 			el.Parent.Name.URI != xdm.NSXSL)
 }
 
-// forwardsAtDeep reports whether el is processed with forwards compatible
-// behavior, reading the version from the nearest ancestor-or-self that
-// declares one. forwardsAt asks the same question of a single element and
-// takes the inherited answer as an argument, which this pass does not carry.
-func forwardsAtDeep(el *xdm.Node) bool {
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind == xdm.KindElement && hasVersionAttr(cur) {
-			return forwardsAt(cur, false)
-		}
-	}
-	return false
-}
-
 // ignoredTopLevel reports whether ch, a child of a module element, is one
 // section 3.9's first rule of forwards compatible behavior discards.
 //
 // That rule covers any XSLT element XSLT 3.0 does not allow in this position,
 // known or not, provided the element's effective version puts it under
-// forwards compatible behavior.
+// forwards compatible behavior -- greater than the processor's version, not
+// merely greater than 2.0, so a version="3.0" module on a 3.0 processor has
+// its misplaced top-level elements reported (XTSE0010), not discarded.
 func ignoredTopLevel(ch *xdm.Node) bool {
-	if ch.Name.URI != xdm.NSXSL || !forwardsAtDeep(ch) {
+	if ch.Name.URI != xdm.NSXSL || !effectiveForwards(ch) {
 		return false
 	}
 	// Not inside an xsl:package: see inPackage. Discarding the element here

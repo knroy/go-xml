@@ -81,13 +81,13 @@ func (p *compactParser) startsGrammarContent() bool {
 	if p.atKeyword("start") || p.atKeyword("div") || p.atKeyword("include") {
 		return true
 	}
-	// An identifier begins a grammar only when it is being defined. "element"
-	// and the other pattern keywords are excluded because a bare pattern may
-	// begin with one and they can never be a definition's name unescaped.
+	// An identifier begins a grammar only when it is being defined. A
+	// keyword is excluded because a bare pattern may begin with one and it
+	// can never be a definition's name unescaped.
 	if p.tok.kind != tokIdent && p.tok.kind != tokEscapedIdent {
 		return false
 	}
-	if p.tok.kind == tokIdent && patternKeywords[p.tok.text] {
+	if p.tok.kind == tokIdent && keywords[p.tok.text] {
 		return false
 	}
 	scan := *p.lex
@@ -99,15 +99,32 @@ func (p *compactParser) startsGrammarContent() bool {
 		(next.text == "=" || next.text == "|=" || next.text == "&=")
 }
 
-// patternKeywords are the words that begin a pattern.
+// keywords are the compact syntax's reserved words (Appendix A.1, keyword).
 //
-// They are listed so that startsGrammarContent can tell "element" beginning a
-// bare-pattern schema from "foo" beginning a definition. A name written with a
-// backslash is not in this set by construction, which is the escape's purpose.
-var patternKeywords = map[string]bool{
-	"element": true, "attribute": true, "text": true, "empty": true,
-	"notAllowed": true, "list": true, "mixed": true, "parent": true,
-	"external": true, "grammar": true,
+// identifier ::= (NCName - keyword) | quotedIdentifier, so none of these may
+// name a definition or a <ref> unless written with a backslash; a name written
+// with one is a tokEscapedIdent and never looked up here, which is the
+// escape's purpose. It also lets startsGrammarContent tell "element" beginning
+// a bare-pattern schema from "foo" beginning a definition.
+var keywords = map[string]bool{
+	"attribute": true, "default": true, "datatypes": true, "div": true,
+	"element": true, "empty": true, "external": true, "grammar": true,
+	"include": true, "inherit": true, "list": true, "mixed": true,
+	"namespace": true, "notAllowed": true, "parent": true, "start": true,
+	"string": true, "text": true, "token": true,
+}
+
+// identifier reads an identifier: an NCName that is not a keyword, or any
+// NCName written with a backslash.
+func (p *compactParser) identifier(what string) (string, error) {
+	if p.tok.kind == tokIdent && keywords[p.tok.text] {
+		return "", p.errorf(`%q is a keyword; write \%s to use it as %s`, p.tok.text, p.tok.text, what)
+	}
+	if p.tok.kind != tokIdent && p.tok.kind != tokEscapedIdent {
+		return "", p.errorf("expected %s, found %s", what, p.tok)
+	}
+	name := p.tok.text
+	return name, p.advance()
 }
 
 // parseDecls reads the namespace and datatypes declarations that open a schema.
@@ -341,8 +358,8 @@ func (p *compactParser) parseStart(g *xdm.Node, doc *annotation) error {
 
 // parseDefine reads `name = pattern`.
 func (p *compactParser) parseDefine(g *xdm.Node, doc *annotation) error {
-	name := p.tok.text
-	if err := p.advance(); err != nil {
+	name, err := p.identifier("a definition name")
+	if err != nil {
 		return err
 	}
 	combine, err := p.parseAssignOp()

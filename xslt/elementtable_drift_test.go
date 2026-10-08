@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -222,5 +223,207 @@ func TestOutputTypedAttrs(t *testing.T) {
 		case c.code != "" && (err == nil || !strings.Contains(err.Error(), c.code)):
 			t.Errorf("%s: want %s, got %v", c.name, c.code, err)
 		}
+	}
+}
+
+// TestExposeSummary pins xsl:expose to its syntax summary: visibility is
+// public|private|final|abstract with no "hidden" (that is xsl:accept's), and
+// section 3.5 allows the element "only as a child of xsl:package".
+func TestExposeSummary(t *testing.T) {
+	pkg := func(vis string) string {
+		return `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		    xmlns:x="http://x/" name="http://x/p" version="3.0">
+		  <xsl:expose component="function" names="*" visibility="` + vis + `"/>
+		  <xsl:function name="x:f"><xsl:sequence select="1"/></xsl:function>
+		</xsl:package>`
+	}
+	for _, c := range []struct{ src, code string }{
+		{pkg("public"), ""},
+		{pkg("final"), ""},
+		{pkg("hidden"), "XTSE0020"},
+		{`<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+		  <xsl:expose component="function" names="*" visibility="public"/>
+		</xsl:stylesheet>`, "XTSE0010"},
+	} {
+		err := compileDrift(t, c.src)
+		switch {
+		case c.code == "" && err != nil:
+			t.Errorf("refused: %v\n%s", err, c.src)
+		case c.code != "" && (err == nil || !strings.Contains(err.Error(), c.code)):
+			t.Errorf("want %s, got %v\n%s", c.code, err, c.src)
+		}
+	}
+}
+
+// TestEnumeratedAVTs pins the summaries of four attribute value templates
+// the table left open: xsl:result-document's @method and
+// @json-node-output-method, and @data-type on xsl:sort and xsl:merge-key.
+// Each is an enumeration united with eqname, so a literal outside it is the
+// static XTSE0020 and a computed one the dynamic XTDE0030; a prefixed name
+// is an implementation-defined value and passes.
+func TestEnumeratedAVTs(t *testing.T) {
+	sheet := func(body string) string {
+		return `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		    xmlns:x="http://x/" version="3.0">
+		  <xsl:variable name="v" select="'bogus'"/>
+		  <xsl:template name="xsl:initial-template">` + body + `</xsl:template>
+		</xsl:stylesheet>`
+	}
+	rd := func(attr string) string {
+		return `<xsl:result-document href="r.xml" ` + attr + `><r/></xsl:result-document><out/>`
+	}
+	sort := func(dt string) string {
+		return `<out><xsl:for-each select="3, 1, 2"><xsl:sort select="." data-type="` +
+			dt + `"/><xsl:value-of select="."/></xsl:for-each></out>`
+	}
+	for _, c := range []struct{ body, code string }{
+		{rd(`method="text"`), ""},
+		{rd(`method="json"`), ""},
+		{rd(`method="bogus"`), "XTSE0020"},
+		{rd(`method="{$v}"`), "XTDE0030"},
+		{rd(`method="{'xml'}"`), ""},
+		{rd(`json-node-output-method="html"`), ""},
+		{rd(`json-node-output-method="json"`), "XTSE0020"},
+		{rd(`json-node-output-method="{$v}"`), "XTDE0030"},
+		{sort("number"), ""},
+		{sort("bogus"), "XTSE0020"},
+		{sort("{$v}"), "XTDE0030"},
+		{sort("{'text'}"), ""},
+		{`<xsl:merge><xsl:merge-source select="1 to 3">
+		    <xsl:merge-key select="." data-type="bogus"/></xsl:merge-source>
+		  <xsl:merge-action><out/></xsl:merge-action></xsl:merge>`, "XTSE0020"},
+	} {
+		err := compileAttrSetSheet(t, sheet(c.body))
+		switch {
+		case c.code == "" && err != nil:
+			t.Errorf("%s: refused: %v", c.body, err)
+		case c.code != "" && (err == nil || !strings.Contains(err.Error(), c.code)):
+			t.Errorf("%s: want %s, got %v", c.body, c.code, err)
+		}
+	}
+	// A prefixed name compiles; what it means is implementation-defined.
+	for _, body := range []string{rd(`method="x:mine"`), sort("x:mine")} {
+		if err := compileDrift(t, sheet(body)); err != nil {
+			t.Errorf("%s: refused: %v", body, err)
+		}
+	}
+}
+
+// TestStandardAttrValuesEverywhere pins section 3.5's standard attributes to
+// their types on any XSLT element, not only on the module element whose
+// table entry already checked them.
+func TestStandardAttrValuesEverywhere(t *testing.T) {
+	sheet := func(rootAttr, tmplAttr string) string {
+		return `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		    xmlns:x="http://x/" version="3.0" ` + rootAttr + `>
+		  <xsl:mode name="x:m"/>
+		  <xsl:template name="t" ` + tmplAttr + `/>
+		</xsl:stylesheet>`
+	}
+	for _, c := range []struct{ root, tmpl, code string }{
+		{``, `version="2.0"`, ""},
+		{``, `default-validation="strip"`, ""},
+		{``, `default-mode="x:m"`, ""},
+		{``, `default-mode="#unnamed"`, ""},
+		{`default-mode="x:m"`, ``, ""},
+		{``, `version="abc"`, "XTSE0110"},
+		{``, `default-validation="lax"`, "XTSE0020"},
+		{``, `default-mode="#bogus"`, "XTSE0020"},
+		{`default-mode="#bogus"`, ``, "XTSE0020"},
+	} {
+		err := compileDrift(t, sheet(c.root, c.tmpl))
+		switch {
+		case c.code == "" && err != nil:
+			t.Errorf("%s %s: refused: %v", c.root, c.tmpl, err)
+		case c.code != "" && (err == nil || !strings.Contains(err.Error(), c.code)):
+			t.Errorf("%s %s: want %s, got %v", c.root, c.tmpl, c.code, err)
+		}
+	}
+	// xsl:output/@version is the output method's, any NMTOKEN, not this one.
+	out := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	    version="3.0"><xsl:output method="html" version="5"/></xsl:stylesheet>`
+	if err := compileDrift(t, out); err != nil {
+		t.Errorf("xsl:output version=\"5\" refused: %v", err)
+	}
+}
+
+// TestNormalizationFormIsNMTOKEN pins the summary's nmtoken: a literal that
+// is not one is XTSE0020 when compiling, where it used to reach the
+// serialiser as SESU0011. A well-formed form this engine does not support is
+// still the serialiser's question.
+func TestNormalizationFormIsNMTOKEN(t *testing.T) {
+	for _, c := range []struct{ body, code string }{
+		{`<xsl:output normalization-form="NFC"/>`, ""},
+		{`<xsl:output normalization-form="weird"/>`, ""},
+		{`<xsl:output normalization-form="not an nmtoken!"/>`, "XTSE0020"},
+		{`<xsl:template name="t"><xsl:result-document href="r.xml"
+		    normalization-form="bad form"/></xsl:template>`, "XTSE0020"},
+		{`<xsl:template name="t"><xsl:result-document href="r.xml"
+		    normalization-form="{'NFC'}"/></xsl:template>`, ""},
+	} {
+		err := compileDrift(t, `<xsl:stylesheet version="3.0"
+		    xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`+c.body+`</xsl:stylesheet>`)
+		switch {
+		case c.code == "" && err != nil:
+			t.Errorf("%s: refused: %v", c.body, err)
+		case c.code != "" && (err == nil || !strings.Contains(err.Error(), c.code)):
+			t.Errorf("%s: want %s, got %v", c.body, c.code, err)
+		}
+	}
+}
+
+// TestTwoPointZeroAttributes pins the table's version conventions for the
+// attributes the drift audit found unmarked. xsl:function/@override is a 2.0
+// attribute, so a 2.0 module gets the 2.0 pair only; and three 3.0
+// attributes are not attributes at all to a 2.0 processor (MaxVersion 2.0).
+// xsl:output's html-version, item-separator and suppress-indentation stay
+// accepted there: output-0724..0726 and validation-0214/0215 are XSLT20+
+// cases that write them in version="2.0" modules.
+func TestTwoPointZeroAttributes(t *testing.T) {
+	compile := func(src string, max float64) error {
+		_, err := Compile(mustParse(t, src), CompileOptions{MaxVersion: max})
+		return err
+	}
+	fn := func(ver, override string) string {
+		return `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		    xmlns:x="http://x/" version="` + ver + `">
+		  <xsl:function name="x:f" override="` + override + `"><xsl:sequence select="1"/></xsl:function>
+		</xsl:stylesheet>`
+	}
+	if err := compile(fn("2.0", "true"), 0); err == nil || !strings.Contains(err.Error(), "XTSE0020") {
+		t.Errorf(`override="true" at 2.0: want XTSE0020, got %v`, err)
+	}
+	for _, c := range []struct{ ver, v string }{{"2.0", "yes"}, {"3.0", "true"}} {
+		if err := compile(fn(c.ver, c.v), 0); err != nil {
+			t.Errorf(`override="%s" at %s refused: %v`, c.v, c.ver, err)
+		}
+	}
+	for _, body := range []string{
+		`<xsl:template name="t" visibility="public"/>`,
+		`<xsl:template name="t"><xsl:copy-of select="." copy-accumulators="yes"/></xsl:template>`,
+		`<xsl:template name="t"><xsl:message error-code="x:e"/></xsl:template>`,
+	} {
+		src := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		    xmlns:x="http://x/" version="2.0">` + body + `</xsl:stylesheet>`
+		if err := compile(src, 2.0); err == nil || !strings.Contains(err.Error(), "XTSE0090") {
+			t.Errorf("%s under a 2.0 processor: want XTSE0090, got %v", body, err)
+		}
+		if err := compile(src, 0); err != nil {
+			t.Errorf("%s under a 3.0 processor refused: %v", body, err)
+		}
+	}
+}
+
+// TestPackageVersionRequired pins section 3.5's summary, version = decimal
+// with no "?": a package without one is refused, as a stylesheet is.
+func TestPackageVersionRequired(t *testing.T) {
+	const pkg = `<xsl:package xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	    name="http://x/p"%s><xsl:template name="t"/></xsl:package>`
+	if err := compileDrift(t, fmt.Sprintf(pkg, ` version="3.0"`)); err != nil {
+		t.Errorf("package with version refused: %v", err)
+	}
+	err := compileDrift(t, fmt.Sprintf(pkg, ``))
+	if err == nil || !strings.Contains(err.Error(), "XTSE0010") {
+		t.Errorf("package without version: want XTSE0010, got %v", err)
 	}
 }

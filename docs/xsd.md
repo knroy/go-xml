@@ -71,7 +71,17 @@ schema written for 1.0 must not acquire its relaxations by accident. Under
 `xs:alternative` and inheritable attributes, `xs:openContent` and
 `xs:defaultOpenContent`, `xs:override`, the `notNamespace` and `notQName`
 wildcard forms, `explicitTimezone`, conditional inclusion through the
-versioning attributes, and the 1.1 built-in types.
+versioning attributes, and the 1.1 built-in types. `xs:yearMonthDuration` and
+`xs:dayTimeDuration` carry the pattern facets Part 2 defines them by, so `P1D`
+is not a year-month duration, in an instance or in a derived type's facet value.
+
+Of the five 1.1 built-in types, a 1.0 schema cannot name `xs:dateTimeStamp` or
+`xs:error` (in `type=`, `base=`, `itemType=`, `memberTypes=` or `xsi:type`).
+`xs:anyAtomicType`, `xs:yearMonthDuration` and `xs:dayTimeDuration` resolve
+under 1.0 as well: the XPath data model defines them for every XPath 2.0+ host,
+and schemas imported into XQuery, which are read as 1.0, use them. This is a
+deliberate leniency; `vc:typeAvailable` still reports all five unavailable
+under 1.0.
 
 The 1.1 constructs are always *parsed*, whichever version is selected — a
 schema that uses one is not rejected for it. Whether it is *honoured* is what
@@ -83,14 +93,17 @@ schema10.Validate(doc.Root, xsd.ValidateOptions{})   // nil — the assertion is
 schema11.Validate(doc.Root, xsd.ValidateOptions{})   // cvc-assertion.3
 ```
 
-So loading a 1.1 schema under the default version gives you a working 1.0
-validator for it, silently missing the 1.1 constraints. **If a schema uses 1.1
-features, select `Version11`.** Nothing warns you.
+The same holds for the `xs:assertion` and `xs:explicitTimezone` facets, for
+`xs:alternative`, and for `defaultAttributes` (a dangling group name is still
+reported). So loading a 1.1 schema under the default version gives you a
+working 1.0 validator for it, silently missing the 1.1 constraints. **If a
+schema uses 1.1 features, select `Version11`.** Nothing warns you.
 
-The exception is `notQName`, which is an error under 1.0 rather than ignored,
-because it *narrows* a wildcard: ignoring it would accept documents the schema
-means to exclude, where ignoring an assertion only fails to reject them. The
-asymmetry is not principled — it is where the line happens to fall today.
+The exceptions are the wildcard forms `notNamespace` and `notQName`, which are
+errors under 1.0 rather than ignored: the attribute is the wildcard's whole
+namespace constraint, so dropping it would leave a wildcard that admits what
+the schema means to exclude, where ignoring an assertion only fails to add a
+check on top of a declaration that still stands.
 
 ## Checking the schema itself
 
@@ -98,6 +111,13 @@ Unique Particle Attribution, Element Declarations Consistent and Particle
 Valid (Restriction) are all applied when the schema is loaded. Each is a
 property of the schema alone, so a document violating one *is not a schema* in
 the spec's terms, and it fails to load rather than validating clean.
+
+The same holds for the schema document's own shape. Its element order, the
+children and attributes each XSD element may carry, and positional rules such
+as "a top-level `xs:element` has no `ref`, `form` or occurrence range" and
+"`xs:import` and `xs:include` come before every declaration" are checked
+against the schema for schemas (the union of 1.0 and 1.1), and a document that
+breaks one fails to load.
 
 This is not the Xerces arrangement, which gates the first two behind
 `schema-full-checking`, off by default. That precedent governs whether a
@@ -209,6 +229,22 @@ and which spellings — so it is recorded once rather than rediscovered. A miss
 is an error rather than a silent nil, because a catalog quietly smaller than
 the caller asked for fails later and somewhere less obvious; `SetFallback`
 names a resolver to consult instead.
+
+With a fallback set, the lookup order is:
+
+1. A location matching an absolute alias — as written, or after resolving
+   against the referring document's base — is the catalog's copy.
+2. A location on `www.w3.org` matched by its file name (say
+   `http://www.w3.org/2012/04/XMLSchema.xsd`) is the catalog's copy too.
+3. Any other location the catalog matches only by spelling — a bare relative
+   alias such as `xml.xsd`, a last path segment, or the namespace of an
+   `xs:import` that also names a location — goes to the fallback first, and
+   the catalog answers only if the fallback cannot. A schema set's own,
+   different `xml.xsd`, or an `xs:import` of the `xml:` namespace naming a
+   local file, is read rather than shadowed by the bundled copy.
+4. An `xs:import` with a namespace and no location gets the catalog's copy.
+
+With no fallback the catalog answers whatever it matches, in the same order.
 
 This matters more than it looks. Schemas published by the W3C import each other
 by absolute URL, and those fetches are throttled: the W3C's own copy of the

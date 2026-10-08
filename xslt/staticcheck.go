@@ -63,6 +63,34 @@ var standardAttributes = map[string]bool{
 	"default-validation": true,
 }
 
+// checkStandardAttrValue holds a standard attribute (section 3.5) to its
+// type wherever it is written, not only on the module element, whose table
+// entry already does: version is an xs:decimal (XTSE0110), default-validation
+// "preserve" | "strip", and default-mode an EQName or "#unnamed" (XTSE0020).
+// expand-text has checkExpandText; the rest have no closed lexical space here.
+func checkStandardAttrValue(el, a *xdm.Node) error {
+	v := strings.TrimSpace(a.Value)
+	switch a.Name.Local {
+	case "version":
+		// xsl:output/@version is the output method's version, not this one.
+		if el.Name.Local != "output" && !isDecimalLexical(v) {
+			return fmt.Errorf("XTSE0110: xsl:%s/@version=%q is not a number",
+				el.Name.Local, a.Value)
+		}
+	case "default-validation":
+		if v != "preserve" && v != "strip" {
+			return fmt.Errorf("attribute default-validation=%q on xsl:%s is "+
+				"not one of preserve, strip (XTSE0020)", a.Value, el.Name.Local)
+		}
+	case "default-mode":
+		if v != "#unnamed" && !isEQName(v) && !isLexicalQName(v) {
+			return fmt.Errorf("attribute default-mode=%q on xsl:%s is not an "+
+				"EQName or #unnamed (XTSE0020)", a.Value, el.Name.Local)
+		}
+	}
+	return nil
+}
+
 // checkStaticGrammar verifies one element against the table.
 //
 // It is applied to the XSLT elements of a stylesheet after conditional
@@ -154,6 +182,9 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			continue
 		}
 
+		if err := checkStandardAttrValue(el, a); err != nil {
+			return err
+		}
 		ad, ok := def.attrs[a.Name.Local]
 		if ok && ad.removed30 && processorAtLeast30() &&
 			moduleAtLeast30(el) && !effectiveForwards(el) {
@@ -336,7 +367,12 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 					"xsl:%s may not contain %s: its content is %s (XTSE0010)",
 					el.Name.Local, ch.Name.Lexical(), cm.model)
 			}
-			if cm.kids[ch.Name.Local] || (cm.decls && xsltDeclarations[ch.Name.Local]) {
+			// xsl:expose is a declaration only of a package: section 3.5
+			// says it "may appear only as a child of xsl:package", whose
+			// model names it among its kids, so other-declarations does not
+			// admit it.
+			if cm.kids[ch.Name.Local] || (cm.decls &&
+				xsltDeclarations[ch.Name.Local] && ch.Name.Local != "expose") {
 				continue
 			}
 			// An unknown XSLT element is XTSE0010 from the table check when
@@ -358,7 +394,7 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 			// covered -- inside a sequence constructor the third rule
 			// applies instead, and that one demands an xsl:fallback.
 			if isModuleElement(el) && forwardsAt(ch, forwards) &&
-				!inPackage(ch) {
+				effectiveForwards(ch) && !inPackage(ch) {
 				continue
 			}
 			if cm.seqCtor && isInstruction(ch.Name.Local) {
@@ -558,6 +594,21 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 	if ad.uri {
 		return checkURIAttr(el, a)
 	}
+	if ad.nmtoken {
+		v := strings.TrimSpace(a.Value)
+		if ad.avt && strings.Contains(v, "{") {
+			return nil
+		}
+		ok := v != ""
+		for _, r := range v {
+			ok = ok && xdm.IsNameChar(r)
+		}
+		if !ok {
+			return fmt.Errorf("attribute %s=%q on xsl:%s is not an NMTOKEN "+
+				"(XTSE0020)", a.Name.Local, a.Value, el.Name.Local)
+		}
+		return nil
+	}
 	if len(ad.values) == 0 {
 		return nil
 	}
@@ -624,7 +675,7 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 			return false
 		}
 		// Only aliases the enumeration does not already spell are added.
-		// Twenty of the enumerations in elementtable.go list all six
+		// Many of the enumerations in elementtable.go list all six
 		// spellings themselves, and for those every alias is both present
 		// in ad.values and mapped by boolAliases to a value that is also
 		// present -- so appending on the mapping alone listed each of
@@ -682,8 +733,8 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 		// nested xsl:transform with no version attribute, and reporting the
 		// missing attribute would be reporting an error about an element the
 		// processor was told to pretend it never saw.
-		if forwards && n.Name.URI == xdm.NSXSL && isTopLevel(n) &&
-			!xsltDeclarations[n.Name.Local] && !inPackage(n) {
+		if forwards && effectiveForwards(n) && n.Name.URI == xdm.NSXSL &&
+			isTopLevel(n) && !xsltDeclarations[n.Name.Local] && !inPackage(n) {
 			return nil
 		}
 		if err := checkStaticGrammar(n, forwards); err != nil {
@@ -701,7 +752,8 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 		// content", so the walk must not descend into it. Checking inside
 		// rejected a stylesheet for a required attribute missing from an
 		// element the processor was told to pretend it never saw.
-		if forwards && n.Name.URI == xdm.NSXSL && isTopLevel(n) {
+		if forwards && effectiveForwards(n) && n.Name.URI == xdm.NSXSL &&
+			isTopLevel(n) {
 			// Unknown in the same sense checkStaticGrammar means it: an
 			// element of a later version is unknown to this stylesheet's.
 			def, known := xsltElements[n.Name.Local]

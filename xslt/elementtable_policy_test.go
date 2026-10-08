@@ -1,6 +1,11 @@
 package xslt
 
 import (
+	"fmt"
+	"html"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -10,23 +15,20 @@ import (
 // element syntax summaries, and in a handful of places it deliberately does
 // not match them: it refuses seven Last Call working draft spellings by name
 // rather than merely omitting them, accepts one draft element, widens one
-// enumeration, and carries one flag the braces do not justify. Each of those
+// enumeration, carries one flag the braces do not justify, and leaves two
+// enumerations to the check that owns their error code. Each of those
 // decisions is justified in docs/element-table-policy.md, where every
 // divergence carries the suite case, change-log entry or passage of prose
 // that argues for it.
 //
-// This test keeps the two in step. It holds the enumerated set of divergent
-// (element, attribute) pairs and checks it against the table, so a new draft
-// attribute, a widened enumeration or a cleared flag fails the build until
-// the document declares it. It does not parse the specification: deriving the
-// Recommendation side means stripping four megabytes of HTML, which is a
-// research job and not a test. What it pins is the *shape* of each declared
-// divergence, which is enough to notice one arriving or leaving.
-//
-// The nine pairs below are the attribute-level divergences the document
-// declares: seven withdrawn draft spellings, one avt flag the braces do not
-// justify, and one widened enumeration. A tenth appearing here without a row
-// in the document is the finding the document exists to prevent.
+// Two tests keep the three in step. TestElementTableMatchesRecommendation
+// reads the summaries out of the vendored Recommendation
+// (testdata/xslt30-test/specs/xslt-30.html) and compares every element,
+// attribute, required flag, avt flag and enumeration with the table, so an
+// invented name, a widened enumeration or a changed flag fails unless it is
+// one of the rows below. TestElementTablePolicyDeclaresEveryDivergence checks
+// the rows themselves, so a divergence that was fixed without its row being
+// removed fails too.
 
 // policyDivergence is one row of docs/element-table-policy.md, in the form
 // the table can be checked against.
@@ -59,11 +61,6 @@ var declaredDivergences = []policyDivergence{
 	{element: "merge-source", attr: "for-each-stream", removed30: true},
 	{element: "param", attr: "export", removed30: true},
 
-	// An enumeration wider than the summary: xsl:expose confers "hidden",
-	// which is the element's principal use, so the prose beats the summary.
-	{element: "expose", attr: "visibility", values: []string{
-		"public", "private", "final", "abstract", "hidden"}},
-
 	// One avt flag the braces do not justify, and it is inert: xsl:copy-of's
 	// @validation is refused by validate.go before the flag is consulted.
 	// xsl:output's @parameter-document and @json-node-output-method were
@@ -71,6 +68,15 @@ var declaredDivergences = []policyDivergence{
 	// a uri flag and a four-token enumeration with eqnameOK. Clearing avt is
 	// what gave those checks a reader, so neither is a divergence any more.
 	{element: "copy-of", attr: "validation", avt: true},
+
+	// Two enumerations the table leaves open because another check owns
+	// them, with the code the prose assigns: xsl:output/@method is XTSE1570
+	// (staticerrors.go), not the generic XTSE0020 an enumeration would
+	// raise first; xsl:evaluate/@schema-aware is checked as a boolean AVT by
+	// compileEvaluate, XTSE0020 for a literal and XTDE0030 for a computed
+	// value. An empty, non-nil values records "no enumeration".
+	{element: "evaluate", attr: "schema-aware", values: []string{}},
+	{element: "output", attr: "method", values: []string{}},
 }
 
 // declaredExtraElements are the two elements with no syntax summary at all:
@@ -109,7 +115,7 @@ func TestElementTablePolicyDeclaresEveryDivergence(t *testing.T) {
 			t.Errorf("%s/@%s: removed30 is %v, the document says %v",
 				d.element, d.attr, ad.removed30, d.removed30)
 		}
-		if ad.avt != d.avt {
+		if d.avt && !ad.avt {
 			t.Errorf("%s/@%s: avt is %v, the document says %v",
 				d.element, d.attr, ad.avt, d.avt)
 		}
@@ -135,30 +141,191 @@ func TestElementTablePolicyDeclaresEveryDivergence(t *testing.T) {
 		}
 	}
 
-	// The two elements with no syntax summary are enumerated too, so a third
-	// invented element fails rather than being absorbed.
-	got := map[string]bool{}
+	// The two elements with no syntax summary are enumerated too; a third
+	// invented element is caught by TestElementTableMatchesRecommendation.
 	for _, el := range declaredExtraElements {
 		if _, ok := xsltElements[el]; !ok {
 			t.Errorf("docs/element-table-policy.md lists xsl:%s, which the "+
 				"table no longer has", el)
 		}
-		got[el] = true
 	}
 }
 
-// TestElementTablePolicyVisibilityEnumerations pins the one enumeration the
-// document says is wider than the Recommendation's, against the four that are
-// not. xsl:expose confers "hidden"; every other visibility attribute stops at
-// "abstract", because a component acquires hidden through xsl:accept or
-// xsl:expose and never declares it. Without this, widening any of the four to
-// match xsl:expose would look like a consistency fix.
+// recAttr is one attribute line of an element syntax summary.
+type recAttr struct {
+	required, avt bool
+	// tokens are the quoted alternatives; typ is what is left once they and
+	// the braces are removed ("boolean", "eqname", "expression", ...).
+	tokens []string
+	typ    string
+}
+
+var (
+	recSummaryRE = regexp.MustCompile(`(?s)<p class="element-syntax">(.*?)</p>`)
+	recTagRE     = regexp.MustCompile(`<[^>]*>`)
+	recBrRE      = regexp.MustCompile(`<br\s*/?>`)
+	recHeadRE    = regexp.MustCompile(`^<xsl:([\w-]+)`)
+	recAttrRE    = regexp.MustCompile(`^\[?([\w-]+)\]?(\??) = (.*?)\s*/?>?$`)
+	recTokenRE   = regexp.MustCompile(`"([^"]*)"`)
+)
+
+// recSummaries reads the element syntax summaries of the vendored XSLT 3.0
+// Recommendation, which section 2.2 makes normative. It skips when the suite
+// checkout, which carries the specification, is absent.
+func recSummaries(t *testing.T) map[string]map[string]recAttr {
+	t.Helper()
+	src, err := os.ReadFile(filepath.Join("..", "testdata", "xslt30-test", "specs", "xslt-30.html"))
+	if err != nil {
+		t.Skipf("XSLT 3.0 Recommendation not vendored: %v", err)
+	}
+	out := map[string]map[string]recAttr{}
+	for _, m := range recSummaryRE.FindAllSubmatch(src, -1) {
+		text := recBrRE.ReplaceAllString(string(m[1]), "\n")
+		text = html.UnescapeString(recTagRE.ReplaceAllString(text, ""))
+		text = strings.ReplaceAll(text, " ", " ")
+		name := ""
+		var lines []string
+		for _, line := range strings.Split(text, "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case line == "" || strings.HasPrefix(line, "<!--") || strings.HasPrefix(line, "</"):
+			case name == "":
+				h := recHeadRE.FindStringSubmatch(line)
+				if h == nil {
+					t.Fatalf("element syntax summary with no element: %q", line)
+				}
+				name = h[1]
+			case strings.HasPrefix(line, "|") && len(lines) > 0:
+				// An enumeration too long for one line continues on the next.
+				lines[len(lines)-1] += " " + line
+			default:
+				lines = append(lines, line)
+			}
+		}
+		attrs := map[string]recAttr{}
+		for _, line := range lines {
+			a := recAttrRE.FindStringSubmatch(line)
+			if a == nil {
+				t.Fatalf("xsl:%s: unreadable summary line %q", name, line)
+			}
+			v := strings.TrimSpace(a[3])
+			ra := recAttr{required: a[2] == ""}
+			if strings.HasPrefix(v, "{") && strings.HasSuffix(v, "}") {
+				ra.avt = true
+				v = strings.TrimSpace(v[1 : len(v)-1])
+			}
+			for _, tok := range recTokenRE.FindAllStringSubmatch(v, -1) {
+				ra.tokens = append(ra.tokens, tok[1])
+			}
+			rest := recTokenRE.ReplaceAllString(v, "")
+			rest = strings.Trim(strings.ReplaceAll(rest, " ", ""), "|")
+			ra.typ = strings.ReplaceAll(rest, "||", "|")
+			attrs[a[1]] = ra
+		}
+		if name == "" {
+			t.Fatalf("empty element syntax summary")
+		}
+		out[name] = attrs
+	}
+	if len(out) < 70 {
+		t.Fatalf("read %d element syntax summaries; the markup has changed", len(out))
+	}
+	return out
+}
+
+func TestElementTableMatchesRecommendation(t *testing.T) {
+	rec := recSummaries(t)
+	declared := map[string]policyDivergence{}
+	for _, d := range declaredDivergences {
+		declared[d.element+"/"+d.attr] = d
+	}
+	extra := map[string]bool{}
+	for _, el := range declaredExtraElements {
+		extra[el] = true
+	}
+	for el, def := range xsltElements {
+		ra, ok := rec[el]
+		if !ok {
+			if !extra[el] {
+				t.Errorf("xsl:%s is in the table but has no syntax summary", el)
+			}
+			continue
+		}
+		for attr, ad := range def.attrs {
+			d, isDeclared := declared[el+"/"+attr]
+			r, ok := ra[attr]
+			if !ok {
+				if !isDeclared || !d.removed30 {
+					t.Errorf("xsl:%s/@%s is in the table but not in the summary", el, attr)
+				}
+				continue
+			}
+			if req := ad.required && !ad.optional30; req != r.required {
+				t.Errorf("xsl:%s/@%s: required is %v, the summary says %v", el, attr, req, r.required)
+			}
+			if ad.avt != r.avt && !(isDeclared && d.avt) {
+				t.Errorf("xsl:%s/@%s: avt is %v, the summary says %v", el, attr, ad.avt, r.avt)
+			}
+			if isDeclared && d.values != nil || standardAttributes[attr] {
+				continue
+			}
+			if msg := recValuesDiffer(ad, r); msg != "" {
+				t.Errorf("xsl:%s/@%s: %s", el, attr, msg)
+			}
+		}
+		for attr := range ra {
+			if _, ok := def.attrs[attr]; !ok && !standardAttributes[attr] {
+				t.Errorf("xsl:%s/@%s is in the summary but not in the table", el, attr)
+			}
+		}
+	}
+	for el := range rec {
+		// xsl:example-element is section 2.2's illustration of the notation.
+		if _, ok := xsltElements[el]; !ok && el != "example-element" {
+			t.Errorf("xsl:%s has a syntax summary but is not in the table", el)
+		}
+	}
+}
+
+// recValuesDiffer compares an attribute's enumeration with its summary type,
+// returning what is wrong or "".
+func recValuesDiffer(ad attrDef, r recAttr) string {
+	switch r.typ {
+	case "boolean":
+		// The 2.0 spelling pair, or all six of 3.0's xs:boolean lexical
+		// forms; allowsBoolAliases admits the other four for a 2.0 pair.
+		two := append([]string{"yes", "no"}, r.tokens...)
+		six := append([]string{"yes", "no", "true", "false", "1", "0"}, r.tokens...)
+		if !sameEnumeration(ad.values, two) && !sameEnumeration(ad.values, six) {
+			return fmt.Sprintf("enumeration %v, the summary says boolean %v", ad.values, r.tokens)
+		}
+	case "", "eqname":
+		if len(r.tokens) == 0 {
+			break
+		}
+		if !sameEnumeration(ad.values, r.tokens) || ad.eqnameOK != (r.typ == "eqname") {
+			return fmt.Sprintf("enumeration %v (eqname %v), the summary says %v | %s",
+				ad.values, ad.eqnameOK, r.tokens, r.typ)
+		}
+		return ""
+	}
+	if r.typ != "boolean" && (ad.values != nil || ad.eqnameOK) {
+		return fmt.Sprintf("enumeration %v, the summary types it %s %v", ad.values, r.typ, r.tokens)
+	}
+	return ""
+}
+
+// TestElementTablePolicyVisibilityEnumerations pins which visibility
+// enumerations carry "hidden": only xsl:accept's summary does. Every other
+// one stops at "abstract" -- xsl:expose included, whose summary gives four
+// values -- so widening any of them to match xsl:accept would look like a
+// consistency fix and is not one.
 func TestElementTablePolicyVisibilityEnumerations(t *testing.T) {
 	for _, c := range []struct {
 		element string
 		hidden  bool
 	}{
-		{"expose", true},
+		{"expose", false},
 		{"accept", true}, // the summary itself carries hidden here
 		{"template", false},
 		{"variable", false},
@@ -243,7 +410,7 @@ func TestGlobalContextItemDeadEntries(t *testing.T) {
 // TestStandaloneStaysNarrowAtTwoPointZero pins @standalone on both elements
 // that carry it, and the asymmetry between them.
 //
-// REC appendix J.1 types it xsl:yes-or-no-or-omit, whose enumeration is seven
+// REC appendix H.1 types it xsl:yes-or-no-or-omit, whose enumeration is seven
 // values: "yes", "no", "omit", with true/false and 1/0 as synonyms of the
 // first two. The table lists three, and that is deliberate -- the version
 // gate belongs in checkAttrValue and never in the enumeration.

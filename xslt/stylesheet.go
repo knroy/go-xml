@@ -597,6 +597,13 @@ type OutputSettings struct {
 	// default, and xsl:result-document clears the flag, because the tree it
 	// creates is not the implicit one.
 	Version10Implicit bool
+	// indentByMethod applies XSLT 3.0 §26's default for an unstated indent:
+	// "yes in the case of the html and xhtml output methods, no in the case
+	// of the xml output method". The default is XSLT's, not Serialization's
+	// -- XQuery's is no for every method -- so only a stylesheet's settings
+	// set it, and an explicit indent clears it. It is read once the method
+	// is known, which for an omitted method is after the result is built.
+	indentByMethod bool
 }
 
 // Instruction is one compiled XSLT instruction.
@@ -717,7 +724,8 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 			// Filling it in here would make every stylesheet that omits
 			// xsl:output/@method serialise as XML.
 			output: OutputSettings{
-				Encoding: "UTF-8",
+				Encoding:       "UTF-8",
+				indentByMethod: true,
 			},
 		},
 	}

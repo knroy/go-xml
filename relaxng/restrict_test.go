@@ -126,6 +126,32 @@ func TestSimplificationBeforeRestrictions(t *testing.T) {
 	}
 }
 
+// Section 4.18 replaces a nested grammar by its start's pattern where the
+// grammar stands, so section 7.1.5 reaches a nested start only when that place
+// is under the schema's own start; and the nested grammar's definitions are
+// its own scope.
+func TestNestedGrammarStartStandsWhereTheGrammarDoes(t *testing.T) {
+	const nested = `<define name="any"><grammar><start><ref name="any"/></start>
+			<define name="any"><zeroOrMore><attribute><anyName/></attribute></zeroOrMore></define>
+		</grammar></define>`
+	mustAccept(t, "nested grammar in a define, used inside an element",
+		`<grammar`+rngNS+`><start><element name="a"><ref name="any"/></element></start>`+
+			nested+`</grammar>`)
+	mustReject(t, "nested grammar in a define, used as the schema start", "7.1.5",
+		`<grammar`+rngNS+`><start><ref name="any"/></start>`+nested+`</grammar>`)
+	mustReject(t, "nested grammar as the schema start", "7.1.5",
+		`<grammar`+rngNS+`><start><grammar><start><text/></start></grammar></start></grammar>`)
+	mustAccept(t, "nested definitions do not leak outward",
+		`<grammar`+rngNS+`>
+			<start><grammar>
+				<start><element name="c"><ref name="x"/></element></start>
+				<define name="x"><attribute name="q"/></define>
+			</grammar></start>
+			<define name="x"><data type="token"/></define>
+			<define name="y"><element name="a"><list><ref name="x"/></list></element></define>
+		</grammar>`)
+}
+
 // A ref is expanded in place, so a definition is legal or not according to
 // where it is referenced from.
 func TestRefExpandsIntoContext(t *testing.T) {
@@ -496,10 +522,40 @@ func TestGrammarHoldsOnlyDefinitions(t *testing.T) {
 			<element name="foo"><empty/></element>
 			<start><element name="foo"><empty/></element></start></grammar>`)
 
-	// A <div> outside a grammar groups patterns, so the rule does not reach
-	// it.
-	mustAccept(t, "div grouping patterns",
-		`<element`+rngNS+` name="foo"><div><empty/></div></element>`)
+}
+
+// Shapes the section 3 grammar does not produce, each refused.
+func TestFullSyntaxShapes(t *testing.T) {
+	for _, c := range []struct{ name, want, src string }{
+		{"start with two patterns", "at most 1",
+			`<grammar` + rngNS + `><start><element name="a"><empty/></element>
+				<element name="b"><empty/></element></start></grammar>`},
+		{"anyName holding a name class", "takes only <except>",
+			`<element` + rngNS + `><anyName><anyName/></anyName><empty/></element>`},
+		{"nsName holding a name", "takes only <except>",
+			`<element` + rngNS + `><nsName ns=""><name>x</name></nsName><empty/></element>`},
+		{"include holding a pattern", "an <include> takes only",
+			`<grammar` + rngNS + `><include href="x.rng"><element name="a"><empty/></element></include>
+				<start><element name="a"><empty/></element></start></grammar>`},
+		{"include holding an include", "an <include> takes only",
+			`<grammar` + rngNS + `><include href="x.rng"><div><include href="y.rng"/></div></include>
+				<start><element name="a"><empty/></element></start></grammar>`},
+		{"div where a pattern belongs", "<div> belongs in",
+			`<element` + rngNS + ` name="foo"><div><empty/></div></element>`},
+		{"param after except", "after its <except>",
+			`<element` + rngNS + ` name="a" datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+				<data type="string"><except><value>x</value></except><param name="length">1</param></data></element>`},
+		{"lone start with a bad combine", "neither choice nor interleave",
+			`<grammar` + rngNS + `><start combine="foo"><element name="a"><empty/></element></start></grammar>`},
+		{"lone define with a bad combine", "neither choice nor interleave",
+			`<grammar` + rngNS + `><start><element name="a"><ref name="x"/></element></start>
+				<define name="x" combine="bogus"><empty/></define></grammar>`},
+	} {
+		_, err := compileSrc(t, c.src)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want an error containing %q", c.name, err, c.want)
+		}
+	}
 }
 
 // A reference that names nothing is an error wherever it stands, including in

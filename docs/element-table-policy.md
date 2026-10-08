@@ -8,12 +8,15 @@ single document. This file says which document it is *meant* to agree with,
 enumerates every place it deliberately does not, and gives the rule for
 deciding the next one.
 
-`xslt/elementtable_policy_test.go` holds the same enumeration in Go and fails
-when the table gains a divergence this document does not list, and equally
-when a divergence is fixed without the row being removed. Adding a
-working-draft attribute, widening an enumeration past the Recommendation's, or
-clearing an `avt` flag without editing this file is a test failure, not a
-silent change.
+`xslt/elementtable_policy_test.go` holds the same enumeration in Go.
+`TestElementTableMatchesRecommendation` reads the element syntax summaries out
+of the vendored Recommendation and compares every element, attribute,
+required flag, `avt` flag and enumeration with the table, failing on any
+difference this document does not list; `TestElementTablePolicyDeclaresEveryDivergence`
+fails when a listed divergence is fixed without its row being removed. Adding
+a working-draft attribute, widening an enumeration past the Recommendation's,
+or changing a flag without editing this file is a test failure, not a silent
+change.
 
 ## The authority
 
@@ -30,10 +33,10 @@ evidence about what a stylesheet in the wild may have been written against,
 and nothing more. Where the table admits a draft spelling it is because a
 stylesheet that exists writes it, not because the draft says so.
 
-The suite's `schema-for-xslt30.xsd` is a third document and is also not an
-authority. It is stale in places — it omits `xsl:accumulator-rule/@select`,
-which both the Recommendation and this table carry — so it corroborates and
-never overrules.
+The schema of appendix H (non-normative; the suite carries a copy as
+`schema-for-xslt30.xsd`) is a third document and is also not an authority. It
+resolves a type name the summary abbreviates, so it corroborates and never
+overrules.
 
 Where the two disagree and no evidence settles it, the Recommendation wins.
 
@@ -57,6 +60,10 @@ vocabulary, which is the narrower and correct answer for a 2.0 module.
 element. They live in `standardAttributes` in `staticcheck.go`, not in the
 per-element maps, so the summaries' listing of them on `xsl:stylesheet`,
 `xsl:transform` and `xsl:package` is not something the table has to repeat.
+Their values are checked wherever they are written, by
+`checkStandardAttrValue`: `version` is an `xs:decimal` (XTSE0110),
+`default-validation` is `preserve` or `strip`, and `default-mode` an EQName
+or `#unnamed` (XTSE0020); `expand-text` has `checkExpandText`.
 
 **Bracketed attributes are real.** The Recommendation writes
 `[override]? = boolean` on `xsl:function` and
@@ -67,7 +74,7 @@ the table carries them as such.
 
 ## The deliberate divergences
 
-Nine entries, each with the reason it exists.
+Each entry below carries the reason it exists.
 
 ### Draft spellings refused — `removed30`
 
@@ -107,11 +114,12 @@ One entry, and it is an element rather than an attribute.
 |---|---|---|
 | `xsl:stream` (element) | — | §18.1's instruction in the draft; the Recommendation renamed it `xsl:source-document`. The change log says so in as many words (Bug29747): *"The `xsl:stream` instruction has been generalized to handle both streamed and unstreamed processing, and it has accordingly been renamed `xsl:source-document`, and has a `streamable` attribute."* A stylesheet written against either text is a legal one, so both names are accepted and `compileSourceDocument` serves both — it reads attributes, never the local name. The `xsl:stream` entry deliberately has no `@streamable`: that is precisely what the rename added. No suite case writes `<xsl:stream`, so this is invisible to the ratchet in both directions. |
 
-### Enumerations wider than the summary
+### Enumerations left to the check that owns the error
 
 | Element | Attribute | Reason |
 |---|---|---|
-| `xsl:expose` | `visibility` adds `hidden` | §3.5's `xsl:expose` summary gives four values, but `hidden` is exactly the visibility `xsl:expose` exists to confer: §3.5.2 lets a component be hidden from importers, and `xsl:accept`'s own summary carries `hidden` in the same position. Rejecting it would refuse the element's principal use. This is the one entry where the Recommendation's own text argues against its summary, so the prose wins. |
+| `xsl:output` | `method` has no enumeration | The summary gives `"xml" \| "html" \| "xhtml" \| "text" \| "json" \| "adaptive" \| eqname`. The prose assigns an invalid value XTSE1570, which `checkElementStatic` in `staticerrors.go` raises, including the 3.0-only `json` and `adaptive` in a 2.0 module; an enumeration here would answer first with the generic XTSE0020. |
+| `xsl:evaluate` | `schema-aware` has no enumeration | §10.4 types it `{ boolean }`. `compileEvaluate` checks it: a literal outside the six spellings is XTSE0020 (`evaluate-038` writes `"TRUE"`) and a computed one XTDE0030 (`evaluate-014`). An enumeration here would only duplicate the literal half. |
 
 ### Elements not in the summaries
 
@@ -125,7 +133,6 @@ One entry, and it is an element rather than an attribute.
 | Element | Attribute | Reason |
 |---|---|---|
 | `xsl:sequence` | `select` is `required` plus `optional30` | XSLT 2.0 requires the attribute; 3.0 lets a sequence constructor stand in for it. The pair of flags is how one table says "required at 2.0, optional at 3.0". The Recommendation's summary is the 3.0 half. |
-| `xsl:package` | `version` is not `required` | `version` is a standard attribute (§3.5), checked by `standardAttributes` rather than the per-element map, so the flag here has no reader. A 3.0 package routinely declares `version="2.0"`, describing its contents rather than itself; `compileRoot` decides whether a package is allowed at all. Marking it required in the map would be inert, and is left cleared so as not to imply a check that does not run. |
 
 ### `avt` flags that disagree with the braces
 
@@ -162,19 +169,44 @@ evidence that the check is missing.
 ## Divergences that had no recorded reason
 
 An undocumented divergence is the finding, so these are listed separately
-rather than quietly explained. Four were found, and none of them
-survived as an undocumented divergence. One was a genuine defect and was
-fixed. One looked like a defect, was fixed, measured, and reverted — the
-measurement is the finding, and is recorded below. One had a reason that was
-simply never written down, and now is. The fourth, `xsl:package/@version`,
-proved to be inert rather than divergent and is described under
-*Required-ness that differs* above.
+rather than quietly explained. None of them survives as an undocumented
+divergence: some were defects and were fixed, one looked like a defect and
+was measured and reverted — the measurement is the finding, and is recorded
+below — and `xsl:evaluate/@schema-aware` had a reason that was simply never
+written down, and now has one under *Enumerations left to the check that owns
+the error* above.
 
-### Still divergent, now with a reason
+### Fixed: the 2026-10-07 drift audit
 
-| Element | Attribute | What differs |
-|---|---|---|
-| `xsl:evaluate` | `schema-aware` has no enumeration | §10.4 types it `{ boolean }`, a closed set once the braces are discounted. The table leaves it open. It is checked instead in `compile_instr.go`, which raises **XTDE0030** — the code an AVT's effective value gets — and `evaluate-038` (`schema-aware="TRUE"`) depends on that code rather than XTSE0020. So the omission produces the right error, and adding the enumeration here would produce the wrong one: XTSE0020 at compile time, ahead of the dynamic check the case expects. It stays as it is, now with a reason. |
+Found by reading the summaries mechanically, which is what
+`TestElementTableMatchesRecommendation` now does on every run:
+
+- `xsl:expose/@visibility` listed `hidden`. The summary (§3.5.3.1), both
+  appendix-H schemas and the suite allow four values; `hidden` is
+  `xsl:accept`'s. This document justified it by a §3.5.2 passage that does
+  not exist. It is XTSE0020 now, and `xsl:expose` outside `xsl:package` is
+  XTSE0010 (§3.5: it "may appear only as a child of `xsl:package`").
+- `xsl:package/@version` was left optional on the claim that marking it
+  required would be inert. It was not inert — a package with no `version`
+  compiled — and the summary requires it, so it is required now.
+- `xsl:result-document/@method` and `@json-node-output-method`, and
+  `@data-type` on `xsl:sort` and `xsl:merge-key`, were open AVTs. Each
+  summary is an enumeration united with `eqname`: a literal outside it is
+  XTSE0020, a computed one XTDE0030.
+- `@normalization-form` is `… | nmtoken`: a literal that is not an NMTOKEN is
+  XTSE0020 at compile time rather than SESU0011 at serialisation.
+- `xsl:function/@override`, a 2.0 attribute, listed all six boolean
+  spellings, against the `yes|no` convention above.
+- The standard attributes were checked only on the module element; on any
+  other XSLT element `version="abc"`, `default-validation="lax"` and
+  `default-mode="#bogus"` compiled. See *What is not a divergence* above.
+- `xsl:template/@visibility` and `xsl:copy-of/@copy-accumulators` are now
+  `since30`, and `xsl:message/@error-code` `processor30`, so a 2.0 processor
+  refuses them. `xsl:output`'s `html-version`, `item-separator` and
+  `suppress-indentation` are 3.0 attributes too but stay unflagged: marking
+  them `processor30` cost `output-0724`, `-0725`, `-0726`, `validation-0214`
+  and `-0215` in the 2.0 lane, XSLT20+ cases that write them in
+  `version="2.0"` modules.
 
 ### Fixed: two entries that could never be consulted
 
@@ -202,7 +234,7 @@ restoring the entries fails as loudly as dropping the check.
 
 ### Measured and reverted: `@standalone` is narrow on purpose
 
-REC appendix J.1 types `@standalone` as `xsl:yes-or-no-or-omit`, whose
+REC appendix H.1 types `@standalone` as `xsl:yes-or-no-or-omit`, whose
 enumeration is seven values — `yes` `no` `true` `false` `1` `0` `omit` — its
 documentation describing the middle four as synonyms of `yes` and `no`. The table lists three, and
 `xsl:output` and `xsl:result-document` answer differently in a `version="2.0"`
@@ -243,7 +275,8 @@ would be lost.
 | `attrDef.since30` | The attribute is new in 3.0 on an element that existed before. Availability follows the **module's** `@version`. | When the attribute changes what the module's grammar contains. `xsl:variable/@static` is the case. |
 | `attrDef.processor30` | `since30` for an attribute whose availability follows the **processor** rather than the module. | When the attribute says what the processor may do rather than what the module contains, evidenced by a suite case that writes it in a `version="2.0"` module while being scoped XSLT30+. `message-0009` (`terminate="true"`), `function-1032` (`new-each-time`), `function-1025` (`@static` on `xsl:param`), `format-number-069a` (`exponent-separator`), `result-document-0302` (`build-tree`) are the precedents. Using it without such a case is guessing. |
 | `attrDef.optional30` | A 2.0-required attribute that 3.0 made optional, because 3.0 gave the element a second way to say the same thing. | Exactly one entry justifies it today: `xsl:sequence/@select`, which 3.0 lets a sequence constructor replace. |
-| `attrDef.eqnameOK` | The type is a **union** of a token enumeration with an EQName, so a lexically valid namespaced name passes beyond the listed tokens. | Only where REC appendix J.1 types the attribute as such a union. `xsl:function/@streamability` (`xsl:streamability-type`) is the only current use. Not a substitute for an incomplete enumeration. |
+| `attrDef.eqnameOK` | The type is a **union** of a token enumeration with an EQName, so a lexically valid namespaced name passes beyond the listed tokens. | Only where the summary writes `… \| eqname` (REC appendix H.1 types it as such a union): `xsl:function/@streamability`, `json-node-output-method` on `xsl:output` and `xsl:result-document`, `xsl:result-document/@method`, and `@data-type` on `xsl:sort` and `xsl:merge-key`. Not a substitute for an incomplete enumeration. |
+| `attrDef.nmtoken` | The summary's type ends in `nmtoken`: no closed set, but a literal value must be an NMTOKEN (XTSE0020). | `@normalization-form` on `xsl:output` and `xsl:result-document`. A well-formed form this engine does not support is SESU0011 from the serialiser, a different question. |
 | `attrDef.removed30` | A name a working draft proposed and the Recommendation removed. Reported XTSE0090 even under forwards-compatible leniency. | Only when the name is genuinely a *withdrawn* draft spelling, and only when no suite stylesheet writes it. Check for live uses rather than mentions: `for-each-stream` appears in six suite files and in none of them as an attribute — every occurrence is inside an XML comment. Where a suite case *seems* to need the attribute tolerated, suspect check ordering before concluding it does; `param/@export` looked like such a case for as long as the attribute sweep outran the placement rule. |
 | `attrDef.uri` | The summary types the attribute `uri`. There is no closed set of values, only a lexical space: the value must parse as a URI reference. | Where the summary says `uri` and the value would otherwise reach the serialiser unchecked. Deliberately the weakest check here — almost every string is a legal relative reference — so it refuses what cannot be a URI at all rather than policing what is. `xsl:output/@parameter-document` is the only current use. |
 | `attrDef.avt` | The summary writes the type in curly brackets, so the value may be `"{…}"` and cannot be checked against the enumeration at compile time. | Follow the braces. The one exception above is recorded because another rule answers first — never because the flag appears to have no reader, which usually means the check is missing rather than unnecessary. |
@@ -253,7 +286,7 @@ would be lost.
 1. **Read the Recommendation's summary first.** Strip tags from
    `testdata/xslt30-test/specs/xslt-30.html` and find the
    `<p class="element-syntax">` block. Never fetch w3.org; the vendored copy is
-   the one the tests measure against. Check appendix J.1 for the attribute's
+   the one the tests measure against. Check appendix H.1 for the attribute's
    schema type, which resolves a union the summary abbreviates.
 2. **If the table already agrees, stop.** Most apparent divergences are one of
    the three conventions under *What is not a divergence*.
@@ -287,7 +320,7 @@ summaries parse cleanly out of `xslt-30.html` with a regex over
 under forty lines. That yields, per element, the attribute names, which are
 required, which are bracketed, which are braced, and the alternation text of
 each type. Resolving the type names (`boolean`, `eqname`, `tokens`,
-`sequence-type`) against appendix J.1's schema, which is embedded in the same
+`sequence-type`) against appendix H.1's schema, which is embedded in the same
 file, gives closed enumerations for the rest. The content models parse from
 the `<!-- Content: … -->` comment in the same block. Nothing here is research;
 it is the same shape of job `cmd/genfunctions` already does.
@@ -305,8 +338,8 @@ overlay would have to carry, keyed by (element, attribute): a set of
 annotations to force, a set of enumeration edits with direction, a set of
 extra entries the Recommendation does not define, and a reason string for
 each — which is exactly the content of this document, in a form the build can
-read. That is the real work: the ten declared divergences plus the one
-recorded without a reason, each needing a stable key and a reason.
+read. That is the real work: every declared divergence, each needing a
+stable key and a reason.
 
 What it would catch is transcription error — a mistyped enumeration value, an
 attribute omitted from an element, a required flag on the wrong attribute, a
@@ -323,7 +356,7 @@ argument for generating the table — a missing *type* is even harder to see in
 review than a missing attribute, because the entry looks complete.
 
 It would also produce false positives, and `@standalone` is the worked
-example: a generator resolving J.1's `xsl:yes-or-no-or-omit` would report the
+example: a generator resolving H.1's `xsl:yes-or-no-or-omit` would report the
 table's three values as a shortfall and "fix" it to seven, which costs
 `output-0282`. The overlay would need not merely a wider-or-narrower edit but
 the reason the narrowing is correct — that the 2.0 vocabulary and the schema
@@ -334,6 +367,7 @@ would *not* catch is any of the divergences in this document, because each is
 an intentional entry in the overlay — a generator cannot tell a justified
 override from an unjustified one. It also would not catch an overlay entry
 that outlived its reason, which is the failure mode this document and its test
-address directly, and more cheaply: the test costs a list of pairs and no
-build step, and it fails on exactly the event a generator would also fail on —
-the table gaining a divergence nobody declared.
+address directly. The extraction half now exists as a test rather than a
+generator: `TestElementTableMatchesRecommendation` parses the summaries on
+every run and fails on exactly the event a generator would also fail on — the
+table gaining a divergence nobody declared — without a build step.

@@ -82,7 +82,8 @@ func directStep(s steps, i int) bool {
 
 // checkRestrictions applies §7 to a schema document.
 func checkRestrictions(root *xdm.Node) error {
-	r := &restrictor{defines: map[string]*xdm.Node{}}
+	r := &restrictor{defines: map[string]*xdm.Node{}, root: root,
+		startStack: []string{"start"}}
 	r.collect(root)
 	// A schema that is not a <grammar> is a pattern standing where a <start>
 	// would: §7.1.5 constrains it the same way, so a schema that is simply
@@ -96,6 +97,8 @@ func checkRestrictions(root *xdm.Node) error {
 
 type restrictor struct {
 	defines map[string]*xdm.Node
+	// root is the schema's document element; any other <grammar> is nested.
+	root *xdm.Node
 	// active guards a definition that reaches itself while being expanded.
 	active map[string]bool
 	// inDefine is set while walking a <define> body that no <ref> has led to.
@@ -111,6 +114,13 @@ type restrictor struct {
 	// open name class into a definition; checkCompetition judges those on the
 	// compiled pattern instead, where every <ref> has been expanded.
 	inDefine bool
+	// startStack is the path a <start> of this grammar stands on. For the
+	// schema's own grammar that is "start" itself, which §7.1.5 constrains.
+	// §4.18 replaces a nested <grammar> by its start's pattern where the
+	// grammar stands, so a nested grammar's <start> inherits that position
+	// and adds no step: it is constrained by §7.1.5 only if the position is
+	// itself under the schema's start.
+	startStack []string
 }
 
 func (r *restrictor) collect(n *xdm.Node) {
@@ -124,7 +134,9 @@ func (r *restrictor) collect(n *xdm.Node) {
 			if _, dup := r.defines[name]; !dup {
 				r.defines[name] = kid
 			}
-		case "div", "grammar", "include", "start":
+		case "div", "include":
+			// A nested <grammar> is not followed: its definitions are its
+			// own scope (section 4.18) and walkNested collects them.
 			r.collect(kid)
 		}
 	}
@@ -159,12 +171,12 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 	// fresh context, so an attribute inside it is not inside any enclosing
 	// oneOrMore or list. <define> and <grammar> likewise start fresh, since a
 	// definition is checked in the context of each <ref> that reaches it.
-	if local == "grammar" && n.Parent != nil {
+	if local == "grammar" && n != r.root {
 		// A nested <grammar> is a scope of its own, so a <ref> inside it
 		// names that grammar's definitions rather than these. Following one
 		// against the outer definitions finds a different pattern under the
 		// same name, and reports a restriction the schema does not break.
-		return r.walkNested(n)
+		return r.walkNested(n, stack)
 	}
 
 	if local == "define" {
@@ -181,14 +193,8 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 		kids = nil
 	case "start":
 		// §7.1.5 constrains the schema's start, which is the start of the
-		// outermost grammar. A <grammar> written inside an <element> is
-		// inlined there by simplification, so its <start> is ordinary content
-		// and the start// paths do not apply to it.
-		if !isSchemaStart(n) {
-			kids = nil
-			break
-		}
-		kids = append(append([]string{}, stack...), local)
+		// outermost grammar; see restrictor.startStack.
+		kids = append([]string{}, r.startStack...)
 	case "group", "interleave", "choice":
 		// Simplification removes a combinator with a single pattern child
 		// (§4.12), so it contributes no step to the path. Keeping it would
@@ -227,9 +233,11 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 	return nil
 }
 
-// walkNested checks a nested <grammar> against its own definitions.
-func (r *restrictor) walkNested(g *xdm.Node) error {
-	sub := &restrictor{defines: map[string]*xdm.Node{}}
+// walkNested checks a nested <grammar> against its own definitions, its
+// <start> standing where the grammar does.
+func (r *restrictor) walkNested(g *xdm.Node, stack []string) error {
+	sub := &restrictor{defines: map[string]*xdm.Node{}, inDefine: r.inDefine,
+		startStack: stack}
 	sub.collect(g)
 	for _, kid := range g.ChildElements() {
 		if kid.Name.URI != NS {
@@ -411,22 +419,8 @@ func transparent(n *xdm.Node, local string) bool {
 	case "group", "interleave", "choice":
 		// A combinator over a single pattern is that pattern (section 4.12).
 		return effectiveChildren(n) < 2
-	case "start":
-		return !isSchemaStart(n)
 	}
 	return false
-}
-
-// isSchemaStart reports whether a <start> belongs to the outermost grammar,
-// which is the one whose content §7.1.5 constrains. A <grammar> nested inside
-// an <element> is inlined where it stands, so its start is ordinary content.
-func isSchemaStart(n *xdm.Node) bool {
-	for cur := n.Parent; cur != nil && cur.Kind == xdm.KindElement; cur = cur.Parent {
-		if cur.Name.URI == NS && cur.Name.Local == "element" {
-			return false
-		}
-	}
-	return true
 }
 
 func isNameClass(local string) bool {
