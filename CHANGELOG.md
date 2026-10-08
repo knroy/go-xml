@@ -10,7 +10,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The release workflow never released `w3cschemas` | `actions/checkout` refetches the pushed tag as a lightweight ref, so the tag message's `w3cschemas: vX.Y.Z` line read as empty and the step skipped; v0.4.0 and v0.5.0 were tagged by hand. The tag object is now fetched before it is read. | |
+| The release workflow never released `w3cschemas` | `actions/checkout` refetches the pushed tag as a lightweight ref, so the tag message's `w3cschemas: vX.Y.Z` line read as empty and the step skipped; v0.4.0 and v0.5.0 were tagged by hand. The tag object is now fetched before it is read. | [`549d113`][549d113] |
 
 ## v1.6.0 — 2026-10-07
 
@@ -1144,6 +1144,7 @@ here so every entry in this file sits under a release.
 [fb64893]: https://github.com/knroy/go-xml/commit/fb64893
 [fee47ab]: https://github.com/knroy/go-xml/commit/fee47ab
 [d3ce46f]: https://github.com/knroy/go-xml/commit/d3ce46f
+[549d113]: https://github.com/knroy/go-xml/commit/549d113
 [d029347]: https://github.com/knroy/go-xml/commit/d029347
 [6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e
