@@ -453,6 +453,16 @@ func (p *Pattern) matches(node *xdm.Node, ctx *xpath.Context, recovered *error) 
 	// compares each candidate against *itself* and so always holds; binding
 	// the outer node instead made the predicate select only the candidates
 	// sharing the numbered node's value.
+	//
+	// Most candidates fail on the last step's node test alone, which needs
+	// neither binding, so they are rejected before the two context copies
+	// are made. Rule dispatch offers every node to every rule in its mode,
+	// and the copies were most of what a failed match cost: rejecting first
+	// made DocBook's chapter transform ~2.5x faster and cut its allocations
+	// by a factor of about 3 (Peppol's by 5).
+	if !p.mayMatch(node) {
+		return false, nil
+	}
 	ctx = ctx.WithVar(currentVar, xdm.One(node))
 	// Section 24.3: the current output URI is cleared while evaluating a
 	// pattern. A pattern is matched against candidate nodes at moments that
@@ -490,6 +500,27 @@ func (p *Pattern) matches(node *xdm.Node, ctx *xpath.Context, recovered *error) 
 		}
 	}
 	return false, nil
+}
+
+// mayMatch is a necessary condition for a match that evaluates no predicate:
+// some alternative's last step must accept node on its axis and node test.
+// Every path through patternAlt.matches tests exactly that before any
+// predicate runs, so a false here loses no error either. An id() or key()
+// alternative, and a general pattern, are not walked from the last step and
+// so may always match.
+func (p *Pattern) mayMatch(node *xdm.Node) bool {
+	if len(p.general) > 0 {
+		return true
+	}
+	for _, a := range p.alts {
+		if a.call != nil {
+			return true
+		}
+		if len(a.steps) > 0 && nodeTestHolds(a.steps[len(a.steps)-1], node) {
+			return true
+		}
+	}
+	return false
 }
 
 // recoverPatternError decides whether a failure while matching one alternative
