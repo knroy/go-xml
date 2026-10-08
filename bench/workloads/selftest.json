@@ -1,0 +1,18 @@
+{
+  "id": "selftest",
+  "area": "parse",
+  "description": "Harness self-test on bench/testfixtures: one item per area, every engine, both modes. Not a benchmark.",
+  "inputs": "bench/testfixtures/",
+  "normalise": "xml-c14n",
+  "engines": ["go-xml", "encoding-xml", "saxon-he", "basex", "xsltproc", "xmllint", "jing", "xerces-j-xsd11"],
+  "modes": ["cold", "warm"],
+  "items": [
+    {"name": "xslt-books", "area": "xslt", "stylesheet": "bench/testfixtures/books.xsl", "glob": "bench/testfixtures/books*.xml"},
+    {"name": "xquery-total", "area": "xquery", "query": "bench/testfixtures/books.xq", "source": "bench/testfixtures/books.xml"},
+    {"name": "xsd-valid", "area": "xsd", "schema": "bench/testfixtures/books.xsd", "source": "bench/testfixtures/books.xml"},
+    {"name": "xsd-invalid", "area": "xsd", "schema": "bench/testfixtures/books.xsd", "source": "bench/testfixtures/bad.xml"},
+    {"name": "rng-valid", "area": "rng", "schema": "bench/testfixtures/books.rng", "source": "bench/testfixtures/books.xml"},
+    {"name": "rng-invalid", "area": "rng", "schema": "bench/testfixtures/books.rng", "source": "bench/testfixtures/bad.xml"},
+    {"name": "parse-books", "source": "bench/testfixtures/books.xml"}
+  ]
+}
