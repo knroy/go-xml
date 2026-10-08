@@ -44,6 +44,11 @@ func TestLibraryKeyAllocatesNothing(t *testing.T) {
 		}
 	}
 
+	// The prefix is not part of an expanded name, so it is not part of the key.
+	if _, ok := lib.Lookup(xdm.QName{Prefix: "p", URI: ns, Local: "f"}, 1); !ok {
+		t.Error("Lookup(p:f#1) missed {urn:k}f#1: the prefix took part in the key")
+	}
+
 	name := xdm.QName{URI: ns, Local: "f"}
 	if n := testing.AllocsPerRun(100, func() { lib.Lookup(name, 2) }); n != 0 {
 		t.Errorf("Lookup allocated %v times, want 0", n)
