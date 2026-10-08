@@ -200,20 +200,10 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	r = decoded
 
 	// XML 1.0 section 2.11: line ends are normalized on input, before
-	// parsing, and before the attribute rewrite below, which must see a
-	// CR-LF as the one line end it is. See xdm/lineend.go.
+	// parsing. See xdm/lineend.go. Attribute-value normalization (section
+	// 3.3.3) is the tokeniser's, which still sees "&#10;" apart from a
+	// newline the author typed.
 	r = newLineEndReader(r)
-
-	// XML 1.0 section 3.3.3 normalizes a literal TAB, LF or CR inside an
-	// attribute value to a single space, while a character reference to the
-	// same character survives. That distinction only exists in the raw bytes
-	// — encoding/xml decodes "&#10;" while tokenising, after which it is
-	// indistinguishable from a newline the author typed — so the rewrite has
-	// to happen here, upstream of the decoder. See xdm/attnorm.go.
-	//
-	// It replaces one byte with one byte, so every offset downstream, both
-	// TrackPositions and the entity base spans, still means what it did.
-	r = newAttNormReader(r)
 
 	trackPos := opts.TrackPositions
 	var srcBuf strings.Builder

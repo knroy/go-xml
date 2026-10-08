@@ -845,11 +845,13 @@ const (
 	clDQ                // '"'
 	clSQ                // '\''
 	clNEL11             // last byte of NEL (C2 85) or U+2028 (E2 80 A8)
+	clWS                // '\t' or '\n', which §3.3.3 maps to a space in a value
 )
 
 var class = func() (t [256]uint8) {
 	t['<'], t['&'], t['>'], t['\r'], t['"'], t['\''] = clLT, clAmp, clGT, clCR, clDQ, clSQ
 	t[0x85], t[0xA8] = clNEL11, clNEL11
+	t['\t'], t['\n'] = clWS, clWS
 	return
 }()
 
@@ -864,17 +866,21 @@ var class = func() (t [256]uint8) {
 // values may also end at the end of input; xdm or the caller's next read
 // reports that.
 //
-// parity: an attribute value is not normalised by §3.3.3 — tabs and newlines
-// stay as they are.
+// In an attribute value a literal TAB, LF or CR (CR-LF counting as one) is
+// replaced by a space, as §3.3.3 asks, while a character reference to one of
+// them is kept as the character: the rewrite sees only literal input bytes.
+//
+// parity: a 1.1 NEL or U+2028 in an attribute value becomes a newline, not a
+// space, and an entity's replacement text is not normalised.
 func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 	var stop uint8
 	switch {
 	case cdata:
 		stop = clGT | clCR
 	case quote == '"':
-		stop = clDQ | clLT | clAmp | clCR
+		stop = clDQ | clLT | clAmp | clCR | clWS
 	case quote == '\'':
-		stop = clSQ | clLT | clAmp | clCR
+		stop = clSQ | clLT | clAmp | clCR | clWS
 	default:
 		stop = clLT | clAmp | clGT | clCR
 	}
@@ -941,6 +947,14 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 			}
 			p1, p2 = 0, 0
 			continue
+		case quote != 0 && (b == '\t' || b == '\n' || b == '\r'):
+			// §3.3.3. b becomes the space, so a NEL after a CR is read as a
+			// line end of its own, as it was when this rewrite ran upstream.
+			if c, ok := d.peek(); ok && b == '\r' && c == '\n' {
+				d.pos++
+			}
+			b = ' '
+			out = append(out, b)
 		case b == '\r':
 			out = append(out, '\n')
 			if c, ok := d.peek(); ok && c == '\n' {
