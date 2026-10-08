@@ -631,7 +631,8 @@ func (d *Decoder) comment() (Token, error) {
 // Quoted text is opaque. Outside quotes each "<" opens a level that a ">"
 // closes, except that "<!--" begins a comment, which is dropped up to its
 // "-->" and replaced by one space, so that the text either side of it is not
-// joined into something new. The first byte is taken as it stands: it neither
+// joined into something new, and "<?" a PI, which is copied up to its "?>"
+// without its body being read as quotes or levels. The first byte is taken as it stands: it neither
 // opens a quote nor a level, and cannot close the directive.
 //
 // parity: the text is returned raw, and a comment inside it is not checked
@@ -663,6 +664,16 @@ func (d *Decoder) directive(b byte) (Token, error) {
 			case b == '>':
 				depth--
 			case b == '<':
+				// A PI is kept as written but scanned as a unit: its body
+				// is not markup, so a quote, "]" or ">" in it is text.
+				if c, ok := d.peek(); ok && c == '?' {
+					d.pos++
+					if out, ok = d.until("?>", append(out, '?')); !ok {
+						return nil, d.err
+					}
+					out = append(out, "?>"...)
+					continue
+				}
 				n := 0
 				for n < len("!--") {
 					if b, ok = d.mustgetc(); !ok {

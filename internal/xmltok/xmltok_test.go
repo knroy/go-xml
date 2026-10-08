@@ -218,6 +218,12 @@ func TestMarkup(t *testing.T) {
 			want: "<!DOCTYPE a [ <!ELEMENT a ANY>]>"},
 		{name: "doctype <!- not comment", src: "<!DOCTYPE a [<!-x>]>", want: "<!DOCTYPE a [<!-x>]>"},
 		{name: "first byte is literal", src: "<!>a>", want: "<!>a>"},
+		{name: "doctype pi with apostrophe", src: "<!DOCTYPE a [<?pi it's?>]>", want: "<!DOCTYPE a [<?pi it's?>]>"},
+		{name: "doctype pi with quote, bracket, gt", src: `<!DOCTYPE a [<?pi "x ] > y?><!ELEMENT a ANY>]>`,
+			want: `<!DOCTYPE a [<?pi "x ] > y?><!ELEMENT a ANY>]>`},
+		{name: "doctype comment with quote, bracket", src: "<!DOCTYPE a [<!-- it's ] > --><!ELEMENT a ANY>]>",
+			want: "<!DOCTYPE a [ <!ELEMENT a ANY>]>"},
+		{name: "eof in doctype pi", src: "<!DOCTYPE a [<?pi x", wantErr: syntax(1, "unexpected EOF")},
 		{name: "eof in doctype", src: "<!DOCTYPE a [", wantErr: syntax(1, "unexpected EOF")},
 	})
 }

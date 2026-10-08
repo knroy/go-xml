@@ -12,16 +12,16 @@ import "testing"
 // A CDATA section is deliberately absent: CDSect belongs to `content`, not to
 // intSubset, so one written here is malformed and the decoder rejects it.
 //
-// A PI holding a bare ">" is absent for a different reason: encoding/xml ends
-// the Directive at that ">" and emits the remaining "]>" as character data, so
-// the document never reaches this package intact. That is a defect in the
-// standard library's directive scanner, not in this one -- endOfInternalSubset
-// gets the boundary right for it -- and there is nothing to assert here until
-// the decoder delivers the DOCTYPE whole.
+// The tokeniser's directive scanner skips a PI as a unit too, so an apostrophe
+// or a bare ">" in one no longer opens a quote or ends the DOCTYPE early.
 func TestInternalSubsetPIIsNotStructure(t *testing.T) {
 	cases := []struct{ name, src string }{
 		{"quote-and-bracket", `<!DOCTYPE d [<?p x "]>" y ?><!ENTITY e "X">]><d>&e;</d>`},
 		{"bracket", `<!DOCTYPE d [<?p a ] b ?><!ENTITY e "X">]><d>&e;</d>`},
+		{"apostrophe", `<!DOCTYPE d [<?p it's ?><!ENTITY e "X">]><d>&e;</d>`},
+		{"bare gt", `<!DOCTYPE d [<?p a > b ?><!ENTITY e "X">]><d>&e;</d>`},
+		{"comment with apostrophe, bracket and gt", `<!DOCTYPE d [<!-- it's ] > --><!ENTITY e "X">]><d>&e;</d>`},
+		{"pi then quoted bracket", `<!DOCTYPE d [<?p it's ?><!ENTITY f "]>"><!ENTITY e "X">]><d>&e;</d>`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
