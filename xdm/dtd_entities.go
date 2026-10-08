@@ -1575,6 +1575,9 @@ type entityChargeReader struct {
 	// bytes carry references that must not escape the charge.
 	backlog []byte
 	err     error
+	// off makes the reader a pass-through: the document element opened with
+	// no entity table installed, so there is nothing left to charge.
+	off bool
 }
 
 func (c *entityChargeReader) Read(p []byte) (int, error) {
@@ -1588,6 +1591,9 @@ func (c *entityChargeReader) Read(p []byte) (int, error) {
 		// the table installed, a good deal of the content has already
 		// streamed past, and those references have to be charged too.
 		// Buffering stops as soon as the table arrives, which arm drains.
+		if c.off {
+			return n, err
+		}
 		if c.t == nil {
 			c.backlog = append(c.backlog, p[:n]...)
 			return n, err

@@ -212,16 +212,15 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// re-parse of the substituted source, and by the time that is known the
 	// reader is partly consumed and the decoder has buffered ahead into it.
 	//
-	// The cost is a second copy of the document for the length of the parse,
-	// paid by every caller that sets AllowDOCTYPE rather than only those who
-	// turn out to need it. Dropping it once the DOCTYPE is read would mean
-	// replacing the decoder mid-stream, which loses its lookahead — so the
-	// copy stays. entitiesExpanded marks the second parse, which has no
-	// entities left to find and so needs no copy at all.
-
-	keepSrc := trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded)
-	if keepSrc {
-		r = io.TeeReader(r, &srcBuf)
+	// The copy is needed only until the document element opens: a re-parse
+	// can start only at the DOCTYPE, which must come first, so past that point
+	// the tee stops and its copy is dropped unless positions are tracked.
+	// entitiesExpanded marks the second parse, which has no entities left to
+	// find and so needs no copy at all.
+	var tee *srcTee
+	if trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded) {
+		tee = &srcTee{r: r, buf: &srcBuf}
+		r = tee
 	}
 
 	// The charge reader sits between the decoder and the source so that an
@@ -341,6 +340,18 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					return nil, fmt.Errorf("parse XML: multiple root elements")
 				}
 				sawRoot = true
+				// Past the prolog: no re-parse can start now, so the copy
+				// kept for one is dropped; and with no entity table installed
+				// by now none ever will be, so the charge reader has nothing
+				// to buffer for.
+				if tee != nil && !trackPos {
+					tee.buf = nil
+					srcBuf = strings.Builder{}
+				}
+				if charger != nil && charger.t == nil {
+					charger.off = true
+					charger.backlog = nil
+				}
 			}
 			if len(attDefaults) > 0 {
 				t = applyAttDefaults(t, attDefaults)
@@ -1258,4 +1269,18 @@ func charsetReader(charset string, input io.Reader) (io.Reader, error) {
 		return bytes.NewReader(out.Bytes()), nil
 	}
 	return nil, fmt.Errorf("unsupported encoding %q", charset)
+}
+
+// srcTee copies what is read from r into buf until buf is set to nil.
+type srcTee struct {
+	r   io.Reader
+	buf *strings.Builder
+}
+
+func (t *srcTee) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if t.buf != nil {
+		t.buf.Write(p[:n])
+	}
+	return n, err
 }
