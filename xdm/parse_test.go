@@ -546,3 +546,30 @@ func TestParseTextRunIsLinear(t *testing.T) {
 		t.Errorf("parsing 20,000 CDATA sections allocated %d MB, want at most 50", mb)
 	}
 }
+
+// TestParsedSlicesAreExactSize: a parse cuts every element's Children and
+// Attrs from shared arrays, so each must end at its own last entry. An append
+// through the mutation API then reallocates rather than overwriting the
+// children or attributes of the element parsed next.
+func TestParsedSlicesAreExactSize(t *testing.T) {
+	tree, err := ParseString(`<r><a p="1" q="2"><x/><y/></a><b s="3"><z/></b></r>`, ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := tree.Root.ChildElements()[0]
+	a, b := r.Children[0], r.Children[1]
+	a.AppendChild(&Node{Kind: KindElement, Name: QName{Local: "new"}})
+	a.AddAttr(&Node{Name: QName{Local: "n"}, Value: "4"})
+	if got := b.Children[0].Name.Local; got != "z" {
+		t.Errorf("b's first child is %q after appending to a, want z", got)
+	}
+	if got := b.Attrs[0].Name.Local; got != "s" {
+		t.Errorf("b's first attribute is %q after adding to a, want s", got)
+	}
+	if len(a.Children) != 3 || a.Children[2].Name.Local != "new" || len(a.Attrs) != 3 {
+		t.Errorf("a has %d children and %d attributes, want 3 and 3", len(a.Children), len(a.Attrs))
+	}
+	if len(tree.Root.Children) != 1 || tree.Root.Children[0] != r {
+		t.Errorf("document node children = %v", tree.Root.Children)
+	}
+}

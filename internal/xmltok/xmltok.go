@@ -134,6 +134,14 @@ type Decoder struct {
 	// The five predefined entities are recognised whatever it holds.
 	Entity map[string]string
 
+	// AttrEntity overrides Entity for a reference in an attribute value. XML
+	// 1.0 §3.3.3 normalizes replacement text there, turning its literal white
+	// space into spaces but not the characters written in it as references;
+	// only the caller, which expanded those references, can tell the two
+	// apart, so it supplies the normalized text. A name absent here reads as
+	// in Entity.
+	AttrEntity map[string]string
+
 	// CharsetReader converts a stream whose XML declaration names an
 	// encoding other than UTF-8. It receives the bytes after the declaration
 	// and returns UTF-8. Without one, such a declaration is an error.
@@ -623,7 +631,8 @@ func (d *Decoder) comment() (Token, error) {
 // Quoted text is opaque. Outside quotes each "<" opens a level that a ">"
 // closes, except that "<!--" begins a comment, which is dropped up to its
 // "-->" and replaced by one space, so that the text either side of it is not
-// joined into something new. The first byte is taken as it stands: it neither
+// joined into something new, and "<?" a PI, which is copied up to its "?>"
+// without its body being read as quotes or levels. The first byte is taken as it stands: it neither
 // opens a quote nor a level, and cannot close the directive.
 //
 // parity: the text is returned raw, and a comment inside it is not checked
@@ -655,6 +664,16 @@ func (d *Decoder) directive(b byte) (Token, error) {
 			case b == '>':
 				depth--
 			case b == '<':
+				// A PI is kept as written but scanned as a unit: its body
+				// is not markup, so a quote, "]" or ">" in it is text.
+				if c, ok := d.peek(); ok && c == '?' {
+					d.pos++
+					if out, ok = d.until("?>", append(out, '?')); !ok {
+						return nil, d.err
+					}
+					out = append(out, "?>"...)
+					continue
+				}
 				n := 0
 				for n < len("!--") {
 					if b, ok = d.mustgetc(); !ok {
@@ -845,11 +864,13 @@ const (
 	clDQ                // '"'
 	clSQ                // '\''
 	clNEL11             // last byte of NEL (C2 85) or U+2028 (E2 80 A8)
+	clWS                // '\t' or '\n', which §3.3.3 maps to a space in a value
 )
 
 var class = func() (t [256]uint8) {
 	t['<'], t['&'], t['>'], t['\r'], t['"'], t['\''] = clLT, clAmp, clGT, clCR, clDQ, clSQ
 	t[0x85], t[0xA8] = clNEL11, clNEL11
+	t['\t'], t['\n'] = clWS, clWS
 	return
 }()
 
@@ -864,17 +885,22 @@ var class = func() (t [256]uint8) {
 // values may also end at the end of input; xdm or the caller's next read
 // reports that.
 //
-// parity: an attribute value is not normalised by §3.3.3 — tabs and newlines
-// stay as they are.
+// In an attribute value a literal TAB, LF or CR (CR-LF counting as one) is
+// replaced by a space, as §3.3.3 asks, while a character reference to one of
+// them is kept as the character: the rewrite sees only literal input bytes.
+//
+// Under XML 1.1, NEL, U+2028 and CR NEL are line ends too, and so one space
+// in a value.
+// An entity's replacement text is the caller's to normalise; see AttrEntity.
 func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 	var stop uint8
 	switch {
 	case cdata:
 		stop = clGT | clCR
 	case quote == '"':
-		stop = clDQ | clLT | clAmp | clCR
+		stop = clDQ | clLT | clAmp | clCR | clWS
 	case quote == '\'':
-		stop = clSQ | clLT | clAmp | clCR
+		stop = clSQ | clLT | clAmp | clCR | clWS
 	default:
 		stop = clLT | clAmp | clGT | clCR
 	}
@@ -936,11 +962,19 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 		case b == quote && quote != 0:
 			return d.finishText(out, spans)
 		case b == '&':
-			if out, spans, ok = d.reference(out, spans); !ok {
+			if out, spans, ok = d.reference(out, spans, quote != 0); !ok {
 				return nil, false
 			}
 			p1, p2 = 0, 0
 			continue
+		case quote != 0 && (b == '\t' || b == '\n' || b == '\r'):
+			// §3.3.3, applied after §2.11: a line end is one space. b stays
+			// a CR only for a lone CR, so that a NEL after it joins it.
+			if c, ok := d.peek(); ok && b == '\r' && c == '\n' {
+				d.pos++
+				b = '\n'
+			}
+			out = append(out, ' ')
 		case b == '\r':
 			out = append(out, '\n')
 			if c, ok := d.peek(); ok && c == '\n' {
@@ -949,20 +983,29 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 			}
 		case b == 0x85 && p1 == 0xC2:
 			// NEL. Its lead byte is already written; \r NEL is one line
-			// end, and the \r has already been written as \n.
+			// end, and the \r has already been written as its line end.
 			out = out[:len(out)-1]
 			if p2 != '\r' {
-				out = append(out, '\n')
+				out = append(out, lineEnd(quote))
 			}
 		case b == 0xA8 && p1 == 0x80 && p2 == 0xE2:
 			// U+2028, likewise.
-			out = append(out[:len(out)-2], '\n')
+			out = append(out[:len(out)-2], lineEnd(quote))
 		default:
 			out = append(out, b)
 		}
 		p2, p1 = p1, b
 	}
 	return d.finishText(out, spans)
+}
+
+// lineEnd is what a line end reads as: a newline, or in an attribute value
+// (quote set) a space.
+func lineEnd(quote byte) byte {
+	if quote != 0 {
+		return ' '
+	}
+	return '\n'
 }
 
 // finishText checks the run against [2] and keeps its buffers for reuse.
@@ -981,9 +1024,11 @@ func (d *Decoder) finishText(out []byte, spans []refSpan) ([]byte, bool) {
 // A character reference is checked against [2] here, while it is still known
 // to be one, and its extent recorded in spans for checkChars to skip.
 //
+// In an attribute value AttrEntity is consulted first.
+//
 // parity: an entity's replacement text is not newline-normalised, but
 // checkChars does see it, as if it had been literal.
-func (d *Decoder) reference(out []byte, spans []refSpan) ([]byte, []refSpan, bool) {
+func (d *Decoder) reference(out []byte, spans []refSpan, attr bool) ([]byte, []refSpan, bool) {
 	d.literal = false
 	start := len(out)
 	out = append(out, '&')
@@ -1056,7 +1101,10 @@ func (d *Decoder) reference(out []byte, spans []refSpan) ([]byte, []refSpan, boo
 			name := out[start+1:]
 			out = append(out, ';')
 			if isName(name) {
-				if repl, found = predefined[string(name)]; !found && d.Entity != nil {
+				if repl, found = predefined[string(name)]; !found && attr {
+					repl, found = d.AttrEntity[string(name)]
+				}
+				if !found && d.Entity != nil {
 					repl, found = d.Entity[string(name)]
 				}
 			}

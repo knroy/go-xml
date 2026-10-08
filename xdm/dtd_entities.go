@@ -385,7 +385,7 @@ func (t *entityTable) resolve(name string) (string, error) {
 			return "", err
 		}
 		t.expanded[name] = ""
-		out, err := t.expand(text, 0, map[string]bool{name: true})
+		out, err := t.expand(text, 0, map[string]bool{name: true}, false)
 		if err != nil {
 			delete(t.expanded, name)
 			return "", err
@@ -400,7 +400,7 @@ func (t *entityTable) resolve(name string) (string, error) {
 	// A placeholder guards against a cycle: an entity that refers to itself,
 	// directly or through others, would otherwise recurse forever.
 	t.expanded[name] = ""
-	out, err := t.expand(replacementText(raw), 0, map[string]bool{name: true})
+	out, err := t.expand(replacementText(raw), 0, map[string]bool{name: true}, false)
 	if err != nil {
 		delete(t.expanded, name)
 		return "", err
@@ -413,7 +413,11 @@ func (t *entityTable) resolve(name string) (string, error) {
 	return out, nil
 }
 
-func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string, error) {
+// expand returns the replacement text s with the references in it expanded.
+// attr expands it for an attribute value, where XML 1.0 §3.3.3 normalizes
+// replacement text recursively: its literal TAB, LF and CR become spaces,
+// while a character written as a reference inside it is kept.
+func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr bool) (string, error) {
 	if depth > maxEntityDepth {
 		return "", fmt.Errorf("entity expansion exceeds %d levels: %w",
 			maxEntityDepth, ErrResourceLimit)
@@ -433,6 +437,9 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 			}
 		}
 		if c != '&' {
+			if attr && (c == '\t' || c == '\n' || c == '\r') {
+				c = ' '
+			}
 			sb.WriteByte(c)
 			i++
 			continue
@@ -502,7 +509,7 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 				return "", err
 			}
 			seen[name] = true
-			sub, err := t.expand(text, depth+1, seen)
+			sub, err := t.expand(text, depth+1, seen, attr)
 			delete(seen, name)
 			if err != nil {
 				return "", err
@@ -521,7 +528,7 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 			return "", fmt.Errorf("entity %q is not declared", name)
 		}
 		seen[name] = true
-		sub, err := t.expand(replacementText(raw), depth+1, seen)
+		sub, err := t.expand(replacementText(raw), depth+1, seen, attr)
 		delete(seen, name)
 		if err != nil {
 			return "", err
@@ -609,6 +616,29 @@ func (t *entityTable) entityMap() map[string]string {
 		if s, err := t.resolve(name); err == nil {
 			out[name] = s
 		}
+	}
+	return out
+}
+
+// attrEntityMap is entityMap for references in attribute values, given the
+// map entityMap returned. It lists only the entities whose replacement text
+// holds white space §3.3.3 would normalize; every other one reads the same in
+// an attribute value as in content. Nothing is charged: an entry is the same
+// length as the one already charged for, and an external text is memoised.
+func (t *entityTable) attrEntityMap(content map[string]string) map[string]string {
+	var out map[string]string
+	for name, s := range content {
+		if !strings.ContainsAny(s, "\t\n\r") {
+			continue
+		}
+		a, err := t.expand(replacementText(t.raw[name]), 0, map[string]bool{name: true}, true)
+		if err != nil {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[name] = a
 	}
 	return out
 }
@@ -1135,14 +1165,22 @@ func (t *Tree) HasUnparsedEntities() bool {
 // and change what the document says. A "&" that replacementText decoded from
 // "&#38;" at declaration is markup by XML 1.0 Appendix D, not data, so it is
 // left for the second parse as well.
+//
+// Literal white space becomes a space, as XML 1.0 §3.3.3 asks of replacement
+// text in a value. It is done here rather than left to the second parse,
+// whose line-end handling would first fold a CR LF the replacement text holds
+// into one character. A character the text holds as a reference is still
+// written as one, and so is kept.
 func escapeAttrLiteral(s string) string {
-	if !strings.ContainsAny(s, `"'<`) {
+	if !strings.ContainsAny(s, "\"'<\t\n\r") {
 		return s
 	}
 	var sb strings.Builder
 	sb.Grow(len(s) + 8)
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
+		case '\t', '\n', '\r':
+			sb.WriteByte(' ')
 		case '"':
 			sb.WriteString("&#34;")
 		case '\'':
