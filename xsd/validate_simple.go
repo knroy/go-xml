@@ -762,7 +762,16 @@ func base64DecodedLen(s string) int {
 // rational arithmetic rather than float64: xs:decimal has arbitrary precision,
 // and comparing 18446744073709551615 as a float would lose the last digits and
 // admit values outside xs:unsignedLong.
+//
+// Most values have no bound to meet — xs:integer and xs:decimal carry none,
+// and neither do most user restrictions of them — so the chain is checked for
+// one before the value is parsed. Parsing first put a big.Rat behind every
+// numeric value in the document whether or not anything compared it, which
+// was 40% of validating the xp-striding catalog (docs/profiling.md).
 func checkBounds(steps []facetStep, normalized, prim string) error {
+	if !hasBoundFacet(steps) {
+		return nil
+	}
 	switch prim {
 	case "decimal", "float", "double":
 	case "duration":
@@ -886,6 +895,20 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 		}
 	}
 	return nil
+}
+
+// hasBoundFacet reports whether any step of the chain carries one of the four
+// bound facets, which is all checkBounds and its temporal and duration
+// variants consult.
+func hasBoundFacet(steps []facetStep) bool {
+	for _, st := range steps {
+		f := st.facets
+		if f.MinInclusive != nil || f.MaxInclusive != nil ||
+			f.MinExclusive != nil || f.MaxExclusive != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // specialFloatOrder places the three floating values that have no rational
