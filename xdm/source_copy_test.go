@@ -96,3 +96,25 @@ func TestSourceCopyStillServesItsUsers(t *testing.T) {
 		}
 	})
 }
+
+// TrackPositions keeps the whole source to count lines in. A reader that
+// knows its length lets that copy be allocated once at its final size,
+// rather than grown by doubling to about twice the document in all.
+func TestTrackedCopyIsSizedOnce(t *testing.T) {
+	doc := "<r>\n" + bigBody(100000) + "</r>\n"
+	parse := func(track bool) func() {
+		return func() {
+			if _, err := ParseString(doc, ParseOptions{TrackPositions: track, MaxBytes: -1, MaxNodes: -1}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	plain := allocated(parse(false))
+	tracked := allocated(parse(true))
+	extra := int64(tracked) - int64(plain)
+	t.Logf("tracked copy cost %d bytes for a %d-byte document", extra, len(doc))
+	if extra > int64(len(doc))*5/4 {
+		t.Errorf("TrackPositions allocated %d bytes more than without (document %d bytes), want about one copy",
+			extra, len(doc))
+	}
+}

@@ -167,6 +167,12 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// against a MaxBytes of 1024 before being refused, which is a refusal
 	// that costs more than accepting. Wrapped here the ReadAll hits the
 	// limited reader and stops at the bound.
+	// A reader that knows its length (strings.Reader, bytes.Reader) lets the
+	// position-tracking copy below be sized once instead of grown by doubling.
+	sizeHint := 0
+	if l, ok := r.(interface{ Len() int }); ok {
+		sizeHint = l.Len()
+	}
 	maxBytes := opts.MaxBytes
 	if maxBytes == 0 {
 		maxBytes = DefaultMaxBytes
@@ -217,6 +223,11 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// the tee stops and its copy is dropped unless positions are tracked.
 	// entitiesExpanded marks the second parse, which has no entities left to
 	// find and so needs no copy at all.
+	// Only a tracked copy is kept to the end, so only it is sized up front;
+	// never past MaxBytes, which the reader will refuse to go beyond.
+	if trackPos && sizeHint > 0 && (maxBytes <= 0 || int64(sizeHint) <= maxBytes) {
+		srcBuf.Grow(sizeHint)
+	}
 	var tee *srcTee
 	if trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded) {
 		tee = &srcTee{r: r, buf: &srcBuf}
