@@ -633,7 +633,10 @@ func (t *entityTable) parseParameterDecls(subset, base string) (map[string]param
 		t.params = map[string]paramEntity{}
 	}
 	out := t.params
-	for body := range markupDecls(subset, "ENTITY") {
+	for kw, body := range markupDecls(subset) {
+		if kw != "ENTITY" {
+			continue
+		}
 		if len(out) >= maxEntityCount {
 			break
 		}

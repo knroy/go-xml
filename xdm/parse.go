@@ -482,9 +482,11 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// #FIXED '...'" is how a DTD supplies a binding. Without this the
 			// prefix is simply absent from the tree.
 			//
-			// Only defaults are read. Nothing here expands an entity,
-			// resolves an external identifier, or reads a file, so this does
-			// not widen what AllowDOCTYPE admits.
+			// Only defaults are read. A default's references to internal
+			// entities are expanded once the entities are known (see
+			// normalizeAttDefaults); nothing resolves an external identifier
+			// or reads a file, so this does not widen what AllowDOCTYPE
+			// admits.
 			if isDOCTYPEDirective(d) {
 				sawDoctype = true
 				sawPrologToken = true
@@ -564,6 +566,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					}
 				} else {
 					ents = parseEntityDecls(d, opts.BaseURI, opts.entityBudget)
+				}
+				if attDefaults, err = normalizeAttDefaults(attDefaults, ents); err != nil {
+					return nil, fmt.Errorf("parse XML: %w", err)
 				}
 				if ents != nil && !opts.entitiesExpanded {
 					ents.version11 = dec.IsVersion11()

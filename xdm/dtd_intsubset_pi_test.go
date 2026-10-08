@@ -92,11 +92,11 @@ func TestDeclarationsInsideUnparsedRegions(t *testing.T) {
 	// Comments in the internal subset are dropped by the tokeniser, so the
 	// comment case is checked on subset text, as an external subset arrives.
 	var got []string
-	for body := range markupDecls(`<!-- <!ENTITY e "evil"> --><!ENTITY f '<!ENTITY g "x">'>`+
-		`<?p <!ENTITY h "y">?><![INCLUDE[<!ENTITY i "z">]]>`, "ENTITY") {
-		got = append(got, body)
+	for kw, body := range markupDecls(`<!-- <!ENTITY e "evil"> --><!ENTITY f '<!ENTITY g "x">'>` +
+		`<?p <!ENTITY h "y">?><![INCLUDE[<!ENTITY i "z">]]>`) {
+		got = append(got, kw+body)
 	}
-	if want := []string{` f '<!ENTITY g "x">'`, ` i "z"`}; strings.Join(got, "|") != strings.Join(want, "|") {
+	if want := []string{`ENTITY f '<!ENTITY g "x">'`, `ENTITY i "z"`}; strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("markupDecls = %q, want %q", got, want)
 	}
 }

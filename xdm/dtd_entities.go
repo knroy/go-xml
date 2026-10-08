@@ -241,7 +241,10 @@ func newEntityTable(base string, b *entityBudget) *entityTable {
 }
 
 func (t *entityTable) parseDecls(subset, base string) *entityTable {
-	for body := range markupDecls(subset, "ENTITY") {
+	for kw, body := range markupDecls(subset) {
+		if kw != "ENTITY" {
+			continue
+		}
 		if len(t.raw)+len(t.external) >= maxEntityCount {
 			break
 		}
@@ -312,9 +315,8 @@ func (t *entityTable) parseDecls(subset, base string) *entityTable {
 	return t
 }
 
-// markupDecls yields the body of each markup declaration in a DTD subset whose
-// keyword is kw — for "<!ENTITY e 'x'>", kw "ENTITY", the text " e 'x'" — in
-// document order. It is the one scanner every reader of declarations goes
+// markupDecls yields the keyword and body of each markup declaration in a DTD
+// subset — for "<!ENTITY e 'x'>", "ENTITY" and " e 'x'" — in document order. It is the one scanner every reader of declarations goes
 // through, so that what counts as a declaration is decided in one place.
 //
 // Comments and processing instructions are skipped whole, and so is a quoted
@@ -323,8 +325,8 @@ func (t *entityTable) parseDecls(subset, base string) *entityTable {
 // at the first ">" outside its own quoted literals. "<![" opening a
 // conditional section is stepped over, so the declarations inside it are
 // seen, as they were before.
-func markupDecls(subset, kw string) iter.Seq[string] {
-	return func(yield func(string) bool) {
+func markupDecls(subset string) iter.Seq2[string, string] {
+	return func(yield func(string, string) bool) {
 		s := subset
 		for i := 0; i < len(s); {
 			rest := s[i:]
@@ -344,7 +346,7 @@ func markupDecls(subset, kw string) iter.Seq[string] {
 				if end < 0 {
 					return
 				}
-				if s[i+len("<!"):j] == kw && !yield(s[j:j+end]) {
+				if !yield(s[i+len("<!"):j], s[j:j+end]) {
 					return
 				}
 				i = j + end + 1
@@ -471,6 +473,9 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 		// reference, so it is copied as it stands rather than expanded:
 		// <!ENTITY e "<![CDATA[&foo;]]>"> is well formed with no foo declared
 		// (XML 1.0 §2.7, §2.5).
+		if c == '<' && attr {
+			return "", fmt.Errorf("entity replacement text in an attribute value contains <")
+		}
 		if c == '<' {
 			if end := endOfLiteralMarkup(s[i:]); end > 0 {
 				sb.WriteString(s[i : i+end])
@@ -539,6 +544,9 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 		}
 		if seen[name] {
 			return "", fmt.Errorf("entity %q refers to itself", name)
+		}
+		if t.external[name] && attr {
+			return "", fmt.Errorf("external entity %q is referenced in an attribute value", name)
 		}
 		if t.external[name] {
 			if t.resolver == nil {
@@ -660,6 +668,87 @@ func (t *entityTable) entityMap() map[string]string {
 		}
 	}
 	return out
+}
+
+// normalizeAttDefaults turns each ATTLIST default as written into the value
+// it supplies, XML 1.0 §3.3.3: a character reference is replaced by its
+// character, an entity reference by its replacement text normalized the same
+// way, and a literal TAB, LF or CR by a space. The collapse for a non-CDATA
+// type follows when the default is applied, with the attributes written in
+// the document.
+//
+// The well-formedness constraints on the way are errors (§3.1, §4.1): a
+// literal "<" or a bare "&" in the default, a reference to an entity not
+// declared before the ATTLIST, to an external or unparsed one, or to one
+// whose replacement text holds "<". t may be nil when nothing was declared.
+func normalizeAttDefaults(defs []attDefault, t *entityTable) ([]attDefault, error) {
+	if t == nil {
+		t = newEntityTable("", nil)
+	}
+	for k, d := range defs {
+		v, err := t.normalizeDefault(d)
+		if err != nil {
+			return nil, fmt.Errorf("default for attribute %s of %s: %w", d.name, d.element, err)
+		}
+		defs[k].value = v
+	}
+	return defs, nil
+}
+
+func (t *entityTable) normalizeDefault(d attDefault) (string, error) {
+	v := d.value
+	if strings.IndexByte(v, '<') >= 0 {
+		return "", fmt.Errorf("%q contains <", v)
+	}
+	if !strings.ContainsAny(v, "&\t\n\r") {
+		return v, nil
+	}
+	var sb strings.Builder
+	for i := 0; i < len(v); {
+		c := v[i]
+		if c != '&' {
+			if c == '\t' || c == '\n' || c == '\r' {
+				c = ' '
+			}
+			sb.WriteByte(c)
+			i++
+			continue
+		}
+		j := strings.IndexByte(v[i:], ';')
+		if j < 0 {
+			return "", fmt.Errorf("%q has an & that begins no reference", v)
+		}
+		name := v[i+1 : i+j]
+		i += j + 1
+		if name != "" && name[0] == '#' {
+			r, ok := decodeCharRef(name)
+			if !ok {
+				return "", fmt.Errorf("%q has an invalid character reference &%s;", v, name)
+			}
+			sb.WriteRune(r)
+			continue
+		}
+		if r, ok := predefinedRune(name); ok {
+			sb.WriteRune(r)
+			continue
+		}
+		if at, ok := d.entities[name]; !ok || at > d.at {
+			return "", fmt.Errorf("entity %q is not declared before the ATTLIST that refers to it", name)
+		}
+		if t.external[name] {
+			return "", fmt.Errorf("external entity %q is referenced in an attribute value", name)
+		}
+		raw, ok := t.raw[name]
+		if !ok {
+			return "", fmt.Errorf("entity %q is not declared", name)
+		}
+		sub, err := t.expand(replacementText(raw), 0, map[string]bool{name: true}, true)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(sub)
+	}
+	return sb.String(), nil
 }
 
 // attrEntityMap is entityMap for references in attribute values, given the
