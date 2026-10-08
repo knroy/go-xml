@@ -36,6 +36,11 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | An `<!ENTITY>`, `<!ATTLIST>` or `<!ELEMENT>` inside a PI or comment in the internal subset was acted on | One declaration scanner now skips PIs, comments and quoted text; a default holding `>` is no longer cut short. | [`efd4178`][efd4178] |
 | DTD attribute defaults were used as written | References now expand and white space is normalised (§3.3.2, §3.3.3); a `<`, bare `&` or external entity in one is a parse error. | [`02905e9`][02905e9] |
 | Line ends in the DOCTYPE were not normalised | CR folds always, and NEL, U+2028 and CR NEL under XML 1.1, as in content (§2.11). | [`0ca7dac`][0ca7dac] |
+| Character references in DTD entity values, replacement text and defaults were not checked | WFC Legal Character now applies there and to parameter-entity values, using the tokenizer's rule for each version. | [`81b0a27`][81b0a27] |
+| In XML 1.1 a NEL, U+2028 or CR NEL in a comment or PI stayed as written | Comments and PIs fold line ends by the document's version, so a 1.0 CR NEL keeps its NEL and loses its CR. | [`17b99c3`][17b99c3] |
+| An undeclared entity was always fatal | It is fatal only where §4.1's WFC applies; after an unread external subset or `%pe;` the reference is dropped, as libxml2 does in attribute values. | [`3d7e86b`][3d7e86b] |
+| A comment with `--` or ending `--->` in the internal or an external subset was accepted | It is refused with the same error as in content (§2.5 [15]). | [`97148b4`][97148b4] |
+| Entity and ATTLIST declarations after an unread `%pe;` were processed | Per §5.1 they are ignored unless the document is `standalone="yes"`. | [`7496ea8`][7496ea8] |
 | Compact syntax refused a free-standing annotation element among definitions | DocBook's `s:ns [ ... ]` was read as a datatype name. The grammar allows it; it is now skipped like any annotation. | [`197eaad`][197eaad] |
 
 ### Changed — performance
@@ -1209,6 +1214,11 @@ here so every entry in this file sits under a release.
 [197eaad]: https://github.com/knroy/go-xml/commit/197eaad
 [cec5f6f]: https://github.com/knroy/go-xml/commit/cec5f6f
 [416ee50]: https://github.com/knroy/go-xml/commit/416ee50
+[81b0a27]: https://github.com/knroy/go-xml/commit/81b0a27
+[17b99c3]: https://github.com/knroy/go-xml/commit/17b99c3
+[3d7e86b]: https://github.com/knroy/go-xml/commit/3d7e86b
+[97148b4]: https://github.com/knroy/go-xml/commit/97148b4
+[7496ea8]: https://github.com/knroy/go-xml/commit/7496ea8
 [efd4178]: https://github.com/knroy/go-xml/commit/efd4178
 [02905e9]: https://github.com/knroy/go-xml/commit/02905e9
 [0ca7dac]: https://github.com/knroy/go-xml/commit/0ca7dac

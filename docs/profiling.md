@@ -306,8 +306,10 @@ absent (`5cf8104`), quadratic text joining across CDATA sections (`0604061`),
 `fn:transform` option typing and `enable-*` switches (`84bbe23`,
 `a2603d3`), and XML attribute-value normalisation: 1.1 line ends,
 entity replacement text, a PI in the internal subset, DTD declarations
-inside PIs, attribute defaults and DOCTYPE line ends (`e03ee3d`, `b7853d6`,
-`b707e39`, `efd4178`, `02905e9`, `0ca7dac`).
+inside PIs, attribute defaults, DOCTYPE line ends, Legal Character, `--` in
+DTD comments and the §4.1/§5.1 entity rules (`e03ee3d`, `b7853d6`, `b707e39`,
+`efd4178`, `02905e9`, `0ca7dac`, `81b0a27`, `17b99c3`, `3d7e86b`, `4949a8f`,
+`97148b4`, `7496ea8`, `ef1eba5`).
 
 T17 was prototyped and not landed: since T3 a lookup allocates nothing, it is
 about 3% of CPU, and a cache that stays correct when a library changes after
