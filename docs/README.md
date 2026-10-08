@@ -53,6 +53,10 @@
   perfect score actually consists of, and which parts of it are worth buying.
 * **[TODO](todo.md)** — what is left: features, the measured bug tail, and
   the non-goals recorded so they are not proposed again as oversights.
+* **[Benchmark](benchmark.md)** — go-xml against Saxon-HE, BaseX, Jing,
+  Xerces-J, libxml2 and `encoding/xml`: where it is faster (anything that
+  starts a process), where it is slower (a warm JVM, value joins, memory per
+  byte), and the bugs the agreement check found.
 * **[Recipes](recipes.md)** — batch validation, splitting documents, reporting
   line numbers, rendering to HTML, custom document resolvers, finding elements
   without XPath.

@@ -225,6 +225,10 @@ Eight packages, each usable on its own:
   1.0 stability promise does and does not cover.
 * **[RELEASE.md](RELEASE.md)** — how a release is cut: the manual steps in the
   order that matters, and what the tag-push workflow checks and refuses.
+* **[docs/benchmark.md](docs/benchmark.md)** — go-xml against Saxon-HE,
+  BaseX, Jing, Xerces-J, libxml2 and `encoding/xml` on DocBook, e-invoicing,
+  XMark, schema validation and parsing, cold and warm, with outputs checked
+  for agreement before anything is timed.
 * **[docs/known-gaps.md](docs/known-gaps.md)** — every measured failure and why
   it is still open, including the fix attempts that were reverted because they
   cost more than they gained.
@@ -688,6 +692,10 @@ introduces bought exactly zero, so it was reverted. The comment in
 `xpath/context.go` records the numbers so nobody repeats the experiment.
 
 ## Benchmarks
+
+The full comparison with other engines, cold and warm, across nine workloads,
+is in [docs/benchmark.md](docs/benchmark.md). The figures below are the
+in-process Go benchmarks.
 
 Apple M3 Pro, Go 1.26, `-benchtime=200x`, median of five runs. These are the
 two production workloads, not microbenchmarks. Wall-clock figures vary about

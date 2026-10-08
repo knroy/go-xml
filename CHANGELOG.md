@@ -6,6 +6,12 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| `docs/benchmark.md` | go-xml against Saxon-HE, BaseX, Jing, Xerces-J, libxml2 and `encoding/xml` on nine real workloads, cold and warm, timed only where outputs agree. | |
+
 ### Fixed — engine
 
 | Change | Problem → solution | Commit |
