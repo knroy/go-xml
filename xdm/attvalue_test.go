@@ -247,10 +247,10 @@ func TestAttributeDefaultNormalization(t *testing.T) {
 // value one space; under 1.0 NEL and U+2028 are characters, and the CR before
 // a NEL is a line end of its own.
 func TestDTDLineEnds(t *testing.T) {
-	const subset = "<!ENTITY e \"1\u00852 3\r\u00854\"><!ATTLIST r d CDATA \"1\u00852 3\r\u00854\">"
+	const subset = "<!ENTITY e \"1\u00852\u20283\r\u00854\"><!ATTLIST r d CDATA \"1\u00852\u20283\r\u00854\">"
 	cases := []struct{ decl, content, attr, def string }{
 		{`<?xml version="1.1"?>`, "1\n2\n3\n4", "1 2 3 4", "1 2 3 4"},
-		{`<?xml version="1.0"?>`, "1\u00852 3\n\u00854", "1\u00852 3 \u00854", "1\u00852 3 \u00854"},
+		{`<?xml version="1.0"?>`, "1\u00852\u20283\n\u00854", "1\u00852\u20283 \u00854", "1\u00852\u20283 \u00854"},
 	}
 	for _, c := range cases {
 		src := c.decl + "<!DOCTYPE r [" + subset + "]><r a=\"&e;\">&e;</r>"
@@ -300,6 +300,31 @@ func TestDTDCharRefsAreLegalChars(t *testing.T) {
 		}
 		if err != nil && !c.ok && !strings.Contains(err.Error(), "character") {
 			t.Errorf("%s: err = %v, want a character-reference error", c.name, err)
+		}
+	}
+}
+
+// TestCommentAndPILineEnds: under XML 1.1, §2.11's NEL, U+2028 and CR NEL
+// line ends are folded in comments and PIs as in text — in the prolog, the
+// content and the epilog alike. Under 1.0 NEL and U+2028 are characters.
+func TestCommentAndPILineEnds(t *testing.T) {
+	for _, c := range []struct{ decl, body, want string }{
+		{`<?xml version="1.1"?>`, "a\u0085b\u2028c\r\u0085d", "a\nb\nc\nd"},
+		{`<?xml version="1.0"?>`, "a\u0085b\u2028c", "a\u0085b\u2028c"},
+	} {
+		body := c.body
+		src := c.decl + "<!--" + body + "--><r><!--" + body + "--><?p " + body + "?></r><?q " + body + "?>"
+		tree, err := ParseString(src, ParseOptions{})
+		if err != nil {
+			t.Fatalf("%s: %v", c.decl, err)
+		}
+		root := tree.Root
+		r := root.ChildElements()[0]
+		nodes := []*Node{root.Children[0], r.Children[0], r.Children[1], root.Children[2]}
+		for i, n := range nodes {
+			if n.Value != c.want {
+				t.Errorf("%s node %d (%v): got %q, want %q", c.decl, i, n.Kind, n.Value, c.want)
+			}
 		}
 	}
 }
