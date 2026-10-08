@@ -399,8 +399,9 @@ func checkAttrValues(n *xdm.Node) error {
 			}
 		}
 		if n.Name.Local == "attribute" {
+			ns, _ := nsInForce(n)
 			if err := checkAttributeName(n, normalizeToken(n.AttrValue("name")),
-				nsInForce(n)); err != nil {
+				ns); err != nil {
 				return err
 			}
 		}
@@ -423,8 +424,9 @@ func checkAttrValues(n *xdm.Node) error {
 		// either — there is nothing to exclude, and writing it suggests the
 		// author believes an attribute class would otherwise match one.
 		if namesAnAttribute(n) {
+			ns, _ := nsInForce(n)
 			if err := checkAttributeName(n, normalizeToken(n.StringValue()),
-				nsInForce(n)); err != nil {
+				ns); err != nil {
 				return err
 			}
 		}

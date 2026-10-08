@@ -98,3 +98,65 @@ func TestIncludeNsIsLexical(t *testing.T) {
 		}
 	}
 }
+
+// An ns="" that is present is a value, not an absence (section 4.8): it puts
+// the names below it in no namespace even where an <externalRef> or <include>
+// supplies one. It used to read as absent, so the inherited ns won. An
+// attribute's name= with no ns= of its own stays in no namespace either way
+// (section 4.10). Every verdict here matches Jing 20241231; xmllint differs
+// only on the unprefixed QName value under a default namespace.
+func TestExplicitEmptyNsBeatsInheritedNs(t *testing.T) {
+	const xsd = ` datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes"`
+	docs := map[string]string{
+		"own.rng":      `<element name="e" ns=""` + rngNS + `><empty/></element>`,
+		"anc.rng":      `<element name="o"` + rngNS + `><group ns=""><element name="i"><empty/></element></group></element>`,
+		"attrname.rng": `<element name="o"` + rngNS + `><attribute ns=""><name>a</name></attribute></element>`,
+		"attrinh.rng":  `<element name="o"` + rngNS + `><attribute><name>a</name></attribute></element>`,
+		"attrattr.rng": `<element name="o"` + rngNS + `><attribute name="a"/></element>`,
+		"nsname.rng":   `<element ns=""` + rngNS + `><nsName/><empty/></element>`,
+		"nsinh.rng":    `<element` + rngNS + `><nsName/><empty/></element>`,
+		"qn.rng":       `<element name="v"` + rngNS + `><value type="QName"` + xsd + ` ns="">foo</value></element>`,
+		"inc11.rng": `<grammar` + rngNS + `><start><element name="o"><ref name="d"/></element></start>
+			<define name="d"><element name="i" ns=""><empty/></element></define></grammar>`,
+	}
+	for _, c := range []struct {
+		href, doc string
+		valid     bool
+	}{
+		{"own.rng", `<w><e/></w>`, true},
+		{"own.rng", `<w><e xmlns="urn:a"/></w>`, false},
+		{"anc.rng", `<w><o xmlns="urn:a"><i xmlns=""/></o></w>`, true},
+		{"anc.rng", `<w><o xmlns="urn:a"><i/></o></w>`, false},
+		{"attrname.rng", `<w><o xmlns="urn:a" a="1"/></w>`, true},
+		{"attrname.rng", `<w><o xmlns="urn:a" xmlns:p="urn:a" p:a="1"/></w>`, false},
+		{"attrinh.rng", `<w><o xmlns="urn:a" xmlns:p="urn:a" p:a="1"/></w>`, true},
+		{"attrinh.rng", `<w><o xmlns="urn:a" a="1"/></w>`, false},
+		{"attrattr.rng", `<w><o xmlns="urn:a" a="1"/></w>`, true},
+		{"attrattr.rng", `<w><o xmlns="urn:a" xmlns:p="urn:a" p:a="1"/></w>`, false},
+		{"nsname.rng", `<w><foo/></w>`, true},
+		{"nsname.rng", `<w><foo xmlns="urn:a"/></w>`, false},
+		{"nsinh.rng", `<w><foo xmlns="urn:a"/></w>`, true},
+		{"nsinh.rng", `<w><foo/></w>`, false},
+		{"qn.rng", `<w><p:v xmlns:p="urn:a">foo</p:v></w>`, true},
+		{"qn.rng", `<w><v xmlns="urn:a">foo</v></w>`, false},
+		{"qn.rng", `<w><p:v xmlns:p="urn:a">p:foo</p:v></w>`, false},
+		{"inc", `<o xmlns="urn:x"><i xmlns=""/></o>`, true},
+		{"inc", `<o xmlns="urn:x"><i/></o>`, false},
+	} {
+		schema := `<element name="w"` + rngNS + `><externalRef href="` + c.href + `" ns="urn:a"/></element>`
+		if c.href == "inc" {
+			schema = `<grammar` + rngNS + `><include href="inc11.rng" ns="urn:x"/></grammar>`
+		}
+		s, err := compileWith(t, schema, Options{Resolver: &mapResolver{docs: docs}})
+		if err != nil {
+			t.Fatalf("compile %s: %v", c.href, err)
+		}
+		doc, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Validate(doc.Root); (err == nil) != c.valid {
+			t.Errorf("%s: %s: valid = %v, want %v (err %v)", c.href, c.doc, err == nil, c.valid, err)
+		}
+	}
+}

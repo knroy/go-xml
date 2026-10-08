@@ -1358,12 +1358,7 @@ func (c *compiler) resolveName(n *xdm.Node, lexical string) xdm.QName {
 // inheritedNs is the ns= that a referenced schema inherits: the one written on
 // the reference itself, or failing that the one in force around it.
 func inheritedNs(n *xdm.Node, outer string) string {
-	for _, a := range n.Attrs {
-		if a.Name.URI == "" && a.Name.Local == "ns" {
-			return a.Value
-		}
-	}
-	if ns := nsInForce(n); ns != "" {
+	if ns, ok := nsInForce(n); ok {
 		return ns
 	}
 	return outer
@@ -1376,22 +1371,25 @@ func inheritedNs(n *xdm.Node, outer string) string {
 // namespaces: <externalRef ns="..."/> supplies a namespace to a document that
 // names none of its own.
 func (c *compiler) nsFor(n *xdm.Node) string {
-	if ns := nsInForce(n); ns != "" {
+	if ns, ok := nsInForce(n); ok {
 		return ns
 	}
 	return c.inheritedNs
 }
 
-// nsInForce reads the nearest ns= attribute on or above n.
-func nsInForce(n *xdm.Node) string {
+// nsInForce reads the nearest ns= attribute on or above n, and reports
+// whether there is one. An ns="" that is present is a value like any other
+// (section 4.8): it puts the names below it in no namespace and stops an
+// inherited ns from reaching them, so it must not read as absent.
+func nsInForce(n *xdm.Node) (string, bool) {
 	for cur := n; cur != nil && cur.Kind == xdm.KindElement; cur = cur.Parent {
 		for _, a := range cur.Attrs {
 			if a.Name.URI == "" && a.Name.Local == "ns" {
-				return a.Value
+				return a.Value, true
 			}
 		}
 	}
-	return ""
+	return "", false
 }
 
 // agreedCombine applies §4.17 to the definitions of one name.
