@@ -391,3 +391,131 @@ func TestJoinRespectsHostFunctions(t *testing.T) {
 		t.Fatalf("with the built-in re-added: got %q, want %q", got, "3 3")
 	}
 }
+
+// TestJoinChargesWhatItHolds pins X1 from profiling round 2: the join holds S
+// once, so it charges S once, not |S| per outer tuple as the nested loop
+// would re-materialise it. 2,000 × 3,000 charged per tuple is 6,000,000
+// items, over MaxItems; held once it is 3,000 plus the kept tuples. A result
+// that really is too large is still refused.
+func TestJoinChargesWhatItHolds(t *testing.T) {
+	const data = `let $ps := for $i in 1 to 2000 return <p id="{$i}"/>
+	  let $os := for $i in 1 to 3000 return <o k="{$i mod 2000}"/> `
+	for _, c := range []struct{ name, src, want string }{
+		{"2000 x 3000 equality join", data +
+			`return sum(for $p in $ps return count(for $o in $os where $o/@k = $p/@id return $o))`, "2999"},
+		{"2000 x 3000 kept tuples over budget", data +
+			`return sum(for $p in $ps return count(for $o in $os where $o/@k != $p/@id return $o))`, "XPDY0130"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			q, err := Compile(c.src, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if countJoins(q) == 0 {
+				t.Fatal("no join planned")
+			}
+			if got := runQuery(t, q); !strings.Contains(got, c.want) {
+				t.Fatalf("got %.200q, want %s", got, c.want)
+			}
+		})
+	}
+}
+
+// TestJoinRangeAndCastMatchNestedLoop is the differential test for the
+// join's numeric paths: the outer key cast once to xs:double, and the sorted
+// range lookup for < <= > >=. Every operator, with the inner key on either
+// side, over keys that are one xs:double each (the range path), numeric of
+// another type, untyped, empty or missing, against outer keys that are
+// untyped, typed, several, empty, or do not cast. NaN, ±0 and ±INF included.
+func TestJoinRangeAndCastMatchNestedLoop(t *testing.T) {
+	const ts = `let $ts := (<t v="1"/>, <t v="-0"/>, <t v="2.5"/>, <t v="INF"/>,
+	  <t v="0"/>, <t v="-INF"/>, <t v="NaN"/>, <t v="1"/>, <t/>, <t v="1e1"/>, <t v="0.1"/>) `
+	inner := []string{
+		"number($t/@v)",    // one xs:double each, NaN for none
+		"xs:double($t/@v)", // empty for <t/>
+		"(if ($t/@v castable as xs:integer) then xs:integer($t/@v) else xs:decimal(0))", // not doubles
+		"$t/@v",              // untyped
+		"(number($t/@v), 2)", // two keys
+	}
+	outer := []string{"$p/@v", "number($p/@v)", "($p/@v, $p/@w)", "xs:float($p/@v)"}
+	ps := []string{`<p v="0"/>`, `<p v="-0"/>`, `<p v="1"/>`, `<p v="NaN"/>`, `<p v="INF"/>`,
+		`<p v="-INF"/>`, `<p v="3"/>`, `<p/>`, `<p v="x"/>`, `<p v="1" w="2.5"/>`, `<p v="1.0"/>`, `<p v="0.1"/>`}
+	ran := 0
+	for _, op := range []string{"<", "<=", ">", ">=", "=", "!="} {
+		for _, in := range inner {
+			for _, out := range outer {
+				for _, innerLeft := range []bool{true, false} {
+					test := in + " " + op + " " + out
+					if !innerLeft {
+						test = out + " " + op + " " + in
+					}
+					for _, p := range ps {
+						src := ts + `for $p in (` + p + `) return string-join(for $t in $ts where «` +
+							test + `» return string($t/@v), ",")`
+						jsrc, lsrc := joinPair(src)
+						jq, err := Compile(jsrc, Options{})
+						if err != nil {
+							t.Fatal(err)
+						}
+						lq, err := Compile(lsrc, Options{})
+						if err != nil {
+							t.Fatal(err)
+						}
+						if countJoins(jq) == 0 || countJoins(lq) != 0 {
+							t.Fatalf("planner: %s", jsrc)
+						}
+						got, want := runQuery(t, jq), runQuery(t, lq)
+						if strings.HasPrefix(want, "ERROR") {
+							got, want = errCode(got), errCode(want)
+						}
+						if got != want {
+							t.Errorf("%s with %s:\n join   %q\n nested %q", test, p, got, want)
+						}
+						ran++
+					}
+				}
+			}
+		}
+	}
+	t.Logf("%d comparisons", ran)
+}
+
+func errCode(s string) string {
+	if f := strings.Fields(s); len(f) > 1 && f[0] == "ERROR" {
+		return strings.TrimSuffix(f[1], ":")
+	}
+	return s
+}
+
+// TestJoinNumericAllocations pins R4's cost: the XMark q11 shape, 300 people
+// against 300 prices, must not cast the outer key once per pair nor bind the
+// return value through a fresh context per tuple. Measured: 195,847
+// allocations before, 69,854 after (most of the rest builds the data).
+func TestJoinNumericAllocations(t *testing.T) {
+	q, err := Compile(`
+	  let $is := for $n in 1 to 300 return <i>{$n}</i>
+	  let $ps := for $n in 1 to 300 return <p income="{$n * 1000}"/>
+	  return sum(for $p in $ps
+	    let $l := for $i in $is where $p/@income > 5000 * exactly-one($i/text()) return $i
+	    return count($l))`, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countJoins(q) == 0 {
+		t.Fatal("no join planned")
+	}
+	ctx := xpath.NewContext(nil, xpath.Builtins())
+	var got xdm.Sequence
+	allocs := testing.AllocsPerRun(3, func() {
+		if got, err = q.Eval(ctx); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if len(got) != 1 || itemText(got[0]) != "8850" {
+		t.Fatalf("got %v", got)
+	}
+	t.Logf("%.0f allocations", allocs)
+	if allocs > 120000 {
+		t.Errorf("%.0f allocations, want at most 120,000", allocs)
+	}
+}

@@ -1,6 +1,8 @@
 package xslt
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"strings"
@@ -62,7 +64,25 @@ func Serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 }
 
 // serialize writes a result sequence using the given output settings.
+//
+// The serializer writes token by token, which to an *os.File is a system call
+// per token, so any writer that is not already in memory or buffered gets a
+// buffer. It is flushed before returning, error or not, so the bytes that
+// reach w are exactly those the serializer wrote; the first error is kept.
 func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
+	switch w.(type) {
+	case *bytes.Buffer, *strings.Builder, *bufio.Writer:
+		return serializeTo(w, seq, opts, charMap)
+	}
+	bw := bufio.NewWriterSize(w, 32<<10)
+	err := serializeTo(bw, seq, opts, charMap)
+	if ferr := bw.Flush(); err == nil {
+		err = ferr
+	}
+	return err
+}
+
+func serializeTo(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
 	s := &serializer{w: w, opts: opts, charMap: charMap}
 	s.normalize = normalizerFor(opts.NormalizationForm)
 	if len(opts.SuppressIndentation) > 0 {
