@@ -184,3 +184,89 @@ func TestEntityReplacementInAttributeValue(t *testing.T) {
 		}
 	}
 }
+
+// TestAttributeDefaultNormalization: an ATTLIST default is an attribute value
+// like any other (XML 1.0 §3.3.2), so §3.3.3 applies to it — character and
+// entity references are replaced, literal white space becomes a space, and a
+// non-CDATA type collapses — and the well-formedness constraints on
+// references in it hold (§3.1 "No < in Attribute Values", §4.1 "Entity
+// Declared", "No External Entity References").
+func TestAttributeDefaultNormalization(t *testing.T) {
+	const ents = `<!ENTITY d "&#xD;"><!ENTITY a "&#xA;"><!ENTITY da "&#xD;&#xA;">` +
+		`<!ENTITY ref "&#38;#xA;"><!ENTITY n "x&a;y">`
+	ok := []struct{ name, decl, want string }{
+		{"literal white space", "<!ATTLIST r v CDATA \"x\ny\tz\">", "x y z"},
+		{"character references", `<!ATTLIST r v CDATA "&#x20;&#xA;&#9;&#60;">`, " \n\t<"},
+		{"section 3.3.3 entities", `<!ATTLIST r v CDATA "&d;&d;A&a;&#x20;&a;B&da;">`, "  A   B  "},
+		{"reference in replacement text", `<!ATTLIST r v CDATA "&ref;">`, "\n"},
+		{"nested", `<!ATTLIST r v CDATA "&n;">`, "x y"},
+		{"predefined", `<!ATTLIST r v CDATA "&amp;&lt;&quot;">`, `&<"`},
+		{"fixed", `<!ATTLIST r v CDATA #FIXED "p&a;q">`, "p q"},
+		{"non-CDATA collapse", `<!ATTLIST r v NMTOKENS "  p&a;&a;q  ">`, "p q"},
+	}
+	for _, c := range ok {
+		tree, err := ParseString("<!DOCTYPE r ["+ents+c.decl+"]><r/>", ParseOptions{AllowDOCTYPE: true})
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		v := tree.Root.ChildElements()[0].Attr("", "v")
+		if v == nil || v.Value != c.want {
+			t.Errorf("%s: got %v, want %q", c.name, v, c.want)
+		}
+	}
+	bad := []struct{ name, subset, want string }{
+		{"literal <", `<!ATTLIST r v CDATA "a<b">`, "contains <"},
+		{"bare &", `<!ATTLIST r v CDATA "a & b">`, "begins no reference"},
+		{"undeclared", `<!ATTLIST r v CDATA "&u;">`, `entity "u" is not declared before`},
+		{"declared after", `<!ATTLIST r v CDATA "&late;"><!ENTITY late "x">`, `entity "late" is not declared before`},
+		{"declared in a PI", `<?p <!ENTITY e "x">?><!ATTLIST r v CDATA "&e;">`, `entity "e" is not declared before`},
+		{"external", `<!ENTITY x SYSTEM "x.ent"><!ATTLIST r v CDATA "&x;">`, `external entity "x"`},
+		{"< in replacement text", `<!ENTITY m "<b/>"><!ATTLIST r v CDATA "&m;">`, "contains <"},
+		{"< nested", `<!ENTITY m "<b/>"><!ENTITY o "&m;"><!ATTLIST r v CDATA "&o;">`, "contains <"},
+	}
+	for _, c := range bad {
+		_, err := ParseString("<!DOCTYPE r ["+c.subset+"]><r/>", ParseOptions{AllowDOCTYPE: true})
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want one containing %q", c.name, err, c.want)
+		}
+	}
+	// A default supplies an omitted value only.
+	tree, err := ParseString("<!DOCTYPE r [<!ATTLIST r v CDATA \"x\ny\">]><r v=\"w\"/>", ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tree.Root.ChildElements()[0].Attr("", "v").Value; got != "w" {
+		t.Errorf("written value = %q, want w", got)
+	}
+}
+
+// TestDTDLineEnds: §2.11's line-end handling covers the internal subset too,
+// so an entity value or attribute default holds the line ends content does —
+// under XML 1.1 NEL, U+2028 and CR NEL are each one LF, and in an attribute
+// value one space; under 1.0 NEL and U+2028 are characters, and the CR before
+// a NEL is a line end of its own.
+func TestDTDLineEnds(t *testing.T) {
+	const subset = "<!ENTITY e \"1\u00852 3\r\u00854\"><!ATTLIST r d CDATA \"1\u00852 3\r\u00854\">"
+	cases := []struct{ decl, content, attr, def string }{
+		{`<?xml version="1.1"?>`, "1\n2\n3\n4", "1 2 3 4", "1 2 3 4"},
+		{`<?xml version="1.0"?>`, "1\u00852 3\n\u00854", "1\u00852 3 \u00854", "1\u00852 3 \u00854"},
+	}
+	for _, c := range cases {
+		src := c.decl + "<!DOCTYPE r [" + subset + "]><r a=\"&e;\">&e;</r>"
+		tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
+		if err != nil {
+			t.Fatalf("%s: %v", c.decl, err)
+		}
+		r := tree.Root.ChildElements()[0]
+		if got := r.StringValue(); got != c.content {
+			t.Errorf("%s content: got %q, want %q", c.decl, got, c.content)
+		}
+		if got := r.Attr("", "a").Value; got != c.attr {
+			t.Errorf("%s attribute: got %q, want %q", c.decl, got, c.attr)
+		}
+		if got := r.Attr("", "d").Value; got != c.def {
+			t.Errorf("%s default: got %q, want %q", c.decl, got, c.def)
+		}
+	}
+}

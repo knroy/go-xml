@@ -633,19 +633,14 @@ func (t *entityTable) parseParameterDecls(subset, base string) (map[string]param
 		t.params = map[string]paramEntity{}
 	}
 	out := t.params
-	rest := subset
-	for len(out) < maxEntityCount {
-		i := strings.Index(rest, "<!ENTITY")
-		if i < 0 {
+	for kw, body := range markupDecls(subset) {
+		if kw != "ENTITY" {
+			continue
+		}
+		if len(out) >= maxEntityCount {
 			break
 		}
-		rest = rest[i+len("<!ENTITY"):]
-		end := endOfDeclaration(rest)
-		if end < 0 {
-			break
-		}
-		body := strings.TrimSpace(rest[:end])
-		rest = rest[end+1:]
+		body = strings.TrimSpace(body)
 		if !strings.HasPrefix(body, "%") {
 			continue
 		}

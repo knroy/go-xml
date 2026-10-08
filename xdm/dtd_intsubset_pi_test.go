@@ -1,6 +1,9 @@
 package xdm
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestInternalSubsetPIIsNotStructure covers a processing instruction in the
 // internal subset. XML 1.0 §2.8 admits a PI to intSubset, and §2.6 says its
@@ -44,5 +47,56 @@ func TestInternalSubsetPIIsNotStructure(t *testing.T) {
 				t.Errorf("root content = %q, want %q (the entity should still expand)", got, "X")
 			}
 		})
+	}
+}
+
+// TestDeclarationsInsideUnparsedRegions: a declaration written inside a PI, a
+// comment or a quoted literal is text, not a declaration (XML 1.0 §2.5, §2.6),
+// so it must not declare an entity, an attribute default or a content model.
+// Every reader of the subset goes through markupDecls, which skips all three.
+func TestDeclarationsInsideUnparsedRegions(t *testing.T) {
+	parse := func(src string) (*Tree, error) {
+		return ParseString(src, ParseOptions{AllowDOCTYPE: true})
+	}
+	if _, err := parse(`<!DOCTYPE r [<?p <!ENTITY e "evil">?>]><r>&e;</r>`); err == nil {
+		t.Error("an entity declared only inside a PI was usable")
+	}
+	tree, err := parse(`<!DOCTYPE r [<?p <!ENTITY e "evil">?><!ENTITY e "good">]><r>&e;</r>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tree.Root.ChildElements()[0].StringValue(); got != "good" {
+		t.Errorf("entity = %q, want the real declaration's %q", got, "good")
+	}
+	tree, err = parse(`<!DOCTYPE r [<?p <!ATTLIST r a CDATA "x">?><!ATTLIST r b CDATA "x>y">]><r/>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := tree.Root.ChildElements()[0]
+	if r.Attr("", "a") != nil {
+		t.Error("an ATTLIST inside a PI supplied a default")
+	}
+	if b := r.Attr("", "b"); b == nil {
+		t.Error("default holding > was lost")
+	} else if b.Value != "x>y" {
+		t.Errorf("default holding > = %q, want %q", b.Value, "x>y")
+	}
+	tree, err = parse("<!DOCTYPE r [<?p <!ELEMENT r (s)>?>]><r> <s/> </r>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(tree.Root.ChildElements()[0].Children); n != 3 {
+		t.Errorf("r has %d children, want 3: an ELEMENT inside a PI made its white space ignorable", n)
+	}
+
+	// Comments in the internal subset are dropped by the tokeniser, so the
+	// comment case is checked on subset text, as an external subset arrives.
+	var got []string
+	for kw, body := range markupDecls(`<!-- <!ENTITY e "evil"> --><!ENTITY f '<!ENTITY g "x">'>` +
+		`<?p <!ENTITY h "y">?><![INCLUDE[<!ENTITY i "z">]]>`) {
+		got = append(got, kw+body)
+	}
+	if want := []string{`ENTITY f '<!ENTITY g "x">'`, `ENTITY i "z"`}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("markupDecls = %q, want %q", got, want)
 	}
 }
