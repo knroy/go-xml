@@ -269,7 +269,7 @@ func bindCaseVar(ctx *evalContext, name *xdm.QName, seq xdm.Sequence) *evalConte
 	if name == nil {
 		return ctx
 	}
-	return &evalContext{xp: ctx.xp.WithVar(*name, seq), sc: ctx.sc}
+	return &evalContext{xp: ctx.xp.WithVar(*name, seq), sc: ctx.sc, joins: ctx.joins}
 }
 
 // checkClauseVars reports XPST0008 for a variable a clause's return expression

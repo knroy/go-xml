@@ -236,14 +236,32 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 		}
 	}
 
-	valueOp := map[string]string{
-		"=": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge",
-	}[e.Op]
+	ok, err := e.comparePairs(ctx, la, ra)
+	if err != nil {
+		return nil, err
+	}
+	return xdm.One(xdm.NewBoolean(ok)), nil
+}
+
+// generalValueOp maps a general comparison to the value comparison each pair
+// is tested with. A package variable because a join calls comparePairs once
+// per candidate pair, where a map literal would be rebuilt every time.
+var generalValueOp = map[string]string{
+	"=": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge",
+}
+
+// comparePairs is the existential half of a general comparison: whether some
+// pair of already-atomized items, one from each operand, compares true. It is
+// split out so that a host evaluating the operands itself (an XQuery join,
+// which atomizes each operand once rather than once per pair) reaches the
+// same pair order, conversions and errors as the operator does.
+func (e *BinaryOp) comparePairs(ctx *Context, la, ra xdm.Sequence) (bool, error) {
+	valueOp := generalValueOp[e.Op]
 
 	for _, li := range la {
 		for _, ri := range ra {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return false, err
 			}
 			// untypedAtomic operands are cast per the general-comparison
 			// rules, which differ from value comparison: against a numeric
@@ -251,14 +269,14 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 			ok, err := compareValuesNS(ctx, li.(*xdm.Atomic), ri.(*xdm.Atomic),
 				valueOp, true, e.ResolveQName)
 			if err != nil {
-				return nil, err
+				return false, err
 			}
 			if ok {
-				return xdm.One(xdm.NewBoolean(true)), nil
+				return true, nil
 			}
 		}
 	}
-	return xdm.One(xdm.NewBoolean(false)), nil
+	return false, nil
 }
 
 // compareValues compares two atomic values with a value-comparison operator.

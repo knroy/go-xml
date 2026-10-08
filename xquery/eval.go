@@ -17,6 +17,10 @@ type evalContext struct {
 	// sc is the static context the query was parsed under, which carries the
 	// construction mode a copy is made with.
 	sc *staticContext
+	// joins is this evaluation's FLWOR join caches (see joinClause). Nil
+	// where a context is rebuilt from an xpath callback, such as a function
+	// body, which only costs the caches across calls.
+	joins *joinState
 }
 
 // collation resolves a collation URI written on an "order by" or "group by"
