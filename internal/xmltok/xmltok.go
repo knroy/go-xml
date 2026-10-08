@@ -142,6 +142,13 @@ type Decoder struct {
 	// in Entity.
 	AttrEntity map[string]string
 
+	// Undeclared, when set, is asked about a reference to an entity that is
+	// neither predefined nor in Entity; if it reports true the reference is
+	// dropped instead of being an error. That is a non-validating
+	// processor's reading of a document whose declarations it may not have
+	// read (XML 1.0 §4.1, VC: Entity Declared); xdm decides when it applies.
+	Undeclared func(name string) bool
+
 	// CharsetReader converts a stream whose XML declaration names an
 	// encoding other than UTF-8. It receives the bytes after the declaration
 	// and returns UTF-8. Without one, such a declaration is an error.
@@ -1156,6 +1163,9 @@ func (d *Decoder) reference(out []byte, spans []refSpan, attr bool) ([]byte, []r
 				}
 				if !found && d.Entity != nil {
 					repl, found = d.Entity[string(name)]
+				}
+				if !found && d.Undeclared != nil && d.Undeclared(string(name)) {
+					return out[:start], spans, true
 				}
 			}
 		}

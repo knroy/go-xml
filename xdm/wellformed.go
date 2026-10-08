@@ -21,6 +21,10 @@ const (
 	xmlDeclEq = xmlDeclS + `*=` + xmlDeclS + `*`
 )
 
+// standaloneYes finds standalone="yes" in a declaration xmlDeclSyntax has
+// already accepted.
+var standaloneYes = regexp.MustCompile(`standalone` + xmlDeclEq + `(?:"yes"|'yes')`)
+
 var xmlDeclSyntax = regexp.MustCompile(
 	`^version` + xmlDeclEq + `(?:"1\.[0-9]+"|'1\.[0-9]+')` +
 		`(?:` + xmlDeclS + `+encoding` + xmlDeclEq +

@@ -318,7 +318,8 @@ func (t *entityTable) parseDecls(subset, base string) *entityTable {
 }
 
 // markupDecls yields the keyword and body of each markup declaration in a DTD
-// subset — for "<!ENTITY e 'x'>", "ENTITY" and " e 'x'" — in document order. It is the one scanner every reader of declarations goes
+// subset — for "<!ENTITY e 'x'>", "ENTITY" and " e 'x'" — in document order,
+// and each parameter-entity reference between them as "%" and its name. It is the one scanner every reader of declarations goes
 // through, so that what counts as a declaration is decided in one place.
 //
 // Comments and processing instructions are skipped whole, and so is a quoted
@@ -354,6 +355,18 @@ func markupDecls(subset string) iter.Seq2[string, string] {
 				i = j + end + 1
 			case s[i] == '"' || s[i] == '\'':
 				i = skipPast(s, i+1, s[i:i+1])
+			case s[i] == '%':
+				// A parameter-entity reference between declarations is
+				// yielded with the keyword "%" and its name.
+				j := strings.IndexByte(rest, ';')
+				if j > 1 && isEntityName(rest[1:j]) {
+					if !yield("%", rest[1:j]) {
+						return
+					}
+					i += j + 1
+					continue
+				}
+				i++
 			default:
 				i++
 			}
@@ -682,13 +695,18 @@ func (t *entityTable) entityMap() map[string]string {
 // literal "<" or a bare "&" in the default, a reference to an entity not
 // declared before the ATTLIST, to an external or unparsed one, or to one
 // whose replacement text holds "<". t may be nil when nothing was declared.
-func normalizeAttDefaults(defs []attDefault, t *entityTable, v11 bool) ([]attDefault, error) {
+//
+// wfc says whether WFC: Entity Declared governs the document (see
+// entityDeclaredIsWFC). When it does not, a reference to an entity with no
+// declaration is a validity error, which a non-validating processor does not
+// report: the reference is dropped, and declaration order is not checked.
+func normalizeAttDefaults(defs []attDefault, t *entityTable, v11, wfc bool) ([]attDefault, error) {
 	if t == nil {
 		t = newEntityTable("", nil)
 		t.version11 = v11
 	}
 	for k, d := range defs {
-		v, err := t.normalizeDefault(d)
+		v, err := t.normalizeDefault(d, wfc)
 		if err != nil {
 			return nil, fmt.Errorf("default for attribute %s of %s: %w", d.name, d.element, err)
 		}
@@ -697,7 +715,7 @@ func normalizeAttDefaults(defs []attDefault, t *entityTable, v11 bool) ([]attDef
 	return defs, nil
 }
 
-func (t *entityTable) normalizeDefault(d attDefault) (string, error) {
+func (t *entityTable) normalizeDefault(d attDefault, wfc bool) (string, error) {
 	v := d.value
 	if strings.IndexByte(v, '<') >= 0 {
 		return "", fmt.Errorf("%q contains <", v)
@@ -734,7 +752,10 @@ func (t *entityTable) normalizeDefault(d attDefault) (string, error) {
 			sb.WriteRune(r)
 			continue
 		}
-		if at, ok := d.entities[name]; !ok || at > d.at {
+		if !wfc && !t.declares(name) {
+			continue
+		}
+		if at, ok := d.entities[name]; wfc && (!ok || at > d.at) {
 			return "", fmt.Errorf("entity %q is not declared before the ATTLIST that refers to it", name)
 		}
 		if t.external[name] {
@@ -751,6 +772,37 @@ func (t *entityTable) normalizeDefault(d attDefault) (string, error) {
 		sb.WriteString(sub)
 	}
 	return sb.String(), nil
+}
+
+// declares reports whether the DTD declares a general entity name, internal
+// or external. t may be nil, which declares nothing.
+func (t *entityTable) declares(name string) bool {
+	if t == nil {
+		return false
+	}
+	_, internal := t.raw[name]
+	return internal || t.external[name]
+}
+
+// entityDeclaredIsWFC reports whether XML 1.0 §4.1's WFC: Entity Declared
+// governs a document with DOCTYPE d: it does when the document has no
+// external subset and its internal subset no parameter-entity reference, or
+// when it says standalone="yes". Otherwise declarations may live where a
+// non-validating processor need not read them, and an undeclared entity is
+// only VC: Entity Declared.
+func entityDeclaredIsWFC(d string, standalone bool) bool {
+	if standalone {
+		return true
+	}
+	if _, _, ok := externalSubsetOf(d); ok {
+		return false
+	}
+	for kw := range markupDecls(d) {
+		if kw == "%" {
+			return false
+		}
+	}
+	return true
 }
 
 // attrEntityMap is entityMap for references in attribute values, given the

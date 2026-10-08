@@ -328,3 +328,64 @@ func TestCommentAndPILineEnds(t *testing.T) {
 		}
 	}
 }
+
+// TestUndeclaredEntityWFCOrVC is XML 1.0 §4.1's split between WFC and VC:
+// Entity Declared. With no DTD, with only an internal subset free of
+// parameter-entity references, or with standalone="yes", a reference to an
+// undeclared entity is a well-formedness error. Otherwise the declaration may
+// be in an external subset or parameter entity a non-validating processor has
+// not read, the error is a validity error that it does not report, and the
+// reference contributes nothing — in content, in an attribute value and in a
+// default alike. An entity that is declared but cannot be read stays an error.
+func TestUndeclaredEntityWFCOrVC(t *testing.T) {
+	const doc = `<r a="1&u;2">x&u;y</r>`
+	cases := []struct {
+		name, prolog string
+		ok           bool
+	}{
+		{"no DTD", ``, false},
+		{"internal subset only", `<!DOCTYPE r [<!ENTITY e "v">]>`, false},
+		{"external subset", `<!DOCTYPE r SYSTEM "r.dtd">`, true},
+		{"external subset and internal", `<!DOCTYPE r SYSTEM "r.dtd" [<!ENTITY e "v">]>`, true},
+		{"parameter-entity reference", `<!DOCTYPE r [<!ENTITY % p ""> %p; ]>`, true},
+		{"standalone with external subset", `<?xml version="1.0" standalone="yes"?><!DOCTYPE r SYSTEM "r.dtd">`, false},
+		{"standalone no", `<?xml version="1.0" standalone="no"?><!DOCTYPE r SYSTEM "r.dtd">`, true},
+		{"percent in a literal is no reference", `<!DOCTYPE r [<!ENTITY e "%p;">]>`, false},
+	}
+	for _, c := range cases {
+		tree, err := ParseString(c.prolog+doc, ParseOptions{AllowDOCTYPE: true})
+		if !c.ok {
+			if err == nil || !strings.Contains(err.Error(), "&u;") {
+				t.Errorf("%s: err = %v, want the undeclared reference refused", c.name, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		r := tree.Root.ChildElements()[0]
+		if got := r.StringValue() + "|" + r.Attr("", "a").Value; got != "xy|12" {
+			t.Errorf("%s: got %q, want the reference dropped (xy|12)", c.name, got)
+		}
+	}
+
+	// Defaults follow the same rule, declaration order included.
+	if _, err := ParseString(`<!DOCTYPE r [<!ATTLIST r d CDATA "1&u;2">]><r/>`, ParseOptions{AllowDOCTYPE: true}); err == nil {
+		t.Error("an undeclared entity in a default was accepted under the WFC")
+	}
+	tree, err := ParseString(`<!DOCTYPE r SYSTEM "r.dtd" [<!ATTLIST r d CDATA "1&u;&late;2"><!ENTITY late "L">]><r/>`,
+		ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tree.Root.ChildElements()[0].Attr("", "d").Value; got != "1L2" {
+		t.Errorf("default = %q, want 1L2", got)
+	}
+
+	// Declared but external, with no resolver: still refused.
+	if _, err := ParseString(`<!DOCTYPE r SYSTEM "r.dtd" [<!ENTITY x SYSTEM "x.ent">]><r>&x;</r>`,
+		ParseOptions{AllowDOCTYPE: true}); err == nil {
+		t.Error("a declared external entity was dropped instead of refused")
+	}
+}
