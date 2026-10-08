@@ -448,11 +448,10 @@ func (d *Decoder) startTag() (Token, error) {
 // The target is followed by white space or "?>", and the body is checked
 // against [2] Char.
 //
-// Under XML 1.1 the body's line ends are folded to LF (§2.11).
+// The body's line ends are folded to LF by the document's version (§2.11).
 //
-// parity: under 1.0 the body is not newline-normalised, and a target of "xml"
-// is the declaration wherever it appears, not only at the start of the
-// document.
+// parity: a target of "xml" is the declaration wherever it appears, not only
+// at the start of the document.
 func (d *Decoder) procInst() (Token, error) {
 	target, ok := d.name()
 	if !ok {
@@ -470,9 +469,7 @@ func (d *Decoder) procInst() (Token, error) {
 	if !d.checkChars(data, nil) {
 		return nil, d.err
 	}
-	if d.v11 {
-		data = foldLineEnds(data, true)
-	}
+	data = foldLineEnds(data, d.v11)
 	if target == "xml" {
 		if err := d.xmlDecl(string(data)); err != nil {
 			d.err = err
@@ -611,7 +608,7 @@ func (d *Decoder) bang() (Token, error) {
 
 // comment reads [15] Comment after "<!-", checking the body against [2] Char.
 //
-// parity: as for a PI, the body is newline-normalised under 1.1 only.
+// As for a PI, the body's line ends are folded by the document's version.
 func (d *Decoder) comment() (Token, error) {
 	b, ok := d.mustgetc()
 	if !ok {
@@ -634,9 +631,7 @@ func (d *Decoder) comment() (Token, error) {
 	if !d.checkChars(data, nil) {
 		return nil, d.err
 	}
-	if d.v11 {
-		data = foldLineEnds(data, true)
-	}
+	data = foldLineEnds(data, d.v11)
 	d.tokComment = Comment(data)
 	return &d.tokComment, nil
 }

@@ -191,7 +191,8 @@ func TestTags(t *testing.T) {
 
 func TestMarkup(t *testing.T) {
 	runCases(t, []tokenCase{
-		{name: "comment", src: "<!-- c\r\n-->", want: "<!-- c\r\n-->"},
+		{name: "comment", src: "<!-- c\r\n-->", want: "<!-- c\n-->"},
+		{name: "1.0 CR NEL in comment and pi", src: "<!--a\r\u0085b--><?p a\r\u0085b\rc?>", want: "<!--a\n\u0085b--><?p a\n\u0085b\nc?>"},
 		{name: "empty comment", src: "<!---->", want: "<!---->"},
 		{name: "dash comment", src: "<!---a-->", want: "<!---a-->"},
 		{name: "double dash", src: "<!-- a -- b -->", wantErr: syntax(1, `invalid sequence "--" not allowed in comments`)},
