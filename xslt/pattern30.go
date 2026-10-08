@@ -212,8 +212,13 @@ func isGeneralPatternForm(src string) bool {
 			// These the step grammar already handles, and better: it matches
 			// them by membership without evaluating the rest of the path.
 			return false
+		case "doc", "root", "element-with-id":
+			return true
 		}
-		return true
+		// OuterFunctionName names no other unprefixed function, so
+		// "copy-of($x)//a" is XTSE0340 (match-077). A prefixed name is
+		// left to the expression compiler.
+		return strings.Contains(src[:strings.IndexByte(src, '(')], ":")
 	}
 	// A parenthesised group appearing as a later step, "x/(a|b)/text()".
 	return containsTopLevel(src, "/(")
@@ -446,12 +451,22 @@ func checkQBraceName(src string) error {
 // patternsAllow30 reports whether the pattern being compiled may use the
 // forms XSLT 3.0 added.
 //
-// A 2.0 stylesheet must get XTSE0340 for them, not a working match: telling it
-// that "self::foo" or ".[E]" is a pattern would silently change which template
-// fires. The answer rides on the resolver because that is what already carries
-// the version of the element the pattern was written on, and a pattern is a
-// static property of that element exactly as its base URI is.
+// A 3.0 processor always may. Section 3.9.2 defines "no differences" for
+// XSLT 2.0 behavior, so "an XSLT 3.0 processor will therefore produce the same
+// results whether the effective version of an element is set to 2.0 or 3.0":
+// SchXslt-compiled Schematron writes match="root()" in version="2.0" modules,
+// and Saxon runs them.
+//
+// A 2.0 processor (MaxVersion 2.0) must give a 2.0 stylesheet XTSE0340 for
+// them, not a working match: telling it that "self::foo" or ".[E]" is a
+// pattern would silently change which template fires. The answer rides on the
+// resolver because that is what already carries the version of the element
+// the pattern was written on, and a pattern is a static property of that
+// element exactly as its base URI is.
 func patternsAllow30(ns xpath.NamespaceResolver) bool {
+	if processorAtLeast30() {
+		return true
+	}
 	r, ok := ns.(*nsResolver)
 	// Exactly the 3.0 family, not "3.0 or later". A stylesheet declaring
 	// version="25.0" is in forwards-compatible mode: it is processed by the
@@ -802,8 +817,12 @@ func isUnionKeywordAt(s string, i int) bool {
 		return false
 	}
 	// An operator needs an operand before it; at the front of the pattern
-	// "union" can only be a name.
-	return strings.TrimSpace(s[:i]) != ""
+	// "union" can only be a name. So it is straight after a "/", "::" or
+	// "@": XPath's leading-lone-slash constraint reads "/ union /*" as the
+	// path "/union/*", since "union" can start a RelativePathExpr, and
+	// match-038 requires that reading.
+	before := strings.TrimSpace(s[:i])
+	return before != "" && !strings.ContainsRune("/:@", rune(before[len(before)-1]))
 }
 
 // isNameByte reports whether c can appear inside an unprefixed XML name. It is

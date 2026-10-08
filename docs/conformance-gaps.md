@@ -236,6 +236,23 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
+The 2.0 lane compiles with `CompileOptions.MaxVersion` 2.0, an XSLT 2.0
+processor, and that is the only setting under which a `version="2.0"` module
+is held to 2.0's narrower rules. XSLT 3.0 §3.9.2: "no differences are defined
+for XSLT 2.0 behavior. An XSLT 3.0 processor will therefore produce the same
+results whether the effective version of an element is set to 2.0 or 3.0". So
+the 3.0 pattern grammar (`root()`, `union`, `doc()`, parenthesised steps) is
+refused with XTSE0340 in a 2.0 module only by the 2.0 processor;
+SchXslt-compiled Schematron writes `match="root()"` in `version="2.0"`
+stylesheets and the 3.0 processor runs them, as Saxon does. The lane's
+XTSE0340 cases (`match-081`, `version-023`) are scoped `XSLT20`. Applying the
+3.0 grammar to 2.0 modules exposed two places it was wider than §5.5 allows,
+which a `version="3.0"` module also reached: `"/ union /*"` is the path
+`/union/*` by XPath's leading-lone-slash rule (`match-038`), and
+OuterFunctionName admits no unprefixed name but `doc`, `id`,
+`element-with-id`, `key` and `root`, so `copy-of($x)//a` is XTSE0340
+(`match-077`).
+
 ## xslt 3.0 — 23 failures
 
 **XSLT 3.0: 11,495 / 11,518 = 99.80%.**
