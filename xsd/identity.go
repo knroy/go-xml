@@ -695,33 +695,6 @@ func (v *validator) frontier(el *xdm.Node, ic *IdentityConstraint) []*xdm.Node {
 	return out
 }
 
-// hasIdentityConstraints reports whether any declaration in the schema carries
-// an identity constraint, so that the per-element bookkeeping the walk needs
-// can be skipped entirely for the schemas that have none.
-func (s *Schema) hasIdentityConstraints() bool {
-	for _, d := range s.Elements {
-		if d != nil && len(d.IdentityConstraints) > 0 {
-			return true
-		}
-	}
-	for _, t := range s.Types {
-		ct, ok := t.(*ComplexType)
-		if !ok || ct.Particle == nil {
-			continue
-		}
-		found := false
-		walkParticleElements(ct.Particle, map[*Particle]bool{}, func(d *ElementDecl) {
-			if len(d.IdentityConstraints) > 0 {
-				found = true
-			}
-		})
-		if found {
-			return true
-		}
-	}
-	return false
-}
-
 // declaresConstraint reports whether the declaration governing el carries ic.
 func (v *validator) declaresConstraint(el *xdm.Node, ic *IdentityConstraint) bool {
 	decl := v.declFor[el]

@@ -186,11 +186,6 @@ func (s *Schema) ValidateContext(ctx context.Context, root *xdm.Node,
 	if icStatsHook != nil {
 		v.icStats = icStatsHook()
 	}
-	// declFor is only consulted by the identity-constraint walk, so it is
-	// allocated only when the schema has a constraint to evaluate.
-	if s.hasIdentityConstraints() {
-		v.declFor = map[*xdm.Node]*ElementDecl{}
-	}
 	// Whitespace-only text in an element whose declared content is
 	// element-only is ignorable (XML 1.0 §2.10), and XSLT 2.0 §4.4 makes
 	// stripping it unconditional — it outranks xsl:preserve-space, exactly as
@@ -278,10 +273,22 @@ type validator struct {
 
 	// declFor records the declaration each element was validated against,
 	// so that an identity-constraint walk can tell whether a descendant is
-	// itself a scope of the same constraint and stop there. It is filled
-	// only when some declaration in the schema carries a constraint, which
-	// leaves the common case paying nothing.
+	// itself a scope of the same constraint and stop there. The walk only
+	// looks below a constraint's own element, so it is filled only inside
+	// one (icScopes > 0), which leaves the common case paying nothing.
 	declFor map[*xdm.Node]*ElementDecl
+
+	// icScopes counts the elements on the current path whose declaration
+	// carries an identity constraint. A constraint's selector and fields
+	// reach only into its element's subtree, so outside every such element
+	// nothing the constraints read needs recording.
+	//
+	// It is counted on the walk rather than read off the schema. Asking the
+	// schema missed declarations it did not reach — a local element in a
+	// global element's anonymous type, or one in a named group — and the
+	// xslt and xquery aggregates copy declarations between schemas, so no
+	// schema-level count is reliable; the declaration being validated is.
+	icScopes int
 
 	// stripIgnorable removes whitespace-only text from elements whose
 	// declared content is element-only, as XML 1.0 §2.10 and XSLT 2.0 §4.4
@@ -493,7 +500,14 @@ func (v *validator) failLimit(n *xdm.Node, code, format string, args ...any) {
 
 // validateElement checks one element against a declaration.
 func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
-	if v.declFor != nil && decl != nil {
+	if decl != nil && len(decl.IdentityConstraints) > 0 {
+		v.icScopes++
+		defer func() { v.icScopes-- }()
+	}
+	if v.icScopes > 0 && decl != nil {
+		if v.declFor == nil {
+			v.declFor = map[*xdm.Node]*ElementDecl{}
+		}
 		v.declFor[el] = decl
 	}
 	if v.stopped {
