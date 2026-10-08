@@ -88,7 +88,9 @@ func contains(s, sub string) bool {
 // and its offset, counted from just after the XML declaration, also for a
 // byte far past the decoder's first read.
 func TestASCIICheckStreams(t *testing.T) {
-	body := strings.Repeat("<e>text</e>\n", 20000)
+	// Large enough that the decoder's fixed buffers (about 40 KB) sit well
+	// inside the bound; the copy the old code made grows with the body.
+	body := strings.Repeat("<e>text</e>\n", 200000)
 	decl := `<?xml version="1.0" encoding="us-ascii"?>`
 	parse := func(doc string) func() {
 		return func() {
@@ -110,7 +112,7 @@ func TestASCIICheckStreams(t *testing.T) {
 	}
 
 	_, err := ParseString(decl+"<a>"+body+"\xe9</a>", ParseOptions{})
-	want := `parse XML: xml: opening charset "us-ascii": declared encoding us-ascii but byte 233 at offset 240003 is not ASCII`
+	want := `parse XML: xml: opening charset "us-ascii": declared encoding us-ascii but byte 233 at offset 2400003 is not ASCII`
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v\nwant %s", err, want)
 	}
