@@ -549,6 +549,7 @@ func (p *parser) finishFLWOR(f *flwor) (*flwor, error) {
 		return nil, err
 	}
 	f.ret = c
+	f.clauses = planJoins(f.clauses)
 	return f, nil
 }
 

@@ -212,8 +212,9 @@ func (n *tryCatch) run(ctx *evalContext) (xdm.Sequence, error) {
 				continue
 			}
 			return c.body.sequence(&evalContext{
-				xp: bindErrorVars(ctx.xp, err, code),
-				sc: ctx.sc,
+				xp:    bindErrorVars(ctx.xp, err, code),
+				sc:    ctx.sc,
+				joins: ctx.joins,
 			})
 		}
 	}

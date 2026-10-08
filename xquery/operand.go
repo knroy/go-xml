@@ -487,7 +487,7 @@ func bindLifted(xp *xpath.Context, ops []liftedOperand,
 			Arity: 0,
 			Call: func(c *xpath.Context, _ []xdm.Sequence) (xdm.Sequence, error) {
 				return (&enclosed{items: []node{item}}).sequence(
-					&evalContext{xp: c, sc: ctx.sc})
+					&evalContext{xp: c, sc: ctx.sc, joins: ctx.joins})
 			},
 		})
 	}

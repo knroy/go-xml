@@ -326,6 +326,13 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	if ctx == nil || !ctx.heldBytes {
 		ctx.resetBytes()
 	}
+	return c.expr.Eval(c.scope(ctx))
+}
+
+// scope is the context c's expression evaluates in: ctx with the static
+// properties c was compiled with applied over it, or ctx itself when they
+// already agree.
+func (c *Compiled) scope(ctx *Context) *Context {
 	if (c.staticBase != "" && c.staticBase != ctx.StaticBaseURI) ||
 		c.staticCollation != nil || c.compat != ctx.Compat ||
 		c.version != ctx.Version ||
@@ -357,9 +364,9 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 		// an xsl:function called from a 1.0 template, say -- is a 2.0
 		// expression, so the flag has to be cleared as well as set.
 		sub.Compat = c.compat
-		return c.expr.Eval(&sub)
+		return &sub
 	}
-	return c.expr.Eval(ctx)
+	return ctx
 }
 
 // EvalString evaluates and returns the string value of the result, which is

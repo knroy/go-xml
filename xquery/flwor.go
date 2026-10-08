@@ -101,7 +101,7 @@ func (t tuple) context(ctx *evalContext) *xpath.Context {
 // constructor bound by a clause needs in order to build in the right static
 // context.
 func (t tuple) sub(ctx *evalContext) *evalContext {
-	return &evalContext{xp: t.context(ctx), sc: ctx.sc}
+	return &evalContext{xp: t.context(ctx), sc: ctx.sc, joins: ctx.joins}
 }
 
 // A clause transforms a tuple stream.

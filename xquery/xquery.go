@@ -349,7 +349,8 @@ func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 	// xpath once per binding, so the per-expression reset cleared the counter
 	// between the doublings and the whole 640 MB was built uncharged.
 	ctx = ctx.HoldByteBudget()
-	ec := &evalContext{xp: ctx, sc: q.sc}
+	ec := &evalContext{xp: ctx, sc: q.sc, joins: &joinState{}}
+	defer ec.joins.release()
 	for _, n := range q.body {
 		if err := n.eval(ref, ec); err != nil {
 			return nil, err
