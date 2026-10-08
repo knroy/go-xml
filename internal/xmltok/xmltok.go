@@ -1205,6 +1205,12 @@ func (d *Decoder) checkChars(b []byte, spans []refSpan) bool {
 	return true
 }
 
+// LegalCharRef reports whether a character reference may name r (XML 1.0
+// §4.1, WFC: Legal Character): r must be a Char of the document's version.
+// Under 1.1 that admits the [2a] RestrictedChar, which only a reference can
+// name, but never #x0.
+func LegalCharRef(r rune, v11 bool) bool { return isChar(r, v11, false) }
+
 // asciiChar10 and asciiChar11 tabulate isChar for literal ASCII.
 var asciiChar10, asciiChar11 = func() (t10, t11 [utf8.RuneSelf]bool) {
 	for c := range t10 {

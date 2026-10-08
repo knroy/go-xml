@@ -270,3 +270,36 @@ func TestDTDLineEnds(t *testing.T) {
 		}
 	}
 }
+
+// TestDTDCharRefsAreLegalChars: WFC Legal Character (§4.1) holds for every
+// character reference, in an entity value and an attribute default as in
+// content, by the document's version: 1.1 admits #x1-#x1F through a reference
+// and 1.0 does not; neither admits #x0. An entity value is checked whether or
+// not the entity is used.
+func TestDTDCharRefsAreLegalChars(t *testing.T) {
+	const v11 = `<?xml version="1.1"?>`
+	cases := []struct {
+		name, src string
+		ok        bool
+	}{
+		{"1.0 entity value #x1", `<!DOCTYPE r [<!ENTITY e "&#x1;">]><r/>`, false},
+		{"1.1 entity value #x1", v11 + `<!DOCTYPE r [<!ENTITY e "&#x1;">]><r/>`, true},
+		{"1.1 entity value #x0", v11 + `<!DOCTYPE r [<!ENTITY e "&#0;">]><r/>`, false},
+		{"1.0 entity value surrogate", `<!DOCTYPE r [<!ENTITY e "&#xD800;">]><r/>`, false},
+		{"1.0 entity value bad syntax", `<!DOCTYPE r [<!ENTITY e "&#xZ;">]><r/>`, false},
+		{"1.0 default #x1", `<!DOCTYPE r [<!ATTLIST r a CDATA "&#1;">]><r/>`, false},
+		{"1.1 default #x1", v11 + `<!DOCTYPE r [<!ATTLIST r a CDATA "&#1;">]><r/>`, true},
+		{"1.1 default #x0", v11 + `<!DOCTYPE r [<!ATTLIST r a CDATA "&#x0;">]><r/>`, false},
+		{"1.0 reference in replacement text", `<!DOCTYPE r [<!ENTITY e "&#38;#1;">]><r>&e;</r>`, false},
+		{"1.0 legal", `<!DOCTYPE r [<!ENTITY e "&#9;&#x10FFFF;"><!ATTLIST r a CDATA "&#xA;">]><r>&e;</r>`, true},
+	}
+	for _, c := range cases {
+		_, err := ParseString(c.src, ParseOptions{AllowDOCTYPE: true})
+		if (err == nil) != c.ok {
+			t.Errorf("%s: err = %v, want ok %v", c.name, err, c.ok)
+		}
+		if err != nil && !c.ok && !strings.Contains(err.Error(), "character") {
+			t.Errorf("%s: err = %v, want a character-reference error", c.name, err)
+		}
+	}
+}

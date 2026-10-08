@@ -8,6 +8,8 @@ import (
 	"iter"
 	"strconv"
 	"strings"
+
+	xml "github.com/knroy/go-xml/internal/xmltok"
 )
 
 // Internal general entities declared in a DOCTYPE's internal subset.
@@ -513,12 +515,11 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr boo
 				i += j + 1
 				continue
 			}
-			if r, ok := decodeCharRef(name); ok {
-				sb.WriteRune(r)
-				i += j + 1
-				continue
+			r, err := t.charRef(name)
+			if err != nil {
+				return "", err
 			}
-			sb.WriteString(s[i : i+j+1])
+			sb.WriteRune(r)
 			i += j + 1
 			continue
 		}
@@ -681,9 +682,10 @@ func (t *entityTable) entityMap() map[string]string {
 // literal "<" or a bare "&" in the default, a reference to an entity not
 // declared before the ATTLIST, to an external or unparsed one, or to one
 // whose replacement text holds "<". t may be nil when nothing was declared.
-func normalizeAttDefaults(defs []attDefault, t *entityTable) ([]attDefault, error) {
+func normalizeAttDefaults(defs []attDefault, t *entityTable, v11 bool) ([]attDefault, error) {
 	if t == nil {
 		t = newEntityTable("", nil)
+		t.version11 = v11
 	}
 	for k, d := range defs {
 		v, err := t.normalizeDefault(d)
@@ -721,9 +723,9 @@ func (t *entityTable) normalizeDefault(d attDefault) (string, error) {
 		name := v[i+1 : i+j]
 		i += j + 1
 		if name != "" && name[0] == '#' {
-			r, ok := decodeCharRef(name)
-			if !ok {
-				return "", fmt.Errorf("%q has an invalid character reference &%s;", v, name)
+			r, err := t.charRef(name)
+			if err != nil {
+				return "", err
 			}
 			sb.WriteRune(r)
 			continue
@@ -774,7 +776,45 @@ func (t *entityTable) attrEntityMap(content map[string]string) map[string]string
 	return out
 }
 
-// decodeCharRef turns "#38" or "#x26" into its rune.
+// charRef decodes the character reference "&name;" and checks it against
+// WFC: Legal Character (§4.1) for the document's version — the tokeniser's
+// rule, so that a reference in the DTD is held to the one in content.
+func (t *entityTable) charRef(name string) (rune, error) {
+	r, ok := decodeCharRef(name)
+	if !ok {
+		return 0, fmt.Errorf("invalid character reference &%s;", name)
+	}
+	if !xml.LegalCharRef(r, t.version11) {
+		return 0, fmt.Errorf("illegal character code %U", r)
+	}
+	return r, nil
+}
+
+// checkCharRefs applies WFC: Legal Character to the character references in
+// every declared entity value, whether or not the entity is ever referenced.
+func (t *entityTable) checkCharRefs() error {
+	for name, raw := range t.raw {
+		for i := 0; ; {
+			k := strings.Index(raw[i:], "&#")
+			if k < 0 {
+				break
+			}
+			i += k
+			j := strings.IndexByte(raw[i:], ';')
+			if j < 0 {
+				return fmt.Errorf("entity %q: unterminated character reference", name)
+			}
+			if _, err := t.charRef(raw[i+1 : i+j]); err != nil {
+				return fmt.Errorf("entity %q: %w", name, err)
+			}
+			i += j + 1
+		}
+	}
+	return nil
+}
+
+// decodeCharRef turns "#38" or "#x26" into its rune. It checks the syntax
+// only; charRef also checks the character.
 func decodeCharRef(name string) (rune, bool) {
 	digits, base := name[1:], 10
 	if len(digits) > 1 && (digits[0] == 'x' || digits[0] == 'X') {

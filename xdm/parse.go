@@ -567,7 +567,13 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				} else {
 					ents = parseEntityDecls(d, opts.BaseURI, opts.entityBudget)
 				}
-				if attDefaults, err = normalizeAttDefaults(attDefaults, ents); err != nil {
+				if ents != nil {
+					ents.version11 = dec.IsVersion11()
+					if err := ents.checkCharRefs(); err != nil {
+						return nil, fmt.Errorf("parse XML: %w", err)
+					}
+				}
+				if attDefaults, err = normalizeAttDefaults(attDefaults, ents, dec.IsVersion11()); err != nil {
 					return nil, fmt.Errorf("parse XML: %w", err)
 				}
 				if ents != nil && !opts.entitiesExpanded {
