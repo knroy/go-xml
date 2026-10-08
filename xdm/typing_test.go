@@ -20,6 +20,7 @@ var psviProperties = map[string]bool{
 	"IsIDREFS":         true,
 	"IsNilled":         true,
 	"NoTypedValue":     true,
+	"MixedContent":     true,
 }
 
 // nonPSVIProperties are the exported fields of Node that are deliberately NOT

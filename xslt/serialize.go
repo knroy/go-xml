@@ -990,7 +990,13 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// Suppression covers the whole subtree, not this element alone: the
 	// point is that the content comes out as it went in, and re-indenting a
 	// grandchild disturbs it exactly as much as re-indenting a child.
-	indentChildren := s.opts.Indent && !hasTextChild(n) && !s.suppressed(n)
+	//
+	// Beyond those, Serialization 3.1 §5.1.4 grants the licence to indent
+	// only in the immediate content of an untyped (or xs:anyType) element
+	// that has element children, or of an element whose content model is
+	// element-only; mayIndentContent says which.
+	indentChildren := s.opts.Indent && !hasTextChild(n) && !s.suppressed(n) &&
+		mayIndentContent(n)
 	// The html method adds no whitespace before or after a comment or a
 	// processing instruction, which is what Serialization-html-48 is titled.
 	// The reason is that neither is markup an HTML parser skips over on its
@@ -1246,6 +1252,37 @@ func hasTextChild(n *xdm.Node) bool {
 		}
 	}
 	return false
+}
+
+// mayIndentContent reports whether Serialization 3.1 §5.1.4 lets whitespace
+// be added in an element's immediate content. The licence covers an element
+// annotated xs:untyped or xs:anyType (or not annotated) that has element
+// children, and an element whose content model is element-only, which the
+// validator records as NoTypedValue. Everything else is simple or empty
+// content, where adding whitespace MUST NOT happen because it changes the
+// typed value -- "<e>  </e>" of type xs:string became "<e>  \n</e>" -- or
+// typed mixed content, where it SHOULD NOT. Kept identical to the copy in
+// xpath/fn_serialize.go.
+func mayIndentContent(n *xdm.Node) bool {
+	hasElem := false
+	for _, c := range n.Children {
+		if c.Kind == xdm.KindElement {
+			hasElem = true
+			break
+		}
+	}
+	if !hasElem {
+		return false
+	}
+	switch n.TypeAnnotation {
+	case "", "untyped":
+		return true
+	case "anyType":
+		// An anonymous mixed type annotates as anyType too; MixedContent
+		// tells it from a genuine xs:anyType element.
+		return n.NoTypedValue || !n.MixedContent
+	}
+	return n.NoTypedValue
 }
 
 // escapeText writes character data with the three characters that cannot

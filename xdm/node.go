@@ -284,6 +284,16 @@ type Node struct {
 	// atomizes without complaint.
 	NoTypedValue bool
 
+	// MixedContent records that an element was validated against a complex
+	// type other than xs:anyType itself whose content model is mixed. Like
+	// NoTypedValue it is needed because the annotation cannot say it: an
+	// anonymous mixed type annotates as "anyType", the same as a genuine
+	// xs:anyType element. Serialization 3.1 §5.1.4 tells the two apart --
+	// whitespace MAY be added in xs:anyType content but SHOULD NOT be in
+	// typed mixed content, where it is significant -- so the serializers
+	// read it. Unvalidated nodes leave it false.
+	MixedContent bool
+
 	// detachedID numbers a node that roots a tree which was never finalized,
 	// assigned on the first cross-tree comparison. Zero means unassigned.
 	detachedID int64
@@ -1828,9 +1838,9 @@ func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem 
 // answers each of them exactly as the original does.
 //
 // It exists because there is no such thing as "the important half" of a node's
-// typing. Eight properties record what an assessment concluded --
+// typing. Nine properties record what an assessment concluded --
 // TypeAnnotation, UnionMember, DerivedPrimitive, ListItem, IsID, IsIDREFS,
-// IsNilled, NoTypedValue -- and each one of them has, at some point in this repository, been
+// IsNilled, NoTypedValue, MixedContent -- and each one of them has, at some point in this repository, been
 // dropped by a copy site that hand-picked the fields it thought mattered. Each
 // omission was silent and each produced a confidently wrong answer rather than
 // a missing one: a union-typed value atomising to xs:untypedAtomic, fn:id
@@ -1851,7 +1861,7 @@ func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem 
 // is-idrefs ON, which would make a copy of a non-ID node inherit a marking the
 // original does not have. The invariant SetTypeAnnotation protects is upheld
 // here by construction: the resolved fields cannot outlive their annotation,
-// because src is a coherent node and all eight fields travel together.
+// because src is a coherent node and all nine fields travel together.
 func (n *Node) CopyTypingFrom(src *Node) {
 	n.TypeAnnotation = src.TypeAnnotation
 	n.UnionMember = src.UnionMember
@@ -1861,6 +1871,7 @@ func (n *Node) CopyTypingFrom(src *Node) {
 	n.IsIDREFS = src.IsIDREFS
 	n.IsNilled = src.IsNilled
 	n.NoTypedValue = src.NoTypedValue
+	n.MixedContent = src.MixedContent
 }
 
 // Typing is the complete set of PSVI properties an assessment concludes about
@@ -1875,7 +1886,7 @@ func (n *Node) CopyTypingFrom(src *Node) {
 // validated this node. The validator holds the right schema at the right
 // moment; Typing is the shape that lets it say so.
 //
-// The field list is CopyTypingFrom's, and deliberately the same one: eight
+// The field list is CopyTypingFrom's, and deliberately the same one: nine
 // properties travel together or the copy is wrong, and every historical bug in
 // this area was a hand-picked subset of them. A new PSVI property must be
 // added here, to CopyTypingFrom and to CopyTypingStrippedFrom together.
@@ -1892,6 +1903,7 @@ type Typing struct {
 	IsIDREFS         bool
 	IsNilled         bool
 	NoTypedValue     bool
+	MixedContent     bool
 }
 
 // TypingOf reads a node's PSVI properties out as a Typing. A nil node has none.
@@ -1908,6 +1920,7 @@ func TypingOf(n *Node) Typing {
 		IsIDREFS:         n.IsIDREFS,
 		IsNilled:         n.IsNilled,
 		NoTypedValue:     n.NoTypedValue,
+		MixedContent:     n.MixedContent,
 	}
 }
 
@@ -1929,6 +1942,7 @@ func (n *Node) ApplyTyping(t Typing) {
 	n.IsIDREFS = t.IsIDREFS
 	n.IsNilled = t.IsNilled
 	n.NoTypedValue = t.NoTypedValue
+	n.MixedContent = t.MixedContent
 }
 
 // CopyTypingStrippedFrom copies onto n the PSVI properties of src that survive
@@ -1975,6 +1989,7 @@ func (n *Node) CopyTypingStrippedFrom(src *Node) {
 	// is a conclusion of an assessment, and a stripped tree is one nothing
 	// assessed. Every element of it is xs:untypedAtomic and atomizes.
 	n.NoTypedValue = false
+	n.MixedContent = false
 }
 
 // StripTyping clears in place every PSVI property that stripping removes,

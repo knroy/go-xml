@@ -2075,6 +2075,14 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 		ct.Content == ContentElementOnly {
 		el.NoTypedValue = true
 	}
+	// Mixed content is recorded for the serializers, which must not indent
+	// it (Serialization 3.1 §5.1.4); the annotation of an anonymous mixed
+	// type is "anyType" and cannot say so. xs:anyType itself is mixed too,
+	// but the same section lets its content be indented, so it is left out.
+	if ct, ok := typ.(*ComplexType); ok && ct != nil &&
+		ct.Content == ContentMixed && ct.Name != xsName("anyType") {
+		el.MixedContent = true
+	}
 	if n := typ.TypeName(); n.Local != "" {
 		v.schema.setResolvedAnnotation(el, xdm.AnnotationName(n.URI, n.Local), typ)
 		return

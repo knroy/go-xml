@@ -23,7 +23,7 @@ Current position:
 | XSLT 3.0 | 99.80% — 11,495 of 11,518 in scope (23 failing); 3 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,579 `func Test` declarations, clean under `-race` |
+| Tests | 2,582 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -97,6 +97,17 @@ serialisers cannot disagree. **`suppress-indentation`** was fixed in the same
 pass and was wrong in a way the audit had not predicted: it suppressed
 indentation document-wide, where `serialize-xml-108` requires the named
 element to keep its own indentation and only its content to be spared.
+
+**Both serialisers now follow every `indent` constraint of Serialization 3.1
+§5.1.4.** `fn:serialize` spared only the immediate content of a
+`suppress-indentation` element and ignored `xml:space="preserve"`; both now
+cover the whole subtree, as `xsl:output` already did. Both serialisers also
+indented typed simple content (a validated `xs:string` of `"  "` came back with
+a newline in it) and typed mixed content. Whitespace is now added only inside
+an untyped or `xs:anyType` element with element children, or an element whose
+validated content model is element-only. An anonymous mixed type is annotated
+`anyType` just as `xs:anyType` is, so the validator records mixed content on
+the node (`xdm.Node.MixedContent`) for the serialisers to read.
 
 **`normalization-form`** is now read too, in both the map and element forms,
 and an unsupported form is `SEPM0017` rather than silence. Normalization is

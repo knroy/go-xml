@@ -818,6 +818,42 @@ func hasTextChild(n *xdm.Node) bool {
 	return false
 }
 
+// mayIndentContent reports whether Serialization 3.1 §5.1.4 lets whitespace
+// be added in an element's immediate content: an element annotated
+// xs:untyped or xs:anyType (or not annotated) with element children, or one
+// whose content model is element-only, which the validator records as
+// NoTypedValue. Simple and empty content MUST NOT be indented, since that
+// changes the typed value, and typed mixed content SHOULD NOT. Kept
+// identical to the copy in xslt/serialize.go.
+func mayIndentContent(n *xdm.Node) bool {
+	hasElem := false
+	for _, c := range n.Children {
+		if c.Kind == xdm.KindElement {
+			hasElem = true
+			break
+		}
+	}
+	if !hasElem {
+		return false
+	}
+	switch n.TypeAnnotation {
+	case "", "untyped":
+		return true
+	case "anyType":
+		// An anonymous mixed type annotates as anyType too; MixedContent
+		// tells it from a genuine xs:anyType element.
+		return n.NoTypedValue || !n.MixedContent
+	}
+	return n.NoTypedValue
+}
+
+// xmlSpacePreserve reports whether an element declares xml:space="preserve",
+// under which §5.1.4 forbids adding whitespace anywhere in its content.
+func xmlSpacePreserve(n *xdm.Node) bool {
+	a := n.Attr(xdm.NSXML, "space")
+	return a != nil && a.Value == "preserve"
+}
+
 // hasCommentOrPIChild reports whether an element holds a comment or a
 // processing instruction, which the html method never indents around.
 func hasCommentOrPIChild(n *xdm.Node) bool {
@@ -954,10 +990,23 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// sits -- that is decided by its parent, one level up -- which is
 		// what QT3 serialize-xml-008 and -108 assert by requiring
 		// "\n\s+<p>" to match while "\n\s+<code>" does not.
+		//
+		// Serialization 3.1 §5.1.4 forbids added whitespace in the whole
+		// content of a suppress-indentation element and wherever
+		// xml:space="preserve" is in force, not only in the immediate
+		// content, so a suppressed element passes indent=false down to its
+		// whole subtree, as xslt/serialize.go's nodeNoIndent does. The same
+		// section licenses indenting only untyped element-only content and
+		// typed element-only content; mayIndentContent decides that.
 		indentChildren := opts.indent && !hasTextChild(n) &&
-			!opts.suppressIndent[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}]
+			!opts.suppressIndent[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] &&
+			!xmlSpacePreserve(n) && mayIndentContent(n)
 		if indentChildren && opts.method == "html" && hasCommentOrPIChild(n) {
 			indentChildren = false
+		}
+		childOpts := opts
+		if !indentChildren {
+			childOpts.indent = false
 		}
 		for _, c := range n.Children {
 			if indentChildren {
@@ -971,7 +1020,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 				sb.WriteString("]]>")
 				continue
 			}
-			serializeNode(sb, c, opts, depth+1)
+			serializeNode(sb, c, childOpts, depth+1)
 		}
 		if indentChildren {
 			writeIndent(sb, depth)
