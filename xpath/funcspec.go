@@ -178,6 +178,6 @@ func parseSpecName(s string) (xdm.QName, bool) {
 
 // specKey keys the manifest the same way Library keys its functions, so the
 // two can be compared without a second convention.
-func specKey(name xdm.QName, arity int) string {
-	return fmt.Sprintf("%s#%d", name.Clark(), arity)
+func specKey(name xdm.QName, arity int) fnKey {
+	return libKey(name, arity)
 }

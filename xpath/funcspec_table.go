@@ -545,7 +545,7 @@ var specSignatures = func() map[string][]string {
 // immutable after construction, so a lookup needs no lock.
 var (
 	functionSpecsOnce sync.Once
-	functionSpecs     map[string][]SequenceType
+	functionSpecs     map[fnKey][]SequenceType
 )
 
 // lookupSpecParams returns the declared parameter types of a function, if the
@@ -567,7 +567,7 @@ func lookupSpecParams(name xdm.QName, arity int) ([]SequenceType, bool) {
 // that makes an unknown spelling subsume only itself in subtype.go. The
 // enforcement test reports such an entry, so it cannot hide.
 func buildFunctionSpecs() {
-	functionSpecs = map[string][]SequenceType{}
+	functionSpecs = map[fnKey][]SequenceType{}
 	for key, sig := range specSignatures {
 		name, arity, ok := splitSpecEntryKey(key)
 		if !ok || len(sig) < 1 {
