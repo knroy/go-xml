@@ -193,10 +193,8 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 	// range may name more integers than the item limit allows, and building
 	// them to find out whether one value is among them is the wrong shape of
 	// work regardless.
-	valueOpFor := map[string]string{
-		"=": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge",
-	}
-	if got, ok, err := rangeContains(ctx, e, valueOpFor[e.Op]); err != nil {
+	valueOp := generalValueOp(e.Op)
+	if got, ok, err := rangeContains(ctx, e, valueOp); err != nil {
 		return nil, err
 	} else if ok {
 		return xdm.One(xdm.NewBoolean(got)), nil
@@ -236,10 +234,6 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 		}
 	}
 
-	valueOp := map[string]string{
-		"=": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge",
-	}[e.Op]
-
 	for _, li := range la {
 		for _, ri := range ra {
 			if err := ctx.Err(); err != nil {
@@ -259,6 +253,27 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 		}
 	}
 	return xdm.One(xdm.NewBoolean(false)), nil
+}
+
+// generalValueOp names the value comparison a general comparison operator
+// applies to each pair. A switch rather than a map literal: the literal was
+// built on every evaluation of the comparison.
+func generalValueOp(op string) string {
+	switch op {
+	case "=":
+		return "eq"
+	case "!=":
+		return "ne"
+	case "<":
+		return "lt"
+	case "<=":
+		return "le"
+	case ">":
+		return "gt"
+	case ">=":
+		return "ge"
+	}
+	return ""
 }
 
 // compareValues compares two atomic values with a value-comparison operator.
