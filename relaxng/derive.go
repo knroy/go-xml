@@ -335,21 +335,64 @@ func listDeriv(p pattern, tokens []string, ctx nsContext) pattern {
 // pattern still live means it went unused, and an unused attributePat cannot be
 // satisfied later.
 func startTagCloseDeriv(p pattern) pattern {
+	q, _ := startTagCloseDerivCh(p)
+	return q
+}
+
+// startTagCloseDerivCh is startTagCloseDeriv reporting whether anything
+// changed. A subtree holding no attributePat comes back as it went in, so it
+// is not rebuilt -- and its choices not deduplicated again by choice() --
+// once per element when there is nothing to discard.
+func startTagCloseDerivCh(p pattern) (pattern, bool) {
+	if r, ok := p.(*refPat); ok {
+		if r.attrFree.Load() {
+			return p, false
+		}
+		q, ch := startTagCloseDerivCh(expand(r))
+		if !ch {
+			r.attrFree.Store(true)
+			return p, false
+		}
+		return q, true
+	}
 	switch t := expand(p).(type) {
 	case afterPat:
-		return after(startTagCloseDeriv(t.Left), t.Right)
+		l, ch := startTagCloseDerivCh(t.Left)
+		if !ch {
+			return p, false
+		}
+		return after(l, t.Right), true
 	case choicePat:
-		return choice(startTagCloseDeriv(t.Left), startTagCloseDeriv(t.Right))
+		l, chl := startTagCloseDerivCh(t.Left)
+		r, chr := startTagCloseDerivCh(t.Right)
+		if !chl && !chr {
+			return p, false
+		}
+		return choice(l, r), true
 	case groupPat:
-		return group(startTagCloseDeriv(t.Left), startTagCloseDeriv(t.Right))
+		l, chl := startTagCloseDerivCh(t.Left)
+		r, chr := startTagCloseDerivCh(t.Right)
+		if !chl && !chr {
+			return p, false
+		}
+		return group(l, r), true
 	case interleavePat:
-		return interleave(startTagCloseDeriv(t.Left), startTagCloseDeriv(t.Right))
+		l, chl := startTagCloseDerivCh(t.Left)
+		r, chr := startTagCloseDerivCh(t.Right)
+		if !chl && !chr {
+			return p, false
+		}
+		return interleave(l, r), true
 	case oneOrMorePat:
-		return oneOrMore(startTagCloseDeriv(t.Pattern))
+		q, ch := startTagCloseDerivCh(t.Pattern)
+		if !ch {
+			return p, false
+		}
+		return oneOrMore(q), true
 	case attributePat:
-		return notAllowedPat{}
+		return notAllowedPat{}, true
 	}
-	return p
+	return p, false
 }
 
 // endTagDeriv is the derivative with respect to an element's end tag.

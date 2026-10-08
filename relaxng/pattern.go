@@ -13,7 +13,11 @@
 // was written against.
 package relaxng
 
-import "github.com/knroy/go-xml/xdm"
+import (
+	"sync/atomic"
+
+	"github.com/knroy/go-xml/xdm"
+)
 
 // pattern is a RELAX NG pattern.
 //
@@ -117,6 +121,10 @@ type refPat struct {
 	done   bool
 	// name is for error messages.
 	name string
+	// attrFree records that startTagCloseDeriv leaves the expansion
+	// unchanged. It depends only on the schema, so it is learnt once and
+	// shared by every validation.
+	attrFree atomic.Bool
 }
 
 // get expands the reference.
