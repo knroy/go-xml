@@ -207,6 +207,9 @@ func (v *validator) checkIdentityConstraints(el *xdm.Node, decl *ElementDecl, ch
 	if decl == nil || len(decl.IdentityConstraints) == 0 {
 		return merged
 	}
+	if merged == nil {
+		merged = icTables{}
+	}
 
 	// key and unique are evaluated before keyref, because a keyref on the
 	// same element may refer to a key on that element.
@@ -248,10 +251,17 @@ func (v *validator) checkIdentityConstraints(el *xdm.Node, decl *ElementDecl, ch
 // after merging — checkIdentityConstraints, which passes merged[ic] to
 // buildNodeTable as below — is reading the merged table this returns, which is
 // the adopted one, and buildNodeTable does not write to it.
+//
+// It returns nil when no child has a table, which is every element outside a
+// constraint's scope: allocating an empty map for each of them was the rest
+// of the bookkeeping a schema without constraints paid for.
 func mergeTables(children []icTables) icTables {
-	out := icTables{}
+	var out icTables
 	for _, child := range children {
 		for ic, tbl := range child {
+			if out == nil {
+				out = icTables{}
+			}
 			existing, ok := out[ic]
 			if !ok {
 				out[ic] = tbl
@@ -693,33 +703,6 @@ func (v *validator) frontier(el *xdm.Node, ic *IdentityConstraint) []*xdm.Node {
 		v.icStats.NodesVisited += uint64(len(out))
 	}
 	return out
-}
-
-// hasIdentityConstraints reports whether any declaration in the schema carries
-// an identity constraint, so that the per-element bookkeeping the walk needs
-// can be skipped entirely for the schemas that have none.
-func (s *Schema) hasIdentityConstraints() bool {
-	for _, d := range s.Elements {
-		if d != nil && len(d.IdentityConstraints) > 0 {
-			return true
-		}
-	}
-	for _, t := range s.Types {
-		ct, ok := t.(*ComplexType)
-		if !ok || ct.Particle == nil {
-			continue
-		}
-		found := false
-		walkParticleElements(ct.Particle, map[*Particle]bool{}, func(d *ElementDecl) {
-			if len(d.IdentityConstraints) > 0 {
-				found = true
-			}
-		})
-		if found {
-			return true
-		}
-	}
-	return false
 }
 
 // declaresConstraint reports whether the declaration governing el carries ic.

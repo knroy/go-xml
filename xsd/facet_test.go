@@ -2,7 +2,6 @@ package xsd
 
 import (
 	"fmt"
-	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -68,15 +67,7 @@ func TestCountDigits(t *testing.T) {
 		{"-0.001", 3, 3},
 	}
 	for _, c := range cases {
-		v, ok := new(big.Rat).SetString(c.lexical)
-		if !ok {
-			t.Fatalf("bad test input %q", c.lexical)
-		}
-		total, frac, ok := countDigits(v)
-		if !ok {
-			t.Errorf("countDigits(%s) reported no terminating expansion", c.lexical)
-			continue
-		}
+		total, frac := countDigits(c.lexical)
 		if total != c.wantTotal || frac != c.wantFrac {
 			t.Errorf("countDigits(%s) = (%d, %d), want (%d, %d)",
 				c.lexical, total, frac, c.wantTotal, c.wantFrac)
@@ -403,14 +394,7 @@ func TestCountDigitsUnbounded(t *testing.T) {
 		if n > 0 {
 			lex = "0." + strings.Repeat("0", n-1) + "1"
 		}
-		v, ok := new(big.Rat).SetString(lex)
-		if !ok {
-			t.Fatalf("bad test input for n=%d", n)
-		}
-		total, frac, ok := countDigits(v)
-		if !ok {
-			t.Fatalf("n=%d: countDigits reported no terminating expansion", n)
-		}
+		total, frac := countDigits(lex)
 		wantTotal, wantFrac := uint64(n), uint64(n)
 		if n == 0 {
 			wantTotal = 1
@@ -427,21 +411,13 @@ func TestCountDigitsUnbounded(t *testing.T) {
 func TestCountDigitsLargeInteger(t *testing.T) {
 	for _, n := range []int{100, 4097, 20000} {
 		lex := "1" + strings.Repeat("0", n)
-		v, _ := new(big.Rat).SetString(lex)
-		total, frac, ok := countDigits(v)
-		if !ok {
-			t.Fatalf("n=%d: no terminating expansion", n)
-		}
+		total, frac := countDigits(lex)
 		if total != uint64(n+1) || frac != 0 {
 			t.Errorf("n=%d: countDigits = (%d, %d), want (%d, 0)", n, total, frac, n+1)
 		}
 		// Same magnitude, but with the digits after the point.
 		lex = "1." + strings.Repeat("0", n-1) + "1"
-		v, _ = new(big.Rat).SetString(lex)
-		total, frac, ok = countDigits(v)
-		if !ok {
-			t.Fatalf("n=%d fraction: no terminating expansion", n)
-		}
+		total, frac = countDigits(lex)
 		if total != uint64(n+1) || frac != uint64(n) {
 			t.Errorf("n=%d fraction: countDigits = (%d, %d), want (%d, %d)",
 				n, total, frac, n+1, n)
@@ -450,19 +426,18 @@ func TestCountDigitsLargeInteger(t *testing.T) {
 }
 
 // TestCountDigitsNonTerminating pins that a value with no finite decimal
-// expansion is reported as such rather than given a truncated count.
+// expansion never reaches a digit count.
 //
-// No xs:decimal literal produces one — isDecimalLexical admits only sign,
-// digits and a single point, so the denominator is always a power of ten — but
-// countDigits must not answer with a number if one ever arrives.
+// countDigits reads the count off a decimal literal, whose grammar — sign,
+// digits and a single point — can only write terminating values. A count must
+// never be invented for one that does not terminate, so what keeps 1/3 out is
+// the lexical check, and checkDigitFacets declines to count anything else.
 func TestCountDigitsNonTerminating(t *testing.T) {
+	one := uint64(1)
+	steps := []facetStep{{typ: &SimpleType{}, facets: &FacetSet{TotalDigits: &one}}}
 	for _, lex := range []string{"1/3", "2/7", "-1/6"} {
-		v, ok := new(big.Rat).SetString(lex)
-		if !ok {
-			t.Fatalf("bad test input %q", lex)
-		}
-		if _, _, ok := countDigits(v); ok {
-			t.Errorf("countDigits(%s) claimed a terminating expansion", lex)
+		if err := checkDigitFacets(steps, lex); err != nil {
+			t.Errorf("checkDigitFacets(%s) counted a non-decimal literal: %v", lex, err)
 		}
 	}
 	// The upstream lexical check is what makes this unreachable in

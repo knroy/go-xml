@@ -812,6 +812,16 @@ func nsRankBase(p *Node) int {
 func (n *Node) StringValue() string {
 	switch n.Kind {
 	case KindDocument, KindElement:
+		// An element holding one text node, or nothing, is the usual
+		// shape of a simple value, and has nothing to concatenate.
+		switch len(n.Children) {
+		case 0:
+			return ""
+		case 1:
+			if c := n.Children[0]; c.Kind == KindText {
+				return c.Value
+			}
+		}
 		var sb strings.Builder
 		n.appendText(&sb)
 		return sb.String()
