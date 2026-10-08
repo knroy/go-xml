@@ -25,7 +25,29 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | RELAX NG `choice` kept duplicate alternatives | Nested `oneOrMore` doubled the derivative per child and hit the size bound on DocBook `xref.001`; equal alternatives are merged. | [`d8f0ac1`][d8f0ac1] |
 | RELAX NG `<include ns>` leaked into definitions reached through `<ref>`, `combine` and nested grammars | Each definition now compiles under the ns of the document it was written in (§4.8). | [`c9c7c79`][c9c7c79] |
 | RELAX NG read an explicit `ns=""` as absent | An inherited ns overrode it in names, `nsName` and QName values; presence is now checked (§4.8). | [`5cf8104`][5cf8104] |
+| Text split by many CDATA sections was joined piece by piece | Parsing was quadratic in the number of pieces (200k sections took 4.4 s); each text node is now joined once (30 ms). | [`0604061`][0604061] |
+| XSD identity-constraint scopes on local and group declarations were missed | A recursive key re-reported each failure once per nesting level; scopes are now tracked on the validation walk. | [`1f80934`][1f80934] |
+| `fn:transform` ignored a mistyped option | Every typed option now follows the F&O §1.5.4 conversion rules: arrays atomize, a string for an `xs:QName` is `XPTY0004`. | [`84bbe23`][84bbe23] |
+| Nested `fn:transform` ran `xsl:assert` by default and ignored `enable-messages` | `enable-assertions` (default false) and `enable-messages=false` now apply; `terminate="yes"` still ends the transform. | [`a2603d3`][a2603d3] |
 | Compact syntax refused a free-standing annotation element among definitions | DocBook's `s:ns [ ... ]` was read as a datatype name. The grammar allows it; it is now skipped like any annotation. | [`197eaad`][197eaad] |
+
+### Changed — performance
+
+From [docs/profiling.md](docs/profiling.md). Outputs are byte-identical on every benchmark workload and every conformance suite is unchanged.
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| Template patterns bound `current()` before testing the node | Each failed candidate cost two context copies; a pattern now rejects on its node test first (DocBook ~3× less CPU). | [`262366d`][262366d] |
+| Every function call formatted a `{uri}local#arity` string key | The function library is keyed by a struct. | [`9bd1c79`][9bd1c79] |
+| A path step copied the evaluation context per input node | Plain axis steps get the context node directly (Peppol CEN 37 → 9 ms per invoice with the two above). | [`4f0cc55`][4f0cc55] |
+| `SortDocumentOrder` sorted step results already in order | A one-tree, strictly increasing sequence is returned as it is. | [`1c7fb99`][1c7fb99] |
+| General comparisons built an operator map on every evaluation | The operator maps to its value comparison through a switch. | [`6ce285f`][6ce285f] |
+| `fn:transform` recompiled its stylesheet on every call | Compiled stylesheets are kept in a bounded per-stylesheet LRU keyed on every compile input; `cache=false` bypasses it. | [`e00735a`][e00735a] |
+| XQuery `for … where A op B` value joins ran as nested loops | They run as a hash or cached-key join when every call resolves to a built-in, falling back on any error (XMark q8 3.3 s → 14 ms). | [`2aa49d8`][2aa49d8] |
+| XSD parsed every `xs:integer` into a `big.Rat` for bounds and digit facets | Bounds are skipped without bound facets and digits are counted from the lexical form. | [`62c7117`][62c7117] |
+| XSD kept identity-constraint bookkeeping for every node | It is kept only inside a constraint's scope; with the collapse, primitive and `StringValue` fast paths, `xp-striding` validates 3.4× faster. | [`949e0fa`][949e0fa] |
+| Every parsed node was its own allocation | Nodes come from per-parse chunks, and rarely set fields sit behind a lazy pointer (node 296 → 280 B). | [`bcae9bd`][bcae9bd] |
+| Parse allocated every token, name, attribute slice and whitespace text | The tokenizer reuses tokens and buffers and interns names; a 10 MB parse makes 70% fewer allocations and runs 34% faster. | [`446432b`][446432b] |
 
 ### Fixed — release process
 
@@ -1174,6 +1196,21 @@ here so every entry in this file sits under a release.
 [197eaad]: https://github.com/knroy/go-xml/commit/197eaad
 [cec5f6f]: https://github.com/knroy/go-xml/commit/cec5f6f
 [416ee50]: https://github.com/knroy/go-xml/commit/416ee50
+[0604061]: https://github.com/knroy/go-xml/commit/0604061
+[1f80934]: https://github.com/knroy/go-xml/commit/1f80934
+[84bbe23]: https://github.com/knroy/go-xml/commit/84bbe23
+[a2603d3]: https://github.com/knroy/go-xml/commit/a2603d3
+[262366d]: https://github.com/knroy/go-xml/commit/262366d
+[9bd1c79]: https://github.com/knroy/go-xml/commit/9bd1c79
+[4f0cc55]: https://github.com/knroy/go-xml/commit/4f0cc55
+[1c7fb99]: https://github.com/knroy/go-xml/commit/1c7fb99
+[6ce285f]: https://github.com/knroy/go-xml/commit/6ce285f
+[e00735a]: https://github.com/knroy/go-xml/commit/e00735a
+[2aa49d8]: https://github.com/knroy/go-xml/commit/2aa49d8
+[62c7117]: https://github.com/knroy/go-xml/commit/62c7117
+[949e0fa]: https://github.com/knroy/go-xml/commit/949e0fa
+[bcae9bd]: https://github.com/knroy/go-xml/commit/bcae9bd
+[446432b]: https://github.com/knroy/go-xml/commit/446432b
 [c7769f5]: https://github.com/knroy/go-xml/commit/c7769f5
 [b44313c]: https://github.com/knroy/go-xml/commit/b44313c
 [d8f0ac1]: https://github.com/knroy/go-xml/commit/d8f0ac1

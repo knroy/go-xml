@@ -57,6 +57,9 @@
   Xerces-J, libxml2 and `encoding/xml`: where it is faster (anything that
   starts a process), where it is slower (a warm JVM, value joins, memory per
   byte), and the bugs the agreement check found.
+* **[Profiling](profiling.md)** — the causes behind the benchmark's losses
+  (allocation churn, pattern dispatch, nested-loop joins, node size) and the
+  status of each fix.
 * **[Recipes](recipes.md)** — batch validation, splitting documents, reporting
   line numbers, rendering to HTML, custom document resolvers, finding elements
   without XPath.
