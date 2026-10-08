@@ -35,6 +35,14 @@ type Context struct {
 	Vars   map[string]xdm.Sequence
 	Parent *Context
 
+	// varURI, varLocal and varVal are the one binding WithVar adds, held
+	// inline rather than in a one-entry Vars map: that map was the largest
+	// allocation site in every stylesheet profiled. A scope holds the inline
+	// pair when varLocal is non-empty (a variable name always has a local
+	// part), and it is consulted before Vars at the same level.
+	varURI, varLocal string
+	varVal           xdm.Sequence
+
 	// Funcs resolves function calls. Supplied by the caller so that XSLT can
 	// add xsl:function declarations and extension functions without this
 	// package knowing about them.
@@ -711,7 +719,12 @@ func (c *Context) WithFocus(item xdm.Item, pos, size int) *Context {
 // value.
 func (c *Context) WithVar(name xdm.QName, val xdm.Sequence) *Context {
 	n := *c
-	n.Vars = map[string]xdm.Sequence{name.Clark(): val}
+	n.Vars = nil
+	n.varURI, n.varLocal, n.varVal = name.URI, name.Local, val
+	if name.Local == "" { // not a variable name, but keep it resolvable
+		n.Vars = map[string]xdm.Sequence{name.Clark(): val}
+		n.varURI, n.varVal = "", nil
+	}
 	n.Parent = c
 	return &n
 }
@@ -742,8 +755,17 @@ func (c *Context) LookupVar(name xdm.QName) (xdm.Sequence, bool) {
 // lookupVarPlain is LookupVar without the host's qualifier, and is what the
 // qualifier's own answer is resolved through.
 func (c *Context) lookupVarPlain(name xdm.QName) (xdm.Sequence, bool) {
-	key := name.Clark()
+	key, keyed := "", false
 	for s := c; s != nil; s = s.Parent {
+		if s.varLocal != "" && s.varLocal == name.Local && s.varURI == name.URI {
+			return s.varVal, true
+		}
+		if len(s.Vars) == 0 {
+			continue
+		}
+		if !keyed {
+			key, keyed = name.Clark(), true
+		}
 		if v, ok := s.Vars[key]; ok {
 			return v, true
 		}

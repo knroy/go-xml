@@ -141,9 +141,10 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			// that is in scope throughout the module. The focus has no such
 			// problem -- it is a property of where the reference stands, and
 			// that is exactly what 3.1.6 says to keep.
-			// Bindings are the Vars map plus the Parent chain lookups walk,
-			// so both come from the call.
+			// Bindings are the Vars map, the inline WithVar pair and the
+			// Parent chain lookups walk, so all three come from the call.
 			sub.Vars, sub.Parent = c.Vars, c.Parent
+			sub.varURI, sub.varLocal, sub.varVal = c.varURI, c.varLocal, c.varVal
 			// The retained focus does not retain the host's dynamic-call
 			// markers. XSLT 3.0 24.3 says the XSLT extensions to the dynamic
 			// context are not part of a function item's closure, so a marker
