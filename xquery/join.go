@@ -156,7 +156,9 @@ type joinCache struct {
 
 func (c *joinClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
 	if out, n, ok := c.join(in, ctx); ok {
-		// What the for clause would have charged before the where clause ran.
+		// What the join materialised: each S it built, and the tuples it
+		// kept. A cached S is held once, so it is charged once, not once per
+		// tuple as the nested loop re-materialises it (profiling round 2, X1).
 		if err := ctx.xp.ChargeItems(n); err != nil {
 			return nil, err
 		}
@@ -189,11 +191,14 @@ func (c *joinClause) join(in []tuple, ctx *evalContext) (out []tuple, n int, ok 
 			return nil, 0, false
 		}
 		sub := t.sub(ctx)
+		prev := state.get(c)
 		e := c.cache(sub, state)
 		if e == nil {
 			return nil, 0, false
 		}
-		n += len(e.items)
+		if e != prev {
+			n += len(e.items)
+		}
 		o, err := c.outer.Eval(sub.xp)
 		if err != nil {
 			return nil, 0, false
@@ -206,6 +211,7 @@ func (c *joinClause) join(in []tuple, ctx *evalContext) (out []tuple, n int, ok 
 		if !ok {
 			return nil, 0, false
 		}
+		n += len(hits)
 		for _, i := range hits {
 			out = append(out, t.bind(c.f.name, xdm.One(e.items[i])))
 		}

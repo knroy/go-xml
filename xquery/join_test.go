@@ -391,3 +391,32 @@ func TestJoinRespectsHostFunctions(t *testing.T) {
 		t.Fatalf("with the built-in re-added: got %q, want %q", got, "3 3")
 	}
 }
+
+// TestJoinChargesWhatItHolds pins X1 from profiling round 2: the join holds S
+// once, so it charges S once, not |S| per outer tuple as the nested loop
+// would re-materialise it. 2,000 × 3,000 charged per tuple is 6,000,000
+// items, over MaxItems; held once it is 3,000 plus the kept tuples. A result
+// that really is too large is still refused.
+func TestJoinChargesWhatItHolds(t *testing.T) {
+	const data = `let $ps := for $i in 1 to 2000 return <p id="{$i}"/>
+	  let $os := for $i in 1 to 3000 return <o k="{$i mod 2000}"/> `
+	for _, c := range []struct{ name, src, want string }{
+		{"2000 x 3000 equality join", data +
+			`return sum(for $p in $ps return count(for $o in $os where $o/@k = $p/@id return $o))`, "2999"},
+		{"2000 x 3000 kept tuples over budget", data +
+			`return sum(for $p in $ps return count(for $o in $os where $o/@k != $p/@id return $o))`, "XPDY0130"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			q, err := Compile(c.src, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if countJoins(q) == 0 {
+				t.Fatal("no join planned")
+			}
+			if got := runQuery(t, q); !strings.Contains(got, c.want) {
+				t.Fatalf("got %.200q, want %s", got, c.want)
+			}
+		})
+	}
+}
