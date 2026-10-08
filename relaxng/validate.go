@@ -340,6 +340,22 @@ func (v *validator) childrenDeriv(p pattern, el *xdm.Node) pattern {
 	// over each piece separately consumes the pattern on the first and then
 	// fails on the second, so a document differing only in where its comments
 	// sit would validate differently.
+	//
+	// Whitespace-only text follows section 6.2.7 of the RELAX NG
+	// specification: when the element has element children, it is stripped
+	// before matching; when it is the element's only content, it may match
+	// either as text or as nothing, which is choice(p, textDeriv). Matching it
+	// as text alone is wrong where the content is a choice between text and
+	// elements: <p>\n <f>a</f>\n</p> against choice(zeroOrMore(text),
+	// oneOrMore(element f)) took the text branch on the first newline, which
+	// left no branch for <f>. Six DocBook documents were rejected that way.
+	hasElem := false
+	for _, c := range kids {
+		if c.Kind == xdm.KindElement {
+			hasElem = true
+			break
+		}
+	}
 	for i := 0; i < len(kids); i++ {
 		c := kids[i]
 		if c.Kind == xdm.KindText {
@@ -348,7 +364,14 @@ func (v *validator) childrenDeriv(p pattern, el *xdm.Node) pattern {
 				sb.WriteString(kids[i].Value)
 			}
 			i--
-			p = v.textDeriv(p, sb.String(), nsContextOf(el))
+			switch s := sb.String(); {
+			case !whitespaceOnly(s):
+				p = textDeriv(p, s, nsContextOf(el))
+			case hasElem:
+				continue
+			default:
+				p = choice(p, textDeriv(p, s, nsContextOf(el)))
+			}
 		} else {
 			p = v.childDeriv(p, c)
 		}
