@@ -463,12 +463,16 @@ func (p *Pattern) matches(node *xdm.Node, ctx *xpath.Context, recovered *error) 
 	if !p.mayMatch(node) {
 		return false, nil
 	}
-	ctx = ctx.WithVar(currentVar, xdm.One(node))
-	// Section 24.3: the current output URI is cleared while evaluating a
-	// pattern. A pattern is matched against candidate nodes at moments that
-	// have nothing to do with which result tree is being written, and
-	// current-output-uri-008 asserts the absence directly.
-	ctx = ctx.WithVar(outputURIVar, xdm.Empty())
+	// A pattern with no predicate, no id() or key() call and no general form
+	// evaluates no expression, so neither binding could be observed.
+	if !p.predicateFree() {
+		ctx = ctx.WithVar(currentVar, xdm.One(node))
+		// Section 24.3: the current output URI is cleared while evaluating a
+		// pattern. A pattern is matched against candidate nodes at moments
+		// that have nothing to do with which result tree is being written,
+		// and current-output-uri-008 asserts the absence directly.
+		ctx = ctx.WithVar(outputURIVar, xdm.Empty())
+	}
 	for _, g := range p.general {
 		ok, err := g.matches(node, ctx)
 		if err != nil {
@@ -500,6 +504,25 @@ func (p *Pattern) matches(node *xdm.Node, ctx *xpath.Context, recovered *error) 
 		}
 	}
 	return false, nil
+}
+
+// predicateFree reports whether matching p evaluates no XPath expression:
+// every alternative is a walk of steps whose node tests are all it checks.
+func (p *Pattern) predicateFree() bool {
+	if len(p.general) > 0 {
+		return false
+	}
+	for _, a := range p.alts {
+		if a.call != nil {
+			return false
+		}
+		for _, s := range a.steps {
+			if len(s.preds) > 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // mayMatch is a necessary condition for a match that evaluates no predicate:

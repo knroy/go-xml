@@ -53,6 +53,15 @@ type runtime struct {
 	itemIDs map[any]int
 	ctx     *xpath.Context
 
+	// absent records which groups of context components clearMergeContext,
+	// withoutGroupingScope and clearRegexGroups have already bound to absent
+	// in ctx, so that the clears every template and function call runs can
+	// return rt unchanged instead of copying the runtime and the context
+	// three times each. withVar drops a group's bit whenever one of its
+	// variables is rebound, and the zero value claims nothing: code that
+	// gives a runtime a context not derived from its own must zero it.
+	absent uint8
+
 	// deferredErr holds the failure of a global whose evaluation is not by
 	// itself the transform's failure -- an abstract variable, whose body
 	// raises XTDE3052. The error is kept against the name so that a
@@ -299,7 +308,30 @@ func (rt *runtime) withSelection(t *Template, next int, mode string,
 func (rt *runtime) withVar(name xdm.QName, val xdm.Sequence) *runtime {
 	n := *rt
 	n.ctx = rt.ctx.WithVar(name, val)
+	if name.URI == internalNS {
+		n.absent &^= absentGroupOf(name)
+	}
 	return &n
+}
+
+// The groups of context components runtime.absent tracks.
+const (
+	absentMerge uint8 = 1 << iota
+	absentGrouping
+	absentRegex
+)
+
+// absentGroupOf names the group a variable belongs to, or 0.
+func absentGroupOf(name xdm.QName) uint8 {
+	switch name {
+	case currentMergeGroupVar, currentMergeKeyVar, currentMergeSourcesVar:
+		return absentMerge
+	case currentGroupVar, currentGroupingKeyVar, groupingScopeVar:
+		return absentGrouping
+	case regexGroupsVar:
+		return absentRegex
+	}
+	return 0
 }
 
 // --- Output construction ----------------------------------------------------

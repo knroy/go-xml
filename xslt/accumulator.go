@@ -464,6 +464,7 @@ func (rt *runtime) applyAccumRules(def *accumulatorDef, n *xdm.Node,
 	case best.body != nil:
 		r2 := rt.temporaryOutput()
 		r2.ctx = sub
+		r2.absent = 0
 		ob := newOutputBuilder(rt)
 		if err := execSequence(best.body, r2, ob); err != nil {
 			return nil, err

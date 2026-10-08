@@ -1222,7 +1222,12 @@ func currentMergeGroup(ctx *xpath.Context) (*mergeGroupBinding, error) {
 // merge-087, merge-088, merge-100 and merge-101 the XTDE3480/XTDE3510 tests
 // they are rather than working stylesheets.
 func (rt *runtime) clearMergeContext() *runtime {
+	if rt.absent&absentMerge != 0 {
+		return rt
+	}
 	sub := rt.withVar(currentMergeGroupVar, nil)
 	sub = sub.withVar(currentMergeKeyVar, nil)
-	return sub.withVar(currentMergeSourcesVar, nil)
+	sub = sub.withVar(currentMergeSourcesVar, nil)
+	sub.absent |= absentMerge
+	return sub
 }
