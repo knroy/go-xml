@@ -8,6 +8,8 @@ import (
 	"path"
 	"strings"
 	"sync"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 // A CatalogResolver answers schemaLocation from an in-memory table keyed by
@@ -145,7 +147,7 @@ func (r *CatalogResolver) Resolve(namespace, location, base string) (io.ReadClos
 		}
 	}
 	if doc != nil {
-		return io.NopCloser(strings.NewReader(string(doc.src))), doc.name, nil
+		return catalogReader{strings.NewReader(string(doc.src))}, doc.name, nil
 	}
 	if f != nil {
 		return f.Resolve(namespace, location, base)
@@ -161,6 +163,38 @@ func (r *CatalogResolver) Resolve(namespace, location, base string) (io.ReadClos
 	}
 	return nil, "", fmt.Errorf(
 		"no catalog entry for %s, and no fallback resolver is set", what)
+}
+
+// catalogReader is a document the catalog answered from its own table rather
+// than through its fallback. The type is the mark schemaParseOptions reads.
+type catalogReader struct{ *strings.Reader }
+
+func (catalogReader) Close() error { return nil }
+
+// schemaParseOptions returns the options a schema document read from rc is
+// parsed with: opts, except that a document a caller registered in a
+// CatalogResolver may carry a DOCTYPE.
+//
+// The W3C's schema for schemas declares its entities in an internal subset,
+// so a catalog holding it was unusable unless the caller set AllowDOCTYPE --
+// and that option applies to every schema document, including whatever a
+// fallback reads on an untrusted schema's say-so. A catalog entry is bytes the
+// caller chose; trusting it with an internal subset widens nothing else.
+// External entities stay as opts has them, and the entity budgets still apply.
+func schemaParseOptions(rc io.Reader, opts xdm.ParseOptions) xdm.ParseOptions {
+	if _, ok := rc.(catalogReader); ok {
+		opts.AllowDOCTYPE = true
+	}
+	return opts
+}
+
+// ParseDocument parses a schema document that a Resolver returned, with opts
+// except that a document a CatalogResolver answered from its own table may
+// carry a DOCTYPE. It is how a host that resolves and parses a schema itself
+// -- xsl:import-schema, XQuery's import schema -- keeps the catalog's
+// documents loadable without allowing a DOCTYPE in every schema it reads.
+func ParseDocument(rc io.Reader, opts xdm.ParseOptions) (*xdm.Tree, error) {
+	return xdm.Parse(rc, schemaParseOptions(rc, opts))
 }
 
 // lookup runs the three lookups in order of how specific they are, and

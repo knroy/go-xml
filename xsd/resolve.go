@@ -106,9 +106,12 @@ func (r multiRootFileResolver) Resolve(namespace, location, base string) (io.Rea
 	return nil, "", firstErr
 }
 
-// rootedFileResolver confines a default FileResolver to the directories the
-// caller's own arguments named.
-func rootedFileResolver(paths []string) Resolver {
+// RootedFileResolver returns the resolver LoadFile and LoadFiles install when
+// Options.Resolver is nil: file reads confined to the directories of the named
+// schema documents, the first that can answer winning. A caller that wraps the
+// default -- a CatalogResolver whose fallback should reach exactly what a plain
+// load would -- passes it the same paths.
+func RootedFileResolver(paths []string) Resolver {
 	seen := map[string]bool{}
 	var rs []*FileResolver
 	for _, p := range paths {

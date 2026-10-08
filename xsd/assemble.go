@@ -372,7 +372,7 @@ func LoadFile(path string, opts Options) (*Schema, error) {
 	}
 	defer rc.Close()
 
-	tree, err := xdm.Parse(rc, opts.ParseOptions)
+	tree, err := xdm.Parse(rc, schemaParseOptions(rc, opts.ParseOptions))
 	if err != nil {
 		return nil, fmt.Errorf("parsing schema %q: %w", path, err)
 	}
@@ -402,7 +402,7 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		// As in LoadFile, confined to what the caller named. Several
 		// paths may sit in several directories, so the grant is the set
 		// of their directories rather than one.
-		opts.Resolver = rootedFileResolver(paths)
+		opts.Resolver = RootedFileResolver(paths)
 	}
 	if opts.MaxDocuments == 0 {
 		opts.MaxDocuments = DefaultMaxDocuments
@@ -429,7 +429,7 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		if rc == nil {
 			return nil, fmt.Errorf("schema %q not found", path)
 		}
-		tree, err := xdm.Parse(rc, opts.ParseOptions)
+		tree, err := xdm.Parse(rc, schemaParseOptions(rc, opts.ParseOptions))
 		rc.Close()
 		if err != nil {
 			return nil, fmt.Errorf("parsing schema %q: %w", path, err)
@@ -1085,7 +1085,7 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 }
 
 func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespace string, doc *schemaDoc, isInclude, redefining bool) {
-	tree, err := xdm.Parse(rc, a.opts.ParseOptions)
+	tree, err := xdm.Parse(rc, schemaParseOptions(rc, a.opts.ParseOptions))
 	if err != nil {
 		a.p.errs = append(a.p.errs, errorAt(el, "src-resolve",
 			"parsing %q: %v", resolved, err))
