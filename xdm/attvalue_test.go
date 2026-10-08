@@ -240,3 +240,33 @@ func TestAttributeDefaultNormalization(t *testing.T) {
 		t.Errorf("written value = %q, want w", got)
 	}
 }
+
+// TestDTDLineEnds: §2.11's line-end handling covers the internal subset too,
+// so an entity value or attribute default holds the line ends content does —
+// under XML 1.1 NEL, U+2028 and CR NEL are each one LF, and in an attribute
+// value one space; under 1.0 NEL and U+2028 are characters, and the CR before
+// a NEL is a line end of its own.
+func TestDTDLineEnds(t *testing.T) {
+	const subset = "<!ENTITY e \"1\u00852 3\r\u00854\"><!ATTLIST r d CDATA \"1\u00852 3\r\u00854\">"
+	cases := []struct{ decl, content, attr, def string }{
+		{`<?xml version="1.1"?>`, "1\n2\n3\n4", "1 2 3 4", "1 2 3 4"},
+		{`<?xml version="1.0"?>`, "1\u00852 3\n\u00854", "1\u00852 3 \u00854", "1\u00852 3 \u00854"},
+	}
+	for _, c := range cases {
+		src := c.decl + "<!DOCTYPE r [" + subset + "]><r a=\"&e;\">&e;</r>"
+		tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
+		if err != nil {
+			t.Fatalf("%s: %v", c.decl, err)
+		}
+		r := tree.Root.ChildElements()[0]
+		if got := r.StringValue(); got != c.content {
+			t.Errorf("%s content: got %q, want %q", c.decl, got, c.content)
+		}
+		if got := r.Attr("", "a").Value; got != c.attr {
+			t.Errorf("%s attribute: got %q, want %q", c.decl, got, c.attr)
+		}
+		if got := r.Attr("", "d").Value; got != c.def {
+			t.Errorf("%s default: got %q, want %q", c.decl, got, c.def)
+		}
+	}
+}

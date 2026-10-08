@@ -137,6 +137,10 @@ func TestXML11(t *testing.T) {
 		{name: "restricted literal in comment", src: v11 + "<!--\x07-->", wantErr: syntax(1, "illegal character code U+0007")},
 		{name: "restricted literal in pi", src: v11 + "<?t \x07?>", wantErr: syntax(1, "illegal character code U+0007")},
 		{name: "NEL in comment", src: v11 + "<!--\u0085-->", want: pi + "<!--\u0085-->"},
+		{name: "1.1 line ends in doctype", src: v11 + "<!DOCTYPE a [<!ENTITY e \"1\u00852\u20283\r\u00854&#x85;\">]>",
+			want: pi + "<!DOCTYPE a [<!ENTITY e \"1\n2\n3\n4&#x85;\">]>"},
+		{name: "1.0 NEL in doctype kept", src: "<!DOCTYPE a [<!ENTITY e \"1\u00852\u20283\r\u00854\r\n5\r6\">]>",
+			want: "<!DOCTYPE a [<!ENTITY e \"1\u00852\u20283\n\u00854\n5\n6\">]>"},
 		{name: "stray decl", src: `<?xml version="1.0"?><a>` + `<?xml version="1.1"?>` + "\x07</a>",
 			wantErr: syntax(1, "illegal character code U+0007")},
 	})

@@ -635,8 +635,10 @@ func (d *Decoder) comment() (Token, error) {
 // without its body being read as quotes or levels. The first byte is taken as it stands: it neither
 // opens a quote nor a level, and cannot close the directive.
 //
-// parity: the text is returned raw, and a comment inside it is not checked
-// for "--".
+// Its line ends are folded to LF, by the rules of the document's version.
+//
+// parity: the text is otherwise returned raw, and a comment inside it is not
+// checked for "--".
 func (d *Decoder) directive(b byte) (Token, error) {
 	out := append(d.scratch[:0], b)
 	var quote byte
@@ -698,9 +700,48 @@ func (d *Decoder) directive(b byte) (Token, error) {
 			}
 		}
 	}
+	out = foldLineEnds(out, d.v11)
 	d.scratch = out
 	d.tokDir = Directive(out)
 	return &d.tokDir, nil
+}
+
+// foldLineEnds rewrites line ends to LF in place, §2.11: CR LF and a lone CR,
+// and under XML 1.1 (v11) NEL, U+2028 and CR NEL as well, so that a DTD's
+// entity values and attribute defaults hold the line ends content does. NEL
+// and U+2028 are UTF-8 sequences whose lead byte begins no other character,
+// so no other text can match.
+func foldLineEnds(b []byte, v11 bool) []byte {
+	if bytes.IndexByte(b, '\r') < 0 && (!v11 || bytes.IndexByte(b, 0xC2) < 0 && bytes.IndexByte(b, 0xE2) < 0) {
+		return b
+	}
+	w := 0
+	for i := 0; i < len(b); i++ {
+		switch {
+		case b[i] == '\r' && i+1 < len(b) && b[i+1] == '\n':
+			b[w] = '\n'
+			i++
+		case !v11:
+			if b[w] = b[i]; b[i] == '\r' {
+				b[w] = '\n'
+			}
+		case b[i] == '\r' && i+2 < len(b) && b[i+1] == 0xC2 && b[i+2] == 0x85:
+			b[w] = '\n'
+			i += 2
+		case b[i] == 0xC2 && i+1 < len(b) && b[i+1] == 0x85:
+			b[w] = '\n'
+			i++
+		case b[i] == 0xE2 && i+2 < len(b) && b[i+1] == 0x80 && b[i+2] == 0xA8:
+			b[w] = '\n'
+			i += 2
+		case b[i] == '\r':
+			b[w] = '\n'
+		default:
+			b[w] = b[i]
+		}
+		w++
+	}
+	return b[:w]
 }
 
 // until consumes input up to and including the first occurrence of term,
