@@ -141,18 +141,7 @@ func (e *PathExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		}
 		cur = xdm.One(ctx.Item)
 	}
-
-	for i, step := range e.Steps {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		next, err := evalStepOver(ctx, cur, step, i == len(e.Steps)-1)
-		if err != nil {
-			return nil, err
-		}
-		cur = next
-	}
-	return cur, nil
+	return evalRemainingSteps(ctx, cur, e.Steps)
 }
 
 // evalStepOver evaluates one step with each item of input as the context item,
@@ -769,9 +758,14 @@ func stepNeedsFocus(e Expr) bool {
 
 // evalRemainingSteps runs the steps after a self-rooted first step.
 func evalRemainingSteps(ctx *Context, cur xdm.Sequence, steps []Expr) (xdm.Sequence, error) {
-	for i, step := range steps {
+	for i := 0; i < len(steps); i++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		step := steps[i]
+		if d := fuseDescendant(steps, i); d != nil {
+			step = d
+			i++
 		}
 		next, err := evalStepOver(ctx, cur, step, i == len(steps)-1)
 		if err != nil {
@@ -780,6 +774,32 @@ func evalRemainingSteps(ctx *Context, cur xdm.Sequence, steps []Expr) (xdm.Seque
 		cur = next
 	}
 	return cur, nil
+}
+
+// fuseDescendant answers "//T", that is descendant-or-self::node() followed
+// by a child step, as the one step descendant::T when neither has a
+// predicate. The two select the same nodes: the children of a node or of any
+// of its descendants are its descendants, and neither axis reaches an
+// attribute or namespace node. Run as written, the first step materialises
+// and sorts every node below the context before the second visits each one's
+// children. A predicate rules it out: "//x[1]" numbers x among its siblings,
+// not among all descendants.
+func fuseDescendant(steps []Expr, i int) *Step {
+	if i+1 >= len(steps) {
+		return nil
+	}
+	dos, ok := steps[i].(*Step)
+	if !ok || dos.Axis != AxisDescendantOrSelf || len(dos.Predicates) != 0 {
+		return nil
+	}
+	if kt, ok := dos.Test.(*KindTest); !ok || !kt.Any {
+		return nil
+	}
+	child, ok := steps[i+1].(*Step)
+	if !ok || child.Axis != AxisChild || len(child.Predicates) != 0 {
+		return nil
+	}
+	return &Step{Axis: AxisDescendant, Test: child.Test}
 }
 
 // stepIsAxisStep reports whether a path step navigates an axis, as opposed to
