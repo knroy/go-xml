@@ -142,6 +142,13 @@ type Decoder struct {
 	// in Entity.
 	AttrEntity map[string]string
 
+	// Undeclared, when set, is asked about a reference to an entity that is
+	// neither predefined nor in Entity; if it reports true the reference is
+	// dropped instead of being an error. That is a non-validating
+	// processor's reading of a document whose declarations it may not have
+	// read (XML 1.0 §4.1, VC: Entity Declared); xdm decides when it applies.
+	Undeclared func(name string) bool
+
 	// CharsetReader converts a stream whose XML declaration names an
 	// encoding other than UTF-8. It receives the bytes after the declaration
 	// and returns UTF-8. Without one, such a declaration is an error.
@@ -441,8 +448,11 @@ func (d *Decoder) startTag() (Token, error) {
 // The target is followed by white space or "?>", and the body is checked
 // against [2] Char.
 //
-// parity: the body is not newline-normalised, and a target of "xml" is the
-// declaration wherever it appears, not only at the start of the document.
+// Under XML 1.1 the body's line ends are folded to LF (§2.11).
+//
+// parity: under 1.0 the body is not newline-normalised, and a target of "xml"
+// is the declaration wherever it appears, not only at the start of the
+// document.
 func (d *Decoder) procInst() (Token, error) {
 	target, ok := d.name()
 	if !ok {
@@ -459,6 +469,9 @@ func (d *Decoder) procInst() (Token, error) {
 	}
 	if !d.checkChars(data, nil) {
 		return nil, d.err
+	}
+	if d.v11 {
+		data = foldLineEnds(data, true)
 	}
 	if target == "xml" {
 		if err := d.xmlDecl(string(data)); err != nil {
@@ -598,7 +611,7 @@ func (d *Decoder) bang() (Token, error) {
 
 // comment reads [15] Comment after "<!-", checking the body against [2] Char.
 //
-// parity: the body is not newline-normalised, as for a PI.
+// parity: as for a PI, the body is newline-normalised under 1.1 only.
 func (d *Decoder) comment() (Token, error) {
 	b, ok := d.mustgetc()
 	if !ok {
@@ -620,6 +633,9 @@ func (d *Decoder) comment() (Token, error) {
 	}
 	if !d.checkChars(data, nil) {
 		return nil, d.err
+	}
+	if d.v11 {
+		data = foldLineEnds(data, true)
 	}
 	d.tokComment = Comment(data)
 	return &d.tokComment, nil
@@ -1148,6 +1164,9 @@ func (d *Decoder) reference(out []byte, spans []refSpan, attr bool) ([]byte, []r
 				if !found && d.Entity != nil {
 					repl, found = d.Entity[string(name)]
 				}
+				if !found && d.Undeclared != nil && d.Undeclared(string(name)) {
+					return out[:start], spans, true
+				}
 			}
 		}
 	}
@@ -1204,6 +1223,12 @@ func (d *Decoder) checkChars(b []byte, spans []refSpan) bool {
 	}
 	return true
 }
+
+// LegalCharRef reports whether a character reference may name r (XML 1.0
+// §4.1, WFC: Legal Character): r must be a Char of the document's version.
+// Under 1.1 that admits the [2a] RestrictedChar, which only a reference can
+// name, but never #x0.
+func LegalCharRef(r rune, v11 bool) bool { return isChar(r, v11, false) }
 
 // asciiChar10 and asciiChar11 tabulate isChar for literal ASCII.
 var asciiChar10, asciiChar11 = func() (t10, t11 [utf8.RuneSelf]bool) {

@@ -247,10 +247,10 @@ func TestAttributeDefaultNormalization(t *testing.T) {
 // value one space; under 1.0 NEL and U+2028 are characters, and the CR before
 // a NEL is a line end of its own.
 func TestDTDLineEnds(t *testing.T) {
-	const subset = "<!ENTITY e \"1\u00852 3\r\u00854\"><!ATTLIST r d CDATA \"1\u00852 3\r\u00854\">"
+	const subset = "<!ENTITY e \"1\u00852\u20283\r\u00854\"><!ATTLIST r d CDATA \"1\u00852\u20283\r\u00854\">"
 	cases := []struct{ decl, content, attr, def string }{
 		{`<?xml version="1.1"?>`, "1\n2\n3\n4", "1 2 3 4", "1 2 3 4"},
-		{`<?xml version="1.0"?>`, "1\u00852 3\n\u00854", "1\u00852 3 \u00854", "1\u00852 3 \u00854"},
+		{`<?xml version="1.0"?>`, "1\u00852\u20283\n\u00854", "1\u00852\u20283 \u00854", "1\u00852\u20283 \u00854"},
 	}
 	for _, c := range cases {
 		src := c.decl + "<!DOCTYPE r [" + subset + "]><r a=\"&e;\">&e;</r>"
@@ -268,5 +268,124 @@ func TestDTDLineEnds(t *testing.T) {
 		if got := r.Attr("", "d").Value; got != c.def {
 			t.Errorf("%s default: got %q, want %q", c.decl, got, c.def)
 		}
+	}
+}
+
+// TestDTDCharRefsAreLegalChars: WFC Legal Character (§4.1) holds for every
+// character reference, in an entity value and an attribute default as in
+// content, by the document's version: 1.1 admits #x1-#x1F through a reference
+// and 1.0 does not; neither admits #x0. An entity value is checked whether or
+// not the entity is used.
+func TestDTDCharRefsAreLegalChars(t *testing.T) {
+	const v11 = `<?xml version="1.1"?>`
+	cases := []struct {
+		name, src string
+		ok        bool
+	}{
+		{"1.0 entity value #x1", `<!DOCTYPE r [<!ENTITY e "&#x1;">]><r/>`, false},
+		{"1.1 entity value #x1", v11 + `<!DOCTYPE r [<!ENTITY e "&#x1;">]><r/>`, true},
+		{"1.1 entity value #x0", v11 + `<!DOCTYPE r [<!ENTITY e "&#0;">]><r/>`, false},
+		{"1.0 entity value surrogate", `<!DOCTYPE r [<!ENTITY e "&#xD800;">]><r/>`, false},
+		{"1.0 entity value bad syntax", `<!DOCTYPE r [<!ENTITY e "&#xZ;">]><r/>`, false},
+		{"1.0 default #x1", `<!DOCTYPE r [<!ATTLIST r a CDATA "&#1;">]><r/>`, false},
+		{"1.1 default #x1", v11 + `<!DOCTYPE r [<!ATTLIST r a CDATA "&#1;">]><r/>`, true},
+		{"1.1 default #x0", v11 + `<!DOCTYPE r [<!ATTLIST r a CDATA "&#x0;">]><r/>`, false},
+		{"1.0 reference in replacement text", `<!DOCTYPE r [<!ENTITY e "&#38;#1;">]><r>&e;</r>`, false},
+		{"1.0 legal", `<!DOCTYPE r [<!ENTITY e "&#9;&#x10FFFF;"><!ATTLIST r a CDATA "&#xA;">]><r>&e;</r>`, true},
+	}
+	for _, c := range cases {
+		_, err := ParseString(c.src, ParseOptions{AllowDOCTYPE: true})
+		if (err == nil) != c.ok {
+			t.Errorf("%s: err = %v, want ok %v", c.name, err, c.ok)
+		}
+		if err != nil && !c.ok && !strings.Contains(err.Error(), "character") {
+			t.Errorf("%s: err = %v, want a character-reference error", c.name, err)
+		}
+	}
+}
+
+// TestCommentAndPILineEnds: under XML 1.1, §2.11's NEL, U+2028 and CR NEL
+// line ends are folded in comments and PIs as in text — in the prolog, the
+// content and the epilog alike. Under 1.0 NEL and U+2028 are characters.
+func TestCommentAndPILineEnds(t *testing.T) {
+	for _, c := range []struct{ decl, body, want string }{
+		{`<?xml version="1.1"?>`, "a\u0085b\u2028c\r\u0085d", "a\nb\nc\nd"},
+		{`<?xml version="1.0"?>`, "a\u0085b\u2028c", "a\u0085b\u2028c"},
+	} {
+		body := c.body
+		src := c.decl + "<!--" + body + "--><r><!--" + body + "--><?p " + body + "?></r><?q " + body + "?>"
+		tree, err := ParseString(src, ParseOptions{})
+		if err != nil {
+			t.Fatalf("%s: %v", c.decl, err)
+		}
+		root := tree.Root
+		r := root.ChildElements()[0]
+		nodes := []*Node{root.Children[0], r.Children[0], r.Children[1], root.Children[2]}
+		for i, n := range nodes {
+			if n.Value != c.want {
+				t.Errorf("%s node %d (%v): got %q, want %q", c.decl, i, n.Kind, n.Value, c.want)
+			}
+		}
+	}
+}
+
+// TestUndeclaredEntityWFCOrVC is XML 1.0 §4.1's split between WFC and VC:
+// Entity Declared. With no DTD, with only an internal subset free of
+// parameter-entity references, or with standalone="yes", a reference to an
+// undeclared entity is a well-formedness error. Otherwise the declaration may
+// be in an external subset or parameter entity a non-validating processor has
+// not read, the error is a validity error that it does not report, and the
+// reference contributes nothing — in content, in an attribute value and in a
+// default alike. An entity that is declared but cannot be read stays an error.
+func TestUndeclaredEntityWFCOrVC(t *testing.T) {
+	const doc = `<r a="1&u;2">x&u;y</r>`
+	cases := []struct {
+		name, prolog string
+		ok           bool
+	}{
+		{"no DTD", ``, false},
+		{"internal subset only", `<!DOCTYPE r [<!ENTITY e "v">]>`, false},
+		{"external subset", `<!DOCTYPE r SYSTEM "r.dtd">`, true},
+		{"external subset and internal", `<!DOCTYPE r SYSTEM "r.dtd" [<!ENTITY e "v">]>`, true},
+		{"parameter-entity reference", `<!DOCTYPE r [<!ENTITY % p ""> %p; ]>`, true},
+		{"standalone with external subset", `<?xml version="1.0" standalone="yes"?><!DOCTYPE r SYSTEM "r.dtd">`, false},
+		{"standalone no", `<?xml version="1.0" standalone="no"?><!DOCTYPE r SYSTEM "r.dtd">`, true},
+		{"percent in a literal is no reference", `<!DOCTYPE r [<!ENTITY e "%p;">]>`, false},
+	}
+	for _, c := range cases {
+		tree, err := ParseString(c.prolog+doc, ParseOptions{AllowDOCTYPE: true})
+		if !c.ok {
+			if err == nil || !strings.Contains(err.Error(), "&u;") {
+				t.Errorf("%s: err = %v, want the undeclared reference refused", c.name, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		r := tree.Root.ChildElements()[0]
+		if got := r.StringValue() + "|" + r.Attr("", "a").Value; got != "xy|12" {
+			t.Errorf("%s: got %q, want the reference dropped (xy|12)", c.name, got)
+		}
+	}
+
+	// Defaults follow the same rule, declaration order included.
+	if _, err := ParseString(`<!DOCTYPE r [<!ATTLIST r d CDATA "1&u;2">]><r/>`, ParseOptions{AllowDOCTYPE: true}); err == nil {
+		t.Error("an undeclared entity in a default was accepted under the WFC")
+	}
+	tree, err := ParseString(`<!DOCTYPE r SYSTEM "r.dtd" [<!ATTLIST r d CDATA "1&u;&late;2"><!ENTITY late "L">]><r/>`,
+		ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tree.Root.ChildElements()[0].Attr("", "d").Value; got != "1L2" {
+		t.Errorf("default = %q, want 1L2", got)
+	}
+
+	// Declared but external, with no resolver: still refused.
+	if _, err := ParseString(`<!DOCTYPE r SYSTEM "r.dtd" [<!ENTITY x SYSTEM "x.ent">]><r>&x;</r>`,
+		ParseOptions{AllowDOCTYPE: true}); err == nil {
+		t.Error("a declared external entity was dropped instead of refused")
 	}
 }

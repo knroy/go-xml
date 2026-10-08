@@ -285,6 +285,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	depth := 0
 	sawRoot := false
 	sawDecl := false
+	standalone := false // the XML declaration said standalone="yes"
 	sawPrologToken := false
 	sawDoctype := false
 	// Attribute defaults declared by an ATTLIST in the internal subset. Kept
@@ -441,6 +442,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					return nil, err
 				}
 				sawDecl = true
+				standalone = standaloneYes.MatchString(string(t.Inst))
 				continue // the XML declaration is not a PI node in the XDM
 			}
 			// Namespaces in XML §7: no PI target contains a colon.
@@ -567,8 +569,19 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				} else {
 					ents = parseEntityDecls(d, opts.BaseURI, opts.entityBudget)
 				}
-				if attDefaults, err = normalizeAttDefaults(attDefaults, ents); err != nil {
+				if ents != nil {
+					ents.version11 = dec.IsVersion11()
+					if err := ents.checkCharRefs(); err != nil {
+						return nil, fmt.Errorf("parse XML: %w", err)
+					}
+				}
+				wfc := entityDeclaredIsWFC(d, standalone)
+				if attDefaults, err = normalizeAttDefaults(attDefaults, ents, dec.IsVersion11(), wfc); err != nil {
 					return nil, fmt.Errorf("parse XML: %w", err)
+				}
+				if !wfc {
+					declared := ents
+					dec.Undeclared = func(name string) bool { return !declared.declares(name) }
 				}
 				if ents != nil && !opts.entitiesExpanded {
 					ents.version11 = dec.IsVersion11()
