@@ -13,6 +13,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A `version="2.0"` stylesheet was refused `match="root()"` and other 3.0 pattern forms | XSLT 3.0 §3.9.2 defines no 2.0 behaviour for a 3.0 processor; the 3.0 pattern grammar now applies, and the refusal stays for `MaxVersion` 2.0. Found by the Peppol BIS validators. | [`ca09e14`][ca09e14] |
 | A `version="2.0"` stylesheet with `xsl:import` after other declarations was `XTSE0200` | XSLT 3.0 removed that rule; it now applies only to a 2.0 processor. Found by KoSIT's XRechnung HTML stylesheet. | [`04ddeea`][04ddeea] |
 | RELAX NG recompiled a definition at every `<ref>` to it | Cost multiplied along chains, so DocBook 5.2 hit the 200,000-expansion limit. Each definition is compiled once and shared; DocBook compiles and validates in 0.55 s. | [`eb6901e`][eb6901e] |
+| `indent` broke Serialization 3.1 §5.1.4 | Typed simple and mixed content was indented, changing a validated `xs:string` value; `fn:serialize` also ignored `xml:space` and nested `suppress-indentation`. All §5.1.4 constraints now hold in both serializers. | [`cec5f6f`][cec5f6f] |
 | Compact syntax refused a free-standing annotation element among definitions | DocBook's `s:ns [ ... ]` was read as a datatype name. The grammar allows it; it is now skipped like any annotation. | [`197eaad`][197eaad] |
 
 ### Fixed — release process
@@ -1160,6 +1161,7 @@ here so every entry in this file sits under a release.
 [04ddeea]: https://github.com/knroy/go-xml/commit/04ddeea
 [eb6901e]: https://github.com/knroy/go-xml/commit/eb6901e
 [197eaad]: https://github.com/knroy/go-xml/commit/197eaad
+[cec5f6f]: https://github.com/knroy/go-xml/commit/cec5f6f
 [d029347]: https://github.com/knroy/go-xml/commit/d029347
 [6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e
