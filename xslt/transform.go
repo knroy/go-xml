@@ -222,6 +222,12 @@ type TransformOptions struct {
 	// with its held flag rather than alone, and
 	// TestNestedTransformInheritsTheByteBudget.
 	nestedBudget *xpath.Context
+
+	// disableMessages is fn:transform's enable-messages=false: a
+	// non-terminating xsl:message is not evaluated, and a terminating one
+	// terminates without recording its text. Unexported because only
+	// runNestedTransform sets it.
+	disableMessages bool
 }
 
 // Result is the outcome of a transform.

@@ -72,3 +72,68 @@ func TestTransformOptionConversion(t *testing.T) {
 		}
 	}
 }
+
+// enable-assertions (default false) and enable-messages decide whether the
+// nested stylesheet's xsl:assert and xsl:message are evaluated (F&O 3.1).
+// A disabled terminating message still terminates, as in Saxon 12.
+func TestTransformEnableSwitches(t *testing.T) {
+	// The message cases run on the 2.0 processor (xslt-version 2.0), where
+	// an error in a message's content propagates rather than being
+	// swallowed: that is what shows the content was evaluated.
+	const inner = `<xsl:stylesheet version="2.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	    xmlns:x="urn:x">
+	  <xsl:param name="case"/>
+	  <xsl:template name="xsl:initial-template">
+	    <xsl:choose>
+	      <xsl:when test="$case = 'assert'">
+	        <xsl:assert test="false()" error-code="x:A1" version="3.0">no</xsl:assert>
+	      </xsl:when>
+	      <xsl:when test="$case = 'message'">
+	        <xsl:message><xsl:value-of select="error(QName('urn:x', 'M1'))"/></xsl:message>
+	      </xsl:when>
+	      <xsl:when test="$case = 'terminate'">
+	        <xsl:message terminate="yes">bye</xsl:message>
+	      </xsl:when>
+	    </xsl:choose>
+	    <xsl:text>ran</xsl:text>
+	  </xsl:template>
+	</xsl:stylesheet>`
+	const outer = `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	    xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:map="http://www.w3.org/2005/xpath-functions/map">
+	  <xsl:param name="inner" as="xs:string"/>
+	  <xsl:output method="text"/>
+	  <xsl:template name="go">
+	    <xsl:value-of select="transform(map:merge((map{'stylesheet-text': $inner,
+	        'delivery-format': 'serialized',
+	        'stylesheet-params': map{QName('', 'case'): 'CASE'}}, OPTS)))?output"/>
+	  </xsl:template>
+	</xsl:stylesheet>`
+	for _, tc := range []struct{ kase, opts, code string }{
+		{"assert", "map{}", ""},
+		{"assert", "map{'enable-assertions': false()}", ""},
+		{"assert", "map{'enable-assertions': true()}", "A1"},
+		{"message", "map{'xslt-version': 2.0}", "M1"},
+		{"message", "map{'xslt-version': 2.0, 'enable-messages': true()}", "M1"},
+		{"message", "map{'xslt-version': 2.0, 'enable-messages': false()}", ""},
+		{"terminate", "map{}", "XTMM9000"},
+		{"terminate", "map{'enable-messages': false()}", "XTMM9000"},
+	} {
+		src := strings.NewReplacer("CASE", tc.kase, "OPTS", tc.opts).Replace(outer)
+		sd, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := Compile(sd.Root, CompileOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := runCacheOuter(st, inner)
+		if code := xdm.ErrorCode(err); code != tc.code {
+			t.Errorf("%s %s: err = %v, want code %q", tc.kase, tc.opts, err, tc.code)
+			continue
+		}
+		if tc.code == "" && !strings.HasSuffix(got, "ran") {
+			t.Errorf("%s %s: output %q, want it to end in \"ran\"", tc.kase, tc.opts, got)
+		}
+	}
+}

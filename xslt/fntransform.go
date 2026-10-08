@@ -431,12 +431,25 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 	if err != nil {
 		return nil, err
 	}
-	// These are type-checked like every option, but have no effect: see
-	// docs/known-gaps.md.
-	for _, name := range []string{"enable-assertions", "enable-messages", "enable-trace"} {
-		if _, err := transformBool(opts, name, false); err != nil {
-			return nil, err
-		}
+	// F&O 3.1: enable-assertions "indicates whether any xsl:assert
+	// instructions in the stylesheet are to be evaluated", default false;
+	// enable-messages likewise for xsl:message, default
+	// implementation-defined, here true. A terminating message still
+	// terminates when disabled, as Saxon 12 does. Both are run-time switches,
+	// so neither belongs in the compile-cache key.
+	assertions, err := transformBool(opts, "enable-assertions", false)
+	if err != nil {
+		return nil, err
+	}
+	messages, err := transformBool(opts, "enable-messages", true)
+	if err != nil {
+		return nil, err
+	}
+	// enable-trace governs whether fn:trace "generate[s] diagnostic
+	// messages"; this processor's fn:trace never writes any, so it is only
+	// type-checked.
+	if _, err := transformBool(opts, "enable-trace", false); err != nil {
+		return nil, err
 	}
 	// vendor-options is map(xs:QName, item()*); this processor defines none,
 	// so the entries are ignored once the map is known to be one.
@@ -480,6 +493,8 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 	// allowances rather than a fresh pair, on the same policy. See
 	// TransformOptions.nestedBudget.
 	topts.nestedBudget = ctx
+	topts.DisableAssertions = !assertions
+	topts.disableMessages = !messages
 	// The nested transform is a transformation of its own: the outer one's
 	// entry point, its parameters and its initial mode say nothing about it.
 	// Only what the options map states, plus the resolvers, carries over.

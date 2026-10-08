@@ -1444,6 +1444,12 @@ type messageInstr struct {
 }
 
 func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if rt.opts.disableMessages && !i.assert {
+		// Not evaluated unless it would terminate; see disableMessages.
+		if terminate, err := i.terminates(rt); err != nil || !terminate {
+			return err
+		}
+	}
 	var text string
 	var value xdm.Sequence
 	if i.sel != nil {
@@ -1483,7 +1489,9 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	// Messages are collected rather than printed: a library writing to stderr
 	// is a nuisance, and the caller may want them alongside the result.
-	*rt.messages = append(*rt.messages, text)
+	if !rt.opts.disableMessages {
+		*rt.messages = append(*rt.messages, text)
+	}
 
 	if i.assert {
 		// 22.2: a failed assertion behaves as an xsl:message "with the value
@@ -1498,37 +1506,39 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return terminateError(code, assertDefaultCode, text, value)
 	}
 
-	if i.terminate != nil {
-		v, err := i.terminate.eval(rt)
-		if err != nil {
-			return err
-		}
-		// XTDE0030: "it is a non-recoverable dynamic error if the effective
-		// value of an attribute written using curly brackets, in a position
-		// where an attribute value template is permitted, is a value that is
-		// not one of the permitted values for that attribute." The summary
-		// gives terminate a closed set of two, and the static check cannot
-		// look inside a template, so the effective value is checked here.
-		terminate, ok := messageTerminate(v, i.xslt30)
-		if !ok {
-			// XTDE0030: "it is a non-recoverable dynamic error if the
-			// effective value of an attribute written using curly brackets,
-			// in a position where an attribute value template is permitted,
-			// is a value that is not one of the permitted values for that
-			// attribute."
-			return fmt.Errorf(
-				"XTDE0030: xsl:message/@terminate evaluated to %q, which is "+
-					"not a permitted value", v)
-		}
-		if terminate {
-			code, err := i.resolveErrorCode(rt)
-			if err != nil {
-				return err
-			}
-			return terminateError(code, messageDefaultCode, text, value)
-		}
+	terminate, err := i.terminates(rt)
+	if err != nil || !terminate {
+		return err
 	}
-	return nil
+	code, err := i.resolveErrorCode(rt)
+	if err != nil {
+		return err
+	}
+	return terminateError(code, messageDefaultCode, text, value)
+}
+
+// terminates evaluates @terminate.
+func (i *messageInstr) terminates(rt *runtime) (bool, error) {
+	if i.terminate == nil {
+		return false, nil
+	}
+	v, err := i.terminate.eval(rt)
+	if err != nil {
+		return false, err
+	}
+	// XTDE0030: "it is a non-recoverable dynamic error if the effective
+	// value of an attribute written using curly brackets, in a position
+	// where an attribute value template is permitted, is a value that is
+	// not one of the permitted values for that attribute." The summary
+	// gives terminate a closed set of two, and the static check cannot
+	// look inside a template, so the effective value is checked here.
+	terminate, ok := messageTerminate(v, i.xslt30)
+	if !ok {
+		return false, fmt.Errorf(
+			"XTDE0030: xsl:message/@terminate evaluated to %q, which is "+
+				"not a permitted value", v)
+	}
+	return terminate, nil
 }
 
 // --- Sorting ----------------------------------------------------------------
