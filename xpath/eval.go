@@ -58,7 +58,16 @@ func (e *Step) Eval(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
+	return e.evalFrom(ctx, node)
+}
 
+// evalFrom is Eval with node as the context node. Of ctx it uses only what
+// the predicates inherit, and each predicate replaces the focus with its own,
+// so ctx's focus need not be node: evalStepOver calls this with its own
+// context rather than copying it once per input node to install a focus that
+// nothing would read.
+func (e *Step) evalFrom(ctx *Context, node *xdm.Node) (xdm.Sequence, error) {
+	var err error
 	principal := e.Axis.PrincipalKind()
 	var selected xdm.Sequence
 	walkAxis(node, e.Axis, func(n *xdm.Node) bool {
@@ -192,8 +201,17 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		sub := ctx.WithFocus(it, i+1, size)
-		v, err := step.Eval(sub)
+		// A plain axis step reads the focus only for its context node, so it
+		// is handed the node directly; the per-node Context copy WithFocus
+		// makes was a heap allocation for every node a path visited. The
+		// loop above has already checked that every item is a node.
+		var v xdm.Sequence
+		var err error
+		if st, ok := step.(*Step); ok {
+			v, err = st.evalFrom(ctx, it.(*xdm.Node))
+		} else {
+			v, err = step.Eval(ctx.WithFocus(it, i+1, size))
+		}
 		if err != nil {
 			return nil, err
 		}
