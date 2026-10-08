@@ -876,21 +876,36 @@ func (t *entityTable) attrEntityMap(content map[string]string) map[string]string
 // charRef decodes the character reference "&name;" and checks it against
 // WFC: Legal Character (§4.1) for the document's version — the tokeniser's
 // rule, so that a reference in the DTD is held to the one in content.
-func (t *entityTable) charRef(name string) (rune, error) {
+func (t *entityTable) charRef(name string) (rune, error) { return charRef(name, t.version11) }
+
+func charRef(name string, v11 bool) (rune, error) {
 	r, ok := decodeCharRef(name)
 	if !ok {
 		return 0, fmt.Errorf("invalid character reference &%s;", name)
 	}
-	if !xml.LegalCharRef(r, t.version11) {
+	if !xml.LegalCharRef(r, v11) {
 		return 0, fmt.Errorf("illegal character code %U", r)
 	}
 	return r, nil
 }
 
-// checkCharRefs applies WFC: Legal Character to the character references in
-// every declared entity value, whether or not the entity is ever referenced.
-func (t *entityTable) checkCharRefs() error {
-	for name, raw := range t.raw {
+// checkEntityCharRefs applies WFC: Legal Character to the character
+// references in the value of every entity declared in text, general and
+// parameter alike, whether or not the entity is referenced, read or (after an
+// unread parameter entity, §5.1) processed.
+func checkEntityCharRefs(text string, v11 bool) error {
+	for kw, body := range markupDecls(text) {
+		if kw != "ENTITY" {
+			continue
+		}
+		fields := attListFields(body)
+		if len(fields) > 0 && fields[0] == "%" {
+			fields = fields[1:]
+		}
+		if len(fields) < 2 || fields[1] == "" || fields[1][0] != '"' && fields[1][0] != '\'' {
+			continue // no value, or an external identifier
+		}
+		name, raw := fields[0], unquote(fields[1])
 		for i := 0; ; {
 			k := strings.Index(raw[i:], "&#")
 			if k < 0 {
@@ -901,7 +916,7 @@ func (t *entityTable) checkCharRefs() error {
 			if j < 0 {
 				return fmt.Errorf("entity %q: unterminated character reference", name)
 			}
-			if _, err := t.charRef(raw[i+1 : i+j]); err != nil {
+			if _, err := charRef(raw[i+1:i+j], v11); err != nil {
 				return fmt.Errorf("entity %q: %w", name, err)
 			}
 			i += j + 1

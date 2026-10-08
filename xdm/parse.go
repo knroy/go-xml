@@ -547,6 +547,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					if err := checkDTDComments(ents.subsetText); err != nil {
 						return nil, fmt.Errorf("parse XML: external DTD: %w", err)
 					}
+					if err := checkEntityCharRefs(ents.subsetText, dec.IsVersion11()); err != nil {
+						return nil, fmt.Errorf("parse XML: %w", err)
+					}
 					// Retained so fn:unparsed-entity-uri can see declarations
 					// that live outside the directive. The subset a document
 					// is governed by is not always the text it was written
@@ -581,9 +584,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				}
 				if ents != nil {
 					ents.version11 = dec.IsVersion11()
-					if err := ents.checkCharRefs(); err != nil {
-						return nil, fmt.Errorf("parse XML: %w", err)
-					}
+				}
+				if err := checkEntityCharRefs(d, dec.IsVersion11()); err != nil {
+					return nil, fmt.Errorf("parse XML: %w", err)
 				}
 				wfc := entityDeclaredIsWFC(d, standalone)
 				if attDefaults, err = normalizeAttDefaults(attDefaults, ents, dec.IsVersion11(), wfc); err != nil {

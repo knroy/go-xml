@@ -720,3 +720,40 @@ func TestDeclarationsAfterUnreadParameterEntity(t *testing.T) {
 		t.Errorf("PE read through a resolver: got %q, want %q", got, "[Bv] c=C a=d")
 	}
 }
+
+// TestParameterEntityCharRefsAreLegal: WFC Legal Character holds for the
+// character references in a parameter entity's value as for a general one,
+// by the same rule, whether the entity is read or not, and for declarations
+// after an unread one that §5.1 leaves unprocessed.
+func TestParameterEntityCharRefsAreLegal(t *testing.T) {
+	const v11 = `<?xml version="1.1"?>`
+	cases := []struct {
+		name, src string
+		ok        bool
+	}{
+		{"1.0 #x1", `<!DOCTYPE r [<!ENTITY % p "&#x1;">]><r/>`, false},
+		{"1.1 #x1", v11 + `<!DOCTYPE r [<!ENTITY % p "&#x1;">]><r/>`, true},
+		{"1.1 #x0", v11 + `<!DOCTYPE r [<!ENTITY % p "&#0;">]><r/>`, false},
+		{"after an unread PE", `<!DOCTYPE r [<!ENTITY % p ""> %p; <!ENTITY % q "&#0;">]><r/>`, false},
+		{"general after an unread PE", `<!DOCTYPE r [<!ENTITY % p ""> %p; <!ENTITY e "&#0;">]><r/>`, false},
+		{"legal", `<!DOCTYPE r [<!ENTITY % p "&#x9;&#60;">]><r/>`, true},
+	}
+	for _, c := range cases {
+		_, err := ParseString(c.src, ParseOptions{AllowDOCTYPE: true})
+		if (err == nil) != c.ok || err != nil && !strings.Contains(err.Error(), "character code") {
+			t.Errorf("%s: err = %v, want ok %v", c.name, err, c.ok)
+		}
+	}
+	dir := writeFiles(t, map[string]string{
+		"d.dtd":   `<!ENTITY % q "&#xFFFE;">`,
+		"doc.xml": `<!DOCTYPE r SYSTEM "d.dtd"><r/>`,
+	})
+	p := filepath.Join(dir, "doc.xml")
+	src, _ := os.ReadFile(p)
+	_, err := ParseString(string(src), ParseOptions{
+		AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: dir}, BaseURI: fileuri.Of(p),
+	})
+	if err == nil || !strings.Contains(err.Error(), "illegal character code U+FFFE") {
+		t.Errorf("external subset PE: err = %v, want it refused", err)
+	}
+}
