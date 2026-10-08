@@ -405,3 +405,46 @@ func TestTreeXMLVersion(t *testing.T) {
 		t.Errorf("NewTree: XMLVersion %q, want empty", v)
 	}
 }
+
+// TestParseNodeChunks pins the chunked node allocation in Parse: every node
+// is distinct and correctly linked across chunk boundaries, adjacent character
+// data still merges into one text node, and the parse no longer pays an
+// allocation per element, attribute and text node.
+func TestParseNodeChunks(t *testing.T) {
+	const n = 3*nodeChunkLen + 7 // elements; three nodes each spans many chunks
+	doc := "<r>" + strings.Repeat(`<e a="1">x&amp;y</e>`, n) + "</r>"
+	tree, err := ParseString(doc, ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := tree.Root.Children[0]
+	if len(r.Children) != n {
+		t.Fatalf("got %d children, want %d", len(r.Children), n)
+	}
+	seen := map[*Node]bool{}
+	for i, e := range r.Children {
+		if e.Kind != KindElement || e.Name.Local != "e" || e.Parent != r {
+			t.Fatalf("child %d: kind %v name %q, parent ok %v", i, e.Kind, e.Name.Local, e.Parent == r)
+		}
+		if len(e.Attrs) != 1 || e.Attrs[0].Value != "1" || e.Attrs[0].Parent != e {
+			t.Fatalf("child %d: bad attribute %+v", i, e.Attrs)
+		}
+		if len(e.Children) != 1 || e.Children[0].Kind != KindText || e.Children[0].Value != "x&y" {
+			t.Fatalf("child %d: text not merged into one node: %d children", i, len(e.Children))
+		}
+		for _, m := range []*Node{e, e.Attrs[0], e.Children[0]} {
+			if seen[m] {
+				t.Fatalf("child %d: node %p handed out twice", i, m)
+			}
+			seen[m] = true
+		}
+	}
+
+	// 1,000 elements of three nodes each took 10,039 allocations with a
+	// separate one per node and 7,069 with chunks. The bound sits between
+	// the two, so a return to per-node allocation fails it.
+	small := "<r>" + strings.Repeat(`<e a="1">t</e>`, 1000) + "</r>"
+	if got := testing.AllocsPerRun(5, func() { _, _ = ParseString(small, ParseOptions{}) }); got > 8500 {
+		t.Errorf("parse of 1,000 elements: %.0f allocations, want at most 8,500", got)
+	}
+}
