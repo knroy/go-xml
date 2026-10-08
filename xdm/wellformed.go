@@ -101,34 +101,31 @@ func validateStartElement(t xml.StartElement, parent *Node, xml11 bool) error {
 		}
 	}
 
-	// Build the in-scope environment before looking at ordinary attributes. A
-	// declaration on this start tag is in scope for its own element and attrs.
-	bindings := map[string]string{"xml": NSXML}
-	for p := parent; p != nil; p = p.Parent {
-		for _, ns := range p.Namespaces {
-			if _, seen := bindings[ns.Name.Local]; !seen {
-				bindings[ns.Name.Local] = ns.Value
-			}
-		}
+	// The in-scope environment, against which every prefix on the tag is
+	// resolved. A declaration on this start tag is in scope for its own
+	// element and attrs; see tagScope for how it is looked up.
+	scope := tagScope{t: t, parent: parent}
+	if len(t.Attr) > smallTag {
+		scope.m = map[string]string{}
 	}
-
-	declared := map[string]bool{}
-	for _, a := range t.Attr {
+	for i, a := range t.Attr {
 		prefix, isDecl := namespaceDecl(a)
 		if !isDecl {
 			continue
 		}
-		if declared[prefix] {
+		if scope.declaredBefore(i, prefix) {
 			return fmt.Errorf("parse XML: duplicate namespace declaration for prefix %q", prefix)
 		}
-		declared[prefix] = true
 		if err := validateNamespaceBinding(prefix, a.Value, xml11); err != nil {
 			return err
 		}
-		bindings[prefix] = a.Value
+		if scope.m != nil {
+			scope.m[prefix] = a.Value
+		}
 	}
+	scope.inherit()
 
-	if err := requireBoundPrefix(t.Name.Space, bindings); err != nil {
+	if err := requireBoundPrefix(t.Name.Space, &scope); err != nil {
 		return err
 	}
 	if t.Name.Space == "xmlns" {
@@ -140,19 +137,19 @@ func validateStartElement(t xml.StartElement, parent *Node, xml11 bool) error {
 	// A tag's few attributes are checked by a scan of those before them, which
 	// allocates nothing; past a handful the keys move into a map, so that a tag
 	// with thousands of attributes is not checked in quadratic time.
-	var small [8]expandedName
+	var small [smallTag]expandedName
 	seen := small[:0]
 	var many map[expandedName]bool
 	for _, a := range t.Attr {
 		if _, declaration := namespaceDecl(a); declaration {
 			continue
 		}
-		if err := requireBoundPrefix(a.Name.Space, bindings); err != nil {
+		if err := requireBoundPrefix(a.Name.Space, &scope); err != nil {
 			return err
 		}
 		uri := ""
 		if a.Name.Space != "" {
-			uri = bindings[a.Name.Space]
+			uri, _ = scope.lookup(a.Name.Space)
 		}
 		k := expandedName{uri, a.Name.Local}
 		dup := many[k]
@@ -181,6 +178,82 @@ func validateStartElement(t xml.StartElement, parent *Node, xml11 bool) error {
 
 // expandedName is an attribute's {namespace URI, local name}.
 type expandedName struct{ uri, local string }
+
+// smallTag is how many attributes a start tag may carry and still be checked
+// by scanning it rather than through maps.
+const smallTag = 8
+
+// tagScope resolves the prefixes used on one start tag: the tag's own
+// declarations first, then the xml prefix, then the nearest ancestor that
+// declares the prefix. Building that as a map per start tag, as this once did,
+// copied every ancestor's declarations for every element parsed, a large
+// share of what loading a stylesheet or schema allocated. A tag of at most
+// smallTag attributes is scanned instead, which allocates nothing; a larger
+// one fills m once, so that each of its attributes is not a scan of the tag
+// and of every ancestor.
+type tagScope struct {
+	t      xml.StartElement
+	parent *Node
+	m      map[string]string // every binding in scope, when the tag is large
+}
+
+// declaredBefore reports whether an attribute before t.Attr[i] declares
+// prefix. With m in use it holds exactly the tag's declarations so far.
+func (s *tagScope) declaredBefore(i int, prefix string) bool {
+	if s.m != nil {
+		_, ok := s.m[prefix]
+		return ok
+	}
+	for _, a := range s.t.Attr[:i] {
+		if p, ok := namespaceDecl(a); ok && p == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+// inherit completes m, once the tag's own declarations are in it, with the
+// bindings it does not override.
+func (s *tagScope) inherit() {
+	if s.m == nil {
+		return
+	}
+	if _, ok := s.m["xml"]; !ok {
+		s.m["xml"] = NSXML
+	}
+	for p := s.parent; p != nil; p = p.Parent {
+		for _, ns := range p.Namespaces {
+			if _, ok := s.m[ns.Name.Local]; !ok {
+				s.m[ns.Name.Local] = ns.Value
+			}
+		}
+	}
+}
+
+// lookup returns the URI bound to prefix, and whether any binding is in scope.
+// An undeclaration (XML 1.1 xmlns:p="") is a binding to "".
+func (s *tagScope) lookup(prefix string) (string, bool) {
+	if s.m != nil {
+		uri, ok := s.m[prefix]
+		return uri, ok
+	}
+	for _, a := range s.t.Attr {
+		if p, ok := namespaceDecl(a); ok && p == prefix {
+			return a.Value, true
+		}
+	}
+	if prefix == "xml" {
+		return NSXML, true
+	}
+	for p := s.parent; p != nil; p = p.Parent {
+		for _, ns := range p.Namespaces {
+			if ns.Name.Local == prefix {
+				return ns.Value, true
+			}
+		}
+	}
+	return "", false
+}
 
 func requireQName(n xml.Name) error {
 	if strings.Contains(n.Local, ":") {
@@ -246,11 +319,11 @@ func validateNamespaceBinding(prefix, uri string, xml11 bool) error {
 // requireBoundPrefix applies the Prefix Declared constraint. Returning an empty
 // URI is not a harmless recovery: it changes a namespace-ill-formed document
 // into a different XDM name, so public document parsing must fail instead.
-func requireBoundPrefix(prefix string, bindings map[string]string) error {
+func requireBoundPrefix(prefix string, scope *tagScope) error {
 	if prefix == "" {
 		return nil
 	}
-	if uri, ok := bindings[prefix]; !ok || uri == "" {
+	if uri, ok := scope.lookup(prefix); !ok || uri == "" {
 		return fmt.Errorf("parse XML: no namespace declaration is in scope for prefix %q", prefix)
 	}
 	return nil
