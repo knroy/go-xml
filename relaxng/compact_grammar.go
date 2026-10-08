@@ -81,6 +81,9 @@ func (p *compactParser) startsGrammarContent() bool {
 	if p.atKeyword("start") || p.atKeyword("div") || p.atKeyword("include") {
 		return true
 	}
+	if p.atAnnotationElement() {
+		return true
+	}
 	// An identifier begins a grammar only when it is being defined. A
 	// keyword is excluded because a bare pattern may begin with one and it
 	// can never be a definition's name unescaped.
@@ -287,8 +290,40 @@ func (p *compactParser) parseGrammarBody(g *xdm.Node, end tokenKind) error {
 	}
 }
 
-// parseGrammarContent reads one start, define, div or include.
+// atAnnotationElement reports whether the current token begins an annotation
+// element standing on its own among a grammar's members:
+//
+//	member ::= annotatedComponent | annotationElementNotKeyword
+//	annotationElementNotKeyword ::= foreignElementNameNotKeyword annotationAttributesContent
+//
+// that is, a prefixed name or a non-keyword identifier followed by "[".
+// DocBook 5 opens its grammar with a run of them (s:ns [ prefix = ... ]). Nothing
+// else at this level is a name followed by "[", so the shape is unambiguous.
+func (p *compactParser) atAnnotationElement() bool {
+	switch p.tok.kind {
+	case tokCName, tokEscapedIdent:
+	case tokIdent:
+		if keywords[p.tok.text] {
+			return false
+		}
+	default:
+		return false
+	}
+	scan := *p.lex
+	next, err := scan.next()
+	return err == nil && next.kind == tokPunct && next.text == "["
+}
+
+// parseGrammarContent reads one start, define, div, include, or a free-standing
+// annotation element, which carries no schema meaning and is skipped.
 func (p *compactParser) parseGrammarContent(g *xdm.Node) error {
+	if p.atAnnotationElement() {
+		p.takeDoc()
+		if err := p.advance(); err != nil {
+			return err
+		}
+		return p.skipAnnotation()
+	}
 	doc := p.takeDoc()
 	switch {
 	case p.atKeyword("start"):
