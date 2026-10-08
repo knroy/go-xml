@@ -10,7 +10,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
-| `docs/benchmark.md` | go-xml against Saxon-HE, BaseX, Jing, Xerces-J, libxml2 and `encoding/xml` on nine real workloads, cold and warm, timed only where outputs agree. | |
+| `docs/benchmark.md` | go-xml against Saxon-HE, BaseX, Jing, Xerces-J, libxml2 and `encoding/xml` on nine real workloads, cold and warm, timed only where outputs agree. | [`416ee50`][416ee50] |
 
 ### Fixed — engine
 
@@ -1168,6 +1168,7 @@ here so every entry in this file sits under a release.
 [eb6901e]: https://github.com/knroy/go-xml/commit/eb6901e
 [197eaad]: https://github.com/knroy/go-xml/commit/197eaad
 [cec5f6f]: https://github.com/knroy/go-xml/commit/cec5f6f
+[416ee50]: https://github.com/knroy/go-xml/commit/416ee50
 [d029347]: https://github.com/knroy/go-xml/commit/d029347
 [6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e
