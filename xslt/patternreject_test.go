@@ -15,7 +15,7 @@ import (
 // an XSLT 3.0 general pattern are not walked from a last step that the node
 // test alone settles.
 func TestPatternRejectsOnNodeTestFirst(t *testing.T) {
-	tree, err := xdm.ParseString(`<doc a="1"><p xml:id="x" id="x"/><q/></doc>`, xdm.ParseOptions{})
+	tree, err := xdm.ParseString(`<doc xmlns:z="urn:z" a="1"><p xml:id="x" id="x"/><q/></doc>`, xdm.ParseOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,6 +23,15 @@ func TestPatternRejectsOnNodeTestFirst(t *testing.T) {
 	el := doc.Children[0]
 	attr := el.Attrs[0]
 	p, q := el.Children[0], el.Children[1]
+	var ns *xdm.Node
+	for _, n := range el.Namespaces {
+		if n.Name.Local == "z" {
+			ns = n
+		}
+	}
+	if ns == nil {
+		t.Fatal("no namespace node for prefix z")
+	}
 	ctx := xpath.NewContext(doc, xpath.Builtins())
 
 	cases := []struct {
@@ -47,6 +56,23 @@ func TestPatternRejectsOnNodeTestFirst(t *testing.T) {
 		{"id('x')", p, true},
 		{"id('x')", q, false},
 		{"doc//q", q, true},
+		{"document-node(element(doc))", doc, true},
+		{"document-node(element(doc))", el, false},
+		{"document-node(element(q))", doc, false},
+		{"*[2]", q, true},
+		{"*[2]", p, false},
+		{"q[last()]", q, true},
+		{"doc/descendant::q[1]", q, true},
+		{"doc/descendant::q[1]", p, false},
+		{"q|@*", attr, true},
+		{"text()", attr, false},
+		{"namespace-node()", ns, true},
+		{"namespace-node()", el, false},
+		{"namespace::z", ns, true},
+		{"*", ns, false},
+		{"node()", ns, false},
+		{".[true()]", q, true},
+		{".[self::q]", q, true},
 	}
 	for _, c := range cases {
 		pat, err := CompilePattern(c.pattern, nil)
