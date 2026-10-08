@@ -10,7 +10,8 @@ copy of the tree.
 T11–T16, T18, T19 and the correctness bugs B1–B4 have since landed; see
 [Implementation status](#implementation-status). A second round re-profiled
 the result and its fixes have landed as well; see
-[Round 2](#round-2-after-the-fixes-73a2963). Profiling ran on the same
+[Round 2](#round-2-after-the-fixes-73a2963); [Round 3](#round-3-after-the-round-2-fixes-3fc468a)
+ranks what is left. Profiling ran on the same
 machine as the benchmark, with five profiles running at once, so wall times
 are noisy (±2×). The claims rest on allocation counts, which are
 deterministic, on profile shares, and on A/B runs done back to back. Each
@@ -452,6 +453,75 @@ The benchmark harness has an inconsistency: its cold parse helper sets
 `AllowDOCTYPE` and its warm loop does not, so the two columns time different
 code paths. `docs/benchmark.md` was re-run with every engine at `eb14939`,
 after the round-2 fixes.
+
+## Round 3: after the round-2 fixes (`3fc468a`)
+
+Re-profiled after the benchmark re-run at `eb14939` (same code), with four
+lanes and prototypes on copies of the tree. Each prototype kept every
+workload output byte-identical; the parser, XSLT and XQuery prototypes also
+held every conformance suite at its ratchet count with the same failing
+names. Wall times are noisy (lanes ran together); the claims rest on CPU
+time, allocation counts and alternated A/B runs.
+
+### Where the room is
+
+| Workload | Now | With round-3 prototypes | Reference | What is left after them |
+|---|---:|---:|---:|---|
+| Peppol (both rule sets), warm | 2.80× Saxon | **2.17×** | Saxon 0.9–2.9 ms | per-element namespace nodes in SVRL output, `//` and predicate context copies (v2 or medium) |
+| XRechnung stage 1, warm | 3.91× | **2.55×** | Saxon 2.4 ms | the same, plus `name()` building strings |
+| XRechnung stage 2 (HTML) | 0/8 comparable | **8/8 agree** | — | — |
+| DocBook, warm | 0.65× | **0.51×**; items slower than Saxon 7 → 4 | Saxon 32 ms median | `ptoc.001` 1.8×, `chapter.003` 1.4× |
+| XMark, warm | 1.09× | **1.01×** | Saxon | parse floor: 50 ms against 45, all node bytes |
+| XSD warm | 0.86 ms (0.75× Xerces) | **0.735 ms** | Xerces 0.99 ms | `xp-striding` is now 69% parse |
+| RELAX NG warm | 2.7× Jing | **~1.3×** | Jing 0.03 ms | `attDeriv` on attribute groups |
+| RELAX NG compile | 26.9 ms | 23.5 ms | Jing 108 ms | — |
+| CLI start-up | 4.8–5.5 ms | **3.2–3.8 ms** with a build tag | xsltproc 2.2–2.9 ms | — |
+| Parse 10 MB, parse thread | 85.6 ms | 77 ms | — | tokeniser 45%; node allocation |
+| Retained heap | 23 B per input byte | unchanged | libxml2 ~14 | Node structs are 95.6% of it: v2 |
+
+The steady-state gap that remains after these is structural: XSLT holds
+dynamic state in a variable chain and copies a 512 B context per predicate
+item, and every node is 280 B. Below that, every lane found that the next
+step needs an exported-field change (v2).
+
+### Fix candidates, ranked
+
+Every fix keeps the v1 API. "Measured" means prototyped and timed.
+
+| # | Fix | Gain | Risk |
+|---|---|---|---|
+| S1 | **Call-site function cache** keyed on library, host, version and a library-generation counter, plus one runtime function library per stylesheet so it survives across transforms (`xpath/eval.go:597`, `xslt/runtime.go:790`) | measured: XRechnung −30% wall; CEN −10%, PEPPOL −11% | low–medium |
+| S2 | **XSLT dynamic state on one unexported Context field** (E1), carrying the known-absent bits so stylesheet functions stop re-clearing merge, grouping and regex context | measured: DocBook bytes −11 to −17%; `epub.001` 100 → 49.5 ms with S1 and S3 | medium |
+| S3 | **`TransformOptions` by pointer in the runtime** (672 → 328 B per copy) | measured: `ptoc.001` CPU −20%; `epub.001` −16% | low |
+| S4 | **Namespace-free node ordering and live namespace fixup**: skip the namespace base when neither node is a namespace node; `fixupNamespaces` reads bindings instead of building a map | measured: CEN −8% and −5% | low |
+| S5 | **Validation without allocation**: XSD count vectors built in place and deduplicated on insert (V3), per-validator walk buffers (V4) | measured: 101,519 → 343 allocations per catalog pass; warm −15% | low |
+| S6 | **RELAX NG memo points**: subtrees of size ≥4 behind pre-resolved refs remembering their derivatives per element name; `noteBare` per innermost definition; ASCII NCName fast path | measured: warm 0.100 → 0.040 ms per document; compile −3.4 ms | medium |
+| S7 | **Number nodes while parsing** instead of a `Finalize` walk; cache the last whitespace run per length; check eight ASCII bytes at a time in `checkChars` | measured: parse thread −8 to −10%; tokeniser −15% | low–medium |
+| S8 | **`descendant::name` walks the tree directly** with the name test inlined | measured: XMark q7 eval −21%, q6 −22% | low |
+| S9 | **CLI parses from a stream or `bytes.Reader`** instead of `ParseString(string(data))` | measured: 10 MB cold CPU −13 to −20%; XMark peak RSS −11 MB | low |
+| S10 | **Build tag `goxml_nohttp`** keeping `HTTPResolver` out of the CLI binary (the default build keeps the API) | measured: start-up −1.6 to −2.0 ms, RSS −4.8 MB, binary −12% | low |
+| S11 | **Configurable `MaxItems`**: an additive `xpath.Context.MaxItems` (0 = default 5,000,000, negative = none), `TransformOptions.MaxItems`, `-max-items`; the range cap and `AdoptBudget` follow it | lets XMark q11/q12 run at factor 1, at 37.5 M items and ~3.5 GB | low |
+| E | Estimates: cache `doc()` per transform (−4% `indexterm.001`), compiled `xsl:evaluate` (−2.5% `ptoc.001`), `Compiled.scope` without a copy (3–5%), lazy RELAX NG `nsContext` (−7%), `attDeriv` memo for text-only attribute groups (≤ −15%) | — | low–medium |
+| v2 | Node slimming (T21/T22), shared namespace maps on result elements, boolean constants, `HTTPResolver` out of `xsd`, the context split (T20) | heap 23 → 5–13 B per byte; SVRL −15–20% bytes | v2 |
+
+Checked and rejected this round: a memory limit instead of `GOGC=200` (a
+limit under the live heap costs 10–25× CPU, and the CLI cannot know the live
+size); bigger node chunks (no gain); a SWAR scan in the tokeniser's `text()`
+(no gain); a 64 KiB file read buffer (no gain).
+
+### Bugs found in round 3
+
+| # | Bug | Status |
+|---|---|---|
+| Y1 | The html method drops the stylesheet's own `<meta charset>` and `<meta http-equiv>` even with `include-content-type="no"`; Serialization 3.1 §7.4.13 allows it only when the serializer adds one. This is why XRechnung stage 2 never agreed with Saxon | open; a one-line fix was prototyped |
+| Y2 | html indentation adds whitespace next to inline elements (`<p><b>…</b><i>…</i></p>` splits across lines), which §7.4.3 forbids | open; prototyped (~50 lines) |
+| Y3 | `xsl:decimal-format NaN=""` and `infinity=""` are ignored: an empty value is taken as absent | open (`xslt/formatnumber.go:84`) |
+| Y4 | XSD 1.1: in a choice of a wildcard and an element declaration, the wildcard's readings are committed before the element is tried, so `<r><a>1</a><a>x</a></r>` is accepted without checking `a`'s type; Xerces rejects it | open (`xsd/validate.go`, wildcard branch of `matchSequence`) |
+| Y5 | Unverified: `Compiled.scope` installs an expression's namespaces only when the context has none, so a nested evaluation may resolve a `$calendar` prefix against the caller's namespaces | needs a test |
+
+The benchmark harness's parse items run at `GOGC=100` through
+`benchrun -helper`, while the CLI runs at 200, so those cold figures read
+15–25% higher than the CLI would.
 
 ## Correctness bugs found while profiling
 
