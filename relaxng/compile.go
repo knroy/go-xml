@@ -135,10 +135,12 @@ type compiler struct {
 	// inheritedNs is the ns= in force where an <externalRef> or <include>
 	// brought this schema in, used when the schema itself sets none.
 	inheritedNs string
-	// defineNs records the inherited ns for definitions that arrived through
-	// an <include>, since they are collected while that ns is in force and
-	// compiled later, when it is not.
-	defineNs map[string]string
+	// nodeNs records, for each <define> and <start>, the inheritedNs of the
+	// schema document it was written in. A definition is compiled under that
+	// ns whichever <ref> reaches it (sections 4.7 and 4.8 make ns inheritance
+	// lexical): it is collected while that ns is in force and compiled later,
+	// when the one in force is the referrer's.
+	nodeNs map[*xdm.Node]string
 	// unbound collects prefixes used in a name that nothing declares. They
 	// are reported once the schema is read, so that the message names the
 	// prefix rather than the place.
@@ -155,19 +157,16 @@ type compiler struct {
 	// expansions counts every <ref> expanded during this compilation, bounded
 	// by maxRefExpansions.
 	expansions int
-	// compiled holds each definition already compiled, keyed by name and the
-	// inherited ns it was compiled under, so that every later <ref> to it
-	// shares the one pattern instead of compiling the body again.
-	compiled map[compiledKey]compiledDef
+	// compiled holds each definition already compiled, keyed by name, so
+	// that every later <ref> to it shares the one pattern instead of
+	// compiling the body again. The name is enough: a definition is always
+	// compiled under the ns of the document it was written in (nodeNs).
+	compiled map[string]compiledDef
 	// bare collects, for each definition being compiled, the names it reaches
 	// without crossing an <element>. A shared definition carries that set so
 	// the section 4.19 check can still be made where it is reused.
 	bare map[string]map[string]bool
 }
-
-// compiledKey names a compiled definition: the result depends on the
-// inherited ns as well as the name.
-type compiledKey struct{ name, ns string }
 
 // compiledDef is a compiled definition and the names it reaches without
 // crossing an <element>.
@@ -190,10 +189,6 @@ func (c *compiler) active() *map[string]bool {
 	return c.activeHrefs
 }
 
-// startKey is the key under which a <start>'s inherited namespace is kept. It
-// cannot collide with a definition name, since a name is an NCName.
-const startKey = "<start>"
-
 func (c *compiler) compileTop(root *xdm.Node) (pattern, error) {
 	if root.Name.Local == "grammar" {
 		return c.compileGrammar(root)
@@ -213,22 +208,18 @@ func (c *compiler) compileGrammar(g *xdm.Node) (pattern, error) {
 			}
 			switch kid.Name.Local {
 			case "start":
+				c.noteNs(kid)
 				if start != nil {
 					c.starts = append(c.starts, kid)
 					break
 				}
 				start = kid
-				if c.inheritedNs != "" {
-					if c.defineNs == nil {
-						c.defineNs = map[string]string{}
-					}
-					c.defineNs[startKey] = c.inheritedNs
-				}
 			case "define":
 				name := normalizeToken(kid.AttrValue("name"))
 				if name == "" {
 					return fmt.Errorf("relaxng: <define> has no name")
 				}
+				c.noteNs(kid)
 				// Section 4.17 is checked once the whole grammar has been
 				// read, since it constrains the *set* of definitions of a
 				// name rather than any pair of them.
@@ -236,14 +227,6 @@ func (c *compiler) compileGrammar(g *xdm.Node) (pattern, error) {
 					c.defines[name] = kid
 				} else {
 					c.combined[name] = append(c.combined[name], kid)
-				}
-				if c.inheritedNs != "" {
-					if c.defineNs == nil {
-						c.defineNs = map[string]string{}
-					}
-					if _, seen := c.defineNs[name]; !seen {
-						c.defineNs[name] = c.inheritedNs
-					}
 				}
 			case "div":
 				// <div> groups definitions for documentation and has no
@@ -280,17 +263,7 @@ func (c *compiler) compileGrammar(g *xdm.Node) (pattern, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ns, ok := c.defineNs[startKey]; ok && c.inheritedNs == "" {
-		was := c.inheritedNs
-		c.inheritedNs = ns
-		p0, err := c.compileChildren(start)
-		c.inheritedNs = was
-		if err != nil {
-			return nil, err
-		}
-		return c.joinStarts(p0, startCombine)
-	}
-	p, err := c.compileChildren(start)
+	p, err := c.compileBody(start)
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +272,7 @@ func (c *compiler) compileGrammar(g *xdm.Node) (pattern, error) {
 		join = interleave
 	}
 	for _, extra := range c.starts {
-		q, err := c.compileChildren(extra)
+		q, err := c.compileBody(extra)
 		if err != nil {
 			return nil, err
 		}
@@ -311,20 +284,25 @@ func (c *compiler) compileGrammar(g *xdm.Node) (pattern, error) {
 	return p, nil
 }
 
-// joinStarts combines the further <start> elements onto the first.
-func (c *compiler) joinStarts(p pattern, how string) (pattern, error) {
-	join := choice
-	if how == "interleave" {
-		join = interleave
+// noteNs records the inheritedNs in force where a <define> or <start> is
+// collected, which is the one its body is compiled under.
+func (c *compiler) noteNs(n *xdm.Node) {
+	if c.nodeNs == nil {
+		c.nodeNs = map[*xdm.Node]string{}
 	}
-	for _, extra := range c.starts {
-		q, err := c.compileChildren(extra)
-		if err != nil {
-			return nil, err
-		}
-		p = join(p, q)
-	}
-	return p, nil
+	c.nodeNs[n] = c.inheritedNs
+}
+
+// compileBody compiles a <define> or <start> under the inheritedNs of the
+// schema document it was written in, not the one in force at the <ref> that
+// reached it: a definition of the including grammar reached from an included
+// one must not pick up the <include>'s ns=, nor an included definition lose
+// it. Each part of a combined definition keeps its own.
+func (c *compiler) compileBody(n *xdm.Node) (pattern, error) {
+	was := c.inheritedNs
+	c.inheritedNs = c.nodeNs[n]
+	defer func() { c.inheritedNs = was }()
+	return c.compileChildren(n)
 }
 
 // checkAll runs the whole-grammar checks.
@@ -663,7 +641,8 @@ func (c *compiler) compilePattern(n *xdm.Node) (pattern, error) {
 		sub := &compiler{defines: map[string]*xdm.Node{},
 			combined: map[string][]*xdm.Node{}, how: map[string]string{},
 			depth: c.depth, parent: c, opts: c.opts,
-			includeDepth: c.includeDepth, activeHrefs: c.active()}
+			includeDepth: c.includeDepth, activeHrefs: c.active(),
+			inheritedNs: c.inheritedNs}
 		return sub.compileGrammar(n)
 
 	case "parentRef":
@@ -709,7 +688,7 @@ func (c *compiler) compileRef(n *xdm.Node) (pattern, error) {
 // maxRefExpansions bounds the total number of <ref> expansions one compilation
 // may perform.
 //
-// Each definition is compiled once per inherited ns and then shared (see
+// Each definition is compiled once and then shared (see
 // compiler.compiled), so the count is about the number of definitions:
 // DocBook 5.2's ~1900 definitions compile in well under the bound. Before
 // that sharing every <ref> re-compiled its definition's whole body, which
@@ -759,12 +738,7 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 		}
 		return c.lazyRef(name), nil
 	}
-	ns := c.inheritedNs
-	if dn, ok := c.defineNs[name]; ok && ns == "" {
-		ns = dn
-	}
-	key := compiledKey{name, ns}
-	if d, ok := c.compiled[key]; ok {
+	if d, ok := c.compiled[name]; ok {
 		// Reusing the pattern skips the walk that would have found a cycle
 		// back to a definition still being compiled, so the names it
 		// reaches bare are checked against those here instead.
@@ -798,11 +772,6 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 	if c.expandingAt == nil {
 		c.expandingAt = map[string]int{}
 	}
-	if ns, ok := c.defineNs[name]; ok && c.inheritedNs == "" {
-		was := c.inheritedNs
-		c.inheritedNs = ns
-		defer func() { c.inheritedNs = was }()
-	}
 	if c.bare == nil {
 		c.bare = map[string]map[string]bool{}
 	}
@@ -816,7 +785,7 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 		delete(c.expandingAt, name)
 		delete(c.bare, name)
 	}()
-	p, err := c.compileChildren(def)
+	p, err := c.compileBody(def)
 	if err != nil {
 		return nil, err
 	}
@@ -828,7 +797,7 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 		join = interleave
 	}
 	for _, extra := range c.combined[name] {
-		q, err := c.compileChildren(extra)
+		q, err := c.compileBody(extra)
 		if err != nil {
 			return nil, err
 		}
@@ -843,9 +812,9 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 		p = &refPat{name: name, cached: p, done: true}
 	}
 	if c.compiled == nil {
-		c.compiled = map[compiledKey]compiledDef{}
+		c.compiled = map[string]compiledDef{}
 	}
-	c.compiled[key] = compiledDef{pat: p, bare: c.bare[name]}
+	c.compiled[name] = compiledDef{pat: p, bare: c.bare[name]}
 	return p, nil
 }
 
@@ -1109,10 +1078,10 @@ func rootElement(doc *xdm.Node) *xdm.Node {
 // the compiled map each resolution compiled the definition's whole body afresh,
 // and everything it reaches: DocBook 5.2 compiled its 1,922 definitions 86,752
 // times, and the fresh pointers defeated the competition check's memo, so
-// compiling took 500–650 ms against 40–50 ms shared. Without defineNs and
-// inheritedNs a recursive definition brought in by <include ns="..."> was
-// compiled the second time in no namespace, so <a xmlns="urn:x"><a/></a> was
-// rejected and an inner <a xmlns=""/> accepted.
+// compiling took 500–650 ms against 40–50 ms shared. Without nodeNs a
+// recursive definition brought in by <include ns="..."> was compiled the
+// second time in no namespace, so <a xmlns="urn:x"><a/></a> was rejected and
+// an inner <a xmlns=""/> accepted.
 func (c *compiler) lazyRef(name string) pattern {
 	if c.lazy == nil {
 		c.lazy = map[string]*refPat{}
@@ -1122,9 +1091,6 @@ func (c *compiler) lazyRef(name string) pattern {
 	}
 	r := &refPat{name: name}
 	c.lazy[name] = r
-	// The ns in force here is captured now: by the time the reference is
-	// resolved, compileRefNamed has restored the one it temporarily set.
-	ns := c.inheritedNs
 	r.resolve = func() (pattern, error) {
 		sub := &compiler{
 			defines: c.defines, combined: c.combined, how: c.how,
@@ -1132,7 +1098,7 @@ func (c *compiler) lazyRef(name string) pattern {
 			activeHrefs: c.activeHrefs,
 			expanding:   map[string]bool{}, expandingAt: map[string]int{},
 			lazy: c.lazy, compiled: c.compiled,
-			defineNs: c.defineNs, inheritedNs: ns,
+			nodeNs: c.nodeNs,
 		}
 		return sub.compileRefNamed(name)
 	}
