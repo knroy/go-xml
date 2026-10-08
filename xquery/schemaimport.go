@@ -318,7 +318,7 @@ func (l *schemaLoader) read(rc io.ReadCloser, resolved, base, ns string) (
 
 // parse turns schema document text into an assembled schema.
 func (l *schemaLoader) parse(r io.Reader, baseURI, ns string) (*xsd.Schema, error) {
-	tree, err := xdm.Parse(r, xdm.ParseOptions{})
+	tree, err := xsd.ParseDocument(r, l.opts.SchemaParseOptions)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"XQST0059: the schema for namespace %q could not be parsed: %w",
@@ -329,7 +329,8 @@ func (l *schemaLoader) parse(r io.Reader, baseURI, ns string) (*xsd.Schema, erro
 		// the same resolver the query's import was granted, never by a wider
 		// one. A nil resolver here would let xsd apply ITS default, and this
 		// package's default is the stricter of the two: nothing is opened.
-		Resolver: l.opts.SchemaResolver,
+		Resolver:     l.opts.SchemaResolver,
+		ParseOptions: l.opts.SchemaParseOptions,
 	}
 	// A schema document may declare with vc:minVersion that it is written for
 	// XSD 1.1. Read under 1.0 the whole document is conditionally excluded and

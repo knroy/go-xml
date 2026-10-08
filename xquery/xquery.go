@@ -128,6 +128,18 @@ type Options struct {
 	// no further than the query's import was granted.
 	SchemaResolver SchemaResolver
 
+	// SchemaParseOptions are passed to the XML parser for each schema
+	// document "import schema" loads, whether from Schemas' Source or through
+	// SchemaResolver, including the ones those documents import in turn.
+	//
+	// The zero value refuses a DOCTYPE, which is the right default for the
+	// same reason it is in xsd.Options: a schema has no use for one, and it
+	// is the entry point for entity expansion attacks. A host that must
+	// read a schema carrying one -- the W3C's own schema for schemas
+	// declares its entities that way -- sets AllowDOCTYPE here, and thereby
+	// says so deliberately rather than having it decided for it.
+	SchemaParseOptions xdm.ParseOptions
+
 	// MaxSchemaBytes bounds the total schema source text one compilation may
 	// read through SchemaResolver and Schemas, cumulatively rather than per
 	// import. Zero means DefaultMaxSchemaBytes.
