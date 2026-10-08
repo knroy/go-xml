@@ -344,6 +344,25 @@ xsd.Options{Resolver: &xsd.HTTPResolver{
 private address ranges. `MapResolver` resolves from an in-memory table and
 touches neither disk nor network, which is the right choice in a server.
 
+From the command line the W3C schemas come from a catalog directory, since the
+CLI fetches nothing. A schema that imports the schema for schemas or `xml.xsd`
+by its `www.w3.org` URL, as the XSLT 3.0 schema does, otherwise loads without
+those components and fails with ``element ref "xs:schema" names no element
+declaration``:
+
+```sh
+go-xml validate -xsd schema-for-xslt30.xsd -xsd-version 1.1 \
+    -catalog path/to/w3c stylesheet.xsl
+```
+
+`-catalog` names a directory holding `XMLSchema.xsd`, `xml.xsd` or both; the
+[`w3cschemas`](../w3cschemas/README.md) module ships them under `schemas/`.
+Every spelling of a reference to them, and an `xs:import` naming only the
+namespace, is answered from those files. A DOCTYPE in them is accepted, since
+the W3C schema for schemas carries one. Everything else is read as without the
+flag, confined to `-root` or the schema's directory. The transform
+(`xsl:import-schema`) and `go-xml xquery` (`import schema`) take the same flag.
+
 Note that `xsi:schemaLocation` lives in the *instance document*. Honouring it
 lets whoever supplied the document choose which schema it is judged against, so
 by default this library does not read it — the schema is the one the caller

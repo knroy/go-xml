@@ -413,6 +413,7 @@ sty, err := xslt.Compile(sheet.Root, xslt.CompileOptions{
 | `Resolver` | `ModuleResolver` | disabled | Loads included and imported modules. **Nil means a stylesheet cannot pull in another file** — the safe default. `xslt.NewFileResolver(roots...)` confines it to directories you name, each covering its subdirectories to any depth; a symlink out of a root is refused at the open by `os.Root`, so it does not escape. |
 | `StaticParams` | `map[string]xdm.Sequence` | none | Values for `xsl:param static="yes"`, keyed by the parameter's `{uri}local` name. A static parameter is bound before static analysis begins, so its value must come from the caller rather than from `Transform`'s runtime `Params`. |
 | `SchemaResolver` | `xsd.Resolver` | disabled | Loads schemas for `xsl:import-schema`. |
+| `SchemaParseOptions` | `xdm.ParseOptions` | refuses a DOCTYPE | Parser options for every schema document `xsl:import-schema` loads, and for what those documents include and import. A document a `CatalogResolver` answers from its own table may carry a DOCTYPE regardless. |
 | `XPathVersion` | `*xpath.Version` | derive | Pins the XPath version for every expression in the stylesheet, overriding what the stylesheet declares. Nil derives it from the `version` attribute. See [Choosing a language version](#choosing-a-language-version). |
 
 ### Choosing a language version
@@ -926,6 +927,7 @@ seq, err := q.Eval(xpath.NewContext(nil, xpath.Builtins()))
 | `MaxModuleBytes` | `int64` | *(none)* | Total module source one compilation may read, cumulatively. Zero means `DefaultMaxModuleBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
 | `Schemas` | `[]Schema` | *(the schema store)* | Schemas `import schema` may find, registered by target namespace with their source or their assembled `*xsd.Schema` components. Consulted before `SchemaResolver`, and reads nothing. |
 | `SchemaResolver` | `xsd.Resolver` | *(none)* | Locates a schema `Schemas` does not have. **Nil by default: with no resolver an `at` location is never opened** and an import that cannot be answered is `XQST0059`. The same resolver is handed to `xsd` for the imported schema's own `xs:include` and `xs:import`. |
+| `SchemaParseOptions` | `xdm.ParseOptions` | refuses a DOCTYPE | Parser options for every schema document `import schema` reads, from the store's source text or a resolver, and for its includes and imports; shared by library modules and `fn:load-xquery-module`. A document a `CatalogResolver` answers from its own table may carry a DOCTYPE regardless. |
 | `MaxSchemaBytes` | `int64` | *(none)* | Total schema source one compilation may read, cumulatively across every import. Zero means `DefaultMaxSchemaBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
 
 Nine prefixes are bound before `Namespaces` is consulted and never need to be

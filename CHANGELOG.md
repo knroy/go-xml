@@ -10,6 +10,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
+| `-catalog DIR` on `validate`, the transform and `xquery` | Answers references to the W3C schemas (`XMLSchema.xsd`, `xml.xsd`) from local copies, so a schema importing them by `www.w3.org` URL loads from the command line. | [`39c6931`][39c6931] |
+| `xquery.Options.SchemaParseOptions` | Parser options for `import schema` documents, as `xslt.CompileOptions` already had; the zero value still refuses a DOCTYPE. | [`740c22a`][740c22a] |
+| `xsd.ParseDocument`, `xsd.RootedFileResolver` | Parse a resolved schema document under the catalog's DOCTYPE rule; build the confined default resolver to use as a catalog's fallback. | [`d86f80c`][d86f80c] |
 | `docs/benchmark.md` | go-xml against Saxon-HE, BaseX, Jing, Xerces-J, libxml2 and `encoding/xml` on nine real workloads, cold and warm, timed only where outputs agree. | [`416ee50`][416ee50] |
 
 ### Fixed — engine
@@ -41,6 +44,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | An undeclared entity was always fatal | It is fatal only where §4.1's WFC applies; after an unread external subset or `%pe;` the reference is dropped, as libxml2 does in attribute values. | [`3d7e86b`][3d7e86b] |
 | A comment with `--` or ending `--->` in the internal or an external subset was accepted | It is refused with the same error as in content (§2.5 [15]). | [`97148b4`][97148b4] |
 | Entity and ATTLIST declarations after an unread `%pe;` were processed | Per §5.1 they are ignored unless the document is `standalone="yes"`. | [`7496ea8`][7496ea8] |
+| A `CatalogResolver` holding the W3C schema for schemas needed `AllowDOCTYPE` for every schema document | A document the catalog answers from its own table may carry a DOCTYPE; documents from the fallback keep the caller's options. | [`d86f80c`][d86f80c] |
+| `xsl:import-schema` ignored `SchemaParseOptions` on the located document and on a namespace-only import | Every path, including the schemas' own includes and imports, now uses them. | [`2402bca`][2402bca] |
+| A namespace-only `xsl:import-schema` read its schema as XSD 1.0 | It is read as XSD 1.1 and honours `vc:minVersion`, like the location and inline paths. | [`987e24e`][987e24e] |
 | Compact syntax refused a free-standing annotation element among definitions | DocBook's `s:ns [ ... ]` was read as a datatype name. The grammar allows it; it is now skipped like any annotation. | [`197eaad`][197eaad] |
 
 ### Changed — performance
@@ -1214,6 +1220,11 @@ here so every entry in this file sits under a release.
 [197eaad]: https://github.com/knroy/go-xml/commit/197eaad
 [cec5f6f]: https://github.com/knroy/go-xml/commit/cec5f6f
 [416ee50]: https://github.com/knroy/go-xml/commit/416ee50
+[740c22a]: https://github.com/knroy/go-xml/commit/740c22a
+[2402bca]: https://github.com/knroy/go-xml/commit/2402bca
+[987e24e]: https://github.com/knroy/go-xml/commit/987e24e
+[39c6931]: https://github.com/knroy/go-xml/commit/39c6931
+[d86f80c]: https://github.com/knroy/go-xml/commit/d86f80c
 [81b0a27]: https://github.com/knroy/go-xml/commit/81b0a27
 [17b99c3]: https://github.com/knroy/go-xml/commit/17b99c3
 [3d7e86b]: https://github.com/knroy/go-xml/commit/3d7e86b
