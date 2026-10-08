@@ -286,6 +286,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 
 	tree := NewTree()
 	var chunk nodeChunk
+	var spaces spaceTable
 	tree.Root.BaseURI = opts.BaseURI
 	tree.Root.DocumentURI = opts.DocumentURI
 	cur := tree.Root
@@ -415,7 +416,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				sawPrologToken = true
 				continue
 			}
-			appendText(&chunk, cur, string(t))
+			appendText(&chunk, cur, spaces.text(t))
 
 		case xml.Comment:
 			sawPrologToken = true
@@ -777,6 +778,48 @@ func appendText(chunk *nodeChunk, parent *Node, s string) {
 	n := chunk.alloc()
 	n.Kind, n.Value = KindText, s
 	parent.AppendChild(n)
+}
+
+// spaceTable shares one string among the whitespace-only text values of a
+// parse. An indented document repeats a handful of them -- a newline and the
+// indentation of each depth -- once per element, so most of its text nodes
+// are one of a few strings.
+type spaceTable map[string]string
+
+// maxSpaceTable and maxSpaceLen bound the table: a run longer than
+// maxSpaceLen is unlikely to repeat, and past maxSpaceTable entries values
+// are copied as before.
+const (
+	maxSpaceTable = 256
+	maxSpaceLen   = 128
+)
+
+// text returns b as a string, shared with earlier identical runs when b is
+// whitespace only.
+func (t *spaceTable) text(b []byte) string {
+	if len(b) > maxSpaceLen || !onlySpace(b) {
+		return string(b)
+	}
+	if s, ok := (*t)[string(b)]; ok {
+		return s
+	}
+	s := string(b)
+	if len(*t) < maxSpaceTable {
+		if *t == nil {
+			*t = make(spaceTable)
+		}
+		(*t)[s] = s
+	}
+	return s
+}
+
+func onlySpace(b []byte) bool {
+	for _, c := range b {
+		if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			return false
+		}
+	}
+	return true
 }
 
 // nodeChunk hands out the nodes of one parse from shared backing arrays, so

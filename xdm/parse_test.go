@@ -3,6 +3,7 @@ package xdm
 import (
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 func TestParseBasicTree(t *testing.T) {
@@ -446,5 +447,52 @@ func TestParseNodeChunks(t *testing.T) {
 	small := "<r>" + strings.Repeat(`<e a="1">t</e>`, 1000) + "</r>"
 	if got := testing.AllocsPerRun(5, func() { _, _ = ParseString(small, ParseOptions{}) }); got > 8500 {
 		t.Errorf("parse of 1,000 elements: %.0f allocations, want at most 8,500", got)
+	}
+}
+
+// TestParseSharesRepeatedStrings pins T18: within one parse, a repeated
+// element or attribute name and a repeated whitespace-only text value are one
+// string, and reusing the tokenizer's attribute slice from tag to tag does not
+// let one element's attributes leak into the next.
+func TestParseSharesRepeatedStrings(t *testing.T) {
+	// Names longer than one byte: Go already shares every one-byte string.
+	doc := "<r>\n  <item id=\"1\" b=\"2\">x</item>\n  <item id=\"3\">y</item>\n  <f/>\n</r>"
+	tree, err := ParseString(doc, ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := tree.Root.Children[0]
+	var els, spaces []*Node
+	for _, c := range r.Children {
+		switch c.Kind {
+		case KindElement:
+			els = append(els, c)
+		case KindText:
+			spaces = append(spaces, c)
+		}
+	}
+	if len(els) != 3 || len(spaces) != 4 {
+		t.Fatalf("got %d elements and %d text nodes, want 3 and 4", len(els), len(spaces))
+	}
+	same := func(a, b string) bool { return unsafe.StringData(a) == unsafe.StringData(b) }
+	if !same(els[0].Name.Local, els[1].Name.Local) {
+		t.Errorf("element name item is not shared")
+	}
+	if !same(els[0].Attrs[0].Name.Local, els[1].Attrs[0].Name.Local) {
+		t.Errorf("attribute name id is not shared")
+	}
+	if !same(spaces[0].Value, spaces[1].Value) || spaces[0].Value != "\n  " {
+		t.Errorf("whitespace text %q is not shared", spaces[0].Value)
+	}
+	var got []string
+	for _, e := range els {
+		var s []string
+		for _, a := range e.Attrs {
+			s = append(s, a.Name.Local+"="+a.Value)
+		}
+		got = append(got, e.Name.Local+"["+strings.Join(s, ",")+"]")
+	}
+	if want := "item[id=1,b=2] item[id=3] f[]"; strings.Join(got, " ") != want {
+		t.Errorf("attributes: got %q, want %q", strings.Join(got, " "), want)
 	}
 }

@@ -116,8 +116,8 @@ const bufSize = 4096
 // A Decoder reads tokens from an XML byte stream.
 //
 // Byte slices in a returned token — CharData, Comment, ProcInst.Inst,
-// Directive — alias the Decoder's scratch space and are valid only until the
-// next call to RawToken.
+// Directive — and StartElement.Attr alias the Decoder's scratch space and are
+// valid only until the next call to RawToken.
 type Decoder struct {
 	// Strict is kept for the caller's sake, which sets it; the Decoder is
 	// strict whatever its value. xdm has never read a document any other way.
@@ -151,6 +151,12 @@ type Decoder struct {
 	scratch []byte    // the bytes of the token being built
 	spans   []refSpan // in scratch, the extents produced by character references
 	carry   []byte    // a name that straddled a refill
+	attrs   []Attr    // backs StartElement.Attr, reused tag to tag
+
+	// names interns the names this Decoder has returned, so that a document
+	// repeating a few element and attribute names thousands of times
+	// allocates each once. Only valid names are entered.
+	names map[string]string
 
 	endPending bool // the last tag was empty; its EndElement is owed
 	endName    Name
@@ -355,7 +361,7 @@ func (d *Decoder) startTag() (Token, error) {
 	if !ok {
 		return nil, d.orSyntaxError("expected element name after <")
 	}
-	attrs := []Attr{}
+	attrs := d.attrs[:0]
 	for {
 		spaced := d.space()
 		b, ok := d.mustgetc()
@@ -403,6 +409,7 @@ func (d *Decoder) startTag() (Token, error) {
 		}
 		attrs = append(attrs, Attr{an, string(v)})
 	}
+	d.attrs = attrs
 	return StartElement{name, attrs}, nil
 }
 
@@ -709,12 +716,27 @@ func (d *Decoder) name() (string, bool) {
 	if !ok {
 		return "", false
 	}
+	if s, ok := d.names[string(b)]; ok {
+		return s, true
+	}
 	if !isName(b) {
 		d.syntaxError("invalid XML name: " + string(b))
 		return "", false
 	}
-	return string(b), true
+	s := string(b)
+	// ponytail: entries stop at maxInternedNames, so a document of unique
+	// names costs a bounded map; later names are allocated as before.
+	if len(d.names) < maxInternedNames {
+		if d.names == nil {
+			d.names = make(map[string]string)
+		}
+		d.names[s] = s
+	}
+	return s, true
 }
+
+// maxInternedNames bounds the name table of one Decoder.
+const maxInternedNames = 4096
 
 // nameBytes consumes a run of bytes that may belong to a name: the ASCII name
 // characters and every non-ASCII byte, whose validity isName decides once the
