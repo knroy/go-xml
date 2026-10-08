@@ -1,8 +1,11 @@
 package xdm
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/internal/xmltok"
 )
 
 func TestParseRejectsDuplicateAndNamespaceIllFormedNames(t *testing.T) {
@@ -111,5 +114,47 @@ func TestParseNamespaceBindsNormalizedValue(t *testing.T) {
 	}
 	if got := tree.Root.ChildElements()[0].Namespaces; len(got) != 2 || got[1].Value != " urn:x " {
 		t.Errorf("CDATA xmlns:b namespaces = %+v, want the value unnormalized", got)
+	}
+}
+
+// TestDuplicateAttributeCheck covers both halves of the duplicate check: the
+// scan used for a tag's first few attributes and the map it hands over to,
+// with the duplicate reported for the attribute that repeats an earlier one.
+// The common case, a tag of a few attributes, must not allocate.
+func TestDuplicateAttributeCheck(t *testing.T) {
+	attrs := func(n int, extra string) string {
+		var b strings.Builder
+		for i := range n {
+			fmt.Fprintf(&b, ` a%d="1"`, i)
+		}
+		return b.String() + extra
+	}
+	for _, n := range []int{0, 3, 7, 8, 9, 30} {
+		ns := `<r xmlns:p="urn:x" xmlns:q="urn:x"`
+		if _, err := ParseString(ns+attrs(n, ` p:z="1"`)+`/>`, ParseOptions{}); err != nil {
+			t.Fatalf("n=%d distinct: %v", n, err)
+		}
+		_, err := ParseString(ns+attrs(n, ` p:z="1" b="2" q:z="3" a0="4"`)+`/>`, ParseOptions{})
+		if want := "parse XML: duplicate attribute {urn:x}z"; err == nil || err.Error() != want {
+			t.Errorf("n=%d: err = %v, want %s", n, err, want)
+		}
+		if n > 0 {
+			_, err = ParseString(`<r`+attrs(n, ` a0="4"`)+`/>`, ParseOptions{})
+			if want := "parse XML: duplicate attribute {}a0"; err == nil || err.Error() != want {
+				t.Errorf("n=%d: err = %v, want %s", n, err, want)
+			}
+		}
+	}
+
+	tok := xmltok.StartElement{Name: xmltok.Name{Local: "e"}}
+	for i := range 6 {
+		tok.Attr = append(tok.Attr, xmltok.Attr{Name: xmltok.Name{Space: "xml", Local: fmt.Sprint("a", i)}, Value: "v"})
+	}
+	if n := testing.AllocsPerRun(100, func() {
+		if err := validateStartElement(tok, nil, false); err != nil {
+			t.Fatal(err)
+		}
+	}); n != 0 {
+		t.Errorf("validateStartElement on six attributes allocated %.0f times, want 0", n)
 	}
 }

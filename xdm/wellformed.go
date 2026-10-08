@@ -132,8 +132,13 @@ func validateStartElement(t xml.StartElement, parent *Node, xml11 bool) error {
 	}
 
 	// XML checks raw names; Namespaces in XML strengthens that to expanded names.
-	// The URI/NUL/local key makes p:a and q:a collide when p and q bind alike.
-	seen := map[string]bool{}
+	// Keying on {URI, local} makes p:a and q:a collide when p and q bind alike.
+	// A tag's few attributes are checked by a scan of those before them, which
+	// allocates nothing; past a handful the keys move into a map, so that a tag
+	// with thousands of attributes is not checked in quadratic time.
+	var small [8]expandedName
+	seen := small[:0]
+	var many map[expandedName]bool
 	for _, a := range t.Attr {
 		if _, declaration := namespaceDecl(a); declaration {
 			continue
@@ -145,14 +150,33 @@ func validateStartElement(t xml.StartElement, parent *Node, xml11 bool) error {
 		if a.Name.Space != "" {
 			uri = bindings[a.Name.Space]
 		}
-		key := uri + "\x00" + a.Name.Local
-		if seen[key] {
+		k := expandedName{uri, a.Name.Local}
+		dup := many[k]
+		for _, s := range seen {
+			dup = dup || s == k
+		}
+		if dup {
 			return fmt.Errorf("parse XML: duplicate attribute {%s}%s", uri, a.Name.Local)
 		}
-		seen[key] = true
+		switch {
+		case many != nil:
+			many[k] = true
+		case len(seen) < len(small):
+			seen = append(seen, k)
+		default:
+			many = make(map[expandedName]bool, 2*len(small))
+			for _, s := range seen {
+				many[s] = true
+			}
+			many[k] = true
+			seen = nil
+		}
 	}
 	return nil
 }
+
+// expandedName is an attribute's {namespace URI, local name}.
+type expandedName struct{ uri, local string }
 
 func requireQName(n xml.Name) error {
 	if strings.Contains(n.Local, ":") {
