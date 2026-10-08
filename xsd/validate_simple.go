@@ -709,6 +709,11 @@ func numericEqual(a, b string) bool {
 // octets, so "0F" has length 1 rather than 2. Measuring the literal would give
 // the wrong answer for every binary-typed value.
 func checkLengthForPrimitive(steps []facetStep, normalized, prim string) error {
+	// Counting is the cost, and with no length facet in the chain there is
+	// nothing to compare the count with.
+	if !hasLengthFacet(steps) {
+		return nil
+	}
 	var n uint64
 	switch prim {
 	case "hexBinary":
@@ -736,6 +741,17 @@ func checkLengthForPrimitive(steps []facetStep, normalized, prim string) error {
 		unit = "octets"
 	}
 	return checkLengthFacets(steps, n, unit)
+}
+
+// hasLengthFacet reports whether any step carries length, minLength or
+// maxLength.
+func hasLengthFacet(steps []facetStep) bool {
+	for _, st := range steps {
+		if f := st.facets; f.Length != nil || f.MinLength != nil || f.MaxLength != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // base64DecodedLen returns the number of octets a base64 literal encodes.

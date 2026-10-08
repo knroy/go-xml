@@ -438,7 +438,7 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		// its key carries an empty adoptedNS; a later chameleon include of
 		// the same file keys separately and is still read.
 		if resolved != "" {
-			a.seen[docKey{location: canonicalLocation(resolved)}] = true
+			a.seen[docKey{location: a.canon.location(resolved)}] = true
 		}
 		// Named on the command line, so the caller knows about it: its
 		// faults are not attributed to a file they did not expect.
@@ -534,24 +534,66 @@ func redefinesAnything(el *xdm.Node) bool {
 // was: a remote URL has no filesystem identity to appeal to, and a location
 // that cannot be statted will fail when it is read.
 func canonicalLocation(resolved string) string {
+	return (&canonCache{}).location(resolved)
+}
+
+// canonCache is canonicalLocation with its answers and directory listings
+// kept for the life of one assembler: a schema set reaches the same documents
+// and directories many times, and each call otherwise lists the directory
+// again and stats its entries.
+type canonCache struct {
+	byPath map[string]string
+	dirs   map[string]*dirListing
+}
+
+// dirListing is one directory's entries, with each entry's FileInfo fetched
+// the first time it is compared, as canonicalLocation's scan did.
+type dirListing struct {
+	entries []os.DirEntry
+	infos   []os.FileInfo
+}
+
+func (c *canonCache) location(resolved string) string {
 	if resolved == "" || strings.Contains(resolved, "://") {
 		return resolved
 	}
+	if got, ok := c.byPath[resolved]; ok {
+		return got
+	}
+	if c.byPath == nil {
+		c.byPath = map[string]string{}
+		c.dirs = map[string]*dirListing{}
+	}
+	out := c.find(resolved)
+	c.byPath[resolved] = out
+	return out
+}
+
+func (c *canonCache) find(resolved string) string {
 	info, err := os.Stat(resolved)
 	if err != nil {
 		return resolved
 	}
 	dir := filepath.Dir(resolved)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+	l, ok := c.dirs[dir]
+	if !ok {
+		if entries, err := os.ReadDir(dir); err == nil {
+			l = &dirListing{entries: entries, infos: make([]os.FileInfo, len(entries))}
+		}
+		c.dirs[dir] = l
+	}
+	if l == nil {
 		return resolved
 	}
-	for _, e := range entries {
-		ei, err := e.Info()
-		if err != nil {
-			continue
+	for i, e := range l.entries {
+		if l.infos[i] == nil {
+			ei, err := e.Info()
+			if err != nil {
+				continue
+			}
+			l.infos[i] = ei
 		}
-		if os.SameFile(info, ei) {
+		if os.SameFile(info, l.infos[i]) {
 			return filepath.Join(dir, e.Name())
 		}
 	}
@@ -602,6 +644,9 @@ type assembler struct {
 	// answered against that document rather than the whole schema.
 	redefined map[*xdm.Node]*xdm.Node
 
+	// canon answers canonicalLocation for this load.
+	canon canonCache
+
 	// compEdges is the schema-composition graph: one entry per
 	// <xs:include>, <xs:redefine> or <xs:override> that resolved to a
 	// document, in the order they were read. checkCompositionCycles walks
@@ -638,7 +683,7 @@ type compEdge struct {
 // meet and no cycle ever closes: same canonicalLocation, same adopted
 // namespace.
 func (a *assembler) addCompositionEdge(el *xdm.Node, doc *schemaDoc, to docKey, redefining bool) {
-	from := docKey{location: canonicalLocation(doc.baseURI)}
+	from := docKey{location: a.canon.location(doc.baseURI)}
 	if doc.chameleon {
 		from.adoptedNS = doc.targetNS
 	}
@@ -1139,7 +1184,7 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 	// schemaLocation instead of the resolved path would make two documents
 	// of one file whenever a schema set reaches it by different spellings;
 	// see docKey.
-	key := docKey{location: canonicalLocation(resolved), adoptedNS: chameleon}
+	key := docKey{location: a.canon.location(resolved), adoptedNS: chameleon}
 
 	// Record the composition edge before the dedup check, not after: a
 	// cycle is precisely the case where the far end has already been read,

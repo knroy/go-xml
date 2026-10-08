@@ -1032,8 +1032,14 @@ func nonSpaceText(el *xdm.Node) string {
 		if c.Kind != xdm.KindText {
 			continue
 		}
-		if s := strings.Trim(c.Value, " \t\n\r"); s != "" {
-			return s
+		// Most element-only content is whitespace only: look for a
+		// non-space byte before paying for the trim.
+		for i := 0; i < len(c.Value); i++ {
+			switch c.Value[i] {
+			case ' ', '\t', '\n', '\r':
+				continue
+			}
+			return strings.Trim(c.Value, " \t\n\r")
 		}
 	}
 	return ""
