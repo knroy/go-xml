@@ -130,6 +130,8 @@ var (
 // about the repository. tests/check.sh's docfigure section still uses grep, and
 // the two agreeing is a check in itself.
 //
+// bench/ is skipped too: it is a local, gitignored benchmark harness.
+//
 // .claude/worktrees holds agent checkouts of this same repository and would
 // otherwise multiply every count; testdata holds fixtures, some of which are
 // Go source. Both are skipped, which is what the documented grep commands do
@@ -171,6 +173,11 @@ func countDecls(root string, re *regexp.Regexp, want func(string) bool) (int, er
 		if info.IsDir() {
 			switch info.Name() {
 			case ".git", "testdata", "worktrees", "node_modules":
+				return filepath.SkipDir
+			}
+			// bench/ is the local benchmark harness, gitignored: counting its
+			// tests would make the figure depend on whether a checkout has it.
+			if filepath.Dir(path) == filepath.Clean(root) && info.Name() == "bench" {
 				return filepath.SkipDir
 			}
 			return nil

@@ -604,13 +604,13 @@
       "id": "unit-tests",
       "label": "Unit tests",
       "kind": "func-test",
-      "method": "grep -rn '^func Test' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'"
+      "method": "grep -rn '^func Test' --include='*_test.go' . | grep -v '/\\.claude/worktrees/' | grep -vc '^\\./bench/'"
     },
     {
       "id": "fuzz-targets",
       "label": "Fuzz targets",
       "kind": "func-fuzz",
-      "method": "grep -rn '^func Fuzz' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'"
+      "method": "grep -rn '^func Fuzz' --include='*_test.go' . | grep -v '/\\.claude/worktrees/' | grep -vc '^\\./bench/'"
     },
     {
       "id": "limit-boundary-tests",

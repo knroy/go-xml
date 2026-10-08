@@ -589,14 +589,15 @@ laneFromStatus vet "$_f0" "go vet ./..."
 # change that is otherwise entirely green.
 #
 # The counting commands. Each excludes .claude/worktrees, which holds agent
-# checkouts of this same repository and would otherwise multiply every count.
+# checkouts of this same repository and would otherwise multiply every count,
+# and bench/, the local benchmark harness, which is gitignored.
 docfigure_tests() {
 	grep -rn "^func Test" --include='*_test.go' . |
-		grep -vc '/\.claude/worktrees/'
+		grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'
 }
 docfigure_fuzz() {
 	grep -rn "^func Fuzz" --include='*_test.go' . |
-		grep -vc '/\.claude/worktrees/'
+		grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'
 }
 docfigure_limits() {
 	grep -hc "^func Test" ./*/limits_boundary_test.go |
@@ -628,9 +629,9 @@ $(for _f in "$@"; do printf '        %s\n' "$_f"; done)
 docfigure_cmd() {
 	case $1 in
 	"unit test count")
-		printf '%s' "grep -rn '^func Test' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'" ;;
+		printf '%s' "grep -rn '^func Test' --include='*_test.go' . | grep -v '/\\.claude/worktrees/' | grep -vc '^\\./bench/'" ;;
 	"fuzz target count")
-		printf '%s' "grep -rn '^func Fuzz' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'" ;;
+		printf '%s' "grep -rn '^func Fuzz' --include='*_test.go' . | grep -v '/\\.claude/worktrees/' | grep -vc '^\\./bench/'" ;;
 	"limit boundary test count")
 		printf '%s' "grep -hc '^func Test' ./*/limits_boundary_test.go | awk '{n += \$1} END {print n + 0}'" ;;
 	esac

@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,585 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,574 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -37,12 +37,12 @@ command can settle are asserted for equality by `tests/check.sh`'s *documented
 figures* section, which fails the gate when this table drifts from the tree:
 
 * **Unit tests** — `func Test` declarations, not subtests and not table rows:
-  `grep -rn "^func Test" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
+  `grep -rn "^func Test" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`
 * **Limit boundary tests** — `func Test` declarations in the six
   `*/limits_boundary_test.go` files (dtd, relaxng, xdm, xpath, xsd, xslt); most
   are table-driven, so they run rather more than 13 cases:
   `grep -hc "^func Test" ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'`
-* **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
+* **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`
 * **W3C conformance suites** — the sum of the in-scope totals in the status
   table: XPath 3.1 22,054 + XQuery 3.1 30,517 + XSLT 2.0 6,201 + XSLT 3.0 11,518
   + XSD 1.0 39,388 + XSD 1.1 41,598 + RELAX NG 965. XPath 2.0 and 3.0 are not

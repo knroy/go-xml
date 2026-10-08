@@ -63,6 +63,8 @@
 # a record of a measurement and stays attached to the run that produced it.
 /tests/release-record.txt
 
-# Benchmark engines and build outputs, fetched and built by bench/fetch-engines.sh
-# and benchrun; third-party jars are never committed.
-/bench/.cache/
+# The benchmark harness is kept local and out of the repository: its engines,
+# inputs and results are machine-specific. Both spellings, for the reason given
+# for testdata above. docs/benchmark.md records what it measured.
+/bench
+/bench/

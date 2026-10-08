@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<library>
-  <book id="b1" year="1951"><title>Foundation</title><price>7.50</price></book>
-  <book id="b2" year="1965"><title>Dune</title><price>9.99</price></book>
-  <book id="b3" year="1969"><title>Ubik</title><price>6.25</price></book>
-</library>
