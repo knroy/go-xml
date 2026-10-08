@@ -1,6 +1,7 @@
 package xquery
 
 import (
+	"math"
 	"sort"
 
 	"github.com/knroy/go-xml/xdm"
@@ -152,6 +153,15 @@ type joinCache struct {
 	// xs:untypedAtomic, the only types whose general-comparison equality is
 	// string equality (under the codepoint collation, checked at use).
 	index map[string][]int
+	// numeric says every key item is numeric, so that an untypedAtomic outer
+	// key is cast to xs:double against each of them (castOuterOnce).
+	numeric bool
+	// byValue holds the positions of the non-NaN keys in ascending key
+	// order, and values every key. They are built only for an ordering
+	// operator when every key is one xs:double, where each pair's comparison
+	// is a float64 comparison.
+	byValue []int
+	values  []float64
 }
 
 func (c *joinClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
@@ -213,7 +223,7 @@ func (c *joinClause) join(in []tuple, ctx *evalContext) (out []tuple, n int, ok 
 		}
 		n += len(hits)
 		for _, i := range hits {
-			out = append(out, t.bind(c.f.name, xdm.One(e.items[i])))
+			out = append(out, t.bind(c.f.name, e.items[i:i+1:i+1]))
 		}
 	}
 	return out, n, true
@@ -249,6 +259,27 @@ func (c *joinClause) cache(sub *evalContext, state *joinState) *joinCache {
 		}
 		hashable = hashable && allStrings(e.keys[i])
 	}
+	e.numeric = true
+	doubles := c.op == "<" || c.op == "<=" || c.op == ">" || c.op == ">="
+	for _, ks := range e.keys {
+		for _, k := range ks {
+			a, ok := k.(*xdm.Atomic)
+			e.numeric = e.numeric && ok && a.Type.IsNumeric()
+		}
+		doubles = doubles && len(ks) == 1 && ks[0].(*xdm.Atomic).Type == xdm.TypeDouble
+	}
+	if doubles && e.numeric {
+		e.values = make([]float64, len(items))
+		for i, ks := range e.keys {
+			e.values[i] = ks[0].(*xdm.Atomic).Float64()
+			if !math.IsNaN(e.values[i]) {
+				e.byValue = append(e.byValue, i)
+			}
+		}
+		sort.SliceStable(e.byValue, func(a, b int) bool {
+			return e.values[e.byValue[a]] < e.values[e.byValue[b]]
+		})
+	}
 	if hashable {
 		e.index = map[string][]int{}
 		for i, ks := range e.keys {
@@ -278,6 +309,13 @@ func (c *joinClause) match(e *joinCache, oa xdm.Sequence, xp *xpath.Context) ([]
 		sort.Ints(hits)
 		return dedupSorted(hits), true
 	}
+	oa, ok := castOuterOnce(e, oa)
+	if !ok {
+		return nil, false
+	}
+	if e.values != nil && len(oa) == 1 && oa[0].(*xdm.Atomic).Type == xdm.TypeDouble {
+		return c.rangeHits(e, oa[0].(*xdm.Atomic).Float64()), true
+	}
 	var hits []int
 	compare := c.cmp.Comparer(xp)
 	for i, ik := range e.keys {
@@ -294,6 +332,76 @@ func (c *joinClause) match(e *joinCache, oa xdm.Sequence, xp *xpath.Context) ([]
 		}
 	}
 	return hits, true
+}
+
+// castOuterOnce does once what the general comparison does for every pair:
+// against a numeric key, an untypedAtomic outer value is cast to xs:double
+// (XPath 3.1 §3.7.1). It applies only when every inner key is numeric and
+// every outer value untypedAtomic. A cast that fails answers false, so that
+// the clauses run as written and raise FORG0001 exactly where, and only if,
+// the nested loop would.
+func castOuterOnce(e *joinCache, oa xdm.Sequence) (xdm.Sequence, bool) {
+	if !e.numeric || len(oa) == 0 {
+		return oa, true
+	}
+	for _, it := range oa {
+		if a, ok := it.(*xdm.Atomic); !ok || a.Type != xdm.TypeUntypedAtomic {
+			return oa, true
+		}
+	}
+	out := make(xdm.Sequence, len(oa))
+	for i, it := range oa {
+		d, err := xpath.CastAtomic(it.(*xdm.Atomic), xdm.TypeDouble)
+		if err != nil {
+			return nil, false
+		}
+		out[i] = d
+	}
+	return out, true
+}
+
+// rangeHits answers an ordering comparison of one xs:double against keys
+// that are each one xs:double, from the sorted keys: the keys that compare
+// true are one contiguous run of byValue. NaN compares false with
+// everything, so a NaN outer key matches nothing and NaN keys are not in
+// byValue; -0 and +0 are equal under both float64 and xs:double comparison.
+// The hits are returned in item order, as the nested loop finds them.
+func (c *joinClause) rangeHits(e *joinCache, o float64) []int {
+	if math.IsNaN(o) {
+		return nil
+	}
+	op := c.op
+	if !c.innerLeft { // "o op key" is "key op' o"
+		switch op {
+		case "<":
+			op = ">"
+		case "<=":
+			op = ">="
+		case ">":
+			op = "<"
+		case ">=":
+			op = "<="
+		}
+	}
+	n := len(e.byValue)
+	at := func(i int) float64 { return e.values[e.byValue[i]] }
+	lo, hi := 0, n
+	switch op {
+	case "<": // key < o
+		hi = sort.Search(n, func(i int) bool { return at(i) >= o })
+	case "<=":
+		hi = sort.Search(n, func(i int) bool { return at(i) > o })
+	case ">":
+		lo = sort.Search(n, func(i int) bool { return at(i) > o })
+	case ">=":
+		lo = sort.Search(n, func(i int) bool { return at(i) >= o })
+	}
+	if lo >= hi {
+		return nil
+	}
+	hits := append([]int(nil), e.byValue[lo:hi]...)
+	sort.Ints(hits)
+	return hits
 }
 
 func allStrings(s xdm.Sequence) bool {
@@ -322,6 +430,11 @@ func sameBindings(a, b []xdm.Sequence) bool {
 	for i := range a {
 		if len(a[i]) != len(b[i]) {
 			return false
+		}
+		// The same binding seen again is the same slice: comparing it item
+		// by item made every cache check O(|binding|).
+		if len(a[i]) > 0 && &a[i][0] == &b[i][0] {
+			continue
 		}
 		for k := range a[i] {
 			if a[i][k] != b[i][k] {
