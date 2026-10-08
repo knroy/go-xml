@@ -139,3 +139,48 @@ func TestParseNormalizesAttributeValues(t *testing.T) {
 		t.Fatalf("character reference not preserved: got %q", got)
 	}
 }
+
+// TestEntityReplacementInAttributeValue is XML 1.0 §3.3.3's recursion: an
+// entity reference in an attribute value is replaced by its replacement text
+// normalized the same way, so the literal white space in that text becomes a
+// space, while a character the replacement text holds as a reference is kept.
+// The rows are the section's own example, whose declarations put a CR and an
+// LF into replacement text through references in the entity value, and
+// Appendix D's "&#38;#..." form, which leaves a reference in replacement text.
+// Each runs on both entity paths: dec.Entity, and the re-parse a markup
+// entity forces.
+func TestEntityReplacementInAttributeValue(t *testing.T) {
+	const decls = `<!ENTITY d "&#xD;"><!ENTITY a "&#xA;"><!ENTITY da "&#xD;&#xA;">` +
+		`<!ENTITY ref "&#38;#xA;"><!ENTITY amp2 "&#38;#38;"><!ENTITY n "x&a;y">` +
+		"<!ENTITY lit \"p\tq\nr\">"
+	cases := []struct{ name, attr, want string }{
+		{"literal line ends", "\n\nxyz", "  xyz"},
+		{"section 3.3.3 entities", "&d;&d;A&a;&#x20;&a;B&da;", "  A   B  "},
+		{"section 3.3.3 references", "&#xd;&#xd;A&#xa;&#xa;B&#xd;&#xa;", "\r\rA\n\nB\r\n"},
+		{"reference in replacement text", "&ref;", "\n"},
+		{"appendix D ampersand", "&amp2;", "&"},
+		{"nested", "&n;", "x y"},
+		{"literal white space in entity value", "&lit;", "p q r"},
+	}
+	for _, markup := range []bool{false, true} {
+		extra := ""
+		if markup {
+			extra = `<!ENTITY m "<b/>">`
+		}
+		for _, c := range cases {
+			src := "<!DOCTYPE r [" + decls + extra + "]><r v=\"" + c.attr + "\">&a;</r>"
+			tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
+			if err != nil {
+				t.Fatalf("%s (markup path %v): %v", c.name, markup, err)
+			}
+			r := tree.Root.ChildElements()[0]
+			if got := r.Attrs[0].Value; got != c.want {
+				t.Errorf("%s (markup path %v): got %q, want %q", c.name, markup, got, c.want)
+			}
+			// In content the replacement text is not normalized.
+			if got := r.StringValue(); got != "\n" {
+				t.Errorf("%s (markup path %v): content %q, want %q", c.name, markup, got, "\n")
+			}
+		}
+	}
+}

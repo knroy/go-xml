@@ -134,6 +134,14 @@ type Decoder struct {
 	// The five predefined entities are recognised whatever it holds.
 	Entity map[string]string
 
+	// AttrEntity overrides Entity for a reference in an attribute value. XML
+	// 1.0 §3.3.3 normalizes replacement text there, turning its literal white
+	// space into spaces but not the characters written in it as references;
+	// only the caller, which expanded those references, can tell the two
+	// apart, so it supplies the normalized text. A name absent here reads as
+	// in Entity.
+	AttrEntity map[string]string
+
 	// CharsetReader converts a stream whose XML declaration names an
 	// encoding other than UTF-8. It receives the bytes after the declaration
 	// and returns UTF-8. Without one, such a declaration is an error.
@@ -872,8 +880,7 @@ var class = func() (t [256]uint8) {
 //
 // Under XML 1.1, NEL, U+2028 and CR NEL are line ends too, and so one space
 // in a value.
-//
-// parity: an entity's replacement text is not normalised.
+// An entity's replacement text is the caller's to normalise; see AttrEntity.
 func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 	var stop uint8
 	switch {
@@ -944,7 +951,7 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 		case b == quote && quote != 0:
 			return d.finishText(out, spans)
 		case b == '&':
-			if out, spans, ok = d.reference(out, spans); !ok {
+			if out, spans, ok = d.reference(out, spans, quote != 0); !ok {
 				return nil, false
 			}
 			p1, p2 = 0, 0
@@ -1006,9 +1013,11 @@ func (d *Decoder) finishText(out []byte, spans []refSpan) ([]byte, bool) {
 // A character reference is checked against [2] here, while it is still known
 // to be one, and its extent recorded in spans for checkChars to skip.
 //
+// In an attribute value AttrEntity is consulted first.
+//
 // parity: an entity's replacement text is not newline-normalised, but
 // checkChars does see it, as if it had been literal.
-func (d *Decoder) reference(out []byte, spans []refSpan) ([]byte, []refSpan, bool) {
+func (d *Decoder) reference(out []byte, spans []refSpan, attr bool) ([]byte, []refSpan, bool) {
 	d.literal = false
 	start := len(out)
 	out = append(out, '&')
@@ -1081,7 +1090,10 @@ func (d *Decoder) reference(out []byte, spans []refSpan) ([]byte, []refSpan, boo
 			name := out[start+1:]
 			out = append(out, ';')
 			if isName(name) {
-				if repl, found = predefined[string(name)]; !found && d.Entity != nil {
+				if repl, found = predefined[string(name)]; !found && attr {
+					repl, found = d.AttrEntity[string(name)]
+				}
+				if !found && d.Entity != nil {
 					repl, found = d.Entity[string(name)]
 				}
 			}

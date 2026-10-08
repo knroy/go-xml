@@ -613,9 +613,11 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					if dec.Entity == nil {
 						dec.Entity = map[string]string{}
 					}
-					for k, v := range ents.entityMap() {
+					m := ents.entityMap()
+					for k, v := range m {
 						dec.Entity[k] = v
 					}
+					dec.AttrEntity = ents.attrEntityMap(m)
 				}
 			}
 		}
