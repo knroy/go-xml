@@ -820,7 +820,7 @@ func (i *analyzeStringInstr) runBranch(rt *runtime, out *outputBuilder,
 // xsl:matching-substring saw the caller's captured substrings and
 // regex-group(1) returned the match instead of the required empty string.
 func (rt *runtime) clearFunctionContext() *runtime {
-	sub := rt.withVar(regexGroupsVar, nil).withoutGroupingScope()
+	sub := rt.clearRegexGroups().withoutGroupingScope()
 	// 15.6 adds the merging pair to the same list of what an invocation
 	// construct clears, so a stylesheet function called from an
 	// xsl:merge-action sees neither of them.
@@ -835,7 +835,12 @@ func (rt *runtime) clearFunctionContext() *runtime {
 // string(regex-group(1))]" — sees the empty string rather than the enclosing
 // match's group.
 func (rt *runtime) clearRegexGroups() *runtime {
-	return rt.withVar(regexGroupsVar, nil)
+	if rt.absent&absentRegex != 0 {
+		return rt
+	}
+	sub := rt.withVar(regexGroupsVar, nil)
+	sub.absent |= absentRegex
+	return sub
 }
 
 var regexGroupsVar = xdm.QName{URI: internalNS, Local: "regex-groups"}

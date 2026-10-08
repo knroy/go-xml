@@ -463,12 +463,16 @@ func (p *Pattern) matches(node *xdm.Node, ctx *xpath.Context, recovered *error) 
 	if !p.mayMatch(node) {
 		return false, nil
 	}
-	ctx = ctx.WithVar(currentVar, xdm.One(node))
-	// Section 24.3: the current output URI is cleared while evaluating a
-	// pattern. A pattern is matched against candidate nodes at moments that
-	// have nothing to do with which result tree is being written, and
-	// current-output-uri-008 asserts the absence directly.
-	ctx = ctx.WithVar(outputURIVar, xdm.Empty())
+	// A pattern with no predicate, no id() or key() call and no general form
+	// evaluates no expression, so neither binding could be observed.
+	if !p.predicateFree() {
+		ctx = ctx.WithVar(currentVar, xdm.One(node))
+		// Section 24.3: the current output URI is cleared while evaluating a
+		// pattern. A pattern is matched against candidate nodes at moments
+		// that have nothing to do with which result tree is being written,
+		// and current-output-uri-008 asserts the absence directly.
+		ctx = ctx.WithVar(outputURIVar, xdm.Empty())
+	}
 	for _, g := range p.general {
 		ok, err := g.matches(node, ctx)
 		if err != nil {
@@ -500,6 +504,25 @@ func (p *Pattern) matches(node *xdm.Node, ctx *xpath.Context, recovered *error) 
 		}
 	}
 	return false, nil
+}
+
+// predicateFree reports whether matching p evaluates no XPath expression:
+// every alternative is a walk of steps whose node tests are all it checks.
+func (p *Pattern) predicateFree() bool {
+	if len(p.general) > 0 {
+		return false
+	}
+	for _, a := range p.alts {
+		if a.call != nil {
+			return false
+		}
+		for _, s := range a.steps {
+			if len(s.preds) > 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // mayMatch is a necessary condition for a match that evaluates no predicate:
@@ -971,38 +994,114 @@ func evalPatternPredicate(pred xpath.Expr, s patternStep, node *xdm.Node, ctx *x
 	return xpath.EffectiveBooleanValue(v)
 }
 
-// needsPosition reports whether an expression could observe the context
+// needsPosition reports whether a predicate's match depends on the context
 // position, so that the sibling scan is skipped when it cannot.
+//
+// Two things make it depend: the predicate reads position() or last(), or its
+// value is numeric. XPath 3.1 section 3.3.2 reads a numeric predicate value V
+// as "position() eq V", and XSLT 3.0 section 5.5.3 defines a pattern by the
+// path it is equivalent to, so item[number(@n)] selects the item whose
+// position is @n. A predicate is therefore positional unless it is statically
+// boolean, string or node-valued. Judging a function call by whether its
+// arguments read the position pinned the position at 1, so item[number(@n)]
+// matched where @n = 1; judging chapter[$v3] non-positional made every
+// chapter match.
 //
 // It is deliberately conservative: a false positive costs a scan, a false
 // negative would produce a wrong match.
 func needsPosition(e xpath.Expr) bool {
+	return !neverNumeric(e) || readsPosition(e)
+}
+
+// neverNumeric reports whether e's value can never be a single numeric atomic
+// value. Anything it does not recognise may be numeric.
+func neverNumeric(e xpath.Expr) bool {
 	switch v := e.(type) {
 	case *xpath.Literal:
-		return v.Val.Type.IsNumeric()
-	case *xpath.VarRef:
-		// A variable can hold a number, and a numeric predicate is
-		// positional. Nothing here knows what the variable holds, so the
-		// conservative answer is the only sound one: judging chapter[$v3]
-		// non-positional pinned the context position at 1 and made every
-		// chapter match.
+		return !v.Val.Type.IsNumeric()
+	case *xpath.ContextItem, *xpath.Step, *xpath.QuantifiedExpr,
+		*xpath.InstanceOfExpr, *xpath.StringConcat:
+		// A pattern step's context item is the candidate node.
 		return true
-	case *xpath.FuncCall:
-		if v.Name.URI == xdm.NSFN && (v.Name.Local == "position" || v.Name.Local == "last") {
-			return true
-		}
-		for _, a := range v.Args {
-			if needsPosition(a) {
-				return true
+	case *xpath.PathExpr:
+		// A path is node-valued when its last step is an axis step.
+		return len(v.Steps) == 0 || neverNumeric(v.Steps[len(v.Steps)-1])
+	case *xpath.FilterExpr:
+		return neverNumeric(v.Base)
+	case *xpath.CastExpr:
+		return v.Castable
+	case *xpath.IfExpr:
+		return neverNumeric(v.Then) && neverNumeric(v.Else)
+	case *xpath.SequenceExpr:
+		for _, it := range v.Items {
+			if !neverNumeric(it) {
+				return false
 			}
 		}
-		return false
+		return true
 	case *xpath.BinaryOp:
-		return needsPosition(v.Left) || needsPosition(v.Right)
+		switch v.Op {
+		case "=", "!=", "<", "<=", ">", ">=", "eq", "ne", "lt", "le", "gt", "ge",
+			"is", "<<", ">>", "and", "or", "union", "intersect", "except":
+			return true
+		}
+	case *xpath.FuncCall:
+		if v.Name.URI != xdm.NSFN {
+			return false
+		}
+		switch v.Name.Local {
+		case "not", "true", "false", "boolean", "exists", "empty", "contains",
+			"starts-with", "ends-with", "matches", "deep-equal", "lang",
+			"has-children", "string", "concat", "normalize-space", "name",
+			"local-name", "substring", "substring-before", "substring-after",
+			"translate", "upper-case", "lower-case", "key", "id":
+			return true
+		}
+	}
+	return false
+}
+
+// readsPosition reports whether e can call position() or last() against the
+// pattern's focus. An axis step's predicates have a focus of their own;
+// anything not recognised here is assumed to read it.
+func readsPosition(e xpath.Expr) bool {
+	switch v := e.(type) {
+	case *xpath.Literal, *xpath.VarRef, *xpath.ContextItem, *xpath.Step:
+		return false
+	case *xpath.FuncCall:
+		if v.Name.URI == xdm.NSFN && (v.Name.Local == "position" ||
+			v.Name.Local == "last" || v.Name.Local == "function-lookup") {
+			return true
+		}
+		return anyReadsPosition(v.Args)
+	case *xpath.PathExpr:
+		// Only the first step is evaluated against the pattern's focus.
+		return len(v.Steps) > 0 && readsPosition(v.Steps[0])
+	case *xpath.FilterExpr:
+		return readsPosition(v.Base)
+	case *xpath.BinaryOp:
+		return readsPosition(v.Left) || readsPosition(v.Right)
+	case *xpath.StringConcat:
+		return readsPosition(v.Left) || readsPosition(v.Right)
 	case *xpath.UnaryOp:
-		return needsPosition(v.Operand)
+		return readsPosition(v.Operand)
 	case *xpath.IfExpr:
-		return needsPosition(v.Cond) || needsPosition(v.Then) || needsPosition(v.Else)
+		return readsPosition(v.Cond) || readsPosition(v.Then) || readsPosition(v.Else)
+	case *xpath.SequenceExpr:
+		return anyReadsPosition(v.Items)
+	case *xpath.InstanceOfExpr:
+		return readsPosition(v.Operand)
+	case *xpath.CastExpr:
+		return readsPosition(v.Operand)
+	}
+	return true
+}
+
+func anyReadsPosition(es []xpath.Expr) bool {
+	for _, e := range es {
+		if readsPosition(e) {
+			return true
+		}
 	}
 	return false
 }

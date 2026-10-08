@@ -653,7 +653,61 @@ func stylesheetBase(doc *xdm.Node, opt string) string {
 func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	compileMu.Lock()
 	defer compileMu.Unlock()
+	setSharedNS(map[*xdm.Node]map[string]string{})
+	defer setSharedNS(nil)
 	return compileLocked(doc, opts)
+}
+
+// sharedNS holds, for the duration of one Compile, the in-scope namespace map
+// of each element that declares a namespace. Every element below it that
+// declares none has the same in-scope namespaces, so the compiler's tens of
+// thousands of per-element lookups share a few dozen maps instead of building
+// one each: rebuilding them was a third of DocBook's compile allocation.
+// Outside a compilation m is nil and nothing is cached. It has its own mutex
+// rather than relying on compileMu because a running transform, which does
+// not hold compileMu, can reach inScopeNamespacesShared too.
+var sharedNS struct {
+	sync.Mutex
+	m map[*xdm.Node]map[string]string
+}
+
+func setSharedNS(m map[*xdm.Node]map[string]string) {
+	sharedNS.Lock()
+	sharedNS.m = m
+	sharedNS.Unlock()
+}
+
+// forgetSharedNS drops the cached maps, for a caller that has just changed a
+// stylesheet tree's namespaces or parent links during a compilation.
+func forgetSharedNS() {
+	sharedNS.Lock()
+	if sharedNS.m != nil {
+		clear(sharedNS.m)
+	}
+	sharedNS.Unlock()
+}
+
+// inScopeNamespacesShared is el.InScopeNamespaces for a caller that only reads
+// the result: the map may be shared and must not be modified.
+func inScopeNamespacesShared(el *xdm.Node) map[string]string {
+	d := el
+	for d != nil && (d.Kind != xdm.KindElement || len(d.Namespaces) == 0) {
+		d = d.Parent
+	}
+	if d == nil {
+		return el.InScopeNamespaces()
+	}
+	sharedNS.Lock()
+	defer sharedNS.Unlock()
+	if sharedNS.m == nil {
+		return el.InScopeNamespaces()
+	}
+	m, ok := sharedNS.m[d]
+	if !ok {
+		m = d.InScopeNamespaces()
+		sharedNS.m[d] = m
+	}
+	return m
 }
 
 // compileNestedLocked compiles a stylesheet from inside a compilation that is
@@ -1143,7 +1197,7 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 		defaultElementNS = xpathDefaultNamespaceAt(el)
 	}
 	return &nsResolver{
-		bindings:  el.InScopeNamespaces(),
+		bindings:  inScopeNamespacesShared(el),
 		defaultNS: defaultElementNS,
 		baseURI:   el.BaseURI,
 		collation: defaultCollationAt(el),

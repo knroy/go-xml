@@ -28,9 +28,14 @@ func (rt *runtime) withGroupingScope(items, key xdm.Sequence) *runtime {
 // withoutGroupingScope removes the grouping from the context, as section
 // 5.4's table says an invocation construct does.
 func (rt *runtime) withoutGroupingScope() *runtime {
+	if rt.absent&absentGrouping != 0 {
+		return rt
+	}
 	sub := rt.withVar(currentGroupVar, nil)
 	sub = sub.withVar(currentGroupingKeyVar, nil)
-	return sub.withVar(groupingScopeVar, nil)
+	sub = sub.withVar(groupingScopeVar, nil)
+	sub.absent |= absentGrouping
+	return sub
 }
 
 // inDeclaredStreamable reports whether n is lexically contained in a

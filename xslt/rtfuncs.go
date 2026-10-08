@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/knroy/go-xml/internal/xpathleaf"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 )
@@ -44,6 +45,7 @@ func runtimeFrom(ctx *xpath.Context) (*runtime, bool) {
 	// focus, not the one captured when the transform started.
 	n := *rt
 	n.ctx = ctx
+	n.absent = 0 // ctx is the caller's; nothing is known about it
 	return &n, true
 }
 
@@ -133,7 +135,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 		},
 	})
 
-	l.Add(xpath.Function{
+	current := xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "current"}, Arity: 0,
 		Call: func(ctx *xpath.Context, _ []xdm.Sequence) (xdm.Sequence, error) {
 			// current() is the node the enclosing XSLT instruction is
@@ -173,7 +175,13 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 			}
 			return xdm.One(ctx.Item), nil
 		},
-	})
+	}
+	// current() reads two variables and the context item, and writes and
+	// calls nothing, so it is called as a leaf: without copying the context.
+	// It is called thousands of times per document by Schematron-shaped
+	// stylesheets, and the copy was 18% of XRechnung's allocation.
+	xpathleaf.Mark(&current)
+	l.Add(current)
 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "generate-id"}, Arity: 0,
@@ -1192,6 +1200,7 @@ func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*x
 	// expression form, so the same key definition reads the same way.
 	sub := rt.temporaryOutput()
 	sub.ctx = ctx.WithFocus(n, 1, 1)
+	sub.absent = 0
 	out := newOutputBuilder(rt)
 	if err := execSequence(def.body, sub, out); err != nil {
 		return nil, err

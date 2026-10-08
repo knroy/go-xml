@@ -1896,6 +1896,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	for _, ch := range kept {
 		ch.Parent = u.root
 	}
+	forgetSharedNS() // parent links changed
 	// The used package's static variables are its own, so they are put back
 	// for the compilation and taken away again after: a using package must
 	// not see them, and the two packages may legitimately declare the same
@@ -2361,6 +2362,7 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 			Value: uri,
 		})
 	}
+	forgetSharedNS() // overriding's namespaces changed
 	return overriding
 }
 
