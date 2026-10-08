@@ -358,7 +358,8 @@ go-xml validate -xsd schema-for-xslt30.xsd -xsd-version 1.1 \
 `-catalog` names a directory holding `XMLSchema.xsd`, `xml.xsd` or both; the
 [`w3cschemas`](../w3cschemas/README.md) module ships them under `schemas/`.
 Every spelling of a reference to them, and an `xs:import` naming only the
-namespace, is answered from those files. A DOCTYPE in them is accepted, since
+namespace, is answered from those files, even where the schema has a copy of
+its own beside it (as the W3C's `schema-for-xslt30.xsd` does). A DOCTYPE in them is accepted, since
 the W3C schema for schemas carries one. Everything else is read as without the
 flag, confined to `-root` or the schema's directory. The transform
 (`xsl:import-schema`) and `go-xml xquery` (`import schema`) take the same flag.

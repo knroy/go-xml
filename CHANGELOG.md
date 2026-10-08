@@ -47,6 +47,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A `CatalogResolver` holding the W3C schema for schemas needed `AllowDOCTYPE` for every schema document | A document the catalog answers from its own table may carry a DOCTYPE; documents from the fallback keep the caller's options. | [`d86f80c`][d86f80c] |
 | `xsl:import-schema` ignored `SchemaParseOptions` on the located document and on a namespace-only import | Every path, including the schemas' own includes and imports, now uses them. | [`2402bca`][2402bca] |
 | A namespace-only `xsl:import-schema` read its schema as XSD 1.0 | It is read as XSD 1.1 and honours `vc:minVersion`, like the location and inline paths. | [`987e24e`][987e24e] |
+| `-catalog` read a schema's sibling `XMLSchema.xsd` before the catalog's | The W3C's own layout failed on the sibling's DOCTYPE; the catalog now answers every spelling of the files it holds. | [`8aa5ab7`][8aa5ab7] |
 | Compact syntax refused a free-standing annotation element among definitions | DocBook's `s:ns [ ... ]` was read as a datatype name. The grammar allows it; it is now skipped like any annotation. | [`197eaad`][197eaad] |
 
 ### Changed — performance
@@ -1220,6 +1221,7 @@ here so every entry in this file sits under a release.
 [197eaad]: https://github.com/knroy/go-xml/commit/197eaad
 [cec5f6f]: https://github.com/knroy/go-xml/commit/cec5f6f
 [416ee50]: https://github.com/knroy/go-xml/commit/416ee50
+[8aa5ab7]: https://github.com/knroy/go-xml/commit/8aa5ab7
 [740c22a]: https://github.com/knroy/go-xml/commit/740c22a
 [2402bca]: https://github.com/knroy/go-xml/commit/2402bca
 [987e24e]: https://github.com/knroy/go-xml/commit/987e24e
