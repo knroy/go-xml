@@ -406,14 +406,15 @@ direction that matters, and it has not been diagnosed.
 `stylesheet-params`, `static-params`, `template-params`, `tunnel-params`,
 `base-output-uri`, `delivery-format`, `serialization-params` (principal result only, as F&O
 states), `requested-properties`, `xslt-version`, `global-context-item` and
-`post-process`. A requested property is
+`post-process`, `cache` (a bounded per-stylesheet compile cache),
+`enable-assertions` (default off) and `enable-messages` (`false` skips
+non-terminating messages). A requested property is
 met only when it equals what `fn:system-property` reports (`xsl:version` is
-ignored); an unmet one is `FOXT0001`. These F&O-defined options are accepted
-and have no effect:
+ignored); an unmet one is `FOXT0001`. Every typed option is converted per F&O
+§1.5.4, so a string where an `xs:QName` is declared is `XPTY0004`. These
+F&O-defined options are accepted and have no effect:
 
-- `enable-messages`, `vendor-options`, `cache`.
-- `enable-assertions`: the nested transform inherits the caller's
-  `DisableAssertions`, so assertions run by default where F&O defaults to off.
+- `vendor-options`; `enable-trace`, since `fn:trace` writes no diagnostics here.
 - `package-location`, `package-node`, `package-text`: alone they identify no
   stylesheet (`FOXT0002`); beside a `stylesheet-*` option they are ignored.
 
