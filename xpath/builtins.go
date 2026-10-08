@@ -50,6 +50,7 @@ func Builtins() FunctionLibrary {
 		registerMiscFuncs(l)
 		registerConstructors(l)
 		applyBuiltinSignatures(l)
+		markLeafBuiltins(l)
 		builtinLibrary = l
 	})
 	return builtinLibrary
@@ -421,4 +422,33 @@ func registerIntegerSubtypes(l *Library) {
 		}
 		return xdm.One(v.WithDerived("dateTimeStamp")), nil
 	})
+}
+
+// leafBuiltins are the fn: functions FuncCall.Eval may call without copying
+// the context (see Function.leaf). Each takes only atomic or node arguments,
+// reads the context without writing it, returns a materialised value and
+// calls no function item, host callback or resolver. A function belongs here
+// only after its body has been checked against all of that.
+var leafBuiltins = map[string]bool{
+	"name": true, "local-name": true, "namespace-uri": true, "not": true,
+	"true": true, "false": true, "boolean": true, "exists": true,
+	"empty": true, "count": true, "string": true, "string-length": true,
+	"normalize-space": true, "concat": true, "contains": true,
+	"starts-with": true, "ends-with": true, "substring": true,
+	"substring-before": true, "substring-after": true, "upper-case": true,
+	"lower-case": true, "translate": true, "string-join": true,
+	"number": true, "sum": true, "round": true, "abs": true, "floor": true,
+	"ceiling": true, "position": true, "last": true, "data": true,
+	"root": true, "document-uri": true,
+}
+
+// markLeafBuiltins sets Function.leaf on the leafBuiltins entries and on the
+// xs: constructors, which are casts.
+func markLeafBuiltins(l *Library) {
+	for k, f := range l.fns {
+		if (k.uri == xdm.NSFN && leafBuiltins[k.local]) || k.uri == xdm.NSXS {
+			f.leaf = true
+			l.fns[k] = f
+		}
+	}
 }

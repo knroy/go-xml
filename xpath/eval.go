@@ -577,6 +577,18 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 		}
 	}
 
+	// A leaf builtin cannot re-enter user code or retain ctx, so the depth
+	// is counted on ctx in place: the same limit and error as Descend,
+	// without copying the context on every call.
+	if fn.leaf {
+		if err := ctx.checkDepth(); err != nil {
+			return nil, err
+		}
+		ctx.Depth++
+		res, err := fn.Call(ctx, args)
+		ctx.Depth--
+		return res, err
+	}
 	sub, err := ctx.Descend()
 	if err != nil {
 		return nil, err

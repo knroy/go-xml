@@ -664,6 +664,12 @@ type Function struct {
 	// form is a liability rather than a convenience. Nil for every
 	// fixed-arity function, which leaves Signature the ordinary path.
 	VariadicSignature *xdm.VariadicSignature
+
+	// leaf marks a builtin that never calls back into user code, never
+	// keeps the context past its return and never writes to it. A call to
+	// one counts recursion depth on the caller's context in place instead
+	// of copying it with Descend. Set only by markLeafBuiltins.
+	leaf bool
 }
 
 // NewContext returns a context with the given focus and library.
@@ -812,6 +818,17 @@ func (c *Context) Err() error {
 // Descend returns a copy with the recursion depth incremented, erroring past
 // the limit.
 func (c *Context) Descend() (*Context, error) {
+	if err := c.checkDepth(); err != nil {
+		return nil, err
+	}
+	n := *c
+	n.Depth++
+	return &n, nil
+}
+
+// checkDepth is Descend's limit test, shared with the in-place count
+// FuncCall.Eval uses for a leaf builtin.
+func (c *Context) checkDepth() error {
 	if lim := c.depthLimit(); c.Depth >= lim {
 		// XPDY0001 is kept because callers and the conformance suites read
 		// it, but it properly means "no context item is defined" and this
@@ -819,12 +836,10 @@ func (c *Context) Descend() (*Context, error) {
 		// context, it is merely deeper than this processor will evaluate.
 		// The sentinel is added alongside so a caller can tell a refusal
 		// from a fault. See xdm.ErrResourceLimit.
-		return nil, fmt.Errorf("XPDY0001: recursion exceeded %d levels: %w",
+		return fmt.Errorf("XPDY0001: recursion exceeded %d levels: %w",
 			lim, xdm.ErrResourceLimit)
 	}
-	n := *c
-	n.Depth++
-	return &n, nil
+	return nil
 }
 
 // countItems charges n items against the evaluation budget.
