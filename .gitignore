@@ -62,3 +62,7 @@
 # to run. A release points at the artifact the tagged CI run uploaded, which is
 # a record of a measurement and stays attached to the run that produced it.
 /tests/release-record.txt
+
+# Benchmark engines and build outputs, fetched and built by bench/fetch-engines.sh
+# and benchrun; third-party jars are never committed.
+/bench/.cache/

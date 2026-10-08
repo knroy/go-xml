@@ -1,0 +1,103 @@
+{
+  "_doc": "Engine pins and invocations. argv placeholders: {go-xml} built CLI, {self} the benchrun binary, {cache} bench/.cache (absolute), {classpath} this engine's jars, {stylesheet} {query} {schema} {source} item paths, {out} output file, {xsd_version}, {params} expands per param_format, {args} the workload's extra args for this engine. An argument whose placeholder is empty is dropped. With no {out} in the argv, stdout is the output. Validation verdict: invalid if invalid_pattern matches stdout+stderr, else valid on exit 0, else error. files must match fetch-engines.sh.",
+  "engines": {
+    "go-xml": {
+      "version": "this tree",
+      "loop": true,
+      "param_format": ["-p", "{name}={value}"],
+      "invalid_pattern": "(?m): INVALID$",
+      "tasks": {
+        "xslt": ["{go-xml}", "-xsl", "{stylesheet}", "-o", "{out}", "{args}", "{params}", "{source}"],
+        "xquery": ["{go-xml}", "xquery", "-q", "{query}", "-o", "{out}", "{args}", "{params}", "{source}"],
+        "xsd": ["{go-xml}", "validate", "-xsd", "{schema}", "-xsd-version", "{xsd_version}", "-quiet", "{args}", "{source}"],
+        "rng": ["{go-xml}", "validate", "-rng", "{schema}", "-quiet", "{args}", "{source}"],
+        "parse": ["{self}", "-helper", "go-xml", "{source}", "{out}"],
+        "c14n": ["{self}", "-helper", "go-xml", "{source}", "{out}"]
+      }
+    },
+    "encoding-xml": {
+      "version": "Go stdlib",
+      "loop": true,
+      "tasks": {
+        "parse": ["{self}", "-helper", "encoding-xml", "{source}", "{out}"]
+      }
+    },
+    "saxon-he": {
+      "version": "12.10",
+      "loop": true,
+      "files": [
+        {"path": "saxon-he/Saxon-HE-12.10.jar", "sha256": "b571af282f25d7301059f788b9a149aab8b5cdc14ef3d212dc5425d3dcbb9a97", "url": "https://repo1.maven.org/maven2/net/sf/saxon/Saxon-HE/12.10/Saxon-HE-12.10.jar"},
+        {"path": "saxon-he/xmlresolver-5.3.3.jar", "sha256": "1fe4d5b92f708dcdb82dbce12919e0171e6b5ca62c6dca6220483625098feb5f", "url": "https://repo1.maven.org/maven2/org/xmlresolver/xmlresolver/5.3.3/xmlresolver-5.3.3.jar"},
+        {"path": "saxon-he/xmlresolver-5.3.3-data.jar", "sha256": "b0c487ad2f3e558be8d829c916d2458d10aca6a5bafa7a4d0524b70845e48a5c", "url": "https://repo1.maven.org/maven2/org/xmlresolver/xmlresolver/5.3.3/xmlresolver-5.3.3-data.jar"}
+      ],
+      "classpath": ["saxon-he/Saxon-HE-12.10.jar", "saxon-he/xmlresolver-5.3.3.jar", "saxon-he/xmlresolver-5.3.3-data.jar"],
+      "param_format": ["{name}={value}"],
+      "tasks": {
+        "xslt": ["java", "-cp", "{classpath}", "net.sf.saxon.Transform", "-s:{source}", "-xsl:{stylesheet}", "-o:{out}", "{args}", "{params}"],
+        "xquery": ["java", "-cp", "{classpath}", "net.sf.saxon.Query", "-s:{source}", "-q:{query}", "-o:{out}", "{args}", "{params}"]
+      }
+    },
+    "basex": {
+      "version": "12.4",
+      "loop": true,
+      "files": [
+        {"path": "basex/basex-12.4.jar", "sha256": "3975bc91acfadd1c139872dd9fc154f2fc7a166792509c7665501089edf5e301", "url": "https://repo1.maven.org/maven2/org/basex/basex/12.4/basex-12.4.jar"}
+      ],
+      "classpath": ["basex/basex-12.4.jar"],
+      "java_opts": ["-Dorg.basex.path={cache}/basex/home/"],
+      "param_format": ["-b{name}={value}"],
+      "tasks": {
+        "xquery": ["java", "-Dorg.basex.path={cache}/basex/home/", "-cp", "{classpath}", "org.basex.BaseX", "-i{source}", "-o{out}", "{args}", "{params}", "{query}"]
+      }
+    },
+    "jing": {
+      "version": "20241231",
+      "loop": true,
+      "files": [
+        {"path": "jing/jing-20241231.jar", "sha256": "ea5e9026244d977e607d8b52212d6871498ece51939f9c49d0e7a77aad91133a", "url": "https://repo1.maven.org/maven2/org/relaxng/jing/20241231/jing-20241231.jar"}
+      ],
+      "classpath": ["jing/jing-20241231.jar"],
+      "invalid_pattern": ": error: ",
+      "tasks": {
+        "rng": ["java", "-cp", "{classpath}", "com.thaiopensource.relaxng.util.Driver", "{args}", "{schema}", "{source}"]
+      }
+    },
+    "xerces-j-xsd11": {
+      "version": "2.12.2 (XML Schema 1.1)",
+      "loop": true,
+      "files": [
+        {"path": "xerces-j-xsd11/Xerces-J-bin.2.12.2-xml-schema-1.1.zip", "sha256": "610d77b0e1a3d23a5224d528266ba1ec21eb7d671f595211e01c2303b8db7cb2", "url": "https://archive.apache.org/dist/xerces/j/binaries/Xerces-J-bin.2.12.2-xml-schema-1.1.zip"}
+      ],
+      "classpath": [
+        "xerces-j-xsd11/xerces-2_12_2-xml-schema-1.1/xercesImpl.jar",
+        "xerces-j-xsd11/xerces-2_12_2-xml-schema-1.1/xercesSamples.jar",
+        "xerces-j-xsd11/xerces-2_12_2-xml-schema-1.1/org.eclipse.wst.xml.xpath2.processor_1.2.1.jar",
+        "xerces-j-xsd11/xerces-2_12_2-xml-schema-1.1/cupv10k-runtime.jar",
+        "xerces-j-xsd11/xerces-2_12_2-xml-schema-1.1/icu4j.jar"
+      ],
+      "invalid_pattern": "\\[(Error|Fatal Error)\\]",
+      "tasks": {
+        "xsd": ["java", "-cp", "{classpath}", "jaxp.SourceValidator", "-xsd11", "{args}", "-a", "{schema}", "-i", "{source}"]
+      }
+    },
+    "xsltproc": {
+      "version": "system",
+      "version_argv": ["xsltproc", "--version"],
+      "param_format": ["--stringparam", "{name}", "{value}"],
+      "tasks": {
+        "xslt": ["xsltproc", "-o", "{out}", "{args}", "{params}", "{stylesheet}", "{source}"]
+      }
+    },
+    "xmllint": {
+      "version": "system",
+      "version_argv": ["xmllint", "--version"],
+      "invalid_pattern": "fails to validate",
+      "tasks": {
+        "parse": ["xmllint", "--c14n", "{args}", "{source}"],
+        "c14n": ["xmllint", "--c14n", "{args}", "{source}"],
+        "xsd": ["xmllint", "--noout", "{args}", "--schema", "{schema}", "{source}"],
+        "rng": ["xmllint", "--noout", "{args}", "--relaxng", "{schema}", "{source}"]
+      }
+    }
+  }
+}
