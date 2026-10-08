@@ -59,3 +59,35 @@ func TestLoneWhitespaceTextMayMatchNothing(t *testing.T) {
 		}
 	}
 }
+
+// Section 6.2.7 lets a lone whitespace-only child match as nothing, but it is
+// still a string to <value>, <data> and <list>, so the derivative over it must
+// be kept, not dropped. Beside an element it is stripped even when a data
+// alternative could have taken it. Every verdict here matches Jing 20241231.
+func TestLoneWhitespaceTextStillReachesValues(t *testing.T) {
+	const xsd = ` datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes"`
+	for _, c := range []struct {
+		schema, doc string
+		valid       bool
+	}{
+		{`<value type="string"> </value>`, "<p> </p>", true},
+		{`<value type="string"> </value>`, "<p>  </p>", false},
+		{`<data type="string"` + xsd + `><param name="minLength">2</param></data>`, "<p>  </p>", true},
+		{`<data type="string"` + xsd + `><param name="minLength">2</param></data>`, "<p> </p>", false},
+		{`<list><oneOrMore><value>a</value></oneOrMore></list>`, "<p> a </p>", true},
+		{`<list><oneOrMore><value>a</value></oneOrMore></list>`, "<p> </p>", false},
+		{`<choice><element name="f"><empty/></element><data type="token"` + xsd + `/></choice>`, "<p> <f/> </p>", true},
+	} {
+		s, err := compileString(t, `<element name="p"`+rngNS+`>`+c.schema+`</element>`)
+		if err != nil {
+			t.Fatalf("compile %s: %v", c.schema, err)
+		}
+		doc, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Validate(doc.Root); (err == nil) != c.valid {
+			t.Errorf("%q against %s: valid = %v, want %v (err %v)", c.doc, c.schema, err == nil, c.valid, err)
+		}
+	}
+}
