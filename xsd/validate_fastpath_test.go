@@ -16,9 +16,10 @@ func TestBoundsSkippedWithoutBoundFacets(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	// 23 with the parse; what remains is the rest of the value check.
-	if allocs > 17 {
-		t.Errorf("validating an xs:integer allocated %v times, want at most 17", allocs)
+	// 23 with both rational parses (bounds, then the fractionDigits="0"
+	// every xs:integer carries); what remains is the rest of the check.
+	if allocs > 1 {
+		t.Errorf("validating an xs:integer allocated %v times, want at most 1", allocs)
 	}
 
 	for _, c := range []struct {

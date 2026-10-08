@@ -2,7 +2,6 @@ package xsd
 
 import (
 	"fmt"
-	"math/big"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -549,34 +548,33 @@ func describePatterns(ps []*Pattern) string {
 	return b.String()
 }
 
-// checkDigitFacets applies totalDigits and fractionDigits to a decimal value.
+// checkDigitFacets applies totalDigits and fractionDigits to a decimal value,
+// given by its lexical form.
 //
 // The counts are of the *value*, not the lexical form: "1.50" has two total
 // digits and one fraction digit, because trailing zeros in the fraction are not
 // significant. Counting the literal would reject values the spec accepts.
-func checkDigitFacets(steps []facetStep, v *big.Rat) error {
-	var total, frac uint64
-	counted := false
+//
+// Nothing is counted unless a step carries one of the two facets, and the count
+// is read off the literal rather than a big.Rat: parsing every decimal in the
+// document into a rational only to discard it was a large share of validating
+// numeric-heavy documents (docs/profiling.md).
+func checkDigitFacets(steps []facetStep, lexical string) error {
+	need := false
+	for _, st := range steps {
+		if st.facets.TotalDigits != nil || st.facets.FractionDigits != nil {
+			need = true
+			break
+		}
+	}
+	// A lexical outside the decimal grammar has already been refused by
+	// the lexical-space check; it has no digit count to compare.
+	if !need || !isDecimalLexical(lexical) {
+		return nil
+	}
+	total, frac := countDigits(lexical)
 	for _, st := range steps {
 		f := st.facets
-		if f.TotalDigits == nil && f.FractionDigits == nil {
-			continue
-		}
-		if !counted {
-			var ok bool
-			total, frac, ok = countDigits(v)
-			if !ok {
-				// A value with no finite decimal expansion has
-				// no digit count to compare. isDecimalLexical
-				// admits only sign, digits and one point, so
-				// nothing that reaches here can be such a
-				// value; refusing it is better than inventing
-				// a count that would let it pass.
-				return facetError(st.typ, FacetTotalDigits,
-					"value has no terminating decimal expansion")
-			}
-			counted = true
-		}
 		if f.TotalDigits != nil && total > *f.TotalDigits {
 			return facetError(st.typ, FacetTotalDigits,
 				"%d digits, want at most %d", total, *f.TotalDigits)
@@ -589,41 +587,37 @@ func checkDigitFacets(steps []facetStep, v *big.Rat) error {
 	return nil
 }
 
-// countDigits returns the total and fraction digit counts of a decimal value.
+// countDigits returns the total and fraction digit counts of the decimal value
+// written by lexical, which must satisfy isDecimalLexical.
 //
 // The counts are of the value, not of the literal: 1.50 and 1.5 are the same
-// value and both have two total digits and one fraction digit.
+// value and both have two total digits and one fraction digit. The grammar is
+// sign, digits and at most one point, so the value's digits are the literal's
+// once the sign, the integer part's leading zeros and the fraction's trailing
+// zeros are dropped — exactly what reducing the value to a coefficient and a
+// scale gives, without building either.
 //
-// The second result is false for a value with no terminating decimal
-// expansion, for which neither count is defined. Every caller reaches here
-// only past isDecimalLexical, whose grammar is sign, digits and at most one
-// point — so the denominator is a power of ten and this cannot happen — but a
-// count must never be invented for a value that does not have one.
-func countDigits(v *big.Rat) (total, frac uint64, ok bool) {
-	if v.Sign() == 0 {
+// A value such as 0.001 has a coefficient of one digit, but the spec counts
+// three: the leading zeros of the fraction are significant to totalDigits even
+// though they are not to the value. Here they survive because only the
+// integer part's leading zeros are dropped, so 0.001 counts three of each.
+//
+// That is load-bearing, not a rounding-up to be tidied away. §4.3.12.4
+// requires fractionDigits <= totalDigits, and facet_check.go enforces it, so
+// reporting total=1 frac=3 for 0.001 would make the value unrepresentable by
+// any conforming schema. Pinned by TestCountDigitsLeadingZerosAreSignificant.
+func countDigits(lexical string) (total, frac uint64) {
+	if lexical[0] == '+' || lexical[0] == '-' {
+		lexical = lexical[1:]
+	}
+	ip, fp, _ := strings.Cut(lexical, ".")
+	ip = strings.TrimLeft(ip, "0")
+	fp = strings.TrimRight(fp, "0")
+	if ip == "" && fp == "" {
 		// Zero has one total digit and no fraction digits.
-		return 1, 0, true
+		return 1, 0
 	}
-	m, ok := xdm.DecimalMagnitudeOf(v)
-	if !ok {
-		return 0, 0, false
-	}
-	digits := uint64(len(m.Coefficient.String()))
-	// A value such as 0.001 scales to 1, one digit, but the spec counts
-	// three: the leading zeros of the fraction are significant to
-	// totalDigits even though they are not to the value. The coefficient
-	// can only be shorter than the scale when the integer part is zero,
-	// and then the fraction digits are all the digits there are.
-	//
-	// This line is load-bearing, not a rounding-up to be tidied away.
-	// §4.3.12.4 requires fractionDigits <= totalDigits, and facet_check.go
-	// enforces it, so reporting total=1 frac=3 for 0.001 would make the
-	// value unrepresentable by any conforming schema. Pinned by
-	// TestCountDigitsLeadingZerosAreSignificant.
-	if digits < uint64(m.Scale) {
-		digits = uint64(m.Scale)
-	}
-	return digits, uint64(m.Scale), true
+	return uint64(len(ip) + len(fp)), uint64(len(fp))
 }
 
 // facetError builds the diagnostic for a failed facet, naming the type that

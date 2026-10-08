@@ -267,10 +267,8 @@ func validateAtomicValueBoundsIn(lexical string, t *SimpleType, version Version,
 		}
 	}
 	if prim == "decimal" {
-		if r, ok := new(big.Rat).SetString(normalized); ok {
-			if err := checkDigitFacets(steps, r); err != nil {
-				return "", err
-			}
+		if err := checkDigitFacets(steps, normalized); err != nil {
+			return "", err
 		}
 	}
 	if err := checkExplicitTimezone(steps, normalized, prim); err != nil {
