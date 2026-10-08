@@ -82,3 +82,30 @@ func TestValidateCatalogWithoutTheFilesIsRefused(t *testing.T) {
 		t.Fatalf("got %v, want the empty-catalog refusal", err)
 	}
 }
+
+// The W3C ships schema-for-xslt30.xsd beside its own XMLSchema.xsd, imported
+// by the bare name, and that copy carries a DOCTYPE. With -catalog the
+// catalog's file must answer the bare name too; reading the sibling first
+// refused its DOCTYPE and never tried the catalog.
+func TestValidateCatalogWinsOverASiblingCopy(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "w3cschemas", "schemas", "XMLSchema.xsd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := filepath.Join(t.TempDir(), "w3c")
+	writeSchema(t, filepath.Join(catalog, "XMLSchema.xsd"), string(src))
+
+	dir := t.TempDir()
+	writeSchema(t, filepath.Join(dir, "XMLSchema.xsd"), string(src))
+	main := filepath.Join(dir, "main.xsd")
+	writeSchema(t, main,
+		`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:import namespace="http://www.w3.org/2001/XMLSchema" schemaLocation="XMLSchema.xsd"/>
+		  <xs:element name="doc"><xs:complexType><xs:sequence>
+		    <xs:element ref="xs:schema"/>
+		  </xs:sequence></xs:complexType></xs:element>
+		</xs:schema>`)
+	if _, err := schemaValidator(main, "", "1.1", "2.0", "", catalog, 1); err != nil {
+		t.Fatalf("with -catalog and a sibling XMLSchema.xsd: %v", err)
+	}
+}

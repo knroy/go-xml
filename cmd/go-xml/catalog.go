@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -54,6 +55,28 @@ func schemaCatalog(dir string, fallback xsd.Resolver) (xsd.Resolver, error) {
 	if found == 0 {
 		return nil, fmt.Errorf("-catalog %s: the directory holds none of %v", dir, names)
 	}
-	cat.SetFallback(fallback)
-	return cat, nil
+	return catalogFirst{cat, fallback}, nil
+}
+
+// catalogFirst asks the catalog before the fallback, for every spelling.
+//
+// CatalogResolver's own fallback mode offers a bare relative name such as
+// XMLSchema.xsd to the fallback first, so that a schema set's own file is not
+// shadowed. On the command line that is the wrong way round: the W3C ships
+// schema-for-xslt30.xsd beside its own XMLSchema.xsd, which carries a DOCTYPE,
+// so the local copy was read, refused, and the catalog's never tried. A user
+// who names -catalog has said which files answer.
+type catalogFirst struct {
+	cat      *xsd.CatalogResolver
+	fallback xsd.Resolver
+}
+
+func (c catalogFirst) Resolve(namespace, location, base string) (io.ReadCloser, string, error) {
+	if rc, name, err := c.cat.Resolve(namespace, location, base); err == nil && rc != nil {
+		return rc, name, nil
+	}
+	if c.fallback == nil {
+		return nil, "", nil
+	}
+	return c.fallback.Resolve(namespace, location, base)
 }
