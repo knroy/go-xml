@@ -163,6 +163,43 @@ func transformString(m *xdm.MapItem, name string) (string, bool, error) {
 	return a.String(), true, nil
 }
 
+// transformBool reads an xs:boolean option, def when it is absent. The option
+// parameter conventions (F&O 3.1 1.5.4) convert the value with the function
+// conversion rules: a node atomizes to untypedAtomic, which is cast (FORG0001
+// when it is not a boolean lexical form); any other type, or other than one
+// item, is XPTY0004. That is the code fn-transform-err-4 and err-5 expect for
+// mistyped options, rather than FOXT0002.
+func transformBool(m *xdm.MapItem, name string, def bool) (bool, error) {
+	seq, ok := transformOption(m, name)
+	if !ok {
+		return def, nil
+	}
+	it, err := seq.Single()
+	if err != nil {
+		return false, xdm.ErrType("fn:transform: %s must be a single xs:boolean", name)
+	}
+	var a *xdm.Atomic
+	switch v := it.(type) {
+	case *xdm.Node:
+		a = xdm.NewUntypedAtomic(v.StringValue())
+	case *xdm.Atomic:
+		a = v
+	default:
+		return false, xdm.ErrType(
+			"fn:transform: %s must be an xs:boolean, got %s", name, it.TypeName())
+	}
+	if a.Type == xdm.TypeUntypedAtomic {
+		if a, err = xpath.CastAtomic(a, xdm.TypeBoolean); err != nil {
+			return false, err
+		}
+	}
+	if a.Type != xdm.TypeBoolean {
+		return false, xdm.ErrType(
+			"fn:transform: %s must be an xs:boolean, got %s", name, a.TypeName())
+	}
+	return a.String() == "true", nil
+}
+
 // transformQName reads a QName-valued option.
 //
 // The value must be read structurally rather than through String(), which
@@ -398,7 +435,12 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 		return nil, err
 	}
 
-	sheet, err := cachedNestedStylesheet(ctx, rt, opts)
+	useCache, err := transformBool(opts, "cache", true)
+	if err != nil {
+		return nil, err
+	}
+
+	sheet, err := cachedNestedStylesheet(ctx, rt, opts, useCache)
 	if err != nil {
 		return nil, err
 	}

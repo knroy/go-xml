@@ -172,6 +172,36 @@ func TestTransformCache(t *testing.T) {
 		}
 	})
 
+	// The cache option is converted to xs:boolean by the option parameter
+	// conventions (F&O 3.1 1.5.4): untypedAtomic is cast, anything else of
+	// the wrong type or cardinality is XPTY0004 (fn-transform-err-4's code).
+	t.Run("cache option type", func(t *testing.T) {
+		for _, tc := range []struct{ cache, code string }{
+			{"'false'", "XPTY0004"},
+			{"1", "XPTY0004"},
+			{"(true(), false())", "XPTY0004"},
+			{"()", "XPTY0004"},
+			{"xs:untypedAtomic('maybe')", "FORG0001"},
+			{"xs:untypedAtomic('0')", ""},
+		} {
+			st := compileCacheOuter(t, "('a','a')", tc.cache)
+			got, err := runCacheOuter(st, cacheInner)
+			if code := xdm.ErrorCode(err); code != tc.code {
+				t.Errorf("cache %s: err = %v, want code %q", tc.cache, err, tc.code)
+			}
+			if tc.code != "" {
+				continue
+			}
+			if got != "a a" {
+				t.Errorf("cache %s: output %q, want \"a a\"", tc.cache, got)
+			}
+			// xs:untypedAtomic('0') casts to false: nothing stored.
+			if c, e := cacheState(st); c != 0 || e != 0 {
+				t.Errorf("cache %s: compiles=%d entries=%d, want 0 and 0", tc.cache, c, e)
+			}
+		}
+	})
+
 	// One compiled outer stylesheet, many concurrent transforms (go test -race).
 	t.Run("concurrent", func(t *testing.T) {
 		st := compileCacheOuter(t, "('a','b','c','a')", "true()")

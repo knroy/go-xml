@@ -86,8 +86,8 @@ func (c *nestedCache) put(k nestedKey, s *Stylesheet) {
 }
 
 // cachedNestedStylesheet is nestedStylesheet behind rt.cache.
-func cachedNestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem) (*Stylesheet, error) {
-	if rt.cache == nil {
+func cachedNestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem, useCache bool) (*Stylesheet, error) {
+	if rt.cache == nil || !useCache {
 		return nestedStylesheet(ctx, rt, opts)
 	}
 	k, ok := nestedCacheKey(ctx, rt, opts)
@@ -105,15 +105,10 @@ func cachedNestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.Ma
 }
 
 // nestedCacheKey builds the key for the options, or reports false when the
-// call must not be cached: cache=false, an option nestedStylesheet would
+// call must not be cached: an option nestedStylesheet would
 // reject (it then reports the error itself), a static parameter that is not
 // atomic, or a resolver that cannot safely be a map key.
 func nestedCacheKey(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem) (nestedKey, bool) {
-	if seq, ok := transformOption(opts, "cache"); ok && len(seq) == 1 {
-		if a, ok := seq[0].(*xdm.Atomic); ok && a.Type == xdm.TypeBoolean && a.String() == "false" {
-			return nestedKey{}, false
-		}
-	}
 	// The compilation sees the caller's resolver only through
 	// moduleResolverFor, beneath the per-transform wrappers, so that is the
 	// identity keyed. Without one, stylesheet-location is read through the
