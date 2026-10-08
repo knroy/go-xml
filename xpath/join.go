@@ -24,7 +24,7 @@ func (c *Compiled) Comparison() (op string, left, right *Compiled, ok bool) {
 	if !isBin || c.compat {
 		return "", nil, nil, false
 	}
-	if _, isGeneral := generalValueOp[b.Op]; !isGeneral {
+	if generalValueOp(b.Op) == "" {
 		return "", nil, nil, false
 	}
 	if r, isRange := b.Right.(*BinaryOp); isRange && r.Op == "to" {

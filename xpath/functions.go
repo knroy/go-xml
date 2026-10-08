@@ -12,7 +12,7 @@ import (
 // fn:string($arg) are different functions, and fn:substring has both a
 // two- and a three-argument form with different behaviour.
 type Library struct {
-	fns map[string]Function
+	fns map[fnKey]Function
 	// Parent is consulted when a name is not found locally, so a stylesheet's
 	// own functions can shadow and extend the builtins without copying them.
 	Parent FunctionLibrary
@@ -20,11 +20,21 @@ type Library struct {
 
 // NewLibrary returns an empty library chained to parent.
 func NewLibrary(parent FunctionLibrary) *Library {
-	return &Library{fns: map[string]Function{}, Parent: parent}
+	return &Library{fns: map[fnKey]Function{}, Parent: parent}
 }
 
-func libKey(name xdm.QName, arity int) string {
-	return fmt.Sprintf("%s#%d", name.Clark(), arity)
+// fnKey is a function's expanded name and arity. It is a struct rather than
+// the "{uri}local#arity" string it once was because every function call looks
+// its target up by it, and building that string with fmt.Sprintf was an
+// allocation per call: XRechnung's validation made 483k allocations per
+// invoice with the string key and 230k without it.
+type fnKey struct {
+	uri, local string
+	arity      int
+}
+
+func libKey(name xdm.QName, arity int) fnKey {
+	return fnKey{name.URI, name.Local, arity}
 }
 
 // Lookup implements FunctionLibrary.

@@ -193,10 +193,8 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 	// range may name more integers than the item limit allows, and building
 	// them to find out whether one value is among them is the wrong shape of
 	// work regardless.
-	valueOpFor := map[string]string{
-		"=": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge",
-	}
-	if got, ok, err := rangeContains(ctx, e, valueOpFor[e.Op]); err != nil {
+	valueOp := generalValueOp(e.Op)
+	if got, ok, err := rangeContains(ctx, e, valueOp); err != nil {
 		return nil, err
 	} else if ok {
 		return xdm.One(xdm.NewBoolean(got)), nil
@@ -243,20 +241,13 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 	return xdm.One(xdm.NewBoolean(ok)), nil
 }
 
-// generalValueOp maps a general comparison to the value comparison each pair
-// is tested with. A package variable because a join calls comparePairs once
-// per candidate pair, where a map literal would be rebuilt every time.
-var generalValueOp = map[string]string{
-	"=": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge",
-}
-
 // comparePairs is the existential half of a general comparison: whether some
 // pair of already-atomized items, one from each operand, compares true. It is
 // split out so that a host evaluating the operands itself (an XQuery join,
 // which atomizes each operand once rather than once per pair) reaches the
 // same pair order, conversions and errors as the operator does.
 func (e *BinaryOp) comparePairs(ctx *Context, la, ra xdm.Sequence) (bool, error) {
-	valueOp := generalValueOp[e.Op]
+	valueOp := generalValueOp(e.Op)
 
 	for _, li := range la {
 		for _, ri := range ra {
@@ -277,6 +268,27 @@ func (e *BinaryOp) comparePairs(ctx *Context, la, ra xdm.Sequence) (bool, error)
 		}
 	}
 	return false, nil
+}
+
+// generalValueOp names the value comparison a general comparison operator
+// applies to each pair. A switch rather than a map literal: the literal was
+// built on every evaluation of the comparison.
+func generalValueOp(op string) string {
+	switch op {
+	case "=":
+		return "eq"
+	case "!=":
+		return "ne"
+	case "<":
+		return "lt"
+	case "<=":
+		return "le"
+	case ">":
+		return "gt"
+	case ">=":
+		return "ge"
+	}
+	return ""
 }
 
 // compareValues compares two atomic values with a value-comparison operator.
