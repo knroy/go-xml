@@ -1,6 +1,9 @@
 package xdm
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A declared encoding is honoured only where this package can decode it
 // exactly. Everything else must stay an error rather than being guessed at.
@@ -78,4 +81,31 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// The US-ASCII check streams: it used to read the rest of the document into
+// a second copy before the tokeniser saw a byte. The refusal keeps its text
+// and its offset, counted from just after the XML declaration, also for a
+// byte far past the decoder's first read.
+func TestASCIICheckStreams(t *testing.T) {
+	body := strings.Repeat("<e>text</e>\n", 20000)
+	decl := `<?xml version="1.0" encoding="us-ascii"?>`
+	parse := func(doc string) func() {
+		return func() {
+			if _, err := ParseString(doc, ParseOptions{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	utf8 := allocated(parse(`<?xml version="1.0" encoding="UTF-8"?><a>` + body + `</a>`))
+	ascii := allocated(parse(decl + `<a>` + body + `</a>`))
+	if extra := int64(ascii) - int64(utf8); extra > int64(len(body))/10 {
+		t.Errorf("a US-ASCII document allocated %d bytes more than the same in UTF-8 (body %d bytes)", extra, len(body))
+	}
+
+	_, err := ParseString(decl+"<a>"+body+"\xe9</a>", ParseOptions{})
+	want := `parse XML: xml: opening charset "us-ascii": declared encoding us-ascii but byte 233 at offset 240003 is not ASCII`
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v\nwant %s", err, want)
+	}
 }

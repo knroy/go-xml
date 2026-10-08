@@ -1255,18 +1255,9 @@ func lexicalName(n xml.Name) string {
 func charsetReader(charset string, input io.Reader) (io.Reader, error) {
 	switch strings.ToLower(charset) {
 	case "us-ascii", "ascii", "iso-646", "us_ascii":
-		b, err := io.ReadAll(input)
-		if err != nil {
-			return nil, err
-		}
-		for i, c := range b {
-			if c > 0x7f {
-				return nil, fmt.Errorf(
-					"declared encoding %s but byte %d at offset %d is not ASCII",
-					charset, c, i)
-			}
-		}
-		return bytes.NewReader(b), nil
+		// Checked as it streams, rather than by reading the rest of the
+		// document into a second copy first.
+		return &asciiReader{r: input, charset: charset}, nil
 	case "iso-8859-1", "latin1", "iso8859-1", "iso_8859-1":
 		b, err := io.ReadAll(input)
 		if err != nil {
@@ -1292,6 +1283,37 @@ func (t *srcTee) Read(p []byte) (int, error) {
 	n, err := t.r.Read(p)
 	if t.buf != nil {
 		t.buf.Write(p[:n])
+	}
+	return n, err
+}
+
+// asciiReader passes seven-bit bytes through and fails at the first byte
+// above 0x7f, naming its offset in the stream it was handed.
+//
+// It used to read the whole stream before returning anything, and its errors
+// were then wrapped by the tokeniser as a failure to open the charset. A
+// reader error is not wrapped, so the wording is supplied here, keeping the
+// messages what they were. What streaming does change is precedence: in a
+// document that is also malformed before its first non-ASCII byte, that
+// error is now the one reported.
+type asciiReader struct {
+	r       io.Reader
+	charset string
+	off     int
+}
+
+func (a *asciiReader) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	for i, c := range p[:n] {
+		if c > 0x7f {
+			return i, fmt.Errorf(
+				"xml: opening charset %q: declared encoding %s but byte %d at offset %d is not ASCII",
+				a.charset, a.charset, c, a.off+i)
+		}
+	}
+	a.off += n
+	if err != nil && err != io.EOF {
+		err = fmt.Errorf("xml: opening charset %q: %w", a.charset, err)
 	}
 	return n, err
 }
