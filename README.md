@@ -689,6 +689,10 @@ introduces bought exactly zero, so it was reverted. The comment in
 
 ## Benchmarks
 
+A harness comparing go-xml with Saxon-HE, BaseX, libxml2, Xerces-J, Jing and
+`encoding/xml` — pinned engines, an agreement check before any timing, cold
+and warm modes — lives in [`bench/`](bench/README.md).
+
 Apple M3 Pro, Go 1.26, `-benchtime=200x`, median of five runs. These are the
 two production workloads, not microbenchmarks. Wall-clock figures vary about
 ±15% run to run on a laptop, so they are rounded; the allocation counts are

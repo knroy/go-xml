@@ -6,6 +6,12 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### Added — benchmarks
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| Benchmark harness in `bench/` | Comparisons with other engines were one-off and unreproducible. Pinned, checksummed engines; outputs checked for agreement before timing; cold and warm modes. | |
+
 ### Fixed — release process
 
 | Change | Problem → solution | Commit |
