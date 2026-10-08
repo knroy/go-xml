@@ -123,6 +123,10 @@ const bufSize = 4096
 // A returned token, and the byte and attribute slices in it, alias the
 // Decoder's own storage and are valid only until the next call to RawToken.
 type Decoder struct {
+	// arena holds the attribute values handed out, which are copies and
+	// outlive the token.
+	arena Arena
+
 	// Strict is kept for the caller's sake, which sets it; the Decoder is
 	// strict whatever its value. xdm has never read a document any other way.
 	Strict bool
@@ -437,7 +441,7 @@ func (d *Decoder) startTag() (Token, error) {
 		if !ok {
 			return nil, d.err
 		}
-		attrs = append(attrs, Attr{an, string(v)})
+		attrs = append(attrs, Attr{an, d.arena.String(v)})
 	}
 	d.attrs = attrs
 	d.tokStart = StartElement{name, attrs}

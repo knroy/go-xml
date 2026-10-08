@@ -254,6 +254,18 @@ func attrLexical(n xml.Name) string {
 	return n.Space + ":" + n.Local
 }
 
+// lexicalIs reports whether s is the lexical QName prefix:local (or local
+// with no prefix), without building it. DTD attribute typing compares every
+// declaration with every element and attribute name, so building the names
+// to compare cost an allocation per declaration per element.
+func lexicalIs(prefix, local, s string) bool {
+	if prefix == "" {
+		return s == local
+	}
+	return len(s) == len(prefix)+1+len(local) && s[len(prefix)] == ':' &&
+		s[:len(prefix)] == prefix && s[len(prefix)+1:] == local
+}
+
 // applyAttTypes stamps the ID, IDREF and IDREFS annotations a DTD declares,
 // and collapses the spaces in every attribute declared with a non-CDATA type.
 //
@@ -264,11 +276,11 @@ func attrLexical(n xml.Name) string {
 // both.
 func applyAttTypes(el *Node, types []attDeclaredType) {
 	for _, t := range types {
-		if t.element != el.Name.Lexical() && t.element != el.Name.Local {
+		if !lexicalIs(el.Name.Prefix, el.Name.Local, t.element) && t.element != el.Name.Local {
 			continue
 		}
 		for _, a := range el.Attrs {
-			if a.Name.Lexical() != t.attr && a.Name.Local != t.attr {
+			if !lexicalIs(a.Name.Prefix, a.Name.Local, t.attr) && a.Name.Local != t.attr {
 				continue
 			}
 			// XML 1.0 §3.3.3: a value whose declared type is not CDATA

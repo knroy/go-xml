@@ -167,6 +167,12 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// against a MaxBytes of 1024 before being refused, which is a refusal
 	// that costs more than accepting. Wrapped here the ReadAll hits the
 	// limited reader and stops at the bound.
+	// A reader that knows its length (strings.Reader, bytes.Reader) lets the
+	// position-tracking copy below be sized once instead of grown by doubling.
+	sizeHint := 0
+	if l, ok := r.(interface{ Len() int }); ok {
+		sizeHint = l.Len()
+	}
 	maxBytes := opts.MaxBytes
 	if maxBytes == 0 {
 		maxBytes = DefaultMaxBytes
@@ -212,16 +218,20 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// re-parse of the substituted source, and by the time that is known the
 	// reader is partly consumed and the decoder has buffered ahead into it.
 	//
-	// The cost is a second copy of the document for the length of the parse,
-	// paid by every caller that sets AllowDOCTYPE rather than only those who
-	// turn out to need it. Dropping it once the DOCTYPE is read would mean
-	// replacing the decoder mid-stream, which loses its lookahead — so the
-	// copy stays. entitiesExpanded marks the second parse, which has no
-	// entities left to find and so needs no copy at all.
-
-	keepSrc := trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded)
-	if keepSrc {
-		r = io.TeeReader(r, &srcBuf)
+	// The copy is needed only until the document element opens: a re-parse
+	// can start only at the DOCTYPE, which must come first, so past that point
+	// the tee stops and its copy is dropped unless positions are tracked.
+	// entitiesExpanded marks the second parse, which has no entities left to
+	// find and so needs no copy at all.
+	// Only a tracked copy is kept to the end, so only it is sized up front;
+	// never past MaxBytes, which the reader will refuse to go beyond.
+	if trackPos && sizeHint > 0 && (maxBytes <= 0 || int64(sizeHint) <= maxBytes) {
+		srcBuf.Grow(sizeHint)
+	}
+	var tee *srcTee
+	if trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded) {
+		tee = &srcTee{r: r, buf: &srcBuf}
+		r = tee
 	}
 
 	// The charge reader sits between the decoder and the source so that an
@@ -341,6 +351,18 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					return nil, fmt.Errorf("parse XML: multiple root elements")
 				}
 				sawRoot = true
+				// Past the prolog: no re-parse can start now, so the copy
+				// kept for one is dropped; and with no entity table installed
+				// by now none ever will be, so the charge reader has nothing
+				// to buffer for.
+				if tee != nil && !trackPos {
+					tee.buf = nil
+					srcBuf = strings.Builder{}
+				}
+				if charger != nil && charger.t == nil {
+					charger.off = true
+					charger.backlog = nil
+				}
 			}
 			if len(attDefaults) > 0 {
 				t = applyAttDefaults(t, attDefaults)
@@ -393,7 +415,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// the lexical name — which is what XML §3 requires anyway: the
 			// end tag must repeat the start tag's QName character for
 			// character, not merely resolve to the same expanded name.
-			if got, want := lexicalName(t.Name), cur.Name.Lexical(); got != want {
+			if t.Name.Space == cur.Name.Prefix && t.Name.Local == cur.Name.Local {
+				// The same QName, written the same way: nothing to build.
+			} else if got, want := lexicalName(t.Name), cur.Name.Lexical(); got != want {
 				return nil, fmt.Errorf(
 					"parse XML: element %q closed by end element %q", want, got)
 			}
@@ -427,7 +451,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		case *xml.Comment:
 			t := *tok
 			sawPrologToken = true
-			chunk.addChild(cur, &Node{Kind: KindComment, Value: string(t)})
+			c := chunk.alloc()
+			c.Kind, c.Value = KindComment, spaces.arena.String(t)
+			chunk.addChild(cur, c)
 
 		case *xml.ProcInst:
 			t := *tok
@@ -852,8 +878,11 @@ func (r *textRun) flush(spaces *spaceTable) {
 // spaceTable shares one string among the whitespace-only text values of a
 // parse. An indented document repeats a handful of them -- a newline and the
 // indentation of each depth -- once per element, so most of its text nodes
-// are one of a few strings.
-type spaceTable map[string]string
+// are one of a few strings. The other values share the arena's blocks.
+type spaceTable struct {
+	m     map[string]string
+	arena xml.Arena
+}
 
 // maxSpaceTable and maxSpaceLen bound the table: a run longer than
 // maxSpaceLen is unlikely to repeat, and past maxSpaceTable entries values
@@ -867,17 +896,17 @@ const (
 // whitespace only.
 func (t *spaceTable) text(b []byte) string {
 	if len(b) > maxSpaceLen || !onlySpace(b) {
-		return string(b)
+		return t.arena.String(b)
 	}
-	if s, ok := (*t)[string(b)]; ok {
+	if s, ok := t.m[string(b)]; ok {
 		return s
 	}
 	s := string(b)
-	if len(*t) < maxSpaceTable {
-		if *t == nil {
-			*t = make(spaceTable)
+	if len(t.m) < maxSpaceTable {
+		if t.m == nil {
+			t.m = make(map[string]string)
 		}
-		(*t)[s] = s
+		t.m[s] = s
 	}
 	return s
 }
@@ -1233,18 +1262,9 @@ func lexicalName(n xml.Name) string {
 func charsetReader(charset string, input io.Reader) (io.Reader, error) {
 	switch strings.ToLower(charset) {
 	case "us-ascii", "ascii", "iso-646", "us_ascii":
-		b, err := io.ReadAll(input)
-		if err != nil {
-			return nil, err
-		}
-		for i, c := range b {
-			if c > 0x7f {
-				return nil, fmt.Errorf(
-					"declared encoding %s but byte %d at offset %d is not ASCII",
-					charset, c, i)
-			}
-		}
-		return bytes.NewReader(b), nil
+		// Checked as it streams, rather than by reading the rest of the
+		// document into a second copy first.
+		return &asciiReader{r: input, charset: charset}, nil
 	case "iso-8859-1", "latin1", "iso8859-1", "iso_8859-1":
 		b, err := io.ReadAll(input)
 		if err != nil {
@@ -1258,4 +1278,49 @@ func charsetReader(charset string, input io.Reader) (io.Reader, error) {
 		return bytes.NewReader(out.Bytes()), nil
 	}
 	return nil, fmt.Errorf("unsupported encoding %q", charset)
+}
+
+// srcTee copies what is read from r into buf until buf is set to nil.
+type srcTee struct {
+	r   io.Reader
+	buf *strings.Builder
+}
+
+func (t *srcTee) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if t.buf != nil {
+		t.buf.Write(p[:n])
+	}
+	return n, err
+}
+
+// asciiReader passes seven-bit bytes through and fails at the first byte
+// above 0x7f, naming its offset in the stream it was handed.
+//
+// It used to read the whole stream before returning anything, and its errors
+// were then wrapped by the tokeniser as a failure to open the charset. A
+// reader error is not wrapped, so the wording is supplied here, keeping the
+// messages what they were. What streaming does change is precedence: in a
+// document that is also malformed before its first non-ASCII byte, that
+// error is now the one reported.
+type asciiReader struct {
+	r       io.Reader
+	charset string
+	off     int
+}
+
+func (a *asciiReader) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	for i, c := range p[:n] {
+		if c > 0x7f {
+			return i, fmt.Errorf(
+				"xml: opening charset %q: declared encoding %s but byte %d at offset %d is not ASCII",
+				a.charset, a.charset, c, a.off+i)
+		}
+	}
+	a.off += n
+	if err != nil && err != io.EOF {
+		err = fmt.Errorf("xml: opening charset %q: %w", a.charset, err)
+	}
+	return n, err
 }
