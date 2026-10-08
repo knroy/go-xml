@@ -55,8 +55,9 @@
   the non-goals recorded so they are not proposed again as oversights.
 * **[Benchmark](benchmark.md)** — go-xml against Saxon-HE, BaseX, Jing,
   Xerces-J, libxml2 and `encoding/xml`: where it is faster (anything that
-  starts a process), where it is slower (a warm JVM, value joins, memory per
-  byte), and the bugs the agreement check found.
+  starts a process, and warm DocBook, XMark and XSD), where it is slower (a
+  warm JVM on Schematron-shaped stylesheets, memory per byte), and the bugs
+  the agreement check found.
 * **[Profiling](profiling.md)** — the causes behind the benchmark's losses
   (allocation churn, pattern dispatch, nested-loop joins, node size) and the
   status of each fix.

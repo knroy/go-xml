@@ -317,9 +317,9 @@ T17 was prototyped and not landed: since T3 a lookup allocates nothing, it is
 about 3% of CPU, and a cache that stays correct when a library changes after
 first use cost more allocations than it saved.
 
-Still open: Tier 3 (T20–T23, which need v2). The benchmark has not been
-re-run; docs/benchmark.md still shows the `4e0496f` figures. Round 2 below
-re-profiles the result and ranks what is left.
+Still open: Tier 3 (T20–T23, which need v2). Round 2 below re-profiles the
+result and ranks what is left; docs/benchmark.md was re-run at `eb14939`,
+after both rounds.
 
 ## Round 2: after the fixes (`73a2963`)
 
@@ -450,8 +450,8 @@ different error can win with nested `x`, so it is not equivalent).
 
 The benchmark harness has an inconsistency: its cold parse helper sets
 `AllowDOCTYPE` and its warm loop does not, so the two columns time different
-code paths. `docs/benchmark.md` still shows the `22f4b04` figures; a full
-re-run, with the JVM engines, should follow the fixes above.
+code paths. `docs/benchmark.md` was re-run with every engine at `eb14939`,
+after the round-2 fixes.
 
 ## Correctness bugs found while profiling
 
