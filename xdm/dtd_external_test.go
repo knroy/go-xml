@@ -677,3 +677,46 @@ func TestDTDCommentDashes(t *testing.T) {
 		t.Errorf("well-formed comments: got %q, want x", got)
 	}
 }
+
+// TestDeclarationsAfterUnreadParameterEntity is XML 1.0 §5.1: a processor
+// that has not read a parameter entity must not process entity or ATTLIST
+// declarations that follow the reference, since the entity may have held
+// overriding declarations — unless the document is standalone="yes", when it
+// must. Declarations before the reference are processed either way, and a
+// processor that does read the entity (a resolver is set) processes all.
+func TestDeclarationsAfterUnreadParameterEntity(t *testing.T) {
+	const subset = `<!ENTITY b "B"><!ATTLIST r c CDATA "C"> %p; <!ENTITY e "v"><!ATTLIST r a CDATA "d">`
+	summary := func(tree *Tree) string {
+		r := tree.Root.ChildElements()[0]
+		s := r.StringValue()
+		for _, n := range []string{"c", "a"} {
+			if a := r.Attr("", n); a != nil {
+				s += " " + n + "=" + a.Value
+			}
+		}
+		return s
+	}
+	cases := []struct{ name, prolog, decl, want string }{
+		{"external PE unread", "", `<!ENTITY % p SYSTEM "p.ent">`, "[B] c=C"},
+		{"internal PE unread", "", `<!ENTITY % p "">`, "[B] c=C"},
+		{"standalone", `<?xml version="1.0" standalone="yes"?>`, `<!ENTITY % p "">`, "[Bv] c=C a=d"},
+	}
+	for _, c := range cases {
+		src := c.prolog + "<!DOCTYPE r [" + c.decl + subset + "]><r>[&b;&e;]</r>"
+		tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if got := summary(tree); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+	dir := writeFiles(t, map[string]string{
+		"p.ent":   "",
+		"doc.xml": `<!DOCTYPE r [<!ENTITY % p SYSTEM "p.ent">` + subset + `]><r>[&b;&e;]</r>`,
+	})
+	if got := summary(mustParseExternal(t, dir, "doc.xml")); got != "[Bv] c=C a=d" {
+		t.Errorf("PE read through a resolver: got %q, want %q", got, "[Bv] c=C a=d")
+	}
+}

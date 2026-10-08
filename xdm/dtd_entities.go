@@ -797,6 +797,28 @@ func checkDTDComments(text string) error {
 	return nil
 }
 
+// declsBeforeUnreadPE returns the internal subset as XML 1.0 §5.1 lets a
+// non-validating processor use it when it has not read the parameter
+// entities the subset refers to: "they MUST NOT process entity declarations
+// or attribute-list declarations encountered after a reference to a
+// parameter entity that is not read", since that entity may have held
+// overriding declarations. The declarations before the first reference are
+// returned; a subset with no reference is returned as it is. The caller
+// skips this under standalone="yes", where §5.1 requires them processed.
+func declsBeforeUnreadPE(subset string) string {
+	var sb strings.Builder
+	for kw, body := range markupDecls(subset) {
+		switch kw {
+		case "%":
+			return sb.String()
+		case "--":
+		default:
+			sb.WriteString("<!" + kw + body + ">")
+		}
+	}
+	return subset
+}
+
 // declares reports whether the DTD declares a general entity name, internal
 // or external. t may be nil, which declares nothing.
 func (t *entityTable) declares(name string) bool {
