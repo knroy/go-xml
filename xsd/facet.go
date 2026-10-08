@@ -3,6 +3,7 @@ package xsd
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -113,6 +114,13 @@ func (w WhiteSpace) Normalize(s string) string {
 			return r
 		}, s)
 	case WhiteCollapse:
+		// Most values are already collapsed, and building a copy of
+		// each was a steady allocation per value. The copy also turns
+		// invalid UTF-8 into U+FFFD, so the input is returned as is
+		// only when that would not have changed it either.
+		if isCollapsed(s) && utf8.ValidString(s) {
+			return s
+		}
 		var b strings.Builder
 		b.Grow(len(s))
 		space := false
@@ -132,6 +140,23 @@ func (w WhiteSpace) Normalize(s string) string {
 		return b.String()
 	}
 	return s
+}
+
+// isCollapsed reports whether s is already in the form the collapse
+// normalisation produces: no tab, newline or carriage return, and no space at
+// either end or next to another space.
+func isCollapsed(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\t', '\n', '\r':
+			return false
+		case ' ':
+			if i == 0 || i == len(s)-1 || s[i+1] == ' ' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // A Pattern is a compiled pattern facet.

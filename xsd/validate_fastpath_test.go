@@ -56,3 +56,36 @@ func TestBoundsSkippedWithoutBoundFacets(t *testing.T) {
 	assertInvalid(t, schema, `<r><t>1999-12-31</t></r>`, "minInclusive")
 	assertInvalid(t, schema, `<r><p>PT24H</p></r>`, "maxExclusive")
 }
+
+// TestCollapseFastPath pins Normalize's early return for a value that is
+// already collapsed. It must return exactly what building the copy returns —
+// including U+FFFD for invalid UTF-8, which the copy produces — and it must not
+// allocate when it applies.
+func TestCollapseFastPath(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"", ""},
+		{"a", "a"},
+		{"a b c", "a b c"},
+		{"é ü", "é ü"},
+		{" ", ""},
+		{" a", "a"},
+		{"a ", "a"},
+		{"a  b", "a b"},
+		{"a\tb", "a b"},
+		{"a\nb", "a b"},
+		{"a\rb", "a b"},
+		{" a ", " a "},
+		{"a\xffb", "a�b"},
+		{"\xff", "�"},
+	} {
+		if got := WhiteCollapse.Normalize(c.in); got != c.want {
+			t.Errorf("Normalize(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = WhiteCollapse.Normalize("already collapsed value")
+	})
+	if allocs != 0 {
+		t.Errorf("collapsing a collapsed value allocated %v times, want 0", allocs)
+	}
+}
