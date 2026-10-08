@@ -99,7 +99,13 @@ func TestASCIICheckStreams(t *testing.T) {
 	}
 	utf8 := allocated(parse(`<?xml version="1.0" encoding="UTF-8"?><a>` + body + `</a>`))
 	ascii := allocated(parse(decl + `<a>` + body + `</a>`))
-	if extra := int64(ascii) - int64(utf8); extra > int64(len(body))/10 {
+	// The old code copied the whole body first, so it is far above either
+	// bound; the race detector's shadow allocations need the wider one.
+	bound := int64(len(body)) / 10
+	if raceEnabled {
+		bound *= 2
+	}
+	if extra := int64(ascii) - int64(utf8); extra > bound {
 		t.Errorf("a US-ASCII document allocated %d bytes more than the same in UTF-8 (body %d bytes)", extra, len(body))
 	}
 
