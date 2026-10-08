@@ -264,6 +264,12 @@ jobs:
           # An annotated tag has a message; a lightweight one does not, and
           # `git tag -l --format` prints an empty contents for it rather than
           # failing. Either way an absent line means "do not release it".
+          # actions/checkout fetches the pushed tag as a LIGHTWEIGHT ref to
+          # the commit, which drops the annotated tag's message, so the
+          # contents read below were always empty and this step skipped the
+          # w3cschemas release it was asked for (v1.6.0 had to be finished by
+          # hand). Fetching the tag object itself restores the message.
+          git fetch --force --no-tags origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
           msg=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME" || true)
           want=$(printf '%s\n' "$msg" | sed -n 's/^w3cschemas:[[:space:]]*\(v[0-9][0-9.]*\)[[:space:]]*$/\1/p' | head -1)
           if [ -z "$want" ]; then

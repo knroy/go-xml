@@ -4,6 +4,14 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+### Fixed — release process
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| The release workflow never released `w3cschemas` | `actions/checkout` refetches the pushed tag as a lightweight ref, so the tag message's `w3cschemas: vX.Y.Z` line read as empty and the step skipped; v0.4.0 and v0.5.0 were tagged by hand. The tag object is now fetched before it is read. | |
+
 ## v1.6.0 — 2026-10-07
 
 ### Added
