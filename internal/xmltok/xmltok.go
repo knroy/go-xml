@@ -870,8 +870,10 @@ var class = func() (t [256]uint8) {
 // replaced by a space, as §3.3.3 asks, while a character reference to one of
 // them is kept as the character: the rewrite sees only literal input bytes.
 //
-// parity: a 1.1 NEL or U+2028 in an attribute value becomes a newline, not a
-// space, and an entity's replacement text is not normalised.
+// Under XML 1.1, NEL, U+2028 and CR NEL are line ends too, and so one space
+// in a value.
+//
+// parity: an entity's replacement text is not normalised.
 func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 	var stop uint8
 	switch {
@@ -948,13 +950,13 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 			p1, p2 = 0, 0
 			continue
 		case quote != 0 && (b == '\t' || b == '\n' || b == '\r'):
-			// §3.3.3. b becomes the space, so a NEL after a CR is read as a
-			// line end of its own, as it was when this rewrite ran upstream.
+			// §3.3.3, applied after §2.11: a line end is one space. b stays
+			// a CR only for a lone CR, so that a NEL after it joins it.
 			if c, ok := d.peek(); ok && b == '\r' && c == '\n' {
 				d.pos++
+				b = '\n'
 			}
-			b = ' '
-			out = append(out, b)
+			out = append(out, ' ')
 		case b == '\r':
 			out = append(out, '\n')
 			if c, ok := d.peek(); ok && c == '\n' {
@@ -963,20 +965,29 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 			}
 		case b == 0x85 && p1 == 0xC2:
 			// NEL. Its lead byte is already written; \r NEL is one line
-			// end, and the \r has already been written as \n.
+			// end, and the \r has already been written as its line end.
 			out = out[:len(out)-1]
 			if p2 != '\r' {
-				out = append(out, '\n')
+				out = append(out, lineEnd(quote))
 			}
 		case b == 0xA8 && p1 == 0x80 && p2 == 0xE2:
 			// U+2028, likewise.
-			out = append(out[:len(out)-2], '\n')
+			out = append(out[:len(out)-2], lineEnd(quote))
 		default:
 			out = append(out, b)
 		}
 		p2, p1 = p1, b
 	}
 	return d.finishText(out, spans)
+}
+
+// lineEnd is what a line end reads as: a newline, or in an attribute value
+// (quote set) a space.
+func lineEnd(quote byte) byte {
+	if quote != 0 {
+		return ' '
+	}
+	return '\n'
 }
 
 // finishText checks the run against [2] and keeps its buffers for reuse.

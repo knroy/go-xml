@@ -79,10 +79,12 @@ func TestAttributeValueNormalization(t *testing.T) {
 		{"subset comment with apostrophe", "<!DOCTYPE r [<!-- don't -->]><r s=\"m\nn\"/>", "m n"},
 		{"subset comment with bracket", "<!DOCTYPE r [<!-- [ -->]><r s=\"m\nn\"/>", "m n"},
 		{"utf-8 neighbour", "<a s=\"é\ny\"/>", "é y"},
-		// Unchanged from the pre-pass: under 1.1 a NEL is a line end that
-		// stays a newline, and a CR before it a space of its own.
-		{"1.1 nel", "<?xml version=\"1.1\"?><a s=\"1\r\u00852\" t=\"1\u00852\"/>", "1 \n2|1\n2"},
-		{"1.0 nel", "<a s=\"1\r\u00852\"/>", "1 \u00852"},
+		// XML 1.1 §2.11 makes NEL, U+2028 and CR NEL line ends, folded
+		// before §3.3.3 applies, so each is one space. Under 1.0 NEL and
+		// U+2028 are ordinary characters; the CR before a NEL is a line end.
+		{"1.1 nel", "<?xml version=\"1.1\"?><a s=\"1\r\u00852\" t=\"1\u00852\" u=\"1\u20282\" v=\"1\r\n\u00852\"/>", "1 2|1 2|1 2|1  2"},
+		{"1.1 nel by reference", "<?xml version=\"1.1\"?><a s=\"1&#x85;2&#x2028;3\"/>", "1\u00852\u20283"},
+		{"1.0 nel", "<a s=\"1\r\u00852\" t=\"1\u00852\u20283\"/>", "1 \u00852|1\u00852\u20283"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
