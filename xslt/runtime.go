@@ -1269,7 +1269,7 @@ func bodyVariableRefs(el *xdm.Node) []string {
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
 		if n.Kind == xdm.KindElement {
-			ns := n.InScopeNamespaces()
+			ns := inScopeNamespacesShared(n)
 			for _, a := range n.Attrs {
 				for _, ref := range variableRefsIn(a.Value, ns) {
 					if !seen[ref] && !bound[ref] {
@@ -1328,7 +1328,7 @@ func bodyFunctionCalls(el *xdm.Node) []string {
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
 		if n.Kind == xdm.KindElement {
-			ns := n.InScopeNamespaces()
+			ns := inScopeNamespacesShared(n)
 			for _, a := range n.Attrs {
 				for _, c := range functionCallsIn(a.Value, ns) {
 					if !seen[c] {
