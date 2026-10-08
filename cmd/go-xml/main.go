@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 )
 
 func main() {
+	lowerGC()
 	// "validate" and "xquery" are subcommands; everything else keeps the original
 	// invocation, so a command line that worked before still works.
 	if len(os.Args) > 1 && (os.Args[1] == "validate" || os.Args[1] == "xquery") {
@@ -37,6 +39,23 @@ func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "go-xml:", err)
 		os.Exit(1)
+	}
+}
+
+// cliGCPercent is the GOGC the command runs with when the environment sets
+// none. A run is a parse and a compile that only grow the heap, then one
+// transform, query or validation, and at the default of 100 the collector
+// spent half the CPU of a cold run re-marking a heap that was all live:
+// 200 cut CPU by a quarter to a third on CEN, DocBook and XMark q1, at the
+// cost of peak RSS (DocBook chapter.003 114 -> 161 MB). It is set here and
+// never in the library, whose callers own their process's GC policy.
+const cliGCPercent = 200
+
+// lowerGC applies cliGCPercent unless GOGC is set, so a user who tunes the
+// collector keeps their setting.
+func lowerGC() {
+	if os.Getenv("GOGC") == "" {
+		debug.SetGCPercent(cliGCPercent)
 	}
 }
 
