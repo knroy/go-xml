@@ -11,6 +11,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | The release workflow never released `w3cschemas` | `actions/checkout` refetches the pushed tag as a lightweight ref, so the tag message's `w3cschemas: vX.Y.Z` line read as empty and the step skipped; v0.4.0 and v0.5.0 were tagged by hand. The tag object is now fetched before it is read. | [`549d113`][549d113] |
+| Release notes printed the commit links as `[`abc1234`][abc1234]` | The body is the CHANGELOG section alone, and the link definitions sit at the file's foot. The section's definitions are now appended to the body. | |
 
 ## v1.6.0 — 2026-10-07
 

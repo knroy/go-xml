@@ -153,6 +153,23 @@ jobs:
             echo "::error::the \"## v${v}\" section of CHANGELOG.md is empty."
             exit 1
           fi
+          # The commit cells are reference links -- [`abc1234`][abc1234] --
+          # whose definitions sit at the foot of CHANGELOG.md, outside the
+          # section. Without them GitHub renders the brackets literally, which
+          # is how the v1.5.0 and v1.6.0 notes came out. So every label the
+          # section uses is followed by its definition, copied as written.
+          grep -oE '\]\[[^]]+\]' /tmp/release-body.md | sed 's/^\]\[//; s/\]$//' | sort -u > /tmp/release-labels
+          if [ -s /tmp/release-labels ]; then
+            echo >> /tmp/release-body.md
+            while IFS= read -r l; do
+              def=$(awk -v l="$l" 'index($0, "[" l "]: ") == 1 { print; exit }' CHANGELOG.md)
+              if [ -z "$def" ]; then
+                echo "::error::CHANGELOG.md uses [$l] but never defines it."
+                exit 1
+              fi
+              printf '%s\n' "$def" >> /tmp/release-body.md
+            done < /tmp/release-labels
+          fi
           echo "extracted $(wc -l < /tmp/release-body.md) lines of release notes"
 
       # ---------------------------------------------------------------
