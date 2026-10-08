@@ -155,6 +155,25 @@ type compiler struct {
 	// expansions counts every <ref> expanded during this compilation, bounded
 	// by maxRefExpansions.
 	expansions int
+	// compiled holds each definition already compiled, keyed by name and the
+	// inherited ns it was compiled under, so that every later <ref> to it
+	// shares the one pattern instead of compiling the body again.
+	compiled map[compiledKey]compiledDef
+	// bare collects, for each definition being compiled, the names it reaches
+	// without crossing an <element>. A shared definition carries that set so
+	// the section 4.19 check can still be made where it is reused.
+	bare map[string]map[string]bool
+}
+
+// compiledKey names a compiled definition: the result depends on the
+// inherited ns as well as the name.
+type compiledKey struct{ name, ns string }
+
+// compiledDef is a compiled definition and the names it reaches without
+// crossing an <element>.
+type compiledDef struct {
+	pat  pattern
+	bare map[string]bool
 }
 
 // active returns the set of hrefs on the current inclusion path, creating it
@@ -690,35 +709,34 @@ func (c *compiler) compileRef(n *xdm.Node) (pattern, error) {
 // maxRefExpansions bounds the total number of <ref> expansions one compilation
 // may perform.
 //
-// Expanding a <ref> re-compiles the definition's whole body, and nothing
-// shares that work between two <ref>s naming the same definition. A grammar
-// whose definitions form a chain — each one referring to several others, as a
-// large modular schema does — therefore costs a number of expansions that
-// grows multiplicatively along the chain, not additively. DocBook 5.1 is the
-// measured case: about 1500 definitions, and compilation had not finished
-// after 140 s. A 70-definition schema (XSpec) already expands 14140 times, a
-// factor of 200 over the number of definitions.
-//
-// This is a work budget in the spirit of MaxPatternSize, which bounds the
-// same shape of blowup during validation: it does not make the compilation
-// cheaper, it makes the failure bounded and legible instead of a hang. The
-// fix that would remove the need for it is to share the compiled pattern
-// between <ref>s naming the same definition, which the recursion guard above
-// makes delicate — see docs/todo.md.
+// Each definition is compiled once per inherited ns and then shared (see
+// compiler.compiled), so the count is about the number of definitions:
+// DocBook 5.2's ~1900 definitions compile in well under the bound. Before
+// that sharing every <ref> re-compiled its definition's whole body, which
+// grew multiplicatively along a chain of definitions; DocBook had not
+// compiled after 140 s. The bound stays as a guard against a grammar that
+// still needs that many, the way MaxPatternSize bounds the derivative.
 const maxRefExpansions = 200_000
+
+// noteBare records names as reached without an <element> by every definition
+// being compiled that has crossed none since it began.
+func (c *compiler) noteBare(names ...string) {
+	for d := range c.expanding {
+		if c.expandingAt[d] != c.elementDepth {
+			continue
+		}
+		for _, n := range names {
+			c.bare[d][n] = true
+		}
+	}
+}
 
 func (c *compiler) compileRefNamed(name string) (pattern, error) {
 	def, ok := c.defines[name]
 	if !ok {
 		return nil, fmt.Errorf("relaxng: <ref> names %q, which no <define> provides", name)
 	}
-	c.expansions++
-	if c.expansions > maxRefExpansions {
-		return nil, fmt.Errorf(
-			"relaxng: compiling this grammar needs more than %d <ref> "+
-				"expansions; it is too large or too densely cross-referenced",
-			maxRefExpansions)
-	}
+	c.noteBare(name)
 	// A definition already being compiled is being reached recursively. That
 	// is legal — a <bar> whose content may hold another <bar> is the ordinary
 	// way to write a nested structure — and expanding it here would not
@@ -741,6 +759,34 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 		}
 		return c.lazyRef(name), nil
 	}
+	ns := c.inheritedNs
+	if dn, ok := c.defineNs[name]; ok && ns == "" {
+		ns = dn
+	}
+	key := compiledKey{name, ns}
+	if d, ok := c.compiled[key]; ok {
+		// Reusing the pattern skips the walk that would have found a cycle
+		// back to a definition still being compiled, so the names it
+		// reaches bare are checked against those here instead.
+		bare := make([]string, 0, len(d.bare))
+		for n := range d.bare {
+			if c.expanding[n] && c.elementDepth <= c.expandingAt[n] {
+				return nil, fmt.Errorf(
+					"relaxng: definition %q refers to itself without an "+
+						"intervening <element> (section 4.19)", n)
+			}
+			bare = append(bare, n)
+		}
+		c.noteBare(bare...)
+		return d.pat, nil
+	}
+	c.expansions++
+	if c.expansions > maxRefExpansions {
+		return nil, fmt.Errorf(
+			"relaxng: compiling this grammar needs more than %d <ref> "+
+				"expansions; it is too large or too densely cross-referenced",
+			maxRefExpansions)
+	}
 	// No bound on c.depth. There was one — maxRefDepth = 500 — and because
 	// c.expanding above already catches every re-entry into a definition
 	// still being compiled, the count could only ever fire on a chain that
@@ -757,13 +803,18 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 		c.inheritedNs = ns
 		defer func() { c.inheritedNs = was }()
 	}
+	if c.bare == nil {
+		c.bare = map[string]map[string]bool{}
+	}
 	c.expanding[name] = true
 	c.expandingAt[name] = c.elementDepth
+	c.bare[name] = map[string]bool{}
 	c.depth++
 	defer func() {
 		c.depth--
 		delete(c.expanding, name)
 		delete(c.expandingAt, name)
+		delete(c.bare, name)
 	}()
 	p, err := c.compileChildren(def)
 	if err != nil {
@@ -783,6 +834,18 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 		}
 		p = join(p, q)
 	}
+	// A compound pattern is shared behind a refPat, so that the walks over
+	// the compiled pattern meet it once rather than once per <ref>. A leaf
+	// is kept as it is, for the constructors' simplifications to see.
+	switch p.(type) {
+	case notAllowedPat, emptyPat, textPat:
+	default:
+		p = &refPat{name: name, cached: p, done: true}
+	}
+	if c.compiled == nil {
+		c.compiled = map[compiledKey]compiledDef{}
+	}
+	c.compiled[key] = compiledDef{pat: p, bare: c.bare[name]}
 	return p, nil
 }
 

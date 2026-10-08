@@ -319,29 +319,6 @@ parameters; `#` comments and the `\` identifier escape.
   does not arbitrate it either way: it passes at 965 of 965 both before and
   after, and contains only nine `zeroOrMore` occurrences in total.
 
-* **`<ref>` expansion is not shared, and costs multiplicatively.** Fixing
-  section 7.3 let DocBook 5.1 reach the compiler for the first time, which is
-  how this surfaced: compilation had **not finished after 140 s**. It is not
-  non-termination. `compileRefNamed` re-compiles a definition's whole body
-  once per `<ref>` that names it and caches nothing, so a grammar whose
-  definitions form a chain — each referring to several others, as a large
-  modular schema does — costs a number of expansions that grows
-  multiplicatively along the chain. Measured: XSpec, with 70 definitions,
-  expands **14,140 times**, a factor of 200; DocBook has roughly 1,500.
-
-  `maxRefExpansions` (200,000) now bounds it, in the spirit of
-  `MaxPatternSize`, which bounds the same shape of blowup during validation.
-  DocBook stops in about 0.2 s with a message that says what happened instead
-  of hanging. **This is containment, not a fix.** The real fix is to share the
-  compiled pattern between `<ref>`s naming the same definition, which the
-  recursion guard makes delicate: the result depends on `inheritedNs`, and
-  `elementDepth` participates in the section 4.19 self-reference check, so a
-  naive cache can both reuse a pattern compiled under a different inherited
-  namespace and mask a legitimate error. Caching on *exit* was tried and does
-  not help — the blowup is in the first traversal, which a completed-entry
-  cache never gets to serve. Until that lands, DocBook-scale schemas are
-  refused rather than compiled.
-
 * **Section 7.3's *first* clause may be over-strict for two `<zeroOrMore>`s.**
   `xspec.rnc` sequences `xml-ns-attributes` with `common-attributes`, which
   itself begins with `xml-ns-attributes`, so `attribute xml:* { text }*`

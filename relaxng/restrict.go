@@ -2,6 +2,7 @@ package relaxng
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -460,6 +461,21 @@ func (s *nameSet) merge(o nameSet) {
 	s.text = s.text || o.text
 }
 
+// distinct drops repeated name classes. A repeat cannot change whether two
+// sets overlap, and without this a definition referring twice to another
+// that does the same doubles its set at every link.
+func distinct(cs []nameClass) []nameClass {
+	seen := make(map[nameClass]bool, len(cs))
+	out := cs[:0:0]
+	for _, c := range cs {
+		if !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // checkCompetition applies §7.3 and §7.4 to a compiled pattern.
 func checkCompetition(p pattern) error {
 	_, err := competing(p)
@@ -472,23 +488,36 @@ func checkCompetition(p pattern) error {
 // whether two branches of a group conflict, both branches must first be
 // summarised, and summarising a branch means recursing into it.
 func competing(p pattern) (nameSet, error) {
-	return competingSeen(p, map[*refPat]bool{})
+	return competingSeen(p, map[*refPat]*nameSet{})
 }
 
-func competingSeen(p pattern, seen map[*refPat]bool) (nameSet, error) {
+func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 	if r, ok := p.(*refPat); ok {
 		// A recursive definition is visited once: what it can match is
 		// already accounted for by the visit in progress, and following it
-		// again would not terminate.
-		if seen[r] {
-			return nameSet{}, nil
+		// again would not terminate. A shared one reached again elsewhere
+		// gives what it gave the first time; it is clipped so that a merge
+		// copies it rather than writing into it.
+		if s, done := seen[r]; done {
+			if s == nil {
+				return nameSet{}, nil
+			}
+			return nameSet{attrs: slices.Clip(s.attrs),
+				elems: slices.Clip(s.elems), text: s.text}, nil
 		}
-		seen[r] = true
+		seen[r] = nil
 		q, err := r.get()
 		if err != nil {
 			return nameSet{}, err
 		}
-		return competingSeen(q, seen)
+		s, err := competingSeen(q, seen)
+		if err != nil {
+			return nameSet{}, err
+		}
+		s.attrs, s.elems = distinct(s.attrs), distinct(s.elems)
+		seen[r] = &s
+		return nameSet{attrs: slices.Clip(s.attrs),
+			elems: slices.Clip(s.elems), text: s.text}, nil
 	}
 	switch t := p.(type) {
 	case attributePat:
@@ -727,20 +756,38 @@ func checkStringSequences(p pattern) error {
 //
 // inList suspends the rule, and is set when descending into a listPat.
 func contentOf(p pattern, inList bool) (contentKind, error) {
-	return contentOfSeen(p, inList, map[*refPat]bool{})
+	return contentOfSeen(p, inList, map[refInList]*contentKind{})
 }
 
-func contentOfSeen(p pattern, inList bool, seen map[*refPat]bool) (contentKind, error) {
+// refInList keys contentOfSeen's memo: what a reference contributes depends
+// on whether it is read inside a list.
+type refInList struct {
+	r      *refPat
+	inList bool
+}
+
+func contentOfSeen(p pattern, inList bool, seen map[refInList]*contentKind) (contentKind, error) {
 	if r, ok := p.(*refPat); ok {
-		if seen[r] {
-			return kindNothing, nil
+		// As in competingSeen: nothing while the visit is in progress, the
+		// first answer when a shared definition is reached again.
+		key := refInList{r, inList}
+		if k, done := seen[key]; done {
+			if k == nil {
+				return kindNothing, nil
+			}
+			return *k, nil
 		}
-		seen[r] = true
+		seen[key] = nil
 		q, err := r.get()
 		if err != nil {
 			return 0, err
 		}
-		return contentOfSeen(q, inList, seen)
+		k, err := contentOfSeen(q, inList, seen)
+		if err != nil {
+			return 0, err
+		}
+		seen[key] = &k
+		return k, nil
 	}
 	switch t := p.(type) {
 	case dataPat:
@@ -827,7 +874,7 @@ func contentOfSeen(p pattern, inList bool, seen map[*refPat]bool) (contentKind, 
 }
 
 // sequenced checks the two halves of a group or interleave against §7.2.
-func sequencedSeen(a, b pattern, inList bool, seen map[*refPat]bool) (contentKind, error) {
+func sequencedSeen(a, b pattern, inList bool, seen map[refInList]*contentKind) (contentKind, error) {
 	l, err := contentOfSeen(a, inList, seen)
 	if err != nil {
 		return 0, err

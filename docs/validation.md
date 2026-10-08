@@ -236,15 +236,15 @@ always works.
   derivatives over a nested document costs time and memory quadratic in the
   depth, so `ValidateOptions.MaxDepth` bounds it at 1000 by default — raising
   `xdm`'s parser limit does not raise this one.
-* **A very large modular grammar may be refused at compile time.** Expanding a
-  `<ref>` re-compiles the definition's body, and that work is not shared
-  between two references naming the same definition, so a grammar whose
-  definitions form a long chain costs expansions that grow multiplicatively
-  rather than additively. A fixed budget of 200,000 expansions turns what would
-  otherwise be an unbounded compile into an error naming the cause. DocBook 5.1
-  is over that budget and is refused; schemas of ordinary size are far under
-  it. This is a known limitation rather than a design choice — see
-  [todo.md](todo.md).
+* **Each definition is compiled once and shared.** Every `<ref>` naming a
+  definition gets the same compiled pattern, so compilation is linear in the
+  number of definitions: DocBook 5.2's `docbook.rng` (about 1,900
+  definitions) compiles in about 0.5 s and 170 MB. A budget of 200,000
+  definition compilations remains as a guard, far above any real schema.
+* **Large schemas can still exceed the derivative bound.** Validation does not
+  intern patterns, so a deeply mixed content model can grow past
+  `ValidateOptions.MaxPatternSize`, which ends validation with an error that
+  says so; a few DocBook documents with nested inlines do.
 
 ## XSD
 
