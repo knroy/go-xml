@@ -15,7 +15,8 @@ import (
 //
 // Compilation is separated from execution so that a stylesheet compiles once
 // and transforms many documents concurrently. Everything reachable from here
-// is immutable after Compile returns; all per-transform state lives in the
+// is immutable after Compile returns, bar the mutex-guarded fn:transform cache
+// (nestedCache); all per-transform state lives in the
 // runtime context. That is what makes a compiled EN 16931 rule set — tens of
 // megabytes — shareable rather than per-worker.
 type Stylesheet struct {
@@ -222,6 +223,8 @@ type Stylesheet struct {
 	// keeps — reads them through it. Keeping the tree costs one reference
 	// per compiled stylesheet.
 	source *xdm.Node
+	// nested caches the stylesheets fn:transform compiles; see nestedCache.
+	nested nestedCache
 }
 
 // Template is a compiled xsl:template.
