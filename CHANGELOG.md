@@ -29,6 +29,13 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | XSD identity-constraint scopes on local and group declarations were missed | A recursive key re-reported each failure once per nesting level; scopes are now tracked on the validation walk. | [`1f80934`][1f80934] |
 | `fn:transform` ignored a mistyped option | Every typed option now follows the F&O §1.5.4 conversion rules: arrays atomize, a string for an `xs:QName` is `XPTY0004`. | [`84bbe23`][84bbe23] |
 | Nested `fn:transform` ran `xsl:assert` by default and ignored `enable-messages` | `enable-assertions` (default false) and `enable-messages=false` now apply; `terminate="yes"` still ends the transform. | [`a2603d3`][a2603d3] |
+| Attribute values after a quote or `[` in a DTD comment were left unnormalised | The byte pre-pass lost its place in the internal subset; the tokenizer now normalises attribute values, and line numbers after a multi-line attribute are right. | [`d212f7a`][d212f7a] |
+| In XML 1.1 a NEL, U+2028 or CR NEL in an attribute value became a newline | Each is now one space (§2.11, §3.3.3); 1.0 documents are unchanged. | [`e03ee3d`][e03ee3d] |
+| Entity replacement text in an attribute value kept its tabs and newlines | §3.3.3 now applies on both entity paths; characters written as references are kept. | [`b7853d6`][b7853d6] |
+| A PI with a quote or `>` in the internal subset broke the DOCTYPE | The scanner now skips PIs whole, as it does comments. | [`b707e39`][b707e39] |
+| An `<!ENTITY>`, `<!ATTLIST>` or `<!ELEMENT>` inside a PI or comment in the internal subset was acted on | One declaration scanner now skips PIs, comments and quoted text; a default holding `>` is no longer cut short. | [`efd4178`][efd4178] |
+| DTD attribute defaults were used as written | References now expand and white space is normalised (§3.3.2, §3.3.3); a `<`, bare `&` or external entity in one is a parse error. | [`02905e9`][02905e9] |
+| Line ends in the DOCTYPE were not normalised | CR folds always, and NEL, U+2028 and CR NEL under XML 1.1, as in content (§2.11). | [`0ca7dac`][0ca7dac] |
 | Compact syntax refused a free-standing annotation element among definitions | DocBook's `s:ns [ ... ]` was read as a datatype name. The grammar allows it; it is now skipped like any annotation. | [`197eaad`][197eaad] |
 
 ### Changed — performance
@@ -48,6 +55,12 @@ From [docs/profiling.md](docs/profiling.md). Outputs are byte-identical on every
 | XSD kept identity-constraint bookkeeping for every node | It is kept only inside a constraint's scope; with the collapse, primitive and `StringValue` fast paths, `xp-striding` validates 3.4× faster. | [`949e0fa`][949e0fa] |
 | Every parsed node was its own allocation | Nodes come from per-parse chunks, and rarely set fields sit behind a lazy pointer (node 296 → 280 B). | [`bcae9bd`][bcae9bd] |
 | Parse allocated every token, name, attribute slice and whitespace text | The tokenizer reuses tokens and buffers and interns names; a 10 MB parse makes 70% fewer allocations and runs 34% faster. | [`446432b`][446432b] |
+| Every variable binding built a one-entry map | `WithVar` stores its binding inline (DocBook allocations −27%). | [`8cfeef4`][8cfeef4] |
+| Every built-in call copied the context to count call depth | Leaf built-ins that cannot re-enter user code count it in place; limits and errors are unchanged. | [`569af46`][569af46] |
+| A focus-free comparison operand in a predicate was re-evaluated per item | It is evaluated once per predicate, falling back per item on error (DocBook `indexterm.001` −32% CPU). | [`1253f9a`][1253f9a] |
+| Template dispatch tried every rule in the mode per node | Rules are indexed by mode, node kind and name in linear-scan order (≈90 → 2 patterns per node on Schematron). | [`c008a63`][c008a63] |
+| Attribute normalisation was a byte-by-byte pass over the whole document | The tokenizer does it (10 MB parse CPU −29%). | [`d212f7a`][d212f7a] |
+| The duplicate-attribute check and child/attribute slice growth allocated per attribute and per child | Keys are compared without allocation and slices are cut exact-size from shared arrays; a 10 MB parse makes 371k allocations, down from 1.13 M. | [`b764d67`][b764d67] |
 
 ### Fixed — release process
 
@@ -1196,6 +1209,18 @@ here so every entry in this file sits under a release.
 [197eaad]: https://github.com/knroy/go-xml/commit/197eaad
 [cec5f6f]: https://github.com/knroy/go-xml/commit/cec5f6f
 [416ee50]: https://github.com/knroy/go-xml/commit/416ee50
+[efd4178]: https://github.com/knroy/go-xml/commit/efd4178
+[02905e9]: https://github.com/knroy/go-xml/commit/02905e9
+[0ca7dac]: https://github.com/knroy/go-xml/commit/0ca7dac
+[d212f7a]: https://github.com/knroy/go-xml/commit/d212f7a
+[e03ee3d]: https://github.com/knroy/go-xml/commit/e03ee3d
+[b7853d6]: https://github.com/knroy/go-xml/commit/b7853d6
+[b707e39]: https://github.com/knroy/go-xml/commit/b707e39
+[8cfeef4]: https://github.com/knroy/go-xml/commit/8cfeef4
+[569af46]: https://github.com/knroy/go-xml/commit/569af46
+[1253f9a]: https://github.com/knroy/go-xml/commit/1253f9a
+[c008a63]: https://github.com/knroy/go-xml/commit/c008a63
+[b764d67]: https://github.com/knroy/go-xml/commit/b764d67
 [0604061]: https://github.com/knroy/go-xml/commit/0604061
 [1f80934]: https://github.com/knroy/go-xml/commit/1f80934
 [84bbe23]: https://github.com/knroy/go-xml/commit/84bbe23

@@ -7,7 +7,7 @@ the causes with evidence, and measures the most promising fixes on a private
 copy of the tree.
 
 **Status:** the analysis was made on `dev` at `4e0496f`. Tier 1 (T1–T10),
-T11, T14, T18 and the correctness bugs B1–B4 have since landed; see
+T11–T16, T18, T19 and the correctness bugs B1–B4 have since landed; see
 [Implementation status](#implementation-status). Profiling ran on the same
 machine as the benchmark, with five profiles running at once, so wall times
 are noisy (±2×). The claims rest on allocation counts, which are
@@ -294,14 +294,26 @@ failing names, and every benchmark output touched is byte-identical.
 | T8–T10, T18 | `bcae9bd`, `b5280b4`, `cadd717`, `41e5cb4`, `446432b` | 10 MB parse: 3.72 M → 1.13 M allocations, 243 → 161 ms, retained heap 27.0 → 23.4 B per input byte. T18's double text copy did not exist; the token boxing did, and is gone |
 | T11 | `e00735a` | DocBook `blocks.002` −40% CPU; `chapter.003` unchanged (the 2.5× estimate held only for small documents) |
 | T14 | `2aa49d8`, `ed75977` | XMark q8 3,296 → 14 ms, q9 3,918 → 26, q11 7,238 → 223, q12 6,992 → 230 (evaluation only) |
+| T12 | `8cfeef4` | CEN 78.6k → 65.3k, PEPPOL 70.5k → 55.3k, `chapter.003` 1.88 M → 1.37 M allocations per item. Context grows 440 → 496 B |
+| T13 | `1253f9a` | `indexterm.001` 540 → 370 ms CPU, 3.75 M → 1.64 M allocations |
+| T15 | `569af46` | safe variant: a reviewed allowlist of leaf built-ins. XRechnung 33.2 → 26.0 MB per item; `indexterm.001` 529 → 466 ms CPU |
+| T16 | `c008a63` | patterns tried per dispatch: CEN 90 → 1.9, `chapter.003` 40 → 1.3. CPU −5–17%; no allocation change, since T1 had already made a rejected pattern free |
+| T19 | `d212f7a`, `6f236b5`, `b764d67` | with the duplicate-attribute and slice changes: 10 MB parse 1.13 M → 0.37 M allocations, 149 → 93 ms. Line-end normalisation (§2.11) stays a pre-pass; it now skips reads with no CR |
 
 Found and fixed along the way: RELAX NG `<include ns>` leaking into
 definitions reached through `<ref>` (`c9c7c79`), an explicit `ns=""` read as
 absent (`5cf8104`), quadratic text joining across CDATA sections (`0604061`),
-and `fn:transform` option typing and `enable-*` switches (`84bbe23`,
-`a2603d3`).
+`fn:transform` option typing and `enable-*` switches (`84bbe23`,
+`a2603d3`), and XML attribute-value normalisation: 1.1 line ends,
+entity replacement text, a PI in the internal subset, DTD declarations
+inside PIs, attribute defaults and DOCTYPE line ends (`e03ee3d`, `b7853d6`,
+`b707e39`, `efd4178`, `02905e9`, `0ca7dac`).
 
-Still open: T12, T13, T15–T17, T19 and Tier 3. The benchmark has not been
+T17 was prototyped and not landed: since T3 a lookup allocates nothing, it is
+about 3% of CPU, and a cache that stays correct when a library changes after
+first use cost more allocations than it saved.
+
+Still open: Tier 3 (T20–T23, which need v2). The benchmark has not been
 re-run; docs/benchmark.md still shows the `4e0496f` figures.
 
 ## Correctness bugs found while profiling
