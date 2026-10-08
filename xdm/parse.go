@@ -537,6 +537,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 							return nil, fmt.Errorf("parse XML: %w", err)
 						}
 					}
+					if err := checkDTDComments(ents.subsetText); err != nil {
+						return nil, fmt.Errorf("parse XML: external DTD: %w", err)
+					}
 					// Retained so fn:unparsed-entity-uri can see declarations
 					// that live outside the directive. The subset a document
 					// is governed by is not always the text it was written

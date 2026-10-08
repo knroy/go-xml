@@ -638,3 +638,42 @@ func TestParameterEntityScopeAndBase(t *testing.T) {
 		}
 	}
 }
+
+// TestDTDCommentDashes: XML 1.0 §2.5 [15] admits no "--" in a comment's body
+// and no "-" ending it ("--->"). That holds in content, in the internal subset
+// and in an external subset alike, with the one error text.
+func TestDTDCommentDashes(t *testing.T) {
+	for _, src := range []string{
+		`<!DOCTYPE r [<!-- a -- b -->]><r/>`,
+		`<!DOCTYPE r [<!-- a --->]><r/>`,
+		`<r><!-- a -- b --></r>`,
+		`<r><!-- a ---></r>`,
+		`<!-- a ---><r/>`,
+	} {
+		_, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
+		if err == nil || !strings.Contains(err.Error(), `invalid sequence "--" not allowed in comments`) {
+			t.Errorf("%s: err = %v, want the comment refused", src, err)
+		}
+	}
+	for _, body := range []string{" a -- b ", " a -"} {
+		dir := writeFiles(t, map[string]string{
+			"d.dtd":   "<!--" + body + "--><!ENTITY e \"x\">",
+			"doc.xml": `<!DOCTYPE r SYSTEM "d.dtd"><r>&e;</r>`,
+		})
+		p := filepath.Join(dir, "doc.xml")
+		src, _ := os.ReadFile(p)
+		_, err := ParseString(string(src), ParseOptions{
+			AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: dir}, BaseURI: fileuri.Of(p),
+		})
+		if err == nil || !strings.Contains(err.Error(), `invalid sequence "--" not allowed in comments`) {
+			t.Errorf("external subset comment %q: err = %v, want it refused", body, err)
+		}
+	}
+	dir := writeFiles(t, map[string]string{
+		"d.dtd":   "<!-- a - b > c --><!ENTITY e \"x\">",
+		"doc.xml": `<!DOCTYPE r SYSTEM "d.dtd" [<!-- a - b > c -->]><r>&e;</r>`,
+	})
+	if got := mustParseExternal(t, dir, "doc.xml").Root.StringValue(); got != "x" {
+		t.Errorf("well-formed comments: got %q, want x", got)
+	}
+}

@@ -319,7 +319,8 @@ func (t *entityTable) parseDecls(subset, base string) *entityTable {
 
 // markupDecls yields the keyword and body of each markup declaration in a DTD
 // subset — for "<!ENTITY e 'x'>", "ENTITY" and " e 'x'" — in document order,
-// and each parameter-entity reference between them as "%" and its name. It is the one scanner every reader of declarations goes
+// each parameter-entity reference between them as "%" and its name, and each
+// comment as "--" and its body. It is the one scanner every reader of declarations goes
 // through, so that what counts as a declaration is decided in one place.
 //
 // Comments and processing instructions are skipped whole, and so is a quoted
@@ -335,7 +336,16 @@ func markupDecls(subset string) iter.Seq2[string, string] {
 			rest := s[i:]
 			switch {
 			case strings.HasPrefix(rest, "<!--"):
-				i = skipPast(s, i+len("<!--"), "-->")
+				// A comment is yielded as "--" and its body, for the [15]
+				// check; an unterminated one ends the scan.
+				j := strings.Index(s[i+len("<!--"):], "-->")
+				if j < 0 {
+					return
+				}
+				if !yield("--", s[i+len("<!--"):i+len("<!--")+j]) {
+					return
+				}
+				i += len("<!--") + j + len("-->")
 			case strings.HasPrefix(rest, "<?"):
 				i = skipPast(s, i+len("<?"), "?>")
 			case strings.HasPrefix(rest, "<!["):
@@ -772,6 +782,19 @@ func (t *entityTable) normalizeDefault(d attDefault, wfc bool) (string, error) {
 		sb.WriteString(sub)
 	}
 	return sb.String(), nil
+}
+
+// checkDTDComments holds the comments of DTD text the tokeniser never saw —
+// an external subset, external parameter entities — to XML 1.0 §2.5 [15],
+// as the tokeniser holds those in content and the internal subset: no "--"
+// in the body, and no "-" ending it.
+func checkDTDComments(text string) error {
+	for kw, body := range markupDecls(text) {
+		if kw == "--" && (strings.Contains(body, "--") || strings.HasSuffix(body, "-")) {
+			return errors.New(xml.CommentDashes)
+		}
+	}
+	return nil
 }
 
 // declares reports whether the DTD declares a general entity name, internal

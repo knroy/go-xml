@@ -606,6 +606,30 @@ func (d *Decoder) bang() (Token, error) {
 	return d.directive(b)
 }
 
+// CommentDashes is the error for a comment whose body holds "--" or ends in
+// "-" (XML 1.0 §2.5 [15]), wherever the comment is.
+const CommentDashes = `invalid sequence "--" not allowed in comments`
+
+// commentBody reads a comment's body after "<!--", appending it to dst, and
+// consumes the closing "-->". [15] admits no "--" in the body, nor a "-"
+// ending it, so the first "--" read must be followed by ">". Comments in
+// content and in the DOCTYPE both go through here.
+func (d *Decoder) commentBody(dst []byte) ([]byte, bool) {
+	data, ok := d.until("--", dst)
+	if !ok {
+		return nil, false
+	}
+	b, ok := d.mustgetc()
+	if !ok {
+		return nil, false
+	}
+	if b != '>' {
+		d.syntaxError(CommentDashes)
+		return nil, false
+	}
+	return data, true
+}
+
 // comment reads [15] Comment after "<!-", checking the body against [2] Char.
 //
 // As for a PI, the body's line ends are folded by the document's version.
@@ -617,17 +641,11 @@ func (d *Decoder) comment() (Token, error) {
 	if b != '-' {
 		return nil, d.syntaxError("invalid sequence <!- not part of <!--")
 	}
-	data, ok := d.until("--", d.scratch[:0])
+	data, ok := d.commentBody(d.scratch[:0])
 	if !ok {
 		return nil, d.err
 	}
 	d.scratch = data
-	if b, ok = d.mustgetc(); !ok {
-		return nil, d.err
-	}
-	if b != '>' {
-		return nil, d.syntaxError(`invalid sequence "--" not allowed in comments`)
-	}
 	if !d.checkChars(data, nil) {
 		return nil, d.err
 	}
@@ -648,8 +666,9 @@ func (d *Decoder) comment() (Token, error) {
 //
 // Its line ends are folded to LF, by the rules of the document's version.
 //
-// parity: the text is otherwise returned raw, and a comment inside it is not
-// checked for "--".
+// A comment inside it is held to [15] as one in content is.
+//
+// parity: the text is otherwise returned raw.
 func (d *Decoder) directive(b byte) (Token, error) {
 	out := append(d.scratch[:0], b)
 	var quote byte
@@ -704,7 +723,7 @@ func (d *Decoder) directive(b byte) (Token, error) {
 					continue
 				}
 				mark := len(out) - 1
-				if out, ok = d.until("-->", out); !ok {
+				if out, ok = d.commentBody(out); !ok {
 					return nil, d.err
 				}
 				out = append(out[:mark], ' ')
