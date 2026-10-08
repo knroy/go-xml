@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xsd"
 )
 
 // dtSchema declares urn:dt's element behind an internal-subset DOCTYPE whose
@@ -75,5 +76,27 @@ func TestSchemaParseOptionsReachEveryImportSchemaParse(t *testing.T) {
 				t.Errorf("AllowDOCTYPE: err = %v; want {urn:dt}e declared", err)
 			}
 		})
+	}
+}
+
+// TestNamespaceOnlyImportSchemaReadsAsXSD11: the namespace-only path reads a
+// schema under the same version as a schema-location does -- XSD 1.1 for an
+// XSLT 3.0 processor -- rather than xsd.Load's 1.0 default.
+func TestNamespaceOnlyImportSchemaReadsAsXSD11(t *testing.T) {
+	const plain = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:dt">
+  <xs:element name="e" type="xs:integer"/>
+</xs:schema>`
+	stree, err := xdm.ParseString(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:import-schema namespace="urn:dt"/>
+</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := Compile(stree.Root, CompileOptions{SchemaResolver: dtResolver{"urn:dt": plain}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := sheet.Schema().Version; v != xsd.Version11 {
+		t.Errorf("schema version = %v, want XSD 1.1", v)
 	}
 }
