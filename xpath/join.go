@@ -1,6 +1,10 @@
 package xpath
 
-import "github.com/knroy/go-xml/xdm"
+import (
+	"unsafe"
+
+	"github.com/knroy/go-xml/xdm"
+)
 
 // This file is the xpath half of XQuery's FLWOR join (xquery/join.go): the
 // questions about an expression that a host must have answered before it may
@@ -52,6 +56,63 @@ func (c *Compiled) CodepointEquality(ctx *Context) bool {
 		return true
 	}
 	return false
+}
+
+// CallsBuiltins reports whether every function c calls resolves in ctx,
+// exactly as evaluation resolves it, to the built-in implementation. Hoistable
+// judges calls by name, and a name is not an implementation: a host may pass
+// a function library that binds fn:exactly-one or xs:integer to its own Go
+// function, which need be neither pure nor deterministic. A host that merely
+// re-adds a built-in's Function value still resolves to the built-in.
+func (c *Compiled) CallsBuiltins(ctx *Context) bool {
+	return c != nil && callsBuiltins(c.expr, c.scope(ctx))
+}
+
+// callsBuiltins walks the node types hoistable admits; c has passed it.
+func callsBuiltins(e Expr, ctx *Context) bool {
+	all := func(es []Expr) bool {
+		for _, x := range es {
+			if !callsBuiltins(x, ctx) {
+				return false
+			}
+		}
+		return true
+	}
+	switch v := e.(type) {
+	case *FuncCall:
+		got, found := lookupFor(ctx, v.Name, len(v.Args))
+		want, builtin := Builtins().Lookup(v.Name, len(v.Args))
+		return found && builtin && sameFunc(got.Call, want.Call) && all(v.Args)
+	case *Step:
+		return all(v.Predicates)
+	case *FilterExpr:
+		return callsBuiltins(v.Base, ctx) && all(v.Predicates)
+	case *PathExpr:
+		return all(v.Steps)
+	case *BinaryOp:
+		return callsBuiltins(v.Left, ctx) && callsBuiltins(v.Right, ctx)
+	case *UnaryOp:
+		return callsBuiltins(v.Operand, ctx)
+	case *CastExpr:
+		return callsBuiltins(v.Operand, ctx)
+	case *SequenceExpr:
+		return all(v.Items)
+	case *IfExpr:
+		return callsBuiltins(v.Cond, ctx) && callsBuiltins(v.Then, ctx) &&
+			callsBuiltins(v.Else, ctx)
+	}
+	return true // a literal, a variable or the context item calls nothing
+}
+
+// sameFunc reports whether two func values are the same closure. Go does not
+// compare funcs, and reflect's Pointer is the code address, which every
+// closure from one literal shares (the xs: constructors are one literal over
+// many types); the func value's own word is the closure's identity.
+func sameFunc(a, b func(*Context, []xdm.Sequence) (xdm.Sequence, error)) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return *(*unsafe.Pointer)(unsafe.Pointer(&a)) == *(*unsafe.Pointer)(unsafe.Pointer(&b))
 }
 
 // Hoistable reports whether c's value is a function of its free variables

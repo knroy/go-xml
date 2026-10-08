@@ -329,3 +329,65 @@ func TestJoinConcurrentEval(t *testing.T) {
 		t.Error(e)
 	}
 }
+
+// TestJoinRespectsHostFunctions pins that a host library binding a name the
+// purity allowlist knows -- fn:exactly-one here -- to its own implementation
+// keeps the nested loop: the host function is called once per pair, as
+// written, and its impure answers are seen in order. A host that re-adds the
+// built-in itself still gets the join.
+func TestJoinRespectsHostFunctions(t *testing.T) {
+	src := `let $is := (<i>1</i>, <i>2</i>, <i>3</i>)
+	  for $p in (<p income="20000"/>, <p income="20000"/>)
+	  return count(for $i in $is where «$p/@income > 5000 * exactly-one($i/text())» return $i)`
+	jsrc, lsrc := joinPair(src)
+	run := func(q *Query, lib xpath.FunctionLibrary) string {
+		seq, err := q.Eval(xpath.NewContext(nil, lib))
+		if err != nil {
+			return "ERROR " + err.Error()
+		}
+		var parts []string
+		for _, it := range seq {
+			parts = append(parts, itemText(it))
+		}
+		return strings.Join(parts, " ")
+	}
+	name := xdm.QName{URI: xdm.NSFN, Local: "exactly-one"}
+	host := func(calls *int) xpath.FunctionLibrary {
+		lib := xpath.NewLibrary(xpath.Builtins())
+		lib.Add(xpath.Function{Name: name, Arity: 1,
+			Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+				*calls++
+				// Impure: the answer depends on how often it was asked.
+				return xdm.One(xdm.NewInteger(int64(*calls))), nil
+			}})
+		return lib
+	}
+	jq, err := Compile(jsrc, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lq, err := Compile(lsrc, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countJoins(jq) == 0 {
+		t.Fatal("no join planned")
+	}
+	var jc, lc int
+	got, want := run(jq, host(&jc)), run(lq, host(&lc))
+	if got != want || jc != lc {
+		t.Fatalf("join gave %q with %d host calls, nested loop %q with %d",
+			got, jc, want, lc)
+	}
+	if lc != 6 {
+		t.Fatalf("nested loop made %d host calls, want 6", lc)
+	}
+
+	// The built-in re-added under its own name is still the built-in.
+	same := xpath.NewLibrary(xpath.Builtins())
+	b, _ := xpath.Builtins().Lookup(name, 1)
+	same.Add(b)
+	if got := run(jq, same); got != "3 3" {
+		t.Fatalf("with the built-in re-added: got %q, want %q", got, "3 3")
+	}
+}

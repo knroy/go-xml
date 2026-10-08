@@ -40,6 +40,8 @@ type joinClause struct {
 	innerLeft bool
 	// deps are S's free variables: the cache key.
 	deps []xdm.QName
+	// seq is S's compiled form, kept to check what its calls resolve to.
+	seq *xpath.Compiled
 }
 
 // planJoins replaces each joinable for/where pair in a FLWOR's clauses.
@@ -96,7 +98,7 @@ func newJoin(a, b clause) *joinClause {
 	}
 	lv, lo := reads(l)
 	rv, ro := reads(r)
-	j := &joinClause{f: f, w: w, op: op, cmp: test, deps: seq.FreeVariables()}
+	j := &joinClause{f: f, w: w, op: op, cmp: test, deps: seq.FreeVariables(), seq: seq}
 	switch {
 	case lv && !lo && !rv:
 		j.inner, j.outer, j.innerLeft = l, r, true
@@ -172,6 +174,12 @@ func (c *joinClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
 
 // join is the fast path. ok false means "run the clauses as written".
 func (c *joinClause) join(in []tuple, ctx *evalContext) (out []tuple, n int, ok bool) {
+	// Hoistable judged calls by name; what a name calls is decided by the
+	// function library in force, which a host supplies. Only the built-ins
+	// are known to be pure.
+	if !c.seq.CallsBuiltins(ctx.xp) || !c.cmp.CallsBuiltins(ctx.xp) {
+		return nil, 0, false
+	}
 	state := ctx.joins
 	if state == nil || state.released {
 		state = &joinState{} // this apply only
