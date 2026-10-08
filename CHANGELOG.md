@@ -20,6 +20,11 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A `version="2.0"` stylesheet with `xsl:import` after other declarations was `XTSE0200` | XSLT 3.0 removed that rule; it now applies only to a 2.0 processor. Found by KoSIT's XRechnung HTML stylesheet. | [`04ddeea`][04ddeea] |
 | RELAX NG recompiled a definition at every `<ref>` to it | Cost multiplied along chains, so DocBook 5.2 hit the 200,000-expansion limit. Each definition is compiled once and shared; DocBook compiles and validates in 0.55 s. | [`eb6901e`][eb6901e] |
 | `indent` broke Serialization 3.1 §5.1.4 | Typed simple and mixed content was indented, changing a validated `xs:string` value; `fn:serialize` also ignored `xml:space` and nested `suppress-indentation`. All §5.1.4 constraints now hold in both serializers. | [`cec5f6f`][cec5f6f] |
+| RELAX NG recompiled a recursive `<ref>`'s definition about 45 times | Lazy sub-compilers now share compiled definitions; DocBook 5.2 compiles in ~20 ms instead of 0.5 s. | [`c7769f5`][c7769f5] |
+| RELAX NG matched whitespace between element children as text | Six valid DocBook documents were rejected; whitespace-only text among elements is now stripped (§6.2.7). | [`b44313c`][b44313c] |
+| RELAX NG `choice` kept duplicate alternatives | Nested `oneOrMore` doubled the derivative per child and hit the size bound on DocBook `xref.001`; equal alternatives are merged. | [`d8f0ac1`][d8f0ac1] |
+| RELAX NG `<include ns>` leaked into definitions reached through `<ref>`, `combine` and nested grammars | Each definition now compiles under the ns of the document it was written in (§4.8). | [`c9c7c79`][c9c7c79] |
+| RELAX NG read an explicit `ns=""` as absent | An inherited ns overrode it in names, `nsName` and QName values; presence is now checked (§4.8). | [`5cf8104`][5cf8104] |
 | Compact syntax refused a free-standing annotation element among definitions | DocBook's `s:ns [ ... ]` was read as a datatype name. The grammar allows it; it is now skipped like any annotation. | [`197eaad`][197eaad] |
 
 ### Fixed — release process
@@ -1169,6 +1174,11 @@ here so every entry in this file sits under a release.
 [197eaad]: https://github.com/knroy/go-xml/commit/197eaad
 [cec5f6f]: https://github.com/knroy/go-xml/commit/cec5f6f
 [416ee50]: https://github.com/knroy/go-xml/commit/416ee50
+[c7769f5]: https://github.com/knroy/go-xml/commit/c7769f5
+[b44313c]: https://github.com/knroy/go-xml/commit/b44313c
+[d8f0ac1]: https://github.com/knroy/go-xml/commit/d8f0ac1
+[c9c7c79]: https://github.com/knroy/go-xml/commit/c9c7c79
+[5cf8104]: https://github.com/knroy/go-xml/commit/5cf8104
 [d029347]: https://github.com/knroy/go-xml/commit/d029347
 [6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e

@@ -216,11 +216,12 @@ Three things stand out:
   timings show they do not, though how each one rewrites them was not
   examined. At factor 0.01 the same queries are
   already 12–13× slower, so the cost grows faster than the document.
-- **An anomaly we have not explained:** for q15–q19 at 0.1, go-xml's warm
-  median is higher than its cold one (433 ms against 177 ms for q15). A cold
-  run is one evaluation in a fresh process; the warm loop re-parses the 11 MB
-  document 36 times in one heap. Garbage-collector pressure from the retained
-  trees is the likely cause, but it has not been profiled.
+- **q15–q19 warm slower than cold is machine load, not go-xml.** For q15 at
+  0.1 the warm minimum is 162 ms against a 433 ms median, and the minimum
+  matches the cold run (177 ms). Re-run in one process the median is 177 ms;
+  the GC was cheap and the heap stable at about 480 MB. The slow runs are
+  contiguous, which points to other load during that window
+  ([profiling](profiling.md#xquery-xmark)).
 
 ## Schema validation
 
@@ -240,8 +241,11 @@ Warm, go-xml ranges from 0.49× (faster, on small instances) to 6.3× slower
 faster than go-xml cold, but it implements XSD 1.0 only.
 
 **RELAX NG.** DocBook 5.2 (`docbook.rng`, 608 KB) over 40 DocBook test
-documents. 33 were timed; go-xml rejects the other 7, which both other
-validators accept (see findings).
+documents. 33 were timed; go-xml rejected the other 7, which both other
+validators accept (fixed since; see findings). Of the 33, 5 are rejected by all three
+validators and were timed because the verdicts agree: `JFK_Inaugural` uses
+`dialogue`, which DocBook 5.2 does not define, and four carry unexpanded
+`xi:include` elements.
 
 | | go-xml | Jing | xmllint |
 |---|---:|---:|---:|
@@ -342,13 +346,19 @@ The agreement check found real bugs. Four were fixed before the timed run:
 | DocBook 5.2 RELAX NG | Every `<ref>` recompiled its definition, so cost multiplied along chains and hit the 200,000-expansion limit | `eb6901e`: compiled once and shared; now 0.5 s |
 | DocBook 5.2 RNC | A free-standing annotation element among definitions was refused | `197eaad` |
 
+Fixed after the timed run, so the RELAX NG figures below still cover 33
+documents:
+
+- **RELAX NG: go-xml rejected 7 of 40 valid DocBook documents**
+  (`bibliography.006`, `book.006`, `glossary.007`, `index.002`,
+  `oxy-changemarkup.001`, `programlisting.004`, `xref.001`). Six came from
+  whitespace between element children being matched as text (RELAX NG §6.2.7,
+  `b44313c`); `xref.001` hit the derivative size bound because `choice` kept
+  duplicate alternatives (`d8f0ac1`). All 40 verdicts now match Jing and
+  xmllint.
+
 Still open:
 
-- **RELAX NG: go-xml rejects 7 of 40 valid DocBook documents**
-  (`bibliography.006`, `book.006`, `glossary.007`, `index.002`,
-  `oxy-changemarkup.001`, `programlisting.004`, `xref.001`). Jing and xmllint
-  both accept them. The cause is whitespace handling in the validator (RELAX NG
-  §6.2.7).
 - **XRechnung HTML: the stylesheet's `<meta charset="UTF-8"/>` is dropped.**
   With `include-content-type="no"`, go-xml's html method still removes an
   existing `<meta charset>` from `<head>`, so the output loses an element the
