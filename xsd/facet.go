@@ -410,6 +410,9 @@ func mergeFacets(a, b map[FacetKind]bool) map[FacetKind]bool {
 // working — without it they were silently skipped, because the code that
 // applies them dispatches on the primitive's name.
 func primitiveOf(t *SimpleType) *SimpleType {
+	if t != nil && t.Primitive != nil {
+		return t.Primitive
+	}
 	seen := map[*SimpleType]bool{}
 	for cur := t; cur != nil && !seen[cur]; {
 		seen[cur] = true
