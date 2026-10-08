@@ -1,0 +1,11 @@
+<element name="library" xmlns="http://relaxng.org/ns/structure/1.0"
+         datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+  <oneOrMore>
+    <element name="book">
+      <attribute name="id"><data type="ID"/></attribute>
+      <attribute name="year"><data type="gYear"/></attribute>
+      <element name="title"><text/></element>
+      <element name="price"><data type="decimal"><param name="minExclusive">0</param></data></element>
+    </element>
+  </oneOrMore>
+</element>
