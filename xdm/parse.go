@@ -276,6 +276,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 
 	tree := NewTree()
 	var chunk nodeChunk
+	chunk.open() // the document node's children
 	var spaces spaceTable
 	var run textRun
 	tree.Root.BaseURI = opts.BaseURI
@@ -378,7 +379,8 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					"parse XML: document exceeds %d nodes: %w",
 					maxNodes, ErrResourceLimit)
 			}
-			cur.AppendChild(el)
+			chunk.addChild(cur, el)
+			chunk.open()
 			cur = el
 
 		case *xml.EndElement:
@@ -397,6 +399,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// Ignorable whitespace goes first and unconditionally: the
 			// DTD-derived rule outranks the stylesheet-declared one, so it
 			// must not be gated on a strip-space declaration existing.
+			chunk.close(cur)
 			if elementOnly != nil {
 				stripIgnorableWhitespace(cur, elementOnly)
 			}
@@ -423,7 +426,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		case *xml.Comment:
 			t := *tok
 			sawPrologToken = true
-			cur.AppendChild(&Node{Kind: KindComment, Value: string(t)})
+			chunk.addChild(cur, &Node{Kind: KindComment, Value: string(t)})
 
 		case *xml.ProcInst:
 			t := *tok
@@ -456,7 +459,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			if b := baseAt(opts.entityBases, int(start)); b != "" {
 				pi.BaseURI = b
 			}
-			cur.AppendChild(pi)
+			chunk.addChild(cur, pi)
 
 		case *xml.Directive:
 			t := *tok
@@ -624,6 +627,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	if cur != tree.Root {
 		return nil, fmt.Errorf("parse XML: unexpected EOF, %q left open", cur.Name.Local)
 	}
+	chunk.close(tree.Root)
 
 	if trackPos {
 		// The decoder stops reading at the end of the root element, so the
@@ -671,6 +675,16 @@ func buildElement(chunk *nodeChunk, t xml.StartElement, parent *Node, offset int
 		Parent:  parent,
 		offset:  offset,
 	}
+
+	// The attributes are counted first so that Attrs is cut to size once.
+	n := 0
+	for _, a := range t.Attr {
+		if a.Name.Space != "xmlns" && a.Name.Space != NSXMLNS &&
+			(a.Name.Space != "" || a.Name.Local != "xmlns") {
+			n++
+		}
+	}
+	el.Attrs = chunk.take(n)
 
 	for _, a := range t.Attr {
 		switch {
@@ -788,7 +802,7 @@ func (r *textRun) add(chunk *nodeChunk, parent *Node, b []byte) {
 		// node, so a run never resumes after a flush.
 		r.node = chunk.alloc()
 		r.node.Kind = KindText
-		parent.AppendChild(r.node)
+		chunk.addChild(parent, r.node)
 		r.buf = r.buf[:0]
 	}
 	r.buf = append(r.buf, b...)
@@ -863,6 +877,58 @@ func onlySpace(b []byte) bool {
 type nodeChunk struct {
 	free []Node
 	size int // length of the last chunk made
+
+	// ptrs backs the Children and Attrs slices of the parse the same way,
+	// chunked and doubling like free. Each slice is cut with cap == len, so
+	// a later append through the tree-mutation API reallocates instead of
+	// writing into the next element's slots.
+	ptrs    []*Node
+	ptrSize int
+
+	// kids holds the children of the open elements, innermost last, and
+	// marks where each open element's own begin. An element's children are
+	// copied into an exact-size slice when it closes, instead of growing
+	// Children by append: ~340k allocations per 10 MB parse.
+	kids  []*Node
+	marks []int
+}
+
+// take returns an empty slice with room for exactly n pointers.
+func (c *nodeChunk) take(n int) []*Node {
+	if n == 0 {
+		return nil
+	}
+	if n > len(c.ptrs) {
+		c.ptrSize = min(max(2*c.ptrSize, 8), ptrChunkLen)
+		if n > c.ptrSize {
+			return make([]*Node, 0, n)
+		}
+		c.ptrs = make([]*Node, c.ptrSize)
+	}
+	s := c.ptrs[:0:n]
+	c.ptrs = c.ptrs[n:]
+	return s
+}
+
+// ptrChunkLen caps a pointer chunk at 32 KiB, for the reason nodeChunkLen does.
+const ptrChunkLen = 32768 / int(unsafe.Sizeof((*Node)(nil)))
+
+// open starts collecting the children of an element just opened.
+func (c *nodeChunk) open() { c.marks = append(c.marks, len(c.kids)) }
+
+// addChild links child as the next child of parent, the innermost open element.
+func (c *nodeChunk) addChild(parent, child *Node) {
+	child.Parent = parent
+	child.tree = parent.tree
+	c.kids = append(c.kids, child)
+}
+
+// close sets el's children, the ones collected since the matching open.
+func (c *nodeChunk) close(el *Node) {
+	m := c.marks[len(c.marks)-1]
+	c.marks = c.marks[:len(c.marks)-1]
+	el.Children = append(c.take(len(c.kids)-m), c.kids[m:]...)
+	c.kids = c.kids[:m]
 }
 
 // nodeChunkLen caps a chunk at 32 KiB, the largest size class the allocator
