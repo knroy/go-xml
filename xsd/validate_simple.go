@@ -59,6 +59,10 @@ func (v *validator) validateSimpleContent(n *xdm.Node, lexical string, t *Simple
 // the other the decimal 1, and the constraint is satisfied — comparing the
 // lexical forms alone made them a duplicate.
 func (v *validator) recordKeyValue(n *xdm.Node, normalized string, t *SimpleType) {
+	// Only a constraint's own subtree is ever compared; see icScopes.
+	if v.icScopes == 0 {
+		return
+	}
 	// A list takes its item type's primitive, not one of its own. A
 	// singleton list is equal to the atomic value it contains — saxonData's
 	// id022 matches a keyref typed as a list of xs:Name against a key typed

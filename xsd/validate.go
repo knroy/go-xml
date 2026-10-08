@@ -889,7 +889,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 	// A complex type with simple content still gives the element a value,
 	// so only the other three content types disqualify it as an identity
 	// constraint field. See the complexTyped field's comment.
-	if t.Content != ContentSimple {
+	if t.Content != ContentSimple && v.icScopes > 0 {
 		if v.complexTyped == nil {
 			v.complexTyped = map[*xdm.Node]bool{}
 		}

@@ -207,6 +207,9 @@ func (v *validator) checkIdentityConstraints(el *xdm.Node, decl *ElementDecl, ch
 	if decl == nil || len(decl.IdentityConstraints) == 0 {
 		return merged
 	}
+	if merged == nil {
+		merged = icTables{}
+	}
 
 	// key and unique are evaluated before keyref, because a keyref on the
 	// same element may refer to a key on that element.
@@ -248,10 +251,17 @@ func (v *validator) checkIdentityConstraints(el *xdm.Node, decl *ElementDecl, ch
 // after merging — checkIdentityConstraints, which passes merged[ic] to
 // buildNodeTable as below — is reading the merged table this returns, which is
 // the adopted one, and buildNodeTable does not write to it.
+//
+// It returns nil when no child has a table, which is every element outside a
+// constraint's scope: allocating an empty map for each of them was the rest
+// of the bookkeeping a schema without constraints paid for.
 func mergeTables(children []icTables) icTables {
-	out := icTables{}
+	var out icTables
 	for _, child := range children {
 		for ic, tbl := range child {
+			if out == nil {
+				out = icTables{}
+			}
 			existing, ok := out[ic]
 			if !ok {
 				out[ic] = tbl

@@ -281,6 +281,9 @@ func (v *validator) recordDefaultID(el *xdm.Node, use *AttributeUse) {
 	// infoset, so a field cannot tell it from a written one. idF016 puts
 	// two elements under a unique, one carrying the value and one letting
 	// it default, and expects them to collide.
+	if v.icScopes == 0 {
+		return
+	}
 	if v.defaultedAttrs == nil {
 		v.defaultedAttrs = map[defaultedAttr]defaultedValue{}
 	}

@@ -1,6 +1,10 @@
 package xsd
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/knroy/go-xml/xdm"
+)
 
 // TestBoundsSkippedWithoutBoundFacets pins checkBounds' early return: a chain
 // with no min/max facet is never compared, so validating an xs:integer does
@@ -87,5 +91,68 @@ func TestCollapseFastPath(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Errorf("collapsing a collapsed value allocated %v times, want 0", allocs)
+	}
+}
+
+// TestIdentityBookkeepingOnlyInsideAScope pins that the per-node records only
+// identity constraints read — key values, complex-typed elements, nested-scope
+// declarations, merged tables — are kept inside a constraint's element and
+// nowhere else. Outside every scope nothing can select a node, so recording
+// there was work for no reader, paid on every value of every document.
+func TestIdentityBookkeepingOnlyInsideAScope(t *testing.T) {
+	s := mustParseSchema(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="I"><xs:attribute name="v" type="xs:int"/></xs:complexType>
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="out" type="I" maxOccurs="unbounded"/>
+	        <xs:element name="in">
+	          <xs:complexType>
+	            <xs:sequence><xs:element name="i" type="I" maxOccurs="unbounded"/></xs:sequence>
+	          </xs:complexType>
+	          <xs:unique name="u"><xs:selector xpath="i"/><xs:field xpath="@v"/></xs:unique>
+	        </xs:element>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+	tree, err := xdm.ParseString(
+		`<root><out v="1"/><out v="1"/><in><i v="2"/><i v="02"/></in></root>`,
+		xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := tree.Root.ChildElements()[0]
+	in := root.ChildElements()[2]
+	v := &validator{schema: s, opts: ValidateOptions{MaxErrors: DefaultMaxErrors,
+		MaxDepth: DefaultMaxDepth}, ids: map[string]int{}}
+	v.validateElement(root, s.Elements[xdm.QName{Local: "root"}])
+
+	// 2 and 02 are one xs:int, so the unique is violated: the scope's
+	// records were kept and compared by value.
+	if len(v.errs) != 1 || v.errs[0].Code != "cvc-identity-constraint.4.1" {
+		t.Fatalf("errors = %v, want one cvc-identity-constraint.4.1", v.errs)
+	}
+	for n := range v.keyValues {
+		if n.Parent == nil || n.Parent.Parent != in {
+			t.Errorf("key value recorded for %s outside the constraint's scope", n.Name.Local)
+		}
+	}
+	if len(v.keyValues) != 2 {
+		t.Errorf("%d key values recorded, want the 2 inside the scope", len(v.keyValues))
+	}
+	for n := range v.complexTyped {
+		if n != in && n.Parent != in {
+			t.Errorf("complexTyped recorded %s outside the constraint's scope", n.Name.Local)
+		}
+	}
+	for n := range v.declFor {
+		if n != in && n.Parent != in {
+			t.Errorf("declFor recorded %s outside the constraint's scope", n.Name.Local)
+		}
+	}
+	if tbl := mergeTables([]icTables{nil, {}, nil}); tbl != nil {
+		t.Errorf("merging no tables gave %v, want nil", tbl)
 	}
 }
