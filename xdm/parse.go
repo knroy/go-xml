@@ -415,7 +415,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// the lexical name — which is what XML §3 requires anyway: the
 			// end tag must repeat the start tag's QName character for
 			// character, not merely resolve to the same expanded name.
-			if got, want := lexicalName(t.Name), cur.Name.Lexical(); got != want {
+			if t.Name.Space == cur.Name.Prefix && t.Name.Local == cur.Name.Local {
+				// The same QName, written the same way: nothing to build.
+			} else if got, want := lexicalName(t.Name), cur.Name.Lexical(); got != want {
 				return nil, fmt.Errorf(
 					"parse XML: element %q closed by end element %q", want, got)
 			}
@@ -449,7 +451,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		case *xml.Comment:
 			t := *tok
 			sawPrologToken = true
-			chunk.addChild(cur, &Node{Kind: KindComment, Value: string(t)})
+			c := chunk.alloc()
+			c.Kind, c.Value = KindComment, spaces.arena.String(t)
+			chunk.addChild(cur, c)
 
 		case *xml.ProcInst:
 			t := *tok
@@ -874,8 +878,11 @@ func (r *textRun) flush(spaces *spaceTable) {
 // spaceTable shares one string among the whitespace-only text values of a
 // parse. An indented document repeats a handful of them -- a newline and the
 // indentation of each depth -- once per element, so most of its text nodes
-// are one of a few strings.
-type spaceTable map[string]string
+// are one of a few strings. The other values share the arena's blocks.
+type spaceTable struct {
+	m     map[string]string
+	arena xml.Arena
+}
 
 // maxSpaceTable and maxSpaceLen bound the table: a run longer than
 // maxSpaceLen is unlikely to repeat, and past maxSpaceTable entries values
@@ -889,17 +896,17 @@ const (
 // whitespace only.
 func (t *spaceTable) text(b []byte) string {
 	if len(b) > maxSpaceLen || !onlySpace(b) {
-		return string(b)
+		return t.arena.String(b)
 	}
-	if s, ok := (*t)[string(b)]; ok {
+	if s, ok := t.m[string(b)]; ok {
 		return s
 	}
 	s := string(b)
-	if len(*t) < maxSpaceTable {
-		if *t == nil {
-			*t = make(spaceTable)
+	if len(t.m) < maxSpaceTable {
+		if t.m == nil {
+			t.m = make(map[string]string)
 		}
-		(*t)[s] = s
+		t.m[s] = s
 	}
 	return s
 }
