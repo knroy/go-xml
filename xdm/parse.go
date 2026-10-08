@@ -329,12 +329,15 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		// Any other token ends a run of character data, and its node must
 		// hold its value before anything -- whitespace stripping at an end
 		// tag, a new sibling -- can look at it.
-		if _, text := tok.(xml.CharData); !text {
+		if _, text := tok.(*xml.CharData); !text {
 			run.flush(&spaces)
 		}
 
-		switch t := tok.(type) {
-		case xml.StartElement:
+		// Each token points into the decoder and is copied out here; it is
+		// valid only until the next RawToken.
+		switch tok := tok.(type) {
+		case *xml.StartElement:
+			t := *tok
 			sawPrologToken = true
 			depth++
 			if depth > maxDepth {
@@ -388,7 +391,8 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			cur.AppendChild(el)
 			cur = el
 
-		case xml.EndElement:
+		case *xml.EndElement:
+			t := *tok
 			if cur.Parent == nil {
 				return nil, fmt.Errorf("parse XML: unbalanced end element %q", t.Name.Local)
 			}
@@ -412,7 +416,8 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			cur = cur.Parent
 			depth--
 
-		case xml.CharData:
+		case *xml.CharData:
+			t := *tok
 			// CharData is only meaningful inside an element; whitespace at the
 			// document level is legal and carries no information. It must be
 			// written as such: [27] Misc admits no reference or CDATA section.
@@ -425,11 +430,13 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			}
 			run.add(&chunk, cur, t)
 
-		case xml.Comment:
+		case *xml.Comment:
+			t := *tok
 			sawPrologToken = true
 			cur.AppendChild(&Node{Kind: KindComment, Value: string(t)})
 
-		case xml.ProcInst:
+		case *xml.ProcInst:
+			t := *tok
 			if strings.EqualFold(t.Target, "xml") {
 				if t.Target != "xml" {
 					return nil, fmt.Errorf("parse XML: processing-instruction target %q is reserved", t.Target)
@@ -461,7 +468,8 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			}
 			cur.AppendChild(pi)
 
-		case xml.Directive:
+		case *xml.Directive:
+			t := *tok
 			d := strings.TrimSpace(string(t))
 			if !isDOCTYPEDirective(d) {
 				return nil, fmt.Errorf("parse XML: markup declaration %q is not a DOCTYPE", d)

@@ -24,22 +24,22 @@ func render(d *Decoder) (string, error) {
 			return sb.String(), err
 		}
 		switch t := t.(type) {
-		case StartElement:
+		case *StartElement:
 			sb.WriteString("<" + qname(t.Name))
 			for _, a := range t.Attr {
 				fmt.Fprintf(&sb, " %s=%q", qname(a.Name), a.Value)
 			}
 			sb.WriteString(">")
-		case EndElement:
+		case *EndElement:
 			sb.WriteString("</" + qname(t.Name) + ">")
-		case CharData:
-			fmt.Fprintf(&sb, "%q", t)
-		case Comment:
-			sb.WriteString("<!--" + string(t) + "-->")
-		case ProcInst:
+		case *CharData:
+			fmt.Fprintf(&sb, "%q", *t)
+		case *Comment:
+			sb.WriteString("<!--" + string(*t) + "-->")
+		case *ProcInst:
 			sb.WriteString("<?" + t.Target + " " + string(t.Inst) + "?>")
-		case Directive:
-			sb.WriteString("<!" + string(t) + ">")
+		case *Directive:
+			sb.WriteString("<!" + string(*t) + ">")
 		}
 	}
 }
@@ -270,7 +270,7 @@ func TestLiteral(t *testing.T) {
 				if err != nil {
 					break
 				}
-				if _, ok := tok.(CharData); ok {
+				if _, ok := tok.(*CharData); ok {
 					got = append(got, d.Literal())
 				}
 			}
@@ -450,4 +450,23 @@ func latinOnly(charset string, input io.Reader) (io.Reader, error) {
 		return &out, nil
 	}
 	return nil, fmt.Errorf("unsupported encoding %q", charset)
+}
+
+// TestRawTokenDoesNotAllocatePerToken pins that a token costs no allocation:
+// RawToken returns pointers to values the Decoder reuses, where returning a
+// struct or slice in the Token interface copied each one to the heap. 1,000
+// repetitions of eight tokens took about 8,000 allocations that way.
+func TestRawTokenDoesNotAllocatePerToken(t *testing.T) {
+	doc := "<r>" + strings.Repeat("<e>text</e><!--c--><?p x?><![CDATA[d]]><f/>", 1000) + "</r>"
+	allocs := testing.AllocsPerRun(5, func() {
+		d := NewDecoder(strings.NewReader(doc))
+		for {
+			if _, err := d.RawToken(); err != nil {
+				break
+			}
+		}
+	})
+	if allocs > 100 {
+		t.Errorf("tokenizing 8,002 tokens took %.0f allocations, want at most 100", allocs)
+	}
 }
