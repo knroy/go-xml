@@ -136,99 +136,91 @@ func transformHasAny(m *xdm.MapItem, names ...string) bool {
 	return false
 }
 
-// transformString reads a string-valued option.
-func transformString(m *xdm.MapItem, name string) (string, bool, error) {
+// transformAtomic reads an option whose declared type is a single atomic
+// type, converting the value with the function conversion rules as the option
+// parameter conventions require (F&O 3.1 1.5.4): atomization (a node gives
+// its typed value, an array its flattened members, a map or function item is
+// FOTY0013), then xs:untypedAtomic is cast to the target and xs:anyURI is
+// promoted to xs:string. Anything else of the wrong type, or other than one
+// value, is XPTY0004 -- the code fn-transform-err-4 and err-5 expect.
+//
+// An option written as element content --
+// <xsl:map-entry key="'stylesheet-location'">a.xsl</xsl:map-entry> -- arrives
+// as a text node and so atomizes to the untypedAtomic it stands for.
+func transformAtomic(m *xdm.MapItem, name string, target xdm.TypeCode) (*xdm.Atomic, bool, error) {
 	seq, ok := transformOption(m, name)
 	if !ok {
-		return "", false, nil
+		return nil, false, nil
 	}
-	it, err := seq.Single()
+	want := "xs:string"
+	switch target {
+	case xdm.TypeBoolean:
+		want = "xs:boolean"
+	case xdm.TypeDecimal:
+		want = "xs:decimal"
+	case xdm.TypeQName:
+		want = "xs:QName"
+	}
+	atoms, err := xdm.AtomizeChecked(seq)
 	if err != nil {
-		return "", true, xdm.ErrType(
-			"fn:transform: %s must be a single value", name)
+		return nil, true, err
 	}
-	// A node is atomized rather than refused. An option written as element
-	// content -- <xsl:map-entry key="'stylesheet-location'">a.xsl</xsl:map-entry>
-	// -- arrives as a text node, not a string, and the value it stands for is
-	// its string value. Refusing it raised XPTY0004 on a map that says exactly
-	// what a string-valued one says.
-	if n, ok := it.(*xdm.Node); ok {
-		return n.StringValue(), true, nil
+	if len(atoms) != 1 {
+		return nil, true, xdm.ErrType(
+			"fn:transform: %s must be a single %s, got %d items", name, want, len(atoms))
 	}
-	a, ok := it.(*xdm.Atomic)
-	if !ok {
-		return "", true, xdm.ErrType(
-			"fn:transform: %s must be a string, got %s", name, it.TypeName())
+	a := atoms[0].(*xdm.Atomic)
+	switch {
+	case a.Type == target,
+		target == xdm.TypeString && a.Type == xdm.TypeAnyURI,
+		target == xdm.TypeDecimal && a.Type == xdm.TypeInteger:
+		return a, true, nil
+	case a.Type == xdm.TypeUntypedAtomic && target == xdm.TypeQName:
+		// XPath 3.1 3.1.5.2: untypedAtomic does not convert to xs:QName,
+		// there being no namespace context to resolve a prefix against.
+		return nil, true, xdm.Errorf("XPTY0117",
+			"fn:transform: %s must be an xs:QName, got xs:untypedAtomic", name)
+	case a.Type == xdm.TypeUntypedAtomic:
+		c, err := xpath.CastAtomic(a, target)
+		return c, true, err
+	}
+	return nil, true, xdm.ErrType(
+		"fn:transform: %s must be %s, got %s", name, want, a.TypeName())
+}
+
+// transformString reads an xs:string option; see transformAtomic.
+func transformString(m *xdm.MapItem, name string) (string, bool, error) {
+	a, ok, err := transformAtomic(m, name, xdm.TypeString)
+	if !ok || err != nil {
+		return "", ok, err
 	}
 	return a.String(), true, nil
 }
 
-// transformBool reads an xs:boolean option, def when it is absent. The option
-// parameter conventions (F&O 3.1 1.5.4) convert the value with the function
-// conversion rules: a node atomizes to untypedAtomic, which is cast (FORG0001
-// when it is not a boolean lexical form); any other type, or other than one
-// item, is XPTY0004. That is the code fn-transform-err-4 and err-5 expect for
-// mistyped options, rather than FOXT0002.
+// transformBool reads an xs:boolean option, def when it is absent; see
+// transformAtomic.
 func transformBool(m *xdm.MapItem, name string, def bool) (bool, error) {
-	seq, ok := transformOption(m, name)
-	if !ok {
-		return def, nil
-	}
-	it, err := seq.Single()
-	if err != nil {
-		return false, xdm.ErrType("fn:transform: %s must be a single xs:boolean", name)
-	}
-	var a *xdm.Atomic
-	switch v := it.(type) {
-	case *xdm.Node:
-		a = xdm.NewUntypedAtomic(v.StringValue())
-	case *xdm.Atomic:
-		a = v
-	default:
-		return false, xdm.ErrType(
-			"fn:transform: %s must be an xs:boolean, got %s", name, it.TypeName())
-	}
-	if a.Type == xdm.TypeUntypedAtomic {
-		if a, err = xpath.CastAtomic(a, xdm.TypeBoolean); err != nil {
-			return false, err
-		}
-	}
-	if a.Type != xdm.TypeBoolean {
-		return false, xdm.ErrType(
-			"fn:transform: %s must be an xs:boolean, got %s", name, a.TypeName())
+	a, ok, err := transformAtomic(m, name, xdm.TypeBoolean)
+	if !ok || err != nil {
+		return def, err
 	}
 	return a.String() == "true", nil
 }
 
-// transformQName reads a QName-valued option.
+// transformQName reads an xs:QName option; see transformAtomic.
 //
-// The value must be read structurally rather than through String(), which
-// gives a QName's LEXICAL form and so drops the namespace URI: reading
+// The value is read structurally rather than through String(), which gives a
+// QName's LEXICAL form and so drops the namespace URI: reading
 // QName('http://example.com/mf','evaluate') as a string yields "evaluate" and
-// would look up a function in no namespace. A string is still accepted, since
-// the option is commonly written as one, and then names a function in no
-// namespace -- there is no prefix context in an options map to resolve
-// against.
+// would look up a function in no namespace. A string is XPTY0004, as the
+// conversion rules make it: there is no prefix context in an options map to
+// resolve one against.
 func transformQName(m *xdm.MapItem, name string) (xdm.QName, bool, error) {
-	seq, ok := transformOption(m, name)
-	if !ok {
-		return xdm.QName{}, false, nil
+	a, ok, err := transformAtomic(m, name, xdm.TypeQName)
+	if !ok || err != nil {
+		return xdm.QName{}, ok, err
 	}
-	it, err := seq.Single()
-	if err != nil {
-		return xdm.QName{}, true, xdm.ErrType(
-			"fn:transform: %s must be a single value", name)
-	}
-	a, ok := it.(*xdm.Atomic)
-	if !ok {
-		return xdm.QName{}, true, xdm.ErrType(
-			"fn:transform: %s must be a QName or string, got %s",
-			name, it.TypeName())
-	}
-	if q := a.QName(); q != nil {
-		return *q, true, nil
-	}
-	return xdm.QName{Local: a.String()}, true, nil
+	return *a.QName(), true, nil
 }
 
 // transformArray reads an array-valued option as the ordered argument list it
@@ -439,6 +431,18 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 	if err != nil {
 		return nil, err
 	}
+	// These are type-checked like every option, but have no effect: see
+	// docs/known-gaps.md.
+	for _, name := range []string{"enable-assertions", "enable-messages", "enable-trace"} {
+		if _, err := transformBool(opts, name, false); err != nil {
+			return nil, err
+		}
+	}
+	// vendor-options is map(xs:QName, item()*); this processor defines none,
+	// so the entries are ignored once the map is known to be one.
+	if _, err := transformParams(opts, "vendor-options"); err != nil {
+		return nil, err
+	}
 
 	sheet, err := cachedNestedStylesheet(ctx, rt, opts, useCache)
 	if err != nil {
@@ -550,10 +554,12 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 			"fn:transform: function-params was supplied without "+
 				"initial-function, so it names the arguments of no function")
 	}
-	if v, ok, verr := transformString(opts, "initial-mode"); verr != nil {
+	if q, ok, verr := transformQName(opts, "initial-mode"); verr != nil {
 		return nil, verr
 	} else if ok {
-		topts.InitialMode = v
+		// Clark form, which Transform matches as is; the lexical form would
+		// resolve a prefix against the stylesheet's own declarations.
+		topts.InitialMode = q.Clark()
 	}
 	if seq, ok := transformOption(opts, "initial-match-selection"); ok {
 		topts.InitialMatchSelection = seq
@@ -762,15 +768,17 @@ func nestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem)
 	}
 
 	if seq, ok := transformOption(opts, "stylesheet-node"); ok {
+		// Declared node(), so a mismatch is the XPTY0004 the conversion
+		// rules give, as for source-node.
 		it, serr := seq.Single()
 		if serr != nil {
-			return nil, xdm.Errorf("FOXT0002",
+			return nil, xdm.ErrType(
 				"fn:transform: stylesheet-node must be a single node")
 		}
 		n, ok := it.(*xdm.Node)
 		if !ok {
-			return nil, xdm.Errorf("FOXT0002",
-				"fn:transform: stylesheet-node must be a node")
+			return nil, xdm.ErrType(
+				"fn:transform: stylesheet-node must be a node, got %s", it.TypeName())
 		}
 		return compileNested(ctx, rt, opts, n, base)
 	}
