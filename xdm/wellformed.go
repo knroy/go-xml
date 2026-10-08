@@ -269,11 +269,11 @@ func requireQName(n xml.Name) error {
 func normalizeAttTokens(t xml.StartElement, types []attDeclaredType) xml.StartElement {
 	var attrs []xml.Attr
 	for _, d := range types {
-		if d.element != lexicalName(t.Name) && d.element != t.Name.Local {
+		if !lexicalIs(t.Name.Space, t.Name.Local, d.element) && d.element != t.Name.Local {
 			continue
 		}
 		for i, a := range t.Attr {
-			if lexicalName(a.Name) != d.attr && a.Name.Local != d.attr {
+			if !lexicalIs(a.Name.Space, a.Name.Local, d.attr) && a.Name.Local != d.attr {
 				continue
 			}
 			if attrs == nil {
