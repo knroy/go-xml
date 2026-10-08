@@ -310,12 +310,12 @@ func TestValidateConfinesIncludesToRoot(t *testing.T) {
 	// Sanity: rooted at the parent, this very schema compiles. Without this
 	// the case could be passing because the grammar is broken rather than
 	// because the root held.
-	if _, err := schemaValidator("", rng, "1.0", "", parent, 1); err != nil {
+	if _, err := schemaValidator("", rng, "1.0", "", parent, "", 1); err != nil {
 		t.Fatalf("the escape schema must compile under the parent root, or "+
 			"the confined case proves nothing: %v", err)
 	}
 
-	_, err := schemaValidator("", rng, "1.0", "", root, 1)
+	_, err := schemaValidator("", rng, "1.0", "", root, "", 1)
 	if err == nil {
 		t.Fatal("an <include> escaping -root was admitted by the CLI")
 	}
@@ -341,7 +341,7 @@ func TestValidateAdmitsIncludesInsideRoot(t *testing.T) {
 			`<include href="inc.rng"/></grammar>`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	validate, err := schemaValidator("", rng, "1.0", "", root, 1)
+	validate, err := schemaValidator("", rng, "1.0", "", root, "", 1)
 	if err != nil {
 		t.Fatalf("an <include> inside -root should compile: %v", err)
 	}

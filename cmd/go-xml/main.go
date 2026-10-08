@@ -108,6 +108,7 @@ func run() error {
 		sheetPath    = flag.String("xsl", "", "stylesheet to apply (required)")
 		outPath      = flag.String("o", "", "write output to this file instead of stdout")
 		allowDirs    = registerAllowDir(flag.CommandLine)
+		catalog      = registerCatalog(flag.CommandLine)
 		allowDoctype = flag.Bool("allow-doctype", false,
 			"permit a DOCTYPE in the source document and expand the entities it "+
 				"declares internally; external entities still require "+
@@ -253,7 +254,11 @@ Exit status: 0 if every input transformed, 1 otherwise.
 	// keyed on the setting, so this cannot serve a stale compilation.
 	xpath.SetBacktrackingRegex(*backtrackRegex)
 
-	sheet, err := compileStylesheet(*sheetPath, resolver, *xpathVersion,
+	schemas, err := schemaCatalog(*catalog, schemaFiles{resolver})
+	if err != nil {
+		return err
+	}
+	sheet, err := compileStylesheet(*sheetPath, resolver, schemas, *xpathVersion,
 		xslt.Compatibility{
 			DropAttributesOnDocumentNode: *compatDropAttrs,
 		})
@@ -343,7 +348,7 @@ Exit status: 0 if every input transformed, 1 otherwise.
 	return nil
 }
 
-func compileStylesheet(path string, resolver *xslt.FileResolver,
+func compileStylesheet(path string, resolver *xslt.FileResolver, schemas xsd.Resolver,
 	xpathVersion string, compat xslt.Compatibility) (*xslt.Stylesheet, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -360,7 +365,7 @@ func compileStylesheet(path string, resolver *xslt.FileResolver,
 	}
 	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{
 		Resolver:       resolver,
-		SchemaResolver: schemaFiles{resolver},
+		SchemaResolver: schemas,
 		BaseURI:        abs,
 		XPathVersion:   v,
 		Compat:         compat,

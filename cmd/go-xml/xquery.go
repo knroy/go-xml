@@ -32,6 +32,7 @@ func runXQuery(args []string) error {
 	var (
 		queryPath = fs.String("q", "", "query to run (required)")
 		outPath   = fs.String("o", "", "write output to this file instead of stdout")
+		catalog   = registerCatalog(fs)
 		allowDirs = fs.String("allow-dir", "",
 			"comma-separated roots that import module, import schema, "+
 				"fn:load-xquery-module, fn:doc and fn:unparsed-text may read, each covering its subdirectories to "+
@@ -88,6 +89,11 @@ Exit status: 0 if the query ran, 1 otherwise.
 	}
 	resolver.UnparsedText = *allowUnparsedText
 
+	schemas, err := schemaCatalog(*catalog, schemaFiles{resolver})
+	if err != nil {
+		return err
+	}
+
 	src, err := os.ReadFile(*queryPath)
 	if err != nil {
 		return err
@@ -97,7 +103,7 @@ Exit status: 0 if the query ran, 1 otherwise.
 		BaseURI:            base,
 		DeclarationBaseURI: base,
 		ModuleResolver:     moduleFiles{resolver},
-		SchemaResolver:     schemaFiles{resolver},
+		SchemaResolver:     schemas,
 	})
 	if err != nil {
 		return fmt.Errorf("compiling query: %w", err)

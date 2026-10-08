@@ -40,6 +40,7 @@ func runValidate(args []string) error {
 			"confine schema include/import to this directory; by default the "+
 				"directory of the schema file, as the transform does for its "+
 				"stylesheet")
+		catalog   = registerCatalog(fs)
 		maxErrors = fs.Int("max-errors", 0,
 			"stop after this many failures per document; 0 uses the default")
 		quiet = fs.Bool("quiet", false,
@@ -84,7 +85,7 @@ Exit status: 0 if every document is valid, 1 otherwise.
 	}
 
 	validate, err := schemaValidator(*xsdPaths, *rngPath, *version, *xpathVersion,
-		*root, *maxErrors)
+		*root, *catalog, *maxErrors)
 	if err != nil {
 		return err
 	}
@@ -123,7 +124,7 @@ Exit status: 0 if every document is valid, 1 otherwise.
 
 // schemaValidator compiles the schema once and returns the check to run per
 // document, so that a run over many instances pays for the schema once.
-func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root string,
+func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root, catalog string,
 	maxErrors int) (
 	func(*xdm.Node) error, error) {
 
@@ -178,6 +179,16 @@ func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root string,
 	var resolver xsd.Resolver
 	if root != "" {
 		resolver = &xsd.FileResolver{Root: root}
+	}
+	if catalog != "" {
+		// The catalog wraps the confinement rather than replacing it: what
+		// it does not hold is read exactly where a plain load would read.
+		if resolver == nil {
+			resolver = xsd.RootedFileResolver(paths)
+		}
+		if resolver, err = schemaCatalog(catalog, resolver); err != nil {
+			return nil, err
+		}
 	}
 	schema, err := xsd.LoadFiles(paths, xsd.Options{
 		Resolver:     resolver,

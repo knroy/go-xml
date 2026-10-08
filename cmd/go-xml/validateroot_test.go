@@ -44,7 +44,7 @@ func TestValidateXSDDefaultsRootToTheSchemaDirectory(t *testing.T) {
 
 	// Sanity: rooted at the parent the schema loads and validates, so the
 	// refusal below is the default root holding, not a broken schema.
-	validate, err := schemaValidator(main, "", "1.0", "2.0", parent, 1)
+	validate, err := schemaValidator(main, "", "1.0", "2.0", parent, "", 1)
 	if err != nil {
 		t.Fatalf("the escape schema must load under -root %s, or the "+
 			"confined case proves nothing: %v", parent, err)
@@ -57,7 +57,7 @@ func TestValidateXSDDefaultsRootToTheSchemaDirectory(t *testing.T) {
 		t.Errorf("a document matching the included schema should validate: %v", err)
 	}
 
-	_, err = schemaValidator(main, "", "1.0", "2.0", "", 1)
+	_, err = schemaValidator(main, "", "1.0", "2.0", "", "", 1)
 	if err == nil {
 		t.Fatal("with no -root, an xs:include climbing out of the schema's " +
 			"directory was admitted")
@@ -77,7 +77,7 @@ func TestValidateRNGDefaultsRootToTheSchemaDirectory(t *testing.T) {
 		`<grammar xmlns="http://relaxng.org/ns/structure/1.0">`+
 			`<include href="../far/deep.rng"/></grammar>`)
 
-	validate, err := schemaValidator("", main, "1.0", "", parent, 1)
+	validate, err := schemaValidator("", main, "1.0", "", parent, "", 1)
 	if err != nil {
 		t.Fatalf("the escape grammar must compile under -root %s, or the "+
 			"confined case proves nothing: %v", parent, err)
@@ -90,7 +90,7 @@ func TestValidateRNGDefaultsRootToTheSchemaDirectory(t *testing.T) {
 		t.Errorf("a document matching the included grammar should validate: %v", err)
 	}
 
-	_, err = schemaValidator("", main, "1.0", "", "", 1)
+	_, err = schemaValidator("", main, "1.0", "", "", "", 1)
 	if err == nil {
 		t.Fatal("with no -root, an <include> climbing out of the schema's " +
 			"directory was admitted")
@@ -196,7 +196,7 @@ func TestValidateRNGReadsTheCompactSyntax(t *testing.T) {
 		"card = element card { attribute name { text } }\n")
 	writeSchema(t, main, "include \"common.rnc\"\nstart = element book { card* }\n")
 
-	validate, err := schemaValidator("", main, "1.0", "", "", 1)
+	validate, err := schemaValidator("", main, "1.0", "", "", "", 1)
 	if err != nil {
 		t.Fatalf("a compact schema with a compact include did not load: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestValidateRNGReadsTheCompactSyntax(t *testing.T) {
 
 	escape := filepath.Join(parent, "d", "escape.rnc")
 	writeSchema(t, escape, "include \"../far/deep.rnc\"\nstart = element book { card* }\n")
-	_, err = schemaValidator("", escape, "1.0", "", "", 1)
+	_, err = schemaValidator("", escape, "1.0", "", "", "", 1)
 	if err == nil || !strings.Contains(err.Error(), "resolves outside root") {
 		t.Errorf("a compact include climbing out of the schema's directory: "+
 			"err = %v, want the containment refusal", err)
