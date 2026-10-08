@@ -191,7 +191,8 @@ func TestTags(t *testing.T) {
 
 func TestMarkup(t *testing.T) {
 	runCases(t, []tokenCase{
-		{name: "comment", src: "<!-- c\r\n-->", want: "<!-- c\r\n-->"},
+		{name: "comment", src: "<!-- c\r\n-->", want: "<!-- c\n-->"},
+		{name: "1.0 CR NEL in comment and pi", src: "<!--a\r\u0085b--><?p a\r\u0085b\rc?>", want: "<!--a\n\u0085b--><?p a\n\u0085b\nc?>"},
 		{name: "empty comment", src: "<!---->", want: "<!---->"},
 		{name: "dash comment", src: "<!---a-->", want: "<!---a-->"},
 		{name: "double dash", src: "<!-- a -- b -->", wantErr: syntax(1, `invalid sequence "--" not allowed in comments`)},
@@ -221,8 +222,14 @@ func TestMarkup(t *testing.T) {
 		{name: "bad cdata", src: "<![CDATX[", wantErr: syntax(1, "invalid <![ sequence")},
 		{name: "doctype", src: `<!DOCTYPE a [<!ENTITY e "x>y"><!ATTLIST a b CDATA '>'>]>`,
 			want: `<!DOCTYPE a [<!ENTITY e "x>y"><!ATTLIST a b CDATA '>'>]>`},
-		{name: "doctype comment", src: "<!DOCTYPE a [<!-- > -- --><!ELEMENT a ANY>]>",
+		{name: "doctype comment", src: "<!DOCTYPE a [<!-- > - --><!ELEMENT a ANY>]>",
 			want: "<!DOCTYPE a [ <!ELEMENT a ANY>]>"},
+		{name: "doctype comment with --", src: "<!DOCTYPE a [<!-- a -- b --><!ELEMENT a ANY>]>",
+			wantErr: syntax(1, CommentDashes)},
+		{name: "doctype comment ending --->", src: "<!DOCTYPE a [<!-- a ---><!ELEMENT a ANY>]>",
+			wantErr: syntax(1, CommentDashes)},
+		{name: "comment with --", src: "<!-- a -- b -->", wantErr: syntax(1, CommentDashes)},
+		{name: "comment ending --->", src: "<!-- a --->", wantErr: syntax(1, CommentDashes)},
 		{name: "doctype <!- not comment", src: "<!DOCTYPE a [<!-x>]>", want: "<!DOCTYPE a [<!-x>]>"},
 		{name: "first byte is literal", src: "<!>a>", want: "<!>a>"},
 		{name: "doctype pi with apostrophe", src: "<!DOCTYPE a [<?pi it's?>]>", want: "<!DOCTYPE a [<?pi it's?>]>"},

@@ -495,7 +495,14 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				// Retained so a caller can validate against the document's
 				// own DTD; see Tree.DocType.
 				tree.DocType = d
-				defs, types := parseAttList(d)
+				// Without a resolver no parameter entity is read, so §5.1
+				// stops entity and ATTLIST processing at the first
+				// reference to one, unless the document is standalone.
+				declText := d
+				if opts.ExternalEntities == nil && !standalone {
+					declText = declsBeforeUnreadPE(d)
+				}
+				defs, types := parseAttList(declText)
 				attDefaults = append(attDefaults, defs...)
 				attTypes = append(attTypes, types...)
 				elementOnly = parseElementOnlyDecls(d)
@@ -537,6 +544,12 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 							return nil, fmt.Errorf("parse XML: %w", err)
 						}
 					}
+					if err := checkDTDComments(ents.subsetText); err != nil {
+						return nil, fmt.Errorf("parse XML: external DTD: %w", err)
+					}
+					if err := checkEntityCharRefs(ents.subsetText, dec.IsVersion11()); err != nil {
+						return nil, fmt.Errorf("parse XML: %w", err)
+					}
 					// Retained so fn:unparsed-entity-uri can see declarations
 					// that live outside the directive. The subset a document
 					// is governed by is not always the text it was written
@@ -567,13 +580,13 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 						elementOnly = parseElementOnlyDecls(text)
 					}
 				} else {
-					ents = parseEntityDecls(d, opts.BaseURI, opts.entityBudget)
+					ents = parseEntityDecls(declText, opts.BaseURI, opts.entityBudget)
 				}
 				if ents != nil {
 					ents.version11 = dec.IsVersion11()
-					if err := ents.checkCharRefs(); err != nil {
-						return nil, fmt.Errorf("parse XML: %w", err)
-					}
+				}
+				if err := checkEntityCharRefs(d, dec.IsVersion11()); err != nil {
+					return nil, fmt.Errorf("parse XML: %w", err)
 				}
 				wfc := entityDeclaredIsWFC(d, standalone)
 				if attDefaults, err = normalizeAttDefaults(attDefaults, ents, dec.IsVersion11(), wfc); err != nil {

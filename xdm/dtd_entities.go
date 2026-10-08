@@ -319,7 +319,8 @@ func (t *entityTable) parseDecls(subset, base string) *entityTable {
 
 // markupDecls yields the keyword and body of each markup declaration in a DTD
 // subset — for "<!ENTITY e 'x'>", "ENTITY" and " e 'x'" — in document order,
-// and each parameter-entity reference between them as "%" and its name. It is the one scanner every reader of declarations goes
+// each parameter-entity reference between them as "%" and its name, and each
+// comment as "--" and its body. It is the one scanner every reader of declarations goes
 // through, so that what counts as a declaration is decided in one place.
 //
 // Comments and processing instructions are skipped whole, and so is a quoted
@@ -335,7 +336,16 @@ func markupDecls(subset string) iter.Seq2[string, string] {
 			rest := s[i:]
 			switch {
 			case strings.HasPrefix(rest, "<!--"):
-				i = skipPast(s, i+len("<!--"), "-->")
+				// A comment is yielded as "--" and its body, for the [15]
+				// check; an unterminated one ends the scan.
+				j := strings.Index(s[i+len("<!--"):], "-->")
+				if j < 0 {
+					return
+				}
+				if !yield("--", s[i+len("<!--"):i+len("<!--")+j]) {
+					return
+				}
+				i += len("<!--") + j + len("-->")
 			case strings.HasPrefix(rest, "<?"):
 				i = skipPast(s, i+len("<?"), "?>")
 			case strings.HasPrefix(rest, "<!["):
@@ -774,6 +784,41 @@ func (t *entityTable) normalizeDefault(d attDefault, wfc bool) (string, error) {
 	return sb.String(), nil
 }
 
+// checkDTDComments holds the comments of DTD text the tokeniser never saw —
+// an external subset, external parameter entities — to XML 1.0 §2.5 [15],
+// as the tokeniser holds those in content and the internal subset: no "--"
+// in the body, and no "-" ending it.
+func checkDTDComments(text string) error {
+	for kw, body := range markupDecls(text) {
+		if kw == "--" && (strings.Contains(body, "--") || strings.HasSuffix(body, "-")) {
+			return errors.New(xml.CommentDashes)
+		}
+	}
+	return nil
+}
+
+// declsBeforeUnreadPE returns the internal subset as XML 1.0 §5.1 lets a
+// non-validating processor use it when it has not read the parameter
+// entities the subset refers to: "they MUST NOT process entity declarations
+// or attribute-list declarations encountered after a reference to a
+// parameter entity that is not read", since that entity may have held
+// overriding declarations. The declarations before the first reference are
+// returned; a subset with no reference is returned as it is. The caller
+// skips this under standalone="yes", where §5.1 requires them processed.
+func declsBeforeUnreadPE(subset string) string {
+	var sb strings.Builder
+	for kw, body := range markupDecls(subset) {
+		switch kw {
+		case "%":
+			return sb.String()
+		case "--":
+		default:
+			sb.WriteString("<!" + kw + body + ">")
+		}
+	}
+	return subset
+}
+
 // declares reports whether the DTD declares a general entity name, internal
 // or external. t may be nil, which declares nothing.
 func (t *entityTable) declares(name string) bool {
@@ -831,21 +876,36 @@ func (t *entityTable) attrEntityMap(content map[string]string) map[string]string
 // charRef decodes the character reference "&name;" and checks it against
 // WFC: Legal Character (§4.1) for the document's version — the tokeniser's
 // rule, so that a reference in the DTD is held to the one in content.
-func (t *entityTable) charRef(name string) (rune, error) {
+func (t *entityTable) charRef(name string) (rune, error) { return charRef(name, t.version11) }
+
+func charRef(name string, v11 bool) (rune, error) {
 	r, ok := decodeCharRef(name)
 	if !ok {
 		return 0, fmt.Errorf("invalid character reference &%s;", name)
 	}
-	if !xml.LegalCharRef(r, t.version11) {
+	if !xml.LegalCharRef(r, v11) {
 		return 0, fmt.Errorf("illegal character code %U", r)
 	}
 	return r, nil
 }
 
-// checkCharRefs applies WFC: Legal Character to the character references in
-// every declared entity value, whether or not the entity is ever referenced.
-func (t *entityTable) checkCharRefs() error {
-	for name, raw := range t.raw {
+// checkEntityCharRefs applies WFC: Legal Character to the character
+// references in the value of every entity declared in text, general and
+// parameter alike, whether or not the entity is referenced, read or (after an
+// unread parameter entity, §5.1) processed.
+func checkEntityCharRefs(text string, v11 bool) error {
+	for kw, body := range markupDecls(text) {
+		if kw != "ENTITY" {
+			continue
+		}
+		fields := attListFields(body)
+		if len(fields) > 0 && fields[0] == "%" {
+			fields = fields[1:]
+		}
+		if len(fields) < 2 || fields[1] == "" || fields[1][0] != '"' && fields[1][0] != '\'' {
+			continue // no value, or an external identifier
+		}
+		name, raw := fields[0], unquote(fields[1])
 		for i := 0; ; {
 			k := strings.Index(raw[i:], "&#")
 			if k < 0 {
@@ -856,7 +916,7 @@ func (t *entityTable) checkCharRefs() error {
 			if j < 0 {
 				return fmt.Errorf("entity %q: unterminated character reference", name)
 			}
-			if _, err := t.charRef(raw[i+1 : i+j]); err != nil {
+			if _, err := charRef(raw[i+1:i+j], v11); err != nil {
 				return fmt.Errorf("entity %q: %w", name, err)
 			}
 			i += j + 1

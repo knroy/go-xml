@@ -389,3 +389,43 @@ func TestUndeclaredEntityWFCOrVC(t *testing.T) {
 		t.Error("a declared external entity was dropped instead of refused")
 	}
 }
+
+// TestCRNELUnderXML10: XML 1.0 §2.11 knows CR LF and CR as line ends but not
+// NEL, so in CR NEL the CR is a line end (LF, or a space in an attribute
+// value) and the NEL an ordinary character — in text, CDATA, attribute
+// values, comments, PIs and the DOCTYPE alike.
+func TestCRNELUnderXML10(t *testing.T) {
+	const s = "a\r\u0085b"
+	src := `<?xml version="1.0"?><!DOCTYPE r [<!ENTITY e "` + s + `">]><!--` + s + `--><r a="` + s + `">` +
+		s + `<![CDATA[` + s + `]]><?p ` + s + `?></r><?q ` + s + `?>`
+	tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const lf, sp = "a\n\u0085b", "a \u0085b"
+	r := tree.Root.ChildElements()[0]
+	for _, c := range []struct {
+		what, got, want string
+	}{
+		{"prolog comment", tree.Root.Children[0].Value, lf},
+		{"attribute", r.Attr("", "a").Value, sp},
+		{"text and CDATA", r.Children[0].Value, lf + lf},
+		{"PI", r.Children[1].Value, lf},
+		{"epilog PI", tree.Root.Children[2].Value, lf},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s: got %q, want %q", c.what, c.got, c.want)
+		}
+	}
+	tree, err = ParseString(`<!DOCTYPE r [<!ENTITY e "`+s+`">]><r a="&e;">&e;</r>`, ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = tree.Root.ChildElements()[0]
+	if got := r.StringValue(); got != lf {
+		t.Errorf("entity in content: got %q, want %q", got, lf)
+	}
+	if got := r.Attr("", "a").Value; got != sp {
+		t.Errorf("entity in attribute: got %q, want %q", got, sp)
+	}
+}

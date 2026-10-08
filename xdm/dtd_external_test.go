@@ -638,3 +638,122 @@ func TestParameterEntityScopeAndBase(t *testing.T) {
 		}
 	}
 }
+
+// TestDTDCommentDashes: XML 1.0 §2.5 [15] admits no "--" in a comment's body
+// and no "-" ending it ("--->"). That holds in content, in the internal subset
+// and in an external subset alike, with the one error text.
+func TestDTDCommentDashes(t *testing.T) {
+	for _, src := range []string{
+		`<!DOCTYPE r [<!-- a -- b -->]><r/>`,
+		`<!DOCTYPE r [<!-- a --->]><r/>`,
+		`<r><!-- a -- b --></r>`,
+		`<r><!-- a ---></r>`,
+		`<!-- a ---><r/>`,
+	} {
+		_, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
+		if err == nil || !strings.Contains(err.Error(), `invalid sequence "--" not allowed in comments`) {
+			t.Errorf("%s: err = %v, want the comment refused", src, err)
+		}
+	}
+	for _, body := range []string{" a -- b ", " a -"} {
+		dir := writeFiles(t, map[string]string{
+			"d.dtd":   "<!--" + body + "--><!ENTITY e \"x\">",
+			"doc.xml": `<!DOCTYPE r SYSTEM "d.dtd"><r>&e;</r>`,
+		})
+		p := filepath.Join(dir, "doc.xml")
+		src, _ := os.ReadFile(p)
+		_, err := ParseString(string(src), ParseOptions{
+			AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: dir}, BaseURI: fileuri.Of(p),
+		})
+		if err == nil || !strings.Contains(err.Error(), `invalid sequence "--" not allowed in comments`) {
+			t.Errorf("external subset comment %q: err = %v, want it refused", body, err)
+		}
+	}
+	dir := writeFiles(t, map[string]string{
+		"d.dtd":   "<!-- a - b > c --><!ENTITY e \"x\">",
+		"doc.xml": `<!DOCTYPE r SYSTEM "d.dtd" [<!-- a - b > c -->]><r>&e;</r>`,
+	})
+	if got := mustParseExternal(t, dir, "doc.xml").Root.StringValue(); got != "x" {
+		t.Errorf("well-formed comments: got %q, want x", got)
+	}
+}
+
+// TestDeclarationsAfterUnreadParameterEntity is XML 1.0 §5.1: a processor
+// that has not read a parameter entity must not process entity or ATTLIST
+// declarations that follow the reference, since the entity may have held
+// overriding declarations — unless the document is standalone="yes", when it
+// must. Declarations before the reference are processed either way, and a
+// processor that does read the entity (a resolver is set) processes all.
+func TestDeclarationsAfterUnreadParameterEntity(t *testing.T) {
+	const subset = `<!ENTITY b "B"><!ATTLIST r c CDATA "C"> %p; <!ENTITY e "v"><!ATTLIST r a CDATA "d">`
+	summary := func(tree *Tree) string {
+		r := tree.Root.ChildElements()[0]
+		s := r.StringValue()
+		for _, n := range []string{"c", "a"} {
+			if a := r.Attr("", n); a != nil {
+				s += " " + n + "=" + a.Value
+			}
+		}
+		return s
+	}
+	cases := []struct{ name, prolog, decl, want string }{
+		{"external PE unread", "", `<!ENTITY % p SYSTEM "p.ent">`, "[B] c=C"},
+		{"internal PE unread", "", `<!ENTITY % p "">`, "[B] c=C"},
+		{"standalone", `<?xml version="1.0" standalone="yes"?>`, `<!ENTITY % p "">`, "[Bv] c=C a=d"},
+	}
+	for _, c := range cases {
+		src := c.prolog + "<!DOCTYPE r [" + c.decl + subset + "]><r>[&b;&e;]</r>"
+		tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if got := summary(tree); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+	dir := writeFiles(t, map[string]string{
+		"p.ent":   "",
+		"doc.xml": `<!DOCTYPE r [<!ENTITY % p SYSTEM "p.ent">` + subset + `]><r>[&b;&e;]</r>`,
+	})
+	if got := summary(mustParseExternal(t, dir, "doc.xml")); got != "[Bv] c=C a=d" {
+		t.Errorf("PE read through a resolver: got %q, want %q", got, "[Bv] c=C a=d")
+	}
+}
+
+// TestParameterEntityCharRefsAreLegal: WFC Legal Character holds for the
+// character references in a parameter entity's value as for a general one,
+// by the same rule, whether the entity is read or not, and for declarations
+// after an unread one that §5.1 leaves unprocessed.
+func TestParameterEntityCharRefsAreLegal(t *testing.T) {
+	const v11 = `<?xml version="1.1"?>`
+	cases := []struct {
+		name, src string
+		ok        bool
+	}{
+		{"1.0 #x1", `<!DOCTYPE r [<!ENTITY % p "&#x1;">]><r/>`, false},
+		{"1.1 #x1", v11 + `<!DOCTYPE r [<!ENTITY % p "&#x1;">]><r/>`, true},
+		{"1.1 #x0", v11 + `<!DOCTYPE r [<!ENTITY % p "&#0;">]><r/>`, false},
+		{"after an unread PE", `<!DOCTYPE r [<!ENTITY % p ""> %p; <!ENTITY % q "&#0;">]><r/>`, false},
+		{"general after an unread PE", `<!DOCTYPE r [<!ENTITY % p ""> %p; <!ENTITY e "&#0;">]><r/>`, false},
+		{"legal", `<!DOCTYPE r [<!ENTITY % p "&#x9;&#60;">]><r/>`, true},
+	}
+	for _, c := range cases {
+		_, err := ParseString(c.src, ParseOptions{AllowDOCTYPE: true})
+		if (err == nil) != c.ok || err != nil && !strings.Contains(err.Error(), "character code") {
+			t.Errorf("%s: err = %v, want ok %v", c.name, err, c.ok)
+		}
+	}
+	dir := writeFiles(t, map[string]string{
+		"d.dtd":   `<!ENTITY % q "&#xFFFE;">`,
+		"doc.xml": `<!DOCTYPE r SYSTEM "d.dtd"><r/>`,
+	})
+	p := filepath.Join(dir, "doc.xml")
+	src, _ := os.ReadFile(p)
+	_, err := ParseString(string(src), ParseOptions{
+		AllowDOCTYPE: true, ExternalEntities: &dirResolver{root: dir}, BaseURI: fileuri.Of(p),
+	})
+	if err == nil || !strings.Contains(err.Error(), "illegal character code U+FFFE") {
+		t.Errorf("external subset PE: err = %v, want it refused", err)
+	}
+}
