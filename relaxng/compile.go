@@ -1103,6 +1103,16 @@ func rootElement(doc *xdm.Node) *xdm.Node {
 //
 // The compiler is captured rather than the pattern, because the definition
 // cannot be compiled yet — it is the one being compiled, several frames up.
+//
+// The sub-compiler resolving it is the same grammar scope, so it shares the
+// compiled definitions and the namespace state as well as the defines. Without
+// the compiled map each resolution compiled the definition's whole body afresh,
+// and everything it reaches: DocBook 5.2 compiled its 1,922 definitions 86,752
+// times, and the fresh pointers defeated the competition check's memo, so
+// compiling took 500–650 ms against 40–50 ms shared. Without defineNs and
+// inheritedNs a recursive definition brought in by <include ns="..."> was
+// compiled the second time in no namespace, so <a xmlns="urn:x"><a/></a> was
+// rejected and an inner <a xmlns=""/> accepted.
 func (c *compiler) lazyRef(name string) pattern {
 	if c.lazy == nil {
 		c.lazy = map[string]*refPat{}
@@ -1112,13 +1122,17 @@ func (c *compiler) lazyRef(name string) pattern {
 	}
 	r := &refPat{name: name}
 	c.lazy[name] = r
+	// The ns in force here is captured now: by the time the reference is
+	// resolved, compileRefNamed has restored the one it temporarily set.
+	ns := c.inheritedNs
 	r.resolve = func() (pattern, error) {
 		sub := &compiler{
 			defines: c.defines, combined: c.combined, how: c.how,
 			parent: c.parent, opts: c.opts, includeDepth: c.includeDepth,
 			activeHrefs: c.activeHrefs,
 			expanding:   map[string]bool{}, expandingAt: map[string]int{},
-			lazy: c.lazy,
+			lazy: c.lazy, compiled: c.compiled,
+			defineNs: c.defineNs, inheritedNs: ns,
 		}
 		return sub.compileRefNamed(name)
 	}
