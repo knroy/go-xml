@@ -48,6 +48,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `xsl:import-schema` ignored `SchemaParseOptions` on the located document and on a namespace-only import | Every path, including the schemas' own includes and imports, now uses them. | [`2402bca`][2402bca] |
 | A namespace-only `xsl:import-schema` read its schema as XSD 1.0 | It is read as XSD 1.1 and honours `vc:minVersion`, like the location and inline paths. | [`987e24e`][987e24e] |
 | `-catalog` read a schema's sibling `XMLSchema.xsd` before the catalog's | The W3C's own layout failed on the sibling's DOCTYPE; the catalog now answers every spelling of the files it holds. | [`8aa5ab7`][8aa5ab7] |
+| A pattern predicate made numeric by a function call, as in `item[number(@n)]`, ran at position 1 | It is positional unless statically boolean, string or node-valued (XSLT 3.0 §5.5.3), as Saxon answers. | [`0602694`][0602694] |
+| A FLWOR join charged its inner sequence once per outer tuple against `MaxItems` | It charges what it holds, so XMark q8–q10 at factor 1 no longer fail with `XPDY0130`. | [`2514a9a`][2514a9a] |
+| With `AllowDOCTYPE` and no DOCTYPE, the parser kept two extra copies of the document | They are dropped when the root opens: 10 MB parse 335 → 230 MB allocated, 100 MB peak RSS 3.15 → 2.0 GB. | [`b88105e`][b88105e] |
 | Compact syntax refused a free-standing annotation element among definitions | DocBook's `s:ns [ ... ]` was read as a datatype name. The grammar allows it; it is now skipped like any annotation. | [`197eaad`][197eaad] |
 
 ### Changed — performance
@@ -73,6 +76,19 @@ From [docs/profiling.md](docs/profiling.md). Outputs are byte-identical on every
 | Template dispatch tried every rule in the mode per node | Rules are indexed by mode, node kind and name in linear-scan order (≈90 → 2 patterns per node on Schematron). | [`c008a63`][c008a63] |
 | Attribute normalisation was a byte-by-byte pass over the whole document | The tokenizer does it (10 MB parse CPU −29%). | [`d212f7a`][d212f7a] |
 | The duplicate-attribute check and child/attribute slice growth allocated per attribute and per child | Keys are compared without allocation and slices are cut exact-size from shared arrays; a 10 MB parse makes 371k allocations, down from 1.13 M. | [`b764d67`][b764d67] |
+| Every start tag built two maps of the namespaces in scope | Prefixes are looked up directly; `docbook.rng` parses in half the time. | [`549d8db`][549d8db] |
+| Text, attribute values and comments were one allocation each | They share arena blocks; a 10 MB parse makes 7k allocations instead of 371k. | [`aa7d1e2`][aa7d1e2] |
+| The position-tracking source copy grew by doubling; a US-ASCII document was copied before being checked | The copy is sized once and US-ASCII is checked as it streams. | [`8fb6f0b`][8fb6f0b] |
+| DTD attribute typing built `prefix:local` per declaration per element | Names are compared in place; the XSD 1.1 schema for schemas loads 30% faster. | [`68795ba`][68795ba] |
+| Stylesheet compile rebuilt each element's in-scope namespaces | One map per declaring element is shared: DocBook compile bytes −30%, CEN −25%. | [`ebd1759`][ebd1759] |
+| XSLT calls cleared context that was already absent; `current()` copied the context | Both are skipped: warm bytes CEN −16%, PEPPOL −23%, DocBook −16%. | [`b0c7b30`][b0c7b30] |
+| `//name` built and sorted every node below the context first | It is evaluated as `descendant::name` when neither step has a predicate (XMark q7 3.6× faster). | [`3cd86ee`][3cd86ee] |
+| The XQuery join cast the outer key and scanned every inner key per tuple | It casts once and range-searches sorted doubles for `< <= > >=` (q11 188 → 30 ms). | [`ba37f7c`][ba37f7c] |
+| `xslt.Serialize` wrote to files one system call per token | Output to a writer not in memory is buffered, with identical bytes. | [`a931b98`][a931b98] |
+| RELAX NG rebuilt the pattern on every start-tag close | It returns its input when nothing changed: DocBook validation 2.3× faster. | [`7ad91bd`][7ad91bd] |
+| XSD re-listed a directory per include and counted characters with no length facet | Locations are cached per load and the count is skipped. | [`3b06e4c`][3b06e4c] |
+| C14N escaped with a per-byte switch into a 4 KiB buffer | Lookup tables and a 64 KiB buffer: 10 MB canonicalisation 22 → 17 ms. | [`8e63b9d`][8e63b9d] |
+| The CLI spent about half its cold CPU on GC while the heap only grew | It runs at GOGC=200 unless `GOGC` is set: DocBook cold CPU −33%, peak RSS 114 → 161 MB. | [`5fbea36`][5fbea36] |
 
 ### Fixed — release process
 
@@ -1221,6 +1237,22 @@ here so every entry in this file sits under a release.
 [197eaad]: https://github.com/knroy/go-xml/commit/197eaad
 [cec5f6f]: https://github.com/knroy/go-xml/commit/cec5f6f
 [416ee50]: https://github.com/knroy/go-xml/commit/416ee50
+[0602694]: https://github.com/knroy/go-xml/commit/0602694
+[2514a9a]: https://github.com/knroy/go-xml/commit/2514a9a
+[b88105e]: https://github.com/knroy/go-xml/commit/b88105e
+[549d8db]: https://github.com/knroy/go-xml/commit/549d8db
+[aa7d1e2]: https://github.com/knroy/go-xml/commit/aa7d1e2
+[8fb6f0b]: https://github.com/knroy/go-xml/commit/8fb6f0b
+[68795ba]: https://github.com/knroy/go-xml/commit/68795ba
+[ebd1759]: https://github.com/knroy/go-xml/commit/ebd1759
+[b0c7b30]: https://github.com/knroy/go-xml/commit/b0c7b30
+[3cd86ee]: https://github.com/knroy/go-xml/commit/3cd86ee
+[ba37f7c]: https://github.com/knroy/go-xml/commit/ba37f7c
+[a931b98]: https://github.com/knroy/go-xml/commit/a931b98
+[7ad91bd]: https://github.com/knroy/go-xml/commit/7ad91bd
+[3b06e4c]: https://github.com/knroy/go-xml/commit/3b06e4c
+[8e63b9d]: https://github.com/knroy/go-xml/commit/8e63b9d
+[5fbea36]: https://github.com/knroy/go-xml/commit/5fbea36
 [8aa5ab7]: https://github.com/knroy/go-xml/commit/8aa5ab7
 [740c22a]: https://github.com/knroy/go-xml/commit/740c22a
 [2402bca]: https://github.com/knroy/go-xml/commit/2402bca

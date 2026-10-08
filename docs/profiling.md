@@ -8,7 +8,9 @@ copy of the tree.
 
 **Status:** the analysis was made on `dev` at `4e0496f`. Tier 1 (T1–T10),
 T11–T16, T18, T19 and the correctness bugs B1–B4 have since landed; see
-[Implementation status](#implementation-status). Profiling ran on the same
+[Implementation status](#implementation-status). A second round re-profiled
+the result and its fixes have landed as well; see
+[Round 2](#round-2-after-the-fixes-73a2963). Profiling ran on the same
 machine as the benchmark, with five profiles running at once, so wall times
 are noisy (±2×). The claims rest on allocation counts, which are
 deterministic, on profile shares, and on A/B runs done back to back. Each
@@ -407,14 +409,44 @@ R6, R7, R11) took a cold 10 MB transform to xsltproc's CPU time.
 T23 (RELAX NG hash-consing) is not worth it yet: R10 removes most of B2's
 cost in about 60 lines, and a cold run is dominated by the compile.
 
+### Round 2 implementation status
+
+Landed on `dev`, each with a test that fails without it; every suite and
+corpus keeps its counts and failing names, and every workload output is
+byte-identical.
+
+| # | Commit | Measured after landing (against `afb3fae`) |
+|---|---|---|
+| R1 | `549d8db` | `docbook.rng` parse 9.7 → 4.6 ms, 51.7k → 0.5k allocations |
+| R2 | `ebd1759` | compile bytes DocBook −30%, CEN −25%; retained stylesheet CEN 19.7 → 17.0 MB |
+| R3 | `3cd86ee` | XMark 0.1 q7 99.6 → 27.7 ms, q6 42.6 → 14.2; factor 1 q7 6.1 → 0.45 s |
+| R4 | `ba37f7c` | q11 188 → 30 ms, q12 162 → 27 ms |
+| R5 | `a931b98` | CLI q10 `-o` 0.34–0.62 → 0.12–0.14 s |
+| R6 | `5fbea36` | GOGC=200 chosen over pausing around parse/compile: cold CPU summed over four workloads 1,025 → 748 ms; DocBook peak RSS 114 → 161 MB |
+| R7 | `b88105e` | 10 MB parse 335 → 230 MB allocated; 100 MB peak RSS 3.15 → 2.0 GB |
+| R8 | `b0c7b30` | warm bytes CEN −16%, PEPPOL −23%, xr −23%, DocBook −16%; DocBook warm wall 54.7 → 37.5 ms per item |
+| R9 | `68795ba` | XSD 1.1 schema for schemas load 4.6 → 3.2 ms |
+| R10 | `7ad91bd` | 40-document validation pass 11.5 → 4.9 ms CPU, allocations ÷5 |
+| R11 | `aa7d1e2` (with `8fb6f0b`, `d2d59ab`) | 10 MB parse 371k → 7k allocations, CPU about 175 → 135 ms |
+| R12 | `8e63b9d` | 10 MB C14N 22.3 → 17 ms; to a file 28.6–34.5 → 19.4–20 ms |
+| R13 | `3b06e4c` | five includes in a 2,000-file directory 20.5 → 3.6 ms; warm validation −9% |
+
+Not landed: E1 (needs a new unexported `xpath.Context` field; deferred), E2
+(an element-name index cannot be invalidated soundly while `xdm.Node`'s
+`Children`, `Name` and `Parent` are exported fields), E3 (the restriction
+checks are 6–9% of an XSD 1.1 load, so bitsets cannot reach the estimate),
+P5 (1,024-node chunks: within noise, +0.28 GB peak RSS at 100 MB), `//@a`
+fusion (needs a new walk; one workload uses it) and `//x[p]` fusion (a
+different error can win with nested `x`, so it is not equivalent).
+
 ### Bugs found in round 2
 
 | # | Bug | Status |
 |---|---|---|
-| X1 | A FLWOR join charges \|S\| items per outer tuple against `MaxItems` (5,000,000, not configurable), so XMark q8, q9, q11 and q12 fail at factor 1 with `XPDY0130`. The nested loop it replaced charged the same | open; R4's accounting fix (charge S once) resolves it |
-| X2 | A pattern predicate that is numeric through a function call, as in `item[number(@n)]`, is evaluated with position fixed at 1, so it matches `@n = 1` rather than position `@n`. Saxon-HE 12.10 gives the positional answer | open (`xslt/pattern.go:1000`) |
+| X1 | A FLWOR join charges \|S\| items per outer tuple against `MaxItems` (5,000,000, not configurable), so XMark q8, q9, q11 and q12 fail at factor 1 with `XPDY0130`. The nested loop it replaced charged the same | the join part fixed in `2514a9a` (q8–q10 at factor 1 now run); q11 and q12 really keep ~12 M tuples and still exceed the non-configurable `MaxItems` |
+| X2 | A pattern predicate that is numeric through a function call, as in `item[number(@n)]`, is evaluated with position fixed at 1, so it matches `@n = 1` rather than position `@n`. Saxon-HE 12.10 gives the positional answer | fixed in `0602694` |
 | X3 | `-catalog` read a schema's sibling `XMLSchema.xsd` before the catalog's, and that copy's DOCTYPE was refused | fixed in `8aa5ab7` |
-| X4 | With `AllowDOCTYPE` set and no DOCTYPE, the parser keeps two extra full copies of the document; `fn:doc` and `fn:parse-xml` always set it | open; R7 |
+| X4 | With `AllowDOCTYPE` set and no DOCTYPE, the parser keeps two extra full copies of the document; `fn:doc` and `fn:parse-xml` always set it | fixed in `b88105e` (R7) |
 
 The benchmark harness has an inconsistency: its cold parse helper sets
 `AllowDOCTYPE` and its warm loop does not, so the two columns time different
