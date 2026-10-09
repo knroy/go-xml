@@ -913,6 +913,10 @@ func (r *textRun) flush(spaces *spaceTable) {
 type spaceTable struct {
 	m     map[string]string
 	arena xml.Arena
+	// byLen holds the last whitespace run of each length. In an indented
+	// document that is nearly always the next run of that length too, so a
+	// compare replaces the hash and map probe.
+	byLen [maxSpaceLen + 1]string
 }
 
 // maxSpaceTable and maxSpaceLen bound the table: a run longer than
@@ -929,10 +933,15 @@ func (t *spaceTable) text(b []byte) string {
 	if len(b) > maxSpaceLen || !onlySpace(b) {
 		return t.arena.String(b)
 	}
+	if s := t.byLen[len(b)]; s == string(b) {
+		return s
+	}
 	if s, ok := t.m[string(b)]; ok {
+		t.byLen[len(b)] = s
 		return s
 	}
 	s := string(b)
+	t.byLen[len(b)] = s
 	if len(t.m) < maxSpaceTable {
 		if t.m == nil {
 			t.m = make(map[string]string)
