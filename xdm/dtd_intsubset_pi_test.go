@@ -78,14 +78,14 @@ func TestDeclarationsInsideUnparsedRegions(t *testing.T) {
 	}
 	if b := r.Attr("", "b"); b == nil {
 		t.Error("default holding > was lost")
-	} else if b.value != "x>y" {
-		t.Errorf("default holding > = %q, want %q", b.value, "x>y")
+	} else if b.Value() != "x>y" {
+		t.Errorf("default holding > = %q, want %q", b.Value(), "x>y")
 	}
 	tree, err = parse("<!DOCTYPE r [<?p <!ELEMENT r (s)>?>]><r> <s/> </r>")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := len(tree.Root.ChildElements()[0].children); n != 3 {
+	if n := len(kids(tree.Root.ChildElements()[0])); n != 3 {
 		t.Errorf("r has %d children, want 3: an ELEMENT inside a PI made its white space ignorable", n)
 	}
 

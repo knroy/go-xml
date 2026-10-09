@@ -1,23 +1,19 @@
 package xdm
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/internal/genid"
 )
 
-// TestGenerateIDAcrossTreeStride pins the collision fn:generate-id() had while
-// it was "N" plus Order(): Order folds the tree id and the document-order
-// index into one integer with a stride of 2^20, so a tree with more order
-// slots than that ran into the next tree's range, and node 2^20 of tree t
-// answered the same id as node 0 of tree t+1.
-func TestGenerateIDAcrossTreeStride(t *testing.T) {
-	t1, t2 := &Tree{id: 7}, &Tree{id: 8}
-	a := &Node{kind: KindElement, tree: t1, order: treeIDStride}
-	b := &Node{kind: KindDocument, tree: t2}
-	if a.Order() != b.Order() {
-		t.Fatalf("precondition: Order() %d and %d no longer overlap; the stride changed", a.Order(), b.Order())
-	}
+// TestGenerateIDAcrossTrees pins the collision fn:generate-id() once had
+// while it folded the tree id and the position into one integer: node 2^20 of
+// tree t answered the same id as node 0 of tree t+1. The id spells the two
+// apart, so nodes at the same position of two trees differ.
+func TestGenerateIDAcrossTrees(t *testing.T) {
+	t1, t2 := NewTree(), NewTree()
+	a, b := t1.Root, t2.Root
 	ida, idb := genid.Of(a), genid.Of(b)
 	if ida == idb {
 		t.Fatalf("generate-id collides across trees: both nodes answered %q", ida)
@@ -29,7 +25,7 @@ func TestGenerateIDAcrossTreeStride(t *testing.T) {
 			}
 		}
 	}
-	if ida != "N7x1048576" {
-		t.Errorf("generate-id = %q, want N7x1048576", ida)
+	if want := "N" + strconv.FormatInt(t1.ident(), 10) + "x0"; ida != want {
+		t.Errorf("generate-id = %q, want %q", ida, want)
 	}
 }

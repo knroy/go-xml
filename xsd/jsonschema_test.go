@@ -43,13 +43,14 @@ func TestSchemaForJSONAnnotates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parsing %s: %v", tc.in, err)
 		}
-		if err := schema.Validate(tree.Root, ValidateOptions{
-			AnnotateInPlace: true, SkipIDConstraints: true,
-		}); err != nil {
+		doc, err := schema.ValidateCopy(tree.Root, ValidateOptions{
+			SkipIDConstraints: true,
+		})
+		if err != nil {
 			t.Errorf("%s should be valid against the schema for JSON: %v", tc.in, err)
 			continue
 		}
-		root := tree.Root.FirstChild()
+		root := doc.FirstChild()
 		if root.TypeAnnotation() != tc.root {
 			t.Errorf("%s: root annotated %q, want %q", tc.in, root.TypeAnnotation(), tc.root)
 		}
@@ -114,12 +115,13 @@ func TestSchemaForJSONWithinMapAnnotations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := schema.Validate(tree.Root, ValidateOptions{
-		AnnotateInPlace: true, SkipIDConstraints: true,
-	}); err != nil {
+	doc, err := schema.ValidateCopy(tree.Root, ValidateOptions{
+		SkipIDConstraints: true,
+	})
+	if err != nil {
 		t.Fatalf("a map of every kind should be valid: %v", err)
 	}
-	root := tree.Root.FirstChild()
+	root := doc.FirstChild()
 	if root.TypeAnnotation() != j+"mapType" {
 		t.Errorf("root annotated %q, want %q", root.TypeAnnotation(), j+"mapType")
 	}

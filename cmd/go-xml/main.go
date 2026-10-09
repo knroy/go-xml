@@ -403,25 +403,25 @@ func compileStylesheet(path string, resolver *xslt.FileResolver, schemas xsd.Res
 }
 
 // validateSource assesses a source document against the stylesheet's imported
-// schema and annotates it, which is what makes a validated <price> atomise to
-// an xs:decimal rather than to xs:untypedAtomic. Without AnnotateInPlace the
-// schema would only check the document, and the stylesheet would see it
-// untyped. In place rather than through ValidateCopy because the tree was
-// parsed here and nothing else holds it, and because a copy would carry no
-// source positions for gx:line-number under -track-positions.
+// schema and returns its typed copy, which is what makes a validated <price>
+// atomise to an xs:decimal rather than to xs:untypedAtomic: the document
+// itself is only read, and the stylesheet would see it untyped.
 // Lax assessment skips a document element the schema does not declare, as
-// validation="lax" does in a stylesheet.
-func validateSource(schema *xsd.Schema, doc *xdm.Node, mode string) error {
-	opts := xsd.ValidateOptions{AnnotateInPlace: true}
+// validation="lax" does in a stylesheet, and returns doc as it is.
+func validateSource(schema *xsd.Schema, doc *xdm.Node, mode string) (*xdm.Node, error) {
 	if mode == "strict" {
-		return schema.Validate(doc, opts)
+		return schema.ValidateCopy(doc, xsd.ValidateOptions{})
 	}
 	for c := range doc.Children() {
 		if c.Kind() == xdm.KindElement {
-			return schema.ValidateElementLax(c, opts)
+			typed, err := schema.ValidateElementLaxCopy(c, xsd.ValidateOptions{})
+			if err != nil {
+				return nil, err
+			}
+			return typed.Parent(), nil
 		}
 	}
-	return nil
+	return doc, nil
 }
 
 // The usage strings of the two limit flags the transform and the xquery
@@ -497,23 +497,25 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		// that gates fn:doc and xsl:include, so an inclusion is confined to
 		// the -allow-dir roots on exactly the same terms.
 		if cfg.xinclude {
-			if err := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
+			included, err := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
 				Resolver: cfg.resolver,
 				// The included documents are held to the same limits as the
 				// including one: an inclusion becomes part of the document,
 				// so it must not be a way around a bound the document itself
 				// was held to.
 				Parse: popts,
-			}); err != nil {
+			})
+			if err != nil {
 				return err
 			}
-		}
-		if cfg.validate != "" {
-			if err := validateSource(sheet.Schema(), tree.Root, cfg.validate); err != nil {
-				return err
-			}
+			tree = included
 		}
 		root = tree.Root
+		if cfg.validate != "" {
+			if root, err = validateSource(sheet.Schema(), root, cfg.validate); err != nil {
+				return err
+			}
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)

@@ -2,8 +2,8 @@ package xdmbuild
 
 import (
 	"fmt"
+	"slices"
 	"sort"
-	"unsafe"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -22,7 +22,9 @@ type Builder struct {
 	open *xdm.Node
 	// parent chains open elements so that nested construction works.
 	parent *Builder
-	tree   *xdm.Tree
+	// frag holds the parentless nodes this builder makes at the top level of
+	// its sequence, made on first use.
+	frag *xdm.Tree
 	// declared records the prefixes xsl:namespace has bound on the open
 	// element, and to what.
 	//
@@ -63,38 +65,6 @@ type Builder struct {
 	// the namespace and type rules a copy is made under. It is never nil: New
 	// requires one, and a nested builder inherits its parent's.
 	policy Policy
-
-	// textBuf is the growable backing array for the trailing text child of
-	// open, and textNode is the node it belongs to. Together they make a run
-	// of adjacent text appends linear rather than quadratic.
-	//
-	// "last.Value += s" allocated a fresh string of the full merged length on
-	// every piece, so merging n pieces copied O(n^2) bytes: a 640 kB document
-	// of 40000 text nodes spent 7.9 GB of allocation to produce 400 kB of
-	// text. The pieces are not under the stylesheet author's control -- a
-	// three-line identity-style transform over a document with many small
-	// text nodes reaches it -- so the cost is driven by input data.
-	//
-	// The buffer is an accumulator, not a deferred write: textNode.Value is
-	// reassigned from it on every append, so the node is fully correct at all
-	// times. That is required rather than merely tidy, because there is no
-	// "close element" call at which a deferred value could be flushed --
-	// StartElement hands back a sub-builder and the element is already
-	// attached to its parent, so XPath in the body, fixupNamespaces and
-	// validation.assess all read the node while it is still being extended.
-	// Correctness therefore cannot depend on a flush, and none is needed: the
-	// saving comes from append's geometric growth, which copies each byte
-	// O(log n) times instead of O(n).
-	//
-	// The string conversion is what makes this work at all. A plain
-	// string(textBuf) copies the whole run on every append, which measures at
-	// 7,778 MB against the 7,946 MB of the concatenation it replaced -- it
-	// gives back essentially the entire saving. So the value aliases the
-	// buffer through unsafe.String, exactly as strings.Builder.String does.
-	// Their pairing is kept too: appendTextTo asserts the invariant the
-	// aliasing rests on, in the spirit of strings.Builder's copyCheck.
-	textBuf  []byte
-	textNode *xdm.Node
 
 	// refused latches the first budget refusal CountNodes returned, so that
 	// construction stops at the node that crossed the bound rather than
@@ -158,7 +128,7 @@ func New(p Policy) *Builder {
 	if p == nil {
 		panic("xdmbuild.New: nil Policy")
 	}
-	return &Builder{tree: xdm.NewTree(), policy: p, refused: new(error)}
+	return &Builder{policy: p, refused: new(error)}
 }
 
 // AppendNode adds a node to the current output position.
@@ -196,10 +166,7 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 		// A document node used as the content of an element contributes its
 		// children, not itself (5.7.1): a result tree may not contain a
 		// document node below the root.
-		kids := make([]*xdm.Node, n.NumChildren())
-		for i := range kids {
-			kids[i] = n.ChildAt(i)
-		}
+		kids := slices.Collect(n.Children())
 		for _, ch := range kids {
 			b.AppendNode(ch)
 		}
@@ -218,12 +185,9 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 		return
 	}
 	if b.open != nil {
-		// Copying is only needed when the node is about to be re-parented:
-		// AppendChild rewrites Parent and tree pointers, so adopting a source
-		// node in place would mutate the source document.
-		n = b.detach(n)
-		Rebase(n, b.open.BaseURI())
-		b.open.AppendChild(n)
+		// The node becomes content as a copy: a tree is built in document
+		// order, so nothing already built can be moved into it.
+		b.appendCopy(n)
 		return
 	}
 	// At the top of a sequence nothing is re-parented, so the node itself is
@@ -317,21 +281,24 @@ func CountSubtree(n *xdm.Node) int {
 	return c
 }
 
-func (b *Builder) detach(n *xdm.Node) *xdm.Node {
-	if n == nil || (n.Tree() == nil && n.Parent() == nil) {
-		return n
+func (b *Builder) appendCopy(n *xdm.Node) {
+	// A node a constructor has just made, which no tree holds, was adopted
+	// rather than copied before trees were built in order, and was charged
+	// when it was made; a node that belongs to a tree is charged for its
+	// copy here. Counted before the copy is made, so a refusal allocates
+	// none of it.
+	fresh := n.Tree() == nil && n.Parent() == nil
+	if !fresh && !b.countNodes(CountSubtree(n)) {
+		return
 	}
-	// Counted before the copy is made, so a refusal allocates none of it.
-	// The walk is over the SOURCE, which already exists, so it costs a
-	// traversal rather than memory.
-	if !b.countNodes(CountSubtree(n)) {
-		return n
-	}
-	c := DeepCopy(n)
-	if n.Kind() == xdm.KindElement && n.Parent() != nil {
+	c := b.open.AppendCopy(n)
+	if fresh {
+		// An adopted node kept its type environments; the copy does too.
+		xdm.CopyTypeEnvs(c, n)
+	} else if n.Kind() == xdm.KindElement && n.Parent() != nil {
 		keepInherited(c, n)
 	}
-	return c
+	Rebase(c, b.open.BaseURI())
 }
 
 // keepInherited gives c, a copy of n about to be re-parented, the bindings n
@@ -344,8 +311,8 @@ func (b *Builder) detach(n *xdm.Node) *xdm.Node {
 func keepInherited(c, n *xdm.Node) {
 	scope := n.InScopeNamespaces()
 	have := make(map[string]bool, c.NumNamespaceDecls())
-	for ns := range c.NamespaceDecls() {
-		have[ns.Name().Local] = true
+	for prefix := range c.DeclaredNamespaces() {
+		have[prefix] = true
 	}
 	prefixes := make([]string, 0, len(scope))
 	for p := range scope {
@@ -357,65 +324,6 @@ func keepInherited(c, n *xdm.Node) {
 	for _, p := range prefixes {
 		c.AddNamespace(p, scope[p])
 	}
-}
-
-// appendTextTo extends the text node n by s, keeping n.Value correct.
-//
-// The pairing of b.textNode with b.textBuf is an INVARIANT rather than a hint,
-// so a mismatch is a bug and is reported as one. Only two places in this file
-// touch either field, and both set them together: AppendText's new-node branch
-// creates n with Value = s and seeds the buffer with the same s, and this
-// function appends to both. Nothing else in the library writes a text node's
-// Value -- only attribute and namespace values are ever reassigned -- so the
-// buffer cannot fall out of step with the node it belongs to.
-//
-// Node.Value is an exported field, so a caller outside this package could in
-// principle assign to a half-built text node and break the pairing. That is
-// not a supported thing to do to a node the builder still owns, and the
-// length check names it as the misuse it is rather than papering over it.
-//
-// n is always b.textNode for the same structural reason. A Builder has one
-// open element for its whole life, because StartElement returns a NEW builder
-// rather than re-pointing this one, and every text child of that element is
-// created by the branch in AppendText that sets b.textNode. So the trailing
-// text child this function is handed is necessarily the node the pairing names.
-//
-// This was written first as a silent recovery -- reseed the buffer from
-// n.Value and carry on -- which was wrong twice over. It was unreachable, so
-// the [:0:0] that made it correct had no test that could fail and a sabotage
-// of it passed the whole suite green; and had it ever been reached it would
-// have concealed the very breakage it was reacting to. strings.Builder faces
-// the same choice for the same unsafe.String aliasing and answers it the same
-// way, with copyCheck panicking on the one misuse that breaks its invariant.
-//
-// The panic is therefore a real assertion: it cannot fire for any input, only
-// for a future edit that adds a third writer of these fields or lets one
-// builder append to another's open element. Failing loudly there is much the
-// better outcome, because the alternative is a string handed out earlier
-// mutating afterwards -- silently wrong output from an XML toolchain, with a
-// correct-looking tree.
-func (b *Builder) appendTextTo(n *xdm.Node, s string) {
-	if s == "" {
-		return
-	}
-	if b.textNode != n || len(b.textBuf) != len(n.Value()) {
-		panic("xdmbuild: text accumulator does not match the node being " +
-			"extended; b.textNode/b.textBuf must be set together, and only " +
-			"the builder that owns an element may append text to it")
-	}
-	b.textBuf = append(b.textBuf, s...)
-	// unsafe.String aliases the buffer rather than copying it, and that is
-	// load-bearing rather than a micro-optimisation: measured on the test in
-	// this package, a plain string(b.textBuf) here costs 7,778 MB against the
-	// 7,946 MB of the "Value += s" this change replaced, so copying once per
-	// append restores essentially the entire quadratic. It is the same call
-	// strings.Builder.String makes, for the same reason.
-	//
-	// It is sound because the bytes under a string already handed out are
-	// never written again: append only extends past them, and when it
-	// reallocates it abandons the old array intact to whatever still aliases
-	// it. TestAppendTextSnapshotsAreStable holds that to account.
-	b.textNode.SetValue(unsafe.String(unsafe.SliceData(b.textBuf), len(b.textBuf)))
 }
 
 // AppendText adds text, merging with a preceding text node so that the XDM
@@ -440,30 +348,19 @@ func (b *Builder) AppendText(s string) {
 		return
 	}
 	if b.open != nil {
-		if k := b.open.NumChildren(); k > 0 {
-			if last := b.open.ChildAt(k - 1); last.Kind() == xdm.KindText {
-				b.appendTextTo(last, s)
-				return
-			}
+		if last := b.open.LastChild(); last != nil && last.Kind() == xdm.KindText {
+			// The store appends in place while nothing has been stored after
+			// the run, so a run of n pieces costs its bytes, not n copies of
+			// it.
+			last.AppendValue(s)
+			return
 		}
 		// A merge into the run above makes no node and costs nothing; only
 		// this branch, which starts a new one, is a node to charge.
 		if !b.countNodes(1) {
 			return
 		}
-		n := xdm.NewNode(xdm.KindText, xdm.QName{}, s)
-		b.open.AppendChild(n)
-		// Start a run on the new node rather than only on the second piece,
-		// so that the buffer holds the first piece too and the run never has
-		// to re-copy it.
-		//
-		// [:0:0] rather than [:0], and the difference is a correctness bug
-		// rather than a style choice: the previous run's Value still aliases
-		// the old array, so reusing it writes this node's text over a string
-		// already handed out. Zeroing the capacity forces a fresh allocation.
-		// TestAppendTextMergeShapes/run_resumed_after_element fails without
-		// it -- the first text node reads back as the second's text.
-		b.textNode, b.textBuf = n, append(b.textBuf[:0:0], s...)
+		b.open.AppendText(s)
 		return
 	}
 	// At the top level of a sequence constructor the text nodes stay
@@ -476,7 +373,7 @@ func (b *Builder) AppendText(s string) {
 	if !b.countNodes(1) {
 		return
 	}
-	b.items = append(b.items, xdm.NewNode(xdm.KindText, xdm.QName{}, s))
+	b.items = append(b.items, b.newItem(xdm.KindText, xdm.QName{}, s))
 }
 
 // AppendValue adds an atomic value to the output sequence.
@@ -581,7 +478,7 @@ func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
 		if !b.countNodes(1) {
 			return b.Refused()
 		}
-		n := xdm.NewNode(xdm.KindAttribute, name, value)
+		n := b.newItem(xdm.KindAttribute, name, value)
 		n.ApplyTyping(typing)
 		fixupOrphanAttrPrefix(n)
 		b.items = append(b.items, n)
@@ -589,7 +486,7 @@ func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
 	}
 	// Adding an attribute after children exist is an error the spec calls out,
 	// because it usually means the stylesheet's instruction order is wrong.
-	if b.open.NumChildren() > 0 {
+	if b.open.FirstChild() != nil {
 		return b.policy.Err(FaultAttrAfterChild,
 			fmt.Sprintf("attribute %q added after the element already has children",
 				name.Lexical()))
@@ -613,10 +510,9 @@ func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
 	if !b.countNodes(1) {
 		return b.Refused()
 	}
-	attr := xdm.NewNode(xdm.KindAttribute, name, value)
+	attr := b.open.AppendAttr(name, value)
 	attr.ApplyTyping(typing)
-	b.open.AddAttr(attr)
-	fixupAttrPrefix(b.open, b.open.AttrAt(b.open.NumAttrs()-1))
+	fixupAttrPrefix(b.open, attr)
 	return nil
 }
 
@@ -682,10 +578,10 @@ func fixupAttrPrefix(el, attr *xdm.Node) {
 		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		for ns := range cur.NamespaceDecls() {
-			if ns.Value() == attr.Name().URI && ns.Name().Local != "" {
-				if uri, ok := el.LookupPrefix(ns.Name().Local); ok && uri == attr.Name().URI {
-					setPrefix(attr, ns.Name().Local)
+		for nsPrefix, nsURI := range cur.DeclaredNamespaces() {
+			if nsURI == attr.Name().URI && nsPrefix != "" {
+				if uri, ok := el.LookupPrefix(nsPrefix); ok && uri == attr.Name().URI {
+					setPrefix(attr, nsPrefix)
 					return
 				}
 			}
@@ -731,7 +627,7 @@ func (b *Builder) AddNamespace(prefix, uri string) error {
 		if !b.countNodes(1) {
 			return b.Refused()
 		}
-		b.items = append(b.items, xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: prefix}, uri))
+		b.items = append(b.items, b.newItem(xdm.KindNamespace, xdm.QName{Local: prefix}, uri))
 		return nil
 	}
 	// XTDE0440: "the result sequence contains a namespace node with no name
@@ -764,13 +660,7 @@ func (b *Builder) AddNamespace(prefix, uri string) error {
 	if b.open.Name().Prefix == prefix && b.open.Name().URI != uri {
 		setPrefix(b.open, b.freshPrefix(prefix))
 	}
-	for ns := range b.open.NamespaceDecls() {
-		if ns.Name().Local == prefix {
-			ns.SetValue(uri)
-			return nil
-		}
-	}
-	b.open.AddNamespace(prefix, uri)
+	b.open.SetNamespaceDecl(prefix, uri)
 	return nil
 }
 
@@ -810,8 +700,8 @@ func (b *Builder) freshPrefix(want string) string {
 	for i := 0; ; i++ {
 		p := fmt.Sprintf("%s_%d", want, i)
 		taken := false
-		for ns := range b.open.NamespaceDecls() {
-			if ns.Name().Local == p {
+		for prefix := range b.open.DeclaredNamespaces() {
+			if prefix == p {
 				taken = true
 				break
 			}
@@ -886,10 +776,42 @@ func (b *Builder) StartElement(name xdm.QName) *Builder {
 	// set, so the loop driving the construction stops on its next check and
 	// nothing further is appended to it.
 	b.countNodes(1)
-	el := xdm.NewNode(xdm.KindElement, name, "")
-	b.AppendNode(el)
-	return &Builder{open: el, parent: b, tree: b.tree, policy: b.policy,
+	b.lastAtomic = false
+	var el *xdm.Node
+	if b.open != nil {
+		// A constructed element's base URI is its parent's until something
+		// says otherwise.
+		el = b.open.AppendElementInheriting(name)
+	} else {
+		el = b.newItem(xdm.KindElement, name, "")
+		b.items = append(b.items, el)
+	}
+	return &Builder{open: el, parent: b, policy: b.policy,
 		refused: b.refused}
+}
+
+// ReplaceOpen puts n, a parentless node, in place of the element this builder
+// is building: in its parent's content, or as the last item of the parent's
+// sequence. Nothing may have been added to the parent since the element was
+// started. It exists to swap a constructed element for its validated, typed
+// copy, and returns the node now in that place.
+func (b *Builder) ReplaceOpen(n *xdm.Node) *xdm.Node {
+	p := b.parent
+	if p.open != nil {
+		n = p.open.ReplaceLastChild(n)
+	} else {
+		p.items[len(p.items)-1] = n
+	}
+	b.open = n
+	return n
+}
+
+// newItem makes a parentless node at the top level of the sequence.
+func (b *Builder) newItem(kind xdm.NodeKind, name xdm.QName, value string) *xdm.Node {
+	if b.frag == nil {
+		b.frag = xdm.NewFragment()
+	}
+	return b.frag.NewRoot(kind, name, value)
 }
 
 // Sequence returns the accumulated items.
@@ -971,6 +893,13 @@ func (b *Builder) ToTree() *xdm.Node {
 	// differently, so it is the policy's to answer. See Policy.DropEmptyText.
 	dropEmpty := b.policy != nil && b.policy.DropEmptyText()
 	emitted := 0
+	// A parentless attribute in the sequence goes on the document node, and
+	// attributes precede a node's children.
+	for _, it := range b.items {
+		if n, ok := it.(*xdm.Node); ok && n.Kind() == xdm.KindAttribute {
+			tree.Root.AppendCopy(n)
+		}
+	}
 	for _, it := range b.items {
 		if sep != nil && emitted > 0 {
 			// A zero-length separator inserts nothing, which is exactly what
@@ -979,9 +908,9 @@ func (b *Builder) ToTree() *xdm.Node {
 			// is cleared below.
 			if *sep != "" {
 				if last := tree.Root.LastChild(); last != nil && last.Kind() == xdm.KindText {
-					last.SetValue(last.Value() + *sep)
+					last.AppendValue(*sep)
 				} else {
-					tree.Root.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, *sep))
+					tree.Root.AppendText(*sep)
 				}
 			}
 			prevAtomic = false
@@ -990,6 +919,9 @@ func (b *Builder) ToTree() *xdm.Node {
 			emitted++
 		}
 		if n, ok := it.(*xdm.Node); ok {
+			if n.Kind() == xdm.KindAttribute {
+				continue
+			}
 			if n.Kind() == xdm.KindText && n.Value() == "" {
 				// Section 5.7.1 removes zero-length text nodes when
 				// constructing complex content, and a variable's implicit
@@ -1044,7 +976,7 @@ func (b *Builder) ToTree() *xdm.Node {
 			last := tree.Root.LastChild()
 			switch {
 			case prevAtomic:
-				last.SetValue(last.Value() + " " + text)
+				last.AppendValue(" " + text)
 			case last != nil && last.Kind() == xdm.KindText:
 				// The child beside it is text and XDM forbids two adjacent
 				// text nodes, so this value joins it rather than becoming a
@@ -1053,9 +985,9 @@ func (b *Builder) ToTree() *xdm.Node {
 				// above, or at the text a nested document node contributed,
 				// which "document {'abc', document {'def'}, 'ghi'}" ends with
 				// and which Constr-cont-document-5 counts as one child.
-				last.SetValue(last.Value() + text)
+				last.AppendValue(text)
 			case text != "" || !dropEmpty:
-				tree.Root.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, text))
+				tree.Root.AppendText(text)
 			default:
 				// Under XQuery's rule a lone zero-length atomic starts no
 				// child. The two arms above still take it -- joining "" onto
@@ -1165,7 +1097,7 @@ func (b *Builder) AppendOpaque(it xdm.Item) error {
 func appendMergingText(parent, n *xdm.Node, dropEmpty bool) {
 	if n.Kind() == xdm.KindText {
 		if last := parent.LastChild(); last != nil && last.Kind() == xdm.KindText {
-			last.SetValue(last.Value() + n.Value())
+			last.AppendValue(n.Value())
 			return
 		}
 		// Under XQuery's rule a zero-length text node is dropped rather than
@@ -1185,5 +1117,5 @@ func appendMergingText(parent, n *xdm.Node, dropEmpty bool) {
 			return
 		}
 	}
-	parent.AppendChild(DeepCopy(n))
+	parent.AppendCopy(n)
 }

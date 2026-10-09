@@ -1,7 +1,5 @@
 package relaxng
 
-import "github.com/knroy/go-xml/v2/xdm"
-
 // Datatypes, values and annotations in the compact syntax.
 
 // parseDatatypeName reads a datatype name and whatever follows it.
@@ -16,7 +14,7 @@ import "github.com/knroy/go-xml/v2/xdm"
 // "xsd:string "abc"" is a <value> of that type. The token after the name
 // decides, which is why they are read together rather than by three callers
 // that would each have to look ahead.
-func (p *compactParser) parseDatatypeName() (*xdm.Node, error) {
+func (p *compactParser) parseDatatypeName() (*cnode, error) {
 	prefix, local := p.tok.prefix, p.tok.text
 	library := ""
 	if p.tok.kind == tokCName {
@@ -49,14 +47,14 @@ func (p *compactParser) parseDatatypeName() (*xdm.Node, error) {
 			return nil, err
 		}
 		ex := p.b.el("except")
-		ex.AppendChild(inner)
-		n.AppendChild(ex)
+		ex.add(inner)
+		n.add(ex)
 	}
 	return n, nil
 }
 
 // parseParams reads `{ name = "value" ... }`.
-func (p *compactParser) parseParams(n *xdm.Node) error {
+func (p *compactParser) parseParams(n *cnode) error {
 	if err := p.expect("{"); err != nil {
 		return err
 	}
@@ -88,7 +86,7 @@ func (p *compactParser) parseParams(n *xdm.Node) error {
 		param := p.b.el("param")
 		p.b.attr(param, "name", name)
 		p.b.text(param, value)
-		n.AppendChild(param)
+		n.add(param)
 	}
 	return p.expect("}")
 }
@@ -100,7 +98,7 @@ func (p *compactParser) parseParams(n *xdm.Node) error {
 // one matters: an unqualified <value> takes the token type by the compiler's
 // own default, and asserting it here would be asserting a rule twice, in two
 // places that could disagree.
-func (p *compactParser) parseValue(library, typeName string) (*xdm.Node, error) {
+func (p *compactParser) parseValue(library, typeName string) (*cnode, error) {
 	text, err := p.parseLiteralValue()
 	if err != nil {
 		return nil, err

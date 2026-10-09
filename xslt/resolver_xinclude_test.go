@@ -128,7 +128,8 @@ func TestXIncludeThroughResolverCannotReachNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &FileResolver{Roots: []string{root}}
-	if err := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{Resolver: r}); err == nil {
+	if out, err := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{Resolver: r}); err == nil {
+		tree = out
 		t.Error("an http:// inclusion succeeded")
 	}
 	if n := atomic.LoadInt32(&hits); n != 0 {
@@ -166,7 +167,11 @@ func TestXIncludeFallbackDoesNotBypassConfinement(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &FileResolver{Roots: []string{root}}
-	err = xdm.ProcessXInclude(tree, xdm.XIncludeOptions{Resolver: r})
+	if out, perr := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{Resolver: r}); perr == nil {
+		tree = out
+	} else {
+		err = perr
+	}
 	// Whether it errors or not, the secret must not be in the tree.
 	if strings.Contains(nodeText(tree.Root), "private key") {
 		t.Fatal("the fallback read a file outside the roots")

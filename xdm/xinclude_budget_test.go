@@ -60,7 +60,7 @@ func TestXIncludeSharesTheEntityBudget(t *testing.T) {
 		`<xi:include href="mem:/p0.xml"/></root>`
 
 	tree := parseWithBase(t, "mem:/root.xml", src)
-	err := ProcessXInclude(tree, XIncludeOptions{
+	_, err := ProcessXInclude(tree, XIncludeOptions{
 		Resolver: &mapResolver{files: files},
 		// The knobs a caller would reach for are set as tightly as the
 		// documents allow, to pin that they are NOT what refuses this.
@@ -98,10 +98,11 @@ func TestXIncludeLegitimateMultiDocumentStillWorks(t *testing.T) {
 		inc.String() + `</root>`
 
 	tree := parseWithBase(t, "mem:/root.xml", src)
-	if err := ProcessXInclude(tree, XIncludeOptions{
+	tree, err := ProcessXInclude(tree, XIncludeOptions{
 		Resolver: &mapResolver{files: files},
 		Parse:    ParseOptions{AllowDOCTYPE: true},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("%d documents expanding %d bytes in total — well inside the "+
 			"%d byte budget — were refused: %v", n, n*per, maxTotalEntityBytes, err)
 	}
@@ -155,7 +156,7 @@ func TestXIncludeBudgetRefusalIsNotRecoverable(t *testing.T) {
 		sb.String() + `</root>`
 
 	tree := parseWithBase(t, "mem:/root.xml", src)
-	err := ProcessXInclude(tree, XIncludeOptions{
+	_, err := ProcessXInclude(tree, XIncludeOptions{
 		Resolver: &mapResolver{files: files},
 		Parse:    ParseOptions{AllowDOCTYPE: true},
 	})

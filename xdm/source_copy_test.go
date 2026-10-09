@@ -67,9 +67,9 @@ func TestSourceCopyStillServesItsUsers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		kids := tr.Root.children[0].children
-		if last := kids[len(kids)-1]; last.kind != KindElement || last.name.Local != "b" {
-			t.Fatalf("last child is %v %q, want element b", last.kind, last.name.Local)
+		kids := kids(kids(tr.Root)[0])
+		if last := kids[len(kids)-1]; last.Kind() != KindElement || last.Name().Local != "b" {
+			t.Fatalf("last child is %v %q, want element b", last.Kind(), last.Name().Local)
 		}
 	})
 
@@ -89,7 +89,7 @@ func TestSourceCopyStillServesItsUsers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		kids := tr.Root.children[0].children
+		kids := kids(kids(tr.Root)[0])
 		line, col, ok := kids[len(kids)-1].Position()
 		if want := 20000 + 2; !ok || line != want || col != 1 {
 			t.Fatalf("last element at line %d col %d (ok=%v), want line %d col 1", line, col, ok, want)
@@ -112,8 +112,15 @@ func TestTrackedCopyIsSizedOnce(t *testing.T) {
 	plain := allocated(parse(false))
 	tracked := allocated(parse(true))
 	extra := int64(tracked) - int64(plain)
-	t.Logf("tracked copy cost %d bytes for a %d-byte document", extra, len(doc))
-	if extra > int64(len(doc))*5/4 {
+	// Besides the copy, tracking keeps each node's source offset: four bytes
+	// a record, in a column a parse without positions does not have.
+	tr, err := ParseString(doc, ParseOptions{MaxBytes: -1, MaxNodes: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	column := 4 * int64(tr.n)
+	t.Logf("tracked copy cost %d bytes for a %d-byte document (offset column %d)", extra, len(doc), column)
+	if extra > int64(len(doc))*5/4+column {
 		t.Errorf("TrackPositions allocated %d bytes more than without (document %d bytes), want about one copy",
 			extra, len(doc))
 	}

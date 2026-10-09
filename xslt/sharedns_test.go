@@ -12,14 +12,16 @@ import (
 // an element that declares one gets its own; and a change to
 // the tree's namespaces is seen once forgetSharedNS has run.
 func TestInScopeNamespacesShared(t *testing.T) {
-	tree, err := xdm.ParseString(`<a xmlns:p="urn:p"><b/><c xmlns:p="urn:q"><d/></c><e/></a>`, xdm.ParseOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := tree.Root.ChildElements()[0]
-	kids := a.ChildElements()
-	b, c, e := kids[0], kids[1], kids[2]
-	d := c.ChildElements()[0]
+	// <a xmlns:p="urn:p"><b/><c xmlns:p="urn:q"><d/></c><e/></a>, built
+	// rather than parsed so that a stays open for the declaration added below.
+	tree := xdm.NewTree()
+	a := tree.Root.AppendElement(xdm.QName{Local: "a"})
+	a.AddNamespace("p", "urn:p")
+	b := a.AppendElement(xdm.QName{Local: "b"})
+	c := a.AppendElement(xdm.QName{Local: "c"})
+	c.AddNamespace("p", "urn:q")
+	d := c.AppendElement(xdm.QName{Local: "d"})
+	e := a.AppendElement(xdm.QName{Local: "e"})
 
 	setSharedNS(map[*xdm.Node]map[string]string{})
 	defer setSharedNS(nil)
@@ -39,12 +41,8 @@ func TestInScopeNamespacesShared(t *testing.T) {
 		}
 	}
 
-	// Add a declaration to a, as use-package's override rewriting does.
-	var decls []*xdm.Node
-	for i := range a.NumNamespaceDecls() {
-		decls = append(decls, a.NamespaceDeclAt(i))
-	}
-	a.SetNamespaceDecls(append(decls, xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: "x"}, "urn:x")))
+	// Add a declaration to a.
+	a.AddNamespace("x", "urn:x")
 	forgetSharedNS()
 	if got := inScopeNamespacesShared(b); got["x"] != "urn:x" {
 		t.Errorf("after a declares x: b sees x = %q, want urn:x", got["x"])

@@ -43,8 +43,8 @@ func TestDTDAttributeTypingDoesNotBuildNames(t *testing.T) {
 		Name: xml.Name{Space: "schema", Local: "element-with-a-long-name-x"},
 		Attr: []xml.Attr{{Name: xml.Name{Space: "prefix", Local: "identifier-with-a-long-name"}, Value: "a"}},
 	}
-	el := &Node{kind: KindElement, name: QName{Prefix: "schema", Local: "element-with-a-long-name-x"}}
-	el.AddAttr(&Node{kind: KindAttribute, name: QName{Prefix: "prefix", Local: "identifier-with-a-long-name"}, value: "a"})
+	el := NewNode(KindElement, QName{Prefix: "schema", Local: "element-with-a-long-name-x"}, "")
+	el.AppendAttr(QName{Prefix: "prefix", Local: "identifier-with-a-long-name"}, "a")
 	if n := testing.AllocsPerRun(100, func() {
 		normalizeAttTokens(tok, types)
 		applyAttTypes(el, types)

@@ -8,27 +8,26 @@ import (
 	"testing"
 )
 
-// The parser numbers nodes as it builds them instead of walking the finished
-// tree with Finalize. Its numbering must be exactly Finalize's, including the
-// slots reserved for in-scope namespace nodes an element does not declare.
+// A parsed tree's document order is the order of its records: every node,
+// its namespace nodes and attributes before its children, compares after the
+// one before it.
 
-func collectOrders(n *Node, out []int32) []int32 {
-	out = append(out, n.order)
-	for _, ns := range n.namespaces {
-		out = append(out, ns.order)
+func collectOrders(n *Node, out []*Node) []*Node {
+	out = append(out, n)
+	for ns := range n.NamespaceNodes() {
+		out = append(out, ns)
 	}
-	for _, a := range n.attrs {
-		out = append(out, a.order)
+	for _, a := range attrsOf(n) {
+		out = append(out, a)
 	}
-	for _, c := range n.children {
+	for _, c := range kids(n) {
 		out = collectOrders(c, out)
 	}
 	return out
 }
 
-// checkParseOrder parses src with and without whitespace stripping and
-// compares each tree's numbering with what Finalize assigns to it. It reports
-// whether src parsed.
+// checkParseOrder parses src with and without whitespace stripping and checks
+// each tree's order. It reports whether src parsed.
 func checkParseOrder(t *testing.T, name, src string) bool {
 	t.Helper()
 	parsed := false
@@ -41,16 +40,11 @@ func checkParseOrder(t *testing.T, name, src string) bool {
 			continue
 		}
 		parsed = true
-		got, counter := collectOrders(tr.Root, nil), tr.counter
-		tr.Finalize()
-		want := collectOrders(tr.Root, nil)
-		if counter != tr.counter || len(got) != len(want) {
-			t.Fatalf("%s (strip %v): counter %d, Finalize %d", name, o.StripSpace != nil, counter, tr.counter)
-		}
-		for i := range got {
-			if got[i] != want[i] {
-				t.Fatalf("%s (strip %v): node %d numbered %d, Finalize %d",
-					name, o.StripSpace != nil, i, got[i], want[i])
+		got := collectOrders(tr.Root, nil)
+		for i := 1; i < len(got); i++ {
+			if got[i-1].Compare(got[i]) >= 0 || got[i].Compare(got[i-1]) <= 0 {
+				t.Fatalf("%s (strip %v): node %d does not follow node %d",
+					name, o.StripSpace != nil, i, i-1)
 			}
 		}
 	}

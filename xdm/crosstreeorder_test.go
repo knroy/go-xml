@@ -19,11 +19,11 @@ func TestCompareOrdersConstructedTreesAfterParsed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed := tree.Root.children[0]
+	parsed := kids(tree.Root)[0]
 
 	// Two parentless elements, as a variable holding element()* produces.
-	a := &Node{kind: KindElement, name: QName{Local: "a"}}
-	b := &Node{kind: KindElement, name: QName{Local: "b"}}
+	a := NewNode(KindElement, QName{Local: "a"}, "")
+	b := NewNode(KindElement, QName{Local: "b"}, "")
 
 	if got := parsed.Compare(a); got >= 0 {
 		t.Errorf("parsed.Compare(constructed) = %d, want < 0", got)
@@ -42,7 +42,7 @@ func TestCompareOrdersConstructedTreesAfterParsed(t *testing.T) {
 	for i := range want {
 		if got[i].(*Node) != want[i] {
 			t.Errorf("union[%d] = %v, want %v",
-				i, got[i].(*Node).name.Local, want[i].name.Local)
+				i, got[i].(*Node).Name().Local, want[i].Name().Local)
 		}
 	}
 }
@@ -68,8 +68,8 @@ func TestCompareOrderSurvivesManyTrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed := tree.Root.children[0]
-	made := &Node{kind: KindElement, name: QName{Local: "a"}}
+	parsed := kids(tree.Root)[0]
+	made := NewNode(KindElement, QName{Local: "a"}, "")
 
 	// The constructed node is made after the parsed one, so it sorts after it.
 	if got := parsed.Compare(made); got >= 0 {

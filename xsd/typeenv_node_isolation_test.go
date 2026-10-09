@@ -63,10 +63,11 @@ func validateChain(t *testing.T, s *Schema, value string) *xdm.Node {
 	if err != nil {
 		t.Fatalf("parsing instance: %v", err)
 	}
-	if err := s.Validate(tree.Root, ValidateOptions{AnnotateInPlace: true}); err != nil {
+	doc, err := s.ValidateCopy(tree.Root, ValidateOptions{})
+	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	return tree.Root.FirstChild()
+	return doc.FirstChild()
 }
 
 // TestNodeCarriesItsSchemasTypeEnvironment is the stamping itself: a node a

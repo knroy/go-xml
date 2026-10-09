@@ -19,7 +19,7 @@ func (v *validator) validateSimpleContent(n *xdm.Node, lexical string, t *Simple
 	if t == nil {
 		return
 	}
-	normalized, err := validateSimpleValueIn(lexical, t, v.schema.Version, n, v.recordUnionMember)
+	normalized, err := validateSimpleValueIn(lexical, t, v.schema.Version, &instance{n, v})
 	if err != nil {
 		v.fail(n, "cvc-datatype-valid.1", "%v", err)
 		return
@@ -118,7 +118,7 @@ func validateSimpleValue(lexical string, t *SimpleType) (string, error) {
 // sync.Once, so two schemas of different versions share the same *SimpleType
 // and a version stored there would be whichever schema loaded last.
 func validateSimpleValueVersion(lexical string, t *SimpleType, version Version) (string, error) {
-	return validateSimpleValueIn(lexical, t, version, nil, nil)
+	return validateSimpleValueIn(lexical, t, version, nil)
 }
 
 // validateSimpleValueIn is validateSimpleValueVersion with the instance node
@@ -128,9 +128,8 @@ func validateSimpleValueVersion(lexical string, t *SimpleType, version Version) 
 // value space is QNames compares expanded names, and expanding the instance's
 // spelling takes the namespaces in scope where it was written. Everything else
 // ignores it, which is why it is threaded as an extra parameter rather than
-// made part of the type or the version. record receives a union's winning
-// member for at; nil records nothing.
-func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *xdm.Node, record func(*xdm.Node, string)) (string, error) {
+// made part of the type or the version.
+func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *instance) (string, error) {
 	// A definition naming a type that does not exist loaded anyway, because
 	// the spec makes that an error only where the type is used. This is
 	// where it is used, so it is an error now — and checking here also
@@ -143,9 +142,9 @@ func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *x
 	}
 	switch t.Variety {
 	case VarietyList:
-		return validateListValueIn(lexical, t, at, record)
+		return validateListValueIn(lexical, t, at)
 	case VarietyUnion:
-		return validateUnionValueIn(lexical, t, at, record)
+		return validateUnionValueIn(lexical, t, at)
 	}
 	// Part 2 §3.2.18: an xs:QName value is a (namespace name, local name)
 	// pair, and the namespace name is the one the prefix is bound to where
@@ -169,7 +168,7 @@ func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *x
 	// alone: validateSimpleValue is used to validate schema documents' own
 	// literals, where no instance DTD exists and refusing every xs:ENTITY
 	// would make the type unusable rather than merely unchecked.
-	if err := entityIsDeclared(at, lexical, t); err != nil {
+	if err := entityIsDeclared(at.node(), lexical, t); err != nil {
 		return "", err
 	}
 	if !qnamePrefixBound(at, lexical, t) {
@@ -223,7 +222,7 @@ func validateAtomicValueBounds(lexical string, t *SimpleType, version Version, b
 	return validateAtomicValueBoundsIn(lexical, t, version, bounds, nil)
 }
 
-func validateAtomicValueBoundsIn(lexical string, t *SimpleType, version Version, bounds bool, at *xdm.Node) (string, error) {
+func validateAtomicValueBoundsIn(lexical string, t *SimpleType, version Version, bounds bool, at *instance) (string, error) {
 	ws := EffectiveWhiteSpace(t)
 	normalized := ws.Normalize(lexical)
 
@@ -342,10 +341,10 @@ func hasTimezone(v string) bool {
 // matches the whole literal rather than each item — erratum E2-30, which is the
 // opposite of what the per-item reading would suggest.
 func validateListValue(lexical string, t *SimpleType) (string, error) {
-	return validateListValueIn(lexical, t, nil, nil)
+	return validateListValueIn(lexical, t, nil)
 }
 
-func validateListValueIn(lexical string, t *SimpleType, at *xdm.Node, record func(*xdm.Node, string)) (string, error) {
+func validateListValueIn(lexical string, t *SimpleType, at *instance) (string, error) {
 	normalized := WhiteCollapse.Normalize(lexical)
 	steps := facetChain(t)
 
@@ -366,7 +365,7 @@ func validateListValueIn(lexical string, t *SimpleType, at *xdm.Node, record fun
 
 	if t.ItemType != nil {
 		for _, item := range items {
-			if _, err := validateSimpleValueIn(item, t.ItemType, Version10, at, record); err != nil {
+			if _, err := validateSimpleValueIn(item, t.ItemType, Version10, at); err != nil {
 				return "", fmt.Errorf("list item %q: %w", item, err)
 			}
 		}
@@ -390,10 +389,10 @@ func validateListValueIn(lexical string, t *SimpleType, at *xdm.Node, record fun
 // that validates. Normalising once up front would make " 42 " fail against
 // union(xs:int, xs:string) or succeed as the wrong member.
 func validateUnionValue(lexical string, t *SimpleType) (string, error) {
-	return validateUnionValueIn(lexical, t, nil, nil)
+	return validateUnionValueIn(lexical, t, nil)
 }
 
-func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node, record func(*xdm.Node, string)) (string, error) {
+func validateUnionValueIn(lexical string, t *SimpleType, at *instance) (string, error) {
 	steps := facetChain(t)
 
 	// A restriction of a union carries no member list of its own; the members
@@ -413,7 +412,7 @@ func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node, record fu
 		// winner on the way through, but the outer winner is written *after*
 		// this call returns and so overwrites it, which is the right order —
 		// the outermost union is the one the node's annotation names.
-		normalized, err := validateSimpleValueIn(lexical, m, Version10, at, record)
+		normalized, err := validateSimpleValueIn(lexical, m, Version10, at)
 		if err != nil {
 			continue
 		}
@@ -446,9 +445,11 @@ func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node, record fu
 		// The node keeps its own annotation: the union's identity is still
 		// true of the value and a large family of tests asks for it. Only the
 		// second, per-value fact is added here.
-		if record != nil && at != nil {
+		if at != nil {
 			if mn := annotationName(m); mn != "" {
-				record(at, mn)
+				t := at.v.typingOf(at.n)
+				t.UnionMember = mn
+				at.v.setTyping(at.n, t)
 			}
 		}
 		return normalized, nil
@@ -468,7 +469,7 @@ func checkEnumeration(steps []facetStep, normalized string, t *SimpleType) error
 
 // checkEnumerationIn is checkEnumeration with the instance node the value was
 // written on, which xs:QName and xs:NOTATION need and no other type does.
-func checkEnumerationIn(steps []facetStep, normalized string, t *SimpleType, at *xdm.Node) error {
+func checkEnumerationIn(steps []facetStep, normalized string, t *SimpleType, at *instance) error {
 	prim := ""
 	if p := primitiveOf(t); p != nil {
 		prim = p.Name.Local
@@ -1501,6 +1502,22 @@ func expandFacetQName(el *xdm.Node, value string) xdm.QName {
 	return xdm.QName{URI: uri, Local: local}
 }
 
+// instance is the instance node a value was written on, with the run that is
+// assessing it: resolving a prefix there has to see the namespace
+// declarations the run has recorded, and a union's winning member is written
+// where the run writes typing.
+type instance struct {
+	n *xdm.Node
+	v *validator
+}
+
+func (at *instance) node() *xdm.Node {
+	if at == nil {
+		return nil
+	}
+	return at.n
+}
+
 // resolveInstanceQName expands a QName written as the value of an instance node
 // against the namespaces in scope there.
 //
@@ -1511,7 +1528,7 @@ func expandFacetQName(el *xdm.Node, value string) xdm.QName {
 // writing a bare "mp3" under xmlns="http://notation.example.com" denotes the
 // same notation as one writing "smokey:mp3" in the schema, and treating it as
 // an absent namespace made those two values differ.
-func resolveInstanceQName(at *xdm.Node, value string) (xdm.QName, bool) {
+func resolveInstanceQName(at *instance, value string) (xdm.QName, bool) {
 	value = trimXMLSpace(value)
 	prefix, local := "", value
 	if i := strings.IndexByte(value, ':'); i >= 0 {
@@ -1520,11 +1537,9 @@ func resolveInstanceQName(at *xdm.Node, value string) (xdm.QName, bool) {
 	if local == "" || strings.ContainsRune(local, ':') {
 		return xdm.QName{}, false
 	}
-	scope := at
-	if scope.Kind() == xdm.KindAttribute && scope.Parent() != nil {
-		scope = scope.Parent()
-	}
-	uri, ok := scope.LookupPrefix(prefix)
+	// An attribute's own LookupPrefix starts at its element, which is the
+	// scope wanted.
+	uri, ok := at.v.lookupPrefix(at.n, prefix)
 	if !ok {
 		return xdm.QName{}, false
 	}
@@ -1563,7 +1578,7 @@ func ParseExpandedName(v string) (xdm.QName, bool) {
 // resolve. A list or union of them is left alone: its items are checked where
 // the list is split and where the member type is chosen, each with the same
 // node in hand.
-func qnamePrefixBound(n *xdm.Node, normalized string, t *SimpleType) bool {
+func qnamePrefixBound(n *instance, normalized string, t *SimpleType) bool {
 	if n == nil || t.Variety != VarietyAtomic {
 		return true
 	}

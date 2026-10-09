@@ -7,9 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
-	"unsafe"
 
 	"github.com/knroy/go-xml/v2/internal/genid"
 )
@@ -47,869 +44,44 @@ func (k NodeKind) String() string {
 	return "node()"
 }
 
-// Node is a node in an XDM tree.
-//
-// This is a concrete struct rather than an interface. Every node kind shares
-// most of its fields, the evaluator switches on Kind rather than dispatching,
-// and the axes need to walk parent/sibling links tens of thousands of times
-// per document — an interface would add a pointer chase and an indirect call
-// to each step for no expressiveness gained.
-//
-// Trees are built by the parser in this package and are immutable afterwards.
-// That immutability is what makes it safe to share one compiled stylesheet
-// tree across concurrent transforms.
-type Node struct {
-	kind NodeKind
-	name QName
-
-	// Value is the text content for text, comment, PI and attribute nodes,
-	// and the namespace URI for namespace nodes. Element and document nodes
-	// derive their string value from descendants; see StringValue.
-	value string
-
-	parent   *Node
-	children []*Node
-
-	// attrs and namespaces hold attribute and namespace nodes for elements.
-	// They are kept out of children because the child axis must not return
-	// them — a fact that a single mixed slice makes easy to get wrong.
-	attrs      []*Node
-	namespaces []*Node
-
-	// order is the document-order position, assigned in a single pre-order
-	// walk when the tree is finalised. Comparing two nodes' document order is
-	// then an integer compare rather than a walk to the common ancestor,
-	// which matters because union, "except", "intersect", and every
-	// path expression that must return nodes in document order sort by it.
-	//
-	// int32 rather than int: this struct is allocated once per element,
-	// attribute and text run, so four bytes saved here is four bytes per
-	// node of a document. Two billion nodes is far past what the rest of
-	// the design survives, and Order() still returns int so no caller sees
-	// the narrower type.
-	order int32
-
-	// A byte offset is stored rather than a line and column because it is one
-	// int32 rather than two ints on a struct that a large document allocates
-	// hundreds of thousands of. Position resolves it on demand, which happens
-	// only for the handful of nodes an error actually names.
-	//
-	// It sits beside order so that the two int32 fields share a single
-	// eight-byte word. Separated, each was padded out to its own word and
-	// the narrowing bought nothing.
-	offset int32
-
-	// tree identifies the containing tree, so that nodes from different
-	// documents compare consistently (the spec requires a stable but
-	// implementation-defined order between trees).
-	tree *Tree
-
-	// BaseURI is the resolved base URI, used by fn:document and fn:doc.
-	baseURI string
-
-	// DocumentURI is the data model's dm:document-uri property, which
-	// fn:document-uri returns. It is meaningful only on a document node.
-	//
-	// It is deliberately NOT the same field as BaseURI, and not derived from
-	// it. dm:base-uri and dm:document-uri are separate accessors in the XDM,
-	// and the difference is observable: dm:document-uri is the absolute URI a
-	// document was RETRIEVED BY, so it is empty for any document that was not
-	// retrieved by URI at all — a temporary tree built by xsl:variable, a
-	// document node constructed by xsl:document, a tree parsed from a string.
-	// Those trees still need a base URI, for fn:base-uri and for resolving a
-	// relative reference written inside them, so BaseURI on a temporary tree
-	// is set on purpose (xslt/runtime.go does this) and cannot double as the
-	// document URI. XPath F&O fn:document-uri: "returns the empty sequence if
-	// $arg is not a document node, or if the document node was not retrieved
-	// via a URI".
-	//
-	// The invariant a caller must maintain: set this ONLY when the document
-	// was fetched by that URI and registered in the document pool, so that
-	// fn:doc of this value returns this same node. Setting it on a tree that
-	// fn:doc cannot retrieve would make "doc(document-uri($d)) is $d" false
-	// while claiming it should be true. Parse sets it from
-	// ParseOptions.DocumentURI, which defaults to empty.
-	documentURI string
-
-	// TypeAnnotation records a schema type when the document has been
-	// validated. Untyped documents leave this empty, and atomisation then
-	// yields xs:untypedAtomic, which is the schemaless default.
-	//
-	// It holds an ANNOTATION NAME, which AnnotationName builds and
-	// SplitAnnotationName takes apart: a type in the XML Schema namespace
-	// keys under its bare local name ("string", "QName"), and any other type
-	// under Clark notation, {uri}local. Producers must go through
-	// AnnotationName; consumers comparing against a qualified name must use
-	// SplitAnnotationName rather than SplitQName, which would cut a Clark key
-	// at the colon inside its URI and yield nonsense without an error.
-	//
-	// The namespace is load-bearing rather than decorative. This string is
-	// the key into a process-global derivation table, so a bare local name
-	// let one schema's type displace a built-in of the same name for every
-	// later schema in the process — see the commentary on derivedPrimitives.
-	typeAnnotation string
-
-	// UnionMember records which member type of a union simple type actually
-	// accepted this node's value, when TypeAnnotation names (or has simple
-	// content of) a union.
-	//
-	// It is separate state from TypeAnnotation because the two facts are
-	// different and both are needed. XSD 1.0 §3.14.4 makes member selection a
-	// property of the *value*, not of the type: "100" validated against
-	// union(my:partNumberType, xs:integer) is an xs:integer while "123-AB" is
-	// a my:partNumberType, and the same annotation covers both. Folding the
-	// winner into TypeAnnotation would answer "instance of xs:integer" at the
-	// cost of "instance of my:partIntegerUnion", which the union's own
-	// identity requires; keeping only the union answers the second and loses
-	// the first. A node must answer both, so both are recorded.
-	//
-	// It is an annotation name, like TypeAnnotation, and for the same reason:
-	// it is compared against, and walked through, the same registries.
-	//
-	// Empty for every node whose type is not a union, which is almost all of
-	// them, so the common path pays only the field.
-	unionMember string
-
-	// DerivedPrimitive and ListItem record what TypeAnnotation MEANS, as the
-	// schema that validated this node defined it: the built-in the annotated
-	// type erases to, and — when the annotated type is a list — the type of
-	// its items. Both are annotation names, like TypeAnnotation itself.
-	//
-	// They exist for the reason UnionMember and IsID do, and the three are
-	// one pattern: the property is fixed by the assessment that produced the
-	// node, so it is recorded when that assessment happens rather than
-	// recomputed afterwards from a name. Recomputing means asking the
-	// process-global derivation registries (derivedPrimitives, listItems),
-	// which are keyed by QName alone and hold whatever schema loaded LAST.
-	// Two schemas may legitimately define {urn:x}T differently — one deriving
-	// from xs:decimal, one from xs:string — and a node validated against the
-	// first then atomised as the second's type: same lexical form, a
-	// confidently wrong answer rather than a fallback, so "'10' lt '9'" came
-	// back true under string ordering where the numeric comparison is false.
-	// A cached stylesheet was corrupted permanently by any later load of a
-	// colliding name, because compile-time registration is not replayed per
-	// transform. Unions were immune precisely because UnionMember already
-	// recorded the answer on the node; this extends that to the other two.
-	//
-	// Empty means "not recorded", not "no derivation": a node annotated by
-	// something other than schema assessment — DTD attribute types, the XSLT
-	// validation instructions, a plain struct literal — leaves them empty and
-	// atomisation falls back to the registries, exactly as it did before.
-	// So these fields are a per-node OVERRIDE of a global answer, never a
-	// precondition for having one.
-	derivedPrimitive string
-	listItem         string
-
-	// ext holds the state that almost no node carries -- the type
-	// environment below, and the identity of a detached root -- out of line,
-	// created on first use. Inline, those 20 bytes put every node of a parsed
-	// document in the 320-byte size class instead of 288. See nodeExt.
-	//
-	// typeEnv is the TypeEnvironment of the schema whose assessment produced
-	// this node's TypeAnnotation, or nil when no schema did.
-	//
-	// The per-node fields above answer only for the node's OWN annotation.
-	// Every other by-NAME question -- is this annotation derived from
-	// xs:QName, is it an instance of that type, what does the chain two links
-	// up erase to -- has to walk a derivation chain, and the chain lives in a
-	// schema. Under the process-global tables two schemas that reuse one
-	// lexical type name for different definitions shared one chain, so a node
-	// validated by the first answered those questions with the second's
-	// derivations from the moment the second loaded. Carrying the environment
-	// on the node is what keeps the annotation and its meaning together: the
-	// name means what the schema that issued it says it means, for as long as
-	// the node exists.
-	//
-	// It is also what keeps the environment alive. The node holds a strong
-	// reference, so the environment becomes collectable exactly when the last
-	// node that depends on it does, which is the lifetime rule
-	// TypeEnvironment documents and the reason nothing evicts from one.
-	//
-	// nil is not an error. A node annotated by something other than schema
-	// assessment -- a DTD attribute type, an XSLT validation instruction, a
-	// plain struct literal in a test -- has no schema to name, and for those
-	// the global table is exactly the behaviour that was there before.
-	ext *nodeExt
-
-	// IsID and IsIDREFS are the data model's is-id and is-idrefs properties
-	// (XDM §5.2, §6.2). They are deliberately *separate* state from
-	// TypeAnnotation rather than being derived from it, because XSLT 2.0
-	// §3.5 requires them to survive input-type-annotations="strip": that
-	// setting turns every annotation into xs:untyped/xs:untypedAtomic while
-	// leaving is-id and is-idrefs exactly as they were. Deriving them from
-	// the annotation would lose them at precisely the point the
-	// specification says they must be kept, and fn:id/fn:idref — which are
-	// defined over these properties, not over the annotation — would then
-	// find nothing in a stripped document whose ID attributes happen not to
-	// be spelled "id".
-	//
-	// Two bools rather than one enum: an attribute of a union type can in
-	// principle be neither, and nothing in the model makes them exclusive.
-	// They are set wherever an annotation is assigned (schema assessment,
-	// DTD attribute types) by whoever knows the declared type; a node whose
-	// type was never determined leaves both false, which is the correct
-	// answer for an unvalidated document.
-	isID     bool
-	isIDREFS bool
-
-	// IsNilled is the data model's dm:nilled property (XDM 5.10): true for an
-	// element that a schema assessment found nil, false for every other node.
-	//
-	// It is separate state from TypeAnnotation, and separate from the xsi:nil
-	// attribute, for the same reason IsID is. The property is fixed by the
-	// assessment that produced the node and does not follow from what the
-	// node looks like afterwards: xsi:nil on an element whose declaration is
-	// not nillable is an ERROR rather than a nilled element, and only the
-	// validator can tell those apart.
-	//
-	// Inferring it from "carries an annotation AND has xsi:nil='true'" gets
-	// xsl:copy validation="preserve" wrong, which is what validation-1204 is
-	// written to catch. That instruction CONSTRUCTS an element and preserves
-	// the annotation onto it without assessing anything, so the new element
-	// had both halves of that test while nothing had ever assessed it. The
-	// property is a fact about an event that either happened or did not, so
-	// it is recorded when it happens and copied when the node is.
-	//
-	// A node whose type was never determined leaves this false, which is the
-	// correct answer for an unvalidated document.
-	isNilled bool
-
-	// NoTypedValue is the data model's "typed value is absent" property (XDM
-	// 3.1 §6.2.4): an element validated against a complex type with
-	// element-only or empty content HAS no typed value, and fn:data applied
-	// to one is FOTY0012.
-	//
-	// It is separate state from TypeAnnotation for the reason IsNilled is:
-	// the annotation cannot answer it. An anonymous complex type annotates
-	// with the nearest named base, ordinarily "anyType" -- which is also what
-	// a MIXED-content type and a genuine xs:anyType element carry, and both
-	// of those DO have a typed value (their string value). Only the validator
-	// knows which of the three it assessed, so only the validator can record
-	// it.
-	//
-	// A node nothing assessed leaves this false, which is correct: an
-	// unvalidated element is xs:untypedAtomic of its string value and
-	// atomizes without complaint.
-	noTypedValue bool
-
-	// MixedContent records that an element was validated against a complex
-	// type other than xs:anyType itself whose content model is mixed. Like
-	// NoTypedValue it is needed because the annotation cannot say it: an
-	// anonymous mixed type annotates as "anyType", the same as a genuine
-	// xs:anyType element. Serialization 3.1 §5.1.4 tells the two apart --
-	// whitespace MAY be added in xs:anyType content but SHOULD NOT be in
-	// typed mixed content, where it is significant -- so the serializers
-	// read it. Unvalidated nodes leave it false.
-	mixedContent bool
-
-	// offset is the byte position where this node starts in the source text,
-	// stored one greater than the true offset so that the zero value means
-	// "unknown". Nodes are built by a transform in two dozen places with a
-	// plain struct literal; if zero meant offset 0, every one of them would
-	// silently claim to start at line 1, and a new construction site added
-	// later would inherit the same bug without anyone noticing.
-	//
-}
-
-// Position returns the 1-based line and column where the node starts, and
-// false if the position is unknown — the node was built by a transform rather
-// than parsed, or the source text was not retained.
-func (n *Node) Position() (line, col int, ok bool) {
-	if n == nil || n.offset <= 0 || n.tree == nil {
-		return 0, 0, false
-	}
-	return n.tree.positionAt(int(n.offset) - 1)
-}
-
-// Tree owns a document and the counter used to assign document order.
-type Tree struct {
-	Root *Node
-	// DocType is the DOCTYPE declaration's text, when the document had one
-	// and AllowDOCTYPE permitted it. Empty otherwise.
-	//
-	// It is retained because the internal subset is the only place a
-	// document's own DTD lives, and validating against it needs the text —
-	// encoding/xml hands the declaration over as one opaque token and keeps
-	// nothing. The dtd package parses it; this package applies only the two
-	// declarations whose absence is visible in the data model.
-	DocType string
-	// XMLVersion is the version the document's XML declaration names: "1.0"
-	// or "1.1", and "1.0" when there is no declaration, since that is the
-	// version such a document is read as. It is empty for a tree that was
-	// not parsed from text, which has no declaration to name one.
-	//
-	// It is recorded because some consumers are defined for one version
-	// only: Canonical XML is not defined for XML 1.1, and package c14n
-	// refuses a tree this reports as 1.1.
-	XMLVersion string
-	// externalSubset is the text of the external DTD subset, and of any
-	// parameter-entity module it pulled in, when one was read.
-	//
-	// It is separate from DocType because DocType is the declaration AS
-	// WRITTEN — that is what a caller re-serialising the document needs —
-	// while the declarations that govern the document may live in a file the
-	// directive merely names. fn:unparsed-entity-uri is the visible case: a
-	// document whose NDATA entities are declared externally reports none of
-	// them if only the directive is consulted.
-	//
-	// Empty unless ParseOptions.ExternalEntities permitted the read.
-	externalSubset string
-	// src is the document text, retained only when the caller asks for
-	// positions. It is what makes Position able to count lines.
-	src string
-	// lineStarts holds the byte offset of each line, built on first use.
-	// Resolving a position is then a binary search rather than a scan from
-	// the start of the document, which matters when a validator reports
-	// thousands of failures over one large file.
-	lineStarts []int
-	lineOnce   sync.Once
-	// id orders nodes from different trees against each other. The spec
-	// requires only that the order be stable within a transform.
-	id      int
-	counter int32
-}
-
 func (n *Node) isItem() {}
 
 // TypeName implements Item.
 func (n *Node) TypeName() string {
-	if n.typeAnnotation != "" {
-		return n.typeAnnotation
+	if n.TypeAnnotation() != "" {
+		return n.TypeAnnotation()
 	}
-	return n.kind.String()
-}
-
-// Order returns a number that identifies the node within the process.
-//
-// It is the document-order index within the node's own tree, combined with the
-// tree's identity so that nodes from two documents do not share it. Callers
-// wanting relative position must use Compare: this value orders nodes within
-// one tree but says nothing across trees.
-//
-// The combination is lossy: a tree with more than treeIDStride order slots
-// overlaps the next tree's range, so two nodes can share a value.
-// fn:generate-id() needs an identity that never collides and so does not use
-// this; see generateID.
-func (n *Node) Order() int {
-	tree, order := n.identity()
-	return tree*treeIDStride + int(order)
-}
-
-// identity returns the two halves of a node's identity: the id of its tree,
-// and its document-order index within that tree.
-//
-// A tree built by a sequence constructor is never finalized and has no tree of
-// its own; those nodes take the identity assigned on demand to their root, the
-// same one cross-tree comparison uses, so two parentless elements are also
-// distinguished.
-func (n *Node) identity() (tree int, order int32) {
-	if n.tree != nil {
-		return n.tree.id, n.order
-	}
-	root := n
-	for root.parent != nil {
-		root = root.parent
-	}
-	tree = int(detachedRootID(root))
-	// Within the tree the root identity is only half the answer: every
-	// node under it still carries the zero order it was built with, so
-	// they all reduced to the same number. fn:generate-id() is built on
-	// this, and a stylesheet that used it as a map key got XTDE3365 for
-	// two genuinely different nodes -- reported against SchXslt2, whose
-	// transpiler keys a severity map on generate-id() of each
-	// sch:assert and sch:report.
-	//
-	// Numbering happens here rather than when the tree is built because
-	// most result trees are serialized and discarded without anyone
-	// asking for a node's identity, and a pre-order walk per construction
-	// would be paid by every transform to serve the few that ask.
-	if n.order == 0 && n != root {
-		numberDetachedSubtree(root)
-	}
-	return tree, n.order
+	return n.Kind().String()
 }
 
 func init() { genid.Of = func(n any) string { return n.(*Node).generateID() } }
-
-// generateID returns the string fn:generate-id() gives n: "N", the tree id,
-// "x", and the document-order index within the tree.
-//
-// The spec requires it to be stable for a node, distinct between nodes and
-// ASCII alphanumeric starting with a letter. Returning the bare per-tree
-// index gave the same answer to the first node of every document, so a
-// stylesheet comparing generated identities across documents -- the case
-// key-042 in the XSLT suite exists to check -- saw distinct nodes as
-// identical. Folding both halves into one integer, as Order does, collided
-// as soon as a tree had more than treeIDStride order slots: node 2^20 of
-// tree t and node 0 of tree t+1 both answered "N" + (t+1)*2^20. Spelling
-// the two halves apart has no such ceiling.
-func (n *Node) generateID() string {
-	tree, order := n.identity()
-	var buf [40]byte
-	b := append(buf[:0], 'N')
-	b = strconv.AppendInt(b, int64(tree), 10)
-	b = append(b, 'x')
-	b = strconv.AppendInt(b, int64(order), 10)
-	return string(b)
-}
-
-// treeIDStride separates one tree's identity range from the next in Order.
-const treeIDStride = 1 << 20
-
-// SetSynthesizedOrder places a node the parser did not build into the document
-// order of an existing tree, immediately after owner.
-//
-// The namespace axis is the case this exists for: its nodes are synthesized on
-// demand from the in-scope bindings, so they have no order of their own. Left
-// at zero they sort before every real node, and — because generate-id() is
-// derived from the order — every one of them answers the same string,
-// colliding with each other and with the document node.
-//
-// The offset separates the bindings of one element from each other while
-// keeping them all adjacent to their owner. It is deliberately not an attempt
-// at a spec-defined position: XPath leaves the relative order of namespace
-// nodes implementation-dependent, and what a caller needs is that the order is
-// stable and the identities distinct.
-func (n *Node) SetSynthesizedOrder(owner *Node, offset int) {
-	if owner == nil {
-		return
-	}
-	if owner.tree == nil {
-		// A constructed tree is numbered on demand (see Order). The slots
-		// are taken from the owner's order, so it has to be numbered first:
-		// an unnumbered owner has order 0, and every element's namespace
-		// nodes then shared the same few identities.
-		root := owner
-		for root.parent != nil {
-			root = root.parent
-		}
-		numberDetachedSubtree(root)
-	}
-	n.tree = owner.tree
-	n.order = owner.order + int32(offset) + 1
-}
-
-// Tree returns the containing tree.
-func (n *Node) Tree() *Tree { return n.tree }
-
-// Is reports whether n and o are the same node, which is what the "is"
-// operator asks and what XDM means by node identity.
-//
-// For every node the parser builds this is pointer equality, because each such
-// node exists exactly once. Namespace nodes are the exception: they are not
-// stored, they are synthesized on demand from the element's in-scope bindings,
-// so a second walk over the same axis hands back a fresh pointer for a binding
-// that is, by every other measure the engine applies, the same node. Comparing
-// those pointers made "/*/namespace::xlink is /*/namespace::*[. = '...']"
-// answer false where the spec requires true.
-//
-// The tree and order fields are the identity the rest of the engine already
-// uses — fn:generate-id spells them out, and Compare reads them — and
-// SetSynthesizedOrder derives it from the owning element and the binding's
-// position in the sorted prefix list. So two synthesized nodes for one
-// element and prefix already share it, and two for different elements, or
-// different prefixes on one element, already do not. Deferring to it here
-// makes "is" agree with generate-id, with "<<" and ">>", and with the
-// document-order deduplication a path expression performs, rather than
-// standing alone as the only operator that could see one node as two.
-func (n *Node) Is(o *Node) bool {
-	if n == o {
-		return true
-	}
-	if n == nil || o == nil {
-		return false
-	}
-	// Only namespace nodes are synthesized, so only they can be the same node
-	// behind two pointers. Widening this to every kind would make two distinct
-	// parentless nodes — which share tree nil and order zero until something
-	// numbers them — compare identical.
-	if n.kind != KindNamespace || o.kind != KindNamespace {
-		return false
-	}
-	// A parentless namespace node is identical only to itself, which the
-	// pointer test above has already ruled out: with no owning element there
-	// is no binding for a second walk to re-derive.
-	if n.parent == nil || o.parent == nil {
-		return false
-	}
-	return n.parent == o.parent && n.name.Local == o.name.Local
-}
-
-// IdentityKey is a comparable value equal for two node references exactly when
-// Is reports them the same node, for use as a map key where a bare *Node
-// pointer would split one synthesized namespace node into two entries.
-//
-// Set membership — fn:intersect, fn:except, fn:innermost, fn:outermost — is
-// keyed on this rather than on the pointer so that the set operators agree
-// with "is". Every kind but namespace keys on the pointer itself, so this
-// costs nothing and changes nothing for them.
-type IdentityKey struct {
-	ptr    *Node
-	parent *Node
-	prefix string
-}
-
-// Identity returns the key that stands for this node's identity.
-func (n *Node) Identity() IdentityKey {
-	if n == nil {
-		return IdentityKey{}
-	}
-	// A parentless namespace node has nothing to key on but itself: without
-	// an owning element there is no binding for a second walk to re-derive,
-	// and keying every such node on the same zero parent would merge nodes
-	// that are genuinely distinct.
-	if n.kind == KindNamespace && n.parent != nil {
-		return IdentityKey{parent: n.parent, prefix: n.name.Local}
-	}
-	return IdentityKey{ptr: n}
-}
-
-// Compare orders two nodes in document order, returning -1, 0 or 1. Nodes in
-// different trees are ordered by tree id, which is stable within a transform.
-func (n *Node) Compare(o *Node) int {
-	if n == o {
-		return 0
-	}
-	if n.tree == nil && o.tree == nil {
-		// A parentless element built by a sequence constructor is the root of
-		// its own tree, but nothing ever calls Finalize on it: it is handed
-		// out as a bare item, not wrapped in a Tree. Both nodes then carry
-		// tree nil and order zero, and comparing those fields alone declares
-		// every such node equal to every other — so a union of a variable
-		// holding <a><x/></a><b><x/></b> with its own descendants came out as
-		// a, b, then the three x's, instead of interleaved.
-		//
-		// Walking the parent links answers it without a tree: nodes in the
-		// same constructed tree compare by their position in it, and nodes in
-		// different ones fall back to a stable identity order.
-		return compareDetached(n, o)
-	}
-	if n.tree != o.tree {
-		ni, oi := crossTreeRank(n), crossTreeRank(o)
-		switch {
-		case ni < oi:
-			return -1
-		case ni > oi:
-			return 1
-		default:
-			return 0
-		}
-	}
-	switch {
-	case n.order < o.order:
-		return -1
-	case n.order > o.order:
-		return 1
-	}
-	return 0
-}
-
-// compareDetached orders two nodes that belong to no Tree, by walking their
-// ancestry.
-//
-// The two are in the same constructed tree exactly when their ancestor chains
-// end at the same root. In that case the answer is the ordinary XDM rule:
-// find the nearest common ancestor and compare the two branches beneath it by
-// child index, with attributes and namespaces preceding children, and with an
-// ancestor preceding its own descendant. In different trees the spec requires
-// only a stable order, and roots that have never been numbered have nothing to
-// order them by, so they compare equal — the same answer the tree-id branch
-// gives for two untracked trees.
-func compareDetached(n, o *Node) int {
-	na := ancestorChain(n)
-	oa := ancestorChain(o)
-	if na[0] != oa[0] {
-		// Different constructed trees. The spec asks only for a stable order,
-		// but it must also be a *total* one: sort.SliceStable is fed this
-		// comparator, and answering "equal" for two roots while answering
-		// "before" for a root and the other root's descendant is not an order
-		// at all — the sort then leaves the roots bunched ahead of every
-		// descendant instead of interleaving them. Numbering each root on
-		// first comparison gives a consistent answer that never changes for a
-		// given pair.
-		switch ra, ro := detachedRootID(na[0]), detachedRootID(oa[0]); {
-		case ra < ro:
-			return -1
-		case ra > ro:
-			return 1
-		}
-		return 0
-	}
-	// Skip the shared prefix. The chains run root-first, so the first index
-	// at which they differ is the pair of siblings to compare.
-	i := 0
-	for i < len(na) && i < len(oa) && na[i] == oa[i] {
-		i++
-	}
-	if i == len(na) {
-		// n is an ancestor of o, and an ancestor precedes its descendants.
-		return -1
-	}
-	if i == len(oa) {
-		return 1
-	}
-	p := na[i-1]
-	rank := siblingRank
-	if na[i].kind != KindNamespace && oa[i].kind != KindNamespace {
-		// Both ranks would add the same namespace base, which costs an
-		// InScopeNamespaces map to compute; without it the order is the same.
-		rank = attrOrChildRank
-	}
-	switch ra, rb := rank(p, na[i]), rank(p, oa[i]); {
-	case ra < rb:
-		return -1
-	case ra > rb:
-		return 1
-	}
-	return 0
-}
-
-// detachedRootIDs numbers the roots of trees that were never finalized, so
-// that nodes from two of them have a stable total order.
-//
-// The numbers are handed out on first comparison rather than at construction:
-// the vast majority of constructed nodes are never compared across trees, and
-// the alternative is a counter increment on every element a transform builds.
-//
-// They come from nextTreeID, the counter the parser draws a Tree's id from,
-// rather than from one of their own. A separate counter has to be kept clear
-// of the tree ids by a fixed offset, and a fixed offset is only ever right
-// until a long enough run overruns it: with detachedIDBias at 1<<20, the
-// xslt30 suite reached tree id 1272658 and parsed documents began sorting
-// after constructed ones again, which is what left "(...PRICE union
-// $insertion)" with the variable's elements first in a full run and correct
-// when the test-set ran alone. One counter has no offset to overrun, and it
-// orders the two kinds of tree by the sequence in which they were actually
-// made.
-func detachedRootID(root *Node) int64 {
-	// The number lives on the node rather than in a side table so that it
-	// dies with the node: a table keyed by *Node would pin every constructed
-	// root for the life of the process.
-	ext := root.ownExt()
-	if id := ext.detachedID.Load(); id != 0 {
-		return id
-	}
-	id := int64(nextTreeID())
-	if !ext.detachedID.CompareAndSwap(0, id) {
-		return ext.detachedID.Load()
-	}
-	return id
-}
-
-// crossTreeRank returns the number that orders n's tree against another's.
-//
-// A node the parser built carries its Tree's id. A node built by a sequence
-// constructor carries no Tree at all, and reading its id as the zero value
-// put every such node ahead of every parsed document -- so
-// "(/BOOKLIST/BOOKS/ITEM/PRICE union $insertion)" came back with the
-// variable's two elements first. Asking detachedRootID instead gives it a
-// number from the same counter the parser draws tree ids from, so the two
-// kinds of tree are ordered by when each was made. The spec leaves the
-// relative order of nodes in different trees implementation-dependent and
-// requires only that it be stable; this makes it so, and makes Compare agree
-// with the identity Order() hands out.
-func crossTreeRank(n *Node) int {
-	if n.tree != nil {
-		return n.tree.id
-	}
-	root := n
-	for root.parent != nil {
-		root = root.parent
-	}
-	return int(detachedRootID(root))
-}
-
-// numberDetachedRoot stamps an identity number on the root of the untracked
-// tree n belongs to, if it has none yet.
-//
-// It exists so that the number can be assigned before any comparison, in the
-// order the caller holds the nodes in, rather than in the order a sort's
-// comparisons happen to reach them. See SortDocumentOrder.
-func numberDetachedRoot(n *Node) {
-	root := n
-	for root.parent != nil {
-		root = root.parent
-	}
-	if root.tree != nil {
-		return
-	}
-	detachedRootID(root)
-}
-
-// numberDetachedSubtree assigns document-order indices under an unfinalized
-// root, so that Order can tell its nodes apart.
-//
-// It is idempotent through the root's own flag: the walk runs once per root
-// however many identities are asked for. Tree.Finalize does the same job for
-// a parsed document, and this is deliberately not that -- Finalize also
-// stamps n.tree, which would claim these nodes for a tree they do not belong
-// to and change what Compare says about them.
-func numberDetachedSubtree(root *Node) {
-	if !root.ownExt().numbered.CompareAndSwap(0, 1) {
-		return
-	}
-	var counter int32
-	// The reservation follows Tree.number: an element takes a slot for every
-	// binding in scope on it, not only the ones it declares, because the
-	// namespace axis synthesizes the inherited ones at owner.order+1 upwards
-	// (SetSynthesizedOrder). Reserving only the declared ones let those
-	// synthesized nodes share an order, and so a generate-id(), with the
-	// element's attributes and first child -- snapshot-0112 counts distinct
-	// identities against the node count of a temporary tree.
-	scope := map[string]string{"xml": NSXML}
-	var walk func(n *Node)
-	walk = func(n *Node) {
-		n.order = counter
-		counter++
-		// Namespace and attribute nodes precede children, matching the order
-		// Tree.assign uses so the two agree about what document order means.
-		var saved []nsSave
-		if n.kind == KindElement {
-			for _, ns := range n.namespaces {
-				prev, had := scope[ns.name.Local]
-				saved = append(saved, nsSave{prefix: ns.name.Local, uri: prev, had: had})
-				if ns.value == "" {
-					delete(scope, ns.name.Local)
-				} else {
-					scope[ns.name.Local] = ns.value
-				}
-			}
-		}
-		for _, ns := range n.namespaces {
-			ns.order = counter
-			counter++
-		}
-		if n.kind == KindElement {
-			if extra := len(scope) - len(n.namespaces); extra > 0 {
-				counter += int32(extra)
-			}
-		}
-		for _, a := range n.attrs {
-			a.order = counter
-			counter++
-		}
-		for _, c := range n.children {
-			walk(c)
-		}
-		restoreScope(scope, saved)
-	}
-	walk(root)
-}
-
-// ancestorChain returns n's ancestors root-first, ending with n itself.
-func ancestorChain(n *Node) []*Node {
-	var up []*Node
-	for c := n; c != nil; c = c.parent {
-		up = append(up, c)
-	}
-	// Reverse in place so the root comes first.
-	for i, j := 0, len(up)-1; i < j; i, j = i+1, j-1 {
-		up[i], up[j] = up[j], up[i]
-	}
-	return up
-}
-
-// siblingRank gives a node its position among all of p's children, attributes
-// and namespace nodes, in document order.
-//
-// Namespace nodes precede attribute nodes, which precede children — the same
-// order Tree.assign lays down, so a detached subtree that is finalized later
-// does not change any answer this gave before.
-func siblingRank(p, n *Node) int {
-	// A namespace node is ranked by its kind, not by looking it up in
-	// p.Namespaces. The namespace axis synthesizes its nodes -- it exposes
-	// every in-scope binding, while p.Namespaces holds only those declared on
-	// p itself -- so the scan never matched an inherited binding, and the
-	// no-match fallback below then ranked it after every child. In a detached
-	// tree, where document order is decided here rather than by Tree.assign,
-	// that put the outermost element's own namespace node last:
-	// ($orphan//namespace::x)[1] answered the copy on the inner element.
-	//
-	// Ranking by kind is the data model's own rule, and the one Tree.assign
-	// lays down: an element's namespace nodes precede its attributes, which
-	// precede its children.
-	if n.kind == KindNamespace {
-		for i, ns := range p.namespaces {
-			if ns == n {
-				return i
-			}
-		}
-		// A synthesized node still has to be ordered against its siblings on
-		// the axis, and the axis emits them in sorted prefix order.
-		i := 0
-		for prefix := range p.InScopeNamespaces() {
-			if prefix < n.name.Local {
-				i++
-			}
-		}
-		return i
-	}
-	return nsRankBase(p) + attrOrChildRank(p, n)
-}
-
-// attrOrChildRank is siblingRank for an attribute or child of p, less the
-// namespace base, which is the same for every such node of p.
-func attrOrChildRank(p, n *Node) int {
-	if n.kind == KindAttribute {
-		for i, a := range p.attrs {
-			if a == n {
-				return i
-			}
-		}
-		return len(p.attrs)
-	}
-	for i, c := range p.children {
-		if c == n {
-			return len(p.attrs) + i
-		}
-	}
-	return len(p.attrs) + len(p.children)
-}
-
-// nsRankBase is the rank the first non-namespace node of p takes, which is one
-// past every node on p's namespace axis rather than one past the declarations
-// p carries: an inherited binding is a node there too.
-func nsRankBase(p *Node) int {
-	n := len(p.namespaces)
-	if m := len(p.InScopeNamespaces()); m > n {
-		n = m
-	}
-	return n
-}
 
 // StringValue returns the node's string value per XDM: the concatenation of
 // all descendant text for document and element nodes, and the value itself for
 // the leaf kinds.
 func (n *Node) StringValue() string {
-	switch n.kind {
+	switch n.Kind() {
 	case KindDocument, KindElement:
 		// An element holding one text node, or nothing, is the usual
 		// shape of a simple value, and has nothing to concatenate.
-		switch len(n.children) {
-		case 0:
+		first := n.FirstChild()
+		if first == nil {
 			return ""
-		case 1:
-			if c := n.children[0]; c.kind == KindText {
-				return c.value
+		}
+		if first.kind == uint8(KindText) && first.NextSibling() == nil {
+			return first.Value()
+		}
+		// The text descendants, in document order, are the string value;
+		// comments and PIs contribute nothing to an ancestor's.
+		var sb strings.Builder
+		for d := range n.Descendants() {
+			if d.kind == uint8(KindText) {
+				sb.WriteString(d.Value())
 			}
 		}
-		var sb strings.Builder
-		n.appendText(&sb)
 		return sb.String()
 	default:
-		return n.value
-	}
-}
-
-func (n *Node) appendText(sb *strings.Builder) {
-	for _, c := range n.children {
-		switch c.kind {
-		case KindText:
-			sb.WriteString(c.value)
-		case KindElement:
-			c.appendText(sb)
-		}
-		// Comments and PIs contribute nothing to an ancestor's string value.
+		return n.Value()
 	}
 }
 
@@ -925,7 +97,7 @@ func (n *Node) Atomize() *Atomic {
 	// would have coerced it. These kinds are never schema-validated, so
 	// there is no annotation to consult and the answer does not depend on
 	// one.
-	switch n.kind {
+	switch n.Kind() {
 	case KindComment, KindPI, KindNamespace:
 		return NewString(n.StringValue())
 	}
@@ -939,7 +111,7 @@ func (n *Node) Atomize() *Atomic {
 	// is deliberately narrow — the numeric, boolean and date types, whose
 	// lexical forms this package can already parse — because a type it
 	// cannot construct is better left untyped than guessed at.
-	if n.typeAnnotation != "" {
+	if n.TypeAnnotation() != "" {
 		// xs:QName and xs:NOTATION are handled here rather than in
 		// atomicForAnnotation because resolving the prefix needs the
 		// node's in-scope namespaces, which a lexical form alone does
@@ -953,7 +125,7 @@ func (n *Node) Atomize() *Atomic {
 		// schema-for-xslt20.xsd declares an xsl:QName that restricts
 		// xs:Name and holds no QName value at all, and matching it here
 		// atomised it as a QName it is not.
-		switch n.typeAnnotation {
+		switch n.TypeAnnotation() {
 		case "QName", "NOTATION":
 			if q, ok := n.resolveQNameValue(); ok {
 				return NewQNameValue(q)
@@ -969,13 +141,13 @@ func (n *Node) Atomize() *Atomic {
 		if a := atomicForUnionAnnotation(n); a != nil {
 			return a
 		}
-		if a := atomicForAnnotation(n.typeAnnotation, n.StringValue()); a != nil {
+		if a := atomicForAnnotation(n.TypeAnnotation(), n.StringValue()); a != nil {
 			// The annotation is kept on the value as its derived type, so
 			// that "instance of" can answer for a user-defined type. Without
 			// it the value knows only the primitive it erased to, and every
 			// question about the schema type it was validated against
 			// answered false.
-			return a.WithDerived(n.typeAnnotation).WithTypeEnv(n.TypeEnv())
+			return a.WithDerived(n.TypeAnnotation()).WithTypeEnv(n.TypeEnv())
 		}
 		// A user-defined type this package cannot construct still atomises:
 		// it is the primitive its schema type derives from, and the schema
@@ -1020,11 +192,11 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 	// so "elem = 'one two three'" compared three NMTOKENs against the whole
 	// string and answered false (as-3002, as-1811).
 	var item string
-	if n.typeAnnotation != "" {
-		item = n.listItem
+	if n.TypeAnnotation() != "" {
+		item = n.ListItem()
 	}
 	if item == "" {
-		item = listItemType(typeEnvOf(n), n.typeAnnotation)
+		item = listItemType(typeEnvOf(n), n.TypeAnnotation())
 	}
 	if item == "" {
 		// A union whose selected member is a LIST has a sequence for its
@@ -1040,7 +212,7 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 		// prefix. Given the whole literal as a single item, "xs ul" is not a
 		// prefix in scope and every stylesheet excluding two prefixes was
 		// reported invalid.
-		if item = listItemType(typeEnvOf(n), n.unionMember); item == "" {
+		if item = listItemType(typeEnvOf(n), n.UnionMember()); item == "" {
 			return nil, false
 		}
 	}
@@ -1318,8 +490,8 @@ func (n *Node) resolveQNameValue() (QName, bool) {
 		return QName{}, false
 	}
 	scope := n
-	if scope.kind == KindAttribute && scope.parent != nil {
-		scope = scope.parent
+	if scope.Kind() == KindAttribute && scope.Parent() != nil {
+		scope = scope.Parent()
 	}
 	if prefix == "" {
 		uri, _ := scope.LookupPrefix("")
@@ -1334,8 +506,13 @@ func (n *Node) resolveQNameValue() (QName, bool) {
 
 // Attr returns the attribute node with the given expanded name, or nil.
 func (n *Node) Attr(uri, local string) *Node {
-	for _, a := range n.attrs {
-		if a.name.Local == local && a.name.URI == uri {
+	if n.isLeaf() || n.flags&fSide != 0 {
+		return nil
+	}
+	t := n.tree
+	for i, k := n.self+1, n.attrCount(); k > 0; i, k = i+1, k-1 {
+		a := t.rec(i)
+		if q := &t.names[a.name]; q.Local == local && q.URI == uri {
 			return a
 		}
 	}
@@ -1347,7 +524,7 @@ func (n *Node) Attr(uri, local string) *Node {
 // unprefixed, so this is the common case worth a helper.
 func (n *Node) AttrValue(local string) string {
 	if a := n.Attr("", local); a != nil {
-		return a.value
+		return a.Value()
 	}
 	return ""
 }
@@ -1356,23 +533,27 @@ func (n *Node) AttrValue(local string) string {
 // well-formed parsed document this is the document node.
 func (n *Node) Root() *Node {
 	cur := n
-	for cur.parent != nil {
-		cur = cur.parent
+	for p := cur.Parent(); p != nil; p = cur.Parent() {
+		cur = p
 	}
 	return cur
 }
 
 // IsElement reports whether n is an element with the given expanded name.
 func (n *Node) IsElement(uri, local string) bool {
-	return n.kind == KindElement && n.name.URI == uri && n.name.Local == local
+	if n.Kind() != KindElement {
+		return false
+	}
+	q := n.Name()
+	return q.URI == uri && q.Local == local
 }
 
 // ChildElements returns the element children, which is what almost every
 // stylesheet-compilation walk wants.
 func (n *Node) ChildElements() []*Node {
 	var out []*Node
-	for _, c := range n.children {
-		if c.kind == KindElement {
+	for c := range n.Children() {
+		if c.Kind() == KindElement {
 			out = append(out, c)
 		}
 	}
@@ -1386,19 +567,14 @@ func (n *Node) ChildElements() []*Node {
 // Recursion depth is the element depth, which the parser bounds with
 // ParseOptions.MaxDepth.
 func (n *Node) Walk(fn func(*Node) bool) {
-	n.walk(fn)
-}
-
-func (n *Node) walk(fn func(*Node) bool) bool {
 	if !fn(n) {
-		return false
+		return
 	}
-	for _, c := range n.children {
-		if c.kind == KindElement && !c.walk(fn) {
-			return false
+	for d := range n.Descendants() {
+		if d.Kind() == KindElement && !fn(d) {
+			return
 		}
 	}
-	return true
 }
 
 // FirstElement returns the first element in document order at or beneath n
@@ -1415,220 +591,7 @@ func (n *Node) FirstElement(uri, local string) *Node {
 	return found
 }
 
-// LookupPrefix resolves a namespace prefix against the in-scope namespaces of
-// n, walking up the tree. Returns the URI and whether the prefix was bound.
-func (n *Node) LookupPrefix(prefix string) (string, bool) {
-	if prefix == "xml" {
-		return NSXML, true
-	}
-	for cur := n; cur != nil; cur = cur.parent {
-		if cur.kind != KindElement {
-			continue
-		}
-		for _, ns := range cur.namespaces {
-			if ns.name.Local == prefix {
-				if ns.value == "" && prefix != "" {
-					// An undeclaration; the prefix is not in scope here.
-					return "", false
-				}
-				return ns.value, true
-			}
-		}
-	}
-	if prefix == "" {
-		return "", true // no default namespace in scope: absent name
-	}
-	return "", false
-}
-
-// InScopeNamespaces returns every prefix-to-URI binding visible at n, with
-// inner declarations shadowing outer ones. Used when copying elements and when
-// resolving QNames in stylesheet attribute values.
-func (n *Node) InScopeNamespaces() map[string]string {
-	// Every element has the xml prefix bound, whether or not the document
-	// declares it: the binding is fixed by the XML Namespaces specification
-	// and, unlike every other prefix, it cannot be undeclared or rebound.
-	// Omitting it left the namespace axis one node short on every element,
-	// and made an expression naming the xml prefix fail to resolve in a tree
-	// the stylesheet built rather than parsed.
-	out := map[string]string{"xml": NSXML}
-	var chain []*Node
-	for cur := n; cur != nil; cur = cur.parent {
-		if cur.kind == KindElement {
-			chain = append(chain, cur)
-		}
-	}
-	// Walk outermost-inward so that inner declarations overwrite outer ones.
-	for i := len(chain) - 1; i >= 0; i-- {
-		for _, ns := range chain[i].namespaces {
-			if ns.value == "" {
-				delete(out, ns.name.Local)
-			} else {
-				out[ns.name.Local] = ns.value
-			}
-		}
-	}
-	return out
-}
-
 // --- Tree construction ------------------------------------------------------
-
-// nextTreeID hands out tree identifiers. Trees created concurrently may
-// interleave, which is fine: the spec requires only a stable order, and each
-// tree's id is fixed once assigned.
-var nextTreeID = newCounter()
-
-// NewTree creates an empty tree with a document node as its root.
-func NewTree() *Tree {
-	t := &Tree{id: nextTreeID()}
-	t.Root = &Node{kind: KindDocument, tree: t}
-	return t
-}
-
-// AppendChild links c as the last child of n, setting the parent link. It does
-// not assign document order; call Finalize once the tree is complete.
-func (n *Node) AppendChild(c *Node) {
-	c.parent = n
-	c.tree = n.tree
-	n.children = append(n.children, c)
-}
-
-// AddAttr links a as an attribute of n.
-func (n *Node) AddAttr(a *Node) {
-	a.kind = KindAttribute
-	a.parent = n
-	a.tree = n.tree
-	n.attrs = append(n.attrs, a)
-}
-
-// AddNamespace links a namespace node to n.
-func (n *Node) AddNamespace(prefix, uri string) {
-	ns := &Node{
-		kind:   KindNamespace,
-		name:   QName{Local: prefix},
-		value:  uri,
-		parent: n,
-		tree:   n.tree,
-	}
-	n.namespaces = append(n.namespaces, ns)
-}
-
-// Finalize assigns document-order indices across the whole tree in a single
-// pre-order walk. It must be called after the tree is fully built and before
-// any node comparison; every parser entry point in this package does so.
-func (t *Tree) Finalize() {
-	t.counter = 0
-	// The in-scope bindings are carried down the walk rather than recomputed
-	// per element. Rebuilding them from the ancestor chain, as
-	// InScopeNamespaces does, costs the depth of the element, which made
-	// Finalize quadratic in nesting depth: a 32,000-level document allocated
-	// 17 GB and took 20 s, against 29 MB for a document of the same byte size
-	// that was wide rather than deep. Threading the scope makes each element
-	// cost only the declarations it carries itself.
-	scope := map[string]string{"xml": NSXML}
-	t.assign(t.Root, scope)
-}
-
-// assign numbers n and its subtree. scope holds the namespace bindings in
-// force at n's parent, keyed as InScopeNamespaces keys them; assign applies
-// n's own declarations to it for the descent and restores it on the way out,
-// so a sibling sees the scope its parent had.
-func (t *Tree) assign(n *Node, scope map[string]string) {
-	saved := t.number(n, scope)
-	for _, c := range n.children {
-		t.assign(c, scope)
-	}
-	restoreScope(scope, saved)
-}
-
-// number gives n, its namespace nodes and its attributes their document
-// order, and applies n's own namespace declarations to scope. The entries it
-// returns undo that through restoreScope once n's subtree is numbered. The
-// parser calls it as it builds each node, which is the same pre-order walk.
-func (t *Tree) number(n *Node, scope map[string]string) []nsSave {
-	n.tree = t
-	n.order = t.counter
-	t.counter++
-	// Namespace nodes precede attribute nodes, which precede children. The
-	// relative order of namespace and attribute nodes is implementation
-	// defined; fixing it here keeps results reproducible across runs.
-	//
-	// The reservation is sized by the element's in-scope bindings, not by the
-	// ones it declares itself. The namespace axis reports every binding in
-	// scope, and the ones inherited from an ancestor have no node on this
-	// element to number: the axis synthesizes them and places them with
-	// SetSynthesizedOrder at owner.order+1 upwards. Reserving only the
-	// declared bindings left those synthesized nodes sitting on the slots
-	// already given to this element's attributes and first child, so
-	// generate-id() answered the same string for a namespace node and an
-	// unrelated attribute — which is what snapshot-0112 detects when it
-	// compares the count of distinct identities against the node count.
-	//
-	// saved records, for each prefix this element declares, the binding its
-	// parent had, so the scope can be restored once the subtree is numbered.
-	// An absent entry is recorded as missing rather than as the empty string:
-	// the empty string is itself a value a caller can bind, and conflating
-	// the two would leave a stale entry in scope for a later sibling.
-	var saved []nsSave
-	if n.kind == KindElement {
-		for _, ns := range n.namespaces {
-			prev, had := scope[ns.name.Local]
-			saved = append(saved, nsSave{prefix: ns.name.Local, uri: prev, had: had})
-			// An empty value undeclares the prefix, which takes it out of
-			// scope; InScopeNamespaces deletes it for the same reason.
-			if ns.value == "" {
-				delete(scope, ns.name.Local)
-			} else {
-				scope[ns.name.Local] = ns.value
-			}
-		}
-		reserved := len(scope)
-		for _, ns := range n.namespaces {
-			ns.tree = t
-			ns.order = t.counter
-			t.counter++
-			reserved--
-		}
-		// The declared bindings are a subset of the in-scope ones except
-		// where a declaration undeclares a prefix, which removes it from
-		// scope while still occupying a node; reserved can then go negative
-		// and no extra slots are due.
-		for ; reserved > 0; reserved-- {
-			t.counter++
-		}
-	} else {
-		for _, ns := range n.namespaces {
-			ns.tree = t
-			ns.order = t.counter
-			t.counter++
-		}
-	}
-	for _, a := range n.attrs {
-		a.tree = t
-		a.order = t.counter
-		t.counter++
-	}
-	return saved
-}
-
-// restoreScope undoes the declarations number applied, last first.
-func restoreScope(scope map[string]string, saved []nsSave) {
-	for i := len(saved) - 1; i >= 0; i-- {
-		if saved[i].had {
-			scope[saved[i].prefix] = saved[i].uri
-		} else {
-			delete(scope, saved[i].prefix)
-		}
-	}
-}
-
-// nsSave is one entry of the namespace scope Tree.assign shadows while it
-// numbers an element's subtree.
-type nsSave struct {
-	prefix string
-	uri    string
-	had    bool
-}
 
 // HasPositions reports whether the tree was parsed with TrackPositions, and so
 // can answer Node.Position for the elements it holds.
@@ -1760,7 +723,7 @@ func DerivedBase(name string) string {
 // The member's own name may itself be a user-defined schema type, so the value
 // is built through the same lexical walk a list item uses.
 func atomicForUnionAnnotation(n *Node) *Atomic {
-	member := n.unionMember
+	member := n.UnionMember()
 	if member == "" {
 		return nil
 	}
@@ -1770,7 +733,7 @@ func atomicForUnionAnnotation(n *Node) *Atomic {
 	switch member {
 	case "QName", "NOTATION":
 		if q, ok := n.resolveQNameValue(); ok {
-			return NewQNameValue(q).WithDerivedUnion(n.typeAnnotation, member).WithTypeEnv(n.TypeEnv())
+			return NewQNameValue(q).WithDerivedUnion(n.TypeAnnotation(), member).WithTypeEnv(n.TypeEnv())
 		}
 		return nil
 	}
@@ -1778,7 +741,7 @@ func atomicForUnionAnnotation(n *Node) *Atomic {
 	if a == nil {
 		return nil
 	}
-	return a.WithDerivedUnion(n.typeAnnotation, member).WithTypeEnv(n.TypeEnv())
+	return a.WithDerivedUnion(n.TypeAnnotation(), member).WithTypeEnv(n.TypeEnv())
 }
 
 // atomicForDerivedAnnotation builds a typed value for a user-defined schema
@@ -1797,7 +760,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 	// somehow formed a cycle cannot spin here. That is the only thing that can
 	// stop it terminating — the registry is a name->name map — and a count
 	// cannot tell such a cycle from a legally deep chain of restrictions.
-	name := n.typeAnnotation
+	name := n.TypeAnnotation()
 	seen := map[string]bool{name: true}
 	// The node's own record of what its type erases to is preferred over the
 	// registry for the FIRST step, which is the step that names the type this
@@ -1810,8 +773,8 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 	// no meaning to prefer. (Atomize only reaches here with one set, but the
 	// walk is exported through other paths and must not depend on that.)
 	first := ""
-	if n.typeAnnotation != "" {
-		first = n.derivedPrimitive
+	if n.TypeAnnotation() != "" {
+		first = n.DerivedPrimitive()
 	}
 	for {
 		var prim string
@@ -1831,7 +794,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 		switch prim {
 		case "QName", "NOTATION":
 			if q, ok := n.resolveQNameValue(); ok {
-				return NewQNameValue(q).WithDerived(n.typeAnnotation).WithTypeEnv(n.TypeEnv())
+				return NewQNameValue(q).WithDerived(n.TypeAnnotation()).WithTypeEnv(n.TypeEnv())
 			}
 			return nil
 		}
@@ -1840,7 +803,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 			// intermediate name the walk stopped at: that is what makes
 			// "instance of my:specialPartNumber" true as well as
 			// "instance of my:partNumberType".
-			return a.WithDerived(n.typeAnnotation).WithTypeEnv(n.TypeEnv())
+			return a.WithDerived(n.TypeAnnotation()).WithTypeEnv(n.TypeEnv())
 		}
 		if seen[prim] {
 			return nil
@@ -1888,18 +851,22 @@ func annotationIDKind(annotation string) (isID, isIDREFS bool) {
 // XSLT's stripping rules are the only thing entitled to change them — and
 // those rules say the properties do not change at all.
 func (n *Node) SetTypeAnnotation(annotation string) {
-	n.typeAnnotation = annotation
+	if annotation == "" && n.flags&fTyped == 0 {
+		return
+	}
+	t := n.ownTyping()
+	t.annotation = annotation
 	if annotation == "" {
 		// Clearing the annotation clears what it meant. DerivedPrimitive and
 		// ListItem describe a type this node no longer claims, and leaving
 		// them would let it keep atomising as that type -- an annotation-less
 		// node that still splits into list items is exactly the bug
 		// input-type-annotations="strip" and xsl:copy-of would have hit.
-		n.derivedPrimitive, n.listItem = "", ""
+		t.derivedPrimitive, t.listItem = "", ""
 	}
 	if isID, isRefs := annotationIDKind(annotation); isID || isRefs {
-		n.isID = n.isID || isID
-		n.isIDREFS = n.isIDREFS || isRefs
+		t.isID = t.isID || isID
+		t.isIDREFS = t.isIDREFS || isRefs
 	}
 }
 
@@ -1925,8 +892,12 @@ func (n *Node) SetTypeAnnotation(annotation string) {
 // missing one, and a missing one falls back correctly.
 func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem string) {
 	n.SetTypeAnnotation(annotation)
-	n.derivedPrimitive = derivedPrimitive
-	n.listItem = listItem
+	if n.flags&fTyped == 0 && derivedPrimitive == "" && listItem == "" {
+		return
+	}
+	t := n.ownTyping()
+	t.derivedPrimitive = derivedPrimitive
+	t.listItem = listItem
 }
 
 // CopyTypingFrom copies every PSVI property of src onto n, so that the copy
@@ -1957,17 +928,7 @@ func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem 
 // original does not have. The invariant SetTypeAnnotation protects is upheld
 // here by construction: the resolved fields cannot outlive their annotation,
 // because src is a coherent node and all nine fields travel together.
-func (n *Node) CopyTypingFrom(src *Node) {
-	n.typeAnnotation = src.typeAnnotation
-	n.unionMember = src.unionMember
-	n.derivedPrimitive = src.derivedPrimitive
-	n.listItem = src.listItem
-	n.isID = src.isID
-	n.isIDREFS = src.isIDREFS
-	n.isNilled = src.isNilled
-	n.noTypedValue = src.noTypedValue
-	n.mixedContent = src.mixedContent
-}
+func (n *Node) CopyTypingFrom(src *Node) { n.ApplyTyping(TypingOf(src)) }
 
 // Typing is the complete set of PSVI properties an assessment concludes about
 // one node, detached from any node.
@@ -2006,16 +967,17 @@ func TypingOf(n *Node) Typing {
 	if n == nil {
 		return Typing{}
 	}
+	t := n.typ()
 	return Typing{
-		TypeAnnotation:   n.typeAnnotation,
-		UnionMember:      n.unionMember,
-		DerivedPrimitive: n.derivedPrimitive,
-		ListItem:         n.listItem,
-		IsID:             n.isID,
-		IsIDREFS:         n.isIDREFS,
-		IsNilled:         n.isNilled,
-		NoTypedValue:     n.noTypedValue,
-		MixedContent:     n.mixedContent,
+		TypeAnnotation:   t.annotation,
+		UnionMember:      t.unionMember,
+		DerivedPrimitive: t.derivedPrimitive,
+		ListItem:         t.listItem,
+		IsID:             t.isID,
+		IsIDREFS:         t.isIDREFS,
+		IsNilled:         t.isNilled,
+		NoTypedValue:     t.noTypedValue,
+		MixedContent:     t.mixedContent,
 	}
 }
 
@@ -2029,15 +991,19 @@ func TypingOf(n *Node) Typing {
 // SetTypeAnnotation only ever turns is-id ON, which would let a node inherit a
 // marking its assessment did not give it.
 func (n *Node) ApplyTyping(t Typing) {
-	n.typeAnnotation = t.TypeAnnotation
-	n.unionMember = t.UnionMember
-	n.derivedPrimitive = t.DerivedPrimitive
-	n.listItem = t.ListItem
-	n.isID = t.IsID
-	n.isIDREFS = t.IsIDREFS
-	n.isNilled = t.IsNilled
-	n.noTypedValue = t.NoTypedValue
-	n.mixedContent = t.MixedContent
+	if t == (Typing{}) && n.flags&fTyped == 0 {
+		return
+	}
+	d := n.ownTyping()
+	d.annotation = t.TypeAnnotation
+	d.unionMember = t.UnionMember
+	d.derivedPrimitive = t.DerivedPrimitive
+	d.listItem = t.ListItem
+	d.isID = t.IsID
+	d.isIDREFS = t.IsIDREFS
+	d.isNilled = t.IsNilled
+	d.noTypedValue = t.NoTypedValue
+	d.mixedContent = t.MixedContent
 }
 
 // CopyTypingStrippedFrom copies onto n the PSVI properties of src that survive
@@ -2072,19 +1038,13 @@ func (n *Node) ApplyTyping(t Typing) {
 //
 // Fields outside the PSVI set -- name, value, base URI, children -- are the
 // caller's business, exactly as in CopyTypingFrom.
+//
+// NoTypedValue and MixedContent are cleared for the same reason IsNilled is:
+// they are conclusions of an assessment, and a stripped tree is one nothing
+// assessed. Every element of it is xs:untypedAtomic and atomizes.
 func (n *Node) CopyTypingStrippedFrom(src *Node) {
-	n.typeAnnotation = ""
-	n.unionMember = ""
-	n.derivedPrimitive = ""
-	n.listItem = ""
-	n.isID = src.isID
-	n.isIDREFS = src.isIDREFS
-	n.isNilled = false
-	// Cleared for the same reason IsNilled is: the absence of a typed value
-	// is a conclusion of an assessment, and a stripped tree is one nothing
-	// assessed. Every element of it is xs:untypedAtomic and atomizes.
-	n.noTypedValue = false
-	n.mixedContent = false
+	s := src.typ()
+	n.ApplyTyping(Typing{IsID: s.isID, IsIDREFS: s.isIDREFS})
 }
 
 // StripTyping clears in place every PSVI property that stripping removes,
@@ -2170,89 +1130,4 @@ func isBuiltinSimpleTypeName(name string) bool {
 		return true
 	}
 	return false
-}
-
-// nodeExt is the out-of-line part of a Node: state that only a schema-typed
-// node or the root of a detached tree ever sets.
-//
-// The Node holds it through a plain pointer read and written with
-// sync/atomic's pointer functions rather than through an atomic.Pointer,
-// because atomic.Pointer carries a no-copy marker and Node is copied by value
-// -- "c := *n" is how this repository and its callers clone a node -- so go
-// vet would flag every such copy.
-//
-// A copy made that way shares its original's nodeExt, and owner is how the
-// two are told apart. typeEnv belongs to the node's content and is inherited
-// by the copy, as it was when the field was inline. detachedID and numbered
-// identify one particular root and must not be: a copy that took its
-// original's id would compare equal to a different tree. So the first time a
-// node that does not own its nodeExt needs one, it gets a fresh one carrying
-// only typeEnv; see ownExt.
-//
-// Because a nodeExt may be shared, its typeEnv is never written in place:
-// SetTypeEnv installs a new nodeExt (replaceExt), so setting the environment
-// of one node never changes what a copy of it reports.
-type nodeExt struct {
-	owner   *Node
-	typeEnv *TypeEnvironment
-
-	// detachedID numbers a node that roots a tree which was never finalized,
-	// assigned on the first cross-tree comparison. Zero means unassigned.
-	detachedID atomic.Int64
-
-	// numbered guards the one-shot pre-order walk that gives the nodes of an
-	// unfinalized tree distinct order values. It sits beside detachedID
-	// because both are properties of a root that has no Tree of its own, and
-	// both are set at most once however many callers ask.
-	numbered atomic.Int32
-}
-
-// extAddr returns the address of n.ext as the type sync/atomic's pointer
-// functions take.
-func (n *Node) extAddr() *unsafe.Pointer { return (*unsafe.Pointer)(unsafe.Pointer(&n.ext)) }
-
-// loadExt returns n's nodeExt, which may be one n shares with the node it was
-// copied from, or nil when nothing has needed one.
-func (n *Node) loadExt() *nodeExt { return (*nodeExt)(atomic.LoadPointer(n.extAddr())) }
-
-// ownExt returns the nodeExt that belongs to n, creating it on first use or
-// replacing one inherited by a struct copy.
-//
-// It is safe to call concurrently, as the atomic fields it replaced were: the
-// pointer is installed by compare-and-swap, so concurrent callers all end up
-// with the one that won, and the counters inside it keep their own atomicity.
-func (n *Node) ownExt() *nodeExt {
-	for {
-		old := n.loadExt()
-		if old != nil && old.owner == n {
-			return old
-		}
-		e := &nodeExt{owner: n}
-		if old != nil {
-			e.typeEnv = old.typeEnv
-		}
-		if atomic.CompareAndSwapPointer(n.extAddr(), unsafe.Pointer(old), unsafe.Pointer(e)) {
-			return e
-		}
-	}
-}
-
-// replaceExt installs a new nodeExt carrying typeEnv e, and the root identity
-// of the one it replaces when n owns that one.
-//
-// ponytail: an id assigned by a detachedRootID racing this exact call on the
-// same node can be lost. SetTypeEnv runs while a validator builds the node,
-// before any other goroutine can reach it, so the window is not reachable.
-func (n *Node) replaceExt(e *TypeEnvironment) {
-	for {
-		old := n.loadExt()
-		ext := &nodeExt{owner: n, typeEnv: e}
-		if old != nil && old.owner == n {
-			ext.detachedID.Store(old.detachedID.Load())
-			ext.numbered.Store(old.numbered.Load())
-		}
-		if atomic.CompareAndSwapPointer(n.extAddr(), unsafe.Pointer(old), unsafe.Pointer(ext)) {
-			return
-		}
-	}
 }

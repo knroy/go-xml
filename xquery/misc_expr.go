@@ -425,13 +425,9 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	}
 
 	// §3.21 validates a COPY: "the validate expression returns a new copy of
-	// its operand", so the annotations the assessment stamps must not reach
-	// the node the operand expression yielded, which may be part of an input
-	// document the query can still see. Everything below therefore runs over
-	// the copy, and the copy is what is returned. Not xsd.ValidateCopy: that
-	// copies the operand's whole tree and returns a node with its ancestors,
-	// where §3.21 wants "a new node ... with no parent", and it would carry
-	// the source's document URI and DTD onto the result.
+	// its operand". The operand is copied on its own, parentless, so that the
+	// assessment sees it as the query does; the typed copy the schema layer
+	// returns from that is the result.
 	root = xdmbuild.DeepCopy(root)
 
 	// A document node's validation root is its element child, and the
@@ -455,7 +451,8 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		target, docNode = elem, true
 	}
 
-	vopts := xsd.ValidateOptions{AnnotateInPlace: true, SkipIDConstraints: !docNode}
+	vopts := xsd.ValidateOptions{SkipIDConstraints: !docNode}
+	var typed *xdm.Node
 	var verr error
 	switch {
 	case n.typeName != nil:
@@ -468,9 +465,9 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 				"validate type %s: no such type in the in-scope schema "+
 					"definitions", n.typeName.Lexical())
 		}
-		verr = schema.ValidateAgainstType(target, *n.typeName, vopts)
+		typed, verr = schema.ValidateAgainstTypeCopy(target, *n.typeName, vopts)
 	case n.lax:
-		verr = schema.ValidateElementLax(target, vopts)
+		typed, verr = schema.ValidateElementLaxCopy(target, vopts)
 	default:
 		// CanAssessStrictly rather than a bare declaration lookup: an element
 		// carrying xsi:type is assessed against the type it names even with
@@ -485,7 +482,7 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 					"in the in-scope schema definitions",
 				target.Name().Lexical())
 		}
-		verr = schema.Validate(target, vopts)
+		typed, verr = schema.ValidateCopy(target, vopts)
 	}
 	if verr != nil {
 		// §3.21 gives XQDY0027 for a validate expression whose operand was
@@ -494,7 +491,12 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		return nil, xdm.Errorf("XQDY0027",
 			"validate: the operand is not valid: %s", verr.Error())
 	}
-	return xdm.One(root), nil
+	if docNode {
+		// The typed copy of the document's element sits in a typed copy of
+		// the document.
+		typed = typed.Parent()
+	}
+	return xdm.One(typed), nil
 }
 
 // checkValidateDocChildren enforces §3.21's shape rule for a document-node

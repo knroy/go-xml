@@ -238,7 +238,8 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// each child instead reported the ID/IDREF failures with the
 				// element codes XTTE1510/XTTE1515, where XTTE1555 is the code
 				// for "document-level constraints are not satisfied".
-				if err := i.validation.assess(rt, c); err != nil {
+				c, err := i.validation.assess(rt, c)
+				if err != nil {
 					return err
 				}
 				out.AppendNode(c)
@@ -286,7 +287,8 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// from the process-global registries.
 				a := xdm.NewNode(xdm.KindAttribute, v.Name(), v.Value())
 				a.CopyTypingFrom(v)
-				if err := i.validation.assess(rt, a); err != nil {
+				a, err := i.validation.assess(rt, a)
+				if err != nil {
 					return err
 				}
 				if err := out.AddAttributeWithTyping(a.Name(), a.Value(),
@@ -354,10 +356,25 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// annotate, and annotating the source document would leak a
 			// property of this instruction into the tree everything else
 			// still reads.
-			if err := i.validation.assess(rt, c); err != nil {
+			typed, err := i.validation.assess(rt, c)
+			if err != nil {
 				return err
 			}
+			if typed != c && i.copyAccumulators {
+				// The typed copy is the copy now, and answers as v does.
+				rt.noteCopiedAccumulators(v, typed)
+			}
+			c = typed
 			out.AppendNode(c)
+			// Under an open element the node in the result is a copy of c,
+			// made as it was appended; that is the node the repair below and
+			// the accumulators are about.
+			if open := out.Open(); open != nil && c.Kind() == xdm.KindElement {
+				c = open.LastChild()
+				if i.copyAccumulators {
+					rt.noteCopiedAccumulators(v, c)
+				}
+			}
 			// After the copy has a parent, because the repair §5.8.3 needs
 			// depends on what the destination declares: an element in no
 			// namespace landing under one that declares a default has to
@@ -472,7 +489,7 @@ func copyDocumentNode(n *xdm.Node) *xdm.Node {
 	// future property does not have to find this line to be added to it.
 	tree.Root.CopyTypingFrom(n)
 	for ch := range n.Children() {
-		tree.Root.AppendChild(deepCopy(ch))
+		tree.Root.AppendCopy(ch)
 	}
 	tree.Finalize()
 	return tree.Root
@@ -484,8 +501,8 @@ func copyDocumentNode(n *xdm.Node) *xdm.Node {
 // nearest ones, and an inherited binding for the same prefix is masked.
 func inheritNamespaces(dst, src *xdm.Node) {
 	have := map[string]bool{}
-	for ns := range dst.NamespaceDecls() {
-		have[ns.Name().Local] = true
+	for prefix := range dst.DeclaredNamespaces() {
+		have[prefix] = true
 	}
 	scope := src.InScopeNamespaces()
 	prefixes := make([]string, 0, len(scope))
@@ -515,8 +532,8 @@ func inheritNamespacesAt(rt *runtime, dst, src, dest *xdm.Node) {
 
 // declares reports whether el carries a namespace node for prefix.
 func declares(el *xdm.Node, prefix string) bool {
-	for ns := range el.NamespaceDecls() {
-		if ns.Name().Local == prefix {
+	for nsPrefix := range el.DeclaredNamespaces() {
+		if nsPrefix == prefix {
 			return true
 		}
 	}
@@ -535,18 +552,22 @@ func scopeBindings(n *xdm.Node, buf []nsBinding) []nsBinding {
 		}
 		// Within one element the last declaration wins, as the map's
 		// overwrites resolve it; an inner element shadows an outer one.
+		// Bindings from buf[start:own] came from inner elements.
+		own := len(buf)
 	next:
-		for i := cur.NumNamespaceDecls() - 1; i >= 0; i-- {
-			ns := cur.NamespaceDeclAt(i)
-			if ns.Name().Local == "xml" {
+		for prefix, uri := range cur.DeclaredNamespaces() {
+			if prefix == "xml" {
 				continue
 			}
-			for _, b := range buf[start:] {
-				if b.prefix == ns.Name().Local {
+			for k := start; k < len(buf); k++ {
+				if buf[k].prefix == prefix {
+					if k >= own {
+						buf[k].uri = uri
+					}
 					continue next
 				}
 			}
-			buf = append(buf, nsBinding{ns.Name().Local, ns.Value()})
+			buf = append(buf, nsBinding{prefix, uri})
 		}
 	}
 	// Drop undeclarations, which only served to shadow, and sort.
@@ -577,7 +598,7 @@ func scopeBindings(n *xdm.Node, buf []nsBinding) []nsBinding {
 // answered with the bindings of wherever the copy landed. copy-0623 and
 // copy-0627 ask exactly that question.
 func stripNamespaces(n *xdm.Node) {
-	n.SetNamespaceDecls(nil)
+	n.RemoveNamespaceDecls(func(string, string) bool { return true })
 	// An element does not acquire an in-scope namespace merely because that
 	// namespace is present on its parent: §5.8.3 permits fixup to add a
 	// namespace node only where one is "necessary either to satisfy these
@@ -698,10 +719,14 @@ func scopeURI(n *xdm.Node, prefix string) string {
 		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		for i := cur.NumNamespaceDecls() - 1; i >= 0; i-- {
-			if ns := cur.NamespaceDeclAt(i); ns.Name().Local == prefix {
-				return ns.Value()
+		found, last := false, ""
+		for p, uri := range cur.DeclaredNamespaces() {
+			if p == prefix {
+				found, last = true, uri
 			}
+		}
+		if found {
+			return last
 		}
 	}
 	if prefix == "xml" {
@@ -764,10 +789,14 @@ func suppliedAt(rt *runtime, parent *xdm.Node, prefix, uri string) bool {
 		if fixupMayBind(cur, prefix) {
 			return false
 		}
-		for i := cur.NumNamespaceDecls() - 1; i >= 0; i-- {
-			if ns := cur.NamespaceDeclAt(i); ns.Name().Local == prefix {
-				return ns.Value() == uri && !rt.blocking[cur]
+		found, last := false, ""
+		for p, u := range cur.DeclaredNamespaces() {
+			if p == prefix {
+				found, last = true, u
 			}
+		}
+		if found {
+			return last == uri && !rt.blocking[cur]
 		}
 	}
 	return false
@@ -925,7 +954,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		// The copy is assessed once it is complete, since validity is a
 		// property of the whole element and its content.
-		return i.validation.assess(rt, sub.Open())
+		return i.validation.assessOpen(rt, sub)
 
 	case xdm.KindDocument:
 		// Section 11.9.1: the result of xsl:copy over a document node is "a
@@ -981,7 +1010,8 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 				}
 			}
 		}
-		if err := i.validation.assess(rt, doc); err != nil {
+		doc, err = i.validation.assess(rt, doc)
+		if err != nil {
 			return err
 		}
 		out.AppendNode(doc)
@@ -992,10 +1022,11 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return nil
 
 	case xdm.KindAttribute:
-		if err := i.validation.assess(rt, node); err != nil {
+		typed, err := i.validation.assess(rt, node)
+		if err != nil {
 			return err
 		}
-		return out.AddAttribute(node.Name(), node.Value())
+		return out.AddAttribute(typed.Name(), typed.Value())
 
 	case xdm.KindComment:
 		out.AppendNode(xdm.NewNode(xdm.KindComment, xdm.QName{}, node.Value()))
@@ -1164,7 +1195,7 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	fixupNamespaces(sub.Open())
 	// Assessed once the element is complete, since validity is a property of
 	// its content as well as its name.
-	return i.validation.assess(rt, sub.Open())
+	return i.validation.assessOpen(rt, sub)
 }
 
 // elementInstr implements xsl:element, whose name is computed at run time.
@@ -1225,7 +1256,7 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// The element is complete only now, so validity is assessed here rather
 	// than at construction: a content model cannot be checked against
 	// content that has not been built yet.
-	return i.validation.assess(rt, sub.Open())
+	return i.validation.assessOpen(rt, sub)
 }
 
 // resolveName turns a computed lexical name into an expanded QName, using the
@@ -1362,8 +1393,8 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// the one place holding the schema that did the assessing, so what it
 	// resolved the name to must travel with the node rather than be looked up
 	// again later against whichever schema happens to have loaded last.
-	assessed := xdm.NewNode(xdm.KindAttribute, qn, value)
-	if err := i.validation.assess(rt, assessed); err != nil {
+	assessed, err := i.validation.assess(rt, xdm.NewNode(xdm.KindAttribute, qn, value))
+	if err != nil {
 		return err
 	}
 	return out.AddAttributeWithTyping(qn, value, xdm.TypingOf(assessed))
@@ -2263,7 +2294,8 @@ func (i *documentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
-	if err := i.validation.assess(rt, doc); err != nil {
+	doc, err = i.validation.assess(rt, doc)
+	if err != nil {
 		return err
 	}
 	out.AppendNode(doc)

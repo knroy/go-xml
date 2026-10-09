@@ -13,7 +13,7 @@ import (
 // independently maintained lists. Deriving it from either operation would make
 // the test agree with whatever the operations happen to do.
 var psviProperties = map[string]bool{
-	"typeAnnotation":   true,
+	"annotation":       true,
 	"unionMember":      true,
 	"derivedPrimitive": true,
 	"listItem":         true,
@@ -24,43 +24,14 @@ var psviProperties = map[string]bool{
 	"mixedContent":     true,
 }
 
-// nonPSVIProperties are the fields of Node that are deliberately NOT
-// carried by the typing operations, each with the reason it is excluded.
-//
-// The list exists so that a NEW field is neither silently absorbed into the
-// PSVI set nor silently exempted from it: adding one to Node without deciding
-// which side it falls on fails TestPSVIPropertyCensus, which is the point.
-// That is the recurring bug this whole mechanism was built against -- a
-// property added to the node and never added to the copy, dropped silently by
-// every copy site at once.
 var nonPSVIProperties = map[string]string{
-	"kind":       "the node's identity, not an assessment of it",
-	"name":       "ditto",
-	"value":      "ditto",
-	"parent":     "structure; a copy is attached by whoever copies it",
-	"children":   "structure",
-	"attrs":      "structure; their typing travels by their own copy",
-	"namespaces": "structure",
-	"baseURI":    "dm:base-uri, decided by where the copy lands",
-	"documentURI": "dm:document-uri is the URI a document was RETRIEVED BY. " +
-		"A copy was not retrieved at all, so inheriting it would make " +
-		"doc(document-uri($d)) is $d false while claiming it is true.",
-	"order":  "document order, assigned by the tree the copy joins",
-	"offset": "source position of the original, not of the copy",
-	"tree":   "the containing tree, set by whoever links the copy",
-	"ext":    "the type environment, carried by SetTypeEnv, not by the typing copy",
+	"env": "the type environment, carried by SetTypeEnv, not by the typing copy",
 }
 
-// TestPSVIPropertyCensus is the guard on the guard: it fails when a field is
-// added to Node and classified as neither PSVI nor structure.
-//
-// CopyTypingFrom exists because eight properties travel together and every
-// hand-written field list eventually dropped one. That argument only holds
-// while "eight" is still the whole set -- a property added to Node later and
-// never added to the operation would be dropped by all ten copy sites at once,
-// silently, which is exactly the shape of every defect in this family.
+// The typing a node carries lives in nodeTyping; every field of it is either
+// a PSVI property the typing copies carry or named here as one they do not.
 func TestPSVIPropertyCensus(t *testing.T) {
-	rt := reflect.TypeOf(Node{})
+	rt := reflect.TypeOf(nodeTyping{})
 	seen := map[string]bool{}
 	for i := 0; i < rt.NumField(); i++ {
 		f := rt.Field(i)
@@ -71,16 +42,16 @@ func TestPSVIPropertyCensus(t *testing.T) {
 		if _, ok := nonPSVIProperties[f.Name]; ok {
 			continue
 		}
-		t.Errorf("Node.%s is classified neither as a PSVI "+
-			"property nor as structure. Decide which it is: if the PSVI "+
-			"records it, add it to CopyTypingFrom, to CopyTypingStrippedFrom "+
-			"(kept or cleared, per XSLT 2.0 3.5) and to psviProperties here. "+
-			"If it does not, add it to nonPSVIProperties with the reason.",
-			f.Name)
+		t.Errorf("nodeTyping.%s is classified neither as a PSVI "+
+			"property nor as something else. Decide which it is: if the PSVI "+
+			"records it, add it to Typing, ApplyTyping, TypingOf, "+
+			"CopyTypingStrippedFrom (kept or cleared, per XSLT 2.0 3.5) and to "+
+			"psviProperties here. If it does not, add it to nonPSVIProperties "+
+			"with the reason.", f.Name)
 	}
 	for name := range psviProperties {
 		if !seen[name] {
-			t.Errorf("psviProperties names %q, which Node no longer has", name)
+			t.Errorf("psviProperties names %q, which nodeTyping no longer has", name)
 		}
 	}
 }
@@ -95,13 +66,13 @@ func TestPSVIPropertyCensus(t *testing.T) {
 // that leaves a field zero and a source that was zero to begin with are
 // indistinguishable.
 func TestCopyTypingFromCarriesEveryPSVIProperty(t *testing.T) {
-	src := &Node{kind: KindElement}
+	src := NewNode(KindElement, QName{}, "")
 	setEveryPSVIProperty(src)
 
-	dst := &Node{kind: KindElement}
+	dst := NewNode(KindElement, QName{}, "")
 	dst.CopyTypingFrom(src)
 
-	sv, dv := reflect.ValueOf(src).Elem(), reflect.ValueOf(dst).Elem()
+	sv, dv := reflect.ValueOf(src.typ()).Elem(), reflect.ValueOf(dst.typ()).Elem()
 	for name := range psviProperties {
 		// The fields are unexported, so they are compared by their printed
 		// values: Interface would panic on them.
@@ -121,31 +92,31 @@ func TestCopyTypingFromCarriesEveryPSVIProperty(t *testing.T) {
 // Starting from a destination whose every field is non-zero and distinct from
 // the source's is what separates a deliberate clear from an omission.
 func TestCopyTypingStrippedFromTouchesEveryPSVIProperty(t *testing.T) {
-	src := &Node{kind: KindElement}
+	src := NewNode(KindElement, QName{}, "")
 	setEveryPSVIProperty(src)
 
 	// A destination pre-loaded with DIFFERENT non-zero values. Any field the
 	// operation does not write keeps one of these, which matches neither the
 	// cleared nor the kept answer.
-	dst := &Node{kind: KindElement,
-		typeAnnotation: "stale", unionMember: "stale", derivedPrimitive: "stale",
-		listItem: "stale", isID: false, isIDREFS: false, isNilled: true}
+	dst := NewNode(KindElement, QName{}, "")
+	dst.ApplyTyping(Typing{TypeAnnotation: "stale", UnionMember: "stale",
+		DerivedPrimitive: "stale", ListItem: "stale", IsNilled: true})
 	dst.CopyTypingStrippedFrom(src)
 
 	// XSLT 2.0 3.5: the four naming the type go, is-id and is-idrefs stay,
 	// dm:nilled goes. See the commentary on CopyTypingStrippedFrom.
-	if dst.typeAnnotation != "" || dst.unionMember != "" ||
-		dst.derivedPrimitive != "" || dst.listItem != "" {
+	if dst.TypeAnnotation() != "" || dst.UnionMember() != "" ||
+		dst.DerivedPrimitive() != "" || dst.ListItem() != "" {
 		t.Errorf("stripping left part of the type behind: annotation=%q "+
 			"UnionMember=%q DerivedPrimitive=%q ListItem=%q",
-			dst.typeAnnotation, dst.unionMember, dst.derivedPrimitive,
-			dst.listItem)
+			dst.TypeAnnotation(), dst.UnionMember(), dst.DerivedPrimitive(),
+			dst.ListItem())
 	}
-	if !dst.isID || !dst.isIDREFS {
+	if !dst.IsID() || !dst.IsIDREFS() {
 		t.Errorf("stripping dropped is-id/is-idrefs, which 3.5 exempts: "+
-			"IsID=%v IsIDREFS=%v", dst.isID, dst.isIDREFS)
+			"IsID=%v IsIDREFS=%v", dst.IsID(), dst.IsIDREFS())
 	}
-	if dst.isNilled {
+	if dst.IsNilled() {
 		t.Error("stripping kept dm:nilled, which 3.5 makes false on every " +
 			"element of a stripped tree")
 	}
@@ -155,11 +126,7 @@ func TestCopyTypingStrippedFromTouchesEveryPSVIProperty(t *testing.T) {
 // the census names one it does not know how to set -- which is how a newly
 // added property reaches this file rather than being quietly skipped.
 func setEveryPSVIProperty(n *Node) {
-	n.typeAnnotation = "{urn:census}T"
-	n.unionMember = "{urn:census}M"
-	n.derivedPrimitive = "decimal"
-	n.listItem = "decimal"
-	n.isID = true
-	n.isIDREFS = true
-	n.isNilled = true
+	n.ApplyTyping(Typing{TypeAnnotation: "{urn:census}T", UnionMember: "{urn:census}M",
+		DerivedPrimitive: "decimal", ListItem: "decimal", IsID: true, IsIDREFS: true,
+		IsNilled: true, NoTypedValue: true, MixedContent: true})
 }

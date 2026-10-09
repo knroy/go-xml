@@ -2,8 +2,8 @@ package xpath
 
 import "github.com/knroy/go-xml/v2/xdm"
 
-// TreeValidator validates a tree this package has just constructed, writing
-// the type annotations the assessment produces onto its nodes.
+// TreeValidator validates a tree this package has just constructed, returning
+// a copy carrying the type annotations the assessment produces.
 //
 // fn:json-to-xml is the one function in the library that must do this. F&O
 // 3.1 §17.5.3 says of its validate option: true "indicates that the resulting
@@ -30,12 +30,8 @@ import "github.com/knroy/go-xml/v2/xdm"
 // that would fail every assertion the stylesheet then makes about it.
 type TreeValidator interface {
 	// ValidateJSONTree assesses a document node holding the XML
-	// representation of JSON against the schema of F&O 3.1 §C.2, annotating
-	// the tree in place.
-	//
-	// The tree was constructed by this package a moment ago and is reachable
-	// from nowhere else, so mutating it is safe in a way that annotating a
-	// source document would not be.
+	// representation of JSON against the schema of F&O 3.1 §C.2, and returns
+	// the typed copy of it, which is the function's result.
 	//
 	// An implementation that has the schema but finds the tree invalid
 	// returns the error. That should not happen for a tree fn:json-to-xml
@@ -43,5 +39,5 @@ type TreeValidator interface {
 	// construction, and duplicates="retain", the one option that does not,
 	// is already refused alongside validate=true — but a wrong answer is
 	// worth a diagnosis rather than a silently untyped tree.
-	ValidateJSONTree(doc *xdm.Node) error
+	ValidateJSONTree(doc *xdm.Node) (*xdm.Node, error)
 }

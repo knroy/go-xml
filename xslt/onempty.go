@@ -109,7 +109,7 @@ func deemedEmpty(it xdm.Item) bool {
 			// Attributes and namespaces do not save an element here: 8.4.1
 			// says so explicitly, and the section's own example relies on it
 			// — <ul class="my-list"> with no list items is dropped.
-			return v.NumChildren() == 0
+			return v.FirstChild() == nil
 		default:
 			return v.StringValue() == ""
 		}
@@ -146,7 +146,7 @@ func vacuous(it xdm.Item) bool {
 	case *xdm.Node:
 		switch v.Kind() {
 		case xdm.KindDocument:
-			return v.NumChildren() == 0
+			return v.FirstChild() == nil
 		case xdm.KindText:
 			return v.Value() == ""
 		case xdm.KindElement:
@@ -418,14 +418,14 @@ func (c *compiler) compileOnEmpty(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 // because it is a static error about what the stylesheet *says*, and the
 // compiled form has already dropped the stripped whitespace and the comments
 // that decide whether a following text node is significant.
-func checkOnEmptyPlacement(nodes []*xdm.Node) error {
+func (c *compiler) checkOnEmptyPlacement(nodes []*xdm.Node) error {
 	seen := false
 	for _, n := range nodes {
 		switch n.Kind() {
 		case xdm.KindText:
 			// Only a text node that survives whitespace stripping counts;
 			// the indentation between two instructions does not.
-			if !seen || xdm.IsXMLWhitespace(n.Value()) && !stylesheetTextPreserved(n) {
+			if !seen || xdm.IsXMLWhitespace(n.Value()) && !stylesheetTextPreserved(n, c.textParent(n)) {
 				continue
 			}
 			return fmt.Errorf(

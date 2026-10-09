@@ -234,11 +234,11 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 	}
 	in := c.contains(e)
 	scopeMark, renderedMark, utilMark := len(c.scope.undo), len(c.rendered.undo), len(c.util.undo)
-	for ns := range e.NamespaceDecls() {
-		if err := checkNamespaceURI(ns.Name().Local, ns.Value()); err != nil {
+	for prefix, uri := range e.DeclaredNamespaces() {
+		if err := checkNamespaceURI(prefix, uri); err != nil {
 			return err
 		}
-		c.scope.set(ns.Name().Local, ns.Value())
+		c.scope.set(prefix, uri)
 	}
 	c.path = append(c.path, ancestor{e, in})
 
@@ -331,8 +331,8 @@ func (c *canon) namespaces(e *xdm.Node, parentIn bool) {
 			c.consider(p)
 		}
 	} else if parentIn {
-		for ns := range e.NamespaceDecls() {
-			c.consider(ns.Name().Local)
+		for prefix := range e.DeclaredNamespaces() {
+			c.consider(prefix)
 		}
 	} else {
 		for prefix := range c.scope.m {

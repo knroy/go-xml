@@ -331,7 +331,6 @@ typed, err := schema.ValidateCopy(doc.Root, xsd.ValidateOptions{
 > `Validate` returned `nil` for a flagrantly invalid document — a silent pass.
 > The guard is now `v.opts.MaxErrors > 0 &&`, matching `dtd`, and
 > `xsd/limits_boundary_test.go` fails against any revision that drops it.
-| `AnnotateInPlace` | `bool` | off | Writes each node's type into the tree you passed in, together with the resolved `DerivedPrimitive`, `ListItem`, `UnionMember` and `nilled` beside it, adds defaulted attributes and strips ignorable whitespace: the part of the PSVI that XPath and XSLT consume. The resolved fields are recorded per node rather than looked up later, so a schema loaded afterwards cannot retype a document this one already validated. For a tree you just built and nobody else holds; it **mutates the tree you passed in**. `ValidateCopy` gives the same typing on a copy. v1 called this `Annotate`. |
 
 ### Bounding a run with a context
 
@@ -380,14 +379,16 @@ xsd.ValidateOptions{MaxDepth: 5000}    // and validate it
 
 ### Typed trees and concurrency
 
-`Validate` without `AnnotateInPlace` only reads the tree. A compiled `*Schema`
-is safe to share across goroutines, and so is a tree being validated that way.
-`AnnotateInPlace: true` writes to the tree, so a tree being annotated in place
-is not.
+`Validate` only reads the tree. A compiled `*Schema` is safe to share across
+goroutines, and so is a tree being validated. (v1's `Annotate`, which wrote
+types into the tree passed in, is gone in v2: a tree is not edited once
+built.)
 
 `Schema.ValidateCopy(root, opts)` (and `ValidateCopyContext`) validates a copy
-of the whole tree and returns the copy's counterpart of `root`, typed as
-`AnnotateInPlace` would type it, valid or not, together with the error `Validate`
+of the whole tree and returns the copy's counterpart of `root`, typed -- each node's
+annotation, with the resolved `DerivedPrimitive`, `ListItem`, `UnionMember`
+and `nilled` recorded beside it, defaulted attributes added and ignorable
+whitespace stripped -- valid or not, together with the error `Validate`
 would have returned. The input is never written to, so one tree can be
 validated from several goroutines at once. The copy carries every typing
 property, base and document URIs, the DOCTYPE and unparsed entities;
@@ -859,14 +860,15 @@ one infoset to another, so it runs as a pass over an already-parsed tree.
 ```go
 tree, err := xdm.ParseString(src, opts)
 if err != nil { return err }
-err = xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
+tree, err = xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
     Resolver: resolver, // an *xslt.FileResolver, or your own
     Parse:    opts,     // the included documents get the same limits
 })
 ```
 
-`ProcessXInclude` modifies the tree in place and re-finalises document order,
-so node identities must not be held across the call.
+`ProcessXInclude` returns the included document as a new tree, built
+top-down as every tree is; the tree it is given is left as it was, and node
+identities do not carry over.
 
 **The resolver is the whole of the confinement.** `xdm` has no filesystem and
 no network; it can read only what a resolver hands it. `xslt.FileResolver`

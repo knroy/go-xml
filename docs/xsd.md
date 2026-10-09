@@ -329,12 +329,9 @@ typed, err := schema.ValidateCopy(doc.Root, xsd.ValidateOptions{})
 That is the part of the post-schema-validation infoset the XPath and XSLT
 layers consume — it is what makes `element(*, xs:date)` and typed value
 comparison mean anything. `Validate` itself only checks and never writes to
-the tree. `ValidateOptions.AnnotateInPlace` types the tree passed in instead
-of a copy; it exists for a tree the caller has just built and nobody else
-holds, as the XSLT and XQuery engines do with their result trees, because
-**it mutates the tree
-you passed in**, which also makes it the one option that is unsafe to use on a
-tree shared between goroutines.
+the tree. `ValidateCopy` (and `ValidateElementLaxCopy`, `ValidateAttributeCopy`,
+`ValidateAgainstTypeCopy`) returns a typed copy; there is no in-place
+annotation, because a tree is not edited once it is built.
 
 ## Limits
 
@@ -645,12 +642,9 @@ Its one piece of lazily-built state, the content-model cache, is synchronised
 for that reason: content models are compiled on first use, so the cache is
 written by whichever goroutine reaches a type first and read by the rest.
 
-Two things are *not* shared:
-
-* **A schema still being assembled.** Finish loading before publishing it.
-* **A document tree** under `AnnotateInPlace`, which writes into it. Plain
-  `Validate` and `ValidateCopy` only read the tree, so one parsed document
-  may be validated from several goroutines at once.
+One thing is *not* shared: **a schema still being assembled.** Finish loading
+before publishing it. `Validate` and `ValidateCopy` only read the tree, so one
+parsed document may be validated from several goroutines at once.
 
 This is tested rather than asserted. The suite runs validation from many
 goroutines against both warm and deliberately cold schemas, validates

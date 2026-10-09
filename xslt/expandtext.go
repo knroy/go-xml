@@ -138,11 +138,11 @@ func (i *textValueTemplateInstr) Execute(rt *runtime, out *outputBuilder) error 
 
 // compileText compiles one text node of a sequence constructor, as either
 // literal text or a text value template.
-func (c *compiler) compileText(n *xdm.Node) (Instruction, error) {
-	if n.Parent() == nil || !expandTextAt(n.Parent()) {
-		return &textInstr{text: n.Value()}, nil
+func (c *compiler) compileText(value string, parent *xdm.Node) (Instruction, error) {
+	if parent == nil || !expandTextAt(parent) {
+		return &textInstr{text: value}, nil
 	}
-	tmpl, err := compileAVT(emptyBracesRemoved(n.Value()), newNSResolver(n.Parent(), ""))
+	tmpl, err := compileAVT(emptyBracesRemoved(value), newNSResolver(parent, ""))
 	if err != nil {
 		return nil, err
 	}

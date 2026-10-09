@@ -12,8 +12,8 @@ import (
 // xsd.Schema.ValidateCopy returns reaches the stylesheet typed: an element
 // declared xs:decimal atomises to an xs:decimal and arithmetic on an
 // xs:integer stays xs:integer, with no cast in the stylesheet. Validate only
-// checks the document and leaves it as it was, so the same stylesheet run on
-// it sees xs:untypedAtomic. docs/validation.md once said typed values did not exist at
+// checks the document, and the same stylesheet sees
+// xs:untypedAtomic. docs/validation.md once said typed values did not exist at
 // all; this is the behaviour that statement contradicted.
 func TestAnnotatedSourceAtomisesToTypedValues(t *testing.T) {
 	const schema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
@@ -41,6 +41,7 @@ func TestAnnotatedSourceAtomisesToTypedValues(t *testing.T) {
 		want     string
 	}{{false, "false false"}, {true, "true true"}} {
 		src := mustParse(t, `<order><price>10.50</price><qty>3</qty></order>`)
+		var err error
 		if c.annotate {
 			src, err = sh.Schema().ValidateCopy(src, xsd.ValidateOptions{})
 		} else {
@@ -54,7 +55,7 @@ func TestAnnotatedSourceAtomisesToTypedValues(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := strings.TrimSpace(res.String()); got != c.want {
-			t.Errorf("typed copy=%v: typed = %q, want %q", c.annotate, got, c.want)
+			t.Errorf("Annotate=%v: typed = %q, want %q", c.annotate, got, c.want)
 		}
 	}
 }

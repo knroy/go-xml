@@ -24,14 +24,10 @@ import (
 func TestDeepCopyPropagatesResolvedTyping(t *testing.T) {
 	src := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
 	src.SetTypeAnnotationResolved("{urn:x}T", "decimal", "")
-	src.AddAttr(func() *xdm.Node {
-		n := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: "a"}, "1 2")
-		n.ApplyTyping(xdm.Typing{TypeAnnotation: "{urn:x}L", DerivedPrimitive: "", ListItem: "integer"})
-		return n
-	}())
-	kid := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "k"}, "")
+	src.AppendAttr(xdm.QName{Local: "a"}, "1 2").ApplyTyping(
+		xdm.Typing{TypeAnnotation: "{urn:x}L", DerivedPrimitive: "", ListItem: "integer"})
+	kid := src.AppendElement(xdm.QName{Local: "k"})
 	kid.SetTypeAnnotationResolved("{urn:x}K", "double", "")
-	src.AppendChild(kid)
 
 	c := DeepCopy(src)
 
@@ -58,7 +54,7 @@ func TestDeepCopyTypingBeatsTheRegistry(t *testing.T) {
 	xdm.RegisterDerivedType(name, "decimal")
 
 	src := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
-	src.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, "10"))
+	src.AppendText("10")
 	src.SetTypeAnnotationResolved(name, "decimal", "")
 
 	c := DeepCopy(src)
@@ -85,7 +81,7 @@ func TestDeepCopyListTypingBeatsTheRegistry(t *testing.T) {
 	xdm.RegisterListType(name, "decimal")
 
 	src := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "l"}, "")
-	src.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, "10 20"))
+	src.AppendText("10 20")
 	src.SetTypeAnnotationResolved(name, "", "decimal")
 
 	c := DeepCopy(src)
@@ -137,7 +133,7 @@ func TestDeepCopyOfUnresolvedNodeStaysUnresolved(t *testing.T) {
 // result tree that had been correctly stripped.
 func TestClearedAnnotationDropsResolvedTyping(t *testing.T) {
 	n := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "lb"}, "")
-	n.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, "one two three"))
+	n.AppendText("one two three")
 	n.SetTypeAnnotationResolved("NMTOKENS", "anySimpleType", "NMTOKEN")
 
 	if got := len(xdm.Atomize(xdm.One(n))); got != 3 {
@@ -160,7 +156,7 @@ func TestClearedAnnotationDropsResolvedTyping(t *testing.T) {
 	// struct literal elsewhere can reach that state.
 	m := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "lb"}, "")
 	m.ApplyTyping(xdm.Typing{ListItem: "NMTOKEN"})
-	m.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, "one two three"))
+	m.AppendText("one two three")
 	if got := len(xdm.Atomize(xdm.One(m))); got != 1 {
 		t.Errorf("a node with no annotation but a stray ListItem atomised to "+
 			"%d items, want 1", got)

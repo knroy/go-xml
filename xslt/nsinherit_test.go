@@ -62,8 +62,8 @@ func TestConstructedElementsInheritBindings(t *testing.T) {
 	}
 	for c := range out.Children() {
 		var got []string
-		for ns := range c.NamespaceDecls() {
-			got = append(got, ns.Name().Local+"="+ns.Value())
+		for prefix, uri := range c.DeclaredNamespaces() {
+			got = append(got, prefix+"="+uri)
 		}
 		want := ""
 		switch c.Name().Local {
@@ -220,15 +220,19 @@ func TestNamespaceInheritanceUnchanged(t *testing.T) {
 // on one element wins, an undeclaration removes the prefix, and xml is left
 // out.
 func TestScopeBindingsMatchesInScopeNamespaces(t *testing.T) {
-	doc, err := xdm.ParseString(`<?xml version="1.1"?>`+
-		`<a xmlns="urn:d" xmlns:p="urn:p" xmlns:q="urn:q">`+
-		`<b xmlns:p="urn:p2" xmlns:q=""><c xmlns=""/></b></a>`,
-		xdm.ParseOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := doc.Root.FirstElement("", "c")
-	b := c.Parent()
+	// <a xmlns="urn:d" xmlns:p="urn:p" xmlns:q="urn:q"><b xmlns:p="urn:p2"
+	// xmlns:q=""><c xmlns=""/></b></a>, built so that declarations can be
+	// added to b below.
+	doc := xdm.NewTree()
+	a := doc.Root.AppendElement(xdm.QName{URI: "urn:d", Local: "a"})
+	a.AddNamespace("", "urn:d")
+	a.AddNamespace("p", "urn:p")
+	a.AddNamespace("q", "urn:q")
+	b := a.AppendElement(xdm.QName{URI: "urn:d", Local: "b"})
+	b.AddNamespace("p", "urn:p2")
+	b.AddNamespace("q", "")
+	c := b.AppendElement(xdm.QName{Local: "c"})
+	c.AddNamespace("", "")
 	// Two declarations of one prefix on one element, as a constructed tree
 	// can hold: the later one is in force.
 	b.AddNamespace("r", "urn:r1")

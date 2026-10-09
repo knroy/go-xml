@@ -1267,14 +1267,22 @@ func deliverSecondary(format string, sec SecondaryResult) (xdm.Sequence, error) 
 		}
 		return xdm.Sequence{xdm.NewString(buf.String())}, nil
 	default:
+		// The document node is built over copies of the result's nodes, so
+		// that each is its child -- parent included -- and a document node in
+		// the result contributes its children, as 5.7.1 has it.
 		doc := xdm.NewNode(xdm.KindDocument, xdm.QName{}, "")
-		var kids []*xdm.Node
 		for _, it := range sec.Nodes {
-			if n, ok := it.(*xdm.Node); ok {
-				kids = append(kids, n)
+			n, ok := it.(*xdm.Node)
+			switch {
+			case !ok:
+			case n.Kind() == xdm.KindDocument:
+				for ch := range n.Children() {
+					doc.AppendCopy(ch)
+				}
+			default:
+				doc.AppendCopy(n)
 			}
 		}
-		doc.SetChildren(kids)
 		return xdm.Sequence{doc}, nil
 	}
 }

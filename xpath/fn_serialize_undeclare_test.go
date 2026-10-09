@@ -14,19 +14,8 @@ import (
 // parser cannot read the xmlns:p="" that produces it.
 func undeclaringTree() *xdm.Node {
 	root := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "root"}, "")
-	root.SetNamespaceDecls([]*xdm.Node{func() *xdm.Node {
-		n := xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: "p"}, "http://example.com/p")
-		n.SetParent(root)
-		return n
-	}()})
-	child := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "child"}, "")
-	child.SetParent(root)
-	child.SetNamespaceDecls([]*xdm.Node{func() *xdm.Node {
-		n := xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: "p"}, "")
-		n.SetParent(child)
-		return n
-	}()})
-	root.SetChildren([]*xdm.Node{child})
+	root.AddNamespace("p", "http://example.com/p")
+	root.AppendElement(xdm.QName{Local: "child"}).AddNamespace("p", "")
 	return root
 }
 
@@ -44,18 +33,10 @@ func paramsElement(params map[string]string) *xdm.Node {
 		names = append(names, k)
 	}
 	sort.Strings(names)
-	var kids []*xdm.Node
 	for _, name := range names {
-		c := xdm.NewNode(xdm.KindElement, xdm.QName{Prefix: "output", URI: ns, Local: name}, "")
-		c.SetParent(root)
-		c.SetAttrs([]*xdm.Node{func() *xdm.Node {
-			n := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: "value"}, params[name])
-			n.SetParent(c)
-			return n
-		}()})
-		kids = append(kids, c)
+		c := root.AppendElement(xdm.QName{Prefix: "output", URI: ns, Local: name})
+		c.AppendAttr(xdm.QName{Local: "value"}, params[name])
 	}
-	root.SetChildren(kids)
 	return root
 }
 

@@ -590,9 +590,10 @@ claim, since it means evaluation never writes back into the document.
 
 That last claim was false until an audit found the counter-example, and it is
 worth recording how it hid. `xsl:sequence` handed source nodes straight to the
-output builder, which calls `AppendChild` on them — and `AppendChild` rewrites
-the node's parent and tree pointers, while `Finalize` renumbers its document
-order. So reading from the document mutated it. The visible symptom was not a
+output builder, which called `AppendChild` on them — and `AppendChild` rewrote
+the node's parent and tree pointers, while `Finalize` renumbered its document
+order. So reading from the document mutated it. (In v2 nothing can relink a
+node: a tree is built top-down, and a node becomes content as a copy.) The visible symptom was not a
 race at all:
 
 ```xslt

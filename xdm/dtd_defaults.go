@@ -275,24 +275,29 @@ func lexicalIs(prefix, local, s string) bool {
 // footing as a schema-validated one, so fn:id finds the same attributes in
 // both.
 func applyAttTypes(el *Node, types []attDeclaredType) {
+	en := el.Name()
 	for _, t := range types {
-		if !lexicalIs(el.name.Prefix, el.name.Local, t.element) && t.element != el.name.Local {
+		if !lexicalIs(en.Prefix, en.Local, t.element) && t.element != en.Local {
 			continue
 		}
-		for _, a := range el.attrs {
-			if !lexicalIs(a.name.Prefix, a.name.Local, t.attr) && a.name.Local != t.attr {
+		for a := range el.Attrs() {
+			if an := a.Name(); !lexicalIs(an.Prefix, an.Local, t.attr) && an.Local != t.attr {
 				continue
 			}
 			// XML 1.0 §3.3.3: a value whose declared type is not CDATA
 			// loses leading and trailing spaces, and each run of spaces
 			// becomes one. Only #x20: a tab written as &#9; survives.
-			a.value = strings.Join(strings.FieldsFunc(a.value, func(r rune) bool { return r == ' ' }), " ")
+			if v := a.Value(); strings.Contains(v, " ") {
+				if c := strings.Join(strings.FieldsFunc(v, func(r rune) bool { return r == ' ' }), " "); c != v {
+					a.SetValue(c)
+				}
+			}
 			switch t.typ {
 			case "ID", "IDREF", "IDREFS":
 			default:
 				continue
 			}
-			if a.typeAnnotation == "" {
+			if a.TypeAnnotation() == "" {
 				// SetTypeAnnotation rather than a bare assignment: a DTD
 				// declaring ID/IDREF/IDREFS is one of the two ways a
 				// document establishes the is-id and is-idrefs properties,
@@ -361,26 +366,17 @@ func isElementOnlyModel(model string) bool {
 	return !strings.Contains(model, "#PCDATA")
 }
 
-// stripIgnorableWhitespace removes the whitespace-only text children of an
-// element whose DTD content model is element-only.
+// ignorableWhitespaceIn reports whether whitespace-only text children of el
+// are ignorable: el's DTD content model is element-only.
 //
 // This runs independently of, and before, the stylesheet's own strip-space
 // rules: it is not a preference that xsl:preserve-space can turn off. An
 // explicit xml:space="preserve" is still honoured, since XML §2.10 makes that
 // the document's own statement about its whitespace.
-func stripIgnorableWhitespace(el *Node, elementOnly map[string]bool) {
-	if !elementOnly[el.name.Lexical()] && !elementOnly[el.name.Local] {
-		return
+func ignorableWhitespaceIn(el *Node, elementOnly map[string]bool) bool {
+	if en := el.Name(); !elementOnly[en.Lexical()] && !elementOnly[en.Local] {
+		return false
 	}
-	if a := el.Attr(NSXML, "space"); a != nil && a.value == "preserve" {
-		return
-	}
-	kept := el.children[:0]
-	for _, c := range el.children {
-		if c.kind == KindText && IsXMLWhitespace(c.value) {
-			continue
-		}
-		kept = append(kept, c)
-	}
-	el.children = kept
+	a := el.Attr(NSXML, "space")
+	return a == nil || a.Value() != "preserve"
 }

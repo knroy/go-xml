@@ -57,7 +57,8 @@ func runUnionMember(t *testing.T, src string) string {
 	if err != nil {
 		t.Fatalf("parsing the source: %v", err)
 	}
-	if err := schema.Validate(tree.Root, xsd.ValidateOptions{AnnotateInPlace: true}); err != nil {
+	typed, err := schema.ValidateCopy(tree.Root, xsd.ValidateOptions{})
+	if err != nil {
 		t.Fatalf("validating the source: %v", err)
 	}
 	sheet, err := Compile(mustParse(t, src), CompileOptions{
@@ -66,7 +67,7 @@ func runUnionMember(t *testing.T, src string) string {
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	res, err := sheet.Transform(context.Background(), tree.Root, TransformOptions{})
+	res, err := sheet.Transform(context.Background(), typed, TransformOptions{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}

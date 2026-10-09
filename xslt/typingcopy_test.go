@@ -95,7 +95,8 @@ func transformTypingProbe(t *testing.T, src, schemaSrc string) *xdm.Node {
 	if err != nil {
 		t.Fatalf("parsing the source: %v", err)
 	}
-	if err := schema.Validate(tree.Root, xsd.ValidateOptions{AnnotateInPlace: true}); err != nil {
+	source, err := schema.ValidateCopy(tree.Root, xsd.ValidateOptions{})
+	if err != nil {
 		t.Fatalf("validating the source: %v", err)
 	}
 	sheet, err := Compile(mustParse(t, src), CompileOptions{
@@ -105,7 +106,7 @@ func transformTypingProbe(t *testing.T, src, schemaSrc string) *xdm.Node {
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	out, err := sheet.Transform(context.Background(), tree.Root, TransformOptions{})
+	out, err := sheet.Transform(context.Background(), source, TransformOptions{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -447,7 +448,8 @@ func TestResultDocumentCarriesResolvedTyping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing the source: %v", err)
 	}
-	if err := schema.Validate(tree.Root, xsd.ValidateOptions{AnnotateInPlace: true}); err != nil {
+	source, err := schema.ValidateCopy(tree.Root, xsd.ValidateOptions{})
+	if err != nil {
 		t.Fatalf("validating the source: %v", err)
 	}
 	sheet, err := Compile(mustParse(t, `<xsl:stylesheet version="3.0"
@@ -466,7 +468,7 @@ func TestResultDocumentCarriesResolvedTyping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	out, err := sheet.Transform(context.Background(), tree.Root, TransformOptions{})
+	out, err := sheet.Transform(context.Background(), source, TransformOptions{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -474,13 +476,11 @@ func TestResultDocumentCarriesResolvedTyping(t *testing.T) {
 		t.Fatalf("got %d secondary results, want 1", len(out.Secondary))
 	}
 	root := xdm.NewNode(xdm.KindDocument, xdm.QName{}, "")
-	var kids []*xdm.Node
 	for _, it := range out.Secondary[0].Nodes {
 		if n, ok := it.(*xdm.Node); ok {
-			kids = append(kids, n)
+			root.AppendCopy(n)
 		}
 	}
-	root.SetChildren(kids)
 
 	// The registries are redefined only now, so everything the engine did was
 	// done while they still agreed with the node. See runTypingProbe.

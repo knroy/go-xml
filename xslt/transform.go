@@ -771,9 +771,7 @@ func (s *Stylesheet) stripWhitespaceForFrom(pkg int, root, want *xdm.Node) (*xdm
 		found = tree.Root
 	}
 	for ch := range root.Children() {
-		if c := s.stripCopy(pkg, ch, false, want, &found); c != nil {
-			tree.Root.AppendChild(c)
-		}
+		s.stripCopy(pkg, tree.Root, ch, false, want, &found)
 	}
 	tree.Finalize()
 	return tree.Root, found
@@ -955,20 +953,20 @@ func (s *Stylesheet) SourceDocumentResolver(inner xpath.DocumentResolver) xpath.
 	return &stripSpaceResolver{sheet: s, inner: inner}
 }
 
-// stripCopy copies n, dropping whitespace-only text where stripping applies.
+// stripCopy appends a copy of n to parent, dropping whitespace-only text
+// where stripping applies.
 //
 // preserving carries xml:space="preserve" down the subtree, and *only* that:
 // whether an element's own whitespace is stripped is decided from the
 // strip-space and preserve-space declarations matching its name.
-func (s *Stylesheet) stripCopy(pkg int, n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
-	c := s.stripCopyNode(pkg, n, preserving, want, found)
+func (s *Stylesheet) stripCopy(pkg int, parent, n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) {
+	c := s.stripCopyNode(pkg, parent, n, preserving, want, found)
 	if c != nil && n == want {
 		*found = c
 	}
-	return c
 }
 
-func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
+func (s *Stylesheet) stripCopyNode(pkg int, parent, n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
 	switch n.Kind() {
 	case xdm.KindText:
 		// Whitespace-only text is dropped unless xml:space preserves it or
@@ -988,7 +986,7 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 			!xdm.HasSimpleTypeAnnotation(n.Parent().TypeAnnotation()) {
 			return nil
 		}
-		return xdm.NewNode(xdm.KindText, xdm.QName{}, n.Value())
+		return parent.AppendText(n.Value())
 
 	case xdm.KindElement:
 		// The type annotation travels with the copy. Whitespace stripping is
@@ -998,7 +996,7 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// document the caller had validated. This pass is gated on there
 		// being a strip-space declaration at all, which is the only reason
 		// the loss was not visible — removing that gate cost 115 tests.
-		c := xdm.NewNode(xdm.KindElement, n.Name(), "")
+		c := parent.AppendElement(n.Name())
 		c.SetBaseURI(n.BaseURI())
 		// Every PSVI property travels, because stripping whitespace is not an
 		// assessment. Copying the annotation without the rest left the element
@@ -1008,13 +1006,12 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// false -- silently, on a document the caller had validated, purely
 		// because the stylesheet declared xsl:strip-space.
 		c.CopyTypingFrom(n)
-		for ns := range n.NamespaceDecls() {
-			c.AddNamespace(ns.Name().Local, ns.Value())
+		for prefix, uri := range n.DeclaredNamespaces() {
+			c.AddNamespace(prefix, uri)
 		}
 		for a := range n.Attrs() {
-			ac := xdm.NewNode(xdm.KindAttribute, a.Name(), a.Value())
+			ac := c.AppendAttr(a.Name(), a.Value())
 			ac.CopyTypingFrom(a)
-			c.AddAttr(ac)
 			if a == want {
 				*found = ac
 			}
@@ -1036,14 +1033,12 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		}
 
 		for ch := range n.Children() {
-			if cc := s.stripCopy(pkg, ch, childPreserving, want, found); cc != nil {
-				c.AppendChild(cc)
-			}
+			s.stripCopy(pkg, c, ch, childPreserving, want, found)
 		}
 		return c
 
 	default:
-		return xdm.NewNode(n.Kind(), n.Name(), n.Value())
+		return appendLeafCopy(parent, n)
 	}
 }
 
@@ -1194,9 +1189,20 @@ func (r *Result) Tree() *xdm.Node {
 	// same document the serialiser would have written. Appending each value
 	// as its own text node lost the separators and broke the XDM invariant
 	// that no two text nodes are adjacent.
-	for _, it := range joinAdjacentAtomics(insertItemSeparator(r.Nodes, r.output.ItemSeparator)) {
+	items := joinAdjacentAtomics(insertItemSeparator(r.Nodes, r.output.ItemSeparator))
+	// A parentless attribute in the result goes on the document node, and
+	// attributes precede a node's children.
+	for _, it := range items {
+		if v, ok := it.(*xdm.Node); ok && v.Kind() == xdm.KindAttribute {
+			tree.Root.AppendCopy(v)
+		}
+	}
+	for _, it := range items {
 		switch v := it.(type) {
 		case *xdm.Node:
+			if v.Kind() == xdm.KindAttribute {
+				continue
+			}
 			// 5.7.1: "Any document node within the result sequence is
 			// replaced by a sequence containing each of its children, in
 			// document order." A result tree may not hold a document node
@@ -1210,14 +1216,14 @@ func (r *Result) Tree() *xdm.Node {
 			// it asked for; the flattening belongs to building the tree,
 			// which is the step this rule describes.
 			if v.Kind() == xdm.KindDocument {
-				for _, ch := range childrenFrom(v, 0) {
-					tree.Root.AppendChild(ch)
+				for ch := range v.Children() {
+					tree.Root.AppendCopy(ch)
 				}
 				continue
 			}
-			tree.Root.AppendChild(v)
+			tree.Root.AppendCopy(v)
 		case *xdm.Atomic:
-			tree.Root.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, v.String()))
+			tree.Root.AppendText(v.String())
 		}
 	}
 	tree.Finalize()
@@ -1254,9 +1260,7 @@ func (s *Stylesheet) stripTypeAnnotationsFrom(root *xdm.Node) *xdm.Node {
 	tree := xdm.NewTree()
 	tree.Root.SetBaseURI(root.BaseURI())
 	for ch := range root.Children() {
-		if c := stripAnnotationCopy(ch); c != nil {
-			tree.Root.AppendChild(c)
-		}
+		stripAnnotationCopy(tree.Root, ch)
 	}
 	tree.Finalize()
 	return tree.Root
@@ -1268,7 +1272,7 @@ func (s *Stylesheet) stripTypeAnnotationsFrom(root *xdm.Node) *xdm.Node {
 // element and xs:untypedAtomic for an attribute: Atomize returns an
 // untypedAtomic for a node carrying none, which is precisely the typed value
 // the specification asks for here.
-func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
+func stripAnnotationCopy(parent, n *xdm.Node) {
 	switch n.Kind() {
 	case xdm.KindElement:
 		// Section 3.5 changes the annotation and the typed value but leaves
@@ -1277,11 +1281,11 @@ func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
 		// derives from xs:ID holds the identity in its CONTENT, so dropping
 		// the property here made fn:id miss it — id('id1') found nothing for
 		// an <id-elem> of type xs:ID once the annotations went.
-		c := xdm.NewNode(xdm.KindElement, n.Name(), "")
+		c := parent.AppendElement(n.Name())
 		c.SetBaseURI(n.BaseURI())
 		c.CopyTypingStrippedFrom(n)
-		for ns := range n.NamespaceDecls() {
-			c.AddNamespace(ns.Name().Local, ns.Value())
+		for prefix, uri := range n.DeclaredNamespaces() {
+			c.AddNamespace(prefix, uri)
 		}
 		for a := range n.Attrs() {
 			// xsi:nil is dropped rather than copied: stripping makes
@@ -1293,24 +1297,26 @@ func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
 			if a.Name().URI == xdm.NSXSI && a.Name().Local == "nil" {
 				continue
 			}
-			ac := xdm.NewNode(xdm.KindAttribute, a.Name(), a.Value())
-			ac.CopyTypingStrippedFrom(a)
-			c.AddAttr(ac)
+			c.AppendAttr(a.Name(), a.Value()).CopyTypingStrippedFrom(a)
 		}
 		for ch := range n.Children() {
-			if cc := stripAnnotationCopy(ch); cc != nil {
-				c.AppendChild(cc)
-			}
+			stripAnnotationCopy(c, ch)
 		}
-		return c
-	case xdm.KindText:
-		return xdm.NewNode(xdm.KindText, xdm.QName{}, n.Value())
-	case xdm.KindComment:
-		return xdm.NewNode(xdm.KindComment, xdm.QName{}, n.Value())
-	case xdm.KindPI:
-		return xdm.NewNode(xdm.KindPI, n.Name(), n.Value())
+	case xdm.KindText, xdm.KindComment, xdm.KindPI:
+		appendLeafCopy(parent, n)
 	}
-	return nil
+}
+
+// appendLeafCopy appends to parent a copy of n, a text, comment or
+// processing-instruction node, carrying its name and value only.
+func appendLeafCopy(parent, n *xdm.Node) *xdm.Node {
+	switch n.Kind() {
+	case xdm.KindText:
+		return parent.AppendText(n.Value())
+	case xdm.KindComment:
+		return parent.AppendComment(n.Value())
+	}
+	return parent.AppendPI(n.Name().Local, n.Value())
 }
 
 // SerializeAsXML renders a result with the xml output method, ignoring the

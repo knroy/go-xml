@@ -141,17 +141,17 @@ func sameTree(t *testing.T, label string, a, b *xdm.Node) {
 	for i := range a.NumAttrs() {
 		sameTree(t, label, a.AttrAt(i), b.AttrAt(i))
 	}
-	for i := range a.NumChildren() {
-		sameTree(t, label, a.ChildAt(i), b.ChildAt(i))
+	for ac, bc := a.FirstChild(), b.FirstChild(); ac != nil; ac, bc = ac.NextSibling(), bc.NextSibling() {
+		sameTree(t, label, ac, bc)
 	}
 }
 
-// TestValidateCopyMatchesInPlace is the differential: the same documents
-// validated in place and through ValidateCopy must agree on every node's
-// typing, values, URIs and namespaces, on the tree's DTD context, and on the
-// error text including line and column; and the input to ValidateCopy must
-// come out exactly as a fresh parse of it.
-func TestValidateCopyMatchesInPlace(t *testing.T) {
+// TestValidateCopyMatchesVerdict checks ValidateCopy against Validate: the
+// same error text, line and column included; an input that comes out exactly
+// as a fresh parse of it; and a copy that is a new tree carrying the DTD
+// context, or, for an element below the document element, a parentless copy
+// of that element alone.
+func TestValidateCopyMatchesVerdict(t *testing.T) {
 	s := loadAssertionSchema(t, copySchema)
 	cases := []struct {
 		name, doc, target string
@@ -164,13 +164,12 @@ func TestValidateCopyMatchesInPlace(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			opts := ValidateOptions{MaxErrors: -1, SkipIDConstraints: c.target != ""}
-			inPlace := parseCopyDoc(t, c.doc)
-			inOpts := opts
-			inOpts.AnnotateInPlace = true
-			errIn := s.Validate(pickCopyTarget(inPlace.Root, c.target), inOpts)
+			verdict := parseCopyDoc(t, c.doc)
+			errIn := s.Validate(pickCopyTarget(verdict.Root, c.target), opts)
 			if (errIn == nil) != c.valid {
-				t.Fatalf("in place: %v", errIn)
+				t.Fatalf("verdict: %v", errIn)
 			}
+			sameTree(t, "Validate's input vs fresh parse", parseCopyDoc(t, c.doc).Root, verdict.Root)
 
 			input := parseCopyDoc(t, c.doc)
 			target := pickCopyTarget(input.Root, c.target)
@@ -180,25 +179,27 @@ func TestValidateCopyMatchesInPlace(t *testing.T) {
 				t.Fatalf("an invalid document's errors carry no position: %v", errCp)
 			}
 			if errText(errIn) != errText(errCp) {
-				t.Fatalf("errors differ\n  in place: %s\n  copy:     %s", errText(errIn), errText(errCp))
+				t.Fatalf("errors differ\n  verdict: %s\n  copy:    %s", errText(errIn), errText(errCp))
 			}
 			if got == target || got.Name() != target.Name() {
 				t.Fatalf("ValidateCopy returned %v, want a copy of %v", got, target)
 			}
-			top := got
-			for top.Parent() != nil {
-				top = top.Parent()
-			}
-			sameTree(t, "copy vs in place", inPlace.Root, top)
 			sameTree(t, "input vs fresh parse", parseCopyDoc(t, c.doc).Root, input.Root)
-
-			ct := top.Tree()
+			if c.target != "" {
+				if got.Parent() != nil || got.TypeAnnotation() != "QName" ||
+					got.InScopeNamespaces()["p"] != "" {
+					t.Fatalf("element copy: parent %v, annotation %q, scope %v",
+						got.Parent(), got.TypeAnnotation(), got.InScopeNamespaces())
+				}
+				return
+			}
+			ct := got.Tree()
 			if ct == nil || ct == input {
 				t.Fatalf("copy tree = %p, want a new tree", ct)
 			}
-			if ct.DocType != inPlace.DocType || ct.XMLVersion != inPlace.XMLVersion {
+			if ct.DocType != input.DocType || ct.XMLVersion != input.XMLVersion {
 				t.Errorf("tree: DocType/XMLVersion %q/%q, want %q/%q",
-					ct.DocType, ct.XMLVersion, inPlace.DocType, inPlace.XMLVersion)
+					ct.DocType, ct.XMLVersion, input.DocType, input.XMLVersion)
 			}
 			if sys, _, _, ok := ct.UnparsedEntity("pic"); !ok || sys == "" {
 				t.Errorf("copy lost the unparsed entity: %q %v", sys, ok)
@@ -256,9 +257,9 @@ func TestValidateCopyIsNotVacuous(t *testing.T) {
 	}
 }
 
-// TestValidateCopyConcurrent validates one tree from several goroutines. In
-// place, each run strips whitespace from and annotates the shared tree, which
-// -race reports; through ValidateCopy each run writes only its own copy.
+// TestValidateCopyConcurrent validates one tree from several goroutines. Each
+// run writes only its own copy, so -race has nothing to report and the input
+// stays as it was.
 func TestValidateCopyConcurrent(t *testing.T) {
 	s := loadAssertionSchema(t, copySchema)
 	in := parseCopyDoc(t, copyDoc("100", `<n xsi:nil="true"/>`, "1"))
@@ -281,8 +282,43 @@ func TestValidateCopyConcurrent(t *testing.T) {
 	}
 }
 
-// TestValidateWritesNothing pins the v2 contract: Validate without
-// AnnotateInPlace only checks. The document that ValidateCopy types, defaults
+// TestTypedCopySeesItsRecordedEdits checks that the checks a typed copy runs
+// see the defaulted attributes and the stripped whitespace, which the copy
+// records rather than writes: an assertion counts the default and finds no
+// text, and a unique key collides on two defaulted values.
+func TestTypedCopySeesItsRecordedEdits(t *testing.T) {
+	s := loadAssertionSchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="r"><xs:complexType><xs:sequence>
+    <xs:element name="i" maxOccurs="unbounded"><xs:complexType>
+      <xs:attribute name="k" type="xs:string" default="d"/></xs:complexType></xs:element>
+    </xs:sequence>
+    <xs:assert test="count(i/@k) eq count(i) and empty(text())"/></xs:complexType>
+    <xs:unique name="u"><xs:selector xpath="i"/><xs:field xpath="@k"/></xs:unique>
+  </xs:element>
+</xs:schema>`)
+	parse := func(src string) *xdm.Node {
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tree.Root
+	}
+	got, err := s.ValidateCopy(parse("<r>\n  <i/>\n  <i k=\"x\"/>\n</r>"), ValidateOptions{})
+	if err != nil {
+		t.Fatalf("the assertion did not see the typed copy's edits: %v", err)
+	}
+	r := got.FirstChild()
+	if r.NumChildren() != 2 || r.ChildAt(0).AttrValue("k") != "d" {
+		t.Errorf("typed copy: %d children, first @k %q", r.NumChildren(), r.ChildAt(0).AttrValue("k"))
+	}
+	if _, err := s.ValidateCopy(parse(`<r><i/><i/></r>`), ValidateOptions{}); err == nil ||
+		!strings.Contains(err.Error(), "cvc-identity-constraint") {
+		t.Errorf("two defaulted key values did not collide: %v", err)
+	}
+}
+
+// TestValidateWritesNothing pins the v2 contract: Validate only
+// checks. The document that ValidateCopy types, defaults
 // and strips (TestValidateCopyIsNotVacuous) comes back from Validate with no
 // annotation, no defaulted attribute and its whitespace in place.
 func TestValidateWritesNothing(t *testing.T) {
@@ -327,7 +363,7 @@ func TestValidateWritesNothing(t *testing.T) {
 }
 
 // TestValidateConcurrentCheckOnly validates one tree from several goroutines
-// with AnnotateInPlace off. Under -race it fails if a check-only run writes to the
+// checking only. Under -race it fails if a check-only run writes to the
 // tree, as the union member, nilled and lax-wildcard restore writes did.
 func TestValidateConcurrentCheckOnly(t *testing.T) {
 	lax := loadAssertionSchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
@@ -378,8 +414,13 @@ func TestCheckOnlyAssertionSeesUnwrittenTyping(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := s.Validate(tree.Root, ValidateOptions{AnnotateInPlace: annotate}); err != nil {
-			t.Errorf("AnnotateInPlace=%v: %v", annotate, err)
+		if annotate {
+			_, err = s.ValidateCopy(tree.Root, ValidateOptions{})
+		} else {
+			err = s.Validate(tree.Root, ValidateOptions{})
+		}
+		if err != nil {
+			t.Errorf("typed copy=%v: %v", annotate, err)
 		}
 	}
 }

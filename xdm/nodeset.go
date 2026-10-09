@@ -58,7 +58,12 @@ func SortDocumentOrder(seq Sequence) Sequence {
 	// different trees implementation-dependent but requires it to be stable;
 	// this is what makes it so. A root already numbered keeps its number, so
 	// a sequence mixing nodes from earlier sorts still compares consistently.
-	numberDetachedRoots(nodes)
+	// Fragments are numbered here, in the order the sequence holds their
+	// nodes, rather than in whatever order the sort's comparisons reach them,
+	// so that the result does not depend on the sort algorithm.
+	for _, n := range nodes {
+		n.tree.ident()
+	}
 	sort.SliceStable(nodes, func(i, j int) bool {
 		return nodes[i].Compare(nodes[j]) < 0
 	})
@@ -91,10 +96,10 @@ func inTreeOrder(seq Sequence) bool {
 	var prev *Node
 	for _, it := range seq {
 		n, ok := it.(*Node)
-		if !ok || n.tree == nil || n.kind == KindNamespace {
+		if !ok {
 			return false
 		}
-		if prev != nil && (n.tree != prev.tree || n.order <= prev.order) {
+		if prev != nil && (n.tree != prev.tree || n.orderKey() <= prev.orderKey()) {
 			return false
 		}
 		prev = n
@@ -232,11 +237,11 @@ func AtomizeChecked(seq Sequence) (Sequence, error) {
 			// confidently wrong answer rather than a missing one; the split
 			// between the two functions is the same one FunctionItem makes
 			// above, and for the same reason.
-			if v.noTypedValue {
+			if v.NoTypedValue() {
 				return nil, Errorf("FOTY0012",
 					"the element %s has no typed value: it was validated "+
 						"against a complex type with element-only content",
-					v.name.Lexical())
+					v.Name().Lexical())
 			}
 		case *FunctionItem:
 			return nil, Errorf("FOTY0013",
@@ -301,24 +306,4 @@ func SplitXMLSpace(s string) []string {
 // TrimXMLSpace removes leading and trailing XML whitespace, and nothing wider.
 func TrimXMLSpace(s string) string {
 	return strings.TrimFunc(s, isXMLSpaceRune)
-}
-
-// numberDetachedRoots assigns cross-tree identities to the roots of any
-// treeless nodes in ns, in the order they appear.
-//
-// detachedRootID is idempotent: a root that already has an id keeps it, so
-// this only fixes the order in which previously unnumbered roots are first
-// seen. Roots inside a real Tree are skipped — their order comes from the
-// tree id, which the parser assigned.
-func numberDetachedRoots(ns []*Node) {
-	for _, n := range ns {
-		if n.tree != nil {
-			continue
-		}
-		root := n
-		for root.parent != nil {
-			root = root.parent
-		}
-		detachedRootID(root)
-	}
 }

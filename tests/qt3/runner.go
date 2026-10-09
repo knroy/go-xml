@@ -1479,23 +1479,23 @@ func writeNodeXML(sb *strings.Builder, n *xdm.Node) {
 		// Namespace declarations are part of the serialised element. Omitting
 		// them made a correct result compare unequal to the expected XML,
 		// which reads as an engine bug and is not one.
-		for ns := range n.NamespaceDecls() {
-			if ns.Name().Local == "" {
-				sb.WriteString(" xmlns=\"" + escapeAttr(ns.Value()) + "\"")
+		for prefix, uri := range n.DeclaredNamespaces() {
+			if prefix == "" {
+				sb.WriteString(" xmlns=\"" + escapeAttr(uri) + "\"")
 				continue
 			}
 			// See writeNodeXMLTop: a prefixed undeclaration is a data-model
 			// marker, not XML 1.0 syntax, and writing it makes this string
 			// unparseable for the infosetEqual comparison below.
-			if ns.Value() == "" {
+			if uri == "" {
 				continue
 			}
-			sb.WriteString(" xmlns:" + ns.Name().Local + "=\"" + escapeAttr(ns.Value()) + "\"")
+			sb.WriteString(" xmlns:" + prefix + "=\"" + escapeAttr(uri) + "\"")
 		}
 		for a := range n.Attrs() {
 			sb.WriteString(" " + a.Name().Lexical() + "=\"" + escapeAttr(a.Value()) + "\"")
 		}
-		if n.NumChildren() == 0 {
+		if n.FirstChild() == nil {
 			sb.WriteString("/>")
 			return
 		}
@@ -2492,8 +2492,8 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 	// Only prefixes the element does not already declare need adding; the
 	// ordinary writer emits those.
 	declared := map[string]bool{}
-	for ns := range n.NamespaceDecls() {
-		declared[ns.Name().Local] = true
+	for prefix := range n.DeclaredNamespaces() {
+		declared[prefix] = true
 	}
 	extra := make([]string, 0, len(scope))
 	for prefix := range scope {
@@ -2509,9 +2509,9 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 	sort.Strings(extra)
 
 	sb.WriteString("<" + n.Name().Lexical())
-	for ns := range n.NamespaceDecls() {
-		if ns.Name().Local == "" {
-			sb.WriteString(" xmlns=\"" + escapeAttr(ns.Value()) + "\"")
+	for prefix, uri := range n.DeclaredNamespaces() {
+		if prefix == "" {
+			sb.WriteString(" xmlns=\"" + escapeAttr(uri) + "\"")
 			continue
 		}
 		// A prefixed undeclaration, xmlns:p="", is XML 1.1 syntax that the
@@ -2520,10 +2520,10 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 		// string that is not an XML 1.0 document, so the final infosetEqual
 		// comparison could not parse it. Both real serialisers omit it unless
 		// undeclare-prefixes asks for it; this one does too.
-		if ns.Value() == "" {
+		if uri == "" {
 			continue
 		}
-		sb.WriteString(" xmlns:" + ns.Name().Local + "=\"" + escapeAttr(ns.Value()) + "\"")
+		sb.WriteString(" xmlns:" + prefix + "=\"" + escapeAttr(uri) + "\"")
 	}
 	for _, prefix := range extra {
 		if prefix == "" {
@@ -2535,7 +2535,7 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 	for a := range n.Attrs() {
 		sb.WriteString(" " + a.Name().Lexical() + "=\"" + escapeAttr(a.Value()) + "\"")
 	}
-	if n.NumChildren() == 0 {
+	if n.FirstChild() == nil {
 		sb.WriteString("/>")
 		return
 	}
@@ -2657,7 +2657,7 @@ func attrsEqual(a, b *xdm.Node) bool {
 // significantChildren drops whitespace-only text, which the expected value in
 // a test-set file carries from its own indentation.
 func significantChildren(n *xdm.Node) []*xdm.Node {
-	out := make([]*xdm.Node, 0, n.NumChildren())
+	out := []*xdm.Node{}
 	for c := range n.Children() {
 		if c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) == "" {
 			continue

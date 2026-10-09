@@ -59,19 +59,23 @@ var inlineNames = map[string]bool{
 	"template": true, "time": true, "video": true, "wbr": true,
 }
 
-// SkipIndentBefore reports whether no indent may go before child i of n's
-// children (i == len(children) meaning before n's end tag): next to an inline
-// child, or before the end tag of an inline element. The boundaries inside an
+// SkipIndentBefore reports whether no indent may go before c, a child of n
+// (c == nil meaning before n's end tag): next to an inline child, or before
+// the end tag of an inline element. The boundaries inside an
 // element follow Saxon, which the spec permits: an indent may follow the start
 // tag of an inline element, but none goes before its end tag.
-func SkipIndentBefore(n *xdm.Node, i int, xhtml, html5 bool) bool {
-	if i > 0 && Inline(n.ChildAt(i-1), xhtml, html5) {
+func SkipIndentBefore(n, c *xdm.Node, xhtml, html5 bool) bool {
+	prev := n.LastChild()
+	if c != nil {
+		prev = c.PrevSibling()
+	}
+	if prev != nil && Inline(prev, xhtml, html5) {
 		return true
 	}
-	if i == n.NumChildren() {
+	if c == nil {
 		return Inline(n, xhtml, html5)
 	}
-	return Inline(n.ChildAt(i), xhtml, html5)
+	return Inline(c, xhtml, html5)
 }
 
 // ReplacedMeta reports whether n is a meta element the html and xhtml methods

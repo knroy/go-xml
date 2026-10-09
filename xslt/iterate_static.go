@@ -230,8 +230,7 @@ func inTailPositionOf(el, iter *xdm.Node) bool {
 // rather than instructions in it, and whitespace text, which the suite writes
 // for indentation.
 func isLastInstruction(parent, child *xdm.Node) bool {
-	for i := parent.NumChildren() - 1; i >= 0; i-- {
-		c := parent.ChildAt(i)
+	for c := parent.LastChild(); c != nil; c = c.PrevSibling() {
 		// The element under test is never skipped as trailing matter: an
 		// xsl:catch reached from inside is exactly the case the definition
 		// calls a tail position within xsl:try, and skipping it here would

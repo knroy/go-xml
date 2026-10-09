@@ -2950,7 +2950,7 @@ func registerParseXML(l *Library, since Version) {
 	// elements, or none.
 	//
 	// It is implemented by wrapping the fragment in a synthetic element and
-	// lifting that element's children out, which is what makes a fragment
+	// copying that element's children out, which is what makes a fragment
 	// with two top-level elements parse at all.
 	l.registerFnSince(since, "parse-xml-fragment", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		if len(args) > 0 && len(args[0]) == 0 {
@@ -3017,7 +3017,7 @@ func parseXMLFragment(s, base string, b *xdm.EntityBudget) (*xdm.Node, error) {
 	// The wrapper name must be a legal XML name — a control character is not,
 	// and made every fragment fail to parse. It is chosen to be one no
 	// fragment would use, and it never appears in the result: its children are
-	// lifted onto the document node below.
+	// copied onto the document node below.
 	tree, err := xdm.ParseString("<parse-xml-fragment-wrapper>"+body+"</parse-xml-fragment-wrapper>", xdm.ParseOptions{
 		AllowDOCTYPE: true,
 		BaseURI:      base,
@@ -3031,8 +3031,8 @@ func parseXMLFragment(s, base string, b *xdm.EntityBudget) (*xdm.Node, error) {
 		return nil, xdm.Errorf("FODC0006",
 			"fn:parse-xml-fragment: argument is not a well-formed XML fragment: %v", err)
 	}
-	// Lift the wrapper's children onto the document node, so the result is a
-	// document whose children are the fragment's top-level nodes.
+	// The result is a new document whose children are copies of the
+	// wrapper's: the fragment's top-level nodes.
 	root := tree.Root
 	var wrapper *xdm.Node
 	for c := range root.Children() {
@@ -3044,15 +3044,16 @@ func parseXMLFragment(s, base string, b *xdm.EntityBudget) (*xdm.Node, error) {
 	if wrapper == nil {
 		return root, nil
 	}
-	kids := make([]*xdm.Node, wrapper.NumChildren())
-	for i := range kids {
-		kids[i] = wrapper.ChildAt(i)
+	out := xdm.NewTree()
+	out.XMLVersion = tree.XMLVersion
+	out.CopyDTDFrom(tree)
+	out.Root.SetBaseURI(root.BaseURI())
+	out.Root.SetDocumentURI(root.DocumentURI())
+	for c := range wrapper.Children() {
+		out.Root.AppendCopy(c)
 	}
-	root.SetChildren(kids)
-	for c := range root.Children() {
-		c.SetParent(root)
-	}
-	return root, nil
+	out.Finalize()
+	return out.Root, nil
 }
 
 // countOptionalDigits counts the optional-digit signs in a digit pattern.

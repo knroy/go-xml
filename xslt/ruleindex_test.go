@@ -164,12 +164,8 @@ func TestRuleIndexCoversEveryCandidate(t *testing.T) {
 		for i := range n.NumAttrs() {
 			nodes = append(nodes, n.AttrAt(i))
 		}
-		if n.Kind() == xdm.KindElement {
-			nodes = append(nodes, func() *xdm.Node {
-				nd := xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: "p"}, "urn:p")
-				nd.SetParent(n)
-				return nd
-			}())
+		for ns := range n.NamespaceNodes() {
+			nodes = append(nodes, ns)
 		}
 		for c := range n.Children() {
 			walk(c)
