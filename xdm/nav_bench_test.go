@@ -88,14 +88,9 @@ func BenchmarkNavDescendantWalk(b *testing.B) {
 	navTree(b)
 	for i := 0; i < b.N; i++ {
 		n := 0
-		var f func(x *Node)
-		f = func(x *Node) {
-			for _, c := range kids(x) {
-				n += int(c.Kind())
-				f(c)
-			}
+		for c := range navOnce.tree.Root.Descendants() {
+			n += int(c.Kind())
 		}
-		f(navOnce.tree.Root)
 		navSink += n
 	}
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(len(navOnce.nodes)), "ns/node")
@@ -107,7 +102,7 @@ func BenchmarkNavChildNameTest(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		n := 0
 		for _, e := range navOnce.elems {
-			for _, c := range kids(e) {
+			for c := range e.Children() {
 				if c.Kind() == KindElement && c.Name().Local == el.Local && c.Name().URI == el.URI {
 					n++
 				}
