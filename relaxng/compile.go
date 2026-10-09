@@ -572,7 +572,7 @@ func (c *compiler) compilePattern(n *xdm.Node) (pattern, error) {
 		if err != nil {
 			return nil, err
 		}
-		return elementPat{Name: nc, Pattern: body}, nil
+		return &elementPat{Name: nc, Pattern: body}, nil
 
 	case "attribute":
 		nc, err := c.nameClass(n)
@@ -587,7 +587,7 @@ func (c *compiler) compilePattern(n *xdm.Node) (pattern, error) {
 				return nil, err
 			}
 		}
-		return attributePat{Name: nc, Pattern: body}, nil
+		return &attributePat{Name: nc, Pattern: body}, nil
 
 	case "group":
 		return c.compileChildren(n)
@@ -632,7 +632,7 @@ func (c *compiler) compilePattern(n *xdm.Node) (pattern, error) {
 		if err != nil {
 			return nil, err
 		}
-		return listPat{Pattern: p}, nil
+		return &listPat{Pattern: p}, nil
 
 	case "value":
 		return c.compileValue(n)
@@ -1141,7 +1141,7 @@ func (c *compiler) compileValue(n *xdm.Node) (pattern, error) {
 	// The schema's own prefixes travel with the value: a qnamePat written here
 	// means what this document's bindings say, and the instance's bindings
 	// are a different set entirely.
-	return valuePat{
+	return &valuePat{
 		Type:     dt,
 		Value:    n.StringValue(),
 		Ns:       c.nsFor(n),
@@ -1158,7 +1158,7 @@ func (c *compiler) compileData(n *xdm.Node) (pattern, error) {
 	if err != nil {
 		return nil, fmt.Errorf("relaxng: <data>: %w", err)
 	}
-	d := dataPat{Type: dt}
+	d := &dataPat{Type: dt}
 	for _, kid := range n.ChildElements() {
 		if kid.Name.URI != NS {
 			continue

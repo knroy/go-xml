@@ -92,12 +92,12 @@ func TestLazyRefSharesTheCompiledDefinition(t *testing.T) {
 			if x.resolve == nil {
 				find(x.cached)
 			}
-		case elementPat:
+		case *elementPat:
 			find(x.Pattern)
-		case choicePat:
+		case *choicePat:
 			find(x.Left)
 			find(x.Right)
-		case oneOrMorePat:
+		case *oneOrMorePat:
 			find(x.Pattern)
 		}
 	}

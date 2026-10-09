@@ -43,18 +43,18 @@ func memoTr(p pattern, refs map[*refPat]bool) pattern {
 			}
 		}
 		return t
-	case elementPat:
+	case *elementPat:
 		// An element is not wrapped itself: startTagOpenDeriv's answer for
 		// it is one afterPat, and its content is wrapped instead.
-		return elementPat{t.Name, memoTr(t.Pattern, refs)}
-	case choicePat:
-		q = choicePat{memoTr(t.Left, refs), memoTr(t.Right, refs)}
-	case groupPat:
-		q = groupPat{memoTr(t.Left, refs), memoTr(t.Right, refs)}
-	case interleavePat:
-		q = interleavePat{memoTr(t.Left, refs), memoTr(t.Right, refs)}
-	case oneOrMorePat:
-		q = oneOrMorePat{memoTr(t.Pattern, refs)}
+		return &elementPat{t.Name, memoTr(t.Pattern, refs)}
+	case *choicePat:
+		q = &choicePat{memoTr(t.Left, refs), memoTr(t.Right, refs)}
+	case *groupPat:
+		q = &groupPat{memoTr(t.Left, refs), memoTr(t.Right, refs)}
+	case *interleavePat:
+		q = &interleavePat{memoTr(t.Left, refs), memoTr(t.Right, refs)}
+	case *oneOrMorePat:
+		q = &oneOrMorePat{memoTr(t.Pattern, refs)}
 	default:
 		return p
 	}
@@ -91,19 +91,19 @@ const (
 // boundary. A reference not yet resolved, or one being visited, answers false.
 func staticFree(p pattern, k kinds, visiting map[*refPat]bool) bool {
 	switch t := p.(type) {
-	case attributePat:
+	case *attributePat:
 		return k != attrKinds
-	case valuePat, dataPat, listPat:
+	case *valuePat, *dataPat, *listPat:
 		return k != dataKinds
-	case elementPat, emptyPat, notAllowedPat, textPat:
+	case *elementPat, emptyPat, notAllowedPat, textPat:
 		return true
-	case choicePat:
+	case *choicePat:
 		return staticFree(t.Left, k, visiting) && staticFree(t.Right, k, visiting)
-	case groupPat:
+	case *groupPat:
 		return staticFree(t.Left, k, visiting) && staticFree(t.Right, k, visiting)
-	case interleavePat:
+	case *interleavePat:
 		return staticFree(t.Left, k, visiting) && staticFree(t.Right, k, visiting)
-	case oneOrMorePat:
+	case *oneOrMorePat:
 		return staticFree(t.Pattern, k, visiting)
 	case *refPat:
 		if t.static != nil {

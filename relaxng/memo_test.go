@@ -23,16 +23,16 @@ func stripMemo(p pattern, refs map[*refPat]bool) pattern {
 			}
 		}
 		return t
-	case elementPat:
-		return elementPat{t.Name, stripMemo(t.Pattern, refs)}
-	case choicePat:
-		return choicePat{stripMemo(t.Left, refs), stripMemo(t.Right, refs)}
-	case groupPat:
-		return groupPat{stripMemo(t.Left, refs), stripMemo(t.Right, refs)}
-	case interleavePat:
-		return interleavePat{stripMemo(t.Left, refs), stripMemo(t.Right, refs)}
-	case oneOrMorePat:
-		return oneOrMorePat{stripMemo(t.Pattern, refs)}
+	case *elementPat:
+		return &elementPat{t.Name, stripMemo(t.Pattern, refs)}
+	case *choicePat:
+		return &choicePat{stripMemo(t.Left, refs), stripMemo(t.Right, refs)}
+	case *groupPat:
+		return &groupPat{stripMemo(t.Left, refs), stripMemo(t.Right, refs)}
+	case *interleavePat:
+		return &interleavePat{stripMemo(t.Left, refs), stripMemo(t.Right, refs)}
+	case *oneOrMorePat:
+		return &oneOrMorePat{stripMemo(t.Pattern, refs)}
 	}
 	return p
 }
@@ -109,7 +109,7 @@ func TestMemoPointsAreInvisible(t *testing.T) {
 	}
 
 	s := compileBoundarySchema(t, cases[0].schema)
-	content := s.start.(elementPat).Pattern
+	content := s.start.(*elementPat).Pattern
 	w, ok := content.(*refPat)
 	if !ok || w.static == nil {
 		t.Fatalf("r's content is %T, want a static memo point", content)
@@ -154,17 +154,17 @@ func TestAttDerivMemoOnlyWhereTheValueCannotMatter(t *testing.T) {
 			t.Errorf("%s: got %v, want valid=%v", c.doc, err, c.valid)
 		}
 	}
-	a := s.start.(elementPat).Pattern.(*refPat).cached
+	a := s.start.(*elementPat).Pattern.(*refPat).cached
 	for {
-		if o, ok := unstatic(a).(oneOrMorePat); ok {
+		if o, ok := unstatic(a).(*oneOrMorePat); ok {
 			a = o.Pattern
 			break
 		}
-		a = unstatic(a).(choicePat).Left
+		a = unstatic(a).(*choicePat).Left
 	}
-	w, ok := a.(elementPat).Pattern.(*refPat)
+	w, ok := a.(*elementPat).Pattern.(*refPat)
 	if !ok || w.static == nil {
-		t.Fatalf("a's content is %T, want a memo point", a.(elementPat).Pattern)
+		t.Fatalf("a's content is %T, want a memo point", a.(*elementPat).Pattern)
 	}
 	if b, ok := w.static.att.Load(xdm.QName{Local: "y"}); !ok || b.(*patBox).p == nil {
 		t.Error("attDeriv for the text attribute y was not remembered")
