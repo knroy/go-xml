@@ -98,7 +98,9 @@ type ValidateOptions struct {
 	// Annotate writes the type of each validated node into its
 	// TypeAnnotation, producing the part of the PSVI that the XPath and
 	// XSLT layers consume. It is off by default because it mutates the
-	// tree the caller passed in.
+	// tree the caller passed in. Without it Validate only checks and writes
+	// nothing to the tree, so one tree may be validated from several
+	// goroutines at once.
 	Annotate bool
 
 	// SkipIDConstraints suppresses "Validation Root Valid (ID/IDREF)"
@@ -310,6 +312,13 @@ type validator struct {
 	// from, so fail can report the original's line and column: the copy
 	// has no source text. nil for an in-place run.
 	twins map[*xdm.Node]*xdm.Node
+
+	// unwritten holds, for a run without Annotate, the typing the validator
+	// would have written onto a node outside annotate(): a union's winning
+	// member and dm:nilled. The caller's tree stays untouched, and
+	// checkAssertions lays these onto the copy an assertion evaluates over,
+	// so the verdict is the one an annotating run reaches.
+	unwritten map[*xdm.Node]xdm.Typing
 
 	// stripIgnorable removes whitespace-only text from elements whose
 	// declared content is element-only, as XML 1.0 §2.10 and XSLT 2.0 §4.4
@@ -691,9 +700,9 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			// failed above as cvc-elt.3.1 and is not a nilled element at all.
 			// Only the validator can draw that distinction, so only the
 			// validator records it. See xdm.Node.IsNilled.
-			t := xdm.TypingOf(el)
+			t := v.typingOf(el)
 			t.IsNilled = true
-			el.ApplyTyping(t)
+			v.setTyping(el, t)
 			return nil
 		}
 	}
@@ -1840,7 +1849,9 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 			prev := kid.TypeAnnotation
 			prevPrim, prevItem := kid.DerivedPrimitive, kid.ListItem
 			v.validateAgainstType(kid, v.schema.anyType(), nil)
-			kid.SetTypeAnnotationResolved(prev, prevPrim, prevItem)
+			if v.opts.Annotate {
+				kid.SetTypeAnnotationResolved(prev, prevPrim, prevItem)
+			}
 			return nil
 		case ProcessStrict:
 			d, ok := v.schema.Elements[name]
@@ -2227,6 +2238,56 @@ func anonComplexAnnotation(t Type) string {
 		cur = base
 	}
 	return "anyType"
+}
+
+// typingOf is the node's typing as this run has decided it so far: what is
+// on the node, or what a run without Annotate holds aside in place of it.
+func (v *validator) typingOf(n *xdm.Node) xdm.Typing {
+	if t, ok := v.unwritten[n]; ok {
+		return t
+	}
+	return xdm.TypingOf(n)
+}
+
+// setTyping records a typing the validator decides outside annotate(). It
+// is written onto the node only when the caller asked for Annotate; otherwise
+// it is held in unwritten, because Validate without Annotate must not touch
+// the tree (two goroutines may be validating it).
+func (v *validator) setTyping(n *xdm.Node, t xdm.Typing) {
+	if v.opts.Annotate {
+		n.ApplyTyping(t)
+		return
+	}
+	if v.unwritten == nil {
+		v.unwritten = map[*xdm.Node]xdm.Typing{}
+	}
+	v.unwritten[n] = t
+}
+
+// recordUnionMember records which member of a union accepted n's value.
+func (v *validator) recordUnionMember(n *xdm.Node, member string) {
+	t := v.typingOf(n)
+	t.UnionMember = member
+	v.setTyping(n, t)
+}
+
+// applyUnwritten lays the typing held in unwritten onto clone, the copy of
+// orig an assertion evaluates over. The copy drops only comments and
+// processing instructions, so attributes and element children pair up by
+// position.
+func (v *validator) applyUnwritten(orig, clone *xdm.Node) {
+	if t, ok := v.unwritten[orig]; ok {
+		clone.ApplyTyping(t)
+	}
+	for i, a := range orig.Attrs {
+		if t, ok := v.unwritten[a]; ok {
+			clone.Attrs[i].ApplyTyping(t)
+		}
+	}
+	kids := clone.ChildElements()
+	for i, c := range orig.ChildElements() {
+		v.applyUnwritten(c, kids[i])
+	}
 }
 
 // stripIgnorableWhitespace removes whitespace-only text children of an element
