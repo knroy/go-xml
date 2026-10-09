@@ -616,7 +616,7 @@
       "id": "limit-boundary-tests",
       "label": "Limit boundary tests",
       "kind": "limits-boundary",
-      "method": "grep -hc '^func Test' ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'"
+      "method": "grep -hc '^func Test' ./*/limits_boundary*_test.go | awk '{n += $1} END {print n + 0}'"
     }
   ],
   "suite_revisions": {

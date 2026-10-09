@@ -148,11 +148,14 @@ func countKind(root, kind string) (int, error) {
 		})
 	case "limits-boundary":
 		return countDecls(root, funcTestRE, func(path string) bool {
-			if filepath.Base(path) != "limits_boundary_test.go" {
+			base := filepath.Base(path)
+			if !strings.HasPrefix(base, "limits_boundary") || !strings.HasSuffix(base, "_test.go") {
 				return false
 			}
 			// Only the top-level package directories, matching the documented
-			// `./*/limits_boundary_test.go`: one directory below the root.
+			// `./*/limits_boundary*_test.go`: one directory below the root.
+			// The glob takes xsd's limits_boundary_http_test.go, which a build
+			// tag keeps apart from the rest because it tests HTTPResolver.
 			rel, err := filepath.Rel(root, path)
 			if err != nil {
 				return false

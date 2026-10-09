@@ -600,7 +600,7 @@ docfigure_fuzz() {
 		grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'
 }
 docfigure_limits() {
-	grep -hc "^func Test" ./*/limits_boundary_test.go |
+	grep -hc "^func Test" ./*/limits_boundary*_test.go |
 		awk '{n += $1} END {print n + 0}'
 }
 
@@ -633,7 +633,7 @@ docfigure_cmd() {
 	"fuzz target count")
 		printf '%s' "grep -rn '^func Fuzz' --include='*_test.go' . | grep -v '/\\.claude/worktrees/' | grep -vc '^\\./bench/'" ;;
 	"limit boundary test count")
-		printf '%s' "grep -hc '^func Test' ./*/limits_boundary_test.go | awk '{n += \$1} END {print n + 0}'" ;;
+		printf '%s' "grep -hc '^func Test' ./*/limits_boundary*_test.go | awk '{n += \$1} END {print n + 0}'" ;;
 	esac
 }
 

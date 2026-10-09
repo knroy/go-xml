@@ -87,7 +87,7 @@ func TestCountWalksTheTree(t *testing.T) {
 	write("a/zz_fuzz_test.go", "package a\n\nfunc "+"Fuzz"+"Thing(f *testing.F) {}\n")
 	write("a/limits_boundary_test.go", "package a\n\n"+decl("Test", "LimitA")+decl("Test", "LimitB"))
 	// Deep: a limits_boundary_test.go two directories down is NOT counted, so
-	// the figure keeps matching the documented `./*/limits_boundary_test.go`.
+	// the figure keeps matching the documented `./*/limits_boundary*_test.go`.
 	write("a/b/limits_boundary_test.go", "package b\n\n"+decl("Test", "Deep"))
 	// A worktree checkout of this same repository would otherwise multiply
 	// every count; testdata holds fixtures that are sometimes Go source.
