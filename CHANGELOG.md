@@ -4,6 +4,19 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## v1.7.1 — 2026-10-09
+
+v1.7.1 is v1.7.0 with a fix to the release workflow and nothing else. The
+v1.7.0 tag and module were published, but its release stopped before the
+gate ran and no GitHub release was made; the changes are listed under v1.7.0
+below. `w3cschemas/v0.6.0` pins go-xml v1.7.0, which is identical in code.
+
+### Fixed — release process
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| The v1.7.0 release stopped at its changelog check | A row quoting a sample link was read as an undefined reference; code spans are ignored when collecting link labels. | [`cb604e9`][cb604e9] |
+
 ## v1.7.0 — 2026-10-09
 
 **Behaviour changes to check before upgrading.** The exported API only
@@ -1292,6 +1305,7 @@ here so every entry in this file sits under a release.
 [d3ce46f]: https://github.com/knroy/go-xml/commit/d3ce46f
 [549d113]: https://github.com/knroy/go-xml/commit/549d113
 [78c47fb]: https://github.com/knroy/go-xml/commit/78c47fb
+[cb604e9]: https://github.com/knroy/go-xml/commit/cb604e9
 [ca09e14]: https://github.com/knroy/go-xml/commit/ca09e14
 [04ddeea]: https://github.com/knroy/go-xml/commit/04ddeea
 [eb6901e]: https://github.com/knroy/go-xml/commit/eb6901e

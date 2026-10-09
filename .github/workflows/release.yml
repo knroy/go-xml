@@ -158,7 +158,10 @@ jobs:
           # section. Without them GitHub renders the brackets literally, which
           # is how the v1.5.0 and v1.6.0 notes came out. So every label the
           # section uses is followed by its definition, copied as written.
-          grep -oE '\]\[[^]]+\]' /tmp/release-body.md | sed 's/^\]\[//; s/\]$//' | sort -u > /tmp/release-labels
+          # Code spans are dropped before scanning: a row that QUOTES a link,
+          # as v1.7.0's note on this very step did, is text, not a reference,
+          # and once failed the release for a label nothing defines.
+          sed 's/`[^`]*`//g' /tmp/release-body.md | grep -oE '\]\[[^]]+\]' | sed 's/^\]\[//; s/\]$//' | sort -u > /tmp/release-labels
           if [ -s /tmp/release-labels ]; then
             echo >> /tmp/release-body.md
             while IFS= read -r l; do
