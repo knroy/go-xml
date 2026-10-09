@@ -56,6 +56,7 @@ import (
 	"strings"
 
 	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/imports"
 )
 
 const (
@@ -621,8 +622,11 @@ func literal(p *packages.Package, file, xdmName string, cl *ast.CompositeLit, st
 	// v := &xdm.Node{...} as a statement: set the rest in statements after it.
 	n := len(stack)
 	if as, ok := stack[n-3].(*ast.AssignStmt); ok && len(as.Lhs) == 1 && len(as.Rhs) == 1 && as.Rhs[0] == whole {
-		if id, ok := as.Lhs[0].(*ast.Ident); ok && id.Name != "_" {
-			if _, inBlock := stack[n-4].(*ast.BlockStmt); inBlock {
+		// Not when a value names the variable: x = &xdm.Node{Parent: x}
+		// reads the old x, x.SetParent(x) after the assignment the new one.
+		if id, ok := as.Lhs[0].(*ast.Ident); ok && id.Name != "_" && !used[id.Name] {
+			switch stack[n-4].(type) {
+			case *ast.BlockStmt, *ast.CaseClause, *ast.CommClause:
 				counts["literal+stmts"]++
 				add(file, whole.Pos(), whole.End(), call, 0)
 				var b strings.Builder
@@ -697,7 +701,7 @@ func apply(name string, es []edit) (int, error) {
 		last = e.end
 	}
 	out.Write(b[last:])
-	res, err := format.Source([]byte(out.String()))
+	res, err := imports.Process(name, []byte(out.String()), &imports.Options{Comments: true, TabIndent: true, TabWidth: 8})
 	if err != nil {
 		return 0, fmt.Errorf("gofmt after rewrite: %v", err)
 	}
