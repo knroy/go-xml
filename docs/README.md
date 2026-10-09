@@ -16,6 +16,9 @@
   Exclusive C14N for XML-DSig, SAML and WS-Security; choosing an algorithm,
   node sets with worked examples, namespace nodes, the `xdm` audit behind it,
   and the verification still to do.
+* **[Migrating to v2](migrating-to-v2.md)** — every breaking change from v1,
+  with code before and after, and how to run the `nodeaccess` rewriter on your
+  own module.
 * **[Options](options.md)** — every configuration field in the library,
   what its zero value means, and worked examples. Start here when you want to
   know what you can change.

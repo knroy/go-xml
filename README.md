@@ -9,8 +9,10 @@ go get github.com/knroy/go-xml/v2
 
 > **This is the v2 branch, in development.** v2 changes the exported API
 > (node fields become methods, a smaller node layout, a split evaluation
-> context); see the v2 section of [CHANGELOG.md](CHANGELOG.md). The stable
-> release is v1: `go get github.com/knroy/go-xml`.
+> context); see the v2 section of [CHANGELOG.md](CHANGELOG.md) and
+> [Migrating to v2](docs/migrating-to-v2.md), which has before/after code for
+> each change and a tool that rewrites most of it. The stable release is v1:
+> `go get github.com/knroy/go-xml`.
 
 Validate a document against a schema:
 
