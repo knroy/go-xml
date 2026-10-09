@@ -185,3 +185,49 @@ func TestWideAttributesStillValidate(t *testing.T) {
 		t.Fatalf("a document of 2000 attributes was refused: %v", err)
 	}
 }
+
+// walkSize is patternSize computed the way it was before the constructors
+// stored it: a walk of the whole pattern.
+func walkSize(p pattern) int {
+	switch t := p.(type) {
+	case *choicePat:
+		return 1 + walkSize(t.Left) + walkSize(t.Right)
+	case *groupPat:
+		return 1 + walkSize(t.Left) + walkSize(t.Right)
+	case *interleavePat:
+		return 1 + walkSize(t.Left) + walkSize(t.Right)
+	case *afterPat:
+		return 1 + walkSize(t.Left) + walkSize(t.Right)
+	case *oneOrMorePat:
+		return 1 + walkSize(t.Pattern)
+	case *listPat:
+		return 1 + walkSize(t.Pattern)
+	case *refPat:
+		if t.static != nil {
+			return int(t.static.size)
+		}
+	}
+	return 1
+}
+
+// The stored size must be the walked size on every derivative the validator
+// carries, with and without a builder, or MaxPatternSize would fire on
+// different inputs than it did when patternSize walked the pattern.
+func TestStoredPatternSizeMatchesWalk(t *testing.T) {
+	s := compileBoundarySchema(t, `<element name="r" xmlns="http://relaxng.org/ns/structure/1.0">
+  <oneOrMore><interleave><oneOrMore><element name="a"><empty/></element></oneOrMore>
+    <optional><element name="b"><list><oneOrMore><data type="token"/></oneOrMore></list></element></optional>
+  </interleave></oneOrMore>
+</element>`)
+	for _, pb := range []*patBuilder{nil, newPatBuilder()} {
+		p := pb.closeTag(pb.open(s.start, xdm.QName{Local: "r"}))
+		for i := 0; i < 8; i++ {
+			for _, name := range []string{"a", "b"} {
+				p = pb.end(pb.closeTag(pb.open(p, xdm.QName{Local: name})))
+				if got, want := patternSize(p), walkSize(p); got != want {
+					t.Fatalf("builder %v, child %d %s: patternSize %d, walk %d", pb != nil, i, name, got, want)
+				}
+			}
+		}
+	}
+}

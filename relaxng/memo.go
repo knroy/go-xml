@@ -1,7 +1,5 @@
 package relaxng
 
-import "math"
-
 // Static memo points: a cheap stand-in for hash-consing.
 //
 // The derivatives are taken over the compiled schema, and most of what they
@@ -48,17 +46,17 @@ func memoTr(p pattern, refs map[*refPat]bool) pattern {
 		// it is one afterPat, and its content is wrapped instead.
 		return &elementPat{t.Name, memoTr(t.Pattern, refs)}
 	case *choicePat:
-		q = &choicePat{memoTr(t.Left, refs), memoTr(t.Right, refs)}
+		q = newChoicePat(memoTr(t.Left, refs), memoTr(t.Right, refs))
 	case *groupPat:
-		q = &groupPat{memoTr(t.Left, refs), memoTr(t.Right, refs)}
+		q = newGroupPat(memoTr(t.Left, refs), memoTr(t.Right, refs))
 	case *interleavePat:
-		q = &interleavePat{memoTr(t.Left, refs), memoTr(t.Right, refs)}
+		q = newInterleavePat(memoTr(t.Left, refs), memoTr(t.Right, refs))
 	case *oneOrMorePat:
-		q = &oneOrMorePat{memoTr(t.Pattern, refs)}
+		q = newOneOrMorePat(memoTr(t.Pattern, refs))
 	default:
 		return p
 	}
-	n := patternSize(q, math.MaxInt32)
+	n := patternSize(q)
 	if n < minWrap {
 		return q
 	}

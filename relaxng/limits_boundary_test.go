@@ -11,14 +11,13 @@ import (
 // ValidateOptions at its edges. See xdm/limits_boundary_test.go for why this
 // class of test exists.
 //
-// This package carries the `+1` shape the MaxBytes overflow came from --
-// validate.go computes patternSize(p, v.maxPattern+1), which wraps to
-// math.MinInt when MaxPatternSize is math.MaxInt. It is harmless here, and the
-// MaxInt case below is what proves it: patternSize returns 0 for any limit
-// <= 0, and 0 never exceeds a large maxPattern, so the bound simply never
-// fires -- which is the right answer at a limit no pattern can reach. The test
-// pins that, so a future change to patternSize's guard cannot quietly turn the
-// largest limit into a refusal the way it did in xdm.
+// This package once carried the `+1` shape the MaxBytes overflow came from:
+// validate.go computed patternSize(p, v.maxPattern+1), which wrapped to
+// math.MinInt when MaxPatternSize was math.MaxInt. patternSize is now a stored
+// count that saturates at math.MaxInt, so it never exceeds that limit and the
+// bound simply never fires -- which is the right answer at a limit no pattern
+// can reach. The MaxInt case below pins that, so a future change cannot
+// quietly turn the largest limit into a refusal the way it did in xdm.
 
 func compileBoundarySchema(t *testing.T, src string) *Schema {
 	t.Helper()

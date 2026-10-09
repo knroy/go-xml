@@ -26,13 +26,13 @@ func stripMemo(p pattern, refs map[*refPat]bool) pattern {
 	case *elementPat:
 		return &elementPat{t.Name, stripMemo(t.Pattern, refs)}
 	case *choicePat:
-		return &choicePat{stripMemo(t.Left, refs), stripMemo(t.Right, refs)}
+		return newChoicePat(stripMemo(t.Left, refs), stripMemo(t.Right, refs))
 	case *groupPat:
-		return &groupPat{stripMemo(t.Left, refs), stripMemo(t.Right, refs)}
+		return newGroupPat(stripMemo(t.Left, refs), stripMemo(t.Right, refs))
 	case *interleavePat:
-		return &interleavePat{stripMemo(t.Left, refs), stripMemo(t.Right, refs)}
+		return newInterleavePat(stripMemo(t.Left, refs), stripMemo(t.Right, refs))
 	case *oneOrMorePat:
-		return &oneOrMorePat{stripMemo(t.Pattern, refs)}
+		return newOneOrMorePat(stripMemo(t.Pattern, refs))
 	}
 	return p
 }
@@ -121,7 +121,7 @@ func TestMemoPointsAreInvisible(t *testing.T) {
 	if _, ok := w.open.Load(xdm.QName{Local: "e1"}); !ok {
 		t.Error("the memo point did not remember startTagOpenDeriv for e1")
 	}
-	if !patEq(w, w.cached) || patternSize(w, 1<<30) != patternSize(w.cached, 1<<30) {
+	if !patEq(w, w.cached) || patternSize(w) != patternSize(w.cached) {
 		t.Error("a memo point must compare and measure as the subtree it holds")
 	}
 }

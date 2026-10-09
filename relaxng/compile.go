@@ -634,7 +634,7 @@ func (c *compiler) compilePattern(n *xdm.Node) (pattern, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &listPat{Pattern: p}, nil
+		return newListPat(p), nil
 
 	case "value":
 		return c.compileValue(n)
