@@ -48,7 +48,7 @@ takes 48–50 ms of every query except q10–q12.
 
 | Benchmark figure | Finding |
 |---|---|
-| DocBook compile 55 → 77 ms | **Real.** Bisected to `a81dff28` (the 40-byte records). The stylesheet checks walk ancestors for the version attribute (`effectiveForwards`, `moduleAtLeast30`, `xpathVersionAt` …). Each `Attr` lookup now goes through the name table instead of an inlined field read, which costs about 5 ms. The static-phase copies add about 2 ms, and the smaller heap runs more GC cycles (115 against 84 per 20 compiles). Fixed by V7 (landed, see [Landed](#landed)) |
+| DocBook compile 55 → 77 ms | **Real.** Bisected to `a81dff28` (the 40-byte records). The stylesheet checks walk ancestors for the version attribute (`effectiveForwards`, `moduleAtLeast30`, `xpathVersionAt` …). Each `Attr` lookup now goes through the name table instead of an inlined field read, which costs about 5 ms. The static-phase copies add about 2 ms, and the smaller heap runs more GC cycles (115 against 84 per 20 compiles). Fixed by V7 (landed, see [Landed](#landed-in-the-v2-fix-round)) |
 | RELAX NG warm 0.60× → 0.75× Jing | **Mostly Jing.** The same Jing jar ran 15% faster in this run, which accounts for about 73% of the change. go-xml's own share is +4–6% on small documents, from per-document parse set-up (V18). Long documents are 18–40% faster than v1 |
 | Parse warm 0.54× → 0.57× `encoding/xml` | **Not the parse.** Parse wall time is level with v1 and its CPU is 39% lower. The C14N write that the item includes was 14% slower. V11 (landed, see [Landed](#landed-in-the-v2-fix-round)) cut the write 10–12% and the item 3.7%, from the output buffer rather than the accessors |
 | RELAX NG warm 0.60× → 0.75× Jing | **Mostly Jing.** The same Jing jar ran 15% faster in this run, which accounts for about 73% of the change. go-xml's own share is +4–6% on small documents, from per-document parse set-up (V18, read windows landed, see [Landed](#landed-in-the-v2-fix-round)). Long documents are 18–40% faster than v1 |
@@ -61,7 +61,7 @@ takes 48–50 ms of every query except q10–q12.
   validate, the second to drop whitespace and add defaults. On top of that,
   three callers still copy the input first, as v1 had to. CLI
   `-validate strict` on a 2.5 MB catalog takes 11 ms on v1 and 38 ms on v2.
-  Fixed by V2 (landed; see [Landed](#landed)).
+  Fixed by V2 (landed; see [Landed](#landed-in-the-v2-fix-round)).
 - **XMark q10** evaluation is 55% slower. XQuery element content is copied
   twice per node (`xdm.Copy`, then `AppendNode`'s own copy), and
   `limitInherited` builds three maps per constructed element. Fixed by V1
