@@ -509,21 +509,64 @@ func inheritNamespaces(dst, src *xdm.Node) {
 // dest: of the bindings src inherited, only those dest does not already
 // supply are written on the copy.
 func inheritNamespacesAt(rt *runtime, dst, src, dest *xdm.Node) {
-	have := map[string]bool{}
-	for _, ns := range dst.Namespaces {
-		have[ns.Name.Local] = true
-	}
-	scope := src.InScopeNamespaces()
-	prefixes := make([]string, 0, len(scope))
-	for p, uri := range scope {
-		if p != "xml" && !have[p] && !suppliedAt(rt, dest, p, uri) {
-			prefixes = append(prefixes, p)
+	var arr [32]nsBinding
+	for _, b := range scopeBindings(src, arr[:0]) {
+		if !declares(dst, b.prefix) && !suppliedAt(rt, dest, b.prefix, b.uri) {
+			dst.AddNamespace(b.prefix, b.uri)
 		}
 	}
-	sort.Strings(prefixes)
-	for _, p := range prefixes {
-		dst.AddNamespace(p, scope[p])
+}
+
+// declares reports whether el carries a namespace node for prefix.
+func declares(el *xdm.Node, prefix string) bool {
+	for _, ns := range el.Namespaces {
+		if ns.Name.Local == prefix {
+			return true
+		}
 	}
+	return false
+}
+
+// scopeBindings appends to buf the bindings n.InScopeNamespaces() holds,
+// less xml, sorted by prefix. It reads the ancestors directly rather than
+// building the map: the copies that call it run once per copied element, and
+// the map was most of what they allocated.
+func scopeBindings(n *xdm.Node, buf []nsBinding) []nsBinding {
+	start := len(buf)
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.Kind != xdm.KindElement {
+			continue
+		}
+		// Within one element the last declaration wins, as the map's
+		// overwrites resolve it; an inner element shadows an outer one.
+	next:
+		for i := len(cur.Namespaces) - 1; i >= 0; i-- {
+			ns := cur.Namespaces[i]
+			if ns.Name.Local == "xml" {
+				continue
+			}
+			for _, b := range buf[start:] {
+				if b.prefix == ns.Name.Local {
+					continue next
+				}
+			}
+			buf = append(buf, nsBinding{ns.Name.Local, ns.Value})
+		}
+	}
+	// Drop undeclarations, which only served to shadow, and sort.
+	out := buf[:start]
+	for _, b := range buf[start:] {
+		if b.uri != "" {
+			out = append(out, b)
+		}
+	}
+	s := out[start:]
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j].prefix < s[j-1].prefix; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+	return out
 }
 
 // stripNamespaces removes the namespace nodes from a copied subtree, which is
@@ -674,33 +717,26 @@ func scopeURI(n *xdm.Node, prefix string) string {
 // copyNamespacesTo adds every namespace node in scope on src to the element
 // sub is building, leaving out those the element already inherits.
 func copyNamespacesTo(rt *runtime, sub *outputBuilder, src *xdm.Node) {
-	scope := src.InScopeNamespaces()
-	prefixes := make([]string, 0, len(scope))
-	for p := range scope {
-		prefixes = append(prefixes, p)
-	}
 	// Sorted so that the declarations come out in a stable order; the XDM
 	// leaves the order of the namespace axis implementation-dependent, but an
-	// order that varies between runs is not an order at all.
-	sort.Strings(prefixes)
-	for _, p := range prefixes {
-		if p == "xml" {
-			// The xml prefix is bound implicitly everywhere, so declaring it
-			// would be redundant and is in fact forbidden in the output.
-			continue
-		}
+	// order that varies between runs is not an order at all. The xml prefix
+	// is left out: it is bound implicitly everywhere, so declaring it would
+	// be redundant and is in fact forbidden in the output.
+	var arr [32]nsBinding
+	for _, b := range scopeBindings(src, arr[:0]) {
+		p, uri := b.prefix, b.uri
 		// Inherited rather than copied, as for a literal result element. The
 		// two cases AddNamespace does more than add -- XTDE0440, and the
 		// rename of an element prefix the binding contradicts -- still go
 		// through it.
 		el := sub.Open()
 		if !(p == "" && el.Name.URI == "") &&
-			!(el.Name.Prefix == p && el.Name.URI != scope[p]) &&
-			parentSupplies(rt, el, p, scope[p]) {
-			sub.NoteDeclared(p, scope[p])
+			!(el.Name.Prefix == p && el.Name.URI != uri) &&
+			parentSupplies(rt, el, p, uri) {
+			sub.NoteDeclared(p, uri)
 			continue
 		}
-		_ = sub.AddNamespace(p, scope[p])
+		_ = sub.AddNamespace(p, uri)
 	}
 }
 

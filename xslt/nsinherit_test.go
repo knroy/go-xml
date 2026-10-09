@@ -213,3 +213,41 @@ func TestNamespaceInheritanceUnchanged(t *testing.T) {
 		})
 	}
 }
+
+// TestScopeBindingsMatchesInScopeNamespaces pins scopeBindings, which the
+// copies read in place of building InScopeNamespaces' map, to the map's
+// answer: inner declarations shadow outer ones, the last of two declarations
+// on one element wins, an undeclaration removes the prefix, and xml is left
+// out.
+func TestScopeBindingsMatchesInScopeNamespaces(t *testing.T) {
+	doc, err := xdm.ParseString(`<?xml version="1.1"?>`+
+		`<a xmlns="urn:d" xmlns:p="urn:p" xmlns:q="urn:q">`+
+		`<b xmlns:p="urn:p2" xmlns:q=""><c xmlns=""/></b></a>`,
+		xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := doc.Root.FirstElement("", "c")
+	b := c.Parent
+	// Two declarations of one prefix on one element, as a constructed tree
+	// can hold: the later one is in force.
+	b.AddNamespace("r", "urn:r1")
+	b.AddNamespace("r", "urn:r2")
+	for _, n := range []*xdm.Node{b.Parent, b, c} {
+		var got []string
+		for _, nb := range scopeBindings(n, nil) {
+			got = append(got, nb.prefix+"="+nb.uri)
+		}
+		scope := n.InScopeNamespaces()
+		var want []string
+		for _, p := range []string{"", "p", "q", "r"} {
+			if u, ok := scope[p]; ok {
+				want = append(want, p+"="+u)
+			}
+		}
+		if strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("<%s>: scopeBindings = %q, InScopeNamespaces = %q",
+				n.Name.Local, got, want)
+		}
+	}
+}
