@@ -476,6 +476,10 @@ type serializer struct {
 	// its single segment. Both callers finish with the slice before asking
 	// again.
 	oneSeg [1]mapSegment
+	// encFrom and encLower cache opts.Encoding lower-cased: representable
+	// asks for it on every non-ASCII character, and lower-casing "UTF-8"
+	// allocated each time. encFrom is the spelling the cache was made from.
+	encFrom, encLower string
 }
 
 func (s *serializer) writeString(str string) {
@@ -1535,7 +1539,7 @@ func (s *serializer) representable(r rune) bool {
 	if r < 0x80 {
 		return true
 	}
-	switch strings.ToLower(s.opts.Encoding) {
+	switch s.encodingLower() {
 	case "us-ascii", "ascii":
 		return false
 	case "iso-8859-1", "latin1":
@@ -1549,11 +1553,20 @@ func (s *serializer) representable(r rune) bool {
 // asking representable() about each rune. It is the run-level form of
 // representable and must agree with it: the two switch on the same names.
 func (s *serializer) encodingHoldsAll() bool {
-	switch strings.ToLower(s.opts.Encoding) {
+	switch s.encodingLower() {
 	case "us-ascii", "ascii", "iso-8859-1", "latin1":
 		return false
 	}
 	return true
+}
+
+// encodingLower returns opts.Encoding lower-cased, computing it only when
+// the setting differs from the one last seen.
+func (s *serializer) encodingLower() string {
+	if s.encFrom != s.opts.Encoding {
+		s.encFrom, s.encLower = s.opts.Encoding, strings.ToLower(s.opts.Encoding)
+	}
+	return s.encLower
 }
 
 // normalized applies the requested Unicode normalisation, if any.
@@ -1751,6 +1764,10 @@ func (s *serializer) writeAttrRuns(sb *strings.Builder, run string) {
 			sb.WriteByte(byte(r))
 			continue
 		}
+		if s.plainAttrWide(r) {
+			sb.WriteRune(r)
+			continue
+		}
 		sb.WriteString(s.escapeAttrRune(r))
 	}
 }
@@ -1764,6 +1781,13 @@ func plainAttrASCII(r rune) bool {
 	return r >= 0x20 && r < 0x7F && r != '&' && r != '<' && r != '>' && r != '"'
 }
 
+// plainAttrWide is plainAttrASCII's counterpart above the C1 block: a
+// character the encoding holds, other than LINE SEPARATOR, is also written
+// unchanged by escapeAttrRune.
+func (s *serializer) plainAttrWide(r rune) bool {
+	return r >= 0xA0 && r != '\u2028' && s.representable(r)
+}
+
 // escapeAttrRunes escapes a whole attribute value one character at a time,
 // so that the html and xhtml spellings escapeAttrRune knows about apply. The
 // percent-escaped URI path used escapeAttr directly and so wrote "&quot;"
@@ -1774,6 +1798,10 @@ func (s *serializer) escapeAttrRunes(v string) string {
 	for _, r := range v {
 		if plainAttrASCII(r) {
 			sb.WriteByte(byte(r))
+			continue
+		}
+		if s.plainAttrWide(r) {
+			sb.WriteRune(r)
 			continue
 		}
 		sb.WriteString(s.escapeAttrRune(r))

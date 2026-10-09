@@ -47,3 +47,43 @@ func TestSerializeHTMLAttrAllocsFlat(t *testing.T) {
 		t.Errorf("800-character value: %.0f allocations, 8-character value: %.0f; want the same", long, short)
 	}
 }
+
+// A non-ASCII attribute character under an encoding spelled "UTF-8" asked
+// representable for the encoding lower-cased, which allocated a string per
+// character, and then escaped it as a one-character string. It is written
+// unchanged, so the count must not grow with the value; a character the
+// encoding cannot hold is still a reference.
+func TestSerializeHTMLAttrWideAllocsFlat(t *testing.T) {
+	page := func(v string) xdm.Sequence {
+		tree, err := xdm.ParseString(`<html><body><p title="`+v+`">x</p></body></html>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return xdm.One(tree.Root)
+	}
+	var out bytes.Buffer
+	if err := Serialize(&out, page("Grüße €"), OutputSettings{Method: "html", Encoding: "ISO-8859-1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if want := `title="Grüße&#8232;&#8364;"`; !strings.Contains(out.String(), want) {
+		t.Fatalf("got %q, want it to contain %q", out.String(), want)
+	}
+
+	if raceEnabled {
+		t.Skip("allocation counts are not stable under -race")
+	}
+	opts := OutputSettings{Method: "html", Encoding: "UTF-8"}
+	count := func(seq xdm.Sequence) float64 {
+		var buf bytes.Buffer
+		return testing.AllocsPerRun(20, func() {
+			buf.Reset()
+			if err := Serialize(&buf, seq, opts, nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	short, long := count(page(strings.Repeat("ü€", 4))), count(page(strings.Repeat("ü€", 400)))
+	if long > short+2 {
+		t.Errorf("800-character value: %.0f allocations, 8-character value: %.0f; want the same", long, short)
+	}
+}
