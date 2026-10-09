@@ -995,34 +995,30 @@ func (g *generalPattern) matchesFromVirtualParent(root, node *xdm.Node,
 	if root.Kind() != xdm.KindElement {
 		return false, nil
 	}
-	// The path from the root down to the candidate, as child indexes. It is
-	// what identifies the candidate inside the copy.
-	var path []int
+	// The path from the candidate up to the root. Its position among its
+	// parent's children at each level is what identifies the candidate
+	// inside the copy; an attribute or namespace node is not a child.
+	var path []*xdm.Node
 	for n := node; n != root; n = n.Parent() {
-		if n.Parent() == nil {
+		if n.Parent() == nil || n.Kind() == xdm.KindAttribute || n.Kind() == xdm.KindNamespace {
 			return false, nil
 		}
-		idx := -1
-		for i := range n.Parent().NumChildren() {
-			ch := n.Parent().ChildAt(i)
-			if ch == n {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			return false, nil
-		}
-		path = append(path, idx)
+		path = append(path, n)
 	}
 
 	doc, copied := wrapInDocument(root)
-	target := copied
+	// Walk the source and the copy in step, taking at each level the copy's
+	// child at the position the path's node holds in the source.
+	src, target := root, copied
 	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] >= target.NumChildren() {
+		s, t := src.FirstChild(), target.FirstChild()
+		for s != nil && t != nil && s != path[i] {
+			s, t = s.NextSibling(), t.NextSibling()
+		}
+		if s != path[i] || t == nil {
 			return false, nil
 		}
-		target = target.ChildAt(path[i])
+		src, target = s, t
 	}
 
 	seq, err := g.expr.Eval(ctx.WithFocus(doc, 1, 1))
@@ -1044,8 +1040,8 @@ func wrapInDocument(el *xdm.Node) (doc, copied *xdm.Node) {
 	clone = func(parent, n *xdm.Node) *xdm.Node {
 		c := parent.AppendShallowCopy(n)
 		c.SetTypeEnv(n.TypeEnv())
-		for ns := range n.NamespaceDecls() {
-			c.AddNamespace(ns.Name().Local, ns.Value())
+		for prefix, uri := range n.DeclaredNamespaces() {
+			c.AddNamespace(prefix, uri)
 		}
 		for a := range n.Attrs() {
 			c.AppendShallowCopy(a).SetTypeEnv(a.TypeEnv())

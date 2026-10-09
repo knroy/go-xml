@@ -4,6 +4,7 @@ package xslt
 
 import (
 	"fmt"
+	"iter"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -904,9 +905,8 @@ func matchPredicates(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, e
 	if s.attribute {
 		principal = xdm.KindAttribute
 	}
-	cand := make([]*xdm.Node, 0, numSiblings(node.Parent(), s.attribute))
-	for i := range numSiblings(node.Parent(), s.attribute) {
-		sib := siblingAt(node.Parent(), s.attribute, i)
+	var cand []*xdm.Node
+	for sib := range stepSiblings(node.Parent(), s.attribute) {
 		if s.nodeTest.Matches(sib, principal) {
 			cand = append(cand, sib)
 		}
@@ -950,20 +950,13 @@ func matchPredicates(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, e
 	return false, nil
 }
 
-// numSiblings and siblingAt index the nodes a pattern step's position counts
+// stepSiblings iterates over the nodes a pattern step's position counts
 // among: p's attributes for an attribute step, its children otherwise.
-func numSiblings(p *xdm.Node, attr bool) int {
+func stepSiblings(p *xdm.Node, attr bool) iter.Seq[*xdm.Node] {
 	if attr {
-		return p.NumAttrs()
+		return p.Attrs()
 	}
-	return p.NumChildren()
-}
-
-func siblingAt(p *xdm.Node, attr bool, i int) *xdm.Node {
-	if attr {
-		return p.AttrAt(i)
-	}
-	return p.ChildAt(i)
+	return p.Children()
 }
 
 // evalPatternPredicate evaluates a pattern predicate against a candidate node.
@@ -981,8 +974,7 @@ func evalPatternPredicate(pred xpath.Expr, s patternStep, node *xdm.Node, ctx *x
 			principal = xdm.KindAttribute
 		}
 		size = 0
-		for i := range numSiblings(node.Parent(), s.attribute) {
-			sib := siblingAt(node.Parent(), s.attribute, i)
+		for sib := range stepSiblings(node.Parent(), s.attribute) {
 			if s.nodeTest.Matches(sib, principal) {
 				size++
 				if sib == node {

@@ -202,8 +202,8 @@ func snapshotItem(it xdm.Item) xdm.Item {
 		c := parent.AppendElement(a.Name())
 		c.SetBaseURI(a.BaseURI())
 		c.ApplyTyping(xdm.Typing{TypeAnnotation: "anyType"})
-		for ns := range a.NamespaceDecls() {
-			c.AddNamespace(ns.Name().Local, ns.Value())
+		for prefix, uri := range a.DeclaredNamespaces() {
+			c.AddNamespace(prefix, uri)
 		}
 		for at := range a.Attrs() {
 			// 18.4 forces xs:anyType and false is-id/is-nilled onto the

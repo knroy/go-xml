@@ -492,8 +492,8 @@ func copyDocumentNode(n *xdm.Node) *xdm.Node {
 // nearest ones, and an inherited binding for the same prefix is masked.
 func inheritNamespaces(dst, src *xdm.Node) {
 	have := map[string]bool{}
-	for ns := range dst.NamespaceDecls() {
-		have[ns.Name().Local] = true
+	for prefix := range dst.DeclaredNamespaces() {
+		have[prefix] = true
 	}
 	scope := src.InScopeNamespaces()
 	prefixes := make([]string, 0, len(scope))
@@ -523,8 +523,8 @@ func inheritNamespacesAt(rt *runtime, dst, src, dest *xdm.Node) {
 
 // declares reports whether el carries a namespace node for prefix.
 func declares(el *xdm.Node, prefix string) bool {
-	for ns := range el.NamespaceDecls() {
-		if ns.Name().Local == prefix {
+	for nsPrefix := range el.DeclaredNamespaces() {
+		if nsPrefix == prefix {
 			return true
 		}
 	}
@@ -543,18 +543,22 @@ func scopeBindings(n *xdm.Node, buf []nsBinding) []nsBinding {
 		}
 		// Within one element the last declaration wins, as the map's
 		// overwrites resolve it; an inner element shadows an outer one.
+		// Bindings from buf[start:own] came from inner elements.
+		own := len(buf)
 	next:
-		for i := cur.NumNamespaceDecls() - 1; i >= 0; i-- {
-			ns := cur.NamespaceDeclAt(i)
-			if ns.Name().Local == "xml" {
+		for prefix, uri := range cur.DeclaredNamespaces() {
+			if prefix == "xml" {
 				continue
 			}
-			for _, b := range buf[start:] {
-				if b.prefix == ns.Name().Local {
+			for k := start; k < len(buf); k++ {
+				if buf[k].prefix == prefix {
+					if k >= own {
+						buf[k].uri = uri
+					}
 					continue next
 				}
 			}
-			buf = append(buf, nsBinding{ns.Name().Local, ns.Value()})
+			buf = append(buf, nsBinding{prefix, uri})
 		}
 	}
 	// Drop undeclarations, which only served to shadow, and sort.
@@ -706,10 +710,14 @@ func scopeURI(n *xdm.Node, prefix string) string {
 		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		for i := cur.NumNamespaceDecls() - 1; i >= 0; i-- {
-			if ns := cur.NamespaceDeclAt(i); ns.Name().Local == prefix {
-				return ns.Value()
+		found, last := false, ""
+		for p, uri := range cur.DeclaredNamespaces() {
+			if p == prefix {
+				found, last = true, uri
 			}
+		}
+		if found {
+			return last
 		}
 	}
 	if prefix == "xml" {
@@ -772,10 +780,14 @@ func suppliedAt(rt *runtime, parent *xdm.Node, prefix, uri string) bool {
 		if fixupMayBind(cur, prefix) {
 			return false
 		}
-		for i := cur.NumNamespaceDecls() - 1; i >= 0; i-- {
-			if ns := cur.NamespaceDeclAt(i); ns.Name().Local == prefix {
-				return ns.Value() == uri && !rt.blocking[cur]
+		found, last := false, ""
+		for p, u := range cur.DeclaredNamespaces() {
+			if p == prefix {
+				found, last = true, u
 			}
+		}
+		if found {
+			return last == uri && !rt.blocking[cur]
 		}
 	}
 	return false

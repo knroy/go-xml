@@ -429,11 +429,9 @@ func lookupPrefix(el *xdm.Node, prefix string) string {
 		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		for ns := range cur.NamespaceDecls() {
-			// A namespace node keeps the prefix in its name and the URI in
-			// its value; there are no Prefix and URI fields.
-			if ns.Name().Local == prefix {
-				return ns.Value()
+		for nsPrefix, nsURI := range cur.DeclaredNamespaces() {
+			if nsPrefix == prefix {
+				return nsURI
 			}
 		}
 	}

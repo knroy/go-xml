@@ -51,17 +51,16 @@ func blockNamespaceInheritance(el *xdm.Node) {
 	}
 	scope := map[string]string{}
 	prefixes := make([]string, 0, el.NumNamespaceDecls())
-	for ns := range el.NamespaceDecls() {
-		p := ns.Name().Local
+	for p, uri := range el.DeclaredNamespaces() {
 		// The xml prefix is bound everywhere by the XML Namespaces
 		// specification and cannot be undeclared.
 		//
 		// An empty value is itself an undeclaration el is carrying, so there
 		// is nothing for the children to inherit and nothing to block.
-		if p == "xml" || ns.Value() == "" {
+		if p == "xml" || uri == "" {
 			continue
 		}
-		scope[p] = ns.Value()
+		scope[p] = uri
 		prefixes = append(prefixes, p)
 	}
 	// A stable order, for the same reason copyNamespacesTo sorts.
@@ -72,8 +71,8 @@ func blockNamespaceInheritance(el *xdm.Node) {
 			continue
 		}
 		declared := map[string]bool{}
-		for ns := range child.NamespaceDecls() {
-			declared[ns.Name().Local] = true
+		for prefix := range child.DeclaredNamespaces() {
+			declared[prefix] = true
 		}
 		for _, p := range prefixes {
 			if declared[p] {

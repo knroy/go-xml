@@ -2190,24 +2190,23 @@ func collectPrefixes(n *xdm.Node, into map[string]string) {
 // raise XTDE1260 purely because of the order the modules were included in.
 func collectPrefixesAll(n *xdm.Node, into map[string]string, all map[string][]string) {
 	if n.Kind() == xdm.KindElement {
-		for ns := range n.NamespaceDecls() {
-			p := ns.Name().Local
+		for p, uri := range n.DeclaredNamespaces() {
 			if p == "" {
 				continue
 			}
 			if _, seen := into[p]; !seen {
-				into[p] = ns.Value()
+				into[p] = uri
 			}
 			if all != nil {
 				dup := false
 				for _, u := range all[p] {
-					if u == ns.Value() {
+					if u == uri {
 						dup = true
 						break
 					}
 				}
 				if !dup {
-					all[p] = append(all[p], ns.Value())
+					all[p] = append(all[p], uri)
 				}
 			}
 		}

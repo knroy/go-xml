@@ -418,10 +418,10 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 			return err
 		}
 		defer rt.ascend()
-		size := node.NumChildren()
-		for idx := range node.NumChildren() {
-			ch := node.ChildAt(idx)
-			sub := rt.withCurrent(ch, idx+1, size)
+		size, idx := node.NumChildren(), 0
+		for ch := range node.Children() {
+			idx++
+			sub := rt.withCurrent(ch, idx, size)
 			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
 				return err
 			}
@@ -1016,10 +1016,10 @@ func builtInDescend(rt *runtime, node *xdm.Node, mode string,
 			return err
 		}
 		defer rt.ascend()
-		size := node.NumChildren()
-		for idx := range node.NumChildren() {
-			ch := node.ChildAt(idx)
-			sub := rt.withCurrent(ch, idx+1, size)
+		size, idx := node.NumChildren(), 0
+		for ch := range node.Children() {
+			idx++
+			sub := rt.withCurrent(ch, idx, size)
 			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
 				return err
 			}
@@ -1063,10 +1063,10 @@ func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
 			return err
 		}
 	}
-	size := node.NumChildren()
-	for idx := range node.NumChildren() {
-		ch := node.ChildAt(idx)
-		cn := rt.withCurrent(ch, idx+1, size)
+	size, idx := node.NumChildren(), 0
+	for ch := range node.Children() {
+		idx++
+		cn := rt.withCurrent(ch, idx, size)
 		if err := applyToNode(cn, ch, mode, params, tunnels, out); err != nil {
 			return err
 		}
@@ -1134,10 +1134,10 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 				return err
 			}
 		}
-		size := node.NumChildren()
-		for idx := range node.NumChildren() {
-			ch := node.ChildAt(idx)
-			cn := rt.withCurrent(ch, idx+1, size)
+		size, idx := node.NumChildren(), 0
+		for ch := range node.Children() {
+			idx++
+			cn := rt.withCurrent(ch, idx, size)
 			if err := applyToNode(cn, ch, mode, params, tunnels, sub); err != nil {
 				return err
 			}

@@ -62,8 +62,8 @@ func TestConstructedElementsInheritBindings(t *testing.T) {
 	}
 	for c := range out.Children() {
 		var got []string
-		for ns := range c.NamespaceDecls() {
-			got = append(got, ns.Name().Local+"="+ns.Value())
+		for prefix, uri := range c.DeclaredNamespaces() {
+			got = append(got, prefix+"="+uri)
 		}
 		want := ""
 		switch c.Name().Local {

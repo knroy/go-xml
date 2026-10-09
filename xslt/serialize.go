@@ -790,62 +790,19 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// element declares, and stays in scope for its children.
 	base := len(s.ns)
 	defer func() { s.ns = s.ns[:base] }()
-	// Normally the element's own namespace nodes; for the root of a
+	// Normally the element's own declarations; for the root of a
 	// serialization, rootNamespaces' list instead.
-	var seeded []*xdm.Node
-	count := n.NumNamespaceDecls()
 	if n == s.seeded {
 		s.seeded = nil
-		seeded = rootNamespaces(n)
-		count = len(seeded)
+		for _, b := range rootNamespaces(n) {
+			s.ownNamespaceDecl(n, base, b.prefix, b.uri)
+		}
+	} else {
+		for prefix, uri := range n.DeclaredNamespaces() {
+			s.ownNamespaceDecl(n, base, prefix, uri)
+		}
 	}
-	for i := range count {
-		var ns *xdm.Node
-		if seeded != nil {
-			ns = seeded[i]
-		} else {
-			ns = n.NamespaceDeclAt(i)
-		}
-		if s.inScope(base, ns.Name().Local) == ns.Value() {
-			continue
-		}
-		// An element binds each prefix at most once, and the binding its own
-		// name needs is the one that has to survive: without it the name is
-		// unresolvable. A namespace node carrying the element's prefix bound
-		// to some other URI -- which xsl:namespace-alias leaves behind, as
-		// namespace-alias-2620 shows -- is dropped here rather than written
-		// beside the one added below, which produced two xmlns:y attributes
-		// on one element and output that is not well-formed XML.
-		if ns.Name().Local != "" && ns.Name().Local == n.Name().Prefix &&
-			n.Name().URI != "" && ns.Value() != n.Name().URI {
-			continue
-		}
-		// An element binds each prefix at most once. A node list can hold the
-		// same prefix twice -- xsl:namespace-alias with competing aliases at
-		// different import precedence leaves two y bindings behind, which is
-		// namespace-alias-2620 -- and writing both is not well-formed XML.
-		if _, dup := s.declared(base, ns.Name().Local); dup {
-			continue
-		}
-		// A namespace undeclaration for a *prefix* -- xmlns:p="" -- is
-		// syntax only XML 1.1 has, and the serialization parameter that asks
-		// for it is undeclare-prefixes. XSLT 3.0 §11.7 states the licence
-		// exactly: "Namespace undeclarations are generated automatically by
-		// the serializer if undeclare-prefixes="yes" is specified on
-		// xsl:output". Without it the binding is simply left out of the
-		// output, which loses nothing a 1.0 reader can express -- a prefix
-		// no name in the subtree uses cannot be missed.
-		//
-		// The default-namespace undeclaration xmlns="" is a separate matter
-		// and is not covered here: it is legal in XML 1.0, it is written
-		// below on its own terms, and omitting it would move an element into
-		// a namespace it is not in.
-		if ns.Value() == "" && ns.Name().Local != "" && !s.opts.UndeclarePrefixes {
-			continue
-		}
-		s.writeNamespaceDecl(ns.Name().Local, ns.Value())
-		s.ns = append(s.ns, nsPair{ns.Name().Local, ns.Value()})
-	}
+
 	// An element whose namespace has no declaration in scope needs one, which
 	// happens for elements built by xsl:element with a computed namespace.
 	if n.Name().URI != "" && s.inScope(base, n.Name().Prefix) != n.Name().URI &&
@@ -893,12 +850,12 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// not. Serialization-xhtml-36 writes <html><head/></html> with no
 	// namespace and asks to see the content-type meta, which the
 	// no-children branch would have written away as "<head></head>".
-	emptyHead := n.NumChildren() == 0 && s.html &&
+	emptyHead := n.FirstChild() == nil && s.html &&
 		strings.EqualFold(n.Name().Local, "head") &&
 		(!s.xhtml || n.Name().URI == nsXHTML || n.Name().URI == "") &&
 		(s.opts.IncludeContentType == nil || *s.opts.IncludeContentType)
 
-	if n.NumChildren() == 0 && !emptyHead {
+	if n.FirstChild() == nil && !emptyHead {
 		// htmlNativeElement rather than s.html: an element in a namespace of
 		// its own is an XML island, and Serialization 3.1 §9 has the html
 		// method write foreign content with XML syntax. The self-closing
@@ -1118,41 +1075,81 @@ func (s *serializer) nodeNoIndent(n *xdm.Node) {
 	s.opts.Indent = saved
 }
 
-// rootNamespaces returns the namespace nodes to write on n when it is
+// ownNamespaceDecl writes one of element n's namespace declarations, unless
+// it is already in scope from the ancestors (s.ns[:base]) or must be left out.
+func (s *serializer) ownNamespaceDecl(n *xdm.Node, base int, prefix, uri string) {
+	if s.inScope(base, prefix) == uri {
+		return
+	}
+	// An element binds each prefix at most once, and the binding its own
+	// name needs is the one that has to survive: without it the name is
+	// unresolvable. A namespace node carrying the element's prefix bound
+	// to some other URI -- which xsl:namespace-alias leaves behind, as
+	// namespace-alias-2620 shows -- is dropped here rather than written
+	// beside the one added below, which produced two xmlns:y attributes
+	// on one element and output that is not well-formed XML.
+	if prefix != "" && prefix == n.Name().Prefix &&
+		n.Name().URI != "" && uri != n.Name().URI {
+		return
+	}
+	// An element binds each prefix at most once. A node list can hold the
+	// same prefix twice -- xsl:namespace-alias with competing aliases at
+	// different import precedence leaves two y bindings behind, which is
+	// namespace-alias-2620 -- and writing both is not well-formed XML.
+	if _, dup := s.declared(base, prefix); dup {
+		return
+	}
+	// A namespace undeclaration for a *prefix* -- xmlns:p="" -- is
+	// syntax only XML 1.1 has, and the serialization parameter that asks
+	// for it is undeclare-prefixes. XSLT 3.0 §11.7 states the licence
+	// exactly: "Namespace undeclarations are generated automatically by
+	// the serializer if undeclare-prefixes="yes" is specified on
+	// xsl:output". Without it the binding is simply left out of the
+	// output, which loses nothing a 1.0 reader can express -- a prefix
+	// no name in the subtree uses cannot be missed.
+	//
+	// The default-namespace undeclaration xmlns="" is a separate matter
+	// and is not covered here: it is legal in XML 1.0, it is written
+	// below on its own terms, and omitting it would move an element into
+	// a namespace it is not in.
+	if uri == "" && prefix != "" && !s.opts.UndeclarePrefixes {
+		return
+	}
+	s.writeNamespaceDecl(prefix, uri)
+	s.ns = append(s.ns, nsPair{prefix, uri})
+}
+
+// rootNamespaces returns the declarations to write on n when it is
 // serialized without its ancestors: its own, and the bindings it inherits.
 //
 // Serialization 3.1 §2 copies each node of the sequence into a new document
 // first, and the copy keeps every in-scope namespace of the element. A
 // constructed element leaves a binding its parent already has to the parent,
-// so writing only its own nodes lost that binding from the output. When n
-// inherits nothing its own nodes are returned in their order, in a new
-// non-nil slice; otherwise the union is sorted by prefix, which is the order
-// a literal result element copies its bindings in.
-func rootNamespaces(n *xdm.Node) []*xdm.Node {
+// so writing only its own declarations lost that binding from the output.
+// When n inherits nothing its own declarations are returned in their order;
+// otherwise the union is sorted by prefix, which is the order a literal
+// result element copies its bindings in.
+func rootNamespaces(n *xdm.Node) []nsPair {
 	scope := n.InScopeNamespaces()
 	own := make(map[string]bool, n.NumNamespaceDecls())
-	for ns := range n.NamespaceDecls() {
-		own[ns.Name().Local] = true
+	for prefix := range n.DeclaredNamespaces() {
+		own[prefix] = true
 	}
-	var out []*xdm.Node
+	var out []nsPair
 	for p, uri := range scope {
 		if p != "xml" && !own[p] {
-			out = append(out, xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: p}, uri))
+			out = append(out, nsPair{p, uri})
 		}
 	}
 	inherited := len(out)
-	for i := range n.NumNamespaceDecls() {
-		out = append(out, n.NamespaceDeclAt(i))
+	for prefix, uri := range n.DeclaredNamespaces() {
+		out = append(out, nsPair{prefix, uri})
 	}
-	if inherited == 0 {
-		if out == nil {
-			out = []*xdm.Node{}
-		}
-		return out
+	if inherited > 0 {
+		sort.SliceStable(out, func(i, j int) bool {
+			return out[i].prefix < out[j].prefix
+		})
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].Name().Local < out[j].Name().Local
-	})
 	return out
 }
 
@@ -2378,7 +2375,7 @@ func defaultMethod(seq xdm.Sequence, v10Implicit bool) string {
 			case *xdm.Node:
 				switch v.Kind() {
 				case xdm.KindDocument:
-					kids := make(xdm.Sequence, 0, v.NumChildren())
+					var kids xdm.Sequence
 					for c := range v.Children() {
 						kids = append(kids, c)
 					}
@@ -2600,7 +2597,7 @@ func isWellFormedDocument(seq xdm.Sequence) bool {
 			case *xdm.Node:
 				switch v.Kind() {
 				case xdm.KindDocument:
-					kids := make(xdm.Sequence, 0, v.NumChildren())
+					var kids xdm.Sequence
 					for c := range v.Children() {
 						kids = append(kids, c)
 					}
