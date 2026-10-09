@@ -654,6 +654,36 @@ Measured and not landed:
 | `Compiled.scope` with the runtime carrying the package's version and static host | 0 copies skipped on any workload: a top-level evaluation is recognised by `StaticNamespaces == nil`, and CEN alone has 1,238 distinct namespace resolvers. Skipping the install changes what host functions see in the exported `StaticNamespaces`: v2 (T20) |
 | A schema-wide RELAX NG derivative memo | 3.5× faster warm only because the benchmark re-validates the same documents; no gain on unseen ones, twice the bytes |
 
+## Round 6: XDM plan, phases 0–2 (`c233f4e`)
+
+The analysis of the external XDM suggestion (kept with the private audits)
+measured the trees, inventoried the exported node API and prototyped three
+layouts. Its conclusions: the 280 B node cannot shrink while its fields are
+exported (they alone total 253 B); the parse already allocates only what it
+keeps; and the Schematron gap follows allocation volume (context copies,
+namespace nodes, boxed values), not tree size. Phases 0–2 are the v1 part of
+its plan.
+
+| Item | Commit | Measured |
+|---|---|---|
+| 0: `xdm` navigation, corpus-parse and tree-shape benchmarks | `a5b4546` | reproduce the analysis: 22.99 retained bytes per input byte on 10 MB, 4.47 on invoices |
+| 1.1: `generate-id` as `N<tree>x<order>` | `3f87498` | fixes a collision between trees over 2^20 order slots |
+| 1.3: constructed elements inherit their parent's bindings | `77c78e9`, `b13e8f4`, `f3ac83d` | CEN allocations −13.9%, bytes −19.1%, CPU −15%; Peppol −8.6%, −11.5%, −8%; DocBook −4.9% allocations, −3% CPU |
+| 1.4: parse-time namespace nodes and PIs from the node chunk | `092bdce` | parse allocations −10% on stylesheets, −4% DocBook; CPU level |
+| 2.1: every tree built or edited outside `xdm`/`xdmbuild` goes through `xdmbuild` (161 sites) | `655311a` … `4cf85b0` | outputs and suites identical; 31 sites left that edit stylesheet trees in place by identity |
+| 2.2: typing written only through `TypingOf`/`ApplyTyping` | `63061b6` | refactor |
+| 2.4: `xsd.Schema.ValidateCopy` | `ec72376` | additive; the input tree is never written |
+
+Not landed:
+- 1.2, the string arena starting small. It cut retained heap 20–37% on small
+  documents, but cost DocBook 5% CPU: the smaller live heap makes the
+  collector run more often at the same `GOGC` (85 cycles against 77; equal
+  with GC off). Reverted in `629cf48`.
+- 1.5, chunked result nodes: −0.9% allocations at most, +0.4–0.7% bytes.
+
+Phase 2.3 (positional access through helpers) moves to the v2 branch, where
+the fields go away anyway.
+
 ## Correctness bugs found while profiling
 
 | # | Bug | Evidence | Fix |

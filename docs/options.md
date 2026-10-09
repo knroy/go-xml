@@ -383,6 +383,17 @@ xsd.ValidateOptions{MaxDepth: 5000}    // and validate it
 across goroutines, but a *tree* being annotated is not — give each goroutine its
 own parse, or leave `Annotate` off.
 
+`Schema.ValidateCopy(root, opts)` (and `ValidateCopyContext`) validates a copy
+of the whole tree instead and returns the copy's counterpart of `root`, typed
+as `Annotate` would type it, valid or not, together with the error `Validate`
+would have returned. The input is never written to, so one tree can be
+validated from several goroutines at once. The copy carries every typing
+property, base and document URIs, the DOCTYPE and unparsed entities;
+whitespace stripping and default attributes happen on the copy. Error
+positions come from the original when it was parsed with `TrackPositions`;
+`Position()` on a copied node itself reports none. The copy is a new tree, so
+`doc(document-uri($copy)) is $copy` is false until the caller registers it.
+
 ---
 
 ## xsd.CheckOptions

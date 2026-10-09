@@ -10,6 +10,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
+| `xsd.Schema.ValidateCopy`, `ValidateCopyContext` | Validate into a typed copy and leave the input untouched, so one tree can be validated from several goroutines. | [`ec72376`][ec72376] |
+| `xdmbuild` node constructors and setters (`NewElement`, `NewAttribute`, `ShallowCopy`, `DeepCopyPruned`, …) | Every package builds and edits trees through `xdmbuild` instead of node literals, the groundwork for v2. | [`655311a`][655311a] |
+| `xdm` benchmarks | Navigation, corpus parse cost, retained heap per input byte and tree shape, the yardstick for the node redesign. | [`a5b4546`][a5b4546] |
 | `xpath.Context.MaxItems`, `xslt.TransformOptions.MaxItems`, CLI `-max-items` | The item budget is configurable (0 = default 5,000,000, negative = none); a nested evaluation cannot raise it. | [`3727b35`][3727b35] |
 | CLI `-max-bytes` | Lifts or sets the input document size limit on the transform and `xquery` (0 = default 64 MB, negative = none). | [`3727b35`][3727b35] |
 | Build tag `goxml_nohttp` | Leaves `xsd.HTTPResolver` and `net/http` out: CLI start-up −1.6 ms, RSS −4.8 MB, binary −12%; the default build is unchanged. | [`dccd679`][dccd679] |
@@ -58,6 +61,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | With `AllowDOCTYPE` and no DOCTYPE, the parser kept two extra copies of the document | They are dropped when the root opens: 10 MB parse 335 → 230 MB allocated, 100 MB peak RSS 3.15 → 2.0 GB. | [`b88105e`][b88105e] |
 | The html method dropped the stylesheet's own `<meta charset>` under `include-content-type="no"` | It is dropped only when the method adds its own (§7.4.13); XRechnung's HTML stage now matches Saxon. | [`262be91`][262be91] |
 | html/xhtml `indent="yes"` split inline elements onto separate lines | No whitespace is added next to an inline element (§7.4.3, §6.1.4), in `xsl:output` and `fn:serialize`. | [`4457808`][4457808] |
+| `generate-id` was `"N"` plus `tree·2^20 + order`, so a tree with over 2^20 nodes collided with the next tree | Ids are `N<tree>x<order>`, distinct for any size. | [`3f87498`][3f87498] |
+| An element copied into new content by `xsl:sequence` lost the namespaces it inherited; a temporary tree's namespace nodes shared generate-ids | Both now follow XSLT 3.0 §5.7.1, and order slots are reserved for in-scope bindings. | [`77c78e9`][77c78e9] |
 | `xsl:next-match` and `xsl:apply-imports` inside `xsl:iterate`, `xsl:merge`, `xsl:sort` or `xsl:copy select` ran the next rule | The current template rule is cleared there, so they raise `XTDE0560` as XSLT 3.0 §6.8 requires. | [`4d31869`][4d31869] |
 | `xsl:decimal-format` read an empty `NaN`/`infinity` as absent and ignored an empty single-character attribute | Presence decides; an empty single character is `XTSE0020`. | [`1b65291`][1b65291] |
 | `fn:serialize` with `include-content-type` kept the document's content-type meta, added none under xhtml, and ignored `media-type` | It replaces the head's meta, adds one under xhtml, and writes the media type, sharing `xsl:output`'s rules. | [`1e2bad6`][1e2bad6] |
@@ -123,6 +128,9 @@ From [docs/profiling.md](docs/profiling.md). Outputs are byte-identical on every
 | `name(.) = name(current())` built, boxed and atomized two names per node | Name comparisons match prefix and local name directly: XRechnung allocations −53%, CPU −20%. | [`738c1fb`][738c1fb] |
 | Every comparison and boolean built-in allocated a fresh `xs:boolean` | Two shared values are returned: allocations −6 to −12%, CPU −5 to −7.5% on Schematron. | [`7dce099`][7dce099] |
 | Each serialized text node and escaped attribute value was built in a builder of its own | Both are written in runs straight to the buffered writer (XMark q2+q10 allocations −6.9%). | [`ca3e6a1`][ca3e6a1] |
+| Literal result elements and `xsl:copy` repeated every in-scope namespace on each element (86% of SVRL nodes) | A binding the parent already has is inherited: CEN allocations −14%, CPU −15%; Peppol −8%. | [`77c78e9`][77c78e9] |
+| Builders kept a map of declared prefixes per element; copies built a map of in-scope namespaces per element | A small slice, and a direct read of the ancestors. | [`b13e8f4`][b13e8f4] |
+| Parse-time namespace nodes and PIs were two allocations each | They come from the node chunk: parse allocations −10% on stylesheets. | [`092bdce`][092bdce] |
 | RELAX NG re-derived every element of a long document from scratch | Patterns are interned and derivatives remembered past 1,000 elements: 1.1 MB table −32% CPU, −76% allocations. | [`77cdd65`][77cdd65] |
 
 ### Fixed — release process
@@ -1300,6 +1308,13 @@ here so every entry in this file sits under a release.
 [7dce099]: https://github.com/knroy/go-xml/commit/7dce099
 [ca3e6a1]: https://github.com/knroy/go-xml/commit/ca3e6a1
 [77cdd65]: https://github.com/knroy/go-xml/commit/77cdd65
+[ec72376]: https://github.com/knroy/go-xml/commit/ec72376
+[655311a]: https://github.com/knroy/go-xml/commit/655311a
+[a5b4546]: https://github.com/knroy/go-xml/commit/a5b4546
+[3f87498]: https://github.com/knroy/go-xml/commit/3f87498
+[77c78e9]: https://github.com/knroy/go-xml/commit/77c78e9
+[b13e8f4]: https://github.com/knroy/go-xml/commit/b13e8f4
+[092bdce]: https://github.com/knroy/go-xml/commit/092bdce
 [e7ec81d]: https://github.com/knroy/go-xml/commit/e7ec81d
 [739c744]: https://github.com/knroy/go-xml/commit/739c744
 [d006ad2]: https://github.com/knroy/go-xml/commit/d006ad2
