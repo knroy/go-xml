@@ -832,7 +832,7 @@ func castListTokens(ctx *Context, a *xdm.Atomic, list SequenceType) (xdm.Sequenc
 	for _, tok := range toks {
 		switch {
 		case list.SchemaListItem != nil:
-			item := &CastExpr{Operand: &Literal{Val: xdm.NewString(tok)},
+			item := &CastExpr{Operand: newLiteral(xdm.NewString(tok)),
 				Type: *list.SchemaListItem}
 			v, err := item.Eval(ctx)
 			if err != nil {

@@ -288,7 +288,7 @@ func evalToLiteral(e Expr) (Expr, bool) {
 	}
 	// A folded double must keep its type: xs:double(1) and the integer 1 are
 	// different values, and a literal carries its type with it.
-	return &Literal{Val: a}, true
+	return newLiteral(a), true
 }
 
 // isClosed reports whether e can be evaluated without a dynamic context.

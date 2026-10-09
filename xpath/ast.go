@@ -24,7 +24,16 @@ type Expr interface {
 // --- Literals and simple terms ---------------------------------------------
 
 // Literal is a constant atomic value.
-type Literal struct{ Val *xdm.Atomic }
+type Literal struct {
+	Val *xdm.Atomic
+	// seq is Val as a one-item sequence, built once by newLiteral so that
+	// evaluating the literal allocates nothing. Sequences are never written
+	// once returned (a variable reference hands out its stored one), so it
+	// is shared. Eval checks it still holds Val.
+	seq xdm.Sequence
+}
+
+func newLiteral(v *xdm.Atomic) *Literal { return &Literal{Val: v, seq: xdm.One(v)} }
 
 // VarRef is a variable reference, $name.
 type VarRef struct{ Name xdm.QName }
