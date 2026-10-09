@@ -64,7 +64,7 @@ func TestAttListNoDefaultDeclared(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if n := len(tree.Root.ChildElements()[0].attrs); n != 0 {
+	if n := len(attrsOf(tree.Root.ChildElements()[0])); n != 0 {
 		t.Errorf("got %d attributes, want none", n)
 	}
 }
@@ -81,7 +81,7 @@ func TestAttListDefaultIsPerElement(t *testing.T) {
 	if got := kids[0].AttrValue("x"); got != "1" {
 		t.Errorf("a/@x = %q, want 1", got)
 	}
-	if len(kids[1].attrs) != 0 {
+	if len(attrsOf(kids[1])) != 0 {
 		t.Error("b should carry no defaulted attribute")
 	}
 }
@@ -104,10 +104,10 @@ func TestAttListDefaultsExpandNothing(t *testing.T) {
 		if err != nil {
 			continue // refusing outright is also fine
 		}
-		for _, a := range tree.Root.ChildElements()[0].attrs {
-			if len(a.value) > 0 && a.value[0] != '&' {
+		for _, a := range attrsOf(tree.Root.ChildElements()[0]) {
+			if len(a.Value()) > 0 && a.Value()[0] != '&' {
 				t.Errorf("%s: attribute %q = %q, which looks expanded",
-					c.name, a.name.Local, a.value)
+					c.name, a.Name().Local, a.Value())
 			}
 		}
 	}
@@ -156,8 +156,8 @@ func TestNonCDATAAttributeCollapse(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := map[string]string{}
-	for _, a := range tr.Root.children[0].attrs {
-		got[a.name.Local] = a.value
+	for _, a := range attrsOf(kids(tr.Root)[0]) {
+		got[a.Name().Local] = a.Value()
 	}
 	want := map[string]string{"n": "A B", "i": "id1", "c": "  A   B  ", "x": "a", "e": "p", "t": "\tA"}
 	for k, v := range want {
@@ -176,9 +176,9 @@ func TestDefaultedNamespaceOnPrefixedElement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := tr.Root.children[0]
-	if d.name.URI != "urn:p" || len(d.attrs) != 1 || d.attrs[0].name.URI != "urn:p" || d.attrs[0].value != "v" {
-		t.Fatalf("got name %v attrs %v", d.name, d.attrs)
+	d := kids(tr.Root)[0]
+	if d.Name().URI != "urn:p" || len(attrsOf(d)) != 1 || attrsOf(d)[0].Name().URI != "urn:p" || attrsOf(d)[0].Value() != "v" {
+		t.Fatalf("got name %v attrs %v", d.Name(), attrsOf(d))
 	}
 }
 

@@ -275,24 +275,29 @@ func lexicalIs(prefix, local, s string) bool {
 // footing as a schema-validated one, so fn:id finds the same attributes in
 // both.
 func applyAttTypes(el *Node, types []attDeclaredType) {
+	en := el.Name()
 	for _, t := range types {
-		if !lexicalIs(el.name.Prefix, el.name.Local, t.element) && t.element != el.name.Local {
+		if !lexicalIs(en.Prefix, en.Local, t.element) && t.element != en.Local {
 			continue
 		}
-		for _, a := range el.attrs {
-			if !lexicalIs(a.name.Prefix, a.name.Local, t.attr) && a.name.Local != t.attr {
+		for a := range el.Attrs() {
+			if an := a.Name(); !lexicalIs(an.Prefix, an.Local, t.attr) && an.Local != t.attr {
 				continue
 			}
 			// XML 1.0 §3.3.3: a value whose declared type is not CDATA
 			// loses leading and trailing spaces, and each run of spaces
 			// becomes one. Only #x20: a tab written as &#9; survives.
-			a.value = strings.Join(strings.FieldsFunc(a.value, func(r rune) bool { return r == ' ' }), " ")
+			if v := a.Value(); strings.Contains(v, " ") {
+				if c := strings.Join(strings.FieldsFunc(v, func(r rune) bool { return r == ' ' }), " "); c != v {
+					a.SetValue(c)
+				}
+			}
 			switch t.typ {
 			case "ID", "IDREF", "IDREFS":
 			default:
 				continue
 			}
-			if a.typeAnnotation == "" {
+			if a.TypeAnnotation() == "" {
 				// SetTypeAnnotation rather than a bare assignment: a DTD
 				// declaring ID/IDREF/IDREFS is one of the two ways a
 				// document establishes the is-id and is-idrefs properties,
@@ -369,9 +374,9 @@ func isElementOnlyModel(model string) bool {
 // explicit xml:space="preserve" is still honoured, since XML §2.10 makes that
 // the document's own statement about its whitespace.
 func ignorableWhitespaceIn(el *Node, elementOnly map[string]bool) bool {
-	if !elementOnly[el.name.Lexical()] && !elementOnly[el.name.Local] {
+	if en := el.Name(); !elementOnly[en.Lexical()] && !elementOnly[en.Local] {
 		return false
 	}
 	a := el.Attr(NSXML, "space")
-	return a == nil || a.value != "preserve"
+	return a == nil || a.Value() != "preserve"
 }

@@ -48,15 +48,15 @@ func navTree(b *testing.B) {
 		var walk func(n *Node)
 		walk = func(n *Node) {
 			navOnce.nodes = append(navOnce.nodes, n)
-			navOnce.nodes = append(navOnce.nodes, n.attrs...)
-			if n.kind == KindElement {
+			navOnce.nodes = append(navOnce.nodes, attrsOf(n)...)
+			if n.Kind() == KindElement {
 				navOnce.elems = append(navOnce.elems, n)
-				ec[QName{URI: n.name.URI, Local: n.name.Local}]++
-				for _, a := range n.attrs {
-					ac[QName{URI: a.name.URI, Local: a.name.Local}]++
+				ec[QName{URI: n.Name().URI, Local: n.Name().Local}]++
+				for _, a := range attrsOf(n) {
+					ac[QName{URI: a.Name().URI, Local: a.Name().Local}]++
 				}
 			}
-			for _, c := range n.children {
+			for _, c := range kids(n) {
 				walk(c)
 			}
 		}
@@ -90,8 +90,8 @@ func BenchmarkNavDescendantWalk(b *testing.B) {
 		n := 0
 		var f func(x *Node)
 		f = func(x *Node) {
-			for _, c := range x.children {
-				n += int(c.kind)
+			for _, c := range kids(x) {
+				n += int(c.Kind())
 				f(c)
 			}
 		}
@@ -107,8 +107,8 @@ func BenchmarkNavChildNameTest(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		n := 0
 		for _, e := range navOnce.elems {
-			for _, c := range e.children {
-				if c.kind == KindElement && c.name.Local == el.Local && c.name.URI == el.URI {
+			for _, c := range kids(e) {
+				if c.Kind() == KindElement && c.Name().Local == el.Local && c.Name().URI == el.URI {
 					n++
 				}
 			}
@@ -125,7 +125,7 @@ func BenchmarkNavAttrLookup(b *testing.B) {
 		n := 0
 		for _, e := range navOnce.elems {
 			if a := e.Attr(al.URI, al.Local); a != nil {
-				n += len(a.value)
+				n += len(a.Value())
 			}
 		}
 		navSink += n
@@ -245,37 +245,37 @@ func BenchmarkCorpusShape(b *testing.B) {
 			docs, _ := loadCorpus(b, c.glob)
 			var kinds [KindNamespace + 1]int
 			fields := map[string]int{}
-			var kids, attrs []int
+			var kidCounts, attrs []int
 			var walk func(n *Node)
 			walk = func(n *Node) {
-				kinds[n.kind]++
+				kinds[n.Kind()]++
 				set := func(name string, ok bool) {
 					if ok {
 						fields[name]++
 					}
 				}
-				set("Name.Prefix", n.name.Prefix != "")
-				set("Name.URI", n.name.URI != "")
-				set("Value", n.value != "")
-				set("Namespaces", len(n.namespaces) > 0)
-				set("BaseURI", n.baseURI != "")
-				set("BaseURI!=parent", n.parent != nil && n.baseURI != n.parent.baseURI)
-				set("DocumentURI", n.documentURI != "")
-				set("TypeAnnotation", n.typeAnnotation != "")
-				kinds[KindNamespace] += len(n.namespaces)
-				if n.kind == KindElement {
-					kids = append(kids, len(n.children))
-					attrs = append(attrs, len(n.attrs))
+				set("Name.Prefix", n.Name().Prefix != "")
+				set("Name.URI", n.Name().URI != "")
+				set("Value", n.Value() != "")
+				set("Namespaces", len(nsOf(n)) > 0)
+				set("BaseURI", n.BaseURI() != "")
+				set("BaseURI!=parent", n.Parent() != nil && n.BaseURI() != n.Parent().BaseURI())
+				set("DocumentURI", n.DocumentURI() != "")
+				set("TypeAnnotation", n.TypeAnnotation() != "")
+				kinds[KindNamespace] += len(nsOf(n))
+				if n.Kind() == KindElement {
+					kidCounts = append(kidCounts, len(kids(n)))
+					attrs = append(attrs, len(attrsOf(n)))
 				}
-				for _, a := range n.attrs {
+				for _, a := range attrsOf(n) {
 					walk(a)
 				}
-				for _, ch := range n.children {
+				for _, ch := range kids(n) {
 					walk(ch)
 				}
 			}
 			for i := 0; i < b.N; i++ {
-				kinds, fields, kids, attrs = [KindNamespace + 1]int{}, map[string]int{}, nil, nil
+				kinds, fields, kidCounts, attrs = [KindNamespace + 1]int{}, map[string]int{}, nil, nil
 				for _, d := range docs {
 					t, _ := Parse(bytes.NewReader(d), ParseOptions{MaxBytes: -1})
 					walk(t.Root)
@@ -296,7 +296,7 @@ func BenchmarkCorpusShape(b *testing.B) {
 			for _, f := range names {
 				b.Logf("  %-16s set on %5.1f%% of nodes", f, 100*float64(fields[f])/float64(total))
 			}
-			b.Logf("  children/element %s; attributes/element %s", pctiles(kids), pctiles(attrs))
+			b.Logf("  children/element %s; attributes/element %s", pctiles(kidCounts), pctiles(attrs))
 		})
 	}
 }

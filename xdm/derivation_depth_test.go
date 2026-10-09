@@ -57,8 +57,8 @@ func TestAtomizeDeepDerivationChain(t *testing.T) {
 
 			// An element's string value comes from its descendants, not from
 			// Value, so the lexical form has to be a text child.
-			n := &Node{kind: KindElement}
-			n.children = []*Node{{kind: KindText, value: "42", parent: n}}
+			n := NewNode(KindElement, QName{}, "")
+			n.AppendText("42")
 			n.SetTypeAnnotation(name)
 
 			a := n.Atomize()
@@ -96,7 +96,7 @@ func TestAtomizeListDeepItemDerivation(t *testing.T) {
 			list := AnnotationName(chainNS("lexical", depth), "L")
 			RegisterListType(list, item)
 
-			n := &Node{kind: KindAttribute, value: "1 2 3"}
+			n := NewNode(KindAttribute, QName{}, "1 2 3")
 			n.SetTypeAnnotation(list)
 
 			seq, ok := n.AtomizeList()
@@ -155,7 +155,7 @@ func TestListItemTypeDeepDerivation(t *testing.T) {
 					depth, name, got, item)
 			}
 
-			n := &Node{kind: KindAttribute, value: "7 8"}
+			n := NewNode(KindAttribute, QName{}, "7 8")
 			n.SetTypeAnnotation(name)
 			seq, ok := n.AtomizeList()
 			if !ok {
@@ -189,23 +189,23 @@ func TestAnnotationIDKindDeepDerivation(t *testing.T) {
 			idName := registerChain("idkind-id", depth, "ID")
 			refName := registerChain("idkind-refs", depth, "IDREFS")
 
-			id := &Node{kind: KindAttribute, value: "x1"}
+			id := NewNode(KindAttribute, QName{}, "x1")
 			id.SetTypeAnnotation(idName)
-			if !id.isID {
+			if !id.IsID() {
 				t.Errorf("depth %d: a chain over xs:ID lost is-id", depth)
 			}
-			if id.isIDREFS {
+			if id.IsIDREFS() {
 				t.Errorf("depth %d: a chain over xs:ID gained is-idrefs",
 					depth)
 			}
 
-			ref := &Node{kind: KindAttribute, value: "x1"}
+			ref := NewNode(KindAttribute, QName{}, "x1")
 			ref.SetTypeAnnotation(refName)
-			if !ref.isIDREFS {
+			if !ref.IsIDREFS() {
 				t.Errorf("depth %d: a chain over xs:IDREFS lost is-idrefs",
 					depth)
 			}
-			if ref.isID {
+			if ref.IsID() {
 				t.Errorf("depth %d: a chain over xs:IDREFS gained is-id",
 					depth)
 			}
@@ -265,9 +265,9 @@ func TestCyclicDerivationTerminates(t *testing.T) {
 	go func() {
 		defer close(done)
 
-		n := &Node{kind: KindElement}
-		n.children = []*Node{{kind: KindText, value: "42", parent: n}}
-		n.typeAnnotation = a
+		n := NewNode(KindElement, QName{}, "")
+		n.AppendText("42")
+		n.ownTyping().annotation = a
 		// Atomize -> atomicForDerivedAnnotation. Nothing in the cycle is a
 		// built-in, so no typed value can be built and the node falls back
 		// to untypedAtomic — the documented answer for a type this package

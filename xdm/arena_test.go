@@ -34,8 +34,8 @@ func TestParseValuesShareBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, e := range tree.Root.children[0].children {
-		got := fmt.Sprintf("%s %s %s %s", e.attrs[0].value, e.attrs[1].value, e.children[0].value, e.children[1].value)
+	for i, e := range kids(kids(tree.Root)[0]) {
+		got := fmt.Sprintf("%s %s %s %s", attrsOf(e)[0].Value(), attrsOf(e)[1].Value(), kids(e)[0].Value(), kids(e)[1].Value())
 		if want := fmt.Sprintf("v%d w%d text %d c%d", i, i, i, i); got != want {
 			t.Fatalf("element %d holds %q, want %q", i, got, want)
 		}
@@ -67,11 +67,11 @@ func TestParseNamespacesAndPIsShareChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, e := range tree.Root.children[0].children {
-		ns, pi := e.namespaces[0], e.children[0]
-		if ns.parent != e || ns.name.Local != "p" || ns.value != fmt.Sprintf("urn:p%d", i) ||
-			pi.kind != KindPI || pi.value != fmt.Sprintf("data %d", i) {
-			t.Fatalf("element %d: namespace %s=%q, PI %q", i, ns.name.Local, ns.value, pi.value)
+	for i, e := range kids(kids(tree.Root)[0]) {
+		ns, pi := nsOf(e)[0], kids(e)[0]
+		if ns.Parent() != e || ns.Name().Local != "p" || ns.Value() != fmt.Sprintf("urn:p%d", i) ||
+			pi.Kind() != KindPI || pi.Value() != fmt.Sprintf("data %d", i) {
+			t.Fatalf("element %d: namespace %s=%q, PI %q", i, ns.Name().Local, ns.Value(), pi.Value())
 		}
 	}
 }

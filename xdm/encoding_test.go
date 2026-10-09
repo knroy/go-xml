@@ -46,8 +46,8 @@ func TestParseUTF16(t *testing.T) {
 			continue
 		}
 		root := tree.Root.ChildElements()[0]
-		if root.name.Local != "r" {
-			t.Errorf("%s: root is %q", name, root.name.Local)
+		if root.Name().Local != "r" {
+			t.Errorf("%s: root is %q", name, root.Name().Local)
 		}
 		if root.AttrValue("a") != "v" {
 			t.Errorf("%s: attribute lost", name)
@@ -80,7 +80,7 @@ func TestParseUTF8BOM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a UTF-8 BOM should be accepted: %v", err)
 	}
-	if tree.Root.ChildElements()[0].name.Local != "r" {
+	if tree.Root.ChildElements()[0].Name().Local != "r" {
 		t.Error("the root element was not found")
 	}
 }

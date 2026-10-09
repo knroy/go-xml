@@ -7,8 +7,9 @@ import "testing"
 func TestSpaceTableSameLengthRuns(t *testing.T) {
 	runs := []string{"\n  ", "  \n", "\n  ", "\t\t\t", " \r\n", "\n  ", "x  ", "\n  "}
 	var tab spaceTable
+	var store textStore
 	for i, r := range runs {
-		if got := tab.text([]byte(r)); got != r {
+		if got := store.str(tab.text(&store, []byte(r))); got != r {
 			t.Fatalf("run %d: got %q, want %q", i, got, r)
 		}
 	}
@@ -19,9 +20,9 @@ func TestSpaceTableSameLengthRuns(t *testing.T) {
 	}
 	want := []string{"\n  ", "  \n", "\n  ", "\t\t\t", "\n  "}
 	var got []string
-	for _, c := range tr.Root.children[0].children {
-		if c.kind == KindText {
-			got = append(got, c.value)
+	for _, c := range kids(kids(tr.Root)[0]) {
+		if c.Kind() == KindText {
+			got = append(got, c.Value())
 		}
 	}
 	if len(got) != len(want) {

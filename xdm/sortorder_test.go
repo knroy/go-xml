@@ -14,20 +14,20 @@ func TestSortDocumentOrderInOrderFastPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := tree.Root.children[0]
-	a, x, y, z := r.attrs[0], r.children[0], r.children[1], r.children[2]
+	r := kids(tree.Root)[0]
+	a, x, y, z := attrsOf(r)[0], kids(r)[0], kids(r)[1], kids(r)[2]
 
 	names := func(s Sequence) string {
 		var b []string
 		for _, it := range s {
 			n := it.(*Node)
-			switch n.kind {
+			switch n.Kind() {
 			case KindNamespace:
-				b = append(b, "ns:"+n.name.Local)
+				b = append(b, "ns:"+n.Name().Local)
 			case KindDocument:
 				b = append(b, "/")
 			default:
-				b = append(b, n.name.Local)
+				b = append(b, n.Name().Local)
 			}
 		}
 		return strings.Join(b, " ")
@@ -53,7 +53,7 @@ func TestSortDocumentOrderInOrderFastPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	o := other.Root.children[0]
+	o := kids(other.Root)[0]
 	if p, q := names(SortDocumentOrder(Sequence{x, o})), names(SortDocumentOrder(Sequence{o, x})); p != q {
 		t.Errorf("two trees: %q and %q", p, q)
 	}
@@ -70,24 +70,30 @@ func TestSortDocumentOrderInOrderFastPath(t *testing.T) {
 		t.Errorf("an in-order sequence allocated %v times, want 0", n)
 	}
 
-	// Two walks of the namespace axis synthesize two pointers for one
-	// binding, in increasing position; they are one node and must merge.
-	ns1 := &Node{kind: KindNamespace, name: QName{Local: "p"}, value: "urn:p", parent: r}
-	ns2 := &Node{kind: KindNamespace, name: QName{Local: "p"}, value: "urn:p", parent: r}
-	ns1.setSynthesizedOrder(r, 0)
-	ns2.setSynthesizedOrder(r, 0)
-	if got := names(SortDocumentOrder(Sequence{r, ns1, ns2})); got != "r ns:p" {
-		t.Errorf("namespace duplicates: got %q, want %q", got, "r ns:p")
+	// The namespace axis gives one node per binding, however often it is
+	// walked; a sequence holding it twice merges to one.
+	var ns1, ns2 *Node
+	for ns := range r.NamespaceNodes() {
+		if ns.Name().Local == "xml" {
+			ns1 = ns
+		}
+	}
+	for ns := range r.NamespaceNodes() {
+		if ns.Name().Local == "xml" {
+			ns2 = ns
+		}
+	}
+	if ns1 != ns2 {
+		t.Fatal("two walks of the namespace axis gave two nodes for one binding")
+	}
+	if got := names(SortDocumentOrder(Sequence{ns2, r, ns1})); got != "r ns:xml" {
+		t.Errorf("namespace duplicates: got %q, want %q", got, "r ns:xml")
 	}
 
-	// Detached roots have no tree; the sort numbers them in the order given.
-	d1, d2 := &Node{kind: KindElement, name: QName{Local: "d1"}},
-		&Node{kind: KindElement, name: QName{Local: "d2"}}
-	if got := names(SortDocumentOrder(Sequence{d1, d2})); got != "d1 d2" {
+	// Parentless constructed nodes sort in the order they were made.
+	d1 := NewNode(KindElement, QName{Local: "d1"}, "")
+	d2 := NewNode(KindElement, QName{Local: "d2"}, "")
+	if got := names(SortDocumentOrder(Sequence{d2, d1})); got != "d1 d2" {
 		t.Errorf("detached roots: got %q", got)
-	}
-	if e1, e2 := d1.loadExt(), d2.loadExt(); e1 == nil || e2 == nil ||
-		e1.detachedID.Load() == 0 || e2.detachedID.Load() == 0 {
-		t.Error("detached roots were not numbered")
 	}
 }

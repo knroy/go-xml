@@ -12,12 +12,10 @@ import "testing"
 // a map on generate-id() of each sch:assert and sch:report and so raised
 // XTDE3365 for a duplicate key that was really two different nodes.
 func TestOrderDistinguishesUnfinalizedNodes(t *testing.T) {
-	root := &Node{kind: KindElement, name: QName{Local: "rule"}}
-	a := &Node{kind: KindElement, name: QName{Local: "assert"}, parent: root}
-	b := &Node{kind: KindElement, name: QName{Local: "report"}, parent: root}
-	deep := &Node{kind: KindElement, name: QName{Local: "text"}, parent: b}
-	b.children = []*Node{deep}
-	root.children = []*Node{a, b}
+	root := NewNode(KindElement, QName{Local: "rule"}, "")
+	a := root.AppendElement(QName{Local: "assert"})
+	b := root.AppendElement(QName{Local: "report"})
+	deep := b.AppendElement(QName{Local: "text"})
 
 	seen := map[int]string{}
 	for _, n := range []struct {
@@ -41,17 +39,16 @@ func TestOrderDistinguishesUnfinalizedNodes(t *testing.T) {
 // Two unfinalized trees still may not collide with each other.
 func TestOrderSeparatesUnfinalizedTrees(t *testing.T) {
 	mk := func() *Node {
-		r := &Node{kind: KindElement, name: QName{Local: "r"}}
-		c := &Node{kind: KindElement, name: QName{Local: "c"}, parent: r}
-		r.children = []*Node{c}
+		r := NewNode(KindElement, QName{Local: "r"}, "")
+		r.AppendElement(QName{Local: "c"})
 		return r
 	}
 	x, y := mk(), mk()
-	if x.Order() == y.Order() {
-		t.Fatalf("two detached roots share Order()=%d", x.Order())
+	if x.generateID() == y.generateID() {
+		t.Fatalf("two detached roots share id %s", x.generateID())
 	}
-	if x.children[0].Order() == y.children[0].Order() {
-		t.Fatalf("children of two detached roots share Order()=%d",
-			x.children[0].Order())
+	if kids(x)[0].generateID() == kids(y)[0].generateID() {
+		t.Fatalf("children of two detached roots share id %s",
+			kids(x)[0].generateID())
 	}
 }

@@ -21,10 +21,10 @@ func validateStartElementMaps(t xml.StartElement, parent *Node, xml11 bool) erro
 		}
 	}
 	bindings := map[string]string{"xml": NSXML}
-	for p := parent; p != nil; p = p.parent {
-		for _, ns := range p.namespaces {
-			if _, seen := bindings[ns.name.Local]; !seen {
-				bindings[ns.name.Local] = ns.value
+	for p := parent; p != nil; p = p.Parent() {
+		for _, ns := range nsOf(p) {
+			if _, seen := bindings[ns.Name().Local]; !seen {
+				bindings[ns.Name().Local] = ns.Value()
 			}
 		}
 	}
@@ -105,13 +105,14 @@ func TestTagScopeMatchesMaps(t *testing.T) {
 	for range 200000 {
 		var parent *Node
 		for range rng.Intn(5) {
-			n := &Node{kind: KindElement, parent: parent}
+			var n *Node
+			if parent == nil {
+				n = NewNode(KindElement, QName{Local: "e"}, "")
+			} else {
+				n = parent.AppendElement(QName{Local: "e"})
+			}
 			for range rng.Intn(4) {
-				n.namespaces = append(n.namespaces, &Node{
-					kind:  KindNamespace,
-					name:  QName{Local: draw(prefixes, prefixBar)},
-					value: draw(uris, uriBar),
-				})
+				n.AddNamespace(draw(prefixes, prefixBar), draw(uris, uriBar))
 			}
 			parent = n
 		}
@@ -158,7 +159,12 @@ func TestTagScopeMatchesMaps(t *testing.T) {
 func TestTagScopeDoesNotAllocate(t *testing.T) {
 	var parent *Node
 	for d := range 4 {
-		n := &Node{kind: KindElement, parent: parent}
+		var n *Node
+		if parent == nil {
+			n = NewNode(KindElement, QName{Local: "e"}, "")
+		} else {
+			n = parent.AppendElement(QName{Local: "e"})
+		}
 		for i := range 4 {
 			n.AddNamespace(fmt.Sprintf("p%d%d", d, i), fmt.Sprintf("urn:%d%d", d, i))
 		}

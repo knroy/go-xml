@@ -109,9 +109,9 @@ func ProcessXInclude(tree *Tree, opts XIncludeOptions) (*Tree, error) {
 	// The including document's own URI is on the stack from the start, so
 	// that a document including itself is a loop at the first step rather
 	// than one level later.
-	base := tree.Root.baseURI
+	base := tree.Root.BaseURI()
 	if base == "" {
-		base = tree.Root.documentURI
+		base = tree.Root.DocumentURI()
 	}
 	p := &includeProc{opts: opts, budget: &entityBudget{}}
 	if base != "" {
@@ -166,8 +166,8 @@ type includeProc struct {
 func (p *includeProc) processTree(t *Tree, base string, depth int) (*Tree, error) {
 	out := NewTree()
 	out.CopySourceFrom(t)
-	out.Root.baseURI = t.Root.baseURI
-	out.Root.documentURI = t.Root.documentURI
+	out.Root.SetBaseURI(t.Root.BaseURI())
+	out.Root.SetDocumentURI(t.Root.DocumentURI())
 	out.Root.CopyTypingFrom(t.Root)
 	if err := p.copyChildren(out.Root, t.Root, base, depth); err != nil {
 		return nil, err
@@ -183,9 +183,9 @@ func (p *includeProc) processTree(t *Tree, base string, depth int) (*Tree, error
 // its own xml:base, which the parser has already resolved into the node's
 // base URI.
 func (p *includeProc) copyChildren(dst, src *Node, base string, depth int) error {
-	for _, c := range src.children {
-		if c.kind == KindElement && c.name.URI == NSXInclude {
-			switch c.name.Local {
+	for c := range src.Children() {
+		if c.Kind() == KindElement && c.Name().URI == NSXInclude {
+			switch c.Name().Local {
 			case "include":
 				if err := p.include(dst, c, depth); err != nil {
 					return err
@@ -198,12 +198,12 @@ func (p *includeProc) copyChildren(dst, src *Node, base string, depth int) error
 				return fmt.Errorf("xi:fallback outside xi:include is a fatal error")
 			}
 		}
-		if c.kind != KindElement {
+		if c.Kind() != KindElement {
 			appendLeafKeep(dst, c)
 			continue
 		}
 		cc := appendElementKeep(dst, c)
-		cb := c.baseURI
+		cb := c.BaseURI()
 		if cb == "" {
 			cb = base
 		}
@@ -225,10 +225,10 @@ func (p *includeProc) copyChildren(dst, src *Node, base string, depth int) error
 func appendElementKeep(dst, el *Node) *Node {
 	c := dst.AppendShallowCopy(el)
 	CopyPosition(c, el)
-	for _, ns := range el.namespaces {
-		c.AddNamespace(ns.name.Local, ns.value)
+	for prefix, uri := range el.DeclaredNamespaces() {
+		c.AddNamespace(prefix, uri)
 	}
-	for _, a := range el.attrs {
+	for a := range el.Attrs() {
 		CopyPosition(c.AppendShallowCopy(a), a)
 	}
 	return c
@@ -239,13 +239,12 @@ func appendElementKeep(dst, el *Node) *Node {
 // dropped: an inclusion can leave two text nodes side by side, or an empty
 // one, and the result infoset holds neither.
 func appendLeafKeep(dst, n *Node) *Node {
-	if n.kind == KindText {
-		if n.value == "" {
+	if n.Kind() == KindText {
+		if n.Value() == "" {
 			return nil
 		}
-		if k := len(dst.children); k > 0 && dst.children[k-1].kind == KindText {
-			last := dst.children[k-1]
-			last.AppendValue(n.value)
+		if last := dst.LastChild(); last != nil && last.Kind() == KindText {
+			last.AppendValue(n.Value())
 			return last
 		}
 	}
@@ -264,7 +263,7 @@ func (p *includeProc) include(dst, inc *Node, depth int) error {
 	if err != nil {
 		return err
 	}
-	for _, n := range holder.children {
+	for n := range holder.Children() {
 		appendSubtreeKeep(dst, n)
 	}
 	return nil
@@ -273,12 +272,12 @@ func (p *includeProc) include(dst, inc *Node, depth int) error {
 // appendSubtreeKeep appends a deep copy of n, merging text as appendLeafKeep
 // does.
 func appendSubtreeKeep(dst, n *Node) {
-	if n.kind != KindElement {
+	if n.Kind() != KindElement {
 		appendLeafKeep(dst, n)
 		return
 	}
 	c := appendElementKeep(dst, n)
-	for _, k := range n.children {
+	for k := range n.Children() {
 		appendSubtreeKeep(c, k)
 	}
 }
@@ -302,13 +301,13 @@ func (p *includeProc) expandInclude(inc *Node, depth int) (*Node, error) {
 	// is read so that the defect is reported on its own terms rather than
 	// only when the inclusion happens to fail.
 	seen := 0
-	for _, c := range inc.children {
-		if c.kind == KindElement && c.name.URI == NSXInclude {
-			if c.name.Local != "fallback" {
+	for c := range inc.Children() {
+		if c.Kind() == KindElement && c.Name().URI == NSXInclude {
+			if c.Name().Local != "fallback" {
 				// Section 3.1: the content of xi:include is "(fallback?)",
 				// so any other XInclude-namespace child is a fatal error.
 				return nil, fmt.Errorf(
-					"xi:%s is not permitted as a child of xi:include", c.name.Local)
+					"xi:%s is not permitted as a child of xi:include", c.Name().Local)
 			}
 			seen++
 		}
@@ -513,7 +512,7 @@ func textEncodingMarker(encoding string) string {
 
 // isAncestorOf reports whether a is an ancestor of n.
 func isAncestorOf(a, n *Node) bool {
-	for cur := n.parent; cur != nil; cur = cur.parent {
+	for cur := n.Parent(); cur != nil; cur = cur.Parent() {
 		if cur == a {
 			return true
 		}
@@ -526,18 +525,18 @@ func isAncestorOf(a, n *Node) bool {
 // takes the base of the element it is copied under.
 func copySubtree(dst, n *Node, base string) {
 	c := dst.AppendShallowCopy(n)
-	c.baseURI = base
-	if n.baseURI != "" {
-		c.baseURI = n.baseURI
+	c.SetBaseURI(base)
+	if n.BaseURI() != "" {
+		c.SetBaseURI(n.BaseURI())
 	}
-	for _, a := range n.attrs {
-		c.AppendShallowCopy(a).baseURI = ""
+	for a := range n.Attrs() {
+		c.AppendShallowCopy(a).SetBaseURI("")
 	}
-	for _, ns := range n.namespaces {
-		c.AddNamespace(ns.name.Local, ns.value)
+	for prefix, uri := range n.DeclaredNamespaces() {
+		c.AddNamespace(prefix, uri)
 	}
-	for _, k := range n.children {
-		copySubtree(c, k, c.baseURI)
+	for k := range n.Children() {
+		copySubtree(c, k, c.BaseURI())
 	}
 }
 
@@ -619,7 +618,9 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 		// comments and processing instructions around it. A document node
 		// cannot appear as a child of an element, which is why it is dropped
 		// rather than copied.
-		picked = done.Root.children
+		for c := range done.Root.Children() {
+			picked = append(picked, c)
+		}
 	} else {
 		picked, err = selectXPointer(done.Root, xptr)
 		if err != nil {
@@ -665,7 +666,7 @@ func copyFixedUp(dst, n *Node, includeBase string) {
 	// PI included alongside the document element has a base URI in the data
 	// model, but nothing can be written on it and nothing resolves a relative
 	// reference from it.
-	if n.kind != KindElement || n.baseURI == "" || n.baseURI == includeBase {
+	if n.Kind() != KindElement || n.BaseURI() == "" || n.BaseURI() == includeBase {
 		appendSubtreeKeep(dst, n)
 		return
 	}
@@ -681,13 +682,13 @@ func copyFixedUp(dst, n *Node, includeBase string) {
 		// attribute reads fn/base-uri/dir5/data.xml, which is what the case
 		// expects.
 		c := appendElementKeep(dst, n)
-		c.baseURI = resolveBase(includeBase, xb.value)
-		copyRebased(c, n, c.baseURI)
+		c.SetBaseURI(resolveBase(includeBase, xb.Value()))
+		copyRebased(c, n, c.BaseURI())
 		return
 	}
 	c := appendElementKeep(dst, n)
-	c.AppendAttr(QName{Prefix: "xml", Local: "base", URI: NSXML}, n.baseURI)
-	for _, k := range n.children {
+	c.AppendAttr(QName{Prefix: "xml", Local: "base", URI: NSXML}, n.BaseURI())
+	for k := range n.Children() {
 		appendSubtreeKeep(c, k)
 	}
 }
@@ -701,18 +702,18 @@ func copyFixedUp(dst, n *Node, includeBase string) {
 // included document read -- keeps that absolute URI, and it governs
 // everything below it.
 func copyRebased(dst, n *Node, base string) {
-	for _, k := range n.children {
-		if k.kind != KindElement {
+	for k := range n.Children() {
+		if k.Kind() != KindElement {
 			appendSubtreeKeep(dst, k)
 			continue
 		}
 		c := appendElementKeep(dst, k)
 		switch xb := k.Attr(NSXML, "base"); {
 		case xb != nil:
-			c.baseURI = resolveBase(base, xb.value)
-			copyRebased(c, k, c.baseURI)
-		case k.baseURI != "":
-			copyRebased(c, k, k.baseURI)
+			c.SetBaseURI(resolveBase(base, xb.Value()))
+			copyRebased(c, k, c.BaseURI())
+		case k.BaseURI() != "":
+			copyRebased(c, k, k.BaseURI())
 		default:
 			copyRebased(c, k, base)
 		}
@@ -726,8 +727,8 @@ func copyRebased(dst, n *Node, base string) {
 // fallbacks" instead of the failure that actually occurred would bury the
 // cause. validateInclude checks the cardinality up front instead.
 func fallbackOf(inc *Node) *Node {
-	for _, c := range inc.children {
-		if c.kind == KindElement && c.name.URI == NSXInclude && c.name.Local == "fallback" {
+	for c := range inc.Children() {
+		if c.Kind() == KindElement && c.Name().URI == NSXInclude && c.Name().Local == "fallback" {
 			return c
 		}
 	}
@@ -741,12 +742,12 @@ func fallbackOf(inc *Node) *Node {
 // external entity gave it one, so an ordinary element deep in a document has
 // the field empty and inherits from above.
 func elementBase(n *Node) string {
-	for cur := n; cur != nil; cur = cur.parent {
-		if cur.baseURI != "" {
-			return cur.baseURI
+	for cur := n; cur != nil; cur = cur.Parent() {
+		if cur.BaseURI() != "" {
+			return cur.BaseURI()
 		}
-		if cur.kind == KindDocument && cur.documentURI != "" {
-			return cur.documentURI
+		if cur.Kind() == KindDocument && cur.DocumentURI() != "" {
+			return cur.DocumentURI()
 		}
 	}
 	return ""
@@ -910,11 +911,11 @@ func elementScheme(root *Node, data string, view func(*Node) *Node) (*Node, erro
 			idx = idx*10 + int(r-'0')
 		}
 		var kids []*Node
-		for _, c := range cur.children {
+		for c := range cur.Children() {
 			if view != nil {
 				c = view(c)
 			}
-			if c.kind == KindElement {
+			if c.Kind() == KindElement {
 				kids = append(kids, c)
 			}
 		}
@@ -923,7 +924,7 @@ func elementScheme(root *Node, data string, view func(*Node) *Node) (*Node, erro
 		}
 		cur = kids[idx-1]
 	}
-	if cur.kind != KindElement {
+	if cur.Kind() != KindElement {
 		return nil, fmt.Errorf("element() pointer %q does not select an element", data)
 	}
 	return cur, nil
@@ -944,17 +945,17 @@ func elementScheme(root *Node, data string, view func(*Node) *Node) (*Node, erro
 func ElementByID(n *Node, id string) *Node { return elementByIDIn(n, id, nil) }
 
 func elementByIDIn(n *Node, id string, view func(*Node) *Node) *Node {
-	if n.kind == KindElement {
-		for _, a := range n.attrs {
-			if a.value != id {
+	if n.Kind() == KindElement {
+		for a := range n.Attrs() {
+			if a.Value() != id {
 				continue
 			}
-			if a.isID || (a.name.URI == NSXML && a.name.Local == "id") {
+			if a.IsID() || (a.Name().URI == NSXML && a.Name().Local == "id") {
 				return n
 			}
 		}
 	}
-	for _, c := range n.children {
+	for c := range n.Children() {
 		if view != nil {
 			c = view(c)
 		}

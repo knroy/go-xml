@@ -13,18 +13,18 @@ func TestNodePositions(t *testing.T) {
 	}
 	var walk func(n *Node)
 	walk = func(n *Node) {
-		if n.kind == KindElement {
+		if n.Kind() == KindElement {
 			line, col, ok := n.Position()
-			w, known := want[n.name.Local]
+			w, known := want[n.Name().Local]
 			if !known {
-				t.Errorf("unexpected element %q", n.name.Local)
+				t.Errorf("unexpected element %q", n.Name().Local)
 			} else if !ok || line != w[0] || col != w[1] {
 				t.Errorf("%s at line %d col %d (ok=%v), want line %d col %d",
-					n.name.Local, line, col, ok, w[0], w[1])
+					n.Name().Local, line, col, ok, w[0], w[1])
 			}
-			delete(want, n.name.Local)
+			delete(want, n.Name().Local)
 		}
-		for _, ch := range n.children {
+		for _, ch := range kids(n) {
 			walk(ch)
 		}
 	}
@@ -51,7 +51,7 @@ func TestPositionsUnknownWithoutTracking(t *testing.T) {
 // the zero value of the offset field must read as unknown rather than as the
 // start of the document.
 func TestConstructedNodeHasNoPosition(t *testing.T) {
-	n := &Node{kind: KindElement, name: QName{Local: "made-up"}}
+	n := NewNode(KindElement, QName{Local: "made-up"}, "")
 	if _, _, ok := n.Position(); ok {
 		t.Error("a constructed node reported a source position")
 	}

@@ -1,10 +1,5 @@
 package xdm
 
-import (
-	"iter"
-	"sort"
-)
-
 // Tree construction.
 //
 // A tree is built top-down, in document order, by appending to an open node:
@@ -19,67 +14,89 @@ import (
 //
 // What may change after a node is made is its scalar state: SetValue and
 // AppendValue (merging adjacent text), SetName, SetBaseURI, the typing
-// setters, and the namespace declarations of an element that is still open.
+// setters, and the namespace declarations of an element of a tree that is
+// not a parsed document.
 //
-// The order is the one a parser produces and the one the stored layout
-// keeps, so a tree built this way is laid out as a parsed one is.
+// The order is the one a parser produces and the one the record layout
+// keeps: a tree built this way is laid out as a parsed one is.
 
 // AppendElement appends a new element named name as the last child of p and
-// returns it, open.
+// returns it, open. It has no base URI of its own; see AppendElementInheriting.
 func (p *Node) AppendElement(name QName) *Node {
-	c := &Node{kind: KindElement, name: name}
-	p.AppendChild(c)
+	c := p.AppendElementInheriting(name)
+	if c.inheritedBase() != "" {
+		c.setOwnBase("")
+	}
+	return c
+}
+
+// AppendElementInheriting is AppendElement for an element whose base URI is
+// its parent's, as a constructed element's is when a sequence constructor
+// builds it inside another.
+func (p *Node) AppendElementInheriting(name QName) *Node {
+	c := p.appendChild(KindElement)
+	c.name = p.tree.intern(name)
 	return c
 }
 
 // AppendText appends a text node holding value as the last child of p. It
 // does not merge with a text node already there; see AppendValue.
-func (p *Node) AppendText(value string) *Node {
-	c := &Node{kind: KindText, value: value}
-	p.AppendChild(c)
-	return c
-}
+func (p *Node) AppendText(value string) *Node { return p.appendLeaf(KindText, QName{}, value) }
 
 // AppendComment appends a comment node as the last child of p.
-func (p *Node) AppendComment(value string) *Node {
-	c := &Node{kind: KindComment, value: value}
-	p.AppendChild(c)
-	return c
-}
+func (p *Node) AppendComment(value string) *Node { return p.appendLeaf(KindComment, QName{}, value) }
 
 // AppendPI appends a processing instruction as the last child of p.
 func (p *Node) AppendPI(target, value string) *Node {
-	c := &Node{kind: KindPI, name: QName{Local: target}, value: value}
-	p.AppendChild(c)
+	return p.appendLeaf(KindPI, QName{Local: target}, value)
+}
+
+func (p *Node) appendLeaf(kind NodeKind, name QName, value string) *Node {
+	c := p.appendChild(kind)
+	c.name = p.tree.intern(name)
+	if value != "" {
+		c.v0, c.v1 = p.tree.text.add(value)
+	}
 	return c
 }
 
 // AppendAttr appends an attribute to p, which must be an element with no
 // children yet, and returns it.
 func (p *Node) AppendAttr(name QName, value string) *Node {
-	a := &Node{kind: KindAttribute, name: name, value: value}
-	p.AddAttr(a)
-	return a
-}
-
-// AppendValue appends s to the value of n, which must be the last node
-// appended to its tree: the text node a builder is still extending.
-func (n *Node) AppendValue(s string) {
-	if s != "" {
-		n.value += s
+	t := p.tree
+	t.openTo(p)
+	if p.kind != uint8(KindElement) || p.v1 != noIdx || t.n != p.self+1+p.attrCount() {
+		panic("xdm: an attribute must be appended to an element before its children")
 	}
+	a := t.alloc()
+	a.kind = uint8(KindAttribute)
+	a.parent = p.self
+	a.v1 = 0
+	a.name = t.intern(name)
+	if value != "" {
+		a.v0, a.v1 = t.text.add(value)
+	}
+	if k := p.attrCount() + 1; k < 0xFFFF && p.flags&fManyAttrs == 0 {
+		p.nattr = uint16(k)
+	} else {
+		if t.attrCounts == nil {
+			t.attrCounts = map[uint32]uint32{}
+		}
+		t.attrCounts[p.self] = k
+		p.flags |= fManyAttrs
+	}
+	return a
 }
 
 // AppendCopy appends a deep copy of src as the last child of p (or, for an
 // attribute, as an attribute of p) and returns the copy. See Copy for what
 // travels.
 func (p *Node) AppendCopy(src *Node) *Node {
-	c := copyPruned(src, nil)
-	if c.kind == KindAttribute {
-		p.AddAttr(c)
-	} else {
-		p.AppendChild(c)
-	}
+	// A subtree still being built in p's own tree grows as the copy is
+	// appended; the copy stops where src ended when it began.
+	limit := src.tree.n
+	c := p.AppendShallowCopy(src)
+	fillCopy(c, src, nil, limit)
 	return c
 }
 
@@ -87,12 +104,18 @@ func (p *Node) AppendCopy(src *Node) *Node {
 // namespace declarations, and returns it open: the start of a copy the caller
 // completes, changing what it needs to on the way.
 func (p *Node) AppendShallowCopy(src *Node) *Node {
-	c := shallowCopy(src)
-	if c.kind == KindAttribute {
-		p.AddAttr(c)
-	} else {
-		p.AppendChild(c)
+	var c *Node
+	switch src.Kind() {
+	case KindAttribute:
+		c = p.AppendAttr(src.Name(), src.Value())
+	case KindElement, KindDocument:
+		c = p.appendChild(src.Kind())
+		c.name = p.tree.intern(src.Name())
+	default:
+		c = p.appendLeaf(src.Kind(), src.Name(), src.Value())
 	}
+	c.SetBaseURI(src.BaseURI())
+	c.CopyTypingFrom(src)
 	return c
 }
 
@@ -100,101 +123,126 @@ func (p *Node) AppendShallowCopy(src *Node) *Node {
 //
 // The copy keeps n's name, value, base URI and typing, its namespace
 // declarations, its attributes (with their typing) and its children. It is a
-// new node: it has its own identity and is in no tree until it is appended.
-func Copy(n *Node) *Node { return copyPruned(n, nil) }
+// new node: it has its own identity, in a fragment of its own.
+func Copy(n *Node) *Node { return CopyPruned(n, nil) }
 
 // CopyPruned is Copy leaving out, with its subtree, every descendant of n for
 // which drop reports true.
 func CopyPruned(n *Node, drop func(*Node) bool) *Node {
-	return copyPruned(n, drop)
+	limit := n.tree.n
+	c := ShallowCopy(n)
+	fillCopy(c, n, drop, limit)
+	return c
 }
 
 // ShallowCopy returns a parentless copy of n without its children, attributes
 // or namespace declarations: the root of a copy the caller completes.
-func ShallowCopy(n *Node) *Node { return shallowCopy(n) }
-
-func shallowCopy(n *Node) *Node {
-	c := &Node{kind: n.kind, name: n.name, value: n.value, baseURI: n.baseURI}
+func ShallowCopy(n *Node) *Node {
+	c := NewFragment().NewRoot(n.Kind(), n.Name(), n.Value())
+	c.SetBaseURI(n.BaseURI())
 	c.CopyTypingFrom(n)
 	return c
 }
 
-func copyPruned(n *Node, drop func(*Node) bool) *Node {
-	c := shallowCopy(n)
-	for _, ns := range n.namespaces {
-		c.AddNamespace(ns.name.Local, ns.value)
+// fillCopy gives c, a shallow copy of src, copies of src's namespace
+// declarations, attributes and children. Records at limit and beyond are
+// not read: they were appended after the copy began.
+func fillCopy(c, src *Node, drop func(*Node) bool, limit uint32) {
+	if src.isLeaf() || src.flags&fSide != 0 {
+		return
 	}
-	for _, a := range n.attrs {
-		ac := &Node{kind: KindAttribute, name: a.name, value: a.value}
-		ac.CopyTypingFrom(a)
-		c.AddAttr(ac)
+	for prefix, uri := range src.DeclaredNamespaces() {
+		c.AddNamespace(prefix, uri)
 	}
-	for _, ch := range n.children {
+	for a := range src.Attrs() {
+		c.AppendAttr(a.Name(), a.Value()).CopyTypingFrom(a)
+	}
+	if src.v1 == noIdx {
+		return
+	}
+	t := src.tree
+	end := min(t.endOf(src), limit)
+	for i := src.firstChildIdx(); i < end; {
+		ch := t.rec(i)
+		next := t.endOf(ch)
 		if drop == nil || !drop(ch) {
-			c.AppendChild(copyPruned(ch, drop))
+			cc := c.AppendShallowCopy(ch)
+			fillCopy(cc, ch, drop, limit)
 		}
+		i = next
 	}
-	return c
-}
-
-// RemoveNamespaceDecls drops the namespace declarations held on n, an element
-// still being built.
-func (n *Node) RemoveNamespaceDecls(drop func(prefix, uri string) bool) {
-	kept := n.namespaces[:0:0]
-	for _, ns := range n.namespaces {
-		if !drop(ns.name.Local, ns.value) {
-			kept = append(kept, ns)
-		}
-	}
-	n.namespaces = kept
-}
-
-// NamespaceNodes iterates over the namespace axis of n: one namespace node
-// for every binding in scope on an element, the inherited ones included,
-// ordered by prefix. Other kinds have none.
-//
-// Asking twice yields nodes that are the same node by Is, Identity, Compare
-// and generate-id, whether or not they are the same pointer.
-func (n *Node) NamespaceNodes() iter.Seq[*Node] {
-	return func(yield func(*Node) bool) {
-		if n.kind != KindElement {
-			return
-		}
-		scope := n.InScopeNamespaces()
-		prefixes := make([]string, 0, len(scope))
-		for prefix := range scope {
-			prefixes = append(prefixes, prefix)
-		}
-		sort.Strings(prefixes)
-		for i, prefix := range prefixes {
-			ns := &Node{kind: KindNamespace, name: QName{Local: prefix}, value: scope[prefix], parent: n}
-			ns.setSynthesizedOrder(n, i)
-			if !yield(ns) {
-				return
-			}
-		}
-	}
-}
-
-// ReplaceLastChild puts c, a parentless node, in place of p's last child,
-// which must be the last subtree appended to the tree: the one place where a
-// built subtree may still be exchanged, used to swap a constructed element for
-// its validated, typed copy. It returns the node now in that place.
-func (p *Node) ReplaceLastChild(c *Node) *Node {
-	c.parent = p
-	c.tree = p.tree
-	p.children[len(p.children)-1] = c
-	return c
 }
 
 // RemoveLastChild takes back p's last child, which must be the last subtree
 // appended to the tree: a node built and then found not to belong, such as
 // an element whose conditional-inclusion test turned out false once its
-// attributes were in place.
+// attributes were in place. A pointer to the node taken back must not be used
+// again: its record is reused.
 func (p *Node) RemoveLastChild() {
-	last := p.children[len(p.children)-1]
-	last.parent = nil
-	p.children = p.children[:len(p.children)-1]
+	t := p.tree
+	t.openTo(p)
+	last := t.rec(p.v1)
+	prev := last.prev
+	t.truncate(last.self)
+	p.v1 = prev
+}
+
+// ReplaceLastChild puts a copy of c in place of p's last child, which must be
+// the last subtree appended to the tree: the one place where a built subtree
+// may still be exchanged, used to swap a constructed element for its
+// validated, typed copy. It returns the copy, which carries c's typing and
+// type environments.
+func (p *Node) ReplaceLastChild(c *Node) *Node {
+	p.RemoveLastChild()
+	r := p.AppendCopy(c)
+	CopyTypeEnvs(r, c)
+	return r
+}
+
+// CopyTypeEnvs gives each node of dst, a copy of src, its original's type
+// environment, which Copy does not carry.
+func CopyTypeEnvs(dst, src *Node) {
+	dst.SetTypeEnv(src.TypeEnv())
+	for i := range min(dst.NumAttrs(), src.NumAttrs()) {
+		dst.AttrAt(i).SetTypeEnv(src.AttrAt(i).TypeEnv())
+	}
+	d, s := dst.FirstChild(), src.FirstChild()
+	for d != nil && s != nil {
+		CopyTypeEnvs(d, s)
+		d, s = d.NextSibling(), s.NextSibling()
+	}
+}
+
+// truncate drops the records from index i on.
+func (t *Tree) truncate(i uint32) {
+	for len(t.open) > 0 && t.open[len(t.open)-1] >= i {
+		t.open = t.open[:len(t.open)-1]
+	}
+	for j := i; j < t.n; j++ {
+		r := t.rec(j)
+		if r.flags&fBase != 0 {
+			delete(t.bases, j)
+		}
+		if r.flags&fTyped != 0 {
+			*r.typ() = nodeTyping{}
+		}
+		if r.flags&fManyAttrs != 0 {
+			delete(t.attrCounts, j)
+		}
+		r.setOffset(0)
+		delete(t.docURIs, j)
+		delete(t.foreignPos, j)
+	}
+	if len(t.side) > 0 {
+		t.sideMu.Lock()
+		for k := range t.side {
+			if k.owner >= i {
+				delete(t.side, k)
+			}
+		}
+		t.sideMu.Unlock()
+	}
+	t.n = i
 }
 
 // CopySourceFrom gives t the source context of src: its DTD (see
@@ -214,17 +262,23 @@ func (t *Tree) CopySourceFrom(src *Tree) {
 // source position. Copies do not carry positions otherwise: a node a
 // transform builds was not parsed from anywhere.
 func CopyPosition(dst, src *Node) {
-	if src.offset <= 0 || src.tree == nil || dst.tree == nil {
+	if src.flags&fSide != 0 || dst.flags&fSide != 0 {
 		return
 	}
-	if dst.tree.src == src.tree.src {
-		dst.offset = src.offset
+	line, col, ok := src.Position()
+	if !ok {
 		return
 	}
-	if line, col, ok := src.Position(); ok {
-		if dst.tree.foreignPos == nil {
-			dst.tree.foreignPos = map[*Node][2]int32{}
-		}
-		dst.tree.foreignPos[dst] = [2]int32{int32(line), int32(col)}
+	if _, foreign := src.tree.foreignPos[src.self]; !foreign && dst.tree.src == src.tree.src {
+		dst.setOffset(src.offset())
+		return
 	}
+	if dst.tree.foreignPos == nil {
+		dst.tree.foreignPos = map[uint32][2]int32{}
+	}
+	dst.tree.foreignPos[dst.self] = [2]int32{int32(line), int32(col)}
 }
+
+// Finalize marks the end of building: every node still open is closed, and
+// appending to the tree again is a programming error.
+func (t *Tree) Finalize() { t.closeAll() }

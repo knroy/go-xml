@@ -112,7 +112,7 @@ func TestParseNamespaceBindsNormalizedValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CDATA xmlns:b: %v", err)
 	}
-	if got := tree.Root.ChildElements()[0].namespaces; len(got) != 2 || got[1].value != " urn:x " {
+	if got := nsOf(tree.Root.ChildElements()[0]); len(got) != 2 || got[1].Value() != " urn:x " {
 		t.Errorf("CDATA xmlns:b namespaces = %+v, want the value unnormalized", got)
 	}
 }
