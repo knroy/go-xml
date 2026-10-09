@@ -112,6 +112,12 @@ From [docs/profiling.md](docs/profiling.md). Outputs are byte-identical on every
 | The CLI held two copies of each input during the parse | It parses from the file; XMark peak RSS −11 MB. | [`739c744`][739c744] |
 | XSD validation allocated a count vector per child and a slice per element | Buffers are reused: 101,505 → 341 allocations per catalog pass. | [`d006ad2`][d006ad2] |
 | RELAX NG re-derived the schema's fixed subtrees per element and built a namespace map per node | Memo points, a lazy namespace context and an attribute memo: DocBook validation −82% CPU. | [`abd214b`][abd214b] |
+| The CLI was built without profile-guided optimisation | `cmd/go-xml/default.pgo` is committed (regenerate with `tests/pgo.sh`): CPU −2 to −3% cold, −3 to −5% warm. | [`b83418a`][b83418a] |
+| `//@a` built and sorted every node below the context before reading attributes | It is one walk over a parsed tree (CEN CPU −5 to −8%). | [`06c0df1`][06c0df1] |
+| Both collation language matchers were built at start-up on every run | They are built on first use (CLI cold start about −0.15 ms). | [`18ef0f0`][18ef0f0] |
+| The html serializer allocated twice per attribute character | Printable ASCII is copied through: XRechnung HTML allocations −53%, CPU −14%. | [`eac3823`][eac3823] |
+| The serializer lower-cased the encoding per non-ASCII character and built names and a namespace map per element | One binding stack, pieces written: XRechnung HTML allocations −57% in all. | [`aefdaea`][aefdaea] |
+| A path step copied its own result into the path's accumulator, and every relative path boxed the context item | The result is kept and the item stays on the stack: CEN allocations −11%, CPU −4 to −7%. | [`d077c5a`][d077c5a] |
 
 ### Fixed — release process
 
@@ -1276,6 +1282,12 @@ here so every entry in this file sits under a release.
 [72cb46a]: https://github.com/knroy/go-xml/commit/72cb46a
 [53cff35]: https://github.com/knroy/go-xml/commit/53cff35
 [659fdc8]: https://github.com/knroy/go-xml/commit/659fdc8
+[b83418a]: https://github.com/knroy/go-xml/commit/b83418a
+[06c0df1]: https://github.com/knroy/go-xml/commit/06c0df1
+[18ef0f0]: https://github.com/knroy/go-xml/commit/18ef0f0
+[eac3823]: https://github.com/knroy/go-xml/commit/eac3823
+[aefdaea]: https://github.com/knroy/go-xml/commit/aefdaea
+[d077c5a]: https://github.com/knroy/go-xml/commit/d077c5a
 [e7ec81d]: https://github.com/knroy/go-xml/commit/e7ec81d
 [739c744]: https://github.com/knroy/go-xml/commit/739c744
 [d006ad2]: https://github.com/knroy/go-xml/commit/d006ad2

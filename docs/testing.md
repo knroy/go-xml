@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,720 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,726 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -1724,3 +1724,11 @@ a bug. The manifest carries no `since` field; it describes F&O 3.1 alone.
   that were attempted, measured and reverted.
 * [reaching-100.md](reaching-100.md) — what the remaining distance consists of
   and which parts are worth buying.
+
+## Regenerating the PGO profile
+
+`tests/pgo.sh` rebuilds `cmd/go-xml/default.pgo` from CPU profiles of the CLI
+on every benchmark workload family, weighted so none dominates. It needs the
+untracked corpora under `testdata/`, including `testdata/bench`, and takes
+about two minutes. A stale profile costs only speed, never correctness, so
+regenerate it after a change moves the hot paths, not on every commit.

@@ -398,3 +398,15 @@ Differences that are not go-xml bugs:
   corpora and generated inputs are large, and none is third-party code this
   repository should carry. The method above is complete enough to rebuild it.
   The figures here come from the run recorded at the top of this page.
+- **macOS, not Linux.** On macOS, Go's runtime re-commits every reused heap
+  page with `madvise`, which costs 13–26% of CPU on parse-heavy work. Linux
+  does not. In a 4-CPU Linux VM on the same machine, cold CLI runs used
+  11–13% less CPU and warm in-process loops 2–20% more, with GC marking in
+  `madvise`'s place. Bare-metal Linux has not been measured; expect cold
+  parse and query times at or below these, and do not read the warm figures
+  as Linux numbers ([profiling, round 4](profiling.md#linux)).
+- **The parse and C14N helper runs as the CLI does** since round 4:
+  `GOGC=200` and a streamed parse. Before that it ran at `GOGC=100` from an
+  in-memory string, which read within noise at 1 and 10 MB and about 8–15%
+  more CPU at 100 MB. The warm loops still parse with `ParseString` at the
+  harness's own `GOGC`, as a library caller would.
