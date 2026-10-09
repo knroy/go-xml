@@ -781,7 +781,7 @@ would mean the file had been read.
 `fn:load-xquery-module` names a module at run time, and it is given no reach
 of its own: it reads only through the resolver `import module` would use —
 the query's `Options.Modules` and `Options.ModuleResolver`, or
-`xpath.Context.Modules` / `xslt.TransformOptions.Modules`, all nil by default
+`xpath.Env.Modules` / `xslt.TransformOptions.Modules`, all nil by default
 — so with nothing configured it raises `FOQM0002` without opening anything.
 `TestLoadXQueryModuleReadsOnlyThroughTheResolver` names a module file that
 exists and asserts it is not read; sabotaging the loader to open the hint

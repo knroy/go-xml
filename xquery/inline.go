@@ -184,10 +184,20 @@ func (n *inlineFunc) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		// accumulate and the recursion would reach a Go stack overflow,
 		// which is fatal and uncatchable. Depth and MaxDepth are exported,
 		// so they can be taken here even though the counters cannot; xpath's
-		// own two invocation paths take them for the same reason.
+		// own two invocation paths take them for the same reason. They are
+		// taken on a copy: the captured context is shared by every call.
 		sub := captured
 		if c, ok := callCtx.(*xpath.Context); ok && c != nil {
-			sub.Depth, sub.MaxDepth = c.Depth, c.MaxDepth
+			if m := c.Env().MaxDepth; m != captured.Env().MaxDepth {
+				sub = sub.WithEnv(func(e *xpath.Env) { e.MaxDepth = m })
+			}
+			if sub.Depth != c.Depth {
+				if sub == captured {
+					s := *captured
+					sub = &s
+				}
+				sub.Depth = c.Depth
+			}
 		}
 		for i, pm := range n.params {
 			v := args[i]

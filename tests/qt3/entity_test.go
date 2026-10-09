@@ -37,7 +37,7 @@ func TestEntityResolverConfinement(t *testing.T) {
 	}
 	// A default context must still refuse every external entity.
 	ctx := xpath.NewContext(nil, xpath.Builtins())
-	ctx.Version = xpath.XPath30
+	ctx = ctx.WithVersion(xpath.XPath30)
 	doc := `<!DOCTYPE a [<!ENTITY x SYSTEM "/etc/passwd">]><a>&x;</a>`
 	if _, err := xpath.Eval(`parse-xml('`+doc+`')`, ctx, nil); err == nil {
 		t.Error("parse-xml resolved an external entity with no resolver configured")

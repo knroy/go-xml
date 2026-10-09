@@ -25,12 +25,12 @@ Two sets of exceptions, both verified by the boundary tests described in
 [testing.md](testing.md):
 
 * **A negative `MaxDepth` means the default, not "no limit"**, in
-  `xdm.ParseOptions`, `xpath.Context` and `c14n.MaxDepth` — a depth bound of zero or below would
+  `xdm.ParseOptions`, `xpath.Env` and `c14n.MaxDepth` — a depth bound of zero or below would
   reject every document, so there is no useful reading of a negative value
   other than "the caller set nothing". Elsewhere — `xsd.ValidateOptions`,
   `relaxng.ValidateOptions`, `xslt.TransformOptions` — a negative `MaxDepth`
   really does mean no limit.
-* **A negative `MaxItems` really is no bound** (`xpath.Context`,
+* **A negative `MaxItems` really is no bound** (`xpath.Env`,
   `xslt.TransformOptions`, CLI `-max-items`). With it removed, an expression
   such as `1 to 1000000000000` can exhaust memory and end the process rather
   than return `XPDY0130`, so remove it only for input you trust.
@@ -115,7 +115,7 @@ syntax error does *not* carry the sentinel.
 | `MaxItems` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own) |
 | `MaxBytes` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own, and the suite already sanctions it for an over-long string — see `fn/codepoints-to-string.xml`. The wording says bytes rather than items, so the two refusals that share the code are still told apart) |
 | `MaxNodes` (result tree) | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own. Distinct from `xdm/parse.go`'s `MaxNodes`, which bounds a *parse*: this one bounds the nodes a transform or query **constructs**, and the wording says "result-tree nodes" so the three refusals that share the code are told apart) |
-| `Context.MaxDepth` | `xpath/context.go` | `XPDY0001` | no context item is defined |
+| `Env.MaxDepth` | `xpath/context.go` | `XPDY0001` | no context item is defined |
 | `backtrackBudget` | `xpath/regex_backtrack.go` | `FORX0002` | the regular expression is invalid |
 | range bound | `xpath/operators.go` | `FOAR0002` | a numeric operation overflowed |
 | `maxNestDepth` | `xquery/nested.go` | `XPDY0130` | as the XPath caps; it borrowed `XPST0003` until 2026-09-14 |
@@ -548,7 +548,7 @@ The nested transform's XPath context starts at that depth too, not at zero, so
 the count survives a hop through another language: an XQuery query or
 `xpath.Eval` caller (which reaches `fn:transform` when the program links
 `xslt`) is charged from its own `Context.Depth` and bounded by its
-`Context.MaxDepth`, and a stylesheet that calls back into a query that
+`Env.MaxDepth`, and a stylesheet that calls back into a query that
 transforms again keeps accumulating rather than restarting.
 
 ### DisableAssertions
@@ -633,32 +633,77 @@ them any more.
 ## xpath.Context
 
 XPath has no `Options` struct; configuration is the evaluation context you build
-with `xpath.NewContext(item, funcs)`.
+with `xpath.NewContext(item, funcs, configure...)`. A context has three parts:
+
+- the **scope** — focus, variables, function library, recursion depth — which
+  the engine copies on every step, predicate and binding, so it is a few words
+  (160 bytes);
+- the **environment** (`xpath.Env`) — cancellation, resolvers, limits, clock,
+  budgets — set up once and shared by every scope of the evaluation behind one
+  pointer;
+- the **static properties** of the expression being evaluated — version, static
+  base URI, namespaces, default collation — which `Compiled.Eval` installs from
+  the compiled expression by swapping one pointer.
 
 ```go
-ctx := xpath.NewContext(doc.Root, xpath.Builtins())
-ctx.Ctx = context.Background()
-ctx.StaticBaseURI = "file:///srv/docs/"
+ctx := xpath.NewContext(doc.Root, xpath.Builtins(), func(e *xpath.Env) {
+    e.Ctx = reqCtx
+    e.Docs = resolver
+}).WithStaticBaseURI("file:///srv/docs/")
 ctx.Vars = map[string]xdm.Sequence{"n": xdm.One(xdm.NewInteger(3))}
 
 seq, err := xpath.Eval(`$n * 2`, ctx, nil)   // [6]
 ```
+
+A context is never modified once it is in use: the `With` methods return a
+copy. `WithEnv(func(*xpath.Env))` changes a copy of the environment;
+`ctx.Env()` reads it and must not be written through.
+
+**Scope** (fields on `Context`):
 
 | Field | Type | What it does |
 |---|---|---|
 | `Item` | `xdm.Item` | The context item — `.` in an expression. |
 | `Position`, `Size` | `int` | `position()` and `last()`. Set by the engine when iterating; set them yourself only when evaluating inside a sequence you are driving. |
 | `Vars` | `map[string]xdm.Sequence` | In-scope variables, keyed by Clark name. |
+| `Parent` | `*Context` | The enclosing scope, which variable lookups walk. |
 | `Funcs` | `FunctionLibrary` | Function resolution. `xpath.Builtins()` is XPath 2.0; XSLT adds its own on top. |
-| `StaticBaseURI` | `string` | What `fn:static-base-uri` returns and what `fn:resolve-uri` resolves against by default. Distinct from a *node's* base URI, which comes from the document. |
+| `Depth` | `int` | Recursion depth, maintained by the engine. |
+
+**Environment** (fields on `xpath.Env`, set through `NewContext`'s configure
+functions or `WithEnv`):
+
+| Field | Type | What it does |
+|---|---|---|
+| `Ctx` | `context.Context` | Cancellation. Set it for untrusted expressions. `context.Background()` by default. |
 | `Docs` | `DocumentResolver` | `fn:doc` and `fn:document`. Nil disables them. |
-| `Ctx` | `context.Context` | Cancellation. Set it for untrusted expressions. |
+| `Collections` | `CollectionResolver` | Resolves `fn:collection`. Nil disables it. Independent of `Docs`. |
+| `Texts` | `TextResolver` | `fn:unparsed-text` and its siblings. Nil disables them. Independent of `Docs`. |
+| `Entities` | `xdm.EntityResolver` | External entities in documents `fn:parse-xml` parses. Nil refuses them. |
+| `Environment` | `EnvironmentResolver` | `fn:environment-variable`. Nil withholds the process environment. |
+| `Modules` | `ModuleResolver` | `fn:load-xquery-module`. Nil reads nothing. |
+| `Validator` | `TreeValidator` | `fn:json-to-xml` with `validate=true`. |
 | `Now`, `HasNow` | `time.Time`, `bool` | Fixes `fn:current-dateTime`. `HasNow` distinguishes "midnight 1 January year 1" from "not set". |
 | `ImplicitTimezone` | `int` | Offset in minutes for values with no timezone. |
-| `Collections` | `CollectionResolver` | Resolves `fn:collection`. Nil disables it. Independent of `Docs`. |
-| `Parent` | `*Context` | The enclosing context, for nested evaluation. |
-| `Depth` | `int` | Recursion depth, maintained by the engine. |
+| `RegexVersion`, `LibraryVersion` | `Version` | Raise the regular-expression dialect and the function library above the expression's version, without admitting new syntax. |
+| `MaxDepth` | `int` | Recursion bound. Zero is `xpath.MaxDepth` (500). |
 | `MaxItems` | `int` | Items an evaluation may materialise. Zero is `xpath.MaxItems` (5,000,000); negative is no bound; a nested evaluation adopts the caller's bound and cannot raise it. |
+| `QualifyVar`, `MissingVar` | funcs | Host hooks for variable references (XSLT packages, XQuery cycles). |
+| `MapDuplicateCode` | `string` | Error code for a duplicate key in a map constructor; `XQDY0137` by default. |
+
+The item, byte, entity and result-node **budget counters** belong to the
+environment but cannot be set through it: `NewContext` installs fresh ones
+after the configure functions run, `WithEnv` keeps the context's own whatever
+the function does, and `AdoptBudget` is the only way to share another
+evaluation's. A nested evaluation therefore never resets or raises a budget.
+
+**Static properties** (read with methods on `Context`): `Version()`,
+`StaticBaseURI()`, `StaticHost()`, `StaticNamespaces()` and `Compat()`.
+`Compiled.Eval` installs the compiled expression's own; `WithVersion` and
+`WithStaticBaseURI` set the defaults an expression compiled without them uses
+(a one-shot `xpath.Eval` compiles at the context's version). `StaticBaseURI` is
+what `fn:static-base-uri` returns and what `fn:resolve-uri` resolves against by
+default — distinct from a *node's* base URI, which comes from the document.
 
 ### fn:collection
 
@@ -693,7 +738,7 @@ func (c Codelists) ResolveCollection(uri, base string) (xdm.Sequence, error) {
     return out, nil
 }
 
-ctx.Collections = Codelists{dir: "lists"}   // xpath
+ctx = ctx.WithEnv(func(e *xpath.Env) { e.Collections = Codelists{dir: "lists"} }) // xpath
 opts.Collections = Codelists{dir: "lists"}  // xslt.TransformOptions
 ```
 
@@ -710,7 +755,7 @@ join it into a path without checking for traversal.
 ### fn:unparsed-text
 
 Off by default, and it has a switch of its own: `TransformOptions.Texts` in
-`xslt`, `Context.Texts` in `xpath`. Setting the document resolver does not set
+`xslt`, `Env.Texts` in `xpath`. Setting the document resolver does not set
 it, and that separation is the point. `fn:doc` hands back a parsed XML
 document, so a file that is not well-formed discloses nothing; `fn:unparsed-text`
 hands back the raw bytes of any file inside the roots.
@@ -722,7 +767,7 @@ reading from the `-allow-dir` roots.
 ### fn:environment-variable
 
 Off by default, with a switch of its own: `TransformOptions.Environment` in
-`xslt`, `Context.Environment` in `xpath`. Nil withholds the process environment
+`xslt`, `Env.Environment` in `xpath`. Nil withholds the process environment
 from both `fn:environment-variable($name)` and
 `fn:available-environment-variables()`. Setting the document or text resolver
 does not set it — those confine reads to a URI space you chose, while this
@@ -750,7 +795,7 @@ type environment map[string]string
 func (e environment) LookupEnvironment(n string) (string, bool) { v, ok := e[n]; return v, ok }
 func (e environment) EnvironmentNames() []string { /* the keys */ }
 
-ctx.Environment = environment{"REPORT_MODE": "summary"}   // xpath
+ctx = ctx.WithEnv(func(e *xpath.Env) { e.Environment = environment{"REPORT_MODE": "summary"} }) // xpath
 opts.Environment = environment{"REPORT_MODE": "summary"}  // xslt.TransformOptions
 ```
 
@@ -760,7 +805,7 @@ for it only where whatever runs is trusted with the process's own secrets.
 
 ### fn:load-xquery-module
 
-`TransformOptions.Modules` in `xslt`, `Context.Modules` in `xpath`: an
+`TransformOptions.Modules` in `xslt`, `Env.Modules` in `xpath`: an
 `xpath.ModuleResolver`, which any `xquery.ModuleResolver` (such as
 `xquery.MapModuleResolver`) satisfies. Nil reads nothing and every call is
 `FOQM0002`. A query sets it from its own `Options.Modules` and
@@ -974,7 +1019,7 @@ markup is **stripped**, so `<a>  <b/>  </a>` constructs `<a><b/></a>`.
 A query is *code*, not data. The sandbox is the same as everywhere else in
 this library — `fn:doc`, `fn:collection` and `fn:unparsed-text` all refuse
 without a resolver, and so does `import module` — but an untrusted query can
-still spend arbitrary CPU and memory, so bound it with `ctx.Ctx` and a timeout
+still spend arbitrary CPU and memory, so bound it with `Env.Ctx` and a timeout
 the way [server.md](server.md) does for stylesheets.
 
 `import module` and `import schema` follow that rule exactly.

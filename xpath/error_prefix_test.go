@@ -20,8 +20,8 @@ func TestErrorCodeRenderedOnce(t *testing.T) {
 	eval := func(expr string) error {
 		t.Helper()
 		ctx := NewContext(nil, Builtins())
-		ctx.Version = XPath31
-		ctx.LibraryVersion = XPath31
+		ctx = ctx.WithVersion(XPath31)
+		ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		_, err := Eval(expr, ctx, cardinalityNS{})
 		return err
 	}

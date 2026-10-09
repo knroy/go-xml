@@ -43,7 +43,7 @@ func registerAnalyzeString(l *Library) {
 		// xsl:analyze-string. Compiling through RE2 alone refused "(a)\\1"
 		// outright while its four siblings answered it, which made the set of
 		// patterns the library accepts depend on which function was asked.
-		re, err := CompileRegexpVersion(pattern, flags, ctx.Version)
+		re, err := CompileRegexpVersion(pattern, flags, ctx.Version())
 		if err != nil {
 			return nil, err
 		}

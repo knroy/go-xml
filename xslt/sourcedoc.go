@@ -124,7 +124,7 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 	if err := validSourceDocumentURI(href); err != nil {
 		return nil, err
 	}
-	docs := rt.ctx.Docs
+	docs := rt.ctx.Env().Docs
 	if docs == nil {
 		return nil, fmt.Errorf(
 			"FODC0002: document access is disabled (no resolver configured): %q",
@@ -135,7 +135,7 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 	// xml:base on it or an ancestor may move.
 	base := i.baseURI
 	if base == "" {
-		base = rt.ctx.StaticBaseURI
+		base = rt.ctx.StaticBaseURI()
 	}
 	if base == "" {
 		if n, ok := rt.ctx.Item.(*xdm.Node); ok {

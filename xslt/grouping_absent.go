@@ -96,9 +96,9 @@ func errNoGrouping(ctx *xpath.Context, code, fn string) error {
 	if ctx == nil {
 		return nil
 	}
-	v := ctx.Version
-	if ctx.LibraryVersion > v {
-		v = ctx.LibraryVersion
+	v := ctx.Version()
+	if ctx.Env().LibraryVersion > v {
+		v = ctx.Env().LibraryVersion
 	}
 	if !v.AtLeast31() {
 		return nil

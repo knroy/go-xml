@@ -1534,6 +1534,9 @@ type evaluateInstr struct {
 	// source text: DocBook evaluates the same few strings once per node.
 	compiledMu sync.Mutex
 	compiled   map[string]*xpath.Compiled
+	// withBase is compiled with the static base URI and default collation
+	// applied, by source text and base URI; see withStatic.
+	withBase map[[2]string]*xpath.Compiled
 }
 
 // maxEvaluateCache bounds evaluateInstr.compiled. Target expressions can be
@@ -1568,6 +1571,50 @@ func (i *evaluateInstr) compile(src string, ns *nsResolver) (*xpath.Compiled, er
 		i.compiledMu.Unlock()
 	}
 	return c, err
+}
+
+// withStatic is comp with the static base URI base and the element's default
+// collation applied, remembered per source text and base URI when ns is the
+// element's own resolver: the copy each application makes escapes once
+// Compiled.Eval installs its static part, so building it per execution would
+// cost an allocation each time.
+func (i *evaluateInstr) withStatic(comp *xpath.Compiled, src string, ns *nsResolver, base string) *xpath.Compiled {
+	key := [2]string{src, base}
+	if ns == i.ns {
+		i.compiledMu.Lock()
+		c, ok := i.withBase[key]
+		i.compiledMu.Unlock()
+		if ok {
+			return c
+		}
+	}
+	c := comp
+	if base != "" {
+		c = c.WithStaticBaseURI(base)
+	}
+	// 10.4.1: "Default collation: the same as the default collation defined at
+	// this point in the stylesheet". compileExpr applies this for a statically
+	// written expression; the target expression is compiled here instead, so
+	// it has to be applied here too — and without it collations-0128 compares
+	// under the codepoint collation and answers false three times.
+	if i.ns.collation != "" {
+		if coll, cerr := xpath.ResolveCollation(i.ns.collation); cerr == nil {
+			// The URI is carried too, so fn:default-collation() inside the
+			// evaluated expression reports the collation actually in force.
+			c = c.WithDefaultCollationURI(coll, i.ns.collation)
+		}
+	}
+	if ns == i.ns {
+		i.compiledMu.Lock()
+		if i.withBase == nil {
+			i.withBase = map[[2]string]*xpath.Compiled{}
+		}
+		if len(i.withBase) < maxEvaluateCache {
+			i.withBase[key] = c
+		}
+		i.compiledMu.Unlock()
+	}
+	return c
 }
 
 // xsltOnlyFunctions is appendix G's list: the functions XSLT defines in the
@@ -1834,21 +1881,7 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		base = b
 	}
-	if base != "" {
-		comp = comp.WithStaticBaseURI(base)
-	}
-	// 10.4.1: "Default collation: the same as the default collation defined at
-	// this point in the stylesheet". compileExpr applies this for a statically
-	// written expression; the target expression is compiled here instead, so
-	// it has to be applied here too — and without it collations-0128 compares
-	// under the codepoint collation and answers false three times.
-	if i.ns.collation != "" {
-		if coll, cerr := xpath.ResolveCollation(i.ns.collation); cerr == nil {
-			// The URI is carried too, so fn:default-collation() inside the
-			// evaluated expression reports the collation actually in force.
-			comp = comp.WithDefaultCollationURI(coll, i.ns.collation)
-		}
-	}
+	comp = i.withStatic(comp, src, ns, base)
 
 	sub := rt
 	for _, p := range i.params {

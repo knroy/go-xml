@@ -108,7 +108,9 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 		sub := captured
 		p := &sub
 		if c, ok := callCtx.(invokeContext); ok && c != nil {
-			sub.Ctx = c.Ctx
+			// Cancellation, the item and byte counters and the depth bound
+			// come from the call's environment; see envForCall.
+			sub.env = envForCall(captured.env, c)
 			// Both budgets come from the call, and each with the flag that
 			// says where its boundary is. The counter alone is not enough:
 			// heldBytes rides on the value copy, so a closure captured
@@ -118,8 +120,7 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			// already made -- the leak HoldByteBudget's idempotence guard
 			// exists to prevent, arriving through the closure instead. The
 			// item budget is forwarded the same way for the same reason.
-			sub.items, sub.heldItems = c.items, c.heldItems
-			sub.bytes, sub.heldBytes = c.bytes, c.heldBytes
+			sub.heldItems, sub.heldBytes = c.heldItems, c.heldBytes
 			// The recursion depth comes from the call for the same reason,
 			// and it is the one budget that cannot survive on its own: items
 			// and bytes are pointers that ride the value copy, while Depth is
@@ -131,7 +132,7 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			// which is fatal and uncatchable. InlineFunctionExpr.Eval takes
 			// it from the call below for exactly this reason; a named
 			// reference reaches the body through here instead.
-			sub.Depth, sub.MaxDepth = c.Depth, c.MaxDepth
+			sub.Depth = c.Depth
 			// Only the *focus* is retained from the reference point; the
 			// variable bindings come from the call. The two parts of the
 			// captured context have opposite lifetimes in a prolog, where a
@@ -173,6 +174,27 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 		}
 		return inner(p, args)
 	}
+}
+
+// envForCall is the environment a function item's body runs in: the one it
+// captured, with the call's cancellation, item and byte counters and depth
+// bound, which are per evaluation rather than per closure. The entity and node
+// allowances stay the captured ones. Within one evaluation the two
+// environments are the same and nothing is copied.
+//
+// ponytail: environments are compared by pointer, so a closure called across
+// a host boundary copies one per call; compare the four fields if that shows.
+func envForCall(captured *Env, call *Context) *Env {
+	if captured == call.env {
+		return captured
+	}
+	e := zeroEnv
+	if captured != nil {
+		e = *captured
+	}
+	c := call.ev()
+	e.Ctx, e.items, e.bytes, e.MaxDepth = c.Ctx, c.items, c.bytes, c.MaxDepth
+	return &e
 }
 
 // hostBoundCall is fn.Call for a function item made from fn at ctx: wrapped,
@@ -240,12 +262,11 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		sub := captured
 		if c, ok := callCtx.(invokeContext); ok && c != nil {
 			s := *captured
-			s.Ctx = c.Ctx
+			s.env = envForCall(captured.env, c)
 			// Both budgets come from the call, each with the flag that says
 			// where its boundary is -- see withRetainedFocus for why the
 			// counter alone would let a closure reset the caller's charges.
-			s.items, s.heldItems = c.items, c.heldItems
-			s.bytes, s.heldBytes = c.bytes, c.heldBytes
+			s.heldItems, s.heldBytes = c.heldItems, c.heldBytes
 			// The recursion depth is one of those per-evaluation limits, and
 			// it has to come from the CALL rather than the closure: a closure
 			// captures the depth it was written at, which for a function that
@@ -256,7 +277,7 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			// count, and taking MaxDepth with it keeps a caller that raised
 			// its own bound from having the package default reimposed inside
 			// a closure written before it was set.
-			s.Depth, s.MaxDepth = c.Depth, c.MaxDepth
+			s.Depth = c.Depth
 			sub = &s
 		}
 		for i, p := range e.Params {
@@ -663,14 +684,14 @@ func inlineSignature(e *InlineFunctionExpr) []string {
 // fn:function-lookup reports as the empty sequence -- the answer F&O 16.1.1
 // gives for any name that is not in scope.
 func lookupSchemaConstructor(ctx *Context, name xdm.QName, arity int) (*xdm.FunctionItem, bool) {
-	if arity != 1 || ctx == nil || ctx.StaticNamespaces == nil {
+	if arity != 1 || ctx == nil || ctx.StaticNamespaces() == nil {
 		return nil, false
 	}
-	ns := wrapBraced(ctx.StaticNamespaces, []string{name.URI})
+	ns := wrapBraced(ctx.StaticNamespaces(), []string{name.URI})
 	prefix := fmt.Sprintf("%s0", bracedURIPrefix)
 	cast, ok := schemaConstructorCast(
 		xdm.QName{URI: name.URI, Prefix: prefix, Local: name.Local},
-		[]Expr{&VarRef{Name: ConstructorArgVar}}, ns, ctx.Version)
+		[]Expr{&VarRef{Name: ConstructorArgVar}}, ns, ctx.Version())
 	if !ok {
 		return nil, false
 	}

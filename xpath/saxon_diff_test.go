@@ -1854,7 +1854,7 @@ func TestStaticBaseURI(t *testing.T) {
 	}
 
 	// When one is supplied it wins, and it is not the document's.
-	ctx.StaticBaseURI = "http://www.example.com"
+	ctx = ctx.WithStaticBaseURI("http://www.example.com")
 	if got := evalOne(t, ctx, `string(static-base-uri())`); got != "http://www.example.com" {
 		t.Errorf("static-base-uri() = %q, want the declared one", got)
 	}

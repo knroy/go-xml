@@ -60,7 +60,7 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	// looked for x.xml beside the input rather than beside the module — and
 	// an included module in a subdirectory could never reach its own files.
 	if base == "" {
-		base = ctx.StaticBaseURI
+		base = ctx.StaticBaseURI()
 	}
 
 	if len(args) == 0 || len(args[0]) == 0 {
@@ -115,7 +115,7 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		}
 	}
 
-	if ctx.Docs == nil {
+	if ctx.ev().Docs == nil {
 		return nil, fmt.Errorf(
 			"FODC0002: document access is disabled (no resolver configured)")
 	}

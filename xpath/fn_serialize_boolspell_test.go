@@ -38,7 +38,7 @@ func boolSpellTree() *xdm.Node {
 func serializeWithParam(t *testing.T, name, value string, with map[string]string) string {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	params := map[string]string{name: value}
 	for k, v := range with {
 		params[k] = v
@@ -179,7 +179,7 @@ func TestSerializeParamElementStandaloneSpellings(t *testing.T) {
 // disagreeing: indent=true() indented and indent="true" did not.
 func TestSerializeBooleanSpellingsMatchMapForm(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	c := ctx.WithVar(xdm.QName{Local: "n"}, xdm.One(boolSpellTree()))
 	seq, err := Eval(`serialize($n, map{'indent': true()})`, c, nil)
 	if err != nil {

@@ -331,7 +331,7 @@ wrong limit trips or the document was malformed for an unrelated reason.
 Where a value's meaning is deliberate the test pins it rather than changing it,
 with a comment saying why: `0` means the default everywhere, and negative means
 "no limit" in most places but *the default* for `xdm.ParseOptions.MaxDepth` and
-`xpath.Context.MaxDepth`, since a depth bound of zero would refuse every
+`xpath.Env.MaxDepth`, since a depth bound of zero would refuse every
 document. See [options.md](options.md) for the field-by-field rule.
 
 ---

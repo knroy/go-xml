@@ -11,7 +11,7 @@ import (
 func evalList(t *testing.T, expr string) (xdm.Sequence, error) {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	return Eval(expr, ctx, nil)
 }
 

@@ -46,7 +46,7 @@ func TestFunctionItemChargesTheCallersByteBudget(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// The item is produced under one context...
 			made := NewContext(nil, Builtins())
-			made.Version = XPath30
+			made = made.WithVersion(XPath30)
 			seq, err := Eval(tc.expr, made, nil)
 			if err != nil {
 				t.Fatalf("evaluating %q: %v", tc.expr, err)
@@ -61,7 +61,7 @@ func TestFunctionItemChargesTheCallersByteBudget(t *testing.T) {
 			// the charge survive to the call: without it the reset in
 			// Compiled.Eval would clear it again.
 			caller := NewContext(nil, Builtins())
-			caller.Version = XPath30
+			caller = caller.WithVersion(XPath30)
 			caller = caller.HoldByteBudget()
 			if err := caller.ChargeBytes(MaxBytes - 8); err != nil {
 				t.Fatalf("charging the caller's budget: %v", err)
@@ -83,7 +83,7 @@ func TestFunctionItemChargesTheCallersByteBudget(t *testing.T) {
 // calls each stays inside the bound while the total runs away.
 func TestFunctionItemSharesTheCallersByteCounter(t *testing.T) {
 	made := NewContext(nil, Builtins())
-	made.Version = XPath30
+	made = made.WithVersion(XPath30)
 	seq, err := Eval("function($x) { concat($x, $x) }", made, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -91,20 +91,20 @@ func TestFunctionItemSharesTheCallersByteCounter(t *testing.T) {
 	fn := seq[0].(*xdm.FunctionItem)
 
 	caller := NewContext(nil, Builtins())
-	caller.Version = XPath30
+	caller = caller.WithVersion(XPath30)
 	caller = caller.HoldByteBudget()
 	arg := xdm.One(xdm.NewString(strings.Repeat("A", 1024)))
 	if _, err := fn.Invoke(caller, []xdm.Sequence{arg}); err != nil {
 		t.Fatalf("the call itself failed: %v", err)
 	}
-	if got := *caller.bytes; got == 0 {
+	if got := *caller.ev().bytes; got == 0 {
 		t.Fatal("the function item's body charged nothing to the caller's " +
 			"counter; it ran against a budget of its own, so a caller can " +
 			"escape MaxBytes by wrapping the work in a closure")
 	}
 	// The context the item was made under must be untouched -- the budget
 	// follows the call, and nothing about the closure's own evaluation.
-	if got := *made.bytes; got != 0 {
+	if got := *made.ev().bytes; got != 0 {
 		t.Errorf("the closure's own context was charged %d bytes; the "+
 			"budget did not follow the call", got)
 	}

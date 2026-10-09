@@ -98,24 +98,25 @@ func callerOf(rt *runtime) transformCaller {
 // into a query that calls fn:transform again is charged one level per hop.
 func init() {
 	xpath.RegisterTransformProcessor(func(ctx *xpath.Context, opts *xdm.MapItem) (xdm.Sequence, error) {
-		maxDepth := ctx.MaxDepth
+		env := ctx.Env()
+		maxDepth := env.MaxDepth
 		if maxDepth == 0 {
 			maxDepth = xpath.MaxDepth
 		}
 		c := transformCaller{
 			opts: TransformOptions{
-				Documents:        ctx.Docs,
-				Collections:      ctx.Collections,
-				Texts:            ctx.Texts,
-				Environment:      ctx.Environment,
+				Documents:        env.Docs,
+				Collections:      env.Collections,
+				Texts:            env.Texts,
+				Environment:      env.Environment,
 				MaxDepth:         maxDepth,
-				ImplicitTimezone: ctx.ImplicitTimezone,
+				ImplicitTimezone: env.ImplicitTimezone,
 			},
 			maxDepth: maxDepth,
-			goCtx:    ctx.Ctx,
+			goCtx:    env.Ctx,
 		}
-		if ctx.HasNow {
-			c.opts.Now = ctx.Now
+		if env.HasNow {
+			c.opts.Now = env.Now
 		}
 		return runNestedTransform(ctx, c, opts)
 	})
@@ -678,9 +679,9 @@ func transformSourceLocation(
 	var err error
 	if cr, ok := docs.(xpath.ContextDocumentResolver); ok {
 		// Charged to the calling evaluation's entity allowance, as fn:doc is.
-		tree, err = cr.ResolveDocumentIn(ctx, loc, ctx.StaticBaseURI)
+		tree, err = cr.ResolveDocumentIn(ctx, loc, ctx.StaticBaseURI())
 	} else {
-		tree, err = docs.ResolveDocument(loc, ctx.StaticBaseURI)
+		tree, err = docs.ResolveDocument(loc, ctx.StaticBaseURI())
 	}
 	if err != nil {
 		return nil, xdm.Errorf("FOXT0002",
@@ -741,7 +742,7 @@ func nestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem)
 	// the call, the rule F&O 3.1 states for base-output-uri; err-9a passes
 	// "transform/include.xsl" and expects its xsl:include to resolve.
 	if base != "" {
-		base = resolveAgainst(ctx.StaticBaseURI, base)
+		base = resolveAgainst(ctx.StaticBaseURI(), base)
 	}
 	var named []string
 	for _, k := range []string{"stylesheet-location", "stylesheet-node", "stylesheet-text", "package-name"} {
@@ -827,7 +828,7 @@ func nestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem)
 					"(no resolver configured): %q", loc)
 		}
 		if base == "" {
-			base = ctx.StaticBaseURI
+			base = ctx.StaticBaseURI()
 		}
 		// ResolveModule is preferred over ResolveDocument because it hands
 		// back the URI it resolved to as well as the tree, and the nested

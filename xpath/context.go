@@ -18,11 +18,21 @@ import (
 // Context is the XPath dynamic context: everything an expression can observe
 // beyond its own AST.
 //
-// The focus (item, position, size) changes on every step and predicate, while
-// the rest (variables, functions, the implicit timezone) changes rarely. They
-// are kept in one struct anyway, copied cheaply by value in the hot paths,
-// because splitting them means every evaluator function takes two parameters
-// and the copy is a handful of words either way.
+// It is three parts, by how often each changes. The Context itself is the
+// per-scope part -- the focus, the variable bindings, the function library,
+// the recursion depth and the host's dynamic state -- and is copied on every
+// step, predicate and binding, so it is kept to a few words. The expression's
+// static properties (its version, static base URI, namespaces, default
+// collation, XPath 1.0 compatibility and host value) change once per compiled
+// expression and sit behind one pointer that Compiled.Eval swaps. Everything
+// set up once per evaluation -- cancellation, resolvers, limits, the clock and
+// the budget counters -- is the Env, shared by every scope of the evaluation
+// and never written once installed.
+//
+// Build one with NewContext, configure its environment with WithEnv, and
+// derive scopes with WithFocus and WithVar. A Context is never modified once
+// it has been handed to an evaluation; every method that changes something
+// returns a copy.
 type Context struct {
 	// Item is the context item. It is nil where there is no context item,
 	// which is an error to reference rather than an empty sequence.
@@ -31,12 +41,10 @@ type Context struct {
 	Position int
 	// Size is the context size.
 	Size int
-
 	// Vars holds in-scope variable bindings, keyed by expanded name.
 	// Lookups walk to Parent, so a nested scope does not copy the map.
 	Vars   map[string]xdm.Sequence
 	Parent *Context
-
 	// varURI, varLocal and varVal are the one binding WithVar adds, held
 	// inline rather than in a one-entry Vars map: that map was the largest
 	// allocation site in every stylesheet profiled. A scope holds the inline
@@ -44,22 +52,58 @@ type Context struct {
 	// part), and it is consulted before Vars at the same level.
 	varURI, varLocal string
 	varVal           xdm.Sequence
-
 	// Funcs resolves function calls. Supplied by the caller so that XSLT can
 	// add xsl:function declarations and extension functions without this
 	// package knowing about them.
 	Funcs FunctionLibrary
+	// Depth guards against unbounded recursion in user-defined functions and
+	// named templates, which the spec does not bound.
+	Depth int
+	// heldItems suppresses Compiled.Eval's per-expression reset of items,
+	// because a host language is measuring a larger evaluation against the
+	// same counter. Set by HoldItemBudget, and copied along with the rest of
+	// the Context by every scope change, which is what carries the hold into
+	// the nested evaluations it has to cover.
+	heldItems bool
+	// heldBytes suppresses Compiled.Eval's per-expression reset of bytes,
+	// because a host language is measuring a larger evaluation against the
+	// same counter. Set by HoldByteBudget; the same mechanism as heldItems,
+	// and separate from it because the two budgets have different natural
+	// boundaries -- a FLWOR for items, one constructed value for bytes.
+	heldBytes bool
+	// host is the host language's dynamic state (XSLT: the transform runtime
+	// and fn:current()), opaque here and copied with the context as the focus
+	// is. A dynamic function call clears its current item and marks it
+	// absent, as it does the variables in ClearedOnDynamicCall and
+	// MarkedOnDynamicCall. See internal/xpathleaf.Host and leafhook.go.
+	host *xpathleaf.Host
 
-	// Version is the language version the expression was compiled under.
-	//
-	// It reaches the function library because a few functions differ between
-	// versions in ways the parser cannot settle: fn:matches and its siblings
-	// accept the "q" flag and the 3.0 regular expression constructs only
-	// under 3.0, and must raise the same errors as any other processor when
-	// asked to be 2.0. The zero value is XPath20, so a Context built by an
-	// existing caller behaves exactly as it did before.
-	Version Version
+	// static holds the static properties of the expression being evaluated.
+	// Nil means the zero values: XPath 2.0, no base URI, no namespaces, the
+	// codepoint collation. Shared and never written; see staticContext.
+	static *staticContext
 
+	// env is the evaluation's environment. Nil means the zero Env, which is
+	// what a hand-built Context gets. Shared and never written; see Env.
+	env *Env
+}
+
+// Env is the part of the dynamic context set up once per evaluation and shared
+// by every scope within it: cancellation, the resolvers that grant access to
+// the outside world, the limits, the clock, and the budget counters.
+//
+// A Context holds a pointer to one, so deriving a scope never copies it. It is
+// therefore never modified once installed: Context.WithEnv changes a copy.
+//
+// The budget counters are not part of what WithEnv changes. They stay with
+// the Context they were minted for (NewContext) or adopted into
+// (Context.AdoptBudget), so configuring an environment can never reset or
+// remove a budget a caller is being charged against.
+type Env struct {
+	// Ctx carries cancellation. A stylesheet can loop for a long time on
+	// pathological input, and the caller needs a way out that does not
+	// involve killing the process.
+	Ctx context.Context
 	// RegexVersion raises the version of the *regular expression* dialect
 	// above Version, without admitting any other 3.0 construct.
 	//
@@ -75,7 +119,6 @@ type Context struct {
 	// The zero value adds nothing: the effective dialect is the larger of
 	// this and Version, so an existing caller is unaffected.
 	RegexVersion Version
-
 	// LibraryVersion raises the version of the *function library* above
 	// Version, without admitting any new syntax.
 	//
@@ -92,94 +135,44 @@ type Context struct {
 	// The zero value adds nothing: the effective floor is the larger of this
 	// and Version, so an existing caller is unaffected.
 	LibraryVersion Version
-
-	// StaticBaseURI is the base URI of the expression itself — the stylesheet
-	// or query it was written in — which is what fn:static-base-uri returns
-	// and what fn:resolve-uri resolves against by default.
-	//
-	// It is distinct from a *node's* base URI, which comes from the document
-	// the node was parsed from. Returning the context node's was the nearest
-	// thing available before this existed, and it is a different value: a
-	// stylesheet in one place can perfectly well be applied to a document
-	// from another.
-	StaticBaseURI string
-
 	// QualifyVar lets the host language redirect a variable reference to a
 	// different name; see VarQualifier. Nil for the flat scoping XPath's own
 	// grammar implies.
 	QualifyVar VarQualifier
-
 	// MissingVar lets the host language say what an unresolved reference
 	// means. Returning nil leaves the ordinary XPST0008. It exists because a
 	// host may decline to bind a variable whose evaluation failed, and owe
 	// the failure to whoever refers to it -- an XSLT 3.0 abstract variable
 	// is the case.
 	MissingVar func(ctx *Context, name xdm.QName) error
-
-	// StaticHost is an opaque value the host language attached to the
-	// expression being evaluated; see Compiled.WithStaticHost. This package
-	// never interprets it, only carries it.
-	StaticHost any
-
-	// StaticNamespaces is the statically known namespaces of the expression,
-	// carried from compile time so that a function can expand a prefix that
-	// reaches it as a *string* rather than as syntax.
-	//
-	// Almost every prefix in an expression is resolved by the parser, which is
-	// why NamespaceResolver is a compile-time interface. The exception is a
-	// prefixed name that arrives as an argument value: F&O 9.8.4.3 says the
-	// $calendar argument of the date formatting functions "must be a valid
-	// EQName ... if it is a lexical QName then it is expanded into an expanded
-	// QName using the statically known namespaces", and the functions' own
-	// Properties section lists them as depending on "namespaces" for exactly
-	// this reason. The argument need not be a literal, so the expansion cannot
-	// be done at parse time; the resolver has to survive into evaluation.
-	//
-	// Nil means the caller compiled without one, and a prefixed calendar is
-	// then unresolvable — which is the same answer an empty resolver gives.
-	StaticNamespaces NamespaceResolver
-
-	// collation is the collation in force for string comparison, when a
-	// function has been given one. Nil means the codepoint collation, which
-	// is the default everywhere.
-	//
-	// It lives here rather than being threaded through every comparison
-	// because fn:deep-equal applies its collation to every string it reaches,
-	// however deep in the two sequences that is.
-	collation Collation
-
-	// collationURI is the URI that named collation, when the default came
-	// from the static context. fn:default-collation returns it; every other
-	// collation-taking function needs only the Collation value. Empty means
-	// the codepoint collation, which is the default the spec states.
-	collationURI string
-
 	// ImplicitTimezone is the offset in minutes applied to date/time values
 	// that carry no timezone. The spec requires the dynamic context to supply
 	// one; defaulting to UTC keeps results reproducible across machines,
 	// which matters more for a validator than matching local time.
 	ImplicitTimezone int
-
-	// Ctx carries cancellation. A stylesheet can loop for a long time on
-	// pathological input, and the caller needs a way out that does not
-	// involve killing the process.
-	Ctx context.Context
-
+	// Now is the value fn:current-dateTime and its siblings return.
+	//
+	// The spec requires these to be stable for the whole of one evaluation:
+	// calling current-dateTime() twice must give the same answer, or a
+	// stylesheet that stamps a document and then checks the stamp against
+	// "now" can disagree with itself. Reading the clock here once, rather
+	// than per call, is what guarantees that. A zero value means the caller
+	// did not set one and the functions are unavailable.
+	Now time.Time
+	// HasNow distinguishes an unset clock from a legitimately zero time.
+	HasNow bool
 	// Docs resolves fn:doc and fn:document URIs. Nil disables them, which is
 	// the safe default: a stylesheet that can open arbitrary URIs is an SSRF
 	// and file-disclosure vector.
 	Docs DocumentResolver
-
 	// Collections resolves fn:collection URIs. Nil disables it, for the same
 	// reason nil disables Docs, and setting Docs does not set this: see
 	// CollectionResolver.
 	Collections CollectionResolver
-
 	// Texts resolves fn:unparsed-text URIs. Nil disables it, and setting
 	// Docs does not set this: reading a file as raw text is a wider grant
 	// than reading it as a parsed document. See TextResolver.
 	Texts TextResolver
-
 	// Entities resolves the external entities and external DTD subset that a
 	// document handed to fn:parse-xml declares. Nil refuses every one of
 	// them, which is the safe default and the one nearly every caller wants:
@@ -191,7 +184,6 @@ type Context struct {
 	//
 	// Confinement is entirely the resolver's; see xdm.EntityResolver.
 	Entities xdm.EntityResolver
-
 	// Environment answers fn:environment-variable and
 	// fn:available-environment-variables. Nil withholds the process
 	// environment from both, which is the default and the safe one: the
@@ -203,7 +195,6 @@ type Context struct {
 	// grants reads of the process's own state, which no resolver root
 	// bounds. Withholding costs no conformance — see EnvironmentResolver.
 	Environment EnvironmentResolver
-
 	// Modules locates the XQuery library modules fn:load-xquery-module
 	// loads. Nil reads nothing, so every module is FOQM0002, which is the
 	// default for the reason Docs is nil by default: the module URI and its
@@ -211,25 +202,11 @@ type Context struct {
 	// fills this from its own Options.Modules and Options.ModuleResolver
 	// when the caller left it nil. See ModuleResolver.
 	Modules ModuleResolver
-
 	// Validator validates a tree fn:json-to-xml has just built, when the
 	// call asked for validate=true. Nil means the processor cannot do it,
 	// which is FOJS0004 rather than a silent untyped result; see
 	// TreeValidator.
 	Validator TreeValidator
-
-	// Compat is XPath 1.0 compatibility mode, which XSLT 3.8 puts in force for
-	// expressions written on an element whose effective [xsl:]version is below
-	// 2.0. Under it the coercion rules of XPath 2.0 appendix B.1 apply: a
-	// multi-item argument to a parameter expecting a string, a number or a
-	// node is truncated to its first item instead of raising XPTY0004,
-	// arithmetic on a non-numeric operand yields NaN rather than a type error,
-	// and a general comparison converts its operands the way XPath 1.0 did.
-	//
-	// It defaults to false and is set only by a Compiled that was given it, so
-	// ordinary 2.0 evaluation never sees it.
-	Compat bool
-
 	// MapDuplicateCode overrides the error code raised when a map constructor
 	// names the same key twice.
 	//
@@ -245,11 +222,6 @@ type Context struct {
 	// The zero value keeps XQDY0137, so a host that does not set it behaves
 	// exactly as it did.
 	MapDuplicateCode string
-
-	// Depth guards against unbounded recursion in user-defined functions and
-	// named templates, which the spec does not bound.
-	Depth int
-
 	// MaxDepth is the bound Depth is checked against. Zero means the package
 	// default, MaxDepth.
 	//
@@ -260,7 +232,6 @@ type Context struct {
 	// trusts can raise the bound; one evaluating an expression from outside
 	// should leave it alone.
 	MaxDepth int
-
 	// MaxItems is the bound the item budget is checked against. Zero means
 	// the package default, MaxItems; a negative value means no bound; a
 	// positive value is the bound. The range operator's cap follows it too.
@@ -275,7 +246,6 @@ type Context struct {
 	// AdoptBudget copies it along with the shared counter, so a nested
 	// evaluation cannot raise the bound it is charged against.
 	MaxItems int
-
 	// items counts the items materialised into intermediate sequences during
 	// this evaluation, bounding memory the way Depth bounds stack.
 	//
@@ -287,14 +257,6 @@ type Context struct {
 	// Nil means unbounded, which is what a caller building a Context by hand
 	// gets; NewContext installs a budget.
 	items *int64
-
-	// heldItems suppresses Compiled.Eval's per-expression reset of items,
-	// because a host language is measuring a larger evaluation against the
-	// same counter. Set by HoldItemBudget, and copied along with the rest of
-	// the Context by every scope change, which is what carries the hold into
-	// the nested evaluations it has to cover.
-	heldItems bool
-
 	// bytes counts the bytes of string content this evaluation has built,
 	// bounding the one dimension items cannot: a string is a single item
 	// however long it is, so a chain of concatenations that doubles its
@@ -305,14 +267,6 @@ type Context struct {
 	// accumulate its own. Nil means unbounded, which is what a hand-built
 	// Context gets.
 	bytes *int64
-
-	// heldBytes suppresses Compiled.Eval's per-expression reset of bytes,
-	// because a host language is measuring a larger evaluation against the
-	// same counter. Set by HoldByteBudget; the same mechanism as heldItems,
-	// and separate from it because the two budgets have different natural
-	// boundaries -- a FLWOR for items, one constructed value for bytes.
-	heldBytes bool
-
 	// entities is the entity-expansion allowance shared by every parse this
 	// evaluation performs, bounding the one dimension neither items nor bytes
 	// can: fn:parse-xml builds a TREE out of a string, so an expansion is
@@ -333,7 +287,6 @@ type Context struct {
 	// each copy accumulate its own. Nil means unbounded, which is what a
 	// hand-built Context gets; NewContext installs one.
 	entities *xdm.EntityBudget
-
 	// nodes counts the nodes constructed into result trees during this
 	// evaluation, bounding the one dimension neither items nor bytes sees.
 	//
@@ -356,31 +309,176 @@ type Context struct {
 	// accumulate its own. Nil means unbounded, which is what a hand-built
 	// Context gets; NewContext installs a budget.
 	nodes *int64
-
-	// Now is the value fn:current-dateTime and its siblings return.
-	//
-	// The spec requires these to be stable for the whole of one evaluation:
-	// calling current-dateTime() twice must give the same answer, or a
-	// stylesheet that stamps a document and then checks the stamp against
-	// "now" can disagree with itself. Reading the clock here once, rather
-	// than per call, is what guarantees that. A zero value means the caller
-	// did not set one and the functions are unavailable.
-	Now time.Time
-	// HasNow distinguishes an unset clock from a legitimately zero time.
-	HasNow bool
-
-	// host is the host language's dynamic state (XSLT: the transform runtime
-	// and fn:current()), opaque here and copied with the context as the focus
-	// is. A dynamic function call clears its current item and marks it
-	// absent, as it does the variables in ClearedOnDynamicCall and
-	// MarkedOnDynamicCall. See internal/xpathleaf.Host and leafhook.go.
-	host *xpathleaf.Host
 }
 
-// WithNow returns a copy of ctx with the transform clock set.
-func (c *Context) WithNow(t time.Time) *Context {
+// staticContext is the static part of the context: the properties of the
+// expression being evaluated rather than of the evaluation. Compiled.Eval
+// installs the compiled expression's own, so one pointer swap replaces the
+// copy of every field. Never written once a Context points at it.
+type staticContext struct {
+	// Version is the language version the expression was compiled under.
+	//
+	// It reaches the function library because a few functions differ between
+	// versions in ways the parser cannot settle: fn:matches and its siblings
+	// accept the "q" flag and the 3.0 regular expression constructs only
+	// under 3.0, and must raise the same errors as any other processor when
+	// asked to be 2.0. The zero value is XPath20, so a Context built by an
+	// existing caller behaves exactly as it did before.
+	version Version
+	// StaticBaseURI is the base URI of the expression itself — the stylesheet
+	// or query it was written in — which is what fn:static-base-uri returns
+	// and what fn:resolve-uri resolves against by default.
+	//
+	// It is distinct from a *node's* base URI, which comes from the document
+	// the node was parsed from. Returning the context node's was the nearest
+	// thing available before this existed, and it is a different value: a
+	// stylesheet in one place can perfectly well be applied to a document
+	// from another.
+	baseURI string
+	// StaticHost is an opaque value the host language attached to the
+	// expression being evaluated; see Compiled.WithStaticHost. This package
+	// never interprets it, only carries it.
+	host any
+	// StaticNamespaces is the statically known namespaces of the expression,
+	// carried from compile time so that a function can expand a prefix that
+	// reaches it as a *string* rather than as syntax.
+	//
+	// Almost every prefix in an expression is resolved by the parser, which is
+	// why NamespaceResolver is a compile-time interface. The exception is a
+	// prefixed name that arrives as an argument value: F&O 9.8.4.3 says the
+	// $calendar argument of the date formatting functions "must be a valid
+	// EQName ... if it is a lexical QName then it is expanded into an expanded
+	// QName using the statically known namespaces", and the functions' own
+	// Properties section lists them as depending on "namespaces" for exactly
+	// this reason. The argument need not be a literal, so the expansion cannot
+	// be done at parse time; the resolver has to survive into evaluation.
+	//
+	// Nil means the caller compiled without one, and a prefixed calendar is
+	// then unresolvable — which is the same answer an empty resolver gives.
+	ns NamespaceResolver
+	// collation is the collation in force for string comparison, when a
+	// function has been given one. Nil means the codepoint collation, which
+	// is the default everywhere.
+	//
+	// It lives here rather than being threaded through every comparison
+	// because fn:deep-equal applies its collation to every string it reaches,
+	// however deep in the two sequences that is.
+	collation Collation
+	// collationURI is the URI that named collation, when the default came
+	// from the static context. fn:default-collation returns it; every other
+	// collation-taking function needs only the Collation value. Empty means
+	// the codepoint collation, which is the default the spec states.
+	collationURI string
+	// Compat is XPath 1.0 compatibility mode, which XSLT 3.8 puts in force for
+	// expressions written on an element whose effective [xsl:]version is below
+	// 2.0. Under it the coercion rules of XPath 2.0 appendix B.1 apply: a
+	// multi-item argument to a parameter expecting a string, a number or a
+	// node is truncated to its first item instead of raising XPTY0004,
+	// arithmetic on a non-numeric operand yields NaN rather than a type error,
+	// and a general comparison converts its operands the way XPath 1.0 did.
+	//
+	// It defaults to false and is set only by a Compiled that was given it, so
+	// ordinary 2.0 evaluation never sees it.
+	compat bool
+}
+
+// zeroEnv and zeroStatic are what a Context with no environment or static
+// part reads. Never written.
+var (
+	zeroEnv    Env
+	zeroStatic staticContext
+)
+
+// ev returns c's environment, or the zero one. Internal: callers outside the
+// package go through Env, which never hands out the shared zero value.
+func (c *Context) ev() *Env {
+	if c == nil || c.env == nil {
+		return &zeroEnv
+	}
+	return c.env
+}
+
+// st returns c's static part, or the zero one.
+func (c *Context) st() *staticContext {
+	if c == nil || c.static == nil {
+		return &zeroStatic
+	}
+	return c.static
+}
+
+// Env returns the environment c evaluates in. It is shared with every scope
+// derived from c and must not be modified; WithEnv changes a copy. A Context with no environment reports a fresh zero Env.
+func (c *Context) Env() *Env {
+	if c == nil || c.env == nil {
+		return new(Env)
+	}
+	return c.env
+}
+
+// WithEnv returns a copy of c whose environment is c's with set applied to a
+// copy of it:
+//
+//	ctx = ctx.WithEnv(func(e *xpath.Env) {
+//		e.Docs = resolver
+//		e.MaxItems = -1
+//	})
+//
+// The budget counters are c's own whatever set does, so configuring an
+// environment never resets, replaces or removes a budget; sharing another
+// evaluation's is AdoptBudget's job. set must not keep e.
+func (c *Context) WithEnv(set func(e *Env)) *Context {
+	own := c.ev()
+	env := *own
+	set(&env)
+	env.items, env.bytes, env.entities, env.nodes =
+		own.items, own.bytes, own.entities, own.nodes
 	n := *c
-	n.Now, n.HasNow = t, true
+	n.env = &env
+	return &n
+}
+
+// Version is the language version of the expression being evaluated.
+func (c *Context) Version() Version { return c.st().version }
+
+// StaticBaseURI is the static base URI of the expression being evaluated.
+func (c *Context) StaticBaseURI() string { return c.st().baseURI }
+
+// StaticHost is the opaque value the host language attached to the expression
+// being evaluated; see Compiled.WithStaticHost.
+func (c *Context) StaticHost() any { return c.st().host }
+
+// StaticNamespaces is the statically known namespaces of the expression being
+// evaluated, or nil where it was compiled without them.
+func (c *Context) StaticNamespaces() NamespaceResolver { return c.st().ns }
+
+// Compat reports XPath 1.0 compatibility mode; see Compiled.WithCompatMode.
+func (c *Context) Compat() bool { return c.st().compat }
+
+// WithVersion returns a copy of c whose expressions evaluate as version v
+// until a compiled expression installs its own. It is for a caller evaluating
+// an expression it did not compile through Compiled -- the version of a
+// Compiled is always the one it was compiled under.
+func (c *Context) WithVersion(v Version) *Context {
+	if c.st().version == v {
+		return c
+	}
+	s := *c.st()
+	s.version = v
+	n := *c
+	n.static = &s
+	return &n
+}
+
+// WithStaticBaseURI returns a copy of c with the static base URI set, for the
+// expressions that were compiled without one of their own.
+func (c *Context) WithStaticBaseURI(base string) *Context {
+	if c.st().baseURI == base {
+		return c
+	}
+	s := *c.st()
+	s.baseURI = base
+	n := *c
+	n.static = &s
 	return &n
 }
 
@@ -389,16 +487,16 @@ func (c *Context) WithNow(t time.Time) *Context {
 // It is a denial-of-service guard for a caller evaluating an expression it did
 // not write, not a conformance limit: nothing in the specification caps
 // recursion, and a query is entitled to recurse as deeply as it likes. A
-// caller that trusts its input can raise the bound through Context.MaxDepth,
+// caller that trusts its input can raise the bound through Env.MaxDepth,
 // which is what the conformance harnesses do — xslt.TransformOptions has
 // carried the same escape hatch for template recursion all along.
 const MaxDepth = 500
 
-// depthLimit is the bound in force, which is Context.MaxDepth where the caller
+// depthLimit is the bound in force, which is Env.MaxDepth where the caller
 // set one and MaxDepth otherwise.
 func (c *Context) depthLimit() int {
-	if c.MaxDepth > 0 {
-		return c.MaxDepth
+	if c.ev().MaxDepth > 0 {
+		return c.ev().MaxDepth
 	}
 	return MaxDepth
 }
@@ -524,10 +622,10 @@ type ContextDocumentResolver interface {
 // resolveDocument loads a document through the richer interface when the
 // resolver offers one, and through the plain one otherwise.
 func resolveDocument(ctx *Context, uri, base string) (*xdm.Tree, error) {
-	if cr, ok := ctx.Docs.(ContextDocumentResolver); ok {
+	if cr, ok := ctx.ev().Docs.(ContextDocumentResolver); ok {
 		return cr.ResolveDocumentIn(ctx, uri, base)
 	}
-	return ctx.Docs.ResolveDocument(uri, base)
+	return ctx.ev().Docs.ResolveDocument(uri, base)
 }
 
 // CollectionResolver loads a named set of documents for fn:collection.
@@ -566,10 +664,10 @@ type ContextCollectionResolver interface {
 // resolveCollectionIn loads a collection through ContextCollectionResolver
 // where the resolver offers it, and through the plain interface otherwise.
 func resolveCollectionIn(ctx *Context, uri, base string) (xdm.Sequence, error) {
-	if cr, ok := ctx.Collections.(ContextCollectionResolver); ok {
+	if cr, ok := ctx.ev().Collections.(ContextCollectionResolver); ok {
 		return cr.ResolveCollectionIn(ctx, uri, base)
 	}
-	return ctx.Collections.ResolveCollection(uri, base)
+	return ctx.ev().Collections.ResolveCollection(uri, base)
 }
 
 // TextResolver reads a resource as text for fn:unparsed-text.
@@ -696,29 +794,44 @@ type Function struct {
 	leaf bool
 }
 
-// NewContext returns a context with the given focus and library.
-func NewContext(item xdm.Item, funcs FunctionLibrary) *Context {
-	c := &Context{
+// NewContext returns a context with the given focus and library, in a fresh
+// environment carrying its own budgets. Each configure function, if any, is
+// applied to the environment first, which is WithEnv without the copy:
+//
+//	ctx := xpath.NewContext(doc, xpath.Builtins(), func(e *xpath.Env) {
+//		e.Docs = resolver
+//	})
+//
+// The budgets are installed after them, so configure cannot remove them.
+func NewContext(item xdm.Item, funcs FunctionLibrary, configure ...func(e *Env)) *Context {
+	// The root scope and its environment in one allocation.
+	r := &struct {
+		c Context
+		e Env
+	}{}
+	r.e.Ctx = context.Background()
+	for _, set := range configure {
+		set(&r.e)
+	}
+	r.e.items, r.e.bytes, r.e.nodes = new(int64), new(int64), new(int64)
+	// One entity-expansion allowance for the whole evaluation. Unlike items
+	// and bytes it is NOT reset per expression by Compiled.Eval: the reset is
+	// what the per-call mint already amounted to, and a budget an expression
+	// can restart by being a new expression is not a budget. See
+	// Env.entities.
+	r.e.entities = xdm.NewEntityBudget()
+	r.c = Context{
 		Item:     item,
 		Funcs:    funcs,
 		Vars:     map[string]xdm.Sequence{},
-		Ctx:      context.Background(),
 		Position: 1,
 		Size:     1,
-		items:    new(int64),
-		bytes:    new(int64),
-		// One entity-expansion allowance for the whole evaluation. Unlike
-		// items and bytes it is NOT reset per expression by Compiled.Eval:
-		// the reset is what the per-call mint already amounted to, and a
-		// budget an expression can restart by being a new expression is not
-		// a budget. See Context.entities.
-		entities: xdm.NewEntityBudget(),
-		nodes:    new(int64),
+		env:      &r.e,
 	}
 	if item == nil {
-		c.Position, c.Size = 0, 0
+		r.c.Position, r.c.Size = 0, 0
 	}
-	return c
+	return &r.c
 }
 
 // WithFocus returns a copy of ctx with a new context item, position and size,
@@ -729,7 +842,9 @@ func NewContext(item xdm.Item, funcs FunctionLibrary) *Context {
 // through the same maps without a new one being built.
 //
 // The copy itself does allocate — it is the largest single allocation site in
-// the engine, around a quarter of what a stylesheet render allocates. Reusing
+// the engine, around a quarter of what a stylesheet render allocates (counted
+// when the copy was 512 bytes; it is 160 since the environment and the static
+// part moved behind pointers). Reusing
 // one context across a step loop was measured and made no difference at all
 // (4,963,596 vs 4,964,187 bytes per render), so it was reverted: WithVar
 // builds children holding a pointer back to this context, and the aliasing
@@ -772,8 +887,8 @@ type VarQualifier func(ctx *Context, name xdm.QName) xdm.QName
 
 // LookupVar resolves a variable by expanded name, walking enclosing scopes.
 func (c *Context) LookupVar(name xdm.QName) (xdm.Sequence, bool) {
-	if c.QualifyVar != nil {
-		if q := c.QualifyVar(c, name); q != name {
+	if c.ev().QualifyVar != nil {
+		if q := c.ev().QualifyVar(c, name); q != name {
 			if v, ok := c.lookupVarPlain(q); ok {
 				return v, true
 			}
@@ -826,17 +941,19 @@ func withCollation(ctx *Context, c Collation) *Context {
 	if c == nil {
 		return ctx
 	}
+	st := *ctx.st()
+	st.collation = c
 	out := *ctx
-	out.collation = c
+	out.static = &st
 	return &out
 }
 
 // Err reports cancellation, checked at loop boundaries during evaluation.
 func (c *Context) Err() error {
-	if c.Ctx == nil {
-		return nil
+	if x := c.ev().Ctx; x != nil {
+		return x.Err()
 	}
-	return c.Ctx.Err()
+	return nil
 }
 
 // Descend returns a copy with the recursion depth incremented, erroring past
@@ -873,10 +990,10 @@ func (c *Context) checkDepth() error {
 // budget — one assembled by hand rather than through NewContext — is
 // unbounded, which keeps the type usable as a plain value.
 func (c *Context) countItems(n int) error {
-	if c == nil || c.items == nil || n <= 0 {
+	if c == nil || c.ev().items == nil || n <= 0 {
 		return nil
 	}
-	if lim := c.itemLimit(); atomic.AddInt64(c.items, int64(n)) > lim {
+	if lim := c.itemLimit(); atomic.AddInt64(c.ev().items, int64(n)) > lim {
 		// The code is kept -- the suites and callers read it -- and the
 		// sentinel added, because this is the processor declining to
 		// allocate rather than anything wrong with the expression.
@@ -888,16 +1005,16 @@ func (c *Context) countItems(n int) error {
 	return nil
 }
 
-// itemLimit is the item bound in force: Context.MaxItems where the caller set
+// itemLimit is the item bound in force: Env.MaxItems where the caller set
 // a positive one, none where it set a negative one, MaxItems otherwise.
 func (c *Context) itemLimit() int64 {
 	switch {
-	case c == nil || c.MaxItems == 0:
+	case c == nil || c.ev().MaxItems == 0:
 		return MaxItems
-	case c.MaxItems < 0:
+	case c.ev().MaxItems < 0:
 		return math.MaxInt64
 	}
-	return int64(c.MaxItems)
+	return int64(c.ev().MaxItems)
 }
 
 // ChargeItems charges n items against the evaluation budget, reporting
@@ -970,8 +1087,8 @@ func (c *Context) HoldItemBudget() *Context {
 
 // resetItems starts a fresh item budget for one expression evaluation.
 func (c *Context) resetItems() {
-	if c != nil && c.items != nil {
-		atomic.StoreInt64(c.items, 0)
+	if c != nil && c.ev().items != nil {
+		atomic.StoreInt64(c.ev().items, 0)
 	}
 }
 
@@ -983,10 +1100,10 @@ func (c *Context) resetItems() {
 // Context with no budget -- one assembled by hand rather than through
 // NewContext -- is unbounded, which keeps the type usable as a plain value.
 func (c *Context) countBytes(n int) error {
-	if c == nil || c.bytes == nil || n <= 0 {
+	if c == nil || c.ev().bytes == nil || n <= 0 {
 		return nil
 	}
-	if atomic.AddInt64(c.bytes, int64(n)) > MaxBytes {
+	if atomic.AddInt64(c.ev().bytes, int64(n)) > MaxBytes {
 		// XPDY0130 is this engine's own code for "the evaluation asked for
 		// more than I will allocate", and the wording says bytes rather than
 		// items so the two refusals are not confused. The suite sanctions it
@@ -1015,10 +1132,10 @@ func (c *Context) countBytes(n int) error {
 // caller passes a reserve it drew itself and has not spent, which is why this
 // is unexported and takes no decision about what a refund means.
 func (c *Context) refundBytes(n int) {
-	if c == nil || c.bytes == nil || n <= 0 {
+	if c == nil || c.ev().bytes == nil || n <= 0 {
 		return
 	}
-	atomic.AddInt64(c.bytes, -int64(n))
+	atomic.AddInt64(c.ev().bytes, -int64(n))
 }
 
 // ChargeBytes charges n bytes of built string content against the evaluation
@@ -1039,10 +1156,10 @@ func (c *Context) ChargeBytes(n int) error { return c.countBytes(n) }
 // Context with no budget -- one assembled by hand rather than through
 // NewContext -- is unbounded, which keeps the type usable as a plain value.
 func (c *Context) countNodes(n int) error {
-	if c == nil || c.nodes == nil || n <= 0 {
+	if c == nil || c.ev().nodes == nil || n <= 0 {
 		return nil
 	}
-	if atomic.AddInt64(c.nodes, int64(n)) > MaxNodes {
+	if atomic.AddInt64(c.ev().nodes, int64(n)) > MaxNodes {
 		// XPDY0130 again, and the wording says nodes so that the three
 		// refusals are not confused with one another. XPath 3.1 §2.3.1
 		// sanctions exactly this: "limitations may exist on the maximum
@@ -1151,29 +1268,36 @@ func (c *Context) AdoptBudget(src *Context) *Context {
 	if c == nil || src == nil {
 		return c
 	}
-	n := *c
-	if src.items != nil {
-		// The bound travels with the counter it is checked against.
-		n.items, n.heldItems, n.MaxItems = src.items, src.heldItems, src.MaxItems
+	from := src.ev()
+	if from.items == nil && from.bytes == nil && from.entities == nil &&
+		from.nodes == nil {
+		return c
 	}
-	if src.bytes != nil {
-		n.bytes, n.heldBytes = src.bytes, src.heldBytes
+	n := *c
+	env := *c.ev()
+	if from.items != nil {
+		// The bound travels with the counter it is checked against.
+		env.items, n.heldItems, env.MaxItems = from.items, src.heldItems, from.MaxItems
+	}
+	if from.bytes != nil {
+		env.bytes, n.heldBytes = from.bytes, src.heldBytes
 	}
 	// The entity allowance is inherited on the same house rule as the other
 	// two: a nested evaluation may spend the parent's remainder, never reset
 	// it. Without this a nested transform would hand fn:parse-xml the full
 	// ceiling over again, which is the per-call mint this change removes
 	// arriving one level up.
-	if src.entities != nil {
-		n.entities = src.entities
+	if from.entities != nil {
+		env.entities = from.entities
 	}
 	// The result-tree allowance inherits on the same house rule, and for the
 	// sharper reason: fn:transform's nested transformation builds a whole
 	// result tree of its own, so a nested transform granted a fresh ceiling
 	// could build MaxNodes again at every level of the nest.
-	if src.nodes != nil {
-		n.nodes = src.nodes
+	if from.nodes != nil {
+		env.nodes = from.nodes
 	}
+	n.env = &env
 	return &n
 }
 
@@ -1184,16 +1308,13 @@ func (c *Context) AdoptBudget(src *Context) *Context {
 // A nil result means this Context carries no allowance -- a hand-built one --
 // and the parse gets the ordinary per-document ceiling.
 func (c *Context) EntityBudget() *xdm.EntityBudget {
-	if c == nil {
-		return nil
-	}
-	return c.entities
+	return c.ev().entities
 }
 
 // resetBytes starts a fresh byte budget for one expression evaluation.
 func (c *Context) resetBytes() {
-	if c != nil && c.bytes != nil {
-		atomic.StoreInt64(c.bytes, 0)
+	if b := c.ev().bytes; b != nil {
+		atomic.StoreInt64(b, 0)
 	}
 }
 
@@ -1205,10 +1326,11 @@ func (c *Context) regexVersion() Version {
 	if c == nil {
 		return XPath20
 	}
-	if c.RegexVersion > c.Version {
-		return c.RegexVersion
+	r, v := c.ev().RegexVersion, c.Version()
+	if r > v {
+		return r
 	}
-	return c.Version
+	return v
 }
 
 // libraryVersion is the version the function library is visible at.
@@ -1219,10 +1341,11 @@ func (c *Context) libraryVersion() Version {
 	if c == nil {
 		return XPath20
 	}
-	if c.LibraryVersion > c.Version {
-		return c.LibraryVersion
+	l, v := c.ev().LibraryVersion, c.Version()
+	if l > v {
+		return l
 	}
-	return c.Version
+	return v
 }
 
 // EnvironmentResolver answers fn:environment-variable and

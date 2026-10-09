@@ -773,15 +773,15 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// The case is evaluated as the version the run is scoped to, so that a
 	// construct 3.0 adds is accepted in the 3.0 run and refused in the 2.0
 	// one. Both are conformance: the 2.0 run asserts the refusals.
-	ctx.Version = xpathVersion(r.Target)
+	ctx = ctx.WithVersion(xpathVersion(r.Target))
 	// fn:unparsed-text reads the suite's own fixtures; see suiteTextResolver
 	// for why this is scoped to the checkout.
-	ctx.Texts = newSuiteTextResolver(r.Root, ts.Dir, env)
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.Texts = newSuiteTextResolver(r.Root, ts.Dir, env) })
 	// A document handed to fn:parse-xml may declare an external entity, and a
 	// few cases assert that its content appears in the result. The engine
 	// refuses every external entity unless a resolver says otherwise; here the
 	// suite is the one input where reading its own fixtures is the point.
-	ctx.Entities = suiteEntityResolver{text: ctx.Texts.(suiteTextResolver)}
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.Entities = suiteEntityResolver{text: ctx.Env().Texts.(suiteTextResolver)} })
 	// A case may declare its own decimal format for fn:format-number. The
 	// builtin library's two-argument form uses the standard symbols, so a
 	// declared format is installed by overriding that entry in a library
@@ -800,7 +800,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		// path has no leading slash, so two slashes made the drive the URI
 		// AUTHORITY and every relative reference in the test set resolved
 		// against a base with the drive letter missing.
-		ctx.StaticBaseURI = fileuri.Dir(abs)
+		ctx = ctx.WithStaticBaseURI(fileuri.Dir(abs))
 	}
 	// The environment may declare the base URI of the expression itself,
 	// which is distinct from the base URI of any document it is applied to.
@@ -809,17 +809,17 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		// absent, not a URI of that spelling. Cases use it to assert what
 		// happens when a relative reference has nothing to resolve against.
 		if b.URI == "#UNDEFINED" {
-			ctx.StaticBaseURI = ""
+			ctx = ctx.WithStaticBaseURI("")
 			continue
 		}
 		if b.URI != "" {
-			ctx.StaticBaseURI = b.URI
+			ctx = ctx.WithStaticBaseURI(b.URI)
 		}
 	}
 	// The suite expects fn:current-dateTime and its siblings to work. A fixed
 	// clock is used rather than the wall clock so that a rerun of the suite
 	// gives the same answers.
-	ctx = ctx.WithNow(SuiteClock)
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.Now, e.HasNow = SuiteClock, true })
 	// A <collection> environment supplies the documents fn:collection
 	// returns. Without this the function has no resolver and refuses, which
 	// is the correct default but not what these cases are testing.
@@ -827,7 +827,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// URI. Without a resolver the function refuses — correct by default, but
 	// not what these cases are testing.
 	if docs := envDocs(r, ts.Dir, env); docs != nil {
-		ctx.Docs = docs
+		ctx = ctx.WithEnv(func(e *xpath.Env) { e.Docs = docs })
 	}
 	if len(env.Collections) > 0 {
 		cr := &envCollections{
@@ -850,7 +850,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 			}
 			cr.queryURI[c.URI] = append(cr.queryURI[c.URI], c.Queries...)
 		}
-		ctx.Collections = cr
+		ctx = ctx.WithEnv(func(e *xpath.Env) { e.Collections = cr })
 	}
 	for name, seq := range vars {
 		ctx = ctx.WithVar(xdm.QName{Local: name}, seq)
@@ -885,7 +885,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// terminate would otherwise take the whole run with it — which is how the
 	// unbounded round() precision was found, after it consumed twenty minutes
 	// and all available memory before the harness could report anything.
-	ctx.Ctx = runCtx
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.Ctx = runCtx })
 	// numberformat121 and 122 recurse five thousand deep on purpose, to build
 	// a decimal of 10^5000 and 10^-5000 and check that format-number prints
 	// each exactly. xpath.MaxDepth is 500 and is a DoS guard for a caller
@@ -898,7 +898,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// its recursion is not a level of Descend: the body is an arrow chain
 	// whose call spends several frames per turn. It is still low enough that
 	// a genuine runaway terminates rather than exhausting the stack.
-	ctx.MaxDepth = 20000
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.MaxDepth = 20000 })
 	res := outcome{}
 	if r.Target == XQuery31 {
 		// An XQuery case holds a whole query, not an expression, and the
@@ -960,7 +960,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 			for _, m := range mods {
 				table[m.Namespace] = m.Source
 			}
-			ctx.Modules = xquery.MapModuleResolver{Modules: table}
+			ctx = ctx.WithEnv(func(e *xpath.Env) { e.Modules = xquery.MapModuleResolver{Modules: table} })
 		}
 		if res.err == nil {
 			res.seq, res.err = xpath.Eval(tc.Test.Query, ctx, ns)
@@ -1273,7 +1273,7 @@ var assertVersion = xpath.XPath30
 // in.
 func assertContext() *xpath.Context {
 	ctx := xpath.NewContext(nil, xpath.Builtins())
-	ctx.Version = assertVersion
+	ctx = ctx.WithVersion(assertVersion)
 	return ctx
 }
 
@@ -1673,9 +1673,8 @@ func (c *envCollections) resolve(ctx *xpath.Context, uri string) (xdm.Sequence, 
 		if err != nil {
 			return nil, fmt.Errorf("collection %q: %w", uri, err)
 		}
-		sub := *ctx
-		sub.Collections = nil // a collection query does not nest
-		seq, err := compiled.Eval(&sub)
+		sub := ctx.WithEnv(func(e *xpath.Env) { e.Collections = nil }) // a collection query does not nest
+		seq, err := compiled.Eval(sub)
 		if err != nil {
 			return nil, fmt.Errorf("collection %q: %w", uri, err)
 		}
@@ -1831,7 +1830,7 @@ func decimalFormatLibrary(env Environment, ns resolver) xpath.FunctionLibrary {
 		}
 		// The running version, not a fixed 3.0: a picture using scientific
 		// notation is well-formed only from 3.1 on.
-		out, err := xpath.FormatNumberVersion(num, pic, df, ctx.Version)
+		out, err := xpath.FormatNumberVersion(num, pic, df, ctx.Version())
 		if err != nil {
 			return nil, err
 		}

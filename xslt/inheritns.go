@@ -110,10 +110,10 @@ func regexDialect(ctx *xpath.Context) xpath.Version {
 	if ctx == nil {
 		return xpath.XPath20
 	}
-	if ctx.RegexVersion > ctx.Version {
-		return ctx.RegexVersion
+	if ctx.Env().RegexVersion > ctx.Version() {
+		return ctx.Env().RegexVersion
 	}
-	return ctx.Version
+	return ctx.Version()
 }
 
 // noXSLAttr is noAttr for an attribute written in the XSLT namespace, which

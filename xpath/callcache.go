@@ -52,7 +52,7 @@ func (e *FuncCall) resolve(ctx *Context) (Function, []SequenceType, bool, bool) 
 	libv := ctx.libraryVersion()
 	c := e.resolved.Load()
 	if c != nil && c.libv == libv &&
-		c.funcs == ctx.Funcs && c.host == ctx.StaticHost && c.current() {
+		c.funcs == ctx.Funcs && c.host == ctx.StaticHost() && c.current() {
 		return c.fn, c.params, c.hasParams, true
 	}
 	fn, ok := lookupFor(ctx, e.Name, len(e.Args))
@@ -67,8 +67,8 @@ func (e *FuncCall) resolve(ctx *Context) (Function, []SequenceType, bool, bool) 
 	if c != nil && c.funcs != ctx.Funcs {
 		return fn, params, hasParams, true
 	}
-	if links, stable := stableChain(ctx.Funcs); stable && comparableValue(ctx.StaticHost) {
-		e.resolved.Store(&callResolution{funcs: ctx.Funcs, host: ctx.StaticHost,
+	if links, stable := stableChain(ctx.Funcs); stable && comparableValue(ctx.StaticHost()) {
+		e.resolved.Store(&callResolution{funcs: ctx.Funcs, host: ctx.StaticHost(),
 			libv: libv, links: links, fn: fn, params: params, hasParams: hasParams})
 	}
 	return fn, params, hasParams, true

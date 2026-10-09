@@ -42,7 +42,7 @@ func availableName(
 	ctx *xpath.Context, code, fn, name string,
 	resolve func(string) (string, string, bool),
 ) (uri, local string, ok bool, err error) {
-	if ctx != nil && ctx.Version.AtLeast30() {
+	if ctx != nil && ctx.Version().AtLeast30() {
 		if u, l, isEQ := splitEQName(name); isEQ {
 			return u, l, true, nil
 		}

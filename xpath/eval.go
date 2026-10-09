@@ -15,8 +15,8 @@ func (e *Literal) Eval(*Context) (xdm.Sequence, error) {
 func (e *VarRef) Eval(ctx *Context) (xdm.Sequence, error) {
 	v, ok := ctx.LookupVar(e.Name)
 	if !ok {
-		if ctx.MissingVar != nil {
-			if err := ctx.MissingVar(ctx, e.Name); err != nil {
+		if ctx.ev().MissingVar != nil {
+			if err := ctx.ev().MissingVar(ctx, e.Name); err != nil {
 				return nil, err
 			}
 		}
@@ -385,7 +385,7 @@ func newComparisonHoist(ctx *Context, pred Expr) *comparisonHoist {
 	switch b.Op {
 	case "eq", "ne", "lt", "le", "gt", "ge":
 	case "=", "!=", "<", "<=", ">", ">=":
-		if r, isRange := b.Right.(*BinaryOp); ctx.Compat || (isRange && r.Op == "to") {
+		if r, isRange := b.Right.(*BinaryOp); ctx.Compat() || (isRange && r.Op == "to") {
 			return nil
 		}
 	default:
@@ -666,7 +666,7 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 		// A function in no namespace is excluded: that is a call to a builtin
 		// this processor does not have, which is a genuine XPST0017 whatever
 		// mode it is written in.
-		if ctx.Compat && e.Name.URI != "" && e.Name.URI != xdm.NSFN {
+		if ctx.Compat() && e.Name.URI != "" && e.Name.URI != xdm.NSFN {
 			return nil, xdm.Errorf("XTDE1425",
 				"no implementation is available for the extension function "+
 					"%s with %d argument(s)", e.Name.Clark(), len(e.Args))
@@ -699,7 +699,7 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	// B.1 rule 1: under XPath 1.0 compatibility an argument supplied where a
 	// string, a number or a single node is expected is reduced to its first
 	// item instead of raising XPTY0004. See compatCoerceArgs.
-	if ctx.Compat {
+	if ctx.Compat() {
 		args = compatCoerceArgs(e.Name, args)
 	}
 
@@ -770,7 +770,7 @@ func (e *UnaryOp) Eval(ctx *Context) (xdm.Sequence, error) {
 	// "-0". Only the unary form is rewritten here; the binary operators reach
 	// the same rule through compatNumber in operators.go.
 	var n *xdm.Atomic
-	if ctx.Compat {
+	if ctx.Compat() {
 		n = compatNumber(a)
 	} else {
 		n, err = toNumeric(a)

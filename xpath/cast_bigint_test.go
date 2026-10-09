@@ -20,7 +20,7 @@ func shorten(s string) string {
 func evalBig30(t *testing.T, expr string) (string, error) {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath30
+	ctx = ctx.WithVersion(XPath30)
 	seq, err := Eval(expr, ctx, nil)
 	if err != nil {
 		return "", err

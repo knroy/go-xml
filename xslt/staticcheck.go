@@ -1098,7 +1098,7 @@ func xpathVersionAt(el *xdm.Node) xpath.Version {
 // arrays and inline functions.
 //
 // This is the same principle already applied to the regex dialect
-// (Context.RegexVersion), the function library (Context.LibraryVersion) and
+// (xpath.Env.RegexVersion), the function library (xpath.Env.LibraryVersion) and
 // named function references. It is stated once here so the four cannot drift.
 //
 // The 1.0 compatibility rules are untouched: they are a separate setting,

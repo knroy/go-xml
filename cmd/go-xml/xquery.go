@@ -141,13 +141,15 @@ Exit status: 0 if the query ran, 1 otherwise.
 
 	cctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	ctx := xpath.NewContext(item, xpath.Builtins()).WithNow(now)
-	ctx.Ctx = cctx
-	ctx.MaxItems = *maxItems
-	ctx.Docs = resolver
-	// The resolver refuses every text read unless -allow-unparsed-text turned
-	// it on, as in the transform.
-	ctx.Texts = resolver
+	ctx := xpath.NewContext(item, xpath.Builtins(), func(e *xpath.Env) {
+		e.Now, e.HasNow = now, true
+		e.Ctx = cctx
+		e.MaxItems = *maxItems
+		e.Docs = resolver
+		// The resolver refuses every text read unless -allow-unparsed-text
+		// turned it on, as in the transform.
+		e.Texts = resolver
+	})
 	// As with -p on the transform, values arrive as xs:string.
 	for k, v := range params {
 		ctx.Vars[k] = xdm.One(xdm.NewString(v))

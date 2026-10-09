@@ -30,7 +30,7 @@ func TestJSONFallbackResultIsChecked(t *testing.T) {
 		`parse-json('"\uFFFF"', map{'fallback':function($s){'ok' || codepoints-to-string(8)}})`,
 	} {
 		ctx := NewContext(nil, Builtins())
-		ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+		ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		_, err := Eval(q, ctx, nil)
 		if err == nil || !strings.Contains(err.Error(), "FOJS0007") {
 			t.Errorf("a fallback returning an invalid XML character should be FOJS0007\n  %s\n  got %v", q, err)
@@ -48,7 +48,7 @@ func TestJSONFallbackResultIsChecked(t *testing.T) {
 		{`parse-json('"\uFFFF"', map{'fallback':function($s){codepoints-to-string(9)}})`, "\t"},
 	} {
 		ctx := NewContext(nil, Builtins())
-		ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+		ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		seq, err := Eval(tc.query, ctx, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.query, err)

@@ -16,7 +16,7 @@ import (
 func evalInstanceOf(t *testing.T, expr string) bool {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	seq, err := Eval(expr, ctx, cardinalityNS{})
 	if err != nil {
 		t.Fatalf("%s: %v", expr, err)
@@ -257,8 +257,8 @@ func TestFunctionLookupCarriesTheSameSignatureAsANamedReference(t *testing.T) {
 	eval := func(expr string) bool {
 		t.Helper()
 		ctx := NewContext(doc.Root, Builtins())
-		ctx.Version = XPath31
-		ctx.LibraryVersion = XPath31
+		ctx = ctx.WithVersion(XPath31)
+		ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		seq, err := Eval(expr, ctx, cardinalityNS{})
 		if err != nil {
 			t.Fatalf("%s: %v", expr, err)
@@ -311,8 +311,8 @@ func TestFunctionLookupItemCarriesTheManifestSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := NewContext(doc.Root, Builtins())
-	ctx.Version = XPath31
-	ctx.LibraryVersion = XPath31
+	ctx = ctx.WithVersion(XPath31)
+	ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	seq, err := Eval(`function-lookup(xs:QName("fn:abs"),1)`, ctx, cardinalityNS{})
 	if err != nil {
 		t.Fatal(err)
@@ -369,8 +369,8 @@ func TestVariadicArityBoundIsTheSameByEveryRoute(t *testing.T) {
 	answers := func(expr string) bool {
 		t.Helper()
 		ctx := NewContext(doc.Root, Builtins())
-		ctx.Version = XPath31
-		ctx.LibraryVersion = XPath31
+		ctx = ctx.WithVersion(XPath31)
+		ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		// The expression is an exists(...), so the answer is the boolean it
 		// yields -- NOT whether one item came back. exists() returns false as
 		// a perfectly good single item, which read as "answered" and made this
@@ -437,8 +437,8 @@ func TestVariadicArityBoundIsTheSameByEveryRoute(t *testing.T) {
 func TestSynthesizedConcatArityCarriesItsSignature(t *testing.T) {
 	ctx := func() *Context {
 		c := NewContext(nil, Builtins())
-		c.Version = XPath31
-		c.LibraryVersion = XPath31
+		c = c.WithVersion(XPath31)
+		c = c.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		return c
 	}
 
@@ -545,8 +545,8 @@ func TestConstructorFunctionItemsCarryTheirDeclaredType(t *testing.T) {
 	eval := func(expr string) bool {
 		t.Helper()
 		ctx := NewContext(doc.Root, Builtins())
-		ctx.Version = XPath31
-		ctx.LibraryVersion = XPath31
+		ctx = ctx.WithVersion(XPath31)
+		ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		seq, err := Eval(expr, ctx, cardinalityNS{})
 		if err != nil {
 			t.Fatalf("%s: %v", expr, err)
@@ -683,8 +683,8 @@ func TestEveryConstructorIsAnnotated(t *testing.T) {
 func TestVariadicSignatureDoesNotGrowWithArity(t *testing.T) {
 	ctx := func() *Context {
 		c := NewContext(nil, Builtins())
-		c.Version = XPath31
-		c.LibraryVersion = XPath31
+		c = c.WithVersion(XPath31)
+		c = c.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		return c
 	}
 	name := xdm.QName{URI: xdm.NSFN, Local: "concat"}
@@ -727,8 +727,8 @@ func TestVariadicSignatureDoesNotGrowWithArity(t *testing.T) {
 func TestVariadicDescriptorAgreesOnBothAcquisitionRoutes(t *testing.T) {
 	ctx := func() *Context {
 		c := NewContext(nil, Builtins())
-		c.Version = XPath31
-		c.LibraryVersion = XPath31
+		c = c.WithVersion(XPath31)
+		c = c.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		return c
 	}
 	const lookup = `function-lookup(QName(` +
@@ -797,8 +797,8 @@ func TestVariadicDescriptorAgreesOnBothAcquisitionRoutes(t *testing.T) {
 // not match fn:concat however such an item was obtained.
 func TestVariadicMinArityIsCarriedOnTheDescriptor(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
-	ctx.LibraryVersion = XPath31
+	ctx = ctx.WithVersion(XPath31)
+	ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 
 	item := &xdm.FunctionItem{
 		Name:  xdm.QName{URI: xdm.NSFN, Local: "concat"},
@@ -856,8 +856,8 @@ func TestVariadicMinArityIsCarriedOnTheDescriptor(t *testing.T) {
 func TestConcatTypeIsTheSameEitherSideOfTheRegistrationBoundary(t *testing.T) {
 	ctx := func() *Context {
 		c := NewContext(nil, Builtins())
-		c.Version = XPath31
-		c.LibraryVersion = XPath31
+		c = c.WithVersion(XPath31)
+		c = c.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		return c
 	}
 	params := func(typ string, n int) string {

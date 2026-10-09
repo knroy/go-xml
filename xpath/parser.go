@@ -161,7 +161,7 @@ func ParseExtended(src string, ns NamespaceResolver) (Expr, error) {
 //
 // The floor exists because which functions exist -- and so whether a name can
 // be referenced at all -- follows the processor rather than the module, in the
-// same way Context.LibraryVersion and Context.RegexVersion already do. See
+// same way Env.LibraryVersion and Env.RegexVersion already do. See
 // refversion.go.
 func ParseVersionRefFloor(src string, ns NamespaceResolver, v, refFloor Version) (Expr, error) {
 	return parseWith(src, ns, false, v, refFloor)

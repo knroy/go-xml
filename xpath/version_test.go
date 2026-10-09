@@ -89,7 +89,7 @@ func TestMatchesHonoursContextVersion(t *testing.T) {
 	const expr = `matches("abab", "(?:ab)+")`
 
 	ctx30 := NewContext(nil, Builtins())
-	ctx30.Version = XPath30
+	ctx30 = ctx30.WithVersion(XPath30)
 	got, err := Eval(expr, ctx30, nil)
 	if err != nil {
 		t.Fatalf("XPath30 %s: %v", expr, err)
@@ -133,7 +133,7 @@ func TestRegexCacheKeyedByVersion(t *testing.T) {
 // be counted". fn:replace's $N is the observable consequence.
 func TestNonCapturingGroupNotNumbered(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath30
+	ctx = ctx.WithVersion(XPath30)
 
 	got, err := Eval(`replace("abcd", "(?:ab)(cd)", "[$1]")`, ctx, nil)
 	if err != nil {

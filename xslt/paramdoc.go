@@ -47,7 +47,7 @@ func applyParameterDocument(rt *runtime, o *OutputSettings, baseURI string) erro
 	if href == "" {
 		return nil
 	}
-	docs := rt.ctx.Docs
+	docs := rt.ctx.Env().Docs
 	if docs == nil {
 		return nil
 	}

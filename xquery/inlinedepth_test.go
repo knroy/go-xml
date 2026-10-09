@@ -17,7 +17,7 @@ func evalDepth(t *testing.T, q string, max int) error {
 		t.Fatalf("compile: %v", err)
 	}
 	ctx := xpath.NewContext(nil, nil)
-	ctx.MaxDepth = max
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.MaxDepth = max })
 	_, ee := c.Eval(ctx)
 	return ee
 }

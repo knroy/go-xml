@@ -718,9 +718,80 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	if g := s.globalContextItem; g != nil && g.decl.use == "absent" {
 		item = nil
 	}
-	xctx := xpath.NewContext(item, s.funcs)
-	// Set before AdoptBudget, which replaces it with the caller's bound.
-	xctx.MaxItems = opts.MaxItems
+	// One clock reading per transform, so fn:current-dateTime is stable
+	// across every call the stylesheet makes.
+	now := opts.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	xctx := xpath.NewContext(item, s.funcs, func(e *xpath.Env) {
+		// Set before AdoptBudget, which replaces it with the caller's bound.
+		e.MaxItems = opts.MaxItems
+		// A duplicate key in an XPath map constructor is XTDE3365 under XSLT,
+		// not XQuery's XQDY0137: section 17.4 gives the MapExpr its own code,
+		// the same one xsl:map raises for a duplicate among the maps it
+		// merges. The two spellings of a map thus fail alike, which is what
+		// si-fork-814 and sx-MapExpr-007 check.
+		e.MapDuplicateCode = "XTDE3365"
+		// The regular-expression dialect follows the processor, not the
+		// module. A pattern is a string read by fn:matches at the point of
+		// call rather than by the parser, so a version="2.0" stylesheet run
+		// by a 3.0 processor may legitimately write "(?:...)" -- the
+		// regex-syntax set is exactly that, 2.0 stylesheets scoped XSLT30+.
+		// Raising RegexVersion rather than the version keeps every other 3.0
+		// construct gated on the module's own declaration, which is what the
+		// syntax rules require.
+		if s.maxVersion == 0 || s.maxVersion >= 3.0 {
+			e.RegexVersion = xpath.XPath31
+			// Which functions exist follows the processor for the same
+			// reason: calling one is ordinary syntax at every version, and
+			// only the name has to resolve. A 3.0 processor running a
+			// version="2.0" stylesheet must find fn:path for it, which
+			// accessor-050 and its siblings require. The module's own version
+			// still governs the grammar.
+			e.LibraryVersion = xpath.XPath31
+		}
+		e.Ctx = ctx
+		// TransformOptions.MaxDepth bounds recursion in the transform, and an
+		// expression recurses as surely as a template does: a
+		// continuation-passing function like higher-order-functions-068's
+		// fibonacci nests one dynamic call per unit of the result, 707 levels
+		// for fib(11). Left unset, the XPath side kept its own package
+		// default of 500 whatever the caller asked for, so a caller that
+		// raised the bound was refused at 500 and the message named a limit
+		// it had not chosen. Passing it through is what makes the documented
+		// option govern this path.
+		e.MaxDepth = rt.maxDepth
+		e.Docs = opts.Documents
+		e.Collections = opts.Collections
+		e.Texts = opts.Texts
+		e.Environment = opts.Environment
+		e.Modules = opts.Modules
+		// fn:json-to-xml with validate=true needs the schema layer to type
+		// the tree it builds, and reaches it through this hook rather than by
+		// importing xsd from xpath, which the dependency direction forbids.
+		// It is installed unconditionally: whether the processor *can*
+		// validate is a property of the processor, and this one always can —
+		// F&O 3.1 §17.5.3 reserves FOJS0004 for a processor that cannot.
+		// Whether the stylesheet may then write "instance of
+		// element(j:map, j:mapType)" is the separate question
+		// xsl:import-schema answers.
+		e.Validator = jsonTreeValidator{}
+		e.ImplicitTimezone = opts.ImplicitTimezone
+		e.Now, e.HasNow = now, true
+		// A variable reference resolves against the package the expression
+		// was written in, so that two packages' globals of one name stay
+		// distinct. See globalBindingName.
+		e.QualifyVar = func(c *xpath.Context, name xdm.QName) xdm.QName {
+			return rt.qualifyGlobal(c, name)
+		}
+		// A reference to a global whose evaluation was deferred and failed
+		// raises that failure, rather than the XPST0008 an unbound name would
+		// otherwise report. See runtime.deferredErr.
+		e.MissingVar = func(c *xpath.Context, name xdm.QName) error {
+			return rt.deferredError(c, name)
+		}
+	})
 	// A transform started by fn:transform continues its caller's item and byte
 	// allowances rather than restarting on fresh ones, the same policy the
 	// recursion depth above follows. The counters travel with their held flags;
@@ -732,65 +803,11 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// fn:transform again -- since the query sees only its Context, and a
 	// Context starting at zero here restarted the count at every hop.
 	xctx.Depth = opts.nestedDepth
-	// A duplicate key in an XPath map constructor is XTDE3365 under XSLT, not
-	// XQuery's XQDY0137: section 17.4 gives the MapExpr its own code, the same
-	// one xsl:map raises for a duplicate among the maps it merges. The two
-	// spellings of a map thus fail alike, which is what si-fork-814 and
-	// sx-MapExpr-007 check.
-	xctx.MapDuplicateCode = "XTDE3365"
-	// The regular-expression dialect follows the processor, not the module.
-	// A pattern is a string read by fn:matches at the point of call rather
-	// than by the parser, so a version="2.0" stylesheet run by a 3.0
-	// processor may legitimately write "(?:...)" -- the regex-syntax set is
-	// exactly that, 2.0 stylesheets scoped XSLT30+. Raising RegexVersion
-	// rather than Version keeps every other 3.0 construct gated on the
-	// module's own declaration, which is what the syntax rules require.
-	if s.maxVersion == 0 || s.maxVersion >= 3.0 {
-		xctx.RegexVersion = xpath.XPath31
-		// Which functions exist follows the processor for the same reason:
-		// calling one is ordinary syntax at every version, and only the name
-		// has to resolve. A 3.0 processor running a version="2.0" stylesheet
-		// must find fn:path for it, which accessor-050 and its siblings
-		// require. The module's own version still governs the grammar.
-		xctx.LibraryVersion = xpath.XPath31
-	}
-	xctx.Ctx = ctx
-	// TransformOptions.MaxDepth bounds recursion in the transform, and an
-	// expression recurses as surely as a template does: a continuation-passing
-	// function like higher-order-functions-068's fibonacci nests one dynamic
-	// call per unit of the result, 707 levels for fib(11). Left unset, the
-	// XPath side kept its own package default of 500 whatever the caller
-	// asked for, so a caller that raised the bound was refused at 500 and the
-	// message named a limit it had not chosen. Passing it through is what
-	// makes the documented option govern this path.
-	xctx.MaxDepth = rt.maxDepth
-	xctx.Docs = opts.Documents
-	xctx.Collections = opts.Collections
-	xctx.Texts = opts.Texts
-	xctx.Environment = opts.Environment
-	xctx.Modules = opts.Modules
-	// fn:json-to-xml with validate=true needs the schema layer to type the
-	// tree it builds, and reaches it through this hook rather than by
-	// importing xsd from xpath, which the dependency direction forbids. It is
-	// installed unconditionally: whether the processor *can* validate is a
-	// property of the processor, and this one always can — F&O 3.1 §17.5.3
-	// reserves FOJS0004 for a processor that cannot. Whether the stylesheet
-	// may then write "instance of element(j:map, j:mapType)" is the separate
-	// question xsl:import-schema answers.
-	xctx.Validator = jsonTreeValidator{}
-	xctx.ImplicitTimezone = opts.ImplicitTimezone
 	// The static base URI of every expression in the stylesheet. Without it
 	// a relative reference in fn:doc or fn:resolve-uri has nothing to
 	// resolve against when there is no context node — which is the case for
 	// a transform started from a named template.
-	xctx.StaticBaseURI = s.baseURI
-	// One clock reading per transform, so fn:current-dateTime is stable
-	// across every call the stylesheet makes.
-	now := opts.Now
-	if now.IsZero() {
-		now = time.Now()
-	}
-	xctx = xctx.WithNow(now)
+	xctx = xctx.WithStaticBaseURI(s.baseURI)
 	// One transform is the unit the byte budget is measured over. The chain
 	// that defeats a narrower boundary is a run of SIBLING xsl:variable
 	// declarations, each holding two xsl:value-of of the one before it: no
@@ -803,18 +820,6 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// and XSpec corpora was 1,031,269 bytes, and the largest in the XSLT 3.0
 	// suite 14,516,346. See xpath.MaxBytes.
 	rt.ctx = xctx.HoldByteBudget()
-	// A variable reference resolves against the package the expression was
-	// written in, so that two packages' globals of one name stay distinct.
-	// See globalBindingName.
-	rt.ctx.QualifyVar = func(c *xpath.Context, name xdm.QName) xdm.QName {
-		return rt.qualifyGlobal(c, name)
-	}
-	// A reference to a global whose evaluation was deferred and failed
-	// raises that failure, rather than the XPST0008 an unbound name would
-	// otherwise report. See runtime.deferredErr.
-	rt.ctx.MissingVar = func(c *xpath.Context, name xdm.QName) error {
-		return rt.deferredError(c, name)
-	}
 
 	// The key() and current() functions need the runtime, so they live in a
 	// library of their own rather than the shared builtin one. It is built

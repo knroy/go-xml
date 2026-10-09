@@ -74,7 +74,7 @@ func TestFormatDateCalendarResolution(t *testing.T) {
 			t.Run(fn+"/"+c.name, func(t *testing.T) {
 				expr := fn + "(" + value + ", " + picture + ", 'en', " + c.calendar + ", ())"
 				ctx := NewContext(nil, Builtins())
-				ctx.Version = XPath31
+				ctx = ctx.WithVersion(XPath31)
 				_, err := Eval(expr, ctx, ns)
 				switch {
 				case c.wantErr == "" && err != nil:
@@ -99,14 +99,14 @@ func TestFormatDateCalendarPrefixNeedsStaticNamespaces(t *testing.T) {
 
 	bound := calendarNS{"xs": xs, "cal": "http://calendar.example.com/none"}
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	if _, err := Eval(expr, ctx, bound); err != nil {
 		t.Fatalf("with cal: bound, expected success, got %v", err)
 	}
 
 	unbound := calendarNS{"xs": xs}
 	ctx = NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	_, err := Eval(expr, ctx, unbound)
 	if err == nil {
 		t.Fatal("with cal: unbound, expected FOFD1340, got success")

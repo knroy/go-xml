@@ -88,7 +88,7 @@ func TestSerializeUndeclarePrefixes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := NewContext(nil, Builtins())
-			ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+			ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 			c := ctx.WithVar(xdm.QName{Local: "n"}, xdm.One(undeclaringTree()))
 			c = c.WithVar(xdm.QName{Local: "yes"}, xdm.One(paramsElement(
 				map[string]string{"version": "1.1", "undeclare-prefixes": "yes"})))
@@ -119,7 +119,7 @@ func TestSerializeUndeclarePrefixesNeedsXML11(t *testing.T) {
 		`serialize($n, $p)`,
 	} {
 		ctx := NewContext(nil, Builtins())
-		ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+		ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		c := ctx.WithVar(xdm.QName{Local: "n"}, xdm.One(undeclaringTree()))
 		c = c.WithVar(xdm.QName{Local: "p"}, xdm.One(paramsElement(
 			map[string]string{"undeclare-prefixes": "yes"})))
@@ -144,7 +144,7 @@ func TestSerializeUndeclarePrefixesNeedsXML11(t *testing.T) {
 func TestSerializeUndeclarePrefixesOnlyConstrainsXML(t *testing.T) {
 	for _, method := range []string{"text", "html", "json"} {
 		ctx := NewContext(nil, Builtins())
-		ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+		ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		expr := `serialize($n, map{'method':'` + method +
 			`','undeclare-prefixes':true()})`
 		arg := xdm.One(undeclaringTree())

@@ -58,6 +58,11 @@ type Compiled struct {
 	// scope must install ns even over another expression's. nsComparable
 	// says ns can be tested with == without a run-time panic.
 	nsNeeded, nsComparable bool
+	// own is the static part of the context built from the fields above
+	// alone, which is what scope installs whenever the caller's static part
+	// has nothing c lacks. Held by value, so it costs no allocation and
+	// &c.own is stable for the life of c. Set by withOwn.
+	own staticContext
 	// version is the language version src was parsed in. It is static for the
 	// same reason the base URI is — it is a property of where the expression
 	// was written — and it is applied to the context at evaluation so that
@@ -82,7 +87,7 @@ func (c *Compiled) WithDefaultCollationURI(coll Collation, uri string) *Compiled
 	n := *c
 	n.staticCollation = coll
 	n.staticCollationURI = uri
-	return &n
+	return n.withOwn()
 }
 
 // WithStaticBaseURI returns a copy of c whose expressions resolve relative
@@ -98,7 +103,7 @@ func (c *Compiled) WithStaticBaseURI(base string) *Compiled {
 	}
 	n := *c
 	n.staticBase = base
-	return &n
+	return n.withOwn()
 }
 
 // WithStaticHost attaches an opaque host-language value to the expression,
@@ -109,7 +114,7 @@ func (c *Compiled) WithStaticHost(v any) *Compiled {
 	}
 	n := *c
 	n.staticHost = v
-	return &n
+	return n.withOwn()
 }
 
 // CompileOptions configures CompileWith.
@@ -230,11 +235,11 @@ func CompileWith(src string, opts CompileOptions) (*Compiled, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Compiled{
+	return (&Compiled{
 		expr: opt, src: src, ns: opts.Namespaces, version: opts.Version,
 		nsNeeded:     readsStaticNamespaces(opt),
 		nsComparable: safelyComparable(reflect.TypeOf(opts.Namespaces)),
-	}, nil
+	}).withOwn(), nil
 }
 
 // compileCancelled reports a cancelled or timed-out compile.
@@ -339,49 +344,78 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 
 // scope is the context c's expression evaluates in: ctx with the static
 // properties c was compiled with applied over it, or ctx itself when they
-// already agree.
+// already agree. Applying them swaps one pointer, so the copy is the small
+// per-scope part of the context rather than all of it.
 func (c *Compiled) scope(ctx *Context) *Context {
-	if (c.staticBase != "" && c.staticBase != ctx.StaticBaseURI) ||
-		c.staticCollation != nil || c.compat != ctx.Compat ||
-		c.version != ctx.Version ||
-		(c.staticHost != nil && c.staticHost != ctx.StaticHost) ||
+	s := ctx.st()
+	if (c.staticBase != "" && c.staticBase != s.baseURI) ||
+		c.staticCollation != nil || c.compat != s.compat ||
+		c.version != s.version ||
+		(c.staticHost != nil && c.staticHost != s.host) ||
 		// The expression's own namespaces, not the caller's, where it reads
 		// them: a function body, or an expression evaluated from inside
 		// another, otherwise expanded a prefixed $calendar against whatever
 		// the outer expression had installed. Elsewhere the caller's are
 		// left in place, which saves a context copy per nested evaluation
 		// (XQuery's enclosed expressions are one each).
-		(c.ns != nil && (ctx.StaticNamespaces == nil || c.nsNeeded &&
-			(!c.nsComparable || c.ns != ctx.StaticNamespaces))) {
+		(c.ns != nil && (s.ns == nil || c.nsNeeded &&
+			(!c.nsComparable || c.ns != s.ns))) {
 		sub := *ctx
-		if c.staticBase != "" {
-			sub.StaticBaseURI = c.staticBase
-		}
-		if c.staticHost != nil {
-			sub.StaticHost = c.staticHost
-		}
-		// The namespaces the expression was compiled against are the ones a
-		// prefixed $calendar expands with; see Context.StaticNamespaces.
-		if c.ns != nil {
-			sub.StaticNamespaces = c.ns
-		}
-		// The version the expression was compiled in is what its function
-		// calls resolve against, whatever the caller's context says: an
-		// expression that parsed as 3.0 must not then be evaluated against a
-		// 2.0 function library.
-		sub.Version = c.version
-		if c.staticCollation != nil {
-			sub.collation = c.staticCollation
-			sub.collationURI = c.staticCollationURI
-		}
-		// The compiled expression's mode is authoritative in both
-		// directions. A 2.0 expression evaluated from inside a 1.0 scope --
-		// an xsl:function called from a 1.0 template, say -- is a 2.0
-		// expression, so the flag has to be cleared as well as set.
-		sub.Compat = c.compat
+		sub.static = c.staticOver(s)
 		return &sub
 	}
 	return ctx
+}
+
+// staticOver is the static part c evaluates with when called from a context
+// whose static part is from: c's own properties, and from's for the ones c was
+// compiled without. When from has none of those either -- every XSLT
+// expression, and XQuery's under a plain caller -- it is c.own, built once.
+func (c *Compiled) staticOver(from *staticContext) *staticContext {
+	if (c.staticBase != "" || from.baseURI == "") &&
+		(c.staticHost != nil || from.host == nil) &&
+		(c.ns != nil || from.ns == nil) &&
+		(c.staticCollation != nil || from.collation == nil && from.collationURI == "") {
+		return &c.own
+	}
+	s := *from
+	if c.staticBase != "" {
+		s.baseURI = c.staticBase
+	}
+	if c.staticHost != nil {
+		s.host = c.staticHost
+	}
+	// The namespaces the expression was compiled against are the ones a
+	// prefixed $calendar expands with; see Context.StaticNamespaces.
+	if c.ns != nil {
+		s.ns = c.ns
+	}
+	// The version the expression was compiled in is what its function
+	// calls resolve against, whatever the caller's context says: an
+	// expression that parsed as 3.0 must not then be evaluated against a
+	// 2.0 function library.
+	s.version = c.version
+	if c.staticCollation != nil {
+		s.collation = c.staticCollation
+		s.collationURI = c.staticCollationURI
+	}
+	// The compiled expression's mode is authoritative in both directions. A
+	// 2.0 expression evaluated from inside a 1.0 scope -- an xsl:function
+	// called from a 1.0 template, say -- is a 2.0 expression, so the flag has
+	// to be cleared as well as set.
+	s.compat = c.compat
+	return &s
+}
+
+// withOwn sets c.own from c's static properties and returns c. Every
+// constructor and With method ends with it, so own is never stale.
+func (c *Compiled) withOwn() *Compiled {
+	c.own = staticContext{
+		version: c.version, baseURI: c.staticBase, host: c.staticHost,
+		ns: c.ns, collation: c.staticCollation,
+		collationURI: c.staticCollationURI, compat: c.compat,
+	}
+	return c
 }
 
 // EvalString evaluates and returns the string value of the result, which is
@@ -421,7 +455,7 @@ func Eval(src string, ctx *Context, ns NamespaceResolver) (xdm.Sequence, error) 
 	// whole language, not just the function library.
 	v := XPath20
 	if ctx != nil {
-		v = ctx.Version
+		v = ctx.Version()
 	}
 	c, err := CompileWith(src, CompileOptions{Namespaces: ns, Version: v})
 	if err != nil {
@@ -464,7 +498,7 @@ func (c *Compiled) WithCompatMode(on bool) *Compiled {
 			n.expr = optimizeCompat(e)
 		}
 	}
-	return &n
+	return n.withOwn()
 }
 
 // CompatMode reports whether c evaluates under XPath 1.0 compatibility mode.

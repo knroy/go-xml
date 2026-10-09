@@ -87,8 +87,8 @@ func TestRequiredParametersRejectEmptySequence(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := NewContext(doc.Root, Builtins())
-			ctx.Version = XPath31
-			ctx.LibraryVersion = XPath31
+			ctx = ctx.WithVersion(XPath31)
+			ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 			_, err := Eval(tt.empty, ctx, nil)
 			if err == nil {
 				t.Fatalf("%s was accepted; %s is declared without \"?\", so "+
@@ -102,8 +102,8 @@ func TestRequiredParametersRejectEmptySequence(t *testing.T) {
 
 			// The control: the optional forms must be untouched by the fix.
 			ctx = NewContext(doc.Root, Builtins())
-			ctx.Version = XPath31
-			ctx.LibraryVersion = XPath31
+			ctx = ctx.WithVersion(XPath31)
+			ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 			_, err = Eval(tt.control, ctx, nil)
 			if tt.name == "fn:error $description" {
 				// fn:error always raises; the control is that it still
@@ -144,8 +144,8 @@ func TestOptionalParametersStillAcceptEmptySequence(t *testing.T) {
 		{"fn:resolve-uri one-argument form (6.1)", `resolve-uri("http://x/a")`},
 	} {
 		ctx := NewContext(doc.Root, Builtins())
-		ctx.Version = XPath31
-		ctx.LibraryVersion = XPath31
+		ctx = ctx.WithVersion(XPath31)
+		ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		if _, err := Eval(tt.expr, ctx, nil); err != nil {
 			t.Errorf("%s was refused: %v (declared %s)", tt.expr, err, tt.declared)
 		}
@@ -169,8 +169,8 @@ func TestRoundPrecisionNotSilentlyZero(t *testing.T) {
 		{`round-half-to-even(2.5)`, "2"},
 	} {
 		ctx := NewContext(nil, Builtins())
-		ctx.Version = XPath31
-		ctx.LibraryVersion = XPath31
+		ctx = ctx.WithVersion(XPath31)
+		ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		seq, err := Eval(tt.expr, ctx, nil)
 		if err != nil {
 			t.Errorf("%s: %v", tt.expr, err)

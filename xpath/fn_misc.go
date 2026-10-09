@@ -274,11 +274,11 @@ func readText(ctx *Context, s, enc string) (string, error) {
 	// message names the reason rather than the URI: a stylesheet that gets
 	// this back has not been granted file reads at all, and saying "cannot
 	// retrieve x" would suggest the file was the problem.
-	if ctx.Texts == nil {
+	if ctx.ev().Texts == nil {
 		return "", fmt.Errorf(
 			"FOUT1170: unparsed-text() is disabled (it reads arbitrary files)")
 	}
-	text, err := ctx.Texts.ResolveText(s, ctx.StaticBaseURI, enc)
+	text, err := ctx.ev().Texts.ResolveText(s, ctx.StaticBaseURI(), enc)
 	if err != nil {
 		// A resolver that already named an error code keeps it: a bad
 		// encoding name is FOUT1190 and undecodable content is FOUT1200,
@@ -556,7 +556,7 @@ func deepEqualItem(ctx *Context, x, y xdm.Item) (bool, error) {
 		}
 		// A collation, when one is in force, decides string equality. Only
 		// the string types use it; everything else compares by value.
-		if coll := ctx.collation; coll != nil &&
+		if coll := ctx.st().collation; coll != nil &&
 			isStringLike(xa.Type) && isStringLike(ya.Type) {
 			return coll.Compare(xa.Str(), ya.Str()) == 0, nil
 		}
@@ -638,8 +638,8 @@ func deepEqualNode(ctx *Context, a, b *xdm.Node) (bool, error) {
 // collation argument for exactly the nodes the function is usually asked
 // about.
 func deepEqualText(ctx *Context, a, b string) bool {
-	if ctx != nil && ctx.collation != nil {
-		return ctx.collation.Compare(a, b) == 0
+	if ctx != nil && ctx.st().collation != nil {
+		return ctx.st().collation.Compare(a, b) == 0
 	}
 	return a == b
 }
@@ -758,7 +758,7 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 			if place, ok := requestedPlace(args); ok {
 				dt, zone = applyPlace(dt, place)
 			}
-			out, err := formatDateTimePicture(dt, pic, name, ctx.Version, zone)
+			out, err := formatDateTimePicture(dt, pic, name, ctx.Version(), zone)
 			if err != nil {
 				return nil, err
 			}
@@ -890,8 +890,8 @@ func calendarInNoNamespace(ctx *Context, s string) (string, bool, error) {
 		return local, true, nil
 	}
 	var uri string
-	if ctx != nil && ctx.StaticNamespaces != nil {
-		uri, _ = ctx.StaticNamespaces.ResolvePrefix(prefix)
+	if ctx != nil && ctx.StaticNamespaces() != nil {
+		uri, _ = ctx.StaticNamespaces().ResolvePrefix(prefix)
 	}
 	if uri == "" {
 		return "", false, fmt.Errorf(
@@ -2217,7 +2217,7 @@ func fnCollection(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			return nil, fmt.Errorf("FODC0004: %q is not a valid collection URI", uri)
 		}
 	}
-	if ctx.Collections == nil {
+	if ctx.ev().Collections == nil {
 		return nil, fmt.Errorf("FODC0002: collections are not configured")
 	}
 	// A relative URI resolves against the *static* base URI — the base of the
@@ -2228,7 +2228,7 @@ func fnCollection(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	//
 	// The context item's base URI is the fallback, for a caller who set no
 	// static base but whose document has one.
-	base := ctx.StaticBaseURI
+	base := ctx.StaticBaseURI()
 	if base == "" {
 		if n, ok := ctx.Item.(*xdm.Node); ok {
 			base = n.BaseURI()
@@ -2911,17 +2911,17 @@ func registerParseXML(l *Library, since Version) {
 		// Minting one per call is what made the ceiling meaningless: this is
 		// an ordinary function, so an expression calls it once per node, and
 		// sixty bombs that each stayed under the 1 MB ceiling expanded 47 MB
-		// between them and were accepted. See Context.entities.
+		// between them and were accepted. See Env.entities.
 		tree, perr := xdm.ParseString(s, xdm.ParseOptions{
 			AllowDOCTYPE: true,
-			BaseURI:      ctx.StaticBaseURI,
+			BaseURI:      ctx.StaticBaseURI(),
 			// A document handed to parse-xml may declare external entities,
 			// and the spec expects a processor that resolves them to do so
 			// against the static base URI. Whether any are read at all is the
 			// caller's decision, made by supplying a resolver: nil here keeps
 			// the default of refusing every one, so an expression parsing
 			// untrusted XML cannot be talked into a file read.
-			ExternalEntities: ctx.Entities,
+			ExternalEntities: ctx.ev().Entities,
 		}.WithEntityBudget(ctx.EntityBudget()))
 		if perr != nil {
 			// A resource refusal is this engine declining to spend more, not a
@@ -2960,7 +2960,7 @@ func registerParseXML(l *Library, since Version) {
 		if err != nil {
 			return nil, err
 		}
-		frag, perr := parseXMLFragment(s, ctx.StaticBaseURI, ctx.EntityBudget())
+		frag, perr := parseXMLFragment(s, ctx.StaticBaseURI(), ctx.EntityBudget())
 		if perr != nil {
 			return nil, perr
 		}

@@ -259,7 +259,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 			// fn:document is the XSLT 1.0 spelling of fn:doc, and is subject
 			// to the same resolver gate — except for document(""), which
 			// fetches nothing and is handled below.
-			if ctx.Docs == nil && !onlyEmptyURIs(args[0]) {
+			if ctx.Env().Docs == nil && !onlyEmptyURIs(args[0]) {
 				return nil, fmt.Errorf(
 					"FODC0002: document() is disabled (no resolver configured)")
 			}
@@ -298,7 +298,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 							v.StringValue())
 					}
 					if b == "" {
-						b = ctx.StaticBaseURI
+						b = ctx.StaticBaseURI()
 					}
 					reqs = append(reqs, docRequest{v.StringValue(), b})
 				default:
@@ -312,7 +312,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 						// document('x.xml') in an included module looked
 						// for x.xml beside the input rather than beside
 						// the module.
-						base := ctx.StaticBaseURI
+						base := ctx.StaticBaseURI()
 						if base == "" {
 							// A stylesheet compiled without a base URI
 							// leaves the static context with nothing; the
@@ -379,7 +379,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 						"XTRE1160: %q has a fragment identifier that is "+
 							"not valid for an XML media type", uri)
 				}
-				if ctx.Docs == nil {
+				if ctx.Env().Docs == nil {
 					return nil, fmt.Errorf(
 						"FODC0002: document() is disabled (no resolver configured)")
 				}
@@ -560,7 +560,7 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 				if !proc30 && local == "version" {
 					return "2.0", true
 				}
-				return systemPropertyValue(local, ctx.Version)
+				return systemPropertyValue(local, ctx.Version())
 			}
 			// XTDE1390: the argument must be a valid QName. A malformed one
 			// would otherwise fall through to the empty string, which is
@@ -841,7 +841,7 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 			// version="2.0" stylesheet and requires false for both, because
 			// the whole point of asking is to find out whether the element may
 			// be used here.
-			if def.since30 && !ctx.Version.AtLeast31() {
+			if def.since30 && !ctx.Version().AtLeast31() {
 				return xdm.One(xdm.NewBoolean(false)), nil
 			}
 			return xdm.One(xdm.NewBoolean(true)), nil
@@ -1085,7 +1085,7 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 		// key twice, once in a 1.0 module and once in a 2.0 one, and both
 		// declarations feed the one shared index, so coercing the index side
 		// would split it in two.
-		if !ctx.Compat {
+		if !ctx.Compat() {
 			continue
 		}
 		alt := compatKeyValue(a)
@@ -1149,7 +1149,7 @@ func hasAncestorOrSelf(n, top *xdm.Node) bool {
 // different timezones, and an xs:double key must find NaN. Indexing on the
 // string form did neither.
 func (rt *runtime) keyLookupKey(a *xdm.Atomic, coll xpath.Collation) (string, error) {
-	return xpath.GroupingKey(a, coll, rt.ctx.ImplicitTimezone)
+	return xpath.GroupingKey(a, coll, rt.ctx.Env().ImplicitTimezone)
 }
 
 // keySearchKey is keyLookupKey for the value being searched for.
@@ -1780,8 +1780,8 @@ func compatKeyValue(a *xdm.Atomic) *xdm.Atomic {
 // it has to make the same choice itself or lose the package identity the
 // context carries. See stripSpaceResolver.ResolveDocumentIn.
 func resolveDocumentIn(ctx *xpath.Context, uri, base string) (*xdm.Tree, error) {
-	if cr, ok := ctx.Docs.(xpath.ContextDocumentResolver); ok {
+	if cr, ok := ctx.Env().Docs.(xpath.ContextDocumentResolver); ok {
 		return cr.ResolveDocumentIn(ctx, uri, base)
 	}
-	return ctx.Docs.ResolveDocument(uri, base)
+	return ctx.Env().Docs.ResolveDocument(uri, base)
 }

@@ -1874,7 +1874,7 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 			if err != nil {
 				return nil, err
 			}
-			sv, err := makeSortValue(v, s, resolved[k], rt.ctx.ImplicitTimezone,
+			sv, err := makeSortValue(v, s, resolved[k], rt.ctx.Env().ImplicitTimezone,
 				rt.sheet.output.Version10Implicit)
 			if err != nil {
 				return nil, err

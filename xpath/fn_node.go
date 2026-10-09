@@ -410,8 +410,8 @@ func langMatches(n *xdm.Node, want string) bool {
 func registerContextFuncs(l *Library) {
 	l.registerFn("implicit-timezone", []int{0}, func(ctx *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
 		d := &xdm.Duration{
-			Negative: ctx.ImplicitTimezone < 0,
-			Seconds:  new(big.Rat).SetInt64(int64(abs(ctx.ImplicitTimezone)) * 60),
+			Negative: ctx.ev().ImplicitTimezone < 0,
+			Seconds:  new(big.Rat).SetInt64(int64(abs(ctx.ev().ImplicitTimezone)) * 60),
 		}
 		return xdm.One(xdm.NewDuration(d, xdm.TypeDayTimeDuration)), nil
 	})
@@ -422,8 +422,8 @@ func registerContextFuncs(l *Library) {
 		// somewhere else, which is the ordinary case; falling back to the
 		// node's is better than answering nothing when no static base URI has
 		// been supplied.
-		if ctx.StaticBaseURI != "" {
-			return xdm.One(xdm.NewAnyURI(ctx.StaticBaseURI)), nil
+		if ctx.StaticBaseURI() != "" {
+			return xdm.One(xdm.NewAnyURI(ctx.StaticBaseURI())), nil
 		}
 		if n, ok := ctx.Item.(*xdm.Node); ok && n.BaseURI() != "" {
 			return xdm.One(xdm.NewAnyURI(n.BaseURI())), nil
@@ -466,7 +466,7 @@ func registerContextFuncs(l *Library) {
 		// that the argument actually identify an error. The suite pins both
 		// halves with K-ErrorFunc-4, scoped "XQ10 XP20 XQ30 XP30", and
 		// K-ErrorFunc-4a, scoped "XQ31+ XP31+", over the same expression.
-		if len(args) == 1 && len(args[0]) == 0 && !ctx.Version.atLeast31() {
+		if len(args) == 1 && len(args[0]) == 0 && !ctx.Version().atLeast31() {
 			return nil, xdm.ErrType(
 				"fn:error: the single-argument form requires an error code")
 		}
@@ -567,7 +567,7 @@ func fnDoc(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	if err := validAnyURI(uri); err != nil || strings.HasPrefix(strings.TrimSpace(uri), ":") {
 		return nil, fmt.Errorf("FODC0005: %q is not a valid URI", uri)
 	}
-	if ctx.Docs == nil {
+	if ctx.ev().Docs == nil {
 		return nil, fmt.Errorf("FODC0002: document access is disabled (no resolver configured): %q", uri)
 	}
 	// The context item's base URI, falling back to the expression's own.
@@ -575,7 +575,7 @@ func fnDoc(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	// against when there is no context node — which is the case in a
 	// stylesheet started from a named template — and it silently resolves
 	// against the process's working directory instead.
-	base := ctx.StaticBaseURI
+	base := ctx.StaticBaseURI()
 	if base == "" {
 		if n, ok := ctx.Item.(*xdm.Node); ok {
 			base = n.BaseURI()
@@ -587,8 +587,8 @@ func fnDoc(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	// stylesheet reads its own literal data elements. Resolving it against
 	// the context node's base would load the source document instead, which
 	// is a different document that happens to be at hand.
-	if strings.TrimSpace(uri) == "" && ctx.StaticBaseURI != "" {
-		base = ctx.StaticBaseURI
+	if strings.TrimSpace(uri) == "" && ctx.StaticBaseURI() != "" {
+		base = ctx.StaticBaseURI()
 	}
 	tree, err := resolveDocument(ctx, uri, base)
 	if err != nil {

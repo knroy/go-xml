@@ -45,7 +45,7 @@ func (e *MapConstructor) Eval(ctx *Context) (xdm.Sequence, error) {
 		if _, present, err := m.Get(key); err != nil {
 			return nil, err
 		} else if present {
-			code := ctx.MapDuplicateCode
+			code := ctx.ev().MapDuplicateCode
 			if code == "" {
 				code = "XQDY0137"
 			}

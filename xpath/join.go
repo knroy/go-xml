@@ -51,7 +51,7 @@ func (c *Compiled) Comparer(ctx *Context) func(la, ra xdm.Sequence) (bool, error
 // collation in ctx, so that two xs:string or xs:untypedAtomic values are
 // equal exactly when their Go strings are.
 func (c *Compiled) CodepointEquality(ctx *Context) bool {
-	switch c.scope(ctx).collation.(type) {
+	switch c.scope(ctx).st().collation.(type) {
 	case nil, codepointCollation:
 		return true
 	}

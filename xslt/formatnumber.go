@@ -305,7 +305,7 @@ func registerFormatNumber(l *xpath.Library, s *Stylesheet) {
 		// property of the processor, not of the module: the suite runs
 		// version="2.0" stylesheets under the 3.0 spec and demands the 3.0
 		// code, exactly as it does for XTDE1280 above.
-		picVersion := ctx.Version
+		picVersion := ctx.Version()
 		if s.maxVersion == 0 || s.maxVersion >= 3.0 {
 			picVersion = xpath.XPath31
 		}

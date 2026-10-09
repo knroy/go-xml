@@ -1239,9 +1239,9 @@ func jsonToXML(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error
 	// declaration the tree serialises with none, so a comparison against the
 	// expected XML sees a differently-named element.
 	b.root.AddNamespace("", nsJSON)
-	doc := xdmbuild.NewDocument(ctx.StaticBaseURI)
+	doc := xdmbuild.NewDocument(ctx.StaticBaseURI())
 	doc.AppendChild(b.root)
-	setBaseURI(b.root, ctx.StaticBaseURI)
+	setBaseURI(b.root, ctx.StaticBaseURI())
 	tree := &xdm.Tree{Root: doc}
 	tree.Finalize()
 	if opts.validate {
@@ -1266,12 +1266,12 @@ func jsonToXML(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error
 // validate option is true and the processor does not support schema
 // validation or typed data."
 func validateJSONTree(ctx *Context, doc *xdm.Node) error {
-	if ctx == nil || ctx.Validator == nil {
+	if ctx == nil || ctx.ev().Validator == nil {
 		return xdm.Errorf("FOJS0004",
 			"validate=true was requested but this processor cannot validate: "+
 				"no schema for the XML representation of JSON is available")
 	}
-	return ctx.Validator.ValidateJSONTree(doc)
+	return ctx.ev().Validator.ValidateJSONTree(doc)
 }
 
 // setBaseURI propagates the base URI down the constructed tree, since

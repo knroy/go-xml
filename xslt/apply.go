@@ -834,7 +834,7 @@ func (rt *runtime) writeIdenticalKey(b *strings.Builder, s xdm.Sequence) error {
 		b.WriteByte(0x1e)
 		switch it := it.(type) {
 		case *xdm.Atomic:
-			k, err := xpath.GroupingKey(it, nil, rt.ctx.ImplicitTimezone)
+			k, err := xpath.GroupingKey(it, nil, rt.ctx.Env().ImplicitTimezone)
 			if err != nil {
 				return err
 			}

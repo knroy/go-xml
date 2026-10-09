@@ -41,7 +41,7 @@ func registerMisc30Funcs(l *Library) {
 	// missing variable and a withheld one are indistinguishable by design.
 	//
 	// That indistinguishability is what lets the environment be withheld by
-	// default. A nil Context.Environment exposes nothing, and the answer is
+	// default. A nil Env.Environment exposes nothing, and the answer is
 	// the empty sequence rather than an error, so no conformance is spent:
 	// the argument is still type-checked, so the XPTY0004 cases stand.
 	l.registerFnSince(XPath30, "environment-variable", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -49,10 +49,10 @@ func registerMisc30Funcs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		if ctx == nil || ctx.Environment == nil {
+		if ctx == nil || ctx.ev().Environment == nil {
 			return xdm.Empty(), nil
 		}
-		v, ok := ctx.Environment.LookupEnvironment(name)
+		v, ok := ctx.ev().Environment.LookupEnvironment(name)
 		if !ok {
 			return xdm.Empty(), nil
 		}
@@ -65,10 +65,10 @@ func registerMisc30Funcs(l *Library) {
 	// for the same reason: it is implementation-dependent which variables are
 	// available, and "none" is one of the answers.
 	l.registerFnSince(XPath30, "available-environment-variables", []int{0}, func(ctx *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
-		if ctx == nil || ctx.Environment == nil {
+		if ctx == nil || ctx.ev().Environment == nil {
 			return xdm.Empty(), nil
 		}
-		names := ctx.Environment.EnvironmentNames()
+		names := ctx.ev().Environment.EnvironmentNames()
 		out := make(xdm.Sequence, 0, len(names))
 		for _, n := range names {
 			out = append(out, xdm.NewString(n))

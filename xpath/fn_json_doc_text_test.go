@@ -56,8 +56,8 @@ func TestJSONDocIsNotBoundByUnparsedTextsCharacterRule(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := NewContext(nil, Builtins())
-			ctx.Texts = fixedTextResolver{text: tc.text}
-			ctx.Version = XPath31
+			ctx = ctx.WithEnv(func(e *Env) { e.Texts = fixedTextResolver{text: tc.text} })
+			ctx = ctx.WithVersion(XPath31)
 
 			check := func(expr, want string) {
 				t.Helper()
@@ -123,8 +123,8 @@ func TestUnparsedTextRejectsAFragmentIdentifier(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := NewContext(nil, Builtins())
-			ctx.Texts = fixedTextResolver{text: "the whole resource"}
-			ctx.Version = XPath31
+			ctx = ctx.WithEnv(func(e *Env) { e.Texts = fixedTextResolver{text: "the whole resource"} })
+			ctx = ctx.WithVersion(XPath31)
 
 			got, err := Eval(tc.expr, ctx, testNS{})
 			switch {
@@ -155,8 +155,8 @@ func TestUnparsedTextRejectsAFragmentIdentifier(t *testing.T) {
 // the fragment was dropped and a real file was found behind it.
 func TestUnparsedTextAvailableIsFalseForAFragmentRatherThanAnError(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Texts = fixedTextResolver{text: "the whole resource"}
-	ctx.Version = XPath31
+	ctx = ctx.WithEnv(func(e *Env) { e.Texts = fixedTextResolver{text: "the whole resource"} })
+	ctx = ctx.WithVersion(XPath31)
 
 	for _, expr := range []string{
 		`unparsed-text-available('r.txt#frag')`,

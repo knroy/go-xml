@@ -17,8 +17,8 @@ import (
 // would answer false, with nothing to say why.
 func TestJSONToXMLValidateNeedsAValidator(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
-	if ctx.Validator != nil {
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
+	if ctx.ev().Validator != nil {
 		t.Fatal("a bare context should have no tree validator")
 	}
 	_, err := Eval(`json-to-xml('{}', map{'validate': true()})`, ctx, nil)
@@ -37,10 +37,12 @@ func TestJSONToXMLValidateNeedsAValidator(t *testing.T) {
 func TestJSONToXMLValidateUsesTheValidator(t *testing.T) {
 	var seen *xdm.Node
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
-	ctx.Validator = validatorFunc(func(doc *xdm.Node) error {
-		seen = doc
-		return nil
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
+	ctx = ctx.WithEnv(func(e *Env) {
+		e.Validator = validatorFunc(func(doc *xdm.Node) error {
+			seen = doc
+			return nil
+		})
 	})
 	if _, err := Eval(`json-to-xml('{}', map{'validate': true()})`, ctx, nil); err != nil {
 		t.Fatalf("validate=true with a validator should succeed: %v", err)
@@ -60,10 +62,12 @@ func TestJSONToXMLValidateUsesTheValidator(t *testing.T) {
 func TestJSONToXMLWithoutValidateSkipsTheValidator(t *testing.T) {
 	called := false
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
-	ctx.Validator = validatorFunc(func(*xdm.Node) error {
-		called = true
-		return nil
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
+	ctx = ctx.WithEnv(func(e *Env) {
+		e.Validator = validatorFunc(func(*xdm.Node) error {
+			called = true
+			return nil
+		})
 	})
 	if _, err := Eval(`json-to-xml('{}')`, ctx, nil); err != nil {
 		t.Fatalf("json-to-xml: %v", err)

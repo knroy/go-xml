@@ -90,7 +90,7 @@ func TestSingletonParametersRejectTwoItems(t *testing.T) {
 				label, expr string
 			}{{"zero", tt.zero}, {"one", tt.one}} {
 				ctx := NewContext(nil, Builtins())
-				ctx.Version = XPath31
+				ctx = ctx.WithVersion(XPath31)
 				_, err := Eval(row.expr, ctx, nil)
 				if isError {
 					if code := xdm.ErrorCode(err); code != "FOER0000" {
@@ -106,7 +106,7 @@ func TestSingletonParametersRejectTwoItems(t *testing.T) {
 			}
 
 			ctx := NewContext(nil, Builtins())
-			ctx.Version = XPath31
+			ctx = ctx.WithVersion(XPath31)
 			_, err := Eval(tt.two, ctx, nil)
 			if err == nil {
 				t.Fatalf("two items %q was accepted; %s is a singleton, so it "+
@@ -194,7 +194,7 @@ func TestErrorEmptyCodeUnchanged(t *testing.T) {
 		{XPath31, "FOER0000"},
 	} {
 		ctx := NewContext(nil, Builtins())
-		ctx.Version = tt.version
+		ctx = ctx.WithVersion(tt.version)
 		_, err := Eval(`fn:error(())`, ctx, nil)
 		if code := xdm.ErrorCode(err); code != tt.want {
 			t.Errorf("error(()) at %v gave code %q (%v), want %q",
@@ -226,7 +226,7 @@ func TestResourceLimitSentinelKeepsItsCode(t *testing.T) {
 		{
 			"item budget", func() error {
 				ctx := NewContext(nil, Builtins())
-				ctx.Version = XPath31
+				ctx = ctx.WithVersion(XPath31)
 				_, err := Eval(
 					`count(for $a in 1 to 3000, $b in 1 to 3000 return 1)`, ctx, nil)
 				return err
@@ -260,7 +260,7 @@ func TestResourceLimitSentinelKeepsItsCode(t *testing.T) {
 // sentinel exists to draw is worthless.
 func TestSemanticErrorIsNotAResourceLimit(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	_, err := Eval(`format-number((1,2), '0')`, ctx, nil)
 	if err == nil {
 		t.Fatal("expected a type error")

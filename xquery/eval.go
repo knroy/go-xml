@@ -54,7 +54,7 @@ func (ctx *evalContext) implicitTimezone() int {
 	if ctx.xp == nil {
 		return 0
 	}
-	return ctx.xp.ImplicitTimezone
+	return ctx.xp.Env().ImplicitTimezone
 }
 
 // languageVersion is the XPath/XQuery version expressions are judged under.
@@ -66,7 +66,7 @@ func (ctx *evalContext) languageVersion() xpath.Version {
 	if ctx.xp == nil {
 		return 0
 	}
-	return ctx.xp.Version
+	return ctx.xp.Version()
 }
 
 // builderRef is the builder a constructor appends to.

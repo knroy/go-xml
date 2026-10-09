@@ -467,8 +467,7 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 			}
 			continue
 		}
-		ctx := v.assertContext(scoped)
-		ctx.StaticBaseURI = alt.staticBaseURI
+		ctx := v.assertContext(scoped).WithStaticBaseURI(alt.staticBaseURI)
 		ok, err := alt.Test.EvalBool(ctx)
 		if err != nil || !ok {
 			continue
@@ -655,20 +654,20 @@ func (v *validator) assertContext(item xdm.Item) *xpath.Context {
 // read once per context so that two calls inside one assertion cannot disagree
 // with each other.
 func newAssertContext(item xdm.Item) *xpath.Context {
-	ctx := xpath.NewContext(item, xpath.Builtins())
-	ctx.Now = time.Now()
-	ctx.HasNow = true
-	// XSD 1.1 Structures fixes the XPath dynamic context an assertion or a
-	// type alternative is evaluated in: "available documents" and "available
-	// collections" are both empty, and the *default collection* is the empty
-	// sequence. That last clause is the one that matters here — an empty
-	// default collection is a value, not an absence, so fn:collection() with
-	// no argument returns () rather than raising FODC0002. Leaving the
-	// resolver nil made "empty(collection())" raise instead of being true,
-	// and a type alternative whose test raises is silently skipped, so
-	// cta0022 fell through to its declared union type.
-	ctx.Collections = emptyCollections{}
-	return ctx
+	now := time.Now()
+	return xpath.NewContext(item, xpath.Builtins(), func(e *xpath.Env) {
+		e.Now, e.HasNow = now, true
+		// XSD 1.1 Structures fixes the XPath dynamic context an assertion or a
+		// type alternative is evaluated in: "available documents" and "available
+		// collections" are both empty, and the *default collection* is the empty
+		// sequence. That last clause is the one that matters here — an empty
+		// default collection is a value, not an absence, so fn:collection() with
+		// no argument returns () rather than raising FODC0002. Leaving the
+		// resolver nil made "empty(collection())" raise instead of being true,
+		// and a type alternative whose test raises is silently skipped, so
+		// cta0022 fell through to its declared union type.
+		e.Collections = emptyCollections{}
+	})
 }
 
 // emptyCollections is the collection resolver an assertion sees: the default

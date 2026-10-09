@@ -229,7 +229,7 @@ func TestSerializeChargesOnlyTheBytesItWrote(t *testing.T) {
 	if s := got[0].(*xdm.Atomic).String(); s != want {
 		t.Fatalf("serialize = %q, want %q", s, want)
 	}
-	if n := atomic.LoadInt64(ctx.bytes); n != int64(len(want)) {
+	if n := atomic.LoadInt64(ctx.ev().bytes); n != int64(len(want)) {
 		t.Errorf("serialize charged %d bytes for a %d-byte result; "+
 			"the reservation block was not released", n, len(want))
 	}
@@ -270,7 +270,7 @@ func manyItems(n int) xdm.Sequence {
 func TestRemoveOutOfRangeIsNotCharged(t *testing.T) {
 	ctx := NewContext(nil, Builtins()).HoldItemBudget()
 	in := manyItems(64)
-	before := atomic.LoadInt64(ctx.items)
+	before := atomic.LoadInt64(ctx.ev().items)
 	got, err := callFn(t, ctx, "remove", in, intSeq(9999))
 	if err != nil {
 		t.Fatalf("remove past the end: %v", err)
@@ -278,7 +278,7 @@ func TestRemoveOutOfRangeIsNotCharged(t *testing.T) {
 	if len(got) != len(in) {
 		t.Fatalf("remove past the end returned %d items, want %d", len(got), len(in))
 	}
-	if after := atomic.LoadInt64(ctx.items); after != before {
+	if after := atomic.LoadInt64(ctx.ev().items); after != before {
 		t.Errorf("remove past the end charged %d items for a result that "+
 			"shares its argument's backing array", after-before)
 	}

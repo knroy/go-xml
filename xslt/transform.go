@@ -69,7 +69,7 @@ type TransformOptions struct {
 	MaxDepth int
 
 	// MaxItems bounds the items the transform's expressions may materialise,
-	// with xpath.Context.MaxItems's meaning: zero is xpath.MaxItems, negative
+	// with xpath.Env.MaxItems's meaning: zero is xpath.MaxItems, negative
 	// is no bound. A transform started by fn:transform keeps its caller's
 	// bound whatever this says.
 	MaxItems int

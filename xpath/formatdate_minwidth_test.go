@@ -49,7 +49,7 @@ func TestFormatDateMinWidthPadsNonDecimalPresentations(t *testing.T) {
 func formatDateMinWidthEval(t *testing.T, expr string) string {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	seq, err := Eval(expr, ctx, nil)
 	if err != nil {
 		t.Fatalf("%s: %v", expr, err)

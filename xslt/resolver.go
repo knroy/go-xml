@@ -399,7 +399,7 @@ func (r *FileResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 //
 // fn:doc and fn:document are ordinary functions, so an expression calls them
 // once per node, and each call that missed the cache parsed with its own full
-// ceiling -- the per-call mint that xpath.Context.entities exists to close,
+// ceiling -- the per-call mint that xpath.Env.entities exists to close,
 // arriving here through a resolver instead of through fn:parse-xml.
 //
 // The context is the right place to read the allowance from, and the resolver

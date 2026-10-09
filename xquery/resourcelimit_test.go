@@ -68,7 +68,7 @@ func TestRegexBudgetCarriesTheSentinelThroughXQuery(t *testing.T) {
 		`analyze-string("` + input + `", "(a*)*\1b")`,
 	} {
 		ctx := xpath.NewContext(nil, xpath.Builtins())
-		ctx.Version = xpath.XPath31
+		ctx = ctx.WithVersion(xpath.XPath31)
 		_, err := Eval(q, ctx, Options{})
 		if err == nil {
 			t.Errorf("%s returned a result; an exhausted budget is not an "+

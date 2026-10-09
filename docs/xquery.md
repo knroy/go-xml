@@ -276,7 +276,7 @@ load-xquery-module("http://example.com/util")("functions")
 
 It reads modules through exactly what `import module` reads through, and
 nothing else. From a query that is the query's own `Options.Modules` and
-`Options.ModuleResolver`; from XPath it is `xpath.Context.Modules`, and from
+`Options.ModuleResolver`; from XPath it is `xpath.Env.Modules`, and from
 XSLT `xslt.TransformOptions.Modules` — both nil by default, so a call finds
 nothing and raises `FOQM0002`, the same answer an import gives as `XQST0059`.
 The `location-hints` option is passed to the resolver, resolved against the
@@ -410,8 +410,7 @@ for "no processor".
 import "github.com/knroy/go-xml/v2/xslt" // linking xslt registers the processor
 
 res, err := xslt.NewFileResolver("/srv/xsl") // all the transformation may read
-ctx := xpath.NewContext(nil, xpath.Builtins())
-ctx.Docs = res
+ctx := xpath.NewContext(nil, xpath.Builtins(), func(e *xpath.Env) { e.Docs = res })
 seq, err := xquery.Eval(`transform(map{
     'stylesheet-location': 'render.xsl', 'source-location': 'in.xml'})?output`,
     ctx, xquery.Options{BaseURI: "file:///srv/xsl/"}) // relative locations resolve here
@@ -419,10 +418,10 @@ seq, err := xquery.Eval(`transform(map{
 
 The nested transformation inherits the query's `Context` and nothing else:
 `stylesheet-location`, `source-location`, its `xsl:include`s and its own
-`fn:doc` resolve through `ctx.Docs` only, so a query with no resolver gets the
+`fn:doc` resolve through `Env.Docs` only, so a query with no resolver gets the
 same `FOXT0002` refusal a stylesheet with none gets, and `package-name` is
 refused (there is no package resolver). Its recursion depth continues the
-query's and is bounded by `ctx.MaxDepth`, so a stylesheet that calls back into
+query's and is bounded by `Env.MaxDepth`, so a stylesheet that calls back into
 a query that transforms again is refused with `XPDY0001` rather than
 exhausting the stack. The options F&O defines that are accepted without effect
 are listed in [known-gaps.md](known-gaps.md).
