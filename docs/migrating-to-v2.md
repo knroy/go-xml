@@ -2,16 +2,19 @@
 
 v2 changes the exported Go API. It does not change what a stylesheet, query
 or schema produces: results, error codes and serialized output stay the same,
-apart from the `generate-id` strings listed below. Every breaking change in the
+apart from the `generate-id` strings and the relative order of nodes from
+different trees, listed below. Every breaking change in the
 v2 section of [CHANGELOG.md](../CHANGELOG.md) is covered here, each with code
 before and after.
 
 Most of the work is mechanical, and a tool does it: see
 [the rewriter](#the-rewriter-nodeaccess). The compiler finds the rest, because
 every change below removes or renames something rather than changing what an
-existing name does. The two exceptions are
-[validation](#validation-never-writes-to-your-tree) and
-[`generate-id`](#generate-id-strings-change).
+existing name does. The exceptions are
+[validation](#validation-never-writes-to-your-tree),
+[`generate-id`](#generate-id-strings-change), and that a tree is now
+[built top-down](#trees-are-built-top-down-by-appending): an append to a node
+that is no longer being built panics at run time.
 
 ## Module path
 
@@ -142,54 +145,94 @@ p := n.Parent()
 
 Code that needs a slice collects one: `slices.Collect(n.Children())`.
 
-## Nodes are built with NewNode and setters
+## Trees are built top-down, by appending
 
-A node literal becomes `xdm.NewNode(kind, name, value)`, and a field write
-becomes a setter. The typing fields are written through `ApplyTyping` and the
-`SetTypeAnnotation*` methods.
+A v2 node is a 40-byte record in its tree's record array, and a tree is
+stored in document order: each element followed by its attributes, then its
+children. So a tree is built the way a parser reads one, top-down, by
+appending to a node that is still being built, and nothing is ever inserted,
+moved or relinked afterwards. Code that changed a tree's shape builds a copy
+with the change made.
 
 ```go
 // v1
-t := &xdm.Node{Kind: xdm.KindText, Value: "hello"}
-el := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "p"}, Parent: doc}
-el.Name = xdm.QName{Local: "para"}
-el.BaseURI = "http://example.com/"
-el.Children = kids
-el.TypeAnnotation = "string"
+doc := xdm.NewTree()
+el := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "p"}}
+el.AddAttr(&xdm.Node{Name: xdm.QName{Local: "id"}, Value: "a1"})
+el.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: "hello"})
+doc.Root.AppendChild(el)
+doc.Finalize()
 
 // v2
-t := xdm.NewNode(xdm.KindText, xdm.QName{}, "hello")
-el := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "p"}, "")
-el.SetParent(doc)
-el.SetName(xdm.QName{Local: "para"})
-el.SetBaseURI("http://example.com/")
-el.SetChildren(kids)
-el.SetTypeAnnotation("string")
+doc := xdm.NewTree()
+el := doc.Root.AppendElement(xdm.QName{Local: "p"})
+el.AppendAttr(xdm.QName{Local: "id"}, "a1")
+el.AppendText("hello")
+doc.Finalize()
 ```
 
-The setters are `SetName`, `SetValue`, `SetParent`, `SetChildren`,
-`SetAttrs`, `SetNamespaceDecls`, `SetBaseURI` and `SetDocumentURI`. Like the
-v1 field writes they replace, they set one link and do nothing else:
-`SetChildren` does not set the children's parents, and no setter attaches the
-node to a tree. To build a tree with parents and document order set for you,
-use the builder functions (`AppendChild`, `AddAttr`, `AddNamespace` and the
-`xdmbuild` constructors), as in v1.
+The calls are `AppendElement`, `AppendText`, `AppendComment`, `AppendPI`,
+`AppendAttr` (before the element's first child), `AddNamespace`,
+`AppendCopy` (a deep copy) and `AppendShallowCopy` (the node alone, for a copy
+you complete yourself). A node is open from the call that made it until you
+append to something that is not it or inside it; appending to a closed node,
+or adding an attribute after a child, panics. `Finalize` closes everything.
+
+What may still change after a node is made is its scalar state: `SetName`,
+`SetValue`, `AppendValue` (merging adjacent text), `SetBaseURI`,
+`SetDocumentURI`, the typing setters, and the namespace declarations of an
+element (`AddNamespace`, `SetNamespaceDecl`, `RemoveNamespaceDecls`) of a tree
+that is not a parsed document. A parsed document is frozen.
+
+`xdm.NewNode(kind, name, value)` still makes a parentless node; it belongs to
+a fragment of its own, and its `Tree()` is nil as before. Many parentless
+nodes made together (a builder's sequence, say) share one fragment:
+`xdm.NewFragment()` then `NewRoot(kind, name, value)`. `xdm.Copy`,
+`CopyPruned` and `ShallowCopy` give parentless copies.
+
+Gone: `SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaceDecls`,
+`AppendChild` and `AddAttr` of a node you made separately,
+`SetSynthesizedOrder`, and `xdmbuild.ShallowCopy`, `ReplaceChild` and
+`PrependChild`. `RemoveLastChild` and `ReplaceLastChild` exist for the one case
+where the subtree just appended has to be taken back or exchanged.
+
+```go
+// v1: rewrite a finished tree in place
+el.SetAttrs(append(attrs, extra))
+el.SetChildren(kept)
+
+// v2: build the rewritten tree
+c := parent.AppendShallowCopy(el)
+for a := range el.Attrs() {
+    c.AppendShallowCopy(a)
+}
+c.AppendAttr(extra.Name(), extra.Value())
+for ch := range el.Children() {
+    if keep(ch) {
+        c.AppendCopy(ch)
+    }
+}
+```
+
+Reading is as in the previous section, with three additions that are
+constant time per step: `NextSibling`, `PrevSibling` and `Descendants` (a
+scan of the subtree). `NumChildren` and `ChildAt` now walk the children, so a
+loop over them belongs with `Children()` or `NextSibling`.
+`DeclaredNamespaces()` reads an element's declarations as prefix and URI
+without making a namespace node for each.
+
+Namespace nodes exist once per element and prefix: the namespace axis, and
+`NamespaceDeclAt`, return the same pointer every time, so `Is` and `==`
+agree for them.
+
+`xdm.ProcessXInclude` returns the included document as a new tree instead of
+editing the one it is given: `tree, err = xdm.ProcessXInclude(tree, opts)`.
 
 ## xdmbuild setters removed
 
 `xdmbuild.SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaces`, `SetName`
-and `SetBaseURI` are gone. Call the node's method. `SetNamespaces` is
-`SetNamespaceDecls`.
-
-```go
-// v1
-xdmbuild.SetParent(n, p)
-xdmbuild.SetNamespaces(n, decls)
-
-// v2
-n.SetParent(p)
-n.SetNamespaceDecls(decls)
-```
+and `SetBaseURI` are gone. Call the node's method where there is one (`SetName`,
+`SetBaseURI`), or build the tree top-down as above.
 
 ## xpath.Context: per-evaluation settings move to Env
 
@@ -280,9 +323,8 @@ ctx = ctx.WithEnv(func(e *xpath.Env) { e.Now, e.HasNow = t, true })
 
 ## Validation never writes to your tree
 
-`xsd.ValidateOptions.Annotate` is renamed `AnnotateInPlace`, and
-`Schema.Validate` without it no longer writes anything to the tree it is
-given.
+`xsd.ValidateOptions.Annotate` is gone, and `Schema.Validate` only checks: it
+never writes to the tree it is given.
 
 To get a typed tree, which is what makes a validated `<price>` atomise to an
 `xs:decimal` in XPath, XSLT and XQuery, use `ValidateCopy`. It validates a
@@ -309,34 +351,31 @@ The copy is a new tree. `is` between it and the original is false, and it
 carries no source positions, so a failure on it still reports the original's
 line and column but `gx:line-number()` has nothing to read on it.
 
-`AnnotateInPlace: true` keeps v1's `Annotate` behaviour exactly. Use it for a
-tree you have just built or parsed yourself and that nothing else holds, when
-you want the typing in that tree and not in a copy:
+There is no in-place annotation, not even for a tree you have just built: a
+tree is never edited once its nodes are made, and annotating adds attributes
+and drops whitespace. The typed-copy counterparts of the other entry points
+are `ValidateElementLaxCopy`, `ValidateAttributeCopy` and
+`ValidateAgainstTypeCopy`; `ValidateElement`, `ValidateElementLax`,
+`ValidateAttribute` and `ValidateAgainstType` check only.
 
-```go
-// v1
-err := schema.Validate(doc.Root, xsd.ValidateOptions{Annotate: true})
-
-// v2, the same behaviour
-err := schema.Validate(doc.Root, xsd.ValidateOptions{AnnotateInPlace: true})
-```
-
-This is the one change the compiler cannot find for you: code that never set
-`Annotate` still compiles. In v1 before `5c2ca9c`, `Validate` without
-`Annotate` still wrote two things to the tree: the member type that matched
-a union-typed value, and `nilled` on an element with `xsi:nil="true"`. Code
-that read those after a plain `Validate` reads nothing in v2. Use `ValidateCopy`, or
-`AnnotateInPlace`, which records them as before.
-
-`ValidateElement`, `ValidateElementLax`, `ValidateAttribute` and
-`ValidateAgainstType` take the same options and follow the same rule.
+This is the one change the compiler cannot find for you if your code never
+set `Annotate`: in v1 before `5c2ca9c`, `Validate` without `Annotate` still
+wrote two things to the tree: the member type that matched a union-typed
+value, and `nilled` on an element with `xsi:nil="true"`. Code that read those
+after a plain `Validate` reads nothing in v2. Use `ValidateCopy`.
 
 ## generate-id strings change
 
-`generate-id()` returns `N<tree>x<order>`, for example `N3x17`, where v1.0
+`generate-id()` returns `N<tree>x<position>`, for example `N3x17`, where v1.0
 returned `N` followed by one number. The old numbers could collide between
-two trees when a tree had more than 2^20 nodes. This change is also in the v1
-line after v1.0, so it is not specific to v2.
+two trees when a tree had more than 2^20 nodes. The format is also in the v1
+line after v1.0; in v2 the numbers are the node's position in its record
+array, so they differ from v1's for the same document.
+
+Nodes of different trees are ordered by when the trees were numbered: a
+document when it is made, a set of constructed nodes the first time one of
+them is compared. The spec leaves that order to the implementation, and it can
+differ from v1's for constructed nodes.
 
 The spec leaves the strings to the implementation. Compare them for equality
 within one transformation; do not parse them, store them, or compare them
