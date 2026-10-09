@@ -438,6 +438,12 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	if err != nil {
 		return nil, err
 	}
+	// Until now every global has been forced on this goroutine. A function
+	// item in the result can reach one later from any goroutine, so the
+	// globals' scope takes its lock from the moment this transform returns.
+	if rt.globalVar != nil {
+		defer rt.globalVar.Share()
+	}
 	rt.readDocs = &readDocs
 	rt.writtenDocs = &writtenDocs
 	// Bind the runtime so key(), current() and xsl:function can reach it.

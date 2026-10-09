@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 	"github.com/knroy/go-xml/v2/xslt"
 )
 
@@ -156,4 +157,55 @@ func TestGlobalFailureWordingIsUnchanged(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "$x depends on itself") {
 		t.Fatalf("got %v, want the cycle reported against $x", err)
 	}
+}
+
+// A function item returned from a finished transform may read a global
+// nothing has evaluated yet, and a library caller may call it from many
+// goroutines at once. The global is evaluated once and every caller sees
+// its value. Run with -race.
+func TestLazyGlobalForcedFromAnEscapedFunctionItem(t *testing.T) {
+	tree, err := xdm.ParseString(`<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	   xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:f="urn:f" version="3.0">
+	  <xsl:variable name="b" select="$a + 1"/>
+	  <xsl:variable name="a" select="sum(1 to 1000)"/>
+	  <xsl:function name="f:get" visibility="public">
+	    <xsl:sequence select="function() { $b }"/>
+	  </xsl:function>
+	</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := sheet.Transform(context.Background(), nil, xslt.TransformOptions{
+		InitialFunction: xdm.QName{URI: "urn:f", Local: "get"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn, ok := res.Nodes[0].(*xdm.FunctionItem)
+	if !ok || len(res.Nodes) != 1 {
+		t.Fatalf("got %v, want one function item", res.Nodes)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 50 {
+				v, err := fn.Invoke(xpath.NewContext(nil, xpath.Builtins()), nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if len(v) != 1 || v[0].(*xdm.Atomic).String() != "500501" {
+					t.Errorf("got %v, want 500501", v)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

@@ -39,7 +39,7 @@ code before and after, and how to run the rewriter on your own module.
 | `Context.WithNow` removed | `ctx.WithNow(t)` → `ctx.WithEnv(func(e *xpath.Env) { e.Now, e.HasNow = t, true })`. | [`9af0e77`][9af0e77] |
 | `xdmbuild.Builder.AppendCopyOf` | Appends a copy of a node straight into the tree being built: the result of `AppendNode(xdm.Copy(n))` with one copy instead of two. | `484cb4e8` |
 | `xdmbuild.NSDecl`, `Builder.NoteDeclaredList` | `NoteDeclared` for a list of bindings the builder may keep instead of copying; for a constructor that notes the same bindings on every element it builds. | 2c5ea0b |
-| `xpath.LazyVar`, `xpath.ReadyVar`, `Context.WithLazyVars` | Binds a scope of variables each evaluated on first reference; a reference raises the evaluation's error. XSLT globals use it. | 7c5121ca, 03adcab8 |
+| `xpath.LazyVar`, `xpath.ReadyVar`, `Context.WithLazyVars` | Binds a scope of variables each evaluated on first reference; a reference raises the evaluation's error. After `LazyVar.Share` each is forced once from any goroutine. XSLT globals use it, so a function item returned by a transform may be called concurrently. | 7c5121ca, 03adcab8 |
 | `xdm.Node.TreeHasTyping` | Whether any node of the node's tree was ever typed; false means the whole tree is untyped. XSLT uses it to skip stripping annotations ([migrating](docs/migrating-to-v2.md#validation-never-writes-to-your-tree)). | 40dbca21 |
 
 ### Changed — performance

@@ -85,6 +85,12 @@ type transformState struct {
 	// evaluated against it; see the comment where it is set.
 	globalCtx *xpath.Context
 
+	// globalVar is one of the globals' LazyVars, kept so that Transform can
+	// Share their scope when it returns, after which a function item in the
+	// result may force a global from any goroutine. Nil when the stylesheet
+	// declares none.
+	globalVar *xpath.LazyVar
+
 	// globalActive names the global variables whose initialiser is currently
 	// being evaluated, by declared local name.
 	//
@@ -965,7 +971,10 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 
 	// state is per binding name; see globalBindingName. A failure is kept,
 	// so that a second reference raises what the first did rather than
-	// evaluating again.
+	// evaluating again. After newRuntime returns it is read and written only
+	// inside a LazyVar's Force, which the scope's lock serialises, so a
+	// function item that outlives the transform may force globals from
+	// several goroutines (see xpath.LazyVar).
 	type gstate struct {
 		active, primed, done bool
 		err                  error
@@ -1123,6 +1132,10 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 		}
 	}
 	rt.ctx = rt.ctx.WithLazyVars(vars)
+	for _, lv := range cellOf {
+		rt.globalVar = lv
+		break
+	}
 	snapshot := *rt
 	gs = &snapshot
 

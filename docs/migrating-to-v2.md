@@ -445,7 +445,12 @@ A host language can bind variables the same way through
 `xpath.Context.WithLazyVars` and `xpath.LazyVar`; an expression's reference
 reports the evaluation's error, while `Context.LookupVar` reports a failed
 one as unbound. A lazy variable is out of scope while its own evaluation
-runs, and `LazyVar.Unbind` takes one out of scope for good.
+runs, and `LazyVar.Unbind` takes one out of scope for good. Call
+`LazyVar.Share` before a value that can reach the scope, such as a function
+item, leaves the evaluating goroutine; from then on each variable is forced
+once under the scope's lock, from any goroutine. XSLT does this when a
+transform returns, so a function item in its result may be called
+concurrently.
 
 ## Not changed
 
