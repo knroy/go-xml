@@ -3,6 +3,8 @@ package relaxng
 import (
 	"fmt"
 	"strings"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 // datatype decides whether a string is a legal value, and when two values are
@@ -31,6 +33,22 @@ type nsContext struct {
 	prefixes map[string]string
 	// dflt is the namespace an unprefixed name takes.
 	dflt string
+	// node, when set, is the document node the bindings are read from on
+	// first use (nsContextOf): almost no value needs them, and reading them
+	// builds a map per element.
+	node *xdm.Node
+}
+
+// resolved returns ctx with its bindings read.
+func (ctx nsContext) resolved() nsContext {
+	if ctx.node == nil {
+		return ctx
+	}
+	r := nsContext{prefixes: ctx.node.InScopeNamespaces()}
+	if uri, ok := r.prefixes[""]; ok {
+		r.dflt = uri
+	}
+	return r
 }
 
 // contextualType is a datatype whose values depend on namespace bindings.

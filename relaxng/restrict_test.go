@@ -882,3 +882,44 @@ func TestValidationDepthIsBounded(t *testing.T) {
 		t.Errorf("an unbounded run should admit the document: %v", err)
 	}
 }
+
+// The document's namespace bindings are read only when a QName or NOTATION
+// value asks for them. Reading them builds a map per element and per text
+// node, so before they were lazy, validating under twenty bindings cost an
+// allocation or more per child for maps no value ever consulted. A QName
+// bound on an ancestor must still resolve (TestQNameValuesCompareByNamespace
+// covers the comparison itself).
+func TestNamespaceBindingsAreReadOnDemand(t *testing.T) {
+	s, err := compileSrc(t, `<element`+rngNS+` name="r"><zeroOrMore>
+		<element name="a"><attribute name="x"/><text/></element></zeroOrMore>
+		<optional><element name="q"><value type="QName"
+			datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes"
+			xmlns:s="urn:s">s:x</value></element></optional></element>`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	var decls strings.Builder
+	for i := 0; i < 20; i++ {
+		decls.WriteString(` xmlns:p` + string(rune('a'+i)) + `="urn:` + string(rune('a'+i)) + `"`)
+	}
+	kids := strings.Repeat(`<a x="1">t</a>`, 500)
+	allocs := func(rootAttrs string) float64 {
+		doc, err := xdm.ParseString(`<r`+rootAttrs+`>`+kids+`</r>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return testing.AllocsPerRun(5, func() {
+			if err := s.Validate(doc.Root); err != nil {
+				t.Fatalf("should be valid: %v", err)
+			}
+		})
+	}
+	if bare, bound := allocs(""), allocs(decls.String()); bound-bare > 50 {
+		t.Errorf("500 children allocated %.0f times under twenty bindings and %.0f under none; "+
+			"the bindings are being read for every node", bound, bare)
+	}
+	doc, _ := xdm.ParseString(`<r xmlns:d="urn:s"><a x="1"/><q>d:x</q></r>`, xdm.ParseOptions{})
+	if err := s.Validate(doc.Root); err != nil {
+		t.Errorf("a QName bound on an ancestor must resolve: %v", err)
+	}
+}
