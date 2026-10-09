@@ -57,6 +57,7 @@ code before and after, and how to run the rewriter on your own module.
 | XSLT runtime and XPath predicates repeated per-item work (V5) | Runtime copy 176 → 112 B, one focus context per predicate, strip-space memo, untyped trees not stripped. XRechnung 1 −10%, 2 −9%, DocBook items about −11% CPU. | 35cd4d60, 16f3d909, f2c08b2e, 40dbca21, db7e1ba3, 462ee9a2 |
 | DocBook compile 55 → 77 ms on v2 (V7) | Version-attribute walks remembered per Compile (not in the static phase); `FileResolver` remembers `EvalSymlinks`. DocBook compile −11% CPU. | 23ace644, be9eb58e |
 | The runtime copy still carried the 64 B template selection (V13) | Selection held by pointer, allocated with the copy that selects it: copy 112 → 64 B. DocBook items −5.5% bytes, −3.8% CPU. | e09f1060 |
+| C14N wrote each token through a `bufio.Writer` call; the serializer's `element` used defers, which sent every element through the runtime's deferred-call path (V11) | C14N appends to its own 64 KiB buffer; `element` restores its state without defers and calls `WriteString` directly. C14N −10 to −12% CPU, parse + C14N −3.7%; serializing XMark q10 −22%, DocBook −18%, XRechnung stage 2 −8%. | 63155c73, da27a7cd |
 
 ## v1.7.1 — 2026-10-09
 

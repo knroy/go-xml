@@ -1,7 +1,6 @@
 package c14n
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"regexp"
@@ -61,8 +60,7 @@ type ancestor struct {
 // depth and are truncated rather than reallocated as the walk returns, so a
 // steady-state element costs no allocation.
 type canon struct {
-	w        *bufio.Writer
-	sw       *stickyWriter
+	w        *outBuf
 	set      NodeSet
 	all      bool // set is a Subtree: every node the walk reaches is a member
 	excl     bool
@@ -108,11 +106,9 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 	if root == nil {
 		return nil, ErrUnsupportedNode
 	}
-	sw := &stickyWriter{w: w}
 	_, all := ns.(subtree)
 	c := &canon{
-		w:        bufio.NewWriterSize(sw, outBufSize),
-		sw:       sw,
+		w:        newOutBuf(w),
 		set:      ns,
 		all:      all,
 		excl:     opts.Algorithm.Exclusive(),
@@ -157,37 +153,53 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 		return nil, ErrUnsupportedNode
 	}
 	if err == nil {
-		err = c.w.Flush()
+		c.w.flush()
 	}
-	if c.sw.err != nil {
-		return c, c.sw.err // unwrapped, as Write documents
+	if c.w.err != nil {
+		return c, c.w.err // unwrapped, as Write documents
 	}
 	return c, err
 }
 
-// stickyWriter remembers the first write error, so the walk can stop at the
-// next element boundary instead of canonicalizing the rest into nothing.
-type stickyWriter struct {
+// outBuf is the output buffer. The canonical form is appended to buf, which
+// goes to w once it holds outBufSize bytes, checked at element and leaf
+// boundaries; appending to a slice costs less per token than a bufio.Writer
+// call, which checks its space and its error on every write. The first write
+// error is kept, nothing is written after it, and the walk stops at the next
+// element boundary (element returns it) instead of canonicalizing the rest
+// into nothing.
+type outBuf struct {
+	buf []byte
 	w   io.Writer
 	err error
 }
 
-// Write is called only by the bufio.Writer, which never writes again after an
-// error, so the first error is the only one recorded.
-func (s *stickyWriter) Write(p []byte) (int, error) {
-	n, err := s.w.Write(p)
-	s.err = err
-	return n, err
+func newOutBuf(w io.Writer) *outBuf {
+	return &outBuf{buf: make([]byte, 0, outBufSize+outBufSize/4), w: w}
 }
 
-// put and putByte discard each write's result on purpose. The bufio.Writer
-// keeps the first error it meets and fails every later write the same way,
-// so checking after each byte would add a branch per byte and learn nothing:
-// the kept error is read at every element boundary (element returns
-// c.sw.err) and at the final Flush, and returned unwrapped from there.
-// writeQName and writeEscaped follow the same rule.
-func (c *canon) put(s string)   { _, _ = c.w.WriteString(s) }
-func (c *canon) putByte(b byte) { _ = c.w.WriteByte(b) }
+// flush hands buf to w. A short write without an error is io.ErrShortWrite,
+// as bufio reports it.
+func (o *outBuf) flush() {
+	if o.err == nil && len(o.buf) > 0 {
+		n, err := o.w.Write(o.buf)
+		if err == nil && n < len(o.buf) {
+			err = io.ErrShortWrite
+		}
+		o.err = err
+	}
+	o.buf = o.buf[:0]
+}
+
+// spill flushes buf once it is full.
+func (o *outBuf) spill() {
+	if len(o.buf) >= outBufSize {
+		o.flush()
+	}
+}
+
+func (c *canon) put(s string)   { c.w.buf = append(c.w.buf, s...) }
+func (c *canon) putByte(b byte) { c.w.buf = append(c.w.buf, b) }
 
 func (c *canon) contains(n *xdm.Node) bool { return c.all || c.set.Contains(n) }
 
@@ -297,7 +309,8 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 	c.util.restore(utilMark)
 	c.axes = c.axes[:axesMark]
 	c.path = c.path[:len(c.path)-1]
-	return c.sw.err
+	c.w.spill()
+	return c.w.err
 }
 
 // namespaces renders e's namespace axis and records what it rendered.
@@ -671,33 +684,42 @@ func (c *canon) leaf(n *xdm.Node) {
 		}
 		c.put("?>")
 	}
+	c.w.spill()
 }
 
-func writeQName(w *bufio.Writer, q xdm.QName) {
+func writeQName(w *outBuf, q xdm.QName) {
 	if q.Prefix != "" {
-		_, _ = w.WriteString(q.Prefix)
-		_ = w.WriteByte(':')
+		w.buf = append(append(w.buf, q.Prefix...), ':')
 	}
-	_, _ = w.WriteString(q.Local)
+	w.buf = append(w.buf, q.Local...)
 }
 
 // writeEscaped writes s with the text or attribute escaping of C14N 1.0
 // §2.3. The two are deliberately asymmetric: text escapes '>' and leaves
 // '"', tab and newline alone; attribute values do the reverse. Do not unify.
-func writeEscaped(w *bufio.Writer, s string, attr bool) {
+//
+// A value longer than the buffer is written a buffer's worth at a time, so
+// one large text node does not grow the buffer to its size. Only ASCII bytes
+// are replaced, so a split inside a UTF-8 sequence changes nothing.
+func writeEscaped(w *outBuf, s string, attr bool) {
 	esc := &textEscapes
 	if attr {
 		esc = &attrEscapes
 	}
+	for len(s) > outBufSize {
+		writeEscaped(w, s[:outBufSize], attr)
+		w.spill()
+		s = s[outBufSize:]
+	}
+	b := w.buf
 	start := 0
 	for i := 0; i < len(s); i++ {
 		if rep := esc[s[i]]; rep != "" {
-			_, _ = w.WriteString(s[start:i])
-			_, _ = w.WriteString(rep)
+			b = append(append(b, s[start:i]...), rep...)
 			start = i + 1
 		}
 	}
-	_, _ = w.WriteString(s[start:])
+	w.buf = append(b, s[start:]...)
 }
 
 // textEscapes and attrEscapes give each byte's replacement, or "" for none:
