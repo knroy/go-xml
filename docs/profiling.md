@@ -566,6 +566,12 @@ names.
 | Serializer: the encoding name lower-cased once; names, bindings and attribute values written in pieces over one binding stack | `935e10e`, `aefdaea` | XRechnung stage 2 105,617 → 45,208 allocations per invoice with `eac3823` (−57%); CEN −2.6% |
 | A path step over one node keeps its result instead of copying it into the path's accumulator; a relative path starts from the context item without boxing it | `d077c5a`, `3fc9f9e` | allocations CEN −10.7%, Peppol −10.2%, XMark −5.7%, DocBook −5.3%, XRechnung −2.0%; CPU CEN −4 to −7%, DocBook −2 to −4%, the rest within noise |
 
+Benchmark re-run at `f45068c` ([benchmark.md](benchmark.md)), warm against
+Saxon, `eb14939` → now: Peppol 2.83× → 1.99×, XRechnung stage 1 3.96× →
+3.0×, XRechnung stage 2 not comparable → 1.42×, DocBook 0.62× → 0.46× (36 of
+40 items faster), XMark 1.09× → 1.00×; RELAX NG warm against Jing 2.7× →
+0.60×; XSD against Xerces 0.75× → 0.73×. These include round 3.
+
 ### Measured and not built
 
 | Idea | Finding |
