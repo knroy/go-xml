@@ -8,6 +8,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xdmbuild"
 )
 
 // This file implements the four XPath 3.1 JSON functions — fn:parse-json,
@@ -1095,14 +1096,11 @@ type jsonXMLBuilder struct {
 const nsJSON = "http://www.w3.org/2005/xpath-functions"
 
 func jsonElement(local string) *xdm.Node {
-	return &xdm.Node{Kind: xdm.KindElement,
-		Name: xdm.QName{URI: nsJSON, Local: local}}
+	return xdmbuild.NewElement(xdm.QName{URI: nsJSON, Local: local})
 }
 
 func setAttr(el *xdm.Node, local, value string) {
-	a := &xdm.Node{Kind: xdm.KindAttribute,
-		Name: xdm.QName{Local: local}, Value: value, Parent: el}
-	el.Attrs = append(el.Attrs, a)
+	el.AddAttr(xdmbuild.NewAttribute(xdm.QName{Local: local}, value))
 }
 
 // attach places a finished element under the open container, applying the key
@@ -1131,8 +1129,7 @@ func (b *jsonXMLBuilder) attach(el *xdm.Node) error {
 				case "reject":
 					return xdm.Errorf("FOJS0003", "duplicate key %q in a JSON object", k)
 				case "use-last":
-					el.Parent = parent
-					parent.Children[i] = el
+					xdmbuild.ReplaceChild(parent, i, el)
 				default: // use-first
 				}
 				return nil
@@ -1140,8 +1137,7 @@ func (b *jsonXMLBuilder) attach(el *xdm.Node) error {
 			idx[k] = len(parent.Children)
 		}
 	}
-	el.Parent = parent
-	parent.Children = append(parent.Children, el)
+	parent.AppendChild(el)
 	return nil
 }
 
@@ -1198,7 +1194,7 @@ func (b *jsonXMLBuilder) str(s string) error {
 		setAttr(el, "escaped", "true")
 	}
 	if s != "" {
-		el.Children = []*xdm.Node{{Kind: xdm.KindText, Value: s, Parent: el}}
+		el.AppendChild(xdmbuild.NewText(s))
 	}
 	return b.attach(el)
 }
@@ -1214,7 +1210,7 @@ func needsEscapeMark(s string) bool { return strings.Contains(s, "\\") }
 
 func (b *jsonXMLBuilder) number(lexeme string) error {
 	el := jsonElement("number")
-	el.Children = []*xdm.Node{{Kind: xdm.KindText, Value: lexeme, Parent: el}}
+	el.AppendChild(xdmbuild.NewText(lexeme))
 	return b.attach(el)
 }
 
@@ -1224,7 +1220,7 @@ func (b *jsonXMLBuilder) boolean(v bool) error {
 	if v {
 		s = "true"
 	}
-	el.Children = []*xdm.Node{{Kind: xdm.KindText, Value: s, Parent: el}}
+	el.AppendChild(xdmbuild.NewText(s))
 	return b.attach(el)
 }
 
@@ -1242,12 +1238,9 @@ func jsonToXML(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error
 	// The root element declares the namespace it is in. Without the
 	// declaration the tree serialises with none, so a comparison against the
 	// expected XML sees a differently-named element.
-	b.root.Namespaces = []*xdm.Node{{
-		Kind: xdm.KindNamespace, Value: nsJSON, Parent: b.root,
-	}}
-	doc := &xdm.Node{Kind: xdm.KindDocument, BaseURI: ctx.StaticBaseURI}
-	b.root.Parent = doc
-	doc.Children = []*xdm.Node{b.root}
+	b.root.AddNamespace("", nsJSON)
+	doc := xdmbuild.NewDocument(ctx.StaticBaseURI)
+	doc.AppendChild(b.root)
 	setBaseURI(b.root, ctx.StaticBaseURI)
 	tree := &xdm.Tree{Root: doc}
 	tree.Finalize()
@@ -1285,7 +1278,7 @@ func validateJSONTree(ctx *Context, doc *xdm.Node) error {
 // fn:base-uri walks to the nearest ancestor that has one and the document node
 // is not consulted for an element built this way.
 func setBaseURI(n *xdm.Node, base string) {
-	n.BaseURI = base
+	xdmbuild.SetBaseURI(n, base)
 	for _, c := range n.Children {
 		setBaseURI(c, base)
 	}
