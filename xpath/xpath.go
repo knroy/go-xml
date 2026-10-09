@@ -356,10 +356,12 @@ func (c *Compiled) scope(ctx *Context) *Context {
 		// them: a function body, or an expression evaluated from inside
 		// another, otherwise expanded a prefixed $calendar against whatever
 		// the outer expression had installed. Elsewhere the caller's are
-		// left in place, which saves a context copy per nested evaluation
-		// (XQuery's enclosed expressions are one each).
-		(c.ns != nil && (s.ns == nil || c.nsNeeded &&
-			(!c.nsComparable || c.ns != s.ns))) {
+		// left in place, nil included, which saves a context copy per
+		// evaluation: one per nested evaluation (XQuery's enclosed
+		// expressions are one each) and one per top-level XSLT expression.
+		// See Context.StaticNamespaces.
+		(c.ns != nil && c.nsNeeded &&
+			(s.ns == nil || !c.nsComparable || c.ns != s.ns)) {
 		sub := *ctx
 		sub.static = c.staticOver(s)
 		return &sub

@@ -448,6 +448,13 @@ func (c *Context) StaticHost() any { return c.st().host }
 
 // StaticNamespaces is the statically known namespaces of the expression being
 // evaluated, or nil where it was compiled without them.
+//
+// They are installed only for an expression that reads them at run time: one
+// that calls or references fn:format-date, fn:format-dateTime,
+// fn:format-time or fn:function-lookup. Any other expression sees whatever
+// its caller's context held, which is nil at the top level, so a host
+// function must not rely on this to expand a prefix it was given as a
+// string; it resolves the prefix against namespaces it captured itself.
 func (c *Context) StaticNamespaces() NamespaceResolver { return c.st().ns }
 
 // Compat reports XPath 1.0 compatibility mode; see Compiled.WithCompatMode.
@@ -463,6 +470,21 @@ func (c *Context) WithVersion(v Version) *Context {
 	}
 	s := *c.st()
 	s.version = v
+	n := *c
+	n.static = &s
+	return &n
+}
+
+// WithStaticHost returns a copy of c whose StaticHost is v until a compiled
+// expression installs its own. A host language whose expressions all carry
+// one value sets it here once, so that evaluating them does not copy the
+// context to install it.
+func (c *Context) WithStaticHost(v any) *Context {
+	if comparableValue(v) && c.st().host == v {
+		return c
+	}
+	s := *c.st()
+	s.host = v
 	n := *c
 	n.static = &s
 	return &n

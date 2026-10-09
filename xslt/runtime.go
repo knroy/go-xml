@@ -852,6 +852,17 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// resolve against when there is no context node — which is the case for
 	// a transform started from a named template.
 	xctx = xctx.WithStaticBaseURI(s.baseURI)
+	// The static part almost every expression carries, so that evaluating
+	// one does not copy the context to install it (xpath.Compiled's scope):
+	// the top-level package, and under a 3.0 processor the XPath 3.1 that
+	// xpathFloor gives every module. The code that reads the version off
+	// this context rather than an expression's (errNoGrouping,
+	// regexDialect) already floors it at the processor's 3.1, so it answers
+	// as before.
+	xctx = xctx.WithStaticHost(hostPackage(0))
+	if s.maxVersion == 0 || s.maxVersion >= 3.0 {
+		xctx = xctx.WithVersion(xpath.XPath31)
+	}
 	// One transform is the unit the byte budget is measured over. The chain
 	// that defeats a narrower boundary is a run of SIBLING xsl:variable
 	// declarations, each holding two xsl:value-of of the one before it: no
