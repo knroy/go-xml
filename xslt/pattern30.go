@@ -479,12 +479,8 @@ func patternsAllow30(ns xpath.NamespaceResolver) bool {
 // declaredXSLTVersion returns the XSLT version stated on el or on the nearest
 // ancestor that states one, defaulting to 2.0 as versionAt does.
 func declaredXSLTVersion(el *xdm.Node) float64 {
-	for a := el; a != nil; a = a.Parent() {
-		if a.Kind() == xdm.KindElement && hasVersionAttr(a) {
-			return versionAt(a)
-		}
-	}
-	return 2.0
+	_, v := versionHolder(el)
+	return v
 }
 
 // matchesAtomicItem reports whether an atomic value matches the pattern.

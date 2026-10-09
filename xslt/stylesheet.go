@@ -668,6 +668,8 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	defer compileMu.Unlock()
 	setSharedNS(map[*xdm.Node]map[string]string{})
 	defer setSharedNS(nil)
+	setVersionMemo(true)
+	defer setVersionMemo(false)
 	return compileLocked(doc, opts)
 }
 
@@ -690,14 +692,16 @@ func setSharedNS(m map[*xdm.Node]map[string]string) {
 	sharedNS.Unlock()
 }
 
-// forgetSharedNS drops the cached maps, for a caller that has just changed a
-// stylesheet tree's namespaces or parent links during a compilation.
+// forgetSharedNS drops the cached maps, and the version memo, for a caller
+// that has just changed a stylesheet tree's namespaces or parent links
+// during a compilation.
 func forgetSharedNS() {
 	sharedNS.Lock()
 	if sharedNS.m != nil {
 		clear(sharedNS.m)
 	}
 	sharedNS.Unlock()
+	forgetVersionMemo()
 }
 
 // inScopeNamespacesShared is el.InScopeNamespaces for a caller that only reads

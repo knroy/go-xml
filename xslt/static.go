@@ -84,6 +84,8 @@ type staticPhase struct {
 // Every module it reaches is replaced, for the rest of compilation, by the
 // copy it builds; c.staticDone records which, and c.prunedModule looks it up.
 func (c *compiler) runStaticPhase(doc *xdm.Node) error {
+	// The phase rewrites what the version walks read; see versionMemo.
+	defer suspendVersionMemo()()
 	p := &staticPhase{
 		c:    c,
 		seen: map[string]bool{},
