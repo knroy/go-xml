@@ -1151,10 +1151,9 @@ word-split, and those are the literal switches written at the call site.
 **Each failing corpus file is named.** Below the count, the gate log prints
 one line per failure, `  XSpec failed: <file>: <first line of its error>`. A
 file counts as failed if the CLI exits non-zero *or* writes anything to
-stderr. The XSpec count read 224 instead of 225 twice, both times while other
-heavy jobs shared the machine, and could not be reproduced alone or under a
-12-way parallel run at `GOGC=5`. The names make the next such run traceable
-by diffing two logs.
+stderr. Diffing two logs then shows which file moved; that is how a 224 in a
+git worktree, whose `testdata` is a symlink, was traced to
+`issue-987_parent.xspec` and the symlink artifact described above.
 
 **Skipped is not failed.** The suites skip cases by declared dependency — a
 specific Unicode version, a spec version not being measured. (Streaming used to
