@@ -892,6 +892,22 @@ func (b *Builder) StartElement(name xdm.QName) *Builder {
 		refused: b.refused}
 }
 
+// ReplaceOpen puts n, a parentless node, in place of the element this builder
+// is building: in its parent's content, or as the last item of the parent's
+// sequence. Nothing may have been added to the parent since the element was
+// started. It exists to swap a constructed element for its validated, typed
+// copy, and returns the node now in that place.
+func (b *Builder) ReplaceOpen(n *xdm.Node) *xdm.Node {
+	p := b.parent
+	if p.open != nil {
+		n = p.open.ReplaceLastChild(n)
+	} else {
+		p.items[len(p.items)-1] = n
+	}
+	b.open = n
+	return n
+}
+
 // Sequence returns the accumulated items.
 func (b *Builder) Sequence() xdm.Sequence { return b.items }
 

@@ -175,3 +175,14 @@ func (n *Node) NamespaceNodes() iter.Seq[*Node] {
 		}
 	}
 }
+
+// ReplaceLastChild puts c, a parentless node, in place of p's last child,
+// which must be the last subtree appended to the tree: the one place where a
+// built subtree may still be exchanged, used to swap a constructed element for
+// its validated, typed copy. It returns the node now in that place.
+func (p *Node) ReplaceLastChild(c *Node) *Node {
+	c.parent = p
+	c.tree = p.tree
+	p.children[len(p.children)-1] = c
+	return c
+}
