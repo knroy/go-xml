@@ -31,7 +31,10 @@ package xslt
 //     so the analysis abandoned the construct before ever reaching the call.
 
 import (
+	"cmp"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -474,7 +477,14 @@ func firstArgUsage(c streamCategory) (usage, bool) {
 // model yields no error at all, because the roaming it would otherwise derive
 // says nothing about the stylesheet.
 func checkStreamableFunctions(root *xdm.Node, funcs map[funcKey]*streamFunc) error {
-	for _, f := range funcs {
+	// Sorted by name and arity, so a stylesheet with two offending functions
+	// names the same one on every run.
+	keys := slices.SortedFunc(maps.Keys(funcs), func(a, b funcKey) int {
+		return cmp.Or(cmp.Compare(a.uri, b.uri), cmp.Compare(a.local, b.local),
+			cmp.Compare(a.arity, b.arity))
+	})
+	for _, k := range keys {
+		f := funcs[k]
 		if !f.category.declaredStreamable() {
 			continue
 		}
