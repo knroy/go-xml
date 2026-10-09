@@ -386,7 +386,7 @@ func packageIdentity(path string) (string, string) {
 		return "", ""
 	}
 	for _, el := range doc.Root.ChildElements() {
-		if el.Name.Local != "package" {
+		if el.Name().Local != "package" {
 			continue
 		}
 		ver := el.AttrValue("package-version")

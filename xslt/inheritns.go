@@ -46,34 +46,34 @@ func noAttr(el *xdm.Node, name string) bool {
 }
 
 func blockNamespaceInheritance(el *xdm.Node) {
-	if el == nil || el.Kind != xdm.KindElement {
+	if el == nil || el.Kind() != xdm.KindElement {
 		return
 	}
 	scope := map[string]string{}
 	prefixes := make([]string, 0, el.NumNamespaceDecls())
-	for _, ns := range el.Namespaces {
-		p := ns.Name.Local
+	for ns := range el.NamespaceDecls() {
+		p := ns.Name().Local
 		// The xml prefix is bound everywhere by the XML Namespaces
 		// specification and cannot be undeclared.
 		//
 		// An empty value is itself an undeclaration el is carrying, so there
 		// is nothing for the children to inherit and nothing to block.
-		if p == "xml" || ns.Value == "" {
+		if p == "xml" || ns.Value() == "" {
 			continue
 		}
-		scope[p] = ns.Value
+		scope[p] = ns.Value()
 		prefixes = append(prefixes, p)
 	}
 	// A stable order, for the same reason copyNamespacesTo sorts.
 	sort.Strings(prefixes)
 
-	for _, child := range el.Children {
-		if child.Kind != xdm.KindElement {
+	for child := range el.Children() {
+		if child.Kind() != xdm.KindElement {
 			continue
 		}
 		declared := map[string]bool{}
-		for _, ns := range child.Namespaces {
-			declared[ns.Name.Local] = true
+		for ns := range child.NamespaceDecls() {
+			declared[ns.Name().Local] = true
 		}
 		for _, p := range prefixes {
 			if declared[p] {
@@ -93,11 +93,11 @@ func blockNamespaceInheritance(el *xdm.Node) {
 // usedByNames reports whether the prefix/URI pair is the binding that el's own
 // name or one of its attribute names depends on.
 func usedByNames(el *xdm.Node, prefix, uri string) bool {
-	if el.Name.URI == uri && el.Name.Prefix == prefix {
+	if el.Name().URI == uri && el.Name().Prefix == prefix {
 		return true
 	}
-	for _, a := range el.Attrs {
-		if a.Name.URI == uri && a.Name.Prefix == prefix {
+	for a := range el.Attrs() {
+		if a.Name().URI == uri && a.Name().Prefix == prefix {
 			return true
 		}
 	}
@@ -124,7 +124,7 @@ func noXSLAttr(el *xdm.Node, name string) bool {
 	if a == nil {
 		return false
 	}
-	switch strings.TrimSpace(a.Value) {
+	switch strings.TrimSpace(a.Value()) {
 	case "yes", "true", "1":
 		return false
 	}

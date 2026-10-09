@@ -184,10 +184,10 @@ func TestDocTypeSystemLegitimateValuesStillWrite(t *testing.T) {
 // document order.
 func collectElements(n *xdm.Node, local string) []*xdm.Node {
 	var out []*xdm.Node
-	if n.Kind == xdm.KindElement && n.Name.Local == local {
+	if n.Kind() == xdm.KindElement && n.Name().Local == local {
 		out = append(out, n)
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		out = append(out, collectElements(c, local)...)
 	}
 	return out
@@ -195,9 +195,9 @@ func collectElements(n *xdm.Node, local string) []*xdm.Node {
 
 // attrValue returns the value of an element's unprefixed attribute.
 func attrValue(n *xdm.Node, local string) string {
-	for _, a := range n.Attrs {
-		if a.Name.Local == local && a.Name.URI == "" {
-			return a.Value
+	for a := range n.Attrs() {
+		if a.Name().Local == local && a.Name().URI == "" {
+			return a.Value()
 		}
 	}
 	return ""

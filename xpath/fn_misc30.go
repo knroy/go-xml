@@ -92,7 +92,7 @@ func registerMisc30Funcs(l *Library) {
 			if !ok {
 				continue
 			}
-			out = append(out, xdm.NewAnyURI(n.BaseURI))
+			out = append(out, xdm.NewAnyURI(n.BaseURI()))
 		}
 		return out, nil
 	})
@@ -127,7 +127,7 @@ func registerMisc30Funcs(l *Library) {
 		out := make(xdm.Sequence, 0, len(seq))
 		for _, it := range seq {
 			n, ok := it.(*xdm.Node)
-			if !ok || n.Kind != xdm.KindElement {
+			if !ok || n.Kind() != xdm.KindElement {
 				continue
 			}
 			// The element was returned for its OWN is-id property rather than
@@ -135,11 +135,11 @@ func registerMisc30Funcs(l *Library) {
 			// what the identifier names. lookupByID appends the element
 			// itself in both cases, so the property is asked again here to
 			// tell them apart.
-			if n.IsID || isIDAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation) {
+			if n.IsID() || isIDAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation()) {
 				// A parentless ID element identifies nothing containing it.
 				// Returning it instead would be fn:id's answer, which is the
 				// one this function exists not to give.
-				if p := n.Parent; p != nil && p.Kind == xdm.KindElement {
+				if p := n.Parent(); p != nil && p.Kind() == xdm.KindElement {
 					out = append(out, p)
 				}
 				continue

@@ -30,16 +30,16 @@ func TestDescendantAttrsFusion(t *testing.T) {
 			got, gerr := MustCompile(src, ns).Eval(NewContext(ctxNode, Builtins()))
 			want, werr := MustCompile(ref, ns).Eval(NewContext(ctxNode, Builtins()))
 			if (gerr == nil) != (werr == nil) || gerr != nil && gerr.Error() != werr.Error() {
-				t.Fatalf("%s from %s: error %v, want %v", src, ctxNode.Kind, gerr, werr)
+				t.Fatalf("%s from %s: error %v, want %v", src, ctxNode.Kind(), gerr, werr)
 			}
 			if len(got) != len(want) {
-				t.Fatalf("%s from %s: %d items, want %d", src, ctxNode.Kind, len(got), len(want))
+				t.Fatalf("%s from %s: %d items, want %d", src, ctxNode.Kind(), len(got), len(want))
 			}
 			for i := range got {
 				ga, gok := got[i].(*xdm.Atomic)
 				wa, wok := want[i].(*xdm.Atomic)
 				if got[i] != want[i] && !(gok && wok && ga.String() == wa.String()) {
-					t.Fatalf("%s from %s: item %d differs", src, ctxNode.Kind, i)
+					t.Fatalf("%s from %s: item %d differs", src, ctxNode.Kind(), i)
 				}
 			}
 		}

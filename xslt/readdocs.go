@@ -55,7 +55,7 @@ func (r *readDocResolver) record(t *xdm.Tree) {
 	if t == nil || t.Root == nil {
 		return
 	}
-	if u := t.Root.DocumentURI; u != "" {
+	if u := t.Root.DocumentURI(); u != "" {
 		r.read[u] = true
 	}
 }
@@ -101,7 +101,7 @@ func (r *readDocResolver) checkWrittenThenRead(t *xdm.Tree) error {
 	if t == nil || t.Root == nil || r.written == nil {
 		return nil
 	}
-	u := t.Root.DocumentURI
+	u := t.Root.DocumentURI()
 	if u == "" || !r.written[u] {
 		return nil
 	}

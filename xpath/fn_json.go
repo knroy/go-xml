@@ -1114,7 +1114,7 @@ func (b *jsonXMLBuilder) attach(el *xdm.Node) error {
 		return nil
 	}
 	parent := b.stack[len(b.stack)-1]
-	if parent.Name.Local == "map" {
+	if parent.Name().Local == "map" {
 		k := b.pending
 		// The key attribute is written before the duplicate check so that
 		// use-last can replace the whole element.
@@ -1279,7 +1279,7 @@ func validateJSONTree(ctx *Context, doc *xdm.Node) error {
 // is not consulted for an element built this way.
 func setBaseURI(n *xdm.Node, base string) {
 	n.SetBaseURI(base)
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		setBaseURI(c, base)
 	}
 }
@@ -1289,12 +1289,12 @@ func setBaseURI(n *xdm.Node, base string) {
 // xmlToJSON serialises the XML representation back to JSON text.
 func xmlToJSON(n *xdm.Node, indent bool) (string, error) {
 	el := n
-	if el.Kind == xdm.KindDocument {
+	if el.Kind() == xdm.KindDocument {
 		// A document node stands for its single element child; anything else
 		// under it is not the representation of a JSON value.
 		el = nil
-		for _, c := range n.Children {
-			switch c.Kind {
+		for c := range n.Children() {
+			switch c.Kind() {
 			case xdm.KindElement:
 				if el != nil {
 					return "", xdm.Errorf("FOJS0006",
@@ -1303,7 +1303,7 @@ func xmlToJSON(n *xdm.Node, indent bool) (string, error) {
 				el = c
 			case xdm.KindComment, xdm.KindPI:
 			case xdm.KindText:
-				if strings.TrimSpace(c.Value) != "" {
+				if strings.TrimSpace(c.Value()) != "" {
 					return "", xdm.Errorf("FOJS0006",
 						"unexpected text under a document node holding JSON XML")
 				}
@@ -1314,9 +1314,9 @@ func xmlToJSON(n *xdm.Node, indent bool) (string, error) {
 				"a document node holding JSON XML must have one element child")
 		}
 	}
-	if el.Kind != xdm.KindElement {
+	if el.Kind() != xdm.KindElement {
 		return "", xdm.ErrType(
-			"fn:xml-to-json expects an element or document node, got %s", el.Kind)
+			"fn:xml-to-json expects an element or document node, got %s", el.Kind())
 	}
 	var b strings.Builder
 	if err := writeJSONFrom(&b, el, indent, 0, true); err != nil {
@@ -1339,15 +1339,15 @@ type jsonElementChild struct {
 // anything and is FOJS0006.
 func jsonChildren(el *xdm.Node) ([]*xdm.Node, error) {
 	var out []*xdm.Node
-	for _, c := range el.Children {
-		switch c.Kind {
+	for c := range el.Children() {
+		switch c.Kind() {
 		case xdm.KindElement:
 			out = append(out, c)
 		case xdm.KindComment, xdm.KindPI:
 		case xdm.KindText:
-			if strings.TrimSpace(c.Value) != "" {
+			if strings.TrimSpace(c.Value()) != "" {
 				return nil, xdm.Errorf("FOJS0006",
-					"element %s may not contain text", el.Name.Local)
+					"element %s may not contain text", el.Name().Local)
 			}
 		}
 	}
@@ -1360,24 +1360,24 @@ func jsonChildren(el *xdm.Node) ([]*xdm.Node, error) {
 // case xml-to-json-068 covers — but one in the JSON namespace itself is not,
 // and neither is a no-namespace attribute the element does not define.
 func checkJSONAttrs(el *xdm.Node, allowed ...string) error {
-	for _, a := range el.Attrs {
-		if a.Name.URI != "" {
-			if a.Name.URI == nsJSON {
+	for a := range el.Attrs() {
+		if a.Name().URI != "" {
+			if a.Name().URI == nsJSON {
 				return xdm.Errorf("FOJS0006",
-					"attribute %s is not allowed in the JSON namespace", a.Name.Local)
+					"attribute %s is not allowed in the JSON namespace", a.Name().Local)
 			}
 			continue
 		}
 		ok := false
 		for _, name := range allowed {
-			if a.Name.Local == name {
+			if a.Name().Local == name {
 				ok = true
 				break
 			}
 		}
 		if !ok {
 			return xdm.Errorf("FOJS0006",
-				"attribute %q is not allowed on element %s", a.Name.Local, el.Name.Local)
+				"attribute %q is not allowed on element %s", a.Name().Local, el.Name().Local)
 		}
 	}
 	return nil
@@ -1385,9 +1385,9 @@ func checkJSONAttrs(el *xdm.Node, allowed ...string) error {
 
 // attrValue returns a no-namespace attribute's value.
 func attrValue(el *xdm.Node, local string) (string, bool) {
-	for _, a := range el.Attrs {
-		if a.Name.URI == "" && a.Name.Local == local {
-			return a.Value, true
+	for a := range el.Attrs() {
+		if a.Name().URI == "" && a.Name().Local == local {
+			return a.Value(), true
 		}
 	}
 	return "", false
@@ -1417,14 +1417,14 @@ func jsonBooleanAttr(el *xdm.Node, local string) (bool, error) {
 // invisible and is FOJS0006.
 func elementText(el *xdm.Node) (string, error) {
 	var b strings.Builder
-	for _, c := range el.Children {
-		switch c.Kind {
+	for c := range el.Children() {
+		switch c.Kind() {
 		case xdm.KindText:
-			b.WriteString(c.Value)
+			b.WriteString(c.Value())
 		case xdm.KindComment, xdm.KindPI:
 		case xdm.KindElement:
 			return "", xdm.Errorf("FOJS0006",
-				"element %s may not have element children", el.Name.Local)
+				"element %s may not have element children", el.Name().Local)
 		}
 	}
 	return b.String(), nil
@@ -1436,9 +1436,9 @@ func elementText(el *xdm.Node) (string, error) {
 // left over from being selected out of a larger tree: xml-to-json-070 selects
 // a keyed array and expects the key to be dropped rather than to be an error.
 func writeJSONFrom(b *strings.Builder, el *xdm.Node, indent bool, depth int, isRoot bool) error {
-	if el.Name.URI != nsJSON {
+	if el.Name().URI != nsJSON {
 		return xdm.Errorf("FOJS0006",
-			"element %s is not in the XPath functions namespace", el.Name.Local)
+			"element %s is not in the XPath functions namespace", el.Name().Local)
 	}
 	// escaped and escaped-key are allowed on any element of the
 	// representation, including ones where they have no effect: xml-to-json-064
@@ -1447,7 +1447,7 @@ func writeJSONFrom(b *strings.Builder, el *xdm.Node, indent bool, depth int, isR
 	if err := checkJSONAttrs(el, allowed...); err != nil {
 		return err
 	}
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "null":
 		kids, err := jsonChildren(el)
 		if err != nil {
@@ -1575,7 +1575,7 @@ func writeJSONFrom(b *strings.Builder, el *xdm.Node, indent bool, depth int, isR
 		b.WriteByte('}')
 	default:
 		return xdm.Errorf("FOJS0006",
-			"element %s is not part of the JSON XML representation", el.Name.Local)
+			"element %s is not part of the JSON XML representation", el.Name().Local)
 	}
 	// A key on the outermost element is dropped rather than rejected; one on
 	// an element that is not a map's child anywhere else has already been

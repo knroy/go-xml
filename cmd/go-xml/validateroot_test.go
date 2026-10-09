@@ -165,8 +165,8 @@ func TestValidateOneGivesTheDocumentAURIBase(t *testing.T) {
 		t.Fatal("the validator was never called")
 	}
 	for _, c := range []struct{ what, uri string }{
-		{"base URI", got.BaseURI},
-		{"document URI", got.DocumentURI},
+		{"base URI", got.BaseURI()},
+		{"document URI", got.DocumentURI()},
 	} {
 		if !strings.HasPrefix(c.uri, "file:///") {
 			t.Errorf("%s = %q, want an absolute file: URI", c.what, c.uri)

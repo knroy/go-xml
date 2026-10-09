@@ -21,14 +21,14 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 		visit(n)
 
 	case AxisChild:
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			if !visit(c) {
 				return
 			}
 		}
 
 	case AxisAttribute:
-		for _, a := range n.Attrs {
+		for a := range n.Attrs() {
 			if !visit(a) {
 				return
 			}
@@ -49,7 +49,7 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 		// namespace axis — including the text and document nodes of a
 		// temporary tree, which inherit no bindings because they have no
 		// name to put in a namespace.
-		if n.Kind != xdm.KindElement {
+		if n.Kind() != xdm.KindElement {
 			return
 		}
 		scope := n.InScopeNamespaces()
@@ -72,7 +72,7 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 		}
 
 	case AxisParent:
-		if p := n.Parent; p != nil {
+		if p := n.Parent(); p != nil {
 			visit(p)
 		}
 
@@ -86,7 +86,7 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 		walkDescendants(n, visit)
 
 	case AxisAncestor:
-		for p := n.Parent; p != nil; p = p.Parent {
+		for p := n.Parent(); p != nil; p = p.Parent() {
 			if !visit(p) {
 				return
 			}
@@ -96,7 +96,7 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 		if !visit(n) {
 			return
 		}
-		for p := n.Parent; p != nil; p = p.Parent {
+		for p := n.Parent(); p != nil; p = p.Parent() {
 			if !visit(p) {
 				return
 			}
@@ -133,7 +133,7 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 // walkDescendants visits children depth-first in document order. Attributes
 // and namespace nodes are not descendants of their element.
 func walkDescendants(n *xdm.Node, visit func(*xdm.Node) bool) bool {
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		if !visit(c) {
 			return false
 		}
@@ -149,11 +149,11 @@ func walkDescendants(n *xdm.Node, visit func(*xdm.Node) bool) bool {
 // inlined, for the hot shape "//name": no closure or interface call per node.
 // Only elements have children, so it does not descend into any other kind.
 func appendNamedDescendants(out xdm.Sequence, n *xdm.Node, t *NameTest) xdm.Sequence {
-	for _, c := range n.Children {
-		if c.Kind != xdm.KindElement {
+	for c := range n.Children() {
+		if c.Kind() != xdm.KindElement {
 			continue
 		}
-		if (t.AnyURI || c.Name.URI == t.Name.URI) && (t.AnyLocal || c.Name.Local == t.Name.Local) {
+		if (t.AnyURI || c.Name().URI == t.Name.URI) && (t.AnyLocal || c.Name().Local == t.Name.Local) {
 			out = append(out, c)
 		}
 		if c.NumChildren() > 0 {
@@ -166,10 +166,10 @@ func appendNamedDescendants(out xdm.Sequence, n *xdm.Node, t *NameTest) xdm.Sequ
 // siblingsOf returns n's parent and n's index among its children, or nil and
 // -1. Attributes have no siblings on the sibling axes, per the spec.
 func siblingsOf(n *xdm.Node) (*xdm.Node, int) {
-	if n.Parent == nil || n.Kind == xdm.KindAttribute || n.Kind == xdm.KindNamespace {
+	if n.Parent() == nil || n.Kind() == xdm.KindAttribute || n.Kind() == xdm.KindNamespace {
 		return nil, -1
 	}
-	p := n.Parent
+	p := n.Parent()
 	for i := range p.NumChildren() {
 		if p.ChildAt(i) == n {
 			return p, i
@@ -188,14 +188,14 @@ func walkFollowing(n *xdm.Node, visit func(*xdm.Node) bool) {
 	// of the attribute — an attribute has none — so the exclusion the axis
 	// makes for descendants does not reach them, and starting the walk at the
 	// owner element's siblings skipped the whole subtree.
-	if n.Kind == xdm.KindAttribute || n.Kind == xdm.KindNamespace {
-		if n.Parent != nil {
-			if !walkDescendants(n.Parent, visit) {
+	if n.Kind() == xdm.KindAttribute || n.Kind() == xdm.KindNamespace {
+		if n.Parent() != nil {
+			if !walkDescendants(n.Parent(), visit) {
 				return
 			}
 		}
 	}
-	for cur := n; cur != nil; cur = cur.Parent {
+	for cur := n; cur != nil; cur = cur.Parent() {
 		p, i := siblingsOf(cur)
 		if i < 0 {
 			continue
@@ -215,7 +215,7 @@ func walkFollowing(n *xdm.Node, visit func(*xdm.Node) bool) {
 // ancestors. It is a reverse axis, so nodes are yielded nearest first: within
 // each preceding sibling's subtree the deepest, last node comes first.
 func walkPreceding(n *xdm.Node, visit func(*xdm.Node) bool) {
-	for cur := n; cur != nil; cur = cur.Parent {
+	for cur := n; cur != nil; cur = cur.Parent() {
 		p, i := siblingsOf(cur)
 		if i < 0 {
 			continue

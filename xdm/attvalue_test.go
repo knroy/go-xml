@@ -41,8 +41,8 @@ func attValues(t *testing.T, src string, n int) string {
 	var vals []string
 	var walk func(*Node)
 	walk = func(n *Node) {
-		for _, a := range n.Attrs {
-			vals = append(vals, a.Value)
+		for _, a := range n.attrs {
+			vals = append(vals, a.value)
 		}
 		for _, c := range n.ChildElements() {
 			walk(c)
@@ -125,7 +125,7 @@ func TestParseNormalizesAttributeValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	el := tree.Root.ChildElements()[0]
-	if got, want := el.Attrs[0].Value, "color: #336699; font-weight: bold"; got != want {
+	if got, want := el.attrs[0].value, "color: #336699; font-weight: bold"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 
@@ -135,7 +135,7 @@ func TestParseNormalizesAttributeValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := tree.Root.ChildElements()[0].Attrs[0].Value; got != "x\ny" {
+	if got := tree.Root.ChildElements()[0].attrs[0].value; got != "x\ny" {
 		t.Fatalf("character reference not preserved: got %q", got)
 	}
 }
@@ -174,7 +174,7 @@ func TestEntityReplacementInAttributeValue(t *testing.T) {
 				t.Fatalf("%s (markup path %v): %v", c.name, markup, err)
 			}
 			r := tree.Root.ChildElements()[0]
-			if got := r.Attrs[0].Value; got != c.want {
+			if got := r.attrs[0].value; got != c.want {
 				t.Errorf("%s (markup path %v): got %q, want %q", c.name, markup, got, c.want)
 			}
 			// In content the replacement text is not normalized.
@@ -211,7 +211,7 @@ func TestAttributeDefaultNormalization(t *testing.T) {
 			continue
 		}
 		v := tree.Root.ChildElements()[0].Attr("", "v")
-		if v == nil || v.Value != c.want {
+		if v == nil || v.value != c.want {
 			t.Errorf("%s: got %v, want %q", c.name, v, c.want)
 		}
 	}
@@ -236,7 +236,7 @@ func TestAttributeDefaultNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := tree.Root.ChildElements()[0].Attr("", "v").Value; got != "w" {
+	if got := tree.Root.ChildElements()[0].Attr("", "v").value; got != "w" {
 		t.Errorf("written value = %q, want w", got)
 	}
 }
@@ -262,10 +262,10 @@ func TestDTDLineEnds(t *testing.T) {
 		if got := r.StringValue(); got != c.content {
 			t.Errorf("%s content: got %q, want %q", c.decl, got, c.content)
 		}
-		if got := r.Attr("", "a").Value; got != c.attr {
+		if got := r.Attr("", "a").value; got != c.attr {
 			t.Errorf("%s attribute: got %q, want %q", c.decl, got, c.attr)
 		}
-		if got := r.Attr("", "d").Value; got != c.def {
+		if got := r.Attr("", "d").value; got != c.def {
 			t.Errorf("%s default: got %q, want %q", c.decl, got, c.def)
 		}
 	}
@@ -320,10 +320,10 @@ func TestCommentAndPILineEnds(t *testing.T) {
 		}
 		root := tree.Root
 		r := root.ChildElements()[0]
-		nodes := []*Node{root.Children[0], r.Children[0], r.Children[1], root.Children[2]}
+		nodes := []*Node{root.children[0], r.children[0], r.children[1], root.children[2]}
 		for i, n := range nodes {
-			if n.Value != c.want {
-				t.Errorf("%s node %d (%v): got %q, want %q", c.decl, i, n.Kind, n.Value, c.want)
+			if n.value != c.want {
+				t.Errorf("%s node %d (%v): got %q, want %q", c.decl, i, n.kind, n.value, c.want)
 			}
 		}
 	}
@@ -365,7 +365,7 @@ func TestUndeclaredEntityWFCOrVC(t *testing.T) {
 			continue
 		}
 		r := tree.Root.ChildElements()[0]
-		if got := r.StringValue() + "|" + r.Attr("", "a").Value; got != "xy|12" {
+		if got := r.StringValue() + "|" + r.Attr("", "a").value; got != "xy|12" {
 			t.Errorf("%s: got %q, want the reference dropped (xy|12)", c.name, got)
 		}
 	}
@@ -379,7 +379,7 @@ func TestUndeclaredEntityWFCOrVC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := tree.Root.ChildElements()[0].Attr("", "d").Value; got != "1L2" {
+	if got := tree.Root.ChildElements()[0].Attr("", "d").value; got != "1L2" {
 		t.Errorf("default = %q, want 1L2", got)
 	}
 
@@ -407,11 +407,11 @@ func TestCRNELUnderXML10(t *testing.T) {
 	for _, c := range []struct {
 		what, got, want string
 	}{
-		{"prolog comment", tree.Root.Children[0].Value, lf},
-		{"attribute", r.Attr("", "a").Value, sp},
-		{"text and CDATA", r.Children[0].Value, lf + lf},
-		{"PI", r.Children[1].Value, lf},
-		{"epilog PI", tree.Root.Children[2].Value, lf},
+		{"prolog comment", tree.Root.children[0].value, lf},
+		{"attribute", r.Attr("", "a").value, sp},
+		{"text and CDATA", r.children[0].value, lf + lf},
+		{"PI", r.children[1].value, lf},
+		{"epilog PI", tree.Root.children[2].value, lf},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s: got %q, want %q", c.what, c.got, c.want)
@@ -425,7 +425,7 @@ func TestCRNELUnderXML10(t *testing.T) {
 	if got := r.StringValue(); got != lf {
 		t.Errorf("entity in content: got %q, want %q", got, lf)
 	}
-	if got := r.Attr("", "a").Value; got != sp {
+	if got := r.Attr("", "a").value; got != sp {
 		t.Errorf("entity in attribute: got %q, want %q", got, sp)
 	}
 }

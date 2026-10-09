@@ -607,7 +607,7 @@ func (e *SchemaErrors) Unwrap() []error { return e.Errors }
 
 // readDocument reads one <xs:schema> element.
 func (p *parser) readDocument(root *xdm.Node, baseURI string) error {
-	if root.Kind == xdm.KindDocument {
+	if root.Kind() == xdm.KindDocument {
 		els := root.ChildElements()
 		if len(els) == 0 {
 			return errorAt(root, "", "schema document is empty")
@@ -616,12 +616,12 @@ func (p *parser) readDocument(root *xdm.Node, baseURI string) error {
 	}
 	if !root.IsElement(NSSchema, "schema") {
 		return errorAt(root, "",
-			"schema document root is %s, want {%s}schema", root.Name.Local, NSSchema)
+			"schema document root is %s, want {%s}schema", root.Name().Local, NSSchema)
 	}
 
 	doc := &schemaDoc{root: root, baseURI: baseURI}
 	if a := root.Attr("", "targetNamespace"); a != nil {
-		doc.targetNS = a.Value
+		doc.targetNS = a.Value()
 		doc.hasTargetNS = true
 	}
 	doc.elementFormQualified = p.formDefault(root, "elementFormDefault")
@@ -681,21 +681,21 @@ func (p *parser) checkIDs(root *xdm.Node) {
 	seen := map[string]bool{}
 	var walk func(*xdm.Node)
 	walk = func(n *xdm.Node) {
-		if n.Name.URI == NSSchema {
+		if n.Name().URI == NSSchema {
 			if a := n.Attr("", "id"); a != nil {
 				switch {
-				case !isNCName(a.Value):
+				case !isNCName(a.Value()):
 					p.errs = append(p.errs, errorAt(n, "",
 						"id %q is not a valid xs:ID: an "+
 							"xs:ID must be an NCName",
-						a.Value))
-				case seen[a.Value]:
+						a.Value()))
+				case seen[a.Value()]:
 					p.errs = append(p.errs, errorAt(n, "",
 						"id %q appears more than once; an "+
 							"xs:ID must be unique within "+
-							"the document", a.Value))
+							"the document", a.Value()))
 				default:
-					seen[a.Value] = true
+					seen[a.Value()] = true
 				}
 			}
 			// <xs:documentation> and <xs:appinfo> take xml:lang as
@@ -710,13 +710,13 @@ func (p *parser) checkIDs(root *xdm.Node) {
 			// annotF003 writes xml:lang=" ", which collapses to the
 			// same thing.
 			p.checkVersioningAttrs(n)
-			switch n.Name.Local {
+			switch n.Name().Local {
 			case "documentation", "appinfo":
 				if a := n.Attr(NSXML, "lang"); a != nil {
-					if v := WhiteCollapse.Normalize(a.Value); !isLanguage(v) {
+					if v := WhiteCollapse.Normalize(a.Value()); !isLanguage(v) {
 						p.errs = append(p.errs, errorAt(n, "",
 							"xml:lang %q on <xs:%s> is not a valid "+
-								"xs:language", a.Value, n.Name.Local))
+								"xs:language", a.Value(), n.Name().Local))
 					}
 				}
 			}
@@ -747,22 +747,22 @@ func (p *parser) checkVersioningAttrs(el *xdm.Node) {
 	if p.schema.Version < Version11 {
 		return
 	}
-	for _, a := range el.Attrs {
-		if a.Name.URI != NSVersioning {
+	for a := range el.Attrs() {
+		if a.Name().URI != NSVersioning {
 			continue
 		}
 		// Matched case-insensitively for the same reason
 		// includeElement does: the suite spells minVersion both ways.
-		switch strings.ToLower(a.Name.Local) {
+		switch strings.ToLower(a.Name().Local) {
 		case "minversion", "maxversion":
-			if !isDecimalLexical(trimXMLSpace(a.Value)) {
+			if !isDecimalLexical(trimXMLSpace(a.Value())) {
 				p.errs = append(p.errs, errorAt(el, "src-schema.1",
-					"vc:%s=%q is not an xs:decimal", a.Name.Local, a.Value))
+					"vc:%s=%q is not an xs:decimal", a.Name().Local, a.Value()))
 			}
 		case "typeavailable", "typeunavailable",
 			"facetavailable", "facetunavailable":
-			for _, word := range splitFields(a.Value) {
-				if _, err := p.resolveQName(el, "vc:"+a.Name.Local, word); err != nil {
+			for _, word := range splitFields(a.Value()) {
+				if _, err := p.resolveQName(el, "vc:"+a.Name().Local, word); err != nil {
 					p.errs = append(p.errs, err)
 					continue
 				}
@@ -779,7 +779,7 @@ func (p *parser) checkVersioningAttrs(el *xdm.Node) {
 				if !isNCName(local) {
 					p.errs = append(p.errs, errorAt(el, "src-schema.1",
 						"vc:%s names %q, which is not a QName",
-						a.Name.Local, word))
+						a.Name().Local, word))
 				}
 			}
 		}
@@ -797,12 +797,12 @@ func (p *parser) readTopLevel(el *xdm.Node) {
 	if !includeElement(el, p.schema.Version) {
 		return
 	}
-	if el.Name.URI != NSSchema {
+	if el.Name().URI != NSSchema {
 		// Foreign elements at the top level are permitted only inside
 		// <xs:annotation>; elsewhere they are a representation fault.
 		p.errs = append(p.errs, errorAt(el, "src-schema.1",
 			"unexpected element {%s}%s at the top level of a schema",
-			el.Name.URI, el.Name.Local))
+			el.Name().URI, el.Name().Local))
 		return
 	}
 
@@ -817,7 +817,7 @@ func (p *parser) readTopLevel(el *xdm.Node) {
 	// documents and for the replacements inside <redefine> and <override>.
 	p.checkSourceModel(el)
 
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "annotation", "defaultOpenContent",
 		"override", "include", "import", "redefine":
 		// None of these is a declaration, so none of them closes the
@@ -826,7 +826,7 @@ func (p *parser) readTopLevel(el *xdm.Node) {
 		p.doc.sawDeclaration = true
 	}
 
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "annotation":
 		// Annotations carry documentation and application information.
 		// Neither affects validation.
@@ -886,7 +886,7 @@ func (p *parser) readTopLevel(el *xdm.Node) {
 		if p.doc.sawDeclaration {
 			p.errs = append(p.errs, errorAt(el, "src-schema.1",
 				"xs:%s must come before every declaration and definition",
-				el.Name.Local))
+				el.Name().Local))
 		}
 		// Assembling several documents is the caller's concern; see the
 		// note on ParseSchema. A single-document parse records nothing
@@ -895,7 +895,7 @@ func (p *parser) readTopLevel(el *xdm.Node) {
 
 	default:
 		p.errs = append(p.errs, errorAt(el, "src-schema.1",
-			"unexpected element xs:%s at the top level of a schema", el.Name.Local))
+			"unexpected element xs:%s at the top level of a schema", el.Name().Local))
 	}
 }
 
@@ -1285,22 +1285,22 @@ func (p *parser) occurs(el *xdm.Node) (min, max int, err error) {
 	min, max = 1, 1
 	p.exactMin, p.exactMax = nil, nil
 	if a := el.Attr("", "minOccurs"); a != nil {
-		n, exact, ok := occursValue(a.Value)
+		n, exact, ok := occursValue(a.Value())
 		if !ok {
 			return 0, 0, errorAt(el, "p-props-correct.1",
-				"minOccurs=%q is not a non-negative integer", a.Value)
+				"minOccurs=%q is not a non-negative integer", a.Value())
 		}
 		min, p.exactMin = n, exact
 	}
 	if a := el.Attr("", "maxOccurs"); a != nil {
-		v := trimXMLSpace(a.Value)
+		v := trimXMLSpace(a.Value())
 		if v == "unbounded" {
 			max = Unbounded
 		} else {
 			n, exact, ok := occursValue(v)
 			if !ok {
 				return 0, 0, errorAt(el, "p-props-correct.1",
-					"maxOccurs=%q is not a non-negative integer or \"unbounded\"", a.Value)
+					"maxOccurs=%q is not a non-negative integer or \"unbounded\"", a.Value())
 			}
 			max, p.exactMax = n, exact
 		}
@@ -1342,7 +1342,7 @@ func (p *parser) boolAttr(el *xdm.Node, name string, def bool) bool {
 	if a == nil {
 		return def
 	}
-	v := trimXMLSpace(a.Value)
+	v := trimXMLSpace(a.Value())
 	switch v {
 	case "true", "1":
 		return true
@@ -1382,8 +1382,8 @@ func (p *parser) derivationSet(el *xdm.Node, name string) (DerivationSet, error)
 	// restriction}": substitution is something an element does, not
 	// something a type definition can prohibit (ctA016).
 	blocking := name == "blockDefault" ||
-		(name == "block" && el.Name.Local == "element")
-	simple := el.Name.Local == "simpleType" ||
+		(name == "block" && el.Name().Local == "element")
+	simple := el.Name().Local == "simpleType" ||
 		(name == "finalDefault" && !blocking)
 
 	var out DerivationSet
@@ -1430,9 +1430,9 @@ func (p *parser) valueConstraint(el *xdm.Node) *ValueConstraint {
 			"a declaration may not have both default and fixed"))
 		return nil
 	case fix != nil:
-		return &ValueConstraint{Fixed: true, Lexical: fix.Value}
+		return &ValueConstraint{Fixed: true, Lexical: fix.Value()}
 	case def != nil:
-		return &ValueConstraint{Lexical: def.Value}
+		return &ValueConstraint{Lexical: def.Value()}
 	}
 	return nil
 }
@@ -1441,7 +1441,7 @@ func (p *parser) valueConstraint(el *xdm.Node) *ValueConstraint {
 // of the given names, skipping annotations.
 func (p *parser) childElement(el *xdm.Node, names ...string) *xdm.Node {
 	for _, c := range el.ChildElements() {
-		if c.Name.URI != NSSchema {
+		if c.Name().URI != NSSchema {
 			continue
 		}
 		if !includeElement(c, p.schema.Version) {
@@ -1450,7 +1450,7 @@ func (p *parser) childElement(el *xdm.Node, names ...string) *xdm.Node {
 			continue
 		}
 		for _, n := range names {
-			if c.Name.Local == n {
+			if c.Name().Local == n {
 				return c
 			}
 		}
@@ -1466,7 +1466,7 @@ func (p *parser) childElement(el *xdm.Node, names ...string) *xdm.Node {
 func (p *parser) contentChildren(el *xdm.Node) []*xdm.Node {
 	var out []*xdm.Node
 	for _, c := range el.ChildElements() {
-		if c.Name.URI == NSSchema && c.Name.Local == "annotation" {
+		if c.Name().URI == NSSchema && c.Name().Local == "annotation" {
 			continue
 		}
 		// XSD 1.1 conditional inclusion (§4.2.1): an element the
@@ -1496,13 +1496,13 @@ func (p *parser) formDefault(root *xdm.Node, name string) bool {
 	if a == nil {
 		return false
 	}
-	switch a.Value {
+	switch a.Value() {
 	case "qualified":
 		return true
 	case "unqualified":
 		return false
 	}
 	p.errs = append(p.errs, errorAt(root, "",
-		"%s=%q is not one of qualified or unqualified", name, a.Value))
+		"%s=%q is not one of qualified or unqualified", name, a.Value()))
 	return false
 }

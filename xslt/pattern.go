@@ -661,7 +661,7 @@ func (a *patternAlt) matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
 		// doc's own child, since the nearest anchor tried was doc's parent.
 		inner := rest[len(rest)-1]
 		before := rest[:len(rest)-1]
-		for anc := node.Parent; anc != nil; anc = anc.Parent {
+		for anc := node.Parent(); anc != nil; anc = anc.Parent() {
 			ok, err := matchStep(inner, anc, ctx)
 			if err != nil {
 				return false, err
@@ -689,8 +689,8 @@ func (a *patternAlt) matchAncestors(steps []patternStep, node *xdm.Node, ctx *xp
 		// Every step is satisfied. An absolute pattern additionally requires
 		// that we have reached the document node.
 		if a.absolute {
-			return node.Parent != nil && node.Parent.Kind == xdm.KindDocument ||
-				node.Kind == xdm.KindDocument, nil
+			return node.Parent() != nil && node.Parent().Kind() == xdm.KindDocument ||
+				node.Kind() == xdm.KindDocument, nil
 		}
 		return true, nil
 	}
@@ -709,7 +709,7 @@ func (a *patternAlt) matchAncestors(steps []patternStep, node *xdm.Node, ctx *xp
 	// level too low: the first such step then described the candidate rather
 	// than its parent, and a second found nothing left to agree with.
 	if step.self {
-		parent := node.Parent
+		parent := node.Parent()
 		if parent == nil {
 			return false, nil
 		}
@@ -750,16 +750,16 @@ func (a *patternAlt) matchAncestors(steps []patternStep, node *xdm.Node, ctx *xp
 			// because the tree it sits in is rooted at an element.
 			if a.absolute {
 				root := node
-				for root.Parent != nil {
-					root = root.Parent
+				for root.Parent() != nil {
+					root = root.Parent()
 				}
-				return root.Kind == xdm.KindDocument, nil
+				return root.Kind() == xdm.KindDocument, nil
 			}
-			return node.Parent != nil, nil
+			return node.Parent() != nil, nil
 		}
 		inner := rest[len(rest)-1]
 		before := rest[:len(rest)-1]
-		for anc := node.Parent; anc != nil; anc = anc.Parent {
+		for anc := node.Parent(); anc != nil; anc = anc.Parent() {
 			ok, err := matchStep(inner, anc, ctx)
 			if err != nil {
 				return false, err
@@ -778,7 +778,7 @@ func (a *patternAlt) matchAncestors(steps []patternStep, node *xdm.Node, ctx *xp
 		return false, nil
 	}
 
-	parent := node.Parent
+	parent := node.Parent()
 	if parent == nil {
 		return false, nil
 	}
@@ -800,14 +800,14 @@ func matchStep(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) 
 	}
 	// The namespace axis contains only namespace nodes, and no other axis
 	// contains any, so the two disagreeing is an immediate non-match.
-	if s.namespace != (node.Kind == xdm.KindNamespace) {
+	if s.namespace != (node.Kind() == xdm.KindNamespace) {
 		return false, nil
 	}
-	if node.Kind == xdm.KindAttribute && !s.attribute {
+	if node.Kind() == xdm.KindAttribute && !s.attribute {
 		// A child-axis step never matches an attribute.
 		return false, nil
 	}
-	if s.attribute && node.Kind != xdm.KindAttribute {
+	if s.attribute && node.Kind() != xdm.KindAttribute {
 		// The attribute axis contains only attributes, so a step on it never
 		// matches anything else — whatever its node test says.
 		return false, nil
@@ -837,7 +837,7 @@ func matchStep(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) 
 	// document node is where template selection starts, a stylesheet
 	// declaring both match="doc" and match="node()" ran the second on the
 	// root and never reached the first.
-	if node.Kind == xdm.KindDocument && !s.attribute {
+	if node.Kind() == xdm.KindDocument && !s.attribute {
 		// Only the unrestricted node() test is excluded. document-node() and
 		// "/" name the document node explicitly and must still match it;
 		// they differ from node() by not being the "any kind" test.
@@ -887,7 +887,7 @@ func matchPredicates(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, e
 			break
 		}
 	}
-	if len(s.preds) < 2 || !positional || node.Parent == nil {
+	if len(s.preds) < 2 || !positional || node.Parent() == nil {
 		for _, pred := range s.preds {
 			ok, err := evalPatternPredicate(pred, s, node, ctx)
 			if err != nil {
@@ -904,9 +904,9 @@ func matchPredicates(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, e
 	if s.attribute {
 		principal = xdm.KindAttribute
 	}
-	cand := make([]*xdm.Node, 0, numSiblings(node.Parent, s.attribute))
-	for i := range numSiblings(node.Parent, s.attribute) {
-		sib := siblingAt(node.Parent, s.attribute, i)
+	cand := make([]*xdm.Node, 0, numSiblings(node.Parent(), s.attribute))
+	for i := range numSiblings(node.Parent(), s.attribute) {
+		sib := siblingAt(node.Parent(), s.attribute, i)
 		if s.nodeTest.Matches(sib, principal) {
 			cand = append(cand, sib)
 		}
@@ -975,14 +975,14 @@ func siblingAt(p *xdm.Node, attr bool, i int) *xdm.Node {
 // worth avoiding in hot rule sets.
 func evalPatternPredicate(pred xpath.Expr, s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) {
 	pos, size := 1, 1
-	if needsPosition(pred) && node.Parent != nil {
+	if needsPosition(pred) && node.Parent() != nil {
 		principal := xdm.KindElement
 		if s.attribute {
 			principal = xdm.KindAttribute
 		}
 		size = 0
-		for i := range numSiblings(node.Parent, s.attribute) {
-			sib := siblingAt(node.Parent, s.attribute, i)
+		for i := range numSiblings(node.Parent(), s.attribute) {
+			sib := siblingAt(node.Parent(), s.attribute, i)
 			if s.nodeTest.Matches(sib, principal) {
 				size++
 				if sib == node {
@@ -1351,7 +1351,7 @@ func (a *patternAlt) callAncestors(steps []patternStep, node *xdm.Node,
 		// first step of the path was the call, and the axis joining it to
 		// what follows is a descendant one in the "//" form, so any
 		// ancestor will do.
-		for p := node.Parent; p != nil; p = p.Parent {
+		for p := node.Parent(); p != nil; p = p.Parent() {
 			for _, it := range seq {
 				if n, ok := it.(*xdm.Node); ok && n == p {
 					return true, nil
@@ -1365,7 +1365,7 @@ func (a *patternAlt) callAncestors(steps []patternStep, node *xdm.Node,
 	}
 
 	last := steps[len(steps)-1]
-	for anc := node.Parent; anc != nil; anc = anc.Parent {
+	for anc := node.Parent(); anc != nil; anc = anc.Parent() {
 		ok, err := matchStep(last, anc, ctx)
 		if err != nil {
 			return false, err
@@ -1700,7 +1700,7 @@ func schemaDeclaredMatches(nt xpath.NodeTest, node *xdm.Node) bool {
 	if !ok || !kt.SchemaDeclared {
 		return true
 	}
-	return node.TypeAnnotation != ""
+	return node.TypeAnnotation() != ""
 }
 
 // isNonRecoverable reports whether an error must propagate out of a pattern
@@ -1750,11 +1750,11 @@ func (a *patternAlt) matchDescendantPositional(last patternStep,
 	// descendant-or-self reaches the anchor itself, so the candidate may BE
 	// the node the preceding step names: match-274's outer x is the root of
 	// a parentless tree and is its own anchor.
-	start := node.Parent
+	start := node.Parent()
 	if last.orSelf {
 		start = node
 	}
-	for anc := start; anc != nil; anc = anc.Parent {
+	for anc := start; anc != nil; anc = anc.Parent() {
 		// The anchor is the node the step before the descendant one names,
 		// so it is tested against that step directly; matchAncestors then
 		// verifies what precedes it, starting from the anchor.
@@ -1793,10 +1793,10 @@ func nodeTestHolds(s patternStep, node *xdm.Node) bool {
 	if s.namespace {
 		principal = xdm.KindNamespace
 	}
-	if s.namespace != (node.Kind == xdm.KindNamespace) {
+	if s.namespace != (node.Kind() == xdm.KindNamespace) {
 		return false
 	}
-	if s.attribute != (node.Kind == xdm.KindAttribute) {
+	if s.attribute != (node.Kind() == xdm.KindAttribute) {
 		return false
 	}
 	return s.nodeTest.Matches(node, principal) && schemaDeclaredMatches(s.nodeTest, node)
@@ -1813,7 +1813,7 @@ func descendantsMatching(s patternStep, root *xdm.Node) []*xdm.Node {
 	}
 	var walk func(*xdm.Node)
 	walk = func(n *xdm.Node) {
-		for _, ch := range n.Children {
+		for ch := range n.Children() {
 			if nodeTestHolds(s, ch) {
 				out = append(out, ch)
 			}

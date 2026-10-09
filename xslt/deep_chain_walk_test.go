@@ -154,7 +154,7 @@ func TestAccumulatorOriginDeepCopyChain(t *testing.T) {
 		if got := rt.accumulatorOrigin(nodes[n]); got != nodes[0] {
 			t.Errorf("copies=%d: origin of the last copy is %s, want the "+
 				"original c0 — the accumulator reports the wrong node's value",
-				n, got.Name.Local)
+				n, got.Name().Local)
 		}
 		// Every intermediate resolves to the same original, and the original
 		// resolves to itself.
@@ -164,7 +164,7 @@ func TestAccumulatorOriginDeepCopyChain(t *testing.T) {
 		mid := n / 2
 		if got := rt.accumulatorOrigin(nodes[mid]); got != nodes[0] {
 			t.Errorf("copies=%d: copy %d resolves to %s, want c0",
-				n, mid, got.Name.Local)
+				n, mid, got.Name().Local)
 		}
 	}
 }

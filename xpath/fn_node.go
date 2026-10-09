@@ -230,9 +230,9 @@ func registerNodeFuncs(l *Library) {
 		}
 		// fn:name returns the lexical QName, prefix included; fn:local-name
 		// does not. Document and text nodes have no name, giving "".
-		switch n.Kind {
+		switch n.Kind() {
 		case xdm.KindElement, xdm.KindAttribute, xdm.KindPI, xdm.KindNamespace:
-			return strSeq(n.Name.Lexical()), nil
+			return strSeq(n.Name().Lexical()), nil
 		}
 		return strSeq(""), nil
 	})
@@ -242,7 +242,7 @@ func registerNodeFuncs(l *Library) {
 		if err != nil || n == nil {
 			return strSeq(""), err
 		}
-		return strSeq(n.Name.Local), nil
+		return strSeq(n.Name().Local), nil
 	})
 
 	l.registerFn("namespace-uri", []int{0, 1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -250,7 +250,7 @@ func registerNodeFuncs(l *Library) {
 		if err != nil || n == nil {
 			return xdm.One(xdm.NewAnyURI("")), err
 		}
-		return xdm.One(xdm.NewAnyURI(n.Name.URI)), nil
+		return xdm.One(xdm.NewAnyURI(n.Name().URI)), nil
 	})
 
 	l.registerFn("root", []int{0, 1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -266,9 +266,9 @@ func registerNodeFuncs(l *Library) {
 		if err != nil || n == nil {
 			return xdm.Empty(), err
 		}
-		switch n.Kind {
+		switch n.Kind() {
 		case xdm.KindElement, xdm.KindAttribute, xdm.KindPI, xdm.KindNamespace:
-			return xdm.One(xdm.NewQNameValue(n.Name)), nil
+			return xdm.One(xdm.NewQNameValue(n.Name())), nil
 		}
 		return xdm.Empty(), nil
 	})
@@ -293,10 +293,10 @@ func registerNodeFuncs(l *Library) {
 		// $d" -- the identity F&O guarantees -- was false for it. Only a
 		// document actually loaded by URI has a document URI, which is what
 		// ParseOptions.DocumentURI records and what leaving it empty means.
-		if n.Kind != xdm.KindDocument || n.DocumentURI == "" {
+		if n.Kind() != xdm.KindDocument || n.DocumentURI() == "" {
 			return xdm.Empty(), nil
 		}
-		return xdm.One(xdm.NewAnyURI(n.DocumentURI)), nil
+		return xdm.One(xdm.NewAnyURI(n.DocumentURI())), nil
 	})
 
 	l.registerFn("base-uri", []int{0, 1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -304,7 +304,7 @@ func registerNodeFuncs(l *Library) {
 		if err != nil || n == nil {
 			return xdm.Empty(), err
 		}
-		if n.Kind == xdm.KindNamespace {
+		if n.Kind() == xdm.KindNamespace {
 			// The data model defines no dm:base-uri for a namespace node, so
 			// the accessor returns the empty sequence rather than inheriting
 			// the element's. accessor-027/028 pin this: base-uri() over the
@@ -350,7 +350,7 @@ func registerNodeFuncs(l *Library) {
 		if err != nil || n == nil {
 			return xdm.Empty(), err
 		}
-		if n.Kind != xdm.KindElement {
+		if n.Kind() != xdm.KindElement {
 			return xdm.Empty(), nil
 		}
 		// dm:nilled is a PSVI property: it is set by schema validation, not by
@@ -383,9 +383,9 @@ func registerNodeFuncs(l *Library) {
 // stylesheet: a temporary tree records the base on its document node and
 // nowhere else.
 func inheritedBaseURI(n *xdm.Node) string {
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.BaseURI != "" {
-			return cur.BaseURI
+	for cur := n; cur != nil; cur = cur.Parent() {
+		if cur.BaseURI() != "" {
+			return cur.BaseURI()
 		}
 	}
 	return ""
@@ -394,12 +394,12 @@ func inheritedBaseURI(n *xdm.Node) string {
 // langMatches implements fn:lang: the nearest xml:lang in scope must equal the
 // requested tag or have it as a prefix followed by "-".
 func langMatches(n *xdm.Node, want string) bool {
-	for cur := n; cur != nil; cur = cur.Parent {
+	for cur := n; cur != nil; cur = cur.Parent() {
 		a := cur.Attr(xdm.NSXML, "lang")
 		if a == nil {
 			continue
 		}
-		have := strings.ToLower(a.Value)
+		have := strings.ToLower(a.Value())
 		w := strings.ToLower(want)
 		return have == w || strings.HasPrefix(have, w+"-")
 	}
@@ -425,8 +425,8 @@ func registerContextFuncs(l *Library) {
 		if ctx.StaticBaseURI != "" {
 			return xdm.One(xdm.NewAnyURI(ctx.StaticBaseURI)), nil
 		}
-		if n, ok := ctx.Item.(*xdm.Node); ok && n.BaseURI != "" {
-			return xdm.One(xdm.NewAnyURI(n.BaseURI)), nil
+		if n, ok := ctx.Item.(*xdm.Node); ok && n.BaseURI() != "" {
+			return xdm.One(xdm.NewAnyURI(n.BaseURI())), nil
 		}
 		return xdm.Empty(), nil
 	})
@@ -578,7 +578,7 @@ func fnDoc(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	base := ctx.StaticBaseURI
 	if base == "" {
 		if n, ok := ctx.Item.(*xdm.Node); ok {
-			base = n.BaseURI
+			base = n.BaseURI()
 		}
 	}
 	// An empty URI reference denotes the document containing the expression

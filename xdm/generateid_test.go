@@ -13,8 +13,8 @@ import (
 // answered the same id as node 0 of tree t+1.
 func TestGenerateIDAcrossTreeStride(t *testing.T) {
 	t1, t2 := &Tree{id: 7}, &Tree{id: 8}
-	a := &Node{Kind: KindElement, tree: t1, order: treeIDStride}
-	b := &Node{Kind: KindDocument, tree: t2}
+	a := &Node{kind: KindElement, tree: t1, order: treeIDStride}
+	b := &Node{kind: KindDocument, tree: t2}
 	if a.Order() != b.Order() {
 		t.Fatalf("precondition: Order() %d and %d no longer overlap; the stride changed", a.Order(), b.Order())
 	}

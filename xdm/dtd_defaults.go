@@ -276,23 +276,23 @@ func lexicalIs(prefix, local, s string) bool {
 // both.
 func applyAttTypes(el *Node, types []attDeclaredType) {
 	for _, t := range types {
-		if !lexicalIs(el.Name.Prefix, el.Name.Local, t.element) && t.element != el.Name.Local {
+		if !lexicalIs(el.name.Prefix, el.name.Local, t.element) && t.element != el.name.Local {
 			continue
 		}
-		for _, a := range el.Attrs {
-			if !lexicalIs(a.Name.Prefix, a.Name.Local, t.attr) && a.Name.Local != t.attr {
+		for _, a := range el.attrs {
+			if !lexicalIs(a.name.Prefix, a.name.Local, t.attr) && a.name.Local != t.attr {
 				continue
 			}
 			// XML 1.0 §3.3.3: a value whose declared type is not CDATA
 			// loses leading and trailing spaces, and each run of spaces
 			// becomes one. Only #x20: a tab written as &#9; survives.
-			a.Value = strings.Join(strings.FieldsFunc(a.Value, func(r rune) bool { return r == ' ' }), " ")
+			a.value = strings.Join(strings.FieldsFunc(a.value, func(r rune) bool { return r == ' ' }), " ")
 			switch t.typ {
 			case "ID", "IDREF", "IDREFS":
 			default:
 				continue
 			}
-			if a.TypeAnnotation == "" {
+			if a.typeAnnotation == "" {
 				// SetTypeAnnotation rather than a bare assignment: a DTD
 				// declaring ID/IDREF/IDREFS is one of the two ways a
 				// document establishes the is-id and is-idrefs properties,
@@ -369,18 +369,18 @@ func isElementOnlyModel(model string) bool {
 // explicit xml:space="preserve" is still honoured, since XML §2.10 makes that
 // the document's own statement about its whitespace.
 func stripIgnorableWhitespace(el *Node, elementOnly map[string]bool) {
-	if !elementOnly[el.Name.Lexical()] && !elementOnly[el.Name.Local] {
+	if !elementOnly[el.name.Lexical()] && !elementOnly[el.name.Local] {
 		return
 	}
-	if a := el.Attr(NSXML, "space"); a != nil && a.Value == "preserve" {
+	if a := el.Attr(NSXML, "space"); a != nil && a.value == "preserve" {
 		return
 	}
-	kept := el.Children[:0]
-	for _, c := range el.Children {
-		if c.Kind == KindText && IsXMLWhitespace(c.Value) {
+	kept := el.children[:0]
+	for _, c := range el.children {
+		if c.kind == KindText && IsXMLWhitespace(c.value) {
 			continue
 		}
 		kept = append(kept, c)
 	}
-	el.Children = kept
+	el.children = kept
 }

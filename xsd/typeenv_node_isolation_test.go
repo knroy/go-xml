@@ -122,7 +122,7 @@ func TestDerivationChainIsolatedFromLaterSchema(t *testing.T) {
 
 	outer := xdm.AnnotationName(nodeEnvNS, "Outer")
 	inner := xdm.AnnotationName(nodeEnvNS, "Inner")
-	if got := el.TypeAnnotation; got != outer {
+	if got := el.TypeAnnotation(); got != outer {
 		t.Fatalf("precondition: validation annotated the element %q, want %q",
 			got, outer)
 	}

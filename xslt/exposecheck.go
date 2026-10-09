@@ -79,7 +79,7 @@ func checkModeName(el *xdm.Node) error {
 	if a == nil {
 		return nil
 	}
-	for _, tok := range strings.Fields(a.Value) {
+	for _, tok := range strings.Fields(a.Value()) {
 		if strings.HasPrefix(tok, "#") {
 			return fmt.Errorf(
 				"XTSE0020: xsl:mode/@name is an EQName, so it may not be %q; "+

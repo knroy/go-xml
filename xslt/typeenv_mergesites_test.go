@@ -210,7 +210,7 @@ func TestNamespaceResolvedSchemaMergeCarriesTheTypeEnvironment(t *testing.T) {
 		xsd.ValidateOptions{Annotate: true}); err != nil {
 		t.Fatalf("validating the source against the aggregate: %v", err)
 	}
-	if got := dtree.Root.FirstChild().TypeAnnotation; got != outer {
+	if got := dtree.Root.FirstChild().TypeAnnotation(); got != outer {
 		t.Fatalf("precondition: validation annotated the element %q, want %q",
 			got, outer)
 	}

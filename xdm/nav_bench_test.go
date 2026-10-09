@@ -48,15 +48,15 @@ func navTree(b *testing.B) {
 		var walk func(n *Node)
 		walk = func(n *Node) {
 			navOnce.nodes = append(navOnce.nodes, n)
-			navOnce.nodes = append(navOnce.nodes, n.Attrs...)
-			if n.Kind == KindElement {
+			navOnce.nodes = append(navOnce.nodes, n.attrs...)
+			if n.kind == KindElement {
 				navOnce.elems = append(navOnce.elems, n)
-				ec[QName{URI: n.Name.URI, Local: n.Name.Local}]++
-				for _, a := range n.Attrs {
-					ac[QName{URI: a.Name.URI, Local: a.Name.Local}]++
+				ec[QName{URI: n.name.URI, Local: n.name.Local}]++
+				for _, a := range n.attrs {
+					ac[QName{URI: a.name.URI, Local: a.name.Local}]++
 				}
 			}
-			for _, c := range n.Children {
+			for _, c := range n.children {
 				walk(c)
 			}
 		}
@@ -90,8 +90,8 @@ func BenchmarkNavDescendantWalk(b *testing.B) {
 		n := 0
 		var f func(x *Node)
 		f = func(x *Node) {
-			for _, c := range x.Children {
-				n += int(c.Kind)
+			for _, c := range x.children {
+				n += int(c.kind)
 				f(c)
 			}
 		}
@@ -107,8 +107,8 @@ func BenchmarkNavChildNameTest(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		n := 0
 		for _, e := range navOnce.elems {
-			for _, c := range e.Children {
-				if c.Kind == KindElement && c.Name.Local == el.Local && c.Name.URI == el.URI {
+			for _, c := range e.children {
+				if c.kind == KindElement && c.name.Local == el.Local && c.name.URI == el.URI {
 					n++
 				}
 			}
@@ -125,7 +125,7 @@ func BenchmarkNavAttrLookup(b *testing.B) {
 		n := 0
 		for _, e := range navOnce.elems {
 			if a := e.Attr(al.URI, al.Local); a != nil {
-				n += len(a.Value)
+				n += len(a.value)
 			}
 		}
 		navSink += n
@@ -248,29 +248,29 @@ func BenchmarkCorpusShape(b *testing.B) {
 			var kids, attrs []int
 			var walk func(n *Node)
 			walk = func(n *Node) {
-				kinds[n.Kind]++
+				kinds[n.kind]++
 				set := func(name string, ok bool) {
 					if ok {
 						fields[name]++
 					}
 				}
-				set("Name.Prefix", n.Name.Prefix != "")
-				set("Name.URI", n.Name.URI != "")
-				set("Value", n.Value != "")
-				set("Namespaces", len(n.Namespaces) > 0)
-				set("BaseURI", n.BaseURI != "")
-				set("BaseURI!=parent", n.Parent != nil && n.BaseURI != n.Parent.BaseURI)
-				set("DocumentURI", n.DocumentURI != "")
-				set("TypeAnnotation", n.TypeAnnotation != "")
-				kinds[KindNamespace] += len(n.Namespaces)
-				if n.Kind == KindElement {
-					kids = append(kids, len(n.Children))
-					attrs = append(attrs, len(n.Attrs))
+				set("Name.Prefix", n.name.Prefix != "")
+				set("Name.URI", n.name.URI != "")
+				set("Value", n.value != "")
+				set("Namespaces", len(n.namespaces) > 0)
+				set("BaseURI", n.baseURI != "")
+				set("BaseURI!=parent", n.parent != nil && n.baseURI != n.parent.baseURI)
+				set("DocumentURI", n.documentURI != "")
+				set("TypeAnnotation", n.typeAnnotation != "")
+				kinds[KindNamespace] += len(n.namespaces)
+				if n.kind == KindElement {
+					kids = append(kids, len(n.children))
+					attrs = append(attrs, len(n.attrs))
 				}
-				for _, a := range n.Attrs {
+				for _, a := range n.attrs {
 					walk(a)
 				}
-				for _, ch := range n.Children {
+				for _, ch := range n.children {
 					walk(ch)
 				}
 			}

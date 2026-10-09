@@ -34,7 +34,7 @@ func (p *parser) readSimpleType(el *xdm.Node) *SimpleType {
 		return t
 	}
 
-	switch body.Name.Local {
+	switch body.Name().Local {
 	case "restriction":
 		t.Variety = VarietyAtomic
 		p.readSimpleRestriction(body, t)
@@ -268,7 +268,7 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 	// so a second occurrence is reported rather than overwriting the first.
 	seen := make(map[string]bool)
 	for _, c := range p.contentChildren(el) {
-		if c.Name.URI != NSSchema {
+		if c.Name().URI != NSSchema {
 			continue
 		}
 		v := c.AttrValue("value")
@@ -286,22 +286,22 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 		// rejected at validation time with no hint why.
 		//
 		// xs:assertion is exempt: 1.1 §4.3.13 gives it `test`, not `value`.
-		if knownFacet(c.Name.Local) && c.Name.Local != "assertion" &&
+		if knownFacet(c.Name().Local) && c.Name().Local != "assertion" &&
 			c.Attr("", "value") == nil {
 			p.errs = append(p.errs, errorAt(c, "src-facet-value",
-				"facet xs:%s requires a value attribute", c.Name.Local))
+				"facet xs:%s requires a value attribute", c.Name().Local))
 			continue
 		}
-		if knownFacet(c.Name.Local) && !repeatableFacets[c.Name.Local] {
-			if seen[c.Name.Local] {
+		if knownFacet(c.Name().Local) && !repeatableFacets[c.Name().Local] {
+			if seen[c.Name().Local] {
 				p.errs = append(p.errs, errorAt(c, "src-single-facet-value",
 					"facet xs:%s appears more than once in a single restriction",
-					c.Name.Local))
+					c.Name().Local))
 				continue
 			}
-			seen[c.Name.Local] = true
+			seen[c.Name().Local] = true
 		}
-		switch c.Name.Local {
+		switch c.Name().Local {
 		case "length":
 			f.Length = p.uintFacet(c, v)
 			p.noteFixed(c, f, FacetLength)
@@ -423,7 +423,7 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 
 		default:
 			p.errs = append(p.errs, errorAt(c, "",
-				"xs:%s is not a constraining facet", c.Name.Local))
+				"xs:%s is not a constraining facet", c.Name().Local))
 		}
 	}
 }
@@ -451,7 +451,7 @@ func (p *parser) uintFacet(el *xdm.Node, v string) *uint64 {
 	n, err := strconv.ParseUint(trimXMLSpace(v), 10, 64)
 	if err != nil {
 		p.errs = append(p.errs, errorAt(el, "",
-			"xs:%s value %q is not a non-negative integer", el.Name.Local, v))
+			"xs:%s value %q is not a non-negative integer", el.Name().Local, v))
 		return nil
 	}
 	return &n
@@ -465,7 +465,7 @@ func (p *parser) positiveUintFacet(el *xdm.Node, v string) *uint64 {
 	}
 	if *n == 0 {
 		p.errs = append(p.errs, errorAt(el, "",
-			"xs:%s value %q is not a positive integer", el.Name.Local, v))
+			"xs:%s value %q is not a positive integer", el.Name().Local, v))
 		return nil
 	}
 	return n
@@ -586,14 +586,14 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 			"simpleContent must have a restriction or extension child"))
 		return
 	}
-	if body.Name.Local == "extension" {
+	if body.Name().Local == "extension" {
 		t.DerivationMethod = DerivationExtension
 	}
 
 	base := body.AttrValue("base")
 	if base == "" {
 		p.errs = append(p.errs, errorAt(body, "src-ct.1",
-			"a simpleContent %s must have a base", body.Name.Local))
+			"a simpleContent %s must have a base", body.Name().Local))
 	}
 
 	// An inline simpleType inside the restriction names the content
@@ -754,10 +754,10 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 // they are honoured, which is where the distinction belongs.
 func (p *parser) readAssertions(el *xdm.Node, t *ComplexType) {
 	for _, c := range p.contentChildren(el) {
-		if c.Name.URI != NSSchema {
+		if c.Name().URI != NSSchema {
 			continue
 		}
-		switch c.Name.Local {
+		switch c.Name().Local {
 		case "assert":
 			if a := p.readAssert(c); a != nil {
 				t.Assertions = append(t.Assertions, a)
@@ -786,7 +786,7 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 			p.errs = append(p.errs, errorAt(el, "src-ct.4",
 				"complexType has mixed=%q but its complexContent has "+
 					"mixed=%q; where both are present they must agree",
-				boolLexical(mixed), a.Value))
+				boolLexical(mixed), a.Value()))
 		}
 		mixed = inner
 	}
@@ -797,7 +797,7 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 			"complexContent must have a restriction or extension child"))
 		return
 	}
-	if body.Name.Local == "extension" {
+	if body.Name().Local == "extension" {
 		t.DerivationMethod = DerivationExtension
 	} else if oc := p.childElement(body, "openContent"); oc != nil &&
 		p.childElement(body, "all", "choice", "sequence", "group") == nil {
@@ -823,7 +823,7 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 	base := body.AttrValue("base")
 	if base == "" {
 		p.errs = append(p.errs, errorAt(body, "src-ct.1",
-			"a complexContent %s must have a base", body.Name.Local))
+			"a complexContent %s must have a base", body.Name().Local))
 	} else {
 		p.resolveTypeRef(body, base, func(bt Type) { t.Base = bt })
 	}
@@ -1084,7 +1084,7 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 		// unreachable from every later pass — mgO001 and mgO018 write
 		// <all minOccurs="0" maxOccurs="0"> and were accepted by a
 		// check written to name mgO001.
-		if el.Name.Local == "all" {
+		if el.Name().Local == "all" {
 			p.checkAllOccurs(el, max)
 		}
 		return nil
@@ -1093,7 +1093,7 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 	// too large for an int; they are nil for every ordinary particle.
 	part := p.takeExactOccurs(&Particle{MinOccurs: min, MaxOccurs: max})
 
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "element":
 		if ref := el.AttrValue("ref"); ref != "" {
 			p.checkElementRefExclusions(el)
@@ -1183,14 +1183,14 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 		})
 
 	case "all", "choice", "sequence":
-		if el.Name.Local == "all" {
+		if el.Name().Local == "all" {
 			p.checkAllOccurs(el, max)
 		}
 		part.Term = p.readModelGroup(el)
 
 	default:
 		p.errs = append(p.errs, errorAt(el, "",
-			"xs:%s is not valid in a content model", el.Name.Local))
+			"xs:%s is not valid in a content model", el.Name().Local))
 		return nil
 	}
 	return part
@@ -1199,7 +1199,7 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 // readModelGroup reads an <xs:all>, <xs:choice> or <xs:sequence>.
 func (p *parser) readModelGroup(el *xdm.Node) *ModelGroup {
 	g := &ModelGroup{}
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "all":
 		g.Compositor = CompositorAll
 	case "choice":
@@ -1208,7 +1208,7 @@ func (p *parser) readModelGroup(el *xdm.Node) *ModelGroup {
 		g.Compositor = CompositorSequence
 	}
 	for _, c := range p.contentChildren(el) {
-		if c.Name.URI != NSSchema {
+		if c.Name().URI != NSSchema {
 			continue
 		}
 		// The 1.0 schema for schemas gives <xs:all> the content model
@@ -1219,10 +1219,10 @@ func (p *parser) readModelGroup(el *xdm.Node) *ModelGroup {
 		// group, where the checks that walk complex types never reach
 		// it.
 		if g.Compositor == CompositorAll && p.schema.Version < Version11 &&
-			c.Name.Local != "element" && c.Name.Local != "annotation" {
+			c.Name().Local != "element" && c.Name().Local != "annotation" {
 			p.errs = append(p.errs, errorAt(c, "cos-all-limited.1",
 				"an xs:all group may only contain element declarations, "+
-					"but this one contains an xs:%s", c.Name.Local))
+					"but this one contains an xs:%s", c.Name().Local))
 			continue
 		}
 		if part := p.readParticle(c); part != nil {
@@ -1290,7 +1290,7 @@ func (p *parser) checkAllMemberOccurs(el *xdm.Node, part *Particle) {
 // because readParticle has already resolved the group reference, and the
 // particle it returns may carry the referenced definition's own bounds.
 func (p *parser) checkAllGroupRefOccurs(el *xdm.Node) {
-	if p.schema.Version < Version11 || el.Name.Local != "group" {
+	if p.schema.Version < Version11 || el.Name().Local != "group" {
 		return
 	}
 	for _, attr := range []string{"minOccurs", "maxOccurs"} {
@@ -1341,12 +1341,12 @@ func (p *parser) readModelGroupDef(el *xdm.Node) *ModelGroupDef {
 	for _, attr := range []string{"minOccurs", "maxOccurs"} {
 		if inner.Attr("", attr) != nil {
 			code := "src-model_group_defn"
-			if inner.Name.Local == "all" {
+			if inner.Name().Local == "all" {
 				code = "cos-all-limited.1.2"
 			}
 			p.errs = append(p.errs, errorAt(inner, code,
 				"attribute %q is not allowed on the xs:%s of a "+
-					"named group definition", attr, inner.Name.Local))
+					"named group definition", attr, inner.Name().Local))
 		}
 	}
 	// The <choice> or <sequence> inside a definition still carries an
@@ -1357,7 +1357,7 @@ func (p *parser) readModelGroupDef(el *xdm.Node) *ModelGroupDef {
 	// readParticle — particlesEc009 writes <choice minOccurs="2"> with
 	// maxOccurs defaulting to 1, which is p-props-correct.2.1, and it
 	// loaded clean.
-	if inner.Name.Local != "all" {
+	if inner.Name().Local != "all" {
 		if _, _, err := p.occurs(inner); err != nil {
 			p.errs = append(p.errs, err)
 		}
@@ -1635,7 +1635,7 @@ func (p *parser) readOpenContent(el *xdm.Node) *OpenContent {
 			if w.AttrValue(attr) != "" {
 				p.errs = append(p.errs, errorAt(w, "src-open-content",
 					"the xs:any of an %s may not have %s",
-					el.Name.Local, attr))
+					el.Name().Local, attr))
 			}
 		}
 		oc.Wildcard = p.readWildcard(w)
@@ -2133,10 +2133,10 @@ func (p *parser) readFacetsOnly(body *xdm.Node) *FacetSet {
 // place without ambiguity.
 func hasFacetChild(el *xdm.Node) bool {
 	for _, c := range el.ChildElements() {
-		if c.Name.URI != NSSchema || c.Name.Local == "assert" {
+		if c.Name().URI != NSSchema || c.Name().Local == "assert" {
 			continue
 		}
-		if knownFacet(c.Name.Local) {
+		if knownFacet(c.Name().Local) {
 			return true
 		}
 	}
@@ -2315,11 +2315,11 @@ func (p *parser) checkAllOccurs(el *xdm.Node, max int) {
 // definition may sit: directly under <xs:schema>, or under an <xs:redefine> or
 // <xs:override>, which stand in for the schema of the document they name.
 func topLevelType(el *xdm.Node) bool {
-	parent := el.Parent
-	if parent == nil || parent.Name.URI != NSSchema {
+	parent := el.Parent()
+	if parent == nil || parent.Name().URI != NSSchema {
 		return false
 	}
-	switch parent.Name.Local {
+	switch parent.Name().Local {
 	case "schema", "redefine", "override":
 		return true
 	}

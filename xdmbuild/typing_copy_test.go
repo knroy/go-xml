@@ -35,17 +35,17 @@ func TestDeepCopyPropagatesResolvedTyping(t *testing.T) {
 
 	c := DeepCopy(src)
 
-	if c.DerivedPrimitive != "decimal" {
+	if c.DerivedPrimitive() != "decimal" {
 		t.Errorf("element lost DerivedPrimitive: %q, want %q",
-			c.DerivedPrimitive, "decimal")
+			c.DerivedPrimitive(), "decimal")
 	}
-	if got := c.AttrAt(0).ListItem; got != "integer" {
+	if got := c.AttrAt(0).ListItem(); got != "integer" {
 		t.Errorf("attribute lost ListItem: %q, want %q", got, "integer")
 	}
-	if got := c.AttrAt(0).TypeAnnotation; got != "{urn:x}L" {
+	if got := c.AttrAt(0).TypeAnnotation(); got != "{urn:x}L" {
 		t.Errorf("attribute lost TypeAnnotation: %q", got)
 	}
-	if got := c.FirstChild().DerivedPrimitive; got != "double" {
+	if got := c.FirstChild().DerivedPrimitive(); got != "double" {
 		t.Errorf("descendant lost DerivedPrimitive: %q, want %q", got, "double")
 	}
 }
@@ -118,9 +118,9 @@ func TestDeepCopyOfUnresolvedNodeStaysUnresolved(t *testing.T) {
 	src.SetTypeAnnotation("{urn:x}Unresolved")
 
 	c := DeepCopy(src)
-	if c.DerivedPrimitive != "" || c.ListItem != "" {
+	if c.DerivedPrimitive() != "" || c.ListItem() != "" {
 		t.Errorf("DeepCopy invented resolved typing: %q %q",
-			c.DerivedPrimitive, c.ListItem)
+			c.DerivedPrimitive(), c.ListItem())
 	}
 }
 
@@ -146,9 +146,9 @@ func TestClearedAnnotationDropsResolvedTyping(t *testing.T) {
 
 	// Clearing the annotation must take its meaning with it.
 	n.SetTypeAnnotation("")
-	if n.ListItem != "" || n.DerivedPrimitive != "" {
+	if n.ListItem() != "" || n.DerivedPrimitive() != "" {
 		t.Errorf("clearing the annotation left resolved fields: %q %q",
-			n.DerivedPrimitive, n.ListItem)
+			n.DerivedPrimitive(), n.ListItem())
 	}
 	if got := len(xdm.Atomize(xdm.One(n))); got != 1 {
 		t.Errorf("an unannotated node atomised to %d items, want 1 "+

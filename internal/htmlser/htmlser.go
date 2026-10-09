@@ -21,14 +21,14 @@ const NSXHTML = "http://www.w3.org/1999/xhtml"
 // ponytail: area, link and meta, phrasing only in some positions, are left
 // out.
 func Inline(n *xdm.Node, xhtml, html5 bool) bool {
-	if n.Kind != xdm.KindElement {
+	if n.Kind() != xdm.KindElement {
 		return false
 	}
-	local := n.Name.Local
+	local := n.Name().Local
 	switch {
-	case xhtml && n.Name.URI == NSXHTML:
-	case n.Name.URI == "" && (!xhtml || html5),
-		!xhtml && html5 && n.Name.URI == NSXHTML:
+	case xhtml && n.Name().URI == NSXHTML:
+	case n.Name().URI == "" && (!xhtml || html5),
+		!xhtml && html5 && n.Name().URI == NSXHTML:
 		local = strings.ToLower(local)
 	default:
 		return false
@@ -83,19 +83,19 @@ func SkipIndentBefore(n *xdm.Node, i int, xhtml, html5 bool) bool {
 // head is left alone. The HTML5 charset spelling of the same declaration is
 // discarded too, as Saxon does, since it would contradict the added one.
 func ReplacedMeta(head, n *xdm.Node) bool {
-	if head == nil || n.Parent != head {
+	if head == nil || n.Parent() != head {
 		return false
 	}
-	if n.Kind != xdm.KindElement || !strings.EqualFold(n.Name.Local, "meta") {
+	if n.Kind() != xdm.KindElement || !strings.EqualFold(n.Name().Local, "meta") {
 		return false
 	}
-	for _, a := range n.Attrs {
-		if a.Name.URI != "" {
+	for a := range n.Attrs() {
+		if a.Name().URI != "" {
 			continue
 		}
-		if a.Name.Local == "charset" ||
-			strings.EqualFold(a.Name.Local, "http-equiv") &&
-				strings.EqualFold(strings.TrimSpace(a.Value), "content-type") {
+		if a.Name().Local == "charset" ||
+			strings.EqualFold(a.Name().Local, "http-equiv") &&
+				strings.EqualFold(strings.TrimSpace(a.Value()), "content-type") {
 			return true
 		}
 	}

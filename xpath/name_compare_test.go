@@ -51,7 +51,7 @@ func TestNameComparison(t *testing.T) {
 				t.Fatalf("%s: error %v, want %v", src, gerr, werr)
 			}
 			if gerr == nil && atomsText(got) != atomsText(want) {
-				t.Fatalf("%s from %s: %s, want %s", src, ctxNode.Kind, atomsText(got), atomsText(want))
+				t.Fatalf("%s from %s: %s, want %s", src, ctxNode.Kind(), atomsText(got), atomsText(want))
 			}
 		}
 	}

@@ -224,17 +224,17 @@ func paramDocElement(doc *xdm.Node) *xdm.Node {
 		return nil
 	}
 	el := doc
-	if el.Kind != xdm.KindElement {
+	if el.Kind() != xdm.KindElement {
 		el = nil
-		for _, c := range doc.Children {
-			if c.Kind == xdm.KindElement {
+		for c := range doc.Children() {
+			if c.Kind() == xdm.KindElement {
 				el = c
 				break
 			}
 		}
 	}
-	if el == nil || el.Name.URI != nsSerialization ||
-		el.Name.Local != "serialization-parameters" {
+	if el == nil || el.Name().URI != nsSerialization ||
+		el.Name().Local != "serialization-parameters" {
 		return nil
 	}
 	return el

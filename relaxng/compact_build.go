@@ -77,13 +77,13 @@ func (b *builder) finish(n *xdm.Node) *xdm.Node {
 // adopt relinks a detached subtree so every node names the parent and tree it
 // belongs to.
 func (b *builder) adopt(n *xdm.Node) {
-	for _, a := range n.Attrs {
+	for a := range n.Attrs() {
 		a.SetParent(n)
 	}
-	for _, ns := range n.Namespaces {
+	for ns := range n.NamespaceDecls() {
 		ns.SetParent(n)
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		c.SetParent(n)
 		b.adopt(c)
 	}

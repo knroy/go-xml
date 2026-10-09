@@ -364,7 +364,7 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 	// and has no ID space to look in. §14.5.1 gives that its own error rather
 	// than an empty result, because returning nothing would say the ID was
 	// absent when in truth there was nowhere to look.
-	if root == nil || root.Kind != xdm.KindDocument {
+	if root == nil || root.Kind() != xdm.KindDocument {
 		return nil, xdm.Errorf("FODC0001",
 			"the root of the tree containing the node is not a document node")
 	}
@@ -393,7 +393,7 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 	var out xdm.Sequence
 	var walk func(*xdm.Node)
 	walk = func(n *xdm.Node) {
-		if n.Kind == xdm.KindElement {
+		if n.Kind() == xdm.KindElement {
 			// An element whose own type is derived from xs:ID (or xs:IDREF /
 			// xs:IDREFS) carries the identity in its content, not in an
 			// attribute. Section 15.5.2 of the data model treats the two the
@@ -408,12 +408,12 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 			// fn:idref are defined over those properties rather than over
 			// the annotation. Testing only the annotation made both
 			// functions find nothing in a stripped document.
-			if wantID && (n.IsID || isIDAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation)) {
+			if wantID && (n.IsID() || isIDAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation())) {
 				if want[trimXMLSpace(n.StringValue())] {
 					out = append(out, n)
 				}
 			}
-			if !wantID && (n.IsIDREFS || isIDREFAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation)) {
+			if !wantID && (n.IsIDREFS() || isIDREFAnnotation(xdm.TypeEnvOf(n), n.TypeAnnotation())) {
 				for _, v := range splitXMLSpace(n.StringValue()) {
 					if want[v] {
 						out = append(out, n)
@@ -421,7 +421,7 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 					}
 				}
 			}
-			for _, a := range n.Attrs {
+			for a := range n.Attrs() {
 				// A validated document says which attributes are of type
 				// xs:ID, and that is what the specification asks for. The
 				// name-based test below is the fallback for a document that
@@ -441,27 +441,27 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 				// xml:id. An attribute the data model has already marked IsID,
 				// or one a schema annotated as xs:ID, was validated by
 				// whatever produced it and is taken at its word.
-				if a.Name.URI == xdm.NSXML && a.Name.Local == "id" &&
-					!isNCName(trimXMLSpace(a.Value)) {
+				if a.Name().URI == xdm.NSXML && a.Name().Local == "id" &&
+					!isNCName(trimXMLSpace(a.Value())) {
 					continue
 				}
-				isIDAttr := a.IsID || isIDAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation) ||
-					(a.Name.URI == xdm.NSXML && a.Name.Local == "id") ||
-					(a.Name.URI == "" && a.Name.Local == "id")
-				isRefAttr := a.IsIDREFS || isIDREFAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation) ||
-					(a.Name.URI == "" &&
-						(a.Name.Local == "idref" || a.Name.Local == "idrefs"))
+				isIDAttr := a.IsID() || isIDAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation()) ||
+					(a.Name().URI == xdm.NSXML && a.Name().Local == "id") ||
+					(a.Name().URI == "" && a.Name().Local == "id")
+				isRefAttr := a.IsIDREFS() || isIDREFAnnotation(xdm.TypeEnvOf(a), a.TypeAnnotation()) ||
+					(a.Name().URI == "" &&
+						(a.Name().Local == "idref" || a.Name().Local == "idrefs"))
 
 				// The value of an ID attribute is of a type derived from
 				// xs:NCName, so its whitespace is collapsed before it is
 				// compared: key241.xml writes xml:id="id3 " and the
 				// stylesheet asks for id(' id3'). The search terms were
 				// already split on whitespace above; this is the other half.
-				if wantID && isIDAttr && want[trimXMLSpace(a.Value)] {
+				if wantID && isIDAttr && want[trimXMLSpace(a.Value())] {
 					out = append(out, n)
 				}
 				if !wantID && isRefAttr {
-					for _, v := range splitXMLSpace(a.Value) {
+					for _, v := range splitXMLSpace(a.Value()) {
 						if want[v] {
 							// fn:idref returns the nodes that *hold* the
 							// reference, which for an IDREF-typed attribute
@@ -477,7 +477,7 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 				}
 			}
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}
@@ -572,32 +572,32 @@ func deepEqualItem(ctx *Context, x, y xdm.Item) (bool, error) {
 }
 
 func deepEqualNode(ctx *Context, a, b *xdm.Node) (bool, error) {
-	if a.Kind != b.Kind {
+	if a.Kind() != b.Kind() {
 		return false, nil
 	}
-	switch a.Kind {
+	switch a.Kind() {
 	case xdm.KindDocument:
 		return deepEqualContent(ctx, a, b)
 
 	case xdm.KindElement:
-		if a.Name.URI != b.Name.URI || a.Name.Local != b.Name.Local {
+		if a.Name().URI != b.Name().URI || a.Name().Local != b.Name().Local {
 			return false, nil
 		}
 		if a.NumAttrs() != b.NumAttrs() {
 			return false, nil
 		}
 		// Attribute order is not significant, so each is matched by name.
-		for _, aa := range a.Attrs {
-			ba := b.Attr(aa.Name.URI, aa.Name.Local)
-			if ba == nil || !deepEqualText(ctx, aa.Value, ba.Value) {
+		for aa := range a.Attrs() {
+			ba := b.Attr(aa.Name().URI, aa.Name().Local)
+			if ba == nil || !deepEqualText(ctx, aa.Value(), ba.Value()) {
 				return false, nil
 			}
 		}
 		return deepEqualContent(ctx, a, b)
 
 	case xdm.KindAttribute:
-		return a.Name.URI == b.Name.URI && a.Name.Local == b.Name.Local &&
-			deepEqualText(ctx, a.Value, b.Value), nil
+		return a.Name().URI == b.Name().URI && a.Name().Local == b.Name().Local &&
+			deepEqualText(ctx, a.Value(), b.Value()), nil
 
 	case xdm.KindNamespace:
 		// The namespace node is the ONE kind whose string value F&O 3.0
@@ -609,15 +609,15 @@ func deepEqualNode(ctx *Context, a, b *xdm.Node) (bool, error) {
 		// is exhaustive, and a namespace URI must not follow it. Sharing the
 		// attribute branch let a case-blind collation make xmlns:p="http://X"
 		// deep-equal to xmlns:p="http://x", which are different namespaces.
-		return a.Name.URI == b.Name.URI && a.Name.Local == b.Name.Local &&
-			a.Value == b.Value, nil
+		return a.Name().URI == b.Name().URI && a.Name().Local == b.Name().Local &&
+			a.Value() == b.Value(), nil
 
 	case xdm.KindPI:
 		// The PI rule ("the string value of $i1 is equal to the string value
 		// of $i2") carries no codepoint carve-out, unlike the namespace rule
 		// directly above it in the spec, so the general collation clause
 		// governs it like any other string comparison.
-		return a.Name.Local == b.Name.Local && deepEqualText(ctx, a.Value, b.Value), nil
+		return a.Name().Local == b.Name().Local && deepEqualText(ctx, a.Value(), b.Value()), nil
 
 	case xdm.KindText, xdm.KindComment:
 		// The spec states text and comment nodes in a single sentence — "if
@@ -625,7 +625,7 @@ func deepEqualNode(ctx *Context, a, b *xdm.Node) (bool, error) {
 		// deep-equal if and only if their string-values are equal" — so a
 		// comment cannot take codepoint comparison while a text node takes
 		// the collation.
-		return deepEqualText(ctx, a.Value, b.Value), nil
+		return deepEqualText(ctx, a.Value(), b.Value()), nil
 	}
 	return false, nil
 }
@@ -682,8 +682,8 @@ func deepEqualContent(ctx *Context, a, b *xdm.Node) (bool, error) {
 // text children that a parsed one would have presented as one node.
 func significantChildren(n *xdm.Node) []*xdm.Node {
 	var out []*xdm.Node
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindComment || c.Kind == xdm.KindPI {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindComment || c.Kind() == xdm.KindPI {
 			continue
 		}
 		out = append(out, c)
@@ -2231,7 +2231,7 @@ func fnCollection(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	base := ctx.StaticBaseURI
 	if base == "" {
 		if n, ok := ctx.Item.(*xdm.Node); ok {
-			base = n.BaseURI
+			base = n.BaseURI()
 		}
 	}
 	seq, err := resolveCollectionIn(ctx, uri, base)
@@ -3035,8 +3035,8 @@ func parseXMLFragment(s, base string, b *xdm.EntityBudget) (*xdm.Node, error) {
 	// document whose children are the fragment's top-level nodes.
 	root := tree.Root
 	var wrapper *xdm.Node
-	for _, c := range root.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range root.Children() {
+		if c.Kind() == xdm.KindElement {
 			wrapper = c
 			break
 		}
@@ -3049,7 +3049,7 @@ func parseXMLFragment(s, base string, b *xdm.EntityBudget) (*xdm.Node, error) {
 		kids[i] = wrapper.ChildAt(i)
 	}
 	root.SetChildren(kids)
-	for _, c := range root.Children {
+	for c := range root.Children() {
 		c.SetParent(root)
 	}
 	return root, nil
@@ -3098,19 +3098,19 @@ func checkNamespaceWellFormed(n *xdm.Node, fn string) error {
 	if n == nil {
 		return nil
 	}
-	if n.Kind == xdm.KindElement {
-		if p := n.Name.Prefix; p != "" && n.Name.URI == "" {
+	if n.Kind() == xdm.KindElement {
+		if p := n.Name().Prefix; p != "" && n.Name().URI == "" {
 			return xdm.Errorf("FODC0006",
 				"%s: no namespace declaration is in scope for the prefix %q", fn, p)
 		}
-		for _, a := range n.Attrs {
-			if p := a.Name.Prefix; p != "" && a.Name.URI == "" {
+		for a := range n.Attrs() {
+			if p := a.Name().Prefix; p != "" && a.Name().URI == "" {
 				return xdm.Errorf("FODC0006",
 					"%s: no namespace declaration is in scope for the prefix %q", fn, p)
 			}
 		}
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		if err := checkNamespaceWellFormed(c, fn); err != nil {
 			return err
 		}

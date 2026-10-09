@@ -109,7 +109,7 @@ func (e *PathExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			return nil, err
 		}
 		root := node.Root()
-		if root.Kind != xdm.KindDocument {
+		if root.Kind() != xdm.KindDocument {
 			// "/" requires the context node to be in a tree whose root is a
 			// document node; a bare element tree has no document root.
 			return nil, fmt.Errorf("XPDY0050: root of the context node is not a document node")
@@ -896,12 +896,12 @@ func fuseDescendantAttrs(steps []Expr, i int, input xdm.Sequence) *descendantAtt
 type descendantAttrs struct{ test NodeTest }
 
 func (d *descendantAttrs) appendFrom(out xdm.Sequence, n *xdm.Node) xdm.Sequence {
-	for _, a := range n.Attrs {
+	for a := range n.Attrs() {
 		if d.test.Matches(a, xdm.KindAttribute) {
 			out = append(out, a)
 		}
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		out = d.appendFrom(out, c)
 	}
 	return out

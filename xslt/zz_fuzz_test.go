@@ -85,27 +85,27 @@ func FuzzSerializeRoundTrip(f *testing.F) {
 // deliberately: they are serialisation choices, not part of what a node is.
 func compareTrees(t *testing.T, src, out string, a, b *xdm.Node) {
 	t.Helper()
-	if a.Kind != b.Kind {
-		t.Fatalf("round trip of %q via %q changed a node kind: %v became %v", src, out, a.Kind, b.Kind)
+	if a.Kind() != b.Kind() {
+		t.Fatalf("round trip of %q via %q changed a node kind: %v became %v", src, out, a.Kind(), b.Kind())
 	}
-	switch a.Kind {
+	switch a.Kind() {
 	case xdm.KindElement, xdm.KindAttribute:
 		// Expanded name only: URI and local name, never the prefix.
-		if a.Name.URI != b.Name.URI || a.Name.Local != b.Name.Local {
+		if a.Name().URI != b.Name().URI || a.Name().Local != b.Name().Local {
 			t.Fatalf("round trip of %q via %q changed a name: {%s}%s became {%s}%s",
-				src, out, a.Name.URI, a.Name.Local, b.Name.URI, b.Name.Local)
+				src, out, a.Name().URI, a.Name().Local, b.Name().URI, b.Name().Local)
 		}
 	case xdm.KindPI:
-		if a.Name.Local != b.Name.Local {
+		if a.Name().Local != b.Name().Local {
 			t.Fatalf("round trip of %q via %q changed a PI target: %s became %s",
-				src, out, a.Name.Local, b.Name.Local)
+				src, out, a.Name().Local, b.Name().Local)
 		}
 	}
 
 	// Attributes compare as a set: their order is not part of the data model.
 	if got, want := attrSet(b), attrSet(a); !sameStrings(got, want) {
 		t.Fatalf("round trip of %q via %q changed the attributes of {%s}%s: %v became %v",
-			src, out, a.Name.URI, a.Name.Local, want, got)
+			src, out, a.Name().URI, a.Name().Local, want, got)
 	}
 
 	// Children compare after merging adjacent text and dropping the empty
@@ -114,13 +114,13 @@ func compareTrees(t *testing.T, src, out string, a, b *xdm.Node) {
 	ac, bc := contentChildren(a), contentChildren(b)
 	if len(ac) != len(bc) {
 		t.Fatalf("round trip of %q via %q changed the child count of {%s}%s: %d became %d",
-			src, out, a.Name.URI, a.Name.Local, len(ac), len(bc))
+			src, out, a.Name().URI, a.Name().Local, len(ac), len(bc))
 	}
 	for i := range ac {
-		if ac[i].Kind == xdm.KindText {
-			if ac[i].Value != bc[i].Value {
+		if ac[i].Kind() == xdm.KindText {
+			if ac[i].Value() != bc[i].Value() {
 				t.Fatalf("round trip of %q via %q changed text: %q became %q",
-					src, out, ac[i].Value, bc[i].Value)
+					src, out, ac[i].Value(), bc[i].Value())
 			}
 			continue
 		}
@@ -133,14 +133,14 @@ func compareTrees(t *testing.T, src, out string, a, b *xdm.Node) {
 // but an empty text node is not a node the data model distinguishes.
 func contentChildren(n *xdm.Node) []*xdm.Node {
 	var out []*xdm.Node
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindText {
-			if c.Value == "" {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindText {
+			if c.Value() == "" {
 				continue
 			}
-			if len(out) > 0 && out[len(out)-1].Kind == xdm.KindText {
+			if len(out) > 0 && out[len(out)-1].Kind() == xdm.KindText {
 				merged := *out[len(out)-1]
-				merged.SetValue(merged.Value + c.Value)
+				merged.SetValue(merged.Value() + c.Value())
 				out[len(out)-1] = &merged
 				continue
 			}
@@ -157,8 +157,8 @@ func contentChildren(n *xdm.Node) []*xdm.Node {
 // strings, which is the comparison the data model licenses.
 func attrSet(n *xdm.Node) []string {
 	out := make([]string, 0, n.NumAttrs())
-	for _, a := range n.Attrs {
-		out = append(out, "{"+a.Name.URI+"}"+a.Name.Local+"="+a.StringValue())
+	for a := range n.Attrs() {
+		out = append(out, "{"+a.Name().URI+"}"+a.Name().Local+"="+a.StringValue())
 	}
 	sortStrings(out)
 	return out

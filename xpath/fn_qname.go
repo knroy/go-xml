@@ -219,9 +219,9 @@ func registerQNameFuncs(l *Library) {
 		// error rather than something to walk. in-scope-prefixes(/) was
 		// answering with the root element's prefixes, which is a different
 		// question from the one asked and hides the mistake.
-		if el.Kind != xdm.KindElement {
+		if el.Kind() != xdm.KindElement {
 			return nil, xdm.ErrType(
-				"in-scope-prefixes(): expected an element, got %s", el.Kind)
+				"in-scope-prefixes(): expected an element, got %s", el.Kind())
 		}
 		// InScopeNamespaces returns a map, and Go randomises map
 		// iteration, so the prefixes are sorted before they are
@@ -289,7 +289,7 @@ func registerURIFuncs(l *Library) {
 			base = ctx.StaticBaseURI
 			if base == "" {
 				if n, ok := ctx.Item.(*xdm.Node); ok {
-					base = n.BaseURI
+					base = n.BaseURI()
 				}
 			}
 		}

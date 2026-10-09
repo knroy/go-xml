@@ -170,10 +170,10 @@ func TestXIncludeDiamondIsLegal(t *testing.T) {
 // countElements counts descendant elements with the given local name.
 func countElements(n *Node, local string) int {
 	count := 0
-	if n.Kind == KindElement && n.Name.Local == local {
+	if n.kind == KindElement && n.name.Local == local {
 		count++
 	}
-	for _, c := range n.Children {
+	for _, c := range n.children {
 		count += countElements(c, local)
 	}
 	return count

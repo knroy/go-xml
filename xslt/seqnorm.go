@@ -36,7 +36,7 @@ func joinAdjacentAtomics(seq xdm.Sequence) xdm.Sequence {
 		}
 		if prevAtomic {
 			last := out[len(out)-1].(*xdm.Node)
-			last.SetValue(last.Value + " " + a.String())
+			last.SetValue(last.Value() + " " + a.String())
 			continue
 		}
 		out = append(out, xdm.NewNode(xdm.KindText, xdm.QName{}, a.String()))

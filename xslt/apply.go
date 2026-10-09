@@ -62,7 +62,7 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if !ok {
 			return fmt.Errorf("XTTE0510: xsl:apply-templates requires a node as the context item")
 		}
-		for _, ch := range node.Children {
+		for ch := range node.Children() {
 			seq = append(seq, ch)
 		}
 	}
@@ -371,7 +371,7 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 		// rules match book and bktlong produced an empty result. Attributes
 		// are not visited -- the rule has no select, so it selects children
 		// only, and a document node has no attributes anyway.
-		if node.Kind != xdm.KindDocument {
+		if node.Kind() != xdm.KindDocument {
 			return nil
 		}
 		return builtInDescend(rt, node, mode, params, tunnels, out, false)
@@ -412,7 +412,7 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 		return builtInShallowCopy(rt, node, mode, params, tunnels, out)
 	}
 
-	switch node.Kind {
+	switch node.Kind() {
 	case xdm.KindDocument, xdm.KindElement:
 		if err := rt.descend(); err != nil {
 			return err
@@ -1010,7 +1010,7 @@ func builtInDescend(rt *runtime, node *xdm.Node, mode string,
 	params, tunnels map[string]xdm.Sequence, out *outputBuilder,
 	copyText bool) error {
 
-	switch node.Kind {
+	switch node.Kind() {
 	case xdm.KindDocument, xdm.KindElement:
 		if err := rt.descend(); err != nil {
 			return err
@@ -1046,7 +1046,7 @@ func builtInDescend(rt *runtime, node *xdm.Node, mode string,
 func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
 	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
 
-	if node.Kind != xdm.KindDocument && node.Kind != xdm.KindElement {
+	if node.Kind() != xdm.KindDocument && node.Kind() != xdm.KindElement {
 		return nil
 	}
 	if err := rt.descend(); err != nil {
@@ -1085,7 +1085,7 @@ func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
 func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
 
-	switch node.Kind {
+	switch node.Kind() {
 	case xdm.KindDocument:
 		// 6.7.3 spells the rule out as <xsl:copy>...</xsl:copy>, and xsl:copy
 		// over a document node constructs one rather than running the body
@@ -1110,15 +1110,15 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 				dst.DocType = src.DocType
 			}
 		}
-		if doc.BaseURI == "" {
-			doc.SetBaseURI(node.BaseURI)
+		if doc.BaseURI() == "" {
+			doc.SetBaseURI(node.BaseURI())
 		}
 		out.AppendNode(doc)
 		return nil
 	case xdm.KindElement:
-		sub := out.StartElement(node.Name)
-		if out.Open() == nil && sub.Open().BaseURI == "" {
-			sub.Open().SetBaseURI(node.BaseURI)
+		sub := out.StartElement(node.Name())
+		if out.Open() == nil && sub.Open().BaseURI() == "" {
+			sub.Open().SetBaseURI(node.BaseURI())
 		}
 		copyNamespacesTo(rt, sub, node)
 		// The attributes are processed first so that they reach the element
@@ -1128,7 +1128,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 			return err
 		}
 		defer rt.ascend()
-		for _, a := range node.Attrs {
+		for a := range node.Attrs() {
 			an := rt.withCurrent(a, 1, node.NumAttrs())
 			if err := applyToNode(an, a, mode, params, tunnels, sub); err != nil {
 				return err
@@ -1153,19 +1153,19 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 
 // builtInNodeLabel names a node for the on-no-match="fail" diagnostic.
 func builtInNodeLabel(node *xdm.Node) string {
-	switch node.Kind {
+	switch node.Kind() {
 	case xdm.KindDocument:
 		return "the document node"
 	case xdm.KindElement:
-		return "element " + node.Name.Lexical()
+		return "element " + node.Name().Lexical()
 	case xdm.KindAttribute:
-		return "attribute " + node.Name.Lexical()
+		return "attribute " + node.Name().Lexical()
 	case xdm.KindText:
 		return "a text node"
 	case xdm.KindComment:
 		return "a comment"
 	case xdm.KindPI:
-		return "processing instruction " + node.Name.Local
+		return "processing instruction " + node.Name().Local
 	}
 	return "a node"
 }

@@ -110,7 +110,7 @@ func TestPathStepResultNotCopied(t *testing.T) {
 
 	// One input node: the slice evalFrom built is the result itself.
 	as := bs[:1:1]
-	as[0] = bs[0].(*xdm.Node).Parent
+	as[0] = bs[0].(*xdm.Node).Parent()
 	step := MustCompile("b", nil).expr
 	allocs := testing.AllocsPerRun(50, func() {
 		if _, err := evalStepOver(ctx, as, step, true); err != nil {

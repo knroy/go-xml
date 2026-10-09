@@ -401,7 +401,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// now works from the root: stripTypeAnnotationsFrom copies the children of
 	// what it is handed, so handing it an inner node discarded everything
 	// above and beside it.
-	if source != nil && source.Kind == xdm.KindDocument && s.stripTypeAnnotations {
+	if source != nil && source.Kind() == xdm.KindDocument && s.stripTypeAnnotations {
 		source = s.stripTypeAnnotationsFrom(source)
 	}
 
@@ -757,7 +757,7 @@ func (s *Stylesheet) stripWhitespaceFor(pkg int, root *xdm.Node) *xdm.Node {
 func (s *Stylesheet) stripWhitespaceForFrom(pkg int, root, want *xdm.Node) (*xdm.Node, *xdm.Node) {
 	var found *xdm.Node
 	tree := xdm.NewTree()
-	tree.Root.SetBaseURI(root.BaseURI)
+	tree.Root.SetBaseURI(root.BaseURI())
 	// The DOCTYPE text is a property of the tree, not of the root node, and
 	// it is where the unparsed-entity declarations live. Building a fresh
 	// tree without it made fn:unparsed-entity-uri answer "" for every
@@ -770,7 +770,7 @@ func (s *Stylesheet) stripWhitespaceForFrom(pkg int, root, want *xdm.Node) (*xdm
 	if want == root {
 		found = tree.Root
 	}
-	for _, ch := range root.Children {
+	for ch := range root.Children() {
 		if c := s.stripCopy(pkg, ch, false, want, &found); c != nil {
 			tree.Root.AppendChild(c)
 		}
@@ -903,7 +903,7 @@ func (r *stripCollectionResolver) resolve(
 		// A collection may hold items that are not document nodes, and only
 		// a document is a source document to be stripped.
 		n, ok := it.(*xdm.Node)
-		if !ok || n.Kind != xdm.KindDocument {
+		if !ok || n.Kind() != xdm.KindDocument {
 			out = append(out, it)
 			continue
 		}
@@ -969,7 +969,7 @@ func (s *Stylesheet) stripCopy(pkg int, n *xdm.Node, preserving bool, want *xdm.
 }
 
 func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindText:
 		// Whitespace-only text is dropped unless xml:space preserves it or
 		// its parent element is outside the strip-space list. The parent is
@@ -983,12 +983,12 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// The exemption is read off the annotation the schema wrote, so
 		// an unvalidated document is unaffected and this stays inside the
 		// existing gate on there being a strip-space declaration at all.
-		if !preserving && xdm.IsXMLWhitespace(n.Value) &&
-			n.Parent != nil && s.stripsElement(pkg, n.Parent.Name) &&
-			!xdm.HasSimpleTypeAnnotation(n.Parent.TypeAnnotation) {
+		if !preserving && xdm.IsXMLWhitespace(n.Value()) &&
+			n.Parent() != nil && s.stripsElement(pkg, n.Parent().Name()) &&
+			!xdm.HasSimpleTypeAnnotation(n.Parent().TypeAnnotation()) {
 			return nil
 		}
-		return xdm.NewNode(xdm.KindText, xdm.QName{}, n.Value)
+		return xdm.NewNode(xdm.KindText, xdm.QName{}, n.Value())
 
 	case xdm.KindElement:
 		// The type annotation travels with the copy. Whitespace stripping is
@@ -998,8 +998,8 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// document the caller had validated. This pass is gated on there
 		// being a strip-space declaration at all, which is the only reason
 		// the loss was not visible — removing that gate cost 115 tests.
-		c := xdm.NewNode(xdm.KindElement, n.Name, "")
-		c.SetBaseURI(n.BaseURI)
+		c := xdm.NewNode(xdm.KindElement, n.Name(), "")
+		c.SetBaseURI(n.BaseURI())
 		// Every PSVI property travels, because stripping whitespace is not an
 		// assessment. Copying the annotation without the rest left the element
 		// annotated as a union whose derivation chain runs to
@@ -1008,11 +1008,11 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// false -- silently, on a document the caller had validated, purely
 		// because the stylesheet declared xsl:strip-space.
 		c.CopyTypingFrom(n)
-		for _, ns := range n.Namespaces {
-			c.AddNamespace(ns.Name.Local, ns.Value)
+		for ns := range n.NamespaceDecls() {
+			c.AddNamespace(ns.Name().Local, ns.Value())
 		}
-		for _, a := range n.Attrs {
-			ac := xdm.NewNode(xdm.KindAttribute, a.Name, a.Value)
+		for a := range n.Attrs() {
+			ac := xdm.NewNode(xdm.KindAttribute, a.Name(), a.Value())
 			ac.CopyTypingFrom(a)
 			c.AddAttr(ac)
 			if a == want {
@@ -1032,10 +1032,10 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// all unless it also named the document element.
 		childPreserving := preserving
 		if a := n.Attr(xdm.NSXML, "space"); a != nil {
-			childPreserving = a.Value == "preserve"
+			childPreserving = a.Value() == "preserve"
 		}
 
-		for _, ch := range n.Children {
+		for ch := range n.Children() {
 			if cc := s.stripCopy(pkg, ch, childPreserving, want, found); cc != nil {
 				c.AppendChild(cc)
 			}
@@ -1043,7 +1043,7 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		return c
 
 	default:
-		return xdm.NewNode(n.Kind, n.Name, n.Value)
+		return xdm.NewNode(n.Kind(), n.Name(), n.Value())
 	}
 }
 
@@ -1209,7 +1209,7 @@ func (r *Result) Tree() *xdm.Node {
 			// caller reading the sequence must still see the document node
 			// it asked for; the flattening belongs to building the tree,
 			// which is the step this rule describes.
-			if v.Kind == xdm.KindDocument {
+			if v.Kind() == xdm.KindDocument {
 				for _, ch := range childrenFrom(v, 0) {
 					tree.Root.AppendChild(ch)
 				}
@@ -1231,7 +1231,7 @@ func (r *Result) Tree() *xdm.Node {
 // The principal input is stripped in Transform; this is the same rule for the
 // other trees 4.4 lists, which xsl:source-document reads.
 func (s *Stylesheet) stripInputAnnotations(root *xdm.Node) *xdm.Node {
-	if root == nil || root.Kind != xdm.KindDocument || !s.stripTypeAnnotations {
+	if root == nil || root.Kind() != xdm.KindDocument || !s.stripTypeAnnotations {
 		return root
 	}
 	return s.stripTypeAnnotationsFrom(root)
@@ -1252,8 +1252,8 @@ func (s *Stylesheet) stripInputAnnotations(root *xdm.Node) *xdm.Node {
 // some of them ask for the annotations to go.
 func (s *Stylesheet) stripTypeAnnotationsFrom(root *xdm.Node) *xdm.Node {
 	tree := xdm.NewTree()
-	tree.Root.SetBaseURI(root.BaseURI)
-	for _, ch := range root.Children {
+	tree.Root.SetBaseURI(root.BaseURI())
+	for ch := range root.Children() {
 		if c := stripAnnotationCopy(ch); c != nil {
 			tree.Root.AppendChild(c)
 		}
@@ -1269,7 +1269,7 @@ func (s *Stylesheet) stripTypeAnnotationsFrom(root *xdm.Node) *xdm.Node {
 // untypedAtomic for a node carrying none, which is precisely the typed value
 // the specification asks for here.
 func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindElement:
 		// Section 3.5 changes the annotation and the typed value but leaves
 		// is-id and is-idrefs alone, which is exactly the split
@@ -1277,38 +1277,38 @@ func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
 		// derives from xs:ID holds the identity in its CONTENT, so dropping
 		// the property here made fn:id miss it — id('id1') found nothing for
 		// an <id-elem> of type xs:ID once the annotations went.
-		c := xdm.NewNode(xdm.KindElement, n.Name, "")
-		c.SetBaseURI(n.BaseURI)
+		c := xdm.NewNode(xdm.KindElement, n.Name(), "")
+		c.SetBaseURI(n.BaseURI())
 		c.CopyTypingStrippedFrom(n)
-		for _, ns := range n.Namespaces {
-			c.AddNamespace(ns.Name.Local, ns.Value)
+		for ns := range n.NamespaceDecls() {
+			c.AddNamespace(ns.Name().Local, ns.Value())
 		}
-		for _, a := range n.Attrs {
+		for a := range n.Attrs() {
 			// xsi:nil is dropped rather than copied: stripping makes
 			// the is-nilled property of every element false, and the
 			// attribute would otherwise remain as a claim the stripped
 			// tree no longer supports. The property itself is simply
 			// not carried onto the copy above. Every other attribute is
 			// kept, which is what leaves is-id and is-idrefs unchanged.
-			if a.Name.URI == xdm.NSXSI && a.Name.Local == "nil" {
+			if a.Name().URI == xdm.NSXSI && a.Name().Local == "nil" {
 				continue
 			}
-			ac := xdm.NewNode(xdm.KindAttribute, a.Name, a.Value)
+			ac := xdm.NewNode(xdm.KindAttribute, a.Name(), a.Value())
 			ac.CopyTypingStrippedFrom(a)
 			c.AddAttr(ac)
 		}
-		for _, ch := range n.Children {
+		for ch := range n.Children() {
 			if cc := stripAnnotationCopy(ch); cc != nil {
 				c.AppendChild(cc)
 			}
 		}
 		return c
 	case xdm.KindText:
-		return xdm.NewNode(xdm.KindText, xdm.QName{}, n.Value)
+		return xdm.NewNode(xdm.KindText, xdm.QName{}, n.Value())
 	case xdm.KindComment:
-		return xdm.NewNode(xdm.KindComment, xdm.QName{}, n.Value)
+		return xdm.NewNode(xdm.KindComment, xdm.QName{}, n.Value())
 	case xdm.KindPI:
-		return xdm.NewNode(xdm.KindPI, n.Name, n.Value)
+		return xdm.NewNode(xdm.KindPI, n.Name(), n.Value())
 	}
 	return nil
 }

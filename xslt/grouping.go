@@ -866,9 +866,9 @@ func (c *compiler) compileAnalyzeString(n *xdm.Node, ns xpath.NamespaceResolver)
 	// XTDE1150, not a compile-time complaint about a missing attribute.
 	regexAttr := n.Attr("", "regex")
 	if regexAttr == nil {
-		return nil, fmt.Errorf("%s requires a regex attribute", n.Name.Lexical())
+		return nil, fmt.Errorf("%s requires a regex attribute", n.Name().Lexical())
 	}
-	regex, err := compileAVT(regexAttr.Value, ns)
+	regex, err := compileAVT(regexAttr.Value(), ns)
 	if err != nil {
 		return nil, err
 	}
@@ -1261,7 +1261,7 @@ func (i *numberInstr) countNode(rt *runtime, node *xdm.Node) ([]int64, error) {
 		// ancestor-or-self::node() includes the document node, so the walk
 		// runs to the root rather than stopping short of it.
 		var chain []*xdm.Node
-		for cur := node; cur != nil; cur = cur.Parent {
+		for cur := node; cur != nil; cur = cur.Parent() {
 			chain = append(chain, cur)
 		}
 		// chain is innermost-first, so the first @from match in it is the
@@ -1321,7 +1321,7 @@ func (i *numberInstr) countNode(rt *runtime, node *xdm.Node) ([]int64, error) {
 	// else: it never looked for a counted node *above* the @from node, and
 	// so returned nothing where the spec returns a number.
 	var chain []*xdm.Node
-	for cur := node; cur != nil; cur = cur.Parent {
+	for cur := node; cur != nil; cur = cur.Parent() {
 		chain = append(chain, cur)
 	}
 
@@ -1369,9 +1369,9 @@ func (i *numberInstr) countNode(rt *runtime, node *xdm.Node) ([]int64, error) {
 // numbered".
 func (i *numberInstr) matchesCount(rt *runtime, n, target *xdm.Node) (bool, error) {
 	if i.count == nil {
-		return n.Kind == target.Kind &&
-			n.Name.URI == target.Name.URI &&
-			n.Name.Local == target.Name.Local, nil
+		return n.Kind() == target.Kind() &&
+			n.Name().URI == target.Name().URI &&
+			n.Name().Local == target.Name().Local, nil
 	}
 	return i.count.Matches(n, rt.ctx)
 }
@@ -1382,7 +1382,7 @@ func (i *numberInstr) matchesFrom(rt *runtime, n *xdm.Node) (bool, error) {
 	// if $node is the root node of a tree". The root is a match whether or
 	// not @from was given, which is what guarantees $F always exists and so
 	// that counting has somewhere to start.
-	if n.Parent == nil {
+	if n.Parent() == nil {
 		return true, nil
 	}
 	if i.from == nil {
@@ -1425,12 +1425,12 @@ func (i *numberInstr) countAny(rt *runtime, node *xdm.Node) (int64, error) {
 	// an attribute is the same as that of the element carrying it — with the
 	// node itself appended as the last member of ancestor-or-self.
 	stop, extra := node, (*xdm.Node)(nil)
-	if node.Kind == xdm.KindAttribute || node.Kind == xdm.KindNamespace {
-		if node.Parent == nil {
+	if node.Kind() == xdm.KindAttribute || node.Kind() == xdm.KindNamespace {
+		if node.Parent() == nil {
 			return 0, fmt.Errorf(
 				"xsl:number: the context node is not in the tree being walked")
 		}
-		stop, extra = node.Parent, node
+		stop, extra = node.Parent(), node
 	}
 
 	// The candidate set in document order: everything from the root up to
@@ -1448,7 +1448,7 @@ func (i *numberInstr) countAny(rt *runtime, node *xdm.Node) (int64, error) {
 			reached = true
 			return
 		}
-		for _, ch := range cur.Children {
+		for ch := range cur.Children() {
 			walk(ch)
 			if reached {
 				return
@@ -1507,11 +1507,11 @@ func (i *numberInstr) countAny(rt *runtime, node *xdm.Node) (int64, error) {
 // positionAmongSiblings counts how many preceding siblings the count pattern
 // also selects, plus one.
 func (i *numberInstr) positionAmongSiblings(rt *runtime, n, target *xdm.Node) (int64, error) {
-	if n.Parent == nil {
+	if n.Parent() == nil {
 		return 1, nil
 	}
 	var count int64
-	for _, sib := range n.Parent.Children {
+	for sib := range n.Parent().Children() {
 		ok, err := i.matchesCount(rt, sib, target)
 		if err != nil {
 			return 0, err

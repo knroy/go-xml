@@ -50,7 +50,7 @@ func TestConstructedAttributeKeepsResolvedTyping(t *testing.T) {
 		t.Fatalf("query produced %d items, want 1", len(seq))
 	}
 	el, ok := seq[0].(*xdm.Node)
-	if !ok || el.Kind != xdm.KindElement {
+	if !ok || el.Kind() != xdm.KindElement {
 		t.Fatalf("query produced %T, want an element", seq[0])
 	}
 	if el.NumAttrs() != 1 {

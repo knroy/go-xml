@@ -98,7 +98,7 @@ func checkDeclaredModes(root *xdm.Node) error {
 	// nothing else at all and expect the static error rather than the
 	// dynamic one their invocation would otherwise reach.
 	if dm := root.Attr("", "default-mode"); dm != nil && !usesPackage {
-		tok := strings.TrimSpace(dm.Value)
+		tok := strings.TrimSpace(dm.Value())
 		if tok != "" && tok != "#unnamed" && tok != "#default" {
 			qn, err := resolveQNameAttr(root, tok)
 			if err != nil {
@@ -161,7 +161,7 @@ func modeNamesOf(el *xdm.Node) []string {
 		return []string{""}
 	}
 	var out []string
-	for _, tok := range strings.Fields(a.Value) {
+	for _, tok := range strings.Fields(a.Value()) {
 		switch tok {
 		case "#default", "#unnamed":
 			out = append(out, "")
@@ -208,7 +208,7 @@ func templateModeNames(el *xdm.Node) []string {
 		return []string{dm}
 	}
 	var out []string
-	for _, tok := range strings.Fields(a.Value) {
+	for _, tok := range strings.Fields(a.Value()) {
 		switch tok {
 		case "#all", "#current":
 			// Neither is a name: "#all" covers every mode there is, and
@@ -252,8 +252,8 @@ var boolAliases = map[string]string{
 // exists only in 3.0, so a stylesheet that uses one is writing 3.0 even where
 // it left the version at 2.0 — which several of the conformance packages do.
 func allowsBoolAliases(el *xdm.Node) bool {
-	for a := el; a != nil; a = a.Parent {
-		if a.Kind != xdm.KindElement {
+	for a := el; a != nil; a = a.Parent() {
+		if a.Kind() != xdm.KindElement {
 			continue
 		}
 		if isXSL(a, "package") {
@@ -291,21 +291,21 @@ func yesAttr(el *xdm.Node, name string) bool {
 // exactly as the default collation and the default element namespace are. The
 // Clark name is returned, or "" for the unnamed mode.
 func defaultModeAt(el *xdm.Node) (string, error) {
-	for a := el; a != nil; a = a.Parent {
-		if a.Kind != xdm.KindElement {
+	for a := el; a != nil; a = a.Parent() {
+		if a.Kind() != xdm.KindElement {
 			continue
 		}
 		v := ""
-		if a.Name.URI == xdm.NSXSL {
+		if a.Name().URI == xdm.NSXSL {
 			if at := a.Attr("", "default-mode"); at != nil {
-				v = at.Value
+				v = at.Value()
 			}
 		}
 		if v == "" {
 			// On a literal result element the attribute must be in the XSLT
 			// namespace to be the stylesheet's rather than the output's.
 			if at := a.Attr(xdm.NSXSL, "default-mode"); at != nil {
-				v = at.Value
+				v = at.Value()
 			}
 		}
 		if v == "" {

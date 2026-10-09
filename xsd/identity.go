@@ -802,7 +802,7 @@ func (v *validator) walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Nod
 				continue
 			}
 		}
-		for _, a := range n.Attrs {
+		for a := range n.Attrs() {
 			if alt.AttributeWildcard {
 				// "@*" selects every attribute, which is
 				// grammatical even though a field using it can
@@ -821,7 +821,7 @@ func (v *validator) walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Nod
 				attrs = append(attrs, a)
 				continue
 			}
-			if a.Name.Local == alt.Attribute.Local &&
+			if a.Name().Local == alt.Attribute.Local &&
 				attrNamespaceMatches(a, alt.Attribute) {
 				attrs = append(attrs, a)
 			}
@@ -833,8 +833,8 @@ func (v *validator) walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Nod
 // hasWrittenAttr reports whether the document itself carried the attribute a
 // field names, in which case no default was applied.
 func hasWrittenAttr(n *xdm.Node, want *xdm.QName) bool {
-	for _, a := range n.Attrs {
-		if a.Name.Local == want.Local && attrNamespaceMatches(a, want) {
+	for a := range n.Attrs() {
+		if a.Name().Local == want.Local && attrNamespaceMatches(a, want) {
 			return true
 		}
 	}
@@ -848,10 +848,10 @@ func hasWrittenAttr(n *xdm.Node, want *xdm.QName) bool {
 // unqualified attributes live.
 func attrNamespaceMatches(a *xdm.Node, want *xdm.QName) bool {
 	if want.URI != "" {
-		return a.Name.URI == want.URI
+		return a.Name().URI == want.URI
 	}
 	if want.Prefix == "" {
-		return a.Name.URI == ""
+		return a.Name().URI == ""
 	}
 	// A prefix that never resolved: match on the local name alone rather
 	// than silently selecting nothing.
@@ -863,16 +863,16 @@ func stepMatches(step ICStep, el *xdm.Node) bool {
 	if step.Wildcard {
 		return true
 	}
-	if el.Name.Local != step.Name.Local {
+	if el.Name().Local != step.Name.Local {
 		return false
 	}
 	if step.Name.URI != "" {
-		return el.Name.URI == step.Name.URI
+		return el.Name().URI == step.Name.URI
 	}
 	// An unprefixed name in a selector refers to the absent namespace,
 	// unless the prefix simply failed to resolve.
 	if step.Name.Prefix == "" {
-		return el.Name.URI == ""
+		return el.Name().URI == ""
 	}
 	return true
 }
@@ -903,7 +903,7 @@ func (v *validator) inSkippedContent(n *xdm.Node) bool {
 	if len(v.skipped) == 0 {
 		return false
 	}
-	for cur := n; cur != nil; cur = cur.Parent {
+	for cur := n; cur != nil; cur = cur.Parent() {
 		if v.skipped[cur] {
 			return true
 		}

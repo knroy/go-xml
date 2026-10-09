@@ -18,44 +18,44 @@ func ser(n *xdm.Node) string {
 }
 
 func writeNode(sb *strings.Builder, n *xdm.Node) {
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindText:
-		sb.WriteString(escapeText(n.Value))
+		sb.WriteString(escapeText(n.Value()))
 	case xdm.KindComment:
-		sb.WriteString("<!--" + n.Value + "-->")
+		sb.WriteString("<!--" + n.Value() + "-->")
 	case xdm.KindPI:
-		sb.WriteString("<?" + n.Name.Local)
-		if n.Value != "" {
-			sb.WriteString(" " + n.Value)
+		sb.WriteString("<?" + n.Name().Local)
+		if n.Value() != "" {
+			sb.WriteString(" " + n.Value())
 		}
 		sb.WriteString("?>")
 	case xdm.KindAttribute:
-		sb.WriteString(" " + n.Name.Lexical() + `="` + escapeAttr(n.Value) + `"`)
+		sb.WriteString(" " + n.Name().Lexical() + `="` + escapeAttr(n.Value()) + `"`)
 	case xdm.KindDocument:
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			writeNode(sb, c)
 		}
 	case xdm.KindElement:
-		sb.WriteString("<" + n.Name.Lexical())
+		sb.WriteString("<" + n.Name().Lexical())
 		// A binding an ancestor already made is inherited, so writing it
 		// again says the same thing twice. Every element carries a binding
 		// for its own name, which on a nested element is usually one the
 		// parent declared.
 		var inherited map[string]string
-		if n.Parent != nil {
-			inherited = n.Parent.InScopeNamespaces()
+		if n.Parent() != nil {
+			inherited = n.Parent().InScopeNamespaces()
 		}
-		for _, ns := range n.Namespaces {
-			if inherited[ns.Name.Local] == ns.Value {
+		for ns := range n.NamespaceDecls() {
+			if inherited[ns.Name().Local] == ns.Value() {
 				continue
 			}
-			if ns.Name.Local == "" {
-				sb.WriteString(` xmlns="` + ns.Value + `"`)
+			if ns.Name().Local == "" {
+				sb.WriteString(` xmlns="` + ns.Value() + `"`)
 			} else {
-				sb.WriteString(` xmlns:` + ns.Name.Local + `="` + ns.Value + `"`)
+				sb.WriteString(` xmlns:` + ns.Name().Local + `="` + ns.Value() + `"`)
 			}
 		}
-		for _, a := range n.Attrs {
+		for a := range n.Attrs() {
 			writeNode(sb, a)
 		}
 		if n.NumChildren() == 0 {
@@ -63,10 +63,10 @@ func writeNode(sb *strings.Builder, n *xdm.Node) {
 			return
 		}
 		sb.WriteString(">")
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			writeNode(sb, c)
 		}
-		sb.WriteString("</" + n.Name.Lexical() + ">")
+		sb.WriteString("</" + n.Name().Lexical() + ">")
 	}
 }
 

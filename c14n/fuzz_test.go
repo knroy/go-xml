@@ -62,14 +62,14 @@ func FuzzCanonicalizeNoPanic(f *testing.F) {
 		}
 		doc := tr.Root
 		var elem, first *xdm.Node
-		for _, c := range doc.Children {
-			if c.Kind == xdm.KindElement {
+		for c := range doc.Children() {
+			if c.Kind() == xdm.KindElement {
 				elem = c
 			}
 		}
 		if elem != nil {
-			for _, c := range elem.Children {
-				if c.Kind == xdm.KindElement {
+			for c := range elem.Children() {
+				if c.Kind() == xdm.KindElement {
 					first = c
 					break
 				}

@@ -39,8 +39,8 @@ func TestQNameFunctionsUseXMLWhitespaceOnly(t *testing.T) {
 	// not the document node above it -- otherwise "eg" is unbound and the
 	// FONS0004 that follows would be mistaken for a whitespace refusal.
 	var el *xdm.Node
-	for _, k := range doc.Root.Children {
-		if k.Kind == xdm.KindElement {
+	for k := range doc.Root.Children() {
+		if k.Kind() == xdm.KindElement {
 			el = k
 			break
 		}

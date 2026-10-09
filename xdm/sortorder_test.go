@@ -14,20 +14,20 @@ func TestSortDocumentOrderInOrderFastPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := tree.Root.Children[0]
-	a, x, y, z := r.Attrs[0], r.Children[0], r.Children[1], r.Children[2]
+	r := tree.Root.children[0]
+	a, x, y, z := r.attrs[0], r.children[0], r.children[1], r.children[2]
 
 	names := func(s Sequence) string {
 		var b []string
 		for _, it := range s {
 			n := it.(*Node)
-			switch n.Kind {
+			switch n.kind {
 			case KindNamespace:
-				b = append(b, "ns:"+n.Name.Local)
+				b = append(b, "ns:"+n.name.Local)
 			case KindDocument:
 				b = append(b, "/")
 			default:
-				b = append(b, n.Name.Local)
+				b = append(b, n.name.Local)
 			}
 		}
 		return strings.Join(b, " ")
@@ -53,7 +53,7 @@ func TestSortDocumentOrderInOrderFastPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	o := other.Root.Children[0]
+	o := other.Root.children[0]
 	if p, q := names(SortDocumentOrder(Sequence{x, o})), names(SortDocumentOrder(Sequence{o, x})); p != q {
 		t.Errorf("two trees: %q and %q", p, q)
 	}
@@ -72,8 +72,8 @@ func TestSortDocumentOrderInOrderFastPath(t *testing.T) {
 
 	// Two walks of the namespace axis synthesize two pointers for one
 	// binding, in increasing position; they are one node and must merge.
-	ns1 := &Node{Kind: KindNamespace, Name: QName{Local: "p"}, Value: "urn:p", Parent: r}
-	ns2 := &Node{Kind: KindNamespace, Name: QName{Local: "p"}, Value: "urn:p", Parent: r}
+	ns1 := &Node{kind: KindNamespace, name: QName{Local: "p"}, value: "urn:p", parent: r}
+	ns2 := &Node{kind: KindNamespace, name: QName{Local: "p"}, value: "urn:p", parent: r}
 	ns1.SetSynthesizedOrder(r, 0)
 	ns2.SetSynthesizedOrder(r, 0)
 	if got := names(SortDocumentOrder(Sequence{r, ns1, ns2})); got != "r ns:p" {
@@ -81,8 +81,8 @@ func TestSortDocumentOrderInOrderFastPath(t *testing.T) {
 	}
 
 	// Detached roots have no tree; the sort numbers them in the order given.
-	d1, d2 := &Node{Kind: KindElement, Name: QName{Local: "d1"}},
-		&Node{Kind: KindElement, Name: QName{Local: "d2"}}
+	d1, d2 := &Node{kind: KindElement, name: QName{Local: "d1"}},
+		&Node{kind: KindElement, name: QName{Local: "d2"}}
 	if got := names(SortDocumentOrder(Sequence{d1, d2})); got != "d1 d2" {
 		t.Errorf("detached roots: got %q", got)
 	}

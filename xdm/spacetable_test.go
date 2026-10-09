@@ -19,9 +19,9 @@ func TestSpaceTableSameLengthRuns(t *testing.T) {
 	}
 	want := []string{"\n  ", "  \n", "\n  ", "\t\t\t", "\n  "}
 	var got []string
-	for _, c := range tr.Root.Children[0].Children {
-		if c.Kind == KindText {
-			got = append(got, c.Value)
+	for _, c := range tr.Root.children[0].children {
+		if c.kind == KindText {
+			got = append(got, c.value)
 		}
 	}
 	if len(got) != len(want) {

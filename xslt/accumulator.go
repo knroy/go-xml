@@ -101,11 +101,11 @@ func (c *compiler) compileAccumulator(el *xdm.Node, precedence int) error {
 	}
 	ns := newNSResolver(el, "")
 	def := &accumulatorDef{name: xdm.QName{URI: qn.URI, Local: qn.Local}}
-	if def.initial, err = compileExpr(initial.Value, ns); err != nil {
+	if def.initial, err = compileExpr(initial.Value(), ns); err != nil {
 		return err
 	}
 	if a := el.Attr("", "as"); a != nil {
-		if def.asType, err = compileSequenceType(a.Value, ns); err != nil {
+		if def.asType, err = compileSequenceType(a.Value(), ns); err != nil {
 			return fmt.Errorf("in xsl:accumulator/@as: %w", err)
 		}
 	}
@@ -252,10 +252,10 @@ func (c *compiler) compileAccumulatorRule(el *xdm.Node) (*accumulatorRule, error
 	}
 	if p := el.Attr("", "priority"); p != nil {
 		var f float64
-		if _, err := fmt.Sscanf(strings.TrimSpace(p.Value), "%g", &f); err != nil {
+		if _, err := fmt.Sscanf(strings.TrimSpace(p.Value()), "%g", &f); err != nil {
 			return nil, fmt.Errorf(
 				"XTSE0530: xsl:accumulator-rule/@priority=%q is not a number",
-				p.Value)
+				p.Value())
 		}
 		r.priority, r.hasPrio = f, true
 	}
@@ -270,7 +270,7 @@ func (c *compiler) compileAccumulatorRule(el *xdm.Node) (*accumulatorRule, error
 			"XTSE3300: xsl:accumulator-rule has both a select attribute and " +
 				"a sequence constructor")
 	case sel != nil:
-		if r.select_, err = compileExpr(sel.Value, ns); err != nil {
+		if r.select_, err = compileExpr(sel.Value(), ns); err != nil {
 			return nil, err
 		}
 	case hasBody:
@@ -301,7 +301,7 @@ func (c *compiler) compileModeAccumulators(el *xdm.Node, mode string) error {
 		return nil
 	}
 	set := &modeAccumulators{names: map[string]bool{}}
-	for _, tok := range strings.Fields(a.Value) {
+	for _, tok := range strings.Fields(a.Value()) {
 		if tok == "#all" {
 			set.all = true
 			continue
@@ -394,7 +394,7 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 		// The before and after maps are left without entries for attribute
 		// nodes for the same reason; accumulator-before on an attribute is
 		// XTTE3360 and never reaches the map.
-		for _, ch := range n.Children {
+		for ch := range n.Children() {
 			if err := walk(ch); err != nil {
 				return err
 			}
@@ -550,9 +550,9 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 		return nil, fmt.Errorf(
 			"XTTE3360: %s(%q): the context item is not a node", fname, lex)
 	}
-	if node.Kind == xdm.KindAttribute || node.Kind == xdm.KindNamespace {
+	if node.Kind() == xdm.KindAttribute || node.Kind() == xdm.KindNamespace {
 		return nil, fmt.Errorf(
-			"XTTE3360: %s(%q): the context item is an %v", fname, lex, node.Kind)
+			"XTTE3360: %s(%q): the context item is an %v", fname, lex, node.Kind())
 	}
 	// A node produced by a copy-accumulators="yes" copy answers with the
 	// value its original had, not with what the rules would compute over the

@@ -48,8 +48,8 @@ func TestJSONToXMLValidateUsesTheValidator(t *testing.T) {
 	if seen == nil {
 		t.Fatal("the validator was not called")
 	}
-	if seen.Kind != xdm.KindDocument {
-		t.Errorf("the validator was handed a %v, want a document node", seen.Kind)
+	if seen.Kind() != xdm.KindDocument {
+		t.Errorf("the validator was handed a %v, want a document node", seen.Kind())
 	}
 }
 

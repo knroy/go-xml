@@ -19,11 +19,11 @@ func TestSerializeRejectsMalformedCommentAndPI(t *testing.T) {
 		var out bytes.Buffer
 		err := Serialize(&out, xdm.Sequence{n}, OutputSettings{Method: "xml", OmitXMLDecl: true}, nil)
 		if err == nil {
-			t.Errorf("Serialize(%v) succeeded with %q", n.Kind, out.String())
+			t.Errorf("Serialize(%v) succeeded with %q", n.Kind(), out.String())
 			continue
 		}
 		if !strings.Contains(err.Error(), "SERE000") {
-			t.Errorf("Serialize(%v) error = %v, want SERE code", n.Kind, err)
+			t.Errorf("Serialize(%v) error = %v, want SERE code", n.Kind(), err)
 		}
 	}
 }

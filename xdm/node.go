@@ -59,22 +59,22 @@ func (k NodeKind) String() string {
 // That immutability is what makes it safe to share one compiled stylesheet
 // tree across concurrent transforms.
 type Node struct {
-	Kind NodeKind
-	Name QName
+	kind NodeKind
+	name QName
 
 	// Value is the text content for text, comment, PI and attribute nodes,
 	// and the namespace URI for namespace nodes. Element and document nodes
 	// derive their string value from descendants; see StringValue.
-	Value string
+	value string
 
-	Parent   *Node
-	Children []*Node
+	parent   *Node
+	children []*Node
 
-	// Attrs and Namespaces hold attribute and namespace nodes for elements.
-	// They are kept out of Children because the child axis must not return
+	// attrs and namespaces hold attribute and namespace nodes for elements.
+	// They are kept out of children because the child axis must not return
 	// them — a fact that a single mixed slice makes easy to get wrong.
-	Attrs      []*Node
-	Namespaces []*Node
+	attrs      []*Node
+	namespaces []*Node
 
 	// order is the document-order position, assigned in a single pre-order
 	// walk when the tree is finalised. Comparing two nodes' document order is
@@ -105,7 +105,7 @@ type Node struct {
 	tree *Tree
 
 	// BaseURI is the resolved base URI, used by fn:document and fn:doc.
-	BaseURI string
+	baseURI string
 
 	// DocumentURI is the data model's dm:document-uri property, which
 	// fn:document-uri returns. It is meaningful only on a document node.
@@ -129,7 +129,7 @@ type Node struct {
 	// fn:doc cannot retrieve would make "doc(document-uri($d)) is $d" false
 	// while claiming it should be true. Parse sets it from
 	// ParseOptions.DocumentURI, which defaults to empty.
-	DocumentURI string
+	documentURI string
 
 	// TypeAnnotation records a schema type when the document has been
 	// validated. Untyped documents leave this empty, and atomisation then
@@ -147,7 +147,7 @@ type Node struct {
 	// the key into a process-global derivation table, so a bare local name
 	// let one schema's type displace a built-in of the same name for every
 	// later schema in the process — see the commentary on derivedPrimitives.
-	TypeAnnotation string
+	typeAnnotation string
 
 	// UnionMember records which member type of a union simple type actually
 	// accepted this node's value, when TypeAnnotation names (or has simple
@@ -168,7 +168,7 @@ type Node struct {
 	//
 	// Empty for every node whose type is not a union, which is almost all of
 	// them, so the common path pays only the field.
-	UnionMember string
+	unionMember string
 
 	// DerivedPrimitive and ListItem record what TypeAnnotation MEANS, as the
 	// schema that validated this node defined it: the built-in the annotated
@@ -197,8 +197,8 @@ type Node struct {
 	// atomisation falls back to the registries, exactly as it did before.
 	// So these fields are a per-node OVERRIDE of a global answer, never a
 	// precondition for having one.
-	DerivedPrimitive string
-	ListItem         string
+	derivedPrimitive string
+	listItem         string
 
 	// ext holds the state that almost no node carries -- the type
 	// environment below, and the identity of a detached root -- out of line,
@@ -249,8 +249,8 @@ type Node struct {
 	// DTD attribute types) by whoever knows the declared type; a node whose
 	// type was never determined leaves both false, which is the correct
 	// answer for an unvalidated document.
-	IsID     bool
-	IsIDREFS bool
+	isID     bool
+	isIDREFS bool
 
 	// IsNilled is the data model's dm:nilled property (XDM 5.10): true for an
 	// element that a schema assessment found nil, false for every other node.
@@ -272,7 +272,7 @@ type Node struct {
 	//
 	// A node whose type was never determined leaves this false, which is the
 	// correct answer for an unvalidated document.
-	IsNilled bool
+	isNilled bool
 
 	// NoTypedValue is the data model's "typed value is absent" property (XDM
 	// 3.1 §6.2.4): an element validated against a complex type with
@@ -290,7 +290,7 @@ type Node struct {
 	// A node nothing assessed leaves this false, which is correct: an
 	// unvalidated element is xs:untypedAtomic of its string value and
 	// atomizes without complaint.
-	NoTypedValue bool
+	noTypedValue bool
 
 	// MixedContent records that an element was validated against a complex
 	// type other than xs:anyType itself whose content model is mixed. Like
@@ -300,7 +300,7 @@ type Node struct {
 	// whitespace MAY be added in xs:anyType content but SHOULD NOT be in
 	// typed mixed content, where it is significant -- so the serializers
 	// read it. Unvalidated nodes leave it false.
-	MixedContent bool
+	mixedContent bool
 
 	// offset is the byte position where this node starts in the source text,
 	// stored one greater than the true offset so that the zero value means
@@ -373,10 +373,10 @@ func (n *Node) isItem() {}
 
 // TypeName implements Item.
 func (n *Node) TypeName() string {
-	if n.TypeAnnotation != "" {
-		return n.TypeAnnotation
+	if n.typeAnnotation != "" {
+		return n.typeAnnotation
 	}
-	return n.Kind.String()
+	return n.kind.String()
 }
 
 // Order returns a number that identifies the node within the process.
@@ -407,8 +407,8 @@ func (n *Node) identity() (tree int, order int32) {
 		return n.tree.id, n.order
 	}
 	root := n
-	for root.Parent != nil {
-		root = root.Parent
+	for root.parent != nil {
+		root = root.parent
 	}
 	tree = int(detachedRootID(root))
 	// Within the tree the root identity is only half the answer: every
@@ -480,8 +480,8 @@ func (n *Node) SetSynthesizedOrder(owner *Node, offset int) {
 		// an unnumbered owner has order 0, and every element's namespace
 		// nodes then shared the same few identities.
 		root := owner
-		for root.Parent != nil {
-			root = root.Parent
+		for root.parent != nil {
+			root = root.parent
 		}
 		numberDetachedSubtree(root)
 	}
@@ -523,16 +523,16 @@ func (n *Node) Is(o *Node) bool {
 	// behind two pointers. Widening this to every kind would make two distinct
 	// parentless nodes — which share tree nil and order zero until something
 	// numbers them — compare identical.
-	if n.Kind != KindNamespace || o.Kind != KindNamespace {
+	if n.kind != KindNamespace || o.kind != KindNamespace {
 		return false
 	}
 	// A parentless namespace node is identical only to itself, which the
 	// pointer test above has already ruled out: with no owning element there
 	// is no binding for a second walk to re-derive.
-	if n.Parent == nil || o.Parent == nil {
+	if n.parent == nil || o.parent == nil {
 		return false
 	}
-	return n.Parent == o.Parent && n.Name.Local == o.Name.Local
+	return n.parent == o.parent && n.name.Local == o.name.Local
 }
 
 // IdentityKey is a comparable value equal for two node references exactly when
@@ -558,8 +558,8 @@ func (n *Node) Identity() IdentityKey {
 	// an owning element there is no binding for a second walk to re-derive,
 	// and keying every such node on the same zero parent would merge nodes
 	// that are genuinely distinct.
-	if n.Kind == KindNamespace && n.Parent != nil {
-		return IdentityKey{parent: n.Parent, prefix: n.Name.Local}
+	if n.kind == KindNamespace && n.parent != nil {
+		return IdentityKey{parent: n.parent, prefix: n.name.Local}
 	}
 	return IdentityKey{ptr: n}
 }
@@ -650,7 +650,7 @@ func compareDetached(n, o *Node) int {
 	}
 	p := na[i-1]
 	rank := siblingRank
-	if na[i].Kind != KindNamespace && oa[i].Kind != KindNamespace {
+	if na[i].kind != KindNamespace && oa[i].kind != KindNamespace {
 		// Both ranks would add the same namespace base, which costs an
 		// InScopeNamespaces map to compute; without it the order is the same.
 		rank = attrOrChildRank
@@ -713,8 +713,8 @@ func crossTreeRank(n *Node) int {
 		return n.tree.id
 	}
 	root := n
-	for root.Parent != nil {
-		root = root.Parent
+	for root.parent != nil {
+		root = root.parent
 	}
 	return int(detachedRootID(root))
 }
@@ -727,8 +727,8 @@ func crossTreeRank(n *Node) int {
 // comparisons happen to reach them. See SortDocumentOrder.
 func numberDetachedRoot(n *Node) {
 	root := n
-	for root.Parent != nil {
-		root = root.Parent
+	for root.parent != nil {
+		root = root.parent
 	}
 	if root.tree != nil {
 		return
@@ -764,31 +764,31 @@ func numberDetachedSubtree(root *Node) {
 		// Namespace and attribute nodes precede children, matching the order
 		// Tree.assign uses so the two agree about what document order means.
 		var saved []nsSave
-		if n.Kind == KindElement {
-			for _, ns := range n.Namespaces {
-				prev, had := scope[ns.Name.Local]
-				saved = append(saved, nsSave{prefix: ns.Name.Local, uri: prev, had: had})
-				if ns.Value == "" {
-					delete(scope, ns.Name.Local)
+		if n.kind == KindElement {
+			for _, ns := range n.namespaces {
+				prev, had := scope[ns.name.Local]
+				saved = append(saved, nsSave{prefix: ns.name.Local, uri: prev, had: had})
+				if ns.value == "" {
+					delete(scope, ns.name.Local)
 				} else {
-					scope[ns.Name.Local] = ns.Value
+					scope[ns.name.Local] = ns.value
 				}
 			}
 		}
-		for _, ns := range n.Namespaces {
+		for _, ns := range n.namespaces {
 			ns.order = counter
 			counter++
 		}
-		if n.Kind == KindElement {
-			if extra := len(scope) - len(n.Namespaces); extra > 0 {
+		if n.kind == KindElement {
+			if extra := len(scope) - len(n.namespaces); extra > 0 {
 				counter += int32(extra)
 			}
 		}
-		for _, a := range n.Attrs {
+		for _, a := range n.attrs {
 			a.order = counter
 			counter++
 		}
-		for _, c := range n.Children {
+		for _, c := range n.children {
 			walk(c)
 		}
 		restoreScope(scope, saved)
@@ -799,7 +799,7 @@ func numberDetachedSubtree(root *Node) {
 // ancestorChain returns n's ancestors root-first, ending with n itself.
 func ancestorChain(n *Node) []*Node {
 	var up []*Node
-	for c := n; c != nil; c = c.Parent {
+	for c := n; c != nil; c = c.parent {
 		up = append(up, c)
 	}
 	// Reverse in place so the root comes first.
@@ -828,8 +828,8 @@ func siblingRank(p, n *Node) int {
 	// Ranking by kind is the data model's own rule, and the one Tree.assign
 	// lays down: an element's namespace nodes precede its attributes, which
 	// precede its children.
-	if n.Kind == KindNamespace {
-		for i, ns := range p.Namespaces {
+	if n.kind == KindNamespace {
+		for i, ns := range p.namespaces {
 			if ns == n {
 				return i
 			}
@@ -838,7 +838,7 @@ func siblingRank(p, n *Node) int {
 		// the axis, and the axis emits them in sorted prefix order.
 		i := 0
 		for prefix := range p.InScopeNamespaces() {
-			if prefix < n.Name.Local {
+			if prefix < n.name.Local {
 				i++
 			}
 		}
@@ -850,27 +850,27 @@ func siblingRank(p, n *Node) int {
 // attrOrChildRank is siblingRank for an attribute or child of p, less the
 // namespace base, which is the same for every such node of p.
 func attrOrChildRank(p, n *Node) int {
-	if n.Kind == KindAttribute {
-		for i, a := range p.Attrs {
+	if n.kind == KindAttribute {
+		for i, a := range p.attrs {
 			if a == n {
 				return i
 			}
 		}
-		return len(p.Attrs)
+		return len(p.attrs)
 	}
-	for i, c := range p.Children {
+	for i, c := range p.children {
 		if c == n {
-			return len(p.Attrs) + i
+			return len(p.attrs) + i
 		}
 	}
-	return len(p.Attrs) + len(p.Children)
+	return len(p.attrs) + len(p.children)
 }
 
 // nsRankBase is the rank the first non-namespace node of p takes, which is one
 // past every node on p's namespace axis rather than one past the declarations
 // p carries: an inherited binding is a node there too.
 func nsRankBase(p *Node) int {
-	n := len(p.Namespaces)
+	n := len(p.namespaces)
 	if m := len(p.InScopeNamespaces()); m > n {
 		n = m
 	}
@@ -881,31 +881,31 @@ func nsRankBase(p *Node) int {
 // all descendant text for document and element nodes, and the value itself for
 // the leaf kinds.
 func (n *Node) StringValue() string {
-	switch n.Kind {
+	switch n.kind {
 	case KindDocument, KindElement:
 		// An element holding one text node, or nothing, is the usual
 		// shape of a simple value, and has nothing to concatenate.
-		switch len(n.Children) {
+		switch len(n.children) {
 		case 0:
 			return ""
 		case 1:
-			if c := n.Children[0]; c.Kind == KindText {
-				return c.Value
+			if c := n.children[0]; c.kind == KindText {
+				return c.value
 			}
 		}
 		var sb strings.Builder
 		n.appendText(&sb)
 		return sb.String()
 	default:
-		return n.Value
+		return n.value
 	}
 }
 
 func (n *Node) appendText(sb *strings.Builder) {
-	for _, c := range n.Children {
-		switch c.Kind {
+	for _, c := range n.children {
+		switch c.kind {
 		case KindText:
-			sb.WriteString(c.Value)
+			sb.WriteString(c.value)
 		case KindElement:
 			c.appendText(sb)
 		}
@@ -925,7 +925,7 @@ func (n *Node) Atomize() *Atomic {
 	// would have coerced it. These kinds are never schema-validated, so
 	// there is no annotation to consult and the answer does not depend on
 	// one.
-	switch n.Kind {
+	switch n.kind {
 	case KindComment, KindPI, KindNamespace:
 		return NewString(n.StringValue())
 	}
@@ -939,7 +939,7 @@ func (n *Node) Atomize() *Atomic {
 	// is deliberately narrow — the numeric, boolean and date types, whose
 	// lexical forms this package can already parse — because a type it
 	// cannot construct is better left untyped than guessed at.
-	if n.TypeAnnotation != "" {
+	if n.typeAnnotation != "" {
 		// xs:QName and xs:NOTATION are handled here rather than in
 		// atomicForAnnotation because resolving the prefix needs the
 		// node's in-scope namespaces, which a lexical form alone does
@@ -953,7 +953,7 @@ func (n *Node) Atomize() *Atomic {
 		// schema-for-xslt20.xsd declares an xsl:QName that restricts
 		// xs:Name and holds no QName value at all, and matching it here
 		// atomised it as a QName it is not.
-		switch n.TypeAnnotation {
+		switch n.typeAnnotation {
 		case "QName", "NOTATION":
 			if q, ok := n.resolveQNameValue(); ok {
 				return NewQNameValue(q)
@@ -969,13 +969,13 @@ func (n *Node) Atomize() *Atomic {
 		if a := atomicForUnionAnnotation(n); a != nil {
 			return a
 		}
-		if a := atomicForAnnotation(n.TypeAnnotation, n.StringValue()); a != nil {
+		if a := atomicForAnnotation(n.typeAnnotation, n.StringValue()); a != nil {
 			// The annotation is kept on the value as its derived type, so
 			// that "instance of" can answer for a user-defined type. Without
 			// it the value knows only the primitive it erased to, and every
 			// question about the schema type it was validated against
 			// answered false.
-			return a.WithDerived(n.TypeAnnotation).WithTypeEnv(n.TypeEnv())
+			return a.WithDerived(n.typeAnnotation).WithTypeEnv(n.TypeEnv())
 		}
 		// A user-defined type this package cannot construct still atomises:
 		// it is the primitive its schema type derives from, and the schema
@@ -1020,11 +1020,11 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 	// so "elem = 'one two three'" compared three NMTOKENs against the whole
 	// string and answered false (as-3002, as-1811).
 	var item string
-	if n.TypeAnnotation != "" {
-		item = n.ListItem
+	if n.typeAnnotation != "" {
+		item = n.listItem
 	}
 	if item == "" {
-		item = listItemType(typeEnvOf(n), n.TypeAnnotation)
+		item = listItemType(typeEnvOf(n), n.typeAnnotation)
 	}
 	if item == "" {
 		// A union whose selected member is a LIST has a sequence for its
@@ -1040,7 +1040,7 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 		// prefix. Given the whole literal as a single item, "xs ul" is not a
 		// prefix in scope and every stylesheet excluding two prefixes was
 		// reported invalid.
-		if item = listItemType(typeEnvOf(n), n.UnionMember); item == "" {
+		if item = listItemType(typeEnvOf(n), n.unionMember); item == "" {
 			return nil, false
 		}
 	}
@@ -1318,8 +1318,8 @@ func (n *Node) resolveQNameValue() (QName, bool) {
 		return QName{}, false
 	}
 	scope := n
-	if scope.Kind == KindAttribute && scope.Parent != nil {
-		scope = scope.Parent
+	if scope.kind == KindAttribute && scope.parent != nil {
+		scope = scope.parent
 	}
 	if prefix == "" {
 		uri, _ := scope.LookupPrefix("")
@@ -1334,8 +1334,8 @@ func (n *Node) resolveQNameValue() (QName, bool) {
 
 // Attr returns the attribute node with the given expanded name, or nil.
 func (n *Node) Attr(uri, local string) *Node {
-	for _, a := range n.Attrs {
-		if a.Name.Local == local && a.Name.URI == uri {
+	for _, a := range n.attrs {
+		if a.name.Local == local && a.name.URI == uri {
 			return a
 		}
 	}
@@ -1347,7 +1347,7 @@ func (n *Node) Attr(uri, local string) *Node {
 // unprefixed, so this is the common case worth a helper.
 func (n *Node) AttrValue(local string) string {
 	if a := n.Attr("", local); a != nil {
-		return a.Value
+		return a.value
 	}
 	return ""
 }
@@ -1356,23 +1356,23 @@ func (n *Node) AttrValue(local string) string {
 // well-formed parsed document this is the document node.
 func (n *Node) Root() *Node {
 	cur := n
-	for cur.Parent != nil {
-		cur = cur.Parent
+	for cur.parent != nil {
+		cur = cur.parent
 	}
 	return cur
 }
 
 // IsElement reports whether n is an element with the given expanded name.
 func (n *Node) IsElement(uri, local string) bool {
-	return n.Kind == KindElement && n.Name.URI == uri && n.Name.Local == local
+	return n.kind == KindElement && n.name.URI == uri && n.name.Local == local
 }
 
 // ChildElements returns the element children, which is what almost every
 // stylesheet-compilation walk wants.
 func (n *Node) ChildElements() []*Node {
 	var out []*Node
-	for _, c := range n.Children {
-		if c.Kind == KindElement {
+	for _, c := range n.children {
+		if c.kind == KindElement {
 			out = append(out, c)
 		}
 	}
@@ -1393,8 +1393,8 @@ func (n *Node) walk(fn func(*Node) bool) bool {
 	if !fn(n) {
 		return false
 	}
-	for _, c := range n.Children {
-		if c.Kind == KindElement && !c.walk(fn) {
+	for _, c := range n.children {
+		if c.kind == KindElement && !c.walk(fn) {
 			return false
 		}
 	}
@@ -1421,17 +1421,17 @@ func (n *Node) LookupPrefix(prefix string) (string, bool) {
 	if prefix == "xml" {
 		return NSXML, true
 	}
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.Kind != KindElement {
+	for cur := n; cur != nil; cur = cur.parent {
+		if cur.kind != KindElement {
 			continue
 		}
-		for _, ns := range cur.Namespaces {
-			if ns.Name.Local == prefix {
-				if ns.Value == "" && prefix != "" {
+		for _, ns := range cur.namespaces {
+			if ns.name.Local == prefix {
+				if ns.value == "" && prefix != "" {
 					// An undeclaration; the prefix is not in scope here.
 					return "", false
 				}
-				return ns.Value, true
+				return ns.value, true
 			}
 		}
 	}
@@ -1453,18 +1453,18 @@ func (n *Node) InScopeNamespaces() map[string]string {
 	// the stylesheet built rather than parsed.
 	out := map[string]string{"xml": NSXML}
 	var chain []*Node
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.Kind == KindElement {
+	for cur := n; cur != nil; cur = cur.parent {
+		if cur.kind == KindElement {
 			chain = append(chain, cur)
 		}
 	}
 	// Walk outermost-inward so that inner declarations overwrite outer ones.
 	for i := len(chain) - 1; i >= 0; i-- {
-		for _, ns := range chain[i].Namespaces {
-			if ns.Value == "" {
-				delete(out, ns.Name.Local)
+		for _, ns := range chain[i].namespaces {
+			if ns.value == "" {
+				delete(out, ns.name.Local)
 			} else {
-				out[ns.Name.Local] = ns.Value
+				out[ns.name.Local] = ns.value
 			}
 		}
 	}
@@ -1481,36 +1481,36 @@ var nextTreeID = newCounter()
 // NewTree creates an empty tree with a document node as its root.
 func NewTree() *Tree {
 	t := &Tree{id: nextTreeID()}
-	t.Root = &Node{Kind: KindDocument, tree: t}
+	t.Root = &Node{kind: KindDocument, tree: t}
 	return t
 }
 
 // AppendChild links c as the last child of n, setting the parent link. It does
 // not assign document order; call Finalize once the tree is complete.
 func (n *Node) AppendChild(c *Node) {
-	c.Parent = n
+	c.parent = n
 	c.tree = n.tree
-	n.Children = append(n.Children, c)
+	n.children = append(n.children, c)
 }
 
 // AddAttr links a as an attribute of n.
 func (n *Node) AddAttr(a *Node) {
-	a.Kind = KindAttribute
-	a.Parent = n
+	a.kind = KindAttribute
+	a.parent = n
 	a.tree = n.tree
-	n.Attrs = append(n.Attrs, a)
+	n.attrs = append(n.attrs, a)
 }
 
 // AddNamespace links a namespace node to n.
 func (n *Node) AddNamespace(prefix, uri string) {
 	ns := &Node{
-		Kind:   KindNamespace,
-		Name:   QName{Local: prefix},
-		Value:  uri,
-		Parent: n,
+		kind:   KindNamespace,
+		name:   QName{Local: prefix},
+		value:  uri,
+		parent: n,
 		tree:   n.tree,
 	}
-	n.Namespaces = append(n.Namespaces, ns)
+	n.namespaces = append(n.namespaces, ns)
 }
 
 // Finalize assigns document-order indices across the whole tree in a single
@@ -1535,7 +1535,7 @@ func (t *Tree) Finalize() {
 // so a sibling sees the scope its parent had.
 func (t *Tree) assign(n *Node, scope map[string]string) {
 	saved := t.number(n, scope)
-	for _, c := range n.Children {
+	for _, c := range n.children {
 		t.assign(c, scope)
 	}
 	restoreScope(scope, saved)
@@ -1570,20 +1570,20 @@ func (t *Tree) number(n *Node, scope map[string]string) []nsSave {
 	// the empty string is itself a value a caller can bind, and conflating
 	// the two would leave a stale entry in scope for a later sibling.
 	var saved []nsSave
-	if n.Kind == KindElement {
-		for _, ns := range n.Namespaces {
-			prev, had := scope[ns.Name.Local]
-			saved = append(saved, nsSave{prefix: ns.Name.Local, uri: prev, had: had})
+	if n.kind == KindElement {
+		for _, ns := range n.namespaces {
+			prev, had := scope[ns.name.Local]
+			saved = append(saved, nsSave{prefix: ns.name.Local, uri: prev, had: had})
 			// An empty value undeclares the prefix, which takes it out of
 			// scope; InScopeNamespaces deletes it for the same reason.
-			if ns.Value == "" {
-				delete(scope, ns.Name.Local)
+			if ns.value == "" {
+				delete(scope, ns.name.Local)
 			} else {
-				scope[ns.Name.Local] = ns.Value
+				scope[ns.name.Local] = ns.value
 			}
 		}
 		reserved := len(scope)
-		for _, ns := range n.Namespaces {
+		for _, ns := range n.namespaces {
 			ns.tree = t
 			ns.order = t.counter
 			t.counter++
@@ -1597,13 +1597,13 @@ func (t *Tree) number(n *Node, scope map[string]string) []nsSave {
 			t.counter++
 		}
 	} else {
-		for _, ns := range n.Namespaces {
+		for _, ns := range n.namespaces {
 			ns.tree = t
 			ns.order = t.counter
 			t.counter++
 		}
 	}
-	for _, a := range n.Attrs {
+	for _, a := range n.attrs {
 		a.tree = t
 		a.order = t.counter
 		t.counter++
@@ -1760,7 +1760,7 @@ func DerivedBase(name string) string {
 // The member's own name may itself be a user-defined schema type, so the value
 // is built through the same lexical walk a list item uses.
 func atomicForUnionAnnotation(n *Node) *Atomic {
-	member := n.UnionMember
+	member := n.unionMember
 	if member == "" {
 		return nil
 	}
@@ -1770,7 +1770,7 @@ func atomicForUnionAnnotation(n *Node) *Atomic {
 	switch member {
 	case "QName", "NOTATION":
 		if q, ok := n.resolveQNameValue(); ok {
-			return NewQNameValue(q).WithDerivedUnion(n.TypeAnnotation, member).WithTypeEnv(n.TypeEnv())
+			return NewQNameValue(q).WithDerivedUnion(n.typeAnnotation, member).WithTypeEnv(n.TypeEnv())
 		}
 		return nil
 	}
@@ -1778,7 +1778,7 @@ func atomicForUnionAnnotation(n *Node) *Atomic {
 	if a == nil {
 		return nil
 	}
-	return a.WithDerivedUnion(n.TypeAnnotation, member).WithTypeEnv(n.TypeEnv())
+	return a.WithDerivedUnion(n.typeAnnotation, member).WithTypeEnv(n.TypeEnv())
 }
 
 // atomicForDerivedAnnotation builds a typed value for a user-defined schema
@@ -1797,7 +1797,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 	// somehow formed a cycle cannot spin here. That is the only thing that can
 	// stop it terminating — the registry is a name->name map — and a count
 	// cannot tell such a cycle from a legally deep chain of restrictions.
-	name := n.TypeAnnotation
+	name := n.typeAnnotation
 	seen := map[string]bool{name: true}
 	// The node's own record of what its type erases to is preferred over the
 	// registry for the FIRST step, which is the step that names the type this
@@ -1810,8 +1810,8 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 	// no meaning to prefer. (Atomize only reaches here with one set, but the
 	// walk is exported through other paths and must not depend on that.)
 	first := ""
-	if n.TypeAnnotation != "" {
-		first = n.DerivedPrimitive
+	if n.typeAnnotation != "" {
+		first = n.derivedPrimitive
 	}
 	for {
 		var prim string
@@ -1831,7 +1831,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 		switch prim {
 		case "QName", "NOTATION":
 			if q, ok := n.resolveQNameValue(); ok {
-				return NewQNameValue(q).WithDerived(n.TypeAnnotation).WithTypeEnv(n.TypeEnv())
+				return NewQNameValue(q).WithDerived(n.typeAnnotation).WithTypeEnv(n.TypeEnv())
 			}
 			return nil
 		}
@@ -1840,7 +1840,7 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 			// intermediate name the walk stopped at: that is what makes
 			// "instance of my:specialPartNumber" true as well as
 			// "instance of my:partNumberType".
-			return a.WithDerived(n.TypeAnnotation).WithTypeEnv(n.TypeEnv())
+			return a.WithDerived(n.typeAnnotation).WithTypeEnv(n.TypeEnv())
 		}
 		if seen[prim] {
 			return nil
@@ -1888,18 +1888,18 @@ func annotationIDKind(annotation string) (isID, isIDREFS bool) {
 // XSLT's stripping rules are the only thing entitled to change them — and
 // those rules say the properties do not change at all.
 func (n *Node) SetTypeAnnotation(annotation string) {
-	n.TypeAnnotation = annotation
+	n.typeAnnotation = annotation
 	if annotation == "" {
 		// Clearing the annotation clears what it meant. DerivedPrimitive and
 		// ListItem describe a type this node no longer claims, and leaving
 		// them would let it keep atomising as that type -- an annotation-less
 		// node that still splits into list items is exactly the bug
 		// input-type-annotations="strip" and xsl:copy-of would have hit.
-		n.DerivedPrimitive, n.ListItem = "", ""
+		n.derivedPrimitive, n.listItem = "", ""
 	}
 	if isID, isRefs := annotationIDKind(annotation); isID || isRefs {
-		n.IsID = n.IsID || isID
-		n.IsIDREFS = n.IsIDREFS || isRefs
+		n.isID = n.isID || isID
+		n.isIDREFS = n.isIDREFS || isRefs
 	}
 }
 
@@ -1925,8 +1925,8 @@ func (n *Node) SetTypeAnnotation(annotation string) {
 // missing one, and a missing one falls back correctly.
 func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem string) {
 	n.SetTypeAnnotation(annotation)
-	n.DerivedPrimitive = derivedPrimitive
-	n.ListItem = listItem
+	n.derivedPrimitive = derivedPrimitive
+	n.listItem = listItem
 }
 
 // CopyTypingFrom copies every PSVI property of src onto n, so that the copy
@@ -1958,15 +1958,15 @@ func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem 
 // here by construction: the resolved fields cannot outlive their annotation,
 // because src is a coherent node and all nine fields travel together.
 func (n *Node) CopyTypingFrom(src *Node) {
-	n.TypeAnnotation = src.TypeAnnotation
-	n.UnionMember = src.UnionMember
-	n.DerivedPrimitive = src.DerivedPrimitive
-	n.ListItem = src.ListItem
-	n.IsID = src.IsID
-	n.IsIDREFS = src.IsIDREFS
-	n.IsNilled = src.IsNilled
-	n.NoTypedValue = src.NoTypedValue
-	n.MixedContent = src.MixedContent
+	n.typeAnnotation = src.typeAnnotation
+	n.unionMember = src.unionMember
+	n.derivedPrimitive = src.derivedPrimitive
+	n.listItem = src.listItem
+	n.isID = src.isID
+	n.isIDREFS = src.isIDREFS
+	n.isNilled = src.isNilled
+	n.noTypedValue = src.noTypedValue
+	n.mixedContent = src.mixedContent
 }
 
 // Typing is the complete set of PSVI properties an assessment concludes about
@@ -2007,15 +2007,15 @@ func TypingOf(n *Node) Typing {
 		return Typing{}
 	}
 	return Typing{
-		TypeAnnotation:   n.TypeAnnotation,
-		UnionMember:      n.UnionMember,
-		DerivedPrimitive: n.DerivedPrimitive,
-		ListItem:         n.ListItem,
-		IsID:             n.IsID,
-		IsIDREFS:         n.IsIDREFS,
-		IsNilled:         n.IsNilled,
-		NoTypedValue:     n.NoTypedValue,
-		MixedContent:     n.MixedContent,
+		TypeAnnotation:   n.typeAnnotation,
+		UnionMember:      n.unionMember,
+		DerivedPrimitive: n.derivedPrimitive,
+		ListItem:         n.listItem,
+		IsID:             n.isID,
+		IsIDREFS:         n.isIDREFS,
+		IsNilled:         n.isNilled,
+		NoTypedValue:     n.noTypedValue,
+		MixedContent:     n.mixedContent,
 	}
 }
 
@@ -2029,15 +2029,15 @@ func TypingOf(n *Node) Typing {
 // SetTypeAnnotation only ever turns is-id ON, which would let a node inherit a
 // marking its assessment did not give it.
 func (n *Node) ApplyTyping(t Typing) {
-	n.TypeAnnotation = t.TypeAnnotation
-	n.UnionMember = t.UnionMember
-	n.DerivedPrimitive = t.DerivedPrimitive
-	n.ListItem = t.ListItem
-	n.IsID = t.IsID
-	n.IsIDREFS = t.IsIDREFS
-	n.IsNilled = t.IsNilled
-	n.NoTypedValue = t.NoTypedValue
-	n.MixedContent = t.MixedContent
+	n.typeAnnotation = t.TypeAnnotation
+	n.unionMember = t.UnionMember
+	n.derivedPrimitive = t.DerivedPrimitive
+	n.listItem = t.ListItem
+	n.isID = t.IsID
+	n.isIDREFS = t.IsIDREFS
+	n.isNilled = t.IsNilled
+	n.noTypedValue = t.NoTypedValue
+	n.mixedContent = t.MixedContent
 }
 
 // CopyTypingStrippedFrom copies onto n the PSVI properties of src that survive
@@ -2073,18 +2073,18 @@ func (n *Node) ApplyTyping(t Typing) {
 // Fields outside the PSVI set -- name, value, base URI, children -- are the
 // caller's business, exactly as in CopyTypingFrom.
 func (n *Node) CopyTypingStrippedFrom(src *Node) {
-	n.TypeAnnotation = ""
-	n.UnionMember = ""
-	n.DerivedPrimitive = ""
-	n.ListItem = ""
-	n.IsID = src.IsID
-	n.IsIDREFS = src.IsIDREFS
-	n.IsNilled = false
+	n.typeAnnotation = ""
+	n.unionMember = ""
+	n.derivedPrimitive = ""
+	n.listItem = ""
+	n.isID = src.isID
+	n.isIDREFS = src.isIDREFS
+	n.isNilled = false
 	// Cleared for the same reason IsNilled is: the absence of a typed value
 	// is a conclusion of an assessment, and a stripped tree is one nothing
 	// assessed. Every element of it is xs:untypedAtomic and atomizes.
-	n.NoTypedValue = false
-	n.MixedContent = false
+	n.noTypedValue = false
+	n.mixedContent = false
 }
 
 // StripTyping clears in place every PSVI property that stripping removes,

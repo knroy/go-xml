@@ -327,7 +327,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 							// no value at all, so the assertion succeeds and
 							// the field access is what faults.
 							if n, ok := ctx.Item.(*xdm.Node); ok && n != nil {
-								base = n.BaseURI
+								base = n.BaseURI()
 							}
 						}
 						reqs = append(reqs, docRequest{a.(*xdm.Atomic).String(), base})
@@ -359,7 +359,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 				// different answers, so the shortcut is taken only when the
 				// base still agrees with the module's own.
 				if strings.TrimSpace(uri) == "" && rt.sheet.source != nil &&
-					sameResource(r.base, rt.sheet.source.BaseURI) {
+					sameResource(r.base, rt.sheet.source.BaseURI()) {
 					if !seen[rt.sheet.source] {
 						seen[rt.sheet.source] = true
 						out = append(out, rt.sheet.source)
@@ -446,7 +446,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 					return nil, fmt.Errorf(
 						"%s: %s() has no context node", code, fname)
 				}
-				if n.Root().Kind != xdm.KindDocument {
+				if n.Root().Kind() != xdm.KindDocument {
 					return nil, fmt.Errorf(
 						"%s: the root of the tree containing the context node "+
 							"of %s() is not a document node", code, fname)
@@ -463,7 +463,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 				// The system identifier is resolved against the base URI of
 				// the document holding the declaration, which is where a
 				// relative one is written.
-				return xdm.One(xdm.NewAnyURI(resolveAgainst(n.Root().BaseURI, sys))), nil
+				return xdm.One(xdm.NewAnyURI(resolveAgainst(n.Root().BaseURI(), sys))), nil
 			},
 		})
 
@@ -488,7 +488,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 						"%s: the second argument of %s() is not a node",
 						code, fname)
 				}
-				if n.Root().Kind != xdm.KindDocument {
+				if n.Root().Kind() != xdm.KindDocument {
 					return nil, fmt.Errorf(
 						"%s: the root of the tree named by %s() is not a "+
 							"document node", code, fname)
@@ -501,7 +501,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 					return xdm.One(xdm.NewString(pub)), nil
 				}
 				return xdm.One(xdm.NewAnyURI(
-					resolveAgainst(n.Root().BaseURI, sys))), nil
+					resolveAgainst(n.Root().BaseURI(), sys))), nil
 			},
 		})
 	}
@@ -1026,7 +1026,7 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 	// serves them: a key is an index over a document, and a temporary tree
 	// rooted at an element is not one. Searching it anyway simply found
 	// nothing, so the stylesheet saw an empty result rather than a mistake.
-	if root.Kind != xdm.KindDocument {
+	if root.Kind() != xdm.KindDocument {
 		return nil, fmt.Errorf(
 			"XTDE1270: key() searches a tree whose root is not a document node")
 	}
@@ -1111,7 +1111,7 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 // composite path instead would have skipped the restriction, which is a
 // silent wrong answer rather than a failure.
 func (rt *runtime) finishKeyLookup(out xdm.Sequence, top *xdm.Node) xdm.Sequence {
-	if top != nil && top.Kind != xdm.KindDocument {
+	if top != nil && top.Kind() != xdm.KindDocument {
 		// Section 16.3: the third argument names a *subtree*, not a document.
 		// "The selected subtree is the set of nodes that have $top as an
 		// ancestor-or-self node", and a node is selected only when
@@ -1133,7 +1133,7 @@ func (rt *runtime) finishKeyLookup(out xdm.Sequence, top *xdm.Node) xdm.Sequence
 
 // hasAncestorOrSelf reports whether top is n or one of its ancestors.
 func hasAncestorOrSelf(n, top *xdm.Node) bool {
-	for p := n; p != nil; p = p.Parent {
+	for p := n; p != nil; p = p.Parent() {
 		if p == top {
 			return true
 		}
@@ -1364,7 +1364,7 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 			}
 		}
 		// Attributes can be key targets, so they are visited too.
-		for _, a := range n.Attrs {
+		for a := range n.Attrs() {
 			for _, def := range defs {
 				ok, err := matches(a, def)
 				if err != nil {
@@ -1395,7 +1395,7 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 		// in-scope set rather than read off the element's own declarations:
 		// key-087 keys on the namespace axis, where an inherited binding
 		// belongs to every element that inherits it.
-		if nsKeys && n.Kind == xdm.KindElement {
+		if nsKeys && n.Kind() == xdm.KindElement {
 			for _, nsNode := range xpath.NamespaceNodesOf(n) {
 				for _, def := range defs {
 					ok, err := def.match.Matches(nsNode, ctx)
@@ -1423,7 +1423,7 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 				}
 			}
 		}
-		for _, ch := range n.Children {
+		for ch := range n.Children() {
 			if err := walk(ch); err != nil {
 				return err
 			}
@@ -1754,9 +1754,9 @@ var builtinNonAtomicTypes = map[string]bool{
 // inheritedBaseURI in xpath/fn_node.go, which is unexported; duplicating four
 // lines is preferable to widening that package's API for one caller.
 func inScopeBaseURI(n *xdm.Node) string {
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.BaseURI != "" {
-			return cur.BaseURI
+	for cur := n; cur != nil; cur = cur.Parent() {
+		if cur.BaseURI() != "" {
+			return cur.BaseURI()
 		}
 	}
 	return ""

@@ -31,10 +31,10 @@ func Compile(doc *xdm.Node) (*Schema, error) {
 // for itself.
 func CompileWithOptions(doc *xdm.Node, opts Options) (*Schema, error) {
 	root := doc
-	if root.Kind == xdm.KindDocument {
+	if root.Kind() == xdm.KindDocument {
 		root = nil
-		for _, c := range doc.Children {
-			if c.Kind == xdm.KindElement {
+		for c := range doc.Children() {
+			if c.Kind() == xdm.KindElement {
 				root = c
 				break
 			}
@@ -43,10 +43,10 @@ func CompileWithOptions(doc *xdm.Node, opts Options) (*Schema, error) {
 	if root == nil {
 		return nil, fmt.Errorf("relaxng: the schema has no root element")
 	}
-	if root.Name.URI != NS {
+	if root.Name().URI != NS {
 		return nil, fmt.Errorf(
 			"relaxng: the schema root is {%s}%s, not a RELAX NG pattern",
-			root.Name.URI, root.Name.Local)
+			root.Name().URI, root.Name().Local)
 	}
 
 	// The syntax is checked before anything is compiled: more than half the
@@ -197,7 +197,7 @@ func (c *compiler) active() *map[string]bool {
 }
 
 func (c *compiler) compileTop(root *xdm.Node) (pattern, error) {
-	if root.Name.Local == "grammar" {
+	if root.Name().Local == "grammar" {
 		return c.compileGrammar(root)
 	}
 	return c.compilePattern(root)
@@ -210,10 +210,10 @@ func (c *compiler) compileGrammar(g *xdm.Node) (pattern, error) {
 	var collect func(n *xdm.Node) error
 	collect = func(n *xdm.Node) error {
 		for _, kid := range n.ChildElements() {
-			if kid.Name.URI != NS {
+			if kid.Name().URI != NS {
 				continue
 			}
-			switch kid.Name.Local {
+			switch kid.Name().Local {
 			case "start":
 				c.noteNs(kid)
 				if start != nil {
@@ -337,10 +337,10 @@ func (c *compiler) checkAll(g *xdm.Node) error {
 // written.
 func checkNestedGrammars(n *xdm.Node) error {
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
-		if kid.Name.Local == "grammar" && !hasStart(kid) {
+		if kid.Name().Local == "grammar" && !hasStart(kid) {
 			return fmt.Errorf("relaxng: <grammar> has no <start>")
 		}
 		if err := checkNestedGrammars(kid); err != nil {
@@ -360,14 +360,14 @@ func checkNestedGrammars(n *xdm.Node) error {
 // So the datatypes are resolved directly instead.
 func (c *compiler) checkUnreferenced(n *xdm.Node) error {
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
-		switch kid.Name.Local {
+		switch kid.Name().Local {
 		case "data", "value":
 			lib, name := datatypeOf(kid, "")
 			if name == "" {
-				if kid.Name.Local == "value" {
+				if kid.Name().Local == "value" {
 					// A <value> with no type is the built-in token, and the
 					// library in force does not come into it.
 					continue
@@ -376,12 +376,12 @@ func (c *compiler) checkUnreferenced(n *xdm.Node) error {
 			}
 			dt, err := lookupDatatype(lib, name)
 			if err != nil {
-				return fmt.Errorf("relaxng: <%s>: %w", kid.Name.Local, err)
+				return fmt.Errorf("relaxng: <%s>: %w", kid.Name().Local, err)
 			}
-			if kid.Name.Local == "data" {
+			if kid.Name().Local == "data" {
 				var params []param
 				for _, p := range kid.ChildElements() {
-					if p.Name.URI == NS && p.Name.Local == "param" {
+					if p.Name().URI == NS && p.Name().Local == "param" {
 						params = append(params,
 							param{Name: p.AttrValue("name"), Value: p.StringValue()})
 					}
@@ -411,10 +411,10 @@ func (c *compiler) checkRefsResolve(g *xdm.Node) error {
 	var walk func(n *xdm.Node, defs map[string]bool, outer map[string]bool) error
 	walk = func(n *xdm.Node, defs, outer map[string]bool) error {
 		for _, kid := range n.ChildElements() {
-			if kid.Name.URI != NS {
+			if kid.Name().URI != NS {
 				continue
 			}
-			switch kid.Name.Local {
+			switch kid.Name().Local {
 			case "ref":
 				name := normalizeToken(kid.AttrValue("name"))
 				if !defs[name] {
@@ -464,13 +464,13 @@ func (c *compiler) checkRefsResolve(g *xdm.Node) error {
 // hasStart reports whether a grammar provides a <start>.
 func hasStart(g *xdm.Node) bool {
 	for _, kid := range g.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
-		if kid.Name.Local == "start" {
+		if kid.Name().Local == "start" {
 			return true
 		}
-		if kid.Name.Local == "div" && hasStart(kid) {
+		if kid.Name().Local == "div" && hasStart(kid) {
 			return true
 		}
 	}
@@ -484,10 +484,10 @@ func definedNames(g *xdm.Node) map[string]bool {
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
 		for _, kid := range n.ChildElements() {
-			if kid.Name.URI != NS {
+			if kid.Name().URI != NS {
 				continue
 			}
-			switch kid.Name.Local {
+			switch kid.Name().Local {
 			case "define":
 				out[normalizeToken(kid.AttrValue("name"))] = true
 			case "div", "include":
@@ -507,7 +507,7 @@ func definedNames(g *xdm.Node) map[string]bool {
 func (c *compiler) compileChildren(n *xdm.Node) (pattern, error) {
 	kids := patternChildren(n)
 	if len(kids) == 0 {
-		return nil, fmt.Errorf("relaxng: <%s> has no pattern", n.Name.Local)
+		return nil, fmt.Errorf("relaxng: <%s> has no pattern", n.Name().Local)
 	}
 	p, err := c.compilePattern(kids[0])
 	if err != nil {
@@ -526,10 +526,10 @@ func (c *compiler) compileChildren(n *xdm.Node) (pattern, error) {
 func patternChildren(n *xdm.Node) []*xdm.Node {
 	var out []*xdm.Node
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
-		switch kid.Name.Local {
+		switch kid.Name().Local {
 		case "param", "except", "name", "anyName", "nsName":
 			continue
 		case "choice":
@@ -539,8 +539,8 @@ func patternChildren(n *xdm.Node) []*xdm.Node {
 			// alternatives for one element. Treating it as a pattern loses
 			// the name and then reports the choice as empty, since a name
 			// class holds no patterns.
-			if isNameClassChoice(kid) && (n.Name.Local == "element" ||
-				n.Name.Local == "attribute") {
+			if isNameClassChoice(kid) && (n.Name().Local == "element" ||
+				n.Name().Local == "attribute") {
 				continue
 			}
 		}
@@ -550,11 +550,11 @@ func patternChildren(n *xdm.Node) []*xdm.Node {
 }
 
 func (c *compiler) compilePattern(n *xdm.Node) (pattern, error) {
-	if n.Name.URI != NS {
+	if n.Name().URI != NS {
 		return nil, fmt.Errorf("relaxng: {%s}%s is not a RELAX NG pattern",
-			n.Name.URI, n.Name.Local)
+			n.Name().URI, n.Name().Local)
 	}
-	switch n.Name.Local {
+	switch n.Name().Local {
 	case "empty":
 		return emptyPat{}, nil
 	case "notAllowed":
@@ -666,13 +666,13 @@ func (c *compiler) compilePattern(n *xdm.Node) (pattern, error) {
 			"relaxng: <include> is only allowed inside <grammar>")
 	}
 	return nil, fmt.Errorf("relaxng: <%s> is not a RELAX NG pattern",
-		n.Name.Local)
+		n.Name().Local)
 }
 
 func (c *compiler) combine(n *xdm.Node, f func(a, b pattern) pattern) (pattern, error) {
 	kids := patternChildren(n)
 	if len(kids) == 0 {
-		return nil, fmt.Errorf("relaxng: <%s> has no pattern", n.Name.Local)
+		return nil, fmt.Errorf("relaxng: <%s> has no pattern", n.Name().Local)
 	}
 	p, err := c.compilePattern(kids[0])
 	if err != nil {
@@ -867,7 +867,7 @@ func (c *compiler) fetch(n *xdm.Node) (*xdm.Node, string, error) {
 	if c.opts.Resolver == nil {
 		return nil, "", fmt.Errorf(
 			"relaxng: <%s href=%q> needs a Resolver; none was configured",
-			n.Name.Local, href)
+			n.Name().Local, href)
 	}
 	// Cycle first, because it is the semantic answer: a schema that includes
 	// itself is defective however shallow the chain is, and reporting it as a
@@ -888,12 +888,12 @@ func (c *compiler) fetch(n *xdm.Node) (*xdm.Node, string, error) {
 	doc, err := c.opts.Resolver.ResolveSchema(href)
 	if err != nil {
 		return nil, "", fmt.Errorf("relaxng: <%s href=%q>: %w",
-			n.Name.Local, href, err)
+			n.Name().Local, href, err)
 	}
 	if doc == nil {
 		return nil, "", fmt.Errorf(
 			"relaxng: <%s href=%q>: the resolver returned nothing",
-			n.Name.Local, href)
+			n.Name().Local, href)
 	}
 	return rootElement(doc), href, nil
 }
@@ -914,10 +914,10 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 		return fmt.Errorf(
 			"relaxng: <include href=%q>: the document has no root element", href)
 	}
-	if root.Name.URI != NS || root.Name.Local != "grammar" {
+	if root.Name().URI != NS || root.Name().Local != "grammar" {
 		return fmt.Errorf(
 			"relaxng: <include href=%q> names a <%s>, not a <grammar>",
-			href, root.Name.Local)
+			href, root.Name().Local)
 	}
 	// Both checks below describe a construct, not a document: "<zeroOrMore1>
 	// is not a RELAX NG element" is true of whichever file it was written in.
@@ -943,10 +943,10 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	var scanOverrides func(n *xdm.Node)
 	scanOverrides = func(n *xdm.Node) {
 		for _, kid := range n.ChildElements() {
-			if kid.Name.URI != NS {
+			if kid.Name().URI != NS {
 				continue
 			}
-			switch kid.Name.Local {
+			switch kid.Name().Local {
 			case "define":
 				overridden[normalizeToken(kid.AttrValue("name"))] = true
 			case "start":
@@ -982,10 +982,10 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	keep = func(n *xdm.Node) []*xdm.Node {
 		var out []*xdm.Node
 		for _, kid := range n.ChildElements() {
-			if kid.Name.URI != NS {
+			if kid.Name().URI != NS {
 				continue
 			}
-			switch kid.Name.Local {
+			switch kid.Name().Local {
 			case "define":
 				if overridden[normalizeToken(kid.AttrValue("name"))] {
 					continue
@@ -1071,11 +1071,11 @@ func (c *compiler) compileExternalRef(n *xdm.Node) (pattern, error) {
 
 // rootElement returns the document element of a parsed schema.
 func rootElement(doc *xdm.Node) *xdm.Node {
-	if doc.Kind != xdm.KindDocument {
+	if doc.Kind() != xdm.KindDocument {
 		return doc
 	}
-	for _, kid := range doc.Children {
-		if kid.Kind == xdm.KindElement {
+	for kid := range doc.Children() {
+		if kid.Kind() == xdm.KindElement {
 			return kid
 		}
 	}
@@ -1160,10 +1160,10 @@ func (c *compiler) compileData(n *xdm.Node) (pattern, error) {
 	}
 	d := &dataPat{Type: dt}
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
-		switch kid.Name.Local {
+		switch kid.Name().Local {
 		case "param":
 			pn := kid.AttrValue("name")
 			if pn == "" {
@@ -1201,11 +1201,11 @@ func datatypeOf(n *xdm.Node, dflt string) (library, name string) {
 	if name == "" {
 		name = dflt
 	}
-	for cur := n; cur != nil; cur = cur.Parent {
+	for cur := n; cur != nil; cur = cur.Parent() {
 		if v := normalizeToken(cur.AttrValue("datatypeLibrary")); v != "" {
 			return v, name
 		}
-		if cur.Kind != xdm.KindElement {
+		if cur.Kind() != xdm.KindElement {
 			break
 		}
 	}
@@ -1220,25 +1220,25 @@ func (c *compiler) nameClass(n *xdm.Node) (nameClass, error) {
 	if v := n.AttrValue("name"); v != "" {
 		// The attribute is declared xsd:qnamePat in the schema for schemas, so
 		// it is whitespace-normalised: name=" foo " names foo.
-		if n.Name.Local == "attribute" {
+		if n.Name().Local == "attribute" {
 			return qnamePat{Name: c.resolveAttrNameAttr(n, normalizeToken(v))}, nil
 		}
 		return qnamePat{Name: c.resolveName(n, normalizeToken(v))}, nil
 	}
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
-		switch kid.Name.Local {
+		switch kid.Name().Local {
 		case "name", "anyName", "nsName", "choice":
 			return c.compileNameClass(kid)
 		}
 	}
-	return nil, fmt.Errorf("relaxng: <%s> has no name class", n.Name.Local)
+	return nil, fmt.Errorf("relaxng: <%s> has no name class", n.Name().Local)
 }
 
 func (c *compiler) compileNameClass(n *xdm.Node) (nameClass, error) {
-	switch n.Name.Local {
+	switch n.Name().Local {
 	case "name":
 		return qnamePat{Name: c.resolveName(n, normalizeToken(n.StringValue()))}, nil
 
@@ -1263,7 +1263,7 @@ func (c *compiler) compileNameClass(n *xdm.Node) (nameClass, error) {
 	case "choice":
 		var out nameClass
 		for _, kid := range n.ChildElements() {
-			if kid.Name.URI != NS {
+			if kid.Name().URI != NS {
 				continue
 			}
 			k, err := c.compileNameClass(kid)
@@ -1281,7 +1281,7 @@ func (c *compiler) compileNameClass(n *xdm.Node) (nameClass, error) {
 		}
 		return out, nil
 	}
-	return nil, fmt.Errorf("relaxng: <%s> is not a name class", n.Name.Local)
+	return nil, fmt.Errorf("relaxng: <%s> is not a name class", n.Name().Local)
 }
 
 // exceptOf finds the <except> child of a name class, and returns the name
@@ -1292,10 +1292,10 @@ func (c *compiler) compileNameClass(n *xdm.Node) (nameClass, error) {
 // name but those two.
 func exceptOf(n *xdm.Node) []*xdm.Node {
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI == NS && kid.Name.Local == "except" {
+		if kid.Name().URI == NS && kid.Name().Local == "except" {
 			var out []*xdm.Node
 			for _, g := range kid.ChildElements() {
-				if g.Name.URI == NS {
+				if g.Name().URI == NS {
 					out = append(out, g)
 				}
 			}
@@ -1340,9 +1340,9 @@ func (c *compiler) resolveAttrNameAttr(n *xdm.Node, lexical string) xdm.QName {
 	if strings.IndexByte(lexical, ':') >= 0 {
 		return c.resolveName(n, lexical)
 	}
-	for _, a := range n.Attrs {
-		if a.Name.URI == "" && a.Name.Local == "ns" {
-			return xdm.QName{URI: a.Value, Local: lexical}
+	for a := range n.Attrs() {
+		if a.Name().URI == "" && a.Name().Local == "ns" {
+			return xdm.QName{URI: a.Value(), Local: lexical}
 		}
 	}
 	return xdm.QName{Local: lexical}
@@ -1402,10 +1402,10 @@ func (c *compiler) nsFor(n *xdm.Node) string {
 // (section 4.8): it puts the names below it in no namespace and stops an
 // inherited ns from reaching them, so it must not read as absent.
 func nsInForce(n *xdm.Node) (string, bool) {
-	for cur := n; cur != nil && cur.Kind == xdm.KindElement; cur = cur.Parent {
-		for _, a := range cur.Attrs {
-			if a.Name.URI == "" && a.Name.Local == "ns" {
-				return a.Value, true
+	for cur := n; cur != nil && cur.Kind() == xdm.KindElement; cur = cur.Parent() {
+		for a := range cur.Attrs() {
+			if a.Name().URI == "" && a.Name().Local == "ns" {
+				return a.Value(), true
 			}
 		}
 	}

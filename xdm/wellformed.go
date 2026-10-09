@@ -221,10 +221,10 @@ func (s *tagScope) inherit() {
 	if _, ok := s.m["xml"]; !ok {
 		s.m["xml"] = NSXML
 	}
-	for p := s.parent; p != nil; p = p.Parent {
-		for _, ns := range p.Namespaces {
-			if _, ok := s.m[ns.Name.Local]; !ok {
-				s.m[ns.Name.Local] = ns.Value
+	for p := s.parent; p != nil; p = p.parent {
+		for _, ns := range p.namespaces {
+			if _, ok := s.m[ns.name.Local]; !ok {
+				s.m[ns.name.Local] = ns.value
 			}
 		}
 	}
@@ -245,10 +245,10 @@ func (s *tagScope) lookup(prefix string) (string, bool) {
 	if prefix == "xml" {
 		return NSXML, true
 	}
-	for p := s.parent; p != nil; p = p.Parent {
-		for _, ns := range p.Namespaces {
-			if ns.Name.Local == prefix {
-				return ns.Value, true
+	for p := s.parent; p != nil; p = p.parent {
+		for _, ns := range p.namespaces {
+			if ns.name.Local == prefix {
+				return ns.value, true
 			}
 		}
 	}

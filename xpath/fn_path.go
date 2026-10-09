@@ -58,8 +58,8 @@ func nodePath(n *xdm.Node) string {
 	// node knows its parent and not its children's positions.
 	var steps []string
 	cur := n
-	for cur != nil && cur.Kind != xdm.KindDocument {
-		p := cur.Parent
+	for cur != nil && cur.Kind() != xdm.KindDocument {
+		p := cur.Parent()
 		if p == nil {
 			break
 		}
@@ -72,7 +72,7 @@ func nodePath(n *xdm.Node) string {
 	// any other node cannot be, so it is anchored with fn:root() applied to
 	// the context item, which is what section 13.9 prescribes.
 	prefix := ""
-	if cur == nil || cur.Kind != xdm.KindDocument {
+	if cur == nil || cur.Kind() != xdm.KindDocument {
 		prefix = "Q{" + xdm.NSFN + "}root()"
 	}
 	if len(steps) == 0 {
@@ -93,32 +93,32 @@ func nodePath(n *xdm.Node) string {
 
 // pathStep writes the one step that selects n from its parent.
 func pathStep(n *xdm.Node) string {
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindElement:
-		return fmt.Sprintf("Q{%s}%s[%d]", n.Name.URI, n.Name.Local,
+		return fmt.Sprintf("Q{%s}%s[%d]", n.Name().URI, n.Name().Local,
 			positionAmongLikeNamed(n))
 	case xdm.KindAttribute:
 		// An attribute in no namespace is written bare: it has no position
 		// because an element cannot carry two attributes of one name.
-		if n.Name.URI == "" {
-			return "@" + n.Name.Local
+		if n.Name().URI == "" {
+			return "@" + n.Name().Local
 		}
-		return fmt.Sprintf("@Q{%s}%s", n.Name.URI, n.Name.Local)
+		return fmt.Sprintf("@Q{%s}%s", n.Name().URI, n.Name().Local)
 	case xdm.KindText:
 		return fmt.Sprintf("text()[%d]", positionAmongLikeNamed(n))
 	case xdm.KindComment:
 		return fmt.Sprintf("comment()[%d]", positionAmongLikeNamed(n))
 	case xdm.KindPI:
-		return fmt.Sprintf("processing-instruction(%s)[%d]", n.Name.Local,
+		return fmt.Sprintf("processing-instruction(%s)[%d]", n.Name().Local,
 			positionAmongLikeNamed(n))
 	case xdm.KindNamespace:
 		// A namespace node's "name" is the prefix it binds. The default
 		// namespace binds no prefix, so it has no name to select by and the
 		// spec falls back to a predicate on the empty local name.
-		if n.Name.Local == "" {
+		if n.Name().Local == "" {
 			return "namespace::*[Q{" + xdm.NSFN + "}local-name()=\"\"]"
 		}
-		return "namespace::" + n.Name.Local
+		return "namespace::" + n.Name().Local
 	}
 	return ""
 }
@@ -131,26 +131,26 @@ func pathStep(n *xdm.Node) string {
 // to be counted over the same set the step selects — like-named elements for
 // an element, all text nodes for a text node, like-named PIs for a PI.
 func positionAmongLikeNamed(n *xdm.Node) int {
-	p := n.Parent
+	p := n.Parent()
 	if p == nil {
 		return 1
 	}
 	pos := 0
-	for _, sib := range p.Children {
-		if sib.Kind != n.Kind {
+	for sib := range p.Children() {
+		if sib.Kind() != n.Kind() {
 			continue
 		}
 		// Text and comment nodes are selected by kind alone, so every
 		// sibling of the kind counts. Elements and PIs are selected by name
 		// as well, so only the like-named ones do.
-		switch n.Kind {
+		switch n.Kind() {
 		case xdm.KindText, xdm.KindComment:
 		case xdm.KindPI:
-			if sib.Name.Local != n.Name.Local {
+			if sib.Name().Local != n.Name().Local {
 				continue
 			}
 		default:
-			if sib.Name.URI != n.Name.URI || sib.Name.Local != n.Name.Local {
+			if sib.Name().URI != n.Name().URI || sib.Name().Local != n.Name().Local {
 				continue
 			}
 		}

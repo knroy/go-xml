@@ -15,7 +15,7 @@ const xlinkNS = "http://www.w3.org/1999/xlink"
 
 func href(n *xdm.Node) string {
 	if a := n.Attr(xlinkNS, "href"); a != nil {
-		return a.Value
+		return a.Value()
 	}
 	return n.AttrValue("href")
 }
@@ -117,7 +117,7 @@ func expectedValidity(parent *xdm.Node, tok map[string]bool) (string, string) {
 	want, status := "", ""
 	qualified := false
 	for _, c := range parent.ChildElements() {
-		if c.Name.Local != "expected" {
+		if c.Name().Local != "expected" {
 			continue
 		}
 		ev := strings.TrimSpace(c.AttrValue("version"))
@@ -140,7 +140,7 @@ func expectedValidity(parent *xdm.Node, tok map[string]bool) (string, string) {
 	// with a bugzilla reference, so those disagreements are a ceiling
 	// rather than work outstanding and must be counted separately.
 	for _, c := range parent.ChildElements() {
-		if c.Name.Local == "current" {
+		if c.Name().Local == "current" {
 			status = c.AttrValue("status")
 			if b := c.AttrValue("bugzilla"); b != "" {
 				if i := strings.LastIndex(b, "="); i >= 0 {
@@ -223,11 +223,11 @@ func main() {
 			panic(err)
 		}
 		root := tree.Root
-		if root.Kind == xdm.KindDocument {
+		if root.Kind() == xdm.KindDocument {
 			root = root.ChildElements()[0]
 		}
 		for _, ref := range root.ChildElements() {
-			if ref.Name.Local == "testSetRef" {
+			if ref.Name().Local == "testSetRef" {
 				sets = append(sets, filepath.Join(suite, href(ref)))
 			}
 		}
@@ -260,7 +260,7 @@ func main() {
 			continue
 		}
 		root := tree.Root
-		if root.Kind == xdm.KindDocument {
+		if root.Kind() == xdm.KindDocument {
 			els := root.ChildElements()
 			if len(els) == 0 {
 				continue
@@ -273,7 +273,7 @@ func main() {
 		}
 
 		for _, g := range root.ChildElements() {
-			if g.Name.Local != "testGroup" {
+			if g.Name().Local != "testGroup" {
 				continue
 			}
 			if !appliesOR(g.AttrValue("version"), tok) {
@@ -286,7 +286,7 @@ func main() {
 			sIndet := false
 			haveSchemaTest := false
 			for _, st := range g.ChildElements() {
-				if st.Name.Local != "schemaTest" {
+				if st.Name().Local != "schemaTest" {
 					continue
 				}
 				if !appliesOR(st.AttrValue("version"), tok) {
@@ -295,7 +295,7 @@ func main() {
 				haveSchemaTest = true
 				sTestName = st.AttrValue("name")
 				for _, c := range st.ChildElements() {
-					if c.Name.Local == "schemaDocument" {
+					if c.Name().Local == "schemaDocument" {
 						schemaPaths = append(schemaPaths, filepath.Join(filepath.Dir(set), href(c)))
 					}
 				}
@@ -320,7 +320,7 @@ func main() {
 					sOOS++
 				}
 				for _, it := range g.ChildElements() {
-					if it.Name.Local == "instanceTest" &&
+					if it.Name().Local == "instanceTest" &&
 						appliesOR(it.AttrValue("version"), tok) {
 						iOOS++
 					}
@@ -376,7 +376,7 @@ func main() {
 			}
 
 			for _, it := range g.ChildElements() {
-				if it.Name.Local != "instanceTest" {
+				if it.Name().Local != "instanceTest" {
 					continue
 				}
 				if !appliesOR(it.AttrValue("version"), tok) {
@@ -384,7 +384,7 @@ func main() {
 				}
 				docPath := ""
 				for _, c := range it.ChildElements() {
-					if c.Name.Local == "instanceDocument" {
+					if c.Name().Local == "instanceDocument" {
 						docPath = filepath.Join(filepath.Dir(set), href(c))
 					}
 				}

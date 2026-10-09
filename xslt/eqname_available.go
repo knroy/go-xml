@@ -69,16 +69,16 @@ func checkIterateOrder(el *xdm.Node, model string) error {
 		rankConstructor
 	)
 	seen := rankParam
-	for _, ch := range el.Children {
+	for ch := range el.Children() {
 		r := rankConstructor
-		switch ch.Kind {
+		switch ch.Kind() {
 		case xdm.KindText:
-			if xdm.IsXMLWhitespace(ch.Value) {
+			if xdm.IsXMLWhitespace(ch.Value()) {
 				continue
 			}
 		case xdm.KindElement:
-			if ch.Name.URI == xdm.NSXSL {
-				switch ch.Name.Local {
+			if ch.Name().URI == xdm.NSXSL {
+				switch ch.Name().Local {
 				case "param":
 					r = rankParam
 				case "on-completion":
@@ -90,8 +90,8 @@ func checkIterateOrder(el *xdm.Node, model string) error {
 		}
 		if r < seen {
 			what := "the sequence constructor"
-			if ch.Kind == xdm.KindElement {
-				what = ch.Name.Lexical()
+			if ch.Kind() == xdm.KindElement {
+				what = ch.Name().Lexical()
 			}
 			return fmt.Errorf(
 				"xsl:iterate: %s is out of order, its content is %s "+
@@ -209,14 +209,14 @@ func checkExtensionPrefixes(el *xdm.Node) error {
 		return nil
 	}
 	for _, uri := range []string{"", xdm.NSXSL} {
-		if uri == "" && el.Name.URI != xdm.NSXSL {
+		if uri == "" && el.Name().URI != xdm.NSXSL {
 			continue
 		}
 		a := el.Attr(uri, "extension-element-prefixes")
 		if a == nil {
 			continue
 		}
-		for _, p := range strings.Fields(a.Value) {
+		for _, p := range strings.Fields(a.Value()) {
 			if p == "#default" {
 				p = ""
 			}
@@ -241,8 +241,8 @@ func checkExtensionPrefixes(el *xdm.Node) error {
 // namespace uri, or "" if there is none.
 func firstElementIn(el *xdm.Node, uri string) string {
 	for _, ch := range el.ChildElements() {
-		if ch.Name.URI == uri {
-			return ch.Name.Lexical()
+		if ch.Name().URI == uri {
+			return ch.Name().Lexical()
 		}
 		if n := firstElementIn(ch, uri); n != "" {
 			return n

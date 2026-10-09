@@ -16,7 +16,7 @@ func TestNodeExtOutOfLine(t *testing.T) {
 	}
 
 	envA, envB := NewTypeEnvironment(), NewTypeEnvironment()
-	orig := &Node{Kind: KindElement, Name: QName{Local: "r"}}
+	orig := &Node{kind: KindElement, name: QName{Local: "r"}}
 	orig.SetTypeEnv(envA)
 	idOrig := detachedRootID(orig)
 

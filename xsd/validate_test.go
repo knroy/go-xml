@@ -460,8 +460,8 @@ func TestValidateAnnotateWritesTypes(t *testing.T) {
 		t.Fatalf("should be valid: %v", err)
 	}
 	n := tree.Root.ChildElements()[0].ChildElements()[0]
-	if n.TypeAnnotation != "int" {
-		t.Errorf("TypeAnnotation is %q, want int", n.TypeAnnotation)
+	if n.TypeAnnotation() != "int" {
+		t.Errorf("TypeAnnotation is %q, want int", n.TypeAnnotation())
 	}
 }
 
@@ -778,9 +778,9 @@ func TestAnnotateStripsIgnorableWhitespace(t *testing.T) {
 		t.Fatalf("should be valid: %v", err)
 	}
 	root := tree.Root.ChildElements()[0]
-	for _, c := range root.Children {
-		if c.Kind == xdm.KindText {
-			t.Errorf("element-only content kept whitespace text %q", c.Value)
+	for c := range root.Children() {
+		if c.Kind() == xdm.KindText {
+			t.Errorf("element-only content kept whitespace text %q", c.Value())
 		}
 	}
 	if n := root.NumChildren(); n != 2 {
@@ -817,8 +817,8 @@ func TestAnnotateDoesNotStripWhenValidatingABareElement(t *testing.T) {
 		t.Fatalf("should be valid: %v", err)
 	}
 	text := 0
-	for _, c := range el.Children {
-		if c.Kind == xdm.KindText {
+	for c := range el.Children() {
+		if c.Kind() == xdm.KindText {
 			text++
 		}
 	}
@@ -849,8 +849,8 @@ func TestAnnotateHonoursXMLSpacePreserve(t *testing.T) {
 	_ = s.Validate(tree.Root, ValidateOptions{Annotate: true})
 	root := tree.Root.ChildElements()[0]
 	text := 0
-	for _, c := range root.Children {
-		if c.Kind == xdm.KindText {
+	for c := range root.Children() {
+		if c.Kind() == xdm.KindText {
 			text++
 		}
 	}

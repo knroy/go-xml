@@ -60,17 +60,17 @@ func sequenceNeedsPrefixNorm(seq xdm.Sequence) bool {
 }
 
 func nodeNeedsPrefixNorm(n *xdm.Node) bool {
-	if n.Kind == xdm.KindElement {
-		if n.Name.Prefix != "" && htmlNativeNamespaces[n.Name.URI] {
+	if n.Kind() == xdm.KindElement {
+		if n.Name().Prefix != "" && htmlNativeNamespaces[n.Name().URI] {
 			return true
 		}
-		for _, ns := range n.Namespaces {
-			if ns.Name.Local != "" && htmlNativeNamespaces[ns.Value] {
+		for ns := range n.NamespaceDecls() {
+			if ns.Name().Local != "" && htmlNativeNamespaces[ns.Value()] {
 				return true
 			}
 		}
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		if nodeNeedsPrefixNorm(c) {
 			return true
 		}
@@ -81,17 +81,17 @@ func nodeNeedsPrefixNorm(n *xdm.Node) bool {
 // normalizeNodePrefixes copies n with the rewriting applied.
 func normalizeNodePrefixes(n *xdm.Node) *xdm.Node {
 	c := xdmbuild.ShallowCopy(n)
-	if c.Kind == xdm.KindElement {
-		if htmlNativeNamespaces[c.Name.URI] {
-			c.SetName(xdm.QName{URI: c.Name.URI, Local: c.Name.Local})
+	if c.Kind() == xdm.KindElement {
+		if htmlNativeNamespaces[c.Name().URI] {
+			c.SetName(xdm.QName{URI: c.Name().URI, Local: c.Name().Local})
 		}
 		// A namespace node binding a prefix to one of the three is removed
 		// outright. The default binding is kept: it is how the element's own
 		// unprefixed name is spelled, and dropping it would leave the
 		// serializer to reinvent it lower down the tree than it belongs.
 		var keep []*xdm.Node
-		for _, ns := range c.Namespaces {
-			if ns.Name.Local != "" && htmlNativeNamespaces[ns.Value] {
+		for ns := range c.NamespaceDecls() {
+			if ns.Name().Local != "" && htmlNativeNamespaces[ns.Value()] {
 				continue
 			}
 			keep = append(keep, ns)
@@ -100,7 +100,7 @@ func normalizeNodePrefixes(n *xdm.Node) *xdm.Node {
 	}
 	if n.NumChildren() > 0 {
 		kids := make([]*xdm.Node, 0, n.NumChildren())
-		for _, k := range n.Children {
+		for k := range n.Children() {
 			nk := normalizeNodePrefixes(k)
 			nk.SetParent(c)
 			kids = append(kids, nk)

@@ -242,17 +242,17 @@ var srcAnyURIAttrs = map[string][]string{
 // checkAnyURIAttrs validates the xs:anyURI-typed attributes on one element of
 // a schema document.
 func (p *parser) checkAnyURIAttrs(el *xdm.Node) {
-	for _, name := range srcAnyURIAttrs[el.Name.Local] {
+	for _, name := range srcAnyURIAttrs[el.Name().Local] {
 		a := el.Attr("", name)
 		if a == nil {
 			continue
 		}
 		// anyURI collapses whitespace before the lexical test, like
 		// every type derived from xs:string with that facet.
-		if v := WhiteCollapse.Normalize(a.Value); v != "" &&
+		if v := WhiteCollapse.Normalize(a.Value()); v != "" &&
 			!isAnyURILexical(v, p.schema.Version) {
 			p.errs = append(p.errs, errorAt(el, "cvc-datatype-valid.1.2.1",
-				"%s=%q is not a valid xs:anyURI", name, a.Value))
+				"%s=%q is not a valid xs:anyURI", name, a.Value()))
 		}
 	}
 }
@@ -269,12 +269,12 @@ func (p *parser) checkAnyURIAttrs(el *xdm.Node) {
 // A prefixed attribute whose namespace *is* the schema namespace is not
 // allowed: the wildcard in the schema for schemas excludes its own namespace.
 func (p *parser) checkAttrs(el *xdm.Node) {
-	allowed, ok := srcAttrs[el.Name.Local]
+	allowed, ok := srcAttrs[el.Name().Local]
 	if !ok {
 		return
 	}
-	for _, a := range el.Attrs {
-		if a.Name.URI != "" && a.Name.URI != NSSchema {
+	for a := range el.Attrs() {
+		if a.Name().URI != "" && a.Name().URI != NSSchema {
 			continue
 		}
 		// Every attribute the schema for schemas declares is
@@ -288,28 +288,28 @@ func (p *parser) checkAttrs(el *xdm.Node) {
 		// the declared `targetNamespace` (addB070a): the prefix made it
 		// a different attribute, which nothing on <schema> permits, but
 		// the allowlist never saw the namespace.
-		if a.Name.URI == NSSchema {
+		if a.Name().URI == NSSchema {
 			p.errs = append(p.errs, errorAt(el, "",
 				"attribute %q is in the schema namespace, which "+
-					"xs:%s does not allow", a.Name.Local,
-				el.Name.Local))
+					"xs:%s does not allow", a.Name().Local,
+				el.Name().Local))
 			continue
 		}
-		if a.Name.Local == "id" && el.Name.Local != "appinfo" &&
-			el.Name.Local != "documentation" {
+		if a.Name().Local == "id" && el.Name().Local != "appinfo" &&
+			el.Name().Local != "documentation" {
 			continue
 		}
 		found := false
 		for _, n := range allowed {
-			if n == a.Name.Local {
+			if n == a.Name().Local {
 				found = true
 				break
 			}
 		}
-		if !found || prohibitedHere(el, a.Name.Local) {
+		if !found || prohibitedHere(el, a.Name().Local) {
 			p.errs = append(p.errs, errorAt(el, "",
 				"attribute %q is not allowed on xs:%s",
-				a.Name.Local, el.Name.Local))
+				a.Name().Local, el.Name().Local))
 			continue
 		}
 		// Every `name` in the schema for schemas is an xs:NCName — the
@@ -325,9 +325,9 @@ func (p *parser) checkAttrs(el *xdm.Node) {
 		// against the NCName production. addB193 declares
 		// name="sub2-elem " with a trailing space and the suite expects
 		// it to be accepted, under exactly that rule.
-		if a.Name.Local == "name" && !isNCName(strings.TrimSpace(a.Value)) {
+		if a.Name().Local == "name" && !isNCName(strings.TrimSpace(a.Value())) {
 			p.errs = append(p.errs, errorAt(el, "",
-				"name=%q is not a valid NCName", a.Value))
+				"name=%q is not a valid NCName", a.Value()))
 		}
 	}
 }
@@ -337,11 +337,11 @@ func (p *parser) checkAttrs(el *xdm.Node) {
 // (topLevelElement) takes no ref, form, targetNamespace or occurrence range,
 // and an attribute group that has a name (namedAttributeGroup) takes no ref.
 func prohibitedHere(el *xdm.Node, attr string) bool {
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "element":
-		parent := el.Parent
-		if parent == nil || parent.Name.URI != NSSchema ||
-			(parent.Name.Local != "schema" && parent.Name.Local != "override") {
+		parent := el.Parent()
+		if parent == nil || parent.Name().URI != NSSchema ||
+			(parent.Name().Local != "schema" && parent.Name().Local != "override") {
 			return false
 		}
 		switch attr {
@@ -361,10 +361,10 @@ func prohibitedHere(el *xdm.Node, attr string) bool {
 // <group>/<attributeGroup> take no children at all when they are a reference
 // rather than a definition.
 func srcModelFor(el, parent *xdm.Node) ([]srcTerm, bool) {
-	name := el.Name.Local
+	name := el.Name().Local
 	parentName := ""
-	if parent != nil && parent.Name.URI == NSSchema {
-		parentName = parent.Name.Local
+	if parent != nil && parent.Name().URI == NSSchema {
+		parentName = parent.Name().Local
 	}
 
 	switch name {
@@ -450,7 +450,7 @@ func srcModelFor(el, parent *xdm.Node) ([]srcTerm, bool) {
 // the given local name, ignoring elements conditional inclusion removes.
 func hasSchemaChild(el *xdm.Node, name string) bool {
 	for _, c := range el.ChildElements() {
-		if c.Name.URI == NSSchema && c.Name.Local == name {
+		if c.Name().URI == NSSchema && c.Name().Local == name {
 			return true
 		}
 	}
@@ -464,7 +464,7 @@ func hasSchemaChild(el *xdm.Node, name string) bool {
 // below them: <appinfo> and <documentation> take arbitrary content, and a
 // foreign element anywhere else is already rejected by the readers.
 func (p *parser) checkSourceModel(el *xdm.Node) {
-	if el.Name.URI != NSSchema {
+	if el.Name().URI != NSSchema {
 		return
 	}
 	// An <appinfo> or <documentation> holds open content, so nothing under
@@ -473,7 +473,7 @@ func (p *parser) checkSourceModel(el *xdm.Node) {
 	//
 	// Their own source= is checked, though: it is the one attribute the
 	// schema for schemas declares on them, and its type is xs:anyURI.
-	if el.Name.Local == "appinfo" || el.Name.Local == "documentation" {
+	if el.Name().Local == "appinfo" || el.Name().Local == "documentation" {
 		p.checkAttrs(el)
 		p.checkAnyURIAttrs(el)
 		return
@@ -482,7 +482,7 @@ func (p *parser) checkSourceModel(el *xdm.Node) {
 	p.checkAttrs(el)
 	p.checkAnyURIAttrs(el)
 
-	if terms, ok := srcModelFor(el, el.Parent); ok {
+	if terms, ok := srcModelFor(el, el.Parent()); ok {
 		p.matchSourceModel(el, terms)
 	}
 	for _, c := range el.ChildElements() {
@@ -506,7 +506,7 @@ func (p *parser) checkSourceModel(el *xdm.Node) {
 func (p *parser) matchSourceModel(el *xdm.Node, terms []srcTerm) {
 	var kids []*xdm.Node
 	for _, c := range el.ChildElements() {
-		if c.Name.URI != NSSchema {
+		if c.Name().URI != NSSchema {
 			// A foreign-namespace element is allowed anywhere by the
 			// {any} wildcards in the schema for schemas.
 			continue
@@ -527,28 +527,28 @@ func (p *parser) matchSourceModel(el *xdm.Node, terms []srcTerm) {
 		if n < t.min {
 			want := strings.Join(t.names, " | ")
 			if i < len(kids) {
-				p.errs = append(p.errs, errorAt(kids[i], "src-"+el.Name.Local,
+				p.errs = append(p.errs, errorAt(kids[i], "src-"+el.Name().Local,
 					"<%s> may not have <%s> here; expected <%s>",
-					el.Name.Local, kids[i].Name.Local, want))
+					el.Name().Local, kids[i].Name().Local, want))
 			} else {
-				p.errs = append(p.errs, errorAt(el, "src-"+el.Name.Local,
+				p.errs = append(p.errs, errorAt(el, "src-"+el.Name().Local,
 					"<%s> is missing a required <%s> child",
-					el.Name.Local, want))
+					el.Name().Local, want))
 			}
 			return
 		}
 	}
 	if i < len(kids) {
-		p.errs = append(p.errs, errorAt(kids[i], "src-"+el.Name.Local,
+		p.errs = append(p.errs, errorAt(kids[i], "src-"+el.Name().Local,
 			"<%s> may not have <%s> here",
-			el.Name.Local, kids[i].Name.Local))
+			el.Name().Local, kids[i].Name().Local))
 	}
 }
 
 // matchesName reports whether c's local name is one of names.
 func matchesName(c *xdm.Node, names []string) bool {
 	for _, n := range names {
-		if c.Name.Local == n {
+		if c.Name().Local == n {
 			return true
 		}
 	}

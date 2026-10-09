@@ -41,24 +41,24 @@ func DocumentRequiresVersion(root *xdm.Node) (Version, bool) {
 		return Version10, false
 	}
 	el := root
-	if el.Kind == xdm.KindDocument {
+	if el.Kind() == xdm.KindDocument {
 		for _, c := range el.ChildElements() {
 			el = c
 			break
 		}
 	}
-	if el == nil || el.Kind != xdm.KindElement ||
-		el.Name.URI != NSSchema || el.Name.Local != "schema" {
+	if el == nil || el.Kind() != xdm.KindElement ||
+		el.Name().URI != NSSchema || el.Name().Local != "schema" {
 		return Version10, false
 	}
-	for _, a := range el.Attrs {
-		if a.Name.URI != NSVersioning {
+	for a := range el.Attrs() {
+		if a.Name().URI != NSVersioning {
 			continue
 		}
-		if strings.ToLower(a.Name.Local) != "minversion" {
+		if strings.ToLower(a.Name().Local) != "minversion" {
 			continue
 		}
-		if versionAtLeast(Version11, a.Value) && !versionAtLeast(Version10, a.Value) {
+		if versionAtLeast(Version11, a.Value()) && !versionAtLeast(Version10, a.Value()) {
 			return Version11, true
 		}
 	}
@@ -77,8 +77,8 @@ func DocumentRequiresVersion(root *xdm.Node) (Version, bool) {
 // An element with no versioning attributes is always included, which is every
 // element in a schema that does not use the feature.
 func includeElement(el *xdm.Node, version Version) bool {
-	for _, a := range el.Attrs {
-		if a.Name.URI != NSVersioning {
+	for a := range el.Attrs() {
+		if a.Name().URI != NSVersioning {
 			continue
 		}
 		// The attribute names are matched case-insensitively because
@@ -86,15 +86,15 @@ func includeElement(el *xdm.Node, version Version) bool {
 		// schema author who miscapitalises one gets silence otherwise:
 		// an unrecognised versioning attribute is ignored, so the
 		// element is included when it should have been dropped.
-		switch strings.ToLower(a.Name.Local) {
+		switch strings.ToLower(a.Name().Local) {
 		case "minversion":
-			if !versionAtLeast(version, a.Value) {
+			if !versionAtLeast(version, a.Value()) {
 				return false
 			}
 		case "maxversion":
 			// maxVersion is exclusive: the element is for
 			// processors *below* the named version.
-			if versionAtLeast(version, a.Value) {
+			if versionAtLeast(version, a.Value()) {
 				return false
 			}
 		case "typeavailable":
@@ -102,7 +102,7 @@ func includeElement(el *xdm.Node, version Version) bool {
 			// definitely available; an unknown name leaves the
 			// condition undecided, and an undecided condition
 			// cannot vouch for the element.
-			if typeListAvailability(el, a.Value, version) != isAvailable {
+			if typeListAvailability(el, a.Value(), version) != isAvailable {
 				return false
 			}
 		case "typeunavailable":
@@ -114,15 +114,15 @@ func includeElement(el *xdm.Node, version Version) bool {
 			// naming only a known type and so excluding the
 			// element, from vc013, which mixes in an unresolvable
 			// name and keeps it.
-			if typeListAvailability(el, a.Value, version) == isAvailable {
+			if typeListAvailability(el, a.Value(), version) == isAvailable {
 				return false
 			}
 		case "facetavailable":
-			if facetListAvailability(el, a.Value, version) != isAvailable {
+			if facetListAvailability(el, a.Value(), version) != isAvailable {
 				return false
 			}
 		case "facetunavailable":
-			if facetListAvailability(el, a.Value, version) == isAvailable {
+			if facetListAvailability(el, a.Value(), version) == isAvailable {
 				return false
 			}
 		}

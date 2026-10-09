@@ -76,7 +76,7 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 		if !isXSL(ch, "attribute") {
 			return fmt.Errorf(
 				"xsl:attribute-set %q may only contain xsl:attribute, found %s",
-				name, ch.Name.Lexical())
+				name, ch.Name().Lexical())
 		}
 	}
 	body, err := c.compileSequence(el, el)
@@ -160,7 +160,7 @@ func expandAttributeSets(rt *runtime, names []attrSetRef, out *outputBuilder,
 func parseUseAttributeSets(el *xdm.Node) ([]attrSetRef, error) {
 	raw := el.AttrValue("use-attribute-sets")
 	if a := el.Attr(xdm.NSXSL, "use-attribute-sets"); a != nil {
-		raw = a.Value
+		raw = a.Value()
 	}
 	pkg := overridingPackage(el, compilePackage)
 	var out []attrSetRef
@@ -370,7 +370,7 @@ func (c *compiler) compileNamespace(n *xdm.Node, ns xpath.NamespaceResolver) (In
 	if na == nil {
 		return nil, fmt.Errorf("xsl:namespace requires a name attribute")
 	}
-	nameAVT, err := compileAVT(na.Value, ns)
+	nameAVT, err := compileAVT(na.Value(), ns)
 	if err != nil {
 		return nil, err
 	}

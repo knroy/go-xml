@@ -87,18 +87,18 @@ func PrependChild(parent, c *xdm.Node) {
 // DeepCopyPruned is DeepCopy leaving out, with its subtree, every descendant
 // of n for which drop reports true.
 func DeepCopyPruned(n *xdm.Node, drop func(*xdm.Node) bool) *xdm.Node {
-	c := xdm.NewNode(n.Kind, n.Name, n.Value)
-	c.SetBaseURI(n.BaseURI)
+	c := xdm.NewNode(n.Kind(), n.Name(), n.Value())
+	c.SetBaseURI(n.BaseURI())
 	c.CopyTypingFrom(n)
-	for _, ns := range n.Namespaces {
-		c.AddNamespace(ns.Name.Local, ns.Value)
+	for ns := range n.NamespaceDecls() {
+		c.AddNamespace(ns.Name().Local, ns.Value())
 	}
-	for _, a := range n.Attrs {
-		ac := NewAttribute(a.Name, a.Value)
+	for a := range n.Attrs() {
+		ac := NewAttribute(a.Name(), a.Value())
 		ac.CopyTypingFrom(a)
 		c.AddAttr(ac)
 	}
-	for _, ch := range n.Children {
+	for ch := range n.Children() {
 		if !drop(ch) {
 			c.AppendChild(DeepCopyPruned(ch, drop))
 		}

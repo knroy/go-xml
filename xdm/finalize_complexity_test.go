@@ -133,9 +133,9 @@ func TestFinalizeNamespaceCountsUnchanged(t *testing.T) {
 		for _, c := range n.ChildElements() {
 			// deep appears three times; key it by its parent so each is
 			// checked separately.
-			name := c.Name.Local
+			name := c.name.Local
 			if name == "deep" {
-				name = n.Name.Local + "/deep"
+				name = n.name.Local + "/deep"
 			}
 			byName[name] = c
 			walk(c)
@@ -182,24 +182,24 @@ func TestFinalizeNamespaceCountsUnchanged(t *testing.T) {
 	order = func(n *Node) {
 		if prev, dup := seen[n.order]; dup {
 			t.Errorf("document order %d given to both %s and %s",
-				n.order, prev.Name.Local, n.Name.Local)
+				n.order, prev.name.Local, n.name.Local)
 		}
 		seen[n.order] = n
-		for _, ns := range n.Namespaces {
+		for _, ns := range n.namespaces {
 			if prev, dup := seen[ns.order]; dup {
 				t.Errorf("document order %d given to both %s and namespace %q",
-					ns.order, prev.Name.Local, ns.Name.Local)
+					ns.order, prev.name.Local, ns.name.Local)
 			}
 			seen[ns.order] = ns
 		}
-		for _, a := range n.Attrs {
+		for _, a := range n.attrs {
 			if prev, dup := seen[a.order]; dup {
 				t.Errorf("document order %d given to both %s and attribute %q",
-					a.order, prev.Name.Local, a.Name.Local)
+					a.order, prev.name.Local, a.name.Local)
 			}
 			seen[a.order] = a
 		}
-		for _, c := range n.Children {
+		for _, c := range n.children {
 			order(c)
 		}
 	}

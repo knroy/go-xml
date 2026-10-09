@@ -21,18 +21,18 @@ import (
 // declaration and must be valid against it. An element with no declaration is
 // an error rather than a pass, which is what distinguishes strict from lax.
 func (s *Schema) ValidateElement(el *xdm.Node, opts ValidateOptions) error {
-	if el == nil || el.Kind != xdm.KindElement {
+	if el == nil || el.Kind() != xdm.KindElement {
 		return fmt.Errorf("xsd: ValidateElement needs an element")
 	}
 	// Prefix-insensitive, for the reason given in ValidateAgainstType: the
 	// element was built by a stylesheet using its own prefix, and the schema
 	// stores the declaration under the one its document used.
-	if _, ok := s.Elements[bareName(el.Name)]; !ok {
+	if _, ok := s.Elements[bareName(el.Name())]; !ok {
 		return &ValidationErrors{Errors: []*ValidationError{{
 			Code: "cvc-elt.1",
 			Message: fmt.Sprintf("no global declaration for element %s",
-				showName(el.Name)),
-			Path: "/" + el.Name.Local,
+				showName(el.Name())),
+			Path: "/" + el.Name().Local,
 		}}}
 	}
 	return s.Validate(el, opts)
@@ -56,10 +56,10 @@ func (s *Schema) ValidateElement(el *xdm.Node, opts ValidateOptions) error {
 // returned the element instead of the XQDY0027 the invalid NCName owes
 // (qischema90621-err).
 func (s *Schema) ValidateElementLax(el *xdm.Node, opts ValidateOptions) error {
-	if el == nil || el.Kind != xdm.KindElement {
+	if el == nil || el.Kind() != xdm.KindElement {
 		return fmt.Errorf("xsd: ValidateElementLax needs an element")
 	}
-	if _, ok := s.Elements[bareName(el.Name)]; !ok {
+	if _, ok := s.Elements[bareName(el.Name())]; !ok {
 		if el.Attr(NSInstance, "type") == nil {
 			return nil
 		}
@@ -88,10 +88,10 @@ func (s *Schema) HasElementDeclaration(name xdm.QName) bool {
 // there, so <doc xsi:type="xs:anyType"> under validation="strict" reported no
 // top-level declaration rather than validating.
 func (s *Schema) CanAssessStrictly(el *xdm.Node) bool {
-	if el == nil || el.Kind != xdm.KindElement {
+	if el == nil || el.Kind() != xdm.KindElement {
 		return false
 	}
-	if s.HasElementDeclaration(el.Name) {
+	if s.HasElementDeclaration(el.Name()) {
 		return true
 	}
 	return el.Attr(NSInstance, "type") != nil
@@ -112,10 +112,10 @@ func (s *Schema) HasAttributeDeclaration(name xdm.QName) bool {
 // type, and the value has to satisfy it. lax passes an attribute the schema
 // does not declare; strict rejects it.
 func (s *Schema) ValidateAttribute(at *xdm.Node, lax bool, opts ValidateOptions) error {
-	if at == nil || at.Kind != xdm.KindAttribute {
+	if at == nil || at.Kind() != xdm.KindAttribute {
 		return fmt.Errorf("xsd: ValidateAttribute needs an attribute")
 	}
-	decl, ok := s.Attributes[bareName(at.Name)]
+	decl, ok := s.Attributes[bareName(at.Name())]
 	if !ok || decl == nil || decl.Type == nil {
 		if lax {
 			return nil
@@ -123,8 +123,8 @@ func (s *Schema) ValidateAttribute(at *xdm.Node, lax bool, opts ValidateOptions)
 		return &ValidationErrors{Errors: []*ValidationError{{
 			Code: "cvc-attribute.1",
 			Message: fmt.Sprintf("no global declaration for attribute %s",
-				showName(at.Name)),
-			Path: "/@" + at.Name.Local,
+				showName(at.Name())),
+			Path: "/@" + at.Name().Local,
 		}}}
 	}
 	// The declaration's type is passed as a component rather than by name.
@@ -182,7 +182,7 @@ func (s *Schema) validateNodeAgainstType(n *xdm.Node, typ Type,
 	}
 	v := &validator{schema: s, opts: opts, ids: map[string]int{}}
 
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindElement:
 		v.validateAgainstType(n, typ, nil)
 	case xdm.KindAttribute:
@@ -193,9 +193,9 @@ func (s *Schema) validateNodeAgainstType(n *xdm.Node, typ Type,
 		if !ok {
 			return fmt.Errorf(
 				"xsd: attribute %s cannot be validated against complex type %s",
-				n.Name.Local, showName(typeName))
+				n.Name().Local, showName(typeName))
 		}
-		v.validateSimpleContent(n, n.Value, st, nil)
+		v.validateSimpleContent(n, n.Value(), st, nil)
 		if opts.Annotate && len(v.errs) == 0 && typeName.Local != "" {
 			// The element branch stamps the annotation inside the validator;
 			// this one has to do it here, because validateSimpleContent works

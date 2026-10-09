@@ -302,8 +302,8 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	chunk.open() // the document node's children
 	var spaces spaceTable
 	var run textRun
-	tree.Root.BaseURI = opts.BaseURI
-	tree.Root.DocumentURI = opts.DocumentURI
+	tree.Root.baseURI = opts.BaseURI
+	tree.Root.documentURI = opts.DocumentURI
 	cur := tree.Root
 	depth := 0
 	sawRoot := false
@@ -398,9 +398,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// force where the attribute was written.
 			if b := baseAt(opts.entityBases, int(start)); b != "" {
 				if xb := el.Attr(NSXML, "base"); xb != nil {
-					el.BaseURI = resolveBase(b, xb.Value)
+					el.baseURI = resolveBase(b, xb.value)
 				} else {
-					el.BaseURI = b
+					el.baseURI = b
 				}
 			}
 			if len(attTypes) > 0 {
@@ -412,7 +412,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// Attributes and namespaces are nodes too, and a document made
 			// of elements carrying many attributes allocates most of its
 			// memory in them, so they count against the limit.
-			nodes += 1 + len(el.Attrs) + len(el.Namespaces)
+			nodes += 1 + len(el.attrs) + len(el.namespaces)
 			if maxNodes > 0 && nodes > maxNodes {
 				return nil, fmt.Errorf(
 					"parse XML: document exceeds %d nodes: %w",
@@ -424,16 +424,16 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 
 		case *xml.EndElement:
 			t := *tok
-			if cur.Parent == nil {
+			if cur.parent == nil {
 				return nil, fmt.Errorf("parse XML: unbalanced end element %q", t.Name.Local)
 			}
 			// RawToken does not pair tags, so the pairing is checked here on
 			// the lexical name — which is what XML §3 requires anyway: the
 			// end tag must repeat the start tag's QName character for
 			// character, not merely resolve to the same expanded name.
-			if t.Name.Space == cur.Name.Prefix && t.Name.Local == cur.Name.Local {
+			if t.Name.Space == cur.name.Prefix && t.Name.Local == cur.name.Local {
 				// The same QName, written the same way: nothing to build.
-			} else if got, want := lexicalName(t.Name), cur.Name.Lexical(); got != want {
+			} else if got, want := lexicalName(t.Name), cur.name.Lexical(); got != want {
 				return nil, fmt.Errorf(
 					"parse XML: element %q closed by end element %q", want, got)
 			}
@@ -441,21 +441,21 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// DTD-derived rule outranks the stylesheet-declared one, so it
 			// must not be gated on a strip-space declaration existing.
 			chunk.close(cur)
-			kids := len(cur.Children)
+			kids := len(cur.children)
 			if elementOnly != nil {
 				stripIgnorableWhitespace(cur, elementOnly)
 			}
 			if opts.StripSpace != nil {
 				stripWhitespaceChildren(cur, opts.StripSpace)
 			}
-			if len(cur.Children) != kids {
+			if len(cur.children) != kids {
 				renumber = true
 			}
 			if n := len(scoped); n > 0 && scoped[n-1].el == cur {
 				restoreScope(scope, scoped[n-1].saved)
 				scoped = scoped[:n-1]
 			}
-			cur = cur.Parent
+			cur = cur.parent
 			depth--
 
 		case *xml.CharData:
@@ -476,7 +476,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			t := *tok
 			sawPrologToken = true
 			c := chunk.alloc()
-			c.Kind, c.Value = KindComment, spaces.arena.String(t)
+			c.kind, c.value = KindComment, spaces.arena.String(t)
 			chunk.addChild(cur, c)
 			tree.number(c, nil)
 
@@ -503,15 +503,15 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			sawPrologToken = true
 			pi := chunk.alloc()
 			*pi = Node{
-				Kind:  KindPI,
-				Name:  QName{Local: t.Target},
-				Value: spaces.arena.String(t.Inst),
+				kind:  KindPI,
+				name:  QName{Local: t.Target},
+				value: spaces.arena.String(t.Inst),
 			}
 			// Same entity rule as for elements: a PI pulled in from an
 			// external entity has that entity's URI as its base. This is
 			// exactly what resolve-uri-021 asserts.
 			if b := baseAt(opts.entityBases, int(start)); b != "" {
-				pi.BaseURI = b
+				pi.baseURI = b
 			}
 			chunk.addChild(cur, pi)
 			tree.number(pi, nil)
@@ -711,7 +711,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		return nil, fmt.Errorf("parse XML: no root element")
 	}
 	if cur != tree.Root {
-		return nil, fmt.Errorf("parse XML: unexpected EOF, %q left open", cur.Name.Local)
+		return nil, fmt.Errorf("parse XML: unexpected EOF, %q left open", cur.name.Local)
 	}
 	chunk.close(tree.Root)
 
@@ -759,10 +759,10 @@ func buildElement(chunk *nodeChunk, t xml.StartElement, parent *Node, offset int
 	// would otherwise resolve to nothing.
 	el := chunk.alloc()
 	*el = Node{
-		Kind:    KindElement,
+		kind:    KindElement,
 		tree:    parent.tree,
-		BaseURI: parent.BaseURI,
-		Parent:  parent,
+		baseURI: parent.baseURI,
+		parent:  parent,
 		offset:  offset,
 	}
 
@@ -774,8 +774,8 @@ func buildElement(chunk *nodeChunk, t xml.StartElement, parent *Node, offset int
 			n++
 		}
 	}
-	el.Attrs = chunk.take(n)
-	el.Namespaces = chunk.take(len(t.Attr) - n)
+	el.attrs = chunk.take(n)
+	el.namespaces = chunk.take(len(t.Attr) - n)
 
 	for _, a := range t.Attr {
 		switch {
@@ -790,9 +790,9 @@ func buildElement(chunk *nodeChunk, t xml.StartElement, parent *Node, offset int
 		default:
 			attr := chunk.alloc()
 			*attr = Node{
-				Kind:  KindAttribute,
-				Name:  QName{Prefix: a.Name.Space, Local: a.Name.Local},
-				Value: a.Value,
+				kind:  KindAttribute,
+				name:  QName{Prefix: a.Name.Space, Local: a.Name.Local},
+				value: a.Value,
 			}
 			// xml:base changes the base URI for the subtree.
 			//
@@ -803,7 +803,7 @@ func buildElement(chunk *nodeChunk, t xml.StartElement, parent *Node, offset int
 			// document's directory joined with it, and made every nested
 			// xml:base lose everything its ancestors contributed.
 			if a.Name.Space == "xml" && a.Name.Local == "base" {
-				el.BaseURI = resolveBase(el.BaseURI, a.Value)
+				el.baseURI = resolveBase(el.baseURI, a.Value)
 			}
 			// xml:id is of type xs:ID whatever the document says, so its
 			// value is whitespace-normalised at parse time — the xml:id
@@ -815,22 +815,22 @@ func buildElement(chunk *nodeChunk, t xml.StartElement, parent *Node, offset int
 			// newlines and tabs, so the node was not the one the data model
 			// says the document has.
 			if a.Name.Space == "xml" && a.Name.Local == "id" {
-				attr.Value = strings.Join(SplitXMLSpace(a.Value), " ")
+				attr.value = strings.Join(SplitXMLSpace(a.Value), " ")
 			}
 			el.AddAttr(attr)
 		}
 	}
 
-	el.Name = QName{
+	el.name = QName{
 		Prefix: t.Name.Space,
 		Local:  t.Name.Local,
 		URI:    resolvePrefix(el, t.Name.Space, true),
 	}
-	for _, a := range el.Attrs {
+	for _, a := range el.attrs {
 		// An unprefixed attribute is in no namespace: the default namespace
 		// declaration applies to elements only (Namespaces in XML 1.0 §6.2).
-		if a.Name.Prefix != "" {
-			a.Name.URI = resolvePrefix(el, a.Name.Prefix, false)
+		if a.name.Prefix != "" {
+			a.name.URI = resolvePrefix(el, a.name.Prefix, false)
 		}
 	}
 	return el
@@ -857,12 +857,12 @@ func resolvePrefix(el *Node, prefix string, isElement bool) string {
 	case "xmlns":
 		return NSXMLNS
 	}
-	for cur := el; cur != nil; cur = cur.Parent {
-		for _, ns := range cur.Namespaces {
-			if ns.Name.Local == prefix {
+	for cur := el; cur != nil; cur = cur.parent {
+		for _, ns := range cur.namespaces {
+			if ns.name.Local == prefix {
 				// An empty value undeclares the namespace
 				// (xmlns="" or, in XML Names 1.1, xmlns:p="").
-				return ns.Value
+				return ns.value
 			}
 		}
 	}
@@ -892,7 +892,7 @@ func (r *textRun) add(chunk *nodeChunk, parent *Node, b []byte) {
 		// Every token inside an element other than character data adds a
 		// node, so a run never resumes after a flush.
 		r.node = chunk.alloc()
-		r.node.Kind = KindText
+		r.node.kind = KindText
 		chunk.addChild(parent, r.node)
 		parent.tree.number(r.node, nil)
 		r.buf = r.buf[:0]
@@ -903,7 +903,7 @@ func (r *textRun) add(chunk *nodeChunk, parent *Node, b []byte) {
 // flush sets the value of the node being built, if any, and ends the run.
 func (r *textRun) flush(spaces *spaceTable) {
 	if r.node != nil {
-		r.node.Value = spaces.text(r.buf)
+		r.node.value = spaces.text(r.buf)
 		r.node = nil
 	}
 }
@@ -1022,7 +1022,7 @@ func (c *nodeChunk) open() { c.marks = append(c.marks, len(c.kids)) }
 
 // addChild links child as the next child of parent, the innermost open element.
 func (c *nodeChunk) addChild(parent, child *Node) {
-	child.Parent = parent
+	child.parent = parent
 	child.tree = parent.tree
 	c.kids = append(c.kids, child)
 }
@@ -1031,7 +1031,7 @@ func (c *nodeChunk) addChild(parent, child *Node) {
 func (c *nodeChunk) close(el *Node) {
 	m := c.marks[len(c.marks)-1]
 	c.marks = c.marks[:len(c.marks)-1]
-	el.Children = append(c.take(len(c.kids)-m), c.kids[m:]...)
+	el.children = append(c.take(len(c.kids)-m), c.kids[m:]...)
 	c.kids = c.kids[:m]
 }
 
@@ -1040,8 +1040,8 @@ func (c *nodeChunk) close(el *Node) {
 // size by take, so the append does not reallocate.
 func (c *nodeChunk) addNamespace(el *Node, prefix, uri string) {
 	ns := c.alloc()
-	*ns = Node{Kind: KindNamespace, Name: QName{Local: prefix}, Value: uri, Parent: el, tree: el.tree}
-	el.Namespaces = append(el.Namespaces, ns)
+	*ns = Node{kind: KindNamespace, name: QName{Local: prefix}, value: uri, parent: el, tree: el.tree}
+	el.namespaces = append(el.namespaces, ns)
 }
 
 // nodeChunkLen caps a chunk at 32 KiB, the largest size class the allocator
@@ -1067,21 +1067,21 @@ func (c *nodeChunk) alloc() *Node {
 // is only strippable if it is whitespace in its entirety and merging (above)
 // may not be complete until the element closes.
 func stripWhitespaceChildren(el *Node, strip func(QName) bool) {
-	if !strip(el.Name) {
+	if !strip(el.name) {
 		return
 	}
 	// xml:space="preserve" overrides stripping for this element's content.
-	if a := el.Attr(NSXML, "space"); a != nil && a.Value == "preserve" {
+	if a := el.Attr(NSXML, "space"); a != nil && a.value == "preserve" {
 		return
 	}
-	kept := el.Children[:0]
-	for _, c := range el.Children {
-		if c.Kind == KindText && IsXMLWhitespace(c.Value) {
+	kept := el.children[:0]
+	for _, c := range el.children {
+		if c.kind == KindText && IsXMLWhitespace(c.value) {
 			continue
 		}
 		kept = append(kept, c)
 	}
-	el.Children = kept
+	el.children = kept
 }
 
 // encodeOffset converts a decoder byte offset into the representation the

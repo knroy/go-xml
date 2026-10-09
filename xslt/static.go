@@ -132,8 +132,8 @@ func (p *staticPhase) module(doc *xdm.Node) error {
 	// xsl:stylesheet is treated specially: excluding it excludes its children
 	// but not the element itself, so that one condition at the top of a module
 	// can govern every declaration in it.
-	if root.Kind == xdm.KindElement && root.Name.URI == xdm.NSXSL &&
-		isStylesheetRootName(root.Name.Local) {
+	if root.Kind() == xdm.KindElement && root.Name().URI == xdm.NSXSL &&
+		isStylesheetRootName(root.Name().Local) {
 		if err := p.expandShadow(root); err != nil {
 			return err
 		}
@@ -160,8 +160,8 @@ func (p *staticPhase) module(doc *xdm.Node) error {
 // its use-when.
 func (p *staticPhase) children(n *xdm.Node, topLevel bool) error {
 	var kept []*xdm.Node
-	for _, ch := range n.Children {
-		if ch.Kind != xdm.KindElement {
+	for ch := range n.Children() {
+		if ch.Kind() != xdm.KindElement {
 			kept = append(kept, ch)
 			continue
 		}
@@ -207,10 +207,10 @@ func (p *staticPhase) children(n *xdm.Node, topLevel bool) error {
 // about: a static variable, whose value it computes, and a module reference,
 // whose target it walks in place.
 func (p *staticPhase) topLevel(el *xdm.Node) error {
-	if el.Name.URI != xdm.NSXSL {
+	if el.Name().URI != xdm.NSXSL {
 		return nil
 	}
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "variable", "param":
 		// static="yes" is XSLT 3.0's, and a 2.0 stylesheet writing it gets
 		// XTSE0090 from the grammar check. Evaluating the declaration here
@@ -231,7 +231,7 @@ func (p *staticPhase) topLevel(el *xdm.Node) error {
 func (p *staticPhase) declare(el *xdm.Node) error {
 	name := el.AttrValue("name")
 	if name == "" {
-		return fmt.Errorf("%s requires a name attribute", el.Name.Lexical())
+		return fmt.Errorf("%s requires a name attribute", el.Name().Lexical())
 	}
 	qn, err := resolveQNameAttr(el, name)
 	if err != nil {
@@ -267,12 +267,12 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 		if sel != "" {
 			return fmt.Errorf(
 				"XTSE0620: %s has a select attribute and non-empty content",
-				el.Name.Lexical())
+				el.Name().Lexical())
 		}
 		return fmt.Errorf(
 			"XTSE0010: %s has static=\"yes\" and a sequence constructor; "+
 				"a static variable's value must come from its select attribute",
-			el.Name.Lexical())
+			el.Name().Lexical())
 	}
 
 	// required="yes" says the value must come from the caller, and select
@@ -285,7 +285,7 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 		return fmt.Errorf(
 			"XTSE0010: %s has required=\"yes\" and a select attribute; "+
 				"a required parameter takes its value from the caller",
-			el.Name.Lexical())
+			el.Name().Lexical())
 	}
 	if required && !fromCaller {
 		return fmt.Errorf(
@@ -294,7 +294,7 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 	}
 	var val xdm.Sequence
 	switch {
-	case fromCaller && el.Name.Local == "param":
+	case fromCaller && el.Name().Local == "param":
 		val = supplied
 	case sel != "":
 		val, err = p.eval(el, sel)
@@ -317,7 +317,7 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 	if as := el.AttrValue("as"); as != "" {
 		t, terr := compileSequenceType(as, newNSResolver(el, ""))
 		if terr != nil {
-			return fmt.Errorf("in %s/@as: %w", el.Name.Lexical(), terr)
+			return fmt.Errorf("in %s/@as: %w", el.Name().Lexical(), terr)
 		}
 		// A value the CALLER supplied that will not convert is a type error,
 		// XTTE0590 -- the same code an xsl:param gets anywhere else, which is
@@ -326,14 +326,14 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 		// section 9.2 makes it implicitly mandatory and the caller having
 		// supplied nothing is the missing-value error rather than a type one.
 		code := "XTSE0590"
-		if fromCaller && el.Name.Local == "param" {
+		if fromCaller && el.Name().Local == "param" {
 			code = "XTTE0590"
 		}
 		conv, cerr := t.convertAs(val,
-			"static "+strings.TrimPrefix(el.Name.Local, "xsl:")+" $"+qn.Lexical(),
+			"static "+strings.TrimPrefix(el.Name().Local, "xsl:")+" $"+qn.Lexical(),
 			code)
 		if cerr != nil {
-			if !fromCaller && el.Name.Local == "param" {
+			if !fromCaller && el.Name().Local == "param" {
 				if len(val) == 0 && sel == "" {
 					return fmt.Errorf(
 						"XTDE0700: no value was supplied for the static parameter $%s, "+
@@ -355,7 +355,7 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 		val = conv
 	}
 
-	isParam := el.Name.Local == "param"
+	isParam := el.Name().Local == "param"
 	for i := range p.vars {
 		if p.vars[i].name.Clark() != key {
 			continue
@@ -376,7 +376,7 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 					"XTSE3450: static $%s is declared as xsl:%s at a higher "+
 						"import precedence than the xsl:%s declared before it "+
 						"in stylesheet tree order",
-					qn.Lexical(), el.Name.Local,
+					qn.Lexical(), el.Name().Local,
 					declKind(prev.isParam))
 			}
 			// A parameter whose value came from the caller is not
@@ -456,7 +456,7 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 	if href == "" || p.c.opts.Resolver == nil {
 		return nil
 	}
-	base := el.BaseURI
+	base := el.BaseURI()
 	if base == "" {
 		base = p.c.opts.BaseURI
 	}
@@ -480,7 +480,7 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 	}
 	// An imported module ranks below its importer; an included one shares the
 	// includer's precedence, so only xsl:import moves the depth.
-	if el.Name.Local == "import" {
+	if el.Name().Local == "import" {
 		// Section 3.10.2 orders sibling imports as well as nested ones: "the
 		// one that occurs later in document order has higher import
 		// precedence". Depth alone gave two siblings the same rank, which is
@@ -516,7 +516,7 @@ func staticDeclAllowed(el *xdm.Node) bool {
 	if !isStaticDecl(el) {
 		return false
 	}
-	if el.Name.Local == "param" {
+	if el.Name().Local == "param" {
 		return processorAtLeast30()
 	}
 	return moduleAtLeast30(el)
@@ -565,12 +565,12 @@ func cacheMemoises(v string) bool {
 // and reading the indentation as a sequence constructor would reject the
 // declarations 9.5 exists to allow.
 func emptyStaticContent(el *xdm.Node) bool {
-	for _, ch := range el.Children {
-		switch ch.Kind {
+	for ch := range el.Children() {
+		switch ch.Kind() {
 		case xdm.KindElement:
 			return false
 		case xdm.KindText:
-			if strings.TrimSpace(ch.Value) != "" {
+			if strings.TrimSpace(ch.Value()) != "" {
 				return false
 			}
 		}
@@ -592,7 +592,7 @@ func emptyStaticContent(el *xdm.Node) bool {
 // is an ordinary first character of an ordinary attribute name, which the
 // result tree carries through unchanged.
 func (p *staticPhase) expandShadow(el *xdm.Node) error {
-	if el.Name.URI != xdm.NSXSL {
+	if el.Name().URI != xdm.NSXSL {
 		return nil
 	}
 	// Shadow attributes are XSLT 3.0's. To a 2.0 stylesheet an underscore is
@@ -621,8 +621,8 @@ func (p *staticPhase) expandShadow(el *xdm.Node) error {
 	// The overwhelmingly common case is an element with no shadow attribute
 	// at all, and this runs for every element of every module.
 	any := false
-	for _, a := range el.Attrs {
-		if a.Name.URI == "" && strings.HasPrefix(a.Name.Local, "_") {
+	for a := range el.Attrs() {
+		if a.Name().URI == "" && strings.HasPrefix(a.Name().Local, "_") {
 			any = true
 			break
 		}
@@ -633,17 +633,17 @@ func (p *staticPhase) expandShadow(el *xdm.Node) error {
 
 	shadowed := map[string]string{}
 	var kept []*xdm.Node
-	for _, a := range el.Attrs {
-		if a.Name.URI != "" || !strings.HasPrefix(a.Name.Local, "_") {
+	for a := range el.Attrs() {
+		if a.Name().URI != "" || !strings.HasPrefix(a.Name().Local, "_") {
 			kept = append(kept, a)
 			continue
 		}
-		v, err := p.valueTemplate(el, a.Value)
+		v, err := p.valueTemplate(el, a.Value())
 		if err != nil {
 			return fmt.Errorf("in %s/@%s: %w",
-				el.Name.Lexical(), a.Name.Local, err)
+				el.Name().Lexical(), a.Name().Local, err)
 		}
-		shadowed[strings.TrimPrefix(a.Name.Local, "_")] = v
+		shadowed[strings.TrimPrefix(a.Name().Local, "_")] = v
 	}
 	// "If a shadow attribute is present, then any attribute node with name N
 	// is ignored" — including for the purpose of reporting an error in its
@@ -651,8 +651,8 @@ func (p *staticPhase) expandShadow(el *xdm.Node) error {
 	// the grammar check to object to.
 	attrs := make([]*xdm.Node, 0, len(kept)+len(shadowed))
 	for _, a := range kept {
-		if a.Name.URI == "" {
-			if _, shadowedOut := shadowed[a.Name.Local]; shadowedOut {
+		if a.Name().URI == "" {
+			if _, shadowedOut := shadowed[a.Name().Local]; shadowedOut {
 				continue
 			}
 		}
@@ -830,7 +830,7 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 		ctx.LibraryVersion = xpath.XPath31
 		ctx.RegexVersion = xpath.XPath31
 	}
-	ctx.StaticBaseURI = el.BaseURI
+	ctx.StaticBaseURI = el.BaseURI()
 	if p.now.IsZero() {
 		p.now = time.Now()
 	}
@@ -880,12 +880,12 @@ func (p *staticPhase) included(el *xdm.Node) (bool, error) {
 	// element on the strength of an attribute XTSE0090 is about to reject it
 	// for carrying -- and having pruned it, nothing would be left to reject.
 	var expr string
-	if el.Name.URI == xdm.NSXSL {
+	if el.Name().URI == xdm.NSXSL {
 		if a := el.Attr("", "use-when"); a != nil {
-			expr = a.Value
+			expr = a.Value()
 		}
 	} else if a := el.Attr(xdm.NSXSL, "use-when"); a != nil {
-		expr = a.Value
+		expr = a.Value()
 	}
 	if expr == "" {
 		return true, nil
@@ -894,11 +894,11 @@ func (p *staticPhase) included(el *xdm.Node) (bool, error) {
 	if err != nil {
 		// An error in the use-when expression itself is reported: it is the
 		// one error the exclusion rule does not suppress.
-		return false, fmt.Errorf("in %s/@use-when: %w", el.Name.Lexical(), err)
+		return false, fmt.Errorf("in %s/@use-when: %w", el.Name().Lexical(), err)
 	}
 	b, err := xpath.EffectiveBooleanValue(v)
 	if err != nil {
-		return false, fmt.Errorf("in %s/@use-when: %w", el.Name.Lexical(), err)
+		return false, fmt.Errorf("in %s/@use-when: %w", el.Name().Lexical(), err)
 	}
 	return b, nil
 }
@@ -914,7 +914,7 @@ func (p *staticPhase) included(el *xdm.Node) (bool, error) {
 func (c *compiler) staticGlobal(el *xdm.Node) (*Variable, error) {
 	name := el.AttrValue("name")
 	if name == "" {
-		return nil, fmt.Errorf("%s requires a name attribute", el.Name.Lexical())
+		return nil, fmt.Errorf("%s requires a name attribute", el.Name().Lexical())
 	}
 	qn, err := resolveQNameAttr(el, name)
 	if err != nil {
@@ -922,9 +922,9 @@ func (c *compiler) staticGlobal(el *xdm.Node) (*Variable, error) {
 	}
 	v := &Variable{
 		Name:     qn,
-		IsParam:  el.Name.Local == "param",
+		IsParam:  el.Name().Local == "param",
 		isStatic: true,
-		baseURI:  el.BaseURI,
+		baseURI:  el.BaseURI(),
 	}
 	key := qn.Clark()
 	for _, sv := range c.staticVars {
@@ -938,16 +938,16 @@ func (c *compiler) staticGlobal(el *xdm.Node) (*Variable, error) {
 	// missing here means the two walks disagreed rather than that the
 	// stylesheet is at fault.
 	return nil, fmt.Errorf("static %s $%s was not evaluated by the static phase",
-		el.Name.Local, qn.Lexical())
+		el.Name().Local, qn.Lexical())
 }
 
 // isModuleElement reports whether el is the element a stylesheet module is
 // rooted at.
 func isModuleElement(el *xdm.Node) bool {
-	return el.Kind == xdm.KindElement && el.Name.URI == xdm.NSXSL &&
-		isStylesheetRootName(el.Name.Local) &&
-		(el.Parent == nil || el.Parent.Kind != xdm.KindElement ||
-			el.Parent.Name.URI != xdm.NSXSL)
+	return el.Kind() == xdm.KindElement && el.Name().URI == xdm.NSXSL &&
+		isStylesheetRootName(el.Name().Local) &&
+		(el.Parent() == nil || el.Parent().Kind() != xdm.KindElement ||
+			el.Parent().Name().URI != xdm.NSXSL)
 }
 
 // ignoredTopLevel reports whether ch, a child of a module element, is one
@@ -959,7 +959,7 @@ func isModuleElement(el *xdm.Node) bool {
 // merely greater than 2.0, so a version="3.0" module on a 3.0 processor has
 // its misplaced top-level elements reported (XTSE0010), not discarded.
 func ignoredTopLevel(ch *xdm.Node) bool {
-	if ch.Name.URI != xdm.NSXSL || !effectiveForwards(ch) {
+	if ch.Name().URI != xdm.NSXSL || !effectiveForwards(ch) {
 		return false
 	}
 	// Not inside an xsl:package: see inPackage. Discarding the element here
@@ -968,10 +968,10 @@ func ignoredTopLevel(ch *xdm.Node) bool {
 	if inPackage(ch) {
 		return false
 	}
-	if _, known := xsltElements[ch.Name.Local]; !known {
+	if _, known := xsltElements[ch.Name().Local]; !known {
 		return true
 	}
-	return !xsltDeclarations[ch.Name.Local]
+	return !xsltDeclarations[ch.Name().Local]
 }
 
 // redeclare walks a module tree that has already been pruned, re-evaluating
@@ -984,15 +984,15 @@ func ignoredTopLevel(ch *xdm.Node) bool {
 // the position in tree order this visit occupies.
 func (p *staticPhase) redeclare(doc *xdm.Node) error {
 	root := firstElement(doc)
-	if root == nil || root.Kind != xdm.KindElement ||
-		root.Name.URI != xdm.NSXSL || !isStylesheetRootName(root.Name.Local) {
+	if root == nil || root.Kind() != xdm.KindElement ||
+		root.Name().URI != xdm.NSXSL || !isStylesheetRootName(root.Name().Local) {
 		return nil
 	}
 	for _, ch := range root.ChildElements() {
-		if ch.Name.URI != xdm.NSXSL {
+		if ch.Name().URI != xdm.NSXSL {
 			continue
 		}
-		switch ch.Name.Local {
+		switch ch.Name().Local {
 		case "variable", "param":
 			if staticDeclAllowed(ch) {
 				if err := p.declare(ch); err != nil {

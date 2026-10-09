@@ -360,9 +360,9 @@ func nameOf(ctx *Context, c *FuncCall) (q xdm.QName, ok bool) {
 	if n == nil {
 		return q, false
 	}
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindElement, xdm.KindAttribute, xdm.KindPI, xdm.KindNamespace:
-		return n.Name, true
+		return n.Name(), true
 	}
 	return q, true
 }

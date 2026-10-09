@@ -46,7 +46,7 @@ func attrBuiltWith(t *testing.T, add func(*xdmbuild.Builder) error) *xdm.Node {
 		t.Fatalf("builder produced %d items, want 1", len(seq))
 	}
 	got, ok := seq[0].(*xdm.Node)
-	if !ok || got.Kind != xdm.KindElement {
+	if !ok || got.Kind() != xdm.KindElement {
 		t.Fatalf("builder produced %T, want an element node", seq[0])
 	}
 	if got.NumAttrs() != 1 {
@@ -146,9 +146,9 @@ func TestAddAttributeWithTypingAvoidsTheGlobalRegistries(t *testing.T) {
 			xdm.Typing{TypeAnnotation: unknown, DerivedPrimitive: "decimal"})
 	})
 
-	if a.DerivedPrimitive != "decimal" {
+	if a.DerivedPrimitive() != "decimal" {
 		t.Fatalf("the builder dropped DerivedPrimitive: got %q, want %q",
-			a.DerivedPrimitive, "decimal")
+			a.DerivedPrimitive(), "decimal")
 	}
 	at := a.Atomize()
 	if at == nil {
@@ -213,7 +213,7 @@ func TestAddAttributeWithTypingCarriesEveryProperty(t *testing.T) {
 			t.Fatalf("builder produced %d items, want 1", len(seq))
 		}
 		a, ok := seq[0].(*xdm.Node)
-		if !ok || a.Kind != xdm.KindAttribute {
+		if !ok || a.Kind() != xdm.KindAttribute {
 			t.Fatalf("builder produced %T, want an attribute node", seq[0])
 		}
 		if got := xdm.TypingOf(a); got != want {
@@ -232,8 +232,8 @@ func TestAddAttributeWithTypingCarriesEveryProperty(t *testing.T) {
 			}
 			return b.AddAttributeWithTyping(name, "1", want)
 		})
-		if a.Value != "1" {
-			t.Fatalf("replacement kept value %q, want %q", a.Value, "1")
+		if a.Value() != "1" {
+			t.Fatalf("replacement kept value %q, want %q", a.Value(), "1")
 		}
 		if got := xdm.TypingOf(a); got != want {
 			t.Fatalf("recorded %+v, want %+v", got, want)
@@ -252,11 +252,11 @@ func TestAddAttributeTypedDoesNotDeriveIsID(t *testing.T) {
 	a := attrBuiltWith(t, func(b *xdmbuild.Builder) error {
 		return b.AddAttributeTyped(xdm.QName{Local: "a"}, "x1", "ID")
 	})
-	if a.IsID {
+	if a.IsID() {
 		t.Fatal("AddAttributeTyped derived is-id from the annotation; it " +
 			"never did before, and the typed path must not have changed that")
 	}
-	if a.TypeAnnotation != "ID" {
-		t.Fatalf("annotation is %q, want %q", a.TypeAnnotation, "ID")
+	if a.TypeAnnotation() != "ID" {
+		t.Fatalf("annotation is %q, want %q", a.TypeAnnotation(), "ID")
 	}
 }

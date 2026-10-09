@@ -77,5 +77,5 @@ func (c *compiler) compileFork(n *xdm.Node) (Instruction, error) {
 func forkContentError(ch *xdm.Node) error {
 	return fmt.Errorf("XTSE0010: %s is not allowed in xsl:fork; the content "+
 		"is either a single xsl:for-each-group or a sequence of xsl:sequence "+
-		"instructions", ch.Name.Lexical())
+		"instructions", ch.Name().Lexical())
 }

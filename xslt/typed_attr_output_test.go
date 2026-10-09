@@ -66,7 +66,7 @@ func onlyAttr(t *testing.T, out *outputBuilder) xdm.Typing {
 		t.Fatalf("builder produced %d items, want 1", len(seq))
 	}
 	n, ok := seq[0].(*xdm.Node)
-	if !ok || n.Kind != xdm.KindElement {
+	if !ok || n.Kind() != xdm.KindElement {
 		t.Fatalf("builder produced %T, want an element", seq[0])
 	}
 	if n.NumAttrs() != 1 {

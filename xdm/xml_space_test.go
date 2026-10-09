@@ -20,7 +20,7 @@ func TestXMLIDNormalizationUsesXMLSpaceOnly(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
-			got := tree.Root.Children[0].Attrs[0].Value
+			got := tree.Root.children[0].attrs[0].value
 			if got != tc.want {
 				t.Errorf("xml:id %q normalized to %q, want %q", tc.in, got, tc.want)
 			}
@@ -49,7 +49,7 @@ func TestSplitXMLSpaceIsNotUnicodeFields(t *testing.T) {
 // it three, splitting a token the schema says is one.
 func TestAtomizeListTokenizesOnXMLSpaceOnly(t *testing.T) {
 	const nbsp = " "
-	n := &Node{Kind: KindAttribute, Value: "a" + nbsp + "b c"}
+	n := &Node{kind: KindAttribute, value: "a" + nbsp + "b c"}
 	n.SetTypeAnnotation("NMTOKENS")
 
 	seq, ok := n.AtomizeList()

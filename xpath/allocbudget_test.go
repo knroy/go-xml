@@ -310,8 +310,8 @@ func TestPathChargesTheStringItBuilds(t *testing.T) {
 	deepest := doc.Root
 	for {
 		var kid *xdm.Node
-		for _, k := range deepest.Children {
-			if k.Kind == xdm.KindElement {
+		for k := range deepest.Children() {
+			if k.Kind() == xdm.KindElement {
 				kid = k
 				break
 			}

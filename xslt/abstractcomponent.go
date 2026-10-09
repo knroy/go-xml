@@ -81,9 +81,9 @@ func markAbstract(el *xdm.Node, what string) {
 // abstractStubFor answers the stub body a declaration needs, or nil where the
 // declaration is not an abstract component.
 func abstractStubFor(el *xdm.Node) []Instruction {
-	for _, a := range el.Attrs {
-		if a.Name.URI == abstractMarkerNS && a.Name.Local == "abstract" {
-			return []Instruction{&abstractStub{what: a.Value}}
+	for a := range el.Attrs() {
+		if a.Name().URI == abstractMarkerNS && a.Name().Local == "abstract" {
+			return []Instruction{&abstractStub{what: a.Value()}}
 		}
 	}
 	return nil
@@ -92,9 +92,9 @@ func abstractStubFor(el *xdm.Node) []Instruction {
 // abstractNameOf answers the symbolic name recorded on an abstract
 // declaration, or "" where the declaration is not abstract.
 func abstractNameOf(el *xdm.Node) string {
-	for _, a := range el.Attrs {
-		if a.Name.URI == abstractMarkerNS && a.Name.Local == "abstract" {
-			return a.Value
+	for a := range el.Attrs() {
+		if a.Name().URI == abstractMarkerNS && a.Name().Local == "abstract" {
+			return a.Value()
 		}
 	}
 	return ""

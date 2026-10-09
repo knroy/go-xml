@@ -106,7 +106,7 @@ func checkStreamability(root *xdm.Node) error {
 				"the body of a streamable %s is %v and %v, but §18.1 requires "+
 					"it to be grounded, so it is not "+
 					"guaranteed-streamable (XTSE3430)",
-				el.Name.Local, p.posture, p.sweep)
+				el.Name().Local, p.posture, p.sweep)
 			return false
 		}
 		if e := checkStreamableBody(el, funcs); e != nil {
@@ -239,7 +239,7 @@ func checkStreamableBody(container *xdm.Node, funcs map[funcKey]*streamFunc) err
 			err = fmt.Errorf(
 				"select expression %q in a streamable %s is %v and %v, "+
 					"so it is not guaranteed-streamable (XTSE3430)",
-				src, container.Name.Local, p.posture, p.sweep)
+				src, container.Name().Local, p.posture, p.sweep)
 			return false
 		}
 		return true
@@ -258,16 +258,16 @@ func checkStreamableBody(container *xdm.Node, funcs map[funcKey]*streamFunc) err
 // when its select expression is, so no instruction-level rule beyond that is
 // needed for them.
 func streamableSelect(el *xdm.Node) (string, bool) {
-	if el.Name.URI != xdm.NSXSL {
+	if el.Name().URI != xdm.NSXSL {
 		return "", false
 	}
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "sequence", "copy-of", "value-of":
 		a := el.Attr("", "select")
 		if a == nil {
 			return "", false
 		}
-		return a.Value, true
+		return a.Value(), true
 	}
 	return "", false
 }
@@ -275,10 +275,10 @@ func streamableSelect(el *xdm.Node) (string, bool) {
 // changesFocus reports whether the instruction gives its body a context item
 // other than its parent's, so that the analysis must not descend into it.
 func changesFocus(el *xdm.Node) bool {
-	if el.Name.URI != xdm.NSXSL {
+	if el.Name().URI != xdm.NSXSL {
 		return false
 	}
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "for-each", "for-each-group", "iterate", "apply-templates",
 		"analyze-string", "merge", "fork", "stream", "source-document",
 		"evaluate", "function", "template", "on-completion", "try",

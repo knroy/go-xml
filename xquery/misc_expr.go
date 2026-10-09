@@ -386,7 +386,7 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 				"and its operand is a sequence of %d items", len(seq))
 	}
 	root, ok := seq[0].(*xdm.Node)
-	if !ok || (root.Kind != xdm.KindElement && root.Kind != xdm.KindDocument) {
+	if !ok || (root.Kind() != xdm.KindElement && root.Kind() != xdm.KindDocument) {
 		return nil, xdm.Errorf("XQTY0030",
 			"validate requires an element or document node")
 	}
@@ -401,7 +401,7 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	// XQTY0030 checks rather than inside the assessment below. Checking it
 	// only in the schema-imported path left "validate lax { document {
 	// <a/>, <b/> } }" returning its operand.
-	if root.Kind == xdm.KindDocument {
+	if root.Kind() == xdm.KindDocument {
 		if err := checkValidateDocChildren(root); err != nil {
 			return nil, err
 		}
@@ -437,10 +437,10 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	// distinction is the same one xslt/validate.go draws and is why
 	// SkipIDConstraints is set for the element case.
 	target, docNode := root, false
-	if target.Kind == xdm.KindDocument {
+	if target.Kind() == xdm.KindDocument {
 		var elem *xdm.Node
-		for _, ch := range target.Children {
-			if ch.Kind == xdm.KindElement {
+		for ch := range target.Children() {
+			if ch.Kind() == xdm.KindElement {
 				elem = ch
 				break
 			}
@@ -480,7 +480,7 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 			return nil, xdm.Errorf("XQDY0084",
 				"validate strict: no top-level element declaration for %s "+
 					"in the in-scope schema definitions",
-				target.Name.Lexical())
+				target.Name().Lexical())
 		}
 		verr = schema.Validate(target, vopts)
 	}
@@ -501,8 +501,8 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 // and cbcl-validateexpr-12 a document with no element at all.
 func checkValidateDocChildren(doc *xdm.Node) error {
 	elems := 0
-	for _, ch := range doc.Children {
-		switch ch.Kind {
+	for ch := range doc.Children() {
+		switch ch.Kind() {
 		case xdm.KindElement:
 			elems++
 		case xdm.KindComment, xdm.KindPI:
@@ -511,7 +511,7 @@ func checkValidateDocChildren(doc *xdm.Node) error {
 			return xdm.Errorf("XQDY0061",
 				"validate: the operand document node has a %s child, and "+
 					"§3.21 permits only one element plus comments and "+
-					"processing instructions", ch.Kind)
+					"processing instructions", ch.Kind())
 		}
 	}
 	if elems != 1 {
@@ -545,7 +545,7 @@ func checkValidateDocChildren(doc *xdm.Node) error {
 // belongs with a real schema processor; what this provides is the annotation,
 // which is the part the data model's ID properties are derived from.
 func annotateBuiltinXSIType(n *xdm.Node) {
-	if n.Kind == xdm.KindElement {
+	if n.Kind() == xdm.KindElement {
 		if a := n.Attr(xdm.NSXSI, "type"); a != nil {
 			// The value is a QName in the element's namespace scope, so the
 			// prefix is resolved rather than assumed to be "xs": a query is
@@ -555,7 +555,7 @@ func annotateBuiltinXSIType(n *xdm.Node) {
 			// no-break space is part of the name -- stripping it made
 			// "<NBSP>xs:integer" annotate as xs:integer, a type the document
 			// never named.
-			prefix, local := "", xdm.TrimXMLSpace(a.Value)
+			prefix, local := "", xdm.TrimXMLSpace(a.Value())
 			if i := strings.IndexByte(local, ':'); i >= 0 {
 				prefix, local = local[:i], local[i+1:]
 			}
@@ -564,7 +564,7 @@ func annotateBuiltinXSIType(n *xdm.Node) {
 			}
 		}
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		annotateBuiltinXSIType(c)
 	}
 }

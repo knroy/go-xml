@@ -295,7 +295,7 @@ func (s *Stylesheet) eligibleInitialFunction(name xdm.QName, arity int) bool {
 // is the same answer walking up to the package would give for a manifest that
 // listed it by a name it does not have.
 func exposedVisibility(el *xdm.Node) visibility {
-	root := el.Parent
+	root := el.Parent()
 	if root == nil || !isXSL(root, "package") {
 		return ""
 	}

@@ -91,7 +91,7 @@ var grammarChildren = map[string]bool{
 // checkGrammarChildren applies §4.18 to <grammar> and <div>, and §3's
 // includeContent to <include>, which is the same less <include> itself.
 func checkGrammarChildren(n *xdm.Node) error {
-	scope := n.Name.Local
+	scope := n.Name().Local
 	switch scope {
 	case "grammar", "include":
 	case "div":
@@ -106,21 +106,21 @@ func checkGrammarChildren(n *xdm.Node) error {
 		return nil
 	}
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
-		if scope == "include" && (kid.Name.Local == "include" ||
-			!grammarChildren[kid.Name.Local]) {
+		if scope == "include" && (kid.Name().Local == "include" ||
+			!grammarChildren[kid.Name().Local]) {
 			return fmt.Errorf(
 				"relaxng: <%s> holds <%s>; an <include> takes only "+
 					"<start>, <define> and <div> (section 3)",
-				n.Name.Local, kid.Name.Local)
+				n.Name().Local, kid.Name().Local)
 		}
-		if !grammarChildren[kid.Name.Local] {
+		if !grammarChildren[kid.Name().Local] {
 			return fmt.Errorf(
 				"relaxng: <%s> holds <%s>; a grammar takes only <start>, "+
 					"<define>, <div> and <include> (section 4.18)",
-				n.Name.Local, kid.Name.Local)
+				n.Name().Local, kid.Name().Local)
 		}
 	}
 	return nil
@@ -129,13 +129,13 @@ func checkGrammarChildren(n *xdm.Node) error {
 // divScope returns "grammar" or "include" for the element a <div> sits in,
 // with only <div> between, or "" when it sits anywhere else.
 func divScope(n *xdm.Node) string {
-	for cur := n.Parent; cur != nil && cur.Kind == xdm.KindElement; cur = cur.Parent {
-		if cur.Name.URI != NS {
+	for cur := n.Parent(); cur != nil && cur.Kind() == xdm.KindElement; cur = cur.Parent() {
+		if cur.Name().URI != NS {
 			return ""
 		}
-		switch cur.Name.Local {
+		switch cur.Name().Local {
 		case "grammar", "include":
-			return cur.Name.Local
+			return cur.Name().Local
 		case "div":
 			continue
 		}
@@ -146,19 +146,19 @@ func divScope(n *xdm.Node) string {
 
 // checkSyntax walks a schema document and reports the first violation.
 func checkSyntax(n *xdm.Node) error {
-	if n.Name.URI != NS {
+	if n.Name().URI != NS {
 		// A foreign element is permitted wherever a pattern is not required,
 		// and ignored. Its subtree is not checked, since it is not RELAX NG.
 		return nil
 	}
-	spec, known := specs[n.Name.Local]
+	spec, known := specs[n.Name().Local]
 	if !known {
-		return fmt.Errorf("relaxng: <%s> is not a RELAX NG element", n.Name.Local)
+		return fmt.Errorf("relaxng: <%s> is not a RELAX NG element", n.Name().Local)
 	}
 	// A <choice> of name classes is not a pattern, so the pattern spec does
 	// not describe it: it holds names, and requiring a pattern child would
 	// reject every element that offers two names for itself.
-	if n.Name.Local == "choice" && isNameClassChoice(n) {
+	if n.Name().Local == "choice" && isNameClassChoice(n) {
 		spec = elementSpec{minPatterns: 0, maxPatterns: -1}
 	}
 
@@ -183,19 +183,19 @@ func checkSyntax(n *xdm.Node) error {
 	if spec.maxExcept > 0 {
 		var n_except int
 		for _, kid := range n.ChildElements() {
-			if kid.Name.URI == NS && kid.Name.Local == "except" {
+			if kid.Name().URI == NS && kid.Name().Local == "except" {
 				n_except++
 			}
 			// §3: <data type="NCName"> param* [exceptPattern] </data>.
-			if kid.Name.URI == NS && kid.Name.Local == "param" && n_except > 0 {
+			if kid.Name().URI == NS && kid.Name().Local == "param" && n_except > 0 {
 				return fmt.Errorf("relaxng: <%s> has a <param> after its <except>",
-					n.Name.Local)
+					n.Name().Local)
 			}
 		}
 		if n_except > spec.maxExcept {
 			return fmt.Errorf(
 				"relaxng: <%s> has %d <except> children; at most %d is allowed",
-				n.Name.Local, n_except, spec.maxExcept)
+				n.Name().Local, n_except, spec.maxExcept)
 		}
 	}
 	for _, kid := range n.ChildElements() {
@@ -214,31 +214,31 @@ func checkAttrs(n *xdm.Node, spec elementSpec) error {
 	if spec.nameClass {
 		allowed["name"] = true
 	}
-	for _, a := range n.Attrs {
+	for a := range n.Attrs() {
 		// An attribute in the RELAX NG namespace is not foreign: the language
 		// puts its own attributes in no namespace, so an r:a= is a
 		// misspelling of the language rather than an annotation from
 		// somewhere else, and passing it over hides the mistake.
-		if a.Name.URI == NS {
+		if a.Name().URI == NS {
 			return fmt.Errorf(
 				"relaxng: <%s> has no attribute %q; RELAX NG's own attributes "+
-					"are in no namespace", n.Name.Local, a.Name.Local)
+					"are in no namespace", n.Name().Local, a.Name().Local)
 		}
 		// A foreign-namespaced attribute is permitted and ignored, which is
 		// how a schema carries annotations. xml:base and friends likewise.
-		if a.Name.URI != "" {
+		if a.Name().URI != "" {
 			continue
 		}
-		if commonAttrs[a.Name.Local] || allowed[a.Name.Local] {
+		if commonAttrs[a.Name().Local] || allowed[a.Name().Local] {
 			continue
 		}
 		return fmt.Errorf("relaxng: <%s> has no attribute %q",
-			n.Name.Local, a.Name.Local)
+			n.Name().Local, a.Name().Local)
 	}
 	for _, req := range spec.required {
 		if n.AttrValue(req) == "" {
 			return fmt.Errorf("relaxng: <%s> requires a %s attribute",
-				n.Name.Local, req)
+				n.Name().Local, req)
 		}
 	}
 	return nil
@@ -255,10 +255,10 @@ func checkNameClass(n *xdm.Node, spec elementSpec) error {
 	hasAttr := n.AttrValue("name") != ""
 	var classes int
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
-		switch kid.Name.Local {
+		switch kid.Name().Local {
 		case "name", "anyName", "nsName":
 			classes++
 		case "choice":
@@ -274,12 +274,12 @@ func checkNameClass(n *xdm.Node, spec elementSpec) error {
 	case hasAttr && classes > 0:
 		return fmt.Errorf(
 			"relaxng: <%s> gives a name both as an attribute and as a child",
-			n.Name.Local)
+			n.Name().Local)
 	case !hasAttr && classes == 0:
-		return fmt.Errorf("relaxng: <%s> has no name", n.Name.Local)
+		return fmt.Errorf("relaxng: <%s> has no name", n.Name().Local)
 	case classes > 1:
 		return fmt.Errorf("relaxng: <%s> has more than one name class",
-			n.Name.Local)
+			n.Name().Local)
 	}
 	return nil
 }
@@ -288,10 +288,10 @@ func checkNameClass(n *xdm.Node, spec elementSpec) error {
 // patterns.
 func isNameClassChoice(n *xdm.Node) bool {
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
-		switch kid.Name.Local {
+		switch kid.Name().Local {
 		case "name", "anyName", "nsName":
 			return true
 		}
@@ -304,15 +304,15 @@ func checkChildren(n *xdm.Node, spec elementSpec) error {
 	if spec.textOnly {
 		if len(n.ChildElements()) > 0 {
 			return fmt.Errorf("relaxng: <%s> takes text, not elements",
-				n.Name.Local)
+				n.Name().Local)
 		}
 		return nil
 	}
 	if spec.maxPatterns == 0 {
 		for _, kid := range n.ChildElements() {
-			if kid.Name.URI == NS {
+			if kid.Name().URI == NS {
 				return fmt.Errorf("relaxng: <%s> takes no pattern",
-					n.Name.Local)
+					n.Name().Local)
 			}
 		}
 		// Only this element's own character data counts. StringValue()
@@ -324,41 +324,41 @@ func checkChildren(n *xdm.Node, spec elementSpec) error {
 		// which is the shape the compatibility specification's own
 		// documentation annotation takes; the branch below, for elements
 		// that do hold patterns, already looks only at direct children.
-		for _, kid := range n.Children {
-			if kid.Kind == xdm.KindText && !whitespaceOnly(kid.Value) &&
-				n.Name.Local != "value" {
-				return fmt.Errorf("relaxng: <%s> takes no content", n.Name.Local)
+		for kid := range n.Children() {
+			if kid.Kind() == xdm.KindText && !whitespaceOnly(kid.Value()) &&
+				n.Name().Local != "value" {
+				return fmt.Errorf("relaxng: <%s> takes no content", n.Name().Local)
 			}
 		}
 		return nil
 	}
 	count := len(patternChildren(n))
-	if n.Name.Local == "except" && isNameClassExcept(n) {
+	if n.Name().Local == "except" && isNameClassExcept(n) {
 		// An <except> inside a name class holds name classes, which are not
 		// patterns. Counting patterns here would reject every anyName that
 		// excludes a name — the commonest thing an except is used for.
 		count = 0
 		for _, kid := range n.ChildElements() {
-			if kid.Name.URI == NS && (isNameClass(kid.Name.Local) ||
-				kid.Name.Local == "choice") {
+			if kid.Name().URI == NS && (isNameClass(kid.Name().Local) ||
+				kid.Name().Local == "choice") {
 				count++
 			}
 		}
 	}
 	if count < spec.minPatterns {
 		return fmt.Errorf("relaxng: <%s> requires at least %d pattern",
-			n.Name.Local, spec.minPatterns)
+			n.Name().Local, spec.minPatterns)
 	}
 	if spec.maxPatterns >= 0 && count > spec.maxPatterns {
 		return fmt.Errorf("relaxng: <%s> takes at most %d pattern",
-			n.Name.Local, spec.maxPatterns)
+			n.Name().Local, spec.maxPatterns)
 	}
 	// Character data where a pattern belongs is an error: a schema is
 	// elements, and stray text is a typo the author will not otherwise see.
-	for _, kid := range n.Children {
-		if kid.Kind == xdm.KindText && !whitespaceOnly(kid.Value) {
+	for kid := range n.Children() {
+		if kid.Kind() == xdm.KindText && !whitespaceOnly(kid.Value()) {
 			return fmt.Errorf("relaxng: <%s> contains character data",
-				n.Name.Local)
+				n.Name().Local)
 		}
 	}
 	return nil
@@ -378,27 +378,27 @@ func checkAttrValues(n *xdm.Node) error {
 	}
 	// §3: method ::= choice | interleave, on a lone <start> or <define> as
 	// much as on one of several.
-	if n.Name.Local == "start" || n.Name.Local == "define" {
-		for _, a := range n.Attrs {
-			if a.Name.URI != "" || a.Name.Local != "combine" {
+	if n.Name().Local == "start" || n.Name().Local == "define" {
+		for a := range n.Attrs() {
+			if a.Name().URI != "" || a.Name().Local != "combine" {
 				continue
 			}
-			if c := normalizeToken(a.Value); c != "choice" && c != "interleave" {
+			if c := normalizeToken(a.Value()); c != "choice" && c != "interleave" {
 				return fmt.Errorf(
 					"relaxng: <%s> has combine=%q, which is neither choice nor interleave",
-					n.Name.Local, a.Value)
+					n.Name().Local, a.Value())
 			}
 		}
 	}
-	switch n.Name.Local {
+	switch n.Name().Local {
 	case "element", "attribute":
 		if v := n.AttrValue("name"); v != "" {
 			if !isQName(normalizeToken(v)) {
 				return fmt.Errorf(
-					"relaxng: <%s> name %q is not a QName", n.Name.Local, v)
+					"relaxng: <%s> name %q is not a QName", n.Name().Local, v)
 			}
 		}
-		if n.Name.Local == "attribute" {
+		if n.Name().Local == "attribute" {
 			ns, _ := nsInForce(n)
 			if err := checkAttributeName(n, normalizeToken(n.AttrValue("name")),
 				ns); err != nil {
@@ -409,7 +409,7 @@ func checkAttrValues(n *xdm.Node) error {
 		if v := n.AttrValue("name"); v != "" {
 			if !isNCName4(normalizeToken(v)) {
 				return fmt.Errorf(
-					"relaxng: <%s> name %q is not an NCName", n.Name.Local, v)
+					"relaxng: <%s> name %q is not an NCName", n.Name().Local, v)
 			}
 		}
 	case "name":
@@ -528,11 +528,11 @@ func isHex(c byte) bool {
 // descendant of the first child" — that is, within the name class itself, and
 // not below an <except>, which negates rather than names.
 func namesAnAttribute(n *xdm.Node) bool {
-	for cur := n.Parent; cur != nil && cur.Kind == xdm.KindElement; cur = cur.Parent {
-		if cur.Name.URI != NS {
+	for cur := n.Parent(); cur != nil && cur.Kind() == xdm.KindElement; cur = cur.Parent() {
+		if cur.Name().URI != NS {
 			return false
 		}
-		switch cur.Name.Local {
+		switch cur.Name().Local {
 		case "attribute":
 			return true
 		case "except":
@@ -550,11 +550,11 @@ func namesAnAttribute(n *xdm.Node) bool {
 // isNameClassExcept reports whether an <except> belongs to a name class
 // rather than to a <data>.
 func isNameClassExcept(n *xdm.Node) bool {
-	p := n.Parent
-	if p == nil || p.Kind != xdm.KindElement || p.Name.URI != NS {
+	p := n.Parent()
+	if p == nil || p.Kind() != xdm.KindElement || p.Name().URI != NS {
 		return false
 	}
-	return p.Name.Local == "anyName" || p.Name.Local == "nsName"
+	return p.Name().Local == "anyName" || p.Name().Local == "nsName"
 }
 
 // checkNameClassExcept applies §4.16 to <anyName> and <nsName>.
@@ -565,35 +565,35 @@ func isNameClassExcept(n *xdm.Node) bool {
 // its namespace. Both are refused because the result matches nothing, which
 // notAllowed already says plainly.
 func checkNameClassExcept(n *xdm.Node) error {
-	if n.Name.Local != "anyName" && n.Name.Local != "nsName" {
+	if n.Name().Local != "anyName" && n.Name().Local != "nsName" {
 		return nil
 	}
 	var excepts int
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
 		// §3: <anyName> [exceptNameClass] </anyName>, and the same for
 		// nsName. Anything else here would be silently ignored.
-		if kid.Name.Local != "except" {
+		if kid.Name().Local != "except" {
 			return fmt.Errorf("relaxng: <%s> holds <%s>; it takes only <except>",
-				n.Name.Local, kid.Name.Local)
+				n.Name().Local, kid.Name().Local)
 		}
 		excepts++
 		if excepts > 1 {
 			return fmt.Errorf(
-				"relaxng: <%s> has more than one <except>", n.Name.Local)
+				"relaxng: <%s> has more than one <except>", n.Name().Local)
 		}
 		// anyName may hold no anyName below its except; nsName may hold
 		// neither.
 		bad := []string{"anyName"}
-		if n.Name.Local == "nsName" {
+		if n.Name().Local == "nsName" {
 			bad = append(bad, "nsName")
 		}
 		if found := findDescendant(kid, bad); found != "" {
 			return fmt.Errorf(
 				"relaxng: <%s> excepts <%s>, which excludes everything it "+
-					"admits (section 4.16)", n.Name.Local, found)
+					"admits (section 4.16)", n.Name().Local, found)
 		}
 	}
 	return nil
@@ -602,11 +602,11 @@ func checkNameClassExcept(n *xdm.Node) error {
 // findDescendant returns the first of names found at or below n.
 func findDescendant(n *xdm.Node, names []string) string {
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
 		for _, want := range names {
-			if kid.Name.Local == want {
+			if kid.Name().Local == want {
 				return want
 			}
 		}

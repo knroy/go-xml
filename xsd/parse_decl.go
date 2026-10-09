@@ -113,14 +113,14 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 		if p.inOverride {
 			miss = nil
 		}
-		p.resolveTypeRefLazy(el, typeAttr.Value,
+		p.resolveTypeRefLazy(el, typeAttr.Value(),
 			func(t Type) {
 				d.Type = t
 				p.rejectDirectNotation(el, t)
 			},
 			miss)
 	case inline != nil:
-		if inline.Name.Local == "simpleType" {
+		if inline.Name().Local == "simpleType" {
 			d.Type = p.readSimpleType(inline)
 		} else {
 			d.Type = p.readComplexType(inline)
@@ -189,10 +189,10 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 	p.checkSubstitutionGroupCircular(el, d)
 
 	for _, c := range p.contentChildren(el) {
-		if c.Name.URI != NSSchema {
+		if c.Name().URI != NSSchema {
 			continue
 		}
-		switch c.Name.Local {
+		switch c.Name().Local {
 		case "key", "keyref", "unique":
 			if ic := p.readIdentityConstraint(c); ic != nil {
 				slot := len(d.IdentityConstraints)
@@ -261,9 +261,9 @@ func (p *parser) readAttributeDecl(el *xdm.Node, scope Scope) *AttributeDecl {
 	// attA004 (""), attA005 ("Qualified") and attA006 ("Unqualified") all
 	// loaded clean before this.
 	if f := el.Attr("", "form"); f != nil &&
-		f.Value != "qualified" && f.Value != "unqualified" {
+		f.Value() != "qualified" && f.Value() != "unqualified" {
 		p.errs = append(p.errs, errorAt(el, "src-attribute",
-			"form=%q is not one of qualified or unqualified", f.Value))
+			"form=%q is not one of qualified or unqualified", f.Value()))
 	}
 
 	if scope == ScopeLocal {
@@ -307,12 +307,12 @@ func (p *parser) readAttributeDecl(el *xdm.Node, scope Scope) *AttributeDecl {
 			"an attribute declaration may not have both a type attribute "+
 				"and an inline simpleType"))
 	case typeAttr != nil:
-		p.resolveTypeRef(el, typeAttr.Value, func(t Type) {
+		p.resolveTypeRef(el, typeAttr.Value(), func(t Type) {
 			st, ok := t.(*SimpleType)
 			if !ok {
 				p.errs = append(p.errs, errorAt(el, "src-resolve",
 					"attribute type %q is a complex type; attributes must "+
-						"have a simple type", typeAttr.Value))
+						"have a simple type", typeAttr.Value()))
 				return
 			}
 			d.Type = st
@@ -399,7 +399,7 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 	use.Inheritable = p.boolAttr(el, "inheritable", false)
 
 	refAttr := el.Attr("", "ref")
-	if refAttr != nil && refAttr.Value == "" {
+	if refAttr != nil && refAttr.Value() == "" {
 		// An empty ref is not "no ref": it is a ref whose value is not a
 		// QName. Testing the string against "" treated the two alike and
 		// read the element as a nameless local declaration. attE007.
@@ -408,7 +408,7 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 		return nil
 	}
 	if refAttr != nil {
-		ref := refAttr.Value
+		ref := refAttr.Value()
 		if el.AttrValue("name") != "" {
 			p.errs = append(p.errs, errorAt(el, "src-attribute.3.1",
 				"an attribute use may not have both ref and name"))
@@ -520,7 +520,7 @@ func (p *parser) readNotation(el *xdm.Node) *NotationDecl {
 	for _, c := range p.contentChildren(el) {
 		p.errs = append(p.errs, errorAt(el, "src-notation",
 			"%s is not permitted inside a notation declaration",
-			c.Name.Local))
+			c.Name().Local))
 		break
 	}
 
@@ -547,20 +547,20 @@ func (p *parser) readNotation(el *xdm.Node) *NotationDecl {
 // notatE003's foo="bar" tests, alongside notatE002's attribute placed in the
 // schema namespace itself.
 func (p *parser) checkNotationAttrs(el *xdm.Node) {
-	for _, a := range el.Attrs {
-		if a.Name.URI == "" {
-			switch a.Name.Local {
+	for a := range el.Attrs() {
+		if a.Name().URI == "" {
+			switch a.Name().Local {
 			case "id", "name", "public", "system":
 				continue
 			}
 			p.errs = append(p.errs, errorAt(el, "src-notation",
-				"%q is not an attribute of a notation declaration", a.Name.Local))
+				"%q is not an attribute of a notation declaration", a.Name().Local))
 			continue
 		}
-		if a.Name.URI == NSSchema {
+		if a.Name().URI == NSSchema {
 			p.errs = append(p.errs, errorAt(el, "src-notation",
 				"a notation declaration may not carry %q from the schema namespace",
-				a.Name.Local))
+				a.Name().Local))
 		}
 	}
 }
@@ -607,10 +607,10 @@ func (p *parser) readAttributes(el *xdm.Node, target *[]*AttributeUse, into **Wi
 	var wildcard *Wildcard
 
 	for _, c := range p.contentChildren(el) {
-		if c.Name.URI != NSSchema {
+		if c.Name().URI != NSSchema {
 			continue
 		}
-		switch c.Name.Local {
+		switch c.Name().Local {
 		case "attribute":
 			if u := p.readAttributeUse(c); u != nil {
 				*target = append(*target, u)
@@ -754,7 +754,7 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 	if a := el.Attr("", "processContents"); a == nil {
 		w.ProcessContents = ProcessStrict
 	} else {
-		switch a.Value {
+		switch a.Value() {
 		case "strict":
 			w.ProcessContents = ProcessStrict
 		case "lax":
@@ -764,7 +764,7 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 		default:
 			p.errs = append(p.errs, errorAt(el, "",
 				"processContents=%q is not one of strict, lax or skip",
-				a.Value))
+				a.Value()))
 		}
 	}
 
@@ -787,7 +787,7 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 		if el.Attr("", "namespace") != nil {
 			p.errs = append(p.errs, errorAt(el, "",
 				"namespace and notNamespace may not both be present on <xs:%s>",
-				el.Name.Local))
+				el.Name().Local))
 		}
 		w.Kind = NSNot
 		for _, word := range splitFields(not) {
@@ -898,7 +898,7 @@ func (p *parser) readDisallowedNames(el *xdm.Node, w *Wildcard) {
 			"notQName requires XSD 1.1"))
 		return
 	}
-	isAttr := el.Name.Local == "anyAttribute"
+	isAttr := el.Name().Local == "anyAttribute"
 	for _, word := range splitFields(raw) {
 		switch word {
 		case "##defined":

@@ -35,7 +35,7 @@ func TestInScopeNamespacesShared(t *testing.T) {
 	for _, n := range []*xdm.Node{c, d} {
 		got := inScopeNamespacesShared(n)
 		if !reflect.DeepEqual(got, n.InScopeNamespaces()) || got["p"] != "urn:q" {
-			t.Errorf("%s: got %v, want %v", n.Name.Local, got, n.InScopeNamespaces())
+			t.Errorf("%s: got %v, want %v", n.Name().Local, got, n.InScopeNamespaces())
 		}
 	}
 

@@ -213,7 +213,7 @@ func (p *parser) readAlternative(el *xdm.Node) *TypeAlternative {
 	if ref := el.AttrValue("type"); ref != "" {
 		p.resolveTypeRef(el, ref, func(t Type) { alt.Type = t })
 	} else if inline := p.childElement(el, "simpleType", "complexType"); inline != nil {
-		if inline.Name.Local == "simpleType" {
+		if inline.Name().Local == "simpleType" {
 			alt.Type = p.readSimpleType(inline)
 		} else {
 			alt.Type = p.readComplexType(inline)
@@ -381,7 +381,7 @@ func deepCopyNode(n *xdm.Node) *xdm.Node {
 }
 
 func isCommentOrPI(n *xdm.Node) bool {
-	return n.Kind == xdm.KindComment || n.Kind == xdm.KindPI
+	return n.Kind() == xdm.KindComment || n.Kind() == xdm.KindPI
 }
 
 // scopeForAlternative returns the context element a type alternative's test is
@@ -406,16 +406,16 @@ func isCommentOrPI(n *xdm.Node) bool {
 // failed; every alternative then fell through to the xs:error default.
 func scopeForAlternative(el *xdm.Node) *xdm.Node {
 	tree := xdm.NewTree()
-	clone := xdmbuild.NewElement(el.Name)
+	clone := xdmbuild.NewElement(el.Name())
 	// The base URI is a property of the element, not of its content, and
 	// survives the copy: cta0021 asks for it. TypeAnnotation is deliberately
 	// left zero. Conditional type assignment chooses the type; it cannot
 	// presuppose one.
-	clone.SetBaseURI(el.BaseURI)
-	for _, a := range el.Attrs {
+	clone.SetBaseURI(el.BaseURI())
+	for a := range el.Attrs() {
 		// The attributes come across without their annotations for the
 		// same reason the element does.
-		clone.AddAttr(xdmbuild.NewAttribute(a.Name, a.Value))
+		clone.AddAttr(xdmbuild.NewAttribute(a.Name(), a.Value()))
 	}
 	// Namespace bindings an ancestor declared are still in scope for the
 	// element, and a QName-valued attribute cannot be expanded without
@@ -453,10 +453,10 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 	// only where the element does not carry one of the same name: the
 	// nearest declaration wins.
 	for _, a := range v.inherited {
-		if scoped.Attr(a.Name.URI, a.Name.Local) != nil {
+		if scoped.Attr(a.Name().URI, a.Name().Local) != nil {
 			continue
 		}
-		scoped.AddAttr(xdmbuild.NewAttribute(a.Name, a.Value))
+		scoped.AddAttr(xdmbuild.NewAttribute(a.Name(), a.Value()))
 	}
 
 	for _, alt := range decl.Alternatives {
@@ -528,7 +528,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
 			continue
 		}
 		a := el.Attr(use.Decl.Name.URI, use.Decl.Name.Local)
-		if a != nil && a.TypeAnnotation == "" {
+		if a != nil && a.TypeAnnotation() == "" {
 			a.SetTypeAnnotation(annotationName(use.Decl.Type))
 		}
 	}
@@ -543,7 +543,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
 		//
 		// $value carries the typed value instead, which is how an
 		// assertion reaches it.
-		if !isRoot && el.TypeAnnotation == "" {
+		if !isRoot && el.TypeAnnotation() == "" {
 			el.SetTypeAnnotation(annotationName(t.SimpleContent))
 		}
 		return
@@ -554,13 +554,13 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
 	byName := map[xdm.QName]*ElementDecl{}
 	collectElementDecls(t.Particle, byName, map[*Particle]bool{})
 	for _, c := range el.ChildElements() {
-		d, ok := byName[xdm.QName{URI: c.Name.URI, Local: c.Name.Local}]
+		d, ok := byName[xdm.QName{URI: c.Name().URI, Local: c.Name().Local}]
 		if !ok || d.Type == nil {
 			continue
 		}
 		switch dt := d.Type.(type) {
 		case *SimpleType:
-			if c.TypeAnnotation == "" {
+			if c.TypeAnnotation() == "" {
 				c.SetTypeAnnotation(annotationName(dt))
 			}
 		case *ComplexType:
@@ -819,13 +819,13 @@ func listItemTypeOf(t *SimpleType) *SimpleType {
 // scoping works: an inner xmlns:p rebinding p hides the outer one.
 func inScopeNamespaces(el *xdm.Node) map[string]string {
 	out := map[string]string{}
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		for _, ns := range cur.Namespaces {
-			if _, seen := out[ns.Name.Local]; !seen {
-				out[ns.Name.Local] = ns.Value
+		for ns := range cur.NamespaceDecls() {
+			if _, seen := out[ns.Name().Local]; !seen {
+				out[ns.Name().Local] = ns.Value()
 			}
 		}
 	}

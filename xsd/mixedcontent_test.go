@@ -28,13 +28,13 @@ func TestValidateRecordsMixedContent(t *testing.T) {
 	}
 	r := tree.Root.FirstChild()
 	m, k := r.FirstChild(), r.ChildAt(1)
-	if r.MixedContent || !r.NoTypedValue {
-		t.Errorf("r (element-only): MixedContent=%v NoTypedValue=%v", r.MixedContent, r.NoTypedValue)
+	if r.MixedContent() || !r.NoTypedValue() {
+		t.Errorf("r (element-only): MixedContent=%v NoTypedValue=%v", r.MixedContent(), r.NoTypedValue())
 	}
-	if !m.MixedContent || m.TypeAnnotation != "anyType" {
-		t.Errorf("m (anonymous mixed): MixedContent=%v annotation=%q", m.MixedContent, m.TypeAnnotation)
+	if !m.MixedContent() || m.TypeAnnotation() != "anyType" {
+		t.Errorf("m (anonymous mixed): MixedContent=%v annotation=%q", m.MixedContent(), m.TypeAnnotation())
 	}
-	if k.MixedContent {
+	if k.MixedContent() {
 		t.Errorf("k (xs:anyType): MixedContent=true")
 	}
 }

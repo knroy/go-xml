@@ -30,8 +30,8 @@ func TestDropAttrs(t *testing.T) {
 	dropAttrs(el, "required", "tunnel")
 
 	got := map[string]string{}
-	for _, a := range el.Attrs {
-		got[a.Name.URI+"|"+a.Name.Local] = a.Value
+	for a := range el.Attrs() {
+		got[a.Name().URI+"|"+a.Name().Local] = a.Value()
 	}
 	want := map[string]string{
 		"|name":                                "v",

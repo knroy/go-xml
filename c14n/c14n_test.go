@@ -37,10 +37,10 @@ func find(t testing.TB, n *xdm.Node, local string) *xdm.Node {
 	t.Helper()
 	var walk func(*xdm.Node) *xdm.Node
 	walk = func(n *xdm.Node) *xdm.Node {
-		if n.Kind == xdm.KindElement && n.Name.Local == local {
+		if n.Kind() == xdm.KindElement && n.Name().Local == local {
 			return n
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			if f := walk(c); f != nil {
 				return f
 			}
@@ -470,7 +470,7 @@ func TestFuncCalledAtMostOnce(t *testing.T) {
 		}
 		for x, c := range calls {
 			if c > 1 {
-				t.Errorf("%s: %v %q called %d times", alg, x.Kind, x.Name.Local, c)
+				t.Errorf("%s: %v %q called %d times", alg, x.Kind(), x.Name().Local, c)
 			}
 		}
 	}
@@ -546,7 +546,7 @@ func TestElementOutAttributeIn(t *testing.T) {
 	doc := parse(t, `<a><b c="1" d="2">t</b></a>`)
 	b := find(t, doc, "b")
 	ns := Func(doc, func(n *xdm.Node) bool {
-		return n != b && !(n.Kind == xdm.KindAttribute && n.Name.Local == "d")
+		return n != b && !(n.Kind() == xdm.KindAttribute && n.Name().Local == "d")
 	})
 	for _, alg := range allAlgorithms {
 		if got, want := canonSet(t, ns, alg), `<a> c="1"t</a>`; got != want {
@@ -601,7 +601,7 @@ func TestSubtreeContains(t *testing.T) {
 		{r, false}, {c, false}, {tr.Root, false},
 	} {
 		if got := set.Contains(tc.n); got != tc.want {
-			t.Errorf("Contains(%v %s) = %v, want %v", tc.n.Kind, tc.n.Name.Local, got, tc.want)
+			t.Errorf("Contains(%v %s) = %v, want %v", tc.n.Kind(), tc.n.Name().Local, got, tc.want)
 		}
 	}
 }
@@ -676,7 +676,7 @@ func TestXML11Refused(t *testing.T) {
 func TestApexOwnXMLAttributes(t *testing.T) {
 	doc := parse(t, `<r><e xml:lang="en" xml:space="preserve" xml:base="b/" xml:id="i" k="v"/></r>`)
 	elementsOnly := Func(doc, func(n *xdm.Node) bool {
-		return n.Kind != xdm.KindAttribute && n.Name.Local != "r"
+		return n.Kind() != xdm.KindAttribute && n.Name().Local != "r"
 	})
 	for alg, want := range map[Algorithm]string{
 		Inclusive11: `<e xml:base="b/" xml:lang="en" xml:space="preserve"></e>`,

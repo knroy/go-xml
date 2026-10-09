@@ -146,7 +146,7 @@ func parentOf(n *xdm.Node) *xdm.Node {
 	if n == nil {
 		return nil
 	}
-	return n.Parent
+	return n.Parent()
 }
 
 // argNodes returns argument i as a slice of nodes, rejecting any item that is

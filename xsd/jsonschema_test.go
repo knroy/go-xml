@@ -50,13 +50,13 @@ func TestSchemaForJSONAnnotates(t *testing.T) {
 			continue
 		}
 		root := tree.Root.FirstChild()
-		if root.TypeAnnotation != tc.root {
-			t.Errorf("%s: root annotated %q, want %q", tc.in, root.TypeAnnotation, tc.root)
+		if root.TypeAnnotation() != tc.root {
+			t.Errorf("%s: root annotated %q, want %q", tc.in, root.TypeAnnotation(), tc.root)
 		}
 		got := ""
-		for _, c := range root.Children {
-			if c.Kind == xdm.KindElement {
-				got = c.TypeAnnotation
+		for c := range root.Children() {
+			if c.Kind() == xdm.KindElement {
+				got = c.TypeAnnotation()
 			}
 		}
 		if got != tc.child {
@@ -120,17 +120,17 @@ func TestSchemaForJSONWithinMapAnnotations(t *testing.T) {
 		t.Fatalf("a map of every kind should be valid: %v", err)
 	}
 	root := tree.Root.FirstChild()
-	if root.TypeAnnotation != j+"mapType" {
-		t.Errorf("root annotated %q, want %q", root.TypeAnnotation, j+"mapType")
+	if root.TypeAnnotation() != j+"mapType" {
+		t.Errorf("root annotated %q, want %q", root.TypeAnnotation(), j+"mapType")
 	}
 	seen := 0
-	for _, c := range root.Children {
-		if c.Kind != xdm.KindElement {
+	for c := range root.Children() {
+		if c.Kind() != xdm.KindElement {
 			continue
 		}
 		seen++
-		if got := c.TypeAnnotation; got != want[c.Name.Local] {
-			t.Errorf("%s annotated %q, want %q", c.Name.Local, got, want[c.Name.Local])
+		if got := c.TypeAnnotation(); got != want[c.Name().Local] {
+			t.Errorf("%s annotated %q, want %q", c.Name().Local, got, want[c.Name().Local])
 		}
 	}
 	if seen != len(want) {

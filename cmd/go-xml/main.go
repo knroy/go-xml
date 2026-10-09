@@ -413,8 +413,8 @@ func validateSource(schema *xsd.Schema, doc *xdm.Node, mode string) error {
 	if mode == "strict" {
 		return schema.Validate(doc, opts)
 	}
-	for _, c := range doc.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range doc.Children() {
+		if c.Kind() == xdm.KindElement {
 			return schema.ValidateElementLax(c, opts)
 		}
 	}
