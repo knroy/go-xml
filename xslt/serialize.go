@@ -935,19 +935,6 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// include-content-type="no" the head keeps the meta it was given.
 			s.inHead = true
 			defer func() { s.inHead = false }()
-			enc := s.opts.Encoding
-			if enc == "" {
-				enc = "UTF-8"
-			}
-			media := s.opts.MediaType
-			if media == "" {
-				// The default is text/html for the html *and* xhtml methods.
-				// XHTML served as application/xhtml+xml is the stricter
-				// choice, but the specification names text/html for both,
-				// and this element exists to describe what a browser will
-				// see rather than what the author would prefer.
-				media = "text/html"
-			}
 			// A character map applies to the value of every attribute the
 			// serializer writes, and this one is no exception: XSLT 3.0
 			// section 27.1 puts the character map at the very end of the
@@ -958,7 +945,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// the generated meta element. Not very desirable but that's what
 			// the spec says." Only the value is mapped; the element and
 			// attribute names are markup the map never touches.
-			content := s.mapChars(media + `; charset=` + enc)
+			content := s.mapChars(htmlser.MetaContent(s.opts.MediaType, s.opts.Encoding))
 			// The injected element is indented like a child of <head>,
 			// because that is what it is. Writing it flush against the start
 			// tag while the head's real children were each on their own line

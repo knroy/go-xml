@@ -212,6 +212,9 @@ type serializeOptions struct {
 	// it throughout (xslt/serialize.go, the head branch of writeElement);
 	// only fn:serialize accepted it and wrote the element anyway.
 	includeContentType *bool
+	// mediaType is the media-type parameter, which the html and xhtml
+	// methods write into the meta they add; "" means text/html.
+	mediaType string
 	// standalone is the value of the standalone parameter, "" when it was not
 	// given. It appears in the XML declaration, so asking for it also forces
 	// the declaration to be written.
@@ -527,8 +530,11 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				// map{"html-version":4} was accepted. It selects the
 				// void-element list the html method minimises against.
 				opts.htmlVersion = val
-			case "media-type",
-				"byte-order-mark":
+			case "media-type":
+				// The content of the meta the html and xhtml methods add
+				// (§7.4.13); a returned string has no other use for it.
+				opts.mediaType = val
+			case "byte-order-mark":
 				// Recognised and accepted, and deliberately without effect
 				// here.
 				//
@@ -541,12 +547,7 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				// an artefact of the octet stream -- has nothing to attach to
 				// in a result that never becomes one.
 				//
-				// media-type never touches the character stream at all: the
-				// same spec (section 3, lines 1114-1123) says it annotates the
-				// destination, and "MAY be used to set the media type in an
-				// HTTP header". A returned string has no destination to
-				// annotate. xsl:output, which does write to one, honours both.
-				// xsl:output, which does write bytes, honours both.
+				// xsl:output, which does write bytes, honours it.
 			}
 		}
 	}
@@ -972,7 +973,8 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// The xhtml method writes the same element as XML, closed with the
 		// space the HTML compatibility guidelines ask for (§6.1.14).
 		if htmlHead {
-			meta := `<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"`
+			meta := `<meta http-equiv="Content-Type" content="` +
+				escapeAttr(htmlser.MetaContent(opts.mediaType, opts.encoding)) + `"`
 			if opts.method == "xhtml" {
 				sb.WriteString(meta + ` />`)
 			} else {
@@ -1723,11 +1725,16 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 				return err
 			}
 			opts.htmlVersion = v
-		case "media-type",
-			"byte-order-mark",
+		case "media-type":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.mediaType = v
+		case "byte-order-mark",
 			"parameter-document":
 			// Recognised and accepted. See the element form's arm for why
-			// byte-order-mark and media-type cannot act on a returned string.
+			// byte-order-mark cannot act on a returned string.
 			//
 			// parameter-document is accepted rather than refused because it
 			// is a real parameter this serialiser has nothing to do with: it

@@ -94,3 +94,16 @@ func ReplacedMeta(n *xdm.Node) bool {
 	}
 	return false
 }
+
+// MetaContent is the content attribute of the meta element the html and xhtml
+// methods add (§7.4.13, §6.1.14): the media-type parameter, text/html when
+// absent, and the charset, UTF-8 when no encoding is given.
+func MetaContent(mediaType, encoding string) string {
+	if mediaType == "" {
+		mediaType = "text/html"
+	}
+	if encoding == "" {
+		encoding = "UTF-8"
+	}
+	return mediaType + "; charset=" + encoding
+}

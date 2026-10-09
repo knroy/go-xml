@@ -63,3 +63,33 @@ func TestSerializeIncludeContentTypeReplacesMeta(t *testing.T) {
 		}
 	}
 }
+
+// TestSerializeMetaHonoursMediaType: the meta the html and xhtml methods add
+// carries the media-type parameter and the encoding (§7.4.13: "The content
+// type MUST be set to the value given for the media-type parameter"), as
+// xsl:output's does. fn:serialize wrote text/html; charset=UTF-8 whatever it
+// was asked. Both the map and the parameter-element forms are read.
+func TestSerializeMetaHonoursMediaType(t *testing.T) {
+	const doc = `parse-xml('<html><head/></html>')`
+	for _, c := range []struct{ query, want string }{
+		{`serialize(` + doc + `, map{'method':'html','media-type':'text/foo'})`,
+			`<meta http-equiv="Content-Type" content="text/foo; charset=UTF-8">`},
+		{`serialize(` + doc + `, map{'method':'xhtml','media-type':'a/b"c','encoding':'iso-8859-1'})`,
+			`<meta http-equiv="Content-Type" content="a/b&quot;c; charset=iso-8859-1" />`},
+		{`serialize(` + doc + `, map{'method':'html'})`,
+			`<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">`},
+		{`serialize(` + doc + `, parse-xml('<output:serialization-parameters ` +
+			`xmlns:output="http://www.w3.org/2010/xslt-xquery-serialization">` +
+			`<output:method value="html"/><output:media-type value="text/foo"/>` +
+			`</output:serialization-parameters>')/*)`,
+			`<meta http-equiv="Content-Type" content="text/foo; charset=UTF-8">`},
+	} {
+		got, err := evalSerialize(t, c.query)
+		if err != nil {
+			t.Fatalf("%s: %v", c.query, err)
+		}
+		if !strings.Contains(got, c.want) {
+			t.Errorf("%s:\nwant %s in %s", c.query, c.want, got)
+		}
+	}
+}
