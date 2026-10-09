@@ -72,10 +72,8 @@ const abstractMarkerNS = "http://go-xml.invalid/xslt/abstract"
 
 // markAbstract records that a declaration is an abstract component, so that
 // the compiler gives it a stub body.
-func markAbstract(el *xdm.Node, what string) {
-	a := xdm.NewNode(xdm.KindAttribute, xdm.QName{URI: abstractMarkerNS, Local: "abstract"}, what)
-	a.SetParent(el)
-	el.SetAttrs(attrsWith(el, a))
+func (e pkgEdits) markAbstract(el *xdm.Node, what string) {
+	e.addAttr(el, xdm.QName{URI: abstractMarkerNS, Local: "abstract"}, what)
 }
 
 // abstractStubFor answers the stub body a declaration needs, or nil where the

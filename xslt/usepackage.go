@@ -963,6 +963,11 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	if err := c.runStaticPhase(doc); err != nil {
 		return nil, err
 	}
+	// The package is read, from here on, as the copy the static phase built.
+	u.doc = c.prunedModule(doc)
+	if u.root = firstElement(u.doc); u.root == nil {
+		return nil, fmt.Errorf("XTSE3000: the package named %s is empty", u.name)
+	}
 	// The used package's own static variables are kept for the moment it is
 	// compiled, which happens later and needs them: package-version-001
 	// declares a static parameter and spells a shadow attribute with it.
@@ -1695,7 +1700,11 @@ func contextItemAttr(el *xdm.Node, name string) string {
 // deleted outright, so that no later phase can bind a reference to it. That is
 // what makes use-package-003 report XPST0017 for a call to a private function
 // rather than quietly calling it.
+//
+// The used package's tree is not edited: the decisions are recorded in e, and
+// the tree compiled is a copy built with them applied.
 func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
+	e := pkgEdits{}
 	keep := map[*xdm.Node]bool{}
 	for _, comp := range u.comps {
 		if comp.sym.kind == kindMode &&
@@ -1783,15 +1792,15 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		if comp.declared == visAbstract &&
 			u.overriding[comp.sym.key()] == nil &&
 			!(u.hiddenByAccept[comp.sym.key()] &&
-				!referencedWithin(u.root, comp)) {
-			markAbstract(comp.el, comp.sym.String())
+				!referencedWithin(e, u.root, comp)) {
+			e.markAbstract(comp.el, comp.sym.String())
 			keep[comp.el] = true
 			continue
 		}
 		if (v == visHidden || v == visAbsent) &&
 			u.overriding[comp.sym.key()] == nil &&
 			(u.hiddenByAccept[comp.sym.key()] ||
-				!referencedWithin(u.root, comp)) {
+				!referencedWithin(e, u.root, comp)) {
 			// A component the using package cannot see is deleted, so that a
 			// reference to it fails as XPST0017 or XTSE0650 rather than
 			// quietly binding -- which is what use-package-003 asks for.
@@ -1831,8 +1840,8 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		}
 		if ov, ok := u.overriding[comp.sym.String()]; ok {
 			noteOverridingDecl(ov, compilePackage)
-			setAttr(ov, spliced, "yes")
-			appended = append(appended, rewriteOverride(ov, comp.el))
+			e.setAttr(ov, spliced, "yes")
+			appended = append(appended, e.rewriteOverride(ov, comp.el))
 		}
 	}
 	var kept []*xdm.Node
@@ -1892,8 +1901,8 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 				// compileDocument, with compilePackage set to the used
 				// package. See overridingPackage.
 				noteOverridingDecl(ov, compilePackage)
-				kept = append(kept, rewriteOverride(ov, ch))
-				if !isAbstractDecl(ch) {
+				kept = append(kept, e.rewriteOverride(ov, ch))
+				if !e.isAbstractDecl(ch) {
 					kept = append(kept, ch)
 				}
 				continue
@@ -1902,11 +1911,11 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		kept = append(kept, ch)
 	}
 	kept = append(kept, appended...)
-	u.root.SetChildren(kept)
-	for _, ch := range kept {
-		ch.SetParent(u.root)
-	}
-	forgetSharedNS() // parent links changed
+	u.doc, u.root = e.rebuild(u.doc, u.root, kept)
+	// The rebuilt tree has had its static phase: it is the pruned copy, with
+	// composition's changes made.
+	c.staticDone[u.doc] = u.doc
+	forgetSharedNS() // the declarations are new nodes
 	// The used package's static variables are its own, so they are put back
 	// for the compilation and taken away again after: a using package must
 	// not see them, and the two packages may legitimately declare the same
@@ -1995,7 +2004,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 // spelling the same name counts -- but it errs towards keeping a declaration,
 // and keeping one the package does not use costs nothing while deleting one
 // it does use breaks the package outright.
-func referencedWithin(root *xdm.Node, comp *component) bool {
+func referencedWithin(e pkgEdits, root *xdm.Node, comp *component) bool {
 	name := comp.el.AttrValue("name")
 	if name == "" {
 		return false
@@ -2029,8 +2038,8 @@ func referencedWithin(root *xdm.Node, comp *component) bool {
 			return false
 		}
 		if n.Kind() == xdm.KindElement {
-			for a := range n.Attrs() {
-				if mentionsComponent(n, a.Value(), local, comp) {
+			for _, a := range e.attrList(n) {
+				if mentionsComponent(n, a.value, local, comp) {
 					return true
 				}
 			}
@@ -2136,8 +2145,8 @@ func namesDynamicFunction(text string) bool {
 // The effective visibility is not consulted: what matters here is whether the
 // declaration has a body, and only the declaration's own visibility attribute
 // says that.
-func isAbstractDecl(el *xdm.Node) bool {
-	return visibility(strings.TrimSpace(el.AttrValue("visibility"))) ==
+func (e pkgEdits) isAbstractDecl(el *xdm.Node) bool {
+	return visibility(strings.TrimSpace(e.attrValue(el, "visibility"))) ==
 		visAbstract
 }
 
@@ -2262,7 +2271,7 @@ var originalSerial int
 // so all six land on the generated name without a rewriter each. Element
 // names are not affected: they were resolved when the tree was parsed, and
 // the compiler reads Node.Name rather than re-expanding the prefix.
-func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
+func (e pkgEdits) rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 	// The overriding declaration is about to be spliced into the used
 	// package's tree, which detaches it from the xsl:override it was written
 	// under. [xsl:]default-mode is resolved by walking ancestors, so a
@@ -2273,9 +2282,9 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 	// that carries both a match and a name: the name makes it a component and
 	// so a candidate for the splice, and after the move its unprefixed @match
 	// named the unnamed mode instead of m3.
-	if overriding.Attr("", "default-mode") == nil {
+	if !e.hasAttr(overriding, "default-mode") {
 		if dm, err := defaultModeAt(overriding); err == nil && dm != "" {
-			setAttr(overriding, "default-mode", clarkToEQName(dm))
+			e.setAttr(overriding, "default-mode", clarkToEQName(dm))
 		}
 	}
 	originalSerial++
@@ -2299,13 +2308,11 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 	// package overrode it. function-lookup-005's f:subtract is abstract in
 	// the used package and overridden in the using one, and must still be
 	// invisible to the used package's own function-lookup.
-	if realName := original.AttrValue("name"); realName != "" &&
-		!isAbstractDecl(original) {
-		marker := xdm.NewNode(xdm.KindAttribute, xdm.QName{URI: overriddenMarkerNS, Local: "name"}, realName)
-		marker.SetParent(original)
-		original.SetAttrs(attrsWith(original, marker))
+	if realName := e.attrValue(original, "name"); realName != "" &&
+		!e.isAbstractDecl(original) {
+		e.addAttr(original, xdm.QName{URI: overriddenMarkerNS, Local: "name"}, realName)
 	}
-	setAttr(original, "name", "Q{"+uri+"}original")
+	e.setAttr(original, "name", "Q{"+uri+"}original")
 	if isXSL(original, "param") {
 		// The renamed original is no longer a stylesheet parameter. It is
 		// reachable only through xsl:original, under a name no caller can
@@ -2320,7 +2327,7 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 		// xsl:original to read, and the declaration is marked abstract: that
 		// defers it, so only a stylesheet that actually reads xsl:original
 		// fails, and it fails as the XTDE3052 for a component with no body.
-		original.SetName(xdm.QName{
+		e.rename(original, xdm.QName{
 			Prefix: original.Name().Prefix, URI: xdm.NSXSL, Local: "variable",
 		})
 		// required and tunnel belong to xsl:param alone -- 9.2's signature
@@ -2332,16 +2339,16 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 		// compatible processing stopped swallowing the report. Dropping them
 		// changes nothing else: compileVariable reads both with yesAttr,
 		// which answers false for an attribute that is not there.
-		dropAttrs(original, "required", "tunnel")
-		if original.AttrValue("select") == "" && len(original.ChildElements()) == 0 {
-			markAbstract(original, "the overridden parameter's default")
+		e.dropAttrs(original, "required", "tunnel")
+		if e.attrValue(original, "select") == "" && len(original.ChildElements()) == 0 {
+			e.markAbstract(original, "the overridden parameter's default")
 		}
 	}
 	if isXSL(original, "template") || isXSL(original, "function") {
 		// A renamed component must not stay visible under its old identity,
 		// and a named template renamed this way is no longer an eligible
 		// initial template either.
-		setAttr(original, "visibility", "private")
+		e.setAttr(original, "visibility", "private")
 	}
 	// The rebinding goes on the overriding declaration and nowhere higher.
 	// Widening it to xsl:override or to the package element would capture
@@ -2363,13 +2370,8 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 		if ns != xdm.NSXSL || prefix == "" {
 			continue
 		}
-		decls := make([]*xdm.Node, overriding.NumNamespaceDecls(), overriding.NumNamespaceDecls()+1)
-		for i := range decls {
-			decls[i] = overriding.NamespaceDeclAt(i)
-		}
-		overriding.SetNamespaceDecls(append(decls, xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: prefix}, uri)))
+		e.addNS(overriding, prefix, uri)
 	}
-	forgetSharedNS() // overriding's namespaces changed
 	return overriding
 }
 
@@ -2377,50 +2379,6 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 // an identity its declarations can be filed under. It is guarded by compileMu
 // with the rest of the compile-time package state.
 var packageSerial int
-
-// dropAttrs removes unprefixed attributes from an element.
-func dropAttrs(el *xdm.Node, names ...string) {
-	kept := make([]*xdm.Node, 0, el.NumAttrs())
-	for a := range el.Attrs() {
-		drop := false
-		if a.Name().URI == "" {
-			for _, n := range names {
-				if a.Name().Local == n {
-					drop = true
-					break
-				}
-			}
-		}
-		if !drop {
-			kept = append(kept, a)
-		}
-	}
-	el.SetAttrs(kept)
-}
-
-// setAttr sets or replaces an unprefixed attribute of an element.
-func setAttr(el *xdm.Node, name, value string) {
-	for a := range el.Attrs() {
-		if a.Name().URI == "" && a.Name().Local == name {
-			a.SetValue(value)
-			return
-		}
-	}
-	a := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: name}, value)
-	a.SetParent(el)
-	el.SetAttrs(attrsWith(el, a))
-}
-
-// attrsWith returns el's attributes followed by a, in a new slice. The
-// stylesheet rewrites add attributes this way rather than with AddAttr, which
-// would also give a the tree el belongs to.
-func attrsWith(el, a *xdm.Node) []*xdm.Node {
-	out := make([]*xdm.Node, el.NumAttrs(), el.NumAttrs()+1)
-	for i := range out {
-		out[i] = el.AttrAt(i)
-	}
-	return append(out, a)
-}
 
 // checkPackageVersionRange applies the PackageVersionRange grammar of 3.5.1
 // to an xsl:use-package/@package-version attribute.

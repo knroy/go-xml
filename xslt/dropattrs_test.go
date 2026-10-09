@@ -19,7 +19,7 @@ import (
 func TestDropAttrs(t *testing.T) {
 	el := xdm.NewNode(xdm.KindElement, xdm.QName{URI: xdm.NSXSL, Local: "variable"}, "")
 	add := func(uri, local, val string) {
-		el.SetAttrs(attrsWith(el, xdm.NewNode(xdm.KindAttribute, xdm.QName{URI: uri, Local: local}, val)))
+		el.AppendAttr(xdm.QName{URI: uri, Local: local}, val)
 	}
 	add("", "name", "v")
 	add("", "required", "no")
@@ -27,11 +27,12 @@ func TestDropAttrs(t *testing.T) {
 	add("", "select", "1")
 	add("http://example.invalid/keep", "required", "kept")
 
-	dropAttrs(el, "required", "tunnel")
+	e := pkgEdits{}
+	e.dropAttrs(el, "required", "tunnel")
 
 	got := map[string]string{}
-	for a := range el.Attrs() {
-		got[a.Name().URI+"|"+a.Name().Local] = a.Value()
+	for _, a := range e.attrList(el) {
+		got[a.name.URI+"|"+a.name.Local] = a.value
 	}
 	want := map[string]string{
 		"|name":                                "v",
