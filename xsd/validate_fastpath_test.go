@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/xdm"
@@ -154,5 +155,50 @@ func TestIdentityBookkeepingOnlyInsideAScope(t *testing.T) {
 	}
 	if tbl := mergeTables([]icTables{nil, {}, nil}); tbl != nil {
 		t.Errorf("merging no tables gave %v, want nil", tbl)
+	}
+}
+
+// TestValidateAllocationFlatInChildCount: a content model with occurrence
+// bounds carries its count vectors in buffers reused across children and
+// across walks (walkScratch, scratchVec), deduplicated as they are built
+// (pushVec), and the walk ranges over el.Children instead of a ChildElements
+// slice. Before, each child cost a fresh vector and the walk a fresh slice:
+// the catalog workload made 101,505 allocations a pass, now 341.
+func TestValidateAllocationFlatInChildCount(t *testing.T) {
+	s, err := parseSchemaString(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="r"><xs:complexType><xs:sequence>
+    <xs:element name="g" minOccurs="0" maxOccurs="unbounded"><xs:complexType>
+      <xs:sequence minOccurs="1" maxOccurs="3">
+        <xs:element name="a" type="xs:string" minOccurs="2" maxOccurs="900"/>
+      </xs:sequence>
+    </xs:complexType></xs:element>
+  </xs:sequence></xs:complexType></xs:element>
+</xs:schema>`)
+	if err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	allocs := func(groups int) float64 {
+		var b strings.Builder
+		b.WriteString("<r>")
+		for i := 0; i < groups; i++ {
+			b.WriteString("<g>\n  " + strings.Repeat("<a>x</a>\n  ", 40) + "</g>\n")
+		}
+		b.WriteString("</r>")
+		doc, err := xdm.ParseString(b.String(), xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		return testing.AllocsPerRun(5, func() {
+			if err := s.Validate(doc.Root, ValidateOptions{}); err != nil {
+				t.Fatalf("document should be valid: %v", err)
+			}
+		})
+	}
+	small, large := allocs(10), allocs(100)
+	// 900 more children; a vector per child or a slice per group shows up
+	// as hundreds of allocations.
+	if large-small > 20 {
+		t.Errorf("validating 100 groups of 40 children allocated %.0f times, 10 groups %.0f; "+
+			"the walk is allocating per child or per element again", large, small)
 	}
 }
