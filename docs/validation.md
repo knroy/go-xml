@@ -483,15 +483,14 @@ const svrlNS = "http://purl.oclc.org/dsdl/svrl"
 var failures []Failure
 var walk func(*xdm.Node)
 walk = func(n *xdm.Node) {
-    if n.Kind == xdm.KindElement &&
-        n.Name.URI == svrlNS && n.Name.Local == "failed-assert" {
+    if n.IsElement(svrlNS, "failed-assert") {
         failures = append(failures, Failure{
             ID:       n.AttrValue("id"),
             Location: n.AttrValue("location"),
             Message:  strings.TrimSpace(n.StringValue()),
         })
     }
-    for _, c := range n.Children {
+    for c := range n.Children() {
         walk(c)
     }
 }
