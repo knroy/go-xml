@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/knroy/go-xml/internal/htmlser"
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -1008,8 +1009,13 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		if !indentChildren {
 			childOpts.indent = false
 		}
-		for _, c := range n.Children {
-			if indentChildren {
+		// No indent next to an inline element under the html and xhtml
+		// methods (Serialization 3.1 §7.4.3, §6.1.4); the rule is shared with
+		// xslt/serialize.go through htmlser.
+		htmlish := opts.method == "html" || opts.method == "xhtml"
+		for i, c := range n.Children {
+			if indentChildren && !(htmlish && htmlser.SkipIndentBefore(
+				n, i, opts.method == "xhtml", opts.html5())) {
 				writeIndent(sb, depth+1)
 			}
 			if cdata && c.Kind == xdm.KindText {
@@ -1022,7 +1028,8 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			}
 			serializeNode(sb, c, childOpts, depth+1)
 		}
-		if indentChildren {
+		if indentChildren && !(htmlish && htmlser.SkipIndentBefore(
+			n, len(n.Children), opts.method == "xhtml", opts.html5())) {
 			writeIndent(sb, depth)
 		}
 		sb.WriteString("</")

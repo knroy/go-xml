@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/knroy/go-xml/internal/htmlser"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 )
@@ -734,8 +735,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// stylesheet would be a second, contradicting declaration. Both spellings
 	// are dropped: the HTML5 "charset" form and the HTTP-header form the
 	// serialiser itself writes.
-	if s.html && s.inHead && strings.EqualFold(n.Name.Local, "meta") &&
-		(n.Attr("", "charset") != nil || isContentTypeMeta(n)) {
+	if s.html && s.inHead && htmlser.ReplacedMeta(n) {
 		return
 	}
 	s.indent(depth)
@@ -1038,24 +1038,18 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		indentChildren = false
 	}
 	// Serialization 3.1 §7.4.3 (html) and §6.1.4 (xhtml): whitespace "MUST
-	// NOT be added or removed adjacent to an inline element". So no indent
-	// goes before an inline child or before the child after one. The
-	// boundaries inside an element follow Saxon, which the spec permits: an
-	// indent may follow the start tag of an inline element, but none goes
-	// before its end tag or before an end tag that follows an inline child.
-	prevInline := false
-	for _, c := range n.Children {
+	// NOT be added or removed adjacent to an inline element"; see
+	// htmlser.SkipIndentBefore for where that leaves room for an indent.
+	for i, c := range n.Children {
 		if !indentChildren {
 			s.nodeNoIndent(c)
 			continue
 		}
-		cInline := s.htmlInline(c)
-		s.skipIndent = prevInline || cInline
+		s.skipIndent = s.skipBeforeChild(n, i)
 		s.node(c, depth+1)
 		s.skipIndent = false
-		prevInline = cInline
 	}
-	if (indentChildren && !prevInline && !s.htmlInline(n)) ||
+	if (indentChildren && !s.skipBeforeChild(n, len(n.Children))) ||
 		(emptyHead && s.opts.Indent) {
 		s.indent(depth)
 	}
@@ -1136,55 +1130,10 @@ func (s *serializer) indent(depth int) {
 	s.writeString("\n" + strings.Repeat("  ", depth))
 }
 
-// htmlInline reports whether n is an inline element in the sense of
-// Serialization 3.1 §7.4.3 and §6.1.4: one the method treats as HTML whose
-// name is in htmlInlineNames. The html method treats an element as HTML when
-// htmlNativeElement says so, and matches its name without regard to case; the
-// xhtml method when it is in the XHTML namespace, or in none under HTML5.
-// ponytail: area, link and meta, phrasing only in some positions, are left
-// out.
-func (s *serializer) htmlInline(n *xdm.Node) bool {
-	if n.Kind != xdm.KindElement {
-		return false
-	}
-	local := n.Name.Local
-	switch {
-	case s.xhtml:
-		if n.Name.URI != nsXHTML && !(s.html5 && n.Name.URI == "") {
-			return false
-		}
-		if n.Name.URI == "" {
-			local = strings.ToLower(local)
-		}
-	case s.htmlNativeElement(n):
-		local = strings.ToLower(local)
-	default:
-		return false
-	}
-	return htmlInlineNames[local]
-}
-
-// htmlInlineNames is the union §7.4.3 names: the HTML 4.01 %inline elements
-// (%fontstyle, %phrase, %special, %formctrl) and HTML5's phrasing content.
-var htmlInlineNames = map[string]bool{
-	// HTML 4.01 %inline.
-	"tt": true, "i": true, "b": true, "u": true, "s": true, "strike": true,
-	"big": true, "small": true, "em": true, "strong": true, "dfn": true,
-	"code": true, "samp": true, "kbd": true, "var": true, "cite": true,
-	"abbr": true, "acronym": true, "a": true, "img": true, "applet": true,
-	"object": true, "font": true, "basefont": true, "br": true,
-	"script": true, "map": true, "q": true, "sub": true, "sup": true,
-	"span": true, "bdo": true, "iframe": true, "input": true, "select": true,
-	"textarea": true, "label": true, "button": true,
-	// ins and del are inline only without element children; Saxon treats
-	// them as inline always, which only withholds whitespace the spec permits.
-	"ins": true, "del": true,
-	// HTML5 phrasing content not already listed.
-	"audio": true, "bdi": true, "canvas": true, "data": true,
-	"datalist": true, "embed": true, "mark": true, "math": true,
-	"meter": true, "noscript": true, "output": true, "picture": true,
-	"progress": true, "ruby": true, "slot": true, "svg": true,
-	"template": true, "time": true, "video": true, "wbr": true,
+// skipBeforeChild reports whether the html or xhtml method may not indent
+// before child i of n (i == len(n.Children): before n's end tag).
+func (s *serializer) skipBeforeChild(n *xdm.Node, i int) bool {
+	return s.html && htmlser.SkipIndentBefore(n, i, s.xhtml, s.html5)
 }
 
 // suppressed reports whether an element's content is written with no added
@@ -2038,19 +1987,6 @@ func escapeAttr(v string) string {
 		}
 	}
 	return sb.String()
-}
-
-// isContentTypeMeta reports whether an element is a meta declaring the
-// content type, in the http-equiv spelling. Case is ignored on both the
-// attribute name and its value, which is how HTTP header names compare.
-func isContentTypeMeta(n *xdm.Node) bool {
-	for _, a := range n.Attrs {
-		if a.Name.URI == "" && strings.EqualFold(a.Name.Local, "http-equiv") &&
-			strings.EqualFold(strings.TrimSpace(a.Value), "content-type") {
-			return true
-		}
-	}
-	return false
 }
 
 // nsXHTML is the namespace an element must be in for the XHTML output
