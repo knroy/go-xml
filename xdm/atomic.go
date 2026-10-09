@@ -104,14 +104,23 @@ type Atomic struct {
 	// anyURI, QName lexical form, binary types) and the canonical lexical
 	// form for date/time/duration types.
 	str string
-	// num holds double and float values.
+	// num holds double and float values, and 1 or 0 for xs:boolean.
 	num float64
 	// dec holds decimal and integer values exactly. XPath 2.0 requires
 	// xs:decimal arithmetic to be exact, so a float64 is not a legal
 	// representation: 0.1 + 0.2 must equal 0.3 for xs:decimal operands.
 	dec *big.Rat
-	// b holds boolean values.
-	b bool
+	// ext holds what only some values carry: the parsed QName, duration or
+	// date/time, and the schema annotation. Strings, numbers and booleans,
+	// which are most of what an evaluation boxes, leave it nil, so an
+	// Atomic is 48 B instead of the 112 B it was with these inline.
+	ext *atomicExt
+}
+
+// atomicExt is the part of an Atomic that most values do not have. It is
+// never written once the Atomic holding it is published: the With* methods
+// copy it.
+type atomicExt struct {
 	// qn holds the resolved QName for TypeQName.
 	qn *QName
 	// dur holds the parsed value for the duration types.
@@ -127,7 +136,7 @@ type Atomic struct {
 	// observable: xs:int(0) instance of xs:int is true, while the plain
 	// literal 1 instance of xs:int is false, and both values are otherwise
 	// identical. It is empty for every value that is not built by a derived
-	// constructor, so the common path pays only the field.
+	// constructor, so the common path leaves ext nil.
 	derived string
 	// derivedMember names the member type of a union that actually accepted
 	// this value, when derived names a union simple type (or a complex type
@@ -164,10 +173,10 @@ type Atomic struct {
 // TypeEnv returns the type environment of the schema that issued this value's
 // derived annotation, or nil when no schema did.
 func (a *Atomic) TypeEnv() *TypeEnvironment {
-	if a == nil {
+	if a == nil || a.ext == nil {
 		return nil
 	}
-	return a.typeEnv
+	return a.ext.typeEnv
 }
 
 // WithTypeEnv returns a copy of a carrying the given type environment, so that
@@ -178,7 +187,7 @@ func (a *Atomic) WithTypeEnv(e *TypeEnvironment) *Atomic {
 		return nil
 	}
 	c := *a
-	c.typeEnv = e
+	c.extCopy().typeEnv = e
 	return &c
 }
 
@@ -186,22 +195,32 @@ func (a *Atomic) WithTypeEnv(e *TypeEnvironment) *Atomic {
 // atomic value's derived type: the one the schema that issued the annotation
 // owns, or the process-global fallback when the value carries none.
 func TypeEnvOfAtomic(a *Atomic) *TypeEnvironment {
-	if a != nil && a.typeEnv != nil {
-		return a.typeEnv
+	if a != nil && a.ext != nil && a.ext.typeEnv != nil {
+		return a.ext.typeEnv
 	}
 	return globalTypeEnv
 }
 
 // Derived returns the narrower XML Schema type this value was constructed as,
 // or "" if it was not built by a derived-type constructor.
-func (a *Atomic) Derived() string { return a.derived }
+func (a *Atomic) Derived() string {
+	if a.ext == nil {
+		return ""
+	}
+	return a.ext.derived
+}
 
 // DerivedMember returns the union member type this value was validated as, or
 // "" when the value's type is not a union.
 //
 // It is a second answer alongside Derived, not a replacement for it: a value
 // of a union type is an instance of both the union and the selected member.
-func (a *Atomic) DerivedMember() string { return a.derivedMember }
+func (a *Atomic) DerivedMember() string {
+	if a.ext == nil {
+		return ""
+	}
+	return a.ext.derivedMember
+}
 
 // WithDerived returns a copy of a annotated as the named derived type.
 //
@@ -210,8 +229,9 @@ func (a *Atomic) DerivedMember() string { return a.derivedMember }
 // forward would let a value claim membership in a union it no longer has.
 func (a *Atomic) WithDerived(name string) *Atomic {
 	c := *a
-	c.derived = name
-	c.derivedMember = ""
+	x := c.extCopy()
+	x.derived = name
+	x.derivedMember = ""
 	return &c
 }
 
@@ -219,9 +239,21 @@ func (a *Atomic) WithDerived(name string) *Atomic {
 // the named member recorded as the one that accepted it.
 func (a *Atomic) WithDerivedUnion(name, member string) *Atomic {
 	c := *a
-	c.derived = name
-	c.derivedMember = member
+	x := c.extCopy()
+	x.derived = name
+	x.derivedMember = member
 	return &c
+}
+
+// extCopy gives a, a copy being built by a With* method, its own atomicExt,
+// so writing it does not change the value a was copied from.
+func (a *Atomic) extCopy() *atomicExt {
+	x := &atomicExt{}
+	if a.ext != nil {
+		*x = *a.ext
+	}
+	a.ext = x
+	return x
 }
 
 func (a *Atomic) isItem() {}
@@ -251,7 +283,12 @@ func NewAnyURI(s string) *Atomic { return &Atomic{Type: TypeAnyURI, str: s} }
 func NewBinary(s string, t TypeCode) *Atomic { return &Atomic{Type: t, str: s} }
 
 // NewBoolean returns an xs:boolean.
-func NewBoolean(v bool) *Atomic { return &Atomic{Type: TypeBoolean, b: v} }
+func NewBoolean(v bool) *Atomic {
+	if v {
+		return &Atomic{Type: TypeBoolean, num: 1}
+	}
+	return &Atomic{Type: TypeBoolean}
+}
 
 // NewInteger returns an xs:integer. Integers are held as exact rationals so
 // that they participate in decimal arithmetic without precision loss.
@@ -282,7 +319,7 @@ func NewFloat(v float64) *Atomic {
 
 // NewQNameValue returns an xs:QName.
 func NewQNameValue(q QName) *Atomic {
-	return &Atomic{Type: TypeQName, qn: &q, str: q.Lexical()}
+	return &Atomic{Type: TypeQName, ext: &atomicExt{qn: &q}, str: q.Lexical()}
 }
 
 // --- Accessors --------------------------------------------------------------
@@ -291,19 +328,34 @@ func NewQNameValue(q QName) *Atomic {
 func (a *Atomic) Str() string { return a.str }
 
 // Bool returns the boolean value. Valid only for TypeBoolean.
-func (a *Atomic) Bool() bool { return a.b }
+func (a *Atomic) Bool() bool { return a.Type == TypeBoolean && a.num != 0 }
 
 // Rat returns the exact value for integer and decimal types, or nil.
 func (a *Atomic) Rat() *big.Rat { return a.dec }
 
 // QName returns the QName value, or nil.
-func (a *Atomic) QName() *QName { return a.qn }
+func (a *Atomic) QName() *QName {
+	if a.ext == nil {
+		return nil
+	}
+	return a.ext.qn
+}
 
 // Duration returns the duration value, or nil.
-func (a *Atomic) DurationVal() *Duration { return a.dur }
+func (a *Atomic) DurationVal() *Duration {
+	if a.ext == nil {
+		return nil
+	}
+	return a.ext.dur
+}
 
 // DateTimeVal returns the date/time value, or nil.
-func (a *Atomic) DateTimeVal() *DateTime { return a.dt }
+func (a *Atomic) DateTimeVal() *DateTime {
+	if a.ext == nil {
+		return nil
+	}
+	return a.ext.dt
+}
 
 // Float64 returns the value as a float64 for any numeric type. Decimal and
 // integer values are converted, which may lose precision; callers doing exact
@@ -381,7 +433,7 @@ func (a *Atomic) String() string {
 		TypeHexBinary, TypeBase64Binary:
 		return a.str
 	case TypeBoolean:
-		if a.b {
+		if a.Bool() {
 			return "true"
 		}
 		return "false"
@@ -395,18 +447,18 @@ func (a *Atomic) String() string {
 	case TypeDouble, TypeFloat:
 		return formatDouble(a.num, a.Type == TypeFloat)
 	case TypeDate, TypeTime, TypeDateTime:
-		if a.dt != nil {
-			return a.dt.Lexical(a.Type)
+		if dt := a.DateTimeVal(); dt != nil {
+			return dt.Lexical(a.Type)
 		}
 		return a.str
 	case TypeGYear, TypeGYearMonth, TypeGMonth, TypeGMonthDay, TypeGDay:
-		if a.dt != nil {
-			return LexicalGregorian(a.dt, a.Type)
+		if dt := a.DateTimeVal(); dt != nil {
+			return LexicalGregorian(dt, a.Type)
 		}
 		return a.str
 	case TypeDuration, TypeYearMonthDuration, TypeDayTimeDuration:
-		if a.dur != nil {
-			return a.dur.Lexical(a.Type)
+		if d := a.DurationVal(); d != nil {
+			return d.Lexical(a.Type)
 		}
 		return a.str
 	}
@@ -582,15 +634,15 @@ func ErrCast(format string, args ...any) error {
 
 // NewDateTime returns a date, time or dateTime atomic value.
 func NewDateTime(dt *DateTime, t TypeCode) *Atomic {
-	return &Atomic{Type: t, dt: dt, str: dt.Lexical(t)}
+	return &Atomic{Type: t, ext: &atomicExt{dt: dt}, str: dt.Lexical(t)}
 }
 
 // NewGregorian returns one of the five Gregorian atomic values.
 func NewGregorian(dt *DateTime, t TypeCode) *Atomic {
-	return &Atomic{Type: t, dt: dt, str: LexicalGregorian(dt, t)}
+	return &Atomic{Type: t, ext: &atomicExt{dt: dt}, str: LexicalGregorian(dt, t)}
 }
 
 // NewDuration returns a duration atomic value of the given duration type.
 func NewDuration(d *Duration, t TypeCode) *Atomic {
-	return &Atomic{Type: t, dur: d, str: d.Lexical(t)}
+	return &Atomic{Type: t, ext: &atomicExt{dur: d}, str: d.Lexical(t)}
 }
