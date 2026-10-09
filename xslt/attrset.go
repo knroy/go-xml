@@ -595,31 +595,30 @@ func (c *compiler) checkAttributeSetRefs() error {
 // siblings, which is exactly when a silent accept is worst -- the set then
 // composes with a streamability or visibility the author never wrote.
 func (c *compiler) checkAttributeSetDeclarationsAgree() error {
-	for _, sets := range c.sheet.attributeSets {
-		byPkg := map[int][]*attributeSet{}
-		for _, as := range sets {
-			byPkg[as.pkg] = append(byPkg[as.pkg], as)
-		}
-		for _, group := range byPkg {
-			first := group[0]
-			for _, as := range group[1:] {
-				if as.visibility != first.visibility {
-					return fmt.Errorf(
-						"XTSE0020: the declarations of xsl:attribute-set %q "+
-							"give it visibility=%q and visibility=%q, but "+
-							"every declaration of one attribute set must "+
-							"carry the same visibility",
-						as.name.Lexical(), first.visibility, as.visibility)
-				}
-				if as.streamable != first.streamable ||
-					as.declaredStreamable != first.declaredStreamable {
-					return fmt.Errorf(
-						"XTSE0020: xsl:attribute-set %q has a declaration "+
-							"with streamable=\"yes\" and another without, "+
-							"but every declaration of one attribute set must "+
-							"specify streamable=\"yes\" if any does",
-						as.name.Lexical())
-				}
+	for _, key := range c.sheet.attributeSetOrder {
+		firstOf := map[int]*attributeSet{}
+		for _, as := range c.sheet.attributeSets[key] {
+			first, ok := firstOf[as.pkg]
+			if !ok {
+				firstOf[as.pkg] = as
+				continue
+			}
+			if as.visibility != first.visibility {
+				return fmt.Errorf(
+					"XTSE0020: the declarations of xsl:attribute-set %q "+
+						"give it visibility=%q and visibility=%q, but "+
+						"every declaration of one attribute set must "+
+						"carry the same visibility",
+					as.name.Lexical(), first.visibility, as.visibility)
+			}
+			if as.streamable != first.streamable ||
+				as.declaredStreamable != first.declaredStreamable {
+				return fmt.Errorf(
+					"XTSE0020: xsl:attribute-set %q has a declaration "+
+						"with streamable=\"yes\" and another without, "+
+						"but every declaration of one attribute set must "+
+						"specify streamable=\"yes\" if any does",
+					as.name.Lexical())
 			}
 		}
 	}
@@ -636,8 +635,8 @@ func (c *compiler) checkAttributeSetDeclarationsAgree() error {
 // resolves to several declarations is checked in each, since every one of them
 // contributes attributes to the reference.
 func (c *compiler) checkStreamableAttributeSets() error {
-	for _, sets := range c.sheet.attributeSets {
-		for _, as := range sets {
+	for _, key := range c.sheet.attributeSetOrder {
+		for _, as := range c.sheet.attributeSets[key] {
 			if !as.streamable {
 				continue
 			}
