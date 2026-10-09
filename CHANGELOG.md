@@ -36,7 +36,7 @@ code before and after, and how to run the rewriter on your own module.
 | `xpath.Context` per-evaluation fields move to `xpath.Env` | `ctx.Docs = r` → `xpath.NewContext(item, funcs, func(e *xpath.Env) { e.Docs = r })` or `ctx = ctx.WithEnv(func(e *xpath.Env) { e.Docs = r })`; reads `ctx.Docs` → `ctx.Env().Docs`. Moved: `Ctx`, `Docs`, `Collections`, `Texts`, `Entities`, `Environment`, `Modules`, `Validator`, `Now`, `HasNow`, `ImplicitTimezone`, `RegexVersion`, `LibraryVersion`, `MaxDepth`, `MaxItems`, `QualifyVar`, `MissingVar`, `MapDuplicateCode`. Budgets cannot be set or reset through `Env`. | [`9af0e77`][9af0e77] |
 | `xpath.Context` static fields become methods | `ctx.Version`, `ctx.StaticBaseURI`, `ctx.StaticHost`, `ctx.StaticNamespaces`, `ctx.Compat` → the same names called; `ctx.Version = v` → `ctx = ctx.WithVersion(v)`, `ctx.StaticBaseURI = u` → `ctx = ctx.WithStaticBaseURI(u)`. | [`9af0e77`][9af0e77] |
 | `Context.WithNow` removed | `ctx.WithNow(t)` → `ctx.WithEnv(func(e *xpath.Env) { e.Now, e.HasNow = t, true })`. | [`9af0e77`][9af0e77] |
-| `xdmbuild.Builder.AppendCopyOf` | Appends a copy of a node straight into the tree being built: the result of `AppendNode(xdm.Copy(n))` with one copy instead of two. | `484cb4e8` |
+| `xdmbuild.Builder.AppendCopyOf` | Appends a copy of a node straight into the tree being built: the result of `AppendNode(xdm.Copy(n))` with one copy instead of two. Returns the copy (nil when the node was merged as text), so a caller can give it bindings. | `484cb4e8`, a785e1a4 |
 | `xdmbuild.NSDecl`, `Builder.NoteDeclaredList` | `NoteDeclared` for a list of bindings the builder may keep instead of copying; for a constructor that notes the same bindings on every element it builds. | 2c5ea0b |
 | `xdm.Node.TreeHasTyping` | Whether any node of the node's tree was ever typed; false means the whole tree is untyped. XSLT uses it to skip stripping annotations ([migrating](docs/migrating-to-v2.md#validation-never-writes-to-your-tree)). | 40dbca21 |
 
@@ -57,6 +57,9 @@ code before and after, and how to run the rewriter on your own module.
 | XSLT runtime and XPath predicates repeated per-item work (V5) | Runtime copy 176 → 112 B, one focus context per predicate, strip-space memo, untyped trees not stripped. XRechnung 1 −10%, 2 −9%, DocBook items about −11% CPU. | 35cd4d60, 16f3d909, f2c08b2e, 40dbca21, db7e1ba3, 462ee9a2 |
 | DocBook compile 55 → 77 ms on v2 (V7) | Version-attribute walks remembered per Compile (not in the static phase); `FileResolver` remembers `EvalSymlinks`. DocBook compile −11% CPU. | 23ace644, be9eb58e |
 | The runtime copy still carried the 64 B template selection (V13) | Selection held by pointer, allocated with the copy that selects it: copy 112 → 64 B. DocBook items −5.5% bytes, −3.8% CPU. | e09f1060 |
+| `xsl:sequence` and `xsl:copy-of` copied a node twice into an open element (V14) | Copied once, straight into the builder. CEN −6.1% bytes, −2.3% CPU; copy-heavy case −49% CPU. | a785e1a4 |
+| Every `Tree` carried 104 B of parse-only fields, and `xsl:attribute` made a fragment per attribute (V15) | Fields behind a pointer (`Tree` 424 → 320 B); no node unless validation assesses it. XRechnung 1 −7.1% bytes, CEN −5.5%. | e62d96db, b22d90cc |
+| A small document's parse allocated three 4 KB read windows (V18) | Windows sized to a reader of known length. Small-document parse −11% bytes, −6% CPU. | 9ddd2bc6 |
 
 ## v1.7.1 — 2026-10-09
 
