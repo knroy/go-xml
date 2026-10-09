@@ -58,6 +58,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | With `AllowDOCTYPE` and no DOCTYPE, the parser kept two extra copies of the document | They are dropped when the root opens: 10 MB parse 335 → 230 MB allocated, 100 MB peak RSS 3.15 → 2.0 GB. | [`b88105e`][b88105e] |
 | The html method dropped the stylesheet's own `<meta charset>` under `include-content-type="no"` | It is dropped only when the method adds its own (§7.4.13); XRechnung's HTML stage now matches Saxon. | [`262be91`][262be91] |
 | html/xhtml `indent="yes"` split inline elements onto separate lines | No whitespace is added next to an inline element (§7.4.3, §6.1.4), in `xsl:output` and `fn:serialize`. | [`4457808`][4457808] |
+| `xsl:next-match` and `xsl:apply-imports` inside `xsl:iterate`, `xsl:merge`, `xsl:sort` or `xsl:copy select` ran the next rule | The current template rule is cleared there, so they raise `XTDE0560` as XSLT 3.0 §6.8 requires. | [`4d31869`][4d31869] |
 | `xsl:decimal-format` read an empty `NaN`/`infinity` as absent and ignored an empty single-character attribute | Presence decides; an empty single character is `XTSE0020`. | [`1b65291`][1b65291] |
 | `fn:serialize` with `include-content-type` kept the document's content-type meta, added none under xhtml, and ignored `media-type` | It replaces the head's meta, adds one under xhtml, and writes the media type, sharing `xsl:output`'s rules. | [`1e2bad6`][1e2bad6] |
 | The html method dropped content-type metas anywhere inside `<head>` | Only direct children of `head` are replaced, as §7.4.13 says. | [`91beb30`][91beb30] |
@@ -118,6 +119,11 @@ From [docs/profiling.md](docs/profiling.md). Outputs are byte-identical on every
 | The html serializer allocated twice per attribute character | Printable ASCII is copied through: XRechnung HTML allocations −53%, CPU −14%. | [`eac3823`][eac3823] |
 | The serializer lower-cased the encoding per non-ASCII character and built names and a namespace map per element | One binding stack, pieces written: XRechnung HTML allocations −57% in all. | [`aefdaea`][aefdaea] |
 | A path step copied its own result into the path's accumulator, and every relative path boxed the context item | The result is kept and the item stays on the stack: CEN allocations −11%, CPU −4 to −7%. | [`d077c5a`][d077c5a] |
+| `//x[p]` from a document root re-walked the whole document on every evaluation (~38% of CEN) | XSLT remembers per parsed document which nodes have an `x` child: CEN CPU −18 to −23%. | [`b5864c4`][b5864c4] |
+| `name(.) = name(current())` built, boxed and atomized two names per node | Name comparisons match prefix and local name directly: XRechnung allocations −53%, CPU −20%. | [`738c1fb`][738c1fb] |
+| Every comparison and boolean built-in allocated a fresh `xs:boolean` | Two shared values are returned: allocations −6 to −12%, CPU −5 to −7.5% on Schematron. | [`7dce099`][7dce099] |
+| Each serialized text node and escaped attribute value was built in a builder of its own | Both are written in runs straight to the buffered writer (XMark q2+q10 allocations −6.9%). | [`ca3e6a1`][ca3e6a1] |
+| RELAX NG re-derived every element of a long document from scratch | Patterns are interned and derivatives remembered past 1,000 elements: 1.1 MB table −32% CPU, −76% allocations. | [`77cdd65`][77cdd65] |
 
 ### Fixed — release process
 
@@ -1288,6 +1294,12 @@ here so every entry in this file sits under a release.
 [eac3823]: https://github.com/knroy/go-xml/commit/eac3823
 [aefdaea]: https://github.com/knroy/go-xml/commit/aefdaea
 [d077c5a]: https://github.com/knroy/go-xml/commit/d077c5a
+[4d31869]: https://github.com/knroy/go-xml/commit/4d31869
+[b5864c4]: https://github.com/knroy/go-xml/commit/b5864c4
+[738c1fb]: https://github.com/knroy/go-xml/commit/738c1fb
+[7dce099]: https://github.com/knroy/go-xml/commit/7dce099
+[ca3e6a1]: https://github.com/knroy/go-xml/commit/ca3e6a1
+[77cdd65]: https://github.com/knroy/go-xml/commit/77cdd65
 [e7ec81d]: https://github.com/knroy/go-xml/commit/e7ec81d
 [739c744]: https://github.com/knroy/go-xml/commit/739c744
 [d006ad2]: https://github.com/knroy/go-xml/commit/d006ad2

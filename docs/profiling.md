@@ -277,7 +277,7 @@ estimate.
 | T20 | Split `xpath.Context` into a small per-scope part and a pointer to the static part (resolvers, versions, budgets, host) | Every remaining copy ~5× cheaper; the broadest single win | Exported fields → API change (v2) |
 | T21 | Move node typing fields and `DocumentURI` behind accessors | Node 280→192 B, heap −40% | Exported fields → v2 (~125 call sites) |
 | T22 | Further node packing: `BaseURI` stored only where it differs from the parent, `Namespaces` out of line, interned `*QName` | Node to 112–152 B (2–3× smaller than today) | v2 |
-| T23 | RELAX NG hash-consing with memoised derivatives (Jing's design) | Removes the derivative size bound; replaces B2's structural check | Large |
+| T23 | RELAX NG hash-consing with memoised derivatives (Jing's design) | Removes the derivative size bound; replaces B2's structural check | Large. Landed in round 5 (`77cdd65`): the bound stays, and the gain is on long documents only |
 
 ## Implementation status
 
@@ -621,6 +621,38 @@ adds to the v2 plan:
    shared between elements (namespace nodes are 86% of CEN's SVRL output).
 2. Corpus statistics (children and attributes per element, node kinds)
    before choosing field layouts and widths.
+
+## Round 5: the remaining non-v2 items (`bd32eff`)
+
+Four lanes on what rounds 3 and 4 left open without an API change, measured
+the same way (allocations and getrusage CPU, A/B against `bd32eff`). Every
+landed change keeps every workload output byte-identical and every suite at
+its counts and failing names.
+
+| Change | Commit | Measured |
+|---|---|---|
+| `//x[p]` from a document root: XSLT remembers, per parsed document, which nodes have an `x` child, and runs the predicate step only over them | `b5864c4` | Root paths were 37.9% of CEN's transform time, 14.9% repeated. CEN CPU −18 to −23%, bytes −19%; others unchanged. Only trees from `xdm.Parse`; capped at 2^20 entries per transform; released with it ([options](options.md#source-trees-are-read-only-during-a-transform)) |
+| `name()` comparisons (`name(.) = name(current())`, against a string literal) match prefix and local name without building strings | `738c1fb` | XRechnung stage 1 allocations −53%, CPU −20% (KoSIT's `xr:src-path`) |
+| Two shared `xs:boolean` values from comparisons, logical operators, `instance of` and the boolean built-ins | `7dce099` | allocations CEN −8.1%, Peppol −5.9%, XRechnung −11.6%; CPU −4.8%, −5.1%, −7.5% |
+| Serializer text and escaped attribute values written in runs | `ca3e6a1`, `3cf29c3` | XMark q2+q10 allocations −6.9%, CPU −3.8%; XRechnung HTML allocations −4.6%. No per-node or per-character allocation is left in the serializer |
+| T23: RELAX NG patterns interned per validation and the four derivatives remembered, from the 1,000th element | `77cdd65` | the 40-document benchmark and compile unchanged; 1.1 MB `table-cals.049` 26.5 → 18.2 ms, allocations −76%; all 589 corpus documents 48.8 → 42.7 ms, allocations −48%. `MaxPatternSize` fires on the same inputs |
+
+Shared booleans were blocked by a real bug. `xsl:iterate`, `xsl:merge`,
+`xsl:sort` and `xsl:copy` with `select` did not clear the current template
+rule (XSLT 3.0 §6.8), and only a pointer comparison of the focus item kept
+`xsl:next-match` inside them from running the next rule. Fixed first in
+`4d31869`. Saxon 12.10 agrees on every case except `xsl:merge-action`,
+where it runs the next rule; go-xml follows §6.8, as it already did for
+`xsl:analyze-string` and `xsl:key`, where Saxon also differs.
+
+Measured and not landed:
+
+| Idea | Finding |
+|---|---|
+| Relative-path memo (`cac:A/cac:B` across assertions) | repeats are ~2.4% of CEN; allocations −0.3%, bytes +5%, no CPU gain |
+| `fuseDescendant` without a step allocation per evaluation | −0.13% allocations on CEN, CPU flat |
+| `Compiled.scope` with the runtime carrying the package's version and static host | 0 copies skipped on any workload: a top-level evaluation is recognised by `StaticNamespaces == nil`, and CEN alone has 1,238 distinct namespace resolvers. Skipping the install changes what host functions see in the exported `StaticNamespaces`: v2 (T20) |
+| A schema-wide RELAX NG derivative memo | 3.5× faster warm only because the benchmark re-validates the same documents; no gain on unseen ones, twice the bytes |
 
 ## Correctness bugs found while profiling
 
