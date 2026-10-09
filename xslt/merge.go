@@ -561,6 +561,8 @@ func checkMergeKeyCompatibility(sources []*mergeSource) error {
 // --- Execution --------------------------------------------------------------
 
 func (i *mergeInstr) Execute(rt *runtime, out *outputBuilder) error {
+	// 6.8: the current template rule is cleared within xsl:merge.
+	rt = rt.clearCurrentRule()
 	// The key attributes are resolved per source before anything is selected,
 	// because XTDE2210 is about the *effective* values and a computed one is
 	// only knowable now. Resolving them once here rather than per item also

@@ -480,7 +480,9 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 // xsl:for-each-group, and xsl:analyze-string, and calls on stylesheet
 // functions. Also cleared while evaluating global variables or default values
 // of stylesheet parameters, and the sequence constructors contained in
-// xsl:key and xsl:sort."
+// xsl:key and xsl:sort." XSLT 3.0 section 6.8 adds xsl:iterate,
+// xsl:source-document, xsl:merge and "xsl:copy if and only if there is a
+// select attribute".
 //
 // It exists for XTDE0560, which is an error "if xsl:apply-imports or
 // xsl:next-match is evaluated when the current template rule is null". Both
