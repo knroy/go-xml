@@ -451,7 +451,7 @@ func (n *Node) isLeaf() bool {
 // Attrs iterates over n's attributes in the order they were added.
 func (n *Node) Attrs() iter.Seq[*Node] {
 	return func(yield func(*Node) bool) {
-		if n.kind != uint8(KindElement) || n.flags&fSide != 0 {
+		if n.isLeaf() || n.flags&fSide != 0 {
 			return
 		}
 		t := n.tree
@@ -548,7 +548,7 @@ func (n *Node) Descendants() iter.Seq[*Node] {
 
 // NumAttrs returns the number of attributes of n.
 func (n *Node) NumAttrs() int {
-	if n.kind != uint8(KindElement) || n.flags&fSide != 0 {
+	if n.isLeaf() || n.flags&fSide != 0 {
 		return 0
 	}
 	return int(n.attrCount())

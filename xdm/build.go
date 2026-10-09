@@ -61,11 +61,13 @@ func (p *Node) appendLeaf(kind NodeKind, name QName, value string) *Node {
 }
 
 // AppendAttr appends an attribute to p, which must be an element with no
-// children yet, and returns it.
+// children yet, and returns it. (A document node may carry one too, for a
+// caller assembling a tree out of a result sequence that holds a parentless
+// attribute; nothing the data model builds does that.)
 func (p *Node) AppendAttr(name QName, value string) *Node {
 	t := p.tree
 	t.openTo(p)
-	if p.kind != uint8(KindElement) || p.v1 != noIdx || t.n != p.self+1+p.attrCount() {
+	if p.isLeaf() || p.v1 != noIdx || t.n != p.self+1+p.attrCount() {
 		panic("xdm: an attribute must be appended to an element before its children")
 	}
 	a := t.alloc()
