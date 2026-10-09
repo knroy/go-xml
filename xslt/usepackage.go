@@ -2,6 +2,8 @@ package xslt
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -820,7 +822,13 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 	}
 	overridingSeen := map[string]bool{}
 	for _, u := range uses {
-		for key, el := range u.overriding {
+		// In document order, so that of two clashing overrides the first
+		// written is reported, with its error code, on every run.
+		keys := slices.SortedFunc(maps.Keys(u.overriding), func(a, b string) int {
+			return u.overriding[a].Order() - u.overriding[b].Order()
+		})
+		for _, key := range keys {
+			el := u.overriding[key]
 			if ownByName[key] {
 				// A function clash is XTSE0770, the more specific rule:
 				// "a package must not contain two or more xsl:function
