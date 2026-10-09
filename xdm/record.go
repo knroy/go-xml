@@ -61,7 +61,7 @@ const (
 	fSide      = 1 << iota // a namespace node made on demand, outside the array
 	fBase                  // has a base URI of its own in tree.bases
 	fTyped                 // has an entry in tree.typing
-	fManyAttrs             // attribute count is in tree.attrCounts
+	fManyAttrs             // attribute count is in tree.source.attrCounts
 )
 
 // Tree owns the records of one document, or of a fragment: the parentless
@@ -129,10 +129,9 @@ type Tree struct {
 	frameMany map[string]uint32    // the rest, keyed by their text
 
 	// Side tables for the properties few nodes have.
-	bases      map[uint32]string // base URIs that differ from the inherited one
-	docURIs    map[uint32]string // dm:document-uri of document nodes
-	typing     [][]nodeTyping    // by chunk, made on first use
-	attrCounts map[uint32]uint32 // attribute counts past 0xFFFE
+	bases   map[uint32]string // base URIs that differ from the inherited one
+	docURIs map[uint32]string // dm:document-uri of document nodes
+	typing  [][]nodeTyping    // by chunk, made on first use
 
 	// elemIndex is a frozen tree's element-name index, built on the first
 	// descendant::name lookup (nameindex.go). A clone is not frozen and
@@ -146,6 +145,10 @@ type Tree struct {
 
 // treeSource is the part of a Tree that parsing fills in (see Tree.source).
 type treeSource struct {
+	// attrCounts holds attribute counts past 0xFFFE, by element. It lives
+	// here, with the other rarely set parts, so that every Tree -- most of
+	// them small constructed fragments -- stays in the 320-byte size class.
+	attrCounts map[uint32]uint32
 	// externalSubset is the text of the external DTD subset, and of any
 	// parameter-entity module it pulled in, when one was read.
 	//
@@ -529,7 +532,7 @@ func (n *Node) Parent() *Node {
 // attrCount is the number of attributes of n.
 func (n *Node) attrCount() uint32 {
 	if n.flags&fManyAttrs != 0 {
-		return n.tree.attrCounts[n.self]
+		return n.tree.source.attrCounts[n.self]
 	}
 	return uint32(n.nattr)
 }

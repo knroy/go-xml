@@ -81,10 +81,10 @@ func (p *Node) AppendAttr(name QName, value string) *Node {
 	if k := p.attrCount() + 1; k < 0xFFFF && p.flags&fManyAttrs == 0 {
 		p.nattr = uint16(k)
 	} else {
-		if t.attrCounts == nil {
-			t.attrCounts = map[uint32]uint32{}
+		if src := t.ownSource(); src.attrCounts == nil {
+			src.attrCounts = map[uint32]uint32{}
 		}
-		t.attrCounts[p.self] = k
+		t.source.attrCounts[p.self] = k
 		p.flags |= fManyAttrs
 	}
 	return a
@@ -229,7 +229,9 @@ func (t *Tree) truncate(i uint32) {
 			*r.typ() = nodeTyping{}
 		}
 		if r.flags&fManyAttrs != 0 {
-			delete(t.attrCounts, j)
+			if t.source != nil {
+				delete(t.source.attrCounts, j)
+			}
 		}
 		r.setOffset(0)
 		delete(t.docURIs, j)

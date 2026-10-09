@@ -192,3 +192,40 @@ func TestCloneSourcePart(t *testing.T) {
 		t.Errorf("fragment clone reports a position")
 	}
 }
+
+// An element with more attributes than a record's 16-bit count holds keeps
+// its count in the tree's rarely set part; parsing, cloning and building
+// must all read it back. (The count moved there so that Tree stays in the
+// 320-byte size class beside the element-name index.)
+func TestManyAttributesCount(t *testing.T) {
+	const n = 0xFFFE + 10
+	var b strings.Builder
+	b.WriteString("<r")
+	for i := range n {
+		fmt.Fprintf(&b, " a%d=''", i)
+	}
+	b.WriteString("/>")
+	tree, err := ParseString(b.String(), ParseOptions{MaxBytes: -1, MaxNodes: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := tree.Root.FirstChild()
+	if got := r.NumAttrs(); got != n {
+		t.Fatalf("parsed: %d attributes, want %d", got, n)
+	}
+	c := xdmclone.Clone(tree.Root, xdmclone.Options{})(tree.Root).(*Node)
+	if got := c.FirstChild().NumAttrs(); got != n {
+		t.Errorf("cloned: %d attributes, want %d", got, n)
+	}
+	built := NewTree()
+	e := built.Root.AppendElement(QName{Local: "r"})
+	for i := range n {
+		e.AppendAttr(QName{Local: fmt.Sprintf("a%d", i)}, "")
+	}
+	if got := e.NumAttrs(); got != n {
+		t.Errorf("built: %d attributes, want %d", got, n)
+	}
+	if s := unsafe.Sizeof(Tree{}); s > 320 {
+		t.Errorf("Tree is %d bytes, want at most 320", s)
+	}
+}

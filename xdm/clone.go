@@ -209,10 +209,10 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 			}
 		}
 		if s.flags&fManyAttrs != 0 {
-			if c.attrCounts == nil {
-				c.attrCounts = map[uint32]uint32{}
+			if src := c.ownSource(); src.attrCounts == nil {
+				src.attrCounts = map[uint32]uint32{}
 			}
-			c.attrCounts[j] = t.attrCounts[i]
+			c.source.attrCounts[j] = t.source.attrCounts[i]
 		}
 		if s.kind == uint8(KindDocument) && !o.Detached {
 			if u := t.docURIs[i]; u != "" {

@@ -803,10 +803,10 @@ func (el *Node) appendAttrRaw() *Node {
 	if k := el.attrCount() + 1; k < 0xFFFF && el.flags&fManyAttrs == 0 {
 		el.nattr = uint16(k)
 	} else {
-		if t.attrCounts == nil {
-			t.attrCounts = map[uint32]uint32{}
+		if src := t.ownSource(); src.attrCounts == nil {
+			src.attrCounts = map[uint32]uint32{}
 		}
-		t.attrCounts[el.self] = k
+		t.source.attrCounts[el.self] = k
 		el.flags |= fManyAttrs
 	}
 	return a
