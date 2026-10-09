@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -483,6 +484,9 @@ type serializer struct {
 	// asks for it on every non-ASCII character, and lower-casing "UTF-8"
 	// allocated each time. encFrom is the spelling the cache was made from.
 	encFrom, encLower string
+	// scratch holds a character reference or an encoded character on its way
+	// to w, so that writing one allocates nothing.
+	scratch [16]byte
 }
 
 func (s *serializer) writeString(str string) {
@@ -490,6 +494,24 @@ func (s *serializer) writeString(str string) {
 		return
 	}
 	_, s.err = io.WriteString(s.w, str)
+}
+
+func (s *serializer) writeBytes(b []byte) {
+	if s.err != nil {
+		return
+	}
+	_, s.err = s.w.Write(b)
+}
+
+// writeRune writes r UTF-8 encoded, as strings.Builder.WriteRune would.
+func (s *serializer) writeRune(r rune) {
+	s.writeBytes(utf8.AppendRune(s.scratch[:0], r))
+}
+
+// writeCharRef writes r as a decimal character reference, "&#N;".
+func (s *serializer) writeCharRef(r rune) {
+	b := strconv.AppendInt(append(s.scratch[:0], "&#"...), int64(r), 10)
+	s.writeBytes(append(b, ';'))
 }
 
 // fail keeps the first serialization error. Subsequent writes must not replace
@@ -1375,124 +1397,174 @@ func mayIndentContent(n *xdm.Node) bool {
 // because doing it unconditionally is cheaper than scanning for that sequence
 // and produces output every parser accepts.
 func (s *serializer) escapeText(text string) {
-	var sb strings.Builder
-	sb.Grow(len(text))
 	// The text is split at the characters the map claims, so that
 	// normalisation applies to the runs between them and not to the map's
 	// inputs or its outputs. See mapSegments.
-	for _, seg := range s.mapSegments(text) {
-		s.escapeTextRun(&sb, seg.text)
-		if s.err != nil {
+	segs := s.mapSegments(text)
+	// The text is written in pieces, so a character the method cannot
+	// output is looked for first: the node then fails with nothing of it
+	// written, as when it was escaped into a builder before being written.
+	for _, seg := range segs {
+		if s.textErr(seg.text) {
 			return
 		}
+	}
+	for _, seg := range segs {
+		s.escapeTextRun(seg.text)
 		if seg.has {
 			// A character map wins over escaping: emitting "&nbsp;" is the
 			// whole reason a stylesheet declares one, and escaping the
 			// ampersand would defeat it.
-			sb.WriteString(seg.repl)
+			s.writeString(seg.repl)
 		}
 	}
-	s.writeString(sb.String())
 }
 
-// escapeTextRun escapes one run of character data into sb. It is the body of
-// escapeText for a stretch of text no character map claims.
-func (s *serializer) escapeTextRun(sb *strings.Builder, text string) {
-	for _, r := range text {
-		// HTML 4 gives #x7F-#x9F no meaning: the numeric character
-		// references in that range name positions in the C1 control block,
-		// and browsers historically remapped them to the windows-1252
-		// characters instead. Writing one either way produces a document
-		// whose meaning depends on the reader, so the spec forbids it.
-		if s.html && !s.xhtml && r >= 0x7F && r <= 0x9F && !s.html5 {
-			if s.err == nil {
-				s.err = fmt.Errorf("SERE0014: character #x%X cannot be "+
-					"output by the html method", r)
-			}
-			return
-		}
-		if !s.representable(r) {
-			fmt.Fprintf(sb, "&#%d;", r)
+// textErr records the error for the first character of text that the
+// output method cannot write at all, and reports whether there was one.
+func (s *serializer) textErr(text string) bool {
+	// HTML 4 gives #x7F-#x9F no meaning: the numeric character
+	// references in that range name positions in the C1 control block,
+	// and browsers historically remapped them to the windows-1252
+	// characters instead. Writing one either way produces a document
+	// whose meaning depends on the reader, so the spec forbids it.
+	html4 := s.html && !s.xhtml && !s.html5
+	// The C0 controls other than TAB, LF and CR, under the XML-based
+	// methods. XML 1.0 has no spelling for them at all -- they are outside
+	// [2] Char, and a character reference does not help, because [66]
+	// CharRef is constrained to Char too. XML 1.1 admits them, but only
+	// written as references: [2a] RestrictedChar excludes them from the
+	// literal text a document may contain.
+	//
+	// So the version decides between a reference and an error, and
+	// there is no third option where the character is written as
+	// itself. It was: the range fell past every arm of escapeTextRun into
+	// WriteRune, and the output held a raw \x01 that no parser at
+	// either version will read back. SERE0006 is the code for a
+	// character the chosen version cannot represent, which is what
+	// xml-version-030 asserts for a BEL under version="1.0".
+	xml10 := (!s.html || s.xhtml) && !s.xml11()
+	if !html4 && !xml10 {
+		return false
+	}
+	for i := 0; i < len(text); i++ {
+		// Every character either check can refuse is below U+00A0: a
+		// single byte, or 0xC2 and a continuation byte.
+		if b := text[i]; b >= 0x20 && b != 0x7F && b != 0xC2 {
 			continue
 		}
-		// Characters that a parser would not hand back unchanged are written
-		// as references by the XML-based methods. A literal CR is turned into
-		// LF by the line-ending normalisation every XML parser performs
-		// before the document reaches an application, so a text node holding
-		// one comes back holding something else; U+2028 (LINE SEPARATOR) and
-		// the C1 block, which includes U+0085 (NEL), are line endings or
-		// controls to an XML 1.1 parser and get the same treatment. A
-		// reference names the code point unambiguously and is the only
-		// spelling that survives. K2-Serialization-5 and -11 assert the CR
-		// and NEL cases and -10 the whole C1 range.
+		r, _ := utf8.DecodeRuneInString(text[i:])
+		if html4 && r >= 0x7F && r <= 0x9F {
+			s.fail(fmt.Errorf("SERE0014: character #x%X cannot be "+
+				"output by the html method", r))
+			return true
+		}
+		if xml10 && r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
+			s.fail(fmt.Errorf("SERE0006: character #x%X cannot "+
+				"be output as XML 1.0; it is not a valid XML "+
+				"character at that version", r))
+			return true
+		}
+	}
+	return false
+}
+
+// escapeTextRun escapes one run of character data. It is the body of
+// escapeText for a stretch of text no character map claims, and textErr has
+// already passed it. Runs of characters written as they stand are copied to
+// w whole, so a text node costs no allocation.
+func (s *serializer) escapeTextRun(text string) {
+	start := 0
+	for i := 0; i < len(text); {
+		r, size := rune(text[i]), 1
+		if r >= utf8.RuneSelf {
+			r, size = utf8.DecodeRuneInString(text[i:])
+		}
+		if s.plainText(r) {
+			i += size
+			continue
+		}
+		s.writeString(text[start:i])
+		i += size
+		start = i
+		s.escapeTextRune(r)
+	}
+	s.writeString(text[start:])
+}
+
+// plainText reports whether escapeTextRune writes r unchanged, under every
+// method and version, so that it can be copied with the run around it. U+FFFD
+// is excluded because an invalid byte decodes to it and is written as it.
+func (s *serializer) plainText(r rune) bool {
+	if r < utf8.RuneSelf {
+		return r >= 0x20 && r < 0x7F && r != '&' && r != '<' && r != '>' ||
+			r == '\t' || r == '\n'
+	}
+	return r > 0xA0 && r != '\u2028' && r != utf8.RuneError && s.representable(r)
+}
+
+// escapeTextRune writes one character of character data that plainText
+// does not pass through.
+func (s *serializer) escapeTextRune(r rune) {
+	if !s.representable(r) {
+		s.writeCharRef(r)
+		return
+	}
+	// Characters that a parser would not hand back unchanged are written
+	// as references by the XML-based methods. A literal CR is turned into
+	// LF by the line-ending normalisation every XML parser performs
+	// before the document reaches an application, so a text node holding
+	// one comes back holding something else; U+2028 (LINE SEPARATOR) and
+	// the C1 block, which includes U+0085 (NEL), are line endings or
+	// controls to an XML 1.1 parser and get the same treatment. A
+	// reference names the code point unambiguously and is the only
+	// spelling that survives. K2-Serialization-5 and -11 assert the CR
+	// and NEL cases and -10 the whole C1 range.
+	//
+	// The html method is excluded, and not because it disagrees about
+	// these characters: it has its own rule for the C1 range (see
+	// textErr), which is stricter still and makes writing one an error
+	// under HTML 4. What it does not share is XML's line-ending
+	// normalisation, so a CR there is an ordinary character.
+	//
+	// A C0 control other than TAB and LF reaches here only under XML 1.1,
+	// where it is written as a reference; textErr refused it under 1.0.
+	if !s.html || s.xhtml {
+		if r == '\r' || r == '\u2028' || (r >= 0x7F && r <= 0x9F) ||
+			r < 0x20 && r != '\t' && r != '\n' {
+			s.writeCharRef(r)
+			return
+		}
+	}
+	switch r {
+	case '&':
+		s.writeString("&amp;")
+	case '<':
+		s.writeString("&lt;")
+	case '>':
+		s.writeString("&gt;")
+	case '\u00a0':
+		// The HTML method writes a no-break space as the named entity, so
+		// that it survives a transport that mangles non-ASCII bytes and
+		// stays visible to anyone reading the source. XML output has no
+		// such convention and keeps the character.
 		//
-		// The html method is excluded, and not because it disagrees about
-		// these characters: it has its own rule for the C1 range a few lines
-		// above, which is stricter still and makes writing one an error under
-		// HTML 4. What it does not share is XML's line-ending normalisation,
-		// so a CR there is an ordinary character.
-		if !s.html || s.xhtml {
-			if r == '\r' || r == '\u2028' || (r >= 0x7F && r <= 0x9F) {
-				fmt.Fprintf(sb, "&#%d;", r)
-				continue
-			}
-			// The C0 controls other than TAB, LF and CR. XML 1.0 has no
-			// spelling for them at all -- they are outside [2] Char, and a
-			// character reference does not help, because [66] CharRef is
-			// constrained to Char too. XML 1.1 admits them, but only written
-			// as references: [2a] RestrictedChar excludes them from the
-			// literal text a document may contain.
-			//
-			// So the version decides between a reference and an error, and
-			// there is no third option where the character is written as
-			// itself. It was: the range fell past every arm above into
-			// WriteRune, and the output held a raw \x01 that no parser at
-			// either version will read back. SERE0006 is the code for a
-			// character the chosen version cannot represent, which is what
-			// xml-version-030 asserts for a BEL under version="1.0".
-			if r < 0x20 && r != '\t' && r != '\n' {
-				if !s.xml11() {
-					if s.err == nil {
-						s.err = fmt.Errorf("SERE0006: character #x%X cannot "+
-							"be output as XML 1.0; it is not a valid XML "+
-							"character at that version", r)
-					}
-					return
-				}
-				fmt.Fprintf(sb, "&#%d;", r)
-				continue
-			}
+		// XHTML is excluded, which is why the guard is the file's usual
+		// "html && !xhtml" and not a bare s.html: s.html is set for the
+		// xhtml method too (see where it is assigned), but XHTML escapes
+		// as XML, and "nbsp" is not one of XML's five predefined entity
+		// names. Writing it there produced a document that references an
+		// undeclared entity — unparseable by the XML parser the method
+		// exists to satisfy — and the character needs no escape anyway:
+		// it is representable in every encoding this serialiser emits
+		// that the document would otherwise have to escape it for.
+		if s.html && !s.xhtml {
+			s.writeString("&nbsp;")
+			return
 		}
-		switch r {
-		case '&':
-			sb.WriteString("&amp;")
-		case '<':
-			sb.WriteString("&lt;")
-		case '>':
-			sb.WriteString("&gt;")
-		case '\u00a0':
-			// The HTML method writes a no-break space as the named entity, so
-			// that it survives a transport that mangles non-ASCII bytes and
-			// stays visible to anyone reading the source. XML output has no
-			// such convention and keeps the character.
-			//
-			// XHTML is excluded, which is why the guard is the file's usual
-			// "html && !xhtml" and not a bare s.html: s.html is set for the
-			// xhtml method too (see where it is assigned), but XHTML escapes
-			// as XML, and "nbsp" is not one of XML's five predefined entity
-			// names. Writing it there produced a document that references an
-			// undeclared entity — unparseable by the XML parser the method
-			// exists to satisfy — and the character needs no escape anyway:
-			// it is representable in every encoding this serialiser emits
-			// that the document would otherwise have to escape it for.
-			if s.html && !s.xhtml {
-				sb.WriteString("&nbsp;")
-				continue
-			}
-			sb.WriteRune(r)
-		default:
-			sb.WriteRune(r)
-		}
+		s.writeRune(r)
+	default:
+		s.writeRune(r)
 	}
 }
 
