@@ -91,7 +91,10 @@ func modeDeclAttrs(el *xdm.Node) (map[string]string, error) {
 // checkAccumulatorConflicts settles XTSE3350 the same way for the same
 // reason.
 func (c *compiler) checkModeConflicts() error {
-	for m, decls := range c.modeTies {
+	// Sorted, so a stylesheet with two conflicting modes names the same one
+	// on every run.
+	for _, m := range sortedKeys(c.modeTies) {
+		decls := c.modeTies[m]
 		// best[attr] is the highest precedence at which attr is stated, and
 		// seen[attr] the value stated there; conflict[attr] records that a
 		// second, different value was stated at that same precedence.
