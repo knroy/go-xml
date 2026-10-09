@@ -315,7 +315,13 @@ type Node struct {
 // false if the position is unknown — the node was built by a transform rather
 // than parsed, or the source text was not retained.
 func (n *Node) Position() (line, col int, ok bool) {
-	if n == nil || n.offset <= 0 || n.tree == nil {
+	if n == nil || n.tree == nil {
+		return 0, 0, false
+	}
+	if p, found := n.tree.foreignPos[n]; found {
+		return int(p[0]), int(p[1]), true
+	}
+	if n.offset <= 0 {
 		return 0, 0, false
 	}
 	return n.tree.positionAt(int(n.offset) - 1)
@@ -363,6 +369,10 @@ type Tree struct {
 	// thousands of failures over one large file.
 	lineStarts []int
 	lineOnce   sync.Once
+	// foreignPos holds the source position of a node copied in from a tree
+	// parsed from other text, which an offset into this tree's src cannot
+	// express. See CopyPosition.
+	foreignPos map[*Node][2]int32
 	// id orders nodes from different trees against each other. The spec
 	// requires only that the order be stable within a transform.
 	id      int

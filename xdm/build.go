@@ -186,3 +186,45 @@ func (p *Node) ReplaceLastChild(c *Node) *Node {
 	p.children[len(p.children)-1] = c
 	return c
 }
+
+// RemoveLastChild takes back p's last child, which must be the last subtree
+// appended to the tree: a node built and then found not to belong, such as
+// an element whose conditional-inclusion test turned out false once its
+// attributes were in place.
+func (p *Node) RemoveLastChild() {
+	last := p.children[len(p.children)-1]
+	last.parent = nil
+	p.children = p.children[:len(p.children)-1]
+}
+
+// CopySourceFrom gives t the source context of src: its DTD (see
+// CopyDTDFrom), its XML version, and the document text that positions are
+// resolved against, so that a node given its original's position with
+// CopyPosition reports the same line and column.
+func (t *Tree) CopySourceFrom(src *Tree) {
+	if t == nil || src == nil {
+		return
+	}
+	t.CopyDTDFrom(src)
+	t.XMLVersion = src.XMLVersion
+	t.src = src.src
+}
+
+// CopyPosition gives dst, a copy of src already appended to a tree, src's
+// source position. Copies do not carry positions otherwise: a node a
+// transform builds was not parsed from anywhere.
+func CopyPosition(dst, src *Node) {
+	if src.offset <= 0 || src.tree == nil || dst.tree == nil {
+		return
+	}
+	if dst.tree.src == src.tree.src {
+		dst.offset = src.offset
+		return
+	}
+	if line, col, ok := src.Position(); ok {
+		if dst.tree.foreignPos == nil {
+			dst.tree.foreignPos = map[*Node][2]int32{}
+		}
+		dst.tree.foreignPos[dst] = [2]int32{int32(line), int32(col)}
+	}
+}
