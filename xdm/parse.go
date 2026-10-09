@@ -812,6 +812,9 @@ func resolvePrefix(el *Node, prefix string, isElement bool) string {
 	case "xmlns":
 		return NSXMLNS
 	}
+	if el.tree.frames == nil {
+		return "" // nothing in this tree declares a namespace
+	}
 	for cur := el; cur != nil; cur = cur.Parent() {
 		for _, b := range cur.frame() {
 			if b.prefix == prefix {

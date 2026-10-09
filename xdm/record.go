@@ -130,7 +130,11 @@ type Tree struct {
 
 	names  []QName
 	nameIx map[QName]uint32
-	text   textStore
+	// nameHot caches recent nameIx answers, made with nameIx: a parse
+	// interns the same few names over and over, and hashing a three-string
+	// QName for the map each time is most of what interning costs.
+	nameHot *[64]uint32
+	text    textStore
 
 	// frames holds the namespace declarations of elements, interned by
 	// content, as ranges of frameData; frame 0 is the empty one.
@@ -249,19 +253,35 @@ func (t *Tree) intern(q QName) uint32 {
 		t.names = append(t.names, q)
 		if len(t.names) > smallNames {
 			t.nameIx = make(map[QName]uint32, 2*len(t.names))
+			t.nameHot = new([64]uint32)
 			for j, x := range t.names[1:] {
 				t.nameIx[x] = uint32(j + 1)
 			}
 		}
 		return i
 	}
-	if i, ok := t.nameIx[q]; ok {
+	h := nameHash(q) & (len(t.nameHot) - 1)
+	if i := t.nameHot[h]; i != 0 && t.names[i] == q {
 		return i
 	}
-	i := uint32(len(t.names))
-	t.names = append(t.names, q)
-	t.nameIx[q] = i
+	i, ok := t.nameIx[q]
+	if !ok {
+		i = uint32(len(t.names))
+		t.names = append(t.names, q)
+		t.nameIx[q] = i
+	}
+	t.nameHot[h] = i
 	return i
+}
+
+// nameHash is a cheap hash of q for nameHot: the lengths and the ends of the
+// local name, which tell most names in a document apart.
+func nameHash(q QName) int {
+	h := len(q.Local)*31 + len(q.Prefix)*7 + len(q.URI)
+	if n := len(q.Local); n > 0 {
+		h = h*131 + int(q.Local[0]) + int(q.Local[n-1])*17
+	}
+	return h
 }
 
 // smallNames is how many names a tree holds before it indexes them.
