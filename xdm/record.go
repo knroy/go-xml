@@ -769,6 +769,12 @@ func (n *Node) typ() *nodeTyping {
 
 var zeroTyping nodeTyping
 
+// TreeHasTyping reports whether any node in n's tree has ever been given a
+// typing entry. False guarantees that every node of the tree is untyped, so
+// a caller about to strip or read the annotations of a whole subtree can
+// skip the walk; true says only that some node may be typed.
+func (n *Node) TreeHasTyping() bool { return n.tree.typing != nil }
+
 // ownTyping returns n's typing entry, making it.
 func (n *Node) ownTyping() *nodeTyping {
 	if n.flags&fSide != 0 {
