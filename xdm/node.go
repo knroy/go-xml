@@ -611,7 +611,13 @@ func compareDetached(n, o *Node) int {
 		return 1
 	}
 	p := na[i-1]
-	switch ra, rb := siblingRank(p, na[i]), siblingRank(p, oa[i]); {
+	rank := siblingRank
+	if na[i].Kind != KindNamespace && oa[i].Kind != KindNamespace {
+		// Both ranks would add the same namespace base, which costs an
+		// InScopeNamespaces map to compute; without it the order is the same.
+		rank = attrOrChildRank
+	}
+	switch ra, rb := rank(p, na[i]), rank(p, oa[i]); {
 	case ra < rb:
 		return -1
 	case ra > rb:
@@ -774,22 +780,26 @@ func siblingRank(p, n *Node) int {
 		}
 		return i
 	}
-	base := nsRankBase(p)
+	return nsRankBase(p) + attrOrChildRank(p, n)
+}
+
+// attrOrChildRank is siblingRank for an attribute or child of p, less the
+// namespace base, which is the same for every such node of p.
+func attrOrChildRank(p, n *Node) int {
 	if n.Kind == KindAttribute {
 		for i, a := range p.Attrs {
 			if a == n {
-				return base + i
+				return i
 			}
 		}
-		return base + len(p.Attrs)
+		return len(p.Attrs)
 	}
-	base += len(p.Attrs)
 	for i, c := range p.Children {
 		if c == n {
-			return base + i
+			return len(p.Attrs) + i
 		}
 	}
-	return base + len(p.Children)
+	return len(p.Attrs) + len(p.Children)
 }
 
 // nsRankBase is the rank the first non-namespace node of p takes, which is one
