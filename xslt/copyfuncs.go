@@ -143,11 +143,7 @@ func copyItem(it xdm.Item) xdm.Item {
 		// one too, but only these two kinds have no children to walk, and
 		// spelling them out keeps the parentlessness deliberate rather than
 		// incidental.
-		c := &xdm.Node{
-			Kind:  n.Kind,
-			Name:  n.Name,
-			Value: n.Value,
-		}
+		c := xdm.NewNode(n.Kind, n.Name, n.Value)
 		// A copy of an assessed node was assessed. fn:copy-of and fn:snapshot
 		// preserve type annotations, and every PSVI property is part of what
 		// they preserve — validation-1203 takes both of a nilled element and
@@ -191,7 +187,7 @@ func snapshotItem(it xdm.Item) xdm.Item {
 	}
 
 	tree := xdm.NewTree()
-	tree.Root.BaseURI = spine[len(spine)-1].BaseURI
+	tree.Root.SetBaseURI(spine[len(spine)-1].BaseURI)
 	// 27.2: a snapshot's root "has the same unparsed entities as the tree
 	// from which it was taken". sf-unparsed-entity-03 hands snapshot(.) to an
 	// xsl:function and asks unparsed-entity-uri of it there.
@@ -203,16 +199,9 @@ func snapshotItem(it xdm.Item) xdm.Item {
 		if a.Kind != xdm.KindElement {
 			continue
 		}
-		c := &xdm.Node{
-			Kind:    xdm.KindElement,
-			Name:    a.Name,
-			BaseURI: a.BaseURI,
-			// "a type annotation of xs:anyType": the ancestor's own
-			// annotation described a node with all its children, and this
-			// copy has only one of them, so the annotation would be a claim
-			// about content that is no longer there.
-			TypeAnnotation: "anyType",
-		}
+		c := xdm.NewNode(xdm.KindElement, a.Name, "")
+		c.SetBaseURI(a.BaseURI)
+		c.ApplyTyping(xdm.Typing{TypeAnnotation: "anyType"})
 		for _, ns := range a.Namespaces {
 			c.AddNamespace(ns.Name.Local, ns.Value)
 		}
@@ -223,8 +212,7 @@ func snapshotItem(it xdm.Item) xdm.Item {
 			// no longer there. Its attributes are simply "copies of the
 			// attributes" — nothing about them changed, so every PSVI
 			// property travels.
-			ac := &xdm.Node{Kind: xdm.KindAttribute, Name: at.Name,
-				Value: at.Value}
+			ac := xdm.NewNode(xdm.KindAttribute, at.Name, at.Value)
 			ac.CopyTypingFrom(at)
 			c.AddAttr(ac)
 		}
@@ -271,7 +259,7 @@ func snapshotItem(it xdm.Item) xdm.Item {
 		}
 		parent.AddNamespace(n.Name.Local, n.Value)
 		tree.Finalize()
-		return parent.Namespaces[len(parent.Namespaces)-1]
+		return parent.NamespaceDeclAt(parent.NumNamespaceDecls() - 1)
 	default:
 		bottom = copyItem(n).(*xdm.Node)
 	}

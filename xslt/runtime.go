@@ -474,7 +474,7 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree.BaseURI = v.baseURI
+	tree.SetBaseURI(v.baseURI)
 	// The document node's base is known only now, after its content was
 	// built, so the children are rebased against it here rather than as they
 	// were appended. Without this a copied element with a relative xml:base

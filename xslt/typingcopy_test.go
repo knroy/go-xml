@@ -280,12 +280,13 @@ func TestSnapshotPreservesResolvedTyping(t *testing.T) {
 // the name, so the distinction was not observable here either way; it now
 // takes the resolved xdm.Typing.) The copy itself is what this test is about.
 func TestCopyItemAttributePreservesResolvedTyping(t *testing.T) {
-	src := &xdm.Node{Kind: xdm.KindAttribute,
-		Name: xdm.QName{Local: "a"}, Value: "10 20"}
+	src := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: "a"}, "10 20")
 	src.SetTypeAnnotationResolved(
 		xdm.AnnotationName(typingProbeNS, "L"), "anySimpleType", "decimal")
-	src.UnionMember = xdm.AnnotationName(typingProbeNS, "M")
-	src.IsIDREFS = true
+	ty := xdm.TypingOf(src)
+	ty.UnionMember = xdm.AnnotationName(typingProbeNS, "M")
+	ty.IsIDREFS = true
+	src.ApplyTyping(ty)
 
 	c, ok := copyItem(src).(*xdm.Node)
 	if !ok {
@@ -384,16 +385,14 @@ func TestValidationStripClearsResolvedTyping(t *testing.T) {
 // annotation, so a stripped document would otherwise go blind to its own IDs
 // -- while the same section makes dm:nilled false for every element.
 func TestStripKeepsIsIDAndClearsIsNilled(t *testing.T) {
-	src := &xdm.Node{Kind: xdm.KindElement,
-		Name:     xdm.QName{Local: "e"},
-		IsID:     true,
-		IsIDREFS: true,
-		IsNilled: true,
-	}
+	src := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
+	src.ApplyTyping(xdm.Typing{IsID: true, IsIDREFS: true, IsNilled: true})
 	src.SetTypeAnnotationResolved("{urn:probe}L", "decimal", "decimal")
-	src.UnionMember = "{urn:probe}M"
+	ty := xdm.TypingOf(src)
+	ty.UnionMember = "{urn:probe}M"
+	src.ApplyTyping(ty)
 
-	dst := &xdm.Node{Kind: xdm.KindElement, Name: src.Name}
+	dst := xdm.NewNode(xdm.KindElement, src.Name, "")
 	dst.CopyTypingStrippedFrom(src)
 
 	if !dst.IsID || !dst.IsIDREFS {
@@ -414,7 +413,7 @@ func TestStripKeepsIsIDAndClearsIsNilled(t *testing.T) {
 
 	// And the preserving variant carries all seven, which is the contrast
 	// that makes two named functions the right shape.
-	keep := &xdm.Node{Kind: xdm.KindElement, Name: src.Name}
+	keep := xdm.NewNode(xdm.KindElement, src.Name, "")
 	keep.CopyTypingFrom(src)
 	if keep.TypeAnnotation != src.TypeAnnotation ||
 		keep.UnionMember != src.UnionMember ||
@@ -474,12 +473,14 @@ func TestResultDocumentCarriesResolvedTyping(t *testing.T) {
 	if len(out.Secondary) != 1 {
 		t.Fatalf("got %d secondary results, want 1", len(out.Secondary))
 	}
-	root := &xdm.Node{Kind: xdm.KindDocument}
+	root := xdm.NewNode(xdm.KindDocument, xdm.QName{}, "")
+	var kids []*xdm.Node
 	for _, it := range out.Secondary[0].Nodes {
 		if n, ok := it.(*xdm.Node); ok {
-			root.Children = append(root.Children, n)
+			kids = append(kids, n)
 		}
 	}
+	root.SetChildren(kids)
 
 	// The registries are redefined only now, so everything the engine did was
 	// done while they still agreed with the node. See runTypingProbe.

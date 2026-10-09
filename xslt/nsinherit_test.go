@@ -57,8 +57,8 @@ func TestConstructedElementsInheritBindings(t *testing.T) {
 	if out == nil {
 		t.Fatal("no <out> element in the result")
 	}
-	if len(out.Namespaces) != 2 {
-		t.Errorf("<out> carries %d namespace nodes, want its own 2", len(out.Namespaces))
+	if out.NumNamespaceDecls() != 2 {
+		t.Errorf("<out> carries %d namespace nodes, want its own 2", out.NumNamespaceDecls())
 	}
 	for _, c := range out.Children {
 		var got []string

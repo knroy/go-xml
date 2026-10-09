@@ -1004,7 +1004,8 @@ func (g *generalPattern) matchesFromVirtualParent(root, node *xdm.Node,
 			return false, nil
 		}
 		idx := -1
-		for i, ch := range n.Parent.Children {
+		for i := range n.Parent.NumChildren() {
+			ch := n.Parent.ChildAt(i)
 			if ch == n {
 				idx = i
 				break
@@ -1019,10 +1020,10 @@ func (g *generalPattern) matchesFromVirtualParent(root, node *xdm.Node,
 	doc, copied := wrapInDocument(root)
 	target := copied
 	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] >= len(target.Children) {
+		if path[i] >= target.NumChildren() {
 			return false, nil
 		}
-		target = target.Children[path[i]]
+		target = target.ChildAt(path[i])
 	}
 
 	seq, err := g.expr.Eval(ctx.WithFocus(doc, 1, 1))
@@ -1041,22 +1042,23 @@ func wrapInDocument(el *xdm.Node) (doc, copied *xdm.Node) {
 	var clone func(n, parent *xdm.Node) *xdm.Node
 	clone = func(n, parent *xdm.Node) *xdm.Node {
 		c := xdmbuild.ShallowCopy(n)
-		xdmbuild.SetParent(c, parent)
-		xdmbuild.SetChildren(c, nil)
-		xdmbuild.SetAttrs(c, nil)
+		c.SetParent(parent)
+		var attrs, kids []*xdm.Node
 		for _, a := range n.Attrs {
 			ac := xdmbuild.ShallowCopy(a)
-			xdmbuild.SetParent(ac, c)
-			xdmbuild.SetAttrs(c, append(c.Attrs, ac))
+			ac.SetParent(c)
+			attrs = append(attrs, ac)
 		}
 		for _, ch := range n.Children {
-			xdmbuild.SetChildren(c, append(c.Children, clone(ch, c)))
+			kids = append(kids, clone(ch, c))
 		}
+		c.SetAttrs(attrs)
+		c.SetChildren(kids)
 		return c
 	}
 	doc = xdmbuild.NewDocument("")
 	copied = clone(el, doc)
-	xdmbuild.SetChildren(doc, []*xdm.Node{copied})
+	doc.SetChildren([]*xdm.Node{copied})
 	return doc, copied
 }
 

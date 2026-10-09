@@ -83,7 +83,7 @@ func normalizeNodePrefixes(n *xdm.Node) *xdm.Node {
 	c := xdmbuild.ShallowCopy(n)
 	if c.Kind == xdm.KindElement {
 		if htmlNativeNamespaces[c.Name.URI] {
-			xdmbuild.SetName(c, xdm.QName{URI: c.Name.URI, Local: c.Name.Local})
+			c.SetName(xdm.QName{URI: c.Name.URI, Local: c.Name.Local})
 		}
 		// A namespace node binding a prefix to one of the three is removed
 		// outright. The default binding is kept: it is how the element's own
@@ -96,16 +96,16 @@ func normalizeNodePrefixes(n *xdm.Node) *xdm.Node {
 			}
 			keep = append(keep, ns)
 		}
-		xdmbuild.SetNamespaces(c, keep)
+		c.SetNamespaceDecls(keep)
 	}
-	if len(n.Children) > 0 {
-		kids := make([]*xdm.Node, 0, len(n.Children))
+	if n.NumChildren() > 0 {
+		kids := make([]*xdm.Node, 0, n.NumChildren())
 		for _, k := range n.Children {
 			nk := normalizeNodePrefixes(k)
-			xdmbuild.SetParent(nk, c)
+			nk.SetParent(c)
 			kids = append(kids, nk)
 		}
-		xdmbuild.SetChildren(c, kids)
+		c.SetChildren(kids)
 	}
 	return c
 }

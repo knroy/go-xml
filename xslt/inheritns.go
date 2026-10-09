@@ -50,7 +50,7 @@ func blockNamespaceInheritance(el *xdm.Node) {
 		return
 	}
 	scope := map[string]string{}
-	prefixes := make([]string, 0, len(el.Namespaces))
+	prefixes := make([]string, 0, el.NumNamespaceDecls())
 	for _, ns := range el.Namespaces {
 		p := ns.Name.Local
 		// The xml prefix is bound everywhere by the XML Namespaces

@@ -627,9 +627,9 @@ func (rt *runtime) noteCopiedAccumulators(orig, copy *xdm.Node) {
 			return
 		}
 		rt.accumOrigin[b] = a
-		for i := range b.Children {
-			if i < len(a.Children) {
-				pair(a.Children[i], b.Children[i])
+		for i := range b.NumChildren() {
+			if i < a.NumChildren() {
+				pair(a.ChildAt(i), b.ChildAt(i))
 			}
 		}
 	}

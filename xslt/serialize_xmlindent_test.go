@@ -19,12 +19,11 @@ func TestXMLIndentRespectsTypedContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := tree.Root.Children[0]
-	r.TypeAnnotation, r.NoTypedValue = "anyType", true // anonymous element-only
-	r.Children[0].TypeAnnotation = "string"
-	m := r.Children[1]
-	m.TypeAnnotation, m.MixedContent = "anyType", true // anonymous mixed
-	r.Children[2].TypeAnnotation = "anyType"           // genuine xs:anyType
+	r := tree.Root.FirstChild()
+	r.ApplyTyping(xdm.Typing{TypeAnnotation: "anyType", NoTypedValue: true}) // anonymous element-only
+	r.FirstChild().ApplyTyping(xdm.Typing{TypeAnnotation: "string"})
+	r.ChildAt(1).ApplyTyping(xdm.Typing{TypeAnnotation: "anyType", MixedContent: true}) // anonymous mixed
+	r.ChildAt(2).ApplyTyping(xdm.Typing{TypeAnnotation: "anyType"})                    // genuine xs:anyType
 
 	var sb strings.Builder
 	err = Serialize(&sb, xdm.One(r),

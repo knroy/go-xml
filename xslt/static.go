@@ -142,7 +142,7 @@ func (p *staticPhase) module(doc *xdm.Node) error {
 			return err
 		}
 		if !keep {
-			root.Children = nil
+			root.SetChildren(nil)
 			return nil
 		}
 		return p.children(root, true)
@@ -199,7 +199,7 @@ func (p *staticPhase) children(n *xdm.Node, topLevel bool) error {
 		}
 		kept = append(kept, ch)
 	}
-	n.Children = kept
+	n.SetChildren(kept)
 	return nil
 }
 
@@ -649,23 +649,21 @@ func (p *staticPhase) expandShadow(el *xdm.Node) error {
 	// is ignored" — including for the purpose of reporting an error in its
 	// value, which is why the target is removed rather than left in place for
 	// the grammar check to object to.
-	el.Attrs = el.Attrs[:0]
+	attrs := make([]*xdm.Node, 0, len(kept)+len(shadowed))
 	for _, a := range kept {
 		if a.Name.URI == "" {
 			if _, shadowedOut := shadowed[a.Name.Local]; shadowedOut {
 				continue
 			}
 		}
-		el.Attrs = append(el.Attrs, a)
+		attrs = append(attrs, a)
 	}
 	for name, v := range shadowed {
-		el.Attrs = append(el.Attrs, &xdm.Node{
-			Kind:   xdm.KindAttribute,
-			Name:   xdm.QName{Local: name},
-			Value:  v,
-			Parent: el,
-		})
+		a := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: name}, v)
+		a.SetParent(el)
+		attrs = append(attrs, a)
 	}
+	el.SetAttrs(attrs)
 	return nil
 }
 

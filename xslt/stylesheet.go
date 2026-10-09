@@ -695,7 +695,7 @@ func forgetSharedNS() {
 // the result: the map may be shared and must not be modified.
 func inScopeNamespacesShared(el *xdm.Node) map[string]string {
 	d := el
-	for d != nil && (d.Kind != xdm.KindElement || len(d.Namespaces) == 0) {
+	for d != nil && (d.Kind != xdm.KindElement || d.NumNamespaceDecls() == 0) {
 		d = d.Parent
 	}
 	if d == nil {

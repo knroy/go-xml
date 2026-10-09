@@ -40,8 +40,11 @@ func TestInScopeNamespacesShared(t *testing.T) {
 	}
 
 	// Add a declaration to a, as use-package's override rewriting does.
-	a.Namespaces = append(a.Namespaces, &xdm.Node{Kind: xdm.KindNamespace,
-		Name: xdm.QName{Local: "x"}, Value: "urn:x"})
+	var decls []*xdm.Node
+	for i := range a.NumNamespaceDecls() {
+		decls = append(decls, a.NamespaceDeclAt(i))
+	}
+	a.SetNamespaceDecls(append(decls, xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: "x"}, "urn:x")))
 	forgetSharedNS()
 	if got := inScopeNamespacesShared(b); got["x"] != "urn:x" {
 		t.Errorf("after a declares x: b sees x = %q, want urn:x", got["x"])

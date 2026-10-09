@@ -418,8 +418,9 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 			return err
 		}
 		defer rt.ascend()
-		size := len(node.Children)
-		for idx, ch := range node.Children {
+		size := node.NumChildren()
+		for idx := range node.NumChildren() {
+			ch := node.ChildAt(idx)
 			sub := rt.withCurrent(ch, idx+1, size)
 			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
 				return err
@@ -1015,8 +1016,9 @@ func builtInDescend(rt *runtime, node *xdm.Node, mode string,
 			return err
 		}
 		defer rt.ascend()
-		size := len(node.Children)
-		for idx, ch := range node.Children {
+		size := node.NumChildren()
+		for idx := range node.NumChildren() {
+			ch := node.ChildAt(idx)
 			sub := rt.withCurrent(ch, idx+1, size)
 			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
 				return err
@@ -1054,14 +1056,16 @@ func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
 	// Two separate xsl:apply-templates instructions, so position() restarts
 	// at 1 for the children -- the same distinction 6.7.3's note draws about
 	// the identity rule.
-	for idx, a := range node.Attrs {
-		an := rt.withCurrent(a, idx+1, len(node.Attrs))
+	for idx := range node.NumAttrs() {
+		a := node.AttrAt(idx)
+		an := rt.withCurrent(a, idx+1, node.NumAttrs())
 		if err := applyToNode(an, a, mode, params, tunnels, out); err != nil {
 			return err
 		}
 	}
-	size := len(node.Children)
-	for idx, ch := range node.Children {
+	size := node.NumChildren()
+	for idx := range node.NumChildren() {
+		ch := node.ChildAt(idx)
 		cn := rt.withCurrent(ch, idx+1, size)
 		if err := applyToNode(cn, ch, mode, params, tunnels, out); err != nil {
 			return err
@@ -1107,14 +1111,14 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 			}
 		}
 		if doc.BaseURI == "" {
-			doc.BaseURI = node.BaseURI
+			doc.SetBaseURI(node.BaseURI)
 		}
 		out.AppendNode(doc)
 		return nil
 	case xdm.KindElement:
 		sub := out.StartElement(node.Name)
 		if out.Open() == nil && sub.Open().BaseURI == "" {
-			sub.Open().BaseURI = node.BaseURI
+			sub.Open().SetBaseURI(node.BaseURI)
 		}
 		copyNamespacesTo(rt, sub, node)
 		// The attributes are processed first so that they reach the element
@@ -1125,13 +1129,14 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		}
 		defer rt.ascend()
 		for _, a := range node.Attrs {
-			an := rt.withCurrent(a, 1, len(node.Attrs))
+			an := rt.withCurrent(a, 1, node.NumAttrs())
 			if err := applyToNode(an, a, mode, params, tunnels, sub); err != nil {
 				return err
 			}
 		}
-		size := len(node.Children)
-		for idx, ch := range node.Children {
+		size := node.NumChildren()
+		for idx := range node.NumChildren() {
+			ch := node.ChildAt(idx)
 			cn := rt.withCurrent(ch, idx+1, size)
 			if err := applyToNode(cn, ch, mode, params, tunnels, sub); err != nil {
 				return err

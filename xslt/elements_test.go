@@ -959,10 +959,12 @@ func TestRawTextCannotEndItsElement(t *testing.T) {
 func TestRawTextGuardSpansTextNodes(t *testing.T) {
 	serialize := func(texts ...string) error {
 		t.Helper()
-		sc := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "script"}}
+		sc := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "script"}, "")
+		var kids []*xdm.Node
 		for _, v := range texts {
-			sc.Children = append(sc.Children, &xdm.Node{Kind: xdm.KindText, Value: v})
+			kids = append(kids, xdm.NewNode(xdm.KindText, xdm.QName{}, v))
 		}
+		sc.SetChildren(kids)
 		var sb strings.Builder
 		err := Serialize(&sb, xdm.Sequence{sc}, OutputSettings{Method: "html", OmitXMLDecl: true}, nil)
 		if err == nil && strings.Contains(sb.String(), "</script><") {

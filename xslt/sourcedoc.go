@@ -150,7 +150,7 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 		return fragmentOf(rt.sheet.stripInputAnnotations(tree.Root), href)
 	}
 	copied := xdm.NewTree()
-	copied.Root.BaseURI = tree.Root.BaseURI
+	copied.Root.SetBaseURI(tree.Root.BaseURI)
 	for _, ch := range tree.Root.Children {
 		copied.Root.AppendChild(deepCopy(ch))
 	}

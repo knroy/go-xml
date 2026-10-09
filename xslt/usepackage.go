@@ -1892,9 +1892,9 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		kept = append(kept, ch)
 	}
 	kept = append(kept, appended...)
-	u.root.Children = kept
+	u.root.SetChildren(kept)
 	for _, ch := range kept {
-		ch.Parent = u.root
+		ch.SetParent(u.root)
 	}
 	forgetSharedNS() // parent links changed
 	// The used package's static variables are its own, so they are put back
@@ -2291,12 +2291,9 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 	// invisible to the used package's own function-lookup.
 	if realName := original.AttrValue("name"); realName != "" &&
 		!isAbstractDecl(original) {
-		original.Attrs = append(original.Attrs, &xdm.Node{
-			Kind:   xdm.KindAttribute,
-			Name:   xdm.QName{URI: overriddenMarkerNS, Local: "name"},
-			Value:  realName,
-			Parent: original,
-		})
+		marker := xdm.NewNode(xdm.KindAttribute, xdm.QName{URI: overriddenMarkerNS, Local: "name"}, realName)
+		marker.SetParent(original)
+		original.SetAttrs(attrsWith(original, marker))
 	}
 	setAttr(original, "name", "Q{"+uri+"}original")
 	if isXSL(original, "param") {
@@ -2313,9 +2310,9 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 		// xsl:original to read, and the declaration is marked abstract: that
 		// defers it, so only a stylesheet that actually reads xsl:original
 		// fails, and it fails as the XTDE3052 for a component with no body.
-		original.Name = xdm.QName{
+		original.SetName(xdm.QName{
 			Prefix: original.Name.Prefix, URI: xdm.NSXSL, Local: "variable",
-		}
+		})
 		// required and tunnel belong to xsl:param alone -- 9.2's signature
 		// has them, 9.1's for xsl:variable does not -- so they have to come
 		// off with the rename. The engine used to add required="no" here
@@ -2356,11 +2353,11 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 		if ns != xdm.NSXSL || prefix == "" {
 			continue
 		}
-		overriding.Namespaces = append(overriding.Namespaces, &xdm.Node{
-			Kind:  xdm.KindNamespace,
-			Name:  xdm.QName{Local: prefix},
-			Value: uri,
-		})
+		decls := make([]*xdm.Node, overriding.NumNamespaceDecls(), overriding.NumNamespaceDecls()+1)
+		for i := range decls {
+			decls[i] = overriding.NamespaceDeclAt(i)
+		}
+		overriding.SetNamespaceDecls(append(decls, xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: prefix}, uri)))
 	}
 	forgetSharedNS() // overriding's namespaces changed
 	return overriding
@@ -2373,7 +2370,7 @@ var packageSerial int
 
 // dropAttrs removes unprefixed attributes from an element.
 func dropAttrs(el *xdm.Node, names ...string) {
-	kept := el.Attrs[:0]
+	kept := make([]*xdm.Node, 0, el.NumAttrs())
 	for _, a := range el.Attrs {
 		drop := false
 		if a.Name.URI == "" {
@@ -2388,23 +2385,31 @@ func dropAttrs(el *xdm.Node, names ...string) {
 			kept = append(kept, a)
 		}
 	}
-	el.Attrs = kept
+	el.SetAttrs(kept)
 }
 
 // setAttr sets or replaces an unprefixed attribute of an element.
 func setAttr(el *xdm.Node, name, value string) {
 	for _, a := range el.Attrs {
 		if a.Name.URI == "" && a.Name.Local == name {
-			a.Value = value
+			a.SetValue(value)
 			return
 		}
 	}
-	el.Attrs = append(el.Attrs, &xdm.Node{
-		Kind:   xdm.KindAttribute,
-		Name:   xdm.QName{Local: name},
-		Value:  value,
-		Parent: el,
-	})
+	a := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: name}, value)
+	a.SetParent(el)
+	el.SetAttrs(attrsWith(el, a))
+}
+
+// attrsWith returns el's attributes followed by a, in a new slice. The
+// stylesheet rewrites add attributes this way rather than with AddAttr, which
+// would also give a the tree el belongs to.
+func attrsWith(el, a *xdm.Node) []*xdm.Node {
+	out := make([]*xdm.Node, el.NumAttrs(), el.NumAttrs()+1)
+	for i := range out {
+		out[i] = el.AttrAt(i)
+	}
+	return append(out, a)
 }
 
 // checkPackageVersionRange applies the PackageVersionRange grammar of 3.5.1

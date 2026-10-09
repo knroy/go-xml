@@ -790,12 +790,22 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// element declares, and stays in scope for its children.
 	base := len(s.ns)
 	defer func() { s.ns = s.ns[:base] }()
-	nsNodes := n.Namespaces
+	// Normally the element's own namespace nodes; for the root of a
+	// serialization, rootNamespaces' list instead.
+	var seeded []*xdm.Node
+	count := n.NumNamespaceDecls()
 	if n == s.seeded {
 		s.seeded = nil
-		nsNodes = rootNamespaces(n)
+		seeded = rootNamespaces(n)
+		count = len(seeded)
 	}
-	for _, ns := range nsNodes {
+	for i := range count {
+		var ns *xdm.Node
+		if seeded != nil {
+			ns = seeded[i]
+		} else {
+			ns = n.NamespaceDeclAt(i)
+		}
 		if s.inScope(base, ns.Name.Local) == ns.Value {
 			continue
 		}
@@ -883,12 +893,12 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// not. Serialization-xhtml-36 writes <html><head/></html> with no
 	// namespace and asks to see the content-type meta, which the
 	// no-children branch would have written away as "<head></head>".
-	emptyHead := len(n.Children) == 0 && s.html &&
+	emptyHead := n.NumChildren() == 0 && s.html &&
 		strings.EqualFold(n.Name.Local, "head") &&
 		(!s.xhtml || n.Name.URI == nsXHTML || n.Name.URI == "") &&
 		(s.opts.IncludeContentType == nil || *s.opts.IncludeContentType)
 
-	if len(n.Children) == 0 && !emptyHead {
+	if n.NumChildren() == 0 && !emptyHead {
 		// htmlNativeElement rather than s.html: an element in a namespace of
 		// its own is an XML island, and Serialization 3.1 §9 has the html
 		// method write foreign content with XML syntax. The self-closing
@@ -1082,7 +1092,8 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// Serialization 3.1 §7.4.3 (html) and §6.1.4 (xhtml): whitespace "MUST
 	// NOT be added or removed adjacent to an inline element"; see
 	// htmlser.SkipIndentBefore for where that leaves room for an indent.
-	for i, c := range n.Children {
+	for i := range n.NumChildren() {
+		c := n.ChildAt(i)
 		if !indentChildren {
 			s.nodeNoIndent(c)
 			continue
@@ -1091,7 +1102,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		s.node(c, depth+1)
 		s.skipIndent = false
 	}
-	if (indentChildren && !s.skipBeforeChild(n, len(n.Children))) ||
+	if (indentChildren && !s.skipBeforeChild(n, n.NumChildren())) ||
 		(emptyHead && s.opts.Indent) {
 		s.indent(depth)
 	}
@@ -1115,26 +1126,31 @@ func (s *serializer) nodeNoIndent(n *xdm.Node) {
 // first, and the copy keeps every in-scope namespace of the element. A
 // constructed element leaves a binding its parent already has to the parent,
 // so writing only its own nodes lost that binding from the output. When n
-// inherits nothing its own nodes are returned unchanged; otherwise the union
-// is sorted by prefix, which is the order a literal result element copies
-// its bindings in.
+// inherits nothing its own nodes are returned in their order, in a new
+// non-nil slice; otherwise the union is sorted by prefix, which is the order
+// a literal result element copies its bindings in.
 func rootNamespaces(n *xdm.Node) []*xdm.Node {
 	scope := n.InScopeNamespaces()
-	own := make(map[string]bool, len(n.Namespaces))
+	own := make(map[string]bool, n.NumNamespaceDecls())
 	for _, ns := range n.Namespaces {
 		own[ns.Name.Local] = true
 	}
 	var out []*xdm.Node
 	for p, uri := range scope {
 		if p != "xml" && !own[p] {
-			out = append(out, &xdm.Node{Kind: xdm.KindNamespace,
-				Name: xdm.QName{Local: p}, Value: uri})
+			out = append(out, xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: p}, uri))
 		}
 	}
-	if out == nil {
-		return n.Namespaces
+	inherited := len(out)
+	for i := range n.NumNamespaceDecls() {
+		out = append(out, n.NamespaceDeclAt(i))
 	}
-	out = append(out, n.Namespaces...)
+	if inherited == 0 {
+		if out == nil {
+			out = []*xdm.Node{}
+		}
+		return out
+	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].Name.Local < out[j].Name.Local
 	})
@@ -2363,7 +2379,7 @@ func defaultMethod(seq xdm.Sequence, v10Implicit bool) string {
 			case *xdm.Node:
 				switch v.Kind {
 				case xdm.KindDocument:
-					kids := make(xdm.Sequence, 0, len(v.Children))
+					kids := make(xdm.Sequence, 0, v.NumChildren())
 					for _, c := range v.Children {
 						kids = append(kids, c)
 					}
@@ -2585,7 +2601,7 @@ func isWellFormedDocument(seq xdm.Sequence) bool {
 			case *xdm.Node:
 				switch v.Kind {
 				case xdm.KindDocument:
-					kids := make(xdm.Sequence, 0, len(v.Children))
+					kids := make(xdm.Sequence, 0, v.NumChildren())
 					for _, c := range v.Children {
 						kids = append(kids, c)
 					}
@@ -2691,7 +2707,7 @@ func insertItemSeparator(seq xdm.Sequence, sep *string) xdm.Sequence {
 	out := make(xdm.Sequence, 0, 2*len(seq)-1)
 	for i, it := range seq {
 		if i > 0 {
-			out = append(out, &xdm.Node{Kind: xdm.KindText, Value: *sep})
+			out = append(out, xdm.NewNode(xdm.KindText, xdm.QName{}, *sep))
 		}
 		out = append(out, it)
 	}

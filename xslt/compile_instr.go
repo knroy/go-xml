@@ -13,7 +13,7 @@ import (
 
 // compileSequence compiles the children of el as a sequence constructor.
 func (c *compiler) compileSequence(el, nsScope *xdm.Node) ([]Instruction, error) {
-	return c.compileNodes(el.Children, nsScope)
+	return c.compileNodes(childrenFrom(el, 0), nsScope)
 }
 
 // compileSequenceFrom compiles the element children of el starting at the
@@ -26,7 +26,8 @@ func (c *compiler) compileSequenceFrom(el, nsScope *xdm.Node, fromElem int) ([]I
 	// that follows it is part of the sequence constructor, and starting at
 	// the following element silently swallowed it.
 	seen, start := 0, 0
-	for i, ch := range el.Children {
+	for i := range el.NumChildren() {
+		ch := el.ChildAt(i)
 		if ch.Kind != xdm.KindElement {
 			continue
 		}
@@ -39,7 +40,16 @@ func (c *compiler) compileSequenceFrom(el, nsScope *xdm.Node, fromElem int) ([]I
 	if fromElem == 0 {
 		start = 0
 	}
-	return c.compileNodes(el.Children[start:], nsScope)
+	return c.compileNodes(childrenFrom(el, start), nsScope)
+}
+
+// childrenFrom returns el's children from index start on, in a new slice.
+func childrenFrom(el *xdm.Node, start int) []*xdm.Node {
+	out := make([]*xdm.Node, el.NumChildren()-start)
+	for i := range out {
+		out[i] = el.ChildAt(start + i)
+	}
+	return out
 }
 
 func (c *compiler) compileNodes(nodes []*xdm.Node, nsScope *xdm.Node) ([]Instruction, error) {
@@ -400,9 +410,11 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		// one in a sequence constructor, so it is compiled through the same
 		// path rather than taken literally. The node stands in for the
 		// element's whole content, which xsl:text is defined to concatenate.
-		return c.compileText(&xdm.Node{
-			Kind: xdm.KindText, Value: n.StringValue(), Parent: n,
-		})
+		return c.compileText(func() *xdm.Node {
+			nd := xdm.NewNode(xdm.KindText, xdm.QName{}, n.StringValue())
+			nd.SetParent(n)
+			return nd
+		}())
 	case "apply-templates":
 		return c.compileApplyTemplates(n, ns)
 	case "call-template":
@@ -1384,11 +1396,13 @@ func stylesheetTextPreserved(n *xdm.Node) bool {
 	// The *following* sibling is what matters: text laid out before an
 	// xsl:sort or xsl:param is indentation, whereas text after the last one
 	// is content of the sequence constructor.
-	for i, ch := range parent.Children {
+	for i := range parent.NumChildren() {
+		ch := parent.ChildAt(i)
 		if ch != n {
 			continue
 		}
-		for _, sib := range parent.Children[i+1:] {
+		for j := i + 1; j < parent.NumChildren(); j++ {
+			sib := parent.ChildAt(j)
 			if sib.Kind != xdm.KindElement {
 				continue
 			}
@@ -1456,7 +1470,8 @@ func mergeAcrossComments(nodes []*xdm.Node) []*xdm.Node {
 		}
 		if n.Kind == xdm.KindText && len(kept) > 0 && kept[len(kept)-1].Kind == xdm.KindText {
 			prev := kept[len(kept)-1]
-			merged := &xdm.Node{Kind: xdm.KindText, Value: prev.Value + n.Value, Parent: prev.Parent}
+			merged := xdm.NewNode(xdm.KindText, xdm.QName{}, prev.Value+n.Value)
+			merged.SetParent(prev.Parent)
 			kept[len(kept)-1] = merged
 			continue
 		}

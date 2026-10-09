@@ -20,9 +20,9 @@ func TestPatternRejectsOnNodeTestFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := tree.Root
-	el := doc.Children[0]
-	attr := el.Attrs[0]
-	p, q := el.Children[0], el.Children[1]
+	el := doc.FirstChild()
+	attr := el.AttrAt(0)
+	p, q := el.FirstChild(), el.ChildAt(1)
 	var ns *xdm.Node
 	for _, n := range el.Namespaces {
 		if n.Name.Local == "z" {

@@ -284,11 +284,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// attribute arrived in the output tree with its union member
 				// and its resolved primitive gone, to be guessed at later
 				// from the process-global registries.
-				a := &xdm.Node{
-					Kind:  xdm.KindAttribute,
-					Name:  v.Name,
-					Value: v.Value,
-				}
+				a := xdm.NewNode(xdm.KindAttribute, v.Name, v.Value)
 				a.CopyTypingFrom(v)
 				if err := i.validation.assess(rt, a); err != nil {
 					return err
@@ -469,7 +465,7 @@ func hasNamespaceSensitiveContent(n *xdm.Node) bool {
 // the copy resolves against the document it came from.
 func copyDocumentNode(n *xdm.Node) *xdm.Node {
 	tree := xdm.NewTree()
-	tree.Root.BaseURI = n.BaseURI
+	tree.Root.SetBaseURI(n.BaseURI)
 	tree.CopyDTDFrom(n.Tree())
 	// A document node's typing is only ever an annotation in practice, but it
 	// is copied through the same operation as every other node so that a
@@ -540,8 +536,8 @@ func scopeBindings(n *xdm.Node, buf []nsBinding) []nsBinding {
 		// Within one element the last declaration wins, as the map's
 		// overwrites resolve it; an inner element shadows an outer one.
 	next:
-		for i := len(cur.Namespaces) - 1; i >= 0; i-- {
-			ns := cur.Namespaces[i]
+		for i := cur.NumNamespaceDecls() - 1; i >= 0; i-- {
+			ns := cur.NamespaceDeclAt(i)
 			if ns.Name.Local == "xml" {
 				continue
 			}
@@ -581,7 +577,7 @@ func scopeBindings(n *xdm.Node, buf []nsBinding) []nsBinding {
 // answered with the bindings of wherever the copy landed. copy-0623 and
 // copy-0627 ask exactly that question.
 func stripNamespaces(n *xdm.Node) {
-	n.Namespaces = nil
+	n.SetNamespaceDecls(nil)
 	// An element does not acquire an in-scope namespace merely because that
 	// namespace is present on its parent: §5.8.3 permits fixup to add a
 	// namespace node only where one is "necessary either to satisfy these
@@ -702,8 +698,8 @@ func scopeURI(n *xdm.Node, prefix string) string {
 		if cur.Kind != xdm.KindElement {
 			continue
 		}
-		for i := len(cur.Namespaces) - 1; i >= 0; i-- {
-			if ns := cur.Namespaces[i]; ns.Name.Local == prefix {
+		for i := cur.NumNamespaceDecls() - 1; i >= 0; i-- {
+			if ns := cur.NamespaceDeclAt(i); ns.Name.Local == prefix {
 				return ns.Value
 			}
 		}
@@ -768,8 +764,8 @@ func suppliedAt(rt *runtime, parent *xdm.Node, prefix, uri string) bool {
 		if fixupMayBind(cur, prefix) {
 			return false
 		}
-		for i := len(cur.Namespaces) - 1; i >= 0; i-- {
-			if ns := cur.Namespaces[i]; ns.Name.Local == prefix {
+		for i := cur.NumNamespaceDecls() - 1; i >= 0; i-- {
+			if ns := cur.NamespaceDeclAt(i); ns.Name.Local == prefix {
 				return ns.Value == uri && !rt.blocking[cur]
 			}
 		}
@@ -897,7 +893,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// so the source node's base URI travels with the shallow copy.
 			// An xml:base written into the body overrides it later, via the
 			// same path any other attribute takes.
-			sub.Open().BaseURI = node.BaseURI
+			sub.Open().SetBaseURI(node.BaseURI)
 		}
 		if !i.noNamespaces {
 			// Section 11.9.1 copies "the namespace nodes of the element",
@@ -961,7 +957,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 		}
 		if doc.BaseURI == "" {
-			doc.BaseURI = node.BaseURI
+			doc.SetBaseURI(node.BaseURI)
 			// The body ran before the document node had a base URI of its
 			// own, so every element it built was parentless as far as
 			// stampConstructedBaseURI could tell and took the stylesheet's
@@ -980,7 +976,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 			if doc.BaseURI != "" {
 				for _, ch := range doc.Children {
 					if ch.Kind == xdm.KindElement {
-						ch.BaseURI = ""
+						ch.SetBaseURI("")
 					}
 				}
 			}
@@ -1002,11 +998,11 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return out.AddAttribute(node.Name, node.Value)
 
 	case xdm.KindComment:
-		out.AppendNode(&xdm.Node{Kind: xdm.KindComment, Value: node.Value})
+		out.AppendNode(xdm.NewNode(xdm.KindComment, xdm.QName{}, node.Value))
 		return nil
 
 	case xdm.KindPI:
-		out.AppendNode(&xdm.Node{Kind: xdm.KindPI, Name: node.Name, Value: node.Value})
+		out.AppendNode(xdm.NewNode(xdm.KindPI, node.Name, node.Value))
 		return nil
 
 	case xdm.KindNamespace:
@@ -1078,7 +1074,7 @@ type nsBinding struct{ prefix, uri string }
 // before the field.
 func stampConstructedBaseURI(el *xdm.Node, base string) {
 	if base == "" || el.Parent == nil {
-		el.BaseURI = base
+		el.SetBaseURI(base)
 		return
 	}
 	for cur := el.Parent; cur != nil; cur = cur.Parent {
@@ -1088,7 +1084,7 @@ func stampConstructedBaseURI(el *xdm.Node, base string) {
 			return
 		}
 	}
-	el.BaseURI = base
+	el.SetBaseURI(base)
 }
 
 func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -1366,7 +1362,7 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// the one place holding the schema that did the assessing, so what it
 	// resolved the name to must travel with the node rather than be looked up
 	// again later against whichever schema happens to have loaded last.
-	assessed := &xdm.Node{Kind: xdm.KindAttribute, Name: qn, Value: value}
+	assessed := xdm.NewNode(xdm.KindAttribute, qn, value)
 	if err := i.validation.assess(rt, assessed); err != nil {
 		return err
 	}
@@ -1448,7 +1444,7 @@ func (i *commentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// repair the specification requires, not an error — rejecting the
 	// stylesheet refused output XML can perfectly well represent.
 	text = repairCommentText(text)
-	out.AppendNode(&xdm.Node{Kind: xdm.KindComment, Value: text})
+	out.AppendNode(xdm.NewNode(xdm.KindComment, xdm.QName{}, text))
 	return nil
 }
 
@@ -1512,11 +1508,7 @@ func (i *piInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// inserting a space between the "?" and the ">", which is what keeps a
 	// computed processing instruction from closing itself early.
 	text = strings.ReplaceAll(text, "?>", "? >")
-	out.AppendNode(&xdm.Node{
-		Kind:  xdm.KindPI,
-		Name:  xdm.QName{Local: target},
-		Value: text,
-	})
+	out.AppendNode(xdm.NewNode(xdm.KindPI, xdm.QName{Local: target}, text))
 	return nil
 }
 

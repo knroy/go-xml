@@ -140,7 +140,7 @@ func contentChildren(n *xdm.Node) []*xdm.Node {
 			}
 			if len(out) > 0 && out[len(out)-1].Kind == xdm.KindText {
 				merged := *out[len(out)-1]
-				merged.Value += c.Value
+				merged.SetValue(merged.Value + c.Value)
 				out[len(out)-1] = &merged
 				continue
 			}
@@ -156,7 +156,7 @@ func contentChildren(n *xdm.Node) []*xdm.Node {
 // attrSet renders an element's attributes as sorted "{uri}local=value"
 // strings, which is the comparison the data model licenses.
 func attrSet(n *xdm.Node) []string {
-	out := make([]string, 0, len(n.Attrs))
+	out := make([]string, 0, n.NumAttrs())
 	for _, a := range n.Attrs {
 		out = append(out, "{"+a.Name.URI+"}"+a.Name.Local+"="+a.StringValue())
 	}

@@ -901,13 +901,12 @@ func matchPredicates(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, e
 	}
 
 	principal := xdm.KindElement
-	siblings := node.Parent.Children
 	if s.attribute {
 		principal = xdm.KindAttribute
-		siblings = node.Parent.Attrs
 	}
-	cand := make([]*xdm.Node, 0, len(siblings))
-	for _, sib := range siblings {
+	cand := make([]*xdm.Node, 0, numSiblings(node.Parent, s.attribute))
+	for i := range numSiblings(node.Parent, s.attribute) {
+		sib := siblingAt(node.Parent, s.attribute, i)
 		if s.nodeTest.Matches(sib, principal) {
 			cand = append(cand, sib)
 		}
@@ -951,6 +950,22 @@ func matchPredicates(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, e
 	return false, nil
 }
 
+// numSiblings and siblingAt index the nodes a pattern step's position counts
+// among: p's attributes for an attribute step, its children otherwise.
+func numSiblings(p *xdm.Node, attr bool) int {
+	if attr {
+		return p.NumAttrs()
+	}
+	return p.NumChildren()
+}
+
+func siblingAt(p *xdm.Node, attr bool, i int) *xdm.Node {
+	if attr {
+		return p.AttrAt(i)
+	}
+	return p.ChildAt(i)
+}
+
 // evalPatternPredicate evaluates a pattern predicate against a candidate node.
 //
 // The context position is the node's position among the siblings that the same
@@ -965,12 +980,9 @@ func evalPatternPredicate(pred xpath.Expr, s patternStep, node *xdm.Node, ctx *x
 		if s.attribute {
 			principal = xdm.KindAttribute
 		}
-		siblings := node.Parent.Children
-		if s.attribute {
-			siblings = node.Parent.Attrs
-		}
 		size = 0
-		for _, sib := range siblings {
+		for i := range numSiblings(node.Parent, s.attribute) {
+			sib := siblingAt(node.Parent, s.attribute, i)
 			if s.nodeTest.Matches(sib, principal) {
 				size++
 				if sib == node {
