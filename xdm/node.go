@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/knroy/go-xml/internal/genid"
 )
 
 // NodeKind enumerates the seven node kinds of the XDM.
@@ -377,56 +379,81 @@ func (n *Node) TypeName() string {
 	return n.Kind.String()
 }
 
-// Order returns a number that identifies the node uniquely within the process.
+// Order returns a number that identifies the node within the process.
 //
 // It is the document-order index within the node's own tree, combined with the
-// tree's identity so that nodes from two documents cannot collide. Callers
+// tree's identity so that nodes from two documents do not share it. Callers
 // wanting relative position must use Compare: this value orders nodes within
 // one tree but says nothing across trees.
 //
-// The combination is what fn:generate-id() needs. Returning the bare per-tree
-// index gave the same answer to the first node of every document, so a
-// stylesheet comparing generated identities across documents — the case
-// key-042 in the XSLT suite exists to check — saw distinct nodes as identical.
+// The combination is lossy: a tree with more than treeIDStride order slots
+// overlaps the next tree's range, so two nodes can share a value.
+// fn:generate-id() needs an identity that never collides and so does not use
+// this; see generateID.
+func (n *Node) Order() int {
+	tree, order := n.identity()
+	return tree*treeIDStride + int(order)
+}
+
+// identity returns the two halves of a node's identity: the id of its tree,
+// and its document-order index within that tree.
 //
 // A tree built by a sequence constructor is never finalized and has no tree of
 // its own; those nodes take the identity assigned on demand to their root, the
 // same one cross-tree comparison uses, so two parentless elements are also
 // distinguished.
-func (n *Node) Order() int {
-	base := 0
+func (n *Node) identity() (tree int, order int32) {
 	if n.tree != nil {
-		base = n.tree.id
-	} else {
-		root := n
-		for root.Parent != nil {
-			root = root.Parent
-		}
-		base = int(detachedRootID(root))
-		// Within the tree the root identity is only half the answer: every
-		// node under it still carries the zero order it was built with, so
-		// they all reduced to the same number. fn:generate-id() is built on
-		// this, and a stylesheet that used it as a map key got XTDE3365 for
-		// two genuinely different nodes -- reported against SchXslt2, whose
-		// transpiler keys a severity map on generate-id() of each
-		// sch:assert and sch:report.
-		//
-		// Numbering happens here rather than when the tree is built because
-		// most result trees are serialized and discarded without anyone
-		// asking for a node's identity, and a pre-order walk per construction
-		// would be paid by every transform to serve the few that ask.
-		if n.order == 0 && n != root {
-			numberDetachedSubtree(root)
-		}
+		return n.tree.id, n.order
 	}
-	// The tree component is shifted well clear of any plausible document
-	// size. A document with more than a million nodes would overlap the next
-	// tree's range, which costs uniqueness but nothing else: the value is an
-	// identity, and Compare — not this — decides order.
-	return base*treeIDStride + int(n.order)
+	root := n
+	for root.Parent != nil {
+		root = root.Parent
+	}
+	tree = int(detachedRootID(root))
+	// Within the tree the root identity is only half the answer: every
+	// node under it still carries the zero order it was built with, so
+	// they all reduced to the same number. fn:generate-id() is built on
+	// this, and a stylesheet that used it as a map key got XTDE3365 for
+	// two genuinely different nodes -- reported against SchXslt2, whose
+	// transpiler keys a severity map on generate-id() of each
+	// sch:assert and sch:report.
+	//
+	// Numbering happens here rather than when the tree is built because
+	// most result trees are serialized and discarded without anyone
+	// asking for a node's identity, and a pre-order walk per construction
+	// would be paid by every transform to serve the few that ask.
+	if n.order == 0 && n != root {
+		numberDetachedSubtree(root)
+	}
+	return tree, n.order
 }
 
-// treeIDStride separates one tree's identity range from the next.
+func init() { genid.Of = func(n any) string { return n.(*Node).generateID() } }
+
+// generateID returns the string fn:generate-id() gives n: "N", the tree id,
+// "x", and the document-order index within the tree.
+//
+// The spec requires it to be stable for a node, distinct between nodes and
+// ASCII alphanumeric starting with a letter. Returning the bare per-tree
+// index gave the same answer to the first node of every document, so a
+// stylesheet comparing generated identities across documents -- the case
+// key-042 in the XSLT suite exists to check -- saw distinct nodes as
+// identical. Folding both halves into one integer, as Order does, collided
+// as soon as a tree had more than treeIDStride order slots: node 2^20 of
+// tree t and node 0 of tree t+1 both answered "N" + (t+1)*2^20. Spelling
+// the two halves apart has no such ceiling.
+func (n *Node) generateID() string {
+	tree, order := n.identity()
+	var buf [40]byte
+	b := append(buf[:0], 'N')
+	b = strconv.AppendInt(b, int64(tree), 10)
+	b = append(b, 'x')
+	b = strconv.AppendInt(b, int64(order), 10)
+	return string(b)
+}
+
+// treeIDStride separates one tree's identity range from the next in Order.
 const treeIDStride = 1 << 20
 
 // SetSynthesizedOrder places a node the parser did not build into the document
@@ -435,8 +462,8 @@ const treeIDStride = 1 << 20
 // The namespace axis is the case this exists for: its nodes are synthesized on
 // demand from the in-scope bindings, so they have no order of their own. Left
 // at zero they sort before every real node, and — because generate-id() is
-// derived from the order — every one of them answers "N0", colliding with each
-// other and with the document node.
+// derived from the order — every one of them answers the same string,
+// colliding with each other and with the document node.
 //
 // The offset separates the bindings of one element from each other while
 // keeping them all adjacent to their owner. It is deliberately not an attempt
@@ -465,8 +492,8 @@ func (n *Node) Tree() *Tree { return n.tree }
 // those pointers made "/*/namespace::xlink is /*/namespace::*[. = '...']"
 // answer false where the spec requires true.
 //
-// Order() is the identity the rest of the engine already uses — fn:generate-id
-// is defined as "N" plus this number, and Compare reads the same field — and
+// The tree and order fields are the identity the rest of the engine already
+// uses — fn:generate-id spells them out, and Compare reads them — and
 // SetSynthesizedOrder derives it from the owning element and the binding's
 // position in the sorted prefix list. So two synthesized nodes for one
 // element and prefix already share it, and two for different elements, or
