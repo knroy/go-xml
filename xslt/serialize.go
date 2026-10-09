@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -483,6 +484,9 @@ type serializer struct {
 	// asks for it on every non-ASCII character, and lower-casing "UTF-8"
 	// allocated each time. encFrom is the spelling the cache was made from.
 	encFrom, encLower string
+	// scratch holds a character reference or an encoded character on its way
+	// to w, so that writing one allocates nothing.
+	scratch [16]byte
 }
 
 func (s *serializer) writeString(str string) {
@@ -490,6 +494,24 @@ func (s *serializer) writeString(str string) {
 		return
 	}
 	_, s.err = io.WriteString(s.w, str)
+}
+
+func (s *serializer) writeBytes(b []byte) {
+	if s.err != nil {
+		return
+	}
+	_, s.err = s.w.Write(b)
+}
+
+// writeRune writes r UTF-8 encoded, as strings.Builder.WriteRune would.
+func (s *serializer) writeRune(r rune) {
+	s.writeBytes(utf8.AppendRune(s.scratch[:0], r))
+}
+
+// writeCharRef writes r as a decimal character reference, "&#N;".
+func (s *serializer) writeCharRef(r rune) {
+	b := strconv.AppendInt(append(s.scratch[:0], "&#"...), int64(r), 10)
+	s.writeBytes(append(b, ';'))
 }
 
 // fail keeps the first serialization error. Subsequent writes must not replace
@@ -835,15 +857,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	}
 
 	for _, a := range n.Attrs {
-		// Written in pieces rather than concatenated, which allocated a
-		// string per attribute. The value is computed first: it can fail,
-		// and then nothing of the attribute is written, as before.
-		open, body, end := s.attrValue(a, n)
-		s.writeString(" ")
-		s.writeAttrName(a)
-		s.writeString(open)
-		s.writeString(body)
-		s.writeString(end)
+		s.writeAttr(a, n)
 	}
 
 	// An empty element still has to be opened when the method is going to put
@@ -985,17 +999,21 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// `">` closed the content attribute and the meta tag, and
 			// everything after it became live markup in the <head>. Nothing
 			// legal is refused here -- a media type containing `<` or `"` is
-			// escaped, as escapeAttrRunes escapes any other value.
-			tag := `<meta http-equiv="Content-Type" content="` +
-				s.escapeAttrRunes(content) + `">`
-			if s.xhtml {
-				// XHTML is XML: an empty element must be closed. The space
-				// before the slash is what the HTML compatibility guidelines
-				// ask for, so that an HTML parser reading the same bytes does
-				// not take the slash as part of the last attribute value.
-				tag = strings.TrimSuffix(tag, ">") + " />"
+			// escaped, as writeAttrRuns escapes any other value.
+			if !s.attrErr(content) {
+				s.writeString(`<meta http-equiv="Content-Type" content="`)
+				s.writeAttrRuns(content, false)
+				if s.xhtml {
+					// XHTML is XML: an empty element must be closed. The
+					// space before the slash is what the HTML compatibility
+					// guidelines ask for, so that an HTML parser reading the
+					// same bytes does not take the slash as part of the last
+					// attribute value.
+					s.writeString(`" />`)
+				} else {
+					s.writeString(`">`)
+				}
 			}
-			s.writeString(tag)
 		}
 	}
 
@@ -1375,124 +1393,174 @@ func mayIndentContent(n *xdm.Node) bool {
 // because doing it unconditionally is cheaper than scanning for that sequence
 // and produces output every parser accepts.
 func (s *serializer) escapeText(text string) {
-	var sb strings.Builder
-	sb.Grow(len(text))
 	// The text is split at the characters the map claims, so that
 	// normalisation applies to the runs between them and not to the map's
 	// inputs or its outputs. See mapSegments.
-	for _, seg := range s.mapSegments(text) {
-		s.escapeTextRun(&sb, seg.text)
-		if s.err != nil {
+	segs := s.mapSegments(text)
+	// The text is written in pieces, so a character the method cannot
+	// output is looked for first: the node then fails with nothing of it
+	// written, as when it was escaped into a builder before being written.
+	for _, seg := range segs {
+		if s.textErr(seg.text) {
 			return
 		}
+	}
+	for _, seg := range segs {
+		s.escapeTextRun(seg.text)
 		if seg.has {
 			// A character map wins over escaping: emitting "&nbsp;" is the
 			// whole reason a stylesheet declares one, and escaping the
 			// ampersand would defeat it.
-			sb.WriteString(seg.repl)
+			s.writeString(seg.repl)
 		}
 	}
-	s.writeString(sb.String())
 }
 
-// escapeTextRun escapes one run of character data into sb. It is the body of
-// escapeText for a stretch of text no character map claims.
-func (s *serializer) escapeTextRun(sb *strings.Builder, text string) {
-	for _, r := range text {
-		// HTML 4 gives #x7F-#x9F no meaning: the numeric character
-		// references in that range name positions in the C1 control block,
-		// and browsers historically remapped them to the windows-1252
-		// characters instead. Writing one either way produces a document
-		// whose meaning depends on the reader, so the spec forbids it.
-		if s.html && !s.xhtml && r >= 0x7F && r <= 0x9F && !s.html5 {
-			if s.err == nil {
-				s.err = fmt.Errorf("SERE0014: character #x%X cannot be "+
-					"output by the html method", r)
-			}
-			return
-		}
-		if !s.representable(r) {
-			fmt.Fprintf(sb, "&#%d;", r)
+// textErr records the error for the first character of text that the
+// output method cannot write at all, and reports whether there was one.
+func (s *serializer) textErr(text string) bool {
+	// HTML 4 gives #x7F-#x9F no meaning: the numeric character
+	// references in that range name positions in the C1 control block,
+	// and browsers historically remapped them to the windows-1252
+	// characters instead. Writing one either way produces a document
+	// whose meaning depends on the reader, so the spec forbids it.
+	html4 := s.html && !s.xhtml && !s.html5
+	// The C0 controls other than TAB, LF and CR, under the XML-based
+	// methods. XML 1.0 has no spelling for them at all -- they are outside
+	// [2] Char, and a character reference does not help, because [66]
+	// CharRef is constrained to Char too. XML 1.1 admits them, but only
+	// written as references: [2a] RestrictedChar excludes them from the
+	// literal text a document may contain.
+	//
+	// So the version decides between a reference and an error, and
+	// there is no third option where the character is written as
+	// itself. It was: the range fell past every arm of escapeTextRun into
+	// WriteRune, and the output held a raw \x01 that no parser at
+	// either version will read back. SERE0006 is the code for a
+	// character the chosen version cannot represent, which is what
+	// xml-version-030 asserts for a BEL under version="1.0".
+	xml10 := (!s.html || s.xhtml) && !s.xml11()
+	if !html4 && !xml10 {
+		return false
+	}
+	for i := 0; i < len(text); i++ {
+		// Every character either check can refuse is below U+00A0: a
+		// single byte, or 0xC2 and a continuation byte.
+		if b := text[i]; b >= 0x20 && b != 0x7F && b != 0xC2 {
 			continue
 		}
-		// Characters that a parser would not hand back unchanged are written
-		// as references by the XML-based methods. A literal CR is turned into
-		// LF by the line-ending normalisation every XML parser performs
-		// before the document reaches an application, so a text node holding
-		// one comes back holding something else; U+2028 (LINE SEPARATOR) and
-		// the C1 block, which includes U+0085 (NEL), are line endings or
-		// controls to an XML 1.1 parser and get the same treatment. A
-		// reference names the code point unambiguously and is the only
-		// spelling that survives. K2-Serialization-5 and -11 assert the CR
-		// and NEL cases and -10 the whole C1 range.
+		r, _ := utf8.DecodeRuneInString(text[i:])
+		if html4 && r >= 0x7F && r <= 0x9F {
+			s.fail(fmt.Errorf("SERE0014: character #x%X cannot be "+
+				"output by the html method", r))
+			return true
+		}
+		if xml10 && r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
+			s.fail(fmt.Errorf("SERE0006: character #x%X cannot "+
+				"be output as XML 1.0; it is not a valid XML "+
+				"character at that version", r))
+			return true
+		}
+	}
+	return false
+}
+
+// escapeTextRun escapes one run of character data. It is the body of
+// escapeText for a stretch of text no character map claims, and textErr has
+// already passed it. Runs of characters written as they stand are copied to
+// w whole, so a text node costs no allocation.
+func (s *serializer) escapeTextRun(text string) {
+	start := 0
+	for i := 0; i < len(text); {
+		r, size := rune(text[i]), 1
+		if r >= utf8.RuneSelf {
+			r, size = utf8.DecodeRuneInString(text[i:])
+		}
+		if s.plainText(r) {
+			i += size
+			continue
+		}
+		s.writeString(text[start:i])
+		i += size
+		start = i
+		s.escapeTextRune(r)
+	}
+	s.writeString(text[start:])
+}
+
+// plainText reports whether escapeTextRune writes r unchanged, under every
+// method and version, so that it can be copied with the run around it. U+FFFD
+// is excluded because an invalid byte decodes to it and is written as it.
+func (s *serializer) plainText(r rune) bool {
+	if r < utf8.RuneSelf {
+		return r >= 0x20 && r < 0x7F && r != '&' && r != '<' && r != '>' ||
+			r == '\t' || r == '\n'
+	}
+	return r > 0xA0 && r != '\u2028' && r != utf8.RuneError && s.representable(r)
+}
+
+// escapeTextRune writes one character of character data that plainText
+// does not pass through.
+func (s *serializer) escapeTextRune(r rune) {
+	if !s.representable(r) {
+		s.writeCharRef(r)
+		return
+	}
+	// Characters that a parser would not hand back unchanged are written
+	// as references by the XML-based methods. A literal CR is turned into
+	// LF by the line-ending normalisation every XML parser performs
+	// before the document reaches an application, so a text node holding
+	// one comes back holding something else; U+2028 (LINE SEPARATOR) and
+	// the C1 block, which includes U+0085 (NEL), are line endings or
+	// controls to an XML 1.1 parser and get the same treatment. A
+	// reference names the code point unambiguously and is the only
+	// spelling that survives. K2-Serialization-5 and -11 assert the CR
+	// and NEL cases and -10 the whole C1 range.
+	//
+	// The html method is excluded, and not because it disagrees about
+	// these characters: it has its own rule for the C1 range (see
+	// textErr), which is stricter still and makes writing one an error
+	// under HTML 4. What it does not share is XML's line-ending
+	// normalisation, so a CR there is an ordinary character.
+	//
+	// A C0 control other than TAB and LF reaches here only under XML 1.1,
+	// where it is written as a reference; textErr refused it under 1.0.
+	if !s.html || s.xhtml {
+		if r == '\r' || r == '\u2028' || (r >= 0x7F && r <= 0x9F) ||
+			r < 0x20 && r != '\t' && r != '\n' {
+			s.writeCharRef(r)
+			return
+		}
+	}
+	switch r {
+	case '&':
+		s.writeString("&amp;")
+	case '<':
+		s.writeString("&lt;")
+	case '>':
+		s.writeString("&gt;")
+	case '\u00a0':
+		// The HTML method writes a no-break space as the named entity, so
+		// that it survives a transport that mangles non-ASCII bytes and
+		// stays visible to anyone reading the source. XML output has no
+		// such convention and keeps the character.
 		//
-		// The html method is excluded, and not because it disagrees about
-		// these characters: it has its own rule for the C1 range a few lines
-		// above, which is stricter still and makes writing one an error under
-		// HTML 4. What it does not share is XML's line-ending normalisation,
-		// so a CR there is an ordinary character.
-		if !s.html || s.xhtml {
-			if r == '\r' || r == '\u2028' || (r >= 0x7F && r <= 0x9F) {
-				fmt.Fprintf(sb, "&#%d;", r)
-				continue
-			}
-			// The C0 controls other than TAB, LF and CR. XML 1.0 has no
-			// spelling for them at all -- they are outside [2] Char, and a
-			// character reference does not help, because [66] CharRef is
-			// constrained to Char too. XML 1.1 admits them, but only written
-			// as references: [2a] RestrictedChar excludes them from the
-			// literal text a document may contain.
-			//
-			// So the version decides between a reference and an error, and
-			// there is no third option where the character is written as
-			// itself. It was: the range fell past every arm above into
-			// WriteRune, and the output held a raw \x01 that no parser at
-			// either version will read back. SERE0006 is the code for a
-			// character the chosen version cannot represent, which is what
-			// xml-version-030 asserts for a BEL under version="1.0".
-			if r < 0x20 && r != '\t' && r != '\n' {
-				if !s.xml11() {
-					if s.err == nil {
-						s.err = fmt.Errorf("SERE0006: character #x%X cannot "+
-							"be output as XML 1.0; it is not a valid XML "+
-							"character at that version", r)
-					}
-					return
-				}
-				fmt.Fprintf(sb, "&#%d;", r)
-				continue
-			}
+		// XHTML is excluded, which is why the guard is the file's usual
+		// "html && !xhtml" and not a bare s.html: s.html is set for the
+		// xhtml method too (see where it is assigned), but XHTML escapes
+		// as XML, and "nbsp" is not one of XML's five predefined entity
+		// names. Writing it there produced a document that references an
+		// undeclared entity — unparseable by the XML parser the method
+		// exists to satisfy — and the character needs no escape anyway:
+		// it is representable in every encoding this serialiser emits
+		// that the document would otherwise have to escape it for.
+		if s.html && !s.xhtml {
+			s.writeString("&nbsp;")
+			return
 		}
-		switch r {
-		case '&':
-			sb.WriteString("&amp;")
-		case '<':
-			sb.WriteString("&lt;")
-		case '>':
-			sb.WriteString("&gt;")
-		case '\u00a0':
-			// The HTML method writes a no-break space as the named entity, so
-			// that it survives a transport that mangles non-ASCII bytes and
-			// stays visible to anyone reading the source. XML output has no
-			// such convention and keeps the character.
-			//
-			// XHTML is excluded, which is why the guard is the file's usual
-			// "html && !xhtml" and not a bare s.html: s.html is set for the
-			// xhtml method too (see where it is assigned), but XHTML escapes
-			// as XML, and "nbsp" is not one of XML's five predefined entity
-			// names. Writing it there produced a document that references an
-			// undeclared entity — unparseable by the XML parser the method
-			// exists to satisfy — and the character needs no escape anyway:
-			// it is representable in every encoding this serialiser emits
-			// that the document would otherwise have to escape it for.
-			if s.html && !s.xhtml {
-				sb.WriteString("&nbsp;")
-				continue
-			}
-			sb.WriteRune(r)
-		default:
-			sb.WriteRune(r)
-		}
+		s.writeRune(r)
+	default:
+		s.writeRune(r)
 	}
 }
 
@@ -1680,9 +1748,8 @@ func (s *serializer) mapChars(text string) string {
 	return sb.String()
 }
 
-// attrValue returns an attribute value with its delimiters, as the opening
-// `="` or `='`, the escaped body and the closing quote, for the caller to
-// write in pieces; all three are empty for a minimized boolean attribute.
+// writeAttr writes one attribute of owner: the space before it, its name
+// and its delimited value, in pieces to w.
 //
 // A character map applies to attribute nodes as well as to text nodes, and
 // the substituted string bypasses escaping — that is the point of declaring
@@ -1690,7 +1757,11 @@ func (s *serializer) mapChars(text string) string {
 // have it escaped, so the specification says the serialiser uses the other
 // delimiter around the value where it can. Only where both quote characters
 // appear is there no choice, and then the double quote is escaped.
-func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) (open, body, end string) {
+//
+// The value is checked before anything is written: it can fail, and then
+// nothing of the attribute is written, as when the value was escaped into a
+// builder first.
+func (s *serializer) writeAttr(a *xdm.Node, owner *xdm.Node) {
 	// XSLT 1.0 section 16.2, carried into the serialization specification's
 	// html output method: "The html output method should output boolean
 	// attributes (that is attributes with only a single possible value that
@@ -1701,7 +1772,9 @@ func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) (open, body, end st
 	// is not well formed, and the XHTML compatibility guidelines say so
 	// explicitly.
 	if s.html && !s.xhtml && isBooleanAttribute(owner.Name.Local, a) {
-		return "", "", ""
+		s.writeString(" ")
+		s.writeAttrName(a)
+		return
 	}
 	if s.html && s.escapeURIs() && isURIAttribute(owner.Name.Local, a) {
 		// A character map does not reach a URI-valued attribute that is being
@@ -1710,146 +1783,168 @@ func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) (open, body, end st
 		// the serialization specification gives the escaping precedence.
 		// character-map-009 checks exactly this: an href of "z-linkage.html"
 		// keeps its "z" even with a map that rewrites "z" everywhere else.
-		return `="`, s.escapeAttrRunes(escapeURIAttribute(s.normalized(a.Value))), `"`
+		v := escapeURIAttribute(s.normalized(a.Value))
+		if s.attrErr(v) {
+			return
+		}
+		s.writeString(" ")
+		s.writeAttrName(a)
+		s.writeString(`="`)
+		s.writeAttrRuns(v, false)
+		s.writeString(`"`)
+		return
 	}
-	body, raw := s.escapeAttrMapped(a.Value, false)
-	if raw && strings.Contains(body, `"`) && !strings.Contains(body, "'") {
-		return "='", body, "'"
-	}
-	return `="`, body, `"`
-}
-
-// escapeAttrMapped escapes an attribute value, passing character-mapped
-// substitutions through untouched. The second result reports whether any
-// substitution happened, which is what makes the delimiter choice necessary.
-//
-// uri asks for percent-escaping of the unmapped runs, for a URI-valued
-// attribute of the html and xhtml methods. It applies to those runs only:
-// percent-escaping a replacement string would defeat the map, and the test
-// suite checks that a map leaves a URI attribute alone.
-func (s *serializer) escapeAttrMapped(v string, uri bool) (string, bool) {
-	// The common case -- no map, no URI escaping, the run-at-once arm below
-	// -- without the builder, so a value with nothing to escape is returned
-	// as it stands.
-	if len(s.charMap) == 0 && !uri && !s.rawText && !s.html && s.encodingHoldsAll() {
-		if run := s.normalized(v); !strings.ContainsFunc(run, isC0Control) {
-			return escapeAttr(run), false
+	segs := s.mapSegments(a.Value)
+	for _, seg := range segs {
+		if s.attrErr(seg.text) {
+			return
 		}
 	}
-	var sb strings.Builder
-	sb.Grow(len(v))
-	mapped := false
-	for _, seg := range s.mapSegments(v) {
-		run := seg.text
-		if uri {
-			run = escapeURIAttribute(run)
-		}
-		// The whole-run spelling is only safe when every character of the run
-		// can be written in the declared encoding. escapeAttr knows nothing
-		// about the encoding and writes each rune raw, so an iso-8859-1 or
-		// us-ascii output would carry UTF-8 bytes the declared encoding
-		// cannot hold — element text goes through representable() and comes
-		// out as "&#776;", while the same character in an attribute did not.
-		// normalize-unicode-017/018 are exactly that asymmetry.
-		switch {
-		case s.rawText:
-			// Inside <script> and <style> nothing is escaped, and that
-			// includes the attributes of any element the content happens to
-			// contain: the whole element is CDATA to an HTML parser, which
-			// will never read those characters as markup in the first place,
-			// so an entity reference written there is the literal text of one
-			// rather than the character it names. Serialization-html-9 puts
-			// <p class="Bill&amp;Ben"/> inside a <script> and asks to read
-			// back "Bill&Ben" -- while the script element's own
-			// language="Jack&amp;Jill", written before the raw content
-			// begins, keeps its escape.
-			sb.WriteString(run)
-		case len(s.charMap) == 0 && !s.html && s.encodingHoldsAll() &&
-			!strings.ContainsFunc(run, isC0Control):
-			// The run-at-once spelling needs one more condition than the
-			// encoding: escapeAttr is a free function and cannot see the
-			// output version, so a run holding a C0 control goes the
-			// per-rune way where the version is known. Same asymmetry the
-			// comment above describes for the encoding.
-			sb.WriteString(escapeAttr(run))
-		default:
-			s.writeAttrRuns(&sb, run)
-		}
+	q := `"`
+	if s.singleQuoted(segs) {
+		q = "'"
+	}
+	s.writeString(" ")
+	s.writeAttrName(a)
+	s.writeString("=")
+	s.writeString(q)
+	for _, seg := range segs {
+		s.writeAttrSeg(seg.text)
 		if seg.has {
-			sb.WriteString(seg.repl)
-			mapped = true
+			s.writeString(seg.repl)
 		}
 	}
-	return sb.String(), mapped
+	s.writeString(q)
 }
 
-// writeAttrRuns escapes an attribute value a character at a time, with the
-// one place the html method needs to see two.
+// singleQuoted reports whether a value written from segs takes the single
+// quote as its delimiter: a substitution happened, and the value holds a
+// double quote but no single quote. Escaping writes neither quote, so only a
+// replacement, or a run written raw inside an HTML raw-text element, puts a
+// double quote in the value; a single quote is never escaped at all.
+func (s *serializer) singleQuoted(segs []mapSegment) bool {
+	if len(s.charMap) == 0 {
+		return false
+	}
+	mapped, dq, sq := false, false, false
+	for _, seg := range segs {
+		if seg.has {
+			mapped = true
+			dq = dq || strings.Contains(seg.repl, `"`)
+			sq = sq || strings.Contains(seg.repl, "'")
+		}
+		dq = dq || s.rawText && strings.Contains(seg.text, `"`)
+		sq = sq || strings.Contains(seg.text, "'")
+	}
+	return mapped && dq && !sq
+}
+
+// attrErr records the error for the first character of an attribute value
+// that the output version cannot write, and reports whether there was one:
+// a C0 control other than TAB, LF and CR under an XML-based method at XML
+// 1.0. writeAttrRune would refuse it; inside an HTML raw-text element nothing
+// is escaped and nothing is refused.
+func (s *serializer) attrErr(v string) bool {
+	if s.rawText || s.html && !s.xhtml || s.xml11() {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		if r := rune(v[i]); isC0Control(r) {
+			s.fail(fmt.Errorf("SERE0006: character #x%X cannot be "+
+				"output as XML 1.0; it is not a valid XML character "+
+				"at that version", r))
+			return true
+		}
+	}
+	return false
+}
+
+// writeAttrSeg escapes one run of an attribute value that no character map
+// claims, after attrErr has passed it.
+func (s *serializer) writeAttrSeg(run string) {
+	// The whole-run spelling is only safe when every character of the run
+	// can be written in the declared encoding. escapeAttr knows nothing
+	// about the encoding and writes each rune raw, so an iso-8859-1 or
+	// us-ascii output would carry UTF-8 bytes the declared encoding
+	// cannot hold — element text goes through representable() and comes
+	// out as "&#776;", while the same character in an attribute did not.
+	// normalize-unicode-017/018 are exactly that asymmetry.
+	switch {
+	case s.rawText:
+		// Inside <script> and <style> nothing is escaped, and that
+		// includes the attributes of any element the content happens to
+		// contain: the whole element is CDATA to an HTML parser, which
+		// will never read those characters as markup in the first place,
+		// so an entity reference written there is the literal text of one
+		// rather than the character it names. Serialization-html-9 puts
+		// <p class="Bill&amp;Ben"/> inside a <script> and asks to read
+		// back "Bill&Ben" -- while the script element's own
+		// language="Jack&amp;Jill", written before the raw content
+		// begins, keeps its escape.
+		s.writeString(run)
+	case len(s.charMap) == 0 && !s.html && s.encodingHoldsAll() &&
+		!strings.ContainsFunc(run, isC0Control):
+		// The run-at-once spelling needs one more condition than the
+		// encoding: escapeAttr is a free function and cannot see the
+		// output version, so a run holding a C0 control goes the
+		// per-rune way where the version is known. Same asymmetry the
+		// comment above describes for the encoding.
+		s.writeString(escapeAttr(run))
+	default:
+		s.writeAttrRuns(run, true)
+	}
+}
+
+// writeAttrRuns escapes an attribute value a character at a time, so that
+// the html and xhtml spellings writeAttrRune knows about apply, copying the
+// runs of characters it writes unchanged to w whole.
 //
-// Serialization 3.1 section 9.5: "if the character is an ampersand and the
-// following character is a left curly brace, the ampersand is output
-// unescaped". The convention predates the specification -- an attribute value
-// of "&{expression};" was Netscape's way of computing an attribute at parse
-// time, and escaping the ampersand turns a macro into the literal text of
-// one. Serialization-html-11 writes class="&{entspannend}" and asks to read
-// exactly that back.
+// macros asks for the one place the html method needs to see two
+// characters. Serialization 3.1 section 9.5: "if the character is an
+// ampersand and the following character is a left curly brace, the
+// ampersand is output unescaped". The convention predates the specification
+// -- an attribute value of "&{expression};" was Netscape's way of computing
+// an attribute at parse time, and escaping the ampersand turns a macro into
+// the literal text of one. Serialization-html-11 writes class="&{entspannend}"
+// and asks to read exactly that back. The percent-escaped URI path and the
+// content-type meta never applied it.
 //
 // The rule is the html method's alone. XHTML is XML, where a bare ampersand
 // is not well formed whatever follows it.
-func (s *serializer) writeAttrRuns(sb *strings.Builder, run string) {
-	for i, r := range run {
-		if r == '&' && s.html && !s.xhtml &&
-			i+1 < len(run) && run[i+1] == '{' {
-			sb.WriteByte('&')
+func (s *serializer) writeAttrRuns(run string, macros bool) {
+	start := 0
+	for i := 0; i < len(run); {
+		r, size := rune(run[i]), 1
+		if r >= utf8.RuneSelf {
+			r, size = utf8.DecodeRuneInString(run[i:])
+		}
+		if plainAttrASCII(r) || s.plainAttrWide(r) ||
+			macros && r == '&' && s.html && !s.xhtml &&
+				i+1 < len(run) && run[i+1] == '{' {
+			i += size
 			continue
 		}
-		if plainAttrASCII(r) {
-			sb.WriteByte(byte(r))
-			continue
-		}
-		if s.plainAttrWide(r) {
-			sb.WriteRune(r)
-			continue
-		}
-		sb.WriteString(s.escapeAttrRune(r))
+		s.writeString(run[start:i])
+		i += size
+		start = i
+		s.writeAttrRune(r)
 	}
+	s.writeString(run[start:])
 }
 
-// plainAttrASCII reports whether r is printable ASCII that escapeAttrRune
-// writes unchanged under every method, encoding and version. Copying such a
-// character straight to the builder skips the one-character string and the
-// builder escapeAttr would allocate for it: on an html page that was two
-// allocations per attribute character, over half of XRechnung stage 2's.
+// plainAttrASCII reports whether r is printable ASCII that writeAttrRune
+// writes unchanged under every method, encoding and version, and so can be
+// copied with the run around it.
 func plainAttrASCII(r rune) bool {
 	return r >= 0x20 && r < 0x7F && r != '&' && r != '<' && r != '>' && r != '"'
 }
 
 // plainAttrWide is plainAttrASCII's counterpart above the C1 block: a
 // character the encoding holds, other than LINE SEPARATOR, is also written
-// unchanged by escapeAttrRune.
+// unchanged by writeAttrRune. U+FFFD is left to writeAttrRune, because an
+// invalid byte decodes to it and is written as it.
 func (s *serializer) plainAttrWide(r rune) bool {
-	return r >= 0xA0 && r != '\u2028' && s.representable(r)
-}
-
-// escapeAttrRunes escapes a whole attribute value one character at a time,
-// so that the html and xhtml spellings escapeAttrRune knows about apply. The
-// percent-escaped URI path used escapeAttr directly and so wrote "&quot;"
-// where the rest of the html serialiser writes "&#34;".
-func (s *serializer) escapeAttrRunes(v string) string {
-	var sb strings.Builder
-	sb.Grow(len(v))
-	for _, r := range v {
-		if plainAttrASCII(r) {
-			sb.WriteByte(byte(r))
-			continue
-		}
-		if s.plainAttrWide(r) {
-			sb.WriteRune(r)
-			continue
-		}
-		sb.WriteString(s.escapeAttrRune(r))
-	}
-	return sb.String()
+	return r >= 0xA0 && r != '\u2028' && r != utf8.RuneError && s.representable(r)
 }
 
 // escapeURIs reports whether URI-valued attributes are percent-escaped. The
@@ -1858,7 +1953,7 @@ func (s *serializer) escapeURIs() bool {
 	return s.opts.EscapeURIAttributes == nil || *s.opts.EscapeURIAttributes
 }
 
-// escapeAttrRune escapes one character of an attribute value.
+// writeAttrRune escapes one character of an attribute value.
 //
 // The HTML and XHTML methods write the C1 range as a numeric character
 // reference. Those code points are the ones HTML 4 leaves undefined and that
@@ -1872,26 +1967,21 @@ func isC0Control(r rune) bool {
 	return r < 0x20 && r != '\t' && r != '\n' && r != '\r'
 }
 
-func (s *serializer) escapeAttrRune(r rune) string {
+func (s *serializer) writeAttrRune(r rune) {
 	if s.html && r >= 0x7F && r <= 0x9F || !s.representable(r) {
-		return fmt.Sprintf("&#%d;", r)
+		s.writeCharRef(r)
+		return
 	}
 	// The C0 controls, on the same terms as element text: 1.1 writes them as
-	// references, 1.0 has no spelling for them and the attempt is SERE0006.
-	// TAB, LF and CR are excluded because escapeAttr already writes all three
-	// as references -- an attribute value normaliser would otherwise turn
-	// them into spaces -- so they never reach this arm as a problem.
-	// xml-version-007 and -008 assert the reference spelling here.
-	if r < 0x20 && r != '\t' && r != '\n' && r != '\r' && (!s.html || s.xhtml) {
-		if !s.xml11() {
-			if s.err == nil {
-				s.err = fmt.Errorf("SERE0006: character #x%X cannot be "+
-					"output as XML 1.0; it is not a valid XML character "+
-					"at that version", r)
-			}
-			return ""
-		}
-		return fmt.Sprintf("&#%d;", r)
+	// references, 1.0 has no spelling for them and the attempt is SERE0006,
+	// which attrErr raised before the value was written. TAB, LF and CR are
+	// excluded because escapeAttr already writes all three as references --
+	// an attribute value normaliser would otherwise turn them into spaces --
+	// so they never reach this arm as a problem. xml-version-007 and -008
+	// assert the reference spelling here.
+	if isC0Control(r) && (!s.html || s.xhtml) {
+		s.writeCharRef(r)
+		return
 	}
 	if s.html && r == '"' {
 		// The html and xhtml methods spell an embedded quotation mark as a
@@ -1901,9 +1991,19 @@ func (s *serializer) escapeAttrRune(r rune) string {
 		// numeric form names the code point with no entity set at all.
 		// output-0102c and output-0103c both accept &#34; or &#x22; and
 		// nothing else.
-		return "&#34;"
+		s.writeString("&#34;")
+		return
 	}
-	return escapeAttr(string(r))
+	// escapeAttr's spelling of the one character.
+	if e := attrEscape(r); e != "" {
+		s.writeString(e)
+		return
+	}
+	if r >= 0x7F && r <= 0x9F {
+		s.writeCharRef(r)
+		return
+	}
+	s.writeRune(r)
 }
 
 // uriAttributes are the attributes the HTML DTD declares with type URI, whose
@@ -2023,6 +2123,11 @@ func isURIAttribute(element string, a *xdm.Node) bool {
 // escape to the same %C3%A5 rather than to two different byte sequences that
 // no longer compare equal as URIs.
 func escapeURIAttribute(v string) string {
+	// An ASCII value is its own NFC form and holds nothing to escape, and
+	// is returned as it stands rather than copied through a builder.
+	if !strings.ContainsFunc(v, func(r rune) bool { return r >= utf8.RuneSelf }) {
+		return v
+	}
 	v = norm.NFC.String(v)
 	var sb strings.Builder
 	sb.Grow(len(v))
@@ -2051,38 +2156,47 @@ func escapeAttr(v string) string {
 	var sb strings.Builder
 	sb.Grow(len(v))
 	for _, r := range v {
-		switch r {
-		case '&':
-			sb.WriteString("&amp;")
-		case '<':
-			sb.WriteString("&lt;")
-		case '>':
-			sb.WriteString("&gt;")
-		case '"':
-			sb.WriteString("&quot;")
-		case '\n':
-			sb.WriteString("&#10;")
-		case '\r':
-			sb.WriteString("&#13;")
-		case '\t':
-			sb.WriteString("&#9;")
-		case '\u2028':
-			// LINE SEPARATOR is a line ending to an XML 1.1 parser and would
-			// be normalised away, so it survives only as a reference -- the
-			// same reason CR, LF and TAB above are escaped.
-			// K2-Serialization-6 asserts it for attribute values.
-			sb.WriteString("&#8232;")
-		default:
-			if r >= 0x7F && r <= 0x9F {
-				// The C1 block, U+0085 among it, for the same reason.
-				// K2-Serialization-9 asserts the whole range.
-				fmt.Fprintf(&sb, "&#%d;", r)
-				continue
-			}
-			sb.WriteRune(r)
+		if e := attrEscape(r); e != "" {
+			sb.WriteString(e)
+			continue
 		}
+		if r >= 0x7F && r <= 0x9F {
+			// The C1 block, U+0085 among it, for the same reason as LINE
+			// SEPARATOR. K2-Serialization-9 asserts the whole range.
+			fmt.Fprintf(&sb, "&#%d;", r)
+			continue
+		}
+		sb.WriteRune(r)
 	}
 	return sb.String()
+}
+
+// attrEscape returns escapeAttr's fixed spelling of r, or "" for a character
+// it writes as a numeric reference (the C1 block) or unchanged.
+func attrEscape(r rune) string {
+	switch r {
+	case '&':
+		return "&amp;"
+	case '<':
+		return "&lt;"
+	case '>':
+		return "&gt;"
+	case '"':
+		return "&quot;"
+	case '\n':
+		return "&#10;"
+	case '\r':
+		return "&#13;"
+	case '\t':
+		return "&#9;"
+	case '\u2028':
+		// LINE SEPARATOR is a line ending to an XML 1.1 parser and would
+		// be normalised away, so it survives only as a reference -- the
+		// same reason CR, LF and TAB above are escaped.
+		// K2-Serialization-6 asserts it for attribute values.
+		return "&#8232;"
+	}
+	return ""
 }
 
 // attrNeedsEscape reports whether escapeAttr writes r as anything but

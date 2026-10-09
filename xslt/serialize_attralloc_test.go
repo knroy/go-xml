@@ -136,3 +136,79 @@ func TestSerializeElementAllocsFlat(t *testing.T) {
 		t.Errorf("2000 elements: %.0f allocations, 20 elements: %.0f; want the same", many, few)
 	}
 }
+
+// The html method and a percent-escaped URI attribute both escape a value a
+// character at a time, and each such attribute was escaped into a builder of
+// its own before being written, an ASCII URI value into one more. The runs
+// that need no escaping are now copied to the writer whole, so the count must
+// not grow with the number of attributes -- and escaping, the &{ macro and
+// the URI escaping are unchanged. A character map still forces the other
+// delimiter around a value it puts a quotation mark in.
+func TestSerializeAttrAllocsFlat(t *testing.T) {
+	doc := func(n int, v string) xdm.Sequence {
+		var b strings.Builder
+		b.WriteString(`<html><body>`)
+		for range n {
+			b.WriteString(v)
+		}
+		b.WriteString(`</body></html>`)
+		tree, err := xdm.ParseString(b.String(), xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return xdm.One(tree.Root)
+	}
+	opts := OutputSettings{Method: "html", Encoding: "UTF-8"}
+	for _, tc := range []struct {
+		in, want string
+		charMap  map[rune]string
+	}{
+		{`<a href="x y/ü?a=1&amp;b" class="c&amp;d&quot;&amp;{m}">t</a>`,
+			`<a href="x y/%C3%BC?a=1&amp;b" class="c&amp;d&#34;&{m}">t</a>`, nil},
+		{`<a title="zq">t</a>`, `<a title='z"'>t</a>`, map[rune]string{'q': `"`}},
+	} {
+		var out bytes.Buffer
+		if err := Serialize(&out, doc(1, tc.in), opts, tc.charMap); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), tc.want) {
+			t.Fatalf("got %s\nwant it to contain %s", out.String(), tc.want)
+		}
+	}
+
+	if raceEnabled {
+		t.Skip("allocation counts are not stable under -race")
+	}
+	count := func(seq xdm.Sequence) float64 {
+		var buf bytes.Buffer
+		return testing.AllocsPerRun(20, func() {
+			buf.Reset()
+			if err := Serialize(&buf, seq, opts, nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	v := `<a href="x/y?a=1&amp;b" class="c&amp;d&quot;&amp;{m}">t</a>`
+	few, many := count(doc(5, v)), count(doc(500, v))
+	if many > few+5 {
+		t.Errorf("1000 attributes: %.0f allocations, 10 attributes: %.0f; want the same", many, few)
+	}
+}
+
+// An attribute value is now written in pieces, so a character the version
+// cannot output is found before any of the attribute is written: it fails
+// whole, as it did when it was escaped into a builder first.
+func TestSerializeAttrErrorWritesNothing(t *testing.T) {
+	tree, err := xdm.ParseString(`<?xml version="1.1"?><r b="1" a="ok&#x2;&#x1;"/>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err = Serialize(&out, xdm.One(tree.Root), OutputSettings{Method: "xml", OmitXMLDecl: true}, nil)
+	if err == nil || !strings.Contains(err.Error(), "SERE0006: character #x2 ") {
+		t.Errorf("error %v, want SERE0006 naming #x2", err)
+	}
+	if got := out.String(); got != `<r b="1"` {
+		t.Errorf("wrote %q before failing, want %q", got, `<r b="1"`)
+	}
+}
