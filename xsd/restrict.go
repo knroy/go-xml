@@ -2255,15 +2255,18 @@ func branchFitsBudget(br branchCount, budget map[xdm.QName]*occBudget) error {
 	// they fit exactly (all221).
 	spend := map[*occBudget]*occRange{}
 	name0 := map[*occBudget]xdm.QName{}
+	var unknown *xdm.QName
 	for name, rng := range br {
 		bud := budget[name]
 		if bud == nil {
 			// A name the base's all group never mentions cannot
 			// appear, however few times. all205 and all215 pin
-			// this.
-			return fmt.Errorf(
-				"element %s may occur in the restriction but the base's all group does not allow it",
-				name.Local)
+			// this. The lowest-sorting such name is reported, as
+			// below, since br is a map.
+			if unknown == nil || qnameLess(name, *unknown) {
+				unknown = &name
+			}
+			continue
 		}
 		if rng.max == 0 {
 			continue
@@ -2282,6 +2285,11 @@ func branchFitsBudget(br branchCount, budget map[xdm.QName]*occBudget) error {
 		if less := qnameLess(name, name0[bud]); less {
 			name0[bud] = name
 		}
+	}
+	if unknown != nil {
+		return fmt.Errorf(
+			"element %s may occur in the restriction but the base's all group does not allow it",
+			unknown.Local)
 	}
 	// Reported in name order for the same reason: a schema violating two
 	// budgets must name the same one every time.
