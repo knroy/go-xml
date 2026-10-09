@@ -1,0 +1,8 @@
+# Differences tests/recdiff compare accepts between two recordings; see the
+# rule format in tests/recdiff/main.go and docs/testing.md, "Output
+# differential". Every rule names the behaviour change it admits. A rule that
+# matches nothing is reported with 0 cases and should be removed.
+
+# generate-id strings are implementation-dependent (XPath F&O 3.1 §14.6.4) and
+# change with the node record: N<tree>x<order>.
+* * N\d+x\d+

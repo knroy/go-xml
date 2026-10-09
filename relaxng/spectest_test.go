@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/knroy/go-xml/v2/internal/record"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -93,10 +94,12 @@ func TestSpectest(t *testing.T) {
 	var failures []string
 
 	var walk func(n *xdm.Node)
+	ncase := 0
 	walk = func(n *xdm.Node) {
 		for _, kid := range n.ChildElements() {
 			if kid.Name.Local == "testCase" {
-				p, f, kind, why := runCase(t, kid)
+				ncase++
+				p, f, kind, why := runCase(t, kid, fmt.Sprintf("case-%04d", ncase))
 				pass += p
 				fail += f
 				if f > 0 {
@@ -129,7 +132,17 @@ func TestSpectest(t *testing.T) {
 }
 
 // runCase returns the passed and failed assertion counts for one testCase.
-func runCase(t *testing.T, tc *xdm.Node) (pass, fail int, kind, why string) {
+//
+// id names the case in a GOXSLT_RECORD_DIR recording, which stores each
+// assertion's verdict and error text (see internal/record).
+func runCase(t *testing.T, tc *xdm.Node, id string) (pass, fail int, kind, why string) {
+	rec := func(what string, err error) {
+		out := "ok\n"
+		if err != nil {
+			out = "error: " + err.Error() + "\n"
+		}
+		record.Write("relaxng", id+"/"+what, []byte(out))
+	}
 	var correct, incorrect *xdm.Node
 	var valids, invalids []*xdm.Node
 	for _, kid := range tc.ChildElements() {
@@ -156,7 +169,9 @@ func runCase(t *testing.T, tc *xdm.Node) (pass, fail int, kind, why string) {
 		if schema == nil {
 			return 0, 0, "", ""
 		}
-		if _, err := CompileWithOptions(schema, opts); err == nil {
+		_, err := CompileWithOptions(schema, opts)
+		rec("incorrect", err)
+		if err == nil {
 			return 0, 1, "incorrect", "incorrect schema accepted: " + summarise(schema)
 		}
 		return 1, 0, "", ""
@@ -170,6 +185,7 @@ func runCase(t *testing.T, tc *xdm.Node) (pass, fail int, kind, why string) {
 		return 0, 0, "", ""
 	}
 	s, err := CompileWithOptions(schema, opts)
+	rec("correct", err)
 	if err != nil {
 		// One assertion, not one per document: a schema that will not compile
 		// is a single failure, and counting the documents it would have
@@ -178,12 +194,14 @@ func runCase(t *testing.T, tc *xdm.Node) (pass, fail int, kind, why string) {
 	}
 	pass++ // the schema compiled, which is itself an assertion
 
-	for _, v := range valids {
+	for i, v := range valids {
 		doc := firstElement(v)
 		if doc == nil {
 			continue
 		}
-		if err := s.Validate(doc); err != nil {
+		err := s.Validate(doc)
+		rec(fmt.Sprintf("valid-%d", i+1), err)
+		if err != nil {
 			fail++
 			kind = "valid"
 			why = "valid rejected: " + summarise(schema) + " || " +
@@ -192,12 +210,14 @@ func runCase(t *testing.T, tc *xdm.Node) (pass, fail int, kind, why string) {
 			pass++
 		}
 	}
-	for _, v := range invalids {
+	for i, v := range invalids {
 		doc := firstElement(v)
 		if doc == nil {
 			continue
 		}
-		if err := s.Validate(doc); err == nil {
+		err := s.Validate(doc)
+		rec(fmt.Sprintf("invalid-%d", i+1), err)
+		if err == nil {
 			fail++
 			kind = "invalid"
 			why = "invalid accepted: " + summarise(schema) + " || " + summarise(doc)

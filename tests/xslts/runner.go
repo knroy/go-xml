@@ -254,6 +254,8 @@ func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 		}
 	}
 
+	r.recordCase(set, tc, res, terr)
+
 	// The schema the environment declares is part of the static context the
 	// assertions are evaluated in, exactly as it is for the stylesheet.
 	ok, why := r.judge(assert, res, terr, set,
