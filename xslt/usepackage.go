@@ -1617,7 +1617,9 @@ func checkTemplateParams(overriding, original *xdm.Node) error {
 				p.AttrValue("tunnel"), o.AttrValue("tunnel"))
 		}
 	}
-	for name, o := range orig {
+	// In declaration order, so the missing parameter named is the first.
+	for _, o := range leadingParams(original) {
+		name := o.AttrValue("name")
 		if !seen[name] && stylesheetYes(o.AttrValue("required")) {
 			return fmt.Errorf(
 				"XTSE3070: the overriding template %s does not declare the "+
