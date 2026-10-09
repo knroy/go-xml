@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/record"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xsd"
 )
@@ -210,6 +211,19 @@ func main() {
 		version = xsd.Version11
 	}
 	tok := supportedTokens(only11)
+	// GOXSLT_RECORD_DIR records every verdict and its error text; see
+	// internal/record and tests/recdiff.
+	suiteName := "xsd10"
+	if only11 {
+		suiteName = "xsd11"
+	}
+	rec := func(key string, err error) {
+		out := "valid\n"
+		if err != nil {
+			out = "invalid: " + err.Error() + "\n"
+		}
+		record.Write(suiteName, key, []byte(out))
+	}
 
 	var sets []string
 	{
@@ -349,6 +363,7 @@ func main() {
 
 			// Score the schema test itself.
 			if haveSchemaTest {
+				rec(setName+"/"+gname+"/"+sTestName, loadErr)
 				gotValid := loadErr == nil
 				switch {
 				case sIndet:
@@ -437,6 +452,7 @@ func main() {
 					fmt.Printf("IUNREAD\t%s\t%s\t%s\t%s\t%s\t%s\n",
 						setName, gname, it.AttrValue("name"), status,
 						filepath.Base(docPath), firstLine(err.Error()))
+					rec(setName+"/"+gname+"/"+it.AttrValue("name"), fmt.Errorf("unread: %w", err))
 					continue
 				}
 				// The suite expects a conforming processor to
@@ -459,6 +475,7 @@ func main() {
 				}
 				got := use.Validate(dt.Root, xsd.ValidateOptions{MaxErrors: 1})
 				valid := got == nil
+				rec(setName+"/"+gname+"/"+it.AttrValue("name"), got)
 				if valid == (want == "valid") {
 					iOK++
 					continue

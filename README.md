@@ -72,6 +72,12 @@ tests/check.sh fast                                  # no external suites
 GOXSLT_UBL=<dir> GOXSLT_CII=<dir> tests/check.sh     # everything
 ```
 
+A change that must not move observable behaviour is also checked output for
+output: `tests/record.sh <dir>` records what every suite case and corpus
+document produces, and `go run ./tests/recdiff compare -allow
+tests/recdiff/allow.txt <a> <b>` lists each case that differs between two
+recordings ([docs/testing.md](docs/testing.md#output-differential)).
+
 The real-world stylesheet corpora are found under `testdata/` by default, or
 pointed at a checkout of your own:
 

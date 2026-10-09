@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/record"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xsd"
 )
@@ -220,6 +221,12 @@ func runVendored(roots []string) {
 		_, err := xsd.LoadFiles([]string{f},
 			xsd.Options{Version: xsd.Version11, Resolver: &xsd.FileResolver{},
 				ParseOptions: xdm.ParseOptions{AllowDOCTYPE: true}})
+		// GOXSLT_RECORD_DIR: see internal/record and tests/recdiff.
+		if err != nil {
+			record.Write("vendored", f, []byte("error: "+err.Error()+"\n"))
+		} else {
+			record.Write("vendored", f, []byte("loaded\n"))
+		}
 		if err != nil {
 			failed++
 			fmt.Printf("FAIL\t%s\t%s\n", f, firstLine(err.Error()))

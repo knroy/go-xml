@@ -1,0 +1,22 @@
+# Differences tests/recdiff compare accepts between two recordings; see the
+# rule format in tests/recdiff/main.go and docs/testing.md, "Output
+# differential". Every rule names the behaviour change it admits. A rule that
+# matches nothing is reported with 0 cases and should be removed.
+
+# generate-id strings are implementation-dependent (XPath F&O 3.1 §14.6.4) and
+# change with the node record: N<tree>x<order>.
+* * N\d+x\d+
+
+# The XSLT suite harness does not fix fn:current-dateTime (the QT3 one does,
+# and tests/record.sh passes -now), so a stylesheet that writes the clock
+# writes a different instant each run: evaluate-052, cvt-042.
+xslt* * \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+Z
+
+# Nondeterministic in v1 too: XTSE0720 names whichever attribute set of the
+# cycle the check reaches first, and that varies run to run (a, b or c).
+xslt* error/error-0720* attribute-set Q\{\}\w+ is dependent on itself
+
+# Nondeterministic in v1 too: xsd checkIDs reports multiply-defined IDs in Go
+# map order (xsd/validate_simple.go), so the cvc-id.2 lines of one error come
+# in a different order each run: validation-1602.
+* * cvc-id\.2: ID value "[^"]*" is defined \d+ times

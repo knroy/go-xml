@@ -662,6 +662,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		if p := recover(); p != nil {
 			rep.Outcome = Fail
 			rep.Reason = fmt.Sprintf("PANIC: %v", p)
+			recordPanic(r.Target, ts, tc, p)
 		}
 	}()
 
@@ -978,6 +979,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		return rep
 	}
 	ok, why := check(want, &res)
+	recordCase(r.Target, ts, tc, &res, ok)
 	if ok {
 		rep.Outcome = Pass
 		return rep

@@ -15,6 +15,12 @@ and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.m
 |---|---|---|
 | Module path `github.com/knroy/go-xml/v2` | Import `github.com/knroy/go-xml/v2/<package>`; v1 stays at `github.com/knroy/go-xml`. The `w3cschemas` module still requires v1. | — |
 
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| `tests/record.sh`, `tests/recdiff`, `GOXSLT_RECORD_DIR` | Suites only count passes; now every case's output is recorded and two checkouts are diffed, allowed differences by rule. | `5aa004e` |
+
 ## Unreleased
 
 ### Added
