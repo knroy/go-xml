@@ -392,7 +392,7 @@ and exceeding it **fails** the compilation with an error wrapping
 **Not implemented on this path.** Automatic validation of the input: a source
 document is not validated because the query imported a schema, so it stays
 untyped until the query asks. `validate strict { . }` types it, as does a
-caller that validates it first with `xsd.ValidateOptions{Annotate: true}`; a
+caller that validates it first with `xsd.Schema.ValidateCopy`; a
 validated node then atomises to its typed value. `SchemaUnionTypes` and `SchemaListTypes` — the two optional
 interfaces `xslt` also implements — are not implemented here, so a union or
 list type an imported schema defines resolves as a name but does not match a

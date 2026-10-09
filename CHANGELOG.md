@@ -8,20 +8,24 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 v2 breaks the exported API, so it has a new module path. Its plan is phases 3
 and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.md#round-6-xdm-plan-phases-02-c233f4e).
+[docs/migrating-to-v2.md](docs/migrating-to-v2.md) shows each change below with
+code before and after, and how to run the rewriter on your own module.
 
 ### Changed — breaking
 
 | Change | What it means for callers | Commit |
 |---|---|---|
 | Module path `github.com/knroy/go-xml/v2` | Import `github.com/knroy/go-xml/v2/<package>`; v1 stays at `github.com/knroy/go-xml`. The `w3cschemas` module still requires v1. | — |
-| `xdm.Node` fields are unexported; read through methods | `n.Kind`, `n.Name`, `n.Value`, `n.Parent`, `n.BaseURI`, `n.DocumentURI` and the nine typing fields (`n.TypeAnnotation` … `n.MixedContent`) become calls of the same name. `range n.Children` / `n.Attrs` / `n.Namespaces` becomes `range n.Children()` / `n.Attrs()` / `n.NamespaceDecls()` (iterators); `len` and indexing become `NumChildren`/`ChildAt`/`FirstChild`/`LastChild`, `NumAttrs`/`AttrAt`, `NumNamespaceDecls`/`NamespaceDeclAt`. No slice is handed out. `internal/tools/nodeaccess` rewrites old code mechanically. | a8e5346 |
+| `xdm.Node` fields are unexported; read through methods | `n.Kind`, `n.Name`, `n.Value`, `n.Parent`, `n.BaseURI`, `n.DocumentURI` and the nine typing fields (`n.TypeAnnotation` … `n.MixedContent`) become calls of the same name. `range n.Children` / `n.Attrs` / `n.Namespaces` becomes `range n.Children()` / `n.Attrs()` / `n.NamespaceDecls()` (iterators); `len` and indexing become `NumChildren`/`ChildAt`/`FirstChild`/`LastChild`, `NumAttrs`/`AttrAt`, `NumNamespaceDecls`/`NamespaceDeclAt`. No slice is handed out. `internal/tools/nodeaccess` rewrites old code mechanically; with `-v1` it also moves another module's imports to `/v2` ([migrating](docs/migrating-to-v2.md#the-rewriter-nodeaccess)). | a8e5346 |
 | Nodes are built with `xdm.NewNode` and the setters | `&xdm.Node{Kind: k, Name: q, Value: v}` becomes `xdm.NewNode(k, q, v)`; field writes become `SetName`, `SetValue`, `SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaceDecls`, `SetBaseURI`, `SetDocumentURI` (builder-side: no re-parenting, no tree link); typing goes through `ApplyTyping` and `SetTypeAnnotation*`. | 9ab409b |
 | `xdmbuild.SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaces`, `SetName`, `SetBaseURI` removed | Call the `xdm.Node` method of the same name (`SetNamespaces` is `SetNamespaceDecls`). | 6b34bc3 |
+| `xsd.ValidateOptions.Annotate` is now `AnnotateInPlace`; `Validate` without it never writes | v1's `Validate` before `5c2ca9c` still wrote union members and `nilled` onto the caller's tree. Get a typed tree from `ValidateCopy`; keep `AnnotateInPlace` for trees you just built. | — |
 
 ### Added
 
 | Change | What it does | Commit |
 |---|---|---|
+| `docs/migrating-to-v2.md`; `nodeaccess -v1` | Before/after code for every breaking change. The rewriter can be pointed at any module: `-v1` moves its go-xml imports to `/v2` and runs `go mod tidy` before rewriting. | — |
 | `tests/record.sh`, `tests/recdiff`, `GOXSLT_RECORD_DIR` | Suites only count passes; now every case's output is recorded and two checkouts are diffed, allowed differences by rule. | `5aa004e` |
 | `xpath.Context` per-evaluation fields move to `xpath.Env` | `ctx.Docs = r` → `xpath.NewContext(item, funcs, func(e *xpath.Env) { e.Docs = r })` or `ctx = ctx.WithEnv(func(e *xpath.Env) { e.Docs = r })`; reads `ctx.Docs` → `ctx.Env().Docs`. Moved: `Ctx`, `Docs`, `Collections`, `Texts`, `Entities`, `Environment`, `Modules`, `Validator`, `Now`, `HasNow`, `ImplicitTimezone`, `RegexVersion`, `LibraryVersion`, `MaxDepth`, `MaxItems`, `QualifyVar`, `MissingVar`, `MapDuplicateCode`. Budgets cannot be set or reset through `Env`. | [`9af0e77`][9af0e77] |
 | `xpath.Context` static fields become methods | `ctx.Version`, `ctx.StaticBaseURI`, `ctx.StaticHost`, `ctx.StaticNamespaces`, `ctx.Compat` → the same names called; `ctx.Version = v` → `ctx = ctx.WithVersion(v)`, `ctx.StaticBaseURI = u` → `ctx = ctx.WithStaticBaseURI(u)`. | [`9af0e77`][9af0e77] |
@@ -90,6 +94,7 @@ and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.m
 | With `AllowDOCTYPE` and no DOCTYPE, the parser kept two extra copies of the document | They are dropped when the root opens: 10 MB parse 335 → 230 MB allocated, 100 MB peak RSS 3.15 → 2.0 GB. | [`b88105e`][b88105e] |
 | The html method dropped the stylesheet's own `<meta charset>` under `include-content-type="no"` | It is dropped only when the method adds its own (§7.4.13); XRechnung's HTML stage now matches Saxon. | [`262be91`][262be91] |
 | html/xhtml `indent="yes"` split inline elements onto separate lines | No whitespace is added next to an inline element (§7.4.3, §6.1.4), in `xsl:output` and `fn:serialize`. | [`4457808`][4457808] |
+| `xsd.Schema.Validate` without `Annotate` still wrote the union member, `nilled` and a lax-wildcard restore to the caller's tree, racing concurrent validation | Those writes need `Annotate`; a check-only run keeps them for that run, so assertion verdicts are unchanged. | [`5c2ca9c`][5c2ca9c] |
 | XSD `mg-props-correct.2` and `src-attribute_group.3` named a group that only refers into another group's cycle, and which one varied per run | Strongly-connected components: every group on a cycle is reported, by name, and only those. | [`373da4b`][373da4b] |
 | Map order chose which error was reported: XTSE0720 (which now shows the cycle), XTSE0020/0730, XTSE0010, XTSE0545, XTSE3350, XTSE3430, XTSE3070, XTSE3055/0770, XTTE0590, XTTE2230 | Each check walks declaration, document or sorted-name order, so one stylesheet gives one error. | [`8082a2c`][8082a2c] |
 | Map order chose the reported XSD error: duplicate IDs (`cvc-id.2`), duplicate keys from nested scopes, an `xs:all` restriction's disallowed element; RELAX NG include overrides and ref cycles | Document order, or the first name in sorted order; found by the v2 output differential. | [`edea87c`][edea87c] |
@@ -1348,6 +1353,7 @@ here so every entry in this file sits under a release.
 [b13e8f4]: https://github.com/knroy/go-xml/commit/b13e8f4
 [092bdce]: https://github.com/knroy/go-xml/commit/092bdce
 [373da4b]: https://github.com/knroy/go-xml/commit/373da4b
+[5c2ca9c]: https://github.com/knroy/go-xml/commit/5c2ca9c
 [8082a2c]: https://github.com/knroy/go-xml/commit/8082a2c
 [edea87c]: https://github.com/knroy/go-xml/commit/edea87c
 [e7ec81d]: https://github.com/knroy/go-xml/commit/e7ec81d

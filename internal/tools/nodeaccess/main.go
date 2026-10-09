@@ -3,7 +3,15 @@
 // and is kept so that the change can be re-applied to code written against the
 // old fields, such as a branch merged after the switch.
 //
-//	cd internal/tools/nodeaccess && go run . [-report] [-flip] [-v] <module root>
+//	cd internal/tools/nodeaccess && go run . [-v1] [-report] [-flip] [-v] <module root>
+//
+// <module root> may be any module, not only this repository. With -v1 the tool
+// first moves a module written against go-xml v1 to v2: it rewrites every
+// import of github.com/knroy/go-xml/... in the module's .go files to
+// github.com/knroy/go-xml/v2/... and runs "go mod tidy" there, which adds the
+// v2 requirement (and drops v1's). A v2 version that is not published yet
+// must already be in go.mod, through "go get" or a replace directive, for
+// tidy to find it. See docs/migrating-to-v2.md.
 //
 // It loads every package of the module, tests included, type-checked, so a
 // field is recognised by the type of the expression it is selected from and
@@ -47,9 +55,11 @@ import (
 	"fmt"
 	"go/ast"
 	"go/format"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -60,6 +70,7 @@ import (
 )
 
 const (
+	v1Module     = "github.com/knroy/go-xml"
 	xdmPath      = "github.com/knroy/go-xml/v2/xdm"
 	xdmbuildPath = "github.com/knroy/go-xml/v2/xdmbuild"
 )
@@ -116,6 +127,7 @@ var (
 	reportOnly = flag.Bool("report", false, "list sites, change nothing")
 	flipFlag   = flag.Bool("flip", false, "rename the fields and rewrite reads too")
 	verbose    = flag.Bool("v", false, "print counts per kind of rewrite")
+	fromV1     = flag.Bool("v1", false, "first move imports of go-xml v1 to v2 and run go mod tidy")
 
 	fset    *token.FileSet
 	edits   map[string][]edit
@@ -132,6 +144,15 @@ func main() {
 		root = flag.Arg(0)
 	}
 	root, _ = filepath.Abs(root)
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r // go list reports resolved paths, which visit compares against
+	}
+	if *fromV1 && !*reportOnly {
+		if err := toV2(root); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
 	for pass := 1; ; pass++ {
 		n := run()
 		fmt.Fprintf(os.Stderr, "pass %d: %d edits\n", pass, n)
@@ -175,14 +196,21 @@ func run() int {
 	}
 	fset = pkgs[0].Fset
 	flipped = *flipFlag
+	// xdm is one of the loaded packages in this repository and an import of
+	// them in any other module.
 	for _, p := range pkgs {
-		if p.PkgPath != xdmPath || p.Types == nil {
+		if p.Types == nil {
 			continue
 		}
-		if obj := p.Types.Scope().Lookup("Node"); obj != nil {
-			if m, _, _ := types.LookupFieldOrMethod(obj.Type(), true, p.Types, "Children"); m != nil {
-				if _, isFunc := m.(*types.Func); isFunc {
-					flipped = true
+		for _, t := range append(p.Types.Imports(), p.Types) {
+			if t.Path() != xdmPath {
+				continue
+			}
+			if obj := t.Scope().Lookup("Node"); obj != nil {
+				if m, _, _ := types.LookupFieldOrMethod(obj.Type(), true, t, "Children"); m != nil {
+					if _, isFunc := m.(*types.Func); isFunc {
+						flipped = true
+					}
 				}
 			}
 		}
@@ -531,11 +559,18 @@ func buildCall(p *packages.Package, file string, c *ast.CallExpr) {
 	if !ok || len(c.Args) != 2 {
 		return
 	}
-	obj, ok := p.TypesInfo.Uses[sel.Sel].(*types.Func)
-	if !ok || obj.Pkg() == nil || obj.Pkg().Path() != xdmbuildPath {
+	// v2 has no such function, so in code just moved to v2 the call resolves
+	// to nothing and only the package qualifier says what it was.
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
 		return
 	}
-	m, ok := buildSetters[obj.Name()]
+	pn, ok := p.TypesInfo.Uses[pkg].(*types.PkgName)
+	if !ok || pn.Imported().Path() != xdmbuildPath {
+		return
+	}
+	obj := sel.Sel
+	m, ok := buildSetters[obj.Name]
 	if !ok {
 		return
 	}
@@ -543,10 +578,10 @@ func buildCall(p *packages.Package, file string, c *ast.CallExpr) {
 	switch recv.(type) {
 	case *ast.Ident, *ast.SelectorExpr, *ast.CallExpr, *ast.IndexExpr, *ast.ParenExpr:
 	default:
-		manual(c, "xdmbuild."+obj.Name()+" on a compound receiver")
+		manual(c, "xdmbuild."+obj.Name+" on a compound receiver")
 		return
 	}
-	counts["xdmbuild."+obj.Name()]++
+	counts["xdmbuild."+obj.Name]++
 	add(file, c.Pos(), recv.Pos(), "", 0)
 	add(file, recv.End(), c.Args[1].Pos(), "."+m+"(", 0)
 }
@@ -706,4 +741,74 @@ func apply(name string, es []edit) (int, error) {
 		return 0, fmt.Errorf("gofmt after rewrite: %v", err)
 	}
 	return len(keep), os.WriteFile(name, res, 0o644)
+}
+
+// toV2 rewrites the go-xml v1 import paths of the module at root to their /v2
+// spelling, then runs go mod tidy so the module requires v2.
+func toV2(root string) error {
+	n, err := importsToV2(root)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "v1 -> v2 imports: %d files\n", n)
+	tidy := exec.Command("go", "mod", "tidy")
+	tidy.Dir, tidy.Stdout, tidy.Stderr = root, os.Stderr, os.Stderr
+	if err := tidy.Run(); err != nil {
+		return fmt.Errorf("go mod tidy in %s: %v", root, err)
+	}
+	return nil
+}
+
+// importsToV2 rewrites the go-xml v1 import paths in every .go file under root
+// and returns how many files it changed. Directories the go command ignores,
+// and nested modules, are left alone.
+func importsToV2(root string) (int, error) {
+	n := 0
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if path != root && (name == "vendor" || name == "testdata" ||
+				strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
+				return filepath.SkipDir
+			}
+			if _, err := os.Stat(filepath.Join(path, "go.mod")); path != root && err == nil {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fs := token.NewFileSet()
+		f, err := parser.ParseFile(fs, path, b, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		var out []byte
+		last := 0
+		for _, im := range f.Imports {
+			p, _ := strconv.Unquote(im.Path.Value)
+			if p != v1Module && !strings.HasPrefix(p, v1Module+"/") ||
+				p == v1Module+"/v2" || strings.HasPrefix(p, v1Module+"/v2/") {
+				continue
+			}
+			at := fs.Position(im.Path.Pos()).Offset
+			out = append(out, b[last:at]...)
+			out = append(out, strconv.Quote(v1Module+"/v2"+p[len(v1Module):])...)
+			last = fs.Position(im.Path.End()).Offset
+		}
+		if last == 0 {
+			return nil
+		}
+		n++
+		return os.WriteFile(path, append(out, b[last:]...), 0o644)
+	})
+	return n, err
 }

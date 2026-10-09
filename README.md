@@ -9,8 +9,10 @@ go get github.com/knroy/go-xml/v2
 
 > **This is the v2 branch, in development.** v2 changes the exported API
 > (node fields become methods, a smaller node layout, a split evaluation
-> context); see the v2 section of [CHANGELOG.md](CHANGELOG.md). The stable
-> release is v1: `go get github.com/knroy/go-xml`.
+> context); see the v2 section of [CHANGELOG.md](CHANGELOG.md) and
+> [Migrating to v2](docs/migrating-to-v2.md), which has before/after code for
+> each change and a tool that rewrites most of it. The stable release is v1:
+> `go get github.com/knroy/go-xml`.
 
 Validate a document against a schema:
 
@@ -26,9 +28,9 @@ Every error carries the spec's code and a path — `cvc-datatype-valid.1` at
 For a document you did not write, use `schema.ValidateContext(ctx, ...)`: it is
 the same call with a deadline, and identity-constraint checking is where an
 untrusted document can make validation expensive. See
-[docs/security.md](docs/security.md). To get a typed tree without touching
-the one you passed in, use `schema.ValidateCopy`
-([options](docs/options.md#annotate-and-concurrency)).
+[docs/security.md](docs/security.md). `Validate` only checks and never writes
+to the tree; to get a typed tree, use `schema.ValidateCopy`, which annotates a
+copy ([options](docs/options.md#typed-trees-and-concurrency)).
 
 ### The packages
 
@@ -131,7 +133,7 @@ and maintains it as a project of his own.
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 2,768 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 2,772 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -1366,7 +1368,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (2,768 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (2,772 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |
