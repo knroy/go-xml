@@ -16,8 +16,8 @@
 //
 //	<suite glob> <key glob> <regexp to delete>
 //
-// so "xslt* * N\d+x\d+" says generate-id strings may differ anywhere in the
-// XSLT suites, and "xsd11 set/group/case (?s).*" accepts one case outright. A
+// where "*" also matches across "/", so "xslt* * N\d+x\d+" says
+// generate-id strings may differ anywhere in the XSLT suites, and "xsd11 set/group/case (?s).*" accepts one case outright. A
 // case recorded on one side only is compared as the text "<missing>". The
 // exit status is 1 when anything is left unexplained.
 package main
@@ -27,7 +27,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -127,6 +126,11 @@ func load(dir string) (recording, error) {
 	if err != nil {
 		return nil, err
 	}
+	// An empty directory would compare as zero differences, which is the one
+	// answer a typo in a path must never produce.
+	if len(ms) == 0 {
+		return nil, fmt.Errorf("%s: no recording (*.tsv) there", dir)
+	}
 	rec := recording{}
 	for _, m := range ms {
 		f, err := os.Open(m)
@@ -174,9 +178,18 @@ func text(dir string, hashes []string) string {
 }
 
 type rule struct {
-	line, suite, key string
-	re               *regexp.Regexp
-	hits             int
+	line       string
+	suite, key *regexp.Regexp
+	re         *regexp.Regexp
+	hits       int
+}
+
+// glob compiles a shell-style pattern in which "*" also crosses "/", since
+// case keys are paths ("set/case") and "*" is meant to mean any case.
+func glob(p string) *regexp.Regexp {
+	q := regexp.QuoteMeta(p)
+	q = strings.NewReplacer(`\*`, ".*", `\?`, ".").Replace(q)
+	return regexp.MustCompile("^" + q + "$")
 }
 
 func loadRules(file string) ([]*rule, error) {
@@ -203,7 +216,7 @@ func loadRules(file string) ([]*rule, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s:%d: %v", file, i+1, err)
 		}
-		rules = append(rules, &rule{line: ln, suite: fs[0], key: fs[1], re: re})
+		rules = append(rules, &rule{line: ln, suite: glob(fs[0]), key: glob(fs[1]), re: re})
 	}
 	return rules, nil
 }
@@ -243,10 +256,7 @@ func compare(dirA, dirB, allowFile string, show int) (int, error) {
 			ta, tb := text(dirA, ha), text(dirB, hb)
 			var used []*rule
 			for _, r := range rules {
-				if ok, _ := path.Match(r.suite, s); !ok {
-					continue
-				}
-				if ok, _ := path.Match(r.key, k); !ok {
+				if !r.suite.MatchString(s) || !r.key.MatchString(k) {
 					continue
 				}
 				na, nb := r.re.ReplaceAllString(ta, ""), r.re.ReplaceAllString(tb, "")

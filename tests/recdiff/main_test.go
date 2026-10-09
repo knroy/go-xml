@@ -20,8 +20,8 @@ func TestCompareRules(t *testing.T) {
 	}
 	put(a, "same", "x")
 	put(b, "same", "x")
-	put(a, "genid", `<p id="N1x2"/>`)
-	put(b, "genid", `<p id="N7x2"/>`)
+	put(a, "set/genid", `<p id="N1x2"/>`)
+	put(b, "set/genid", `<p id="N7x2"/>`)
 	put(a, "real", "1")
 	put(b, "real", "2")
 	put(a, "gone", "x")
