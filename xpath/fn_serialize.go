@@ -1024,7 +1024,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		for i, c := range n.Children {
 			// Having added its own meta, the method discards the head's
 			// (§7.4.13, §6.1.14): two declarations could contradict.
-			if htmlHead && htmlser.ReplacedMeta(c) {
+			if htmlHead && htmlser.ReplacedMeta(n, c) {
 				continue
 			}
 			if indentChildren && !(htmlish && htmlser.SkipIndentBefore(

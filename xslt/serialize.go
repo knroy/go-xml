@@ -439,12 +439,12 @@ type serializer struct {
 	// content-type meta but serialises as XML: an XML declaration, and empty
 	// elements closed rather than left open.
 	xhtml bool
-	// inHead marks that serialisation is inside a <head> that received the
-	// method's own content-type meta, where the stylesheet's duplicate
-	// charset meta is suppressed.
-	inHead bool
+	// head is the <head> being written that received the method's own
+	// content-type meta, whose own content-type meta children are discarded
+	// (htmlser.ReplacedMeta); nil elsewhere.
+	head *xdm.Node
 	// skipIndent drops the indent before the node being written: it sits
-	// next to an inline HTML element (see htmlInline).
+	// next to an inline HTML element (see skipBeforeChild).
 	skipIndent bool
 	// rawText marks that serialisation is inside an HTML element whose
 	// content is CDATA rather than parsed character data. rawTextName is
@@ -729,13 +729,11 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		s.writeDoctypeFor(n)
 	}
 
-	// The method already emitted a content-type meta, so a charset meta from
-	// the stylesheet would be a duplicate declaration.
-	// The method already emitted a content-type meta, so one from the
-	// stylesheet would be a second, contradicting declaration. Both spellings
-	// are dropped: the HTML5 "charset" form and the HTTP-header form the
-	// serialiser itself writes.
-	if s.html && s.inHead && htmlser.ReplacedMeta(n) {
+	// The method already emitted a content-type meta into this element's
+	// <head>, so one from the stylesheet would be a second, contradicting
+	// declaration. Both spellings are dropped, the HTML5 "charset" form and
+	// the HTTP-header form, but only as children of that head (§7.4.13).
+	if s.html && htmlser.ReplacedMeta(s.head, n) {
 		return
 	}
 	s.indent(depth)
@@ -933,8 +931,9 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// content-type meta only "if a meta element has been added", so
 			// the suppression is armed here and nowhere else: under
 			// include-content-type="no" the head keeps the meta it was given.
-			s.inHead = true
-			defer func() { s.inHead = false }()
+			saved := s.head
+			s.head = n
+			defer func() { s.head = saved }()
 			// A character map applies to the value of every attribute the
 			// serializer writes, and this one is no exception: XSLT 3.0
 			// section 27.1 puts the character map at the very end of the

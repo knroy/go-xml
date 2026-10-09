@@ -93,3 +93,20 @@ func TestSerializeMetaHonoursMediaType(t *testing.T) {
 		}
 	}
 }
+
+// TestSerializeKeepsNestedMeta pins the other half of §7.4.13 for
+// fn:serialize: only a meta that is a child of <head> is discarded, so one in
+// a <noscript> inside head stays, as it does through xsl:output.
+func TestSerializeKeepsNestedMeta(t *testing.T) {
+	got, err := evalSerialize(t, `serialize(parse-xml('<html><head><meta charset="x"/>`+
+		`<noscript><meta http-equiv="Content-Type" content="y"/></noscript></head></html>'),`+
+		` map{'method':'html'})`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `<head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">` +
+		`<noscript><meta http-equiv="Content-Type" content="y"></noscript></head>`
+	if !strings.Contains(got, want) {
+		t.Errorf("want %s in %s", want, got)
+	}
+}

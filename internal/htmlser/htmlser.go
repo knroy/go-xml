@@ -75,10 +75,17 @@ func SkipIndentBefore(n *xdm.Node, i int, xhtml, html5 bool) bool {
 }
 
 // ReplacedMeta reports whether n is a meta element the html and xhtml methods
-// discard from a head they add their own content-type meta to (§7.4.13,
-// §6.1.14): http-equiv="Content-Type", compared without regard to case or
-// surrounding space, or the HTML5 charset spelling of the same declaration.
-func ReplacedMeta(n *xdm.Node) bool {
+// discard from head, the <head> they have added their own content-type meta
+// to. §7.4.13 and §6.1.14: "any existing meta element child of the head
+// element having an http-equiv attribute with the value "Content-Type",
+// making the comparison without regard to case after first stripping leading
+// and trailing spaces ... MUST be discarded". A child only: a meta deeper in
+// head is left alone. The HTML5 charset spelling of the same declaration is
+// discarded too, as Saxon does, since it would contradict the added one.
+func ReplacedMeta(head, n *xdm.Node) bool {
+	if head == nil || n.Parent != head {
+		return false
+	}
 	if n.Kind != xdm.KindElement || !strings.EqualFold(n.Name.Local, "meta") {
 		return false
 	}
