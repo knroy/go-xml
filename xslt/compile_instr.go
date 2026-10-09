@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
@@ -1513,6 +1514,45 @@ type evaluateInstr struct {
 	// yes do the schemas xsl:import-schema brought in reach the target
 	// expression; otherwise it sees the built-in types alone.
 	schemaAware *avt
+
+	// compiled remembers target expressions compiled against ns itself, by
+	// source text: DocBook evaluates the same few strings once per node.
+	compiledMu sync.Mutex
+	compiled   map[string]*xpath.Compiled
+}
+
+// maxEvaluateCache bounds evaluateInstr.compiled. Target expressions can be
+// computed from document data, so the set of strings is not bounded by the
+// stylesheet.
+// ponytail: past the cap new strings are compiled every time; LRU if a
+// workload cycles through more than this many.
+const maxEvaluateCache = 64
+
+// compile compiles src against ns, from the cache when ns is the element's own
+// resolver (no @namespace-context, no schema change).
+func (i *evaluateInstr) compile(src string, ns *nsResolver) (*xpath.Compiled, error) {
+	if ns == i.ns {
+		i.compiledMu.Lock()
+		c, ok := i.compiled[src]
+		i.compiledMu.Unlock()
+		if ok {
+			return c, nil
+		}
+	}
+	c, err := xpath.CompileWith(src, xpath.CompileOptions{
+		Namespaces: ns, Version: ns.xpathVersion,
+	})
+	if err == nil && ns == i.ns {
+		i.compiledMu.Lock()
+		if i.compiled == nil {
+			i.compiled = map[string]*xpath.Compiled{}
+		}
+		if len(i.compiled) < maxEvaluateCache {
+			i.compiled[src] = c
+		}
+		i.compiledMu.Unlock()
+	}
+	return c, err
 }
 
 // xsltOnlyFunctions is appendix G's list: the functions XSLT defines in the
@@ -1758,9 +1798,7 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// code would have been: 10.4 defines the error by *when* it happens, not
 	// by which rule was broken. The version is the module's, exactly as a
 	// statically written expression gets it.
-	comp, err := xpath.CompileWith(src, xpath.CompileOptions{
-		Namespaces: ns, Version: ns.xpathVersion,
-	})
+	comp, err := i.compile(src, ns)
 	if err != nil {
 		// An xdm.Error, not a wrap: ErrorCode reports the innermost code it
 		// can find, so wrapping would leave the failure carrying the target
