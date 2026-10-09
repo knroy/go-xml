@@ -1042,10 +1042,45 @@ func (s *Stylesheet) stripCopyNode(pkg int, parent, n *xdm.Node, preserving bool
 	}
 }
 
+// stripKey names one stripsElement question.
+type stripKey struct {
+	pkg        int
+	uri, local string
+}
+
+// stripMemoCap bounds stripMemo: a document with more distinct element
+// names than this is answered past it without being remembered.
+const stripMemoCap = 4096
+
 // stripsElement reports whether whitespace inside the named element is
-// stripped. A specific preserve-space entry wins over a wildcard strip-space
-// entry, matching the spec's import-precedence rule for the common case.
+// stripped. It is asked once per whitespace text node of every stripped
+// document, and the answer depends only on the package and the name, so it
+// is remembered per stylesheet.
 func (s *Stylesheet) stripsElement(pkg int, name xdm.QName) bool {
+	k := stripKey{pkg, name.URI, name.Local}
+	s.stripMu.RLock()
+	v, ok := s.stripMemo[k]
+	s.stripMu.RUnlock()
+	if ok {
+		return v
+	}
+	v = s.stripsElementUncached(pkg, name)
+	s.stripMu.Lock()
+	if len(s.stripMemo) < stripMemoCap {
+		if s.stripMemo == nil {
+			s.stripMemo = map[stripKey]bool{}
+		}
+		s.stripMemo[k] = v
+	}
+	s.stripMu.Unlock()
+	return v
+}
+
+// stripsElementUncached is stripsElement's answer worked out from the
+// declarations. A specific preserve-space entry wins over a wildcard
+// strip-space entry, matching the spec's import-precedence rule for the
+// common case.
+func (s *Stylesheet) stripsElementUncached(pkg int, name xdm.QName) bool {
 	best, strip := -1, false
 	rank := func(q xdm.QName) int {
 		switch {

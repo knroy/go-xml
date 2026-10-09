@@ -24,6 +24,11 @@ type Stylesheet struct {
 	rtLib     *xpath.Library
 	rtLibOnce sync.Once
 
+	// stripMemo caches stripsElement's answer per package and element
+	// name, under stripMu; see stripsElement.
+	stripMu   sync.RWMutex
+	stripMemo map[stripKey]bool
+
 	// templates are the match templates, pre-sorted by descending priority so
 	// that selection is a linear scan that stops at the first match.
 	templates []*Template
