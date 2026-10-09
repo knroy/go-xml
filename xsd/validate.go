@@ -318,6 +318,13 @@ type validator struct {
 	// has no source text. nil for an in-place run.
 	twins map[*xdm.Node]*xdm.Node
 
+	// unwritten holds, for a run without AnnotateInPlace, the typing the validator
+	// would have written onto a node outside annotate(): a union's winning
+	// member and dm:nilled. The caller's tree stays untouched, and
+	// checkAssertions lays these onto the copy an assertion evaluates over,
+	// so the verdict is the one an annotating run reaches.
+	unwritten map[*xdm.Node]xdm.Typing
+
 	// stripIgnorable removes whitespace-only text from elements whose
 	// declared content is element-only, as XML 1.0 §2.10 and XSLT 2.0 §4.4
 	// require of a source document. See Schema.Validate for why it is scoped
@@ -698,11 +705,9 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			// failed above as cvc-elt.3.1 and is not a nilled element at all.
 			// Only the validator can draw that distinction, so only the
 			// validator records it. See xdm.Node.IsNilled.
-			if v.opts.AnnotateInPlace {
-				t := xdm.TypingOf(el)
-				t.IsNilled = true
-				el.ApplyTyping(t)
-			}
+			t := v.typingOf(el)
+			t.IsNilled = true
+			v.setTyping(el, t)
 			return nil
 		}
 	}
@@ -2238,6 +2243,57 @@ func anonComplexAnnotation(t Type) string {
 		cur = base
 	}
 	return "anyType"
+}
+
+// typingOf is the node's typing as this run has decided it so far: what is
+// on the node, or what a run without AnnotateInPlace holds aside in place of it.
+func (v *validator) typingOf(n *xdm.Node) xdm.Typing {
+	if t, ok := v.unwritten[n]; ok {
+		return t
+	}
+	return xdm.TypingOf(n)
+}
+
+// setTyping records a typing the validator decides outside annotate(). It
+// is written onto the node only when the caller asked for AnnotateInPlace; otherwise
+// it is held in unwritten, because Validate without AnnotateInPlace must not touch
+// the tree (two goroutines may be validating it).
+func (v *validator) setTyping(n *xdm.Node, t xdm.Typing) {
+	if v.opts.AnnotateInPlace {
+		n.ApplyTyping(t)
+		return
+	}
+	if v.unwritten == nil {
+		v.unwritten = map[*xdm.Node]xdm.Typing{}
+	}
+	v.unwritten[n] = t
+}
+
+// recordUnionMember records which member of a union accepted n's value.
+func (v *validator) recordUnionMember(n *xdm.Node, member string) {
+	t := v.typingOf(n)
+	t.UnionMember = member
+	v.setTyping(n, t)
+}
+
+// applyUnwritten lays the typing held in unwritten onto clone, the copy of
+// orig an assertion evaluates over. The copy drops only comments and
+// processing instructions, so attributes and element children pair up by
+// position.
+func (v *validator) applyUnwritten(orig, clone *xdm.Node) {
+	if t, ok := v.unwritten[orig]; ok {
+		clone.ApplyTyping(t)
+	}
+	for i := range orig.NumAttrs() {
+		a := orig.AttrAt(i)
+		if t, ok := v.unwritten[a]; ok {
+			clone.AttrAt(i).ApplyTyping(t)
+		}
+	}
+	kids := clone.ChildElements()
+	for i, c := range orig.ChildElements() {
+		v.applyUnwritten(c, kids[i])
+	}
 }
 
 // stripIgnorableWhitespace removes whitespace-only text children of an element

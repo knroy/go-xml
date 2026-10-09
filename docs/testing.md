@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,770 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,772 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -522,7 +522,11 @@ path rewritten (`sed 's#knroy/go-xml/v2/#knroy/go-xml/#g'`). The baseline,
 188,898 byte-identical, 5 explained, **zero unexplained**, every suite figure
 unchanged; a second v2 recording against both also reads zero. Against v1
 `dev` at `a33c0b7`, v2 at `5362841` reads 188,903 cases, 188,898 identical, 5
-explained by the generate-id and clock rules alone, zero unexplained. Without the
+explained by the generate-id and clock rules alone, zero unexplained. After
+merging `dev` at `062a821` (check-only `Validate` writes nothing; assertion
+copies get the held-back typing), v2 against the same v1 recording reads
+188,899 identical, 4 explained, zero unexplained, check-only xsdsuite
+verdicts included. Without the
 allow file the same comparison reports those 5 and exits 1, and
 `tests/recdiff/main_test.go` pins a real difference and a missing case. An
 empty or mistyped recording directory is an error, never "zero differences".

@@ -322,10 +322,10 @@ err := schema.Validate(doc.Root, xsd.ValidateOptions{AnnotateInPlace: true})
 ```
 
 This is the one change the compiler cannot find for you: code that never set
-`Annotate` still compiles. In v1, `Validate` without `Annotate` still wrote
-two things to the tree: the member type that matched a union-typed value, and
-`nilled` on an element with `xsi:nil="true"`. Code that read those after a
-plain `Validate` reads nothing in v2. Use `ValidateCopy`, or
+`Annotate` still compiles. In v1 before `5c2ca9c`, `Validate` without
+`Annotate` still wrote two things to the tree: the member type that matched
+a union-typed value, and `nilled` on an element with `xsi:nil="true"`. Code
+that read those after a plain `Validate` reads nothing in v2. Use `ValidateCopy`, or
 `AnnotateInPlace`, which records them as before.
 
 `ValidateElement`, `ValidateElementLax`, `ValidateAttribute` and

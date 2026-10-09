@@ -19,7 +19,7 @@ func (v *validator) validateSimpleContent(n *xdm.Node, lexical string, t *Simple
 	if t == nil {
 		return
 	}
-	normalized, err := validateSimpleValueIn(lexical, t, v.schema.Version, n, v.opts.AnnotateInPlace)
+	normalized, err := validateSimpleValueIn(lexical, t, v.schema.Version, n, v.recordUnionMember)
 	if err != nil {
 		v.fail(n, "cvc-datatype-valid.1", "%v", err)
 		return
@@ -118,7 +118,7 @@ func validateSimpleValue(lexical string, t *SimpleType) (string, error) {
 // sync.Once, so two schemas of different versions share the same *SimpleType
 // and a version stored there would be whichever schema loaded last.
 func validateSimpleValueVersion(lexical string, t *SimpleType, version Version) (string, error) {
-	return validateSimpleValueIn(lexical, t, version, nil, false)
+	return validateSimpleValueIn(lexical, t, version, nil, nil)
 }
 
 // validateSimpleValueIn is validateSimpleValueVersion with the instance node
@@ -128,9 +128,9 @@ func validateSimpleValueVersion(lexical string, t *SimpleType, version Version) 
 // value space is QNames compares expanded names, and expanding the instance's
 // spelling takes the namespaces in scope where it was written. Everything else
 // ignores it, which is why it is threaded as an extra parameter rather than
-// made part of the type or the version. record says whether a union's winning
-// member may be written onto it, which only an annotating run allows.
-func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *xdm.Node, record bool) (string, error) {
+// made part of the type or the version. record receives a union's winning
+// member for at; nil records nothing.
+func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *xdm.Node, record func(*xdm.Node, string)) (string, error) {
 	// A definition naming a type that does not exist loaded anyway, because
 	// the spec makes that an error only where the type is used. This is
 	// where it is used, so it is an error now — and checking here also
@@ -342,10 +342,10 @@ func hasTimezone(v string) bool {
 // matches the whole literal rather than each item — erratum E2-30, which is the
 // opposite of what the per-item reading would suggest.
 func validateListValue(lexical string, t *SimpleType) (string, error) {
-	return validateListValueIn(lexical, t, nil, false)
+	return validateListValueIn(lexical, t, nil, nil)
 }
 
-func validateListValueIn(lexical string, t *SimpleType, at *xdm.Node, record bool) (string, error) {
+func validateListValueIn(lexical string, t *SimpleType, at *xdm.Node, record func(*xdm.Node, string)) (string, error) {
 	normalized := WhiteCollapse.Normalize(lexical)
 	steps := facetChain(t)
 
@@ -390,10 +390,10 @@ func validateListValueIn(lexical string, t *SimpleType, at *xdm.Node, record boo
 // that validates. Normalising once up front would make " 42 " fail against
 // union(xs:int, xs:string) or succeed as the wrong member.
 func validateUnionValue(lexical string, t *SimpleType) (string, error) {
-	return validateUnionValueIn(lexical, t, nil, false)
+	return validateUnionValueIn(lexical, t, nil, nil)
 }
 
-func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node, record bool) (string, error) {
+func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node, record func(*xdm.Node, string)) (string, error) {
 	steps := facetChain(t)
 
 	// A restriction of a union carries no member list of its own; the members
@@ -446,11 +446,9 @@ func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node, record bo
 		// The node keeps its own annotation: the union's identity is still
 		// true of the value and a large family of tests asks for it. Only the
 		// second, per-value fact is added here.
-		if record && at != nil {
+		if record != nil && at != nil {
 			if mn := annotationName(m); mn != "" {
-				t := xdm.TypingOf(at)
-				t.UnionMember = mn
-				at.ApplyTyping(t)
+				record(at, mn)
 			}
 		}
 		return normalized, nil
