@@ -759,6 +759,58 @@ Left, ranked by CEN bytes at `2c5ea0b` (429 MB over 23 passes):
   parse-only fields could move behind a pointer.
 - `FuncCall.Eval`'s argument slice (4%), round 4's pooled-argument idea.
 
+## v2 profile (`ef76ae2c`)
+
+Three lanes profiled the `v2` branch after its benchmark run
+([benchmark](benchmark.md#v2-branch-v2)), against v1 at `f45068c`, on copies of
+the tree; nothing was changed. Allocation counts are exact; CPU is getrusage;
+attribution for XSLT comes from Linux profiles, because macOS put 25–40% of
+samples on `EvalSymlinks` system calls that an A/B showed cost no time. No
+correctness bug was found: XSD and RELAX NG verdicts and messages are identical
+to v1, and every prototype kept its outputs byte-identical.
+
+### The three apparent regressions
+
+| Benchmark figure | Finding |
+|---|---|
+| DocBook compile 55 → 77 ms | Real: bisected to `a81dff28` (40-byte records). The stylesheet checks walk ancestors for the version attribute (`effectiveForwards`, `moduleAtLeast30`, `xpathVersionAt` …), and each `Attr` lookup now goes through the name table instead of an inlined field read (~5 ms). The static-phase copies add ~2 ms; the smaller heap runs more GC cycles |
+| RELAX NG warm 0.60× → 0.75× Jing | Mostly Jing: the same Jing jar ran 15% faster in this run. go-xml's own change is +4–6% on small documents (per-document parse set-up); long documents are 18–40% faster than v1 |
+| Parse warm 0.54× → 0.57× `encoding/xml` | Not the parse: parse wall is level with v1 and CPU is −39%. The C14N write that the item includes is +14% (node accessors) |
+
+Two real regressions the benchmark ratios did not show:
+- **Typed validation** (`ValidateCopy`) costs 2.5–3.4× v1's in-place
+  annotation: two full per-node copies (the second to drop whitespace and add
+  defaults), and three callers (`xsl:source-document`, `xsl:merge`, XQuery
+  `validate`) still pre-copy the input as v1 had to. CLI `-validate strict` on a
+  2.5 MB catalog: v1 11 ms, v2 38 ms.
+- **XMark q10** evaluation is +55%: XQuery element content is copied twice per
+  node (`xdm.Copy`, then `AppendNode`'s own copy), and `limitInherited` builds
+  three maps per constructed element.
+
+The committed `cmd/go-xml/default.pgo` names v1 module paths only, so profile-
+guided optimisation does nothing for v2's go-xml code; it needs regenerating.
+
+### Fix candidates, ranked
+
+All measured on prototypes unless marked.
+
+| # | Fix | Gain | Risk |
+|---|---|---|---|
+| V1 | XQuery constructors copy once, straight into the builder; skip `limitInherited`'s maps when nothing in scope declares a namespace | q10 eval −40% (below v1); XMark q1–q20 −10% with V3 | low; one builder method |
+| V2 | Bulk tree clone for `ValidateCopy` (copy record chunks, share text and tables) for both copies; drop the three leftover pre-copies | typed validation −34% to about v1; XQuery `validate` back to v1 | medium (index renumbering in the second copy) |
+| V3 | Parser: no ancestor walk for prefixes when the tree declares none; a small name cache in front of the intern table | parse −5 to −7% | low |
+| V4 | Global variables evaluated on first use (DocBook declares ~946 per transform and reads ~75), held in one map scope | DocBook −13% more; four XSLT 3.0 cases and one 2.0 case regress in the prototype (errors must surface through the lookup) | medium–high |
+| V5 | XSLT: per-transform fields out of the runtime copy (176 → 112 B); one focus context reused per predicate; strip-space answer memoised per element name; no position stamping on `next-iteration`; `stripAnnotations` skipped on untyped trees; `NameTest.Matches` compares local name first | together with V7: DocBook −15%, Peppol −8%, XRechnung −7% / −17% (HTML stage); `ptoc.001` to about Saxon's time | low–medium |
+| V6 | RELAX NG: pattern size stored at construction; separate end-tag memo maps | long documents −37% | low |
+| V7 | Compile: memoise the version-attribute walk (not during the static phase, where `use-when` changes the answer); memoise `EvalSymlinks` in `FileResolver` | DocBook compile 63 → 53 ms (v1 51) | low–medium |
+| V8 | `HTTPResolver` into its own package (planned) | −1.3 ms per cold CLI run; small XSD 1.73× → 1.38× xmllint | v2 API |
+| V9 | Regenerate `default.pgo` for v2; `runtime.MemProfileRate = 0` in the CLI | PGO as in round 4; −8% CPU on deep-recursion DocBook items | trivial |
+| V10 | XSD: read `Value()` once per text node in `nonSpaceTextSeen`; no typing side table when no assertion can read it | −3 to −8%; 505 → 18 KB per pass | trivial |
+| V11 | C14N and the serializer walk records directly | C14N about −10% (estimate) | medium; new xdm API |
+
+Scaled onto the benchmark: Peppol about 1.24× Saxon, XRechnung stage 1 about
+1.65×, stage 2 about 1.0×, DocBook about 0.27× with V4, `ptoc.001` about 1.0×.
+
 ## Correctness bugs found while profiling
 
 | # | Bug | Evidence | Fix |
