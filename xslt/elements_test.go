@@ -960,11 +960,9 @@ func TestRawTextGuardSpansTextNodes(t *testing.T) {
 	serialize := func(texts ...string) error {
 		t.Helper()
 		sc := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "script"}, "")
-		var kids []*xdm.Node
 		for _, v := range texts {
-			kids = append(kids, xdm.NewNode(xdm.KindText, xdm.QName{}, v))
+			sc.AppendText(v)
 		}
-		sc.SetChildren(kids)
 		var sb strings.Builder
 		err := Serialize(&sb, xdm.Sequence{sc}, OutputSettings{Method: "html", OmitXMLDecl: true}, nil)
 		if err == nil && strings.Contains(sb.String(), "</script><") {

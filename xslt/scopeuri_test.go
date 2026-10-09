@@ -13,13 +13,11 @@ import (
 // undeclaration shadowing an outer binding, and the implicit xml prefix.
 func TestScopeURIMatchesInScopeNamespaces(t *testing.T) {
 	tree := xdm.NewTree()
-	outer := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "outer"}, "")
-	outer.SetParent(tree.Root)
+	outer := tree.Root.AppendElement(xdm.QName{Local: "outer"})
 	outer.AddNamespace("", "urn:default")
 	outer.AddNamespace("a", "urn:a1")
 	outer.AddNamespace("b", "urn:b")
-	inner := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "inner"}, "")
-	inner.SetParent(outer)
+	inner := outer.AppendElement(xdm.QName{Local: "inner"})
 	inner.AddNamespace("a", "urn:a2")
 	inner.AddNamespace("a", "urn:a3") // the later one is in scope
 	inner.AddNamespace("", "")        // undeclares the outer default
