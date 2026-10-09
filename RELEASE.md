@@ -187,6 +187,7 @@ one**, and the workflow does not try to derive it:
 | v1.5.0 | *(no release)* |
 | v1.6.0 | w3cschemas/v0.5.0 |
 | v1.7.0 | w3cschemas/v0.6.0 (tagged by hand: the tag message had no `w3cschemas:` line) |
+| v1.7.1 | *(no release)* |
 
 The minor number counts **w3cschemas releases**, not go-xml ones, and two
 go-xml releases produced none at all. Any rule derived from the parent version
