@@ -342,7 +342,7 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 	if decl == nil || decl.Type == nil {
 		return
 	}
-	normalized, err := validateSimpleValueIn(a.Value, decl.Type, v.schema.Version, a)
+	normalized, err := validateSimpleValueIn(a.Value, decl.Type, v.schema.Version, a, v.recordUnionMember)
 	if err != nil {
 		v.fail(a, "cvc-attribute.3",
 			"attribute %s: %v", attrName(decl.Name), err)

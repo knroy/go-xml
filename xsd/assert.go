@@ -238,6 +238,9 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 		return
 	}
 	scoped := scopeForAssertion(el)
+	if len(v.unwritten) > 0 {
+		v.applyUnwritten(el, scoped)
+	}
 	annotateForAssertion(scoped, t)
 
 	// $value is in scope in every assertion, not only those on a simple
