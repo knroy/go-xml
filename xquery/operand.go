@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // Constructors and the other XQuery-only forms as operands of an ordinary

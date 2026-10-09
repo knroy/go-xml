@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // readSimpleType reads an <xs:simpleType>.

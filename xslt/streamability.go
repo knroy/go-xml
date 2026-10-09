@@ -17,8 +17,8 @@ package xslt
 // one as "no opinion" rather than as a failure.
 
 import (
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // analyzer carries the context an expression is assessed in.

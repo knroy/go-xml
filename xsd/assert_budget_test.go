@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // assertionSheet builds a schema whose element carries n assertions, each

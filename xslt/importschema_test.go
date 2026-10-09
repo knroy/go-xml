@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // TestImportSchemaInline covers the form that needs no resolver: the schema is

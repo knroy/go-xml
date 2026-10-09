@@ -5,7 +5,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // validateSimpleContent checks a lexical value against a simple type.

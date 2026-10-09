@@ -1,8 +1,8 @@
 package xslt
 
 import (
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // htmlNativeNamespaces are the three vocabularies an HTML5 parser understands

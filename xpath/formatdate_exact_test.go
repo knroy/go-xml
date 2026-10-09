@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // formatWithPlace evaluates a five-argument format-dateTime call.

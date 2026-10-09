@@ -3,7 +3,7 @@ package xpath
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // registerStreamFuncs adds fn:stream-available, XSLT 3.0 section 18.1.3.

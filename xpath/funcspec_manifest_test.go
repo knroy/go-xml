@@ -7,7 +7,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // manifestPath is the normalized data source cmd/genfunctions writes from the

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode/utf16"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // This file implements the four XPath 3.1 JSON functions — fn:parse-json,

@@ -3,7 +3,7 @@ package xsd
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestValidateRecordsMixedContent pins the MixedContent property the

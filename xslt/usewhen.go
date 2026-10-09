@@ -1,8 +1,8 @@
 package xslt
 
 import (
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // The static context a static expression is evaluated in, section 9.7.

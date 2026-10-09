@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // xsl:try and xsl:catch, XSLT 3.0 section 8.3.

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // countJoins counts the joinClauses reachable from v, wherever the parser

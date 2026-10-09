@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // The bug these tests pin: the data model's derivation registries

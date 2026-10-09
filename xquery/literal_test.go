@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xquery"
+	"github.com/knroy/go-xml/v2/xquery"
 )
 
 // TestStringLiteralReferences covers the expansion in literal.go: §3.1.1 gives

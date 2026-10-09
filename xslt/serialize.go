@@ -12,9 +12,9 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/knroy/go-xml/internal/htmlser"
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/internal/htmlser"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // jsonParams carries the settings the JSON and adaptive output methods read

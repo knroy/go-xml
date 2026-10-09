@@ -1,6 +1,6 @@
 package xpathleaf
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // StableLibrary is implemented by a host's xpath.FunctionLibrary wrapper whose
 // answers depend only on its own comparable fields, the library it wraps and

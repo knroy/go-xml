@@ -3,7 +3,7 @@ package xpath
 import (
 	"context"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Optimisation runs between parsing and evaluation, rewriting the tree into an

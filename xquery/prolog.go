@@ -5,8 +5,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // The prolog is XQuery 3.1 §4: everything between the optional version

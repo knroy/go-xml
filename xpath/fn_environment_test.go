@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // fixedEnvironment exposes exactly the variables it was given, and nothing of

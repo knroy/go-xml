@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // genDoc builds a document of at least size bytes out of a repeated record

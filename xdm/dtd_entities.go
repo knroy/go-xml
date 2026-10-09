@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	xml "github.com/knroy/go-xml/internal/xmltok"
+	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
 // Internal general entities declared in a DOCTYPE's internal subset.

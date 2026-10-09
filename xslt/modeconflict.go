@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // modeDecl is one xsl:mode declaration as XTSE0545 sees it: the import

@@ -4,6 +4,17 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased — v2 (branch `v2`, in development)
+
+v2 breaks the exported API, so it has a new module path. Its plan is phases 3
+and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.md#round-6-xdm-plan-phases-02-c233f4e).
+
+### Changed — breaking
+
+| Change | What it means for callers | Commit |
+|---|---|---|
+| Module path `github.com/knroy/go-xml/v2` | Import `github.com/knroy/go-xml/v2/<package>`; v1 stays at `github.com/knroy/go-xml`. The `w3cschemas` module still requires v1. | — |
+
 ## Unreleased
 
 ### Added

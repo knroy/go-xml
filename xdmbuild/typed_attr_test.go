@@ -3,9 +3,9 @@ package xdmbuild_test
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // AddAttributeWithTyping is the typed builder entry point of audit finding 24.

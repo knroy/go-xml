@@ -1,7 +1,7 @@
 package relaxng
 
 import (
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The declarations and grammar level of the compact syntax.

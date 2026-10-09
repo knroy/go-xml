@@ -3,7 +3,7 @@ package qt3
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // TestQT3XQuery measures the XQuery half of the same suite.

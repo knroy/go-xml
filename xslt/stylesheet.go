@@ -6,9 +6,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // Stylesheet is a compiled XSLT 2.0 stylesheet.

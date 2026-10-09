@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // loadTestSchema builds a one-element schema for the tests below.

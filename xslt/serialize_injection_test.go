@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // runSecondary compiles src, transforms doc through it and returns the one

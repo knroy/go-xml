@@ -1,6 +1,6 @@
 package xpath
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // Version selects the version of the XPath language an expression is written
 // in.

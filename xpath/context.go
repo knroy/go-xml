@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/knroy/go-xml/internal/xpathleaf"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Context is the XPath dynamic context: everything an expression can observe

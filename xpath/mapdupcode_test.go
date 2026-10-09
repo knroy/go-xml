@@ -3,7 +3,7 @@ package xpath
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Context.MapDuplicateCode selects the error code for a duplicate key in a map

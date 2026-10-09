@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // fn:QName, fn:resolve-QName and fn:normalize-unicode all reduce to XML S, and

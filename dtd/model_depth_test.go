@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // nestedModel builds a DOCTYPE whose one element declaration has a content

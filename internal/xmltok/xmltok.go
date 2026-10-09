@@ -49,7 +49,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/knroy/go-xml/internal/xmlname"
+	"github.com/knroy/go-xml/v2/internal/xmlname"
 )
 
 // A SyntaxError is a well-formedness error, reported against the line the

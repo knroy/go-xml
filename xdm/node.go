@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/knroy/go-xml/internal/genid"
+	"github.com/knroy/go-xml/v2/internal/genid"
 )
 
 // NodeKind enumerates the seven node kinds of the XDM.

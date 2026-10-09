@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A oneOrMore nested inside a oneOrMore duplicates its operand on every

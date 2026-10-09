@@ -3,7 +3,7 @@ package xdmbuild
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // DeepCopy is what xsl:copy-of, fn:snapshot and xsl:merge build result trees

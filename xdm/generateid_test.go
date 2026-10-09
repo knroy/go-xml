@@ -3,7 +3,7 @@ package xdm
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/internal/genid"
+	"github.com/knroy/go-xml/v2/internal/genid"
 )
 
 // TestGenerateIDAcrossTreeStride pins the collision fn:generate-id() had while

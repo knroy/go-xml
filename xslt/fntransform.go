@@ -8,8 +8,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // fn:transform runs a transformation described by an options map and returns

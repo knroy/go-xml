@@ -54,7 +54,7 @@ import (
 	"math/big"
 	"sync/atomic"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Namespaces used throughout the spec.

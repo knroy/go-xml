@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // sequenceType is a compiled "as" attribute from xsl:param, xsl:variable or

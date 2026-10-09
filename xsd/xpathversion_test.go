@@ -3,8 +3,8 @@ package xsd
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // assertSchema is a 1.1 schema whose single element carries one assertion.

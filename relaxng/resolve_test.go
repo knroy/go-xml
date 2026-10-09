@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // mapResolver serves schemas from a fixed map, standing in for a caller that

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Builtins returns the standard fn: function library.

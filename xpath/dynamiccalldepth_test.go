@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // evalDepth runs an expression against a default context, as an untrusted

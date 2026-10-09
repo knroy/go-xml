@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // Static and dynamic checks introduced by XSLT 3.0 that have no natural home

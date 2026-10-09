@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A static expression may call fn:doc, and the empty reference denotes the

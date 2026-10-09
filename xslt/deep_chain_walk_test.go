@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Two walks up a type's derivation chain and one walk back along a copy's

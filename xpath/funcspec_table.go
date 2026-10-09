@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // This file holds the FunctionSpec table: the declared types of every

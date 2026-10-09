@@ -3,7 +3,7 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // checkIterateStatic enforces the placement rules section 8.4 puts on

@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // registerCatalog declares -catalog on fs and returns its target. One
@@ -22,7 +22,7 @@ func registerCatalog(fs *flag.FlagSet) *string {
 			"URLs, a relative name, or the namespace alone -- is answered from "+
 			"these files, and nothing is fetched. A DOCTYPE in these files is "+
 			"permitted, since the W3C schema for schemas carries one. The "+
-			"github.com/knroy/go-xml/w3cschemas module ships both under "+
+			"github.com/knroy/go-xml/v2/w3cschemas module ships both under "+
 			"schemas/")
 }
 

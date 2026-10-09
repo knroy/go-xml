@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xquery"
+	"github.com/knroy/go-xml/v2/xquery"
 )
 
 // TestFunctionResultConvertsToImportedSchemaType pins the function conversion

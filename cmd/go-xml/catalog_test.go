@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A schema that imports the XSD 1.1 schema for schemas by its www.w3.org URL,

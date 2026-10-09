@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // chainedValueSchema builds a document element whose repeated child is typed by

@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // DeepCopy clones a subtree, detached from its original parent.

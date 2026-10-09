@@ -3,7 +3,7 @@ package xpath
 import (
 	"unsafe"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // This file is the xpath half of XQuery's FLWOR join (xquery/join.go): the

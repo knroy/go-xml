@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestBoundsSkippedWithoutBoundFacets pins checkBounds' early return: a chain

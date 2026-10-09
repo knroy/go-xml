@@ -3,7 +3,7 @@ package xsd
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Conditional inclusion (XSD 1.1 Part 1 §4.2.1, "Conditional inclusion").

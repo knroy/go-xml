@@ -3,8 +3,8 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // xsl:map and xsl:map-entry, XSLT 3.0 section 14.

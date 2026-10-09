@@ -3,7 +3,7 @@ package xpath
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A parameter the spec declares WITHOUT "?" must raise XPTY0004 when it is

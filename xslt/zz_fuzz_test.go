@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // fuzzParseOptions bound what a generated document may cost. A limit firing is

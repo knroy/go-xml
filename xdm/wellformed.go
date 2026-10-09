@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	xml "github.com/knroy/go-xml/internal/xmltok"
+	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
 // xmlDeclSyntax is productions [23]-[26] reduced to the declarations this

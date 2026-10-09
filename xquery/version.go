@@ -1,6 +1,6 @@
 package xquery
 
-import "github.com/knroy/go-xml/xpath"
+import "github.com/knroy/go-xml/v2/xpath"
 
 // XQVersion is the version of the XQuery language a module is written in, as
 // named by its version declaration (§4.1 VersionDecl).

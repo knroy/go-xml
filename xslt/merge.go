@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // xsl:merge and its three companion elements, XSLT 3.0 section 15.

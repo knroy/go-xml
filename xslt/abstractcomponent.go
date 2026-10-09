@@ -3,7 +3,7 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Abstract components and XTDE3052, XSLT 3.0 sections 3.5.2 and 3.5.3.2.

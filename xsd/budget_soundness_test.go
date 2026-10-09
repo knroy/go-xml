@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The invariant this file enforces.

@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/fileuri"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
 
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // TestEntityResolverConfinement checks that the suite's entity resolver cannot

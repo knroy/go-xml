@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Five walks up the derivation chain a schema recorded stopped after a fixed

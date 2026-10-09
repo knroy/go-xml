@@ -4,8 +4,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 
-	"github.com/knroy/go-xml/c14n"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/c14n"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Exclusive canonicalization of a signed subtree, as a WS-Security

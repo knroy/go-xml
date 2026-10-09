@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"unicode/utf8"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A backtracking matcher for the XPath 2.0 / XML Schema regular expression

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // nsAlias is the result-namespace a stylesheet namespace is rewritten to.

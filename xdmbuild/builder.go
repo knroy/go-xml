@@ -5,7 +5,7 @@ import (
 	"sort"
 	"unsafe"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Builder accumulates the result of a sequence constructor.

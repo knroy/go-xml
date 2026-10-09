@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // XSD 1.1 assertions and conditional type assignment.

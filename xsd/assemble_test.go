@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/fileuri"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // loadFromMap assembles a schema from an in-memory set of documents, so that a

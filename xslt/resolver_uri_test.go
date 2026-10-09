@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/fileuri"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
 )
 
 // TestFileURIToPathHandlesBothPlatforms covers the conversion that used to be

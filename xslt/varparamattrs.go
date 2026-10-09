@@ -3,7 +3,7 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Which attributes xsl:variable and xsl:param may carry where, sections 9.1

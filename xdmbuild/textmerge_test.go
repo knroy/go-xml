@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // TestAppendTextNotQuadratic bounds the cost of merging many adjacent text

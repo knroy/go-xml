@@ -1,6 +1,6 @@
 package xslt
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // focusDependent lists the built-in functions F&O 3.1 and XSLT 3.0 declare
 // ·focus-dependent·, by namespace, local name and arity. §19.8.8.15 turns on

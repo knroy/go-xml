@@ -3,8 +3,8 @@ package xslt
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // Pattern.matches rejects a candidate that no alternative's last step accepts

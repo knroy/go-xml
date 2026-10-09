@@ -9,7 +9,7 @@ import (
 	"testing"
 	"unicode/utf16"
 
-	"github.com/knroy/go-xml/internal/fileuri"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
 )
 
 // These tests exist because external entity resolution is the XXE boundary.

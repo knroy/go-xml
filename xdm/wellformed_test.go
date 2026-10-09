@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/xmltok"
+	"github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
 func TestParseRejectsDuplicateAndNamespaceIllFormedNames(t *testing.T) {

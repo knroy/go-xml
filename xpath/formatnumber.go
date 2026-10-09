@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // fn:format-number and the decimal-format machinery it reads.

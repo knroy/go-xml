@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // bomb builds the doubling chain: n nested "let"s, each concatenating the

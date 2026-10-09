@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Matches implements NodeTest for name tests.

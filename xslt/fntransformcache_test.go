@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/fileuri"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // cacheInner reports its static parameter, so a stale cache hit across

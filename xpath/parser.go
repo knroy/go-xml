@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // NamespaceResolver resolves a namespace prefix to a URI at parse time.

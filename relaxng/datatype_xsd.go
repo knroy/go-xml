@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // xsdType adapts an XML Schema built-in datatype to RELAX NG's interface.

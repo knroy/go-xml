@@ -3,7 +3,7 @@ package xpath
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A library is keyed by namespace URI, local name and arity, each of which

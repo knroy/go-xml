@@ -3,7 +3,7 @@ package xslt
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The XSLT 3.0 changes to xsl:message, section 23.1.

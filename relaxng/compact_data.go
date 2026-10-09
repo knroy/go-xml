@@ -1,6 +1,6 @@
 package relaxng
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // Datatypes, values and annotations in the compact syntax.
 

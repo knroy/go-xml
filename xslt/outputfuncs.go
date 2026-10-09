@@ -3,8 +3,8 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // outputURIVar carries the current output URI down the XPath context.

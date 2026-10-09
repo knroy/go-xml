@@ -3,7 +3,7 @@ package xpath
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // registerHOFuncs adds the higher-order functions of F&O 3.0 section 16: the

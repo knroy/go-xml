@@ -9,8 +9,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // forEachGroupInstr implements xsl:for-each-group.

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The four positional spellings must keep answering exactly as they did, now

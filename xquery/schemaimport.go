@@ -6,8 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // Schema import is XQuery 3.1 §4.11. A schema import adds the components of

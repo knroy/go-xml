@@ -3,7 +3,7 @@ package xpath
 import (
 	"sort"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // walkAxis calls visit for each node on the axis from n, in axis order.

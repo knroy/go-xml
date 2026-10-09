@@ -3,7 +3,7 @@ package xquery
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A FLWOR written unparenthesised in a branch of a conditional belongs to that

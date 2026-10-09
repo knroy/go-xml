@@ -3,9 +3,9 @@ package xquery
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // parseOrderedUnordered parses [136] "ordered { Expr }" and [137]

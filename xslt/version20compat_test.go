@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // compileAtVersion compiles the version="2.0" stylesheet src, written to

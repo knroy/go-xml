@@ -1,8 +1,8 @@
 package xpath
 
 import (
-	"github.com/knroy/go-xml/internal/xpathleaf"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 func init() {

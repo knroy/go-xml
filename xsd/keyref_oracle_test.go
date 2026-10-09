@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // keyref is the half of identity-constraint evaluation the two existing

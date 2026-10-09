@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // Module import is XQuery 3.1 §4.12. A library module declares a target

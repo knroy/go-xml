@@ -3,7 +3,7 @@ package xpath
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 func eval30(t *testing.T, expr string, item xdm.Item) xdm.Sequence {

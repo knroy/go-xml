@@ -3,7 +3,7 @@ package xsd
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // SequenceMatcher decides whether a sequence of element names satisfies a

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // TestDeclareBaseURIResolution covers the two halves of "declare base-uri"

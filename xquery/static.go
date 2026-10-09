@@ -3,8 +3,8 @@ package xquery
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // BoundarySpace is the boundary-space policy of §4.3: whether whitespace that

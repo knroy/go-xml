@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/fileuri"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
 )
 
 // TestFnTransformSourceLocationFollowsAllowDir is GitHub issue #12 through the

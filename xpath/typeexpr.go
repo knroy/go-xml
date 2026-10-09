@@ -3,7 +3,7 @@ package xpath
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Matches reports whether seq conforms to the sequence type.

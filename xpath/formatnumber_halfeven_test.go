@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestFormatNumberRoundsHalfToEven pins the rounding mode of fn:format-number.

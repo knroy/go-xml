@@ -9,7 +9,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Eval implements Expr for all infix operators.

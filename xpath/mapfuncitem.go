@@ -1,6 +1,6 @@
 package xpath
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // functionItemView presents a map or an array as the function item the data
 // model says it already is.

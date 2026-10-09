@@ -3,8 +3,8 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // The XSLT 3.0 conditional content instructions, section 8.4:

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // avt is a compiled attribute value template: literal text interleaved with

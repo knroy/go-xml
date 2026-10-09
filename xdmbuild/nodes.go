@@ -1,6 +1,6 @@
 package xdmbuild
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // Node constructors and edits for code that builds or rewrites a tree outside
 // a Builder.

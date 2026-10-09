@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 func parseJSONNested(t *testing.T, n int) error {

@@ -46,7 +46,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // sweepConvDoc is an untyped tree: every attribute atomizes to

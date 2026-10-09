@@ -3,8 +3,8 @@ package xslt
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // Composite grouping keys, XSLT 3.0 section 14.2.

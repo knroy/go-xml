@@ -3,7 +3,7 @@ package xsd
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestSchemaForJSONAnnotates checks the built-in schema of F&O 3.1 §C.2 both

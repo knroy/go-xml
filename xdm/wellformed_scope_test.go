@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"testing"
 
-	xml "github.com/knroy/go-xml/internal/xmltok"
+	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
 // validateStartElementMaps is validateStartElement as it was before tagScope:

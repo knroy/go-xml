@@ -3,7 +3,7 @@ package xpath
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // functionItemMatches decides a typed function test against a function item.

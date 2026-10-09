@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // registerSeqFuncs adds the sequence and aggregate functions.

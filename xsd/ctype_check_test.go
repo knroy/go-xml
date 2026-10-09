@@ -3,7 +3,7 @@ package xsd
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // loadVer assembles a schema under an explicit version, so one document can be

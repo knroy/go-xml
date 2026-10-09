@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // The property these tests pin: a node COPIED by the engine must answer every

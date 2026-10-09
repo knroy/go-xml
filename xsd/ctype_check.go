@@ -1,7 +1,7 @@
 package xsd
 
 import (
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // checkLocalTargetNamespace enforces src-attribute.6 and src-element.4, the

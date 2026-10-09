@@ -1,7 +1,7 @@
 package xpath
 
 import (
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The three built-in list types, xs:NMTOKENS, xs:IDREFS and xs:ENTITIES.

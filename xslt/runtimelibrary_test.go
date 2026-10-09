@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The runtime function library (key(), current(), the accumulators, ...) is

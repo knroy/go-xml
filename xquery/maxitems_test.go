@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xquery"
-	_ "github.com/knroy/go-xml/xslt" // registers fn:transform
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xquery"
+	_ "github.com/knroy/go-xml/v2/xslt" // registers fn:transform
 )
 
 // A transform a query starts with fn:transform is held to the query's

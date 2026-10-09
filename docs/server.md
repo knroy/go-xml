@@ -25,8 +25,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // Validator holds one compiled rule set. It is safe for concurrent use:

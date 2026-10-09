@@ -16,12 +16,12 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"github.com/knroy/go-xml/internal/fileuri"
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xquery"
-	"github.com/knroy/go-xml/xsd"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xquery"
+	"github.com/knroy/go-xml/v2/xsd"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // SuiteClock is the fixed value fn:current-dateTime returns during a run.

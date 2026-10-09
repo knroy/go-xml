@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // allAlgorithms is every supported algorithm, in a fixed order so that a

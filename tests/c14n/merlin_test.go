@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/c14n"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/c14n"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The Baltimore "Merlin" interop signatures (Merlin Hughes, 2002), vendored

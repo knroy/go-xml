@@ -3,7 +3,7 @@ package xpath
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // registerMisc30Funcs adds the remaining XPath 3.0 additions that need no

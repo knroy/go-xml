@@ -7,10 +7,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xsd"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xsd"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // Judging a result against the suite's assertions.

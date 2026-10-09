@@ -4,8 +4,13 @@
 no JVM, no libxml2 — one `go get`, and it cross-compiles like any Go package.
 
 ```
-go get github.com/knroy/go-xml
+go get github.com/knroy/go-xml/v2
 ```
+
+> **This is the v2 branch, in development.** v2 changes the exported API
+> (node fields become methods, a smaller node layout, a split evaluation
+> context); see the v2 section of [CHANGELOG.md](CHANGELOG.md). The stable
+> release is v1: `go get github.com/knroy/go-xml`.
 
 Validate a document against a schema:
 
@@ -429,7 +434,7 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 
 The exit status is 0 only if every input transformed.
 
-`go install -tags goxml_nohttp github.com/knroy/go-xml/cmd/go-xml@latest`
+`go install -tags goxml_nohttp github.com/knroy/go-xml/v2/cmd/go-xml@latest`
 builds the CLI without `net/http`, which it never uses: it starts about 1.6 ms
 faster and is 12% smaller.
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // writeSecondary is the only path in this program that opens a file by name

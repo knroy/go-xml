@@ -3,7 +3,7 @@ package xslt
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The package-version attribute's syntax, section 3.6.1.

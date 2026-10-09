@@ -9,8 +9,8 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/knroy/go-xml/internal/htmlser"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/htmlser"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // registerSerialize adds fn:serialize, F&O 3.0 section 14.7.2.

@@ -1,6 +1,6 @@
 package xpath
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // CoerceFunctionItem applies the function coercion clause of the function
 // conversion rules (section 3.1.5) to a value supplied where st, a typed

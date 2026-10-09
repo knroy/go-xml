@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // xsl:source-document/@use-accumulators restricts which accumulators may be

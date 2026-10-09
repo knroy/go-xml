@@ -3,7 +3,7 @@ package xsd
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // readElementDecl reads an <xs:element>.

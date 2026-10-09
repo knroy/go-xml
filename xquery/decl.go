@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // varDecl is one "declare variable" (§4.14).

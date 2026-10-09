@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/knroy/go-xml/internal/fileuri"
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // fn:transform for a caller with no transform of its own -- an XQuery query,

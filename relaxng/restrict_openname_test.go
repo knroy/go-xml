@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 func itoa(i int) string { return strconv.Itoa(i) }

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/uripath"
-	"github.com/knroy/go-xml/relaxng"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/uripath"
+	"github.com/knroy/go-xml/v2/relaxng"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // These cases were written against the CLI's own rngFileResolver, which was a

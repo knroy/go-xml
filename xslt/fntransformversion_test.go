@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // globalItemSheet reports, from a version="3.0" stylesheet, what its global

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	xml "github.com/knroy/go-xml/internal/xmltok"
+	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
 func TestLexicalIs(t *testing.T) {

@@ -3,9 +3,9 @@ package xquery_test
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xquery"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xquery"
 )
 
 // An attribute that reaches element content as a value -- "<e>{$a}</e>", where

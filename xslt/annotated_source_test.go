@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // TestAnnotatedSourceAtomisesToTypedValues pins that a source validated with

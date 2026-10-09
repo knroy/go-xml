@@ -1,7 +1,7 @@
 package xpath
 
 import (
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // registerMapFuncs adds the map: functions of F&O 3.1 section 17.1.

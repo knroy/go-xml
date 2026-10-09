@@ -1,6 +1,6 @@
 package xpath
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // TreeValidator validates a tree this package has just constructed, writing
 // the type annotations the assessment produces onto its nodes.

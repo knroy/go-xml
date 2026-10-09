@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/fileuri"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
 )
 
 // A file: URI names the drive INSIDE the path: RFC 8089's three-slash form

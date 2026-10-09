@@ -3,7 +3,7 @@ package xsd
 import (
 	"sync"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The built-in type hierarchy (Part 2 §3).

@@ -3,7 +3,7 @@ package xpath
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // dynamicQName is xs:QName() applied to an argument that is not a string

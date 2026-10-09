@@ -1,7 +1,7 @@
 package xquery
 
 import (
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // windowVars are the five variables a window boundary condition may bind:

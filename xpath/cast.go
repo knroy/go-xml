@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/internal/xmlname"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/xmlname"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // CastAtomic converts an atomic value to a target type, per the XPath 2.0

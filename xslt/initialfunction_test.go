@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/fileuri"
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // A stylesheet function is the third entry point, beside a named template and

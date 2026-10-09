@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // These cover the XSLT 2.0 elements added after an audit against the spec's

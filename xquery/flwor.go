@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // A flwor is a FLWOR expression: §3.10's initial clause, the clauses that

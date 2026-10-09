@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/knroy/go-xml/internal/fileuri"
-	"github.com/knroy/go-xml/internal/uripath"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/internal/uripath"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Resolver fetches a schema document named by an <externalRef> or <include>.

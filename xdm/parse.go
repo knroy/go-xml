@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unsafe"
 
-	xml "github.com/knroy/go-xml/internal/xmltok"
+	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
 // ParseOptions controls document construction.

@@ -3,7 +3,7 @@ package xsd
 import (
 	"context"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // ValidateCopy validates a copy of root and returns the annotated copy,

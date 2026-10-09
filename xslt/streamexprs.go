@@ -20,8 +20,8 @@ package xslt
 //	§19.8.9.16 fn:position                   (grounded and motionless)
 
 import (
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 	"strings"
 )
 

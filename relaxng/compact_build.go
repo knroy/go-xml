@@ -1,8 +1,8 @@
 package relaxng
 
 import (
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // Construction of the XML-syntax tree that the compact syntax maps onto.

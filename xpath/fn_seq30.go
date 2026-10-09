@@ -1,7 +1,7 @@
 package xpath
 
 import (
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // registerSeq30Funcs adds the sequence and node functions XPath 3.0 introduces

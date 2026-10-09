@@ -3,7 +3,7 @@ package xslt
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The builder's typed entry point (audit finding 24) is only worth having if

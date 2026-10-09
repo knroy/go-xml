@@ -3,7 +3,7 @@ package xsd
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The schema for schemas constrains the children of every XSD element, and a

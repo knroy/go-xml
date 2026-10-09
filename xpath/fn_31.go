@@ -6,7 +6,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // register31Funcs adds the XPath 3.1 functions that need nothing from the map

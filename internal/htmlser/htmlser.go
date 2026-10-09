@@ -6,7 +6,7 @@ package htmlser
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // NSXHTML is the XHTML namespace.

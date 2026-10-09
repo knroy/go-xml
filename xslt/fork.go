@@ -3,7 +3,7 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The xsl:fork instruction, section 16.

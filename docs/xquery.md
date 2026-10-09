@@ -10,7 +10,7 @@ themselves are compiled by [`xpath`](../xpath/), which is at 100% of the same
 suite for 2.0, 3.0 and 3.1.
 
 ```
-go get github.com/knroy/go-xml
+go get github.com/knroy/go-xml/v2
 ```
 
 ## Two calls
@@ -46,7 +46,7 @@ a syntax error can never reach you from `Eval`.
 HTML, JSON or text is a separate step, and it lives in `xslt`:
 
 ```go
-import "github.com/knroy/go-xml/xslt"
+import "github.com/knroy/go-xml/v2/xslt"
 
 seq, err := xquery.Eval(`<sum>{ 1 + 2 }</sum>`, ctx, xquery.Options{})
 err = xslt.Serialize(os.Stdout, seq, xslt.OutputSettings{OmitXMLDecl: true}, nil)
@@ -295,7 +295,7 @@ supplied variable or context item that does not match its declared type is
 
 The function lives in `xpath`'s library, but the processor behind it lives
 here, and `xpath` cannot import `xquery`. So **a Go program gets it by
-importing this package** — a blank `import _ "github.com/knroy/go-xml/xquery"`
+importing this package** — a blank `import _ "github.com/knroy/go-xml/v2/xquery"`
 is enough for a stylesheet or an XPath expression to use it. A program that
 does not import `xquery` gets `FOQM0006`, which the specification defines for
 a processor without the function. The `go-xml` command links `xquery`, so both
@@ -407,7 +407,7 @@ that imports only `xpath` or `xquery` gets `FOXT0004`, the specification's code
 for "no processor".
 
 ```go
-import "github.com/knroy/go-xml/xslt" // linking xslt registers the processor
+import "github.com/knroy/go-xml/v2/xslt" // linking xslt registers the processor
 
 res, err := xslt.NewFileResolver("/srv/xsl") // all the transformation may read
 ctx := xpath.NewContext(nil, xpath.Builtins())

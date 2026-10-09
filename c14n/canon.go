@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // binding is one prefix-to-URI namespace binding. An empty prefix is the

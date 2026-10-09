@@ -3,7 +3,7 @@ package xpath
 import (
 	"sync/atomic"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Expr is a node in the XPath abstract syntax tree.

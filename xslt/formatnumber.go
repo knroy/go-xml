@@ -7,8 +7,8 @@ import (
 
 	"unicode"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // DecimalFormat holds an xsl:decimal-format declaration.

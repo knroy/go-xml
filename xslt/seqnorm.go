@@ -1,6 +1,6 @@
 package xslt
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // joinAdjacentAtomics is step 1 of sequence normalisation (XSLT and XQuery
 // Serialization 3.1, section 2): every maximal run of adjacent atomic values

@@ -1,6 +1,6 @@
 package xpath
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // FreeVariables reports every variable this expression reads without binding.
 //

@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // streamCorpusDirs names the real-world stylesheet trees, relative to the

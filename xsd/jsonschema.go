@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The schema for the XML representation of JSON.

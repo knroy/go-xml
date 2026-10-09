@@ -3,7 +3,7 @@ package relaxng
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The ns= of an <include> or <externalRef> is inherited lexically (sections

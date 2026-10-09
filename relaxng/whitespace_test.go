@@ -3,7 +3,7 @@ package relaxng
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Section 6.2.7: whitespace-only text among element children is stripped, and

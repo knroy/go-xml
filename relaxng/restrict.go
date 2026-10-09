@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Section 7 of the spec: the restrictions.

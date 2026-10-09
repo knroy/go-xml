@@ -3,7 +3,7 @@ package xquery_test
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // ser renders a node the way an XML serializer would, for comparing what a

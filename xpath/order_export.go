@@ -1,6 +1,6 @@
 package xpath
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // OrderAtomics orders two atomic values the way a sorting host language needs
 // to, returning -1, 0 or 1 and whether the pair is ordered at all.

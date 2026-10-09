@@ -31,8 +31,8 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // checkStreamability raises XTSE3430 where the §19.8 analysis shows that a

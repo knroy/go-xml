@@ -40,8 +40,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/knroy/go-xml/c14n"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/c14n"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 var allAlgs = []c14n.Algorithm{

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 const copySchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"

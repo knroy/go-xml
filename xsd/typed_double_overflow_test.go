@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestTypedDoubleOverflowKeepsItsType covers an xs:double whose magnitude no

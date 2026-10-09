@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/c14n"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/c14n"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestW3CC14N11Interop runs the XML Security WG's Canonical XML 1.1 interop

@@ -3,9 +3,9 @@ package xslt
 import (
 	"sort"
 
-	"github.com/knroy/go-xml/internal/version"
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/internal/version"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // productVersion is what fn:system-property('xsl:product-version') answers.

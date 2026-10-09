@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // dateAccessorType is the type an accessor's single argument is declared as,

@@ -3,8 +3,8 @@ package xpath
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/internal/xpathleaf"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // This file implements the function-item half of XPath 3.0: a function is a

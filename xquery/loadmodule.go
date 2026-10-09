@@ -7,8 +7,8 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // fn:load-xquery-module (F&O 3.1 section 14.6.1) is implemented here and

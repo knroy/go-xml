@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/internal/genid"
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/v2/internal/genid"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // registerAnalyzeString adds fn:analyze-string and fn:generate-id.

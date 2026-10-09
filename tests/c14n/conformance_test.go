@@ -26,8 +26,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/c14n"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/c14n"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 var update = flag.Bool("update", false, "regenerate testdata/diff/*.golden from xmllint")

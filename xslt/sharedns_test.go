@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // During a compilation, elements that declare no namespace share their

@@ -1,7 +1,7 @@
 package xslt
 
 import (
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // appendOpaqueItem adds a function item, a map or an array to the result, or

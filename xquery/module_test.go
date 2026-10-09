@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xquery"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xquery"
 )
 
 // Module import is XQuery 3.1 §4.12. The cases below are named for the QT3

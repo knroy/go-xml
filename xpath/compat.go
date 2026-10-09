@@ -3,7 +3,7 @@ package xpath
 import (
 	"math"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // XPath 1.0 compatibility mode.

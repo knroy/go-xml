@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 func runPP(t *testing.T, sheet, src string) (string, error) {

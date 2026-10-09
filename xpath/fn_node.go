@@ -6,7 +6,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // registerNumericFuncs adds the numeric functions.

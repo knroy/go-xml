@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xquery"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xquery"
 )
 
 // run compiles and evaluates a query, rendering its result.

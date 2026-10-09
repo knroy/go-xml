@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xquery"
+	"github.com/knroy/go-xml/v2/xquery"
 )
 
 // doctypeSchema is hatsSchema behind an internal-subset DOCTYPE whose entity

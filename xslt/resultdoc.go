@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // SecondaryResult is one document produced by xsl:result-document.

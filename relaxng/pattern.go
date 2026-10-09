@@ -17,7 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // pattern is a RELAX NG pattern.

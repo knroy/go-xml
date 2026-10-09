@@ -3,7 +3,7 @@ package xslt
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestDropAttrs covers the helper that strips the param-only attributes off a

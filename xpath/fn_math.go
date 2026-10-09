@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // registerMathFuncs adds the math: functions of F&O 3.0 section 4.8.

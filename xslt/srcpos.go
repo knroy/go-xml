@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // posInstr is an instruction that remembers where it was written.

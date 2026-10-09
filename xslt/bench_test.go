@@ -13,7 +13,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 func benchSheet(b *testing.B, sheetPath, docPath string) (*Stylesheet, *xdm.Node) {

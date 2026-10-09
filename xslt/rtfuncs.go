@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/internal/xpathleaf"
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // internalNS is the namespace for bindings this package threads through the

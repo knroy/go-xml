@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/knroy/go-xml/internal/uripath"
+	"github.com/knroy/go-xml/v2/internal/uripath"
 )
 
 // FileResolver reads an external subset from the filesystem, confined to a

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // Static variables, static parameters and shadow attributes, sections 9.5,

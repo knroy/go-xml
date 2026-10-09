@@ -3,7 +3,7 @@ package xsd
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Validating a single element against a declaration or a type.

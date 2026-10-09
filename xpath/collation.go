@@ -13,7 +13,7 @@ import (
 	"golang.org/x/text/language"
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // CodepointCollation is the one collation this implementation provides. It is

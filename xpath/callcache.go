@@ -3,7 +3,7 @@ package xpath
 import (
 	"reflect"
 
-	"github.com/knroy/go-xml/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 )
 
 // callResolution is one call site's resolved target. It stays valid while the

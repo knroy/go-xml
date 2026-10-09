@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // refusingResolver refuses every location. Fuzzing must not read the

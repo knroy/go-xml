@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"sort"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // registerArrayFuncs adds the array: functions of F&O 3.1 section 17.3.
