@@ -75,7 +75,7 @@ func Serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
 	switch w.(type) {
 	case *bytes.Buffer, *strings.Builder, *bufio.Writer:
-		return serializeTo(w, seq, opts, charMap)
+		return serializeTo(w.(stringWriter), seq, opts, charMap)
 	}
 	bw := bufio.NewWriterSize(w, 32<<10)
 	err := serializeTo(bw, seq, opts, charMap)
@@ -85,7 +85,15 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 	return err
 }
 
-func serializeTo(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
+// stringWriter is what serialize writes to: each of its writers has
+// WriteString, which the serializer calls directly rather than through
+// io.WriteString's check on every token.
+type stringWriter interface {
+	io.Writer
+	io.StringWriter
+}
+
+func serializeTo(w stringWriter, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
 	s := &serializer{w: w, opts: opts, charMap: charMap}
 	s.normalize = normalizerFor(opts.NormalizationForm)
 	if len(opts.SuppressIndentation) > 0 {
@@ -422,7 +430,7 @@ func serializeTo(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map
 }
 
 type serializer struct {
-	w    io.Writer
+	w    stringWriter
 	opts OutputSettings
 	err  error
 	// ns holds the namespace bindings written on the open elements, outermost
@@ -501,7 +509,7 @@ func (s *serializer) writeString(str string) {
 	if s.err != nil {
 		return
 	}
-	_, s.err = io.WriteString(s.w, str)
+	_, s.err = s.w.WriteString(str)
 }
 
 func (s *serializer) writeBytes(b []byte) {
@@ -765,7 +773,19 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 	}
 }
 
+// element writes element n. The namespace declarations it adds to s.ns are
+// dropped here rather than by a defer in writeElement: that function returns
+// from several places, and with a defer each call to it went through the
+// runtime's deferred-call path, a measurable share of serialising a large
+// result.
 func (s *serializer) element(n *xdm.Node, depth int) {
+	base := len(s.ns)
+	s.writeElement(n, depth, base)
+	s.ns = s.ns[:base]
+}
+
+// writeElement writes element n; s.ns[:base] is in scope from its ancestors.
+func (s *serializer) writeElement(n *xdm.Node, depth, base int) {
 	if s.pendingDoctype {
 		s.pendingDoctype = false
 		s.writeDoctypeFor(n)
@@ -788,8 +808,6 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// a document with a namespace on every element it doubles the output size.
 	// s.ns[:base] is in scope from the ancestors; s.ns[base:] is what this
 	// element declares, and stays in scope for its children.
-	base := len(s.ns)
-	defer func() { s.ns = s.ns[:base] }()
 	// Normally the element's own declarations; for the root of a
 	// serialization, rootNamespaces' list instead.
 	if n == s.seeded {
@@ -918,6 +936,14 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	}
 
 	s.writeString(">")
+	// The state the content below changes for this element's subtree,
+	// restored after its end tag. Not by defer, for the reason element gives.
+	// The raw-text state is restored only by the element that set it: the
+	// text inside sets rawTextLT for whatever follows, across element ends.
+	savedHead, savedCData := s.head, s.inCData
+	rawElem := false
+	var savedRaw, savedRawLT bool
+	var savedRawName string
 
 	// The HTML method adds the content-type meta so the encoding survives
 	// being served without a charset header.
@@ -926,9 +952,8 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// suite's expected output escapes "<" and "&" inside a script there, and
 	// a document that did not would not parse as XML at all.
 	if s.html && !s.xhtml && isRawTextElement(n.Name().Local) {
-		saved, savedName, savedLT := s.rawText, s.rawTextName, s.rawTextLT
+		rawElem, savedRaw, savedRawName, savedRawLT = true, s.rawText, s.rawTextName, s.rawTextLT
 		s.rawText, s.rawTextName, s.rawTextLT = true, n.Name().Local, false
-		defer func() { s.rawText, s.rawTextName, s.rawTextLT = saved, savedName, savedLT }()
 	}
 	// The head this belongs in is an HTML one. Under the html method every
 	// element is HTML by definition, but the xhtml method serialises whatever
@@ -950,9 +975,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// content-type meta only "if a meta element has been added", so
 			// the suppression is armed here and nowhere else: under
 			// include-content-type="no" the head keeps the meta it was given.
-			saved := s.head
 			s.head = n
-			defer func() { s.head = saved }()
 			// A character map applies to the value of every attribute the
 			// serializer writes, and this one is no exception: XSLT 3.0
 			// section 27.1 puts the character map at the very end of the
@@ -999,15 +1022,12 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 
 	if s.cdataElems[xdm.QName{URI: n.Name().URI, Local: n.Name().Local}] &&
 		!s.htmlNativeElement(n) {
-		saved := s.inCData
 		s.inCData = true
-		defer func() { s.inCData = saved }()
 	} else if s.inCData {
 		// The parameter names the elements whose *own* text children are
 		// wrapped, not a subtree. A nested element's text is escaped
 		// normally unless that element is named too.
 		s.inCData = false
-		defer func() { s.inCData = true }()
 	}
 
 	// Indentation is suppressed for mixed content: adding whitespace around
@@ -1065,6 +1085,10 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	s.writeString("</")
 	s.writeElementName(n)
 	s.writeString(">")
+	s.head, s.inCData = savedHead, savedCData
+	if rawElem {
+		s.rawText, s.rawTextName, s.rawTextLT = savedRaw, savedRawName, savedRawLT
+	}
 }
 
 // nodeNoIndent writes a node without introducing whitespace.
