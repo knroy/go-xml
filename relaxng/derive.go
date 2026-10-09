@@ -398,7 +398,13 @@ func textDeriv(p pattern, s string, ctx nsContext) pattern {
 		}
 		return notAllowedPat{}
 	case dataPat:
-		if err := t.Type.check(s, t.Params); err != nil {
+		var err error
+		if ct, ok := t.Type.(contextualType); ok {
+			err = ct.checkIn(s, t.Params, ctx)
+		} else {
+			err = t.Type.check(s, t.Params)
+		}
+		if err != nil {
 			return notAllowedPat{}
 		}
 		if t.Except != nil && valueMatch(t.Except, s, ctx) {

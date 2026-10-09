@@ -923,3 +923,42 @@ func TestNamespaceBindingsAreReadOnDemand(t *testing.T) {
 		t.Errorf("a QName bound on an ancestor must resolve: %v", err)
 	}
 }
+
+// A <data type="QName"> or NOTATION value names an expanded name, so its
+// prefix must be bound where it is written: in the element's scope for text
+// and attributes alike, and for every token of a list. The verdicts are
+// Jing's, which also refuses a length facet on these types.
+func TestDataQNameResolvesItsPrefix(t *testing.T) {
+	const xsdLib = ` datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes"`
+	s, err := compileSrc(t, `<element`+rngNS+xsdLib+` name="w"><element name="r">
+		<attribute name="q"><data type="QName"/></attribute>
+		<list><oneOrMore><data type="QName"/></oneOrMore></list></element>
+		<optional><element name="n"><data type="NOTATION"/></element></optional></element>`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, c := range []struct {
+		doc   string
+		valid bool
+	}{
+		{`<w xmlns:p="urn:p"><r q="p:a">p:x y xml:z</r></w>`, true},
+		{`<w><r q="a" xmlns="urn:d">x</r></w>`, false}, // r is not in urn:d; sanity
+		{`<w><r q="p:a">x</r></w>`, false},
+		{`<w xmlns:p="urn:p"><r q="a">p:x q:y</r></w>`, false},
+		{`<w xmlns:p="urn:p"><r q="a">x</r><n>p:x</n></w>`, true},
+		{`<w><r q="a">x</r><n>p:x</n></w>`, false},
+	} {
+		doc, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Validate(doc.Root) == nil; got != c.valid {
+			t.Errorf("%s: valid=%v, want %v", c.doc, got, c.valid)
+		}
+	}
+	_, err = compileSrc(t, `<element`+rngNS+xsdLib+` name="r"><data type="QName">
+		<param name="maxLength">2</param></data></element>`)
+	if err == nil || !strings.Contains(err.Error(), "no units of length") {
+		t.Errorf("a length facet on QName: got %v, want a refusal", err)
+	}
+}

@@ -139,6 +139,24 @@ func (t xsdType) equalIn(a string, actx nsContext, b string, bctx nsContext) boo
 	return aok && bok && an == bn
 }
 
+// checkIn is check with the value's namespace context. A QName or NOTATION
+// is an expanded name, so a prefix not bound where the value is written
+// names nothing and the value is not in the value space (XSD Part 2 QName;
+// RELAX NG §6.2.8 gives a data pattern the element's context). The bindings
+// are read only for these two types.
+func (t xsdType) checkIn(value string, params []param, ctx nsContext) error {
+	if err := t.check(value, params); err != nil {
+		return err
+	}
+	if t.name != "QName" && t.name != "NOTATION" {
+		return nil
+	}
+	if _, ok := resolveQName(strings.TrimSpace(value), ctx.resolved()); !ok {
+		return fmt.Errorf("the prefix of %q is not declared", strings.TrimSpace(value))
+	}
+	return nil
+}
+
 // resolveQName splits a lexical qnamePat and resolves its prefix.
 //
 // An unresolvable prefix is not an error here but a mismatch: the value simply
