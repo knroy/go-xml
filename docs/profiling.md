@@ -762,12 +762,28 @@ Left, ranked by CEN bytes at `2c5ea0b` (429 MB over 23 passes):
 ## v2 profile (`ef76ae2c`)
 
 Three lanes profiled the `v2` branch after its benchmark run
-([benchmark](benchmark.md#v2-branch-v2)), against v1 at `f45068c`, on copies of
+([benchmark](benchmark.md#what-changed-from-v1-to-v2)), against v1 at `f45068c`, on copies of
 the tree; nothing was changed. Allocation counts are exact; CPU is getrusage;
 attribution for XSLT comes from Linux profiles, because macOS put 25–40% of
 samples on `EvalSymlinks` system calls that an A/B showed cost no time. No
 correctness bug was found: XSD and RELAX NG verdicts and messages are identical
 to v1, and every prototype kept its outputs byte-identical.
+
+Where the benchmark leaves v1 and v2 (warm, go-xml over the reference,
+geometric mean; each version against the reference times from its own run),
+and where the fix list below is projected to take v2:
+
+| Workload | Reference | v1 | v2 | Projected after V1–V11 |
+|---|---|---:|---:|---:|
+| DocBook xslTNG | Saxon-HE | 0.46× | 0.37× | about 0.27× (with V4) |
+| DocBook `ptoc.001` | Saxon-HE | 1.49× | 1.17× | about 1.0× |
+| Peppol Schematron | Saxon-HE | 1.99× | 1.31× | about 1.24× |
+| XRechnung stage 1 | Saxon-HE | 3.00× | 1.77× | about 1.65× |
+| XRechnung stage 2 | Saxon-HE | 1.42× | 1.23× | about 1.0× |
+| XMark q1–q20 | Saxon-HE | 1.00× | 0.97× | not projected |
+| XSD catalogs | Xerces-J | 0.73× | 0.69× | not projected |
+| RELAX NG DocBook 5.2 | Jing | 0.60× | 0.75× | not projected |
+| Parse 1/10/100 MB | `encoding/xml` | 0.54× | 0.57× | not projected |
 
 ### The three apparent regressions
 
