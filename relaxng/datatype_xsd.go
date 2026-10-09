@@ -134,8 +134,8 @@ func (t xsdType) equalIn(a string, actx nsContext, b string, bctx nsContext) boo
 	if t.name != "QName" && t.name != "NOTATION" {
 		return t.equal(a, b)
 	}
-	an, aok := resolveQName(strings.TrimSpace(a), actx)
-	bn, bok := resolveQName(strings.TrimSpace(b), bctx)
+	an, aok := resolveQName(strings.TrimSpace(a), actx.resolved())
+	bn, bok := resolveQName(strings.TrimSpace(b), bctx.resolved())
 	return aok && bok && an == bn
 }
 

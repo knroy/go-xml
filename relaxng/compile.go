@@ -89,7 +89,7 @@ func CompileWithOptions(doc *xdm.Node, opts Options) (*Schema, error) {
 	if err := checkStringSequences(p); err != nil {
 		return nil, err
 	}
-	return &Schema{start: p}, nil
+	return &Schema{start: addMemoPoints(p)}, nil
 }
 
 type compiler struct {
@@ -166,6 +166,12 @@ type compiler struct {
 	// without crossing an <element>. A shared definition carries that set so
 	// the section 4.19 check can still be made where it is reused.
 	bare map[string]map[string]bool
+	// bareStack is the definitions being compiled, innermost last. A name
+	// is noted only in the innermost, and a finished definition hands its
+	// set to the one enclosing it when both began at the same depth, which
+	// gives every set what noting it in all of them gave, without visiting
+	// every definition in progress for every name.
+	bareStack []string
 }
 
 // compiledDef is a compiled definition and the names it reaches without
@@ -697,16 +703,21 @@ func (c *compiler) compileRef(n *xdm.Node) (pattern, error) {
 // still needs that many, the way MaxPatternSize bounds the derivative.
 const maxRefExpansions = 200_000
 
-// noteBare records names as reached without an <element> by every definition
-// being compiled that has crossed none since it began.
+// noteBare records names as reached without an <element> by the innermost
+// definition being compiled, when it has crossed none since it began; the
+// definitions around it that began at the same depth receive them when it
+// finishes (see bareStack).
 func (c *compiler) noteBare(names ...string) {
-	for d := range c.expanding {
-		if c.expandingAt[d] != c.elementDepth {
-			continue
-		}
-		for _, n := range names {
-			c.bare[d][n] = true
-		}
+	k := len(c.bareStack)
+	if k == 0 {
+		return
+	}
+	d := c.bareStack[k-1]
+	if c.expandingAt[d] != c.elementDepth {
+		return
+	}
+	for _, n := range names {
+		c.bare[d][n] = true
 	}
 }
 
@@ -778,9 +789,18 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 	c.expanding[name] = true
 	c.expandingAt[name] = c.elementDepth
 	c.bare[name] = map[string]bool{}
+	c.bareStack = append(c.bareStack, name)
 	c.depth++
 	defer func() {
 		c.depth--
+		c.bareStack = c.bareStack[:len(c.bareStack)-1]
+		if k := len(c.bareStack); k > 0 {
+			if up := c.bareStack[k-1]; c.expandingAt[up] == c.expandingAt[name] {
+				for n := range c.bare[name] {
+					c.bare[up][n] = true
+				}
+			}
+		}
 		delete(c.expanding, name)
 		delete(c.expandingAt, name)
 		delete(c.bare, name)

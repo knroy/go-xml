@@ -244,6 +244,14 @@ func (s *Schema) ValidateContext(ctx context.Context, root *xdm.Node,
 
 // validator carries the state of one validation run.
 type validator struct {
+	// walks are the count-vector buffers of finished content-model walks,
+	// reused by the next one. matchSequence recurses through validateChild,
+	// so this is a stack: a walk takes one on entry and returns it on exit.
+	walks []*walkScratch
+
+	// lastSpace is the last whitespace-only text nonSpaceTextSeen saw.
+	lastSpace string
+
 	// ctx bounds the run. Validation is not incremental — it walks the whole
 	// tree before it can answer at all — so a caller's only way to put a
 	// ceiling on it is to have the walk itself look up and stop.
@@ -620,7 +628,7 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			// left for whitespace to sit inside. The suite's
 			// all004.n02 is annotated "invalid, element is nilled
 			// but contains content, albeit whitespace".
-			if len(el.ChildElements()) > 0 || hasText(el) {
+			if childElementCount(el) > 0 || hasText(el) {
 				v.fail(el, "cvc-elt.3.2.1",
 					"an element with xsi:nil=\"true\" must be empty")
 			}
@@ -765,7 +773,7 @@ func (v *validator) checkFixedValueConstraint(el *xdm.Node, typ Type, decl *Elem
 	if len(el.Children) == 0 {
 		return
 	}
-	if len(el.ChildElements()) > 0 {
+	if childElementCount(el) > 0 {
 		v.fail(el, "cvc-elt.5.2.2.1",
 			"an element with a fixed value constraint may not have "+
 				"element children")
@@ -913,7 +921,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 		if oc := v.openContentFor(t); oc != nil {
 			return v.matchOpenOnly(el, el.ChildElements(), oc)
 		}
-		if len(el.ChildElements()) > 0 {
+		if childElementCount(el) > 0 {
 			v.fail(el, "cvc-complex-type.2.1",
 				"element must be empty but has element children")
 		}
@@ -928,7 +936,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 		}
 
 	case ContentSimple:
-		if len(el.ChildElements()) > 0 {
+		if childElementCount(el) > 0 {
 			v.fail(el, "cvc-complex-type.2.2",
 				"element has simple content but has element children")
 		}
@@ -952,7 +960,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 		// containing the empty *string*. saxonData's complex022 says so
 		// outright — "empty content does not satisfy empty choice".
 		if !particleAcceptsEmpty(t.Particle, map[*Particle]bool{}) && v.openContentFor(t) == nil &&
-			len(el.ChildElements()) == 0 {
+			childElementCount(el) == 0 {
 			v.fail(el, "cvc-complex-type.2.4.b",
 				"element has no children, and the content model "+
 					"admits no sequence at all")
@@ -969,7 +977,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 			}
 			return v.validateChildren(el, t)
 		}
-		if s := nonSpaceText(el); s != "" {
+		if s := nonSpaceTextSeen(el, &v.lastSpace); s != "" {
 			v.fail(el, "cvc-complex-type.2.3",
 				"element-only content may not contain character data %q",
 				truncate(s))
@@ -1027,9 +1035,15 @@ func hasText(el *xdm.Node) bool {
 }
 
 // nonSpaceText returns the first non-whitespace text directly inside el.
-func nonSpaceText(el *xdm.Node) string {
+func nonSpaceText(el *xdm.Node) string { return nonSpaceTextSeen(el, new(string)) }
+
+// nonSpaceTextSeen is nonSpaceText remembering in *seen the last text found
+// to be all whitespace. The parser shares one string among equal
+// whitespace-only texts, so indentation repeats and the comparison usually
+// succeeds on the pointer without reading a byte.
+func nonSpaceTextSeen(el *xdm.Node, seen *string) string {
 	for _, c := range el.Children {
-		if c.Kind != xdm.KindText {
+		if c.Kind != xdm.KindText || c.Value == *seen {
 			continue
 		}
 		// Most element-only content is whitespace only: look for a
@@ -1041,6 +1055,7 @@ func nonSpaceText(el *xdm.Node) string {
 			}
 			return strings.Trim(c.Value, " \t\n\r")
 		}
+		*seen = c.Value
 	}
 	return ""
 }
@@ -1068,12 +1083,10 @@ func (v *validator) validateChildren(el *xdm.Node, t *ComplexType) []icTables {
 		v.fail(el, "", "compiling the content model: %v", err)
 		return nil
 	}
-	kids := el.ChildElements()
-
 	if isAllGroup(t.Particle) {
-		return v.matchAll(el, kids, t.Particle.Term.(*ModelGroup), t)
+		return v.matchAll(el, el.ChildElements(), t.Particle.Term.(*ModelGroup), t)
 	}
-	return v.matchSequence(el, kids, m, t)
+	return v.matchSequence(el, childElementCount(el), m, t)
 }
 
 // noteChildType applies the XSD 1.1 dynamic Element Declarations Consistent
@@ -1262,15 +1275,38 @@ func (v *validator) modelFor(t *ComplexType) (*contentModel, error) {
 	return m, nil
 }
 
-// matchSequence walks the automaton over an element's children.
-func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentModel, t *ComplexType) []icTables {
+// walkScratch holds one content-model walk's count vectors. The slots past
+// each slice's length park vector buffers for scratchVec to reuse.
+type walkScratch struct {
+	ints    []int
+	a, b, c [][]int
+}
+
+// childElementCount is len(el.ChildElements()) without building the slice.
+func childElementCount(el *xdm.Node) int {
+	n := 0
+	for _, c := range el.Children {
+		if c.Kind == xdm.KindElement {
+			n++
+		}
+	}
+	return n
+}
+
+// matchSequence walks the automaton over an element's nkids element children.
+// It ranges over el.Children rather than a ChildElements slice, which on a
+// catalog root is a fresh multi-kilobyte allocation per validation.
+func (v *validator) matchSequence(el *xdm.Node, nkids int, m *contentModel, t *ComplexType) []icTables {
 	if len(m.positions) == 0 {
 		// An empty content model still admits whatever open content
 		// permits, which is the case that makes a type declaring only
 		// <xs:openContent> useful at all.
 		var tables []icTables
 		oc := v.openContentFor(t)
-		for _, kid := range kids {
+		for _, kid := range el.Children {
+			if kid.Kind != xdm.KindElement {
+				continue
+			}
 			if oc != nil && oc.Wildcard.AllowsName(kid.Name, v.elementDefined) {
 				if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
 					tables = append(tables, tbl)
@@ -1306,10 +1342,25 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 	// them and costing an allocation per element.
 	nested := len(m.counters) > 0
 	var counts, reach []int
-	var vectors, stepped [][]int
+	var vectors, stepped, wildStepped [][]int
 	if nested {
-		counts = make([]int, len(m.counters))
-		reach = reachable(m, len(kids))
+		var ws *walkScratch
+		if n := len(v.walks); n > 0 {
+			ws, v.walks = v.walks[n-1], v.walks[:n-1]
+		} else {
+			ws = &walkScratch{}
+		}
+		nc := len(m.counters)
+		if cap(ws.ints) < 2*nc {
+			ws.ints = make([]int, 2*nc)
+		}
+		counts = ws.ints[:nc]
+		reach = reachableInto(m, nkids, ws.ints[nc:2*nc])
+		vectors, stepped, wildStepped = ws.a, ws.b, ws.c
+		defer func() {
+			ws.a, ws.b, ws.c = vectors[:0], stepped[:0], wildStepped[:0]
+			v.walks = append(v.walks, ws)
+		}()
 	}
 	current := m.first
 	prevIdx := -1
@@ -1330,7 +1381,7 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 		stepped = stepped[:0]
 		if prevIdx < 0 {
 			enterCounts(m, reach, idx, counts)
-			stepped = append(stepped, append([]int(nil), counts...))
+			stepped = append(stepped, scratchVec(&stepped, counts))
 			return true
 		}
 		for _, vec := range vectors {
@@ -1339,29 +1390,18 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 		return len(stepped) > 0
 	}
 
-	// keep installs the readings admits found, deduplicated so that two
-	// executions which have converged are not carried twice, and reports
-	// whether the set stayed inside the budget.
-	//
-	// The duplicate check is a linear scan rather than a set: the vectors
-	// are the readings one element's children admit, which stays in single
-	// digits on every schema measured, and a map costs more to build than
-	// the scan costs to run.
+	// keep installs the readings admits found and reports whether the set
+	// stayed inside the budget. They arrive deduplicated (pushVec), so two
+	// executions which have converged are not carried twice.
 	keep := func() bool {
 		vectors, stepped = stepped, vectors[:0]
-		for i := 0; i < len(vectors); i++ {
-			for j := 0; j < i; j++ {
-				if intsEqual(vectors[i], vectors[j]) {
-					vectors = append(vectors[:i], vectors[i+1:]...)
-					i--
-					break
-				}
-			}
-		}
 		return len(vectors) <= DefaultMaxMatchStates
 	}
 
-	for _, kid := range kids {
+	for _, kid := range el.Children {
+		if kid.Kind != xdm.KindElement {
+			continue
+		}
 		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
 		next := -1
 		// boundRefused records that a position matched the child by name
@@ -1398,11 +1438,16 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 				// remaining ambiguity is only ever between an
 				// element and a wildcard, which is the case
 				// erratum E1-29 leaves to the processor.
+				//
+				// So the wildcard's readings are set aside, not
+				// installed: the element positions after it must
+				// still step from the readings this child began
+				// with (XSD 1.1 §3.8.4.2 and §3.10.6.2: an element
+				// declaration takes precedence over a wildcard).
 				if next < 0 {
 					next = idx
-					if nested && !keep() {
-						v.fail(el, "", "%v", errMatchStates)
-						return tables
+					if nested {
+						stepped, wildStepped = wildStepped, stepped
 					}
 				}
 				continue
@@ -1413,6 +1458,17 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 				return tables
 			}
 			break
+		}
+		if next >= 0 && nested {
+			if _, isWildcard := m.positions[next].term.(*Wildcard); isWildcard {
+				// No element position took the child: the
+				// wildcard's readings are the ones to carry.
+				stepped, wildStepped = wildStepped, stepped[:0]
+				if !keep() {
+					v.fail(el, "", "%v", errMatchStates)
+					return tables
+				}
+			}
 		}
 		if next < 0 {
 			// XSD 1.1 open content: an element the model does not

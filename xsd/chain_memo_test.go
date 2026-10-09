@@ -90,42 +90,53 @@ func validateAllocs(t *testing.T, chain, values int) uint64 {
 // the figure does not move with machine load, and the race detector does not
 // inflate it, so no separate budget is needed for the gate's race lane.
 //
-// The bound is deliberately loose in absolute terms — most of what is left is
-// the document tree the validator walks, not the chain — and it is the *ratio*
-// between the two chain lengths that catches a regression. A 500-link chain is
-// ten times the 50-link one, so if any of the three walks runs per value again
-// the deep case costs roughly ten times the shallow one; memoised, the two are
-// within noise of each other. Measured after the fix: 2.6 MB at 50 links and
-// 2.7 MB at 500, a ratio of 1.04. Before it: 67 MB and 999 MB, a ratio of 14.9.
+// The assertion is on the cost of one more value, measured as the difference
+// between validating 8,000 and 16,000 values against the 500-link chain. A
+// per-value walk of that chain costs about 125 KB per value (999 MB over 8,000
+// values before the memo); memoised, a value costs what the walk around it
+// costs, which was about 340 B once the memo landed and is zero since
+// the validator reuses its walk buffers.
+//
+// It used to compare the 500-link chain against a 50-link one instead. That
+// ratio held while the per-value cost of the walk dominated both figures; once
+// the walk stopped allocating, what was left was the memo itself, built once
+// per type and proportional to the chain, so the ratio read 9.8x on a
+// 5.7 KB against 56 KB pair that has nothing to do with per-value cost.
+// Varying the value count keeps the chain length, and so that one-off cost,
+// out of the difference.
 func TestValidateAllocationFlatInChainDepth(t *testing.T) {
 	if testing.Short() {
 		t.Skip("allocation test")
 	}
 	const values = 8000
 
-	shallow := validateAllocs(t, 50, values)
-	deep := validateAllocs(t, 500, values)
+	once := validateAllocs(t, 500, values)
+	twice := validateAllocs(t, 500, 2*values)
 
-	// A ceiling on the deep case on its own, so that a regression which
-	// somehow lifted both ends equally is still caught. 64 MB is over 20x
-	// the measured 2.7 MB and under a fifteenth of the 999 MB it cost
-	// before.
+	// A ceiling on the whole run, so that a regression which somehow
+	// lifted both value counts equally is still caught. 64 MB is far
+	// under the 999 MB a per-value walk cost before.
 	const ceiling = 64 << 20
-	if deep > ceiling {
+	if twice > ceiling {
 		t.Errorf("validating %d values against a 500-link chain allocated %.1f MB, "+
 			"over the %d MB budget.\nA base-chain walk is running per value "+
 			"again; see chainFactsOf.",
-			values, float64(deep)/(1<<20), ceiling>>20)
+			2*values, float64(twice)/(1<<20), ceiling>>20)
 	}
 
-	// The ratio is the real assertion. 4x leaves ample room for noise in
-	// two independent MemStats readings while sitting far under the 14.9x
-	// a per-value walk produces.
-	if ratio := float64(deep) / float64(shallow); ratio > 4 {
-		t.Errorf("a 500-link chain allocated %.1fx what a 50-link one did "+
-			"(%.1f MB vs %.1f MB); the per-value cost is scaling with chain "+
-			"length again, so a base-chain walk is no longer memoised.",
-			ratio, float64(deep)/(1<<20), float64(shallow)/(1<<20))
+	// 4 KB a value is over ten times the 340 B a value cost with the memo
+	// and the per-walk buffers of that time, and a thirtieth of the 125 KB a
+	// per-value chain walk costs.
+	const perValue = 4 << 10
+	var extra uint64
+	if twice > once {
+		extra = twice - once
+	}
+	if got := extra / values; got > perValue {
+		t.Errorf("each value against a 500-link chain allocated %d B "+
+			"(%.1f MB for %d values, %.1f MB for %d), over %d B; a base-chain "+
+			"walk is running per value again, so it is no longer memoised.",
+			got, float64(once)/(1<<20), values, float64(twice)/(1<<20), 2*values, perValue)
 	}
 }
 

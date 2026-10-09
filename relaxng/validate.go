@@ -185,12 +185,10 @@ func (v *validator) note(msg string) {
 // A qnamePat in a document means what the document's prefixes say it means, and
 // the schema's prefixes are a separate set — so the comparison needs both, and
 // this supplies the document half.
+//
+// The bindings are read when a value first asks for them (nsContext.resolved).
 func nsContextOf(n *xdm.Node) nsContext {
-	ctx := nsContext{prefixes: n.InScopeNamespaces()}
-	if uri, ok := ctx.prefixes[""]; ok {
-		ctx.dflt = uri
-	}
-	return ctx
+	return nsContext{node: n}
 }
 
 // textDeriv takes the derivative over a run of character data.
