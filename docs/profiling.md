@@ -53,7 +53,8 @@ takes 48–50 ms of every query except q10–q12.
   Fixed by V2.
 - **XMark q10** evaluation is 55% slower. XQuery element content is copied
   twice per node (`xdm.Copy`, then `AppendNode`'s own copy), and
-  `limitInherited` builds three maps per constructed element. Fixed by V1.
+  `limitInherited` builds three maps per constructed element. Fixed by V1
+  (`484cb4e8`, see [Landed](#landed-in-the-v2-fix-round)).
 
 ## Open fixes
 
@@ -67,9 +68,7 @@ onward are what earlier rounds left open.
 
 | ID | Fix | Cause | Where | Gain | Risk | API |
 |---|---|---|---|---|---|---|
-| V1 | XQuery constructors copy once, straight into the builder (text through `AppendText`). Skip `limitInherited`'s maps when nothing in scope declares a namespace | Element content is copied by `xdm.Copy`, then again by `AppendNode`'s fresh path, plus `CopyTypeEnvs` and `Rebase`. `limitInherited` builds three maps per element, including the parent's `InScopeNamespaces` | `xquery/eval.go:297–299`, `:657`; `xdmbuild/builder.go:287` | q10 eval −40% (below v1), q13 eval −38%; XMark q1–q20 −10% together with V3 | Low; same semantics as the fresh path | One new `xdmbuild.Builder` method |
 | V2 | Bulk tree clone for `ValidateCopy` (copy the record chunks, share text, names, frames and offsets) for both copies; drop the three leftover pre-copies | Two per-node copies, each about as costly as a parse, plus a per-node "twins" map. `xsl:source-document`, `xsl:merge` and XQuery `validate` still copy the input before assessment, although `ValidateCopy` never writes to it | `xsd/validate_copy.go:59`, `:74`; `xslt/sourcedoc.go:152`, `xslt/merge.go:1032`, `xquery/misc_expr.go:431` | Catalog pass −34%; `xp-striding` 49.3 → 30.0 ms (v1 22); `xsl:source-document` to v1 parity; XQuery `validate` back to v1 | Medium: the second copy renumbers record indices. The pre-copy removal needs QT3 and XSLT runs (§3.21 copy semantics for a non-root element). The prototype keeps source positions on invalid input where the per-node copy has none, so offsets must be cleared | A clone primitive in `xdm` (exported, or behind an internal hook) |
-| V3 | Parser: skip the ancestor walk for a prefix when the tree declares no namespaces. Put a 64-entry name cache in front of the intern table | `resolvePrefix` walks every ancestor frame for each element. `intern` hashes a three-string `QName` per name | `xdm/parse.go:805`, `xdm/record.go:233` | XMark parse −7%; 10 MB parse −5.5%. Parse is most of XSD `xp-striding` (62%) and of XMark at 0.1 | Low | None |
 | V4 | Evaluate global variables on first use, held in one map scope instead of a chain of about 950 single-variable scopes | DocBook declares about 946 globals per transform and reads about 75. Evaluating them all is 31% of DocBook's wall time | `xslt/runtime.go:863`, `:905`, `:1166`; `xpath/context.go:915` | DocBook a further −13% (−26% with V5/V7); the map scope alone −3.5% | Medium–high: errors must surface through the variable lookup, where the prototype panics. Four XSLT 3.0 cases (error-0610d, higher-order-functions-070, variable-0118, variable-0120) and one 2.0 case regress in the prototype | None |
 | V5 | XSLT runtime: move the per-transform fields out of the runtime copy (176 → 112 B); reuse one focus context per predicate; memoise the strip-space answer per element name; skip position stamping on `next-iteration`/`break`; skip `stripAnnotations` on untyped trees; compare the local name first in `NameTest.Matches` | `WithVar` and runtime copies are about 24% of bytes on the slow DocBook items, and `WithFocus` per predicate item 17% on XRechnung. `NameTest.Matches` compares 70-byte UBL namespace URIs first (8.4% of CEN). `stripAnnotations` is 8.5% of XRechnung stage 2 | `xslt/runtime.go:20–110`; `xpath/eval.go:337`; `xslt/transform.go:1048`; `xslt/srcpos.go:71`; `xslt/validate.go:631`; `xpath/ast_string.go:16` | With V7: DocBook −15%, Peppol −8%, XRechnung stage 1 −7%, stage 2 −17%; `ptoc.001` to about Saxon's time | Low–medium: focus reuse needs a static check that the predicate does not capture its context (inline functions). The strip-space map needs a size cap | One `xdm` accessor (whether a tree carries any typing) |
 | V6 | RELAX NG: store each pattern's size when it is built; use separate pattern-only memo maps for the close-tag and end-tag derivatives | `patternSize` re-walks the whole derivative before every element (22% of `table-cals.049`). After that, `memoKey` hashes a QName and a string even for lookups that need only the pattern (35%) | `relaxng/validate.go:238`, `:287`; `relaxng/derive.go:54`, `:150–175`, `:768`; `relaxng/pattern.go` | Long documents −37% (`table-cals.049` 17.2 → 10.9 ms); corpus −20%; the 40-document set flat | Low; 589/589 verdicts and messages identical, and `MaxPatternSize` fires on the same inputs. Pattern bytes +33% (48 B size class) | None |
@@ -90,6 +89,20 @@ onward are what earlier rounds left open.
 The projections in [Where go-xml stands](#where-go-xml-stands) scale V1–V11
 onto the benchmark. V4 is the only fix there that moves DocBook from 0.37×
 to 0.27×.
+
+## Landed in the v2 fix round
+
+A/B against `0ff09c65`, getrusage CPU and allocation counts, medians of three
+alternated runs (four for parse).
+
+| ID | Commit | Measured |
+|---|---|---|
+| V1 | `484cb4e8` | XMark q10 eval −38% at 0.1 (−32% at 0.01), allocations −43%; q13 eval −37%, allocations −27%; q1–q20 allocations −12.7% |
+| V3 | `7186eb0e` | Parse 1 MB −2.2%, 10 MB −2.4%, `xp-striding` catalog −3.2%; XMark parse phase −6.0% at 0.1. Allocations +0.3% (one cache per indexed tree) |
+
+V1 and V3 together: XMark q1–q20 CPU −8.8% at 0.1 and −7.7% at 0.01; q10
+−33%, q13 −10%. The prototype's −40% q10 eval holds; its parse gains
+(−5.5 to −7%) measured smaller here, with four lanes sharing the machine.
 
 ## Measured and rejected
 
