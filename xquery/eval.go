@@ -482,7 +482,7 @@ func stripNamespaces(n *xdm.Node) {
 			delete(need, ns.Name.Local)
 		}
 	}
-	n.Namespaces = kept
+	xdmbuild.SetNamespaces(n, kept)
 	// A name whose binding was never on this element in the first place — it
 	// came from an ancestor that the copy has left behind — still needs one,
 	// or the copy would carry a prefix bound to nothing.
@@ -508,7 +508,7 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	}
 	sub := &builderRef{b: out.b.StartElement(name)}
 	if el := sub.b.Open(); el != nil && n.baseURI != "" {
-		el.BaseURI = n.baseURI
+		xdmbuild.SetBaseURI(el, n.baseURI)
 	}
 	// §3.9.3.1: the in-scope namespaces of a constructed element include a
 	// binding for its own name. A direct constructor writes that binding as
@@ -877,7 +877,7 @@ func (n *comment) eval(out *builderRef, ctx *evalContext) error {
 		return fmt.Errorf("XQDY0072: a comment may not contain %q "+
 			"or end with %q", "--", "-")
 	}
-	out.b.AppendNode(&xdm.Node{Kind: xdm.KindComment, Value: text})
+	out.b.AppendNode(xdmbuild.NewComment(text))
 	return nil
 }
 
@@ -914,8 +914,7 @@ func (n *pi) eval(out *builderRef, ctx *evalContext) error {
 		return fmt.Errorf(
 			"XQDY0026: a processing instruction may not contain %q", "?>")
 	}
-	out.b.AppendNode(&xdm.Node{Kind: xdm.KindPI,
-		Name: xdm.QName{Local: target}, Value: text})
+	out.b.AppendNode(xdmbuild.NewPI(target, text))
 	return nil
 }
 
@@ -1015,7 +1014,7 @@ func (n *document) eval(out *builderRef, ctx *evalContext) error {
 	// document element (builder.go), and that one wins, being the resolved
 	// xml:base of the content rather than the constructor's own.
 	if doc != nil && doc.BaseURI == "" && n.baseURI != "" {
-		doc.BaseURI = n.baseURI
+		xdmbuild.SetBaseURI(doc, n.baseURI)
 	}
 	out.b.AppendNode(doc)
 	return nil
