@@ -285,6 +285,19 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	nodes := 0
 
 	tree := NewTree()
+	// Document order is assigned as each node is built, which is the
+	// pre-order walk Finalize makes, so a parse does not walk the finished
+	// tree a second time. scope and scoped carry the namespace bindings
+	// Finalize threads down its walk; an element that declares none pushes
+	// nothing. Finalize still runs when stripping removed a numbered node.
+	scope := map[string]string{"xml": NSXML}
+	type scopeFrame struct {
+		el    *Node
+		saved []nsSave
+	}
+	var scoped []scopeFrame
+	tree.number(tree.Root, scope)
+	renumber := false
 	var chunk nodeChunk
 	chunk.open() // the document node's children
 	var spaces spaceTable
@@ -393,6 +406,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			if len(attTypes) > 0 {
 				applyAttTypes(el, attTypes)
 			}
+			if saved := tree.number(el, scope); saved != nil {
+				scoped = append(scoped, scopeFrame{el, saved})
+			}
 			// Attributes and namespaces are nodes too, and a document made
 			// of elements carrying many attributes allocates most of its
 			// memory in them, so they count against the limit.
@@ -425,11 +441,19 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// DTD-derived rule outranks the stylesheet-declared one, so it
 			// must not be gated on a strip-space declaration existing.
 			chunk.close(cur)
+			kids := len(cur.Children)
 			if elementOnly != nil {
 				stripIgnorableWhitespace(cur, elementOnly)
 			}
 			if opts.StripSpace != nil {
 				stripWhitespaceChildren(cur, opts.StripSpace)
+			}
+			if len(cur.Children) != kids {
+				renumber = true
+			}
+			if n := len(scoped); n > 0 && scoped[n-1].el == cur {
+				restoreScope(scope, scoped[n-1].saved)
+				scoped = scoped[:n-1]
 			}
 			cur = cur.Parent
 			depth--
@@ -454,6 +478,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			c := chunk.alloc()
 			c.Kind, c.Value = KindComment, spaces.arena.String(t)
 			chunk.addChild(cur, c)
+			tree.number(c, nil)
 
 		case *xml.ProcInst:
 			t := *tok
@@ -488,6 +513,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				pi.BaseURI = b
 			}
 			chunk.addChild(cur, pi)
+			tree.number(pi, nil)
 
 		case *xml.Directive:
 			t := *tok
@@ -698,7 +724,11 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	if dec.IsVersion11() {
 		tree.XMLVersion = "1.1"
 	}
-	tree.Finalize()
+	// Stripping left gaps in the numbering. They would not reorder anything,
+	// but Finalize numbers densely, as every parse did before.
+	if renumber {
+		tree.Finalize()
+	}
 	return tree, nil
 }
 
@@ -862,6 +892,7 @@ func (r *textRun) add(chunk *nodeChunk, parent *Node, b []byte) {
 		r.node = chunk.alloc()
 		r.node.Kind = KindText
 		chunk.addChild(parent, r.node)
+		parent.tree.number(r.node, nil)
 		r.buf = r.buf[:0]
 	}
 	r.buf = append(r.buf, b...)

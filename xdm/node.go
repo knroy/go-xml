@@ -1460,6 +1460,18 @@ func (t *Tree) Finalize() {
 // n's own declarations to it for the descent and restores it on the way out,
 // so a sibling sees the scope its parent had.
 func (t *Tree) assign(n *Node, scope map[string]string) {
+	saved := t.number(n, scope)
+	for _, c := range n.Children {
+		t.assign(c, scope)
+	}
+	restoreScope(scope, saved)
+}
+
+// number gives n, its namespace nodes and its attributes their document
+// order, and applies n's own namespace declarations to scope. The entries it
+// returns undo that through restoreScope once n's subtree is numbered. The
+// parser calls it as it builds each node, which is the same pre-order walk.
+func (t *Tree) number(n *Node, scope map[string]string) []nsSave {
 	n.tree = t
 	n.order = t.counter
 	t.counter++
@@ -1522,9 +1534,11 @@ func (t *Tree) assign(n *Node, scope map[string]string) {
 		a.order = t.counter
 		t.counter++
 	}
-	for _, c := range n.Children {
-		t.assign(c, scope)
-	}
+	return saved
+}
+
+// restoreScope undoes the declarations number applied, last first.
+func restoreScope(scope map[string]string, saved []nsSave) {
 	for i := len(saved) - 1; i >= 0; i-- {
 		if saved[i].had {
 			scope[saved[i].prefix] = saved[i].uri
