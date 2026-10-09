@@ -12,7 +12,15 @@ import "unsafe"
 // alive. For a tree that lives and dies as a whole that costs nothing, and
 // a value longer than arenaMax gets its own allocation, so a long value
 // never pins a block nor is pinned by one.
-type Arena struct{ buf []byte }
+//
+// Blocks start at arenaMax and double up to arenaBlock, as xdm's node chunks
+// do, so that a small document does not pin a full block it never fills: a
+// parse has two arenas, and two fixed 32 KiB blocks were a fifth of the
+// retained heap of an e-invoice or a stylesheet.
+type Arena struct {
+	buf  []byte
+	size int // capacity of the last block made
+}
 
 const (
 	arenaBlock = 32 << 10
@@ -28,7 +36,8 @@ func (a *Arena) String(b []byte) string {
 		return string(b)
 	}
 	if cap(a.buf)-len(a.buf) < len(b) {
-		a.buf = make([]byte, 0, arenaBlock)
+		a.size = min(max(2*a.size, arenaMax), arenaBlock)
+		a.buf = make([]byte, 0, a.size)
 	}
 	n := len(a.buf)
 	a.buf = append(a.buf, b...)

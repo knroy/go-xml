@@ -2,6 +2,7 @@ package xdm
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -39,6 +40,26 @@ func TestParseValuesShareBlocks(t *testing.T) {
 		if want := fmt.Sprintf("v%d w%d text %d c%d", i, i, i, i); got != want {
 			t.Fatalf("element %d holds %q, want %q", i, got, want)
 		}
+	}
+}
+
+// A parse has two string arenas, the decoder's for attribute values and the
+// parser's for text, and each made a fixed 32 KiB block on first use, so a
+// document of a few bytes allocated, and its tree retained, 64 KiB. Blocks
+// now start at 1 KiB and double.
+func TestSmallParseArenaBlocks(t *testing.T) {
+	const doc = `<r a="v">text</r>`
+	const runs = 20
+	var m0, m1 runtime.MemStats
+	runtime.ReadMemStats(&m0)
+	for range runs {
+		if _, err := ParseString(doc, ParseOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.ReadMemStats(&m1)
+	if per := (m1.TotalAlloc - m0.TotalAlloc) / runs; per > 24<<10 {
+		t.Errorf("parsing %q allocated %d bytes, want under 24 KiB", doc, per)
 	}
 }
 
