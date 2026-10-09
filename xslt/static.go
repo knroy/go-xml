@@ -151,6 +151,24 @@ func (p *staticPhase) module(doc *xdm.Node) error {
 		p.done[doc] = doc
 		return nil
 	}
+	if !mayPrune(root) {
+		// Nothing in the module can be excluded or rewritten, so it is read
+		// as it is: only its static declarations and module references are
+		// walked.
+		p.done[doc] = doc
+		p.done[root] = root
+		if root.Name().URI != xdm.NSXSL || !isStylesheetRootName(root.Name().Local) {
+			return nil
+		}
+		for ch := range root.Children() {
+			if ch.Kind() == xdm.KindElement {
+				if err := p.topLevel(ch); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
 	tree := xdm.NewTree()
 	tree.CopySourceFrom(root.Tree())
 	shell := tree.Root
@@ -178,6 +196,38 @@ func (p *staticPhase) module(doc *xdm.Node) error {
 	// An embedded stylesheet: the element is the module, and the bindings it
 	// inherited from the document around it come with it.
 	return p.moduleRoot(shell, root)
+}
+
+// mayPrune reports whether the static phase could change anything in the
+// module rooted at root: an element with a use-when, a shadow attribute, or a
+// top-level element forwards-compatible processing ignores. A module with none
+// is read as it is, which is most of them, and is not copied.
+func mayPrune(root *xdm.Node) bool {
+	if root.Name().URI == xdm.NSXSL && isStylesheetRootName(root.Name().Local) {
+		for ch := range root.Children() {
+			if ch.Kind() == xdm.KindElement && ignoredTopLevel(ch) {
+				return true
+			}
+		}
+	}
+	found := false
+	root.Walk(func(el *xdm.Node) bool {
+		if el.Kind() != xdm.KindElement {
+			return true
+		}
+		xsl := el.Name().URI == xdm.NSXSL
+		for a := range el.Attrs() {
+			switch {
+			case a.Name().URI == "" && xsl &&
+				(a.Name().Local == "use-when" || strings.HasPrefix(a.Name().Local, "_")):
+				found = true
+			case a.Name().URI == xdm.NSXSL && !xsl && a.Name().Local == "use-when":
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
 }
 
 // moduleRoot copies a module's document element under shell and walks it.
