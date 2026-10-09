@@ -155,6 +155,25 @@ func TestSharedDefinitionKeeps419(t *testing.T) {
 	}
 }
 
+// The same, with the way back to d running through two definitions, b and c,
+// that began at the same depth: the name d is noted in b, the innermost, and
+// reaches c's shared set only when b finishes and hands its set up.
+func TestSharedDefinitionKeeps419ThroughAChain(t *testing.T) {
+	src := `<grammar xmlns="http://relaxng.org/ns/structure/1.0">
+		<start><element name="r"><ref name="d"/></element></start>
+		<define name="d"><choice>
+			<element name="e"><ref name="c"/></element>
+			<ref name="c"/>
+		</choice></define>
+		<define name="c"><ref name="b"/></define>
+		<define name="b"><ref name="d"/></define>
+	</grammar>`
+	_, err := compileSrcNoFatal(src)
+	if err == nil || !strings.Contains(err.Error(), "4.19") {
+		t.Fatalf("got %v, want a section 4.19 refusal", err)
+	}
+}
+
 // A shared definition reached twice is two occurrences for sections 7.2 and
 // 7.4, not one: the checks over the compiled pattern must not treat the
 // second as already accounted for.
