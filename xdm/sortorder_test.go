@@ -74,8 +74,8 @@ func TestSortDocumentOrderInOrderFastPath(t *testing.T) {
 	// binding, in increasing position; they are one node and must merge.
 	ns1 := &Node{kind: KindNamespace, name: QName{Local: "p"}, value: "urn:p", parent: r}
 	ns2 := &Node{kind: KindNamespace, name: QName{Local: "p"}, value: "urn:p", parent: r}
-	ns1.SetSynthesizedOrder(r, 0)
-	ns2.SetSynthesizedOrder(r, 0)
+	ns1.setSynthesizedOrder(r, 0)
+	ns2.setSynthesizedOrder(r, 0)
 	if got := names(SortDocumentOrder(Sequence{r, ns1, ns2})); got != "r ns:p" {
 		t.Errorf("namespace duplicates: got %q, want %q", got, "r ns:p")
 	}

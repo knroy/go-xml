@@ -168,7 +168,7 @@ func (n *Node) NamespaceNodes() iter.Seq[*Node] {
 		sort.Strings(prefixes)
 		for i, prefix := range prefixes {
 			ns := &Node{kind: KindNamespace, name: QName{Local: prefix}, value: scope[prefix], parent: n}
-			ns.SetSynthesizedOrder(n, i)
+			ns.setSynthesizedOrder(n, i)
 			if !yield(ns) {
 				return
 			}

@@ -466,7 +466,7 @@ func (n *Node) generateID() string {
 // treeIDStride separates one tree's identity range from the next in Order.
 const treeIDStride = 1 << 20
 
-// SetSynthesizedOrder places a node the parser did not build into the document
+// setSynthesizedOrder places a node the parser did not build into the document
 // order of an existing tree, immediately after owner.
 //
 // The namespace axis is the case this exists for: its nodes are synthesized on
@@ -480,7 +480,7 @@ const treeIDStride = 1 << 20
 // at a spec-defined position: XPath leaves the relative order of namespace
 // nodes implementation-dependent, and what a caller needs is that the order is
 // stable and the identities distinct.
-func (n *Node) SetSynthesizedOrder(owner *Node, offset int) {
+func (n *Node) setSynthesizedOrder(owner *Node, offset int) {
 	if owner == nil {
 		return
 	}
@@ -515,7 +515,7 @@ func (n *Node) Tree() *Tree { return n.tree }
 //
 // The tree and order fields are the identity the rest of the engine already
 // uses — fn:generate-id spells them out, and Compare reads them — and
-// SetSynthesizedOrder derives it from the owning element and the binding's
+// setSynthesizedOrder derives it from the owning element and the binding's
 // position in the sorted prefix list. So two synthesized nodes for one
 // element and prefix already share it, and two for different elements, or
 // different prefixes on one element, already do not. Deferring to it here
@@ -762,7 +762,7 @@ func numberDetachedSubtree(root *Node) {
 	// The reservation follows Tree.number: an element takes a slot for every
 	// binding in scope on it, not only the ones it declares, because the
 	// namespace axis synthesizes the inherited ones at owner.order+1 upwards
-	// (SetSynthesizedOrder). Reserving only the declared ones let those
+	// (setSynthesizedOrder). Reserving only the declared ones let those
 	// synthesized nodes share an order, and so a generate-id(), with the
 	// element's attributes and first child -- snapshot-0112 counts distinct
 	// identities against the node count of a temporary tree.
@@ -1567,7 +1567,7 @@ func (t *Tree) number(n *Node, scope map[string]string) []nsSave {
 	// ones it declares itself. The namespace axis reports every binding in
 	// scope, and the ones inherited from an ancestor have no node on this
 	// element to number: the axis synthesizes them and places them with
-	// SetSynthesizedOrder at owner.order+1 upwards. Reserving only the
+	// setSynthesizedOrder at owner.order+1 upwards. Reserving only the
 	// declared bindings left those synthesized nodes sitting on the slots
 	// already given to this element's attributes and first child, so
 	// generate-id() answered the same string for a namespace node and an

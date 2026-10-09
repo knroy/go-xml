@@ -155,12 +155,11 @@ func (n *Node) NumNamespaceDecls() int { return len(n.namespaces) }
 // NamespaceDeclAt returns the i'th namespace node held on n itself.
 func (n *Node) NamespaceDeclAt(i int) *Node { return n.namespaces[i] }
 
-// Builder-side mutation.
+// Scalar edits.
 //
-// The setters below are for code that builds or rewrites a tree: xdmbuild,
-// and the few transforms that edit a tree they own. Each does exactly the
-// field write it replaced: no re-parenting, no tree pointer, no document
-// order. A slice passed in is kept, not copied.
+// The setters below change a property of a node being built. None changes
+// the shape of a tree: that is built top-down with the Append calls in
+// build.go, and a changed shape is a copy.
 
 // SetName renames n.
 func (n *Node) SetName(name QName) { n.name = name }
@@ -168,19 +167,6 @@ func (n *Node) SetName(name QName) { n.name = name }
 // SetValue sets the string value n holds: the text of a text, comment or
 // processing-instruction node, an attribute's value, a namespace node's URI.
 func (n *Node) SetValue(v string) { n.value = v }
-
-// SetParent sets n's parent link and nothing else.
-func (n *Node) SetParent(p *Node) { n.parent = p }
-
-// SetChildren replaces n's children. They are not re-parented.
-func (n *Node) SetChildren(kids []*Node) { n.children = kids }
-
-// SetAttrs replaces n's attributes. They are not re-parented.
-func (n *Node) SetAttrs(attrs []*Node) { n.attrs = attrs }
-
-// SetNamespaceDecls replaces the namespace nodes held on n. They are not
-// re-parented.
-func (n *Node) SetNamespaceDecls(ns []*Node) { n.namespaces = ns }
 
 // SetBaseURI sets n's own base URI, leaving its descendants as they are.
 func (n *Node) SetBaseURI(base string) { n.baseURI = base }
