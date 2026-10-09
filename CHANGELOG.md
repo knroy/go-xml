@@ -13,6 +13,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | `-catalog DIR` on `validate`, the transform and `xquery` | Answers references to the W3C schemas (`XMLSchema.xsd`, `xml.xsd`) from local copies, so a schema importing them by `www.w3.org` URL loads from the command line. | [`39c6931`][39c6931] |
 | `xquery.Options.SchemaParseOptions` | Parser options for `import schema` documents, as `xslt.CompileOptions` already had; the zero value still refuses a DOCTYPE. | [`740c22a`][740c22a] |
 | `xsd.ParseDocument`, `xsd.RootedFileResolver` | Parse a resolved schema document under the catalog's DOCTYPE rule; build the confined default resolver to use as a catalog's fallback. | [`d86f80c`][d86f80c] |
+| `docs/profiling.md` | Three profiling rounds: the causes behind the benchmark's losses, each fix with its measured gain, what was rejected and why, and what is left for v2. | [`007e682`][007e682] |
+| `docs/benchmark.md` re-run | Every engine re-measured at `eb14939`, after the performance work, with the first run's figures alongside. | [`3fc468a`][3fc468a] |
 | `docs/benchmark.md` | go-xml against Saxon-HE, BaseX, Jing, Xerces-J, libxml2 and `encoding/xml` on nine real workloads, cold and warm, timed only where outputs agree. | [`416ee50`][416ee50] |
 
 ### Fixed — engine
@@ -1237,6 +1239,8 @@ here so every entry in this file sits under a release.
 [197eaad]: https://github.com/knroy/go-xml/commit/197eaad
 [cec5f6f]: https://github.com/knroy/go-xml/commit/cec5f6f
 [416ee50]: https://github.com/knroy/go-xml/commit/416ee50
+[007e682]: https://github.com/knroy/go-xml/commit/007e682
+[3fc468a]: https://github.com/knroy/go-xml/commit/3fc468a
 [0602694]: https://github.com/knroy/go-xml/commit/0602694
 [2514a9a]: https://github.com/knroy/go-xml/commit/2514a9a
 [b88105e]: https://github.com/knroy/go-xml/commit/b88105e

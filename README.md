@@ -697,8 +697,11 @@ introduces bought exactly zero, so it was reverted. The comment in
 ## Benchmarks
 
 The full comparison with other engines, cold and warm, across nine workloads,
-is in [docs/benchmark.md](docs/benchmark.md). The figures below are the
-in-process Go benchmarks.
+is in [docs/benchmark.md](docs/benchmark.md), re-run after the performance work
+in [docs/profiling.md](docs/profiling.md). The figures below are the in-process
+Go benchmarks; they and the Saxon table after them were measured in August 2026, before that
+work, on a UBL and an Oman corpus that are not in this repository, and have not
+been re-run since. benchmark.md has the current figures.
 
 Apple M3 Pro, Go 1.26, `-benchtime=200x`, median of five runs. These are the
 two production workloads, not microbenchmarks. Wall-clock figures vary about
