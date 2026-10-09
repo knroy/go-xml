@@ -442,9 +442,8 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 
 The exit status is 0 only if every input transformed.
 
-`go install -tags goxml_nohttp github.com/knroy/go-xml/v2/cmd/go-xml@latest`
-builds the CLI without `net/http`, which it never uses: it starts about 1.6 ms
-faster and is 12% smaller.
+The CLI does not link `net/http`: `HTTPResolver` lives in its own package,
+`xsd/xsdnet`, which the CLI does not import.
 
 The CLI is built with profile-guided optimisation from the committed
 `cmd/go-xml/default.pgo` (regenerate it with `tests/pgo.sh`), which `go build`
@@ -815,7 +814,7 @@ Every remote-reference mechanism is off unless you turn it on.
   exposes it as `-xinclude`.
 * **`xs:import` and `xs:include` fail closed**, via `xsd.Options.Resolver`.
   The default reads a schema beside the one it was given and **refuses a
-  remote URL outright**; `HTTPResolver` is how you opt in to the network.
+  remote URL outright**; `xsdnet.HTTPResolver` is how you opt in to the network.
   `go-xml validate` is confined on the same terms for `-xsd` and `-rng`: to
   `-root` when given, and otherwise to the schema's own directory, as the
   transform is to its stylesheet's.

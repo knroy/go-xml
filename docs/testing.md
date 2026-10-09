@@ -40,8 +40,8 @@ figures* section, which fails the gate when this table drifts from the tree:
   `grep -rn "^func Test" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`
 * **Limit boundary tests** — `func Test` declarations in the
   `*/limits_boundary*_test.go` files of dtd, relaxng, xdm, xpath, xsd and xslt
-  (xsd's HTTPResolver limits sit in `limits_boundary_http_test.go`, behind the
-  `goxml_nohttp` tag); most
+  (xsd's `xsdnet.HTTPResolver` limits sit in `limits_boundary_http_test.go`, in
+  the external `xsd_test` package); most
   are table-driven, so they run rather more than 13 cases:
   `grep -hc "^func Test" ./*/limits_boundary*_test.go | awk '{n += $1} END {print n + 0}'`
 * **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`

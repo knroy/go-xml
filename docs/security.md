@@ -1741,7 +1741,7 @@ No `unsafe`, no `cgo`, no `reflect` in any non-test file.
    returning the empty sequence — which the spec permits, because it makes
    availability implementation-dependent. Setting a document or text resolver
    does not set this.
-5. **Set a `Root`** on `FileResolver`, and an `AllowHost` on `HTTPResolver`, if
+5. **Set a `Root`** on `FileResolver`, and an `AllowHost` on `xsdnet.HTTPResolver`, if
    either resolves locations an attacker can influence — `relaxng.FileResolver`
    has a `Root` too, and `cmd/go-xml` passes `-root` to it, or the schema's own
    directory when the flag is absent. An empty `Root` on a non-nil resolver

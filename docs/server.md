@@ -215,7 +215,7 @@ billion-laughs — before being written here.
 **Every default in this library is already the safe one.** You are not
 hardening a permissive parser; you are choosing limits that fit your documents.
 The two settings that matter most are the ones you do *not* change:
-`AllowDOCTYPE` stays off, and no `HTTPResolver` is configured.
+`AllowDOCTYPE` stays off, and no `xsdnet.HTTPResolver` is configured.
 
 ### Load the schema once, at startup
 
@@ -224,7 +224,7 @@ The two settings that matter most are the ones you do *not* change:
 // goroutine. Loading per request would dominate the cost of validating.
 //
 // FileResolver.Root confines every schemaLocation to one directory, so an
-// import cannot reach elsewhere on disk. No HTTPResolver, so nothing is
+// import cannot reach elsewhere on disk. No xsdnet.HTTPResolver, so nothing is
 // fetched over the network — the schema graph is exactly what you shipped.
 schema, err := xsd.LoadFile("schemas/main.xsd", xsd.Options{
     Version:      xsd.Version11,
@@ -343,7 +343,7 @@ defaults off and why it must stay off for caller input.
 - [ ] Schema loaded **once** at startup, shared across goroutines
 - [ ] `FileResolver{Root: ...}` set — never a bare `FileResolver{}` for
       caller-influenced locations
-- [ ] No `HTTPResolver` unless you need one, and then with `AllowHost`
+- [ ] No `xsdnet.HTTPResolver` unless you need one, and then with `AllowHost`
 - [ ] `AllowDOCTYPE` **off** for request bodies (on for your own schemas only
       if they need it)
 - [ ] `MaxBytes`, `MaxNodes`, `MaxDepth` sized to your documents

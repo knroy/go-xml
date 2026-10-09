@@ -34,7 +34,7 @@ Two sets of exceptions, both verified by the boundary tests described in
   `xslt.TransformOptions`, CLI `-max-items`). With it removed, an expression
   such as `1 to 1000000000000` can exhaust memory and end the process rather
   than return `XPDY0130`, so remove it only for input you trust.
-* **`xsd.HTTPResolver.MaxBytes` has no unlimited setting.** A negative value
+* **`xsdnet.HTTPResolver.MaxBytes` has no unlimited setting.** A negative value
   refuses every fetch, with an error naming the limit. That is deliberate: a
   schema is not a stream, so an unbounded read is a way to be handed an
   unbounded allocation. Use a large number, not `-1`.
@@ -255,11 +255,6 @@ schema, err := xsd.LoadFile("main.xsd", xsd.Options{
 
 ### Resolvers
 
-A program that never fetches schemas over the network can build with
-`-tags goxml_nohttp`: `HTTPResolver` and `net/http` are left out, which makes
-the go-xml CLI start about 1.6 ms faster with 4.8 MB less memory. The default
-build is unchanged.
-
 `FileResolver` reads from disk. **Set `Root`** whenever a location could be
 influenced by anyone but you — it refuses `..`, absolute paths, `file:` URLs and
 symlinks that lead outside:
@@ -268,12 +263,14 @@ symlinks that lead outside:
 &xsd.FileResolver{Root: "/srv/schemas"}
 ```
 
-`HTTPResolver` adds network fetching, which is off unless you ask for it:
+`HTTPResolver` adds network fetching, which is off unless you ask for it. It
+lives in its own package, `github.com/knroy/go-xml/v2/xsd/xsdnet`, so only a
+program that imports it links `net/http`:
 
 ```go
-&xsd.HTTPResolver{
-    Timeout:   10 * time.Second,          // DefaultFetchTimeout = 30s
-    MaxBytes:  4 << 20,                   // DefaultMaxSchemaBytes = 16 MB
+&xsdnet.HTTPResolver{
+    Timeout:   10 * time.Second,          // xsdnet.DefaultFetchTimeout = 30s
+    MaxBytes:  4 << 20,                   // xsdnet.DefaultMaxSchemaBytes = 16 MB
     AllowHost: func(h string) bool { return h == "schemas.example.com" },
     Files:     &xsd.FileResolver{Root: "/srv/schemas"},
 }

@@ -381,6 +381,39 @@ The spec leaves the strings to the implementation. Compare them for equality
 within one transformation; do not parse them, store them, or compare them
 across runs.
 
+## HTTPResolver moves to package xsdnet
+
+`xsd.HTTPResolver` was the one part of the module that needed `net/http`, so
+every program that imported `xsd` linked it, TLS and x509, fetching or not. It
+now lives in `github.com/knroy/go-xml/v2/xsd/xsdnet` with the same fields and
+behaviour, and so do the names that only it uses:
+
+| v1 | v2 |
+|---|---|
+| `xsd.HTTPResolver` | `xsdnet.HTTPResolver` |
+| `xsd.ErrPrivateAddress` | `xsdnet.ErrPrivateAddress` |
+| `xsd.DefaultFetchTimeout` | `xsdnet.DefaultFetchTimeout` |
+| `xsd.DefaultMaxSchemaBytes` | `xsdnet.DefaultMaxSchemaBytes` |
+
+```go
+// v1
+import "github.com/knroy/go-xml/xsd"
+
+opts := xsd.Options{Resolver: &xsd.HTTPResolver{AllowHost: allow}}
+
+// v2
+import (
+    "github.com/knroy/go-xml/v2/xsd"
+    "github.com/knroy/go-xml/v2/xsd/xsdnet"
+)
+
+opts := xsd.Options{Resolver: &xsdnet.HTTPResolver{AllowHost: allow}}
+```
+
+The `goxml_nohttp` build tag is gone. It existed to leave `HTTPResolver` and
+`net/http` out of a build; a program that does not import `xsdnet` now gets
+that without a tag.
+
 ## Not changed
 
 The command-line tool's flags and output, the `xslt`, `xquery` and `relaxng`

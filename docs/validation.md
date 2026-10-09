@@ -335,7 +335,7 @@ granted — while `LoadFile` and `LoadFiles` were handed paths and default to a
 not. To follow remote locations, opt in:
 
 ```go
-xsd.Options{Resolver: &xsd.HTTPResolver{
+xsd.Options{Resolver: &xsdnet.HTTPResolver{
     AllowHost: func(host string) bool { return host == "schemas.example.com" },
 }}
 ```
