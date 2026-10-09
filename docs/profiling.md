@@ -509,15 +509,37 @@ limit under the live heap costs 10–25× CPU, and the CLI cannot know the live
 size); bigger node chunks (no gain); a SWAR scan in the tokeniser's `text()`
 (no gain); a 64 KiB file read buffer (no gain).
 
+### Round 3 implementation status
+
+Landed on `dev`; every suite and corpus keeps its counts and failing names,
+and every workload output is byte-identical. Figures are against `1cd6878`,
+measured while other lanes ran, so the allocation and CPU figures are the
+reliable ones.
+
+| # | Commit | Measured after landing |
+|---|---|---|
+| S1 | `87cf96e` | call-site cache keyed per library (a global counter would have reset every cache on each XQuery operand); XRechnung CPU −26% with S2/S3 |
+| S2 | `2a7843f` | XSLT state on one 8 B context field (context 504 B); DocBook CPU −27% over all 42 items with S1/S3, `epub.001` −42% |
+| S3 | `ab65f9f` | runtime copy 672 → 328 B |
+| S4 | `53cff35`, `7c0d318` | CEN allocations −3.2% and CPU −4.7% |
+| S5 | `d006ad2` | XSD catalog pass 101,505 → 341 allocations, 17.9 → 14.0 ms CPU |
+| S6 | `abd214b`, `850c04c`, `42aa3d1`, `060b08f`, `f6080a2` | RELAX NG 40-document pass 4.84 → 0.87 ms CPU; memo points need no `unsafe`, and `MaxPatternSize` fires on the same inputs |
+| S7 | `e7ec81d`, `ac6d163`, `d19a0ce` | 10 MB parse −4% (numbering) and −1.6% (whitespace); tokeniser −36% on prose |
+| S8 | `659fdc8` | XMark q6 eval −23%, q7 −28% at 0.1; −30% at factor 1 |
+| S9 | `739c744` | peak RSS −11 MB on XMark q1, −10 MB on a 10 MB transform; the CPU gain profiling credited to `bytes.Reader` was GC timing and did not hold |
+| S10 | `dccd679`, `6f63564` | CLI start-up 5.3–6.3 → 3.7–4.3 ms, RSS 12.5 → 7.7 MB, binary −12%; CI builds and tests both ways |
+| S11 | `3727b35` | `MaxItems` configurable, plus CLI `-max-bytes`; XMark q11/q12 at factor 1 run (3.3 / 4.5 s, 3.6 / 2.9 GB) and match Saxon |
+| E | `72cb46a`, `3574659` | `doc()` path resolution 10.6 → 2.6% of DocBook CPU samples; `xsl:evaluate` allocations −1.4 to −5.8% |
+
 ### Bugs found in round 3
 
 | # | Bug | Status |
 |---|---|---|
-| Y1 | The html method drops the stylesheet's own `<meta charset>` and `<meta http-equiv>` even with `include-content-type="no"`; Serialization 3.1 §7.4.13 allows it only when the serializer adds one. This is why XRechnung stage 2 never agreed with Saxon | open; a one-line fix was prototyped |
-| Y2 | html indentation adds whitespace next to inline elements (`<p><b>…</b><i>…</i></p>` splits across lines), which §7.4.3 forbids | open; prototyped (~50 lines) |
-| Y3 | `xsl:decimal-format NaN=""` and `infinity=""` are ignored: an empty value is taken as absent | open (`xslt/formatnumber.go:84`) |
-| Y4 | XSD 1.1: in a choice of a wildcard and an element declaration, the wildcard's readings are committed before the element is tried, so `<r><a>1</a><a>x</a></r>` is accepted without checking `a`'s type; Xerces rejects it | open (`xsd/validate.go`, wildcard branch of `matchSequence`) |
-| Y5 | Unverified: `Compiled.scope` installs an expression's namespaces only when the context has none, so a nested evaluation may resolve a `$calendar` prefix against the caller's namespaces | needs a test |
+| Y1 | The html method drops the stylesheet's own `<meta charset>` and `<meta http-equiv>` even with `include-content-type="no"`; Serialization 3.1 §7.4.13 allows it only when the serializer adds one. This is why XRechnung stage 2 never agreed with Saxon | fixed in `262be91`, with `91beb30` (only children of `head`) and `1e2bad6` (`fn:serialize`) |
+| Y2 | html indentation adds whitespace next to inline elements (`<p><b>…</b><i>…</i></p>` splits across lines), which §7.4.3 forbids | fixed in `4457808` (`xsl:output`) and `8964e07` (`fn:serialize`), sharing `internal/htmlser` |
+| Y3 | `xsl:decimal-format NaN=""` and `infinity=""` are ignored: an empty value is taken as absent | fixed in `1b65291`; the nine single-character attributes had the reverse mistake, now `XTSE0020` |
+| Y4 | XSD 1.1: in a choice of a wildcard and an element declaration, the wildcard's readings are committed before the element is tried, so `<r><a>1</a><a>x</a></r>` is accepted without checking `a`'s type; Xerces rejects it | fixed in `5912a5a`; 45 of 45 cases agree with Xerces |
+| Y5 | Unverified: `Compiled.scope` installs an expression's namespaces only when the context has none, so a nested evaluation may resolve a `$calendar` prefix against the caller's namespaces | real; fixed in `8a792f7` for `format-date`, `format-dateTime`, `format-time` and `function-lookup` |
 
 The benchmark harness's parse items run at `GOGC=100` through
 `benchrun -helper`, while the CLI runs at 200, so those cold figures read

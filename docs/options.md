@@ -30,6 +30,10 @@ Two sets of exceptions, both verified by the boundary tests described in
   other than "the caller set nothing". Elsewhere — `xsd.ValidateOptions`,
   `relaxng.ValidateOptions`, `xslt.TransformOptions` — a negative `MaxDepth`
   really does mean no limit.
+* **A negative `MaxItems` really is no bound** (`xpath.Context`,
+  `xslt.TransformOptions`, CLI `-max-items`). With it removed, an expression
+  such as `1 to 1000000000000` can exhaust memory and end the process rather
+  than return `XPDY0130`, so remove it only for input you trust.
 * **`xsd.HTTPResolver.MaxBytes` has no unlimited setting.** A negative value
   refuses every fetch, with an error naming the limit. That is deliberate: a
   schema is not a stream, so an unbounded read is a way to be handed an
@@ -250,6 +254,11 @@ schema, err := xsd.LoadFile("main.xsd", xsd.Options{
 | `XPathVersion` | `xpath.Version` | `XPath20` | The version of XPath the 1.1 assertions and conditional type alternatives are written in. See [Choosing a language version](#choosing-a-language-version). |
 
 ### Resolvers
+
+A program that never fetches schemas over the network can build with
+`-tags goxml_nohttp`: `HTTPResolver` and `net/http` are left out, which makes
+the go-xml CLI start about 1.6 ms faster with 4.8 MB less memory. The default
+build is unchanged.
 
 `FileResolver` reads from disk. **Set `Root`** whenever a location could be
 influenced by anyone but you — it refuses `..`, absolute paths, `file:` URLs and
@@ -500,6 +509,7 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{
 | `Documents` | `xpath.DocumentResolver` | disabled | Resolves `fn:doc` and `fn:document`, and `fn:transform`'s `stylesheet-location` and `source-location`. **Nil disables them**, which is the default: a stylesheet that can open arbitrary URIs is an SSRF and file-disclosure vector. |
 | `Collections` | `xpath.CollectionResolver` | disabled | Resolves `fn:collection`. **Nil disables it**, and setting `Documents` does not set this — the two are separate switches on purpose. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Template recursion limit, and the bound on `fn:transform` nesting. Catches a stylesheet with no base case. |
+| `MaxItems` | `int` | `xpath.MaxItems` = 5,000,000 | Items one transformation may materialise, `XPDY0130` past it. Negative removes the bound; nested `fn:transform` and `xsl:evaluate` keep the caller's. |
 | `DisableAssertions` | `bool` | `false` — assertions enabled | Turns off `xsl:assert` checking for the whole transformation. XSLT 3.0 §22.2: "By default, assertions are enabled." |
 | `InitialMode` | `string` | default mode | Mode for the initial `apply-templates`. |
 | `InitialTemplate` | `string` | match the root | Invokes a named template instead, which is how a stylesheet of only named templates is entered. |
@@ -626,6 +636,7 @@ seq, err := xpath.Eval(`$n * 2`, ctx, nil)   // [6]
 | `Collections` | `CollectionResolver` | Resolves `fn:collection`. Nil disables it. Independent of `Docs`. |
 | `Parent` | `*Context` | The enclosing context, for nested evaluation. |
 | `Depth` | `int` | Recursion depth, maintained by the engine. |
+| `MaxItems` | `int` | Items an evaluation may materialise. Zero is `xpath.MaxItems` (5,000,000); negative is no bound; a nested evaluation adopts the caller's bound and cannot raise it. |
 
 ### fn:collection
 

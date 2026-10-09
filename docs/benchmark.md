@@ -328,11 +328,12 @@ workloads and about 150 for XSD.
 
 ## What could not be measured
 
-- **XMark at factor 1 (111 MB).** The go-xml CLI refuses documents over 64 MB
-  and has no flag to raise the limit. The library can (`MaxBytes: -1`, as the
-  parse workload does), but XMark runs through the CLI.
-- **XRechnung stage 2 (HTML).** No item agreed with Saxon, so nothing was timed
-  (below).
+- **XMark at factor 1 (111 MB).** The CLI refused documents over 64 MB when
+  this was run. Since `3727b35` it takes `-max-bytes -1`, and `-max-items -1`
+  lets q11 and q12 hold their ~37 M items (about 3.5 GB); q11 then takes 3.3 s
+  and matches Saxon. It has not been timed here.
+- **XRechnung stage 2 (HTML).** No item agreed with Saxon in this run, so
+  nothing was timed; the cause is fixed since (below).
 - **xsltproc.** Every XSLT workload here is XSLT 2.0 or 3.0, and libxslt
   implements 1.0 only.
 - **libxml2 warm mode.** There is no in-process harness for the C tools, so
@@ -362,16 +363,13 @@ Fixed between the two runs:
   duplicate alternatives (`d8f0ac1`). All 40 verdicts now match Jing and
   xmllint.
 
-Still open:
+Fixed after the second run, so stage 2 is still untimed above:
 
-- **XRechnung HTML: the stylesheet's `<meta charset="UTF-8"/>` is dropped.**
-  With `include-content-type="no"`, go-xml's html method still removes an
-  existing `<meta charset>` from `<head>`, so the output loses an element the
-  stylesheet wrote. The run also showed a second difference that is not a bug:
-  - The stylesheet (`version="2.0"`) gives no `html-version`, whose default
-    XSLT 3.0 §26 leaves implementation-defined.
-  - Saxon serialises as HTML5 and writes `<!DOCTYPE HTML>`; go-xml uses HTML 4
-    and writes none.
+- **XRechnung HTML: the stylesheet's `<meta charset="UTF-8"/>` was dropped**
+  under `include-content-type="no"` (`262be91`), and html indentation split
+  inline elements across lines (`4457808`). With both fixed all 8 items agree
+  with Saxon, once its `<!DOCTYPE HTML>` is stripped: the stylesheet gives no
+  `html-version`, whose default XSLT 3.0 §26 leaves implementation-defined.
 
 Differences that are not go-xml bugs:
 

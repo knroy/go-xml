@@ -10,6 +10,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
+| `xpath.Context.MaxItems`, `xslt.TransformOptions.MaxItems`, CLI `-max-items` | The item budget is configurable (0 = default 5,000,000, negative = none); a nested evaluation cannot raise it. | [`3727b35`][3727b35] |
+| CLI `-max-bytes` | Lifts or sets the input document size limit on the transform and `xquery` (0 = default 64 MB, negative = none). | [`3727b35`][3727b35] |
+| Build tag `goxml_nohttp` | Leaves `xsd.HTTPResolver` and `net/http` out: CLI start-up −1.6 ms, RSS −4.8 MB, binary −12%; the default build is unchanged. | [`dccd679`][dccd679] |
 | `-catalog DIR` on `validate`, the transform and `xquery` | Answers references to the W3C schemas (`XMLSchema.xsd`, `xml.xsd`) from local copies, so a schema importing them by `www.w3.org` URL loads from the command line. | [`39c6931`][39c6931] |
 | `xquery.Options.SchemaParseOptions` | Parser options for `import schema` documents, as `xslt.CompileOptions` already had; the zero value still refuses a DOCTYPE. | [`740c22a`][740c22a] |
 | `xsd.ParseDocument`, `xsd.RootedFileResolver` | Parse a resolved schema document under the catalog's DOCTYPE rule; build the confined default resolver to use as a catalog's fallback. | [`d86f80c`][d86f80c] |
@@ -53,6 +56,15 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A pattern predicate made numeric by a function call, as in `item[number(@n)]`, ran at position 1 | It is positional unless statically boolean, string or node-valued (XSLT 3.0 §5.5.3), as Saxon answers. | [`0602694`][0602694] |
 | A FLWOR join charged its inner sequence once per outer tuple against `MaxItems` | It charges what it holds, so XMark q8–q10 at factor 1 no longer fail with `XPDY0130`. | [`2514a9a`][2514a9a] |
 | With `AllowDOCTYPE` and no DOCTYPE, the parser kept two extra copies of the document | They are dropped when the root opens: 10 MB parse 335 → 230 MB allocated, 100 MB peak RSS 3.15 → 2.0 GB. | [`b88105e`][b88105e] |
+| The html method dropped the stylesheet's own `<meta charset>` under `include-content-type="no"` | It is dropped only when the method adds its own (§7.4.13); XRechnung's HTML stage now matches Saxon. | [`262be91`][262be91] |
+| html/xhtml `indent="yes"` split inline elements onto separate lines | No whitespace is added next to an inline element (§7.4.3, §6.1.4), in `xsl:output` and `fn:serialize`. | [`4457808`][4457808] |
+| `xsl:decimal-format` read an empty `NaN`/`infinity` as absent and ignored an empty single-character attribute | Presence decides; an empty single character is `XTSE0020`. | [`1b65291`][1b65291] |
+| `fn:serialize` with `include-content-type` kept the document's content-type meta, added none under xhtml, and ignored `media-type` | It replaces the head's meta, adds one under xhtml, and writes the media type, sharing `xsl:output`'s rules. | [`1e2bad6`][1e2bad6] |
+| The html method dropped content-type metas anywhere inside `<head>` | Only direct children of `head` are replaced, as §7.4.13 says. | [`91beb30`][91beb30] |
+| XSD 1.1: a wildcard before an element in a repeated choice spent the repeat bound, so bad `a` values passed | The element declaration is tried first; 45 of 45 cases now agree with Xerces. | [`5912a5a`][5912a5a] |
+| RELAX NG `<data type="QName">` accepted undeclared prefixes and length params | Prefixes resolve against in-scope namespaces and length params are refused, as Jing does. | [`81d16d5`][81d16d5] |
+| A function body expanded a prefixed `format-date` `$calendar` against the caller's namespaces | It uses its own; a false `FOFD1340` is gone. | [`8a792f7`][8a792f7] |
+| Under `goxml_nohttp`, refusals still pointed at `HTTPResolver` | They name only the resolvers the build has. | [`6f63564`][6f63564] |
 | Compact syntax refused a free-standing annotation element among definitions | DocBook's `s:ns [ ... ]` was read as a datatype name. The grammar allows it; it is now skipped like any annotation. | [`197eaad`][197eaad] |
 
 ### Changed — performance
@@ -91,6 +103,15 @@ From [docs/profiling.md](docs/profiling.md). Outputs are byte-identical on every
 | XSD re-listed a directory per include and counted characters with no length facet | Locations are cached per load and the count is skipped. | [`3b06e4c`][3b06e4c] |
 | C14N escaped with a per-byte switch into a 4 KiB buffer | Lookup tables and a 64 KiB buffer: 10 MB canonicalisation 22 → 17 ms. | [`8e63b9d`][8e63b9d] |
 | The CLI spent about half its cold CPU on GC while the heap only grew | It runs at GOGC=200 unless `GOGC` is set: DocBook cold CPU −33%, peak RSS 114 → 161 MB. | [`5fbea36`][5fbea36] |
+| Every call re-resolved its function and every transform rebuilt its runtime library | Call sites cache the resolution and each stylesheet builds one library (XRechnung CPU −26%). | [`87cf96e`][87cf96e] |
+| `key()`, `current()` and stylesheet functions walked the variable chain for XSLT state | It rides on one context field; with options held by pointer, DocBook CPU −27%. | [`2a7843f`][2a7843f] |
+| Repeated `fn:doc` calls re-resolved the path; `xsl:evaluate` re-parsed its target | Per-transform `doc()` cache; up to 64 compiled expressions kept per instruction. | [`72cb46a`][72cb46a] |
+| Namespace fixup built a scope map per constructed element; node ordering built one per comparison | Bindings are read live, and the namespace base is skipped for non-namespace nodes (CEN −3 to −5%). | [`53cff35`][53cff35] |
+| `descendant::name` went through a closure and an interface call per node | It walks elements directly with the test inlined (XMark q6/q7 eval −23 to −30%). | [`659fdc8`][659fdc8] |
+| The parser numbered nodes in a second walk, looked whitespace up in a map, and checked characters one byte at a time | Nodes are numbered while built, the last run per length is cached, and ASCII is checked eight bytes at a time. | [`e7ec81d`][e7ec81d] |
+| The CLI held two copies of each input during the parse | It parses from the file; XMark peak RSS −11 MB. | [`739c744`][739c744] |
+| XSD validation allocated a count vector per child and a slice per element | Buffers are reused: 101,505 → 341 allocations per catalog pass. | [`d006ad2`][d006ad2] |
+| RELAX NG re-derived the schema's fixed subtrees per element and built a namespace map per node | Memo points, a lazy namespace context and an attribute memo: DocBook validation −82% CPU. | [`abd214b`][abd214b] |
 
 ### Fixed — release process
 
@@ -1239,6 +1260,26 @@ here so every entry in this file sits under a release.
 [197eaad]: https://github.com/knroy/go-xml/commit/197eaad
 [cec5f6f]: https://github.com/knroy/go-xml/commit/cec5f6f
 [416ee50]: https://github.com/knroy/go-xml/commit/416ee50
+[3727b35]: https://github.com/knroy/go-xml/commit/3727b35
+[dccd679]: https://github.com/knroy/go-xml/commit/dccd679
+[262be91]: https://github.com/knroy/go-xml/commit/262be91
+[4457808]: https://github.com/knroy/go-xml/commit/4457808
+[1b65291]: https://github.com/knroy/go-xml/commit/1b65291
+[1e2bad6]: https://github.com/knroy/go-xml/commit/1e2bad6
+[91beb30]: https://github.com/knroy/go-xml/commit/91beb30
+[5912a5a]: https://github.com/knroy/go-xml/commit/5912a5a
+[81d16d5]: https://github.com/knroy/go-xml/commit/81d16d5
+[8a792f7]: https://github.com/knroy/go-xml/commit/8a792f7
+[6f63564]: https://github.com/knroy/go-xml/commit/6f63564
+[87cf96e]: https://github.com/knroy/go-xml/commit/87cf96e
+[2a7843f]: https://github.com/knroy/go-xml/commit/2a7843f
+[72cb46a]: https://github.com/knroy/go-xml/commit/72cb46a
+[53cff35]: https://github.com/knroy/go-xml/commit/53cff35
+[659fdc8]: https://github.com/knroy/go-xml/commit/659fdc8
+[e7ec81d]: https://github.com/knroy/go-xml/commit/e7ec81d
+[739c744]: https://github.com/knroy/go-xml/commit/739c744
+[d006ad2]: https://github.com/knroy/go-xml/commit/d006ad2
+[abd214b]: https://github.com/knroy/go-xml/commit/abd214b
 [007e682]: https://github.com/knroy/go-xml/commit/007e682
 [3fc468a]: https://github.com/knroy/go-xml/commit/3fc468a
 [0602694]: https://github.com/knroy/go-xml/commit/0602694

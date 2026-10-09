@@ -649,45 +649,6 @@ resolver so that the external subset is read. For the same reason, entity and
 ATTLIST declarations that follow an unread parameter-entity reference are
 ignored (§5.1); libxml2 2.9.13 still processes them.
 
-### `MaxItems` cannot be raised, so XMark q11 and q12 fail at factor 1
-
-`xpath.MaxItems` (5,000,000) bounds the items an evaluation materialises in
-total, and no option raises it. XMark q11 and q12 at factor 1 keep about 12
-million tuples, a count that grows quadratically with the document, so they
-fail with `XPDY0130`. The join no longer contributes: since `2514a9a` it
-charges what it holds, which brought q8–q10 at factor 1 through. Profiling
-round 2, X1.
-
-### The html method drops the stylesheet's `<meta charset>` with `include-content-type="no"`
-
-Serialization 3.1 §7.4.13 lets the serializer discard an existing
-content-type `meta` only when it adds its own. go-xml discards the
-stylesheet's `<meta charset>` and `<meta http-equiv>` whatever the parameter
-says (`xslt/serialize.go`), which is why XRechnung's HTML stage never agrees
-with Saxon in [benchmark.md](benchmark.md#correctness-findings). Profiling
-round 3, Y1.
-
-### html indentation adds whitespace next to inline elements
-
-With `indent="yes"`, `<p><b>bold</b><i>it</i></p>` is written with each child
-on its own line, which changes how it renders. §7.4.3 forbids adding
-whitespace adjacent to an inline element (HTML 4.01 `%inline`, HTML5
-phrasing content). Profiling round 3, Y2.
-
-### `xsl:decimal-format NaN=""` is ignored
-
-An empty `NaN` or `infinity` attribute is treated as absent, so
-`format-number` writes `NaN` where Saxon writes the empty string
-(`xslt/formatnumber.go`). Profiling round 3, Y3.
-
-### XSD 1.1: a wildcard can win over a matching element declaration
-
-In a repeated choice of `xs:any` and an element declaration, the wildcard's
-readings are committed before the declaration is tried, so
-`<r><a>1</a><a>x</a></r>` validates although the second `a` is not an
-`xs:int`. Xerces rejects it. This is a false accept (`xsd/validate.go`,
-`matchSequence`). Profiling round 3, Y4.
-
 ---
 
 ## Deliberate divergences
