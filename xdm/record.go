@@ -260,6 +260,11 @@ func (t *Tree) intern(q QName) uint32 {
 		}
 		return i
 	}
+	// A tree whose name index was copied rather than built here -- a bulk
+	// clone -- arrives without the cache; it is made on first use.
+	if t.nameHot == nil {
+		t.nameHot = new([64]uint32)
+	}
 	h := nameHash(q) & (len(t.nameHot) - 1)
 	if i := t.nameHot[h]; i != 0 && t.names[i] == q {
 		return i

@@ -87,3 +87,32 @@ func TestCloneIsIndependent(t *testing.T) {
 		t.Errorf("clone after edits: %q %v", got, ca.Name())
 	}
 }
+
+// A clone copies the name index but not the parser's name cache, so a clone
+// with more names than smallNames must still intern: the cache is made on
+// first use instead of being dereferenced while nil.
+func TestCloneInternsPastSmallNames(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<r>")
+	for i := range 2 * smallNames {
+		fmt.Fprintf(&b, "<e%d/>", i)
+	}
+	b.WriteString("</r>")
+	tree, err := ParseString(b.String(), ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := xdmclone.Clone(tree.Root, xdmclone.Options{})(tree.Root).(*Node)
+	c := got.Tree()
+	if c == nil || c.nameIx == nil {
+		t.Fatalf("clone has no name index to exercise (tree %v)", c)
+	}
+	old := c.intern(QName{Local: "e3"})
+	if c.names[old] != (QName{Local: "e3"}) {
+		t.Errorf("existing name interned at %d, which holds %v", old, c.names[old])
+	}
+	fresh := c.intern(QName{Local: "new"})
+	if fresh == old || c.names[fresh] != (QName{Local: "new"}) {
+		t.Errorf("new name interned at %d, which holds %v", fresh, c.names[fresh])
+	}
+}
