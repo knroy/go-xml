@@ -4,7 +4,21 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased
+## v1.7.0 — 2026-10-09
+
+**Behaviour changes to check before upgrading.** The exported API only
+gains names, but three things you may observe change:
+
+- `generate-id()` strings are now `N<tree>x<order>`. The old form collided
+  between trees with more than 2^20 nodes; the spec leaves the format to the
+  implementation, so code that stored generated ids will see new values.
+- `xsl:next-match` and `xsl:apply-imports` inside `xsl:iterate`,
+  `xsl:merge`, `xsl:sort` or `xsl:copy select` now raise `XTDE0560`, as XSLT
+  3.0 §6.8 requires; they used to run the next rule. (Saxon 12.10 still runs
+  it inside `xsl:merge-action`.)
+- Several static and validation error messages changed wording or order
+  (for example, XTSE0720 now shows the cycle). They are now the same on every
+  run; before, Go's map order could pick a different message.
 
 ### Added
 
