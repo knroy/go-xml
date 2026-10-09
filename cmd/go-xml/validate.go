@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -212,7 +213,10 @@ func validateOne(path string, popts xdm.ParseOptions, validate func(*xdm.Node) e
 	abs := fileURI(path)
 	popts.BaseURI = abs
 	popts.DocumentURI = abs
-	tree, err := xdm.ParseString(string(data), popts)
+	// A bytes.Reader rather than a string copy of data: the parse keeps the
+	// source for positions, and a reader that knows its length lets it size
+	// that copy once.
+	tree, err := xdm.Parse(bytes.NewReader(data), popts)
 	if err != nil {
 		return fmt.Errorf("parsing: %w", err)
 	}

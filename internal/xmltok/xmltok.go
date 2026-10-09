@@ -42,6 +42,7 @@ package xmltok
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"strconv"
@@ -1219,6 +1220,16 @@ func (d *Decoder) checkChars(b []byte, spans []refSpan) bool {
 			i = max(i, spans[0].end)
 			spans = spans[1:]
 			continue
+		}
+		// Eight bytes at a time while all are in 0x20..0x7F, which XML 1.0
+		// admits literally. 1.1 refuses a literal DEL, so it takes the byte
+		// loop. A byte below 0x20 borrows in w-0x2020..., and one at 0x80 or
+		// above is set in w, so either leaves a high bit and falls through.
+		if !d.v11 && i+8 <= len(b) && (len(spans) == 0 || i+8 <= spans[0].start) {
+			if w := binary.LittleEndian.Uint64(b[i:]); (w|(w-0x2020202020202020))&0x8080808080808080 == 0 {
+				i += 8
+				continue
+			}
 		}
 		if c := b[i]; c < utf8.RuneSelf {
 			if !ok[c] {
