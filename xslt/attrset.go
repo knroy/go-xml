@@ -91,6 +91,9 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 	// Several declarations of one name are merged, highest precedence last so
 	// that it wins.
 	key := qn.Clark()
+	if _, seen := c.sheet.attributeSets[key]; !seen {
+		c.sheet.attributeSetOrder = append(c.sheet.attributeSetOrder, key)
+	}
 	c.sheet.attributeSets[key] = append(c.sheet.attributeSets[key], as)
 	return nil
 }
@@ -477,19 +480,19 @@ func (c *compiler) compilePerformSort(n *xdm.Node, ns xpath.NamespaceResolver) (
 func (c *compiler) checkAttributeSetCycles() error {
 	// Edges are collected per package: only a use that both ends of agree on
 	// is an edge the static analysis of that package can see.
-	uses := map[int]map[string][]string{}
-	for key, sets := range c.sheet.attributeSets {
-		for _, as := range sets {
-			m := uses[as.pkg]
-			if m == nil {
-				m = map[string][]string{}
-				uses[as.pkg] = m
-			}
+	type node struct {
+		pkg int
+		key string
+	}
+	uses := map[node][]string{}
+	for _, key := range c.sheet.attributeSetOrder {
+		for _, as := range c.sheet.attributeSets[key] {
 			for _, u := range as.uses {
 				uk := u.name.Clark()
 				for _, target := range c.sheet.attributeSets[uk] {
 					if target.pkg == as.pkg {
-						m[key] = append(m[key], uk)
+						n := node{as.pkg, key}
+						uses[n] = append(uses[n], uk)
 						break
 					}
 				}
@@ -501,30 +504,45 @@ func (c *compiler) checkAttributeSetCycles() error {
 		active    = 1
 		done      = 2
 	)
-	for pkg, m := range uses {
-		_ = pkg
-		state := map[string]int{}
-		var visit func(string) error
-		visit = func(n string) error {
-			switch state[n] {
-			case active:
-				return fmt.Errorf(
-					"XTSE0720: xsl:attribute-set %s is dependent on itself",
-					clarkToEQName(n))
-			case done:
-				return nil
-			}
-			state[n] = active
-			for _, next := range m[n] {
-				if err := visit(next); err != nil {
-					return err
+	// The walk starts from each set in declaration order, so the cycle
+	// reported is the first one reachable from the earliest declared set, and
+	// it is named by the set where the walk re-entered it.
+	state := map[node]int{}
+	var path []string
+	var visit func(node) error
+	visit = func(n node) error {
+		switch state[n] {
+		case active:
+			cycle := []string{}
+			for i, k := range path {
+				if k == n.key {
+					for _, k := range path[i:] {
+						cycle = append(cycle, clarkToEQName(k))
+					}
+					break
 				}
 			}
-			state[n] = done
+			cycle = append(cycle, clarkToEQName(n.key))
+			return fmt.Errorf(
+				"XTSE0720: xsl:attribute-set %s is dependent on itself (%s)",
+				clarkToEQName(n.key), strings.Join(cycle, " -> "))
+		case done:
 			return nil
 		}
-		for n := range m {
-			if err := visit(n); err != nil {
+		state[n] = active
+		path = append(path, n.key)
+		for _, next := range uses[n] {
+			if err := visit(node{n.pkg, next}); err != nil {
+				return err
+			}
+		}
+		path = path[:len(path)-1]
+		state[n] = done
+		return nil
+	}
+	for _, key := range c.sheet.attributeSetOrder {
+		for _, as := range c.sheet.attributeSets[key] {
+			if err := visit(node{as.pkg, key}); err != nil {
 				return err
 			}
 		}

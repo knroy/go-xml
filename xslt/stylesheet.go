@@ -97,6 +97,10 @@ type Stylesheet struct {
 	// attributeSets holds xsl:attribute-set declarations, several per name
 	// when modules declare the same one.
 	attributeSets map[string][]*attributeSet
+	// attributeSetOrder lists the keys of attributeSets in the order their
+	// first declaration was compiled, so the static checks that walk every
+	// set report the same error on every run.
+	attributeSetOrder []string
 	// namespaceAliases rewrites literal-result-element namespaces, mapping a
 	// stylesheet URI to the result URI and prefix it becomes.
 	namespaceAliases map[string]nsAlias
