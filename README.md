@@ -244,8 +244,8 @@ Eight packages, each usable on its own:
   BaseX, Jing, Xerces-J, libxml2 and `encoding/xml` on DocBook, e-invoicing,
   XMark, schema validation and parsing, cold and warm, with outputs checked
   for agreement before anything is timed.
-* **[docs/profiling.md](docs/profiling.md)** — why go-xml was slower than a warm
-  JVM, profiled per workload, and which of the fixes it proposed have landed.
+* **[docs/profiling.md](docs/profiling.md)** — the performance work still open
+  on v2, ranked with measured gains, and the ideas measured and rejected.
 * **[docs/known-gaps.md](docs/known-gaps.md)** — every measured failure and why
   it is still open, including the fix attempts that were reverted because they
   cost more than they gained.

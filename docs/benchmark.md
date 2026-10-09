@@ -20,7 +20,7 @@ Measured on one machine with the same harness and engine builds, otherwise
 idle: v1 at `f45068c` (2026-10-08/09, after the round-3 and round-4 work in
 [profiling](profiling.md)), and v2 as the `v2` branch on 2026-10-09 (after
 the 40-byte node records, the split evaluation context and the allocation
-cuts; see [profiling](profiling.md#v2-profile-ef76ae2c)). The reference
+cuts; see [profiling](profiling.md#where-go-xml-stands)). The reference
 engines were re-run with each version, and every ratio uses the reference
 times from its own run. Earlier runs, at `eb14939` and `22f4b04`, are in this
 file's history.
@@ -158,7 +158,7 @@ use 18–27% less. Cold parse got faster with it (0.66× to 0.60×
 cuts took most of the per-assertion overhead out of the e-invoice
 stylesheets: Peppol went from 1.99× to 1.31× Saxon warm, XRechnung stage 1
 from 3.00× to 1.77×, stage 2 from 1.42× to 1.23×. Saxon still leads on all
-three; [profiling](profiling.md#fix-candidates-ranked-2) ranks what is left.
+three; [profiling](profiling.md#open-fixes) ranks what is left.
 
 **DocBook warm.** 0.46× to 0.37× Saxon. Three of the four items v1 lost
 (`epub.001`, `indexterm.001`, `chapter.003`) are now faster than Saxon;
@@ -229,7 +229,7 @@ document. That is the shape where Saxon's bytecode generation and JIT pay off
 most. Round 4 measured that interpreting the expressions is only 2–4% of
 go-xml's time here; the rest was allocation and collection, which is what v2's
 node and context changes cut
-([profiling](profiling.md#round-4-efficiency-without-an-api-change-1cfeebd)).
+([profiling](profiling.md#measured-and-rejected)).
 
 **XRechnung, stage 1** (KoSIT `ubl-invoice-xr.xsl`, XSLT 2.0): UBL invoices from
 the KoSIT test suite to the intermediate `xr:invoice` XML.
@@ -284,7 +284,7 @@ At factor 0.1 (milliseconds; Saxon and BaseX from the v2 run):
 - **The value joins are go-xml's strongest queries.** q8, q9 and q11 are
   0.19× to 0.64× Saxon's warm time in both versions and 21–43× faster than
   BaseX. They run as hash or range joins
-  ([profiling](profiling.md#round-2-implementation-status)).
+  ([changelog](../CHANGELOG.md)).
 - **The rest are 1.0× to 1.5× Saxon warm in v1 and 0.9× to 1.45× in v2.** The
   floor of about 50 ms on the 11 MB document is the parse, which every engine
   repeats per run; Saxon's is about 45 ms. q10 is v2's one slower query
@@ -310,7 +310,7 @@ slower, and v2 from 0.25× to 1.64×; the slowest is the 2.5 MB `xp-striding`
 catalog (v1 18.8 ms, v2 18.2 ms, Xerces 11.1 ms). libxml2's C validator is
 1.4× to 2.2× faster than v1 cold and 1.5× to 2.3× faster than v2; about 3 ms
 of go-xml's cold time is process start
-([profiling](profiling.md#where-cold-time-goes)). xmllint implements XSD 1.0
+([profiling](profiling.md#open-fixes)). xmllint implements XSD 1.0
 only.
 
 **RELAX NG.** DocBook 5.2 (`docbook.rng`, 608 KB) over 40 DocBook test
@@ -483,7 +483,7 @@ differences left are not go-xml bugs:
   11–13% less CPU and warm in-process loops 2–20% more, with GC marking in
   `madvise`'s place. Bare-metal Linux has not been measured; expect cold
   parse and query times at or below these, and do not read the warm figures
-  as Linux numbers ([profiling, round 4](profiling.md#linux)).
+  as Linux numbers ([profiling](profiling.md#linux)).
 - **The parse and C14N helper runs as the CLI does** since round 4:
   `GOGC=200` and a streamed parse. Before that it ran at `GOGC=100` from an
   in-memory string, which read within noise at 1 and 10 MB and about 8–15%

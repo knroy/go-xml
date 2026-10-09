@@ -629,7 +629,7 @@ is in the external-entity and DTD layers, and is described in
 `internal/xmltok` still carries these `parity:` behaviours from the
 `encoding/xml` fork it replaced; the others were corrected against the W3C XML
 Conformance Test Suite (see [testing.md](testing.md#tokeniser-differential)) or
-by the parse work in [profiling.md](profiling.md#implementation-status).
+by the parse work recorded in [CHANGELOG.md](../CHANGELOG.md).
 
 * A PI with target `xml` is taken as the XML declaration wherever it appears,
   and the declaration's pseudo-attributes are found by substring search;

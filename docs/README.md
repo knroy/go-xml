@@ -61,9 +61,8 @@
   starts a process, and warm DocBook, XMark and XSD), where it is slower (a
   warm JVM on Schematron-shaped stylesheets, memory per byte), and the bugs
   the agreement check found.
-* **[Profiling](profiling.md)** — the causes behind the benchmark's losses
-  (allocation churn, pattern dispatch, nested-loop joins, node size) and the
-  status of each fix.
+* **[Profiling](profiling.md)** — the performance fixes still open on v2,
+  ranked with measured gains, and the ideas measured and rejected.
 * **[Recipes](recipes.md)** — batch validation, splitting documents, reporting
   line numbers, rendering to HTML, custom document resolvers, finding elements
   without XPath.

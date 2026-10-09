@@ -7,7 +7,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 ## Unreleased — v2 (branch `v2`, in development)
 
 v2 breaks the exported API, so it has a new module path. Its plan is phases 3
-and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.md#round-6-xdm-plan-phases-02-c233f4e).
+and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.md).
 [docs/migrating-to-v2.md](docs/migrating-to-v2.md) shows each change below with
 code before and after, and how to run the rewriter on your own module.
 
@@ -28,6 +28,7 @@ code before and after, and how to run the rewriter on your own module.
 | Change | What it does | Commit |
 |---|---|---|
 | `docs/benchmark.md` v1 and v2; `docs/profiling.md` v2 profile | The benchmark re-run on v2, every table showing v1 `f45068c` and v2 side by side against the reference engines, and a profile explaining v2's three regressions with a ranked fix list (V1–V11). | `694b9c37`, `c9a6e8e7`, `6ec7da09` |
+| `docs/profiling.md` rewritten as the open-fix list | Six rounds of landed fixes hid what was still open. It now ranks only open fixes (V1–V19) and lists what was measured and rejected; landed work stays here and in `git show aefbd8a5:docs/profiling.md`. | — |
 | `xdm.NewFragment`, `Tree.NewRoot`, `Copy`, `CopyPruned`, `ShallowCopy`, `CopyPosition`, `Tree.CopySourceFrom`, `CopyTypeEnvs`, `SetNamespaceDecl`, `RemoveNamespaceDecls`, `DeclaredNamespaces`, `NamespaceNodes`, `RemoveLastChild`, `ReplaceLastChild` | The construction and reading calls the record layout is built on; see [migrating](docs/migrating-to-v2.md#trees-are-built-top-down-by-appending). | 3f33dce, 86f991c, d337fd9 |
 | `docs/migrating-to-v2.md`; `nodeaccess -v1` | Before/after code for every breaking change. The rewriter can be pointed at any module: `-v1` moves its go-xml imports to `/v2` and runs `go mod tidy` before rewriting. | — |
 | `tests/record.sh`, `tests/recdiff`, `GOXSLT_RECORD_DIR` | Suites only count passes; now every case's output is recorded and two checkouts are diffed, allowed differences by rule. | `5aa004e` |
