@@ -95,7 +95,7 @@ func transformTypingProbe(t *testing.T, src, schemaSrc string) *xdm.Node {
 	if err != nil {
 		t.Fatalf("parsing the source: %v", err)
 	}
-	if err := schema.Validate(tree.Root, xsd.ValidateOptions{Annotate: true}); err != nil {
+	if err := schema.Validate(tree.Root, xsd.ValidateOptions{AnnotateInPlace: true}); err != nil {
 		t.Fatalf("validating the source: %v", err)
 	}
 	sheet, err := Compile(mustParse(t, src), CompileOptions{
@@ -447,7 +447,7 @@ func TestResultDocumentCarriesResolvedTyping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing the source: %v", err)
 	}
-	if err := schema.Validate(tree.Root, xsd.ValidateOptions{Annotate: true}); err != nil {
+	if err := schema.Validate(tree.Root, xsd.ValidateOptions{AnnotateInPlace: true}); err != nil {
 		t.Fatalf("validating the source: %v", err)
 	}
 	sheet, err := Compile(mustParse(t, `<xsl:stylesheet version="3.0"

@@ -150,13 +150,13 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 // — reject a written value that differs — is checked in validateAttribute, not
 // here.
 //
-// This is gated on Annotate for the same reason the type annotation is: it
+// This is gated on AnnotateInPlace for the same reason the type annotation is: it
 // mutates the tree the caller handed in, and a caller who only asked "is this
 // valid?" has not asked for their document to be rewritten. recordDefaultID
 // above deliberately stays ungated, because ID/IDREF binding affects the
 // validity *verdict* rather than the tree.
 func (v *validator) applyAttributeDefault(el *xdm.Node, use *AttributeUse) {
-	if !v.opts.Annotate || use == nil || use.Decl == nil || use.Prohibited {
+	if !v.opts.AnnotateInPlace || use == nil || use.Decl == nil || use.Prohibited {
 		return
 	}
 	c := use.Constraint
@@ -338,7 +338,7 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 	if decl == nil || decl.Type == nil {
 		return
 	}
-	normalized, err := validateSimpleValueIn(a.Value(), decl.Type, v.schema.Version, a)
+	normalized, err := validateSimpleValueIn(a.Value(), decl.Type, v.schema.Version, a, v.opts.AnnotateInPlace)
 	if err != nil {
 		v.fail(a, "cvc-attribute.3",
 			"attribute %s: %v", attrName(decl.Name), err)
@@ -372,7 +372,7 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 	v.recordIDs(a, normalized, decl.Type)
 	v.recordKeyValue(a, normalized, decl.Type)
 
-	if v.opts.Annotate && decl.Type.Name.Local != "" {
+	if v.opts.AnnotateInPlace && decl.Type.Name.Local != "" {
 		// SetTypeAnnotation rather than a bare assignment: it also records
 		// the is-id and is-idrefs properties from the declared type. Those
 		// are separate state from the annotation because XSLT's

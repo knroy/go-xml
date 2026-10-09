@@ -17,6 +17,7 @@ and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.m
 | `xdm.Node` fields are unexported; read through methods | `n.Kind`, `n.Name`, `n.Value`, `n.Parent`, `n.BaseURI`, `n.DocumentURI` and the nine typing fields (`n.TypeAnnotation` … `n.MixedContent`) become calls of the same name. `range n.Children` / `n.Attrs` / `n.Namespaces` becomes `range n.Children()` / `n.Attrs()` / `n.NamespaceDecls()` (iterators); `len` and indexing become `NumChildren`/`ChildAt`/`FirstChild`/`LastChild`, `NumAttrs`/`AttrAt`, `NumNamespaceDecls`/`NamespaceDeclAt`. No slice is handed out. `internal/tools/nodeaccess` rewrites old code mechanically. | a8e5346 |
 | Nodes are built with `xdm.NewNode` and the setters | `&xdm.Node{Kind: k, Name: q, Value: v}` becomes `xdm.NewNode(k, q, v)`; field writes become `SetName`, `SetValue`, `SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaceDecls`, `SetBaseURI`, `SetDocumentURI` (builder-side: no re-parenting, no tree link); typing goes through `ApplyTyping` and `SetTypeAnnotation*`. | 9ab409b |
 | `xdmbuild.SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaces`, `SetName`, `SetBaseURI` removed | Call the `xdm.Node` method of the same name (`SetNamespaces` is `SetNamespaceDecls`). | 6b34bc3 |
+| `xsd.ValidateOptions.Annotate` is now `AnnotateInPlace`; `Validate` without it never writes | v1's `Validate` still wrote union members and `nilled` onto the caller's tree. Get a typed tree from `ValidateCopy`; keep `AnnotateInPlace` for trees you just built. | — |
 
 ### Added
 

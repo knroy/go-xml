@@ -556,7 +556,7 @@ small feature rather than a bug in the import:
 
 * **Automatic input validation.** A source document is not validated because
   the query imported a schema, so it stays untyped until `validate { }` or the
-  caller (`xsd.ValidateOptions{Annotate: true}`) types it. That is what the
+  caller (`xsd.Schema.ValidateCopy`) types it. That is what the
   `schemaValidation` and `typedData` dependencies name, and the harness still
   skips on them; `prod-CastExpr.schema`'s `(a, b, c) is not an instance of
   xs:IDREF*` is the shape it takes.

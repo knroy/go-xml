@@ -428,7 +428,10 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	// its operand", so the annotations the assessment stamps must not reach
 	// the node the operand expression yielded, which may be part of an input
 	// document the query can still see. Everything below therefore runs over
-	// the copy, and the copy is what is returned.
+	// the copy, and the copy is what is returned. Not xsd.ValidateCopy: that
+	// copies the operand's whole tree and returns a node with its ancestors,
+	// where §3.21 wants "a new node ... with no parent", and it would carry
+	// the source's document URI and DTD onto the result.
 	root = xdmbuild.DeepCopy(root)
 
 	// A document node's validation root is its element child, and the
@@ -452,7 +455,7 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		target, docNode = elem, true
 	}
 
-	vopts := xsd.ValidateOptions{Annotate: true, SkipIDConstraints: !docNode}
+	vopts := xsd.ValidateOptions{AnnotateInPlace: true, SkipIDConstraints: !docNode}
 	var verr error
 	switch {
 	case n.typeName != nil:

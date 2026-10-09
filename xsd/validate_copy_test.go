@@ -166,7 +166,7 @@ func TestValidateCopyMatchesInPlace(t *testing.T) {
 			opts := ValidateOptions{MaxErrors: -1, SkipIDConstraints: c.target != ""}
 			inPlace := parseCopyDoc(t, c.doc)
 			inOpts := opts
-			inOpts.Annotate = true
+			inOpts.AnnotateInPlace = true
 			errIn := s.Validate(pickCopyTarget(inPlace.Root, c.target), inOpts)
 			if (errIn == nil) != c.valid {
 				t.Fatalf("in place: %v", errIn)
@@ -278,5 +278,50 @@ func TestValidateCopyConcurrent(t *testing.T) {
 	wg.Wait()
 	if r.NumChildren() != kids || r.TypeAnnotation() != "" {
 		t.Errorf("input changed: %d children (was %d), annotation %q", r.NumChildren(), kids, r.TypeAnnotation())
+	}
+}
+
+// TestValidateWritesNothing pins the v2 contract: Validate without
+// AnnotateInPlace only checks. The document that ValidateCopy types, defaults
+// and strips (TestValidateCopyIsNotVacuous) comes back from Validate with no
+// annotation, no defaulted attribute and its whitespace in place.
+func TestValidateWritesNothing(t *testing.T) {
+	s := loadAssertionSchema(t, copySchema)
+	in := parseCopyDoc(t, copyDoc("100", `<n xsi:nil="true"/>`, "1"))
+	kidsBefore := in.Root.ChildElements()[0].NumChildren()
+	// parseCopyDoc stamps <x> as if an earlier assessment had typed it.
+	before := map[*xdm.Node]xdm.Typing{}
+	var snap func(n *xdm.Node)
+	snap = func(n *xdm.Node) {
+		before[n] = xdm.TypingOf(n)
+		for a := range n.Attrs() {
+			snap(a)
+		}
+		for c := range n.Children() {
+			snap(c)
+		}
+	}
+	snap(in.Root)
+	if err := s.Validate(in.Root, ValidateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(n *xdm.Node)
+	walk = func(n *xdm.Node) {
+		if got := xdm.TypingOf(n); got != before[n] {
+			t.Errorf("Validate wrote typing to %s: %+v", n.Name().Local, got)
+		}
+		for a := range n.Attrs() {
+			if a.Value() == "dflt" {
+				t.Errorf("Validate added the defaulted attribute %s", a.Name().Local)
+			}
+			walk(a)
+		}
+		for c := range n.Children() {
+			walk(c)
+		}
+	}
+	walk(in.Root)
+	if got := in.Root.ChildElements()[0].NumChildren(); got != kidsBefore {
+		t.Errorf("Validate stripped whitespace: %d children, had %d", got, kidsBefore)
 	}
 }

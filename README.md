@@ -26,9 +26,9 @@ Every error carries the spec's code and a path — `cvc-datatype-valid.1` at
 For a document you did not write, use `schema.ValidateContext(ctx, ...)`: it is
 the same call with a deadline, and identity-constraint checking is where an
 untrusted document can make validation expensive. See
-[docs/security.md](docs/security.md). To get a typed tree without touching
-the one you passed in, use `schema.ValidateCopy`
-([options](docs/options.md#annotate-and-concurrency)).
+[docs/security.md](docs/security.md). `Validate` only checks and never writes
+to the tree; to get a typed tree, use `schema.ValidateCopy`, which annotates a
+copy ([options](docs/options.md#typed-trees-and-concurrency)).
 
 ### The packages
 

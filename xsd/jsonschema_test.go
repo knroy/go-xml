@@ -44,7 +44,7 @@ func TestSchemaForJSONAnnotates(t *testing.T) {
 			t.Fatalf("parsing %s: %v", tc.in, err)
 		}
 		if err := schema.Validate(tree.Root, ValidateOptions{
-			Annotate: true, SkipIDConstraints: true,
+			AnnotateInPlace: true, SkipIDConstraints: true,
 		}); err != nil {
 			t.Errorf("%s should be valid against the schema for JSON: %v", tc.in, err)
 			continue
@@ -115,7 +115,7 @@ func TestSchemaForJSONWithinMapAnnotations(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := schema.Validate(tree.Root, ValidateOptions{
-		Annotate: true, SkipIDConstraints: true,
+		AnnotateInPlace: true, SkipIDConstraints: true,
 	}); err != nil {
 		t.Fatalf("a map of every kind should be valid: %v", err)
 	}

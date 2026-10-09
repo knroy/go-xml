@@ -23,7 +23,7 @@ func TestValidateRecordsMixedContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
+	if err := s.Validate(tree.Root, ValidateOptions{AnnotateInPlace: true}); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 	r := tree.Root.FirstChild()

@@ -63,7 +63,7 @@ func validateChain(t *testing.T, s *Schema, value string) *xdm.Node {
 	if err != nil {
 		t.Fatalf("parsing instance: %v", err)
 	}
-	if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
+	if err := s.Validate(tree.Root, ValidateOptions{AnnotateInPlace: true}); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 	return tree.Root.FirstChild()
