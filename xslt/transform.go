@@ -403,6 +403,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// the same whitespace declarations apply to them. The wrapper is per
 	// transform because its cache holds the stripped copies, which must not
 	// outlive the declarations that produced them.
+	callerDocs := opts.Documents
 	if len(s.strip) > 0 && opts.Documents != nil {
 		opts.Documents = &stripSpaceResolver{sheet: s, inner: opts.Documents}
 	}
@@ -419,8 +420,12 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	readDocs := map[string]bool{}
 	writtenDocs := map[string]bool{}
 	if opts.Documents != nil {
-		opts.Documents = &readDocResolver{
+		rd := &readDocResolver{
 			inner: opts.Documents, read: readDocs, written: writtenDocs}
+		if _, ok := callerDocs.(*FileResolver); ok {
+			rd.docs = map[docKey]*xdm.Tree{}
+		}
+		opts.Documents = rd
 	}
 
 	rt, err := newRuntime(s, ctx, source, opts)
