@@ -696,6 +696,9 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// selected item as the singleton focus" when select is present, so
 		// the focus moves before anything below reads it.
 		rt = rt.withCurrent(item, 1, 1)
+		// 6.8: the current template rule is cleared within "xsl:copy if
+		// and only if there is a select attribute".
+		rt = rt.clearCurrentRule()
 	}
 	node, ok := item.(*xdm.Node)
 	if !ok {

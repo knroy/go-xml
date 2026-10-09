@@ -2051,6 +2051,8 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
+	// 6.8: the current template rule is cleared within xsl:iterate.
+	rt = rt.clearCurrentRule()
 
 	// The carried state starts at the declared defaults, which are evaluated
 	// in the focus of the xsl:iterate instruction itself rather than of any

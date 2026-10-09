@@ -266,7 +266,18 @@ func argNodeOrContext(ctx *Context, args []xdm.Sequence, i int) (*xdm.Node, erro
 	return n, nil
 }
 
-func boolSeq(v bool) xdm.Sequence   { return xdm.One(xdm.NewBoolean(v)) }
+func boolSeq(v bool) xdm.Sequence   { return xdm.One(boolItem(v)) }
+
+// trueItem and falseItem are the two xs:boolean values, shared by every
+// evaluation: atomic values are never written once built.
+var trueItem, falseItem = xdm.NewBoolean(true), xdm.NewBoolean(false)
+
+func boolItem(v bool) *xdm.Atomic {
+	if v {
+		return trueItem
+	}
+	return falseItem
+}
 func strSeq(s string) xdm.Sequence  { return xdm.One(xdm.NewString(s)) }
 func intSeq(n int64) xdm.Sequence   { return xdm.One(xdm.NewInteger(n)) }
 func numSeq(f float64) xdm.Sequence { return xdm.One(xdm.NewDouble(f)) }

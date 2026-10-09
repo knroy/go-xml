@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -52,10 +53,10 @@ func (e *BinaryOp) evalLogical(ctx *Context) (xdm.Sequence, error) {
 	// Short-circuit: the right operand is not evaluated when the result is
 	// already determined, so "$n != 0 and 10 div $n > 1" is safe.
 	if e.Op == "and" && !lb {
-		return xdm.One(xdm.NewBoolean(false)), nil
+		return xdm.One(boolItem(false)), nil
 	}
 	if e.Op == "or" && lb {
-		return xdm.One(xdm.NewBoolean(true)), nil
+		return xdm.One(boolItem(true)), nil
 	}
 	r, err := e.Right.Eval(ctx)
 	if err != nil {
@@ -65,7 +66,7 @@ func (e *BinaryOp) evalLogical(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	return xdm.One(xdm.NewBoolean(rb)), nil
+	return xdm.One(boolItem(rb)), nil
 }
 
 func (e *BinaryOp) evalNodeSetOp(ctx *Context) (xdm.Sequence, error) {
@@ -122,11 +123,11 @@ func (e *BinaryOp) evalNodeComparison(ctx *Context) (xdm.Sequence, error) {
 		// are not "is"-equal. Node.Is is pointer equality for every stored
 		// node and additionally recognises the two synthesized namespace
 		// nodes a pair of namespace:: walks makes for one binding.
-		return xdm.One(xdm.NewBoolean(ln.Is(rn))), nil
+		return xdm.One(boolItem(ln.Is(rn))), nil
 	case "<<":
-		return xdm.One(xdm.NewBoolean(ln.Compare(rn) < 0)), nil
+		return xdm.One(boolItem(ln.Compare(rn) < 0)), nil
 	default:
-		return xdm.One(xdm.NewBoolean(ln.Compare(rn) > 0)), nil
+		return xdm.One(boolItem(ln.Compare(rn) > 0)), nil
 	}
 }
 
@@ -187,7 +188,7 @@ func (e *BinaryOp) compareSingletons(ctx *Context, la, ra xdm.Sequence) (xdm.Seq
 	if err != nil {
 		return nil, err
 	}
-	return xdm.One(xdm.NewBoolean(res)), nil
+	return xdm.One(boolItem(res)), nil
 }
 
 // evalGeneralComparison implements =, !=, <, <=, >, >=.
@@ -200,11 +201,14 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 	// range may name more integers than the item limit allows, and building
 	// them to find out whether one value is among them is the wrong shape of
 	// work regardless.
+	if got, ok := nameComparison(ctx, e); ok {
+		return xdm.One(boolItem(got)), nil
+	}
 	valueOp := generalValueOp(e.Op)
 	if got, ok, err := rangeContains(ctx, e, valueOp); err != nil {
 		return nil, err
 	} else if ok {
-		return xdm.One(xdm.NewBoolean(got)), nil
+		return xdm.One(boolItem(got)), nil
 	}
 
 	l, err := e.Left.Eval(ctx)
@@ -245,7 +249,150 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	return xdm.One(xdm.NewBoolean(ok)), nil
+	return xdm.One(boolItem(ok)), nil
+}
+
+// nameComparison answers "name(A) = name(B)", "name(A) = 'lit'" and their
+// "!=" and mirrored forms without building the lexical names, when each name
+// call's argument is one node: "preceding-sibling::*[name(.) =
+// name(current())]" builds two prefixed names, boxes them as strings and
+// atomizes them for every sibling. Called as written, fn:name returns
+// n.Name.Lexical() for an element, attribute, processing instruction or
+// namespace node and "" for any other, and two single strings compare
+// codepoint by codepoint under the default collation.
+//
+// ok is false whenever the comparison is not of that shape, an argument is
+// not one node, a collation other than the codepoint one is in force, or under
+// XPath 1.0 compatibility; the comparison is then evaluated as written. The
+// arguments allowed ("." , a variable, current()) are pure, so evaluating one
+// again there raises the same error or yields the same nodes.
+func nameComparison(ctx *Context, e *BinaryOp) (result, ok bool) {
+	if (e.Op != "=" && e.Op != "!=") || ctx.Compat || ctx.collation != nil {
+		return false, false
+	}
+	lc, lName := nameCallArg(ctx, e.Left)
+	rc, rName := nameCallArg(ctx, e.Right)
+	var lLit, rLit *xdm.Atomic
+	if !lName {
+		lLit = stringLiteral(e.Left)
+	}
+	if !rName {
+		rLit = stringLiteral(e.Right)
+	}
+	if !(lName && rName || lName && rLit != nil || lLit != nil && rName) {
+		return false, false
+	}
+	var lq, rq xdm.QName
+	if lName {
+		if lq, ok = nameOf(ctx, lc); !ok {
+			return false, false
+		}
+	}
+	if rName {
+		if rq, ok = nameOf(ctx, rc); !ok {
+			return false, false
+		}
+	}
+	switch {
+	case lName && rName:
+		result = lexicalNamesEqual(lq, rq)
+	case lName:
+		result = lexicalNameIs(lq, rLit.Str())
+	default:
+		result = lexicalNameIs(rq, lLit.Str())
+	}
+	return result == (e.Op == "="), true
+}
+
+// nameCallArg reports whether x is a call to the built-in fn:name whose
+// argument, if any, is ".", a variable or current().
+func nameCallArg(ctx *Context, x Expr) (*FuncCall, bool) {
+	c, ok := x.(*FuncCall)
+	if !ok || c.Name.Local != "name" || c.Name.URI != xdm.NSFN || len(c.Args) > 1 || ctx.Funcs == nil {
+		return nil, false
+	}
+	if len(c.Args) == 1 {
+		switch a := c.Args[0].(type) {
+		case *ContextItem, *VarRef:
+		case *FuncCall:
+			if a.Name.Local != "current" || a.Name.URI != xdm.NSFN || len(a.Args) != 0 {
+				return nil, false
+			}
+		default:
+			return nil, false
+		}
+	}
+	// Only the built-in, which is a leaf: a host or caller binding fn:name
+	// itself gets its own function called.
+	fn, _, _, found := c.resolve(ctx)
+	if !found || !fn.leaf || fn.Name != c.Name {
+		return nil, false
+	}
+	return c, true
+}
+
+// stringLiteral returns x's value when x is an xs:string literal.
+func stringLiteral(x Expr) *xdm.Atomic {
+	if l, ok := x.(*Literal); ok && l.Val.Type == xdm.TypeString {
+		return l.Val
+	}
+	return nil
+}
+
+// nameOf is the name fn:name would render for c's argument, the context item
+// when it has none. ok is false when that is not one node, or when the call
+// would fail the recursion limit FuncCall.Eval checks.
+func nameOf(ctx *Context, c *FuncCall) (q xdm.QName, ok bool) {
+	if ctx.checkDepth() != nil {
+		return q, false
+	}
+	var n *xdm.Node
+	if len(c.Args) == 0 || isContextItem(c.Args[0]) {
+		// "." read in place: evaluating it boxes the item in a sequence.
+		n, _ = ctx.Item.(*xdm.Node)
+	} else {
+		v, err := c.Args[0].Eval(ctx)
+		if err != nil || len(v) != 1 {
+			return q, false
+		}
+		n, _ = v[0].(*xdm.Node)
+	}
+	if n == nil {
+		return q, false
+	}
+	switch n.Kind {
+	case xdm.KindElement, xdm.KindAttribute, xdm.KindPI, xdm.KindNamespace:
+		return n.Name, true
+	}
+	return q, true
+}
+
+func isContextItem(x Expr) bool {
+	_, ok := x.(*ContextItem)
+	return ok
+}
+
+// lexicalNamesEqual reports whether a.Lexical() == b.Lexical().
+func lexicalNamesEqual(a, b xdm.QName) bool {
+	if a.Prefix == b.Prefix {
+		return a.Local == b.Local
+	}
+	// With different prefixes the two can be equal only if some part holds
+	// a colon, which no parsed name does.
+	if strings.IndexByte(a.Prefix, ':') < 0 && strings.IndexByte(b.Prefix, ':') < 0 &&
+		strings.IndexByte(a.Local, ':') < 0 && strings.IndexByte(b.Local, ':') < 0 {
+		return false
+	}
+	return a.Lexical() == b.Lexical()
+}
+
+// lexicalNameIs reports whether q.Lexical() == s.
+func lexicalNameIs(q xdm.QName, s string) bool {
+	if q.Prefix == "" {
+		return q.Local == s
+	}
+	p := len(q.Prefix)
+	return len(s) == p+1+len(q.Local) && s[:p] == q.Prefix && s[p] == ':' && s[p+1:] == q.Local
 }
 
 // comparePairs is the existential half of a general comparison: whether some

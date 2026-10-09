@@ -627,7 +627,8 @@ func (s *sortKey) evalKey(rt *runtime) (xdm.Sequence, error) {
 		}
 		return seq, nil
 	}
-	sub := rt.temporaryOutput()
+	// 6.8: the current template rule is cleared within xsl:sort.
+	sub := rt.temporaryOutput().clearCurrentRule()
 	out := newOutputBuilder(rt)
 	if err := execSequence(s.body, sub, out); err != nil {
 		return nil, err

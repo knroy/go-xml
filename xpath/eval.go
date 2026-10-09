@@ -413,6 +413,9 @@ func newComparisonHoist(ctx *Context, pred Expr) *comparisonHoist {
 // in the order evaluating "A op B" would raise them.
 func (h *comparisonHoist) holds(sub *Context) (keep, ok bool, err error) {
 	b := h.cmp
+	if keep, ok := nameComparison(sub, b); ok {
+		return keep, true, nil
+	}
 	other := b.Left
 	if h.left {
 		other = b.Right
@@ -598,7 +601,7 @@ func (e *QuantifiedExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	return xdm.One(xdm.NewBoolean(res)), nil
+	return xdm.One(boolItem(res)), nil
 }
 
 // evalQuantified short-circuits: "some" stops at the first true, "every" at
