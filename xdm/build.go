@@ -233,7 +233,9 @@ func (t *Tree) truncate(i uint32) {
 		}
 		r.setOffset(0)
 		delete(t.docURIs, j)
-		delete(t.foreignPos, j)
+		if t.source != nil {
+			delete(t.source.foreignPos, j)
+		}
 	}
 	if len(t.side) > 0 {
 		t.sideMu.Lock()
@@ -257,7 +259,11 @@ func (t *Tree) CopySourceFrom(src *Tree) {
 	}
 	t.CopyDTDFrom(src)
 	t.XMLVersion = src.XMLVersion
-	t.src = src.src
+	if s := src.srcText(); s != "" {
+		t.ownSource().src = s
+	} else if t.source != nil {
+		t.source.src = ""
+	}
 }
 
 // CopyPosition gives dst, a copy of src already appended to a tree, src's
@@ -271,14 +277,15 @@ func CopyPosition(dst, src *Node) {
 	if !ok {
 		return
 	}
-	if _, foreign := src.tree.foreignPos[src.self]; !foreign && dst.tree.src == src.tree.src {
+	if _, foreign := src.tree.foreign(src.self); !foreign && dst.tree.srcText() == src.tree.srcText() {
 		dst.setOffset(src.offset())
 		return
 	}
-	if dst.tree.foreignPos == nil {
-		dst.tree.foreignPos = map[uint32][2]int32{}
+	s := dst.tree.ownSource()
+	if s.foreignPos == nil {
+		s.foreignPos = map[uint32][2]int32{}
 	}
-	dst.tree.foreignPos[dst.self] = [2]int32{int32(line), int32(col)}
+	s.foreignPos[dst.self] = [2]int32{int32(line), int32(col)}
 }
 
 // Finalize marks the end of building: every node still open is closed, and

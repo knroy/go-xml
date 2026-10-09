@@ -580,7 +580,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					// that live outside the directive. The subset a document
 					// is governed by is not always the text it was written
 					// with.
-					tree.externalSubset = ents.subsetText
+					tree.ownSource().externalSubset = ents.subsetText
 					// Declarations pulled in from the external subset are read
 					// before ents may be discarded below: loading one that
 					// declared no entities still nils ents out, and the
@@ -693,7 +693,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		// The decoder stops reading at the end of the root element, so the
 		// tee holds everything up to there — which is all any offset can
 		// point into.
-		tree.src = srcBuf.String()
+		tree.ownSource().src = srcBuf.String()
 	}
 	tree.XMLVersion = "1.0"
 	if dec.IsVersion11() {

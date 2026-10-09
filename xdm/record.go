@@ -86,27 +86,12 @@ type Tree struct {
 	// only: Canonical XML is not defined for XML 1.1, and package c14n
 	// refuses a tree this reports as 1.1.
 	XMLVersion string
-	// externalSubset is the text of the external DTD subset, and of any
-	// parameter-entity module it pulled in, when one was read.
-	//
-	// It is separate from DocType because DocType is the declaration AS
-	// WRITTEN — that is what a caller re-serialising the document needs —
-	// while the declarations that govern the document may live in a file the
-	// directive merely names. fn:unparsed-entity-uri is the visible case: a
-	// document whose NDATA entities are declared externally reports none of
-	// them if only the directive is consulted.
-	//
-	// Empty unless ParseOptions.ExternalEntities permitted the read.
-	externalSubset string
-	// src is the document text, retained only when the caller asks for
-	// positions. It is what makes Position able to count lines.
-	src string
-	// lineStarts holds the byte offset of each line, built on first use.
-	// Resolving a position is then a binary search rather than a scan from
-	// the start of the document, which matters when a validator reports
-	// thousands of failures over one large file.
-	lineStarts []int
-	lineOnce   sync.Once
+	// source holds what only a parsed document has -- the external subset,
+	// the document text and the node positions -- and is nil for a tree that
+	// has none of them, which is every tree a constructor builds. Kept apart
+	// so that a constructed fragment, of which a transform makes thousands,
+	// does not carry their fields.
+	source *treeSource
 
 	// id orders nodes of different trees against each other; the spec asks
 	// only for a stable order. A document is numbered when it is made. A
@@ -121,9 +106,9 @@ type Tree struct {
 	// frozen marks a parsed document: it is complete and shared, and
 	// appending to it is a programming error.
 	frozen bool
+	n      uint32 // records in use
 
 	chunks [][]Node
-	n      uint32 // records in use
 	// open is the path of nodes still being built, outermost first: the
 	// nodes something may be appended to.
 	open []uint32
@@ -147,13 +132,71 @@ type Tree struct {
 	bases      map[uint32]string // base URIs that differ from the inherited one
 	docURIs    map[uint32]string // dm:document-uri of document nodes
 	typing     [][]nodeTyping    // by chunk, made on first use
-	offsets    [][]int32         // by chunk: source offset + 1, made on first use
-	foreignPos map[uint32][2]int32
 	attrCounts map[uint32]uint32 // attribute counts past 0xFFFE
 
 	// Namespace nodes, made on demand.
 	sideMu sync.Mutex
 	side   map[sideKey]*Node
+}
+
+// treeSource is the part of a Tree that parsing fills in (see Tree.source).
+type treeSource struct {
+	// externalSubset is the text of the external DTD subset, and of any
+	// parameter-entity module it pulled in, when one was read.
+	//
+	// It is separate from DocType because DocType is the declaration AS
+	// WRITTEN — that is what a caller re-serialising the document needs —
+	// while the declarations that govern the document may live in a file the
+	// directive merely names. fn:unparsed-entity-uri is the visible case: a
+	// document whose NDATA entities are declared externally reports none of
+	// them if only the directive is consulted.
+	//
+	// Empty unless ParseOptions.ExternalEntities permitted the read.
+	externalSubset string
+	// src is the document text, retained only when the caller asks for
+	// positions. It is what makes Position able to count lines.
+	src string
+	// lineStarts holds the byte offset of each line, built on first use.
+	// Resolving a position is then a binary search rather than a scan from
+	// the start of the document, which matters when a validator reports
+	// thousands of failures over one large file.
+	lineStarts []int
+	lineOnce   sync.Once
+	offsets    [][]int32           // by chunk: source offset + 1, made on first use
+	foreignPos map[uint32][2]int32 // positions copied from another document
+}
+
+// ownSource returns t's source part, made on first use.
+func (t *Tree) ownSource() *treeSource {
+	if t.source == nil {
+		t.source = &treeSource{}
+	}
+	return t.source
+}
+
+// srcText is the retained document text, or "".
+func (t *Tree) srcText() string {
+	if t.source == nil {
+		return ""
+	}
+	return t.source.src
+}
+
+// extSubset is the external subset text, or "".
+func (t *Tree) extSubset() string {
+	if t.source == nil {
+		return ""
+	}
+	return t.source.externalSubset
+}
+
+// foreign is the position a copy was given from another document, if any.
+func (t *Tree) foreign(i uint32) ([2]int32, bool) {
+	if t.source == nil {
+		return [2]int32{}, false
+	}
+	p, ok := t.source.foreignPos[i]
+	return p, ok
 }
 
 type nsBinding struct{ prefix, uri string }
@@ -1277,7 +1320,7 @@ func (n *Node) Position() (line, col int, ok bool) {
 		return 0, 0, false
 	}
 	t := n.tree
-	if p, found := t.foreignPos[n.self]; found {
+	if p, found := t.foreign(n.self); found {
 		return int(p[0]), int(p[1]), true
 	}
 	off := n.offset()
@@ -1289,26 +1332,30 @@ func (n *Node) Position() (line, col int, ok bool) {
 
 // offset is the stored source offset + 1, or 0.
 func (n *Node) offset() int32 {
-	k, off := chunkOf(n.self)
-	if k >= len(n.tree.offsets) || n.tree.offsets[k] == nil {
+	s := n.tree.source
+	if s == nil {
 		return 0
 	}
-	return n.tree.offsets[k][off]
+	k, off := chunkOf(n.self)
+	if k >= len(s.offsets) || s.offsets[k] == nil {
+		return 0
+	}
+	return s.offsets[k][off]
 }
 
 func (n *Node) setOffset(v int32) {
 	if v == 0 && n.offset() == 0 {
 		return
 	}
-	t := n.tree
+	s := n.tree.ownSource()
 	k, off := chunkOf(n.self)
-	for len(t.offsets) <= k {
-		t.offsets = append(t.offsets, nil)
+	for len(s.offsets) <= k {
+		s.offsets = append(s.offsets, nil)
 	}
-	if t.offsets[k] == nil {
-		t.offsets[k] = make([]int32, chunkLen(k))
+	if s.offsets[k] == nil {
+		s.offsets[k] = make([]int32, chunkLen(k))
 	}
-	t.offsets[k][off] = v
+	s.offsets[k][off] = v
 }
 
 // --- Text store ----------------------------------------------------------
