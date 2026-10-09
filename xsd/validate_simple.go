@@ -447,7 +447,9 @@ func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node) (string, 
 		// second, per-value fact is added here.
 		if at != nil {
 			if mn := annotationName(m); mn != "" {
-				at.UnionMember = mn
+				t := xdm.TypingOf(at)
+				t.UnionMember = mn
+				at.ApplyTyping(t)
 			}
 		}
 		return normalized, nil
