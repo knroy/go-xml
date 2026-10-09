@@ -805,6 +805,10 @@ func evalRemainingSteps(ctx *Context, cur xdm.Sequence, steps []Expr) (xdm.Seque
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if v, ok := namedParents(ctx, cur, steps, i); ok {
+			cur = v
+			continue
+		}
 		step := steps[i]
 		if d := fuseDescendant(steps, i); d != nil {
 			step = d

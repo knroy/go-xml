@@ -52,3 +52,14 @@ var (
 	SetHost       func(ctx any, h *Host)
 	WithFocusHost func(ctx any, item xdm.Item, pos, size int, h *Host) any
 )
+
+// StepMemoHost is implemented by a Host.Runtime that gives package xpath
+// somewhere to remember step walks over parsed trees for as long as the
+// runtime lives (see xpath's stepMemo). StepMemo returns what NewStepMemo
+// made for it. A host that implements it promises not to change a parsed
+// tree while that runtime evaluates.
+type StepMemoHost interface{ StepMemo() any }
+
+// NewStepMemo returns an empty memo for a StepMemoHost. Package xpath sets it
+// in its init.
+var NewStepMemo func() any
