@@ -140,7 +140,7 @@ func TestCyclicChainTerminatesXSLT(t *testing.T) {
 // legal-looking wrong number.
 func TestAccumulatorOriginDeepCopyChain(t *testing.T) {
 	for _, n := range []int{1, 2, 31, 32, 33, 63, 64, 65, 128, 256, 512} {
-		rt := &runtime{accumOrigin: map[*xdm.Node]*xdm.Node{}}
+		rt := &runtime{transformState: &transformState{accumOrigin: map[*xdm.Node]*xdm.Node{}}}
 
 		// nodes[0] is the original; nodes[i] is the i'th successive copy.
 		nodes := make([]*xdm.Node, n+1)
@@ -174,7 +174,7 @@ func TestAccumulatorOriginDeepCopyChain(t *testing.T) {
 // nominally the guard for the second; the visited set has to keep it.
 func TestAccumulatorOriginCyclicTerminates(t *testing.T) {
 	for _, n := range []int{1, 2, 65, 128} {
-		rt := &runtime{accumOrigin: map[*xdm.Node]*xdm.Node{}}
+		rt := &runtime{transformState: &transformState{accumOrigin: map[*xdm.Node]*xdm.Node{}}}
 		nodes := make([]*xdm.Node, n)
 		for i := range nodes {
 			nodes[i] = xdm.NewNode(xdm.KindElement, xdm.QName{}, "")
