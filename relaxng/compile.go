@@ -939,6 +939,7 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	// What the include overrides: the names it defines itself, and whether it
 	// replaces <start>.
 	overridden := map[string]bool{}
+	var overrides []string // overridden's names in document order
 	var overridesStart bool
 	var scanOverrides func(n *xdm.Node)
 	scanOverrides = func(n *xdm.Node) {
@@ -948,7 +949,11 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 			}
 			switch kid.Name.Local {
 			case "define":
-				overridden[normalizeToken(kid.AttrValue("name"))] = true
+				name := normalizeToken(kid.AttrValue("name"))
+				if !overridden[name] {
+					overrides = append(overrides, name)
+				}
+				overridden[name] = true
 			case "start":
 				overridesStart = true
 			case "div":
@@ -963,7 +968,7 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	// often a typo — and treating it as an addition would silently leave the
 	// definition the author meant to replace in force.
 	included := definedNames(root)
-	for name := range overridden {
+	for _, name := range overrides {
 		if !included[name] {
 			return fmt.Errorf(
 				"relaxng: <include href=%q> overrides %q, which it does not define",
