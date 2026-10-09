@@ -15,20 +15,29 @@ previous version of this file: `git show aefbd8a5:docs/profiling.md`.
 
 Warm time, go-xml over the reference engine (geometric mean). Each version is
 compared with the reference times from its own benchmark run
-([benchmark](benchmark.md)). The last column is the projection if the open
-fixes V1–V11 below land.
+([benchmark](benchmark.md)). "v2, pre-fix" is the run before the fix waves;
+"v2 now" is `377452c0`, after waves 1 and 2 (the fixes under
+[Landed](#landed-in-the-v2-fix-round)). The open fixes V17 and V20 are not
+projected.
 
-| Workload | Reference | v1 | v2 | Projected after V1–V11 |
+| Workload | Reference | v1 | v2, pre-fix | v2 now |
 |---|---|---:|---:|---:|
-| DocBook xslTNG | Saxon-HE | 0.46× | 0.37× | about 0.27× (with V4) |
-| DocBook `ptoc.001` | Saxon-HE | 1.49× | 1.17× | about 1.0× |
-| Peppol Schematron | Saxon-HE | 1.99× | 1.31× | about 1.24× |
-| XRechnung stage 1 | Saxon-HE | 3.00× | 1.77× | about 1.65× |
-| XRechnung stage 2 | Saxon-HE | 1.42× | 1.23× | about 1.0× |
-| XMark q1–q20 | Saxon-HE | 1.00× | 0.97× | not projected |
-| XSD catalogs | Xerces-J | 0.73× | 0.69× | not projected |
-| RELAX NG DocBook 5.2 | Jing | 0.60× | 0.75× | not projected |
-| Parse 1/10/100 MB | `encoding/xml` | 0.54× | 0.57× | not projected |
+| DocBook xslTNG | Saxon-HE | 0.46× | 0.37× | 0.24× |
+| DocBook `ptoc.001` | Saxon-HE | 1.49× | 1.17× | 0.98× |
+| Peppol Schematron | Saxon-HE | 1.99× | 1.31× | 1.22× |
+| XRechnung stage 1 | Saxon-HE | 3.00× | 1.77× | 1.46× |
+| XRechnung stage 2 | Saxon-HE | 1.42× | 1.23× | 0.75× |
+| XMark q1–q20 | Saxon-HE | 1.00× | 0.97× | 0.86× |
+| XSD catalogs | Xerces-J | 0.73× | 0.69× | 0.73× |
+| RELAX NG DocBook 5.2 | Jing | 0.60× | 0.75× | 0.91× |
+| Parse 1/10/100 MB | `encoding/xml` | 0.54× | 0.57× | 0.53× |
+
+The XSD and RELAX NG ratios follow the JVM validators more than go-xml.
+go-xml's geometric mean per document went 1.07 → 1.05 → 1.02 ms on XSD and
+26.8 → 28.4 → 27.6 µs on RELAX NG, while Xerces ran at 1.47, 1.53 and 1.39 ms
+and Jing at 44.5, 37.9 and 30.4 µs in the same three runs. XRechnung stage 2
+crosses 1× partly because Saxon's median there was 3.4 ms in the last run
+against 2.8 ms in the pre-fix one; go-xml's went 3.3 → 2.6 ms.
 
 On XSLT, most of the time left goes to the garbage collector and the
 allocator: 26–47% GC marking and 14–28% `mallocgc`, from Linux profiles. CPU

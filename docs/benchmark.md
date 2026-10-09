@@ -7,23 +7,26 @@ canonicalisation. Each comparison is timed only after the engines are shown to
 produce the same output.
 
 **The short version.** Cold, both versions finish first everywhere except
-small XSD validations, where xmllint's C start-up is 1.9× quicker; go-xml
-starts in milliseconds where a JVM takes 0.4–1 s. Warm, in a long-running
-process, v2 is faster than Saxon on DocBook (39 of 40 documents, against 36 of
-40 for v1), level with Saxon on XMark and 2.7× faster than BaseX, and faster
-than Xerces on XSD and Jing on RELAX NG, as v1 was. Saxon still leads on the
-Schematron-shaped e-invoice stylesheets, by 1.2× to 1.8× in v2, down from
-1.4× to 3.0× in v1. On large documents v2 needs a sixth to a third of v1's
-peak memory, and less than libxml2.
+small XSD validations, where xmllint's C start-up is quicker (1.9× against v1,
+1.6× against v2); go-xml starts in milliseconds where a JVM takes 0.4–1 s.
+Warm, in a long-running process, v2 is 4.2× faster than Saxon on DocBook and
+faster on all 40 documents (v1: 2.2×, 36 of 40), 0.86× Saxon on XMark and 3.0×
+faster than BaseX, and faster than Saxon on XRechnung stage 2 (0.75×), where v1
+was 1.4× slower. It is faster than Xerces on XSD and than Jing on RELAX NG, as
+v1 was. Saxon still leads on Peppol, by 1.22× (v1 1.99×), and on XRechnung
+stage 1, by 1.46× (v1 3.00×). On large documents v2 needs a sixth to a third
+of v1's peak memory, and less than libxml2.
 
 Measured on one machine with the same harness and engine builds, otherwise
 idle: v1 at `f45068c` (2026-10-08/09, after the round-3 and round-4 work in
-[profiling](profiling.md)), and v2 as the `v2` branch on 2026-10-09 (after
-the 40-byte node records, the split evaluation context and the allocation
-cuts; see [profiling](profiling.md#where-go-xml-stands)). The reference
-engines were re-run with each version, and every ratio uses the reference
-times from its own run. Earlier runs, at `eb14939` and `22f4b04`, are in this
-file's history.
+[profiling](profiling.md)), and v2 as the `v2` branch at `377452c0` on
+2026-10-09 (after the 40-byte node records, the split evaluation context, the
+allocation cuts, and fix waves 1 and 2; see
+[profiling](profiling.md#where-go-xml-stands)). The reference engines were
+re-run with each version, and every ratio uses the reference times from its
+own run. An earlier v2 run, before the two fix waves, is cited below as
+"pre-fix v2" where it explains a move; it and the earlier runs at `eb14939` and
+`22f4b04` are in this file's history.
 
 ## Contents
 
@@ -53,7 +56,7 @@ file's history.
 | Engine | Version | Used for |
 |---|---|---|
 | go-xml v1 | `f45068c` | everything |
-| go-xml v2 | the `v2` branch on 2026-10-09 | everything |
+| go-xml v2 | `377452c0` (the `v2` branch on 2026-10-09) | everything |
 | Saxon-HE | 12.10 | XSLT, XQuery |
 | BaseX | 12.4 | XQuery |
 | Jing | 20241231 | RELAX NG |
@@ -103,7 +106,8 @@ compares two engines that produced the same answer.
 run. Below 1 means go-xml is faster. Per-workload figures are the geometric
 mean over the items both engines agreed on, with the range across items.
 Absolute reference times in the tables below are from the v2 run; the v1 run's
-are within noise of them except where noted.
+are within noise of them except where noted (see
+[Reading these numbers](#reading-these-numbers)).
 
 **go-xml's flags** match what its own test runner uses for the same corpus
 (`-allow-doctype`, `-allow-unparsed-text`, `-allow-dir`). The library refuses
@@ -117,70 +121,84 @@ items.
 
 | Workload | Items timed | Reference | Cold, v1 | Cold, v2 | Warm, v1 | Warm, v2 |
 |---|---:|---|---:|---:|---:|---:|
-| DocBook xslTNG → XHTML5 | 40 / 42 | Saxon-HE | **0.09×** (12× faster) | **0.10×** (10× faster) | **0.46×** (2.2× faster) | **0.37×** (2.7× faster) |
-| Peppol BIS Schematron → SVRL | 18 / 18 | Saxon-HE | **0.04×** (25× faster) | **0.04×** (23× faster) | 1.99× slower | 1.31× slower |
-| XRechnung UBL → xr:invoice | 8 / 8 | Saxon-HE | **0.03×** (29× faster) | **0.03×** (32× faster) | 3.00× slower | 1.77× slower |
-| XRechnung xr:invoice → HTML | 8 / 8 | Saxon-HE | **0.03×** (37× faster) | **0.03×** (36× faster) | 1.42× slower | 1.23× slower |
-| XMark q1–q20, 1 and 11 MB | 40 / 40 | Saxon-HE | **0.07×** (14× faster) | **0.06×** (16× faster) | 1.00× (level) | 0.97× (level) |
-| XMark q1–q20, 1 and 11 MB | 40 / 40 | BaseX | **0.05×** (18× faster) | **0.05×** (21× faster) | **0.39×** (2.6× faster) | **0.37×** (2.7× faster) |
-| XSD 1.0/1.1 (catalog schemas) | 11 / 11 | Xerces-J | **0.05×** (18× faster) | **0.05×** (19× faster) | **0.73×** (1.4× faster) | **0.69×** (1.5× faster) |
-| XSD 1.0/1.1 (catalog schemas) | 11 / 11 | xmllint | 1.87× slower | 1.92× slower | — | — |
-| RELAX NG (DocBook 5.2) | 40 / 40 | Jing | **0.15×** (6.6× faster) | **0.15×** (6.8× faster) | **0.60×** | **0.75×** |
-| RELAX NG (DocBook 5.2) | 40 / 40 | xmllint | 0.96× (level) | 0.95× (level) | — | — |
-| Parse 1 / 10 / 100 MB | 3 / 3 | `encoding/xml` | **0.66×** | **0.60×** | **0.54×** | **0.57×** |
-| Parse 1 / 10 / 100 MB | 3 / 3 | xmllint | **0.66×** | **0.61×** | — | — |
-| Canonical XML 1 / 10 MB | 2 / 2 | xmllint | **0.72×** | **0.64×** | — | — |
+| DocBook xslTNG → XHTML5 | 40 / 42 | Saxon-HE | **0.09×** (12× faster) | **0.08×** (12× faster) | **0.46×** (2.2× faster) | **0.24×** (4.2× faster) |
+| Peppol BIS Schematron → SVRL | 18 / 18 | Saxon-HE | **0.04×** (25× faster) | **0.04×** (26× faster) | 1.99× slower | 1.22× slower |
+| XRechnung UBL → xr:invoice | 8 / 8 | Saxon-HE | **0.03×** (29× faster) | **0.03×** (39× faster) | 3.00× slower | 1.46× slower |
+| XRechnung xr:invoice → HTML | 8 / 8 | Saxon-HE | **0.03×** (37× faster) | **0.02×** (44× faster) | 1.42× slower | **0.75×** (1.3× faster) |
+| XMark q1–q20, 1 and 11 MB | 40 / 40 | Saxon-HE | **0.07×** (14× faster) | **0.06×** (18× faster) | 1.00× (level) | **0.86×** (1.2× faster) |
+| XMark q1–q20, 1 and 11 MB | 40 / 40 | BaseX | **0.05×** (18× faster) | **0.04×** (24× faster) | **0.39×** (2.6× faster) | **0.34×** (3.0× faster) |
+| XSD 1.0/1.1 (catalog schemas) | 11 / 11 | Xerces-J | **0.05×** (18× faster) | **0.04×** (24× faster) | **0.73×** (1.4× faster) | **0.73×** (1.4× faster) |
+| XSD 1.0/1.1 (catalog schemas) | 11 / 11 | xmllint | 1.87× slower | 1.55× slower | — | — |
+| RELAX NG (DocBook 5.2) | 40 / 40 | Jing | **0.15×** (6.6× faster) | **0.14×** (7.0× faster) | **0.60×** | 0.91× |
+| RELAX NG (DocBook 5.2) | 40 / 40 | xmllint | 0.96× (level) | 0.90× (level) | — | — |
+| Parse 1 / 10 / 100 MB | 3 / 3 | `encoding/xml` | **0.66×** | **0.54×** | **0.54×** | **0.53×** |
+| Parse 1 / 10 / 100 MB | 3 / 3 | xmllint | **0.66×** | **0.53×** | — | — |
+| Canonical XML 1 / 10 MB | 2 / 2 | xmllint | **0.72×** | **0.55×** | — | — |
 
 The parse and C14N cold figures come from a helper that runs as the CLI does
-(see [Reading these numbers](#reading-these-numbers)).
+(see [Reading these numbers](#reading-these-numbers)). The RELAX NG and XSD
+warm ratios depend on how fast the JVM validators ran in each run more than on
+go-xml (see [Schema validation](#schema-validation)).
 
 Compile time (warm mode, median per workload):
 
 | Workload | v1 | v2 | Reference |
 |---|---:|---:|---:|
-| DocBook xslTNG (`docbook.xsl` and its modules) | 55 ms | 77 ms | Saxon 924 ms |
-| Peppol Schematron (compiled XSLT 2.0; CEN and PEPPOL) | 23 ms | 24 ms | Saxon 574 ms |
-| XRechnung UBL → xr | 6.6 ms | 7.5 ms | Saxon 419 ms |
-| XRechnung xr → HTML | 7.8 ms | 7.3 ms | Saxon 429 ms |
-| XMark query | 1.0 ms | 0.9 ms | Saxon 222 ms, BaseX 226 ms |
-| XSD catalog schemas | 2.9 ms | 2.8 ms | Xerces 100 ms |
-| DocBook 5.2 RELAX NG (608 KB) | 25 ms | 24 ms | Jing 118 ms |
+| DocBook xslTNG (`docbook.xsl` and its modules) | 55 ms | 58 ms | Saxon 825 ms |
+| Peppol Schematron (compiled XSLT 2.0; CEN and PEPPOL) | 23 ms | 24 ms | Saxon 578 ms |
+| XRechnung UBL → xr | 6.6 ms | 7.0 ms | Saxon 420 ms |
+| XRechnung xr → HTML | 7.8 ms | 6.2 ms | Saxon 438 ms |
+| XMark query | 1.0 ms | 0.45 ms | Saxon 217 ms, BaseX 224 ms |
+| XSD catalog schemas | 2.9 ms | 2.6 ms | Xerces 100 ms |
+| DocBook 5.2 RELAX NG (608 KB) | 25 ms | 23 ms | Jing 107 ms |
 
 ### What changed from v1 to v2
 
+**DocBook warm.** 0.46× to 0.24× Saxon (pre-fix v2: 0.37×); the median
+document went from 13.0 to 6.4 ms. All four items v1 lost are now faster than
+Saxon; the slowest, `ptoc.001`, went from 1.49× to 0.98× (pre-fix v2: 1.17×).
+Most of the fix-wave gain is lazy globals (V4): DocBook runs several
+transforms per document with 300–950 globals each and evaluates few of them.
+
+**Schematron-shaped XSLT.** The split evaluation context, the allocation cuts
+and the fix waves took most of the per-assertion overhead out of the
+e-invoice stylesheets: Peppol went from 1.99× to 1.22× Saxon warm (pre-fix v2
+1.31×), XRechnung stage 1 from 3.00× to 1.46× (1.77×), stage 2 from 1.42× to
+0.75× (1.23×). Stage 2 is now faster than Saxon on all 8 invoices, partly
+because Saxon's own median was 3.4 ms in this run against 2.8 ms in the pre-fix
+run; go-xml's went from 4.3 ms (v1) and 3.3 ms (pre-fix) to 2.6 ms. Saxon still
+leads on Peppol and stage 1; [profiling](profiling.md#open-fixes) ranks what
+is left.
+
 **Memory.** v2 stores each node as a 40-byte record instead of a Go object
-per node. Peak RSS on the 100 MB parse fell from 2.2 GB to 376 MB, now below
-xmllint's 1.4 GB; XMark's median fell from 101 to 35 MB, and the transforms
-use 18–27% less. Cold parse got faster with it (0.66× to 0.60×
+per node. Peak RSS on the 100 MB parse fell from 2.2 GB to 371 MB, below
+xmllint's 1.4 GB; XMark's median fell from 101 to 29 MB, and the transforms
+use a third to two fifths less. Cold parse got faster with it (0.66× to 0.54×
 `encoding/xml`), because the smaller heap needs less memory mapped in.
 
-**Schematron-shaped XSLT.** The split evaluation context and the allocation
-cuts took most of the per-assertion overhead out of the e-invoice
-stylesheets: Peppol went from 1.99× to 1.31× Saxon warm, XRechnung stage 1
-from 3.00× to 1.77×, stage 2 from 1.42× to 1.23×. Saxon still leads on all
-three; [profiling](profiling.md#open-fixes) ranks what is left.
+**Two pre-fix regressions are gone:**
+- **DocBook compile** went from 55 ms in v1 to 77 ms in pre-fix v2, from
+  attribute lookups through the name table; it is 58 ms now (V7). DocBook cold
+  is 85 ms against v1's 89 ms (pre-fix v2: 104 ms).
+- **XMark q10** at 11 MB went from 94 ms in v1 to 122 ms in pre-fix v2,
+  because XQuery element content was copied twice per constructed node; it is
+  88 ms now (V1). XMark overall went from 1.00× to 0.86× Saxon, with 32 of 40
+  items faster than Saxon (v1: 9).
 
-**DocBook warm.** 0.46× to 0.37× Saxon. Three of the four items v1 lost
-(`epub.001`, `indexterm.001`, `chapter.003`) are now faster than Saxon;
-`ptoc.001` is the only one slower, at 1.17× (it was 1.49×).
+**Parse warm** went from 0.54× `encoding/xml` (v1) to 0.57× (pre-fix v2) to
+0.53×: the warm item also writes Canonical XML, and the C14N write buffer (V11)
+recovered what the record accessors had cost.
 
-**Three figures that moved the wrong way**, each explained in
-[profiling](profiling.md#the-three-apparent-regressions):
-- **DocBook compile, 55 to 77 ms.** Real. The stylesheet checks walk
-  ancestors for the version attribute, and each attribute lookup now goes
-  through the name table instead of reading a field. It is the main reason
-  DocBook cold went from 89 to 104 ms (0.09× to 0.10× Saxon).
-- **RELAX NG warm, 0.60× to 0.75× Jing.** Mostly Jing: the same Jing jar ran
-  15% faster in the v2 run. go-xml's own time is 6% higher overall (per
-  document set-up on small documents), and long documents are faster than
-  v1's.
-- **Parse warm, 0.54× to 0.57× `encoding/xml`.** Not the parse: the warm item
-  also writes Canonical XML, and that write is slower through the record
-  accessors. Parse alone is level with v1 in wall time and uses less CPU.
-
-**XMark** is level overall, with one query moving: q10 at 11 MB went from 94
-to 122 ms, because XQuery element content is copied twice per constructed
-node.
+**RELAX NG and XSD warm: the ratios moved toward 1, but go-xml got faster.**
+The JVM validators ran at different speeds in the three runs. Jing's warm
+geometric mean per document was 44.5 µs in the v1 run, 37.9 µs in the pre-fix
+v2 run and 30.4 µs in this one; Xerces's was 1.47, 1.53 and 1.39 ms. go-xml's
+RELAX NG time went from 26.8 µs per document in v1 to 28.4 µs in pre-fix v2
+and 27.6 µs now, so the ratio went from 0.60× to 0.91× Jing while go-xml
+itself moved 3%. On XSD go-xml went from 1.07 to 1.02 ms, and the ratio stayed
+at 0.73× Xerces. See
+[profiling](profiling.md#the-three-apparent-regressions) for the per-document
+set-up cost behind the small RELAX NG documents.
 
 ## XSLT: DocBook xslTNG
 
@@ -192,25 +210,25 @@ dates.
 
 | | v1 | v2 | Saxon-HE |
 |---|---:|---:|---:|
-| Cold, median over items | 89 ms | 104 ms | 1,091 ms |
-| Warm, median over items | 13.0 ms | 10.9 ms | 33.6 ms |
-| Compile | 55 ms | 77 ms | 924 ms |
-| Peak RSS, cold (median) | 84 MB | 62 MB | 246 MB |
+| Cold, median over items | 89 ms | 85 ms | 1,053 ms |
+| Warm, median over items | 13.0 ms | 6.4 ms | 32.2 ms |
+| Compile | 55 ms | 58 ms | 825 ms |
+| Peak RSS, cold (median) | 84 MB | 54 MB | 246 MB |
 
-Cold, both versions are faster on every item (v1 0.08× to 0.13×, v2 0.09× to
-0.13×). Warm, v1 is faster on 36 of 40 items (0.27× to 1.49×) and v2 on 39 of
-40 (0.18× to 1.17×). The items v1 lost are the large ones with index or
+Cold, both versions are faster on every item (v1 0.08× to 0.13×, v2 0.08× to
+0.11×). Warm, v1 is faster on 36 of 40 items (0.27× to 1.49×) and v2 on all
+40 (0.06× to 0.98×). The items v1 lost are the large ones with index or
 table-of-contents work:
 
 | Item | v1 warm | v2 warm | Saxon warm | Ratio, v1 | Ratio, v2 |
 |---|---:|---:|---:|---:|---:|
-| `table-html.001` | 7.9 ms | 5.4 ms | 29.6 ms | 0.27× | 0.18× |
-| `blocks.002` | 10.1 ms | 7.6 ms | 31.8 ms | 0.31× | 0.24× |
-| `book.001` | 31.3 ms | 24.7 ms | 41.2 ms | 0.76× | 0.60× |
-| `epub.001` | 46.1 ms | 34.4 ms | 40.8 ms | 1.13× | 0.84× |
-| `indexterm.001` | 63.6 ms | 50.7 ms | 51.3 ms | 1.24× | 0.99× |
-| `chapter.003` | 66.4 ms | 50.6 ms | 52.2 ms | 1.25× | 0.97× |
-| `ptoc.001` | 88.3 ms | 69.3 ms | 59.1 ms | 1.49× | 1.17× |
+| `table-html.001` | 7.9 ms | 1.6 ms | 28.1 ms | 0.27× | 0.06× |
+| `blocks.002` | 10.1 ms | 4.0 ms | 30.2 ms | 0.31× | 0.13× |
+| `book.001` | 31.3 ms | 18.3 ms | 39.2 ms | 0.76× | 0.47× |
+| `epub.001` | 46.1 ms | 28.6 ms | 39.0 ms | 1.13× | 0.73× |
+| `indexterm.001` | 63.6 ms | 40.6 ms | 49.7 ms | 1.24× | 0.82× |
+| `chapter.003` | 66.4 ms | 40.8 ms | 51.0 ms | 1.25× | 0.80× |
+| `ptoc.001` | 88.3 ms | 56.0 ms | 57.3 ms | 1.49× | 0.98× |
 
 ## XSLT: e-invoicing
 
@@ -220,25 +238,26 @@ produce SVRL.
 
 | | v1 | v2 | Saxon-HE |
 |---|---:|---:|---:|
-| Cold, median | 29 ms | 31 ms | 669 ms |
-| Warm, per invoice | 1.7–6.7 ms | 1.0–3.9 ms | 1.0–2.6 ms |
-| Warm, ratio by item | 1.66× to 2.61× | 1.01× to 1.51× | |
+| Cold, median | 29 ms | 28 ms | 675 ms |
+| Warm, per invoice | 1.7–6.7 ms | 0.9–3.7 ms | 0.9–2.6 ms |
+| Warm, ratio by item | 1.66× to 2.61× | 0.94× to 1.39× | |
 
 These stylesheets are hundreds of independent XPath assertions over one small
 document. That is the shape where Saxon's bytecode generation and JIT pay off
 most. Round 4 measured that interpreting the expressions is only 2–4% of
 go-xml's time here; the rest was allocation and collection, which is what v2's
-node and context changes cut
-([profiling](profiling.md#measured-and-rejected)).
+node and context changes and the two fix waves cut
+([profiling](profiling.md#measured-and-rejected)). v2 is faster than Saxon on
+one of the 18 invoices.
 
 **XRechnung, stage 1** (KoSIT `ubl-invoice-xr.xsl`, XSLT 2.0): UBL invoices from
 the KoSIT test suite to the intermediate `xr:invoice` XML.
 
 | | v1 | v2 | Saxon-HE |
 |---|---:|---:|---:|
-| Cold, median | 18 ms | 16 ms | 525 ms |
-| Warm, median | 6.2 ms | 3.6 ms | 2.1 ms |
-| Warm, ratio by item | 2.11× to 4.47× | 1.36× to 2.25× | |
+| Cold, median | 18 ms | 13 ms | 533 ms |
+| Warm, median | 6.2 ms | 3.1 ms | 2.1 ms |
+| Warm, ratio by item | 2.11× to 4.47× | 1.12× to 1.85× | |
 
 **XRechnung, stage 2** (`xrechnung-html.xsl`, XSLT 2.0): stage 1's output to
 HTML. All 8 items agree with Saxon in both runs (see
@@ -246,9 +265,12 @@ HTML. All 8 items agree with Saxon in both runs (see
 
 | | v1 | v2 | Saxon-HE |
 |---|---:|---:|---:|
-| Cold, median | 15 ms | 15 ms | 547 ms |
-| Warm, median | 4.3 ms | 3.3 ms | 2.8 ms |
-| Warm, ratio by item | 1.15× to 1.92× | 0.83× to 1.77× | |
+| Cold, median | 15 ms | 12 ms | 546 ms |
+| Warm, median | 4.3 ms | 2.6 ms | 3.4 ms |
+| Warm, ratio by item | 1.15× to 1.92× | 0.62× to 0.97× | |
+
+Saxon's stage 2 median was 2.9 ms in the v1 run and 3.4 ms in this one, so
+part of the move to 0.75× is Saxon's; go-xml's own median fell by 40%.
 
 ## XQuery: XMark
 
@@ -260,37 +282,38 @@ At factor 0.1 (milliseconds; Saxon and BaseX from the v2 run):
 
 | Query | v1 warm | v2 warm | Saxon warm | BaseX warm | v1 cold | v2 cold | Saxon cold | BaseX cold |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| q1 | 51 | 50 | 46 | 107 | 64 | 62 | 492 | 654 |
-| q2 | 53 | 52 | 45 | 89 | 67 | 63 | 511 | 633 |
-| q3 | 57 | 55 | 49 | 109 | 71 | 64 | 542 | 638 |
-| q4 | 55 | 52 | 58 | 90 | 68 | 61 | 486 | 663 |
-| q5 | 50 | 50 | 48 | 89 | 65 | 59 | 489 | 656 |
-| q6 | 60 | 52 | 47 | 105 | 72 | 61 | 497 | 650 |
-| q7 | 72 | 54 | 47 | 89 | 84 | 65 | 496 | 687 |
-| q8 | **58** | **55** | 217 | 1,192 | 71 | 67 | 919 | 651 |
-| q9 | **59** | **59** | 275 | 1,285 | 75 | 68 | 806 | 2,052 |
-| q10 | 94 | 122 | 84 | 253 | 113 | 129 | 533 | 671 |
-| q11 | **76** | **75** | 121 | 3,096 | 93 | 86 | 644 | 4,172 |
-| q12 | 75 | 73 | 72 | 805 | 91 | 82 | 509 | 1,297 |
-| q13 | 54 | 52 | 47 | 88 | 67 | 61 | 472 | 645 |
-| q14 | 61 | 55 | 50 | 92 | 78 | 65 | 536 | 661 |
-| q15 | 51 | 50 | 46 | 90 | 64 | 60 | 502 | 656 |
-| q16 | 52 | 50 | 46 | 89 | 65 | 59 | 532 | 661 |
-| q17 | 53 | 52 | 45 | 108 | 67 | 61 | 505 | 650 |
-| q18 | 53 | 54 | 47 | 108 | 67 | 61 | 510 | 663 |
-| q19 | 59 | 56 | 49 | 98 | 75 | 67 | 542 | 921 |
-| q20 | 55 | 53 | 47 | 93 | 68 | 63 | 442 | 601 |
+| q1 | 51 | 45 | 46 | 90 | 64 | 52 | 456 | 591 |
+| q2 | 53 | 46 | 45 | 87 | 67 | 56 | 472 | 626 |
+| q3 | 57 | 49 | 47 | 89 | 71 | 57 | 531 | 605 |
+| q4 | 55 | 47 | 47 | 90 | 68 | 55 | 512 | 628 |
+| q5 | 50 | 45 | 45 | 87 | 65 | 53 | 467 | 587 |
+| q6 | 60 | 45 | 46 | 87 | 72 | 53 | 415 | 565 |
+| q7 | 72 | 45 | 46 | 86 | 84 | 54 | 419 | 572 |
+| q8 | **58** | **50** | 222 | 1,180 | 71 | 59 | 651 | 604 |
+| q9 | **59** | **53** | 297 | 1,413 | 75 | 61 | 687 | 2,116 |
+| q10 | 94 | 88 | 86 | 252 | 113 | 98 | 533 | 673 |
+| q11 | **76** | **69** | 131 | 3,314 | 93 | 78 | 565 | 3,933 |
+| q12 | 75 | 68 | 78 | 710 | 91 | 77 | 507 | 1,267 |
+| q13 | 54 | 46 | 47 | 93 | 67 | 54 | 489 | 639 |
+| q14 | 61 | 49 | 51 | 93 | 78 | 58 | 503 | 582 |
+| q15 | 51 | 45 | 46 | 87 | 64 | 53 | 413 | 571 |
+| q16 | 52 | 45 | 47 | 88 | 65 | 54 | 465 | 572 |
+| q17 | 53 | 47 | 46 | 107 | 67 | 55 | 465 | 582 |
+| q18 | 53 | 47 | 47 | 107 | 67 | 55 | 433 | 576 |
+| q19 | 59 | 50 | 48 | 93 | 75 | 59 | 500 | 660 |
+| q20 | 55 | 48 | 47 | 109 | 68 | 56 | 515 | 644 |
 
 - **The value joins are go-xml's strongest queries.** q8, q9 and q11 are
-  0.19× to 0.64× Saxon's warm time in both versions and 21–43× faster than
-  BaseX. They run as hash or range joins
+  0.19× to 0.64× Saxon's warm time in v1 and 0.18× to 0.53× in v2, and 21–43×
+  (v1) and 24–48× (v2) faster than BaseX. They run as hash or range joins
   ([changelog](../CHANGELOG.md)).
-- **The rest are 1.0× to 1.5× Saxon warm in v1 and 0.9× to 1.45× in v2.** The
-  floor of about 50 ms on the 11 MB document is the parse, which every engine
-  repeats per run; Saxon's is about 45 ms. q10 is v2's one slower query
-  (see [What changed](#what-changed-from-v1-to-v2)).
-- **Cold, every query is faster than both JVMs**: 5× to 11× against Saxon in
-  v1, 4× to 14× in v2.
+- **The rest are 0.96× to 1.52× Saxon warm in v1 and 0.87× to 1.32× in v2.**
+  At 11 MB v2 is 0.87× to 1.06× on these queries. The floor of about 45 ms on
+  the 11 MB document is the parse, which every engine repeats per run; Saxon's
+  is about the same. q10 is v2's slowest query, 1.03× at 11 MB and 1.32× at
+  1 MB (see [What changed](#what-changed-from-v1-to-v2)).
+- **Cold, every query is faster than both JVMs**: 5× to 11× against Saxon at
+  11 MB, in both versions.
 
 ## Schema validation
 
@@ -301,17 +324,19 @@ in the test corpus. All three validators agree on every verdict.
 
 | | v1 | v2 | Xerces-J 1.1 | xmllint |
 |---|---:|---:|---:|---:|
-| Cold, median | 7.6 ms | 6.7 ms | 171 ms | 3.4 ms |
-| Warm, median | 0.58 ms | 0.66 ms | 0.97 ms | — |
-| Compile | 2.9 ms | 2.8 ms | 100 ms | — |
+| Cold, median | 7.6 ms | 5.5 ms | 174 ms | 3.4 ms |
+| Warm, median | 0.58 ms | 0.63 ms | 0.92 ms | — |
+| Warm, geometric mean | 1.07 ms | 1.02 ms | 1.39 ms | — |
+| Compile | 2.9 ms | 2.6 ms | 100 ms | — |
 
 Warm, v1 ranges from 0.28× Xerces (faster, on small instances) to 1.68×
-slower, and v2 from 0.25× to 1.64×; the slowest is the 2.5 MB `xp-striding`
-catalog (v1 18.8 ms, v2 18.2 ms, Xerces 11.1 ms). libxml2's C validator is
-1.4× to 2.2× faster than v1 cold and 1.5× to 2.3× faster than v2; about 3 ms
-of go-xml's cold time is process start
-([profiling](profiling.md#open-fixes)). xmllint implements XSD 1.0
-only.
+slower, and v2 from 0.24× to 1.64×; the slowest is the 2.5 MB `xp-striding`
+catalog (v1 18.8 ms, v2 17.8 ms, Xerces 10.8 ms). go-xml's geometric mean fell
+from 1.07 to 1.02 ms, but the ratio stayed at 0.73×, because Xerces ran at
+1.47 ms in the v1 run and 1.39 ms in this one. libxml2's C validator is 1.4×
+to 2.2× faster than v1 cold and 1.3× to 1.7× faster than v2; about 3 ms of
+go-xml's cold time is process start ([profiling](profiling.md#open-fixes)).
+xmllint implements XSD 1.0 only.
 
 **RELAX NG.** DocBook 5.2 (`docbook.rng`, 608 KB) over 40 DocBook test
 documents, all 40 timed. 5 are rejected by all three validators and are timed
@@ -320,15 +345,19 @@ does not define, and four carry unexpanded `xi:include` elements.
 
 | | v1 | v2 | Jing | xmllint |
 |---|---:|---:|---:|---:|
-| Cold, median | 27 ms | 27 ms | 182 ms | 28 ms |
-| Warm, median per document | 0.029 ms | 0.030 ms | 0.026 ms | — |
-| Compile | 25 ms | 24 ms | 118 ms | — |
+| Cold, median | 27 ms | 25 ms | 173 ms | 28 ms |
+| Warm, median per document | 0.029 ms | 0.030 ms | 0.023 ms | — |
+| Warm, geometric mean per document | 26.8 µs | 27.6 µs | 30.4 µs | — |
+| Compile | 25 ms | 23 ms | 107 ms | — |
 
-Cold time is the grammar compile, about a fifth of Jing's and level with
-xmllint overall. Validating once compiled takes about as long as Jing in both
-versions; Jing's own median was 0.034 ms in the v1 run. The per-item ratio
-(0.04× to 1.85× in v1, 0.05× to 1.99× in v2) is noise around very small
-numbers.
+Cold time is the grammar compile, about a seventh of Jing's; v2 is faster than
+xmllint on all 40 documents (0.90×). Validating once compiled takes about as
+long as Jing in both versions. **The warm ratio moved from 0.60× to 0.91× Jing
+although go-xml barely moved**: its geometric mean is 26.8 µs per document in
+v1 and 27.6 µs in v2 (28.4 µs in pre-fix v2), while the same Jing jar ran at
+44.5 µs in the v1 run, 37.9 µs in the pre-fix v2 run and 30.4 µs in this one.
+The per-item ratio (0.04× to 1.85× in v1, 0.06× to 2.62× in v2) is noise
+around very small numbers.
 
 ## Parsing and Canonical XML
 
@@ -339,23 +368,23 @@ null sink (`encoding/xml`).
 
 | Size | v1 cold | v2 cold | v1 warm | v2 warm | encoding/xml cold | encoding/xml warm | xmllint cold |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 MB | 17 ms | 15 ms | 8.5 ms | 9.3 ms | 24 ms | 16 ms | 21 ms |
-| 10 MB | 116 ms | 111 ms | 86 ms | 90 ms | 186 ms | 158 ms | 191 ms |
-| 100 MB | 1,127 ms | 1,018 ms | 880 ms | 891 ms | 1,776 ms | 1,578 ms | 1,901 ms |
+| 1 MB | 17 ms | 13 ms | 8.5 ms | 8.6 ms | 22 ms | 16 ms | 21 ms |
+| 10 MB | 116 ms | 94 ms | 86 ms | 84 ms | 179 ms | 157 ms | 192 ms |
+| 100 MB | 1,127 ms | 901 ms | 880 ms | 839 ms | 1,739 ms | 1,569 ms | 1,878 ms |
 
 In both modes go-xml builds a full XDM tree (node identity, document order,
 namespaces) and writes Canonical XML from it; warm runs write to a null sink.
-That gives about **90 MB/s (v1) and 100 MB/s (v2)** cold for parse plus C14N,
-and about 112 MB/s warm in both. `encoding/xml` reaches about 63 MB/s, but it
-only tokenises and re-emits and builds no tree. xmllint parses and writes C14N
-at about 53 MB/s.
+That gives about **90 MB/s (v1) and 110 MB/s (v2)** cold for parse plus C14N,
+and about 114 MB/s (v1) and 119 MB/s (v2) warm. `encoding/xml` reaches about
+64 MB/s warm, but it only tokenises and re-emits and builds no tree. xmllint
+parses and writes C14N at about 53 MB/s.
 
 The 100 MB document needs `MaxBytes: -1` (CLI `-max-bytes -1`). go-xml's
 default 64 MB document limit is a deliberate guard against untrusted input.
 
 Canonical XML (inclusive 1.0) of the 1 and 10 MB documents is faster than
-`xmllint --c14n` cold: v1 19 and 112 ms, v2 15 and 109 ms, against 21 and
-194 ms.
+`xmllint --c14n` cold: v1 19 and 112 ms, v2 12.5 and 97 ms, against 21 and
+193 ms.
 
 ## Memory
 
@@ -363,22 +392,22 @@ Peak RSS in cold runs (median / maximum over items):
 
 | Workload | v1 | v2 | Reference |
 |---|---:|---:|---:|
-| DocBook xslTNG | 84 / 147 MB | 62 / 95 MB | Saxon 246 / 293 MB |
-| Peppol | 41 / 56 MB | 30 / 36 MB | Saxon 171 / 192 MB |
-| XRechnung stage 1 | 32 / 38 MB | 24 / 28 MB | Saxon 129 / 138 MB |
-| XRechnung stage 2 | 28 / 32 MB | 23 / 24 MB | Saxon 135 / 140 MB |
-| XMark | 101 / 238 MB | 35 / 129 MB | Saxon 149 / 333 MB, BaseX 160 / 551 MB |
-| XSD | 17 / 50 MB | 14 / 29 MB | Xerces 74 / 95 MB, xmllint 3 / 19 MB |
-| RELAX NG DocBook | 38 / 39 MB | 26 / 26 MB | Jing 67 / 77 MB, xmllint 11 / 12 MB |
-| Parse 1 MB | 37 MB | 16 MB | encoding/xml 18 MB, xmllint 16 MB |
-| Parse 10 MB | 235 MB | **50 MB** | encoding/xml 35 MB, xmllint 142 MB |
-| Parse 100 MB | 2.2 GB | **376 MB** | encoding/xml 209 MB, xmllint 1.4 GB |
+| DocBook xslTNG | 84 / 147 MB | 54 / 85 MB | Saxon 246 / 286 MB |
+| Peppol | 41 / 56 MB | 26 / 31 MB | Saxon 174 / 204 MB |
+| XRechnung stage 1 | 32 / 38 MB | 19 / 22 MB | Saxon 127 / 140 MB |
+| XRechnung stage 2 | 28 / 32 MB | 19 / 19 MB | Saxon 135 / 140 MB |
+| XMark | 101 / 238 MB | 29 / 77 MB | Saxon 150 / 330 MB, BaseX 178 / 634 MB |
+| XSD | 17 / 50 MB | 10 / 24 MB | Xerces 77 / 100 MB, xmllint 4 / 19 MB |
+| RELAX NG DocBook | 38 / 39 MB | 21 / 22 MB | Jing 75 / 79 MB, xmllint 11 / 12 MB |
+| Parse 1 MB | 37 MB | 11 MB | encoding/xml 13 MB, xmllint 16 MB |
+| Parse 10 MB | 235 MB | **46 MB** | encoding/xml 30 MB, xmllint 142 MB |
+| Parse 100 MB | 2.2 GB | **371 MB** | encoding/xml 204 MB, xmllint 1.4 GB |
 
 For transforms v1 uses a fifth to two thirds of a JVM's memory, and v2 a
-sixth to a quarter. The CLI runs its collector at `GOGC=200` unless `GOGC` is
+seventh to a fifth. The CLI runs its collector at `GOGC=200` unless `GOGC` is
 set, which trades some peak memory for CPU. For large documents v1's tree
 cost about 23 bytes of RSS per byte of input, 1.6× libxml2's; v2's costs
-about 4, about a quarter of libxml2's. Only `encoding/xml`, which builds no
+under 4, about a quarter of libxml2's. Only `encoding/xml`, which builds no
 tree, uses less.
 
 ## Where the break-even is
@@ -390,18 +419,18 @@ go-xml's warm median less the reference's.
 
 | Workload | JVM fixed cost (v1 / v2 run) | Per-document gap, v1 | Per-document gap, v2 | Break-even, v1 | Break-even, v2 |
 |---|---:|---:|---:|---:|---:|
-| DocBook xslTNG | ~1.0 s | go-xml faster warm | go-xml faster warm | none | none |
-| XMark, simple queries (11 MB) | ~0.41 / 0.44 s | ~7.9 ms | ~4.8 ms | ~50 documents | ~90 documents |
-| XMark, value joins (11 MB) | ~0.67 / 0.74 s | go-xml faster warm | go-xml faster warm | none | none |
-| Peppol Schematron | ~0.67 / 0.64 s | ~1.0 ms | ~0.47 ms | ~650 documents | ~1,400 documents |
-| XRechnung stage 1 | ~0.53 / 0.51 s | ~4.1 ms | ~1.5 ms | ~130 documents | ~330 documents |
-| XRechnung stage 2 | ~0.54 / 0.53 s | ~1.4 ms | ~0.53 ms | ~390 documents | ~1,000 documents |
-| XSD catalogs | ~0.17 / 0.16 s | go-xml faster warm | go-xml faster warm | none | none |
+| DocBook xslTNG | ~0.99 / 0.97 s | go-xml faster warm | go-xml faster warm | none | none |
+| XMark, simple queries (11 MB) | ~0.41 / 0.42 s | ~7.9 ms | ~0.02 ms (level) | ~50 documents | none measurable |
+| XMark, value joins (11 MB) | ~0.67 / 0.59 s | go-xml faster warm | go-xml faster warm | none | none |
+| Peppol Schematron | ~0.67 / 0.65 s | ~1.0 ms | ~0.29 ms | ~650 documents | ~2,200 documents |
+| XRechnung stage 1 | ~0.53 / 0.52 s | ~4.1 ms | ~1.0 ms | ~130 documents | ~520 documents |
+| XRechnung stage 2 | ~0.54 / 0.53 s | ~1.4 ms | go-xml faster warm | ~390 documents | none |
+| XSD catalogs | ~0.17 / 0.17 s | go-xml faster warm | go-xml faster warm | none | none |
 
 Below these batch sizes per process, go-xml finishes first. Above them, a warm
 JVM does. These are estimates from medians, not measured crossovers; real
-documents vary. Part of XMark's move is the reference: Saxon's cold median
-was 15% higher in the v2 run.
+documents vary. On XMark's simple queries the medians differ by 0.02 ms per
+document, so neither engine pays the other back.
 
 ## What could not be measured
 
@@ -446,8 +475,8 @@ Fixed after the second run (`eb14939`), which made stage 2 comparable:
   with Saxon, once its `<!DOCTYPE HTML>` is stripped: the stylesheet gives no
   `html-version`, whose default XSLT 3.0 §26 leaves implementation-defined.
 
-The v1 and v2 runs agree and disagree on exactly the same items. The two
-differences left are not go-xml bugs:
+The v1 run and both v2 runs agree and disagree on exactly the same items.
+The two differences left are not go-xml bugs:
 
 - **DocBook `dates.001`:** the picture `At [h1]:[m01][P] on [F], …` gives
   `4:49pm on friday` in go-xml and `4:49p.m. on Friday` in Saxon. F&O 3.1
@@ -462,10 +491,13 @@ differences left are not go-xml bugs:
 ## Reading these numbers
 
 - **One machine, one run per version.** Laptop timings vary about ±10–15%
-  from run to run, and the reference engines did too between the two runs:
-  Jing ran 15% faster warm in the v2 run, and Saxon's XMark cold median was
-  15% slower. Ratios under about 1.3× are not meaningful, and neither is a
-  v1-to-v2 move of a few percent; the large ones are.
+  from run to run, and the reference engines did too between runs. Jing's
+  warm geometric mean was 44.5 µs in the v1 run, 37.9 µs in the pre-fix v2
+  run and 30.4 µs in this one; Xerces's was 1.47, 1.53 and 1.39 ms; Saxon's
+  XRechnung stage 2 median was 2.9, 2.8 and 3.4 ms. A ratio can move with no
+  change in go-xml, so read go-xml's absolute times beside it. Ratios under
+  about 1.3× are not meaningful, and neither is a v1-to-v2 move of a few
+  percent; the large ones are.
 - **Cold includes everything a caller pays.** That is process start, compile,
   input parse and output write. For the JVM engines most of it is the JVM.
   This is the number for a CLI or per-request process, not for a server.
