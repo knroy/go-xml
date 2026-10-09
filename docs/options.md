@@ -381,7 +381,8 @@ xsd.ValidateOptions{MaxDepth: 5000}    // and validate it
 
 `Annotate: true` writes to the tree. A compiled `*Schema` is safe to share
 across goroutines, but a *tree* being annotated is not — give each goroutine its
-own parse, or leave `Annotate` off.
+own parse, or leave `Annotate` off. With `Annotate` off, validation writes
+nothing to the tree, so one tree can be checked from several goroutines.
 
 `Schema.ValidateCopy(root, opts)` (and `ValidateCopyContext`) validates a copy
 of the whole tree instead and returns the copy's counterpart of `root`, typed
