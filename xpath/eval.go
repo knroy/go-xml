@@ -70,12 +70,20 @@ func (e *Step) evalFrom(ctx *Context, node *xdm.Node) (xdm.Sequence, error) {
 	var err error
 	principal := e.Axis.PrincipalKind()
 	var selected xdm.Sequence
-	walkAxis(node, e.Axis, func(n *xdm.Node) bool {
-		if e.Test.Matches(n, principal) {
-			selected = append(selected, n)
+	if nt, ok := e.Test.(*NameTest); ok && (e.Axis == AxisDescendant || e.Axis == AxisDescendantOrSelf) {
+		// The direct walk selects what walkAxis would, in the same order.
+		if e.Axis == AxisDescendantOrSelf && nt.Matches(node, principal) {
+			selected = append(selected, node)
 		}
-		return true
-	})
+		selected = appendNamedDescendants(selected, node, nt)
+	} else {
+		walkAxis(node, e.Axis, func(n *xdm.Node) bool {
+			if e.Test.Matches(n, principal) {
+				selected = append(selected, n)
+			}
+			return true
+		})
+	}
 
 	// Predicates apply in axis order, so a reverse axis numbers positions
 	// from the context node outwards.

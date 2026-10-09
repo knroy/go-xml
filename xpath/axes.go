@@ -145,6 +145,25 @@ func walkDescendants(n *xdm.Node, visit func(*xdm.Node) bool) bool {
 	return true
 }
 
+// appendNamedDescendants appends to out the element descendants of n that t
+// matches, in document order. It is walkDescendants with the name test
+// inlined, for the hot shape "//name": no closure or interface call per node.
+// Only elements have children, so it does not descend into any other kind.
+func appendNamedDescendants(out xdm.Sequence, n *xdm.Node, t *NameTest) xdm.Sequence {
+	for _, c := range n.Children {
+		if c.Kind != xdm.KindElement {
+			continue
+		}
+		if (t.AnyURI || c.Name.URI == t.Name.URI) && (t.AnyLocal || c.Name.Local == t.Name.Local) {
+			out = append(out, c)
+		}
+		if len(c.Children) > 0 {
+			out = appendNamedDescendants(out, c, t)
+		}
+	}
+	return out
+}
+
 // siblingsOf returns the parent's children and n's index within them.
 // Attributes have no siblings on the sibling axes, per the spec.
 func siblingsOf(n *xdm.Node) ([]*xdm.Node, int) {
