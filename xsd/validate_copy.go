@@ -3,6 +3,7 @@ package xsd
 import (
 	"context"
 
+	"github.com/knroy/go-xml/v2/internal/xdmclone"
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
@@ -60,13 +61,32 @@ func (s *Schema) typedCopy(ctx context.Context, root *xdm.Node, opts ValidateOpt
 	check func(*validator, *xdm.Node) error) (*xdm.Node, error) {
 	whole := root.Kind() == xdm.KindDocument || root.Parent() == nil ||
 		root.Parent().Kind() == xdm.KindDocument
-	c := copier{root: root, whole: whole, track: true}
-	c.copyTree(topOf(root))
 	v := s.newValidator(ctx, opts)
 	v.typed = true
-	v.twins = c.twins
-	err := check(v, c.twin)
-	return v.typedResult(c.twin, whole), err
+	// A whole tree is cloned in bulk, with its source positions, so a
+	// failure reports its line and column without a map back to the
+	// original. The ancestors-only copy is made node by node.
+	var twin *xdm.Node
+	top := topOf(root)
+	t := top.Tree()
+	positions := t != nil && t.Root == top && t.HasPositions()
+	if whole {
+		if m := xdmclone.Clone(top, xdmclone.Options{Positions: positions}); m != nil {
+			twin = m(root).(*xdm.Node)
+		}
+	}
+	if twin == nil {
+		c := copier{root: root, whole: whole, track: true}
+		c.copyTree(top)
+		twin, v.twins = c.twin, c.twins
+		positions = false
+	}
+	err := check(v, twin)
+	if positions {
+		// The per-node copy the result stands in for had no positions.
+		xdmclone.DropPositions(twin)
+	}
+	return v.typedResult(twin, whole), err
 }
 
 // typedResult builds the tree a typed copy returns from the validated working
@@ -81,6 +101,30 @@ func (v *validator) typedResult(twin *xdm.Node, whole bool) *xdm.Node {
 		top = topOf(twin)
 	} else if !edited && twin.Parent() == nil {
 		return twin
+	}
+	// The bulk clone renumbers records around dropped text and added
+	// attributes; added namespace declarations are left to the per-node copy.
+	if len(v.fixups) == 0 {
+		var o xdmclone.Options
+		if len(v.dropped) > 0 {
+			o.Drop = func(n any) bool { return v.dropped[n.(*xdm.Node)] }
+		}
+		if len(v.defaults) > 0 {
+			o.Add = func(n any) []any {
+				as := v.defaults[n.(*xdm.Node)]
+				if len(as) == 0 {
+					return nil
+				}
+				out := make([]any, len(as))
+				for i, a := range as {
+					out[i] = a
+				}
+				return out
+			}
+		}
+		if m := xdmclone.Clone(top, o); m != nil {
+			return m(twin).(*xdm.Node)
+		}
 	}
 	c := copier{v: v, root: twin, whole: true}
 	c.copyTree(top)

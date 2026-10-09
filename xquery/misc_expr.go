@@ -3,6 +3,7 @@ package xquery
 import (
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmclone"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xsd"
@@ -427,8 +428,13 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	// §3.21 validates a COPY: "the validate expression returns a new copy of
 	// its operand". The operand is copied on its own, parentless, so that the
 	// assessment sees it as the query does; the typed copy the schema layer
-	// returns from that is the result.
-	root = xdmbuild.DeepCopy(root)
+	// returns from that is the result. The copy is made in bulk where the
+	// operand allows, with what xdmbuild.DeepCopy would give it.
+	if m := xdmclone.Clone(root, xdmclone.Options{Detached: true}); m != nil {
+		root = m(root).(*xdm.Node)
+	} else {
+		root = xdmbuild.DeepCopy(root)
+	}
 
 	// A document node's validation root is its element child, and the
 	// document-level constraints — ID/IDREF among them — apply over the whole

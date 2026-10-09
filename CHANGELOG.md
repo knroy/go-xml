@@ -51,6 +51,8 @@ code before and after, and how to run the rewriter on your own module.
 | The smaller heap made the collector run 65–75% more often (CEN +32%, Peppol +19% CPU at `GOGC=100`) | Transform allocation cut: `current()` rebinding skipped, `Atomic` 112 → 48 B, runtime copy 352 → 176 B, `Context` 160 → 112 B, shared literal/boolean sequences, lent namespace lists. CEN −2%, Peppol −13%, DocBook −21% CPU against v1's layout. | 90d9a8b, afa3b59, f2e6fb1, 76a7f6a, 0462046, 2c5ea0b |
 | XQuery element content was copied twice per node, and every constructed element built three namespace maps | Content is copied once into the builder; the maps are skipped when nothing in scope declares a namespace. XMark q10 eval −38%, q13 −37%, q1–q20 allocations −13%. | `484cb4e8` |
 | The parser walked ancestors for every prefix and hashed every name into the intern map | No walk in a tree without declarations; a 64-entry cache in front of the map. Parse −2 to −3%, XMark parse phase −6%. | `7186eb0e` |
+| Typed validation made two per-node copies (2.5–3.4× v1's in-place annotation), and three callers copied the input first | `ValidateCopy` clones the record chunks in bulk for both copies; the pre-copies go where they change nothing. Catalog `ValidateCopy` −48% CPU; CLI `-validate strict` −31%, `xsl:source-document` −30%, XQuery `validate` −34%. | 18c35f6, b48adaf |
+| Plain `Validate` kept union-member typing that only assertions read | Kept only inside an element with assertions; text read once per node. Catalog `Validate` −4% CPU, 508 → 19 KB per pass. | e48af61 |
 
 ## v1.7.1 — 2026-10-09
 

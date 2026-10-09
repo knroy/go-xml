@@ -149,13 +149,7 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 	if i.validation.isDefault() {
 		return fragmentOf(rt.sheet.stripInputAnnotations(tree.Root), href)
 	}
-	copied := xdm.NewTree()
-	copied.Root.SetBaseURI(tree.Root.BaseURI())
-	for ch := range tree.Root.Children() {
-		copied.Root.AppendCopy(ch)
-	}
-	copied.Finalize()
-	root, err := i.validation.assess(rt, copied.Root)
+	root, err := i.validation.assessSource(rt, tree)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +213,37 @@ func fragmentOf(root *xdm.Node, href string) (*xdm.Node, error) {
 // conformance harness's preloaded sources already do.
 func (s validationSpec) isDefault() bool {
 	return s.typeName == nil && s.mode == validateStrip
+}
+
+// assessSource applies the validation to tree, a document the resolver
+// retrieved and may have cached, which must not change.
+//
+// The document assessed is a copy that has the original's nodes but none of
+// its document URI, DTD, XML version or positions. Strict validation against
+// an imported schema copies whatever it assesses, so there the original
+// stands in for that copy when it lacks those properties anyway, and the
+// two it may have are cleared from the typed result. Every other mode can
+// return or annotate the node it is given, and gets the copy.
+func (s validationSpec) assessSource(rt *runtime, tree *xdm.Tree) (*xdm.Node, error) {
+	if s.typeName == nil && s.mode == validateStrict && rt.sheet.schema != nil &&
+		tree.DocType == "" && !tree.HasPositions() {
+		root, err := s.assess(rt, tree.Root)
+		if err != nil {
+			return nil, err
+		}
+		if t := root.Tree(); t != nil && t != tree {
+			root.SetDocumentURI("")
+			t.XMLVersion = ""
+		}
+		return root, nil
+	}
+	copied := xdm.NewTree()
+	copied.Root.SetBaseURI(tree.Root.BaseURI())
+	for ch := range tree.Root.Children() {
+		copied.Root.AppendCopy(ch)
+	}
+	copied.Finalize()
+	return s.assess(rt, copied.Root)
 }
 
 // validSourceDocumentURI rejects an @href that is not a usable URI reference,

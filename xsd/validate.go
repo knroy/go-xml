@@ -319,8 +319,14 @@ type validator struct {
 
 	// typing holds, when typed is off, the typing facts the run would
 	// otherwise have written onto a node (a union's winning member, dm:nilled),
-	// so that an assertion's copy of the node still sees them.
+	// so that an assertion's copy of the node still sees them. Only facts
+	// about nodes inside an element with assertions are kept.
 	typing map[*xdm.Node]xdm.Typing
+
+	// assertScopes counts the elements on the current path whose type
+	// carries assertions, as icScopes does for identity constraints: an
+	// assertion reads typing only inside its own element.
+	assertScopes int
 
 	// The structural edits of a typed copy. The copy is a built tree and is
 	// never edited, so the assessment records them, every check that would
@@ -956,13 +962,19 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 		v.complexTyped[el] = true
 	}
 
-	v.validateAttributes(el, t)
-
 	// XSD 1.1 assertions are checked after the content, because an
 	// assertion is a co-constraint over content that has to exist first.
-	if v.schema.Version == Version11 {
-		defer v.checkAssertions(el, t)
+	// The scope opens before the attributes, whose typing the assertion's
+	// copy reads too.
+	if v.schema.Version == Version11 && len(t.Assertions) > 0 {
+		v.assertScopes++
+		defer func() {
+			v.checkAssertions(el, t)
+			v.assertScopes--
+		}()
 	}
+
+	v.validateAttributes(el, t)
 
 	switch t.Content {
 	case ContentEmpty:
@@ -1095,19 +1107,23 @@ func nonSpaceText(el *xdm.Node) string { return nonSpaceTextSeen(el, new(string)
 // succeeds on the pointer without reading a byte.
 func nonSpaceTextSeen(el *xdm.Node, seen *string) string {
 	for c := range el.Children() {
-		if c.Kind() != xdm.KindText || c.Value() == *seen {
+		if c.Kind() != xdm.KindText {
+			continue
+		}
+		s := c.Value()
+		if s == *seen {
 			continue
 		}
 		// Most element-only content is whitespace only: look for a
 		// non-space byte before paying for the trim.
-		for i := 0; i < len(c.Value()); i++ {
-			switch c.Value()[i] {
+		for i := 0; i < len(s); i++ {
+			switch s[i] {
 			case ' ', '\t', '\n', '\r':
 				continue
 			}
-			return strings.Trim(c.Value(), " \t\n\r")
+			return strings.Trim(s, " \t\n\r")
 		}
-		*seen = c.Value()
+		*seen = s
 	}
 	return ""
 }
@@ -2302,6 +2318,11 @@ func (v *validator) typingOf(n *xdm.Node) xdm.Typing {
 func (v *validator) setTyping(n *xdm.Node, t xdm.Typing) {
 	if v.typed {
 		n.ApplyTyping(t)
+		return
+	}
+	if v.assertScopes == 0 {
+		// Only an assertion's copy reads v.typing, and n is in the
+		// subtree of none.
 		return
 	}
 	if v.typing == nil {

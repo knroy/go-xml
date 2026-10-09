@@ -1029,13 +1029,7 @@ func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
 	if s.validation.isDefault() {
 		return tree.Root, nil
 	}
-	copied := xdm.NewTree()
-	copied.Root.SetBaseURI(tree.Root.BaseURI())
-	for ch := range tree.Root.Children() {
-		copied.Root.AppendCopy(ch)
-	}
-	copied.Finalize()
-	root, err := s.validation.assess(rt, copied.Root)
+	root, err := s.validation.assessSource(rt, tree)
 	if err != nil {
 		return nil, err
 	}
