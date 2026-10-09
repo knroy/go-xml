@@ -20,6 +20,10 @@ import (
 // runtime context. That is what makes a compiled EN 16931 rule set — tens of
 // megabytes — shareable rather than per-worker.
 type Stylesheet struct {
+	// rtLib is the runtime function library, built once by runtimeLibrary.
+	rtLib     *xpath.Library
+	rtLibOnce sync.Once
+
 	// templates are the match templates, pre-sorted by descending priority so
 	// that selection is a linear scan that stops at the first match.
 	templates []*Template

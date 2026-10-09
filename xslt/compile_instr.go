@@ -1591,6 +1591,10 @@ type restrictedLibrary struct {
 	sheet      *Stylesheet
 }
 
+// WrappedLibrary implements xpathleaf.StableLibrary: the answers depend only
+// on inner and the stylesheet's own functions, which are fixed after Compile.
+func (r restrictedLibrary) WrappedLibrary() any { return r.inner }
+
 func (r restrictedLibrary) Lookup(name xdm.QName, arity int) (xpath.Function, bool) {
 	if name.URI == xdm.NSFN && xsltOnlyFunctions[name.Local] {
 		return xpath.Function{}, false

@@ -16,6 +16,9 @@ type Library struct {
 	// Parent is consulted when a name is not found locally, so a stylesheet's
 	// own functions can shadow and extend the builtins without copying them.
 	Parent FunctionLibrary
+	// gen counts Add calls, so a call site's cached resolution through this
+	// library is never reused after it changes; see FuncCall.resolve.
+	gen uint64
 }
 
 // NewLibrary returns an empty library chained to parent.
@@ -63,6 +66,7 @@ func (l *Library) Declares(name xdm.QName, arity int) bool {
 
 // Add registers a function.
 func (l *Library) Add(f Function) {
+	l.gen++
 	l.fns[libKey(f.Name, f.Arity)] = f
 }
 

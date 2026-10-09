@@ -787,24 +787,12 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		return rt.deferredError(c, name)
 	}
 
-	// The key() and current() functions need the runtime, so they are bound
-	// per transform rather than living in the shared builtin library.
-	lib := xpath.NewLibrary(s.funcs)
-	registerRuntimeFuncs(lib, rt)
-	registerOutputFuncs(lib)
-	// The grouping, merge and position accessors go in here too, rather than
-	// after the globals are bound, because a global may hold a *reference* to
-	// one: for-each-group-078 writes `<xsl:variable name="f"
-	// select="current-group#0"/>`, and a named function reference resolves
-	// against the library in force where it is written. Registered later,
-	// that was XPST0017 for a function this engine has. They read their state
-	// through variable bindings that no global has yet, so one *called* from
-	// a global still reports the XTDE1061 it should.
-	registerGroupingFuncs(lib)
-	registerMergeFuncs(lib)
-	registerFormatNumber(lib, s)
-	registerPositionFuncs(lib)
-	rt.ctx.Funcs = packageScopedLibrary{inner: lib, sheet: s}
+	// The key() and current() functions need the runtime, so they live in a
+	// library of their own rather than the shared builtin one. It is built
+	// once per stylesheet: the functions find the transform through the
+	// context (rtFor), so every transform shares it and a call site's cached
+	// resolution survives from one transform to the next.
+	rt.ctx.Funcs = packageScopedLibrary{inner: s.runtimeLibrary(), sheet: s}
 
 	// Global variables are evaluated in dependency order rather than
 	// declaration order. Section 9.5 puts no ordering constraint on
@@ -832,6 +820,34 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// is what lets the set body be evaluated in that scope.
 	rt.globalCtx = rt.ctx
 	return rt, nil
+}
+
+// runtimeLibrary is the stylesheet's runtime function library, built on first
+// use.
+func (s *Stylesheet) runtimeLibrary() *xpath.Library {
+	s.rtLibOnce.Do(func() {
+		lib := xpath.NewLibrary(s.funcs)
+		// The functions that need a transform find it through the context;
+		// this runtime answers only the static resolvers, which read nothing
+		// but the stylesheet.
+		registerRuntimeFuncs(lib, &runtime{sheet: s})
+		registerOutputFuncs(lib)
+		// The grouping, merge and position accessors go in here too, rather
+		// than after the globals are bound, because a global may hold a
+		// *reference* to one: for-each-group-078 writes `<xsl:variable
+		// name="f" select="current-group#0"/>`, and a named function
+		// reference resolves against the library in force where it is
+		// written. Registered later, that was XPST0017 for a function this
+		// engine has. They read their state through variable bindings that no
+		// global has yet, so one *called* from a global still reports the
+		// XTDE1061 it should.
+		registerGroupingFuncs(lib)
+		registerMergeFuncs(lib)
+		registerFormatNumber(lib, s)
+		registerPositionFuncs(lib)
+		s.rtLib = lib
+	})
+	return s.rtLib
 }
 
 // evalGlobals binds every global variable, resolving dependencies on demand.

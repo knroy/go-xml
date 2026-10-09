@@ -49,11 +49,61 @@ func runtimeFrom(ctx *xpath.Context) (*runtime, bool) {
 	return &n, true
 }
 
-// runtimeFuncNames lists the functions bound per transform rather than at
-// compile time, by registerRuntimeFuncs and registerGroupingFuncs together.
+// rtFor is the transform a runtime-library function runs under: the runtime
+// the context carries, which is the one the per-transform closures used to
+// capture. A function item made from one of these functions carries its
+// transform along (see hostBoundFuncs).
+func rtFor(ctx *xpath.Context) (*runtime, error) {
+	if seq, ok := ctx.LookupVar(runtimeVar); ok && len(seq) > 0 {
+		if o, ok := seq[0].(*xdm.Opaque); ok {
+			if rt, ok := o.Value.(*runtime); ok {
+				return rt, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("XPDY0002: an XSLT function was called outside a transform")
+}
+
+// hostBoundFuncs are the runtime-library functions whose answer depends on
+// the transform, not only on the stylesheet and the context.
+//
+// When each transform built its own library they closed over their runtime,
+// so a function item made from one -- key#2, a partial application of
+// accumulator-before -- kept answering for the transform it was made in even
+// when called from another: from a nested fn:transform it was passed to, or
+// back in the outer transform it was returned to. They read the runtime from
+// the context now, so xpathleaf.BindHost hands such an item the runtime in
+// force where it was made.
+var hostBoundFuncs = map[string]bool{
+	"key":                true,
+	"accumulator-before": true,
+	"accumulator-after":  true,
+	"copy-of":            true,
+	"snapshot":           true,
+	"transform":          true,
+}
+
+func init() {
+	xpathleaf.BindHost = func(c any, name xdm.QName) func(any) any {
+		if name.URI != xdm.NSFN || !hostBoundFuncs[name.Local] {
+			return nil
+		}
+		seq, ok := c.(*xpath.Context).LookupVar(runtimeVar)
+		if !ok {
+			return nil
+		}
+		return func(call any) any {
+			return call.(*xpath.Context).WithVar(runtimeVar, seq)
+		}
+	}
+}
+
+// runtimeFuncNames lists the functions of the runtime library rather than the
+// compile-time one, bound by registerRuntimeFuncs and registerGroupingFuncs
+// together.
 //
 // These are absent from the stylesheet's compile-time library because each one
-// closes over a *runtime that does not exist until a transform starts. A
+// needs a running transform. A
 // static check that resolves function names against that library must still
 // treat them as declared, or it would reject key() and current() — which is
 // exactly where they are most often written.
@@ -98,21 +148,29 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 	// fn:copy-of and fn:snapshot need no transform state either, but they are
 	// bound here for the same reason: they are XSLT's, not XPath's, and a
 	// bare xpath.Eval caller has no business seeing them. See copyfuncs.go.
-	registerCopyFuncs(l, rt)
+	registerCopyFuncs(l)
 
 	// fn:transform needs an XSLT processor, which is why xpath registers a
 	// stub that declines and this overrides it. See fntransform.go.
-	registerTransformFunc(l, rt)
+	registerTransformFunc(l)
 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "key"}, Arity: 2,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			rt, err := rtFor(ctx)
+			if err != nil {
+				return nil, err
+			}
 			return fnKey(rt, ctx, args)
 		},
 	})
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "key"}, Arity: 3,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			rt, err := rtFor(ctx)
+			if err != nil {
+				return nil, err
+			}
 			return fnKey(rt, ctx, args)
 		},
 	})
@@ -124,6 +182,10 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 		// compiles as XPath 3.1, which is what the gate tests.
 		Since: xpath.XPath31,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			rt, err := rtFor(ctx)
+			if err != nil {
+				return nil, err
+			}
 			return fnAccumulator(rt, ctx, args, false)
 		},
 	})
@@ -131,6 +193,10 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 		Name: xdm.QName{URI: xdm.NSFN, Local: "accumulator-after"}, Arity: 1,
 		Since: xpath.XPath31,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			rt, err := rtFor(ctx)
+			if err != nil {
+				return nil, err
+			}
 			return fnAccumulator(rt, ctx, args, true)
 		},
 	})

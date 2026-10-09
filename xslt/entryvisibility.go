@@ -360,6 +360,11 @@ type packageScopedLibrary struct {
 	sheet *Stylesheet
 }
 
+// WrappedLibrary implements xpathleaf.StableLibrary: the answers depend only
+// on inner, the stylesheet (immutable after Compile) and the calling package,
+// which rides on Context.StaticHost.
+func (p packageScopedLibrary) WrappedLibrary() any { return p.inner }
+
 func (p packageScopedLibrary) Lookup(name xdm.QName, arity int) (xpath.Function, bool) {
 	return p.inner.Lookup(name, arity)
 }

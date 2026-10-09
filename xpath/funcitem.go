@@ -3,6 +3,7 @@ package xpath
 import (
 	"fmt"
 
+	"github.com/knroy/go-xml/internal/xpathleaf"
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -43,7 +44,7 @@ func (e *NamedFunctionRef) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, fmt.Errorf("XPST0017: unknown function %s with %d argument(s)",
 			e.Name.Clark(), e.Arity)
 	}
-	item := functionItemFor(e.Name, e.Arity, fn.Call)
+	item := functionItemFor(e.Name, e.Arity, hostBoundCall(ctx, fn))
 	item.Signature = fn.Signature
 	item.VariadicSignature = fn.VariadicSignature
 	// A named function reference to a context-dependent function retains the
@@ -168,6 +169,23 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			}
 		}
 		return inner(p, args)
+	}
+}
+
+// hostBoundCall is fn.Call for a function item made from fn at ctx: wrapped,
+// if the host asks, to run under the host state in force at ctx rather than at
+// the call. See xpathleaf.BindHost.
+func hostBoundCall(ctx *Context, fn Function) func(*Context, []xdm.Sequence) (xdm.Sequence, error) {
+	if xpathleaf.BindHost == nil {
+		return fn.Call
+	}
+	restore := xpathleaf.BindHost(ctx, fn.Name)
+	if restore == nil {
+		return fn.Call
+	}
+	call := fn.Call
+	return func(c *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		return call(restore(c).(*Context), args)
 	}
 }
 
