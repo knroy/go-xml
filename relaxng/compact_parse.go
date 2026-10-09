@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/knroy/go-xml/v2/xdm"
-	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // The compact syntax parser.
@@ -226,15 +225,15 @@ var takesAnnotation = func() map[string]bool {
 // annotation is dropped there rather than change what the schema says. Every
 // other element takes it, <ref> and <empty> included, because §5.2 removes
 // foreign elements before the content model is judged.
-func (p *compactParser) attachDoc(n *xdm.Node, doc *annotation) {
-	if doc == nil || !takesAnnotation[n.Name().Local] {
+func (p *compactParser) attachDoc(n *cnode, doc *annotation) {
+	if doc == nil || !takesAnnotation[n.name.Local] {
 		return
 	}
-	a := xdmbuild.NewElement(xdm.QName{URI: compatibilityNS, Prefix: "a", Local: "documentation"})
+	a := &cnode{name: xdm.QName{URI: compatibilityNS, Prefix: "a", Local: "documentation"}}
 	p.b.text(a, doc.doc)
 	// The annotation goes first: the compatibility spec places it before the
 	// content it documents, and a <define>'s pattern children must stay in
 	// their own order relative to one another.
-	xdmbuild.PrependChild(n, a)
-	n.AddNamespace("a", compatibilityNS)
+	n.prepend(a)
+	n.addNS("a", compatibilityNS)
 }
