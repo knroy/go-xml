@@ -902,12 +902,12 @@ func (p *staticPhase) valueTemplate(el *xdm.Node, src string) (string, error) {
 // functions alike, so there is nothing for the zero values to withhold that
 // the specification does not already withhold.
 func (p *staticPhase) staticRuntime() *runtime {
-	rt := &runtime{
+	rt := &runtime{transformState: &transformState{
 		static: true,
 		opts:   &TransformOptions{},
 		sheet:  p.c.sheet,
 		goCtx:  context.Background(),
-	}
+	}}
 	// Only a ModuleResolver that is also a DocumentResolver can answer
 	// stylesheet-location, which is the same pairing eval already requires
 	// for fn:doc, and for the same reason: FileResolver is both, and a

@@ -266,7 +266,16 @@ func argNodeOrContext(ctx *Context, args []xdm.Sequence, i int) (*xdm.Node, erro
 	return n, nil
 }
 
-func boolSeq(v bool) xdm.Sequence   { return xdm.One(boolItem(v)) }
+// boolSeq returns one of two shared sequences: a sequence is never written
+// once returned, as a variable reference's stored value is not.
+func boolSeq(v bool) xdm.Sequence {
+	if v {
+		return trueSeq
+	}
+	return falseSeq
+}
+
+var trueSeq, falseSeq = xdm.One(trueItem), xdm.One(falseItem)
 
 // trueItem and falseItem are the two xs:boolean values, shared by every
 // evaluation: atomic values are never written once built.

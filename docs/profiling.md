@@ -11,7 +11,8 @@ T11–T16, T18, T19 and the correctness bugs B1–B4 have since landed; see
 [Implementation status](#implementation-status). A second round re-profiled
 the result and its fixes have landed as well; see
 [Round 2](#round-2-after-the-fixes-73a2963); [Round 3](#round-3-after-the-round-2-fixes-3fc468a)
-ranks what is left. Profiling ran on the same
+ranks what is left. On v2, [the allocation section](#v2-allocation-after-the-node-records-299b8f0)
+covers the collector cost of the smaller heap. Profiling ran on the same
 machine as the benchmark, with five profiles running at once, so wall times
 are noisy (±2×). The claims rest on allocation counts, which are
 deterministic, on profile shares, and on A/B runs done back to back. Each
@@ -683,6 +684,80 @@ Not landed:
 
 Phase 2.3 (positional access through helpers) moves to the v2 branch, where
 the fields go away anyway.
+
+## v2: allocation after the node records (`299b8f0`)
+
+The 40-byte node records halved the live heap (CEN 18 → 11 MB, Peppol 8 → 4
+MB in the warm loop). At `GOGC=100` the collector starts a cycle each time the
+heap grows by the live size, so the same allocation volume ran 65–75% more
+cycles, and on a 12-core machine every cycle also runs idle mark workers on
+the free cores. The transform code itself got faster; the CPU went to the
+collector. The lever is allocation volume. Six cuts, each measured A/B against
+the commit before it (allocations exact, getrusage CPU alternated, outputs of
+all five workloads byte-identical):
+
+| Change | Commit | Measured (against the previous commit) |
+|---|---|---|
+| Rebinding `current()` to the node it already holds returns the context; template dispatch sets the context on `withSelection`'s copy instead of copying the runtime again | `90d9a8b` | bytes CEN −11.5%, Peppol −11.7%; CPU −9%, −9.5% |
+| `xdm.Atomic` 112 → 48 B: QName, duration, date/time and the schema annotation move to an `atomicExt` only those values allocate; a boolean lives in `num` | `afa3b59` | bytes CEN −6.2%, Peppol −12.1%, DocBook −6.1%; CPU −3%, −7%, −5% |
+| The XSLT runtime copied per focus, variable and selection change 352 → 176 B: what is set once per transform moves to a shared `transformState` embedded by pointer | `f2e6fb1` | bytes CEN −8.0%, Peppol −7.8%, DocBook −16.7%; CPU −4%, −5%, −11% |
+| `xpath.Context` 160 → 112 B: `WithVar`'s binding moves behind a pointer, allocated with the scope `WithVar` makes | `76a7f6a` | bytes CEN −6.9%, Peppol −4.2%, DocBook −7.2%; CPU −4%, −3%, −4% |
+| Literals keep their one-item sequence from parse time; `boolSeq` returns one of two shared sequences (a returned sequence is never written: a variable reference hands out its stored one) | `0462046` | allocations CEN −10.4%, Peppol −3.5%, DocBook −3.1%; CPU −2%, −4%, −3% |
+| A literal result element lends the namespaces it notes for XTDE0430 (built once per stylesheet); `xdmbuild.Builder.NoteDeclaredList` copies only before rewriting an entry | `2c5ea0b` | bytes CEN −7.3%, Peppol −4.7%; CPU −5%, −2% |
+
+Warm loop, getrusage CPU per item (median of 5 alternated runs; DocBook is
+the five-item sum per pass, XMark one pass of q1–q20 at 0.1), macOS on the
+M3 Pro, 12 cores:
+
+| Workload | `GOGC` | `40aa76c` (v1 layout) | `299b8f0` (records) | `2c5ea0b` | GC cycles (same order) | KB per item (same order) |
+|---|---:|---:|---:|---:|---|---|
+| CEN | 100 | 4.47 ms | 5.88 ms | **4.36 ms** | 74 / 129 / 83 | 3,174 / 3,147 / 2,026 |
+| CEN | 200 | 3.13 ms | 3.86 ms | **3.11 ms** | 33 / 56 / 36 | |
+| Peppol | 100 | 4.14 ms | 4.91 ms | **3.62 ms** | 354 / 619 / 408 | 3,331 / 3,342 / 2,167 |
+| Peppol | 200 | 2.70 ms | 3.13 ms | **2.45 ms** | 159 / 271 / 178 | |
+| XRechnung stage 1 | 100 | 8.16 ms | 7.73 ms | **6.57 ms** | 220 / 316 / 244 | 8,311 / 7,590 / 5,864 |
+| XRechnung stage 1 | 200 | 5.83 ms | 5.76 ms | **5.13 ms** | 99 / 140 / 108 | |
+| DocBook | 100 | 500 ms | 531 ms | **397 ms** | 29 / 42 / 27 | 453 / 400 / 267 MB |
+| DocBook | 200 | 341 ms | 359 ms | **288 ms** | 13 / 19 / 13 | |
+| XMark 0.1 | 100 | 251 ms | 260 ms | 256 ms | 3 / 18 / 17 | 274 / 296 / 282 MB |
+| XMark 0.1 | 200 | 202 ms | 220 ms | 213 ms | 1 / 8 / 7 | |
+
+CEN and Peppol are back at or below `40aa76c` at `GOGC=100`, which was the
+release condition for v2; CEN's margin is small (−2.5%, run minima 4.24 vs
+4.40 ms). XMark is still 2–5% above: its queries build few contexts, and
+what it allocates is the parse and the result values.
+
+The same binaries cross-compiled for linux/arm64, run in a `golang:1.26`
+container under Docker Desktop with `--cpus 4` on the same machine (a VM, so
+read the figures as an upper bound; see round 4's *Linux*):
+
+| Workload | `GOGC` | `40aa76c` | `299b8f0` | `2c5ea0b` |
+|---|---:|---:|---:|---:|
+| CEN | 100 | 4.02 ms | 5.04 ms | **3.95 ms** |
+| CEN | 200 | 2.85 ms | 3.59 ms | 2.93 ms |
+| Peppol | 100 | 3.41 ms | 4.11 ms | **3.26 ms** |
+| Peppol | 200 | 2.46 ms | 3.17 ms | 2.41 ms |
+| XRechnung stage 1 | 100 | 7.72 ms | 7.63 ms | 6.92 ms |
+| DocBook | 100 | 440 ms | 464 ms | 350 ms |
+| XMark 0.1 | 100 | 262 ms | 246 ms | 247 ms |
+
+On Linux too CEN and Peppol are at or below `40aa76c` at `GOGC=100`; CEN at
+200 is within the VM's noise (+3%, run minima 2.87 vs 2.78 ms).
+
+Left, ranked by CEN bytes at `2c5ea0b` (429 MB over 23 passes):
+- The runtime copies of `withSelection` and `withCurrent` (9.5%). Holding
+  `sel` (64 B) by pointer would make the other copies 112 B.
+- `Compiled.scope` (7.7%) copies the context on every top-level XSLT
+  evaluation: the runtime's context has version 2.0, no static host and no
+  namespaces, while every expression carries its own. Giving the runtime's
+  context the stylesheet's common static part would skip the copy for
+  expressions that do not read their namespaces (`nsNeeded`), at the cost of
+  what `StaticNamespaces` reports to them.
+- `WithFocus` per predicate item and step (7.9%).
+- Temporary trees: `NewFragment` (4.4%, a `Tree` is ~370 B and CEN builds
+  ~250 per invoice) and their first chunks (`Tree.alloc`, 6%). The
+  parse-only fields could move behind a pointer.
+- `FuncCall.Eval`'s argument slice (4%), round 4's pooled-argument idea.
 
 ## Correctness bugs found while profiling
 

@@ -8,6 +8,9 @@ import (
 
 // Eval implements Expr for literals.
 func (e *Literal) Eval(*Context) (xdm.Sequence, error) {
+	if len(e.seq) == 1 && e.seq[0] == xdm.Item(e.Val) {
+		return e.seq, nil
+	}
 	return xdm.One(e.Val), nil
 }
 

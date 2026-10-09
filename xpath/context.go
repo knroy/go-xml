@@ -45,13 +45,12 @@ type Context struct {
 	// Lookups walk to Parent, so a nested scope does not copy the map.
 	Vars   map[string]xdm.Sequence
 	Parent *Context
-	// varURI, varLocal and varVal are the one binding WithVar adds, held
-	// inline rather than in a one-entry Vars map: that map was the largest
-	// allocation site in every stylesheet profiled. A scope holds the inline
-	// pair when varLocal is non-empty (a variable name always has a local
-	// part), and it is consulted before Vars at the same level.
-	varURI, varLocal string
-	varVal           xdm.Sequence
+	// bind is the one binding WithVar adds, held here rather than in a
+	// one-entry Vars map: that map was the largest allocation site in every
+	// stylesheet profiled. It is consulted before Vars at the same level. It
+	// is a pointer, allocated with the scope WithVar makes, so the copies
+	// every focus change and evaluation make do not carry its 56 B.
+	bind *varBinding
 	// Funcs resolves function calls. Supplied by the caller so that XSLT can
 	// add xsl:function declarations and extension functions without this
 	// package knowing about them.
@@ -843,8 +842,8 @@ func NewContext(item xdm.Item, funcs FunctionLibrary, configure ...func(e *Env))
 //
 // The copy itself does allocate — it is the largest single allocation site in
 // the engine, around a quarter of what a stylesheet render allocates (counted
-// when the copy was 512 bytes; it is 160 since the environment and the static
-// part moved behind pointers). Reusing
+// when the copy was 512 bytes; it is 112 since the environment, the static
+// part and the WithVar binding moved behind pointers). Reusing
 // one context across a step loop was measured and made no difference at all
 // (4,963,596 vs 4,964,187 bytes per render), so it was reverted: WithVar
 // builds children holding a pointer back to this context, and the aliasing
@@ -863,15 +862,29 @@ func (c *Context) WithFocus(item xdm.Item, pos, size int) *Context {
 // the body may capture it; mutation would make all iterations observe the last
 // value.
 func (c *Context) WithVar(name xdm.QName, val xdm.Sequence) *Context {
-	n := *c
+	// The scope and its binding in one allocation.
+	s := &struct {
+		n Context
+		b varBinding
+	}{n: *c}
+	n := &s.n
 	n.Vars = nil
-	n.varURI, n.varLocal, n.varVal = name.URI, name.Local, val
 	if name.Local == "" { // not a variable name, but keep it resolvable
 		n.Vars = map[string]xdm.Sequence{name.Clark(): val}
-		n.varURI, n.varVal = "", nil
+		n.bind = nil
+	} else {
+		s.b = varBinding{uri: name.URI, local: name.Local, val: val}
+		n.bind = &s.b
 	}
 	n.Parent = c
-	return &n
+	return n
+}
+
+// varBinding is the binding a scope made by WithVar adds. Never written once
+// the scope is published.
+type varBinding struct {
+	uri, local string
+	val        xdm.Sequence
 }
 
 // QualifyVar, when set, is consulted before a variable reference is resolved
@@ -902,8 +915,8 @@ func (c *Context) LookupVar(name xdm.QName) (xdm.Sequence, bool) {
 func (c *Context) lookupVarPlain(name xdm.QName) (xdm.Sequence, bool) {
 	key, keyed := "", false
 	for s := c; s != nil; s = s.Parent {
-		if s.varLocal != "" && s.varLocal == name.Local && s.varURI == name.URI {
-			return s.varVal, true
+		if b := s.bind; b != nil && b.local == name.Local && b.uri == name.URI {
+			return b.val, true
 		}
 		if len(s.Vars) == 0 {
 			continue

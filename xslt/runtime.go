@@ -18,6 +18,101 @@ import (
 // mutable — the variable stack, the key index, the recursion depth — lives
 // here, and the Stylesheet itself is read-only.
 type runtime struct {
+	// transformState is what every runtime of one transform shares. Only
+	// the fields below it are copied on a focus, variable or selection
+	// change, which happens per instruction.
+	*transformState
+
+	ctx *xpath.Context
+
+	// absent records which groups of context components clearMergeContext,
+	// withoutGroupingScope and clearRegexGroups have already bound to absent
+	// in ctx, so that the clears every template and function call runs can
+	// return rt unchanged instead of copying the runtime and the context
+	// three times each. withVar drops a group's bit whenever one of its
+	// variables is rebound, and the zero value claims nothing: code that
+	// gives a runtime a context not derived from its own must zero it.
+	absent uint8
+
+	// deferredErr holds the failure of a global whose evaluation is not by
+	// itself the transform's failure -- an abstract variable, whose body
+	// raises XTDE3052. The error is kept against the name so that a
+	// reference to it raises what the reference deserves, and a transform
+	// that never mentions the name raises nothing. See evalGlobals.
+	deferredErr []deferredGlobal
+
+	// globalCtx is the context as it stood once the global variables were
+	// bound, holding those and nothing local. xsl:attribute-set bodies are
+	// evaluated against it; see the comment where it is set.
+	globalCtx *xpath.Context
+
+	// globalActive names the global variables whose initialiser is currently
+	// being evaluated, by declared local name.
+	//
+	// A global is not in scope within its own binding, so a reference to one
+	// from inside its own evaluation resolves to nothing and is reported as
+	// XPST0008. That is the right answer for a reference written in the
+	// variable's own select expression, but not for one reached indirectly:
+	// error-0640e's key match pattern reads $p while $p's initialiser is
+	// building that very key's index, which is a circularity -- XTDE0640 --
+	// rather than an undeclared name. Pattern matching recovers from an
+	// ordinary error, so without knowing which names are mid-evaluation the
+	// cycle was swallowed and the transform ran to completion.
+	globalActive map[string]bool
+
+	// blocking holds the elements whose body is running under
+	// inherit-namespaces="no". blockNamespaceInheritance reads each child's
+	// own namespace nodes when the body ends, so a child built inside one of
+	// these must keep the bindings it would otherwise leave to its parent;
+	// see parentSupplies. Shared with derived runtimes like treeAccums.
+	blocking map[*xdm.Node]bool
+
+	// depth bounds apply-templates recursion, which the spec does not bound
+	// and which a stylesheet with a cycle would otherwise run forever.
+	depth int
+
+	// temporary marks that the runtime is building a temporary tree — the
+	// content of a variable, a function's body, or a grouping key — rather
+	// than a final result tree.
+	//
+	// It exists for XTDE1480: xsl:result-document may not be evaluated in
+	// temporary output state, because there is no final result tree for it
+	// to be a sibling of. The flag is on the runtime rather than the output
+	// builder because the state is inherited by everything the constructor
+	// calls, however deeply.
+	temporary bool
+
+	// readDocs is the set of absolute URIs the transformation has read, for
+	// XTDE1500. A pointer for the same reason secondary and baseURIUsed are:
+	// the runtime is copied on every focus change, and a document read in one
+	// template must be visible to an xsl:result-document in another.
+	readDocs *map[string]bool
+
+	// writtenDocs is the set of absolute URIs xsl:result-document has
+	// written, the twin of readDocs. XTDE1500 is order-independent -- the
+	// spec says "write to an external resource and read from the same
+	// resource during a single transformation" -- so the read side needs the
+	// writes recorded just as the write side needs the reads. A pointer for
+	// the same reason readDocs is: the runtime is copied on every focus
+	// change, and a document written inside one template has to be visible
+	// to a doc() evaluated anywhere else.
+	writtenDocs *map[string]bool
+
+	// tunnel holds tunnel parameters, which pass through templates that do
+	// not declare them.
+	tunnel map[string]xdm.Sequence
+
+	// sel records how the currently-executing template was selected, so that
+	// xsl:next-match and xsl:apply-imports in its body can resume the search
+	// where it left off rather than starting over and picking the same
+	// template forever.
+	sel selection
+}
+
+// transformState holds the fields of a runtime that are set once, when the
+// transform starts, and shared by every runtime derived from it; the maps
+// and pointers among them are written through, never replaced.
+type transformState struct {
 	sheet *Stylesheet
 
 	// goCtx is the caller's context.Context, kept so that a nested transform
@@ -51,50 +146,15 @@ type runtime struct {
 	// so the promise is only kept by evaluating once and reusing. Keyed by
 	// functionCallKey; see apply.go.
 	funcResults map[string]xdm.Sequence
+
 	// itemIDs numbers the nodes and function items functionCallKey keys by
 	// identity; see identityNumber.
 	itemIDs map[any]int
-	ctx     *xpath.Context
-
-	// absent records which groups of context components clearMergeContext,
-	// withoutGroupingScope and clearRegexGroups have already bound to absent
-	// in ctx, so that the clears every template and function call runs can
-	// return rt unchanged instead of copying the runtime and the context
-	// three times each. withVar drops a group's bit whenever one of its
-	// variables is rebound, and the zero value claims nothing: code that
-	// gives a runtime a context not derived from its own must zero it.
-	absent uint8
-
-	// deferredErr holds the failure of a global whose evaluation is not by
-	// itself the transform's failure -- an abstract variable, whose body
-	// raises XTDE3052. The error is kept against the name so that a
-	// reference to it raises what the reference deserves, and a transform
-	// that never mentions the name raises nothing. See evalGlobals.
-	deferredErr []deferredGlobal
-
-	// globalCtx is the context as it stood once the global variables were
-	// bound, holding those and nothing local. xsl:attribute-set bodies are
-	// evaluated against it; see the comment where it is set.
-	globalCtx *xpath.Context
 
 	// keyIndex caches xsl:key lookups per document. Building an index is a
 	// full document scan, so it is done once per (key, document) pair on
 	// first use rather than eagerly for every declared key.
 	keyIndex map[keyCacheKey]map[string]xdm.Sequence
-
-	// globalActive names the global variables whose initialiser is currently
-	// being evaluated, by declared local name.
-	//
-	// A global is not in scope within its own binding, so a reference to one
-	// from inside its own evaluation resolves to nothing and is reported as
-	// XPST0008. That is the right answer for a reference written in the
-	// variable's own select expression, but not for one reached indirectly:
-	// error-0640e's key match pattern reads $p while $p's initialiser is
-	// building that very key's index, which is a circularity -- XTDE0640 --
-	// rather than an undeclared name. Pattern matching recovers from an
-	// ordinary error, so without knowing which names are mid-evaluation the
-	// cycle was swallowed and the transform ran to completion.
-	globalActive map[string]bool
 
 	// keyBuilding marks the (key, document) pairs whose index is currently
 	// being built. keyIndex is only written once a build has *finished*, so
@@ -118,8 +178,10 @@ type runtime struct {
 	// allowed to read values the walk has already recorded (§18.2.4: an
 	// end-phase rule may read the pre-descent value of its own node), and
 	// only a value not yet recorded is circular.
-	accumValues   map[accumCacheKey]*accumulatorValues
+	accumValues map[accumCacheKey]*accumulatorValues
+
 	accumBuilding map[accumCacheKey]*accumulatorValues
+
 	// accumOrigin maps a node produced by a copy-accumulators="yes" copy to
 	// the node it was copied from, which is the only thing that can say what
 	// an accumulator's value at the copy should be. It is a map on the
@@ -138,34 +200,13 @@ type runtime struct {
 	// restricted for the whole of the action that reads it.
 	treeAccums map[*xdm.Node]*modeAccumulators
 
-	// blocking holds the elements whose body is running under
-	// inherit-namespaces="no". blockNamespaceInheritance reads each child's
-	// own namespace nodes when the body ends, so a child built inside one of
-	// these must keep the bindings it would otherwise leave to its parent;
-	// see parentSupplies. Shared with derived runtimes like treeAccums.
-	blocking map[*xdm.Node]bool
-
 	// streamedTrees records the roots that xsl:source-document was asked to
 	// read in streamed mode, which XTDE3362 bars a non-streamable accumulator
 	// from being read over.
 	streamedTrees map[*xdm.Node]bool
 
-	// depth bounds apply-templates recursion, which the spec does not bound
-	// and which a stylesheet with a cycle would otherwise run forever.
-	depth int
 	// maxDepth is the ceiling depth may reach, from TransformOptions.
 	maxDepth int
-
-	// temporary marks that the runtime is building a temporary tree — the
-	// content of a variable, a function's body, or a grouping key — rather
-	// than a final result tree.
-	//
-	// It exists for XTDE1480: xsl:result-document may not be evaluated in
-	// temporary output state, because there is no final result tree for it
-	// to be a sibling of. The flag is on the runtime rather than the output
-	// builder because the state is inherited by everything the constructor
-	// calls, however deeply.
-	temporary bool
 
 	// baseOutputURI is TransformOptions.BaseOutputURI, kept for resolving a
 	// relative xsl:result-document/@href and for the value
@@ -186,21 +227,6 @@ type runtime struct {
 	// reason secondary is: the runtime is copied on every focus change.
 	baseURIUsed *bool
 
-	// readDocs is the set of absolute URIs the transformation has read, for
-	// XTDE1500. A pointer for the same reason secondary and baseURIUsed are:
-	// the runtime is copied on every focus change, and a document read in one
-	// template must be visible to an xsl:result-document in another.
-	readDocs *map[string]bool
-	// writtenDocs is the set of absolute URIs xsl:result-document has
-	// written, the twin of readDocs. XTDE1500 is order-independent -- the
-	// spec says "write to an external resource and read from the same
-	// resource during a single transformation" -- so the read side needs the
-	// writes recorded just as the write side needs the reads. A pointer for
-	// the same reason readDocs is: the runtime is copied on every focus
-	// change, and a document written inside one template has to be visible
-	// to a doc() evaluated anywhere else.
-	writtenDocs *map[string]bool
-
 	// messages collects xsl:message output rather than writing to stderr.
 	//
 	// It is a pointer to a slice because the runtime struct is copied on
@@ -212,16 +238,6 @@ type runtime struct {
 	// warnings collects the recoverable-condition warnings xsl:mode asks for,
 	// and is a pointer for the same reason messages is.
 	warnings *[]string
-
-	// tunnel holds tunnel parameters, which pass through templates that do
-	// not declare them.
-	tunnel map[string]xdm.Sequence
-
-	// sel records how the currently-executing template was selected, so that
-	// xsl:next-match and xsl:apply-imports in its body can resume the search
-	// where it left off rather than starting over and picking the same
-	// template forever.
-	sel selection
 }
 
 // selection is the template-selection state of the enclosing apply-templates.
@@ -667,32 +683,34 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		maxDepth = DefaultMaxDepth
 	}
 	rt := &runtime{
-		sheet: s,
+		transformState: &transformState{
+			sheet:       s,
+			maxDepth:    maxDepth,
+			keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
+			keyBuilding: map[keyCacheKey]bool{},
+			steps:       xpathleaf.NewStepMemo(),
+
+			accumValues:   map[accumCacheKey]*accumulatorValues{},
+			accumBuilding: map[accumCacheKey]*accumulatorValues{},
+			accumOrigin:   map[*xdm.Node]*xdm.Node{},
+			treeAccums:    map[*xdm.Node]*modeAccumulators{},
+			streamedTrees: map[*xdm.Node]bool{},
+			funcResults:   map[string]xdm.Sequence{},
+			itemIDs:       map[any]int{},
+			messages:      new([]string),
+			warnings:      new([]string),
+			secondary:     new([]SecondaryResult),
+			baseURIUsed:   new(bool),
+			baseOutputURI: opts.BaseOutputURI,
+			opts:          &opts,
+			goCtx:         ctx,
+		},
 		// A transform started by fn:transform continues its caller's
 		// recursion count rather than restarting at zero; see
 		// TransformOptions.nestedDepth for why the budget is inherited.
-		depth:       opts.nestedDepth,
-		maxDepth:    maxDepth,
-		keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
-		keyBuilding: map[keyCacheKey]bool{},
-		steps:       xpathleaf.NewStepMemo(),
-
-		accumValues:   map[accumCacheKey]*accumulatorValues{},
-		accumBuilding: map[accumCacheKey]*accumulatorValues{},
-		accumOrigin:   map[*xdm.Node]*xdm.Node{},
-		treeAccums:    map[*xdm.Node]*modeAccumulators{},
-		blocking:      map[*xdm.Node]bool{},
-		streamedTrees: map[*xdm.Node]bool{},
-		tunnel:        map[string]xdm.Sequence{},
-		funcResults:   map[string]xdm.Sequence{},
-		itemIDs:       map[any]int{},
-		messages:      new([]string),
-		warnings:      new([]string),
-		secondary:     new([]SecondaryResult),
-		baseURIUsed:   new(bool),
-		baseOutputURI: opts.BaseOutputURI,
-		opts:          &opts,
-		goCtx:         ctx,
+		depth:    opts.nestedDepth,
+		blocking: map[*xdm.Node]bool{},
+		tunnel:   map[string]xdm.Sequence{},
 	}
 
 	// A transform started from a named template has no source document, and
@@ -863,7 +881,7 @@ func (s *Stylesheet) runtimeLibrary() *xpath.Library {
 		// The functions that need a transform find it through the context;
 		// this runtime answers only the static resolvers, which read nothing
 		// but the stylesheet.
-		registerRuntimeFuncs(lib, &runtime{sheet: s})
+		registerRuntimeFuncs(lib, &runtime{transformState: &transformState{sheet: s}})
 		registerOutputFuncs(lib)
 		// The grouping, merge and position accessors go in here too, rather
 		// than after the globals are bound, because a global may hold a

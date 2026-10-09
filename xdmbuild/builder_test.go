@@ -182,3 +182,23 @@ func TestNewRequiresAPolicy(t *testing.T) {
 	}()
 	xdmbuild.New(nil)
 }
+
+// A list lent by NoteDeclaredList is shared by every element a literal result
+// element builds, so rebinding a prefix on one element must not write it.
+func TestNoteDeclaredListIsNotWritten(t *testing.T) {
+	list := []xdmbuild.NSDecl{{Prefix: "a", URI: "u1"}, {Prefix: "b", URI: "u2"}}
+	sub := xdmbuild.New(xsltLike{}).StartElement(xdm.QName{Local: "e"})
+	sub.NoteDeclaredList(list)
+	sub.NoteDeclared("a", "u3")
+	if err := sub.AddOwnNameNamespace("b", "u2"); err != nil {
+		t.Fatal(err)
+	}
+	if list[0].URI != "u1" || list[1].URI != "u2" || len(list) != 2 {
+		t.Fatalf("lent list was written: %v", list)
+	}
+	// The element itself sees its own rebinding: binding a to u3 again is no
+	// conflict, binding it to u1 is.
+	if err := sub.AddNamespace("a", "u1"); err == nil {
+		t.Fatal("rebinding a to u1 after noting u3: want a conflict")
+	}
+}

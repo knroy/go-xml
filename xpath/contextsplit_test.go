@@ -9,10 +9,11 @@ import (
 
 // The per-scope part is what every step, predicate and binding copies, so its
 // size is the cost of a scope change. It was 512 bytes when the environment and
-// the static properties lived in it too.
+// the static properties lived in it too, and 160 while WithVar's binding was
+// inline.
 func TestContextPerScopePartStaysSmall(t *testing.T) {
-	if n := unsafe.Sizeof(Context{}); n > 160 {
-		t.Errorf("Context is %d bytes, want at most 160: a field added here is "+
+	if n := unsafe.Sizeof(Context{}); n > 112 {
+		t.Errorf("Context is %d bytes, want at most 112: a field added here is "+
 			"copied on every scope change; per-evaluation state belongs in Env", n)
 	}
 }

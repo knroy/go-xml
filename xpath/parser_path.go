@@ -790,11 +790,11 @@ func (p *Parser) parsePrimary() (Expr, error) {
 	switch t.Kind {
 	case TokNumber:
 		p.pos++
-		return &Literal{Val: numericLiteral(t)}, nil
+		return newLiteral(numericLiteral(t)), nil
 
 	case TokString:
 		p.pos++
-		return &Literal{Val: xdm.NewString(t.Val)}, nil
+		return newLiteral(xdm.NewString(t.Val)), nil
 
 	case TokVar:
 		p.pos++
