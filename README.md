@@ -447,8 +447,15 @@ The CLI does not link `net/http`: `HTTPResolver` lives in its own package,
 
 The CLI is built with profile-guided optimisation from the committed
 `cmd/go-xml/default.pgo` (regenerate it with `tests/pgo.sh`), which `go build`
-and `go install` use automatically: 2–3% less CPU per run. A program embedding
-the library gains only from a profile of its own in its main package.
+and `go install` use automatically: on v2, 1–6% less CPU in a warm loop and
+1–2% per cold run. A program embedding the library gains only from a profile
+of its own in its main package.
+
+The CLI runs with Go's allocation sampling off (`runtime.MemProfileRate` 0).
+It does not link `runtime/pprof`, so the Go linker turns the sampling off; a
+build that links it (a `-cpuprofile` flag, `net/http/pprof`) would pay up to
+10% more CPU on the DocBook stylesheets, whose deep recursion makes sampling
+expensive.
 
 `go-xml xquery` runs an XQuery main module. The optional input document is
 the context item; the result is serialized with the query's own
