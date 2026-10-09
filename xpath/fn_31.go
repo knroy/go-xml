@@ -101,7 +101,7 @@ func registerDefaultLanguage(l *Library) {
 // xquery package registers when it is initialised; see processors.go. A
 // program that imports xquery -- a blank import is enough, and the go-xml
 // command does -- has the function in XPath, XQuery and XSLT alike, reading
-// modules only through Context.Modules.
+// modules only through Env.Modules.
 //
 // A program that does not import xquery has no processor, and FOQM0006 is
 // the code the specification defines for exactly that: "No XQuery processor

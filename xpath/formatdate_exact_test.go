@@ -16,7 +16,7 @@ import (
 func formatWithPlace(t *testing.T, expr string) string {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	seq, err := Eval(expr, ctx, nil)
 	if err != nil {
 		t.Fatalf("Eval(%s): %v", expr, err)
@@ -201,7 +201,7 @@ func TestSplitSecondPrecondition(t *testing.T) {
 
 	t.Run("arithmetic and adjustment", func(t *testing.T) {
 		ctx := NewContext(nil, Builtins())
-		ctx.Version = XPath31
+		ctx = ctx.WithVersion(XPath31)
 		cases := []struct{ expr, want string }{
 			// Carrying forward over a minute boundary.
 			{`seconds-from-dateTime(xs:dateTime("2020-01-01T00:00:30.75Z") + xs:dayTimeDuration("PT29.5S"))`, "0.25"},
@@ -237,7 +237,7 @@ func TestSplitSecondPrecondition(t *testing.T) {
 // altering only the rendered seconds.
 func TestFormatDateTimeSecondsComponent(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	cases := []struct{ expr, want string }{
 		{`format-dateTime(xs:dateTime("2020-01-01T10:20:30.125Z"), "[s01].[f001]")`, "30.125"},
 		{`format-dateTime(xs:dateTime("2020-01-01T10:20:00.5Z"), "[s01].[f001]")`, "00.500"},

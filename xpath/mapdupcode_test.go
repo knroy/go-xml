@@ -6,7 +6,7 @@ import (
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
-// Context.MapDuplicateCode selects the error code for a duplicate key in a map
+// Env.MapDuplicateCode selects the error code for a duplicate key in a map
 // constructor, and defaults to XQuery's.
 //
 // The code is the host language's rather than XPath's: XQuery 3.1 section
@@ -29,7 +29,7 @@ func TestMapConstructorDuplicateKeyCode(t *testing.T) {
 				t.Fatalf("compile: %v", err)
 			}
 			ctx := NewContext(nil, nil)
-			ctx.MapDuplicateCode = tc.override
+			ctx = ctx.WithEnv(func(e *Env) { e.MapDuplicateCode = tc.override })
 			if _, err := c.Eval(ctx); err == nil {
 				t.Fatal("a map constructor naming a key twice succeeded; " +
 					"want " + tc.want)

@@ -121,7 +121,7 @@ func evalAtVersion(t *testing.T, doc, expr string, v Version) (string, error) {
 	lib := NewLibrary(Builtins())
 	RegisterXSLTFuncs(lib)
 	ctx := NewContext(root, lib)
-	ctx.Version = v
+	ctx = ctx.WithVersion(v)
 	comp, err := CompileVersion(expr, sweepConvNS{}, v)
 	if err != nil {
 		return "", err

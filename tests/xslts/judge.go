@@ -969,7 +969,7 @@ func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]str
 	// produced by a stylesheet the 2.0 rules would otherwise judge. Raising
 	// the library version alone leaves the grammar where evalAssertExpr's
 	// comment puts it, so only which functions exist changes.
-	ctx.LibraryVersion = xpath.XPath31
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.LibraryVersion = xpath.XPath31 })
 	// The suite's own driver binds $result to the result of the
 	// transformation. That is the document node the assertions are written
 	// about, the same tree the context item is: on-empty-115b asks

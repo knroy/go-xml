@@ -47,7 +47,7 @@ func (nopDocs) ResolveDocument(string, string) (*xdm.Tree, error) {
 func collCtx(t *testing.T, r CollectionResolver) *Context {
 	t.Helper()
 	ctx := NewContext(mustParse(t, testDoc), Builtins())
-	ctx.Collections = r
+	ctx = ctx.WithEnv(func(e *Env) { e.Collections = r })
 	return ctx
 }
 
@@ -145,7 +145,7 @@ func TestCollectionNonStringArgument(t *testing.T) {
 func TestCollectionUsesStaticBaseURI(t *testing.T) {
 	r := &testCollections{docs: map[string][]string{"books": {`<b>one</b>`}}}
 	ctx := collCtx(t, r)
-	ctx.StaticBaseURI = "http://example.com/base/"
+	ctx = ctx.WithStaticBaseURI("http://example.com/base/")
 	if _, err := Eval(`collection('books')`, ctx, testNS{}); err != nil {
 		t.Fatalf("collection: %v", err)
 	}
@@ -165,8 +165,8 @@ func TestCollectionStaticBaseBeatsItemBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := NewContext(tree.Root, Builtins())
-	ctx.Collections = r
-	ctx.StaticBaseURI = "http://example.com/expression/"
+	ctx = ctx.WithEnv(func(e *Env) { e.Collections = r })
+	ctx = ctx.WithStaticBaseURI("http://example.com/expression/")
 	if _, err := Eval(`collection('books')`, ctx, testNS{}); err != nil {
 		t.Fatalf("collection: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestCollectionFallsBackToItemBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := NewContext(tree.Root, Builtins())
-	ctx.Collections = r
+	ctx = ctx.WithEnv(func(e *Env) { e.Collections = r })
 	if _, err := Eval(`collection('books')`, ctx, testNS{}); err != nil {
 		t.Fatalf("collection: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestCollectionFallsBackToItemBase(t *testing.T) {
 // separate switches on purpose.
 func TestCollectionIndependentOfDocs(t *testing.T) {
 	ctx := NewContext(mustParse(t, testDoc), Builtins())
-	ctx.Docs = nopDocs{} // fn:doc enabled, fn:collection not
+	ctx = ctx.WithEnv(func(e *Env) { e.Docs = nopDocs{} }) // fn:doc enabled, fn:collection not
 	_, err := Eval(`collection('books')`, ctx, testNS{})
 	if err == nil || !strings.Contains(err.Error(), "FODC0002") {
 		t.Errorf("collection() = %v, want FODC0002 with only Docs set", err)

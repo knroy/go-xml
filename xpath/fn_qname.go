@@ -43,7 +43,7 @@ import (
 // untypedAtomic case and so always the general error.
 func errNotQName(ctx *Context, a *xdm.Atomic, format string, args ...any) error {
 	if a != nil && a.Type == xdm.TypeUntypedAtomic &&
-		ctx != nil && ctx.Version.atLeast30() {
+		ctx != nil && ctx.Version().atLeast30() {
 		return xdm.Errorf("XPTY0117",
 			"%s", fmt.Sprintf(format, args...))
 	}
@@ -286,7 +286,7 @@ func registerURIFuncs(l *Library) {
 			// resolved against the source document instead of against the
 			// stylesheet, which is a different answer whenever the two
 			// documents come from different places.
-			base = ctx.StaticBaseURI
+			base = ctx.StaticBaseURI()
 			if base == "" {
 				if n, ok := ctx.Item.(*xdm.Node); ok {
 					base = n.BaseURI
@@ -444,8 +444,8 @@ func registerURIFuncs(l *Library) {
 	// using. Empty means nothing was set, and codepoint is then the default
 	// the spec states.
 	l.registerFn("default-collation", []int{0}, func(ctx *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
-		if ctx != nil && ctx.collationURI != "" {
-			return strSeq(ctx.collationURI), nil
+		if ctx != nil && ctx.st().collationURI != "" {
+			return strSeq(ctx.st().collationURI), nil
 		}
 		return strSeq(CodepointCollation), nil
 	})

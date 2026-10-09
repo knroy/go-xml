@@ -13,7 +13,7 @@ import (
 func evalDepth(t *testing.T, expr string) (xdm.Sequence, error) {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	return Eval(expr, ctx, nil)
 }
 
@@ -148,8 +148,8 @@ func TestLegitimateDeepDynamicNestingIsAccepted(t *testing.T) {
 // conformance limit.
 func TestDynamicCallDepthHonoursCallerMaxDepth(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
-	ctx.MaxDepth = 30
+	ctx = ctx.WithVersion(XPath31)
+	ctx = ctx.WithEnv(func(e *Env) { e.MaxDepth = 30 })
 	_, err := Eval(`let $f := function($g, $n) {
 		if ($n >= 100) then $n else $g($g, $n + 1)
 	} return $f($f, 1)`, ctx, nil)

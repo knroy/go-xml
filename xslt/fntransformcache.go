@@ -124,7 +124,7 @@ func nestedCacheKey(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem) (
 	k := nestedKey{docs: mr, pkgs: rt.pkgs}
 	var b strings.Builder
 	field := func(s string) { fmt.Fprintf(&b, "%d:%s;", len(s), s) }
-	field(ctx.StaticBaseURI)
+	field(ctx.StaticBaseURI())
 	for _, name := range []string{"stylesheet-base-uri", "stylesheet-location",
 		"stylesheet-text", "package-name", "package-version"} {
 		v, ok, err := transformString(opts, name)

@@ -195,7 +195,7 @@ func (i *forEachGroupInstr) sortGroups(rt *runtime, groups []group) ([]group, er
 			if err != nil {
 				return nil, err
 			}
-			sv, err := makeSortValue(v, sk, colls[k], rt.ctx.ImplicitTimezone,
+			sv, err := makeSortValue(v, sk, colls[k], rt.ctx.Env().ImplicitTimezone,
 				rt.sheet.output.Version10Implicit)
 			if err != nil {
 				return nil, err
@@ -307,7 +307,7 @@ func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 				// it is why the key is a bucket and the comparison decides.
 				if a, isAtomic := kv.(*xdm.Atomic); isAtomic && a.Type.IsNumeric() {
 					if gk, ok2 := groups[gi].key[0].(*xdm.Atomic); ok2 &&
-						!xpath.GroupingEqual(a, gk, coll, rt.ctx.ImplicitTimezone) {
+						!xpath.GroupingEqual(a, gk, coll, rt.ctx.Env().ImplicitTimezone) {
 						ok = false
 					}
 				}
@@ -335,7 +335,7 @@ func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 							continue
 						}
 						if xpath.GroupingEqual(a, gk, coll,
-							rt.ctx.ImplicitTimezone) {
+							rt.ctx.Env().ImplicitTimezone) {
 							gi, ok = gj, true
 							break
 						}
@@ -2016,7 +2016,7 @@ func resolveGroupCollation(uri string) (xpath.Collation, error) {
 // their lexical timezones differed, and kept an xs:integer apart from the
 // equal xs:double.
 func groupingKey(rt *runtime, a *xdm.Atomic, coll xpath.Collation) (string, error) {
-	return xpath.GroupingKey(a, coll, rt.ctx.ImplicitTimezone)
+	return xpath.GroupingKey(a, coll, rt.ctx.Env().ImplicitTimezone)
 }
 
 func collationKey(coll xpath.Collation, s string) string {

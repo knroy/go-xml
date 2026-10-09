@@ -905,13 +905,13 @@ func TestAlternativeSeesAnEmptyDefaultCollection(t *testing.T) {
 // one specific value, not a blanket "every collection is empty" resolver.
 func TestAssertionNamedCollectionIsStillUnavailable(t *testing.T) {
 	ctx := newAssertContext(nil)
-	if ctx.Collections == nil {
+	if ctx.Env().Collections == nil {
 		t.Fatal("an assertion context must carry a collection resolver")
 	}
-	if _, err := ctx.Collections.ResolveCollection("", ""); err != nil {
+	if _, err := ctx.Env().Collections.ResolveCollection("", ""); err != nil {
 		t.Errorf("the default collection must be the empty sequence: %v", err)
 	}
-	if _, err := ctx.Collections.ResolveCollection("urn:x", ""); err == nil {
+	if _, err := ctx.Env().Collections.ResolveCollection("urn:x", ""); err == nil {
 		t.Error("a named collection must not resolve")
 	}
 }

@@ -39,7 +39,7 @@ func TestResourceLimitsCarrySentinelAndKeepTheirCode(t *testing.T) {
 			// xpath/context.go, Context.Descend.
 			"evaluation depth", func() error {
 				ctx := NewContext(nil, Builtins())
-				ctx.MaxDepth = 2
+				ctx = ctx.WithEnv(func(e *Env) { e.MaxDepth = 2 })
 				c, err := ctx.Descend()
 				if err != nil {
 					return err
@@ -86,7 +86,7 @@ func TestResourceLimitsCarrySentinelAndKeepTheirCode(t *testing.T) {
 				SetBacktrackingRegex(true)
 				defer SetBacktrackingRegex(old)
 				ctx := NewContext(nil, Builtins())
-				ctx.Version = XPath31
+				ctx = ctx.WithVersion(XPath31)
 				_, err := Eval(`matches("`+strings.Repeat("a", 60)+
 					`", "(a*)*\1b")`, ctx, nil)
 				return err
@@ -125,7 +125,7 @@ func TestResourceLimitsCarrySentinelAndKeepTheirCode(t *testing.T) {
 // prevent from recurring.
 func TestRangeBoundRefusalCarriesSentinel(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	huge, err := Parse("100000000000000000000000000", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +150,7 @@ func TestRangeBoundRefusalCarriesSentinel(t *testing.T) {
 // genuine type error would retry a request that can never succeed.
 func TestOrdinaryFaultsAreNotResourceLimits(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	for _, expr := range []string{
 		`1 + "a"`,           // XPTY0004, a type error
 		`xs:integer("zz")`,  // FORG0001, a failed cast

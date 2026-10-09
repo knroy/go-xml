@@ -109,7 +109,7 @@ func registerStringFuncs(l *Library) {
 			// value rather than rejected. Earlier versions keep the strict
 			// xs:string* signature, which their own cases pin: under 2.0
 			// and 3.0, string-join(1 to 5, "") must still be XPTY0004.
-			if ctx != nil && ctx.Version.atLeast31() {
+			if ctx != nil && ctx.Version().atLeast31() {
 				parts = append(parts, a.String())
 				continue
 			}

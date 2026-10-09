@@ -114,7 +114,7 @@ func TestJSONOptionKeyTypes(t *testing.T) {
 func evalJSONOptionKey(t *testing.T, expr, key string) (string, error) {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	seq, err := Eval(strings.Replace(expr, "%s", key, 1), ctx, nil)
 	if err != nil {
 		return "", err

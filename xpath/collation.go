@@ -205,8 +205,8 @@ func collationArg(fn string, args []xdm.Sequence, i int) (Collation, error) {
 // that had asked for a case-insensitive default.
 func collationArgCtx(ctx *Context, fn string, args []xdm.Sequence, i int) (Collation, error) {
 	if i >= len(args) {
-		if ctx != nil && ctx.collation != nil {
-			return ctx.collation, nil
+		if ctx != nil && ctx.st().collation != nil {
+			return ctx.st().collation, nil
 		}
 		return codepointCollation{}, nil
 	}

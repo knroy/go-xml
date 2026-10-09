@@ -93,7 +93,7 @@ func evalSweepConv(t *testing.T, doc, expr string) (string, error) {
 	lib := NewLibrary(Builtins())
 	RegisterXSLTFuncs(lib)
 	ctx := NewContext(root, lib)
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	comp, err := CompileVersion(expr, sweepConvNS{}, XPath31)
 	if err != nil {
 		return "", err

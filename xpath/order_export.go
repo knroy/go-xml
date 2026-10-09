@@ -38,10 +38,9 @@ func OrderAtomics(a, b *xdm.Atomic, coll Collation, implicitTZ int, version Vers
 	if a == nil || b == nil {
 		return 0, false
 	}
-	ctx := &Context{ImplicitTimezone: implicitTZ, Version: version}
-	if coll != nil {
-		ctx.collation = coll
-	}
+	env := Env{ImplicitTimezone: implicitTZ}
+	st := staticContext{version: version, collation: coll}
+	ctx := &Context{env: &env, static: &st}
 	// The value-comparison harmonisation is what makes xs:integer and
 	// xs:double comparable, and what casts an untypedAtomic to a string
 	// rather than to the other operand's type.

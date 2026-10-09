@@ -36,7 +36,7 @@ func TestJSONToXMLDuplicatesAcrossNesting(t *testing.T) {
 			`<array key="two"><number>2</number></array></map>`},
 	} {
 		ctx := NewContext(nil, Builtins())
-		ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+		ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		seq, err := Eval(
 			`serialize(json-to-xml($j, map{'duplicates': $d}))`, ctx.
 				WithVar(xdm.QName{Local: "j"}, xdm.One(xdm.NewString(in))).
@@ -51,7 +51,7 @@ func TestJSONToXMLDuplicatesAcrossNesting(t *testing.T) {
 	}
 	// reject sees the outer duplicate for the same reason use-first drops it.
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	_, err := Eval(`json-to-xml($j, map{'duplicates': 'reject'})`,
 		ctx.WithVar(xdm.QName{Local: "j"}, xdm.One(xdm.NewString(`{"a":{"x":1},"a":{"y":2}}`))), nil)
 	if err == nil || !strings.Contains(err.Error(), "FOJS0003") {

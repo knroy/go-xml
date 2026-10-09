@@ -1102,7 +1102,7 @@ func registerFormatNumber(l *Library) {
 		// The context's own version, not a fixed XPath30: scientific notation
 		// in the picture is a 3.1 feature, and a 3.0 expression must still be
 		// told that "9.9999e999" is malformed.
-		out, err := FormatNumberVersion(num, pic, DefaultDecimalFormat(), ctx.Version)
+		out, err := FormatNumberVersion(num, pic, DefaultDecimalFormat(), ctx.Version())
 		if err != nil {
 			return nil, err
 		}

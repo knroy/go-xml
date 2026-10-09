@@ -52,8 +52,8 @@ func TestQNameFunctionsUseXMLWhitespaceOnly(t *testing.T) {
 	eval := func(expr string) error {
 		t.Helper()
 		ctx := NewContext(el, Builtins())
-		ctx.Version = XPath31
-		ctx.LibraryVersion = XPath31
+		ctx = ctx.WithVersion(XPath31)
+		ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		_, err := Eval(expr, ctx, cardinalityNS{})
 		return err
 	}
@@ -138,8 +138,8 @@ func TestQNameInteriorNBSPStillRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := NewContext(doc.Root, Builtins())
-	ctx.Version = XPath31
-	ctx.LibraryVersion = XPath31
+	ctx = ctx.WithVersion(XPath31)
+	ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	expr := `fn:QName("http://example.com/eg", "a` + nbsp + `b")`
 	err = func() error { _, e := Eval(expr, ctx, cardinalityNS{}); return e }()
 	if err == nil {
@@ -174,8 +174,8 @@ func TestLexicalQNameColonCheckTrimsXMLSpaceOnly(t *testing.T) {
 	}
 	eval := func(expr string) error {
 		ctx := NewContext(doc.Root, Builtins())
-		ctx.Version = XPath31
-		ctx.LibraryVersion = XPath31
+		ctx = ctx.WithVersion(XPath31)
+		ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		_, err := Eval(expr, ctx, cardinalityNS{})
 		return err
 	}
@@ -218,8 +218,8 @@ func TestDynamicQNameConstructorUsesXMLWhitespaceOnly(t *testing.T) {
 	}
 	ctx := func() *Context {
 		c := NewContext(nil, Builtins())
-		c.Version = XPath31
-		c.LibraryVersion = XPath31
+		c = c.WithVersion(XPath31)
+		c = c.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		return c
 	}
 

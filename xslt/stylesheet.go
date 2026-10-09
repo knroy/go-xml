@@ -424,7 +424,7 @@ func packageOf(ctx *xpath.Context) int {
 	if ctx == nil {
 		return 0
 	}
-	if p, ok := ctx.StaticHost.(hostPackage); ok {
+	if p, ok := ctx.StaticHost().(hostPackage); ok {
 		return int(p)
 	}
 	return 0
@@ -1553,7 +1553,7 @@ func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error
 	}
 	// A named function reference resolves at the processor's version, not the
 	// module's: "#N" names a function, and which functions exist is already a
-	// processor property (see xpath.Context.LibraryVersion). The XSLT suite
+	// processor property (see xpath.Env.LibraryVersion). The XSLT suite
 	// runs version="2.0" modules scoped XSLT30+ that write "current-group#0"
 	// and "system-property#1", and a 3.0 processor must resolve them. Every
 	// other 3.0 construct stays gated on the module's own declaration.

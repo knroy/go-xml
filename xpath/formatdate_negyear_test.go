@@ -6,7 +6,7 @@ import "testing"
 func formatDT(t *testing.T, value, picture string) string {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	expr := `format-dateTime(xs:dateTime("` + value + `"), "` + picture + `")`
 	seq, err := Eval(expr, ctx, nil)
 	if err != nil {

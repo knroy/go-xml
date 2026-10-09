@@ -44,7 +44,7 @@ func regexLimitEval(t *testing.T, expr string) error {
 	SetBacktrackingRegex(true)
 	defer SetBacktrackingRegex(old)
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	_, err := Eval(expr, ctx, nil)
 	return err
 }
@@ -142,7 +142,7 @@ func TestAnalyzeStringAcceptsBackreferencePatterns(t *testing.T) {
 	SetBacktrackingRegex(true)
 	defer SetBacktrackingRegex(old)
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	seq, err := Eval(`analyze-string("xabcabcy", "(abc)\1")`, ctx, nil)
 	if err != nil {
 		t.Fatalf("analyze-string with a backreference = %v; fn:matches, "+

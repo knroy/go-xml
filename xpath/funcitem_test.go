@@ -64,7 +64,7 @@ func TestNamedFunctionRef(t *testing.T) {
 	}
 	// A reference to a function that does not exist is a static error.
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath30
+	ctx = ctx.WithVersion(XPath30)
 	wantErrCode(t, ctx, `no-such-function#1`, "XPST0017")
 	// Arity is part of a function's identity, so the wrong one does not
 	// resolve: fn:substring has 2 and 3, not 9. XPST0017 in particular --
@@ -114,7 +114,7 @@ func TestInlineFunctionParamTypes(t *testing.T) {
 		t.Errorf("typed param = %v, want %v", got, want)
 	}
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath30
+	ctx = ctx.WithVersion(XPath30)
 	wantErrCode(t, ctx, `(function($x as xs:integer) { $x })("nope")`, "XPTY0004")
 	// The declared return type is checked too. Without the check the body
 	// still runs, and "nope" + nothing is a different error entirely -- which
@@ -127,7 +127,7 @@ func TestInlineFunctionParamTypes(t *testing.T) {
 // XPTY0004 rather than something that silently does nothing.
 func TestDynamicCallErrors(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath30
+	ctx = ctx.WithVersion(XPath30)
 	for _, expr := range []string{
 		`let $f := 42 return $f(1)`,
 		`let $f := function($x) { $x } return $f(1, 2)`,
@@ -224,7 +224,7 @@ func TestFunctionLookup(t *testing.T) {
 // swapped, and passes if either path stops distinguishing them at all.
 func TestFunctionItemDoesNotAtomize(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath30
+	ctx = ctx.WithVersion(XPath30)
 	for _, c := range []struct{ expr, code string }{
 		// fn:string has no definition for a function item; that is its own
 		// code, not the atomisation one.

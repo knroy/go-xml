@@ -71,7 +71,7 @@ func TestNamespaceNodeIdentity(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := NewContext(tree.Root, Builtins())
-			ctx.Version = XPath31
+			ctx = ctx.WithVersion(XPath31)
 			seq, err := Eval(tc.expr, ctx, nil)
 			if err != nil {
 				t.Fatalf("eval %s: %v", tc.expr, err)

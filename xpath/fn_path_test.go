@@ -20,7 +20,7 @@ func TestFnPath(t *testing.T) {
 		{`path(/*:p/*:br[2])`, "/Q{http://example.com/one}p[1]/Q{http://example.com/one}br[2]"},
 	} {
 		ctx := NewContext(tree.Root, Builtins())
-		ctx.Version = XPath31
+		ctx = ctx.WithVersion(XPath31)
 		got, err := Eval(tc.expr, ctx, nil)
 		if err != nil {
 			t.Errorf("%s: %v", tc.expr, err)

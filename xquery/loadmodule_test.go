@@ -88,11 +88,13 @@ func TestLoadXQueryModuleSpendsTheCallersBudget(t *testing.T) {
 }
 
 // TestLoadXQueryModuleFromXPath: an XPath host gets the function by
-// importing this package and installing Context.Modules.
+// importing this package and installing Env.Modules.
 func TestLoadXQueryModuleFromXPath(t *testing.T) {
 	ctx := xpath.NewContext(nil, xpath.Builtins())
-	ctx.Version = xpath.XPath31
-	ctx.Modules = xquery.MapModuleResolver{Modules: map[string]string{"urn:lxm": lxmModule.Source}}
+	ctx = ctx.WithVersion(xpath.XPath31)
+	ctx = ctx.WithEnv(func(e *xpath.Env) {
+		e.Modules = xquery.MapModuleResolver{Modules: map[string]string{"urn:lxm": lxmModule.Source}}
+	})
 	seq, err := xpath.Eval(`load-xquery-module("urn:lxm")("functions")(QName("urn:lxm", "f"))(1)(4)`, ctx, nil)
 	if err != nil || render(seq) != "8" {
 		t.Errorf("got %q, %v; want 8", render(seq), err)

@@ -9,7 +9,7 @@ import (
 func eval30(t *testing.T, expr string, item xdm.Item) xdm.Sequence {
 	t.Helper()
 	ctx := NewContext(item, Builtins())
-	ctx.Version = XPath30
+	ctx = ctx.WithVersion(XPath30)
 	got, err := Eval(expr, ctx, nil)
 	if err != nil {
 		t.Fatalf("%s: %v", expr, err)
@@ -192,7 +192,7 @@ func TestHasChildren(t *testing.T) {
 
 	// The zero-argument form reads the context item.
 	ctx := NewContext(doc, Builtins())
-	ctx.Version = XPath30
+	ctx = ctx.WithVersion(XPath30)
 	got, err := Eval(`//c/has-children()`, ctx, nil)
 	if err != nil {
 		t.Fatalf("has-children(): %v", err)

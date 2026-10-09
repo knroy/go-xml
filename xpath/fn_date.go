@@ -272,7 +272,7 @@ func registerTimezoneAdjust(l *Library) {
 			// Resolve the target offset, distinguishing "argument absent"
 			// (use the implicit timezone) from "argument is the empty
 			// sequence" (remove the timezone).
-			targetTZ := ctx.ImplicitTimezone
+			targetTZ := ctx.ev().ImplicitTimezone
 			removeTZ := false
 			if len(args) > 1 {
 				tzAtoms := xdm.Atomize(args[1])
@@ -370,11 +370,11 @@ func shiftToTimezone(src *xdm.DateTime, targetTZ int) (*xdm.DateTime, error) {
 func registerCurrentDateTime(l *Library) {
 	current := func(name string, t xdm.TypeCode) {
 		l.registerFn(name, []int{0}, func(ctx *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
-			if !ctx.HasNow {
+			if !ctx.ev().HasNow {
 				return nil, fmt.Errorf(
 					"FODC0001: %s() is unavailable (no transform clock configured)", name)
 			}
-			dt := dateTimeFromGoTime(ctx.Now, ctx.ImplicitTimezone)
+			dt := dateTimeFromGoTime(ctx.ev().Now, ctx.ev().ImplicitTimezone)
 			if t == xdm.TypeDate {
 				dt.Hour, dt.Minute = 0, 0
 				dt.Second = new(big.Rat)

@@ -47,7 +47,7 @@ func TestSerializeDoctypeParameters(t *testing.T) {
 
 	// The element form must answer the same request the same way.
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	c := ctx.WithVar(xdm.QName{Local: "p"}, xdm.One(paramsElement(
 		map[string]string{"doctype-system": "a.dtd"})))
 	seq, err := Eval(`serialize(parse-xml('<a/>'), $p)`, c, nil)
@@ -171,7 +171,7 @@ func TestSerializeSuppressIndentation(t *testing.T) {
 	assertSuppressed(t, "map form", mapForm)
 
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	c := ctx.WithVar(xdm.QName{Local: "p"}, xdm.One(paramsElement(
 		map[string]string{"indent": "yes", "suppress-indentation": "p"})))
 	seq, err := Eval(`serialize(parse-xml('`+doc+`'), $p)`, c, nil)

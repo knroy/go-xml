@@ -11,7 +11,7 @@ func parseJSONNested(t *testing.T, n int) error {
 	t.Helper()
 	q := `parse-json('` + strings.Repeat("[", n) + strings.Repeat("]", n) + `')`
 	ctx := xpath.NewContext(nil, xpath.Builtins())
-	ctx.Version, ctx.LibraryVersion = xpath.XPath31, xpath.XPath31
+	ctx = ctx.WithVersion(xpath.XPath31).WithEnv(func(e *xpath.Env) { e.LibraryVersion = xpath.XPath31 })
 	_, err := xpath.Eval(q, ctx, nil)
 	return err
 }
@@ -42,7 +42,7 @@ func TestJSONNestingBoundary(t *testing.T) {
 // pass both tests above and break the function.
 func TestOrdinaryJSONStillParses(t *testing.T) {
 	ctx := xpath.NewContext(nil, xpath.Builtins())
-	ctx.Version, ctx.LibraryVersion = xpath.XPath31, xpath.XPath31
+	ctx = ctx.WithVersion(xpath.XPath31).WithEnv(func(e *xpath.Env) { e.LibraryVersion = xpath.XPath31 })
 	const q = `parse-json('{"a":[1,2,{"b":[3,{"c":4}]}],"d":{"e":[[[5]]]}}')?d?e?1?1?1`
 	seq, err := xpath.Eval(q, ctx, nil)
 	if err != nil {

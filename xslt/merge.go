@@ -909,7 +909,7 @@ func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
 					}
 				}
 				sv, err := makeSortValue(v, sk, colls[k],
-					rt.ctx.ImplicitTimezone, rt.sheet.output.Version10Implicit)
+					rt.ctx.Env().ImplicitTimezone, rt.sheet.output.Version10Implicit)
 				if err != nil {
 					// XTTE1020 is the sort-key code; for a merge key the
 					// suite accepts either it or XTTE2230, and the message
@@ -996,7 +996,7 @@ func (s *mergeSource) anchorItems(rt *runtime) ([]xdm.Item, error) {
 // the resolver caches its trees, so validating in place would change what a
 // later fn:doc of the same URI sees.
 func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
-	docs := rt.ctx.Docs
+	docs := rt.ctx.Env().Docs
 	if docs == nil {
 		return nil, fmt.Errorf(
 			"FODC0002: document access is disabled (no resolver configured): %q",
@@ -1004,7 +1004,7 @@ func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
 	}
 	base := s.baseURI
 	if base == "" {
-		base = rt.ctx.StaticBaseURI
+		base = rt.ctx.StaticBaseURI()
 	}
 	tree, err := resolveDocumentIn(rt.ctx, href, base)
 	if err != nil {

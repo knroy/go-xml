@@ -27,7 +27,7 @@ func TestSerializeVersionReachesDeclaration(t *testing.T) {
 			`version="1.0"`},
 	} {
 		ctx := NewContext(nil, Builtins())
-		ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+		ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		seq, err := Eval(tc.expr,
 			ctx.WithVar(xdm.QName{Local: "n"}, xdm.One(xdm.NewString("x"))), nil)
 		if err != nil {

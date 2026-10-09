@@ -498,7 +498,7 @@ func valueKey(ctx *Context, a *xdm.Atomic) (string, error) {
 			// Key is optional: a host-supplied collation need not offer one,
 			// and without it there is no sound way to hash by that
 			// collation, so the raw string stands.
-			if k, ok := ctx.collation.(interface{ Key(string) string }); ok {
+			if k, ok := ctx.st().collation.(interface{ Key(string) string }); ok {
 				return "s\x00" + k.Key(a.Str()), nil
 			}
 		}
@@ -544,7 +544,7 @@ func ctxImplicitTimezone(ctx *Context) int {
 	if ctx == nil {
 		return 0
 	}
-	return ctx.ImplicitTimezone
+	return ctx.ev().ImplicitTimezone
 }
 
 func fnIndexOf(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -950,10 +950,9 @@ func clampPosition(pos *xdm.Atomic, past int) int {
 //
 // coll may be nil, in which case strings key on themselves.
 func GroupingKey(a *xdm.Atomic, coll Collation, implicitTZ int) (string, error) {
-	ctx := &Context{ImplicitTimezone: implicitTZ}
-	if coll != nil {
-		ctx.collation = coll
-	}
+	env := Env{ImplicitTimezone: implicitTZ}
+	st := staticContext{collation: coll}
+	ctx := &Context{env: &env, static: &st}
 	return valueKey(ctx, a)
 }
 
@@ -974,10 +973,9 @@ func GroupingKey(a *xdm.Atomic, coll Collation, implicitTZ int) (string, error) 
 // equal rather than an error, because grouping puts such values in separate
 // groups rather than failing.
 func GroupingEqual(a, b *xdm.Atomic, coll Collation, implicitTZ int) bool {
-	ctx := &Context{ImplicitTimezone: implicitTZ}
-	if coll != nil {
-		ctx.collation = coll
-	}
+	env := Env{ImplicitTimezone: implicitTZ}
+	st := staticContext{collation: coll}
+	ctx := &Context{env: &env, static: &st}
 	eq, err := compareValues(ctx, a, b, "eq", false)
 	if err != nil {
 		return false

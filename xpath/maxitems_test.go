@@ -8,13 +8,13 @@ import (
 	"github.com/knroy/go-xml/v2/xdm"
 )
 
-// Context.MaxItems sets the item bound: zero is the MaxItems default,
+// Env.MaxItems sets the item bound: zero is the MaxItems default,
 // negative is none, positive is the bound. The range cap and AdoptBudget
 // follow it.
 func TestContextMaxItems(t *testing.T) {
 	charge := func(limit, n int) error {
 		ctx := NewContext(nil, Builtins())
-		ctx.MaxItems = limit
+		ctx = ctx.WithEnv(func(e *Env) { e.MaxItems = limit })
 		return ctx.HoldItemBudget().ChargeItems(n)
 	}
 	if err := charge(0, MaxItems); err != nil {
@@ -34,7 +34,7 @@ func TestContextMaxItems(t *testing.T) {
 
 	eval := func(limit int, expr string) error {
 		ctx := NewContext(nil, Builtins())
-		ctx.MaxItems = limit
+		ctx = ctx.WithEnv(func(e *Env) { e.MaxItems = limit })
 		_, err := MustCompile(expr, nil).Eval(ctx)
 		return err
 	}
@@ -52,10 +52,10 @@ func TestContextMaxItems(t *testing.T) {
 	// A nested evaluation spends its caller's budget under its caller's
 	// bound, whatever its own Context said.
 	parent := NewContext(nil, Builtins())
-	parent.MaxItems = 10
+	parent = parent.WithEnv(func(e *Env) { e.MaxItems = 10 })
 	parent = parent.HoldItemBudget()
 	child := NewContext(nil, Builtins())
-	child.MaxItems = -1
+	child = child.WithEnv(func(e *Env) { e.MaxItems = -1 })
 	child = child.AdoptBudget(parent)
 	if err := child.ChargeItems(11); err == nil || !strings.Contains(err.Error(), "more than 10 items") {
 		t.Errorf("a nested context escaped its caller's bound of 10: %v", err)

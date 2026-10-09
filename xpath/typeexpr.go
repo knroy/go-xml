@@ -576,7 +576,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	// the statically known namespaces of the expression rather than of the
 	// literal. So the rule below applies to a 2.0 expression only.
 	srcIsQName := atoms[0].(*xdm.Atomic).Type == xdm.TypeQName
-	if !ctx.Version.atLeast30() &&
+	if !ctx.Version().atLeast30() &&
 		e.Type.AtomicType == xdm.TypeQName && !srcIsQName && !isLiteralOperand(e.Operand) {
 		if e.Castable {
 			return xdm.One(boolItem(false)), nil
@@ -592,7 +592,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	// the version here, rather than threading it through the cast tables. A
 	// malformed name then fails as a bad lexical form (FORG0001) instead of
 	// as a conversion that does not exist (XPTY0004).
-	if ctx.Version.atLeast30() && e.Type.AtomicType == xdm.TypeQName &&
+	if ctx.Version().atLeast30() && e.Type.AtomicType == xdm.TypeQName &&
 		src.Type == xdm.TypeUntypedAtomic {
 		src = xdm.NewString(src.String())
 	}

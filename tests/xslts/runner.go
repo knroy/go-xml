@@ -672,8 +672,8 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 			// whitespace the transform would have seen: mode-1802 indexes
 			// the source by position, which counts the whitespace text nodes
 			// xsl:strip-space removes.
-			selCtx.Docs = ss.SourceDocumentResolver(docs)
-			selCtx.StaticBaseURI = fileURI(sheetPath)
+			selCtx = selCtx.WithEnv(func(e *xpath.Env) { e.Docs = ss.SourceDocumentResolver(docs) })
+			selCtx = selCtx.WithStaticBaseURI(fileURI(sheetPath))
 			v, err := xpath.Eval(sel, selCtx, catalogNS{})
 			if err != nil {
 				return nil, fmt.Errorf("initial-mode selection %s: %w", sel, err)

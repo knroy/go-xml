@@ -331,7 +331,7 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 	// which is how every one of the json and adaptive cases writes them. The
 	// element form stays for 3.0, where a map is not an item at all.
 	if len(args[1]) == 1 {
-		if m, ok := args[1][0].(*xdm.MapItem); ok && ctx.Version.atLeast31() {
+		if m, ok := args[1][0].(*xdm.MapItem); ok && ctx.Version().atLeast31() {
 			return mapSerializationParams(m, opts)
 		}
 	}

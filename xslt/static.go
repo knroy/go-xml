@@ -828,15 +828,22 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 	// run time; the module's own version still governs the grammar. Left at
 	// the default the library was 2.0, so use-when-0127b could not call
 	// fn:generate-id, which F&O 3.0 defines.
-	if processorAtLeast30() {
-		ctx.LibraryVersion = xpath.XPath31
-		ctx.RegexVersion = xpath.XPath31
-	}
-	ctx.StaticBaseURI = el.BaseURI
 	if p.now.IsZero() {
 		p.now = time.Now()
 	}
-	ctx = ctx.WithNow(p.now)
+	ctx = ctx.WithEnv(func(e *xpath.Env) {
+		if processorAtLeast30() {
+			e.LibraryVersion = xpath.XPath31
+			e.RegexVersion = xpath.XPath31
+		}
+		e.Now, e.HasNow = p.now, true
+		// Documents follow the processor version: see the note below.
+		if processorAtLeast30() {
+			if docs, ok := p.c.opts.Resolver.(xpath.DocumentResolver); ok {
+				e.Docs = docs
+			}
+		}
+	}).WithStaticBaseURI(el.BaseURI)
 	// Whether a static expression can read a document follows the PROCESSOR
 	// version, and the two specifications say opposite things about it.
 	//
@@ -863,11 +870,8 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 	// version from the module's own @version, and doc('') is the empty
 	// reference, which denotes the document it appears in -- the stylesheet
 	// module, whose URI is the static base URI just set. Saxon 9.8 passes it.
-	if processorAtLeast30() {
-		if docs, ok := p.c.opts.Resolver.(xpath.DocumentResolver); ok {
-			ctx.Docs = docs
-		}
-	}
+	//
+	// The resolver is installed with the rest of the environment above.
 	for _, sv := range p.vars {
 		ctx = ctx.WithVar(sv.name, sv.val)
 	}

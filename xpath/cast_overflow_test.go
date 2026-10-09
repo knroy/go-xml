@@ -12,7 +12,7 @@ import (
 func eval31(t *testing.T, expr string, root *xdm.Node) (string, error) {
 	t.Helper()
 	ctx := NewContext(root, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	seq, err := Eval(expr, ctx, nil)
 	if err != nil {
 		return "", err

@@ -102,7 +102,7 @@ func TestCallCacheKeepsVersionGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx31 := NewContext(nil, Builtins())
-	ctx31.LibraryVersion = XPath31
+	ctx31 = ctx31.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	ctx20 := NewContext(nil, Builtins())
 	for i := 0; i < 2; i++ {
 		ccMust(t, c, ctx31, "x")
@@ -122,7 +122,7 @@ func (s scopedLib) Lookup(n xdm.QName, a int) (Function, bool) {
 	return s.inner.Lookup(n, a)
 }
 func (s scopedLib) LookupFrom(ctx *Context, n xdm.QName, a int) (Function, bool) {
-	if n.Equal(tName) && ctx.StaticHost == "hidden" {
+	if n.Equal(tName) && ctx.StaticHost() == "hidden" {
 		return Function{}, false
 	}
 	return s.inner.Lookup(n, a)

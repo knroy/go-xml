@@ -52,7 +52,7 @@ func TestEnvironmentWithheldByDefault(t *testing.T) {
 	t.Setenv("GOXML_TEST_SECRET", "sk-live-DO-NOT-LEAK")
 
 	ctx := xpath.NewContext(nil, xpath.Builtins())
-	ctx.Version = xpath.XPath31
+	ctx = ctx.WithVersion(xpath.XPath31)
 
 	if got := evalEnv(t, ctx, `environment-variable('GOXML_TEST_SECRET')`); len(got) != 0 {
 		t.Errorf("environment-variable leaked the process environment: %q", got)
@@ -91,8 +91,8 @@ func TestEnvironmentOptIn(t *testing.T) {
 	t.Setenv("GOXML_TEST_SECRET", "sk-live-DO-NOT-LEAK")
 
 	ctx := xpath.NewContext(nil, xpath.Builtins())
-	ctx.Version = xpath.XPath31
-	ctx.Environment = fixedEnvironment{"REPORT_MODE": "summary"}
+	ctx = ctx.WithVersion(xpath.XPath31)
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.Environment = fixedEnvironment{"REPORT_MODE": "summary"} })
 
 	if got := evalEnv(t, ctx, `environment-variable('REPORT_MODE')`); len(got) != 1 || got[0] != "summary" {
 		t.Errorf("environment-variable('REPORT_MODE') = %q, want [summary]", got)
@@ -112,8 +112,8 @@ func TestOSEnvironmentReadsTheProcess(t *testing.T) {
 	t.Setenv("GOXML_TEST_SECRET", "sk-live-DO-NOT-LEAK")
 
 	ctx := xpath.NewContext(nil, xpath.Builtins())
-	ctx.Version = xpath.XPath31
-	ctx.Environment = xpath.OSEnvironment{}
+	ctx = ctx.WithVersion(xpath.XPath31)
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.Environment = xpath.OSEnvironment{} })
 
 	if got := evalEnv(t, ctx, `environment-variable('GOXML_TEST_SECRET')`); len(got) != 1 ||
 		got[0] != "sk-live-DO-NOT-LEAK" {
