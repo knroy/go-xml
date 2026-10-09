@@ -1044,7 +1044,9 @@ func (v *validator) recordID(owner *xdm.Node, value string) {
 	}
 	if prev, seen := v.idOwners[value]; seen {
 		if prev != owner {
-			v.ids[value]++
+			if v.ids[value]++; v.ids[value] == 2 {
+				v.dupIDs = append(v.dupIDs, value)
+			}
 		}
 		return
 	}
@@ -1107,11 +1109,9 @@ func idKind(t *SimpleType, value string) string {
 // root rather than per element, because an IDREF may legitimately point forward
 // to an ID that has not been seen yet.
 func (v *validator) checkIDs() {
-	for value, count := range v.ids {
-		if count > 1 {
-			v.fail(nil, "cvc-id.2",
-				"ID value %q is defined %d times", value, count)
-		}
+	for _, value := range v.dupIDs {
+		v.fail(nil, "cvc-id.2",
+			"ID value %q is defined %d times", value, v.ids[value])
 	}
 	for _, ref := range v.idrefs {
 		if v.ids[ref.value] == 0 {

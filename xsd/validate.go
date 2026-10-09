@@ -328,6 +328,10 @@ type validator struct {
 	// the same value on two attributes of one element counts once. XSD 1.1
 	// permits an element to carry several ID attributes.
 	idOwners map[string]*xdm.Node
+	// dupIDs lists each ID value in the order its second definition was met,
+	// which is where a streaming validator reports it; checkIDs reports in
+	// this order so the errors (and the one MaxErrors keeps) are stable.
+	dupIDs []string
 
 	// skipped holds the elements matched by a processContents="skip"
 	// wildcard. They and their descendants are outside the assessment, so

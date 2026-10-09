@@ -674,7 +674,9 @@ func (rt *runtime) accumulatorOrigin(n *xdm.Node) *xdm.Node {
 // invisible tie, because the module holding it had been compiled before the
 // module that overrides it.
 func (c *compiler) checkAccumulatorConflicts() error {
-	for key, precs := range c.accumTies {
+	// Sorted, so two tied names are reported the same way on every run.
+	for _, key := range sortedKeys(c.accumTies) {
+		precs := c.accumTies[key]
 		best := precs[0]
 		n := 0
 		for _, p := range precs {

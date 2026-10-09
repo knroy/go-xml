@@ -2,6 +2,8 @@ package xslt
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -748,12 +750,18 @@ func checkMergeKeysComparable(entries []mergeEntry, nsrc int) error {
 			}
 		}
 	}
-	for _, m := range byKey {
-		for src, sm := range m {
+	// Walked in key position and source order, so that of several
+	// incomparable pairs the one reported is the same on every run.
+	for _, k := range slices.Sorted(maps.Keys(byKey)) {
+		m := byKey[k]
+		srcs := slices.Sorted(maps.Keys(m))
+		for _, src := range srcs {
+			sm := m[src]
 			if sm.untyped == nil {
 				continue
 			}
-			for other, om := range m {
+			for _, other := range srcs {
+				om := m[other]
 				if other == src || om.typed == nil {
 					continue
 				}

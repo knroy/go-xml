@@ -285,6 +285,9 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		}
 	}
 
+	// The map is ranged, so the missing attribute named is the least by
+	// name: an element missing two names the same one on every run.
+	missing := ""
 	for name, ad := range def.attrs {
 		if !ad.required {
 			continue
@@ -292,11 +295,14 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		if ad.optional30 && processorAtLeast30() {
 			continue
 		}
-		if el.Attr("", name) == nil {
-			return fmt.Errorf(
-				"xsl:%s requires a %s attribute (XTSE0010)",
-				el.Name().Local, name)
+		if el.Attr("", name) == nil && (missing == "" || name < missing) {
+			missing = name
 		}
+	}
+	if missing != "" {
+		return fmt.Errorf(
+			"xsl:%s requires a %s attribute (XTSE0010)",
+			el.Name().Local, missing)
 	}
 
 	return checkContentModel(el, forwards)

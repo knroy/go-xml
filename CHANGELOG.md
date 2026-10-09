@@ -90,6 +90,9 @@ and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.m
 | With `AllowDOCTYPE` and no DOCTYPE, the parser kept two extra copies of the document | They are dropped when the root opens: 10 MB parse 335 → 230 MB allocated, 100 MB peak RSS 3.15 → 2.0 GB. | [`b88105e`][b88105e] |
 | The html method dropped the stylesheet's own `<meta charset>` under `include-content-type="no"` | It is dropped only when the method adds its own (§7.4.13); XRechnung's HTML stage now matches Saxon. | [`262be91`][262be91] |
 | html/xhtml `indent="yes"` split inline elements onto separate lines | No whitespace is added next to an inline element (§7.4.3, §6.1.4), in `xsl:output` and `fn:serialize`. | [`4457808`][4457808] |
+| XSD `mg-props-correct.2` and `src-attribute_group.3` named a group that only refers into another group's cycle, and which one varied per run | Strongly-connected components: every group on a cycle is reported, by name, and only those. | [`373da4b`][373da4b] |
+| Map order chose which error was reported: XTSE0720 (which now shows the cycle), XTSE0020/0730, XTSE0010, XTSE0545, XTSE3350, XTSE3430, XTSE3070, XTSE3055/0770, XTTE0590, XTTE2230 | Each check walks declaration, document or sorted-name order, so one stylesheet gives one error. | [`8082a2c`][8082a2c] |
+| Map order chose the reported XSD error: duplicate IDs (`cvc-id.2`), duplicate keys from nested scopes, an `xs:all` restriction's disallowed element; RELAX NG include overrides and ref cycles | Document order, or the first name in sorted order; found by the v2 output differential. | [`edea87c`][edea87c] |
 | `generate-id` was `"N"` plus `tree·2^20 + order`, so a tree with over 2^20 nodes collided with the next tree | Ids are `N<tree>x<order>`, distinct for any size. | [`3f87498`][3f87498] |
 | An element copied into new content by `xsl:sequence` lost the namespaces it inherited; a temporary tree's namespace nodes shared generate-ids | Both now follow XSLT 3.0 §5.7.1, and order slots are reserved for in-scope bindings. | [`77c78e9`][77c78e9] |
 | `xsl:next-match` and `xsl:apply-imports` inside `xsl:iterate`, `xsl:merge`, `xsl:sort` or `xsl:copy select` ran the next rule | The current template rule is cleared there, so they raise `XTDE0560` as XSLT 3.0 §6.8 requires. | [`4d31869`][4d31869] |
@@ -1344,6 +1347,9 @@ here so every entry in this file sits under a release.
 [77c78e9]: https://github.com/knroy/go-xml/commit/77c78e9
 [b13e8f4]: https://github.com/knroy/go-xml/commit/b13e8f4
 [092bdce]: https://github.com/knroy/go-xml/commit/092bdce
+[373da4b]: https://github.com/knroy/go-xml/commit/373da4b
+[8082a2c]: https://github.com/knroy/go-xml/commit/8082a2c
+[edea87c]: https://github.com/knroy/go-xml/commit/edea87c
 [e7ec81d]: https://github.com/knroy/go-xml/commit/e7ec81d
 [739c744]: https://github.com/knroy/go-xml/commit/739c744
 [d006ad2]: https://github.com/knroy/go-xml/commit/d006ad2

@@ -754,14 +754,22 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 		// Reusing the pattern skips the walk that would have found a cycle
 		// back to a definition still being compiled, so the names it
 		// reaches bare are checked against those here instead.
+		//
+		// d.bare is a set, so when several names close a cycle here the
+		// least is reported, the same on every run.
 		bare := make([]string, 0, len(d.bare))
+		cyclic := ""
 		for n := range d.bare {
-			if c.expanding[n] && c.elementDepth <= c.expandingAt[n] {
-				return nil, fmt.Errorf(
-					"relaxng: definition %q refers to itself without an "+
-						"intervening <element> (section 4.19)", n)
+			if c.expanding[n] && c.elementDepth <= c.expandingAt[n] &&
+				(cyclic == "" || n < cyclic) {
+				cyclic = n
 			}
 			bare = append(bare, n)
+		}
+		if cyclic != "" {
+			return nil, fmt.Errorf(
+				"relaxng: definition %q refers to itself without an "+
+					"intervening <element> (section 4.19)", cyclic)
 		}
 		c.noteBare(bare...)
 		return d.pat, nil
@@ -939,6 +947,7 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	// What the include overrides: the names it defines itself, and whether it
 	// replaces <start>.
 	overridden := map[string]bool{}
+	var overrides []string // overridden's names in document order
 	var overridesStart bool
 	var scanOverrides func(n *xdm.Node)
 	scanOverrides = func(n *xdm.Node) {
@@ -948,7 +957,11 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 			}
 			switch kid.Name().Local {
 			case "define":
-				overridden[normalizeToken(kid.AttrValue("name"))] = true
+				name := normalizeToken(kid.AttrValue("name"))
+				if !overridden[name] {
+					overrides = append(overrides, name)
+				}
+				overridden[name] = true
 			case "start":
 				overridesStart = true
 			case "div":
@@ -963,7 +976,7 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	// often a typo — and treating it as an addition would silently leave the
 	// definition the author meant to replace in force.
 	included := definedNames(root)
-	for name := range overridden {
+	for _, name := range overrides {
 		if !included[name] {
 			return fmt.Errorf(
 				"relaxng: <include href=%q> overrides %q, which it does not define",
