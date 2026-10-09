@@ -68,7 +68,7 @@ type transformCaller struct {
 // callerOf is the caller a running (or static-phase) stylesheet makes.
 func callerOf(rt *runtime) transformCaller {
 	c := transformCaller{
-		opts: rt.opts, pkgs: rt.sheet.pkgResolver,
+		opts: *rt.opts, pkgs: rt.sheet.pkgResolver,
 		depth: rt.depth, maxDepth: rt.maxDepth,
 		goCtx: rt.goCtx, static: rt.static,
 	}

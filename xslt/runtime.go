@@ -28,8 +28,10 @@ type runtime struct {
 	// started by fn:transform inherits what this one was given -- above all
 	// the resolvers, since a nested transform that could reach documents the
 	// outer one could not would be a hole in the sandbox rather than a
-	// feature. See fntransform.go.
-	opts TransformOptions
+	// feature. See fntransform.go. It is held by pointer and never written
+	// after newRuntime: the runtime is copied on every focus and variable
+	// change, and the options are most of its size.
+	opts *TransformOptions
 
 	// static marks the stand-in runtime the static phase builds so that a
 	// static="yes" variable can call fn:transform. Section 9.7 gives a static
@@ -662,7 +664,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		secondary:     new([]SecondaryResult),
 		baseURIUsed:   new(bool),
 		baseOutputURI: opts.BaseOutputURI,
-		opts:          opts,
+		opts:          &opts,
 		goCtx:         ctx,
 	}
 

@@ -743,6 +743,7 @@ func (p *staticPhase) valueTemplate(el *xdm.Node, src string) (string, error) {
 func (p *staticPhase) staticRuntime() *runtime {
 	rt := &runtime{
 		static: true,
+		opts:   &TransformOptions{},
 		sheet:  p.c.sheet,
 		goCtx:  context.Background(),
 	}
