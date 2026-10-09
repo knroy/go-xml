@@ -49,8 +49,8 @@ func (p *compactParser) parseDatatypeName() (*xdm.Node, error) {
 			return nil, err
 		}
 		ex := p.b.el("except")
-		ex.Children = append(ex.Children, inner)
-		n.Children = append(n.Children, ex)
+		ex.AppendChild(inner)
+		n.AppendChild(ex)
 	}
 	return n, nil
 }
@@ -88,7 +88,7 @@ func (p *compactParser) parseParams(n *xdm.Node) error {
 		param := p.b.el("param")
 		p.b.attr(param, "name", name)
 		p.b.text(param, value)
-		n.Children = append(n.Children, param)
+		n.AppendChild(param)
 	}
 	return p.expect("}")
 }
