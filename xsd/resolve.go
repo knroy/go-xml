@@ -70,8 +70,8 @@ func (noResolverConfigured) Resolve(namespace, location, base string) (io.ReadCl
 	}
 	return nil, "", fmt.Errorf(
 		"schemaLocation %q cannot be resolved: %w (Options.Resolver); pass "+
-			"a FileResolver, a MapResolver or an HTTPResolver to say what "+
-			"this schema may read", location, errNoResolver)
+			"%s to say what this schema may read", location, errNoResolver,
+		resolverChoices)
 }
 
 // multiRootFileResolver reads from any of several directories.
@@ -144,7 +144,7 @@ func (r *FileResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 	if isRemote(location) {
 		return nil, "", fmt.Errorf(
 			"schemaLocation %q is a remote URL and network resolution is not "+
-				"enabled; see HTTPResolver", location)
+				"enabled; %s", location, remoteHint)
 	}
 
 	// A location is a URI reference, so a file: URL and a bare path both

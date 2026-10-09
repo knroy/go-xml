@@ -302,3 +302,10 @@ func isPrivateAddr(ip netip.Addr) bool {
 	}
 	return false
 }
+
+// The resolvers a refusal names, and where it points for remote locations.
+// The goxml_nohttp build has its own wording, since HTTPResolver is absent.
+const (
+	resolverChoices = "a FileResolver, a MapResolver or an HTTPResolver"
+	remoteHint      = "see HTTPResolver"
+)
