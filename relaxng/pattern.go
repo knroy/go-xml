@@ -180,19 +180,19 @@ type param struct {
 	Value string
 }
 
-func (notAllowedPat) nullable() bool   { return false }
-func (emptyPat) nullable() bool        { return true }
-func (textPat) nullable() bool         { return true }
-func (p choicePat) nullable() bool     { return p.Left.nullable() || p.Right.nullable() }
-func (p interleavePat) nullable() bool { return p.Left.nullable() && p.Right.nullable() }
-func (p groupPat) nullable() bool      { return p.Left.nullable() && p.Right.nullable() }
-func (p oneOrMorePat) nullable() bool  { return p.Pattern.nullable() }
-func (elementPat) nullable() bool      { return false }
-func (attributePat) nullable() bool    { return false }
-func (valuePat) nullable() bool        { return false }
-func (dataPat) nullable() bool         { return false }
-func (listPat) nullable() bool         { return false }
-func (afterPat) nullable() bool        { return false }
+func (notAllowedPat) nullable() bool    { return false }
+func (emptyPat) nullable() bool         { return true }
+func (textPat) nullable() bool          { return true }
+func (p *choicePat) nullable() bool     { return p.Left.nullable() || p.Right.nullable() }
+func (p *interleavePat) nullable() bool { return p.Left.nullable() && p.Right.nullable() }
+func (p *groupPat) nullable() bool      { return p.Left.nullable() && p.Right.nullable() }
+func (p *oneOrMorePat) nullable() bool  { return p.Pattern.nullable() }
+func (*elementPat) nullable() bool      { return false }
+func (*attributePat) nullable() bool    { return false }
+func (*valuePat) nullable() bool        { return false }
+func (*dataPat) nullable() bool         { return false }
+func (*listPat) nullable() bool         { return false }
+func (*afterPat) nullable() bool        { return false }
 
 // nullable expands the reference.
 //

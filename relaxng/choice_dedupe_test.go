@@ -40,8 +40,8 @@ func TestNestedOneOrMoreDoesNotDouble(t *testing.T) {
 // choice returns its left operand when the right one is already among its
 // alternatives, at any position in the chain.
 func TestChoiceMergesEqualAlternatives(t *testing.T) {
-	a := elementPat{Name: qnamePat{xdm.QName{Local: "a"}}, Pattern: emptyPat{}}
-	b := elementPat{Name: qnamePat{xdm.QName{Local: "b"}}, Pattern: textPat{}}
+	a := &elementPat{Name: qnamePat{xdm.QName{Local: "a"}}, Pattern: emptyPat{}}
+	b := &elementPat{Name: qnamePat{xdm.QName{Local: "b"}}, Pattern: textPat{}}
 	ab := choice(a, b)
 	if got := choice(ab, a); !patEq(got, ab) {
 		t.Errorf("choice(a|b, a) = %#v, want a|b", got)
@@ -54,8 +54,8 @@ func TestChoiceMergesEqualAlternatives(t *testing.T) {
 	}
 	// Values are never merged: equal-looking ones may differ in their
 	// bindings, and the fields are not comparable anyway.
-	v := valuePat{Value: "x", Prefixes: map[string]string{}}
-	if _, ok := choice(v, v).(choicePat); !ok {
+	v := &valuePat{Value: "x", Prefixes: map[string]string{}}
+	if _, ok := choice(v, v).(*choicePat); !ok {
 		t.Error("choice(value, value) merged two values")
 	}
 }

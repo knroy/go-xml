@@ -134,6 +134,14 @@ func (s *Schema) ValidateWithOptions(doc *xdm.Node, opts ValidateOptions) error 
 	return nil
 }
 
+// memoAfter is the element at which a validation starts interning and
+// remembering derivatives (patBuilder). Below it the tables cost more than
+// they save: measured on the 40 DocBook benchmark documents, interning from
+// the first element more than doubled CPU, while a document of a thousand elements or
+// more returns to its states often enough to repay them.
+// ponytail: a fixed count; a hit-rate estimate if a corpus needs one.
+var memoAfter = 1000
+
 type validator struct {
 	// maxDepth bounds recursion; a negative value means no bound.
 	maxDepth int
@@ -155,6 +163,10 @@ type validator struct {
 	// told why rather than being handed a validity failure that is really a
 	// limit.
 	tooBig bool
+	// pb interns and remembers this run's derivatives, from the
+	// memoAfter'th element on.
+	pb    *patBuilder
+	elems int
 }
 
 // tailPath renders the last few segments of a deep path.
@@ -197,11 +209,11 @@ func (v *validator) textDeriv(p pattern, s string, ctx nsContext) pattern {
 		// Whitespace between elements is not content unless the pattern asks
 		// for text: a document written across lines must not fail because of
 		// its own indentation.
-		if isNotAllowed(textDeriv(p, s, ctx)) {
+		if isNotAllowed(v.pb.textDeriv(p, s, ctx)) {
 			return p
 		}
 	}
-	return textDeriv(p, s, ctx)
+	return v.pb.textDeriv(p, s, ctx)
 }
 
 // attsDeriv is the derivative with respect to an element's attributes.
@@ -228,7 +240,7 @@ func (v *validator) attsDeriv(p pattern, attrs []attr, ctx nsContext, el *xdm.No
 			v.deepPath = tailPath(v.path, el.Name.Local)
 			return notAllowedPat{}
 		}
-		p = attDeriv(p, a, ctx)
+		p = v.pb.att(p, a, ctx)
 	}
 	return p
 }
@@ -257,6 +269,10 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 			return notAllowedPat{}
 		}
 		v.depth++
+		v.elems++
+		if v.elems == memoAfter {
+			v.pb = newPatBuilder()
+		}
 		v.path = append(v.path, n.Name.Local)
 		defer func() {
 			v.depth--
@@ -273,7 +289,7 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 			v.deepPath = tailPath(v.path, n.Name.Local)
 			return notAllowedPat{}
 		}
-		p1 := startTagOpenDeriv(p, name)
+		p1 := v.pb.open(p, name)
 		if isNotAllowed(p1) {
 			v.note(fmt.Sprintf("element %s is not permitted here", n.Name.Local))
 			return notAllowedPat{}
@@ -283,7 +299,7 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 			v.note(fmt.Sprintf("the attributes of %s do not match", n.Name.Local))
 			return notAllowedPat{}
 		}
-		p1 = startTagCloseDeriv(p1)
+		p1 = v.pb.closeTag(p1)
 		if isNotAllowed(p1) {
 			v.note(fmt.Sprintf("element %s is missing a required attribute",
 				n.Name.Local))
@@ -293,7 +309,7 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 		if isNotAllowed(p1) {
 			return notAllowedPat{}
 		}
-		p2 := endTagDeriv(p1)
+		p2 := v.pb.end(p1)
 		if isNotAllowed(p2) {
 			v.note(fmt.Sprintf("the content of %s is incomplete", n.Name.Local))
 		}
@@ -327,7 +343,7 @@ func (v *validator) childrenDeriv(p pattern, el *xdm.Node) pattern {
 		// nullability: at this point the pattern is inside an afterPat, whose
 		// continuation is the rest of the enclosing content, and an afterPat is
 		// never nullable however well its left half matched.
-		if d := textDeriv(p, "", nsContextOf(el)); !isNotAllowed(endTagDeriv(d)) {
+		if d := v.pb.textDeriv(p, "", nsContextOf(el)); !isNotAllowed(v.pb.endTagDeriv(d)) {
 			return d
 		}
 		return p
@@ -364,11 +380,11 @@ func (v *validator) childrenDeriv(p pattern, el *xdm.Node) pattern {
 			i--
 			switch s := sb.String(); {
 			case !whitespaceOnly(s):
-				p = textDeriv(p, s, nsContextOf(el))
+				p = v.pb.textDeriv(p, s, nsContextOf(el))
 			case hasElem:
 				continue
 			default:
-				p = choice(p, textDeriv(p, s, nsContextOf(el)))
+				p = v.pb.choice(p, v.pb.textDeriv(p, s, nsContextOf(el)))
 			}
 		} else {
 			p = v.childDeriv(p, c)

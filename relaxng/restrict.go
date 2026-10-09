@@ -520,12 +520,12 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 			elems: slices.Clip(s.elems), text: s.text}, nil
 	}
 	switch t := p.(type) {
-	case attributePat:
+	case *attributePat:
 		// The attribute's own content is a separate world — §7.1 has already
 		// ruled out anything in it that could compete out here.
 		return nameSet{attrs: []nameClass{t.Name}}, nil
 
-	case elementPat:
+	case *elementPat:
 		// An element's content is checked, but its names do not escape: two
 		// sibling elements named bar are fine, it is two *branches* offering
 		// bar to the same interleave that is not.
@@ -537,7 +537,7 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 	case textPat:
 		return nameSet{text: true}, nil
 
-	case groupPat:
+	case *groupPat:
 		l, err := competingSeen(t.Left, seen)
 		if err != nil {
 			return nameSet{}, err
@@ -556,7 +556,7 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 		l.merge(r)
 		return l, nil
 
-	case interleavePat:
+	case *interleavePat:
 		l, err := competingSeen(t.Left, seen)
 		if err != nil {
 			return nameSet{}, err
@@ -585,7 +585,7 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 		l.merge(r)
 		return l, nil
 
-	case choicePat:
+	case *choicePat:
 		// Alternatives do not compete: only one of them runs.
 		l, err := competingSeen(t.Left, seen)
 		if err != nil {
@@ -598,7 +598,7 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 		l.merge(r)
 		return l, nil
 
-	case oneOrMorePat:
+	case *oneOrMorePat:
 		s, err := competingSeen(t.Pattern, seen)
 		if err != nil {
 			return nameSet{}, err
@@ -610,10 +610,10 @@ func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 		// before this check ever runs.
 		return s, nil
 
-	case listPat:
+	case *listPat:
 		return competingSeen(t.Pattern, seen)
 
-	case afterPat:
+	case *afterPat:
 		l, err := competingSeen(t.Left, seen)
 		if err != nil {
 			return nameSet{}, err
@@ -790,16 +790,16 @@ func contentOfSeen(p pattern, inList bool, seen map[refInList]*contentKind) (con
 		return k, nil
 	}
 	switch t := p.(type) {
-	case dataPat:
+	case *dataPat:
 		if t.Except != nil {
 			if _, err := contentOfSeen(t.Except, true, seen); err != nil {
 				return 0, err
 			}
 		}
 		return kindString, nil
-	case valuePat:
+	case *valuePat:
 		return kindString, nil
-	case listPat:
+	case *listPat:
 		// The list itself is a string as far as its parent is concerned; its
 		// contents are checked with the rule suspended.
 		if _, err := contentOfSeen(t.Pattern, true, seen); err != nil {
@@ -809,7 +809,7 @@ func contentOfSeen(p pattern, inList bool, seen map[refInList]*contentKind) (con
 	case textPat:
 		return kindChild, nil
 
-	case elementPat:
+	case *elementPat:
 		// The element's own content is a fresh scope: what it holds does not
 		// sequence with what stands beside it.
 		if _, err := contentOfSeen(t.Pattern, false, seen); err != nil {
@@ -826,7 +826,7 @@ func contentOfSeen(p pattern, inList bool, seen map[refInList]*contentKind) (con
 		}
 		return kindChild, nil
 
-	case attributePat:
+	case *attributePat:
 		// An attribute's value is a string. Its pattern may match one, and
 		// <text/> is the ordinary way to say "any string" — what it may not
 		// hold is an element, which has nowhere to be. inString says so.
@@ -837,12 +837,12 @@ func contentOfSeen(p pattern, inList bool, seen map[refInList]*contentKind) (con
 		// content: it is not a child.
 		return kindNothing, nil
 
-	case groupPat:
+	case *groupPat:
 		return sequencedSeen(t.Left, t.Right, inList, seen)
-	case interleavePat:
+	case *interleavePat:
 		return sequencedSeen(t.Left, t.Right, inList, seen)
 
-	case choicePat:
+	case *choicePat:
 		// Alternatives: the rule does not apply, and the choice contributes
 		// whatever either branch might.
 		l, err := contentOfSeen(t.Left, inList, seen)
@@ -855,7 +855,7 @@ func contentOfSeen(p pattern, inList bool, seen map[refInList]*contentKind) (con
 		}
 		return l | r, nil
 
-	case oneOrMorePat:
+	case *oneOrMorePat:
 		k, err := contentOfSeen(t.Pattern, inList, seen)
 		if err != nil {
 			return 0, err
@@ -867,7 +867,7 @@ func contentOfSeen(p pattern, inList bool, seen map[refInList]*contentKind) (con
 		}
 		return k, nil
 
-	case afterPat:
+	case *afterPat:
 		return sequencedSeen(t.Left, t.Right, inList, seen)
 	}
 	return kindNothing, nil

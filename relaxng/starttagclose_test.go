@@ -14,11 +14,11 @@ import (
 // the ref's expansion has no attributes. A pattern that does hold one is
 // still rewritten.
 func TestStartTagCloseDerivKeepsAttributeFreePattern(t *testing.T) {
-	a := elementPat{Name: qnamePat{xdm.QName{Local: "a"}}, Pattern: emptyPat{}}
-	b := elementPat{Name: qnamePat{xdm.QName{Local: "b"}}, Pattern: textPat{}}
-	free := groupPat{choicePat{a, b}, oneOrMorePat{interleavePat{a, textPat{}}}}
+	a := &elementPat{Name: qnamePat{xdm.QName{Local: "a"}}, Pattern: emptyPat{}}
+	b := &elementPat{Name: qnamePat{xdm.QName{Local: "b"}}, Pattern: textPat{}}
+	free := &groupPat{&choicePat{a, b}, &oneOrMorePat{&interleavePat{a, textPat{}}}}
 	ref := &refPat{name: "free", resolve: func() (pattern, error) { return free, nil }}
-	p := pattern(afterPat{groupPat{ref, free}, emptyPat{}})
+	p := pattern(&afterPat{&groupPat{ref, free}, emptyPat{}})
 
 	if got := startTagCloseDeriv(p); !patEq(got, p) {
 		t.Fatalf("startTagCloseDeriv changed an attribute-free pattern: %#v", got)
@@ -30,9 +30,9 @@ func TestStartTagCloseDerivKeepsAttributeFreePattern(t *testing.T) {
 		t.Errorf("startTagCloseDeriv allocated %v times on an attribute-free pattern, want 0", n)
 	}
 
-	att := attributePat{Name: qnamePat{xdm.QName{Local: "id"}}, Pattern: textPat{}}
-	withAtt := &refPat{name: "att", resolve: func() (pattern, error) { return groupPat{att, a}, nil }}
-	got := startTagCloseDeriv(afterPat{choicePat{withAtt, b}, emptyPat{}})
+	att := &attributePat{Name: qnamePat{xdm.QName{Local: "id"}}, Pattern: textPat{}}
+	withAtt := &refPat{name: "att", resolve: func() (pattern, error) { return &groupPat{att, a}, nil }}
+	got := startTagCloseDeriv(&afterPat{&choicePat{withAtt, b}, emptyPat{}})
 	want := after(b, emptyPat{})
 	if !patEq(got, want) {
 		t.Errorf("unused attribute not discarded: got %#v, want %#v", got, want)
