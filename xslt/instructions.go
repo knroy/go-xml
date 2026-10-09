@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
@@ -1059,8 +1062,10 @@ type literalElemInstr struct {
 	// section 11.1.4 restores any of them whose URI turns out to be a target
 	// namespace URI of an xsl:namespace-alias.
 	excludedNamespaces []nsBinding
-	attrSets           []attrSetRef
-	body               []Instruction
+	// notedCache is what noted built, for the stylesheet it was built for.
+	notedCache atomic.Pointer[notedDecls]
+	attrSets   []attrSetRef
+	body       []Instruction
 	// pkg is the package the element was written in, which decides whose
 	// xsl:namespace-alias declarations rewrite it: 3.5.5 makes those local to
 	// the declaring package. See aliasKey.
@@ -1118,6 +1123,39 @@ func stampConstructedBaseURI(el *xdm.Node, base string) {
 	el.SetBaseURI(base)
 }
 
+// noted is what the namespaces loop of Execute records with NoteDeclared, in
+// order, a rebinding of a prefix replacing its entry as NoteDeclared does.
+// It depends only on the stylesheet's aliases, so it is built once per
+// stylesheet and lent to every builder (see xdmbuild.Builder.NoteDeclaredList).
+func (i *literalElemInstr) noted(s *Stylesheet) []xdmbuild.NSDecl {
+	if c := i.notedCache.Load(); c != nil && c.sheet == s {
+		return c.list
+	}
+	var list []xdmbuild.NSDecl
+	for _, ns := range i.namespaces {
+		d := xdmbuild.NSDecl{Prefix: ns.prefix, URI: ns.uri}
+		if a, ok := s.aliasIn(i.pkg, ns.uri); ok {
+			if a.uri == "" {
+				continue
+			}
+			d = xdmbuild.NSDecl{Prefix: a.prefix, URI: a.uri}
+		}
+		if k := slices.IndexFunc(list, func(e xdmbuild.NSDecl) bool { return e.Prefix == d.Prefix }); k >= 0 {
+			list[k].URI = d.URI
+			continue
+		}
+		list = append(list, d)
+	}
+	i.notedCache.Store(&notedDecls{sheet: s, list: list})
+	return list
+}
+
+// notedDecls is literalElemInstr.noted's answer for one stylesheet.
+type notedDecls struct {
+	sheet *Stylesheet
+	list  []xdmbuild.NSDecl
+}
+
 func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	sub := out.StartElement(rt.sheet.aliasFor(i.pkg, i.name))
 	stampConstructedBaseURI(sub.Open(), i.baseURI)
@@ -1140,8 +1178,8 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if !parentSupplies(rt, sub.Open(), prefix, uri) {
 			sub.Open().AddNamespace(prefix, uri)
 		}
-		sub.NoteDeclared(prefix, uri)
 	}
+	sub.NoteDeclaredList(i.noted(rt.sheet))
 	// A namespace that exclusion would have dropped comes back if it is the
 	// target of an alias: the point of aliasing onto, say, the XSLT namespace
 	// is that the result must carry a usable binding for it, and the note in

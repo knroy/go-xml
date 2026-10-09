@@ -40,6 +40,9 @@ type Builder struct {
 	// binding it copies, usually a dozen or more, and is rarely asked about
 	// them, so growing a map per element cost more than scanning a slice.
 	declared []decl
+	// declShared marks declared as a list NoteDeclaredList lent the builder,
+	// which must be copied before an entry is written in place.
+	declShared bool
 
 	// lastAtomic records that the item most recently appended was an atomic
 	// value rather than a node.
@@ -715,13 +718,16 @@ func (b *Builder) freshPrefix(want string) string {
 	}
 }
 
+// NSDecl is one namespace binding, for NoteDeclaredList.
+type NSDecl struct{ Prefix, URI string }
+
 // decl is one entry of Builder.declared.
-type decl struct{ prefix, uri string }
+type decl = NSDecl
 
 func (b *Builder) lookupDecl(prefix string) (string, bool) {
 	for _, d := range b.declared {
-		if d.prefix == prefix {
-			return d.uri, true
+		if d.Prefix == prefix {
+			return d.URI, true
 		}
 	}
 	return "", false
@@ -729,20 +735,23 @@ func (b *Builder) lookupDecl(prefix string) (string, bool) {
 
 func (b *Builder) setDecl(prefix, uri string) {
 	for i := range b.declared {
-		if b.declared[i].prefix == prefix {
-			b.declared[i].uri = uri
+		if b.declared[i].Prefix == prefix {
+			b.unshareDecls()
+			b.declared[i].URI = uri
 			return
 		}
 	}
 	if b.declared == nil {
 		b.declared = make([]decl, 0, 8)
 	}
-	b.declared = append(b.declared, decl{prefix, uri})
+	b.declared = append(b.declared, decl{Prefix: prefix, URI: uri})
+	b.declShared = false // a lent list has no spare capacity, so append copied it
 }
 
 func (b *Builder) delDecl(prefix string) {
 	for i, d := range b.declared {
-		if d.prefix == prefix {
+		if d.Prefix == prefix {
+			b.unshareDecls()
 			b.declared = append(b.declared[:i], b.declared[i+1:]...)
 			return
 		}
@@ -765,6 +774,32 @@ func (b *Builder) delDecl(prefix string) {
 // error.
 func (b *Builder) NoteDeclared(prefix, uri string) {
 	b.setDecl(prefix, uri)
+}
+
+// NoteDeclaredList is NoteDeclared for each of ds in turn. ds must not bind a
+// prefix twice and must not be written afterwards: on an element that has
+// noted nothing yet, the builder keeps ds itself rather than a copy, which is
+// what a literal result element, noting the same dozen bindings every time
+// it is instantiated, wants.
+func (b *Builder) NoteDeclaredList(ds []NSDecl) {
+	if len(ds) == 0 {
+		return
+	}
+	if len(b.declared) == 0 {
+		b.declared, b.declShared = ds[:len(ds):len(ds)], true
+		return
+	}
+	for _, d := range ds {
+		b.setDecl(d.Prefix, d.URI)
+	}
+}
+
+// unshareDecls copies a lent declared list before it is written in place.
+// Appending needs no copy: the lent list has no spare capacity.
+func (b *Builder) unshareDecls() {
+	if b.declShared {
+		b.declared, b.declShared = append([]decl(nil), b.declared...), false
+	}
 }
 
 // StartElement opens a new element, returning a builder scoped to it.
