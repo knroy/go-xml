@@ -25,7 +25,7 @@ func TestGenerateIDAcrossTrees(t *testing.T) {
 			}
 		}
 	}
-	if want := "N" + strconv.Itoa(t1.id) + "x0"; ida != want {
+	if want := "N" + strconv.FormatInt(t1.ident(), 10) + "x0"; ida != want {
 		t.Errorf("generate-id = %q, want %q", ida, want)
 	}
 }

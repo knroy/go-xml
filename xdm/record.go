@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -107,9 +108,12 @@ type Tree struct {
 	lineStarts []int
 	lineOnce   sync.Once
 
-	// id orders nodes of different trees against each other: trees are
-	// numbered as they are made, and the spec asks only for a stable order.
-	id int
+	// id orders nodes of different trees against each other; the spec asks
+	// only for a stable order. A document is numbered when it is made. A
+	// fragment is numbered the first time its order or identity is asked
+	// for, so that constructed nodes order after the documents a transform
+	// read before comparing them, as they always have; see ident.
+	id atomic.Int64
 	// fragment marks a tree with no document node, holding constructed
 	// parentless nodes. Tree() answers nil for its nodes, as it did for
 	// constructed nodes before trees held them.
@@ -246,7 +250,8 @@ var nextTreeID = newCounter()
 // NewTree creates an empty tree with a document node as its root, open for
 // appending.
 func NewTree() *Tree {
-	t := &Tree{id: nextTreeID()}
+	t := &Tree{}
+	t.id.Store(int64(nextTreeID()))
 	t.Root = t.newRoot(KindDocument)
 	return t
 }
@@ -254,7 +259,16 @@ func NewTree() *Tree {
 // NewFragment creates a tree for parentless constructed nodes: each NewRoot
 // starts a new one, closing whatever was being built before it.
 func NewFragment() *Tree {
-	return &Tree{id: nextTreeID(), fragment: true}
+	return &Tree{fragment: true}
+}
+
+// ident returns t's number, giving a fragment one on first use.
+func (t *Tree) ident() int64 {
+	if id := t.id.Load(); id != 0 {
+		return id
+	}
+	t.id.CompareAndSwap(0, int64(nextTreeID()))
+	return t.id.Load()
 }
 
 // NewRoot appends a parentless node to the fragment t and returns it, open
@@ -1092,7 +1106,7 @@ func (n *Node) Compare(o *Node) int {
 		return 0
 	}
 	if n.tree != o.tree {
-		if n.tree.id < o.tree.id {
+		if n.tree.ident() < o.tree.ident() {
 			return -1
 		}
 		return 1
@@ -1131,7 +1145,7 @@ func (n *Node) Order() int { return int(n.orderKey()) }
 func (n *Node) generateID() string {
 	var buf [48]byte
 	b := append(buf[:0], 'N')
-	b = strconv.AppendInt(b, int64(n.tree.id), 10)
+	b = strconv.AppendInt(b, n.tree.ident(), 10)
 	b = append(b, 'x')
 	k := uint64(n.self)
 	if n.flags&fSide != 0 {

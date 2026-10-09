@@ -366,6 +366,15 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 			c = typed
 			out.AppendNode(c)
+			// Under an open element the node in the result is a copy of c,
+			// made as it was appended; that is the node the repair below and
+			// the accumulators are about.
+			if open := out.Open(); open != nil && c.Kind() == xdm.KindElement {
+				c = open.LastChild()
+				if i.copyAccumulators {
+					rt.noteCopiedAccumulators(v, c)
+				}
+			}
 			// After the copy has a parent, because the repair §5.8.3 needs
 			// depends on what the destination declares: an element in no
 			// namespace landing under one that declares a default has to

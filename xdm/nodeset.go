@@ -58,6 +58,12 @@ func SortDocumentOrder(seq Sequence) Sequence {
 	// different trees implementation-dependent but requires it to be stable;
 	// this is what makes it so. A root already numbered keeps its number, so
 	// a sequence mixing nodes from earlier sorts still compares consistently.
+	// Fragments are numbered here, in the order the sequence holds their
+	// nodes, rather than in whatever order the sort's comparisons reach them,
+	// so that the result does not depend on the sort algorithm.
+	for _, n := range nodes {
+		n.tree.ident()
+	}
 	sort.SliceStable(nodes, func(i, j int) bool {
 		return nodes[i].Compare(nodes[j]) < 0
 	})
