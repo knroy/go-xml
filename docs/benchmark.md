@@ -19,8 +19,58 @@ work in [profiling.md](profiling.md), with the machine otherwise idle. The
 previous run, at `eb14939`, is given alongside; the first, at `22f4b04`
 before any of the profiling work, is in this file's history.
 
+## v2 (branch `v2`)
+
+The same harness, engines and machine, re-run on 2026-10-09 against the `v2`
+branch (with the 40-byte node records, the split evaluation context and the
+allocation cuts; see [profiling](profiling.md)). Every item agreed with the
+reference engines exactly as in the v1 run below. Ratios are go-xml over the
+reference, geometric mean over the timed items; below 1 is faster.
+
+| Workload | Reference | Warm, v1 (`f45068c`) | Warm, v2 | Cold, v2 |
+|---|---|---:|---:|---:|
+| DocBook xslTNG → XHTML5 | Saxon-HE | 0.46× | **0.37×** (2.7× faster; 39 of 40 items) | 0.10× |
+| Peppol Schematron → SVRL | Saxon-HE | 1.99× | **1.32×** | 0.04× |
+| XRechnung UBL → xr:invoice | Saxon-HE | 3.00× | **1.77×** | 0.03× |
+| XRechnung xr:invoice → HTML | Saxon-HE | 1.42× | **1.23×** | 0.03× |
+| XMark q1–q20 | Saxon-HE | 1.00× | 0.97× | 0.06× |
+| XMark q1–q20 | BaseX | 0.39× | 0.37× | 0.05× |
+| XSD catalog schemas | Xerces-J | 0.73× | 0.69× | 0.05× |
+| XSD catalog schemas | xmllint | — | — | 1.9× slower |
+| RELAX NG DocBook 5.2 | Jing | 0.60× | 0.75× | 0.15× |
+| Parse 1/10/100 MB | `encoding/xml` | 0.54× | 0.57× | 0.60× |
+| Parse 1/10/100 MB | xmllint | — | — | 0.61× |
+| Canonical XML 1/10 MB | xmllint | — | — | 0.64× |
+
+Memory, peak RSS in cold runs (median / max):
+
+| Workload | v1 (`f45068c`) | v2 | Reference |
+|---|---:|---:|---:|
+| Parse 10 MB | 235 MB | **50 MB** | xmllint 142 MB, encoding/xml 35 MB |
+| Parse 100 MB | 2.2 GB | **376 MB** | xmllint 1.4 GB, encoding/xml 209 MB |
+| XMark | 101 / 238 MB | **35 / 129 MB** | Saxon 149 / 333 MB, BaseX 160 / 551 MB |
+| DocBook xslTNG | 84 / 147 MB | **62 / 95 MB** | Saxon 246 / 293 MB |
+| Peppol | 41 MB | **30 MB** | Saxon 171 MB |
+| XSD | 17 MB | **14 MB** | Xerces 74 MB, xmllint 3 MB |
+| RELAX NG | 38 MB | **26 MB** | Jing 67 MB, xmllint 11 MB |
+
+DocBook's warm items, against Saxon: `ptoc.001` 1.17× is now the only one
+slower (it was 1.49×); `indexterm.001` 0.99×, `chapter.003` 0.97×,
+`epub.001` 0.84×.
+
+What did not improve, and is being profiled:
+- **Compile time on DocBook** went from 55 to 77 ms (Saxon: 924 ms). The
+  static phase now builds pruned copies of the modules it changes instead of
+  editing them in place.
+- **RELAX NG warm** went from 0.60× to 0.75× Jing. It is still well below
+  1×, and the absolute times are tens of microseconds per document.
+- **Parse warm** went from 0.54× to 0.57× `encoding/xml`. Cold parse
+  improved (0.66× to 0.60×), because the smaller heap needs less memory to be
+  mapped in.
+
 ## Contents
 
+- [v2 (branch `v2`)](#v2-branch-v2)
 - [Machine and engines](#machine-and-engines)
 - [Method](#method)
 - [Results at a glance](#results-at-a-glance)
