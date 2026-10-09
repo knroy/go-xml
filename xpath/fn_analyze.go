@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/knroy/go-xml/internal/genid"
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -90,7 +91,7 @@ func registerAnalyzeString(l *Library) {
 			return nil, xdm.ErrType(
 				"fn:generate-id: expected a node, got %s", it.TypeName())
 		}
-		// "N" plus a decimal integer, so this is bounded and small where
+		// "N" plus two decimal integers, so this is bounded and small where
 		// fn:path is not -- but it is still a newly built string, and the
 		// ownership rule is that whoever allocates charges.
 		return stringResult(ctx, GenerateID(n))
@@ -100,8 +101,8 @@ func registerAnalyzeString(l *Library) {
 // GenerateID returns the unique identifier fn:generate-id gives a node.
 //
 // The spec requires only that it be stable for a node, distinct between
-// nodes, and syntactically an XML name — so it is the node's document order
-// index with a letter in front, which satisfies all three without a table.
+// nodes, and syntactically an XML name — so it spells out the node's tree id
+// and document-order index, which satisfies all three without a table.
 //
 // Exported because the XSLT layer has had this function since 1.0 and must
 // agree with this one: two spellings of the same identity would let
@@ -112,7 +113,7 @@ func GenerateID(it xdm.Item) string {
 	if !ok {
 		return ""
 	}
-	return "N" + strconv.Itoa(n.Order())
+	return genid.Of(n)
 }
 
 // groupParents maps each capturing group number to the number of the

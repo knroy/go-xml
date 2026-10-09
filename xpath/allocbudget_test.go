@@ -291,7 +291,7 @@ func TestRemoveOutOfRangeIsNotCharged(t *testing.T) {
 // of them were charged.
 //
 // fn:generate-id is charged in the same pass for the ownership rule rather
-// than for its size -- "N" plus a decimal integer is a dozen bytes -- so it is
+// than for its size -- "N" plus two decimal integers is a dozen bytes -- so it is
 // asserted here to RETURN, not to refuse. A test that demanded a refusal from
 // it would be asserting something false.
 func TestPathChargesTheStringItBuilds(t *testing.T) {
