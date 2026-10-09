@@ -53,10 +53,10 @@ func (e *BinaryOp) evalLogical(ctx *Context) (xdm.Sequence, error) {
 	// Short-circuit: the right operand is not evaluated when the result is
 	// already determined, so "$n != 0 and 10 div $n > 1" is safe.
 	if e.Op == "and" && !lb {
-		return xdm.One(xdm.NewBoolean(false)), nil
+		return xdm.One(boolItem(false)), nil
 	}
 	if e.Op == "or" && lb {
-		return xdm.One(xdm.NewBoolean(true)), nil
+		return xdm.One(boolItem(true)), nil
 	}
 	r, err := e.Right.Eval(ctx)
 	if err != nil {
@@ -66,7 +66,7 @@ func (e *BinaryOp) evalLogical(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	return xdm.One(xdm.NewBoolean(rb)), nil
+	return xdm.One(boolItem(rb)), nil
 }
 
 func (e *BinaryOp) evalNodeSetOp(ctx *Context) (xdm.Sequence, error) {
@@ -123,11 +123,11 @@ func (e *BinaryOp) evalNodeComparison(ctx *Context) (xdm.Sequence, error) {
 		// are not "is"-equal. Node.Is is pointer equality for every stored
 		// node and additionally recognises the two synthesized namespace
 		// nodes a pair of namespace:: walks makes for one binding.
-		return xdm.One(xdm.NewBoolean(ln.Is(rn))), nil
+		return xdm.One(boolItem(ln.Is(rn))), nil
 	case "<<":
-		return xdm.One(xdm.NewBoolean(ln.Compare(rn) < 0)), nil
+		return xdm.One(boolItem(ln.Compare(rn) < 0)), nil
 	default:
-		return xdm.One(xdm.NewBoolean(ln.Compare(rn) > 0)), nil
+		return xdm.One(boolItem(ln.Compare(rn) > 0)), nil
 	}
 }
 
@@ -188,7 +188,7 @@ func (e *BinaryOp) compareSingletons(ctx *Context, la, ra xdm.Sequence) (xdm.Seq
 	if err != nil {
 		return nil, err
 	}
-	return xdm.One(xdm.NewBoolean(res)), nil
+	return xdm.One(boolItem(res)), nil
 }
 
 // evalGeneralComparison implements =, !=, <, <=, >, >=.
@@ -202,13 +202,13 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 	// them to find out whether one value is among them is the wrong shape of
 	// work regardless.
 	if got, ok := nameComparison(ctx, e); ok {
-		return xdm.One(xdm.NewBoolean(got)), nil
+		return xdm.One(boolItem(got)), nil
 	}
 	valueOp := generalValueOp(e.Op)
 	if got, ok, err := rangeContains(ctx, e, valueOp); err != nil {
 		return nil, err
 	} else if ok {
-		return xdm.One(xdm.NewBoolean(got)), nil
+		return xdm.One(boolItem(got)), nil
 	}
 
 	l, err := e.Left.Eval(ctx)
@@ -249,7 +249,7 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	return xdm.One(xdm.NewBoolean(ok)), nil
+	return xdm.One(boolItem(ok)), nil
 }
 
 // nameComparison answers "name(A) = name(B)", "name(A) = 'lit'" and their

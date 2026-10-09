@@ -601,7 +601,7 @@ func (e *QuantifiedExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	return xdm.One(xdm.NewBoolean(res)), nil
+	return xdm.One(boolItem(res)), nil
 }
 
 // evalQuantified short-circuits: "some" stops at the first true, "every" at
