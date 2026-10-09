@@ -205,19 +205,28 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 // instruction is copied straight into the tree being built, and a text node
 // contributes its value. Like a parentless copy, it is not charged and takes
 // only the namespaces n itself declares.
-func (b *Builder) AppendCopyOf(n *xdm.Node) {
+//
+// It returns the copy, so that a caller can give it the bindings it chooses,
+// or nil when n contributed its value or was merged into the open element (a
+// text, attribute, namespace or document node under an open element).
+func (b *Builder) AppendCopyOf(n *xdm.Node) *xdm.Node {
 	if b.open == nil {
-		b.AppendNode(xdm.Copy(n))
-		return
+		c := xdm.Copy(n)
+		b.AppendNode(c)
+		return c
 	}
 	switch n.Kind() {
 	case xdm.KindText:
 		b.AppendText(n.Value())
+		return nil
 	case xdm.KindElement, xdm.KindComment, xdm.KindPI:
 		b.lastAtomic = false
-		Rebase(b.open.AppendCopy(n), b.open.BaseURI())
+		c := b.open.AppendCopy(n)
+		Rebase(c, b.open.BaseURI())
+		return c
 	default:
 		b.AppendNode(xdm.Copy(n))
+		return nil
 	}
 }
 
