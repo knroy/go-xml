@@ -2,6 +2,7 @@ package xsd
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -363,7 +364,16 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 		// carrying it would leave a table holding an order that covers
 		// only part of its targets, for a later reader to trust.
 		tbl.targets = below.targets
-		for n, k := range tbl.targets {
+		// Walked in document order, not map order, so a duplicate is
+		// reported on its later occurrence and several are reported in
+		// the same order on every run.
+		nodes := make([]*xdm.Node, 0, len(tbl.targets))
+		for n := range tbl.targets {
+			nodes = append(nodes, n)
+		}
+		slices.SortFunc(nodes, func(a, b *xdm.Node) int { return a.Order() - b.Order() })
+		for _, n := range nodes {
+			k := tbl.targets[n]
 			if prev, dup := tbl.entries[k]; dup && prev != n {
 				code := "cvc-identity-constraint.4.1"
 				if ic.Kind == ICKey {
