@@ -316,3 +316,111 @@ func TestTypedCopySeesItsRecordedEdits(t *testing.T) {
 		t.Errorf("two defaulted key values did not collide: %v", err)
 	}
 }
+
+// TestValidateWritesNothing pins the v2 contract: Validate only
+// checks. The document that ValidateCopy types, defaults
+// and strips (TestValidateCopyIsNotVacuous) comes back from Validate with no
+// annotation, no defaulted attribute and its whitespace in place.
+func TestValidateWritesNothing(t *testing.T) {
+	s := loadAssertionSchema(t, copySchema)
+	in := parseCopyDoc(t, copyDoc("100", `<n xsi:nil="true"/>`, "1"))
+	kidsBefore := in.Root.ChildElements()[0].NumChildren()
+	// parseCopyDoc stamps <x> as if an earlier assessment had typed it.
+	before := map[*xdm.Node]xdm.Typing{}
+	var snap func(n *xdm.Node)
+	snap = func(n *xdm.Node) {
+		before[n] = xdm.TypingOf(n)
+		for a := range n.Attrs() {
+			snap(a)
+		}
+		for c := range n.Children() {
+			snap(c)
+		}
+	}
+	snap(in.Root)
+	if err := s.Validate(in.Root, ValidateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(n *xdm.Node)
+	walk = func(n *xdm.Node) {
+		if got := xdm.TypingOf(n); got != before[n] {
+			t.Errorf("Validate wrote typing to %s: %+v", n.Name().Local, got)
+		}
+		for a := range n.Attrs() {
+			if a.Value() == "dflt" {
+				t.Errorf("Validate added the defaulted attribute %s", a.Name().Local)
+			}
+			walk(a)
+		}
+		for c := range n.Children() {
+			walk(c)
+		}
+	}
+	walk(in.Root)
+	if got := in.Root.ChildElements()[0].NumChildren(); got != kidsBefore {
+		t.Errorf("Validate stripped whitespace: %d children, had %d", got, kidsBefore)
+	}
+}
+
+// TestValidateConcurrentCheckOnly validates one tree from several goroutines
+// checking only. Under -race it fails if a check-only run writes to the
+// tree, as the union member, nilled and lax-wildcard restore writes did.
+func TestValidateConcurrentCheckOnly(t *testing.T) {
+	lax := loadAssertionSchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="r"><xs:complexType><xs:sequence>
+    <xs:any processContents="lax"/></xs:sequence></xs:complexType></xs:element>
+</xs:schema>`)
+	laxDoc, err := xdm.ParseString(`<r><x>k</x></r>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		s  *Schema
+		in *xdm.Node
+	}{
+		{loadAssertionSchema(t, copySchema), parseCopyDoc(t, copyDoc("100", `<n xsi:nil="true"/>`, "1")).Root},
+		{lax, laxDoc.Root},
+	} {
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := c.s.Validate(c.in, ValidateOptions{}); err != nil {
+					t.Errorf("Validate: %v", err)
+				}
+			}()
+		}
+		wg.Wait()
+	}
+}
+
+// TestCheckOnlyAssertionSeesUnwrittenTyping: an assertion evaluates over a
+// copy of its element, and a check-only run used to reach it through the
+// union member and dm:nilled it wrote onto the caller's tree. Those are now
+// held aside and laid onto the copy, so the verdict is the annotating run's.
+func TestCheckOnlyAssertionSeesUnwrittenTyping(t *testing.T) {
+	s := loadAssertionSchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:simpleType name="u"><xs:union memberTypes="xs:integer xs:NCName"/></xs:simpleType>
+  <xs:element name="r"><xs:complexType><xs:sequence>
+    <xs:element name="n" type="xs:int" nillable="true"/></xs:sequence>
+    <xs:attribute name="a" type="u"/>
+    <xs:assert test="data(@a) instance of xs:integer and nilled(n)"/>
+  </xs:complexType></xs:element>
+</xs:schema>`)
+	for _, annotate := range []bool{false, true} {
+		tree, err := xdm.ParseString(`<r a="7" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><n xsi:nil="true"/></r>`,
+			xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if annotate {
+			_, err = s.ValidateCopy(tree.Root, ValidateOptions{})
+		} else {
+			err = s.Validate(tree.Root, ValidateOptions{})
+		}
+		if err != nil {
+			t.Errorf("typed copy=%v: %v", annotate, err)
+		}
+	}
+}
