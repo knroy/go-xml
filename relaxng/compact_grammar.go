@@ -13,7 +13,7 @@ import (
 // namespace bindings on whichever it is.
 
 // parseTopLevel reads the declarations and then the body.
-func (p *compactParser) parseTopLevel() (*xdm.Node, error) {
+func (p *compactParser) parseTopLevel() (*cnode, error) {
 	if err := p.parseDecls(); err != nil {
 		return nil, err
 	}
@@ -57,12 +57,12 @@ func (p *compactParser) parseTopLevel() (*xdm.Node, error) {
 // namespace nodes, because a prefixed name in the compact syntax was resolved
 // against them and the compiler resolves the name= it becomes by looking them
 // up again.
-func (p *compactParser) decorate(root *xdm.Node) {
+func (p *compactParser) decorate(root *cnode) {
 	if p.defaultNS != "" {
 		p.b.attr(root, "ns", p.defaultNS)
 	}
 	for prefix, uri := range p.namespaces {
-		root.AddNamespace(prefix, uri)
+		root.addNS(prefix, uri)
 	}
 	// datatypeLibrary is inherited the same way ns= is, so the one written
 	// without a prefix — "datatypes xsd = ..." names a prefix, but a schema
@@ -268,7 +268,7 @@ func (p *compactParser) parseDatatypesDecl() error {
 // end is tokEOF for a schema that is a grammar without the keyword, and
 // tokPunct "}" for one written with braces. Passing it in rather than having
 // two loops keeps the set of things a grammar may hold in one place.
-func (p *compactParser) parseGrammarBody(g *xdm.Node, end tokenKind) error {
+func (p *compactParser) parseGrammarBody(g *cnode, end tokenKind) error {
 	for {
 		if err := p.readDoc(); err != nil {
 			return err
@@ -314,7 +314,7 @@ func (p *compactParser) atAnnotationElement() bool {
 
 // parseGrammarContent reads one start, define, div, include, or a free-standing
 // annotation element, which carries no schema meaning and is skipped.
-func (p *compactParser) parseGrammarContent(g *xdm.Node) error {
+func (p *compactParser) parseGrammarContent(g *cnode) error {
 	if p.atAnnotationElement() {
 		p.takeDoc()
 		if err := p.advance(); err != nil {
@@ -367,7 +367,7 @@ func (p *compactParser) parseAssignOp() (string, error) {
 }
 
 // parseStart reads `start = pattern`.
-func (p *compactParser) parseStart(g *xdm.Node, doc *annotation) error {
+func (p *compactParser) parseStart(g *cnode, doc *annotation) error {
 	if err := p.advance(); err != nil { // "start"
 		return err
 	}
@@ -383,14 +383,14 @@ func (p *compactParser) parseStart(g *xdm.Node, doc *annotation) error {
 	if combine != "" {
 		p.b.attr(s, "combine", combine)
 	}
-	s.AppendChild(pat)
+	s.add(pat)
 	p.attachDoc(s, doc)
-	g.AppendChild(s)
+	g.add(s)
 	return nil
 }
 
 // parseDefine reads `name = pattern`.
-func (p *compactParser) parseDefine(g *xdm.Node, doc *annotation) error {
+func (p *compactParser) parseDefine(g *cnode, doc *annotation) error {
 	name, err := p.identifier("a definition name")
 	if err != nil {
 		return err
@@ -408,9 +408,9 @@ func (p *compactParser) parseDefine(g *xdm.Node, doc *annotation) error {
 	if combine != "" {
 		p.b.attr(d, "combine", combine)
 	}
-	d.AppendChild(pat)
+	d.add(pat)
 	p.attachDoc(d, doc)
-	g.AppendChild(d)
+	g.add(d)
 	return nil
 }
 
@@ -419,7 +419,7 @@ func (p *compactParser) parseDefine(g *xdm.Node, doc *annotation) error {
 // A div groups definitions without affecting their scope. It exists in the
 // compact syntax for the same reason as in the XML syntax: so that an include
 // can override a whole block, and so that annotations can apply to a group.
-func (p *compactParser) parseDiv(g *xdm.Node, doc *annotation) error {
+func (p *compactParser) parseDiv(g *cnode, doc *annotation) error {
 	if err := p.advance(); err != nil { // "div"
 		return err
 	}
@@ -434,7 +434,7 @@ func (p *compactParser) parseDiv(g *xdm.Node, doc *annotation) error {
 		return err
 	}
 	p.attachDoc(d, doc)
-	g.AppendChild(d)
+	g.add(d)
 	return nil
 }
 
@@ -443,7 +443,7 @@ func (p *compactParser) parseDiv(g *xdm.Node, doc *annotation) error {
 // The overrides are definitions that replace the included schema's own, which
 // is how a schema is specialised without editing it. They are the same
 // grammar contents as anywhere else, so the same loop reads them.
-func (p *compactParser) parseInclude(g *xdm.Node, doc *annotation) error {
+func (p *compactParser) parseInclude(g *cnode, doc *annotation) error {
 	if err := p.advance(); err != nil { // "include"
 		return err
 	}
@@ -472,7 +472,7 @@ func (p *compactParser) parseInclude(g *xdm.Node, doc *annotation) error {
 		}
 	}
 	p.attachDoc(inc, doc)
-	g.AppendChild(inc)
+	g.add(inc)
 	return nil
 }
 
@@ -482,7 +482,7 @@ func (p *compactParser) parseInclude(g *xdm.Node, doc *annotation) error {
 // XML syntax that is ns= on the <include>, so the prefix is resolved here and
 // the URI written on, which is also why an unbound prefix is an error at this
 // point rather than a dangling reference later.
-func (p *compactParser) parseInheritClause(n *xdm.Node) error {
+func (p *compactParser) parseInheritClause(n *cnode) error {
 	if !p.atKeyword("inherit") {
 		return nil
 	}
@@ -539,11 +539,11 @@ func (p *compactParser) datatypeLibraryFor(prefix string) (string, bool) {
 // written as a namespace node on the element, so the compiler resolves it by
 // its own rule. Resolving it to a URI here instead would mean inventing an
 // ns= that could collide with an inherited one.
-func (p *compactParser) qnameFor(n *xdm.Node, prefix, local string) (string, error) {
+func (p *compactParser) qnameFor(n *cnode, prefix, local string) (string, error) {
 	uri, ok := p.resolvePrefix(prefix)
 	if !ok {
 		return "", p.errorf("the prefix %q is not bound", prefix)
 	}
-	n.AddNamespace(prefix, uri)
+	n.addNS(prefix, uri)
 	return prefix + ":" + local, nil
 }

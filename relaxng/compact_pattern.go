@@ -1,9 +1,5 @@
 package relaxng
 
-import (
-	"github.com/knroy/go-xml/v2/xdm"
-)
-
 // The pattern and name-class level of the compact syntax.
 
 // parsePattern reads a pattern with all its infix operators.
@@ -13,7 +9,7 @@ import (
 // one the whole sequence uses, and a different one after it is an error naming
 // both. A tower would have had to re-implement that refusal at each level, or
 // silently impose a precedence the language does not define.
-func (p *compactParser) parsePattern() (*xdm.Node, error) {
+func (p *compactParser) parsePattern() (*cnode, error) {
 	p.depth++
 	if p.depth > maxCompactDepth {
 		p.depth--
@@ -30,7 +26,7 @@ func (p *compactParser) parsePattern() (*xdm.Node, error) {
 	}
 
 	op := p.tok.text
-	operands := []*xdm.Node{first}
+	operands := []*cnode{first}
 	for {
 		if p.tok.kind != tokPunct {
 			break
@@ -65,7 +61,7 @@ func (p *compactParser) parsePattern() (*xdm.Node, error) {
 		local = "interleave"
 	}
 	n := p.b.el(local)
-	n.SetChildren(operands)
+	n.kids = operands
 	return n, nil
 }
 
@@ -74,7 +70,7 @@ func (p *compactParser) parsePattern() (*xdm.Node, error) {
 // They stack: "a?*" is legal, if pointless, and each wraps the last. Reading
 // them in a loop rather than allowing one keeps that from being a special
 // case the grammar does not actually make.
-func (p *compactParser) parseRepeated() (*xdm.Node, error) {
+func (p *compactParser) parseRepeated() (*cnode, error) {
 	n, err := p.parsePrimary()
 	if err != nil {
 		return nil, err
@@ -98,7 +94,7 @@ func (p *compactParser) parseRepeated() (*xdm.Node, error) {
 			return nil, err
 		}
 		wrap := p.b.el(local)
-		wrap.AppendChild(n)
+		wrap.add(n)
 		n = wrap
 	}
 }
@@ -141,7 +137,7 @@ func (p *compactParser) parseFollowAnnotations() error {
 }
 
 // parsePrimary reads a pattern with no infix or postfix operator.
-func (p *compactParser) parsePrimary() (*xdm.Node, error) {
+func (p *compactParser) parsePrimary() (*cnode, error) {
 	if err := p.readDoc(); err != nil {
 		return nil, err
 	}
@@ -168,7 +164,7 @@ func (p *compactParser) parsePrimary() (*xdm.Node, error) {
 	return n, nil
 }
 
-func (p *compactParser) parsePrimaryInner() (*xdm.Node, error) {
+func (p *compactParser) parsePrimaryInner() (*cnode, error) {
 	switch {
 	case p.at("("):
 		if err := p.advance(); err != nil {
@@ -226,7 +222,7 @@ func (p *compactParser) parsePrimaryInner() (*xdm.Node, error) {
 }
 
 // keywordPattern reads one of the patterns that is just a keyword.
-func (p *compactParser) keywordPattern(local string) (*xdm.Node, error) {
+func (p *compactParser) keywordPattern(local string) (*cnode, error) {
 	if err := p.advance(); err != nil {
 		return nil, err
 	}
@@ -234,7 +230,7 @@ func (p *compactParser) keywordPattern(local string) (*xdm.Node, error) {
 }
 
 // parseBracedPattern reads `list { p }` and `mixed { p }`.
-func (p *compactParser) parseBracedPattern(local string) (*xdm.Node, error) {
+func (p *compactParser) parseBracedPattern(local string) (*cnode, error) {
 	if err := p.advance(); err != nil {
 		return nil, err
 	}
@@ -249,12 +245,12 @@ func (p *compactParser) parseBracedPattern(local string) (*xdm.Node, error) {
 		return nil, err
 	}
 	n := p.b.el(local)
-	n.AppendChild(inner)
+	n.add(inner)
 	return n, nil
 }
 
 // parseRef reads a reference to a definition.
-func (p *compactParser) parseRef() (*xdm.Node, error) {
+func (p *compactParser) parseRef() (*cnode, error) {
 	name, err := p.identifier("a definition name")
 	if err != nil {
 		return nil, err
@@ -269,7 +265,7 @@ func (p *compactParser) parseRef() (*xdm.Node, error) {
 // It names a definition in the grammar one level out, which is how a nested
 // grammar reaches the one that contains it. The compiler already refuses one
 // written outside any enclosing grammar, so that is not rechecked here.
-func (p *compactParser) parseParentRef() (*xdm.Node, error) {
+func (p *compactParser) parseParentRef() (*cnode, error) {
 	if err := p.advance(); err != nil { // "parent"
 		return nil, err
 	}
@@ -283,7 +279,7 @@ func (p *compactParser) parseParentRef() (*xdm.Node, error) {
 }
 
 // parseExternalRef reads `external "uri" [inherit = prefix]`.
-func (p *compactParser) parseExternalRef() (*xdm.Node, error) {
+func (p *compactParser) parseExternalRef() (*cnode, error) {
 	if err := p.advance(); err != nil { // "external"
 		return nil, err
 	}
@@ -302,7 +298,7 @@ func (p *compactParser) parseExternalRef() (*xdm.Node, error) {
 }
 
 // parseInlineGrammar reads `grammar { ... }`.
-func (p *compactParser) parseInlineGrammar() (*xdm.Node, error) {
+func (p *compactParser) parseInlineGrammar() (*cnode, error) {
 	if err := p.advance(); err != nil { // "grammar"
 		return nil, err
 	}
@@ -321,7 +317,7 @@ func (p *compactParser) parseInlineGrammar() (*xdm.Node, error) {
 
 // parseElementOrAttribute reads `element nameclass { p }` or the attribute
 // form.
-func (p *compactParser) parseElementOrAttribute(local string) (*xdm.Node, error) {
+func (p *compactParser) parseElementOrAttribute(local string) (*cnode, error) {
 	if err := p.advance(); err != nil {
 		return nil, err
 	}
@@ -337,7 +333,7 @@ func (p *compactParser) parseElementOrAttribute(local string) (*xdm.Node, error)
 	if simple != "" {
 		p.b.attr(n, "name", simple)
 	} else {
-		n.AppendChild(nc)
+		n.add(nc)
 	}
 	if err := p.expect("{"); err != nil {
 		return nil, err
@@ -349,7 +345,7 @@ func (p *compactParser) parseElementOrAttribute(local string) (*xdm.Node, error)
 	if err := p.expect("}"); err != nil {
 		return nil, err
 	}
-	n.AppendChild(inner)
+	n.add(inner)
 	return n, nil
 }
 
@@ -359,7 +355,7 @@ func (p *compactParser) parseElementOrAttribute(local string) (*xdm.Node, error)
 // class is exactly one name, since that case is written as an attribute
 // instead. owner is the element the namespace bindings for any prefix must be
 // written onto.
-func (p *compactParser) parseNameClass(owner *xdm.Node) (nc *xdm.Node, simple string, err error) {
+func (p *compactParser) parseNameClass(owner *cnode) (nc *cnode, simple string, err error) {
 	p.depth++
 	if p.depth > maxCompactDepth {
 		p.depth--
@@ -378,7 +374,7 @@ func (p *compactParser) parseNameClass(owner *xdm.Node) (nc *xdm.Node, simple st
 	// out to be one branch of a choice has to become a <name> element after
 	// all.
 	choice := p.b.el("choice")
-	choice.AppendChild(p.nameClassNode(first, firstSimple))
+	choice.add(p.nameClassNode(first, firstSimple))
 	for p.at("|") {
 		if err := p.advance(); err != nil {
 			return nil, "", err
@@ -387,14 +383,14 @@ func (p *compactParser) parseNameClass(owner *xdm.Node) (nc *xdm.Node, simple st
 		if err != nil {
 			return nil, "", err
 		}
-		choice.AppendChild(p.nameClassNode(next, nextSimple))
+		choice.add(p.nameClassNode(next, nextSimple))
 	}
 	return choice, "", nil
 }
 
 // nameClassNode returns the element form of a name class, making a <name> when
 // the class was a bare name.
-func (p *compactParser) nameClassNode(n *xdm.Node, simple string) *xdm.Node {
+func (p *compactParser) nameClassNode(n *cnode, simple string) *cnode {
 	if simple == "" {
 		return n
 	}
@@ -404,7 +400,7 @@ func (p *compactParser) nameClassNode(n *xdm.Node, simple string) *xdm.Node {
 }
 
 // parseNameClassPrimary reads one name class with no "|".
-func (p *compactParser) parseNameClassPrimary(owner *xdm.Node) (*xdm.Node, string, error) {
+func (p *compactParser) parseNameClassPrimary(owner *cnode) (*cnode, string, error) {
 	// An annotation may precede a name class as it may precede a pattern.
 	if p.at("[") {
 		if err := p.skipAnnotation(); err != nil {
@@ -481,7 +477,7 @@ func (p *compactParser) parseNameClassPrimary(owner *xdm.Node) (*xdm.Node, strin
 
 // parseNameClassExcept reads an optional `- nameclass` following anyName or
 // nsName.
-func (p *compactParser) parseNameClassExcept(n *xdm.Node, owner *xdm.Node) error {
+func (p *compactParser) parseNameClassExcept(n *cnode, owner *cnode) error {
 	if !p.at("-") {
 		return nil
 	}
@@ -493,7 +489,7 @@ func (p *compactParser) parseNameClassExcept(n *xdm.Node, owner *xdm.Node) error
 		return err
 	}
 	ex := p.b.el("except")
-	ex.AppendChild(p.nameClassNode(inner, simple))
+	ex.add(p.nameClassNode(inner, simple))
 	// A further "|" after an except belongs to the excepted class, not to the
 	// class being excepted from: "* - (a | b)" is written with parentheses,
 	// but "* - a | b" excludes both. Reading the rest of the choice here is
@@ -506,17 +502,13 @@ func (p *compactParser) parseNameClassExcept(n *xdm.Node, owner *xdm.Node) error
 		if err != nil {
 			return err
 		}
-		ex.AppendChild(p.nameClassNode(next, nextSimple))
+		ex.add(p.nameClassNode(next, nextSimple))
 	}
-	if ex.NumChildren() > 1 {
+	if len(ex.kids) > 1 {
 		choice := p.b.el("choice")
-		kids := make([]*xdm.Node, ex.NumChildren())
-		for i := range kids {
-			kids[i] = ex.ChildAt(i)
-		}
-		choice.SetChildren(kids)
-		ex.SetChildren([]*xdm.Node{choice})
+		choice.kids = ex.kids
+		ex.kids = []*cnode{choice}
 	}
-	n.AppendChild(ex)
+	n.add(ex)
 	return nil
 }

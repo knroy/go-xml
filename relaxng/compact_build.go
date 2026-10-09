@@ -2,7 +2,6 @@ package relaxng
 
 import (
 	"github.com/knroy/go-xml/v2/xdm"
-	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // Construction of the XML-syntax tree that the compact syntax maps onto.
@@ -24,22 +23,35 @@ import (
 // builder assembles the XML-syntax tree.
 //
 // A pattern is parsed bottom-up — an operand exists before the operator that
-// combines it — so nodes are made detached and grafted together as the parse
-// reduces. The owning tree pointer is therefore not known when a node is made,
-// and is propagated to the whole tree in one walk by finish. Nothing in this
-// package asks a node for its document order, but a caller handed a tree might,
-// and a half-attached tree is a trap rather than an economy.
+// combines it — while an xdm tree is built top-down, each node appended to an
+// open parent in document order. The parser therefore builds cnodes, a plain
+// mirror of the elements it means, and finish emits the xdm tree from them in
+// one walk once the parse is complete.
 type builder struct{ tree *xdm.Tree }
 
 func newBuilder() *builder { return &builder{tree: xdm.NewTree()} }
+
+// cnode is an element, or a text node when isText, of the tree being parsed.
+type cnode struct {
+	name   xdm.QName
+	ns     [][2]string // prefix, uri
+	attrs  [][2]string // local name (no namespace), value
+	kids   []*cnode
+	text   string
+	isText bool
+}
+
+func (n *cnode) add(c *cnode)             { n.kids = append(n.kids, c) }
+func (n *cnode) addNS(prefix, uri string) { n.ns = append(n.ns, [2]string{prefix, uri}) }
+func (n *cnode) prepend(c *cnode)         { n.kids = append([]*cnode{c}, n.kids...) }
 
 // el makes a RELAX NG element.
 //
 // The name is in the RELAX NG namespace with no prefix. Nothing downstream
 // looks at the prefix — every check is on Name.URI == NS — and leaving it
 // empty keeps the tree from implying a binding the source never wrote.
-func (b *builder) el(local string) *xdm.Node {
-	return xdmbuild.NewElement(xdm.QName{URI: NS, Local: local})
+func (b *builder) el(local string) *cnode {
+	return &cnode{name: xdm.QName{URI: NS, Local: local}}
 }
 
 // attr sets a RELAX NG attribute.
@@ -48,8 +60,8 @@ func (b *builder) el(local string) *xdm.Node {
 // RELAX NG namespace as an error and one in any other namespace as a foreign
 // annotation to be ignored, so a name= that carried a URI would either be
 // rejected or silently dropped.
-func (b *builder) attr(n *xdm.Node, local, value string) {
-	n.AddAttr(xdmbuild.NewAttribute(xdm.QName{Local: local}, value))
+func (b *builder) attr(n *cnode, local, value string) {
+	n.attrs = append(n.attrs, [2]string{local, value})
 }
 
 // text gives an element character content.
@@ -57,34 +69,31 @@ func (b *builder) attr(n *xdm.Node, local, value string) {
 // Only the elements syntax.go marks textOnly — <name>, <value>, <param> — may
 // have any, and a whitespace-only text node elsewhere would be harmless but
 // pointless, so this is called exactly where content is meant.
-func (b *builder) text(n *xdm.Node, s string) {
-	n.AppendChild(xdmbuild.NewText(s))
+func (b *builder) text(n *cnode, s string) {
+	n.add(&cnode{text: s, isText: true})
 }
 
-// finish roots the document at n and returns the document node.
-//
-// Finalize assigns document order over the whole tree, but it is reached only
-// through nodes already linked to it, so the tree pointer is threaded down
-// first. AppendChild propagates it one level at a time and the tree was built
-// detached, so that propagation has to be repeated here rather than assumed.
-func (b *builder) finish(n *xdm.Node) *xdm.Node {
-	b.tree.Root.AppendChild(n)
-	b.adopt(n)
+// finish emits the document rooted at n and returns the document node.
+func (b *builder) finish(n *cnode) *xdm.Node {
+	emit(b.tree.Root, n)
 	b.tree.Finalize()
 	return b.tree.Root
 }
 
-// adopt relinks a detached subtree so every node names the parent and tree it
-// belongs to.
-func (b *builder) adopt(n *xdm.Node) {
-	for a := range n.Attrs() {
-		a.SetParent(n)
+// emit appends n, and then its subtree, to p.
+func emit(p *xdm.Node, n *cnode) {
+	if n.isText {
+		p.AppendText(n.text)
+		return
 	}
-	for ns := range n.NamespaceDecls() {
-		ns.SetParent(n)
+	e := p.AppendElement(n.name)
+	for _, ns := range n.ns {
+		e.AddNamespace(ns[0], ns[1])
 	}
-	for c := range n.Children() {
-		c.SetParent(n)
-		b.adopt(c)
+	for _, a := range n.attrs {
+		e.AppendAttr(xdm.QName{Local: a[0]}, a[1])
+	}
+	for _, k := range n.kids {
+		emit(e, k)
 	}
 }
