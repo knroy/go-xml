@@ -161,6 +161,14 @@ func (s *Schema) Validate(root *xdm.Node, opts ValidateOptions) error {
 // A nil ctx is treated as context.Background().
 func (s *Schema) ValidateContext(ctx context.Context, root *xdm.Node,
 	opts ValidateOptions) error {
+	return s.validateContext(ctx, root, opts, nil)
+}
+
+// validateContext is ValidateContext with the copy-to-original map
+// ValidateCopyContext supplies, so a failure on a copied node reports the
+// original's position. nil for an in-place run.
+func (s *Schema) validateContext(ctx context.Context, root *xdm.Node,
+	opts ValidateOptions, twins map[*xdm.Node]*xdm.Node) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -179,7 +187,7 @@ func (s *Schema) ValidateContext(ctx context.Context, root *xdm.Node,
 	if opts.MaxDepth == 0 {
 		opts.MaxDepth = DefaultMaxDepth
 	}
-	v := &validator{ctx: ctx, schema: s, opts: opts, ids: map[string]int{}}
+	v := &validator{ctx: ctx, schema: s, opts: opts, ids: map[string]int{}, twins: twins}
 	// icStatsHook is nil except under the package's own measurement tests.
 	// See icStats: the counters exist because elapsed time cannot show that
 	// the same node is walked once per enclosing scope.
@@ -297,6 +305,11 @@ type validator struct {
 	// xslt and xquery aggregates copy declarations between schemas, so no
 	// schema-level count is reliable; the declaration being validated is.
 	icScopes int
+
+	// twins maps a node of a ValidateCopy copy to the node it was copied
+	// from, so fail can report the original's line and column: the copy
+	// has no source text. nil for an in-place run.
+	twins map[*xdm.Node]*xdm.Node
 
 	// stripIgnorable removes whitespace-only text from elements whose
 	// declared content is element-only, as XML 1.0 §2.10 and XSLT 2.0 §4.4
@@ -483,6 +496,9 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 		Code:    code,
 		Message: fmt.Sprintf(format, args...),
 		Path:    v.pathString(),
+	}
+	if t := v.twins[n]; t != nil {
+		n = t
 	}
 	if n != nil {
 		if line, col, ok := n.Position(); ok {
