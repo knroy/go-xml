@@ -840,6 +840,7 @@ func (rt *runtime) clearRegexGroups() *runtime {
 	}
 	sub := rt.withVar(regexGroupsVar, nil)
 	sub.absent |= absentRegex
+	sub.noteUnbound(absentRegex)
 	return sub
 }
 

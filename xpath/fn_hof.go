@@ -111,7 +111,7 @@ func registerHOFuncs(l *Library) {
 			}
 			return xdm.Empty(), nil
 		}
-		item := functionItemFor(name, n, fn.Call)
+		item := functionItemFor(name, n, hostBoundCall(ctx, fn))
 		// The signature rides along for the same reason the focus does: F&O
 		// 16.4.3 makes this behave like a named function reference, and
 		// NamedFunctionRef.Eval assigns it. Without this line the two ways of

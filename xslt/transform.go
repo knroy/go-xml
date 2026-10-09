@@ -409,6 +409,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// the same whitespace declarations apply to them. The wrapper is per
 	// transform because its cache holds the stripped copies, which must not
 	// outlive the declarations that produced them.
+	callerDocs := opts.Documents
 	if len(s.strip) > 0 && opts.Documents != nil {
 		opts.Documents = &stripSpaceResolver{sheet: s, inner: opts.Documents}
 	}
@@ -425,8 +426,12 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	readDocs := map[string]bool{}
 	writtenDocs := map[string]bool{}
 	if opts.Documents != nil {
-		opts.Documents = &readDocResolver{
+		rd := &readDocResolver{
 			inner: opts.Documents, read: readDocs, written: writtenDocs}
+		if _, ok := callerDocs.(*FileResolver); ok {
+			rd.docs = map[docKey]*xdm.Tree{}
+		}
+		opts.Documents = rd
 	}
 
 	rt, err := newRuntime(s, ctx, source, opts)
@@ -436,8 +441,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	rt.readDocs = &readDocs
 	rt.writtenDocs = &writtenDocs
 	// Bind the runtime so key(), current() and xsl:function can reach it.
-	rt.ctx = rt.ctx.WithVar(runtimeVar,
-		xdm.One(&xdm.Opaque{Label: "runtime", Value: rt}))
+	rt.ctx = bindRuntime(rt.ctx, rt)
 
 	// The principal result tree begins here. Global variables were evaluated
 	// inside newRuntime, before this binding exists, which is what makes

@@ -493,7 +493,7 @@ func declaredXSLTVersion(el *xdm.Node) float64 {
 // an atomic value is never among them. This is what lets xsl:apply-templates
 // over a sequence of integers dispatch on ".[. mod 3 = 0]".
 func (p *Pattern) matchesAtomicItem(item xdm.Item, ctx *xpath.Context) (bool, error) {
-	ctx = ctx.WithVar(currentVar, xdm.One(item))
+	ctx = withCurrentItem(ctx, item)
 	// Section 24.3 clears the current output URI while a pattern is
 	// evaluated, whether the item being matched is a node or an atomic
 	// value. Pattern.Matches does the same for the node case;

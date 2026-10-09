@@ -21,14 +21,14 @@ import (
 // package's init registers with it, for a caller with no transform of its own,
 // and raises FOXT0004 in a program that does not link xslt; this overrides it
 // for the duration of a transform, exactly as key() and current() are bound
-// per transform by registerRuntimeFuncs.
+// in the runtime library by registerRuntimeFuncs.
 //
 // The nested transform inherits the outer one's resolvers. A stylesheet that
 // could reach documents through fn:transform that it could not reach through
 // fn:doc would be a hole in the sandbox rather than a feature, so
 // stylesheet-location and the source it names resolve through the same
 // (possibly nil) resolvers the caller supplied.
-func registerTransformFunc(l *xpath.Library, rt *runtime) {
+func registerTransformFunc(l *xpath.Library) {
 	l.Add(xpath.Function{
 		Name:  xdm.QName{URI: xdm.NSFN, Local: "transform"},
 		Arity: 1,
@@ -42,6 +42,10 @@ func registerTransformFunc(l *xpath.Library, rt *runtime) {
 			if !ok {
 				return nil, xdm.ErrType(
 					"fn:transform: the options must be a map, got %s", it.TypeName())
+			}
+			rt, err := rtFor(ctx)
+			if err != nil {
+				return nil, err
 			}
 			return runNestedTransform(ctx, callerOf(rt), opts)
 		},
@@ -68,7 +72,7 @@ type transformCaller struct {
 // callerOf is the caller a running (or static-phase) stylesheet makes.
 func callerOf(rt *runtime) transformCaller {
 	c := transformCaller{
-		opts: rt.opts, pkgs: rt.sheet.pkgResolver,
+		opts: *rt.opts, pkgs: rt.sheet.pkgResolver,
 		depth: rt.depth, maxDepth: rt.maxDepth,
 		goCtx: rt.goCtx, static: rt.static,
 	}

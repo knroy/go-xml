@@ -1229,5 +1229,6 @@ func (rt *runtime) clearMergeContext() *runtime {
 	sub = sub.withVar(currentMergeKeyVar, nil)
 	sub = sub.withVar(currentMergeSourcesVar, nil)
 	sub.absent |= absentMerge
+	sub.noteUnbound(absentMerge)
 	return sub
 }

@@ -28,8 +28,10 @@ type runtime struct {
 	// started by fn:transform inherits what this one was given -- above all
 	// the resolvers, since a nested transform that could reach documents the
 	// outer one could not would be a hole in the sandbox rather than a
-	// feature. See fntransform.go.
-	opts TransformOptions
+	// feature. See fntransform.go. It is held by pointer and never written
+	// after newRuntime: the runtime is copied on every focus and variable
+	// change, and the options are most of its size.
+	opts *TransformOptions
 
 	// static marks the stand-in runtime the static phase builds so that a
 	// static="yes" variable can call fn:transform. Section 9.7 gives a static
@@ -283,9 +285,10 @@ func (rt *runtime) withFocus(item xdm.Item, pos, size int) *runtime {
 // evaluation use withFocus, which deliberately leaves current() alone.
 func (rt *runtime) withCurrent(item xdm.Item, pos, size int) *runtime {
 	n := *rt
-	n.ctx = rt.ctx.WithFocus(item, pos, size)
 	if item != nil {
-		n.ctx = n.ctx.WithVar(currentVar, xdm.One(item))
+		n.ctx = withFocusCurrent(rt.ctx, item, pos, size)
+	} else {
+		n.ctx = rt.ctx.WithFocus(item, pos, size)
 	}
 	return &n
 }
@@ -309,7 +312,11 @@ func (rt *runtime) withVar(name xdm.QName, val xdm.Sequence) *runtime {
 	n := *rt
 	n.ctx = rt.ctx.WithVar(name, val)
 	if name.URI == internalNS {
-		n.absent &^= absentGroupOf(name)
+		g := absentGroupOf(name)
+		n.absent &^= g
+		if h := hostOf(n.ctx); h != nil && h.Unbound&g != 0 {
+			setUnbound(n.ctx, h.Unbound&^g)
+		}
 	}
 	return &n
 }
@@ -662,7 +669,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		secondary:     new([]SecondaryResult),
 		baseURIUsed:   new(bool),
 		baseOutputURI: opts.BaseOutputURI,
-		opts:          opts,
+		opts:          &opts,
 		goCtx:         ctx,
 	}
 
@@ -787,24 +794,12 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		return rt.deferredError(c, name)
 	}
 
-	// The key() and current() functions need the runtime, so they are bound
-	// per transform rather than living in the shared builtin library.
-	lib := xpath.NewLibrary(s.funcs)
-	registerRuntimeFuncs(lib, rt)
-	registerOutputFuncs(lib)
-	// The grouping, merge and position accessors go in here too, rather than
-	// after the globals are bound, because a global may hold a *reference* to
-	// one: for-each-group-078 writes `<xsl:variable name="f"
-	// select="current-group#0"/>`, and a named function reference resolves
-	// against the library in force where it is written. Registered later,
-	// that was XPST0017 for a function this engine has. They read their state
-	// through variable bindings that no global has yet, so one *called* from
-	// a global still reports the XTDE1061 it should.
-	registerGroupingFuncs(lib)
-	registerMergeFuncs(lib)
-	registerFormatNumber(lib, s)
-	registerPositionFuncs(lib)
-	rt.ctx.Funcs = packageScopedLibrary{inner: lib, sheet: s}
+	// The key() and current() functions need the runtime, so they live in a
+	// library of their own rather than the shared builtin one. It is built
+	// once per stylesheet: the functions find the transform through the
+	// context (rtFor), so every transform shares it and a call site's cached
+	// resolution survives from one transform to the next.
+	rt.ctx.Funcs = packageScopedLibrary{inner: s.runtimeLibrary(), sheet: s}
 
 	// Global variables are evaluated in dependency order rather than
 	// declaration order. Section 9.5 puts no ordering constraint on
@@ -818,8 +813,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// xsl:function reaches the runtime through this binding — evaluating the
 	// globals first left such a call reporting that it was made outside a
 	// transform.
-	rt.ctx = rt.ctx.WithVar(runtimeVar,
-		xdm.One(&xdm.Opaque{Label: "runtime", Value: rt}))
+	rt.ctx = bindRuntime(rt.ctx, rt)
 
 	if err := rt.evalGlobals(s, opts); err != nil {
 		return nil, err
@@ -832,6 +826,34 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// is what lets the set body be evaluated in that scope.
 	rt.globalCtx = rt.ctx
 	return rt, nil
+}
+
+// runtimeLibrary is the stylesheet's runtime function library, built on first
+// use.
+func (s *Stylesheet) runtimeLibrary() *xpath.Library {
+	s.rtLibOnce.Do(func() {
+		lib := xpath.NewLibrary(s.funcs)
+		// The functions that need a transform find it through the context;
+		// this runtime answers only the static resolvers, which read nothing
+		// but the stylesheet.
+		registerRuntimeFuncs(lib, &runtime{sheet: s})
+		registerOutputFuncs(lib)
+		// The grouping, merge and position accessors go in here too, rather
+		// than after the globals are bound, because a global may hold a
+		// *reference* to one: for-each-group-078 writes `<xsl:variable
+		// name="f" select="current-group#0"/>`, and a named function
+		// reference resolves against the library in force where it is
+		// written. Registered later, that was XPST0017 for a function this
+		// engine has. They read their state through variable bindings that no
+		// global has yet, so one *called* from a global still reports the
+		// XTDE1061 it should.
+		registerGroupingFuncs(lib)
+		registerMergeFuncs(lib)
+		registerFormatNumber(lib, s)
+		registerPositionFuncs(lib)
+		s.rtLib = lib
+	})
+	return s.rtLib
 }
 
 // evalGlobals binds every global variable, resolving dependencies on demand.
@@ -1433,4 +1455,13 @@ func functionCallsIn(src string, ns map[string]string) []string {
 // lexical scan, covers the rest.
 func isNameStartByte(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// noteUnbound records on rt.ctx, which a clearing function has just made,
+// that the components in bits are cleared there, so that runtimeFrom can
+// carry the knowledge into a stylesheet function's body.
+func (rt *runtime) noteUnbound(bits uint8) {
+	if h := hostOf(rt.ctx); h != nil {
+		setUnbound(rt.ctx, h.Unbound|bits)
+	}
 }

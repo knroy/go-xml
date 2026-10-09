@@ -210,7 +210,7 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 // be missing.
 func (rt *runtime) withCurrentNode(node *xdm.Node) *runtime {
 	n := *rt
-	n.ctx = rt.ctx.WithVar(currentVar, xdm.One(node))
+	n.ctx = withCurrentItem(rt.ctx, node)
 	return &n
 }
 

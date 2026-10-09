@@ -614,9 +614,9 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 			return nil, fmt.Errorf("XPST0017: unknown function %s with %d argument(s)",
 				e.Name.Clark(), len(e.Args))
 		}
-		return partialApply(e.Name, fn.Arity, fn.Call, e.Args, ctx)
+		return partialApply(e.Name, fn.Arity, hostBoundCall(ctx, fn), e.Args, ctx)
 	}
-	fn, ok := lookupFor(ctx, e.Name, len(e.Args))
+	fn, params, hasParams, ok := e.resolve(ctx)
 	if !ok {
 		// XSLT 18.1, and B.1 rule 6: under XPath 1.0 compatibility a call to
 		// an unknown function in a non-null namespace is not the static error
@@ -678,7 +678,7 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	// It covers only the functions the manifest has been migrated to; a miss
 	// binds the call exactly as before. See checkArgCardinality for why the
 	// check is cardinality-only and cannot change error precedence.
-	if params, ok := lookupSpecParams(fn.Name, fn.Arity); ok {
+	if hasParams {
 		if err := checkArgCardinality(fn.Name, params, args); err != nil {
 			return nil, err
 		}

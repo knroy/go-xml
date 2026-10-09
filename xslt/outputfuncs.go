@@ -11,7 +11,7 @@ import (
 //
 // It cannot be read from the runtime the way key() and current() are. The
 // runtime struct is copied by value on every focus change, and the copy
-// stored in runtimeVar is the one made when the transform started, so a
+// the context carries is the one made when the transform started, so a
 // `temporary` flag set on a derived copy is invisible to a function that
 // recovers the runtime from the context. Binding the value as an ordinary
 // XPath variable makes it follow the same scoping the expression itself
