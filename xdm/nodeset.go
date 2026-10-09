@@ -28,6 +28,11 @@ func SortDocumentOrder(seq Sequence) Sequence {
 	if len(seq) < 2 {
 		return seq
 	}
+	if inTreeOrder(seq) {
+		// Capped so that a caller appending to the result cannot write into
+		// spare capacity of the slice it passed in.
+		return seq[:len(seq):len(seq)]
+	}
 	nodes := make([]*Node, 0, len(seq))
 	for _, it := range seq {
 		n, ok := it.(*Node)
@@ -71,6 +76,30 @@ func SortDocumentOrder(seq Sequence) Sequence {
 		prev = n
 	}
 	return out
+}
+
+// inTreeOrder reports whether seq is already what SortDocumentOrder would
+// return: nodes of one parsed tree with strictly increasing order numbers.
+// Most step results are, and the sort's two slices were then pure cost.
+//
+// Within one tree Compare is the order compare, so a strictly increasing run
+// is sorted and holds no node twice. Detached roots (tree nil) are excluded
+// because sorting them numbers them, and namespace nodes because they are
+// synthesized: two pointers can be one node to Is, and their order is their
+// owner's plus an offset, which can equal a real node's.
+func inTreeOrder(seq Sequence) bool {
+	var prev *Node
+	for _, it := range seq {
+		n, ok := it.(*Node)
+		if !ok || n.tree == nil || n.Kind == KindNamespace {
+			return false
+		}
+		if prev != nil && (n.tree != prev.tree || n.order <= prev.order) {
+			return false
+		}
+		prev = n
+	}
+	return true
 }
 
 // Union returns the document-ordered union of two node sequences.

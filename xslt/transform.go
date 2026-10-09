@@ -68,6 +68,12 @@ type TransformOptions struct {
 	// legal 500-deep document could be parsed and not transformed.
 	MaxDepth int
 
+	// MaxItems bounds the items the transform's expressions may materialise,
+	// with xpath.Context.MaxItems's meaning: zero is xpath.MaxItems, negative
+	// is no bound. A transform started by fn:transform keeps its caller's
+	// bound whatever this says.
+	MaxItems int
+
 	// DisableAssertions turns off xsl:assert checking for the whole
 	// transformation. The zero value leaves assertions enabled, which is what
 	// XSLT 3.0 section 22.2 requires: "By default, assertions are enabled."
@@ -222,6 +228,12 @@ type TransformOptions struct {
 	// with its held flag rather than alone, and
 	// TestNestedTransformInheritsTheByteBudget.
 	nestedBudget *xpath.Context
+
+	// disableMessages is fn:transform's enable-messages=false: a
+	// non-terminating xsl:message is not evaluated, and a terminating one
+	// terminates without recording its text. Unexported because only
+	// runNestedTransform sets it.
+	disableMessages bool
 }
 
 // Result is the outcome of a transform.
@@ -397,6 +409,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// the same whitespace declarations apply to them. The wrapper is per
 	// transform because its cache holds the stripped copies, which must not
 	// outlive the declarations that produced them.
+	callerDocs := opts.Documents
 	if len(s.strip) > 0 && opts.Documents != nil {
 		opts.Documents = &stripSpaceResolver{sheet: s, inner: opts.Documents}
 	}
@@ -413,8 +426,12 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	readDocs := map[string]bool{}
 	writtenDocs := map[string]bool{}
 	if opts.Documents != nil {
-		opts.Documents = &readDocResolver{
+		rd := &readDocResolver{
 			inner: opts.Documents, read: readDocs, written: writtenDocs}
+		if _, ok := callerDocs.(*FileResolver); ok {
+			rd.docs = map[docKey]*xdm.Tree{}
+		}
+		opts.Documents = rd
 	}
 
 	rt, err := newRuntime(s, ctx, source, opts)
@@ -424,8 +441,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	rt.readDocs = &readDocs
 	rt.writtenDocs = &writtenDocs
 	// Bind the runtime so key(), current() and xsl:function can reach it.
-	rt.ctx = rt.ctx.WithVar(runtimeVar,
-		xdm.One(&xdm.Opaque{Label: "runtime", Value: rt}))
+	rt.ctx = bindRuntime(rt.ctx, rt)
 
 	// The principal result tree begins here. Global variables were evaluated
 	// inside newRuntime, before this binding exists, which is what makes

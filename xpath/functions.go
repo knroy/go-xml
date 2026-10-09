@@ -12,19 +12,32 @@ import (
 // fn:string($arg) are different functions, and fn:substring has both a
 // two- and a three-argument form with different behaviour.
 type Library struct {
-	fns map[string]Function
+	fns map[fnKey]Function
 	// Parent is consulted when a name is not found locally, so a stylesheet's
 	// own functions can shadow and extend the builtins without copying them.
 	Parent FunctionLibrary
+	// gen counts Add calls, so a call site's cached resolution through this
+	// library is never reused after it changes; see FuncCall.resolve.
+	gen uint64
 }
 
 // NewLibrary returns an empty library chained to parent.
 func NewLibrary(parent FunctionLibrary) *Library {
-	return &Library{fns: map[string]Function{}, Parent: parent}
+	return &Library{fns: map[fnKey]Function{}, Parent: parent}
 }
 
-func libKey(name xdm.QName, arity int) string {
-	return fmt.Sprintf("%s#%d", name.Clark(), arity)
+// fnKey is a function's expanded name and arity. It is a struct rather than
+// the "{uri}local#arity" string it once was because every function call looks
+// its target up by it, and building that string with fmt.Sprintf was an
+// allocation per call: XRechnung's validation made 483k allocations per
+// invoice with the string key and 230k without it.
+type fnKey struct {
+	uri, local string
+	arity      int
+}
+
+func libKey(name xdm.QName, arity int) fnKey {
+	return fnKey{name.URI, name.Local, arity}
 }
 
 // Lookup implements FunctionLibrary.
@@ -53,6 +66,7 @@ func (l *Library) Declares(name xdm.QName, arity int) bool {
 
 // Add registers a function.
 func (l *Library) Add(f Function) {
+	l.gen++
 	l.fns[libKey(f.Name, f.Arity)] = f
 }
 
@@ -252,7 +266,18 @@ func argNodeOrContext(ctx *Context, args []xdm.Sequence, i int) (*xdm.Node, erro
 	return n, nil
 }
 
-func boolSeq(v bool) xdm.Sequence   { return xdm.One(xdm.NewBoolean(v)) }
+func boolSeq(v bool) xdm.Sequence { return xdm.One(boolItem(v)) }
+
+// trueItem and falseItem are the two xs:boolean values, shared by every
+// evaluation: atomic values are never written once built.
+var trueItem, falseItem = xdm.NewBoolean(true), xdm.NewBoolean(false)
+
+func boolItem(v bool) *xdm.Atomic {
+	if v {
+		return trueItem
+	}
+	return falseItem
+}
 func strSeq(s string) xdm.Sequence  { return xdm.One(xdm.NewString(s)) }
 func intSeq(n int64) xdm.Sequence   { return xdm.One(xdm.NewInteger(n)) }
 func numSeq(f float64) xdm.Sequence { return xdm.One(xdm.NewDouble(f)) }

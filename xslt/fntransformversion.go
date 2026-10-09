@@ -2,7 +2,6 @@ package xslt
 
 import (
 	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
 )
 
 // transformXSLTVersion reads fn:transform's xslt-version option and returns
@@ -26,32 +25,9 @@ import (
 // the stylesheet's own version, which for a version="2.0" stylesheet would
 // select the 2.0 processor; that default is not followed (docs/known-gaps.md).
 func transformXSLTVersion(opts *xdm.MapItem) (float64, error) {
-	seq, ok := transformOption(opts, "xslt-version")
-	if !ok {
-		return 0, nil
-	}
-	it, err := seq.Single()
-	if err != nil {
-		return 0, xdm.ErrType("fn:transform: xslt-version must be a single xs:decimal")
-	}
-	var a *xdm.Atomic
-	switch v := it.(type) {
-	case *xdm.Node:
-		a = xdm.NewUntypedAtomic(v.StringValue())
-	case *xdm.Atomic:
-		a = v
-	default:
-		return 0, xdm.ErrType(
-			"fn:transform: xslt-version must be an xs:decimal, got %s", it.TypeName())
-	}
-	if a.Type == xdm.TypeUntypedAtomic {
-		if a, err = xpath.CastAtomic(a, xdm.TypeDecimal); err != nil {
-			return 0, err
-		}
-	}
-	if a.Type != xdm.TypeDecimal && a.Type != xdm.TypeInteger {
-		return 0, xdm.ErrType(
-			"fn:transform: xslt-version must be an xs:decimal, got %s", a.TypeName())
+	a, ok, err := transformAtomic(opts, "xslt-version", xdm.TypeDecimal)
+	if !ok || err != nil {
+		return 0, err
 	}
 	v, _ := a.Rat().Float64()
 	switch {

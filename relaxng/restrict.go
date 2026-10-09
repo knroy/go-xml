@@ -2,6 +2,7 @@ package relaxng
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -460,6 +461,21 @@ func (s *nameSet) merge(o nameSet) {
 	s.text = s.text || o.text
 }
 
+// distinct drops repeated name classes. A repeat cannot change whether two
+// sets overlap, and without this a definition referring twice to another
+// that does the same doubles its set at every link.
+func distinct(cs []nameClass) []nameClass {
+	seen := make(map[nameClass]bool, len(cs))
+	out := cs[:0:0]
+	for _, c := range cs {
+		if !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // checkCompetition applies §7.3 and §7.4 to a compiled pattern.
 func checkCompetition(p pattern) error {
 	_, err := competing(p)
@@ -472,31 +488,44 @@ func checkCompetition(p pattern) error {
 // whether two branches of a group conflict, both branches must first be
 // summarised, and summarising a branch means recursing into it.
 func competing(p pattern) (nameSet, error) {
-	return competingSeen(p, map[*refPat]bool{})
+	return competingSeen(p, map[*refPat]*nameSet{})
 }
 
-func competingSeen(p pattern, seen map[*refPat]bool) (nameSet, error) {
+func competingSeen(p pattern, seen map[*refPat]*nameSet) (nameSet, error) {
 	if r, ok := p.(*refPat); ok {
 		// A recursive definition is visited once: what it can match is
 		// already accounted for by the visit in progress, and following it
-		// again would not terminate.
-		if seen[r] {
-			return nameSet{}, nil
+		// again would not terminate. A shared one reached again elsewhere
+		// gives what it gave the first time; it is clipped so that a merge
+		// copies it rather than writing into it.
+		if s, done := seen[r]; done {
+			if s == nil {
+				return nameSet{}, nil
+			}
+			return nameSet{attrs: slices.Clip(s.attrs),
+				elems: slices.Clip(s.elems), text: s.text}, nil
 		}
-		seen[r] = true
+		seen[r] = nil
 		q, err := r.get()
 		if err != nil {
 			return nameSet{}, err
 		}
-		return competingSeen(q, seen)
+		s, err := competingSeen(q, seen)
+		if err != nil {
+			return nameSet{}, err
+		}
+		s.attrs, s.elems = distinct(s.attrs), distinct(s.elems)
+		seen[r] = &s
+		return nameSet{attrs: slices.Clip(s.attrs),
+			elems: slices.Clip(s.elems), text: s.text}, nil
 	}
 	switch t := p.(type) {
-	case attributePat:
+	case *attributePat:
 		// The attribute's own content is a separate world — §7.1 has already
 		// ruled out anything in it that could compete out here.
 		return nameSet{attrs: []nameClass{t.Name}}, nil
 
-	case elementPat:
+	case *elementPat:
 		// An element's content is checked, but its names do not escape: two
 		// sibling elements named bar are fine, it is two *branches* offering
 		// bar to the same interleave that is not.
@@ -508,7 +537,7 @@ func competingSeen(p pattern, seen map[*refPat]bool) (nameSet, error) {
 	case textPat:
 		return nameSet{text: true}, nil
 
-	case groupPat:
+	case *groupPat:
 		l, err := competingSeen(t.Left, seen)
 		if err != nil {
 			return nameSet{}, err
@@ -527,7 +556,7 @@ func competingSeen(p pattern, seen map[*refPat]bool) (nameSet, error) {
 		l.merge(r)
 		return l, nil
 
-	case interleavePat:
+	case *interleavePat:
 		l, err := competingSeen(t.Left, seen)
 		if err != nil {
 			return nameSet{}, err
@@ -556,7 +585,7 @@ func competingSeen(p pattern, seen map[*refPat]bool) (nameSet, error) {
 		l.merge(r)
 		return l, nil
 
-	case choicePat:
+	case *choicePat:
 		// Alternatives do not compete: only one of them runs.
 		l, err := competingSeen(t.Left, seen)
 		if err != nil {
@@ -569,7 +598,7 @@ func competingSeen(p pattern, seen map[*refPat]bool) (nameSet, error) {
 		l.merge(r)
 		return l, nil
 
-	case oneOrMorePat:
+	case *oneOrMorePat:
 		s, err := competingSeen(t.Pattern, seen)
 		if err != nil {
 			return nameSet{}, err
@@ -581,10 +610,10 @@ func competingSeen(p pattern, seen map[*refPat]bool) (nameSet, error) {
 		// before this check ever runs.
 		return s, nil
 
-	case listPat:
+	case *listPat:
 		return competingSeen(t.Pattern, seen)
 
-	case afterPat:
+	case *afterPat:
 		l, err := competingSeen(t.Left, seen)
 		if err != nil {
 			return nameSet{}, err
@@ -727,32 +756,50 @@ func checkStringSequences(p pattern) error {
 //
 // inList suspends the rule, and is set when descending into a listPat.
 func contentOf(p pattern, inList bool) (contentKind, error) {
-	return contentOfSeen(p, inList, map[*refPat]bool{})
+	return contentOfSeen(p, inList, map[refInList]*contentKind{})
 }
 
-func contentOfSeen(p pattern, inList bool, seen map[*refPat]bool) (contentKind, error) {
+// refInList keys contentOfSeen's memo: what a reference contributes depends
+// on whether it is read inside a list.
+type refInList struct {
+	r      *refPat
+	inList bool
+}
+
+func contentOfSeen(p pattern, inList bool, seen map[refInList]*contentKind) (contentKind, error) {
 	if r, ok := p.(*refPat); ok {
-		if seen[r] {
-			return kindNothing, nil
+		// As in competingSeen: nothing while the visit is in progress, the
+		// first answer when a shared definition is reached again.
+		key := refInList{r, inList}
+		if k, done := seen[key]; done {
+			if k == nil {
+				return kindNothing, nil
+			}
+			return *k, nil
 		}
-		seen[r] = true
+		seen[key] = nil
 		q, err := r.get()
 		if err != nil {
 			return 0, err
 		}
-		return contentOfSeen(q, inList, seen)
+		k, err := contentOfSeen(q, inList, seen)
+		if err != nil {
+			return 0, err
+		}
+		seen[key] = &k
+		return k, nil
 	}
 	switch t := p.(type) {
-	case dataPat:
+	case *dataPat:
 		if t.Except != nil {
 			if _, err := contentOfSeen(t.Except, true, seen); err != nil {
 				return 0, err
 			}
 		}
 		return kindString, nil
-	case valuePat:
+	case *valuePat:
 		return kindString, nil
-	case listPat:
+	case *listPat:
 		// The list itself is a string as far as its parent is concerned; its
 		// contents are checked with the rule suspended.
 		if _, err := contentOfSeen(t.Pattern, true, seen); err != nil {
@@ -762,7 +809,7 @@ func contentOfSeen(p pattern, inList bool, seen map[*refPat]bool) (contentKind, 
 	case textPat:
 		return kindChild, nil
 
-	case elementPat:
+	case *elementPat:
 		// The element's own content is a fresh scope: what it holds does not
 		// sequence with what stands beside it.
 		if _, err := contentOfSeen(t.Pattern, false, seen); err != nil {
@@ -779,7 +826,7 @@ func contentOfSeen(p pattern, inList bool, seen map[*refPat]bool) (contentKind, 
 		}
 		return kindChild, nil
 
-	case attributePat:
+	case *attributePat:
 		// An attribute's value is a string. Its pattern may match one, and
 		// <text/> is the ordinary way to say "any string" — what it may not
 		// hold is an element, which has nowhere to be. inString says so.
@@ -790,12 +837,12 @@ func contentOfSeen(p pattern, inList bool, seen map[*refPat]bool) (contentKind, 
 		// content: it is not a child.
 		return kindNothing, nil
 
-	case groupPat:
+	case *groupPat:
 		return sequencedSeen(t.Left, t.Right, inList, seen)
-	case interleavePat:
+	case *interleavePat:
 		return sequencedSeen(t.Left, t.Right, inList, seen)
 
-	case choicePat:
+	case *choicePat:
 		// Alternatives: the rule does not apply, and the choice contributes
 		// whatever either branch might.
 		l, err := contentOfSeen(t.Left, inList, seen)
@@ -808,7 +855,7 @@ func contentOfSeen(p pattern, inList bool, seen map[*refPat]bool) (contentKind, 
 		}
 		return l | r, nil
 
-	case oneOrMorePat:
+	case *oneOrMorePat:
 		k, err := contentOfSeen(t.Pattern, inList, seen)
 		if err != nil {
 			return 0, err
@@ -820,14 +867,14 @@ func contentOfSeen(p pattern, inList bool, seen map[*refPat]bool) (contentKind, 
 		}
 		return k, nil
 
-	case afterPat:
+	case *afterPat:
 		return sequencedSeen(t.Left, t.Right, inList, seen)
 	}
 	return kindNothing, nil
 }
 
 // sequenced checks the two halves of a group or interleave against §7.2.
-func sequencedSeen(a, b pattern, inList bool, seen map[*refPat]bool) (contentKind, error) {
+func sequencedSeen(a, b pattern, inList bool, seen map[refInList]*contentKind) (contentKind, error) {
 	l, err := contentOfSeen(a, inList, seen)
 	if err != nil {
 		return 0, err

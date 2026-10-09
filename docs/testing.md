@@ -7,7 +7,7 @@ The short version: `tests/check.sh` is the gate, and a change is not done
 until it prints `OK`.
 
 ```
-tests/check.sh fast     # build, vet, unit tests, race — about a minute
+tests/check.sh fast     # build, vet, gofmt, unit tests, race — about a minute
 tests/check.sh          # everything available, about eight minutes
 ```
 
@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,574 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,766 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -37,12 +37,14 @@ command can settle are asserted for equality by `tests/check.sh`'s *documented
 figures* section, which fails the gate when this table drifts from the tree:
 
 * **Unit tests** — `func Test` declarations, not subtests and not table rows:
-  `grep -rn "^func Test" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
-* **Limit boundary tests** — `func Test` declarations in the six
-  `*/limits_boundary_test.go` files (dtd, relaxng, xdm, xpath, xsd, xslt); most
+  `grep -rn "^func Test" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`
+* **Limit boundary tests** — `func Test` declarations in the
+  `*/limits_boundary*_test.go` files of dtd, relaxng, xdm, xpath, xsd and xslt
+  (xsd's HTTPResolver limits sit in `limits_boundary_http_test.go`, behind the
+  `goxml_nohttp` tag); most
   are table-driven, so they run rather more than 13 cases:
-  `grep -hc "^func Test" ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'`
-* **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
+  `grep -hc "^func Test" ./*/limits_boundary*_test.go | awk '{n += $1} END {print n + 0}'`
+* **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`
 * **W3C conformance suites** — the sum of the in-scope totals in the status
   table: XPath 3.1 22,054 + XQuery 3.1 30,517 + XSLT 2.0 6,201 + XSLT 3.0 11,518
   + XSD 1.0 39,388 + XSD 1.1 41,598 + RELAX NG 965. XPath 2.0 and 3.0 are not
@@ -1146,6 +1148,13 @@ inputs, and matched no files at all — both silently, since the corpus then
 reported "matched no inputs" and skipped. Only the remaining flags are
 word-split, and those are the literal switches written at the call site.
 
+**Each failing corpus file is named.** Below the count, the gate log prints
+one line per failure, `  XSpec failed: <file>: <first line of its error>`. A
+file counts as failed if the CLI exits non-zero *or* writes anything to
+stderr. Diffing two logs then shows which file moved; that is how a 224 in a
+git worktree, whose `testdata` is a symlink, was traced to
+`issue-987_parent.xspec` and the symlink artifact described above.
+
 **Skipped is not failed.** The suites skip cases by declared dependency — a
 specific Unicode version, a spec version not being measured. (Streaming used to
 head that list and no longer does: it was measured and found implemented.) The
@@ -1722,3 +1731,11 @@ a bug. The manifest carries no `since` field; it describes F&O 3.1 alone.
   that were attempted, measured and reverted.
 * [reaching-100.md](reaching-100.md) — what the remaining distance consists of
   and which parts are worth buying.
+
+## Regenerating the PGO profile
+
+`tests/pgo.sh` rebuilds `cmd/go-xml/default.pgo` from CPU profiles of the CLI
+on every benchmark workload family, weighted so none dominates. It needs the
+untracked corpora under `testdata/`, including `testdata/bench`, and takes
+about two minutes. A stale profile costs only speed, never correctness, so
+regenerate it after a change moves the hot paths, not on every commit.

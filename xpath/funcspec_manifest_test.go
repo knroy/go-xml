@@ -39,10 +39,16 @@ func loadManifest(t *testing.T) []manifestRow {
 	return rows
 }
 
+// String spells a key the way F&O names a function, "{uri}local#arity", so a
+// test can list the keys it is reporting.
+func (k fnKey) String() string {
+	return fmt.Sprintf("%s#%d", xdm.QName{URI: k.uri, Local: k.local}.Clark(), k.arity)
+}
+
 // manifestByKey indexes the manifest the way the library is keyed.
-func manifestByKey(t *testing.T) map[string]manifestRow {
+func manifestByKey(t *testing.T) map[fnKey]manifestRow {
 	t.Helper()
-	out := map[string]manifestRow{}
+	out := map[fnKey]manifestRow{}
 	for _, r := range loadManifest(t) {
 		name, ok := parseSpecName(r.Name)
 		if !ok {
@@ -60,8 +66,8 @@ func manifestByKey(t *testing.T) map[string]manifestRow {
 // is a claim that the specification defines no such function, so it needs a
 // reason, not just a name — a function added here to silence the enforcement
 // test would defeat the test's whole purpose.
-var extensionAllowlist = map[string]string{
-	"{http://www.w3.org/2005/xpath-functions}stream-available#1": "XSLT 3.0 " +
+var extensionAllowlist = map[fnKey]string{
+	{xdm.NSFN, "stream-available", 1}: "XSLT 3.0 " +
 		"18.1.3 defines fn:stream-available for streamability; F&O 3.1 defines " +
 		"no function of that name, so it has no proforma to extract.",
 }
@@ -114,7 +120,7 @@ func TestRegisteredFunctionsHaveManifestMetadata(t *testing.T) {
 			// TestConstructorFunctionsShareOneSignature below.
 			continue
 		}
-		missing = append(missing, key)
+		missing = append(missing, key.String())
 	}
 	sort.Strings(missing)
 
@@ -146,7 +152,7 @@ func TestRegisteredFunctionsHaveManifestMetadata(t *testing.T) {
 // migration work outstanding.
 func TestManifestFunctionsAreAllRegistered(t *testing.T) {
 	lib := Builtins().(*Library)
-	registered := map[string]bool{}
+	registered := map[fnKey]bool{}
 	for _, fn := range lib.fns {
 		registered[specKey(fn.Name, fn.Arity)] = true
 	}
@@ -167,7 +173,7 @@ func TestManifestFunctionsAreAllRegistered(t *testing.T) {
 		if _, ok := lookupFor(NewContext(nil, Builtins()), name, row.Arity); ok {
 			continue
 		}
-		missing = append(missing, key)
+		missing = append(missing, key.String())
 	}
 	sort.Strings(missing)
 
@@ -199,7 +205,7 @@ func TestCallBindingMigrationInventory(t *testing.T) {
 	for key, row := range manifest {
 		name, _ := parseSpecName(row.Name)
 		if _, ok := lookupSpecParams(name, row.Arity); !ok {
-			pending = append(pending, key)
+			pending = append(pending, key.String())
 		}
 	}
 	sort.Strings(pending)

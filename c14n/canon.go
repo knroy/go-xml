@@ -111,7 +111,7 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 	sw := &stickyWriter{w: w}
 	_, all := ns.(subtree)
 	c := &canon{
-		w:        bufio.NewWriter(sw),
+		w:        bufio.NewWriterSize(sw, outBufSize),
 		sw:       sw,
 		set:      ns,
 		all:      all,
@@ -689,45 +689,31 @@ func writeQName(w *bufio.Writer, q xdm.QName) {
 // §2.3. The two are deliberately asymmetric: text escapes '>' and leaves
 // '"', tab and newline alone; attribute values do the reverse. Do not unify.
 func writeEscaped(w *bufio.Writer, s string, attr bool) {
+	esc := &textEscapes
+	if attr {
+		esc = &attrEscapes
+	}
 	start := 0
 	for i := 0; i < len(s); i++ {
-		var rep string
-		switch s[i] {
-		case '&':
-			rep = "&amp;"
-		case '<':
-			rep = "&lt;"
-		case '>':
-			if attr {
-				continue
-			}
-			rep = "&gt;"
-		case '"':
-			if !attr {
-				continue
-			}
-			rep = "&quot;"
-		case '\t':
-			if !attr {
-				continue
-			}
-			rep = "&#x9;"
-		case '\n':
-			if !attr {
-				continue
-			}
-			rep = "&#xA;"
-		case '\r':
-			rep = "&#xD;"
-		default:
-			continue
+		if rep := esc[s[i]]; rep != "" {
+			_, _ = w.WriteString(s[start:i])
+			_, _ = w.WriteString(rep)
+			start = i + 1
 		}
-		_, _ = w.WriteString(s[start:i])
-		_, _ = w.WriteString(rep)
-		start = i + 1
 	}
 	_, _ = w.WriteString(s[start:])
 }
+
+// textEscapes and attrEscapes give each byte's replacement, or "" for none:
+// one table load per byte instead of a switch.
+var (
+	textEscapes = [256]string{'&': "&amp;", '<': "&lt;", '>': "&gt;", '\r': "&#xD;"}
+	attrEscapes = [256]string{'&': "&amp;", '<': "&lt;", '"': "&quot;", '\t': "&#x9;", '\n': "&#xA;", '\r': "&#xD;"}
+)
+
+// outBufSize is the output buffer: 64 KiB rather than bufio's 4 KiB, so a
+// large document reaches the writer in a sixteenth of the calls.
+const outBufSize = 64 << 10
 
 // uriRE is RFC 3986 appendix B's reference-splitting expression.
 var uriRE = regexp.MustCompile(`^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?$`)

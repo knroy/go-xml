@@ -130,6 +130,8 @@ var (
 // about the repository. tests/check.sh's docfigure section still uses grep, and
 // the two agreeing is a check in itself.
 //
+// bench/ is skipped too: it is a local, gitignored benchmark harness.
+//
 // .claude/worktrees holds agent checkouts of this same repository and would
 // otherwise multiply every count; testdata holds fixtures, some of which are
 // Go source. Both are skipped, which is what the documented grep commands do
@@ -146,11 +148,14 @@ func countKind(root, kind string) (int, error) {
 		})
 	case "limits-boundary":
 		return countDecls(root, funcTestRE, func(path string) bool {
-			if filepath.Base(path) != "limits_boundary_test.go" {
+			base := filepath.Base(path)
+			if !strings.HasPrefix(base, "limits_boundary") || !strings.HasSuffix(base, "_test.go") {
 				return false
 			}
 			// Only the top-level package directories, matching the documented
-			// `./*/limits_boundary_test.go`: one directory below the root.
+			// `./*/limits_boundary*_test.go`: one directory below the root.
+			// The glob takes xsd's limits_boundary_http_test.go, which a build
+			// tag keeps apart from the rest because it tests HTTPResolver.
 			rel, err := filepath.Rel(root, path)
 			if err != nil {
 				return false
@@ -171,6 +176,11 @@ func countDecls(root string, re *regexp.Regexp, want func(string) bool) (int, er
 		if info.IsDir() {
 			switch info.Name() {
 			case ".git", "testdata", "worktrees", "node_modules":
+				return filepath.SkipDir
+			}
+			// bench/ is the local benchmark harness, gitignored: counting its
+			// tests would make the figure depend on whether a checkout has it.
+			if filepath.Dir(path) == filepath.Clean(root) && info.Name() == "bench" {
 				return filepath.SkipDir
 			}
 			return nil

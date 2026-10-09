@@ -24,22 +24,22 @@ func render(d *Decoder) (string, error) {
 			return sb.String(), err
 		}
 		switch t := t.(type) {
-		case StartElement:
+		case *StartElement:
 			sb.WriteString("<" + qname(t.Name))
 			for _, a := range t.Attr {
 				fmt.Fprintf(&sb, " %s=%q", qname(a.Name), a.Value)
 			}
 			sb.WriteString(">")
-		case EndElement:
+		case *EndElement:
 			sb.WriteString("</" + qname(t.Name) + ">")
-		case CharData:
-			fmt.Fprintf(&sb, "%q", t)
-		case Comment:
-			sb.WriteString("<!--" + string(t) + "-->")
-		case ProcInst:
+		case *CharData:
+			fmt.Fprintf(&sb, "%q", *t)
+		case *Comment:
+			sb.WriteString("<!--" + string(*t) + "-->")
+		case *ProcInst:
 			sb.WriteString("<?" + t.Target + " " + string(t.Inst) + "?>")
-		case Directive:
-			sb.WriteString("<!" + string(t) + ">")
+		case *Directive:
+			sb.WriteString("<!" + string(*t) + ">")
 		}
 	}
 }
@@ -126,7 +126,9 @@ func TestXML11(t *testing.T) {
 		{name: "CR NEL", src: v11 + "<a>x\r\u0085y</a>", want: pi + `<a>"x\ny"</a>`},
 		{name: "NEL ref kept", src: v11 + "<a>&#x85;</a>", want: pi + `<a>"\u0085"</a>`},
 		{name: "NEL 1.0 kept", src: "<a>x\u0085y</a>", want: `<a>"x\u0085y"</a>`},
-		{name: "NEL in attr", src: v11 + "<a b='\u0085'/>", want: pi + `<a b="\n"></a>`},
+		{name: "NEL in attr", src: v11 + "<a b='\u0085'/>", want: pi + `<a b=" "></a>`},
+		{name: "1.1 line ends in attr", src: v11 + "<a b='1\r\u00852\u20283\r\n\u00854\t\u00855'/>", want: pi + `<a b="1 2 3  4  5"></a>`},
+		{name: "1.0 NEL and LS in attr kept", src: "<a b='1\r\u00852\u20283'/>", want: `<a b="1 \u00852\u20283"></a>`},
 		{name: "1.x is 1.0", src: `<?xml version="1.7"?><a>&#x7;</a>`, wantErr: syntax(1, "illegal character code U+0007")},
 		{name: "1.10 is 1.0", src: `<?xml version="1.10"?><a/>`, want: `<?xml version="1.10"?><a></a>`},
 		{name: "unsupported", src: `<?xml version="2.0"?><a/>`, wantErr: `xml: unsupported version "2.0"; only versions 1.x are supported`},
@@ -134,7 +136,14 @@ func TestXML11(t *testing.T) {
 		{name: "not digits", src: `<?xml version="1.1a"?><a/>`, wantErr: `xml: unsupported version "1.1a"; only versions 1.x are supported`},
 		{name: "restricted literal in comment", src: v11 + "<!--\x07-->", wantErr: syntax(1, "illegal character code U+0007")},
 		{name: "restricted literal in pi", src: v11 + "<?t \x07?>", wantErr: syntax(1, "illegal character code U+0007")},
-		{name: "NEL in comment", src: v11 + "<!--\u0085-->", want: pi + "<!--\u0085-->"},
+		{name: "NEL in comment", src: v11 + "<!--\u0085-->", want: pi + "<!--\n-->"},
+		{name: "1.1 line ends in comment", src: v11 + "<!--a\u0085b\u2028c\r\u0085d\r\ne-->", want: pi + "<!--a\nb\nc\nd\ne-->"},
+		{name: "1.1 line ends in pi", src: v11 + "<?p a\u0085b\u2028c\r\u0085d?>", want: pi + "<?p a\nb\nc\nd?>"},
+		{name: "1.0 comment and pi kept", src: "<!--a\u0085b\u2028c--><?p a\u0085b?>", want: "<!--a\u0085b\u2028c--><?p a\u0085b?>"},
+		{name: "1.1 line ends in doctype", src: v11 + "<!DOCTYPE a [<!ENTITY e \"1\u00852\u20283\r\u00854&#x85;\">]>",
+			want: pi + "<!DOCTYPE a [<!ENTITY e \"1\n2\n3\n4&#x85;\">]>"},
+		{name: "1.0 NEL in doctype kept", src: "<!DOCTYPE a [<!ENTITY e \"1\u00852\u20283\r\u00854\r\n5\r6\">]>",
+			want: "<!DOCTYPE a [<!ENTITY e \"1\u00852\u20283\n\u00854\n5\n6\">]>"},
 		{name: "stray decl", src: `<?xml version="1.0"?><a>` + `<?xml version="1.1"?>` + "\x07</a>",
 			wantErr: syntax(1, "illegal character code U+0007")},
 	})
@@ -151,7 +160,9 @@ func TestTags(t *testing.T) {
 		{name: "empty", src: `<a/>`, want: `<a></a>`},
 		{name: "prefixed", src: `<p:a></p:a>`, want: `<p:a></p:a>`},
 		{name: "edge colons", src: `<:a b:="1"/>`, want: `<:a b:="1"></:a>`},
-		{name: "attr ws kept", src: "<a b='\t\r\nc'/>", want: `<a b="\t\nc"></a>`},
+		{name: "attr ws normalised", src: "<a b='\t\r\nc\nd\re'/>", want: `<a b="  c d e"></a>`},
+		{name: "attr ws refs kept", src: "<a b='&#9;&#10;&#13;&#x20;'/>", want: `<a b="\t\n\r "></a>`},
+		{name: "text ws kept", src: "<a>\t\nc</a>", want: `<a>"\t\nc"</a>`},
 		{name: "attr refs", src: `<a b="&lt;&#65;"/>`, want: `<a b="<A"></a>`},
 		{name: "attr ]]>", src: `<a b="]]>"/>`, want: `<a b="]]>"></a>`},
 		{name: "no space between attrs", src: `<a b="1"c="2"/>`, wantErr: syntax(1, "expected white space between attributes")},
@@ -180,7 +191,8 @@ func TestTags(t *testing.T) {
 
 func TestMarkup(t *testing.T) {
 	runCases(t, []tokenCase{
-		{name: "comment", src: "<!-- c\r\n-->", want: "<!-- c\r\n-->"},
+		{name: "comment", src: "<!-- c\r\n-->", want: "<!-- c\n-->"},
+		{name: "1.0 CR NEL in comment and pi", src: "<!--a\r\u0085b--><?p a\r\u0085b\rc?>", want: "<!--a\n\u0085b--><?p a\n\u0085b\nc?>"},
 		{name: "empty comment", src: "<!---->", want: "<!---->"},
 		{name: "dash comment", src: "<!---a-->", want: "<!---a-->"},
 		{name: "double dash", src: "<!-- a -- b -->", wantErr: syntax(1, `invalid sequence "--" not allowed in comments`)},
@@ -210,10 +222,22 @@ func TestMarkup(t *testing.T) {
 		{name: "bad cdata", src: "<![CDATX[", wantErr: syntax(1, "invalid <![ sequence")},
 		{name: "doctype", src: `<!DOCTYPE a [<!ENTITY e "x>y"><!ATTLIST a b CDATA '>'>]>`,
 			want: `<!DOCTYPE a [<!ENTITY e "x>y"><!ATTLIST a b CDATA '>'>]>`},
-		{name: "doctype comment", src: "<!DOCTYPE a [<!-- > -- --><!ELEMENT a ANY>]>",
+		{name: "doctype comment", src: "<!DOCTYPE a [<!-- > - --><!ELEMENT a ANY>]>",
 			want: "<!DOCTYPE a [ <!ELEMENT a ANY>]>"},
+		{name: "doctype comment with --", src: "<!DOCTYPE a [<!-- a -- b --><!ELEMENT a ANY>]>",
+			wantErr: syntax(1, CommentDashes)},
+		{name: "doctype comment ending --->", src: "<!DOCTYPE a [<!-- a ---><!ELEMENT a ANY>]>",
+			wantErr: syntax(1, CommentDashes)},
+		{name: "comment with --", src: "<!-- a -- b -->", wantErr: syntax(1, CommentDashes)},
+		{name: "comment ending --->", src: "<!-- a --->", wantErr: syntax(1, CommentDashes)},
 		{name: "doctype <!- not comment", src: "<!DOCTYPE a [<!-x>]>", want: "<!DOCTYPE a [<!-x>]>"},
 		{name: "first byte is literal", src: "<!>a>", want: "<!>a>"},
+		{name: "doctype pi with apostrophe", src: "<!DOCTYPE a [<?pi it's?>]>", want: "<!DOCTYPE a [<?pi it's?>]>"},
+		{name: "doctype pi with quote, bracket, gt", src: `<!DOCTYPE a [<?pi "x ] > y?><!ELEMENT a ANY>]>`,
+			want: `<!DOCTYPE a [<?pi "x ] > y?><!ELEMENT a ANY>]>`},
+		{name: "doctype comment with quote, bracket", src: "<!DOCTYPE a [<!-- it's ] > --><!ELEMENT a ANY>]>",
+			want: "<!DOCTYPE a [ <!ELEMENT a ANY>]>"},
+		{name: "eof in doctype pi", src: "<!DOCTYPE a [<?pi x", wantErr: syntax(1, "unexpected EOF")},
 		{name: "eof in doctype", src: "<!DOCTYPE a [", wantErr: syntax(1, "unexpected EOF")},
 	})
 }
@@ -270,7 +294,7 @@ func TestLiteral(t *testing.T) {
 				if err != nil {
 					break
 				}
-				if _, ok := tok.(CharData); ok {
+				if _, ok := tok.(*CharData); ok {
 					got = append(got, d.Literal())
 				}
 			}
@@ -450,4 +474,23 @@ func latinOnly(charset string, input io.Reader) (io.Reader, error) {
 		return &out, nil
 	}
 	return nil, fmt.Errorf("unsupported encoding %q", charset)
+}
+
+// TestRawTokenDoesNotAllocatePerToken pins that a token costs no allocation:
+// RawToken returns pointers to values the Decoder reuses, where returning a
+// struct or slice in the Token interface copied each one to the heap. 1,000
+// repetitions of eight tokens took about 8,000 allocations that way.
+func TestRawTokenDoesNotAllocatePerToken(t *testing.T) {
+	doc := "<r>" + strings.Repeat("<e>text</e><!--c--><?p x?><![CDATA[d]]><f/>", 1000) + "</r>"
+	allocs := testing.AllocsPerRun(5, func() {
+		d := NewDecoder(strings.NewReader(doc))
+		for {
+			if _, err := d.RawToken(); err != nil {
+				break
+			}
+		}
+	})
+	if allocs > 100 {
+		t.Errorf("tokenizing 8,002 tokens took %.0f allocations, want at most 100", allocs)
+	}
 }

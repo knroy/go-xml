@@ -42,6 +42,7 @@ package xmltok
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"strconv"
@@ -75,8 +76,13 @@ type Attr struct {
 	Value string
 }
 
-// A Token is one of StartElement, EndElement, CharData, Comment, ProcInst or
-// Directive.
+// A Token is one of *StartElement, *EndElement, *CharData, *Comment,
+// *ProcInst or *Directive. It points into the Decoder, which reuses the same
+// value for the next token of its kind, so a token -- like the byte slices
+// and attribute slice it holds -- is valid only until the next call to
+// RawToken. Handing out pointers rather than values is what keeps a token
+// from costing an allocation: a struct or slice stored in an interface is
+// copied to the heap, a pointer is not.
 type Token any
 
 // A StartElement is a start tag. An empty-element tag is returned as a
@@ -115,10 +121,13 @@ const bufSize = 4096
 
 // A Decoder reads tokens from an XML byte stream.
 //
-// Byte slices in a returned token — CharData, Comment, ProcInst.Inst,
-// Directive — alias the Decoder's scratch space and are valid only until the
-// next call to RawToken.
+// A returned token, and the byte and attribute slices in it, alias the
+// Decoder's own storage and are valid only until the next call to RawToken.
 type Decoder struct {
+	// arena holds the attribute values handed out, which are copies and
+	// outlive the token.
+	arena Arena
+
 	// Strict is kept for the caller's sake, which sets it; the Decoder is
 	// strict whatever its value. xdm has never read a document any other way.
 	Strict bool
@@ -129,6 +138,21 @@ type Decoder struct {
 	// substituted as text and is not itself scanned for markup or references.
 	// The five predefined entities are recognised whatever it holds.
 	Entity map[string]string
+
+	// AttrEntity overrides Entity for a reference in an attribute value. XML
+	// 1.0 §3.3.3 normalizes replacement text there, turning its literal white
+	// space into spaces but not the characters written in it as references;
+	// only the caller, which expanded those references, can tell the two
+	// apart, so it supplies the normalized text. A name absent here reads as
+	// in Entity.
+	AttrEntity map[string]string
+
+	// Undeclared, when set, is asked about a reference to an entity that is
+	// neither predefined nor in Entity; if it reports true the reference is
+	// dropped instead of being an error. That is a non-validating
+	// processor's reading of a document whose declarations it may not have
+	// read (XML 1.0 §4.1, VC: Entity Declared); xdm decides when it applies.
+	Undeclared func(name string) bool
 
 	// CharsetReader converts a stream whose XML declaration names an
 	// encoding other than UTF-8. It receives the bytes after the declaration
@@ -151,6 +175,12 @@ type Decoder struct {
 	scratch []byte    // the bytes of the token being built
 	spans   []refSpan // in scratch, the extents produced by character references
 	carry   []byte    // a name that straddled a refill
+	attrs   []Attr    // backs StartElement.Attr, reused tag to tag
+
+	// names interns the names this Decoder has returned, so that a document
+	// repeating a few element and attribute names thousands of times
+	// allocates each once. Only valid names are entered.
+	names map[string]string
 
 	endPending bool // the last tag was empty; its EndElement is owed
 	endName    Name
@@ -159,6 +189,14 @@ type Decoder struct {
 	declSeen bool // the first <?xml?> has been read; the version is fixed
 
 	literal bool // the last CharData had no reference and was not CDATA
+
+	// The values RawToken returns pointers to, one per kind, reused.
+	tokStart   StartElement
+	tokEnd     EndElement
+	tokText    CharData
+	tokComment Comment
+	tokPI      ProcInst
+	tokDir     Directive
 }
 
 // NewDecoder returns a Decoder reading from r.
@@ -292,7 +330,8 @@ func (d *Decoder) RawToken() (Token, error) {
 	}
 	if d.endPending {
 		d.endPending = false
-		return EndElement{d.endName}, nil
+		d.tokEnd = EndElement{d.endName}
+		return &d.tokEnd, nil
 	}
 	b, ok := d.getc()
 	if !ok {
@@ -305,7 +344,8 @@ func (d *Decoder) RawToken() (Token, error) {
 		if !ok {
 			return nil, d.err
 		}
-		return CharData(data), nil
+		d.tokText = CharData(data)
+		return &d.tokText, nil
 	}
 	if b, ok = d.mustgetc(); !ok {
 		return nil, d.err
@@ -336,7 +376,8 @@ func (d *Decoder) endTag() (Token, error) {
 	if b != '>' {
 		return nil, d.syntaxError("invalid characters between </" + name.Local + " and >")
 	}
-	return EndElement{name}, nil
+	d.tokEnd = EndElement{name}
+	return &d.tokEnd, nil
 }
 
 // orSyntaxError reports msg unless a more specific error is already recorded.
@@ -355,7 +396,7 @@ func (d *Decoder) startTag() (Token, error) {
 	if !ok {
 		return nil, d.orSyntaxError("expected element name after <")
 	}
-	attrs := []Attr{}
+	attrs := d.attrs[:0]
 	for {
 		spaced := d.space()
 		b, ok := d.mustgetc()
@@ -401,17 +442,21 @@ func (d *Decoder) startTag() (Token, error) {
 		if !ok {
 			return nil, d.err
 		}
-		attrs = append(attrs, Attr{an, string(v)})
+		attrs = append(attrs, Attr{an, d.arena.String(v)})
 	}
-	return StartElement{name, attrs}, nil
+	d.attrs = attrs
+	d.tokStart = StartElement{name, attrs}
+	return &d.tokStart, nil
 }
 
 // procInst reads [16] PI after "<?", and treats target "xml" as [23] XMLDecl.
 // The target is followed by white space or "?>", and the body is checked
 // against [2] Char.
 //
-// parity: the body is not newline-normalised, and a target of "xml" is the
-// declaration wherever it appears, not only at the start of the document.
+// The body's line ends are folded to LF by the document's version (§2.11).
+//
+// parity: a target of "xml" is the declaration wherever it appears, not only
+// at the start of the document.
 func (d *Decoder) procInst() (Token, error) {
 	target, ok := d.name()
 	if !ok {
@@ -429,13 +474,15 @@ func (d *Decoder) procInst() (Token, error) {
 	if !d.checkChars(data, nil) {
 		return nil, d.err
 	}
+	data = foldLineEnds(data, d.v11)
 	if target == "xml" {
 		if err := d.xmlDecl(string(data)); err != nil {
 			d.err = err
 			return nil, err
 		}
 	}
-	return ProcInst{target, data}, nil
+	d.tokPI = ProcInst{target, data}
+	return &d.tokPI, nil
 }
 
 // xmlDecl applies the version and encoding of an XML declaration whose
@@ -558,14 +605,39 @@ func (d *Decoder) bang() (Token, error) {
 		if !ok {
 			return nil, d.err
 		}
-		return CharData(data), nil
+		d.tokText = CharData(data)
+		return &d.tokText, nil
 	}
 	return d.directive(b)
 }
 
+// CommentDashes is the error for a comment whose body holds "--" or ends in
+// "-" (XML 1.0 §2.5 [15]), wherever the comment is.
+const CommentDashes = `invalid sequence "--" not allowed in comments`
+
+// commentBody reads a comment's body after "<!--", appending it to dst, and
+// consumes the closing "-->". [15] admits no "--" in the body, nor a "-"
+// ending it, so the first "--" read must be followed by ">". Comments in
+// content and in the DOCTYPE both go through here.
+func (d *Decoder) commentBody(dst []byte) ([]byte, bool) {
+	data, ok := d.until("--", dst)
+	if !ok {
+		return nil, false
+	}
+	b, ok := d.mustgetc()
+	if !ok {
+		return nil, false
+	}
+	if b != '>' {
+		d.syntaxError(CommentDashes)
+		return nil, false
+	}
+	return data, true
+}
+
 // comment reads [15] Comment after "<!-", checking the body against [2] Char.
 //
-// parity: the body is not newline-normalised, as for a PI.
+// As for a PI, the body's line ends are folded by the document's version.
 func (d *Decoder) comment() (Token, error) {
 	b, ok := d.mustgetc()
 	if !ok {
@@ -574,21 +646,17 @@ func (d *Decoder) comment() (Token, error) {
 	if b != '-' {
 		return nil, d.syntaxError("invalid sequence <!- not part of <!--")
 	}
-	data, ok := d.until("--", d.scratch[:0])
+	data, ok := d.commentBody(d.scratch[:0])
 	if !ok {
 		return nil, d.err
 	}
 	d.scratch = data
-	if b, ok = d.mustgetc(); !ok {
-		return nil, d.err
-	}
-	if b != '>' {
-		return nil, d.syntaxError(`invalid sequence "--" not allowed in comments`)
-	}
 	if !d.checkChars(data, nil) {
 		return nil, d.err
 	}
-	return Comment(data), nil
+	data = foldLineEnds(data, d.v11)
+	d.tokComment = Comment(data)
+	return &d.tokComment, nil
 }
 
 // directive reads a markup declaration after "<!", whose first byte b has
@@ -597,11 +665,15 @@ func (d *Decoder) comment() (Token, error) {
 // Quoted text is opaque. Outside quotes each "<" opens a level that a ">"
 // closes, except that "<!--" begins a comment, which is dropped up to its
 // "-->" and replaced by one space, so that the text either side of it is not
-// joined into something new. The first byte is taken as it stands: it neither
+// joined into something new, and "<?" a PI, which is copied up to its "?>"
+// without its body being read as quotes or levels. The first byte is taken as it stands: it neither
 // opens a quote nor a level, and cannot close the directive.
 //
-// parity: the text is returned raw, and a comment inside it is not checked
-// for "--".
+// Its line ends are folded to LF, by the rules of the document's version.
+//
+// A comment inside it is held to [15] as one in content is.
+//
+// parity: the text is otherwise returned raw.
 func (d *Decoder) directive(b byte) (Token, error) {
 	out := append(d.scratch[:0], b)
 	var quote byte
@@ -629,6 +701,16 @@ func (d *Decoder) directive(b byte) (Token, error) {
 			case b == '>':
 				depth--
 			case b == '<':
+				// A PI is kept as written but scanned as a unit: its body
+				// is not markup, so a quote, "]" or ">" in it is text.
+				if c, ok := d.peek(); ok && c == '?' {
+					d.pos++
+					if out, ok = d.until("?>", append(out, '?')); !ok {
+						return nil, d.err
+					}
+					out = append(out, "?>"...)
+					continue
+				}
 				n := 0
 				for n < len("!--") {
 					if b, ok = d.mustgetc(); !ok {
@@ -646,15 +728,55 @@ func (d *Decoder) directive(b byte) (Token, error) {
 					continue
 				}
 				mark := len(out) - 1
-				if out, ok = d.until("-->", out); !ok {
+				if out, ok = d.commentBody(out); !ok {
 					return nil, d.err
 				}
 				out = append(out[:mark], ' ')
 			}
 		}
 	}
+	out = foldLineEnds(out, d.v11)
 	d.scratch = out
-	return Directive(out), nil
+	d.tokDir = Directive(out)
+	return &d.tokDir, nil
+}
+
+// foldLineEnds rewrites line ends to LF in place, §2.11: CR LF and a lone CR,
+// and under XML 1.1 (v11) NEL, U+2028 and CR NEL as well, so that a DTD's
+// entity values and attribute defaults hold the line ends content does. NEL
+// and U+2028 are UTF-8 sequences whose lead byte begins no other character,
+// so no other text can match.
+func foldLineEnds(b []byte, v11 bool) []byte {
+	if bytes.IndexByte(b, '\r') < 0 && (!v11 || bytes.IndexByte(b, 0xC2) < 0 && bytes.IndexByte(b, 0xE2) < 0) {
+		return b
+	}
+	w := 0
+	for i := 0; i < len(b); i++ {
+		switch {
+		case b[i] == '\r' && i+1 < len(b) && b[i+1] == '\n':
+			b[w] = '\n'
+			i++
+		case !v11:
+			if b[w] = b[i]; b[i] == '\r' {
+				b[w] = '\n'
+			}
+		case b[i] == '\r' && i+2 < len(b) && b[i+1] == 0xC2 && b[i+2] == 0x85:
+			b[w] = '\n'
+			i += 2
+		case b[i] == 0xC2 && i+1 < len(b) && b[i+1] == 0x85:
+			b[w] = '\n'
+			i++
+		case b[i] == 0xE2 && i+2 < len(b) && b[i+1] == 0x80 && b[i+2] == 0xA8:
+			b[w] = '\n'
+			i += 2
+		case b[i] == '\r':
+			b[w] = '\n'
+		default:
+			b[w] = b[i]
+		}
+		w++
+	}
+	return b[:w]
 }
 
 // until consumes input up to and including the first occurrence of term,
@@ -709,12 +831,27 @@ func (d *Decoder) name() (string, bool) {
 	if !ok {
 		return "", false
 	}
+	if s, ok := d.names[string(b)]; ok {
+		return s, true
+	}
 	if !isName(b) {
 		d.syntaxError("invalid XML name: " + string(b))
 		return "", false
 	}
-	return string(b), true
+	s := string(b)
+	// ponytail: entries stop at maxInternedNames, so a document of unique
+	// names costs a bounded map; later names are allocated as before.
+	if len(d.names) < maxInternedNames {
+		if d.names == nil {
+			d.names = make(map[string]string)
+		}
+		d.names[s] = s
+	}
+	return s, true
 }
+
+// maxInternedNames bounds the name table of one Decoder.
+const maxInternedNames = 4096
 
 // nameBytes consumes a run of bytes that may belong to a name: the ASCII name
 // characters and every non-ASCII byte, whose validity isName decides once the
@@ -803,11 +940,13 @@ const (
 	clDQ                // '"'
 	clSQ                // '\''
 	clNEL11             // last byte of NEL (C2 85) or U+2028 (E2 80 A8)
+	clWS                // '\t' or '\n', which §3.3.3 maps to a space in a value
 )
 
 var class = func() (t [256]uint8) {
 	t['<'], t['&'], t['>'], t['\r'], t['"'], t['\''] = clLT, clAmp, clGT, clCR, clDQ, clSQ
 	t[0x85], t[0xA8] = clNEL11, clNEL11
+	t['\t'], t['\n'] = clWS, clWS
 	return
 }()
 
@@ -822,17 +961,22 @@ var class = func() (t [256]uint8) {
 // values may also end at the end of input; xdm or the caller's next read
 // reports that.
 //
-// parity: an attribute value is not normalised by §3.3.3 — tabs and newlines
-// stay as they are.
+// In an attribute value a literal TAB, LF or CR (CR-LF counting as one) is
+// replaced by a space, as §3.3.3 asks, while a character reference to one of
+// them is kept as the character: the rewrite sees only literal input bytes.
+//
+// Under XML 1.1, NEL, U+2028 and CR NEL are line ends too, and so one space
+// in a value.
+// An entity's replacement text is the caller's to normalise; see AttrEntity.
 func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 	var stop uint8
 	switch {
 	case cdata:
 		stop = clGT | clCR
 	case quote == '"':
-		stop = clDQ | clLT | clAmp | clCR
+		stop = clDQ | clLT | clAmp | clCR | clWS
 	case quote == '\'':
-		stop = clSQ | clLT | clAmp | clCR
+		stop = clSQ | clLT | clAmp | clCR | clWS
 	default:
 		stop = clLT | clAmp | clGT | clCR
 	}
@@ -894,11 +1038,19 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 		case b == quote && quote != 0:
 			return d.finishText(out, spans)
 		case b == '&':
-			if out, spans, ok = d.reference(out, spans); !ok {
+			if out, spans, ok = d.reference(out, spans, quote != 0); !ok {
 				return nil, false
 			}
 			p1, p2 = 0, 0
 			continue
+		case quote != 0 && (b == '\t' || b == '\n' || b == '\r'):
+			// §3.3.3, applied after §2.11: a line end is one space. b stays
+			// a CR only for a lone CR, so that a NEL after it joins it.
+			if c, ok := d.peek(); ok && b == '\r' && c == '\n' {
+				d.pos++
+				b = '\n'
+			}
+			out = append(out, ' ')
 		case b == '\r':
 			out = append(out, '\n')
 			if c, ok := d.peek(); ok && c == '\n' {
@@ -907,20 +1059,29 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 			}
 		case b == 0x85 && p1 == 0xC2:
 			// NEL. Its lead byte is already written; \r NEL is one line
-			// end, and the \r has already been written as \n.
+			// end, and the \r has already been written as its line end.
 			out = out[:len(out)-1]
 			if p2 != '\r' {
-				out = append(out, '\n')
+				out = append(out, lineEnd(quote))
 			}
 		case b == 0xA8 && p1 == 0x80 && p2 == 0xE2:
 			// U+2028, likewise.
-			out = append(out[:len(out)-2], '\n')
+			out = append(out[:len(out)-2], lineEnd(quote))
 		default:
 			out = append(out, b)
 		}
 		p2, p1 = p1, b
 	}
 	return d.finishText(out, spans)
+}
+
+// lineEnd is what a line end reads as: a newline, or in an attribute value
+// (quote set) a space.
+func lineEnd(quote byte) byte {
+	if quote != 0 {
+		return ' '
+	}
+	return '\n'
 }
 
 // finishText checks the run against [2] and keeps its buffers for reuse.
@@ -939,9 +1100,11 @@ func (d *Decoder) finishText(out []byte, spans []refSpan) ([]byte, bool) {
 // A character reference is checked against [2] here, while it is still known
 // to be one, and its extent recorded in spans for checkChars to skip.
 //
+// In an attribute value AttrEntity is consulted first.
+//
 // parity: an entity's replacement text is not newline-normalised, but
 // checkChars does see it, as if it had been literal.
-func (d *Decoder) reference(out []byte, spans []refSpan) ([]byte, []refSpan, bool) {
+func (d *Decoder) reference(out []byte, spans []refSpan, attr bool) ([]byte, []refSpan, bool) {
 	d.literal = false
 	start := len(out)
 	out = append(out, '&')
@@ -1014,8 +1177,14 @@ func (d *Decoder) reference(out []byte, spans []refSpan) ([]byte, []refSpan, boo
 			name := out[start+1:]
 			out = append(out, ';')
 			if isName(name) {
-				if repl, found = predefined[string(name)]; !found && d.Entity != nil {
+				if repl, found = predefined[string(name)]; !found && attr {
+					repl, found = d.AttrEntity[string(name)]
+				}
+				if !found && d.Entity != nil {
 					repl, found = d.Entity[string(name)]
+				}
+				if !found && d.Undeclared != nil && d.Undeclared(string(name)) {
+					return out[:start], spans, true
 				}
 			}
 		}
@@ -1052,6 +1221,16 @@ func (d *Decoder) checkChars(b []byte, spans []refSpan) bool {
 			spans = spans[1:]
 			continue
 		}
+		// Eight bytes at a time while all are in 0x20..0x7F, which XML 1.0
+		// admits literally. 1.1 refuses a literal DEL, so it takes the byte
+		// loop. A byte below 0x20 borrows in w-0x2020..., and one at 0x80 or
+		// above is set in w, so either leaves a high bit and falls through.
+		if !d.v11 && i+8 <= len(b) && (len(spans) == 0 || i+8 <= spans[0].start) {
+			if w := binary.LittleEndian.Uint64(b[i:]); (w|(w-0x2020202020202020))&0x8080808080808080 == 0 {
+				i += 8
+				continue
+			}
+		}
 		if c := b[i]; c < utf8.RuneSelf {
 			if !ok[c] {
 				d.syntaxError(fmt.Sprintf("illegal character code %U", rune(c)))
@@ -1073,6 +1252,12 @@ func (d *Decoder) checkChars(b []byte, spans []refSpan) bool {
 	}
 	return true
 }
+
+// LegalCharRef reports whether a character reference may name r (XML 1.0
+// §4.1, WFC: Legal Character): r must be a Char of the document's version.
+// Under 1.1 that admits the [2a] RestrictedChar, which only a reference can
+// name, but never #x0.
+func LegalCharRef(r rune, v11 bool) bool { return isChar(r, v11, false) }
 
 // asciiChar10 and asciiChar11 tabulate isChar for literal ASCII.
 var asciiChar10, asciiChar11 = func() (t10, t11 [utf8.RuneSelf]bool) {

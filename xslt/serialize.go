@@ -1,13 +1,18 @@
 package xslt
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"io"
+	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/knroy/go-xml/internal/htmlser"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 )
@@ -62,7 +67,25 @@ func Serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 }
 
 // serialize writes a result sequence using the given output settings.
+//
+// The serializer writes token by token, which to an *os.File is a system call
+// per token, so any writer that is not already in memory or buffered gets a
+// buffer. It is flushed before returning, error or not, so the bytes that
+// reach w are exactly those the serializer wrote; the first error is kept.
 func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
+	switch w.(type) {
+	case *bytes.Buffer, *strings.Builder, *bufio.Writer:
+		return serializeTo(w, seq, opts, charMap)
+	}
+	bw := bufio.NewWriterSize(w, 32<<10)
+	err := serializeTo(bw, seq, opts, charMap)
+	if ferr := bw.Flush(); err == nil {
+		err = ferr
+	}
+	return err
+}
+
+func serializeTo(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
 	s := &serializer{w: w, opts: opts, charMap: charMap}
 	s.normalize = normalizerFor(opts.NormalizationForm)
 	if len(opts.SuppressIndentation) > 0 {
@@ -387,6 +410,9 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
+			if v.Kind == xdm.KindElement && v.Parent != nil {
+				s.seeded = v
+			}
 			s.node(v, 0)
 		case *xdm.Atomic:
 			s.escapeText(v.String())
@@ -399,9 +425,16 @@ type serializer struct {
 	w    io.Writer
 	opts OutputSettings
 	err  error
-	// nsStack tracks namespace prefixes already declared on ancestors, so a
-	// binding is emitted once rather than on every descendant.
-	nsStack []map[string]string
+	// ns holds the namespace bindings written on the open elements, outermost
+	// first, so a binding is emitted once rather than on every descendant.
+	// Each element appends what it declares and truncates back on exit; the
+	// latest entry for a prefix is the one in force. It replaced a map per
+	// element holding a copy of every binding in scope.
+	ns []nsPair
+	// seeded is the top-level element whose ancestors are not being written,
+	// and whose inherited bindings element therefore writes itself; see
+	// rootNamespaces.
+	seeded *xdm.Node
 	// pendingDoctype records that a document type declaration is owed, to be
 	// written immediately before the document element.
 	pendingDoctype bool
@@ -418,9 +451,13 @@ type serializer struct {
 	// content-type meta but serialises as XML: an XML declaration, and empty
 	// elements closed rather than left open.
 	xhtml bool
-	// inHead marks that serialisation is inside <head>, where a duplicate
-	// charset meta is suppressed.
-	inHead bool
+	// head is the <head> being written that received the method's own
+	// content-type meta, whose own content-type meta children are discarded
+	// (htmlser.ReplacedMeta); nil elsewhere.
+	head *xdm.Node
+	// skipIndent drops the indent before the node being written: it sits
+	// next to an inline HTML element (see skipBeforeChild).
+	skipIndent bool
 	// rawText marks that serialisation is inside an HTML element whose
 	// content is CDATA rather than parsed character data. rawTextName is
 	// which one, so that the error naming it can say so.
@@ -446,6 +483,18 @@ type serializer struct {
 	// charMap substitutes individual characters for arbitrary strings,
 	// bypassing escaping. Declared by xsl:character-map.
 	charMap map[rune]string
+	// oneSeg backs mapSegments' answer when there is no character map, so
+	// that every text node and attribute value does not allocate a slice for
+	// its single segment. Both callers finish with the slice before asking
+	// again.
+	oneSeg [1]mapSegment
+	// encFrom and encLower cache opts.Encoding lower-cased: representable
+	// asks for it on every non-ASCII character, and lower-casing "UTF-8"
+	// allocated each time. encFrom is the spelling the cache was made from.
+	encFrom, encLower string
+	// scratch holds a character reference or an encoded character on its way
+	// to w, so that writing one allocates nothing.
+	scratch [16]byte
 }
 
 func (s *serializer) writeString(str string) {
@@ -453,6 +502,24 @@ func (s *serializer) writeString(str string) {
 		return
 	}
 	_, s.err = io.WriteString(s.w, str)
+}
+
+func (s *serializer) writeBytes(b []byte) {
+	if s.err != nil {
+		return
+	}
+	_, s.err = s.w.Write(b)
+}
+
+// writeRune writes r UTF-8 encoded, as strings.Builder.WriteRune would.
+func (s *serializer) writeRune(r rune) {
+	s.writeBytes(utf8.AppendRune(s.scratch[:0], r))
+}
+
+// writeCharRef writes r as a decimal character reference, "&#N;".
+func (s *serializer) writeCharRef(r rune) {
+	b := strconv.AppendInt(append(s.scratch[:0], "&#"...), int64(r), 10)
+	s.writeBytes(append(b, ';'))
 }
 
 // fail keeps the first serialization error. Subsequent writes must not replace
@@ -704,28 +771,32 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		s.writeDoctypeFor(n)
 	}
 
-	// The method already emitted a content-type meta, so a charset meta from
-	// the stylesheet would be a duplicate declaration.
-	// The method already emitted a content-type meta, so one from the
-	// stylesheet would be a second, contradicting declaration. Both spellings
-	// are dropped: the HTML5 "charset" form and the HTTP-header form the
-	// serialiser itself writes.
-	if s.html && s.inHead && strings.EqualFold(n.Name.Local, "meta") &&
-		(n.Attr("", "charset") != nil || isContentTypeMeta(n)) {
+	// The method already emitted a content-type meta into this element's
+	// <head>, so one from the stylesheet would be a second, contradicting
+	// declaration. Both spellings are dropped, the HTML5 "charset" form and
+	// the HTTP-header form, but only as children of that head (§7.4.13).
+	if s.html && htmlser.ReplacedMeta(s.head, n) {
 		return
 	}
 	s.indent(depth)
 
-	name := s.elementName(n)
-	s.writeString("<" + name)
+	s.writeString("<")
+	s.writeElementName(n)
 
 	// Emit namespace declarations that are not already in scope on an
 	// ancestor. Re-declaring an inherited binding is legal but noisy, and for
 	// a document with a namespace on every element it doubles the output size.
-	inScope := s.currentScope()
-	declared := map[string]string{}
-	for _, ns := range n.Namespaces {
-		if inScope[ns.Name.Local] == ns.Value {
+	// s.ns[:base] is in scope from the ancestors; s.ns[base:] is what this
+	// element declares, and stays in scope for its children.
+	base := len(s.ns)
+	defer func() { s.ns = s.ns[:base] }()
+	nsNodes := n.Namespaces
+	if n == s.seeded {
+		s.seeded = nil
+		nsNodes = rootNamespaces(n)
+	}
+	for _, ns := range nsNodes {
+		if s.inScope(base, ns.Name.Local) == ns.Value {
 			continue
 		}
 		// An element binds each prefix at most once, and the binding its own
@@ -743,7 +814,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		// same prefix twice -- xsl:namespace-alias with competing aliases at
 		// different import precedence leaves two y bindings behind, which is
 		// namespace-alias-2620 -- and writing both is not well-formed XML.
-		if _, dup := declared[ns.Name.Local]; dup {
+		if _, dup := s.declared(base, ns.Name.Local); dup {
 			continue
 		}
 		// A namespace undeclaration for a *prefix* -- xmlns:p="" -- is
@@ -763,14 +834,14 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			continue
 		}
 		s.writeNamespaceDecl(ns.Name.Local, ns.Value)
-		declared[ns.Name.Local] = ns.Value
+		s.ns = append(s.ns, nsPair{ns.Name.Local, ns.Value})
 	}
 	// An element whose namespace has no declaration in scope needs one, which
 	// happens for elements built by xsl:element with a computed namespace.
-	if n.Name.URI != "" && inScope[n.Name.Prefix] != n.Name.URI &&
-		declared[n.Name.Prefix] != n.Name.URI {
+	if n.Name.URI != "" && s.inScope(base, n.Name.Prefix) != n.Name.URI &&
+		s.declaredURI(base, n.Name.Prefix) != n.Name.URI {
 		s.writeNamespaceDecl(n.Name.Prefix, n.Name.URI)
-		declared[n.Name.Prefix] = n.Name.URI
+		s.ns = append(s.ns, nsPair{n.Name.Prefix, n.Name.URI})
 	}
 	// An element in no namespace under an ancestor with a default namespace
 	// has to undeclare it. Without xmlns="" the element is read back as
@@ -782,24 +853,24 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// string, so testing declared[""] == "" could not tell "already
 	// undeclared here" from "not mentioned here" and wrote xmlns="" twice on
 	// an element that needed it once.
-	if _, undeclared := declared[""]; n.Name.URI == "" && n.Name.Prefix == "" &&
-		inScope[""] != "" && !undeclared {
+	if _, undeclared := s.declared(base, ""); n.Name.URI == "" && n.Name.Prefix == "" &&
+		s.inScope(base, "") != "" && !undeclared {
 		s.writeNamespaceDecl("", "")
-		declared[""] = ""
+		s.ns = append(s.ns, nsPair{"", ""})
 	}
 	for _, a := range n.Attrs {
 		if a.Name.URI == "" || a.Name.URI == xdm.NSXML {
 			continue
 		}
-		if inScope[a.Name.Prefix] == a.Name.URI || declared[a.Name.Prefix] == a.Name.URI {
+		if s.inScope(base, a.Name.Prefix) == a.Name.URI || s.declaredURI(base, a.Name.Prefix) == a.Name.URI {
 			continue
 		}
 		s.writeNamespaceDecl(a.Name.Prefix, a.Name.URI)
-		declared[a.Name.Prefix] = a.Name.URI
+		s.ns = append(s.ns, nsPair{a.Name.Prefix, a.Name.URI})
 	}
 
 	for _, a := range n.Attrs {
-		s.writeString(" " + s.attrName(a) + s.attrValue(a, n))
+		s.writeAttr(a, n)
 	}
 
 	// An empty element still has to be opened when the method is going to put
@@ -835,7 +906,9 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 				if s.isVoidElement(n.Name.Local) {
 					s.writeString(">")
 				} else {
-					s.writeString("></" + name + ">")
+					s.writeString("></")
+					s.writeElementName(n)
+					s.writeString(">")
 				}
 				return
 			}
@@ -865,7 +938,9 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			if s.xhtmlVoidElement(n) {
 				s.writeString(" />")
 			} else {
-				s.writeString("></" + name + ">")
+				s.writeString("></")
+				s.writeElementName(n)
+				s.writeString(">")
 			}
 			return
 		}
@@ -875,7 +950,6 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		return
 	}
 
-	s.pushScope(inScope, declared)
 	s.writeString(">")
 
 	// The HTML method adds the content-type meta so the encoding survives
@@ -902,24 +976,16 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// constructor puts it in none -- and ask to see the content-type meta.
 	if s.html && strings.EqualFold(n.Name.Local, "head") &&
 		(!s.xhtml || n.Name.URI == nsXHTML || n.Name.URI == "") {
-		s.inHead = true
-		defer func() { s.inHead = false }()
 		// include-content-type="no" suppresses the meta element. It defaults
 		// to yes, which is why an absent attribute is nil rather than false.
 		if s.opts.IncludeContentType == nil || *s.opts.IncludeContentType {
-			enc := s.opts.Encoding
-			if enc == "" {
-				enc = "UTF-8"
-			}
-			media := s.opts.MediaType
-			if media == "" {
-				// The default is text/html for the html *and* xhtml methods.
-				// XHTML served as application/xhtml+xml is the stricter
-				// choice, but the specification names text/html for both,
-				// and this element exists to describe what a browser will
-				// see rather than what the author would prefer.
-				media = "text/html"
-			}
+			// Serialization 3.1 §7.4.13 and §6.1.14 discard the head's own
+			// content-type meta only "if a meta element has been added", so
+			// the suppression is armed here and nowhere else: under
+			// include-content-type="no" the head keeps the meta it was given.
+			saved := s.head
+			s.head = n
+			defer func() { s.head = saved }()
 			// A character map applies to the value of every attribute the
 			// serializer writes, and this one is no exception: XSLT 3.0
 			// section 27.1 puts the character map at the very end of the
@@ -930,7 +996,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// the generated meta element. Not very desirable but that's what
 			// the spec says." Only the value is mapped; the element and
 			// attribute names are markup the map never touches.
-			content := s.mapChars(media + `; charset=` + enc)
+			content := s.mapChars(htmlser.MetaContent(s.opts.MediaType, s.opts.Encoding))
 			// The injected element is indented like a child of <head>,
 			// because that is what it is. Writing it flush against the start
 			// tag while the head's real children were each on their own line
@@ -946,17 +1012,21 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// `">` closed the content attribute and the meta tag, and
 			// everything after it became live markup in the <head>. Nothing
 			// legal is refused here -- a media type containing `<` or `"` is
-			// escaped, as escapeAttrRunes escapes any other value.
-			tag := `<meta http-equiv="Content-Type" content="` +
-				s.escapeAttrRunes(content) + `">`
-			if s.xhtml {
-				// XHTML is XML: an empty element must be closed. The space
-				// before the slash is what the HTML compatibility guidelines
-				// ask for, so that an HTML parser reading the same bytes does
-				// not take the slash as part of the last attribute value.
-				tag = strings.TrimSuffix(tag, ">") + " />"
+			// escaped, as writeAttrRuns escapes any other value.
+			if !s.attrErr(content) {
+				s.writeString(`<meta http-equiv="Content-Type" content="`)
+				s.writeAttrRuns(content, false)
+				if s.xhtml {
+					// XHTML is XML: an empty element must be closed. The
+					// space before the slash is what the HTML compatibility
+					// guidelines ask for, so that an HTML parser reading the
+					// same bytes does not take the slash as part of the last
+					// attribute value.
+					s.writeString(`" />`)
+				} else {
+					s.writeString(`">`)
+				}
 			}
-			s.writeString(tag)
 		}
 	}
 
@@ -990,7 +1060,13 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// Suppression covers the whole subtree, not this element alone: the
 	// point is that the content comes out as it went in, and re-indenting a
 	// grandchild disturbs it exactly as much as re-indenting a child.
-	indentChildren := s.opts.Indent && !hasTextChild(n) && !s.suppressed(n)
+	//
+	// Beyond those, Serialization 3.1 §5.1.4 grants the licence to indent
+	// only in the immediate content of an untyped (or xs:anyType) element
+	// that has element children, or of an element whose content model is
+	// element-only; mayIndentContent says which.
+	indentChildren := s.opts.Indent && !hasTextChild(n) && !s.suppressed(n) &&
+		mayIndentContent(n)
 	// The html method adds no whitespace before or after a comment or a
 	// processing instruction, which is what Serialization-html-48 is titled.
 	// The reason is that neither is markup an HTML parser skips over on its
@@ -1003,18 +1079,25 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	if indentChildren && s.html && !s.xhtml && hasCommentOrPIChild(n) {
 		indentChildren = false
 	}
-	for _, c := range n.Children {
-		if indentChildren {
-			s.node(c, depth+1)
-		} else {
+	// Serialization 3.1 §7.4.3 (html) and §6.1.4 (xhtml): whitespace "MUST
+	// NOT be added or removed adjacent to an inline element"; see
+	// htmlser.SkipIndentBefore for where that leaves room for an indent.
+	for i, c := range n.Children {
+		if !indentChildren {
 			s.nodeNoIndent(c)
+			continue
 		}
+		s.skipIndent = s.skipBeforeChild(n, i)
+		s.node(c, depth+1)
+		s.skipIndent = false
 	}
-	if indentChildren || (emptyHead && s.opts.Indent) {
+	if (indentChildren && !s.skipBeforeChild(n, len(n.Children))) ||
+		(emptyHead && s.opts.Indent) {
 		s.indent(depth)
 	}
-	s.writeString("</" + name + ">")
-	s.popScope()
+	s.writeString("</")
+	s.writeElementName(n)
+	s.writeString(">")
 }
 
 // nodeNoIndent writes a node without introducing whitespace.
@@ -1025,36 +1108,90 @@ func (s *serializer) nodeNoIndent(n *xdm.Node) {
 	s.opts.Indent = saved
 }
 
+// rootNamespaces returns the namespace nodes to write on n when it is
+// serialized without its ancestors: its own, and the bindings it inherits.
+//
+// Serialization 3.1 §2 copies each node of the sequence into a new document
+// first, and the copy keeps every in-scope namespace of the element. A
+// constructed element leaves a binding its parent already has to the parent,
+// so writing only its own nodes lost that binding from the output. When n
+// inherits nothing its own nodes are returned unchanged; otherwise the union
+// is sorted by prefix, which is the order a literal result element copies
+// its bindings in.
+func rootNamespaces(n *xdm.Node) []*xdm.Node {
+	scope := n.InScopeNamespaces()
+	own := make(map[string]bool, len(n.Namespaces))
+	for _, ns := range n.Namespaces {
+		own[ns.Name.Local] = true
+	}
+	var out []*xdm.Node
+	for p, uri := range scope {
+		if p != "xml" && !own[p] {
+			out = append(out, &xdm.Node{Kind: xdm.KindNamespace,
+				Name: xdm.QName{Local: p}, Value: uri})
+		}
+	}
+	if out == nil {
+		return n.Namespaces
+	}
+	out = append(out, n.Namespaces...)
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Name.Local < out[j].Name.Local
+	})
+	return out
+}
+
 func (s *serializer) writeNamespaceDecl(prefix, uri string) {
 	if prefix == "" {
-		s.writeString(` xmlns="` + escapeAttr(uri) + `"`)
-		return
+		s.writeString(` xmlns="`)
+	} else {
+		s.writeString(` xmlns:`)
+		s.writeString(prefix)
+		s.writeString(`="`)
 	}
-	s.writeString(` xmlns:` + prefix + `="` + escapeAttr(uri) + `"`)
+	s.writeString(escapeAttr(uri))
+	s.writeString(`"`)
 }
 
-func (s *serializer) currentScope() map[string]string {
-	if len(s.nsStack) == 0 {
-		return map[string]string{}
+// nsPair is one namespace binding written on an open element.
+type nsPair struct{ prefix, uri string }
+
+// inScope returns the URI an ancestor bound prefix to, or "" if none did:
+// the latest binding in s.ns[:base].
+func (s *serializer) inScope(base int, prefix string) string {
+	for i := base - 1; i >= 0; i-- {
+		if s.ns[i].prefix == prefix {
+			return s.ns[i].uri
+		}
 	}
-	return s.nsStack[len(s.nsStack)-1]
+	return ""
 }
 
-func (s *serializer) pushScope(base, added map[string]string) {
-	next := make(map[string]string, len(base)+len(added))
-	for k, v := range base {
-		next[k] = v
+// declared returns the URI the current element, whose own bindings start at
+// base, has declared for prefix, and whether it has declared one.
+func (s *serializer) declared(base int, prefix string) (string, bool) {
+	for i := len(s.ns) - 1; i >= base; i-- {
+		if s.ns[i].prefix == prefix {
+			return s.ns[i].uri, true
+		}
 	}
-	for k, v := range added {
-		next[k] = v
-	}
-	s.nsStack = append(s.nsStack, next)
+	return "", false
 }
 
-func (s *serializer) popScope() {
-	if len(s.nsStack) > 0 {
-		s.nsStack = s.nsStack[:len(s.nsStack)-1]
+// declaredURI is declared without the presence flag.
+func (s *serializer) declaredURI(base int, prefix string) string {
+	uri, _ := s.declared(base, prefix)
+	return uri
+}
+
+// writeElementName writes an element's lexical name in pieces, which
+// spares the string elementName allocates for a prefixed name.
+func (s *serializer) writeElementName(n *xdm.Node) {
+	if n.Name.Prefix != "" {
+		s.writeString(n.Name.Prefix)
+		s.writeString(":")
 	}
+	s.writeString(n.Name.Local)
 }
 
 // elementName returns the lexical name to serialise.
@@ -1065,14 +1202,17 @@ func (s *serializer) elementName(n *xdm.Node) string {
 	return n.Name.Local
 }
 
-func (s *serializer) attrName(a *xdm.Node) string {
-	if a.Name.URI == xdm.NSXML {
-		return "xml:" + a.Name.Local
+// writeAttrName writes an attribute's lexical name in pieces, which spares
+// the string a concatenation would allocate per attribute.
+func (s *serializer) writeAttrName(a *xdm.Node) {
+	switch {
+	case a.Name.URI == xdm.NSXML:
+		s.writeString("xml:")
+	case a.Name.Prefix != "":
+		s.writeString(a.Name.Prefix)
+		s.writeString(":")
 	}
-	if a.Name.Prefix != "" {
-		return a.Name.Prefix + ":" + a.Name.Local
-	}
-	return a.Name.Local
+	s.writeString(a.Name.Local)
 }
 
 func (s *serializer) indent(depth int) {
@@ -1083,7 +1223,20 @@ func (s *serializer) indent(depth int) {
 		s.atTop = false
 		return
 	}
-	s.writeString("\n" + strings.Repeat("  ", depth))
+	if s.skipIndent {
+		s.skipIndent = false
+		return
+	}
+	s.writeString("\n")
+	for range depth {
+		s.writeString("  ")
+	}
+}
+
+// skipBeforeChild reports whether the html or xhtml method may not indent
+// before child i of n (i == len(n.Children): before n's end tag).
+func (s *serializer) skipBeforeChild(n *xdm.Node, i int) bool {
+	return s.html && htmlser.SkipIndentBefore(n, i, s.xhtml, s.html5)
 }
 
 // suppressed reports whether an element's content is written with no added
@@ -1248,6 +1401,37 @@ func hasTextChild(n *xdm.Node) bool {
 	return false
 }
 
+// mayIndentContent reports whether Serialization 3.1 §5.1.4 lets whitespace
+// be added in an element's immediate content. The licence covers an element
+// annotated xs:untyped or xs:anyType (or not annotated) that has element
+// children, and an element whose content model is element-only, which the
+// validator records as NoTypedValue. Everything else is simple or empty
+// content, where adding whitespace MUST NOT happen because it changes the
+// typed value -- "<e>  </e>" of type xs:string became "<e>  \n</e>" -- or
+// typed mixed content, where it SHOULD NOT. Kept identical to the copy in
+// xpath/fn_serialize.go.
+func mayIndentContent(n *xdm.Node) bool {
+	hasElem := false
+	for _, c := range n.Children {
+		if c.Kind == xdm.KindElement {
+			hasElem = true
+			break
+		}
+	}
+	if !hasElem {
+		return false
+	}
+	switch n.TypeAnnotation {
+	case "", "untyped":
+		return true
+	case "anyType":
+		// An anonymous mixed type annotates as anyType too; MixedContent
+		// tells it from a genuine xs:anyType element.
+		return n.NoTypedValue || !n.MixedContent
+	}
+	return n.NoTypedValue
+}
+
 // escapeText writes character data with the three characters that cannot
 // appear literally.
 //
@@ -1255,124 +1439,174 @@ func hasTextChild(n *xdm.Node) bool {
 // because doing it unconditionally is cheaper than scanning for that sequence
 // and produces output every parser accepts.
 func (s *serializer) escapeText(text string) {
-	var sb strings.Builder
-	sb.Grow(len(text))
 	// The text is split at the characters the map claims, so that
 	// normalisation applies to the runs between them and not to the map's
 	// inputs or its outputs. See mapSegments.
-	for _, seg := range s.mapSegments(text) {
-		s.escapeTextRun(&sb, seg.text)
-		if s.err != nil {
+	segs := s.mapSegments(text)
+	// The text is written in pieces, so a character the method cannot
+	// output is looked for first: the node then fails with nothing of it
+	// written, as when it was escaped into a builder before being written.
+	for _, seg := range segs {
+		if s.textErr(seg.text) {
 			return
 		}
+	}
+	for _, seg := range segs {
+		s.escapeTextRun(seg.text)
 		if seg.has {
 			// A character map wins over escaping: emitting "&nbsp;" is the
 			// whole reason a stylesheet declares one, and escaping the
 			// ampersand would defeat it.
-			sb.WriteString(seg.repl)
+			s.writeString(seg.repl)
 		}
 	}
-	s.writeString(sb.String())
 }
 
-// escapeTextRun escapes one run of character data into sb. It is the body of
-// escapeText for a stretch of text no character map claims.
-func (s *serializer) escapeTextRun(sb *strings.Builder, text string) {
-	for _, r := range text {
-		// HTML 4 gives #x7F-#x9F no meaning: the numeric character
-		// references in that range name positions in the C1 control block,
-		// and browsers historically remapped them to the windows-1252
-		// characters instead. Writing one either way produces a document
-		// whose meaning depends on the reader, so the spec forbids it.
-		if s.html && !s.xhtml && r >= 0x7F && r <= 0x9F && !s.html5 {
-			if s.err == nil {
-				s.err = fmt.Errorf("SERE0014: character #x%X cannot be "+
-					"output by the html method", r)
-			}
-			return
-		}
-		if !s.representable(r) {
-			fmt.Fprintf(sb, "&#%d;", r)
+// textErr records the error for the first character of text that the
+// output method cannot write at all, and reports whether there was one.
+func (s *serializer) textErr(text string) bool {
+	// HTML 4 gives #x7F-#x9F no meaning: the numeric character
+	// references in that range name positions in the C1 control block,
+	// and browsers historically remapped them to the windows-1252
+	// characters instead. Writing one either way produces a document
+	// whose meaning depends on the reader, so the spec forbids it.
+	html4 := s.html && !s.xhtml && !s.html5
+	// The C0 controls other than TAB, LF and CR, under the XML-based
+	// methods. XML 1.0 has no spelling for them at all -- they are outside
+	// [2] Char, and a character reference does not help, because [66]
+	// CharRef is constrained to Char too. XML 1.1 admits them, but only
+	// written as references: [2a] RestrictedChar excludes them from the
+	// literal text a document may contain.
+	//
+	// So the version decides between a reference and an error, and
+	// there is no third option where the character is written as
+	// itself. It was: the range fell past every arm of escapeTextRun into
+	// WriteRune, and the output held a raw \x01 that no parser at
+	// either version will read back. SERE0006 is the code for a
+	// character the chosen version cannot represent, which is what
+	// xml-version-030 asserts for a BEL under version="1.0".
+	xml10 := (!s.html || s.xhtml) && !s.xml11()
+	if !html4 && !xml10 {
+		return false
+	}
+	for i := 0; i < len(text); i++ {
+		// Every character either check can refuse is below U+00A0: a
+		// single byte, or 0xC2 and a continuation byte.
+		if b := text[i]; b >= 0x20 && b != 0x7F && b != 0xC2 {
 			continue
 		}
-		// Characters that a parser would not hand back unchanged are written
-		// as references by the XML-based methods. A literal CR is turned into
-		// LF by the line-ending normalisation every XML parser performs
-		// before the document reaches an application, so a text node holding
-		// one comes back holding something else; U+2028 (LINE SEPARATOR) and
-		// the C1 block, which includes U+0085 (NEL), are line endings or
-		// controls to an XML 1.1 parser and get the same treatment. A
-		// reference names the code point unambiguously and is the only
-		// spelling that survives. K2-Serialization-5 and -11 assert the CR
-		// and NEL cases and -10 the whole C1 range.
+		r, _ := utf8.DecodeRuneInString(text[i:])
+		if html4 && r >= 0x7F && r <= 0x9F {
+			s.fail(fmt.Errorf("SERE0014: character #x%X cannot be "+
+				"output by the html method", r))
+			return true
+		}
+		if xml10 && r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
+			s.fail(fmt.Errorf("SERE0006: character #x%X cannot "+
+				"be output as XML 1.0; it is not a valid XML "+
+				"character at that version", r))
+			return true
+		}
+	}
+	return false
+}
+
+// escapeTextRun escapes one run of character data. It is the body of
+// escapeText for a stretch of text no character map claims, and textErr has
+// already passed it. Runs of characters written as they stand are copied to
+// w whole, so a text node costs no allocation.
+func (s *serializer) escapeTextRun(text string) {
+	start := 0
+	for i := 0; i < len(text); {
+		r, size := rune(text[i]), 1
+		if r >= utf8.RuneSelf {
+			r, size = utf8.DecodeRuneInString(text[i:])
+		}
+		if s.plainText(r) {
+			i += size
+			continue
+		}
+		s.writeString(text[start:i])
+		i += size
+		start = i
+		s.escapeTextRune(r)
+	}
+	s.writeString(text[start:])
+}
+
+// plainText reports whether escapeTextRune writes r unchanged, under every
+// method and version, so that it can be copied with the run around it. U+FFFD
+// is excluded because an invalid byte decodes to it and is written as it.
+func (s *serializer) plainText(r rune) bool {
+	if r < utf8.RuneSelf {
+		return r >= 0x20 && r < 0x7F && r != '&' && r != '<' && r != '>' ||
+			r == '\t' || r == '\n'
+	}
+	return r > 0xA0 && r != '\u2028' && r != utf8.RuneError && s.representable(r)
+}
+
+// escapeTextRune writes one character of character data that plainText
+// does not pass through.
+func (s *serializer) escapeTextRune(r rune) {
+	if !s.representable(r) {
+		s.writeCharRef(r)
+		return
+	}
+	// Characters that a parser would not hand back unchanged are written
+	// as references by the XML-based methods. A literal CR is turned into
+	// LF by the line-ending normalisation every XML parser performs
+	// before the document reaches an application, so a text node holding
+	// one comes back holding something else; U+2028 (LINE SEPARATOR) and
+	// the C1 block, which includes U+0085 (NEL), are line endings or
+	// controls to an XML 1.1 parser and get the same treatment. A
+	// reference names the code point unambiguously and is the only
+	// spelling that survives. K2-Serialization-5 and -11 assert the CR
+	// and NEL cases and -10 the whole C1 range.
+	//
+	// The html method is excluded, and not because it disagrees about
+	// these characters: it has its own rule for the C1 range (see
+	// textErr), which is stricter still and makes writing one an error
+	// under HTML 4. What it does not share is XML's line-ending
+	// normalisation, so a CR there is an ordinary character.
+	//
+	// A C0 control other than TAB and LF reaches here only under XML 1.1,
+	// where it is written as a reference; textErr refused it under 1.0.
+	if !s.html || s.xhtml {
+		if r == '\r' || r == '\u2028' || (r >= 0x7F && r <= 0x9F) ||
+			r < 0x20 && r != '\t' && r != '\n' {
+			s.writeCharRef(r)
+			return
+		}
+	}
+	switch r {
+	case '&':
+		s.writeString("&amp;")
+	case '<':
+		s.writeString("&lt;")
+	case '>':
+		s.writeString("&gt;")
+	case '\u00a0':
+		// The HTML method writes a no-break space as the named entity, so
+		// that it survives a transport that mangles non-ASCII bytes and
+		// stays visible to anyone reading the source. XML output has no
+		// such convention and keeps the character.
 		//
-		// The html method is excluded, and not because it disagrees about
-		// these characters: it has its own rule for the C1 range a few lines
-		// above, which is stricter still and makes writing one an error under
-		// HTML 4. What it does not share is XML's line-ending normalisation,
-		// so a CR there is an ordinary character.
-		if !s.html || s.xhtml {
-			if r == '\r' || r == '\u2028' || (r >= 0x7F && r <= 0x9F) {
-				fmt.Fprintf(sb, "&#%d;", r)
-				continue
-			}
-			// The C0 controls other than TAB, LF and CR. XML 1.0 has no
-			// spelling for them at all -- they are outside [2] Char, and a
-			// character reference does not help, because [66] CharRef is
-			// constrained to Char too. XML 1.1 admits them, but only written
-			// as references: [2a] RestrictedChar excludes them from the
-			// literal text a document may contain.
-			//
-			// So the version decides between a reference and an error, and
-			// there is no third option where the character is written as
-			// itself. It was: the range fell past every arm above into
-			// WriteRune, and the output held a raw \x01 that no parser at
-			// either version will read back. SERE0006 is the code for a
-			// character the chosen version cannot represent, which is what
-			// xml-version-030 asserts for a BEL under version="1.0".
-			if r < 0x20 && r != '\t' && r != '\n' {
-				if !s.xml11() {
-					if s.err == nil {
-						s.err = fmt.Errorf("SERE0006: character #x%X cannot "+
-							"be output as XML 1.0; it is not a valid XML "+
-							"character at that version", r)
-					}
-					return
-				}
-				fmt.Fprintf(sb, "&#%d;", r)
-				continue
-			}
+		// XHTML is excluded, which is why the guard is the file's usual
+		// "html && !xhtml" and not a bare s.html: s.html is set for the
+		// xhtml method too (see where it is assigned), but XHTML escapes
+		// as XML, and "nbsp" is not one of XML's five predefined entity
+		// names. Writing it there produced a document that references an
+		// undeclared entity — unparseable by the XML parser the method
+		// exists to satisfy — and the character needs no escape anyway:
+		// it is representable in every encoding this serialiser emits
+		// that the document would otherwise have to escape it for.
+		if s.html && !s.xhtml {
+			s.writeString("&nbsp;")
+			return
 		}
-		switch r {
-		case '&':
-			sb.WriteString("&amp;")
-		case '<':
-			sb.WriteString("&lt;")
-		case '>':
-			sb.WriteString("&gt;")
-		case '\u00a0':
-			// The HTML method writes a no-break space as the named entity, so
-			// that it survives a transport that mangles non-ASCII bytes and
-			// stays visible to anyone reading the source. XML output has no
-			// such convention and keeps the character.
-			//
-			// XHTML is excluded, which is why the guard is the file's usual
-			// "html && !xhtml" and not a bare s.html: s.html is set for the
-			// xhtml method too (see where it is assigned), but XHTML escapes
-			// as XML, and "nbsp" is not one of XML's five predefined entity
-			// names. Writing it there produced a document that references an
-			// undeclared entity — unparseable by the XML parser the method
-			// exists to satisfy — and the character needs no escape anyway:
-			// it is representable in every encoding this serialiser emits
-			// that the document would otherwise have to escape it for.
-			if s.html && !s.xhtml {
-				sb.WriteString("&nbsp;")
-				continue
-			}
-			sb.WriteRune(r)
-		default:
-			sb.WriteRune(r)
-		}
+		s.writeRune(r)
+	default:
+		s.writeRune(r)
 	}
 }
 
@@ -1452,7 +1686,7 @@ func (s *serializer) representable(r rune) bool {
 	if r < 0x80 {
 		return true
 	}
-	switch strings.ToLower(s.opts.Encoding) {
+	switch s.encodingLower() {
 	case "us-ascii", "ascii":
 		return false
 	case "iso-8859-1", "latin1":
@@ -1466,11 +1700,20 @@ func (s *serializer) representable(r rune) bool {
 // asking representable() about each rune. It is the run-level form of
 // representable and must agree with it: the two switch on the same names.
 func (s *serializer) encodingHoldsAll() bool {
-	switch strings.ToLower(s.opts.Encoding) {
+	switch s.encodingLower() {
 	case "us-ascii", "ascii", "iso-8859-1", "latin1":
 		return false
 	}
 	return true
+}
+
+// encodingLower returns opts.Encoding lower-cased, computing it only when
+// the setting differs from the one last seen.
+func (s *serializer) encodingLower() string {
+	if s.encFrom != s.opts.Encoding {
+		s.encFrom, s.encLower = s.opts.Encoding, strings.ToLower(s.opts.Encoding)
+	}
+	return s.encLower
 }
 
 // normalized applies the requested Unicode normalisation, if any.
@@ -1503,7 +1746,8 @@ func (s *serializer) normalized(text string) string {
 // replacements verbatim, which is the point of declaring a map at all.
 func (s *serializer) mapSegments(text string) []mapSegment {
 	if len(s.charMap) == 0 {
-		return []mapSegment{{text: s.normalized(text)}}
+		s.oneSeg[0] = mapSegment{text: s.normalized(text)}
+		return s.oneSeg[:]
 	}
 	var segs []mapSegment
 	run := 0
@@ -1550,7 +1794,8 @@ func (s *serializer) mapChars(text string) string {
 	return sb.String()
 }
 
-// attrValue writes an attribute value with its delimiters.
+// writeAttr writes one attribute of owner: the space before it, its name
+// and its delimited value, in pieces to w.
 //
 // A character map applies to attribute nodes as well as to text nodes, and
 // the substituted string bypasses escaping — that is the point of declaring
@@ -1558,7 +1803,11 @@ func (s *serializer) mapChars(text string) string {
 // have it escaped, so the specification says the serialiser uses the other
 // delimiter around the value where it can. Only where both quote characters
 // appear is there no choice, and then the double quote is escaped.
-func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) string {
+//
+// The value is checked before anything is written: it can fail, and then
+// nothing of the attribute is written, as when the value was escaped into a
+// builder first.
+func (s *serializer) writeAttr(a *xdm.Node, owner *xdm.Node) {
 	// XSLT 1.0 section 16.2, carried into the serialization specification's
 	// html output method: "The html output method should output boolean
 	// attributes (that is attributes with only a single possible value that
@@ -1569,7 +1818,9 @@ func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) string {
 	// is not well formed, and the XHTML compatibility guidelines say so
 	// explicitly.
 	if s.html && !s.xhtml && isBooleanAttribute(owner.Name.Local, a) {
-		return ""
+		s.writeString(" ")
+		s.writeAttrName(a)
+		return
 	}
 	if s.html && s.escapeURIs() && isURIAttribute(owner.Name.Local, a) {
 		// A character map does not reach a URI-valued attribute that is being
@@ -1578,106 +1829,168 @@ func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) string {
 		// the serialization specification gives the escaping precedence.
 		// character-map-009 checks exactly this: an href of "z-linkage.html"
 		// keeps its "z" even with a map that rewrites "z" everywhere else.
-		return `="` + s.escapeAttrRunes(escapeURIAttribute(s.normalized(a.Value))) + `"`
-	}
-	body, raw := s.escapeAttrMapped(a.Value, false)
-	if raw && strings.Contains(body, `"`) && !strings.Contains(body, "'") {
-		return "='" + body + "'"
-	}
-	return `="` + body + `"`
-}
-
-// escapeAttrMapped escapes an attribute value, passing character-mapped
-// substitutions through untouched. The second result reports whether any
-// substitution happened, which is what makes the delimiter choice necessary.
-//
-// uri asks for percent-escaping of the unmapped runs, for a URI-valued
-// attribute of the html and xhtml methods. It applies to those runs only:
-// percent-escaping a replacement string would defeat the map, and the test
-// suite checks that a map leaves a URI attribute alone.
-func (s *serializer) escapeAttrMapped(v string, uri bool) (string, bool) {
-	var sb strings.Builder
-	sb.Grow(len(v))
-	mapped := false
-	for _, seg := range s.mapSegments(v) {
-		run := seg.text
-		if uri {
-			run = escapeURIAttribute(run)
+		v := escapeURIAttribute(s.normalized(a.Value))
+		if s.attrErr(v) {
+			return
 		}
-		// The whole-run spelling is only safe when every character of the run
-		// can be written in the declared encoding. escapeAttr knows nothing
-		// about the encoding and writes each rune raw, so an iso-8859-1 or
-		// us-ascii output would carry UTF-8 bytes the declared encoding
-		// cannot hold — element text goes through representable() and comes
-		// out as "&#776;", while the same character in an attribute did not.
-		// normalize-unicode-017/018 are exactly that asymmetry.
-		switch {
-		case s.rawText:
-			// Inside <script> and <style> nothing is escaped, and that
-			// includes the attributes of any element the content happens to
-			// contain: the whole element is CDATA to an HTML parser, which
-			// will never read those characters as markup in the first place,
-			// so an entity reference written there is the literal text of one
-			// rather than the character it names. Serialization-html-9 puts
-			// <p class="Bill&amp;Ben"/> inside a <script> and asks to read
-			// back "Bill&Ben" -- while the script element's own
-			// language="Jack&amp;Jill", written before the raw content
-			// begins, keeps its escape.
-			sb.WriteString(run)
-		case len(s.charMap) == 0 && !s.html && s.encodingHoldsAll() &&
-			!strings.ContainsFunc(run, isC0Control):
-			// The run-at-once spelling needs one more condition than the
-			// encoding: escapeAttr is a free function and cannot see the
-			// output version, so a run holding a C0 control goes the
-			// per-rune way where the version is known. Same asymmetry the
-			// comment above describes for the encoding.
-			sb.WriteString(escapeAttr(run))
-		default:
-			s.writeAttrRuns(&sb, run)
+		s.writeString(" ")
+		s.writeAttrName(a)
+		s.writeString(`="`)
+		s.writeAttrRuns(v, false)
+		s.writeString(`"`)
+		return
+	}
+	segs := s.mapSegments(a.Value)
+	for _, seg := range segs {
+		if s.attrErr(seg.text) {
+			return
 		}
+	}
+	q := `"`
+	if s.singleQuoted(segs) {
+		q = "'"
+	}
+	s.writeString(" ")
+	s.writeAttrName(a)
+	s.writeString("=")
+	s.writeString(q)
+	for _, seg := range segs {
+		s.writeAttrSeg(seg.text)
 		if seg.has {
-			sb.WriteString(seg.repl)
-			mapped = true
+			s.writeString(seg.repl)
 		}
 	}
-	return sb.String(), mapped
+	s.writeString(q)
 }
 
-// writeAttrRuns escapes an attribute value a character at a time, with the
-// one place the html method needs to see two.
+// singleQuoted reports whether a value written from segs takes the single
+// quote as its delimiter: a substitution happened, and the value holds a
+// double quote but no single quote. Escaping writes neither quote, so only a
+// replacement, or a run written raw inside an HTML raw-text element, puts a
+// double quote in the value; a single quote is never escaped at all.
+func (s *serializer) singleQuoted(segs []mapSegment) bool {
+	if len(s.charMap) == 0 {
+		return false
+	}
+	mapped, dq, sq := false, false, false
+	for _, seg := range segs {
+		if seg.has {
+			mapped = true
+			dq = dq || strings.Contains(seg.repl, `"`)
+			sq = sq || strings.Contains(seg.repl, "'")
+		}
+		dq = dq || s.rawText && strings.Contains(seg.text, `"`)
+		sq = sq || strings.Contains(seg.text, "'")
+	}
+	return mapped && dq && !sq
+}
+
+// attrErr records the error for the first character of an attribute value
+// that the output version cannot write, and reports whether there was one:
+// a C0 control other than TAB, LF and CR under an XML-based method at XML
+// 1.0. writeAttrRune would refuse it; inside an HTML raw-text element nothing
+// is escaped and nothing is refused.
+func (s *serializer) attrErr(v string) bool {
+	if s.rawText || s.html && !s.xhtml || s.xml11() {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		if r := rune(v[i]); isC0Control(r) {
+			s.fail(fmt.Errorf("SERE0006: character #x%X cannot be "+
+				"output as XML 1.0; it is not a valid XML character "+
+				"at that version", r))
+			return true
+		}
+	}
+	return false
+}
+
+// writeAttrSeg escapes one run of an attribute value that no character map
+// claims, after attrErr has passed it.
+func (s *serializer) writeAttrSeg(run string) {
+	// The whole-run spelling is only safe when every character of the run
+	// can be written in the declared encoding. escapeAttr knows nothing
+	// about the encoding and writes each rune raw, so an iso-8859-1 or
+	// us-ascii output would carry UTF-8 bytes the declared encoding
+	// cannot hold — element text goes through representable() and comes
+	// out as "&#776;", while the same character in an attribute did not.
+	// normalize-unicode-017/018 are exactly that asymmetry.
+	switch {
+	case s.rawText:
+		// Inside <script> and <style> nothing is escaped, and that
+		// includes the attributes of any element the content happens to
+		// contain: the whole element is CDATA to an HTML parser, which
+		// will never read those characters as markup in the first place,
+		// so an entity reference written there is the literal text of one
+		// rather than the character it names. Serialization-html-9 puts
+		// <p class="Bill&amp;Ben"/> inside a <script> and asks to read
+		// back "Bill&Ben" -- while the script element's own
+		// language="Jack&amp;Jill", written before the raw content
+		// begins, keeps its escape.
+		s.writeString(run)
+	case len(s.charMap) == 0 && !s.html && s.encodingHoldsAll() &&
+		!strings.ContainsFunc(run, isC0Control):
+		// The run-at-once spelling needs one more condition than the
+		// encoding: escapeAttr is a free function and cannot see the
+		// output version, so a run holding a C0 control goes the
+		// per-rune way where the version is known. Same asymmetry the
+		// comment above describes for the encoding.
+		s.writeString(escapeAttr(run))
+	default:
+		s.writeAttrRuns(run, true)
+	}
+}
+
+// writeAttrRuns escapes an attribute value a character at a time, so that
+// the html and xhtml spellings writeAttrRune knows about apply, copying the
+// runs of characters it writes unchanged to w whole.
 //
-// Serialization 3.1 section 9.5: "if the character is an ampersand and the
-// following character is a left curly brace, the ampersand is output
-// unescaped". The convention predates the specification -- an attribute value
-// of "&{expression};" was Netscape's way of computing an attribute at parse
-// time, and escaping the ampersand turns a macro into the literal text of
-// one. Serialization-html-11 writes class="&{entspannend}" and asks to read
-// exactly that back.
+// macros asks for the one place the html method needs to see two
+// characters. Serialization 3.1 section 9.5: "if the character is an
+// ampersand and the following character is a left curly brace, the
+// ampersand is output unescaped". The convention predates the specification
+// -- an attribute value of "&{expression};" was Netscape's way of computing
+// an attribute at parse time, and escaping the ampersand turns a macro into
+// the literal text of one. Serialization-html-11 writes class="&{entspannend}"
+// and asks to read exactly that back. The percent-escaped URI path and the
+// content-type meta never applied it.
 //
 // The rule is the html method's alone. XHTML is XML, where a bare ampersand
 // is not well formed whatever follows it.
-func (s *serializer) writeAttrRuns(sb *strings.Builder, run string) {
-	for i, r := range run {
-		if r == '&' && s.html && !s.xhtml &&
-			i+1 < len(run) && run[i+1] == '{' {
-			sb.WriteByte('&')
+func (s *serializer) writeAttrRuns(run string, macros bool) {
+	start := 0
+	for i := 0; i < len(run); {
+		r, size := rune(run[i]), 1
+		if r >= utf8.RuneSelf {
+			r, size = utf8.DecodeRuneInString(run[i:])
+		}
+		if plainAttrASCII(r) || s.plainAttrWide(r) ||
+			macros && r == '&' && s.html && !s.xhtml &&
+				i+1 < len(run) && run[i+1] == '{' {
+			i += size
 			continue
 		}
-		sb.WriteString(s.escapeAttrRune(r))
+		s.writeString(run[start:i])
+		i += size
+		start = i
+		s.writeAttrRune(r)
 	}
+	s.writeString(run[start:])
 }
 
-// escapeAttrRunes escapes a whole attribute value one character at a time,
-// so that the html and xhtml spellings escapeAttrRune knows about apply. The
-// percent-escaped URI path used escapeAttr directly and so wrote "&quot;"
-// where the rest of the html serialiser writes "&#34;".
-func (s *serializer) escapeAttrRunes(v string) string {
-	var sb strings.Builder
-	sb.Grow(len(v))
-	for _, r := range v {
-		sb.WriteString(s.escapeAttrRune(r))
-	}
-	return sb.String()
+// plainAttrASCII reports whether r is printable ASCII that writeAttrRune
+// writes unchanged under every method, encoding and version, and so can be
+// copied with the run around it.
+func plainAttrASCII(r rune) bool {
+	return r >= 0x20 && r < 0x7F && r != '&' && r != '<' && r != '>' && r != '"'
+}
+
+// plainAttrWide is plainAttrASCII's counterpart above the C1 block: a
+// character the encoding holds, other than LINE SEPARATOR, is also written
+// unchanged by writeAttrRune. U+FFFD is left to writeAttrRune, because an
+// invalid byte decodes to it and is written as it.
+func (s *serializer) plainAttrWide(r rune) bool {
+	return r >= 0xA0 && r != '\u2028' && r != utf8.RuneError && s.representable(r)
 }
 
 // escapeURIs reports whether URI-valued attributes are percent-escaped. The
@@ -1686,7 +1999,7 @@ func (s *serializer) escapeURIs() bool {
 	return s.opts.EscapeURIAttributes == nil || *s.opts.EscapeURIAttributes
 }
 
-// escapeAttrRune escapes one character of an attribute value.
+// writeAttrRune escapes one character of an attribute value.
 //
 // The HTML and XHTML methods write the C1 range as a numeric character
 // reference. Those code points are the ones HTML 4 leaves undefined and that
@@ -1700,26 +2013,21 @@ func isC0Control(r rune) bool {
 	return r < 0x20 && r != '\t' && r != '\n' && r != '\r'
 }
 
-func (s *serializer) escapeAttrRune(r rune) string {
+func (s *serializer) writeAttrRune(r rune) {
 	if s.html && r >= 0x7F && r <= 0x9F || !s.representable(r) {
-		return fmt.Sprintf("&#%d;", r)
+		s.writeCharRef(r)
+		return
 	}
 	// The C0 controls, on the same terms as element text: 1.1 writes them as
-	// references, 1.0 has no spelling for them and the attempt is SERE0006.
-	// TAB, LF and CR are excluded because escapeAttr already writes all three
-	// as references -- an attribute value normaliser would otherwise turn
-	// them into spaces -- so they never reach this arm as a problem.
-	// xml-version-007 and -008 assert the reference spelling here.
-	if r < 0x20 && r != '\t' && r != '\n' && r != '\r' && (!s.html || s.xhtml) {
-		if !s.xml11() {
-			if s.err == nil {
-				s.err = fmt.Errorf("SERE0006: character #x%X cannot be "+
-					"output as XML 1.0; it is not a valid XML character "+
-					"at that version", r)
-			}
-			return ""
-		}
-		return fmt.Sprintf("&#%d;", r)
+	// references, 1.0 has no spelling for them and the attempt is SERE0006,
+	// which attrErr raised before the value was written. TAB, LF and CR are
+	// excluded because escapeAttr already writes all three as references --
+	// an attribute value normaliser would otherwise turn them into spaces --
+	// so they never reach this arm as a problem. xml-version-007 and -008
+	// assert the reference spelling here.
+	if isC0Control(r) && (!s.html || s.xhtml) {
+		s.writeCharRef(r)
+		return
 	}
 	if s.html && r == '"' {
 		// The html and xhtml methods spell an embedded quotation mark as a
@@ -1729,9 +2037,19 @@ func (s *serializer) escapeAttrRune(r rune) string {
 		// numeric form names the code point with no entity set at all.
 		// output-0102c and output-0103c both accept &#34; or &#x22; and
 		// nothing else.
-		return "&#34;"
+		s.writeString("&#34;")
+		return
 	}
-	return escapeAttr(string(r))
+	// escapeAttr's spelling of the one character.
+	if e := attrEscape(r); e != "" {
+		s.writeString(e)
+		return
+	}
+	if r >= 0x7F && r <= 0x9F {
+		s.writeCharRef(r)
+		return
+	}
+	s.writeRune(r)
 }
 
 // uriAttributes are the attributes the HTML DTD declares with type URI, whose
@@ -1851,6 +2169,11 @@ func isURIAttribute(element string, a *xdm.Node) bool {
 // escape to the same %C3%A5 rather than to two different byte sequences that
 // no longer compare equal as URIs.
 func escapeURIAttribute(v string) string {
+	// An ASCII value is its own NFC form and holds nothing to escape, and
+	// is returned as it stands rather than copied through a builder.
+	if !strings.ContainsFunc(v, func(r rune) bool { return r >= utf8.RuneSelf }) {
+		return v
+	}
 	v = norm.NFC.String(v)
 	var sb strings.Builder
 	sb.Grow(len(v))
@@ -1871,54 +2194,65 @@ func escapeURIAttribute(v string) string {
 // normalised to a space by every conformant parser, so it has to be escaped to
 // survive a round trip.
 func escapeAttr(v string) string {
+	// Most values hold nothing to escape, and are returned as they stand
+	// rather than copied through a builder.
+	if !strings.ContainsFunc(v, attrNeedsEscape) {
+		return v
+	}
 	var sb strings.Builder
 	sb.Grow(len(v))
 	for _, r := range v {
-		switch r {
-		case '&':
-			sb.WriteString("&amp;")
-		case '<':
-			sb.WriteString("&lt;")
-		case '>':
-			sb.WriteString("&gt;")
-		case '"':
-			sb.WriteString("&quot;")
-		case '\n':
-			sb.WriteString("&#10;")
-		case '\r':
-			sb.WriteString("&#13;")
-		case '\t':
-			sb.WriteString("&#9;")
-		case '\u2028':
-			// LINE SEPARATOR is a line ending to an XML 1.1 parser and would
-			// be normalised away, so it survives only as a reference -- the
-			// same reason CR, LF and TAB above are escaped.
-			// K2-Serialization-6 asserts it for attribute values.
-			sb.WriteString("&#8232;")
-		default:
-			if r >= 0x7F && r <= 0x9F {
-				// The C1 block, U+0085 among it, for the same reason.
-				// K2-Serialization-9 asserts the whole range.
-				fmt.Fprintf(&sb, "&#%d;", r)
-				continue
-			}
-			sb.WriteRune(r)
+		if e := attrEscape(r); e != "" {
+			sb.WriteString(e)
+			continue
 		}
+		if r >= 0x7F && r <= 0x9F {
+			// The C1 block, U+0085 among it, for the same reason as LINE
+			// SEPARATOR. K2-Serialization-9 asserts the whole range.
+			fmt.Fprintf(&sb, "&#%d;", r)
+			continue
+		}
+		sb.WriteRune(r)
 	}
 	return sb.String()
 }
 
-// isContentTypeMeta reports whether an element is a meta declaring the
-// content type, in the http-equiv spelling. Case is ignored on both the
-// attribute name and its value, which is how HTTP header names compare.
-func isContentTypeMeta(n *xdm.Node) bool {
-	for _, a := range n.Attrs {
-		if a.Name.URI == "" && strings.EqualFold(a.Name.Local, "http-equiv") &&
-			strings.EqualFold(strings.TrimSpace(a.Value), "content-type") {
-			return true
-		}
+// attrEscape returns escapeAttr's fixed spelling of r, or "" for a character
+// it writes as a numeric reference (the C1 block) or unchanged.
+func attrEscape(r rune) string {
+	switch r {
+	case '&':
+		return "&amp;"
+	case '<':
+		return "&lt;"
+	case '>':
+		return "&gt;"
+	case '"':
+		return "&quot;"
+	case '\n':
+		return "&#10;"
+	case '\r':
+		return "&#13;"
+	case '\t':
+		return "&#9;"
+	case '\u2028':
+		// LINE SEPARATOR is a line ending to an XML 1.1 parser and would
+		// be normalised away, so it survives only as a reference -- the
+		// same reason CR, LF and TAB above are escaped.
+		// K2-Serialization-6 asserts it for attribute values.
+		return "&#8232;"
 	}
-	return false
+	return ""
+}
+
+// attrNeedsEscape reports whether escapeAttr writes r as anything but
+// itself; it must name exactly the cases of escapeAttr's switch.
+func attrNeedsEscape(r rune) bool {
+	switch r {
+	case '&', '<', '>', '"', '\n', '\r', '\t', '\u2028':
+		return true
+	}
+	return r >= 0x7F && r <= 0x9F
 }
 
 // nsXHTML is the namespace an element must be in for the XHTML output

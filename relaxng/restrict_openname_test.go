@@ -107,18 +107,12 @@ func TestOpenNameAttributeInDefine(t *testing.T) {
 	}
 }
 
-// Expanding a <ref> re-compiles the definition's body, and nothing shares
-// that work between two <ref>s naming the same definition. A chain of
-// definitions each referring to several others therefore costs
-// multiplicatively rather than additively: DocBook 5.1 had not compiled after
-// 140 s, and a 70-definition schema already expands 14140 times.
-//
-// maxRefExpansions does not make that cheaper. It makes it bounded, the way
-// MaxPatternSize bounds the same shape of blowup during validation — a schema
-// that would once have hung now stops with a message that says what happened.
-// The chain below is small enough to write down and still doubles at every
-// link, so it crosses the budget in well under a second.
-func TestRefExpansionIsBounded(t *testing.T) {
+// Each definition is compiled once and shared by every <ref> naming it. Before
+// that, a <ref> re-compiled the definition's body, so a chain of definitions
+// each referring to the next twice cost 2^links expansions: DocBook 5.2 hit
+// maxRefExpansions, and this 40-link chain was refused by it. Shared, the
+// chain compiles in one expansion per definition.
+func TestRefExpansionIsShared(t *testing.T) {
 	var b strings.Builder
 	b.WriteString(`<grammar xmlns="http://relaxng.org/ns/structure/1.0">` +
 		`<start><element name="e"><ref name="d0"/></element></start>`)
@@ -128,19 +122,76 @@ func TestRefExpansionIsBounded(t *testing.T) {
 			`<ref name="d` + itoa(i+1) + `"/><ref name="d` + itoa(i+1) + `"/>` +
 			`</group></define>`)
 	}
-	b.WriteString(`<define name="d` + itoa(links) + `"><empty/></define></grammar>`)
+	b.WriteString(`<define name="d` + itoa(links) + `"><element name="x"><empty/></element></define></grammar>`)
 
 	done := make(chan error, 1)
 	go func() { _, err := compileSrcNoFatal(b.String()); done <- err }()
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Fatal("a grammar doubling at each of 40 links compiled; the budget did not bite")
-		}
-		if !strings.Contains(err.Error(), "<ref> expansions") {
-			t.Fatalf("refused for the wrong reason: %v", err)
+		if err != nil {
+			t.Fatalf("a chain of 40 shared definitions was refused: %v", err)
 		}
 	case <-time.After(30 * time.Second):
-		t.Fatal("compilation did not finish in 30s; the budget did not bite")
+		t.Fatal("compilation did not finish in 30s")
+	}
+}
+
+// Sharing a compiled definition must not hide a section 4.19 violation. Here
+// c is first compiled under the <element>, where its way back to d is legal,
+// and then reused by d's second branch, where d reaches itself through c with
+// no <element> between.
+func TestSharedDefinitionKeeps419(t *testing.T) {
+	src := `<grammar xmlns="http://relaxng.org/ns/structure/1.0">
+		<start><element name="r"><ref name="d"/></element></start>
+		<define name="d"><choice>
+			<element name="e"><ref name="c"/></element>
+			<ref name="c"/>
+		</choice></define>
+		<define name="c"><ref name="d"/></define>
+	</grammar>`
+	_, err := compileSrcNoFatal(src)
+	if err == nil || !strings.Contains(err.Error(), "4.19") {
+		t.Fatalf("got %v, want a section 4.19 refusal", err)
+	}
+}
+
+// The same, with the way back to d running through two definitions, b and c,
+// that began at the same depth: the name d is noted in b, the innermost, and
+// reaches c's shared set only when b finishes and hands its set up.
+func TestSharedDefinitionKeeps419ThroughAChain(t *testing.T) {
+	src := `<grammar xmlns="http://relaxng.org/ns/structure/1.0">
+		<start><element name="r"><ref name="d"/></element></start>
+		<define name="d"><choice>
+			<element name="e"><ref name="c"/></element>
+			<ref name="c"/>
+		</choice></define>
+		<define name="c"><ref name="b"/></define>
+		<define name="b"><ref name="d"/></define>
+	</grammar>`
+	_, err := compileSrcNoFatal(src)
+	if err == nil || !strings.Contains(err.Error(), "4.19") {
+		t.Fatalf("got %v, want a section 4.19 refusal", err)
+	}
+}
+
+// A shared definition reached twice is two occurrences for sections 7.2 and
+// 7.4, not one: the checks over the compiled pattern must not treat the
+// second as already accounted for.
+func TestSharedDefinitionCountsTwice(t *testing.T) {
+	for _, c := range []struct{ combinator, body, section string }{
+		{"interleave", `<group><element name="x"><empty/></element><empty/></group>`, "7.4"},
+		{"group", `<group><data type="string"/><empty/></group>`, "7.2"},
+	} {
+		src := `<grammar xmlns="http://relaxng.org/ns/structure/1.0"
+			datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+			<start><element name="r"><` + c.combinator + `>
+				<ref name="a"/><ref name="a"/>
+			</` + c.combinator + `></element></start>
+			<define name="a">` + c.body + `</define>
+		</grammar>`
+		_, err := compileSrcNoFatal(src)
+		if err == nil || !strings.Contains(err.Error(), c.section) {
+			t.Errorf("%s: got %v, want a section %s refusal", c.combinator, err, c.section)
+		}
 	}
 }

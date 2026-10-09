@@ -300,7 +300,7 @@ func (e *InstanceOfExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	return xdm.One(xdm.NewBoolean(e.Type.Matches(v))), nil
+	return xdm.One(boolItem(e.Type.Matches(v))), nil
 }
 
 // Eval implements Expr for "cast as" and "castable as".
@@ -323,7 +323,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	// (xs-error-040) reported the wrong reason for the wrong stage.
 	if e.Type.IsErrorType && len(v) != 0 {
 		if e.Castable {
-			return xdm.One(xdm.NewBoolean(false)), nil
+			return xdm.One(boolItem(false)), nil
 		}
 		return nil, xdm.Errorf("FORG0001",
 			"a value cannot be cast to xs:error, which has no instances")
@@ -335,18 +335,18 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// Only "type?" permits an empty operand.
 		if e.Type.Occurrence == "?" {
 			if e.Castable {
-				return xdm.One(xdm.NewBoolean(true)), nil
+				return xdm.One(boolItem(true)), nil
 			}
 			return xdm.Empty(), nil
 		}
 		if e.Castable {
-			return xdm.One(xdm.NewBoolean(false)), nil
+			return xdm.One(boolItem(false)), nil
 		}
 		return nil, xdm.ErrType("cast: empty sequence is not castable to %s", e.Type)
 	case 1:
 	default:
 		if e.Castable {
-			return xdm.One(xdm.NewBoolean(false)), nil
+			return xdm.One(boolItem(false)), nil
 		}
 		return nil, xdm.ErrType("cast: operand has %d items, want 1", len(atoms))
 	}
@@ -360,13 +360,13 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		a := atoms[0].(*xdm.Atomic)
 		if a.Type.IsNumeric() {
 			if e.Castable {
-				return xdm.One(xdm.NewBoolean(true)), nil
+				return xdm.One(boolItem(true)), nil
 			}
 			return xdm.One(a), nil
 		}
 		out, err := CastAtomic(a, xdm.TypeDouble)
 		if e.Castable {
-			return xdm.One(xdm.NewBoolean(err == nil)), nil
+			return xdm.One(boolItem(err == nil)), nil
 		}
 		if err != nil {
 			return nil, err
@@ -385,13 +385,13 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// rather than the error escaping.
 		if _, err := listSourceValue(a); err != nil {
 			if e.Castable {
-				return xdm.One(xdm.NewBoolean(false)), nil
+				return xdm.One(boolItem(false)), nil
 			}
 			return nil, err
 		}
 		out, err := castToListType(a, e.Type.ListItemFacet)
 		if e.Castable {
-			return xdm.One(xdm.NewBoolean(err == nil)), nil
+			return xdm.One(boolItem(err == nil)), nil
 		}
 		if err != nil {
 			return nil, err
@@ -405,7 +405,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	if len(e.Type.SchemaUnionMembers) > 0 {
 		out, err := castToUnion(atoms[0].(*xdm.Atomic), e.Type)
 		if e.Castable {
-			return xdm.One(xdm.NewBoolean(err == nil)), nil
+			return xdm.One(boolItem(err == nil)), nil
 		}
 		if err != nil {
 			return nil, err
@@ -425,7 +425,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			verr = e.Type.SchemaValueValid(atoms[0].(*xdm.Atomic).String())
 		}
 		if e.Castable {
-			return xdm.One(xdm.NewBoolean(verr == nil)), nil
+			return xdm.One(boolItem(verr == nil)), nil
 		}
 		if verr != nil {
 			return nil, verr
@@ -473,7 +473,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			}
 		}
 		if e.Castable {
-			return xdm.One(xdm.NewBoolean(verr == nil)), nil
+			return xdm.One(boolItem(verr == nil)), nil
 		}
 		if verr != nil {
 			return nil, xdm.Errorf("FORG0001",
@@ -579,7 +579,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	if !ctx.Version.atLeast30() &&
 		e.Type.AtomicType == xdm.TypeQName && !srcIsQName && !isLiteralOperand(e.Operand) {
 		if e.Castable {
-			return xdm.One(xdm.NewBoolean(false)), nil
+			return xdm.One(boolItem(false)), nil
 		}
 		return nil, xdm.ErrType(
 			"cast: only a literal string is castable to xs:QName")
@@ -688,7 +688,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	if e.Castable {
 		// "castable as" is precisely "would cast succeed", so the error is
 		// consumed rather than propagated.
-		return xdm.One(xdm.NewBoolean(err == nil)), nil
+		return xdm.One(boolItem(err == nil)), nil
 	}
 	if err != nil {
 		return nil, err

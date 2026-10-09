@@ -95,7 +95,7 @@ func (s *Schema) WithInstanceLocations(root *xdm.Node, policy InstanceLocationPo
 		if len(s.sourcePaths) == 0 {
 			opts.Resolver = noResolverConfigured{}
 		} else {
-			opts.Resolver = rootedFileResolver(s.sourcePaths)
+			opts.Resolver = RootedFileResolver(s.sourcePaths)
 		}
 	}
 	if opts.MaxDocuments == 0 {

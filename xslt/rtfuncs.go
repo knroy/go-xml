@@ -4,54 +4,94 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/knroy/go-xml/internal/xpathleaf"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 )
 
 // internalNS is the namespace for bindings this package threads through the
 // XPath context. The xpath package must not import xslt (that would be a
-// cycle), so state that XSLT functions need — the runtime, the current group,
-// the regex captures — travels as reserved variable bindings.
+// cycle), so state that XSLT functions need — the current group, the regex
+// captures — travels as reserved variable bindings. The runtime and
+// fn:current() travel on the context's host state instead; see hoststate.go.
 //
 // Stylesheets cannot reach these: a variable reference resolves its prefix
 // against the stylesheet's own namespace declarations, and nothing binds a
 // prefix to this URI.
 const internalNS = "urn:goxslt:internal"
 
-// runtimeVar is the binding that carries the transform runtime.
-var runtimeVar = xdm.QName{URI: internalNS, Local: "runtime"}
-
-// currentVar carries the focus as it stood when the enclosing XSLT
-// instruction began, which is what fn:current returns.
-var currentVar = xdm.QName{URI: internalNS, Local: "current"}
-
 // runtimeFrom recovers the runtime from an XPath context.
 func runtimeFrom(ctx *xpath.Context) (*runtime, bool) {
-	seq, ok := ctx.LookupVar(runtimeVar)
-	if !ok || len(seq) == 0 {
+	h := hostOf(ctx)
+	if h == nil {
 		return nil, false
 	}
-	o, ok := seq[0].(*xdm.Opaque)
-	if !ok {
-		return nil, false
-	}
-	rt, ok := o.Value.(*runtime)
+	rt, ok := h.Runtime.(*runtime)
 	if !ok {
 		return nil, false
 	}
 	// The runtime's own context is stale by the time a nested expression
 	// runs, so the caller's context is grafted on: key() must see the current
-	// focus, not the one captured when the transform started.
+	// focus, not the one captured when the transform started. What is known
+	// cleared about ctx rides on it, so a stylesheet function called from
+	// another does not clear the grouping, merge and regex components again.
 	n := *rt
 	n.ctx = ctx
+	n.absent = h.Unbound
 	return &n, true
 }
 
-// runtimeFuncNames lists the functions bound per transform rather than at
-// compile time, by registerRuntimeFuncs and registerGroupingFuncs together.
+// rtFor is the transform a runtime-library function runs under: the runtime
+// the context carries, which is the one the per-transform closures used to
+// capture. A function item made from one of these functions carries its
+// transform along (see hostBoundFuncs).
+func rtFor(ctx *xpath.Context) (*runtime, error) {
+	if rt := runtimeOf(ctx); rt != nil {
+		return rt, nil
+	}
+	return nil, fmt.Errorf("XPDY0002: an XSLT function was called outside a transform")
+}
+
+// hostBoundFuncs are the runtime-library functions whose answer depends on
+// the transform, not only on the stylesheet and the context.
+//
+// When each transform built its own library they closed over their runtime,
+// so a function item made from one -- key#2, a partial application of
+// accumulator-before -- kept answering for the transform it was made in even
+// when called from another: from a nested fn:transform it was passed to, or
+// back in the outer transform it was returned to. They read the runtime from
+// the context now, so xpathleaf.BindHost hands such an item the runtime in
+// force where it was made.
+var hostBoundFuncs = map[string]bool{
+	"key":                true,
+	"accumulator-before": true,
+	"accumulator-after":  true,
+	"copy-of":            true,
+	"snapshot":           true,
+	"transform":          true,
+}
+
+func init() {
+	xpathleaf.BindHost = func(c any, name xdm.QName) func(any) any {
+		if name.URI != xdm.NSFN || !hostBoundFuncs[name.Local] {
+			return nil
+		}
+		rt := runtimeOf(c.(*xpath.Context))
+		if rt == nil {
+			return nil
+		}
+		return func(call any) any {
+			return bindRuntime(call.(*xpath.Context), rt)
+		}
+	}
+}
+
+// runtimeFuncNames lists the functions of the runtime library rather than the
+// compile-time one, bound by registerRuntimeFuncs and registerGroupingFuncs
+// together.
 //
 // These are absent from the stylesheet's compile-time library because each one
-// closes over a *runtime that does not exist until a transform starts. A
+// needs a running transform. A
 // static check that resolves function names against that library must still
 // treat them as declared, or it would reject key() and current() — which is
 // exactly where they are most often written.
@@ -96,21 +136,29 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 	// fn:copy-of and fn:snapshot need no transform state either, but they are
 	// bound here for the same reason: they are XSLT's, not XPath's, and a
 	// bare xpath.Eval caller has no business seeing them. See copyfuncs.go.
-	registerCopyFuncs(l, rt)
+	registerCopyFuncs(l)
 
 	// fn:transform needs an XSLT processor, which is why xpath registers a
 	// stub that declines and this overrides it. See fntransform.go.
-	registerTransformFunc(l, rt)
+	registerTransformFunc(l)
 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "key"}, Arity: 2,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			rt, err := rtFor(ctx)
+			if err != nil {
+				return nil, err
+			}
 			return fnKey(rt, ctx, args)
 		},
 	})
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "key"}, Arity: 3,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			rt, err := rtFor(ctx)
+			if err != nil {
+				return nil, err
+			}
 			return fnKey(rt, ctx, args)
 		},
 	})
@@ -122,6 +170,10 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 		// compiles as XPath 3.1, which is what the gate tests.
 		Since: xpath.XPath31,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			rt, err := rtFor(ctx)
+			if err != nil {
+				return nil, err
+			}
 			return fnAccumulator(rt, ctx, args, false)
 		},
 	})
@@ -129,11 +181,15 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 		Name: xdm.QName{URI: xdm.NSFN, Local: "accumulator-after"}, Arity: 1,
 		Since: xpath.XPath31,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			rt, err := rtFor(ctx)
+			if err != nil {
+				return nil, err
+			}
 			return fnAccumulator(rt, ctx, args, true)
 		},
 	})
 
-	l.Add(xpath.Function{
+	current := xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "current"}, Arity: 0,
 		Call: func(ctx *xpath.Context, _ []xdm.Sequence) (xdm.Sequence, error) {
 			// current() is the node the enclosing XSLT instruction is
@@ -155,8 +211,8 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 						"call, which is evaluated as if the context item " +
 						"were absent")
 			}
-			if seq, ok := ctx.LookupVar(currentVar); ok {
-				return seq, nil
+			if h := hostOf(ctx); h != nil && h.CurrentSet {
+				return h.Current, nil
 			}
 			// Outside any instruction (a bare XPath evaluation) the context
 			// item is the only sensible answer. With no context item there is
@@ -173,7 +229,13 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 			}
 			return xdm.One(ctx.Item), nil
 		},
-	})
+	}
+	// current() reads two variables and the context item, and writes and
+	// calls nothing, so it is called as a leaf: without copying the context.
+	// It is called thousands of times per document by Schematron-shaped
+	// stylesheets, and the copy was 18% of XRechnung's allocation.
+	xpathleaf.Mark(&current)
+	l.Add(current)
 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "generate-id"}, Arity: 0,
@@ -1174,8 +1236,7 @@ func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*x
 		// sets the context item but not the current-node variable the
 		// function reads, so the use expression saw whatever current() meant
 		// where the index happened to be built.
-		vals, err := def.use.Eval(
-			ctx.WithFocus(n, 1, 1).WithVar(currentVar, xdm.One(n)))
+		vals, err := def.use.Eval(withFocusCurrent(ctx, n, 1, 1))
 		if err != nil {
 			return nil, err
 		}
@@ -1192,6 +1253,7 @@ func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*x
 	// expression form, so the same key definition reads the same way.
 	sub := rt.temporaryOutput()
 	sub.ctx = ctx.WithFocus(n, 1, 1)
+	sub.absent = 0
 	out := newOutputBuilder(rt)
 	if err := execSequence(def.body, sub, out); err != nil {
 		return nil, err

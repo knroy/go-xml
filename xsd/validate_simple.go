@@ -19,7 +19,7 @@ func (v *validator) validateSimpleContent(n *xdm.Node, lexical string, t *Simple
 	if t == nil {
 		return
 	}
-	normalized, err := validateSimpleValueIn(lexical, t, v.schema.Version, n)
+	normalized, err := validateSimpleValueIn(lexical, t, v.schema.Version, n, v.recordUnionMember)
 	if err != nil {
 		v.fail(n, "cvc-datatype-valid.1", "%v", err)
 		return
@@ -59,6 +59,10 @@ func (v *validator) validateSimpleContent(n *xdm.Node, lexical string, t *Simple
 // the other the decimal 1, and the constraint is satisfied — comparing the
 // lexical forms alone made them a duplicate.
 func (v *validator) recordKeyValue(n *xdm.Node, normalized string, t *SimpleType) {
+	// Only a constraint's own subtree is ever compared; see icScopes.
+	if v.icScopes == 0 {
+		return
+	}
 	// A list takes its item type's primitive, not one of its own. A
 	// singleton list is equal to the atomic value it contains — saxonData's
 	// id022 matches a keyref typed as a list of xs:Name against a key typed
@@ -114,7 +118,7 @@ func validateSimpleValue(lexical string, t *SimpleType) (string, error) {
 // sync.Once, so two schemas of different versions share the same *SimpleType
 // and a version stored there would be whichever schema loaded last.
 func validateSimpleValueVersion(lexical string, t *SimpleType, version Version) (string, error) {
-	return validateSimpleValueIn(lexical, t, version, nil)
+	return validateSimpleValueIn(lexical, t, version, nil, nil)
 }
 
 // validateSimpleValueIn is validateSimpleValueVersion with the instance node
@@ -124,8 +128,9 @@ func validateSimpleValueVersion(lexical string, t *SimpleType, version Version) 
 // value space is QNames compares expanded names, and expanding the instance's
 // spelling takes the namespaces in scope where it was written. Everything else
 // ignores it, which is why it is threaded as an extra parameter rather than
-// made part of the type or the version.
-func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *xdm.Node) (string, error) {
+// made part of the type or the version. record receives a union's winning
+// member for at; nil records nothing.
+func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *xdm.Node, record func(*xdm.Node, string)) (string, error) {
 	// A definition naming a type that does not exist loaded anyway, because
 	// the spec makes that an error only where the type is used. This is
 	// where it is used, so it is an error now — and checking here also
@@ -138,9 +143,9 @@ func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *x
 	}
 	switch t.Variety {
 	case VarietyList:
-		return validateListValueIn(lexical, t, at)
+		return validateListValueIn(lexical, t, at, record)
 	case VarietyUnion:
-		return validateUnionValueIn(lexical, t, at)
+		return validateUnionValueIn(lexical, t, at, record)
 	}
 	// Part 2 §3.2.18: an xs:QName value is a (namespace name, local name)
 	// pair, and the namespace name is the one the prefix is bound to where
@@ -267,10 +272,8 @@ func validateAtomicValueBoundsIn(lexical string, t *SimpleType, version Version,
 		}
 	}
 	if prim == "decimal" {
-		if r, ok := new(big.Rat).SetString(normalized); ok {
-			if err := checkDigitFacets(steps, r); err != nil {
-				return "", err
-			}
+		if err := checkDigitFacets(steps, normalized); err != nil {
+			return "", err
 		}
 	}
 	if err := checkExplicitTimezone(steps, normalized, prim); err != nil {
@@ -339,10 +342,10 @@ func hasTimezone(v string) bool {
 // matches the whole literal rather than each item — erratum E2-30, which is the
 // opposite of what the per-item reading would suggest.
 func validateListValue(lexical string, t *SimpleType) (string, error) {
-	return validateListValueIn(lexical, t, nil)
+	return validateListValueIn(lexical, t, nil, nil)
 }
 
-func validateListValueIn(lexical string, t *SimpleType, at *xdm.Node) (string, error) {
+func validateListValueIn(lexical string, t *SimpleType, at *xdm.Node, record func(*xdm.Node, string)) (string, error) {
 	normalized := WhiteCollapse.Normalize(lexical)
 	steps := facetChain(t)
 
@@ -363,7 +366,7 @@ func validateListValueIn(lexical string, t *SimpleType, at *xdm.Node) (string, e
 
 	if t.ItemType != nil {
 		for _, item := range items {
-			if _, err := validateSimpleValueIn(item, t.ItemType, Version10, at); err != nil {
+			if _, err := validateSimpleValueIn(item, t.ItemType, Version10, at, record); err != nil {
 				return "", fmt.Errorf("list item %q: %w", item, err)
 			}
 		}
@@ -387,10 +390,10 @@ func validateListValueIn(lexical string, t *SimpleType, at *xdm.Node) (string, e
 // that validates. Normalising once up front would make " 42 " fail against
 // union(xs:int, xs:string) or succeed as the wrong member.
 func validateUnionValue(lexical string, t *SimpleType) (string, error) {
-	return validateUnionValueIn(lexical, t, nil)
+	return validateUnionValueIn(lexical, t, nil, nil)
 }
 
-func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node) (string, error) {
+func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node, record func(*xdm.Node, string)) (string, error) {
 	steps := facetChain(t)
 
 	// A restriction of a union carries no member list of its own; the members
@@ -410,7 +413,7 @@ func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node) (string, 
 		// winner on the way through, but the outer winner is written *after*
 		// this call returns and so overwrites it, which is the right order —
 		// the outermost union is the one the node's annotation names.
-		normalized, err := validateSimpleValueIn(lexical, m, Version10, at)
+		normalized, err := validateSimpleValueIn(lexical, m, Version10, at, record)
 		if err != nil {
 			continue
 		}
@@ -443,9 +446,9 @@ func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node) (string, 
 		// The node keeps its own annotation: the union's identity is still
 		// true of the value and a large family of tests asks for it. Only the
 		// second, per-value fact is added here.
-		if at != nil {
+		if record != nil && at != nil {
 			if mn := annotationName(m); mn != "" {
-				at.UnionMember = mn
+				record(at, mn)
 			}
 		}
 		return normalized, nil
@@ -707,6 +710,11 @@ func numericEqual(a, b string) bool {
 // octets, so "0F" has length 1 rather than 2. Measuring the literal would give
 // the wrong answer for every binary-typed value.
 func checkLengthForPrimitive(steps []facetStep, normalized, prim string) error {
+	// Counting is the cost, and with no length facet in the chain there is
+	// nothing to compare the count with.
+	if !hasLengthFacet(steps) {
+		return nil
+	}
 	var n uint64
 	switch prim {
 	case "hexBinary":
@@ -736,6 +744,17 @@ func checkLengthForPrimitive(steps []facetStep, normalized, prim string) error {
 	return checkLengthFacets(steps, n, unit)
 }
 
+// hasLengthFacet reports whether any step carries length, minLength or
+// maxLength.
+func hasLengthFacet(steps []facetStep) bool {
+	for _, st := range steps {
+		if f := st.facets; f.Length != nil || f.MinLength != nil || f.MaxLength != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // base64DecodedLen returns the number of octets a base64 literal encodes.
 func base64DecodedLen(s string) int {
 	var n, pad int
@@ -762,7 +781,16 @@ func base64DecodedLen(s string) int {
 // rational arithmetic rather than float64: xs:decimal has arbitrary precision,
 // and comparing 18446744073709551615 as a float would lose the last digits and
 // admit values outside xs:unsignedLong.
+//
+// Most values have no bound to meet — xs:integer and xs:decimal carry none,
+// and neither do most user restrictions of them — so the chain is checked for
+// one before the value is parsed. Parsing first put a big.Rat behind every
+// numeric value in the document whether or not anything compared it, which
+// was 40% of validating the xp-striding catalog (docs/profiling.md).
 func checkBounds(steps []facetStep, normalized, prim string) error {
+	if !hasBoundFacet(steps) {
+		return nil
+	}
 	switch prim {
 	case "decimal", "float", "double":
 	case "duration":
@@ -888,6 +916,20 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 	return nil
 }
 
+// hasBoundFacet reports whether any step of the chain carries one of the four
+// bound facets, which is all checkBounds and its temporal and duration
+// variants consult.
+func hasBoundFacet(steps []facetStep) bool {
+	for _, st := range steps {
+		f := st.facets
+		if f.MinInclusive != nil || f.MaxInclusive != nil ||
+			f.MinExclusive != nil || f.MaxExclusive != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // specialFloatOrder places the three floating values that have no rational
 // form on the order of §3.3.5/§3.3.6.
 //
@@ -1001,7 +1043,9 @@ func (v *validator) recordID(owner *xdm.Node, value string) {
 	}
 	if prev, seen := v.idOwners[value]; seen {
 		if prev != owner {
-			v.ids[value]++
+			if v.ids[value]++; v.ids[value] == 2 {
+				v.dupIDs = append(v.dupIDs, value)
+			}
 		}
 		return
 	}
@@ -1064,11 +1108,9 @@ func idKind(t *SimpleType, value string) string {
 // root rather than per element, because an IDREF may legitimately point forward
 // to an ID that has not been seen yet.
 func (v *validator) checkIDs() {
-	for value, count := range v.ids {
-		if count > 1 {
-			v.fail(nil, "cvc-id.2",
-				"ID value %q is defined %d times", value, count)
-		}
+	for _, value := range v.dupIDs {
+		v.fail(nil, "cvc-id.2",
+			"ID value %q is defined %d times", value, v.ids[value])
 	}
 	for _, ref := range v.idrefs {
 		if v.ids[ref.value] == 0 {

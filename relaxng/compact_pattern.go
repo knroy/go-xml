@@ -1,6 +1,9 @@
 package relaxng
 
-import "github.com/knroy/go-xml/xdm"
+import (
+	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xdmbuild"
+)
 
 // The pattern and name-class level of the compact syntax.
 
@@ -63,7 +66,7 @@ func (p *compactParser) parsePattern() (*xdm.Node, error) {
 		local = "interleave"
 	}
 	n := p.b.el(local)
-	n.Children = append(n.Children, operands...)
+	xdmbuild.SetChildren(n, operands)
 	return n, nil
 }
 
@@ -96,7 +99,7 @@ func (p *compactParser) parseRepeated() (*xdm.Node, error) {
 			return nil, err
 		}
 		wrap := p.b.el(local)
-		wrap.Children = append(wrap.Children, n)
+		wrap.AppendChild(n)
 		n = wrap
 	}
 }
@@ -247,7 +250,7 @@ func (p *compactParser) parseBracedPattern(local string) (*xdm.Node, error) {
 		return nil, err
 	}
 	n := p.b.el(local)
-	n.Children = append(n.Children, inner)
+	n.AppendChild(inner)
 	return n, nil
 }
 
@@ -335,7 +338,7 @@ func (p *compactParser) parseElementOrAttribute(local string) (*xdm.Node, error)
 	if simple != "" {
 		p.b.attr(n, "name", simple)
 	} else {
-		n.Children = append(n.Children, nc)
+		n.AppendChild(nc)
 	}
 	if err := p.expect("{"); err != nil {
 		return nil, err
@@ -347,7 +350,7 @@ func (p *compactParser) parseElementOrAttribute(local string) (*xdm.Node, error)
 	if err := p.expect("}"); err != nil {
 		return nil, err
 	}
-	n.Children = append(n.Children, inner)
+	n.AppendChild(inner)
 	return n, nil
 }
 
@@ -376,7 +379,7 @@ func (p *compactParser) parseNameClass(owner *xdm.Node) (nc *xdm.Node, simple st
 	// out to be one branch of a choice has to become a <name> element after
 	// all.
 	choice := p.b.el("choice")
-	choice.Children = append(choice.Children, p.nameClassNode(first, firstSimple))
+	choice.AppendChild(p.nameClassNode(first, firstSimple))
 	for p.at("|") {
 		if err := p.advance(); err != nil {
 			return nil, "", err
@@ -385,7 +388,7 @@ func (p *compactParser) parseNameClass(owner *xdm.Node) (nc *xdm.Node, simple st
 		if err != nil {
 			return nil, "", err
 		}
-		choice.Children = append(choice.Children, p.nameClassNode(next, nextSimple))
+		choice.AppendChild(p.nameClassNode(next, nextSimple))
 	}
 	return choice, "", nil
 }
@@ -491,7 +494,7 @@ func (p *compactParser) parseNameClassExcept(n *xdm.Node, owner *xdm.Node) error
 		return err
 	}
 	ex := p.b.el("except")
-	ex.Children = append(ex.Children, p.nameClassNode(inner, simple))
+	ex.AppendChild(p.nameClassNode(inner, simple))
 	// A further "|" after an except belongs to the excepted class, not to the
 	// class being excepted from: "* - (a | b)" is written with parentheses,
 	// but "* - a | b" excludes both. Reading the rest of the choice here is
@@ -504,13 +507,13 @@ func (p *compactParser) parseNameClassExcept(n *xdm.Node, owner *xdm.Node) error
 		if err != nil {
 			return err
 		}
-		ex.Children = append(ex.Children, p.nameClassNode(next, nextSimple))
+		ex.AppendChild(p.nameClassNode(next, nextSimple))
 	}
 	if len(ex.Children) > 1 {
 		choice := p.b.el("choice")
-		choice.Children = ex.Children
-		ex.Children = []*xdm.Node{choice}
+		xdmbuild.SetChildren(choice, ex.Children)
+		xdmbuild.SetChildren(ex, []*xdm.Node{choice})
 	}
-	n.Children = append(n.Children, ex)
+	n.AppendChild(ex)
 	return nil
 }

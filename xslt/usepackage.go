@@ -2,6 +2,8 @@ package xslt
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -820,7 +822,13 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 	}
 	overridingSeen := map[string]bool{}
 	for _, u := range uses {
-		for key, el := range u.overriding {
+		// In document order, so that of two clashing overrides the first
+		// written is reported, with its error code, on every run.
+		keys := slices.SortedFunc(maps.Keys(u.overriding), func(a, b string) int {
+			return u.overriding[a].Order() - u.overriding[b].Order()
+		})
+		for _, key := range keys {
+			el := u.overriding[key]
 			if ownByName[key] {
 				// A function clash is XTSE0770, the more specific rule:
 				// "a package must not contain two or more xsl:function
@@ -1617,7 +1625,9 @@ func checkTemplateParams(overriding, original *xdm.Node) error {
 				p.AttrValue("tunnel"), o.AttrValue("tunnel"))
 		}
 	}
-	for name, o := range orig {
+	// In declaration order, so the missing parameter named is the first.
+	for _, o := range leadingParams(original) {
+		name := o.AttrValue("name")
 		if !seen[name] && stylesheetYes(o.AttrValue("required")) {
 			return fmt.Errorf(
 				"XTSE3070: the overriding template %s does not declare the "+
@@ -1896,6 +1906,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	for _, ch := range kept {
 		ch.Parent = u.root
 	}
+	forgetSharedNS() // parent links changed
 	// The used package's static variables are its own, so they are put back
 	// for the compilation and taken away again after: a using package must
 	// not see them, and the two packages may legitimately declare the same
@@ -2361,6 +2372,7 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 			Value: uri,
 		})
 	}
+	forgetSharedNS() // overriding's namespaces changed
 	return overriding
 }
 

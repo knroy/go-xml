@@ -882,3 +882,83 @@ func TestValidationDepthIsBounded(t *testing.T) {
 		t.Errorf("an unbounded run should admit the document: %v", err)
 	}
 }
+
+// The document's namespace bindings are read only when a QName or NOTATION
+// value asks for them. Reading them builds a map per element and per text
+// node, so before they were lazy, validating under twenty bindings cost an
+// allocation or more per child for maps no value ever consulted. A QName
+// bound on an ancestor must still resolve (TestQNameValuesCompareByNamespace
+// covers the comparison itself).
+func TestNamespaceBindingsAreReadOnDemand(t *testing.T) {
+	s, err := compileSrc(t, `<element`+rngNS+` name="r"><zeroOrMore>
+		<element name="a"><attribute name="x"/><text/></element></zeroOrMore>
+		<optional><element name="q"><value type="QName"
+			datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes"
+			xmlns:s="urn:s">s:x</value></element></optional></element>`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	var decls strings.Builder
+	for i := 0; i < 20; i++ {
+		decls.WriteString(` xmlns:p` + string(rune('a'+i)) + `="urn:` + string(rune('a'+i)) + `"`)
+	}
+	kids := strings.Repeat(`<a x="1">t</a>`, 500)
+	allocs := func(rootAttrs string) float64 {
+		doc, err := xdm.ParseString(`<r`+rootAttrs+`>`+kids+`</r>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return testing.AllocsPerRun(5, func() {
+			if err := s.Validate(doc.Root); err != nil {
+				t.Fatalf("should be valid: %v", err)
+			}
+		})
+	}
+	if bare, bound := allocs(""), allocs(decls.String()); bound-bare > 50 {
+		t.Errorf("500 children allocated %.0f times under twenty bindings and %.0f under none; "+
+			"the bindings are being read for every node", bound, bare)
+	}
+	doc, _ := xdm.ParseString(`<r xmlns:d="urn:s"><a x="1"/><q>d:x</q></r>`, xdm.ParseOptions{})
+	if err := s.Validate(doc.Root); err != nil {
+		t.Errorf("a QName bound on an ancestor must resolve: %v", err)
+	}
+}
+
+// A <data type="QName"> or NOTATION value names an expanded name, so its
+// prefix must be bound where it is written: in the element's scope for text
+// and attributes alike, and for every token of a list. The verdicts are
+// Jing's, which also refuses a length facet on these types.
+func TestDataQNameResolvesItsPrefix(t *testing.T) {
+	const xsdLib = ` datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes"`
+	s, err := compileSrc(t, `<element`+rngNS+xsdLib+` name="w"><element name="r">
+		<attribute name="q"><data type="QName"/></attribute>
+		<list><oneOrMore><data type="QName"/></oneOrMore></list></element>
+		<optional><element name="n"><data type="NOTATION"/></element></optional></element>`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, c := range []struct {
+		doc   string
+		valid bool
+	}{
+		{`<w xmlns:p="urn:p"><r q="p:a">p:x y xml:z</r></w>`, true},
+		{`<w><r q="a" xmlns="urn:d">x</r></w>`, false}, // r is not in urn:d; sanity
+		{`<w><r q="p:a">x</r></w>`, false},
+		{`<w xmlns:p="urn:p"><r q="a">p:x q:y</r></w>`, false},
+		{`<w xmlns:p="urn:p"><r q="a">x</r><n>p:x</n></w>`, true},
+		{`<w><r q="a">x</r><n>p:x</n></w>`, false},
+	} {
+		doc, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Validate(doc.Root) == nil; got != c.valid {
+			t.Errorf("%s: valid=%v, want %v", c.doc, got, c.valid)
+		}
+	}
+	_, err = compileSrc(t, `<element`+rngNS+xsdLib+` name="r"><data type="QName">
+		<param name="maxLength">2</param></data></element>`)
+	if err == nil || !strings.Contains(err.Error(), "no units of length") {
+		t.Errorf("a length facet on QName: got %v, want a refusal", err)
+	}
+}

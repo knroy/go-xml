@@ -356,8 +356,7 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	}
 	rt.accumBuilding[key] = vals
 	defer delete(rt.accumBuilding, key)
-	cur, err := def.initial.Eval(ctx.WithFocus(root, 1, 1).
-		WithVar(currentVar, xdm.One(root)))
+	cur, err := def.initial.Eval(withFocusCurrent(ctx, root, 1, 1))
 	if err != nil {
 		return nil, fmt.Errorf(
 			"evaluating xsl:accumulator %s initial-value: %w",
@@ -450,8 +449,7 @@ func (rt *runtime) applyAccumRules(def *accumulatorDef, n *xdm.Node,
 	// $value is the accumulator's value as the rule found it. It is bound as
 	// an ordinary variable so that a rule body can read it from anywhere in a
 	// sequence constructor, not only from @select.
-	sub := ctx.WithFocus(n, 1, 1).
-		WithVar(currentVar, xdm.One(n)).
+	sub := withFocusCurrent(ctx, n, 1, 1).
 		WithVar(xdm.QName{Local: "value"}, cur)
 
 	var out xdm.Sequence
@@ -464,6 +462,7 @@ func (rt *runtime) applyAccumRules(def *accumulatorDef, n *xdm.Node,
 	case best.body != nil:
 		r2 := rt.temporaryOutput()
 		r2.ctx = sub
+		r2.absent = 0
 		ob := newOutputBuilder(rt)
 		if err := execSequence(best.body, r2, ob); err != nil {
 			return nil, err
@@ -675,7 +674,9 @@ func (rt *runtime) accumulatorOrigin(n *xdm.Node) *xdm.Node {
 // invisible tie, because the module holding it had been compiled before the
 // module that overrides it.
 func (c *compiler) checkAccumulatorConflicts() error {
-	for key, precs := range c.accumTies {
+	// Sorted, so two tied names are reported the same way on every run.
+	for _, key := range sortedKeys(c.accumTies) {
+		precs := c.accumTies[key]
 		best := precs[0]
 		n := 0
 		for _, p := range precs {

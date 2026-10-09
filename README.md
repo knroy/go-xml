@@ -21,7 +21,9 @@ Every error carries the spec's code and a path — `cvc-datatype-valid.1` at
 For a document you did not write, use `schema.ValidateContext(ctx, ...)`: it is
 the same call with a deadline, and identity-constraint checking is where an
 untrusted document can make validation expensive. See
-[docs/security.md](docs/security.md).
+[docs/security.md](docs/security.md). To get a typed tree without touching
+the one you passed in, use `schema.ValidateCopy`
+([options](docs/options.md#annotate-and-concurrency)).
 
 ### The packages
 
@@ -118,7 +120,7 @@ and maintains it as a project of his own.
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 2,574 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 2,766 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -225,6 +227,12 @@ Eight packages, each usable on its own:
   1.0 stability promise does and does not cover.
 * **[RELEASE.md](RELEASE.md)** — how a release is cut: the manual steps in the
   order that matters, and what the tag-push workflow checks and refuses.
+* **[docs/benchmark.md](docs/benchmark.md)** — go-xml against Saxon-HE,
+  BaseX, Jing, Xerces-J, libxml2 and `encoding/xml` on DocBook, e-invoicing,
+  XMark, schema validation and parsing, cold and warm, with outputs checked
+  for agreement before anything is timed.
+* **[docs/profiling.md](docs/profiling.md)** — why go-xml was slower than a warm
+  JVM, profiled per workload, and which of the fixes it proposed have landed.
 * **[docs/known-gaps.md](docs/known-gaps.md)** — every measured failure and why
   it is still open, including the fix attempts that were reverted because they
   cost more than they gained.
@@ -405,7 +413,10 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 | `-p name=value` | supply a top-level `xsl:param`; repeatable |
 | `-allow-dir` | open `xsl:include`/`xsl:import`/`xsl:import-schema`/`doc()`/`document()` to further directories, each covering its subdirectories to any depth; the stylesheet's own directory is always readable. It says *where*, not *what*: raw text, external entities and XInclude each need their own flag as well |
 | `-allow-doctype` | permit a `DOCTYPE` in the source |
+| `-catalog DIR` | answer `xsl:import-schema`'s references to the W3C schemas (`XMLSchema.xsd`, `xml.xsd`) from local copies in `DIR` instead of leaving them unresolved; see [validation.md](docs/validation.md#resolving-schemalocation) |
 | `-timeout` | bound the transform (default 60s) |
+| `-max-items N` | items the transform may materialise (default 5,000,000; `-1` removes the bound) |
+| `-max-bytes N` | largest input document (default 64 MB; `-1` removes the limit) |
 | `-initial-template` | start at a named template instead of matching the root; no input document is then needed |
 | `-mode` | initial mode for `apply-templates` |
 | `-messages` | print `xsl:message` output to stderr |
@@ -418,6 +429,15 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 
 The exit status is 0 only if every input transformed.
 
+`go install -tags goxml_nohttp github.com/knroy/go-xml/cmd/go-xml@latest`
+builds the CLI without `net/http`, which it never uses: it starts about 1.6 ms
+faster and is 12% smaller.
+
+The CLI is built with profile-guided optimisation from the committed
+`cmd/go-xml/default.pgo` (regenerate it with `tests/pgo.sh`), which `go build`
+and `go install` use automatically: 2–3% less CPU per run. A program embedding
+the library gains only from a profile of its own in its main package.
+
 `go-xml xquery` runs an XQuery main module. The optional input document is
 the context item; the result is serialized with the query's own
 `declare option output:*` parameters.
@@ -429,7 +449,7 @@ go-xml xquery -q generate.xq -now 2024-01-15T09:00:00Z
 
 It takes `-o`, `-p` (an external variable, as `xs:string`), `-allow-dir`,
 `-allow-doctype`, `-allow-external-entities`, `-allow-unparsed-text`,
-`-timeout` and `-now`, with the transform's meanings and defaults: `import
+`-catalog`, `-max-items`, `-max-bytes`, `-timeout` and `-now`, with the transform's meanings and defaults: `import
 module ... at`, `import schema ... at`, `doc()` and `unparsed-text()` read only
 the query's own directory and the `-allow-dir` roots. A query types its input
 with the language's own `validate { . }`, so it needs no `-validate` flag.
@@ -689,6 +709,13 @@ introduces bought exactly zero, so it was reverted. The comment in
 
 ## Benchmarks
 
+The full comparison with other engines, cold and warm, across nine workloads,
+is in [docs/benchmark.md](docs/benchmark.md), re-run after the performance work
+in [docs/profiling.md](docs/profiling.md). The figures below are the in-process
+Go benchmarks; they and the Saxon table after them were measured in August 2026, before that
+work, on a UBL and an Oman corpus that are not in this repository, and have not
+been re-run since. benchmark.md has the current figures.
+
 Apple M3 Pro, Go 1.26, `-benchtime=200x`, median of five runs. These are the
 two production workloads, not microbenchmarks. Wall-clock figures vary about
 ±15% run to run on a laptop, so they are rounded; the allocation counts are
@@ -798,7 +825,9 @@ Every remote-reference mechanism is off unless you turn it on.
   module [`w3cschemas`](w3cschemas/README.md) ships the W3C documents
   themselves — separate because they are under W3C rather than MIT terms —
   and its schema for schemas is the XSD 1.1 one, so it loads under
-  `xsd.Version11`.
+  `xsd.Version11`. From the command line, `-catalog DIR` on `validate`,
+  the transform and `xquery` does the same from a directory holding those
+  files.
 * **Nesting and recursion are bounded** — parse depth, XPath recursion and
   template recursion each have a limit that produces an error rather than a
   stack overflow.
@@ -1323,7 +1352,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (2,574 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (2,766 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |

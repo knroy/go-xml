@@ -210,7 +210,7 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 // be missing.
 func (rt *runtime) withCurrentNode(node *xdm.Node) *runtime {
 	n := *rt
-	n.ctx = rt.ctx.WithVar(currentVar, xdm.One(node))
+	n.ctx = withCurrentItem(rt.ctx, node)
 	return &n
 }
 
@@ -235,6 +235,19 @@ func (s *Stylesheet) findTemplate(node *xdm.Node, mode string, ctx *xpath.Contex
 func (s *Stylesheet) findTemplateFrom(node *xdm.Node, mode string,
 	ctx *xpath.Context, start int) (*Template, int, error) {
 
+	if cand, ok := s.candidates(node, mode); ok {
+		for _, i := range cand[sort.SearchInts(cand, start):] {
+			t := s.templates[i]
+			ok, err := t.Match.Matches(node, ctx)
+			if err != nil {
+				return nil, 0, err
+			}
+			if ok {
+				return t, i + 1, nil
+			}
+		}
+		return nil, len(s.templates), nil
+	}
 	for i := start; i < len(s.templates); i++ {
 		t := s.templates[i]
 		if !t.matchesMode(mode) {
@@ -1103,7 +1116,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		if out.Open() == nil && sub.Open().BaseURI == "" {
 			sub.Open().BaseURI = node.BaseURI
 		}
-		copyNamespacesTo(sub, node)
+		copyNamespacesTo(rt, sub, node)
 		// The attributes are processed first so that they reach the element
 		// before any child content closes it to them; section 6.7's rule
 		// selects attributes as well as children.

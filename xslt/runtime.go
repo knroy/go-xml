@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/knroy/go-xml/internal/xpathleaf"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 )
@@ -28,8 +29,10 @@ type runtime struct {
 	// started by fn:transform inherits what this one was given -- above all
 	// the resolvers, since a nested transform that could reach documents the
 	// outer one could not would be a hole in the sandbox rather than a
-	// feature. See fntransform.go.
-	opts TransformOptions
+	// feature. See fntransform.go. It is held by pointer and never written
+	// after newRuntime: the runtime is copied on every focus and variable
+	// change, and the options are most of its size.
+	opts *TransformOptions
 
 	// static marks the stand-in runtime the static phase builds so that a
 	// static="yes" variable can call fn:transform. Section 9.7 gives a static
@@ -52,6 +55,15 @@ type runtime struct {
 	// identity; see identityNumber.
 	itemIDs map[any]int
 	ctx     *xpath.Context
+
+	// absent records which groups of context components clearMergeContext,
+	// withoutGroupingScope and clearRegexGroups have already bound to absent
+	// in ctx, so that the clears every template and function call runs can
+	// return rt unchanged instead of copying the runtime and the context
+	// three times each. withVar drops a group's bit whenever one of its
+	// variables is rebound, and the zero value claims nothing: code that
+	// gives a runtime a context not derived from its own must zero it.
+	absent uint8
 
 	// deferredErr holds the failure of a global whose evaluation is not by
 	// itself the transform's failure -- an abstract variable, whose body
@@ -93,6 +105,10 @@ type runtime struct {
 	// of an xsl:key declaration contains a call to the key function".
 	keyBuilding map[keyCacheKey]bool
 
+	// steps is package xpath's memo of step walks over parsed trees, kept for
+	// this transform as keyIndex is (see xpathleaf.StepMemoHost).
+	steps any
+
 	// accumValues caches each accumulator's value at every node of a tree,
 	// and accumBuilding holds the values recorded so far by a walk still in
 	// progress. Both mirror keyIndex and keyBuilding, and for the same
@@ -121,6 +137,13 @@ type runtime struct {
 	// is copied by value: a document loaded inside an xsl:merge must stay
 	// restricted for the whole of the action that reads it.
 	treeAccums map[*xdm.Node]*modeAccumulators
+
+	// blocking holds the elements whose body is running under
+	// inherit-namespaces="no". blockNamespaceInheritance reads each child's
+	// own namespace nodes when the body ends, so a child built inside one of
+	// these must keep the bindings it would otherwise leave to its parent;
+	// see parentSupplies. Shared with derived runtimes like treeAccums.
+	blocking map[*xdm.Node]bool
 
 	// streamedTrees records the roots that xsl:source-document was asked to
 	// read in streamed mode, which XTDE3362 bars a non-streamable accumulator
@@ -274,9 +297,10 @@ func (rt *runtime) withFocus(item xdm.Item, pos, size int) *runtime {
 // evaluation use withFocus, which deliberately leaves current() alone.
 func (rt *runtime) withCurrent(item xdm.Item, pos, size int) *runtime {
 	n := *rt
-	n.ctx = rt.ctx.WithFocus(item, pos, size)
 	if item != nil {
-		n.ctx = n.ctx.WithVar(currentVar, xdm.One(item))
+		n.ctx = withFocusCurrent(rt.ctx, item, pos, size)
+	} else {
+		n.ctx = rt.ctx.WithFocus(item, pos, size)
 	}
 	return &n
 }
@@ -299,7 +323,34 @@ func (rt *runtime) withSelection(t *Template, next int, mode string,
 func (rt *runtime) withVar(name xdm.QName, val xdm.Sequence) *runtime {
 	n := *rt
 	n.ctx = rt.ctx.WithVar(name, val)
+	if name.URI == internalNS {
+		g := absentGroupOf(name)
+		n.absent &^= g
+		if h := hostOf(n.ctx); h != nil && h.Unbound&g != 0 {
+			setUnbound(n.ctx, h.Unbound&^g)
+		}
+	}
 	return &n
+}
+
+// The groups of context components runtime.absent tracks.
+const (
+	absentMerge uint8 = 1 << iota
+	absentGrouping
+	absentRegex
+)
+
+// absentGroupOf names the group a variable belongs to, or 0.
+func absentGroupOf(name xdm.QName) uint8 {
+	switch name {
+	case currentMergeGroupVar, currentMergeKeyVar, currentMergeSourcesVar:
+		return absentMerge
+	case currentGroupVar, currentGroupingKeyVar, groupingScopeVar:
+		return absentGrouping
+	case regexGroupsVar:
+		return absentRegex
+	}
+	return 0
 }
 
 // --- Output construction ----------------------------------------------------
@@ -441,7 +492,9 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 // xsl:for-each-group, and xsl:analyze-string, and calls on stylesheet
 // functions. Also cleared while evaluating global variables or default values
 // of stylesheet parameters, and the sequence constructors contained in
-// xsl:key and xsl:sort."
+// xsl:key and xsl:sort." XSLT 3.0 section 6.8 adds xsl:iterate,
+// xsl:source-document, xsl:merge and "xsl:copy if and only if there is a
+// select attribute".
 //
 // It exists for XTDE0560, which is an error "if xsl:apply-imports or
 // xsl:next-match is evaluated when the current template rule is null". Both
@@ -601,6 +654,12 @@ func constructedText(seq xdm.Sequence, sep string) string {
 	return strings.Join(parts, sep)
 }
 
+// StepMemo implements xpathleaf.StepMemoHost. The transform does not change a
+// parsed tree, so walks over one may be remembered until it ends.
+func (rt *runtime) StepMemo() any { return rt.steps }
+
+var _ xpathleaf.StepMemoHost = (*runtime)(nil)
+
 // newRuntime builds a runtime for one transform.
 func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts TransformOptions) (*runtime, error) {
 	maxDepth := opts.MaxDepth
@@ -616,11 +675,13 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		maxDepth:    maxDepth,
 		keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
 		keyBuilding: map[keyCacheKey]bool{},
+		steps:       xpathleaf.NewStepMemo(),
 
 		accumValues:   map[accumCacheKey]*accumulatorValues{},
 		accumBuilding: map[accumCacheKey]*accumulatorValues{},
 		accumOrigin:   map[*xdm.Node]*xdm.Node{},
 		treeAccums:    map[*xdm.Node]*modeAccumulators{},
+		blocking:      map[*xdm.Node]bool{},
 		streamedTrees: map[*xdm.Node]bool{},
 		tunnel:        map[string]xdm.Sequence{},
 		funcResults:   map[string]xdm.Sequence{},
@@ -630,7 +691,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		secondary:     new([]SecondaryResult),
 		baseURIUsed:   new(bool),
 		baseOutputURI: opts.BaseOutputURI,
-		opts:          opts,
+		opts:          &opts,
 		goCtx:         ctx,
 	}
 
@@ -658,6 +719,8 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		item = nil
 	}
 	xctx := xpath.NewContext(item, s.funcs)
+	// Set before AdoptBudget, which replaces it with the caller's bound.
+	xctx.MaxItems = opts.MaxItems
 	// A transform started by fn:transform continues its caller's item and byte
 	// allowances rather than restarting on fresh ones, the same policy the
 	// recursion depth above follows. The counters travel with their held flags;
@@ -753,24 +816,12 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		return rt.deferredError(c, name)
 	}
 
-	// The key() and current() functions need the runtime, so they are bound
-	// per transform rather than living in the shared builtin library.
-	lib := xpath.NewLibrary(s.funcs)
-	registerRuntimeFuncs(lib, rt)
-	registerOutputFuncs(lib)
-	// The grouping, merge and position accessors go in here too, rather than
-	// after the globals are bound, because a global may hold a *reference* to
-	// one: for-each-group-078 writes `<xsl:variable name="f"
-	// select="current-group#0"/>`, and a named function reference resolves
-	// against the library in force where it is written. Registered later,
-	// that was XPST0017 for a function this engine has. They read their state
-	// through variable bindings that no global has yet, so one *called* from
-	// a global still reports the XTDE1061 it should.
-	registerGroupingFuncs(lib)
-	registerMergeFuncs(lib)
-	registerFormatNumber(lib, s)
-	registerPositionFuncs(lib)
-	rt.ctx.Funcs = packageScopedLibrary{inner: lib, sheet: s}
+	// The key() and current() functions need the runtime, so they live in a
+	// library of their own rather than the shared builtin one. It is built
+	// once per stylesheet: the functions find the transform through the
+	// context (rtFor), so every transform shares it and a call site's cached
+	// resolution survives from one transform to the next.
+	rt.ctx.Funcs = packageScopedLibrary{inner: s.runtimeLibrary(), sheet: s}
 
 	// Global variables are evaluated in dependency order rather than
 	// declaration order. Section 9.5 puts no ordering constraint on
@@ -784,8 +835,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// xsl:function reaches the runtime through this binding — evaluating the
 	// globals first left such a call reporting that it was made outside a
 	// transform.
-	rt.ctx = rt.ctx.WithVar(runtimeVar,
-		xdm.One(&xdm.Opaque{Label: "runtime", Value: rt}))
+	rt.ctx = bindRuntime(rt.ctx, rt)
 
 	if err := rt.evalGlobals(s, opts); err != nil {
 		return nil, err
@@ -798,6 +848,34 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// is what lets the set body be evaluated in that scope.
 	rt.globalCtx = rt.ctx
 	return rt, nil
+}
+
+// runtimeLibrary is the stylesheet's runtime function library, built on first
+// use.
+func (s *Stylesheet) runtimeLibrary() *xpath.Library {
+	s.rtLibOnce.Do(func() {
+		lib := xpath.NewLibrary(s.funcs)
+		// The functions that need a transform find it through the context;
+		// this runtime answers only the static resolvers, which read nothing
+		// but the stylesheet.
+		registerRuntimeFuncs(lib, &runtime{sheet: s})
+		registerOutputFuncs(lib)
+		// The grouping, merge and position accessors go in here too, rather
+		// than after the globals are bound, because a global may hold a
+		// *reference* to one: for-each-group-078 writes `<xsl:variable
+		// name="f" select="current-group#0"/>`, and a named function
+		// reference resolves against the library in force where it is
+		// written. Registered later, that was XPST0017 for a function this
+		// engine has. They read their state through variable bindings that no
+		// global has yet, so one *called* from a global still reports the
+		// XTDE1061 it should.
+		registerGroupingFuncs(lib)
+		registerMergeFuncs(lib)
+		registerFormatNumber(lib, s)
+		registerPositionFuncs(lib)
+		s.rtLib = lib
+	})
+	return s.rtLib
 }
 
 // evalGlobals binds every global variable, resolving dependencies on demand.
@@ -1269,7 +1347,7 @@ func bodyVariableRefs(el *xdm.Node) []string {
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
 		if n.Kind == xdm.KindElement {
-			ns := n.InScopeNamespaces()
+			ns := inScopeNamespacesShared(n)
 			for _, a := range n.Attrs {
 				for _, ref := range variableRefsIn(a.Value, ns) {
 					if !seen[ref] && !bound[ref] {
@@ -1328,7 +1406,7 @@ func bodyFunctionCalls(el *xdm.Node) []string {
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
 		if n.Kind == xdm.KindElement {
-			ns := n.InScopeNamespaces()
+			ns := inScopeNamespacesShared(n)
 			for _, a := range n.Attrs {
 				for _, c := range functionCallsIn(a.Value, ns) {
 					if !seen[c] {
@@ -1399,4 +1477,13 @@ func functionCallsIn(src string, ns map[string]string) []string {
 // lexical scan, covers the rest.
 func isNameStartByte(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// noteUnbound records on rt.ctx, which a clearing function has just made,
+// that the components in bits are cleared there, so that runtimeFrom can
+// carry the knowledge into a stylesheet function's body.
+func (rt *runtime) noteUnbound(bits uint8) {
+	if h := hostOf(rt.ctx); h != nil {
+		setUnbound(rt.ctx, h.Unbound|bits)
+	}
 }

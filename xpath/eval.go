@@ -58,15 +58,32 @@ func (e *Step) Eval(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
+	return e.evalFrom(ctx, node)
+}
 
+// evalFrom is Eval with node as the context node. Of ctx it uses only what
+// the predicates inherit, and each predicate replaces the focus with its own,
+// so ctx's focus need not be node: evalStepOver calls this with its own
+// context rather than copying it once per input node to install a focus that
+// nothing would read.
+func (e *Step) evalFrom(ctx *Context, node *xdm.Node) (xdm.Sequence, error) {
+	var err error
 	principal := e.Axis.PrincipalKind()
 	var selected xdm.Sequence
-	walkAxis(node, e.Axis, func(n *xdm.Node) bool {
-		if e.Test.Matches(n, principal) {
-			selected = append(selected, n)
+	if nt, ok := e.Test.(*NameTest); ok && (e.Axis == AxisDescendant || e.Axis == AxisDescendantOrSelf) {
+		// The direct walk selects what walkAxis would, in the same order.
+		if e.Axis == AxisDescendantOrSelf && nt.Matches(node, principal) {
+			selected = append(selected, node)
 		}
-		return true
-	})
+		selected = appendNamedDescendants(selected, node, nt)
+	} else {
+		walkAxis(node, e.Axis, func(n *xdm.Node) bool {
+			if e.Test.Matches(n, principal) {
+				selected = append(selected, n)
+			}
+			return true
+		})
+	}
 
 	// Predicates apply in axis order, so a reverse axis numbers positions
 	// from the context node outwards.
@@ -130,20 +147,32 @@ func (e *PathExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 				"the context item for an axis step is %s, not a node",
 				ctx.Item.TypeName())
 		}
+		if len(e.Steps) > 0 {
+			return evalPathFromItem(ctx, ctx.Item, e.Steps)
+		}
 		cur = xdm.One(ctx.Item)
 	}
+	return evalRemainingSteps(ctx, cur, e.Steps)
+}
 
-	for i, step := range e.Steps {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		next, err := evalStepOver(ctx, cur, step, i == len(e.Steps)-1)
-		if err != nil {
-			return nil, err
-		}
-		cur = next
+// evalPathFromItem is evalRemainingSteps starting from the one item it.
+// The first step only iterates its input, so it is held in an array on the
+// stack rather than boxed into a one-item sequence on the heap, which was an
+// allocation for every relative path evaluated.
+func evalPathFromItem(ctx *Context, it xdm.Item, steps []Expr) (xdm.Sequence, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return cur, nil
+	one := [1]xdm.Item{it}
+	step, rest := steps[0], steps[1:]
+	if d := fuseDescendant(steps, 0); d != nil {
+		step, rest = d, steps[2:]
+	}
+	next, err := evalStepOver(ctx, one[:], step, len(rest) == 0)
+	if err != nil {
+		return nil, err
+	}
+	return evalRemainingSteps(ctx, next, rest)
 }
 
 // evalStepOver evaluates one step with each item of input as the context item,
@@ -192,8 +221,20 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		sub := ctx.WithFocus(it, i+1, size)
-		v, err := step.Eval(sub)
+		// A plain axis step reads the focus only for its context node, so it
+		// is handed the node directly; the per-node Context copy WithFocus
+		// makes was a heap allocation for every node a path visited. The
+		// loop above has already checked that every item is a node.
+		var v xdm.Sequence
+		var err error
+		st, fresh := step.(*Step)
+		if fresh {
+			v, err = st.evalFrom(ctx, it.(*xdm.Node))
+		} else if da, ok := step.(*descendantAttrs); ok {
+			v = da.appendFrom(nil, it.(*xdm.Node))
+		} else {
+			v, err = step.Eval(ctx.WithFocus(it, i+1, size))
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -202,7 +243,16 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 				allNodes = false
 			}
 		}
-		out = append(out, v...)
+		// evalFrom's result is a fresh slice no one else holds, so the first
+		// one becomes out instead of being copied into it: for a single
+		// input node, the common case, that copy was the accumulation's
+		// whole cost. Any other step can return a sequence a variable still
+		// holds, whose spare capacity a later append must not write into.
+		if fresh && out == nil {
+			out = v
+		} else {
+			out = append(out, v...)
+		}
 	}
 
 	if !allNodes {
@@ -271,6 +321,10 @@ func (e *FilterExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, error) {
 	var out xdm.Sequence
 	size := len(seq)
+	var h *comparisonHoist
+	if size > 1 {
+		h = newComparisonHoist(ctx, pred)
+	}
 
 	for i, it := range seq {
 		if err := ctx.Err(); err != nil {
@@ -278,6 +332,19 @@ func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, er
 		}
 		pos := i + 1
 		sub := ctx.WithFocus(it, pos, size)
+		if h != nil {
+			keep, ok, err := h.holds(sub)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				if keep {
+					out = append(out, it)
+				}
+				continue
+			}
+			h = nil // the hoisted operand failed: evaluate as written from here
+		}
 		v, err := pred.Eval(sub)
 		if err != nil {
 			return nil, err
@@ -292,6 +359,102 @@ func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, er
 		}
 	}
 	return out, nil
+}
+
+// comparisonHoist evaluates a predicate "A op B", a general or value
+// comparison, whose one operand reads no focus and calls only pure built-ins
+// (hoistable and callsBuiltins, as the XQuery join uses them): that operand is
+// evaluated and atomized once per application of the predicate rather than
+// once per item. A comparison is never numeric, so no positional predicate is
+// affected. "$letters/l[. = substring($term, 1, 2)]" is the motivating shape.
+type comparisonHoist struct {
+	cmp   *BinaryOp
+	left  bool         // the hoisted operand is the left one
+	value xdm.Sequence // its atomized value, once ready
+	ready bool
+}
+
+// newComparisonHoist returns nil when pred is not such a comparison, under
+// XPath 1.0 compatibility (whose conversions need the raw operands), and for
+// "A = (M to N)", which evalGeneralComparison answers from the bounds.
+func newComparisonHoist(ctx *Context, pred Expr) *comparisonHoist {
+	b, ok := pred.(*BinaryOp)
+	if !ok {
+		return nil
+	}
+	switch b.Op {
+	case "eq", "ne", "lt", "le", "gt", "ge":
+	case "=", "!=", "<", "<=", ">", ">=":
+		if r, isRange := b.Right.(*BinaryOp); ctx.Compat || (isRange && r.Op == "to") {
+			return nil
+		}
+	default:
+		return nil
+	}
+	side, left := b.Right, false
+	if !hoistable(side, false) {
+		side, left = b.Left, true
+		if !hoistable(side, false) {
+			return nil
+		}
+	}
+	if !callsBuiltins(side, ctx) {
+		return nil
+	}
+	return &comparisonHoist{cmp: b, left: left}
+}
+
+// holds reports whether the predicate selects sub's context item. The hoisted
+// operand is evaluated on the first item, so an empty sequence never raises
+// its error. ok is false when it raised one: the caller then evaluates the
+// predicate as written from this item on, which raises whichever error the
+// comparison raises first. Once it has succeeded it cannot fail on a later
+// item, so every error left comes from the other operand or the comparison,
+// in the order evaluating "A op B" would raise them.
+func (h *comparisonHoist) holds(sub *Context) (keep, ok bool, err error) {
+	b := h.cmp
+	if keep, ok := nameComparison(sub, b); ok {
+		return keep, true, nil
+	}
+	other := b.Left
+	if h.left {
+		other = b.Right
+	}
+	if !h.ready {
+		side := b.Right
+		if h.left {
+			side = b.Left
+		}
+		v, err := side.Eval(sub)
+		if err == nil {
+			v, err = xdm.AtomizeChecked(v)
+		}
+		if err != nil {
+			return false, false, nil
+		}
+		h.value, h.ready = v, true
+	}
+	v, err := other.Eval(sub)
+	if err != nil {
+		return false, true, err
+	}
+	a, err := xdm.AtomizeChecked(v)
+	if err != nil {
+		return false, true, err
+	}
+	la, ra := a, h.value
+	if h.left {
+		la, ra = h.value, a
+	}
+	if generalValueOp(b.Op) != "" {
+		keep, err = b.comparePairs(sub, la, ra)
+		return keep, true, err
+	}
+	r, err := b.compareSingletons(sub, la, ra)
+	if err != nil || len(r) == 0 {
+		return false, true, err
+	}
+	return r[0].(*xdm.Atomic).Bool(), true, nil
 }
 
 // predicateHolds decides whether a predicate value selects the item at pos.
@@ -438,7 +601,7 @@ func (e *QuantifiedExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	return xdm.One(xdm.NewBoolean(res)), nil
+	return xdm.One(boolItem(res)), nil
 }
 
 // evalQuantified short-circuits: "some" stops at the first true, "every" at
@@ -489,9 +652,9 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 			return nil, fmt.Errorf("XPST0017: unknown function %s with %d argument(s)",
 				e.Name.Clark(), len(e.Args))
 		}
-		return partialApply(e.Name, fn.Arity, fn.Call, e.Args, ctx)
+		return partialApply(e.Name, fn.Arity, hostBoundCall(ctx, fn), e.Args, ctx)
 	}
-	fn, ok := lookupFor(ctx, e.Name, len(e.Args))
+	fn, params, hasParams, ok := e.resolve(ctx)
 	if !ok {
 		// XSLT 18.1, and B.1 rule 6: under XPath 1.0 compatibility a call to
 		// an unknown function in a non-null namespace is not the static error
@@ -553,12 +716,24 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	// It covers only the functions the manifest has been migrated to; a miss
 	// binds the call exactly as before. See checkArgCardinality for why the
 	// check is cardinality-only and cannot change error precedence.
-	if params, ok := lookupSpecParams(fn.Name, fn.Arity); ok {
+	if hasParams {
 		if err := checkArgCardinality(fn.Name, params, args); err != nil {
 			return nil, err
 		}
 	}
 
+	// A leaf builtin cannot re-enter user code or retain ctx, so the depth
+	// is counted on ctx in place: the same limit and error as Descend,
+	// without copying the context on every call.
+	if fn.leaf {
+		if err := ctx.checkDepth(); err != nil {
+			return nil, err
+		}
+		ctx.Depth++
+		res, err := fn.Call(ctx, args)
+		ctx.Depth--
+		return res, err
+	}
 	sub, err := ctx.Descend()
 	if err != nil {
 		return nil, err
@@ -629,9 +804,21 @@ func stepNeedsFocus(e Expr) bool {
 
 // evalRemainingSteps runs the steps after a self-rooted first step.
 func evalRemainingSteps(ctx *Context, cur xdm.Sequence, steps []Expr) (xdm.Sequence, error) {
-	for i, step := range steps {
+	for i := 0; i < len(steps); i++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if v, ok := namedParents(ctx, cur, steps, i); ok {
+			cur = v
+			continue
+		}
+		step := steps[i]
+		if d := fuseDescendant(steps, i); d != nil {
+			step = d
+			i++
+		} else if a := fuseDescendantAttrs(steps, i, cur); a != nil {
+			step = a
+			i++
 		}
 		next, err := evalStepOver(ctx, cur, step, i == len(steps)-1)
 		if err != nil {
@@ -640,6 +827,97 @@ func evalRemainingSteps(ctx *Context, cur xdm.Sequence, steps []Expr) (xdm.Seque
 		cur = next
 	}
 	return cur, nil
+}
+
+// fuseDescendant answers "//T", that is descendant-or-self::node() followed
+// by a child step, as the one step descendant::T when neither has a
+// predicate. The two select the same nodes: the children of a node or of any
+// of its descendants are its descendants, and neither axis reaches an
+// attribute or namespace node. Run as written, the first step materialises
+// and sorts every node below the context before the second visits each one's
+// children. A predicate rules it out: "//x[1]" numbers x among its siblings,
+// not among all descendants.
+func fuseDescendant(steps []Expr, i int) *Step {
+	if i+1 >= len(steps) {
+		return nil
+	}
+	dos, ok := steps[i].(*Step)
+	if !ok || dos.Axis != AxisDescendantOrSelf || len(dos.Predicates) != 0 {
+		return nil
+	}
+	if kt, ok := dos.Test.(*KindTest); !ok || !kt.Any {
+		return nil
+	}
+	child, ok := steps[i+1].(*Step)
+	if !ok || child.Axis != AxisChild || len(child.Predicates) != 0 {
+		return nil
+	}
+	return &Step{Axis: AxisDescendant, Test: child.Test}
+}
+
+// fuseDescendantAttrs answers "//@a", that is descendant-or-self::node()
+// followed by an attribute step, as one walk that reads each node's
+// attributes as it passes, when neither step has a predicate. Run as written,
+// the first step materialises and sorts every node below the context, and the
+// second then walks each one's attribute axis through a closure and sorts the
+// result.
+//
+// Only over nodes of parsed trees: sorting nodes of a constructed tree
+// numbers its root on first sight (xdm.SortDocumentOrder), and the fused walk
+// sorts different nodes, so it could leave a root numbered later, or not at
+// all, and order trees differently afterwards. Anything else, a non-node
+// operand included, takes the steps as written, errors and all.
+func fuseDescendantAttrs(steps []Expr, i int, input xdm.Sequence) *descendantAttrs {
+	if i+1 >= len(steps) {
+		return nil
+	}
+	dos, ok := steps[i].(*Step)
+	if !ok || dos.Axis != AxisDescendantOrSelf || len(dos.Predicates) != 0 {
+		return nil
+	}
+	if kt, ok := dos.Test.(*KindTest); !ok || !kt.Any {
+		return nil
+	}
+	at, ok := steps[i+1].(*Step)
+	if !ok || at.Axis != AxisAttribute || len(at.Predicates) != 0 {
+		return nil
+	}
+	for _, it := range input {
+		if n, ok := it.(*xdm.Node); !ok || n.Tree() == nil {
+			return nil
+		}
+	}
+	return &descendantAttrs{test: at.Test}
+}
+
+// descendantAttrs is the fused step fuseDescendantAttrs builds: the
+// attributes that test matches on the context node and on each of its
+// descendants, in document order. Only evalStepOver runs it.
+type descendantAttrs struct{ test NodeTest }
+
+func (d *descendantAttrs) appendFrom(out xdm.Sequence, n *xdm.Node) xdm.Sequence {
+	for _, a := range n.Attrs {
+		if d.test.Matches(a, xdm.KindAttribute) {
+			out = append(out, a)
+		}
+	}
+	for _, c := range n.Children {
+		out = d.appendFrom(out, c)
+	}
+	return out
+}
+
+// Eval implements Expr.
+func (d *descendantAttrs) Eval(ctx *Context) (xdm.Sequence, error) {
+	node, err := ctx.ContextNode()
+	if err != nil {
+		return nil, err
+	}
+	return d.appendFrom(nil, node), nil
+}
+
+func (d *descendantAttrs) String() string {
+	return "descendant-or-self::node()/attribute::" + d.test.String()
 }
 
 // stepIsAxisStep reports whether a path step navigates an axis, as opposed to

@@ -47,12 +47,15 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node, precedence int) error {
 	}
 
 	// Each symbol attribute is a single character; anything else is a
-	// declaration error rather than something to truncate silently.
+	// declaration error rather than something to truncate silently. An
+	// attribute is stated by being present, so an empty value is one of the
+	// "anything else" (XTSE0020, as Saxon reports), not an absent attribute.
 	runeAttr := func(attr string, dst *rune) error {
-		v := el.AttrValue(attr)
-		if v == "" {
+		a := el.Attr("", attr)
+		if a == nil {
 			return nil
 		}
+		v := a.Value
 		r := []rune(v)
 		if len(r) != 1 {
 			return fmt.Errorf(
@@ -81,12 +84,14 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node, precedence int) error {
 			return err
 		}
 	}
-	if v := el.AttrValue("infinity"); v != "" {
-		df.Infinity = v
+	// Presence, not a non-empty value: both are xs:string, so NaN="" is a
+	// legal declaration that formats NaN as the empty string.
+	if a := el.Attr("", "infinity"); a != nil {
+		df.Infinity = a.Value
 		stated["infinity"] = true
 	}
-	if v := el.AttrValue("NaN"); v != "" {
-		df.NaN = v
+	if a := el.Attr("", "NaN"); a != nil {
+		df.NaN = a.Value
 		stated["NaN"] = true
 	}
 

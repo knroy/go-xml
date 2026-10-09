@@ -75,7 +75,7 @@ func loadXQueryModule(ctx *xpath.Context, uri string, options *xdm.MapItem) (xdm
 		opts = Options{Modules: m.opts.Modules, ModuleResolver: m.opts.ModuleResolver,
 			MaxModules: m.opts.MaxModules, MaxModuleBytes: m.opts.MaxModuleBytes,
 			Schemas: m.opts.Schemas, SchemaResolver: m.opts.SchemaResolver,
-			MaxSchemaBytes: m.opts.MaxSchemaBytes}
+			MaxSchemaBytes: m.opts.MaxSchemaBytes, SchemaParseOptions: m.opts.SchemaParseOptions}
 	case nil:
 	default:
 		opts.ModuleResolver = m

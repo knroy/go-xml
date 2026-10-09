@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -40,6 +41,7 @@ func runValidate(args []string) error {
 			"confine schema include/import to this directory; by default the "+
 				"directory of the schema file, as the transform does for its "+
 				"stylesheet")
+		catalog   = registerCatalog(fs)
 		maxErrors = fs.Int("max-errors", 0,
 			"stop after this many failures per document; 0 uses the default")
 		quiet = fs.Bool("quiet", false,
@@ -84,7 +86,7 @@ Exit status: 0 if every document is valid, 1 otherwise.
 	}
 
 	validate, err := schemaValidator(*xsdPaths, *rngPath, *version, *xpathVersion,
-		*root, *maxErrors)
+		*root, *catalog, *maxErrors)
 	if err != nil {
 		return err
 	}
@@ -123,7 +125,7 @@ Exit status: 0 if every document is valid, 1 otherwise.
 
 // schemaValidator compiles the schema once and returns the check to run per
 // document, so that a run over many instances pays for the schema once.
-func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root string,
+func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root, catalog string,
 	maxErrors int) (
 	func(*xdm.Node) error, error) {
 
@@ -179,6 +181,16 @@ func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root string,
 	if root != "" {
 		resolver = &xsd.FileResolver{Root: root}
 	}
+	if catalog != "" {
+		// The catalog wraps the confinement rather than replacing it: what
+		// it does not hold is read exactly where a plain load would read.
+		if resolver == nil {
+			resolver = xsd.RootedFileResolver(paths)
+		}
+		if resolver, err = schemaCatalog(catalog, resolver); err != nil {
+			return nil, err
+		}
+	}
 	schema, err := xsd.LoadFiles(paths, xsd.Options{
 		Resolver:     resolver,
 		Version:      v,
@@ -201,7 +213,10 @@ func validateOne(path string, popts xdm.ParseOptions, validate func(*xdm.Node) e
 	abs := fileURI(path)
 	popts.BaseURI = abs
 	popts.DocumentURI = abs
-	tree, err := xdm.ParseString(string(data), popts)
+	// A bytes.Reader rather than a string copy of data: the parse keeps the
+	// source for positions, and a reader that knows its length lets it size
+	// that copy once.
+	tree, err := xdm.Parse(bytes.NewReader(data), popts)
 	if err != nil {
 		return fmt.Errorf("parsing: %w", err)
 	}

@@ -143,7 +143,11 @@ func decodeCounts(s string, into []int) {
 // The result is per-walk state and never written back into the compiled model,
 // which is shared across goroutines and must stay immutable.
 func reachable(m *contentModel, n int) []int {
-	reach := make([]int, len(m.counters))
+	return reachableInto(m, n, make([]int, len(m.counters)))
+}
+
+// reachableInto is reachable writing into reach, which has len(m.counters).
+func reachableInto(m *contentModel, n int, reach []int) []int {
 	for i, c := range m.counters {
 		if c.max != Unbounded && c.max <= n {
 			reach[i] = c.max
@@ -286,12 +290,12 @@ func stepCountsWhy(m *contentModel, reach []int, from, to int, cur []int, out *[
 			if shared > 0 && !m.scopeInner[a[shared-1]][[2]int{from, to}] {
 				continue
 			}
-			next := append([]int(nil), cur...)
+			next := scratchVec(out, cur)
 			if !leave(next, shared) {
 				continue
 			}
 			enter(next, shared)
-			*out = append(*out, next)
+			pushVec(out, next)
 			continue
 		}
 
@@ -302,7 +306,7 @@ func stepCountsWhy(m *contentModel, reach []int, from, to int, cur []int, out *[
 		if reach[c] != Unbounded && cur[c] >= reach[c] {
 			continue
 		}
-		next := append([]int(nil), cur...)
+		next := scratchVec(out, cur)
 		// Everything inside c is left behind, on both sides of the
 		// transition: the scopes shared with to below depth k, and
 		// from's own remaining ones.
@@ -314,8 +318,36 @@ func stepCountsWhy(m *contentModel, reach []int, from, to int, cur []int, out *[
 		}
 		next[c] = capCount(m.counters[c], reach[c], cur[c]+1)
 		enter(next, k+1)
-		*out = append(*out, next)
+		pushVec(out, next)
 	}
+}
+
+// scratchVec returns a copy of cur to build the next reading in. It reuses the
+// buffer parked in the first free slot of *out when there is one: the slots
+// past len(*out) hold readings of a step already consumed, so nothing else
+// refers to them.
+func scratchVec(out *[][]int, cur []int) []int {
+	s := *out
+	if len(s) < cap(s) {
+		if b := s[: len(s)+1 : len(s)+1][len(s)]; cap(b) >= len(cur) {
+			b = b[:len(cur)]
+			copy(b, cur)
+			return b
+		}
+	}
+	return append([]int(nil), cur...)
+}
+
+// pushVec appends v unless an equal reading is already in *out, so that
+// readings which have converged are merged before they are carried, keeping
+// the first occurrence and so the order.
+func pushVec(out *[][]int, v []int) {
+	for _, w := range *out {
+		if intsEqual(w, v) {
+			return
+		}
+	}
+	*out = append(*out, v)
 }
 
 // accepting reports whether an execution may end at its current position.

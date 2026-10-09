@@ -3,6 +3,8 @@ package relaxng
 import (
 	"fmt"
 	"strings"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 // datatype decides whether a string is a legal value, and when two values are
@@ -31,12 +33,30 @@ type nsContext struct {
 	prefixes map[string]string
 	// dflt is the namespace an unprefixed name takes.
 	dflt string
+	// node, when set, is the document node the bindings are read from on
+	// first use (nsContextOf): almost no value needs them, and reading them
+	// builds a map per element.
+	node *xdm.Node
+}
+
+// resolved returns ctx with its bindings read.
+func (ctx nsContext) resolved() nsContext {
+	if ctx.node == nil {
+		return ctx
+	}
+	r := nsContext{prefixes: ctx.node.InScopeNamespaces()}
+	if uri, ok := r.prefixes[""]; ok {
+		r.dflt = uri
+	}
+	return r
 }
 
 // contextualType is a datatype whose values depend on namespace bindings.
 type contextualType interface {
 	// equalIn compares two values, each read in its own context.
 	equalIn(a string, actx nsContext, b string, bctx nsContext) bool
+	// checkIn is check for a value read in ctx.
+	checkIn(value string, params []param, ctx nsContext) error
 }
 
 // The built-in library, which is the empty datatypeLibrary URI.
@@ -133,11 +153,19 @@ func checkParams(dt datatype, library, name string, params []param) error {
 	for _, p := range params {
 		switch p.Name {
 		case "length", "minLength", "maxLength":
+			// A QName or NOTATION value is a pair of names, which has no
+			// length: XSD 1.1 Part 2 deprecates these facets on them and
+			// says they are ignored, and Jing refuses the schema. Refusing
+			// is the reading that cannot leave a bound its author believes
+			// is enforced.
+			if t, ok := dt.(xsdType); ok && (t.name == "QName" || t.name == "NOTATION") {
+				return fmt.Errorf("relaxng: parameter %q does not apply to %s, "+
+					"which has no units of length", p.Name, t.name)
+			}
 			if _, err := atoiParam(p); err != nil {
 				return err
 			}
 		}
 	}
-	_ = dt
 	return nil
 }

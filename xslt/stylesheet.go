@@ -15,13 +15,20 @@ import (
 //
 // Compilation is separated from execution so that a stylesheet compiles once
 // and transforms many documents concurrently. Everything reachable from here
-// is immutable after Compile returns; all per-transform state lives in the
+// is immutable after Compile returns, bar the mutex-guarded fn:transform cache
+// (nestedCache); all per-transform state lives in the
 // runtime context. That is what makes a compiled EN 16931 rule set — tens of
 // megabytes — shareable rather than per-worker.
 type Stylesheet struct {
+	// rtLib is the runtime function library, built once by runtimeLibrary.
+	rtLib     *xpath.Library
+	rtLibOnce sync.Once
+
 	// templates are the match templates, pre-sorted by descending priority so
 	// that selection is a linear scan that stops at the first match.
 	templates []*Template
+	// rules indexes templates by mode, node kind and name; see ruleIndex.
+	rules ruleIndex
 	// named indexes templates that have a name, for xsl:call-template.
 	named map[string]*Template
 	// globals are top-level variables and parameters, in declaration order.
@@ -90,6 +97,10 @@ type Stylesheet struct {
 	// attributeSets holds xsl:attribute-set declarations, several per name
 	// when modules declare the same one.
 	attributeSets map[string][]*attributeSet
+	// attributeSetOrder lists the keys of attributeSets in the order their
+	// first declaration was compiled, so the static checks that walk every
+	// set report the same error on every run.
+	attributeSetOrder []string
 	// namespaceAliases rewrites literal-result-element namespaces, mapping a
 	// stylesheet URI to the result URI and prefix it becomes.
 	namespaceAliases map[string]nsAlias
@@ -222,6 +233,8 @@ type Stylesheet struct {
 	// keeps — reads them through it. Keeping the tree costs one reference
 	// per compiled stylesheet.
 	source *xdm.Node
+	// nested caches the stylesheets fn:transform compiles; see nestedCache.
+	nested nestedCache
 }
 
 // Template is a compiled xsl:template.
@@ -648,7 +661,61 @@ func stylesheetBase(doc *xdm.Node, opt string) string {
 func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	compileMu.Lock()
 	defer compileMu.Unlock()
+	setSharedNS(map[*xdm.Node]map[string]string{})
+	defer setSharedNS(nil)
 	return compileLocked(doc, opts)
+}
+
+// sharedNS holds, for the duration of one Compile, the in-scope namespace map
+// of each element that declares a namespace. Every element below it that
+// declares none has the same in-scope namespaces, so the compiler's tens of
+// thousands of per-element lookups share a few dozen maps instead of building
+// one each: rebuilding them was a third of DocBook's compile allocation.
+// Outside a compilation m is nil and nothing is cached. It has its own mutex
+// rather than relying on compileMu because a running transform, which does
+// not hold compileMu, can reach inScopeNamespacesShared too.
+var sharedNS struct {
+	sync.Mutex
+	m map[*xdm.Node]map[string]string
+}
+
+func setSharedNS(m map[*xdm.Node]map[string]string) {
+	sharedNS.Lock()
+	sharedNS.m = m
+	sharedNS.Unlock()
+}
+
+// forgetSharedNS drops the cached maps, for a caller that has just changed a
+// stylesheet tree's namespaces or parent links during a compilation.
+func forgetSharedNS() {
+	sharedNS.Lock()
+	if sharedNS.m != nil {
+		clear(sharedNS.m)
+	}
+	sharedNS.Unlock()
+}
+
+// inScopeNamespacesShared is el.InScopeNamespaces for a caller that only reads
+// the result: the map may be shared and must not be modified.
+func inScopeNamespacesShared(el *xdm.Node) map[string]string {
+	d := el
+	for d != nil && (d.Kind != xdm.KindElement || len(d.Namespaces) == 0) {
+		d = d.Parent
+	}
+	if d == nil {
+		return el.InScopeNamespaces()
+	}
+	sharedNS.Lock()
+	defer sharedNS.Unlock()
+	if sharedNS.m == nil {
+		return el.InScopeNamespaces()
+	}
+	m, ok := sharedNS.m[d]
+	if !ok {
+		m = d.InScopeNamespaces()
+		sharedNS.m[d] = m
+	}
+	return m
 }
 
 // compileNestedLocked compiles a stylesheet from inside a compilation that is
@@ -767,6 +834,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 		return nil, err
 	}
 	c.sheet.sortTemplates()
+	c.sheet.buildRuleIndex()
 	// A global variable overridden by a higher-precedence declaration is not
 	// evaluated at all, so the overridden bindings are dropped before the
 	// stylesheet is handed back.
@@ -1137,7 +1205,7 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 		defaultElementNS = xpathDefaultNamespaceAt(el)
 	}
 	return &nsResolver{
-		bindings:  el.InScopeNamespaces(),
+		bindings:  inScopeNamespacesShared(el),
 		defaultNS: defaultElementNS,
 		baseURI:   el.BaseURI,
 		collation: defaultCollationAt(el),

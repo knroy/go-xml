@@ -3,6 +3,7 @@ package xpath
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -52,6 +53,11 @@ type Compiled struct {
 	// ns is the namespace resolver src was parsed with, kept so that
 	// WithCompatMode can re-parse. See there for why re-parsing is necessary.
 	ns NamespaceResolver
+	// nsNeeded says the expression calls something that reads
+	// Context.StaticNamespaces at run time (see readsStaticNamespaces), so
+	// scope must install ns even over another expression's. nsComparable
+	// says ns can be tested with == without a run-time panic.
+	nsNeeded, nsComparable bool
 	// version is the language version src was parsed in. It is static for the
 	// same reason the base URI is — it is a property of where the expression
 	// was written — and it is applied to the context at evaluation so that
@@ -226,6 +232,8 @@ func CompileWith(src string, opts CompileOptions) (*Compiled, error) {
 	}
 	return &Compiled{
 		expr: opt, src: src, ns: opts.Namespaces, version: opts.Version,
+		nsNeeded:     readsStaticNamespaces(opt),
+		nsComparable: safelyComparable(reflect.TypeOf(opts.Namespaces)),
 	}, nil
 }
 
@@ -326,11 +334,25 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	if ctx == nil || !ctx.heldBytes {
 		ctx.resetBytes()
 	}
+	return c.expr.Eval(c.scope(ctx))
+}
+
+// scope is the context c's expression evaluates in: ctx with the static
+// properties c was compiled with applied over it, or ctx itself when they
+// already agree.
+func (c *Compiled) scope(ctx *Context) *Context {
 	if (c.staticBase != "" && c.staticBase != ctx.StaticBaseURI) ||
 		c.staticCollation != nil || c.compat != ctx.Compat ||
 		c.version != ctx.Version ||
 		(c.staticHost != nil && c.staticHost != ctx.StaticHost) ||
-		(c.ns != nil && ctx.StaticNamespaces == nil) {
+		// The expression's own namespaces, not the caller's, where it reads
+		// them: a function body, or an expression evaluated from inside
+		// another, otherwise expanded a prefixed $calendar against whatever
+		// the outer expression had installed. Elsewhere the caller's are
+		// left in place, which saves a context copy per nested evaluation
+		// (XQuery's enclosed expressions are one each).
+		(c.ns != nil && (ctx.StaticNamespaces == nil || c.nsNeeded &&
+			(!c.nsComparable || c.ns != ctx.StaticNamespaces))) {
 		sub := *ctx
 		if c.staticBase != "" {
 			sub.StaticBaseURI = c.staticBase
@@ -357,9 +379,9 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 		// an xsl:function called from a 1.0 template, say -- is a 2.0
 		// expression, so the flag has to be cleared as well as set.
 		sub.Compat = c.compat
-		return c.expr.Eval(&sub)
+		return &sub
 	}
-	return c.expr.Eval(ctx)
+	return ctx
 }
 
 // EvalString evaluates and returns the string value of the result, which is
@@ -447,3 +469,44 @@ func (c *Compiled) WithCompatMode(on bool) *Compiled {
 
 // CompatMode reports whether c evaluates under XPath 1.0 compatibility mode.
 func (c *Compiled) CompatMode() bool { return c != nil && c.compat }
+
+// safelyComparable reports whether == on values of t can never panic: no
+// interface, map, slice or func anywhere in it. A nil type is the nil
+// interface, which compares safely.
+func safelyComparable(t reflect.Type) bool {
+	if t == nil {
+		return true
+	}
+	switch t.Kind() {
+	case reflect.Interface, reflect.Map, reflect.Slice, reflect.Func:
+		return false
+	case reflect.Array:
+		return safelyComparable(t.Elem())
+	case reflect.Struct:
+		for i := 0; i < t.NumField(); i++ {
+			if !safelyComparable(t.Field(i).Type) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// readsStaticNamespaces reports whether e calls or references a function that
+// expands a prefix from Context.StaticNamespaces at run time: the date
+// formatting functions ($calendar) and fn:function-lookup (a schema type's
+// constructor).
+func readsStaticNamespaces(e Expr) bool {
+	var calls []StaticCall
+	walkCalls(e, &calls)
+	for _, c := range calls {
+		if c.Name.URI != xdm.NSFN {
+			continue
+		}
+		switch c.Name.Local {
+		case "format-date", "format-dateTime", "format-time", "function-lookup":
+			return true
+		}
+	}
+	return false
+}

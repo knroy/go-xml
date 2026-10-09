@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"strconv"
 	"strings"
+
+	xml "github.com/knroy/go-xml/internal/xmltok"
 )
 
 // Internal general entities declared in a DOCTYPE's internal subset.
@@ -240,24 +243,14 @@ func newEntityTable(base string, b *entityBudget) *entityTable {
 }
 
 func (t *entityTable) parseDecls(subset, base string) *entityTable {
-	rest := subset
-	for len(t.raw)+len(t.external) < maxEntityCount {
-		i := strings.Index(rest, "<!ENTITY")
-		if i < 0 {
+	for kw, body := range markupDecls(subset) {
+		if kw != "ENTITY" {
+			continue
+		}
+		if len(t.raw)+len(t.external) >= maxEntityCount {
 			break
 		}
-		rest = rest[i+len("<!ENTITY"):]
-		// The declaration ends at the first ">" *outside* a quoted value.
-		// Scanning for a bare ">" truncates any entity whose replacement text
-		// contains one — which is every entity that holds markup, and the
-		// reason <!ENTITY e "<b/>"> was read as the value "<b/".
-		end := endOfDeclaration(rest)
-		if end < 0 {
-			break
-		}
-		body := strings.TrimSpace(rest[:end])
-		rest = rest[end+1:]
-
+		body = strings.TrimSpace(body)
 		// A parameter entity declaration begins with "%".
 		if strings.HasPrefix(body, "%") {
 			continue
@@ -324,6 +317,82 @@ func (t *entityTable) parseDecls(subset, base string) *entityTable {
 	return t
 }
 
+// markupDecls yields the keyword and body of each markup declaration in a DTD
+// subset — for "<!ENTITY e 'x'>", "ENTITY" and " e 'x'" — in document order,
+// each parameter-entity reference between them as "%" and its name, and each
+// comment as "--" and its body. It is the one scanner every reader of declarations goes
+// through, so that what counts as a declaration is decided in one place.
+//
+// Comments and processing instructions are skipped whole, and so is a quoted
+// literal outside a declaration (a DOCTYPE's system identifier): none of them
+// is markup, and a declaration written inside one is text. A declaration ends
+// at the first ">" outside its own quoted literals. "<![" opening a
+// conditional section is stepped over, so the declarations inside it are
+// seen, as they were before.
+func markupDecls(subset string) iter.Seq2[string, string] {
+	return func(yield func(string, string) bool) {
+		s := subset
+		for i := 0; i < len(s); {
+			rest := s[i:]
+			switch {
+			case strings.HasPrefix(rest, "<!--"):
+				// A comment is yielded as "--" and its body, for the [15]
+				// check; an unterminated one ends the scan.
+				j := strings.Index(s[i+len("<!--"):], "-->")
+				if j < 0 {
+					return
+				}
+				if !yield("--", s[i+len("<!--"):i+len("<!--")+j]) {
+					return
+				}
+				i += len("<!--") + j + len("-->")
+			case strings.HasPrefix(rest, "<?"):
+				i = skipPast(s, i+len("<?"), "?>")
+			case strings.HasPrefix(rest, "<!["):
+				i += len("<![")
+			case strings.HasPrefix(rest, "<!"):
+				j := i + len("<!")
+				for j < len(s) && 'A' <= s[j] && s[j] <= 'Z' {
+					j++
+				}
+				end := endOfDeclaration(s[j:])
+				if end < 0 {
+					return
+				}
+				if !yield(s[i+len("<!"):j], s[j:j+end]) {
+					return
+				}
+				i = j + end + 1
+			case s[i] == '"' || s[i] == '\'':
+				i = skipPast(s, i+1, s[i:i+1])
+			case s[i] == '%':
+				// A parameter-entity reference between declarations is
+				// yielded with the keyword "%" and its name.
+				j := strings.IndexByte(rest, ';')
+				if j > 1 && isEntityName(rest[1:j]) {
+					if !yield("%", rest[1:j]) {
+						return
+					}
+					i += j + 1
+					continue
+				}
+				i++
+			default:
+				i++
+			}
+		}
+	}
+}
+
+// skipPast returns the offset just past the first end at or after i, or
+// len(s) when there is none.
+func skipPast(s string, i int, end string) int {
+	if j := strings.Index(s[i:], end); j >= 0 {
+		return i + j + len(end)
+	}
+	return len(s)
+}
+
 // endOfDeclaration returns the offset of the ">" that closes a declaration,
 // skipping any inside a quoted value, or -1 if there is none.
 func endOfDeclaration(s string) int {
@@ -385,7 +454,7 @@ func (t *entityTable) resolve(name string) (string, error) {
 			return "", err
 		}
 		t.expanded[name] = ""
-		out, err := t.expand(text, 0, map[string]bool{name: true})
+		out, err := t.expand(text, 0, map[string]bool{name: true}, false)
 		if err != nil {
 			delete(t.expanded, name)
 			return "", err
@@ -400,7 +469,7 @@ func (t *entityTable) resolve(name string) (string, error) {
 	// A placeholder guards against a cycle: an entity that refers to itself,
 	// directly or through others, would otherwise recurse forever.
 	t.expanded[name] = ""
-	out, err := t.expand(replacementText(raw), 0, map[string]bool{name: true})
+	out, err := t.expand(replacementText(raw), 0, map[string]bool{name: true}, false)
 	if err != nil {
 		delete(t.expanded, name)
 		return "", err
@@ -413,7 +482,11 @@ func (t *entityTable) resolve(name string) (string, error) {
 	return out, nil
 }
 
-func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string, error) {
+// expand returns the replacement text s with the references in it expanded.
+// attr expands it for an attribute value, where XML 1.0 §3.3.3 normalizes
+// replacement text recursively: its literal TAB, LF and CR become spaces,
+// while a character written as a reference inside it is kept.
+func (t *entityTable) expand(s string, depth int, seen map[string]bool, attr bool) (string, error) {
 	if depth > maxEntityDepth {
 		return "", fmt.Errorf("entity expansion exceeds %d levels: %w",
 			maxEntityDepth, ErrResourceLimit)
@@ -425,6 +498,9 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 		// reference, so it is copied as it stands rather than expanded:
 		// <!ENTITY e "<![CDATA[&foo;]]>"> is well formed with no foo declared
 		// (XML 1.0 §2.7, §2.5).
+		if c == '<' && attr {
+			return "", fmt.Errorf("entity replacement text in an attribute value contains <")
+		}
 		if c == '<' {
 			if end := endOfLiteralMarkup(s[i:]); end > 0 {
 				sb.WriteString(s[i : i+end])
@@ -433,6 +509,9 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 			}
 		}
 		if c != '&' {
+			if attr && (c == '\t' || c == '\n' || c == '\r') {
+				c = ' '
+			}
 			sb.WriteByte(c)
 			i++
 			continue
@@ -459,12 +538,11 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 				i += j + 1
 				continue
 			}
-			if r, ok := decodeCharRef(name); ok {
-				sb.WriteRune(r)
-				i += j + 1
-				continue
+			r, err := t.charRef(name)
+			if err != nil {
+				return "", err
 			}
-			sb.WriteString(s[i : i+j+1])
+			sb.WriteRune(r)
 			i += j + 1
 			continue
 		}
@@ -491,6 +569,9 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 		if seen[name] {
 			return "", fmt.Errorf("entity %q refers to itself", name)
 		}
+		if t.external[name] && attr {
+			return "", fmt.Errorf("external entity %q is referenced in an attribute value", name)
+		}
 		if t.external[name] {
 			if t.resolver == nil {
 				return "", fmt.Errorf(
@@ -502,7 +583,7 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 				return "", err
 			}
 			seen[name] = true
-			sub, err := t.expand(text, depth+1, seen)
+			sub, err := t.expand(text, depth+1, seen, attr)
 			delete(seen, name)
 			if err != nil {
 				return "", err
@@ -521,7 +602,7 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 			return "", fmt.Errorf("entity %q is not declared", name)
 		}
 		seen[name] = true
-		sub, err := t.expand(replacementText(raw), depth+1, seen)
+		sub, err := t.expand(replacementText(raw), depth+1, seen, attr)
 		delete(seen, name)
 		if err != nil {
 			return "", err
@@ -613,7 +694,239 @@ func (t *entityTable) entityMap() map[string]string {
 	return out
 }
 
-// decodeCharRef turns "#38" or "#x26" into its rune.
+// normalizeAttDefaults turns each ATTLIST default as written into the value
+// it supplies, XML 1.0 §3.3.3: a character reference is replaced by its
+// character, an entity reference by its replacement text normalized the same
+// way, and a literal TAB, LF or CR by a space. The collapse for a non-CDATA
+// type follows when the default is applied, with the attributes written in
+// the document.
+//
+// The well-formedness constraints on the way are errors (§3.1, §4.1): a
+// literal "<" or a bare "&" in the default, a reference to an entity not
+// declared before the ATTLIST, to an external or unparsed one, or to one
+// whose replacement text holds "<". t may be nil when nothing was declared.
+//
+// wfc says whether WFC: Entity Declared governs the document (see
+// entityDeclaredIsWFC). When it does not, a reference to an entity with no
+// declaration is a validity error, which a non-validating processor does not
+// report: the reference is dropped, and declaration order is not checked.
+func normalizeAttDefaults(defs []attDefault, t *entityTable, v11, wfc bool) ([]attDefault, error) {
+	if t == nil {
+		t = newEntityTable("", nil)
+		t.version11 = v11
+	}
+	for k, d := range defs {
+		v, err := t.normalizeDefault(d, wfc)
+		if err != nil {
+			return nil, fmt.Errorf("default for attribute %s of %s: %w", d.name, d.element, err)
+		}
+		defs[k].value = v
+	}
+	return defs, nil
+}
+
+func (t *entityTable) normalizeDefault(d attDefault, wfc bool) (string, error) {
+	v := d.value
+	if strings.IndexByte(v, '<') >= 0 {
+		return "", fmt.Errorf("%q contains <", v)
+	}
+	if !strings.ContainsAny(v, "&\t\n\r") {
+		return v, nil
+	}
+	var sb strings.Builder
+	for i := 0; i < len(v); {
+		c := v[i]
+		if c != '&' {
+			if c == '\t' || c == '\n' || c == '\r' {
+				c = ' '
+			}
+			sb.WriteByte(c)
+			i++
+			continue
+		}
+		j := strings.IndexByte(v[i:], ';')
+		if j < 0 {
+			return "", fmt.Errorf("%q has an & that begins no reference", v)
+		}
+		name := v[i+1 : i+j]
+		i += j + 1
+		if name != "" && name[0] == '#' {
+			r, err := t.charRef(name)
+			if err != nil {
+				return "", err
+			}
+			sb.WriteRune(r)
+			continue
+		}
+		if r, ok := predefinedRune(name); ok {
+			sb.WriteRune(r)
+			continue
+		}
+		if !wfc && !t.declares(name) {
+			continue
+		}
+		if at, ok := d.entities[name]; wfc && (!ok || at > d.at) {
+			return "", fmt.Errorf("entity %q is not declared before the ATTLIST that refers to it", name)
+		}
+		if t.external[name] {
+			return "", fmt.Errorf("external entity %q is referenced in an attribute value", name)
+		}
+		raw, ok := t.raw[name]
+		if !ok {
+			return "", fmt.Errorf("entity %q is not declared", name)
+		}
+		sub, err := t.expand(replacementText(raw), 0, map[string]bool{name: true}, true)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(sub)
+	}
+	return sb.String(), nil
+}
+
+// checkDTDComments holds the comments of DTD text the tokeniser never saw —
+// an external subset, external parameter entities — to XML 1.0 §2.5 [15],
+// as the tokeniser holds those in content and the internal subset: no "--"
+// in the body, and no "-" ending it.
+func checkDTDComments(text string) error {
+	for kw, body := range markupDecls(text) {
+		if kw == "--" && (strings.Contains(body, "--") || strings.HasSuffix(body, "-")) {
+			return errors.New(xml.CommentDashes)
+		}
+	}
+	return nil
+}
+
+// declsBeforeUnreadPE returns the internal subset as XML 1.0 §5.1 lets a
+// non-validating processor use it when it has not read the parameter
+// entities the subset refers to: "they MUST NOT process entity declarations
+// or attribute-list declarations encountered after a reference to a
+// parameter entity that is not read", since that entity may have held
+// overriding declarations. The declarations before the first reference are
+// returned; a subset with no reference is returned as it is. The caller
+// skips this under standalone="yes", where §5.1 requires them processed.
+func declsBeforeUnreadPE(subset string) string {
+	var sb strings.Builder
+	for kw, body := range markupDecls(subset) {
+		switch kw {
+		case "%":
+			return sb.String()
+		case "--":
+		default:
+			sb.WriteString("<!" + kw + body + ">")
+		}
+	}
+	return subset
+}
+
+// declares reports whether the DTD declares a general entity name, internal
+// or external. t may be nil, which declares nothing.
+func (t *entityTable) declares(name string) bool {
+	if t == nil {
+		return false
+	}
+	_, internal := t.raw[name]
+	return internal || t.external[name]
+}
+
+// entityDeclaredIsWFC reports whether XML 1.0 §4.1's WFC: Entity Declared
+// governs a document with DOCTYPE d: it does when the document has no
+// external subset and its internal subset no parameter-entity reference, or
+// when it says standalone="yes". Otherwise declarations may live where a
+// non-validating processor need not read them, and an undeclared entity is
+// only VC: Entity Declared.
+func entityDeclaredIsWFC(d string, standalone bool) bool {
+	if standalone {
+		return true
+	}
+	if _, _, ok := externalSubsetOf(d); ok {
+		return false
+	}
+	for kw := range markupDecls(d) {
+		if kw == "%" {
+			return false
+		}
+	}
+	return true
+}
+
+// attrEntityMap is entityMap for references in attribute values, given the
+// map entityMap returned. It lists only the entities whose replacement text
+// holds white space §3.3.3 would normalize; every other one reads the same in
+// an attribute value as in content. Nothing is charged: an entry is the same
+// length as the one already charged for, and an external text is memoised.
+func (t *entityTable) attrEntityMap(content map[string]string) map[string]string {
+	var out map[string]string
+	for name, s := range content {
+		if !strings.ContainsAny(s, "\t\n\r") {
+			continue
+		}
+		a, err := t.expand(replacementText(t.raw[name]), 0, map[string]bool{name: true}, true)
+		if err != nil {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[name] = a
+	}
+	return out
+}
+
+// charRef decodes the character reference "&name;" and checks it against
+// WFC: Legal Character (§4.1) for the document's version — the tokeniser's
+// rule, so that a reference in the DTD is held to the one in content.
+func (t *entityTable) charRef(name string) (rune, error) { return charRef(name, t.version11) }
+
+func charRef(name string, v11 bool) (rune, error) {
+	r, ok := decodeCharRef(name)
+	if !ok {
+		return 0, fmt.Errorf("invalid character reference &%s;", name)
+	}
+	if !xml.LegalCharRef(r, v11) {
+		return 0, fmt.Errorf("illegal character code %U", r)
+	}
+	return r, nil
+}
+
+// checkEntityCharRefs applies WFC: Legal Character to the character
+// references in the value of every entity declared in text, general and
+// parameter alike, whether or not the entity is referenced, read or (after an
+// unread parameter entity, §5.1) processed.
+func checkEntityCharRefs(text string, v11 bool) error {
+	for kw, body := range markupDecls(text) {
+		if kw != "ENTITY" {
+			continue
+		}
+		fields := attListFields(body)
+		if len(fields) > 0 && fields[0] == "%" {
+			fields = fields[1:]
+		}
+		if len(fields) < 2 || fields[1] == "" || fields[1][0] != '"' && fields[1][0] != '\'' {
+			continue // no value, or an external identifier
+		}
+		name, raw := fields[0], unquote(fields[1])
+		for i := 0; ; {
+			k := strings.Index(raw[i:], "&#")
+			if k < 0 {
+				break
+			}
+			i += k
+			j := strings.IndexByte(raw[i:], ';')
+			if j < 0 {
+				return fmt.Errorf("entity %q: unterminated character reference", name)
+			}
+			if _, err := charRef(raw[i+1:i+j], v11); err != nil {
+				return fmt.Errorf("entity %q: %w", name, err)
+			}
+			i += j + 1
+		}
+	}
+	return nil
+}
+
+// decodeCharRef turns "#38" or "#x26" into its rune. It checks the syntax
+// only; charRef also checks the character.
 func decodeCharRef(name string) (rune, bool) {
 	digits, base := name[1:], 10
 	if len(digits) > 1 && (digits[0] == 'x' || digits[0] == 'X') {
@@ -1135,14 +1448,22 @@ func (t *Tree) HasUnparsedEntities() bool {
 // and change what the document says. A "&" that replacementText decoded from
 // "&#38;" at declaration is markup by XML 1.0 Appendix D, not data, so it is
 // left for the second parse as well.
+//
+// Literal white space becomes a space, as XML 1.0 §3.3.3 asks of replacement
+// text in a value. It is done here rather than left to the second parse,
+// whose line-end handling would first fold a CR LF the replacement text holds
+// into one character. A character the text holds as a reference is still
+// written as one, and so is kept.
 func escapeAttrLiteral(s string) string {
-	if !strings.ContainsAny(s, `"'<`) {
+	if !strings.ContainsAny(s, "\"'<\t\n\r") {
 		return s
 	}
 	var sb strings.Builder
 	sb.Grow(len(s) + 8)
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
+		case '\t', '\n', '\r':
+			sb.WriteByte(' ')
 		case '"':
 			sb.WriteString("&#34;")
 		case '\'':
@@ -1254,6 +1575,9 @@ type entityChargeReader struct {
 	// bytes carry references that must not escape the charge.
 	backlog []byte
 	err     error
+	// off makes the reader a pass-through: the document element opened with
+	// no entity table installed, so there is nothing left to charge.
+	off bool
 }
 
 func (c *entityChargeReader) Read(p []byte) (int, error) {
@@ -1267,6 +1591,9 @@ func (c *entityChargeReader) Read(p []byte) (int, error) {
 		// the table installed, a good deal of the content has already
 		// streamed past, and those references have to be charged too.
 		// Buffering stops as soon as the table arrives, which arm drains.
+		if c.off {
+			return n, err
+		}
 		if c.t == nil {
 			c.backlog = append(c.backlog, p[:n]...)
 			return n, err

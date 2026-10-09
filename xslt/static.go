@@ -743,6 +743,7 @@ func (p *staticPhase) valueTemplate(el *xdm.Node, src string) (string, error) {
 func (p *staticPhase) staticRuntime() *runtime {
 	rt := &runtime{
 		static: true,
+		opts:   &TransformOptions{},
 		sheet:  p.c.sheet,
 		goCtx:  context.Background(),
 	}
@@ -786,7 +787,7 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 	var staticRT *runtime
 	if processorAtLeast30() {
 		staticRT = p.staticRuntime()
-		registerTransformFunc(lib, staticRT)
+		registerTransformFunc(lib)
 	} else {
 		// A 2.0 processor runs no nested transformation. Left to the xpath
 		// stub, the call would reach the processor this package's init
@@ -819,8 +820,7 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 		// reach it; the only thing that ever finds it is a function item
 		// that crossed the fn:transform boundary, which is exactly the case
 		// the specification's unrestricted function library allows in.
-		ctx = ctx.WithVar(runtimeVar,
-			xdm.One(&xdm.Opaque{Label: "runtime", Value: staticRT}))
+		ctx = bindRuntime(ctx, staticRT)
 	}
 	// 3.12's table gives a static expression "the core functions defined in
 	// [Functions and Operators]" -- the whole library, not a 2.0 subset of

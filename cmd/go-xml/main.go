@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 )
 
 func main() {
+	lowerGC()
 	// "validate" and "xquery" are subcommands; everything else keeps the original
 	// invocation, so a command line that worked before still works.
 	if len(os.Args) > 1 && (os.Args[1] == "validate" || os.Args[1] == "xquery") {
@@ -37,6 +39,23 @@ func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "go-xml:", err)
 		os.Exit(1)
+	}
+}
+
+// cliGCPercent is the GOGC the command runs with when the environment sets
+// none. A run is a parse and a compile that only grow the heap, then one
+// transform, query or validation, and at the default of 100 the collector
+// spent half the CPU of a cold run re-marking a heap that was all live:
+// 200 cut CPU by a quarter to a third on CEN, DocBook and XMark q1, at the
+// cost of peak RSS (DocBook chapter.003 114 -> 161 MB). It is set here and
+// never in the library, whose callers own their process's GC policy.
+const cliGCPercent = 200
+
+// lowerGC applies cliGCPercent unless GOGC is set, so a user who tunes the
+// collector keeps their setting.
+func lowerGC() {
+	if os.Getenv("GOGC") == "" {
+		debug.SetGCPercent(cliGCPercent)
 	}
 }
 
@@ -108,6 +127,7 @@ func run() error {
 		sheetPath    = flag.String("xsl", "", "stylesheet to apply (required)")
 		outPath      = flag.String("o", "", "write output to this file instead of stdout")
 		allowDirs    = registerAllowDir(flag.CommandLine)
+		catalog      = registerCatalog(flag.CommandLine)
 		allowDoctype = flag.Bool("allow-doctype", false,
 			"permit a DOCTYPE in the source document and expand the entities it "+
 				"declares internally; external entities still require "+
@@ -163,6 +183,8 @@ func run() error {
 			"bound template recursion; 0 uses the default, negative removes the "+
 				"bound (the default guards against a stylesheet that recurses "+
 				"without a base case)")
+		maxItems = flag.Int("max-items", 0, maxItemsUsage)
+		maxBytes = flag.Int64("max-bytes", 0, maxBytesUsage)
 
 		validate = flag.String("validate", "",
 			"validate each source document against the schema the stylesheet "+
@@ -253,7 +275,11 @@ Exit status: 0 if every input transformed, 1 otherwise.
 	// keyed on the setting, so this cannot serve a stale compilation.
 	xpath.SetBacktrackingRegex(*backtrackRegex)
 
-	sheet, err := compileStylesheet(*sheetPath, resolver, *xpathVersion,
+	schemas, err := schemaCatalog(*catalog, schemaFiles{resolver})
+	if err != nil {
+		return err
+	}
+	sheet, err := compileStylesheet(*sheetPath, resolver, schemas, *xpathVersion,
 		xslt.Compatibility{
 			DropAttributesOnDocumentNode: *compatDropAttrs,
 		})
@@ -304,6 +330,8 @@ Exit status: 0 if every input transformed, 1 otherwise.
 		externalEnts: *allowExternalEnts,
 		xinclude:     *xinclude,
 		maxDepth:     *maxDepth,
+		maxItems:     *maxItems,
+		maxBytes:     *maxBytes,
 		validate:     *validate,
 
 		baseOutputURI: baseOutputURI(*outPath, *resultDir),
@@ -343,14 +371,17 @@ Exit status: 0 if every input transformed, 1 otherwise.
 	return nil
 }
 
-func compileStylesheet(path string, resolver *xslt.FileResolver,
+func compileStylesheet(path string, resolver *xslt.FileResolver, schemas xsd.Resolver,
 	xpathVersion string, compat xslt.Compatibility) (*xslt.Stylesheet, error) {
-	data, err := os.ReadFile(path)
+	// Parsed from the file as it is read, rather than read whole and copied
+	// to a string: the two copies were live together through the parse.
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
 	abs := fileURI(path)
-	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{BaseURI: abs})
+	tree, err := xdm.Parse(f, xdm.ParseOptions{BaseURI: abs})
 	if err != nil {
 		return nil, fmt.Errorf("parsing stylesheet: %w", err)
 	}
@@ -360,7 +391,7 @@ func compileStylesheet(path string, resolver *xslt.FileResolver,
 	}
 	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{
 		Resolver:       resolver,
-		SchemaResolver: schemaFiles{resolver},
+		SchemaResolver: schemas,
 		BaseURI:        abs,
 		XPathVersion:   v,
 		Compat:         compat,
@@ -390,6 +421,16 @@ func validateSource(schema *xsd.Schema, doc *xdm.Node, mode string) error {
 	return nil
 }
 
+// The usage strings of the two limit flags the transform and the xquery
+// subcommand share.
+const (
+	maxItemsUsage = "bound the items an evaluation may materialise; 0 uses the " +
+		"default (5,000,000), negative removes the bound (the default guards " +
+		"against a runaway expression exhausting memory)"
+	maxBytesUsage = "bound the size of the input document in bytes; 0 uses the " +
+		"default (64 MB), negative removes the bound"
+)
+
 type transformCfg struct {
 	resolver     *xslt.FileResolver
 	params       map[string]xdm.Sequence
@@ -406,6 +447,8 @@ type transformCfg struct {
 	externalEnts bool
 	xinclude     bool
 	maxDepth     int
+	maxItems     int
+	maxBytes     int64
 	validate     string
 	// baseOutputURI is where this run's output is actually going, as a URI.
 	// Unlike the library, the CLI knows that destination, so it supplies one
@@ -419,10 +462,12 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 	// source for exactly that case, so the parse is simply skipped.
 	var root *xdm.Node
 	if inPath != "" {
-		data, err := os.ReadFile(inPath)
+		// Streamed, as the stylesheet is (see compileStylesheet).
+		f, err := os.Open(inPath)
 		if err != nil {
 			return err
 		}
+		defer f.Close()
 		abs := fileURI(inPath)
 		popts := xdm.ParseOptions{
 			BaseURI: abs,
@@ -433,11 +478,12 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 			DocumentURI:    abs,
 			AllowDOCTYPE:   cfg.allowDoctype,
 			TrackPositions: cfg.trackPos,
+			MaxBytes:       cfg.maxBytes,
 		}
 		if cfg.externalEnts {
 			popts.ExternalEntities = cfg.resolver
 		}
-		tree, err := xdm.ParseString(string(data), popts)
+		tree, err := xdm.Parse(f, popts)
 		if err != nil {
 			return err
 		}
@@ -478,6 +524,7 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		ImplicitTimezone: cfg.timezone,
 		Now:              cfg.now,
 		MaxDepth:         cfg.maxDepth,
+		MaxItems:         cfg.maxItems,
 		// Texts is the same resolver, which refuses every read unless
 		// -allow-unparsed-text turned it on. Passing it unconditionally keeps
 		// the gate in one place rather than two.

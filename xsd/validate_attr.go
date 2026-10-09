@@ -10,7 +10,19 @@ import (
 // validateAttributes checks an element's attributes against a complex type's
 // attribute uses and wildcard.
 func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
-	matched := make(map[*AttributeUse]bool, len(t.AttributeUses))
+	// The uses matched so far: a slice scanned linearly rather than a map,
+	// because an element carries a handful of attributes and the map was an
+	// allocation per element.
+	var matchedBuf [8]*AttributeUse
+	matched := matchedBuf[:0]
+	isMatched := func(u *AttributeUse) bool {
+		for _, m := range matched {
+			if m == u {
+				return true
+			}
+		}
+		return false
+	}
 
 	// XSD 1.0 permits an element at most one attribute of a type derived
 	// from xs:ID (Part 2 §3.3.8). ct-props-correct.5 catches the case where
@@ -55,7 +67,7 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 			switch name.Local {
 			case "type", "nil", "schemaLocation", "noNamespaceSchemaLocation":
 				if use := findAttributeUse(t.AttributeUses, name); use != nil {
-					matched[use] = true
+					matched = append(matched, use)
 				}
 				continue
 			}
@@ -68,7 +80,7 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 
 		use := findAttributeUse(t.AttributeUses, name)
 		if use != nil {
-			matched[use] = true
+			matched = append(matched, use)
 			countID(a, name, use.Decl)
 			v.validateAttribute(a, use.Decl, use.Constraint)
 			continue
@@ -98,12 +110,12 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 			// require or to default from.
 			continue
 		}
-		if use.Required && !matched[use] {
+		if use.Required && !isMatched(use) {
 			v.fail(el, "cvc-complex-type.4",
 				"required attribute %s is missing", attrName(use.Decl.Name))
 			continue
 		}
-		if !matched[use] {
+		if !isMatched(use) {
 			// A defaulted attribute is an attribute for this
 			// purpose: §3.4.5 makes the {value constraint} a
 			// contribution to the infoset, indistinguishable from
@@ -281,6 +293,9 @@ func (v *validator) recordDefaultID(el *xdm.Node, use *AttributeUse) {
 	// infoset, so a field cannot tell it from a written one. idF016 puts
 	// two elements under a unique, one carrying the value and one letting
 	// it default, and expects them to collide.
+	if v.icScopes == 0 {
+		return
+	}
 	if v.defaultedAttrs == nil {
 		v.defaultedAttrs = map[defaultedAttr]defaultedValue{}
 	}
@@ -327,7 +342,7 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 	if decl == nil || decl.Type == nil {
 		return
 	}
-	normalized, err := validateSimpleValueIn(a.Value, decl.Type, v.schema.Version, a)
+	normalized, err := validateSimpleValueIn(a.Value, decl.Type, v.schema.Version, a, v.recordUnionMember)
 	if err != nil {
 		v.fail(a, "cvc-attribute.3",
 			"attribute %s: %v", attrName(decl.Name), err)

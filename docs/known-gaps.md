@@ -406,14 +406,15 @@ direction that matters, and it has not been diagnosed.
 `stylesheet-params`, `static-params`, `template-params`, `tunnel-params`,
 `base-output-uri`, `delivery-format`, `serialization-params` (principal result only, as F&O
 states), `requested-properties`, `xslt-version`, `global-context-item` and
-`post-process`. A requested property is
+`post-process`, `cache` (a bounded per-stylesheet compile cache),
+`enable-assertions` (default off) and `enable-messages` (`false` skips
+non-terminating messages). A requested property is
 met only when it equals what `fn:system-property` reports (`xsl:version` is
-ignored); an unmet one is `FOXT0001`. These F&O-defined options are accepted
-and have no effect:
+ignored); an unmet one is `FOXT0001`. Every typed option is converted per F&O
+§1.5.4, so a string where an `xs:QName` is declared is `XPTY0004`. These
+F&O-defined options are accepted and have no effect:
 
-- `enable-messages`, `vendor-options`, `cache`.
-- `enable-assertions`: the nested transform inherits the caller's
-  `DisableAssertions`, so assertions run by default where F&O defaults to off.
+- `vendor-options`; `enable-trace`, since `fn:trace` writes no diagnostics here.
 - `package-location`, `package-node`, `package-text`: alone they identify no
   stylesheet (`FOXT0002`); beside a `stylesheet-*` option they are ignored.
 
@@ -623,38 +624,30 @@ wrong language's rules. The version now reaches the tokeniser, and [2] `Char`,
 is in the external-entity and DTD layers, and is described in
 [todo.md](todo.md#11-xml-11-documents--character-rules-done-dtd-side-rules-outstanding).
 
-### The tokeniser keeps six leniencies
+### The tokeniser keeps two leniencies
 
 `internal/xmltok` still carries these `parity:` behaviours from the
 `encoding/xml` fork it replaced; the others were corrected against the W3C XML
-Conformance Test Suite (see [testing.md](testing.md#tokeniser-differential)).
+Conformance Test Suite (see [testing.md](testing.md#tokeniser-differential)) or
+by the parse work in [profiling.md](profiling.md#implementation-status).
 
-* Comment and PI bodies are not newline-normalised, though §2.11 applies to the
-  whole entity: `\r\n` in a comment reaches the tree, and so a C14N digest,
-  as written. Changing it changes output, so it waits on its own c14n check.
-* Attribute values leave the tokeniser raw; `xdm` applies §3.3.3 after it, so a
-  literal tab or newline in a value reaches the tree as a space.
 * A PI with target `xml` is taken as the XML declaration wherever it appears,
   and the declaration's pseudo-attributes are found by substring search;
   `xdm` validates the declaration's syntax and placement itself.
-* Entity replacement text is substituted without newline normalisation.
-* The DOCTYPE is returned raw, and a comment inside it is not checked for `--`.
 * A character error is reported against the line where the run ended.
 
-### An undeclared entity after a parameter-entity reference is still an error (xmlconf `rmt-e3e-13`)
+### An undeclared entity is dropped where §4.1 makes it a validity error
 
-XML 1.0 §4.1 makes an undeclared general entity a well-formedness error only in
-a document with no parameter-entity references (or `standalone="yes"`);
-otherwise it is a validity error, and a non-validating processor parses on.
-`xdm` reports `&ent2;` as undeclared whatever the subset holds, and the error is
-raised by the tokeniser's entity lookup, not in the DTD code. Accepting it would
-mean choosing what an unresolvable reference becomes in the tree (`xmllint
---noent` prints "Entity 'ent2' not defined" and keeps an empty reference node), so it stays until a
-caller needs the other answer.
-
-Related: internal parameter entities are expanded only when
-`ParseOptions.ExternalEntities` is set, so with `AllowDOCTYPE` alone xmlconf
-`v-pe02` (Appendix D's `%xx;` example) still reports `&tricky;` undeclared.
+Where §4.1's WFC "Entity Declared" does not apply (an external subset that was
+not read, or a parameter-entity reference, without `standalone="yes"`), an
+undeclared general entity is a validity error, and a non-validating parse goes
+on. `xdm` then drops the reference from content, attribute values and defaults
+without reporting it, as libxml2 does for attribute values. libxml2 keeps an
+entity-reference node in content, which the XDM cannot represent. Nothing tells
+the caller a reference was dropped; a caller that must know can supply a
+resolver so that the external subset is read. For the same reason, entity and
+ATTLIST declarations that follow an unread parameter-entity reference are
+ignored (§5.1); libxml2 2.9.13 still processes them.
 
 ---
 

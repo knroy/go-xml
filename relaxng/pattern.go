@@ -13,7 +13,12 @@
 // was written against.
 package relaxng
 
-import "github.com/knroy/go-xml/xdm"
+import (
+	"sync"
+	"sync/atomic"
+
+	"github.com/knroy/go-xml/xdm"
+)
 
 // pattern is a RELAX NG pattern.
 //
@@ -117,6 +122,44 @@ type refPat struct {
 	done   bool
 	// name is for error messages.
 	name string
+	// attrFree records that startTagCloseDeriv leaves the expansion
+	// unchanged. It depends only on the schema, so it is learnt once and
+	// shared by every validation.
+	attrFree atomic.Bool
+	// open memoises startTagOpenDeriv of the expansion by element name
+	// (xdm.QName -> pattern). The derivative of a schema pattern depends
+	// only on the pattern and the name, and patterns are immutable values,
+	// so the result is shared by every validation. openN caps the entries
+	// so that a document cannot grow it without bound by inventing names.
+	open  sync.Map
+	openN atomic.Int32
+	// static is set on a wrapper addMemoPoints put around a schema subtree;
+	// see memo.go. Nil for a definition reference.
+	static *staticInfo
+}
+
+// staticInfo is what is known of a static subtree once and for all.
+type staticInfo struct {
+	size     int32 // patternSize of the subtree
+	null     bool  // nullable
+	dataFree bool  // no valuePat, dataPat or listPat before an element
+	selfEq   bool  // patEq of the subtree with itself (false if it holds data)
+	// text memoises textDeriv when dataFree: with no datatype to consult the
+	// derivative does not depend on the string.
+	text atomic.Pointer[patBox]
+	// close memoises startTagCloseDerivCh, which depends on nothing else.
+	close atomic.Pointer[patBox]
+	// att memoises attDeriv by attribute name (xdm.QName -> *patBox) where
+	// every attribute pattern the name reaches takes any value (text), so
+	// the derivative depends on the name alone. A nil p records a name
+	// whose derivative depends on the value. attN caps the entries.
+	att  sync.Map
+	attN atomic.Int32
+}
+
+type patBox struct {
+	p  pattern
+	ch bool
 }
 
 // get expands the reference.
@@ -137,19 +180,19 @@ type param struct {
 	Value string
 }
 
-func (notAllowedPat) nullable() bool   { return false }
-func (emptyPat) nullable() bool        { return true }
-func (textPat) nullable() bool         { return true }
-func (p choicePat) nullable() bool     { return p.Left.nullable() || p.Right.nullable() }
-func (p interleavePat) nullable() bool { return p.Left.nullable() && p.Right.nullable() }
-func (p groupPat) nullable() bool      { return p.Left.nullable() && p.Right.nullable() }
-func (p oneOrMorePat) nullable() bool  { return p.Pattern.nullable() }
-func (elementPat) nullable() bool      { return false }
-func (attributePat) nullable() bool    { return false }
-func (valuePat) nullable() bool        { return false }
-func (dataPat) nullable() bool         { return false }
-func (listPat) nullable() bool         { return false }
-func (afterPat) nullable() bool        { return false }
+func (notAllowedPat) nullable() bool    { return false }
+func (emptyPat) nullable() bool         { return true }
+func (textPat) nullable() bool          { return true }
+func (p *choicePat) nullable() bool     { return p.Left.nullable() || p.Right.nullable() }
+func (p *interleavePat) nullable() bool { return p.Left.nullable() && p.Right.nullable() }
+func (p *groupPat) nullable() bool      { return p.Left.nullable() && p.Right.nullable() }
+func (p *oneOrMorePat) nullable() bool  { return p.Pattern.nullable() }
+func (*elementPat) nullable() bool      { return false }
+func (*attributePat) nullable() bool    { return false }
+func (*valuePat) nullable() bool        { return false }
+func (*dataPat) nullable() bool         { return false }
+func (*listPat) nullable() bool         { return false }
+func (*afterPat) nullable() bool        { return false }
 
 // nullable expands the reference.
 //
@@ -157,6 +200,9 @@ func (afterPat) nullable() bool        { return false }
 // reading: the failure is reported when the schema is compiled, and by the
 // time a derivative is asking, refusing is right.
 func (r *refPat) nullable() bool {
+	if r.static != nil {
+		return r.static.null
+	}
 	p, err := r.get()
 	if err != nil {
 		return false

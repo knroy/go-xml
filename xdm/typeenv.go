@@ -260,8 +260,8 @@ func (e *TypeEnvironment) Merge(src *TypeEnvironment) {
 // struct literal -- and for those the global table is exactly the behaviour
 // that was there before, which is why the fallback is not an error.
 func typeEnvOf(n *Node) *TypeEnvironment {
-	if n != nil && n.typeEnv != nil {
-		return n.typeEnv
+	if e := n.TypeEnv(); e != nil {
+		return e
 	}
 	return globalTypeEnv
 }
@@ -288,7 +288,10 @@ func (n *Node) TypeEnv() *TypeEnvironment {
 	if n == nil {
 		return nil
 	}
-	return n.typeEnv
+	if ext := n.loadExt(); ext != nil {
+		return ext.typeEnv
+	}
+	return nil
 }
 
 // SetTypeEnv records the type environment of the schema whose assessment
@@ -298,8 +301,8 @@ func (n *Node) TypeEnv() *TypeEnvironment {
 // about the node's type reach the definitions that schema actually made rather
 // than whatever a later, unrelated schema registered under the same name.
 func (n *Node) SetTypeEnv(e *TypeEnvironment) {
-	if n == nil {
+	if n == nil || (e == nil && n.loadExt() == nil) {
 		return
 	}
-	n.typeEnv = e
+	n.replaceExt(e)
 }

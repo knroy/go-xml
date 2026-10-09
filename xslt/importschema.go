@@ -102,28 +102,7 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 		c.sheet.schema = xsd.NewSchema()
 	}
 
-	opts := xsd.Options{
-		Resolver:     c.opts.SchemaResolver,
-		ParseOptions: c.opts.SchemaParseOptions,
-	}
-	// An XSLT 3.0 processor reads a schema as XSD 1.1 unless the document
-	// says otherwise.
-	//
-	// XSLT 3.0 3.2 makes the version an option -- "XSLT 3.0 processors may
-	// optionally include types defined in XSD 1.1" -- and this engine takes
-	// it, so 1.1 is what its schema processor is. A schema document written
-	// for 1.1 is not obliged to announce the fact: vc:minVersion exists so a
-	// 1.0 processor knows to SKIP what it cannot handle, and a document that
-	// expects to be read by a 1.1 processor has no reason to carry one.
-	// validation-1301's inline schema is exactly that -- an <xs:alternative>
-	// and no versioning attribute anywhere -- and read as 1.0 its conditional
-	// type assignment was parsed and then never applied.
-	//
-	// DocumentRequiresVersion still runs below and can only raise this, never
-	// lower it.
-	if processorAtLeast30() {
-		opts.Version = xsd.Version11
-	}
+	opts := c.schemaLoadOptions()
 	if opts.Resolver == nil {
 		// Without a resolver the stylesheet cannot name a location, for
 		// the same reason xsl:include cannot: following one means
@@ -171,7 +150,7 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 			return fmt.Errorf("xsl:import-schema %q resolved to nothing", location)
 		}
 		defer rc.Close()
-		tree, perr := xdm.Parse(rc, xdm.ParseOptions{})
+		tree, perr := xsd.ParseDocument(rc, opts.ParseOptions)
 		if perr != nil {
 			return fmt.Errorf("xsl:import-schema %q: %w", location, perr)
 		}
@@ -327,7 +306,8 @@ func (c *compiler) tryResolveSchemaByNamespace(ns string) *xsd.Schema {
 		return nil
 	}
 	defer rc.Close()
-	tree, err := xdm.Parse(rc, xdm.ParseOptions{})
+	opts := c.schemaLoadOptions()
+	tree, err := xsd.ParseDocument(rc, opts.ParseOptions)
 	if err != nil || tree.Root == nil {
 		return nil
 	}
@@ -338,11 +318,44 @@ func (c *compiler) tryResolveSchemaByNamespace(ns string) *xsd.Schema {
 	if checkImportedNamespace(nil, tree.Root, ns) != nil {
 		return nil
 	}
-	loaded, err := xsd.Load(tree.Root, resolved, xsd.Options{Resolver: c.opts.SchemaResolver})
+	if v, ok := xsd.DocumentRequiresVersion(tree.Root); ok {
+		opts.Version = v
+	}
+	loaded, err := xsd.Load(tree.Root, resolved, opts)
 	if err != nil {
 		return nil
 	}
 	return loaded
+}
+
+// schemaLoadOptions are the xsd.Options every schema xsl:import-schema loads
+// is read with, whichever path finds it: by location, inline, or by
+// namespace alone. SchemaParseOptions reaches the document itself and,
+// through xsd.Options.ParseOptions, the documents it includes and imports.
+func (c *compiler) schemaLoadOptions() xsd.Options {
+	opts := xsd.Options{
+		Resolver:     c.opts.SchemaResolver,
+		ParseOptions: c.opts.SchemaParseOptions,
+	}
+	// An XSLT 3.0 processor reads a schema as XSD 1.1 unless the document
+	// says otherwise.
+	//
+	// XSLT 3.0 3.2 makes the version an option -- "XSLT 3.0 processors may
+	// optionally include types defined in XSD 1.1" -- and this engine takes
+	// it, so 1.1 is what its schema processor is. A schema document written
+	// for 1.1 is not obliged to announce the fact: vc:minVersion exists so a
+	// 1.0 processor knows to SKIP what it cannot handle, and a document that
+	// expects to be read by a 1.1 processor has no reason to carry one.
+	// validation-1301's inline schema is exactly that -- an <xs:alternative>
+	// and no versioning attribute anywhere -- and read as 1.0 its conditional
+	// type assignment was parsed and then never applied.
+	//
+	// DocumentRequiresVersion still runs at each call site and can only raise
+	// this, never lower it.
+	if processorAtLeast30() {
+		opts.Version = xsd.Version11
+	}
+	return opts
 }
 
 // SetSchemaIfAbsent installs sch as the stylesheet's schema when the

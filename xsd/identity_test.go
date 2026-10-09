@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/xdm"
@@ -395,4 +396,49 @@ func TestPrimitivesDeriveFromAnyAtomicType(t *testing.T) {
 	// A list type is not atomic, so it does not derive from anyAtomicType.
 	assertInvalid(t, schema, `<e`+ns+` xsi:type="xs:NMTOKENS">a b</e>`,
 		"cvc-elt.4.3")
+}
+
+// TestNestedScopeReportedOnceForLocalDeclaration pins that a constraint on a
+// LOCAL declaration prunes its nested scopes like a global one does.
+//
+// The pruning needs to know which descendants declare the same constraint,
+// and that record used to be kept only when a schema-wide scan found a
+// constraint. The scan looked at global elements and named types only, so a
+// key on an element declared inside a named group was invisible to it: every
+// enclosing scope re-walked the inner ones and re-reported their failures,
+// once per level. The verdict was the same; the error list grew with depth,
+// and an unrelated global constraint elsewhere in the schema cut it back to
+// one.
+func TestNestedScopeReportedOnceForLocalDeclaration(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType><xs:sequence><xs:group ref="G"/></xs:sequence></xs:complexType>
+	  </xs:element>
+	  <xs:group name="G">
+	    <xs:sequence>
+	      <xs:element name="n">
+	        <xs:complexType>
+	          <xs:sequence>
+	            <xs:element name="v" minOccurs="0">
+	              <xs:complexType><xs:attribute name="x"/></xs:complexType>
+	            </xs:element>
+	            <xs:group ref="G" minOccurs="0"/>
+	          </xs:sequence>
+	        </xs:complexType>
+	        <xs:key name="k">
+	          <xs:selector xpath=".//v"/>
+	          <xs:field xpath="@x"/>
+	        </xs:key>
+	      </xs:element>
+	    </xs:sequence>
+	  </xs:group>
+	</xs:schema>`
+	err := validateString(t, schema, `<root><n><n><n><n><v/></n></n></n></n></root>`)
+	if err == nil {
+		t.Fatal("a key target without its field should be invalid")
+	}
+	if got := strings.Count(err.Error(), "cvc-identity-constraint.4.2.1"); got != 1 {
+		t.Errorf("the missing field was reported %d times, want once:\n%v", got, err)
+	}
 }

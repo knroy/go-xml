@@ -557,6 +557,18 @@ _f0=$failed
 $GO vet ./... || fail "vet"
 laneFromStatus vet "$_f0" "go vet ./..."
 
+# gofmt, as the CI job runs it. CI's own step is the authority; this lane exists
+# because the gate once passed with two unformatted files that CI then refused.
+# Tracked files only: `gofmt -l .` here would also walk .claude/worktrees.
+section "gofmt"
+_f0=$failed
+_unfmt=$(git ls-files '*.go' 2>/dev/null | grep -v '^testdata/' | xargs gofmt -l 2>&1 || true)
+if [ -n "$_unfmt" ]; then
+	printf "not gofmt'd:\n%s\n" "$_unfmt"
+	fail "gofmt"
+fi
+laneFromStatus gofmt "$_f0" "gofmt -l on tracked .go files"
+
 # docfigure asserts that a number written in the documentation still equals the
 # number the command beside it produces.
 #
@@ -589,17 +601,18 @@ laneFromStatus vet "$_f0" "go vet ./..."
 # change that is otherwise entirely green.
 #
 # The counting commands. Each excludes .claude/worktrees, which holds agent
-# checkouts of this same repository and would otherwise multiply every count.
+# checkouts of this same repository and would otherwise multiply every count,
+# and bench/, the local benchmark harness, which is gitignored.
 docfigure_tests() {
 	grep -rn "^func Test" --include='*_test.go' . |
-		grep -vc '/\.claude/worktrees/'
+		grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'
 }
 docfigure_fuzz() {
 	grep -rn "^func Fuzz" --include='*_test.go' . |
-		grep -vc '/\.claude/worktrees/'
+		grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'
 }
 docfigure_limits() {
-	grep -hc "^func Test" ./*/limits_boundary_test.go |
+	grep -hc "^func Test" ./*/limits_boundary*_test.go |
 		awk '{n += $1} END {print n + 0}'
 }
 
@@ -628,11 +641,11 @@ $(for _f in "$@"; do printf '        %s\n' "$_f"; done)
 docfigure_cmd() {
 	case $1 in
 	"unit test count")
-		printf '%s' "grep -rn '^func Test' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'" ;;
+		printf '%s' "grep -rn '^func Test' --include='*_test.go' . | grep -v '/\\.claude/worktrees/' | grep -vc '^\\./bench/'" ;;
 	"fuzz target count")
-		printf '%s' "grep -rn '^func Fuzz' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'" ;;
+		printf '%s' "grep -rn '^func Fuzz' --include='*_test.go' . | grep -v '/\\.claude/worktrees/' | grep -vc '^\\./bench/'" ;;
 	"limit boundary test count")
-		printf '%s' "grep -hc '^func Test' ./*/limits_boundary_test.go | awk '{n += \$1} END {print n + 0}'" ;;
+		printf '%s' "grep -hc '^func Test' ./*/limits_boundary*_test.go | awk '{n += \$1} END {print n + 0}'" ;;
 	esac
 }
 
@@ -1150,6 +1163,10 @@ stylesheetCorpus() { # name, stylesheet, root, input dir, pattern, extra flags
 			_ok=$((_ok + 1))
 		else
 			_bad=$((_bad + 1))
+			# Named, with the first line of what it said, so that a count
+			# that moves between runs can be traced to the file that moved.
+			printf '  %s failed: %s: %s\n' "$_name" "${_f#"$_dir"/}" \
+				"$(printf '%s\n' "$_err" | head -n 1)"
 		fi
 	done < "$_list"
 	rm -f "$_list"

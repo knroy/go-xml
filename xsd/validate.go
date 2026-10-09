@@ -98,7 +98,9 @@ type ValidateOptions struct {
 	// Annotate writes the type of each validated node into its
 	// TypeAnnotation, producing the part of the PSVI that the XPath and
 	// XSLT layers consume. It is off by default because it mutates the
-	// tree the caller passed in.
+	// tree the caller passed in. Without it Validate only checks and writes
+	// nothing to the tree, so one tree may be validated from several
+	// goroutines at once.
 	Annotate bool
 
 	// SkipIDConstraints suppresses "Validation Root Valid (ID/IDREF)"
@@ -161,6 +163,14 @@ func (s *Schema) Validate(root *xdm.Node, opts ValidateOptions) error {
 // A nil ctx is treated as context.Background().
 func (s *Schema) ValidateContext(ctx context.Context, root *xdm.Node,
 	opts ValidateOptions) error {
+	return s.validateContext(ctx, root, opts, nil)
+}
+
+// validateContext is ValidateContext with the copy-to-original map
+// ValidateCopyContext supplies, so a failure on a copied node reports the
+// original's position. nil for an in-place run.
+func (s *Schema) validateContext(ctx context.Context, root *xdm.Node,
+	opts ValidateOptions, twins map[*xdm.Node]*xdm.Node) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -179,17 +189,12 @@ func (s *Schema) ValidateContext(ctx context.Context, root *xdm.Node,
 	if opts.MaxDepth == 0 {
 		opts.MaxDepth = DefaultMaxDepth
 	}
-	v := &validator{ctx: ctx, schema: s, opts: opts, ids: map[string]int{}}
+	v := &validator{ctx: ctx, schema: s, opts: opts, ids: map[string]int{}, twins: twins}
 	// icStatsHook is nil except under the package's own measurement tests.
 	// See icStats: the counters exist because elapsed time cannot show that
 	// the same node is walked once per enclosing scope.
 	if icStatsHook != nil {
 		v.icStats = icStatsHook()
-	}
-	// declFor is only consulted by the identity-constraint walk, so it is
-	// allocated only when the schema has a constraint to evaluate.
-	if s.hasIdentityConstraints() {
-		v.declFor = map[*xdm.Node]*ElementDecl{}
 	}
 	// Whitespace-only text in an element whose declared content is
 	// element-only is ignorable (XML 1.0 §2.10), and XSLT 2.0 §4.4 makes
@@ -249,6 +254,14 @@ func (s *Schema) ValidateContext(ctx context.Context, root *xdm.Node,
 
 // validator carries the state of one validation run.
 type validator struct {
+	// walks are the count-vector buffers of finished content-model walks,
+	// reused by the next one. matchSequence recurses through validateChild,
+	// so this is a stack: a walk takes one on entry and returns it on exit.
+	walks []*walkScratch
+
+	// lastSpace is the last whitespace-only text nonSpaceTextSeen saw.
+	lastSpace string
+
 	// ctx bounds the run. Validation is not incremental — it walks the whole
 	// tree before it can answer at all — so a caller's only way to put a
 	// ceiling on it is to have the walk itself look up and stop.
@@ -278,10 +291,34 @@ type validator struct {
 
 	// declFor records the declaration each element was validated against,
 	// so that an identity-constraint walk can tell whether a descendant is
-	// itself a scope of the same constraint and stop there. It is filled
-	// only when some declaration in the schema carries a constraint, which
-	// leaves the common case paying nothing.
+	// itself a scope of the same constraint and stop there. The walk only
+	// looks below a constraint's own element, so it is filled only inside
+	// one (icScopes > 0), which leaves the common case paying nothing.
 	declFor map[*xdm.Node]*ElementDecl
+
+	// icScopes counts the elements on the current path whose declaration
+	// carries an identity constraint. A constraint's selector and fields
+	// reach only into its element's subtree, so outside every such element
+	// nothing the constraints read needs recording.
+	//
+	// It is counted on the walk rather than read off the schema. Asking the
+	// schema missed declarations it did not reach — a local element in a
+	// global element's anonymous type, or one in a named group — and the
+	// xslt and xquery aggregates copy declarations between schemas, so no
+	// schema-level count is reliable; the declaration being validated is.
+	icScopes int
+
+	// twins maps a node of a ValidateCopy copy to the node it was copied
+	// from, so fail can report the original's line and column: the copy
+	// has no source text. nil for an in-place run.
+	twins map[*xdm.Node]*xdm.Node
+
+	// unwritten holds, for a run without Annotate, the typing the validator
+	// would have written onto a node outside annotate(): a union's winning
+	// member and dm:nilled. The caller's tree stays untouched, and
+	// checkAssertions lays these onto the copy an assertion evaluates over,
+	// so the verdict is the one an annotating run reaches.
+	unwritten map[*xdm.Node]xdm.Typing
 
 	// stripIgnorable removes whitespace-only text from elements whose
 	// declared content is element-only, as XML 1.0 §2.10 and XSLT 2.0 §4.4
@@ -300,6 +337,10 @@ type validator struct {
 	// the same value on two attributes of one element counts once. XSD 1.1
 	// permits an element to carry several ID attributes.
 	idOwners map[string]*xdm.Node
+	// dupIDs lists each ID value in the order its second definition was met,
+	// which is where a streaming validator reports it; checkIDs reports in
+	// this order so the errors (and the one MaxErrors keeps) are stable.
+	dupIDs []string
 
 	// skipped holds the elements matched by a processContents="skip"
 	// wildcard. They and their descendants are outside the assessment, so
@@ -469,6 +510,9 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 		Message: fmt.Sprintf(format, args...),
 		Path:    v.pathString(),
 	}
+	if t := v.twins[n]; t != nil {
+		n = t
+	}
 	if n != nil {
 		if line, col, ok := n.Position(); ok {
 			e.Line, e.Column = line, col
@@ -493,7 +537,14 @@ func (v *validator) failLimit(n *xdm.Node, code, format string, args ...any) {
 
 // validateElement checks one element against a declaration.
 func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
-	if v.declFor != nil && decl != nil {
+	if decl != nil && len(decl.IdentityConstraints) > 0 {
+		v.icScopes++
+		defer func() { v.icScopes-- }()
+	}
+	if v.icScopes > 0 && decl != nil {
+		if v.declFor == nil {
+			v.declFor = map[*xdm.Node]*ElementDecl{}
+		}
 		v.declFor[el] = decl
 	}
 	if v.stopped {
@@ -606,7 +657,7 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			// left for whitespace to sit inside. The suite's
 			// all004.n02 is annotated "invalid, element is nilled
 			// but contains content, albeit whitespace".
-			if len(el.ChildElements()) > 0 || hasText(el) {
+			if childElementCount(el) > 0 || hasText(el) {
 				v.fail(el, "cvc-elt.3.2.1",
 					"an element with xsi:nil=\"true\" must be empty")
 			}
@@ -649,7 +700,9 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			// failed above as cvc-elt.3.1 and is not a nilled element at all.
 			// Only the validator can draw that distinction, so only the
 			// validator records it. See xdm.Node.IsNilled.
-			el.IsNilled = true
+			t := v.typingOf(el)
+			t.IsNilled = true
+			v.setTyping(el, t)
 			return nil
 		}
 	}
@@ -751,7 +804,7 @@ func (v *validator) checkFixedValueConstraint(el *xdm.Node, typ Type, decl *Elem
 	if len(el.Children) == 0 {
 		return
 	}
-	if len(el.ChildElements()) > 0 {
+	if childElementCount(el) > 0 {
 		v.fail(el, "cvc-elt.5.2.2.1",
 			"an element with a fixed value constraint may not have "+
 				"element children")
@@ -875,7 +928,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 	// A complex type with simple content still gives the element a value,
 	// so only the other three content types disqualify it as an identity
 	// constraint field. See the complexTyped field's comment.
-	if t.Content != ContentSimple {
+	if t.Content != ContentSimple && v.icScopes > 0 {
 		if v.complexTyped == nil {
 			v.complexTyped = map[*xdm.Node]bool{}
 		}
@@ -899,7 +952,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 		if oc := v.openContentFor(t); oc != nil {
 			return v.matchOpenOnly(el, el.ChildElements(), oc)
 		}
-		if len(el.ChildElements()) > 0 {
+		if childElementCount(el) > 0 {
 			v.fail(el, "cvc-complex-type.2.1",
 				"element must be empty but has element children")
 		}
@@ -914,7 +967,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 		}
 
 	case ContentSimple:
-		if len(el.ChildElements()) > 0 {
+		if childElementCount(el) > 0 {
 			v.fail(el, "cvc-complex-type.2.2",
 				"element has simple content but has element children")
 		}
@@ -938,7 +991,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 		// containing the empty *string*. saxonData's complex022 says so
 		// outright — "empty content does not satisfy empty choice".
 		if !particleAcceptsEmpty(t.Particle, map[*Particle]bool{}) && v.openContentFor(t) == nil &&
-			len(el.ChildElements()) == 0 {
+			childElementCount(el) == 0 {
 			v.fail(el, "cvc-complex-type.2.4.b",
 				"element has no children, and the content model "+
 					"admits no sequence at all")
@@ -955,7 +1008,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 			}
 			return v.validateChildren(el, t)
 		}
-		if s := nonSpaceText(el); s != "" {
+		if s := nonSpaceTextSeen(el, &v.lastSpace); s != "" {
 			v.fail(el, "cvc-complex-type.2.3",
 				"element-only content may not contain character data %q",
 				truncate(s))
@@ -1013,14 +1066,27 @@ func hasText(el *xdm.Node) bool {
 }
 
 // nonSpaceText returns the first non-whitespace text directly inside el.
-func nonSpaceText(el *xdm.Node) string {
+func nonSpaceText(el *xdm.Node) string { return nonSpaceTextSeen(el, new(string)) }
+
+// nonSpaceTextSeen is nonSpaceText remembering in *seen the last text found
+// to be all whitespace. The parser shares one string among equal
+// whitespace-only texts, so indentation repeats and the comparison usually
+// succeeds on the pointer without reading a byte.
+func nonSpaceTextSeen(el *xdm.Node, seen *string) string {
 	for _, c := range el.Children {
-		if c.Kind != xdm.KindText {
+		if c.Kind != xdm.KindText || c.Value == *seen {
 			continue
 		}
-		if s := strings.Trim(c.Value, " \t\n\r"); s != "" {
-			return s
+		// Most element-only content is whitespace only: look for a
+		// non-space byte before paying for the trim.
+		for i := 0; i < len(c.Value); i++ {
+			switch c.Value[i] {
+			case ' ', '\t', '\n', '\r':
+				continue
+			}
+			return strings.Trim(c.Value, " \t\n\r")
 		}
+		*seen = c.Value
 	}
 	return ""
 }
@@ -1048,12 +1114,10 @@ func (v *validator) validateChildren(el *xdm.Node, t *ComplexType) []icTables {
 		v.fail(el, "", "compiling the content model: %v", err)
 		return nil
 	}
-	kids := el.ChildElements()
-
 	if isAllGroup(t.Particle) {
-		return v.matchAll(el, kids, t.Particle.Term.(*ModelGroup), t)
+		return v.matchAll(el, el.ChildElements(), t.Particle.Term.(*ModelGroup), t)
 	}
-	return v.matchSequence(el, kids, m, t)
+	return v.matchSequence(el, childElementCount(el), m, t)
 }
 
 // noteChildType applies the XSD 1.1 dynamic Element Declarations Consistent
@@ -1242,15 +1306,38 @@ func (v *validator) modelFor(t *ComplexType) (*contentModel, error) {
 	return m, nil
 }
 
-// matchSequence walks the automaton over an element's children.
-func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentModel, t *ComplexType) []icTables {
+// walkScratch holds one content-model walk's count vectors. The slots past
+// each slice's length park vector buffers for scratchVec to reuse.
+type walkScratch struct {
+	ints    []int
+	a, b, c [][]int
+}
+
+// childElementCount is len(el.ChildElements()) without building the slice.
+func childElementCount(el *xdm.Node) int {
+	n := 0
+	for _, c := range el.Children {
+		if c.Kind == xdm.KindElement {
+			n++
+		}
+	}
+	return n
+}
+
+// matchSequence walks the automaton over an element's nkids element children.
+// It ranges over el.Children rather than a ChildElements slice, which on a
+// catalog root is a fresh multi-kilobyte allocation per validation.
+func (v *validator) matchSequence(el *xdm.Node, nkids int, m *contentModel, t *ComplexType) []icTables {
 	if len(m.positions) == 0 {
 		// An empty content model still admits whatever open content
 		// permits, which is the case that makes a type declaring only
 		// <xs:openContent> useful at all.
 		var tables []icTables
 		oc := v.openContentFor(t)
-		for _, kid := range kids {
+		for _, kid := range el.Children {
+			if kid.Kind != xdm.KindElement {
+				continue
+			}
 			if oc != nil && oc.Wildcard.AllowsName(kid.Name, v.elementDefined) {
 				if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
 					tables = append(tables, tbl)
@@ -1286,10 +1373,25 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 	// them and costing an allocation per element.
 	nested := len(m.counters) > 0
 	var counts, reach []int
-	var vectors, stepped [][]int
+	var vectors, stepped, wildStepped [][]int
 	if nested {
-		counts = make([]int, len(m.counters))
-		reach = reachable(m, len(kids))
+		var ws *walkScratch
+		if n := len(v.walks); n > 0 {
+			ws, v.walks = v.walks[n-1], v.walks[:n-1]
+		} else {
+			ws = &walkScratch{}
+		}
+		nc := len(m.counters)
+		if cap(ws.ints) < 2*nc {
+			ws.ints = make([]int, 2*nc)
+		}
+		counts = ws.ints[:nc]
+		reach = reachableInto(m, nkids, ws.ints[nc:2*nc])
+		vectors, stepped, wildStepped = ws.a, ws.b, ws.c
+		defer func() {
+			ws.a, ws.b, ws.c = vectors[:0], stepped[:0], wildStepped[:0]
+			v.walks = append(v.walks, ws)
+		}()
 	}
 	current := m.first
 	prevIdx := -1
@@ -1310,7 +1412,7 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 		stepped = stepped[:0]
 		if prevIdx < 0 {
 			enterCounts(m, reach, idx, counts)
-			stepped = append(stepped, append([]int(nil), counts...))
+			stepped = append(stepped, scratchVec(&stepped, counts))
 			return true
 		}
 		for _, vec := range vectors {
@@ -1319,29 +1421,18 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 		return len(stepped) > 0
 	}
 
-	// keep installs the readings admits found, deduplicated so that two
-	// executions which have converged are not carried twice, and reports
-	// whether the set stayed inside the budget.
-	//
-	// The duplicate check is a linear scan rather than a set: the vectors
-	// are the readings one element's children admit, which stays in single
-	// digits on every schema measured, and a map costs more to build than
-	// the scan costs to run.
+	// keep installs the readings admits found and reports whether the set
+	// stayed inside the budget. They arrive deduplicated (pushVec), so two
+	// executions which have converged are not carried twice.
 	keep := func() bool {
 		vectors, stepped = stepped, vectors[:0]
-		for i := 0; i < len(vectors); i++ {
-			for j := 0; j < i; j++ {
-				if intsEqual(vectors[i], vectors[j]) {
-					vectors = append(vectors[:i], vectors[i+1:]...)
-					i--
-					break
-				}
-			}
-		}
 		return len(vectors) <= DefaultMaxMatchStates
 	}
 
-	for _, kid := range kids {
+	for _, kid := range el.Children {
+		if kid.Kind != xdm.KindElement {
+			continue
+		}
 		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
 		next := -1
 		// boundRefused records that a position matched the child by name
@@ -1378,11 +1469,16 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 				// remaining ambiguity is only ever between an
 				// element and a wildcard, which is the case
 				// erratum E1-29 leaves to the processor.
+				//
+				// So the wildcard's readings are set aside, not
+				// installed: the element positions after it must
+				// still step from the readings this child began
+				// with (XSD 1.1 §3.8.4.2 and §3.10.6.2: an element
+				// declaration takes precedence over a wildcard).
 				if next < 0 {
 					next = idx
-					if nested && !keep() {
-						v.fail(el, "", "%v", errMatchStates)
-						return tables
+					if nested {
+						stepped, wildStepped = wildStepped, stepped
 					}
 				}
 				continue
@@ -1393,6 +1489,17 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 				return tables
 			}
 			break
+		}
+		if next >= 0 && nested {
+			if _, isWildcard := m.positions[next].term.(*Wildcard); isWildcard {
+				// No element position took the child: the
+				// wildcard's readings are the ones to carry.
+				stepped, wildStepped = wildStepped, stepped[:0]
+				if !keep() {
+					v.fail(el, "", "%v", errMatchStates)
+					return tables
+				}
+			}
 		}
 		if next < 0 {
 			// XSD 1.1 open content: an element the model does not
@@ -1742,7 +1849,9 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 			prev := kid.TypeAnnotation
 			prevPrim, prevItem := kid.DerivedPrimitive, kid.ListItem
 			v.validateAgainstType(kid, v.schema.anyType(), nil)
-			kid.SetTypeAnnotationResolved(prev, prevPrim, prevItem)
+			if v.opts.Annotate {
+				kid.SetTypeAnnotationResolved(prev, prevPrim, prevItem)
+			}
 			return nil
 		case ProcessStrict:
 			d, ok := v.schema.Elements[name]
@@ -2073,7 +2182,19 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 	// into an error.
 	if ct, ok := typ.(*ComplexType); ok && ct != nil &&
 		ct.Content == ContentElementOnly {
-		el.NoTypedValue = true
+		t := xdm.TypingOf(el)
+		t.NoTypedValue = true
+		el.ApplyTyping(t)
+	}
+	// Mixed content is recorded for the serializers, which must not indent
+	// it (Serialization 3.1 §5.1.4); the annotation of an anonymous mixed
+	// type is "anyType" and cannot say so. xs:anyType itself is mixed too,
+	// but the same section lets its content be indented, so it is left out.
+	if ct, ok := typ.(*ComplexType); ok && ct != nil &&
+		ct.Content == ContentMixed && ct.Name != xsName("anyType") {
+		t := xdm.TypingOf(el)
+		t.MixedContent = true
+		el.ApplyTyping(t)
 	}
 	if n := typ.TypeName(); n.Local != "" {
 		v.schema.setResolvedAnnotation(el, xdm.AnnotationName(n.URI, n.Local), typ)
@@ -2117,6 +2238,56 @@ func anonComplexAnnotation(t Type) string {
 		cur = base
 	}
 	return "anyType"
+}
+
+// typingOf is the node's typing as this run has decided it so far: what is
+// on the node, or what a run without Annotate holds aside in place of it.
+func (v *validator) typingOf(n *xdm.Node) xdm.Typing {
+	if t, ok := v.unwritten[n]; ok {
+		return t
+	}
+	return xdm.TypingOf(n)
+}
+
+// setTyping records a typing the validator decides outside annotate(). It
+// is written onto the node only when the caller asked for Annotate; otherwise
+// it is held in unwritten, because Validate without Annotate must not touch
+// the tree (two goroutines may be validating it).
+func (v *validator) setTyping(n *xdm.Node, t xdm.Typing) {
+	if v.opts.Annotate {
+		n.ApplyTyping(t)
+		return
+	}
+	if v.unwritten == nil {
+		v.unwritten = map[*xdm.Node]xdm.Typing{}
+	}
+	v.unwritten[n] = t
+}
+
+// recordUnionMember records which member of a union accepted n's value.
+func (v *validator) recordUnionMember(n *xdm.Node, member string) {
+	t := v.typingOf(n)
+	t.UnionMember = member
+	v.setTyping(n, t)
+}
+
+// applyUnwritten lays the typing held in unwritten onto clone, the copy of
+// orig an assertion evaluates over. The copy drops only comments and
+// processing instructions, so attributes and element children pair up by
+// position.
+func (v *validator) applyUnwritten(orig, clone *xdm.Node) {
+	if t, ok := v.unwritten[orig]; ok {
+		clone.ApplyTyping(t)
+	}
+	for i, a := range orig.Attrs {
+		if t, ok := v.unwritten[a]; ok {
+			clone.Attrs[i].ApplyTyping(t)
+		}
+	}
+	kids := clone.ChildElements()
+	for i, c := range orig.ChildElements() {
+		v.applyUnwritten(c, kids[i])
+	}
 }
 
 // stripIgnorableWhitespace removes whitespace-only text children of an element

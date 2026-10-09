@@ -236,15 +236,15 @@ always works.
   derivatives over a nested document costs time and memory quadratic in the
   depth, so `ValidateOptions.MaxDepth` bounds it at 1000 by default — raising
   `xdm`'s parser limit does not raise this one.
-* **A very large modular grammar may be refused at compile time.** Expanding a
-  `<ref>` re-compiles the definition's body, and that work is not shared
-  between two references naming the same definition, so a grammar whose
-  definitions form a long chain costs expansions that grow multiplicatively
-  rather than additively. A fixed budget of 200,000 expansions turns what would
-  otherwise be an unbounded compile into an error naming the cause. DocBook 5.1
-  is over that budget and is refused; schemas of ordinary size are far under
-  it. This is a known limitation rather than a design choice — see
-  [todo.md](todo.md).
+* **Each definition is compiled once and shared.** Every `<ref>` naming a
+  definition gets the same compiled pattern, so compilation is linear in the
+  number of definitions: DocBook 5.2's `docbook.rng` (about 1,900
+  definitions) compiles in about 0.5 s and 170 MB. A budget of 200,000
+  definition compilations remains as a guard, far above any real schema.
+* **Large schemas can still exceed the derivative bound.** Validation does not
+  intern patterns, so a deeply mixed content model can grow past
+  `ValidateOptions.MaxPatternSize`, which ends validation with an error that
+  says so; a few DocBook documents with nested inlines do.
 
 ## XSD
 
@@ -343,6 +343,26 @@ xsd.Options{Resolver: &xsd.HTTPResolver{
 `AllowHost` runs before the request, so it is the place to refuse loopback and
 private address ranges. `MapResolver` resolves from an in-memory table and
 touches neither disk nor network, which is the right choice in a server.
+
+From the command line the W3C schemas come from a catalog directory, since the
+CLI fetches nothing. A schema that imports the schema for schemas or `xml.xsd`
+by its `www.w3.org` URL, as the XSLT 3.0 schema does, otherwise loads without
+those components and fails with ``element ref "xs:schema" names no element
+declaration``:
+
+```sh
+go-xml validate -xsd schema-for-xslt30.xsd -xsd-version 1.1 \
+    -catalog path/to/w3c stylesheet.xsl
+```
+
+`-catalog` names a directory holding `XMLSchema.xsd`, `xml.xsd` or both; the
+[`w3cschemas`](../w3cschemas/README.md) module ships them under `schemas/`.
+Every spelling of a reference to them, and an `xs:import` naming only the
+namespace, is answered from those files, even where the schema has a copy of
+its own beside it (as the W3C's `schema-for-xslt30.xsd` does). A DOCTYPE in them is accepted, since
+the W3C schema for schemas carries one. Everything else is read as without the
+flag, confined to `-root` or the schema's directory. The transform
+(`xsl:import-schema`) and `go-xml xquery` (`import schema`) take the same flag.
 
 Note that `xsi:schemaLocation` lives in the *instance document*. Honouring it
 lets whoever supplied the document choose which schema it is judged against, so

@@ -702,23 +702,15 @@ func TestCompactParsesRealSchemas(t *testing.T) {
 	// grammar, where §4.20 has already rewritten <zeroOrMore>p as
 	// choice(oneOrMore p, empty) — and it is fixed, so the excuse is gone.
 	//
-	// Removing it exposed two things the refusal had been hiding, both of
-	// which are refusals in their own right rather than this parser's doing:
+	// Removing it exposed a refusal the old one had been hiding, which is not
+	// this parser's doing: xspec.rnc sequences xml-ns-attributes with
+	// common-attributes, which itself begins with xml-ns-attributes, so
+	// attribute xml:* {text}* appears twice in one group. §7.3's first clause
+	// refuses that. Two <zeroOrMore>s can each match nothing, so whether
+	// "required twice" is the right reading of that shape is a question about
+	// §7.3's first clause and not one this change settles — see docs/todo.md.
 	//
-	//   - DocBook 5.1 and its assembly schema now reach the compiler, which
-	//     re-compiles a definition once per <ref> that names it and so costs
-	//     multiplicatively in a large modular grammar. Compilation had not
-	//     finished after 140 s; maxRefExpansions now stops it at a fifth of a
-	//     second with a message that says so. Sharing the compiled pattern
-	//     between <ref>s is the real fix — see docs/todo.md.
-	//   - xspec.rnc sequences xml-ns-attributes with common-attributes, which
-	//     itself begins with xml-ns-attributes, so attribute xml:* {text}*
-	//     appears twice in one group. §7.3's first clause refuses that. Two
-	//     <zeroOrMore>s can each match nothing, so whether "required twice"
-	//     is the right reading of that shape is a question about §7.3's first
-	//     clause and not one this change settles — see docs/todo.md.
-	//
-	// Both are excused by message here so that this test keeps asserting what
+	// It is excused by message here so that this test keeps asserting what
 	// it was written to assert, which is that the grammar parses.
 	for _, f := range files {
 		src, err := os.ReadFile(f)
@@ -733,7 +725,6 @@ func TestCompactParsesRealSchemas(t *testing.T) {
 		}
 		if _, err := Compile(doc); err != nil {
 			if strings.Contains(err.Error(), "Resolver") ||
-				strings.Contains(err.Error(), "<ref> expansions") ||
 				strings.Contains(err.Error(), "required twice") {
 				continue // see above; none of these is this parser's doing
 			}

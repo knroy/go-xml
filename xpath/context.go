@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/knroy/go-xml/internal/xpathleaf"
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -34,6 +36,14 @@ type Context struct {
 	// Lookups walk to Parent, so a nested scope does not copy the map.
 	Vars   map[string]xdm.Sequence
 	Parent *Context
+
+	// varURI, varLocal and varVal are the one binding WithVar adds, held
+	// inline rather than in a one-entry Vars map: that map was the largest
+	// allocation site in every stylesheet profiled. A scope holds the inline
+	// pair when varLocal is non-empty (a variable name always has a local
+	// part), and it is consulted before Vars at the same level.
+	varURI, varLocal string
+	varVal           xdm.Sequence
 
 	// Funcs resolves function calls. Supplied by the caller so that XSLT can
 	// add xsl:function declarations and extension functions without this
@@ -251,6 +261,21 @@ type Context struct {
 	// should leave it alone.
 	MaxDepth int
 
+	// MaxItems is the bound the item budget is checked against. Zero means
+	// the package default, MaxItems; a negative value means no bound; a
+	// positive value is the bound. The range operator's cap follows it too.
+	//
+	// It is settable for the reason MaxDepth is: the default guards against
+	// untrusted input, and a trusted query over a large document can need
+	// more: XMark q11 and q12 at factor 1 exceed it.
+	//
+	// Note the convention differs from MaxDepth's, where a negative value
+	// falls back to the default rather than removing the bound.
+	//
+	// AdoptBudget copies it along with the shared counter, so a nested
+	// evaluation cannot raise the bound it is charged against.
+	MaxItems int
+
 	// items counts the items materialised into intermediate sequences during
 	// this evaluation, bounding memory the way Depth bounds stack.
 	//
@@ -343,6 +368,13 @@ type Context struct {
 	Now time.Time
 	// HasNow distinguishes an unset clock from a legitimately zero time.
 	HasNow bool
+
+	// host is the host language's dynamic state (XSLT: the transform runtime
+	// and fn:current()), opaque here and copied with the context as the focus
+	// is. A dynamic function call clears its current item and marks it
+	// absent, as it does the variables in ClearedOnDynamicCall and
+	// MarkedOnDynamicCall. See internal/xpathleaf.Host and leafhook.go.
+	host *xpathleaf.Host
 }
 
 // WithNow returns a copy of ctx with the transform clock set.
@@ -656,6 +688,12 @@ type Function struct {
 	// form is a liability rather than a convenience. Nil for every
 	// fixed-arity function, which leaves Signature the ordinary path.
 	VariadicSignature *xdm.VariadicSignature
+
+	// leaf marks a builtin that never calls back into user code, never
+	// keeps the context past its return and never writes to it. A call to
+	// one counts recursion depth on the caller's context in place instead
+	// of copying it with Descend. Set only by markLeafBuiltins.
+	leaf bool
 }
 
 // NewContext returns a context with the given focus and library.
@@ -711,7 +749,12 @@ func (c *Context) WithFocus(item xdm.Item, pos, size int) *Context {
 // value.
 func (c *Context) WithVar(name xdm.QName, val xdm.Sequence) *Context {
 	n := *c
-	n.Vars = map[string]xdm.Sequence{name.Clark(): val}
+	n.Vars = nil
+	n.varURI, n.varLocal, n.varVal = name.URI, name.Local, val
+	if name.Local == "" { // not a variable name, but keep it resolvable
+		n.Vars = map[string]xdm.Sequence{name.Clark(): val}
+		n.varURI, n.varVal = "", nil
+	}
 	n.Parent = c
 	return &n
 }
@@ -742,8 +785,17 @@ func (c *Context) LookupVar(name xdm.QName) (xdm.Sequence, bool) {
 // lookupVarPlain is LookupVar without the host's qualifier, and is what the
 // qualifier's own answer is resolved through.
 func (c *Context) lookupVarPlain(name xdm.QName) (xdm.Sequence, bool) {
-	key := name.Clark()
+	key, keyed := "", false
 	for s := c; s != nil; s = s.Parent {
+		if s.varLocal != "" && s.varLocal == name.Local && s.varURI == name.URI {
+			return s.varVal, true
+		}
+		if len(s.Vars) == 0 {
+			continue
+		}
+		if !keyed {
+			key, keyed = name.Clark(), true
+		}
 		if v, ok := s.Vars[key]; ok {
 			return v, true
 		}
@@ -790,6 +842,17 @@ func (c *Context) Err() error {
 // Descend returns a copy with the recursion depth incremented, erroring past
 // the limit.
 func (c *Context) Descend() (*Context, error) {
+	if err := c.checkDepth(); err != nil {
+		return nil, err
+	}
+	n := *c
+	n.Depth++
+	return &n, nil
+}
+
+// checkDepth is Descend's limit test, shared with the in-place count
+// FuncCall.Eval uses for a leaf builtin.
+func (c *Context) checkDepth() error {
 	if lim := c.depthLimit(); c.Depth >= lim {
 		// XPDY0001 is kept because callers and the conformance suites read
 		// it, but it properly means "no context item is defined" and this
@@ -797,12 +860,10 @@ func (c *Context) Descend() (*Context, error) {
 		// context, it is merely deeper than this processor will evaluate.
 		// The sentinel is added alongside so a caller can tell a refusal
 		// from a fault. See xdm.ErrResourceLimit.
-		return nil, fmt.Errorf("XPDY0001: recursion exceeded %d levels: %w",
+		return fmt.Errorf("XPDY0001: recursion exceeded %d levels: %w",
 			lim, xdm.ErrResourceLimit)
 	}
-	n := *c
-	n.Depth++
-	return &n, nil
+	return nil
 }
 
 // countItems charges n items against the evaluation budget.
@@ -815,16 +876,28 @@ func (c *Context) countItems(n int) error {
 	if c == nil || c.items == nil || n <= 0 {
 		return nil
 	}
-	if atomic.AddInt64(c.items, int64(n)) > MaxItems {
+	if lim := c.itemLimit(); atomic.AddInt64(c.items, int64(n)) > lim {
 		// The code is kept -- the suites and callers read it -- and the
 		// sentinel added, because this is the processor declining to
 		// allocate rather than anything wrong with the expression.
 		return fmt.Errorf(
 			"XPDY0130: evaluation materialised more than %d items; "+
 				"the expression is building a sequence too large to hold: %w",
-			MaxItems, xdm.ErrResourceLimit)
+			lim, xdm.ErrResourceLimit)
 	}
 	return nil
+}
+
+// itemLimit is the item bound in force: Context.MaxItems where the caller set
+// a positive one, none where it set a negative one, MaxItems otherwise.
+func (c *Context) itemLimit() int64 {
+	switch {
+	case c == nil || c.MaxItems == 0:
+		return MaxItems
+	case c.MaxItems < 0:
+		return math.MaxInt64
+	}
+	return int64(c.MaxItems)
 }
 
 // ChargeItems charges n items against the evaluation budget, reporting
@@ -1080,7 +1153,8 @@ func (c *Context) AdoptBudget(src *Context) *Context {
 	}
 	n := *c
 	if src.items != nil {
-		n.items, n.heldItems = src.items, src.heldItems
+		// The bound travels with the counter it is checked against.
+		n.items, n.heldItems, n.MaxItems = src.items, src.heldItems, src.MaxItems
 	}
 	if src.bytes != nil {
 		n.bytes, n.heldBytes = src.bytes, src.heldBytes

@@ -1,6 +1,9 @@
 package xdm
 
-import "io"
+import (
+	"bytes"
+	"io"
+)
 
 // End-of-line handling, XML 1.0 section 2.11.
 //
@@ -12,12 +15,9 @@ import "io"
 // So it is done here, on input, before parsing, rather than left to the
 // tokeniser. encoding/xml folds line ends only in character data and attribute
 // values — a comment or processing instruction kept its carriage returns, so
-// "<!--a\r\nb-->" had the value "a\r\nb" — and in an attribute value it folds
-// them too late: attNormReader, which must see a literal line end to turn it
-// into a space, would have seen CR-LF as two characters and written two
-// spaces where §3.3.3 applied to the normalized text gives one.
+// "<!--a\r\nb-->" had the value "a\r\nb".
 //
-// Unlike attNormReader this changes lengths. That is safe because it sits
+// This changes lengths. That is safe because it sits
 // upstream of everything that records an offset: the retained source,
 // position tracking and the entity base spans all see the normalized text,
 // and only characters at line ends are touched, so line numbers are those of
@@ -64,8 +64,12 @@ func (l *lineEndReader) Read(p []byte) (int, error) {
 // unprocessed tail. The tail is a CR (or CR plus the first byte of a NEL)
 // whose meaning depends on bytes not yet read; final says none will come.
 func foldLineEnds(in []byte, final bool) (out, carry []byte) {
-	w := 0
-	for i := 0; i < len(in); i++ {
+	// Most documents have no CR at all; everything before the first is kept.
+	w := bytes.IndexByte(in, '\r')
+	if w < 0 {
+		return in, nil
+	}
+	for i := w; i < len(in); i++ {
 		c := in[i]
 		if c != '\r' {
 			in[w] = c

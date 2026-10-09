@@ -54,6 +54,14 @@ namespace. The catalog answers both with the files above.
 The bundled schema for schemas is the 1.1 one and loads only with
 `xsd.Version11`; a schema that imports it needs that version too.
 
+It declares its entities in a DOCTYPE. A go-xml release after v1.6.0 accepts
+a DOCTYPE in documents a catalog answers itself, so `ParseOptions.AllowDOCTYPE`
+is not needed; with v1.6.0 it still is.
+
+From the command line, `go-xml validate -catalog <dir>` (and the same flag on
+the transform and `go-xml xquery`) reads these files from a directory, such as
+this module's `schemas/`.
+
 ## What it does not do
 
 `Catalog` answers only what is bundled. A reference to anything else is an

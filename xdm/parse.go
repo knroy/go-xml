@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/url"
 	"strings"
+	"unsafe"
 
 	xml "github.com/knroy/go-xml/internal/xmltok"
 )
@@ -166,6 +167,12 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// against a MaxBytes of 1024 before being refused, which is a refusal
 	// that costs more than accepting. Wrapped here the ReadAll hits the
 	// limited reader and stops at the bound.
+	// A reader that knows its length (strings.Reader, bytes.Reader) lets the
+	// position-tracking copy below be sized once instead of grown by doubling.
+	sizeHint := 0
+	if l, ok := r.(interface{ Len() int }); ok {
+		sizeHint = l.Len()
+	}
 	maxBytes := opts.MaxBytes
 	if maxBytes == 0 {
 		maxBytes = DefaultMaxBytes
@@ -199,20 +206,10 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	r = decoded
 
 	// XML 1.0 section 2.11: line ends are normalized on input, before
-	// parsing, and before the attribute rewrite below, which must see a
-	// CR-LF as the one line end it is. See xdm/lineend.go.
+	// parsing. See xdm/lineend.go. Attribute-value normalization (section
+	// 3.3.3) is the tokeniser's, which still sees "&#10;" apart from a
+	// newline the author typed.
 	r = newLineEndReader(r)
-
-	// XML 1.0 section 3.3.3 normalizes a literal TAB, LF or CR inside an
-	// attribute value to a single space, while a character reference to the
-	// same character survives. That distinction only exists in the raw bytes
-	// — encoding/xml decodes "&#10;" while tokenising, after which it is
-	// indistinguishable from a newline the author typed — so the rewrite has
-	// to happen here, upstream of the decoder. See xdm/attnorm.go.
-	//
-	// It replaces one byte with one byte, so every offset downstream, both
-	// TrackPositions and the entity base spans, still means what it did.
-	r = newAttNormReader(r)
 
 	trackPos := opts.TrackPositions
 	var srcBuf strings.Builder
@@ -221,16 +218,20 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// re-parse of the substituted source, and by the time that is known the
 	// reader is partly consumed and the decoder has buffered ahead into it.
 	//
-	// The cost is a second copy of the document for the length of the parse,
-	// paid by every caller that sets AllowDOCTYPE rather than only those who
-	// turn out to need it. Dropping it once the DOCTYPE is read would mean
-	// replacing the decoder mid-stream, which loses its lookahead — so the
-	// copy stays. entitiesExpanded marks the second parse, which has no
-	// entities left to find and so needs no copy at all.
-
-	keepSrc := trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded)
-	if keepSrc {
-		r = io.TeeReader(r, &srcBuf)
+	// The copy is needed only until the document element opens: a re-parse
+	// can start only at the DOCTYPE, which must come first, so past that point
+	// the tee stops and its copy is dropped unless positions are tracked.
+	// entitiesExpanded marks the second parse, which has no entities left to
+	// find and so needs no copy at all.
+	// Only a tracked copy is kept to the end, so only it is sized up front;
+	// never past MaxBytes, which the reader will refuse to go beyond.
+	if trackPos && sizeHint > 0 && (maxBytes <= 0 || int64(sizeHint) <= maxBytes) {
+		srcBuf.Grow(sizeHint)
+	}
+	var tee *srcTee
+	if trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded) {
+		tee = &srcTee{r: r, buf: &srcBuf}
+		r = tee
 	}
 
 	// The charge reader sits between the decoder and the source so that an
@@ -284,12 +285,30 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	nodes := 0
 
 	tree := NewTree()
+	// Document order is assigned as each node is built, which is the
+	// pre-order walk Finalize makes, so a parse does not walk the finished
+	// tree a second time. scope and scoped carry the namespace bindings
+	// Finalize threads down its walk; an element that declares none pushes
+	// nothing. Finalize still runs when stripping removed a numbered node.
+	scope := map[string]string{"xml": NSXML}
+	type scopeFrame struct {
+		el    *Node
+		saved []nsSave
+	}
+	var scoped []scopeFrame
+	tree.number(tree.Root, scope)
+	renumber := false
+	var chunk nodeChunk
+	chunk.open() // the document node's children
+	var spaces spaceTable
+	var run textRun
 	tree.Root.BaseURI = opts.BaseURI
 	tree.Root.DocumentURI = opts.DocumentURI
 	cur := tree.Root
 	depth := 0
 	sawRoot := false
 	sawDecl := false
+	standalone := false // the XML declaration said standalone="yes"
 	sawPrologToken := false
 	sawDoctype := false
 	// Attribute defaults declared by an ATTLIST in the internal subset. Kept
@@ -322,9 +341,18 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse XML: %w", err)
 		}
+		// Any other token ends a run of character data, and its node must
+		// hold its value before anything -- whitespace stripping at an end
+		// tag, a new sibling -- can look at it.
+		if _, text := tok.(*xml.CharData); !text {
+			run.flush(&spaces)
+		}
 
-		switch t := tok.(type) {
-		case xml.StartElement:
+		// Each token points into the decoder and is copied out here; it is
+		// valid only until the next RawToken.
+		switch tok := tok.(type) {
+		case *xml.StartElement:
+			t := *tok
 			sawPrologToken = true
 			depth++
 			if depth > maxDepth {
@@ -336,6 +364,18 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					return nil, fmt.Errorf("parse XML: multiple root elements")
 				}
 				sawRoot = true
+				// Past the prolog: no re-parse can start now, so the copy
+				// kept for one is dropped; and with no entity table installed
+				// by now none ever will be, so the charge reader has nothing
+				// to buffer for.
+				if tee != nil && !trackPos {
+					tee.buf = nil
+					srcBuf = strings.Builder{}
+				}
+				if charger != nil && charger.t == nil {
+					charger.off = true
+					charger.backlog = nil
+				}
 			}
 			if len(attDefaults) > 0 {
 				t = applyAttDefaults(t, attDefaults)
@@ -346,7 +386,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			if err := validateStartElement(t, cur, dec.IsVersion11()); err != nil {
 				return nil, err
 			}
-			el := buildElement(t, cur, encodeOffset(start, trackPos))
+			el := buildElement(&chunk, t, cur, encodeOffset(start, trackPos))
 			// A node written inside an external parsed entity takes its base
 			// URI from that entity, not from its parent in the tree — XML
 			// Base section 4.2 and the XDM base-uri accessor. The entity's
@@ -366,6 +406,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			if len(attTypes) > 0 {
 				applyAttTypes(el, attTypes)
 			}
+			if saved := tree.number(el, scope); saved != nil {
+				scoped = append(scoped, scopeFrame{el, saved})
+			}
 			// Attributes and namespaces are nodes too, and a document made
 			// of elements carrying many attributes allocates most of its
 			// memory in them, so they count against the limit.
@@ -375,10 +418,12 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					"parse XML: document exceeds %d nodes: %w",
 					maxNodes, ErrResourceLimit)
 			}
-			cur.AppendChild(el)
+			chunk.addChild(cur, el)
+			chunk.open()
 			cur = el
 
-		case xml.EndElement:
+		case *xml.EndElement:
+			t := *tok
 			if cur.Parent == nil {
 				return nil, fmt.Errorf("parse XML: unbalanced end element %q", t.Name.Local)
 			}
@@ -386,23 +431,35 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// the lexical name — which is what XML §3 requires anyway: the
 			// end tag must repeat the start tag's QName character for
 			// character, not merely resolve to the same expanded name.
-			if got, want := lexicalName(t.Name), cur.Name.Lexical(); got != want {
+			if t.Name.Space == cur.Name.Prefix && t.Name.Local == cur.Name.Local {
+				// The same QName, written the same way: nothing to build.
+			} else if got, want := lexicalName(t.Name), cur.Name.Lexical(); got != want {
 				return nil, fmt.Errorf(
 					"parse XML: element %q closed by end element %q", want, got)
 			}
 			// Ignorable whitespace goes first and unconditionally: the
 			// DTD-derived rule outranks the stylesheet-declared one, so it
 			// must not be gated on a strip-space declaration existing.
+			chunk.close(cur)
+			kids := len(cur.Children)
 			if elementOnly != nil {
 				stripIgnorableWhitespace(cur, elementOnly)
 			}
 			if opts.StripSpace != nil {
 				stripWhitespaceChildren(cur, opts.StripSpace)
 			}
+			if len(cur.Children) != kids {
+				renumber = true
+			}
+			if n := len(scoped); n > 0 && scoped[n-1].el == cur {
+				restoreScope(scope, scoped[n-1].saved)
+				scoped = scoped[:n-1]
+			}
 			cur = cur.Parent
 			depth--
 
-		case xml.CharData:
+		case *xml.CharData:
+			t := *tok
 			// CharData is only meaningful inside an element; whitespace at the
 			// document level is legal and carries no information. It must be
 			// written as such: [27] Misc admits no reference or CDATA section.
@@ -413,13 +470,18 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				sawPrologToken = true
 				continue
 			}
-			appendText(cur, string(t))
+			run.add(&chunk, cur, t)
 
-		case xml.Comment:
+		case *xml.Comment:
+			t := *tok
 			sawPrologToken = true
-			cur.AppendChild(&Node{Kind: KindComment, Value: string(t)})
+			c := chunk.alloc()
+			c.Kind, c.Value = KindComment, spaces.arena.String(t)
+			chunk.addChild(cur, c)
+			tree.number(c, nil)
 
-		case xml.ProcInst:
+		case *xml.ProcInst:
+			t := *tok
 			if strings.EqualFold(t.Target, "xml") {
 				if t.Target != "xml" {
 					return nil, fmt.Errorf("parse XML: processing-instruction target %q is reserved", t.Target)
@@ -431,6 +493,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					return nil, err
 				}
 				sawDecl = true
+				standalone = standaloneYes.MatchString(string(t.Inst))
 				continue // the XML declaration is not a PI node in the XDM
 			}
 			// Namespaces in XML §7: no PI target contains a colon.
@@ -438,10 +501,11 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				return nil, fmt.Errorf("parse XML: processing-instruction target %q contains a colon", t.Target)
 			}
 			sawPrologToken = true
-			pi := &Node{
+			pi := chunk.alloc()
+			*pi = Node{
 				Kind:  KindPI,
 				Name:  QName{Local: t.Target},
-				Value: string(t.Inst),
+				Value: spaces.arena.String(t.Inst),
 			}
 			// Same entity rule as for elements: a PI pulled in from an
 			// external entity has that entity's URI as its base. This is
@@ -449,9 +513,11 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			if b := baseAt(opts.entityBases, int(start)); b != "" {
 				pi.BaseURI = b
 			}
-			cur.AppendChild(pi)
+			chunk.addChild(cur, pi)
+			tree.number(pi, nil)
 
-		case xml.Directive:
+		case *xml.Directive:
+			t := *tok
 			d := strings.TrimSpace(string(t))
 			if !isDOCTYPEDirective(d) {
 				return nil, fmt.Errorf("parse XML: markup declaration %q is not a DOCTYPE", d)
@@ -471,16 +537,25 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// #FIXED '...'" is how a DTD supplies a binding. Without this the
 			// prefix is simply absent from the tree.
 			//
-			// Only defaults are read. Nothing here expands an entity,
-			// resolves an external identifier, or reads a file, so this does
-			// not widen what AllowDOCTYPE admits.
+			// Only defaults are read. A default's references to internal
+			// entities are expanded once the entities are known (see
+			// normalizeAttDefaults); nothing resolves an external identifier
+			// or reads a file, so this does not widen what AllowDOCTYPE
+			// admits.
 			if isDOCTYPEDirective(d) {
 				sawDoctype = true
 				sawPrologToken = true
 				// Retained so a caller can validate against the document's
 				// own DTD; see Tree.DocType.
 				tree.DocType = d
-				defs, types := parseAttList(d)
+				// Without a resolver no parameter entity is read, so §5.1
+				// stops entity and ATTLIST processing at the first
+				// reference to one, unless the document is standalone.
+				declText := d
+				if opts.ExternalEntities == nil && !standalone {
+					declText = declsBeforeUnreadPE(d)
+				}
+				defs, types := parseAttList(declText)
 				attDefaults = append(attDefaults, defs...)
 				attTypes = append(attTypes, types...)
 				elementOnly = parseElementOnlyDecls(d)
@@ -522,6 +597,12 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 							return nil, fmt.Errorf("parse XML: %w", err)
 						}
 					}
+					if err := checkDTDComments(ents.subsetText); err != nil {
+						return nil, fmt.Errorf("parse XML: external DTD: %w", err)
+					}
+					if err := checkEntityCharRefs(ents.subsetText, dec.IsVersion11()); err != nil {
+						return nil, fmt.Errorf("parse XML: %w", err)
+					}
 					// Retained so fn:unparsed-entity-uri can see declarations
 					// that live outside the directive. The subset a document
 					// is governed by is not always the text it was written
@@ -552,7 +633,21 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 						elementOnly = parseElementOnlyDecls(text)
 					}
 				} else {
-					ents = parseEntityDecls(d, opts.BaseURI, opts.entityBudget)
+					ents = parseEntityDecls(declText, opts.BaseURI, opts.entityBudget)
+				}
+				if ents != nil {
+					ents.version11 = dec.IsVersion11()
+				}
+				if err := checkEntityCharRefs(d, dec.IsVersion11()); err != nil {
+					return nil, fmt.Errorf("parse XML: %w", err)
+				}
+				wfc := entityDeclaredIsWFC(d, standalone)
+				if attDefaults, err = normalizeAttDefaults(attDefaults, ents, dec.IsVersion11(), wfc); err != nil {
+					return nil, fmt.Errorf("parse XML: %w", err)
+				}
+				if !wfc {
+					declared := ents
+					dec.Undeclared = func(name string) bool { return !declared.declares(name) }
 				}
 				if ents != nil && !opts.entitiesExpanded {
 					ents.version11 = dec.IsVersion11()
@@ -602,9 +697,11 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					if dec.Entity == nil {
 						dec.Entity = map[string]string{}
 					}
-					for k, v := range ents.entityMap() {
+					m := ents.entityMap()
+					for k, v := range m {
 						dec.Entity[k] = v
 					}
+					dec.AttrEntity = ents.attrEntityMap(m)
 				}
 			}
 		}
@@ -616,6 +713,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	if cur != tree.Root {
 		return nil, fmt.Errorf("parse XML: unexpected EOF, %q left open", cur.Name.Local)
 	}
+	chunk.close(tree.Root)
 
 	if trackPos {
 		// The decoder stops reading at the end of the root element, so the
@@ -627,7 +725,11 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	if dec.IsVersion11() {
 		tree.XMLVersion = "1.1"
 	}
-	tree.Finalize()
+	// Stripping left gaps in the numbering. They would not reorder anything,
+	// but Finalize numbers densely, as every parse did before.
+	if renumber {
+		tree.Finalize()
+	}
 	return tree, nil
 }
 
@@ -651,11 +753,12 @@ func ParseString(s string, opts ParseOptions) (*Tree, error) {
 // xmlns declarations arrive as ordinary attributes with Space "xmlns" (or
 // Local "xmlns" for the default). Those must become namespace nodes rather
 // than attributes: the attribute axis must not return them.
-func buildElement(t xml.StartElement, parent *Node, offset int32) *Node {
+func buildElement(chunk *nodeChunk, t xml.StartElement, parent *Node, offset int32) *Node {
 	// Parent is linked here, before resolution below, because resolvePrefix
 	// walks ancestors: an element using a prefix declared on an ancestor
 	// would otherwise resolve to nothing.
-	el := &Node{
+	el := chunk.alloc()
+	*el = Node{
 		Kind:    KindElement,
 		tree:    parent.tree,
 		BaseURI: parent.BaseURI,
@@ -663,18 +766,30 @@ func buildElement(t xml.StartElement, parent *Node, offset int32) *Node {
 		offset:  offset,
 	}
 
+	// The attributes are counted first so that Attrs is cut to size once.
+	n := 0
+	for _, a := range t.Attr {
+		if a.Name.Space != "xmlns" && a.Name.Space != NSXMLNS &&
+			(a.Name.Space != "" || a.Name.Local != "xmlns") {
+			n++
+		}
+	}
+	el.Attrs = chunk.take(n)
+	el.Namespaces = chunk.take(len(t.Attr) - n)
+
 	for _, a := range t.Attr {
 		switch {
 		case a.Name.Space == "xmlns":
-			el.AddNamespace(a.Name.Local, a.Value)
+			chunk.addNamespace(el, a.Name.Local, a.Value)
 		case a.Name.Space == "" && a.Name.Local == "xmlns":
-			el.AddNamespace("", a.Value)
+			chunk.addNamespace(el, "", a.Value)
 		case a.Name.Space == NSXMLNS:
 			// applyAttDefaults and callers that hand-build a token may use
 			// the resolved xmlns URI instead of the "xmlns" prefix.
-			el.AddNamespace(a.Name.Local, a.Value)
+			chunk.addNamespace(el, a.Name.Local, a.Value)
 		default:
-			attr := &Node{
+			attr := chunk.alloc()
+			*attr = Node{
 				Kind:  KindAttribute,
 				Name:  QName{Prefix: a.Name.Space, Local: a.Name.Local},
 				Value: a.Value,
@@ -754,23 +869,195 @@ func resolvePrefix(el *Node, prefix string, isElement bool) string {
 	return ""
 }
 
-// appendText adds character data, merging into a preceding text node.
+// textRun gathers the character data of one text node, which arrives as
+// several tokens when a CDATA section adjoins other text, and sets the node's
+// value once when the run ends.
 //
-// The XDM requires that no two text nodes be adjacent. encoding/xml splits
-// character data at entity references and buffer boundaries, so without
-// merging, "a&amp;b" would produce three text nodes and fn:count(text()) would
-// return 3 instead of 1.
-func appendText(parent *Node, s string) {
-	if s == "" {
+// The XDM requires that no two text nodes be adjacent, so "a<![CDATA[b]]>c"
+// is one node. Joining each piece onto the node's value as it arrived copied
+// the whole value every time, which made a text node of n pieces cost O(n^2)
+// -- a 100,000-section document took a second.
+type textRun struct {
+	node *Node // the text node being built, nil between runs
+	buf  []byte
+}
+
+// add appends b to the text node at the end of parent's children, creating
+// it when parent does not end in one.
+func (r *textRun) add(chunk *nodeChunk, parent *Node, b []byte) {
+	if len(b) == 0 {
 		return
 	}
-	if n := len(parent.Children); n > 0 {
-		if last := parent.Children[n-1]; last.Kind == KindText {
-			last.Value += s
-			return
+	if r.node == nil {
+		// Every token inside an element other than character data adds a
+		// node, so a run never resumes after a flush.
+		r.node = chunk.alloc()
+		r.node.Kind = KindText
+		chunk.addChild(parent, r.node)
+		parent.tree.number(r.node, nil)
+		r.buf = r.buf[:0]
+	}
+	r.buf = append(r.buf, b...)
+}
+
+// flush sets the value of the node being built, if any, and ends the run.
+func (r *textRun) flush(spaces *spaceTable) {
+	if r.node != nil {
+		r.node.Value = spaces.text(r.buf)
+		r.node = nil
+	}
+}
+
+// spaceTable shares one string among the whitespace-only text values of a
+// parse. An indented document repeats a handful of them -- a newline and the
+// indentation of each depth -- once per element, so most of its text nodes
+// are one of a few strings. The other values share the arena's blocks.
+type spaceTable struct {
+	m     map[string]string
+	arena xml.Arena
+	// byLen holds the last whitespace run of each length. In an indented
+	// document that is nearly always the next run of that length too, so a
+	// compare replaces the hash and map probe.
+	byLen [maxSpaceLen + 1]string
+}
+
+// maxSpaceTable and maxSpaceLen bound the table: a run longer than
+// maxSpaceLen is unlikely to repeat, and past maxSpaceTable entries values
+// are copied as before.
+const (
+	maxSpaceTable = 256
+	maxSpaceLen   = 128
+)
+
+// text returns b as a string, shared with earlier identical runs when b is
+// whitespace only.
+func (t *spaceTable) text(b []byte) string {
+	if len(b) > maxSpaceLen || !onlySpace(b) {
+		return t.arena.String(b)
+	}
+	if s := t.byLen[len(b)]; s == string(b) {
+		return s
+	}
+	if s, ok := t.m[string(b)]; ok {
+		t.byLen[len(b)] = s
+		return s
+	}
+	s := string(b)
+	t.byLen[len(b)] = s
+	if len(t.m) < maxSpaceTable {
+		if t.m == nil {
+			t.m = make(map[string]string)
+		}
+		t.m[s] = s
+	}
+	return s
+}
+
+func onlySpace(b []byte) bool {
+	for _, c := range b {
+		if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			return false
 		}
 	}
-	parent.AppendChild(&Node{Kind: KindText, Value: s})
+	return true
+}
+
+// nodeChunk hands out the nodes of one parse from shared backing arrays, so
+// that elements, attributes and text -- nearly every node of a document --
+// cost one allocation per nodeChunkLen nodes rather than one each. Measured on
+// a 10 MB document: parse 22% faster, 21% fewer mallocs, GC mark time down
+// 43%, and Finalize and C14N faster again because siblings sit side by side.
+//
+// The trade-off is retention. The garbage collector frees an array as a
+// whole, so one node still reachable keeps every node of its chunk alive: a
+// caller that parses a document and keeps a single attribute pins up to 32
+// KiB, and a whitespace text node stripped after parsing still occupies its
+// slot. For a tree that lives and dies as a whole, which is how trees are
+// used, the cost is nil.
+//
+// Chunks start small and double, so that a document of a handful of nodes --
+// fn:parse-xml on a fragment, a test fixture -- does not pay for, or retain,
+// a full chunk it will never fill.
+type nodeChunk struct {
+	free []Node
+	size int // length of the last chunk made
+
+	// ptrs backs the Children and Attrs slices of the parse the same way,
+	// chunked and doubling like free. Each slice is cut with cap == len, so
+	// a later append through the tree-mutation API reallocates instead of
+	// writing into the next element's slots.
+	ptrs    []*Node
+	ptrSize int
+
+	// kids holds the children of the open elements, innermost last, and
+	// marks where each open element's own begin. An element's children are
+	// copied into an exact-size slice when it closes, instead of growing
+	// Children by append: ~340k allocations per 10 MB parse.
+	kids  []*Node
+	marks []int
+}
+
+// take returns an empty slice with room for exactly n pointers.
+func (c *nodeChunk) take(n int) []*Node {
+	if n == 0 {
+		return nil
+	}
+	if n > len(c.ptrs) {
+		c.ptrSize = min(max(2*c.ptrSize, 8), ptrChunkLen)
+		if n > c.ptrSize {
+			return make([]*Node, 0, n)
+		}
+		c.ptrs = make([]*Node, c.ptrSize)
+	}
+	s := c.ptrs[:0:n]
+	c.ptrs = c.ptrs[n:]
+	return s
+}
+
+// ptrChunkLen caps a pointer chunk at 32 KiB, for the reason nodeChunkLen does.
+const ptrChunkLen = 32768 / int(unsafe.Sizeof((*Node)(nil)))
+
+// open starts collecting the children of an element just opened.
+func (c *nodeChunk) open() { c.marks = append(c.marks, len(c.kids)) }
+
+// addChild links child as the next child of parent, the innermost open element.
+func (c *nodeChunk) addChild(parent, child *Node) {
+	child.Parent = parent
+	child.tree = parent.tree
+	c.kids = append(c.kids, child)
+}
+
+// close sets el's children, the ones collected since the matching open.
+func (c *nodeChunk) close(el *Node) {
+	m := c.marks[len(c.marks)-1]
+	c.marks = c.marks[:len(c.marks)-1]
+	el.Children = append(c.take(len(c.kids)-m), c.kids[m:]...)
+	c.kids = c.kids[:m]
+}
+
+// addNamespace appends to el a namespace node binding prefix to uri, as
+// Node.AddNamespace does, but taken from the chunk: el.Namespaces was cut to
+// size by take, so the append does not reallocate.
+func (c *nodeChunk) addNamespace(el *Node, prefix, uri string) {
+	ns := c.alloc()
+	*ns = Node{Kind: KindNamespace, Name: QName{Local: prefix}, Value: uri, Parent: el, tree: el.tree}
+	el.Namespaces = append(el.Namespaces, ns)
+}
+
+// nodeChunkLen caps a chunk at 32 KiB, the largest size class the allocator
+// serves from its small-object spans. A larger chunk becomes a large object
+// rounded up to whole pages, and measured that grew the heap rather than
+// shrinking it.
+const nodeChunkLen = 32768 / int(unsafe.Sizeof(Node{}))
+
+func (c *nodeChunk) alloc() *Node {
+	if len(c.free) == 0 {
+		c.size = min(max(2*c.size, 8), nodeChunkLen)
+		c.free = make([]Node, c.size)
+	}
+	n := &c.free[0]
+	c.free = c.free[1:]
+	return n
 }
 
 // stripWhitespaceChildren removes whitespace-only text children of el when the
@@ -1026,18 +1313,9 @@ func lexicalName(n xml.Name) string {
 func charsetReader(charset string, input io.Reader) (io.Reader, error) {
 	switch strings.ToLower(charset) {
 	case "us-ascii", "ascii", "iso-646", "us_ascii":
-		b, err := io.ReadAll(input)
-		if err != nil {
-			return nil, err
-		}
-		for i, c := range b {
-			if c > 0x7f {
-				return nil, fmt.Errorf(
-					"declared encoding %s but byte %d at offset %d is not ASCII",
-					charset, c, i)
-			}
-		}
-		return bytes.NewReader(b), nil
+		// Checked as it streams, rather than by reading the rest of the
+		// document into a second copy first.
+		return &asciiReader{r: input, charset: charset}, nil
 	case "iso-8859-1", "latin1", "iso8859-1", "iso_8859-1":
 		b, err := io.ReadAll(input)
 		if err != nil {
@@ -1051,4 +1329,49 @@ func charsetReader(charset string, input io.Reader) (io.Reader, error) {
 		return bytes.NewReader(out.Bytes()), nil
 	}
 	return nil, fmt.Errorf("unsupported encoding %q", charset)
+}
+
+// srcTee copies what is read from r into buf until buf is set to nil.
+type srcTee struct {
+	r   io.Reader
+	buf *strings.Builder
+}
+
+func (t *srcTee) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if t.buf != nil {
+		t.buf.Write(p[:n])
+	}
+	return n, err
+}
+
+// asciiReader passes seven-bit bytes through and fails at the first byte
+// above 0x7f, naming its offset in the stream it was handed.
+//
+// It used to read the whole stream before returning anything, and its errors
+// were then wrapped by the tokeniser as a failure to open the charset. A
+// reader error is not wrapped, so the wording is supplied here, keeping the
+// messages what they were. What streaming does change is precedence: in a
+// document that is also malformed before its first non-ASCII byte, that
+// error is now the one reported.
+type asciiReader struct {
+	r       io.Reader
+	charset string
+	off     int
+}
+
+func (a *asciiReader) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	for i, c := range p[:n] {
+		if c > 0x7f {
+			return i, fmt.Errorf(
+				"xml: opening charset %q: declared encoding %s but byte %d at offset %d is not ASCII",
+				a.charset, a.charset, c, a.off+i)
+		}
+	}
+	a.off += n
+	if err != nil && err != io.EOF {
+		err = fmt.Errorf("xml: opening charset %q: %w", a.charset, err)
+	}
+	return n, err
 }

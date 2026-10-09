@@ -3,6 +3,7 @@ package xpath
 import (
 	"fmt"
 
+	"github.com/knroy/go-xml/internal/xpathleaf"
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -43,7 +44,7 @@ func (e *NamedFunctionRef) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, fmt.Errorf("XPST0017: unknown function %s with %d argument(s)",
 			e.Name.Clark(), e.Arity)
 	}
-	item := functionItemFor(e.Name, e.Arity, fn.Call)
+	item := functionItemFor(e.Name, e.Arity, hostBoundCall(ctx, fn))
 	item.Signature = fn.Signature
 	item.VariadicSignature = fn.VariadicSignature
 	// A named function reference to a context-dependent function retains the
@@ -141,9 +142,10 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			// that is in scope throughout the module. The focus has no such
 			// problem -- it is a property of where the reference stands, and
 			// that is exactly what 3.1.6 says to keep.
-			// Bindings are the Vars map plus the Parent chain lookups walk,
-			// so both come from the call.
+			// Bindings are the Vars map, the inline WithVar pair and the
+			// Parent chain lookups walk, so all three come from the call.
 			sub.Vars, sub.Parent = c.Vars, c.Parent
+			sub.varURI, sub.varLocal, sub.varVal = c.varURI, c.varLocal, c.varVal
 			// The retained focus does not retain the host's dynamic-call
 			// markers. XSLT 3.0 24.3 says the XSLT extensions to the dynamic
 			// context are not part of a function item's closure, so a marker
@@ -165,8 +167,28 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			for _, name := range ClearedOnDynamicCall {
 				p = p.WithVar(name, nil)
 			}
+			// The host state is a binding too: it comes from the call, with
+			// the current item cleared as the variables above are.
+			p.host = hostOnCall(c.host, false)
 		}
 		return inner(p, args)
+	}
+}
+
+// hostBoundCall is fn.Call for a function item made from fn at ctx: wrapped,
+// if the host asks, to run under the host state in force at ctx rather than at
+// the call. See xpathleaf.BindHost.
+func hostBoundCall(ctx *Context, fn Function) func(*Context, []xdm.Sequence) (xdm.Sequence, error) {
+	if xpathleaf.BindHost == nil {
+		return fn.Call
+	}
+	restore := xpathleaf.BindHost(ctx, fn.Name)
+	if restore == nil {
+		return fn.Call
+	}
+	call := fn.Call
+	return func(c *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		return call(restore(c).(*Context), args)
 	}
 }
 
@@ -514,6 +536,11 @@ var MarkedOnDynamicCall []xdm.QName
 
 // clearHostVars applies both host registries for one call.
 func clearHostVars(ctx *Context) *Context {
+	if h := hostOnCall(ctx.host, true); h != ctx.host {
+		n := *ctx
+		n.host = h
+		ctx = &n
+	}
 	for _, name := range ClearedOnDynamicCall {
 		ctx = ctx.WithVar(name, nil)
 	}

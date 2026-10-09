@@ -30,6 +30,10 @@ Two sets of exceptions, both verified by the boundary tests described in
   other than "the caller set nothing". Elsewhere — `xsd.ValidateOptions`,
   `relaxng.ValidateOptions`, `xslt.TransformOptions` — a negative `MaxDepth`
   really does mean no limit.
+* **A negative `MaxItems` really is no bound** (`xpath.Context`,
+  `xslt.TransformOptions`, CLI `-max-items`). With it removed, an expression
+  such as `1 to 1000000000000` can exhaust memory and end the process rather
+  than return `XPDY0130`, so remove it only for input you trust.
 * **`xsd.HTTPResolver.MaxBytes` has no unlimited setting.** A negative value
   refuses every fetch, with an error naming the limit. That is deliberate: a
   schema is not a stream, so an unbounded read is a way to be handed an
@@ -251,6 +255,11 @@ schema, err := xsd.LoadFile("main.xsd", xsd.Options{
 
 ### Resolvers
 
+A program that never fetches schemas over the network can build with
+`-tags goxml_nohttp`: `HTTPResolver` and `net/http` are left out, which makes
+the go-xml CLI start about 1.6 ms faster with 4.8 MB less memory. The default
+build is unchanged.
+
 `FileResolver` reads from disk. **Set `Root`** whenever a location could be
 influenced by anyone but you — it refuses `..`, absolute paths, `file:` URLs and
 symlinks that lead outside:
@@ -372,7 +381,19 @@ xsd.ValidateOptions{MaxDepth: 5000}    // and validate it
 
 `Annotate: true` writes to the tree. A compiled `*Schema` is safe to share
 across goroutines, but a *tree* being annotated is not — give each goroutine its
-own parse, or leave `Annotate` off.
+own parse, or leave `Annotate` off. With `Annotate` off, validation writes
+nothing to the tree, so one tree can be checked from several goroutines.
+
+`Schema.ValidateCopy(root, opts)` (and `ValidateCopyContext`) validates a copy
+of the whole tree instead and returns the copy's counterpart of `root`, typed
+as `Annotate` would type it, valid or not, together with the error `Validate`
+would have returned. The input is never written to, so one tree can be
+validated from several goroutines at once. The copy carries every typing
+property, base and document URIs, the DOCTYPE and unparsed entities;
+whitespace stripping and default attributes happen on the copy. Error
+positions come from the original when it was parsed with `TrackPositions`;
+`Position()` on a copied node itself reports none. The copy is a new tree, so
+`doc(document-uri($copy)) is $copy` is false until the caller registers it.
 
 ---
 
@@ -413,6 +434,7 @@ sty, err := xslt.Compile(sheet.Root, xslt.CompileOptions{
 | `Resolver` | `ModuleResolver` | disabled | Loads included and imported modules. **Nil means a stylesheet cannot pull in another file** — the safe default. `xslt.NewFileResolver(roots...)` confines it to directories you name, each covering its subdirectories to any depth; a symlink out of a root is refused at the open by `os.Root`, so it does not escape. |
 | `StaticParams` | `map[string]xdm.Sequence` | none | Values for `xsl:param static="yes"`, keyed by the parameter's `{uri}local` name. A static parameter is bound before static analysis begins, so its value must come from the caller rather than from `Transform`'s runtime `Params`. |
 | `SchemaResolver` | `xsd.Resolver` | disabled | Loads schemas for `xsl:import-schema`. |
+| `SchemaParseOptions` | `xdm.ParseOptions` | refuses a DOCTYPE | Parser options for every schema document `xsl:import-schema` loads, and for what those documents include and import. A document a `CatalogResolver` answers from its own table may carry a DOCTYPE regardless. |
 | `XPathVersion` | `*xpath.Version` | derive | Pins the XPath version for every expression in the stylesheet, overriding what the stylesheet declares. Nil derives it from the `version` attribute. See [Choosing a language version](#choosing-a-language-version). |
 
 ### Choosing a language version
@@ -499,6 +521,7 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{
 | `Documents` | `xpath.DocumentResolver` | disabled | Resolves `fn:doc` and `fn:document`, and `fn:transform`'s `stylesheet-location` and `source-location`. **Nil disables them**, which is the default: a stylesheet that can open arbitrary URIs is an SSRF and file-disclosure vector. |
 | `Collections` | `xpath.CollectionResolver` | disabled | Resolves `fn:collection`. **Nil disables it**, and setting `Documents` does not set this — the two are separate switches on purpose. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Template recursion limit, and the bound on `fn:transform` nesting. Catches a stylesheet with no base case. |
+| `MaxItems` | `int` | `xpath.MaxItems` = 5,000,000 | Items one transformation may materialise, `XPDY0130` past it. Negative removes the bound; nested `fn:transform` and `xsl:evaluate` keep the caller's. |
 | `DisableAssertions` | `bool` | `false` — assertions enabled | Turns off `xsl:assert` checking for the whole transformation. XSLT 3.0 §22.2: "By default, assertions are enabled." |
 | `InitialMode` | `string` | default mode | Mode for the initial `apply-templates`. |
 | `InitialTemplate` | `string` | match the root | Invokes a named template instead, which is how a stylesheet of only named templates is entered. |
@@ -565,6 +588,17 @@ defer cancel()
 res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{})
 ```
 
+### Source trees are read-only during a transform
+
+A transform indexes the parsed documents it reads: `xsl:key` tables, and,
+for `//x[p]` paths from a document root, which nodes have an `x` child. Both
+are built on first use and kept until the transform ends. Do not change a
+parsed tree's `Children`, `Attrs` or names from Go while a transform that
+reads it is running, for example from a host function; the indexes would
+then answer for the old tree. Trees built during the transform (temporary
+trees, results) and trees not produced by `xdm.Parse` are never indexed this
+way.
+
 ---
 
 ## xpath.CompileOptions
@@ -625,6 +659,7 @@ seq, err := xpath.Eval(`$n * 2`, ctx, nil)   // [6]
 | `Collections` | `CollectionResolver` | Resolves `fn:collection`. Nil disables it. Independent of `Docs`. |
 | `Parent` | `*Context` | The enclosing context, for nested evaluation. |
 | `Depth` | `int` | Recursion depth, maintained by the engine. |
+| `MaxItems` | `int` | Items an evaluation may materialise. Zero is `xpath.MaxItems` (5,000,000); negative is no bound; a nested evaluation adopts the caller's bound and cannot raise it. |
 
 ### fn:collection
 
@@ -926,6 +961,7 @@ seq, err := q.Eval(xpath.NewContext(nil, xpath.Builtins()))
 | `MaxModuleBytes` | `int64` | *(none)* | Total module source one compilation may read, cumulatively. Zero means `DefaultMaxModuleBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
 | `Schemas` | `[]Schema` | *(the schema store)* | Schemas `import schema` may find, registered by target namespace with their source or their assembled `*xsd.Schema` components. Consulted before `SchemaResolver`, and reads nothing. |
 | `SchemaResolver` | `xsd.Resolver` | *(none)* | Locates a schema `Schemas` does not have. **Nil by default: with no resolver an `at` location is never opened** and an import that cannot be answered is `XQST0059`. The same resolver is handed to `xsd` for the imported schema's own `xs:include` and `xs:import`. |
+| `SchemaParseOptions` | `xdm.ParseOptions` | refuses a DOCTYPE | Parser options for every schema document `import schema` reads, from the store's source text or a resolver, and for its includes and imports; shared by library modules and `fn:load-xquery-module`. A document a `CatalogResolver` answers from its own table may carry a DOCTYPE regardless. |
 | `MaxSchemaBytes` | `int64` | *(none)* | Total schema source one compilation may read, cumulatively across every import. Zero means `DefaultMaxSchemaBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
 
 Nine prefixes are bound before `Namespaces` is consulted and never need to be

@@ -53,8 +53,9 @@ func isNCName4(s string) bool {
 // what the fifth edition's ranges swept back in, is everything else: the
 // combining marks (Mn, Mc), the digits (Nd), and the modifier symbols.
 func isNameStart4(r rune) bool {
-	if r == '_' {
-		return true
+	if r < 0x80 {
+		// ASCII holds no Lo, Lt or Lm letters, so the letters are A-Z a-z.
+		return 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || r == '_'
 	}
 	return unicode.In(r, unicode.Lu, unicode.Ll, unicode.Lo, unicode.Lt,
 		unicode.Lm)
@@ -62,6 +63,10 @@ func isNameStart4(r rune) bool {
 
 // isNameChar4 is the fourth edition's NameChar, less the colon.
 func isNameChar4(r rune) bool {
+	if r < 0x80 {
+		// ASCII holds no combining marks; its digits are 0-9.
+		return isNameStart4(r) || '0' <= r && r <= '9' || r == '-' || r == '.'
+	}
 	if isNameStart4(r) {
 		return true
 	}

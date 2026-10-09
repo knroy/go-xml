@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xdmbuild"
 	"github.com/knroy/go-xml/xpath"
 )
 
@@ -212,8 +213,13 @@ func isGeneralPatternForm(src string) bool {
 			// These the step grammar already handles, and better: it matches
 			// them by membership without evaluating the rest of the path.
 			return false
+		case "doc", "root", "element-with-id":
+			return true
 		}
-		return true
+		// OuterFunctionName names no other unprefixed function, so
+		// "copy-of($x)//a" is XTSE0340 (match-077). A prefixed name is
+		// left to the expression compiler.
+		return strings.Contains(src[:strings.IndexByte(src, '(')], ":")
 	}
 	// A parenthesised group appearing as a later step, "x/(a|b)/text()".
 	return containsTopLevel(src, "/(")
@@ -446,12 +452,22 @@ func checkQBraceName(src string) error {
 // patternsAllow30 reports whether the pattern being compiled may use the
 // forms XSLT 3.0 added.
 //
-// A 2.0 stylesheet must get XTSE0340 for them, not a working match: telling it
-// that "self::foo" or ".[E]" is a pattern would silently change which template
-// fires. The answer rides on the resolver because that is what already carries
-// the version of the element the pattern was written on, and a pattern is a
-// static property of that element exactly as its base URI is.
+// A 3.0 processor always may. Section 3.9.2 defines "no differences" for
+// XSLT 2.0 behavior, so "an XSLT 3.0 processor will therefore produce the same
+// results whether the effective version of an element is set to 2.0 or 3.0":
+// SchXslt-compiled Schematron writes match="root()" in version="2.0" modules,
+// and Saxon runs them.
+//
+// A 2.0 processor (MaxVersion 2.0) must give a 2.0 stylesheet XTSE0340 for
+// them, not a working match: telling it that "self::foo" or ".[E]" is a
+// pattern would silently change which template fires. The answer rides on the
+// resolver because that is what already carries the version of the element
+// the pattern was written on, and a pattern is a static property of that
+// element exactly as its base URI is.
 func patternsAllow30(ns xpath.NamespaceResolver) bool {
+	if processorAtLeast30() {
+		return true
+	}
 	r, ok := ns.(*nsResolver)
 	// Exactly the 3.0 family, not "3.0 or later". A stylesheet declaring
 	// version="25.0" is in forwards-compatible mode: it is processed by the
@@ -478,7 +494,7 @@ func declaredXSLTVersion(el *xdm.Node) float64 {
 // an atomic value is never among them. This is what lets xsl:apply-templates
 // over a sequence of integers dispatch on ".[. mod 3 = 0]".
 func (p *Pattern) matchesAtomicItem(item xdm.Item, ctx *xpath.Context) (bool, error) {
-	ctx = ctx.WithVar(currentVar, xdm.One(item))
+	ctx = withCurrentItem(ctx, item)
 	// Section 24.3 clears the current output URI while a pattern is
 	// evaluated, whether the item being matched is a node or an atomic
 	// value. Pattern.Matches does the same for the node case;
@@ -802,8 +818,12 @@ func isUnionKeywordAt(s string, i int) bool {
 		return false
 	}
 	// An operator needs an operand before it; at the front of the pattern
-	// "union" can only be a name.
-	return strings.TrimSpace(s[:i]) != ""
+	// "union" can only be a name. So it is straight after a "/", "::" or
+	// "@": XPath's leading-lone-slash constraint reads "/ union /*" as the
+	// path "/union/*", since "union" can start a RelativePathExpr, and
+	// match-038 requires that reading.
+	before := strings.TrimSpace(s[:i])
+	return before != "" && !strings.ContainsRune("/:@", rune(before[len(before)-1]))
 }
 
 // isNameByte reports whether c can appear inside an unprefixed XML name. It is
@@ -1020,23 +1040,23 @@ func (g *generalPattern) matchesFromVirtualParent(root, node *xdm.Node,
 func wrapInDocument(el *xdm.Node) (doc, copied *xdm.Node) {
 	var clone func(n, parent *xdm.Node) *xdm.Node
 	clone = func(n, parent *xdm.Node) *xdm.Node {
-		c := *n
-		c.Parent = parent
-		c.Children = nil
-		c.Attrs = nil
+		c := xdmbuild.ShallowCopy(n)
+		xdmbuild.SetParent(c, parent)
+		xdmbuild.SetChildren(c, nil)
+		xdmbuild.SetAttrs(c, nil)
 		for _, a := range n.Attrs {
-			ac := *a
-			ac.Parent = &c
-			c.Attrs = append(c.Attrs, &ac)
+			ac := xdmbuild.ShallowCopy(a)
+			xdmbuild.SetParent(ac, c)
+			xdmbuild.SetAttrs(c, append(c.Attrs, ac))
 		}
 		for _, ch := range n.Children {
-			c.Children = append(c.Children, clone(ch, &c))
+			xdmbuild.SetChildren(c, append(c.Children, clone(ch, c)))
 		}
-		return &c
+		return c
 	}
-	doc = &xdm.Node{Kind: xdm.KindDocument}
+	doc = xdmbuild.NewDocument("")
 	copied = clone(el, doc)
-	doc.Children = []*xdm.Node{copied}
+	xdmbuild.SetChildren(doc, []*xdm.Node{copied})
 	return doc, copied
 }
 

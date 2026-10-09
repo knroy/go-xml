@@ -62,9 +62,7 @@ func (p *compactParser) decorate(root *xdm.Node) {
 		p.b.attr(root, "ns", p.defaultNS)
 	}
 	for prefix, uri := range p.namespaces {
-		root.Namespaces = append(root.Namespaces, &xdm.Node{
-			Kind: xdm.KindNamespace, Name: xdm.QName{Local: prefix}, Value: uri,
-		})
+		root.AddNamespace(prefix, uri)
 	}
 	// datatypeLibrary is inherited the same way ns= is, so the one written
 	// without a prefix — "datatypes xsd = ..." names a prefix, but a schema
@@ -79,6 +77,9 @@ func (p *compactParser) decorate(root *xdm.Node) {
 // grammar rather than being a pattern.
 func (p *compactParser) startsGrammarContent() bool {
 	if p.atKeyword("start") || p.atKeyword("div") || p.atKeyword("include") {
+		return true
+	}
+	if p.atAnnotationElement() {
 		return true
 	}
 	// An identifier begins a grammar only when it is being defined. A
@@ -287,8 +288,40 @@ func (p *compactParser) parseGrammarBody(g *xdm.Node, end tokenKind) error {
 	}
 }
 
-// parseGrammarContent reads one start, define, div or include.
+// atAnnotationElement reports whether the current token begins an annotation
+// element standing on its own among a grammar's members:
+//
+//	member ::= annotatedComponent | annotationElementNotKeyword
+//	annotationElementNotKeyword ::= foreignElementNameNotKeyword annotationAttributesContent
+//
+// that is, a prefixed name or a non-keyword identifier followed by "[".
+// DocBook 5 opens its grammar with a run of them (s:ns [ prefix = ... ]). Nothing
+// else at this level is a name followed by "[", so the shape is unambiguous.
+func (p *compactParser) atAnnotationElement() bool {
+	switch p.tok.kind {
+	case tokCName, tokEscapedIdent:
+	case tokIdent:
+		if keywords[p.tok.text] {
+			return false
+		}
+	default:
+		return false
+	}
+	scan := *p.lex
+	next, err := scan.next()
+	return err == nil && next.kind == tokPunct && next.text == "["
+}
+
+// parseGrammarContent reads one start, define, div, include, or a free-standing
+// annotation element, which carries no schema meaning and is skipped.
 func (p *compactParser) parseGrammarContent(g *xdm.Node) error {
+	if p.atAnnotationElement() {
+		p.takeDoc()
+		if err := p.advance(); err != nil {
+			return err
+		}
+		return p.skipAnnotation()
+	}
 	doc := p.takeDoc()
 	switch {
 	case p.atKeyword("start"):
@@ -350,9 +383,9 @@ func (p *compactParser) parseStart(g *xdm.Node, doc *annotation) error {
 	if combine != "" {
 		p.b.attr(s, "combine", combine)
 	}
-	s.Children = append(s.Children, pat)
+	s.AppendChild(pat)
 	p.attachDoc(s, doc)
-	g.Children = append(g.Children, s)
+	g.AppendChild(s)
 	return nil
 }
 
@@ -375,9 +408,9 @@ func (p *compactParser) parseDefine(g *xdm.Node, doc *annotation) error {
 	if combine != "" {
 		p.b.attr(d, "combine", combine)
 	}
-	d.Children = append(d.Children, pat)
+	d.AppendChild(pat)
 	p.attachDoc(d, doc)
-	g.Children = append(g.Children, d)
+	g.AppendChild(d)
 	return nil
 }
 
@@ -401,7 +434,7 @@ func (p *compactParser) parseDiv(g *xdm.Node, doc *annotation) error {
 		return err
 	}
 	p.attachDoc(d, doc)
-	g.Children = append(g.Children, d)
+	g.AppendChild(d)
 	return nil
 }
 
@@ -439,7 +472,7 @@ func (p *compactParser) parseInclude(g *xdm.Node, doc *annotation) error {
 		}
 	}
 	p.attachDoc(inc, doc)
-	g.Children = append(g.Children, inc)
+	g.AppendChild(inc)
 	return nil
 }
 
@@ -511,8 +544,6 @@ func (p *compactParser) qnameFor(n *xdm.Node, prefix, local string) (string, err
 	if !ok {
 		return "", p.errorf("the prefix %q is not bound", prefix)
 	}
-	n.Namespaces = append(n.Namespaces, &xdm.Node{
-		Kind: xdm.KindNamespace, Name: xdm.QName{Local: prefix}, Value: uri,
-	})
+	n.AddNamespace(prefix, uri)
 	return prefix + ":" + local, nil
 }

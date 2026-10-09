@@ -1,8 +1,10 @@
 package xdm
 
 import (
+	"runtime"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 func TestParseBasicTree(t *testing.T) {
@@ -403,5 +405,171 @@ func TestTreeXMLVersion(t *testing.T) {
 	}
 	if v := NewTree().XMLVersion; v != "" {
 		t.Errorf("NewTree: XMLVersion %q, want empty", v)
+	}
+}
+
+// TestParseNodeChunks pins the chunked node allocation in Parse: every node
+// is distinct and correctly linked across chunk boundaries, adjacent character
+// data still merges into one text node, and the parse no longer pays an
+// allocation per element, attribute and text node.
+func TestParseNodeChunks(t *testing.T) {
+	const n = 3*nodeChunkLen + 7 // elements; three nodes each spans many chunks
+	doc := "<r>" + strings.Repeat(`<e a="1">x&amp;y</e>`, n) + "</r>"
+	tree, err := ParseString(doc, ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := tree.Root.Children[0]
+	if len(r.Children) != n {
+		t.Fatalf("got %d children, want %d", len(r.Children), n)
+	}
+	seen := map[*Node]bool{}
+	for i, e := range r.Children {
+		if e.Kind != KindElement || e.Name.Local != "e" || e.Parent != r {
+			t.Fatalf("child %d: kind %v name %q, parent ok %v", i, e.Kind, e.Name.Local, e.Parent == r)
+		}
+		if len(e.Attrs) != 1 || e.Attrs[0].Value != "1" || e.Attrs[0].Parent != e {
+			t.Fatalf("child %d: bad attribute %+v", i, e.Attrs)
+		}
+		if len(e.Children) != 1 || e.Children[0].Kind != KindText || e.Children[0].Value != "x&y" {
+			t.Fatalf("child %d: text not merged into one node: %d children", i, len(e.Children))
+		}
+		for _, m := range []*Node{e, e.Attrs[0], e.Children[0]} {
+			if seen[m] {
+				t.Fatalf("child %d: node %p handed out twice", i, m)
+			}
+			seen[m] = true
+		}
+	}
+
+	// 1,000 elements of three nodes each took 10,039 allocations with a
+	// separate one per node and 7,069 with chunks. The bound sits between
+	// the two, so a return to per-node allocation fails it.
+	small := "<r>" + strings.Repeat(`<e a="1">t</e>`, 1000) + "</r>"
+	if got := testing.AllocsPerRun(5, func() { _, _ = ParseString(small, ParseOptions{}) }); got > 8500 {
+		t.Errorf("parse of 1,000 elements: %.0f allocations, want at most 8,500", got)
+	}
+}
+
+// TestParseSharesRepeatedStrings pins T18: within one parse, a repeated
+// element or attribute name and a repeated whitespace-only text value are one
+// string, and reusing the tokenizer's attribute slice from tag to tag does not
+// let one element's attributes leak into the next.
+func TestParseSharesRepeatedStrings(t *testing.T) {
+	// Names longer than one byte: Go already shares every one-byte string.
+	doc := "<r>\n  <item id=\"1\" b=\"2\">x</item>\n  <item id=\"3\">y</item>\n  <f/>\n</r>"
+	tree, err := ParseString(doc, ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := tree.Root.Children[0]
+	var els, spaces []*Node
+	for _, c := range r.Children {
+		switch c.Kind {
+		case KindElement:
+			els = append(els, c)
+		case KindText:
+			spaces = append(spaces, c)
+		}
+	}
+	if len(els) != 3 || len(spaces) != 4 {
+		t.Fatalf("got %d elements and %d text nodes, want 3 and 4", len(els), len(spaces))
+	}
+	same := func(a, b string) bool { return unsafe.StringData(a) == unsafe.StringData(b) }
+	if !same(els[0].Name.Local, els[1].Name.Local) {
+		t.Errorf("element name item is not shared")
+	}
+	if !same(els[0].Attrs[0].Name.Local, els[1].Attrs[0].Name.Local) {
+		t.Errorf("attribute name id is not shared")
+	}
+	if !same(spaces[0].Value, spaces[1].Value) || spaces[0].Value != "\n  " {
+		t.Errorf("whitespace text %q is not shared", spaces[0].Value)
+	}
+	var got []string
+	for _, e := range els {
+		var s []string
+		for _, a := range e.Attrs {
+			s = append(s, a.Name.Local+"="+a.Value)
+		}
+		got = append(got, e.Name.Local+"["+strings.Join(s, ",")+"]")
+	}
+	if want := "item[id=1,b=2] item[id=3] f[]"; strings.Join(got, " ") != want {
+		t.Errorf("attributes: got %q, want %q", strings.Join(got, " "), want)
+	}
+}
+
+// TestParseTextRunIsLinear pins that character data split across many tokens
+// -- CDATA sections between text -- is joined once per text node rather than
+// copied again for every piece, which made untrusted input of n sections cost
+// O(n^2). It also pins what joining must not change: CDATA merges with its
+// neighbours, while a comment or PI between two runs keeps them separate
+// nodes, and whitespace stripping still sees the joined value.
+func TestParseTextRunIsLinear(t *testing.T) {
+	children := func(doc string, opts ParseOptions) string {
+		t.Helper()
+		tree, err := ParseString(doc, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, k := range tree.Root.Children[0].Children {
+			got = append(got, k.Kind.String()+k.Value)
+		}
+		return strings.Join(got, " ")
+	}
+	for _, c := range []struct {
+		doc  string
+		opts ParseOptions
+		want string
+	}{
+		{`<r>a<![CDATA[b]]>c&amp;d<![CDATA[]]><![CDATA[e]]></r>`, ParseOptions{}, "text()abc&de"},
+		{`<r>a<!--c-->b<?p x?>c</r>`, ParseOptions{},
+			"text()a comment()c text()b processing-instruction()x text()c"},
+		{"<r> <![CDATA[ ]]> <e/></r>", ParseOptions{StripSpace: func(QName) bool { return true }},
+			"element()"},
+	} {
+		if got := children(c.doc, c.opts); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.doc, got, c.want)
+		}
+	}
+
+	// 20,000 one-byte sections between one-byte texts: joined piece by piece,
+	// this allocated ~800 MB; joined once, a few hundred KB.
+	doc := "<r>" + strings.Repeat("a<![CDATA[b]]>", 20000) + "</r>"
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if _, err := ParseString(doc, ParseOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	if mb := (after.TotalAlloc - before.TotalAlloc) >> 20; mb > 50 {
+		t.Errorf("parsing 20,000 CDATA sections allocated %d MB, want at most 50", mb)
+	}
+}
+
+// TestParsedSlicesAreExactSize: a parse cuts every element's Children and
+// Attrs from shared arrays, so each must end at its own last entry. An append
+// through the mutation API then reallocates rather than overwriting the
+// children or attributes of the element parsed next.
+func TestParsedSlicesAreExactSize(t *testing.T) {
+	tree, err := ParseString(`<r><a p="1" q="2"><x/><y/></a><b s="3"><z/></b></r>`, ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := tree.Root.ChildElements()[0]
+	a, b := r.Children[0], r.Children[1]
+	a.AppendChild(&Node{Kind: KindElement, Name: QName{Local: "new"}})
+	a.AddAttr(&Node{Name: QName{Local: "n"}, Value: "4"})
+	if got := b.Children[0].Name.Local; got != "z" {
+		t.Errorf("b's first child is %q after appending to a, want z", got)
+	}
+	if got := b.Attrs[0].Name.Local; got != "s" {
+		t.Errorf("b's first attribute is %q after adding to a, want s", got)
+	}
+	if len(a.Children) != 3 || a.Children[2].Name.Local != "new" || len(a.Attrs) != 3 {
+		t.Errorf("a has %d children and %d attributes, want 3 and 3", len(a.Children), len(a.Attrs))
+	}
+	if len(tree.Root.Children) != 1 || tree.Root.Children[0] != r {
+		t.Errorf("document node children = %v", tree.Root.Children)
 	}
 }

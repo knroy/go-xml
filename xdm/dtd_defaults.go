@@ -24,7 +24,14 @@ type attDeclaredType struct {
 type attDefault struct {
 	element string
 	name    string
-	value   string
+	value   string // as written; normalizeAttDefaults makes it the value
+
+	// at is the index of its ATTLIST among the subset's declarations, and
+	// entities maps each general entity the subset declares to the index of
+	// its first declaration: a default may refer only to an entity declared
+	// before it (XML 1.0 §4.1, WFC: Entity Declared).
+	at       int
+	entities map[string]int
 }
 
 // parseAttListDefaults extracts the defaulted attributes from a DOCTYPE
@@ -37,7 +44,8 @@ type attDefault struct {
 //
 // Entities are the reason DOCTYPE is refused by default: expanding them is
 // where billion-laughs and XXE live. Nothing here expands anything, resolves
-// anything, or reads a file. The subset arrives from encoding/xml as one
+// anything, or reads a file; a default's entity references are expanded
+// later, by normalizeAttDefaults, under the entity table's own bounds. The subset arrives from encoding/xml as one
 // opaque Directive token and is scanned as text, so a declaration this does
 // not understand is skipped rather than acted on.
 //
@@ -58,19 +66,21 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 	// declaration is binding and later ones are ignored. The subset arrives
 	// internal part first, so first in the text is first in the DTD.
 	seen := map[string]bool{}
-	for {
-		i := strings.Index(subset, "<!ATTLIST")
-		if i < 0 {
-			return out, types
+	entities := map[string]int{}
+	at := -1
+	for kw, body := range markupDecls(subset) {
+		at++
+		if kw == "ENTITY" {
+			if f := attListFields(body); len(f) > 0 && f[0] != "%" {
+				if _, dup := entities[f[0]]; !dup {
+					entities[f[0]] = at
+				}
+			}
+			continue
 		}
-		subset = subset[i+len("<!ATTLIST"):]
-		end := strings.IndexByte(subset, '>')
-		if end < 0 {
-			return out, types
+		if kw != "ATTLIST" {
+			continue
 		}
-		body := subset[:end]
-		subset = subset[end+1:]
-
 		fields := attListFields(body)
 		if len(fields) < 2 {
 			continue
@@ -102,11 +112,11 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 				// No default to supply.
 			case decl == "#FIXED":
 				if i < len(fields) {
-					out = append(out, attDefault{element, name, unquote(fields[i])})
+					out = append(out, attDefault{element, name, unquote(fields[i]), at, entities})
 					i++
 				}
 			case strings.HasPrefix(decl, `"`), strings.HasPrefix(decl, `'`):
-				out = append(out, attDefault{element, name, unquote(decl)})
+				out = append(out, attDefault{element, name, unquote(decl), at, entities})
 			default:
 				// decl was the attribute *type*; the default follows it.
 				if i < len(fields) {
@@ -116,11 +126,11 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 					case d == "#REQUIRED", d == "#IMPLIED":
 					case d == "#FIXED":
 						if i < len(fields) {
-							out = append(out, attDefault{element, name, unquote(fields[i])})
+							out = append(out, attDefault{element, name, unquote(fields[i]), at, entities})
 							i++
 						}
 					case strings.HasPrefix(d, `"`), strings.HasPrefix(d, `'`):
-						out = append(out, attDefault{element, name, unquote(d)})
+						out = append(out, attDefault{element, name, unquote(d), at, entities})
 					}
 				}
 			}
@@ -130,6 +140,7 @@ func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 			seen[key] = true
 		}
 	}
+	return out, types
 }
 
 // attListFields splits an ATTLIST body into tokens, keeping a quoted value or
@@ -243,6 +254,18 @@ func attrLexical(n xml.Name) string {
 	return n.Space + ":" + n.Local
 }
 
+// lexicalIs reports whether s is the lexical QName prefix:local (or local
+// with no prefix), without building it. DTD attribute typing compares every
+// declaration with every element and attribute name, so building the names
+// to compare cost an allocation per declaration per element.
+func lexicalIs(prefix, local, s string) bool {
+	if prefix == "" {
+		return s == local
+	}
+	return len(s) == len(prefix)+1+len(local) && s[len(prefix)] == ':' &&
+		s[:len(prefix)] == prefix && s[len(prefix)+1:] == local
+}
+
 // applyAttTypes stamps the ID, IDREF and IDREFS annotations a DTD declares,
 // and collapses the spaces in every attribute declared with a non-CDATA type.
 //
@@ -253,11 +276,11 @@ func attrLexical(n xml.Name) string {
 // both.
 func applyAttTypes(el *Node, types []attDeclaredType) {
 	for _, t := range types {
-		if t.element != el.Name.Lexical() && t.element != el.Name.Local {
+		if !lexicalIs(el.Name.Prefix, el.Name.Local, t.element) && t.element != el.Name.Local {
 			continue
 		}
 		for _, a := range el.Attrs {
-			if a.Name.Lexical() != t.attr && a.Name.Local != t.attr {
+			if !lexicalIs(a.Name.Prefix, a.Name.Local, t.attr) && a.Name.Local != t.attr {
 				continue
 			}
 			// XML 1.0 §3.3.3: a value whose declared type is not CDATA
@@ -299,19 +322,10 @@ func applyAttTypes(el *Node, types []attDeclaredType) {
 // misparse loses the optimisation rather than deleting content.
 func parseElementOnlyDecls(subset string) map[string]bool {
 	var out map[string]bool
-	for {
-		i := strings.Index(subset, "<!ELEMENT")
-		if i < 0 {
-			return out
+	for kw, body := range markupDecls(subset) {
+		if kw != "ELEMENT" {
+			continue
 		}
-		subset = subset[i+len("<!ELEMENT"):]
-		end := strings.IndexByte(subset, '>')
-		if end < 0 {
-			return out
-		}
-		body := subset[:end]
-		subset = subset[end+1:]
-
 		fields := strings.Fields(body)
 		if len(fields) < 2 {
 			continue
@@ -326,6 +340,7 @@ func parseElementOnlyDecls(subset string) map[string]bool {
 		}
 		out[name] = true
 	}
+	return out
 }
 
 // isElementOnlyModel reports whether a content model is element content.

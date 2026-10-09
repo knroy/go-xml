@@ -246,6 +246,15 @@ With a fallback set, the lookup order is:
 
 With no fallback the catalog answers whatever it matches, in the same order.
 
+A document the catalog answers from its own table may carry a DOCTYPE, so the
+W3C schema for schemas, which declares its entities in an internal subset,
+loads without `Options.ParseOptions.AllowDOCTYPE`. That option would open every
+schema document the load reads, including those a fallback fetches on an
+untrusted schema's say-so. A catalog entry is bytes the caller chose. External
+entities and the entity budgets are unchanged, and a document the fallback
+returns is parsed with the caller's options as before. A host that resolves
+and parses a schema itself gets the same rule from `xsd.ParseDocument`.
+
 This matters more than it looks. Schemas published by the W3C import each other
 by absolute URL, and those fetches are throttled: the W3C's own copy of the
 XSLT 3.0 schema in the XSLT test suite was edited in 2021 to use a relative

@@ -65,7 +65,7 @@ func mediaTypeSheet(method string) string {
 // the html and xhtml methods write it, which is the content attribute of the
 // meta element they inject.
 //
-// Every other attribute the serialiser writes goes through escapeAttrRunes;
+// Every other attribute the serialiser writes goes through writeAttrRuns;
 // this one was concatenated raw, so a media-type holding `">` closed the
 // attribute and the tag and everything after it became live markup inside
 // <head>. The route is not contrived: media-type is an attribute value

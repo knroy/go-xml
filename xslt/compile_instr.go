@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
@@ -1513,6 +1514,45 @@ type evaluateInstr struct {
 	// yes do the schemas xsl:import-schema brought in reach the target
 	// expression; otherwise it sees the built-in types alone.
 	schemaAware *avt
+
+	// compiled remembers target expressions compiled against ns itself, by
+	// source text: DocBook evaluates the same few strings once per node.
+	compiledMu sync.Mutex
+	compiled   map[string]*xpath.Compiled
+}
+
+// maxEvaluateCache bounds evaluateInstr.compiled. Target expressions can be
+// computed from document data, so the set of strings is not bounded by the
+// stylesheet.
+// ponytail: past the cap new strings are compiled every time; LRU if a
+// workload cycles through more than this many.
+const maxEvaluateCache = 64
+
+// compile compiles src against ns, from the cache when ns is the element's own
+// resolver (no @namespace-context, no schema change).
+func (i *evaluateInstr) compile(src string, ns *nsResolver) (*xpath.Compiled, error) {
+	if ns == i.ns {
+		i.compiledMu.Lock()
+		c, ok := i.compiled[src]
+		i.compiledMu.Unlock()
+		if ok {
+			return c, nil
+		}
+	}
+	c, err := xpath.CompileWith(src, xpath.CompileOptions{
+		Namespaces: ns, Version: ns.xpathVersion,
+	})
+	if err == nil && ns == i.ns {
+		i.compiledMu.Lock()
+		if i.compiled == nil {
+			i.compiled = map[string]*xpath.Compiled{}
+		}
+		if len(i.compiled) < maxEvaluateCache {
+			i.compiled[src] = c
+		}
+		i.compiledMu.Unlock()
+	}
+	return c, err
 }
 
 // xsltOnlyFunctions is appendix G's list: the functions XSLT defines in the
@@ -1590,6 +1630,10 @@ type restrictedLibrary struct {
 	sheetFuncs *xpath.Library
 	sheet      *Stylesheet
 }
+
+// WrappedLibrary implements xpathleaf.StableLibrary: the answers depend only
+// on inner and the stylesheet's own functions, which are fixed after Compile.
+func (r restrictedLibrary) WrappedLibrary() any { return r.inner }
 
 func (r restrictedLibrary) Lookup(name xdm.QName, arity int) (xpath.Function, bool) {
 	if name.URI == xdm.NSFN && xsltOnlyFunctions[name.Local] {
@@ -1754,9 +1798,7 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// code would have been: 10.4 defines the error by *when* it happens, not
 	// by which rule was broken. The version is the module's, exactly as a
 	// statically written expression gets it.
-	comp, err := xpath.CompileWith(src, xpath.CompileOptions{
-		Namespaces: ns, Version: ns.xpathVersion,
-	})
+	comp, err := i.compile(src, ns)
 	if err != nil {
 		// An xdm.Error, not a wrap: ErrorCode reports the innermost code it
 		// can find, so wrapping would leave the failure carrying the target
@@ -2009,6 +2051,8 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
+	// 6.8: the current template rule is cleared within xsl:iterate.
+	rt = rt.clearCurrentRule()
 
 	// The carried state starts at the declared defaults, which are evaluated
 	// in the focus of the xsl:iterate instruction itself rather than of any
@@ -2022,13 +2066,6 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		carried[p.Name.Clark()] = v
 	}
-	// The declarations, by name, so that a value xsl:next-iteration supplies
-	// can be converted to the type the matching xsl:param asked for.
-	declared := make(map[string]*Variable, len(i.params))
-	for _, p := range i.params {
-		declared[p.Name.Clark()] = p
-	}
-
 	broke := false
 	for idx, it := range seq {
 		sub := rt.withCurrent(it, idx+1, len(seq))
@@ -2052,17 +2089,27 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// arrives needing them: iterate-042 builds an element and
 				// binds it to a parameter declared as="xs:string", which the
 				// rules atomise.
-				for k, v := range nx.params {
-					if p := declared[k]; p != nil {
+				//
+				// The parameters are walked in declaration order, not over
+				// the supplied map, so when two values fail conversion the
+				// XTTE0590 reported is the first declared, on every run.
+				// XTSE3130 has already refused a with-param naming no
+				// xsl:param, so nothing supplied is skipped.
+				if len(nx.params) > 0 {
+					for _, p := range i.params {
+						k := p.Name.Clark()
+						v, ok := nx.params[k]
+						if !ok {
+							continue
+						}
 						conv, err := p.asType.convertAs(v,
 							"parameter $"+p.Name.Lexical()+" of xsl:iterate",
 							"XTTE0590")
 						if err != nil {
 							return err
 						}
-						v = conv
+						carried[k] = conv
 					}
-					carried[k] = v
 				}
 				continue
 			}

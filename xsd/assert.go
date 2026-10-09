@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xdmbuild"
 	"github.com/knroy/go-xml/xpath"
 )
 
@@ -237,6 +238,9 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 		return
 	}
 	scoped := scopeForAssertion(el)
+	if len(v.unwritten) > 0 {
+		v.applyUnwritten(el, scoped)
+	}
 	annotateForAssertion(scoped, t)
 
 	// $value is in scope in every assertion, not only those on a simple
@@ -343,8 +347,8 @@ func scopeForAssertion(el *xdm.Node) *xdm.Node {
 	//
 	// Detaching after finalising keeps the document order the tree assigned,
 	// which the clone still needs for any positional predicate.
-	clone.Parent = nil
-	tree.Root.Children = nil
+	xdmbuild.SetParent(clone, nil)
+	xdmbuild.SetChildren(tree.Root, nil)
 	return clone
 }
 
@@ -357,12 +361,6 @@ func scopeForAssertion(el *xdm.Node) *xdm.Node {
 // content holds any, and the answer the spec defines is yes-by-default only for
 // a processor that has been told to expose them.
 func deepCopyNode(n *xdm.Node) *xdm.Node {
-	out := &xdm.Node{
-		Kind:    n.Kind,
-		Name:    n.Name,
-		Value:   n.Value,
-		BaseURI: n.BaseURI,
-	}
 	// The clone is what the assertion actually evaluates over, so it must
 	// answer every PSVI property as the validated node does.
 	//
@@ -382,22 +380,11 @@ func deepCopyNode(n *xdm.Node) *xdm.Node {
 	// a LIST: the union's own name carries no item type, so without the member
 	// the typed value collapsed from a sequence of tokens to one string
 	// holding all of them.
-	out.CopyTypingFrom(n)
-	for _, a := range n.Attrs {
-		ac := &xdm.Node{Kind: a.Kind, Name: a.Name, Value: a.Value}
-		ac.CopyTypingFrom(a)
-		out.AddAttr(ac)
-	}
-	for _, ns := range n.Namespaces {
-		out.AddNamespace(ns.Name.Local, ns.Value)
-	}
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindComment || c.Kind == xdm.KindPI {
-			continue
-		}
-		out.AppendChild(deepCopyNode(c))
-	}
-	return out
+	return xdmbuild.DeepCopyPruned(n, isCommentOrPI)
+}
+
+func isCommentOrPI(n *xdm.Node) bool {
+	return n.Kind == xdm.KindComment || n.Kind == xdm.KindPI
 }
 
 // scopeForAlternative returns the context element a type alternative's test is
@@ -422,19 +409,16 @@ func deepCopyNode(n *xdm.Node) *xdm.Node {
 // failed; every alternative then fell through to the xs:error default.
 func scopeForAlternative(el *xdm.Node) *xdm.Node {
 	tree := xdm.NewTree()
-	clone := &xdm.Node{
-		Kind: el.Kind,
-		Name: el.Name,
-		// The base URI is a property of the element, not of its
-		// content, and survives the copy: cta0021 asks for it.
-		BaseURI: el.BaseURI,
-		// TypeAnnotation is deliberately left zero. Conditional type
-		// assignment chooses the type; it cannot presuppose one.
-	}
+	clone := xdmbuild.NewElement(el.Name)
+	// The base URI is a property of the element, not of its content, and
+	// survives the copy: cta0021 asks for it. TypeAnnotation is deliberately
+	// left zero. Conditional type assignment chooses the type; it cannot
+	// presuppose one.
+	xdmbuild.SetBaseURI(clone, el.BaseURI)
 	for _, a := range el.Attrs {
 		// The attributes come across without their annotations for the
 		// same reason the element does.
-		clone.AddAttr(&xdm.Node{Kind: a.Kind, Name: a.Name, Value: a.Value})
+		clone.AddAttr(xdmbuild.NewAttribute(a.Name, a.Value))
 	}
 	// Namespace bindings an ancestor declared are still in scope for the
 	// element, and a QName-valued attribute cannot be expanded without
@@ -450,8 +434,8 @@ func scopeForAlternative(el *xdm.Node) *xdm.Node {
 	// Detached from the document node for the same reason an assertion's
 	// copy is: the element must be its own root, which is what makes
 	// (. is root()) hold and "//" select nothing.
-	clone.Parent = nil
-	tree.Root.Children = nil
+	xdmbuild.SetParent(clone, nil)
+	xdmbuild.SetChildren(tree.Root, nil)
 	return clone
 }
 
@@ -475,7 +459,7 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 		if scoped.Attr(a.Name.URI, a.Name.Local) != nil {
 			continue
 		}
-		scoped.AddAttr(&xdm.Node{Kind: a.Kind, Name: a.Name, Value: a.Value})
+		scoped.AddAttr(xdmbuild.NewAttribute(a.Name, a.Value))
 	}
 
 	for _, alt := range decl.Alternatives {
@@ -740,7 +724,8 @@ func typedValueFor(normalized string, t *SimpleType) xdm.Item {
 	if p := primitiveOf(t); p != nil {
 		prim = p.Name.Local
 	}
-	n := &xdm.Node{Kind: xdm.KindText, Value: normalized, TypeAnnotation: prim}
+	n := &xdm.Node{Kind: xdm.KindText, Value: normalized}
+	n.ApplyTyping(xdm.Typing{TypeAnnotation: prim})
 	return n.Atomize()
 }
 

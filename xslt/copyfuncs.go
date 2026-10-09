@@ -28,7 +28,7 @@ import (
 // The instruction's base URI is not available here — a function call has no
 // instruction — so a detached copy keeps the base URI it had, which is what
 // xsl:copy-of does for a copy whose source carries an absolute one.
-func registerCopyFuncs(l *xpath.Library, rt *runtime) {
+func registerCopyFuncs(l *xpath.Library) {
 	// Since XPath31: both were introduced by XSLT 3.0, and a version="3.0"
 	// stylesheet is what compiles as XPath 3.1. A 2.0 stylesheet calling one
 	// must get XPST0017 -- and, through the same library,
@@ -39,6 +39,10 @@ func registerCopyFuncs(l *xpath.Library, rt *runtime) {
 			Name: xdm.QName{URI: xdm.NSFN, Local: "copy-of"}, Arity: arity,
 			Since: xpath.XPath31,
 			Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+				rt, err := rtFor(ctx)
+				if err != nil {
+					return nil, err
+				}
 				return mapItemsChecked(ctx, args, checkParentlessQName,
 					func(it xdm.Item) xdm.Item {
 						return noteCopy(rt, it, copyItem(it))
@@ -49,6 +53,10 @@ func registerCopyFuncs(l *xpath.Library, rt *runtime) {
 			Name: xdm.QName{URI: xdm.NSFN, Local: "snapshot"}, Arity: arity,
 			Since: xpath.XPath31,
 			Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+				rt, err := rtFor(ctx)
+				if err != nil {
+					return nil, err
+				}
 				return mapItems(ctx, args, func(it xdm.Item) xdm.Item {
 					return noteCopy(rt, it, snapshotItem(it))
 				})

@@ -101,7 +101,7 @@ func (t tuple) context(ctx *evalContext) *xpath.Context {
 // constructor bound by a clause needs in order to build in the right static
 // context.
 func (t tuple) sub(ctx *evalContext) *evalContext {
-	return &evalContext{xp: t.context(ctx), sc: ctx.sc}
+	return &evalContext{xp: t.context(ctx), sc: ctx.sc, joins: ctx.joins}
 }
 
 // A clause transforms a tuple stream.
@@ -158,6 +158,19 @@ func (f *flwor) eval(ctx *evalContext) (xdm.Sequence, error) {
 
 // evalReturn evaluates the return expression against one tuple.
 func (f *flwor) evalReturn(t tuple, ctx *evalContext) (xdm.Sequence, error) {
+	// "return $v" for a variable the tuple binds is that binding: the
+	// tuple's variables are the innermost scope, and a name is bound once.
+	// Only where the query holds both budgets (Hold* return a holding
+	// context unchanged): elsewhere, as in a global's initialiser, the
+	// skipped Compiled.Eval would have reset them.
+	if x := plainXPath(f.ret); x != nil && ctx.xp.HoldItemBudget() == ctx.xp &&
+		ctx.xp.HoldByteBudget() == ctx.xp {
+		if v, ok := x.Expr().(*xpath.VarRef); ok {
+			if val, ok := t.lookup(v.Name); ok {
+				return val, nil
+			}
+		}
+	}
 	sub := t.sub(ctx)
 	if f.ret != nil {
 		return f.ret.eval(sub)

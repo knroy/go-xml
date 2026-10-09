@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xdmbuild"
 )
 
 // The compact syntax parser.
@@ -229,16 +230,11 @@ func (p *compactParser) attachDoc(n *xdm.Node, doc *annotation) {
 	if doc == nil || !takesAnnotation[n.Name.Local] {
 		return
 	}
-	a := &xdm.Node{
-		Kind: xdm.KindElement,
-		Name: xdm.QName{URI: compatibilityNS, Prefix: "a", Local: "documentation"},
-	}
+	a := xdmbuild.NewElement(xdm.QName{URI: compatibilityNS, Prefix: "a", Local: "documentation"})
 	p.b.text(a, doc.doc)
 	// The annotation goes first: the compatibility spec places it before the
 	// content it documents, and a <define>'s pattern children must stay in
 	// their own order relative to one another.
-	n.Children = append([]*xdm.Node{a}, n.Children...)
-	n.Namespaces = append(n.Namespaces, &xdm.Node{
-		Kind: xdm.KindNamespace, Name: xdm.QName{Local: "a"}, Value: compatibilityNS,
-	})
+	xdmbuild.PrependChild(n, a)
+	n.AddNamespace("a", compatibilityNS)
 }

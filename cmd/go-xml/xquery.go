@@ -32,6 +32,7 @@ func runXQuery(args []string) error {
 	var (
 		queryPath = fs.String("q", "", "query to run (required)")
 		outPath   = fs.String("o", "", "write output to this file instead of stdout")
+		catalog   = registerCatalog(fs)
 		allowDirs = fs.String("allow-dir", "",
 			"comma-separated roots that import module, import schema, "+
 				"fn:load-xquery-module, fn:doc and fn:unparsed-text may read, each covering its subdirectories to "+
@@ -47,8 +48,10 @@ func runXQuery(args []string) error {
 				"XXE surface; it also requires -allow-doctype)")
 		allowUnparsedText = fs.Bool("allow-unparsed-text", false,
 			"let fn:unparsed-text read files from the -allow-dir roots as raw text")
-		timeout = fs.Duration("timeout", 60*time.Second, "abort the query after this long")
-		nowStr  = fs.String("now", "",
+		timeout  = fs.Duration("timeout", 60*time.Second, "abort the query after this long")
+		maxItems = fs.Int("max-items", 0, maxItemsUsage)
+		maxBytes = fs.Int64("max-bytes", 0, maxBytesUsage)
+		nowStr   = fs.String("now", "",
 			"fix fn:current-dateTime to this xs:dateTime, making the run reproducible")
 		params = paramFlag{}
 	)
@@ -88,6 +91,11 @@ Exit status: 0 if the query ran, 1 otherwise.
 	}
 	resolver.UnparsedText = *allowUnparsedText
 
+	schemas, err := schemaCatalog(*catalog, schemaFiles{resolver})
+	if err != nil {
+		return err
+	}
+
 	src, err := os.ReadFile(*queryPath)
 	if err != nil {
 		return err
@@ -97,7 +105,7 @@ Exit status: 0 if the query ran, 1 otherwise.
 		BaseURI:            base,
 		DeclarationBaseURI: base,
 		ModuleResolver:     moduleFiles{resolver},
-		SchemaResolver:     schemaFiles{resolver},
+		SchemaResolver:     schemas,
 	})
 	if err != nil {
 		return fmt.Errorf("compiling query: %w", err)
@@ -105,16 +113,18 @@ Exit status: 0 if the query ran, 1 otherwise.
 
 	var item xdm.Item
 	if in := fs.Arg(0); in != "" {
-		data, err := os.ReadFile(in)
+		// Streamed, as the transform's source is (see compileStylesheet).
+		f, err := os.Open(in)
 		if err != nil {
 			return err
 		}
+		defer f.Close()
 		abs := fileURI(in)
-		popts := xdm.ParseOptions{BaseURI: abs, DocumentURI: abs, AllowDOCTYPE: *allowDoctype}
+		popts := xdm.ParseOptions{BaseURI: abs, DocumentURI: abs, AllowDOCTYPE: *allowDoctype, MaxBytes: *maxBytes}
 		if *allowExternalEnts {
 			popts.ExternalEntities = resolver
 		}
-		tree, err := xdm.ParseString(string(data), popts)
+		tree, err := xdm.Parse(f, popts)
 		if err != nil {
 			return fmt.Errorf("%s: %w", in, err)
 		}
@@ -133,6 +143,7 @@ Exit status: 0 if the query ran, 1 otherwise.
 	defer cancel()
 	ctx := xpath.NewContext(item, xpath.Builtins()).WithNow(now)
 	ctx.Ctx = cctx
+	ctx.MaxItems = *maxItems
 	ctx.Docs = resolver
 	// The resolver refuses every text read unless -allow-unparsed-text turned
 	// it on, as in the transform.

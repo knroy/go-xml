@@ -5,7 +5,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/knroy/go-xml/internal/genid"
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xdmbuild"
 )
 
 // registerAnalyzeString adds fn:analyze-string and fn:generate-id.
@@ -90,7 +92,7 @@ func registerAnalyzeString(l *Library) {
 			return nil, xdm.ErrType(
 				"fn:generate-id: expected a node, got %s", it.TypeName())
 		}
-		// "N" plus a decimal integer, so this is bounded and small where
+		// "N" plus two decimal integers, so this is bounded and small where
 		// fn:path is not -- but it is still a newly built string, and the
 		// ownership rule is that whoever allocates charges.
 		return stringResult(ctx, GenerateID(n))
@@ -100,8 +102,8 @@ func registerAnalyzeString(l *Library) {
 // GenerateID returns the unique identifier fn:generate-id gives a node.
 //
 // The spec requires only that it be stable for a node, distinct between
-// nodes, and syntactically an XML name — so it is the node's document order
-// index with a letter in front, which satisfies all three without a table.
+// nodes, and syntactically an XML name — so it spells out the node's tree id
+// and document-order index, which satisfies all three without a table.
 //
 // Exported because the XSLT layer has had this function since 1.0 and must
 // agree with this one: two spellings of the same identity would let
@@ -112,7 +114,7 @@ func GenerateID(it xdm.Item) string {
 	if !ok {
 		return ""
 	}
-	return "N" + strconv.Itoa(n.Order())
+	return genid.Of(n)
 }
 
 // groupParents maps each capturing group number to the number of the
@@ -190,23 +192,10 @@ func analyzeString(in string, re Regexp, parents []int) (*xdm.Node, error) {
 	// the root carries the declaration that binds it. Without the namespace
 	// node the tree serialises with no binding at all, so a comparison
 	// against the expected XML sees a different element.
-	result := &xdm.Node{
-		Kind: xdm.KindElement,
-		Name: xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "analyze-string-result"},
-	}
-	result.Namespaces = []*xdm.Node{{
-		Kind:   xdm.KindNamespace,
-		Name:   xdm.QName{Local: "fn"},
-		Value:  xdm.NSFN,
-		Parent: result,
-	}}
-	appendChild := func(parent, child *xdm.Node) {
-		child.Parent = parent
-		parent.Children = append(parent.Children, child)
-	}
-	text := func(s string) *xdm.Node {
-		return &xdm.Node{Kind: xdm.KindText, Value: s}
-	}
+	result := xdmbuild.NewElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "analyze-string-result"})
+	result.AddNamespace("fn", xdm.NSFN)
+	appendChild := (*xdm.Node).AppendChild
+	text := xdmbuild.NewText
 
 	all := re.FindAllStringSubmatchIndex(in, -1)
 	// A budget exhausted part way through the scan returns the matches found
@@ -220,21 +209,18 @@ func analyzeString(in string, re Regexp, parents []int) (*xdm.Node, error) {
 	for _, m := range all {
 		// Everything between the previous match and this one is a non-match.
 		if m[0] > last {
-			nm := &xdm.Node{Kind: xdm.KindElement,
-				Name: xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "non-match"}}
+			nm := xdmbuild.NewElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "non-match"})
 			appendChild(nm, text(in[last:m[0]]))
 			appendChild(result, nm)
 		}
 
-		match := &xdm.Node{Kind: xdm.KindElement,
-			Name: xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "match"}}
+		match := xdmbuild.NewElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "match"})
 		buildMatch(match, in, m, parents, appendChild, text)
 		appendChild(result, match)
 		last = m[1]
 	}
 	if last < len(in) {
-		nm := &xdm.Node{Kind: xdm.KindElement,
-			Name: xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "non-match"}}
+		nm := xdmbuild.NewElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "non-match"})
 		appendChild(nm, text(in[last:]))
 		appendChild(result, nm)
 	}
@@ -283,11 +269,8 @@ func buildMatch(match *xdm.Node, in string, m []int, parents []int,
 		if g.start > pos {
 			appendChild(match, text(in[pos:g.start]))
 		}
-		el := &xdm.Node{Kind: xdm.KindElement,
-			Name:  xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "group"},
-			Attrs: []*xdm.Node{{Kind: xdm.KindAttribute, Name: xdm.QName{Local: "nr"}, Value: strconv.Itoa(g.nr)}},
-		}
-		el.Attrs[0].Parent = el
+		el := xdmbuild.NewElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "group"})
+		el.AddAttr(xdmbuild.NewAttribute(xdm.QName{Local: "nr"}, strconv.Itoa(g.nr)))
 		emitted[best] = true
 		// Nested groups sit inside this one, so recurse over the sub-slice of
 		// groups this one contains.
@@ -347,11 +330,8 @@ func fillNested(el *xdm.Node, in string, start, end, outer int,
 		if g.start > pos {
 			appendChild(el, text(in[pos:g.start]))
 		}
-		inner := &xdm.Node{Kind: xdm.KindElement,
-			Name:  xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "group"},
-			Attrs: []*xdm.Node{{Kind: xdm.KindAttribute, Name: xdm.QName{Local: "nr"}, Value: strconv.Itoa(g.nr)}},
-		}
-		inner.Attrs[0].Parent = inner
+		inner := xdmbuild.NewElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "group"})
+		inner.AddAttr(xdmbuild.NewAttribute(xdm.QName{Local: "nr"}, strconv.Itoa(g.nr)))
 		emitted[best] = true
 		fillNested(inner, in, g.start, g.end, g.nr, groups, parents, emitted, appendChild, text)
 		appendChild(el, inner)

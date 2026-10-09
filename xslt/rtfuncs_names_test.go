@@ -3,7 +3,6 @@ package xslt
 import (
 	"reflect"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/xdm"
@@ -102,18 +101,16 @@ func registeredFnLocals(t *testing.T, lib *xpath.Library) map[string]bool {
 	if !v.IsValid() || v.Kind() != reflect.Map {
 		t.Fatal("xpath.Library no longer has an fns map; update this enumeration")
 	}
-	prefix := "{" + xdm.NSFN + "}"
 	out := map[string]bool{}
 	for _, k := range v.MapKeys() {
-		key := k.String() // "{uri}local#arity"
-		if !strings.HasPrefix(key, prefix) {
-			continue
+		// The key is a struct of uri, local name and arity.
+		uri, local := k.FieldByName("uri"), k.FieldByName("local")
+		if !uri.IsValid() || !local.IsValid() {
+			t.Fatal("xpath.Library's key no longer has uri and local fields; update this enumeration")
 		}
-		local := strings.TrimPrefix(key, prefix)
-		if i := strings.LastIndex(local, "#"); i >= 0 {
-			local = local[:i]
+		if uri.String() == xdm.NSFN {
+			out[local.String()] = true
 		}
-		out[local] = true
 	}
 	return out
 }

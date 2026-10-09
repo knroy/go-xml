@@ -34,6 +34,21 @@ type readDocResolver struct {
 	// every focus change. A document read inside a template has to be
 	// visible to an xsl:result-document evaluated anywhere else.
 	read map[string]bool
+	// docs remembers each successful fn:doc / fn:document answer by its
+	// arguments, so that a stylesheet calling doc() per node does not resolve
+	// the path again every time (filepath.Abs and EvalSymlinks on the file
+	// and on every root). Only over a FileResolver, whose answer for one path
+	// is already fixed for the transform by its own cache: the confinement
+	// check runs on the first call, and a later one returns the tree that
+	// check admitted. Nil disables it.
+	docs map[docKey]*xdm.Tree
+}
+
+// docKey is one fn:doc call's arguments, and the package it is written in,
+// which decides the whitespace stripping applied (see stripSpaceResolver).
+type docKey struct {
+	uri, base string
+	pkg       int
 }
 
 func (r *readDocResolver) record(t *xdm.Tree) {
@@ -46,11 +61,27 @@ func (r *readDocResolver) record(t *xdm.Tree) {
 }
 
 func (r *readDocResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
-	t, err := r.inner.ResolveDocument(uri, base)
+	return r.cached(docKey{uri, base, 0}, func() (*xdm.Tree, error) {
+		return r.inner.ResolveDocument(uri, base)
+	})
+}
+
+// cached answers k from docs, or through load, which is remembered when it
+// succeeds. A remembered tree needs no XTDE1500 check: it was recorded as
+// read when it was loaded, so a write to it after that is refused by
+// checkReadThenWrite, and one before it refused the load.
+func (r *readDocResolver) cached(k docKey, load func() (*xdm.Tree, error)) (*xdm.Tree, error) {
+	if t, ok := r.docs[k]; ok {
+		return t, nil
+	}
+	t, err := load()
 	r.record(t)
 	if err == nil {
 		if werr := r.checkWrittenThenRead(t); werr != nil {
 			return nil, werr
+		}
+		if r.docs != nil {
+			r.docs[k] = t
 		}
 	}
 	return t, err
@@ -87,14 +118,9 @@ func (r *readDocResolver) ResolveDocumentIn(
 	ctx *xpath.Context, uri, base string) (*xdm.Tree, error) {
 
 	if cr, ok := r.inner.(xpath.ContextDocumentResolver); ok {
-		t, err := cr.ResolveDocumentIn(ctx, uri, base)
-		r.record(t)
-		if err == nil {
-			if werr := r.checkWrittenThenRead(t); werr != nil {
-				return nil, werr
-			}
-		}
-		return t, err
+		return r.cached(docKey{uri, base, packageOf(ctx)}, func() (*xdm.Tree, error) {
+			return cr.ResolveDocumentIn(ctx, uri, base)
+		})
 	}
 	return r.ResolveDocument(uri, base)
 }

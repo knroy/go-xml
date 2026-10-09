@@ -4,6 +4,160 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## v1.7.0 — 2026-10-09
+
+**Behaviour changes to check before upgrading.** The exported API only
+gains names, but three things you may observe change:
+
+- `generate-id()` strings are now `N<tree>x<order>`. The old form collided
+  between trees with more than 2^20 nodes; the spec leaves the format to the
+  implementation, so code that stored generated ids will see new values.
+- `xsl:next-match` and `xsl:apply-imports` inside `xsl:iterate`,
+  `xsl:merge`, `xsl:sort` or `xsl:copy select` now raise `XTDE0560`, as XSLT
+  3.0 §6.8 requires; they used to run the next rule. (Saxon 12.10 still runs
+  it inside `xsl:merge-action`.)
+- Several static and validation error messages changed wording or order
+  (for example, XTSE0720 now shows the cycle). They are now the same on every
+  run; before, Go's map order could pick a different message.
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| `xsd.Schema.ValidateCopy`, `ValidateCopyContext` | Validate into a typed copy and leave the input untouched, so one tree can be validated from several goroutines. | [`ec72376`][ec72376] |
+| `xdmbuild` node constructors and setters (`NewElement`, `NewAttribute`, `ShallowCopy`, `DeepCopyPruned`, …) | Every package builds and edits trees through `xdmbuild` instead of node literals, the groundwork for v2. | [`655311a`][655311a] |
+| `xdm` benchmarks | Navigation, corpus parse cost, retained heap per input byte and tree shape, the yardstick for the node redesign. | [`a5b4546`][a5b4546] |
+| `xpath.Context.MaxItems`, `xslt.TransformOptions.MaxItems`, CLI `-max-items` | The item budget is configurable (0 = default 5,000,000, negative = none); a nested evaluation cannot raise it. | [`3727b35`][3727b35] |
+| CLI `-max-bytes` | Lifts or sets the input document size limit on the transform and `xquery` (0 = default 64 MB, negative = none). | [`3727b35`][3727b35] |
+| Build tag `goxml_nohttp` | Leaves `xsd.HTTPResolver` and `net/http` out: CLI start-up −1.6 ms, RSS −4.8 MB, binary −12%; the default build is unchanged. | [`dccd679`][dccd679] |
+| `-catalog DIR` on `validate`, the transform and `xquery` | Answers references to the W3C schemas (`XMLSchema.xsd`, `xml.xsd`) from local copies, so a schema importing them by `www.w3.org` URL loads from the command line. | [`39c6931`][39c6931] |
+| `xquery.Options.SchemaParseOptions` | Parser options for `import schema` documents, as `xslt.CompileOptions` already had; the zero value still refuses a DOCTYPE. | [`740c22a`][740c22a] |
+| `xsd.ParseDocument`, `xsd.RootedFileResolver` | Parse a resolved schema document under the catalog's DOCTYPE rule; build the confined default resolver to use as a catalog's fallback. | [`d86f80c`][d86f80c] |
+| `docs/profiling.md` | Three profiling rounds: the causes behind the benchmark's losses, each fix with its measured gain, what was rejected and why, and what is left for v2. | [`007e682`][007e682] |
+| `docs/benchmark.md` re-run | Every engine re-measured at `eb14939`, after the performance work, and again at `f45068c` after rounds 3 and 4, with the previous run's figures alongside. | [`3fc468a`][3fc468a] |
+| `docs/benchmark.md` | go-xml against Saxon-HE, BaseX, Jing, Xerces-J, libxml2 and `encoding/xml` on nine real workloads, cold and warm, timed only where outputs agree. | [`416ee50`][416ee50] |
+
+### Fixed — engine
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| A `version="2.0"` stylesheet was refused `match="root()"` and other 3.0 pattern forms | XSLT 3.0 §3.9.2 defines no 2.0 behaviour for a 3.0 processor; the 3.0 pattern grammar now applies, and the refusal stays for `MaxVersion` 2.0. Found by the Peppol BIS validators. | [`ca09e14`][ca09e14] |
+| A `version="2.0"` stylesheet with `xsl:import` after other declarations was `XTSE0200` | XSLT 3.0 removed that rule; it now applies only to a 2.0 processor. Found by KoSIT's XRechnung HTML stylesheet. | [`04ddeea`][04ddeea] |
+| RELAX NG recompiled a definition at every `<ref>` to it | Cost multiplied along chains, so DocBook 5.2 hit the 200,000-expansion limit. Each definition is compiled once and shared; DocBook compiles and validates in 0.55 s. | [`eb6901e`][eb6901e] |
+| `indent` broke Serialization 3.1 §5.1.4 | Typed simple and mixed content was indented, changing a validated `xs:string` value; `fn:serialize` also ignored `xml:space` and nested `suppress-indentation`. All §5.1.4 constraints now hold in both serializers. | [`cec5f6f`][cec5f6f] |
+| RELAX NG recompiled a recursive `<ref>`'s definition about 45 times | Lazy sub-compilers now share compiled definitions; DocBook 5.2 compiles in ~20 ms instead of 0.5 s. | [`c7769f5`][c7769f5] |
+| RELAX NG matched whitespace between element children as text | Six valid DocBook documents were rejected; whitespace-only text among elements is now stripped (§6.2.7). | [`b44313c`][b44313c] |
+| RELAX NG `choice` kept duplicate alternatives | Nested `oneOrMore` doubled the derivative per child and hit the size bound on DocBook `xref.001`; equal alternatives are merged. | [`d8f0ac1`][d8f0ac1] |
+| RELAX NG `<include ns>` leaked into definitions reached through `<ref>`, `combine` and nested grammars | Each definition now compiles under the ns of the document it was written in (§4.8). | [`c9c7c79`][c9c7c79] |
+| RELAX NG read an explicit `ns=""` as absent | An inherited ns overrode it in names, `nsName` and QName values; presence is now checked (§4.8). | [`5cf8104`][5cf8104] |
+| Text split by many CDATA sections was joined piece by piece | Parsing was quadratic in the number of pieces (200k sections took 4.4 s); each text node is now joined once (30 ms). | [`0604061`][0604061] |
+| XSD identity-constraint scopes on local and group declarations were missed | A recursive key re-reported each failure once per nesting level; scopes are now tracked on the validation walk. | [`1f80934`][1f80934] |
+| `fn:transform` ignored a mistyped option | Every typed option now follows the F&O §1.5.4 conversion rules: arrays atomize, a string for an `xs:QName` is `XPTY0004`. | [`84bbe23`][84bbe23] |
+| Nested `fn:transform` ran `xsl:assert` by default and ignored `enable-messages` | `enable-assertions` (default false) and `enable-messages=false` now apply; `terminate="yes"` still ends the transform. | [`a2603d3`][a2603d3] |
+| Attribute values after a quote or `[` in a DTD comment were left unnormalised | The byte pre-pass lost its place in the internal subset; the tokenizer now normalises attribute values, and line numbers after a multi-line attribute are right. | [`d212f7a`][d212f7a] |
+| In XML 1.1 a NEL, U+2028 or CR NEL in an attribute value became a newline | Each is now one space (§2.11, §3.3.3); 1.0 documents are unchanged. | [`e03ee3d`][e03ee3d] |
+| Entity replacement text in an attribute value kept its tabs and newlines | §3.3.3 now applies on both entity paths; characters written as references are kept. | [`b7853d6`][b7853d6] |
+| A PI with a quote or `>` in the internal subset broke the DOCTYPE | The scanner now skips PIs whole, as it does comments. | [`b707e39`][b707e39] |
+| An `<!ENTITY>`, `<!ATTLIST>` or `<!ELEMENT>` inside a PI or comment in the internal subset was acted on | One declaration scanner now skips PIs, comments and quoted text; a default holding `>` is no longer cut short. | [`efd4178`][efd4178] |
+| DTD attribute defaults were used as written | References now expand and white space is normalised (§3.3.2, §3.3.3); a `<`, bare `&` or external entity in one is a parse error. | [`02905e9`][02905e9] |
+| Line ends in the DOCTYPE were not normalised | CR folds always, and NEL, U+2028 and CR NEL under XML 1.1, as in content (§2.11). | [`0ca7dac`][0ca7dac] |
+| Character references in DTD entity values, replacement text and defaults were not checked | WFC Legal Character now applies there and to parameter-entity values, using the tokenizer's rule for each version. | [`81b0a27`][81b0a27] |
+| In XML 1.1 a NEL, U+2028 or CR NEL in a comment or PI stayed as written | Comments and PIs fold line ends by the document's version, so a 1.0 CR NEL keeps its NEL and loses its CR. | [`17b99c3`][17b99c3] |
+| An undeclared entity was always fatal | It is fatal only where §4.1's WFC applies; after an unread external subset or `%pe;` the reference is dropped, as libxml2 does in attribute values. | [`3d7e86b`][3d7e86b] |
+| A comment with `--` or ending `--->` in the internal or an external subset was accepted | It is refused with the same error as in content (§2.5 [15]). | [`97148b4`][97148b4] |
+| Entity and ATTLIST declarations after an unread `%pe;` were processed | Per §5.1 they are ignored unless the document is `standalone="yes"`. | [`7496ea8`][7496ea8] |
+| A `CatalogResolver` holding the W3C schema for schemas needed `AllowDOCTYPE` for every schema document | A document the catalog answers from its own table may carry a DOCTYPE; documents from the fallback keep the caller's options. | [`d86f80c`][d86f80c] |
+| `xsl:import-schema` ignored `SchemaParseOptions` on the located document and on a namespace-only import | Every path, including the schemas' own includes and imports, now uses them. | [`2402bca`][2402bca] |
+| A namespace-only `xsl:import-schema` read its schema as XSD 1.0 | It is read as XSD 1.1 and honours `vc:minVersion`, like the location and inline paths. | [`987e24e`][987e24e] |
+| `-catalog` read a schema's sibling `XMLSchema.xsd` before the catalog's | The W3C's own layout failed on the sibling's DOCTYPE; the catalog now answers every spelling of the files it holds. | [`8aa5ab7`][8aa5ab7] |
+| A pattern predicate made numeric by a function call, as in `item[number(@n)]`, ran at position 1 | It is positional unless statically boolean, string or node-valued (XSLT 3.0 §5.5.3), as Saxon answers. | [`0602694`][0602694] |
+| A FLWOR join charged its inner sequence once per outer tuple against `MaxItems` | It charges what it holds, so XMark q8–q10 at factor 1 no longer fail with `XPDY0130`. | [`2514a9a`][2514a9a] |
+| With `AllowDOCTYPE` and no DOCTYPE, the parser kept two extra copies of the document | They are dropped when the root opens: 10 MB parse 335 → 230 MB allocated, 100 MB peak RSS 3.15 → 2.0 GB. | [`b88105e`][b88105e] |
+| The html method dropped the stylesheet's own `<meta charset>` under `include-content-type="no"` | It is dropped only when the method adds its own (§7.4.13); XRechnung's HTML stage now matches Saxon. | [`262be91`][262be91] |
+| html/xhtml `indent="yes"` split inline elements onto separate lines | No whitespace is added next to an inline element (§7.4.3, §6.1.4), in `xsl:output` and `fn:serialize`. | [`4457808`][4457808] |
+| `xsd.Schema.Validate` without `Annotate` still wrote the union member, `nilled` and a lax-wildcard restore to the caller's tree, racing concurrent validation | Those writes need `Annotate`; a check-only run keeps them for that run, so assertion verdicts are unchanged. | [`5c2ca9c`][5c2ca9c] |
+| XSD `mg-props-correct.2` and `src-attribute_group.3` named a group that only refers into another group's cycle, and which one varied per run | Strongly-connected components: every group on a cycle is reported, by name, and only those. | [`373da4b`][373da4b] |
+| Map order chose which error was reported: XTSE0720 (which now shows the cycle), XTSE0020/0730, XTSE0010, XTSE0545, XTSE3350, XTSE3430, XTSE3070, XTSE3055/0770, XTTE0590, XTTE2230 | Each check walks declaration, document or sorted-name order, so one stylesheet gives one error. | [`8082a2c`][8082a2c] |
+| Map order chose the reported XSD error: duplicate IDs (`cvc-id.2`), duplicate keys from nested scopes, an `xs:all` restriction's disallowed element; RELAX NG include overrides and ref cycles | Document order, or the first name in sorted order; found by the v2 output differential. | [`edea87c`][edea87c] |
+| `generate-id` was `"N"` plus `tree·2^20 + order`, so a tree with over 2^20 nodes collided with the next tree | Ids are `N<tree>x<order>`, distinct for any size. | [`3f87498`][3f87498] |
+| An element copied into new content by `xsl:sequence` lost the namespaces it inherited; a temporary tree's namespace nodes shared generate-ids | Both now follow XSLT 3.0 §5.7.1, and order slots are reserved for in-scope bindings. | [`77c78e9`][77c78e9] |
+| `xsl:next-match` and `xsl:apply-imports` inside `xsl:iterate`, `xsl:merge`, `xsl:sort` or `xsl:copy select` ran the next rule | The current template rule is cleared there, so they raise `XTDE0560` as XSLT 3.0 §6.8 requires. | [`4d31869`][4d31869] |
+| `xsl:decimal-format` read an empty `NaN`/`infinity` as absent and ignored an empty single-character attribute | Presence decides; an empty single character is `XTSE0020`. | [`1b65291`][1b65291] |
+| `fn:serialize` with `include-content-type` kept the document's content-type meta, added none under xhtml, and ignored `media-type` | It replaces the head's meta, adds one under xhtml, and writes the media type, sharing `xsl:output`'s rules. | [`1e2bad6`][1e2bad6] |
+| The html method dropped content-type metas anywhere inside `<head>` | Only direct children of `head` are replaced, as §7.4.13 says. | [`91beb30`][91beb30] |
+| XSD 1.1: a wildcard before an element in a repeated choice spent the repeat bound, so bad `a` values passed | The element declaration is tried first; 45 of 45 cases now agree with Xerces. | [`5912a5a`][5912a5a] |
+| RELAX NG `<data type="QName">` accepted undeclared prefixes and length params | Prefixes resolve against in-scope namespaces and length params are refused, as Jing does. | [`81d16d5`][81d16d5] |
+| A function body expanded a prefixed `format-date` `$calendar` against the caller's namespaces | It uses its own; a false `FOFD1340` is gone. | [`8a792f7`][8a792f7] |
+| Under `goxml_nohttp`, refusals still pointed at `HTTPResolver` | They name only the resolvers the build has. | [`6f63564`][6f63564] |
+| Compact syntax refused a free-standing annotation element among definitions | DocBook's `s:ns [ ... ]` was read as a datatype name. The grammar allows it; it is now skipped like any annotation. | [`197eaad`][197eaad] |
+
+### Changed — performance
+
+From [docs/profiling.md](docs/profiling.md). Outputs are byte-identical on every benchmark workload and every conformance suite is unchanged.
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| Template patterns bound `current()` before testing the node | Each failed candidate cost two context copies; a pattern now rejects on its node test first (DocBook ~3× less CPU). | [`262366d`][262366d] |
+| Every function call formatted a `{uri}local#arity` string key | The function library is keyed by a struct. | [`9bd1c79`][9bd1c79] |
+| A path step copied the evaluation context per input node | Plain axis steps get the context node directly (Peppol CEN 37 → 9 ms per invoice with the two above). | [`4f0cc55`][4f0cc55] |
+| `SortDocumentOrder` sorted step results already in order | A one-tree, strictly increasing sequence is returned as it is. | [`1c7fb99`][1c7fb99] |
+| General comparisons built an operator map on every evaluation | The operator maps to its value comparison through a switch. | [`6ce285f`][6ce285f] |
+| `fn:transform` recompiled its stylesheet on every call | Compiled stylesheets are kept in a bounded per-stylesheet LRU keyed on every compile input; `cache=false` bypasses it. | [`e00735a`][e00735a] |
+| XQuery `for … where A op B` value joins ran as nested loops | They run as a hash or cached-key join when every call resolves to a built-in, falling back on any error (XMark q8 3.3 s → 14 ms). | [`2aa49d8`][2aa49d8] |
+| XSD parsed every `xs:integer` into a `big.Rat` for bounds and digit facets | Bounds are skipped without bound facets and digits are counted from the lexical form. | [`62c7117`][62c7117] |
+| XSD kept identity-constraint bookkeeping for every node | It is kept only inside a constraint's scope; with the collapse, primitive and `StringValue` fast paths, `xp-striding` validates 3.4× faster. | [`949e0fa`][949e0fa] |
+| Every parsed node was its own allocation | Nodes come from per-parse chunks, and rarely set fields sit behind a lazy pointer (node 296 → 280 B). | [`bcae9bd`][bcae9bd] |
+| Parse allocated every token, name, attribute slice and whitespace text | The tokenizer reuses tokens and buffers and interns names; a 10 MB parse makes 70% fewer allocations and runs 34% faster. | [`446432b`][446432b] |
+| Every variable binding built a one-entry map | `WithVar` stores its binding inline (DocBook allocations −27%). | [`8cfeef4`][8cfeef4] |
+| Every built-in call copied the context to count call depth | Leaf built-ins that cannot re-enter user code count it in place; limits and errors are unchanged. | [`569af46`][569af46] |
+| A focus-free comparison operand in a predicate was re-evaluated per item | It is evaluated once per predicate, falling back per item on error (DocBook `indexterm.001` −32% CPU). | [`1253f9a`][1253f9a] |
+| Template dispatch tried every rule in the mode per node | Rules are indexed by mode, node kind and name in linear-scan order (≈90 → 2 patterns per node on Schematron). | [`c008a63`][c008a63] |
+| Attribute normalisation was a byte-by-byte pass over the whole document | The tokenizer does it (10 MB parse CPU −29%). | [`d212f7a`][d212f7a] |
+| The duplicate-attribute check and child/attribute slice growth allocated per attribute and per child | Keys are compared without allocation and slices are cut exact-size from shared arrays; a 10 MB parse makes 371k allocations, down from 1.13 M. | [`b764d67`][b764d67] |
+| Every start tag built two maps of the namespaces in scope | Prefixes are looked up directly; `docbook.rng` parses in half the time. | [`549d8db`][549d8db] |
+| Text, attribute values and comments were one allocation each | They share arena blocks; a 10 MB parse makes 7k allocations instead of 371k. | [`aa7d1e2`][aa7d1e2] |
+| The position-tracking source copy grew by doubling; a US-ASCII document was copied before being checked | The copy is sized once and US-ASCII is checked as it streams. | [`8fb6f0b`][8fb6f0b] |
+| DTD attribute typing built `prefix:local` per declaration per element | Names are compared in place; the XSD 1.1 schema for schemas loads 30% faster. | [`68795ba`][68795ba] |
+| Stylesheet compile rebuilt each element's in-scope namespaces | One map per declaring element is shared: DocBook compile bytes −30%, CEN −25%. | [`ebd1759`][ebd1759] |
+| XSLT calls cleared context that was already absent; `current()` copied the context | Both are skipped: warm bytes CEN −16%, PEPPOL −23%, DocBook −16%. | [`b0c7b30`][b0c7b30] |
+| `//name` built and sorted every node below the context first | It is evaluated as `descendant::name` when neither step has a predicate (XMark q7 3.6× faster). | [`3cd86ee`][3cd86ee] |
+| The XQuery join cast the outer key and scanned every inner key per tuple | It casts once and range-searches sorted doubles for `< <= > >=` (q11 188 → 30 ms). | [`ba37f7c`][ba37f7c] |
+| `xslt.Serialize` wrote to files one system call per token | Output to a writer not in memory is buffered, with identical bytes. | [`a931b98`][a931b98] |
+| RELAX NG rebuilt the pattern on every start-tag close | It returns its input when nothing changed: DocBook validation 2.3× faster. | [`7ad91bd`][7ad91bd] |
+| XSD re-listed a directory per include and counted characters with no length facet | Locations are cached per load and the count is skipped. | [`3b06e4c`][3b06e4c] |
+| C14N escaped with a per-byte switch into a 4 KiB buffer | Lookup tables and a 64 KiB buffer: 10 MB canonicalisation 22 → 17 ms. | [`8e63b9d`][8e63b9d] |
+| The CLI spent about half its cold CPU on GC while the heap only grew | It runs at GOGC=200 unless `GOGC` is set: DocBook cold CPU −33%, peak RSS 114 → 161 MB. | [`5fbea36`][5fbea36] |
+| Every call re-resolved its function and every transform rebuilt its runtime library | Call sites cache the resolution and each stylesheet builds one library (XRechnung CPU −26%). | [`87cf96e`][87cf96e] |
+| `key()`, `current()` and stylesheet functions walked the variable chain for XSLT state | It rides on one context field; with options held by pointer, DocBook CPU −27%. | [`2a7843f`][2a7843f] |
+| Repeated `fn:doc` calls re-resolved the path; `xsl:evaluate` re-parsed its target | Per-transform `doc()` cache; up to 64 compiled expressions kept per instruction. | [`72cb46a`][72cb46a] |
+| Namespace fixup built a scope map per constructed element; node ordering built one per comparison | Bindings are read live, and the namespace base is skipped for non-namespace nodes (CEN −3 to −5%). | [`53cff35`][53cff35] |
+| `descendant::name` went through a closure and an interface call per node | It walks elements directly with the test inlined (XMark q6/q7 eval −23 to −30%). | [`659fdc8`][659fdc8] |
+| The parser numbered nodes in a second walk, looked whitespace up in a map, and checked characters one byte at a time | Nodes are numbered while built, the last run per length is cached, and ASCII is checked eight bytes at a time. | [`e7ec81d`][e7ec81d] |
+| The CLI held two copies of each input during the parse | It parses from the file; XMark peak RSS −11 MB. | [`739c744`][739c744] |
+| XSD validation allocated a count vector per child and a slice per element | Buffers are reused: 101,505 → 341 allocations per catalog pass. | [`d006ad2`][d006ad2] |
+| RELAX NG re-derived the schema's fixed subtrees per element and built a namespace map per node | Memo points, a lazy namespace context and an attribute memo: DocBook validation −82% CPU. | [`abd214b`][abd214b] |
+| The CLI was built without profile-guided optimisation | `cmd/go-xml/default.pgo` is committed (regenerate with `tests/pgo.sh`): CPU −2 to −3% cold, −3 to −5% warm. | [`b83418a`][b83418a] |
+| `//@a` built and sorted every node below the context before reading attributes | It is one walk over a parsed tree (CEN CPU −5 to −8%). | [`06c0df1`][06c0df1] |
+| Both collation language matchers were built at start-up on every run | They are built on first use (CLI cold start about −0.15 ms). | [`18ef0f0`][18ef0f0] |
+| The html serializer allocated twice per attribute character | Printable ASCII is copied through: XRechnung HTML allocations −53%, CPU −14%. | [`eac3823`][eac3823] |
+| The serializer lower-cased the encoding per non-ASCII character and built names and a namespace map per element | One binding stack, pieces written: XRechnung HTML allocations −57% in all. | [`aefdaea`][aefdaea] |
+| A path step copied its own result into the path's accumulator, and every relative path boxed the context item | The result is kept and the item stays on the stack: CEN allocations −11%, CPU −4 to −7%. | [`d077c5a`][d077c5a] |
+| `//x[p]` from a document root re-walked the whole document on every evaluation (~38% of CEN) | XSLT remembers per parsed document which nodes have an `x` child: CEN CPU −18 to −23%. | [`b5864c4`][b5864c4] |
+| `name(.) = name(current())` built, boxed and atomized two names per node | Name comparisons match prefix and local name directly: XRechnung allocations −53%, CPU −20%. | [`738c1fb`][738c1fb] |
+| Every comparison and boolean built-in allocated a fresh `xs:boolean` | Two shared values are returned: allocations −6 to −12%, CPU −5 to −7.5% on Schematron. | [`7dce099`][7dce099] |
+| Each serialized text node and escaped attribute value was built in a builder of its own | Both are written in runs straight to the buffered writer (XMark q2+q10 allocations −6.9%). | [`ca3e6a1`][ca3e6a1] |
+| Literal result elements and `xsl:copy` repeated every in-scope namespace on each element (86% of SVRL nodes) | A binding the parent already has is inherited: CEN allocations −14%, CPU −15%; Peppol −8%. | [`77c78e9`][77c78e9] |
+| Builders kept a map of declared prefixes per element; copies built a map of in-scope namespaces per element | A small slice, and a direct read of the ancestors. | [`b13e8f4`][b13e8f4] |
+| Parse-time namespace nodes and PIs were two allocations each | They come from the node chunk: parse allocations −10% on stylesheets. | [`092bdce`][092bdce] |
+| RELAX NG re-derived every element of a long document from scratch | Patterns are interned and derivatives remembered past 1,000 elements: 1.1 MB table −32% CPU, −76% allocations. | [`77cdd65`][77cdd65] |
+
+### Fixed — release process
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| The release workflow never released `w3cschemas` | `actions/checkout` refetches the pushed tag as a lightweight ref, so the tag message's `w3cschemas: vX.Y.Z` line read as empty and the step skipped; v0.4.0 and v0.5.0 were tagged by hand. The tag object is now fetched before it is read. | [`549d113`][549d113] |
+| Release notes printed the commit links as `[`abc1234`][abc1234]` | The body is the CHANGELOG section alone, and the link definitions sit at the file's foot. The section's definitions are now appended to the body. | [`78c47fb`][78c47fb] |
+
 ## v1.6.0 — 2026-10-07
 
 ### Added
@@ -1136,6 +1290,118 @@ here so every entry in this file sits under a release.
 [fb64893]: https://github.com/knroy/go-xml/commit/fb64893
 [fee47ab]: https://github.com/knroy/go-xml/commit/fee47ab
 [d3ce46f]: https://github.com/knroy/go-xml/commit/d3ce46f
+[549d113]: https://github.com/knroy/go-xml/commit/549d113
+[78c47fb]: https://github.com/knroy/go-xml/commit/78c47fb
+[ca09e14]: https://github.com/knroy/go-xml/commit/ca09e14
+[04ddeea]: https://github.com/knroy/go-xml/commit/04ddeea
+[eb6901e]: https://github.com/knroy/go-xml/commit/eb6901e
+[197eaad]: https://github.com/knroy/go-xml/commit/197eaad
+[cec5f6f]: https://github.com/knroy/go-xml/commit/cec5f6f
+[416ee50]: https://github.com/knroy/go-xml/commit/416ee50
+[3727b35]: https://github.com/knroy/go-xml/commit/3727b35
+[dccd679]: https://github.com/knroy/go-xml/commit/dccd679
+[262be91]: https://github.com/knroy/go-xml/commit/262be91
+[4457808]: https://github.com/knroy/go-xml/commit/4457808
+[1b65291]: https://github.com/knroy/go-xml/commit/1b65291
+[1e2bad6]: https://github.com/knroy/go-xml/commit/1e2bad6
+[91beb30]: https://github.com/knroy/go-xml/commit/91beb30
+[5912a5a]: https://github.com/knroy/go-xml/commit/5912a5a
+[81d16d5]: https://github.com/knroy/go-xml/commit/81d16d5
+[8a792f7]: https://github.com/knroy/go-xml/commit/8a792f7
+[6f63564]: https://github.com/knroy/go-xml/commit/6f63564
+[87cf96e]: https://github.com/knroy/go-xml/commit/87cf96e
+[2a7843f]: https://github.com/knroy/go-xml/commit/2a7843f
+[72cb46a]: https://github.com/knroy/go-xml/commit/72cb46a
+[53cff35]: https://github.com/knroy/go-xml/commit/53cff35
+[659fdc8]: https://github.com/knroy/go-xml/commit/659fdc8
+[b83418a]: https://github.com/knroy/go-xml/commit/b83418a
+[06c0df1]: https://github.com/knroy/go-xml/commit/06c0df1
+[18ef0f0]: https://github.com/knroy/go-xml/commit/18ef0f0
+[eac3823]: https://github.com/knroy/go-xml/commit/eac3823
+[aefdaea]: https://github.com/knroy/go-xml/commit/aefdaea
+[d077c5a]: https://github.com/knroy/go-xml/commit/d077c5a
+[4d31869]: https://github.com/knroy/go-xml/commit/4d31869
+[b5864c4]: https://github.com/knroy/go-xml/commit/b5864c4
+[738c1fb]: https://github.com/knroy/go-xml/commit/738c1fb
+[7dce099]: https://github.com/knroy/go-xml/commit/7dce099
+[ca3e6a1]: https://github.com/knroy/go-xml/commit/ca3e6a1
+[77cdd65]: https://github.com/knroy/go-xml/commit/77cdd65
+[ec72376]: https://github.com/knroy/go-xml/commit/ec72376
+[655311a]: https://github.com/knroy/go-xml/commit/655311a
+[a5b4546]: https://github.com/knroy/go-xml/commit/a5b4546
+[3f87498]: https://github.com/knroy/go-xml/commit/3f87498
+[77c78e9]: https://github.com/knroy/go-xml/commit/77c78e9
+[b13e8f4]: https://github.com/knroy/go-xml/commit/b13e8f4
+[092bdce]: https://github.com/knroy/go-xml/commit/092bdce
+[373da4b]: https://github.com/knroy/go-xml/commit/373da4b
+[5c2ca9c]: https://github.com/knroy/go-xml/commit/5c2ca9c
+[8082a2c]: https://github.com/knroy/go-xml/commit/8082a2c
+[edea87c]: https://github.com/knroy/go-xml/commit/edea87c
+[e7ec81d]: https://github.com/knroy/go-xml/commit/e7ec81d
+[739c744]: https://github.com/knroy/go-xml/commit/739c744
+[d006ad2]: https://github.com/knroy/go-xml/commit/d006ad2
+[abd214b]: https://github.com/knroy/go-xml/commit/abd214b
+[007e682]: https://github.com/knroy/go-xml/commit/007e682
+[3fc468a]: https://github.com/knroy/go-xml/commit/3fc468a
+[0602694]: https://github.com/knroy/go-xml/commit/0602694
+[2514a9a]: https://github.com/knroy/go-xml/commit/2514a9a
+[b88105e]: https://github.com/knroy/go-xml/commit/b88105e
+[549d8db]: https://github.com/knroy/go-xml/commit/549d8db
+[aa7d1e2]: https://github.com/knroy/go-xml/commit/aa7d1e2
+[8fb6f0b]: https://github.com/knroy/go-xml/commit/8fb6f0b
+[68795ba]: https://github.com/knroy/go-xml/commit/68795ba
+[ebd1759]: https://github.com/knroy/go-xml/commit/ebd1759
+[b0c7b30]: https://github.com/knroy/go-xml/commit/b0c7b30
+[3cd86ee]: https://github.com/knroy/go-xml/commit/3cd86ee
+[ba37f7c]: https://github.com/knroy/go-xml/commit/ba37f7c
+[a931b98]: https://github.com/knroy/go-xml/commit/a931b98
+[7ad91bd]: https://github.com/knroy/go-xml/commit/7ad91bd
+[3b06e4c]: https://github.com/knroy/go-xml/commit/3b06e4c
+[8e63b9d]: https://github.com/knroy/go-xml/commit/8e63b9d
+[5fbea36]: https://github.com/knroy/go-xml/commit/5fbea36
+[8aa5ab7]: https://github.com/knroy/go-xml/commit/8aa5ab7
+[740c22a]: https://github.com/knroy/go-xml/commit/740c22a
+[2402bca]: https://github.com/knroy/go-xml/commit/2402bca
+[987e24e]: https://github.com/knroy/go-xml/commit/987e24e
+[39c6931]: https://github.com/knroy/go-xml/commit/39c6931
+[d86f80c]: https://github.com/knroy/go-xml/commit/d86f80c
+[81b0a27]: https://github.com/knroy/go-xml/commit/81b0a27
+[17b99c3]: https://github.com/knroy/go-xml/commit/17b99c3
+[3d7e86b]: https://github.com/knroy/go-xml/commit/3d7e86b
+[97148b4]: https://github.com/knroy/go-xml/commit/97148b4
+[7496ea8]: https://github.com/knroy/go-xml/commit/7496ea8
+[efd4178]: https://github.com/knroy/go-xml/commit/efd4178
+[02905e9]: https://github.com/knroy/go-xml/commit/02905e9
+[0ca7dac]: https://github.com/knroy/go-xml/commit/0ca7dac
+[d212f7a]: https://github.com/knroy/go-xml/commit/d212f7a
+[e03ee3d]: https://github.com/knroy/go-xml/commit/e03ee3d
+[b7853d6]: https://github.com/knroy/go-xml/commit/b7853d6
+[b707e39]: https://github.com/knroy/go-xml/commit/b707e39
+[8cfeef4]: https://github.com/knroy/go-xml/commit/8cfeef4
+[569af46]: https://github.com/knroy/go-xml/commit/569af46
+[1253f9a]: https://github.com/knroy/go-xml/commit/1253f9a
+[c008a63]: https://github.com/knroy/go-xml/commit/c008a63
+[b764d67]: https://github.com/knroy/go-xml/commit/b764d67
+[0604061]: https://github.com/knroy/go-xml/commit/0604061
+[1f80934]: https://github.com/knroy/go-xml/commit/1f80934
+[84bbe23]: https://github.com/knroy/go-xml/commit/84bbe23
+[a2603d3]: https://github.com/knroy/go-xml/commit/a2603d3
+[262366d]: https://github.com/knroy/go-xml/commit/262366d
+[9bd1c79]: https://github.com/knroy/go-xml/commit/9bd1c79
+[4f0cc55]: https://github.com/knroy/go-xml/commit/4f0cc55
+[1c7fb99]: https://github.com/knroy/go-xml/commit/1c7fb99
+[6ce285f]: https://github.com/knroy/go-xml/commit/6ce285f
+[e00735a]: https://github.com/knroy/go-xml/commit/e00735a
+[2aa49d8]: https://github.com/knroy/go-xml/commit/2aa49d8
+[62c7117]: https://github.com/knroy/go-xml/commit/62c7117
+[949e0fa]: https://github.com/knroy/go-xml/commit/949e0fa
+[bcae9bd]: https://github.com/knroy/go-xml/commit/bcae9bd
+[446432b]: https://github.com/knroy/go-xml/commit/446432b
+[c7769f5]: https://github.com/knroy/go-xml/commit/c7769f5
+[b44313c]: https://github.com/knroy/go-xml/commit/b44313c
+[d8f0ac1]: https://github.com/knroy/go-xml/commit/d8f0ac1
+[c9c7c79]: https://github.com/knroy/go-xml/commit/c9c7c79
+[5cf8104]: https://github.com/knroy/go-xml/commit/5cf8104
 [d029347]: https://github.com/knroy/go-xml/commit/d029347
 [6e6fa8a]: https://github.com/knroy/go-xml/commit/6e6fa8a
 [f18912e]: https://github.com/knroy/go-xml/commit/f18912e

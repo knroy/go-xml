@@ -1,6 +1,8 @@
 package xpath
 
 import (
+	"sync/atomic"
+
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -347,6 +349,9 @@ type LetExpr struct {
 type FuncCall struct {
 	Name xdm.QName
 	Args []Expr
+
+	// resolved caches this call site's last resolution; see FuncCall.resolve.
+	resolved atomic.Pointer[callResolution]
 }
 
 // SequenceExpr is a comma-separated sequence constructor.

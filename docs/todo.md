@@ -23,7 +23,7 @@ Current position:
 | XSLT 3.0 | 99.80% — 11,495 of 11,518 in scope (23 failing); 3 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,574 `func Test` declarations, clean under `-race` |
+| Tests | 2,766 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -97,6 +97,17 @@ serialisers cannot disagree. **`suppress-indentation`** was fixed in the same
 pass and was wrong in a way the audit had not predicted: it suppressed
 indentation document-wide, where `serialize-xml-108` requires the named
 element to keep its own indentation and only its content to be spared.
+
+**Both serialisers now follow every `indent` constraint of Serialization 3.1
+§5.1.4.** `fn:serialize` spared only the immediate content of a
+`suppress-indentation` element and ignored `xml:space="preserve"`; both now
+cover the whole subtree, as `xsl:output` already did. Both serialisers also
+indented typed simple content (a validated `xs:string` of `"  "` came back with
+a newline in it) and typed mixed content. Whitespace is now added only inside
+an untyped or `xs:anyType` element with element children, or an element whose
+validated content model is element-only. An anonymous mixed type is annotated
+`anyType` just as `xs:anyType` is, so the validator records mixed content on
+the node (`xdm.Node.MixedContent`) for the serialisers to read.
 
 **`normalization-form`** is now read too, in both the map and element forms,
 and an unsupported form is `SEPM0017` rather than silence. Normalization is
@@ -318,29 +329,6 @@ parameters; `#` comments and the `\` identifier escape.
   widely reported as invalid RELAX NG is corroboration, not proof. The suite
   does not arbitrate it either way: it passes at 965 of 965 both before and
   after, and contains only nine `zeroOrMore` occurrences in total.
-
-* **`<ref>` expansion is not shared, and costs multiplicatively.** Fixing
-  section 7.3 let DocBook 5.1 reach the compiler for the first time, which is
-  how this surfaced: compilation had **not finished after 140 s**. It is not
-  non-termination. `compileRefNamed` re-compiles a definition's whole body
-  once per `<ref>` that names it and caches nothing, so a grammar whose
-  definitions form a chain — each referring to several others, as a large
-  modular schema does — costs a number of expansions that grows
-  multiplicatively along the chain. Measured: XSpec, with 70 definitions,
-  expands **14,140 times**, a factor of 200; DocBook has roughly 1,500.
-
-  `maxRefExpansions` (200,000) now bounds it, in the spirit of
-  `MaxPatternSize`, which bounds the same shape of blowup during validation.
-  DocBook stops in about 0.2 s with a message that says what happened instead
-  of hanging. **This is containment, not a fix.** The real fix is to share the
-  compiled pattern between `<ref>`s naming the same definition, which the
-  recursion guard makes delicate: the result depends on `inheritedNs`, and
-  `elementDepth` participates in the section 4.19 self-reference check, so a
-  naive cache can both reuse a pattern compiled under a different inherited
-  namespace and mask a legitimate error. Caching on *exit* was tried and does
-  not help — the blowup is in the first traversal, which a completed-entry
-  cache never gets to serve. Until that lands, DocBook-scale schemas are
-  refused rather than compiled.
 
 * **Section 7.3's *first* clause may be over-strict for two `<zeroOrMore>`s.**
   `xspec.rnc` sequences `xml-ns-attributes` with `common-attributes`, which
