@@ -36,3 +36,11 @@ func TestModeConflictReportedInNameOrder(t *testing.T) {
 		`<xsl:mode name="m%[1]d" on-no-match="shallow-copy"/><xsl:mode name="m%[1]d" on-no-match="deep-skip"/>`,
 		"conflicting values for mode m0 ")
 }
+
+// XTSE3350 with twenty tied accumulator names names the least every time.
+func TestAccumulatorTieReportedInNameOrder(t *testing.T) {
+	compileRepeated(t,
+		`<xsl:accumulator name="a%[1]d" initial-value="0"><xsl:accumulator-rule match="x" select="1"/></xsl:accumulator>`+
+			`<xsl:accumulator name="a%[1]d" initial-value="0"><xsl:accumulator-rule match="x" select="1"/></xsl:accumulator>`,
+		"named a0 at the same import precedence")
+}
