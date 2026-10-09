@@ -266,7 +266,7 @@ func argNodeOrContext(ctx *Context, args []xdm.Sequence, i int) (*xdm.Node, erro
 	return n, nil
 }
 
-func boolSeq(v bool) xdm.Sequence   { return xdm.One(boolItem(v)) }
+func boolSeq(v bool) xdm.Sequence { return xdm.One(boolItem(v)) }
 
 // trueItem and falseItem are the two xs:boolean values, shared by every
 // evaluation: atomic values are never written once built.
