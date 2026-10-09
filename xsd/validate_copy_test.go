@@ -281,3 +281,38 @@ func TestValidateCopyConcurrent(t *testing.T) {
 		t.Errorf("input changed: %d children (was %d), annotation %q", r.NumChildren(), kids, r.TypeAnnotation())
 	}
 }
+
+// TestTypedCopySeesItsRecordedEdits checks that the checks a typed copy runs
+// see the defaulted attributes and the stripped whitespace, which the copy
+// records rather than writes: an assertion counts the default and finds no
+// text, and a unique key collides on two defaulted values.
+func TestTypedCopySeesItsRecordedEdits(t *testing.T) {
+	s := loadAssertionSchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="r"><xs:complexType><xs:sequence>
+    <xs:element name="i" maxOccurs="unbounded"><xs:complexType>
+      <xs:attribute name="k" type="xs:string" default="d"/></xs:complexType></xs:element>
+    </xs:sequence>
+    <xs:assert test="count(i/@k) eq count(i) and empty(text())"/></xs:complexType>
+    <xs:unique name="u"><xs:selector xpath="i"/><xs:field xpath="@k"/></xs:unique>
+  </xs:element>
+</xs:schema>`)
+	parse := func(src string) *xdm.Node {
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tree.Root
+	}
+	got, err := s.ValidateCopy(parse("<r>\n  <i/>\n  <i k=\"x\"/>\n</r>"), ValidateOptions{})
+	if err != nil {
+		t.Fatalf("the assertion did not see the typed copy's edits: %v", err)
+	}
+	r := got.FirstChild()
+	if r.NumChildren() != 2 || r.ChildAt(0).AttrValue("k") != "d" {
+		t.Errorf("typed copy: %d children, first @k %q", r.NumChildren(), r.ChildAt(0).AttrValue("k"))
+	}
+	if _, err := s.ValidateCopy(parse(`<r><i/><i/></r>`), ValidateOptions{}); err == nil ||
+		!strings.Contains(err.Error(), "cvc-identity-constraint") {
+		t.Errorf("two defaulted key values did not collide: %v", err)
+	}
+}
