@@ -238,7 +238,8 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// each child instead reported the ID/IDREF failures with the
 				// element codes XTTE1510/XTTE1515, where XTTE1555 is the code
 				// for "document-level constraints are not satisfied".
-				if err := i.validation.assess(rt, c); err != nil {
+				c, err := i.validation.assess(rt, c)
+				if err != nil {
 					return err
 				}
 				out.AppendNode(c)
@@ -286,7 +287,8 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// from the process-global registries.
 				a := xdm.NewNode(xdm.KindAttribute, v.Name(), v.Value())
 				a.CopyTypingFrom(v)
-				if err := i.validation.assess(rt, a); err != nil {
+				a, err := i.validation.assess(rt, a)
+				if err != nil {
 					return err
 				}
 				if err := out.AddAttributeWithTyping(a.Name(), a.Value(),
@@ -354,9 +356,15 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// annotate, and annotating the source document would leak a
 			// property of this instruction into the tree everything else
 			// still reads.
-			if err := i.validation.assess(rt, c); err != nil {
+			typed, err := i.validation.assess(rt, c)
+			if err != nil {
 				return err
 			}
+			if typed != c && i.copyAccumulators {
+				// The typed copy is the copy now, and answers as v does.
+				rt.noteCopiedAccumulators(v, typed)
+			}
+			c = typed
 			out.AppendNode(c)
 			// After the copy has a parent, because the repair §5.8.3 needs
 			// depends on what the destination declares: an element in no
@@ -925,7 +933,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		// The copy is assessed once it is complete, since validity is a
 		// property of the whole element and its content.
-		return i.validation.assess(rt, sub.Open())
+		return i.validation.assessOpen(rt, sub)
 
 	case xdm.KindDocument:
 		// Section 11.9.1: the result of xsl:copy over a document node is "a
@@ -981,7 +989,8 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 				}
 			}
 		}
-		if err := i.validation.assess(rt, doc); err != nil {
+		doc, err = i.validation.assess(rt, doc)
+		if err != nil {
 			return err
 		}
 		out.AppendNode(doc)
@@ -992,10 +1001,11 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return nil
 
 	case xdm.KindAttribute:
-		if err := i.validation.assess(rt, node); err != nil {
+		typed, err := i.validation.assess(rt, node)
+		if err != nil {
 			return err
 		}
-		return out.AddAttribute(node.Name(), node.Value())
+		return out.AddAttribute(typed.Name(), typed.Value())
 
 	case xdm.KindComment:
 		out.AppendNode(xdm.NewNode(xdm.KindComment, xdm.QName{}, node.Value()))
@@ -1164,7 +1174,7 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	fixupNamespaces(sub.Open())
 	// Assessed once the element is complete, since validity is a property of
 	// its content as well as its name.
-	return i.validation.assess(rt, sub.Open())
+	return i.validation.assessOpen(rt, sub)
 }
 
 // elementInstr implements xsl:element, whose name is computed at run time.
@@ -1225,7 +1235,7 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// The element is complete only now, so validity is assessed here rather
 	// than at construction: a content model cannot be checked against
 	// content that has not been built yet.
-	return i.validation.assess(rt, sub.Open())
+	return i.validation.assessOpen(rt, sub)
 }
 
 // resolveName turns a computed lexical name into an expanded QName, using the
@@ -1362,8 +1372,8 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// the one place holding the schema that did the assessing, so what it
 	// resolved the name to must travel with the node rather than be looked up
 	// again later against whichever schema happens to have loaded last.
-	assessed := xdm.NewNode(xdm.KindAttribute, qn, value)
-	if err := i.validation.assess(rt, assessed); err != nil {
+	assessed, err := i.validation.assess(rt, xdm.NewNode(xdm.KindAttribute, qn, value))
+	if err != nil {
 		return err
 	}
 	return out.AddAttributeWithTyping(qn, value, xdm.TypingOf(assessed))
@@ -2263,7 +2273,8 @@ func (i *documentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
-	if err := i.validation.assess(rt, doc); err != nil {
+	doc, err = i.validation.assess(rt, doc)
+	if err != nil {
 		return err
 	}
 	out.AppendNode(doc)

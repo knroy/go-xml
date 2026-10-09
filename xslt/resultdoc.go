@@ -211,8 +211,8 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if derr != nil {
 			return derr
 		}
-		if err := i.validation.assess(rt, doc); err != nil {
-			return err
+		if doc, derr = i.validation.assess(rt, doc); derr != nil {
+			return derr
 		}
 		// The assessment annotated the document toDocument built, and that
 		// document is a COPY: toTree deep-copies every node it adopts, so

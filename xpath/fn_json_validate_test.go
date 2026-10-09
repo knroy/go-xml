@@ -79,4 +79,4 @@ func TestJSONToXMLWithoutValidateSkipsTheValidator(t *testing.T) {
 
 type validatorFunc func(*xdm.Node) error
 
-func (f validatorFunc) ValidateJSONTree(doc *xdm.Node) error { return f(doc) }
+func (f validatorFunc) ValidateJSONTree(doc *xdm.Node) (*xdm.Node, error) { return doc, f(doc) }

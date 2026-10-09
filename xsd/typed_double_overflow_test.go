@@ -47,10 +47,11 @@ func TestTypedDoubleOverflowKeepsItsType(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s=%s: %v", c.el, c.lex, err)
 		}
-		if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
+		doc, err := s.ValidateCopy(tree.Root, ValidateOptions{})
+		if err != nil {
 			t.Fatalf("%s=%s: the schema accepts this lexical form: %v", c.el, c.lex, err)
 		}
-		a := tree.Root.ChildElements()[0].Atomize()
+		a := doc.ChildElements()[0].Atomize()
 		if a == nil {
 			t.Errorf("%s=%s: atomised to nothing", c.el, c.lex)
 			continue

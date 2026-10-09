@@ -52,20 +52,11 @@ const keySepSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
 // an XML 1.1 instance would produce once that path admits the character.
 func keySepTree(pairs ...[2]string) *xdm.Node {
 	root := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "root"}, "")
-	var kids []*xdm.Node
 	for _, p := range pairs {
-		i := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "i"}, "")
-		i.SetParent(root)
-		var attrs []*xdm.Node
-		for _, at := range [][2]string{{"a", p[0]}, {"b", p[1]}} {
-			a := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: at[0]}, at[1])
-			a.SetParent(i)
-			attrs = append(attrs, a)
-		}
-		i.SetAttrs(attrs)
-		kids = append(kids, i)
+		i := root.AppendElement(xdm.QName{Local: "i"})
+		i.AppendAttr(xdm.QName{Local: "a"}, p[0])
+		i.AppendAttr(xdm.QName{Local: "b"}, p[1])
 	}
-	root.SetChildren(kids)
 	return root
 }
 

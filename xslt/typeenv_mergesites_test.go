@@ -206,16 +206,16 @@ func TestNamespaceResolvedSchemaMergeCarriesTheTypeEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing the source: %v", err)
 	}
-	if err := sheet.schema.Validate(dtree.Root,
-		xsd.ValidateOptions{Annotate: true}); err != nil {
+	typed, err := sheet.schema.ValidateCopy(dtree.Root, xsd.ValidateOptions{})
+	if err != nil {
 		t.Fatalf("validating the source against the aggregate: %v", err)
 	}
-	if got := dtree.Root.FirstChild().TypeAnnotation(); got != outer {
+	if got := typed.FirstChild().TypeAnnotation(); got != outer {
 		t.Fatalf("precondition: validation annotated the element %q, want %q",
 			got, outer)
 	}
 
-	out, err := sheet.Transform(context.Background(), dtree.Root,
+	out, err := sheet.Transform(context.Background(), typed,
 		TransformOptions{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)

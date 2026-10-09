@@ -155,7 +155,8 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 		copied.Root.AppendChild(deepCopy(ch))
 	}
 	copied.Finalize()
-	if err := i.validation.assess(rt, copied.Root); err != nil {
+	root, err := i.validation.assess(rt, copied.Root)
+	if err != nil {
 		return nil, err
 	}
 	// Stripping happens after assessment, not instead of it. 3.5 scopes
@@ -165,7 +166,7 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 	// error whether or not the annotations it would have produced survive.
 	// Only the annotations go, which is what makes
 	// "data(.) instance of xs:decimal" false over a validated document.
-	return fragmentOf(rt.sheet.stripInputAnnotations(copied.Root), href)
+	return fragmentOf(rt.sheet.stripInputAnnotations(root), href)
 }
 
 // fragmentOf applies the fragment identifier of href, if there is one, to the

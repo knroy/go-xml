@@ -1245,7 +1245,8 @@ func jsonToXML(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error
 	tree := &xdm.Tree{Root: doc}
 	tree.Finalize()
 	if opts.validate {
-		if err := validateJSONTree(ctx, doc); err != nil {
+		var err error
+		if doc, err = validateJSONTree(ctx, doc); err != nil {
 			return nil, err
 		}
 	}
@@ -1265,9 +1266,9 @@ func jsonToXML(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error
 // F&O 3.1 §17.5.3: "An error is raised [err:FOJS0004] if the value of the
 // validate option is true and the processor does not support schema
 // validation or typed data."
-func validateJSONTree(ctx *Context, doc *xdm.Node) error {
+func validateJSONTree(ctx *Context, doc *xdm.Node) (*xdm.Node, error) {
 	if ctx == nil || ctx.ev().Validator == nil {
-		return xdm.Errorf("FOJS0004",
+		return nil, xdm.Errorf("FOJS0004",
 			"validate=true was requested but this processor cannot validate: "+
 				"no schema for the XML representation of JSON is available")
 	}

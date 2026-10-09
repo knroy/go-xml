@@ -8,11 +8,11 @@ import (
 	"github.com/knroy/go-xml/v2/xsd"
 )
 
-// TestAnnotatedSourceAtomisesToTypedValues pins that a source validated with
-// xsd.ValidateOptions{Annotate: true} reaches the stylesheet typed: an element
+// TestAnnotatedSourceAtomisesToTypedValues pins that the typed copy
+// xsd.Schema.ValidateCopy returns reaches the stylesheet typed: an element
 // declared xs:decimal atomises to an xs:decimal and arithmetic on an
-// xs:integer stays xs:integer, with no cast in the stylesheet. Without
-// Annotate the schema only checks the document, and the same stylesheet sees
+// xs:integer stays xs:integer, with no cast in the stylesheet. Validate only
+// checks the document, and the same stylesheet sees
 // xs:untypedAtomic. docs/validation.md once said typed values did not exist at
 // all; this is the behaviour that statement contradicted.
 func TestAnnotatedSourceAtomisesToTypedValues(t *testing.T) {
@@ -41,7 +41,13 @@ func TestAnnotatedSourceAtomisesToTypedValues(t *testing.T) {
 		want     string
 	}{{false, "false false"}, {true, "true true"}} {
 		src := mustParse(t, `<order><price>10.50</price><qty>3</qty></order>`)
-		if err := sh.Schema().Validate(src, xsd.ValidateOptions{Annotate: c.annotate}); err != nil {
+		var err error
+		if c.annotate {
+			src, err = sh.Schema().ValidateCopy(src, xsd.ValidateOptions{})
+		} else {
+			err = sh.Schema().Validate(src, xsd.ValidateOptions{})
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
 		res, err := sh.Transform(context.Background(), src, TransformOptions{})

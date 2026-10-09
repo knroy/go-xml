@@ -17,7 +17,8 @@ import (
 // the same hook for the same reason; this is the query side of it.
 type jsonTreeValidator struct{}
 
-// ValidateJSONTree assesses the tree against F&O 3.1 §C.2 and annotates it.
+// ValidateJSONTree assesses the tree against F&O 3.1 §C.2 and returns its
+// typed copy.
 //
 // The schema is the built-in one rather than whatever the query imported.
 // §17.5.3 names it outright — the annotations are those "that result from
@@ -31,18 +32,18 @@ type jsonTreeValidator struct{}
 // map's keys is scoped to a validation root the function built and nothing
 // else can see, and the duplicates option has already settled what happens to
 // a repeated key.
-func (jsonTreeValidator) ValidateJSONTree(doc *xdm.Node) error {
+func (jsonTreeValidator) ValidateJSONTree(doc *xdm.Node) (*xdm.Node, error) {
 	schema, err := xsd.SchemaForJSON()
 	if err != nil {
-		return xdm.Errorf("FOJS0004", "%s", err.Error())
+		return nil, xdm.Errorf("FOJS0004", "%s", err.Error())
 	}
-	if err := schema.Validate(doc, xsd.ValidateOptions{
-		Annotate:          true,
+	typed, err := schema.ValidateCopy(doc, xsd.ValidateOptions{
 		SkipIDConstraints: true,
-	}); err != nil {
-		return fmt.Errorf(
+	})
+	if err != nil {
+		return nil, fmt.Errorf(
 			"the XML representation of the JSON input is not valid against "+
 				"the schema for fn:json-to-xml: %w", err)
 	}
-	return nil
+	return typed, nil
 }

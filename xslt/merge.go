@@ -1035,13 +1035,14 @@ func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
 		copied.Root.AppendChild(deepCopy(ch))
 	}
 	copied.Finalize()
-	if s.accums != nil {
-		rt.treeAccums[copied.Root] = s.accums
-	}
-	if err := s.validation.assess(rt, copied.Root); err != nil {
+	root, err := s.validation.assess(rt, copied.Root)
+	if err != nil {
 		return nil, err
 	}
-	return copied.Root, nil
+	if s.accums != nil {
+		rt.treeAccums[root] = s.accums
+	}
+	return root, nil
 }
 
 // parseUseAccumulators reads a use-accumulators attribute into the same set

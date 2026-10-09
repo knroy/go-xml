@@ -146,12 +146,12 @@ func sameTree(t *testing.T, label string, a, b *xdm.Node) {
 	}
 }
 
-// TestValidateCopyMatchesInPlace is the differential: the same documents
-// validated in place and through ValidateCopy must agree on every node's
-// typing, values, URIs and namespaces, on the tree's DTD context, and on the
-// error text including line and column; and the input to ValidateCopy must
-// come out exactly as a fresh parse of it.
-func TestValidateCopyMatchesInPlace(t *testing.T) {
+// TestValidateCopyMatchesVerdict checks ValidateCopy against Validate: the
+// same error text, line and column included; an input that comes out exactly
+// as a fresh parse of it; and a copy that is a new tree carrying the DTD
+// context, or, for an element below the document element, a parentless copy
+// of that element alone.
+func TestValidateCopyMatchesVerdict(t *testing.T) {
 	s := loadAssertionSchema(t, copySchema)
 	cases := []struct {
 		name, doc, target string
@@ -164,13 +164,12 @@ func TestValidateCopyMatchesInPlace(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			opts := ValidateOptions{MaxErrors: -1, SkipIDConstraints: c.target != ""}
-			inPlace := parseCopyDoc(t, c.doc)
-			inOpts := opts
-			inOpts.Annotate = true
-			errIn := s.Validate(pickCopyTarget(inPlace.Root, c.target), inOpts)
+			verdict := parseCopyDoc(t, c.doc)
+			errIn := s.Validate(pickCopyTarget(verdict.Root, c.target), opts)
 			if (errIn == nil) != c.valid {
-				t.Fatalf("in place: %v", errIn)
+				t.Fatalf("verdict: %v", errIn)
 			}
+			sameTree(t, "Validate's input vs fresh parse", parseCopyDoc(t, c.doc).Root, verdict.Root)
 
 			input := parseCopyDoc(t, c.doc)
 			target := pickCopyTarget(input.Root, c.target)
@@ -180,25 +179,27 @@ func TestValidateCopyMatchesInPlace(t *testing.T) {
 				t.Fatalf("an invalid document's errors carry no position: %v", errCp)
 			}
 			if errText(errIn) != errText(errCp) {
-				t.Fatalf("errors differ\n  in place: %s\n  copy:     %s", errText(errIn), errText(errCp))
+				t.Fatalf("errors differ\n  verdict: %s\n  copy:    %s", errText(errIn), errText(errCp))
 			}
 			if got == target || got.Name() != target.Name() {
 				t.Fatalf("ValidateCopy returned %v, want a copy of %v", got, target)
 			}
-			top := got
-			for top.Parent() != nil {
-				top = top.Parent()
-			}
-			sameTree(t, "copy vs in place", inPlace.Root, top)
 			sameTree(t, "input vs fresh parse", parseCopyDoc(t, c.doc).Root, input.Root)
-
-			ct := top.Tree()
+			if c.target != "" {
+				if got.Parent() != nil || got.TypeAnnotation() != "QName" ||
+					got.InScopeNamespaces()["p"] != "" {
+					t.Fatalf("element copy: parent %v, annotation %q, scope %v",
+						got.Parent(), got.TypeAnnotation(), got.InScopeNamespaces())
+				}
+				return
+			}
+			ct := got.Tree()
 			if ct == nil || ct == input {
 				t.Fatalf("copy tree = %p, want a new tree", ct)
 			}
-			if ct.DocType != inPlace.DocType || ct.XMLVersion != inPlace.XMLVersion {
+			if ct.DocType != input.DocType || ct.XMLVersion != input.XMLVersion {
 				t.Errorf("tree: DocType/XMLVersion %q/%q, want %q/%q",
-					ct.DocType, ct.XMLVersion, inPlace.DocType, inPlace.XMLVersion)
+					ct.DocType, ct.XMLVersion, input.DocType, input.XMLVersion)
 			}
 			if sys, _, _, ok := ct.UnparsedEntity("pic"); !ok || sys == "" {
 				t.Errorf("copy lost the unparsed entity: %q %v", sys, ok)
@@ -256,9 +257,9 @@ func TestValidateCopyIsNotVacuous(t *testing.T) {
 	}
 }
 
-// TestValidateCopyConcurrent validates one tree from several goroutines. In
-// place, each run strips whitespace from and annotates the shared tree, which
-// -race reports; through ValidateCopy each run writes only its own copy.
+// TestValidateCopyConcurrent validates one tree from several goroutines. Each
+// run writes only its own copy, so -race has nothing to report and the input
+// stays as it was.
 func TestValidateCopyConcurrent(t *testing.T) {
 	s := loadAssertionSchema(t, copySchema)
 	in := parseCopyDoc(t, copyDoc("100", `<n xsi:nil="true"/>`, "1"))
