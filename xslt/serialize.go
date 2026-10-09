@@ -420,9 +420,12 @@ type serializer struct {
 	w    io.Writer
 	opts OutputSettings
 	err  error
-	// nsStack tracks namespace prefixes already declared on ancestors, so a
-	// binding is emitted once rather than on every descendant.
-	nsStack []map[string]string
+	// ns holds the namespace bindings written on the open elements, outermost
+	// first, so a binding is emitted once rather than on every descendant.
+	// Each element appends what it declares and truncates back on exit; the
+	// latest entry for a prefix is the one in force. It replaced a map per
+	// element holding a copy of every binding in scope.
+	ns []nsPair
 	// pendingDoctype records that a document type declaration is owed, to be
 	// written immediately before the document element.
 	pendingDoctype bool
@@ -471,6 +474,15 @@ type serializer struct {
 	// charMap substitutes individual characters for arbitrary strings,
 	// bypassing escaping. Declared by xsl:character-map.
 	charMap map[rune]string
+	// oneSeg backs mapSegments' answer when there is no character map, so
+	// that every text node and attribute value does not allocate a slice for
+	// its single segment. Both callers finish with the slice before asking
+	// again.
+	oneSeg [1]mapSegment
+	// encFrom and encLower cache opts.Encoding lower-cased: representable
+	// asks for it on every non-ASCII character, and lower-casing "UTF-8"
+	// allocated each time. encFrom is the spelling the cache was made from.
+	encFrom, encLower string
 }
 
 func (s *serializer) writeString(str string) {
@@ -738,16 +750,18 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	}
 	s.indent(depth)
 
-	name := s.elementName(n)
-	s.writeString("<" + name)
+	s.writeString("<")
+	s.writeElementName(n)
 
 	// Emit namespace declarations that are not already in scope on an
 	// ancestor. Re-declaring an inherited binding is legal but noisy, and for
 	// a document with a namespace on every element it doubles the output size.
-	inScope := s.currentScope()
-	declared := map[string]string{}
+	// s.ns[:base] is in scope from the ancestors; s.ns[base:] is what this
+	// element declares, and stays in scope for its children.
+	base := len(s.ns)
+	defer func() { s.ns = s.ns[:base] }()
 	for _, ns := range n.Namespaces {
-		if inScope[ns.Name.Local] == ns.Value {
+		if s.inScope(base, ns.Name.Local) == ns.Value {
 			continue
 		}
 		// An element binds each prefix at most once, and the binding its own
@@ -765,7 +779,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		// same prefix twice -- xsl:namespace-alias with competing aliases at
 		// different import precedence leaves two y bindings behind, which is
 		// namespace-alias-2620 -- and writing both is not well-formed XML.
-		if _, dup := declared[ns.Name.Local]; dup {
+		if _, dup := s.declared(base, ns.Name.Local); dup {
 			continue
 		}
 		// A namespace undeclaration for a *prefix* -- xmlns:p="" -- is
@@ -785,14 +799,14 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			continue
 		}
 		s.writeNamespaceDecl(ns.Name.Local, ns.Value)
-		declared[ns.Name.Local] = ns.Value
+		s.ns = append(s.ns, nsPair{ns.Name.Local, ns.Value})
 	}
 	// An element whose namespace has no declaration in scope needs one, which
 	// happens for elements built by xsl:element with a computed namespace.
-	if n.Name.URI != "" && inScope[n.Name.Prefix] != n.Name.URI &&
-		declared[n.Name.Prefix] != n.Name.URI {
+	if n.Name.URI != "" && s.inScope(base, n.Name.Prefix) != n.Name.URI &&
+		s.declaredURI(base, n.Name.Prefix) != n.Name.URI {
 		s.writeNamespaceDecl(n.Name.Prefix, n.Name.URI)
-		declared[n.Name.Prefix] = n.Name.URI
+		s.ns = append(s.ns, nsPair{n.Name.Prefix, n.Name.URI})
 	}
 	// An element in no namespace under an ancestor with a default namespace
 	// has to undeclare it. Without xmlns="" the element is read back as
@@ -804,24 +818,32 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// string, so testing declared[""] == "" could not tell "already
 	// undeclared here" from "not mentioned here" and wrote xmlns="" twice on
 	// an element that needed it once.
-	if _, undeclared := declared[""]; n.Name.URI == "" && n.Name.Prefix == "" &&
-		inScope[""] != "" && !undeclared {
+	if _, undeclared := s.declared(base, ""); n.Name.URI == "" && n.Name.Prefix == "" &&
+		s.inScope(base, "") != "" && !undeclared {
 		s.writeNamespaceDecl("", "")
-		declared[""] = ""
+		s.ns = append(s.ns, nsPair{"", ""})
 	}
 	for _, a := range n.Attrs {
 		if a.Name.URI == "" || a.Name.URI == xdm.NSXML {
 			continue
 		}
-		if inScope[a.Name.Prefix] == a.Name.URI || declared[a.Name.Prefix] == a.Name.URI {
+		if s.inScope(base, a.Name.Prefix) == a.Name.URI || s.declaredURI(base, a.Name.Prefix) == a.Name.URI {
 			continue
 		}
 		s.writeNamespaceDecl(a.Name.Prefix, a.Name.URI)
-		declared[a.Name.Prefix] = a.Name.URI
+		s.ns = append(s.ns, nsPair{a.Name.Prefix, a.Name.URI})
 	}
 
 	for _, a := range n.Attrs {
-		s.writeString(" " + s.attrName(a) + s.attrValue(a, n))
+		// Written in pieces rather than concatenated, which allocated a
+		// string per attribute. The value is computed first: it can fail,
+		// and then nothing of the attribute is written, as before.
+		open, body, end := s.attrValue(a, n)
+		s.writeString(" ")
+		s.writeAttrName(a)
+		s.writeString(open)
+		s.writeString(body)
+		s.writeString(end)
 	}
 
 	// An empty element still has to be opened when the method is going to put
@@ -857,7 +879,9 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 				if s.isVoidElement(n.Name.Local) {
 					s.writeString(">")
 				} else {
-					s.writeString("></" + name + ">")
+					s.writeString("></")
+					s.writeElementName(n)
+					s.writeString(">")
 				}
 				return
 			}
@@ -887,7 +911,9 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			if s.xhtmlVoidElement(n) {
 				s.writeString(" />")
 			} else {
-				s.writeString("></" + name + ">")
+				s.writeString("></")
+				s.writeElementName(n)
+				s.writeString(">")
 			}
 			return
 		}
@@ -897,7 +923,6 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		return
 	}
 
-	s.pushScope(inScope, declared)
 	s.writeString(">")
 
 	// The HTML method adds the content-type meta so the encoding survives
@@ -1039,8 +1064,9 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		(emptyHead && s.opts.Indent) {
 		s.indent(depth)
 	}
-	s.writeString("</" + name + ">")
-	s.popScope()
+	s.writeString("</")
+	s.writeElementName(n)
+	s.writeString(">")
 }
 
 // nodeNoIndent writes a node without introducing whitespace.
@@ -1053,34 +1079,55 @@ func (s *serializer) nodeNoIndent(n *xdm.Node) {
 
 func (s *serializer) writeNamespaceDecl(prefix, uri string) {
 	if prefix == "" {
-		s.writeString(` xmlns="` + escapeAttr(uri) + `"`)
-		return
+		s.writeString(` xmlns="`)
+	} else {
+		s.writeString(` xmlns:`)
+		s.writeString(prefix)
+		s.writeString(`="`)
 	}
-	s.writeString(` xmlns:` + prefix + `="` + escapeAttr(uri) + `"`)
+	s.writeString(escapeAttr(uri))
+	s.writeString(`"`)
 }
 
-func (s *serializer) currentScope() map[string]string {
-	if len(s.nsStack) == 0 {
-		return map[string]string{}
+// nsPair is one namespace binding written on an open element.
+type nsPair struct{ prefix, uri string }
+
+// inScope returns the URI an ancestor bound prefix to, or "" if none did:
+// the latest binding in s.ns[:base].
+func (s *serializer) inScope(base int, prefix string) string {
+	for i := base - 1; i >= 0; i-- {
+		if s.ns[i].prefix == prefix {
+			return s.ns[i].uri
+		}
 	}
-	return s.nsStack[len(s.nsStack)-1]
+	return ""
 }
 
-func (s *serializer) pushScope(base, added map[string]string) {
-	next := make(map[string]string, len(base)+len(added))
-	for k, v := range base {
-		next[k] = v
+// declared returns the URI the current element, whose own bindings start at
+// base, has declared for prefix, and whether it has declared one.
+func (s *serializer) declared(base int, prefix string) (string, bool) {
+	for i := len(s.ns) - 1; i >= base; i-- {
+		if s.ns[i].prefix == prefix {
+			return s.ns[i].uri, true
+		}
 	}
-	for k, v := range added {
-		next[k] = v
-	}
-	s.nsStack = append(s.nsStack, next)
+	return "", false
 }
 
-func (s *serializer) popScope() {
-	if len(s.nsStack) > 0 {
-		s.nsStack = s.nsStack[:len(s.nsStack)-1]
+// declaredURI is declared without the presence flag.
+func (s *serializer) declaredURI(base int, prefix string) string {
+	uri, _ := s.declared(base, prefix)
+	return uri
+}
+
+// writeElementName writes an element's lexical name in pieces, which
+// spares the string elementName allocates for a prefixed name.
+func (s *serializer) writeElementName(n *xdm.Node) {
+	if n.Name.Prefix != "" {
+		s.writeString(n.Name.Prefix)
+		s.writeString(":")
 	}
+	s.writeString(n.Name.Local)
 }
 
 // elementName returns the lexical name to serialise.
@@ -1091,14 +1138,17 @@ func (s *serializer) elementName(n *xdm.Node) string {
 	return n.Name.Local
 }
 
-func (s *serializer) attrName(a *xdm.Node) string {
-	if a.Name.URI == xdm.NSXML {
-		return "xml:" + a.Name.Local
+// writeAttrName writes an attribute's lexical name in pieces, which spares
+// the string a concatenation would allocate per attribute.
+func (s *serializer) writeAttrName(a *xdm.Node) {
+	switch {
+	case a.Name.URI == xdm.NSXML:
+		s.writeString("xml:")
+	case a.Name.Prefix != "":
+		s.writeString(a.Name.Prefix)
+		s.writeString(":")
 	}
-	if a.Name.Prefix != "" {
-		return a.Name.Prefix + ":" + a.Name.Local
-	}
-	return a.Name.Local
+	s.writeString(a.Name.Local)
 }
 
 func (s *serializer) indent(depth int) {
@@ -1113,7 +1163,10 @@ func (s *serializer) indent(depth int) {
 		s.skipIndent = false
 		return
 	}
-	s.writeString("\n" + strings.Repeat("  ", depth))
+	s.writeString("\n")
+	for range depth {
+		s.writeString("  ")
+	}
 }
 
 // skipBeforeChild reports whether the html or xhtml method may not indent
@@ -1519,7 +1572,7 @@ func (s *serializer) representable(r rune) bool {
 	if r < 0x80 {
 		return true
 	}
-	switch strings.ToLower(s.opts.Encoding) {
+	switch s.encodingLower() {
 	case "us-ascii", "ascii":
 		return false
 	case "iso-8859-1", "latin1":
@@ -1533,11 +1586,20 @@ func (s *serializer) representable(r rune) bool {
 // asking representable() about each rune. It is the run-level form of
 // representable and must agree with it: the two switch on the same names.
 func (s *serializer) encodingHoldsAll() bool {
-	switch strings.ToLower(s.opts.Encoding) {
+	switch s.encodingLower() {
 	case "us-ascii", "ascii", "iso-8859-1", "latin1":
 		return false
 	}
 	return true
+}
+
+// encodingLower returns opts.Encoding lower-cased, computing it only when
+// the setting differs from the one last seen.
+func (s *serializer) encodingLower() string {
+	if s.encFrom != s.opts.Encoding {
+		s.encFrom, s.encLower = s.opts.Encoding, strings.ToLower(s.opts.Encoding)
+	}
+	return s.encLower
 }
 
 // normalized applies the requested Unicode normalisation, if any.
@@ -1570,7 +1632,8 @@ func (s *serializer) normalized(text string) string {
 // replacements verbatim, which is the point of declaring a map at all.
 func (s *serializer) mapSegments(text string) []mapSegment {
 	if len(s.charMap) == 0 {
-		return []mapSegment{{text: s.normalized(text)}}
+		s.oneSeg[0] = mapSegment{text: s.normalized(text)}
+		return s.oneSeg[:]
 	}
 	var segs []mapSegment
 	run := 0
@@ -1617,7 +1680,9 @@ func (s *serializer) mapChars(text string) string {
 	return sb.String()
 }
 
-// attrValue writes an attribute value with its delimiters.
+// attrValue returns an attribute value with its delimiters, as the opening
+// `="` or `='`, the escaped body and the closing quote, for the caller to
+// write in pieces; all three are empty for a minimized boolean attribute.
 //
 // A character map applies to attribute nodes as well as to text nodes, and
 // the substituted string bypasses escaping — that is the point of declaring
@@ -1625,7 +1690,7 @@ func (s *serializer) mapChars(text string) string {
 // have it escaped, so the specification says the serialiser uses the other
 // delimiter around the value where it can. Only where both quote characters
 // appear is there no choice, and then the double quote is escaped.
-func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) string {
+func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) (open, body, end string) {
 	// XSLT 1.0 section 16.2, carried into the serialization specification's
 	// html output method: "The html output method should output boolean
 	// attributes (that is attributes with only a single possible value that
@@ -1636,7 +1701,7 @@ func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) string {
 	// is not well formed, and the XHTML compatibility guidelines say so
 	// explicitly.
 	if s.html && !s.xhtml && isBooleanAttribute(owner.Name.Local, a) {
-		return ""
+		return "", "", ""
 	}
 	if s.html && s.escapeURIs() && isURIAttribute(owner.Name.Local, a) {
 		// A character map does not reach a URI-valued attribute that is being
@@ -1645,13 +1710,13 @@ func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) string {
 		// the serialization specification gives the escaping precedence.
 		// character-map-009 checks exactly this: an href of "z-linkage.html"
 		// keeps its "z" even with a map that rewrites "z" everywhere else.
-		return `="` + s.escapeAttrRunes(escapeURIAttribute(s.normalized(a.Value))) + `"`
+		return `="`, s.escapeAttrRunes(escapeURIAttribute(s.normalized(a.Value))), `"`
 	}
 	body, raw := s.escapeAttrMapped(a.Value, false)
 	if raw && strings.Contains(body, `"`) && !strings.Contains(body, "'") {
-		return "='" + body + "'"
+		return "='", body, "'"
 	}
-	return `="` + body + `"`
+	return `="`, body, `"`
 }
 
 // escapeAttrMapped escapes an attribute value, passing character-mapped
@@ -1663,6 +1728,14 @@ func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) string {
 // percent-escaping a replacement string would defeat the map, and the test
 // suite checks that a map leaves a URI attribute alone.
 func (s *serializer) escapeAttrMapped(v string, uri bool) (string, bool) {
+	// The common case -- no map, no URI escaping, the run-at-once arm below
+	// -- without the builder, so a value with nothing to escape is returned
+	// as it stands.
+	if len(s.charMap) == 0 && !uri && !s.rawText && !s.html && s.encodingHoldsAll() {
+		if run := s.normalized(v); !strings.ContainsFunc(run, isC0Control) {
+			return escapeAttr(run), false
+		}
+	}
 	var sb strings.Builder
 	sb.Grow(len(v))
 	mapped := false
@@ -1730,8 +1803,32 @@ func (s *serializer) writeAttrRuns(sb *strings.Builder, run string) {
 			sb.WriteByte('&')
 			continue
 		}
+		if plainAttrASCII(r) {
+			sb.WriteByte(byte(r))
+			continue
+		}
+		if s.plainAttrWide(r) {
+			sb.WriteRune(r)
+			continue
+		}
 		sb.WriteString(s.escapeAttrRune(r))
 	}
+}
+
+// plainAttrASCII reports whether r is printable ASCII that escapeAttrRune
+// writes unchanged under every method, encoding and version. Copying such a
+// character straight to the builder skips the one-character string and the
+// builder escapeAttr would allocate for it: on an html page that was two
+// allocations per attribute character, over half of XRechnung stage 2's.
+func plainAttrASCII(r rune) bool {
+	return r >= 0x20 && r < 0x7F && r != '&' && r != '<' && r != '>' && r != '"'
+}
+
+// plainAttrWide is plainAttrASCII's counterpart above the C1 block: a
+// character the encoding holds, other than LINE SEPARATOR, is also written
+// unchanged by escapeAttrRune.
+func (s *serializer) plainAttrWide(r rune) bool {
+	return r >= 0xA0 && r != '\u2028' && s.representable(r)
 }
 
 // escapeAttrRunes escapes a whole attribute value one character at a time,
@@ -1742,6 +1839,14 @@ func (s *serializer) escapeAttrRunes(v string) string {
 	var sb strings.Builder
 	sb.Grow(len(v))
 	for _, r := range v {
+		if plainAttrASCII(r) {
+			sb.WriteByte(byte(r))
+			continue
+		}
+		if s.plainAttrWide(r) {
+			sb.WriteRune(r)
+			continue
+		}
 		sb.WriteString(s.escapeAttrRune(r))
 	}
 	return sb.String()
@@ -1938,6 +2043,11 @@ func escapeURIAttribute(v string) string {
 // normalised to a space by every conformant parser, so it has to be escaped to
 // survive a round trip.
 func escapeAttr(v string) string {
+	// Most values hold nothing to escape, and are returned as they stand
+	// rather than copied through a builder.
+	if !strings.ContainsFunc(v, attrNeedsEscape) {
+		return v
+	}
 	var sb strings.Builder
 	sb.Grow(len(v))
 	for _, r := range v {
@@ -1973,6 +2083,16 @@ func escapeAttr(v string) string {
 		}
 	}
 	return sb.String()
+}
+
+// attrNeedsEscape reports whether escapeAttr writes r as anything but
+// itself; it must name exactly the cases of escapeAttr's switch.
+func attrNeedsEscape(r rune) bool {
+	switch r {
+	case '&', '<', '>', '"', '\n', '\r', '\t', '\u2028':
+		return true
+	}
+	return r >= 0x7F && r <= 0x9F
 }
 
 // nsXHTML is the namespace an element must be in for the XHTML output
