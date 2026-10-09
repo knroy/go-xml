@@ -138,6 +138,13 @@ type runtime struct {
 	// restricted for the whole of the action that reads it.
 	treeAccums map[*xdm.Node]*modeAccumulators
 
+	// blocking holds the elements whose body is running under
+	// inherit-namespaces="no". blockNamespaceInheritance reads each child's
+	// own namespace nodes when the body ends, so a child built inside one of
+	// these must keep the bindings it would otherwise leave to its parent;
+	// see parentSupplies. Shared with derived runtimes like treeAccums.
+	blocking map[*xdm.Node]bool
+
 	// streamedTrees records the roots that xsl:source-document was asked to
 	// read in streamed mode, which XTDE3362 bars a non-streamable accumulator
 	// from being read over.
@@ -674,6 +681,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		accumBuilding: map[accumCacheKey]*accumulatorValues{},
 		accumOrigin:   map[*xdm.Node]*xdm.Node{},
 		treeAccums:    map[*xdm.Node]*modeAccumulators{},
+		blocking:      map[*xdm.Node]bool{},
 		streamedTrees: map[*xdm.Node]bool{},
 		tunnel:        map[string]xdm.Sequence{},
 		funcResults:   map[string]xdm.Sequence{},

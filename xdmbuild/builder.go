@@ -2,6 +2,7 @@ package xdmbuild
 
 import (
 	"fmt"
+	"sort"
 	"unsafe"
 
 	"github.com/knroy/go-xml/xdm"
@@ -318,7 +319,36 @@ func (b *Builder) detach(n *xdm.Node) *xdm.Node {
 	if !b.countNodes(CountSubtree(n)) {
 		return n
 	}
-	return DeepCopy(n)
+	c := DeepCopy(n)
+	if n.Kind == xdm.KindElement && n.Parent != nil {
+		keepInherited(c, n)
+	}
+	return c
+}
+
+// keepInherited gives c, a copy of n about to be re-parented, the bindings n
+// inherited from its ancestors.
+//
+// XSLT 3.0 §5.7.1 copies a node into new content as xsl:copy-of does with
+// copy-namespaces="yes", which keeps every in-scope namespace of the
+// element, not only the ones it declares. The ancestors that supplied the
+// rest are left behind by the copy.
+func keepInherited(c, n *xdm.Node) {
+	scope := n.InScopeNamespaces()
+	have := make(map[string]bool, len(c.Namespaces))
+	for _, ns := range c.Namespaces {
+		have[ns.Name.Local] = true
+	}
+	prefixes := make([]string, 0, len(scope))
+	for p := range scope {
+		if p != "xml" && !have[p] {
+			prefixes = append(prefixes, p)
+		}
+	}
+	sort.Strings(prefixes)
+	for _, p := range prefixes {
+		c.AddNamespace(p, scope[p])
+	}
 }
 
 // appendTextTo extends the text node n by s, keeping n.Value correct.

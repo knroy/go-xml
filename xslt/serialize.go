@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -409,6 +410,9 @@ func serializeTo(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
+			if v.Kind == xdm.KindElement && v.Parent != nil {
+				s.seeded = v
+			}
 			s.node(v, 0)
 		case *xdm.Atomic:
 			s.escapeText(v.String())
@@ -427,6 +431,10 @@ type serializer struct {
 	// latest entry for a prefix is the one in force. It replaced a map per
 	// element holding a copy of every binding in scope.
 	ns []nsPair
+	// seeded is the top-level element whose ancestors are not being written,
+	// and whose inherited bindings element therefore writes itself; see
+	// rootNamespaces.
+	seeded *xdm.Node
 	// pendingDoctype records that a document type declaration is owed, to be
 	// written immediately before the document element.
 	pendingDoctype bool
@@ -782,7 +790,12 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// element declares, and stays in scope for its children.
 	base := len(s.ns)
 	defer func() { s.ns = s.ns[:base] }()
-	for _, ns := range n.Namespaces {
+	nsNodes := n.Namespaces
+	if n == s.seeded {
+		s.seeded = nil
+		nsNodes = rootNamespaces(n)
+	}
+	for _, ns := range nsNodes {
 		if s.inScope(base, ns.Name.Local) == ns.Value {
 			continue
 		}
@@ -1093,6 +1106,39 @@ func (s *serializer) nodeNoIndent(n *xdm.Node) {
 	s.opts.Indent = false
 	s.node(n, 0)
 	s.opts.Indent = saved
+}
+
+// rootNamespaces returns the namespace nodes to write on n when it is
+// serialized without its ancestors: its own, and the bindings it inherits.
+//
+// Serialization 3.1 §2 copies each node of the sequence into a new document
+// first, and the copy keeps every in-scope namespace of the element. A
+// constructed element leaves a binding its parent already has to the parent,
+// so writing only its own nodes lost that binding from the output. When n
+// inherits nothing its own nodes are returned unchanged; otherwise the union
+// is sorted by prefix, which is the order a literal result element copies
+// its bindings in.
+func rootNamespaces(n *xdm.Node) []*xdm.Node {
+	scope := n.InScopeNamespaces()
+	own := make(map[string]bool, len(n.Namespaces))
+	for _, ns := range n.Namespaces {
+		own[ns.Name.Local] = true
+	}
+	var out []*xdm.Node
+	for p, uri := range scope {
+		if p != "xml" && !own[p] {
+			out = append(out, &xdm.Node{Kind: xdm.KindNamespace,
+				Name: xdm.QName{Local: p}, Value: uri})
+		}
+	}
+	if out == nil {
+		return n.Namespaces
+	}
+	out = append(out, n.Namespaces...)
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Name.Local < out[j].Name.Local
+	})
+	return out
 }
 
 func (s *serializer) writeNamespaceDecl(prefix, uri string) {
