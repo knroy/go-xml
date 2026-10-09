@@ -729,7 +729,7 @@ func (i *nextMatchInstr) nextMatchAtomic(rt *runtime, out *outputBuilder,
 		return err
 	}
 	if tunnels == nil {
-		tunnels = rt.sel.tunnels
+		tunnels = rt.selected().tunnels
 	}
 	var t *Template
 	var next int
@@ -737,11 +737,11 @@ func (i *nextMatchInstr) nextMatchAtomic(rt *runtime, out *outputBuilder,
 		// xsl:apply-imports resumes in the import tree of the rule that
 		// matched, not at the next rule in declaration order.
 		t, next = rt.sheet.findAtomicTemplateInImportTree(
-			item, rt.sel.mode, rt.ctx,
-			rt.sel.template.lowPrecedence, rt.sel.template.importPrecedence)
+			item, rt.selected().mode, rt.ctx,
+			rt.selected().template.lowPrecedence, rt.selected().template.importPrecedence)
 	} else {
 		t, next = rt.sheet.findAtomicTemplateFrom(
-			item, rt.sel.mode, rt.ctx, rt.sel.next)
+			item, rt.selected().mode, rt.ctx, rt.selected().next)
 	}
 	if t == nil {
 		if a, ok := item.(*xdm.Atomic); ok {
@@ -753,7 +753,7 @@ func (i *nextMatchInstr) nextMatchAtomic(rt *runtime, out *outputBuilder,
 		return err
 	}
 	defer rt.ascend()
-	sub := rt.withSelection(t, next, rt.sel.mode, params, tunnels)
+	sub := rt.withSelection(t, next, rt.selected().mode, params, tunnels)
 	return runTemplate(sub, t, params, tunnels, out)
 }
 

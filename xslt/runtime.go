@@ -56,8 +56,10 @@ type runtime struct {
 	// sel records how the currently-executing template was selected, so that
 	// xsl:next-match and xsl:apply-imports in its body can resume the search
 	// where it left off rather than starting over and picking the same
-	// template forever.
-	sel selection
+	// template forever. Held by pointer, so that the runtime copy every
+	// focus and variable change makes does not carry it; nil is the zero
+	// selection (see selected).
+	sel *selection
 }
 
 // transformState holds the fields of a runtime that are set once, when the
@@ -263,6 +265,18 @@ type selection struct {
 	item xdm.Item
 }
 
+// noSelection is what selected answers for a runtime no template rule has
+// been selected for.
+var noSelection selection
+
+// selected returns how the running template was selected; see runtime.sel.
+func (rt *runtime) selected() *selection {
+	if rt.sel == nil {
+		return &noSelection
+	}
+	return rt.sel
+}
+
 type keyCacheKey struct {
 	name string
 	tree *xdm.Tree
@@ -328,16 +342,25 @@ func (rt *runtime) withCurrent(item xdm.Item, pos, size int) *runtime {
 // withSelection records the template-selection state for the body about to run.
 func (rt *runtime) withSelection(t *Template, next int, mode string,
 	params, tunnels map[string]xdm.Sequence) *runtime {
-	n := *rt
 	var item xdm.Item
 	if rt.ctx != nil {
 		item = rt.ctx.Item
 	}
-	n.sel = selection{
+	return rt.withSel(selection{
 		template: t, next: next, mode: mode,
 		params: params, tunnels: tunnels, item: item,
-	}
-	return &n
+	})
+}
+
+// withSel returns a copy of rt selected by s. The copy and the selection
+// are one allocation, as they were when the selection was held by value.
+func (rt *runtime) withSel(s selection) *runtime {
+	p := &struct {
+		n runtime
+		s selection
+	}{*rt, s}
+	p.n.sel = &p.s
+	return &p.n
 }
 
 func (rt *runtime) withVar(name xdm.QName, val xdm.Sequence) *runtime {
@@ -522,9 +545,8 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 // an xsl:for-each has changed the focus there is no such search to resume —
 // the node being processed is no longer the one any template rule matched.
 func (rt *runtime) clearCurrentRule() *runtime {
-	sub := *rt
-	sub.sel = selection{mode: rt.sel.mode, tunnels: rt.sel.tunnels}
-	return &sub
+	cur := rt.selected()
+	return rt.withSel(selection{mode: cur.mode, tunnels: cur.tunnels})
 }
 
 // temporaryOutput returns a runtime in temporary output state.
