@@ -171,11 +171,16 @@ type nodeTyping struct {
 
 // --- Records ----------------------------------------------------------------
 
-// Chunk k holds 8<<k records up to 4096, then 4096 each, so a small tree
-// stays small and a large one allocates in 160 KB steps. Records never move.
+// Chunk k holds 4<<k records up to 512, then 512 each, so a small tree stays
+// small and a large one allocates in 20 KB steps. Records never move.
+//
+// The cap keeps every chunk a small-object allocation (at most 32 KB): a
+// larger one is allocated and freed as whole pages, which the runtime hands
+// back to the OS and faults in again, and on macOS that round trip costs more
+// than the parse saves.
 const (
-	chunkFirst   = 8
-	chunkMaxLog  = 9 // 8<<9 = 4096
+	chunkFirst   = 4
+	chunkMaxLog  = 7 // 4<<7 = 512
 	chunkMax     = chunkFirst << chunkMaxLog
 	growingTotal = chunkFirst * (1<<(chunkMaxLog+1) - 1) // records in the growing chunks
 )
@@ -229,18 +234,38 @@ func (t *Tree) intern(q QName) uint32 {
 	if q == (QName{}) {
 		return 0
 	}
-	if i, ok := t.nameIx[q]; ok {
+	// A small tree -- a constructed fragment, mostly -- has a handful of
+	// names, and finding one by scanning costs less than building a map.
+	if t.nameIx == nil {
+		for i, x := range t.names {
+			if x == q {
+				return uint32(i)
+			}
+		}
+		if t.names == nil {
+			t.names = make([]QName, 1, 4)
+		}
+		i := uint32(len(t.names))
+		t.names = append(t.names, q)
+		if len(t.names) > smallNames {
+			t.nameIx = make(map[QName]uint32, 2*len(t.names))
+			for j, x := range t.names[1:] {
+				t.nameIx[x] = uint32(j + 1)
+			}
+		}
 		return i
 	}
-	if t.names == nil {
-		t.names = []QName{{}}
-		t.nameIx = map[QName]uint32{}
+	if i, ok := t.nameIx[q]; ok {
+		return i
 	}
 	i := uint32(len(t.names))
 	t.names = append(t.names, q)
 	t.nameIx[q] = i
 	return i
 }
+
+// smallNames is how many names a tree holds before it indexes them.
+const smallNames = 8
 
 // nextTreeID hands out tree identifiers. Trees created concurrently may
 // interleave, which is fine: the spec requires only a stable order, and each
@@ -832,6 +857,20 @@ func (t *Tree) internFrame(ns []nsBinding) uint32 {
 	if t.frames == nil {
 		t.frames = []frameRange{{}}
 	}
+	if len(t.frames) <= smallFrames {
+		for i := 1; i < len(t.frames); i++ {
+			if f := t.frameAt(uint32(i)); len(f) == len(ns) && sameBindings(f, ns) {
+				return uint32(i)
+			}
+		}
+		return t.addFrame(ns)
+	}
+	if len(t.frames) == smallFrames+1 && t.frameOne == nil && t.frameMany == nil {
+		// Past the scan's reach: index what is there.
+		for i := 1; i < len(t.frames); i++ {
+			t.indexFrame(uint32(i))
+		}
+	}
 	if len(ns) == 1 {
 		if i, ok := t.frameOne[ns[0]]; ok {
 			return i
@@ -857,6 +896,48 @@ func (t *Tree) internFrame(ns []nsBinding) uint32 {
 	}
 	t.frameMany[string(key)] = i
 	return i
+}
+
+// smallFrames is how many frames a tree holds before it indexes them.
+const smallFrames = 8
+
+func sameBindings(a, b []nsBinding) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// indexFrame records frame i in the frame indexes.
+func (t *Tree) indexFrame(i uint32) {
+	f := t.frameAt(i)
+	if len(f) == 1 {
+		if t.frameOne == nil {
+			t.frameOne = map[nsBinding]uint32{}
+		}
+		if _, dup := t.frameOne[f[0]]; !dup {
+			t.frameOne[f[0]] = i
+		}
+		return
+	}
+	if t.frameMany == nil {
+		t.frameMany = map[string]uint32{}
+	}
+	k := frameKey(f)
+	if _, dup := t.frameMany[k]; !dup {
+		t.frameMany[k] = i
+	}
+}
+
+func frameKey(ns []nsBinding) string {
+	var buf [256]byte
+	key := buf[:0]
+	for _, b := range ns {
+		key = append(append(append(append(key, b.prefix...), 0), b.uri...), 0)
+	}
+	return string(key)
 }
 
 func (t *Tree) addFrame(ns []nsBinding) uint32 {
@@ -1212,8 +1293,9 @@ type textStore struct {
 	size   int // capacity of the last ordinary block made
 }
 
+// Ordinary blocks stop at 32 KB for the reason record chunks do.
 const (
-	textShift   = 18
+	textShift   = 15
 	textMask    = 1<<textShift - 1
 	textBlock   = 1 << textShift // largest ordinary block
 	textOwnFrom = textBlock / 4  // values this long get a block of their own
@@ -1247,7 +1329,7 @@ func (s *textStore) addBytes(b []byte, extra int) (uint32, uint32) {
 		return uint32(len(s.blocks)-1) << textShift, uint32(len(b))
 	}
 	if s.cur == 0 || cap(s.blocks[s.cur-1])-len(s.blocks[s.cur-1]) < need {
-		s.size = min(max(2*s.size, 512, need), textBlock)
+		s.size = min(max(2*s.size, 64, need), textBlock)
 		s.newBlock(make([]byte, 0, s.size))
 		s.cur = len(s.blocks)
 	}
