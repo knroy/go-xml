@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xdmbuild"
 )
 
 // htmlNativeNamespaces are the three vocabularies an HTML5 parser understands
@@ -79,10 +80,10 @@ func nodeNeedsPrefixNorm(n *xdm.Node) bool {
 
 // normalizeNodePrefixes copies n with the rewriting applied.
 func normalizeNodePrefixes(n *xdm.Node) *xdm.Node {
-	c := *n
+	c := xdmbuild.ShallowCopy(n)
 	if c.Kind == xdm.KindElement {
 		if htmlNativeNamespaces[c.Name.URI] {
-			c.Name.Prefix = ""
+			xdmbuild.SetName(c, xdm.QName{URI: c.Name.URI, Local: c.Name.Local})
 		}
 		// A namespace node binding a prefix to one of the three is removed
 		// outright. The default binding is kept: it is how the element's own
@@ -95,16 +96,16 @@ func normalizeNodePrefixes(n *xdm.Node) *xdm.Node {
 			}
 			keep = append(keep, ns)
 		}
-		c.Namespaces = keep
+		xdmbuild.SetNamespaces(c, keep)
 	}
 	if len(n.Children) > 0 {
 		kids := make([]*xdm.Node, 0, len(n.Children))
 		for _, k := range n.Children {
 			nk := normalizeNodePrefixes(k)
-			nk.Parent = &c
+			xdmbuild.SetParent(nk, c)
 			kids = append(kids, nk)
 		}
-		c.Children = kids
+		xdmbuild.SetChildren(c, kids)
 	}
-	return &c
+	return c
 }
