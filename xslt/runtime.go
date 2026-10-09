@@ -34,6 +34,42 @@ type runtime struct {
 	// gives a runtime a context not derived from its own must zero it.
 	absent uint8
 
+	// depth bounds apply-templates recursion, which the spec does not bound
+	// and which a stylesheet with a cycle would otherwise run forever.
+	depth int
+
+	// temporary marks that the runtime is building a temporary tree — the
+	// content of a variable, a function's body, or a grouping key — rather
+	// than a final result tree.
+	//
+	// It exists for XTDE1480: xsl:result-document may not be evaluated in
+	// temporary output state, because there is no final result tree for it
+	// to be a sibling of. The flag is on the runtime rather than the output
+	// builder because the state is inherited by everything the constructor
+	// calls, however deeply.
+	temporary bool
+
+	// tunnel holds tunnel parameters, which pass through templates that do
+	// not declare them.
+	tunnel map[string]xdm.Sequence
+
+	// sel records how the currently-executing template was selected, so that
+	// xsl:next-match and xsl:apply-imports in its body can resume the search
+	// where it left off rather than starting over and picking the same
+	// template forever.
+	sel selection
+}
+
+// transformState holds the fields of a runtime that are set once, when the
+// transform starts, and shared by every runtime derived from it; the maps
+// and pointers among them are written through, never replaced. deferredErr,
+// globalCtx and globalActive are the exception in timing only: they are
+// filled in while newRuntime evaluates the globals, before any template
+// runs. Keeping them here rather than on the runtime keeps the runtime copy
+// that every focus, variable and selection change makes small.
+type transformState struct {
+	sheet *Stylesheet
+
 	// deferredErr holds the failure of a global whose evaluation is not by
 	// itself the transform's failure -- an abstract variable, whose body
 	// raises XTDE3052. The error is kept against the name so that a
@@ -67,21 +103,6 @@ type runtime struct {
 	// see parentSupplies. Shared with derived runtimes like treeAccums.
 	blocking map[*xdm.Node]bool
 
-	// depth bounds apply-templates recursion, which the spec does not bound
-	// and which a stylesheet with a cycle would otherwise run forever.
-	depth int
-
-	// temporary marks that the runtime is building a temporary tree — the
-	// content of a variable, a function's body, or a grouping key — rather
-	// than a final result tree.
-	//
-	// It exists for XTDE1480: xsl:result-document may not be evaluated in
-	// temporary output state, because there is no final result tree for it
-	// to be a sibling of. The flag is on the runtime rather than the output
-	// builder because the state is inherited by everything the constructor
-	// calls, however deeply.
-	temporary bool
-
 	// readDocs is the set of absolute URIs the transformation has read, for
 	// XTDE1500. A pointer for the same reason secondary and baseURIUsed are:
 	// the runtime is copied on every focus change, and a document read in one
@@ -97,23 +118,6 @@ type runtime struct {
 	// change, and a document written inside one template has to be visible
 	// to a doc() evaluated anywhere else.
 	writtenDocs *map[string]bool
-
-	// tunnel holds tunnel parameters, which pass through templates that do
-	// not declare them.
-	tunnel map[string]xdm.Sequence
-
-	// sel records how the currently-executing template was selected, so that
-	// xsl:next-match and xsl:apply-imports in its body can resume the search
-	// where it left off rather than starting over and picking the same
-	// template forever.
-	sel selection
-}
-
-// transformState holds the fields of a runtime that are set once, when the
-// transform starts, and shared by every runtime derived from it; the maps
-// and pointers among them are written through, never replaced.
-type transformState struct {
-	sheet *Stylesheet
 
 	// goCtx is the caller's context.Context, kept so that a nested transform
 	// started by fn:transform is cancelled with the outer one rather than
@@ -704,13 +708,13 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 			baseOutputURI: opts.BaseOutputURI,
 			opts:          &opts,
 			goCtx:         ctx,
+			blocking:      map[*xdm.Node]bool{},
 		},
 		// A transform started by fn:transform continues its caller's
 		// recursion count rather than restarting at zero; see
 		// TransformOptions.nestedDepth for why the budget is inherited.
-		depth:    opts.nestedDepth,
-		blocking: map[*xdm.Node]bool{},
-		tunnel:   map[string]xdm.Sequence{},
+		depth:  opts.nestedDepth,
+		tunnel: map[string]xdm.Sequence{},
 	}
 
 	// A transform started from a named template has no source document, and
