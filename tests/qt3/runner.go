@@ -1493,7 +1493,7 @@ func writeNodeXML(sb *strings.Builder, n *xdm.Node) {
 		for _, a := range n.Attrs {
 			sb.WriteString(" " + a.Name.Lexical() + "=\"" + escapeAttr(a.Value) + "\"")
 		}
-		if len(n.Children) == 0 {
+		if n.NumChildren() == 0 {
 			sb.WriteString("/>")
 			return
 		}
@@ -2534,7 +2534,7 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 	for _, a := range n.Attrs {
 		sb.WriteString(" " + a.Name.Lexical() + "=\"" + escapeAttr(a.Value) + "\"")
 	}
-	if len(n.Children) == 0 {
+	if n.NumChildren() == 0 {
 		sb.WriteString("/>")
 		return
 	}
@@ -2637,10 +2637,10 @@ func nodesEqual(a, b *xdm.Node) bool {
 // attrsEqual compares two elements' attributes as sets keyed by expanded name.
 // Namespace declarations are not attributes in the data model and are excluded.
 func attrsEqual(a, b *xdm.Node) bool {
-	if len(a.Attrs) != len(b.Attrs) {
+	if a.NumAttrs() != b.NumAttrs() {
 		return false
 	}
-	want := make(map[string]string, len(b.Attrs))
+	want := make(map[string]string, b.NumAttrs())
 	for _, at := range b.Attrs {
 		want[at.Name.Clark()] = at.Value
 	}
@@ -2656,7 +2656,7 @@ func attrsEqual(a, b *xdm.Node) bool {
 // significantChildren drops whitespace-only text, which the expected value in
 // a test-set file carries from its own indentation.
 func significantChildren(n *xdm.Node) []*xdm.Node {
-	out := make([]*xdm.Node, 0, len(n.Children))
+	out := make([]*xdm.Node, 0, n.NumChildren())
 	for _, c := range n.Children {
 		if c.Kind == xdm.KindText && strings.TrimSpace(c.Value) == "" {
 			continue

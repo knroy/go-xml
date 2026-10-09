@@ -159,10 +159,7 @@ func treeOf(res *xslt.Result) *xdm.Node {
 		case *xdm.Node:
 			spliceInto(tree.Root, v)
 		case *xdm.Atomic:
-			tree.Root.AppendChild(&xdm.Node{
-				Kind:  xdm.KindText,
-				Value: v.String(),
-			})
+			tree.Root.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, v.String()))
 		}
 	}
 	tree.Finalize()
@@ -676,7 +673,7 @@ func sameExpandedName(a, b xdm.QName) bool {
 }
 
 func attrsEqual(a, b *xdm.Node) bool {
-	if len(a.Attrs) != len(b.Attrs) {
+	if a.NumAttrs() != b.NumAttrs() {
 		return false
 	}
 	// Attribute order is not significant, so each is looked up by name.
@@ -758,14 +755,18 @@ func spliceInto(parent, n *xdm.Node) {
 	// URI and the type annotation — and the namespace count in element-0306
 	// went from three to two because the node was no longer the one the
 	// engine built.
-	copied := &xdm.Node{
-		Kind:       n.Kind,
-		Name:       n.Name,
-		Value:      n.Value,
-		Attrs:      n.Attrs,
-		Namespaces: n.Namespaces,
-		BaseURI:    n.BaseURI,
+	copied := xdm.NewNode(n.Kind, n.Name, n.Value)
+	attrs := make([]*xdm.Node, n.NumAttrs())
+	for i := range attrs {
+		attrs[i] = n.AttrAt(i)
 	}
+	copied.SetAttrs(attrs)
+	nss := make([]*xdm.Node, n.NumNamespaceDecls())
+	for i := range nss {
+		nss[i] = n.NamespaceDeclAt(i)
+	}
+	copied.SetNamespaceDecls(nss)
+	copied.SetBaseURI(n.BaseURI)
 	copied.CopyTypingFrom(n)
 	parent.AppendChild(copied)
 	for _, c := range n.Children {
