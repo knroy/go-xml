@@ -79,7 +79,7 @@ func validateProbe(t *testing.T, s *Schema, value string) *xdm.Node {
 	if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	el := tree.Root.Children[0]
+	el := tree.Root.FirstChild()
 	if el.TypeAnnotation == "" {
 		t.Fatal("validation did not annotate the element")
 	}
@@ -226,8 +226,8 @@ func TestRegistryFallbackStillWorks(t *testing.T) {
 
 	// Built by hand, the way a non-validating producer builds one: the
 	// annotation is set, the resolved fields are not.
-	n := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "e"}}
-	n.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: "10"})
+	n := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
+	n.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, "10"))
 	n.SetTypeAnnotation(name)
 	if n.DerivedPrimitive != "" {
 		t.Fatalf("precondition: SetTypeAnnotation should leave the resolved "+
@@ -241,8 +241,8 @@ func TestRegistryFallbackStillWorks(t *testing.T) {
 
 	listName := xdm.AnnotationName(isolationNS, "FallbackList")
 	xdm.RegisterListType(listName, "decimal")
-	l := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "l"}}
-	l.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: "10 20"})
+	l := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "l"}, "")
+	l.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, "10 20"))
 	l.SetTypeAnnotation(listName)
 	items, ok := l.AtomizeList()
 	if !ok || len(items) != 2 {
@@ -279,7 +279,7 @@ func TestReloadingSameSchemaIsStillFine(t *testing.T) {
 // stale one is a confident wrong answer of exactly the kind this whole change
 // exists to remove.
 func TestFreshNodeHasNoStaleResolvedFields(t *testing.T) {
-	n := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "e"}}
+	n := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
 	n.SetTypeAnnotationResolved("t1", "decimal", "decimal")
 	if n.DerivedPrimitive != "decimal" || n.ListItem != "decimal" {
 		t.Fatalf("precondition: fields not set: %q %q",
@@ -314,11 +314,9 @@ func TestStripLeavesNoResolvedFields(t *testing.T) {
 
 	// The strip path's construction: annotation cleared, is-id and is-idrefs
 	// carried, everything else left at the zero value.
-	stripped := &xdm.Node{
-		Kind: xdm.KindElement, Name: el.Name,
-		IsID: el.IsID, IsIDREFS: el.IsIDREFS,
-	}
-	stripped.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: el.StringValue()})
+	stripped := xdm.NewNode(xdm.KindElement, el.Name, "")
+	stripped.ApplyTyping(xdm.Typing{IsID: el.IsID, IsIDREFS: el.IsIDREFS})
+	stripped.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, el.StringValue()))
 
 	if stripped.DerivedPrimitive != "" || stripped.ListItem != "" {
 		t.Errorf("a stripped node carries resolved fields: %q %q",

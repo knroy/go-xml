@@ -5,8 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/v2/xdm"
 	"math/big"
+
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Identity constraint evaluation (§3.11.4, §3.11.5).
@@ -784,12 +785,8 @@ func (v *validator) walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Nod
 				el:   n,
 				name: xdm.QName{URI: alt.Attribute.URI, Local: alt.Attribute.Local},
 			}]; ok && !hasWrittenAttr(n, alt.Attribute) {
-				syn := &xdm.Node{
-					Kind:   xdm.KindAttribute,
-					Name:   xdm.QName{Local: alt.Attribute.Local},
-					Value:  val.normalized,
-					Parent: n,
-				}
+				syn := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: alt.Attribute.Local}, val.normalized)
+				syn.SetParent(n)
 				// The synthetic node needs the same key entry a
 				// written attribute would have, or it compares
 				// by raw string against keys that compare by

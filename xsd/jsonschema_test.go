@@ -49,7 +49,7 @@ func TestSchemaForJSONAnnotates(t *testing.T) {
 			t.Errorf("%s should be valid against the schema for JSON: %v", tc.in, err)
 			continue
 		}
-		root := tree.Root.Children[0]
+		root := tree.Root.FirstChild()
 		if root.TypeAnnotation != tc.root {
 			t.Errorf("%s: root annotated %q, want %q", tc.in, root.TypeAnnotation, tc.root)
 		}
@@ -119,7 +119,7 @@ func TestSchemaForJSONWithinMapAnnotations(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("a map of every kind should be valid: %v", err)
 	}
-	root := tree.Root.Children[0]
+	root := tree.Root.FirstChild()
 	if root.TypeAnnotation != j+"mapType" {
 		t.Errorf("root annotated %q, want %q", root.TypeAnnotation, j+"mapType")
 	}

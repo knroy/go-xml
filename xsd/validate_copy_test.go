@@ -128,7 +128,7 @@ func nodeFacts(n *xdm.Node) string {
 	if n.Kind == xdm.KindElement {
 		fmt.Fprintf(&b, " ns=%v", n.InScopeNamespaces())
 	}
-	fmt.Fprintf(&b, " #ns=%d #attrs=%d #kids=%d", len(n.Namespaces), len(n.Attrs), len(n.Children))
+	fmt.Fprintf(&b, " #ns=%d #attrs=%d #kids=%d", n.NumNamespaceDecls(), n.NumAttrs(), n.NumChildren())
 	return b.String()
 }
 
@@ -138,11 +138,11 @@ func sameTree(t *testing.T, label string, a, b *xdm.Node) {
 	if fa, fb := nodeFacts(a), nodeFacts(b); fa != fb {
 		t.Fatalf("%s: nodes differ\n  want %s\n  got  %s", label, fa, fb)
 	}
-	for i := range a.Attrs {
-		sameTree(t, label, a.Attrs[i], b.Attrs[i])
+	for i := range a.NumAttrs() {
+		sameTree(t, label, a.AttrAt(i), b.AttrAt(i))
 	}
-	for i := range a.Children {
-		sameTree(t, label, a.Children[i], b.Children[i])
+	for i := range a.NumChildren() {
+		sameTree(t, label, a.ChildAt(i), b.ChildAt(i))
 	}
 }
 
@@ -213,7 +213,7 @@ func TestValidateCopyMatchesInPlace(t *testing.T) {
 func TestValidateCopyIsNotVacuous(t *testing.T) {
 	s := loadAssertionSchema(t, copySchema)
 	in := parseCopyDoc(t, copyDoc("100", `<n xsi:nil="true"/>`, "1"))
-	kidsBefore := len(in.Root.ChildElements()[0].Children)
+	kidsBefore := in.Root.ChildElements()[0].NumChildren()
 	got, err := s.ValidateCopy(in.Root, ValidateOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -248,7 +248,7 @@ func TestValidateCopyIsNotVacuous(t *testing.T) {
 			t.Errorf("no node of the validated copy has %s", p)
 		}
 	}
-	if len(got.ChildElements()[0].Children) >= kidsBefore {
+	if got.ChildElements()[0].NumChildren() >= kidsBefore {
 		t.Errorf("ignorable whitespace was not stripped from the copy")
 	}
 	if got.DocumentURI != "http://ex/doc.xml" || got.BaseURI != "http://ex/doc.xml" {
@@ -263,7 +263,7 @@ func TestValidateCopyConcurrent(t *testing.T) {
 	s := loadAssertionSchema(t, copySchema)
 	in := parseCopyDoc(t, copyDoc("100", `<n xsi:nil="true"/>`, "1"))
 	r := in.Root.ChildElements()[0]
-	kids := len(r.Children)
+	kids := r.NumChildren()
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -276,7 +276,7 @@ func TestValidateCopyConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if len(r.Children) != kids || r.TypeAnnotation != "" {
-		t.Errorf("input changed: %d children (was %d), annotation %q", len(r.Children), kids, r.TypeAnnotation)
+	if r.NumChildren() != kids || r.TypeAnnotation != "" {
+		t.Errorf("input changed: %d children (was %d), annotation %q", r.NumChildren(), kids, r.TypeAnnotation)
 	}
 }

@@ -1574,11 +1574,10 @@ func sameOverrideChild(a, b *xdm.Node) bool {
 	if a.Name != b.Name {
 		return false
 	}
-	aa, ba := a.Attrs, b.Attrs
-	if len(aa) != len(ba) {
+	if a.NumAttrs() != b.NumAttrs() {
 		return false
 	}
-	for _, x := range aa {
+	for _, x := range a.Attrs {
 		v := b.Attr(x.Name.URI, x.Name.Local)
 		if v == nil || v.Value != x.Value {
 			return false

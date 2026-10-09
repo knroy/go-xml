@@ -783,7 +783,7 @@ func TestAnnotateStripsIgnorableWhitespace(t *testing.T) {
 			t.Errorf("element-only content kept whitespace text %q", c.Value)
 		}
 	}
-	if n := len(root.Children); n != 2 {
+	if n := root.NumChildren(); n != 2 {
 		t.Errorf("root has %d children, want 2", n)
 	}
 	// The whitespace inside "keep" is CONTENT: its type is xs:string, so

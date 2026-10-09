@@ -199,11 +199,7 @@ func (v *validator) applyAttributeDefault(el *xdm.Node, use *AttributeUse) {
 			prefix = declareFixupPrefix(el, name.URI)
 		}
 	}
-	attr := &xdm.Node{
-		Kind:  xdm.KindAttribute,
-		Name:  xdm.QName{Prefix: prefix, Local: name.Local, URI: name.URI},
-		Value: normalized,
-	}
+	attr := xdm.NewNode(xdm.KindAttribute, xdm.QName{Prefix: prefix, Local: name.Local, URI: name.URI}, normalized)
 	if use.Decl.Type != nil {
 		if a := annotationName(use.Decl.Type); a != "" {
 			v.schema.setResolvedAnnotation(attr, a, use.Decl.Type)

@@ -344,8 +344,8 @@ func scopeForAssertion(el *xdm.Node) *xdm.Node {
 	//
 	// Detaching after finalising keeps the document order the tree assigned,
 	// which the clone still needs for any positional predicate.
-	xdmbuild.SetParent(clone, nil)
-	xdmbuild.SetChildren(tree.Root, nil)
+	clone.SetParent(nil)
+	tree.Root.SetChildren(nil)
 	return clone
 }
 
@@ -411,7 +411,7 @@ func scopeForAlternative(el *xdm.Node) *xdm.Node {
 	// survives the copy: cta0021 asks for it. TypeAnnotation is deliberately
 	// left zero. Conditional type assignment chooses the type; it cannot
 	// presuppose one.
-	xdmbuild.SetBaseURI(clone, el.BaseURI)
+	clone.SetBaseURI(el.BaseURI)
 	for _, a := range el.Attrs {
 		// The attributes come across without their annotations for the
 		// same reason the element does.
@@ -431,8 +431,8 @@ func scopeForAlternative(el *xdm.Node) *xdm.Node {
 	// Detached from the document node for the same reason an assertion's
 	// copy is: the element must be its own root, which is what makes
 	// (. is root()) hold and "//" select nothing.
-	xdmbuild.SetParent(clone, nil)
-	xdmbuild.SetChildren(tree.Root, nil)
+	clone.SetParent(nil)
+	tree.Root.SetChildren(nil)
 	return clone
 }
 
@@ -721,7 +721,7 @@ func typedValueFor(normalized string, t *SimpleType) xdm.Item {
 	if p := primitiveOf(t); p != nil {
 		prim = p.Name.Local
 	}
-	n := &xdm.Node{Kind: xdm.KindText, Value: normalized}
+	n := xdm.NewNode(xdm.KindText, xdm.QName{}, normalized)
 	n.ApplyTyping(xdm.Typing{TypeAnnotation: prim})
 	return n.Atomize()
 }

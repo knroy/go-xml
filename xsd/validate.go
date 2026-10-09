@@ -788,7 +788,7 @@ func (v *validator) checkFixedValueConstraint(el *xdm.Node, typ Type, decl *Elem
 	}
 	// Clause 5.2 applies only when the item has children; an empty item is
 	// clause 5.1, and a nilled one has been returned on long before here.
-	if len(el.Children) == 0 {
+	if el.NumChildren() == 0 {
 		return
 	}
 	if childElementCount(el) > 0 {
@@ -1981,7 +1981,7 @@ func effectiveValue(el *xdm.Node, decl *ElementDecl) string {
 	// Only a genuinely empty element defaults. One containing whitespace has
 	// content, which whiteSpace normalisation may later collapse to nothing
 	// — that is a different value from absent, and the spec treats it so.
-	if len(el.Children) > 0 {
+	if el.NumChildren() > 0 {
 		return raw
 	}
 	return decl.Constraint.Lexical
@@ -2241,21 +2241,28 @@ func stripIgnorableWhitespace(el *xdm.Node) {
 	if a := el.Attr(xdm.NSXML, "space"); a != nil && a.Value == "preserve" {
 		return
 	}
-	kept := el.Children[:0]
-	changed := false
-	for _, c := range el.Children {
+	var kept []*xdm.Node
+	for i := range el.NumChildren() {
+		c := el.ChildAt(i)
 		if c.Kind == xdm.KindText && xdm.IsXMLWhitespace(c.Value) {
-			changed = true
+			if kept == nil {
+				kept = make([]*xdm.Node, i, el.NumChildren()-1)
+				for j := range i {
+					kept[j] = el.ChildAt(j)
+				}
+			}
 			continue
 		}
-		kept = append(kept, c)
+		if kept != nil {
+			kept = append(kept, c)
+		}
 	}
-	if !changed {
+	if kept == nil {
 		return
 	}
 	// The document-order indices assigned at parse time are left alone. They
 	// are only ever compared, never counted, so the gaps a removal leaves
 	// behind cost nothing: the surviving children stay in order relative to
 	// each other and to every node outside this element.
-	el.Children = kept
+	el.SetChildren(kept)
 }

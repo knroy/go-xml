@@ -66,7 +66,7 @@ func validateChain(t *testing.T, s *Schema, value string) *xdm.Node {
 	if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	return tree.Root.Children[0]
+	return tree.Root.FirstChild()
 }
 
 // TestNodeCarriesItsSchemasTypeEnvironment is the stamping itself: a node a
@@ -92,7 +92,7 @@ func TestNodeCarriesItsSchemasTypeEnvironment(t *testing.T) {
 	}
 	// Attributes and defaulted attributes go through the same stamping, and
 	// a node whose annotation came from somewhere else must still carry none.
-	plain := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "e"}}
+	plain := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
 	plain.SetTypeAnnotation("decimal")
 	if plain.TypeEnv() != nil {
 		t.Errorf("a node no schema validated carries a TypeEnvironment; it " +
