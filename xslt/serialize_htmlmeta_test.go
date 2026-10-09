@@ -79,3 +79,23 @@ func TestHTMLIndentLeavesInlineElementsAlone(t *testing.T) {
 		}
 	}
 }
+
+// TestAddedMetaReplacesOnlyHeadChildren: §7.4.13 discards "any existing meta
+// element child of the head element" with http-equiv="Content-Type" once the
+// method adds its own. Every such meta anywhere under <head> was dropped, so a
+// <noscript> inside head lost its content. The charset spelling follows the
+// same rule. Saxon 12.10 writes the same.
+func TestAddedMetaReplacesOnlyHeadChildren(t *testing.T) {
+	sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+		`<xsl:output method="html" indent="no" media-type="text/foo"/><xsl:template match="/">` +
+		`<html><head><meta charset="x"/><meta http-equiv="content-type" content="x"/>` +
+		`<noscript><meta http-equiv="Content-Type" content="y"/><meta charset="y"/></noscript>` +
+		`<title>t</title></head></html></xsl:template></xsl:stylesheet>`
+	out := run(t, sheet, `<r/>`)
+	want := `<head><meta http-equiv="Content-Type" content="text/foo; charset=UTF-8">` +
+		`<noscript><meta http-equiv="Content-Type" content="y"><meta charset="y"></noscript>` +
+		`<title>t</title></head>`
+	if !strings.Contains(out, want) {
+		t.Errorf("want %s in:\n%s", want, out)
+	}
+}

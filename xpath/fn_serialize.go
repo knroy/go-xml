@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/knroy/go-xml/internal/htmlser"
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -211,6 +212,9 @@ type serializeOptions struct {
 	// it throughout (xslt/serialize.go, the head branch of writeElement);
 	// only fn:serialize accepted it and wrote the element anyway.
 	includeContentType *bool
+	// mediaType is the media-type parameter, which the html and xhtml
+	// methods write into the meta they add; "" means text/html.
+	mediaType string
 	// standalone is the value of the standalone parameter, "" when it was not
 	// given. It appears in the XML declaration, so asking for it also forces
 	// the declaration to be written.
@@ -526,8 +530,11 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				// map{"html-version":4} was accepted. It selects the
 				// void-element list the html method minimises against.
 				opts.htmlVersion = val
-			case "media-type",
-				"byte-order-mark":
+			case "media-type":
+				// The content of the meta the html and xhtml methods add
+				// (§7.4.13); a returned string has no other use for it.
+				opts.mediaType = val
+			case "byte-order-mark":
 				// Recognised and accepted, and deliberately without effect
 				// here.
 				//
@@ -540,12 +547,7 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 				// an artefact of the octet stream -- has nothing to attach to
 				// in a result that never becomes one.
 				//
-				// media-type never touches the character stream at all: the
-				// same spec (section 3, lines 1114-1123) says it annotates the
-				// destination, and "MAY be used to set the media type in an
-				// HTTP header". A returned string has no destination to
-				// annotate. xsl:output, which does write to one, honours both.
-				// xsl:output, which does write bytes, honours both.
+				// xsl:output, which does write bytes, honours it.
 			}
 		}
 	}
@@ -968,9 +970,16 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// attribute in its place. The full serializer already writes this
 		// form -- see the meta branch of writeElement in xslt/serialize.go --
 		// so the two spellings were also disagreeing with each other.
+		// The xhtml method writes the same element as XML, closed with the
+		// space the HTML compatibility guidelines ask for (§6.1.14).
 		if htmlHead {
-			sb.WriteString(
-				`<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">`)
+			meta := `<meta http-equiv="Content-Type" content="` +
+				escapeAttr(htmlser.MetaContent(opts.mediaType, opts.encoding)) + `"`
+			if opts.method == "xhtml" {
+				sb.WriteString(meta + ` />`)
+			} else {
+				sb.WriteString(meta + `>`)
+			}
 		}
 		// An element named by cdata-section-elements has its text written as
 		// a CDATA section instead of with escaping, which is what the
@@ -1008,8 +1017,18 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		if !indentChildren {
 			childOpts.indent = false
 		}
-		for _, c := range n.Children {
-			if indentChildren {
+		// No indent next to an inline element under the html and xhtml
+		// methods (Serialization 3.1 §7.4.3, §6.1.4); the rule is shared with
+		// xslt/serialize.go through htmlser.
+		htmlish := opts.method == "html" || opts.method == "xhtml"
+		for i, c := range n.Children {
+			// Having added its own meta, the method discards the head's
+			// (§7.4.13, §6.1.14): two declarations could contradict.
+			if htmlHead && htmlser.ReplacedMeta(n, c) {
+				continue
+			}
+			if indentChildren && !(htmlish && htmlser.SkipIndentBefore(
+				n, i, opts.method == "xhtml", opts.html5())) {
 				writeIndent(sb, depth+1)
 			}
 			if cdata && c.Kind == xdm.KindText {
@@ -1022,7 +1041,8 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			}
 			serializeNode(sb, c, childOpts, depth+1)
 		}
-		if indentChildren {
+		if indentChildren && !(htmlish && htmlser.SkipIndentBefore(
+			n, len(n.Children), opts.method == "xhtml", opts.html5())) {
 			writeIndent(sb, depth)
 		}
 		sb.WriteString("</")
@@ -1069,7 +1089,8 @@ func xmlDeclVersion(v string) string {
 }
 
 // isHTMLContentTypeHead reports whether this element is the <head> that the
-// html output method injects a content-type meta into.
+// html and xhtml output methods inject a content-type meta into (§7.4.13,
+// §6.1.14).
 //
 // The namespace test mirrors the full serializer's: under the html method
 // every element is HTML by definition, so no namespace and the XHTML one both
@@ -1084,9 +1105,9 @@ func isHTMLContentTypeHead(n *xdm.Node, opts serializeOptions) bool {
 	if opts.includeContentType != nil && !*opts.includeContentType {
 		return false
 	}
-	return opts.method == "html" &&
+	return (opts.method == "html" || opts.method == "xhtml") &&
 		strings.EqualFold(n.Name.Local, "head") &&
-		(n.Name.URI == "" || n.Name.URI == "http://www.w3.org/1999/xhtml")
+		(n.Name.URI == "" || n.Name.URI == htmlser.NSXHTML)
 }
 
 // elementName renders a node's name with its prefix, when it has one.
@@ -1704,11 +1725,16 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 				return err
 			}
 			opts.htmlVersion = v
-		case "media-type",
-			"byte-order-mark",
+		case "media-type":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.mediaType = v
+		case "byte-order-mark",
 			"parameter-document":
 			// Recognised and accepted. See the element form's arm for why
-			// byte-order-mark and media-type cannot act on a returned string.
+			// byte-order-mark cannot act on a returned string.
 			//
 			// parameter-document is accepted rather than refused because it
 			// is a real parameter this serialiser has nothing to do with: it
