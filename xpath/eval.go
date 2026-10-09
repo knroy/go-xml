@@ -413,6 +413,9 @@ func newComparisonHoist(ctx *Context, pred Expr) *comparisonHoist {
 // in the order evaluating "A op B" would raise them.
 func (h *comparisonHoist) holds(sub *Context) (keep, ok bool, err error) {
 	b := h.cmp
+	if keep, ok := nameComparison(sub, b); ok {
+		return keep, true, nil
+	}
 	other := b.Left
 	if h.left {
 		other = b.Right
