@@ -89,6 +89,8 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 	}
 
 	document := !o.Detached && !t.fragment && t.Root == top
+	// The copy is not frozen, so it neither inherits nor builds an element
+	// index (elemIndex): it may still be appended to.
 	c := &Tree{fragment: !document}
 	if document {
 		c.id.Store(int64(nextTreeID()))

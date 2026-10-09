@@ -151,6 +151,11 @@ type Tree struct {
 	foreignPos map[uint32][2]int32
 	attrCounts map[uint32]uint32 // attribute counts past 0xFFFE
 
+	// elemIndex is a frozen tree's element-name index, built on the first
+	// descendant::name lookup (nameindex.go). A clone is not frozen and
+	// starts without one.
+	elemIndex atomic.Pointer[elementIndex]
+
 	// Namespace nodes, made on demand.
 	sideMu sync.Mutex
 	side   map[sideKey]*Node
@@ -758,6 +763,10 @@ func (n *Node) SetDocumentURI(uri string) {
 // SetName renames n.
 func (n *Node) SetName(name QName) {
 	if n.flags&fSide == 0 {
+		// A parsed document's element-name index would go stale.
+		if old := n.Name(); n.tree.frozen && (old.URI != name.URI || old.Local != name.Local) {
+			n.tree.elemIndex.Store(nil)
+		}
 		n.name = n.tree.intern(name)
 	}
 }
