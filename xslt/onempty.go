@@ -418,14 +418,14 @@ func (c *compiler) compileOnEmpty(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 // because it is a static error about what the stylesheet *says*, and the
 // compiled form has already dropped the stripped whitespace and the comments
 // that decide whether a following text node is significant.
-func checkOnEmptyPlacement(nodes []*xdm.Node) error {
+func (c *compiler) checkOnEmptyPlacement(nodes []*xdm.Node) error {
 	seen := false
 	for _, n := range nodes {
 		switch n.Kind() {
 		case xdm.KindText:
 			// Only a text node that survives whitespace stripping counts;
 			// the indentation between two instructions does not.
-			if !seen || xdm.IsXMLWhitespace(n.Value()) && !stylesheetTextPreserved(n) {
+			if !seen || xdm.IsXMLWhitespace(n.Value()) && !stylesheetTextPreserved(n, c.textParent(n)) {
 				continue
 			}
 			return fmt.Errorf(

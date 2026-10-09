@@ -1032,7 +1032,7 @@ func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
 	copied := xdm.NewTree()
 	copied.Root.SetBaseURI(tree.Root.BaseURI())
 	for ch := range tree.Root.Children() {
-		copied.Root.AppendChild(deepCopy(ch))
+		copied.Root.AppendCopy(ch)
 	}
 	copied.Finalize()
 	if s.accums != nil {

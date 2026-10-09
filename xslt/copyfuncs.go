@@ -199,7 +199,7 @@ func snapshotItem(it xdm.Item) xdm.Item {
 		if a.Kind() != xdm.KindElement {
 			continue
 		}
-		c := xdm.NewNode(xdm.KindElement, a.Name(), "")
+		c := parent.AppendElement(a.Name())
 		c.SetBaseURI(a.BaseURI())
 		c.ApplyTyping(xdm.Typing{TypeAnnotation: "anyType"})
 		for ns := range a.NamespaceDecls() {
@@ -212,11 +212,8 @@ func snapshotItem(it xdm.Item) xdm.Item {
 			// no longer there. Its attributes are simply "copies of the
 			// attributes" — nothing about them changed, so every PSVI
 			// property travels.
-			ac := xdm.NewNode(xdm.KindAttribute, at.Name(), at.Value())
-			ac.CopyTypingFrom(at)
-			c.AddAttr(ac)
+			c.AppendAttr(at.Name(), at.Value()).CopyTypingFrom(at)
 		}
-		parent.AppendChild(c)
 		parent = c
 	}
 
@@ -240,8 +237,8 @@ func snapshotItem(it xdm.Item) xdm.Item {
 				return at
 			}
 		}
-		a := copyItem(n).(*xdm.Node)
-		parent.AddAttr(a)
+		a := parent.AppendAttr(n.Name(), n.Value())
+		a.CopyTypingFrom(n)
 		tree.Finalize()
 		return a
 	case xdm.KindNamespace:
@@ -261,9 +258,11 @@ func snapshotItem(it xdm.Item) xdm.Item {
 		tree.Finalize()
 		return parent.NamespaceDeclAt(parent.NumNamespaceDecls() - 1)
 	default:
-		bottom = copyItem(n).(*xdm.Node)
+		bottom = parent.AppendCopy(n)
+		if n.Kind() == xdm.KindElement {
+			inheritNamespaces(bottom, n)
+		}
 	}
-	parent.AppendChild(bottom)
 	tree.Finalize()
 	return bottom
 }

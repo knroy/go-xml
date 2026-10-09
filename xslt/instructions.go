@@ -472,7 +472,7 @@ func copyDocumentNode(n *xdm.Node) *xdm.Node {
 	// future property does not have to find this line to be added to it.
 	tree.Root.CopyTypingFrom(n)
 	for ch := range n.Children() {
-		tree.Root.AppendChild(deepCopy(ch))
+		tree.Root.AppendCopy(ch)
 	}
 	tree.Finalize()
 	return tree.Root
@@ -577,7 +577,7 @@ func scopeBindings(n *xdm.Node, buf []nsBinding) []nsBinding {
 // answered with the bindings of wherever the copy landed. copy-0623 and
 // copy-0627 ask exactly that question.
 func stripNamespaces(n *xdm.Node) {
-	n.SetNamespaceDecls(nil)
+	n.RemoveNamespaceDecls(func(string, string) bool { return true })
 	// An element does not acquire an in-scope namespace merely because that
 	// namespace is present on its parent: §5.8.3 permits fixup to add a
 	// namespace node only where one is "necessary either to satisfy these

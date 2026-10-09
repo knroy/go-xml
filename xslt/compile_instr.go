@@ -53,8 +53,8 @@ func childrenFrom(el *xdm.Node, start int) []*xdm.Node {
 }
 
 func (c *compiler) compileNodes(nodes []*xdm.Node, nsScope *xdm.Node) ([]Instruction, error) {
-	nodes = mergeAcrossComments(nodes)
-	if err := checkOnEmptyPlacement(nodes); err != nil {
+	nodes = c.mergeAcrossComments(nodes)
+	if err := c.checkOnEmptyPlacement(nodes); err != nil {
 		return nil, err
 	}
 	var out []Instruction
@@ -182,10 +182,11 @@ func (c *compiler) compileNode(n *xdm.Node, nsScope *xdm.Node) (Instruction, err
 		// Whitespace-only text between instructions is discarded; anything
 		// else is a literal text node. Without this every indented stylesheet
 		// would emit its own indentation into the result.
-		if xdm.IsXMLWhitespace(n.Value()) && !stylesheetTextPreserved(n) {
+		parent := c.textParent(n)
+		if xdm.IsXMLWhitespace(n.Value()) && !stylesheetTextPreserved(n, parent) {
 			return nil, nil
 		}
-		return c.compileText(n)
+		return c.compileText(n.Value(), parent)
 
 	case xdm.KindComment:
 		// Comments in the stylesheet are not copied to the output.
@@ -410,11 +411,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		// one in a sequence constructor, so it is compiled through the same
 		// path rather than taken literally. The node stands in for the
 		// element's whole content, which xsl:text is defined to concatenate.
-		return c.compileText(func() *xdm.Node {
-			nd := xdm.NewNode(xdm.KindText, xdm.QName{}, n.StringValue())
-			nd.SetParent(n)
-			return nd
-		}())
+		return c.compileText(n.StringValue(), n)
 	case "apply-templates":
 		return c.compileApplyTemplates(n, ns)
 	case "call-template":
@@ -1385,8 +1382,7 @@ func checkCaseOrder(v string) error {
 // immediately followed by xsl:param or xsl:sort. Both exist because those
 // positions can never carry meaningful text, so preserving there would inject
 // indentation into every stylesheet that formats them across lines.
-func stylesheetTextPreserved(n *xdm.Node) bool {
-	parent := n.Parent()
+func stylesheetTextPreserved(n, parent *xdm.Node) bool {
 	if parent == nil {
 		return false
 	}
@@ -1452,7 +1448,11 @@ var whitespaceStrippingParents = map[string]bool{
 // The order matters. In expression-2101 a comment sits between "\n    " and
 // "\n    [", neither of which survives on its own as a whitespace-only node;
 // merged they form "\n    \n    [", which is not whitespace-only and is kept.
-func mergeAcrossComments(nodes []*xdm.Node) []*xdm.Node {
+//
+// A merged text node belongs to no tree: it is a parentless node, and the
+// element it was merged inside is recorded in c.mergedText for the two
+// questions compileNode asks about its parent.
+func (c *compiler) mergeAcrossComments(nodes []*xdm.Node) []*xdm.Node {
 	has := false
 	for _, n := range nodes {
 		if n.Kind() == xdm.KindComment || n.Kind() == xdm.KindPI {
@@ -1471,7 +1471,10 @@ func mergeAcrossComments(nodes []*xdm.Node) []*xdm.Node {
 		if n.Kind() == xdm.KindText && len(kept) > 0 && kept[len(kept)-1].Kind() == xdm.KindText {
 			prev := kept[len(kept)-1]
 			merged := xdm.NewNode(xdm.KindText, xdm.QName{}, prev.Value()+n.Value())
-			merged.SetParent(prev.Parent())
+			if c.mergedText == nil {
+				c.mergedText = map[*xdm.Node]*xdm.Node{}
+			}
+			c.mergedText[merged] = c.textParent(prev)
 			kept[len(kept)-1] = merged
 			continue
 		}
@@ -2269,4 +2272,14 @@ func (c *compiler) compileNextIteration(n *xdm.Node, ns *nsResolver) (Instructio
 		return nil, err
 	}
 	return &nextIterationInstr{params: params}, nil
+}
+
+// textParent is the stylesheet element a text node of a sequence constructor
+// sits in: its parent, or for a text node mergeAcrossComments made, the
+// element the merged pieces were children of.
+func (c *compiler) textParent(n *xdm.Node) *xdm.Node {
+	if p, ok := c.mergedText[n]; ok {
+		return p
+	}
+	return n.Parent()
 }

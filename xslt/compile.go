@@ -165,7 +165,10 @@ type compiler struct {
 	// walked, so that compileModule does not repeat conditional inclusion
 	// over one and evaluate its use-when expressions a second time.
 	staticVars []staticVar
-	staticDone map[*xdm.Node]bool
+	staticDone map[*xdm.Node]*xdm.Node
+	// mergedText records, for each text node mergeAcrossComments built out
+	// of pieces separated by comments, the element the pieces were in.
+	mergedText map[*xdm.Node]*xdm.Node
 
 	// nextPrecedence allocates import precedence numbers. See compileModule:
 	// precedence is a total order over the import tree rather than a depth,
@@ -293,6 +296,9 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 		c.lowPrecedence = c.nextPrecedence
 		defer func() { c.lowPrecedence = saved }()
 	}
+	// A module the static phase has already walked is read as the copy it
+	// built: conditional inclusion applied, shadow attributes expanded.
+	doc = c.prunedModule(doc)
 	collectPrefixesAll(doc, c.sheet.prefixes, c.sheet.prefixesAll)
 	if err := c.checkInputTypeAnnotations(doc); err != nil {
 		return err
@@ -346,9 +352,19 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 	if err := checkOverrideTemplates(root); err != nil {
 		return err
 	}
-	if !c.staticDone[doc] {
+	if _, done := c.staticDone[doc]; !done {
 		if err := c.runStaticPhase(doc); err != nil {
 			return err
+		}
+		unpruned := doc
+		doc = c.prunedModule(doc)
+		if root = firstElement(doc); root == nil {
+			return fmt.Errorf("stylesheet has no root element")
+		}
+		// document("") and the principal-module checks read the module as
+		// compiled, which is the copy.
+		if c.sheet.source == unpruned {
+			c.sheet.source = doc
 		}
 	}
 
@@ -1888,7 +1904,7 @@ func (c *compiler) hoistImportSchema(root *xdm.Node) error {
 				continue
 			}
 			c.schemaSeen[resolved] = true
-			sub := embeddedModule(doc, fragment)
+			sub := c.prunedModule(embeddedModule(doc, fragment))
 			if sub == nil {
 				continue
 			}
@@ -2050,7 +2066,7 @@ func (c *compiler) numberIncludedImports(root *xdm.Node) error {
 		if c.seen[resolved] {
 			continue
 		}
-		sub := embeddedModule(doc, fragment)
+		sub := c.prunedModule(embeddedModule(doc, fragment))
 		if sub == nil {
 			continue
 		}
