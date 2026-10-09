@@ -90,10 +90,14 @@ func TestSortDocumentOrderInOrderFastPath(t *testing.T) {
 		t.Errorf("namespace duplicates: got %q, want %q", got, "r ns:xml")
 	}
 
-	// Parentless constructed nodes sort in the order they were made.
+	// Parentless constructed nodes of separate fragments are numbered in
+	// the order the sequence holds them, the first time they are compared.
 	d1 := NewNode(KindElement, QName{Local: "d1"}, "")
 	d2 := NewNode(KindElement, QName{Local: "d2"}, "")
-	if got := names(SortDocumentOrder(Sequence{d2, d1})); got != "d1 d2" {
+	if got := names(SortDocumentOrder(Sequence{d2, d1})); got != "d2 d1" {
 		t.Errorf("detached roots: got %q", got)
+	}
+	if got := names(SortDocumentOrder(Sequence{d1, d2})); got != "d2 d1" {
+		t.Errorf("detached roots, asked again: got %q", got)
 	}
 }
