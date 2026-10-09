@@ -294,9 +294,11 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 				// right for XSLT's sequence rules and wrong here.
 				// Constr-cont-nodeid-1 binds <a/> to $x, puts $x in
 				// <elem>{$x}</elem>, and requires the child not to be $x.
-				v = xdm.Copy(v)
+				// The copy goes straight into the tree being built.
+				out.b.AppendCopyOf(v)
+			} else {
+				out.b.AppendNode(v)
 			}
-			out.b.AppendNode(v)
 			if el := out.b.Open(); el != nil && el.LastChild() != before {
 				applyCopyNamespaces(el.LastChild(), srcScope, sc)
 			}
@@ -658,6 +660,9 @@ func limitInherited(el *xdm.Node, inherited map[string]string) {
 	if el == nil || el.Parent() == nil || el.Parent().Kind() != xdm.KindElement {
 		return
 	}
+	if !declaresAny(el.Parent()) {
+		return // only xml is in scope at the parent: nothing to undeclare
+	}
 	// Bindings this element already carries -- fixup for its own name and its
 	// attributes' names, plus the declaration attributes written above --
 	// shadow the parent's and need no undeclaration.
@@ -691,6 +696,17 @@ func limitInherited(el *xdm.Node, inherited map[string]string) {
 		}
 		el.AddNamespace(prefix, "")
 	}
+}
+
+// declaresAny reports whether n or an ancestor declares a namespace, that is,
+// whether anything but xml is in scope at n.
+func declaresAny(n *xdm.Node) bool {
+	for c := n; c != nil; c = c.Parent() {
+		if c.NumNamespaceDecls() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // declareOwnName gives the element under construction a namespace node for
