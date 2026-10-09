@@ -609,6 +609,7 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		if el.Name().Local == "param" {
 			v.IsParam = true
 		}
+		v.effects = hasEffects(el)
 		// XTSE0630: two bindings of a global variable may not share a name
 		// at the same import precedence. A higher precedence legitimately
 		// overrides a lower one, so only a tie is an error.

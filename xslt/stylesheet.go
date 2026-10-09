@@ -350,6 +350,17 @@ type Variable struct {
 	// XTDE3052, which 3.5.3.2 makes the error for an invocation that "is
 	// evaluated", so a variable nothing refers to must not raise at all.
 	deferred bool
+	// effects marks a global whose own select or content writes
+	// xsl:message, xsl:assert or xsl:result-document, or names fn:trace.
+	// Such a global is evaluated when the transform starts rather than on
+	// first use, so that what it writes does not depend on whether anything
+	// reads it. See evalGlobals.
+	effects bool
+	// selfRef marks a global that names itself (see globalRefs), which
+	// evalGlobals reports as XPST0008. That is a static error in the spec,
+	// owed whether or not anything reads the global, so such a global is
+	// evaluated when the transform starts, like one with effects.
+	selfRef bool
 	// pkg is the package whose module declared this variable. Section 3.5.5
 	// makes a component's identity belong to its package, and a diamond --
 	// one package used by two routes, each overriding the same variable --
@@ -903,6 +914,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// Every module has compiled, so an xsl:function declared after -- or
 	// imported after -- the global that calls it is now known.
 	c.foldFunctionRefsIntoGlobals()
+	c.markSelfReferences()
 	// XTSE1290 likewise: two imported xsl:decimal-format declarations may
 	// conflict with each other and still be harmless, because the importing
 	// module overrides both.

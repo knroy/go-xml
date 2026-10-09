@@ -16,7 +16,10 @@ func (e *Literal) Eval(*Context) (xdm.Sequence, error) {
 
 // Eval implements Expr for variable references.
 func (e *VarRef) Eval(ctx *Context) (xdm.Sequence, error) {
-	v, ok := ctx.LookupVar(e.Name)
+	v, ok, err := ctx.lookupVar(e.Name)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		if ctx.ev().MissingVar != nil {
 			if err := ctx.ev().MissingVar(ctx, e.Name); err != nil {

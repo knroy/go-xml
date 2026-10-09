@@ -567,6 +567,11 @@ func (p *Pattern) mayMatch(node *xdm.Node) bool {
 // raise about the stylesheet rather than about this node — XTDE0640's key
 // recursion is a property of the stylesheet and reporting it is the point.
 func recoverPatternError(err error) bool {
+	if isGlobalError(err) {
+		// A global's failure belongs to the stylesheet, not to this node;
+		// see globalError.
+		return false
+	}
 	msg := err.Error()
 	for _, code := range nonRecoverablePatternCodes {
 		if strings.HasPrefix(msg, code) || strings.Contains(msg, ": "+code) {
