@@ -53,7 +53,7 @@ func TestHTMLIndentDoesNotEnterPreOrTextarea(t *testing.T) {
 		`<listing><span>x</span><span>y</span></listing>` +
 		`<xmp><span>x</span><span>y</span></xmp>` +
 		`<plaintext><span>x</span><span>y</span></plaintext>` +
-		`<p><span>a</span><span>b</span></p>` +
+		`<div><p>a</p><p>b</p></div>` +
 		`</body></html>`
 
 	for _, method := range []string{"html", "xhtml"} {
@@ -77,8 +77,11 @@ func TestHTMLIndentDoesNotEnterPreOrTextarea(t *testing.T) {
 		// Indentation is still on everywhere else. Without this the test
 		// would also pass with indentation turned off altogether, which
 		// would be a different and worse bug.
-		if !strings.Contains(out, "<p>\n") {
-			t.Errorf("method=%s: <p> should still be indented, got:\n%s",
+		// <div> holding block children, not <p> holding <span>s: the spans
+		// are inline, and Serialization 3.1 §7.4.3 and §6.1.4 forbid the
+		// whitespace this test used to ask for around them.
+		if !strings.Contains(out, "<div>\n") {
+			t.Errorf("method=%s: <div> should still be indented, got:\n%s",
 				method, out)
 		}
 		if !strings.Contains(out, "<body>\n") {
@@ -134,10 +137,12 @@ func TestXMLIndentStillEntersPre(t *testing.T) {
 // suppress-indentation parameter, and the built-in set has to draw it in the
 // same place or the two would disagree about the same document.
 func TestHTMLPreIndentIsCaseInsensitiveButXHTMLIsNot(t *testing.T) {
-	body := `<html><body><PRE><span>a</span><span>b</span></PRE></body></html>`
+	// <div> children rather than <span>: a span is inline, which keeps the
+	// xhtml method from indenting around it whatever its parent is called.
+	body := `<html><body><PRE><div>a</div><div>b</div></PRE></body></html>`
 
 	out := run(t, htmlIndentSheet("html", "", body), `<r/>`)
-	if !strings.Contains(out, `<PRE><span>a</span><span>b</span></PRE>`) {
+	if !strings.Contains(out, `<PRE><div>a</div><div>b</div></PRE>`) {
 		t.Errorf("the html method should recognise <PRE>, got:\n%s", out)
 	}
 

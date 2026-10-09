@@ -44,3 +44,38 @@ func TestIncludeContentTypeNoKeepsStylesheetMeta(t *testing.T) {
 		}
 	}
 }
+
+// TestHTMLIndentLeavesInlineElementsAlone: under indent="yes" the html and
+// xhtml methods "MUST NOT" add whitespace adjacent to an inline element
+// (Serialization 3.1 §7.4.3, §6.1.4). <p><b>bold</b><i>it</i></p> came out
+// with each child on its own line, which renders "bold it" with a space the
+// document never had. The expected layouts are Saxon 12's for the same input.
+func TestHTMLIndentLeavesInlineElementsAlone(t *testing.T) {
+	body := `<html><body><div><p><b>bold</b><I>it</I></p>` +
+		`<style>s{}</style><script>var a;</script></div>` +
+		`<span><div>x</div><div>y</div></span>` +
+		`<ul><li>a</li><li>b</li></ul></body></html>`
+	for _, method := range []string{"html", "xhtml"} {
+		out := run(t, htmlIndentSheet(method, "", body), `<r/>`)
+		for _, want := range []string{
+			// Nothing between inline siblings or before </p> after one.
+			"<p><b>bold</b><I>it</I></p>",
+			// <style> is not inline, <script> is, and so is the end tag
+			// after it.
+			"\n      <style>s{}</style><script>var a;</script></div>",
+			// Inside an inline element the first block child is indented,
+			// its end tag is not.
+			"<span>\n      <div>x</div>\n      <div>y</div></span>",
+			// Block content indents as before.
+			"<ul>\n      <li>a</li>\n      <li>b</li>\n    </ul>",
+		} {
+			if method == "xhtml" && strings.Contains(want, "<I>") {
+				// XHTML is XML: <I> is not <i>, so it is not inline there.
+				want = "<p><b>bold</b><I>it</I>\n      </p>"
+			}
+			if !strings.Contains(out, want) {
+				t.Errorf("method=%s: want %q in output, got:\n%s", method, want, out)
+			}
+		}
+	}
+}
