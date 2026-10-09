@@ -83,21 +83,16 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 		}
 
 	case AxisFollowingSibling:
-		p, i := siblingsOf(n)
-		if i < 0 {
-			return
-		}
-		for j := i + 1; j < p.NumChildren(); j++ {
-			if !visit(p.ChildAt(j)) {
+		for s := n.NextSibling(); s != nil; s = s.NextSibling() {
+			if !visit(s) {
 				return
 			}
 		}
 
 	case AxisPrecedingSibling:
 		// Reverse axis: nearest sibling first.
-		p, i := siblingsOf(n)
-		for j := i - 1; j >= 0; j-- {
-			if !visit(p.ChildAt(j)) {
+		for s := n.PrevSibling(); s != nil; s = s.PrevSibling() {
+			if !visit(s) {
 				return
 			}
 		}
@@ -113,11 +108,8 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 // walkDescendants visits children depth-first in document order. Attributes
 // and namespace nodes are not descendants of their element.
 func walkDescendants(n *xdm.Node, visit func(*xdm.Node) bool) bool {
-	for c := range n.Children() {
+	for c := range n.Descendants() {
 		if !visit(c) {
-			return false
-		}
-		if !walkDescendants(c, visit) {
 			return false
 		}
 	}
@@ -126,36 +118,17 @@ func walkDescendants(n *xdm.Node, visit func(*xdm.Node) bool) bool {
 
 // appendNamedDescendants appends to out the element descendants of n that t
 // matches, in document order. It is walkDescendants with the name test
-// inlined, for the hot shape "//name": no closure or interface call per node.
-// Only elements have children, so it does not descend into any other kind.
+// inlined, for the hot shape "//name": no visit callback per node.
 func appendNamedDescendants(out xdm.Sequence, n *xdm.Node, t *NameTest) xdm.Sequence {
-	for c := range n.Children() {
+	for c := range n.Descendants() {
 		if c.Kind() != xdm.KindElement {
 			continue
 		}
 		if (t.AnyURI || c.Name().URI == t.Name.URI) && (t.AnyLocal || c.Name().Local == t.Name.Local) {
 			out = append(out, c)
 		}
-		if c.NumChildren() > 0 {
-			out = appendNamedDescendants(out, c, t)
-		}
 	}
 	return out
-}
-
-// siblingsOf returns n's parent and n's index among its children, or nil and
-// -1. Attributes have no siblings on the sibling axes, per the spec.
-func siblingsOf(n *xdm.Node) (*xdm.Node, int) {
-	if n.Parent() == nil || n.Kind() == xdm.KindAttribute || n.Kind() == xdm.KindNamespace {
-		return nil, -1
-	}
-	p := n.Parent()
-	for i := range p.NumChildren() {
-		if p.ChildAt(i) == n {
-			return p, i
-		}
-	}
-	return nil, -1
 }
 
 // walkFollowing visits every node after n in document order, excluding n's own
@@ -175,16 +148,14 @@ func walkFollowing(n *xdm.Node, visit func(*xdm.Node) bool) {
 			}
 		}
 	}
+	// NextSibling and PrevSibling are nil for an attribute or namespace node:
+	// they have no siblings on the sibling axes, per the spec.
 	for cur := n; cur != nil; cur = cur.Parent() {
-		p, i := siblingsOf(cur)
-		if i < 0 {
-			continue
-		}
-		for j := i + 1; j < p.NumChildren(); j++ {
-			if !visit(p.ChildAt(j)) {
+		for s := cur.NextSibling(); s != nil; s = s.NextSibling() {
+			if !visit(s) {
 				return
 			}
-			if !walkDescendants(p.ChildAt(j), visit) {
+			if !walkDescendants(s, visit) {
 				return
 			}
 		}
@@ -196,12 +167,8 @@ func walkFollowing(n *xdm.Node, visit func(*xdm.Node) bool) {
 // each preceding sibling's subtree the deepest, last node comes first.
 func walkPreceding(n *xdm.Node, visit func(*xdm.Node) bool) {
 	for cur := n; cur != nil; cur = cur.Parent() {
-		p, i := siblingsOf(cur)
-		if i < 0 {
-			continue
-		}
-		for j := i - 1; j >= 0; j-- {
-			if !walkSubtreeReverse(p.ChildAt(j), visit) {
+		for s := cur.PrevSibling(); s != nil; s = s.PrevSibling() {
+			if !walkSubtreeReverse(s, visit) {
 				return
 			}
 		}
@@ -210,8 +177,8 @@ func walkPreceding(n *xdm.Node, visit func(*xdm.Node) bool) {
 
 // walkSubtreeReverse visits a subtree in reverse document order.
 func walkSubtreeReverse(n *xdm.Node, visit func(*xdm.Node) bool) bool {
-	for i := n.NumChildren() - 1; i >= 0; i-- {
-		if !walkSubtreeReverse(n.ChildAt(i), visit) {
+	for c := n.LastChild(); c != nil; c = c.PrevSibling() {
+		if !walkSubtreeReverse(c, visit) {
 			return false
 		}
 	}

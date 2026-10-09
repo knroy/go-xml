@@ -63,8 +63,8 @@ func nodeNeedsPrefixNorm(n *xdm.Node) bool {
 		if n.Name().Prefix != "" && htmlNativeNamespaces[n.Name().URI] {
 			return true
 		}
-		for ns := range n.NamespaceDecls() {
-			if ns.Name().Local != "" && htmlNativeNamespaces[ns.Value()] {
+		for prefix, uri := range n.DeclaredNamespaces() {
+			if prefix != "" && htmlNativeNamespaces[uri] {
 				return true
 			}
 		}
@@ -90,15 +90,15 @@ func normalizeInto(c, n *xdm.Node) {
 	if c.Kind() == xdm.KindElement && htmlNativeNamespaces[c.Name().URI] {
 		c.SetName(xdm.QName{URI: c.Name().URI, Local: c.Name().Local})
 	}
-	for ns := range n.NamespaceDecls() {
+	for prefix, uri := range n.DeclaredNamespaces() {
 		// A namespace node binding a prefix to one of the three is removed
 		// outright. The default binding is kept: it is how the element's own
 		// unprefixed name is spelled, and dropping it would leave the
 		// serializer to reinvent it lower down the tree than it belongs.
-		if c.Kind() == xdm.KindElement && ns.Name().Local != "" && htmlNativeNamespaces[ns.Value()] {
+		if c.Kind() == xdm.KindElement && prefix != "" && htmlNativeNamespaces[uri] {
 			continue
 		}
-		c.AddNamespace(ns.Name().Local, ns.Value())
+		c.AddNamespace(prefix, uri)
 	}
 	for a := range n.Attrs() {
 		c.AppendShallowCopy(a)

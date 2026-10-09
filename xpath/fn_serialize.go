@@ -927,7 +927,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// take the self-closing shortcut. HTML has no self-closing syntax for
 		// a non-void element anyway.
 		htmlHead := isHTMLContentTypeHead(n, opts)
-		if n.NumChildren() == 0 && !htmlHead {
+		if n.FirstChild() == nil && !htmlHead {
 			// HTML has no self-closing syntax, so the html method cannot take
 			// the XML shortcut: a void element takes no end tag at all, and
 			// every other empty element takes an explicit one, because an
@@ -1021,15 +1021,14 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// methods (Serialization 3.1 §7.4.3, §6.1.4); the rule is shared with
 		// xslt/serialize.go through htmlser.
 		htmlish := opts.method == "html" || opts.method == "xhtml"
-		for i := range n.NumChildren() {
-			c := n.ChildAt(i)
+		for c := range n.Children() {
 			// Having added its own meta, the method discards the head's
 			// (§7.4.13, §6.1.14): two declarations could contradict.
 			if htmlHead && htmlser.ReplacedMeta(n, c) {
 				continue
 			}
 			if indentChildren && !(htmlish && htmlser.SkipIndentBefore(
-				n, i, opts.method == "xhtml", opts.html5())) {
+				n, c, opts.method == "xhtml", opts.html5())) {
 				writeIndent(sb, depth+1)
 			}
 			if cdata && c.Kind() == xdm.KindText {
@@ -1043,7 +1042,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			serializeNode(sb, c, childOpts, depth+1)
 		}
 		if indentChildren && !(htmlish && htmlser.SkipIndentBefore(
-			n, n.NumChildren(), opts.method == "xhtml", opts.html5())) {
+			n, nil, opts.method == "xhtml", opts.html5())) {
 			writeIndent(sb, depth)
 		}
 		sb.WriteString("</")
@@ -1124,16 +1123,16 @@ func elementName(n *xdm.Node) string {
 func writeNamespaceDecls(sb *serializeSink, n *xdm.Node, opts serializeOptions) {
 	inherited := map[string]string{}
 	for p := n.Parent(); p != nil; p = p.Parent() {
-		for ns := range p.NamespaceDecls() {
-			if _, seen := inherited[ns.Name().Local]; !seen {
-				inherited[ns.Name().Local] = ns.Value()
+		for prefix, uri := range p.DeclaredNamespaces() {
+			if _, seen := inherited[prefix]; !seen {
+				inherited[prefix] = uri
 			}
 		}
 	}
 	type decl struct{ prefix, uri string }
 	var decls []decl
-	for ns := range n.NamespaceDecls() {
-		if inherited[ns.Name().Local] == ns.Value() {
+	for prefix, uri := range n.DeclaredNamespaces() {
+		if inherited[prefix] == uri {
 			continue
 		}
 		// A namespace undeclaration for a *prefix* -- xmlns:p="" -- is syntax
@@ -1146,10 +1145,10 @@ func writeNamespaceDecls(sb *serializeSink, n *xdm.Node, opts serializeOptions) 
 		// The default-namespace undeclaration xmlns="" is a separate matter:
 		// it is legal in XML 1.0 and is written regardless, since omitting it
 		// would move an element into a namespace it is not in.
-		if ns.Value() == "" && ns.Name().Local != "" && !opts.undeclarePrefixes {
+		if uri == "" && prefix != "" && !opts.undeclarePrefixes {
 			continue
 		}
-		decls = append(decls, decl{ns.Name().Local, ns.Value()})
+		decls = append(decls, decl{prefix, uri})
 	}
 	sort.Slice(decls, func(i, j int) bool { return decls[i].prefix < decls[j].prefix })
 	for _, d := range decls {

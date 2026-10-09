@@ -141,37 +141,40 @@ func (c *copier) copyTree(top *xdm.Node) *xdm.Node {
 	}
 	c.fill(dst, top)
 
+	// next is the source child to copy next; started records that the frame
+	// has copied one, which on the path to root is all it copies.
 	type frame struct {
-		src, dst *xdm.Node
-		next     int
+		src, dst, next *xdm.Node
+		started        bool
 	}
-	stack := []frame{{top, dst, 0}}
+	stack := []frame{{top, dst, top.FirstChild(), false}}
 	for len(stack) > 0 {
 		f := &stack[len(stack)-1]
 		var src *xdm.Node
 		if next, ok := c.onPath[f.src]; ok {
 			// An ancestor: only the way down to root is copied. An
 			// attribute root came with its parent's attributes.
-			if f.next > 0 || next.Kind() == xdm.KindAttribute {
+			if f.started || next.Kind() == xdm.KindAttribute {
 				stack = stack[:len(stack)-1]
 				continue
 			}
 			src = next
 		} else {
-			if f.next == f.src.NumChildren() {
+			if f.next == nil {
 				stack = stack[:len(stack)-1]
 				continue
 			}
-			src = f.src.ChildAt(f.next)
+			src = f.next
+			f.next = src.NextSibling()
 		}
 		parent := f.dst
-		f.next++
+		f.started = true
 		if c.v != nil && c.v.dropped[src] {
 			continue
 		}
 		cc := parent.AppendShallowCopy(src)
 		c.fill(cc, src)
-		stack = append(stack, frame{src, cc, 0})
+		stack = append(stack, frame{src, cc, src.FirstChild(), false})
 	}
 	if tree != nil {
 		tree.Finalize()
@@ -184,8 +187,8 @@ func (c *copier) copyTree(top *xdm.Node) *xdm.Node {
 // those src carries, in the order an in-place edit would have added them.
 func (c *copier) fill(dst, src *xdm.Node) {
 	c.note(dst, src)
-	for ns := range src.NamespaceDecls() {
-		dst.AddNamespace(ns.Name().Local, ns.Value())
+	for prefix, uri := range src.DeclaredNamespaces() {
+		dst.AddNamespace(prefix, uri)
 	}
 	if c.v != nil {
 		for _, ns := range c.v.fixups[src] {

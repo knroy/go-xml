@@ -755,8 +755,8 @@ func spliceInto(parent, n *xdm.Node) {
 	// went from three to two because the node was no longer the one the
 	// engine built.
 	copied := parent.AppendShallowCopy(n)
-	for ns := range n.NamespaceDecls() {
-		copied.AddNamespace(ns.Name().Local, ns.Value())
+	for prefix, uri := range n.DeclaredNamespaces() {
+		copied.AddNamespace(prefix, uri)
 	}
 	for a := range n.Attrs() {
 		copied.AppendCopy(a)

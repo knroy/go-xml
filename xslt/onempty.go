@@ -109,7 +109,7 @@ func deemedEmpty(it xdm.Item) bool {
 			// Attributes and namespaces do not save an element here: 8.4.1
 			// says so explicitly, and the section's own example relies on it
 			// — <ul class="my-list"> with no list items is dropped.
-			return v.NumChildren() == 0
+			return v.FirstChild() == nil
 		default:
 			return v.StringValue() == ""
 		}
@@ -146,7 +146,7 @@ func vacuous(it xdm.Item) bool {
 	case *xdm.Node:
 		switch v.Kind() {
 		case xdm.KindDocument:
-			return v.NumChildren() == 0
+			return v.FirstChild() == nil
 		case xdm.KindText:
 			return v.Value() == ""
 		case xdm.KindElement:

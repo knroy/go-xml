@@ -13,7 +13,7 @@ import (
 
 // compileSequence compiles the children of el as a sequence constructor.
 func (c *compiler) compileSequence(el, nsScope *xdm.Node) ([]Instruction, error) {
-	return c.compileNodes(childrenFrom(el, 0), nsScope)
+	return c.compileNodes(childrenFrom(el.FirstChild()), nsScope)
 }
 
 // compileSequenceFrom compiles the element children of el starting at the
@@ -25,9 +25,8 @@ func (c *compiler) compileSequenceFrom(el, nsScope *xdm.Node, fromElem int) ([]I
 	// than at the next one: the text between an xsl:param and the instruction
 	// that follows it is part of the sequence constructor, and starting at
 	// the following element silently swallowed it.
-	seen, start := 0, 0
-	for i := range el.NumChildren() {
-		ch := el.ChildAt(i)
+	seen, start := 0, el.FirstChild()
+	for ch := range el.Children() {
 		if ch.Kind() != xdm.KindElement {
 			continue
 		}
@@ -35,19 +34,19 @@ func (c *compiler) compileSequenceFrom(el, nsScope *xdm.Node, fromElem int) ([]I
 			break
 		}
 		seen++
-		start = i + 1
+		start = ch.NextSibling()
 	}
 	if fromElem == 0 {
-		start = 0
+		start = el.FirstChild()
 	}
-	return c.compileNodes(childrenFrom(el, start), nsScope)
+	return c.compileNodes(childrenFrom(start), nsScope)
 }
 
-// childrenFrom returns el's children from index start on, in a new slice.
-func childrenFrom(el *xdm.Node, start int) []*xdm.Node {
-	out := make([]*xdm.Node, el.NumChildren()-start)
-	for i := range out {
-		out[i] = el.ChildAt(start + i)
+// childrenFrom returns first and the siblings after it, in a new slice.
+func childrenFrom(first *xdm.Node) []*xdm.Node {
+	out := []*xdm.Node{}
+	for n := first; n != nil; n = n.NextSibling() {
+		out = append(out, n)
 	}
 	return out
 }
@@ -1391,22 +1390,15 @@ func stylesheetTextPreserved(n, parent *xdm.Node) bool {
 	}
 	// The *following* sibling is what matters: text laid out before an
 	// xsl:sort or xsl:param is indentation, whereas text after the last one
-	// is content of the sequence constructor.
-	for i := range parent.NumChildren() {
-		ch := parent.ChildAt(i)
-		if ch != n {
+	// is content of the sequence constructor. A text node merged across a
+	// comment has no parent of its own, and so no following sibling here.
+	for sib := n.NextSibling(); sib != nil; sib = sib.NextSibling() {
+		if sib.Kind() != xdm.KindElement {
 			continue
 		}
-		for j := i + 1; j < parent.NumChildren(); j++ {
-			sib := parent.ChildAt(j)
-			if sib.Kind() != xdm.KindElement {
-				continue
-			}
-			if sib.Name().URI == xdm.NSXSL &&
-				(sib.Name().Local == "param" || sib.Name().Local == "sort") {
-				return false
-			}
-			break
+		if sib.Name().URI == xdm.NSXSL &&
+			(sib.Name().Local == "param" || sib.Name().Local == "sort") {
+			return false
 		}
 		break
 	}

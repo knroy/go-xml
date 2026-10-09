@@ -822,7 +822,7 @@ func (v *validator) checkFixedValueConstraint(el *xdm.Node, typ Type, decl *Elem
 	}
 	// Clause 5.2 applies only when the item has children; an empty item is
 	// clause 5.1, and a nilled one has been returned on long before here.
-	if el.NumChildren() == 0 {
+	if el.FirstChild() == nil {
 		return
 	}
 	if childElementCount(el) > 0 {
@@ -2017,7 +2017,7 @@ func effectiveValue(el *xdm.Node, decl *ElementDecl) string {
 	// Only a genuinely empty element defaults. One containing whitespace has
 	// content, which whiteSpace normalisation may later collapse to nothing
 	// — that is a different value from absent, and the spec treats it so.
-	if el.NumChildren() > 0 {
+	if el.FirstChild() != nil {
 		return raw
 	}
 	return decl.Constraint.Lexical
@@ -2388,8 +2388,8 @@ func (v *validator) lookupPrefix(n *xdm.Node, prefix string) (string, bool) {
 // recorded for it.
 func (v *validator) namespaceDecls(el *xdm.Node) iter.Seq[nsBinding] {
 	return func(yield func(nsBinding) bool) {
-		for ns := range el.NamespaceDecls() {
-			if !yield(nsBinding{ns.Name().Local, ns.Value()}) {
+		for prefix, uri := range el.DeclaredNamespaces() {
+			if !yield(nsBinding{prefix, uri}) {
 				return
 			}
 		}

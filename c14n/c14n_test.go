@@ -240,10 +240,12 @@ func TestNodeSetRootedAtLeaf(t *testing.T) {
 	doc := parse(t, `<a>x&gt;&#13;<!--c--><?p d?></a>`)
 	a := find(t, doc, "a")
 	all := func(*xdm.Node) bool { return true }
+	c := a.FirstChild()
 	for i, want := range []string{"x&gt;&#xD;", "<!--c-->", "<?p d?>"} {
-		if got := canonSet(t, Func(a.ChildAt(i), all), Inclusive10WithComments); got != want {
+		if got := canonSet(t, Func(c, all), Inclusive10WithComments); got != want {
 			t.Errorf("child %d: got %q want %q", i, got, want)
 		}
+		c = c.NextSibling()
 	}
 	// Without comments, a comment root renders nothing: C14N 1.0 section 1.1
 	// defines the without-comments form as the node-set with comment nodes
@@ -254,8 +256,8 @@ func TestNodeSetRootedAtLeaf(t *testing.T) {
 	// A root that is not itself a member renders nothing (section 2.3: only
 	// nodes in the node-set are rendered).
 	none := func(*xdm.Node) bool { return false }
-	for i := range 3 {
-		if got := canonSet(t, Func(a.ChildAt(i), none), Inclusive10WithComments); got != "" {
+	for i, c := 0, a.FirstChild(); c != nil; i, c = i+1, c.NextSibling() {
+		if got := canonSet(t, Func(c, none), Inclusive10WithComments); got != "" {
 			t.Errorf("non-member child %d rendered %q", i, got)
 		}
 	}

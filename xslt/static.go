@@ -268,8 +268,8 @@ func (p *staticPhase) moduleRoot(shell, root *xdm.Node) error {
 
 // declaresPrefix reports whether el itself carries a namespace node for prefix.
 func declaresPrefix(el *xdm.Node, prefix string) bool {
-	for ns := range el.NamespaceDecls() {
-		if ns.Name().Local == prefix {
+	for nsPrefix := range el.DeclaredNamespaces() {
+		if nsPrefix == prefix {
 			return true
 		}
 	}
@@ -281,8 +281,8 @@ func declaresPrefix(el *xdm.Node, prefix string) bool {
 func copyStylesheetElement(parent, el *xdm.Node) *xdm.Node {
 	c := parent.AppendShallowCopy(el)
 	xdm.CopyPosition(c, el)
-	for ns := range el.NamespaceDecls() {
-		c.AddNamespace(ns.Name().Local, ns.Value())
+	for prefix, uri := range el.DeclaredNamespaces() {
+		c.AddNamespace(prefix, uri)
 	}
 	for a := range el.Attrs() {
 		xdm.CopyPosition(c.AppendShallowCopy(a), a)
@@ -813,8 +813,8 @@ func (p *staticPhase) expandShadow(parent, orig, el *xdm.Node) (*xdm.Node, error
 	parent.RemoveLastChild()
 	c := parent.AppendShallowCopy(orig)
 	xdm.CopyPosition(c, orig)
-	for ns := range orig.NamespaceDecls() {
-		c.AddNamespace(ns.Name().Local, ns.Value())
+	for prefix, uri := range orig.DeclaredNamespaces() {
+		c.AddNamespace(prefix, uri)
 	}
 	for _, a := range kept {
 		if a.Name().URI == "" {

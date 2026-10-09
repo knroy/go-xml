@@ -1006,8 +1006,8 @@ func (s *Stylesheet) stripCopyNode(pkg int, parent, n *xdm.Node, preserving bool
 		// false -- silently, on a document the caller had validated, purely
 		// because the stylesheet declared xsl:strip-space.
 		c.CopyTypingFrom(n)
-		for ns := range n.NamespaceDecls() {
-			c.AddNamespace(ns.Name().Local, ns.Value())
+		for prefix, uri := range n.DeclaredNamespaces() {
+			c.AddNamespace(prefix, uri)
 		}
 		for a := range n.Attrs() {
 			ac := c.AppendAttr(a.Name(), a.Value())
@@ -1273,8 +1273,8 @@ func stripAnnotationCopy(parent, n *xdm.Node) {
 		c := parent.AppendElement(n.Name())
 		c.SetBaseURI(n.BaseURI())
 		c.CopyTypingStrippedFrom(n)
-		for ns := range n.NamespaceDecls() {
-			c.AddNamespace(ns.Name().Local, ns.Value())
+		for prefix, uri := range n.DeclaredNamespaces() {
+			c.AddNamespace(prefix, uri)
 		}
 		for a := range n.Attrs() {
 			// xsi:nil is dropped rather than copied: stripping makes

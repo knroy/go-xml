@@ -2,6 +2,7 @@ package xdmbuild
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -165,10 +166,7 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 		// A document node used as the content of an element contributes its
 		// children, not itself (5.7.1): a result tree may not contain a
 		// document node below the root.
-		kids := make([]*xdm.Node, n.NumChildren())
-		for i := range kids {
-			kids[i] = n.ChildAt(i)
-		}
+		kids := slices.Collect(n.Children())
 		for _, ch := range kids {
 			b.AppendNode(ch)
 		}
@@ -313,8 +311,8 @@ func (b *Builder) appendCopy(n *xdm.Node) {
 func keepInherited(c, n *xdm.Node) {
 	scope := n.InScopeNamespaces()
 	have := make(map[string]bool, c.NumNamespaceDecls())
-	for ns := range c.NamespaceDecls() {
-		have[ns.Name().Local] = true
+	for prefix := range c.DeclaredNamespaces() {
+		have[prefix] = true
 	}
 	prefixes := make([]string, 0, len(scope))
 	for p := range scope {
@@ -488,7 +486,7 @@ func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
 	}
 	// Adding an attribute after children exist is an error the spec calls out,
 	// because it usually means the stylesheet's instruction order is wrong.
-	if b.open.NumChildren() > 0 {
+	if b.open.FirstChild() != nil {
 		return b.policy.Err(FaultAttrAfterChild,
 			fmt.Sprintf("attribute %q added after the element already has children",
 				name.Lexical()))
@@ -580,10 +578,10 @@ func fixupAttrPrefix(el, attr *xdm.Node) {
 		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		for ns := range cur.NamespaceDecls() {
-			if ns.Value() == attr.Name().URI && ns.Name().Local != "" {
-				if uri, ok := el.LookupPrefix(ns.Name().Local); ok && uri == attr.Name().URI {
-					setPrefix(attr, ns.Name().Local)
+		for nsPrefix, nsURI := range cur.DeclaredNamespaces() {
+			if nsURI == attr.Name().URI && nsPrefix != "" {
+				if uri, ok := el.LookupPrefix(nsPrefix); ok && uri == attr.Name().URI {
+					setPrefix(attr, nsPrefix)
 					return
 				}
 			}
@@ -702,8 +700,8 @@ func (b *Builder) freshPrefix(want string) string {
 	for i := 0; ; i++ {
 		p := fmt.Sprintf("%s_%d", want, i)
 		taken := false
-		for ns := range b.open.NamespaceDecls() {
-			if ns.Name().Local == p {
+		for prefix := range b.open.DeclaredNamespaces() {
+			if prefix == p {
 				taken = true
 				break
 			}

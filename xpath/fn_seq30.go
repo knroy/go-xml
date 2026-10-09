@@ -62,7 +62,7 @@ func registerSeq30Funcs(l *Library) {
 			}
 			n = node
 		}
-		return boolSeq(n.NumChildren() > 0), nil
+		return boolSeq(n.FirstChild() != nil), nil
 	})
 
 	// fn:innermost($nodes as node()*) as node()*

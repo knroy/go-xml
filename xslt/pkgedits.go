@@ -180,8 +180,8 @@ func (e pkgEdits) copyInto(parent, n *xdm.Node) *xdm.Node {
 	if d.name != nil {
 		c.SetName(*d.name)
 	}
-	for ns := range n.NamespaceDecls() {
-		c.AddNamespace(ns.Name().Local, ns.Value())
+	for prefix, uri := range n.DeclaredNamespaces() {
+		c.AddNamespace(prefix, uri)
 	}
 	for _, b := range d.ns {
 		c.AddNamespace(b[0], b[1])

@@ -120,7 +120,7 @@ func appendNamedParents(out xdm.Sequence, n *xdm.Node, t *NameTest) xdm.Sequence
 		}
 	}
 	for c := range n.Children() {
-		if c.NumChildren() > 0 {
+		if c.FirstChild() != nil {
 			out = appendNamedParents(out, c, t)
 		}
 	}
