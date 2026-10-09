@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -1525,10 +1526,11 @@ func (p *parser) checkAttributeRestriction(t, base *ComplexType) {
 // checkAttributeGroupCycles enforces src-attribute_group.3 (§3.6.3): an
 // attribute group may not reference itself, directly or at any depth.
 //
-// The refs graph is walked per group with a path set rather than a global
-// visited set, because the constraint is about a group reaching *itself*, not
-// about a group being reachable twice. A diamond — two groups both referencing
-// a third — is legal and a global visited set would not tell it from a cycle.
+// The refs graph is walked per group with a visited set of its own, asking
+// whether the walk comes back to that group, because the constraint is about a
+// group reaching *itself*, not about a group being reachable twice. A diamond
+// — two groups both referencing a third — is legal, and a group that only
+// refers into another group's cycle is not itself circular.
 //
 // Redefine needs no special case here. A redefined group's self-reference binds
 // to the definition being replaced, which is a different component from the
@@ -1544,22 +1546,39 @@ func (p *parser) checkAttributeGroupCycles() {
 	if p.schema.Version != Version10 {
 		return
 	}
-	var walk func(g *AttributeGroupDef, path map[*AttributeGroupDef]bool) bool
-	walk = func(g *AttributeGroupDef, path map[*AttributeGroupDef]bool) bool {
-		if path[g] {
-			return true
-		}
-		path[g] = true
-		defer delete(path, g)
+	// A group is circular when it reaches itself, not when it merely reaches
+	// a cycle: a group referring into an A <-> B cycle is not named. The
+	// seen set is per root, so a diamond is walked once and is not a cycle.
+	var reaches func(g, root *AttributeGroupDef, seen map[*AttributeGroupDef]bool) bool
+	reaches = func(g, root *AttributeGroupDef, seen map[*AttributeGroupDef]bool) bool {
 		for _, r := range g.refs {
-			if r != nil && walk(r, path) {
+			if r == root {
 				return true
+			}
+			if r != nil && !seen[r] {
+				seen[r] = true
+				if reaches(r, root, seen) {
+					return true
+				}
 			}
 		}
 		return false
 	}
-	for _, g := range p.schema.AttributeGroups {
-		if walk(g, map[*AttributeGroupDef]bool{}) {
+	// Sorted name order, as checkTypeBaseCycles does, so the errors do not
+	// reorder between runs.
+	names := make([]xdm.QName, 0, len(p.schema.AttributeGroups))
+	for name := range p.schema.AttributeGroups {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if names[i].URI != names[j].URI {
+			return names[i].URI < names[j].URI
+		}
+		return names[i].Local < names[j].Local
+	})
+	for _, name := range names {
+		g := p.schema.AttributeGroups[name]
+		if g != nil && reaches(g, g, map[*AttributeGroupDef]bool{}) {
 			p.errs = append(p.errs, errorAt(nil, "src-attribute_group.3",
 				"attribute group %q references itself", g.Name.Local))
 		}
