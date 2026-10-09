@@ -2,6 +2,7 @@ package xdmbuild
 
 import (
 	"fmt"
+	"sort"
 	"unsafe"
 
 	"github.com/knroy/go-xml/xdm"
@@ -32,7 +33,11 @@ type Builder struct {
 	// the suite requires it to be: namespace-alias-1903 constructs
 	// <ns:e xmlns:ns="one"> and then binds ns to "two", and the expected
 	// result renames the element's prefix rather than reporting an error.
-	declared map[string]string
+	//
+	// A slice rather than a map: a literal result element records every
+	// binding it copies, usually a dozen or more, and is rarely asked about
+	// them, so growing a map per element cost more than scanning a slice.
+	declared []decl
 
 	// lastAtomic records that the item most recently appended was an atomic
 	// value rather than a node.
@@ -318,7 +323,36 @@ func (b *Builder) detach(n *xdm.Node) *xdm.Node {
 	if !b.countNodes(CountSubtree(n)) {
 		return n
 	}
-	return DeepCopy(n)
+	c := DeepCopy(n)
+	if n.Kind == xdm.KindElement && n.Parent != nil {
+		keepInherited(c, n)
+	}
+	return c
+}
+
+// keepInherited gives c, a copy of n about to be re-parented, the bindings n
+// inherited from its ancestors.
+//
+// XSLT 3.0 §5.7.1 copies a node into new content as xsl:copy-of does with
+// copy-namespaces="yes", which keeps every in-scope namespace of the
+// element, not only the ones it declares. The ancestors that supplied the
+// rest are left behind by the copy.
+func keepInherited(c, n *xdm.Node) {
+	scope := n.InScopeNamespaces()
+	have := make(map[string]bool, len(c.Namespaces))
+	for _, ns := range c.Namespaces {
+		have[ns.Name.Local] = true
+	}
+	prefixes := make([]string, 0, len(scope))
+	for p := range scope {
+		if p != "xml" && !have[p] {
+			prefixes = append(prefixes, p)
+		}
+	}
+	sort.Strings(prefixes)
+	for _, p := range prefixes {
+		c.AddNamespace(p, scope[p])
+	}
 }
 
 // appendTextTo extends the text node n by s, keeping n.Value correct.
@@ -708,15 +742,12 @@ func (b *Builder) AddNamespace(prefix, uri string) error {
 	// having the same name but different string values". Re-declaring a
 	// prefix to the *same* URI is harmless and common — an element and its
 	// content may each ask for it — so only a conflicting one is an error.
-	if was, ok := b.declared[prefix]; ok && was != uri {
+	if was, ok := b.lookupDecl(prefix); ok && was != uri {
 		return b.policy.Err(FaultConflictingPrefix,
 			fmt.Sprintf("the prefix %q is bound to both %q and %q on the "+
 				"same element", prefix, was, uri))
 	}
-	if b.declared == nil {
-		b.declared = map[string]string{}
-	}
-	b.declared[prefix] = uri
+	b.setDecl(prefix, uri)
 	// The element's own name may already have claimed this prefix for a
 	// different URI. Section 11.7 resolves that in favour of the namespace
 	// node and renames the element's prefix — the specification's own example
@@ -751,18 +782,16 @@ func (b *Builder) AddNamespace(prefix, uri string) error {
 // must rename the element's prefix and keep p bound to one, and it reported
 // XQDY0102 instead.
 func (b *Builder) AddOwnNameNamespace(prefix, uri string) error {
-	was, had := b.declared[prefix]
+	was, had := b.lookupDecl(prefix)
 	err := b.AddNamespace(prefix, uri)
 	// Restore declared to what it was, so that the own-name binding is not
 	// visible to a later conflict check. Everything else AddNamespace does --
 	// the namespace node itself, the default-namespace rule, the rename of an
 	// already-conflicting prefix -- is wanted and is left in place.
-	if b.declared != nil {
-		if had {
-			b.declared[prefix] = was
-		} else {
-			delete(b.declared, prefix)
-		}
+	if had {
+		b.setDecl(prefix, was)
+	} else {
+		b.delDecl(prefix)
 	}
 	return err
 }
@@ -780,11 +809,45 @@ func (b *Builder) freshPrefix(want string) string {
 				break
 			}
 		}
-		if _, ok := b.declared[p]; ok {
+		if _, ok := b.lookupDecl(p); ok {
 			taken = true
 		}
 		if !taken {
 			return p
+		}
+	}
+}
+
+// decl is one entry of Builder.declared.
+type decl struct{ prefix, uri string }
+
+func (b *Builder) lookupDecl(prefix string) (string, bool) {
+	for _, d := range b.declared {
+		if d.prefix == prefix {
+			return d.uri, true
+		}
+	}
+	return "", false
+}
+
+func (b *Builder) setDecl(prefix, uri string) {
+	for i := range b.declared {
+		if b.declared[i].prefix == prefix {
+			b.declared[i].uri = uri
+			return
+		}
+	}
+	if b.declared == nil {
+		b.declared = make([]decl, 0, 8)
+	}
+	b.declared = append(b.declared, decl{prefix, uri})
+}
+
+func (b *Builder) delDecl(prefix string) {
+	for i, d := range b.declared {
+		if d.prefix == prefix {
+			b.declared = append(b.declared[:i], b.declared[i+1:]...)
+			return
 		}
 	}
 }
@@ -804,10 +867,7 @@ func (b *Builder) freshPrefix(want string) string {
 // the spec's own "Conflicting Namespace Prefixes" example and expects the
 // error.
 func (b *Builder) NoteDeclared(prefix, uri string) {
-	if b.declared == nil {
-		b.declared = map[string]string{}
-	}
-	b.declared[prefix] = uri
+	b.setDecl(prefix, uri)
 }
 
 // StartElement opens a new element, returning a builder scoped to it.

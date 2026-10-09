@@ -1116,7 +1116,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		if out.Open() == nil && sub.Open().BaseURI == "" {
 			sub.Open().BaseURI = node.BaseURI
 		}
-		copyNamespacesTo(sub, node)
+		copyNamespacesTo(rt, sub, node)
 		// The attributes are processed first so that they reach the element
 		// before any child content closes it to them; section 6.7's rule
 		// selects attributes as well as children.

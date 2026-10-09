@@ -143,6 +143,21 @@ func (i *sequenceInstr) Execute(rt *runtime, out *outputBuilder) error {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
+			if dest := out.Open(); dest != nil && v.Kind == xdm.KindElement &&
+				v.Parent != nil {
+				// The builder would copy v itself and give the copy every
+				// binding v inherited. Copying here instead lets the copy
+				// leave out those its new parent already supplies, which a
+				// constructed tree mostly shares with the element it is
+				// sequenced into. Charged first, as the builder charges.
+				if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
+					return err
+				}
+				c := deepCopy(v)
+				inheritNamespacesAt(rt, c, v, dest)
+				out.AppendNode(c)
+				continue
+			}
 			out.AppendNode(v)
 		case *xdm.Atomic:
 			out.AppendValue(v)
@@ -490,6 +505,70 @@ func inheritNamespaces(dst, src *xdm.Node) {
 	}
 }
 
+// inheritNamespacesAt is inheritNamespaces for a copy about to be attached to
+// dest: of the bindings src inherited, only those dest does not already
+// supply are written on the copy.
+func inheritNamespacesAt(rt *runtime, dst, src, dest *xdm.Node) {
+	var arr [32]nsBinding
+	for _, b := range scopeBindings(src, arr[:0]) {
+		if !declares(dst, b.prefix) && !suppliedAt(rt, dest, b.prefix, b.uri) {
+			dst.AddNamespace(b.prefix, b.uri)
+		}
+	}
+}
+
+// declares reports whether el carries a namespace node for prefix.
+func declares(el *xdm.Node, prefix string) bool {
+	for _, ns := range el.Namespaces {
+		if ns.Name.Local == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+// scopeBindings appends to buf the bindings n.InScopeNamespaces() holds,
+// less xml, sorted by prefix. It reads the ancestors directly rather than
+// building the map: the copies that call it run once per copied element, and
+// the map was most of what they allocated.
+func scopeBindings(n *xdm.Node, buf []nsBinding) []nsBinding {
+	start := len(buf)
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.Kind != xdm.KindElement {
+			continue
+		}
+		// Within one element the last declaration wins, as the map's
+		// overwrites resolve it; an inner element shadows an outer one.
+	next:
+		for i := len(cur.Namespaces) - 1; i >= 0; i-- {
+			ns := cur.Namespaces[i]
+			if ns.Name.Local == "xml" {
+				continue
+			}
+			for _, b := range buf[start:] {
+				if b.prefix == ns.Name.Local {
+					continue next
+				}
+			}
+			buf = append(buf, nsBinding{ns.Name.Local, ns.Value})
+		}
+	}
+	// Drop undeclarations, which only served to shadow, and sort.
+	out := buf[:start]
+	for _, b := range buf[start:] {
+		if b.uri != "" {
+			out = append(out, b)
+		}
+	}
+	s := out[start:]
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j].prefix < s[j-1].prefix; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+	return out
+}
+
 // stripNamespaces removes the namespace nodes from a copied subtree, which is
 // what copy-namespaces="no" asks for, and then puts back the ones the names
 // still depend on.
@@ -636,25 +715,99 @@ func scopeURI(n *xdm.Node, prefix string) string {
 }
 
 // copyNamespacesTo adds every namespace node in scope on src to the element
-// sub is building.
-func copyNamespacesTo(sub *outputBuilder, src *xdm.Node) {
-	scope := src.InScopeNamespaces()
-	prefixes := make([]string, 0, len(scope))
-	for p := range scope {
-		prefixes = append(prefixes, p)
-	}
+// sub is building, leaving out those the element already inherits.
+func copyNamespacesTo(rt *runtime, sub *outputBuilder, src *xdm.Node) {
 	// Sorted so that the declarations come out in a stable order; the XDM
 	// leaves the order of the namespace axis implementation-dependent, but an
-	// order that varies between runs is not an order at all.
-	sort.Strings(prefixes)
-	for _, p := range prefixes {
-		if p == "xml" {
-			// The xml prefix is bound implicitly everywhere, so declaring it
-			// would be redundant and is in fact forbidden in the output.
+	// order that varies between runs is not an order at all. The xml prefix
+	// is left out: it is bound implicitly everywhere, so declaring it would
+	// be redundant and is in fact forbidden in the output.
+	var arr [32]nsBinding
+	for _, b := range scopeBindings(src, arr[:0]) {
+		p, uri := b.prefix, b.uri
+		// Inherited rather than copied, as for a literal result element. The
+		// two cases AddNamespace does more than add -- XTDE0440, and the
+		// rename of an element prefix the binding contradicts -- still go
+		// through it.
+		el := sub.Open()
+		if !(p == "" && el.Name.URI == "") &&
+			!(el.Name.Prefix == p && el.Name.URI != uri) &&
+			parentSupplies(rt, el, p, uri) {
+			sub.NoteDeclared(p, uri)
 			continue
 		}
-		_ = sub.AddNamespace(p, scope[p])
+		_ = sub.AddNamespace(p, uri)
 	}
+}
+
+// parentSupplies reports whether el, just attached to the element being
+// built, already inherits prefix bound to uri, and will keep inheriting it
+// once its ancestors are finished. Only then may el leave the namespace node
+// out (XSLT 3.0 §5.7.1 copies each namespace node of a new element down to
+// its descendants, so the copy on el is the same node the axis would show).
+//
+// Two things change an ancestor's bindings after its children exist, and
+// both rule the shortcut out:
+//   - blockNamespaceInheritance undeclares, on each direct child, the
+//     bindings of an inherit-namespaces="no" element that the child does not
+//     carry itself. A binding found on such an element must be copied.
+//   - fixupNamespaces runs at the end of a literal result element or an
+//     xsl:copy, and adds the binding its own name needs, or xmlns="" for a
+//     name in no namespace. An ancestor that will do that for prefix would
+//     shadow what el found, so el keeps its own copy.
+func parentSupplies(rt *runtime, el *xdm.Node, prefix, uri string) bool {
+	if el == nil {
+		return false
+	}
+	return suppliedAt(rt, el.Parent, prefix, uri)
+}
+
+// suppliedAt is parentSupplies for a child about to be attached to parent.
+func suppliedAt(rt *runtime, parent *xdm.Node, prefix, uri string) bool {
+	for cur := parent; cur != nil && cur.Kind == xdm.KindElement; cur = cur.Parent {
+		if fixupMayBind(cur, prefix) {
+			return false
+		}
+		for i := len(cur.Namespaces) - 1; i >= 0; i-- {
+			if ns := cur.Namespaces[i]; ns.Name.Local == prefix {
+				return ns.Value == uri && !rt.blocking[cur]
+			}
+		}
+	}
+	return false
+}
+
+// fixupMayBind reports whether fixupNamespaces, run on el now, would add a
+// namespace node for prefix.
+func fixupMayBind(el *xdm.Node, prefix string) bool {
+	if el.Name.Prefix != prefix {
+		return false
+	}
+	if el.Name.URI == "" {
+		return prefix == "" && scopeURI(el, "") != ""
+	}
+	return el.Name.URI != xdm.NSXML && scopeURI(el, prefix) != el.Name.URI
+}
+
+// execBlocking runs the body of a new element, applying
+// inherit-namespaces="no" to it afterwards when noInherit is set. The element
+// is recorded in rt.blocking while its body runs; see parentSupplies.
+func execBlocking(rt *runtime, noInherit bool, body []Instruction, sub *outputBuilder) error {
+	if !noInherit {
+		return execSequence(body, rt, sub)
+	}
+	el := sub.Open()
+	if rt.blocking == nil {
+		rt.blocking = map[*xdm.Node]bool{}
+	}
+	rt.blocking[el] = true
+	err := execSequence(body, rt, sub)
+	delete(rt.blocking, el)
+	if err != nil {
+		return err
+	}
+	blockNamespaceInheritance(el)
+	return nil
 }
 
 // copyInstr implements xsl:copy, a shallow copy of the context node.
@@ -751,16 +904,13 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// which is every binding in scope on it rather than only those it
 			// declares itself. A copied element whose prefix was declared on
 			// an ancestor otherwise lost the declaration it needs.
-			copyNamespacesTo(sub, node)
+			copyNamespacesTo(rt, sub, node)
 		}
 		if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
 			return err
 		}
-		if err := execSequence(i.body, rt, sub); err != nil {
+		if err := execBlocking(rt, i.noInherit, i.body, sub); err != nil {
 			return err
-		}
-		if i.noInherit {
-			blockNamespaceInheritance(sub.Open())
 		}
 		if i.noNamespaces {
 			// §5.8.3 namespace fixup still applies: dropping the source's
@@ -949,16 +1099,21 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// the literal result element, not only its name. Copying them
 		// unaliased left the placeholder URI in the result beside the
 		// namespace it was supposed to have been rewritten to.
+		prefix, uri := ns.prefix, ns.uri
 		if a, ok := rt.sheet.aliasIn(i.pkg, ns.uri); ok {
 			if a.uri == "" {
 				continue
 			}
-			sub.Open().AddNamespace(a.prefix, a.uri)
-			sub.NoteDeclared(a.prefix, a.uri)
-			continue
+			prefix, uri = a.prefix, a.uri
 		}
-		sub.Open().AddNamespace(ns.prefix, ns.uri)
-		sub.NoteDeclared(ns.prefix, ns.uri)
+		// A binding the parent already supplies is inherited rather than
+		// copied: the namespace axis and LookupPrefix walk the ancestors,
+		// so the node would only repeat it. It is still a namespace node
+		// the result sequence holds, so XTDE0430 must still see it.
+		if !parentSupplies(rt, sub.Open(), prefix, uri) {
+			sub.Open().AddNamespace(prefix, uri)
+		}
+		sub.NoteDeclared(prefix, uri)
 	}
 	// A namespace that exclusion would have dropped comes back if it is the
 	// target of an alias: the point of aliasing onto, say, the XSLT namespace
@@ -1001,11 +1156,8 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 			return err
 		}
 	}
-	if err := execSequence(i.body, rt, sub); err != nil {
+	if err := execBlocking(rt, i.noInherit, i.body, sub); err != nil {
 		return err
-	}
-	if i.noInherit {
-		blockNamespaceInheritance(sub.Open())
 	}
 	// §5.8.3: an element in a namespace must carry a namespace node for it.
 	// exclude-result-prefixes is what makes this reachable -- it drops the
@@ -1053,6 +1205,9 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 	sub := out.StartElement(qn)
 	stampConstructedBaseURI(sub.Open(), i.baseURI)
 	if qn.URI != "" {
+		// Not left to the parent even when it agrees: a later xsl:namespace
+		// for the same prefix renames the element and rebinds this node in
+		// place, and the order of the declarations depends on it.
 		sub.Open().AddNamespace(qn.Prefix, qn.URI)
 	} else if qn.Prefix == "" {
 		// An unprefixed name in no namespace UNDECLARES the default
@@ -1068,11 +1223,8 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
 		return err
 	}
-	if err := execSequence(i.body, rt, sub); err != nil {
+	if err := execBlocking(rt, i.noInherit, i.body, sub); err != nil {
 		return err
-	}
-	if i.noInherit {
-		blockNamespaceInheritance(sub.Open())
 	}
 	// The element is complete only now, so validity is assessed here rather
 	// than at construction: a content model cannot be checked against

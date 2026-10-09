@@ -474,6 +474,17 @@ func (n *Node) SetSynthesizedOrder(owner *Node, offset int) {
 	if owner == nil {
 		return
 	}
+	if owner.tree == nil {
+		// A constructed tree is numbered on demand (see Order). The slots
+		// are taken from the owner's order, so it has to be numbered first:
+		// an unnumbered owner has order 0, and every element's namespace
+		// nodes then shared the same few identities.
+		root := owner
+		for root.Parent != nil {
+			root = root.Parent
+		}
+		numberDetachedSubtree(root)
+	}
 	n.tree = owner.tree
 	n.order = owner.order + int32(offset) + 1
 }
@@ -738,15 +749,40 @@ func numberDetachedSubtree(root *Node) {
 		return
 	}
 	var counter int32
+	// The reservation follows Tree.number: an element takes a slot for every
+	// binding in scope on it, not only the ones it declares, because the
+	// namespace axis synthesizes the inherited ones at owner.order+1 upwards
+	// (SetSynthesizedOrder). Reserving only the declared ones let those
+	// synthesized nodes share an order, and so a generate-id(), with the
+	// element's attributes and first child -- snapshot-0112 counts distinct
+	// identities against the node count of a temporary tree.
+	scope := map[string]string{"xml": NSXML}
 	var walk func(n *Node)
 	walk = func(n *Node) {
 		n.order = counter
 		counter++
 		// Namespace and attribute nodes precede children, matching the order
 		// Tree.assign uses so the two agree about what document order means.
+		var saved []nsSave
+		if n.Kind == KindElement {
+			for _, ns := range n.Namespaces {
+				prev, had := scope[ns.Name.Local]
+				saved = append(saved, nsSave{prefix: ns.Name.Local, uri: prev, had: had})
+				if ns.Value == "" {
+					delete(scope, ns.Name.Local)
+				} else {
+					scope[ns.Name.Local] = ns.Value
+				}
+			}
+		}
 		for _, ns := range n.Namespaces {
 			ns.order = counter
 			counter++
+		}
+		if n.Kind == KindElement {
+			if extra := len(scope) - len(n.Namespaces); extra > 0 {
+				counter += int32(extra)
+			}
 		}
 		for _, a := range n.Attrs {
 			a.order = counter
@@ -755,6 +791,7 @@ func numberDetachedSubtree(root *Node) {
 		for _, c := range n.Children {
 			walk(c)
 		}
+		restoreScope(scope, saved)
 	}
 	walk(root)
 }
