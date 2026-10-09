@@ -893,6 +893,13 @@ func (b *Builder) ToTree() *xdm.Node {
 	// differently, so it is the policy's to answer. See Policy.DropEmptyText.
 	dropEmpty := b.policy != nil && b.policy.DropEmptyText()
 	emitted := 0
+	// A parentless attribute in the sequence goes on the document node, and
+	// attributes precede a node's children.
+	for _, it := range b.items {
+		if n, ok := it.(*xdm.Node); ok && n.Kind() == xdm.KindAttribute {
+			tree.Root.AppendCopy(n)
+		}
+	}
 	for _, it := range b.items {
 		if sep != nil && emitted > 0 {
 			// A zero-length separator inserts nothing, which is exactly what
@@ -912,6 +919,9 @@ func (b *Builder) ToTree() *xdm.Node {
 			emitted++
 		}
 		if n, ok := it.(*xdm.Node); ok {
+			if n.Kind() == xdm.KindAttribute {
+				continue
+			}
 			if n.Kind() == xdm.KindText && n.Value() == "" {
 				// Section 5.7.1 removes zero-length text nodes when
 				// constructing complex content, and a variable's implicit

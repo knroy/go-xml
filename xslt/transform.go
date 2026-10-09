@@ -1189,9 +1189,20 @@ func (r *Result) Tree() *xdm.Node {
 	// same document the serialiser would have written. Appending each value
 	// as its own text node lost the separators and broke the XDM invariant
 	// that no two text nodes are adjacent.
-	for _, it := range joinAdjacentAtomics(insertItemSeparator(r.Nodes, r.output.ItemSeparator)) {
+	items := joinAdjacentAtomics(insertItemSeparator(r.Nodes, r.output.ItemSeparator))
+	// A parentless attribute in the result goes on the document node, and
+	// attributes precede a node's children.
+	for _, it := range items {
+		if v, ok := it.(*xdm.Node); ok && v.Kind() == xdm.KindAttribute {
+			tree.Root.AppendCopy(v)
+		}
+	}
+	for _, it := range items {
 		switch v := it.(type) {
 		case *xdm.Node:
+			if v.Kind() == xdm.KindAttribute {
+				continue
+			}
 			// 5.7.1: "Any document node within the result sequence is
 			// replaced by a sequence containing each of its children, in
 			// document order." A result tree may not hold a document node
