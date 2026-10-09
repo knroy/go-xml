@@ -51,7 +51,7 @@ type InstanceLocationPolicy struct {
 	// schema's own resolver is used — but note that a FileResolver will
 	// read whatever path the instance gives it, relative to the base, so a
 	// caller following untrusted documents should supply a MapResolver or
-	// an HTTPResolver with AllowHost.
+	// an xsdnet.HTTPResolver with AllowHost.
 	Resolver Resolver
 
 	// MaxDocuments bounds how many documents the instance may pull in.

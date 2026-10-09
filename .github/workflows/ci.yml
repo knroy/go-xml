@@ -117,16 +117,6 @@ jobs:
           GOXSLT_NO_SUITES: '1'
           CGO_ENABLED: '1'
           GOXML_C14N_W3C: '1'
-      # goxml_nohttp leaves xsd.HTTPResolver, and with it net/http, out of the
-      # build (xsd/resolve_http.go). Nothing else in the default jobs compiles
-      # that configuration, so a change that leans on HTTPResolver from an
-      # untagged file would break it unseen.
-      - name: Build and test with -tags goxml_nohttp
-        shell: bash
-        env:
-          GOXSLT_NO_SUITES: '1'
-        run: go vet -tags goxml_nohttp ./... && go test -tags goxml_nohttp -count=1 ./xsd/ ./cmd/...
-
       # w3cschemas is a second module -- the schemas it bundles are under W3C
       # terms rather than MIT -- so every step above misses it: `go list ./...`
       # at the root does not cross a module boundary. Until this step existed

@@ -48,8 +48,8 @@ import (
 //	                              subsume.go:388              of the BFS loop
 //	                                                          (subsumeMaxProduct = 20000)
 //	document composition          assemble.go                 MaxDocuments (assemble.go:78)
-//	                                                          DefaultMaxSchemaBytes
-//	                                                          (resolve.go:284)
+//	                                                          xsdnet.DefaultMaxSchemaBytes
+//	                                                          (xsdnet/resolve_http.go)
 //	group-ref recursion           cycleFrom,                  NO BUDGET, AND NONE NEEDED:
 //	                              parse_type.go:2173          three-colour DFS with a
 //	                                                          shared done set
@@ -599,7 +599,7 @@ func TestGroupOccursDoesNotUnroll(t *testing.T) {
 //
 // This is real quadratic growth, but with a small constant and bounded by
 // schema text rather than by an intermediate structure, so a chain long enough
-// to matter is a schema large enough to be refused by DefaultMaxSchemaBytes
+// to matter is a schema large enough to be refused by xsdnet.DefaultMaxSchemaBytes
 // first. It is measured here so the constant cannot grow unnoticed.
 func TestSubstitutionClosureGrowth(t *testing.T) {
 	measureLoad(t, genSubstChain(64))

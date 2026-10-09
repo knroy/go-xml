@@ -19,7 +19,7 @@ type Options struct {
 	// redefine. When nil, a FileResolver with no root is used, so a schema
 	// can include a file beside it but nothing is fetched over the network.
 	//
-	// To follow remote locations, set an HTTPResolver. That is off by
+	// To follow remote locations, set an xsdnet.HTTPResolver. That is off by
 	// default because it hands control of what this process fetches to
 	// whoever wrote the schema.
 	Resolver Resolver
