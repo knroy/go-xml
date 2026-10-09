@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
-	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // NS is the RELAX NG structure namespace.
@@ -207,10 +206,12 @@ func (c *compiler) compileTop(root *xdm.Node) (pattern, error) {
 // <start>, so that a <ref> may name a definition that appears later.
 func (c *compiler) compileGrammar(g *xdm.Node) (pattern, error) {
 	var start *xdm.Node
-	var collect func(n *xdm.Node) error
-	collect = func(n *xdm.Node) error {
+	// skip, when not nil, leaves out the definitions an <include> overrides:
+	// collect walks the included grammar itself rather than a filtered copy.
+	var collect func(n *xdm.Node, skip func(*xdm.Node) bool) error
+	collect = func(n *xdm.Node, skip func(*xdm.Node) bool) error {
 		for _, kid := range n.ChildElements() {
-			if kid.Name().URI != NS {
+			if kid.Name().URI != NS || (skip != nil && skip(kid)) {
 				continue
 			}
 			switch kid.Name().Local {
@@ -239,7 +240,7 @@ func (c *compiler) compileGrammar(g *xdm.Node) (pattern, error) {
 				// <div> groups definitions for documentation and has no
 				// effect on the grammar, so its children are collected as if
 				// written in its parent.
-				if err := collect(kid); err != nil {
+				if err := collect(kid, skip); err != nil {
 					return err
 				}
 			case "include":
@@ -250,7 +251,7 @@ func (c *compiler) compileGrammar(g *xdm.Node) (pattern, error) {
 		}
 		return nil
 	}
-	if err := collect(g); err != nil {
+	if err := collect(g, nil); err != nil {
 		return nil, err
 	}
 	// Section 4.17, applied to each name once the grammar has been read.
@@ -913,7 +914,7 @@ func (c *compiler) fetch(n *xdm.Node) (*xdm.Node, string, error) {
 // combining with it. That is what makes include useful — a schema adopts
 // another and changes the parts it needs — and it is also why the included
 // definitions cannot simply be collected first. They are filtered.
-func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) error {
+func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node, func(*xdm.Node) bool) error) error {
 	root, href, err := c.fetch(inc)
 	if err != nil {
 		return err
@@ -990,32 +991,15 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	}
 
 	// The included grammar's own definitions, less the overridden ones.
-	filtered := xdmbuild.ShallowCopy(root)
-	var keep func(n *xdm.Node) []*xdm.Node
-	keep = func(n *xdm.Node) []*xdm.Node {
-		var out []*xdm.Node
-		for _, kid := range n.ChildElements() {
-			if kid.Name().URI != NS {
-				continue
-			}
-			switch kid.Name().Local {
-			case "define":
-				if overridden[normalizeToken(kid.AttrValue("name"))] {
-					continue
-				}
-			case "start":
-				if overridesStart {
-					continue
-				}
-			case "div":
-				out = append(out, keep(kid)...)
-				continue
-			}
-			out = append(out, kid)
+	skip := func(kid *xdm.Node) bool {
+		switch kid.Name().Local {
+		case "define":
+			return overridden[normalizeToken(kid.AttrValue("name"))]
+		case "start":
+			return overridesStart
 		}
-		return out
+		return false
 	}
-	filtered.SetChildren(keep(root))
 
 	// The included definitions are collected in a compiler whose base URI is
 	// the included document's, so that an href inside it resolves there.
@@ -1032,7 +1016,7 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	// The ns= written on the <include> reaches the definitions it brings in,
 	// the same way it reaches an <externalRef>'s schema.
 	c.inheritedNs = inheritedNs(inc, c.inheritedNs)
-	err = collect(filtered)
+	err = collect(root, skip)
 	delete(*active, href)
 	c.opts.BaseURI = was
 	c.includeDepth = wasDepth
@@ -1041,7 +1025,7 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 		return err
 	}
 	// Then the overriding definitions written inside the <include> itself.
-	return collect(inc)
+	return collect(inc, nil)
 }
 
 // compileExternalRef compiles the schema an <externalRef> names, as a pattern
