@@ -31,3 +31,35 @@ func TestSerializeHTMLIndentLeavesInlineElementsAlone(t *testing.T) {
 		}
 	}
 }
+
+// TestSerializeIncludeContentTypeReplacesMeta: with include-content-type yes (the
+// default), the html and xhtml methods add a content-type meta to <head> and
+// discard the head's own (Serialization 3.1 §7.4.13, §6.1.14). The html method
+// added its meta but kept the document's, leaving two that disagreed; the
+// xhtml method added none. With "no" the document's metas stay untouched.
+func TestSerializeIncludeContentTypeReplacesMeta(t *testing.T) {
+	const doc = `<html><head><meta charset="UTF-8"/>` +
+		`<meta http-equiv=" content-TYPE " content="text/html; charset=ISO-8859-1"/>` +
+		`<title>t</title></head><body/></html>`
+	for _, method := range []string{"html", "xhtml"} {
+		for _, version := range []string{"", ", 'html-version': 5"} {
+			for _, ict := range []string{"true", "false"} {
+				got, err := evalSerialize(t, `serialize(parse-xml('`+doc+`'), map{'method': '`+
+					method+`', 'include-content-type': `+ict+`()`+version+`})`)
+				if err != nil {
+					t.Fatalf("%s %s %s: %v", method, version, ict, err)
+				}
+				own := strings.Contains(got, `<meta charset="UTF-8"`) ||
+					strings.Contains(got, "ISO-8859-1")
+				added := strings.Count(got, `content="text/html; charset=UTF-8"`)
+				if ict == "true" && (own || added != 1) {
+					t.Errorf("%s%s yes: want only the added meta, got:\n%s", method, version, got)
+				}
+				if ict == "false" && (!strings.Contains(got, `<meta charset="UTF-8"`) ||
+					!strings.Contains(got, "ISO-8859-1") || added != 0) {
+					t.Errorf("%s%s no: want both document metas and none added, got:\n%s", method, version, got)
+				}
+			}
+		}
+	}
+}

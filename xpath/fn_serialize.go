@@ -969,9 +969,15 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// attribute in its place. The full serializer already writes this
 		// form -- see the meta branch of writeElement in xslt/serialize.go --
 		// so the two spellings were also disagreeing with each other.
+		// The xhtml method writes the same element as XML, closed with the
+		// space the HTML compatibility guidelines ask for (§6.1.14).
 		if htmlHead {
-			sb.WriteString(
-				`<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">`)
+			meta := `<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"`
+			if opts.method == "xhtml" {
+				sb.WriteString(meta + ` />`)
+			} else {
+				sb.WriteString(meta + `>`)
+			}
 		}
 		// An element named by cdata-section-elements has its text written as
 		// a CDATA section instead of with escaping, which is what the
@@ -1014,6 +1020,11 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// xslt/serialize.go through htmlser.
 		htmlish := opts.method == "html" || opts.method == "xhtml"
 		for i, c := range n.Children {
+			// Having added its own meta, the method discards the head's
+			// (§7.4.13, §6.1.14): two declarations could contradict.
+			if htmlHead && htmlser.ReplacedMeta(c) {
+				continue
+			}
 			if indentChildren && !(htmlish && htmlser.SkipIndentBefore(
 				n, i, opts.method == "xhtml", opts.html5())) {
 				writeIndent(sb, depth+1)
@@ -1076,7 +1087,8 @@ func xmlDeclVersion(v string) string {
 }
 
 // isHTMLContentTypeHead reports whether this element is the <head> that the
-// html output method injects a content-type meta into.
+// html and xhtml output methods inject a content-type meta into (§7.4.13,
+// §6.1.14).
 //
 // The namespace test mirrors the full serializer's: under the html method
 // every element is HTML by definition, so no namespace and the XHTML one both
@@ -1091,9 +1103,9 @@ func isHTMLContentTypeHead(n *xdm.Node, opts serializeOptions) bool {
 	if opts.includeContentType != nil && !*opts.includeContentType {
 		return false
 	}
-	return opts.method == "html" &&
+	return (opts.method == "html" || opts.method == "xhtml") &&
 		strings.EqualFold(n.Name.Local, "head") &&
-		(n.Name.URI == "" || n.Name.URI == "http://www.w3.org/1999/xhtml")
+		(n.Name.URI == "" || n.Name.URI == htmlser.NSXHTML)
 }
 
 // elementName renders a node's name with its prefix, when it has one.
