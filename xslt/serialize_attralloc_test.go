@@ -87,3 +87,52 @@ func TestSerializeHTMLAttrWideAllocsFlat(t *testing.T) {
 		t.Errorf("800-character value: %.0f allocations, 8-character value: %.0f; want the same", long, short)
 	}
 }
+
+// Each element allocated its prefixed name, a map of the bindings it
+// declared and, when it had children, a copy of every binding in scope; each
+// namespace declaration and attribute was concatenated before being written.
+// Elements and attributes that need no escaping now cost nothing per
+// element, so the count must not grow with the number of them -- and the
+// bindings must still be declared once, undeclared where needed, and
+// redeclared after their scope has closed.
+func TestSerializeElementAllocsFlat(t *testing.T) {
+	doc := func(n int) xdm.Sequence {
+		var b strings.Builder
+		b.WriteString(`<p:r xmlns:p="urn:p" xmlns="urn:d">`)
+		for range n {
+			b.WriteString(`<p:a p:k="v"><q:b xmlns:q="urn:q" q:k="v"><c xmlns=""><d/></c></q:b></p:a>`)
+		}
+		b.WriteString(`</p:r>`)
+		tree, err := xdm.ParseString(b.String(), xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return xdm.One(tree.Root)
+	}
+	opts := OutputSettings{Method: "xml", Encoding: "UTF-8", OmitXMLDecl: true}
+	var out bytes.Buffer
+	if err := Serialize(&out, doc(2), opts, nil); err != nil {
+		t.Fatal(err)
+	}
+	one := `<p:a p:k="v"><q:b xmlns:q="urn:q" q:k="v"><c xmlns=""><d/></c></q:b></p:a>`
+	if want := `<p:r xmlns:p="urn:p" xmlns="urn:d">` + one + one + `</p:r>`; out.String() != want {
+		t.Fatalf("got  %s\nwant %s", out.String(), want)
+	}
+
+	if raceEnabled {
+		t.Skip("allocation counts are not stable under -race")
+	}
+	count := func(seq xdm.Sequence) float64 {
+		var buf bytes.Buffer
+		return testing.AllocsPerRun(20, func() {
+			buf.Reset()
+			if err := Serialize(&buf, seq, opts, nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	few, many := count(doc(5)), count(doc(500))
+	if many > few+5 {
+		t.Errorf("2000 elements: %.0f allocations, 20 elements: %.0f; want the same", many, few)
+	}
+}
