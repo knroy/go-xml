@@ -149,6 +149,12 @@ type staticInfo struct {
 	text atomic.Pointer[patBox]
 	// close memoises startTagCloseDerivCh, which depends on nothing else.
 	close atomic.Pointer[patBox]
+	// att memoises attDeriv by attribute name (xdm.QName -> *patBox) where
+	// every attribute pattern the name reaches takes any value (text), so
+	// the derivative depends on the name alone. A nil p records a name
+	// whose derivative depends on the value. attN caps the entries.
+	att  sync.Map
+	attN atomic.Int32
 }
 
 type patBox struct {

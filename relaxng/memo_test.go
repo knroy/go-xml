@@ -125,3 +125,51 @@ func TestMemoPointsAreInvisible(t *testing.T) {
 		t.Error("a memo point must compare and measure as the subtree it holds")
 	}
 }
+
+// TestAttDerivMemoOnlyWhereTheValueCannotMatter: a memo point remembers
+// attDeriv by attribute name only where every attribute pattern the name
+// reaches takes any value. x is an xs:int, so <a x="z"/> must still fail
+// after <a x="1"/> has been validated; y is text, so its derivative is kept.
+func TestAttDerivMemoOnlyWhereTheValueCannotMatter(t *testing.T) {
+	s := compileBoundarySchema(t, `<element name="r" xmlns="http://relaxng.org/ns/structure/1.0"
+		datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes"><zeroOrMore>
+		<element name="a"><interleave>
+			<optional><attribute name="x"><data type="int"/></attribute></optional>
+			<optional><attribute name="y"><text/></attribute></optional>
+			<optional><attribute name="z"><text/></attribute></optional>
+		</interleave></element></zeroOrMore></element>`)
+	for _, c := range []struct {
+		doc   string
+		valid bool
+	}{
+		{`<r><a x="1" y="q"/><a y="p" z="o"/></r>`, true},
+		{`<r><a x="1" y="q"/><a x="z" y="q"/></r>`, false},
+		{`<r><a y="q"/><a x="z"/></r>`, false},
+	} {
+		doc, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Validate(doc.Root); (err == nil) != c.valid {
+			t.Errorf("%s: got %v, want valid=%v", c.doc, err, c.valid)
+		}
+	}
+	a := s.start.(elementPat).Pattern.(*refPat).cached
+	for {
+		if o, ok := unstatic(a).(oneOrMorePat); ok {
+			a = o.Pattern
+			break
+		}
+		a = unstatic(a).(choicePat).Left
+	}
+	w, ok := a.(elementPat).Pattern.(*refPat)
+	if !ok || w.static == nil {
+		t.Fatalf("a's content is %T, want a memo point", a.(elementPat).Pattern)
+	}
+	if b, ok := w.static.att.Load(xdm.QName{Local: "y"}); !ok || b.(*patBox).p == nil {
+		t.Error("attDeriv for the text attribute y was not remembered")
+	}
+	if b, ok := w.static.att.Load(xdm.QName{Local: "x"}); ok && b.(*patBox).p != nil {
+		t.Error("attDeriv for the typed attribute x was remembered")
+	}
+}

@@ -248,8 +248,26 @@ func attDeriv(p pattern, a attr, ctx nsContext) pattern {
 	// A definition known to hold no attribute pattern (learnt by
 	// startTagCloseDerivCh, which stops at the same element boundary)
 	// derives to notAllowed for every attribute: every leaf does.
-	if r, ok := p.(*refPat); ok && r.attrFree.Load() {
-		return notAllowedPat{}
+	if r, ok := p.(*refPat); ok {
+		if r.attrFree.Load() {
+			return notAllowedPat{}
+		}
+		if s := r.static; s != nil {
+			if b, ok := s.att.Load(a.name); ok && b.(*patBox).p != nil {
+				return b.(*patBox).p
+			} else if ok {
+				return attDeriv(r.cached, a, ctx)
+			}
+			d := attDeriv(r.cached, a, ctx)
+			if s.attN.Add(1) <= maxOpenMemo {
+				b := &patBox{}
+				if anyValueFor(r.cached, a.name, nil) {
+					b.p = d
+				}
+				s.att.Store(a.name, b)
+			}
+			return d
+		}
 	}
 	switch t := expand(p).(type) {
 	case afterPat:
@@ -274,6 +292,46 @@ func attDeriv(p pattern, a attr, ctx nsContext) pattern {
 		return emptyPat{}
 	}
 	return notAllowedPat{}
+}
+
+// anyValueFor reports whether every attribute pattern in p that admits name,
+// up to an element boundary, takes any value (its content is text), so that
+// attDeriv of p for that name does not depend on the value or its context.
+// A reference not yet resolved, or one being visited, answers false.
+func anyValueFor(p pattern, name xdm.QName, visiting map[*refPat]bool) bool {
+	switch t := p.(type) {
+	case attributePat:
+		if !t.Name.contains(name) {
+			return true
+		}
+		_, ok := t.Pattern.(textPat)
+		return ok
+	case choicePat:
+		return anyValueFor(t.Left, name, visiting) && anyValueFor(t.Right, name, visiting)
+	case groupPat:
+		return anyValueFor(t.Left, name, visiting) && anyValueFor(t.Right, name, visiting)
+	case interleavePat:
+		return anyValueFor(t.Left, name, visiting) && anyValueFor(t.Right, name, visiting)
+	case oneOrMorePat:
+		return anyValueFor(t.Pattern, name, visiting)
+	case *refPat:
+		if t.attrFree.Load() {
+			return true
+		}
+		if !t.done || t.err != nil || visiting[t] {
+			return false
+		}
+		if visiting == nil {
+			visiting = map[*refPat]bool{}
+		}
+		visiting[t] = true
+		ok := anyValueFor(t.cached, name, visiting)
+		delete(visiting, t)
+		return ok
+	}
+	// Elements, values, data, lists, text, empty and notAllowed hold no
+	// attribute pattern before an element boundary.
+	return true
 }
 
 // valueMatch reports whether a string satisfies a pattern.
