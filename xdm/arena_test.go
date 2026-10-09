@@ -43,6 +43,40 @@ func TestParseValuesShareBlocks(t *testing.T) {
 	}
 }
 
+// Namespace declarations and processing instructions were one heap object
+// each (two, with the namespace slice and the PI's value), where every other
+// node of a parse comes from the shared node chunks.
+func TestParseNamespacesAndPIsShareChunks(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<r>")
+	for i := range 2000 {
+		fmt.Fprintf(&b, `<e xmlns:p="urn:p%d"><?pi data %d?></e>`, i, i)
+	}
+	b.WriteString("</r>")
+	doc := b.String()
+	n := testing.AllocsPerRun(5, func() {
+		if _, err := ParseString(doc, ParseOptions{MaxBytes: -1, MaxNodes: -1}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// 2,000 namespace nodes and 2,000 PIs: 10,070 allocations before, 2,110
+	// after.
+	if n > 3000 {
+		t.Errorf("parsing 2,000 namespace declarations and PIs allocated %.0f times, want under 3,000", n)
+	}
+	tree, err := ParseString(doc, ParseOptions{MaxBytes: -1, MaxNodes: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, e := range tree.Root.Children[0].Children {
+		ns, pi := e.Namespaces[0], e.Children[0]
+		if ns.Parent != e || ns.Name.Local != "p" || ns.Value != fmt.Sprintf("urn:p%d", i) ||
+			pi.Kind != KindPI || pi.Value != fmt.Sprintf("data %d", i) {
+			t.Fatalf("element %d: namespace %s=%q, PI %q", i, ns.Name.Local, ns.Value, pi.Value)
+		}
+	}
+}
+
 // A parse has two string arenas, the decoder's for attribute values and the
 // parser's for text, and each made a fixed 32 KiB block on first use, so a
 // document of a few bytes allocated, and its tree retained, 64 KiB. Blocks

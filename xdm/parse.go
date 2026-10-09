@@ -501,10 +501,11 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				return nil, fmt.Errorf("parse XML: processing-instruction target %q contains a colon", t.Target)
 			}
 			sawPrologToken = true
-			pi := &Node{
+			pi := chunk.alloc()
+			*pi = Node{
 				Kind:  KindPI,
 				Name:  QName{Local: t.Target},
-				Value: string(t.Inst),
+				Value: spaces.arena.String(t.Inst),
 			}
 			// Same entity rule as for elements: a PI pulled in from an
 			// external entity has that entity's URI as its base. This is
@@ -774,17 +775,18 @@ func buildElement(chunk *nodeChunk, t xml.StartElement, parent *Node, offset int
 		}
 	}
 	el.Attrs = chunk.take(n)
+	el.Namespaces = chunk.take(len(t.Attr) - n)
 
 	for _, a := range t.Attr {
 		switch {
 		case a.Name.Space == "xmlns":
-			el.AddNamespace(a.Name.Local, a.Value)
+			chunk.addNamespace(el, a.Name.Local, a.Value)
 		case a.Name.Space == "" && a.Name.Local == "xmlns":
-			el.AddNamespace("", a.Value)
+			chunk.addNamespace(el, "", a.Value)
 		case a.Name.Space == NSXMLNS:
 			// applyAttDefaults and callers that hand-build a token may use
 			// the resolved xmlns URI instead of the "xmlns" prefix.
-			el.AddNamespace(a.Name.Local, a.Value)
+			chunk.addNamespace(el, a.Name.Local, a.Value)
 		default:
 			attr := chunk.alloc()
 			*attr = Node{
@@ -1031,6 +1033,15 @@ func (c *nodeChunk) close(el *Node) {
 	c.marks = c.marks[:len(c.marks)-1]
 	el.Children = append(c.take(len(c.kids)-m), c.kids[m:]...)
 	c.kids = c.kids[:m]
+}
+
+// addNamespace appends to el a namespace node binding prefix to uri, as
+// Node.AddNamespace does, but taken from the chunk: el.Namespaces was cut to
+// size by take, so the append does not reallocate.
+func (c *nodeChunk) addNamespace(el *Node, prefix, uri string) {
+	ns := c.alloc()
+	*ns = Node{Kind: KindNamespace, Name: QName{Local: prefix}, Value: uri, Parent: el, tree: el.tree}
+	el.Namespaces = append(el.Namespaces, ns)
 }
 
 // nodeChunkLen caps a chunk at 32 KiB, the largest size class the allocator
