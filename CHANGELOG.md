@@ -22,7 +22,7 @@ code before and after, and how to run the rewriter on your own module.
 | `xdm.ProcessXInclude` returns a new tree | `tree, err = xdm.ProcessXInclude(tree, opts)`; the input is not edited. | fb2426e |
 | `xdmbuild.SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaces`, `SetName`, `SetBaseURI`, `ShallowCopy`, `ReplaceChild`, `PrependChild` removed | Call the `xdm.Node` method of the same name where there is one (`SetName`, `SetBaseURI`); build a changed tree as a copy. `Builder.ReplaceOpen` swaps an element being built for its typed copy. | 6b34bc3, 13c4f5f |
 | `xsd.HTTPResolver` moves to package `xsd/xsdnet` | Every program importing `xsd` linked `net/http`, TLS and x509; only `-tags goxml_nohttp` kept them out. Use `xsdnet.HTTPResolver`, `ErrPrivateAddress`, `DefaultFetchTimeout`, `DefaultMaxSchemaBytes`; the tag is gone ([migrating](docs/migrating-to-v2.md#httpresolver-moves-to-package-xsdnet)). | 5509745a |
-| XSLT global variables are evaluated on first use | A global nothing reads is not evaluated, so its failure is not reported (XSLT 3.0 §2.14 allows this); one with `xsl:message`, `xsl:assert`, `xsl:result-document` or `fn:trace` in its own body is still evaluated at the start ([migrating](docs/migrating-to-v2.md#global-variables-are-evaluated-on-first-use)). | 7c5121ca |
+| XSLT global variables are evaluated on first use | A global nothing reads is not evaluated, so its failure is not reported (XSLT 3.0 §2.14 allows this); one with `xsl:message`, `xsl:assert`, `xsl:result-document` or `fn:trace` in its own body is still evaluated at the start, and every error keeps its code and wording ([migrating](docs/migrating-to-v2.md#global-variables-are-evaluated-on-first-use)). | 7c5121ca |
 | `xsd.ValidateOptions.Annotate` removed; `Validate` and its siblings only check | A typed tree comes from `ValidateCopy`, `ValidateElementLaxCopy`, `ValidateAttributeCopy` or `ValidateAgainstTypeCopy`, which return the copy's counterpart of the node given. There is no in-place annotation (v2's interim `AnnotateInPlace` is gone too): annotating adds attributes and strips whitespace, which a built tree cannot take. | 21105fe |
 
 ### Added
@@ -39,7 +39,7 @@ code before and after, and how to run the rewriter on your own module.
 | `Context.WithNow` removed | `ctx.WithNow(t)` → `ctx.WithEnv(func(e *xpath.Env) { e.Now, e.HasNow = t, true })`. | [`9af0e77`][9af0e77] |
 | `xdmbuild.Builder.AppendCopyOf` | Appends a copy of a node straight into the tree being built: the result of `AppendNode(xdm.Copy(n))` with one copy instead of two. | `484cb4e8` |
 | `xdmbuild.NSDecl`, `Builder.NoteDeclaredList` | `NoteDeclared` for a list of bindings the builder may keep instead of copying; for a constructor that notes the same bindings on every element it builds. | 2c5ea0b |
-| `xpath.LazyVar`, `xpath.ReadyVar`, `Context.WithLazyVars` | Binds a scope of variables each evaluated on first reference; a reference raises the evaluation's error. XSLT globals use it. | 7c5121ca |
+| `xpath.LazyVar`, `xpath.ReadyVar`, `Context.WithLazyVars` | Binds a scope of variables each evaluated on first reference; a reference raises the evaluation's error. XSLT globals use it. | 7c5121ca, 03adcab8 |
 | `xdm.Node.TreeHasTyping` | Whether any node of the node's tree was ever typed; false means the whole tree is untyped. XSLT uses it to skip stripping annotations ([migrating](docs/migrating-to-v2.md#validation-never-writes-to-your-tree)). | 40dbca21 |
 
 ### Changed — performance
@@ -58,7 +58,7 @@ code before and after, and how to run the rewriter on your own module.
 | Plain `Validate` kept union-member typing that only assertions read | Kept only inside an element with assertions; text read once per node. Catalog `Validate` −4% CPU, 508 → 19 KB per pass. | e48af61 |
 | XSLT runtime and XPath predicates repeated per-item work (V5) | Runtime copy 176 → 112 B, one focus context per predicate, strip-space memo, untyped trees not stripped. XRechnung 1 −10%, 2 −9%, DocBook items about −11% CPU. | 35cd4d60, 16f3d909, f2c08b2e, 40dbca21, db7e1ba3, 462ee9a2 |
 | DocBook compile 55 → 77 ms on v2 (V7) | Version-attribute walks remembered per Compile (not in the static phase); `FileResolver` remembers `EvalSymlinks`. DocBook compile −11% CPU. | 23ace644, be9eb58e |
-| XSLT evaluated every global at the start of a transform (DocBook declares 300–950 per transform and reads a fraction), each bound in its own scope (V4) | Globals are evaluated on first use from one map scope; ones with direct side effects or a self-reference stay eager. DocBook items −9% CPU, −12% allocations; XRechnung 1 −8%, Peppol −3%. | 7c5121ca |
+| XSLT evaluated every global at the start of a transform (DocBook declares 300–950 per transform and reads a fraction), each bound in its own scope (V4) | Globals are evaluated on first use from one map scope; ones with direct side effects, a self-reference or a cycle stay eager. DocBook items −10% CPU, −12% allocations; XRechnung 1 −7%, Peppol −5%. | 7c5121ca, 03adcab8 |
 | The runtime copy still carried the 64 B template selection (V13) | Selection held by pointer, allocated with the copy that selects it: copy 112 → 64 B. DocBook items −5.5% bytes, −3.8% CPU. | e09f1060 |
 
 ## v1.7.1 — 2026-10-09

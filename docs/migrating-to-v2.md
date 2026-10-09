@@ -429,9 +429,12 @@ evaluated, so its failure is no longer reported; section 2.14 of XSLT 3.0
 allows this. What stays as it was:
 
 - A failure met through a reference is not caught by an `xsl:try` around the
-  reference (section 9.5), and the code is the one the eager evaluation gave.
+  reference (section 9.5), and its code and message are the ones eager
+  evaluation gave.
 - A required parameter left unset is `XTDE0050` at the start.
-- A global that names itself is `XPST0008` at the start, read or not.
+- A global that names itself is `XPST0008` at the start, read or not. A
+  global that depends on a cycle, or calls `key()`, is evaluated at the start
+  too, so a circularity is `XTDE0640` naming the same global as before.
 - A global whose own `select` or content holds `xsl:message`, `xsl:assert`,
   `xsl:result-document` or a call to `fn:trace` is evaluated at the start, so
   its effect does not depend on whether anything reads it. One that reaches
@@ -441,7 +444,8 @@ allows this. What stays as it was:
 A host language can bind variables the same way through
 `xpath.Context.WithLazyVars` and `xpath.LazyVar`; an expression's reference
 reports the evaluation's error, while `Context.LookupVar` reports a failed
-one as unbound.
+one as unbound. A lazy variable is out of scope while its own evaluation
+runs, and `LazyVar.Unbind` takes one out of scope for good.
 
 ## Not changed
 
