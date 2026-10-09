@@ -27,6 +27,7 @@ code before and after, and how to run the rewriter on your own module.
 
 | Change | What it does | Commit |
 |---|---|---|
+| `docs/benchmark.md` v2 section; `docs/profiling.md` v2 profile | The benchmark re-run on v2 against v1 `f45068c`, and a profile explaining its three regressions with a ranked fix list (V1–V11). | `694b9c37`, `c9a6e8e7` |
 | `xdm.NewFragment`, `Tree.NewRoot`, `Copy`, `CopyPruned`, `ShallowCopy`, `CopyPosition`, `Tree.CopySourceFrom`, `CopyTypeEnvs`, `SetNamespaceDecl`, `RemoveNamespaceDecls`, `DeclaredNamespaces`, `NamespaceNodes`, `RemoveLastChild`, `ReplaceLastChild` | The construction and reading calls the record layout is built on; see [migrating](docs/migrating-to-v2.md#trees-are-built-top-down-by-appending). | 3f33dce, 86f991c, d337fd9 |
 | `docs/migrating-to-v2.md`; `nodeaccess -v1` | Before/after code for every breaking change. The rewriter can be pointed at any module: `-v1` moves its go-xml imports to `/v2` and runs `go mod tidy` before rewriting. | — |
 | `tests/record.sh`, `tests/recdiff`, `GOXSLT_RECORD_DIR` | Suites only count passes; now every case's output is recorded and two checkouts are diffed, allowed differences by rule. | `5aa004e` |
