@@ -147,9 +147,32 @@ func (e *PathExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 				"the context item for an axis step is %s, not a node",
 				ctx.Item.TypeName())
 		}
+		if len(e.Steps) > 0 {
+			return evalPathFromItem(ctx, ctx.Item, e.Steps)
+		}
 		cur = xdm.One(ctx.Item)
 	}
 	return evalRemainingSteps(ctx, cur, e.Steps)
+}
+
+// evalPathFromItem is evalRemainingSteps starting from the one item it.
+// The first step only iterates its input, so it is held in an array on the
+// stack rather than boxed into a one-item sequence on the heap, which was an
+// allocation for every relative path evaluated.
+func evalPathFromItem(ctx *Context, it xdm.Item, steps []Expr) (xdm.Sequence, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	one := [1]xdm.Item{it}
+	step, rest := steps[0], steps[1:]
+	if d := fuseDescendant(steps, 0); d != nil {
+		step, rest = d, steps[2:]
+	}
+	next, err := evalStepOver(ctx, one[:], step, len(rest) == 0)
+	if err != nil {
+		return nil, err
+	}
+	return evalRemainingSteps(ctx, next, rest)
 }
 
 // evalStepOver evaluates one step with each item of input as the context item,

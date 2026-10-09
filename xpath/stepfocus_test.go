@@ -122,3 +122,27 @@ func TestPathStepResultNotCopied(t *testing.T) {
 		t.Errorf("a child step over one node allocated %.0f times, want at most 6", allocs)
 	}
 }
+
+// A relative path starts from the context item without boxing it into a
+// one-item sequence: "b" from one a allocates only what its step builds.
+func TestRelativePathStartsWithoutBoxing(t *testing.T) {
+	tree, err := xdm.ParseString(`<r><a><b/><b/><b/></a></r>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := tree.Root.Children[0].Children[0]
+	ctx := NewContext(a, Builtins())
+	e := MustCompile("b", nil).expr.(*PathExpr)
+	if got, err := e.Eval(ctx); err != nil || len(got) != 3 {
+		t.Fatalf("b: %d items, %v", len(got), err)
+	}
+	allocs := testing.AllocsPerRun(50, func() {
+		if _, err := e.Eval(ctx); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Logf("allocations: %.0f", allocs)
+	if allocs > 3 {
+		t.Errorf("the path \"b\" allocated %.0f times, want at most 3", allocs)
+	}
+}
