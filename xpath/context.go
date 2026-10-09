@@ -901,32 +901,53 @@ type varKey struct{ uri, local string }
 //
 // Force computes the value. A successful result is kept and Force is not
 // called again; a failure is not kept, so the host decides what a second
-// reference sees. Force is also called again if a reference reaches the
-// variable while its own Force is running, which is how a host detects a
-// circularity. A LazyVar belongs to one evaluation and is not safe for
-// concurrent use.
+// reference sees. While Force runs the variable is not in scope: a reference
+// reached from inside its own evaluation resolves as if the name were not
+// bound here, which is how a host sees a circularity. Unbind takes the
+// variable out of scope for good. A LazyVar belongs to one evaluation and is
+// not safe for concurrent use.
 type LazyVar struct {
 	Force func() (xdm.Sequence, error)
 	val   xdm.Sequence
-	done  bool
+	state uint8
 }
 
+const (
+	lazyPending uint8 = iota
+	lazyRunning
+	lazyDone
+	lazyUnbound
+)
+
 // ReadyVar returns a LazyVar that already holds val.
-func ReadyVar(val xdm.Sequence) *LazyVar { return &LazyVar{val: val, done: true} }
+func ReadyVar(val xdm.Sequence) *LazyVar { return &LazyVar{val: val, state: lazyDone} }
 
 // Value returns the variable's value, computing it if no reference has yet.
-func (l *LazyVar) Value() (xdm.Sequence, error) { return l.get() }
+// A variable out of scope (see LazyVar) reports no value and no error.
+func (l *LazyVar) Value() (xdm.Sequence, error) {
+	v, _, err := l.get()
+	return v, err
+}
 
-func (l *LazyVar) get() (xdm.Sequence, error) {
-	if l.done {
-		return l.val, nil
+// Unbind takes the variable out of scope: a reference resolves as if the
+// name were not bound by this scope.
+func (l *LazyVar) Unbind() { l.state = lazyUnbound }
+
+func (l *LazyVar) get() (xdm.Sequence, bool, error) {
+	switch l.state {
+	case lazyDone:
+		return l.val, true, nil
+	case lazyRunning, lazyUnbound:
+		return nil, false, nil
 	}
+	l.state = lazyRunning
 	v, err := l.Force()
 	if err != nil {
-		return nil, err
+		l.state = lazyPending
+		return nil, true, err
 	}
-	l.val, l.done = v, true
-	return v, nil
+	l.val, l.state = v, lazyDone
+	return v, true, nil
 }
 
 // WithLazyVars returns a child scope binding every name in vars, each one
@@ -984,8 +1005,9 @@ func (c *Context) lookupVarPlain(name xdm.QName) (xdm.Sequence, bool, error) {
 		if b := s.bind; b != nil {
 			if b.lazy != nil {
 				if l, ok := b.lazy[varKey{name.URI, name.Local}]; ok {
-					v, err := l.get()
-					return v, true, err
+					if v, ok, err := l.get(); ok || err != nil {
+						return v, true, err
+					}
 				}
 			} else if b.local == name.Local && b.uri == name.URI {
 				return b.val, true, nil

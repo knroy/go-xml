@@ -136,3 +136,24 @@ func TestLazyGlobalsArePerTransform(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// A global's failure reads as it did when every global was evaluated at the
+// start: worded by the global, not stamped by the instruction that first
+// read it, and a cycle names the global met first in declaration order,
+// whichever one a template reads.
+func TestGlobalFailureWordingIsUnchanged(t *testing.T) {
+	sheet := lazySheet(t, `<xsl:variable name="q" select="1 idiv 0"/>
+	  <xsl:template match="/"><o><xsl:value-of select="$q"/></o></xsl:template>`)
+	_, err := lazyRun(t, sheet, nil)
+	if err == nil || !strings.HasPrefix(err.Error(), "evaluating global $q: FOAR0001") {
+		t.Fatalf("got %v, want it to start with %q", err, "evaluating global $q: FOAR0001")
+	}
+	sheet = lazySheet(t, `<xsl:variable name="x" select="$y"/>
+	  <xsl:variable name="y" select="$z"/>
+	  <xsl:variable name="z" select="$x"/>
+	  <xsl:template match="/"><o><xsl:value-of select="$z"/></o></xsl:template>`)
+	_, err = lazyRun(t, sheet, nil)
+	if err == nil || !strings.Contains(err.Error(), "$x depends on itself") {
+		t.Fatalf("got %v, want the cycle reported against $x", err)
+	}
+}

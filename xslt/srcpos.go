@@ -80,6 +80,12 @@ func stampPosition(err error, instr Instruction) error {
 		// passes one up through every enclosing instruction per iteration.
 		return err
 	}
+	if isGlobalError(err) {
+		// A global's failure is reported as evaluating the global raised
+		// it, not as the instruction whose reference happened to need the
+		// value first; see globalError.
+		return err
+	}
 	var e *xdm.Error
 	if errors.As(err, &e) {
 		if e.Line == 0 {

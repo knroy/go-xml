@@ -931,18 +931,21 @@ func (s *Stylesheet) runtimeLibrary() *xpath.Library {
 // Section 2.14 lets a processor evaluate only what it uses ("an
 // implementation will signal the error only if it actually executes the
 // instructions and expressions"), and a large stylesheet uses few of its
-// globals: DocBook xslTNG declares about 950 per transform and reads about
-// 75. The bindings are one map scope (xpath.Context.WithLazyVars) rather than
-// a WithVar per name, so a reference that reaches them costs one map probe
-// rather than a walk past every global declared after it.
+// globals: DocBook xslTNG declares 300-950 per transform and reads a
+// fraction. The bindings are one map scope (xpath.Context.WithLazyVars)
+// rather than a WithVar per name, so a reference that reaches them costs one
+// map probe rather than a walk past every global bound after it.
 //
-// Some globals are still evaluated here, in declaration order and with their
-// dependencies first, as they all were before:
+// Some globals are still evaluated here, in declaration order and with the
+// dependencies globalRefs names first, which is how every global was
+// evaluated before (see Variable.eager):
 //   - a deferred global (an abstract variable), whose failure is owed to a
 //     reference rather than to the transform; see runtime.deferredErr;
 //   - a global whose own select or content writes xsl:message, xsl:assert,
 //     xsl:result-document or calls fn:trace, so that its effect does not
-//     depend on whether anything reads it (Variable.effects).
+//     depend on whether anything reads it;
+//   - a global that names itself, or depends on a cycle, so that the error
+//     and the name it reports are the ones evaluating in that order gave.
 //
 // A missing required parameter is reported here too, since it needs no
 // evaluation to detect.
@@ -960,17 +963,30 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 	// runtime of the instruction that made the reference.
 	var gs *runtime
 
-	// state is keyed by binding name; see globalBindingName. A failure is
-	// kept, so that a second reference raises what the first did rather
-	// than evaluating again.
+	// state is per binding name; see globalBindingName. A failure is kept,
+	// so that a second reference raises what the first did rather than
+	// evaluating again.
 	type gstate struct {
-		active, done bool
-		err          error
+		active, primed, done bool
+		err                  error
 	}
 	state := make(map[xdm.QName]*gstate, len(s.globals))
+	stateOf := func(g *Variable) *gstate {
+		key := globalBindingName(g.Name, g.pkg)
+		st := state[key]
+		if st == nil {
+			st = &gstate{}
+			state[key] = st
+		}
+		return st
+	}
+	circular := func(g *Variable) error {
+		// XTDE0640: a global variable whose value depends on its own.
+		return fmt.Errorf("XTDE0640: global variable $%s depends on itself",
+			g.Name.Lexical())
+	}
 
-	// eval computes one global's value, the work the eager loop used to do
-	// at the point it bound the name.
+	// eval computes one global's value.
 	eval := func(g *Variable) (xdm.Sequence, error) {
 		// The DECLARED local name, which is what a reference inside a match
 		// pattern is written with and all recoverPatternError can compare.
@@ -980,30 +996,24 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 		rt.globalActive[g.Name.Local] = true
 		defer delete(rt.globalActive, g.Name.Local)
 
-		for _, dep := range globalRefs(g) {
-			if d, ok := byName[dep]; ok && d == g {
-				// A global variable is not in the scope of its own binding:
-				// XSLT 3.0 §9.1 gives the scope of a global xsl:variable as
-				// every stylesheet module in the package *except* the
-				// variable's own select expression and sequence constructor.
-				// A reference to the name from there is therefore a
-				// reference to nothing at all, and the static error for an
-				// unbound variable reference is XPST0008 rather than the
-				// XTDE0640 that a genuine circularity between two distinct
-				// declarations raises.
-				//
-				// higher-order-functions-070 writes the case that makes the
-				// distinction visible: $gcd's select is an inline function
-				// whose body calls $gcd, which "would make sense" as
-				// recursion and is still an error because the name is not
-				// in scope. The binding exists -- every global is bound
-				// before any is evaluated -- so it is reported here
-				// directly.
-				return nil, fmt.Errorf(
-					"XPST0008: undeclared variable $%s: a global variable is "+
-						"not in scope within its own binding",
-					g.Name.Lexical())
-			}
+		if g.selfRef {
+			// A global variable is not in the scope of its own binding:
+			// XSLT 3.0 §9.1 gives the scope of a global xsl:variable as
+			// every stylesheet module in the package *except* the variable's
+			// own select expression and sequence constructor. A reference to
+			// the name from there is therefore a reference to nothing at
+			// all, and the static error for an unbound variable reference is
+			// XPST0008 rather than the XTDE0640 that a genuine circularity
+			// between two distinct declarations raises.
+			//
+			// higher-order-functions-070 writes the case that makes the
+			// distinction visible: $gcd's select is an inline function whose
+			// body calls $gcd, which "would make sense" as recursion and is
+			// still an error because the name is not in scope.
+			return nil, fmt.Errorf(
+				"XPST0008: undeclared variable $%s: a global variable is "+
+					"not in scope within its own binding",
+				g.Name.Lexical())
 		}
 
 		val, err := evalVariable(g, globalRuntimeFor(gs, g))
@@ -1012,8 +1022,18 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 		}
 		if isGlobalError(err) {
 			// Another global's failure, met through a reference: it is that
-			// global's error, already worded, and not this one's.
+			// global's error and is reported as it stands.
 			return nil, err
+		}
+		// globalRefs only reads the text, so a reference reached through a
+		// sequence constructor, a match pattern or a function body can meet
+		// a global still under evaluation. A global is out of scope while
+		// it is evaluated (see xpath.LazyVar), so that shows up as XPST0008
+		// for a name that is in fact declared: its value depends on itself.
+		// Section 9.11 makes a circularity XTDE0640, and reporting the
+		// reference as undeclared hid the cycle behind a static-error code.
+		if dep, ok := unresolvedGlobal(err, byName); ok && stateOf(dep).active {
+			return nil, circular(dep)
 		}
 		// A global xsl:param with an "as" type, no explicit default and no
 		// supplied value takes the empty sequence as its default. Section
@@ -1042,26 +1062,11 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 		return nil, fmt.Errorf("evaluating global $%s: %w", g.Name.Lexical(), err)
 	}
 
-	// force is a global's LazyVar.Force: eval guarded against re-entry, with
-	// the failure wrapped so that no xsl:try around the reference catches it.
+	// force is a global's LazyVar.Force.
 	force := func(g *Variable) (xdm.Sequence, error) {
-		key := globalBindingName(g.Name, g.pkg)
-		st := state[key]
-		if st == nil {
-			st = &gstate{}
-			state[key] = st
-		}
-		switch {
-		case st.done:
+		st := stateOf(g)
+		if st.done {
 			return nil, st.err
-		case st.active:
-			// XTDE0640: a global variable whose value depends on its own.
-			// Section 9.11 makes a circularity XTDE0640, and reached through
-			// a function, a template or a key it is only seen here, as a
-			// reference to a global whose evaluation is under way.
-			return nil, &globalError{fmt.Errorf(
-				"XTDE0640: global variable $%s depends on itself",
-				g.Name.Lexical())}
 		}
 		st.active = true
 		val, err := eval(g)
@@ -1083,8 +1088,7 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 	// and, for a used package's global, under the plain name while no
 	// top-level global or earlier used-package global has that. The plain
 	// binding is what an expression carrying no package resolves against.
-	// A duplicate binding name keeps the first declaration, as the eager
-	// loop did by marking the name done.
+	// A duplicate binding name keeps the first declaration.
 	cellOf := make(map[xdm.QName]*xpath.LazyVar, len(s.globals))
 	vars := make(map[xdm.QName]*xpath.LazyVar, len(s.globals))
 	for _, g := range s.globals {
@@ -1118,70 +1122,72 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 			}
 		}
 	}
-	base := rt.ctx
-	rt.ctx = base.WithLazyVars(vars)
+	rt.ctx = rt.ctx.WithLazyVars(vars)
 	snapshot := *rt
 	gs = &snapshot
 
-	// prime evaluates g now, its dependencies first: the order every global
-	// was evaluated in before evaluation became lazy.
-	primed := map[*Variable]bool{}
+	// prime evaluates g now, the dependencies globalRefs names first, which
+	// is the order every global was evaluated in before evaluation became
+	// lazy. A deferred global that fails is taken out of scope, as it was
+	// never bound before.
 	var prime func(g *Variable) error
 	prime = func(g *Variable) error {
-		if primed[g] {
+		st := stateOf(g)
+		switch {
+		case st.active:
+			return circular(g)
+		case st.primed:
 			return nil
 		}
-		primed[g] = true
-		for _, dep := range globalRefs(g) {
-			if d, ok := byName[dep]; ok && d != g {
+		st.primed = true
+		lv := cellOf[globalBindingName(g.Name, g.pkg)]
+		if lv.Force != nil {
+			st.active = true
+			for _, dep := range globalRefs(g) {
+				d, ok := byName[dep]
+				if !ok {
+					continue
+				}
+				if d == g {
+					break // eval reports it
+				}
 				if err := prime(d); err != nil {
+					st.active = false
 					return err
 				}
 			}
+			st.active = false
 		}
-		_, err := cellOf[globalBindingName(g.Name, g.pkg)].Value()
+		_, err := lv.Value()
+		if err != nil && g.deferred {
+			lv.Unbind()
+		}
 		return unwrapGlobalError(err)
 	}
-	unbound := false
 	for _, g := range s.globals {
-		switch {
-		case g.deferred:
+		if !g.deferred && !g.eager {
+			continue
+		}
+		if err := prime(g); err != nil {
+			if !g.deferred {
+				return err
+			}
 			// A deferred global's failure is not the transform's failure:
 			// 3.5.3.2 makes XTDE3052 the error for an invocation that "is
 			// evaluated", so a variable nothing refers to must raise
-			// nothing. A failed one is left unbound, and a reference to it
-			// raises the failure through deferredError.
+			// nothing. A reference to it raises the failure through
+			// deferredError.
 			//
 			// accept-042 hides an abstract v1 and never mentions it, while
 			// the v1-proxy that selects it is public and equally
 			// unreferenced; accept-043b and -043c refer to the proxy and
 			// still expect XTDE3052.
-			name := globalBindingName(g.Name, g.pkg)
-			lv := cellOf[name]
-			if _, err := lv.Value(); err != nil {
-				rt.deferredErr = append(rt.deferredErr, deferredGlobal{
-					name:     name,
-					declared: g.Name,
-					err:      unwrapGlobalError(err),
-				})
-				for k, v := range vars {
-					if v == lv {
-						delete(vars, k)
-						unbound = true
-					}
-				}
-			}
-		case g.effects || g.selfRef:
-			if err := prime(g); err != nil {
-				return err
-			}
+			rt.deferredErr = append(rt.deferredErr, deferredGlobal{
+				name:     globalBindingName(g.Name, g.pkg),
+				declared: g.Name,
+				err:      err,
+			})
 		}
-	}
-	if unbound {
-		// The scope is rebuilt without the failed deferred globals. Every
-		// lazy global evaluates in gs, so it is rebuilt there too.
-		rt.ctx = base.WithLazyVars(vars)
-		gs.ctx = rt.ctx
 	}
 	return nil
 }
@@ -1208,6 +1214,32 @@ func unwrapGlobalError(err error) error {
 		return ge.err
 	}
 	return err
+}
+
+// unresolvedGlobal reports whether err is an XPST0008 naming a variable that
+// the stylesheet does in fact declare globally, and if so returns that
+// declaration.
+//
+// The name is recovered from the message rather than from a typed error
+// because XPST0008 is raised in xpath, where nothing knows what an XSLT
+// global is. A message that is not this shape, or that names something no
+// global declares, yields false and is left to be reported as it stands.
+func unresolvedGlobal(err error, byName map[string]*Variable) (*Variable, bool) {
+	const marker = "XPST0008: undeclared variable $"
+	msg := err.Error()
+	i := strings.Index(msg, marker)
+	if i < 0 {
+		return nil, false
+	}
+	name := msg[i+len(marker):]
+	if j := strings.IndexAny(name, " :\t\n"); j >= 0 {
+		name = name[:j]
+	}
+	if name == "" {
+		return nil, false
+	}
+	g, ok := byName[xdm.QName{Local: name}.Clark()]
+	return g, ok
 }
 
 // qualifyGlobal is the VarQualifier that resolves a reference against the
@@ -1588,37 +1620,82 @@ func (rt *runtime) noteUnbound(bits uint8) {
 	}
 }
 
-// markSelfReferences sets Variable.selfRef. It runs once every module has
-// compiled and foldFunctionRefsIntoGlobals has added the references made
-// through stylesheet functions, since globalRefs reads those too.
-func (c *compiler) markSelfReferences() {
+// markGlobalOrder sets Variable.selfRef and Variable.eager. It runs once
+// every module has compiled and foldFunctionRefsIntoGlobals has added the
+// references made through stylesheet functions, since globalRefs reads those
+// too.
+//
+// A global is eager when it has effects, names itself, or reaches a cycle of
+// globalRefs dependencies: evaluated at the start, in declaration order and
+// dependencies first, a circularity is reported naming the global it named
+// when every global was evaluated that way.
+func (c *compiler) markGlobalOrder() {
 	byName := make(map[string]*Variable, len(c.sheet.globals))
 	for _, g := range c.sheet.globals {
 		if _, dup := byName[g.Name.Clark()]; !dup {
 			byName[g.Name.Clark()] = g
 		}
 	}
-	for _, g := range c.sheet.globals {
+	// A depth-first walk: meeting a variable still on the walk's path is a
+	// cycle, and everything on the path from it reaches that cycle.
+	const (
+		unseen = iota
+		onPath
+		finished
+	)
+	mark := map[*Variable]int{}
+	reaches := map[*Variable]bool{}
+	var walk func(g *Variable) bool
+	walk = func(g *Variable) bool {
+		switch mark[g] {
+		case onPath:
+			return true
+		case finished:
+			return reaches[g]
+		}
+		mark[g] = onPath
+		r := false
 		for _, dep := range globalRefs(g) {
-			if byName[dep] == g {
+			d, ok := byName[dep]
+			if !ok {
+				continue
+			}
+			if d == g {
 				g.selfRef = true
-				break
+				continue
+			}
+			if walk(d) {
+				r = true
 			}
 		}
+		mark[g], reaches[g] = finished, r
+		return r
+	}
+	for _, g := range c.sheet.globals {
+		walk(g)
+	}
+	for _, g := range c.sheet.globals {
+		g.eager = g.eager || g.selfRef || reaches[g]
 	}
 }
 
 // hasEffects reports whether a global declaration's own select or content
 // writes xsl:message, xsl:assert or xsl:result-document, or mentions trace
-// anywhere in an attribute, which is generous: a false hit only evaluates
-// the global when the transform starts, as every global once was.
+// or key( anywhere in an attribute, which is generous: a false hit only
+// evaluates the global when the transform starts, as every global once was.
+//
+// key( is here for section 9.11's circularity through a key: a global
+// that builds a key index whose match or use pattern reads that global.
+// Evaluated at the start, the pattern meets the global out of scope and the
+// circularity is reported against the global (error-0640e, -0640f), rather
+// than against the key when a template happened to build the index first.
 func hasEffects(el *xdm.Node) bool {
 	if el.Kind() == xdm.KindElement {
 		if isXSL(el, "message") || isXSL(el, "assert") || isXSL(el, "result-document") {
 			return true
 		}
 		for a := range el.Attrs() {
-			if strings.Contains(a.Value(), "trace") {
+			if v := a.Value(); strings.Contains(v, "trace") || strings.Contains(v, "key(") {
 				return true
 			}
 		}
