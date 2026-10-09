@@ -90,7 +90,7 @@ func checkRestrictions(root *xdm.Node) error {
 	// would: §7.1.5 constrains it the same way, so a schema that is simply
 	// <text/> is refused for the reason a <start><text/></start> is.
 	stack := []string(nil)
-	if root.Name.URI == NS && root.Name.Local != "grammar" {
+	if root.Name().URI == NS && root.Name().Local != "grammar" {
 		stack = []string{"start"}
 	}
 	return r.walk(root, stack)
@@ -126,10 +126,10 @@ type restrictor struct {
 
 func (r *restrictor) collect(n *xdm.Node) {
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
-		switch kid.Name.Local {
+		switch kid.Name().Local {
 		case "define":
 			name := normalizeToken(kid.AttrValue("name"))
 			if _, dup := r.defines[name]; !dup {
@@ -146,10 +146,10 @@ func (r *restrictor) collect(n *xdm.Node) {
 // walk visits n with stack holding the enclosing RELAX NG element names,
 // outermost first.
 func (r *restrictor) walk(n *xdm.Node, stack []string) error {
-	if n.Name.URI != NS {
+	if n.Name().URI != NS {
 		return nil // a foreign element is an annotation
 	}
-	local := n.Name.Local
+	local := n.Name().Local
 
 	// A pattern that simplification erases cannot violate anything.
 	if prune(n) {
@@ -210,12 +210,12 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 	}
 
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
 		// Name classes are not patterns; §7.1's paths do not run through
 		// them, and an <except> inside one is a name-class except.
-		if isNameClass(kid.Name.Local) {
+		if isNameClass(kid.Name().Local) {
 			continue
 		}
 		if err := r.walk(kid, kids); err != nil {
@@ -241,7 +241,7 @@ func (r *restrictor) walkNested(g *xdm.Node, stack []string) error {
 		startStack: stack}
 	sub.collect(g)
 	for _, kid := range g.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
 		if err := sub.walk(kid, nil); err != nil {
@@ -277,7 +277,7 @@ func (r *restrictor) followRef(n *xdm.Node, stack []string) error {
 	r.active[name] = true
 	defer delete(r.active, name)
 	for _, kid := range def.ChildElements() {
-		if kid.Name.URI != NS || isNameClass(kid.Name.Local) {
+		if kid.Name().URI != NS || isNameClass(kid.Name().Local) {
 			continue
 		}
 		if err := r.walk(kid, stack); err != nil {
@@ -347,10 +347,10 @@ func matchSteps(stack []string, steps steps) bool {
 // an <attribute> inside an <attribute> is legal when a sibling <notAllowed/>
 // removes the whole group first.
 func prune(n *xdm.Node) bool {
-	if n.Name.URI != NS {
+	if n.Name().URI != NS {
 		return false
 	}
-	switch n.Name.Local {
+	switch n.Name().Local {
 	case "notAllowed":
 		return true
 
@@ -360,7 +360,7 @@ func prune(n *xdm.Node) bool {
 		// pattern notAllowed. (For optional and zeroOrMore the result is
 		// empty rather than notAllowed, but either way the subtree is gone.)
 		kids := patternChildren(n)
-		if n.Name.Local == "attribute" && len(kids) == 0 {
+		if n.Name().Local == "attribute" && len(kids) == 0 {
 			return false
 		}
 		for _, kid := range kids {
@@ -398,12 +398,12 @@ func prune(n *xdm.Node) bool {
 // has removed.
 func effectiveChildren(n *xdm.Node) int {
 	kids := patternChildren(n)
-	if n.Name.Local == "choice" {
+	if n.Name().Local == "choice" {
 		return len(kids)
 	}
 	count := 0
 	for _, kid := range kids {
-		if kid.Name.URI == NS && kid.Name.Local == "empty" {
+		if kid.Name().URI == NS && kid.Name().Local == "empty" {
 			continue
 		}
 		count++
@@ -937,10 +937,10 @@ func checkInfiniteAttributeName(n *xdm.Node, stack []string) error {
 // unboundedly many names.
 func hasInfiniteNameClass(n *xdm.Node) bool {
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI != NS {
+		if kid.Name().URI != NS {
 			continue
 		}
-		switch kid.Name.Local {
+		switch kid.Name().Local {
 		case "anyName", "nsName":
 			return true
 		case "choice":

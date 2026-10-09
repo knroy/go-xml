@@ -104,10 +104,10 @@ func equivElement(t *testing.T, local string) *xdm.Node {
 	t.Helper()
 	var walk func(n *xdm.Node) *xdm.Node
 	walk = func(n *xdm.Node) *xdm.Node {
-		if n.Kind == xdm.KindElement && n.Name.Local == local {
+		if n.Kind() == xdm.KindElement && n.Name().Local == local {
 			return n
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			if got := walk(c); got != nil {
 				return got
 			}
@@ -189,7 +189,7 @@ func equivRender(it xdm.Item) string {
 		// but carry different types must not compare equal.
 		return fmt.Sprintf("%s(%q)", v.TypeName(), v.String())
 	case *xdm.Node:
-		return fmt.Sprintf("node:%v:%s(%q)", v.Kind, v.Name.Local, v.StringValue())
+		return fmt.Sprintf("node:%v:%s(%q)", v.Kind(), v.Name().Local, v.StringValue())
 	default:
 		return fmt.Sprintf("%T", it)
 	}

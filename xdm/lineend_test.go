@@ -40,14 +40,14 @@ func TestLineEndsNormalizedBeforeParsing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := tr.Root.Children[0]
-	if got, want := a.Attrs[0].Value, "x y z w v\ru"; got != want {
+	a := tr.Root.children[0]
+	if got, want := a.attrs[0].value, "x y z w v\ru"; got != want {
 		t.Errorf("attribute %q, want %q", got, want)
 	}
 	want := []string{"t\nu", "c\nd\ne", "x\ny"}
-	for i, c := range a.Children {
-		if c.Value != want[i] {
-			t.Errorf("%v %q, want %q", c.Kind, c.Value, want[i])
+	for i, c := range a.children {
+		if c.value != want[i] {
+			t.Errorf("%v %q, want %q", c.kind, c.value, want[i])
 		}
 	}
 }

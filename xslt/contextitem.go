@@ -35,19 +35,19 @@ func compileContextItem(el, tmpl *xdm.Node) (*contextItemDecl, error) {
 	// engine reads every 3.0 module as forwards-compatible, which withholds
 	// the table from all of them; @select is the one a stylesheet reaches
 	// for, xsl:param having accustomed it to the idea.
-	for _, a := range el.Attrs {
-		if a.Name.URI != "" {
+	for a := range el.Attrs() {
+		if a.Name().URI != "" {
 			continue
 		}
-		switch a.Name.Local {
+		switch a.Name().Local {
 		case "as", "use":
 		default:
-			if standardAttributes[a.Name.Local] {
+			if standardAttributes[a.Name().Local] {
 				continue
 			}
 			return nil, fmt.Errorf(
 				"attribute %q is not allowed on xsl:context-item (XTSE0090)",
-				a.Name.Local)
+				a.Name().Local)
 		}
 	}
 
@@ -57,13 +57,13 @@ func compileContextItem(el, tmpl *xdm.Node) (*contextItemDecl, error) {
 		// whitespace is layout rather than part of the value -- 3.7 says so
 		// of every such attribute, and context-item-007 writes use=" required "
 		// under xml:space="preserve" to insist on it.
-		switch v := strings.TrimSpace(a.Value); v {
+		switch v := strings.TrimSpace(a.Value()); v {
 		case "required", "optional", "absent":
 			d.use = v
 		default:
 			return nil, fmt.Errorf(
 				"XTSE0020: xsl:context-item/@use must be required, optional "+
-					"or absent, not %q", a.Value)
+					"or absent, not %q", a.Value())
 		}
 	}
 	// "If the containing xsl:template element has no name attribute then the
@@ -85,12 +85,12 @@ func compileContextItem(el, tmpl *xdm.Node) (*contextItemDecl, error) {
 		// specification assigns to what it wrote.
 		if d.use == "absent" {
 			code := "XTSE3088"
-			if el.Name.Local == "global-context-item" {
+			if el.Name().Local == "global-context-item" {
 				code = "XTSE3089"
 			}
 			return nil, fmt.Errorf(
 				"%s: xsl:%s may not have an as attribute when use=\"absent\"",
-				code, el.Name.Local)
+				code, el.Name().Local)
 		}
 		// The attribute is typed ItemType, not SequenceType: an occurrence
 		// indicator would be saying how many context items there are, and

@@ -152,15 +152,15 @@ func serializesHTMLDocument(seq xdm.Sequence) bool {
 		if !ok {
 			continue
 		}
-		switch n.Kind {
+		switch n.Kind() {
 		case xdm.KindElement:
 			// Case-blind on the local name: HTML element names are, and the
 			// prefix is not part of the element's identity.
-			return strings.EqualFold(n.Name.Local, "html")
+			return strings.EqualFold(n.Name().Local, "html")
 		case xdm.KindDocument:
-			for _, c := range n.Children {
-				if c.Kind == xdm.KindElement {
-					return strings.EqualFold(c.Name.Local, "html")
+			for c := range n.Children() {
+				if c.Kind() == xdm.KindElement {
+					return strings.EqualFold(c.Name().Local, "html")
 				}
 			}
 			return false
@@ -337,14 +337,14 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 	}
 	for _, it := range args[1] {
 		n, ok := it.(*xdm.Node)
-		if !ok || n.Kind != xdm.KindElement {
+		if !ok || n.Kind() != xdm.KindElement {
 			continue
 		}
 		// A wrapper in the wrong namespace is not a serialization-parameters
 		// element at all, so the argument does not match the declared type:
 		// XPTY0004. A wrapper in the right namespace with the wrong local
 		// name is a malformed parameter document: SEPM0017.
-		if n.Name.URI != nsSerialization {
+		if n.Name().URI != nsSerialization {
 			return opts, xdm.ErrType(
 				"the serialization parameters must be an " +
 					"output:serialization-parameters element")
@@ -352,45 +352,45 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 		// A wrapper with the wrong local name is not the element the
 		// parameter is declared to be either, so it is the same type error
 		// rather than a malformed-document one.
-		if n.Name.Local != "serialization-parameters" {
+		if n.Name().Local != "serialization-parameters" {
 			return opts, xdm.ErrType(
-				"%q is not a serialization-parameters element", n.Name.Local)
+				"%q is not a serialization-parameters element", n.Name().Local)
 		}
 		// An attribute on the wrapper is not a parameter either.
-		for _, a := range n.Attrs {
-			if a.Name.URI == "" && a.Name.Local != "" {
+		for a := range n.Attrs() {
+			if a.Name().URI == "" && a.Name().Local != "" {
 				return opts, fmt.Errorf(
-					"SEPM0017: unexpected attribute %q on serialization-parameters", a.Name.Local)
+					"SEPM0017: unexpected attribute %q on serialization-parameters", a.Name().Local)
 			}
 		}
 		seen := map[string]bool{}
-		for _, p := range n.Children {
-			if p.Kind != xdm.KindElement {
+		for p := range n.Children() {
+			if p.Kind() != xdm.KindElement {
 				continue
 			}
 			// A parameter in another namespace is an implementation-defined
 			// extension. It is ignored rather than refused — the spec allows
 			// them — but it may still not be repeated.
-			key := p.Name.Clark()
+			key := p.Name().Clark()
 			if seen[key] {
 				return opts, fmt.Errorf(
-					"SEPM0019: serialization parameter %q appears more than once", p.Name.Local)
+					"SEPM0019: serialization parameter %q appears more than once", p.Name().Local)
 			}
 			seen[key] = true
-			if p.Name.URI != nsSerialization {
+			if p.Name().URI != nsSerialization {
 				// A child in *no* namespace is not an extension parameter —
 				// an extension has to name its own namespace — so it is a
 				// malformed parameter document.
-				if p.Name.URI == "" {
+				if p.Name().URI == "" {
 					return opts, fmt.Errorf(
 						"SEPM0017: serialization parameter %q is in no namespace",
-						p.Name.Local)
+						p.Name().Local)
 				}
 				continue
 			}
 
 			// use-character-maps carries child elements rather than a value.
-			if p.Name.Local == "use-character-maps" {
+			if p.Name().Local == "use-character-maps" {
 				m, err := ReadCharacterMaps(p)
 				if err != nil {
 					return opts, err
@@ -406,10 +406,10 @@ func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOption
 			// Checked against the parameter's schema type before anything
 			// reads it; the value comes back normalised, so a boolean below
 			// is always "yes" or "no".
-			if val, err = CheckSerializationParam(p.Name.Local, val); err != nil {
+			if val, err = CheckSerializationParam(p.Name().Local, val); err != nil {
 				return opts, fmt.Errorf("SEPM0017: %w", err)
 			}
-			switch p.Name.Local {
+			switch p.Name().Local {
 			case "method":
 				opts.method = val
 			case "omit-xml-declaration":
@@ -571,38 +571,38 @@ func ReadCharacterMaps(p *xdm.Node) (map[rune]string, error) {
 	// The parameter carries its maps as children, so it has no attributes of
 	// its own: "use-character-maps value='yes'" is not this parameter written
 	// correctly, it is a malformed parameter document.
-	for _, a := range p.Attrs {
-		if a.Name.URI == "" {
+	for a := range p.Attrs() {
+		if a.Name().URI == "" {
 			return nil, fmt.Errorf(
-				"SEPM0017: unexpected attribute %q on use-character-maps", a.Name.Local)
+				"SEPM0017: unexpected attribute %q on use-character-maps", a.Name().Local)
 		}
 	}
-	for _, c := range p.Children {
-		if c.Kind != xdm.KindElement {
+	for c := range p.Children() {
+		if c.Kind() != xdm.KindElement {
 			continue
 		}
-		if c.Name.URI != "" && c.Name.URI != nsSerialization {
+		if c.Name().URI != "" && c.Name().URI != nsSerialization {
 			continue
 		}
 		// Otherwise only output:character-map may appear here.
-		if c.Name.URI != nsSerialization || c.Name.Local != "character-map" {
+		if c.Name().URI != nsSerialization || c.Name().Local != "character-map" {
 			return nil, fmt.Errorf(
-				"SEPM0017: %q is not a character-map element", c.Name.Local)
+				"SEPM0017: %q is not a character-map element", c.Name().Local)
 		}
 		ch, to := "", ""
 		haveChar := false
-		for _, a := range c.Attrs {
-			if a.Name.URI != "" {
+		for a := range c.Attrs() {
+			if a.Name().URI != "" {
 				continue
 			}
-			switch a.Name.Local {
+			switch a.Name().Local {
 			case "character":
-				ch, haveChar = a.Value, true
+				ch, haveChar = a.Value(), true
 			case "map-string":
-				to = a.Value
+				to = a.Value()
 			default:
 				return nil, fmt.Errorf(
-					"SEPM0017: unexpected attribute %q on character-map", a.Name.Local)
+					"SEPM0017: unexpected attribute %q on character-map", a.Name().Local)
 			}
 		}
 		if !haveChar {
@@ -757,20 +757,20 @@ const nsSerialization = "http://www.w3.org/2010/xslt-xquery-serialization"
 func paramValue(p *xdm.Node) (string, error) {
 	val := ""
 	found := false
-	for _, a := range p.Attrs {
-		if a.Name.URI != "" {
+	for a := range p.Attrs() {
+		if a.Name().URI != "" {
 			continue
 		}
-		if a.Name.Local != "value" {
+		if a.Name().Local != "value" {
 			return "", fmt.Errorf(
 				"SEPM0017: unexpected attribute %q on serialization parameter %q",
-				a.Name.Local, p.Name.Local)
+				a.Name().Local, p.Name().Local)
 		}
-		val, found = a.Value, true
+		val, found = a.Value(), true
 	}
 	if !found {
 		return "", fmt.Errorf(
-			"SEPM0017: serialization parameter %q has no value", p.Name.Local)
+			"SEPM0017: serialization parameter %q has no value", p.Name().Local)
 	}
 	return val, nil
 }
@@ -791,7 +791,7 @@ func serializeItem(sb *serializeSink, it xdm.Item, opts serializeOptions) error 
 		// rule's reach: an attribute reached as part of an element is inside
 		// a start tag and serializes normally. nscons-029 is the namespace
 		// case.
-		if v.Kind == xdm.KindAttribute || v.Kind == xdm.KindNamespace {
+		if v.Kind() == xdm.KindAttribute || v.Kind() == xdm.KindNamespace {
 			return fmt.Errorf(
 				"SENR0001: an attribute or namespace node cannot be serialized")
 		}
@@ -812,8 +812,8 @@ func serializeItem(sb *serializeSink, it xdm.Item, opts serializeOptions) error 
 // makes indenting its children unsafe: the inserted whitespace would become
 // part of the element's string value.
 func hasTextChild(n *xdm.Node) bool {
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindText && !xdm.IsXMLWhitespace(c.Value) {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindText && !xdm.IsXMLWhitespace(c.Value()) {
 			return true
 		}
 	}
@@ -829,8 +829,8 @@ func hasTextChild(n *xdm.Node) bool {
 // identical to the copy in xslt/serialize.go.
 func mayIndentContent(n *xdm.Node) bool {
 	hasElem := false
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindElement {
 			hasElem = true
 			break
 		}
@@ -838,29 +838,29 @@ func mayIndentContent(n *xdm.Node) bool {
 	if !hasElem {
 		return false
 	}
-	switch n.TypeAnnotation {
+	switch n.TypeAnnotation() {
 	case "", "untyped":
 		return true
 	case "anyType":
 		// An anonymous mixed type annotates as anyType too; MixedContent
 		// tells it from a genuine xs:anyType element.
-		return n.NoTypedValue || !n.MixedContent
+		return n.NoTypedValue() || !n.MixedContent()
 	}
-	return n.NoTypedValue
+	return n.NoTypedValue()
 }
 
 // xmlSpacePreserve reports whether an element declares xml:space="preserve",
 // under which §5.1.4 forbids adding whitespace anywhere in its content.
 func xmlSpacePreserve(n *xdm.Node) bool {
 	a := n.Attr(xdm.NSXML, "space")
-	return a != nil && a.Value == "preserve"
+	return a != nil && a.Value() == "preserve"
 }
 
 // hasCommentOrPIChild reports whether an element holds a comment or a
 // processing instruction, which the html method never indents around.
 func hasCommentOrPIChild(n *xdm.Node) bool {
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindComment || c.Kind == xdm.KindPI {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindComment || c.Kind() == xdm.KindPI {
 			return true
 		}
 	}
@@ -895,9 +895,9 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		sb.WriteString(n.StringValue())
 		return
 	}
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindDocument:
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			serializeNode(sb, c, opts, depth)
 		}
 	case xdm.KindElement:
@@ -906,7 +906,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		writeNamespaceDecls(sb, n, opts)
 		// Attributes are written in the order the document had them, which is
 		// what a round-trip test compares against.
-		for _, a := range n.Attrs {
+		for a := range n.Attrs() {
 			sb.WriteString(" ")
 			sb.WriteString(elementName(a))
 			sb.WriteString(`="`)
@@ -916,10 +916,10 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			// default "yes", and xslt/serialize.go has done this all along --
 			// so the two serialisers disagreed on identical input until now.
 			if opts.escapesURIAttrs() && (opts.method == "html" || opts.method == "xhtml") &&
-				isURIAttribute(n.Name.Local, a) {
-				sb.WriteString(escapeAttr(escapeURIAttribute(a.Value)))
+				isURIAttribute(n.Name().Local, a) {
+				sb.WriteString(escapeAttr(escapeURIAttribute(a.Value())))
 			} else {
-				sb.WriteString(escapeAttr(a.Value))
+				sb.WriteString(escapeAttr(a.Value()))
 			}
 			sb.WriteString(`"`)
 		}
@@ -927,7 +927,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// take the self-closing shortcut. HTML has no self-closing syntax for
 		// a non-void element anyway.
 		htmlHead := isHTMLContentTypeHead(n, opts)
-		if len(n.Children) == 0 && !htmlHead {
+		if n.NumChildren() == 0 && !htmlHead {
 			// HTML has no self-closing syntax, so the html method cannot take
 			// the XML shortcut: a void element takes no end tag at all, and
 			// every other empty element takes an explicit one, because an
@@ -948,7 +948,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			// never implemented it. Changing xhtml's output is a separate
 			// change with its own cases to answer to.
 			if opts.method == "html" {
-				if opts.isVoidElement(n.Name.Local) {
+				if opts.isVoidElement(n.Name().Local) {
 					sb.WriteString(">")
 				} else {
 					sb.WriteString("></")
@@ -984,7 +984,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// An element named by cdata-section-elements has its text written as
 		// a CDATA section instead of with escaping, which is what the
 		// parameter exists to ask for.
-		cdata := opts.cdataElements[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}]
+		cdata := opts.cdataElements[xdm.QName{URI: n.Name().URI, Local: n.Name().Local}]
 		// Indentation is suppressed for an element holding non-whitespace
 		// text, because inserting whitespace there would change the element's
 		// string value -- Serialization 3.1 section 4 forbids adding
@@ -1008,7 +1008,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// section licenses indenting only untyped element-only content and
 		// typed element-only content; mayIndentContent decides that.
 		indentChildren := opts.indent && !hasTextChild(n) &&
-			!opts.suppressIndent[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] &&
+			!opts.suppressIndent[xdm.QName{URI: n.Name().URI, Local: n.Name().Local}] &&
 			!xmlSpacePreserve(n) && mayIndentContent(n)
 		if indentChildren && opts.method == "html" && hasCommentOrPIChild(n) {
 			indentChildren = false
@@ -1021,7 +1021,8 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// methods (Serialization 3.1 §7.4.3, §6.1.4); the rule is shared with
 		// xslt/serialize.go through htmlser.
 		htmlish := opts.method == "html" || opts.method == "xhtml"
-		for i, c := range n.Children {
+		for i := range n.NumChildren() {
+			c := n.ChildAt(i)
 			// Having added its own meta, the method discards the head's
 			// (§7.4.13, §6.1.14): two declarations could contradict.
 			if htmlHead && htmlser.ReplacedMeta(n, c) {
@@ -1031,44 +1032,44 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 				n, i, opts.method == "xhtml", opts.html5())) {
 				writeIndent(sb, depth+1)
 			}
-			if cdata && c.Kind == xdm.KindText {
+			if cdata && c.Kind() == xdm.KindText {
 				sb.WriteString("<![CDATA[")
 				// A "]]>" inside the text would end the section early, so it
 				// is split across two sections rather than written literally.
-				sb.WriteString(strings.ReplaceAll(c.Value, "]]>", "]]]]><![CDATA[>"))
+				sb.WriteString(strings.ReplaceAll(c.Value(), "]]>", "]]]]><![CDATA[>"))
 				sb.WriteString("]]>")
 				continue
 			}
 			serializeNode(sb, c, childOpts, depth+1)
 		}
 		if indentChildren && !(htmlish && htmlser.SkipIndentBefore(
-			n, len(n.Children), opts.method == "xhtml", opts.html5())) {
+			n, n.NumChildren(), opts.method == "xhtml", opts.html5())) {
 			writeIndent(sb, depth)
 		}
 		sb.WriteString("</")
 		sb.WriteString(elementName(n))
 		sb.WriteString(">")
 	case xdm.KindText:
-		sb.WriteString(escapeText(opts.normalized(n.Value)))
+		sb.WriteString(escapeText(opts.normalized(n.Value())))
 	case xdm.KindComment:
 		sb.WriteString("<!--")
-		sb.WriteString(n.Value)
+		sb.WriteString(n.Value())
 		sb.WriteString("-->")
 	case xdm.KindPI:
 		sb.WriteString("<?")
-		sb.WriteString(n.Name.Local)
-		if n.Value != "" {
+		sb.WriteString(n.Name().Local)
+		if n.Value() != "" {
 			sb.WriteString(" ")
-			sb.WriteString(n.Value)
+			sb.WriteString(n.Value())
 		}
 		sb.WriteString("?>")
 	case xdm.KindAttribute:
 		// A free-standing attribute serialises as its value; the spec makes
 		// serializing one directly an error in some methods, but the suite
 		// compares the value.
-		sb.WriteString(n.Value)
+		sb.WriteString(n.Value())
 	case xdm.KindNamespace:
-		sb.WriteString(n.Value)
+		sb.WriteString(n.Value())
 	}
 }
 
@@ -1106,13 +1107,13 @@ func isHTMLContentTypeHead(n *xdm.Node, opts serializeOptions) bool {
 		return false
 	}
 	return (opts.method == "html" || opts.method == "xhtml") &&
-		strings.EqualFold(n.Name.Local, "head") &&
-		(n.Name.URI == "" || n.Name.URI == htmlser.NSXHTML)
+		strings.EqualFold(n.Name().Local, "head") &&
+		(n.Name().URI == "" || n.Name().URI == htmlser.NSXHTML)
 }
 
 // elementName renders a node's name with its prefix, when it has one.
 func elementName(n *xdm.Node) string {
-	return n.Name.Lexical()
+	return n.Name().Lexical()
 }
 
 // writeNamespaceDecls writes the namespace declarations an element introduces.
@@ -1122,17 +1123,17 @@ func elementName(n *xdm.Node) string {
 // what the round-trip tests expect.
 func writeNamespaceDecls(sb *serializeSink, n *xdm.Node, opts serializeOptions) {
 	inherited := map[string]string{}
-	for p := n.Parent; p != nil; p = p.Parent {
-		for _, ns := range p.Namespaces {
-			if _, seen := inherited[ns.Name.Local]; !seen {
-				inherited[ns.Name.Local] = ns.Value
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		for ns := range p.NamespaceDecls() {
+			if _, seen := inherited[ns.Name().Local]; !seen {
+				inherited[ns.Name().Local] = ns.Value()
 			}
 		}
 	}
 	type decl struct{ prefix, uri string }
 	var decls []decl
-	for _, ns := range n.Namespaces {
-		if inherited[ns.Name.Local] == ns.Value {
+	for ns := range n.NamespaceDecls() {
+		if inherited[ns.Name().Local] == ns.Value() {
 			continue
 		}
 		// A namespace undeclaration for a *prefix* -- xmlns:p="" -- is syntax
@@ -1145,10 +1146,10 @@ func writeNamespaceDecls(sb *serializeSink, n *xdm.Node, opts serializeOptions) 
 		// The default-namespace undeclaration xmlns="" is a separate matter:
 		// it is legal in XML 1.0 and is written regardless, since omitting it
 		// would move an element into a namespace it is not in.
-		if ns.Value == "" && ns.Name.Local != "" && !opts.undeclarePrefixes {
+		if ns.Value() == "" && ns.Name().Local != "" && !opts.undeclarePrefixes {
 			continue
 		}
-		decls = append(decls, decl{ns.Name.Local, ns.Value})
+		decls = append(decls, decl{ns.Name().Local, ns.Value()})
 	}
 	sort.Slice(decls, func(i, j int) bool { return decls[i].prefix < decls[j].prefix })
 	for _, d := range decls {
@@ -1263,12 +1264,12 @@ func documentElementName(seq xdm.Sequence) string {
 		if !ok {
 			continue
 		}
-		switch n.Kind {
+		switch n.Kind() {
 		case xdm.KindElement:
 			return elementName(n)
 		case xdm.KindDocument:
-			for _, c := range n.Children {
-				if c.Kind == xdm.KindElement {
+			for c := range n.Children() {
+				if c.Kind() == xdm.KindElement {
 					return elementName(c)
 				}
 			}
@@ -1404,14 +1405,14 @@ var uriAttributes = map[string]map[string]bool{
 
 // isURIAttribute reports whether an attribute carries a URI.
 func isURIAttribute(element string, a *xdm.Node) bool {
-	if a.Name.URI != "" {
+	if a.Name().URI != "" {
 		return false
 	}
 	attrs, ok := uriAttributes[strings.ToLower(element)]
 	if !ok {
 		return false
 	}
-	return attrs[strings.ToLower(a.Name.Local)]
+	return attrs[strings.ToLower(a.Name().Local)]
 }
 
 // escapeURIAttribute percent-escapes the characters a URI cannot hold.
@@ -1957,7 +1958,7 @@ func writeJSONItem(sb *serializeSink, it xdm.Item, opts serializeOptions, depth 
 		// error. Serialization-json-30 puts an attribute in an array and
 		// asks for SENR0001; without this it was written as the string of
 		// its value, which quietly invented a document for it.
-		if v.Kind == xdm.KindAttribute || v.Kind == xdm.KindNamespace {
+		if v.Kind() == xdm.KindAttribute || v.Kind() == xdm.KindNamespace {
 			return fmt.Errorf(
 				"SENR0001: an attribute or namespace node cannot be serialized")
 		}
@@ -2234,10 +2235,10 @@ func writeAdaptiveItem(sb *serializeSink, it xdm.Item, opts serializeOptions) {
 		// An attribute has no XML serialization of its own, so adaptive gives
 		// it the name="value" form it has inside a start tag
 		// (serialize-adaptive-003).
-		if v.Kind == xdm.KindAttribute {
+		if v.Kind() == xdm.KindAttribute {
 			sb.WriteString(elementName(v))
 			sb.WriteString(`="`)
-			sb.WriteString(escapeAttr(v.Value))
+			sb.WriteString(escapeAttr(v.Value()))
 			sb.WriteString(`"`)
 			return
 		}

@@ -16,20 +16,14 @@ import (
 // at or above 0x80. An attribute outside that table, or an all-ASCII value,
 // would leave the parameter no live path to act on.
 func boolSpellTree() *xdm.Node {
-	root := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "a"}}
-	b := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "b"}, Parent: root}
-	c := &xdm.Node{
-		Kind:   xdm.KindElement,
-		Name:   xdm.QName{Local: "a"},
-		Parent: b,
-		Attrs: []*xdm.Node{{
-			Kind:  xdm.KindAttribute,
-			Name:  xdm.QName{Local: "href"},
-			Value: "p\u00e9",
-		}},
-	}
-	b.Children = []*xdm.Node{c}
-	root.Children = []*xdm.Node{b}
+	root := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "a"}, "")
+	b := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "b"}, "")
+	b.SetParent(root)
+	c := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "a"}, "")
+	c.SetParent(b)
+	c.SetAttrs([]*xdm.Node{xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: "href"}, "p\u00e9")})
+	b.SetChildren([]*xdm.Node{c})
+	root.SetChildren([]*xdm.Node{b})
 	return root
 }
 

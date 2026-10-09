@@ -51,19 +51,21 @@ const keySepSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
 // have come from the parser, so this is a real input shape, and it is the one
 // an XML 1.1 instance would produce once that path admits the character.
 func keySepTree(pairs ...[2]string) *xdm.Node {
-	root := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "root"}}
+	root := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "root"}, "")
+	var kids []*xdm.Node
 	for _, p := range pairs {
-		i := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "i"}, Parent: root}
+		i := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "i"}, "")
+		i.SetParent(root)
+		var attrs []*xdm.Node
 		for _, at := range [][2]string{{"a", p[0]}, {"b", p[1]}} {
-			i.Attrs = append(i.Attrs, &xdm.Node{
-				Kind:   xdm.KindAttribute,
-				Name:   xdm.QName{Local: at[0]},
-				Value:  at[1],
-				Parent: i,
-			})
+			a := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: at[0]}, at[1])
+			a.SetParent(i)
+			attrs = append(attrs, a)
 		}
-		root.Children = append(root.Children, i)
+		i.SetAttrs(attrs)
+		kids = append(kids, i)
 	}
+	root.SetChildren(kids)
 	return root
 }
 

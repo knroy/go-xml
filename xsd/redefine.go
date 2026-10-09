@@ -57,16 +57,16 @@ func (a *assembler) checkRedefine(el *xdm.Node, doc *schemaDoc) {
 	// replacing the first is exactly the misreading to refuse (schT2).
 	seen := map[string]bool{}
 	for _, c := range el.ChildElements() {
-		if c.Name.URI != NSSchema {
+		if c.Name().URI != NSSchema {
 			continue
 		}
-		switch c.Name.Local {
+		switch c.Name().Local {
 		case "simpleType", "complexType", "group", "attributeGroup":
 		default:
 			continue
 		}
-		key := c.Name.Local + " " + c.AttrValue("name")
-		if c.Name.Local == "simpleType" || c.Name.Local == "complexType" {
+		key := c.Name().Local + " " + c.AttrValue("name")
+		if c.Name().Local == "simpleType" || c.Name().Local == "complexType" {
 			// Types share one symbol space.
 			key = "type " + c.AttrValue("name")
 		}
@@ -79,7 +79,7 @@ func (a *assembler) checkRedefine(el *xdm.Node, doc *schemaDoc) {
 	}
 
 	for _, c := range el.ChildElements() {
-		if c.Name.URI != NSSchema {
+		if c.Name().URI != NSSchema {
 			continue
 		}
 		name := c.AttrValue("name")
@@ -88,7 +88,7 @@ func (a *assembler) checkRedefine(el *xdm.Node, doc *schemaDoc) {
 		}
 		self := xdm.QName{URI: doc.targetNS, Local: name}
 
-		switch c.Name.Local {
+		switch c.Name().Local {
 		case "simpleType", "complexType":
 			// src-redefine.5: a type definition among the children
 			// of a redefine must have a <restriction> or
@@ -99,7 +99,7 @@ func (a *assembler) checkRedefine(el *xdm.Node, doc *schemaDoc) {
 			if !ok {
 				a.p.errs = append(a.p.errs, errorAt(c, "src-redefine.5",
 					"the %s %q inside a redefine must derive by "+
-						"restriction or extension", c.Name.Local, name))
+						"restriction or extension", c.Name().Local, name))
 				continue
 			}
 			q, err := a.p.resolveQName(c, "base", base)
@@ -110,7 +110,7 @@ func (a *assembler) checkRedefine(el *xdm.Node, doc *schemaDoc) {
 			if q != self {
 				a.p.errs = append(a.p.errs, errorAt(c, "src-redefine.5",
 					"the %s %q inside a redefine must have base %q, not %q",
-					c.Name.Local, name, self.Local, base))
+					c.Name().Local, name, self.Local, base))
 			}
 
 		case "group":
@@ -175,16 +175,16 @@ func (a *assembler) checkRedefine(el *xdm.Node, doc *schemaDoc) {
 // content model has no derivation step at all (schK3).
 func (a *assembler) redefineBase(c *xdm.Node) (string, bool) {
 	for _, k := range c.ChildElements() {
-		if k.Name.URI != NSSchema {
+		if k.Name().URI != NSSchema {
 			continue
 		}
-		switch k.Name.Local {
+		switch k.Name().Local {
 		case "restriction", "extension":
 			return k.AttrValue("base"), true
 		case "simpleContent", "complexContent":
 			for _, d := range k.ChildElements() {
-				if d.Name.URI == NSSchema &&
-					(d.Name.Local == "restriction" || d.Name.Local == "extension") {
+				if d.Name().URI == NSSchema &&
+					(d.Name().Local == "restriction" || d.Name().Local == "extension") {
 					return d.AttrValue("base"), true
 				}
 			}
@@ -246,7 +246,7 @@ func (a *assembler) prepareReplacement(el *xdm.Node, doc *schemaDoc, keep func(*
 	}
 
 	for _, c := range el.ChildElements() {
-		if c.Name.URI != NSSchema {
+		if c.Name().URI != NSSchema {
 			continue
 		}
 		name := c.AttrValue("name")
@@ -258,7 +258,7 @@ func (a *assembler) prepareReplacement(el *xdm.Node, doc *schemaDoc, keep func(*
 		}
 		q := xdm.QName{URI: doc.targetNS, Local: name}
 
-		switch c.Name.Local {
+		switch c.Name().Local {
 		case "simpleType", "complexType":
 			if t, ok := a.schema.Types[q]; ok {
 				hold.types[q] = t
@@ -340,7 +340,7 @@ func (a *assembler) applyRedefine(el *xdm.Node, doc *schemaDoc, hold *redefineHo
 	var results []built
 
 	for _, c := range el.ChildElements() {
-		if c.Name.URI != NSSchema {
+		if c.Name().URI != NSSchema {
 			continue
 		}
 		name := c.AttrValue("name")
@@ -353,7 +353,7 @@ func (a *assembler) applyRedefine(el *xdm.Node, doc *schemaDoc, hold *redefineHo
 		var b built
 		b.q = q
 		b.el = c
-		switch c.Name.Local {
+		switch c.Name().Local {
 		case "simpleType":
 			b.t = a.p.readSimpleType(c)
 		case "complexType":
@@ -450,7 +450,7 @@ func (a *assembler) definedIn(redefine *xdm.Node, kind, name string) bool {
 			return false
 		}
 		seen[n] = true
-		if n.Kind == xdm.KindDocument {
+		if n.Kind() == xdm.KindDocument {
 			els := n.ChildElements()
 			if len(els) == 0 {
 				return false
@@ -458,14 +458,14 @@ func (a *assembler) definedIn(redefine *xdm.Node, kind, name string) bool {
 			n = els[0]
 		}
 		for _, c := range n.ChildElements() {
-			if c.Name.URI != NSSchema {
+			if c.Name().URI != NSSchema {
 				continue
 			}
-			if c.Name.Local == kind && c.AttrValue("name") == name {
+			if c.Name().Local == kind && c.AttrValue("name") == name {
 				return true
 			}
-			if c.Name.Local == "include" || c.Name.Local == "redefine" ||
-				c.Name.Local == "override" {
+			if c.Name().Local == "include" || c.Name().Local == "redefine" ||
+				c.Name().Local == "override" {
 				if look(a.redefined[c]) {
 					return true
 				}
@@ -494,12 +494,12 @@ func (a *assembler) overridesSomething(override, child *xdm.Node) bool {
 	if name == "" {
 		return false
 	}
-	switch child.Name.Local {
+	switch child.Name().Local {
 	case "simpleType", "complexType":
 		return a.definedIn(override, "simpleType", name) ||
 			a.definedIn(override, "complexType", name)
 	default:
-		return a.definedIn(override, child.Name.Local, name)
+		return a.definedIn(override, child.Name().Local, name)
 	}
 }
 

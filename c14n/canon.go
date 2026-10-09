@@ -135,7 +135,7 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 	}
 	// Bindings declared above the root are in scope for it. Their order here
 	// is irrelevant: each prefix appears once, and output is sorted.
-	if p := root.Parent; p != nil {
+	if p := root.Parent(); p != nil {
 		for prefix, uri := range p.InScopeNamespaces() {
 			if err := checkNamespaceURI(prefix, uri); err != nil {
 				return nil, err
@@ -144,7 +144,7 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 		}
 	}
 	var err error
-	switch root.Kind {
+	switch root.Kind() {
 	case xdm.KindDocument:
 		err = c.document(root)
 	case xdm.KindElement:
@@ -196,8 +196,8 @@ func (c *canon) contains(n *xdm.Node) bool { return c.all || c.set.Contains(n) }
 // the node when it precedes the element, before it when it follows.
 func (c *canon) document(d *xdm.Node) error {
 	after := false
-	for _, ch := range d.Children {
-		if ch.Kind == xdm.KindElement {
+	for ch := range d.Children() {
+		if ch.Kind() == xdm.KindElement {
 			if err := c.element(ch, c.contains(d), 1); err != nil {
 				return err
 			}
@@ -222,7 +222,7 @@ func (c *canon) document(d *xdm.Node) error {
 // kinds that reach it, since elements are walked and attributes are not
 // children.
 func (c *canon) member(n *xdm.Node) bool {
-	if n.Kind == xdm.KindComment && !c.comments {
+	if n.Kind() == xdm.KindComment && !c.comments {
 		return false
 	}
 	return c.contains(n)
@@ -234,16 +234,16 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 	}
 	in := c.contains(e)
 	scopeMark, renderedMark, utilMark := len(c.scope.undo), len(c.rendered.undo), len(c.util.undo)
-	for _, ns := range e.Namespaces {
-		if err := checkNamespaceURI(ns.Name.Local, ns.Value); err != nil {
+	for ns := range e.NamespaceDecls() {
+		if err := checkNamespaceURI(ns.Name().Local, ns.Value()); err != nil {
 			return err
 		}
-		c.scope.set(ns.Name.Local, ns.Value)
+		c.scope.set(ns.Name().Local, ns.Value())
 	}
 	c.path = append(c.path, ancestor{e, in})
 
 	c.attrs = c.attrs[:0]
-	for _, a := range e.Attrs {
+	for a := range e.Attrs() {
 		if c.contains(a) {
 			c.attrs = append(c.attrs, a)
 		}
@@ -252,7 +252,7 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 	switch {
 	case in:
 		c.putByte('<')
-		writeQName(c.w, e.Name)
+		writeQName(c.w, e.Name())
 		if c.nsSet != nil {
 			c.namespaceNodes(e, true)
 		} else {
@@ -278,8 +278,8 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 		c.putByte('>')
 	}
 
-	for _, ch := range e.Children {
-		if ch.Kind == xdm.KindElement {
+	for ch := range e.Children() {
+		if ch.Kind() == xdm.KindElement {
 			if err := c.element(ch, in, depth+1); err != nil {
 				return err
 			}
@@ -289,7 +289,7 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 	}
 	if in {
 		c.put("</")
-		writeQName(c.w, e.Name)
+		writeQName(c.w, e.Name())
 		c.putByte('>')
 	}
 	c.scope.restore(scopeMark)
@@ -321,18 +321,18 @@ func (c *canon) namespaces(e *xdm.Node, parentIn bool) {
 		// own, and those of its attributes in the set (an unprefixed
 		// attribute is in no namespace, so it utilises nothing) — plus the
 		// InclusiveNamespaces PrefixList.
-		c.consider(e.Name.Prefix)
+		c.consider(e.Name().Prefix)
 		for _, a := range c.attrs {
-			if a.Name.Prefix != "" {
-				c.consider(a.Name.Prefix)
+			if a.Name().Prefix != "" {
+				c.consider(a.Name().Prefix)
 			}
 		}
 		for _, p := range c.prefixes {
 			c.consider(p)
 		}
 	} else if parentIn {
-		for _, ns := range e.Namespaces {
-			c.consider(ns.Name.Local)
+		for ns := range e.NamespaceDecls() {
+			c.consider(ns.Name().Local)
 		}
 	} else {
 		for prefix := range c.scope.m {
@@ -438,10 +438,10 @@ func (c *canon) exclusiveUtilised(e *xdm.Node, axis map[string]string) {
 			used = append(used, p)
 		}
 	}
-	add(e.Name.Prefix)
+	add(e.Name().Prefix)
 	for _, a := range c.attrs {
-		if a.Name.Prefix != "" {
-			add(a.Name.Prefix)
+		if a.Name().Prefix != "" {
+			add(a.Name().Prefix)
 		}
 	}
 	for _, p := range used {
@@ -552,17 +552,17 @@ func (c *canon) inherit(e *xdm.Node) {
 		// without its attribute, all five implementations in that round
 		// signed exactly that, and xmlsec1 1.2.41 was measured doing the
 		// same. The WG's result is followed.
-		for _, at := range e.Attrs {
-			if at.Name.URI == xdm.NSXML && (c.inheritable(at.Name.Local) || at.Name.Local == "base") &&
-				!hasXMLAttr(c.attrs, at.Name.Local) {
+		for at := range e.Attrs() {
+			if at.Name().URI == xdm.NSXML && (c.inheritable(at.Name().Local) || at.Name().Local == "base") &&
+				!hasXMLAttr(c.attrs, at.Name().Local) {
 				c.attrs = append(c.attrs, at)
 			}
 		}
 	}
-	for a := e.Parent; a != nil && a.Kind == xdm.KindElement; a = a.Parent {
-		for _, at := range a.Attrs {
-			if at.Name.URI != xdm.NSXML || !c.inheritable(at.Name.Local) ||
-				hasXMLAttr(e.Attrs, at.Name.Local) || hasXMLAttr(c.attrs, at.Name.Local) {
+	for a := e.Parent(); a != nil && a.Kind() == xdm.KindElement; a = a.Parent() {
+		for at := range a.Attrs() {
+			if at.Name().URI != xdm.NSXML || !c.inheritable(at.Name().Local) ||
+				e.Attr(xdm.NSXML, at.Name().Local) != nil || hasXMLAttr(c.attrs, at.Name().Local) {
 				continue
 			}
 			c.attrs = append(c.attrs, at)
@@ -583,7 +583,7 @@ func (c *canon) inheritable(local string) bool {
 
 func hasXMLAttr(attrs []*xdm.Node, local string) bool {
 	for _, a := range attrs {
-		if a.Name.URI == xdm.NSXML && a.Name.Local == local {
+		if a.Name().URI == xdm.NSXML && a.Name().Local == local {
 			return true
 		}
 	}
@@ -596,8 +596,8 @@ func hasXMLAttr(attrs []*xdm.Node, local string) bool {
 func (c *canon) fixBase(e *xdm.Node) {
 	var bases []string // innermost first
 	i := len(c.path) - 2
-	a := e.Parent
-	for ; a != nil && a.Kind == xdm.KindElement; a = a.Parent {
+	a := e.Parent()
+	for ; a != nil && a.Kind() == xdm.KindElement; a = a.Parent() {
 		if i >= 0 {
 			if c.path[i].in {
 				break
@@ -619,21 +619,17 @@ func (c *canon) fixBase(e *xdm.Node) {
 		v = joinURIReferences(b, v)
 	}
 	c.attrs = slices.DeleteFunc(c.attrs, func(a *xdm.Node) bool {
-		return a.Name.URI == xdm.NSXML && a.Name.Local == "base"
+		return a.Name().URI == xdm.NSXML && a.Name().Local == "base"
 	})
 	if v != "" {
-		c.attrs = append(c.attrs, &xdm.Node{
-			Kind:  xdm.KindAttribute,
-			Name:  xdm.QName{Prefix: "xml", Local: "base", URI: xdm.NSXML},
-			Value: v,
-		})
+		c.attrs = append(c.attrs, xdm.NewNode(xdm.KindAttribute, xdm.QName{Prefix: "xml", Local: "base", URI: xdm.NSXML}, v))
 	}
 }
 
 func xmlAttr(e *xdm.Node, local string) (string, bool) {
-	for _, a := range e.Attrs {
-		if a.Name.URI == xdm.NSXML && a.Name.Local == local {
-			return a.Value, true
+	for a := range e.Attrs() {
+		if a.Name().URI == xdm.NSXML && a.Name().Local == local {
+			return a.Value(), true
 		}
 	}
 	return "", false
@@ -644,34 +640,34 @@ func xmlAttr(e *xdm.Node, local string) (string, bool) {
 // order the specifications require. No collation belongs here.
 func (c *canon) writeAttrs() {
 	slices.SortFunc(c.attrs, func(a, b *xdm.Node) int {
-		if n := strings.Compare(a.Name.URI, b.Name.URI); n != 0 {
+		if n := strings.Compare(a.Name().URI, b.Name().URI); n != 0 {
 			return n
 		}
-		return strings.Compare(a.Name.Local, b.Name.Local)
+		return strings.Compare(a.Name().Local, b.Name().Local)
 	})
 	for _, a := range c.attrs {
 		c.putByte(' ')
-		writeQName(c.w, a.Name)
+		writeQName(c.w, a.Name())
 		c.put(`="`)
-		writeEscaped(c.w, a.Value, true)
+		writeEscaped(c.w, a.Value(), true)
 		c.putByte('"')
 	}
 }
 
 func (c *canon) leaf(n *xdm.Node) {
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindText:
-		writeEscaped(c.w, n.Value, false)
+		writeEscaped(c.w, n.Value(), false)
 	case xdm.KindComment:
 		c.put("<!--")
-		c.put(n.Value)
+		c.put(n.Value())
 		c.put("-->")
 	case xdm.KindPI:
 		c.put("<?")
-		c.put(n.Name.Local)
-		if n.Value != "" {
+		c.put(n.Name().Local)
+		if n.Value() != "" {
 			c.putByte(' ')
-			c.put(n.Value)
+			c.put(n.Value())
 		}
 		c.put("?>")
 	}

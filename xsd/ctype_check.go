@@ -81,7 +81,7 @@ func (p *parser) checkLocalTargetNamespace(el *xdm.Node, kind string) {
 	// nothing that form="qualified" could not have said, so clause .3 — which
 	// guards against reaching into a namespace the document does not own —
 	// does not apply.
-	if p.doc.hasTargetNS && p.doc.targetNS == tns.Value {
+	if p.doc.hasTargetNS && p.doc.targetNS == tns.Value() {
 		return
 	}
 
@@ -91,15 +91,15 @@ func (p *parser) checkLocalTargetNamespace(el *xdm.Node, kind string) {
 	// where the complexType does.
 	var restriction *xdm.Node
 	var ct *xdm.Node
-	for cur := el.Parent; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement || cur.Name.URI != NSSchema {
+	for cur := el.Parent(); cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement || cur.Name().URI != NSSchema {
 			continue
 		}
-		if cur.Name.Local == "complexType" {
+		if cur.Name().Local == "complexType" {
 			ct = cur
 			break
 		}
-		if cur.Name.Local == "restriction" {
+		if cur.Name().Local == "restriction" {
 			restriction = cur
 		}
 	}
@@ -107,14 +107,14 @@ func (p *parser) checkLocalTargetNamespace(el *xdm.Node, kind string) {
 	if ct == nil {
 		p.errs = append(p.errs, errorAt(el, code+"."+clause+".3.1",
 			"a local %s declaration naming foreign namespace %q must appear "+
-				"inside a complexType", kind, tns.Value))
+				"inside a complexType", kind, tns.Value()))
 		return
 	}
 	if restriction == nil {
 		p.errs = append(p.errs, errorAt(el, code+"."+clause+".3.2",
 			"a local %s declaration naming foreign namespace %q must appear "+
 				"inside a restriction; only restricting an existing foreign "+
-				"declaration may name another namespace", kind, tns.Value))
+				"declaration may name another namespace", kind, tns.Value()))
 		return
 	}
 
@@ -125,7 +125,7 @@ func (p *parser) checkLocalTargetNamespace(el *xdm.Node, kind string) {
 	if base == nil {
 		return
 	}
-	name, err := p.resolveQName(restriction, "base", base.Value)
+	name, err := p.resolveQName(restriction, "base", base.Value())
 	if err != nil {
 		// An unresolvable base is reported by the normal base handling; do
 		// not double-report it here.
@@ -135,7 +135,7 @@ func (p *parser) checkLocalTargetNamespace(el *xdm.Node, kind string) {
 		p.errs = append(p.errs, errorAt(el, code+"."+clause+".3.2",
 			"a local %s declaration naming foreign namespace %q may not appear "+
 				"in a restriction of xs:anyType, which has no declaration in "+
-				"that namespace to restrict", kind, tns.Value))
+				"that namespace to restrict", kind, tns.Value()))
 	}
 }
 

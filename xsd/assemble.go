@@ -511,7 +511,7 @@ type docKey struct {
 // redefine carrying nothing else asks nothing of the document it names.
 func redefinesAnything(el *xdm.Node) bool {
 	for _, kid := range el.ChildElements() {
-		switch kid.Name.Local {
+		switch kid.Name().Local {
 		case "simpleType", "complexType", "group", "attributeGroup":
 			return true
 		}
@@ -845,7 +845,7 @@ func (a *assembler) run() error {
 		}
 
 		root := item.root
-		if root.Kind == xdm.KindDocument {
+		if root.Kind() == xdm.KindDocument {
 			els := root.ChildElements()
 			if len(els) == 0 {
 				return fmt.Errorf("schema document at %q is empty", item.base)
@@ -855,7 +855,7 @@ func (a *assembler) run() error {
 		if !root.IsElement(NSSchema, "schema") {
 			return fmt.Errorf(
 				"schema document at %q has root {%s}%s, want {%s}schema",
-				item.base, root.Name.URI, root.Name.Local, NSSchema)
+				item.base, root.Name().URI, root.Name().Local, NSSchema)
 		}
 
 		if err := a.readOne(root, item); err != nil {
@@ -878,12 +878,12 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 		// namespace, and "" names none. A document meaning "no target
 		// namespace" leaves the attribute off; writing it empty is a
 		// representation fault (schZ014_b).
-		if attr.Value == "" {
+		if attr.Value() == "" {
 			a.p.errs = append(a.p.errs, errorAt(root, "src-schema",
 				"targetNamespace=\"\" is not a namespace name; "+
 					"omit the attribute for the absent namespace"))
 		}
-		doc.targetNS = attr.Value
+		doc.targetNS = attr.Value()
 		doc.hasTargetNS = true
 	} else if item.chameleonNS != "" {
 		// A chameleon include: a document with no target namespace, read
@@ -935,10 +935,10 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 	a.p.checkAttrs(root)
 
 	for _, el := range root.ChildElements() {
-		if el.Name.URI != NSSchema || !includeElement(el, a.schema.Version) {
+		if el.Name().URI != NSSchema || !includeElement(el, a.schema.Version) {
 			continue
 		}
-		switch el.Name.Local {
+		switch el.Name().Local {
 		case "include":
 			a.queueRef(el, doc, "", el.AttrValue("schemaLocation"), true, false)
 		case "redefine":
@@ -1229,7 +1229,7 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 // targetNSOf returns a schema document's target namespace and whether it
 // declares one at all.
 func targetNSOf(root *xdm.Node) (string, bool) {
-	if root.Kind == xdm.KindDocument {
+	if root.Kind() == xdm.KindDocument {
 		els := root.ChildElements()
 		if len(els) == 0 {
 			return "", false
@@ -1237,7 +1237,7 @@ func targetNSOf(root *xdm.Node) (string, bool) {
 		root = els[0]
 	}
 	if attr := root.Attr("", "targetNamespace"); attr != nil {
-		return attr.Value, true
+		return attr.Value(), true
 	}
 	return "", false
 }
@@ -1245,7 +1245,7 @@ func targetNSOf(root *xdm.Node) (string, bool) {
 // declaresTargetNS reports whether a schema document element carries a
 // targetNamespace of its own, and so cannot be made to adopt an includer's.
 func declaresTargetNS(root *xdm.Node) bool {
-	if root.Kind == xdm.KindDocument {
+	if root.Kind() == xdm.KindDocument {
 		els := root.ChildElements()
 		if len(els) == 0 {
 			return false
@@ -1518,14 +1518,14 @@ func (a *assembler) checkOverrideConflicts() {
 			continue
 		}
 		for _, c := range o.el.ChildElements() {
-			if c.Name.URI != NSSchema {
+			if c.Name().URI != NSSchema {
 				continue
 			}
 			name := c.AttrValue("name")
 			if name == "" {
 				continue
 			}
-			kind := c.Name.Local
+			kind := c.Name().Local
 			switch kind {
 			case "simpleType", "complexType":
 				// Types share one symbol space, so a <simpleType>
@@ -1571,16 +1571,15 @@ func sameOverrideChild(a, b *xdm.Node) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	if a.Name != b.Name {
+	if a.Name() != b.Name() {
 		return false
 	}
-	aa, ba := a.Attrs, b.Attrs
-	if len(aa) != len(ba) {
+	if a.NumAttrs() != b.NumAttrs() {
 		return false
 	}
-	for _, x := range aa {
-		v := b.Attr(x.Name.URI, x.Name.Local)
-		if v == nil || v.Value != x.Value {
+	for x := range a.Attrs() {
+		v := b.Attr(x.Name().URI, x.Name().Local)
+		if v == nil || v.Value() != x.Value() {
 			return false
 		}
 	}
@@ -1615,10 +1614,10 @@ func (a *assembler) runOverrides() {
 		prevOverride := a.p.inOverride
 		a.p.doc, a.p.inOverride = o.doc, true
 		for _, c := range o.el.ChildElements() {
-			if c.Name.URI != NSSchema {
+			if c.Name().URI != NSSchema {
 				continue
 			}
-			switch c.Name.Local {
+			switch c.Name().Local {
 			case "simpleType", "complexType", "group", "attributeGroup",
 				"element", "attribute", "notation":
 				if !a.overridesSomething(o.el, c) {
@@ -1699,18 +1698,18 @@ func substitutionBlockedBy(head, member *ElementDecl) bool {
 func redefinedComponents(el *xdm.Node) []string {
 	var out []string
 	for _, c := range el.ChildElements() {
-		if c.Name.URI != NSSchema {
+		if c.Name().URI != NSSchema {
 			continue
 		}
 		name := c.AttrValue("name")
 		if name == "" {
 			continue
 		}
-		switch c.Name.Local {
+		switch c.Name().Local {
 		case "simpleType", "complexType":
 			out = append(out, "type "+name)
 		case "group", "attributeGroup", "element", "attribute", "notation":
-			out = append(out, c.Name.Local+" "+name)
+			out = append(out, c.Name().Local+" "+name)
 		}
 	}
 	return out

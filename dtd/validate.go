@@ -125,9 +125,9 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 		notationsChecked: map[string]bool{},
 	}
 	root := doc
-	if root.Kind == xdm.KindDocument {
-		for _, c := range root.Children {
-			if c.Kind == xdm.KindElement {
+	if root.Kind() == xdm.KindDocument {
+		for c := range root.Children() {
+			if c.Kind() == xdm.KindElement {
 				root = c
 				break
 			}
@@ -176,11 +176,11 @@ func (v *validator) fail(path, format string, args ...any) {
 }
 
 func (v *validator) walk(el *xdm.Node, parentPath string) {
-	path := parentPath + "/" + el.Name.Local
+	path := parentPath + "/" + el.Name().Local
 	v.checkContent(el, path)
 	v.checkAttributes(el, path)
-	for _, c := range el.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range el.Children() {
+		if c.Kind() == xdm.KindElement {
 			v.walk(c, path)
 		}
 	}
@@ -188,13 +188,13 @@ func (v *validator) walk(el *xdm.Node, parentPath string) {
 
 // checkContent applies the element's content model.
 func (v *validator) checkContent(el *xdm.Node, path string) {
-	decl, ok := v.dtd.Elements[el.Name.Local]
+	decl, ok := v.dtd.Elements[el.Name().Local]
 	if !ok {
 		// An undeclared element is a validity error in a DTD-validated
 		// document — unlike XSD, where a wildcard may admit it. A caller
 		// working with a deliberately partial internal subset can say so.
 		if !v.allowUndec {
-			v.fail(path, "element %s is not declared", el.Name.Local)
+			v.fail(path, "element %s is not declared", el.Name().Local)
 		}
 		return
 	}
@@ -202,47 +202,47 @@ func (v *validator) checkContent(el *xdm.Node, path string) {
 	case ContentAny:
 		return
 	case ContentEmpty:
-		for _, c := range el.Children {
-			if c.Kind == xdm.KindElement || (c.Kind == xdm.KindText && strings.TrimSpace(c.Value) != "") {
+		for c := range el.Children() {
+			if c.Kind() == xdm.KindElement || (c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) != "") {
 				v.fail(path, "element %s is declared EMPTY but has content",
-					el.Name.Local)
+					el.Name().Local)
 				return
 			}
 		}
 	case ContentMixed:
-		for _, c := range el.Children {
-			if c.Kind == xdm.KindElement && !decl.Mixed[c.Name.Local] {
+		for c := range el.Children() {
+			if c.Kind() == xdm.KindElement && !decl.Mixed[c.Name().Local] {
 				v.fail(path, "element %s is not permitted in the mixed "+
-					"content of %s", c.Name.Local, el.Name.Local)
+					"content of %s", c.Name().Local, el.Name().Local)
 			}
 		}
 	case ContentChildren:
 		// An element-only model forbids character data outright, not merely
 		// unexpected elements: "(a, b)" does not admit text between them.
-		for _, c := range el.Children {
-			if c.Kind == xdm.KindText && strings.TrimSpace(c.Value) != "" {
+		for c := range el.Children() {
+			if c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) != "" {
 				v.fail(path, "element %s has element-only content but "+
-					"contains character data", el.Name.Local)
+					"contains character data", el.Name().Local)
 				break
 			}
 		}
 		m, err := v.matcherFor(decl)
 		if err != nil {
-			v.fail(path, "content model of %s: %v", el.Name.Local, err)
+			v.fail(path, "content model of %s: %v", el.Name().Local, err)
 			return
 		}
 		var names []xdm.QName
-		for _, c := range el.Children {
-			if c.Kind == xdm.KindElement {
-				names = append(names, xdm.QName{Local: c.Name.Local})
+		for c := range el.Children() {
+			if c.Kind() == xdm.KindElement {
+				names = append(names, xdm.QName{Local: c.Name().Local})
 			}
 		}
 		if ok, at := m.Match(names); !ok {
 			if at < len(names) {
 				v.fail(path, "element %s is not permitted here in the "+
-					"content of %s", names[at].Local, el.Name.Local)
+					"content of %s", names[at].Local, el.Name().Local)
 			} else {
-				v.fail(path, "the content of %s is incomplete", el.Name.Local)
+				v.fail(path, "the content of %s is incomplete", el.Name().Local)
 			}
 		}
 	}
@@ -262,17 +262,17 @@ func (v *validator) matcherFor(decl *Element) (*xsd.SequenceMatcher, error) {
 
 // checkAttributes applies the ATTLIST declarations for an element.
 func (v *validator) checkAttributes(el *xdm.Node, path string) {
-	decls := v.dtd.Attributes[el.Name.Local]
+	decls := v.dtd.Attributes[el.Name().Local]
 	present := map[string]string{}
-	for _, a := range el.Attrs {
-		name := a.Name.Local
-		if a.Name.URI != "" || strings.HasPrefix(name, "xmlns") {
+	for a := range el.Attrs() {
+		name := a.Name().Local
+		if a.Name().URI != "" || strings.HasPrefix(name, "xmlns") {
 			// A DTD predates namespaces and declares "xmlns" as an ordinary
 			// attribute when it declares it at all. Skipping namespace
 			// declarations avoids reporting every one as undeclared.
 			continue
 		}
-		present[name] = a.Value
+		present[name] = a.Value()
 	}
 
 	for _, d := range decls {

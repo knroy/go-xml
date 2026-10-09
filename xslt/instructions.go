@@ -143,8 +143,8 @@ func (i *sequenceInstr) Execute(rt *runtime, out *outputBuilder) error {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
-			if dest := out.Open(); dest != nil && v.Kind == xdm.KindElement &&
-				v.Parent != nil {
+			if dest := out.Open(); dest != nil && v.Kind() == xdm.KindElement &&
+				v.Parent() != nil {
 				// The builder would copy v itself and give the copy every
 				// binding v inherited. Copying here instead lets the copy
 				// leave out those its new parent already supplies, which a
@@ -209,7 +209,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// A deep copy is required: the result tree must not alias the
 			// source, or a later instruction mutating one would change the
 			// other.
-			if v.Kind == xdm.KindDocument {
+			if v.Kind() == xdm.KindDocument {
 				// The copy of a document node is a document node (11.9.1).
 				// Flattening happens only where the copy is attached as the
 				// content of an element (5.7.1), which appendNode decides;
@@ -225,8 +225,8 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 					// declarations copy-namespaces="no" had asked to be
 					// dropped -- copy-0614 and -0615 graft a whole $inner and
 					// expect the inner element's own xmlns:s to go with them.
-					for _, ch := range c.Children {
-						if ch.Kind == xdm.KindElement {
+					for ch := range c.Children() {
+						if ch.Kind() == xdm.KindElement {
 							stripNamespaces(ch)
 						}
 					}
@@ -244,7 +244,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				out.AppendNode(c)
 				continue
 			}
-			if v.Kind == xdm.KindAttribute {
+			if v.Kind() == xdm.KindAttribute {
 				// XTTE0950, second sentence: copying an attribute with
 				// namespace-sensitive content under validation="preserve" is
 				// a type error "unless the parent element is also copied".
@@ -254,12 +254,12 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// The prefix in the copied QName would keep pointing at a
 				// binding the new parent element need not declare.
 				if i.validation.mode == validatePreserve &&
-					isNamespaceSensitiveType(xdm.TypeEnvOf(v), v.TypeAnnotation) {
+					isNamespaceSensitiveType(xdm.TypeEnvOf(v), v.TypeAnnotation()) {
 					return fmt.Errorf(
 						"XTTE0950: xsl:copy-of with validation=\"preserve\" "+
 							"cannot copy attribute %s on its own, because its "+
 							"content is namespace-sensitive",
-						v.Name.Lexical())
+						v.Name().Lexical())
 				}
 				// Assessed on a copy, never on v. Validation strips type
 				// annotations in place, and the default mode is "strip", so
@@ -284,26 +284,22 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// attribute arrived in the output tree with its union member
 				// and its resolved primitive gone, to be guessed at later
 				// from the process-global registries.
-				a := &xdm.Node{
-					Kind:  xdm.KindAttribute,
-					Name:  v.Name,
-					Value: v.Value,
-				}
+				a := xdm.NewNode(xdm.KindAttribute, v.Name(), v.Value())
 				a.CopyTypingFrom(v)
 				if err := i.validation.assess(rt, a); err != nil {
 					return err
 				}
-				if err := out.AddAttributeWithTyping(a.Name, a.Value,
+				if err := out.AddAttributeWithTyping(a.Name(), a.Value(),
 					xdm.TypingOf(a)); err != nil {
 					return err
 				}
 				continue
 			}
-			if v.Kind == xdm.KindNamespace {
+			if v.Kind() == xdm.KindNamespace {
 				// A namespace node joins the element's bindings rather than
 				// its children. Appending it as a child put it nowhere the
 				// namespace axis or the serialiser would ever look.
-				if err := out.AddNamespace(v.Name.Local, v.Value); err != nil {
+				if err := out.AddNamespace(v.Name().Local, v.Value()); err != nil {
 					return err
 				}
 				continue
@@ -341,7 +337,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// variable would otherwise keep the source's resolved base.
 				rebaseDetached(c, i.baseURI)
 			}
-			if v.Kind == xdm.KindElement {
+			if v.Kind() == xdm.KindElement {
 				if i.noNamespaces {
 					stripNamespaces(c)
 				} else {
@@ -368,7 +364,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// undeclare it, or the copy silently changes namespace.
 			// copy-1220 grafts elements in no namespace into a
 			// <doc xmlns="http://www.out.com/">.
-			if c.Kind == xdm.KindElement {
+			if c.Kind() == xdm.KindElement {
 				fixupNamespaces(c)
 			}
 		case *xdm.Atomic:
@@ -440,15 +436,15 @@ func hasNamespaceSensitiveContent(n *xdm.Node) bool {
 	if n == nil {
 		return false
 	}
-	if isNamespaceSensitiveType(xdm.TypeEnvOf(n), n.TypeAnnotation) {
+	if isNamespaceSensitiveType(xdm.TypeEnvOf(n), n.TypeAnnotation()) {
 		return true
 	}
-	for _, a := range n.Attrs {
-		if isNamespaceSensitiveType(xdm.TypeEnvOf(a), a.TypeAnnotation) {
+	for a := range n.Attrs() {
+		if isNamespaceSensitiveType(xdm.TypeEnvOf(a), a.TypeAnnotation()) {
 			return true
 		}
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		if hasNamespaceSensitiveContent(c) {
 			return true
 		}
@@ -469,13 +465,13 @@ func hasNamespaceSensitiveContent(n *xdm.Node) bool {
 // the copy resolves against the document it came from.
 func copyDocumentNode(n *xdm.Node) *xdm.Node {
 	tree := xdm.NewTree()
-	tree.Root.BaseURI = n.BaseURI
+	tree.Root.SetBaseURI(n.BaseURI())
 	tree.CopyDTDFrom(n.Tree())
 	// A document node's typing is only ever an annotation in practice, but it
 	// is copied through the same operation as every other node so that a
 	// future property does not have to find this line to be added to it.
 	tree.Root.CopyTypingFrom(n)
-	for _, ch := range n.Children {
+	for ch := range n.Children() {
 		tree.Root.AppendChild(deepCopy(ch))
 	}
 	tree.Finalize()
@@ -488,8 +484,8 @@ func copyDocumentNode(n *xdm.Node) *xdm.Node {
 // nearest ones, and an inherited binding for the same prefix is masked.
 func inheritNamespaces(dst, src *xdm.Node) {
 	have := map[string]bool{}
-	for _, ns := range dst.Namespaces {
-		have[ns.Name.Local] = true
+	for ns := range dst.NamespaceDecls() {
+		have[ns.Name().Local] = true
 	}
 	scope := src.InScopeNamespaces()
 	prefixes := make([]string, 0, len(scope))
@@ -519,8 +515,8 @@ func inheritNamespacesAt(rt *runtime, dst, src, dest *xdm.Node) {
 
 // declares reports whether el carries a namespace node for prefix.
 func declares(el *xdm.Node, prefix string) bool {
-	for _, ns := range el.Namespaces {
-		if ns.Name.Local == prefix {
+	for ns := range el.NamespaceDecls() {
+		if ns.Name().Local == prefix {
 			return true
 		}
 	}
@@ -533,24 +529,24 @@ func declares(el *xdm.Node, prefix string) bool {
 // the map was most of what they allocated.
 func scopeBindings(n *xdm.Node, buf []nsBinding) []nsBinding {
 	start := len(buf)
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := n; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
 		// Within one element the last declaration wins, as the map's
 		// overwrites resolve it; an inner element shadows an outer one.
 	next:
-		for i := len(cur.Namespaces) - 1; i >= 0; i-- {
-			ns := cur.Namespaces[i]
-			if ns.Name.Local == "xml" {
+		for i := cur.NumNamespaceDecls() - 1; i >= 0; i-- {
+			ns := cur.NamespaceDeclAt(i)
+			if ns.Name().Local == "xml" {
 				continue
 			}
 			for _, b := range buf[start:] {
-				if b.prefix == ns.Name.Local {
+				if b.prefix == ns.Name().Local {
 					continue next
 				}
 			}
-			buf = append(buf, nsBinding{ns.Name.Local, ns.Value})
+			buf = append(buf, nsBinding{ns.Name().Local, ns.Value()})
 		}
 	}
 	// Drop undeclarations, which only served to shadow, and sort.
@@ -581,7 +577,7 @@ func scopeBindings(n *xdm.Node, buf []nsBinding) []nsBinding {
 // answered with the bindings of wherever the copy landed. copy-0623 and
 // copy-0627 ask exactly that question.
 func stripNamespaces(n *xdm.Node) {
-	n.Namespaces = nil
+	n.SetNamespaceDecls(nil)
 	// An element does not acquire an in-scope namespace merely because that
 	// namespace is present on its parent: §5.8.3 permits fixup to add a
 	// namespace node only where one is "necessary either to satisfy these
@@ -598,8 +594,8 @@ func stripNamespaces(n *xdm.Node) {
 	// attribute needs, and its <aa xmlns="..."> child must not inherit it.
 	undeclareInherited(n)
 	fixupNamespaces(n)
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindElement {
 			stripNamespaces(c)
 		}
 	}
@@ -611,13 +607,13 @@ func stripNamespaces(n *xdm.Node) {
 // name's own namespace, so an undeclaration of the same prefix would be a
 // second namespace node with the same name either way.
 func prefixUsedByNames(el *xdm.Node, prefix string) bool {
-	if el.Name.Prefix == prefix {
+	if el.Name().Prefix == prefix {
 		return true
 	}
-	for _, a := range el.Attrs {
+	for a := range el.Attrs() {
 		// An attribute in no namespace is never written with a prefix, and
 		// the default declaration never applies to an attribute name.
-		if a.Name.URI != "" && a.Name.Prefix == prefix {
+		if a.Name().URI != "" && a.Name().Prefix == prefix {
 			return true
 		}
 	}
@@ -672,7 +668,7 @@ func fixupNamespaces(el *xdm.Node) {
 		}
 		el.AddNamespace(prefix, uri)
 	}
-	if el.Name.URI == "" && el.Name.Prefix == "" && scopeURI(el, "") != "" {
+	if el.Name().URI == "" && el.Name().Prefix == "" && scopeURI(el, "") != "" {
 		// An unprefixed name in no namespace UNDECLARES the default
 		// namespace when one is in scope: without the undeclaration the name
 		// would read as being in whatever the parent declares. This is the
@@ -681,13 +677,13 @@ func fixupNamespaces(el *xdm.Node) {
 		// grafts elements in no namespace into a <doc xmlns="...">.
 		el.AddNamespace("", "")
 	}
-	need(el.Name.Prefix, el.Name.URI)
-	for _, a := range el.Attrs {
+	need(el.Name().Prefix, el.Name().URI)
+	for a := range el.Attrs() {
 		// An attribute in a namespace must be prefixed: the default
 		// declaration never applies to an attribute name, so a binding for
 		// the empty prefix would not satisfy the constraint.
-		if a.Name.URI != "" && a.Name.Prefix != "" {
-			need(a.Name.Prefix, a.Name.URI)
+		if a.Name().URI != "" && a.Name().Prefix != "" {
+			need(a.Name().Prefix, a.Name().URI)
 		}
 	}
 }
@@ -698,13 +694,13 @@ func fixupNamespaces(el *xdm.Node) {
 // reads as "", as the map's delete does. (xdm's LookupPrefix takes the first
 // declaration on an element, which is why it is not used here.)
 func scopeURI(n *xdm.Node, prefix string) string {
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := n; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		for i := len(cur.Namespaces) - 1; i >= 0; i-- {
-			if ns := cur.Namespaces[i]; ns.Name.Local == prefix {
-				return ns.Value
+		for i := cur.NumNamespaceDecls() - 1; i >= 0; i-- {
+			if ns := cur.NamespaceDeclAt(i); ns.Name().Local == prefix {
+				return ns.Value()
 			}
 		}
 	}
@@ -730,8 +726,8 @@ func copyNamespacesTo(rt *runtime, sub *outputBuilder, src *xdm.Node) {
 		// rename of an element prefix the binding contradicts -- still go
 		// through it.
 		el := sub.Open()
-		if !(p == "" && el.Name.URI == "") &&
-			!(el.Name.Prefix == p && el.Name.URI != uri) &&
+		if !(p == "" && el.Name().URI == "") &&
+			!(el.Name().Prefix == p && el.Name().URI != uri) &&
 			parentSupplies(rt, el, p, uri) {
 			sub.NoteDeclared(p, uri)
 			continue
@@ -759,18 +755,18 @@ func parentSupplies(rt *runtime, el *xdm.Node, prefix, uri string) bool {
 	if el == nil {
 		return false
 	}
-	return suppliedAt(rt, el.Parent, prefix, uri)
+	return suppliedAt(rt, el.Parent(), prefix, uri)
 }
 
 // suppliedAt is parentSupplies for a child about to be attached to parent.
 func suppliedAt(rt *runtime, parent *xdm.Node, prefix, uri string) bool {
-	for cur := parent; cur != nil && cur.Kind == xdm.KindElement; cur = cur.Parent {
+	for cur := parent; cur != nil && cur.Kind() == xdm.KindElement; cur = cur.Parent() {
 		if fixupMayBind(cur, prefix) {
 			return false
 		}
-		for i := len(cur.Namespaces) - 1; i >= 0; i-- {
-			if ns := cur.Namespaces[i]; ns.Name.Local == prefix {
-				return ns.Value == uri && !rt.blocking[cur]
+		for i := cur.NumNamespaceDecls() - 1; i >= 0; i-- {
+			if ns := cur.NamespaceDeclAt(i); ns.Name().Local == prefix {
+				return ns.Value() == uri && !rt.blocking[cur]
 			}
 		}
 	}
@@ -780,13 +776,13 @@ func suppliedAt(rt *runtime, parent *xdm.Node, prefix, uri string) bool {
 // fixupMayBind reports whether fixupNamespaces, run on el now, would add a
 // namespace node for prefix.
 func fixupMayBind(el *xdm.Node, prefix string) bool {
-	if el.Name.Prefix != prefix {
+	if el.Name().Prefix != prefix {
 		return false
 	}
-	if el.Name.URI == "" {
+	if el.Name().URI == "" {
 		return prefix == "" && scopeURI(el, "") != ""
 	}
-	return el.Name.URI != xdm.NSXML && scopeURI(el, prefix) != el.Name.URI
+	return el.Name().URI != xdm.NSXML && scopeURI(el, prefix) != el.Name().URI
 }
 
 // execBlocking runs the body of a new element, applying
@@ -885,19 +881,19 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return nil
 	}
 
-	switch node.Kind {
+	switch node.Kind() {
 	case xdm.KindElement:
 		// Shallow: the element and its namespaces are copied, attributes and
 		// children come from the body. That is the distinction from
 		// xsl:copy-of, and it is what makes the identity-transform idiom work.
-		sub := out.StartElement(node.Name)
-		if out.Open() == nil && sub.Open().BaseURI == "" {
+		sub := out.StartElement(node.Name())
+		if out.Open() == nil && sub.Open().BaseURI() == "" {
 			// Section 11.9.1: "the base URI of a node is copied". With no
 			// parent to inherit from there is nothing else to take it from,
 			// so the source node's base URI travels with the shallow copy.
 			// An xml:base written into the body overrides it later, via the
 			// same path any other attribute takes.
-			sub.Open().BaseURI = node.BaseURI
+			sub.Open().SetBaseURI(node.BaseURI())
 		}
 		if !i.noNamespaces {
 			// Section 11.9.1 copies "the namespace nodes of the element",
@@ -960,8 +956,8 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 				dst.DocType = src.DocType
 			}
 		}
-		if doc.BaseURI == "" {
-			doc.BaseURI = node.BaseURI
+		if doc.BaseURI() == "" {
+			doc.SetBaseURI(node.BaseURI())
 			// The body ran before the document node had a base URI of its
 			// own, so every element it built was parentless as far as
 			// stampConstructedBaseURI could tell and took the stylesheet's
@@ -977,10 +973,10 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// before this field. base-uri-053 shallow-copies two documents
 			// read with fn:doc, puts a <z/> in each, and requires
 			// base-uri() of that z to end in the copied document's name.
-			if doc.BaseURI != "" {
-				for _, ch := range doc.Children {
-					if ch.Kind == xdm.KindElement {
-						ch.BaseURI = ""
+			if doc.BaseURI() != "" {
+				for ch := range doc.Children() {
+					if ch.Kind() == xdm.KindElement {
+						ch.SetBaseURI("")
 					}
 				}
 			}
@@ -992,27 +988,27 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return nil
 
 	case xdm.KindText:
-		out.AppendText(node.Value)
+		out.AppendText(node.Value())
 		return nil
 
 	case xdm.KindAttribute:
 		if err := i.validation.assess(rt, node); err != nil {
 			return err
 		}
-		return out.AddAttribute(node.Name, node.Value)
+		return out.AddAttribute(node.Name(), node.Value())
 
 	case xdm.KindComment:
-		out.AppendNode(&xdm.Node{Kind: xdm.KindComment, Value: node.Value})
+		out.AppendNode(xdm.NewNode(xdm.KindComment, xdm.QName{}, node.Value()))
 		return nil
 
 	case xdm.KindPI:
-		out.AppendNode(&xdm.Node{Kind: xdm.KindPI, Name: node.Name, Value: node.Value})
+		out.AppendNode(xdm.NewNode(xdm.KindPI, node.Name(), node.Value()))
 		return nil
 
 	case xdm.KindNamespace:
 		// A namespace node joins the element's bindings rather than its
 		// children, exactly as it does for xsl:copy-of.
-		return out.AddNamespace(node.Name.Local, node.Value)
+		return out.AddNamespace(node.Name().Local, node.Value())
 	}
 	return nil
 }
@@ -1077,18 +1073,18 @@ type nsBinding struct{ prefix, uri string }
 // added to the element after this and the accessor reads the attribute
 // before the field.
 func stampConstructedBaseURI(el *xdm.Node, base string) {
-	if base == "" || el.Parent == nil {
-		el.BaseURI = base
+	if base == "" || el.Parent() == nil {
+		el.SetBaseURI(base)
 		return
 	}
-	for cur := el.Parent; cur != nil; cur = cur.Parent {
-		if cur.BaseURI != "" {
+	for cur := el.Parent(); cur != nil; cur = cur.Parent() {
+		if cur.BaseURI() != "" {
 			// The parent chain answers, so leaving the field empty is what
 			// makes the element inherit rather than override.
 			return
 		}
 	}
-	el.BaseURI = base
+	el.SetBaseURI(base)
 }
 
 func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -1216,7 +1212,7 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// the namespace axis kept reporting the inherited default binding.
 		// InScopeNamespaces already honours an empty-valued entry as an
 		// undeclaration; the constructor simply has to write one.
-		if sub.Open().Parent != nil && sub.Open().Parent.InScopeNamespaces()[""] != "" {
+		if sub.Open().Parent() != nil && sub.Open().Parent().InScopeNamespaces()[""] != "" {
 			sub.Open().AddNamespace("", "")
 		}
 	}
@@ -1366,7 +1362,7 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// the one place holding the schema that did the assessing, so what it
 	// resolved the name to must travel with the node rather than be looked up
 	// again later against whichever schema happens to have loaded last.
-	assessed := &xdm.Node{Kind: xdm.KindAttribute, Name: qn, Value: value}
+	assessed := xdm.NewNode(xdm.KindAttribute, qn, value)
 	if err := i.validation.assess(rt, assessed); err != nil {
 		return err
 	}
@@ -1448,7 +1444,7 @@ func (i *commentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// repair the specification requires, not an error — rejecting the
 	// stylesheet refused output XML can perfectly well represent.
 	text = repairCommentText(text)
-	out.AppendNode(&xdm.Node{Kind: xdm.KindComment, Value: text})
+	out.AppendNode(xdm.NewNode(xdm.KindComment, xdm.QName{}, text))
 	return nil
 }
 
@@ -1512,11 +1508,7 @@ func (i *piInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// inserting a space between the "?" and the ">", which is what keeps a
 	// computed processing instruction from closing itself early.
 	text = strings.ReplaceAll(text, "?>", "? >")
-	out.AppendNode(&xdm.Node{
-		Kind:  xdm.KindPI,
-		Name:  xdm.QName{Local: target},
-		Value: text,
-	})
+	out.AppendNode(xdm.NewNode(xdm.KindPI, xdm.QName{Local: target}, text))
 	return nil
 }
 

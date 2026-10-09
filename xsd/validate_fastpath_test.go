@@ -136,21 +136,21 @@ func TestIdentityBookkeepingOnlyInsideAScope(t *testing.T) {
 		t.Fatalf("errors = %v, want one cvc-identity-constraint.4.1", v.errs)
 	}
 	for n := range v.keyValues {
-		if n.Parent == nil || n.Parent.Parent != in {
-			t.Errorf("key value recorded for %s outside the constraint's scope", n.Name.Local)
+		if n.Parent() == nil || n.Parent().Parent() != in {
+			t.Errorf("key value recorded for %s outside the constraint's scope", n.Name().Local)
 		}
 	}
 	if len(v.keyValues) != 2 {
 		t.Errorf("%d key values recorded, want the 2 inside the scope", len(v.keyValues))
 	}
 	for n := range v.complexTyped {
-		if n != in && n.Parent != in {
-			t.Errorf("complexTyped recorded %s outside the constraint's scope", n.Name.Local)
+		if n != in && n.Parent() != in {
+			t.Errorf("complexTyped recorded %s outside the constraint's scope", n.Name().Local)
 		}
 	}
 	for n := range v.declFor {
-		if n != in && n.Parent != in {
-			t.Errorf("declFor recorded %s outside the constraint's scope", n.Name.Local)
+		if n != in && n.Parent() != in {
+			t.Errorf("declFor recorded %s outside the constraint's scope", n.Name().Local)
 		}
 	}
 	if tbl := mergeTables([]icTables{nil, {}, nil}); tbl != nil {

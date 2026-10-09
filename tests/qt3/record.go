@@ -48,7 +48,7 @@ func renderOutcome(res *outcome, pass bool) (s string) {
 			case *xdm.Atomic:
 				b.WriteString(" " + v.TypeName())
 			case *xdm.Node:
-				b.WriteString(" " + v.Kind.String())
+				b.WriteString(" " + v.Kind().String())
 			case *xdm.MapItem:
 				b.WriteString(" map")
 			case *xdm.ArrayItem:

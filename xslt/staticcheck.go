@@ -69,23 +69,23 @@ var standardAttributes = map[string]bool{
 // "preserve" | "strip", and default-mode an EQName or "#unnamed" (XTSE0020).
 // expand-text has checkExpandText; the rest have no closed lexical space here.
 func checkStandardAttrValue(el, a *xdm.Node) error {
-	v := strings.TrimSpace(a.Value)
-	switch a.Name.Local {
+	v := strings.TrimSpace(a.Value())
+	switch a.Name().Local {
 	case "version":
 		// xsl:output/@version is the output method's version, not this one.
-		if el.Name.Local != "output" && !isDecimalLexical(v) {
+		if el.Name().Local != "output" && !isDecimalLexical(v) {
 			return fmt.Errorf("XTSE0110: xsl:%s/@version=%q is not a number",
-				el.Name.Local, a.Value)
+				el.Name().Local, a.Value())
 		}
 	case "default-validation":
 		if v != "preserve" && v != "strip" {
 			return fmt.Errorf("attribute default-validation=%q on xsl:%s is "+
-				"not one of preserve, strip (XTSE0020)", a.Value, el.Name.Local)
+				"not one of preserve, strip (XTSE0020)", a.Value(), el.Name().Local)
 		}
 	case "default-mode":
 		if v != "#unnamed" && !isEQName(v) && !isLexicalQName(v) {
 			return fmt.Errorf("attribute default-mode=%q on xsl:%s is not an "+
-				"EQName or #unnamed (XTSE0020)", a.Value, el.Name.Local)
+				"EQName or #unnamed (XTSE0020)", a.Value(), el.Name().Local)
 		}
 	}
 	return nil
@@ -97,14 +97,14 @@ func checkStandardAttrValue(el, a *xdm.Node) error {
 // inclusion has run, so an element excluded by use-when is never asked about —
 // which section 3.12 requires, since no error may be reported for one.
 func checkStaticGrammar(el *xdm.Node, forwards bool) error {
-	if el.Name.URI != xdm.NSXSL {
+	if el.Name().URI != xdm.NSXSL {
 		// A literal result element may carry the standard attributes in their
 		// prefixed form, and anything else on it is an ordinary attribute of
 		// the output rather than an error.
 		return nil
 	}
 
-	def, known := xsltElements[el.Name.Local]
+	def, known := xsltElements[el.Name().Local]
 	// An element XSLT 3.0 introduced is not an XSLT element to a stylesheet
 	// declaring an earlier version, so it is treated exactly as an unknown
 	// one: XTSE0010 outside forwards-compatible mode, ignored within it.
@@ -118,8 +118,8 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 	// package is allowed at all is the processor's cap to decide, and
 	// compileRoot has already applied it before reaching here.
 	if known && def.since30 && !xpathVersionAt(el).AtLeast31() &&
-		!(el.Name.Local == "package" && el.Parent != nil &&
-			el.Parent.Kind == xdm.KindDocument) {
+		!(el.Name().Local == "package" && el.Parent() != nil &&
+			el.Parent().Kind() == xdm.KindDocument) {
 		known = false
 	}
 	if !known {
@@ -151,11 +151,11 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		// why it is written here instead of being claimed as closed.
 		return fmt.Errorf(
 			"xsl:%s is not an XSLT %s element (XTSE0010)",
-			el.Name.Local, xsltVersionName(xpathVersionAt(el)))
+			el.Name().Local, xsltVersionName(xpathVersionAt(el)))
 	}
 
-	for _, a := range el.Attrs {
-		switch a.Name.URI {
+	for a := range el.Attrs() {
+		switch a.Name().URI {
 		case "":
 			// An unprefixed attribute is the element's own.
 		case xdm.NSXML:
@@ -173,7 +173,7 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			}
 			return fmt.Errorf(
 				"attribute xsl:%s is not allowed on xsl:%s (XTSE0090)",
-				a.Name.Local, el.Name.Local)
+				a.Name().Local, el.Name().Local)
 		default:
 			// An attribute in another namespace is allowed on any XSLT
 			// element and is ignored, which is how extension attributes
@@ -185,7 +185,7 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		if err := checkStandardAttrValue(el, a); err != nil {
 			return err
 		}
-		ad, ok := def.attrs[a.Name.Local]
+		ad, ok := def.attrs[a.Name().Local]
 		if ok && ad.removed30 && processorAtLeast30() &&
 			moduleAtLeast30(el) && !effectiveForwards(el) {
 			// A name a working draft proposed and the Recommendation removed
@@ -197,7 +197,7 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			// unbound $g raises once the attribute has been dropped.
 			return fmt.Errorf(
 				"attribute %q is not allowed on xsl:%s (XTSE0090)",
-				a.Name.Local, el.Name.Local)
+				a.Name().Local, el.Name().Local)
 		}
 		if ok && ad.removed30 {
 			// Below 3.0, or within genuine forwards-compatible behavior, it
@@ -231,7 +231,7 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			ok = false
 		}
 		if !ok {
-			if standardAttributes[a.Name.Local] {
+			if standardAttributes[a.Name().Local] {
 				continue
 			}
 			// The splice marker is written by rewriteOverride onto a
@@ -240,7 +240,7 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			// stylesheet author wrote, so the grammar has nothing to say
 			// about it -- the sibling marker at overriddenMarkerNS is exempt
 			// because it carries a namespace, and this one does not.
-			if a.Name.Local == spliced {
+			if a.Name().Local == spliced {
 				continue
 			}
 			if forwards && effectiveForwards(el) {
@@ -266,7 +266,7 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			}
 			return fmt.Errorf(
 				"attribute %q is not allowed on xsl:%s (XTSE0090)",
-				a.Name.Local, el.Name.Local)
+				a.Name().Local, el.Name().Local)
 		}
 		if err := checkAttrValue(el, a, ad); err != nil {
 			return err
@@ -274,11 +274,11 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		// package-version has a grammar rather than a closed set of values,
 		// so the attribute table cannot state it and checkAttrValue cannot
 		// check it.
-		if a.Name.Local == "package-version" && isXSL(el, "package") &&
-			!validPackageVersion(a.Value) {
+		if a.Name().Local == "package-version" && isXSL(el, "package") &&
+			!validPackageVersion(a.Value()) {
 			return fmt.Errorf(
 				"attribute package-version=%q on xsl:package is not a valid "+
-					"version number (XTSE0020)", a.Value)
+					"version number (XTSE0020)", a.Value())
 		}
 		if err := checkQNameAttr(el, a); err != nil {
 			return err
@@ -295,7 +295,7 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		if el.Attr("", name) == nil {
 			return fmt.Errorf(
 				"xsl:%s requires a %s attribute (XTSE0010)",
-				el.Name.Local, name)
+				el.Name().Local, name)
 		}
 	}
 
@@ -322,7 +322,7 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 // those are decided by each instruction's own compiler, which has to walk the
 // children in order anyway.
 func checkContentModel(el *xdm.Node, forwards bool) error {
-	cm, ok := contentModels[el.Name.Local]
+	cm, ok := contentModels[el.Name().Local]
 	if !ok {
 		return nil
 	}
@@ -336,10 +336,10 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 	if cm.seqCtor30 && processorAtLeast30() {
 		cm.seqCtor = true
 	}
-	for _, ch := range el.Children {
-		switch ch.Kind {
+	for ch := range el.Children() {
+		switch ch.Kind() {
 		case xdm.KindElement:
-			if ch.Name.URI != xdm.NSXSL {
+			if ch.Name().URI != xdm.NSXSL {
 				// A literal result element or extension element is content
 				// only where a sequence constructor is.
 				if cm.seqCtor {
@@ -354,31 +354,31 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 				}
 				// A model may also name a non-XSLT element outright:
 				// xsl:import-schema contains an inline xs:schema.
-				if cm.foreign != "" && ch.Name.Local == cm.foreign {
+				if cm.foreign != "" && ch.Name().Local == cm.foreign {
 					continue
 				}
 				if cm.model == "" {
 					return fmt.Errorf(
 						"xsl:%s is required to be empty, so the %s child is "+
 							"a static error (XTSE0260)",
-						el.Name.Local, ch.Name.Lexical())
+						el.Name().Local, ch.Name().Lexical())
 				}
 				return fmt.Errorf(
 					"xsl:%s may not contain %s: its content is %s (XTSE0010)",
-					el.Name.Local, ch.Name.Lexical(), cm.model)
+					el.Name().Local, ch.Name().Lexical(), cm.model)
 			}
 			// xsl:expose is a declaration only of a package: section 3.5
 			// says it "may appear only as a child of xsl:package", whose
 			// model names it among its kids, so other-declarations does not
 			// admit it.
-			if cm.kids[ch.Name.Local] || (cm.decls &&
-				xsltDeclarations[ch.Name.Local] && ch.Name.Local != "expose") {
+			if cm.kids[ch.Name().Local] || (cm.decls &&
+				xsltDeclarations[ch.Name().Local] && ch.Name().Local != "expose") {
 				continue
 			}
 			// An unknown XSLT element is XTSE0010 from the table check when
 			// it is reached; here it is only a question of placement, and
 			// forwards-compatible mode ignores what it does not know.
-			if _, known := xsltElements[ch.Name.Local]; !known && forwards {
+			if _, known := xsltElements[ch.Name().Local]; !known && forwards {
 				continue
 			}
 			// Section 3.9, first rule of forwards compatible behavior: "if
@@ -397,24 +397,24 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 				effectiveForwards(ch) && !inPackage(ch) {
 				continue
 			}
-			if cm.seqCtor && isInstruction(ch.Name.Local) {
+			if cm.seqCtor && isInstruction(ch.Name().Local) {
 				continue
 			}
 			// Two of these have a code of their own, which says the same
 			// thing about a specific element rather than about the model.
 			switch {
-			case ch.Name.Local == "include":
+			case ch.Name().Local == "include":
 				return fmt.Errorf(
 					"an xsl:include element must be a top-level element, "+
-						"and this one is inside xsl:%s (XTSE0170)", el.Name.Local)
-			case ch.Name.Local == "import":
+						"and this one is inside xsl:%s (XTSE0170)", el.Name().Local)
+			case ch.Name().Local == "import":
 				return fmt.Errorf(
 					"an xsl:import element must be a top-level element, "+
-						"and this one is inside xsl:%s (XTSE0190)", el.Name.Local)
+						"and this one is inside xsl:%s (XTSE0190)", el.Name().Local)
 			}
 			return fmt.Errorf(
 				"xsl:%s may not contain xsl:%s: its content is %s (XTSE0010)",
-				el.Name.Local, ch.Name.Local, cm.model)
+				el.Name().Local, ch.Name().Local, cm.model)
 
 		case xdm.KindText:
 			if cm.seqCtor || cm.pcdata {
@@ -427,7 +427,7 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 			// xml:space="preserve" *is* an error inside an element required
 			// to be empty. That is checked where xml:space is known rather
 			// than assumed here, so plain indentation stays legal.
-			if xdm.IsXMLWhitespace(ch.Value) {
+			if xdm.IsXMLWhitespace(ch.Value()) {
 				continue
 			}
 			// An empty element and a non-empty one give different codes for
@@ -435,18 +435,18 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 			// required to be empty, and xsl:stylesheet has XTSE0120 of its
 			// own for a text node child.
 			switch {
-			case isStylesheetRootName(el.Name.Local):
+			case isStylesheetRootName(el.Name().Local):
 				return fmt.Errorf(
 					"an xsl:%s element must not have text node children (XTSE0120)",
-					el.Name.Local)
+					el.Name().Local)
 			case cm.model == "":
 				return fmt.Errorf(
 					"xsl:%s is required to be empty, so its text content is "+
-						"a static error (XTSE0260)", el.Name.Local)
+						"a static error (XTSE0260)", el.Name().Local)
 			}
 			return fmt.Errorf(
 				"xsl:%s may not contain text: its content is %s (XTSE0010)",
-				el.Name.Local, cm.model)
+				el.Name().Local, cm.model)
 		}
 	}
 	return checkModelOrder(el, cm)
@@ -479,14 +479,14 @@ func checkModelOrder(el *xdm.Node, cm contentModel) error {
 	if cm.foreign != "" && strings.HasSuffix(cm.model, "?") {
 		n := 0
 		for _, ch := range el.ChildElements() {
-			if ch.Name.URI != xdm.NSXSL && ch.Name.Local == cm.foreign {
+			if ch.Name().URI != xdm.NSXSL && ch.Name().Local == cm.foreign {
 				n++
 			}
 		}
 		if n > 1 {
 			return fmt.Errorf(
 				"xsl:%s: at most one %s child is allowed, its content is "+
-					"%s (XTSE0010)", el.Name.Local, cm.foreign, cm.model)
+					"%s (XTSE0010)", el.Name().Local, cm.foreign, cm.model)
 		}
 	}
 
@@ -497,10 +497,10 @@ func checkModelOrder(el *xdm.Node, cm contentModel) error {
 		// xsl:sort after any other content is out of place. xsl:fallback is
 		// not part of these models, so only real content counts.
 		seenOther := false
-		for _, ch := range el.Children {
-			switch ch.Kind {
+		for ch := range el.Children() {
+			switch ch.Kind() {
 			case xdm.KindText:
-				if !xdm.IsXMLWhitespace(ch.Value) {
+				if !xdm.IsXMLWhitespace(ch.Value()) {
 					seenOther = true
 				}
 			case xdm.KindElement:
@@ -509,7 +509,7 @@ func checkModelOrder(el *xdm.Node, cm contentModel) error {
 						return fmt.Errorf(
 							"xsl:%s: every xsl:sort must precede the sequence "+
 								"constructor, its content is %s (XTSE0010)",
-							el.Name.Local, cm.model)
+							el.Name().Local, cm.model)
 					}
 					continue
 				}
@@ -529,21 +529,21 @@ func checkModelOrder(el *xdm.Node, cm contentModel) error {
 		}
 		seen := -1
 		for _, ch := range el.ChildElements() {
-			r, ok := rank[ch.Name.Local]
-			if !ok || ch.Name.URI != xdm.NSXSL {
+			r, ok := rank[ch.Name().Local]
+			if !ok || ch.Name().URI != xdm.NSXSL {
 				continue
 			}
 			if r < seen {
 				return fmt.Errorf(
 					"xsl:analyze-string: %s is out of order, its content is "+
-						"%s (XTSE0010)", ch.Name.Lexical(), cm.model)
+						"%s (XTSE0010)", ch.Name().Lexical(), cm.model)
 			}
 			// Each of the two substring elements may appear once; only
 			// xsl:fallback repeats, so an equal rank below it is a duplicate.
 			if r == seen && r != rank["fallback"] {
 				return fmt.Errorf(
 					"xsl:analyze-string: at most one %s is allowed, its "+
-						"content is %s (XTSE0010)", ch.Name.Lexical(), cm.model)
+						"content is %s (XTSE0010)", ch.Name().Lexical(), cm.model)
 			}
 			seen = r
 		}
@@ -595,7 +595,7 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 		return checkURIAttr(el, a)
 	}
 	if ad.nmtoken {
-		v := strings.TrimSpace(a.Value)
+		v := strings.TrimSpace(a.Value())
 		if ad.avt && strings.Contains(v, "{") {
 			return nil
 		}
@@ -605,14 +605,14 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 		}
 		if !ok {
 			return fmt.Errorf("attribute %s=%q on xsl:%s is not an NMTOKEN "+
-				"(XTSE0020)", a.Name.Local, a.Value, el.Name.Local)
+				"(XTSE0020)", a.Name().Local, a.Value(), el.Name().Local)
 		}
 		return nil
 	}
 	if len(ad.values) == 0 {
 		return nil
 	}
-	v := strings.TrimSpace(a.Value)
+	v := strings.TrimSpace(a.Value())
 	// An attribute value template's value is not known until the instruction
 	// runs, so a "{...}" here is checked then rather than now. Rejecting it
 	// would refuse the legal order="{$dir}".
@@ -640,7 +640,7 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 	// follows the processor rather than the module -- as @error-code beside
 	// it does.
 	allow := allowsBoolAliases(el)
-	if isXSL(el, "message") && a.Name.Local == "terminate" {
+	if isXSL(el, "message") && a.Name().Local == "terminate" {
 		allow = allow || processorAtLeast30()
 	}
 	// The serialization attributes of xsl:result-document are the same case:
@@ -694,7 +694,7 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 	}
 	return fmt.Errorf(
 		"attribute %s=%q on xsl:%s is not one of %s (XTSE0020)",
-		a.Name.Local, a.Value, el.Name.Local, strings.Join(listed, ", "))
+		a.Name().Local, a.Value(), el.Name().Local, strings.Join(listed, ", "))
 }
 
 // checkURIAttr holds an attribute the summary types "uri" to that lexical
@@ -703,17 +703,17 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 // curly-bracket template, which the attribute is not -- the summary writes
 // the name unbraced, so a brace here is a literal brace and no URI has one.
 func checkURIAttr(el *xdm.Node, a *xdm.Node) error {
-	v := strings.TrimSpace(a.Value)
+	v := strings.TrimSpace(a.Value())
 	if strings.ContainsAny(v, "{}") {
 		return fmt.Errorf(
 			"attribute %s=%q on xsl:%s is not an attribute value template "+
 				"and must be a URI (XTSE0020)",
-			a.Name.Local, a.Value, el.Name.Local)
+			a.Name().Local, a.Value(), el.Name().Local)
 	}
 	if _, err := url.Parse(v); err != nil {
 		return fmt.Errorf(
 			"attribute %s=%q on xsl:%s is not a valid URI reference (XTSE0020)",
-			a.Name.Local, a.Value, el.Name.Local)
+			a.Name().Local, a.Value(), el.Name().Local)
 	}
 	return nil
 }
@@ -726,15 +726,15 @@ func checkURIAttr(el *xdm.Node, a *xdm.Node) error {
 // compatibility behavior established by an ancestor element" — so it is
 // recomputed at every element that carries one rather than only at the root.
 func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
-	if n.Kind == xdm.KindElement {
+	if n.Kind() == xdm.KindElement {
 		forwards = forwardsAt(n, forwards)
 		// Section 3.9's first rule ignores the element "and its content", so
 		// the element itself is not checked either -- forwards-006 writes a
 		// nested xsl:transform with no version attribute, and reporting the
 		// missing attribute would be reporting an error about an element the
 		// processor was told to pretend it never saw.
-		if forwards && effectiveForwards(n) && n.Name.URI == xdm.NSXSL &&
-			isTopLevel(n) && !xsltDeclarations[n.Name.Local] && !inPackage(n) {
+		if forwards && effectiveForwards(n) && n.Name().URI == xdm.NSXSL &&
+			isTopLevel(n) && !xsltDeclarations[n.Name().Local] && !inPackage(n) {
 			return nil
 		}
 		if err := checkStaticGrammar(n, forwards); err != nil {
@@ -752,11 +752,11 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 		// content", so the walk must not descend into it. Checking inside
 		// rejected a stylesheet for a required attribute missing from an
 		// element the processor was told to pretend it never saw.
-		if forwards && effectiveForwards(n) && n.Name.URI == xdm.NSXSL &&
+		if forwards && effectiveForwards(n) && n.Name().URI == xdm.NSXSL &&
 			isTopLevel(n) {
 			// Unknown in the same sense checkStaticGrammar means it: an
 			// element of a later version is unknown to this stylesheet's.
-			def, known := xsltElements[n.Name.Local]
+			def, known := xsltElements[n.Name().Local]
 			if (!known || (def.since30 && !xpathVersionAt(n).AtLeast31())) &&
 				!inPackage(n) {
 				return nil
@@ -766,7 +766,7 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 			// the element sits, not about whether this version knows it:
 			// xsl:value-of and xsl:when are both well known and both must be
 			// ignored as children of the module element.
-			if !xsltDeclarations[n.Name.Local] && !inPackage(n) {
+			if !xsltDeclarations[n.Name().Local] && !inPackage(n) {
 				return nil
 			}
 		}
@@ -778,9 +778,9 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 		// fallbacks alone: a sibling is not merely unevaluated, it is not
 		// looked at, and forwards-203 relies on that by writing an
 		// xsl:accumulator with no name where the name is required.
-		if forwards && n.Name.URI == xdm.NSXSL && hasFallbackChild(n) {
-			if _, known := xsltElements[n.Name.Local]; !known {
-				for _, c := range n.Children {
+		if forwards && n.Name().URI == xdm.NSXSL && hasFallbackChild(n) {
+			if _, known := xsltElements[n.Name().Local]; !known {
+				for c := range n.Children() {
 					if !isXSL(c, "fallback") {
 						continue
 					}
@@ -792,7 +792,7 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 			}
 		}
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		if err := checkStaticGrammarTree(c, forwards); err != nil {
 			return err
 		}
@@ -802,7 +802,7 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 
 // hasFallbackChild reports whether el has an xsl:fallback child.
 func hasFallbackChild(el *xdm.Node) bool {
-	for _, c := range el.Children {
+	for c := range el.Children() {
 		if isXSL(c, "fallback") {
 			return true
 		}
@@ -814,20 +814,20 @@ func hasFallbackChild(el *xdm.Node) bool {
 // inherited from its parent.
 func forwardsAt(el *xdm.Node, inherited bool) bool {
 	v := ""
-	if el.Name.URI == xdm.NSXSL {
+	if el.Name().URI == xdm.NSXSL {
 		// The version attribute of xsl:output is the *output* version and
 		// has nothing to do with compatibility, which section 3.9 says in
 		// so many words.
-		if el.Name.Local == "output" {
+		if el.Name().Local == "output" {
 			return inherited
 		}
 		if a := el.Attr("", "version"); a != nil {
-			v = a.Value
+			v = a.Value()
 		}
 	}
 	if v == "" {
 		if a := el.Attr(xdm.NSXSL, "version"); a != nil {
-			v = a.Value
+			v = a.Value()
 		}
 	}
 	if v == "" {
@@ -853,29 +853,29 @@ func forwardsAt(el *xdm.Node, inherited bool) bool {
 // a literal result element", which is what changes an unknown element from
 // harmless output into something requiring fallback.
 func isExtensionInstruction(el *xdm.Node) bool {
-	if el.Name.URI == "" || el.Name.URI == xdm.NSXSL {
+	if el.Name().URI == "" || el.Name().URI == xdm.NSXSL {
 		return false
 	}
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
 		lists := []string{}
 		// The attribute is unprefixed on an XSLT element and xsl:-prefixed on
 		// any other, and section 18.2.1 accepts either spelling wherever it is
 		// not ambiguous, so both are read.
-		if cur.Name.URI == xdm.NSXSL {
+		if cur.Name().URI == xdm.NSXSL {
 			lists = append(lists, cur.AttrValue("extension-element-prefixes"))
 		}
 		if a := cur.Attr(xdm.NSXSL, "extension-element-prefixes"); a != nil {
-			lists = append(lists, a.Value)
+			lists = append(lists, a.Value())
 		}
 		for _, list := range lists {
 			for _, p := range strings.Fields(list) {
 				if p == "#default" {
 					p = ""
 				}
-				if uri, ok := cur.LookupPrefix(p); ok && uri == el.Name.URI {
+				if uri, ok := cur.LookupPrefix(p); ok && uri == el.Name().URI {
 					return true
 				}
 			}
@@ -886,9 +886,9 @@ func isExtensionInstruction(el *xdm.Node) bool {
 
 // isTopLevel reports whether el is a child of xsl:stylesheet or xsl:transform.
 func isTopLevel(el *xdm.Node) bool {
-	p := el.Parent
-	return p != nil && p.Kind == xdm.KindElement && p.Name.URI == xdm.NSXSL &&
-		isStylesheetRootName(p.Name.Local)
+	p := el.Parent()
+	return p != nil && p.Kind() == xdm.KindElement && p.Name().URI == xdm.NSXSL &&
+		isStylesheetRootName(p.Name().Local)
 }
 
 // forwardsMode reports whether forwards-compatible behaviour is in force at
@@ -900,8 +900,8 @@ func isTopLevel(el *xdm.Node) bool {
 // [xsl:]version attribute decides, since section 3.9 says the compatibility
 // behaviour an element establishes overrides any established by an ancestor.
 func forwardsMode(el *xdm.Node) bool {
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
 		if forwardsAt(cur, false) {
@@ -935,8 +935,8 @@ func forwardsMode(el *xdm.Node) bool {
 // declaration can change what a 1.0 stylesheet produces but cannot make one
 // fail that did not.
 func compatModeAt(el *xdm.Node) bool {
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
 		if !hasVersionAttr(cur) {
@@ -951,17 +951,17 @@ func compatModeAt(el *xdm.Node) bool {
 // states something unparseable. It reads the same attributes as forwardsAt.
 func versionAt(el *xdm.Node) float64 {
 	v := ""
-	if el.Name.URI == xdm.NSXSL {
-		if el.Name.Local == "output" {
+	if el.Name().URI == xdm.NSXSL {
+		if el.Name().Local == "output" {
 			return 2.0
 		}
 		if a := el.Attr("", "version"); a != nil {
-			v = a.Value
+			v = a.Value()
 		}
 	}
 	if v == "" {
 		if a := el.Attr(xdm.NSXSL, "version"); a != nil {
-			v = a.Value
+			v = a.Value()
 		}
 	}
 	f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
@@ -974,10 +974,10 @@ func versionAt(el *xdm.Node) float64 {
 // hasVersionAttr reports whether el carries a version attribute that
 // forwardsAt would consult — that is, one that states a compatibility mode.
 func hasVersionAttr(el *xdm.Node) bool {
-	if el.Name.URI == xdm.NSXSL {
+	if el.Name().URI == xdm.NSXSL {
 		// xsl:output/@version is the output method's version, not a
 		// compatibility statement, so it establishes nothing.
-		if el.Name.Local == "output" {
+		if el.Name().Local == "output" {
 			return false
 		}
 		if el.Attr("", "version") != nil {
@@ -1002,11 +1002,11 @@ func hasVersionAttr(el *xdm.Node) bool {
 // escapes the check but simply a value outside the lexical space, which is
 // what xsl:decimal-format/@name="{concat('f','f')}" is.
 func checkQNameAttr(el *xdm.Node, a *xdm.Node) error {
-	qd, ok := qnameAttrs[el.Name.Local][a.Name.Local]
+	qd, ok := qnameAttrs[el.Name().Local][a.Name().Local]
 	if !ok {
 		return nil
 	}
-	v := strings.TrimSpace(a.Value)
+	v := strings.TrimSpace(a.Value())
 	if qd.avt {
 		// The value is only known once the instruction runs, so it is
 		// checked then.
@@ -1033,7 +1033,7 @@ func checkQNameAttr(el *xdm.Node, a *xdm.Node) error {
 		if !isLexicalQName(n) && !isEQName(n) {
 			return fmt.Errorf(
 				"%s: attribute %s=%q on xsl:%s is not a QName",
-				code, a.Name.Local, a.Value, el.Name.Local)
+				code, a.Name().Local, a.Value(), el.Name().Local)
 		}
 	}
 	return nil
@@ -1073,8 +1073,8 @@ func xpathVersionAt(el *xdm.Node) xpath.Version {
 	if overrideXPathVersion != nil {
 		return *overrideXPathVersion
 	}
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement || !hasVersionAttr(cur) {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement || !hasVersionAttr(cur) {
 			continue
 		}
 		switch v := versionAt(cur); {
@@ -1131,9 +1131,9 @@ var overrideXPathVersion *xpath.Version
 // through -905b their nested xsl:stylesheet and xsl:transform, as XTSE0010
 // rather than passing silently.
 func inPackage(el *xdm.Node) bool {
-	p := el.Parent
-	return p != nil && p.Kind == xdm.KindElement &&
-		p.Name.URI == xdm.NSXSL && p.Name.Local == "package"
+	p := el.Parent()
+	return p != nil && p.Kind() == xdm.KindElement &&
+		p.Name().URI == xdm.NSXSL && p.Name().Local == "package"
 }
 
 // xsltVersionName spells the XSLT version that corresponds to an XPath

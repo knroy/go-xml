@@ -58,8 +58,8 @@ func applyParameterDocument(rt *runtime, o *OutputSettings, baseURI string) erro
 		return nil
 	}
 	root := docElement(tree.Root)
-	if root == nil || root.Name.URI != nsSerialization ||
-		root.Name.Local != "serialization-parameters" {
+	if root == nil || root.Name().URI != nsSerialization ||
+		root.Name().Local != "serialization-parameters" {
 		return fmt.Errorf(
 			"SEPM0017: the parameter document %q is not an "+
 				"output:serialization-parameters document", href)
@@ -73,11 +73,11 @@ func docElement(n *xdm.Node) *xdm.Node {
 	if n == nil {
 		return nil
 	}
-	if n.Kind == xdm.KindElement {
+	if n.Kind() == xdm.KindElement {
 		return n
 	}
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindElement {
 			return c
 		}
 	}
@@ -105,29 +105,29 @@ func docElement(n *xdm.Node) *xdm.Node {
 // the reading of a document already in hand.
 func ApplyParameterDocument(root *xdm.Node, o *OutputSettings) error {
 	seen := map[string]bool{}
-	for _, p := range root.Children {
-		if p.Kind != xdm.KindElement {
+	for p := range root.Children() {
+		if p.Kind() != xdm.KindElement {
 			continue
 		}
 		// Serialization 3.1 §3.1: a document that "specifies the value of
 		// the same parameter more than once" is SEPM0019. An extension
 		// parameter may not be repeated either.
-		key := p.Name.Clark()
+		key := p.Name().Clark()
 		if seen[key] {
 			return fmt.Errorf(
 				"SEPM0019: serialization parameter %q appears more than once",
-				p.Name.Local)
+				p.Name().Local)
 		}
 		seen[key] = true
-		if p.Name.URI != nsSerialization {
-			if p.Name.URI == "" {
+		if p.Name().URI != nsSerialization {
+			if p.Name().URI == "" {
 				return fmt.Errorf(
 					"SEPM0017: serialization parameter %q is in no namespace",
-					p.Name.Local)
+					p.Name().Local)
 			}
 			continue
 		}
-		if p.Name.Local == "use-character-maps" {
+		if p.Name().Local == "use-character-maps" {
 			m, err := xpath.ReadCharacterMaps(p)
 			if err != nil {
 				return err
@@ -160,7 +160,7 @@ func ApplyParameterDocument(root *xdm.Node, o *OutputSettings) error {
 		// the value "Q{...a}e b:e Q{...c}e e" sits on an element carrying
 		// xmlns:b and a default namespace, and b:e was being dropped
 		// altogether while the bare e was being read as no-namespace.
-		if qnameListParam[p.Name.Local] {
+		if qnameListParam[p.Name().Local] {
 			if val, err = expandParamQNames(p, val); err != nil {
 				return err
 			}
@@ -171,10 +171,10 @@ func ApplyParameterDocument(root *xdm.Node, o *OutputSettings) error {
 		// of the cdata-section-elements and suppress-indentation attributes
 		// are merged". For XQuery the settings are still empty here.
 		cdata, suppress := o.CDataElements, o.SuppressIndentation
-		if err := setSerializationParam(o, p.Name.Local, val, "SEPM0017"); err != nil {
+		if err := setSerializationParam(o, p.Name().Local, val, "SEPM0017"); err != nil {
 			return err
 		}
-		switch p.Name.Local {
+		switch p.Name().Local {
 		case "cdata-section-elements":
 			o.CDataElements = slices.Concat(cdata, o.CDataElements)
 		case "suppress-indentation":
@@ -314,19 +314,19 @@ func applySerializationParam(o *OutputSettings, name, val string) error {
 // attribute, named "value" and in no namespace: a differently named one means
 // the document is not the parameter document it claims to be.
 func paramDocValue(p *xdm.Node) (string, error) {
-	for _, a := range p.Attrs {
-		if a.Name.URI != "" {
+	for a := range p.Attrs() {
+		if a.Name().URI != "" {
 			continue
 		}
-		if a.Name.Local != "value" {
+		if a.Name().Local != "value" {
 			return "", fmt.Errorf(
 				"SEPM0017: unexpected attribute %q on serialization parameter %q",
-				a.Name.Local, p.Name.Local)
+				a.Name().Local, p.Name().Local)
 		}
-		return a.Value, nil
+		return a.Value(), nil
 	}
 	return "", fmt.Errorf(
-		"SEPM0017: serialization parameter %q has no value", p.Name.Local)
+		"SEPM0017: serialization parameter %q has no value", p.Name().Local)
 }
 
 // qnameListParam names the serialization parameters whose value is a list of
@@ -369,7 +369,7 @@ func expandParamQNames(p *xdm.Node, val string) (string, error) {
 			// bindings are in hand and the name is genuinely unresolvable.
 			return "", fmt.Errorf(
 				"SEPM0017: the prefix %q in serialization parameter %q is not bound",
-				prefix, p.Name.Local)
+				prefix, p.Name().Local)
 		}
 		fields[i] = "Q{" + uri + "}" + local
 	}

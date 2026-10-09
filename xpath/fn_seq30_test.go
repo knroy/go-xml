@@ -95,9 +95,9 @@ func idsOf(t *testing.T, seq xdm.Sequence) []string {
 			t.Fatalf("result item is %T, want a node", it)
 		}
 		var id string
-		for _, a := range n.Attrs {
-			if a.Name.Local == "id" {
-				id = a.Value
+		for a := range n.Attrs() {
+			if a.Name().Local == "id" {
+				id = a.Value()
 			}
 		}
 		out = append(out, id)
@@ -158,7 +158,7 @@ func TestOutermostHandlesAttributes(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("outermost((//d, //d/@id)) returned %d items, want 1", len(got))
 	}
-	if n := got[0].(*xdm.Node); n.Kind != xdm.KindElement {
+	if n := got[0].(*xdm.Node); n.Kind() != xdm.KindElement {
 		t.Errorf("outermost kept the attribute, want the element")
 	}
 }

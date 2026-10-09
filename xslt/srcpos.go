@@ -53,7 +53,7 @@ func withPosition(instr Instruction, n *xdm.Node) Instruction {
 	if !ok {
 		return instr
 	}
-	return &posInstr{Instruction: instr, line: line, module: n.BaseURI}
+	return &posInstr{Instruction: instr, line: line, module: n.BaseURI()}
 }
 
 // stampPosition records where an error was raised, if it does not already say.

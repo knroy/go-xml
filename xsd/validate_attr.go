@@ -54,8 +54,8 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 		}
 	}
 
-	for _, a := range el.Attrs {
-		name := xdm.QName{URI: a.Name.URI, Local: a.Name.Local}
+	for a := range el.Attrs() {
+		name := xdm.QName{URI: a.Name().URI, Local: a.Name().Local}
 
 		// The four xsi: attributes are permitted on any element and are
 		// not subject to the type's attribute uses — but a type may
@@ -73,8 +73,8 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 			}
 		}
 		// A namespace declaration is not an attribute for this purpose.
-		if name.URI == "http://www.w3.org/2000/xmlns/" || a.Name.Prefix == "xmlns" ||
-			(a.Name.Prefix == "" && a.Name.Local == "xmlns") {
+		if name.URI == "http://www.w3.org/2000/xmlns/" || a.Name().Prefix == "xmlns" ||
+			(a.Name().Prefix == "" && a.Name().Local == "xmlns") {
 			continue
 		}
 
@@ -199,11 +199,7 @@ func (v *validator) applyAttributeDefault(el *xdm.Node, use *AttributeUse) {
 			prefix = declareFixupPrefix(el, name.URI)
 		}
 	}
-	attr := &xdm.Node{
-		Kind:  xdm.KindAttribute,
-		Name:  xdm.QName{Prefix: prefix, Local: name.Local, URI: name.URI},
-		Value: normalized,
-	}
+	attr := xdm.NewNode(xdm.KindAttribute, xdm.QName{Prefix: prefix, Local: name.Local, URI: name.URI}, normalized)
 	if use.Decl.Type != nil {
 		if a := annotationName(use.Decl.Type); a != "" {
 			v.schema.setResolvedAnnotation(attr, a, use.Decl.Type)
@@ -232,13 +228,13 @@ func declareFixupPrefix(el *xdm.Node, uri string) string {
 // prefixInScopeFor finds a prefix bound to a namespace at an element, or ""
 // when none is in scope.
 func prefixInScopeFor(el *xdm.Node, uri string) string {
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		for _, ns := range cur.Namespaces {
-			if ns.Value == uri && ns.Name.Local != "" && ns.Name.Local != "xmlns" {
-				return ns.Name.Local
+		for ns := range cur.NamespaceDecls() {
+			if ns.Value() == uri && ns.Name().Local != "" && ns.Name().Local != "xmlns" {
+				return ns.Name().Local
 			}
 		}
 	}
@@ -342,7 +338,7 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 	if decl == nil || decl.Type == nil {
 		return
 	}
-	normalized, err := validateSimpleValueIn(a.Value, decl.Type, v.schema.Version, a)
+	normalized, err := validateSimpleValueIn(a.Value(), decl.Type, v.schema.Version, a)
 	if err != nil {
 		v.fail(a, "cvc-attribute.3",
 			"attribute %s: %v", attrName(decl.Name), err)
@@ -418,16 +414,16 @@ func (v *validator) validateWildcardAttribute(a *xdm.Node, w *Wildcard, name xdm
 // namespace declarations. This is clause 3.1.1 of Element Locally Valid (Type),
 // which names those four explicitly.
 func (v *validator) checkNoForeignAttributes(el *xdm.Node, uses []*AttributeUse, w *Wildcard) {
-	for _, a := range el.Attrs {
-		name := xdm.QName{URI: a.Name.URI, Local: a.Name.Local}
+	for a := range el.Attrs() {
+		name := xdm.QName{URI: a.Name().URI, Local: a.Name().Local}
 		if name.URI == NSInstance {
 			switch name.Local {
 			case "type", "nil", "schemaLocation", "noNamespaceSchemaLocation":
 				continue
 			}
 		}
-		if name.URI == "http://www.w3.org/2000/xmlns/" || a.Name.Prefix == "xmlns" ||
-			(a.Name.Prefix == "" && a.Name.Local == "xmlns") {
+		if name.URI == "http://www.w3.org/2000/xmlns/" || a.Name().Prefix == "xmlns" ||
+			(a.Name().Prefix == "" && a.Name().Local == "xmlns") {
 			continue
 		}
 		if findAttributeUse(uses, name) != nil {

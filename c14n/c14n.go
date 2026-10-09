@@ -255,7 +255,7 @@ func (c *compareWriter) Write(p []byte) (int, error) {
 // count of one element, not by its size. A write error from w is returned
 // unwrapped, so callers can use errors.Is against their own sentinel values.
 func Write(w io.Writer, n *xdm.Node, opts Options) error {
-	if n == nil || (n.Kind != xdm.KindDocument && n.Kind != xdm.KindElement) {
+	if n == nil || (n.Kind() != xdm.KindDocument && n.Kind() != xdm.KindElement) {
 		return ErrUnsupportedNode
 	}
 	return WriteNodeSet(w, Subtree(n), opts)
@@ -351,7 +351,7 @@ func FromXPath(doc *xdm.Node, expr string, ns map[string]string) (NodeSet, error
 	}
 	m := make(map[*xdm.Node]bool, len(seq))
 	for _, it := range seq {
-		if n, ok := it.(*xdm.Node); ok && n.Kind != xdm.KindNamespace {
+		if n, ok := it.(*xdm.Node); ok && n.Kind() != xdm.KindNamespace {
 			m[n] = true
 		}
 	}
@@ -408,8 +408,8 @@ func FromXPathFilter(doc *xdm.Node, filter string, ns map[string]string) (NodeSe
 		}
 		switch {
 		case !keep:
-		case n.Kind == xdm.KindNamespace:
-			set.ns[nsKey{n.Parent, n.Name.Local}] = true
+		case n.Kind() == xdm.KindNamespace:
+			set.ns[nsKey{n.Parent(), n.Name().Local}] = true
 		default:
 			set.nodes[n] = true
 		}
@@ -462,7 +462,7 @@ func (s funcSet) Contains(x *xdm.Node) bool { return s.f(x) }
 // within reports whether x is top or one of its descendants, attributes
 // included.
 func within(x, top *xdm.Node) bool {
-	for ; x != nil; x = x.Parent {
+	for ; x != nil; x = x.Parent() {
 		if x == top {
 			return true
 		}
@@ -471,8 +471,8 @@ func within(x, top *xdm.Node) bool {
 }
 
 func top(n *xdm.Node) *xdm.Node {
-	for n != nil && n.Parent != nil {
-		n = n.Parent
+	for n != nil && n.Parent() != nil {
+		n = n.Parent()
 	}
 	return n
 }

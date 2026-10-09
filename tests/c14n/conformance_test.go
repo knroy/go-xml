@@ -203,10 +203,10 @@ func TestC14NConformance(t *testing.T) {
 	count(t.Run("c14n11/2.4-xml-base-join/"+algName(c14n.Inclusive11), func(t *testing.T) {
 		doc := parseFile(t, filepath.Join("testdata", "c14n11", "2.4-xml-base-join.xml"), nil)
 		omitted := func(n *xdm.Node) bool {
-			if n.Kind == xdm.KindAttribute {
-				n = n.Parent
+			if n.Kind() == xdm.KindAttribute {
+				n = n.Parent()
 			}
-			return n.Kind == xdm.KindElement && (n.Name.Local == "b" || n.Name.Local == "c")
+			return n.Kind() == xdm.KindElement && (n.Name().Local == "b" || n.Name().Local == "c")
 		}
 		got, err := c14n.BytesNodeSet(c14n.Func(doc, func(n *xdm.Node) bool { return !omitted(n) }), c14n.Options{Algorithm: c14n.Inclusive11})
 		if err != nil {

@@ -170,7 +170,7 @@ func (t SequenceType) matchesItem(it xdm.Item) bool {
 		}
 		// A kind test in a sequence type is checked against the node's own
 		// kind, so the principal kind passed here is the node's own.
-		return t.ItemType.Matches(n, n.Kind)
+		return t.ItemType.Matches(n, n.Kind())
 	}
 	// item(): matches anything.
 	return true

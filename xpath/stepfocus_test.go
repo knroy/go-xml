@@ -110,7 +110,7 @@ func TestPathStepResultNotCopied(t *testing.T) {
 
 	// One input node: the slice evalFrom built is the result itself.
 	as := bs[:1:1]
-	as[0] = bs[0].(*xdm.Node).Parent
+	as[0] = bs[0].(*xdm.Node).Parent()
 	step := MustCompile("b", nil).expr
 	allocs := testing.AllocsPerRun(50, func() {
 		if _, err := evalStepOver(ctx, as, step, true); err != nil {
@@ -130,7 +130,7 @@ func TestRelativePathStartsWithoutBoxing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := tree.Root.Children[0].Children[0]
+	a := tree.Root.FirstChild().FirstChild()
 	ctx := NewContext(a, Builtins())
 	e := MustCompile("b", nil).expr.(*PathExpr)
 	if got, err := e.Eval(ctx); err != nil || len(got) != 3 {

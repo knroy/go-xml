@@ -8,29 +8,29 @@ import "testing"
 func detachedSample() []*Node {
 	var all []*Node
 	el := func(parent *Node, name string, ns ...string) *Node {
-		e := &Node{Kind: KindElement, Name: QName{Local: name}}
+		e := &Node{kind: KindElement, name: QName{Local: name}}
 		if parent != nil {
 			parent.AppendChild(e)
 		}
 		for i := 0; i < len(ns); i += 2 {
 			e.AddNamespace(ns[i], ns[i+1])
 		}
-		e.AddAttr(&Node{Name: QName{Local: "a"}, Value: "1"})
-		e.AddAttr(&Node{Name: QName{Local: "b"}, Value: "2"})
+		e.AddAttr(&Node{name: QName{Local: "a"}, value: "1"})
+		e.AddAttr(&Node{name: QName{Local: "b"}, value: "2"})
 		all = append(all, e)
-		all = append(all, e.Namespaces...)
-		all = append(all, e.Attrs...)
+		all = append(all, e.namespaces...)
+		all = append(all, e.attrs...)
 		return e
 	}
 	r := el(nil, "r", "p", "u1", "q", "u2")
 	b := el(r, "b", "s", "u3")
-	r.AppendChild(&Node{Kind: KindText, Value: "t"})
-	all = append(all, r.Children[1])
+	r.AppendChild(&Node{kind: KindText, value: "t"})
+	all = append(all, r.children[1])
 	c := el(r, "c")
 	el(b, "d", "", "u4")
 	el(c, "e")
 	// The namespace axis synthesizes inherited bindings: c has no node for p.
-	all = append(all, &Node{Kind: KindNamespace, Name: QName{Local: "p"}, Value: "u1", Parent: c})
+	all = append(all, &Node{kind: KindNamespace, name: QName{Local: "p"}, value: "u1", parent: c})
 	return all
 }
 
@@ -59,39 +59,39 @@ func refCompareDetached(n, o *Node) int {
 }
 
 func refSiblingRank(p, n *Node) int {
-	if n.Kind == KindNamespace {
-		for i, ns := range p.Namespaces {
+	if n.kind == KindNamespace {
+		for i, ns := range p.namespaces {
 			if ns == n {
 				return i
 			}
 		}
 		i := 0
 		for prefix := range p.InScopeNamespaces() {
-			if prefix < n.Name.Local {
+			if prefix < n.name.Local {
 				i++
 			}
 		}
 		return i
 	}
-	base := len(p.Namespaces)
+	base := len(p.namespaces)
 	if m := len(p.InScopeNamespaces()); m > base {
 		base = m
 	}
-	if n.Kind == KindAttribute {
-		for i, a := range p.Attrs {
+	if n.kind == KindAttribute {
+		for i, a := range p.attrs {
 			if a == n {
 				return base + i
 			}
 		}
-		return base + len(p.Attrs)
+		return base + len(p.attrs)
 	}
-	base += len(p.Attrs)
-	for i, c := range p.Children {
+	base += len(p.attrs)
+	for i, c := range p.children {
 		if c == n {
 			return base + i
 		}
 	}
-	return base + len(p.Children)
+	return base + len(p.children)
 }
 
 // Skipping the namespace base for two non-namespace siblings must not change
@@ -104,7 +104,7 @@ func TestCompareDetachedSkipsNamespaceBase(t *testing.T) {
 				continue
 			}
 			if got, want := a.Compare(b), refCompareDetached(a, b); got != want {
-				t.Fatalf("%v %q vs %v %q: %d, want %d", a.Kind, a.Name.Local, b.Kind, b.Name.Local, got, want)
+				t.Fatalf("%v %q vs %v %q: %d, want %d", a.kind, a.name.Local, b.kind, b.name.Local, got, want)
 			}
 		}
 	}

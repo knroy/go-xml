@@ -213,9 +213,9 @@ func signatureTemplate(refs []xsRef) string {
 func envelop(t *testing.T, src string, doc *xdm.Node, sig string) string {
 	t.Helper()
 	root := documentElement(doc)
-	qn := root.Name.Local
-	if root.Name.Prefix != "" {
-		qn = root.Name.Prefix + ":" + qn
+	qn := root.Name().Local
+	if root.Name().Prefix != "" {
+		qn = root.Name().Prefix + ":" + qn
 	}
 	if i := strings.LastIndex(src, "</"+qn); i >= 0 {
 		return src[:i] + sig + src[i:]
@@ -229,8 +229,8 @@ func envelop(t *testing.T, src string, doc *xdm.Node, sig string) string {
 }
 
 func documentElement(doc *xdm.Node) *xdm.Node {
-	for _, c := range doc.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range doc.Children() {
+		if c.Kind() == xdm.KindElement {
 			return c
 		}
 	}
@@ -384,14 +384,14 @@ func declaredPrefixes(doc *xdm.Node) []string {
 	set := map[string]bool{"": true}
 	var walk func(*xdm.Node)
 	walk = func(n *xdm.Node) {
-		if n.Kind == xdm.KindElement {
+		if n.Kind() == xdm.KindElement {
 			for p := range n.InScopeNamespaces() {
 				if p != "xml" {
 					set[p] = true
 				}
 			}
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}
@@ -553,9 +553,9 @@ func subsetCases(t *testing.T) []subsetCase {
 			t.Fatalf("%s: template has no Reference or XPath", name)
 		}
 		var input string
-		for _, a := range ref.Attrs {
-			if a.Name.Local == "URI" {
-				input = a.Value
+		for a := range ref.Attrs() {
+			if a.Name().Local == "URI" {
+				input = a.Value()
 			}
 		}
 		src, err := os.ReadFile(filepath.Join(dir, input))

@@ -36,10 +36,10 @@ var globalOnlyAttrs = map[string]bool{"static": true, "visibility": true}
 // checkVarParamAttrs applies the positional attribute rules to one
 // xsl:variable or xsl:param.
 func checkVarParamAttrs(el *xdm.Node) error {
-	if el.Name.URI != xdm.NSXSL {
+	if el.Name().URI != xdm.NSXSL {
 		return nil
 	}
-	if el.Name.Local != "variable" && el.Name.Local != "param" {
+	if el.Name().Local != "variable" && el.Name().Local != "param" {
 		return nil
 	}
 	// Only a module that declares 3.0 or later. These attributes are XSLT
@@ -49,21 +49,21 @@ func checkVarParamAttrs(el *xdm.Node) error {
 	if !moduleAtLeast30(el) {
 		return nil
 	}
-	global := el.Parent != nil && el.Parent.Kind == xdm.KindElement &&
-		el.Parent.Name.URI == xdm.NSXSL &&
-		(isStylesheetRootName(el.Parent.Name.Local) ||
+	global := el.Parent() != nil && el.Parent().Kind() == xdm.KindElement &&
+		el.Parent().Name().URI == xdm.NSXSL &&
+		(isStylesheetRootName(el.Parent().Name().Local) ||
 			// A declaration inside xsl:override stands in for a top-level
 			// declaration of the used package, so it carries the same
 			// attributes -- visibility above all, since 3.5.4 requires the
 			// override to restate the component's visibility.
-			el.Parent.Name.Local == "override")
+			el.Parent().Name().Local == "override")
 
-	for _, a := range el.Attrs {
-		if a.Name.URI != "" {
+	for a := range el.Attrs() {
+		if a.Name().URI != "" {
 			continue
 		}
 		switch {
-		case a.Name.Local == "visibility" && el.Name.Local == "param":
+		case a.Name().Local == "visibility" && el.Name().Local == "param":
 			// 9.2's signature for xsl:param has no visibility in any
 			// position. An earlier draft allowed it, which is what these
 			// cases are testing the removal of, so the code is XTSE0090 --
@@ -71,8 +71,8 @@ func checkVarParamAttrs(el *xdm.Node) error {
 			// XTSE0020.
 			return fmt.Errorf(
 				"XTSE0090: visibility is not an attribute of xsl:param")
-		case a.Name.Local == "visibility" && isStaticDecl(el) &&
-			a.Value != "private":
+		case a.Name().Local == "visibility" && isStaticDecl(el) &&
+			a.Value() != "private":
 			// 9.5: "When the static attribute is present with the value yes,
 			// the visibility attribute must not have a value other than
 			// private." A static variable's value is used while the package
@@ -80,20 +80,20 @@ func checkVarParamAttrs(el *xdm.Node) error {
 			// independent compilation impossible.
 			return fmt.Errorf(
 				"XTSE0020: a static xsl:%s may not have visibility=%q; "+
-					"only private is allowed", el.Name.Local, a.Value)
-		case globalOnlyAttrs[a.Name.Local] && !global:
+					"only private is allowed", el.Name().Local, a.Value())
+		case globalOnlyAttrs[a.Name().Local] && !global:
 			return fmt.Errorf(
 				"XTSE0020: %s is only allowed on a top-level xsl:%s, not on "+
-					"one inside a %s", a.Name.Local, el.Name.Local,
-				el.Parent.Name.Lexical())
-		case a.Name.Local == "tunnel" && global:
+					"one inside a %s", a.Name().Local, el.Name().Local,
+				el.Parent().Name().Lexical())
+		case a.Name().Local == "tunnel" && global:
 			// 9.2: a stylesheet parameter is supplied by the calling
 			// application rather than passed down a template chain, so
 			// tunnelling has nothing to mean here.
 			return fmt.Errorf(
 				"XTSE0020: tunnel is not allowed on a top-level xsl:%s; "+
 					"a stylesheet parameter is set by the caller",
-				el.Name.Local)
+				el.Name().Local)
 		}
 	}
 	return nil
@@ -110,12 +110,12 @@ func checkVarParamAttrs(el *xdm.Node) error {
 // version="3.0" module and expects the parameter to work.
 func moduleAtLeast30(el *xdm.Node) bool {
 	var outermost *xdm.Node
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
 		outermost = cur
-		if cur.Name.URI == xdm.NSXSL && isStylesheetRootName(cur.Name.Local) {
+		if cur.Name().URI == xdm.NSXSL && isStylesheetRootName(cur.Name().Local) {
 			return versionAt(cur) >= 3.0
 		}
 	}

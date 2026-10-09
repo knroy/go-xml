@@ -18,7 +18,7 @@ func (r *fixedDocResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) 
 	if err != nil {
 		return nil, err
 	}
-	t.Root.DocumentURI = r.uri
+	t.Root.SetDocumentURI(r.uri)
 	return t, nil
 }
 

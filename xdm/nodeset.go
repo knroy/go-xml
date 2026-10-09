@@ -91,7 +91,7 @@ func inTreeOrder(seq Sequence) bool {
 	var prev *Node
 	for _, it := range seq {
 		n, ok := it.(*Node)
-		if !ok || n.tree == nil || n.Kind == KindNamespace {
+		if !ok || n.tree == nil || n.kind == KindNamespace {
 			return false
 		}
 		if prev != nil && (n.tree != prev.tree || n.order <= prev.order) {
@@ -232,11 +232,11 @@ func AtomizeChecked(seq Sequence) (Sequence, error) {
 			// confidently wrong answer rather than a missing one; the split
 			// between the two functions is the same one FunctionItem makes
 			// above, and for the same reason.
-			if v.NoTypedValue {
+			if v.noTypedValue {
 				return nil, Errorf("FOTY0012",
 					"the element %s has no typed value: it was validated "+
 						"against a complex type with element-only content",
-					v.Name.Lexical())
+					v.name.Lexical())
 			}
 		case *FunctionItem:
 			return nil, Errorf("FOTY0013",
@@ -316,8 +316,8 @@ func numberDetachedRoots(ns []*Node) {
 			continue
 		}
 		root := n
-		for root.Parent != nil {
-			root = root.Parent
+		for root.parent != nil {
+			root = root.parent
 		}
 		detachedRootID(root)
 	}

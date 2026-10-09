@@ -336,7 +336,7 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 			p.errs = append(p.errs, err)
 			return nil
 		}
-		want := icKindOf(el.Name.Local)
+		want := icKindOf(el.Name().Local)
 		// The reference is a placeholder until the constraint it names
 		// has been read, which may be in a document not yet seen.
 		placeholder := &IdentityConstraint{Name: target}
@@ -351,7 +351,7 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 			// may only name a key. ibmData S2_2_4 s2_2_4si02 pins this.
 			if found.Kind != want {
 				return errorAt(el, "src-identity-constraint",
-					"%s ref=%q names a %s", el.Name.Local, ref, found.Kind)
+					"%s ref=%q names a %s", el.Name().Local, ref, found.Kind)
 			}
 			// The reference resolves to the named component itself. Recording
 			// it here lets resolveICRefs replace the placeholder in the
@@ -380,12 +380,12 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 		return nil
 	}
 
-	ic := &IdentityConstraint{Name: p.qnameFor(name), Kind: icKindOf(el.Name.Local)}
+	ic := &IdentityConstraint{Name: p.qnameFor(name), Kind: icKindOf(el.Name().Local)}
 
 	sel := p.childElement(el, "selector")
 	if sel == nil {
 		p.errs = append(p.errs, errorAt(el, "",
-			"%s %q has no selector", el.Name.Local, name))
+			"%s %q has no selector", el.Name().Local, name))
 		return nil
 	}
 	path, err := parseICPath(sel.AttrValue("xpath"), false)
@@ -410,7 +410,7 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 	}
 	if len(ic.Fields) == 0 {
 		p.errs = append(p.errs, errorAt(el, "",
-			"%s %q has no fields", el.Name.Local, name))
+			"%s %q has no fields", el.Name().Local, name))
 		return nil
 	}
 
@@ -550,12 +550,12 @@ func (p *parser) resolveICPath(el *xdm.Node, path *ICPath) {
 // xpathDefaultNamespace returns the XSD 1.1 xpathDefaultNamespace in force at
 // an element, looking outward to the schema element for the document default.
 func (p *parser) xpathDefaultNamespace(el *xdm.Node) (string, bool) {
-	for cur := el; cur != nil; cur = cur.Parent {
+	for cur := el; cur != nil; cur = cur.Parent() {
 		a := cur.Attr("", "xpathDefaultNamespace")
 		if a == nil {
 			continue
 		}
-		switch a.Value {
+		switch a.Value() {
 		case "##targetNamespace":
 			return p.doc.targetNS, true
 		case "##defaultNamespace":
@@ -575,7 +575,7 @@ func (p *parser) xpathDefaultNamespace(el *xdm.Node) (string, bool) {
 			// a default this one is overriding.
 			return "", true
 		default:
-			return a.Value, true
+			return a.Value(), true
 		}
 	}
 	return "", false

@@ -20,7 +20,9 @@ func TestNamedDescendantWalk(t *testing.T) {
 	var contexts []*xdm.Node
 	walkAxis(tree.Root, AxisDescendantOrSelf, func(n *xdm.Node) bool {
 		contexts = append(contexts, n)
-		contexts = append(contexts, n.Attrs...)
+		for i := range n.NumAttrs() {
+			contexts = append(contexts, n.AttrAt(i))
+		}
 		return true
 	})
 	p := "urn:p"
@@ -49,11 +51,11 @@ func TestNamedDescendantWalk(t *testing.T) {
 					t.Fatal(err)
 				}
 				if len(got) != len(want) {
-					t.Fatalf("%v::%s from %s %q: %d nodes, want %d", axis, nt, n.Kind, n.Name.Local, len(got), len(want))
+					t.Fatalf("%v::%s from %s %q: %d nodes, want %d", axis, nt, n.Kind(), n.Name().Local, len(got), len(want))
 				}
 				for i := range got {
 					if got[i] != want[i] {
-						t.Fatalf("%v::%s from %s %q: node %d differs", axis, nt, n.Kind, n.Name.Local, i)
+						t.Fatalf("%v::%s from %s %q: node %d differs", axis, nt, n.Kind(), n.Name().Local, i)
 					}
 				}
 			}

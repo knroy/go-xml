@@ -98,7 +98,7 @@ func registerOutputFuncs(l *xpath.Library) {
 				// FODC0005 rather than XTDE1370: the node was supplied, so
 				// there is no question of a missing focus — the argument
 				// simply does not identify a document.
-				if n.Root().Kind != xdm.KindDocument {
+				if n.Root().Kind() != xdm.KindDocument {
 					return nil, fmt.Errorf(
 						"FODC0005: the root of the tree containing the second "+
 							"argument of %s() is not a document node", fname)
@@ -110,7 +110,7 @@ func registerOutputFuncs(l *xpath.Library) {
 				if public {
 					return xdm.One(xdm.NewString(pub)), nil
 				}
-				return xdm.One(xdm.NewAnyURI(resolveAgainst(n.Root().BaseURI, sys))), nil
+				return xdm.One(xdm.NewAnyURI(resolveAgainst(n.Root().BaseURI(), sys))), nil
 			},
 		})
 	}

@@ -81,15 +81,15 @@ func registerCopyFuncs(l *xpath.Library) {
 // declares a as xs:QName, then calls copy-of($e/@*).
 func checkParentlessQName(it xdm.Item) error {
 	n, ok := it.(*xdm.Node)
-	if !ok || n.Kind != xdm.KindAttribute {
+	if !ok || n.Kind() != xdm.KindAttribute {
 		return nil
 	}
-	if !isNamespaceSensitiveType(xdm.TypeEnvOf(n), n.TypeAnnotation) {
+	if !isNamespaceSensitiveType(xdm.TypeEnvOf(n), n.TypeAnnotation()) {
 		return nil
 	}
 	return fmt.Errorf("XTTE0950: fn:copy-of cannot copy attribute %s on its "+
 		"own, because its content is namespace-sensitive and the copy has no "+
-		"parent element to keep the prefix bound", n.Name.Lexical())
+		"parent element to keep the prefix bound", n.Name().Lexical())
 }
 
 // mapItemsChecked is mapItems with a per-item precondition applied first.
@@ -135,7 +135,7 @@ func copyItem(it xdm.Item) xdm.Item {
 		// (including maps and arrays), then it returns that item unchanged."
 		return it
 	}
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindDocument:
 		return copyDocumentNode(n)
 	case xdm.KindAttribute, xdm.KindNamespace:
@@ -143,11 +143,7 @@ func copyItem(it xdm.Item) xdm.Item {
 		// one too, but only these two kinds have no children to walk, and
 		// spelling them out keeps the parentlessness deliberate rather than
 		// incidental.
-		c := &xdm.Node{
-			Kind:  n.Kind,
-			Name:  n.Name,
-			Value: n.Value,
-		}
+		c := xdm.NewNode(n.Kind(), n.Name(), n.Value())
 		// A copy of an assessed node was assessed. fn:copy-of and fn:snapshot
 		// preserve type annotations, and every PSVI property is part of what
 		// they preserve — validation-1203 takes both of a nilled element and
@@ -156,7 +152,7 @@ func copyItem(it xdm.Item) xdm.Item {
 		return c
 	}
 	c := deepCopy(n)
-	if n.Kind == xdm.KindElement {
+	if n.Kind() == xdm.KindElement {
 		// copy-namespaces="yes": the copy is lifted out of the tree whose
 		// ancestors declared the prefixes its own names use, so those
 		// declarations come with it.
@@ -179,11 +175,11 @@ func snapshotItem(it xdm.Item) xdm.Item {
 	if !ok {
 		return it
 	}
-	if n.Kind == xdm.KindDocument {
+	if n.Kind() == xdm.KindDocument {
 		return copyDocumentNode(n)
 	}
 	var spine []*xdm.Node
-	for a := n.Parent; a != nil; a = a.Parent {
+	for a := n.Parent(); a != nil; a = a.Parent() {
 		spine = append(spine, a)
 	}
 	if len(spine) == 0 {
@@ -191,7 +187,7 @@ func snapshotItem(it xdm.Item) xdm.Item {
 	}
 
 	tree := xdm.NewTree()
-	tree.Root.BaseURI = spine[len(spine)-1].BaseURI
+	tree.Root.SetBaseURI(spine[len(spine)-1].BaseURI())
 	// 27.2: a snapshot's root "has the same unparsed entities as the tree
 	// from which it was taken". sf-unparsed-entity-03 hands snapshot(.) to an
 	// xsl:function and asks unparsed-entity-uri of it there.
@@ -200,31 +196,23 @@ func snapshotItem(it xdm.Item) xdm.Item {
 	// Outermost first: spine was built from the node upwards.
 	for i := len(spine) - 1; i >= 0; i-- {
 		a := spine[i]
-		if a.Kind != xdm.KindElement {
+		if a.Kind() != xdm.KindElement {
 			continue
 		}
-		c := &xdm.Node{
-			Kind:    xdm.KindElement,
-			Name:    a.Name,
-			BaseURI: a.BaseURI,
-			// "a type annotation of xs:anyType": the ancestor's own
-			// annotation described a node with all its children, and this
-			// copy has only one of them, so the annotation would be a claim
-			// about content that is no longer there.
-			TypeAnnotation: "anyType",
+		c := xdm.NewNode(xdm.KindElement, a.Name(), "")
+		c.SetBaseURI(a.BaseURI())
+		c.ApplyTyping(xdm.Typing{TypeAnnotation: "anyType"})
+		for ns := range a.NamespaceDecls() {
+			c.AddNamespace(ns.Name().Local, ns.Value())
 		}
-		for _, ns := range a.Namespaces {
-			c.AddNamespace(ns.Name.Local, ns.Value)
-		}
-		for _, at := range a.Attrs {
+		for at := range a.Attrs() {
 			// 18.4 forces xs:anyType and false is-id/is-nilled onto the
 			// ancestor ELEMENT above, because that copy holds only one of its
 			// children and its own annotation would describe content that is
 			// no longer there. Its attributes are simply "copies of the
 			// attributes" — nothing about them changed, so every PSVI
 			// property travels.
-			ac := &xdm.Node{Kind: xdm.KindAttribute, Name: at.Name,
-				Value: at.Value}
+			ac := xdm.NewNode(xdm.KindAttribute, at.Name(), at.Value())
 			ac.CopyTypingFrom(at)
 			c.AddAttr(ac)
 		}
@@ -233,7 +221,7 @@ func snapshotItem(it xdm.Item) xdm.Item {
 	}
 
 	var bottom *xdm.Node
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindAttribute:
 		// An attribute's snapshot hangs off its own element rather than
 		// becoming a child of it: an attribute is not in the child axis, and
@@ -246,8 +234,8 @@ func snapshotItem(it xdm.Item) xdm.Item {
 		// attributes of the same name, which is not a well-formed element at
 		// all. snapshot-0102a compares fn:snapshot against the reference
 		// implementation in the spec and reports the duplicate.
-		for _, at := range parent.Attrs {
-			if at.Name == n.Name {
+		for at := range parent.Attrs() {
+			if at.Name() == n.Name() {
 				tree.Finalize()
 				return at
 			}
@@ -263,15 +251,15 @@ func snapshotItem(it xdm.Item) xdm.Item {
 		// Either way the node returned must be the one attached to the tree:
 		// returning the detached copy left the snapshot of a namespace node
 		// with no parent, which is what snapshot-0101f asks about.
-		for _, ns := range parent.Namespaces {
-			if ns.Name.Local == n.Name.Local {
+		for ns := range parent.NamespaceDecls() {
+			if ns.Name().Local == n.Name().Local {
 				tree.Finalize()
 				return ns
 			}
 		}
-		parent.AddNamespace(n.Name.Local, n.Value)
+		parent.AddNamespace(n.Name().Local, n.Value())
 		tree.Finalize()
-		return parent.Namespaces[len(parent.Namespaces)-1]
+		return parent.NamespaceDeclAt(parent.NumNamespaceDecls() - 1)
 	default:
 		bottom = copyItem(n).(*xdm.Node)
 	}

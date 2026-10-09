@@ -71,7 +71,7 @@ func (t errorNameTest) matches(uri, local string) bool {
 
 // compileTry builds an xsl:try.
 func (c *compiler) compileTry(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
-	instr := &tryInstr{module: n.BaseURI}
+	instr := &tryInstr{module: n.BaseURI()}
 	switch v := strings.TrimSpace(n.AttrValue("rollback-output")); v {
 	case "", "yes", "true", "1":
 	case "no", "false", "0":
@@ -94,7 +94,7 @@ func (c *compiler) compileTry(n *xdm.Node, ns xpath.NamespaceResolver) (Instruct
 	// be rejected as misplaced — which is right for a stray one.
 	var bodyNodes []*xdm.Node
 	seenCatch := false
-	for _, ch := range n.Children {
+	for ch := range n.Children() {
 		if isXSL(ch, "catch") {
 			seenCatch = true
 			cl, err := c.compileCatch(ch, ch)
@@ -110,10 +110,10 @@ func (c *compiler) compileTry(n *xdm.Node, ns xpath.NamespaceResolver) (Instruct
 			// the try body. xsl:fallback is exempt — it is permitted
 			// anywhere in an instruction's content and never instantiated
 			// here — and so is the whitespace between the clauses.
-			if ch.Kind == xdm.KindElement && !isXSL(ch, "fallback") {
+			if ch.Kind() == xdm.KindElement && !isXSL(ch, "fallback") {
 				return nil, fmt.Errorf(
 					"XTSE0010: %s follows xsl:catch in xsl:try; the xsl:catch "+
-						"elements must come last", ch.Name.Lexical())
+						"elements must come last", ch.Name().Lexical())
 			}
 			continue
 		}
@@ -126,7 +126,7 @@ func (c *compiler) compileTry(n *xdm.Node, ns xpath.NamespaceResolver) (Instruct
 		// XTSE3140: with @select the only permitted content is xsl:catch and
 		// xsl:fallback, so anything the loop kept as body is misplaced.
 		for _, ch := range bodyNodes {
-			if ch.Kind == xdm.KindElement && !isXSL(ch, "fallback") {
+			if ch.Kind() == xdm.KindElement && !isXSL(ch, "fallback") {
 				return nil, fmt.Errorf(
 					"XTSE3140: xsl:try has a select attribute, so it may not " +
 						"also have a sequence constructor")

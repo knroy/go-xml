@@ -159,10 +159,7 @@ func treeOf(res *xslt.Result) *xdm.Node {
 		case *xdm.Node:
 			spliceInto(tree.Root, v)
 		case *xdm.Atomic:
-			tree.Root.AppendChild(&xdm.Node{
-				Kind:  xdm.KindText,
-				Value: v.String(),
-			})
+			tree.Root.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, v.String()))
 		}
 	}
 	tree.Finalize()
@@ -620,19 +617,19 @@ func treesEqual(a, b *xdm.Node, normalizeSpace bool) bool {
 	}
 	for i := range ac {
 		x, y := ac[i], bc[i]
-		if x.Kind != y.Kind {
+		if x.Kind() != y.Kind() {
 			return false
 		}
-		switch x.Kind {
+		switch x.Kind() {
 		case xdm.KindElement:
-			if !sameExpandedName(x.Name, y.Name) || !attrsEqual(x, y) {
+			if !sameExpandedName(x.Name(), y.Name()) || !attrsEqual(x, y) {
 				return false
 			}
 			if !treesEqual(x, y, normalizeSpace) {
 				return false
 			}
 		case xdm.KindText, xdm.KindComment:
-			xv, yv := x.Value, y.Value
+			xv, yv := x.Value(), y.Value()
 			if normalizeSpace {
 				xv, yv = normalize(xv), normalize(yv)
 			}
@@ -640,7 +637,7 @@ func treesEqual(a, b *xdm.Node, normalizeSpace bool) bool {
 				return false
 			}
 		case xdm.KindPI:
-			if !sameExpandedName(x.Name, y.Name) || x.Value != y.Value {
+			if !sameExpandedName(x.Name(), y.Name()) || x.Value() != y.Value() {
 				return false
 			}
 		}
@@ -652,9 +649,9 @@ func treesEqual(a, b *xdm.Node, normalizeSpace bool) bool {
 // whitespace-only text when normalising.
 func contentOf(n *xdm.Node, normalizeSpace bool) []*xdm.Node {
 	var out []*xdm.Node
-	for _, c := range n.Children {
-		if normalizeSpace && c.Kind == xdm.KindText &&
-			strings.TrimSpace(c.Value) == "" {
+	for c := range n.Children() {
+		if normalizeSpace && c.Kind() == xdm.KindText &&
+			strings.TrimSpace(c.Value()) == "" {
 			continue
 		}
 		out = append(out, c)
@@ -676,14 +673,14 @@ func sameExpandedName(a, b xdm.QName) bool {
 }
 
 func attrsEqual(a, b *xdm.Node) bool {
-	if len(a.Attrs) != len(b.Attrs) {
+	if a.NumAttrs() != b.NumAttrs() {
 		return false
 	}
 	// Attribute order is not significant, so each is looked up by name.
-	for _, x := range a.Attrs {
+	for x := range a.Attrs() {
 		found := false
-		for _, y := range b.Attrs {
-			if sameExpandedName(x.Name, y.Name) && x.Value == y.Value {
+		for y := range b.Attrs() {
+			if sameExpandedName(x.Name(), y.Name()) && x.Value() == y.Value() {
 				found = true
 				break
 			}
@@ -741,8 +738,8 @@ func (mapNS) DefaultFunctionNamespace() string  { return xdm.NSFN }
 // document node anywhere beneath it is passed through untouched, which is the
 // overwhelmingly common case.
 func spliceInto(parent, n *xdm.Node) {
-	if n.Kind == xdm.KindDocument {
-		for _, c := range n.Children {
+	if n.Kind() == xdm.KindDocument {
+		for c := range n.Children() {
 			spliceInto(parent, c)
 		}
 		return
@@ -758,17 +755,21 @@ func spliceInto(parent, n *xdm.Node) {
 	// URI and the type annotation — and the namespace count in element-0306
 	// went from three to two because the node was no longer the one the
 	// engine built.
-	copied := &xdm.Node{
-		Kind:       n.Kind,
-		Name:       n.Name,
-		Value:      n.Value,
-		Attrs:      n.Attrs,
-		Namespaces: n.Namespaces,
-		BaseURI:    n.BaseURI,
+	copied := xdm.NewNode(n.Kind(), n.Name(), n.Value())
+	attrs := make([]*xdm.Node, n.NumAttrs())
+	for i := range attrs {
+		attrs[i] = n.AttrAt(i)
 	}
+	copied.SetAttrs(attrs)
+	nss := make([]*xdm.Node, n.NumNamespaceDecls())
+	for i := range nss {
+		nss[i] = n.NamespaceDeclAt(i)
+	}
+	copied.SetNamespaceDecls(nss)
+	copied.SetBaseURI(n.BaseURI())
 	copied.CopyTypingFrom(n)
 	parent.AppendChild(copied)
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		spliceInto(copied, c)
 	}
 }
@@ -791,7 +792,7 @@ func needsRebuild(res *xslt.Result) bool {
 		if !ok {
 			continue
 		}
-		if n.Kind == xdm.KindDocument || hasDocumentChild(n) {
+		if n.Kind() == xdm.KindDocument || hasDocumentChild(n) {
 			return true
 		}
 	}
@@ -800,8 +801,8 @@ func needsRebuild(res *xslt.Result) bool {
 
 // hasDocumentChild reports whether a document node appears anywhere below n.
 func hasDocumentChild(n *xdm.Node) bool {
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindDocument || hasDocumentChild(c) {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindDocument || hasDocumentChild(c) {
 			return true
 		}
 	}

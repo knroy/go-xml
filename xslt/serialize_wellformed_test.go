@@ -10,20 +10,20 @@ import (
 
 func TestSerializeRejectsMalformedCommentAndPI(t *testing.T) {
 	for _, n := range []*xdm.Node{
-		{Kind: xdm.KindComment, Value: "a--b"},
-		{Kind: xdm.KindComment, Value: "a-"},
-		{Kind: xdm.KindPI, Name: xdm.QName{Local: "p"}, Value: "a?>b"},
-		{Kind: xdm.KindPI, Name: xdm.QName{Local: "xml"}, Value: "a"},
-		{Kind: xdm.KindComment, Value: "a\x01b"},
+		xdm.NewNode(xdm.KindComment, xdm.QName{}, "a--b"),
+		xdm.NewNode(xdm.KindComment, xdm.QName{}, "a-"),
+		xdm.NewNode(xdm.KindPI, xdm.QName{Local: "p"}, "a?>b"),
+		xdm.NewNode(xdm.KindPI, xdm.QName{Local: "xml"}, "a"),
+		xdm.NewNode(xdm.KindComment, xdm.QName{}, "a\x01b"),
 	} {
 		var out bytes.Buffer
 		err := Serialize(&out, xdm.Sequence{n}, OutputSettings{Method: "xml", OmitXMLDecl: true}, nil)
 		if err == nil {
-			t.Errorf("Serialize(%v) succeeded with %q", n.Kind, out.String())
+			t.Errorf("Serialize(%v) succeeded with %q", n.Kind(), out.String())
 			continue
 		}
 		if !strings.Contains(err.Error(), "SERE000") {
-			t.Errorf("Serialize(%v) error = %v, want SERE code", n.Kind, err)
+			t.Errorf("Serialize(%v) error = %v, want SERE code", n.Kind(), err)
 		}
 	}
 }
@@ -35,8 +35,7 @@ func TestSerializeRejectsMalformedCommentAndPI(t *testing.T) {
 // only because the malformed output failed to parse and the judge fell back to
 // comparing text, which happened to match.
 func TestSerializeBindsElementPrefixOnce(t *testing.T) {
-	n := &xdm.Node{Kind: xdm.KindElement,
-		Name: xdm.QName{Prefix: "y", Local: "transform", URI: "urn:wanted"}}
+	n := xdm.NewNode(xdm.KindElement, xdm.QName{Prefix: "y", Local: "transform", URI: "urn:wanted"}, "")
 	// Two bindings for one prefix, which is the shape the real case has: the
 	// competing aliases resolve to the SAME uri, so a guard that only drops a
 	// differing one writes both. The differing binding is added as well, since
@@ -62,8 +61,7 @@ func TestSerializeBindsElementPrefixOnce(t *testing.T) {
 	// The other half of the rule: when the competing binding names a
 	// different uri, the element's own must still be the one written, or the
 	// name it was serialised under is unresolvable.
-	m := &xdm.Node{Kind: xdm.KindElement,
-		Name: xdm.QName{Prefix: "y", Local: "transform", URI: "urn:wanted"}}
+	m := xdm.NewNode(xdm.KindElement, xdm.QName{Prefix: "y", Local: "transform", URI: "urn:wanted"}, "")
 	m.AddNamespace("y", "urn:other")
 	var out2 bytes.Buffer
 	if err := Serialize(&out2, xdm.Sequence{m},

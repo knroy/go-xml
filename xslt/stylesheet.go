@@ -637,11 +637,11 @@ func stylesheetBase(doc *xdm.Node, opt string) string {
 	// the document node alone ignored it, so a stylesheet that declared its
 	// own base got the file it happened to be loaded from instead.
 	if doc != nil {
-		if root := firstElement(doc); root != nil && root.BaseURI != "" {
-			return root.BaseURI
+		if root := firstElement(doc); root != nil && root.BaseURI() != "" {
+			return root.BaseURI()
 		}
-		if doc.BaseURI != "" {
-			return doc.BaseURI
+		if doc.BaseURI() != "" {
+			return doc.BaseURI()
 		}
 	}
 	return opt
@@ -695,8 +695,8 @@ func forgetSharedNS() {
 // the result: the map may be shared and must not be modified.
 func inScopeNamespacesShared(el *xdm.Node) map[string]string {
 	d := el
-	for d != nil && (d.Kind != xdm.KindElement || len(d.Namespaces) == 0) {
-		d = d.Parent
+	for d != nil && (d.Kind() != xdm.KindElement || d.NumNamespaceDecls() == 0) {
+		d = d.Parent()
 	}
 	if d == nil {
 		return el.InScopeNamespaces()
@@ -1203,7 +1203,7 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 	return &nsResolver{
 		bindings:  inScopeNamespacesShared(el),
 		defaultNS: defaultElementNS,
-		baseURI:   el.BaseURI,
+		baseURI:   el.BaseURI(),
 		collation: defaultCollationAt(el),
 		compat:    compatModeAt(el),
 		schema:    compileSchema,
@@ -1702,17 +1702,17 @@ func newStylesheetFuncs() *xpath.Library {
 // element and xpath-default-namespace on an XSLT element, and the innermost
 // occurrence wins — the same scoping [xsl:]default-collation has.
 func xpathDefaultNamespaceAt(el *xdm.Node) string {
-	for n := el; n != nil; n = n.Parent {
-		if n.Kind != xdm.KindElement {
+	for n := el; n != nil; n = n.Parent() {
+		if n.Kind() != xdm.KindElement {
 			continue
 		}
-		if n.Name.URI == xdm.NSXSL {
+		if n.Name().URI == xdm.NSXSL {
 			if a := n.Attr("", "xpath-default-namespace"); a != nil {
-				return a.Value
+				return a.Value()
 			}
 		}
 		if a := n.Attr(xdm.NSXSL, "xpath-default-namespace"); a != nil {
-			return a.Value
+			return a.Value()
 		}
 	}
 	return ""
@@ -1726,19 +1726,19 @@ func xpathDefaultNamespaceAt(el *xdm.Node) string {
 // the implementation recognises is used — which is how a stylesheet names a
 // preferred collation and a fallback in one attribute.
 func defaultCollationAt(el *xdm.Node) string {
-	for n := el; n != nil; n = n.Parent {
-		if n.Kind != xdm.KindElement {
+	for n := el; n != nil; n = n.Parent() {
+		if n.Kind() != xdm.KindElement {
 			continue
 		}
 		v := ""
-		if n.Name.URI == xdm.NSXSL {
+		if n.Name().URI == xdm.NSXSL {
 			if a := n.Attr("", "default-collation"); a != nil {
-				v = a.Value
+				v = a.Value()
 			}
 		}
 		if v == "" {
 			if a := n.Attr(xdm.NSXSL, "default-collation"); a != nil {
-				v = a.Value
+				v = a.Value()
 			}
 		}
 		if v == "" {

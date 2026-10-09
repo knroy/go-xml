@@ -242,12 +242,12 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 			// the content rather than refusing them. XQuery does refuse them,
 			// and the check has to happen here because AppendNode reports
 			// nothing to a caller.
-			if v.Kind == xdm.KindAttribute {
+			if v.Kind() == xdm.KindAttribute {
 				if el := out.b.Open(); el != nil {
-					if len(el.Children) > 0 {
+					if el.NumChildren() > 0 {
 						return fmt.Errorf("XQTY0024: the attribute %s follows a "+
 							"node that is not an attribute in the content of "+
-							"element %s", v.Name.Lexical(), el.Name.Lexical())
+							"element %s", v.Name().Lexical(), el.Name().Lexical())
 					}
 					// The attribute is added here rather than through
 					// AppendNode, which discards what AddAttribute returns
@@ -264,7 +264,7 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 					// union member and resolved primitive to be guessed at
 					// from the process-global registries.
 					if err := out.b.AddAttributeWithTyping(
-						v.Name, v.Value, xdm.TypingOf(v)); err != nil {
+						v.Name(), v.Value(), xdm.TypingOf(v)); err != nil {
 						return err
 					}
 					continue
@@ -272,14 +272,14 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 			}
 			before := 0
 			if el := out.b.Open(); el != nil {
-				before = len(el.Children)
+				before = el.NumChildren()
 			}
 			// The namespaces in scope at the *source* have to be read before
 			// the node is appended: appending re-parents a copy of it, and
 			// from there the ancestors that supplied most of those bindings
 			// are no longer reachable.
 			var srcScope map[string]string
-			if v.Kind == xdm.KindElement && out.b.Open() != nil {
+			if v.Kind() == xdm.KindElement && out.b.Open() != nil {
 				srcScope = v.InScopeNamespaces()
 			}
 			if out.b.Open() != nil {
@@ -295,8 +295,8 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 				v = xdmbuild.DeepCopy(v)
 			}
 			out.b.AppendNode(v)
-			if el := out.b.Open(); el != nil && len(el.Children) > before {
-				applyCopyNamespaces(el.Children[len(el.Children)-1], srcScope, sc)
+			if el := out.b.Open(); el != nil && el.NumChildren() > before {
+				applyCopyNamespaces(el.LastChild(), srcScope, sc)
 			}
 		case *xdm.Atomic:
 			out.b.AppendValue(v)
@@ -369,7 +369,7 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 // copynamespace-17 asks for both and expects the copy to be left with the xml
 // binding alone.
 func applyCopyNamespaces(n *xdm.Node, srcScope map[string]string, sc *staticContext) {
-	if n == nil || n.Kind != xdm.KindElement {
+	if n == nil || n.Kind() != xdm.KindElement {
 		return
 	}
 	preserve := sc == nil || sc.preserveNS
@@ -387,11 +387,11 @@ func applyCopyNamespaces(n *xdm.Node, srcScope map[string]string, sc *staticCont
 	// and must survive. An undeclaration is written as an empty URI, which
 	// InScopeNamespaces and LookupPrefix both read as "not in scope here".
 	own := map[string]bool{}
-	for _, ns := range n.Namespaces {
-		own[ns.Name.Local] = true
+	for ns := range n.NamespaceDecls() {
+		own[ns.Name().Local] = true
 	}
-	if n.Parent != nil {
-		for prefix := range n.Parent.InScopeNamespaces() {
+	if n.Parent() != nil {
+		for prefix := range n.Parent().InScopeNamespaces() {
 			if prefix == "xml" || own[prefix] {
 				continue
 			}
@@ -419,8 +419,8 @@ func preserveScope(n *xdm.Node, srcScope map[string]string) {
 		return
 	}
 	own := map[string]bool{}
-	for _, ns := range n.Namespaces {
-		own[ns.Name.Local] = true
+	for ns := range n.NamespaceDecls() {
+		own[ns.Name().Local] = true
 	}
 	for prefix, uri := range srcScope {
 		if prefix == "xml" || own[prefix] {
@@ -445,7 +445,7 @@ func preserveScope(n *xdm.Node, srcScope map[string]string) {
 	// ... the in-scope namespaces of the construction". functx-change-
 	// element-ns-all copies <bar:b> into an element in a default namespace
 	// and expects <bar:b xmlns:bar="http://bar"> with no undeclaration.
-	if n.Name.Prefix == "" && n.Name.URI == "" {
+	if n.Name().Prefix == "" && n.Name().URI == "" {
 		if _, hadDefault := srcScope[""]; !hadDefault && !own[""] {
 			if uri, ok := n.LookupPrefix(""); ok && uri != "" {
 				n.AddNamespace("", "")
@@ -463,33 +463,33 @@ func preserveScope(n *xdm.Node, srcScope map[string]string) {
 // does not: dropping the ancestor's binding and stopping there would leave the
 // descendant's name pointing at nothing.
 func stripNamespaces(n *xdm.Node) {
-	if n.Kind != xdm.KindElement {
+	if n.Kind() != xdm.KindElement {
 		return
 	}
 	need := map[string]string{}
-	if n.Name.URI != "" && n.Name.URI != xdm.NSXML {
-		need[n.Name.Prefix] = n.Name.URI
+	if n.Name().URI != "" && n.Name().URI != xdm.NSXML {
+		need[n.Name().Prefix] = n.Name().URI
 	}
-	for _, a := range n.Attrs {
-		if a.Name.URI != "" && a.Name.URI != xdm.NSXML {
-			need[a.Name.Prefix] = a.Name.URI
+	for a := range n.Attrs() {
+		if a.Name().URI != "" && a.Name().URI != xdm.NSXML {
+			need[a.Name().Prefix] = a.Name().URI
 		}
 	}
-	kept := n.Namespaces[:0]
-	for _, ns := range n.Namespaces {
-		if uri, ok := need[ns.Name.Local]; ok && uri == ns.Value {
+	kept := make([]*xdm.Node, 0, n.NumNamespaceDecls())
+	for ns := range n.NamespaceDecls() {
+		if uri, ok := need[ns.Name().Local]; ok && uri == ns.Value() {
 			kept = append(kept, ns)
-			delete(need, ns.Name.Local)
+			delete(need, ns.Name().Local)
 		}
 	}
-	xdmbuild.SetNamespaces(n, kept)
+	n.SetNamespaceDecls(kept)
 	// A name whose binding was never on this element in the first place — it
 	// came from an ancestor that the copy has left behind — still needs one,
 	// or the copy would carry a prefix bound to nothing.
 	for prefix, uri := range need {
 		n.AddNamespace(prefix, uri)
 	}
-	for _, ch := range n.Children {
+	for ch := range n.Children() {
 		stripNamespaces(ch)
 	}
 }
@@ -508,7 +508,7 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	}
 	sub := &builderRef{b: out.b.StartElement(name)}
 	if el := sub.b.Open(); el != nil && n.baseURI != "" {
-		xdmbuild.SetBaseURI(el, n.baseURI)
+		el.SetBaseURI(n.baseURI)
 	}
 	// §3.9.3.1: the in-scope namespaces of a constructed element include a
 	// binding for its own name. A direct constructor writes that binding as
@@ -591,12 +591,12 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 			return
 		}
 		parent := n.baseURI
-		if el.Parent != nil {
+		if el.Parent() != nil {
 			// A nested constructor resolves against the base URI its
 			// enclosing element ended up with, not against the static one:
 			// <e xml:base="http://a.example/x/"><b xml:base="y"/></e> makes
 			// b's base http://a.example/x/y.
-			if pb := inheritedBase(el.Parent); pb != "" {
+			if pb := inheritedBase(el.Parent()); pb != "" {
 				parent = pb
 			}
 		}
@@ -654,30 +654,30 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 // name and attribute names need (already on the node from fixup), and xml,
 // which XML Names binds everywhere and which can never be undeclared.
 func limitInherited(el *xdm.Node, inherited map[string]string) {
-	if el == nil || el.Parent == nil || el.Parent.Kind != xdm.KindElement {
+	if el == nil || el.Parent() == nil || el.Parent().Kind() != xdm.KindElement {
 		return
 	}
 	// Bindings this element already carries -- fixup for its own name and its
 	// attributes' names, plus the declaration attributes written above --
 	// shadow the parent's and need no undeclaration.
 	own := map[string]bool{}
-	for _, ns := range el.Namespaces {
-		own[ns.Name.Local] = true
+	for ns := range el.NamespaceDecls() {
+		own[ns.Name().Local] = true
 	}
 	// A prefix a name on this element needs, that the parent happens to
 	// supply with the same URI, has no namespace node here: fixup skipped it
 	// precisely because the parent already agreed. Undeclaring it would break
 	// the name, so it counts as needed rather than inherited.
 	need := map[string]string{}
-	if el.Name.URI != "" {
-		need[el.Name.Prefix] = el.Name.URI
+	if el.Name().URI != "" {
+		need[el.Name().Prefix] = el.Name().URI
 	}
-	for _, a := range el.Attrs {
-		if a.Name.URI != "" && a.Name.Prefix != "" {
-			need[a.Name.Prefix] = a.Name.URI
+	for a := range el.Attrs() {
+		if a.Name().URI != "" && a.Name().Prefix != "" {
+			need[a.Name().Prefix] = a.Name().URI
 		}
 	}
-	for prefix, uri := range el.Parent.InScopeNamespaces() {
+	for prefix, uri := range el.Parent().InScopeNamespaces() {
 		switch {
 		case prefix == "xml", own[prefix]:
 			continue
@@ -722,10 +722,10 @@ func declareOwnName(b *xdmbuild.Builder) error {
 	// The xml prefix is bound everywhere by XML Names itself and is never
 	// declared; K2-DirectConElemNamespace-58 writes <xml:element/> and
 	// expects no declaration on it.
-	if el.Name.URI == xdm.NSXML {
+	if el.Name().URI == xdm.NSXML {
 		return nil
 	}
-	if el.Name.URI == "" {
+	if el.Name().URI == "" {
 		// An element in no namespace under an ancestor with a default
 		// namespace has to undeclare it, or reading the result back puts the
 		// element in the ancestor's namespace — a different element from the
@@ -737,7 +737,7 @@ func declareOwnName(b *xdmbuild.Builder) error {
 		// namespace on an element in no namespace (XQDY0102) is about
 		// *binding* one and would reject the undeclaration that is precisely
 		// right here.
-		if el.Name.Prefix != "" {
+		if el.Name().Prefix != "" {
 			return nil
 		}
 		if uri, ok := el.LookupPrefix(""); ok && uri != "" {
@@ -745,7 +745,7 @@ func declareOwnName(b *xdmbuild.Builder) error {
 		}
 		return nil
 	}
-	if uri, ok := el.LookupPrefix(el.Name.Prefix); ok && uri == el.Name.URI {
+	if uri, ok := el.LookupPrefix(el.Name().Prefix); ok && uri == el.Name().URI {
 		return nil
 	}
 	// The element's own name, so AddOwnNameNamespace rather than
@@ -753,16 +753,16 @@ func declareOwnName(b *xdmbuild.Builder) error {
 	// produced, and recording it as one made a later "namespace p {...}" for
 	// the same prefix look like two conflicting namespace nodes instead of
 	// the rename §3.9.3.1 calls for.
-	return b.AddOwnNameNamespace(el.Name.Prefix, el.Name.URI)
+	return b.AddOwnNameNamespace(el.Name().Prefix, el.Name().URI)
 }
 
 // inheritedBase returns the base URI in force at a node, which is the nearest
 // one stamped on it or on an ancestor. A node the builder has not stamped —
 // every node without an xml:base of its own — takes its parent's.
 func inheritedBase(n *xdm.Node) string {
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.BaseURI != "" {
-			return cur.BaseURI
+	for cur := n; cur != nil; cur = cur.Parent() {
+		if cur.BaseURI() != "" {
+			return cur.BaseURI()
 		}
 	}
 	return ""
@@ -1013,8 +1013,8 @@ func (n *document) eval(out *builderRef, ctx *evalContext) error {
 	// constructor. ToDocument may already have lifted a base URI off the
 	// document element (builder.go), and that one wins, being the resolved
 	// xml:base of the content rather than the constructor's own.
-	if doc != nil && doc.BaseURI == "" && n.baseURI != "" {
-		xdmbuild.SetBaseURI(doc, n.baseURI)
+	if doc != nil && doc.BaseURI() == "" && n.baseURI != "" {
+		doc.SetBaseURI(n.baseURI)
 	}
 	out.b.AppendNode(doc)
 	return nil

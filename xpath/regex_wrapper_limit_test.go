@@ -161,8 +161,8 @@ func TestAnalyzeStringAcceptsBackreferencePatterns(t *testing.T) {
 		t.Errorf("string value = %q, want the whole input back", got)
 	}
 	var kinds []string
-	for _, c := range n.Children {
-		kinds = append(kinds, c.Name.Local)
+	for c := range n.Children() {
+		kinds = append(kinds, c.Name().Local)
 	}
 	want := "non-match match non-match"
 	if got := strings.Join(kinds, " "); got != want {

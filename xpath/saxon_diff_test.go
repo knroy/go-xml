@@ -1845,7 +1845,7 @@ func TestDocumentURIOnlyOnDocuments(t *testing.T) {
 // from somewhere else, which is the ordinary case.
 func TestStaticBaseURI(t *testing.T) {
 	root := mustParse(t, `<r/>`)
-	root.BaseURI = "file:///docs/input.xml"
+	root.SetBaseURI("file:///docs/input.xml")
 
 	// With none supplied, the context node's is the best available answer.
 	ctx := NewContext(root, Builtins())

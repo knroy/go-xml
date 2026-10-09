@@ -80,11 +80,11 @@ func checkOneAccumulator(acc *xdm.Node) error {
 	// motionless. §18.2.9 evaluates it with a singleton focus on the root of
 	// the streamed tree, so its context posture is striding.
 	if a := acc.Attr("", "initial-value"); a != nil {
-		if bad, known := exprIsNotGroundedMotionless(a.Value, acc); known && bad {
+		if bad, known := exprIsNotGroundedMotionless(a.Value(), acc); known && bad {
 			return fmt.Errorf(
 				"the initial-value expression %q of streamable accumulator "+
 					"%q is not grounded and motionless, so the accumulator "+
-					"is not guaranteed-streamable (XTSE3430)", a.Value, name)
+					"is not guaranteed-streamable (XTSE3430)", a.Value(), name)
 		}
 	}
 
@@ -94,12 +94,12 @@ func checkOneAccumulator(acc *xdm.Node) error {
 			continue
 		}
 		if a := rule.Attr("", "match"); a != nil {
-			if free, known := patternIsFreeRanging(a.Value, rule); known && free {
+			if free, known := patternIsFreeRanging(a.Value(), rule); known && free {
 				return fmt.Errorf(
 					"the match pattern %q of a rule in streamable "+
 						"accumulator %q is free-ranging, so the accumulator "+
 						"is not guaranteed-streamable (XTSE3430)",
-					a.Value, name)
+					a.Value(), name)
 			}
 		}
 		if a := rule.Attr("", "select"); a != nil {
@@ -108,7 +108,7 @@ func checkOneAccumulator(acc *xdm.Node) error {
 			// absorbing it reads anything further from the stream -- is
 			// decided by the rule's own match pattern.
 			kids := matchedNodeAllowsChildren(rule.AttrValue("match"), rule)
-			bad, known := exprIsNotGroundedMotionlessCtx(a.Value, rule, kids)
+			bad, known := exprIsNotGroundedMotionlessCtx(a.Value(), rule, kids)
 			// §18.2.1: "the result of both the initial-value and select
 			// expressions is converted to the type declared in the as
 			// attribute by applying the function conversion rules". Where
@@ -122,7 +122,7 @@ func checkOneAccumulator(acc *xdm.Node) error {
 			// hand moves the input position no further, and atomizing one
 			// that is not was already consuming before the conversion.
 			if bad && known && atomicSequenceType(acc.AttrValue("as")) {
-				if p, k := exprSweepCtx(a.Value, rule, kids); k &&
+				if p, k := exprSweepCtx(a.Value(), rule, kids); k &&
 					p == sweepMotionless {
 					bad = false
 				}
@@ -132,7 +132,7 @@ func checkOneAccumulator(acc *xdm.Node) error {
 					"the select expression %q of a rule in streamable "+
 						"accumulator %q is not grounded and motionless, so "+
 						"the accumulator is not guaranteed-streamable "+
-						"(XTSE3430)", a.Value, name)
+						"(XTSE3430)", a.Value(), name)
 			}
 		}
 		// A rule with a contained sequence constructor rather than a select

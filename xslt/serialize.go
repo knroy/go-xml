@@ -290,7 +290,7 @@ func serializeTo(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map
 				// through StringValue here would have written a comment's text
 				// and a PI's data as if they were character content, which is
 				// exactly the markup the method exists to suppress.
-				if v.Kind == xdm.KindComment || v.Kind == xdm.KindPI {
+				if v.Kind() == xdm.KindComment || v.Kind() == xdm.KindPI {
 					continue
 				}
 				// Sequence normalisation runs before any method does, so a
@@ -299,7 +299,7 @@ func serializeTo(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map
 				// method having nothing to write for it is not the same as
 				// there being nothing wrong. Serialization-text-1 through -4
 				// send one straight to the serialiser and ask for SENR0001.
-				if v.Kind == xdm.KindAttribute || v.Kind == xdm.KindNamespace {
+				if v.Kind() == xdm.KindAttribute || v.Kind() == xdm.KindNamespace {
 					if s.err == nil {
 						s.err = fmt.Errorf("SENR0001: an attribute or " +
 							"namespace node cannot be serialised on its own")
@@ -410,7 +410,7 @@ func serializeTo(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
-			if v.Kind == xdm.KindElement && v.Parent != nil {
+			if v.Kind() == xdm.KindElement && v.Parent() != nil {
 				s.seeded = v
 			}
 			s.node(v, 0)
@@ -618,10 +618,10 @@ func (s *serializer) writeDoctypeFor(n *xdm.Node) {
 			// DOCTYPE. Requiring the XHTML namespace withheld it from a
 			// document whose element is called html and is in no namespace
 			// that contradicts it.
-			if n.Kind == xdm.KindElement &&
-				(n.Name.URI == nsXHTML || n.Name.URI == "") &&
-				strings.EqualFold(n.Name.Local, "html") {
-				s.writeString("<!DOCTYPE " + n.Name.Local + ">\n")
+			if n.Kind() == xdm.KindElement &&
+				(n.Name().URI == nsXHTML || n.Name().URI == "") &&
+				strings.EqualFold(n.Name().Local, "html") {
+				s.writeString("<!DOCTYPE " + n.Name().Local + ">\n")
 			}
 			return
 		}
@@ -652,9 +652,9 @@ func quoteLiteral(v string) string {
 
 // node writes one node at the given indent depth.
 func (s *serializer) node(n *xdm.Node, depth int) {
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindDocument:
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			s.node(c, depth)
 		}
 
@@ -675,8 +675,8 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 			// <script> body. Escaping is not an option here, so the spec
 			// makes it a serialization error, as it does for "--" in a
 			// comment and "?>" in a processing instruction.
-			if strings.Contains(n.Value, "</") ||
-				(s.rawTextLT && strings.HasPrefix(n.Value, "/")) {
+			if strings.Contains(n.Value(), "</") ||
+				(s.rawTextLT && strings.HasPrefix(n.Value(), "/")) {
 				if s.err == nil {
 					s.err = fmt.Errorf(
 						"SERE0007: %s content contains '</', which would end "+
@@ -685,28 +685,28 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 				}
 				return
 			}
-			s.writeString(n.Value)
-			if n.Value != "" {
-				s.rawTextLT = strings.HasSuffix(n.Value, "<")
+			s.writeString(n.Value())
+			if n.Value() != "" {
+				s.rawTextLT = strings.HasSuffix(n.Value(), "<")
 			}
 			return
 		}
 		if s.inCData {
-			s.writeCData(n.Value)
+			s.writeCData(n.Value())
 			return
 		}
-		s.escapeText(n.Value)
+		s.escapeText(n.Value())
 
 	case xdm.KindComment:
-		if err := s.validateComment(n.Value); err != nil {
+		if err := s.validateComment(n.Value()); err != nil {
 			s.fail(err)
 			return
 		}
 		s.indent(depth)
-		s.writeString("<!--" + n.Value + "-->")
+		s.writeString("<!--" + n.Value() + "-->")
 
 	case xdm.KindPI:
-		if err := s.validatePI(n.Name.Local, n.Value); err != nil {
+		if err := s.validatePI(n.Name().Local, n.Value()); err != nil {
 			s.fail(err)
 			return
 		}
@@ -714,7 +714,7 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 		// rather than at "?>", so a ">" inside the data would truncate it.
 		// There is no escape for it in HTML, which is why the spec makes it
 		// an error rather than something to encode.
-		if s.html && !s.xhtml && strings.Contains(n.Value, ">") {
+		if s.html && !s.xhtml && strings.Contains(n.Value(), ">") {
 			if s.err == nil {
 				s.err = fmt.Errorf("SERE0015: a processing instruction " +
 					"contains '>', which ends it in the html output method")
@@ -722,9 +722,9 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 			return
 		}
 		s.indent(depth)
-		s.writeString("<?" + n.Name.Local)
-		if n.Value != "" {
-			s.writeString(" " + n.Value)
+		s.writeString("<?" + n.Name().Local)
+		if n.Value() != "" {
+			s.writeString(" " + n.Value())
 		}
 		// The html method closes a processing instruction with ">" alone,
 		// which is the same rule the SERE0015 check above is written for: if
@@ -754,13 +754,13 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 		// and ask for SENR0001, which is the code Serialization 3.1 §2
 		// assigns.
 		kind := "attribute"
-		if n.Kind == xdm.KindNamespace {
+		if n.Kind() == xdm.KindNamespace {
 			kind = "namespace"
 		}
 		if s.err == nil {
 			s.err = fmt.Errorf(
 				"SENR0001: %s node %q cannot be serialised outside an element",
-				kind, n.Name.Lexical())
+				kind, n.Name().Lexical())
 		}
 	}
 }
@@ -790,13 +790,23 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// element declares, and stays in scope for its children.
 	base := len(s.ns)
 	defer func() { s.ns = s.ns[:base] }()
-	nsNodes := n.Namespaces
+	// Normally the element's own namespace nodes; for the root of a
+	// serialization, rootNamespaces' list instead.
+	var seeded []*xdm.Node
+	count := n.NumNamespaceDecls()
 	if n == s.seeded {
 		s.seeded = nil
-		nsNodes = rootNamespaces(n)
+		seeded = rootNamespaces(n)
+		count = len(seeded)
 	}
-	for _, ns := range nsNodes {
-		if s.inScope(base, ns.Name.Local) == ns.Value {
+	for i := range count {
+		var ns *xdm.Node
+		if seeded != nil {
+			ns = seeded[i]
+		} else {
+			ns = n.NamespaceDeclAt(i)
+		}
+		if s.inScope(base, ns.Name().Local) == ns.Value() {
 			continue
 		}
 		// An element binds each prefix at most once, and the binding its own
@@ -806,15 +816,15 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		// namespace-alias-2620 shows -- is dropped here rather than written
 		// beside the one added below, which produced two xmlns:y attributes
 		// on one element and output that is not well-formed XML.
-		if ns.Name.Local != "" && ns.Name.Local == n.Name.Prefix &&
-			n.Name.URI != "" && ns.Value != n.Name.URI {
+		if ns.Name().Local != "" && ns.Name().Local == n.Name().Prefix &&
+			n.Name().URI != "" && ns.Value() != n.Name().URI {
 			continue
 		}
 		// An element binds each prefix at most once. A node list can hold the
 		// same prefix twice -- xsl:namespace-alias with competing aliases at
 		// different import precedence leaves two y bindings behind, which is
 		// namespace-alias-2620 -- and writing both is not well-formed XML.
-		if _, dup := s.declared(base, ns.Name.Local); dup {
+		if _, dup := s.declared(base, ns.Name().Local); dup {
 			continue
 		}
 		// A namespace undeclaration for a *prefix* -- xmlns:p="" -- is
@@ -830,18 +840,18 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		// and is not covered here: it is legal in XML 1.0, it is written
 		// below on its own terms, and omitting it would move an element into
 		// a namespace it is not in.
-		if ns.Value == "" && ns.Name.Local != "" && !s.opts.UndeclarePrefixes {
+		if ns.Value() == "" && ns.Name().Local != "" && !s.opts.UndeclarePrefixes {
 			continue
 		}
-		s.writeNamespaceDecl(ns.Name.Local, ns.Value)
-		s.ns = append(s.ns, nsPair{ns.Name.Local, ns.Value})
+		s.writeNamespaceDecl(ns.Name().Local, ns.Value())
+		s.ns = append(s.ns, nsPair{ns.Name().Local, ns.Value()})
 	}
 	// An element whose namespace has no declaration in scope needs one, which
 	// happens for elements built by xsl:element with a computed namespace.
-	if n.Name.URI != "" && s.inScope(base, n.Name.Prefix) != n.Name.URI &&
-		s.declaredURI(base, n.Name.Prefix) != n.Name.URI {
-		s.writeNamespaceDecl(n.Name.Prefix, n.Name.URI)
-		s.ns = append(s.ns, nsPair{n.Name.Prefix, n.Name.URI})
+	if n.Name().URI != "" && s.inScope(base, n.Name().Prefix) != n.Name().URI &&
+		s.declaredURI(base, n.Name().Prefix) != n.Name().URI {
+		s.writeNamespaceDecl(n.Name().Prefix, n.Name().URI)
+		s.ns = append(s.ns, nsPair{n.Name().Prefix, n.Name().URI})
 	}
 	// An element in no namespace under an ancestor with a default namespace
 	// has to undeclare it. Without xmlns="" the element is read back as
@@ -853,23 +863,23 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// string, so testing declared[""] == "" could not tell "already
 	// undeclared here" from "not mentioned here" and wrote xmlns="" twice on
 	// an element that needed it once.
-	if _, undeclared := s.declared(base, ""); n.Name.URI == "" && n.Name.Prefix == "" &&
+	if _, undeclared := s.declared(base, ""); n.Name().URI == "" && n.Name().Prefix == "" &&
 		s.inScope(base, "") != "" && !undeclared {
 		s.writeNamespaceDecl("", "")
 		s.ns = append(s.ns, nsPair{"", ""})
 	}
-	for _, a := range n.Attrs {
-		if a.Name.URI == "" || a.Name.URI == xdm.NSXML {
+	for a := range n.Attrs() {
+		if a.Name().URI == "" || a.Name().URI == xdm.NSXML {
 			continue
 		}
-		if s.inScope(base, a.Name.Prefix) == a.Name.URI || s.declaredURI(base, a.Name.Prefix) == a.Name.URI {
+		if s.inScope(base, a.Name().Prefix) == a.Name().URI || s.declaredURI(base, a.Name().Prefix) == a.Name().URI {
 			continue
 		}
-		s.writeNamespaceDecl(a.Name.Prefix, a.Name.URI)
-		s.ns = append(s.ns, nsPair{a.Name.Prefix, a.Name.URI})
+		s.writeNamespaceDecl(a.Name().Prefix, a.Name().URI)
+		s.ns = append(s.ns, nsPair{a.Name().Prefix, a.Name().URI})
 	}
 
-	for _, a := range n.Attrs {
+	for a := range n.Attrs() {
 		s.writeAttr(a, n)
 	}
 
@@ -883,12 +893,12 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// not. Serialization-xhtml-36 writes <html><head/></html> with no
 	// namespace and asks to see the content-type meta, which the
 	// no-children branch would have written away as "<head></head>".
-	emptyHead := len(n.Children) == 0 && s.html &&
-		strings.EqualFold(n.Name.Local, "head") &&
-		(!s.xhtml || n.Name.URI == nsXHTML || n.Name.URI == "") &&
+	emptyHead := n.NumChildren() == 0 && s.html &&
+		strings.EqualFold(n.Name().Local, "head") &&
+		(!s.xhtml || n.Name().URI == nsXHTML || n.Name().URI == "") &&
 		(s.opts.IncludeContentType == nil || *s.opts.IncludeContentType)
 
-	if len(n.Children) == 0 && !emptyHead {
+	if n.NumChildren() == 0 && !emptyHead {
 		// htmlNativeElement rather than s.html: an element in a namespace of
 		// its own is an XML island, and Serialization 3.1 §9 has the html
 		// method write foreign content with XML syntax. The self-closing
@@ -903,7 +913,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 				// end tag; every other empty element takes an explicit one,
 				// because "<div/>" is parsed by HTML parsers as an unclosed
 				// "<div>".
-				if s.isVoidElement(n.Name.Local) {
+				if s.isVoidElement(n.Name().Local) {
 					s.writeString(">")
 				} else {
 					s.writeString("></")
@@ -958,9 +968,9 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// XML, where those elements hold ordinary parsed character data — the
 	// suite's expected output escapes "<" and "&" inside a script there, and
 	// a document that did not would not parse as XML at all.
-	if s.html && !s.xhtml && isRawTextElement(n.Name.Local) {
+	if s.html && !s.xhtml && isRawTextElement(n.Name().Local) {
 		saved, savedName, savedLT := s.rawText, s.rawTextName, s.rawTextLT
-		s.rawText, s.rawTextName, s.rawTextLT = true, n.Name.Local, false
+		s.rawText, s.rawTextName, s.rawTextLT = true, n.Name().Local, false
 		defer func() { s.rawText, s.rawTextName, s.rawTextLT = saved, savedName, savedLT }()
 	}
 	// The head this belongs in is an HTML one. Under the html method every
@@ -974,8 +984,8 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// about one in no namespace. Serialization-xhtml-36, -37 and -37a write a
 	// bare <html><head/></html> -- no namespace, because a direct element
 	// constructor puts it in none -- and ask to see the content-type meta.
-	if s.html && strings.EqualFold(n.Name.Local, "head") &&
-		(!s.xhtml || n.Name.URI == nsXHTML || n.Name.URI == "") {
+	if s.html && strings.EqualFold(n.Name().Local, "head") &&
+		(!s.xhtml || n.Name().URI == nsXHTML || n.Name().URI == "") {
 		// include-content-type="no" suppresses the meta element. It defaults
 		// to yes, which is why an absent attribute is nil rather than false.
 		if s.opts.IncludeContentType == nil || *s.opts.IncludeContentType {
@@ -1030,7 +1040,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		}
 	}
 
-	if s.cdataElems[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] &&
+	if s.cdataElems[xdm.QName{URI: n.Name().URI, Local: n.Name().Local}] &&
 		!s.htmlNativeElement(n) {
 		saved := s.inCData
 		s.inCData = true
@@ -1082,7 +1092,8 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// Serialization 3.1 §7.4.3 (html) and §6.1.4 (xhtml): whitespace "MUST
 	// NOT be added or removed adjacent to an inline element"; see
 	// htmlser.SkipIndentBefore for where that leaves room for an indent.
-	for i, c := range n.Children {
+	for i := range n.NumChildren() {
+		c := n.ChildAt(i)
 		if !indentChildren {
 			s.nodeNoIndent(c)
 			continue
@@ -1091,7 +1102,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		s.node(c, depth+1)
 		s.skipIndent = false
 	}
-	if (indentChildren && !s.skipBeforeChild(n, len(n.Children))) ||
+	if (indentChildren && !s.skipBeforeChild(n, n.NumChildren())) ||
 		(emptyHead && s.opts.Indent) {
 		s.indent(depth)
 	}
@@ -1115,28 +1126,33 @@ func (s *serializer) nodeNoIndent(n *xdm.Node) {
 // first, and the copy keeps every in-scope namespace of the element. A
 // constructed element leaves a binding its parent already has to the parent,
 // so writing only its own nodes lost that binding from the output. When n
-// inherits nothing its own nodes are returned unchanged; otherwise the union
-// is sorted by prefix, which is the order a literal result element copies
-// its bindings in.
+// inherits nothing its own nodes are returned in their order, in a new
+// non-nil slice; otherwise the union is sorted by prefix, which is the order
+// a literal result element copies its bindings in.
 func rootNamespaces(n *xdm.Node) []*xdm.Node {
 	scope := n.InScopeNamespaces()
-	own := make(map[string]bool, len(n.Namespaces))
-	for _, ns := range n.Namespaces {
-		own[ns.Name.Local] = true
+	own := make(map[string]bool, n.NumNamespaceDecls())
+	for ns := range n.NamespaceDecls() {
+		own[ns.Name().Local] = true
 	}
 	var out []*xdm.Node
 	for p, uri := range scope {
 		if p != "xml" && !own[p] {
-			out = append(out, &xdm.Node{Kind: xdm.KindNamespace,
-				Name: xdm.QName{Local: p}, Value: uri})
+			out = append(out, xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: p}, uri))
 		}
 	}
-	if out == nil {
-		return n.Namespaces
+	inherited := len(out)
+	for i := range n.NumNamespaceDecls() {
+		out = append(out, n.NamespaceDeclAt(i))
 	}
-	out = append(out, n.Namespaces...)
+	if inherited == 0 {
+		if out == nil {
+			out = []*xdm.Node{}
+		}
+		return out
+	}
 	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].Name.Local < out[j].Name.Local
+		return out[i].Name().Local < out[j].Name().Local
 	})
 	return out
 }
@@ -1187,32 +1203,32 @@ func (s *serializer) declaredURI(base int, prefix string) string {
 // writeElementName writes an element's lexical name in pieces, which
 // spares the string elementName allocates for a prefixed name.
 func (s *serializer) writeElementName(n *xdm.Node) {
-	if n.Name.Prefix != "" {
-		s.writeString(n.Name.Prefix)
+	if n.Name().Prefix != "" {
+		s.writeString(n.Name().Prefix)
 		s.writeString(":")
 	}
-	s.writeString(n.Name.Local)
+	s.writeString(n.Name().Local)
 }
 
 // elementName returns the lexical name to serialise.
 func (s *serializer) elementName(n *xdm.Node) string {
-	if n.Name.Prefix != "" {
-		return n.Name.Prefix + ":" + n.Name.Local
+	if n.Name().Prefix != "" {
+		return n.Name().Prefix + ":" + n.Name().Local
 	}
-	return n.Name.Local
+	return n.Name().Local
 }
 
 // writeAttrName writes an attribute's lexical name in pieces, which spares
 // the string a concatenation would allocate per attribute.
 func (s *serializer) writeAttrName(a *xdm.Node) {
 	switch {
-	case a.Name.URI == xdm.NSXML:
+	case a.Name().URI == xdm.NSXML:
 		s.writeString("xml:")
-	case a.Name.Prefix != "":
-		s.writeString(a.Name.Prefix)
+	case a.Name().Prefix != "":
+		s.writeString(a.Name().Prefix)
 		s.writeString(":")
 	}
-	s.writeString(a.Name.Local)
+	s.writeString(a.Name().Local)
 }
 
 func (s *serializer) indent(depth int) {
@@ -1273,7 +1289,7 @@ func (s *serializer) htmlNativeElement(n *xdm.Node) bool {
 	// "b html:em", differing only in the version: 19b is 4.0 and wants a
 	// CDATA section around html:em, 19c is 5.0 and wants none. The absent
 	// namespace is native under both.
-	return n.Name.URI == "" || (s.html5 && n.Name.URI == nsXHTML)
+	return n.Name().URI == "" || (s.html5 && n.Name().URI == nsXHTML)
 }
 
 // htmlIsland reports whether the html method must write n with XML syntax
@@ -1297,12 +1313,12 @@ func (s *serializer) htmlNativeElement(n *xdm.Node) bool {
 // as the self-closed XML the island rule produces, where html-4 at 5.0 wants
 // the bare HTML start tag.
 func (s *serializer) htmlIsland(n *xdm.Node) bool {
-	return s.html && !s.xhtml && n.Name.URI != "" &&
-		!(s.html5 && n.Name.URI == nsXHTML)
+	return s.html && !s.xhtml && n.Name().URI != "" &&
+		!(s.html5 && n.Name().URI == nsXHTML)
 }
 
 func (s *serializer) suppressed(n *xdm.Node) bool {
-	if s.noIndentElems[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] {
+	if s.noIndentElems[xdm.QName{URI: n.Name().URI, Local: n.Name().Local}] {
 		return true
 	}
 	// The html method matches an element name without regard to case, here as
@@ -1312,13 +1328,13 @@ func (s *serializer) suppressed(n *xdm.Node) bool {
 	// reading the parameter by XML's rules inside the one method that is not
 	// XML. Serialization-html-56 writes the parameter in upper case and the
 	// element in lower. XHTML is XML, where the two are different names.
-	if s.html && !s.xhtml && n.Name.URI == "" {
+	if s.html && !s.xhtml && n.Name().URI == "" {
 		if s.noIndentElems[xdm.QName{
-			Local: strings.ToLower(n.Name.Local)}] {
+			Local: strings.ToLower(n.Name().Local)}] {
 			return true
 		}
 	}
-	if a := n.Attr(xdm.NSXML, "space"); a != nil && a.Value == "preserve" {
+	if a := n.Attr(xdm.NSXML, "space"); a != nil && a.Value() == "preserve" {
 		return true
 	}
 	// The html and xhtml methods suppress indentation inside the elements
@@ -1346,12 +1362,12 @@ func (s *serializer) suppressed(n *xdm.Node) bool {
 	// The html method folds case, as it does for every other name it
 	// recognises; the xhtml method does not, because it is XML and <PRE> is
 	// a different element there.
-	if s.html && !s.xhtml && n.Name.URI == "" &&
-		htmlPreserveWhitespaceElement(strings.ToLower(n.Name.Local)) {
+	if s.html && !s.xhtml && n.Name().URI == "" &&
+		htmlPreserveWhitespaceElement(strings.ToLower(n.Name().Local)) {
 		return true
 	}
-	if s.xhtml && (n.Name.URI == nsXHTML || n.Name.URI == "") &&
-		htmlPreserveWhitespaceElement(n.Name.Local) {
+	if s.xhtml && (n.Name().URI == nsXHTML || n.Name().URI == "") &&
+		htmlPreserveWhitespaceElement(n.Name().Local) {
 		return true
 	}
 	return false
@@ -1384,8 +1400,8 @@ func htmlPreserveWhitespaceElement(local string) bool {
 // processing instruction, which the html method will not put whitespace
 // beside.
 func hasCommentOrPIChild(n *xdm.Node) bool {
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindComment || c.Kind == xdm.KindPI {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindComment || c.Kind() == xdm.KindPI {
 			return true
 		}
 	}
@@ -1393,8 +1409,8 @@ func hasCommentOrPIChild(n *xdm.Node) bool {
 }
 
 func hasTextChild(n *xdm.Node) bool {
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindText && !xdm.IsXMLWhitespace(c.Value) {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindText && !xdm.IsXMLWhitespace(c.Value()) {
 			return true
 		}
 	}
@@ -1412,8 +1428,8 @@ func hasTextChild(n *xdm.Node) bool {
 // xpath/fn_serialize.go.
 func mayIndentContent(n *xdm.Node) bool {
 	hasElem := false
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindElement {
 			hasElem = true
 			break
 		}
@@ -1421,15 +1437,15 @@ func mayIndentContent(n *xdm.Node) bool {
 	if !hasElem {
 		return false
 	}
-	switch n.TypeAnnotation {
+	switch n.TypeAnnotation() {
 	case "", "untyped":
 		return true
 	case "anyType":
 		// An anonymous mixed type annotates as anyType too; MixedContent
 		// tells it from a genuine xs:anyType element.
-		return n.NoTypedValue || !n.MixedContent
+		return n.NoTypedValue() || !n.MixedContent()
 	}
-	return n.NoTypedValue
+	return n.NoTypedValue()
 }
 
 // escapeText writes character data with the three characters that cannot
@@ -1817,19 +1833,19 @@ func (s *serializer) writeAttr(a *xdm.Node, owner *xdm.Node) {
 	// The html method only. XHTML is XML, where an attribute without a value
 	// is not well formed, and the XHTML compatibility guidelines say so
 	// explicitly.
-	if s.html && !s.xhtml && isBooleanAttribute(owner.Name.Local, a) {
+	if s.html && !s.xhtml && isBooleanAttribute(owner.Name().Local, a) {
 		s.writeString(" ")
 		s.writeAttrName(a)
 		return
 	}
-	if s.html && s.escapeURIs() && isURIAttribute(owner.Name.Local, a) {
+	if s.html && s.escapeURIs() && isURIAttribute(owner.Name().Local, a) {
 		// A character map does not reach a URI-valued attribute that is being
 		// percent-escaped. The two rewrites contradict each other — the map
 		// would substitute characters the escaping is there to encode — and
 		// the serialization specification gives the escaping precedence.
 		// character-map-009 checks exactly this: an href of "z-linkage.html"
 		// keeps its "z" even with a map that rewrites "z" everywhere else.
-		v := escapeURIAttribute(s.normalized(a.Value))
+		v := escapeURIAttribute(s.normalized(a.Value()))
 		if s.attrErr(v) {
 			return
 		}
@@ -1840,7 +1856,7 @@ func (s *serializer) writeAttr(a *xdm.Node, owner *xdm.Node) {
 		s.writeString(`"`)
 		return
 	}
-	segs := s.mapSegments(a.Value)
+	segs := s.mapSegments(a.Value())
 	for _, seg := range segs {
 		if s.attrErr(seg.text) {
 			return
@@ -2119,17 +2135,17 @@ var booleanAttributes = map[string]map[string]bool{
 // A namespaced attribute is never one of these -- the HTML DTD declares no
 // namespaces -- which is the same guard isURIAttribute applies.
 func isBooleanAttribute(element string, a *xdm.Node) bool {
-	if a.Name.URI != "" {
+	if a.Name().URI != "" {
 		return false
 	}
 	attrs, ok := booleanAttributes[strings.ToLower(element)]
 	if !ok {
 		return false
 	}
-	if !attrs[strings.ToLower(a.Name.Local)] {
+	if !attrs[strings.ToLower(a.Name().Local)] {
 		return false
 	}
-	return strings.EqualFold(a.Value, a.Name.Local)
+	return strings.EqualFold(a.Value(), a.Name().Local)
 }
 
 // isURIAttribute reports whether an attribute holds a URI, and so is subject
@@ -2140,14 +2156,14 @@ func isBooleanAttribute(element string, a *xdm.Node) bool {
 // The test suite checks exactly that distinction: accesskey on <a> holds a
 // character, not a URI, and must not be escaped.
 func isURIAttribute(element string, a *xdm.Node) bool {
-	if a.Name.URI != "" {
+	if a.Name().URI != "" {
 		return false
 	}
 	attrs, ok := uriAttributes[strings.ToLower(element)]
 	if !ok {
 		return false
 	}
-	return attrs[strings.ToLower(a.Name.Local)]
+	return attrs[strings.ToLower(a.Name().Local)]
 }
 
 // escapeURIAttribute percent-escapes the characters a URI cannot hold.
@@ -2297,10 +2313,10 @@ var html5VoidElements = map[string]bool{
 // "<br></br>" from a no-namespace <br/>, while -2 asks for "<br />" from the
 // same markup under version 5. A foreign namespace never says so.
 func (s *serializer) xhtmlVoidElement(n *xdm.Node) bool {
-	if !s.isVoidElement(n.Name.Local) {
+	if !s.isVoidElement(n.Name().Local) {
 		return false
 	}
-	switch n.Name.URI {
+	switch n.Name().URI {
 	case nsXHTML:
 		return true
 	case "":
@@ -2361,10 +2377,10 @@ func defaultMethod(seq xdm.Sequence, v10Implicit bool) string {
 		for _, it := range items {
 			switch v := it.(type) {
 			case *xdm.Node:
-				switch v.Kind {
+				switch v.Kind() {
 				case xdm.KindDocument:
-					kids := make(xdm.Sequence, 0, len(v.Children))
-					for _, c := range v.Children {
+					kids := make(xdm.Sequence, 0, v.NumChildren())
+					for c := range v.Children() {
 						kids = append(kids, c)
 					}
 					if !scan(kids) {
@@ -2379,7 +2395,7 @@ func defaultMethod(seq xdm.Sequence, v10Implicit bool) string {
 					// Text before the first element rules out the HTML
 					// methods, which describe a document rather than an
 					// arbitrary sequence — unless it is only whitespace.
-					if !xdm.IsXMLWhitespace(v.Value) {
+					if !xdm.IsXMLWhitespace(v.Value()) {
 						return false
 					}
 				}
@@ -2396,12 +2412,12 @@ func defaultMethod(seq xdm.Sequence, v10Implicit bool) string {
 		return "xml"
 	}
 	switch {
-	case first.Name.URI == nsXHTML && first.Name.Local == "html":
+	case first.Name().URI == nsXHTML && first.Name().Local == "html":
 		if v10Implicit {
 			return "xml"
 		}
 		return "xhtml"
-	case first.Name.URI == "" && strings.EqualFold(first.Name.Local, "html"):
+	case first.Name().URI == "" && strings.EqualFold(first.Name().Local, "html"):
 		return "html"
 	}
 	return "xml"
@@ -2583,10 +2599,10 @@ func isWellFormedDocument(seq xdm.Sequence) bool {
 		for _, it := range items {
 			switch v := it.(type) {
 			case *xdm.Node:
-				switch v.Kind {
+				switch v.Kind() {
 				case xdm.KindDocument:
-					kids := make(xdm.Sequence, 0, len(v.Children))
-					for _, c := range v.Children {
+					kids := make(xdm.Sequence, 0, v.NumChildren())
+					for c := range v.Children() {
 						kids = append(kids, c)
 					}
 					if !walk(kids) {
@@ -2598,7 +2614,7 @@ func isWellFormedDocument(seq xdm.Sequence) bool {
 					// Whitespace between top-level nodes is permitted in a
 					// document; anything else is character data outside the
 					// document element.
-					if !xdm.IsXMLWhitespace(v.Value) {
+					if !xdm.IsXMLWhitespace(v.Value()) {
 						return false
 					}
 				}
@@ -2691,7 +2707,7 @@ func insertItemSeparator(seq xdm.Sequence, sep *string) xdm.Sequence {
 	out := make(xdm.Sequence, 0, 2*len(seq)-1)
 	for i, it := range seq {
 		if i > 0 {
-			out = append(out, &xdm.Node{Kind: xdm.KindText, Value: *sep})
+			out = append(out, xdm.NewNode(xdm.KindText, xdm.QName{}, *sep))
 		}
 		out = append(out, it)
 	}

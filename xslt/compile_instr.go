@@ -13,7 +13,7 @@ import (
 
 // compileSequence compiles the children of el as a sequence constructor.
 func (c *compiler) compileSequence(el, nsScope *xdm.Node) ([]Instruction, error) {
-	return c.compileNodes(el.Children, nsScope)
+	return c.compileNodes(childrenFrom(el, 0), nsScope)
 }
 
 // compileSequenceFrom compiles the element children of el starting at the
@@ -26,8 +26,9 @@ func (c *compiler) compileSequenceFrom(el, nsScope *xdm.Node, fromElem int) ([]I
 	// that follows it is part of the sequence constructor, and starting at
 	// the following element silently swallowed it.
 	seen, start := 0, 0
-	for i, ch := range el.Children {
-		if ch.Kind != xdm.KindElement {
+	for i := range el.NumChildren() {
+		ch := el.ChildAt(i)
+		if ch.Kind() != xdm.KindElement {
 			continue
 		}
 		if seen == fromElem {
@@ -39,7 +40,16 @@ func (c *compiler) compileSequenceFrom(el, nsScope *xdm.Node, fromElem int) ([]I
 	if fromElem == 0 {
 		start = 0
 	}
-	return c.compileNodes(el.Children[start:], nsScope)
+	return c.compileNodes(childrenFrom(el, start), nsScope)
+}
+
+// childrenFrom returns el's children from index start on, in a new slice.
+func childrenFrom(el *xdm.Node, start int) []*xdm.Node {
+	out := make([]*xdm.Node, el.NumChildren()-start)
+	for i := range out {
+		out[i] = el.ChildAt(start + i)
+	}
+	return out
 }
 
 func (c *compiler) compileNodes(nodes []*xdm.Node, nsScope *xdm.Node) ([]Instruction, error) {
@@ -68,7 +78,7 @@ func (c *compiler) compileNodes(nodes []*xdm.Node, nsScope *xdm.Node) ([]Instruc
 		// instructions after a variable refer to. What it can be told is
 		// whether any of them mention the name, which is decided from the
 		// source elements that produced them.
-		if v, ok := instr.(*varInstr); ok && n.Kind == xdm.KindElement {
+		if v, ok := instr.(*varInstr); ok && n.Kind() == xdm.KindElement {
 			// A declaration that names itself is XPST0008 — a *static*
 			// error, so it is due whether or not the value is ever demanded,
 			// and skipping the evaluation would silently accept it.
@@ -106,19 +116,19 @@ func nameReferencedIn(nodes []*xdm.Node, name xdm.QName) bool {
 		if n == nil {
 			return false
 		}
-		switch n.Kind {
+		switch n.Kind() {
 		case xdm.KindText, xdm.KindComment:
-			if mentions(n.Value, want) {
+			if mentions(n.Value(), want) {
 				return true
 			}
 		case xdm.KindElement:
-			for _, a := range n.Attrs {
-				if mentions(a.Value, want) {
+			for a := range n.Attrs() {
+				if mentions(a.Value(), want) {
 					return true
 				}
 			}
 		}
-		for _, ch := range n.Children {
+		for ch := range n.Children() {
 			if scan(ch) {
 				return true
 			}
@@ -167,12 +177,12 @@ func isNameContinuation(r rune) bool {
 
 // compileNode compiles one node of a sequence constructor.
 func (c *compiler) compileNode(n *xdm.Node, nsScope *xdm.Node) (Instruction, error) {
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindText:
 		// Whitespace-only text between instructions is discarded; anything
 		// else is a literal text node. Without this every indented stylesheet
 		// would emit its own indentation into the result.
-		if xdm.IsXMLWhitespace(n.Value) && !stylesheetTextPreserved(n) {
+		if xdm.IsXMLWhitespace(n.Value()) && !stylesheetTextPreserved(n) {
 			return nil, nil
 		}
 		return c.compileText(n)
@@ -191,7 +201,7 @@ func (c *compiler) compileNode(n *xdm.Node, nsScope *xdm.Node) (Instruction, err
 		// refuse here: XTDE0160 applies only to a processor that does not,
 		// and the mode is carried into the expressions by the namespace
 		// resolver each of them is compiled through. See compatModeAt.
-		if n.Name.URI == xdm.NSXSL {
+		if n.Name().URI == xdm.NSXSL {
 			return c.compileXSLInstruction(n)
 		}
 		return c.compileLiteralElement(n)
@@ -216,14 +226,14 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &extensionInstr{name: n.Name, fallback: body, hasFallback: ok}, nil
+		return &extensionInstr{name: n.Name(), fallback: body, hasFallback: ok}, nil
 	}
 	sets, err := parseUseAttributeSets(n)
 	if err != nil {
 		return nil, err
 	}
 	instr := &literalElemInstr{
-		name: n.Name, attrSets: sets, baseURI: n.BaseURI,
+		name: n.Name(), attrSets: sets, baseURI: n.BaseURI(),
 		pkg: compilePackage,
 		// §11.1: the property is spelled xsl:inherit-namespaces here,
 		// because an unprefixed name on a literal result element is an
@@ -286,17 +296,17 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	// everything inside it, so an ancestor's list is collected too — a
 	// stylesheet routinely writes one on xsl:stylesheet and expects it to
 	// cover every literal element in the module.
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := n; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		if cur == n || cur.Name.URI == xdm.NSXSL {
+		if cur == n || cur.Name().URI == xdm.NSXSL {
 			if err := addExcluded(cur, cur.AttrValue("exclude-result-prefixes")); err != nil {
 				return nil, err
 			}
 		}
 		if v := cur.Attr(xdm.NSXSL, "exclude-result-prefixes"); v != nil {
-			if err := addExcluded(cur, v.Value); err != nil {
+			if err := addExcluded(cur, v.Value()); err != nil {
 				return nil, err
 			}
 		}
@@ -334,15 +344,15 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 		instr.namespaces = append(instr.namespaces, nsBinding{prefix: p, uri: uri})
 	}
 
-	for _, a := range n.Attrs {
+	for a := range n.Attrs() {
 		// xsl:-prefixed attributes on a literal element are directives, not
 		// output attributes.
-		if a.Name.URI == xdm.NSXSL {
+		if a.Name().URI == xdm.NSXSL {
 			continue
 		}
-		avt, err := compileAVT(a.Value, newNSResolver(n, ""))
+		avt, err := compileAVT(a.Value(), newNSResolver(n, ""))
 		if err != nil {
-			return nil, fmt.Errorf("in attribute %s: %w", a.Name.Lexical(), err)
+			return nil, fmt.Errorf("in attribute %s: %w", a.Name().Lexical(), err)
 		}
 		// The parser recovers an attribute's prefix by scanning the in-scope
 		// bindings for one matching its URI, innermost first, so a prefix
@@ -351,7 +361,7 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 		// result would not be readable back — so the declaration reappears
 		// under the dropped spelling. Re-point the name at a surviving
 		// prefix for the same URI when the stylesheet named this one.
-		an := a.Name
+		an := a.Name()
 		if an.URI != "" && excludedPrefixes[an.Prefix] {
 			if p, ok := survivingPrefix(scope, an.URI, excludedPrefixes); ok {
 				an.Prefix = p
@@ -392,7 +402,7 @@ func survivingPrefix(scope map[string]string, uri string, excludedPrefixes map[s
 func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 	ns := newNSResolver(n, "")
 
-	switch n.Name.Local {
+	switch n.Name().Local {
 	case "value-of":
 		return c.compileValueOf(n, ns)
 	case "text":
@@ -400,9 +410,11 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		// one in a sequence constructor, so it is compiled through the same
 		// path rather than taken literally. The node stands in for the
 		// element's whole content, which xsl:text is defined to concatenate.
-		return c.compileText(&xdm.Node{
-			Kind: xdm.KindText, Value: n.StringValue(), Parent: n,
-		})
+		return c.compileText(func() *xdm.Node {
+			nd := xdm.NewNode(xdm.KindText, xdm.QName{}, n.StringValue())
+			nd.SetParent(n)
+			return nd
+		}())
 	case "apply-templates":
 		return c.compileApplyTemplates(n, ns)
 	case "call-template":
@@ -458,7 +470,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			noNamespaces:     noAttr(n, "copy-namespaces"),
 			copyAccumulators: yesAttr(n, "copy-accumulators"),
 			validation:       spec,
-			baseURI:          n.BaseURI,
+			baseURI:          n.BaseURI(),
 		}, nil
 	case "evaluate":
 		return c.compileEvaluate(n, ns)
@@ -503,7 +515,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			if !isXSL(ch, "fallback") {
 				return nil, fmt.Errorf(
 					"XTSE3185: xsl:sequence has a select attribute and a %s "+
-						"child", ch.Name.Lexical())
+						"child", ch.Name().Lexical())
 			}
 		}
 		return &sequenceInstr{sel: sel}, nil
@@ -574,7 +586,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		// XTSE0010 for all of these, and so does this.
 		return nil, fmt.Errorf(
 			"XTSE0010: xsl:%s is not allowed here; it belongs inside %s",
-			n.Name.Local, enclosingElementFor(n.Name.Local))
+			n.Name().Local, enclosingElementFor(n.Name().Local))
 	}
 	// Section 3.9: an element in the XSLT namespace that this version does not
 	// define, appearing in a sequence constructor where forwards-compatible
@@ -600,7 +612,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 	// spellings of diagnostics that may be dead.
 	return nil, fmt.Errorf(
 		"xsl:%s is not an XSLT %s element (XTSE0010)",
-		n.Name.Local, xsltVersionName(xpathVersionAt(n)))
+		n.Name().Local, xsltVersionName(xpathVersionAt(n)))
 }
 
 // extensionInstr stands for an extension instruction the processor does not
@@ -648,7 +660,7 @@ func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	// rather than tested for emptiness because separator="" is a meaningful
 	// request for no separator at all.
 	if a := n.Attr("", "separator"); a != nil {
-		sep, err := compileAVT(a.Value, ns)
+		sep, err := compileAVT(a.Value(), ns)
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:value-of/@separator: %w", err)
 		}
@@ -1009,7 +1021,7 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 		return nil, err
 	}
 	instr := &elementInstr{name: nameAVT, scope: n, attrSets: sets,
-		baseURI: n.BaseURI, noInherit: noAttr(n, "inherit-namespaces")}
+		baseURI: n.BaseURI(), noInherit: noAttr(n, "inherit-namespaces")}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
 	}
@@ -1017,7 +1029,7 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	// the name in no namespace, the second lets the prefix decide. Testing
 	// the *value* rather than the attribute's presence conflated them.
 	if a := n.Attr("", "namespace"); a != nil {
-		avt, err := compileAVT(a.Value, ns)
+		avt, err := compileAVT(a.Value(), ns)
 		if err != nil {
 			return nil, err
 		}
@@ -1038,7 +1050,7 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 	}
 	instr := &attributeInstr{name: nameAVT, scope: n}
 	if sepAttr := n.Attr("", "separator"); sepAttr != nil {
-		sep, err := compileAVT(sepAttr.Value, ns)
+		sep, err := compileAVT(sepAttr.Value(), ns)
 		if err != nil {
 			return nil, err
 		}
@@ -1051,7 +1063,7 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 	// the name in no namespace, the second lets the prefix decide. Testing
 	// the *value* rather than the attribute's presence conflated them.
 	if a := n.Attr("", "namespace"); a != nil {
-		avt, err := compileAVT(a.Value, ns)
+		avt, err := compileAVT(a.Value(), ns)
 		if err != nil {
 			return nil, err
 		}
@@ -1200,11 +1212,11 @@ func (c *compiler) compileAssert(n *xdm.Node, ns xpath.NamespaceResolver) (Instr
 func requiredExpr(n *xdm.Node, attr string, ns xpath.NamespaceResolver) (*xpath.Compiled, error) {
 	v := n.AttrValue(attr)
 	if v == "" {
-		return nil, fmt.Errorf("%s requires a %s attribute", n.Name.Lexical(), attr)
+		return nil, fmt.Errorf("%s requires a %s attribute", n.Name().Lexical(), attr)
 	}
 	comp, err := compileExpr(v, ns)
 	if err != nil {
-		return nil, fmt.Errorf("in %s/@%s: %w", n.Name.Lexical(), attr, err)
+		return nil, fmt.Errorf("in %s/@%s: %w", n.Name().Lexical(), attr, err)
 	}
 	return comp, nil
 }
@@ -1212,7 +1224,7 @@ func requiredExpr(n *xdm.Node, attr string, ns xpath.NamespaceResolver) (*xpath.
 func requiredAVT(n *xdm.Node, attr string, ns xpath.NamespaceResolver) (*avt, error) {
 	v := n.AttrValue(attr)
 	if v == "" {
-		return nil, fmt.Errorf("%s requires a %s attribute", n.Name.Lexical(), attr)
+		return nil, fmt.Errorf("%s requires a %s attribute", n.Name().Lexical(), attr)
 	}
 	return compileAVT(v, ns)
 }
@@ -1221,9 +1233,9 @@ func requiredAVT(n *xdm.Node, attr string, ns xpath.NamespaceResolver) (*avt, er
 // xsl:with-param elements, which the enclosing instruction consumes itself.
 func nonSortChildren(n *xdm.Node) []*xdm.Node {
 	var out []*xdm.Node
-	for _, ch := range n.Children {
-		if ch.Kind == xdm.KindElement && ch.Name.URI == xdm.NSXSL &&
-			(ch.Name.Local == "sort" || ch.Name.Local == "with-param") {
+	for ch := range n.Children() {
+		if ch.Kind() == xdm.KindElement && ch.Name().URI == xdm.NSXSL &&
+			(ch.Name().Local == "sort" || ch.Name().Local == "with-param") {
 			continue
 		}
 		out = append(out, ch)
@@ -1262,22 +1274,22 @@ func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver
 		return nil, err
 	}
 	instr.overrideAVTs = map[string]*avt{}
-	for _, a := range n.Attrs {
-		if a.Name.URI != "" || a.Name.Local == "href" || a.Name.Local == "format" {
+	for a := range n.Attrs() {
+		if a.Name().URI != "" || a.Name().Local == "href" || a.Name().Local == "format" {
 			continue
 		}
 		// validation and type are not serialisation parameters. They ask for
 		// the result tree to be assessed, and treating them as overrides
 		// would have put validation="strict" into the output settings, where
 		// nothing reads it.
-		if a.Name.Local == "validation" || a.Name.Local == "type" {
+		if a.Name().Local == "validation" || a.Name().Local == "type" {
 			continue
 		}
-		t, err := compileAVT(a.Value, ns)
+		t, err := compileAVT(a.Value(), ns)
 		if err != nil {
-			return nil, fmt.Errorf("in xsl:result-document/@%s: %w", a.Name.Local, err)
+			return nil, fmt.Errorf("in xsl:result-document/@%s: %w", a.Name().Local, err)
 		}
-		instr.overrideAVTs[a.Name.Local] = t
+		instr.overrideAVTs[a.Name().Local] = t
 	}
 	// §19.2.2: a result document is a document node, and validation on it is
 	// document-node validation — the sole element child is assessed, and the
@@ -1374,26 +1386,28 @@ func checkCaseOrder(v string) error {
 // positions can never carry meaningful text, so preserving there would inject
 // indentation into every stylesheet that formats them across lines.
 func stylesheetTextPreserved(n *xdm.Node) bool {
-	parent := n.Parent
+	parent := n.Parent()
 	if parent == nil {
 		return false
 	}
-	if parent.Name.URI == xdm.NSXSL && whitespaceStrippingParents[parent.Name.Local] {
+	if parent.Name().URI == xdm.NSXSL && whitespaceStrippingParents[parent.Name().Local] {
 		return false
 	}
 	// The *following* sibling is what matters: text laid out before an
 	// xsl:sort or xsl:param is indentation, whereas text after the last one
 	// is content of the sequence constructor.
-	for i, ch := range parent.Children {
+	for i := range parent.NumChildren() {
+		ch := parent.ChildAt(i)
 		if ch != n {
 			continue
 		}
-		for _, sib := range parent.Children[i+1:] {
-			if sib.Kind != xdm.KindElement {
+		for j := i + 1; j < parent.NumChildren(); j++ {
+			sib := parent.ChildAt(j)
+			if sib.Kind() != xdm.KindElement {
 				continue
 			}
-			if sib.Name.URI == xdm.NSXSL &&
-				(sib.Name.Local == "param" || sib.Name.Local == "sort") {
+			if sib.Name().URI == xdm.NSXSL &&
+				(sib.Name().Local == "param" || sib.Name().Local == "sort") {
 				return false
 			}
 			break
@@ -1404,12 +1418,12 @@ func stylesheetTextPreserved(n *xdm.Node) bool {
 	// inside a "preserve" region turns stripping back on, which is why the
 	// walk stops at the first attribute found rather than at the first
 	// "preserve".
-	for cur := parent; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := parent; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
 		if a := cur.Attr(xdm.NSXML, "space"); a != nil {
-			return a.Value == "preserve"
+			return a.Value() == "preserve"
 		}
 	}
 	return false
@@ -1441,7 +1455,7 @@ var whitespaceStrippingParents = map[string]bool{
 func mergeAcrossComments(nodes []*xdm.Node) []*xdm.Node {
 	has := false
 	for _, n := range nodes {
-		if n.Kind == xdm.KindComment || n.Kind == xdm.KindPI {
+		if n.Kind() == xdm.KindComment || n.Kind() == xdm.KindPI {
 			has = true
 			break
 		}
@@ -1451,12 +1465,13 @@ func mergeAcrossComments(nodes []*xdm.Node) []*xdm.Node {
 	}
 	var kept []*xdm.Node
 	for _, n := range nodes {
-		if n.Kind == xdm.KindComment || n.Kind == xdm.KindPI {
+		if n.Kind() == xdm.KindComment || n.Kind() == xdm.KindPI {
 			continue
 		}
-		if n.Kind == xdm.KindText && len(kept) > 0 && kept[len(kept)-1].Kind == xdm.KindText {
+		if n.Kind() == xdm.KindText && len(kept) > 0 && kept[len(kept)-1].Kind() == xdm.KindText {
 			prev := kept[len(kept)-1]
-			merged := &xdm.Node{Kind: xdm.KindText, Value: prev.Value + n.Value, Parent: prev.Parent}
+			merged := xdm.NewNode(xdm.KindText, xdm.QName{}, prev.Value()+n.Value())
+			merged.SetParent(prev.Parent())
 			kept[len(kept)-1] = merged
 			continue
 		}
@@ -1720,35 +1735,35 @@ func (c *compiler) compileEvaluate(n *xdm.Node, ns *nsResolver) (Instruction, er
 	instr := &evaluateInstr{xpathExpr: xp, ns: ns}
 
 	if a := n.Attr("", "context-item"); a != nil {
-		ci, err := compileExpr(a.Value, ns)
+		ci, err := compileExpr(a.Value(), ns)
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:evaluate/@context-item: %w", err)
 		}
 		instr.contextItem = ci
 	}
 	if a := n.Attr("", "as"); a != nil {
-		st, err := compileSequenceType(a.Value, ns)
+		st, err := compileSequenceType(a.Value(), ns)
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:evaluate/@as: %w", err)
 		}
 		instr.as = st
 	}
 	if a := n.Attr("", "with-params"); a != nil {
-		wp, err := compileExpr(a.Value, ns)
+		wp, err := compileExpr(a.Value(), ns)
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:evaluate/@with-params: %w", err)
 		}
 		instr.withParams = wp
 	}
 	if a := n.Attr("", "namespace-context"); a != nil {
-		nc, err := compileExpr(a.Value, ns)
+		nc, err := compileExpr(a.Value(), ns)
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:evaluate/@namespace-context: %w", err)
 		}
 		instr.nsContext = nc
 	}
 	if a := n.Attr("", "schema-aware"); a != nil {
-		sa, err := compileAVT(a.Value, ns)
+		sa, err := compileAVT(a.Value(), ns)
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:evaluate/@schema-aware: %w", err)
 		}
@@ -1768,7 +1783,7 @@ func (c *compiler) compileEvaluate(n *xdm.Node, ns *nsResolver) (Instruction, er
 		instr.schemaAware = sa
 	}
 	if a := n.Attr("", "base-uri"); a != nil {
-		b, err := compileAVT(a.Value, ns)
+		b, err := compileAVT(a.Value(), ns)
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:evaluate/@base-uri: %w", err)
 		}
@@ -2151,9 +2166,9 @@ func (c *compiler) compileIterate(n *xdm.Node, ns *nsResolver) (Instruction, err
 	// are not part of the sequence constructor. Section 8.4's content model
 	// puts them first, and stripping them here is what leaves the body.
 	var bodyNodes []*xdm.Node
-	for _, ch := range n.Children {
-		if ch.Kind == xdm.KindElement && ch.Name.URI == xdm.NSXSL {
-			switch ch.Name.Local {
+	for ch := range n.Children() {
+		if ch.Kind() == xdm.KindElement && ch.Name().URI == xdm.NSXSL {
+			switch ch.Name().Local {
 			case "param":
 				if err := checkIterateParam(ch); err != nil {
 					return nil, err
@@ -2167,7 +2182,7 @@ func (c *compiler) compileIterate(n *xdm.Node, ns *nsResolver) (Instruction, err
 			case "on-completion":
 				instr.hasOnCompletion = true
 				if a := ch.Attr("", "select"); a != nil {
-					sc, err := compileExpr(a.Value, newNSResolver(ch, ""))
+					sc, err := compileExpr(a.Value(), newNSResolver(ch, ""))
 					if err != nil {
 						return nil, fmt.Errorf(
 							"in xsl:on-completion/@select: %w", err)
@@ -2197,7 +2212,7 @@ func (c *compiler) compileIterate(n *xdm.Node, ns *nsResolver) (Instruction, err
 func (c *compiler) compileBreak(n *xdm.Node, ns *nsResolver) (Instruction, error) {
 	instr := &breakInstr{}
 	if a := n.Attr("", "select"); a != nil {
-		sel, err := compileExpr(a.Value, ns)
+		sel, err := compileExpr(a.Value(), ns)
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:break/@select: %w", err)
 		}

@@ -14,13 +14,13 @@ import (
 // why "@*" selects attributes while "*" selects elements even though both are
 // the same test: the axis decides the kind, the test decides the name.
 func (t *NameTest) Matches(n *xdm.Node, principal xdm.NodeKind) bool {
-	if n.Kind != principal {
+	if n.Kind() != principal {
 		return false
 	}
-	if !t.AnyURI && n.Name.URI != t.Name.URI {
+	if !t.AnyURI && n.Name().URI != t.Name.URI {
 		return false
 	}
-	if !t.AnyLocal && n.Name.Local != t.Name.Local {
+	if !t.AnyLocal && n.Name().Local != t.Name.Local {
 		return false
 	}
 	return true
@@ -45,7 +45,7 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 	if t.Any {
 		return true
 	}
-	if n.Kind != t.Kind {
+	if n.Kind() != t.Kind {
 		return false
 	}
 	if t.Content != nil {
@@ -56,8 +56,8 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 		// made document-node(schema-element(address)) answer true for a
 		// document the type cannot describe at all.
 		var only *xdm.Node
-		for _, c := range n.Children {
-			if c.Kind == xdm.KindElement {
+		for c := range n.Children() {
+			if c.Kind() == xdm.KindElement {
 				if only != nil {
 					return false
 				}
@@ -67,24 +67,24 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 		if only == nil {
 			return false
 		}
-		return t.Content.Matches(only, only.Kind)
+		return t.Content.Matches(only, only.Kind())
 	}
 	if t.HasName && t.Name != nil {
-		if n.Kind == xdm.KindPI {
+		if n.Kind() == xdm.KindPI {
 			// A PI test names the target, which has no namespace.
-			return n.Name.Local == t.Name.Local
+			return n.Name().Local == t.Name.Local
 		}
-		if n.Name.URI != t.Name.URI || n.Name.Local != t.Name.Local {
+		if n.Name().URI != t.Name.URI || n.Name().Local != t.Name.Local {
 			// schema-element(E) matches E and anything substitutable for it,
 			// so a name that is not E itself may still be a member of E's
 			// substitution group. The members were resolved when the test was
 			// parsed; an ordinary name test has none and falls straight out.
-			if !t.substitutes(n.Name) {
+			if !t.substitutes(n.Name()) {
 				return false
 			}
 		}
 	}
-	if t.SchemaDeclared && n.TypeAnnotation == "" {
+	if t.SchemaDeclared && n.TypeAnnotation() == "" {
 		// schema-element(E) and schema-attribute(A) match by *declaration*,
 		// not by name: the node must have been validated against E, not
 		// merely called E. An unvalidated node carries no annotation, so
@@ -95,7 +95,7 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 		return false
 	}
 	if t.SchemaDeclared && t.DeclaredType != "" && t.Name != nil &&
-		n.Name.URI == t.Name.URI && n.Name.Local == t.Name.Local &&
+		n.Name().URI == t.Name.URI && n.Name().Local == t.Name.Local &&
 		!declaredTypeMatches(n, t.DeclaredType) {
 		// The node was validated, but against a declaration whose type is
 		// not the global one's — a local element declaration of the same
@@ -126,7 +126,7 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 		// is not something the grammar produces, and asking the question of
 		// a non-element would answer false and reject a node the annotation
 		// already matched.
-		if !t.TypeNillable && n.Kind == xdm.KindElement && nodeIsNilled(n) {
+		if !t.TypeNillable && n.Kind() == xdm.KindElement && nodeIsNilled(n) {
 			return false
 		}
 		return true
@@ -194,7 +194,7 @@ func (t *KindTest) matchesUnionMember(n *xdm.Node) bool {
 // fn:nilled and the element() kind test must agree on this, which is why the
 // rule lives in one place rather than being written out at each.
 func nodeIsNilled(n *xdm.Node) bool {
-	return n != nil && n.Kind == xdm.KindElement && n.IsNilled
+	return n != nil && n.Kind() == xdm.KindElement && n.IsNilled()
 }
 
 // substitutes reports whether name is a member of the substitution group the
@@ -232,13 +232,13 @@ func nodeTypeMatches(n *xdm.Node, want string) bool {
 	// those are atomic. Treating anyAtomicType like anyType made
 	// "$e instance of element(*, xs:anyAtomicType)" true, which is the exact
 	// distinction type-0203 is written to draw.
-	if w == "anyAtomicType" && n.Kind == xdm.KindElement {
+	if w == "anyAtomicType" && n.Kind() == xdm.KindElement {
 		return false
 	}
 	// The roots of the hierarchy are built-ins, so they only answer for an
 	// UNQUALIFIED want. A schema type that happens to be called "anyType" in
 	// its own namespace is an ordinary named type, not the root.
-	if n.TypeAnnotation == "" {
+	if n.TypeAnnotation() == "" {
 		if qualified {
 			return false
 		}
@@ -246,9 +246,9 @@ func nodeTypeMatches(n *xdm.Node, want string) bool {
 		case "anyType", "anySimpleType", "anyAtomicType":
 			return true
 		case "untyped":
-			return n.Kind == xdm.KindElement
+			return n.Kind() == xdm.KindElement
 		case "untypedAtomic":
-			return n.Kind == xdm.KindAttribute
+			return n.Kind() == xdm.KindAttribute
 		}
 		return false
 	}
@@ -258,7 +258,7 @@ func nodeTypeMatches(n *xdm.Node, want string) bool {
 			return true
 		}
 	}
-	if schemaTypeNameMatches(xdm.TypeEnvOf(n), n.TypeAnnotation, want) {
+	if schemaTypeNameMatches(xdm.TypeEnvOf(n), n.TypeAnnotation(), want) {
 		return true
 	}
 	// The built-in hierarchy is not in the schema's derivation table — nothing
@@ -270,7 +270,7 @@ func nodeTypeMatches(n *xdm.Node, want string) bool {
 	// built-in too. A qualified want is a schema type and is never reachable
 	// through the built-in hierarchy; letting it in here would restore the
 	// local-name conflation this change removes.
-	a := n.TypeAnnotation
+	a := n.TypeAnnotation()
 	if !xdm.IsQualifiedAnnotation(a) {
 		_, a = xdm.SplitQName(a)
 	}
@@ -334,10 +334,10 @@ func declaredTypeMatches(n *xdm.Node, want string) bool {
 	// A qualified annotation is offered again by its local part, which is the
 	// form the declaration reported. Only the annotation is re-spelled; want
 	// stays as given, so a bare want never gains reach it did not have.
-	if !xdm.IsQualifiedAnnotation(n.TypeAnnotation) {
+	if !xdm.IsQualifiedAnnotation(n.TypeAnnotation()) {
 		return false
 	}
-	local := xdm.AnnotationLocal(n.TypeAnnotation)
+	local := xdm.AnnotationLocal(n.TypeAnnotation())
 	if local == want {
 		return true
 	}
@@ -345,7 +345,7 @@ func declaredTypeMatches(n *xdm.Node, want string) bool {
 	// walks it, and terminates the same way: a visited set, because a schema
 	// whose derivations formed a cycle must not spin here and a repeated name
 	// is what a cycle is.
-	a := n.TypeAnnotation
+	a := n.TypeAnnotation()
 	env := xdm.TypeEnvOf(n)
 	seen := map[string]bool{a: true}
 	for a != "" {

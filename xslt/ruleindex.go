@@ -169,13 +169,13 @@ func (s *Stylesheet) candidates(node *xdm.Node, mode string) ([]int, bool) {
 		return nil, false
 	}
 	mr := s.rules[mode]
-	if mr == nil || int(node.Kind) >= len(mr.byKind) {
+	if mr == nil || int(node.Kind()) >= len(mr.byKind) {
 		return nil, false
 	}
-	if node.Kind == xdm.KindElement || node.Kind == xdm.KindAttribute {
-		if l, ok := mr.byName[ruleName{node.Kind, node.Name.URI, node.Name.Local}]; ok {
+	if node.Kind() == xdm.KindElement || node.Kind() == xdm.KindAttribute {
+		if l, ok := mr.byName[ruleName{node.Kind(), node.Name().URI, node.Name().Local}]; ok {
 			return l, true
 		}
 	}
-	return mr.byKind[node.Kind], true
+	return mr.byKind[node.Kind()], true
 }

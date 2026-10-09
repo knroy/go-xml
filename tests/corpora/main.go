@@ -107,7 +107,7 @@ func runMainDoc(args []string) {
 		if len(els) == 0 {
 			continue
 		}
-		name := xdm.QName{URI: els[0].Name.URI, Local: els[0].Name.Local}
+		name := xdm.QName{URI: els[0].Name().URI, Local: els[0].Name().Local}
 
 		var chosen *xsd.Schema
 		for _, s := range loaded {

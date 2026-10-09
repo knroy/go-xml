@@ -62,7 +62,7 @@ func registerSeq30Funcs(l *Library) {
 			}
 			n = node
 		}
-		return boolSeq(len(n.Children) > 0), nil
+		return boolSeq(n.NumChildren() > 0), nil
 	})
 
 	// fn:innermost($nodes as node()*) as node()*
@@ -146,7 +146,7 @@ func parentOf(n *xdm.Node) *xdm.Node {
 	if n == nil {
 		return nil
 	}
-	return n.Parent
+	return n.Parent()
 }
 
 // argNodes returns argument i as a slice of nodes, rejecting any item that is

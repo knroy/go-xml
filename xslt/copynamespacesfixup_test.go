@@ -117,15 +117,15 @@ func inScopeOfCopy(t *testing.T, sheet, src string) []string {
 		if copied != nil {
 			return
 		}
-		if n.Kind == xdm.KindElement && n.Name.Local == "out" {
-			for _, c := range n.Children {
-				if c.Kind == xdm.KindElement {
+		if n.Kind() == xdm.KindElement && n.Name().Local == "out" {
+			for c := range n.Children() {
+				if c.Kind() == xdm.KindElement {
 					copied = c
 					return
 				}
 			}
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}

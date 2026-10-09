@@ -323,7 +323,7 @@ func (g *generalPattern) matches(node *xdm.Node, ctx *xpath.Context) (bool, erro
 	// that x's *parent*, which does not exist — the anchor is the x itself
 	// and the expression is evaluated from one level above where the first
 	// step names. Walking the whole chain covers both.
-	for anc := node; ; anc = anc.Parent {
+	for anc := node; ; anc = anc.Parent() {
 		seq, err := g.expr.Eval(ctx.WithFocus(anc, 1, 1))
 		if err != nil {
 			// A pattern evaluated against a node it was not written for is a
@@ -335,7 +335,7 @@ func (g *generalPattern) matches(node *xdm.Node, ctx *xpath.Context) (bool, erro
 		} else if containsNode(seq, node) {
 			return true, nil
 		}
-		if anc.Parent == nil {
+		if anc.Parent() == nil {
 			// The chain ends at the root. A relative pattern is still
 			// anchored below it — "x/(a|b)" against a tree whose root is the
 			// x needs the x's own parent, which the chain does not have — so
@@ -369,8 +369,8 @@ func (g *generalPattern) matches(node *xdm.Node, ctx *xpath.Context) (bool, erro
 func (g *generalPattern) matchesUnderRoot(root, node *xdm.Node,
 	ctx *xpath.Context) (bool, error) {
 
-	for _, ch := range root.Children {
-		if ch.Kind != xdm.KindElement && ch.Kind != xdm.KindDocument {
+	for ch := range root.Children() {
+		if ch.Kind() != xdm.KindElement && ch.Kind() != xdm.KindDocument {
 			continue
 		}
 		seq, err := g.expr.Eval(ctx.WithFocus(ch, 1, 1))
@@ -480,8 +480,8 @@ func patternsAllow30(ns xpath.NamespaceResolver) bool {
 // declaredXSLTVersion returns the XSLT version stated on el or on the nearest
 // ancestor that states one, defaulting to 2.0 as versionAt does.
 func declaredXSLTVersion(el *xdm.Node) float64 {
-	for a := el; a != nil; a = a.Parent {
-		if a.Kind == xdm.KindElement && hasVersionAttr(a) {
+	for a := el; a != nil; a = a.Parent() {
+		if a.Kind() == xdm.KindElement && hasVersionAttr(a) {
 			return versionAt(a)
 		}
 	}
@@ -993,18 +993,19 @@ func unwrapParens(src string) (string, bool) {
 func (g *generalPattern) matchesFromVirtualParent(root, node *xdm.Node,
 	ctx *xpath.Context) (bool, error) {
 
-	if root.Kind != xdm.KindElement {
+	if root.Kind() != xdm.KindElement {
 		return false, nil
 	}
 	// The path from the root down to the candidate, as child indexes. It is
 	// what identifies the candidate inside the copy.
 	var path []int
-	for n := node; n != root; n = n.Parent {
-		if n.Parent == nil {
+	for n := node; n != root; n = n.Parent() {
+		if n.Parent() == nil {
 			return false, nil
 		}
 		idx := -1
-		for i, ch := range n.Parent.Children {
+		for i := range n.Parent().NumChildren() {
+			ch := n.Parent().ChildAt(i)
 			if ch == n {
 				idx = i
 				break
@@ -1019,10 +1020,10 @@ func (g *generalPattern) matchesFromVirtualParent(root, node *xdm.Node,
 	doc, copied := wrapInDocument(root)
 	target := copied
 	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] >= len(target.Children) {
+		if path[i] >= target.NumChildren() {
 			return false, nil
 		}
-		target = target.Children[path[i]]
+		target = target.ChildAt(path[i])
 	}
 
 	seq, err := g.expr.Eval(ctx.WithFocus(doc, 1, 1))
@@ -1041,22 +1042,23 @@ func wrapInDocument(el *xdm.Node) (doc, copied *xdm.Node) {
 	var clone func(n, parent *xdm.Node) *xdm.Node
 	clone = func(n, parent *xdm.Node) *xdm.Node {
 		c := xdmbuild.ShallowCopy(n)
-		xdmbuild.SetParent(c, parent)
-		xdmbuild.SetChildren(c, nil)
-		xdmbuild.SetAttrs(c, nil)
-		for _, a := range n.Attrs {
+		c.SetParent(parent)
+		var attrs, kids []*xdm.Node
+		for a := range n.Attrs() {
 			ac := xdmbuild.ShallowCopy(a)
-			xdmbuild.SetParent(ac, c)
-			xdmbuild.SetAttrs(c, append(c.Attrs, ac))
+			ac.SetParent(c)
+			attrs = append(attrs, ac)
 		}
-		for _, ch := range n.Children {
-			xdmbuild.SetChildren(c, append(c.Children, clone(ch, c)))
+		for ch := range n.Children() {
+			kids = append(kids, clone(ch, c))
 		}
+		c.SetAttrs(attrs)
+		c.SetChildren(kids)
 		return c
 	}
 	doc = xdmbuild.NewDocument("")
 	copied = clone(el, doc)
-	xdmbuild.SetChildren(doc, []*xdm.Node{copied})
+	doc.SetChildren([]*xdm.Node{copied})
 	return doc, copied
 }
 

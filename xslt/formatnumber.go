@@ -55,7 +55,7 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node, precedence int) error {
 		if a == nil {
 			return nil
 		}
-		v := a.Value
+		v := a.Value()
 		r := []rune(v)
 		if len(r) != 1 {
 			return fmt.Errorf(
@@ -87,11 +87,11 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node, precedence int) error {
 	// Presence, not a non-empty value: both are xs:string, so NaN="" is a
 	// legal declaration that formats NaN as the empty string.
 	if a := el.Attr("", "infinity"); a != nil {
-		df.Infinity = a.Value
+		df.Infinity = a.Value()
 		stated["infinity"] = true
 	}
 	if a := el.Attr("", "NaN"); a != nil {
-		df.NaN = a.Value
+		df.NaN = a.Value()
 		stated["NaN"] = true
 	}
 

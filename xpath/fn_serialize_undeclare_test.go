@@ -13,28 +13,20 @@ import (
 // anything to say about. It is built rather than parsed because an XML 1.0
 // parser cannot read the xmlns:p="" that produces it.
 func undeclaringTree() *xdm.Node {
-	root := &xdm.Node{
-		Kind: xdm.KindElement,
-		Name: xdm.QName{Local: "root"},
-	}
-	root.Namespaces = []*xdm.Node{{
-		Kind:   xdm.KindNamespace,
-		Name:   xdm.QName{Local: "p"},
-		Value:  "http://example.com/p",
-		Parent: root,
-	}}
-	child := &xdm.Node{
-		Kind:   xdm.KindElement,
-		Name:   xdm.QName{Local: "child"},
-		Parent: root,
-	}
-	child.Namespaces = []*xdm.Node{{
-		Kind:   xdm.KindNamespace,
-		Name:   xdm.QName{Local: "p"},
-		Value:  "",
-		Parent: child,
-	}}
-	root.Children = []*xdm.Node{child}
+	root := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "root"}, "")
+	root.SetNamespaceDecls([]*xdm.Node{func() *xdm.Node {
+		n := xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: "p"}, "http://example.com/p")
+		n.SetParent(root)
+		return n
+	}()})
+	child := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "child"}, "")
+	child.SetParent(root)
+	child.SetNamespaceDecls([]*xdm.Node{func() *xdm.Node {
+		n := xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: "p"}, "")
+		n.SetParent(child)
+		return n
+	}()})
+	root.SetChildren([]*xdm.Node{child})
 	return root
 }
 
@@ -44,10 +36,7 @@ func undeclaringTree() *xdm.Node {
 // variable.
 func paramsElement(params map[string]string) *xdm.Node {
 	const ns = "http://www.w3.org/2010/xslt-xquery-serialization"
-	root := &xdm.Node{
-		Kind: xdm.KindElement,
-		Name: xdm.QName{Prefix: "output", URI: ns, Local: "serialization-parameters"},
-	}
+	root := xdm.NewNode(xdm.KindElement, xdm.QName{Prefix: "output", URI: ns, Local: "serialization-parameters"}, "")
 	// Sorted so the element is the same one on every run; Go randomises map
 	// iteration, and a parameter document is compared by what it holds.
 	names := make([]string, 0, len(params))
@@ -55,20 +44,18 @@ func paramsElement(params map[string]string) *xdm.Node {
 		names = append(names, k)
 	}
 	sort.Strings(names)
+	var kids []*xdm.Node
 	for _, name := range names {
-		c := &xdm.Node{
-			Kind:   xdm.KindElement,
-			Name:   xdm.QName{Prefix: "output", URI: ns, Local: name},
-			Parent: root,
-		}
-		c.Attrs = []*xdm.Node{{
-			Kind:   xdm.KindAttribute,
-			Name:   xdm.QName{Local: "value"},
-			Value:  params[name],
-			Parent: c,
-		}}
-		root.Children = append(root.Children, c)
+		c := xdm.NewNode(xdm.KindElement, xdm.QName{Prefix: "output", URI: ns, Local: name}, "")
+		c.SetParent(root)
+		c.SetAttrs([]*xdm.Node{func() *xdm.Node {
+			n := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: "value"}, params[name])
+			n.SetParent(c)
+			return n
+		}()})
+		kids = append(kids, c)
 	}
+	root.SetChildren(kids)
 	return root
 }
 

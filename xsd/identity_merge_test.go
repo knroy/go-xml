@@ -25,7 +25,7 @@ import (
 func TestMergeAmbiguityIsTerminal(t *testing.T) {
 	ic := &IdentityConstraint{Kind: ICKey, Name: xdm.QName{Local: "k"}}
 	sibling := func(tag string) icTables {
-		n := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: tag}}
+		n := xdm.NewNode(xdm.KindElement, xdm.QName{Local: tag}, "")
 		return icTables{ic: &nodeTable{
 			entries: map[string]*xdm.Node{"A": n},
 			targets: map[*xdm.Node]string{n: "A"},

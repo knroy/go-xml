@@ -198,10 +198,10 @@ func checkImportedNamespace(el, schemaRoot *xdm.Node, ns string) error {
 		return nil
 	}
 	root := schemaRoot
-	if root.Kind == xdm.KindDocument {
+	if root.Kind() == xdm.KindDocument {
 		root = nil
-		for _, ch := range schemaRoot.Children {
-			if ch.Kind == xdm.KindElement {
+		for ch := range schemaRoot.Children() {
+			if ch.Kind() == xdm.KindElement {
 				root = ch
 				break
 			}

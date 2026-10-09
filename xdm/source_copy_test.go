@@ -67,9 +67,9 @@ func TestSourceCopyStillServesItsUsers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		kids := tr.Root.Children[0].Children
-		if last := kids[len(kids)-1]; last.Kind != KindElement || last.Name.Local != "b" {
-			t.Fatalf("last child is %v %q, want element b", last.Kind, last.Name.Local)
+		kids := tr.Root.children[0].children
+		if last := kids[len(kids)-1]; last.kind != KindElement || last.name.Local != "b" {
+			t.Fatalf("last child is %v %q, want element b", last.kind, last.name.Local)
 		}
 	})
 
@@ -89,7 +89,7 @@ func TestSourceCopyStillServesItsUsers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		kids := tr.Root.Children[0].Children
+		kids := tr.Root.children[0].children
 		line, col, ok := kids[len(kids)-1].Position()
 		if want := 20000 + 2; !ok || line != want || col != 1 {
 			t.Fatalf("last element at line %d col %d (ok=%v), want line %d col 1", line, col, ok, want)

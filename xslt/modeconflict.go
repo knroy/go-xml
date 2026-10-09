@@ -39,12 +39,12 @@ type modeDecl struct {
 // @visibility) that make up the rest of the element.
 func modeDeclAttrs(el *xdm.Node) (map[string]string, error) {
 	attrs := map[string]string{}
-	for _, a := range el.Attrs {
-		if a.Name.URI != "" || a.Name.Local == "name" {
+	for a := range el.Attrs() {
+		if a.Name().URI != "" || a.Name().Local == "name" {
 			continue
 		}
-		v := strings.TrimSpace(a.Value)
-		switch a.Name.Local {
+		v := strings.TrimSpace(a.Value())
+		switch a.Name().Local {
 		case "use-accumulators":
 			toks := strings.Fields(v)
 			for i, tok := range toks {
@@ -64,7 +64,7 @@ func modeDeclAttrs(el *xdm.Node) (map[string]string, error) {
 				v = alias
 			}
 		}
-		attrs[a.Name.Local] = v
+		attrs[a.Name().Local] = v
 	}
 	return attrs, nil
 }

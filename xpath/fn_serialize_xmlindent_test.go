@@ -25,15 +25,15 @@ func TestSerializeXMLIndentConstraints(t *testing.T) {
 			want: "<a>\n  <p xml:space=\"preserve\"><b><c/></b></p>\n</a>"},
 		{name: "typed simple content is never indented",
 			doc: `<r><e>  </e></r>`, annotate: func(r *xdm.Node) {
-				r.TypeAnnotation, r.NoTypedValue = "anyType", true
-				r.Children[0].TypeAnnotation = "string"
+				r.ApplyTyping(xdm.Typing{TypeAnnotation: "anyType", NoTypedValue: true})
+				r.FirstChild().ApplyTyping(xdm.Typing{TypeAnnotation: "string"})
 			},
 			want: "<r>\n  <e>  </e>\n</r>"},
 		{name: "typed mixed content is not indented",
 			doc: `<r><m> <b/> </m></r>`, annotate: func(r *xdm.Node) {
-				r.TypeAnnotation, r.NoTypedValue = "anyType", true
-				m := r.Children[0]
-				m.TypeAnnotation, m.MixedContent = "anyType", true
+				r.ApplyTyping(xdm.Typing{TypeAnnotation: "anyType", NoTypedValue: true})
+				m := r.FirstChild()
+				m.ApplyTyping(xdm.Typing{TypeAnnotation: "anyType", MixedContent: true})
 			},
 			want: "<r>\n  <m> <b/> </m>\n</r>"},
 		{name: "an element with no element children is not indented",
@@ -46,7 +46,7 @@ func TestSerializeXMLIndentConstraints(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			root := tree.Root.Children[0]
+			root := tree.Root.FirstChild()
 			if c.annotate != nil {
 				c.annotate(root)
 			}

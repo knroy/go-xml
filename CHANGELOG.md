@@ -14,6 +14,9 @@ and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.m
 | Change | What it means for callers | Commit |
 |---|---|---|
 | Module path `github.com/knroy/go-xml/v2` | Import `github.com/knroy/go-xml/v2/<package>`; v1 stays at `github.com/knroy/go-xml`. The `w3cschemas` module still requires v1. | — |
+| `xdm.Node` fields are unexported; read through methods | `n.Kind`, `n.Name`, `n.Value`, `n.Parent`, `n.BaseURI`, `n.DocumentURI` and the nine typing fields (`n.TypeAnnotation` … `n.MixedContent`) become calls of the same name. `range n.Children` / `n.Attrs` / `n.Namespaces` becomes `range n.Children()` / `n.Attrs()` / `n.NamespaceDecls()` (iterators); `len` and indexing become `NumChildren`/`ChildAt`/`FirstChild`/`LastChild`, `NumAttrs`/`AttrAt`, `NumNamespaceDecls`/`NamespaceDeclAt`. No slice is handed out. `internal/tools/nodeaccess` rewrites old code mechanically. | a8e5346 |
+| Nodes are built with `xdm.NewNode` and the setters | `&xdm.Node{Kind: k, Name: q, Value: v}` becomes `xdm.NewNode(k, q, v)`; field writes become `SetName`, `SetValue`, `SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaceDecls`, `SetBaseURI`, `SetDocumentURI` (builder-side: no re-parenting, no tree link); typing goes through `ApplyTyping` and `SetTypeAnnotation*`. | 9ab409b |
+| `xdmbuild.SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaces`, `SetName`, `SetBaseURI` removed | Call the `xdm.Node` method of the same name (`SetNamespaces` is `SetNamespaceDecls`). | 6b34bc3 |
 
 ### Added
 

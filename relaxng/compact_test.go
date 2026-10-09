@@ -53,42 +53,42 @@ func xmlTree(t *testing.T, src string) *xdm.Node {
 // syntax is not content. Everything else, including attribute values and the
 // order of children, is compared exactly.
 func normalise(n *xdm.Node, sb *strings.Builder, depth int) {
-	if n.Kind == xdm.KindText {
-		if strings.TrimSpace(n.Value) == "" {
+	if n.Kind() == xdm.KindText {
+		if strings.TrimSpace(n.Value()) == "" {
 			return
 		}
-		fmt.Fprintf(sb, "%stext(%q)\n", strings.Repeat(" ", depth), n.Value)
+		fmt.Fprintf(sb, "%stext(%q)\n", strings.Repeat(" ", depth), n.Value())
 		return
 	}
-	if n.Kind != xdm.KindElement {
+	if n.Kind() != xdm.KindElement {
 		return
 	}
-	fmt.Fprintf(sb, "%s<%s>", strings.Repeat(" ", depth), n.Name.Clark())
+	fmt.Fprintf(sb, "%s<%s>", strings.Repeat(" ", depth), n.Name().Clark())
 
 	var attrs []string
-	for _, a := range n.Attrs {
-		if a.Name.URI != "" {
+	for a := range n.Attrs() {
+		if a.Name().URI != "" {
 			continue // a foreign annotation, which carries no schema meaning
 		}
-		value := a.Value
+		value := a.Value()
 		// A name= holding a prefixed name is compared by what the prefix
 		// means, not by how it is spelled: the two syntaxes may reach the same
 		// namespace through different prefixes, and a comparison on the
 		// lexical form would call that a difference when it is not.
-		if a.Name.Local == "name" && strings.Contains(value, ":") {
+		if a.Name().Local == "name" && strings.Contains(value, ":") {
 			prefix, local, _ := strings.Cut(value, ":")
 			if uri, ok := n.LookupPrefix(prefix); ok {
 				value = "{" + uri + "}" + local
 			}
 		}
-		attrs = append(attrs, a.Name.Local+"="+value)
+		attrs = append(attrs, a.Name().Local+"="+value)
 	}
 	sort.Strings(attrs)
 	if len(attrs) > 0 {
 		fmt.Fprintf(sb, " %s", strings.Join(attrs, " "))
 	}
 	sb.WriteString("\n")
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		normalise(c, sb, depth+1)
 	}
 }
@@ -443,10 +443,10 @@ func TestCompactDocumentationIsAnnotation(t *testing.T) {
 	var found string
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
-		if n.Kind == xdm.KindElement && n.Name.URI == compatibilityNS {
+		if n.Kind() == xdm.KindElement && n.Name().URI == compatibilityNS {
 			found = n.StringValue()
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}

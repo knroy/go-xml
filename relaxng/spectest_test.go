@@ -39,7 +39,7 @@ func collectResources(tc *xdm.Node) *suiteResolver {
 	var walk func(n *xdm.Node, dir string)
 	walk = func(n *xdm.Node, dir string) {
 		for _, kid := range n.ChildElements() {
-			switch kid.Name.Local {
+			switch kid.Name().Local {
 			case "resource":
 				name := kid.AttrValue("name")
 				if name == "" {
@@ -97,7 +97,7 @@ func TestSpectest(t *testing.T) {
 	ncase := 0
 	walk = func(n *xdm.Node) {
 		for _, kid := range n.ChildElements() {
-			if kid.Name.Local == "testCase" {
+			if kid.Name().Local == "testCase" {
 				ncase++
 				p, f, kind, why := runCase(t, kid, fmt.Sprintf("case-%04d", ncase))
 				pass += p
@@ -146,7 +146,7 @@ func runCase(t *testing.T, tc *xdm.Node, id string) (pass, fail int, kind, why s
 	var correct, incorrect *xdm.Node
 	var valids, invalids []*xdm.Node
 	for _, kid := range tc.ChildElements() {
-		switch kid.Name.Local {
+		switch kid.Name().Local {
 		case "correct":
 			correct = kid
 		case "incorrect":
@@ -240,16 +240,16 @@ func summarise(n *xdm.Node) string {
 	if len(s) > 90 {
 		s = s[:90] + "..."
 	}
-	return "<" + n.Name.Local + "> " + s
+	return "<" + n.Name().Local + "> " + s
 }
 
 func nodeText(n *xdm.Node) string {
 	var sb strings.Builder
-	for _, a := range n.Attrs {
-		sb.WriteString(" " + a.Name.Local + "=" + a.Value)
+	for a := range n.Attrs() {
+		sb.WriteString(" " + a.Name().Local + "=" + a.Value())
 	}
 	for _, c := range n.ChildElements() {
-		sb.WriteString(" <" + c.Name.Local + ">")
+		sb.WriteString(" <" + c.Name().Local + ">")
 	}
 	return sb.String()
 }

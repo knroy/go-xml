@@ -14,13 +14,13 @@ import (
 
 func collectOrders(n *Node, out []int32) []int32 {
 	out = append(out, n.order)
-	for _, ns := range n.Namespaces {
+	for _, ns := range n.namespaces {
 		out = append(out, ns.order)
 	}
-	for _, a := range n.Attrs {
+	for _, a := range n.attrs {
 		out = append(out, a.order)
 	}
-	for _, c := range n.Children {
+	for _, c := range n.children {
 		out = collectOrders(c, out)
 	}
 	return out

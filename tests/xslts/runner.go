@@ -531,7 +531,7 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	// "doc(document-uri(.)) is ." true, which section 16.1 requires and
 	// accessor-008 tests: without it doc() parses the same file a second
 	// time and answers a node with a different identity.
-	if srcPath != "" && src != nil && src.Kind == xdm.KindDocument {
+	if srcPath != "" && src != nil && src.Kind() == xdm.KindDocument {
 		docs.Preload(fileURI(srcPath), &xdm.Tree{Root: src})
 	}
 	// Every other source the environment declares with a validation is
@@ -1202,14 +1202,14 @@ func findByID(n *xdm.Node, id string) *xdm.Node {
 	if n == nil {
 		return nil
 	}
-	if n.Kind == xdm.KindElement {
-		for _, a := range n.Attrs {
-			if a.Name.Local == "id" && a.Value == id {
+	if n.Kind() == xdm.KindElement {
+		for a := range n.Attrs() {
+			if a.Name().Local == "id" && a.Value() == id {
 				return n
 			}
 		}
 	}
-	for _, ch := range n.Children {
+	for ch := range n.Children() {
 		if got := findByID(ch, id); got != nil {
 			return got
 		}

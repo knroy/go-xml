@@ -31,8 +31,7 @@ const typedProbeNS = "urn:go-xml:finding24:output"
 // assessedAttr is an attribute node carrying every PSVI property, standing in
 // for one a validator has just produced.
 func assessedAttr() *xdm.Node {
-	a := &xdm.Node{Kind: xdm.KindAttribute,
-		Name: xdm.QName{Local: "a"}, Value: "10 20"}
+	a := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: "a"}, "10 20")
 	a.ApplyTyping(xdm.Typing{
 		TypeAnnotation:   xdm.AnnotationName(typedProbeNS, "L"),
 		UnionMember:      xdm.AnnotationName(typedProbeNS, "M"),
@@ -67,13 +66,13 @@ func onlyAttr(t *testing.T, out *outputBuilder) xdm.Typing {
 		t.Fatalf("builder produced %d items, want 1", len(seq))
 	}
 	n, ok := seq[0].(*xdm.Node)
-	if !ok || n.Kind != xdm.KindElement {
+	if !ok || n.Kind() != xdm.KindElement {
 		t.Fatalf("builder produced %T, want an element", seq[0])
 	}
-	if len(n.Attrs) != 1 {
-		t.Fatalf("element carries %d attributes, want 1", len(n.Attrs))
+	if n.NumAttrs() != 1 {
+		t.Fatalf("element carries %d attributes, want 1", n.NumAttrs())
 	}
-	return xdm.TypingOf(n.Attrs[0])
+	return xdm.TypingOf(n.AttrAt(0))
 }
 
 // TestCopyOfBareAttributeForwardsResolvedTyping pins the OTHER site: the

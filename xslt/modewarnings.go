@@ -101,11 +101,11 @@ func nodeLabel(node *xdm.Node) string {
 	if node == nil {
 		return "the context item"
 	}
-	switch node.Kind {
+	switch node.Kind() {
 	case xdm.KindElement:
-		return "element " + node.Name.Lexical()
+		return "element " + node.Name().Lexical()
 	case xdm.KindAttribute:
-		return "attribute " + node.Name.Lexical()
+		return "attribute " + node.Name().Lexical()
 	case xdm.KindText:
 		return "a text node"
 	case xdm.KindComment:

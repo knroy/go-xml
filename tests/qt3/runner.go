@@ -1301,7 +1301,7 @@ func seqString(s xdm.Sequence) string {
 		case *xdm.Atomic:
 			parts = append(parts, v.String())
 		case *xdm.Node:
-			parts = append(parts, "<"+v.Name.Local+">")
+			parts = append(parts, "<"+v.Name().Local+">")
 		}
 	}
 	return "(" + strings.Join(parts, ", ") + ")"
@@ -1469,45 +1469,45 @@ func xmlMatches(got xdm.Sequence, want string) (bool, string) {
 func collapseWS(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func writeNodeXML(sb *strings.Builder, n *xdm.Node) {
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindDocument:
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			writeNodeXML(sb, c)
 		}
 	case xdm.KindElement:
-		sb.WriteString("<" + n.Name.Lexical())
+		sb.WriteString("<" + n.Name().Lexical())
 		// Namespace declarations are part of the serialised element. Omitting
 		// them made a correct result compare unequal to the expected XML,
 		// which reads as an engine bug and is not one.
-		for _, ns := range n.Namespaces {
-			if ns.Name.Local == "" {
-				sb.WriteString(" xmlns=\"" + escapeAttr(ns.Value) + "\"")
+		for ns := range n.NamespaceDecls() {
+			if ns.Name().Local == "" {
+				sb.WriteString(" xmlns=\"" + escapeAttr(ns.Value()) + "\"")
 				continue
 			}
 			// See writeNodeXMLTop: a prefixed undeclaration is a data-model
 			// marker, not XML 1.0 syntax, and writing it makes this string
 			// unparseable for the infosetEqual comparison below.
-			if ns.Value == "" {
+			if ns.Value() == "" {
 				continue
 			}
-			sb.WriteString(" xmlns:" + ns.Name.Local + "=\"" + escapeAttr(ns.Value) + "\"")
+			sb.WriteString(" xmlns:" + ns.Name().Local + "=\"" + escapeAttr(ns.Value()) + "\"")
 		}
-		for _, a := range n.Attrs {
-			sb.WriteString(" " + a.Name.Lexical() + "=\"" + escapeAttr(a.Value) + "\"")
+		for a := range n.Attrs() {
+			sb.WriteString(" " + a.Name().Lexical() + "=\"" + escapeAttr(a.Value()) + "\"")
 		}
-		if len(n.Children) == 0 {
+		if n.NumChildren() == 0 {
 			sb.WriteString("/>")
 			return
 		}
 		sb.WriteString(">")
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			writeNodeXML(sb, c)
 		}
-		sb.WriteString("</" + n.Name.Lexical() + ">")
+		sb.WriteString("</" + n.Name().Lexical() + ">")
 	case xdm.KindText:
-		sb.WriteString(escapeText(n.Value))
+		sb.WriteString(escapeText(n.Value()))
 	case xdm.KindComment:
-		sb.WriteString("<!--" + n.Value + "-->")
+		sb.WriteString("<!--" + n.Value() + "-->")
 	case xdm.KindPI:
 		// The space is written even for an empty PI, though XML 1.0 §2.6 --
 		//   PI ::= '<?' PITarget (S (Char* - (Char* '?>' Char*)))? '?>'
@@ -1525,10 +1525,10 @@ func writeNodeXML(sb *strings.Builder, n *xdm.Node) {
 		// the comparison to reach infosetEqual, which cannot parse a bare PI
 		// because it has no root element. That is the thing worth fixing;
 		// changing the spelling here only moves which cases fail.
-		sb.WriteString("<?" + n.Name.Local + " " + n.Value + "?>")
+		sb.WriteString("<?" + n.Name().Local + " " + n.Value() + "?>")
 	case xdm.KindAttribute:
 		// A bare attribute in a result sequence serialises as its value.
-		sb.WriteString(escapeText(n.Value))
+		sb.WriteString(escapeText(n.Value()))
 	}
 }
 
@@ -2258,7 +2258,7 @@ func (d *envDocResolver) ResolveModule(href, base string) (*xdm.Node, string, er
 		return nil, "", fmt.Errorf("relative module href %q with no base URI", href)
 	}
 	if t, err := d.ResolveDocument(href, base); err == nil {
-		return t.Root, t.Root.BaseURI, nil
+		return t.Root, t.Root.BaseURI(), nil
 	}
 	files, err := xslt.NewFileResolver(d.r.Root)
 	if err != nil {
@@ -2485,7 +2485,7 @@ func foldEmptyPIs(s string) string {
 // serialised form uses a prefix nothing defines — which is what a conforming
 // serialiser emits and what the expected XML in the suite shows.
 func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
-	if n.Kind != xdm.KindElement {
+	if n.Kind() != xdm.KindElement {
 		writeNodeXML(sb, n)
 		return
 	}
@@ -2493,8 +2493,8 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 	// Only prefixes the element does not already declare need adding; the
 	// ordinary writer emits those.
 	declared := map[string]bool{}
-	for _, ns := range n.Namespaces {
-		declared[ns.Name.Local] = true
+	for ns := range n.NamespaceDecls() {
+		declared[ns.Name().Local] = true
 	}
 	extra := make([]string, 0, len(scope))
 	for prefix := range scope {
@@ -2509,10 +2509,10 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 	}
 	sort.Strings(extra)
 
-	sb.WriteString("<" + n.Name.Lexical())
-	for _, ns := range n.Namespaces {
-		if ns.Name.Local == "" {
-			sb.WriteString(" xmlns=\"" + escapeAttr(ns.Value) + "\"")
+	sb.WriteString("<" + n.Name().Lexical())
+	for ns := range n.NamespaceDecls() {
+		if ns.Name().Local == "" {
+			sb.WriteString(" xmlns=\"" + escapeAttr(ns.Value()) + "\"")
 			continue
 		}
 		// A prefixed undeclaration, xmlns:p="", is XML 1.1 syntax that the
@@ -2521,10 +2521,10 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 		// string that is not an XML 1.0 document, so the final infosetEqual
 		// comparison could not parse it. Both real serialisers omit it unless
 		// undeclare-prefixes asks for it; this one does too.
-		if ns.Value == "" {
+		if ns.Value() == "" {
 			continue
 		}
-		sb.WriteString(" xmlns:" + ns.Name.Local + "=\"" + escapeAttr(ns.Value) + "\"")
+		sb.WriteString(" xmlns:" + ns.Name().Local + "=\"" + escapeAttr(ns.Value()) + "\"")
 	}
 	for _, prefix := range extra {
 		if prefix == "" {
@@ -2533,18 +2533,18 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 			sb.WriteString(" xmlns:" + prefix + "=\"" + escapeAttr(scope[prefix]) + "\"")
 		}
 	}
-	for _, a := range n.Attrs {
-		sb.WriteString(" " + a.Name.Lexical() + "=\"" + escapeAttr(a.Value) + "\"")
+	for a := range n.Attrs() {
+		sb.WriteString(" " + a.Name().Lexical() + "=\"" + escapeAttr(a.Value()) + "\"")
 	}
-	if len(n.Children) == 0 {
+	if n.NumChildren() == 0 {
 		sb.WriteString("/>")
 		return
 	}
 	sb.WriteString(">")
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		writeNodeXML(sb, c)
 	}
-	sb.WriteString("</" + n.Name.Lexical() + ">")
+	sb.WriteString("</" + n.Name().Lexical() + ">")
 }
 
 // loadAssertFiles fills in the Value of any assertion whose expected result is
@@ -2612,16 +2612,16 @@ func nodesEqual(a, b *xdm.Node) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	if a.Kind != b.Kind {
+	if a.Kind() != b.Kind() {
 		return false
 	}
-	if a.Name.URI != b.Name.URI || a.Name.Local != b.Name.Local {
+	if a.Name().URI != b.Name().URI || a.Name().Local != b.Name().Local {
 		return false
 	}
-	if a.Kind != xdm.KindElement && a.Kind != xdm.KindDocument && a.Value != b.Value {
+	if a.Kind() != xdm.KindElement && a.Kind() != xdm.KindDocument && a.Value() != b.Value() {
 		return false
 	}
-	if a.Kind == xdm.KindElement && !attrsEqual(a, b) {
+	if a.Kind() == xdm.KindElement && !attrsEqual(a, b) {
 		return false
 	}
 	ac, bc := significantChildren(a), significantChildren(b)
@@ -2639,16 +2639,16 @@ func nodesEqual(a, b *xdm.Node) bool {
 // attrsEqual compares two elements' attributes as sets keyed by expanded name.
 // Namespace declarations are not attributes in the data model and are excluded.
 func attrsEqual(a, b *xdm.Node) bool {
-	if len(a.Attrs) != len(b.Attrs) {
+	if a.NumAttrs() != b.NumAttrs() {
 		return false
 	}
-	want := make(map[string]string, len(b.Attrs))
-	for _, at := range b.Attrs {
-		want[at.Name.Clark()] = at.Value
+	want := make(map[string]string, b.NumAttrs())
+	for at := range b.Attrs() {
+		want[at.Name().Clark()] = at.Value()
 	}
-	for _, at := range a.Attrs {
-		v, ok := want[at.Name.Clark()]
-		if !ok || v != at.Value {
+	for at := range a.Attrs() {
+		v, ok := want[at.Name().Clark()]
+		if !ok || v != at.Value() {
 			return false
 		}
 	}
@@ -2658,9 +2658,9 @@ func attrsEqual(a, b *xdm.Node) bool {
 // significantChildren drops whitespace-only text, which the expected value in
 // a test-set file carries from its own indentation.
 func significantChildren(n *xdm.Node) []*xdm.Node {
-	out := make([]*xdm.Node, 0, len(n.Children))
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindText && strings.TrimSpace(c.Value) == "" {
+	out := make([]*xdm.Node, 0, n.NumChildren())
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) == "" {
 			continue
 		}
 		out = append(out, c)

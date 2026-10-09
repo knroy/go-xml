@@ -20,9 +20,10 @@ package xslt
 //	§19.8.9.16 fn:position                   (grounded and motionless)
 
 import (
+	"strings"
+
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
-	"strings"
 )
 
 // unionExpr applies §19.8.8.4 to "E | F", "E intersect F" and "E except F".
@@ -743,11 +744,11 @@ func functionParamTypes(as string) ([]string, bool) {
 // scope everywhere. The innermost binding wins. A declaration without "as"
 // is found but reports "".
 func declaredTypeOf(el *xdm.Node, name xdm.QName) (string, bool) {
-	for n := el; n != nil && n.Parent != nil && n.Parent.Parent != nil; n = n.Parent {
+	for n := el; n != nil && n.Parent() != nil && n.Parent().Parent() != nil; n = n.Parent() {
 		if isXSL(n, "accumulator-rule") && name.URI == "" && name.Local == "value" {
-			return n.Parent.AttrValue("as"), true
+			return n.Parent().AttrValue("as"), true
 		}
-		sibs := n.Parent.ChildElements()
+		sibs := n.Parent().ChildElements()
 		for i := range sibs {
 			if sibs[i] == n {
 				sibs = sibs[:i]
@@ -759,10 +760,10 @@ func declaredTypeOf(el *xdm.Node, name xdm.QName) (string, bool) {
 				return sibs[i].AttrValue("as"), true
 			}
 		}
-		if n.Parent.Parent.Parent == nil {
+		if n.Parent().Parent().Parent() == nil {
 			// n's parent is the stylesheet element: every top-level
 			// declaration is in scope, following ones included.
-			for _, d := range n.Parent.ChildElements() {
+			for _, d := range n.Parent().ChildElements() {
 				if declaresVar(d, name) {
 					return d.AttrValue("as"), true
 				}

@@ -77,12 +77,12 @@ func checkStreamableModePatterns(root *xdm.Node) error {
 		if !inStreamable {
 			return true
 		}
-		free, known := patternIsFreeRanging(a.Value, el)
-		if known && free && !patternPredicateOnlySyntacticallyNumeric(a.Value, el) {
+		free, known := patternIsFreeRanging(a.Value(), el)
+		if known && free && !patternPredicateOnlySyntacticallyNumeric(a.Value(), el) {
 			err = fmt.Errorf(
 				"the match pattern %q of a template rule in a streamable "+
 					"mode is not motionless, so it is not "+
-					"guaranteed-streamable (XTSE3430)", a.Value)
+					"guaranteed-streamable (XTSE3430)", a.Value())
 			return false
 		}
 		return true
@@ -379,13 +379,13 @@ func hasIndependentGroupRefusal(rule *xdm.Node) bool {
 			return true
 		}
 		a := &instrAnalyzer{ctxPosture: postureStriding, ctxAllowsChildren: true, known: true}
-		selP, selKids := a.exprOperandIn(sel.Value, el, postureStriding, true)
+		selP, selKids := a.exprOperandIn(sel.Value(), el, postureStriding, true)
 		if !a.known || selP.posture == postureGrounded {
 			return true
 		}
 		if at := groupPatternAttr(el); at != nil {
-			free, known := patternIsFreeRanging(at.Value, el)
-			if known && free && !patternPredicateOnlySyntacticallyNumeric(at.Value, el) {
+			free, known := patternIsFreeRanging(at.Value(), el)
+			if known && free && !patternPredicateOnlySyntacticallyNumeric(at.Value(), el) {
 				found = true
 				return false
 			}
@@ -396,7 +396,7 @@ func hasIndependentGroupRefusal(rule *xdm.Node) bool {
 				continue
 			}
 			ka := &instrAnalyzer{ctxPosture: selP.posture, ctxAllowsChildren: selKids, known: true}
-			if p := ka.exprPropsIn(at.Value, el, selP.posture, selKids); ka.known &&
+			if p := ka.exprPropsIn(at.Value(), el, selP.posture, selKids); ka.known &&
 				p.sweep != sweepMotionless {
 				found = true
 				return false
@@ -453,8 +453,8 @@ func hasDisplacedCurrentGroupCall(rule *xdm.Node) bool {
 			displaced = true
 		}
 		if inGroup && displaced {
-			for _, at := range el.Attrs {
-				if countCurrentGroupRefs(at.Value) > 0 {
+			for at := range el.Attrs() {
+				if countCurrentGroupRefs(at.Value()) > 0 {
 					found = true
 					return
 				}
@@ -482,7 +482,7 @@ func groundedGroupSelect(el *xdm.Node) bool {
 		return false
 	}
 	a := &instrAnalyzer{ctxPosture: postureStriding, ctxAllowsChildren: true, known: true}
-	p, _ := a.exprOperandIn(at.Value, el, postureStriding, true)
+	p, _ := a.exprOperandIn(at.Value(), el, postureStriding, true)
 	return a.known && p.posture == postureGrounded
 }
 
@@ -562,7 +562,7 @@ func bodyCallsCurrentGroup(rule *xdm.Node) bool {
 			inGroup = true
 		}
 		if inGroup {
-			for _, at := range el.Attrs {
+			for at := range el.Attrs() {
 				// Exactly one reference. Two references to the group in one
 				// expression read it twice, which §19.8.1's limit of one
 				// potentially-consuming operand refuses on its own terms and
@@ -571,7 +571,7 @@ func bodyCallsCurrentGroup(rule *xdm.Node) bool {
 				// catalog asserts XTSE3430 for it. Withholding there would
 				// silence a real refusal, so only the single-reference case
 				// is withheld.
-				if countCurrentGroupRefs(at.Value) == 1 {
+				if countCurrentGroupRefs(at.Value()) == 1 {
 					found = true
 					return
 				}

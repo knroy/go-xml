@@ -50,8 +50,8 @@ var namedDeclarations = map[string]bool{
 
 // checkStaticErrors applies the tree-decidable static rules to a module.
 func checkStaticErrors(root *xdm.Node) error {
-	if root.Kind == xdm.KindElement && root.Name.URI == xdm.NSXSL &&
-		isStylesheetRootName(root.Name.Local) {
+	if root.Kind() == xdm.KindElement && root.Name().URI == xdm.NSXSL &&
+		isStylesheetRootName(root.Name().Local) {
 		if err := checkStylesheetElement(root); err != nil {
 			return err
 		}
@@ -89,10 +89,10 @@ func checkStaticErrors(root *xdm.Node) error {
 func checkStylesheetElement(root *xdm.Node) error {
 	// XTSE0110: the version attribute must be an xs:decimal.
 	if a := root.Attr("", "version"); a != nil {
-		if !isDecimalLexical(a.Value) {
+		if !isDecimalLexical(a.Value()) {
 			return fmt.Errorf(
 				"XTSE0110: xsl:%s/@version=%q is not a number",
-				root.Name.Local, a.Value)
+				root.Name().Local, a.Value())
 		}
 	}
 
@@ -107,15 +107,15 @@ func checkStylesheetElement(root *xdm.Node) error {
 	importAnywhere := versionAt(root) >= 3.0 || processorAtLeast30()
 
 	seenNonImport := false
-	for _, c := range root.Children {
-		switch c.Kind {
+	for c := range root.Children() {
+		switch c.Kind() {
 		case xdm.KindText:
 			// XTSE0120: no text node children. Whitespace-only text is
 			// stripped before this runs, so anything left is real content.
-			if strings.TrimSpace(c.Value) != "" {
+			if strings.TrimSpace(c.Value()) != "" {
 				return fmt.Errorf(
 					"XTSE0120: xsl:%s must not have text node children",
-					root.Name.Local)
+					root.Name().Local)
 			}
 			continue
 		case xdm.KindElement:
@@ -123,10 +123,10 @@ func checkStylesheetElement(root *xdm.Node) error {
 			continue
 		}
 		// XTSE0130: a child element in no namespace.
-		if c.Name.URI == "" {
+		if c.Name().URI == "" {
 			return fmt.Errorf(
 				"XTSE0130: top-level element %q is in no namespace",
-				c.Name.Local)
+				c.Name().Local)
 		}
 		// XTSE0200: xsl:import must precede every other element child.
 		//
@@ -136,7 +136,7 @@ func checkStylesheetElement(root *xdm.Node) error {
 		// does not appear in its error list at all: a 3.0 module may place an
 		// xsl:import anywhere among its declarations, which is what lets a
 		// static variable be declared before the import that will see it.
-		if c.Name.URI == xdm.NSXSL && c.Name.Local == "import" {
+		if c.Name().URI == xdm.NSXSL && c.Name().Local == "import" {
 			if seenNonImport && !importAnywhere {
 				return fmt.Errorf(
 					"XTSE0200: xsl:import must precede every other top-level element")
@@ -152,7 +152,7 @@ func checkStylesheetElement(root *xdm.Node) error {
 // forwards-compatible mode so that a module written for a later version is
 // not judged by this one's rules.
 func walkStaticErrors(n *xdm.Node, forwards bool) error {
-	if n.Kind == xdm.KindElement {
+	if n.Kind() == xdm.KindElement {
 		forwards = forwardsAt(n, forwards)
 		// Section 3.9 excuses only what the PROCESSOR does not understand: a
 		// stylesheet is in forwards-compatible mode when its effective
@@ -202,15 +202,15 @@ func walkStaticErrors(n *xdm.Node, forwards bool) error {
 		// but only where forwards compatible behavior is not actually in
 		// force, since rule 2 of section 3.9 ignores an attribute this
 		// version does not allow.
-		if n.Name.URI == xdm.NSXSL && moduleAtLeast30(n) &&
+		if n.Name().URI == xdm.NSXSL && moduleAtLeast30(n) &&
 			!effectiveForwards(n) {
-			for _, a := range n.Attrs {
-				if a.Name.URI != xdm.NSXSL {
+			for a := range n.Attrs() {
+				if a.Name().URI != xdm.NSXSL {
 					continue
 				}
 				return fmt.Errorf(
 					"attribute xsl:%s is not allowed on xsl:%s (XTSE0090)",
-					a.Name.Local, n.Name.Local)
+					a.Name().Local, n.Name().Local)
 			}
 		}
 		// The module element's own attributes, checked outside the forwards
@@ -242,7 +242,7 @@ func walkStaticErrors(n *xdm.Node, forwards bool) error {
 			}
 		}
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		if err := walkStaticErrors(c, forwards); err != nil {
 			return err
 		}
@@ -252,7 +252,7 @@ func walkStaticErrors(n *xdm.Node, forwards bool) error {
 
 // checkElementStatic applies the rules that look at one element.
 func checkElementStatic(el *xdm.Node) error {
-	if el.Name.URI != xdm.NSXSL {
+	if el.Name().URI != xdm.NSXSL {
 		if err := checkLiteralResultXSLAttrs(el); err != nil {
 			return err
 		}
@@ -267,7 +267,7 @@ func checkElementStatic(el *xdm.Node) error {
 		return checkDefaultCollation(el)
 	}
 
-	local := el.Name.Local
+	local := el.Name().Local
 
 	// XTSE0808: "it is a static error if a namespace prefix is used within
 	// the [xsl:]exclude-result-prefixes attribute and there is no namespace
@@ -293,12 +293,12 @@ func checkElementStatic(el *xdm.Node) error {
 			// stylesheet may declare: it is how a transform names the
 			// template to start at, so the specification reserves the name
 			// *for* stylesheets rather than against them.
-			if qn, err := resolveQNameAttr(el, a.Value); err == nil &&
+			if qn, err := resolveQNameAttr(el, a.Value()); err == nil &&
 				isReservedNamespace(el, qn.URI) &&
 				!(qn.URI == xdm.NSXSL && qn.Local == "initial-template") {
 				return fmt.Errorf(
 					"XTSE0080: xsl:%s/@name=%q is in a reserved namespace",
-					local, a.Value)
+					local, a.Value())
 			}
 		}
 	}
@@ -316,17 +316,17 @@ func checkElementStatic(el *xdm.Node) error {
 		// says that whitespace is content, and then it is an error like any
 		// other content.
 		preserve := false
-		for n := el; n != nil; n = n.Parent {
+		for n := el; n != nil; n = n.Parent() {
 			if a := n.Attr(xdm.NSXML, "space"); a != nil {
-				preserve = strings.TrimSpace(a.Value) == "preserve"
+				preserve = strings.TrimSpace(a.Value()) == "preserve"
 				break
 			}
 		}
-		for _, c := range el.Children {
-			switch c.Kind {
+		for c := range el.Children() {
+			switch c.Kind() {
 			case xdm.KindComment, xdm.KindPI:
 			case xdm.KindText:
-				if strings.TrimSpace(c.Value) != "" || preserve {
+				if strings.TrimSpace(c.Value()) != "" || preserve {
 					return fmt.Errorf("XTSE0260: xsl:%s must be empty", local)
 				}
 			default:
@@ -345,11 +345,11 @@ func checkElementStatic(el *xdm.Node) error {
 	// is a closed set. "your::xml" is neither, being not a QName at all.
 	if local == "output" {
 		if a := el.Attr("", "method"); a != nil {
-			m := strings.TrimSpace(a.Value)
+			m := strings.TrimSpace(a.Value())
 			if !isLexicalQName(m) {
 				return fmt.Errorf(
 					"XTSE1570: xsl:output/@method=%q is not a valid QName",
-					a.Value)
+					a.Value())
 			}
 			if !strings.Contains(m, ":") {
 				switch m {
@@ -361,12 +361,12 @@ func checkElementStatic(el *xdm.Node) error {
 					if !moduleAtLeast30(el) {
 						return fmt.Errorf(
 							"XTSE1570: xsl:output/@method=%q is an XSLT 3.0 "+
-								"serialization method", a.Value)
+								"serialization method", a.Value())
 					}
 				default:
 					return fmt.Errorf(
 						"XTSE1570: xsl:output/@method=%q is not xml, html, "+
-							"xhtml or text", a.Value)
+							"xhtml or text", a.Value())
 				}
 			}
 		}
@@ -399,20 +399,20 @@ func checkElementStatic(el *xdm.Node) error {
 			case ns == nil:
 				// Absent @namespace never conflicts: the inline schema's
 				// target namespace, present or absent, is taken as given.
-			case target == nil || target.Value != ns.Value:
+			case target == nil || target.Value() != ns.Value():
 				return fmt.Errorf(
 					"XTSE0215: xsl:import-schema/@namespace=%q conflicts "+
 						"with the target namespace of the contained schema",
-					ns.Value)
+					ns.Value())
 			}
 		}
 
 	case "include", "import":
 		// XTSE0170 and XTSE0190: both must be top-level, which means their
 		// parent is the xsl:stylesheet element.
-		p := el.Parent
-		if p == nil || p.Name.URI != xdm.NSXSL ||
-			!isStylesheetRootName(p.Name.Local) {
+		p := el.Parent()
+		if p == nil || p.Name().URI != xdm.NSXSL ||
+			!isStylesheetRootName(p.Name().Local) {
 			code := "XTSE0170"
 			if local == "import" {
 				code = "XTSE0190"
@@ -424,10 +424,10 @@ func checkElementStatic(el *xdm.Node) error {
 	case "template":
 		// XTSE0530: the priority must be an xs:decimal.
 		if a := el.Attr("", "priority"); a != nil &&
-			!isDecimalLexical(a.Value) {
+			!isDecimalLexical(a.Value()) {
 			return fmt.Errorf(
 				"XTSE0530: xsl:template/@priority=%q is not a decimal number",
-				a.Value)
+				a.Value())
 		}
 
 	case "with-param":
@@ -487,14 +487,14 @@ func checkElementStatic(el *xdm.Node) error {
 		// namespace node with no URI is not a thing the data model has.
 		hasSelect := el.Attr("", "select") != nil
 		content := false
-		for _, c := range el.Children {
-			switch c.Kind {
+		for c := range el.Children() {
+			switch c.Kind() {
 			case xdm.KindElement:
 				if !isXSL(c, "fallback") {
 					content = true
 				}
 			case xdm.KindText:
-				if strings.TrimSpace(c.Value) != "" {
+				if strings.TrimSpace(c.Value()) != "" {
 					content = true
 				}
 			}
@@ -546,9 +546,9 @@ func checkElementStatic(el *xdm.Node) error {
 		// without a prefix; the requirement is that the name be IN a
 		// namespace, which is what having a prefix was shorthand for.
 		if a := el.Attr("", "name"); a != nil &&
-			!strings.Contains(a.Value, ":") && !isEQName(strings.TrimSpace(a.Value)) {
+			!strings.Contains(a.Value(), ":") && !isEQName(strings.TrimSpace(a.Value())) {
 			return fmt.Errorf(
-				"XTSE0740: xsl:function/@name=%q must have a prefix", a.Value)
+				"XTSE0740: xsl:function/@name=%q must have a prefix", a.Value())
 		}
 		// XTSE0760: its xsl:param children may not specify a default, since
 		// every argument of a function call must be supplied.
@@ -590,9 +590,9 @@ func checkElementStatic(el *xdm.Node) error {
 		}
 		// XTSE1017: only the first xsl:sort of a sibling run may carry
 		// @stable, since stability is a property of the whole sort.
-		if el.Attr("", "stable") != nil && el.Parent != nil {
+		if el.Attr("", "stable") != nil && el.Parent() != nil {
 			first := true
-			for _, sib := range el.Parent.ChildElements() {
+			for _, sib := range el.Parent().ChildElements() {
 				if !isXSL(sib, "sort") {
 					continue
 				}
@@ -619,7 +619,7 @@ func checkElementStatic(el *xdm.Node) error {
 				return fmt.Errorf(
 					"XTSE1040: xsl:perform-sort with a select attribute may "+
 						"only contain xsl:sort and xsl:fallback, found %s",
-					c.Name.Lexical())
+					c.Name().Lexical())
 			}
 		}
 
@@ -634,7 +634,7 @@ func checkElementStatic(el *xdm.Node) error {
 			if a == nil {
 				continue
 			}
-			qn, err := resolveQNameAttr(c, a.Value)
+			qn, err := resolveQNameAttr(c, a.Value())
 			if err != nil {
 				continue
 			}
@@ -642,7 +642,7 @@ func checkElementStatic(el *xdm.Node) error {
 			if seen[key] {
 				return fmt.Errorf(
 					"XTSE0670: xsl:%s has two xsl:with-param elements named %q",
-					local, a.Value)
+					local, a.Value())
 			}
 			seen[key] = true
 		}
@@ -683,12 +683,12 @@ var emptyXSLElements = map[string]bool{
 // hasRealContent reports whether an element has content other than whitespace,
 // comments and processing instructions.
 func hasRealContent(el *xdm.Node) bool {
-	for _, c := range el.Children {
-		switch c.Kind {
+	for c := range el.Children() {
+		switch c.Kind() {
 		case xdm.KindElement:
 			return true
 		case xdm.KindText:
-			if strings.TrimSpace(c.Value) != "" {
+			if strings.TrimSpace(c.Value()) != "" {
 				return true
 			}
 		}
@@ -746,8 +746,8 @@ func checkParamStatic(el *xdm.Node) error {
 	// Which rules apply depends on what the xsl:param is a parameter of, and
 	// the summaries let it be a child of four different elements.
 	parent := ""
-	if el.Parent != nil && el.Parent.Name.URI == xdm.NSXSL {
-		parent = el.Parent.Name.Local
+	if el.Parent() != nil && el.Parent().Name().URI == xdm.NSXSL {
+		parent = el.Parent().Name().Local
 	}
 	inFunction := parent == "function"
 	inTemplate := parent == "template"
@@ -779,17 +779,17 @@ func checkParamStatic(el *xdm.Node) error {
 					"XTSE0090: required may not be specified on an xsl:param " +
 						"of a stylesheet function, which is always mandatory")
 			}
-			if strings.TrimSpace(a.Value) != "yes" {
+			if strings.TrimSpace(a.Value()) != "yes" {
 				return fmt.Errorf(
 					"XTSE0020: required=%q on an xsl:param of a stylesheet "+
 						"function: the only permitted value is \"yes\", such "+
-						"a parameter always being mandatory", a.Value)
+						"a parameter always being mandatory", a.Value())
 			}
 			return nil
 		}
 		// "If the parameter is mandatory, then the xsl:param element must be
 		// empty and must not have a select attribute."
-		if strings.TrimSpace(a.Value) == "yes" {
+		if strings.TrimSpace(a.Value()) == "yes" {
 			if el.Attr("", "select") != nil {
 				return fmt.Errorf(
 					"XTSE0010: an xsl:param with required=\"yes\" must not " +
@@ -803,7 +803,7 @@ func checkParamStatic(el *xdm.Node) error {
 	}
 
 	if a := el.Attr("", "tunnel"); a != nil &&
-		strings.TrimSpace(a.Value) == "yes" && !inTemplate {
+		strings.TrimSpace(a.Value()) == "yes" && !inTemplate {
 		// "The default is no; the value yes may be specified only for
 		// template parameters."
 		return fmt.Errorf(
@@ -873,14 +873,14 @@ func checkPrefixListAttrs(el *xdm.Node) error {
 			// be in the XSLT namespace only if its parent element is not in
 			// the XSLT namespace". Checking it there rejected a stylesheet for
 			// an attribute it was merely copying through.
-			if uri == "" && el.Name.URI != xdm.NSXSL {
+			if uri == "" && el.Name().URI != xdm.NSXSL {
 				continue
 			}
 			a := el.Attr(uri, spec.attr)
 			if a == nil {
 				continue
 			}
-			if err := checkPrefixList(el, a.Value, spec.unbound,
+			if err := checkPrefixList(el, a.Value(), spec.unbound,
 				spec.nodefault, spec.attr); err != nil {
 				return err
 			}
@@ -906,7 +906,7 @@ func checkDefaultCollation(el *xdm.Node) error {
 		if a == nil {
 			continue
 		}
-		candidates := strings.Fields(a.Value)
+		candidates := strings.Fields(a.Value())
 		if len(candidates) == 0 {
 			return fmt.Errorf(
 				"XTSE0125: default-collation is empty, so it names no collation")
@@ -918,7 +918,7 @@ func checkDefaultCollation(el *xdm.Node) error {
 		}
 		return fmt.Errorf(
 			"XTSE0125: default-collation=%q names no collation this "+
-				"implementation recognises", a.Value)
+				"implementation recognises", a.Value())
 	}
 	return nil
 }
@@ -929,12 +929,12 @@ func checkDefaultCollation(el *xdm.Node) error {
 // the one XSLT element whose model names a foreign element outright — rather
 // than from a hard-coded name here, so that the two cannot drift apart.
 func inlineSchema(el *xdm.Node) *xdm.Node {
-	cm, ok := contentModels[el.Name.Local]
+	cm, ok := contentModels[el.Name().Local]
 	if !ok || cm.foreign == "" {
 		return nil
 	}
 	for _, c := range el.ChildElements() {
-		if c.Name.URI == xdm.NSXS && c.Name.Local == cm.foreign {
+		if c.Name().URI == xdm.NSXS && c.Name().Local == cm.foreign {
 			return c
 		}
 	}
@@ -980,8 +980,8 @@ func checkTypeAttributes(root *xdm.Node, schema *xsd.Schema) error {
 // literal result element would be an ordinary attribute of the output.
 func checkTypeAttribute(el *xdm.Node, schema *xsd.Schema) error {
 	var a *xdm.Node
-	if el.Name.URI == xdm.NSXSL {
-		if _, ok := qnameAttrs[el.Name.Local]["type"]; !ok {
+	if el.Name().URI == xdm.NSXSL {
+		if _, ok := qnameAttrs[el.Name().Local]["type"]; !ok {
 			return nil
 		}
 		a = el.Attr("", "type")
@@ -997,17 +997,17 @@ func checkTypeAttribute(el *xdm.Node, schema *xsd.Schema) error {
 	// from [xsl:]xpath-default-namespace — an unprefixed type name is a type
 	// name, so it follows the element/type default rather than no namespace.
 	ns := newNSResolver(el, "")
-	lex := strings.TrimSpace(a.Value)
+	lex := strings.TrimSpace(a.Value())
 	// Q{uri}local names its namespace directly, so it resolves without any
 	// in-scope binding. Every other QName-valued attribute already accepts the
 	// spelling; type= rejected it before the schema was ever consulted.
 	if u, l, isEQ := splitEQName(lex); isEQ {
-		return checkTypeAttrName(el, schema, xdm.QName{URI: u, Local: l}, a.Value)
+		return checkTypeAttrName(el, schema, xdm.QName{URI: u, Local: l}, a.Value())
 	}
 	prefix, local := xdm.SplitQName(lex)
 	if local == "" || !xdm.IsNCName(local) || (prefix != "" && !xdm.IsNCName(prefix)) {
 		return fmt.Errorf("XTSE1520: type=%q on %s is not a valid QName",
-			a.Value, el.Name.Lexical())
+			a.Value(), el.Name().Lexical())
 	}
 	uri := ns.defaultNS
 	if prefix != "" {
@@ -1016,7 +1016,7 @@ func checkTypeAttribute(el *xdm.Node, schema *xsd.Schema) error {
 			return fmt.Errorf(
 				"XTSE1520: type=%q on %s uses prefix %q, which is not "+
 					"declared in an in-scope namespace declaration",
-				a.Value, el.Name.Lexical(), prefix)
+				a.Value(), el.Name().Lexical(), prefix)
 		}
 		uri = u
 	}
@@ -1025,7 +1025,7 @@ func checkTypeAttribute(el *xdm.Node, schema *xsd.Schema) error {
 	// already covers "validation requires a schema; none was imported", so
 	// reporting XTSE1520 here as well would replace a more specific error
 	// with a less specific one.
-	return checkTypeAttrName(el, schema, xdm.QName{URI: uri, Local: local}, a.Value)
+	return checkTypeAttrName(el, schema, xdm.QName{URI: uri, Local: local}, a.Value())
 }
 
 // checkTypeAttrName applies XTSE1520 and XTSE1530 to a resolved type= name.
@@ -1040,7 +1040,7 @@ func checkTypeAttrName(
 		return fmt.Errorf(
 			"XTSE1520: type=%q on %s is not the name of a type definition "+
 				"in the in-scope schema components",
-			lexical, el.Name.Lexical())
+			lexical, el.Name().Lexical())
 	}
 	// XTSE1530 is narrower: only xsl:attribute is forbidden from naming a
 	// complex type, because an attribute can only ever have a simple type.
@@ -1058,17 +1058,17 @@ func checkTypeAttrName(
 // attribute on one may not be in the XSLT namespace unless the specification
 // defines it there.
 func checkLiteralResultXSLAttrs(el *xdm.Node) error {
-	if el.Kind != xdm.KindElement || el.Name.URI == xdm.NSXSL {
+	if el.Kind() != xdm.KindElement || el.Name().URI == xdm.NSXSL {
 		return nil
 	}
-	for _, a := range el.Attrs {
-		if a.Name.URI != xdm.NSXSL {
+	for a := range el.Attrs() {
+		if a.Name().URI != xdm.NSXSL {
 			continue
 		}
-		if !literalResultXSLAttrs[a.Name.Local] {
+		if !literalResultXSLAttrs[a.Name().Local] {
 			return fmt.Errorf(
 				"XTSE0805: xsl:%s is not an attribute this specification "+
-					"defines on a literal result element", a.Name.Local)
+					"defines on a literal result element", a.Name().Local)
 		}
 		if err := checkLiteralResultXSLAttrValue(el, a); err != nil {
 			return err
@@ -1099,11 +1099,11 @@ var literalResultXSLAttrValues = map[string][]string{
 // checkLiteralResultXSLAttrValue applies XTSE0020 to one xsl:-prefixed
 // attribute of a literal result element.
 func checkLiteralResultXSLAttrValue(el *xdm.Node, a *xdm.Node) error {
-	want, ok := literalResultXSLAttrValues[a.Name.Local]
+	want, ok := literalResultXSLAttrValues[a.Name().Local]
 	if !ok {
 		return nil
 	}
-	v := strings.TrimSpace(a.Value)
+	v := strings.TrimSpace(a.Value())
 	for _, w := range want {
 		if v == w {
 			return nil
@@ -1111,7 +1111,7 @@ func checkLiteralResultXSLAttrValue(el *xdm.Node, a *xdm.Node) error {
 	}
 	return fmt.Errorf(
 		"XTSE0020: attribute xsl:%s=%q on a literal result element is not "+
-			"one of %s", a.Name.Local, a.Value, strings.Join(want, ", "))
+			"one of %s", a.Name().Local, a.Value(), strings.Join(want, ", "))
 }
 
 // effectiveForwards reports whether el is processed with forwards compatible
@@ -1135,8 +1135,8 @@ func effectiveForwards(el *xdm.Node) bool {
 	if proc == 0 {
 		proc = 3.0
 	}
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind == xdm.KindElement && hasVersionAttr(cur) {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() == xdm.KindElement && hasVersionAttr(cur) {
 			return versionAt(cur) > proc
 		}
 	}
@@ -1145,23 +1145,23 @@ func effectiveForwards(el *xdm.Node) bool {
 
 // checkModuleAttrs applies the attribute table to a module element.
 func checkModuleAttrs(el *xdm.Node) error {
-	def, known := xsltElements[el.Name.Local]
+	def, known := xsltElements[el.Name().Local]
 	if !known {
 		return nil
 	}
-	for _, a := range el.Attrs {
-		if a.Name.URI != "" {
+	for a := range el.Attrs() {
+		if a.Name().URI != "" {
 			continue
 		}
-		if _, ok := def.attrs[a.Name.Local]; ok {
+		if _, ok := def.attrs[a.Name().Local]; ok {
 			continue
 		}
-		if standardAttributes[a.Name.Local] {
+		if standardAttributes[a.Name().Local] {
 			continue
 		}
 		return fmt.Errorf(
 			"attribute %q is not allowed on xsl:%s (XTSE0090)",
-			a.Name.Local, el.Name.Local)
+			a.Name().Local, el.Name().Local)
 	}
 	return nil
 }
@@ -1195,7 +1195,7 @@ func checkStreamableCompat(root *xdm.Node) error {
 		}
 		name := ""
 		if na := d.Attr("", "name"); na != nil {
-			tok := strings.TrimSpace(na.Value)
+			tok := strings.TrimSpace(na.Value())
 			switch tok {
 			case "", "#default", "#unnamed":
 			default:
@@ -1222,7 +1222,7 @@ func checkStreamableCompat(root *xdm.Node) error {
 		if ma == nil {
 			continue
 		}
-		for _, tok := range strings.Fields(ma.Value) {
+		for _, tok := range strings.Fields(ma.Value()) {
 			name := ""
 			switch tok {
 			case "#default", "#unnamed":
@@ -1242,7 +1242,7 @@ func checkStreamableCompat(root *xdm.Node) error {
 				return fmt.Errorf(
 					"xsl:%s is processed in XSLT 1.0 compatibility mode "+
 						"inside a streamable mode, which makes it roaming "+
-						"and free-ranging (XTSE3430)", el.Name.Local)
+						"and free-ranging (XTSE3430)", el.Name().Local)
 			}
 			break
 		}
@@ -1259,7 +1259,7 @@ func checkStreamableCompat(root *xdm.Node) error {
 // xsl:apply-templates and nowhere else.
 func firstCompatInstruction(el *xdm.Node) *xdm.Node {
 	for _, c := range el.ChildElements() {
-		if c.Name.URI == xdm.NSXSL && hasVersionAttr(c) && versionAt(c) < 2.0 {
+		if c.Name().URI == xdm.NSXSL && hasVersionAttr(c) && versionAt(c) < 2.0 {
 			return c
 		}
 		if found := firstCompatInstruction(c); found != nil {

@@ -60,9 +60,9 @@ func TestW3CC14N11Interop(t *testing.T) {
 				t.Fatal("template has no Reference or XPath")
 			}
 			var input string
-			for _, a := range ref.Attrs {
-				if a.Name.Local == "URI" {
-					input = a.Value
+			for a := range ref.Attrs() {
+				if a.Name().Local == "URI" {
+					input = a.Value()
 				}
 			}
 			// The template's transform is the XML-DSig XPath Filter, which
@@ -115,10 +115,10 @@ func TestW3CC14N11Interop(t *testing.T) {
 // firstElement returns the first element in document order whose local name
 // is local.
 func firstElement(n *xdm.Node, local string) *xdm.Node {
-	if n.Kind == xdm.KindElement && n.Name.Local == local {
+	if n.Kind() == xdm.KindElement && n.Name().Local == local {
 		return n
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		if f := firstElement(c, local); f != nil {
 			return f
 		}

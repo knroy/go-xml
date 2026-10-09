@@ -20,12 +20,12 @@ func TestPatternRejectsOnNodeTestFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := tree.Root
-	el := doc.Children[0]
-	attr := el.Attrs[0]
-	p, q := el.Children[0], el.Children[1]
+	el := doc.FirstChild()
+	attr := el.AttrAt(0)
+	p, q := el.FirstChild(), el.ChildAt(1)
 	var ns *xdm.Node
-	for _, n := range el.Namespaces {
-		if n.Name.Local == "z" {
+	for n := range el.NamespaceDecls() {
+		if n.Name().Local == "z" {
 			ns = n
 		}
 	}
@@ -81,10 +81,10 @@ func TestPatternRejectsOnNodeTestFirst(t *testing.T) {
 		}
 		got, err := pat.Matches(c.node, ctx)
 		if err != nil {
-			t.Errorf("%q against %s: %v", c.pattern, c.node.Name.Local, err)
+			t.Errorf("%q against %s: %v", c.pattern, c.node.Name().Local, err)
 		} else if got != c.want {
 			t.Errorf("%q against <%s> kind %v = %v, want %v",
-				c.pattern, c.node.Name.Local, c.node.Kind, got, c.want)
+				c.pattern, c.node.Name().Local, c.node.Kind(), got, c.want)
 		}
 	}
 

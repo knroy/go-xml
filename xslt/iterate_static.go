@@ -14,7 +14,7 @@ import (
 // containing xsl:iterate at all, which an iterate-rooted walk would never
 // reach.
 func checkIterateStatic(el *xdm.Node) error {
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "break", "next-iteration":
 		// XTSE0010: the element is only defined as part of xsl:iterate's
 		// content, so one that is not lexically inside an xsl:iterate at all
@@ -27,15 +27,15 @@ func checkIterateStatic(el *xdm.Node) error {
 		if it == nil {
 			return fmt.Errorf(
 				"XTSE0010: xsl:%s may only appear within xsl:iterate",
-				el.Name.Local)
+				el.Name().Local)
 		}
 		// XTSE3120: and only in a tail position within the loop body.
 		if !inTailPositionOf(el, it) {
 			return fmt.Errorf(
 				"XTSE3120: xsl:%s must be in a tail position within the "+
-					"body of xsl:iterate", el.Name.Local)
+					"body of xsl:iterate", el.Name().Local)
 		}
-		if el.Name.Local == "break" {
+		if el.Name().Local == "break" {
 			return checkSelectOrContent(el)
 		}
 		// XTSE3130: every xsl:with-param must name a parameter the innermost
@@ -86,18 +86,18 @@ func checkSelectOrContent(el *xdm.Node) error {
 	}
 	return fmt.Errorf(
 		"XTSE3125: xsl:%s has both a select attribute and content",
-		el.Name.Local)
+		el.Name().Local)
 }
 
 // hasSequenceContent reports whether an element's children amount to a
 // sequence constructor rather than to layout whitespace.
 func hasSequenceContent(el *xdm.Node) bool {
-	for _, c := range el.Children {
-		switch c.Kind {
+	for c := range el.Children() {
+		switch c.Kind() {
 		case xdm.KindElement, xdm.KindPI:
 			return true
 		case xdm.KindText:
-			if !isWhitespaceOnly(c.Value) {
+			if !isWhitespaceOnly(c.Value()) {
 				return true
 			}
 		}
@@ -150,7 +150,7 @@ func paramName(el *xdm.Node) (xdm.QName, bool) {
 	if a == nil {
 		return xdm.QName{}, false
 	}
-	qn, err := resolveQNameAttr(el, a.Value)
+	qn, err := resolveQNameAttr(el, a.Value())
 	if err != nil {
 		return xdm.QName{}, false
 	}
@@ -164,14 +164,14 @@ func paramName(el *xdm.Node) (xdm.QName, bool) {
 // body -- because an xsl:break there is not part of the loop's own body even
 // though the loop element is an ancestor.
 func enclosingIterate(el *xdm.Node) *xdm.Node {
-	for cur := el.Parent; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := el.Parent(); cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			return nil
 		}
-		if cur.Name.URI != xdm.NSXSL {
+		if cur.Name().URI != xdm.NSXSL {
 			continue
 		}
-		switch cur.Name.Local {
+		switch cur.Name().Local {
 		case "iterate":
 			return cur
 		case "on-completion", "template", "function", "variable", "param",
@@ -192,7 +192,7 @@ func enclosingIterate(el *xdm.Node) *xdm.Node {
 func inTailPositionOf(el, iter *xdm.Node) bool {
 	cur := el
 	for {
-		parent := cur.Parent
+		parent := cur.Parent()
 		if parent == nil {
 			return false
 		}
@@ -207,13 +207,13 @@ func inTailPositionOf(el, iter *xdm.Node) bool {
 		if parent == iter {
 			return true
 		}
-		if parent.Name.URI != xdm.NSXSL {
+		if parent.Name().URI != xdm.NSXSL {
 			// A literal result element ends the chain: its content is the
 			// content of the element being built, not a continuation of the
 			// loop body.
 			return false
 		}
-		switch parent.Name.Local {
+		switch parent.Name().Local {
 		case "if", "when", "otherwise", "choose", "try", "catch":
 		default:
 			return false
@@ -230,8 +230,8 @@ func inTailPositionOf(el, iter *xdm.Node) bool {
 // rather than instructions in it, and whitespace text, which the suite writes
 // for indentation.
 func isLastInstruction(parent, child *xdm.Node) bool {
-	for i := len(parent.Children) - 1; i >= 0; i-- {
-		c := parent.Children[i]
+	for i := parent.NumChildren() - 1; i >= 0; i-- {
+		c := parent.ChildAt(i)
 		// The element under test is never skipped as trailing matter: an
 		// xsl:catch reached from inside is exactly the case the definition
 		// calls a tail position within xsl:try, and skipping it here would
@@ -239,14 +239,14 @@ func isLastInstruction(parent, child *xdm.Node) bool {
 		if c == child {
 			return true
 		}
-		switch c.Kind {
+		switch c.Kind() {
 		case xdm.KindText:
-			if isWhitespaceOnly(c.Value) {
+			if isWhitespaceOnly(c.Value()) {
 				continue
 			}
 		case xdm.KindElement:
-			if c.Name.URI == xdm.NSXSL {
-				switch c.Name.Local {
+			if c.Name().URI == xdm.NSXSL {
+				switch c.Name().Local {
 				case "fallback", "param", "sort", "on-completion", "catch":
 					continue
 				}
@@ -302,14 +302,14 @@ func checkDuplicateWithParams(el *xdm.Node) error {
 // attribute inside it. Nothing is accepted that was refused before, and a
 // module with only one of the two faults is unaffected.
 func checkIteratePlacement(n *xdm.Node) error {
-	if n.Kind == xdm.KindElement && isXSL(n, "on-completion") {
-		if p := n.Parent; p == nil || !isXSL(p, "iterate") {
+	if n.Kind() == xdm.KindElement && isXSL(n, "on-completion") {
+		if p := n.Parent(); p == nil || !isXSL(p, "iterate") {
 			return fmt.Errorf(
 				"XTSE0010: xsl:on-completion may only appear as a child of " +
 					"xsl:iterate")
 		}
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		if err := checkIteratePlacement(c); err != nil {
 			return err
 		}

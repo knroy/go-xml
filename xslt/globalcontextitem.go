@@ -126,7 +126,7 @@ func normalizeTypeSource(t *sequenceType) string {
 // module, which is what decides whether a repeated declaration is a
 // duplicate or a restatement.
 func sameModule(a, b *xdm.Node) bool {
-	return a != nil && b != nil && a.BaseURI == b.BaseURI
+	return a != nil && b != nil && a.BaseURI() == b.BaseURI()
 }
 
 // checkGlobalContextItem applies the declaration to the item a transform was

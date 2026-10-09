@@ -592,9 +592,9 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{})
 A transform indexes the parsed documents it reads: `xsl:key` tables, and,
 for `//x[p]` paths from a document root, which nodes have an `x` child. Both
 are built on first use and kept until the transform ends. Do not change a
-parsed tree's `Children`, `Attrs` or names from Go while a transform that
-reads it is running, for example from a host function; the indexes would
-then answer for the old tree. Trees built during the transform (temporary
+parsed tree's children, attributes or names from Go (the `xdm.Node` setters)
+while a transform that reads it is running, for example from a host
+function; the indexes would then answer for the old tree. Trees built during the transform (temporary
 trees, results) and trees not produced by `xdm.Parse` are never indexed this
 way.
 

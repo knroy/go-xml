@@ -61,8 +61,8 @@ func (s *Schema) ValidateCopyContext(ctx context.Context, root *xdm.Node,
 // overflow the stack here.
 func copyForValidation(root *xdm.Node) (twin *xdm.Node, twins map[*xdm.Node]*xdm.Node) {
 	top := root
-	for top.Parent != nil {
-		top = top.Parent
+	for top.Parent() != nil {
+		top = top.Parent()
 	}
 	var tree *xdm.Tree
 	var topCopy *xdm.Node
@@ -75,7 +75,7 @@ func copyForValidation(root *xdm.Node) (twin *xdm.Node, twins map[*xdm.Node]*xdm
 			twins = map[*xdm.Node]*xdm.Node{}
 		}
 	} else {
-		topCopy = &xdm.Node{Kind: top.Kind}
+		topCopy = xdm.NewNode(top.Kind(), xdm.QName{}, "")
 	}
 
 	type pair struct{ dst, src *xdm.Node }
@@ -91,11 +91,11 @@ func copyForValidation(root *xdm.Node) (twin *xdm.Node, twins map[*xdm.Node]*xdm
 		if twins != nil {
 			twins[dst] = src
 		}
-		for _, ns := range src.Namespaces {
-			dst.AddNamespace(ns.Name.Local, ns.Value)
+		for ns := range src.NamespaceDecls() {
+			dst.AddNamespace(ns.Name().Local, ns.Value())
 		}
-		for _, a := range src.Attrs {
-			ac := &xdm.Node{}
+		for a := range src.Attrs() {
+			ac := xdm.NewNode(a.Kind(), xdm.QName{}, "")
 			copyNodeProps(ac, a)
 			dst.AddAttr(ac)
 			if a == root {
@@ -105,8 +105,8 @@ func copyForValidation(root *xdm.Node) (twin *xdm.Node, twins map[*xdm.Node]*xdm
 				twins[ac] = a
 			}
 		}
-		for _, c := range src.Children {
-			cc := &xdm.Node{}
+		for c := range src.Children() {
+			cc := xdm.NewNode(c.Kind(), xdm.QName{}, "")
 			dst.AppendChild(cc)
 			stack = append(stack, pair{cc, c})
 		}
@@ -117,13 +117,13 @@ func copyForValidation(root *xdm.Node) (twin *xdm.Node, twins map[*xdm.Node]*xdm
 	return twin, twins
 }
 
-// copyNodeProps copies the properties of src that are not its links.
+// copyNodeProps copies the properties of src that are not its links or its
+// kind, which dst was created with.
 func copyNodeProps(dst, src *xdm.Node) {
-	dst.Kind = src.Kind
-	dst.Name = src.Name
-	dst.Value = src.Value
-	dst.BaseURI = src.BaseURI
-	dst.DocumentURI = src.DocumentURI
+	dst.SetName(src.Name())
+	dst.SetValue(src.Value())
+	dst.SetBaseURI(src.BaseURI())
+	dst.SetDocumentURI(src.DocumentURI())
 	dst.CopyTypingFrom(src)
 	dst.SetTypeEnv(src.TypeEnv())
 }

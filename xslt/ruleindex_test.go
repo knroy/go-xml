@@ -161,12 +161,17 @@ func TestRuleIndexCoversEveryCandidate(t *testing.T) {
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
 		nodes = append(nodes, n)
-		nodes = append(nodes, n.Attrs...)
-		if n.Kind == xdm.KindElement {
-			nodes = append(nodes, &xdm.Node{Kind: xdm.KindNamespace,
-				Name: xdm.QName{Local: "p"}, Value: "urn:p", Parent: n})
+		for i := range n.NumAttrs() {
+			nodes = append(nodes, n.AttrAt(i))
 		}
-		for _, c := range n.Children {
+		if n.Kind() == xdm.KindElement {
+			nodes = append(nodes, func() *xdm.Node {
+				nd := xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: "p"}, "urn:p")
+				nd.SetParent(n)
+				return nd
+			}())
+		}
+		for c := range n.Children() {
 			walk(c)
 		}
 	}
@@ -175,7 +180,7 @@ func TestRuleIndexCoversEveryCandidate(t *testing.T) {
 		for _, n := range nodes {
 			cand, ok := s.candidates(n, mode)
 			if !ok {
-				t.Fatalf("no index for %v in mode %q", n.Kind, mode)
+				t.Fatalf("no index for %v in mode %q", n.Kind(), mode)
 			}
 			in := map[int]bool{}
 			for _, i := range cand {
@@ -184,7 +189,7 @@ func TestRuleIndexCoversEveryCandidate(t *testing.T) {
 			for i, r := range s.templates {
 				if r.matchesMode(mode) && r.Match.mayMatch(n) && !in[i] {
 					t.Errorf("mode %q: rule %q may match %s %q but is not a candidate",
-						mode, r.Match.src, kindName(n.Kind), n.Name.Local)
+						mode, r.Match.src, kindName(n.Kind()), n.Name().Local)
 				}
 			}
 		}

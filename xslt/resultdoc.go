@@ -139,8 +139,8 @@ func (i *resultDocumentInstr) settings(rt *runtime) (OutputSettings, error) {
 	// the xsl:result-document element, which is where the attribute was
 	// written.
 	base := rt.sheet.baseURI
-	if i.overrides != nil && i.overrides.BaseURI != "" {
-		base = i.overrides.BaseURI
+	if i.overrides != nil && i.overrides.BaseURI() != "" {
+		base = i.overrides.BaseURI()
 	}
 	// The URI is resolved against the base URI of the element that wrote the
 	// attribute, which is not always the xsl:result-document: a named

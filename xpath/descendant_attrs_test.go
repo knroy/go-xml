@@ -26,20 +26,20 @@ func TestDescendantAttrsFusion(t *testing.T) {
 		"//@nothere", "/a/@id//@id", "//comment()//@*", "(1)//@id", "//b/(.//@id)",
 	} {
 		ref := strings.ReplaceAll(src, "//", "/descendant-or-self::node()/self::node()/")
-		for _, ctxNode := range []*xdm.Node{tree.Root, tree.Root.Children[0], tree.Root.Children[0].Attrs[0]} {
+		for _, ctxNode := range []*xdm.Node{tree.Root, tree.Root.FirstChild(), tree.Root.FirstChild().AttrAt(0)} {
 			got, gerr := MustCompile(src, ns).Eval(NewContext(ctxNode, Builtins()))
 			want, werr := MustCompile(ref, ns).Eval(NewContext(ctxNode, Builtins()))
 			if (gerr == nil) != (werr == nil) || gerr != nil && gerr.Error() != werr.Error() {
-				t.Fatalf("%s from %s: error %v, want %v", src, ctxNode.Kind, gerr, werr)
+				t.Fatalf("%s from %s: error %v, want %v", src, ctxNode.Kind(), gerr, werr)
 			}
 			if len(got) != len(want) {
-				t.Fatalf("%s from %s: %d items, want %d", src, ctxNode.Kind, len(got), len(want))
+				t.Fatalf("%s from %s: %d items, want %d", src, ctxNode.Kind(), len(got), len(want))
 			}
 			for i := range got {
 				ga, gok := got[i].(*xdm.Atomic)
 				wa, wok := want[i].(*xdm.Atomic)
 				if got[i] != want[i] && !(gok && wok && ga.String() == wa.String()) {
-					t.Fatalf("%s from %s: item %d differs", src, ctxNode.Kind, i)
+					t.Fatalf("%s from %s: item %d differs", src, ctxNode.Kind(), i)
 				}
 			}
 		}
@@ -51,7 +51,7 @@ func TestDescendantAttrsFusion(t *testing.T) {
 	if fuseDescendantAttrs(p.Steps, 0, xdm.One(tree.Root)) == nil {
 		t.Error("//@id over a parsed tree is not fused")
 	}
-	if fuseDescendantAttrs(p.Steps, 0, xdm.One(&xdm.Node{Kind: xdm.KindElement})) != nil {
+	if fuseDescendantAttrs(p.Steps, 0, xdm.One(xdm.NewNode(xdm.KindElement, xdm.QName{}, ""))) != nil {
 		t.Error("//@id over a constructed tree is fused")
 	}
 	if fuseDescendantAttrs(p.Steps, 0, xdm.One(xdm.NewString("x"))) != nil {

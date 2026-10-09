@@ -76,7 +76,7 @@ func parseCopyDoc(t *testing.T, src string) *xdm.Tree {
 	// assessment: the copy must carry that typing over, as the in-place run
 	// leaves it in place.
 	for _, el := range tree.Root.ChildElements()[0].ChildElements() {
-		if el.Name.Local == "free" {
+		if el.Name().Local == "free" {
 			x := el.ChildElements()[0]
 			x.ApplyTyping(xdm.Typing{TypeAnnotation: "string", DerivedPrimitive: "string", IsID: true})
 			x.SetTypeEnv(stampEnv)
@@ -95,7 +95,7 @@ func pickCopyTarget(root *xdm.Node, local string) *xdm.Node {
 		return root
 	}
 	for _, el := range root.ChildElements()[0].ChildElements() {
-		if el.Name.Local == local {
+		if el.Name().Local == local {
 			return el
 		}
 	}
@@ -114,9 +114,9 @@ func errText(err error) string {
 func nodeFacts(n *xdm.Node) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%v %v %q base=%q doc=%q typing=%+v env=%p sv=%q",
-		n.Kind, n.Name, n.Value, n.BaseURI, n.DocumentURI, xdm.TypingOf(n),
+		n.Kind(), n.Name(), n.Value(), n.BaseURI(), n.DocumentURI(), xdm.TypingOf(n),
 		n.TypeEnv(), n.StringValue())
-	if n.Kind == xdm.KindElement || n.Kind == xdm.KindAttribute {
+	if n.Kind() == xdm.KindElement || n.Kind() == xdm.KindAttribute {
 		seq, err := xdm.AtomizeChecked(xdm.One(n))
 		for _, it := range seq {
 			if a, ok := it.(*xdm.Atomic); ok {
@@ -125,10 +125,10 @@ func nodeFacts(n *xdm.Node) string {
 		}
 		fmt.Fprintf(&b, " atomize-err=%v", err != nil)
 	}
-	if n.Kind == xdm.KindElement {
+	if n.Kind() == xdm.KindElement {
 		fmt.Fprintf(&b, " ns=%v", n.InScopeNamespaces())
 	}
-	fmt.Fprintf(&b, " #ns=%d #attrs=%d #kids=%d", len(n.Namespaces), len(n.Attrs), len(n.Children))
+	fmt.Fprintf(&b, " #ns=%d #attrs=%d #kids=%d", n.NumNamespaceDecls(), n.NumAttrs(), n.NumChildren())
 	return b.String()
 }
 
@@ -138,11 +138,11 @@ func sameTree(t *testing.T, label string, a, b *xdm.Node) {
 	if fa, fb := nodeFacts(a), nodeFacts(b); fa != fb {
 		t.Fatalf("%s: nodes differ\n  want %s\n  got  %s", label, fa, fb)
 	}
-	for i := range a.Attrs {
-		sameTree(t, label, a.Attrs[i], b.Attrs[i])
+	for i := range a.NumAttrs() {
+		sameTree(t, label, a.AttrAt(i), b.AttrAt(i))
 	}
-	for i := range a.Children {
-		sameTree(t, label, a.Children[i], b.Children[i])
+	for i := range a.NumChildren() {
+		sameTree(t, label, a.ChildAt(i), b.ChildAt(i))
 	}
 }
 
@@ -182,12 +182,12 @@ func TestValidateCopyMatchesInPlace(t *testing.T) {
 			if errText(errIn) != errText(errCp) {
 				t.Fatalf("errors differ\n  in place: %s\n  copy:     %s", errText(errIn), errText(errCp))
 			}
-			if got == target || got.Name != target.Name {
+			if got == target || got.Name() != target.Name() {
 				t.Fatalf("ValidateCopy returned %v, want a copy of %v", got, target)
 			}
 			top := got
-			for top.Parent != nil {
-				top = top.Parent
+			for top.Parent() != nil {
+				top = top.Parent()
 			}
 			sameTree(t, "copy vs in place", inPlace.Root, top)
 			sameTree(t, "input vs fresh parse", parseCopyDoc(t, c.doc).Root, input.Root)
@@ -213,7 +213,7 @@ func TestValidateCopyMatchesInPlace(t *testing.T) {
 func TestValidateCopyIsNotVacuous(t *testing.T) {
 	s := loadAssertionSchema(t, copySchema)
 	in := parseCopyDoc(t, copyDoc("100", `<n xsi:nil="true"/>`, "1"))
-	kidsBefore := len(in.Root.ChildElements()[0].Children)
+	kidsBefore := in.Root.ChildElements()[0].NumChildren()
 	got, err := s.ValidateCopy(in.Root, ValidateOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -233,11 +233,11 @@ func TestValidateCopyIsNotVacuous(t *testing.T) {
 		seen["mixed"] = seen["mixed"] || ty.MixedContent
 		seen["type env"] = seen["type env"] || n.TypeEnv() != nil
 		seen["default attribute"] = seen["default attribute"] ||
-			(n.Kind == xdm.KindAttribute && n.Value == "dflt")
-		for _, a := range n.Attrs {
+			(n.Kind() == xdm.KindAttribute && n.Value() == "dflt")
+		for a := range n.Attrs() {
 			walk(a)
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}
@@ -248,11 +248,11 @@ func TestValidateCopyIsNotVacuous(t *testing.T) {
 			t.Errorf("no node of the validated copy has %s", p)
 		}
 	}
-	if len(got.ChildElements()[0].Children) >= kidsBefore {
+	if got.ChildElements()[0].NumChildren() >= kidsBefore {
 		t.Errorf("ignorable whitespace was not stripped from the copy")
 	}
-	if got.DocumentURI != "http://ex/doc.xml" || got.BaseURI != "http://ex/doc.xml" {
-		t.Errorf("copy URIs: document %q base %q", got.DocumentURI, got.BaseURI)
+	if got.DocumentURI() != "http://ex/doc.xml" || got.BaseURI() != "http://ex/doc.xml" {
+		t.Errorf("copy URIs: document %q base %q", got.DocumentURI(), got.BaseURI())
 	}
 }
 
@@ -263,20 +263,20 @@ func TestValidateCopyConcurrent(t *testing.T) {
 	s := loadAssertionSchema(t, copySchema)
 	in := parseCopyDoc(t, copyDoc("100", `<n xsi:nil="true"/>`, "1"))
 	r := in.Root.ChildElements()[0]
-	kids := len(r.Children)
+	kids := r.NumChildren()
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			got, err := s.ValidateCopy(in.Root, ValidateOptions{})
-			if err != nil || got == in.Root || got.ChildElements()[0].TypeAnnotation == "" {
+			if err != nil || got == in.Root || got.ChildElements()[0].TypeAnnotation() == "" {
 				t.Errorf("ValidateCopy: %v, %p", err, got)
 			}
 		}()
 	}
 	wg.Wait()
-	if len(r.Children) != kids || r.TypeAnnotation != "" {
-		t.Errorf("input changed: %d children (was %d), annotation %q", len(r.Children), kids, r.TypeAnnotation)
+	if r.NumChildren() != kids || r.TypeAnnotation() != "" {
+		t.Errorf("input changed: %d children (was %d), annotation %q", r.NumChildren(), kids, r.TypeAnnotation())
 	}
 }

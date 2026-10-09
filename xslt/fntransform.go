@@ -1266,12 +1266,14 @@ func deliverSecondary(format string, sec SecondaryResult) (xdm.Sequence, error) 
 		}
 		return xdm.Sequence{xdm.NewString(buf.String())}, nil
 	default:
-		doc := &xdm.Node{Kind: xdm.KindDocument}
+		doc := xdm.NewNode(xdm.KindDocument, xdm.QName{}, "")
+		var kids []*xdm.Node
 		for _, it := range sec.Nodes {
 			if n, ok := it.(*xdm.Node); ok {
-				doc.Children = append(doc.Children, n)
+				kids = append(kids, n)
 			}
 		}
+		doc.SetChildren(kids)
 		return xdm.Sequence{doc}, nil
 	}
 }

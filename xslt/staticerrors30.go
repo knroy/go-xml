@@ -34,7 +34,7 @@ func checkImportSchemaInline(el, inline *xdm.Node) error {
 	if a == nil {
 		return nil
 	}
-	declared := strings.TrimSpace(a.Value)
+	declared := strings.TrimSpace(a.Value())
 	target := strings.TrimSpace(inline.AttrValue("targetNamespace"))
 	if declared != target {
 		return fmt.Errorf(
@@ -75,15 +75,15 @@ func checkCatchSelect(n *xdm.Node) error {
 	if n.Attr("", "select") == nil {
 		return nil
 	}
-	for _, ch := range n.Children {
-		switch ch.Kind {
+	for ch := range n.Children() {
+		switch ch.Kind() {
 		case xdm.KindElement, xdm.KindComment, xdm.KindPI:
 			return fmt.Errorf(
 				"XTSE3150: xsl:catch has a select attribute and is not empty")
 		case xdm.KindText:
 			// Indentation is not content, for the same reason it is not
 			// content in a static declaration: every real stylesheet has it.
-			if strings.TrimSpace(ch.Value) != "" {
+			if strings.TrimSpace(ch.Value()) != "" {
 				return fmt.Errorf(
 					"XTSE3150: xsl:catch has a select attribute and is not empty")
 			}
@@ -215,7 +215,7 @@ func checkOverrideRule(decl *xdm.Node) error {
 					"attribute and the default mode is the unnamed mode")
 		}
 	} else {
-		for _, tok := range strings.Fields(mode.Value) {
+		for _, tok := range strings.Fields(mode.Value()) {
 			switch tok {
 			case "#all", "#unnamed":
 				return fmt.Errorf(
@@ -275,15 +275,15 @@ func checkIterateParam(ch *xdm.Node) error {
 	if ch.Attr("", "select") != nil {
 		return nil
 	}
-	if a := ch.Attr("", "as"); a == nil || sequenceTypePermitsEmpty(a.Value) {
+	if a := ch.Attr("", "as"); a == nil || sequenceTypePermitsEmpty(a.Value()) {
 		return nil
 	}
-	for _, k := range ch.Children {
-		switch k.Kind {
+	for k := range ch.Children() {
+		switch k.Kind() {
 		case xdm.KindElement, xdm.KindComment, xdm.KindPI:
 			return nil
 		case xdm.KindText:
-			if strings.TrimSpace(k.Value) != "" {
+			if strings.TrimSpace(k.Value()) != "" {
 				return nil
 			}
 		}
@@ -405,12 +405,12 @@ func (s *Stylesheet) checkModeTyped(node *xdm.Node, mode string) error {
 	if !ok {
 		return nil
 	}
-	if node.Kind != xdm.KindElement && node.Kind != xdm.KindAttribute {
+	if node.Kind() != xdm.KindElement && node.Kind() != xdm.KindAttribute {
 		return nil
 	}
-	untyped := node.TypeAnnotation == "" ||
-		node.TypeAnnotation == "{"+xdm.NSXS+"}untyped" ||
-		node.TypeAnnotation == "{"+xdm.NSXS+"}untypedAtomic"
+	untyped := node.TypeAnnotation() == "" ||
+		node.TypeAnnotation() == "{"+xdm.NSXS+"}untyped" ||
+		node.TypeAnnotation() == "{"+xdm.NSXS+"}untypedAtomic"
 	// @typed is "boolean | strict | lax | unspecified", and a boolean in this
 	// language is any of yes/no, true/false, 1/0 -- mode-1445 writes
 	// typed=" false " and mode-1446 typed="0", both of which mean "no" and
@@ -422,7 +422,7 @@ func (s *Stylesheet) checkModeTyped(node *xdm.Node, mode string) error {
 		if !untyped {
 			return fmt.Errorf(
 				"XTTE3110: mode %s declares typed=%q but %s has type %s",
-				modeLabel(mode), want, nodeLabel(node), node.TypeAnnotation)
+				modeLabel(mode), want, nodeLabel(node), node.TypeAnnotation())
 		}
 	case "unspecified":
 		return nil

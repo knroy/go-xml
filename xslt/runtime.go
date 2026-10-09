@@ -474,14 +474,14 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree.BaseURI = v.baseURI
+	tree.SetBaseURI(v.baseURI)
 	// The document node's base is known only now, after its content was
 	// built, so the children are rebased against it here rather than as they
 	// were appended. Without this a copied element with a relative xml:base
 	// keeps the base of the document it came from, and a copied element with
 	// none keeps it too, instead of inheriting the temporary tree's.
-	for _, ch := range tree.Children {
-		rebase(ch, tree.BaseURI)
+	for ch := range tree.Children() {
+		rebase(ch, tree.BaseURI())
 	}
 	return xdm.One(tree), nil
 }
@@ -594,7 +594,7 @@ func constructedTextChecked(seq xdm.Sequence, sep string) (string, error) {
 func nonTextItems(seq xdm.Sequence) xdm.Sequence {
 	out := make(xdm.Sequence, 0, len(seq))
 	for _, it := range xdm.Flatten(seq) {
-		if n, ok := it.(*xdm.Node); ok && n.Kind == xdm.KindText {
+		if n, ok := it.(*xdm.Node); ok && n.Kind() == xdm.KindText {
 			continue
 		}
 		out = append(out, it)
@@ -619,15 +619,15 @@ func constructedText(seq xdm.Sequence, sep string) string {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
-			if v.Kind == xdm.KindText {
-				if v.Value == "" {
+			if v.Kind() == xdm.KindText {
+				if v.Value() == "" {
 					continue
 				}
 				if inText {
-					parts[len(parts)-1] += v.Value
+					parts[len(parts)-1] += v.Value()
 					continue
 				}
-				parts = append(parts, v.Value)
+				parts = append(parts, v.Value())
 				inText = true
 				continue
 			}
@@ -1326,19 +1326,19 @@ func bodyVariableRefs(el *xdm.Node) []string {
 	bound := map[string]bool{}
 	var names func(n *xdm.Node)
 	names = func(n *xdm.Node) {
-		if n.Kind == xdm.KindElement && isXSL(n, "variable") ||
-			n.Kind == xdm.KindElement && isXSL(n, "param") {
+		if n.Kind() == xdm.KindElement && isXSL(n, "variable") ||
+			n.Kind() == xdm.KindElement && isXSL(n, "param") {
 			if a := n.Attr("", "name"); a != nil {
-				if qn, err := resolveQNameAttr(n, a.Value); err == nil {
+				if qn, err := resolveQNameAttr(n, a.Value()); err == nil {
 					bound[qn.Clark()] = true
 				}
 			}
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			names(c)
 		}
 	}
-	for _, c := range el.Children {
+	for c := range el.Children() {
 		names(c)
 	}
 
@@ -1346,10 +1346,10 @@ func bodyVariableRefs(el *xdm.Node) []string {
 	var out []string
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
-		if n.Kind == xdm.KindElement {
+		if n.Kind() == xdm.KindElement {
 			ns := inScopeNamespacesShared(n)
-			for _, a := range n.Attrs {
-				for _, ref := range variableRefsIn(a.Value, ns) {
+			for a := range n.Attrs() {
+				for _, ref := range variableRefsIn(a.Value(), ns) {
 					if !seen[ref] && !bound[ref] {
 						seen[ref] = true
 						out = append(out, ref)
@@ -1357,11 +1357,11 @@ func bodyVariableRefs(el *xdm.Node) []string {
 				}
 			}
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}
-	for _, c := range el.Children {
+	for c := range el.Children() {
 		walk(c)
 	}
 	return out
@@ -1405,10 +1405,10 @@ func bodyFunctionCalls(el *xdm.Node) []string {
 	var out []string
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
-		if n.Kind == xdm.KindElement {
+		if n.Kind() == xdm.KindElement {
 			ns := inScopeNamespacesShared(n)
-			for _, a := range n.Attrs {
-				for _, c := range functionCallsIn(a.Value, ns) {
+			for a := range n.Attrs() {
+				for _, c := range functionCallsIn(a.Value(), ns) {
 					if !seen[c] {
 						seen[c] = true
 						out = append(out, c)
@@ -1416,7 +1416,7 @@ func bodyFunctionCalls(el *xdm.Node) []string {
 				}
 			}
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}

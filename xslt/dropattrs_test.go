@@ -17,13 +17,9 @@ import (
 // A prefixed attribute of the same local name is a different attribute and
 // must survive, which is why the helper tests the namespace too.
 func TestDropAttrs(t *testing.T) {
-	el := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{URI: xdm.NSXSL, Local: "variable"}}
+	el := xdm.NewNode(xdm.KindElement, xdm.QName{URI: xdm.NSXSL, Local: "variable"}, "")
 	add := func(uri, local, val string) {
-		el.Attrs = append(el.Attrs, &xdm.Node{
-			Kind:  xdm.KindAttribute,
-			Name:  xdm.QName{URI: uri, Local: local},
-			Value: val,
-		})
+		el.SetAttrs(attrsWith(el, xdm.NewNode(xdm.KindAttribute, xdm.QName{URI: uri, Local: local}, val)))
 	}
 	add("", "name", "v")
 	add("", "required", "no")
@@ -34,8 +30,8 @@ func TestDropAttrs(t *testing.T) {
 	dropAttrs(el, "required", "tunnel")
 
 	got := map[string]string{}
-	for _, a := range el.Attrs {
-		got[a.Name.URI+"|"+a.Name.Local] = a.Value
+	for a := range el.Attrs() {
+		got[a.Name().URI+"|"+a.Name().Local] = a.Value()
 	}
 	want := map[string]string{
 		"|name":                                "v",

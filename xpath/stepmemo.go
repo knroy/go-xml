@@ -69,7 +69,7 @@ func namedParents(ctx *Context, cur xdm.Sequence, steps []Expr, i int) (xdm.Sequ
 		return nil, false
 	}
 	doc, ok := cur[0].(*xdm.Node)
-	if !ok || doc.Kind != xdm.KindDocument || doc.Tree() == nil || doc.Tree().XMLVersion == "" {
+	if !ok || doc.Kind() != xdm.KindDocument || doc.Tree() == nil || doc.Tree().XMLVersion == "" {
 		return nil, false
 	}
 	if kt, ok := dos.Test.(*KindTest); !ok || !kt.Any {
@@ -113,14 +113,14 @@ func namedParents(ctx *Context, cur xdm.Sequence, steps []Expr, i int) (xdm.Sequ
 // element child t matches: descendant-or-self::node()[child::t] in document
 // order. Attributes and namespaces have no children, so they never qualify.
 func appendNamedParents(out xdm.Sequence, n *xdm.Node, t *NameTest) xdm.Sequence {
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		if t.Matches(c, xdm.KindElement) {
 			out = append(out, n)
 			break
 		}
 	}
-	for _, c := range n.Children {
-		if len(c.Children) > 0 {
+	for c := range n.Children() {
+		if c.NumChildren() > 0 {
 			out = appendNamedParents(out, c, t)
 		}
 	}

@@ -121,10 +121,10 @@ func findProbe(t *testing.T, root *xdm.Node, local string) *xdm.Node {
 	t.Helper()
 	var walk func(*xdm.Node) *xdm.Node
 	walk = func(n *xdm.Node) *xdm.Node {
-		if n.Kind == xdm.KindElement && n.Name.Local == local {
+		if n.Kind() == xdm.KindElement && n.Name().Local == local {
 			return n
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			if f := walk(c); f != nil {
 				return f
 			}
@@ -163,9 +163,9 @@ func checkAtomDecimal(t *testing.T, atom *xdm.Node) {
 	if a == nil {
 		t.Fatal("the copied element has no @a")
 	}
-	if a.DerivedPrimitive != "decimal" {
+	if a.DerivedPrimitive() != "decimal" {
 		t.Errorf("copied attribute lost DerivedPrimitive: %q, want %q",
-			a.DerivedPrimitive, "decimal")
+			a.DerivedPrimitive(), "decimal")
 	}
 	if got := a.Atomize(); got.Type != xdm.TypeDecimal {
 		t.Errorf("copied attribute atomised as %v, want %v -- the copy lost "+
@@ -195,9 +195,9 @@ func checkListDecimal(t *testing.T, list *xdm.Node) {
 
 func checkListNodeDecimal(t *testing.T, n *xdm.Node, what string) {
 	t.Helper()
-	if n.ListItem != "decimal" {
+	if n.ListItem() != "decimal" {
 		t.Errorf("copied list %s lost ListItem: %q, want %q", what,
-			n.ListItem, "decimal")
+			n.ListItem(), "decimal")
 	}
 	seq, ok := n.AtomizeList()
 	if !ok {
@@ -280,12 +280,13 @@ func TestSnapshotPreservesResolvedTyping(t *testing.T) {
 // the name, so the distinction was not observable here either way; it now
 // takes the resolved xdm.Typing.) The copy itself is what this test is about.
 func TestCopyItemAttributePreservesResolvedTyping(t *testing.T) {
-	src := &xdm.Node{Kind: xdm.KindAttribute,
-		Name: xdm.QName{Local: "a"}, Value: "10 20"}
+	src := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: "a"}, "10 20")
 	src.SetTypeAnnotationResolved(
 		xdm.AnnotationName(typingProbeNS, "L"), "anySimpleType", "decimal")
-	src.UnionMember = xdm.AnnotationName(typingProbeNS, "M")
-	src.IsIDREFS = true
+	ty := xdm.TypingOf(src)
+	ty.UnionMember = xdm.AnnotationName(typingProbeNS, "M")
+	ty.IsIDREFS = true
+	src.ApplyTyping(ty)
 
 	c, ok := copyItem(src).(*xdm.Node)
 	if !ok {
@@ -294,13 +295,13 @@ func TestCopyItemAttributePreservesResolvedTyping(t *testing.T) {
 	if c == src {
 		t.Fatal("copyItem returned the source attribute rather than a copy")
 	}
-	if c.DerivedPrimitive != src.DerivedPrimitive || c.ListItem != src.ListItem ||
-		c.UnionMember != src.UnionMember || c.TypeAnnotation != src.TypeAnnotation ||
-		!c.IsIDREFS {
+	if c.DerivedPrimitive() != src.DerivedPrimitive() || c.ListItem() != src.ListItem() ||
+		c.UnionMember() != src.UnionMember() || c.TypeAnnotation() != src.TypeAnnotation() ||
+		!c.IsIDREFS() {
 		t.Fatalf("copyItem dropped typing: annotation=%q UnionMember=%q "+
 			"DerivedPrimitive=%q ListItem=%q IsIDREFS=%v",
-			c.TypeAnnotation, c.UnionMember, c.DerivedPrimitive, c.ListItem,
-			c.IsIDREFS)
+			c.TypeAnnotation(), c.UnionMember(), c.DerivedPrimitive(), c.ListItem(),
+			c.IsIDREFS())
 	}
 
 	// Observable: the copy still splits into decimals once a later schema has
@@ -330,23 +331,23 @@ func TestStripClearsResolvedTyping(t *testing.T) {
 	</xsl:stylesheet>`, typingProbeSchema("decimal"))
 	for _, local := range []string{"atom", "list"} {
 		n := findProbe(t, res, local)
-		if n.TypeAnnotation != "" {
+		if n.TypeAnnotation() != "" {
 			t.Errorf("<%s> kept the annotation %q across a strip", local,
-				n.TypeAnnotation)
+				n.TypeAnnotation())
 		}
-		if n.DerivedPrimitive != "" || n.ListItem != "" {
+		if n.DerivedPrimitive() != "" || n.ListItem() != "" {
 			t.Errorf("<%s> kept resolved typing across a strip: "+
 				"DerivedPrimitive=%q ListItem=%q -- these describe an "+
 				"annotation the node no longer carries", local,
-				n.DerivedPrimitive, n.ListItem)
+				n.DerivedPrimitive(), n.ListItem())
 		}
-		for _, a := range n.Attrs {
-			if a.TypeAnnotation != "" || a.DerivedPrimitive != "" ||
-				a.ListItem != "" || a.UnionMember != "" {
+		for a := range n.Attrs() {
+			if a.TypeAnnotation() != "" || a.DerivedPrimitive() != "" ||
+				a.ListItem() != "" || a.UnionMember() != "" {
 				t.Errorf("<%s>/@%s kept typing across a strip: "+
 					"annotation=%q DerivedPrimitive=%q ListItem=%q "+
-					"UnionMember=%q", local, a.Name.Local, a.TypeAnnotation,
-					a.DerivedPrimitive, a.ListItem, a.UnionMember)
+					"UnionMember=%q", local, a.Name().Local, a.TypeAnnotation(),
+					a.DerivedPrimitive(), a.ListItem(), a.UnionMember())
 			}
 		}
 	}
@@ -367,10 +368,10 @@ func TestValidationStripClearsResolvedTyping(t *testing.T) {
 	</xsl:stylesheet>`, typingProbeSchema("decimal"))
 	for _, local := range []string{"atom", "list"} {
 		n := findProbe(t, res, local)
-		if n.TypeAnnotation != "" || n.DerivedPrimitive != "" || n.ListItem != "" {
+		if n.TypeAnnotation() != "" || n.DerivedPrimitive() != "" || n.ListItem() != "" {
 			t.Errorf(`<%s> survived validation="strip" with `+
 				"annotation=%q DerivedPrimitive=%q ListItem=%q", local,
-				n.TypeAnnotation, n.DerivedPrimitive, n.ListItem)
+				n.TypeAnnotation(), n.DerivedPrimitive(), n.ListItem())
 		}
 	}
 }
@@ -384,43 +385,41 @@ func TestValidationStripClearsResolvedTyping(t *testing.T) {
 // annotation, so a stripped document would otherwise go blind to its own IDs
 // -- while the same section makes dm:nilled false for every element.
 func TestStripKeepsIsIDAndClearsIsNilled(t *testing.T) {
-	src := &xdm.Node{Kind: xdm.KindElement,
-		Name:     xdm.QName{Local: "e"},
-		IsID:     true,
-		IsIDREFS: true,
-		IsNilled: true,
-	}
+	src := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
+	src.ApplyTyping(xdm.Typing{IsID: true, IsIDREFS: true, IsNilled: true})
 	src.SetTypeAnnotationResolved("{urn:probe}L", "decimal", "decimal")
-	src.UnionMember = "{urn:probe}M"
+	ty := xdm.TypingOf(src)
+	ty.UnionMember = "{urn:probe}M"
+	src.ApplyTyping(ty)
 
-	dst := &xdm.Node{Kind: xdm.KindElement, Name: src.Name}
+	dst := xdm.NewNode(xdm.KindElement, src.Name(), "")
 	dst.CopyTypingStrippedFrom(src)
 
-	if !dst.IsID || !dst.IsIDREFS {
+	if !dst.IsID() || !dst.IsIDREFS() {
 		t.Errorf("stripping cleared is-id/is-idrefs (%v/%v); §3.5 says it "+
-			"does not change them", dst.IsID, dst.IsIDREFS)
+			"does not change them", dst.IsID(), dst.IsIDREFS())
 	}
-	if dst.IsNilled {
+	if dst.IsNilled() {
 		t.Error("stripping kept dm:nilled; §3.5 makes it false for every " +
 			"element in a stripped tree")
 	}
-	if dst.TypeAnnotation != "" || dst.UnionMember != "" ||
-		dst.DerivedPrimitive != "" || dst.ListItem != "" {
+	if dst.TypeAnnotation() != "" || dst.UnionMember() != "" ||
+		dst.DerivedPrimitive() != "" || dst.ListItem() != "" {
 		t.Errorf("stripping kept part of the annotation: annotation=%q "+
 			"UnionMember=%q DerivedPrimitive=%q ListItem=%q",
-			dst.TypeAnnotation, dst.UnionMember, dst.DerivedPrimitive,
-			dst.ListItem)
+			dst.TypeAnnotation(), dst.UnionMember(), dst.DerivedPrimitive(),
+			dst.ListItem())
 	}
 
 	// And the preserving variant carries all seven, which is the contrast
 	// that makes two named functions the right shape.
-	keep := &xdm.Node{Kind: xdm.KindElement, Name: src.Name}
+	keep := xdm.NewNode(xdm.KindElement, src.Name(), "")
 	keep.CopyTypingFrom(src)
-	if keep.TypeAnnotation != src.TypeAnnotation ||
-		keep.UnionMember != src.UnionMember ||
-		keep.DerivedPrimitive != src.DerivedPrimitive ||
-		keep.ListItem != src.ListItem || !keep.IsID || !keep.IsIDREFS ||
-		!keep.IsNilled {
+	if keep.TypeAnnotation() != src.TypeAnnotation() ||
+		keep.UnionMember() != src.UnionMember() ||
+		keep.DerivedPrimitive() != src.DerivedPrimitive() ||
+		keep.ListItem() != src.ListItem() || !keep.IsID() || !keep.IsIDREFS() ||
+		!keep.IsNilled() {
 		t.Errorf("CopyTypingFrom did not carry every property: %+v", keep)
 	}
 }
@@ -474,12 +473,14 @@ func TestResultDocumentCarriesResolvedTyping(t *testing.T) {
 	if len(out.Secondary) != 1 {
 		t.Fatalf("got %d secondary results, want 1", len(out.Secondary))
 	}
-	root := &xdm.Node{Kind: xdm.KindDocument}
+	root := xdm.NewNode(xdm.KindDocument, xdm.QName{}, "")
+	var kids []*xdm.Node
 	for _, it := range out.Secondary[0].Nodes {
 		if n, ok := it.(*xdm.Node); ok {
-			root.Children = append(root.Children, n)
+			kids = append(kids, n)
 		}
 	}
+	root.SetChildren(kids)
 
 	// The registries are redefined only now, so everything the engine did was
 	// done while they still agreed with the node. See runTypingProbe.

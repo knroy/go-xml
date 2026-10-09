@@ -88,7 +88,7 @@ func FuzzParseNoPanic(f *testing.F) {
 		if tree == nil || tree.Root == nil {
 			t.Fatalf("ParseString(%q) returned no error and no tree", src)
 		}
-		if k := tree.Root.Kind; k != KindDocument {
+		if k := tree.Root.kind; k != KindDocument {
 			t.Fatalf("ParseString(%q) root is %v, want a document node", src, k)
 		}
 		// Every accessor a consumer reaches for must survive the tree the
@@ -152,7 +152,7 @@ func FuzzParseDOCTYPE(f *testing.F) {
 		if tree == nil || tree.Root == nil {
 			t.Fatalf("ParseString(%q) returned no error and no tree", src)
 		}
-		if k := tree.Root.Kind; k != KindDocument {
+		if k := tree.Root.kind; k != KindDocument {
 			t.Fatalf("ParseString(%q) root is %v, want a document node", src, k)
 		}
 		walkNode(t, src, tree.Root, 0)
@@ -167,20 +167,20 @@ func walkNode(t *testing.T, src string, n *Node, depth int) {
 		t.Fatalf("ParseString(%q) built a tree deeper than the depth limit allows", src)
 	}
 	_ = n.StringValue()
-	for _, a := range n.Attrs {
-		if a.Parent != n {
-			t.Fatalf("ParseString(%q): attribute %v is not parented to its element", src, a.Name)
+	for _, a := range n.attrs {
+		if a.parent != n {
+			t.Fatalf("ParseString(%q): attribute %v is not parented to its element", src, a.name)
 		}
 		_ = a.StringValue()
 	}
-	for _, ns := range n.Namespaces {
-		if ns.Parent != n {
-			t.Fatalf("ParseString(%q): namespace %v is not parented to its element", src, ns.Name)
+	for _, ns := range n.namespaces {
+		if ns.parent != n {
+			t.Fatalf("ParseString(%q): namespace %v is not parented to its element", src, ns.name)
 		}
 	}
-	for _, c := range n.Children {
-		if c.Parent != n {
-			t.Fatalf("ParseString(%q): child %v is not parented to its element", src, c.Name)
+	for _, c := range n.children {
+		if c.parent != n {
+			t.Fatalf("ParseString(%q): child %v is not parented to its element", src, c.name)
 		}
 		walkNode(t, src, c, depth+1)
 	}

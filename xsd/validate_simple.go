@@ -980,8 +980,8 @@ func (v *validator) idOwner(n *xdm.Node) *xdm.Node {
 		return nil
 	}
 	if v.schema.Version < Version11 {
-		if n.Kind == xdm.KindAttribute && n.Parent != nil {
-			return n.Parent
+		if n.Kind() == xdm.KindAttribute && n.Parent() != nil {
+			return n.Parent()
 		}
 		return n
 	}
@@ -991,8 +991,8 @@ func (v *validator) idOwner(n *xdm.Node) *xdm.Node {
 	// element". Falling back to the node itself would make the root denote
 	// itself, and a reference to that value would then resolve against a
 	// binding the spec does not create.
-	if n.Parent != nil && n.Parent.Kind == xdm.KindElement {
-		return n.Parent
+	if n.Parent() != nil && n.Parent().Kind() == xdm.KindElement {
+		return n.Parent()
 	}
 	return nil
 }
@@ -1522,8 +1522,8 @@ func resolveInstanceQName(at *xdm.Node, value string) (xdm.QName, bool) {
 		return xdm.QName{}, false
 	}
 	scope := at
-	if scope.Kind == xdm.KindAttribute && scope.Parent != nil {
-		scope = scope.Parent
+	if scope.Kind() == xdm.KindAttribute && scope.Parent() != nil {
+		scope = scope.Parent()
 	}
 	uri, ok := scope.LookupPrefix(prefix)
 	if !ok {

@@ -207,10 +207,10 @@ func (s *Schema) validateContext(ctx context.Context, root *xdm.Node,
 	// tree, not a source document, and §4.4 says nothing about those. Those
 	// callers hand in the element itself, so the document node is what
 	// separates the two.
-	v.stripIgnorable = opts.Annotate && root.Kind == xdm.KindDocument
+	v.stripIgnorable = opts.Annotate && root.Kind() == xdm.KindDocument
 
 	el := root
-	if el.Kind == xdm.KindDocument {
+	if el.Kind() == xdm.KindDocument {
 		els := el.ChildElements()
 		if len(els) == 0 {
 			return &ValidationErrors{Errors: []*ValidationError{{
@@ -220,7 +220,7 @@ func (s *Schema) validateContext(ctx context.Context, root *xdm.Node,
 		el = els[0]
 	}
 
-	decl, ok := s.Elements[xdm.QName{URI: el.Name.URI, Local: el.Name.Local}]
+	decl, ok := s.Elements[xdm.QName{URI: el.Name().URI, Local: el.Name().Local}]
 	if !ok {
 		// An element with no declaration is still assessable when
 		// xsi:type names a type: §3.3.4 clause 1.2 validates it against
@@ -228,7 +228,7 @@ func (s *Schema) validateContext(ctx context.Context, root *xdm.Node,
 		// no elements is a legitimate way to write one, and the
 		// instance says which type it means.
 		if xsiType := el.Attr(NSInstance, "type"); xsiType != nil {
-			t, err := v.resolveXSIType(el, xsiType.Value)
+			t, err := v.resolveXSIType(el, xsiType.Value())
 			if err != nil {
 				v.fail(el, "cvc-elt.4.2", "%v", err)
 				return v.result()
@@ -240,7 +240,7 @@ func (s *Schema) validateContext(ctx context.Context, root *xdm.Node,
 			return v.result()
 		}
 		v.fail(el, "cvc-elt.1",
-			"no element declaration for {%s}%s", el.Name.URI, el.Name.Local)
+			"no element declaration for {%s}%s", el.Name().URI, el.Name().Local)
 		return v.result()
 	}
 	v.validateElement(el, decl)
@@ -565,7 +565,7 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 		v.stopped = true
 		return nil
 	}
-	v.path = append(v.path, el.Name.Local)
+	v.path = append(v.path, el.Name().Local)
 	defer func() { v.path = v.path[:len(v.path)-1] }()
 
 	// A declaration whose type could not be resolved is an error only here,
@@ -604,7 +604,7 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 
 	// xsi:type overrides the declared type, subject to the blocking rules.
 	if xsiType := el.Attr(NSInstance, "type"); xsiType != nil {
-		t, err := v.resolveXSIType(el, xsiType.Value)
+		t, err := v.resolveXSIType(el, xsiType.Value())
 		if err != nil {
 			v.fail(el, "cvc-elt.4.2", "%v", err)
 			return nil
@@ -612,13 +612,13 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 		if !v.derivedFrom(t, decl.Type) {
 			v.fail(el, "cvc-elt.4.3",
 				"xsi:type %q is not derived from the declared type",
-				xsiType.Value)
+				xsiType.Value())
 			return nil
 		}
 		if m, blocked := v.substitutionBlocked(t, decl); blocked {
 			v.fail(el, "cvc-elt.4.3",
 				"xsi:type %q substitutes by %v, which is blocked",
-				xsiType.Value, m)
+				xsiType.Value(), m)
 			return nil
 		}
 		typ = t
@@ -629,7 +629,7 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 		// xsi:nil is xs:boolean, whiteSpace="collapse": XML S only. A
 		// no-break space is part of the lexical form and makes it invalid,
 		// where strings.TrimSpace stripped it and honoured the attribute.
-		val := trimXMLSpace(nilAttr.Value)
+		val := trimXMLSpace(nilAttr.Value())
 		if !decl.Nillable {
 			v.fail(el, "cvc-elt.3.1",
 				"xsi:nil is present but the declaration is not nillable")
@@ -788,7 +788,7 @@ func (v *validator) checkFixedValueConstraint(el *xdm.Node, typ Type, decl *Elem
 	}
 	// Clause 5.2 applies only when the item has children; an empty item is
 	// clause 5.1, and a nilled one has been returned on long before here.
-	if len(el.Children) == 0 {
+	if el.NumChildren() == 0 {
 		return
 	}
 	if childElementCount(el) > 0 {
@@ -1024,7 +1024,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 func (v *validator) matchOpenOnly(el *xdm.Node, kids []*xdm.Node, oc *OpenContent) []icTables {
 	var tables []icTables
 	for _, kid := range kids {
-		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
+		name := xdm.QName{URI: kid.Name().URI, Local: kid.Name().Local}
 		if !oc.Wildcard.AllowsName(name, v.elementDefined) {
 			v.fail(kid, "cvc-complex-type.2.4.a",
 				"element {%s}%s is not permitted by the open content wildcard",
@@ -1044,8 +1044,8 @@ func (v *validator) matchOpenOnly(el *xdm.Node, kids []*xdm.Node, oc *OpenConten
 // Empty content admits none: the indentation exception belongs to element-only
 // content, where there are elements for the whitespace to sit between.
 func hasText(el *xdm.Node) bool {
-	for _, c := range el.Children {
-		if c.Kind == xdm.KindText && c.Value != "" {
+	for c := range el.Children() {
+		if c.Kind() == xdm.KindText && c.Value() != "" {
 			return true
 		}
 	}
@@ -1060,20 +1060,20 @@ func nonSpaceText(el *xdm.Node) string { return nonSpaceTextSeen(el, new(string)
 // whitespace-only texts, so indentation repeats and the comparison usually
 // succeeds on the pointer without reading a byte.
 func nonSpaceTextSeen(el *xdm.Node, seen *string) string {
-	for _, c := range el.Children {
-		if c.Kind != xdm.KindText || c.Value == *seen {
+	for c := range el.Children() {
+		if c.Kind() != xdm.KindText || c.Value() == *seen {
 			continue
 		}
 		// Most element-only content is whitespace only: look for a
 		// non-space byte before paying for the trim.
-		for i := 0; i < len(c.Value); i++ {
-			switch c.Value[i] {
+		for i := 0; i < len(c.Value()); i++ {
+			switch c.Value()[i] {
 			case ' ', '\t', '\n', '\r':
 				continue
 			}
-			return strings.Trim(c.Value, " \t\n\r")
+			return strings.Trim(c.Value(), " \t\n\r")
 		}
-		*seen = c.Value
+		*seen = c.Value()
 	}
 	return ""
 }
@@ -1148,7 +1148,7 @@ func (v *validator) noteChildType(kid *xdm.Node, name xdm.QName, p *position, t 
 			// still assesses the element when xsi:type names a
 			// type. That is the only thing assigning this name a
 			// type here, so it is the one the rule compares.
-			t, err := v.resolveXSIType(kid, xsiType.Value)
+			t, err := v.resolveXSIType(kid, xsiType.Value())
 			if err != nil {
 				return
 			}
@@ -1176,7 +1176,7 @@ func (v *validator) noteChildType(kid *xdm.Node, name xdm.QName, p *position, t 
 	_, viaWildcard := p.term.(*Wildcard)
 	if viaWildcard {
 		if xsiType := kid.Attr(NSInstance, "type"); xsiType != nil {
-			if t, err := v.resolveXSIType(kid, xsiType.Value); err == nil {
+			if t, err := v.resolveXSIType(kid, xsiType.Value()); err == nil {
 				got = t
 			}
 		}
@@ -1200,7 +1200,7 @@ func (v *validator) noteChildType(kid *xdm.Node, name xdm.QName, p *position, t 
 	}
 
 	// The scope is one content model, which is one parent element.
-	parent := kid.Parent
+	parent := kid.Parent()
 	if parent == nil {
 		return
 	}
@@ -1303,8 +1303,8 @@ type walkScratch struct {
 // childElementCount is len(el.ChildElements()) without building the slice.
 func childElementCount(el *xdm.Node) int {
 	n := 0
-	for _, c := range el.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range el.Children() {
+		if c.Kind() == xdm.KindElement {
 			n++
 		}
 	}
@@ -1321,11 +1321,11 @@ func (v *validator) matchSequence(el *xdm.Node, nkids int, m *contentModel, t *C
 		// <xs:openContent> useful at all.
 		var tables []icTables
 		oc := v.openContentFor(t)
-		for _, kid := range el.Children {
-			if kid.Kind != xdm.KindElement {
+		for kid := range el.Children() {
+			if kid.Kind() != xdm.KindElement {
 				continue
 			}
-			if oc != nil && oc.Wildcard.AllowsName(kid.Name, v.elementDefined) {
+			if oc != nil && oc.Wildcard.AllowsName(kid.Name(), v.elementDefined) {
 				if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
 					tables = append(tables, tbl)
 				}
@@ -1333,7 +1333,7 @@ func (v *validator) matchSequence(el *xdm.Node, nkids int, m *contentModel, t *C
 			}
 			v.fail(kid, "cvc-complex-type.2.4.d",
 				"element {%s}%s is not permitted here: the content model "+
-					"is empty", kid.Name.URI, kid.Name.Local)
+					"is empty", kid.Name().URI, kid.Name().Local)
 			return tables
 		}
 		return tables
@@ -1416,11 +1416,11 @@ func (v *validator) matchSequence(el *xdm.Node, nkids int, m *contentModel, t *C
 		return len(vectors) <= DefaultMaxMatchStates
 	}
 
-	for _, kid := range el.Children {
-		if kid.Kind != xdm.KindElement {
+	for kid := range el.Children() {
+		if kid.Kind() != xdm.KindElement {
 			continue
 		}
-		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
+		name := xdm.QName{URI: kid.Name().URI, Local: kid.Name().Local}
 		next := -1
 		// boundRefused records that a position matched the child by name
 		// and was refused only by an occurrence bound. The two failures
@@ -1522,12 +1522,12 @@ func (v *validator) matchSequence(el *xdm.Node, nkids int, m *contentModel, t *C
 				v.fail(kid, "cvc-complex-type.2.4.b",
 					"element content is incomplete: {%s}%s cannot follow "+
 						"until an earlier particle has met its minimum",
-					kid.Name.URI, kid.Name.Local)
+					kid.Name().URI, kid.Name().Local)
 				return tables
 			}
 			v.fail(kid, "cvc-complex-type.2.4.a",
 				"element {%s}%s is not permitted here%s",
-				kid.Name.URI, kid.Name.Local, expected(m, current))
+				kid.Name().URI, kid.Name().Local, expected(m, current))
 			return tables
 		}
 
@@ -1641,7 +1641,7 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 	inSuffix := false
 
 	for _, kid := range kids {
-		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
+		name := xdm.QName{URI: kid.Name().URI, Local: kid.Name().Local}
 		found := false
 		// A particle whose bound is used up does not fail the element:
 		// another particle may still admit it. XSD 1.1 permits a
@@ -1773,7 +1773,7 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 // validateChild validates one matched child against the position that matched
 // it.
 func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
-	name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
+	name := xdm.QName{URI: kid.Name().URI, Local: kid.Name().Local}
 	v.noteChildType(kid, name, p, v.currentType)
 
 	if w, ok := p.term.(*Wildcard); ok {
@@ -1820,7 +1820,7 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 			// That path does annotate, because the item really was
 			// strictly assessed.
 			if xsiType := kid.Attr(NSInstance, "type"); xsiType != nil {
-				t, err := v.resolveXSIType(kid, xsiType.Value)
+				t, err := v.resolveXSIType(kid, xsiType.Value())
 				if err != nil {
 					v.fail(kid, "cvc-elt.4.2", "%v", err)
 					return nil
@@ -1833,8 +1833,8 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 			// they are halves of one fact, so restoring the name
 			// while leaving the meaning from the anyType pass would
 			// describe the old type with the new type's erasure.
-			prev := kid.TypeAnnotation
-			prevPrim, prevItem := kid.DerivedPrimitive, kid.ListItem
+			prev := kid.TypeAnnotation()
+			prevPrim, prevItem := kid.DerivedPrimitive(), kid.ListItem()
 			v.validateAgainstType(kid, v.schema.anyType(), nil)
 			kid.SetTypeAnnotationResolved(prev, prevPrim, prevItem)
 			return nil
@@ -1851,7 +1851,7 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 				// on every child under a strict wildcard and
 				// declares none of them.
 				if xsiType := kid.Attr(NSInstance, "type"); xsiType != nil {
-					t, err := v.resolveXSIType(kid, xsiType.Value)
+					t, err := v.resolveXSIType(kid, xsiType.Value())
 					if err != nil {
 						v.fail(kid, "cvc-elt.4.2", "%v", err)
 						return nil
@@ -1981,7 +1981,7 @@ func effectiveValue(el *xdm.Node, decl *ElementDecl) string {
 	// Only a genuinely empty element defaults. One containing whitespace has
 	// content, which whiteSpace normalisation may later collapse to nothing
 	// — that is a different value from absent, and the spec treats it so.
-	if len(el.Children) > 0 {
+	if el.NumChildren() > 0 {
 		return raw
 	}
 	return decl.Constraint.Lexical
@@ -2238,24 +2238,31 @@ func anonComplexAnnotation(t Type) string {
 // xml:space="preserve" is honoured, on the same footing as it has in the
 // DTD-derived rule: the author has said the whitespace here is content.
 func stripIgnorableWhitespace(el *xdm.Node) {
-	if a := el.Attr(xdm.NSXML, "space"); a != nil && a.Value == "preserve" {
+	if a := el.Attr(xdm.NSXML, "space"); a != nil && a.Value() == "preserve" {
 		return
 	}
-	kept := el.Children[:0]
-	changed := false
-	for _, c := range el.Children {
-		if c.Kind == xdm.KindText && xdm.IsXMLWhitespace(c.Value) {
-			changed = true
+	var kept []*xdm.Node
+	for i := range el.NumChildren() {
+		c := el.ChildAt(i)
+		if c.Kind() == xdm.KindText && xdm.IsXMLWhitespace(c.Value()) {
+			if kept == nil {
+				kept = make([]*xdm.Node, i, el.NumChildren()-1)
+				for j := range i {
+					kept[j] = el.ChildAt(j)
+				}
+			}
 			continue
 		}
-		kept = append(kept, c)
+		if kept != nil {
+			kept = append(kept, c)
+		}
 	}
-	if !changed {
+	if kept == nil {
 		return
 	}
 	// The document-order indices assigned at parse time are left alone. They
 	// are only ever compared, never counted, so the gaps a removal leaves
 	// behind cost nothing: the surviving children stay in order relative to
 	// each other and to every node outside this element.
-	el.Children = kept
+	el.SetChildren(kept)
 }

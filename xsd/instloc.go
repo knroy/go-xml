@@ -168,7 +168,7 @@ func instanceLocations(root *xdm.Node, policy InstanceLocationPolicy) []string {
 
 	var walk func(*xdm.Node)
 	walk = func(n *xdm.Node) {
-		if n.Kind == xdm.KindElement {
+		if n.Kind() == xdm.KindElement {
 			if a := n.Attr(NSInstance, "schemaLocation"); a != nil {
 				// The value is a whitespace-separated list of
 				// (namespace, location) pairs. An odd number of
@@ -179,7 +179,7 @@ func instanceLocations(root *xdm.Node, policy InstanceLocationPolicy) []string {
 				// XSD list tokenizes on XML S alone. A no-break space is
 				// data inside a token, so strings.Fields turned one URI
 				// into two and paired the halves wrongly.
-				f := splitFields(a.Value)
+				f := splitFields(a.Value())
 				for i := 0; i+1 < len(f); i += 2 {
 					ns, loc := f[i], f[i+1]
 					if policy.AllowNamespace == nil ||
@@ -194,7 +194,7 @@ func instanceLocations(root *xdm.Node, policy InstanceLocationPolicy) []string {
 			}
 			if a := n.Attr(NSInstance, "noNamespaceSchemaLocation"); a != nil &&
 				policy.AllowNoNamespace {
-				for _, loc := range splitFields(a.Value) {
+				for _, loc := range splitFields(a.Value()) {
 					if !seen[loc] {
 						seen[loc] = true
 						out = append(out, loc)
@@ -202,7 +202,7 @@ func instanceLocations(root *xdm.Node, policy InstanceLocationPolicy) []string {
 				}
 			}
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}

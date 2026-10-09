@@ -69,40 +69,40 @@ func serialize(n *Node) string {
 	var sb strings.Builder
 	var walk func(*Node)
 	walk = func(n *Node) {
-		switch n.Kind {
+		switch n.kind {
 		case KindDocument:
-			for _, c := range n.Children {
+			for _, c := range n.children {
 				walk(c)
 			}
 		case KindElement:
 			sb.WriteByte('<')
-			sb.WriteString(n.Name.Local)
-			for _, a := range n.Attrs {
+			sb.WriteString(n.name.Local)
+			for _, a := range n.attrs {
 				sb.WriteByte(' ')
-				if a.Name.Prefix != "" {
-					sb.WriteString(a.Name.Prefix)
+				if a.name.Prefix != "" {
+					sb.WriteString(a.name.Prefix)
 					sb.WriteByte(':')
 				}
-				sb.WriteString(a.Name.Local)
+				sb.WriteString(a.name.Local)
 				sb.WriteString(`="`)
-				sb.WriteString(a.Value)
+				sb.WriteString(a.value)
 				sb.WriteByte('"')
 			}
-			if len(n.Children) == 0 {
+			if len(n.children) == 0 {
 				sb.WriteString("/>")
 				return
 			}
 			sb.WriteByte('>')
-			for _, c := range n.Children {
+			for _, c := range n.children {
 				walk(c)
 			}
 			sb.WriteString("</")
-			sb.WriteString(n.Name.Local)
+			sb.WriteString(n.name.Local)
 			sb.WriteByte('>')
 		case KindText:
-			sb.WriteString(n.Value)
+			sb.WriteString(n.value)
 		case KindComment:
-			sb.WriteString("<!--" + n.Value + "-->")
+			sb.WriteString("<!--" + n.value + "-->")
 		}
 	}
 	walk(n)
@@ -137,11 +137,11 @@ func TestXIncludeTextIsNotParsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessXInclude: %v", err)
 	}
-	kids := tree.Root.Children[0].Children
-	if len(kids) != 1 || kids[0].Kind != KindText {
+	kids := tree.Root.children[0].children
+	if len(kids) != 1 || kids[0].kind != KindText {
 		t.Fatalf("want one text child, got %d children", len(kids))
 	}
-	if got, want := kids[0].Value, `a < b && <notanelement/>`; got != want {
+	if got, want := kids[0].value, `a < b && <notanelement/>`; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
@@ -155,11 +155,11 @@ func TestXIncludeTextMergesWithNeighbours(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessXInclude: %v", err)
 	}
-	kids := tree.Root.Children[0].Children
+	kids := tree.Root.children[0].children
 	if len(kids) != 1 {
 		t.Fatalf("want the three text runs merged into one node, got %d", len(kids))
 	}
-	if got, want := kids[0].Value, "beforeMIDafter"; got != want {
+	if got, want := kids[0].value, "beforeMIDafter"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
@@ -215,19 +215,19 @@ func TestXIncludeBaseURIFixup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessXInclude: %v", err)
 	}
-	frag := tree.Root.Children[0].Children[0]
+	frag := tree.Root.children[0].children[0]
 	xb := frag.Attr(NSXML, "base")
 	if xb == nil {
 		t.Fatal("the included element should carry an xml:base")
 	}
-	if got, want := xb.Value, "mem:///doc/sub/frag.xml"; got != want {
+	if got, want := xb.value, "mem:///doc/sub/frag.xml"; got != want {
 		t.Errorf("xml:base = %q, want %q", got, want)
 	}
-	if got, want := frag.BaseURI, "mem:///doc/sub/frag.xml"; got != want {
+	if got, want := frag.baseURI, "mem:///doc/sub/frag.xml"; got != want {
 		t.Errorf("BaseURI = %q, want %q", got, want)
 	}
 	// The descendant inherits it, which is the point of adding the attribute.
-	if got := elementBase(frag.Children[0]); got != "mem:///doc/sub/frag.xml" {
+	if got := elementBase(frag.children[0]); got != "mem:///doc/sub/frag.xml" {
 		t.Errorf("descendant base = %q", got)
 	}
 }
@@ -249,8 +249,8 @@ func TestXIncludeNoRedundantBaseAttribute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessXInclude: %v", err)
 	}
-	frag := tree.Root.Children[0].Children[0]
-	if xb := frag.Attr(NSXML, "base"); xb == nil || xb.Value != "mem:///doc/frag.xml" {
+	frag := tree.Root.children[0].children[0]
+	if xb := frag.Attr(NSXML, "base"); xb == nil || xb.value != "mem:///doc/frag.xml" {
 		t.Errorf("want xml:base=mem:///doc/frag.xml, got %v", xb)
 	}
 }
@@ -265,14 +265,14 @@ func TestXIncludeExistingXMLBaseIsKeptAndRebased(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessXInclude: %v", err)
 	}
-	frag := tree.Root.Children[0].Children[0]
+	frag := tree.Root.children[0].children[0]
 	xb := frag.Attr(NSXML, "base")
-	if xb == nil || xb.Value != "other/x.xml" {
+	if xb == nil || xb.value != "other/x.xml" {
 		t.Fatalf("the document's own xml:base must survive, got %v", xb)
 	}
 	// Resolved against the INCLUDE element's base (mem:///doc/), not against
 	// the included document's (mem:///doc/dir/).
-	if got, want := frag.BaseURI, "mem:///doc/other/x.xml"; got != want {
+	if got, want := frag.baseURI, "mem:///doc/other/x.xml"; got != want {
 		t.Errorf("BaseURI = %q, want %q", got, want)
 	}
 }
@@ -398,7 +398,7 @@ func TestXIncludeShorthandXPointer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessXInclude: %v", err)
 	}
-	if got := serialize(tree.Root.Children[0].Children[0]); !strings.Contains(got, "two") {
+	if got := serialize(tree.Root.children[0].children[0]); !strings.Contains(got, "two") {
 		t.Errorf("want the p2 element, got %s", got)
 	}
 	if strings.Contains(serialize(tree.Root), "one") {
@@ -489,7 +489,7 @@ func TestXIncludeDocumentOrderIsReassigned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessXInclude: %v", err)
 	}
-	kids := tree.Root.Children[0].Children
+	kids := tree.Root.children[0].children
 	if len(kids) != 3 {
 		t.Fatalf("want three children, got %d", len(kids))
 	}
@@ -519,12 +519,12 @@ func TestXIncludeHreflessXPointerSelectsLocally(t *testing.T) {
 	if len(res.reads) != 0 {
 		t.Errorf("a local selection must read nothing, got %v", res.reads)
 	}
-	q := tree.Root.Children[0].Children[1]
+	q := tree.Root.children[0].children[1]
 	if got := serialize(q); !strings.Contains(got, "quoted") {
 		t.Errorf("the local selection did not happen: %s", got)
 	}
 	// A COPY, not a move: the original must still be where it was.
-	if got := serialize(tree.Root.Children[0].Children[0]); !strings.Contains(got, "quoted") {
+	if got := serialize(tree.Root.children[0].children[0]); !strings.Contains(got, "quoted") {
 		t.Errorf("the selected node was moved rather than copied: %s", got)
 	}
 }

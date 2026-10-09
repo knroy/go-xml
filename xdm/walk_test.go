@@ -12,12 +12,12 @@ const walkSrc = `<a xmlns:p="urn:p">t1<b>t2<c/>t3</b><!--x--><?pi?><p:d k="v"><e
 // namespaced element, the local name otherwise.
 func label(n *Node) string {
 	switch {
-	case n.Kind == KindDocument:
+	case n.kind == KindDocument:
 		return "#doc"
-	case n.Name.URI != "":
-		return "{" + n.Name.URI + "}" + n.Name.Local
+	case n.name.URI != "":
+		return "{" + n.name.URI + "}" + n.name.Local
 	}
-	return n.Name.Local
+	return n.name.Local
 }
 
 // Walk visits n whatever its kind, then descendant elements only, in
@@ -28,7 +28,7 @@ func TestWalk(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := tree.Root
-	a := doc.Children[0]
+	a := doc.children[0]
 	for _, tc := range []struct {
 		name   string
 		start  *Node
@@ -62,7 +62,7 @@ func TestFirstElement(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := tree.Root
-	r := doc.Children[0]
+	r := doc.children[0]
 	for _, tc := range []struct {
 		name       string
 		start      *Node
@@ -96,6 +96,6 @@ func TestFirstElement(t *testing.T) {
 func ExampleNode_FirstElement() {
 	tree, _ := ParseString(`<doc xmlns:p="urn:p"><head/><body><p:item>one</p:item></body></doc>`, ParseOptions{})
 	item := tree.Root.FirstElement("urn:p", "item")
-	fmt.Println(item.Name.Local, item.StringValue())
+	fmt.Println(item.name.Local, item.StringValue())
 	// Output: item one
 }

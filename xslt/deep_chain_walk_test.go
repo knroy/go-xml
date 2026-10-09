@@ -145,10 +145,7 @@ func TestAccumulatorOriginDeepCopyChain(t *testing.T) {
 		// nodes[0] is the original; nodes[i] is the i'th successive copy.
 		nodes := make([]*xdm.Node, n+1)
 		for i := range nodes {
-			nodes[i] = &xdm.Node{
-				Kind: xdm.KindElement,
-				Name: xdm.QName{Local: fmt.Sprintf("c%d", i)},
-			}
+			nodes[i] = xdm.NewNode(xdm.KindElement, xdm.QName{Local: fmt.Sprintf("c%d", i)}, "")
 		}
 		for i := 1; i <= n; i++ {
 			rt.accumOrigin[nodes[i]] = nodes[i-1]
@@ -157,7 +154,7 @@ func TestAccumulatorOriginDeepCopyChain(t *testing.T) {
 		if got := rt.accumulatorOrigin(nodes[n]); got != nodes[0] {
 			t.Errorf("copies=%d: origin of the last copy is %s, want the "+
 				"original c0 — the accumulator reports the wrong node's value",
-				n, got.Name.Local)
+				n, got.Name().Local)
 		}
 		// Every intermediate resolves to the same original, and the original
 		// resolves to itself.
@@ -167,7 +164,7 @@ func TestAccumulatorOriginDeepCopyChain(t *testing.T) {
 		mid := n / 2
 		if got := rt.accumulatorOrigin(nodes[mid]); got != nodes[0] {
 			t.Errorf("copies=%d: copy %d resolves to %s, want c0",
-				n, mid, got.Name.Local)
+				n, mid, got.Name().Local)
 		}
 	}
 }
@@ -180,7 +177,7 @@ func TestAccumulatorOriginCyclicTerminates(t *testing.T) {
 		rt := &runtime{accumOrigin: map[*xdm.Node]*xdm.Node{}}
 		nodes := make([]*xdm.Node, n)
 		for i := range nodes {
-			nodes[i] = &xdm.Node{Kind: xdm.KindElement}
+			nodes[i] = xdm.NewNode(xdm.KindElement, xdm.QName{}, "")
 		}
 		for i := range nodes {
 			rt.accumOrigin[nodes[i]] = nodes[(i+1)%n]

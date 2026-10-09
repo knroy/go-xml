@@ -173,7 +173,7 @@ func analyzeSequenceConstructor(
 func enclosingGroupSelect(
 	el *xdm.Node, attrSets map[xdm.QName][]*xdm.Node, funcs map[funcKey]*streamFunc,
 ) (props, bool) {
-	for n := el.Parent; n != nil; n = n.Parent {
+	for n := el.Parent(); n != nil; n = n.Parent() {
 		if !isXSL(n, "for-each-group") {
 			continue
 		}
@@ -188,7 +188,7 @@ func enclosingGroupSelect(
 			attrSets:          attrSets,
 			funcs:             funcs,
 		}
-		sel := outer.exprPropsIn(at.Value, n, postureStriding, true)
+		sel := outer.exprPropsIn(at.Value(), n, postureStriding, true)
 		if !outer.known {
 			return props{}, false
 		}
@@ -203,7 +203,7 @@ func enclosingGroupSelect(
 // hasForEachGroupAncestor reports whether el is nested inside an
 // xsl:for-each-group.
 func hasForEachGroupAncestor(el *xdm.Node) bool {
-	for n := el.Parent; n != nil; n = n.Parent {
+	for n := el.Parent(); n != nil; n = n.Parent() {
 		if isXSL(n, "for-each-group") {
 			return true
 		}
@@ -342,7 +342,7 @@ func (a *instrAnalyzer) avtProps(el *xdm.Node, attr string) (props, bool) {
 	if at == nil {
 		return groundedMotionless, false
 	}
-	return a.avtPropsOf(at.Value, el), true
+	return a.avtPropsOf(at.Value(), el), true
 }
 
 func (a *instrAnalyzer) avtPropsOf(src string, el *xdm.Node) props {
@@ -408,7 +408,7 @@ func (a *instrAnalyzer) selectOperand(el *xdm.Node, u usage) (operand, bool) {
 	if at == nil {
 		return operand{}, false
 	}
-	p, kids := a.exprOperandIn(at.Value, el, a.ctxPosture, a.ctxAllowsChildren)
+	p, kids := a.exprOperandIn(at.Value(), el, a.ctxPosture, a.ctxAllowsChildren)
 	return operand{props: p, usage: u, allowsChildren: kids}, true
 }
 
@@ -419,7 +419,7 @@ func (a *instrAnalyzer) exprOperand(el *xdm.Node, attr string, u usage) (operand
 	if at == nil {
 		return operand{}, false
 	}
-	p, kids := a.exprOperandIn(at.Value, el, a.ctxPosture, a.ctxAllowsChildren)
+	p, kids := a.exprOperandIn(at.Value(), el, a.ctxPosture, a.ctxAllowsChildren)
 	return operand{props: p, usage: u, allowsChildren: kids}, true
 }
 
@@ -501,10 +501,10 @@ func (a *instrAnalyzer) body(el *xdm.Node) props {
 // operands of their parent instruction under its own rule, not members of its
 // body, and assessing them twice would double-count a consuming operand.
 func isSequenceConstructorExcluded(el *xdm.Node) bool {
-	if el.Name.URI != xdm.NSXSL {
+	if el.Name().URI != xdm.NSXSL {
 		return false
 	}
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "param", "sort", "with-param", "on-completion", "catch",
 		"matching-substring", "non-matching-substring", "merge-source",
 		"merge-key", "merge-action", "when", "otherwise", "map-entry",
@@ -517,14 +517,14 @@ func isSequenceConstructorExcluded(el *xdm.Node) bool {
 // instruction applies the §19.8.4 rule for a single instruction or literal
 // result element.
 func (a *instrAnalyzer) instruction(el *xdm.Node) props {
-	if el.Name.URI != xdm.NSXSL {
+	if el.Name().URI != xdm.NSXSL {
 		// §19.8.4.1: a literal result element. Its operands are the
 		// contained sequence constructor, the expressions in its attribute
 		// value templates, and any attribute sets it names -- all with
 		// usage absorption.
 		return a.literalResultElement(el)
 	}
-	switch el.Name.Local {
+	switch el.Name().Local {
 
 	// --- Instructions that are simply a table of operand usages. ---
 
@@ -623,7 +623,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 			case isXSL(c, "when"):
 				if at := c.Attr("", "test"); at != nil {
 					ops = append(ops, operand{
-						props:          a.exprProps(at.Value, c),
+						props:          a.exprProps(at.Value(), c),
 						usage:          usageInspection,
 						allowsChildren: true,
 					})
@@ -692,7 +692,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		// types come from the with-param, or from the corresponding
 		// xsl:param on the containing xsl:iterate.
 		var targets map[xdm.QName]string
-		for p := el.Parent; p != nil && p.Kind == xdm.KindElement; p = p.Parent {
+		for p := el.Parent(); p != nil && p.Kind() == xdm.KindElement; p = p.Parent() {
 			if isXSL(p, "iterate") {
 				targets = declaredParamTypes(p)
 				break
@@ -770,7 +770,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		// node.
 		selUsage, bodyUsage := usageNavigation, usageAbsorption
 		if at := el.Attr("", "as"); at != nil {
-			u := instrTypeDeterminedUsage(at.Value)
+			u := instrTypeDeterminedUsage(at.Value())
 			selUsage, bodyUsage = u, u
 		}
 		var ops []operand
@@ -951,13 +951,13 @@ func (a *instrAnalyzer) absorbingSelectOrBody(el *xdm.Node, avts []string) props
 // literalResultElement applies §19.8.4.1.
 func (a *instrAnalyzer) literalResultElement(el *xdm.Node) props {
 	var ops []operand
-	for _, at := range el.Attrs {
+	for at := range el.Attrs() {
 		// xsl:use-attribute-sets is handled below, and is not itself an
 		// attribute value template.
-		if at.Name.URI == xdm.NSXSL {
+		if at.Name().URI == xdm.NSXSL {
 			continue
 		}
-		p := a.avtPropsOf(at.Value, el)
+		p := a.avtPropsOf(at.Value(), el)
 		ops = append(ops, operand{props: p, usage: usageAbsorption, allowsChildren: true})
 	}
 	ops = append(ops, a.useAttributeSetOperands(el)...)
@@ -1062,11 +1062,11 @@ func (a *instrAnalyzer) attributeSetProps(decls []*xdm.Node) props {
 // xsl:use-attribute-sets on a literal result element.
 func attributeSetNames(el *xdm.Node) []xdm.QName {
 	raw := ""
-	if el.Name.URI == xdm.NSXSL {
+	if el.Name().URI == xdm.NSXSL {
 		raw = el.AttrValue("use-attribute-sets")
 	} else {
 		if at := el.Attr(xdm.NSXSL, "use-attribute-sets"); at != nil {
-			raw = at.Value
+			raw = at.Value()
 		}
 	}
 	if raw == "" {
@@ -1153,9 +1153,9 @@ func calledTemplate(el *xdm.Node) *xdm.Node {
 func bodyCallsAny(el *xdm.Node, names ...string) bool {
 	found := false
 	walkElements(el, func(d *xdm.Node) bool {
-		for _, at := range d.Attrs {
+		for at := range d.Attrs() {
 			for _, n := range names {
-				if strings.Contains(at.Value, n+"(") {
+				if strings.Contains(at.Value(), n+"(") {
 					found = true
 					return false
 				}
@@ -1309,7 +1309,7 @@ func (a *instrAnalyzer) sortOperands(el *xdm.Node, ctx posture) []operand {
 			"lang", "order", "collation", "stable", "case-order", "data-type")...)
 		sub := a.sub(ctx, true)
 		if at := c.Attr("", "select"); at != nil {
-			p, kids := sub.exprOperandIn(at.Value, c, ctx, true)
+			p, kids := sub.exprOperandIn(at.Value(), c, ctx, true)
 			ops = append(ops, operand{props: p, usage: usageAbsorption, allowsChildren: kids})
 		} else {
 			ops = append(ops, operand{
@@ -1394,7 +1394,7 @@ func (a *instrAnalyzer) copyInstruction(el *xdm.Node) props {
 	// expected to run, and does.
 	focusSetting := false
 	if at := el.Attr("", "select"); at != nil {
-		sp, spKids := a.exprOperandIn(at.Value, el, a.ctxPosture, a.ctxAllowsChildren)
+		sp, spKids := a.exprOperandIn(at.Value(), el, a.ctxPosture, a.ctxAllowsChildren)
 		if !sp.streamable() {
 			return roamingFreeRanging
 		}
@@ -1576,7 +1576,7 @@ func (a *instrAnalyzer) applyTemplates(el *xdm.Node) props {
 	// presence of an implicit operand select='child::node()'."
 	sel, selKids := props{a.ctxPosture, sweepMotionless}, true
 	if at := el.Attr("", "select"); at != nil {
-		sel, selKids = a.exprOperandIn(at.Value, el, a.ctxPosture, a.ctxAllowsChildren)
+		sel, selKids = a.exprOperandIn(at.Value(), el, a.ctxPosture, a.ctxAllowsChildren)
 	} else {
 		// child::node() from the context item strides, and reading it
 		// consumes; from a grounded context it stays grounded.
@@ -1642,14 +1642,14 @@ func (a *instrAnalyzer) applyTemplates(el *xdm.Node) props {
 // The attribute is spelt default-mode on the XSLT elements that allow it and
 // xsl:default-mode on a literal result element, so both are looked for.
 func defaultModeFor(el *xdm.Node) (string, *xdm.Node) {
-	for n := el; n != nil && n.Kind == xdm.KindElement; n = n.Parent {
-		if n.Name.URI == xdm.NSXSL {
+	for n := el; n != nil && n.Kind() == xdm.KindElement; n = n.Parent() {
+		if n.Name().URI == xdm.NSXSL {
 			if v := strings.TrimSpace(n.AttrValue("default-mode")); v != "" {
 				return v, n
 			}
 		}
 		if at := n.Attr(xdm.NSXSL, "default-mode"); at != nil {
-			if v := strings.TrimSpace(at.Value); v != "" {
+			if v := strings.TrimSpace(at.Value()); v != "" {
 				return v, n
 			}
 		}
@@ -1754,8 +1754,8 @@ func (a *instrAnalyzer) modeStreamable(el *xdm.Node) modeVerdict {
 // documentElementOf returns the outermost element containing el.
 func documentElementOf(el *xdm.Node) *xdm.Node {
 	top := el
-	for top.Parent != nil && top.Parent.Kind == xdm.KindElement {
-		top = top.Parent
+	for top.Parent() != nil && top.Parent().Kind() == xdm.KindElement {
+		top = top.Parent()
 	}
 	return top
 }
@@ -1769,7 +1769,7 @@ func (a *instrAnalyzer) forEach(el *xdm.Node) props {
 	// have children is the select expression's own answer -- not "yes".
 	// "for-each select='@value'" binds an attribute, whose whole subtree is
 	// already in hand, so absorbing "." in the body reads nothing (§19.8.1).
-	sel, selKids := a.exprOperandIn(at.Value, el, a.ctxPosture, a.ctxAllowsChildren)
+	sel, selKids := a.exprOperandIn(at.Value(), el, a.ctxPosture, a.ctxAllowsChildren)
 	hasSort := hasChild(el, "sort")
 
 	// Clause 1: a grounded select. The body is a higher-order operand
@@ -1830,7 +1830,7 @@ func (a *instrAnalyzer) iterate(el *xdm.Node) props {
 	if at == nil {
 		return a.unknown()
 	}
-	sel, selKids := a.exprOperandIn(at.Value, el, a.ctxPosture, a.ctxAllowsChildren)
+	sel, selKids := a.exprOperandIn(at.Value(), el, a.ctxPosture, a.ctxAllowsChildren)
 
 	// Clause 1: a grounded select follows the general rules. xsl:param and
 	// xsl:on-completion operands are navigation and transmission
@@ -1860,7 +1860,7 @@ func (a *instrAnalyzer) iterate(el *xdm.Node) props {
 			ocSub := a.subFocus(postureRoaming, true)
 			var p props
 			if sat := oc.Attr("", "select"); sat != nil {
-				p = ocSub.exprPropsIn(sat.Value, oc, postureRoaming, true)
+				p = ocSub.exprPropsIn(sat.Value(), oc, postureRoaming, true)
 			} else {
 				p = ocSub.body(oc)
 			}
@@ -1884,7 +1884,7 @@ func (a *instrAnalyzer) iterate(el *xdm.Node) props {
 		}
 		var p props
 		if sat := c.Attr("", "select"); sat != nil {
-			p = a.exprProps(sat.Value, c)
+			p = a.exprProps(sat.Value(), c)
 		} else {
 			p = a.body(c)
 		}
@@ -1899,7 +1899,7 @@ func (a *instrAnalyzer) iterate(el *xdm.Node) props {
 		ocSub := a.subFocus(postureRoaming, true)
 		var p props
 		if sat := oc.Attr("", "select"); sat != nil {
-			p = ocSub.exprPropsIn(sat.Value, oc, postureRoaming, true)
+			p = ocSub.exprPropsIn(sat.Value(), oc, postureRoaming, true)
 		} else {
 			p = ocSub.body(oc)
 		}
@@ -1939,7 +1939,7 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 	if at == nil {
 		return a.unknown()
 	}
-	sel, selKids := a.exprOperandIn(at.Value, el, a.ctxPosture, a.ctxAllowsChildren)
+	sel, selKids := a.exprOperandIn(at.Value(), el, a.ctxPosture, a.ctxAllowsChildren)
 
 	groupBy := el.Attr("", "group-by")
 	groupAdj := el.Attr("", "group-adjacent")
@@ -1973,10 +1973,10 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 	// identifies -- the same withholding checkStreamableModePatterns applies
 	// to a rule's match pattern, and for the same reason.
 	if p := groupPatternAttr(el); p != nil && sel.posture != postureGrounded {
-		free, known := patternIsFreeRanging(p.Value, el)
+		free, known := patternIsFreeRanging(p.Value(), el)
 		if !known {
 			a.known = false
-		} else if free && !patternPredicateOnlySyntacticallyNumeric(p.Value, el) {
+		} else if free && !patternPredicateOnlySyntacticallyNumeric(p.Value(), el) {
 			return roamingFreeRanging
 		}
 	}
@@ -1989,7 +1989,7 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 			if gat == nil {
 				continue
 			}
-			p, kids := a.exprOperandIn(gat.Value, el, postureGrounded, true)
+			p, kids := a.exprOperandIn(gat.Value(), el, postureGrounded, true)
 			ops = append(ops, operand{props: p, usage: usageAbsorption, allowsChildren: kids})
 		}
 		for _, o := range a.sortOperands(el, postureGrounded) {
@@ -2030,7 +2030,7 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 	// as a fact about the stylesheet when it is really a fact about this
 	// implementation. The body is therefore assessed first, purely for its
 	// effect on `known`, and its properties are discarded.
-	if groupBy != nil && !isXSL(el.Parent, "fork") {
+	if groupBy != nil && !isXSL(el.Parent(), "fork") {
 		a.noteGroupBodyModelled(el, sel)
 		return roamingFreeRanging
 	}
@@ -2054,7 +2054,7 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 		if gat == nil {
 			continue
 		}
-		p := a.exprPropsIn(gat.Value, el, sel.posture, selKids)
+		p := a.exprPropsIn(gat.Value(), el, sel.posture, selKids)
 		if p.sweep != sweepMotionless {
 			a.noteGroupBodyModelled(el, sel)
 			return roamingFreeRanging
@@ -2109,7 +2109,7 @@ func (a *instrAnalyzer) merge(el *xdm.Node) props {
 			if at == nil {
 				continue
 			}
-			p := a.exprProps(at.Value, c)
+			p := a.exprProps(at.Value(), c)
 			if p.posture != postureGrounded || p.sweep != sweepMotionless {
 				return roamingFreeRanging
 			}
@@ -2119,7 +2119,7 @@ func (a *instrAnalyzer) merge(el *xdm.Node) props {
 			if sat == nil {
 				return a.unknown()
 			}
-			p := a.exprProps(sat.Value, c)
+			p := a.exprProps(sat.Value(), c)
 			if p.posture != postureGrounded || p.sweep != sweepMotionless {
 				return roamingFreeRanging
 			}
@@ -2199,7 +2199,7 @@ func checkStreamableMergeSources(root *xdm.Node, sets map[xdm.QName][]*xdm.Node)
 			known:             true,
 			attrSets:          sets,
 		}
-		p := a.exprProps(sat.Value, el)
+		p := a.exprProps(sat.Value(), el)
 		if !a.known {
 			return true
 		}

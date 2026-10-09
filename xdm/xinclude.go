@@ -111,9 +111,9 @@ func ProcessXInclude(tree *Tree, opts XIncludeOptions) error {
 	if tree == nil || tree.Root == nil {
 		return nil
 	}
-	base := tree.Root.BaseURI
+	base := tree.Root.baseURI
 	if base == "" {
-		base = tree.Root.DocumentURI
+		base = tree.Root.documentURI
 	}
 	p := &includeProc{opts: opts, budget: &entityBudget{}}
 	// The including document is on the stack from the outset, so that an
@@ -178,16 +178,16 @@ type includeProc struct {
 func (p *includeProc) expandChildren(n *Node, base string, depth int) error {
 	var out []*Node
 	changed := false
-	for _, c := range n.Children {
-		if c.Kind == KindElement && c.Name.URI == NSXInclude {
-			switch c.Name.Local {
+	for _, c := range n.children {
+		if c.kind == KindElement && c.name.URI == NSXInclude {
+			switch c.name.Local {
 			case "include":
 				repl, err := p.expandInclude(c, depth)
 				if err != nil {
 					return err
 				}
 				for _, r := range repl {
-					r.Parent = n
+					r.parent = n
 					r.tree = n.tree
 					out = append(out, r)
 				}
@@ -204,8 +204,8 @@ func (p *includeProc) expandChildren(n *Node, base string, depth int) error {
 		}
 		// A non-include element may still contain one, and its own xml:base
 		// governs how that one's href resolves.
-		if c.Kind == KindElement {
-			cb := c.BaseURI
+		if c.kind == KindElement {
+			cb := c.baseURI
 			if cb == "" {
 				cb = base
 			}
@@ -216,7 +216,7 @@ func (p *includeProc) expandChildren(n *Node, base string, depth int) error {
 		out = append(out, c)
 	}
 	if changed {
-		n.Children = out
+		n.children = out
 		// Adjacent text nodes can appear where an inclusion sat between two
 		// of them, or where parse="text" produced one beside an existing
 		// one. The data model does not permit two adjacent text children —
@@ -241,13 +241,13 @@ func (p *includeProc) expandInclude(inc *Node, depth int) ([]*Node, error) {
 	// is read so that the defect is reported on its own terms rather than
 	// only when the inclusion happens to fail.
 	seen := 0
-	for _, c := range inc.Children {
-		if c.Kind == KindElement && c.Name.URI == NSXInclude {
-			if c.Name.Local != "fallback" {
+	for _, c := range inc.children {
+		if c.kind == KindElement && c.name.URI == NSXInclude {
+			if c.name.Local != "fallback" {
 				// Section 3.1: the content of xi:include is "(fallback?)",
 				// so any other XInclude-namespace child is a fatal error.
 				return nil, fmt.Errorf(
-					"xi:%s is not permitted as a child of xi:include", c.Name.Local)
+					"xi:%s is not permitted as a child of xi:include", c.name.Local)
 			}
 			seen++
 		}
@@ -358,8 +358,8 @@ func (p *includeProc) expandInclude(inc *Node, depth int) ([]*Node, error) {
 		if err := p.expandChildren(fb, fbBase, depth+1); err != nil {
 			return nil, err
 		}
-		kids := fb.Children
-		fb.Children = nil
+		kids := fb.children
+		fb.children = nil
 		return kids, nil
 	}
 	// Section 4.3: "if the fallback element is absent, it is a fatal error."
@@ -429,7 +429,7 @@ func (p *includeProc) fetchText(target, base, encoding string) ([]*Node, error) 
 	//
 	// The decode is the resolver's: it holds the bytes, and it is the same
 	// decode fn:unparsed-text already implements.
-	return []*Node{{Kind: KindText, Value: string(data)}}, nil
+	return []*Node{{kind: KindText, value: string(data)}}, nil
 }
 
 // textEncodingMarker makes the resolver's encoding argument non-empty for a
@@ -450,7 +450,7 @@ func textEncodingMarker(encoding string) string {
 
 // isAncestorOf reports whether a is an ancestor of n.
 func isAncestorOf(a, n *Node) bool {
-	for cur := n.Parent; cur != nil; cur = cur.Parent {
+	for cur := n.parent; cur != nil; cur = cur.parent {
 		if cur == a {
 			return true
 		}
@@ -466,28 +466,28 @@ func isAncestorOf(a, n *Node) bool {
 // name only one of them.
 func copySubtree(n *Node, base string) *Node {
 	c := &Node{
-		Kind:    n.Kind,
-		Name:    n.Name,
-		Value:   n.Value,
-		BaseURI: base,
+		kind:    n.kind,
+		name:    n.name,
+		value:   n.value,
+		baseURI: base,
 	}
 	// XInclude splices a subtree into another document unchanged; nothing
 	// about that is an assessment, so every PSVI property travels.
 	c.CopyTypingFrom(n)
-	if n.BaseURI != "" {
+	if n.baseURI != "" {
 		// The node stated a base of its own, which travels with it.
-		c.BaseURI = n.BaseURI
+		c.baseURI = n.baseURI
 	}
-	for _, a := range n.Attrs {
-		ac := &Node{Kind: KindAttribute, Name: a.Name, Value: a.Value}
+	for _, a := range n.attrs {
+		ac := &Node{kind: KindAttribute, name: a.name, value: a.value}
 		ac.CopyTypingFrom(a)
 		c.AddAttr(ac)
 	}
-	for _, ns := range n.Namespaces {
-		c.AddNamespace(ns.Name.Local, ns.Value)
+	for _, ns := range n.namespaces {
+		c.AddNamespace(ns.name.Local, ns.value)
 	}
-	for _, k := range n.Children {
-		c.AppendChild(copySubtree(k, c.BaseURI))
+	for _, k := range n.children {
+		c.AppendChild(copySubtree(k, c.baseURI))
 	}
 	return c
 }
@@ -569,7 +569,7 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 		// comments and processing instructions around it. A document node
 		// cannot appear as a child of an element, which is why it is dropped
 		// rather than copied.
-		picked = sub.Root.Children
+		picked = sub.Root.children
 	} else {
 		picked, err = selectXPointer(sub.Root, xptr)
 		if err != nil {
@@ -607,7 +607,7 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 	// Detach from the sub-tree so the nodes belong to the including document
 	// alone; the caller re-parents them and ProcessXInclude re-finalises.
 	for _, n := range picked {
-		n.Parent = nil
+		n.parent = nil
 	}
 	return picked, nil
 }
@@ -621,14 +621,14 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 // document looks like when it is serialised for no gain.
 func fixupBase(nodes []*Node, includeBase string) {
 	for _, n := range nodes {
-		if n.Kind != KindElement {
+		if n.kind != KindElement {
 			// Only element information items have an xml:base to carry.
 			// A comment or PI included alongside the document element has a
 			// base URI in the data model, but nothing can be written on it
 			// and nothing resolves a relative reference from it.
 			continue
 		}
-		if n.BaseURI == "" || n.BaseURI == includeBase {
+		if n.baseURI == "" || n.baseURI == includeBase {
 			continue
 		}
 		if xb := n.Attr(NSXML, "base"); xb != nil {
@@ -647,16 +647,16 @@ func fixupBase(nodes []*Node, includeBase string) {
 			// fn/base-uri/ the surviving attribute reads fn/base-uri/dir5/data.xml,
 			// which is what the case expects. Leaving BaseURI as parsed made
 			// fn:base-uri disagree with the document's own serialisation.
-			n.BaseURI = resolveBase(includeBase, xb.Value)
+			n.baseURI = resolveBase(includeBase, xb.value)
 			// The subtree below inherited the old resolution, so it is
 			// rebased too; nothing else in the tree can see the change.
-			rebaseDescendants(n, n.BaseURI)
+			rebaseDescendants(n, n.baseURI)
 			continue
 		}
 		n.AddAttr(&Node{
-			Kind:  KindAttribute,
-			Name:  QName{Prefix: "xml", Local: "base", URI: NSXML},
-			Value: n.BaseURI,
+			kind:  KindAttribute,
+			name:  QName{Prefix: "xml", Local: "base", URI: NSXML},
+			value: n.baseURI,
 		})
 	}
 }
@@ -670,21 +670,21 @@ func fixupBase(nodes []*Node, includeBase string) {
 // walk therefore stops recursing where nothing changed, which is almost
 // everywhere.
 func rebaseDescendants(n *Node, base string) {
-	for _, c := range n.Children {
-		if c.Kind != KindElement {
+	for _, c := range n.children {
+		if c.kind != KindElement {
 			continue
 		}
 		if xb := c.Attr(NSXML, "base"); xb != nil {
-			c.BaseURI = resolveBase(base, xb.Value)
-			rebaseDescendants(c, c.BaseURI)
+			c.baseURI = resolveBase(base, xb.value)
+			rebaseDescendants(c, c.baseURI)
 			continue
 		}
-		if c.BaseURI != "" {
+		if c.baseURI != "" {
 			// Set by something other than an attribute — an external entity
 			// the included document read. That URI is absolute and does not
 			// depend on where the subtree ends up, so it stands and governs
 			// everything below it.
-			rebaseDescendants(c, c.BaseURI)
+			rebaseDescendants(c, c.baseURI)
 			continue
 		}
 		rebaseDescendants(c, base)
@@ -698,8 +698,8 @@ func rebaseDescendants(n *Node, base string) {
 // fallbacks" instead of the failure that actually occurred would bury the
 // cause. validateInclude checks the cardinality up front instead.
 func fallbackOf(inc *Node) *Node {
-	for _, c := range inc.Children {
-		if c.Kind == KindElement && c.Name.URI == NSXInclude && c.Name.Local == "fallback" {
+	for _, c := range inc.children {
+		if c.kind == KindElement && c.name.URI == NSXInclude && c.name.Local == "fallback" {
 			return c
 		}
 	}
@@ -713,12 +713,12 @@ func fallbackOf(inc *Node) *Node {
 // external entity gave it one, so an ordinary element deep in a document has
 // the field empty and inherits from above.
 func elementBase(n *Node) string {
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.BaseURI != "" {
-			return cur.BaseURI
+	for cur := n; cur != nil; cur = cur.parent {
+		if cur.baseURI != "" {
+			return cur.baseURI
 		}
-		if cur.Kind == KindDocument && cur.DocumentURI != "" {
-			return cur.DocumentURI
+		if cur.kind == KindDocument && cur.documentURI != "" {
+			return cur.documentURI
 		}
 	}
 	return ""
@@ -735,20 +735,20 @@ func elementBase(n *Node) string {
 // same reason: the data model has no zero-length text node.
 func mergeAdjacentText(n *Node) {
 	var out []*Node
-	for _, c := range n.Children {
-		if c.Kind == KindText {
-			if c.Value == "" {
+	for _, c := range n.children {
+		if c.kind == KindText {
+			if c.value == "" {
 				continue
 			}
-			if len(out) > 0 && out[len(out)-1].Kind == KindText {
+			if len(out) > 0 && out[len(out)-1].kind == KindText {
 				prev := out[len(out)-1]
-				prev.Value += c.Value
+				prev.value += c.value
 				continue
 			}
 		}
 		out = append(out, c)
 	}
-	n.Children = out
+	n.children = out
 }
 
 // selectXPointer applies an xpointer attribute to an included document.
@@ -908,7 +908,7 @@ func elementScheme(root *Node, data string) (*Node, error) {
 		}
 		cur = kids[idx-1]
 	}
-	if cur.Kind != KindElement {
+	if cur.kind != KindElement {
 		return nil, fmt.Errorf("element() pointer %q does not select an element", data)
 	}
 	return cur, nil
@@ -927,17 +927,17 @@ func elementScheme(root *Node, data string) (*Node, error) {
 // schema saying so it is an ordinary attribute, and guessing would make an
 // inclusion resolve differently depending on data the document never declared.
 func ElementByID(n *Node, id string) *Node {
-	if n.Kind == KindElement {
-		for _, a := range n.Attrs {
-			if a.Value != id {
+	if n.kind == KindElement {
+		for _, a := range n.attrs {
+			if a.value != id {
 				continue
 			}
-			if a.IsID || (a.Name.URI == NSXML && a.Name.Local == "id") {
+			if a.isID || (a.name.URI == NSXML && a.name.Local == "id") {
 				return n
 			}
 		}
 	}
-	for _, c := range n.Children {
+	for _, c := range n.children {
 		if f := ElementByID(c, id); f != nil {
 			return f
 		}

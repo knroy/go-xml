@@ -252,7 +252,7 @@ func TestApexNamespaces(t *testing.T) {
 func TestPrefixUsedOnlyByExcludedAttribute(t *testing.T) {
 	doc := parse(t, `<r xmlns:p="urn:p"><a p:x="1" y="2"/></r>`)
 	ns := Func(doc, func(n *xdm.Node) bool {
-		return !(n.Kind == xdm.KindAttribute && n.Name.Local == "x")
+		return !(n.Kind() == xdm.KindAttribute && n.Name().Local == "x")
 	})
 	if got, want := canonSet(t, ns, Exclusive10), `<r><a y="2"></a></r>`; got != want {
 		t.Errorf("exclusive: got %q want %q", got, want)
@@ -328,7 +328,7 @@ func TestXMLBaseFixup(t *testing.T) {
 	// the node set drops it (see inherit in canon.go).
 	doc = parse(t, `<r><e xml:base="k/"/></r>`)
 	ns = Func(doc, func(n *xdm.Node) bool {
-		return n.Kind != xdm.KindAttribute && n.Name.Local != "r"
+		return n.Kind() != xdm.KindAttribute && n.Name().Local != "r"
 	})
 	if got, want := canonSet(t, ns, Inclusive11), `<e xml:base="k/"></e>`; got != want {
 		t.Errorf("attribute removed: got %q want %q", got, want)
@@ -349,7 +349,7 @@ func TestXMLBaseFixup(t *testing.T) {
 func omit(doc *xdm.Node, els ...*xdm.Node) NodeSet {
 	return Func(doc, func(n *xdm.Node) bool {
 		for _, e := range els {
-			if n == e || n.Kind == xdm.KindAttribute && n.Parent == e {
+			if n == e || n.Kind() == xdm.KindAttribute && n.Parent() == e {
 				return false
 			}
 		}
@@ -454,7 +454,7 @@ func TestDiscontiguous(t *testing.T) {
 	// The document node itself omitted while its element is kept: the
 	// document-level PI/comment rules do not depend on it.
 	doc = parse(t, `<?p?><r/>`)
-	ns = Func(doc, func(n *xdm.Node) bool { return n.Kind != xdm.KindDocument })
+	ns = Func(doc, func(n *xdm.Node) bool { return n.Kind() != xdm.KindDocument })
 	if got, want := canonSet(t, ns, Inclusive10), "<?p?>\n<r></r>"; got != want {
 		t.Errorf("document node omitted: got %q want %q", got, want)
 	}
@@ -486,9 +486,9 @@ func TestMaxDepthBoundaries(t *testing.T) {
 	// Depth is relative to the start: a subtree 300 levels down in a
 	// 600-level document is only 301 deep.
 	doc := nested(600)
-	inner := doc.Children[0]
+	inner := doc.FirstChild()
 	for range 299 {
-		inner = inner.Children[0]
+		inner = inner.FirstChild()
 	}
 	if _, err := Bytes(inner, opts); err != nil {
 		t.Errorf("inner subtree: %v", err)

@@ -150,7 +150,7 @@ func TestEntityHoldingMarkupIsParsed(t *testing.T) {
 		t.Fatalf("root has %d element children, want 1", len(kids))
 	}
 	inner := kids[0].ChildElements()
-	if len(inner) != 1 || inner[0].Name.Local != "b" {
+	if len(inner) != 1 || inner[0].name.Local != "b" {
 		t.Fatalf("entity expanded to %v, want an element named b", inner)
 	}
 }
@@ -276,7 +276,7 @@ func TestEntityReferencesAreNotRecognisedInCDATACommentsOrPIs(t *testing.T) {
 		// that the document did not write.
 		for _, el := range r.ChildElements() {
 			t.Errorf("%s: an element %q was manufactured from entity text",
-				c.name, el.Name.Local)
+				c.name, el.name.Local)
 		}
 	}
 }
@@ -323,7 +323,7 @@ func TestReplacementTextIsDecodedOnce(t *testing.T) {
 		}
 		for _, el := range r.ChildElements() {
 			t.Errorf("%s: escaped text became an element %q",
-				c.name, el.Name.Local)
+				c.name, el.name.Local)
 		}
 	}
 }
@@ -529,8 +529,8 @@ func TestReplacementQuotesDoNotDesynchroniseTheScanner(t *testing.T) {
 	if got := kids[0].StringValue(); got != "plain" {
 		t.Errorf("c = %q, want %q", got, "plain")
 	}
-	if kids[1].Name.Local != "b" {
-		t.Errorf("second child is %q, want b", kids[1].Name.Local)
+	if kids[1].name.Local != "b" {
+		t.Errorf("second child is %q, want b", kids[1].name.Local)
 	}
 }
 
@@ -551,12 +551,12 @@ func TestEntityValueTwoLevelExpansion(t *testing.T) {
 			t.Errorf("%s: %v", tc.doc, err)
 			continue
 		}
-		d := tr.Root.Children[0]
+		d := tr.Root.children[0]
 		if got := d.StringValue(); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.doc, got, tc.want)
 		}
-		if len(d.Attrs) == 1 && d.Attrs[0].Value != "&" {
-			t.Errorf("%s: attribute %q, want %q", tc.doc, d.Attrs[0].Value, "&")
+		if len(d.attrs) == 1 && d.attrs[0].value != "&" {
+			t.Errorf("%s: attribute %q, want %q", tc.doc, d.attrs[0].value, "&")
 		}
 	}
 }

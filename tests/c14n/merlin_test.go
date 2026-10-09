@@ -143,9 +143,9 @@ func checkOctets(t *testing.T, dir string, i int, got []byte) bool {
 }
 
 func attr(n *xdm.Node, local string) string {
-	for _, a := range n.Attrs {
-		if a.Name.Local == local && a.Name.URI == "" {
-			return a.Value
+	for a := range n.Attrs() {
+		if a.Name().Local == local && a.Name().URI == "" {
+			return a.Value()
 		}
 	}
 	return ""
@@ -156,8 +156,8 @@ func childElements(n *xdm.Node, local string) []*xdm.Node {
 	if n == nil {
 		return nil
 	}
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindElement && c.Name.Local == local {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindElement && c.Name().Local == local {
 			out = append(out, c)
 		}
 	}
@@ -165,10 +165,10 @@ func childElements(n *xdm.Node, local string) []*xdm.Node {
 }
 
 func findElement(n *xdm.Node, f func(*xdm.Node) bool) *xdm.Node {
-	if n.Kind == xdm.KindElement && f(n) {
+	if n.Kind() == xdm.KindElement && f(n) {
 		return n
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		if e := findElement(c, f); e != nil {
 			return e
 		}

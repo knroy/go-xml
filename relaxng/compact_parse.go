@@ -227,7 +227,7 @@ var takesAnnotation = func() map[string]bool {
 // other element takes it, <ref> and <empty> included, because §5.2 removes
 // foreign elements before the content model is judged.
 func (p *compactParser) attachDoc(n *xdm.Node, doc *annotation) {
-	if doc == nil || !takesAnnotation[n.Name.Local] {
+	if doc == nil || !takesAnnotation[n.Name().Local] {
 		return
 	}
 	a := xdmbuild.NewElement(xdm.QName{URI: compatibilityNS, Prefix: "a", Local: "documentation"})

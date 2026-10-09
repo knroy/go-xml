@@ -57,16 +57,16 @@ func TestConstructedElementsInheritBindings(t *testing.T) {
 	if out == nil {
 		t.Fatal("no <out> element in the result")
 	}
-	if len(out.Namespaces) != 2 {
-		t.Errorf("<out> carries %d namespace nodes, want its own 2", len(out.Namespaces))
+	if out.NumNamespaceDecls() != 2 {
+		t.Errorf("<out> carries %d namespace nodes, want its own 2", out.NumNamespaceDecls())
 	}
-	for _, c := range out.Children {
+	for c := range out.Children() {
 		var got []string
-		for _, ns := range c.Namespaces {
-			got = append(got, ns.Name.Local+"="+ns.Value)
+		for ns := range c.NamespaceDecls() {
+			got = append(got, ns.Name().Local+"="+ns.Value())
 		}
 		want := ""
-		switch c.Name.Local {
+		switch c.Name().Local {
 		case "b":
 			// The copy's s binding is the one its parent does not have.
 			want = "s=urn:s"
@@ -76,7 +76,7 @@ func TestConstructedElementsInheritBindings(t *testing.T) {
 		}
 		if strings.Join(got, " ") != want {
 			t.Errorf("<%s> carries namespace nodes %q, want %q",
-				c.Name.Lexical(), got, want)
+				c.Name().Lexical(), got, want)
 		}
 	}
 }
@@ -228,12 +228,12 @@ func TestScopeBindingsMatchesInScopeNamespaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := doc.Root.FirstElement("", "c")
-	b := c.Parent
+	b := c.Parent()
 	// Two declarations of one prefix on one element, as a constructed tree
 	// can hold: the later one is in force.
 	b.AddNamespace("r", "urn:r1")
 	b.AddNamespace("r", "urn:r2")
-	for _, n := range []*xdm.Node{b.Parent, b, c} {
+	for _, n := range []*xdm.Node{b.Parent(), b, c} {
 		var got []string
 		for _, nb := range scopeBindings(n, nil) {
 			got = append(got, nb.prefix+"="+nb.uri)
@@ -247,7 +247,7 @@ func TestScopeBindingsMatchesInScopeNamespaces(t *testing.T) {
 		}
 		if strings.Join(got, " ") != strings.Join(want, " ") {
 			t.Errorf("<%s>: scopeBindings = %q, InScopeNamespaces = %q",
-				n.Name.Local, got, want)
+				n.Name().Local, got, want)
 		}
 	}
 }
