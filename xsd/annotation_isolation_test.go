@@ -76,10 +76,11 @@ func validateProbe(t *testing.T, s *Schema, value string) *xdm.Node {
 	if err != nil {
 		t.Fatalf("parsing instance: %v", err)
 	}
-	if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
+	doc, err := s.ValidateCopy(tree.Root, ValidateOptions{})
+	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	el := tree.Root.FirstChild()
+	el := doc.FirstChild()
 	if el.TypeAnnotation() == "" {
 		t.Fatal("validation did not annotate the element")
 	}
@@ -227,7 +228,7 @@ func TestRegistryFallbackStillWorks(t *testing.T) {
 	// Built by hand, the way a non-validating producer builds one: the
 	// annotation is set, the resolved fields are not.
 	n := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
-	n.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, "10"))
+	n.AppendText("10")
 	n.SetTypeAnnotation(name)
 	if n.DerivedPrimitive() != "" {
 		t.Fatalf("precondition: SetTypeAnnotation should leave the resolved "+
@@ -242,7 +243,7 @@ func TestRegistryFallbackStillWorks(t *testing.T) {
 	listName := xdm.AnnotationName(isolationNS, "FallbackList")
 	xdm.RegisterListType(listName, "decimal")
 	l := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "l"}, "")
-	l.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, "10 20"))
+	l.AppendText("10 20")
 	l.SetTypeAnnotation(listName)
 	items, ok := l.AtomizeList()
 	if !ok || len(items) != 2 {
@@ -316,7 +317,7 @@ func TestStripLeavesNoResolvedFields(t *testing.T) {
 	// carried, everything else left at the zero value.
 	stripped := xdm.NewNode(xdm.KindElement, el.Name(), "")
 	stripped.ApplyTyping(xdm.Typing{IsID: el.IsID(), IsIDREFS: el.IsIDREFS()})
-	stripped.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, el.StringValue()))
+	stripped.AppendText(el.StringValue())
 
 	if stripped.DerivedPrimitive() != "" || stripped.ListItem() != "" {
 		t.Errorf("a stripped node carries resolved fields: %q %q",

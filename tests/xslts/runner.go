@@ -796,13 +796,14 @@ func (r *Runner) preloadSources(set *TestSet, tc *TestCase, docs *xslt.FileResol
 		if err != nil {
 			continue
 		}
-		if err := r.annotate(set, env, s, tree.Root); err != nil {
+		root, err := r.annotate(set, env, s, tree.Root)
+		if err != nil {
 			continue
 		}
 		// Under the path the declared URI resolves to. The suite writes the
 		// uri relative to the test-set directory and the stylesheet names it
 		// the same way, so both arrive at the same file.
-		docs.Preload(fileURI(filepath.Join(set.Dir, filepath.FromSlash(s.URI))), tree)
+		docs.Preload(fileURI(filepath.Join(set.Dir, filepath.FromSlash(s.URI))), root.Tree())
 	}
 }
 
@@ -867,10 +868,11 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, string,
 			// The initial context is the *document* node: a stylesheet
 			// matching "/" needs a root to match, and passing the document
 			// element leaves it with none.
-			if err := r.annotate(set, env, s, tree.Root); err != nil {
+			root, err := r.annotate(set, env, s, tree.Root)
+			if err != nil {
 				return nil, "", err
 			}
-			return tree.Root, "", nil
+			return root, "", nil
 		}
 		if s.File != "" {
 			p := filepath.Join(set.Dir, filepath.FromSlash(s.File))
@@ -904,10 +906,11 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, string,
 				}
 				tree = included
 			}
-			if err := r.annotate(set, env, s, tree.Root); err != nil {
+			root, err := r.annotate(set, env, s, tree.Root)
+			if err != nil {
 				return nil, "", err
 			}
-			return tree.Root, p, nil
+			return root, p, nil
 		}
 	}
 	return nil, "", nil
@@ -947,7 +950,8 @@ func (r *Runner) selectedSource(set *TestSet, env *Environment, s Source) (*xdm.
 		doc = tree.Root
 	}
 	if doc != nil {
-		if err := r.annotate(set, env, s, doc); err != nil {
+		var err error
+		if doc, err = r.annotate(set, env, s, doc); err != nil {
 			return nil, err
 		}
 	}
@@ -1010,8 +1014,9 @@ func fileURI(path string) string {
 	return fileuri.Of(path)
 }
 
-// annotate validates a source against the environment's schema so that the
-// tree carries type annotations.
+// annotate validates a source against the environment's schema and returns
+// its typed copy, so that the tree the transform sees carries type
+// annotations. A source that is not validated is returned as it is.
 //
 // A source declared validation="strict" is meant to reach the transform
 // already validated: that is what makes "$v instance of my:partNumberType"
@@ -1024,20 +1029,20 @@ func fileURI(path string) string {
 // deliberately invalid, and refusing to run them would turn a test about what
 // the stylesheet does into an error about its input. Whatever annotations the
 // validator managed to stamp are kept.
-func (r *Runner) annotate(set *TestSet, env *Environment, s Source, root *xdm.Node) error {
+func (r *Runner) annotate(set *TestSet, env *Environment, s Source, root *xdm.Node) (*xdm.Node, error) {
 	switch s.Validation {
 	case "strict", "lax":
 	default:
-		return nil
+		return root, nil
 	}
 	schema := envSchema(set, env)
 	if schema == nil {
-		return nil
+		return root, nil
 	}
-	// The validator stamps annotations as it goes, so the error is discarded
-	// rather than propagated, for the reason given above.
-	_ = schema.Validate(root, xsd.ValidateOptions{Annotate: true})
-	return nil
+	// The copy carries the annotations stamped up to any failure, so the
+	// error is discarded rather than propagated, for the reason given above.
+	typed, _ := schema.ValidateCopy(root, xsd.ValidateOptions{})
+	return typed, nil
 }
 
 // envSchema loads and merges every schema an environment declares.

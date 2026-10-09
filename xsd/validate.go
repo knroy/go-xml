@@ -3,6 +3,7 @@ package xsd
 import (
 	"context"
 	"fmt"
+	"iter"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -95,12 +96,6 @@ type ValidateOptions struct {
 	// costs memory proportional to the document.
 	MaxErrors int
 
-	// Annotate writes the type of each validated node into its
-	// TypeAnnotation, producing the part of the PSVI that the XPath and
-	// XSLT layers consume. It is off by default because it mutates the
-	// tree the caller passed in.
-	Annotate bool
-
 	// SkipIDConstraints suppresses "Validation Root Valid (ID/IDREF)"
 	// (§3.3.4 clause 2) — the check that ID values are unique and that
 	// every IDREF resolves.
@@ -159,19 +154,32 @@ func (s *Schema) Validate(root *xdm.Node, opts ValidateOptions) error {
 // verdict, and it is not one.
 //
 // A nil ctx is treated as context.Background().
+//
+// Validation only reads root's tree. ValidateCopyContext is the entry point
+// that produces the typed result.
 func (s *Schema) ValidateContext(ctx context.Context, root *xdm.Node,
 	opts ValidateOptions) error {
-	return s.validateContext(ctx, root, opts, nil)
-}
-
-// validateContext is ValidateContext with the copy-to-original map
-// ValidateCopyContext supplies, so a failure on a copied node reports the
-// original's position. nil for an in-place run.
-func (s *Schema) validateContext(ctx context.Context, root *xdm.Node,
-	opts ValidateOptions, twins map[*xdm.Node]*xdm.Node) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	return s.newValidator(ctx, opts).run(root)
+}
+
+// newValidator prepares a validation run. A nil ctx is kept: the
+// type-validation entry points carry none (see checkCancelled).
+func (s *Schema) newValidator(ctx context.Context, opts ValidateOptions) *validator {
+	if opts.MaxErrors == 0 {
+		opts.MaxErrors = DefaultMaxErrors
+	}
+	if opts.MaxDepth == 0 {
+		opts.MaxDepth = DefaultMaxDepth
+	}
+	return &validator{ctx: ctx, schema: s, opts: opts, ids: map[string]int{}}
+}
+
+// run assesses root, which is a document or an element.
+func (v *validator) run(root *xdm.Node) error {
+	s, opts := v.schema, v.opts
 	// A nil root is a caller's mistake rather than an attack, but a library
 	// that panics on one takes the caller's process down with it — and this
 	// one is meant to run inside servers, where a nil from a failed parse
@@ -181,13 +189,6 @@ func (s *Schema) validateContext(ctx context.Context, root *xdm.Node,
 			Code: "cvc-elt.1", Message: "no document to validate",
 		}}}
 	}
-	if opts.MaxErrors == 0 {
-		opts.MaxErrors = DefaultMaxErrors
-	}
-	if opts.MaxDepth == 0 {
-		opts.MaxDepth = DefaultMaxDepth
-	}
-	v := &validator{ctx: ctx, schema: s, opts: opts, ids: map[string]int{}, twins: twins}
 	// icStatsHook is nil except under the package's own measurement tests.
 	// See icStats: the counters exist because elapsed time cannot show that
 	// the same node is walked once per enclosing scope.
@@ -201,13 +202,13 @@ func (s *Schema) validateContext(ctx context.Context, root *xdm.Node,
 	// because a DOCTYPE's content models are known then; a schema's are not,
 	// so it has to happen here, where the content model is first consulted.
 	//
-	// It is confined to annotating a whole DOCUMENT. Annotate already mutates
-	// the tree, but a caller assessing a CONSTRUCTED element — xsl:copy-of
-	// with validation="strict", XSLT 2.0 §19.2.1 — is validating a result
-	// tree, not a source document, and §4.4 says nothing about those. Those
+	// It is confined to the typed copy of a whole DOCUMENT. A caller
+	// assessing a CONSTRUCTED element — xsl:copy-of with
+	// validation="strict", XSLT 2.0 §19.2.1 — is validating a result tree,
+	// not a source document, and §4.4 says nothing about those. Those
 	// callers hand in the element itself, so the document node is what
 	// separates the two.
-	v.stripIgnorable = opts.Annotate && root.Kind() == xdm.KindDocument
+	v.stripIgnorable = v.typed && root.Kind() == xdm.KindDocument
 
 	el := root
 	if el.Kind() == xdm.KindDocument {
@@ -308,13 +309,42 @@ type validator struct {
 
 	// twins maps a node of a ValidateCopy copy to the node it was copied
 	// from, so fail can report the original's line and column: the copy
-	// has no source text. nil for an in-place run.
+	// has no source text. nil when the run reads the caller's tree.
 	twins map[*xdm.Node]*xdm.Node
+
+	// typed is set when the run works on a typed copy (ValidateCopy and
+	// its siblings), which it writes typing onto as it goes. Without it the
+	// run reads the caller's tree and writes nothing to it.
+	typed bool
+
+	// typing holds, when typed is off, the typing facts the run would
+	// otherwise have written onto a node (a union's winning member, dm:nilled),
+	// so that an assertion's copy of the node still sees them.
+	typing map[*xdm.Node]xdm.Typing
+
+	// The structural edits of a typed copy. The copy is a built tree and is
+	// never edited, so the assessment records them, every check that would
+	// see an edited tree consults them, and typedResult applies them in a
+	// final copy.
+	//
+	// defaults holds the attributes each element's type supplied by default,
+	// in the order they were applied: parentless nodes whose owner attrOwner
+	// records. fixups holds the namespace declarations XSD 1.1 namespace
+	// fixup added for them. dropped holds the ignorable whitespace text
+	// nodes stripIgnorable removes.
+	defaults map[*xdm.Node][]*xdm.Node
+	fixups   map[*xdm.Node][]nsBinding
+	dropped  map[*xdm.Node]bool
+
+	// attrOwner maps an attribute that is in no element's attribute list --
+	// a recorded default, or a defaulted value an identity constraint's
+	// field selects -- to the element it belongs to.
+	attrOwner map[*xdm.Node]*xdm.Node
 
 	// stripIgnorable removes whitespace-only text from elements whose
 	// declared content is element-only, as XML 1.0 §2.10 and XSLT 2.0 §4.4
-	// require of a source document. See Schema.Validate for why it is scoped
-	// to annotating a document node.
+	// require of a source document. See run for why it is scoped to the
+	// typed copy of a document node.
 	stripIgnorable bool
 
 	// ids records every xs:ID value seen and every xs:IDREF, so that
@@ -354,8 +384,8 @@ type validator struct {
 
 	// defaultedAttrs holds the value of each attribute a type supplied by
 	// default rather than the document writing it, so an identity
-	// constraint's field can select it. The tree is not mutated to carry
-	// them: validation must not rewrite the caller's document.
+	// constraint's field can select it even where no attribute is recorded
+	// for it in defaults.
 	defaultedAttrs map[defaultedAttr]defaultedValue
 
 	// childTypes records the type each child name was matched with, per
@@ -691,9 +721,9 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			// failed above as cvc-elt.3.1 and is not a nilled element at all.
 			// Only the validator can draw that distinction, so only the
 			// validator records it. See xdm.Node.IsNilled.
-			t := xdm.TypingOf(el)
+			t := v.typingOf(el)
 			t.IsNilled = true
-			el.ApplyTyping(t)
+			v.setTyping(el, t)
 			return nil
 		}
 	}
@@ -819,7 +849,7 @@ func (v *validator) resolveXSIType(el *xdm.Node, value string) (Type, error) {
 	if i := strings.IndexByte(value, ':'); i >= 0 {
 		prefix, local = value[:i], value[i+1:]
 	}
-	uri, ok := el.LookupPrefix(prefix)
+	uri, ok := v.lookupPrefix(el, prefix)
 	if !ok && prefix != "" {
 		return nil, fmt.Errorf("xsi:type %q uses undeclared prefix %q", value, prefix)
 	}
@@ -1008,7 +1038,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 		// element's character data, and removing it first would make
 		// element-only content that is genuinely wrong look right.
 		if v.stripIgnorable {
-			stripIgnorableWhitespace(el)
+			v.stripIgnorableWhitespace(el)
 		}
 		return v.validateChildren(el, t)
 
@@ -1840,7 +1870,9 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 			prev := kid.TypeAnnotation()
 			prevPrim, prevItem := kid.DerivedPrimitive(), kid.ListItem()
 			v.validateAgainstType(kid, v.schema.anyType(), nil)
-			kid.SetTypeAnnotationResolved(prev, prevPrim, prevItem)
+			if v.typed {
+				kid.SetTypeAnnotationResolved(prev, prevPrim, prevItem)
+			}
 			return nil
 		case ProcessStrict:
 			d, ok := v.schema.Elements[name]
@@ -2154,7 +2186,7 @@ func (v *validator) substitutionBlocked(t Type, decl *ElementDecl) (Derivation, 
 //     schema-element(E) reject a node the stylesheet had just validated
 //     strict whenever E's declaration used an inline complex type.
 func (v *validator) annotate(el *xdm.Node, typ Type) {
-	if !v.opts.Annotate || typ == nil {
+	if !v.typed || typ == nil {
 		return
 	}
 	// XDM 3.1 6.2.4 leaves dm:typed-value UNDEFINED for an element whose type
@@ -2230,7 +2262,7 @@ func anonComplexAnnotation(t Type) string {
 }
 
 // stripIgnorableWhitespace removes whitespace-only text children of an element
-// whose declared content is element-only.
+// whose declared content is element-only, by recording them in v.dropped.
 //
 // XML 1.0 §2.10 calls that text ignorable: with a content model that admits no
 // character data, the only thing whitespace between the children can be is
@@ -2240,33 +2272,131 @@ func anonComplexAnnotation(t Type) string {
 // on a strip-space declaration.
 //
 // xml:space="preserve" is honoured, on the same footing as it has in the
-// DTD-derived rule: the author has said the whitespace here is content.
-func stripIgnorableWhitespace(el *xdm.Node) {
-	if a := el.Attr(xdm.NSXML, "space"); a != nil && a.Value() == "preserve" {
+// DTD-derived rule: the author has said the whitespace here is content. A
+// value the schema supplies by default counts, as a written one does.
+func (v *validator) stripIgnorableWhitespace(el *xdm.Node) {
+	if a := v.attr(el, xdm.NSXML, "space"); a != nil && a.Value() == "preserve" {
 		return
 	}
-	var kept []*xdm.Node
-	for i := range el.NumChildren() {
-		c := el.ChildAt(i)
+	for c := range el.Children() {
 		if c.Kind() == xdm.KindText && xdm.IsXMLWhitespace(c.Value()) {
-			if kept == nil {
-				kept = make([]*xdm.Node, i, el.NumChildren()-1)
-				for j := range i {
-					kept[j] = el.ChildAt(j)
-				}
+			if v.dropped == nil {
+				v.dropped = map[*xdm.Node]bool{}
 			}
+			v.dropped[c] = true
+		}
+	}
+}
+
+// typingOf returns n's typing as this run sees it: what it has written, on a
+// typed copy, or recorded, on the caller's tree.
+func (v *validator) typingOf(n *xdm.Node) xdm.Typing {
+	if t, ok := v.typing[n]; ok {
+		return t
+	}
+	return xdm.TypingOf(n)
+}
+
+// setTyping gives n the typing t: on the node itself in a typed copy, and in
+// v.typing when the run must not write to the tree it reads.
+func (v *validator) setTyping(n *xdm.Node, t xdm.Typing) {
+	if v.typed {
+		n.ApplyTyping(t)
+		return
+	}
+	if v.typing == nil {
+		v.typing = map[*xdm.Node]xdm.Typing{}
+	}
+	v.typing[n] = t
+}
+
+// attrs iterates over el's attributes as the assessment has left them: the
+// ones el carries, then those its type supplied by default.
+func (v *validator) attrs(el *xdm.Node) iter.Seq[*xdm.Node] {
+	return func(yield func(*xdm.Node) bool) {
+		for a := range el.Attrs() {
+			if !yield(a) {
+				return
+			}
+		}
+		for _, a := range v.defaults[el] {
+			if !yield(a) {
+				return
+			}
+		}
+	}
+}
+
+// attr is el.Attr over v.attrs.
+func (v *validator) attr(el *xdm.Node, uri, local string) *xdm.Node {
+	if a := el.Attr(uri, local); a != nil {
+		return a
+	}
+	for _, a := range v.defaults[el] {
+		if a.Name().URI == uri && a.Name().Local == local {
+			return a
+		}
+	}
+	return nil
+}
+
+// parentOf is n.Parent(), or for an attribute that is in no attribute list
+// the element it belongs to.
+func (v *validator) parentOf(n *xdm.Node) *xdm.Node {
+	if p := n.Parent(); p != nil {
+		return p
+	}
+	return v.attrOwner[n]
+}
+
+// nsBinding is one namespace declaration.
+type nsBinding struct{ prefix, uri string }
+
+// lookupPrefix is n.LookupPrefix seeing the namespace declarations the
+// assessment has recorded (see fixups) as well as the tree's own.
+func (v *validator) lookupPrefix(n *xdm.Node, prefix string) (string, bool) {
+	if len(v.fixups) == 0 {
+		if o := v.attrOwner[n]; o != nil {
+			n = o
+		}
+		return n.LookupPrefix(prefix)
+	}
+	if prefix == "xml" {
+		return xdm.NSXML, true
+	}
+	for cur := n; cur != nil; cur = v.parentOf(cur) {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		if kept != nil {
-			kept = append(kept, c)
+		for ns := range v.namespaceDecls(cur) {
+			if ns.prefix == prefix {
+				if ns.uri == "" && prefix != "" {
+					// An undeclaration; the prefix is not in scope here.
+					return "", false
+				}
+				return ns.uri, true
+			}
 		}
 	}
-	if kept == nil {
-		return
+	if prefix == "" {
+		return "", true // no default namespace in scope: absent name
 	}
-	// The document-order indices assigned at parse time are left alone. They
-	// are only ever compared, never counted, so the gaps a removal leaves
-	// behind cost nothing: the surviving children stay in order relative to
-	// each other and to every node outside this element.
-	el.SetChildren(kept)
+	return "", false
+}
+
+// namespaceDecls iterates over the declarations on el: its own, then the ones
+// recorded for it.
+func (v *validator) namespaceDecls(el *xdm.Node) iter.Seq[nsBinding] {
+	return func(yield func(nsBinding) bool) {
+		for ns := range el.NamespaceDecls() {
+			if !yield(nsBinding{ns.Name().Local, ns.Value()}) {
+				return
+			}
+		}
+		for _, ns := range v.fixups[el] {
+			if !yield(ns) {
+				return
+			}
+		}
+	}
 }
