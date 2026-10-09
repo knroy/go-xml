@@ -12,7 +12,9 @@ Most of the work is mechanical, and a tool does it: see
 every change below removes or renames something rather than changing what an
 existing name does. The exceptions are
 [validation](#validation-never-writes-to-your-tree),
-[`generate-id`](#generate-id-strings-change), and that a tree is now
+[`generate-id`](#generate-id-strings-change),
+[`StaticNamespaces`](#staticnamespaces-only-where-an-expression-reads-them),
+and that a tree is now
 [built top-down](#trees-are-built-top-down-by-appending): an append to a node
 that is no longer being built panics at run time.
 
@@ -305,7 +307,38 @@ ctx = ctx.WithStaticBaseURI("http://example.com/")
 if ctx.Compat() { … }
 ```
 
-`StaticHost` and `StaticNamespaces` are methods too, read-only.
+`StaticHost` and `StaticNamespaces` are methods too. `WithStaticHost` sets the
+host for expressions compiled without one, as `WithStaticBaseURI` does for the
+base URI.
+
+## StaticNamespaces only where an expression reads them
+
+In v1, evaluating an expression compiled with a namespace resolver at the top
+level put that resolver in `ctx.StaticNamespaces`, so a host function called
+from it could read it. In v2 the resolver is installed only for an expression
+that calls or references `fn:format-date`, `fn:format-dateTime`,
+`fn:format-time` or `fn:function-lookup`, the functions that expand a prefix
+given to them as a string. Any other expression keeps its caller's, which at
+the top level is nil. Installing it meant copying the context for every
+top-level XSLT expression: 9% of the bytes the CEN Schematron allocates.
+
+A host function that expanded a prefix through `StaticNamespaces` resolves it
+against namespaces it holds itself:
+
+```go
+// v1
+uri, _ := ctx.StaticNamespaces.ResolvePrefix(prefix)
+
+// v2: capture the resolver where the expression is compiled
+ns := myResolver
+fn := func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+    uri, _ := ns.ResolvePrefix(prefix)
+    …
+}
+```
+
+Results of stylesheets and queries do not change: nothing in go-xml besides
+those four functions reads `StaticNamespaces`.
 
 ## Context.WithNow removed
 

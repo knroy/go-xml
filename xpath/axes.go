@@ -1,6 +1,9 @@
 package xpath
 
-import "github.com/knroy/go-xml/v2/xdm"
+import (
+	"github.com/knroy/go-xml/v2/internal/xdmindex"
+	"github.com/knroy/go-xml/v2/xdm"
+)
 
 // walkAxis calls visit for each node on the axis from n, in axis order.
 //
@@ -118,8 +121,14 @@ func walkDescendants(n *xdm.Node, visit func(*xdm.Node) bool) bool {
 
 // appendNamedDescendants appends to out the element descendants of n that t
 // matches, in document order. It is walkDescendants with the name test
-// inlined, for the hot shape "//name": no visit callback per node.
+// inlined, for the hot shape "//name": no visit callback per node. A name
+// with no wildcard in a parsed document is answered from the tree's
+// element-name index instead of a walk.
 func appendNamedDescendants(out xdm.Sequence, n *xdm.Node, t *NameTest) xdm.Sequence {
+	if !t.AnyURI && !t.AnyLocal && xdmindex.Named(n, t.Name.URI, t.Name.Local,
+		func(c any) { out = append(out, c.(*xdm.Node)) }) {
+		return out
+	}
 	for c := range n.Descendants() {
 		if c.Kind() != xdm.KindElement {
 			continue

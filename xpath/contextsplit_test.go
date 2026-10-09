@@ -77,3 +77,50 @@ func TestNewContextConfigureCannotRemoveBudgets(t *testing.T) {
 		t.Error("the default Ctx overrode what the configure function set")
 	}
 }
+
+// A top-level evaluation of an expression that does not read its static
+// namespaces runs on the caller's context: installing them cost a context
+// copy per top-level XSLT expression (V12). One that reads them still gets
+// them, so a prefixed $calendar keeps resolving.
+func TestScopeInstallsNamespacesOnlyWhereRead(t *testing.T) {
+	ns := calendarNS{"xs": xdm.NSXS, "cal": "http://calendar.example.com/none"}
+	ctx := NewContext(nil, Builtins()).WithStaticHost("pkg").WithVersion(XPath31)
+	plain, err := CompileWith(`1 + 1`, CompileOptions{Namespaces: ns, Version: XPath31})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plain.WithStaticHost("pkg").scope(ctx); got != ctx {
+		t.Error("an expression that does not read its namespaces copied the context to install them")
+	}
+	if got := plain.scope(ctx.WithVersion(XPath20)); got.Version() != XPath31 {
+		t.Errorf("a version mismatch still has to copy: got %v", got.Version())
+	}
+	reads, err := CompileWith(`format-date(xs:date('2006-03-01'), '[Y]', 'en', 'cal:CB', ())`,
+		CompileOptions{Namespaces: ns, Version: XPath31})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reads.scope(ctx); got == ctx || got.StaticNamespaces() == nil {
+		t.Error("an expression that reads its namespaces did not get them")
+	}
+	if _, err := reads.Eval(ctx); err != nil {
+		t.Errorf("prefixed calendar at the top level: %v", err)
+	}
+}
+
+// WithStaticHost sets the host for expressions compiled without one, and is
+// a no-op when the context already carries that value.
+func TestContextWithStaticHost(t *testing.T) {
+	ctx := NewContext(nil, Builtins())
+	h := ctx.WithStaticHost(7)
+	if h.StaticHost() != 7 || ctx.StaticHost() != nil {
+		t.Fatalf("StaticHost = %v (original %v); want 7 (nil)", h.StaticHost(), ctx.StaticHost())
+	}
+	if h.WithStaticHost(7) != h {
+		t.Error("setting the same host copied the context")
+	}
+	// A non-comparable value is stored, not compared.
+	if s := h.WithStaticHost([]int{1}); s == h {
+		t.Error("a non-comparable host was not installed")
+	}
+}

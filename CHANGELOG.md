@@ -22,6 +22,7 @@ code before and after, and how to run the rewriter on your own module.
 | `xdm.ProcessXInclude` returns a new tree | `tree, err = xdm.ProcessXInclude(tree, opts)`; the input is not edited. | fb2426e |
 | `xdmbuild.SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaces`, `SetName`, `SetBaseURI`, `ShallowCopy`, `ReplaceChild`, `PrependChild` removed | Call the `xdm.Node` method of the same name where there is one (`SetName`, `SetBaseURI`); build a changed tree as a copy. `Builder.ReplaceOpen` swaps an element being built for its typed copy. | 6b34bc3, 13c4f5f |
 | `xsd.HTTPResolver` moves to package `xsd/xsdnet` | Every program importing `xsd` linked `net/http`, TLS and x509; only `-tags goxml_nohttp` kept them out. Use `xsdnet.HTTPResolver`, `ErrPrivateAddress`, `DefaultFetchTimeout`, `DefaultMaxSchemaBytes`; the tag is gone ([migrating](docs/migrating-to-v2.md#httpresolver-moves-to-package-xsdnet)). | 5509745a |
+| `xpath.Context.StaticNamespaces` is set only for an expression that reads it | It holds the expression's resolver only where the expression calls or references `fn:format-date`, `format-dateTime`, `format-time` or `function-lookup`; elsewhere it is the caller's, nil at the top level. A host function expands prefixes against a resolver it captured itself ([migrating](docs/migrating-to-v2.md#staticnamespaces-only-where-an-expression-reads-them)). | d5a980b6 |
 | `xsd.ValidateOptions.Annotate` removed; `Validate` and its siblings only check | A typed tree comes from `ValidateCopy`, `ValidateElementLaxCopy`, `ValidateAttributeCopy` or `ValidateAgainstTypeCopy`, which return the copy's counterpart of the node given. There is no in-place annotation (v2's interim `AnnotateInPlace` is gone too): annotating adds attributes and strips whitespace, which a built tree cannot take. | 21105fe |
 
 ### Added
@@ -38,6 +39,7 @@ code before and after, and how to run the rewriter on your own module.
 | `Context.WithNow` removed | `ctx.WithNow(t)` → `ctx.WithEnv(func(e *xpath.Env) { e.Now, e.HasNow = t, true })`. | [`9af0e77`][9af0e77] |
 | `xdmbuild.Builder.AppendCopyOf` | Appends a copy of a node straight into the tree being built: the result of `AppendNode(xdm.Copy(n))` with one copy instead of two. | `484cb4e8` |
 | `xdmbuild.NSDecl`, `Builder.NoteDeclaredList` | `NoteDeclared` for a list of bindings the builder may keep instead of copying; for a constructor that notes the same bindings on every element it builds. | 2c5ea0b |
+| `xpath.Context.WithStaticHost` | Sets the static host for expressions compiled without one, as `WithStaticBaseURI` does for the base URI. The XSLT runtime sets its top-level package once this way. | d5a980b6 |
 | `xdm.Node.TreeHasTyping` | Whether any node of the node's tree was ever typed; false means the whole tree is untyped. XSLT uses it to skip stripping annotations ([migrating](docs/migrating-to-v2.md#validation-never-writes-to-your-tree)). | 40dbca21 |
 
 ### Changed — performance
@@ -58,6 +60,8 @@ code before and after, and how to run the rewriter on your own module.
 | DocBook compile 55 → 77 ms on v2 (V7) | Version-attribute walks remembered per Compile (not in the static phase); `FileResolver` remembers `EvalSymlinks`. DocBook compile −11% CPU. | 23ace644, be9eb58e |
 | The runtime copy still carried the 64 B template selection (V13) | Selection held by pointer, allocated with the copy that selects it: copy 112 → 64 B. DocBook items −5.5% bytes, −3.8% CPU. | e09f1060 |
 | C14N wrote each token through a `bufio.Writer` call; the serializer's `element` used defers, which sent every element through the runtime's deferred-call path (V11) | C14N appends to its own 64 KiB buffer; `element` restores its state without defers and calls `WriteString` directly. C14N −10 to −12% CPU, parse + C14N −3.7%; serializing XMark q10 −22%, DocBook −18%, XRechnung stage 2 −8%. | 63155c73, da27a7cd |
+| Every top-level XSLT expression copied the context to install its version, package and namespaces (V12) | The transform's context carries the common version and package; namespaces are installed only where read. CEN −5.1% CPU, −9.2% bytes; Peppol −3.6% bytes. | d5a980b6 |
+| `//name` walked the subtree on every evaluation (V19) | A parsed document builds an element-name index on first use (4 B per element). XMark q7 −8% CPU per parse-and-query; a document queried repeatedly: q6, q7 −98%, q14 −30%. | babd534f |
 
 ## v1.7.1 — 2026-10-09
 
