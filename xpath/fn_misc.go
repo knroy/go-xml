@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xdmbuild"
 )
 
 // registerMiscFuncs adds the remaining F&O functions.
@@ -3044,9 +3045,9 @@ func parseXMLFragment(s, base string, b *xdm.EntityBudget) (*xdm.Node, error) {
 	if wrapper == nil {
 		return root, nil
 	}
-	root.Children = wrapper.Children
+	xdmbuild.SetChildren(root, wrapper.Children)
 	for _, c := range root.Children {
-		c.Parent = root
+		xdmbuild.SetParent(c, root)
 	}
 	return root, nil
 }

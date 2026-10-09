@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xdmbuild"
 )
 
 // NS is the RELAX NG structure namespace.
@@ -976,8 +977,7 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	}
 
 	// The included grammar's own definitions, less the overridden ones.
-	filtered := *root
-	filtered.Children = nil
+	filtered := xdmbuild.ShallowCopy(root)
 	var keep func(n *xdm.Node) []*xdm.Node
 	keep = func(n *xdm.Node) []*xdm.Node {
 		var out []*xdm.Node
@@ -1002,7 +1002,7 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 		}
 		return out
 	}
-	filtered.Children = keep(root)
+	xdmbuild.SetChildren(filtered, keep(root))
 
 	// The included definitions are collected in a compiler whose base URI is
 	// the included document's, so that an href inside it resolves there.
@@ -1019,7 +1019,7 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	// The ns= written on the <include> reaches the definitions it brings in,
 	// the same way it reaches an <externalRef>'s schema.
 	c.inheritedNs = inheritedNs(inc, c.inheritedNs)
-	err = collect(&filtered)
+	err = collect(filtered)
 	delete(*active, href)
 	c.opts.BaseURI = was
 	c.includeDepth = wasDepth

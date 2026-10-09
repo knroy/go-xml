@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xdmbuild"
 	"github.com/knroy/go-xml/xpath"
 )
 
@@ -1039,23 +1040,23 @@ func (g *generalPattern) matchesFromVirtualParent(root, node *xdm.Node,
 func wrapInDocument(el *xdm.Node) (doc, copied *xdm.Node) {
 	var clone func(n, parent *xdm.Node) *xdm.Node
 	clone = func(n, parent *xdm.Node) *xdm.Node {
-		c := *n
-		c.Parent = parent
-		c.Children = nil
-		c.Attrs = nil
+		c := xdmbuild.ShallowCopy(n)
+		xdmbuild.SetParent(c, parent)
+		xdmbuild.SetChildren(c, nil)
+		xdmbuild.SetAttrs(c, nil)
 		for _, a := range n.Attrs {
-			ac := *a
-			ac.Parent = &c
-			c.Attrs = append(c.Attrs, &ac)
+			ac := xdmbuild.ShallowCopy(a)
+			xdmbuild.SetParent(ac, c)
+			xdmbuild.SetAttrs(c, append(c.Attrs, ac))
 		}
 		for _, ch := range n.Children {
-			c.Children = append(c.Children, clone(ch, &c))
+			xdmbuild.SetChildren(c, append(c.Children, clone(ch, c)))
 		}
-		return &c
+		return c
 	}
-	doc = &xdm.Node{Kind: xdm.KindDocument}
+	doc = xdmbuild.NewDocument("")
 	copied = clone(el, doc)
-	doc.Children = []*xdm.Node{copied}
+	xdmbuild.SetChildren(doc, []*xdm.Node{copied})
 	return doc, copied
 }
 

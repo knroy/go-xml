@@ -1,6 +1,9 @@
 package relaxng
 
-import "github.com/knroy/go-xml/xdm"
+import (
+	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xdmbuild"
+)
 
 // Construction of the XML-syntax tree that the compact syntax maps onto.
 //
@@ -36,7 +39,7 @@ func newBuilder() *builder { return &builder{tree: xdm.NewTree()} }
 // looks at the prefix — every check is on Name.URI == NS — and leaving it
 // empty keeps the tree from implying a binding the source never wrote.
 func (b *builder) el(local string) *xdm.Node {
-	return &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{URI: NS, Local: local}}
+	return xdmbuild.NewElement(xdm.QName{URI: NS, Local: local})
 }
 
 // attr sets a RELAX NG attribute.
@@ -46,11 +49,7 @@ func (b *builder) el(local string) *xdm.Node {
 // annotation to be ignored, so a name= that carried a URI would either be
 // rejected or silently dropped.
 func (b *builder) attr(n *xdm.Node, local, value string) {
-	n.Attrs = append(n.Attrs, &xdm.Node{
-		Kind:  xdm.KindAttribute,
-		Name:  xdm.QName{Local: local},
-		Value: value, Parent: n,
-	})
+	n.AddAttr(xdmbuild.NewAttribute(xdm.QName{Local: local}, value))
 }
 
 // text gives an element character content.
@@ -59,7 +58,7 @@ func (b *builder) attr(n *xdm.Node, local, value string) {
 // have any, and a whitespace-only text node elsewhere would be harmless but
 // pointless, so this is called exactly where content is meant.
 func (b *builder) text(n *xdm.Node, s string) {
-	n.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: s})
+	n.AppendChild(xdmbuild.NewText(s))
 }
 
 // finish roots the document at n and returns the document node.
@@ -79,13 +78,13 @@ func (b *builder) finish(n *xdm.Node) *xdm.Node {
 // belongs to.
 func (b *builder) adopt(n *xdm.Node) {
 	for _, a := range n.Attrs {
-		a.Parent = n
+		xdmbuild.SetParent(a, n)
 	}
 	for _, ns := range n.Namespaces {
-		ns.Parent = n
+		xdmbuild.SetParent(ns, n)
 	}
 	for _, c := range n.Children {
-		c.Parent = n
+		xdmbuild.SetParent(c, n)
 		b.adopt(c)
 	}
 }
