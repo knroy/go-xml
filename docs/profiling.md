@@ -274,7 +274,7 @@ estimate.
 
 | # | Fix | Estimated gain | Constraint |
 |---|---|---|---|
-| T20 | Split `xpath.Context` into a small per-scope part and a pointer to the static part (resolvers, versions, budgets, host) | Every remaining copy ~5× cheaper; the broadest single win | Exported fields → API change (v2) |
+| T20 | Split `xpath.Context` into a small per-scope part and a pointer to the static part (resolvers, versions, budgets, host) | Every remaining copy ~5× cheaper; the broadest single win | Exported fields → API change (v2). Landed on the `v2` branch (`9af0e77`): 512 → 160 B per scope; CEN, Peppol, XRechnung −26% CPU and −36% bytes, DocBook −30% CPU, XMark −9% |
 | T21 | Move node typing fields and `DocumentURI` behind accessors | Node 280→192 B, heap −40% | Exported fields → v2 (~125 call sites) |
 | T22 | Further node packing: `BaseURI` stored only where it differs from the parent, `Namespaces` out of line, interned `*QName` | Node to 112–152 B (2–3× smaller than today) | v2 |
 | T23 | RELAX NG hash-consing with memoised derivatives (Jing's design) | Removes the derivative size bound; replaces B2's structural check | Large. Landed in round 5 (`77cdd65`): the bound stays, and the gain is on long documents only |
