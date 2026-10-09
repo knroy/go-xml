@@ -1092,17 +1092,16 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// Serialization 3.1 §7.4.3 (html) and §6.1.4 (xhtml): whitespace "MUST
 	// NOT be added or removed adjacent to an inline element"; see
 	// htmlser.SkipIndentBefore for where that leaves room for an indent.
-	for i := range n.NumChildren() {
-		c := n.ChildAt(i)
+	for c := range n.Children() {
 		if !indentChildren {
 			s.nodeNoIndent(c)
 			continue
 		}
-		s.skipIndent = s.skipBeforeChild(n, i)
+		s.skipIndent = s.skipBeforeChild(n, c)
 		s.node(c, depth+1)
 		s.skipIndent = false
 	}
-	if (indentChildren && !s.skipBeforeChild(n, n.NumChildren())) ||
+	if (indentChildren && !s.skipBeforeChild(n, nil)) ||
 		(emptyHead && s.opts.Indent) {
 		s.indent(depth)
 	}
@@ -1250,9 +1249,9 @@ func (s *serializer) indent(depth int) {
 }
 
 // skipBeforeChild reports whether the html or xhtml method may not indent
-// before child i of n (i == len(n.Children): before n's end tag).
-func (s *serializer) skipBeforeChild(n *xdm.Node, i int) bool {
-	return s.html && htmlser.SkipIndentBefore(n, i, s.xhtml, s.html5)
+// before c, a child of n (c == nil: before n's end tag).
+func (s *serializer) skipBeforeChild(n, c *xdm.Node) bool {
+	return s.html && htmlser.SkipIndentBefore(n, c, s.xhtml, s.html5)
 }
 
 // suppressed reports whether an element's content is written with no added
