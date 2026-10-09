@@ -147,9 +147,32 @@ func (e *PathExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 				"the context item for an axis step is %s, not a node",
 				ctx.Item.TypeName())
 		}
+		if len(e.Steps) > 0 {
+			return evalPathFromItem(ctx, ctx.Item, e.Steps)
+		}
 		cur = xdm.One(ctx.Item)
 	}
 	return evalRemainingSteps(ctx, cur, e.Steps)
+}
+
+// evalPathFromItem is evalRemainingSteps starting from the one item it.
+// The first step only iterates its input, so it is held in an array on the
+// stack rather than boxed into a one-item sequence on the heap, which was an
+// allocation for every relative path evaluated.
+func evalPathFromItem(ctx *Context, it xdm.Item, steps []Expr) (xdm.Sequence, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	one := [1]xdm.Item{it}
+	step, rest := steps[0], steps[1:]
+	if d := fuseDescendant(steps, 0); d != nil {
+		step, rest = d, steps[2:]
+	}
+	next, err := evalStepOver(ctx, one[:], step, len(rest) == 0)
+	if err != nil {
+		return nil, err
+	}
+	return evalRemainingSteps(ctx, next, rest)
 }
 
 // evalStepOver evaluates one step with each item of input as the context item,
@@ -204,7 +227,8 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 		// loop above has already checked that every item is a node.
 		var v xdm.Sequence
 		var err error
-		if st, ok := step.(*Step); ok {
+		st, fresh := step.(*Step)
+		if fresh {
 			v, err = st.evalFrom(ctx, it.(*xdm.Node))
 		} else if da, ok := step.(*descendantAttrs); ok {
 			v = da.appendFrom(nil, it.(*xdm.Node))
@@ -219,7 +243,16 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 				allNodes = false
 			}
 		}
-		out = append(out, v...)
+		// evalFrom's result is a fresh slice no one else holds, so the first
+		// one becomes out instead of being copied into it: for a single
+		// input node, the common case, that copy was the accumulation's
+		// whole cost. Any other step can return a sequence a variable still
+		// holds, whose spare capacity a later append must not write into.
+		if fresh && out == nil {
+			out = v
+		} else {
+			out = append(out, v...)
+		}
 	}
 
 	if !allNodes {
