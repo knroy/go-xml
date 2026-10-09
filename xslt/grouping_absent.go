@@ -35,6 +35,7 @@ func (rt *runtime) withoutGroupingScope() *runtime {
 	sub = sub.withVar(currentGroupingKeyVar, nil)
 	sub = sub.withVar(groupingScopeVar, nil)
 	sub.absent |= absentGrouping
+	sub.noteUnbound(absentGrouping)
 	return sub
 }
 

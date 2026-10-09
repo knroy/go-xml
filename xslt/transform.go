@@ -430,8 +430,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	rt.readDocs = &readDocs
 	rt.writtenDocs = &writtenDocs
 	// Bind the runtime so key(), current() and xsl:function can reach it.
-	rt.ctx = rt.ctx.WithVar(runtimeVar,
-		xdm.One(&xdm.Opaque{Label: "runtime", Value: rt}))
+	rt.ctx = bindRuntime(rt.ctx, rt)
 
 	// The principal result tree begins here. Global variables were evaluated
 	// inside newRuntime, before this binding exists, which is what makes

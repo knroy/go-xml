@@ -820,8 +820,7 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 		// reach it; the only thing that ever finds it is a function item
 		// that crossed the fn:transform boundary, which is exactly the case
 		// the specification's unrestricted function library allows in.
-		ctx = ctx.WithVar(runtimeVar,
-			xdm.One(&xdm.Opaque{Label: "runtime", Value: staticRT}))
+		ctx = bindRuntime(ctx, staticRT)
 	}
 	// 3.12's table gives a static expression "the core functions defined in
 	// [Functions and Operators]" -- the whole library, not a 2.0 subset of

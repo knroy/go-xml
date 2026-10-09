@@ -466,7 +466,7 @@ func (p *Pattern) matches(node *xdm.Node, ctx *xpath.Context, recovered *error) 
 	// A pattern with no predicate, no id() or key() call and no general form
 	// evaluates no expression, so neither binding could be observed.
 	if !p.predicateFree() {
-		ctx = ctx.WithVar(currentVar, xdm.One(node))
+		ctx = withCurrentItem(ctx, node)
 		// Section 24.3: the current output URI is cleared while evaluating a
 		// pattern. A pattern is matched against candidate nodes at moments
 		// that have nothing to do with which result tree is being written,

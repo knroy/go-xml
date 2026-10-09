@@ -285,9 +285,10 @@ func (rt *runtime) withFocus(item xdm.Item, pos, size int) *runtime {
 // evaluation use withFocus, which deliberately leaves current() alone.
 func (rt *runtime) withCurrent(item xdm.Item, pos, size int) *runtime {
 	n := *rt
-	n.ctx = rt.ctx.WithFocus(item, pos, size)
 	if item != nil {
-		n.ctx = n.ctx.WithVar(currentVar, xdm.One(item))
+		n.ctx = withFocusCurrent(rt.ctx, item, pos, size)
+	} else {
+		n.ctx = rt.ctx.WithFocus(item, pos, size)
 	}
 	return &n
 }
@@ -311,7 +312,11 @@ func (rt *runtime) withVar(name xdm.QName, val xdm.Sequence) *runtime {
 	n := *rt
 	n.ctx = rt.ctx.WithVar(name, val)
 	if name.URI == internalNS {
-		n.absent &^= absentGroupOf(name)
+		g := absentGroupOf(name)
+		n.absent &^= g
+		if h := hostOf(n.ctx); h != nil && h.Unbound&g != 0 {
+			setUnbound(n.ctx, h.Unbound&^g)
+		}
 	}
 	return &n
 }
@@ -806,8 +811,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// xsl:function reaches the runtime through this binding — evaluating the
 	// globals first left such a call reporting that it was made outside a
 	// transform.
-	rt.ctx = rt.ctx.WithVar(runtimeVar,
-		xdm.One(&xdm.Opaque{Label: "runtime", Value: rt}))
+	rt.ctx = bindRuntime(rt.ctx, rt)
 
 	if err := rt.evalGlobals(s, opts); err != nil {
 		return nil, err
@@ -1449,4 +1453,13 @@ func functionCallsIn(src string, ns map[string]string) []string {
 // lexical scan, covers the rest.
 func isNameStartByte(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// noteUnbound records on rt.ctx, which a clearing function has just made,
+// that the components in bits are cleared there, so that runtimeFrom can
+// carry the knowledge into a stylesheet function's body.
+func (rt *runtime) noteUnbound(bits uint8) {
+	if h := hostOf(rt.ctx); h != nil {
+		setUnbound(rt.ctx, h.Unbound|bits)
+	}
 }

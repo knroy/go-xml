@@ -11,41 +11,33 @@ import (
 
 // internalNS is the namespace for bindings this package threads through the
 // XPath context. The xpath package must not import xslt (that would be a
-// cycle), so state that XSLT functions need — the runtime, the current group,
-// the regex captures — travels as reserved variable bindings.
+// cycle), so state that XSLT functions need — the current group, the regex
+// captures — travels as reserved variable bindings. The runtime and
+// fn:current() travel on the context's host state instead; see hoststate.go.
 //
 // Stylesheets cannot reach these: a variable reference resolves its prefix
 // against the stylesheet's own namespace declarations, and nothing binds a
 // prefix to this URI.
 const internalNS = "urn:goxslt:internal"
 
-// runtimeVar is the binding that carries the transform runtime.
-var runtimeVar = xdm.QName{URI: internalNS, Local: "runtime"}
-
-// currentVar carries the focus as it stood when the enclosing XSLT
-// instruction began, which is what fn:current returns.
-var currentVar = xdm.QName{URI: internalNS, Local: "current"}
-
 // runtimeFrom recovers the runtime from an XPath context.
 func runtimeFrom(ctx *xpath.Context) (*runtime, bool) {
-	seq, ok := ctx.LookupVar(runtimeVar)
-	if !ok || len(seq) == 0 {
+	h := hostOf(ctx)
+	if h == nil {
 		return nil, false
 	}
-	o, ok := seq[0].(*xdm.Opaque)
-	if !ok {
-		return nil, false
-	}
-	rt, ok := o.Value.(*runtime)
+	rt, ok := h.Runtime.(*runtime)
 	if !ok {
 		return nil, false
 	}
 	// The runtime's own context is stale by the time a nested expression
 	// runs, so the caller's context is grafted on: key() must see the current
-	// focus, not the one captured when the transform started.
+	// focus, not the one captured when the transform started. What is known
+	// cleared about ctx rides on it, so a stylesheet function called from
+	// another does not clear the grouping, merge and regex components again.
 	n := *rt
 	n.ctx = ctx
-	n.absent = 0 // ctx is the caller's; nothing is known about it
+	n.absent = h.Unbound
 	return &n, true
 }
 
@@ -54,12 +46,8 @@ func runtimeFrom(ctx *xpath.Context) (*runtime, bool) {
 // capture. A function item made from one of these functions carries its
 // transform along (see hostBoundFuncs).
 func rtFor(ctx *xpath.Context) (*runtime, error) {
-	if seq, ok := ctx.LookupVar(runtimeVar); ok && len(seq) > 0 {
-		if o, ok := seq[0].(*xdm.Opaque); ok {
-			if rt, ok := o.Value.(*runtime); ok {
-				return rt, nil
-			}
-		}
+	if rt := runtimeOf(ctx); rt != nil {
+		return rt, nil
 	}
 	return nil, fmt.Errorf("XPDY0002: an XSLT function was called outside a transform")
 }
@@ -88,12 +76,12 @@ func init() {
 		if name.URI != xdm.NSFN || !hostBoundFuncs[name.Local] {
 			return nil
 		}
-		seq, ok := c.(*xpath.Context).LookupVar(runtimeVar)
-		if !ok {
+		rt := runtimeOf(c.(*xpath.Context))
+		if rt == nil {
 			return nil
 		}
 		return func(call any) any {
-			return call.(*xpath.Context).WithVar(runtimeVar, seq)
+			return bindRuntime(call.(*xpath.Context), rt)
 		}
 	}
 }
@@ -223,8 +211,8 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 						"call, which is evaluated as if the context item " +
 						"were absent")
 			}
-			if seq, ok := ctx.LookupVar(currentVar); ok {
-				return seq, nil
+			if h := hostOf(ctx); h != nil && h.CurrentSet {
+				return h.Current, nil
 			}
 			// Outside any instruction (a bare XPath evaluation) the context
 			// item is the only sensible answer. With no context item there is
@@ -1248,8 +1236,7 @@ func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*x
 		// sets the context item but not the current-node variable the
 		// function reads, so the use expression saw whatever current() meant
 		// where the index happened to be built.
-		vals, err := def.use.Eval(
-			ctx.WithFocus(n, 1, 1).WithVar(currentVar, xdm.One(n)))
+		vals, err := def.use.Eval(withFocusCurrent(ctx, n, 1, 1))
 		if err != nil {
 			return nil, err
 		}

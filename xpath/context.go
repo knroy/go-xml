@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/knroy/go-xml/internal/xpathleaf"
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -351,6 +352,13 @@ type Context struct {
 	Now time.Time
 	// HasNow distinguishes an unset clock from a legitimately zero time.
 	HasNow bool
+
+	// host is the host language's dynamic state (XSLT: the transform runtime
+	// and fn:current()), opaque here and copied with the context as the focus
+	// is. A dynamic function call clears its current item and marks it
+	// absent, as it does the variables in ClearedOnDynamicCall and
+	// MarkedOnDynamicCall. See internal/xpathleaf.Host and leafhook.go.
+	host *xpathleaf.Host
 }
 
 // WithNow returns a copy of ctx with the transform clock set.

@@ -167,6 +167,9 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			for _, name := range ClearedOnDynamicCall {
 				p = p.WithVar(name, nil)
 			}
+			// The host state is a binding too: it comes from the call, with
+			// the current item cleared as the variables above are.
+			p.host = hostOnCall(c.host, false)
 		}
 		return inner(p, args)
 	}
@@ -533,6 +536,11 @@ var MarkedOnDynamicCall []xdm.QName
 
 // clearHostVars applies both host registries for one call.
 func clearHostVars(ctx *Context) *Context {
+	if h := hostOnCall(ctx.host, true); h != ctx.host {
+		n := *ctx
+		n.host = h
+		ctx = &n
+	}
 	for _, name := range ClearedOnDynamicCall {
 		ctx = ctx.WithVar(name, nil)
 	}

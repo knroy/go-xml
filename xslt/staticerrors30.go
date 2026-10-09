@@ -374,28 +374,19 @@ func (s *Stylesheet) failMultipleMatch(node *xdm.Node, mode string,
 	return nil
 }
 
-// currentAbsentVar marks a dynamic function call, across which XTDE1360 makes
-// fn:current() behave "as if the context item is absent".
+// currentIsAbsent reports whether a dynamic call is being evaluated, across
+// which XTDE1360 makes fn:current() behave "as if the context item is absent".
 //
 // A dynamic call carries no XSLT focus with it: 24.3 already clears the
 // current output URI the same way, and current#0() is the example the spec
-// itself gives. Clearing the current-node binding alone is not enough,
-// because fn:current() falls back to the context item when nothing bound it
-// -- which is right for a bare XPath evaluation and wrong here -- so the
-// crossing is recorded rather than inferred.
-var currentAbsentVar = xdm.QName{URI: internalNS, Local: "current-absent"}
-
-func init() {
-	xpath.ClearedOnDynamicCall = append(
-		xpath.ClearedOnDynamicCall, currentVar)
-	xpath.MarkedOnDynamicCall = append(
-		xpath.MarkedOnDynamicCall, currentAbsentVar)
-}
-
-// currentIsAbsent reports whether a dynamic call is being evaluated.
+// itself gives. Clearing the current node alone is not enough, because
+// fn:current() falls back to the context item when nothing bound it -- which
+// is right for a bare XPath evaluation and wrong here -- so the crossing is
+// recorded (xpathleaf.Host.Absent, set by xpath's hostOnCall) rather than
+// inferred.
 func currentIsAbsent(ctx *xpath.Context) bool {
-	seq, _ := ctx.LookupVar(currentAbsentVar)
-	return len(seq) > 0
+	h := hostOf(ctx)
+	return h != nil && h.Absent
 }
 
 // checkModeTyped applies XTTE3100 and XTTE3110 to one node selected by an
