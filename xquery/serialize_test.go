@@ -45,20 +45,20 @@ func writeNode(sb *strings.Builder, n *xdm.Node) {
 		if n.Parent() != nil {
 			inherited = n.Parent().InScopeNamespaces()
 		}
-		for ns := range n.NamespaceDecls() {
-			if inherited[ns.Name().Local] == ns.Value() {
+		for prefix, uri := range n.DeclaredNamespaces() {
+			if inherited[prefix] == uri {
 				continue
 			}
-			if ns.Name().Local == "" {
-				sb.WriteString(` xmlns="` + ns.Value() + `"`)
+			if prefix == "" {
+				sb.WriteString(` xmlns="` + uri + `"`)
 			} else {
-				sb.WriteString(` xmlns:` + ns.Name().Local + `="` + ns.Value() + `"`)
+				sb.WriteString(` xmlns:` + prefix + `="` + uri + `"`)
 			}
 		}
 		for a := range n.Attrs() {
 			writeNode(sb, a)
 		}
-		if n.NumChildren() == 0 {
+		if n.FirstChild() == nil {
 			sb.WriteString("/>")
 			return
 		}
