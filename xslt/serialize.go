@@ -471,6 +471,11 @@ type serializer struct {
 	// charMap substitutes individual characters for arbitrary strings,
 	// bypassing escaping. Declared by xsl:character-map.
 	charMap map[rune]string
+	// oneSeg backs mapSegments' answer when there is no character map, so
+	// that every text node and attribute value does not allocate a slice for
+	// its single segment. Both callers finish with the slice before asking
+	// again.
+	oneSeg [1]mapSegment
 }
 
 func (s *serializer) writeString(str string) {
@@ -821,7 +826,13 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	}
 
 	for _, a := range n.Attrs {
-		s.writeString(" " + s.attrName(a) + s.attrValue(a, n))
+		// Written in pieces rather than concatenated, which allocated a
+		// string per attribute. The value is computed first: it can fail,
+		// and then nothing of the attribute is written, as before.
+		an, av := s.attrName(a), s.attrValue(a, n)
+		s.writeString(" ")
+		s.writeString(an)
+		s.writeString(av)
 	}
 
 	// An empty element still has to be opened when the method is going to put
@@ -1039,7 +1050,9 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		(emptyHead && s.opts.Indent) {
 		s.indent(depth)
 	}
-	s.writeString("</" + name + ">")
+	s.writeString("</")
+	s.writeString(name)
+	s.writeString(">")
 	s.popScope()
 }
 
@@ -1113,7 +1126,10 @@ func (s *serializer) indent(depth int) {
 		s.skipIndent = false
 		return
 	}
-	s.writeString("\n" + strings.Repeat("  ", depth))
+	s.writeString("\n")
+	for range depth {
+		s.writeString("  ")
+	}
 }
 
 // skipBeforeChild reports whether the html or xhtml method may not indent
@@ -1570,7 +1586,8 @@ func (s *serializer) normalized(text string) string {
 // replacements verbatim, which is the point of declaring a map at all.
 func (s *serializer) mapSegments(text string) []mapSegment {
 	if len(s.charMap) == 0 {
-		return []mapSegment{{text: s.normalized(text)}}
+		s.oneSeg[0] = mapSegment{text: s.normalized(text)}
+		return s.oneSeg[:]
 	}
 	var segs []mapSegment
 	run := 0
@@ -1730,8 +1747,21 @@ func (s *serializer) writeAttrRuns(sb *strings.Builder, run string) {
 			sb.WriteByte('&')
 			continue
 		}
+		if plainAttrASCII(r) {
+			sb.WriteByte(byte(r))
+			continue
+		}
 		sb.WriteString(s.escapeAttrRune(r))
 	}
+}
+
+// plainAttrASCII reports whether r is printable ASCII that escapeAttrRune
+// writes unchanged under every method, encoding and version. Copying such a
+// character straight to the builder skips the one-character string and the
+// builder escapeAttr would allocate for it: on an html page that was two
+// allocations per attribute character, over half of XRechnung stage 2's.
+func plainAttrASCII(r rune) bool {
+	return r >= 0x20 && r < 0x7F && r != '&' && r != '<' && r != '>' && r != '"'
 }
 
 // escapeAttrRunes escapes a whole attribute value one character at a time,
@@ -1742,6 +1772,10 @@ func (s *serializer) escapeAttrRunes(v string) string {
 	var sb strings.Builder
 	sb.Grow(len(v))
 	for _, r := range v {
+		if plainAttrASCII(r) {
+			sb.WriteByte(byte(r))
+			continue
+		}
 		sb.WriteString(s.escapeAttrRune(r))
 	}
 	return sb.String()
