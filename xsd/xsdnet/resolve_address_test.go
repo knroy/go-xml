@@ -1,6 +1,4 @@
-//go:build !goxml_nohttp
-
-package xsd
+package xsdnet
 
 import (
 	"errors"

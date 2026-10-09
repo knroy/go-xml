@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,774 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,778 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -40,8 +40,8 @@ figures* section, which fails the gate when this table drifts from the tree:
   `grep -rn "^func Test" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`
 * **Limit boundary tests** — `func Test` declarations in the
   `*/limits_boundary*_test.go` files of dtd, relaxng, xdm, xpath, xsd and xslt
-  (xsd's HTTPResolver limits sit in `limits_boundary_http_test.go`, behind the
-  `goxml_nohttp` tag); most
+  (xsd's `xsdnet.HTTPResolver` limits sit in `limits_boundary_http_test.go`, in
+  the external `xsd_test` package); most
   are table-driven, so they run rather more than 13 cases:
   `grep -hc "^func Test" ./*/limits_boundary*_test.go | awk '{n += $1} END {print n + 0}'`
 * **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`

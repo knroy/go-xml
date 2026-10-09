@@ -14,6 +14,7 @@
 package relaxng
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -42,20 +43,32 @@ type emptyPat struct{}
 type textPat struct{}
 
 // choicePat matches either branch.
-type choicePat struct{ Left, Right pattern }
+type choicePat struct {
+	Left, Right pattern
+	size        int // patternSize; set by newChoicePat
+}
 
 // interleavePat matches both branches with their items in any interleaving.
 //
 // This is the construct that makes RELAX NG more expressive than a DTD or an
 // XSD all group: the branches may be arbitrary patterns, not just elements,
 // and they interleave rather than merely being unordered.
-type interleavePat struct{ Left, Right pattern }
+type interleavePat struct {
+	Left, Right pattern
+	size        int // patternSize; set by newInterleavePat
+}
 
 // groupPat matches the left branch followed by the right.
-type groupPat struct{ Left, Right pattern }
+type groupPat struct {
+	Left, Right pattern
+	size        int // patternSize; set by newGroupPat
+}
 
 // oneOrMorePat matches its pattern one or more times.
-type oneOrMorePat struct{ Pattern pattern }
+type oneOrMorePat struct {
+	Pattern pattern
+	size    int // patternSize; set by newOneOrMorePat
+}
 
 // elementPat matches one element whose name the class admits and whose content
 // matches the pattern.
@@ -94,7 +107,10 @@ type dataPat struct {
 }
 
 // listPat matches a whitespace-separated list of tokens against a pattern.
-type listPat struct{ Pattern pattern }
+type listPat struct {
+	Pattern pattern
+	size    int // patternSize; set by newListPat
+}
 
 // afterPat is an internal Pattern: it matches the first pattern, then continues
 // with the second.
@@ -102,7 +118,10 @@ type listPat struct{ Pattern pattern }
 // It has no syntax — it arises only while computing a derivative, to remember
 // what must follow once an element's content is complete. Keeping it a pattern
 // rather than a separate stack is what makes the algorithm one recursion.
-type afterPat struct{ Left, Right pattern }
+type afterPat struct {
+	Left, Right pattern
+	size        int // patternSize; set by newAfterPat
+}
 
 // refPat is a definition not yet expanded.
 //
@@ -245,4 +264,28 @@ func (c qnamePat) contains(n xdm.QName) bool { return n == c.Name }
 
 func (c nameChoicePat) contains(n xdm.QName) bool {
 	return c.Left.contains(n) || c.Right.contains(n)
+}
+
+// The compound constructors fix each node's patternSize when it is built, so
+// measuring a derivative before every element costs one field read instead of
+// a walk of the whole derivative. Every compound node must come from one of
+// them: a struct literal would carry size 0.
+func newChoicePat(l, r pattern) *choicePat { return &choicePat{l, r, sizeOf2(l, r)} }
+func newGroupPat(l, r pattern) *groupPat   { return &groupPat{l, r, sizeOf2(l, r)} }
+func newAfterPat(l, r pattern) *afterPat   { return &afterPat{l, r, sizeOf2(l, r)} }
+func newInterleavePat(l, r pattern) *interleavePat {
+	return &interleavePat{l, r, sizeOf2(l, r)}
+}
+func newOneOrMorePat(p pattern) *oneOrMorePat { return &oneOrMorePat{p, addSize(1, patternSize(p))} }
+func newListPat(p pattern) *listPat           { return &listPat{p, addSize(1, patternSize(p))} }
+
+func sizeOf2(l, r pattern) int { return addSize(1, addSize(patternSize(l), patternSize(r))) }
+
+// addSize saturates rather than wrapping: interned nodes are shared, so the
+// tree size counted here can outgrow memory by far.
+func addSize(a, b int) int {
+	if a > math.MaxInt-b {
+		return math.MaxInt
+	}
+	return a + b
 }

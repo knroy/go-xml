@@ -16,9 +16,9 @@ import (
 func TestStartTagCloseDerivKeepsAttributeFreePattern(t *testing.T) {
 	a := &elementPat{Name: qnamePat{xdm.QName{Local: "a"}}, Pattern: emptyPat{}}
 	b := &elementPat{Name: qnamePat{xdm.QName{Local: "b"}}, Pattern: textPat{}}
-	free := &groupPat{&choicePat{a, b}, &oneOrMorePat{&interleavePat{a, textPat{}}}}
+	free := newGroupPat(newChoicePat(a, b), newOneOrMorePat(newInterleavePat(a, textPat{})))
 	ref := &refPat{name: "free", resolve: func() (pattern, error) { return free, nil }}
-	p := pattern(&afterPat{&groupPat{ref, free}, emptyPat{}})
+	p := pattern(newAfterPat(newGroupPat(ref, free), emptyPat{}))
 
 	if got := startTagCloseDeriv(p); !patEq(got, p) {
 		t.Fatalf("startTagCloseDeriv changed an attribute-free pattern: %#v", got)
@@ -31,8 +31,8 @@ func TestStartTagCloseDerivKeepsAttributeFreePattern(t *testing.T) {
 	}
 
 	att := &attributePat{Name: qnamePat{xdm.QName{Local: "id"}}, Pattern: textPat{}}
-	withAtt := &refPat{name: "att", resolve: func() (pattern, error) { return &groupPat{att, a}, nil }}
-	got := startTagCloseDeriv(&afterPat{&choicePat{withAtt, b}, emptyPat{}})
+	withAtt := &refPat{name: "att", resolve: func() (pattern, error) { return newGroupPat(att, a), nil }}
+	got := startTagCloseDeriv(newAfterPat(newChoicePat(withAtt, b), emptyPat{}))
 	want := after(b, emptyPat{})
 	if !patEq(got, want) {
 		t.Errorf("unused attribute not discarded: got %#v, want %#v", got, want)

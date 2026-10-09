@@ -235,7 +235,7 @@ func (v *validator) textDeriv(p pattern, s string, ctx nsContext) pattern {
 // pattern only accumulates across attributes, not within one.
 func (v *validator) attsDeriv(p pattern, attrs []attr, ctx nsContext, el *xdm.Node) pattern {
 	for _, a := range attrs {
-		if v.maxPattern >= 0 && patternSize(p, v.maxPattern+1) > v.maxPattern {
+		if v.maxPattern >= 0 && patternSize(p) > v.maxPattern {
 			v.tooBig = true
 			v.deepPath = tailPath(v.path, el.Name().Local)
 			return notAllowedPat{}
@@ -284,7 +284,7 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 		// is taken, for the same reason the depth bound is fatal here: the
 		// derivative about to be computed is the expensive one, so noticing
 		// afterwards would spend exactly what the bound exists to refuse.
-		if v.maxPattern >= 0 && patternSize(p, v.maxPattern+1) > v.maxPattern {
+		if v.maxPattern >= 0 && patternSize(p) > v.maxPattern {
 			v.tooBig = true
 			v.deepPath = tailPath(v.path, n.Name().Local)
 			return notAllowedPat{}

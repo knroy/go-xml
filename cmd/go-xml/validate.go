@@ -229,7 +229,7 @@ func validateOne(path string, popts xdm.ParseOptions, validate func(*xdm.Node) e
 // The command line asks for less, on the same terms as its XML Schema flag: a
 // RELAX NG grammar and an XML Schema are the same kind of document at the same
 // scale, and the W3C's own largest schema is under 200 kB. The figure therefore
-// matches xsd.DefaultMaxSchemaBytes rather than the library ceiling.
+// matches xsdnet.DefaultMaxSchemaBytes rather than the library ceiling.
 const DefaultMaxRNGBytes = 16 << 20
 
 // cliRNGResolver is the resolver the validate path installs.

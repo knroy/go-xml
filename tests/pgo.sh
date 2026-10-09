@@ -28,10 +28,14 @@ package main
 
 import (
 	"os"
+	"runtime"
 	"runtime/pprof"
 )
 
 func startProfile() func() {
+	// Linking runtime/pprof turns on allocation sampling, which the shipped
+	// CLI does not link and so never runs; keep it out of the profile.
+	runtime.MemProfileRate = 0
 	f, err := os.Create(os.Getenv("GOXML_CPUPROFILE"))
 	if err != nil {
 		panic(err)
@@ -108,12 +112,12 @@ parse() {
 }
 
 reps 2 peppol
-reps 10 xrechnung
+reps 12 xrechnung
 reps 1 docbook
 reps 1 xmark
 reps 50 xsd
-reps 7 rng
-reps 1 parse
+reps 6 rng
+reps 2 parse
 
 for fam in peppol xrechnung docbook xmark xsd rng parse; do
 	go tool pprof -proto "$T"/$fam.*.pprof >"$T/$fam.merged" 2>/dev/null

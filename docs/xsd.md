@@ -168,10 +168,12 @@ resolves anything. `LoadFile` and `LoadFiles` were handed paths, so a sibling
 absolute path elsewhere or a climb through `..`. `Schema.WithInstanceLocations`
 is rooted the same way, at the directories the schema was loaded from.
 
-To follow remote locations you have to say so, and say which hosts:
+To follow remote locations you have to say so, and say which hosts.
+`HTTPResolver` is in its own package, `github.com/knroy/go-xml/v2/xsd/xsdnet`,
+so a program that does not import it does not link `net/http`:
 
 ```go
-xsd.Options{Resolver: &xsd.HTTPResolver{
+xsd.Options{Resolver: &xsdnet.HTTPResolver{
     AllowHost: func(host string) bool { return host == "schemas.example.com" },
 }}
 ```
@@ -312,7 +314,7 @@ Three things about that shape are deliberate:
   validating many documents against one schema should not pay for it.
 
 The resolver still decides what can actually be fetched. Following untrusted
-documents means pairing this with a `MapResolver`, or an `HTTPResolver` whose
+documents means pairing this with a `MapResolver`, or an `xsdnet.HTTPResolver` whose
 `AllowHost` refuses everything you have not vouched for: the allowlist says
 *which namespaces* an instance may extend, not *what it may reach*.
 
