@@ -6,8 +6,10 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -903,10 +905,179 @@ func (c *Context) WithVar(name xdm.QName, val xdm.Sequence) *Context {
 }
 
 // varBinding is the binding a scope made by WithVar adds. Never written once
-// the scope is published.
+// the scope is published. A scope made by WithLazyVars holds lazy instead,
+// and binds every name in it.
 type varBinding struct {
 	uri, local string
 	val        xdm.Sequence
+	lazy       map[varKey]*LazyVar
+}
+
+// varKey is a variable's expanded name as a map key that needs no Clark
+// string built for a lookup.
+type varKey struct{ uri, local string }
+
+// LazyVar is a variable whose value is computed when a reference first needs
+// it. XSLT's global variables are the case: a stylesheet may declare hundreds
+// and read a few, and evaluating each only on first use is what section 2.14
+// permits ("an implementation will signal the error only if it actually
+// executes the instructions and expressions").
+//
+// Force computes the value. A successful result is kept and Force is not
+// called again; a failure is not kept, so the host decides what a second
+// reference sees. While Force runs the variable is not in scope for the
+// goroutine running it: a reference reached from inside its own evaluation
+// resolves as if the name were not bound here, which is how a host sees a
+// circularity. Unbind takes the variable out of scope for good.
+//
+// A LazyVar is safe for concurrent use once Share has been called. A
+// function item can outlive the evaluation that made it and be called from
+// several goroutines, each reaching a variable nothing has evaluated yet.
+// The variables bound by one WithLazyVars call share one lock, held while
+// any of them is forced, so each is evaluated once and the host's Force
+// never runs concurrently with another of the same scope; one lock per
+// variable would let two goroutines forcing two variables that read each
+// other wait on each other forever. The lock is re-entrant for the goroutine
+// holding it, since forcing one variable usually reads others.
+//
+// Until Share, the scope is used by the one goroutine evaluating with it and
+// no lock is taken: finding the goroutine costs a stack trace, and taking it
+// on every first force cost DocBook 44% CPU. A forced value is read with one
+// atomic load either way.
+type LazyVar struct {
+	Force func() (xdm.Sequence, error)
+	val   xdm.Sequence
+	state atomic.Uint32
+	group *lazyGroup
+}
+
+const (
+	lazyPending uint32 = iota
+	lazyRunning
+	lazyDone
+	lazyUnbound
+)
+
+// lazyGroup is the lock the variables of one WithLazyVars scope share.
+type lazyGroup struct {
+	shared atomic.Bool // set by Share
+	mu     sync.Mutex
+	owner  atomic.Int64 // goroutine holding mu, or 0
+}
+
+// lock takes g for the calling goroutine and returns the release, which does
+// nothing when the goroutine already held it.
+func (g *lazyGroup) lock() func() {
+	if !g.shared.Load() {
+		return func() {}
+	}
+	id := goroutineID()
+	if g.owner.Load() == id {
+		return func() {}
+	}
+	g.mu.Lock()
+	g.owner.Store(id)
+	return func() {
+		g.owner.Store(0)
+		g.mu.Unlock()
+	}
+}
+
+// goroutineID is the calling goroutine's number, read from the first line
+// of its stack trace ("goroutine 18 [running]:"). Go offers no other way to
+// tell a re-entrant call from another goroutine's. Only a force after Share
+// pays for it.
+//
+// ponytail: parses runtime.Stack; a context-carried lock token would avoid
+// it, but every evaluation path would have to carry the token.
+func goroutineID() int64 {
+	var buf [64]byte
+	b := buf[:runtime.Stack(buf[:], false)]
+	b = b[len("goroutine "):]
+	var id int64
+	for _, c := range b {
+		if c < '0' || c > '9' {
+			break
+		}
+		id = id*10 + int64(c-'0')
+	}
+	return id
+}
+
+// ReadyVar returns a LazyVar that already holds val.
+func ReadyVar(val xdm.Sequence) *LazyVar {
+	l := &LazyVar{val: val}
+	l.state.Store(lazyDone)
+	return l
+}
+
+// Value returns the variable's value, computing it if no reference has yet.
+// A variable out of scope (see LazyVar) reports no value and no error.
+func (l *LazyVar) Value() (xdm.Sequence, error) {
+	v, _, err := l.get()
+	return v, err
+}
+
+// Share marks the scope l is bound in as reachable from other goroutines:
+// from then on forcing any of its variables takes the scope's lock. A host
+// calls it before a value that can reach the scope, such as a function item,
+// leaves the goroutine evaluating with it.
+func (l *LazyVar) Share() {
+	if l.group != nil {
+		l.group.shared.Store(true)
+	}
+}
+
+// Unbind takes the variable out of scope: a reference resolves as if the
+// name were not bound by this scope.
+func (l *LazyVar) Unbind() {
+	if l.group != nil {
+		defer l.group.lock()()
+	}
+	l.state.Store(lazyUnbound)
+}
+
+func (l *LazyVar) get() (xdm.Sequence, bool, error) {
+	if l.state.Load() == lazyDone {
+		return l.val, true, nil
+	}
+	if l.group != nil {
+		defer l.group.lock()()
+	}
+	switch l.state.Load() {
+	case lazyDone:
+		return l.val, true, nil
+	case lazyRunning, lazyUnbound:
+		return nil, false, nil
+	}
+	l.state.Store(lazyRunning)
+	v, err := l.Force()
+	if err != nil {
+		l.state.Store(lazyPending)
+		return nil, true, err
+	}
+	l.val = v
+	l.state.Store(lazyDone)
+	return v, true, nil
+}
+
+// WithLazyVars returns a child scope binding every name in vars, each one
+// evaluated on first lookup. One map scope rather than a WithVar per name
+// keeps a lookup that passes through it to one map probe. The variables
+// share one lock (see LazyVar); binding them again moves them to a new one,
+// so it must not happen while one is being forced.
+func (c *Context) WithLazyVars(vars map[xdm.QName]*LazyVar) *Context {
+	g := &lazyGroup{}
+	m := make(map[varKey]*LazyVar, len(vars))
+	for k, v := range vars {
+		v.group = g
+		m[varKey{k.URI, k.Local}] = v
+	}
+	n := *c
+	n.Vars = nil
+	n.bind = &varBinding{lazy: m}
+	n.Parent = c
+	return &n
 }
 
 // QualifyVar, when set, is consulted before a variable reference is resolved
@@ -921,24 +1092,41 @@ type varBinding struct {
 type VarQualifier func(ctx *Context, name xdm.QName) xdm.QName
 
 // LookupVar resolves a variable by expanded name, walking enclosing scopes.
+// A variable bound by WithLazyVars whose evaluation fails reports no value;
+// a reference in an expression reports the failure itself.
 func (c *Context) LookupVar(name xdm.QName) (xdm.Sequence, bool) {
+	v, ok, err := c.lookupVar(name)
+	return v, ok && err == nil
+}
+
+// lookupVar is LookupVar with the failure of a lazily bound variable's
+// evaluation, which is what a VarRef raises.
+func (c *Context) lookupVar(name xdm.QName) (xdm.Sequence, bool, error) {
 	if c.ev().QualifyVar != nil {
 		if q := c.ev().QualifyVar(c, name); q != name {
-			if v, ok := c.lookupVarPlain(q); ok {
-				return v, true
+			if v, ok, err := c.lookupVarPlain(q); ok {
+				return v, true, err
 			}
 		}
 	}
 	return c.lookupVarPlain(name)
 }
 
-// lookupVarPlain is LookupVar without the host's qualifier, and is what the
+// lookupVarPlain is lookupVar without the host's qualifier, and is what the
 // qualifier's own answer is resolved through.
-func (c *Context) lookupVarPlain(name xdm.QName) (xdm.Sequence, bool) {
+func (c *Context) lookupVarPlain(name xdm.QName) (xdm.Sequence, bool, error) {
 	key, keyed := "", false
 	for s := c; s != nil; s = s.Parent {
-		if b := s.bind; b != nil && b.local == name.Local && b.uri == name.URI {
-			return b.val, true
+		if b := s.bind; b != nil {
+			if b.lazy != nil {
+				if l, ok := b.lazy[varKey{name.URI, name.Local}]; ok {
+					if v, ok, err := l.get(); ok || err != nil {
+						return v, true, err
+					}
+				}
+			} else if b.local == name.Local && b.uri == name.URI {
+				return b.val, true, nil
+			}
 		}
 		if len(s.Vars) == 0 {
 			continue
@@ -947,10 +1135,10 @@ func (c *Context) lookupVarPlain(name xdm.QName) (xdm.Sequence, bool) {
 			key, keyed = name.Clark(), true
 		}
 		if v, ok := s.Vars[key]; ok {
-			return v, true
+			return v, true, nil
 		}
 	}
-	return nil, false
+	return nil, false, nil
 }
 
 // ContextNode returns the context item as a node, or an error when there is no

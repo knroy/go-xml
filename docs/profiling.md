@@ -60,25 +60,13 @@ takes 48–50 ms of every query except q10–q12.
 
 ## Open fixes
 
-Gains are measured on prototypes, A/B against `ef76ae2c`, unless marked
-*estimate*. Every prototype kept its workload outputs byte-identical. None
-was run against every conformance suite, so each fix needs the full suite
-gate before it lands. "API" is the effect on the exported v2 API.
-
-Ranked by benefit for the effort. V1–V11 come from the v2 profile, and V12
-onward are what earlier rounds left open.
+V1–V16, V18 and V19 have landed or were measured and rejected (below). What
+is left:
 
 | ID | Fix | Cause | Where | Gain | Risk | API |
 |---|---|---|---|---|---|---|
-
-| V4 | Evaluate global variables on first use, held in one map scope instead of a chain of about 950 single-variable scopes | DocBook declares about 946 globals per transform and reads about 75. Evaluating them all is 31% of DocBook's wall time | `xslt/runtime.go:863`, `:905`, `:1166`; `xpath/context.go:915` | DocBook a further −13% (−26% with V5/V7); the map scope alone −3.5% | Medium–high: errors must surface through the variable lookup, where the prototype panics. Four XSLT 3.0 cases (error-0610d, higher-order-functions-070, variable-0118, variable-0120) and one 2.0 case regress in the prototype | None |
-
-
-| V17 | Slot-indexed frames for local variables (Saxon's design) instead of the `WithVar` scope chain | `WithVar` plus runtime copies are about 24% of bytes on the slow DocBook items; `lookupVarPlain` is 2.5–4.5% of CPU | `xpath/context.go`, `xslt/runtime.go:339` | DocBook about −10 to −15% (*estimate*) | High effort: slots resolved at compile time across XPath and XSLT | Host variable binding through the context must keep working |
-
-The projections in [Where go-xml stands](#where-go-xml-stands) scale V1–V11
-onto the benchmark. V4 is the only fix there that moves DocBook from 0.37×
-to 0.27×.
+| V17 | Slot-indexed frames for local variables (Saxon's design) instead of the `WithVar` scope chain | After V4, on all 42 DocBook items, `WithVar` is 13.0% of bytes and 6.6% of allocations, the runtime copies `withVar` makes another 3.7% and 5.1%; `lookupVarPlain` is 2.4% of CPU. Of the `withVar` allocations, 30% are locals in a sequence constructor, 21% function parameters, 16% template parameters, 18% the grouping and regex clearing bindings a function call makes | `xpath/context.go`, `xslt/runtime.go:367` | Measured ceiling, not a gain: a frame prototype that binds all of one sequence constructor's locals in one allocation saved 0.5% of allocations and no CPU (most constructors bind one variable). Frames across a whole template or function, parameters included, would remove at most about 10% of allocations and 15% of bytes, so the −10 to −15% CPU estimate is the ceiling. The clearing bindings (18%) can be skipped when the component is already absent, without frames | High effort: XPath has no compile-time scope for XSLT locals, so slots need one threaded through `xpath.Compile`, for/let/quantified, inline functions and closures that capture a frame | Host variable binding through the context must keep working |
+| V20 | Skip the clearing bindings a stylesheet-function call makes for merge, grouping and regex context when that component is already absent | 18% of DocBook's remaining `withVar` allocations are these bindings (measured after V4) | `xslt/runtime.go`, function-call entry | Part of V17's ceiling without frames (*estimate*: up to about 2–3% of DocBook bytes) | Low | None |
 
 ## Landed in the v2 fix round
 
@@ -97,6 +85,7 @@ alternated runs (four for parse).
 | V5 | `462ee9a2` `NameTest.Matches` local name first; `35cd4d60` per-transform fields to `transformState` (runtime copy 176 → 112 B); `16f3d909` one focus context per predicate, behind a static capture check; `f2c08b2e` strip-space answer remembered per package and name (cap 4,096); `db7e1ba3` no position stamp on `next-iteration`/`break`; `40dbca21` `stripAnnotations` skips a never-typed tree (`Node.TreeHasTyping`) | XRechnung stage 1 −12% allocations, −10% CPU (focus reuse); stage 2 −9% CPU (untyped skip), −6% bytes; DocBook items −5% CPU and −8% bytes from the field move, −6% CPU and −6% allocations from the focus reuse; the strip pass 450 → 170 µs per DocBook document; an included `xsl:iterate` −10% per iteration; `Matches` −9% per call (within noise on the workloads) |
 | V7 | `23ace644` version-attribute walks remembered per Compile, off during the static phase; `be9eb58e` `FileResolver` remembers `EvalSymlinks` per path (cap 4,096; `os.Root` still confines at open) | DocBook compile −5% CPU from the walks, −7% CPU and −4% allocations from `EvalSymlinks` (32% → 6% of the compile profile on macOS); CEN compile −3.5% |
 | V11 | `63155c73` C14N appends to its own 64 KiB buffer instead of calling a `bufio.Writer` per token; `da27a7cd` the serializer's `element` has no defers (they forced the runtime's deferred-call path on every element) and calls `WriteString` directly | Against `257ade0d`, 3 alternated rounds: C14N 1 MB −9.6%, 10 MB −11.9% CPU (exclusive −10.8%, −10.5%); parse + C14N −3.7% at 1 and 10 MB; one allocation fewer, +16 KB buffer per call. Serializing a finished result: XMark q10 −22%, q2 −20%, XRechnung stage 2 −8%, DocBook −18%; allocations unchanged. No xdm API was added: a record walker measured slower than the accessors (see rejected) |
+| V4 | `7c5121ca` globals evaluated on first use, bound in one map scope (`xpath.Context.WithLazyVars`); `03adcab8` the errors and their wording stay those of eager evaluation: a global naming itself, reaching a cycle, mentioning `key(`, or with `xsl:message`, `xsl:assert`, `xsl:result-document` or `fn:trace` in its own body is still evaluated at the start, in declaration order. A/B against `257ade0d`, 5 rounds | All 42 DocBook items −9.7% CPU, −11.6% allocations; `ptoc.001`/`indexterm.001`/`chapter.003` −5.2%, −2.8%; XRechnung stage 1 −7.2%, −4.5%; stage 2 −2.4%, −0.3%; Peppol −5.5%, −3.5%; CEN and both compiles within noise. DocBook runs several transforms per document, with 300–950 globals each, and evaluates few of them. The prototype's −13% was against a base before V5, V7 and V13. Output differential: zero unexplained |
 | V13 | `e09f1060` the runtime holds its selection by pointer, allocated with the copy that selects it (runtime copy 112 → 64 B) | DocBook items −5.5% bytes, −3.8% CPU; XRechnung stage 2 −4.4% bytes, −2% CPU; allocation counts unchanged. Allocating the selection separately added 1.8% allocations and was dropped |
 | V14 | `a785e1a4` `xsl:sequence` and `xsl:copy-of` copy into an open element once, through `Builder.AppendCopyOf`; the namespace work of the old detached copy is done on the attached one. `copy-namespaces="no"` and the validating modes keep the detached copy | Copy micro case −49% CPU, −74% allocations; CEN −3.8% allocations, −6.1% bytes, −2.3% CPU; Peppol −2.2%, bytes −4.1%; DocBook −0.3%, bytes −0.7%; XRechnung unchanged (no such copies) |
 | V15 | `e62d96db` the parse-only `Tree` fields (external subset, source text, line index, offsets, foreign positions) behind `Tree.source`: `Tree` 424 → 320 B; `b22d90cc` `xsl:attribute` makes no node when strip or preserve leaves it untyped (that node was a fragment per attribute) | Tree: bytes CEN −1.3%, Peppol −0.8%, XRechnung 1 −1.6%, DocBook −0.6%. Attribute: XRechnung 1 −3.8% allocations, −5.6% bytes; CEN −2.0%, −4.3%; Peppol −1.4%, −3.3%. Both: XRechnung 1 bytes −7.1%, CEN −5.5%, Peppol −4.1%. CPU within noise. A smaller first chunk was measured and rejected |
@@ -160,14 +149,20 @@ Reopen one only if the reason no longer holds.
 
 ## Correctness
 
-None open. Every bug found while profiling has been fixed and is listed in
-[CHANGELOG.md](../CHANGELOG.md). The v2 profile found no new bug: XSD and
+One is open (below). Every other bug found while profiling has been fixed
+and is listed in [CHANGELOG.md](../CHANGELOG.md). The v2 profile found no new bug: XSD and
 RELAX NG verdicts and messages are identical to v1 (11/11 catalogs, 589/589
 RELAX NG documents), and every prototype kept its outputs byte-identical.
 
 One deliberate difference remains: inside `xsl:merge-action`, go-xml clears
 the current template rule as XSLT 3.0 §6.8 requires, while Saxon 12.10 still
 runs the next rule.
+
+**Open:** a function item that escapes a transform and is then called from
+several goroutines is not race-safe when it reaches per-transform runtime
+state other than global variables, such as the `key()` index (`keyIndex`):
+building an index entry writes a map another goroutine may read. Lazy global
+variables are safe in that situation (V4). This race predates v2's fix round.
 
 ## Method notes
 

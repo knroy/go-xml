@@ -298,6 +298,9 @@ func (i *tryInstr) selectCatch(name xdm.QName) (catchClause, bool) {
 // the transformation when nothing catches it — message-0501 wraps one in an
 // xsl:try and reads the code, description and value it carries.
 func catchable(err error) bool {
+	if isGlobalError(err) {
+		return false
+	}
 	code := xdm.ErrorCode(err)
 	if code == "" {
 		// An error with no code is one of this engine's own internal

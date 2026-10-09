@@ -2,8 +2,10 @@
 
 v2 changes the exported Go API. It does not change what a stylesheet, query
 or schema produces: results, error codes and serialized output stay the same,
-apart from the `generate-id` strings and the relative order of nodes from
-different trees, listed below. Every breaking change in the
+apart from the `generate-id` strings, the relative order of nodes from
+different trees, and the failure of an XSLT global variable nothing reads
+([no longer reported](#global-variables-are-evaluated-on-first-use)), listed
+below. Every breaking change in the
 v2 section of [CHANGELOG.md](../CHANGELOG.md) is covered here, each with code
 before and after.
 
@@ -14,7 +16,7 @@ existing name does. The exceptions are
 [validation](#validation-never-writes-to-your-tree),
 [`generate-id`](#generate-id-strings-change),
 [`StaticNamespaces`](#staticnamespaces-only-where-an-expression-reads-them),
-and that a tree is now
+[global variables](#global-variables-are-evaluated-on-first-use), and that a tree is now
 [built top-down](#trees-are-built-top-down-by-appending): an append to a node
 that is no longer being built panics at run time.
 
@@ -450,6 +452,37 @@ opts := xsd.Options{Resolver: &xsdnet.HTTPResolver{AllowHost: allow}}
 The `goxml_nohttp` build tag is gone. It existed to leave `HTTPResolver` and
 `net/http` out of a build; a program that does not import `xsdnet` now gets
 that without a tag.
+
+## Global variables are evaluated on first use
+
+An XSLT global variable or parameter is evaluated when a reference first
+needs it, not when the transform starts. A global nothing reads is not
+evaluated, so its failure is no longer reported; section 2.14 of XSLT 3.0
+allows this. What stays as it was:
+
+- A failure met through a reference is not caught by an `xsl:try` around the
+  reference (section 9.5), and its code and message are the ones eager
+  evaluation gave.
+- A required parameter left unset is `XTDE0050` at the start.
+- A global that names itself is `XPST0008` at the start, read or not. A
+  global that depends on a cycle, or calls `key()`, is evaluated at the start
+  too, so a circularity is `XTDE0640` naming the same global as before.
+- A global whose own `select` or content holds `xsl:message`, `xsl:assert`,
+  `xsl:result-document` or a call to `fn:trace` is evaluated at the start, so
+  its effect does not depend on whether anything reads it. One that reaches
+  such an instruction only through a function or template it calls is
+  evaluated on first use, as Saxon does.
+
+A host language can bind variables the same way through
+`xpath.Context.WithLazyVars` and `xpath.LazyVar`; an expression's reference
+reports the evaluation's error, while `Context.LookupVar` reports a failed
+one as unbound. A lazy variable is out of scope while its own evaluation
+runs, and `LazyVar.Unbind` takes one out of scope for good. Call
+`LazyVar.Share` before a value that can reach the scope, such as a function
+item, leaves the evaluating goroutine; from then on each variable is forced
+once under the scope's lock, from any goroutine. XSLT does this when a
+transform returns, so a function item in its result may be called
+concurrently.
 
 ## Not changed
 
