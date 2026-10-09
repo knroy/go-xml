@@ -89,7 +89,7 @@ func CompileWithOptions(doc *xdm.Node, opts Options) (*Schema, error) {
 	if err := checkStringSequences(p); err != nil {
 		return nil, err
 	}
-	return &Schema{start: p}, nil
+	return &Schema{start: addMemoPoints(p)}, nil
 }
 
 type compiler struct {

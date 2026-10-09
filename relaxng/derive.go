@@ -40,7 +40,7 @@ func choice(a, b pattern) pattern {
 // and the Left of the last.
 func inChoice(a, b pattern) bool {
 	for {
-		c, ok := a.(choicePat)
+		c, ok := unstatic(a).(choicePat)
 		if !ok {
 			return patEq(a, b)
 		}
@@ -56,6 +56,13 @@ func inChoice(a, b pattern) bool {
 // data, whose fields hold maps and slices, always compare unequal, and a
 // refPat is equal only to itself.
 func patEq(a, b pattern) bool {
+	// A static wrapper (memo.go) is compared as the subtree it holds. The
+	// same wrapper on both sides is that subtree twice, whose answer was
+	// worked out once when the wrapper was made.
+	if x, ok := a.(*refPat); ok && x.static != nil && a == b {
+		return x.static.selfEq
+	}
+	a, b = unstatic(a), unstatic(b)
 	switch x := a.(type) {
 	case choicePat:
 		y, ok := b.(choicePat)
@@ -144,6 +151,18 @@ func oneOrMore(p pattern) pattern {
 // by whatever must come once that element closes. That pairing is what lets
 // one recursion handle arbitrary nesting.
 func startTagOpenDeriv(p pattern, name xdm.QName) pattern {
+	if r, ok := p.(*refPat); ok {
+		if d, ok := r.open.Load(name); ok {
+			return d.(pattern)
+		}
+		d := startTagOpenDeriv(expand(r), name)
+		// ponytail: per-definition cap, not a global LRU; enough for any
+		// real vocabulary, and past it the derivative is simply recomputed.
+		if r.openN.Add(1) <= maxOpenMemo {
+			r.open.Store(name, d)
+		}
+		return d
+	}
 	switch t := expand(p).(type) {
 	case choicePat:
 		return choice(startTagOpenDeriv(t.Left, name), startTagOpenDeriv(t.Right, name))
@@ -177,6 +196,9 @@ func startTagOpenDeriv(p pattern, name xdm.QName) pattern {
 	}
 	return notAllowedPat{}
 }
+
+// maxOpenMemo bounds refPat.open per definition.
+const maxOpenMemo = 1024
 
 // expand resolves a refPat to the pattern it stands for.
 //
@@ -223,6 +245,12 @@ type attr struct {
 }
 
 func attDeriv(p pattern, a attr, ctx nsContext) pattern {
+	// A definition known to hold no attribute pattern (learnt by
+	// startTagCloseDerivCh, which stops at the same element boundary)
+	// derives to notAllowed for every attribute: every leaf does.
+	if r, ok := p.(*refPat); ok && r.attrFree.Load() {
+		return notAllowedPat{}
+	}
 	switch t := expand(p).(type) {
 	case afterPat:
 		return after(attDeriv(t.Left, a, ctx), t.Right)
@@ -267,6 +295,14 @@ func isNotAllowed(p pattern) bool {
 
 // textDeriv is the derivative with respect to a string of character data.
 func textDeriv(p pattern, s string, ctx nsContext) pattern {
+	if r, ok := p.(*refPat); ok && r.static != nil && r.static.dataFree {
+		if b := r.static.text.Load(); b != nil {
+			return b.p
+		}
+		d := textDeriv(r.cached, s, ctx)
+		r.static.text.Store(&patBox{p: d})
+		return d
+	}
 	switch t := expand(p).(type) {
 	case choicePat:
 		return choice(textDeriv(t.Left, s, ctx), textDeriv(t.Right, s, ctx))
@@ -347,6 +383,17 @@ func startTagCloseDerivCh(p pattern) (pattern, bool) {
 	if r, ok := p.(*refPat); ok {
 		if r.attrFree.Load() {
 			return p, false
+		}
+		if r.static != nil {
+			if b := r.static.close.Load(); b != nil {
+				return b.p, b.ch
+			}
+			q, ch := startTagCloseDerivCh(r.cached)
+			if !ch {
+				q = p
+			}
+			r.static.close.Store(&patBox{p: q, ch: ch})
+			return q, ch
 		}
 		q, ch := startTagCloseDerivCh(expand(r))
 		if !ch {
@@ -491,6 +538,10 @@ func patternSize(p pattern, limit int) int {
 		n += patternSize(t.Pattern, limit-n)
 	case listPat:
 		n += patternSize(t.Pattern, limit-n)
+	case *refPat:
+		if t.static != nil {
+			return int(t.static.size)
+		}
 	}
 	// An elementPat's and attributePat's content is not descended into: it is
 	// the schema's own structure, which is fixed, and only the derivative's

@@ -14,6 +14,7 @@
 package relaxng
 
 import (
+	"sync"
 	"sync/atomic"
 
 	"github.com/knroy/go-xml/xdm"
@@ -125,6 +126,34 @@ type refPat struct {
 	// unchanged. It depends only on the schema, so it is learnt once and
 	// shared by every validation.
 	attrFree atomic.Bool
+	// open memoises startTagOpenDeriv of the expansion by element name
+	// (xdm.QName -> pattern). The derivative of a schema pattern depends
+	// only on the pattern and the name, and patterns are immutable values,
+	// so the result is shared by every validation. openN caps the entries
+	// so that a document cannot grow it without bound by inventing names.
+	open  sync.Map
+	openN atomic.Int32
+	// static is set on a wrapper addMemoPoints put around a schema subtree;
+	// see memo.go. Nil for a definition reference.
+	static *staticInfo
+}
+
+// staticInfo is what is known of a static subtree once and for all.
+type staticInfo struct {
+	size     int32 // patternSize of the subtree
+	null     bool  // nullable
+	dataFree bool  // no valuePat, dataPat or listPat before an element
+	selfEq   bool  // patEq of the subtree with itself (false if it holds data)
+	// text memoises textDeriv when dataFree: with no datatype to consult the
+	// derivative does not depend on the string.
+	text atomic.Pointer[patBox]
+	// close memoises startTagCloseDerivCh, which depends on nothing else.
+	close atomic.Pointer[patBox]
+}
+
+type patBox struct {
+	p  pattern
+	ch bool
 }
 
 // get expands the reference.
@@ -165,6 +194,9 @@ func (afterPat) nullable() bool        { return false }
 // reading: the failure is reported when the schema is compiled, and by the
 // time a derivative is asking, refusing is right.
 func (r *refPat) nullable() bool {
+	if r.static != nil {
+		return r.static.null
+	}
 	p, err := r.get()
 	if err != nil {
 		return false
