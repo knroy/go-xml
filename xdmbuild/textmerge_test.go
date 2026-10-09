@@ -76,13 +76,13 @@ func TestAppendTextNotQuadratic(t *testing.T) {
 	// The merge must actually have happened, or the cost figure is measuring
 	// the wrong thing: n separate text children are cheap to build and would
 	// pass a budget that says nothing about concatenation.
-	kids := el.Open().Children
-	if len(kids) != 1 || kids[0].Kind != xdm.KindText {
+	open := el.Open()
+	if open.NumChildren() != 1 || open.FirstChild().Kind != xdm.KindText {
 		t.Fatalf("got %d children, want one text node: the pieces were not "+
-			"merged, so this test is not measuring the merge", len(kids))
+			"merged, so this test is not measuring the merge", open.NumChildren())
 	}
-	if want := n * len(piece); len(kids[0].Value) != want {
-		t.Fatalf("merged text is %d bytes, want %d", len(kids[0].Value), want)
+	if want := n * len(piece); len(open.FirstChild().Value) != want {
+		t.Fatalf("merged text is %d bytes, want %d", len(open.FirstChild().Value), want)
 	}
 
 	if used := m1.TotalAlloc - m0.TotalAlloc; used > limit {
@@ -221,7 +221,7 @@ func TestAppendTextSnapshotsAreStable(t *testing.T) {
 		el.AppendText("ab")
 		acc += "ab"
 		if i%97 == 0 {
-			snaps = append(snaps, el.Open().Children[0].Value)
+			snaps = append(snaps, el.Open().FirstChild().Value)
 			want = append(want, acc)
 		}
 	}

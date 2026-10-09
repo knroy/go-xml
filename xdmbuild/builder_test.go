@@ -76,12 +76,12 @@ func TestDuplicateAttributeLastWins(t *testing.T) {
 	_ = el.AddAttribute(qn("a"), "first")
 	_ = el.AddAttribute(qn("a"), "second")
 	root := b.ToTree()
-	got := root.Children[0].Attrs
-	if len(got) != 1 {
-		t.Fatalf("want 1 attribute, got %d", len(got))
+	got := root.FirstChild()
+	if got.NumAttrs() != 1 {
+		t.Fatalf("want 1 attribute, got %d", got.NumAttrs())
 	}
-	if got[0].Value != "second" {
-		t.Errorf("want the later value to win, got %q", got[0].Value)
+	if got.AttrAt(0).Value != "second" {
+		t.Errorf("want the later value to win, got %q", got.AttrAt(0).Value)
 	}
 }
 
@@ -129,7 +129,7 @@ func TestAtomicRunSpacing(t *testing.T) {
 		}
 		root := b.ToTree()
 		var sb strings.Builder
-		for _, ch := range root.Children[0].Children {
+		for _, ch := range root.FirstChild().Children {
 			sb.WriteString(ch.Value)
 		}
 		if got := sb.String(); got != c.want {
@@ -147,7 +147,7 @@ func TestTextAdjacentToAtomicHasNoSeparator(t *testing.T) {
 	el.AppendValue(xdm.NewString("a"))
 	root := b.ToTree()
 	var sb strings.Builder
-	for _, ch := range root.Children[0].Children {
+	for _, ch := range root.FirstChild().Children {
 		sb.WriteString(ch.Value)
 	}
 	if got := sb.String(); got != "xa" {

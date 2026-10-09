@@ -49,10 +49,10 @@ func attrBuiltWith(t *testing.T, add func(*xdmbuild.Builder) error) *xdm.Node {
 	if !ok || got.Kind != xdm.KindElement {
 		t.Fatalf("builder produced %T, want an element node", seq[0])
 	}
-	if len(got.Attrs) != 1 {
-		t.Fatalf("element carries %d attributes, want 1", len(got.Attrs))
+	if got.NumAttrs() != 1 {
+		t.Fatalf("element carries %d attributes, want 1", got.NumAttrs())
 	}
-	return got.Attrs[0]
+	return got.AttrAt(0)
 }
 
 // TestAddAttributeTypedAgreesWithTypedPath is the compatibility half. The same

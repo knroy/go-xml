@@ -22,13 +22,14 @@ import (
 // attributes, and on a descendant, since each is a separate construction site
 // inside DeepCopy and a field can be forgotten at any one of them.
 func TestDeepCopyPropagatesResolvedTyping(t *testing.T) {
-	src := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "e"}}
+	src := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
 	src.SetTypeAnnotationResolved("{urn:x}T", "decimal", "")
-	src.AddAttr(&xdm.Node{
-		Kind: xdm.KindAttribute, Name: xdm.QName{Local: "a"}, Value: "1 2",
-		TypeAnnotation: "{urn:x}L", DerivedPrimitive: "", ListItem: "integer",
-	})
-	kid := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "k"}}
+	src.AddAttr(func() *xdm.Node {
+		n := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: "a"}, "1 2")
+		n.ApplyTyping(xdm.Typing{TypeAnnotation: "{urn:x}L", DerivedPrimitive: "", ListItem: "integer"})
+		return n
+	}())
+	kid := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "k"}, "")
 	kid.SetTypeAnnotationResolved("{urn:x}K", "double", "")
 	src.AppendChild(kid)
 
@@ -38,13 +39,13 @@ func TestDeepCopyPropagatesResolvedTyping(t *testing.T) {
 		t.Errorf("element lost DerivedPrimitive: %q, want %q",
 			c.DerivedPrimitive, "decimal")
 	}
-	if got := c.Attrs[0].ListItem; got != "integer" {
+	if got := c.AttrAt(0).ListItem; got != "integer" {
 		t.Errorf("attribute lost ListItem: %q, want %q", got, "integer")
 	}
-	if got := c.Attrs[0].TypeAnnotation; got != "{urn:x}L" {
+	if got := c.AttrAt(0).TypeAnnotation; got != "{urn:x}L" {
 		t.Errorf("attribute lost TypeAnnotation: %q", got)
 	}
-	if got := c.Children[0].DerivedPrimitive; got != "double" {
+	if got := c.FirstChild().DerivedPrimitive; got != "double" {
 		t.Errorf("descendant lost DerivedPrimitive: %q, want %q", got, "double")
 	}
 }
@@ -56,8 +57,8 @@ func TestDeepCopyTypingBeatsTheRegistry(t *testing.T) {
 	const name = "{urn:copyprobe}T"
 	xdm.RegisterDerivedType(name, "decimal")
 
-	src := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "e"}}
-	src.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: "10"})
+	src := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
+	src.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, "10"))
 	src.SetTypeAnnotationResolved(name, "decimal", "")
 
 	c := DeepCopy(src)
@@ -83,8 +84,8 @@ func TestDeepCopyListTypingBeatsTheRegistry(t *testing.T) {
 	const name = "{urn:copyprobe}L"
 	xdm.RegisterListType(name, "decimal")
 
-	src := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "l"}}
-	src.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: "10 20"})
+	src := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "l"}, "")
+	src.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, "10 20"))
 	src.SetTypeAnnotationResolved(name, "", "decimal")
 
 	c := DeepCopy(src)
@@ -113,7 +114,7 @@ func TestDeepCopyListTypingBeatsTheRegistry(t *testing.T) {
 // would freeze whatever the registry happened to say at copy time into a node
 // that should keep consulting it.
 func TestDeepCopyOfUnresolvedNodeStaysUnresolved(t *testing.T) {
-	src := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "e"}}
+	src := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
 	src.SetTypeAnnotation("{urn:x}Unresolved")
 
 	c := DeepCopy(src)
@@ -135,8 +136,8 @@ func TestDeepCopyOfUnresolvedNodeStaysUnresolved(t *testing.T) {
 // compared three NMTOKENs against the whole string and answered false, on a
 // result tree that had been correctly stripped.
 func TestClearedAnnotationDropsResolvedTyping(t *testing.T) {
-	n := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "lb"}}
-	n.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: "one two three"})
+	n := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "lb"}, "")
+	n.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, "one two three"))
 	n.SetTypeAnnotationResolved("NMTOKENS", "anySimpleType", "NMTOKEN")
 
 	if got := len(xdm.Atomize(xdm.One(n))); got != 3 {
@@ -157,9 +158,9 @@ func TestClearedAnnotationDropsResolvedTyping(t *testing.T) {
 	// Even a node whose fields were set behind the setter's back must not
 	// atomise as a list while carrying no annotation, since a copy built by a
 	// struct literal elsewhere can reach that state.
-	m := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "lb"},
-		ListItem: "NMTOKEN"}
-	m.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: "one two three"})
+	m := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "lb"}, "")
+	m.ApplyTyping(xdm.Typing{ListItem: "NMTOKEN"})
+	m.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, "one two three"))
 	if got := len(xdm.Atomize(xdm.One(m))); got != 1 {
 		t.Errorf("a node with no annotation but a stray ListItem atomised to "+
 			"%d items, want 1", got)

@@ -16,12 +16,8 @@ import (
 // Stripping is done by the validation spec, which is the thing that knows
 // whether the instruction asked for it.
 func DeepCopy(n *xdm.Node) *xdm.Node {
-	c := &xdm.Node{
-		Kind:    n.Kind,
-		Name:    n.Name,
-		Value:   n.Value,
-		BaseURI: n.BaseURI,
-	}
+	c := xdm.NewNode(n.Kind, n.Name, n.Value)
+	c.SetBaseURI(n.BaseURI)
 	// Every PSVI property travels, which is what "the copy is the same node"
 	// means. dm:nilled included: a copy of an assessed element is an element
 	// that was assessed — validation-1202 copies a nilled element with
@@ -36,7 +32,7 @@ func DeepCopy(n *xdm.Node) *xdm.Node {
 		c.AddNamespace(ns.Name.Local, ns.Value)
 	}
 	for _, a := range n.Attrs {
-		ac := &xdm.Node{Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value}
+		ac := xdm.NewNode(xdm.KindAttribute, a.Name, a.Value)
 		ac.CopyTypingFrom(a)
 		c.AddAttr(ac)
 	}

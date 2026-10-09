@@ -31,7 +31,7 @@ func TestAppendTextAssertionFires(t *testing.T) {
 
 	// Desynchronise the accumulator from the node, as an outside writer of
 	// the exported Value field would.
-	el.open.Children[0].Value = "tampered"
+	el.open.FirstChild().SetValue("tampered")
 
 	defer func() {
 		r := recover()
