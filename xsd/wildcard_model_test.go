@@ -912,3 +912,32 @@ func TestUPACompetitionExamples(t *testing.T) {
 		})
 	}
 }
+
+// TestWildcardDoesNotPreemptElementReadings: in a repeated choice of xs:any
+// and an element declaration, the wildcard is tried first in position order.
+// Its count readings must not be installed before the element is tried: the
+// element declaration takes precedence (XSD 1.1 §3.8.4.2, §3.10.6.2), and
+// stepping it from the wildcard's readings exhausted the repetition bound, so
+// the second <a> fell to the skip wildcard and its type was never checked.
+// The verdicts are Xerces-J 2.12.2's.
+func TestWildcardDoesNotPreemptElementReadings(t *testing.T) {
+	s := load11(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="r"><xs:complexType>
+    <xs:sequence minOccurs="2" maxOccurs="2"><xs:choice>
+      <xs:any processContents="skip"/>
+      <xs:element name="a" type="xs:int"/>
+    </xs:choice></xs:sequence>
+  </xs:complexType></xs:element>
+</xs:schema>`)
+	for _, doc := range []string{`<r><a>1</a><a>x</a></r>`, `<r><a>x</a><a>1</a></r>`} {
+		err := check11(t, s, doc)
+		if err == nil || !strings.Contains(err.Error(), "cvc-datatype-valid") {
+			t.Errorf("%s: want cvc-datatype-valid, got %v", doc, err)
+		}
+	}
+	for _, doc := range []string{`<r><a>1</a><b>x</b></r>`, `<r><b/><a>2</a></r>`, `<r><a>1</a><a>2</a></r>`} {
+		if err := check11(t, s, doc); err != nil {
+			t.Errorf("%s: want valid, got %v", doc, err)
+		}
+	}
+}

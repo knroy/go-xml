@@ -1306,7 +1306,7 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 	// them and costing an allocation per element.
 	nested := len(m.counters) > 0
 	var counts, reach []int
-	var vectors, stepped [][]int
+	var vectors, stepped, wildStepped [][]int
 	if nested {
 		counts = make([]int, len(m.counters))
 		reach = reachable(m, len(kids))
@@ -1398,11 +1398,16 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 				// remaining ambiguity is only ever between an
 				// element and a wildcard, which is the case
 				// erratum E1-29 leaves to the processor.
+				//
+				// So the wildcard's readings are set aside, not
+				// installed: the element positions after it must
+				// still step from the readings this child began
+				// with (XSD 1.1 §3.8.4.2 and §3.10.6.2: an element
+				// declaration takes precedence over a wildcard).
 				if next < 0 {
 					next = idx
-					if nested && !keep() {
-						v.fail(el, "", "%v", errMatchStates)
-						return tables
+					if nested {
+						stepped, wildStepped = wildStepped, stepped
 					}
 				}
 				continue
@@ -1413,6 +1418,17 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 				return tables
 			}
 			break
+		}
+		if next >= 0 && nested {
+			if _, isWildcard := m.positions[next].term.(*Wildcard); isWildcard {
+				// No element position took the child: the
+				// wildcard's readings are the ones to carry.
+				stepped, wildStepped = wildStepped, stepped[:0]
+				if !keep() {
+					v.fail(el, "", "%v", errMatchStates)
+					return tables
+				}
+			}
 		}
 		if next < 0 {
 			// XSD 1.1 open content: an element the model does not
