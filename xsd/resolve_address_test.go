@@ -1,3 +1,5 @@
+//go:build !goxml_nohttp
+
 package xsd
 
 import (
