@@ -438,9 +438,13 @@ type serializer struct {
 	// content-type meta but serialises as XML: an XML declaration, and empty
 	// elements closed rather than left open.
 	xhtml bool
-	// inHead marks that serialisation is inside <head>, where a duplicate
+	// inHead marks that serialisation is inside a <head> that received the
+	// method's own content-type meta, where the stylesheet's duplicate
 	// charset meta is suppressed.
 	inHead bool
+	// skipIndent drops the indent before the node being written: it sits
+	// next to an inline HTML element (see htmlInline).
+	skipIndent bool
 	// rawText marks that serialisation is inside an HTML element whose
 	// content is CDATA rather than parsed character data. rawTextName is
 	// which one, so that the error naming it can say so.
@@ -922,11 +926,15 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// constructor puts it in none -- and ask to see the content-type meta.
 	if s.html && strings.EqualFold(n.Name.Local, "head") &&
 		(!s.xhtml || n.Name.URI == nsXHTML || n.Name.URI == "") {
-		s.inHead = true
-		defer func() { s.inHead = false }()
 		// include-content-type="no" suppresses the meta element. It defaults
 		// to yes, which is why an absent attribute is nil rather than false.
 		if s.opts.IncludeContentType == nil || *s.opts.IncludeContentType {
+			// Serialization 3.1 §7.4.13 and §6.1.14 discard the head's own
+			// content-type meta only "if a meta element has been added", so
+			// the suppression is armed here and nowhere else: under
+			// include-content-type="no" the head keeps the meta it was given.
+			s.inHead = true
+			defer func() { s.inHead = false }()
 			enc := s.opts.Encoding
 			if enc == "" {
 				enc = "UTF-8"
@@ -1029,14 +1037,26 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	if indentChildren && s.html && !s.xhtml && hasCommentOrPIChild(n) {
 		indentChildren = false
 	}
+	// Serialization 3.1 §7.4.3 (html) and §6.1.4 (xhtml): whitespace "MUST
+	// NOT be added or removed adjacent to an inline element". So no indent
+	// goes before an inline child or before the child after one. The
+	// boundaries inside an element follow Saxon, which the spec permits: an
+	// indent may follow the start tag of an inline element, but none goes
+	// before its end tag or before an end tag that follows an inline child.
+	prevInline := false
 	for _, c := range n.Children {
-		if indentChildren {
-			s.node(c, depth+1)
-		} else {
+		if !indentChildren {
 			s.nodeNoIndent(c)
+			continue
 		}
+		cInline := s.htmlInline(c)
+		s.skipIndent = prevInline || cInline
+		s.node(c, depth+1)
+		s.skipIndent = false
+		prevInline = cInline
 	}
-	if indentChildren || (emptyHead && s.opts.Indent) {
+	if (indentChildren && !prevInline && !s.htmlInline(n)) ||
+		(emptyHead && s.opts.Indent) {
 		s.indent(depth)
 	}
 	s.writeString("</" + name + ">")
@@ -1109,7 +1129,62 @@ func (s *serializer) indent(depth int) {
 		s.atTop = false
 		return
 	}
+	if s.skipIndent {
+		s.skipIndent = false
+		return
+	}
 	s.writeString("\n" + strings.Repeat("  ", depth))
+}
+
+// htmlInline reports whether n is an inline element in the sense of
+// Serialization 3.1 §7.4.3 and §6.1.4: one the method treats as HTML whose
+// name is in htmlInlineNames. The html method treats an element as HTML when
+// htmlNativeElement says so, and matches its name without regard to case; the
+// xhtml method when it is in the XHTML namespace, or in none under HTML5.
+// ponytail: area, link and meta, phrasing only in some positions, are left
+// out.
+func (s *serializer) htmlInline(n *xdm.Node) bool {
+	if n.Kind != xdm.KindElement {
+		return false
+	}
+	local := n.Name.Local
+	switch {
+	case s.xhtml:
+		if n.Name.URI != nsXHTML && !(s.html5 && n.Name.URI == "") {
+			return false
+		}
+		if n.Name.URI == "" {
+			local = strings.ToLower(local)
+		}
+	case s.htmlNativeElement(n):
+		local = strings.ToLower(local)
+	default:
+		return false
+	}
+	return htmlInlineNames[local]
+}
+
+// htmlInlineNames is the union §7.4.3 names: the HTML 4.01 %inline elements
+// (%fontstyle, %phrase, %special, %formctrl) and HTML5's phrasing content.
+var htmlInlineNames = map[string]bool{
+	// HTML 4.01 %inline.
+	"tt": true, "i": true, "b": true, "u": true, "s": true, "strike": true,
+	"big": true, "small": true, "em": true, "strong": true, "dfn": true,
+	"code": true, "samp": true, "kbd": true, "var": true, "cite": true,
+	"abbr": true, "acronym": true, "a": true, "img": true, "applet": true,
+	"object": true, "font": true, "basefont": true, "br": true,
+	"script": true, "map": true, "q": true, "sub": true, "sup": true,
+	"span": true, "bdo": true, "iframe": true, "input": true, "select": true,
+	"textarea": true, "label": true, "button": true,
+	// ins and del are inline only without element children; Saxon treats
+	// them as inline always, which only withholds whitespace the spec permits.
+	"ins": true, "del": true,
+	// HTML5 phrasing content not already listed.
+	"audio": true, "bdi": true, "canvas": true, "data": true,
+	"datalist": true, "embed": true, "mark": true, "math": true,
+	"meter": true, "noscript": true, "output": true, "picture": true,
+	"progress": true, "ruby": true, "slot": true, "svg": true,
+	"template": true, "time": true, "video": true, "wbr": true,
 }
 
 // suppressed reports whether an element's content is written with no added

@@ -581,16 +581,19 @@ func undeclareInherited(el *xdm.Node) {
 // fixupNamespaces declares on el whatever its own name and its attribute names
 // need and cannot already see, which is the part of §5.8.3 that applies to an
 // element whose declarations have just been taken away.
+//
+// Bindings are read live with scopeURI rather than from a map of the whole
+// scope built per element: a literal result element usually needs nothing, and
+// the map cost an allocation per element for it. Read live, a binding added
+// here is seen by the next test without being recorded twice.
 func fixupNamespaces(el *xdm.Node) {
-	scope := el.InScopeNamespaces()
 	need := func(prefix, uri string) {
-		if uri == "" || uri == xdm.NSXML || scope[prefix] == uri {
+		if uri == "" || uri == xdm.NSXML || scopeURI(el, prefix) == uri {
 			return
 		}
 		el.AddNamespace(prefix, uri)
-		scope[prefix] = uri
 	}
-	if el.Name.URI == "" && el.Name.Prefix == "" && scope[""] != "" {
+	if el.Name.URI == "" && el.Name.Prefix == "" && scopeURI(el, "") != "" {
 		// An unprefixed name in no namespace UNDECLARES the default
 		// namespace when one is in scope: without the undeclaration the name
 		// would read as being in whatever the parent declares. This is the
@@ -598,7 +601,6 @@ func fixupNamespaces(el *xdm.Node) {
 		// a copy that lands under a parent declaring a default -- copy-1220
 		// grafts elements in no namespace into a <doc xmlns="...">.
 		el.AddNamespace("", "")
-		scope[""] = ""
 	}
 	need(el.Name.Prefix, el.Name.URI)
 	for _, a := range el.Attrs {
@@ -609,6 +611,28 @@ func fixupNamespaces(el *xdm.Node) {
 			need(a.Name.Prefix, a.Name.URI)
 		}
 	}
+}
+
+// scopeURI is n.InScopeNamespaces()[prefix] without building the map: the
+// innermost element that binds prefix decides, and within one element the
+// last declaration does, as the map's overwrites resolve it. An undeclaration
+// reads as "", as the map's delete does. (xdm's LookupPrefix takes the first
+// declaration on an element, which is why it is not used here.)
+func scopeURI(n *xdm.Node, prefix string) string {
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.Kind != xdm.KindElement {
+			continue
+		}
+		for i := len(cur.Namespaces) - 1; i >= 0; i-- {
+			if ns := cur.Namespaces[i]; ns.Name.Local == prefix {
+				return ns.Value
+			}
+		}
+	}
+	if prefix == "xml" {
+		return xdm.NSXML
+	}
+	return ""
 }
 
 // copyNamespacesTo adds every namespace node in scope on src to the element
