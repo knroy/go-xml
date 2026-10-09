@@ -2175,17 +2175,29 @@ func (p *parser) checkGroupCycles() {
 	// complex type can only be part of a cycle by way of a <group ref>, and
 	// that ref points at a named definition, which is a root already.
 	//
-	// done is shared across every root. A group proven acyclic while checking
-	// one definition is still acyclic while checking the next, and sharing it
-	// is what makes the whole pass linear in the graph rather than linear per
-	// root. It is safe to share precisely because it records a property of the
-	// group and not of the route taken to it.
-	done := map[*ModelGroup]bool{}
-	for _, def := range p.schema.ModelGroups {
-		if def == nil || def.Group == nil {
-			continue
+	// The definitions are reported in sorted name order, as
+	// checkTypeBaseCycles does, so the errors do not reorder between runs.
+	names := make([]xdm.QName, 0, len(p.schema.ModelGroups))
+	for name := range p.schema.ModelGroups {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if names[i].URI != names[j].URI {
+			return names[i].URI < names[j].URI
 		}
-		if cycleFrom(def.Group, map[*ModelGroup]bool{}, done) {
+		return names[i].Local < names[j].Local
+	})
+	st := &groupSCC{index: map[*ModelGroup]int{}, low: map[*ModelGroup]int{},
+		onStack: map[*ModelGroup]bool{}, circular: map[*ModelGroup]bool{}}
+	for _, name := range names {
+		if def := p.schema.ModelGroups[name]; def != nil && def.Group != nil &&
+			st.index[def.Group] == 0 {
+			cycleFrom(def.Group, st)
+		}
+	}
+	for _, name := range names {
+		def := p.schema.ModelGroups[name]
+		if def != nil && def.Group != nil && st.circular[def.Group] {
 			p.errs = append(p.errs, &ParseError{
 				Code: "mg-props-correct.2",
 				Message: fmt.Sprintf(
@@ -2196,52 +2208,69 @@ func (p *parser) checkGroupCycles() {
 	}
 }
 
-// cycleFrom reports whether g reaches itself through the particle tree.
-//
-// path holds the groups on the current descent and done holds those already
-// explored to the bottom without finding a cycle — grey and black in the
-// textbook three-colour depth-first search.
-//
-// Both sets are needed, and the reason the second one is easy to get wrong is
-// worth stating. A group legitimately reachable by two disjoint routes is not
-// a cycle, so a single "visited" set is wrong: marking a group seen on the
-// first route would either miss a real cycle on the second or report one that
-// is not there. That objection is sound, and it is an objection to two-colour
-// marking rather than to memoisation. A group already explored to the bottom
-// has had every path below it examined; whether the current route reaches it
-// again changes nothing about what lies underneath, so it can be pruned. Only
-// a group on the *current* descent is a back edge, and path still says so.
-//
-// Without done this is exponential in the number of distinct root-to-leaf
-// paths, not in the graph. A group referencing the next one twice, for 29
-// definitions in a 3.0 KB schema, is acyclic and valid and took 35.8 seconds
-// to load; a profile put 86% of that here. It is linear now — the same shape
-// at 10,000 groups costs 2.2 ms. Differential-tested against the previous form
-// over 5,000 random group graphs rooted at every node, cyclic and acyclic
-// alike: no disagreement.
-func cycleFrom(g *ModelGroup, path, done map[*ModelGroup]bool) bool {
-	if path[g] {
-		return true
-	}
-	if done[g] {
-		return false
-	}
-	countGroupCycleStep()
-	path[g] = true
-	defer func() {
-		delete(path, g)
-		done[g] = true
-	}()
+// groupSCC is the state of Tarjan's strongly-connected-components search
+// over the group graph: index and low are the discovery and low-link
+// numbers (zero meaning unvisited), and circular collects every group that
+// lies on a cycle.
+type groupSCC struct {
+	index, low map[*ModelGroup]int
+	onStack    map[*ModelGroup]bool
+	stack      []*ModelGroup
+	circular   map[*ModelGroup]bool
+}
 
+// cycleFrom runs Tarjan's strong-connect from g, marking in st.circular
+// every group that reaches itself: one in a component of two or more
+// groups, or one that is its own direct particle.
+//
+// A group is circular only if it lies on a cycle. Asking instead whether a
+// cycle is reachable from it names a group C that merely refers into an
+// A <-> B cycle, and with a memo shared across roots which of C, A and B got
+// named depended on the order the roots were visited in.
+//
+// Each group is expanded once, so the pass is linear in the graph. A
+// path-walking search is exponential in the number of distinct root-to-leaf
+// paths: a group referencing the next one twice, for 29 definitions in a
+// 3.0 KB schema, is acyclic and valid and took 35.8 seconds to load.
+func cycleFrom(g *ModelGroup, st *groupSCC) {
+	countGroupCycleStep()
+	n := len(st.index) + 1
+	st.index[g], st.low[g] = n, n
+	st.stack = append(st.stack, g)
+	st.onStack[g] = true
 	for _, part := range g.Particles {
 		if part == nil {
 			continue
 		}
-		if inner, ok := part.Term.(*ModelGroup); ok && cycleFrom(inner, path, done) {
-			return true
+		inner, ok := part.Term.(*ModelGroup)
+		if !ok {
+			continue
+		}
+		switch {
+		case inner == g:
+			st.circular[g] = true
+		case st.index[inner] == 0:
+			cycleFrom(inner, st)
+			st.low[g] = min(st.low[g], st.low[inner])
+		case st.onStack[inner]:
+			st.low[g] = min(st.low[g], st.index[inner])
 		}
 	}
-	return false
+	if st.low[g] != st.index[g] {
+		return
+	}
+	i := len(st.stack) - 1
+	for st.stack[i] != g {
+		i--
+	}
+	comp := st.stack[i:]
+	st.stack = st.stack[:i]
+	for _, m := range comp {
+		st.onStack[m] = false
+		if len(comp) > 1 {
+			st.circular[m] = true
+		}
+	}
 }
 
 // checkElementRefExclusions enforces src-element.2.2 (§3.3.3): when a local
