@@ -78,13 +78,13 @@ func (b *builder) finish(n *xdm.Node) *xdm.Node {
 // belongs to.
 func (b *builder) adopt(n *xdm.Node) {
 	for _, a := range n.Attrs {
-		xdmbuild.SetParent(a, n)
+		a.SetParent(n)
 	}
 	for _, ns := range n.Namespaces {
-		xdmbuild.SetParent(ns, n)
+		ns.SetParent(n)
 	}
 	for _, c := range n.Children {
-		xdmbuild.SetParent(c, n)
+		c.SetParent(n)
 		b.adopt(c)
 	}
 }

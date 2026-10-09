@@ -12,15 +12,12 @@ import (
 // the parameter the "<" is written as &lt;, with it the run is wrapped in a
 // CDATA section instead.
 func cdataTree(local, uri, prefix string) *xdm.Node {
-	root := &xdm.Node{
-		Kind: xdm.KindElement,
-		Name: xdm.QName{Prefix: prefix, URI: uri, Local: local},
-	}
-	root.Children = []*xdm.Node{{
-		Kind:   xdm.KindText,
-		Value:  "x<y",
-		Parent: root,
-	}}
+	root := xdm.NewNode(xdm.KindElement, xdm.QName{Prefix: prefix, URI: uri, Local: local}, "")
+	root.SetChildren([]*xdm.Node{func() *xdm.Node {
+		n := xdm.NewNode(xdm.KindText, xdm.QName{}, "x<y")
+		n.SetParent(root)
+		return n
+	}()})
 	return root
 }
 
@@ -110,12 +107,11 @@ func TestSerializeParamElementCdataMatchesMapForm(t *testing.T) {
 func TestSerializeParamElementCdataResolvesPrefix(t *testing.T) {
 	const ns = "http://example.com/n"
 	params := paramsElement(map[string]string{"cdata-section-elements": "e:a"})
-	params.Namespaces = []*xdm.Node{{
-		Kind:   xdm.KindNamespace,
-		Name:   xdm.QName{Local: "e"},
-		Value:  ns,
-		Parent: params,
-	}}
+	params.SetNamespaceDecls([]*xdm.Node{func() *xdm.Node {
+		n := xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: "e"}, ns)
+		n.SetParent(params)
+		return n
+	}()})
 
 	ctx := NewContext(nil, Builtins())
 	ctx.Version, ctx.LibraryVersion = XPath31, XPath31

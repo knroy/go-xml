@@ -137,7 +137,8 @@ func TestDeepChainNodeTypeMatches(t *testing.T) {
 	for _, n := range annotationChainDepths {
 		ns := chainNS("node", n)
 		top := registerChain(ns, "integer", n)
-		node := &xdm.Node{Kind: xdm.KindElement, TypeAnnotation: top}
+		node := xdm.NewNode(xdm.KindElement, xdm.QName{}, "")
+		node.ApplyTyping(xdm.Typing{TypeAnnotation: top})
 
 		// Its own type, an ancestor in the chain, and the built-ins above it.
 		for _, want := range []string{
@@ -166,7 +167,8 @@ func TestDeepChainDeclaredTypeMatches(t *testing.T) {
 	for _, n := range annotationChainDepths {
 		ns := chainNS("declared", n)
 		top := registerChain(ns, "integer", n)
-		node := &xdm.Node{Kind: xdm.KindElement, TypeAnnotation: top}
+		node := xdm.NewNode(xdm.KindElement, xdm.QName{}, "")
+		node.ApplyTyping(xdm.Typing{TypeAnnotation: top})
 
 		for _, want := range []string{
 			"T1",
@@ -207,7 +209,8 @@ func TestCyclicAnnotationChainTerminates(t *testing.T) {
 		xdm.RegisterDerivedType(names[1], names[n])
 
 		top := names[n]
-		node := &xdm.Node{Kind: xdm.KindElement, TypeAnnotation: top}
+		node := xdm.NewNode(xdm.KindElement, xdm.QName{}, "")
+		node.ApplyTyping(xdm.Typing{TypeAnnotation: top})
 
 		// Nothing in the ring is grounded in a built-in, so every one of these
 		// is a question the ring cannot answer yes to. The requirement is that

@@ -130,7 +130,7 @@ func TestRelativePathStartsWithoutBoxing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := tree.Root.Children[0].Children[0]
+	a := tree.Root.FirstChild().FirstChild()
 	ctx := NewContext(a, Builtins())
 	e := MustCompile("b", nil).expr.(*PathExpr)
 	if got, err := e.Eval(ctx); err != nil || len(got) != 3 {

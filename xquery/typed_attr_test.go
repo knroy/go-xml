@@ -28,8 +28,7 @@ func TestConstructedAttributeKeepsResolvedTyping(t *testing.T) {
 
 	// An attribute as a validator would leave it: a list type whose item type
 	// the schema resolved to xs:decimal, recorded on the node.
-	src := &xdm.Node{Kind: xdm.KindAttribute,
-		Name: xdm.QName{Local: "a"}, Value: "10 20"}
+	src := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: "a"}, "10 20")
 	src.ApplyTyping(xdm.Typing{
 		TypeAnnotation:   xdm.AnnotationName(ns, "L"),
 		DerivedPrimitive: "anySimpleType",
@@ -54,11 +53,11 @@ func TestConstructedAttributeKeepsResolvedTyping(t *testing.T) {
 	if !ok || el.Kind != xdm.KindElement {
 		t.Fatalf("query produced %T, want an element", seq[0])
 	}
-	if len(el.Attrs) != 1 {
+	if el.NumAttrs() != 1 {
 		t.Fatalf("constructed element carries %d attributes, want 1",
-			len(el.Attrs))
+			el.NumAttrs())
 	}
-	got := el.Attrs[0]
+	got := el.AttrAt(0)
 
 	if want := xdm.TypingOf(src); xdm.TypingOf(got) != want {
 		t.Fatalf("constructed attribute carries %+v, want %+v",

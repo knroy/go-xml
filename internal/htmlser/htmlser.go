@@ -65,13 +65,13 @@ var inlineNames = map[string]bool{
 // element follow Saxon, which the spec permits: an indent may follow the start
 // tag of an inline element, but none goes before its end tag.
 func SkipIndentBefore(n *xdm.Node, i int, xhtml, html5 bool) bool {
-	if i > 0 && Inline(n.Children[i-1], xhtml, html5) {
+	if i > 0 && Inline(n.ChildAt(i-1), xhtml, html5) {
 		return true
 	}
-	if i == len(n.Children) {
+	if i == n.NumChildren() {
 		return Inline(n, xhtml, html5)
 	}
-	return Inline(n.Children[i], xhtml, html5)
+	return Inline(n.ChildAt(i), xhtml, html5)
 }
 
 // ReplacedMeta reports whether n is a meta element the html and xhtml methods

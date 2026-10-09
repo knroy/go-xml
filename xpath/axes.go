@@ -59,12 +59,8 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 		}
 		sort.Strings(prefixes)
 		for i, prefix := range prefixes {
-			ns := &xdm.Node{
-				Kind:   xdm.KindNamespace,
-				Name:   xdm.QName{Local: prefix},
-				Value:  scope[prefix],
-				Parent: n,
-			}
+			ns := xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: prefix}, scope[prefix])
+			ns.SetParent(n)
 			// A synthesized node has no document order of its own, and left
 			// at zero it sorts before every real node and makes
 			// generate-id() answer "N0" for all of them — colliding with
@@ -107,18 +103,21 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 		}
 
 	case AxisFollowingSibling:
-		sibs, i := siblingsOf(n)
-		for j := i + 1; j < len(sibs); j++ {
-			if !visit(sibs[j]) {
+		p, i := siblingsOf(n)
+		if i < 0 {
+			return
+		}
+		for j := i + 1; j < p.NumChildren(); j++ {
+			if !visit(p.ChildAt(j)) {
 				return
 			}
 		}
 
 	case AxisPrecedingSibling:
 		// Reverse axis: nearest sibling first.
-		sibs, i := siblingsOf(n)
+		p, i := siblingsOf(n)
 		for j := i - 1; j >= 0; j-- {
-			if !visit(sibs[j]) {
+			if !visit(p.ChildAt(j)) {
 				return
 			}
 		}
@@ -157,23 +156,23 @@ func appendNamedDescendants(out xdm.Sequence, n *xdm.Node, t *NameTest) xdm.Sequ
 		if (t.AnyURI || c.Name.URI == t.Name.URI) && (t.AnyLocal || c.Name.Local == t.Name.Local) {
 			out = append(out, c)
 		}
-		if len(c.Children) > 0 {
+		if c.NumChildren() > 0 {
 			out = appendNamedDescendants(out, c, t)
 		}
 	}
 	return out
 }
 
-// siblingsOf returns the parent's children and n's index within them.
-// Attributes have no siblings on the sibling axes, per the spec.
-func siblingsOf(n *xdm.Node) ([]*xdm.Node, int) {
+// siblingsOf returns n's parent and n's index among its children, or nil and
+// -1. Attributes have no siblings on the sibling axes, per the spec.
+func siblingsOf(n *xdm.Node) (*xdm.Node, int) {
 	if n.Parent == nil || n.Kind == xdm.KindAttribute || n.Kind == xdm.KindNamespace {
 		return nil, -1
 	}
-	sibs := n.Parent.Children
-	for i, s := range sibs {
-		if s == n {
-			return sibs, i
+	p := n.Parent
+	for i := range p.NumChildren() {
+		if p.ChildAt(i) == n {
+			return p, i
 		}
 	}
 	return nil, -1
@@ -197,15 +196,15 @@ func walkFollowing(n *xdm.Node, visit func(*xdm.Node) bool) {
 		}
 	}
 	for cur := n; cur != nil; cur = cur.Parent {
-		sibs, i := siblingsOf(cur)
+		p, i := siblingsOf(cur)
 		if i < 0 {
 			continue
 		}
-		for j := i + 1; j < len(sibs); j++ {
-			if !visit(sibs[j]) {
+		for j := i + 1; j < p.NumChildren(); j++ {
+			if !visit(p.ChildAt(j)) {
 				return
 			}
-			if !walkDescendants(sibs[j], visit) {
+			if !walkDescendants(p.ChildAt(j), visit) {
 				return
 			}
 		}
@@ -217,12 +216,12 @@ func walkFollowing(n *xdm.Node, visit func(*xdm.Node) bool) {
 // each preceding sibling's subtree the deepest, last node comes first.
 func walkPreceding(n *xdm.Node, visit func(*xdm.Node) bool) {
 	for cur := n; cur != nil; cur = cur.Parent {
-		sibs, i := siblingsOf(cur)
+		p, i := siblingsOf(cur)
 		if i < 0 {
 			continue
 		}
 		for j := i - 1; j >= 0; j-- {
-			if !walkSubtreeReverse(sibs[j], visit) {
+			if !walkSubtreeReverse(p.ChildAt(j), visit) {
 				return
 			}
 		}
@@ -231,8 +230,8 @@ func walkPreceding(n *xdm.Node, visit func(*xdm.Node) bool) {
 
 // walkSubtreeReverse visits a subtree in reverse document order.
 func walkSubtreeReverse(n *xdm.Node, visit func(*xdm.Node) bool) bool {
-	for i := len(n.Children) - 1; i >= 0; i-- {
-		if !walkSubtreeReverse(n.Children[i], visit) {
+	for i := n.NumChildren() - 1; i >= 0; i-- {
+		if !walkSubtreeReverse(n.ChildAt(i), visit) {
 			return false
 		}
 	}

@@ -562,7 +562,7 @@ func (c *canon) inherit(e *xdm.Node) {
 	for a := e.Parent; a != nil && a.Kind == xdm.KindElement; a = a.Parent {
 		for _, at := range a.Attrs {
 			if at.Name.URI != xdm.NSXML || !c.inheritable(at.Name.Local) ||
-				hasXMLAttr(e.Attrs, at.Name.Local) || hasXMLAttr(c.attrs, at.Name.Local) {
+				e.Attr(xdm.NSXML, at.Name.Local) != nil || hasXMLAttr(c.attrs, at.Name.Local) {
 				continue
 			}
 			c.attrs = append(c.attrs, at)
@@ -622,11 +622,7 @@ func (c *canon) fixBase(e *xdm.Node) {
 		return a.Name.URI == xdm.NSXML && a.Name.Local == "base"
 	})
 	if v != "" {
-		c.attrs = append(c.attrs, &xdm.Node{
-			Kind:  xdm.KindAttribute,
-			Name:  xdm.QName{Prefix: "xml", Local: "base", URI: xdm.NSXML},
-			Value: v,
-		})
+		c.attrs = append(c.attrs, xdm.NewNode(xdm.KindAttribute, xdm.QName{Prefix: "xml", Local: "base", URI: xdm.NSXML}, v))
 	}
 }
 

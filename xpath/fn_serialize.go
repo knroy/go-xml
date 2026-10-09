@@ -927,7 +927,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// take the self-closing shortcut. HTML has no self-closing syntax for
 		// a non-void element anyway.
 		htmlHead := isHTMLContentTypeHead(n, opts)
-		if len(n.Children) == 0 && !htmlHead {
+		if n.NumChildren() == 0 && !htmlHead {
 			// HTML has no self-closing syntax, so the html method cannot take
 			// the XML shortcut: a void element takes no end tag at all, and
 			// every other empty element takes an explicit one, because an
@@ -1021,7 +1021,8 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		// methods (Serialization 3.1 §7.4.3, §6.1.4); the rule is shared with
 		// xslt/serialize.go through htmlser.
 		htmlish := opts.method == "html" || opts.method == "xhtml"
-		for i, c := range n.Children {
+		for i := range n.NumChildren() {
+			c := n.ChildAt(i)
 			// Having added its own meta, the method discards the head's
 			// (§7.4.13, §6.1.14): two declarations could contradict.
 			if htmlHead && htmlser.ReplacedMeta(n, c) {
@@ -1042,7 +1043,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			serializeNode(sb, c, childOpts, depth+1)
 		}
 		if indentChildren && !(htmlish && htmlser.SkipIndentBefore(
-			n, len(n.Children), opts.method == "xhtml", opts.html5())) {
+			n, n.NumChildren(), opts.method == "xhtml", opts.html5())) {
 			writeIndent(sb, depth)
 		}
 		sb.WriteString("</")

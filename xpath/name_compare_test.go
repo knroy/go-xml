@@ -37,11 +37,11 @@ func TestNameComparison(t *testing.T) {
 		if ref == src {
 			t.Fatalf("%s: no reference spelling", src)
 		}
-		for _, ctxNode := range []*xdm.Node{tree.Root, tree.Root.Children[0]} {
+		for _, ctxNode := range []*xdm.Node{tree.Root, tree.Root.FirstChild()} {
 			ctx := func() *Context {
 				c := NewContext(ctxNode, Builtins())
 				c.Vars["none"] = xdm.Empty()
-				c.Vars["bs"] = xdm.Sequence{tree.Root.Children[0].Children[2], tree.Root.Children[0].Children[6]}
+				c.Vars["bs"] = xdm.Sequence{tree.Root.FirstChild().ChildAt(2), tree.Root.FirstChild().ChildAt(6)}
 				c.Vars["one"] = xdm.One(xdm.NewInteger(1))
 				return c
 			}
@@ -58,7 +58,7 @@ func TestNameComparison(t *testing.T) {
 
 	// The fast path is taken: a comparison of two names over one node each.
 	e := MustCompile("name(.) = 'm:a'", ns).Expr().(*BinaryOp)
-	if got, ok := nameComparison(NewContext(tree.Root.Children[0], Builtins()), e); !ok || !got {
+	if got, ok := nameComparison(NewContext(tree.Root.FirstChild(), Builtins()), e); !ok || !got {
 		t.Errorf("name(.) = 'm:a': %v, %v; want true, true", got, ok)
 	}
 	if _, ok := nameComparison(NewContext(xdm.NewString("x"), Builtins()), e); ok {

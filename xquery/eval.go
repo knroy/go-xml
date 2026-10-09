@@ -244,7 +244,7 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 			// nothing to a caller.
 			if v.Kind == xdm.KindAttribute {
 				if el := out.b.Open(); el != nil {
-					if len(el.Children) > 0 {
+					if el.NumChildren() > 0 {
 						return fmt.Errorf("XQTY0024: the attribute %s follows a "+
 							"node that is not an attribute in the content of "+
 							"element %s", v.Name.Lexical(), el.Name.Lexical())
@@ -272,7 +272,7 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 			}
 			before := 0
 			if el := out.b.Open(); el != nil {
-				before = len(el.Children)
+				before = el.NumChildren()
 			}
 			// The namespaces in scope at the *source* have to be read before
 			// the node is appended: appending re-parents a copy of it, and
@@ -295,8 +295,8 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 				v = xdmbuild.DeepCopy(v)
 			}
 			out.b.AppendNode(v)
-			if el := out.b.Open(); el != nil && len(el.Children) > before {
-				applyCopyNamespaces(el.Children[len(el.Children)-1], srcScope, sc)
+			if el := out.b.Open(); el != nil && el.NumChildren() > before {
+				applyCopyNamespaces(el.LastChild(), srcScope, sc)
 			}
 		case *xdm.Atomic:
 			out.b.AppendValue(v)
@@ -475,14 +475,14 @@ func stripNamespaces(n *xdm.Node) {
 			need[a.Name.Prefix] = a.Name.URI
 		}
 	}
-	kept := n.Namespaces[:0]
+	kept := make([]*xdm.Node, 0, n.NumNamespaceDecls())
 	for _, ns := range n.Namespaces {
 		if uri, ok := need[ns.Name.Local]; ok && uri == ns.Value {
 			kept = append(kept, ns)
 			delete(need, ns.Name.Local)
 		}
 	}
-	xdmbuild.SetNamespaces(n, kept)
+	n.SetNamespaceDecls(kept)
 	// A name whose binding was never on this element in the first place — it
 	// came from an ancestor that the copy has left behind — still needs one,
 	// or the copy would carry a prefix bound to nothing.
@@ -508,7 +508,7 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	}
 	sub := &builderRef{b: out.b.StartElement(name)}
 	if el := sub.b.Open(); el != nil && n.baseURI != "" {
-		xdmbuild.SetBaseURI(el, n.baseURI)
+		el.SetBaseURI(n.baseURI)
 	}
 	// §3.9.3.1: the in-scope namespaces of a constructed element include a
 	// binding for its own name. A direct constructor writes that binding as
@@ -1014,7 +1014,7 @@ func (n *document) eval(out *builderRef, ctx *evalContext) error {
 	// document element (builder.go), and that one wins, being the resolved
 	// xml:base of the content rather than the constructor's own.
 	if doc != nil && doc.BaseURI == "" && n.baseURI != "" {
-		xdmbuild.SetBaseURI(doc, n.baseURI)
+		doc.SetBaseURI(n.baseURI)
 	}
 	out.b.AppendNode(doc)
 	return nil

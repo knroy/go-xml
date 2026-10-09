@@ -58,7 +58,7 @@ func writeNode(sb *strings.Builder, n *xdm.Node) {
 		for _, a := range n.Attrs {
 			writeNode(sb, a)
 		}
-		if len(n.Children) == 0 {
+		if n.NumChildren() == 0 {
 			sb.WriteString("/>")
 			return
 		}

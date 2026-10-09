@@ -26,7 +26,7 @@ func TestDescendantAttrsFusion(t *testing.T) {
 		"//@nothere", "/a/@id//@id", "//comment()//@*", "(1)//@id", "//b/(.//@id)",
 	} {
 		ref := strings.ReplaceAll(src, "//", "/descendant-or-self::node()/self::node()/")
-		for _, ctxNode := range []*xdm.Node{tree.Root, tree.Root.Children[0], tree.Root.Children[0].Attrs[0]} {
+		for _, ctxNode := range []*xdm.Node{tree.Root, tree.Root.FirstChild(), tree.Root.FirstChild().AttrAt(0)} {
 			got, gerr := MustCompile(src, ns).Eval(NewContext(ctxNode, Builtins()))
 			want, werr := MustCompile(ref, ns).Eval(NewContext(ctxNode, Builtins()))
 			if (gerr == nil) != (werr == nil) || gerr != nil && gerr.Error() != werr.Error() {
@@ -51,7 +51,7 @@ func TestDescendantAttrsFusion(t *testing.T) {
 	if fuseDescendantAttrs(p.Steps, 0, xdm.One(tree.Root)) == nil {
 		t.Error("//@id over a parsed tree is not fused")
 	}
-	if fuseDescendantAttrs(p.Steps, 0, xdm.One(&xdm.Node{Kind: xdm.KindElement})) != nil {
+	if fuseDescendantAttrs(p.Steps, 0, xdm.One(xdm.NewNode(xdm.KindElement, xdm.QName{}, ""))) != nil {
 		t.Error("//@id over a constructed tree is fused")
 	}
 	if fuseDescendantAttrs(p.Steps, 0, xdm.One(xdm.NewString("x"))) != nil {

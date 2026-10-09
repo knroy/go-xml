@@ -1002,7 +1002,7 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 		}
 		return out
 	}
-	xdmbuild.SetChildren(filtered, keep(root))
+	filtered.SetChildren(keep(root))
 
 	// The included definitions are collected in a compiler whose base URI is
 	// the included document's, so that an href inside it resolves there.

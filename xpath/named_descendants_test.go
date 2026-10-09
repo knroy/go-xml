@@ -20,7 +20,9 @@ func TestNamedDescendantWalk(t *testing.T) {
 	var contexts []*xdm.Node
 	walkAxis(tree.Root, AxisDescendantOrSelf, func(n *xdm.Node) bool {
 		contexts = append(contexts, n)
-		contexts = append(contexts, n.Attrs...)
+		for i := range n.NumAttrs() {
+			contexts = append(contexts, n.AttrAt(i))
+		}
 		return true
 	})
 	p := "urn:p"

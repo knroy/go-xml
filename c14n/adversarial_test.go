@@ -486,9 +486,9 @@ func TestMaxDepthBoundaries(t *testing.T) {
 	// Depth is relative to the start: a subtree 300 levels down in a
 	// 600-level document is only 301 deep.
 	doc := nested(600)
-	inner := doc.Children[0]
+	inner := doc.FirstChild()
 	for range 299 {
-		inner = inner.Children[0]
+		inner = inner.FirstChild()
 	}
 	if _, err := Bytes(inner, opts); err != nil {
 		t.Errorf("inner subtree: %v", err)

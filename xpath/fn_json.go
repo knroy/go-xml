@@ -1134,7 +1134,7 @@ func (b *jsonXMLBuilder) attach(el *xdm.Node) error {
 				}
 				return nil
 			}
-			idx[k] = len(parent.Children)
+			idx[k] = parent.NumChildren()
 		}
 	}
 	parent.AppendChild(el)
@@ -1278,7 +1278,7 @@ func validateJSONTree(ctx *Context, doc *xdm.Node) error {
 // fn:base-uri walks to the nearest ancestor that has one and the document node
 // is not consulted for an element built this way.
 func setBaseURI(n *xdm.Node, base string) {
-	xdmbuild.SetBaseURI(n, base)
+	n.SetBaseURI(base)
 	for _, c := range n.Children {
 		setBaseURI(c, base)
 	}

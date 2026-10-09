@@ -10,7 +10,6 @@ import (
 	"unicode"
 
 	"github.com/knroy/go-xml/v2/xdm"
-	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // registerMiscFuncs adds the remaining F&O functions.
@@ -584,7 +583,7 @@ func deepEqualNode(ctx *Context, a, b *xdm.Node) (bool, error) {
 		if a.Name.URI != b.Name.URI || a.Name.Local != b.Name.Local {
 			return false, nil
 		}
-		if len(a.Attrs) != len(b.Attrs) {
+		if a.NumAttrs() != b.NumAttrs() {
 			return false, nil
 		}
 		// Attribute order is not significant, so each is matched by name.
@@ -3045,9 +3044,13 @@ func parseXMLFragment(s, base string, b *xdm.EntityBudget) (*xdm.Node, error) {
 	if wrapper == nil {
 		return root, nil
 	}
-	xdmbuild.SetChildren(root, wrapper.Children)
+	kids := make([]*xdm.Node, wrapper.NumChildren())
+	for i := range kids {
+		kids[i] = wrapper.ChildAt(i)
+	}
+	root.SetChildren(kids)
 	for _, c := range root.Children {
-		xdmbuild.SetParent(c, root)
+		c.SetParent(root)
 	}
 	return root, nil
 }

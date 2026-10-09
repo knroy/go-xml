@@ -156,7 +156,7 @@ func TestFromXPathFilterErrors(t *testing.T) {
 	}
 	// "//" needs a tree rooted at a document node; a detached element has
 	// none, so collecting the input node-set fails (XPDY0050).
-	detached := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "d"}}
+	detached := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "d"}, "")
 	if _, err := FromXPathFilter(detached, "true()", nil); err == nil {
 		t.Error("a tree with no document node: no error")
 	}
@@ -164,10 +164,10 @@ func TestFromXPathFilterErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if set.Root() != doc || !set.Contains(doc.Children[0]) || set.Contains(doc) {
+	if set.Root() != doc || !set.Contains(doc.FirstChild()) || set.Contains(doc) {
 		t.Error("membership of self::a")
 	}
-	if ns, ok := set.(NamespaceSet); !ok || ns.ContainsNamespace(doc.Children[0], "xml") {
+	if ns, ok := set.(NamespaceSet); !ok || ns.ContainsNamespace(doc.FirstChild(), "xml") {
 		t.Error("FromXPathFilter must be a NamespaceSet; self::a keeps no namespace node")
 	}
 }

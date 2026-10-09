@@ -2,7 +2,6 @@ package relaxng
 
 import (
 	"github.com/knroy/go-xml/v2/xdm"
-	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // The pattern and name-class level of the compact syntax.
@@ -66,7 +65,7 @@ func (p *compactParser) parsePattern() (*xdm.Node, error) {
 		local = "interleave"
 	}
 	n := p.b.el(local)
-	xdmbuild.SetChildren(n, operands)
+	n.SetChildren(operands)
 	return n, nil
 }
 
@@ -509,10 +508,14 @@ func (p *compactParser) parseNameClassExcept(n *xdm.Node, owner *xdm.Node) error
 		}
 		ex.AppendChild(p.nameClassNode(next, nextSimple))
 	}
-	if len(ex.Children) > 1 {
+	if ex.NumChildren() > 1 {
 		choice := p.b.el("choice")
-		xdmbuild.SetChildren(choice, ex.Children)
-		xdmbuild.SetChildren(ex, []*xdm.Node{choice})
+		kids := make([]*xdm.Node, ex.NumChildren())
+		for i := range kids {
+			kids[i] = ex.ChildAt(i)
+		}
+		choice.SetChildren(kids)
+		ex.SetChildren([]*xdm.Node{choice})
 	}
 	n.AppendChild(ex)
 	return nil

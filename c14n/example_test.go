@@ -19,7 +19,7 @@ func ExampleOptions_prefixList() {
 	if err != nil {
 		panic(err)
 	}
-	body := tr.Root.Children[0].Children[0]
+	body := tr.Root.FirstChild().FirstChild()
 	out, err := c14n.Bytes(body, c14n.Options{
 		Algorithm:                  c14n.Exclusive10,
 		InclusiveNamespacePrefixes: c14n.ParsePrefixList("ext"),
@@ -42,8 +42,8 @@ func ExampleExcludeSubtree() {
 	if err != nil {
 		panic(err)
 	}
-	order := tr.Root.Children[0]
-	sig := order.Children[1]
+	order := tr.Root.FirstChild()
+	sig := order.ChildAt(1)
 	set := c14n.ExcludeSubtree(tr.Root, sig)
 	opts := c14n.Options{Algorithm: c14n.Exclusive10}
 

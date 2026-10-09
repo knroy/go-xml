@@ -210,7 +210,7 @@ func TestUnsupportedNode(t *testing.T) {
 	a := find(t, doc, "a")
 	opts := Options{Algorithm: Inclusive10}
 	for name, n := range map[string]*xdm.Node{
-		"nil": nil, "attribute": a.Attrs[0], "namespace": a.Namespaces[0], "text": a.Children[0],
+		"nil": nil, "attribute": a.AttrAt(0), "namespace": a.NamespaceDeclAt(0), "text": a.FirstChild(),
 	} {
 		if _, err := Bytes(n, opts); !errors.Is(err, ErrUnsupportedNode) {
 			t.Errorf("Bytes(%s): %v", name, err)
@@ -218,17 +218,17 @@ func TestUnsupportedNode(t *testing.T) {
 	}
 	for name, ns := range map[string]NodeSet{
 		"nil root": Func(nil, func(*xdm.Node) bool { return true }),
-		"attr":     Func(a.Attrs[0], func(*xdm.Node) bool { return true }),
-		"ns":       Func(a.Namespaces[0], func(*xdm.Node) bool { return true }),
+		"attr":     Func(a.AttrAt(0), func(*xdm.Node) bool { return true }),
+		"ns":       Func(a.NamespaceDeclAt(0), func(*xdm.Node) bool { return true }),
 	} {
 		if _, err := BytesNodeSet(ns, opts); !errors.Is(err, ErrUnsupportedNode) {
 			t.Errorf("BytesNodeSet(%s): %v", name, err)
 		}
 	}
-	if _, err := Equal(a.Attrs[0], doc, opts); !errors.Is(err, ErrUnsupportedNode) {
+	if _, err := Equal(a.AttrAt(0), doc, opts); !errors.Is(err, ErrUnsupportedNode) {
 		t.Errorf("Equal(attr, doc): %v", err)
 	}
-	if _, err := Equal(doc, a.Attrs[0], opts); !errors.Is(err, ErrUnsupportedNode) {
+	if _, err := Equal(doc, a.AttrAt(0), opts); !errors.Is(err, ErrUnsupportedNode) {
 		t.Errorf("Equal(doc, attr): %v", err)
 	}
 }
@@ -241,21 +241,21 @@ func TestNodeSetRootedAtLeaf(t *testing.T) {
 	a := find(t, doc, "a")
 	all := func(*xdm.Node) bool { return true }
 	for i, want := range []string{"x&gt;&#xD;", "<!--c-->", "<?p d?>"} {
-		if got := canonSet(t, Func(a.Children[i], all), Inclusive10WithComments); got != want {
+		if got := canonSet(t, Func(a.ChildAt(i), all), Inclusive10WithComments); got != want {
 			t.Errorf("child %d: got %q want %q", i, got, want)
 		}
 	}
 	// Without comments, a comment root renders nothing: C14N 1.0 section 1.1
 	// defines the without-comments form as the node-set with comment nodes
 	// removed, whatever node the set happens to be rooted at.
-	if got := canonSet(t, Func(a.Children[1], all), Inclusive10); got != "" {
+	if got := canonSet(t, Func(a.ChildAt(1), all), Inclusive10); got != "" {
 		t.Errorf("comment without comments: got %q", got)
 	}
 	// A root that is not itself a member renders nothing (section 2.3: only
 	// nodes in the node-set are rendered).
 	none := func(*xdm.Node) bool { return false }
 	for i := range 3 {
-		if got := canonSet(t, Func(a.Children[i], none), Inclusive10WithComments); got != "" {
+		if got := canonSet(t, Func(a.ChildAt(i), none), Inclusive10WithComments); got != "" {
 			t.Errorf("non-member child %d rendered %q", i, got)
 		}
 	}
@@ -590,14 +590,14 @@ func TestSubtreeContains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := tr.Root.Children[0]
-	a, c := r.Children[0], r.Children[1]
+	r := tr.Root.FirstChild()
+	a, c := r.FirstChild(), r.ChildAt(1)
 	set := Subtree(a)
 	for _, tc := range []struct {
 		n    *xdm.Node
 		want bool
 	}{
-		{a, true}, {a.Attrs[0], true}, {a.Children[0], true},
+		{a, true}, {a.AttrAt(0), true}, {a.FirstChild(), true},
 		{r, false}, {c, false}, {tr.Root, false},
 	} {
 		if got := set.Contains(tc.n); got != tc.want {
@@ -661,7 +661,7 @@ func TestXML11Refused(t *testing.T) {
 	}
 	// A tree built rather than parsed declares no version and is read as 1.0.
 	tr := xdm.NewTree()
-	tr.Root.AppendChild(&xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "a"}})
+	tr.Root.AppendChild(xdm.NewNode(xdm.KindElement, xdm.QName{Local: "a"}, ""))
 	if got, err := Bytes(tr.Root, Options{Algorithm: Inclusive10}); err != nil || string(got) != "<a></a>" {
 		t.Errorf("built tree: %q, %v", got, err)
 	}
