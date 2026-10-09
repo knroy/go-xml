@@ -36,6 +36,7 @@ code before and after, and how to run the rewriter on your own module.
 | `xpath.Context` static fields become methods | `ctx.Version`, `ctx.StaticBaseURI`, `ctx.StaticHost`, `ctx.StaticNamespaces`, `ctx.Compat` → the same names called; `ctx.Version = v` → `ctx = ctx.WithVersion(v)`, `ctx.StaticBaseURI = u` → `ctx = ctx.WithStaticBaseURI(u)`. | [`9af0e77`][9af0e77] |
 | `Context.WithNow` removed | `ctx.WithNow(t)` → `ctx.WithEnv(func(e *xpath.Env) { e.Now, e.HasNow = t, true })`. | [`9af0e77`][9af0e77] |
 | `xdmbuild.NSDecl`, `Builder.NoteDeclaredList` | `NoteDeclared` for a list of bindings the builder may keep instead of copying; for a constructor that notes the same bindings on every element it builds. | 2c5ea0b |
+| `xdm.Node.TreeHasTyping` | Whether any node of the node's tree was ever typed; false means the whole tree is untyped. XSLT uses it to skip stripping annotations ([migrating](docs/migrating-to-v2.md#validation-never-writes-to-your-tree)). | 40dbca21 |
 
 ### Changed — performance
 
@@ -44,6 +45,9 @@ code before and after, and how to run the rewriter on your own module.
 | A parsed node was a 280 B struct of 16 pointers | Nodes are 40 B records in per-tree chunks, one pointer each; names, values, typing, positions and base URIs live in per-tree tables. 10 MB parse: 22 → 2.5 bytes retained per input byte, 127 → 77 ms CPU, 230 → 36 MB allocated; 100 MB parse peak 2.3 GB → 446 MB; descendant walk 10.6 → 1.3 ns per node. | a81dff2 |
 | Every scope change copied the whole 512 B `xpath.Context` | The context is a 160 B scope plus pointers to a shared `Env` and the expression's static part; `Compiled.Eval` swaps a pointer. CEN, Peppol, XRechnung −25% CPU, −36% bytes; DocBook −30% CPU. | [`9af0e77`][9af0e77] |
 | The smaller heap made the collector run 65–75% more often (CEN +32%, Peppol +19% CPU at `GOGC=100`) | Transform allocation cut: `current()` rebinding skipped, `Atomic` 112 → 48 B, runtime copy 352 → 176 B, `Context` 160 → 112 B, shared literal/boolean sequences, lent namespace lists. CEN −2%, Peppol −13%, DocBook −21% CPU against v1's layout. | 90d9a8b, afa3b59, f2e6fb1, 76a7f6a, 0462046, 2c5ea0b |
+| XSLT runtime and XPath predicates repeated per-item work (V5) | Runtime copy 176 → 112 B, one focus context per predicate, strip-space memo, untyped trees not stripped. XRechnung 1 −10%, 2 −9%, DocBook items about −11% CPU. | 35cd4d60, 16f3d909, f2c08b2e, 40dbca21, db7e1ba3, 462ee9a2 |
+| DocBook compile 55 → 77 ms on v2 (V7) | Version-attribute walks remembered per Compile (not in the static phase); `FileResolver` remembers `EvalSymlinks`. DocBook compile −11% CPU. | 23ace644, be9eb58e |
+| The runtime copy still carried the 64 B template selection (V13) | Selection held by pointer, allocated with the copy that selects it: copy 112 → 64 B. DocBook items −5.5% bytes, −3.8% CPU. | e09f1060 |
 
 ## v1.7.1 — 2026-10-09
 
