@@ -111,16 +111,18 @@ Exit status: 0 if the query ran, 1 otherwise.
 
 	var item xdm.Item
 	if in := fs.Arg(0); in != "" {
-		data, err := os.ReadFile(in)
+		// Streamed, as the transform's source is (see compileStylesheet).
+		f, err := os.Open(in)
 		if err != nil {
 			return err
 		}
+		defer f.Close()
 		abs := fileURI(in)
 		popts := xdm.ParseOptions{BaseURI: abs, DocumentURI: abs, AllowDOCTYPE: *allowDoctype}
 		if *allowExternalEnts {
 			popts.ExternalEntities = resolver
 		}
-		tree, err := xdm.ParseString(string(data), popts)
+		tree, err := xdm.Parse(f, popts)
 		if err != nil {
 			return fmt.Errorf("%s: %w", in, err)
 		}

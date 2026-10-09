@@ -369,12 +369,15 @@ Exit status: 0 if every input transformed, 1 otherwise.
 
 func compileStylesheet(path string, resolver *xslt.FileResolver, schemas xsd.Resolver,
 	xpathVersion string, compat xslt.Compatibility) (*xslt.Stylesheet, error) {
-	data, err := os.ReadFile(path)
+	// Parsed from the file as it is read, rather than read whole and copied
+	// to a string: the two copies were live together through the parse.
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
 	abs := fileURI(path)
-	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{BaseURI: abs})
+	tree, err := xdm.Parse(f, xdm.ParseOptions{BaseURI: abs})
 	if err != nil {
 		return nil, fmt.Errorf("parsing stylesheet: %w", err)
 	}
@@ -443,10 +446,12 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 	// source for exactly that case, so the parse is simply skipped.
 	var root *xdm.Node
 	if inPath != "" {
-		data, err := os.ReadFile(inPath)
+		// Streamed, as the stylesheet is (see compileStylesheet).
+		f, err := os.Open(inPath)
 		if err != nil {
 			return err
 		}
+		defer f.Close()
 		abs := fileURI(inPath)
 		popts := xdm.ParseOptions{
 			BaseURI: abs,
@@ -461,7 +466,7 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		if cfg.externalEnts {
 			popts.ExternalEntities = cfg.resolver
 		}
-		tree, err := xdm.ParseString(string(data), popts)
+		tree, err := xdm.Parse(f, popts)
 		if err != nil {
 			return err
 		}
