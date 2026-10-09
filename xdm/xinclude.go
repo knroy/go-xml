@@ -95,39 +95,29 @@ type XIncludeOptions struct {
 	Parse ParseOptions
 }
 
-// ProcessXInclude performs XInclude processing on tree in place.
+// ProcessXInclude performs XInclude processing on tree and returns the result
+// as a new tree.
 //
-// The tree is modified rather than copied. XInclude 1.0 section 4 is written
-// as a transformation from one infoset to another, and building a second tree
-// would be the more literal reading — but every node in this package carries a
-// pointer to its Tree and its document order, so a copy would have to rebuild
-// both anyway, and the caller's other references to the tree would then point
-// at the *unincluded* document. Modifying in place and re-finalising is the
-// behaviour a caller loading a document actually wants.
-//
-// The tree is re-finalised before returning, so document order is correct over
-// the merged content. Callers must not hold node identities across this call.
-func ProcessXInclude(tree *Tree, opts XIncludeOptions) error {
+// XInclude 1.0 section 4 is written as a transformation from one infoset to
+// another, and that is what this does: the result is built top-down, in
+// document order, as any tree is, and tree itself is left as it was. Callers
+// use the returned tree; node identities in tree do not carry over.
+func ProcessXInclude(tree *Tree, opts XIncludeOptions) (*Tree, error) {
 	if tree == nil || tree.Root == nil {
-		return nil
+		return tree, nil
 	}
+	// The including document's own URI is on the stack from the start, so
+	// that a document including itself is a loop at the first step rather
+	// than one level later.
 	base := tree.Root.baseURI
 	if base == "" {
 		base = tree.Root.documentURI
 	}
 	p := &includeProc{opts: opts, budget: &entityBudget{}}
-	// The including document is on the stack from the outset, so that an
-	// inclusion naming the document it appears in is caught as the cycle it
-	// is rather than read a second time. XInclude 1.0 section 4.5: "an
-	// inclusion loop ... is a fatal error".
 	if base != "" {
 		p.stack = append(p.stack, base)
 	}
-	if err := p.expandChildren(tree.Root, base, 0); err != nil {
-		return err
-	}
-	tree.Finalize()
-	return nil
+	return p.processTree(tree, base, 0)
 }
 
 // fatalInclude marks an error that xi:fallback must NOT recover from.
@@ -165,71 +155,142 @@ type includeProc struct {
 	// instead of together — 95 KB of source expanded to 149 MB with
 	// MaxBytes 8192 and MaxNodes 50, neither of which can see an expansion.
 	budget *entityBudget
+	// done maps each element of a document being processed whose content
+	// processing has finished to its processed copy, which an href-less
+	// xpointer selects from in its place. See selectLocal.
+	done map[*Node]*Node
 }
 
-// expandChildren walks n's children, replacing each xi:include it finds.
+// processTree builds the included form of t: a new tree with every xi:include
+// replaced by what it includes.
+func (p *includeProc) processTree(t *Tree, base string, depth int) (*Tree, error) {
+	out := NewTree()
+	out.CopySourceFrom(t)
+	out.Root.baseURI = t.Root.baseURI
+	out.Root.documentURI = t.Root.documentURI
+	out.Root.CopyTypingFrom(t.Root)
+	if err := p.copyChildren(out.Root, t.Root, base, depth); err != nil {
+		return nil, err
+	}
+	out.Finalize()
+	return out, nil
+}
+
+// copyChildren appends to dst copies of src's children, replacing each
+// xi:include it finds by what it includes.
 //
-// The walk is iterative over a rebuilt child slice rather than recursive over
-// the original, because an inclusion replaces one child with zero or more and
-// mutating a slice while ranging over it is how that goes wrong quietly.
-//
-// base is the base URI in force for n itself; each child may narrow it with
-// its own xml:base, which the parser has already resolved into Node.BaseURI.
-func (p *includeProc) expandChildren(n *Node, base string, depth int) error {
-	var out []*Node
-	changed := false
-	for _, c := range n.children {
+// base is the base URI in force for src itself; each child may narrow it with
+// its own xml:base, which the parser has already resolved into the node's
+// base URI.
+func (p *includeProc) copyChildren(dst, src *Node, base string, depth int) error {
+	for _, c := range src.children {
 		if c.kind == KindElement && c.name.URI == NSXInclude {
 			switch c.name.Local {
 			case "include":
-				repl, err := p.expandInclude(c, depth)
-				if err != nil {
+				if err := p.include(dst, c, depth); err != nil {
 					return err
 				}
-				for _, r := range repl {
-					r.parent = n
-					r.tree = n.tree
-					out = append(out, r)
-				}
-				changed = true
 				continue
 			case "fallback":
-				// XInclude 1.0 section 3.2: xi:fallback "is only meaningful
-				// as the child of an include element". One found anywhere
-				// else is a fatal error, and saying so is better than
-				// silently copying an element whose whole purpose was to be
-				// consumed by a parent that is not there.
+				// Section 3.2: xi:fallback is only meaningful as a child of
+				// xi:include, and anywhere else it is a fatal error rather
+				// than ordinary content.
 				return fmt.Errorf("xi:fallback outside xi:include is a fatal error")
 			}
 		}
-		// A non-include element may still contain one, and its own xml:base
-		// governs how that one's href resolves.
-		if c.kind == KindElement {
-			cb := c.baseURI
-			if cb == "" {
-				cb = base
-			}
-			if err := p.expandChildren(c, cb, depth); err != nil {
-				return err
-			}
+		if c.kind != KindElement {
+			appendLeafKeep(dst, c)
+			continue
 		}
-		out = append(out, c)
-	}
-	if changed {
-		n.children = out
-		// Adjacent text nodes can appear where an inclusion sat between two
-		// of them, or where parse="text" produced one beside an existing
-		// one. The data model does not permit two adjacent text children —
-		// XDM section 6.1 requires text node siblings to be merged — so a
-		// document that kept them would answer a different node count than
-		// the same content written literally.
-		mergeAdjacentText(n)
+		cc := appendElementKeep(dst, c)
+		cb := c.baseURI
+		if cb == "" {
+			cb = base
+		}
+		if err := p.copyChildren(cc, c, cb, depth); err != nil {
+			return err
+		}
+		// An href-less inclusion selects from the including document as far
+		// as it has been processed: see selectLocal.
+		if p.done == nil {
+			p.done = map[*Node]*Node{}
+		}
+		p.done[c] = cc
 	}
 	return nil
 }
 
-// expandInclude computes the replacement for one xi:include element.
-func (p *includeProc) expandInclude(inc *Node, depth int) ([]*Node, error) {
+// appendElementKeep appends a copy of el without its children: name, base URI,
+// typing, position, namespace declarations and attributes.
+func appendElementKeep(dst, el *Node) *Node {
+	c := dst.AppendShallowCopy(el)
+	CopyPosition(c, el)
+	for _, ns := range el.namespaces {
+		c.AddNamespace(ns.name.Local, ns.value)
+	}
+	for _, a := range el.attrs {
+		CopyPosition(c.AppendShallowCopy(a), a)
+	}
+	return c
+}
+
+// appendLeafKeep appends a copy of a text, comment or processing-instruction
+// node. Text merges into a text node just before it, and empty text is
+// dropped: an inclusion can leave two text nodes side by side, or an empty
+// one, and the result infoset holds neither.
+func appendLeafKeep(dst, n *Node) *Node {
+	if n.kind == KindText {
+		if n.value == "" {
+			return nil
+		}
+		if k := len(dst.children); k > 0 && dst.children[k-1].kind == KindText {
+			last := dst.children[k-1]
+			last.AppendValue(n.value)
+			return last
+		}
+	}
+	c := dst.AppendShallowCopy(n)
+	CopyPosition(c, n)
+	return c
+}
+
+// include appends to dst what one xi:include element includes.
+//
+// The inclusion is built in a holder first and only appended once it has
+// succeeded: a failure anywhere in it must leave dst as it was, so that the
+// fallback can take its place.
+func (p *includeProc) include(dst, inc *Node, depth int) error {
+	holder, err := p.expandInclude(inc, depth)
+	if err != nil {
+		return err
+	}
+	for _, n := range holder.children {
+		appendSubtreeKeep(dst, n)
+	}
+	return nil
+}
+
+// appendSubtreeKeep appends a deep copy of n, merging text as appendLeafKeep
+// does.
+func appendSubtreeKeep(dst, n *Node) {
+	if n.kind != KindElement {
+		appendLeafKeep(dst, n)
+		return
+	}
+	c := appendElementKeep(dst, n)
+	for _, k := range n.children {
+		appendSubtreeKeep(c, k)
+	}
+}
+
+// newHolder returns the document node an inclusion is built under before it
+// is appended where the include element was. It belongs to a tree so that the
+// positions of what it holds survive the move.
+func newHolder() *Node { return NewTree().Root }
+
+// expandInclude computes, in a holder, the replacement for one xi:include
+// element.
+func (p *includeProc) expandInclude(inc *Node, depth int) (*Node, error) {
 	if depth >= maxIncludeDepth {
 		return nil, fatalInclude{fmt.Errorf(
 			"resource limit exceeded: xi:include nesting exceeds %d levels: %w",
@@ -303,7 +364,7 @@ func (p *includeProc) expandInclude(inc *Node, depth int) ([]*Node, error) {
 		encoding = inc.AttrValue("encoding")
 	}
 
-	var nodes []*Node
+	var holder *Node
 	var err error
 	switch {
 	case href == "" && parse == "xml" && xptr != "":
@@ -321,18 +382,18 @@ func (p *includeProc) expandInclude(inc *Node, depth int) ([]*Node, error) {
 		// own pointer back at the reader. And it would address a *reparse*
 		// rather than this tree, so an xpointer naming content an earlier
 		// inclusion brought in would not find it.
-		nodes, err = p.selectLocal(inc, xptr, base)
+		holder, err = p.selectLocal(inc, xptr, base)
 	case href == "" && parse == "text":
 		// parse="text" with no href asks for the including document as
 		// characters. That is not a subresource selection and the resource
 		// genuinely has to be read, so it goes down the ordinary path and
 		// the loop rule does not apply — a text inclusion cannot recurse.
-		nodes, err = p.fetchText(target, base, encoding)
+		holder, err = p.fetchText(target, base, encoding)
 	default:
-		nodes, err = p.fetch(target, base, parse, xptr, encoding, depth)
+		holder, err = p.fetch(target, base, parse, xptr, encoding, depth)
 	}
 	if err == nil {
-		return nodes, nil
+		return holder, nil
 	}
 
 	// Section 4.3: "If the resource ... cannot be fetched ... the processor
@@ -355,59 +416,67 @@ func (p *includeProc) expandInclude(inc *Node, depth int) ([]*Node, error) {
 		// like any other content. The depth is carried through so that a
 		// fallback chain cannot be used to sidestep the nesting bound.
 		fbBase := elementBase(fb)
-		if err := p.expandChildren(fb, fbBase, depth+1); err != nil {
+		holder := newHolder()
+		if err := p.copyChildren(holder, fb, fbBase, depth+1); err != nil {
 			return nil, err
 		}
-		kids := fb.children
-		fb.children = nil
-		return kids, nil
+		return holder, nil
 	}
 	// Section 4.3: "if the fallback element is absent, it is a fatal error."
 	return nil, fmt.Errorf("xi:include of %q failed and has no xi:fallback: %w", target, err)
 }
 
-// selectLocal resolves an xpointer against the tree the include element is
-// already part of, for an inclusion that names no href.
+// selectLocal resolves an xpointer against the including document, for an
+// inclusion that names no href.
 //
-// The selection is COPIED rather than moved. Section 4.5.1 replaces the
-// include element with the included content, and moving a node that is still
-// reachable from elsewhere in the same document would put one node in two
-// places — which the data model does not have, and which would make the
-// subtree's parent link a lie. A copy is also the only reading that makes
-// sense when the pointer selects an ancestor of the include element itself.
+// The selection is made in the document as far as inclusion has processed it:
+// an element whose content is complete is seen with its inclusions done, as
+// it will appear in the result, and everything else as it was read -- which
+// is what an xpointer naming content an earlier inclusion brought in needs.
+// See viewOf.
+//
+// The selection is COPIED. Section 4.5.1 replaces the include element with
+// the included content, and the content selected is still where it was. A
+// copy is also the only reading that makes sense when the pointer selects an
+// ancestor of the include element itself.
 //
 // The nodes are given the include element's base, because they are being
 // written where the include element sat, not where they were read.
-func (p *includeProc) selectLocal(inc *Node, xptr, base string) ([]*Node, error) {
+func (p *includeProc) selectLocal(inc *Node, xptr, base string) (*Node, error) {
 	root := inc.Root()
-	picked, err := selectXPointer(root, xptr)
+	picked, err := selectXPointerIn(root, xptr, p.viewOf)
 	if err != nil {
 		return nil, err
 	}
 	if len(picked) == 0 {
 		return nil, fmt.Errorf("xpointer %q selected nothing in the including document", xptr)
 	}
-	out := make([]*Node, 0, len(picked))
+	holder := newHolder()
 	for _, n := range picked {
+		// Section 4.5.1: an inclusion of the include element itself, or of
+		// one of its ancestors, is an inclusion loop and a fatal error. It
+		// cannot be caught by the URI stack, because the URI is the same
+		// document's and there is no second fetch to compare against.
 		if n == inc || isAncestorOf(n, inc) {
-			// Copying an ancestor of the include element would embed the
-			// include element inside its own replacement, which is a loop by
-			// another name — section 4.5's rule applied to a subresource.
 			return nil, fatalInclude{fmt.Errorf(
 				"xpointer %q selects the include element or an ancestor of it", xptr)}
 		}
-		c := copySubtree(n, base)
-		out = append(out, c)
+		copySubtree(holder, n, base)
 	}
-	return out, nil
+	return holder, nil
+}
+
+// viewOf is the node a local xpointer sees in place of n: the processed copy
+// of an element whose content inclusion has finished with, and n otherwise.
+func (p *includeProc) viewOf(n *Node) *Node {
+	if c, ok := p.done[n]; ok {
+		return c
+	}
+	return n
 }
 
 // fetchText reads a resource as characters.
-//
-// It is separate from fetch because a text inclusion shares none of fetch's
-// XML work — no parse, no recursion, no cycle stack, no base fixup — and it
-// is reached both from the ordinary path and from the href-less one.
-func (p *includeProc) fetchText(target, base, encoding string) ([]*Node, error) {
+func (p *includeProc) fetchText(target, base, encoding string) (*Node, error) {
 	if p.fetches >= maxIncludeFetches {
 		return nil, fatalInclude{fmt.Errorf(
 			"resource limit exceeded: document performs more than %d inclusions: %w",
@@ -421,15 +490,9 @@ func (p *includeProc) fetchText(target, base, encoding string) ([]*Node, error) 
 	if err != nil {
 		return nil, err
 	}
-	// Section 3.1 and 4.4: a text inclusion contributes "a single text
-	// information item whose character code property is the character
-	// sequence" of the resource. It is NOT parsed, so markup in it is data —
-	// which is the whole point of parse="text", and is why an included
-	// fragment of source code does not have to be escaped.
-	//
-	// The decode is the resolver's: it holds the bytes, and it is the same
-	// decode fn:unparsed-text already implements.
-	return []*Node{{kind: KindText, value: string(data)}}, nil
+	holder := newHolder()
+	holder.AppendText(string(data))
+	return holder, nil
 }
 
 // textEncodingMarker makes the resolver's encoding argument non-empty for a
@@ -458,43 +521,29 @@ func isAncestorOf(a, n *Node) bool {
 	return false
 }
 
-// copySubtree deep-copies a node, giving the copy the base URI it must carry
-// where it is going.
-//
-// Attributes and namespaces are copied too: a copy that shared them would have
-// two elements owning one attribute node, and the attribute's Parent could
-// name only one of them.
-func copySubtree(n *Node, base string) *Node {
-	c := &Node{
-		kind:    n.kind,
-		name:    n.name,
-		value:   n.value,
-		baseURI: base,
-	}
-	// XInclude splices a subtree into another document unchanged; nothing
-	// about that is an assessment, so every PSVI property travels.
-	c.CopyTypingFrom(n)
+// copySubtree appends a deep copy of n to dst, giving the copy the base URI it
+// must carry where it is going: an element keeps its own, and every other node
+// takes the base of the element it is copied under.
+func copySubtree(dst, n *Node, base string) {
+	c := dst.AppendShallowCopy(n)
+	c.baseURI = base
 	if n.baseURI != "" {
-		// The node stated a base of its own, which travels with it.
 		c.baseURI = n.baseURI
 	}
 	for _, a := range n.attrs {
-		ac := &Node{kind: KindAttribute, name: a.name, value: a.value}
-		ac.CopyTypingFrom(a)
-		c.AddAttr(ac)
+		c.AppendShallowCopy(a).baseURI = ""
 	}
 	for _, ns := range n.namespaces {
 		c.AddNamespace(ns.name.Local, ns.value)
 	}
 	for _, k := range n.children {
-		c.AppendChild(copySubtree(k, c.baseURI))
+		copySubtree(c, k, c.baseURI)
 	}
-	return c
 }
 
-// fetch reads one resource and turns it into the nodes that replace the
-// xi:include element.
-func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth int) ([]*Node, error) {
+// fetch reads one resource and returns, in a holder, the nodes that replace
+// the xi:include element.
+func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth int) (*Node, error) {
 	if parse == "text" {
 		return p.fetchText(target, base, encoding)
 	}
@@ -552,10 +601,11 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 		return nil, err
 	}
 
-	// Recurse before selecting, so that an xpointer may address content that
-	// an inner inclusion brought in. The stack grows for the duration.
+	// Process the included document before selecting, so that an xpointer
+	// may address content that an inner inclusion brought in. The stack
+	// grows for the duration.
 	p.stack = append(p.stack, uri)
-	err = p.expandChildren(sub.Root, uri, depth+1)
+	done, err := p.processTree(sub, uri, depth+1)
 	p.stack = p.stack[:len(p.stack)-1]
 	if err != nil {
 		return nil, err
@@ -569,9 +619,9 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 		// comments and processing instructions around it. A document node
 		// cannot appear as a child of an element, which is why it is dropped
 		// rather than copied.
-		picked = sub.Root.children
+		picked = done.Root.children
 	} else {
-		picked, err = selectXPointer(sub.Root, xptr)
+		picked, err = selectXPointer(done.Root, xptr)
 		if err != nil {
 			return nil, err
 		}
@@ -584,110 +634,88 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 		}
 	}
 
-	// Base URI fixup, section 4.5.5. The included elements are about to sit
-	// in a document retrieved from a *different* URI, so a relative
-	// reference written inside them would resolve against the wrong place
-	// unless their base is recorded explicitly. The specification says to
-	// add an xml:base attribute to each top-level included element whose
-	// base differs from that of the include element.
-	//
-	// An element that ALREADY carries an xml:base keeps it. The specification
-	// text says the existing attribute "is replaced by the new attribute",
-	// but the XSLT 3.0 test suite's base-uri-052 asserts the opposite
-	// behaviour and notes in its own source that Xerces does not replace it —
-	// and a replacement would in any case throw away information the document
-	// deliberately stated. Node.BaseURI has already folded such an attribute
-	// against the included document's URI, so keeping it is also the answer
-	// that leaves fn:base-uri consistent with what the attribute says.
-	//
-	// This is the only place the tree is given an attribute it did not have,
-	// and it is exactly what base-uri-052 tests.
-	fixupBase(picked, base)
-
-	// Detach from the sub-tree so the nodes belong to the including document
-	// alone; the caller re-parents them and ProcessXInclude re-finalises.
+	holder := newHolder()
 	for _, n := range picked {
-		n.parent = nil
+		copyFixedUp(holder, n, base)
 	}
-	return picked, nil
+	return holder, nil
 }
 
-// fixupBase records the base URI of included top-level nodes, per section
-// 4.5.5, so that a relative reference inside them still resolves.
+// copyFixedUp appends a copy of n, a top-level included node, with the base
+// URI fixup of section 4.5.5 applied.
+//
+// The included elements are about to sit in a document retrieved from a
+// *different* URI, so a relative reference written inside them would resolve
+// against the wrong place unless their base is recorded explicitly. The
+// specification says to add an xml:base attribute to each top-level included
+// element whose base differs from that of the include element.
+//
+// An element that ALREADY carries an xml:base keeps it. The specification text
+// says the existing attribute "is replaced by the new attribute", but the XSLT
+// 3.0 test suite's base-uri-052 asserts the opposite behaviour and notes in
+// its own source that Xerces does not replace it — and a replacement would in
+// any case throw away information the document deliberately stated.
 //
 // includeBase is the base URI in force at the xi:include element. A node whose
 // own base already equals it needs no attribute: the value it would carry is
 // the one it inherits anyway, and adding a redundant xml:base changes what the
 // document looks like when it is serialised for no gain.
-func fixupBase(nodes []*Node, includeBase string) {
-	for _, n := range nodes {
-		if n.kind != KindElement {
-			// Only element information items have an xml:base to carry.
-			// A comment or PI included alongside the document element has a
-			// base URI in the data model, but nothing can be written on it
-			// and nothing resolves a relative reference from it.
-			continue
-		}
-		if n.baseURI == "" || n.baseURI == includeBase {
-			continue
-		}
-		if xb := n.Attr(NSXML, "base"); xb != nil {
-			// The element states its own base. Xerces leaves such an
-			// attribute alone rather than replacing it, and base-uri-052
-			// asserts that behaviour — but "leaving it alone" has a
-			// consequence the attribute alone does not show: a RELATIVE
-			// xml:base now sits in a different document, so it resolves
-			// against the include element's base rather than the included
-			// document's, and the node's computed base must be recomputed to
-			// match what the attribute will mean where the node now lives.
-			//
-			// This is the whole of base-uri-052's fifth assertion. dir/data2.xml
-			// holds <para xml:base="dir5/data.xml">; parsed on its own that
-			// is dir/dir5/data.xml, but included into a document based at
-			// fn/base-uri/ the surviving attribute reads fn/base-uri/dir5/data.xml,
-			// which is what the case expects. Leaving BaseURI as parsed made
-			// fn:base-uri disagree with the document's own serialisation.
-			n.baseURI = resolveBase(includeBase, xb.value)
-			// The subtree below inherited the old resolution, so it is
-			// rebased too; nothing else in the tree can see the change.
-			rebaseDescendants(n, n.baseURI)
-			continue
-		}
-		n.AddAttr(&Node{
-			kind:  KindAttribute,
-			name:  QName{Prefix: "xml", Local: "base", URI: NSXML},
-			value: n.baseURI,
-		})
+func copyFixedUp(dst, n *Node, includeBase string) {
+	// Only element information items have an xml:base to carry. A comment or
+	// PI included alongside the document element has a base URI in the data
+	// model, but nothing can be written on it and nothing resolves a relative
+	// reference from it.
+	if n.kind != KindElement || n.baseURI == "" || n.baseURI == includeBase {
+		appendSubtreeKeep(dst, n)
+		return
+	}
+	if xb := n.Attr(NSXML, "base"); xb != nil {
+		// The element states its own base. Leaving it alone has a consequence
+		// the attribute alone does not show: a RELATIVE xml:base now sits in
+		// a different document, so it resolves against the include element's
+		// base rather than the included document's, and the node's computed
+		// base must be recomputed to match what the attribute will mean where
+		// the node now lives. This is the whole of base-uri-052's fifth
+		// assertion: dir/data2.xml holds <para xml:base="dir5/data.xml">;
+		// included into a document based at fn/base-uri/ the surviving
+		// attribute reads fn/base-uri/dir5/data.xml, which is what the case
+		// expects.
+		c := appendElementKeep(dst, n)
+		c.baseURI = resolveBase(includeBase, xb.value)
+		copyRebased(c, n, c.baseURI)
+		return
+	}
+	c := appendElementKeep(dst, n)
+	c.AppendAttr(QName{Prefix: "xml", Local: "base", URI: NSXML}, n.baseURI)
+	for _, k := range n.children {
+		appendSubtreeKeep(c, k)
 	}
 }
 
-// rebaseDescendants recomputes Node.BaseURI below n after n's own base
-// changed, by re-resolving each descendant's xml:base against the new one.
+// copyRebased appends to dst, the copy of n whose base was just recomputed,
+// copies of n's children with each descendant's xml:base re-resolved against
+// the new base.
 //
-// Only elements that actually carry an xml:base need touching: the parser sets
-// BaseURI on an element only where an attribute or an external entity gave it
-// one, and everything else inherits by walking up at the time of asking. The
-// walk therefore stops recursing where nothing changed, which is almost
-// everywhere.
-func rebaseDescendants(n *Node, base string) {
-	for _, c := range n.children {
-		if c.kind != KindElement {
+// Only elements that actually carry an xml:base change: an element whose base
+// was set by something other than an attribute -- an external entity the
+// included document read -- keeps that absolute URI, and it governs
+// everything below it.
+func copyRebased(dst, n *Node, base string) {
+	for _, k := range n.children {
+		if k.kind != KindElement {
+			appendSubtreeKeep(dst, k)
 			continue
 		}
-		if xb := c.Attr(NSXML, "base"); xb != nil {
+		c := appendElementKeep(dst, k)
+		switch xb := k.Attr(NSXML, "base"); {
+		case xb != nil:
 			c.baseURI = resolveBase(base, xb.value)
-			rebaseDescendants(c, c.baseURI)
-			continue
+			copyRebased(c, k, c.baseURI)
+		case k.baseURI != "":
+			copyRebased(c, k, k.baseURI)
+		default:
+			copyRebased(c, k, base)
 		}
-		if c.baseURI != "" {
-			// Set by something other than an attribute — an external entity
-			// the included document read. That URI is absolute and does not
-			// depend on where the subtree ends up, so it stands and governs
-			// everything below it.
-			rebaseDescendants(c, c.baseURI)
-			continue
-		}
-		rebaseDescendants(c, base)
 	}
 }
 
@@ -724,33 +752,6 @@ func elementBase(n *Node) string {
 	return ""
 }
 
-// mergeAdjacentText joins text children that ended up next to each other.
-//
-// XDM section 6.1: "the children of a document or element node ... must not
-// contain two consecutive text nodes". Inclusion is one of the few operations
-// that can produce them — a parse="text" inclusion written between two lines
-// of text leaves three text nodes where the data model says there is one — and
-// leaving them would make count(text()) answer differently for content that is
-// indistinguishable once serialised. An empty text node is dropped for the
-// same reason: the data model has no zero-length text node.
-func mergeAdjacentText(n *Node) {
-	var out []*Node
-	for _, c := range n.children {
-		if c.kind == KindText {
-			if c.value == "" {
-				continue
-			}
-			if len(out) > 0 && out[len(out)-1].kind == KindText {
-				prev := out[len(out)-1]
-				prev.value += c.value
-				continue
-			}
-		}
-		out = append(out, c)
-	}
-	n.children = out
-}
-
 // selectXPointer applies an xpointer attribute to an included document.
 //
 // Only the two schemes XInclude 1.0 section 4.2 requires a conforming
@@ -769,6 +770,12 @@ func mergeAdjacentText(n *Node) {
 // that names an unsupported scheme is *defined* to fall through to the next
 // one, so refusing them is conforming behaviour rather than a gap.
 func selectXPointer(root *Node, ptr string) ([]*Node, error) {
+	return selectXPointerIn(root, ptr, nil)
+}
+
+// selectXPointerIn is selectXPointer over a view of the tree: view, when not
+// nil, gives the node seen in place of each child as the walk reaches it.
+func selectXPointerIn(root *Node, ptr string, view func(*Node) *Node) ([]*Node, error) {
 	ptr = strings.TrimSpace(ptr)
 	if ptr == "" {
 		return nil, fmt.Errorf("empty xpointer")
@@ -776,7 +783,7 @@ func selectXPointer(root *Node, ptr string) ([]*Node, error) {
 	// A shorthand pointer is an NCName with no parenthesis anywhere: the
 	// XPointer Framework distinguishes the two forms by exactly that.
 	if !strings.Contains(ptr, "(") {
-		if n := ElementByID(root, ptr); n != nil {
+		if n := elementByIDIn(root, ptr, view); n != nil {
 			return []*Node{n}, nil
 		}
 		return nil, fmt.Errorf("no element with ID %q", ptr)
@@ -788,7 +795,7 @@ func selectXPointer(root *Node, ptr string) ([]*Node, error) {
 	for _, part := range schemeParts(ptr) {
 		switch part.scheme {
 		case "element":
-			n, err := elementScheme(root, part.data)
+			n, err := elementScheme(root, part.data, view)
 			if err != nil {
 				lastErr = err
 				continue
@@ -875,7 +882,7 @@ func schemeParts(ptr string) []xptrPart {
 // XPointer element() scheme: the data is either a child sequence "/1/2/3"
 // counting element children from one, or an NCName naming an element by ID
 // optionally followed by such a sequence.
-func elementScheme(root *Node, data string) (*Node, error) {
+func elementScheme(root *Node, data string, view func(*Node) *Node) (*Node, error) {
 	data = strings.TrimSpace(data)
 	if data == "" {
 		return nil, fmt.Errorf("empty element() pointer")
@@ -884,7 +891,7 @@ func elementScheme(root *Node, data string) (*Node, error) {
 	steps := strings.Split(data, "/")
 	if steps[0] != "" {
 		// Rooted at an ID rather than at the document.
-		cur = ElementByID(root, steps[0])
+		cur = elementByIDIn(root, steps[0], view)
 		if cur == nil {
 			return nil, fmt.Errorf("no element with ID %q", steps[0])
 		}
@@ -902,7 +909,15 @@ func elementScheme(root *Node, data string) (*Node, error) {
 			}
 			idx = idx*10 + int(r-'0')
 		}
-		kids := cur.ChildElements()
+		var kids []*Node
+		for _, c := range cur.children {
+			if view != nil {
+				c = view(c)
+			}
+			if c.kind == KindElement {
+				kids = append(kids, c)
+			}
+		}
 		if idx < 1 || idx > len(kids) {
 			return nil, fmt.Errorf("element() pointer %q: no child %d", data, idx)
 		}
@@ -926,7 +941,9 @@ func elementScheme(root *Node, data string) (*Node, error) {
 // merely *named* "id" is deliberately not treated as one: without a DTD or a
 // schema saying so it is an ordinary attribute, and guessing would make an
 // inclusion resolve differently depending on data the document never declared.
-func ElementByID(n *Node, id string) *Node {
+func ElementByID(n *Node, id string) *Node { return elementByIDIn(n, id, nil) }
+
+func elementByIDIn(n *Node, id string, view func(*Node) *Node) *Node {
 	if n.kind == KindElement {
 		for _, a := range n.attrs {
 			if a.value != id {
@@ -938,7 +955,10 @@ func ElementByID(n *Node, id string) *Node {
 		}
 	}
 	for _, c := range n.children {
-		if f := ElementByID(c, id); f != nil {
+		if view != nil {
+			c = view(c)
+		}
+		if f := elementByIDIn(c, id, view); f != nil {
 			return f
 		}
 	}

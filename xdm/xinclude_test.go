@@ -58,8 +58,11 @@ func run(t *testing.T, uri, src string, files map[string]string) (*Tree, *mapRes
 	t.Helper()
 	tree := parseWithBase(t, uri, src)
 	res := &mapResolver{files: files}
-	err := ProcessXInclude(tree, XIncludeOptions{Resolver: res})
-	return tree, res, err
+	out, err := ProcessXInclude(tree, XIncludeOptions{Resolver: res})
+	if err != nil {
+		return tree, res, err
+	}
+	return out, res, nil
 }
 
 // serialize renders an element subtree in a form the assertions can compare
@@ -438,7 +441,7 @@ func TestXIncludeUnresolvedXPointerFallsBack(t *testing.T) {
 func TestXIncludeNilResolverRefuses(t *testing.T) {
 	tree := parseWithBase(t, "mem:///doc/main.xml",
 		`<root`+xiNS+`><xi:include href="frag.xml"/></root>`)
-	if err := ProcessXInclude(tree, XIncludeOptions{}); err == nil {
+	if _, err := ProcessXInclude(tree, XIncludeOptions{}); err == nil {
 		t.Fatal("a nil resolver must refuse the inclusion, not skip it")
 	}
 }

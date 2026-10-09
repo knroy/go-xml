@@ -494,16 +494,18 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		// that gates fn:doc and xsl:include, so an inclusion is confined to
 		// the -allow-dir roots on exactly the same terms.
 		if cfg.xinclude {
-			if err := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
+			included, err := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
 				Resolver: cfg.resolver,
 				// The included documents are held to the same limits as the
 				// including one: an inclusion becomes part of the document,
 				// so it must not be a way around a bound the document itself
 				// was held to.
 				Parse: popts,
-			}); err != nil {
+			})
+			if err != nil {
 				return err
 			}
+			tree = included
 		}
 		if cfg.validate != "" {
 			if err := validateSource(sheet.Schema(), tree.Root, cfg.validate); err != nil {

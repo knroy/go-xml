@@ -895,12 +895,14 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, string,
 			// 1.0 section 4.5.5, which is the only way base-uri() can answer
 			// where an included element really came from.
 			if s.XInclude == "true" {
-				if err := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
+				included, err := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
 					Resolver: r.entityResolver(),
 					Parse:    popts,
-				}); err != nil {
+				})
+				if err != nil {
 					return nil, "", err
 				}
+				tree = included
 			}
 			if err := r.annotate(set, env, s, tree.Root); err != nil {
 				return nil, "", err
