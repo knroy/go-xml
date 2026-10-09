@@ -55,6 +55,8 @@ func (ctx nsContext) resolved() nsContext {
 type contextualType interface {
 	// equalIn compares two values, each read in its own context.
 	equalIn(a string, actx nsContext, b string, bctx nsContext) bool
+	// checkIn is check for a value read in ctx.
+	checkIn(value string, params []param, ctx nsContext) error
 }
 
 // The built-in library, which is the empty datatypeLibrary URI.
@@ -151,11 +153,19 @@ func checkParams(dt datatype, library, name string, params []param) error {
 	for _, p := range params {
 		switch p.Name {
 		case "length", "minLength", "maxLength":
+			// A QName or NOTATION value is a pair of names, which has no
+			// length: XSD 1.1 Part 2 deprecates these facets on them and
+			// says they are ignored, and Jing refuses the schema. Refusing
+			// is the reading that cannot leave a bound its author believes
+			// is enforced.
+			if t, ok := dt.(xsdType); ok && (t.name == "QName" || t.name == "NOTATION") {
+				return fmt.Errorf("relaxng: parameter %q does not apply to %s, "+
+					"which has no units of length", p.Name, t.name)
+			}
 			if _, err := atoiParam(p); err != nil {
 				return err
 			}
 		}
 	}
-	_ = dt
 	return nil
 }
