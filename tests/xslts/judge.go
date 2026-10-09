@@ -154,9 +154,20 @@ func treeOf(res *xslt.Result) *xdm.Node {
 		}
 	}
 	tree := xdm.NewTree()
+	// A parentless attribute in the result is carried as an attribute of the
+	// document node, and attributes come before a node's children, so they
+	// are placed first.
+	for _, it := range res.Nodes {
+		if v, ok := it.(*xdm.Node); ok && v.Kind() == xdm.KindAttribute {
+			spliceInto(tree.Root, v)
+		}
+	}
 	for _, it := range res.Nodes {
 		switch v := it.(type) {
 		case *xdm.Node:
+			if v.Kind() == xdm.KindAttribute {
+				continue
+			}
 			spliceInto(tree.Root, v)
 		case *xdm.Atomic:
 			tree.Root.AppendText(v.String())
