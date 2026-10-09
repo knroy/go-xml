@@ -40,7 +40,7 @@ func (jsonTreeValidator) ValidateJSONTree(doc *xdm.Node) error {
 		return xdm.Errorf("FOJS0004", "%s", err.Error())
 	}
 	if err := schema.Validate(doc, xsd.ValidateOptions{
-		Annotate:          true,
+		AnnotateInPlace:   true,
 		SkipIDConstraints: true,
 	}); err != nil {
 		// A tree fn:json-to-xml built is valid against this schema by

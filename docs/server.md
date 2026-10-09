@@ -292,8 +292,8 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    // Annotate is deliberately off: it writes type annotations into the tree,
-    // which would make this handler mutate state shared across goroutines.
+    // Validate only reads the tree. AnnotateInPlace is deliberately off: it
+    // writes type annotations into the tree; ValidateCopy types a copy.
     err = s.schema.Validate(tree.Root, xsd.ValidateOptions{
         MaxErrors: maxErrors,
         MaxDepth:  maxDepth,
@@ -349,7 +349,7 @@ defaults off and why it must stay off for caller input.
       if they need it)
 - [ ] `MaxBytes`, `MaxNodes`, `MaxDepth` sized to your documents
 - [ ] `MaxBytesReader` bounding the read, not just the parse
-- [ ] `Annotate` off, or a fresh tree per goroutine if on
+- [ ] `AnnotateInPlace` off (use `ValidateCopy` for a typed tree)
 - [ ] Server-level `ReadTimeout`/`WriteTimeout`/`MaxHeaderBytes` set
 - [ ] 400 and 422 distinguished in the response
 

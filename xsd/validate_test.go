@@ -456,7 +456,7 @@ func TestValidateAnnotateWritesTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
+	if err := s.Validate(tree.Root, ValidateOptions{AnnotateInPlace: true}); err != nil {
 		t.Fatalf("should be valid: %v", err)
 	}
 	n := tree.Root.ChildElements()[0].ChildElements()[0]
@@ -774,7 +774,7 @@ func TestAnnotateStripsIgnorableWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
+	if err := s.Validate(tree.Root, ValidateOptions{AnnotateInPlace: true}); err != nil {
 		t.Fatalf("should be valid: %v", err)
 	}
 	root := tree.Root.ChildElements()[0]
@@ -813,7 +813,7 @@ func TestAnnotateDoesNotStripWhenValidatingABareElement(t *testing.T) {
 		t.Fatal(err)
 	}
 	el := tree.Root.ChildElements()[0]
-	if err := s.Validate(el, ValidateOptions{Annotate: true}); err != nil {
+	if err := s.Validate(el, ValidateOptions{AnnotateInPlace: true}); err != nil {
 		t.Fatalf("should be valid: %v", err)
 	}
 	text := 0
@@ -846,7 +846,7 @@ func TestAnnotateHonoursXMLSpacePreserve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = s.Validate(tree.Root, ValidateOptions{Annotate: true})
+	_ = s.Validate(tree.Root, ValidateOptions{AnnotateInPlace: true})
 	root := tree.Root.ChildElements()[0]
 	text := 0
 	for c := range root.Children() {

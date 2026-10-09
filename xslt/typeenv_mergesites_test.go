@@ -207,7 +207,7 @@ func TestNamespaceResolvedSchemaMergeCarriesTheTypeEnvironment(t *testing.T) {
 		t.Fatalf("parsing the source: %v", err)
 	}
 	if err := sheet.schema.Validate(dtree.Root,
-		xsd.ValidateOptions{Annotate: true}); err != nil {
+		xsd.ValidateOptions{AnnotateInPlace: true}); err != nil {
 		t.Fatalf("validating the source against the aggregate: %v", err)
 	}
 	if got := dtree.Root.FirstChild().TypeAnnotation(); got != outer {

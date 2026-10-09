@@ -8,20 +8,24 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 v2 breaks the exported API, so it has a new module path. Its plan is phases 3
 and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.md#round-6-xdm-plan-phases-02-c233f4e).
+[docs/migrating-to-v2.md](docs/migrating-to-v2.md) shows each change below with
+code before and after, and how to run the rewriter on your own module.
 
 ### Changed — breaking
 
 | Change | What it means for callers | Commit |
 |---|---|---|
 | Module path `github.com/knroy/go-xml/v2` | Import `github.com/knroy/go-xml/v2/<package>`; v1 stays at `github.com/knroy/go-xml`. The `w3cschemas` module still requires v1. | — |
-| `xdm.Node` fields are unexported; read through methods | `n.Kind`, `n.Name`, `n.Value`, `n.Parent`, `n.BaseURI`, `n.DocumentURI` and the nine typing fields (`n.TypeAnnotation` … `n.MixedContent`) become calls of the same name. `range n.Children` / `n.Attrs` / `n.Namespaces` becomes `range n.Children()` / `n.Attrs()` / `n.NamespaceDecls()` (iterators); `len` and indexing become `NumChildren`/`ChildAt`/`FirstChild`/`LastChild`, `NumAttrs`/`AttrAt`, `NumNamespaceDecls`/`NamespaceDeclAt`. No slice is handed out. `internal/tools/nodeaccess` rewrites old code mechanically. | a8e5346 |
+| `xdm.Node` fields are unexported; read through methods | `n.Kind`, `n.Name`, `n.Value`, `n.Parent`, `n.BaseURI`, `n.DocumentURI` and the nine typing fields (`n.TypeAnnotation` … `n.MixedContent`) become calls of the same name. `range n.Children` / `n.Attrs` / `n.Namespaces` becomes `range n.Children()` / `n.Attrs()` / `n.NamespaceDecls()` (iterators); `len` and indexing become `NumChildren`/`ChildAt`/`FirstChild`/`LastChild`, `NumAttrs`/`AttrAt`, `NumNamespaceDecls`/`NamespaceDeclAt`. No slice is handed out. `internal/tools/nodeaccess` rewrites old code mechanically; with `-v1` it also moves another module's imports to `/v2` ([migrating](docs/migrating-to-v2.md#the-rewriter-nodeaccess)). | a8e5346 |
 | Nodes are built with `xdm.NewNode` and the setters | `&xdm.Node{Kind: k, Name: q, Value: v}` becomes `xdm.NewNode(k, q, v)`; field writes become `SetName`, `SetValue`, `SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaceDecls`, `SetBaseURI`, `SetDocumentURI` (builder-side: no re-parenting, no tree link); typing goes through `ApplyTyping` and `SetTypeAnnotation*`. | 9ab409b |
 | `xdmbuild.SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaces`, `SetName`, `SetBaseURI` removed | Call the `xdm.Node` method of the same name (`SetNamespaces` is `SetNamespaceDecls`). | 6b34bc3 |
+| `xsd.ValidateOptions.Annotate` is now `AnnotateInPlace`; `Validate` without it never writes | v1's `Validate` still wrote union members and `nilled` onto the caller's tree. Get a typed tree from `ValidateCopy`; keep `AnnotateInPlace` for trees you just built. | — |
 
 ### Added
 
 | Change | What it does | Commit |
 |---|---|---|
+| `docs/migrating-to-v2.md`; `nodeaccess -v1` | Before/after code for every breaking change. The rewriter can be pointed at any module: `-v1` moves its go-xml imports to `/v2` and runs `go mod tidy` before rewriting. | — |
 | `tests/record.sh`, `tests/recdiff`, `GOXSLT_RECORD_DIR` | Suites only count passes; now every case's output is recorded and two checkouts are diffed, allowed differences by rule. | `5aa004e` |
 | `xpath.Context` per-evaluation fields move to `xpath.Env` | `ctx.Docs = r` → `xpath.NewContext(item, funcs, func(e *xpath.Env) { e.Docs = r })` or `ctx = ctx.WithEnv(func(e *xpath.Env) { e.Docs = r })`; reads `ctx.Docs` → `ctx.Env().Docs`. Moved: `Ctx`, `Docs`, `Collections`, `Texts`, `Entities`, `Environment`, `Modules`, `Validator`, `Now`, `HasNow`, `ImplicitTimezone`, `RegexVersion`, `LibraryVersion`, `MaxDepth`, `MaxItems`, `QualifyVar`, `MissingVar`, `MapDuplicateCode`. Budgets cannot be set or reset through `Env`. | [`9af0e77`][9af0e77] |
 | `xpath.Context` static fields become methods | `ctx.Version`, `ctx.StaticBaseURI`, `ctx.StaticHost`, `ctx.StaticNamespaces`, `ctx.Compat` → the same names called; `ctx.Version = v` → `ctx = ctx.WithVersion(v)`, `ctx.StaticBaseURI = u` → `ctx = ctx.WithStaticBaseURI(u)`. | [`9af0e77`][9af0e77] |

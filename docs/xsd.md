@@ -318,16 +318,21 @@ documents means pairing this with a `MapResolver`, or an `HTTPResolver` whose
 
 ## The PSVI
 
-`ValidateOptions.Annotate` writes the type of each validated node into its
-`TypeAnnotation`:
+`Schema.ValidateCopy` validates a copy of the document and returns it typed:
+each node's type is in its `TypeAnnotation`, defaulted attributes are added
+and ignorable whitespace is stripped.
 
 ```go
-err := schema.Validate(doc.Root, xsd.ValidateOptions{Annotate: true})
+typed, err := schema.ValidateCopy(doc.Root, xsd.ValidateOptions{})
 ```
 
 That is the part of the post-schema-validation infoset the XPath and XSLT
 layers consume — it is what makes `element(*, xs:date)` and typed value
-comparison mean anything. It is off by default because **it mutates the tree
+comparison mean anything. `Validate` itself only checks and never writes to
+the tree. `ValidateOptions.AnnotateInPlace` types the tree passed in instead
+of a copy; it exists for a tree the caller has just built and nobody else
+holds, as the XSLT and XQuery engines do with their result trees, because
+**it mutates the tree
 you passed in**, which also makes it the one option that is unsafe to use on a
 tree shared between goroutines.
 
@@ -643,8 +648,9 @@ written by whichever goroutine reaches a type first and read by the rest.
 Two things are *not* shared:
 
 * **A schema still being assembled.** Finish loading before publishing it.
-* **A document tree.** Parse one per goroutine. `Annotate: true` writes into
-  the tree, and even without it the tree is the one mutable thing in play.
+* **A document tree** under `AnnotateInPlace`, which writes into it. Plain
+  `Validate` and `ValidateCopy` only read the tree, so one parsed document
+  may be validated from several goroutines at once.
 
 This is tested rather than asserted. The suite runs validation from many
 goroutines against both warm and deliberately cold schemas, validates

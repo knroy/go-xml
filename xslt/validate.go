@@ -392,13 +392,13 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 					n.Name().Local, spec.typeName.Lexical())
 			}
 		}
-		// Annotate: the whole point of validating a constructed node is that
+		// AnnotateInPlace: the whole point of validating a constructed node is that
 		// the result carries the type it was validated against, so that
 		// "instance of element(x, my:t)" and a match pattern naming a type
 		// answer true for it. Without the annotation the node came out of a
 		// successful validation still untyped.
 		if err := schema.ValidateAgainstType(n, *spec.typeName,
-			xsd.ValidateOptions{Annotate: true}); err != nil {
+			xsd.ValidateOptions{AnnotateInPlace: true}); err != nil {
 			return fmt.Errorf("XTTE1540: %s is not valid against %s: %w",
 				describeNode(n), spec.typeName.Lexical(), err)
 		}
@@ -430,7 +430,7 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 				"XTTE1512: no top-level declaration for %s", describeNode(n))
 		}
 		if err := schema.ValidateAttribute(n, spec.mode != validateStrict,
-			xsd.ValidateOptions{Annotate: true}); err != nil {
+			xsd.ValidateOptions{AnnotateInPlace: true}); err != nil {
 			return fmt.Errorf("%s: %s is not valid: %w",
 				invalidCode(spec.mode), describeNode(n), err)
 		}
@@ -450,7 +450,7 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 	// code for failing it there. Applying it to a bare element reported five
 	// duplicate-ID failures as XTTE1510 for element constructions the spec
 	// says are valid.
-	vopts := xsd.ValidateOptions{Annotate: true, SkipIDConstraints: !docNode}
+	vopts := xsd.ValidateOptions{AnnotateInPlace: true, SkipIDConstraints: !docNode}
 	var err error
 	if spec.mode == validateStrict {
 		// CanAssessStrictly rather than HasElementDeclaration: an element

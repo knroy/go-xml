@@ -95,11 +95,18 @@ type ValidateOptions struct {
 	// costs memory proportional to the document.
 	MaxErrors int
 
-	// Annotate writes the type of each validated node into its
-	// TypeAnnotation, producing the part of the PSVI that the XPath and
-	// XSLT layers consume. It is off by default because it mutates the
-	// tree the caller passed in.
-	Annotate bool
+	// AnnotateInPlace writes the type of each validated node into the tree
+	// that was passed in, and strips ignorable whitespace from it, producing
+	// the part of the PSVI that the XPath and XSLT layers consume.
+	//
+	// It is for a tree the caller has just built and that nothing else can
+	// see yet: the XSLT and XQuery engines use it on the result trees they
+	// construct. It mutates the tree, so it is unsafe while another
+	// goroutine reads it, and it changes a document other code may hold. To
+	// get a typed tree from a document you were handed, use ValidateCopy,
+	// which annotates a copy and leaves the input as it was. Validate
+	// without this option only checks, and never writes.
+	AnnotateInPlace bool
 
 	// SkipIDConstraints suppresses "Validation Root Valid (ID/IDREF)"
 	// (§3.3.4 clause 2) — the check that ID values are unique and that
@@ -201,13 +208,13 @@ func (s *Schema) validateContext(ctx context.Context, root *xdm.Node,
 	// because a DOCTYPE's content models are known then; a schema's are not,
 	// so it has to happen here, where the content model is first consulted.
 	//
-	// It is confined to annotating a whole DOCUMENT. Annotate already mutates
+	// It is confined to annotating a whole DOCUMENT. Annotating already mutates
 	// the tree, but a caller assessing a CONSTRUCTED element — xsl:copy-of
 	// with validation="strict", XSLT 2.0 §19.2.1 — is validating a result
 	// tree, not a source document, and §4.4 says nothing about those. Those
 	// callers hand in the element itself, so the document node is what
 	// separates the two.
-	v.stripIgnorable = opts.Annotate && root.Kind() == xdm.KindDocument
+	v.stripIgnorable = opts.AnnotateInPlace && root.Kind() == xdm.KindDocument
 
 	el := root
 	if el.Kind() == xdm.KindDocument {
@@ -691,9 +698,11 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			// failed above as cvc-elt.3.1 and is not a nilled element at all.
 			// Only the validator can draw that distinction, so only the
 			// validator records it. See xdm.Node.IsNilled.
-			t := xdm.TypingOf(el)
-			t.IsNilled = true
-			el.ApplyTyping(t)
+			if v.opts.AnnotateInPlace {
+				t := xdm.TypingOf(el)
+				t.IsNilled = true
+				el.ApplyTyping(t)
+			}
 			return nil
 		}
 	}
@@ -1840,7 +1849,9 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 			prev := kid.TypeAnnotation()
 			prevPrim, prevItem := kid.DerivedPrimitive(), kid.ListItem()
 			v.validateAgainstType(kid, v.schema.anyType(), nil)
-			kid.SetTypeAnnotationResolved(prev, prevPrim, prevItem)
+			if v.opts.AnnotateInPlace {
+				kid.SetTypeAnnotationResolved(prev, prevPrim, prevItem)
+			}
 			return nil
 		case ProcessStrict:
 			d, ok := v.schema.Elements[name]
@@ -2154,7 +2165,7 @@ func (v *validator) substitutionBlocked(t Type, decl *ElementDecl) (Derivation, 
 //     schema-element(E) reject a node the stylesheet had just validated
 //     strict whenever E's declaration used an inline complex type.
 func (v *validator) annotate(el *xdm.Node, typ Type) {
-	if !v.opts.Annotate || typ == nil {
+	if !v.opts.AnnotateInPlace || typ == nil {
 		return
 	}
 	// XDM 3.1 6.2.4 leaves dm:typed-value UNDEFINED for an element whose type

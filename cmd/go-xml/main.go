@@ -404,12 +404,15 @@ func compileStylesheet(path string, resolver *xslt.FileResolver, schemas xsd.Res
 
 // validateSource assesses a source document against the stylesheet's imported
 // schema and annotates it, which is what makes a validated <price> atomise to
-// an xs:decimal rather than to xs:untypedAtomic. Without Annotate the schema
-// would only check the document, and the stylesheet would see it untyped.
+// an xs:decimal rather than to xs:untypedAtomic. Without AnnotateInPlace the
+// schema would only check the document, and the stylesheet would see it
+// untyped. In place rather than through ValidateCopy because the tree was
+// parsed here and nothing else holds it, and because a copy would carry no
+// source positions for gx:line-number under -track-positions.
 // Lax assessment skips a document element the schema does not declare, as
 // validation="lax" does in a stylesheet.
 func validateSource(schema *xsd.Schema, doc *xdm.Node, mode string) error {
-	opts := xsd.ValidateOptions{Annotate: true}
+	opts := xsd.ValidateOptions{AnnotateInPlace: true}
 	if mode == "strict" {
 		return schema.Validate(doc, opts)
 	}

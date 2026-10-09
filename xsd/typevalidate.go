@@ -196,7 +196,7 @@ func (s *Schema) validateNodeAgainstType(n *xdm.Node, typ Type,
 				n.Name().Local, showName(typeName))
 		}
 		v.validateSimpleContent(n, n.Value(), st, nil)
-		if opts.Annotate && len(v.errs) == 0 && typeName.Local != "" {
+		if opts.AnnotateInPlace && len(v.errs) == 0 && typeName.Local != "" {
 			// The element branch stamps the annotation inside the validator;
 			// this one has to do it here, because validateSimpleContent works
 			// on a value rather than on a declared node. Without it an

@@ -9,7 +9,8 @@ import (
 // ValidateCopy validates a copy of root and returns the annotated copy,
 // leaving root and the tree it belongs to untouched.
 //
-// It is Validate with ValidateOptions.Annotate forced on, run over a copy.
+// It is Validate with ValidateOptions.AnnotateInPlace forced on, run over a
+// copy, and it is the way to get a typed tree from a document you were handed.
 // The copy answers every question the in-place run would have answered on
 // the original: each node's typing (annotation, union member, resolved
 // primitive and list item type, is-id, is-idrefs, nilled, the absent typed
@@ -26,11 +27,10 @@ import (
 //
 // What differs is identity. The copy is a new tree: "is" between it and the
 // original is false, and so is doc(document-uri($copy)) is $copy until the
-// caller registers the copy under that URI in place of the original. In-place
-// validation (Validate with Annotate) remains the default; ValidateCopy is
-// for a caller that must keep the input as it was, or that validates one
-// tree from several goroutines, which the in-place run cannot do safely
-// because it writes to the tree.
+// caller registers the copy under that URI in place of the original. Because
+// it never writes to the input, one tree may be validated from several
+// goroutines at once. ValidateOptions.AnnotateInPlace is the alternative for a
+// tree the caller has just built and owns outright.
 //
 // The copy is returned whether or not it is valid, annotated as far as the
 // in-place run would have annotated the original.
@@ -46,7 +46,7 @@ func (s *Schema) ValidateCopyContext(ctx context.Context, root *xdm.Node,
 		return nil, s.ValidateContext(ctx, nil, opts)
 	}
 	twin, twins := copyForValidation(root)
-	opts.Annotate = true
+	opts.AnnotateInPlace = true
 	return twin, s.validateContext(ctx, twin, opts, twins)
 }
 

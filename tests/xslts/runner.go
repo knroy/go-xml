@@ -1034,7 +1034,7 @@ func (r *Runner) annotate(set *TestSet, env *Environment, s Source, root *xdm.No
 	}
 	// The validator stamps annotations as it goes, so the error is discarded
 	// rather than propagated, for the reason given above.
-	_ = schema.Validate(root, xsd.ValidateOptions{Annotate: true})
+	_ = schema.Validate(root, xsd.ValidateOptions{AnnotateInPlace: true})
 	return nil
 }
 
