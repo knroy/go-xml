@@ -28,8 +28,8 @@ import (
 // The BOM is consumed when present. A UTF-8 BOM is also removed: it is legal
 // and carries no information, but encoding/xml treats it as content and a
 // document beginning with one would fail to parse.
-func decodeReader(r io.Reader) (io.Reader, error) {
-	br := bufio.NewReaderSize(r, 4096)
+func decodeReader(r io.Reader, window int) (io.Reader, error) {
+	br := bufio.NewReaderSize(r, window)
 	prefix, err := br.Peek(4)
 	if err != nil && err != io.EOF && !errIsShort(err) {
 		return nil, err
