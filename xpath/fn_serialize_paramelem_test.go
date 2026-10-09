@@ -13,11 +13,7 @@ import (
 // CDATA section instead.
 func cdataTree(local, uri, prefix string) *xdm.Node {
 	root := xdm.NewNode(xdm.KindElement, xdm.QName{Prefix: prefix, URI: uri, Local: local}, "")
-	root.SetChildren([]*xdm.Node{func() *xdm.Node {
-		n := xdm.NewNode(xdm.KindText, xdm.QName{}, "x<y")
-		n.SetParent(root)
-		return n
-	}()})
+	root.AppendText("x<y")
 	return root
 }
 
@@ -107,11 +103,7 @@ func TestSerializeParamElementCdataMatchesMapForm(t *testing.T) {
 func TestSerializeParamElementCdataResolvesPrefix(t *testing.T) {
 	const ns = "http://example.com/n"
 	params := paramsElement(map[string]string{"cdata-section-elements": "e:a"})
-	params.SetNamespaceDecls([]*xdm.Node{func() *xdm.Node {
-		n := xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: "e"}, ns)
-		n.SetParent(params)
-		return n
-	}()})
+	params.AddNamespace("e", ns)
 
 	ctx := NewContext(nil, Builtins())
 	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })

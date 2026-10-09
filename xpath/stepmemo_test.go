@@ -67,9 +67,8 @@ func TestStepMemoAnswersAsTheWalk(t *testing.T) {
 // over it is never remembered.
 func TestStepMemoSkipsConstructedTrees(t *testing.T) {
 	tree := xdm.NewTree()
-	a := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "a"}, "")
-	tree.Root.AppendChild(a)
-	a.AppendChild(xdm.NewNode(xdm.KindElement, xdm.QName{Local: "b"}, ""))
+	a := tree.Root.AppendElement(xdm.QName{Local: "a"})
+	a.AppendElement(xdm.QName{Local: "b"})
 	tree.Finalize()
 	ctx, m := memoContext(tree.Root)
 	count := func() string {
@@ -82,9 +81,7 @@ func TestStepMemoSkipsConstructedTrees(t *testing.T) {
 	if got := count(); got != "1" {
 		t.Fatalf("got %s b elements, want 1", got)
 	}
-	c := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "c"}, "")
-	a.AppendChild(c)
-	c.AppendChild(xdm.NewNode(xdm.KindElement, xdm.QName{Local: "b"}, ""))
+	a.AppendElement(xdm.QName{Local: "c"}).AppendElement(xdm.QName{Local: "b"})
 	tree.Finalize()
 	if got := count(); got != "2" {
 		t.Errorf("after adding a b under a new parent: got %s, want 2", got)

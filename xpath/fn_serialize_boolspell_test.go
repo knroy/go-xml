@@ -17,13 +17,8 @@ import (
 // would leave the parameter no live path to act on.
 func boolSpellTree() *xdm.Node {
 	root := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "a"}, "")
-	b := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "b"}, "")
-	b.SetParent(root)
-	c := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "a"}, "")
-	c.SetParent(b)
-	c.SetAttrs([]*xdm.Node{xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: "href"}, "p\u00e9")})
-	b.SetChildren([]*xdm.Node{c})
-	root.SetChildren([]*xdm.Node{b})
+	root.AppendElement(xdm.QName{Local: "b"}).AppendElement(xdm.QName{Local: "a"}).
+		AppendAttr(xdm.QName{Local: "href"}, "p\u00e9")
 	return root
 }
 
