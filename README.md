@@ -790,7 +790,7 @@ Every remote-reference mechanism is off unless you turn it on.
   the same resolver, so a nested transformation reaches nothing `fn:doc`
   could not — from a stylesheet, and from an XQuery query or `xpath.Eval`
   caller in a program that links `xslt`, where it is the caller's
-  `Context.Docs`.
+  `Env.Docs`.
 * **`xsl:include` and `xsl:import` fail closed** the same way, via
   `CompileOptions.Resolver`.
 * **XInclude is off** unless a caller runs `xdm.ProcessXInclude` explicitly.
@@ -1291,7 +1291,10 @@ inside `\p{Lu}`, the `x` flag strips whitespace *before* escapes are read, and
 Profiling the UBL renderer: the whole transform is ~12% of samples and GC is
 ~40%. The engine is **allocation-bound, not algorithm-bound**. The largest
 single site is `Context.WithFocus`, at roughly a quarter of all allocation,
-because a path step allocates a focus context per node.
+because a path step allocates a focus context per node. In v2 that copy is
+160 bytes rather than 512: the environment and the expression's static
+properties sit behind pointers the copy shares (see
+[options.md](docs/options.md#xpathcontext)).
 
 The unimplemented items that would actually move this are structural, not
 incremental:

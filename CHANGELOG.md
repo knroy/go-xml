@@ -14,6 +14,15 @@ and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.m
 | Change | What it means for callers | Commit |
 |---|---|---|
 | Module path `github.com/knroy/go-xml/v2` | Import `github.com/knroy/go-xml/v2/<package>`; v1 stays at `github.com/knroy/go-xml`. The `w3cschemas` module still requires v1. | — |
+| `xpath.Context` per-evaluation fields move to `xpath.Env` | `ctx.Docs = r` → `xpath.NewContext(item, funcs, func(e *xpath.Env) { e.Docs = r })` or `ctx = ctx.WithEnv(func(e *xpath.Env) { e.Docs = r })`; reads `ctx.Docs` → `ctx.Env().Docs`. Moved: `Ctx`, `Docs`, `Collections`, `Texts`, `Entities`, `Environment`, `Modules`, `Validator`, `Now`, `HasNow`, `ImplicitTimezone`, `RegexVersion`, `LibraryVersion`, `MaxDepth`, `MaxItems`, `QualifyVar`, `MissingVar`, `MapDuplicateCode`. Budgets cannot be set or reset through `Env`. | [`9af0e77`][9af0e77] |
+| `xpath.Context` static fields become methods | `ctx.Version`, `ctx.StaticBaseURI`, `ctx.StaticHost`, `ctx.StaticNamespaces`, `ctx.Compat` → the same names called; `ctx.Version = v` → `ctx = ctx.WithVersion(v)`, `ctx.StaticBaseURI = u` → `ctx = ctx.WithStaticBaseURI(u)`. | [`9af0e77`][9af0e77] |
+| `Context.WithNow` removed | `ctx.WithNow(t)` → `ctx.WithEnv(func(e *xpath.Env) { e.Now, e.HasNow = t, true })`. | [`9af0e77`][9af0e77] |
+
+### Changed — performance
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| Every scope change copied the whole 512 B `xpath.Context` | The context is a 160 B scope plus pointers to a shared `Env` and the expression's static part; `Compiled.Eval` swaps a pointer. CEN, Peppol, XRechnung −25% CPU, −36% bytes; DocBook −30% CPU. | [`9af0e77`][9af0e77] |
 
 ## Unreleased
 
@@ -1398,3 +1407,4 @@ here so every entry in this file sits under a release.
 [900cece]: https://github.com/knroy/go-xml/commit/900cece
 [ba09cac]: https://github.com/knroy/go-xml/commit/ba09cac
 [1a3cf7f]: https://github.com/knroy/go-xml/commit/1a3cf7f
+[9af0e77]: https://github.com/knroy/go-xml/commit/9af0e77

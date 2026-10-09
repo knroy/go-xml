@@ -598,14 +598,14 @@ an expression:
 ```go
 e, _ := xpath.ParseVersion(`parse-json('{"n":42}')`, nil, xpath.XPath31)
 ctx := xpath.NewContext(nil, xpath.Builtins())
-ctx.Version = xpath.XPath31   // and this line, or XPST0017
+ctx = ctx.WithVersion(xpath.XPath31) // and this line, or XPST0017
 seq, _ := e.Eval(ctx)         // seq[0] is an *xdm.MapItem
 ```
 
 Two things make that worse than it looks. The version is set in **two** places
 and both are required: `xpath.Parse` compiles 2.0, so the expression needs
 `ParseVersion(…, XPath31)`, and `parse-json` is registered with
-`registerFnSince(XPath31, …)`, which reads `ctx.Version` rather than the
+`registerFnSince(XPath31, …)`, which reads `ctx.Version()` rather than the
 parser's. Setting one and not the other gives `XPST0017: unknown function`,
 which reads like the function is missing rather than like a version is unset.
 The second is that the JSON text has to be *spliced into an expression*, so a
@@ -693,7 +693,7 @@ charge or the inheritance brings the fatal back.
 
 The guarantee extends to `fn:transform` called from XQuery or `xpath.Eval`
 (the processor `xslt` registers with `xpath`): that path charges from
-`ctx.Depth` under `ctx.MaxDepth`, and the nested runtime's XPath context now
+`ctx.Depth` under `ctx.Env().MaxDepth`, and the nested runtime's XPath context now
 starts at the inherited depth, so a cycle through another host language
 accumulates too. `TestTransformRecursionThroughAnotherHostIsBounded`; removing
 the seed fails it.

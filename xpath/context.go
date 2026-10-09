@@ -842,7 +842,9 @@ func NewContext(item xdm.Item, funcs FunctionLibrary, configure ...func(e *Env))
 // through the same maps without a new one being built.
 //
 // The copy itself does allocate — it is the largest single allocation site in
-// the engine, around a quarter of what a stylesheet render allocates. Reusing
+// the engine, around a quarter of what a stylesheet render allocates (counted
+// when the copy was 512 bytes; it is 160 since the environment and the static
+// part moved behind pointers). Reusing
 // one context across a step loop was measured and made no difference at all
 // (4,963,596 vs 4,964,187 bytes per render), so it was reverted: WithVar
 // builds children holding a pointer back to this context, and the aliasing
