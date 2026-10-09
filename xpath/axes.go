@@ -1,10 +1,6 @@
 package xpath
 
-import (
-	"sort"
-
-	"github.com/knroy/go-xml/v2/xdm"
-)
+import "github.com/knroy/go-xml/v2/xdm"
 
 // walkAxis calls visit for each node on the axis from n, in axis order.
 //
@@ -49,23 +45,7 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 		// namespace axis — including the text and document nodes of a
 		// temporary tree, which inherit no bindings because they have no
 		// name to put in a namespace.
-		if n.Kind() != xdm.KindElement {
-			return
-		}
-		scope := n.InScopeNamespaces()
-		prefixes := make([]string, 0, len(scope))
-		for prefix := range scope {
-			prefixes = append(prefixes, prefix)
-		}
-		sort.Strings(prefixes)
-		for i, prefix := range prefixes {
-			ns := xdm.NewNode(xdm.KindNamespace, xdm.QName{Local: prefix}, scope[prefix])
-			ns.SetParent(n)
-			// A synthesized node has no document order of its own, and left
-			// at zero it sorts before every real node and makes
-			// generate-id() answer "N0" for all of them — colliding with
-			// each other and with the document node.
-			ns.SetSynthesizedOrder(n, i)
+		for ns := range n.NamespaceNodes() {
 			if !visit(ns) {
 				return
 			}

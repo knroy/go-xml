@@ -194,8 +194,6 @@ func analyzeString(in string, re Regexp, parents []int) (*xdm.Node, error) {
 	// against the expected XML sees a different element.
 	result := xdmbuild.NewElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "analyze-string-result"})
 	result.AddNamespace("fn", xdm.NSFN)
-	appendChild := (*xdm.Node).AppendChild
-	text := xdmbuild.NewText
 
 	all := re.FindAllStringSubmatchIndex(in, -1)
 	// A budget exhausted part way through the scan returns the matches found
@@ -209,20 +207,15 @@ func analyzeString(in string, re Regexp, parents []int) (*xdm.Node, error) {
 	for _, m := range all {
 		// Everything between the previous match and this one is a non-match.
 		if m[0] > last {
-			nm := xdmbuild.NewElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "non-match"})
-			appendChild(nm, text(in[last:m[0]]))
-			appendChild(result, nm)
+			result.AppendElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "non-match"}).AppendText(in[last:m[0]])
 		}
 
-		match := xdmbuild.NewElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "match"})
-		buildMatch(match, in, m, parents, appendChild, text)
-		appendChild(result, match)
+		match := result.AppendElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "match"})
+		buildMatch(match, in, m, parents)
 		last = m[1]
 	}
 	if last < len(in) {
-		nm := xdmbuild.NewElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "non-match"})
-		appendChild(nm, text(in[last:]))
-		appendChild(result, nm)
+		result.AppendElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "non-match"}).AppendText(in[last:])
 	}
 	return result, nil
 }
@@ -237,8 +230,7 @@ type groupSpan struct{ start, end, nr int }
 // group that did not participate in the match contributes nothing. Text of the
 // match that falls outside every group is emitted directly on fn:match, which
 // is why this walks the match span rather than concatenating the groups.
-func buildMatch(match *xdm.Node, in string, m []int, parents []int,
-	appendChild func(parent, child *xdm.Node), text func(string) *xdm.Node) {
+func buildMatch(match *xdm.Node, in string, m []int, parents []int) {
 	var groups []groupSpan
 	for g := 1; g*2+1 < len(m); g++ {
 		if m[g*2] >= 0 {
@@ -267,19 +259,18 @@ func buildMatch(match *xdm.Node, in string, m []int, parents []int,
 		}
 		g := groups[best]
 		if g.start > pos {
-			appendChild(match, text(in[pos:g.start]))
+			match.AppendText(in[pos:g.start])
 		}
-		el := xdmbuild.NewElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "group"})
-		el.AddAttr(xdmbuild.NewAttribute(xdm.QName{Local: "nr"}, strconv.Itoa(g.nr)))
+		el := match.AppendElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "group"})
+		el.AppendAttr(xdm.QName{Local: "nr"}, strconv.Itoa(g.nr))
 		emitted[best] = true
 		// Nested groups sit inside this one, so recurse over the sub-slice of
 		// groups this one contains.
-		fillNested(el, in, g.start, g.end, g.nr, groups, parents, emitted, appendChild, text)
-		appendChild(match, el)
+		fillNested(el, in, g.start, g.end, g.nr, groups, parents, emitted)
 		pos = g.end
 	}
 	if pos < m[1] {
-		appendChild(match, text(in[pos:m[1]]))
+		match.AppendText(in[pos:m[1]])
 	}
 }
 
@@ -303,8 +294,7 @@ func enclosedBy(nr, outer int, parents []int) bool {
 
 // fillNested fills a group element with the groups nested inside it.
 func fillNested(el *xdm.Node, in string, start, end, outer int,
-	groups []groupSpan, parents []int, emitted []bool,
-	appendChild func(parent, child *xdm.Node), text func(string) *xdm.Node) {
+	groups []groupSpan, parents []int, emitted []bool) {
 	pos := start
 	for {
 		best := -1
@@ -328,16 +318,15 @@ func fillNested(el *xdm.Node, in string, start, end, outer int,
 		}
 		g := groups[best]
 		if g.start > pos {
-			appendChild(el, text(in[pos:g.start]))
+			el.AppendText(in[pos:g.start])
 		}
-		inner := xdmbuild.NewElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "group"})
-		inner.AddAttr(xdmbuild.NewAttribute(xdm.QName{Local: "nr"}, strconv.Itoa(g.nr)))
+		inner := el.AppendElement(xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "group"})
+		inner.AppendAttr(xdm.QName{Local: "nr"}, strconv.Itoa(g.nr))
 		emitted[best] = true
-		fillNested(inner, in, g.start, g.end, g.nr, groups, parents, emitted, appendChild, text)
-		appendChild(el, inner)
+		fillNested(inner, in, g.start, g.end, g.nr, groups, parents, emitted)
 		pos = g.end
 	}
 	if pos < end {
-		appendChild(el, text(in[pos:end]))
+		el.AppendText(in[pos:end])
 	}
 }

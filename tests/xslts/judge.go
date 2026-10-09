@@ -159,7 +159,7 @@ func treeOf(res *xslt.Result) *xdm.Node {
 		case *xdm.Node:
 			spliceInto(tree.Root, v)
 		case *xdm.Atomic:
-			tree.Root.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, v.String()))
+			tree.Root.AppendText(v.String())
 		}
 	}
 	tree.Finalize()
@@ -731,11 +731,10 @@ func (mapNS) DefaultFunctionNamespace() string  { return xdm.NSFN }
 // puts one directly under <out>, so "/out/node()[1]" saw a single document
 // node where the assertion expects the comment inside it.
 //
-// An element containing one is rebuilt rather than relinked, because the
-// splice changes its child list and the result's own nodes must not be
-// mutated: the failure message serialises them afterwards, and a shared
-// subtree would be reported with the harness's edit in it. An element with no
-// document node anywhere beneath it is passed through untouched, which is the
+// Everything is copied rather than relinked, because the result's own nodes
+// must not be mutated: the failure message serialises them afterwards, and a
+// shared subtree would be reported with the harness's edit in it. An element
+// with no document node anywhere beneath it is copied whole, which is the
 // overwhelmingly common case.
 func spliceInto(parent, n *xdm.Node) {
 	if n.Kind() == xdm.KindDocument {
@@ -745,7 +744,7 @@ func spliceInto(parent, n *xdm.Node) {
 		return
 	}
 	if !hasDocumentChild(n) {
-		parent.AppendChild(n)
+		parent.AppendCopy(n)
 		return
 	}
 	// Every field of the node is carried across, not the handful the
@@ -755,20 +754,13 @@ func spliceInto(parent, n *xdm.Node) {
 	// URI and the type annotation — and the namespace count in element-0306
 	// went from three to two because the node was no longer the one the
 	// engine built.
-	copied := xdm.NewNode(n.Kind(), n.Name(), n.Value())
-	attrs := make([]*xdm.Node, n.NumAttrs())
-	for i := range attrs {
-		attrs[i] = n.AttrAt(i)
+	copied := parent.AppendShallowCopy(n)
+	for ns := range n.NamespaceDecls() {
+		copied.AddNamespace(ns.Name().Local, ns.Value())
 	}
-	copied.SetAttrs(attrs)
-	nss := make([]*xdm.Node, n.NumNamespaceDecls())
-	for i := range nss {
-		nss[i] = n.NamespaceDeclAt(i)
+	for a := range n.Attrs() {
+		copied.AppendCopy(a)
 	}
-	copied.SetNamespaceDecls(nss)
-	copied.SetBaseURI(n.BaseURI())
-	copied.CopyTypingFrom(n)
-	parent.AppendChild(copied)
 	for c := range n.Children() {
 		spliceInto(copied, c)
 	}

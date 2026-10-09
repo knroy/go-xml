@@ -292,7 +292,7 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 				// right for XSLT's sequence rules and wrong here.
 				// Constr-cont-nodeid-1 binds <a/> to $x, puts $x in
 				// <elem>{$x}</elem>, and requires the child not to be $x.
-				v = xdmbuild.DeepCopy(v)
+				v = xdm.Copy(v)
 			}
 			out.b.AppendNode(v)
 			if el := out.b.Open(); el != nil && el.NumChildren() > before {
@@ -475,14 +475,13 @@ func stripNamespaces(n *xdm.Node) {
 			need[a.Name().Prefix] = a.Name().URI
 		}
 	}
-	kept := make([]*xdm.Node, 0, n.NumNamespaceDecls())
-	for ns := range n.NamespaceDecls() {
-		if uri, ok := need[ns.Name().Local]; ok && uri == ns.Value() {
-			kept = append(kept, ns)
-			delete(need, ns.Name().Local)
+	n.RemoveNamespaceDecls(func(prefix, uri string) bool {
+		if want, ok := need[prefix]; ok && want == uri {
+			delete(need, prefix)
+			return false
 		}
-	}
-	n.SetNamespaceDecls(kept)
+		return true
+	})
 	// A name whose binding was never on this element in the first place — it
 	// came from an ancestor that the copy has left behind — still needs one,
 	// or the copy would carry a prefix bound to nothing.

@@ -661,7 +661,7 @@ func TestXML11Refused(t *testing.T) {
 	}
 	// A tree built rather than parsed declares no version and is read as 1.0.
 	tr := xdm.NewTree()
-	tr.Root.AppendChild(xdm.NewNode(xdm.KindElement, xdm.QName{Local: "a"}, ""))
+	tr.Root.AppendElement(xdm.QName{Local: "a"})
 	if got, err := Bytes(tr.Root, Options{Algorithm: Inclusive10}); err != nil || string(got) != "<a></a>" {
 		t.Errorf("built tree: %q, %v", got, err)
 	}

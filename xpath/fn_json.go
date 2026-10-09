@@ -1082,8 +1082,8 @@ func jsonFallback(ctx *Context, opts jsonOptions) func(string) (string, error) {
 // a value was delivered in escaped form.
 type jsonXMLBuilder struct {
 	opts    jsonOptions
-	stack   []*xdm.Node
-	root    *xdm.Node
+	stack   []*jsonXMLNode
+	root    *jsonXMLNode
 	pending string
 	// pendingRaw records whether the pending key needed escaping, which
 	// decides the escaped-key attribute.
@@ -1095,17 +1095,42 @@ type jsonXMLBuilder struct {
 
 const nsJSON = "http://www.w3.org/2005/xpath-functions"
 
-func jsonElement(local string) *xdm.Node {
-	return xdmbuild.NewElement(xdm.QName{URI: nsJSON, Local: local})
+// jsonXMLNode is an element of the XML representation while the JSON is
+// being read. The tree is collected first and emitted afterwards because the
+// duplicates option use-last replaces an entry already seen, and an xdm tree
+// is only ever appended to.
+type jsonXMLNode struct {
+	local string
+	attrs [][2]string // local name, value, in the order they were set
+	text  string
+	kids  []*jsonXMLNode
 }
 
-func setAttr(el *xdm.Node, local, value string) {
-	el.AddAttr(xdmbuild.NewAttribute(xdm.QName{Local: local}, value))
+func jsonElement(local string) *jsonXMLNode { return &jsonXMLNode{local: local} }
+
+func setAttr(el *jsonXMLNode, local, value string) {
+	el.attrs = append(el.attrs, [2]string{local, value})
+}
+
+// emit appends el, its attributes and its content to p, in document order,
+// and returns the new element.
+func (el *jsonXMLNode) emit(p *xdm.Node) *xdm.Node {
+	n := p.AppendElement(xdm.QName{URI: nsJSON, Local: el.local})
+	for _, a := range el.attrs {
+		n.AppendAttr(xdm.QName{Local: a[0]}, a[1])
+	}
+	if el.text != "" {
+		n.AppendText(el.text)
+	}
+	for _, k := range el.kids {
+		k.emit(n)
+	}
+	return n
 }
 
 // attach places a finished element under the open container, applying the key
 // attribute and the duplicates option.
-func (b *jsonXMLBuilder) attach(el *xdm.Node) error {
+func (b *jsonXMLBuilder) attach(el *jsonXMLNode) error {
 	if len(b.stack) == 0 {
 		if b.root != nil {
 			return errFOJS0001("more than one value at the top level")
@@ -1114,7 +1139,7 @@ func (b *jsonXMLBuilder) attach(el *xdm.Node) error {
 		return nil
 	}
 	parent := b.stack[len(b.stack)-1]
-	if parent.Name().Local == "map" {
+	if parent.local == "map" {
 		k := b.pending
 		// The key attribute is written before the duplicate check so that
 		// use-last can replace the whole element.
@@ -1129,15 +1154,15 @@ func (b *jsonXMLBuilder) attach(el *xdm.Node) error {
 				case "reject":
 					return xdm.Errorf("FOJS0003", "duplicate key %q in a JSON object", k)
 				case "use-last":
-					xdmbuild.ReplaceChild(parent, i, el)
+					parent.kids[i] = el
 				default: // use-first
 				}
 				return nil
 			}
-			idx[k] = parent.NumChildren()
+			idx[k] = len(parent.kids)
 		}
 	}
-	parent.AppendChild(el)
+	parent.kids = append(parent.kids, el)
 	return nil
 }
 
@@ -1193,9 +1218,7 @@ func (b *jsonXMLBuilder) str(s string) error {
 	if b.opts.escape && needsEscapeMark(s) {
 		setAttr(el, "escaped", "true")
 	}
-	if s != "" {
-		el.AppendChild(xdmbuild.NewText(s))
-	}
+	el.text = s
 	return b.attach(el)
 }
 
@@ -1210,7 +1233,7 @@ func needsEscapeMark(s string) bool { return strings.Contains(s, "\\") }
 
 func (b *jsonXMLBuilder) number(lexeme string) error {
 	el := jsonElement("number")
-	el.AppendChild(xdmbuild.NewText(lexeme))
+	el.text = lexeme
 	return b.attach(el)
 }
 
@@ -1220,7 +1243,7 @@ func (b *jsonXMLBuilder) boolean(v bool) error {
 	if v {
 		s = "true"
 	}
-	el.AppendChild(xdmbuild.NewText(s))
+	el.text = s
 	return b.attach(el)
 }
 
@@ -1238,10 +1261,10 @@ func jsonToXML(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error
 	// The root element declares the namespace it is in. Without the
 	// declaration the tree serialises with none, so a comparison against the
 	// expected XML sees a differently-named element.
-	b.root.AddNamespace("", nsJSON)
 	doc := xdmbuild.NewDocument(ctx.StaticBaseURI())
-	doc.AppendChild(b.root)
-	setBaseURI(b.root, ctx.StaticBaseURI())
+	root := b.root.emit(doc)
+	root.AddNamespace("", nsJSON)
+	setBaseURI(root, ctx.StaticBaseURI())
 	tree := &xdm.Tree{Root: doc}
 	tree.Finalize()
 	if opts.validate {
