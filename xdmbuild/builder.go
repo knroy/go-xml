@@ -451,8 +451,7 @@ func (b *Builder) AppendText(s string) {
 		if !b.countNodes(1) {
 			return
 		}
-		n := xdm.NewNode(xdm.KindText, xdm.QName{}, s)
-		b.open.AppendChild(n)
+		n := b.open.AppendText(s)
 		// Start a run on the new node rather than only on the second piece,
 		// so that the buffer holds the first piece too and the run never has
 		// to re-copy it.
@@ -613,10 +612,9 @@ func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
 	if !b.countNodes(1) {
 		return b.Refused()
 	}
-	attr := xdm.NewNode(xdm.KindAttribute, name, value)
+	attr := b.open.AppendAttr(name, value)
 	attr.ApplyTyping(typing)
-	b.open.AddAttr(attr)
-	fixupAttrPrefix(b.open, b.open.AttrAt(b.open.NumAttrs()-1))
+	fixupAttrPrefix(b.open, attr)
 	return nil
 }
 
@@ -886,8 +884,15 @@ func (b *Builder) StartElement(name xdm.QName) *Builder {
 	// set, so the loop driving the construction stops on its next check and
 	// nothing further is appended to it.
 	b.countNodes(1)
-	el := xdm.NewNode(xdm.KindElement, name, "")
-	b.AppendNode(el)
+	b.lastAtomic = false
+	var el *xdm.Node
+	if b.open != nil {
+		el = b.open.AppendElement(name)
+		Rebase(el, b.open.BaseURI())
+	} else {
+		el = xdm.NewNode(xdm.KindElement, name, "")
+		b.items = append(b.items, el)
+	}
 	return &Builder{open: el, parent: b, tree: b.tree, policy: b.policy,
 		refused: b.refused}
 }
@@ -997,7 +1002,7 @@ func (b *Builder) ToTree() *xdm.Node {
 				if last := tree.Root.LastChild(); last != nil && last.Kind() == xdm.KindText {
 					last.SetValue(last.Value() + *sep)
 				} else {
-					tree.Root.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, *sep))
+					tree.Root.AppendText(*sep)
 				}
 			}
 			prevAtomic = false
@@ -1071,7 +1076,7 @@ func (b *Builder) ToTree() *xdm.Node {
 				// and which Constr-cont-document-5 counts as one child.
 				last.SetValue(last.Value() + text)
 			case text != "" || !dropEmpty:
-				tree.Root.AppendChild(xdm.NewNode(xdm.KindText, xdm.QName{}, text))
+				tree.Root.AppendText(text)
 			default:
 				// Under XQuery's rule a lone zero-length atomic starts no
 				// child. The two arms above still take it -- joining "" onto
@@ -1201,5 +1206,5 @@ func appendMergingText(parent, n *xdm.Node, dropEmpty bool) {
 			return
 		}
 	}
-	parent.AppendChild(DeepCopy(n))
+	parent.AppendCopy(n)
 }

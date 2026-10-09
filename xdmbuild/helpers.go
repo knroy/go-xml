@@ -15,32 +15,7 @@ import (
 // false for a node that had just been copied from a validated document.
 // Stripping is done by the validation spec, which is the thing that knows
 // whether the instruction asked for it.
-func DeepCopy(n *xdm.Node) *xdm.Node {
-	c := xdm.NewNode(n.Kind(), n.Name(), n.Value())
-	c.SetBaseURI(n.BaseURI())
-	// Every PSVI property travels, which is what "the copy is the same node"
-	// means. dm:nilled included: a copy of an assessed element is an element
-	// that was assessed — validation-1202 copies a nilled element with
-	// validation="preserve" and requires nilled() to stay true, and fn:copy-of
-	// and fn:snapshot in validation-1203 require the same. Only a NEWLY
-	// CONSTRUCTED element starts unnilled, which is xsl:copy's case in
-	// validation-1204: there the annotation is preserved but the element
-	// itself is new, and that is decided by the validation spec rather than
-	// here.
-	c.CopyTypingFrom(n)
-	for ns := range n.NamespaceDecls() {
-		c.AddNamespace(ns.Name().Local, ns.Value())
-	}
-	for a := range n.Attrs() {
-		ac := xdm.NewNode(xdm.KindAttribute, a.Name(), a.Value())
-		ac.CopyTypingFrom(a)
-		c.AddAttr(ac)
-	}
-	for ch := range n.Children() {
-		c.AppendChild(DeepCopy(ch))
-	}
-	return c
-}
+func DeepCopy(n *xdm.Node) *xdm.Node { return xdm.Copy(n) }
 
 // ResolveAgainst resolves a possibly-relative reference against a base URI,
 // returning the reference unchanged when the base is unusable.
