@@ -204,7 +204,8 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 		// loop above has already checked that every item is a node.
 		var v xdm.Sequence
 		var err error
-		if st, ok := step.(*Step); ok {
+		st, fresh := step.(*Step)
+		if fresh {
 			v, err = st.evalFrom(ctx, it.(*xdm.Node))
 		} else {
 			v, err = step.Eval(ctx.WithFocus(it, i+1, size))
@@ -217,7 +218,16 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 				allNodes = false
 			}
 		}
-		out = append(out, v...)
+		// evalFrom's result is a fresh slice no one else holds, so the first
+		// one becomes out instead of being copied into it: for a single
+		// input node, the common case, that copy was the accumulation's
+		// whole cost. Any other step can return a sequence a variable still
+		// holds, whose spare capacity a later append must not write into.
+		if fresh && out == nil {
+			out = v
+		} else {
+			out = append(out, v...)
+		}
 	}
 
 	if !allNodes {

@@ -79,3 +79,46 @@ func TestPathStepWithoutFocusCopy(t *testing.T) {
 		t.Errorf("a child step allocated %.2f times per input node, want at most 4.5", perNode)
 	}
 }
+
+// evalStepOver keeps the first axis step's result as its accumulator instead
+// of copying it, since evalFrom's result is a fresh slice. A step of another
+// kind can return a sequence a variable holds, so that one is still copied:
+// "/r/a/$v" must not write into the spare capacity of $v's slice.
+func TestPathStepResultNotCopied(t *testing.T) {
+	tree, err := xdm.ParseString(`<r><a><b/><b/><b/></a><a><b/></a></r>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewContext(tree.Root, Builtins())
+	bs, err := MustCompile("/r/a[1]/b", nil).Eval(ctx)
+	if err != nil || len(bs) != 3 {
+		t.Fatalf("/r/a[1]/b: %v %v", bs, err)
+	}
+	v := make(xdm.Sequence, 3, 10)
+	copy(v, bs)
+	ctx.Vars["v"] = v
+	got, err := MustCompile("/r/a/$v", nil).Eval(ctx)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("/r/a/$v: %d items, %v", len(got), err)
+	}
+	if spare := v[:10]; spare[3] != nil {
+		t.Errorf("/r/a/$v wrote into the spare capacity of $v")
+	}
+	if n, err := MustCompile("count(/r/a/b)", nil).Eval(ctx); err != nil || n[0].(*xdm.Atomic).String() != "4" {
+		t.Errorf("count(/r/a/b) = %v, %v; want 4", n, err)
+	}
+
+	// One input node: the slice evalFrom built is the result itself.
+	as := bs[:1:1]
+	as[0] = bs[0].(*xdm.Node).Parent
+	step := MustCompile("b", nil).expr
+	allocs := testing.AllocsPerRun(50, func() {
+		if _, err := evalStepOver(ctx, as, step, true); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Logf("allocations: %.0f", allocs)
+	if allocs > 6 {
+		t.Errorf("a child step over one node allocated %.0f times, want at most 6", allocs)
+	}
+}
