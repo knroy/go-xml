@@ -671,7 +671,9 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			// failed above as cvc-elt.3.1 and is not a nilled element at all.
 			// Only the validator can draw that distinction, so only the
 			// validator records it. See xdm.Node.IsNilled.
-			el.IsNilled = true
+			t := xdm.TypingOf(el)
+			t.IsNilled = true
+			el.ApplyTyping(t)
 			return nil
 		}
 	}
@@ -2149,7 +2151,9 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 	// into an error.
 	if ct, ok := typ.(*ComplexType); ok && ct != nil &&
 		ct.Content == ContentElementOnly {
-		el.NoTypedValue = true
+		t := xdm.TypingOf(el)
+		t.NoTypedValue = true
+		el.ApplyTyping(t)
 	}
 	// Mixed content is recorded for the serializers, which must not indent
 	// it (Serialization 3.1 §5.1.4); the annotation of an anonymous mixed
@@ -2157,7 +2161,9 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 	// but the same section lets its content be indented, so it is left out.
 	if ct, ok := typ.(*ComplexType); ok && ct != nil &&
 		ct.Content == ContentMixed && ct.Name != xsName("anyType") {
-		el.MixedContent = true
+		t := xdm.TypingOf(el)
+		t.MixedContent = true
+		el.ApplyTyping(t)
 	}
 	if n := typ.TypeName(); n.Local != "" {
 		v.schema.setResolvedAnnotation(el, xdm.AnnotationName(n.URI, n.Local), typ)

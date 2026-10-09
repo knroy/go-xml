@@ -342,7 +342,9 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 				}
 			}
 			stripAnnotations(n)
-			n.TypeAnnotation = "untypedAtomic"
+			t := xdm.TypingOf(n)
+			t.TypeAnnotation = "untypedAtomic"
+			n.ApplyTyping(t)
 			return nil
 		}
 	}

@@ -740,7 +740,8 @@ func typedValueFor(normalized string, t *SimpleType) xdm.Item {
 	if p := primitiveOf(t); p != nil {
 		prim = p.Name.Local
 	}
-	n := &xdm.Node{Kind: xdm.KindText, Value: normalized, TypeAnnotation: prim}
+	n := &xdm.Node{Kind: xdm.KindText, Value: normalized}
+	n.ApplyTyping(xdm.Typing{TypeAnnotation: prim})
 	return n.Atomize()
 }
 
