@@ -44,6 +44,8 @@ code before and after, and how to run the rewriter on your own module.
 | A parsed node was a 280 B struct of 16 pointers | Nodes are 40 B records in per-tree chunks, one pointer each; names, values, typing, positions and base URIs live in per-tree tables. 10 MB parse: 22 → 2.5 bytes retained per input byte, 127 → 77 ms CPU, 230 → 36 MB allocated; 100 MB parse peak 2.3 GB → 446 MB; descendant walk 10.6 → 1.3 ns per node. | a81dff2 |
 | Every scope change copied the whole 512 B `xpath.Context` | The context is a 160 B scope plus pointers to a shared `Env` and the expression's static part; `Compiled.Eval` swaps a pointer. CEN, Peppol, XRechnung −25% CPU, −36% bytes; DocBook −30% CPU. | [`9af0e77`][9af0e77] |
 | The smaller heap made the collector run 65–75% more often (CEN +32%, Peppol +19% CPU at `GOGC=100`) | Transform allocation cut: `current()` rebinding skipped, `Atomic` 112 → 48 B, runtime copy 352 → 176 B, `Context` 160 → 112 B, shared literal/boolean sequences, lent namespace lists. CEN −2%, Peppol −13%, DocBook −21% CPU against v1's layout. | 90d9a8b, afa3b59, f2e6fb1, 76a7f6a, 0462046, 2c5ea0b |
+| Typed validation made two per-node copies (2.5–3.4× v1's in-place annotation), and three callers copied the input first | `ValidateCopy` clones the record chunks in bulk for both copies; the pre-copies go where they change nothing. Catalog `ValidateCopy` −48% CPU; CLI `-validate strict` −31%, `xsl:source-document` −30%, XQuery `validate` −34%. | 18c35f6, b48adaf |
+| Plain `Validate` kept union-member typing that only assertions read | Kept only inside an element with assertions; text read once per node. Catalog `Validate` −4% CPU, 508 → 19 KB per pass. | e48af61 |
 
 ## v1.7.1 — 2026-10-09
 
