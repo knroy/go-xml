@@ -7,7 +7,7 @@ The short version: `tests/check.sh` is the gate, and a change is not done
 until it prints `OK`.
 
 ```
-tests/check.sh fast     # build, vet, unit tests, race — about a minute
+tests/check.sh fast     # build, vet, gofmt, unit tests, race — about a minute
 tests/check.sh          # everything available, about eight minutes
 ```
 

@@ -43,7 +43,21 @@ code before and after, and how to run the rewriter on your own module.
 | Every scope change copied the whole 512 B `xpath.Context` | The context is a 160 B scope plus pointers to a shared `Env` and the expression's static part; `Compiled.Eval` swaps a pointer. CEN, Peppol, XRechnung −25% CPU, −36% bytes; DocBook −30% CPU. | [`9af0e77`][9af0e77] |
 | The smaller heap made the collector run 65–75% more often (CEN +32%, Peppol +19% CPU at `GOGC=100`) | Transform allocation cut: `current()` rebinding skipped, `Atomic` 112 → 48 B, runtime copy 352 → 176 B, `Context` 160 → 112 B, shared literal/boolean sequences, lent namespace lists. CEN −2%, Peppol −13%, DocBook −21% CPU against v1's layout. | 90d9a8b, afa3b59, f2e6fb1, 76a7f6a, 0462046, 2c5ea0b |
 
-## Unreleased
+## v1.7.0 — 2026-10-09
+
+**Behaviour changes to check before upgrading.** The exported API only
+gains names, but three things you may observe change:
+
+- `generate-id()` strings are now `N<tree>x<order>`. The old form collided
+  between trees with more than 2^20 nodes; the spec leaves the format to the
+  implementation, so code that stored generated ids will see new values.
+- `xsl:next-match` and `xsl:apply-imports` inside `xsl:iterate`,
+  `xsl:merge`, `xsl:sort` or `xsl:copy select` now raise `XTDE0560`, as XSLT
+  3.0 §6.8 requires; they used to run the next rule. (Saxon 12.10 still runs
+  it inside `xsl:merge-action`.)
+- Several static and validation error messages changed wording or order
+  (for example, XTSE0720 now shows the cycle). They are now the same on every
+  run; before, Go's map order could pick a different message.
 
 ### Added
 
