@@ -557,6 +557,18 @@ _f0=$failed
 $GO vet ./... || fail "vet"
 laneFromStatus vet "$_f0" "go vet ./..."
 
+# gofmt, as the CI job runs it. CI's own step is the authority; this lane exists
+# because the gate once passed with two unformatted files that CI then refused.
+# Tracked files only: `gofmt -l .` here would also walk .claude/worktrees.
+section "gofmt"
+_f0=$failed
+_unfmt=$(git ls-files '*.go' 2>/dev/null | grep -v '^testdata/' | xargs gofmt -l 2>&1 || true)
+if [ -n "$_unfmt" ]; then
+	printf "not gofmt'd:\n%s\n" "$_unfmt"
+	fail "gofmt"
+fi
+laneFromStatus gofmt "$_f0" "gofmt -l on tracked .go files"
+
 # docfigure asserts that a number written in the documentation still equals the
 # number the command beside it produces.
 #
