@@ -43,8 +43,17 @@ func hostWithCurrent(h *xpathleaf.Host, item xdm.Item) *xpathleaf.Host {
 	return &n.h
 }
 
-// withCurrentItem binds item as fn:current() on a copy of ctx.
+// withCurrentItem binds item as fn:current() on a copy of ctx. When ctx
+// already binds that node, ctx is returned: the copy would equal it, and
+// template dispatch and pattern predicates almost always find it so.
 func withCurrentItem(ctx *xpath.Context, item xdm.Item) *xpath.Context {
+	if n, ok := item.(*xdm.Node); ok {
+		if h := hostOf(ctx); h != nil && h.CurrentSet && len(h.Current) == 1 {
+			if c, ok := h.Current[0].(*xdm.Node); ok && c == n {
+				return ctx
+			}
+		}
+	}
 	return xpathleaf.WithHost(ctx, hostWithCurrent(hostOf(ctx), item)).(*xpath.Context)
 }
 

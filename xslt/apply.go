@@ -198,20 +198,12 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 	//
 	// Binding it here rather than at the call site covers every entry point
 	// at once, and rebinding it to the same node the caller already bound
-	// costs nothing.
+	// costs nothing. sub is withSelection's fresh copy, so its context is
+	// replaced in place rather than copying the runtime again.
 	if node != nil {
-		sub = sub.withCurrentNode(node)
+		sub.ctx = withCurrentItem(sub.ctx, node)
 	}
 	return runTemplate(sub, t, params, tunnels, out)
-}
-
-// withCurrentNode records node as what fn:current() returns, without touching
-// the focus. The focus is already node here; only the current-node binding may
-// be missing.
-func (rt *runtime) withCurrentNode(node *xdm.Node) *runtime {
-	n := *rt
-	n.ctx = withCurrentItem(rt.ctx, node)
-	return &n
 }
 
 // findTemplate returns the highest-priority template matching node in mode.
