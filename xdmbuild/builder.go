@@ -200,6 +200,27 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 	b.items = append(b.items, n)
 }
 
+// AppendCopyOf appends a copy of n with a new identity, as AppendNode does
+// with xdm.Copy(n), but copying once: an element, comment or processing
+// instruction is copied straight into the tree being built, and a text node
+// contributes its value. Like a parentless copy, it is not charged and takes
+// only the namespaces n itself declares.
+func (b *Builder) AppendCopyOf(n *xdm.Node) {
+	if b.open == nil {
+		b.AppendNode(xdm.Copy(n))
+		return
+	}
+	switch n.Kind() {
+	case xdm.KindText:
+		b.AppendText(n.Value())
+	case xdm.KindElement, xdm.KindComment, xdm.KindPI:
+		b.lastAtomic = false
+		Rebase(b.open.AppendCopy(n), b.open.BaseURI())
+	default:
+		b.AppendNode(xdm.Copy(n))
+	}
+}
+
 // Rebase recomputes the base URIs of a subtree that has just been re-parented.
 //
 // A copied element keeps whatever xml:base attribute it carried, and XSLT 2.0
