@@ -23,7 +23,7 @@ claim is only as good as the command behind it.
 
 | figure | count | counted by |
 |---|---:|---|
-| Unit tests | 2,746 | `grep -rn '^func Test' --include='*_test.go' . \| grep -v '/\.claude/worktrees/' \| grep -vc '^\./bench/'` |
+| Unit tests | 2,747 | `grep -rn '^func Test' --include='*_test.go' . \| grep -v '/\.claude/worktrees/' \| grep -vc '^\./bench/'` |
 | Fuzz targets | 12 | `grep -rn '^func Fuzz' --include='*_test.go' . \| grep -v '/\.claude/worktrees/' \| grep -vc '^\./bench/'` |
 | Limit boundary tests | 14 | `grep -hc '^func Test' ./*/limits_boundary*_test.go \| awk '{n += $1} END {print n + 0}'` |
 
