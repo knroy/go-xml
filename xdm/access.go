@@ -188,3 +188,70 @@ func (n *Node) SetBaseURI(base string) { n.baseURI = base }
 // SetDocumentURI sets dm:document-uri on a document node. See the
 // invariant on the field: only for a document fetched by that URI.
 func (n *Node) SetDocumentURI(uri string) { n.documentURI = uri }
+
+// NextSibling returns the child of n's parent that follows n, or nil when n
+// is the last child, has no parent, or is an attribute or namespace node.
+func (n *Node) NextSibling() *Node {
+	p := n.parent
+	if p == nil || n.kind == KindAttribute || n.kind == KindNamespace {
+		return nil
+	}
+	for i, c := range p.children {
+		if c == n {
+			if i+1 < len(p.children) {
+				return p.children[i+1]
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+// PrevSibling returns the child of n's parent that precedes n, or nil when n
+// is the first child, has no parent, or is an attribute or namespace node.
+func (n *Node) PrevSibling() *Node {
+	p := n.parent
+	if p == nil || n.kind == KindAttribute || n.kind == KindNamespace {
+		return nil
+	}
+	for i, c := range p.children {
+		if c == n {
+			if i > 0 {
+				return p.children[i-1]
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+// Descendants iterates over n's descendants in document order: children,
+// their children, and so on. Attributes and namespace nodes are not
+// descendants.
+func (n *Node) Descendants() iter.Seq[*Node] {
+	return func(yield func(*Node) bool) {
+		n.descend(yield)
+	}
+}
+
+func (n *Node) descend(yield func(*Node) bool) bool {
+	for _, c := range n.children {
+		if !yield(c) || !c.descend(yield) {
+			return false
+		}
+	}
+	return true
+}
+
+// DeclaredNamespaces iterates over the namespace declarations held on n
+// itself as prefix and URI, without making a namespace node for each. An
+// empty URI undeclares the prefix.
+func (n *Node) DeclaredNamespaces() iter.Seq2[string, string] {
+	return func(yield func(string, string) bool) {
+		for _, ns := range n.namespaces {
+			if !yield(ns.name.Local, ns.value) {
+				return
+			}
+		}
+	}
+}

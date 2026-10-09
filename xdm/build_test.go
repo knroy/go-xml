@@ -1,6 +1,9 @@
 package xdm
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // TestAppendBuildsInDocumentOrder builds a small tree top-down and checks the
 // shape, the attribute placement, and that Copy reproduces it as a new tree.
@@ -37,5 +40,33 @@ func TestAppendBuildsInDocumentOrder(t *testing.T) {
 	}
 	if len(prefixes) != 2 || prefixes[0] != "p" || prefixes[1] != "xml" {
 		t.Fatalf("namespace axis %v", prefixes)
+	}
+}
+
+// TestSiblingsAndDescendants checks the sibling links and the descendant
+// iterator against the child lists they walk.
+func TestSiblingsAndDescendants(t *testing.T) {
+	tree, err := ParseString(`<r xmlns:p="urn:p"><a x="1"><b/>t</a><!--c--><d/></r>`, ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := tree.Root.FirstChild()
+	a, c, d := r.ChildAt(0), r.ChildAt(1), r.ChildAt(2)
+	if a.NextSibling() != c || c.NextSibling() != d || d.NextSibling() != nil ||
+		d.PrevSibling() != c || a.PrevSibling() != nil || a.AttrAt(0).NextSibling() != nil {
+		t.Fatal("sibling links wrong")
+	}
+	var got []string
+	for x := range r.Descendants() {
+		got = append(got, x.Kind().String())
+	}
+	want := "element() element() text() comment() element()"
+	if s := fmt.Sprint(got); s != "["+want+"]" {
+		t.Fatalf("descendants %v, want %s", got, want)
+	}
+	for p, u := range r.DeclaredNamespaces() {
+		if p != "p" || u != "urn:p" {
+			t.Fatalf("declared %q=%q", p, u)
+		}
 	}
 }
