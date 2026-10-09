@@ -73,6 +73,13 @@ func stampPosition(err error, instr Instruction) error {
 	if !ok || err == nil {
 		return err
 	}
+	switch err.(type) {
+	case nextIterationSignal, breakSignal:
+		// Control flow rather than an error: it carries no code and is
+		// never reported, so there is nothing to stamp, and xsl:iterate
+		// passes one up through every enclosing instruction per iteration.
+		return err
+	}
 	var e *xdm.Error
 	if errors.As(err, &e) {
 		if e.Line == 0 {

@@ -629,7 +629,9 @@ func soleElementChild(n *xdm.Node) (*xdm.Node, error) {
 // stripAnnotations removes every type annotation from a subtree, which is what
 // validation="strip" means.
 func stripAnnotations(n *xdm.Node) {
-	if n == nil {
+	// A tree no node of which was ever typed has nothing to strip, and the
+	// walk was 8.5% of XRechnung stage 2, which strips every copy it makes.
+	if n == nil || !n.TreeHasTyping() {
 		return
 	}
 	// dm:nilled goes with the annotation, and so do the union member and the

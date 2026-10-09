@@ -941,16 +941,8 @@ func forwardsMode(el *xdm.Node) bool {
 // declaration can change what a 1.0 stylesheet produces but cannot make one
 // fail that did not.
 func compatModeAt(el *xdm.Node) bool {
-	for cur := el; cur != nil; cur = cur.Parent() {
-		if cur.Kind() != xdm.KindElement {
-			continue
-		}
-		if !hasVersionAttr(cur) {
-			continue
-		}
-		return versionAt(cur) < 2.0
-	}
-	return false
+	h, v := versionHolder(el)
+	return h != nil && v < 2.0
 }
 
 // versionAt returns the version stated on el, or 2.0 when el states none or
@@ -1079,16 +1071,8 @@ func xpathVersionAt(el *xdm.Node) xpath.Version {
 	if overrideXPathVersion != nil {
 		return *overrideXPathVersion
 	}
-	for cur := el; cur != nil; cur = cur.Parent() {
-		if cur.Kind() != xdm.KindElement || !hasVersionAttr(cur) {
-			continue
-		}
-		switch v := versionAt(cur); {
-		case v < 3.0:
-			return xpathFloor(xpath.XPath20)
-		default:
-			return xpath.XPath31
-		}
+	if h, v := versionHolder(el); h != nil && v >= 3.0 {
+		return xpath.XPath31
 	}
 	return xpathFloor(xpath.XPath20)
 }

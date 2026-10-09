@@ -364,6 +364,10 @@ wrote two things to the tree: the member type that matched a union-typed
 value, and `nilled` on an element with `xsi:nil="true"`. Code that read those
 after a plain `Validate` reads nothing in v2. Use `ValidateCopy`.
 
+To ask whether a tree carries any typing at all, call `n.TreeHasTyping()` on
+any of its nodes. A copy from `ValidateCopy` does; a parsed document does not,
+and false means every node in the tree is untyped.
+
 ## generate-id strings change
 
 `generate-id()` returns `N<tree>x<position>`, for example `N3x17`, where v1.0

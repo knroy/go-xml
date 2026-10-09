@@ -329,12 +329,27 @@ func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, er
 		h = newComparisonHoist(ctx, pred)
 	}
 
+	// One focus context serves every item when the predicate cannot keep
+	// it: each item's evaluation is over before the next begins, so the
+	// context is moved on in place instead of copied per item.
+	var reuse *Context
+	share := size > 1 && !mayCaptureFocus(pred)
 	for i, it := range seq {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		pos := i + 1
-		sub := ctx.WithFocus(it, pos, size)
+		var sub *Context
+		switch {
+		case !share:
+			sub = ctx.WithFocus(it, pos, size)
+		case reuse == nil:
+			reuse = ctx.WithFocus(it, pos, size)
+			sub = reuse
+		default:
+			reuse.Item, reuse.Position = it, pos
+			sub = reuse
+		}
 		if h != nil {
 			keep, ok, err := h.holds(sub)
 			if err != nil {
@@ -362,6 +377,81 @@ func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, er
 		}
 	}
 	return out, nil
+}
+
+// mayCaptureFocus reports whether evaluating e might keep its context past
+// the evaluation, which would see a later item's focus if applyPredicate
+// moved that context on. A function item is the way one could: an inline
+// function, a named function reference, a partial application or
+// fn:function-lookup builds one, and a dynamic call runs one. Anything not
+// known to be free of them is assumed to capture.
+func mayCaptureFocus(e Expr) bool {
+	anyOf := func(es []Expr) bool {
+		for _, x := range es {
+			if mayCaptureFocus(x) {
+				return true
+			}
+		}
+		return false
+	}
+	bindings := func(bs []Binding) bool {
+		for _, b := range bs {
+			if mayCaptureFocus(b.Seq) {
+				return true
+			}
+		}
+		return false
+	}
+	switch v := e.(type) {
+	case nil, *Literal, *VarRef, *ContextItem, *descendantAttrs:
+		return false
+	case *FuncCall:
+		if v.Name.URI == xdm.NSFN {
+			switch v.Name.Local {
+			case "function-lookup", "load-xquery-module":
+				return true
+			}
+		}
+		return anyOf(v.Args)
+	case *Step:
+		return anyOf(v.Predicates)
+	case *FilterExpr:
+		return mayCaptureFocus(v.Base) || anyOf(v.Predicates)
+	case *PathExpr:
+		return anyOf(v.Steps)
+	case *BinaryOp:
+		return mayCaptureFocus(v.Left) || mayCaptureFocus(v.Right)
+	case *UnaryOp:
+		return mayCaptureFocus(v.Operand)
+	case *CastExpr:
+		return mayCaptureFocus(v.Operand)
+	case *InstanceOfExpr:
+		return mayCaptureFocus(v.Operand)
+	case *TreatExpr:
+		return mayCaptureFocus(v.Operand)
+	case *SequenceExpr:
+		return anyOf(v.Items)
+	case *IfExpr:
+		return mayCaptureFocus(v.Cond) || mayCaptureFocus(v.Then) ||
+			mayCaptureFocus(v.Else)
+	case *StringConcat:
+		return mayCaptureFocus(v.Left) || mayCaptureFocus(v.Right)
+	case *SimpleMap:
+		return mayCaptureFocus(v.Left) || mayCaptureFocus(v.Right)
+	case *ForExpr:
+		return bindings(v.Bindings) || mayCaptureFocus(v.Return)
+	case *LetExpr:
+		return bindings(v.Bindings) || mayCaptureFocus(v.Return)
+	case *QuantifiedExpr:
+		return bindings(v.Bindings) || mayCaptureFocus(v.Test)
+	case *LookupExpr:
+		return mayCaptureFocus(v.Base) || mayCaptureFocus(v.Expr)
+	case *MapConstructor:
+		return anyOf(v.Keys) || anyOf(v.Values)
+	case *ArrayConstructor:
+		return anyOf(v.Members)
+	}
+	return true
 }
 
 // comparisonHoist evaluates a predicate "A op B", a general or value

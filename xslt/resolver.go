@@ -98,6 +98,46 @@ type FileResolver struct {
 	// node for the same URI, and two goroutines that each parsed and each
 	// published would hand out two trees for one document.
 	inflight map[string]*loadCall
+	// real remembers filepath.EvalSymlinks per absolute path, under mu; see
+	// evalSymlinks.
+	real map[string]string
+}
+
+// realCacheMax bounds FileResolver.real: past it, a path is resolved and not
+// remembered.
+const realCacheMax = 4096
+
+// evalSymlinks is filepath.EvalSymlinks remembered per path for the life of
+// the resolver. Resolving walks and lstats every component of the path, and
+// a compilation resolves the same module directory and roots for every
+// reference: it was a third of DocBook's compile time on macOS.
+//
+// Remembering it cannot widen what is read. resolvePath's comparison against
+// the roots is the diagnosis, not the enforcement: every file is opened
+// through readConfined, whose os.Root resolves each component at open time
+// and refuses one that leads out of the root, so a link changed after its
+// answer was remembered is refused rather than followed. A failure is not
+// remembered.
+func (r *FileResolver) evalSymlinks(p string) (string, error) {
+	r.mu.Lock()
+	v, ok := r.real[p]
+	r.mu.Unlock()
+	if ok {
+		return v, nil
+	}
+	v, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return "", err
+	}
+	r.mu.Lock()
+	if len(r.real) < realCacheMax {
+		if r.real == nil {
+			r.real = map[string]string{}
+		}
+		r.real[p] = v
+	}
+	r.mu.Unlock()
+	return v, nil
 }
 
 // loadCall is one in-progress parse. done is closed when tree and err are set.
@@ -176,7 +216,7 @@ func (r *FileResolver) readConfined(path string) ([]byte, error) {
 		if err != nil {
 			continue
 		}
-		if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
+		if resolved, err := r.evalSymlinks(absRoot); err == nil {
 			absRoot = resolved
 		}
 		// The path is made absolute on the same terms as the root. Its
@@ -320,7 +360,7 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 	}
 	// Resolve symlinks before the containment check: without this, a symlink
 	// inside a root pointing at /etc/passwd would pass.
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+	if resolved, err := r.evalSymlinks(abs); err == nil {
 		abs = resolved
 	}
 
@@ -334,7 +374,7 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 		if err != nil {
 			continue
 		}
-		if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
+		if resolved, err := r.evalSymlinks(absRoot); err == nil {
 			absRoot = resolved
 		}
 		rel, err := filepath.Rel(absRoot, abs)

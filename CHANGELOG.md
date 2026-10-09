@@ -38,6 +38,7 @@ code before and after, and how to run the rewriter on your own module.
 | `Context.WithNow` removed | `ctx.WithNow(t)` → `ctx.WithEnv(func(e *xpath.Env) { e.Now, e.HasNow = t, true })`. | [`9af0e77`][9af0e77] |
 | `xdmbuild.Builder.AppendCopyOf` | Appends a copy of a node straight into the tree being built: the result of `AppendNode(xdm.Copy(n))` with one copy instead of two. | `484cb4e8` |
 | `xdmbuild.NSDecl`, `Builder.NoteDeclaredList` | `NoteDeclared` for a list of bindings the builder may keep instead of copying; for a constructor that notes the same bindings on every element it builds. | 2c5ea0b |
+| `xdm.Node.TreeHasTyping` | Whether any node of the node's tree was ever typed; false means the whole tree is untyped. XSLT uses it to skip stripping annotations ([migrating](docs/migrating-to-v2.md#validation-never-writes-to-your-tree)). | 40dbca21 |
 
 ### Changed — performance
 
@@ -53,6 +54,9 @@ code before and after, and how to run the rewriter on your own module.
 | The parser walked ancestors for every prefix and hashed every name into the intern map | No walk in a tree without declarations; a 64-entry cache in front of the map. Parse −2 to −3%, XMark parse phase −6%. | `7186eb0e` |
 | Typed validation made two per-node copies (2.5–3.4× v1's in-place annotation), and three callers copied the input first | `ValidateCopy` clones the record chunks in bulk for both copies; the pre-copies go where they change nothing. Catalog `ValidateCopy` −48% CPU; CLI `-validate strict` −31%, `xsl:source-document` −30%, XQuery `validate` −34%. | 18c35f6, b48adaf |
 | Plain `Validate` kept union-member typing that only assertions read | Kept only inside an element with assertions; text read once per node. Catalog `Validate` −4% CPU, 508 → 19 KB per pass. | e48af61 |
+| XSLT runtime and XPath predicates repeated per-item work (V5) | Runtime copy 176 → 112 B, one focus context per predicate, strip-space memo, untyped trees not stripped. XRechnung 1 −10%, 2 −9%, DocBook items about −11% CPU. | 35cd4d60, 16f3d909, f2c08b2e, 40dbca21, db7e1ba3, 462ee9a2 |
+| DocBook compile 55 → 77 ms on v2 (V7) | Version-attribute walks remembered per Compile (not in the static phase); `FileResolver` remembers `EvalSymlinks`. DocBook compile −11% CPU. | 23ace644, be9eb58e |
+| The runtime copy still carried the 64 B template selection (V13) | Selection held by pointer, allocated with the copy that selects it: copy 112 → 64 B. DocBook items −5.5% bytes, −3.8% CPU. | e09f1060 |
 
 ## v1.7.1 — 2026-10-09
 

@@ -133,7 +133,7 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 func (i *applyTemplatesInstr) effectiveMode(rt *runtime) string {
 	switch i.mode {
 	case "#current":
-		return rt.sel.mode
+		return rt.selected().mode
 	case "#default":
 		return ""
 	}
@@ -924,7 +924,7 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if i.applyImports {
 		name = "xsl:apply-imports"
 	}
-	if rt.sel.template == nil {
+	if rt.selected().template == nil {
 		return fmt.Errorf("XTDE0560: %s used outside a template rule", name)
 	}
 	// Section 6.7 states two conditions, not one: there must be a current
@@ -939,7 +939,7 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// which moves it to the parent. Checking only for a current rule left
 	// both re-dispatching: 029 against no item at all, and 030 against the
 	// parent, which the same rule matched again -- 5000 levels of it.
-	if !sameFocusItem(rt.sel.item, rt.ctx.Item) {
+	if !sameFocusItem(rt.selected().item, rt.ctx.Item) {
 		return fmt.Errorf(
 			"XTDE0560: %s: the context item is no longer the item the "+
 				"current template rule matched", name)
@@ -958,10 +958,10 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	)
 	if i.applyImports {
 		t, nxt, err = rt.sheet.findTemplateInImportTree(
-			node, rt.sel.mode, rt.ctx,
-			rt.sel.template.lowPrecedence, rt.sel.template.importPrecedence)
+			node, rt.selected().mode, rt.ctx,
+			rt.selected().template.lowPrecedence, rt.selected().template.importPrecedence)
 	} else {
-		t, nxt, err = rt.sheet.findTemplateFrom(node, rt.sel.mode, rt.ctx, rt.sel.next)
+		t, nxt, err = rt.sheet.findTemplateFrom(node, rt.selected().mode, rt.ctx, rt.selected().next)
 	}
 	if err != nil {
 		return err
@@ -981,18 +981,18 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 	if tunnels == nil {
-		tunnels = rt.sel.tunnels
+		tunnels = rt.selected().tunnels
 	}
 
 	if t == nil {
 		// Falling off the end of the template list lands on the built-in rule.
-		return applyBuiltInRule(rt, node, rt.sel.mode, params, tunnels, out)
+		return applyBuiltInRule(rt, node, rt.selected().mode, params, tunnels, out)
 	}
 	if err := rt.descend(); err != nil {
 		return err
 	}
 	defer rt.ascend()
-	sub := rt.withSelection(t, nxt, rt.sel.mode, params, tunnels)
+	sub := rt.withSelection(t, nxt, rt.selected().mode, params, tunnels)
 	return runTemplate(sub, t, params, tunnels, out)
 }
 

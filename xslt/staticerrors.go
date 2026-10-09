@@ -1135,12 +1135,8 @@ func effectiveForwards(el *xdm.Node) bool {
 	if proc == 0 {
 		proc = 3.0
 	}
-	for cur := el; cur != nil; cur = cur.Parent() {
-		if cur.Kind() == xdm.KindElement && hasVersionAttr(cur) {
-			return versionAt(cur) > proc
-		}
-	}
-	return false
+	h, v := versionHolder(el)
+	return h != nil && v > proc
 }
 
 // checkModuleAttrs applies the attribute table to a module element.

@@ -1861,6 +1861,10 @@ func (c *compiler) compileSpaceControl(el *xdm.Node, precedence int) error {
 			ps.preserve = append(ps.preserve, qn)
 		}
 	}
+	// An answer remembered before this declaration was read is stale.
+	c.sheet.stripMu.Lock()
+	c.sheet.stripMemo = nil
+	c.sheet.stripMu.Unlock()
 	return nil
 }
 

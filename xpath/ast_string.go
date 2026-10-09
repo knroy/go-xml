@@ -17,13 +17,14 @@ func (t *NameTest) Matches(n *xdm.Node, principal xdm.NodeKind) bool {
 	if n.Kind() != principal {
 		return false
 	}
-	if !t.AnyURI && n.Name().URI != t.Name.URI {
+	// The local name first: it differs sooner, and namespace URIs are long
+	// and shared (a UBL document's 70-byte URIs compare in full on every
+	// node of the same namespace).
+	q := n.Name()
+	if !t.AnyLocal && q.Local != t.Name.Local {
 		return false
 	}
-	if !t.AnyLocal && n.Name().Local != t.Name.Local {
-		return false
-	}
-	return true
+	return t.AnyURI || q.URI == t.Name.URI
 }
 
 func (t *NameTest) String() string {
