@@ -508,17 +508,21 @@ glob> <regexp>`, and its matches are deleted from both sides before they are
 compared again; every rule says which behaviour change it admits and how many
 cases it explained. A case recorded on one side only compares as `<missing>`.
 The rules today are generate-id strings (`N<tree>x<order>`, whose tree number
-depends on how many trees the process built first), the clock in two XSLT
-cases whose harness does not fix `fn:current-dateTime`, and two messages that
-v1 already writes differently from run to run of one binary: XTSE0720 names
-whichever attribute set of a cycle it reaches first (`error-0720*`), and
-`cvc-id.2` lists multiply-defined IDs in Go map order (`validation-1602`).
+depends on how many trees the process built first) and the clock in two XSLT
+cases whose harness does not fix `fn:current-dateTime`. Two more rules once
+admitted messages v1 wrote differently from run to run of one binary, XTSE0720
+naming whichever attribute set of a cycle it reached first (`error-0720*`) and
+`cvc-id.2` listing IDs in Go map order (`validation-1602`). Both messages are
+deterministic since `8082a2c` and `edea87c`, and the rules were removed once a
+recording of v1 `dev` with those fixes matched without them.
 
 A v1 checkout records with the same hook: apply its commit with the module
 path rewritten (`sed 's#knroy/go-xml/v2/#knroy/go-xml/#g'`). The baseline,
 `05ca570` (v1 `dev`) against `12720d5` (v2's module rename), 188,903 cases:
 188,898 byte-identical, 5 explained, **zero unexplained**, every suite figure
-unchanged; a second v2 recording against both also reads zero. Without the
+unchanged; a second v2 recording against both also reads zero. Against v1
+`dev` at `a33c0b7`, v2 at `5362841` reads 188,903 cases, 188,898 identical, 5
+explained by the generate-id and clock rules alone, zero unexplained. Without the
 allow file the same comparison reports those 5 and exits 1, and
 `tests/recdiff/main_test.go` pins a real difference and a missing case. An
 empty or mistyped recording directory is an error, never "zero differences".
