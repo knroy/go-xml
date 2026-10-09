@@ -17,8 +17,8 @@ Warm time, go-xml over the reference engine (geometric mean). Each version is
 compared with the reference times from its own benchmark run
 ([benchmark](benchmark.md)). "v2, pre-fix" is the run before the fix waves;
 "v2 now" is `377452c0`, after waves 1 and 2 (the fixes under
-[Landed](#landed-in-the-v2-fix-round)). The open fixes V17 and V20 are not
-projected.
+[Landed](#landed-in-the-v2-fix-round)). The [open fixes](#open-fixes) (V17,
+V21–V51) are not projected.
 
 | Workload | Reference | v1 | v2, pre-fix | v2 now |
 |---|---|---:|---:|---:|
@@ -69,13 +69,84 @@ takes 48–50 ms of every query except q10–q12.
 
 ## Open fixes
 
-V1–V16, V18 and V19 have landed or were measured and rejected (below). What
-is left:
+From the second v2 profile at `377452c0`, after fix waves 1 and 2. Gains are
+measured on prototypes (getrusage CPU, exact allocation counts, alternated
+A/B) unless marked *estimate*; none has been through the full conformance
+gate yet. Code layout alone moves timings on this machine by up to ±8%, so a
+single CPU gain under about 5% is unconfirmed; byte counts are exact.
 
-| ID | Fix | Cause | Where | Gain | Risk | API |
-|---|---|---|---|---|---|---|
+Two regressions against v1 that the benchmark ratios hide:
+- **XSD validation itself** is 15–23% slower than v1 (the record accessors);
+  faster parsing keeps the whole XSD item level. V21 + V26 bring validation
+  back to about v1 (17.4 → 15.3 ms, v1 14.7).
+- **Typed validation** (`ValidateCopy`) costs about 2× v1's validate phase:
+  the per-node typing table is 80 B a node, twice the record. CLI
+  `-validate strict` on a 2.5 MB catalog is 14% slower than v1 end to end.
+- **Warm compile** is slower (CEN +18%, DocBook +10%): the smaller live heap
+  runs the collector about twice as often during compile; DocBook keeps +7%
+  with GC off (name-table attribute lookups). CLI cold runs are unaffected.
+
+### Validation (XSD, typed validation, RELAX NG)
+
+| ID | Fix | Where | Measured | Risk / API |
+|---|---|---|---|---|
+| V21 | Skip the facet checks for a simple type with no facets (one flag on the cached chain facts) | `xsd/validate_simple.go:225`, `xsd/component.go:585` | XSD validate −10% CPU | Low / none |
+| V22 | RELAX NG name memos: typed copy-on-write maps keyed by namespace and local name instead of `sync.Map` keyed by `QName` | `relaxng/pattern.go:153,175`, `derive.go:348,449` | validate −9.5% small, −7% long | Low / none |
+| V23 | RELAX NG reuses one child and one attribute buffer; a single text node skips the builder | `relaxng/validate.go:297,326,376` | with V22: corpus validate −15.5%, long documents −19%, allocations −69% | Low / none |
+| V24 | The clone keeps a dense index of default-attribute insertions instead of three map lookups per record | `xdm/clone.go:47,56,141,184` | typed validate −8% wall | Low / none |
+| V25 | XSD caches the annotation name and its resolution per type and writes typing once | `xsd/validate.go:2236`, `typevalidate.go:495`, `validate_attr.go:205` | typed allocations −25%, CPU −4% | Low / one xdm setter |
+| V26 | Intern namespace URIs (cloned) so equal URIs compare by pointer; compare local names first | `xdm/parse.go:745`, `xsd/automaton.go:480,504` and others | XSD validate −5.7% | Medium-low / none |
+| V27 | Typing as a pointer to a shared per-tree profile plus flags (16 B instead of 80 B) | `xdm/record.go:221`, `clone.go:195` | typed bytes −26%, CPU −3% beyond V25 | Medium / none |
+| V28 | Record character-reference spans only for XML 1.1 | `internal/xmltok/xmltok.go:1213` | `regex-syntax` parse bytes −38%, fewer GC cycles | Low / none |
+| V29 | `ParseString` uses its own string as the position source when decoding changes nothing | `xdm/parse.go:217–235` | XSD warm bytes −10% | Low-medium / none |
+| V30 | RELAX NG derivative caches keyed by pattern id instead of an interface | `relaxng/derive.go:44,57,118` | *estimate* −8 to −10% long-document validate | Medium / none |
+| V31 | Validate the original tree read-only and clone once instead of twice | `xsd/validate_copy.go:60` | *ceiling* the first clone (7%) and its bytes | High / none |
+| V32 | Lazy package init for xpath, xslt, xdm and collate | init functions | *estimate* ≤5% of a cold small XSD run | Low-medium / none |
+| V33 | Hand-written XML declaration check instead of a regexp | `xdm/wellformed.go:28` | 0.29 µs a document (~2.4% of a small parse) | Low / none |
+
+### Parse and XQuery
+
+| ID | Fix | Where | Measured | Risk / API |
+|---|---|---|---|---|
+| V34 | Small direct-mapped cache in front of the tokenizer's name map | `internal/xmltok/xmltok.go:841` | parse −3.6 to −5.3% | Low / none |
+| V35 | Check an end tag against a stack of open names instead of a second lookup | `xmltok.go:378,406` | −1 to −4% | Low / none |
+| V36 | One namespace-binding stack shared by `validateStartElement` and `buildElement`; name cache keyed on the tokenizer's interned strings | `xdm/parse.go:740,818`, `wellformed.go:91,235`, `record.go:288` | −1.5 to −4.5% each | Low-medium / none |
+| V37 | Text runs stored straight into the text store | `xdm/parse.go:844–881` | 14–20 fewer allocations a parse | Low / none |
+| V38 | `Rebase` stops at a subtree whose base did not change and holds no own bases | `xdmbuild/builder.go:245` | XMark q10 eval −6.6%; XSLT copies benefit too | Low; the prototype's Tree field must fit the 320 B class / none |
+| V39 | Raise `smallNames` from 8 to 24 | `xdm/record.go:344` | q10 eval −8.8% CPU, −18% bytes | Needs a DocBook/Schematron A/B / none |
+| V40 | Pass attribute values to xdm without the tokenizer's arena copy | `xmltok.go:457` | *estimate* ~1% CPU | GC-pacing caveat (see rejected) / none |
+| V41 | Build the large package-level tables on first use | `xslt/elementtable.go:110,942,1143`, xpath tables | *estimate* −0.2 to −0.3 ms a cold CLI run | Low / none |
+| V42 | Cache `canonCache` directory reads and stats | `xsd/assemble.go:556,572` | *estimate* ~0.1 ms cold | Low / none |
+
+V34–V38 together: parse CPU −7 to −9%, XMark −8.4 to −9.2% wall (about 0.79×
+Saxon from 0.86×), outputs byte-identical.
+
+### XSLT
+
+| ID | Fix | Where | Measured | Risk / API |
+|---|---|---|---|---|
+| V43 | Mark merge, grouping and regex absent at the root runtime (the rest of V20, which is otherwise already in the code) | `xslt/runtime.go:902` | XRechnung stage 2 −13% bytes, −7 to −8% CPU; stage 1 −4% bytes | Low / none |
+| V44 | An absent bit for the output URI, so calls and pattern matches stop rebinding it | `xslt/apply.go:767`, `pattern.go:475`, `pattern30.go:498`, `outputfuncs.go:34` | with V43: DocBook −4.5%, CEN −5.3%, Peppol −6.6%, stage 2 −15.6% bytes | Low-medium / none |
+| V45 | Install the module's base URI once on template and function entry, so body expressions stop copying the context | `xslt/apply.go:471,740`, `compile.go:754,1629` | DocBook −3.3%, stage 1 −4.4% bytes; `Compiled.scope` 4.9% → 0.6% of DocBook bytes | Low-medium / none |
+| V46 | int64 fast path for integer `+ - *` (overflow-checked), integer positional predicates, shared small-integer constants | `xpath/operators.go:1077`, `xpath/eval.go:569`, `xdm/atomic.go:295` | Peppol −13.8% allocations, −5.7% CPU | Low; document `Atomic.Rat()` as read-only / none |
+| V47 | Cache the whitespace-stripped copy of a `doc()` tree per stylesheet instead of per transform | `xslt/transform.go:840` | DocBook −3% bytes, about −7% CPU | Medium: bounded or weak-keyed cache / none |
+| V48 | Grow the tokenizer scratch once to the remaining input when a long text run crosses a read window | `internal/xmltok/xmltok.go:1011`, `xdm/parse.go:254` | XRechnung stage 1 −7.3%, stage 2 −9.3% bytes | Low / none |
+| V49 | Count recursion depth in place for non-leaf calls (as leaf calls already do) | `xpath/eval.go:833` | DocBook −4% bytes, −2.8% CPU | Medium / none |
+| V50 | The text store keeps a string of 8 KB or more as its own block | `xdm/record.go:1404` | stage 1 −6.2%, stage 2 −4.3% bytes | Medium: audit the `unsafe.String` producers / none |
+| V51 | `xpath.Context` 112 → 96 B | `xpath/context.go:38` | *estimate* about −3% DocBook bytes | Changes exported `Position`, `Size`, `Depth`, `Funcs` / v2 API |
 | V17 | Slot-indexed frames for local variables (Saxon's design) instead of the `WithVar` scope chain | After V4, on all 42 DocBook items, `WithVar` is 13.0% of bytes and 6.6% of allocations, the runtime copies `withVar` makes another 3.7% and 5.1%; `lookupVarPlain` is 2.4% of CPU. Of the `withVar` allocations, 30% are locals in a sequence constructor, 21% function parameters, 16% template parameters, 18% the grouping and regex clearing bindings a function call makes | `xpath/context.go`, `xslt/runtime.go:367` | Measured ceiling, not a gain: a frame prototype that binds all of one sequence constructor's locals in one allocation saved 0.5% of allocations and no CPU (most constructors bind one variable). Frames across a whole template or function, parameters included, would remove at most about 10% of allocations and 15% of bytes, so the −10 to −15% CPU estimate is the ceiling. The clearing bindings (18%) can be skipped when the component is already absent, without frames | High effort: XPath has no compile-time scope for XSLT locals, so slots need one threaded through `xpath.Compile`, for/let/quantified, inline functions and closures that capture a frame | Host variable binding through the context must keep working |
-| V20 | Skip the clearing bindings a stylesheet-function call makes for merge, grouping and regex context when that component is already absent | 18% of DocBook's remaining `withVar` allocations are these bindings (measured after V4) | `xslt/runtime.go`, function-call entry | Part of V17's ceiling without frames (*estimate*: up to about 2–3% of DocBook bytes) | Low | None |
+
+V43–V49 together: DocBook −13.3% CPU, −15.1% bytes; Peppol −10.8%, −14.2%;
+XRechnung stage 1 −9.1%, −18.5%; stage 2 −15.8%, −29.5%; CEN −4.1%, −6.3%.
+`ptoc.001` goes from Saxon parity to about 0.94×. XSLT 2.0/3.0 unchanged on
+the combined prototype. V17's ceiling is unchanged (locals 36%, function
+params 26%, template params 18% of the remaining `WithVar` bytes).
+
+Measured and not worth it this round: an `Atomize` fast path for all-atomic
+input (allocations −5 to −9%, no CPU), reading a schema in one system call (no
+gain), a `checkChars` table loop for short text, a byte table for the C14N
+escape test. `xdm.ErrorCode` allocating its `errors.As` target on a nil error
+is a trivial fix worth folding into any of the above.
 
 ## Landed in the v2 fix round
 
