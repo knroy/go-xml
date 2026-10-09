@@ -438,7 +438,8 @@ type serializer struct {
 	// content-type meta but serialises as XML: an XML declaration, and empty
 	// elements closed rather than left open.
 	xhtml bool
-	// inHead marks that serialisation is inside <head>, where a duplicate
+	// inHead marks that serialisation is inside a <head> that received the
+	// method's own content-type meta, where the stylesheet's duplicate
 	// charset meta is suppressed.
 	inHead bool
 	// rawText marks that serialisation is inside an HTML element whose
@@ -922,11 +923,15 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// constructor puts it in none -- and ask to see the content-type meta.
 	if s.html && strings.EqualFold(n.Name.Local, "head") &&
 		(!s.xhtml || n.Name.URI == nsXHTML || n.Name.URI == "") {
-		s.inHead = true
-		defer func() { s.inHead = false }()
 		// include-content-type="no" suppresses the meta element. It defaults
 		// to yes, which is why an absent attribute is nil rather than false.
 		if s.opts.IncludeContentType == nil || *s.opts.IncludeContentType {
+			// Serialization 3.1 §7.4.13 and §6.1.14 discard the head's own
+			// content-type meta only "if a meta element has been added", so
+			// the suppression is armed here and nowhere else: under
+			// include-content-type="no" the head keeps the meta it was given.
+			s.inHead = true
+			defer func() { s.inHead = false }()
 			enc := s.opts.Encoding
 			if enc == "" {
 				enc = "UTF-8"
