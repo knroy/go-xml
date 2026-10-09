@@ -1151,6 +1151,10 @@ stylesheetCorpus() { # name, stylesheet, root, input dir, pattern, extra flags
 			_ok=$((_ok + 1))
 		else
 			_bad=$((_bad + 1))
+			# Named, with the first line of what it said, so that a count
+			# that moves between runs can be traced to the file that moved.
+			printf '  %s failed: %s: %s\n' "$_name" "${_f#"$_dir"/}" \
+				"$(printf '%s\n' "$_err" | head -n 1)"
 		fi
 	done < "$_list"
 	rm -f "$_list"
