@@ -506,8 +506,13 @@ func (n *Node) resolveQNameValue() (QName, bool) {
 
 // Attr returns the attribute node with the given expanded name, or nil.
 func (n *Node) Attr(uri, local string) *Node {
-	for a := range n.Attrs() {
-		if q := a.Name(); q.Local == local && q.URI == uri {
+	if n.isLeaf() || n.flags&fSide != 0 {
+		return nil
+	}
+	t := n.tree
+	for i, k := n.self+1, n.attrCount(); k > 0; i, k = i+1, k-1 {
+		a := t.rec(i)
+		if q := &t.names[a.name]; q.Local == local && q.URI == uri {
 			return a
 		}
 	}
