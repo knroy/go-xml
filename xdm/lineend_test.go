@@ -20,7 +20,7 @@ func TestLineEndReader(t *testing.T) {
 	}
 	for _, tc := range cases {
 		for chunk := 1; chunk <= len(tc.in); chunk++ {
-			r := newLineEndReader(&chunkReader{s: tc.in, n: chunk})
+			r := newLineEndReader(&chunkReader{s: tc.in, n: chunk}, 4096)
 			got, err := io.ReadAll(r)
 			if err != nil {
 				t.Fatal(err)

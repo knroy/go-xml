@@ -1396,8 +1396,8 @@ func (t *Tree) UnparsedEntity(name string) (systemID, publicID, notation string,
 	// XML section 4.2. parseInternalEntities keeps the first declaration of
 	// each name, so concatenating in this order gives that rule for free.
 	subset := t.DocType
-	if t.externalSubset != "" {
-		subset += "\n" + t.externalSubset
+	if e := t.extSubset(); e != "" {
+		subset += "\n" + e
 	}
 	if subset == "" {
 		return "", "", "", false
@@ -1428,8 +1428,8 @@ func (t *Tree) HasUnparsedEntities() bool {
 		return false
 	}
 	subset := t.DocType
-	if t.externalSubset != "" {
-		subset += "\n" + t.externalSubset
+	if e := t.extSubset(); e != "" {
+		subset += "\n" + e
 	}
 	if subset == "" {
 		return false

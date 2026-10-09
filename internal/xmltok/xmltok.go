@@ -204,6 +204,18 @@ func NewDecoder(r io.Reader) *Decoder {
 	return &Decoder{Strict: true, src: r, buf: make([]byte, 0, bufSize)}
 }
 
+// NewDecoderSize is NewDecoder for a stream known to hold about size bytes:
+// its read window is no larger than the input needs, where a small document
+// otherwise paid for 4 KB. The string arena is not sized down: a smaller
+// arena retains less heap per tree, which made the collector run more often
+// (docs/profiling.md, "Measured and rejected").
+func NewDecoderSize(r io.Reader, size int) *Decoder {
+	return &Decoder{Strict: true, src: r, buf: make([]byte, 0, min(max(size, minWindow), bufSize))}
+}
+
+// minWindow is the smallest read window NewDecoderSize uses.
+const minWindow = 512
+
 // IsVersion11 reports whether the document declared version="1.1". The
 // version comes from the XML declaration and nowhere else, so there is no
 // setter: a caller able to assert a version could give a 1.0 document 1.1's

@@ -17,5 +17,9 @@ func (t *Tree) CopyDTDFrom(src *Tree) {
 		return
 	}
 	t.DocType = src.DocType
-	t.externalSubset = src.externalSubset
+	if e := src.extSubset(); e != "" {
+		t.ownSource().externalSubset = e
+	} else if t.source != nil {
+		t.source.externalSubset = ""
+	}
 }

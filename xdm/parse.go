@@ -198,7 +198,10 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// UTF-16 document fails with "invalid UTF-8" rather than being read.
 	// This happens before the tee, so that position tracking counts lines
 	// in the text the decoder actually sees.
-	decoded, err := decodeReader(r)
+	// The read windows are sized to a document known to be small: a 2 KB
+	// document otherwise paid for three 4 KB buffers it never filled.
+	window := readWindow(sizeHint)
+	decoded, err := decodeReader(r, window)
 	if err != nil {
 		return nil, fmt.Errorf("parse XML: %w", err)
 	}
@@ -208,7 +211,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// parsing. See xdm/lineend.go. Attribute-value normalization (section
 	// 3.3.3) is the tokeniser's, which still sees "&#10;" apart from a
 	// newline the author typed.
-	r = newLineEndReader(r)
+	r = newLineEndReader(r, window)
 
 	trackPos := opts.TrackPositions
 	var srcBuf strings.Builder
@@ -248,7 +251,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		r = charger
 	}
 
-	dec := xml.NewDecoder(r)
+	dec := xml.NewDecoderSize(r, window)
 	dec.CharsetReader = charsetReader
 	// Leave Strict on: a validator must not silently accept malformed input.
 	dec.Strict = true
@@ -580,7 +583,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					// that live outside the directive. The subset a document
 					// is governed by is not always the text it was written
 					// with.
-					tree.externalSubset = ents.subsetText
+					tree.ownSource().externalSubset = ents.subsetText
 					// Declarations pulled in from the external subset are read
 					// before ents may be discarded below: loading one that
 					// declared no entities still nils ents out, and the
@@ -693,13 +696,23 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		// The decoder stops reading at the end of the root element, so the
 		// tee holds everything up to there — which is all any offset can
 		// point into.
-		tree.src = srcBuf.String()
+		tree.ownSource().src = srcBuf.String()
 	}
 	tree.XMLVersion = "1.0"
 	if dec.IsVersion11() {
 		tree.XMLVersion = "1.1"
 	}
 	return tree, nil
+}
+
+// readWindow is the read buffer size for an input of size bytes (0:
+// unknown): the input's length, within [512, 4096]. 512 leaves room for
+// decodeReader's look at the XML declaration.
+func readWindow(size int) int {
+	if size <= 0 {
+		return 4096
+	}
+	return min(max(size+1, 512), 4096)
 }
 
 // ParseString is Parse over a string, which is what most tests and the

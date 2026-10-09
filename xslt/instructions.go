@@ -153,12 +153,13 @@ func (i *sequenceInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// leave out those its new parent already supplies, which a
 				// constructed tree mostly shares with the element it is
 				// sequenced into. Charged first, as the builder charges.
+				// The copy is made once, straight into dest, and given the
+				// bindings there: a detached copy appended afterwards was
+				// copied a second time by the builder.
 				if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
 					return err
 				}
-				c := deepCopy(v)
-				inheritNamespacesAt(rt, c, v, dest)
-				out.AppendNode(c)
+				inheritNamespacesAt(rt, out.AppendCopyOf(v), v, dest)
 				continue
 			}
 			out.AppendNode(v)
@@ -329,6 +330,27 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// document would otherwise build the cross product uncharged.
 			if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
 				return err
+			}
+			// Under an open element the copy is made once, straight into the
+			// tree being built, whenever the pre-copy below would leave it as
+			// it is: a text, comment or processing instruction always (only
+			// elements are rebased, stripped or assessed), and an element
+			// when copy-namespaces is "yes" and the validation neither
+			// replaces nor retypes it -- preserve, or strip of a tree that
+			// was never typed. What is done to the detached copy below is
+			// then done to this one, in the same order.
+			if out.Open() != nil && (v.Kind() != xdm.KindElement ||
+				!i.noNamespaces && i.validation.typeName == nil &&
+					(i.validation.mode == validatePreserve && !i.validation.constructsElement ||
+						i.validation.mode == validateStrip && !v.TreeHasTyping())) {
+				if c := out.AppendCopyOf(v); c != nil && c.Kind() == xdm.KindElement {
+					inheritNamespaces(c, v)
+					if i.copyAccumulators {
+						rt.noteCopiedAccumulators(v, c)
+					}
+					fixupNamespaces(c)
+				}
+				continue
 			}
 			c := deepCopy(v)
 			if i.copyAccumulators {
@@ -1431,11 +1453,19 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// the one place holding the schema that did the assessing, so what it
 	// resolved the name to must travel with the node rather than be looked up
 	// again later against whichever schema happens to have loaded last.
-	assessed, err := i.validation.assess(rt, xdm.NewNode(xdm.KindAttribute, qn, value))
-	if err != nil {
-		return err
+	//
+	// Strip and preserve without a type leave a new attribute untyped, so no
+	// node is made for them to assess: one was a fragment tree per attribute.
+	var typing xdm.Typing
+	if v := i.validation; v.typeName != nil ||
+		v.mode != validateStrip && v.mode != validatePreserve {
+		assessed, err := v.assess(rt, xdm.NewNode(xdm.KindAttribute, qn, value))
+		if err != nil {
+			return err
+		}
+		typing = xdm.TypingOf(assessed)
 	}
-	return out.AddAttributeWithTyping(qn, value, xdm.TypingOf(assessed))
+	return out.AddAttributeWithTyping(qn, value, typing)
 }
 
 // resolveName turns a computed attribute name into an expanded QName.

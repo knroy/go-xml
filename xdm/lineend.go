@@ -38,8 +38,8 @@ type lineEndReader struct {
 	err     error
 }
 
-func newLineEndReader(r io.Reader) *lineEndReader {
-	return &lineEndReader{src: r, scratch: make([]byte, 0, 4096)}
+func newLineEndReader(r io.Reader, window int) *lineEndReader {
+	return &lineEndReader{src: r, scratch: make([]byte, 0, window)}
 }
 
 func (l *lineEndReader) Read(p []byte) (int, error) {
