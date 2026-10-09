@@ -754,14 +754,22 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 		// Reusing the pattern skips the walk that would have found a cycle
 		// back to a definition still being compiled, so the names it
 		// reaches bare are checked against those here instead.
+		//
+		// d.bare is a set, so when several names close a cycle here the
+		// least is reported, the same on every run.
 		bare := make([]string, 0, len(d.bare))
+		cyclic := ""
 		for n := range d.bare {
-			if c.expanding[n] && c.elementDepth <= c.expandingAt[n] {
-				return nil, fmt.Errorf(
-					"relaxng: definition %q refers to itself without an "+
-						"intervening <element> (section 4.19)", n)
+			if c.expanding[n] && c.elementDepth <= c.expandingAt[n] &&
+				(cyclic == "" || n < cyclic) {
+				cyclic = n
 			}
 			bare = append(bare, n)
+		}
+		if cyclic != "" {
+			return nil, fmt.Errorf(
+				"relaxng: definition %q refers to itself without an "+
+					"intervening <element> (section 4.19)", cyclic)
 		}
 		c.noteBare(bare...)
 		return d.pat, nil
