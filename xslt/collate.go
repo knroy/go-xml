@@ -43,8 +43,11 @@ func (co *collator) key(s string) []byte {
 }
 
 // collateMatcher is built once: constructing a matcher walks the full list of
-// supported tags, which is wasted work on every xsl:sort compilation.
-var collateMatcher = language.NewMatcher(collate.Supported())
+// supported tags, which is wasted work on every xsl:sort compilation. It is built on
+// first use rather than at start-up, which a run with no collation skips.
+var collateMatcher = sync.OnceValue(func() language.Matcher {
+	return language.NewMatcher(collate.Supported())
+})
 
 // isXSLanguage reports whether s is in the value space of xs:language, whose
 // lexical form is [a-zA-Z]{1,8}(-[a-zA-Z0-9]{1,8})*.
@@ -110,7 +113,7 @@ func newCollator(lang string) (*collator, error) {
 	// The spec's own fallback — "removing successive hyphen-separated
 	// suffixes until a supported language code is obtained" — is what the
 	// matcher performs, so a tag it can place is used as matched.
-	if _, _, conf := collateMatcher.Match(tag); conf == language.No {
+	if _, _, conf := collateMatcher().Match(tag); conf == language.No {
 		return nil, errLangUnsupported
 	}
 	return &collator{c: collate.New(tag), tag: tag}, nil

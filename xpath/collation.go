@@ -653,7 +653,7 @@ func parseUCACollation(uri string) (Collation, error) {
 		// fallback=no that is exactly the case the parameter exists to
 		// forbid; with fallback=yes it is what the specification permits, and
 		// the root collation is a real UCA ordering rather than a guess.
-		if _, _, conf := ucaMatcher.Match(t); conf == language.No && !fallback {
+		if _, _, conf := ucaMatcher().Match(t); conf == language.No && !fallback {
 			return nil, fmt.Errorf("UCA lang=%q: no collation data for that language", lang)
 		}
 		tag = t
@@ -788,8 +788,11 @@ func isFrenchCanadian(t language.Tag) bool {
 }
 
 // ucaMatcher is built once: constructing a matcher walks the full list of
-// supported tags, which is wasted work on every collation lookup.
-var ucaMatcher = language.NewMatcher(collate.Supported())
+// supported tags, which is wasted work on every collation lookup. It is built on
+// first use rather than at start-up, which a run with no collation skips.
+var ucaMatcher = sync.OnceValue(func() language.Matcher {
+	return language.NewMatcher(collate.Supported())
+})
 
 // ucaCollationFor is parseUCACollation memoised on the URI.
 //

@@ -206,6 +206,8 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 		var err error
 		if st, ok := step.(*Step); ok {
 			v, err = st.evalFrom(ctx, it.(*xdm.Node))
+		} else if da, ok := step.(*descendantAttrs); ok {
+			v = da.appendFrom(nil, it.(*xdm.Node))
 		} else {
 			v, err = step.Eval(ctx.WithFocus(it, i+1, size))
 		}
@@ -774,6 +776,9 @@ func evalRemainingSteps(ctx *Context, cur xdm.Sequence, steps []Expr) (xdm.Seque
 		if d := fuseDescendant(steps, i); d != nil {
 			step = d
 			i++
+		} else if a := fuseDescendantAttrs(steps, i, cur); a != nil {
+			step = a
+			i++
 		}
 		next, err := evalStepOver(ctx, cur, step, i == len(steps)-1)
 		if err != nil {
@@ -808,6 +813,71 @@ func fuseDescendant(steps []Expr, i int) *Step {
 		return nil
 	}
 	return &Step{Axis: AxisDescendant, Test: child.Test}
+}
+
+// fuseDescendantAttrs answers "//@a", that is descendant-or-self::node()
+// followed by an attribute step, as one walk that reads each node's
+// attributes as it passes, when neither step has a predicate. Run as written,
+// the first step materialises and sorts every node below the context, and the
+// second then walks each one's attribute axis through a closure and sorts the
+// result.
+//
+// Only over nodes of parsed trees: sorting nodes of a constructed tree
+// numbers its root on first sight (xdm.SortDocumentOrder), and the fused walk
+// sorts different nodes, so it could leave a root numbered later, or not at
+// all, and order trees differently afterwards. Anything else, a non-node
+// operand included, takes the steps as written, errors and all.
+func fuseDescendantAttrs(steps []Expr, i int, input xdm.Sequence) *descendantAttrs {
+	if i+1 >= len(steps) {
+		return nil
+	}
+	dos, ok := steps[i].(*Step)
+	if !ok || dos.Axis != AxisDescendantOrSelf || len(dos.Predicates) != 0 {
+		return nil
+	}
+	if kt, ok := dos.Test.(*KindTest); !ok || !kt.Any {
+		return nil
+	}
+	at, ok := steps[i+1].(*Step)
+	if !ok || at.Axis != AxisAttribute || len(at.Predicates) != 0 {
+		return nil
+	}
+	for _, it := range input {
+		if n, ok := it.(*xdm.Node); !ok || n.Tree() == nil {
+			return nil
+		}
+	}
+	return &descendantAttrs{test: at.Test}
+}
+
+// descendantAttrs is the fused step fuseDescendantAttrs builds: the
+// attributes that test matches on the context node and on each of its
+// descendants, in document order. Only evalStepOver runs it.
+type descendantAttrs struct{ test NodeTest }
+
+func (d *descendantAttrs) appendFrom(out xdm.Sequence, n *xdm.Node) xdm.Sequence {
+	for _, a := range n.Attrs {
+		if d.test.Matches(a, xdm.KindAttribute) {
+			out = append(out, a)
+		}
+	}
+	for _, c := range n.Children {
+		out = d.appendFrom(out, c)
+	}
+	return out
+}
+
+// Eval implements Expr.
+func (d *descendantAttrs) Eval(ctx *Context) (xdm.Sequence, error) {
+	node, err := ctx.ContextNode()
+	if err != nil {
+		return nil, err
+	}
+	return d.appendFrom(nil, node), nil
+}
+
+func (d *descendantAttrs) String() string {
+	return "descendant-or-self::node()/attribute::" + d.test.String()
 }
 
 // stepIsAxisStep reports whether a path step navigates an axis, as opposed to
