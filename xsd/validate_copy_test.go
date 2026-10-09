@@ -141,8 +141,8 @@ func sameTree(t *testing.T, label string, a, b *xdm.Node) {
 	for i := range a.NumAttrs() {
 		sameTree(t, label, a.AttrAt(i), b.AttrAt(i))
 	}
-	for i := range a.NumChildren() {
-		sameTree(t, label, a.ChildAt(i), b.ChildAt(i))
+	for ac, bc := a.FirstChild(), b.FirstChild(); ac != nil; ac, bc = ac.NextSibling(), bc.NextSibling() {
+		sameTree(t, label, ac, bc)
 	}
 }
 
