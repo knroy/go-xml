@@ -297,7 +297,6 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	}
 	var scoped []scopeFrame
 	tree.number(tree.Root, scope)
-	renumber := false
 	var chunk nodeChunk
 	chunk.open() // the document node's children
 	var spaces spaceTable
@@ -320,6 +319,16 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// text in such an element is ignorable (XML §2.10) and is stripped
 	// regardless of what the stylesheet declares (XSLT 2.0 §4.4).
 	var elementOnly map[string]bool
+	// stripSpaceAt reports whether whitespace-only text directly inside el
+	// is dropped: ignorable whitespace in DTD element-only content first and
+	// unconditionally, since the DTD-derived rule outranks the
+	// stylesheet-declared one, then the caller's StripSpace rule. A text run
+	// is complete when it is flushed, so the decision is made there and the
+	// node never joins the tree.
+	stripSpaceAt := func(el *Node) bool {
+		return (elementOnly != nil && ignorableWhitespaceIn(el, elementOnly)) ||
+			(opts.StripSpace != nil && stripsWhitespaceIn(el, opts.StripSpace))
+	}
 
 	for {
 		// InputOffset after Token() is the position *after* the token, so the
@@ -345,7 +354,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		// hold its value before anything -- whitespace stripping at an end
 		// tag, a new sibling -- can look at it.
 		if _, text := tok.(*xml.CharData); !text {
-			run.flush(&spaces)
+			run.flush(&spaces, &chunk, stripSpaceAt)
 		}
 
 		// Each token points into the decoder and is copied out here; it is
@@ -441,16 +450,6 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// DTD-derived rule outranks the stylesheet-declared one, so it
 			// must not be gated on a strip-space declaration existing.
 			chunk.close(cur)
-			kids := len(cur.children)
-			if elementOnly != nil {
-				stripIgnorableWhitespace(cur, elementOnly)
-			}
-			if opts.StripSpace != nil {
-				stripWhitespaceChildren(cur, opts.StripSpace)
-			}
-			if len(cur.children) != kids {
-				renumber = true
-			}
 			if n := len(scoped); n > 0 && scoped[n-1].el == cur {
 				restoreScope(scope, scoped[n-1].saved)
 				scoped = scoped[:n-1]
@@ -725,11 +724,6 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	if dec.IsVersion11() {
 		tree.XMLVersion = "1.1"
 	}
-	// Stripping left gaps in the numbering. They would not reorder anything,
-	// but Finalize numbers densely, as every parse did before.
-	if renumber {
-		tree.Finalize()
-	}
 	return tree, nil
 }
 
@@ -901,11 +895,22 @@ func (r *textRun) add(chunk *nodeChunk, parent *Node, b []byte) {
 }
 
 // flush sets the value of the node being built, if any, and ends the run.
-func (r *textRun) flush(spaces *spaceTable) {
-	if r.node != nil {
-		r.node.value = spaces.text(r.buf)
-		r.node = nil
+// A whitespace-only run inside an element strip selects is taken back out:
+// it is the last node appended, and the last numbered, so removing it leaves
+// the numbering as dense as if it had never been made.
+func (r *textRun) flush(spaces *spaceTable, chunk *nodeChunk, strip func(*Node) bool) {
+	if r.node == nil {
+		return
 	}
+	n := r.node
+	r.node = nil
+	if onlySpace(r.buf) && strip(n.parent) {
+		chunk.kids = chunk.kids[:len(chunk.kids)-1]
+		n.parent.tree.counter--
+		*n = Node{}
+		return
+	}
+	n.value = spaces.text(r.buf)
 }
 
 // spaceTable shares one string among the whitespace-only text values of a
@@ -1060,37 +1065,17 @@ func (c *nodeChunk) alloc() *Node {
 	return n
 }
 
-// stripWhitespaceChildren removes whitespace-only text children of el when the
-// predicate selects el's name.
-//
-// This runs at EndElement, once all children are present, because a text node
-// is only strippable if it is whitespace in its entirety and merging (above)
-// may not be complete until the element closes.
-func stripWhitespaceChildren(el *Node, strip func(QName) bool) {
+// stripsWhitespaceIn reports whether the predicate strips whitespace-only text
+// children of el: it selects el's name, and el itself does not say
+// xml:space="preserve".
+func stripsWhitespaceIn(el *Node, strip func(QName) bool) bool {
 	if !strip(el.name) {
-		return
+		return false
 	}
-	// xml:space="preserve" overrides stripping for this element's content.
-	if a := el.Attr(NSXML, "space"); a != nil && a.value == "preserve" {
-		return
-	}
-	kept := el.children[:0]
-	for _, c := range el.children {
-		if c.kind == KindText && IsXMLWhitespace(c.value) {
-			continue
-		}
-		kept = append(kept, c)
-	}
-	el.children = kept
+	a := el.Attr(NSXML, "space")
+	return a == nil || a.value != "preserve"
 }
 
-// encodeOffset converts a decoder byte offset into the representation the
-// Node.offset field uses: one greater than the true offset, so that a node
-// built without one reads as "unknown" rather than as line 1.
-//
-// Offsets beyond what an int32 holds are dropped rather than truncated: a
-// wrapped offset would name a confidently wrong line, and no position at all
-// is the honest answer for a document over 2GB.
 func encodeOffset(off int64, track bool) int32 {
 	if !track || off < 0 || off >= math.MaxInt32 {
 		return 0

@@ -361,26 +361,17 @@ func isElementOnlyModel(model string) bool {
 	return !strings.Contains(model, "#PCDATA")
 }
 
-// stripIgnorableWhitespace removes the whitespace-only text children of an
-// element whose DTD content model is element-only.
+// ignorableWhitespaceIn reports whether whitespace-only text children of el
+// are ignorable: el's DTD content model is element-only.
 //
 // This runs independently of, and before, the stylesheet's own strip-space
 // rules: it is not a preference that xsl:preserve-space can turn off. An
 // explicit xml:space="preserve" is still honoured, since XML §2.10 makes that
 // the document's own statement about its whitespace.
-func stripIgnorableWhitespace(el *Node, elementOnly map[string]bool) {
+func ignorableWhitespaceIn(el *Node, elementOnly map[string]bool) bool {
 	if !elementOnly[el.name.Lexical()] && !elementOnly[el.name.Local] {
-		return
+		return false
 	}
-	if a := el.Attr(NSXML, "space"); a != nil && a.value == "preserve" {
-		return
-	}
-	kept := el.children[:0]
-	for _, c := range el.children {
-		if c.kind == KindText && IsXMLWhitespace(c.value) {
-			continue
-		}
-		kept = append(kept, c)
-	}
-	el.children = kept
+	a := el.Attr(NSXML, "space")
+	return a == nil || a.value != "preserve"
 }
