@@ -48,8 +48,10 @@ func runXQuery(args []string) error {
 				"XXE surface; it also requires -allow-doctype)")
 		allowUnparsedText = fs.Bool("allow-unparsed-text", false,
 			"let fn:unparsed-text read files from the -allow-dir roots as raw text")
-		timeout = fs.Duration("timeout", 60*time.Second, "abort the query after this long")
-		nowStr  = fs.String("now", "",
+		timeout  = fs.Duration("timeout", 60*time.Second, "abort the query after this long")
+		maxItems = fs.Int("max-items", 0, maxItemsUsage)
+		maxBytes = fs.Int64("max-bytes", 0, maxBytesUsage)
+		nowStr   = fs.String("now", "",
 			"fix fn:current-dateTime to this xs:dateTime, making the run reproducible")
 		params = paramFlag{}
 	)
@@ -116,7 +118,7 @@ Exit status: 0 if the query ran, 1 otherwise.
 			return err
 		}
 		abs := fileURI(in)
-		popts := xdm.ParseOptions{BaseURI: abs, DocumentURI: abs, AllowDOCTYPE: *allowDoctype}
+		popts := xdm.ParseOptions{BaseURI: abs, DocumentURI: abs, AllowDOCTYPE: *allowDoctype, MaxBytes: *maxBytes}
 		if *allowExternalEnts {
 			popts.ExternalEntities = resolver
 		}
@@ -139,6 +141,7 @@ Exit status: 0 if the query ran, 1 otherwise.
 	defer cancel()
 	ctx := xpath.NewContext(item, xpath.Builtins()).WithNow(now)
 	ctx.Ctx = cctx
+	ctx.MaxItems = *maxItems
 	ctx.Docs = resolver
 	// The resolver refuses every text read unless -allow-unparsed-text turned
 	// it on, as in the transform.

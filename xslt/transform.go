@@ -68,6 +68,12 @@ type TransformOptions struct {
 	// legal 500-deep document could be parsed and not transformed.
 	MaxDepth int
 
+	// MaxItems bounds the items the transform's expressions may materialise,
+	// with xpath.Context.MaxItems's meaning: zero is xpath.MaxItems, negative
+	// is no bound. A transform started by fn:transform keeps its caller's
+	// bound whatever this says.
+	MaxItems int
+
 	// DisableAssertions turns off xsl:assert checking for the whole
 	// transformation. The zero value leaves assertions enabled, which is what
 	// XSLT 3.0 section 22.2 requires: "By default, assertions are enabled."

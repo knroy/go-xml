@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -258,6 +259,21 @@ type Context struct {
 	// trusts can raise the bound; one evaluating an expression from outside
 	// should leave it alone.
 	MaxDepth int
+
+	// MaxItems is the bound the item budget is checked against. Zero means
+	// the package default, MaxItems; a negative value means no bound; a
+	// positive value is the bound. The range operator's cap follows it too.
+	//
+	// It is settable for the reason MaxDepth is: the default guards against
+	// untrusted input, and a trusted query over a large document can need
+	// more: XMark q11 and q12 at factor 1 exceed it.
+	//
+	// Note the convention differs from MaxDepth's, where a negative value
+	// falls back to the default rather than removing the bound.
+	//
+	// AdoptBudget copies it along with the shared counter, so a nested
+	// evaluation cannot raise the bound it is charged against.
+	MaxItems int
 
 	// items counts the items materialised into intermediate sequences during
 	// this evaluation, bounding memory the way Depth bounds stack.
@@ -852,16 +868,28 @@ func (c *Context) countItems(n int) error {
 	if c == nil || c.items == nil || n <= 0 {
 		return nil
 	}
-	if atomic.AddInt64(c.items, int64(n)) > MaxItems {
+	if lim := c.itemLimit(); atomic.AddInt64(c.items, int64(n)) > lim {
 		// The code is kept -- the suites and callers read it -- and the
 		// sentinel added, because this is the processor declining to
 		// allocate rather than anything wrong with the expression.
 		return fmt.Errorf(
 			"XPDY0130: evaluation materialised more than %d items; "+
 				"the expression is building a sequence too large to hold: %w",
-			MaxItems, xdm.ErrResourceLimit)
+			lim, xdm.ErrResourceLimit)
 	}
 	return nil
+}
+
+// itemLimit is the item bound in force: Context.MaxItems where the caller set
+// a positive one, none where it set a negative one, MaxItems otherwise.
+func (c *Context) itemLimit() int64 {
+	switch {
+	case c == nil || c.MaxItems == 0:
+		return MaxItems
+	case c.MaxItems < 0:
+		return math.MaxInt64
+	}
+	return int64(c.MaxItems)
 }
 
 // ChargeItems charges n items against the evaluation budget, reporting
@@ -1117,7 +1145,8 @@ func (c *Context) AdoptBudget(src *Context) *Context {
 	}
 	n := *c
 	if src.items != nil {
-		n.items, n.heldItems = src.items, src.heldItems
+		// The bound travels with the counter it is checked against.
+		n.items, n.heldItems, n.MaxItems = src.items, src.heldItems, src.MaxItems
 	}
 	if src.bytes != nil {
 		n.bytes, n.heldBytes = src.bytes, src.heldBytes

@@ -690,6 +690,8 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		item = nil
 	}
 	xctx := xpath.NewContext(item, s.funcs)
+	// Set before AdoptBudget, which replaces it with the caller's bound.
+	xctx.MaxItems = opts.MaxItems
 	// A transform started by fn:transform continues its caller's item and byte
 	// allowances rather than restarting on fresh ones, the same policy the
 	// recursion depth above follows. The counters travel with their held flags;

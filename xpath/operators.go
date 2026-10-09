@@ -698,7 +698,7 @@ func (e *BinaryOp) evalRange(ctx *Context) (xdm.Sequence, error) {
 	n.Sub(hi, lo)
 	n.Add(&n, big.NewInt(1))
 
-	const maxRange = MaxItems
+	maxRange := ctx.itemLimit()
 	if !n.IsInt64() || n.Int64() > maxRange {
 		// Coded and wrapped like ctx.countItems two lines below, which is
 		// the same refusal reached by a range small enough to count. This

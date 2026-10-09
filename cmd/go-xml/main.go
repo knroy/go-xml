@@ -183,6 +183,8 @@ func run() error {
 			"bound template recursion; 0 uses the default, negative removes the "+
 				"bound (the default guards against a stylesheet that recurses "+
 				"without a base case)")
+		maxItems = flag.Int("max-items", 0, maxItemsUsage)
+		maxBytes = flag.Int64("max-bytes", 0, maxBytesUsage)
 
 		validate = flag.String("validate", "",
 			"validate each source document against the schema the stylesheet "+
@@ -328,6 +330,8 @@ Exit status: 0 if every input transformed, 1 otherwise.
 		externalEnts: *allowExternalEnts,
 		xinclude:     *xinclude,
 		maxDepth:     *maxDepth,
+		maxItems:     *maxItems,
+		maxBytes:     *maxBytes,
 		validate:     *validate,
 
 		baseOutputURI: baseOutputURI(*outPath, *resultDir),
@@ -414,6 +418,16 @@ func validateSource(schema *xsd.Schema, doc *xdm.Node, mode string) error {
 	return nil
 }
 
+// The usage strings of the two limit flags the transform and the xquery
+// subcommand share.
+const (
+	maxItemsUsage = "bound the items an evaluation may materialise; 0 uses the " +
+		"default (5,000,000), negative removes the bound (the default guards " +
+		"against a runaway expression exhausting memory)"
+	maxBytesUsage = "bound the size of the input document in bytes; 0 uses the " +
+		"default (64 MB), negative removes the bound"
+)
+
 type transformCfg struct {
 	resolver     *xslt.FileResolver
 	params       map[string]xdm.Sequence
@@ -430,6 +444,8 @@ type transformCfg struct {
 	externalEnts bool
 	xinclude     bool
 	maxDepth     int
+	maxItems     int
+	maxBytes     int64
 	validate     string
 	// baseOutputURI is where this run's output is actually going, as a URI.
 	// Unlike the library, the CLI knows that destination, so it supplies one
@@ -457,6 +473,7 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 			DocumentURI:    abs,
 			AllowDOCTYPE:   cfg.allowDoctype,
 			TrackPositions: cfg.trackPos,
+			MaxBytes:       cfg.maxBytes,
 		}
 		if cfg.externalEnts {
 			popts.ExternalEntities = cfg.resolver
@@ -502,6 +519,7 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		ImplicitTimezone: cfg.timezone,
 		Now:              cfg.now,
 		MaxDepth:         cfg.maxDepth,
+		MaxItems:         cfg.maxItems,
 		// Texts is the same resolver, which refuses every read unless
 		// -allow-unparsed-text turned it on. Passing it unconditionally keeps
 		// the gate in one place rather than two.
