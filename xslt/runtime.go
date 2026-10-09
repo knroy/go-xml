@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/knroy/go-xml/internal/xpathleaf"
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 )
@@ -103,6 +104,10 @@ type runtime struct {
 	// "it is a non-recoverable dynamic error if the use or match attribute
 	// of an xsl:key declaration contains a call to the key function".
 	keyBuilding map[keyCacheKey]bool
+
+	// steps is package xpath's memo of step walks over parsed trees, kept for
+	// this transform as keyIndex is (see xpathleaf.StepMemoHost).
+	steps any
 
 	// accumValues caches each accumulator's value at every node of a tree,
 	// and accumBuilding holds the values recorded so far by a walk still in
@@ -640,6 +645,12 @@ func constructedText(seq xdm.Sequence, sep string) string {
 	return strings.Join(parts, sep)
 }
 
+// StepMemo implements xpathleaf.StepMemoHost. The transform does not change a
+// parsed tree, so walks over one may be remembered until it ends.
+func (rt *runtime) StepMemo() any { return rt.steps }
+
+var _ xpathleaf.StepMemoHost = (*runtime)(nil)
+
 // newRuntime builds a runtime for one transform.
 func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts TransformOptions) (*runtime, error) {
 	maxDepth := opts.MaxDepth
@@ -655,6 +666,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		maxDepth:    maxDepth,
 		keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
 		keyBuilding: map[keyCacheKey]bool{},
+		steps:       xpathleaf.NewStepMemo(),
 
 		accumValues:   map[accumCacheKey]*accumulatorValues{},
 		accumBuilding: map[accumCacheKey]*accumulatorValues{},
