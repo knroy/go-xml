@@ -80,3 +80,52 @@ func TestCopyIntoElementCopiesOnce(t *testing.T) {
 		t.Errorf("%.1f allocations per copied record, want at most 30", per)
 	}
 }
+
+// xsl:attribute made a parentless attribute node, a fragment tree of its
+// own, to hand to validation even when validation was strip or preserve with
+// no type, which leave a new attribute untyped. It now makes none then; under
+// validation="strict" or a type it still assesses one (validate tests).
+func TestAttributeBuildsNoNodeUnassessed(t *testing.T) {
+	st, err := xdm.ParseString(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:param name="n" select="1"/>
+<xsl:template match="/">
+  <out><xsl:for-each select="1 to $n"><e><xsl:attribute name="a" select="."/><xsl:attribute name="b" validation="preserve">x</xsl:attribute></e></xsl:for-each></out>
+</xsl:template>
+</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Compile(st.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := xdm.ParseString(`<r/>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(n int) string {
+		res, err := s.Transform(context.Background(), doc.Root, TransformOptions{
+			Params: map[string]xdm.Sequence{"n": xdm.One(xdm.NewInteger(int64(n)))}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if err := res.Serialize(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	if got, want := run(2), `<out><e a="1" b="x"/><e a="2" b="x"/></out>`; !strings.HasSuffix(got, want) {
+		t.Fatalf("got  %s\nwant …%s", got, want)
+	}
+	if raceEnabled {
+		t.Skip("allocation counts are not stable under -race")
+	}
+	count := func(n int) float64 { return testing.AllocsPerRun(10, func() { run(n) }) }
+	per := (count(250) - count(50)) / 200
+	t.Logf("%.2f allocations per element with two attributes", per)
+	// Measured 35 with no node made, 47 with one per attribute.
+	if per > 41 {
+		t.Errorf("%.1f allocations per element, want at most 41", per)
+	}
+}
