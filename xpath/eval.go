@@ -824,23 +824,18 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 		}
 	}
 
-	// A leaf builtin cannot re-enter user code or retain ctx, so the depth
-	// is counted on ctx in place: the same limit and error as Descend,
-	// without copying the context on every call.
-	if fn.leaf {
-		if err := ctx.checkDepth(); err != nil {
-			return nil, err
-		}
-		ctx.Depth++
-		res, err := fn.Call(ctx, args)
-		ctx.Depth--
-		return res, err
-	}
-	sub, err := ctx.Descend()
-	if err != nil {
+	// The depth is counted on ctx in place: the same limit and error as
+	// Descend, without copying the context on every call. A callee that
+	// keeps a context derives its own copy, which carries the raised depth
+	// into whatever it calls; one that keeps ctx itself sees the depth of
+	// this call site once the call returns.
+	if err := ctx.checkDepth(); err != nil {
 		return nil, err
 	}
-	return fn.Call(sub, args)
+	ctx.Depth++
+	res, err := fn.Call(ctx, args)
+	ctx.Depth--
+	return res, err
 }
 
 // Eval implements Expr for unary + and -.

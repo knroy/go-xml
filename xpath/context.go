@@ -811,9 +811,9 @@ type Function struct {
 	VariadicSignature *xdm.VariadicSignature
 
 	// leaf marks a builtin that never calls back into user code, never
-	// keeps the context past its return and never writes to it. A call to
-	// one counts recursion depth on the caller's context in place instead
-	// of copying it with Descend. Set only by markLeafBuiltins.
+	// keeps the context past its return and never writes to it, which is
+	// what lets a call be answered without calling it (see nameOf). Set
+	// only by markLeafBuiltins and xpathleaf.Mark.
 	leaf bool
 }
 
