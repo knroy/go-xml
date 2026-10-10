@@ -69,6 +69,21 @@ code before and after, and how to run the rewriter on your own module.
 | Every `Tree` carried 104 B of parse-only fields, and `xsl:attribute` made a fragment per attribute (V15) | Fields behind a pointer (`Tree` 424 → 320 B); no node unless validation assesses it. XRechnung 1 −7.1% bytes, CEN −5.5%. | e62d96db, b22d90cc |
 | A small document's parse allocated three 4 KB read windows (V18) | Windows sized to a reader of known length. Small-document parse −11% bytes, −6% CPU. | 9ddd2bc6 |
 
+## Unreleased
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| `go-xml xquery -validate strict\|lax` | Validates the input document against the schema the query imports before it runs, so a declared typed context item (`document-node(schema-element(...))`) can be satisfied from the command line. | [`130360b`][130360b] |
+| `xquery.Query.Schema` | The schema merged from a query's `import schema` declarations, or nil; mirrors `xslt.Stylesheet.Schema`. | [`130360b`][130360b] |
+
+### Fixed — documentation
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `docs/xquery.md` said `import schema ... at` is not resolved from the command line | It is, through the query's directory and `-allow-dir` roots (and `-catalog`); the sentence is corrected. | — |
+
 ## v1.7.1 — 2026-10-09
 
 v1.7.1 is v1.7.0 with a fix to the release workflow and nothing else. The
@@ -1414,6 +1429,7 @@ here so every entry in this file sits under a release.
 [092bdce]: https://github.com/knroy/go-xml/commit/092bdce
 [373da4b]: https://github.com/knroy/go-xml/commit/373da4b
 [5c2ca9c]: https://github.com/knroy/go-xml/commit/5c2ca9c
+[130360b]: https://github.com/knroy/go-xml/commit/130360b
 [8082a2c]: https://github.com/knroy/go-xml/commit/8082a2c
 [edea87c]: https://github.com/knroy/go-xml/commit/edea87c
 [e7ec81d]: https://github.com/knroy/go-xml/commit/e7ec81d

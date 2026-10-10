@@ -51,7 +51,14 @@ func runXQuery(args []string) error {
 		timeout  = fs.Duration("timeout", 60*time.Second, "abort the query after this long")
 		maxItems = fs.Int("max-items", 0, maxItemsUsage)
 		maxBytes = fs.Int64("max-bytes", 0, maxBytesUsage)
-		nowStr   = fs.String("now", "",
+		validate = fs.String("validate", "",
+			"validate the input document against the schema the query imports "+
+				"with import schema, before the query runs: strict requires the "+
+				"document element to be declared, lax checks it only if it is. "+
+				"Validated nodes carry their schema types, so they atomise to "+
+				"typed values and match schema-element() tests. Empty does not "+
+				"validate")
+		nowStr = fs.String("now", "",
 			"fix fn:current-dateTime to this xs:dateTime, making the run reproducible")
 		params = paramFlag{}
 	)
@@ -62,6 +69,9 @@ func runXQuery(args []string) error {
 		fs.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
 INPUT.xml, when given, is the context item; without it the query has none.
+With -validate it is first validated against the schema the query imports,
+so a query declaring a typed context item, or comparing typed values, sees
+schema types rather than untyped text.
 The result is serialized with the parameters the query declares through
 "declare option output:*"; with none declared the method follows from the
 result, as the Serialization 3.1 specification says.
@@ -110,6 +120,18 @@ Exit status: 0 if the query ran, 1 otherwise.
 	if err != nil {
 		return fmt.Errorf("compiling query: %w", err)
 	}
+	switch *validate {
+	case "", "strict", "lax":
+	default:
+		return fmt.Errorf("-validate %q: expected strict or lax", *validate)
+	}
+	if *validate != "" && q.Schema() == nil {
+		return fmt.Errorf("-validate needs a schema, and the query " +
+			"imports none with import schema")
+	}
+	if *validate != "" && fs.Arg(0) == "" {
+		return fmt.Errorf("-validate needs an input document to validate")
+	}
 
 	var item xdm.Item
 	if in := fs.Arg(0); in != "" {
@@ -129,6 +151,16 @@ Exit status: 0 if the query ran, 1 otherwise.
 			return fmt.Errorf("%s: %w", in, err)
 		}
 		item = tree.Root
+		if *validate != "" {
+			// The same assessment the transform's -validate makes: a typed
+			// copy of the document becomes the context item, so the query
+			// sees schema types.
+			typed, err := validateSource(q.Schema(), tree.Root, *validate)
+			if err != nil {
+				return fmt.Errorf("%s: %w", in, err)
+			}
+			item = typed
+		}
 	}
 
 	now := time.Now()

@@ -423,3 +423,35 @@ func (r *recordingResolver) Resolve(ns, location, base string) (
 	}
 	return io.NopCloser(strings.NewReader(src)), location, nil
 }
+
+// Query.Schema is the merged schema of the prolog's imports, as the command
+// line's -validate uses it, and nil for a query that imports none.
+func TestQuerySchemaAccessor(t *testing.T) {
+	plain, err := xquery.Compile(`1`, xquery.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Schema() != nil {
+		t.Errorf("a query without import schema returned a schema")
+	}
+	tree, err := xdm.ParseString(hatsSchema, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sch, err := xsd.Load(tree.Root, "", xsd.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := xquery.Compile(fmt.Sprintf(`import schema namespace h = %q; 1`, hatsNS),
+		xquery.Options{Schemas: []xquery.Schema{{Namespace: hatsNS, Components: sch}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := q.Schema()
+	if got == nil {
+		t.Fatal("a query importing a schema returned nil")
+	}
+	if !got.HasSimpleType(xdm.QName{URI: hatsNS, Local: "hatsize"}) {
+		t.Errorf("the returned schema does not define {%s}hatsize", hatsNS)
+	}
+}
