@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
@@ -23,14 +24,18 @@ const (
 
 // standaloneYes finds standalone="yes" in a declaration xmlDeclSyntax has
 // already accepted.
-var standaloneYes = regexp.MustCompile(`standalone` + xmlDeclEq + `(?:"yes"|'yes')`)
+var standaloneYes = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`standalone` + xmlDeclEq + `(?:"yes"|'yes')`)
+})
 
-var xmlDeclSyntax = regexp.MustCompile(
-	`^version` + xmlDeclEq + `(?:"1\.[0-9]+"|'1\.[0-9]+')` +
-		`(?:` + xmlDeclS + `+encoding` + xmlDeclEq +
-		`(?:"[A-Za-z][A-Za-z0-9._-]*"|'[A-Za-z][A-Za-z0-9._-]*'))?` +
-		`(?:` + xmlDeclS + `+standalone` + xmlDeclEq +
-		`(?:"(?:yes|no)"|'(?:yes|no)'))?$`)
+var xmlDeclSyntax = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(
+		`^version` + xmlDeclEq + `(?:"1\.[0-9]+"|'1\.[0-9]+')` +
+			`(?:` + xmlDeclS + `+encoding` + xmlDeclEq +
+			`(?:"[A-Za-z][A-Za-z0-9._-]*"|'[A-Za-z][A-Za-z0-9._-]*'))?` +
+			`(?:` + xmlDeclS + `+standalone` + xmlDeclEq +
+			`(?:"(?:yes|no)"|'(?:yes|no)'))?$`)
+})
 
 // validateXMLDecl checks the XML declaration separately from the token reader.
 // RawToken deliberately exposes it as a PI so clients that want a token stream
@@ -41,7 +46,7 @@ func validateXMLDecl(inst string) error {
 	if inst == "" {
 		return fmt.Errorf("parse XML: XML declaration must contain VersionInfo")
 	}
-	if !xmlDeclSyntax.MatchString(strings.TrimSpace(inst)) {
+	if !xmlDeclSyntax().MatchString(strings.TrimSpace(inst)) {
 		return fmt.Errorf("parse XML: malformed XML declaration")
 	}
 	return nil

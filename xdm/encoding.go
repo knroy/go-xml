@@ -7,6 +7,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode/utf16"
 )
 
@@ -167,7 +168,9 @@ func (u *utf16Reader) fill() error {
 }
 
 // encodingDecl finds [80] EncodingDecl in an XML declaration at the start of s.
-var encodingDecl = regexp.MustCompile(`^<\?xml[ \t\r\n][^?>]*?encoding[ \t\r\n]*=[ \t\r\n]*["']([A-Za-z][A-Za-z0-9._-]*)["']`)
+var encodingDecl = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^<\?xml[ \t\r\n][^?>]*?encoding[ \t\r\n]*=[ \t\r\n]*["']([A-Za-z][A-Za-z0-9._-]*)["']`)
+})
 
 // declaredEncoding returns the encoding an XML declaration names, or "".
 // XML 1.0 §4.3.3 makes it a fatal error for an entity to be presented in an
@@ -175,7 +178,7 @@ var encodingDecl = regexp.MustCompile(`^<\?xml[ \t\r\n][^?>]*?encoding[ \t\r\n]*
 // is that presentation (Appendix F): a UTF-8 BOM before encoding="ISO-8859-1"
 // leaves two readings of the same bytes, so the document is refused.
 func declaredEncoding(s string) string {
-	if m := encodingDecl.FindStringSubmatch(s); m != nil {
+	if m := encodingDecl().FindStringSubmatch(s); m != nil {
 		return m[1]
 	}
 	return ""
