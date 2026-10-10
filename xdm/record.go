@@ -341,7 +341,7 @@ func nameHash(q QName) int {
 }
 
 // smallNames is how many names a tree holds before it indexes them.
-const smallNames = 8
+const smallNames = 24
 
 // nextTreeID hands out tree identifiers. Trees created concurrently may
 // interleave, which is fine: the spec requires only a stable order, and each
@@ -771,6 +771,28 @@ func (n *Node) SetBaseURI(base string) {
 		return
 	}
 	n.setOwnBase(base)
+}
+
+// DescendantsInheritBase reports whether every node below n inherits its base
+// URI: none has one of its own, and no element there or on n carries an
+// xml:base attribute. Setting n's base URI then settles the whole subtree.
+func (n *Node) DescendantsInheritBase() bool {
+	if n.isLeaf() || n.flags&fSide != 0 {
+		return true
+	}
+	t := n.tree
+	for i, end := n.self+1, t.endOf(n); i < end; i++ {
+		r := t.rec(i)
+		if r.flags&fBase != 0 {
+			return false
+		}
+		if r.kind == uint8(KindAttribute) {
+			if q := t.names[r.name]; q.Local == "base" && q.URI == NSXML {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (n *Node) setOwnBase(base string) {

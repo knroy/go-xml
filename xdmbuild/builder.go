@@ -262,6 +262,11 @@ func Rebase(n *xdm.Node, parentBase string) {
 	if base == "" {
 		return
 	}
+	// A subtree that already has this base, and where every node inherits
+	// it, would only see no-op SetBaseURI calls below.
+	if n.BaseURI() == base && n.DescendantsInheritBase() {
+		return
+	}
 	n.SetBaseURI(base)
 	for ch := range n.Children() {
 		Rebase(ch, base)
