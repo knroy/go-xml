@@ -380,6 +380,10 @@ type Schema struct {
 	// after the first document there are no more writes — and because a
 	// Schema is documented as safe to share between goroutines once loaded.
 	models sync.Map
+
+	// annotations caches what each type annotates a node with, keyed by
+	// type (see annotationFor), on the same write-once pattern as models.
+	annotations sync.Map
 }
 
 // Version selects the XML Schema version a schema is interpreted under.

@@ -424,3 +424,74 @@ func TestCheckOnlyAssertionSeesUnwrittenTyping(t *testing.T) {
 		}
 	}
 }
+
+// TestTypedCopyDefaultsInOrder pins where the bulk clone inserts defaulted
+// attributes: on nested elements, next to dropped whitespace, and on the
+// last record of the tree, so every insertion point is met in order.
+func TestTypedCopyDefaultsInOrder(t *testing.T) {
+	s := loadAssertionSchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="e"><xs:sequence>
+    <xs:element name="i" type="e" minOccurs="0" maxOccurs="unbounded"/></xs:sequence>
+    <xs:attribute name="a" type="xs:string"/>
+    <xs:attribute name="k" type="xs:string" default="d"/></xs:complexType>
+  <xs:element name="i" type="e"/>
+</xs:schema>`)
+	tree, err := xdm.ParseString("<i a=\"0\">\n <i>\n  <i a=\"2\"/> <i k=\"x\"/>\n </i>\n <i/></i>", xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ValidateCopy(tree.Root, ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	var walk func(n *xdm.Node)
+	walk = func(n *xdm.Node) {
+		b.WriteString("<" + n.Name().Local)
+		for a := range n.Attrs() {
+			fmt.Fprintf(&b, " %s=%s:%s", a.Name().Local, a.Value(), a.TypeAnnotation())
+		}
+		b.WriteString(">")
+		for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+			if c.Kind() != xdm.KindElement {
+				fmt.Fprintf(&b, "%q", c.Value())
+				continue
+			}
+			walk(c)
+			if c.Parent() != n {
+				t.Errorf("%s: wrong parent", c.Name().Local)
+			}
+		}
+		b.WriteString("</>")
+	}
+	walk(got.FirstChild())
+	const want = `<i a=0:string k=d:string><i k=d:string><i a=2:string k=d:string></><i k=x:string></></><i k=d:string></></>`
+	if b.String() != want {
+		t.Errorf("typed copy\n  got  %s\n  want %s", b.String(), want)
+	}
+}
+
+// TestTypedCopyAnnotationMemo pins the per-type annotation memo: a second
+// typed copy, written from the memo, carries every property the first,
+// written while the memo was filled, does.
+func TestTypedCopyAnnotationMemo(t *testing.T) {
+	s := loadAssertionSchema(t, copySchema)
+	doc := copyDoc("100", `<n xsi:nil="true"/>`, "1")
+	first, err := s.ValidateCopy(parseCopyDoc(t, doc).Root, ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.ValidateCopy(parseCopyDoc(t, doc).Root, ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameTree(t, "first vs memoised copy", first, second)
+	nums := pickCopyTarget(second, "nums")
+	if got := xdm.TypingOf(nums); got.TypeAnnotation != "{urn:t}l" || got.ListItem != "integer" ||
+		nums.TypeEnv() != s.TypeEnv() {
+		t.Errorf("nums typing %+v, env %p", got, nums.TypeEnv())
+	}
+	if r := second.FirstChild(); !r.NoTypedValue() || r.TypeAnnotation() != "anyType" {
+		t.Errorf("r: no typed value %v, annotation %q", r.NoTypedValue(), r.TypeAnnotation())
+	}
+}

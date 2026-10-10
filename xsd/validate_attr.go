@@ -202,8 +202,9 @@ func (v *validator) applyAttributeDefault(el *xdm.Node, use *AttributeUse) {
 	}
 	attr := xdm.NewNode(xdm.KindAttribute, xdm.QName{Prefix: prefix, Local: name.Local, URI: name.URI}, normalized)
 	if use.Decl.Type != nil {
-		if a := annotationName(use.Decl.Type); a != "" {
-			v.schema.setResolvedAnnotation(attr, a, use.Decl.Type)
+		// A simple type's annotationFor name is annotationName's.
+		if a := v.schema.annotationFor(use.Decl.Type); a.name != "" {
+			attr.SetAssessedTyping(a.name, a.prim, a.item, v.schema.typeEnv, false, false)
 		}
 	}
 	if v.defaults == nil {
@@ -389,9 +390,8 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 		// input-type-annotations="strip" clears the annotation while
 		// requiring them to survive, and fn:id/fn:idref are defined over
 		// them rather than over the annotation.
-		v.schema.setResolvedAnnotation(a,
-			xdm.AnnotationName(decl.Type.Name.URI, decl.Type.Name.Local),
-			decl.Type)
+		t := v.schema.annotationFor(decl.Type)
+		a.SetAssessedTyping(t.name, t.prim, t.item, v.schema.typeEnv, false, false)
 	}
 }
 

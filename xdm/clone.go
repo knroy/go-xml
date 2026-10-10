@@ -41,19 +41,26 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 	var newIdx []uint32
 	var dropped []bool
 	type addition struct {
+		at    uint32 // the source index they are inserted before
 		owner uint32 // the element's source index
 		attrs []any
 	}
-	var adds map[uint32]addition // by the source index they are inserted before
+	// adds is in increasing order of at, as the elements are met, so both
+	// walks below consume it with a cursor rather than a lookup per record.
+	var adds []addition
 	if o.Drop != nil || o.Add != nil {
 		newIdx = make([]uint32, n+1)
 		if o.Drop != nil {
 			dropped = make([]bool, n)
 		}
 		delta := int64(0)
+		next := 0 // the first addition not yet counted into delta
 		for i := lo; i < hi; i++ {
 			r := t.rec(i)
-			delta += int64(len(adds[i].attrs))
+			if next < len(adds) && adds[next].at == i {
+				delta += int64(len(adds[next].attrs))
+				next++
+			}
 			newIdx[i-lo] = uint32(int64(i-lo) + delta)
 			switch {
 			case r.kind == uint8(KindElement) && o.Add != nil:
@@ -61,10 +68,7 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 					if r.flags&fManyAttrs != 0 || int(r.nattr)+len(as) >= 0xFFFF {
 						return nil
 					}
-					if adds == nil {
-						adds = map[uint32]addition{}
-					}
-					adds[i+1+uint32(r.nattr)] = addition{i, as}
+					adds = append(adds, addition{i + 1 + uint32(r.nattr), i, as})
 				}
 			case r.isLeaf() && r.kind != uint8(KindAttribute) && o.Drop != nil && i != lo:
 				if o.Drop(r) {
@@ -73,7 +77,9 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 				}
 			}
 		}
-		delta += int64(len(adds[hi].attrs))
+		if next < len(adds) && adds[next].at == hi {
+			delta += int64(len(adds[next].attrs))
+		}
 		newIdx[n] = uint32(int64(n) + delta)
 	}
 	mapIdx := func(i uint32) uint32 {
@@ -137,11 +143,13 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 		*d = r
 		return d
 	}
+	ai := 0 // the next addition to place
 	addAttrs := func(at uint32) {
-		a, ok := adds[at]
-		if !ok {
+		if ai == len(adds) || adds[ai].at != at {
 			return
 		}
+		a := adds[ai]
+		ai++
 		owner := mapIdx(a.owner)
 		j := mapIdx(at) - uint32(len(a.attrs))
 		for _, x := range a.attrs {
@@ -181,8 +189,10 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 			r.end = j + 1
 		} else {
 			r.end = mapIdx(t.endOf(s))
-			if a, ok := adds[s.firstChildIdx()]; ok && a.owner == i {
-				r.nattr += uint16(len(a.attrs))
+			// addAttrs(i) has placed everything before i, so an
+			// addition of i's own is the next.
+			if ai < len(adds) && adds[ai].owner == i {
+				r.nattr += uint16(len(adds[ai].attrs))
 			}
 			if r.v1 != noIdx {
 				if r.v1 = livePrev(r.v1); r.v1 != noIdx {
@@ -192,11 +202,13 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 		}
 		d := place(j, r)
 		if s.flags&fTyped != 0 {
-			ty := *s.typ()
-			if o.Detached {
-				ty.env = nil
+			dt := d.ownTyping()
+			*dt = *s.typ() // the names are shared, not copied
+			if o.Detached && dt.get().env != nil {
+				v := *dt.names
+				v.env = nil
+				setNames(dt, v)
 			}
-			*d.ownTyping() = ty
 		}
 		if s.flags&fBase != 0 {
 			if o.Detached && s.kind == uint8(KindAttribute) {

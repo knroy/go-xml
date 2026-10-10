@@ -267,7 +267,7 @@ func TestCyclicDerivationTerminates(t *testing.T) {
 
 		n := NewNode(KindElement, QName{}, "")
 		n.AppendText("42")
-		n.ownTyping().annotation = a
+		setNames(n.ownTyping(), typingNames{annotation: a})
 		// Atomize -> atomicForDerivedAnnotation. Nothing in the cycle is a
 		// built-in, so no typed value can be built and the node falls back
 		// to untypedAtomic — the documented answer for a type this package

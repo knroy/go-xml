@@ -218,10 +218,54 @@ type sideKey struct {
 
 // nodeTyping is the PSVI a schema assessment (or a DTD, or an XSLT
 // validation instruction) recorded on a node. See the typing accessors.
+//
+// The names are behind a pointer shared by every record typed with the same
+// ones, which keeps an entry at 16 bytes rather than 80: a typed copy holds
+// one entry per node, and few distinct names.
 type nodeTyping struct {
-	annotation, unionMember, derivedPrimitive, listItem  string
-	env                                                  *TypeEnvironment
+	names                                                *typingNames // nil for none; never written through
 	isID, isIDREFS, isNilled, noTypedValue, mixedContent bool
+}
+
+// typingNames is the part of a node's typing that names types.
+type typingNames struct {
+	annotation, unionMember, derivedPrimitive, listItem string
+	env                                                 *TypeEnvironment
+}
+
+var zeroNames typingNames
+
+// get returns t's names, or the zero ones.
+func (t *nodeTyping) get() *typingNames {
+	if t.names == nil {
+		return &zeroNames
+	}
+	return t.names
+}
+
+// recentNames holds names made earlier, direct-mapped by where their strings
+// live rather than by what they say: an assessment writes each type's names
+// from one memoised set of strings, so equal names usually share storage,
+// and hashing the text on every write is what sank interning per tree
+// (docs/profiling.md, "Interning nodeTyping per tree"). Equal names in other
+// storage only miss, and cost an allocation.
+//
+// It is process-wide rather than per tree because a defaulted attribute
+// starts out as a tree of its own. Names are never written once made, so any
+// tree on any goroutine may share them.
+//
+// Each set of names has two slots, so that two in steady use that hash alike
+// do not keep evicting each other.
+var recentNames [1024]atomic.Pointer[typingNames]
+
+// recentSlots is the index of v's first slot in recentNames; the second is
+// the one after it.
+func recentSlots(v *typingNames) uint64 {
+	h := uint64(uintptr(unsafe.Pointer(v.env)))
+	for _, s := range [...]string{v.annotation, v.unionMember, v.derivedPrimitive, v.listItem} {
+		h = (h ^ uint64(uintptr(unsafe.Pointer(unsafe.StringData(s))))) * 0x9E3779B97F4A7C15
+	}
+	return h >> 55 << 1
 }
 
 // --- Records ----------------------------------------------------------------
@@ -894,20 +938,48 @@ func (n *Node) ownTyping() *nodeTyping {
 	return &t.typing[k][off]
 }
 
+// setNames points t at names equal to v, sharing ones made recently.
+func setNames(t *nodeTyping, v typingNames) {
+	if v == (typingNames{}) {
+		t.names = nil
+		return
+	}
+	if t.names != nil && *t.names == v {
+		return
+	}
+	i := recentSlots(&v)
+	a, b := &recentNames[i], &recentNames[i+1]
+	pa := a.Load()
+	if pa != nil && *pa == v {
+		t.names = pa
+		return
+	}
+	if pb := b.Load(); pb != nil && *pb == v {
+		t.names = pb
+		return
+	}
+	p := new(typingNames)
+	*p = v
+	// The newest goes first; the first moves to second.
+	b.Store(pa)
+	a.Store(p)
+	t.names = p
+}
+
 // TypeAnnotation returns n's type annotation name (see AnnotationName), or
 // "" when n is untyped.
-func (n *Node) TypeAnnotation() string { return n.typ().annotation }
+func (n *Node) TypeAnnotation() string { return n.typ().get().annotation }
 
 // UnionMember returns the member type of a union that accepted n's value.
-func (n *Node) UnionMember() string { return n.typ().unionMember }
+func (n *Node) UnionMember() string { return n.typ().get().unionMember }
 
 // DerivedPrimitive returns the built-in type n's annotation erases to, as
 // recorded at assessment, or "" when not recorded.
-func (n *Node) DerivedPrimitive() string { return n.typ().derivedPrimitive }
+func (n *Node) DerivedPrimitive() string { return n.typ().get().derivedPrimitive }
 
 // ListItem returns the item type when n's annotation is a list type, as
 // recorded at assessment, or "".
-func (n *Node) ListItem() string { return n.typ().listItem }
+func (n *Node) ListItem() string { return n.typ().get().listItem }
 
 // IsID reports the dm:is-id property.
 func (n *Node) IsID() bool { return n.typ().isID }
@@ -936,7 +1008,7 @@ func (n *Node) TypeEnv() *TypeEnvironment {
 	if n == nil {
 		return nil
 	}
-	return n.typ().env
+	return n.typ().get().env
 }
 
 // SetTypeEnv records the type environment of the schema whose assessment
@@ -949,7 +1021,10 @@ func (n *Node) SetTypeEnv(e *TypeEnvironment) {
 	if n == nil || (e == nil && n.flags&fTyped == 0) {
 		return
 	}
-	n.ownTyping().env = e
+	t := n.ownTyping()
+	v := *t.get()
+	v.env = e
+	setNames(t, v)
 }
 
 // --- Namespaces -----------------------------------------------------------

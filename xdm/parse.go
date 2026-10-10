@@ -150,6 +150,13 @@ const (
 // namespace nodes are addressable on the namespace axis, and a literal result
 // element must be serialised with the prefix the author wrote.
 func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
+	return parse(r, "", opts)
+}
+
+// parse is Parse. whole, when not "", is the text r reads (ParseString's
+// string): if decoding leaves it unchanged it is the source kept for
+// positions and for an entity re-parse, and no copy is made.
+func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	// The byte limit wraps the reader FIRST, ahead of every other wrapper,
 	// so that it bounds the raw source as ParseOptions.MaxBytes says it
 	// does: what is read, not what a caller remembered to check. One byte
@@ -227,11 +234,14 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// find and so needs no copy at all.
 	// Only a tracked copy is kept to the end, so only it is sized up front;
 	// never past MaxBytes, which the reader will refuse to go beyond.
-	if trackPos && sizeHint > 0 && (maxBytes <= 0 || int64(sizeHint) <= maxBytes) {
+	if !verbatim(whole) {
+		whole = ""
+	}
+	if whole == "" && trackPos && sizeHint > 0 && (maxBytes <= 0 || int64(sizeHint) <= maxBytes) {
 		srcBuf.Grow(sizeHint)
 	}
 	var tee *srcTee
-	if trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded) {
+	if whole == "" && (trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded)) {
 		tee = &srcTee{r: r, buf: &srcBuf}
 		r = tee
 	}
@@ -474,7 +484,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					return nil, err
 				}
 				sawDecl = true
-				standalone = standaloneYes().MatchString(string(t.Inst))
+				standalone = declStandaloneYes(string(t.Inst))
 				continue // the XML declaration is not a PI node in the XDM
 			}
 			// Namespaces in XML §7: no PI target contains a colon.
@@ -654,6 +664,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 						if _, err := io.Copy(io.Discard, r); err != nil {
 							return nil, fmt.Errorf("parse XML: %w", err)
 						}
+						if whole != "" {
+							return parseExpanded(whole, ents, opts)
+						}
 						return parseExpanded(srcBuf.String(), ents, opts)
 					}
 					// Arm the charge reader now that the declarations are
@@ -696,7 +709,11 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		// The decoder stops reading at the end of the root element, so the
 		// tee holds everything up to there — which is all any offset can
 		// point into.
-		tree.ownSource().src = srcBuf.String()
+		src := srcBuf.String()
+		if whole != "" {
+			src = whole
+		}
+		tree.ownSource().src = src
 	}
 	tree.XMLVersion = "1.0"
 	if dec.IsVersion11() {
@@ -718,7 +735,18 @@ func readWindow(size int) int {
 // ParseString is Parse over a string, which is what most tests and the
 // stylesheet compiler want.
 func ParseString(s string, opts ParseOptions) (*Tree, error) {
-	return Parse(strings.NewReader(s), opts)
+	return parse(strings.NewReader(s), s, opts)
+}
+
+// verbatim reports whether decoding passes s through unchanged: no byte order
+// mark, no UTF-16 and no carriage return for line-end normalisation to fold.
+// It errs towards false, which costs only a copy.
+func verbatim(s string) bool {
+	if s == "" || s[0] == 0xFE || s[0] == 0xFF || s[0] == 0xEF || s[0] == 0 ||
+		len(s) > 1 && s[1] == 0 {
+		return false
+	}
+	return strings.IndexByte(s, '\r') < 0
 }
 
 // buildElement appends to parent the element a StartElement opens, its

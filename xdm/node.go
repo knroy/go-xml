@@ -856,15 +856,17 @@ func (n *Node) SetTypeAnnotation(annotation string) {
 		return
 	}
 	t := n.ownTyping()
-	t.annotation = annotation
+	v := *t.get()
+	v.annotation = annotation
 	if annotation == "" {
 		// Clearing the annotation clears what it meant. DerivedPrimitive and
 		// ListItem describe a type this node no longer claims, and leaving
 		// them would let it keep atomising as that type -- an annotation-less
 		// node that still splits into list items is exactly the bug
 		// input-type-annotations="strip" and xsl:copy-of would have hit.
-		t.derivedPrimitive, t.listItem = "", ""
+		v.derivedPrimitive, v.listItem = "", ""
 	}
+	setNames(t, v)
 	if isID, isRefs := annotationIDKind(annotation); isID || isRefs {
 		t.isID = t.isID || isID
 		t.isIDREFS = t.isIDREFS || isRefs
@@ -897,8 +899,24 @@ func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem 
 		return
 	}
 	t := n.ownTyping()
-	t.derivedPrimitive = derivedPrimitive
-	t.listItem = listItem
+	v := *t.get()
+	v.derivedPrimitive, v.listItem = derivedPrimitive, listItem
+	setNames(t, v)
+}
+
+// SetAssessedTyping is SetTypeAnnotationResolved followed by SetTypeEnv, and
+// turns NoTypedValue and MixedContent on when asked, in one write: the shape
+// in which schema assessment annotates a node. annotation must not be "".
+func (n *Node) SetAssessedTyping(annotation, derivedPrimitive, listItem string,
+	env *TypeEnvironment, noTypedValue, mixedContent bool) {
+	t := n.ownTyping()
+	setNames(t, typingNames{annotation, t.get().unionMember, derivedPrimitive, listItem, env})
+	if isID, isRefs := annotationIDKind(annotation); isID || isRefs {
+		t.isID = t.isID || isID
+		t.isIDREFS = t.isIDREFS || isRefs
+	}
+	t.noTypedValue = t.noTypedValue || noTypedValue
+	t.mixedContent = t.mixedContent || mixedContent
 }
 
 // CopyTypingFrom copies every PSVI property of src onto n, so that the copy
@@ -969,11 +987,12 @@ func TypingOf(n *Node) Typing {
 		return Typing{}
 	}
 	t := n.typ()
+	nm := t.get()
 	return Typing{
-		TypeAnnotation:   t.annotation,
-		UnionMember:      t.unionMember,
-		DerivedPrimitive: t.derivedPrimitive,
-		ListItem:         t.listItem,
+		TypeAnnotation:   nm.annotation,
+		UnionMember:      nm.unionMember,
+		DerivedPrimitive: nm.derivedPrimitive,
+		ListItem:         nm.listItem,
 		IsID:             t.isID,
 		IsIDREFS:         t.isIDREFS,
 		IsNilled:         t.isNilled,
@@ -996,10 +1015,7 @@ func (n *Node) ApplyTyping(t Typing) {
 		return
 	}
 	d := n.ownTyping()
-	d.annotation = t.TypeAnnotation
-	d.unionMember = t.UnionMember
-	d.derivedPrimitive = t.DerivedPrimitive
-	d.listItem = t.ListItem
+	setNames(d, typingNames{t.TypeAnnotation, t.UnionMember, t.DerivedPrimitive, t.ListItem, d.get().env})
 	d.isID = t.IsID
 	d.isIDREFS = t.IsIDREFS
 	d.isNilled = t.IsNilled

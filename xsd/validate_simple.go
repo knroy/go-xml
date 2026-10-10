@@ -227,8 +227,12 @@ func validateAtomicValueBoundsIn(lexical string, t *SimpleType, version Version,
 	normalized := ws.Normalize(lexical)
 
 	steps := facetChain(t)
-	if err := checkPatterns(steps, normalized); err != nil {
-		return "", err
+	// A type no facet constrains needs only the lexical checks below.
+	free := t == nil || chainFactsOf(t).unconstrained
+	if !free {
+		if err := checkPatterns(steps, normalized); err != nil {
+			return "", err
+		}
 	}
 
 	// The lexical form must belong to the primitive's lexical space. This
@@ -257,6 +261,9 @@ func validateAtomicValueBoundsIn(lexical string, t *SimpleType, version Version,
 	// with a digit and is not one.
 	if err := checkStringSubtype(normalized, t); err != nil {
 		return "", err
+	}
+	if free {
+		return normalized, nil
 	}
 
 	if err := checkEnumerationIn(steps, normalized, t, at); err != nil {
