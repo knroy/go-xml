@@ -384,8 +384,10 @@ func nameHash(q QName) int {
 	return h
 }
 
-// smallNames is how many names a tree holds before it indexes them.
-const smallNames = 24
+// smallNames is how many names a tree holds before it indexes them. 24
+// helped constructed trees but cost parsing 7%, scanning more names before
+// the map; 16 keeps both.
+const smallNames = 16
 
 // nextTreeID hands out tree identifiers. Trees created concurrently may
 // interleave, which is fine: the spec requires only a stable order, and each
