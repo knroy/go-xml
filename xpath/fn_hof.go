@@ -336,7 +336,7 @@ func callFunction(ctx *Context, fn *xdm.FunctionItem, args ...xdm.Sequence) (xdm
 		return nil, fmt.Errorf("XPTY0004: %s takes %d argument(s), but was applied to %d",
 			fn.String(), fn.Arity, len(args))
 	}
-	return fn.Invoke(ctx, args)
+	return callItem(ctx, fn, args)
 }
 
 // singleBoolean reads the xs:boolean a predicate function must return.

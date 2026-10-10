@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmfunc"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -176,7 +177,7 @@ func loadXQueryModule(ctx *xpath.Context, uri string, options *xdm.MapItem) (xdm
 // none of the module's globals.
 func moduleFunction(d *funcDecl, bound *xpath.Context) *xdm.FunctionItem {
 	fn, _ := bound.Funcs.Lookup(d.name, len(d.params))
-	return &xdm.FunctionItem{Name: d.name, Arity: len(d.params), Signature: fn.Signature,
+	item := &xdm.FunctionItem{Name: d.name, Arity: len(d.params), Signature: fn.Signature,
 		Invoke: func(c any, args []xdm.Sequence) (xdm.Sequence, error) {
 			call, ok := c.(*xpath.Context)
 			if !ok {
@@ -189,6 +190,8 @@ func moduleFunction(d *funcDecl, bound *xpath.Context) *xdm.FunctionItem {
 			sub.Depth = call.Depth
 			return fn.Call(sub, args)
 		}}
+	xdmfunc.Mark(item)
+	return item
 }
 
 // moduleCompileError maps a failed compile onto §14.6.1's codes: a module

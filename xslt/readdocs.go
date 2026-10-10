@@ -119,11 +119,14 @@ func (r *readDocResolver) ResolveDocumentIn(
 
 	if cr, ok := r.inner.(xpath.ContextDocumentResolver); ok {
 		return r.cached(docKey{uri, base, packageOf(ctx)}, func() (*xdm.Tree, error) {
-			return cr.ResolveDocumentIn(ctx, uri, base)
+			return resolveDocIn(cr, ctx, uri, base)
 		})
 	}
 	return r.ResolveDocument(uri, base)
 }
+
+// NativeResolver implements xpathleaf.NativeResolver.
+func (r *readDocResolver) NativeResolver() {}
 
 // checkReadThenWrite is XTDE1500 for one xsl:result-document destination.
 //

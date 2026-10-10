@@ -19,14 +19,17 @@ import (
 //
 // The stack is written in place. What outlives the scope it was made in
 // captures a copy: an inline function does (xpath's frozenLocals), and so
-// does a deferred xsl:on-non-empty (execConditionalSequence). Once the
-// transform has returned, a function item that escaped it may be called from
-// several goroutines, so from then on bindings go back to WithVar.
+// does a deferred xsl:on-non-empty (execConditionalSequence). Only the
+// transform's own goroutine binds on it, and only while it holds the
+// runtime: once a host call has let a function item or a context reach other
+// goroutines, the stack is off while that call runs, and for good once the
+// transform has returned (see xpath.EvalLock), and whoever runs then binds
+// with WithVar. A transform fn:transform starts binds on its caller's stack,
+// in a frame of its own, so that the one goroutine has one stack to give up.
 
-// localStack is the stack this runtime binds on, or nil once the transform
-// has returned.
+// localStack is the stack this runtime binds on, or nil while it is off.
 func (rt *runtime) localStack() *xpathleaf.Locals {
-	if rt.transformState == nil || rt.locals == nil || rt.localsDone.Load() {
+	if rt.transformState == nil || rt.locals == nil || rt.locals.Off() {
 		return nil
 	}
 	return rt.locals
@@ -89,9 +92,7 @@ func (rt *runtime) globalBindings() *runtime {
 
 // finishLocals ends the stack's use: the transform has returned.
 func (rt *runtime) finishLocals() {
-	if st := rt.localStack(); st != nil {
-		st.Truncate(0)
-		st.SetBase(0)
-		rt.localsDone.Store(true)
+	if rt.locals != nil {
+		rt.locals.Close()
 	}
 }

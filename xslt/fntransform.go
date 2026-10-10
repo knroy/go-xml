@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -498,6 +499,12 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 	// allowances rather than a fresh pair, on the same policy. See
 	// TransformOptions.nestedBudget.
 	topts.nestedBudget = ctx
+	// It shares the calling transform's lock and locals stack. See
+	// TransformOptions.nestedLock.
+	topts.nestedLock, topts.nestedLocals = nil, nil
+	if prt := runtimeOf(ctx); prt != nil && prt.transformState != nil && prt.evalLock != nil {
+		topts.nestedLock, topts.nestedLocals = prt.evalLock, prt.locals
+	}
 	topts.DisableAssertions = !assertions
 	topts.disableMessages = !messages
 	// The nested transform is a transformation of its own: the outer one's
@@ -679,7 +686,7 @@ func transformSourceLocation(
 	var err error
 	if cr, ok := docs.(xpath.ContextDocumentResolver); ok {
 		// Charged to the calling evaluation's entity allowance, as fn:doc is.
-		tree, err = cr.ResolveDocumentIn(ctx, loc, ctx.StaticBaseURI())
+		tree, err = resolveDocIn(cr, ctx, loc, ctx.StaticBaseURI())
 	} else {
 		tree, err = docs.ResolveDocument(loc, ctx.StaticBaseURI())
 	}
@@ -1224,7 +1231,7 @@ func postProcess(ctx *xpath.Context, f *xdm.FunctionItem, key string, val xdm.Se
 	if f == nil {
 		return val, nil
 	}
-	out, err := f.Invoke(ctx, []xdm.Sequence{
+	out, err := xpathleaf.CallItem(ctx, f, []xdm.Sequence{
 		{xdm.NewString(key)},
 		val,
 	})

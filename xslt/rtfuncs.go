@@ -1781,7 +1781,17 @@ func compatKeyValue(a *xdm.Atomic) *xdm.Atomic {
 // context carries. See stripSpaceResolver.ResolveDocumentIn.
 func resolveDocumentIn(ctx *xpath.Context, uri, base string) (*xdm.Tree, error) {
 	if cr, ok := ctx.Env().Docs.(xpath.ContextDocumentResolver); ok {
-		return cr.ResolveDocumentIn(ctx, uri, base)
+		return resolveDocIn(cr, ctx, uri, base)
 	}
 	return ctx.Env().Docs.ResolveDocument(uri, base)
+}
+
+// resolveDocIn is r.ResolveDocumentIn for a call made at ctx. A resolver
+// that is not this module's own is host code handed the context, which goes
+// through xpath (see its hostCall).
+func resolveDocIn(r xpath.ContextDocumentResolver, ctx *xpath.Context, uri, base string) (*xdm.Tree, error) {
+	if _, ok := r.(*FileResolver); ok {
+		return r.ResolveDocumentIn(ctx, uri, base)
+	}
+	return xpathleaf.ResolveDocumentIn(r, ctx, uri, base)
 }

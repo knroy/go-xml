@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
@@ -75,9 +74,8 @@ type transformState struct {
 	sheet *Stylesheet
 
 	// locals holds the local variables and parameters in scope; see
-	// locals.go. localsDone is set when the transform returns.
-	locals     *xpathleaf.Locals
-	localsDone atomic.Bool
+	// locals.go. A transform fn:transform starts shares its caller's.
+	locals *xpathleaf.Locals
 
 	// deferredErr holds the failure of a global whose evaluation is not by
 	// itself the transform's failure -- an abstract variable, whose body
@@ -731,6 +729,9 @@ var _ xpathleaf.StepMemoHost = (*runtime)(nil)
 // EvalLock implements xpath.EvalLocker.
 func (rt *runtime) EvalLock() *xpath.EvalLock { return rt.evalLock }
 
+// Locals implements xpathleaf.LocalsHost.
+func (rt *runtime) Locals() *xpathleaf.Locals { return rt.locals }
+
 // newRuntime builds a runtime for one transform.
 func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts TransformOptions) (*runtime, error) {
 	maxDepth := opts.MaxDepth
@@ -740,7 +741,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	rt := &runtime{
 		transformState: &transformState{
 			sheet:       s,
-			evalLock:    &xpath.EvalLock{},
+			evalLock:    opts.nestedLock,
 			maxDepth:    maxDepth,
 			keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
 			keyBuilding: map[keyCacheKey]bool{},
@@ -767,6 +768,9 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		// TransformOptions.nestedDepth for why the budget is inherited.
 		depth:  opts.nestedDepth,
 		tunnel: map[string]xdm.Sequence{},
+	}
+	if rt.evalLock == nil {
+		rt.evalLock = &xpath.EvalLock{}
 	}
 
 	// A transform started from a named template has no source document, and
@@ -928,7 +932,10 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// template and function call makes then return the runtime unchanged.
 	rt.absent = absentMerge | absentGrouping | absentRegex | absentOutputURI
 	setUnbound(rt.ctx, rt.absent)
-	rt.locals = &xpathleaf.Locals{}
+	rt.locals = opts.nestedLocals
+	if rt.locals == nil {
+		rt.locals = &xpathleaf.Locals{}
+	}
 
 	if err := rt.evalGlobals(s, opts); err != nil {
 		return nil, err

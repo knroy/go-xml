@@ -13,11 +13,40 @@ import "github.com/knroy/go-xml/v2/xdm"
 // template or function body, which sees its own locals and the globals but
 // not its caller's. The stack is written in place, so a value that outlives
 // the scopes it reads, such as an inline function, captures a copy (Frozen).
-// It is used by the one goroutine running the evaluation.
+// It is used by the one goroutine running the evaluation, and by no other:
+// while that goroutine is in host code, or once the evaluation has ended, it
+// is off (Suspend, Close), and whatever else runs against the host binds its
+// locals elsewhere.
 type Locals struct {
 	names []localName
 	vals  []xdm.Sequence
 	base  int
+	off   bool
+}
+
+// LocalsHost is implemented by a Host.Runtime that binds on a Locals.
+type LocalsHost interface{ Locals() *Locals }
+
+// Off reports whether the stack is suspended or closed: the goroutine
+// running now must not bind on it.
+func (l *Locals) Off() bool { return l.off }
+
+// Suspend turns the stack off and hides every binding on it from lookups,
+// until the returned resume. It does nothing to a nil or an off stack.
+func (l *Locals) Suspend() (resume func()) {
+	if l == nil || l.off {
+		return func() {}
+	}
+	base := l.base
+	l.base, l.off = len(l.names), true
+	return func() { l.base, l.off = base, false }
+}
+
+// Close empties the stack and turns it off for good: the evaluation using it
+// has ended.
+func (l *Locals) Close() {
+	l.Truncate(0)
+	l.base, l.off = 0, true
 }
 
 type localName struct{ uri, local string }
