@@ -930,25 +930,24 @@ type varKey struct{ uri, local string }
 // resolves as if the name were not bound here, which is how a host sees a
 // circularity. Unbind takes the variable out of scope for good.
 //
-// A LazyVar is safe for concurrent use once Share has been called. A
-// function item can outlive the evaluation that made it and be called from
-// several goroutines, each reaching a variable nothing has evaluated yet.
-// The variables bound by one WithLazyVars call share one lock, held while
-// any of them is forced, so each is evaluated once and the host's Force
-// never runs concurrently with another of the same scope; one lock per
-// variable would let two goroutines forcing two variables that read each
-// other wait on each other forever. The lock is re-entrant for the goroutine
-// holding it, since forcing one variable usually reads others.
+// A LazyVar is safe for concurrent use once its scope's EvalLock has been
+// shared. A function item can outlive the evaluation that made it and be
+// called from several goroutines, each reaching a variable nothing has
+// evaluated yet. The variables bound by one WithLazyVars call share one
+// lock, held while any of them is forced, so each is evaluated once and the
+// host's Force never runs concurrently with another of the same scope; one
+// lock per variable would let two goroutines forcing two variables that read
+// each other wait on each other forever.
 //
-// Until Share, the scope is used by the one goroutine evaluating with it and
-// no lock is taken: finding the goroutine costs a stack trace, and taking it
-// on every first force cost DocBook 44% CPU. A forced value is read with one
-// atomic load either way.
+// Until the lock is shared, the scope is used by the one goroutine
+// evaluating with it and no lock is taken: finding the goroutine costs a
+// stack trace, and taking it on every first force cost DocBook 44% CPU. A
+// forced value is read with one atomic load either way.
 type LazyVar struct {
 	Force func() (xdm.Sequence, error)
 	val   xdm.Sequence
 	state atomic.Uint32
-	group *lazyGroup
+	group *EvalLock
 }
 
 const (
@@ -958,16 +957,36 @@ const (
 	lazyUnbound
 )
 
-// lazyGroup is the lock the variables of one WithLazyVars scope share.
-type lazyGroup struct {
+// EvalLock serializes evaluation of one host's state once a value that can
+// reach it, such as a function item, has left the goroutine that made it.
+// The lazy variables of a WithLazyVars scope take it while one is forced,
+// and a function item whose body runs under a context carrying a host
+// runtime that implements EvalLocker takes it for the call. One lock for
+// both, since forcing a variable can build the host's state and building
+// the state can read a variable: two locks would let two goroutines each
+// hold one and wait for the other. It is re-entrant for the goroutine
+// holding it, since one function calls another and forcing one variable
+// usually reads others.
+//
+// Until Share it is never taken and costs one atomic load.
+type EvalLock struct {
 	shared atomic.Bool // set by Share
 	mu     sync.Mutex
 	owner  atomic.Int64 // goroutine holding mu, or 0
 }
 
-// lock takes g for the calling goroutine and returns the release, which does
-// nothing when the goroutine already held it.
-func (g *lazyGroup) lock() func() {
+// EvalLocker is implemented by a host's xpathleaf.Host.Runtime whose state
+// an escaped function item must not reach from two goroutines at once.
+type EvalLocker interface{ EvalLock() *EvalLock }
+
+// Share marks the state g guards as reachable from other goroutines: from
+// then on Lock takes it. A host calls it before a value that can reach the
+// state leaves the goroutine evaluating with it.
+func (g *EvalLock) Share() { g.shared.Store(true) }
+
+// Lock takes g for the calling goroutine and returns the release, which does
+// nothing when the goroutine already held it or g is not shared.
+func (g *EvalLock) Lock() func() {
 	if !g.shared.Load() {
 		return func() {}
 	}
@@ -985,7 +1004,7 @@ func (g *lazyGroup) lock() func() {
 
 // goroutineID is the calling goroutine's number, read from the first line
 // of its stack trace ("goroutine 18 [running]:"). Go offers no other way to
-// tell a re-entrant call from another goroutine's. Only a force after Share
+// tell a re-entrant call from another goroutine's. Only a Lock after Share
 // pays for it.
 //
 // ponytail: parses runtime.Stack; a context-carried lock token would avoid
@@ -1018,21 +1037,11 @@ func (l *LazyVar) Value() (xdm.Sequence, error) {
 	return v, err
 }
 
-// Share marks the scope l is bound in as reachable from other goroutines:
-// from then on forcing any of its variables takes the scope's lock. A host
-// calls it before a value that can reach the scope, such as a function item,
-// leaves the goroutine evaluating with it.
-func (l *LazyVar) Share() {
-	if l.group != nil {
-		l.group.shared.Store(true)
-	}
-}
-
 // Unbind takes the variable out of scope: a reference resolves as if the
 // name were not bound by this scope.
 func (l *LazyVar) Unbind() {
 	if l.group != nil {
-		defer l.group.lock()()
+		defer l.group.Lock()()
 	}
 	l.state.Store(lazyUnbound)
 }
@@ -1042,7 +1051,7 @@ func (l *LazyVar) get() (xdm.Sequence, bool, error) {
 		return l.val, true, nil
 	}
 	if l.group != nil {
-		defer l.group.lock()()
+		defer l.group.Lock()()
 	}
 	switch l.state.Load() {
 	case lazyDone:
@@ -1064,10 +1073,13 @@ func (l *LazyVar) get() (xdm.Sequence, bool, error) {
 // WithLazyVars returns a child scope binding every name in vars, each one
 // evaluated on first lookup. One map scope rather than a WithVar per name
 // keeps a lookup that passes through it to one map probe. The variables
-// share one lock (see LazyVar); binding them again moves them to a new one,
-// so it must not happen while one is being forced.
-func (c *Context) WithLazyVars(vars map[xdm.QName]*LazyVar) *Context {
-	g := &lazyGroup{}
+// share lock, or a new one when it is nil (see LazyVar); binding them again
+// moves them to that one, so it must not happen while one is being forced.
+func (c *Context) WithLazyVars(vars map[xdm.QName]*LazyVar, lock *EvalLock) *Context {
+	g := lock
+	if g == nil {
+		g = &EvalLock{}
+	}
 	m := make(map[varKey]*LazyVar, len(vars))
 	for k, v := range vars {
 		v.group = g

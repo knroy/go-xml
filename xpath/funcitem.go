@@ -107,7 +107,8 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 	return func(callCtx any, args []xdm.Sequence) (xdm.Sequence, error) {
 		sub := captured
 		p := &sub
-		if c, ok := callCtx.(invokeContext); ok && c != nil {
+		c, _ := callCtx.(invokeContext)
+		if c != nil {
 			// Cancellation, the item and byte counters and the depth bound
 			// come from the call's environment; see envForCall.
 			sub.env = envForCall(captured.env, c)
@@ -172,8 +173,34 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			// the current item cleared as the variables above are.
 			p.host = hostOnCall(c.host, false)
 		}
+		defer enterHost(p, c)()
 		return inner(p, args)
 	}
+}
+
+// enterHost takes the EvalLock of the host runtime a function item's body is
+// about to run under at to, and returns the release. A caller whose context
+// from carries the same runtime is already running under it, which after
+// Share it can only be by holding the lock, so it is not taken again and
+// nested calls pay no goroutine lookup. Before Share it costs an atomic
+// load. See EvalLock.
+func enterHost(to, from *Context) func() {
+	l := evalLockOf(to)
+	if l == nil || !l.shared.Load() || from != nil && evalLockOf(from) == l {
+		return func() {}
+	}
+	return l.Lock()
+}
+
+// evalLockOf is the EvalLock of the host runtime c carries, or nil.
+func evalLockOf(c *Context) *EvalLock {
+	if c.host == nil {
+		return nil
+	}
+	if h, ok := c.host.Runtime.(EvalLocker); ok {
+		return h.EvalLock()
+	}
+	return nil
 }
 
 // envForCall is the environment a function item's body runs in: the one it
@@ -210,7 +237,9 @@ func hostBoundCall(ctx *Context, fn Function) func(*Context, []xdm.Sequence) (xd
 	}
 	call := fn.Call
 	return func(c *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		return call(restore(c).(*Context), args)
+		r := restore(c).(*Context)
+		defer enterHost(r, c)()
+		return call(r, args)
 	}
 }
 
@@ -260,7 +289,8 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// context supplies only the resource limits, which are per-evaluation
 		// rather than per-closure.
 		sub := captured
-		if c, ok := callCtx.(invokeContext); ok && c != nil {
+		c, _ := callCtx.(invokeContext)
+		if c != nil {
 			s := *captured
 			s.env = envForCall(captured.env, c)
 			// Both budgets come from the call, each with the flag that says
@@ -294,6 +324,9 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			}
 			sub = sub.WithVar(p.Name, v)
 		}
+		// The captured scope may carry a host runtime the caller is not
+		// running under, such as a transform's after it has returned.
+		defer enterHost(captured, c)()
 		out, err := e.Body.Eval(sub)
 		if err != nil {
 			return nil, err
@@ -481,9 +514,11 @@ func partialApply(name xdm.QName, arity int,
 				full[h] = supplied[i]
 			}
 			c := captured
-			if cc, ok := callCtx.(invokeContext); ok && cc != nil {
+			cc, _ := callCtx.(invokeContext)
+			if cc != nil {
 				c = cc
 			}
+			defer enterHost(c, cc)()
 			return call(c, full)
 		},
 	}

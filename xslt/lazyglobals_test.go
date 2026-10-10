@@ -209,3 +209,74 @@ func TestLazyGlobalForcedFromAnEscapedFunctionItem(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// The same, for the per-transform state built on first use that is not a
+// global: a key index, an accumulator's values and a new-each-time="no"
+// function's memo. Every caller builds some of it, so the escaped function
+// item must keep its runtime to one goroutine at a time. Run with -race.
+func TestEscapedFunctionItemBuildsStateFromManyGoroutines(t *testing.T) {
+	tree, err := xdm.ParseString(`<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	   xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:f="urn:f" version="3.0">
+	  <xsl:key name="k" match="e" use="@id"/>
+	  <xsl:accumulator name="n" initial-value="0">
+	    <xsl:accumulator-rule match="e" select="$value + 1"/>
+	  </xsl:accumulator>
+	  <xsl:function name="f:mk" new-each-time="no">
+	    <xsl:param name="x"/>
+	    <m><xsl:value-of select="$x"/></m>
+	  </xsl:function>
+	  <xsl:function name="f:doc">
+	    <xsl:param name="i"/>
+	    <xsl:document><r><e id="a{$i}"/><e id="b{$i}"/></r></xsl:document>
+	  </xsl:function>
+	  <xsl:function name="f:get" visibility="public">
+	    <xsl:sequence select="function($i) {
+	      let $d := f:doc($i)
+	      return string-join((
+	        key('k', 'b' || $i, $d)/@id,
+	        string(key('k', 'b' || $i, $d)/accumulator-after('n')),
+	        string(f:mk($i) is f:mk($i)),
+	        string(f:mk($d) is f:mk($d))), ' ')
+	    }"/>
+	  </xsl:function>
+	</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := sheet.Transform(context.Background(), nil, xslt.TransformOptions{
+		InitialFunction: xdm.QName{URI: "urn:f", Local: "get"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn, ok := res.Nodes[0].(*xdm.FunctionItem)
+	if !ok || len(res.Nodes) != 1 {
+		t.Fatalf("got %v, want one function item", res.Nodes)
+	}
+	var wg sync.WaitGroup
+	for g := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range 20 {
+				i := g*100 + j
+				v, err := fn.Invoke(xpath.NewContext(nil, xpath.Builtins()),
+					[]xdm.Sequence{xdm.One(xdm.NewInteger(int64(i)))})
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				want := fmt.Sprintf("b%d 2 true true", i)
+				if len(v) != 1 || v[0].(*xdm.Atomic).String() != want {
+					t.Errorf("got %v, want %q", v, want)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}

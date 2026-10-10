@@ -85,11 +85,13 @@ type transformState struct {
 	// evaluated against it; see the comment where it is set.
 	globalCtx *xpath.Context
 
-	// globalVar is one of the globals' LazyVars, kept so that Transform can
-	// Share their scope when it returns, after which a function item in the
-	// result may force a global from any goroutine. Nil when the stylesheet
-	// declares none.
-	globalVar *xpath.LazyVar
+	// evalLock keeps this transform's state to one goroutine at a time once
+	// Transform has returned and shared it, after which a function item in
+	// the result may reach it from any goroutine: force a global (the
+	// globals' LazyVars take the same lock), build a key index or an
+	// accumulator's values, memoise a function. Nil for a stand-in runtime
+	// that never escapes.
+	evalLock *xpath.EvalLock
 
 	// globalActive names the global variables whose initialiser is currently
 	// being evaluated, by declared local name.
@@ -709,6 +711,9 @@ func (rt *runtime) StepMemo() any { return rt.steps }
 
 var _ xpathleaf.StepMemoHost = (*runtime)(nil)
 
+// EvalLock implements xpath.EvalLocker.
+func (rt *runtime) EvalLock() *xpath.EvalLock { return rt.evalLock }
+
 // newRuntime builds a runtime for one transform.
 func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts TransformOptions) (*runtime, error) {
 	maxDepth := opts.MaxDepth
@@ -718,6 +723,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	rt := &runtime{
 		transformState: &transformState{
 			sheet:       s,
+			evalLock:    &xpath.EvalLock{},
 			maxDepth:    maxDepth,
 			keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
 			keyBuilding: map[keyCacheKey]bool{},
@@ -1142,11 +1148,7 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 			}
 		}
 	}
-	rt.ctx = rt.ctx.WithLazyVars(vars)
-	for _, lv := range cellOf {
-		rt.globalVar = lv
-		break
-	}
+	rt.ctx = rt.ctx.WithLazyVars(vars, rt.evalLock)
 	snapshot := *rt
 	gs = &snapshot
 
