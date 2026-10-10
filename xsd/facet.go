@@ -484,6 +484,17 @@ func EffectiveWhiteSpace(t *SimpleType) WhiteSpace {
 	return WhitePreserve
 }
 
+// whiteSpaceOnly reports whether f constrains nothing but whitespace, so that
+// no value can fail it.
+func (f *FacetSet) whiteSpaceOnly() bool {
+	return f.Length == nil && f.MinLength == nil && f.MaxLength == nil &&
+		f.TotalDigits == nil && f.FractionDigits == nil &&
+		f.MinInclusive == nil && f.MaxInclusive == nil &&
+		f.MinExclusive == nil && f.MaxExclusive == nil &&
+		len(f.Patterns) == 0 && !f.HasEnumerations && len(f.Enumerations) == 0 &&
+		len(f.Assertions) == 0 && f.ExplicitTimezone == nil
+}
+
 // facetStep is one derivation step's facets together with the type that carried
 // them, so that diagnostics can name the type a constraint came from.
 type facetStep struct {

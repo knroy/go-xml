@@ -255,3 +255,51 @@ func TestChainFactsTerminateOnCycle(t *testing.T) {
 		}
 	}
 }
+
+// TestUnconstrainedChainStillRefuses pins the facet-free shortcut: a type
+// whose chain carries only whiteSpace skips the facet checks, and a type
+// derived from it with a real facet, or a built-in with bounds, must not.
+// The facet-free type is validated first so its memo is filled before the
+// derived type's.
+func TestUnconstrainedChainStillRefuses(t *testing.T) {
+	const schema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+<xs:simpleType name="Free"><xs:restriction base="xs:string">
+<xs:whiteSpace value="collapse"/></xs:restriction></xs:simpleType>
+<xs:simpleType name="Short"><xs:restriction base="Free">
+<xs:maxLength value="3"/></xs:restriction></xs:simpleType>
+<xs:simpleType name="Pick"><xs:restriction base="Free">
+<xs:enumeration value="a b"/></xs:restriction></xs:simpleType>
+<xs:element name="free" type="Free"/>
+<xs:element name="short" type="Short"/>
+<xs:element name="pick" type="Pick"/>
+<xs:element name="int" type="xs:int"/>
+</xs:schema>`
+	st, err := xdm.ParseString(schema, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(st.Root, "", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		doc   string
+		valid bool
+	}{
+		{`<free>  abcdef  </free>`, true},
+		{`<short>abcdef</short>`, false},
+		{`<short> abc </short>`, true},
+		{`<pick> a   b </pick>`, true},
+		{`<pick>a</pick>`, false},
+		{`<int>3000000000</int>`, false},
+		{`<int>-7</int>`, true},
+	} {
+		d, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Validate(d.Root, ValidateOptions{}); (err == nil) != c.valid {
+			t.Errorf("%s: valid %v, got error %v", c.doc, c.valid, err)
+		}
+	}
+}

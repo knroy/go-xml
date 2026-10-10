@@ -597,6 +597,13 @@ type chainFacts struct {
 	// through to whichever member validates the value, so their answer
 	// varies per value and is not a fact about the chain.
 	idName string
+
+	// unconstrained records that no step carries a facet that can refuse a
+	// value: whiteSpace alone, or nothing. Such a type (xs:string, xs:date,
+	// most of a catalog schema's attribute types) needs only its lexical
+	// checks, so the facet checks are skipped rather than run over steps
+	// that would each find nothing.
+	unconstrained bool
 }
 
 // chainFactsOf returns t's memoised base-chain facts, computing them on first
@@ -656,6 +663,13 @@ func computeChainFacts(t *SimpleType) *chainFacts {
 			break
 		}
 		cur = base
+	}
+	f.unconstrained = true
+	for _, st := range f.steps {
+		if !st.facets.whiteSpaceOnly() {
+			f.unconstrained = false
+			break
+		}
 	}
 	return f
 }
