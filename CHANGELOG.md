@@ -57,6 +57,7 @@ code before and after, and how to run the rewriter on your own module.
 |---|---|---|
 | An escaped function item raced on its transform's state | Called from several goroutines after the transform, `key()`, accumulators and memo maps were written concurrently. One re-entrant lock per runtime, shared with the globals, taken once it escapes. | fbd4b74a |
 | A called template or function could read a caller's local named like a global | A local was visible past its frame where a global of its name existed. Locals now live in frames that a call raises. | a0250ddb |
+| Goroutines a Go extension function started during a transform, and function items called both ways across `fn:transform`, were unguarded | The lock turns on at the first host call and is released around it; a nested transform shares its caller's lock and locals stack, so there is one lock. | 4954bf0f |
 | go-xml did not compile for 32-bit targets, and an array position past 2^31 could wrap there | The `xs:date` year bound is compared as int64; `maxArrayIndex` is capped at a quarter of `math.MaxInt`. CI vets `linux/386`, `linux/arm` and `windows/386`. | — |
 
 ### Fixed — documentation
@@ -96,6 +97,8 @@ code before and after, and how to run the rewriter on your own module.
 | XQuery rebased whole subtrees and `smallNames` scanned only 8 (V38, V39) | `Rebase` stops where nothing changes; 24 names before the map. XMark q10 −5% CPU, −11% bytes. | ae360399, fb01bf29 |
 | XSLT rebound absent context components, copied base URIs, boxed integers and stripped `doc()` per transform (V43–V51) | Absent bits, base URI on entry, int64 arithmetic, per-stylesheet stripped trees, 96 B context. DocBook −14% CPU, −17% bytes; Peppol −13% CPU. | cf948ed9, 1e976a35, bd28fa9e, 496f46af, 71d73165, f51ebda6, 7f6f1689 |
 | Every XSLT local and parameter made a context scope (V17) | One name-addressed stack per transform, frames per call. DocBook −5.8% CPU, −8.7% bytes. | a0250ddb |
+| Typed validation cloned the whole tree twice (V31) | The source is validated read-only into a typing layer, and the typed copy is made once. Catalog typed validation −6.5% CPU, −30% bytes. | d3f48240 |
+| The parser resolved namespaces twice, walking ancestors for every prefix (V36) | One namespace stack shared by the check and the builder, and a name cache keyed on the tokenizer's strings. Parse −13 to −15% CPU. | b08a3d4a |
 
 ## v1.7.1 — 2026-10-09
 

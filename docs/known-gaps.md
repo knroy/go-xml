@@ -77,22 +77,21 @@ What this file adds, and that one does not:
 Real gaps: a genuine bug or an unimplemented rule, failing now. Ordered by how
 much each costs.
 
-### Two narrow concurrency limits on a transform's runtime (XSLT, Go API)
+### Two edges of a transform's lock (XSLT, Go API)
 
-A function item returned from a transform keeps that transform's runtime.
-Once the transform has returned, every call that enters the runtime takes
-its lock, so such an item may be called from many goroutines at once
-(`key()`, accumulators, `new-each-time="no"` functions and lazy globals
-included). Two cases are outside that:
-- **Goroutines started during the transform.** The lock is only taken after
-  the transform returns, so a Go extension function that starts goroutines
-  which evaluate against the runtime while the transform is still running is
-  not protected. Globals have the same limit.
-- **Function items passed both ways across `fn:transform`.** A nested
-  transform has its own lock. If its function items call into the outer
-  transform's items and are called from them, on two goroutines, the two
-  locks can be taken in opposite order. This needs a function-valued
-  stylesheet parameter passed into `fn:transform`.
+A transform's runtime takes one re-entrant lock wherever host Go code could
+reach it from another goroutine: when a function item it made is called
+after it returns, around every call into a Go-built function item or a
+context-taking resolver during it, and in `fn:transform`, whose nested
+transform shares its caller's lock. Two routes stay outside it:
+- **Evaluating the raw expression tree.** A host that calls `Expr.Eval` on
+  `Compiled.Expr()` with a context it was handed, instead of
+  `Compiled.Eval`, takes no lock.
+- **Items passed between separate `Transform` calls.** Two top-level
+  transforms have two locks. A host that hands each one's function items to
+  the other and calls them from two goroutines in opposite directions can
+  take the locks in opposite order. Within one `Transform`, `fn:transform`
+  included, there is one lock.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 

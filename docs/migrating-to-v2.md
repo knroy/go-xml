@@ -487,6 +487,13 @@ every function item that runs under it. XSLT does both when a transform
 returns, so a function item in its result may be called concurrently, `key()`,
 accumulators and memoised functions included.
 
+During a transform, a function item you build in Go and a resolver that
+takes a context (`ResolveDocumentIn`, `ResolveCollectionIn`) are called
+with a copy of the context, not the caller's own, and without the
+transform's lock held. Goroutines they start may evaluate with that context
+or call the function items it reaches; each such call takes the lock. An
+`fn:transform` shares its caller's lock.
+
 ## xpath.Context: Position, Size and Depth are int32
 
 `Context` shrinks from 112 to 96 bytes, so every scope change copies less.

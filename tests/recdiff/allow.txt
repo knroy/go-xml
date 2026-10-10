@@ -11,3 +11,9 @@
 # and tests/record.sh passes -now), so a stylesheet that writes the clock
 # writes a different instant each run: evaluate-052, cvt-042.
 xslt* * \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+Z
+
+# xsl:product-version answers the module version (internal/version), and
+# DocBook and the Schematron reports write it into their output: recordings
+# made either side of a release differ there by design.
+* * go-xml[ /]\d+\.\d+\.\d+
+xslt30 document/document-2011 prod="\d+\.\d+\.\d+"
