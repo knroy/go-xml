@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"math"
 	"math/big"
 	"sort"
 
@@ -682,11 +683,13 @@ func integerPosition(a *xdm.Atomic, fname string) (int, error) {
 // that sum must not overflow: at math.MaxInt it wraps negative, the guard
 // reads false, and an out-of-range request is accepted instead of raising
 // FOAY0001. Keeping the bound at 1<<40 leaves 2*maxArrayIndex comfortably
-// inside an int on every platform Go supports, so no sum of two accepted
-// positions can wrap.
+// inside a 64-bit int, so no sum of two accepted positions can wrap. A 32-bit
+// int cannot hold 1<<40 at all: there the bound is a quarter of math.MaxInt,
+// or the conversion to int would turn a position past it into a small one
+// that names a member.
 const (
-	maxArrayIndex = 1 << 40
-	minArrayIndex = -(1 << 40)
+	maxArrayIndex = min(1<<40, math.MaxInt>>2)
+	minArrayIndex = -maxArrayIndex
 )
 
 // arrayMatchesFunctionTest decides "array instance of function(...) as ...".
