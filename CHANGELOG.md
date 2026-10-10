@@ -4,6 +4,21 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| `go-xml xquery -validate strict\|lax` | Validates the input document against the schema the query imports before it runs, so a declared typed context item (`document-node(schema-element(...))`) can be satisfied from the command line. | [`130360b`][130360b] |
+| `xquery.Query.Schema` | The schema merged from a query's `import schema` declarations, or nil; mirrors `xslt.Stylesheet.Schema`. | [`130360b`][130360b] |
+
+### Fixed — documentation
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `docs/xquery.md` said `import schema ... at` is not resolved from the command line | It is, through the query's directory and `-allow-dir` roots (and `-catalog`); the sentence is corrected. | — |
+
 ## v1.7.1 — 2026-10-09
 
 v1.7.1 is v1.7.0 with a fix to the release workflow and nothing else. The
@@ -1349,6 +1364,7 @@ here so every entry in this file sits under a release.
 [092bdce]: https://github.com/knroy/go-xml/commit/092bdce
 [373da4b]: https://github.com/knroy/go-xml/commit/373da4b
 [5c2ca9c]: https://github.com/knroy/go-xml/commit/5c2ca9c
+[130360b]: https://github.com/knroy/go-xml/commit/130360b
 [8082a2c]: https://github.com/knroy/go-xml/commit/8082a2c
 [edea87c]: https://github.com/knroy/go-xml/commit/edea87c
 [e7ec81d]: https://github.com/knroy/go-xml/commit/e7ec81d
