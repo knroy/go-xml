@@ -151,10 +151,12 @@ func TestDuplicateAttributeCheck(t *testing.T) {
 	for i := range 6 {
 		tok.Attr = append(tok.Attr, xmltok.Attr{Name: xmltok.Name{Space: "xml", Local: fmt.Sprint("a", i)}, Value: "v"})
 	}
+	var ns nsScope
 	if n := testing.AllocsPerRun(100, func() {
-		if err := validateStartElement(tok, nil, false); err != nil {
+		if err := validateStartElement(tok, &ns, false); err != nil {
 			t.Fatal(err)
 		}
+		ns.pop(ns.own)
 	}); n != 0 {
 		t.Errorf("validateStartElement on six attributes allocated %.0f times, want 0", n)
 	}

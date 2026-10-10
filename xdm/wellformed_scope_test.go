@@ -79,6 +79,34 @@ func validateStartElementMaps(t xml.StartElement, parent *Node, xml11 bool) erro
 	return nil
 }
 
+// scopeAt is the nsScope a parse holds at parent: its ancestors' frames,
+// outermost first. A frame AddNamespace gave one prefix twice keeps the first,
+// as the reference does, and a binding of xml is dropped, since the reference
+// lets no ancestor rebind it; a parse admits neither.
+func scopeAt(parent *Node) *nsScope {
+	var chain []*Node
+	for p := parent; p != nil; p = p.Parent() {
+		chain = append(chain, p)
+	}
+	ns := &nsScope{}
+	for i := len(chain) - 1; i >= 0; i-- {
+		ns.push()
+	frame:
+		for _, b := range chain[i].frame() {
+			if b.prefix == "xml" {
+				continue
+			}
+			for _, o := range ns.ownDecls() {
+				if o.prefix == b.prefix {
+					continue frame
+				}
+			}
+			ns.declare(b.prefix, b.uri)
+		}
+	}
+	return ns
+}
+
 // TestTagScopeMatchesMaps generates start tags under generated ancestor
 // chains and requires validateStartElement to reach the verdict, and the
 // error text, of the map-building version it replaced. The vocabulary is
@@ -133,7 +161,7 @@ func TestTagScopeMatchesMaps(t *testing.T) {
 		}
 		xml11 := rng.Intn(2) == 0
 
-		got := validateStartElement(tag, parent, xml11)
+		got := validateStartElement(tag, scopeAt(parent), xml11)
 		want := validateStartElementMaps(tag, parent, xml11)
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Fatalf("tag %+v xml11=%v:\n got  %v\n want %v", tag, xml11, got, want)
@@ -178,10 +206,13 @@ func TestTagScopeDoesNotAllocate(t *testing.T) {
 			{Name: xml.Name{Space: "p31", Local: "a"}, Value: "2"},
 		},
 	}
+	ns := scopeAt(parent)
+	ns.b = append(ns.b, make([]nsBinding, 4)...)[:len(ns.b)]
 	if n := testing.AllocsPerRun(100, func() {
-		if err := validateStartElement(tok, parent, false); err != nil {
+		if err := validateStartElement(tok, ns, false); err != nil {
 			t.Fatal(err)
 		}
+		ns.pop(ns.own)
 	}); n != 0 {
 		t.Errorf("validateStartElement under 16 inherited bindings allocated %.0f times, want 0", n)
 	}
