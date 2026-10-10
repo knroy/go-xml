@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 // Text, attribute values and comments were one heap object each, which made
@@ -91,5 +92,33 @@ func TestEndTagMatching(t *testing.T) {
 		if got := fmt.Sprint(err); (c.err == "" && err != nil) || (c.err != "" && got != c.err) {
 			t.Errorf("%s: err = %v, want %q", c.doc, err, c.err)
 		}
+	}
+}
+
+// A value of textOwnFrom bytes or more is kept as its own block without a
+// copy, and reads back whole; appending to it copies, leaving both the
+// stored value and the caller's string as they were.
+func TestTextStoreKeepsLongString(t *testing.T) {
+	big := strings.Repeat("0123456789abcdef", 1+textOwnFrom/16) // just over 8 KB
+	var s textStore
+	off, n := s.add(big)
+	got := s.str(off, n)
+	if got != big {
+		t.Fatalf("read back %d bytes, want %d", len(got), len(big))
+	}
+	if unsafe.StringData(got) != unsafe.StringData(big) {
+		t.Errorf("a long string was copied into the store")
+	}
+	off2, n2 := s.extend(off, n, "tail")
+	if s.str(off2, n2) != big+"tail" || s.str(off, n) != big {
+		t.Fatalf("extending a kept string changed it")
+	}
+
+	a := NewNode(KindText, QName{}, big)
+	b := NewNode(KindText, QName{}, "")
+	b.SetValue(a.Value()) // a string the store itself produced
+	a.AppendValue("!")
+	if a.Value() != big+"!" || b.Value() != big {
+		t.Fatalf("values %d and %d bytes, want %d and %d", len(a.Value()), len(b.Value()), len(big)+1, len(big))
 	}
 }
