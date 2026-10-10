@@ -532,3 +532,15 @@ func TestLongTextAcrossWindows(t *testing.T) {
 		t.Errorf("sized scratch took %.0f allocations, unsized %.0f: want fewer", a, b)
 	}
 }
+
+// Names that share a slot of the name cache (same length, same first, middle
+// and last byte) are still told apart, and a name refused once is refused
+// again after a valid name took its slot.
+func TestNameCacheCollisions(t *testing.T) {
+	runCases(t, []tokenCase{
+		{name: "collide", src: `<abcde axcde="1"><axcde abcde="2"/></abcde>`,
+			want: `<abcde axcde="1"><axcde abcde="2"></axcde></abcde>`},
+		{name: "refused", src: "<r><a×cde/><a×cde/></r>",
+			wantErr: "XML syntax error on line 1: invalid XML name: a×cde"},
+	})
+}

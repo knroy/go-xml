@@ -187,6 +187,9 @@ type Decoder struct {
 	// repeating a few element and attribute names thousands of times
 	// allocates each once. Only valid names are entered.
 	names map[string]string
+	// nameHot is a direct-mapped cache in front of names, which a name
+	// repeated tag after tag finds without hashing the whole of it.
+	nameHot [64]string
 
 	endPending bool // the last tag was empty; its EndElement is owed
 	endName    Name
@@ -849,7 +852,12 @@ func (d *Decoder) name() (string, bool) {
 	if !ok {
 		return "", false
 	}
+	h := (len(b)*31 + int(b[0])*7 + int(b[len(b)/2])*3 + int(b[len(b)-1])) & (len(d.nameHot) - 1)
+	if s := d.nameHot[h]; s == string(b) {
+		return s, true
+	}
 	if s, ok := d.names[string(b)]; ok {
+		d.nameHot[h] = s
 		return s, true
 	}
 	if !isName(b) {
@@ -865,6 +873,7 @@ func (d *Decoder) name() (string, bool) {
 		}
 		d.names[s] = s
 	}
+	d.nameHot[h] = s
 	return s, true
 }
 
