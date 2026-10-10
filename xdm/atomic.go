@@ -292,14 +292,33 @@ func NewBoolean(v bool) *Atomic {
 
 // NewInteger returns an xs:integer. Integers are held as exact rationals so
 // that they participate in decimal arithmetic without precision loss.
+//
+// A small integer shares one rational with every other of its value (see
+// Rat), which saves two of its three allocations.
 func NewInteger(v int64) *Atomic {
+	if v >= smallIntMin && v < smallIntMin+int64(len(smallInts)) {
+		return &Atomic{Type: TypeInteger, dec: &smallInts[v-smallIntMin]}
+	}
 	return &Atomic{Type: TypeInteger, dec: new(big.Rat).SetInt64(v)}
 }
+
+// smallInts holds the rationals NewInteger shares, smallIntMin and up.
+const smallIntMin = -16
+
+var smallInts = func() (t [272]big.Rat) {
+	for i := range t {
+		t[i].SetInt64(int64(i) + smallIntMin)
+	}
+	return t
+}()
 
 // NewIntegerFromRat returns an xs:integer from an exact rational, which must
 // have denominator 1. Used by arithmetic that has already established
 // integrality (idiv, string-length, count).
 func NewIntegerFromRat(r *big.Rat) *Atomic {
+	if n := r.Num(); r.IsInt() && n.IsInt64() {
+		return NewInteger(n.Int64())
+	}
 	return &Atomic{Type: TypeInteger, dec: new(big.Rat).Set(r)}
 }
 
@@ -331,6 +350,10 @@ func (a *Atomic) Str() string { return a.str }
 func (a *Atomic) Bool() bool { return a.Type == TypeBoolean && a.num != 0 }
 
 // Rat returns the exact value for integer and decimal types, or nil.
+//
+// The result is read-only: it may be shared with other values (NewInteger
+// shares the small integers), so a caller that needs to change it must copy
+// it first.
 func (a *Atomic) Rat() *big.Rat { return a.dec }
 
 // QName returns the QName value, or nil.

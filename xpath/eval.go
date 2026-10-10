@@ -566,6 +566,12 @@ func predicateHolds(v xdm.Sequence, pos int) (bool, error) {
 			if a.IsNaN() {
 				return false, nil
 			}
+			// An integer compares exactly, and without the allocations
+			// big.Rat's Float64 makes.
+			if r := a.Rat(); a.Type == xdm.TypeInteger && r != nil && r.IsInt() &&
+				r.Num().IsInt64() {
+				return r.Num().Int64() == int64(pos), nil
+			}
 			return a.Float64() == float64(pos), nil
 		}
 	}

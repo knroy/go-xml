@@ -1047,6 +1047,11 @@ func (e *BinaryOp) evalArithmetic(ctx *Context) (xdm.Sequence, error) {
 
 // arithmetic applies a binary arithmetic operator to two atomic values.
 func arithmetic(a, b *xdm.Atomic, op string) (*xdm.Atomic, error) {
+	if a.Type == xdm.TypeInteger && b.Type == xdm.TypeInteger {
+		if z, ok := int64Arithmetic(a.Rat(), b.Rat(), op); ok {
+			return xdm.NewInteger(z), nil
+		}
+	}
 	// Date and duration arithmetic is a separate rule table from numeric.
 	if isDateLike(a.Type) || isDurationLike(a.Type) ||
 		isDateLike(b.Type) || isDurationLike(b.Type) {
@@ -1106,6 +1111,32 @@ func arithmetic(a, b *xdm.Atomic, op string) (*xdm.Atomic, error) {
 		return nil, fmt.Errorf("unknown operator %q", op)
 	}
 	return makeFloat(z, common), nil
+}
+
+// int64Arithmetic is integer + - * when both operands and the result fit an
+// int64; ok is false otherwise, and the caller takes the exact path.
+func int64Arithmetic(x, y *big.Rat, op string) (z int64, ok bool) {
+	if x == nil || y == nil || !x.IsInt() || !y.IsInt() ||
+		!x.Num().IsInt64() || !y.Num().IsInt64() {
+		return 0, false
+	}
+	a, b := x.Num().Int64(), y.Num().Int64()
+	switch op {
+	case "+":
+		z = a + b
+		return z, (z > a) == (b > 0)
+	case "-":
+		z = a - b
+		return z, (z < a) == (b > 0)
+	case "*":
+		if a == 0 || b == 0 {
+			return 0, true
+		}
+		z = a * b
+		return z, z/b == a && !(a == -1 && b == math.MinInt64) &&
+			!(b == -1 && a == math.MinInt64)
+	}
+	return 0, false
 }
 
 func divide(a, b *xdm.Atomic, common xdm.TypeCode, exact bool) (*xdm.Atomic, error) {
