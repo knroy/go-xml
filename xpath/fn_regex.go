@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -1163,153 +1164,155 @@ func takeBlockName(s string) (name, rest string, ok bool) {
 // Blocks are not scripts. Go exposes unicode.Scripts, but \p{IsTibetan} names a
 // contiguous range of codepoints, while the Tibetan script is a set that spans
 // several — substituting one for the other would quietly change the match.
-var unicodeBlocks = map[string][][2]rune{
-	"IsBasicLatin":                {{0x0000, 0x007F}},
-	"IsLatin-1Supplement":         {{0x0080, 0x00FF}},
-	"IsLatinExtended-A":           {{0x0100, 0x017F}},
-	"IsLatinExtended-B":           {{0x0180, 0x024F}},
-	"IsIPAExtensions":             {{0x0250, 0x02AF}},
-	"IsSpacingModifierLetters":    {{0x02B0, 0x02FF}},
-	"IsCombiningDiacriticalMarks": {{0x0300, 0x036F}},
-	"IsGreek":                     {{0x0370, 0x03FF}},
-	// Unicode renamed several blocks after XML Schema froze its list, and the
-	// suite uses the newer spellings. Both are accepted: a pattern written
-	// against either name must work, and they denote the same range.
-	"IsGreekandCoptic":                      {{0x0370, 0x03FF}},
-	"IsCombiningDiacriticalMarksforSymbols": {{0x20D0, 0x20FF}},
-	"IsPrivateUseArea":                      {{0xE000, 0xF8FF}},
-	"IsSupplementaryPrivateUseArea-A":       {{0xF0000, 0xFFFFD}},
-	"IsSupplementaryPrivateUseArea-B":       {{0x100000, 0x10FFFD}},
-	"IsCyrillic":                            {{0x0400, 0x04FF}},
-	"IsArmenian":                            {{0x0530, 0x058F}},
-	"IsHebrew":                              {{0x0590, 0x05FF}},
-	"IsArabic":                              {{0x0600, 0x06FF}},
-	"IsSyriac":                              {{0x0700, 0x074F}},
-	"IsThaana":                              {{0x0780, 0x07BF}},
-	"IsDevanagari":                          {{0x0900, 0x097F}},
-	"IsBengali":                             {{0x0980, 0x09FF}},
-	"IsGurmukhi":                            {{0x0A00, 0x0A7F}},
-	"IsGujarati":                            {{0x0A80, 0x0AFF}},
-	"IsOriya":                               {{0x0B00, 0x0B7F}},
-	"IsTamil":                               {{0x0B80, 0x0BFF}},
-	"IsTelugu":                              {{0x0C00, 0x0C7F}},
-	"IsKannada":                             {{0x0C80, 0x0CFF}},
-	"IsMalayalam":                           {{0x0D00, 0x0D7F}},
-	"IsSinhala":                             {{0x0D80, 0x0DFF}},
-	"IsThai":                                {{0x0E00, 0x0E7F}},
-	"IsLao":                                 {{0x0E80, 0x0EFF}},
-	"IsTibetan":                             {{0x0F00, 0x0FFF}},
-	"IsMyanmar":                             {{0x1000, 0x109F}},
-	"IsGeorgian":                            {{0x10A0, 0x10FF}},
-	"IsHangulJamo":                          {{0x1100, 0x11FF}},
-	"IsEthiopic":                            {{0x1200, 0x137F}},
-	"IsCherokee":                            {{0x13A0, 0x13FF}},
-	"IsUnifiedCanadianAboriginalSyllabics":  {{0x1400, 0x167F}},
-	"IsOgham":                               {{0x1680, 0x169F}},
-	"IsRunic":                               {{0x16A0, 0x16FF}},
-	"IsKhmer":                               {{0x1780, 0x17FF}},
-	"IsMongolian":                           {{0x1800, 0x18AF}},
-	"IsLatinExtendedAdditional":             {{0x1E00, 0x1EFF}},
-	"IsGreekExtended":                       {{0x1F00, 0x1FFF}},
-	"IsGeneralPunctuation":                  {{0x2000, 0x206F}},
-	"IsSuperscriptsandSubscripts":           {{0x2070, 0x209F}},
-	"IsCurrencySymbols":                     {{0x20A0, 0x20CF}},
-	"IsCombiningMarksforSymbols":            {{0x20D0, 0x20FF}},
-	"IsLetterlikeSymbols":                   {{0x2100, 0x214F}},
-	"IsNumberForms":                         {{0x2150, 0x218F}},
-	"IsArrows":                              {{0x2190, 0x21FF}},
-	"IsMathematicalOperators":               {{0x2200, 0x22FF}},
-	"IsMiscellaneousTechnical":              {{0x2300, 0x23FF}},
-	"IsControlPictures":                     {{0x2400, 0x243F}},
-	"IsOpticalCharacterRecognition":         {{0x2440, 0x245F}},
-	"IsEnclosedAlphanumerics":               {{0x2460, 0x24FF}},
-	"IsBoxDrawing":                          {{0x2500, 0x257F}},
-	"IsBlockElements":                       {{0x2580, 0x259F}},
-	"IsGeometricShapes":                     {{0x25A0, 0x25FF}},
-	"IsMiscellaneousSymbols":                {{0x2600, 0x26FF}},
-	"IsDingbats":                            {{0x2700, 0x27BF}},
-	"IsBraillePatterns":                     {{0x2800, 0x28FF}},
-	"IsCJKRadicalsSupplement":               {{0x2E80, 0x2EFF}},
-	"IsKangxiRadicals":                      {{0x2F00, 0x2FDF}},
-	"IsIdeographicDescriptionCharacters":    {{0x2FF0, 0x2FFF}},
-	"IsCJKSymbolsandPunctuation":            {{0x3000, 0x303F}},
-	"IsHiragana":                            {{0x3040, 0x309F}},
-	"IsKatakana":                            {{0x30A0, 0x30FF}},
-	"IsBopomofo":                            {{0x3100, 0x312F}},
-	"IsHangulCompatibilityJamo":             {{0x3130, 0x318F}},
-	"IsKanbun":                              {{0x3190, 0x319F}},
-	"IsBopomofoExtended":                    {{0x31A0, 0x31BF}},
-	"IsEnclosedCJKLettersandMonths":         {{0x3200, 0x32FF}},
-	"IsCJKCompatibility":                    {{0x3300, 0x33FF}},
-	"IsCJKUnifiedIdeographsExtensionA":      {{0x3400, 0x4DB5}},
-	"IsCJKUnifiedIdeographs":                {{0x4E00, 0x9FFF}},
-	"IsYiSyllables":                         {{0xA000, 0xA48F}},
-	"IsYiRadicals":                          {{0xA490, 0xA4CF}},
-	"IsHangulSyllables":                     {{0xAC00, 0xD7A3}},
-	"IsHighSurrogates":                      {{0xD800, 0xDB7F}},
-	"IsLowSurrogates":                       {{0xDC00, 0xDFFF}},
-	// All three private-use areas, not the BMP one alone.
-	//
-	// XML Schema Part 2 Appendix F lists the block as "PrivateUse" spanning
-	// #xE000-#xF8FF, because the list was frozen against Unicode 3.1 when the
-	// supplementary planes were newly assigned; Unicode itself splits the same
-	// property into "Private Use Area" plus the separately named
-	// "Supplementary Private Use Area-A" and "-B". So the name is one the two
-	// authorities spell differently, and the suites disagree along that seam.
-	//
-	// The disagreement is not symmetric, which is what settles it. The XML
-	// Schema suite contradicts itself here: reL98 and reL99 apply
-	// "\p{IsPrivateUse}+" to #xF0000/#xFFFFD and #x100000/#x10FFFD, while
-	// reM98 and reN99 apply "\p{IsPrivateUse}" to #x100000 and #xFFFFD --
-	// the same codepoints, one pair required to match and the other required
-	// not to. No definition of the block satisfies all four. Every one of the
-	// four is marked status="queried" in msMeta/Regex_w3c.xml, two of them
-	// against a filed W3C bug, so all of them are disputed rather than
-	// settled; the tests that are marked "accepted" -- reM78 (#xF900),
-	// reM99 (#x007F) and reN98 (#xE007F) -- name codepoints outside every
-	// private-use area, and so are unaffected either way.
-	//
-	// The XSLT suite, curated later and not self-contradictory, requires the
-	// wider reading in regex-syntax-xslt20-0288, -0370 and -0480. Widening
-	// therefore trades four disputed assertions for three undisputed ones and
-	// leaves every undisputed assertion on both sides intact.
-	"IsPrivateUse": {{0xE000, 0xF8FF},
-		{0xF0000, 0xFFFFD}, {0x100000, 0x10FFFD}},
-	"IsCJKCompatibilityIdeographs":           {{0xF900, 0xFAFF}},
-	"IsAlphabeticPresentationForms":          {{0xFB00, 0xFB4F}},
-	"IsArabicPresentationForms-A":            {{0xFB50, 0xFDFF}},
-	"IsCombiningHalfMarks":                   {{0xFE20, 0xFE2F}},
-	"IsCJKCompatibilityForms":                {{0xFE30, 0xFE4F}},
-	"IsSmallFormVariants":                    {{0xFE50, 0xFE6F}},
-	"IsArabicPresentationForms-B":            {{0xFE70, 0xFEFE}},
-	"IsSpecials":                             {{0xFEFF, 0xFEFF}, {0xFFF0, 0xFFFD}},
-	"IsHalfwidthandFullwidthForms":           {{0xFF00, 0xFFEF}},
-	"IsOldItalic":                            {{0x10300, 0x1032F}},
-	"IsGothic":                               {{0x10330, 0x1034F}},
-	"IsDeseret":                              {{0x10400, 0x1044F}},
-	"IsByzantineMusicalSymbols":              {{0x1D000, 0x1D0FF}},
-	"IsMusicalSymbols":                       {{0x1D100, 0x1D1FF}},
-	"IsMathematicalAlphanumericSymbols":      {{0x1D400, 0x1D7FF}},
-	"IsCJKUnifiedIdeographsExtensionB":       {{0x20000, 0x2A6D6}},
-	"IsCJKCompatibilityIdeographsSupplement": {{0x2F800, 0x2FA1F}},
-	// Blocks added after Unicode 3.1. Appendix G does not name them, but
-	// XPath 3.1 references a later Unicode, and a pattern naming one is a
-	// pattern for a block that genuinely exists — refusing it as an unknown
-	// block is wrong in a way that adding it is not. These are additions
-	// only: no boundary above is moved, so nothing a schema written against
-	// Appendix G accepts changes.
-	"IsEmoticons":                          {{0x1F600, 0x1F64F}},
-	"IsMiscellaneousSymbolsandPictographs": {{0x1F300, 0x1F5FF}},
-	"IsTransportandMapSymbols":             {{0x1F680, 0x1F6FF}},
-	"IsSupplementalSymbolsandPictographs":  {{0x1F900, 0x1F9FF}},
-	"IsAlchemicalSymbols":                  {{0x1F700, 0x1F77F}},
-	"IsGeometricShapesExtended":            {{0x1F780, 0x1F7FF}},
-	"IsSupplementalArrowsC":                {{0x1F800, 0x1F8FF}},
-	"IsPlayingCards":                       {{0x1F0A0, 0x1F0FF}},
-	"IsMahjongTiles":                       {{0x1F000, 0x1F02F}},
-	"IsDominoTiles":                        {{0x1F030, 0x1F09F}},
-	"IsTags":                               {{0xE0000, 0xE007F}},
-}
+var unicodeBlocks = sync.OnceValue(func() map[string][][2]rune {
+	return map[string][][2]rune{
+		"IsBasicLatin":                {{0x0000, 0x007F}},
+		"IsLatin-1Supplement":         {{0x0080, 0x00FF}},
+		"IsLatinExtended-A":           {{0x0100, 0x017F}},
+		"IsLatinExtended-B":           {{0x0180, 0x024F}},
+		"IsIPAExtensions":             {{0x0250, 0x02AF}},
+		"IsSpacingModifierLetters":    {{0x02B0, 0x02FF}},
+		"IsCombiningDiacriticalMarks": {{0x0300, 0x036F}},
+		"IsGreek":                     {{0x0370, 0x03FF}},
+		// Unicode renamed several blocks after XML Schema froze its list, and the
+		// suite uses the newer spellings. Both are accepted: a pattern written
+		// against either name must work, and they denote the same range.
+		"IsGreekandCoptic":                      {{0x0370, 0x03FF}},
+		"IsCombiningDiacriticalMarksforSymbols": {{0x20D0, 0x20FF}},
+		"IsPrivateUseArea":                      {{0xE000, 0xF8FF}},
+		"IsSupplementaryPrivateUseArea-A":       {{0xF0000, 0xFFFFD}},
+		"IsSupplementaryPrivateUseArea-B":       {{0x100000, 0x10FFFD}},
+		"IsCyrillic":                            {{0x0400, 0x04FF}},
+		"IsArmenian":                            {{0x0530, 0x058F}},
+		"IsHebrew":                              {{0x0590, 0x05FF}},
+		"IsArabic":                              {{0x0600, 0x06FF}},
+		"IsSyriac":                              {{0x0700, 0x074F}},
+		"IsThaana":                              {{0x0780, 0x07BF}},
+		"IsDevanagari":                          {{0x0900, 0x097F}},
+		"IsBengali":                             {{0x0980, 0x09FF}},
+		"IsGurmukhi":                            {{0x0A00, 0x0A7F}},
+		"IsGujarati":                            {{0x0A80, 0x0AFF}},
+		"IsOriya":                               {{0x0B00, 0x0B7F}},
+		"IsTamil":                               {{0x0B80, 0x0BFF}},
+		"IsTelugu":                              {{0x0C00, 0x0C7F}},
+		"IsKannada":                             {{0x0C80, 0x0CFF}},
+		"IsMalayalam":                           {{0x0D00, 0x0D7F}},
+		"IsSinhala":                             {{0x0D80, 0x0DFF}},
+		"IsThai":                                {{0x0E00, 0x0E7F}},
+		"IsLao":                                 {{0x0E80, 0x0EFF}},
+		"IsTibetan":                             {{0x0F00, 0x0FFF}},
+		"IsMyanmar":                             {{0x1000, 0x109F}},
+		"IsGeorgian":                            {{0x10A0, 0x10FF}},
+		"IsHangulJamo":                          {{0x1100, 0x11FF}},
+		"IsEthiopic":                            {{0x1200, 0x137F}},
+		"IsCherokee":                            {{0x13A0, 0x13FF}},
+		"IsUnifiedCanadianAboriginalSyllabics":  {{0x1400, 0x167F}},
+		"IsOgham":                               {{0x1680, 0x169F}},
+		"IsRunic":                               {{0x16A0, 0x16FF}},
+		"IsKhmer":                               {{0x1780, 0x17FF}},
+		"IsMongolian":                           {{0x1800, 0x18AF}},
+		"IsLatinExtendedAdditional":             {{0x1E00, 0x1EFF}},
+		"IsGreekExtended":                       {{0x1F00, 0x1FFF}},
+		"IsGeneralPunctuation":                  {{0x2000, 0x206F}},
+		"IsSuperscriptsandSubscripts":           {{0x2070, 0x209F}},
+		"IsCurrencySymbols":                     {{0x20A0, 0x20CF}},
+		"IsCombiningMarksforSymbols":            {{0x20D0, 0x20FF}},
+		"IsLetterlikeSymbols":                   {{0x2100, 0x214F}},
+		"IsNumberForms":                         {{0x2150, 0x218F}},
+		"IsArrows":                              {{0x2190, 0x21FF}},
+		"IsMathematicalOperators":               {{0x2200, 0x22FF}},
+		"IsMiscellaneousTechnical":              {{0x2300, 0x23FF}},
+		"IsControlPictures":                     {{0x2400, 0x243F}},
+		"IsOpticalCharacterRecognition":         {{0x2440, 0x245F}},
+		"IsEnclosedAlphanumerics":               {{0x2460, 0x24FF}},
+		"IsBoxDrawing":                          {{0x2500, 0x257F}},
+		"IsBlockElements":                       {{0x2580, 0x259F}},
+		"IsGeometricShapes":                     {{0x25A0, 0x25FF}},
+		"IsMiscellaneousSymbols":                {{0x2600, 0x26FF}},
+		"IsDingbats":                            {{0x2700, 0x27BF}},
+		"IsBraillePatterns":                     {{0x2800, 0x28FF}},
+		"IsCJKRadicalsSupplement":               {{0x2E80, 0x2EFF}},
+		"IsKangxiRadicals":                      {{0x2F00, 0x2FDF}},
+		"IsIdeographicDescriptionCharacters":    {{0x2FF0, 0x2FFF}},
+		"IsCJKSymbolsandPunctuation":            {{0x3000, 0x303F}},
+		"IsHiragana":                            {{0x3040, 0x309F}},
+		"IsKatakana":                            {{0x30A0, 0x30FF}},
+		"IsBopomofo":                            {{0x3100, 0x312F}},
+		"IsHangulCompatibilityJamo":             {{0x3130, 0x318F}},
+		"IsKanbun":                              {{0x3190, 0x319F}},
+		"IsBopomofoExtended":                    {{0x31A0, 0x31BF}},
+		"IsEnclosedCJKLettersandMonths":         {{0x3200, 0x32FF}},
+		"IsCJKCompatibility":                    {{0x3300, 0x33FF}},
+		"IsCJKUnifiedIdeographsExtensionA":      {{0x3400, 0x4DB5}},
+		"IsCJKUnifiedIdeographs":                {{0x4E00, 0x9FFF}},
+		"IsYiSyllables":                         {{0xA000, 0xA48F}},
+		"IsYiRadicals":                          {{0xA490, 0xA4CF}},
+		"IsHangulSyllables":                     {{0xAC00, 0xD7A3}},
+		"IsHighSurrogates":                      {{0xD800, 0xDB7F}},
+		"IsLowSurrogates":                       {{0xDC00, 0xDFFF}},
+		// All three private-use areas, not the BMP one alone.
+		//
+		// XML Schema Part 2 Appendix F lists the block as "PrivateUse" spanning
+		// #xE000-#xF8FF, because the list was frozen against Unicode 3.1 when the
+		// supplementary planes were newly assigned; Unicode itself splits the same
+		// property into "Private Use Area" plus the separately named
+		// "Supplementary Private Use Area-A" and "-B". So the name is one the two
+		// authorities spell differently, and the suites disagree along that seam.
+		//
+		// The disagreement is not symmetric, which is what settles it. The XML
+		// Schema suite contradicts itself here: reL98 and reL99 apply
+		// "\p{IsPrivateUse}+" to #xF0000/#xFFFFD and #x100000/#x10FFFD, while
+		// reM98 and reN99 apply "\p{IsPrivateUse}" to #x100000 and #xFFFFD --
+		// the same codepoints, one pair required to match and the other required
+		// not to. No definition of the block satisfies all four. Every one of the
+		// four is marked status="queried" in msMeta/Regex_w3c.xml, two of them
+		// against a filed W3C bug, so all of them are disputed rather than
+		// settled; the tests that are marked "accepted" -- reM78 (#xF900),
+		// reM99 (#x007F) and reN98 (#xE007F) -- name codepoints outside every
+		// private-use area, and so are unaffected either way.
+		//
+		// The XSLT suite, curated later and not self-contradictory, requires the
+		// wider reading in regex-syntax-xslt20-0288, -0370 and -0480. Widening
+		// therefore trades four disputed assertions for three undisputed ones and
+		// leaves every undisputed assertion on both sides intact.
+		"IsPrivateUse": {{0xE000, 0xF8FF},
+			{0xF0000, 0xFFFFD}, {0x100000, 0x10FFFD}},
+		"IsCJKCompatibilityIdeographs":           {{0xF900, 0xFAFF}},
+		"IsAlphabeticPresentationForms":          {{0xFB00, 0xFB4F}},
+		"IsArabicPresentationForms-A":            {{0xFB50, 0xFDFF}},
+		"IsCombiningHalfMarks":                   {{0xFE20, 0xFE2F}},
+		"IsCJKCompatibilityForms":                {{0xFE30, 0xFE4F}},
+		"IsSmallFormVariants":                    {{0xFE50, 0xFE6F}},
+		"IsArabicPresentationForms-B":            {{0xFE70, 0xFEFE}},
+		"IsSpecials":                             {{0xFEFF, 0xFEFF}, {0xFFF0, 0xFFFD}},
+		"IsHalfwidthandFullwidthForms":           {{0xFF00, 0xFFEF}},
+		"IsOldItalic":                            {{0x10300, 0x1032F}},
+		"IsGothic":                               {{0x10330, 0x1034F}},
+		"IsDeseret":                              {{0x10400, 0x1044F}},
+		"IsByzantineMusicalSymbols":              {{0x1D000, 0x1D0FF}},
+		"IsMusicalSymbols":                       {{0x1D100, 0x1D1FF}},
+		"IsMathematicalAlphanumericSymbols":      {{0x1D400, 0x1D7FF}},
+		"IsCJKUnifiedIdeographsExtensionB":       {{0x20000, 0x2A6D6}},
+		"IsCJKCompatibilityIdeographsSupplement": {{0x2F800, 0x2FA1F}},
+		// Blocks added after Unicode 3.1. Appendix G does not name them, but
+		// XPath 3.1 references a later Unicode, and a pattern naming one is a
+		// pattern for a block that genuinely exists — refusing it as an unknown
+		// block is wrong in a way that adding it is not. These are additions
+		// only: no boundary above is moved, so nothing a schema written against
+		// Appendix G accepts changes.
+		"IsEmoticons":                          {{0x1F600, 0x1F64F}},
+		"IsMiscellaneousSymbolsandPictographs": {{0x1F300, 0x1F5FF}},
+		"IsTransportandMapSymbols":             {{0x1F680, 0x1F6FF}},
+		"IsSupplementalSymbolsandPictographs":  {{0x1F900, 0x1F9FF}},
+		"IsAlchemicalSymbols":                  {{0x1F700, 0x1F77F}},
+		"IsGeometricShapesExtended":            {{0x1F780, 0x1F7FF}},
+		"IsSupplementalArrowsC":                {{0x1F800, 0x1F8FF}},
+		"IsPlayingCards":                       {{0x1F0A0, 0x1F0FF}},
+		"IsMahjongTiles":                       {{0x1F000, 0x1F02F}},
+		"IsDominoTiles":                        {{0x1F030, 0x1F09F}},
+		"IsTags":                               {{0xE0000, 0xE007F}},
+	}
+})
 
 // unicodeBlockRange maps an XML Schema Unicode block name to the RE2 class
 // body for its codepoint range.
@@ -1319,7 +1322,7 @@ var unicodeBlocks = map[string][][2]rune{
 // failed to compile and the schema carrying it failed to load — which is how a
 // missing block name turned into a schema-level error far from its cause.
 func unicodeBlockRange(name string) (string, bool) {
-	rs, ok := unicodeBlocks[name]
+	rs, ok := unicodeBlocks()[name]
 	if !ok {
 		return "", false
 	}
@@ -1421,7 +1424,7 @@ func rewriteUnknownBlocks(p string) string {
 			i++
 			continue
 		}
-		if _, known := unicodeBlocks[body]; known || body == "Is" {
+		if _, known := unicodeBlocks()[body]; known || body == "Is" {
 			sb.WriteByte(c)
 			sb.WriteByte(esc)
 			i++

@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -269,42 +270,44 @@ func baseKind(s string) string {
 // atomicAncestors maps an atomic type to the types it derives from, nearest
 // first. Only the relations the built-in signatures need are listed; a type
 // absent from the table subsumes only itself.
-var atomicAncestors = map[string][]string{
-	"xs:string":           {"xs:anyAtomicType"},
-	"xs:NCName":           {"xs:Name", "xs:token", "xs:normalizedString", "xs:string", "xs:anyAtomicType"},
-	"xs:Name":             {"xs:token", "xs:normalizedString", "xs:string", "xs:anyAtomicType"},
-	"xs:token":            {"xs:normalizedString", "xs:string", "xs:anyAtomicType"},
-	"xs:normalizedString": {"xs:string", "xs:anyAtomicType"},
-	"xs:anyURI":           {"xs:anyAtomicType"},
-	"xs:QName":            {"xs:anyAtomicType"},
-	"xs:boolean":          {"xs:anyAtomicType"},
-	"xs:double":           {"xs:numeric", "xs:anyAtomicType"},
-	"xs:float":            {"xs:numeric", "xs:anyAtomicType"},
-	"xs:decimal":          {"xs:numeric", "xs:anyAtomicType"},
-	"xs:integer":          {"xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	// The integer family. A typed function test written against one of these
-	// is not exotic — inline-fn-033 asserts that a function taking xs:integer
-	// is an instance of "function(xs:long, xs:long) as xs:integer+", which is
-	// contravariance over exactly this chain. With the derived names absent
-	// each subsumed only itself and the assertion failed.
-	"xs:long":               {"xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:int":                {"xs:long", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:short":              {"xs:int", "xs:long", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:byte":               {"xs:short", "xs:int", "xs:long", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:nonPositiveInteger": {"xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:negativeInteger":    {"xs:nonPositiveInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:nonNegativeInteger": {"xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:positiveInteger":    {"xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:unsignedLong":       {"xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:unsignedInt":        {"xs:unsignedLong", "xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:unsignedShort":      {"xs:unsignedInt", "xs:unsignedLong", "xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:unsignedByte":       {"xs:unsignedShort", "xs:unsignedInt", "xs:unsignedLong", "xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:untypedAtomic":      {"xs:anyAtomicType"},
-	"xs:date":               {"xs:anyAtomicType"},
-	"xs:time":               {"xs:anyAtomicType"},
-	"xs:dateTime":           {"xs:anyAtomicType"},
-	"xs:numeric":            {"xs:anyAtomicType"},
-}
+var atomicAncestors = sync.OnceValue(func() map[string][]string {
+	return map[string][]string{
+		"xs:string":           {"xs:anyAtomicType"},
+		"xs:NCName":           {"xs:Name", "xs:token", "xs:normalizedString", "xs:string", "xs:anyAtomicType"},
+		"xs:Name":             {"xs:token", "xs:normalizedString", "xs:string", "xs:anyAtomicType"},
+		"xs:token":            {"xs:normalizedString", "xs:string", "xs:anyAtomicType"},
+		"xs:normalizedString": {"xs:string", "xs:anyAtomicType"},
+		"xs:anyURI":           {"xs:anyAtomicType"},
+		"xs:QName":            {"xs:anyAtomicType"},
+		"xs:boolean":          {"xs:anyAtomicType"},
+		"xs:double":           {"xs:numeric", "xs:anyAtomicType"},
+		"xs:float":            {"xs:numeric", "xs:anyAtomicType"},
+		"xs:decimal":          {"xs:numeric", "xs:anyAtomicType"},
+		"xs:integer":          {"xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		// The integer family. A typed function test written against one of these
+		// is not exotic — inline-fn-033 asserts that a function taking xs:integer
+		// is an instance of "function(xs:long, xs:long) as xs:integer+", which is
+		// contravariance over exactly this chain. With the derived names absent
+		// each subsumed only itself and the assertion failed.
+		"xs:long":               {"xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		"xs:int":                {"xs:long", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		"xs:short":              {"xs:int", "xs:long", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		"xs:byte":               {"xs:short", "xs:int", "xs:long", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		"xs:nonPositiveInteger": {"xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		"xs:negativeInteger":    {"xs:nonPositiveInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		"xs:nonNegativeInteger": {"xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		"xs:positiveInteger":    {"xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		"xs:unsignedLong":       {"xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		"xs:unsignedInt":        {"xs:unsignedLong", "xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		"xs:unsignedShort":      {"xs:unsignedInt", "xs:unsignedLong", "xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		"xs:unsignedByte":       {"xs:unsignedShort", "xs:unsignedInt", "xs:unsignedLong", "xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+		"xs:untypedAtomic":      {"xs:anyAtomicType"},
+		"xs:date":               {"xs:anyAtomicType"},
+		"xs:time":               {"xs:anyAtomicType"},
+		"xs:dateTime":           {"xs:anyAtomicType"},
+		"xs:numeric":            {"xs:anyAtomicType"},
+	}
+})
 
 // The four process-global type-environment reads in this file are the ONLY
 // ones left in xpath, and they are deliberate rather than overlooked.
@@ -456,7 +459,7 @@ func atomicSubsumesDepth(super, sub string, depth int) bool {
 	if super == sub {
 		return true
 	}
-	for _, a := range atomicAncestors[sub] {
+	for _, a := range atomicAncestors()[sub] {
 		if a == super {
 			return true
 		}
@@ -509,7 +512,7 @@ func isManifestNamespace(uri string) bool {
 func applyBuiltinSignatures(l *Library) {
 	applyVariadicSignatures(l)
 	applyConstructorSignatures(l)
-	for key, sig := range specSignatures {
+	for key, sig := range specSignatures() {
 		name, arity, ok := splitSpecEntryKey(key)
 		if !ok || len(sig) != arity+1 {
 			continue

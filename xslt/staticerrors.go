@@ -929,7 +929,7 @@ func checkDefaultCollation(el *xdm.Node) error {
 // the one XSLT element whose model names a foreign element outright — rather
 // than from a hard-coded name here, so that the two cannot drift apart.
 func inlineSchema(el *xdm.Node) *xdm.Node {
-	cm, ok := contentModels[el.Name().Local]
+	cm, ok := contentModels()[el.Name().Local]
 	if !ok || cm.foreign == "" {
 		return nil
 	}
@@ -981,7 +981,7 @@ func checkTypeAttributes(root *xdm.Node, schema *xsd.Schema) error {
 func checkTypeAttribute(el *xdm.Node, schema *xsd.Schema) error {
 	var a *xdm.Node
 	if el.Name().URI == xdm.NSXSL {
-		if _, ok := qnameAttrs[el.Name().Local]["type"]; !ok {
+		if _, ok := qnameAttrs()[el.Name().Local]["type"]; !ok {
 			return nil
 		}
 		a = el.Attr("", "type")
@@ -1141,7 +1141,7 @@ func effectiveForwards(el *xdm.Node) bool {
 
 // checkModuleAttrs applies the attribute table to a module element.
 func checkModuleAttrs(el *xdm.Node) error {
-	def, known := xsltElements[el.Name().Local]
+	def, known := xsltElements()[el.Name().Local]
 	if !known {
 		return nil
 	}

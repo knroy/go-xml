@@ -104,7 +104,7 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		return nil
 	}
 
-	def, known := xsltElements[el.Name().Local]
+	def, known := xsltElements()[el.Name().Local]
 	// An element XSLT 3.0 introduced is not an XSLT element to a stylesheet
 	// declaring an earlier version, so it is treated exactly as an unknown
 	// one: XTSE0010 outside forwards-compatible mode, ignored within it.
@@ -328,7 +328,7 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 // those are decided by each instruction's own compiler, which has to walk the
 // children in order anyway.
 func checkContentModel(el *xdm.Node, forwards bool) error {
-	cm, ok := contentModels[el.Name().Local]
+	cm, ok := contentModels()[el.Name().Local]
 	if !ok {
 		return nil
 	}
@@ -384,7 +384,7 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 			// An unknown XSLT element is XTSE0010 from the table check when
 			// it is reached; here it is only a question of placement, and
 			// forwards-compatible mode ignores what it does not know.
-			if _, known := xsltElements[ch.Name().Local]; !known && forwards {
+			if _, known := xsltElements()[ch.Name().Local]; !known && forwards {
 				continue
 			}
 			// Section 3.9, first rule of forwards compatible behavior: "if
@@ -762,7 +762,7 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 			isTopLevel(n) {
 			// Unknown in the same sense checkStaticGrammar means it: an
 			// element of a later version is unknown to this stylesheet's.
-			def, known := xsltElements[n.Name().Local]
+			def, known := xsltElements()[n.Name().Local]
 			if (!known || (def.since30 && !xpathVersionAt(n).AtLeast31())) &&
 				!inPackage(n) {
 				return nil
@@ -785,7 +785,7 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 		// looked at, and forwards-203 relies on that by writing an
 		// xsl:accumulator with no name where the name is required.
 		if forwards && n.Name().URI == xdm.NSXSL && hasFallbackChild(n) {
-			if _, known := xsltElements[n.Name().Local]; !known {
+			if _, known := xsltElements()[n.Name().Local]; !known {
 				for c := range n.Children() {
 					if !isXSL(c, "fallback") {
 						continue
@@ -1000,7 +1000,7 @@ func hasVersionAttr(el *xdm.Node) bool {
 // escapes the check but simply a value outside the lexical space, which is
 // what xsl:decimal-format/@name="{concat('f','f')}" is.
 func checkQNameAttr(el *xdm.Node, a *xdm.Node) error {
-	qd, ok := qnameAttrs[el.Name().Local][a.Name().Local]
+	qd, ok := qnameAttrs()[el.Name().Local][a.Name().Local]
 	if !ok {
 		return nil
 	}
