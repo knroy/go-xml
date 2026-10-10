@@ -908,11 +908,34 @@ func (c *Context) WithVar(name xdm.QName, val xdm.Sequence) *Context {
 
 // varBinding is the binding a scope made by WithVar adds. Never written once
 // the scope is published. A scope made by WithLazyVars holds lazy instead,
-// and binds every name in it.
+// and binds every name in it; one made by xpathleaf.WithLocals holds locals,
+// a host's stack of bindings, which is written in place.
 type varBinding struct {
 	uri, local string
 	val        xdm.Sequence
 	lazy       map[varKey]*LazyVar
+	locals     *xpathleaf.Locals
+}
+
+// frozenLocals is the copy of c a closure captures: every host stack of
+// local bindings on its chain replaced by a copy of what is visible now, so
+// that the stack moving on does not change what the closure sees.
+func frozenLocals(c *Context) *Context {
+	if c == nil {
+		return nil
+	}
+	if b := c.bind; b != nil && b.locals != nil {
+		n := *c
+		n.bind = &varBinding{locals: b.locals.Frozen()}
+		return &n
+	}
+	p := frozenLocals(c.Parent)
+	if p == c.Parent {
+		return c
+	}
+	n := *c
+	n.Parent = p
+	return &n
 }
 
 // varKey is a variable's expanded name as a map key that needs no Clark
@@ -1132,7 +1155,11 @@ func (c *Context) lookupVarPlain(name xdm.QName) (xdm.Sequence, bool, error) {
 	key, keyed := "", false
 	for s := c; s != nil; s = s.Parent {
 		if b := s.bind; b != nil {
-			if b.lazy != nil {
+			if b.locals != nil {
+				if v, ok := b.locals.Lookup(name.URI, name.Local); ok {
+					return v, true, nil
+				}
+			} else if b.lazy != nil {
 				if l, ok := b.lazy[varKey{name.URI, name.Local}]; ok {
 					if v, ok, err := l.get(); ok || err != nil {
 						return v, true, err

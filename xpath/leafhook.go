@@ -14,6 +14,16 @@ func init() {
 		return &n
 	}
 	xpathleaf.SetHost = func(c any, h *xpathleaf.Host) { c.(*Context).host = h }
+	xpathleaf.WithLocals = func(c any, l *xpathleaf.Locals) any {
+		n := *c.(*Context)
+		n.Vars, n.bind, n.Parent = nil, &varBinding{locals: l}, c.(*Context)
+		return &n
+	}
+	xpathleaf.WithBindingsOf = func(c, base any) any {
+		n, b := *c.(*Context), base.(*Context)
+		n.Vars, n.bind, n.Parent = b.Vars, b.bind, b.Parent
+		return &n
+	}
 	xpathleaf.WithFocusHost = func(c any, item xdm.Item, pos, size int, h *xpathleaf.Host) any {
 		n := *c.(*Context)
 		n.Item, n.Position, n.Size, n.host = item, int32(pos), int32(size), h

@@ -2112,10 +2112,12 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	broke := false
 	for idx, it := range seq {
 		sub := rt.withCurrent(it, idx+1, len(seq))
+		mark := sub.localsMark()
 		for _, p := range i.params {
-			sub = sub.withVar(p.Name, carried[p.Name.Clark()])
+			sub = sub.bindLocal(p.Name, carried[p.Name.Clark()])
 		}
 		err := execSequence(i.body, sub, out)
+		sub.localsPop(mark)
 		if err != nil {
 			if _, ok := err.(breakSignal); ok {
 				broke = true
@@ -2169,8 +2171,9 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// these values is an error)." That absence is the whole of number-1004:
 	// xsl:number with no context node is XTTE0990.
 	done := rt.withFocus(nil, 0, 0)
+	defer done.localsPop(done.localsMark())
 	for _, p := range i.params {
-		done = done.withVar(p.Name, carried[p.Name.Clark()])
+		done = done.bindLocal(p.Name, carried[p.Name.Clark()])
 	}
 	if i.onCompletionSelect != nil {
 		vals, err := i.onCompletionSelect.Eval(done.ctx)

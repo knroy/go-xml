@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
@@ -72,6 +73,11 @@ type runtime struct {
 // that every focus, variable and selection change makes small.
 type transformState struct {
 	sheet *Stylesheet
+
+	// locals holds the local variables and parameters in scope; see
+	// locals.go. localsDone is set when the transform returns.
+	locals     *xpathleaf.Locals
+	localsDone atomic.Bool
 
 	// deferredErr holds the failure of a global whose evaluation is not by
 	// itself the transform's failure -- an abstract variable, whose body
@@ -417,8 +423,16 @@ func absentGroupOf(name xdm.QName) uint8 {
 
 // --- Instruction execution helpers -----------------------------------------
 
-// execSequence runs a sequence constructor into out.
+// execSequence runs a sequence constructor into out. The locals it declares
+// go out of scope when it returns.
 func execSequence(body []Instruction, rt *runtime, out *outputBuilder) error {
+	n := rt.localsMark()
+	err := execSequenceBody(body, rt, out)
+	rt.localsPop(n)
+	return err
+}
+
+func execSequenceBody(body []Instruction, rt *runtime, out *outputBuilder) error {
 	// A constructor holding xsl:on-empty or xsl:on-non-empty cannot be run
 	// left to right: whether either fires depends on what the whole
 	// constructor produced, so it goes to the section 8.4.4 algorithm
@@ -457,7 +471,7 @@ func execSequence(body []Instruction, rt *runtime, out *outputBuilder) error {
 			if err != nil {
 				return err
 			}
-			rt = rt.withVar(v.v.Name, val)
+			rt = rt.bindLocal(v.v.Name, val)
 			continue
 		}
 		if err := instr.Execute(rt, out); err != nil {
@@ -914,6 +928,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// template and function call makes then return the runtime unchanged.
 	rt.absent = absentMerge | absentGrouping | absentRegex | absentOutputURI
 	setUnbound(rt.ctx, rt.absent)
+	rt.locals = &xpathleaf.Locals{}
 
 	if err := rt.evalGlobals(s, opts); err != nil {
 		return nil, err
@@ -1145,7 +1160,12 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 					g.Name.Lexical())
 			default:
 				g := g
-				lv = &xpath.LazyVar{Force: func() (xdm.Sequence, error) { return force(g) }}
+				lv = &xpath.LazyVar{Force: func() (xdm.Sequence, error) {
+					// A global is evaluated wherever it is first read, and
+					// must not see the locals in scope there.
+					defer rt.leaveFrame(rt.enterFrame())
+					return force(g)
+				}}
 			}
 			cellOf[name] = lv
 		}
@@ -1157,6 +1177,12 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 		}
 	}
 	rt.ctx = rt.ctx.WithLazyVars(vars, rt.evalLock)
+	// The locals sit above the globals, so a local shadows a global of its
+	// name.
+	rt.ctx = xpathleaf.WithLocals(rt.ctx, rt.locals).(*xpath.Context)
+	// Set here as well as in newRuntime, for the stylesheet functions an
+	// initialiser calls (see globalBindings).
+	rt.globalCtx = rt.ctx
 	snapshot := *rt
 	gs = &snapshot
 

@@ -144,13 +144,22 @@ func expandAttributeSets(rt *runtime, names []attrSetRef, out *outputBuilder,
 			r.absent = 0
 			setRT = &r
 		}
-		for _, as := range sets {
-			if err := expandAttributeSets(setRT, as.uses, out, active); err != nil {
-				return err
+		// The locals bound on the stack are hidden from it the same way.
+		mark, base := rt.enterFrame()
+		err := func() error {
+			for _, as := range sets {
+				if err := expandAttributeSets(setRT, as.uses, out, active); err != nil {
+					return err
+				}
+				if err := execSequence(as.body, setRT, out); err != nil {
+					return err
+				}
 			}
-			if err := execSequence(as.body, setRT, out); err != nil {
-				return err
-			}
+			return nil
+		}()
+		rt.leaveFrame(mark, base)
+		if err != nil {
+			return err
 		}
 		delete(active, key)
 	}

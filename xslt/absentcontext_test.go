@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -119,5 +120,22 @@ func TestAbsentClearShortcut(t *testing.T) {
 		if got := p.predicateFree(); got != want {
 			t.Errorf("%s: predicateFree = %v, want %v", src, got, want)
 		}
+	}
+}
+
+// A transform starts with the grouping, merge and regex components absent, so
+// the first stylesheet-function call from a template does not clear them.
+func TestRootRuntimeStartsAbsent(t *testing.T) {
+	s := compileString(t, `<xsl:stylesheet version="3.0"
+		xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:template match="/"/></xsl:stylesheet>`)
+	rt, err := newRuntime(s, context.Background(), nil, TransformOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.clearFunctionContext() != rt {
+		t.Error("the root runtime cleared components nothing had bound")
+	}
+	if fn, _ := runtimeFrom(rt.ctx); fn.absent != rt.absent {
+		t.Error("a function called from the root context does not see them absent")
 	}
 }
