@@ -145,13 +145,11 @@ type refPat struct {
 	// unchanged. It depends only on the schema, so it is learnt once and
 	// shared by every validation.
 	attrFree atomic.Bool
-	// open memoises startTagOpenDeriv of the expansion by element name
-	// (xdm.QName -> pattern). The derivative of a schema pattern depends
-	// only on the pattern and the name, and patterns are immutable values,
-	// so the result is shared by every validation. openN caps the entries
-	// so that a document cannot grow it without bound by inventing names.
-	open  sync.Map
-	openN atomic.Int32
+	// open memoises startTagOpenDeriv of the expansion by element name.
+	// The derivative of a schema pattern depends only on the pattern and
+	// the name, and patterns are immutable values, so the result is shared
+	// by every validation.
+	open nameMemo
 	// static is set on a wrapper addMemoPoints put around a schema subtree;
 	// see memo.go. Nil for a definition reference.
 	static *staticInfo
@@ -168,12 +166,50 @@ type staticInfo struct {
 	text atomic.Pointer[patBox]
 	// close memoises startTagCloseDerivCh, which depends on nothing else.
 	close atomic.Pointer[patBox]
-	// att memoises attDeriv by attribute name (xdm.QName -> *patBox) where
-	// every attribute pattern the name reaches takes any value (text), so
-	// the derivative depends on the name alone. A nil p records a name
-	// whose derivative depends on the value. attN caps the entries.
-	att  sync.Map
-	attN atomic.Int32
+	// att memoises attDeriv by attribute name where every attribute
+	// pattern the name reaches takes any value (text), so the derivative
+	// depends on the name alone. A nil pattern records a name whose
+	// derivative depends on the value.
+	att nameMemo
+}
+
+// nameMemo is a copy-on-write map from a name to a pattern, shared by every
+// validation of a schema: a lookup is one atomic load and a map read with no
+// boxing, and a store copies the map under a lock. The entries are capped at
+// maxOpenMemo so that a document cannot grow it without bound by inventing
+// names, which also bounds each copy.
+type nameMemo struct {
+	m  atomic.Pointer[map[nameKey]pattern]
+	mu sync.Mutex
+}
+
+type nameKey struct{ ns, local string }
+
+func (c *nameMemo) load(n xdm.QName) (pattern, bool) {
+	m := c.m.Load()
+	if m == nil {
+		return nil, false
+	}
+	p, ok := (*m)[nameKey{n.URI, n.Local}]
+	return p, ok
+}
+
+func (c *nameMemo) store(n xdm.QName, p pattern) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var old map[nameKey]pattern
+	if o := c.m.Load(); o != nil {
+		old = *o
+	}
+	if len(old) >= maxOpenMemo {
+		return
+	}
+	m := make(map[nameKey]pattern, len(old)+1)
+	for k, v := range old {
+		m[k] = v
+	}
+	m[nameKey{n.URI, n.Local}] = p
+	c.m.Store(&m)
 }
 
 type patBox struct {

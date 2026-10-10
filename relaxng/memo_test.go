@@ -3,6 +3,7 @@ package relaxng
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -118,7 +119,7 @@ func TestMemoPointsAreInvisible(t *testing.T) {
 	if err := s.Validate(doc.Root); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := w.open.Load(xdm.QName{Local: "e1"}); !ok {
+	if _, ok := w.open.load(xdm.QName{Local: "e1"}); !ok {
 		t.Error("the memo point did not remember startTagOpenDeriv for e1")
 	}
 	if !patEq(w, w.cached) || patternSize(w) != patternSize(w.cached) {
@@ -166,10 +167,52 @@ func TestAttDerivMemoOnlyWhereTheValueCannotMatter(t *testing.T) {
 	if !ok || w.static == nil {
 		t.Fatalf("a's content is %T, want a memo point", a.(*elementPat).Pattern)
 	}
-	if b, ok := w.static.att.Load(xdm.QName{Local: "y"}); !ok || b.(*patBox).p == nil {
+	if d, ok := w.static.att.load(xdm.QName{Local: "y"}); !ok || d == nil {
 		t.Error("attDeriv for the text attribute y was not remembered")
 	}
-	if b, ok := w.static.att.Load(xdm.QName{Local: "x"}); ok && b.(*patBox).p != nil {
+	if d, ok := w.static.att.load(xdm.QName{Local: "x"}); ok && d != nil {
 		t.Error("attDeriv for the typed attribute x was remembered")
 	}
+}
+
+// TestNameMemoConcurrent: one schema validated from many goroutines at once
+// fills its name memos concurrently; every verdict must match the serial one.
+// Run under -race this is what checks the copy-on-write maps.
+func TestNameMemoConcurrent(t *testing.T) {
+	var schema, valid, invalid strings.Builder
+	schema.WriteString(`<element name="r" xmlns="http://relaxng.org/ns/structure/1.0"><zeroOrMore><choice>`)
+	valid.WriteString("<r>")
+	invalid.WriteString("<r>")
+	for i := 0; i < 40; i++ {
+		n := fmt.Sprintf("e%d", i)
+		schema.WriteString(`<element name="` + n + `"><optional><attribute name="a` + n +
+			`"><text/></attribute></optional><text/></element>`)
+		valid.WriteString("<" + n + ` a` + n + `="v">x</` + n + ">")
+		invalid.WriteString("<" + n + ` a` + n + `="v">x</` + n + ">")
+	}
+	schema.WriteString(`</choice></zeroOrMore></element>`)
+	valid.WriteString("</r>")
+	invalid.WriteString(`<e1 ae2="v"/></r>`)
+	s := compileBoundarySchema(t, schema.String())
+	docs := map[string]bool{valid.String(): true, invalid.String(): false}
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				for src, want := range docs {
+					doc, err := xdm.ParseString(src, xdm.ParseOptions{})
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					if err := s.Validate(doc.Root); (err == nil) != want {
+						t.Errorf("got %v, want valid=%v", err, want)
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

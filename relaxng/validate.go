@@ -167,6 +167,11 @@ type validator struct {
 	// memoAfter'th element on.
 	pb    *patBuilder
 	elems int
+	// kids is a stack of the content children of the elements being
+	// validated, each level's above its parent's; attrs is the one element's
+	// attributes being matched. Both are reused for every element.
+	kids  []*xdm.Node
+	attrs []attr
 }
 
 // tailPath renders the last few segments of a deep path.
@@ -294,7 +299,8 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 			v.note(fmt.Sprintf("element %s is not permitted here", n.Name().Local))
 			return notAllowedPat{}
 		}
-		p1 = v.attsDeriv(p1, elementAttrs(n), nsContextOf(n), n)
+		v.attrs = elementAttrs(v.attrs[:0], n)
+		p1 = v.attsDeriv(p1, v.attrs, nsContextOf(n), n)
 		if isNotAllowed(p1) {
 			v.note(fmt.Sprintf("the attributes of %s do not match", n.Name().Local))
 			return notAllowedPat{}
@@ -323,7 +329,12 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 
 // childrenDeriv takes the derivative over an element's children.
 func (v *validator) childrenDeriv(p pattern, el *xdm.Node) pattern {
-	kids := contentChildren(el)
+	base := len(v.kids)
+	v.kids = contentChildren(v.kids, el)
+	// Deeper levels push above this one and pop back to it, so kids stays
+	// valid even when they grow v.kids into a new array.
+	kids := v.kids[base:]
+	defer func() { v.kids = v.kids[:base] }()
 	if len(kids) == 0 {
 		// An empty element and one containing "" are the same document, so a
 		// pattern that admits the empty sequence already matches.
@@ -373,12 +384,16 @@ func (v *validator) childrenDeriv(p pattern, el *xdm.Node) pattern {
 	for i := 0; i < len(kids); i++ {
 		c := kids[i]
 		if c.Kind() == xdm.KindText {
-			var sb strings.Builder
-			for ; i < len(kids) && kids[i].Kind() == xdm.KindText; i++ {
-				sb.WriteString(kids[i].Value())
+			s := c.Value()
+			if i+1 < len(kids) && kids[i+1].Kind() == xdm.KindText {
+				var sb strings.Builder
+				for ; i < len(kids) && kids[i].Kind() == xdm.KindText; i++ {
+					sb.WriteString(kids[i].Value())
+				}
+				i--
+				s = sb.String()
 			}
-			i--
-			switch s := sb.String(); {
+			switch {
 			case !whitespaceOnly(s):
 				p = v.pb.textDeriv(p, s, nsContextOf(el))
 			case hasElem:
@@ -396,9 +411,8 @@ func (v *validator) childrenDeriv(p pattern, el *xdm.Node) pattern {
 	return p
 }
 
-// contentChildren drops the nodes that are not content.
-func contentChildren(el *xdm.Node) []*xdm.Node {
-	var out []*xdm.Node
+// contentChildren appends the children that are content to out.
+func contentChildren(out []*xdm.Node, el *xdm.Node) []*xdm.Node {
 	for c := range el.Children() {
 		switch c.Kind() {
 		case xdm.KindElement, xdm.KindText:
@@ -408,13 +422,12 @@ func contentChildren(el *xdm.Node) []*xdm.Node {
 	return out
 }
 
-// elementAttrs collects the attributes a pattern may match.
+// elementAttrs appends to out the attributes a pattern may match.
 //
 // Namespace declarations are not attributes in the data model RELAX NG
 // validates: xmlns:p="..." is a binding, not content, and a schema is never
 // asked to declare one.
-func elementAttrs(el *xdm.Node) []attr {
-	var out []attr
+func elementAttrs(out []attr, el *xdm.Node) []attr {
 	for a := range el.Attrs() {
 		if a.Name().URI == xdm.NSXMLNS || a.Name().Local == "xmlns" {
 			continue
