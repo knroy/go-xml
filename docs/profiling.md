@@ -1,9 +1,11 @@
 # Profiling: what is left to fix
 
 This document lists the performance work that is still open on v2, the
-ideas that were measured and rejected, and how to measure. It was measured on
-the `v2` branch at `ef76ae2c`; the Go code has not changed since apart from
-the version string.
+ideas that were measured and rejected, and how to measure. The open fixes and
+the rejected ideas were measured on the `v2` branch at `ef76ae2c` and, for the
+third fix round, on the lanes merged as `v2x-int` (each item against the commit
+before it). The standing in [Where go-xml stands](#where-go-xml-stands) comes
+from full benchmark runs at `377452c0` and at `4068c98c`.
 
 Fixes that have landed are not repeated here. Each is in
 [CHANGELOG.md](../CHANGELOG.md) and the git history. The six earlier
@@ -15,29 +17,34 @@ previous version of this file: `git show aefbd8a5:docs/profiling.md`.
 
 Warm time, go-xml over the reference engine (geometric mean). Each version is
 compared with the reference times from its own benchmark run
-([benchmark](benchmark.md)). "v2, pre-fix" is the run before the fix waves;
-"v2 now" is `377452c0`, after waves 1 and 2 (the fixes under
-[Landed](#landed-in-the-v2-fix-round)). The [open fixes](#open-fixes) (V17,
-V21–V51) are not projected.
+([benchmark](benchmark.md)). "v2, pre-fix" is the run before the fix rounds;
+"v2, rounds 1–2" is `377452c0`, after the first two rounds; "v2, round 3" is
+`4068c98c` (2026-10-10), after the third round (V17, V21–V51). The fixes are
+under [Landed](#landed-in-the-v2-fix-round); the [open fixes](#open-fixes)
+(V31, V36) are not projected.
 
-| Workload | Reference | v1 | v2, pre-fix | v2 now |
-|---|---|---:|---:|---:|
-| DocBook xslTNG | Saxon-HE | 0.46× | 0.37× | 0.24× |
-| DocBook `ptoc.001` | Saxon-HE | 1.49× | 1.17× | 0.98× |
-| Peppol Schematron | Saxon-HE | 1.99× | 1.31× | 1.22× |
-| XRechnung stage 1 | Saxon-HE | 3.00× | 1.77× | 1.46× |
-| XRechnung stage 2 | Saxon-HE | 1.42× | 1.23× | 0.75× |
-| XMark q1–q20 | Saxon-HE | 1.00× | 0.97× | 0.86× |
-| XSD catalogs | Xerces-J | 0.73× | 0.69× | 0.73× |
-| RELAX NG DocBook 5.2 | Jing | 0.60× | 0.75× | 0.91× |
-| Parse 1/10/100 MB | `encoding/xml` | 0.54× | 0.57× | 0.53× |
+| Workload | Reference | v1 | v2, pre-fix | v2, rounds 1–2 | v2, round 3 |
+|---|---|---:|---:|---:|---:|
+| DocBook xslTNG | Saxon-HE | 0.46× | 0.37× | 0.24× | 0.19× |
+| DocBook `ptoc.001` | Saxon-HE | 1.49× | 1.17× | 0.98× | 0.86× |
+| Peppol Schematron | Saxon-HE | 1.99× | 1.31× | 1.22× | 1.16× |
+| XRechnung stage 1 | Saxon-HE | 3.00× | 1.77× | 1.46× | 1.25× |
+| XRechnung stage 2 | Saxon-HE | 1.42× | 1.23× | 0.75× | 0.89× |
+| XMark q1–q20 | Saxon-HE | 1.00× | 0.97× | 0.86× | 0.84× |
+| XSD catalogs | Xerces-J | 0.73× | 0.69× | 0.73× | 0.67× |
+| RELAX NG DocBook 5.2 | Jing | 0.60× | 0.75× | 0.91× | 0.76× |
+| Parse 1/10/100 MB | `encoding/xml` | 0.54× | 0.57× | 0.53× | 0.57× |
 
 The XSD and RELAX NG ratios follow the JVM validators more than go-xml.
-go-xml's geometric mean per document went 1.07 → 1.05 → 1.02 ms on XSD and
-26.8 → 28.4 → 27.6 µs on RELAX NG, while Xerces ran at 1.47, 1.53 and 1.39 ms
-and Jing at 44.5, 37.9 and 30.4 µs in the same three runs. XRechnung stage 2
-crosses 1× partly because Saxon's median there was 3.4 ms in the last run
-against 2.8 ms in the pre-fix one; go-xml's went 3.3 → 2.6 ms.
+go-xml's geometric mean per document went 1.07 → 1.05 → 1.02 → 0.99 ms on XSD
+and 26.8 → 28.4 → 27.6 → 24.5 µs on RELAX NG, while Xerces ran at 1.47, 1.53,
+1.39 and 1.49 ms and Jing at 44.5, 37.9, 30.4 and 32.5 µs in the same four
+runs. XRechnung stage 2 crossed 1× at `377452c0` partly because Saxon's median
+there was 3.4 ms against 2.8 ms in the pre-fix run, and moved back to 0.89× at
+`4068c98c` because Saxon's was 2.6 ms; go-xml's went 3.3 → 2.6 → 2.3 ms. Parse
+moved from 0.53× to 0.57× with `encoding/xml` level: go-xml's warm 100 MB parse
+took 839 ms at `377452c0` and 890 ms at `4068c98c`, which has not been
+bisected.
 
 On XSLT, most of the time left goes to the garbage collector and the
 allocator: 26–47% GC marking and 14–28% `mallocgc`, from Linux profiles. CPU
