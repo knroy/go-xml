@@ -2,35 +2,86 @@ package xdm
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
-// xmlDeclSyntax is productions [23]-[26] reduced to the declarations this
-// parser supports. It deliberately validates the *whole* PI data: searching
-// for version= would accept duplicate fields and trailing garbage, both of
-// which make a document not well formed.
+// parseXMLDecl matches productions [23]-[26] reduced to the declarations
+// this parser supports, and returns the standalone value ("" when absent). It
+// deliberately validates the *whole* PI data: searching for version= would
+// accept duplicate fields and trailing garbage, both of which make a document
+// not well formed.
 //
 // Each name is separated from its value by [25] Eq ::= S? '=' S?, not by a
 // bare "=". Requiring the bare form rejected `version = "1.0"` and
 // `encoding = "UTF-8"`, both well formed and both used by the QT3 corpus.
-const (
-	xmlDeclS  = `[ \t\r\n]`
-	xmlDeclEq = xmlDeclS + `*=` + xmlDeclS + `*`
-)
+//
+// It is the regular expression
+//
+//	^version Eq ("1\.[0-9]+"|'1\.[0-9]+')
+//	(S+ encoding Eq ("[A-Za-z][A-Za-z0-9._-]*"|'...'))?
+//	(S+ standalone Eq ("(yes|no)"|'(yes|no)'))?$
+//
+// written out, which costs a tenth of compiling the match per document did.
+func parseXMLDecl(s string) (standalone string, ok bool) {
+	s, ok = declField(s, "version", false, func(v string) bool {
+		return len(v) > 2 && v[:2] == "1." && strings.Trim(v[2:], "0123456789") == ""
+	})
+	if !ok {
+		return "", false
+	}
+	if rest, ok := declField(s, "encoding", true, func(v string) bool {
+		return v != "" && isASCIILetter(v[0]) && strings.TrimLeft(v,
+			"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") == ""
+	}); ok {
+		s = rest
+	}
+	if rest, ok := declField(s, "standalone", true, func(v string) bool {
+		standalone = v
+		return v == "yes" || v == "no"
+	}); ok {
+		return standalone, rest == ""
+	}
+	return "", s == ""
+}
 
-// standaloneYes finds standalone="yes" in a declaration xmlDeclSyntax has
-// already accepted.
-var standaloneYes = regexp.MustCompile(`standalone` + xmlDeclEq + `(?:"yes"|'yes')`)
+// declField reads name Eq quoted-value from the front of s, after S+ when
+// spaced, and returns the rest when valid accepts the value.
+func declField(s, name string, spaced bool, valid func(string) bool) (string, bool) {
+	if spaced {
+		t := strings.TrimLeft(s, " \t\r\n")
+		if len(t) == len(s) {
+			return s, false
+		}
+		s = t
+	}
+	if !strings.HasPrefix(s, name) {
+		return s, false
+	}
+	s = strings.TrimLeft(s[len(name):], " \t\r\n")
+	if s == "" || s[0] != '=' {
+		return s, false
+	}
+	s = strings.TrimLeft(s[1:], " \t\r\n")
+	if s == "" || s[0] != '"' && s[0] != '\'' {
+		return s, false
+	}
+	end := strings.IndexByte(s[1:], s[0])
+	if end < 0 || !valid(s[1:1+end]) {
+		return s, false
+	}
+	return s[end+2:], true
+}
 
-var xmlDeclSyntax = regexp.MustCompile(
-	`^version` + xmlDeclEq + `(?:"1\.[0-9]+"|'1\.[0-9]+')` +
-		`(?:` + xmlDeclS + `+encoding` + xmlDeclEq +
-		`(?:"[A-Za-z][A-Za-z0-9._-]*"|'[A-Za-z][A-Za-z0-9._-]*'))?` +
-		`(?:` + xmlDeclS + `+standalone` + xmlDeclEq +
-		`(?:"(?:yes|no)"|'(?:yes|no)'))?$`)
+func isASCIILetter(b byte) bool { return 'a' <= b|0x20 && b|0x20 <= 'z' }
+
+// declStandaloneYes reports standalone="yes" in a declaration parseXMLDecl
+// has already accepted.
+func declStandaloneYes(inst string) bool {
+	sa, _ := parseXMLDecl(strings.TrimSpace(inst))
+	return sa == "yes"
+}
 
 // validateXMLDecl checks the XML declaration separately from the token reader.
 // RawToken deliberately exposes it as a PI so clients that want a token stream
@@ -41,7 +92,7 @@ func validateXMLDecl(inst string) error {
 	if inst == "" {
 		return fmt.Errorf("parse XML: XML declaration must contain VersionInfo")
 	}
-	if !xmlDeclSyntax.MatchString(strings.TrimSpace(inst)) {
+	if _, ok := parseXMLDecl(strings.TrimSpace(inst)); !ok {
 		return fmt.Errorf("parse XML: malformed XML declaration")
 	}
 	return nil

@@ -484,7 +484,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 					return nil, err
 				}
 				sawDecl = true
-				standalone = standaloneYes.MatchString(string(t.Inst))
+				standalone = declStandaloneYes(string(t.Inst))
 				continue // the XML declaration is not a PI node in the XDM
 			}
 			// Namespaces in XML §7: no PI target contains a colon.
