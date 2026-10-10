@@ -469,6 +469,13 @@ func runTemplate(rt *runtime, t *Template,
 	// into it — which is what makes current-merge-group() in a called template
 	// the XTDE3480 that merge-087 and merge-088 require.
 	sub := rt.clearMergeContext()
+	if t.baseURI != "" {
+		if c := sub.ctx.WithStaticBaseURI(t.baseURI); c != sub.ctx {
+			n := *sub
+			n.ctx = c
+			sub = &n
+		}
+	}
 	// use="absent" means "the contained sequence constructor, and any
 	// xsl:param elements, are evaluated with an absent focus". It is not an
 	// error to call such a template with a focus -- the item is simply not
@@ -677,6 +684,8 @@ type userFunction struct {
 	// arguments must return identical results -- the SAME nodes, not merely
 	// equal ones.
 	deterministic bool
+	// baseURI is the xsl:function element's base URI; see Template.baseURI.
+	baseURI string
 }
 
 // call adapts the function to the xpath.Function signature.
@@ -738,6 +747,9 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	// A function body has no context item: referring to "." inside one is an
 	// error, which is what stops functions from depending on hidden state.
 	sub = sub.withFocus(nil, 0, 0)
+	if f.baseURI != "" {
+		sub.ctx = sub.ctx.WithStaticBaseURI(f.baseURI)
+	}
 	// Section 5.4's table lists what a call on a stylesheet function clears
 	// as well as the focus: the current group, the current grouping key and
 	// the current captured substrings.

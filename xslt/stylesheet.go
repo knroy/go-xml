@@ -287,6 +287,10 @@ type Template struct {
 	// declOrder breaks ties between equal-priority templates: the last one
 	// declared wins, per the spec's conflict-resolution rule.
 	declOrder int
+	// baseURI is the xsl:template element's base URI, installed on the
+	// context when the body runs so that its expressions, which carry the
+	// same one, evaluate without copying the context to install it.
+	baseURI string
 	// unionGroup identifies the xsl:template declaration a rule came from.
 	//
 	// compileTemplate splits a union pattern into one rule per branch so that
