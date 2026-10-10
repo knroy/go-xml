@@ -1,6 +1,11 @@
 package xdm
 
-import "testing"
+import (
+	"fmt"
+	"io"
+	"strings"
+	"testing"
+)
 
 func TestNodePositions(t *testing.T) {
 	src := "<r>\n  <a/>\n  <b>\n    <c/>\n  </b>\n</r>\n"
@@ -75,4 +80,49 @@ func TestPositionsWithCRLF(t *testing.T) {
 	if !ok || line != 3 || col != 3 {
 		t.Errorf("<a/> at line %d col %d (ok=%v), want line 3 col 3", line, col, ok)
 	}
+}
+
+// TestParseStringPositionsMatchParse pins that ParseString, which keeps the
+// caller's string as the position source when decoding would not change it,
+// reports what Parse over a plain reader does, which keeps a decoded copy.
+func TestParseStringPositionsMatchParse(t *testing.T) {
+	utf16 := func(s string) string {
+		b := []byte{0xFF, 0xFE}
+		for _, r := range s {
+			b = append(b, byte(r), 0)
+		}
+		return string(b)
+	}
+	for _, src := range []string{
+		"<r>\n  <a/>\n  <b>\n    <c/>\n  </b>\n</r>\n",
+		"\n <?xml-stylesheet x?>\n<r>\r\n  <a/>\r\n</r>",
+		"\xEF\xBB\xBF<r>\n  <a/></r>",
+		utf16("<r>\n  <a/>\n</r>"),
+		"<!DOCTYPE r [<!ENTITY e \"<x/>\n<y/>\">]>\n<r>\n  &e;\n  <a/>\n</r>",
+	} {
+		opts := ParseOptions{TrackPositions: true, AllowDOCTYPE: true}
+		want, err := Parse(io.MultiReader(strings.NewReader(src)), opts)
+		if err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		got, err := ParseString(src, opts)
+		if err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		if p, q := positions(want.Root), positions(got.Root); p != q || !strings.Contains(p, ":") {
+			t.Errorf("%q:\n  Parse       %s\n  ParseString %s", src, p, q)
+		}
+	}
+}
+
+func positions(n *Node) string {
+	var b strings.Builder
+	if n.Kind() == KindElement {
+		l, c, ok := n.Position()
+		fmt.Fprintf(&b, "%s@%d:%d:%v ", n.Name().Local, l, c, ok)
+	}
+	for _, ch := range kids(n) {
+		b.WriteString(positions(ch))
+	}
+	return b.String()
 }
