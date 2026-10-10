@@ -77,19 +77,22 @@ What this file adds, and that one does not:
 Real gaps: a genuine bug or an unimplemented rule, failing now. Ordered by how
 much each costs.
 
-### An escaped function item is not race-safe on `key()` state (XSLT, Go API)
+### Two narrow concurrency limits on a transform's runtime (XSLT, Go API)
 
-A function item returned from a transform (through `InitialFunction` or as an
-item of the result) keeps that transform's runtime. Called from several
-goroutines after the transform has returned, it is safe when it reads global
-variables, which are evaluated once under a lock, but not when it reaches
-other per-transform state built on first use, such as the index behind
-`key()` (`keyIndex`): one goroutine can write the map while another reads it.
-Calling such a function item from one goroutine at a time is safe. The fix is
-the same as for globals (a lock taken only once the runtime has escaped), or
-building the indexes a stylesheet's `xsl:key` declarations need before the
-runtime escapes. Found while making lazy global variables race-free (V4 in
-[profiling](profiling.md)); it predates that change.
+A function item returned from a transform keeps that transform's runtime.
+Once the transform has returned, every call that enters the runtime takes
+its lock, so such an item may be called from many goroutines at once
+(`key()`, accumulators, `new-each-time="no"` functions and lazy globals
+included). Two cases are outside that:
+- **Goroutines started during the transform.** The lock is only taken after
+  the transform returns, so a Go extension function that starts goroutines
+  which evaluate against the runtime while the transform is still running is
+  not protected. Globals have the same limit.
+- **Function items passed both ways across `fn:transform`.** A nested
+  transform has its own lock. If its function items call into the outer
+  transform's items and are called from them, on two goroutines, the two
+  locks can be taken in opposite order. This needs a function-valued
+  stylesheet parameter passed into `fn:transform`.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 

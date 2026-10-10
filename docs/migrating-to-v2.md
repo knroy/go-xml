@@ -487,6 +487,24 @@ every function item that runs under it. XSLT does both when a transform
 returns, so a function item in its result may be called concurrently, `key()`,
 accumulators and memoised functions included.
 
+## xpath.Context: Position, Size and Depth are int32
+
+`Context` shrinks from 112 to 96 bytes, so every scope change copies less.
+The compiler reports each place an `int` meets one of the three fields:
+
+```go
+// v1
+n := ctx.Position * 2
+ctx.Depth = depth
+
+// v2
+n := int(ctx.Position) * 2
+ctx.Depth = int32(depth)
+```
+
+`WithFocus(item, pos, size int)` keeps its `int` parameters, and `Funcs` is
+unchanged.
+
 ## Not changed
 
 The command-line tool's flags and output, the `xslt`, `xquery` and `relaxng`

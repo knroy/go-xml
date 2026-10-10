@@ -25,6 +25,8 @@ code before and after, and how to run the rewriter on your own module.
 | `xpath.Context.StaticNamespaces` is set only for an expression that reads it | It holds the expression's resolver only where the expression calls or references `fn:format-date`, `format-dateTime`, `format-time` or `function-lookup`; elsewhere it is the caller's, nil at the top level. A host function expands prefixes against a resolver it captured itself ([migrating](docs/migrating-to-v2.md#staticnamespaces-only-where-an-expression-reads-them)). | d5a980b6 |
 | XSLT global variables are evaluated on first use | A global nothing reads is not evaluated, so its failure is not reported (XSLT 3.0 §2.14 allows this); one with `xsl:message`, `xsl:assert`, `xsl:result-document` or `fn:trace` in its own body is still evaluated at the start, and every error keeps its code and wording ([migrating](docs/migrating-to-v2.md#global-variables-are-evaluated-on-first-use)). | 7c5121ca |
 | `xsd.ValidateOptions.Annotate` removed; `Validate` and its siblings only check | A typed tree comes from `ValidateCopy`, `ValidateElementLaxCopy`, `ValidateAttributeCopy` or `ValidateAgainstTypeCopy`, which return the copy's counterpart of the node given. There is no in-place annotation (v2's interim `AnnotateInPlace` is gone too): annotating adds attributes and strips whitespace, which a built tree cannot take. | 21105fe |
+| `xpath.Context.Position`, `Size` and `Depth` are `int32` | `Context` is 112 → 96 B, one size class down on every scope change. Convert where an `int` is mixed in: `int(ctx.Position)`; `WithFocus(item, pos, size int)` keeps its signature ([migrating](docs/migrating-to-v2.md#xpathcontext-position-size-and-depth-are-int32)). | 7f6f1689 |
+| `LazyVar.Share` removed; `Context.WithLazyVars(vars, lock)` takes an `*xpath.EvalLock` | The lock a scope of lazy variables shares is now the host's, so a host can guard its other state with the same one; nil makes a fresh lock. Call `lock.Share()` where `LazyVar.Share()` was ([migrating](docs/migrating-to-v2.md#global-variables-are-evaluated-on-first-use)). | fbd4b74a |
 
 ### Added
 
@@ -41,8 +43,18 @@ code before and after, and how to run the rewriter on your own module.
 | `xdmbuild.Builder.AppendCopyOf` | Appends a copy of a node straight into the tree being built: the result of `AppendNode(xdm.Copy(n))` with one copy instead of two. Returns the copy (nil when the node was merged as text), so a caller can give it bindings. | `484cb4e8`, a785e1a4 |
 | `xdmbuild.NSDecl`, `Builder.NoteDeclaredList` | `NoteDeclared` for a list of bindings the builder may keep instead of copying; for a constructor that notes the same bindings on every element it builds. | 2c5ea0b |
 | `xpath.Context.WithStaticHost` | Sets the static host for expressions compiled without one, as `WithStaticBaseURI` does for the base URI. The XSLT runtime sets its top-level package once this way. | d5a980b6 |
-| `xpath.LazyVar`, `xpath.ReadyVar`, `Context.WithLazyVars` | Binds a scope of variables each evaluated on first reference; a reference raises the evaluation's error. After `LazyVar.Share` each is forced once from any goroutine. XSLT globals use it, so a function item returned by a transform may be called concurrently. | 7c5121ca, 03adcab8 |
+| `xpath.LazyVar`, `xpath.ReadyVar`, `Context.WithLazyVars` | Binds a scope of variables each evaluated on first reference; a reference raises the evaluation's error. After its `EvalLock` is shared each is forced once from any goroutine. XSLT globals use it, so a function item returned by a transform may be called concurrently. | 7c5121ca, 03adcab8 |
+| `xpath.EvalLock`, `xpath.EvalLocker` | A re-entrant lock a host shares once its runtime can be reached from other goroutines; before `Share` it costs one atomic load. A host runtime that implements `EvalLocker` has it taken wherever a function item's body enters it. | fbd4b74a |
+| `xdm.Node.SetAssessedTyping` | Writes a node's annotation, primitive and list item type in one call; the validator uses it once per typed node. | 8faf3493 |
+| `xdm.Node.DescendantsInheritBase` | Whether nothing below the node sets its own base URI, so a rebase can stop there. | ae360399 |
 | `xdm.Node.TreeHasTyping` | Whether any node of the node's tree was ever typed; false means the whole tree is untyped. XSLT uses it to skip stripping annotations ([migrating](docs/migrating-to-v2.md#validation-never-writes-to-your-tree)). | 40dbca21 |
+
+### Fixed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| An escaped function item raced on its transform's state | Called from several goroutines after the transform, `key()`, accumulators and memo maps were written concurrently. One re-entrant lock per runtime, shared with the globals, taken once it escapes. | fbd4b74a |
+| A called template or function could read a caller's local named like a global | A local was visible past its frame where a global of its name existed. Locals now live in frames that a call raises. | a0250ddb |
 
 ### Changed — performance
 
@@ -68,6 +80,13 @@ code before and after, and how to run the rewriter on your own module.
 | `xsl:sequence` and `xsl:copy-of` copied a node twice into an open element (V14) | Copied once, straight into the builder. CEN −6.1% bytes, −2.3% CPU; copy-heavy case −49% CPU. | a785e1a4 |
 | Every `Tree` carried 104 B of parse-only fields, and `xsl:attribute` made a fragment per attribute (V15) | Fields behind a pointer (`Tree` 424 → 320 B); no node unless validation assesses it. XRechnung 1 −7.1% bytes, CEN −5.5%. | e62d96db, b22d90cc |
 | A small document's parse allocated three 4 KB read windows (V18) | Windows sized to a reader of known length. Small-document parse −11% bytes, −6% CPU. | 9ddd2bc6 |
+| XSD checked every facet of a type that has none, and typed validation wrote 80 B of names per node (V21, V24, V25, V27, V29) | No-facet chains skip the checks; typing points at shared names (16 B), written once. XSD validate −12% CPU; typed validate −42% bytes, −29% allocations. | 3208c54d, 4e8fa840, 8faf3493, 8e29a38f, d2f1b1b0 |
+| RELAX NG hashed `QName` keys through `sync.Map` and allocated buffers per element (V22, V23) | Typed copy-on-write memos; one child stack and attribute buffer per validation. −23 to −30% CPU, long documents −84% allocations. | ea894387, fb7a15b0 |
+| The tokenizer hashed every name, kept XML 1.1 spans for 1.0 and regrew scratch per window (V28, V34, V37, V48, V50) | Name cache, 1.1-only spans, bounded scratch growth, long strings as own blocks. Parse −5 to −10% CPU; XRechnung stage 1 −16% bytes. | d2d1eb1e, 2dd09c03, 6004f45c, 48db5cc1, 20e3f0f0 |
+| Package init built large tables and regexps every run (V32, V33, V41) | Built on first use, or checked by hand. Init 1,893 → 785 allocations; cold XSD validate −3 to −4%. | c249ce3e, 47db4aa5, 06cf8508 |
+| XQuery rebased whole subtrees and `smallNames` scanned only 8 (V38, V39) | `Rebase` stops where nothing changes; 24 names before the map. XMark q10 −5% CPU, −11% bytes. | ae360399, fb01bf29 |
+| XSLT rebound absent context components, copied base URIs, boxed integers and stripped `doc()` per transform (V43–V51) | Absent bits, base URI on entry, int64 arithmetic, per-stylesheet stripped trees, 96 B context. DocBook −14% CPU, −17% bytes; Peppol −13% CPU. | cf948ed9, 1e976a35, bd28fa9e, 496f46af, 71d73165, f51ebda6, 7f6f1689 |
+| Every XSLT local and parameter made a context scope (V17) | One name-addressed stack per transform, frames per call. DocBook −5.8% CPU, −8.7% bytes. | a0250ddb |
 
 ## Unreleased
 
