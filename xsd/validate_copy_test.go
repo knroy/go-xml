@@ -470,3 +470,28 @@ func TestTypedCopyDefaultsInOrder(t *testing.T) {
 		t.Errorf("typed copy\n  got  %s\n  want %s", b.String(), want)
 	}
 }
+
+// TestTypedCopyAnnotationMemo pins the per-type annotation memo: a second
+// typed copy, written from the memo, carries every property the first,
+// written while the memo was filled, does.
+func TestTypedCopyAnnotationMemo(t *testing.T) {
+	s := loadAssertionSchema(t, copySchema)
+	doc := copyDoc("100", `<n xsi:nil="true"/>`, "1")
+	first, err := s.ValidateCopy(parseCopyDoc(t, doc).Root, ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.ValidateCopy(parseCopyDoc(t, doc).Root, ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameTree(t, "first vs memoised copy", first, second)
+	nums := pickCopyTarget(second, "nums")
+	if got := xdm.TypingOf(nums); got.TypeAnnotation != "{urn:t}l" || got.ListItem != "integer" ||
+		nums.TypeEnv() != s.TypeEnv() {
+		t.Errorf("nums typing %+v, env %p", got, nums.TypeEnv())
+	}
+	if r := second.FirstChild(); !r.NoTypedValue() || r.TypeAnnotation() != "anyType" {
+		t.Errorf("r: no typed value %v, annotation %q", r.NoTypedValue(), r.TypeAnnotation())
+	}
+}

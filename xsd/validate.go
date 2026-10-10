@@ -2217,37 +2217,60 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 	// sequence and MIXED content the string value as xs:untypedAtomic; both
 	// atomize without error, and marking either would turn a defined value
 	// into an error.
-	if ct, ok := typ.(*ComplexType); ok && ct != nil &&
-		ct.Content == ContentElementOnly {
-		t := xdm.TypingOf(el)
-		t.NoTypedValue = true
-		el.ApplyTyping(t)
-	}
+	//
 	// Mixed content is recorded for the serializers, which must not indent
 	// it (Serialization 3.1 §5.1.4); the annotation of an anonymous mixed
 	// type is "anyType" and cannot say so. xs:anyType itself is mixed too,
 	// but the same section lets its content be indented, so it is left out.
-	if ct, ok := typ.(*ComplexType); ok && ct != nil &&
-		ct.Content == ContentMixed && ct.Name != xsName("anyType") {
-		t := xdm.TypingOf(el)
-		t.MixedContent = true
-		el.ApplyTyping(t)
-	}
-	if n := typ.TypeName(); n.Local != "" {
-		v.schema.setResolvedAnnotation(el, xdm.AnnotationName(n.URI, n.Local), typ)
+	//
+	// Both are facts about the type, so annotationFor computes them with the
+	// annotation and the node is written once.
+	a := v.schema.annotationFor(typ)
+	if a.name == "" {
+		// Only a complex type sets either flag, and a complex type always
+		// has an annotation, so there is nothing to write.
 		return
 	}
-	if a := annotationName(typ); a != "" {
-		v.schema.setResolvedAnnotation(el, a, typ)
-		return
+	el.SetAssessedTyping(a.name, a.prim, a.item, v.schema.typeEnv, a.noTypedValue, a.mixed)
+}
+
+// typeAnnotation is what a type annotates a node with: the annotation name,
+// its meaning (see resolveAnnotationMeaning) and the two content flags
+// annotate records. Every field is fixed once the schema is loaded.
+type typeAnnotation struct {
+	name, prim, item    string
+	noTypedValue, mixed bool
+}
+
+// annotationFor returns t's typeAnnotation, memoised on the schema: building
+// the name of a type in a namespace allocates, and annotate asked for it on
+// every element and attribute of a typed copy.
+//
+//   - a named type annotates with its own name;
+//   - an anonymous simple type with its nearest named base (annotationName);
+//   - an anonymous complex type with its nearest named base, ordinarily
+//     xs:anyType (anonComplexAnnotation), whose meaning, having element-only
+//     or mixed content, resolves to nothing and correctly leaves the
+//     resolved fields empty.
+func (s *Schema) annotationFor(t Type) *typeAnnotation {
+	if a, ok := s.annotations.Load(t); ok {
+		return a.(*typeAnnotation)
 	}
-	if a := anonComplexAnnotation(typ); a != "" {
-		// An anonymous COMPLEX type annotates with a named ancestor's name,
-		// so the meaning recorded is that of typ itself -- which, having
-		// element-only or mixed content, resolves to nothing and correctly
-		// leaves the resolved fields empty.
-		v.schema.setResolvedAnnotation(el, a, typ)
+	a := &typeAnnotation{}
+	if n := t.TypeName(); n.Local != "" {
+		a.name = xdm.AnnotationName(n.URI, n.Local)
+	} else if a.name = annotationName(t); a.name == "" {
+		a.name = anonComplexAnnotation(t)
 	}
+	if a.name != "" {
+		a.prim, a.item = resolveAnnotationMeaning(a.name, t)
+	}
+	if ct, ok := t.(*ComplexType); ok && ct != nil {
+		a.noTypedValue = ct.Content == ContentElementOnly
+		a.mixed = ct.Content == ContentMixed && ct.Name != xsName("anyType")
+	}
+	s.annotations.Store(t, a)
+	return a
 }
 
 // anonComplexAnnotation returns the annotation name for an anonymous complex

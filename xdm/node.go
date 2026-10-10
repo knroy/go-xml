@@ -901,6 +901,22 @@ func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem 
 	t.listItem = listItem
 }
 
+// SetAssessedTyping is SetTypeAnnotationResolved followed by SetTypeEnv, and
+// turns NoTypedValue and MixedContent on when asked, in one write: the shape
+// in which schema assessment annotates a node. annotation must not be "".
+func (n *Node) SetAssessedTyping(annotation, derivedPrimitive, listItem string,
+	env *TypeEnvironment, noTypedValue, mixedContent bool) {
+	t := n.ownTyping()
+	t.annotation = annotation
+	if isID, isRefs := annotationIDKind(annotation); isID || isRefs {
+		t.isID = t.isID || isID
+		t.isIDREFS = t.isIDREFS || isRefs
+	}
+	t.derivedPrimitive, t.listItem, t.env = derivedPrimitive, listItem, env
+	t.noTypedValue = t.noTypedValue || noTypedValue
+	t.mixedContent = t.mixedContent || mixedContent
+}
+
 // CopyTypingFrom copies every PSVI property of src onto n, so that the copy
 // answers each of them exactly as the original does.
 //
