@@ -29,6 +29,11 @@ type Stylesheet struct {
 	stripMu   sync.RWMutex
 	stripMemo map[stripKey]bool
 
+	// stripped holds the whitespace-stripped copies of fn:doc trees across
+	// transforms, under strippedMu; see Stylesheet.strippedTree.
+	strippedMu sync.Mutex
+	stripped   map[weakStrippedKey]*xdm.Tree
+
 	// templates are the match templates, pre-sorted by descending priority so
 	// that selection is a linear scan that stops at the first match.
 	templates []*Template
