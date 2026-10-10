@@ -3,6 +3,7 @@ package xslt
 import (
 	"fmt"
 
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -223,6 +224,9 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 		// declares $x twice, once before each of two xsl:on-non-empty
 		// instructions, and expects each to see its own.
 		rt *runtime
+		// locals is how many locals were bound there; the ones bound since
+		// are taken off the stack while it runs.
+		locals int
 	}
 	var (
 		r       xdm.Sequence
@@ -242,7 +246,15 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 		for i := len(l) - 1; i >= 0; i-- {
 			p := l[i]
 			sub := newOutputBuilder(rt)
-			if err := p.instr.Execute(p.rt, sub); err != nil {
+			var later *xpathleaf.Locals
+			if st := rt.localStack(); st != nil {
+				later = st.Detach(p.locals)
+			}
+			err := p.instr.Execute(p.rt, sub)
+			if later != nil {
+				rt.localStack().Reattach(later)
+			}
+			if err != nil {
 				return err
 			}
 			items := sub.Sequence()
@@ -271,7 +283,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 			if err != nil {
 				return err
 			}
-			rt = rt.withVar(v.v.Name, val)
+			rt = rt.bindLocal(v.v.Name, val)
 			continue
 		}
 
@@ -284,7 +296,8 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 				}
 				r = append(r, sub.Sequence()...)
 			} else {
-				l = append(l, pending{instr: ci, at: len(r), rt: rt})
+				l = append(l, pending{instr: ci, at: len(r), rt: rt,
+					locals: rt.localsMark()})
 			}
 			continue
 

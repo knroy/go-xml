@@ -431,8 +431,16 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 	return nil
 }
 
-// runTemplate executes a template with the supplied parameters.
+// runTemplate executes a template with the supplied parameters, in a frame
+// of its own (see locals.go).
 func runTemplate(rt *runtime, t *Template,
+	params map[string]xdm.Sequence, tunnels map[string]xdm.Sequence,
+	out *outputBuilder) error {
+	defer rt.leaveFrame(rt.enterFrame())
+	return runTemplateBody(rt, t, params, tunnels, out)
+}
+
+func runTemplateBody(rt *runtime, t *Template,
 	params map[string]xdm.Sequence, tunnels map[string]xdm.Sequence,
 	out *outputBuilder) error {
 
@@ -510,7 +518,7 @@ func runTemplate(rt *runtime, t *Template,
 				if err != nil {
 					return err
 				}
-				sub = sub.withVar(p.Name, v)
+				sub = sub.bindLocal(p.Name, v)
 				continue
 			}
 		} else if v, ok := sub.tunnel[key]; ok {
@@ -518,7 +526,7 @@ func runTemplate(rt *runtime, t *Template,
 			if err != nil {
 				return err
 			}
-			sub = sub.withVar(p.Name, v)
+			sub = sub.bindLocal(p.Name, v)
 			continue
 		}
 		if p.Required {
@@ -558,7 +566,7 @@ func runTemplate(rt *runtime, t *Template,
 			}
 			return err
 		}
-		sub = sub.withVar(p.Name, val)
+		sub = sub.bindLocal(p.Name, val)
 	}
 
 	if t.asType == nil {
@@ -717,7 +725,10 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		}
 	}
 
-	sub := rt
+	// The body is a frame of its own, and sees the globals but nothing bound
+	// where it was called.
+	defer rt.leaveFrame(rt.enterFrame())
+	sub := rt.globalBindings()
 	for i, p := range f.params {
 		// A declared parameter type converts the argument. Without this a
 		// parameter declared "as=xs:decimal?" receives an untypedAtomic and
@@ -733,7 +744,7 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		if err != nil {
 			return nil, err
 		}
-		sub = sub.withVar(p.Name, v)
+		sub = sub.bindLocal(p.Name, v)
 	}
 	// A function body has no context item: referring to "." inside one is an
 	// error, which is what stops functions from depending on hidden state.

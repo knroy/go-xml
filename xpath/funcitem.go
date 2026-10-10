@@ -242,7 +242,7 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	// has no context item, position or size, so "." inside one is XPDY0002
 	// even where the expression that wrote it had a focus. Variables are
 	// captured; the focus is deliberately dropped.
-	noFocus := *ctx
+	noFocus := *frozenLocals(ctx)
 	noFocus.Item, noFocus.Position, noFocus.Size = nil, 0, 0
 	captured := &noFocus
 	item := &xdm.FunctionItem{

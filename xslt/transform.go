@@ -444,6 +444,9 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	if rt.globalVar != nil {
 		defer rt.globalVar.Share()
 	}
+	// For the same reason, such a call binds its locals with WithVar rather
+	// than on this transform's stack (see locals.go).
+	defer rt.finishLocals()
 	rt.readDocs = &readDocs
 	rt.writtenDocs = &writtenDocs
 	// Bind the runtime so key(), current() and xsl:function can reach it.
