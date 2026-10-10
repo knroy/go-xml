@@ -557,6 +557,15 @@ _f0=$failed
 $GO vet ./... || fail "vet"
 laneFromStatus vet "$_f0" "go vet ./..."
 
+# The CI job's 32-bit vet: no runner is 32-bit, so this is the only check that
+# an int-sized constant or conversion still compiles there.
+section "vet 32-bit"
+_f0=$failed
+for _t in linux/386 linux/arm windows/386; do
+	CGO_ENABLED=0 GOOS=${_t%/*} GOARCH=${_t#*/} $GO vet ./... || fail "vet $_t"
+done
+laneFromStatus vet32 "$_f0" "go vet ./... for linux/386, linux/arm, windows/386"
+
 # gofmt, as the CI job runs it. CI's own step is the authority; this lane exists
 # because the gate once passed with two unformatted files that CI then refused.
 # Tracked files only: `gofmt -l .` here would also walk .claude/worktrees.
