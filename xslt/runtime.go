@@ -900,6 +900,11 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// globals first left such a call reporting that it was made outside a
 	// transform.
 	rt.ctx = bindRuntime(rt.ctx, rt)
+	// Nothing has bound a merge, grouping or regex component yet, so each
+	// is already absent: the clears every template and function call makes
+	// then return the runtime unchanged.
+	rt.absent = absentMerge | absentGrouping | absentRegex
+	setUnbound(rt.ctx, rt.absent)
 
 	if err := rt.evalGlobals(s, opts); err != nil {
 		return nil, err
