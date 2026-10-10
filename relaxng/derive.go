@@ -345,15 +345,11 @@ func (pb *patBuilder) oneOrMore(p pattern) pattern {
 // one recursion handle arbitrary nesting.
 func (pb *patBuilder) startTagOpenDeriv(p pattern, name xdm.QName) pattern {
 	if r, ok := p.(*refPat); ok {
-		if d, ok := r.open.Load(name); ok {
-			return d.(pattern)
+		if d, ok := r.open.load(name); ok {
+			return d
 		}
 		d := pb.startTagOpenDeriv(expand(r), name)
-		// ponytail: per-definition cap, not a global LRU; enough for any
-		// real vocabulary, and past it the derivative is simply recomputed.
-		if r.openN.Add(1) <= maxOpenMemo {
-			r.open.Store(name, d)
-		}
+		r.open.store(name, d)
 		return d
 	}
 	switch t := expand(p).(type) {
@@ -390,7 +386,9 @@ func (pb *patBuilder) startTagOpenDeriv(p pattern, name xdm.QName) pattern {
 	return notAllowedPat{}
 }
 
-// maxOpenMemo bounds refPat.open per definition.
+// maxOpenMemo bounds each nameMemo.
+// ponytail: per-definition cap, not a global LRU; enough for any real
+// vocabulary, and past it the derivative is simply recomputed.
 const maxOpenMemo = 1024
 
 // expand resolves a refPat to the pattern it stands for.
@@ -446,19 +444,17 @@ func (pb *patBuilder) attDeriv(p pattern, a attr, ctx nsContext) pattern {
 			return notAllowedPat{}
 		}
 		if s := r.static; s != nil {
-			if b, ok := s.att.Load(a.name); ok && b.(*patBox).p != nil {
-				return b.(*patBox).p
+			if d, ok := s.att.load(a.name); ok && d != nil {
+				return d
 			} else if ok {
 				return pb.attDeriv(r.cached, a, ctx)
 			}
 			d := pb.attDeriv(r.cached, a, ctx)
-			if s.attN.Add(1) <= maxOpenMemo {
-				b := &patBox{}
-				if anyValueFor(r.cached, a.name, nil) {
-					b.p = d
-				}
-				s.att.Store(a.name, b)
+			keep := d
+			if !anyValueFor(r.cached, a.name, nil) {
+				keep = nil
 			}
+			s.att.store(a.name, keep)
 			return d
 		}
 	}
