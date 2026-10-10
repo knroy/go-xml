@@ -472,7 +472,7 @@ func (p *Pattern) matches(node *xdm.Node, ctx *xpath.Context, recovered *error) 
 		// pattern. A pattern is matched against candidate nodes at moments
 		// that have nothing to do with which result tree is being written,
 		// and current-output-uri-008 asserts the absence directly.
-		ctx = ctx.WithVar(outputURIVar, xdm.Empty())
+		ctx = withoutOutputURI(ctx)
 	}
 	for _, g := range p.general {
 		ok, err := g.matches(node, ctx)

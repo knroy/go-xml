@@ -764,7 +764,7 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	}
 	// Section 24.3: the current output URI is cleared while a stylesheet
 	// function's body is evaluated.
-	sub.ctx = sub.ctx.WithVar(outputURIVar, xdm.Empty())
+	sub = sub.withOutputURI("")
 
 	out := newOutputBuilder(rt)
 	if err := execSequence(f.body, sub, out); err != nil {

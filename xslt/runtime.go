@@ -27,8 +27,8 @@ type runtime struct {
 	ctx *xpath.Context
 
 	// absent records which groups of context components clearMergeContext,
-	// withoutGroupingScope and clearRegexGroups have already bound to absent
-	// in ctx, so that the clears every template and function call runs can
+	// withoutGroupingScope, clearRegexGroups and withOutputURI have already
+	// bound to absent in ctx (or that nothing has bound yet), so that the clears every template and function call runs can
 	// return rt unchanged instead of copying the runtime and the context
 	// three times each. withVar drops a group's bit whenever one of its
 	// variables is rebound, and the zero value claims nothing: code that
@@ -388,6 +388,7 @@ const (
 	absentMerge uint8 = 1 << iota
 	absentGrouping
 	absentRegex
+	absentOutputURI
 )
 
 // absentGroupOf names the group a variable belongs to, or 0.
@@ -399,6 +400,8 @@ func absentGroupOf(name xdm.QName) uint8 {
 		return absentGrouping
 	case regexGroupsVar:
 		return absentRegex
+	case outputURIVar:
+		return absentOutputURI
 	}
 	return 0
 }
@@ -900,10 +903,10 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// globals first left such a call reporting that it was made outside a
 	// transform.
 	rt.ctx = bindRuntime(rt.ctx, rt)
-	// Nothing has bound a merge, grouping or regex component yet, so each
-	// is already absent: the clears every template and function call makes
-	// then return the runtime unchanged.
-	rt.absent = absentMerge | absentGrouping | absentRegex
+	// Nothing has bound a merge, grouping, regex or output-URI component
+	// yet, so every one of them is already absent: the clears every
+	// template and function call makes then return the runtime unchanged.
+	rt.absent = absentMerge | absentGrouping | absentRegex | absentOutputURI
 	setUnbound(rt.ctx, rt.absent)
 
 	if err := rt.evalGlobals(s, opts); err != nil {

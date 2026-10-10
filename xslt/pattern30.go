@@ -495,7 +495,7 @@ func (p *Pattern) matchesAtomicItem(item xdm.Item, ctx *xpath.Context) (bool, er
 	// value. Pattern.Matches does the same for the node case;
 	// current-output-uri-008 matches atomic values with
 	// group-starting-with and needs both.
-	ctx = ctx.WithVar(outputURIVar, xdm.Empty())
+	ctx = withoutOutputURI(ctx)
 	for _, g := range p.general {
 		ok, err := g.matchesAtomic(item, ctx)
 		if err != nil {
