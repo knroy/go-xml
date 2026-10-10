@@ -1137,7 +1137,7 @@ func ignoredTopLevel(ch *xdm.Node) bool {
 	if inPackage(ch) {
 		return false
 	}
-	if _, known := xsltElements[ch.Name().Local]; !known {
+	if _, known := xsltElements()[ch.Name().Local]; !known {
 		return true
 	}
 	return !xsltDeclarations[ch.Name().Local]

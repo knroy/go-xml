@@ -1,5 +1,7 @@
 package xslt
 
+import "sync"
+
 // The XSLT element grammar, transcribed by hand from the element syntax
 // summaries of the XSLT 3.0 Recommendation, which section 2.2 makes
 // normative.
@@ -107,809 +109,811 @@ var componentKinds = []string{
 }
 
 // xsltElements is the grammar, keyed by local name.
-var xsltElements = map[string]elementDef{
-	"stylesheet": {attrs: map[string]attrDef{
-		"id":                         {},
-		"extension-element-prefixes": {},
-		"exclude-result-prefixes":    {},
-		"version":                    {required: true},
-		"xpath-default-namespace":    {},
-		"default-validation":         {values: []string{"preserve", "strip"}},
-		"default-collation":          {},
-		"input-type-annotations":     {values: []string{"preserve", "strip", "unspecified"}},
-	}},
-	"package": {since30: true, attrs: map[string]attrDef{
-		"id":                         {},
-		"name":                       {},
-		"package-version":            {},
-		"version":                    {required: true},
-		"declared-modes":             {values: []string{"yes", "no", "true", "false", "1", "0"}},
-		"extension-element-prefixes": {},
-		"exclude-result-prefixes":    {},
-		"xpath-default-namespace":    {},
-		"default-validation":         {values: []string{"preserve", "strip"}},
-		"default-collation":          {},
-		"default-mode":               {},
-		"input-type-annotations":     {values: []string{"preserve", "strip", "unspecified"}},
-		// A working-draft spelling: the Recommendation's xsl:package summary
-		// (section 3.5) has no such attribute; packages are used through the
-		// xsl:use-package child. Listed as removed so that a 3.0 module
-		// naming it is refused rather than tolerated under leniency.
-		"use-package": {removed30: true},
-	}},
-	// The package-composition elements, XSLT 3.0 section 3.5. All carry
-	// since30: an earlier stylesheet using one must be told it is not an
-	// XSLT element, which is what every conforming 2.0 processor says.
-	"use-package": {since30: true, attrs: map[string]attrDef{
-		"name":            {required: true},
-		"package-version": {},
-	}},
-	"expose": {since30: true, attrs: map[string]attrDef{
-		// REC H.1 types @component as xsl:component-kind-type, a closed set
-		// of six tokens. Without it "component=\"accumulator\"" was accepted
-		// and silently exposed nothing; expose-906 and expose-907 are the
-		// suite's "unknown component kind" cases, both XTSE0020.
-		"component": {required: true, values: componentKinds},
-		"names":     {required: true},
-		// The summary (section 3.5.3.1) stops at "abstract"; unlike
-		// xsl:accept's, it carries no "hidden".
-		"visibility": {required: true, values: []string{
-			"public", "private", "final", "abstract"}},
-	}},
-	"accept": {since30: true, attrs: map[string]attrDef{
-		"component": {required: true, values: componentKinds},
-		"names":     {required: true},
-		"visibility": {required: true, values: []string{
-			"public", "private", "final", "abstract", "hidden"}},
-	}},
-	"override": {since30: true, attrs: map[string]attrDef{}},
-	"original": {since30: true, attrs: map[string]attrDef{}},
-	"transform": {attrs: map[string]attrDef{
-		"id":                         {},
-		"extension-element-prefixes": {},
-		"exclude-result-prefixes":    {},
-		"version":                    {required: true},
-		"xpath-default-namespace":    {},
-		"default-validation":         {values: []string{"preserve", "strip"}},
-		"default-collation":          {},
-		"input-type-annotations":     {values: []string{"preserve", "strip", "unspecified"}},
-	}},
-	// xsl:mode is an XSLT 3.0 declaration, and 2.0 has no summary for it.
-	// It is listed here because everything it can say is configuration a
-	// non-streaming XSLT 2.0 processor is free to ignore: streamable="yes"
-	// asks for a streaming evaluation, which the specification always allows
-	// a processor to satisfy by building the tree instead, and the remaining
-	// attributes name defaults that 2.0 already fixes. Rejecting it under
-	// XTSE0010 would refuse a stylesheet whose 2.0 meaning is unambiguous,
-	// so the declaration is accepted and then does nothing. The attributes
-	// are still checked, so a misspelling inside it is not swallowed.
-	"mode": {attrs: map[string]attrDef{
-		"name":                      {},
-		"streamable":                {values: []string{"yes", "no"}},
-		"use-accumulators":          {},
-		"on-no-match":               {values: []string{"deep-copy", "shallow-copy", "deep-skip", "shallow-skip", "text-only-copy", "fail"}},
-		"on-multiple-match":         {values: []string{"use-last", "fail"}},
-		"warning-on-no-match":       {values: []string{"yes", "no"}},
-		"warning-on-multiple-match": {values: []string{"yes", "no"}},
-		// XSLT 3.0 section 6.6: @typed says whether the mode expects typed
-		// input. "lax" and "strict" join the booleans, so the vocabulary is
-		// not the plain yes/no one.
-		"typed": {values: []string{"yes", "no", "true", "false", "1", "0", "lax", "strict", "unspecified"}},
-		// A mode declaration's visibility is drawn from the package
-		// vocabulary minus "abstract": a mode has no signature to leave
-		// unimplemented. "hidden" is not declared either: the summary gives
-		// "public" | "private" | "final", and hidden is a visibility a
-		// component acquires through xsl:accept or xsl:expose.
-		"visibility": {values: []string{"public", "private", "final"}},
-	}},
-	"include": {attrs: map[string]attrDef{
-		"href": {required: true},
-	}},
-	"import": {attrs: map[string]attrDef{
-		"href": {required: true},
-	}},
-	"import-schema": {attrs: map[string]attrDef{
-		"namespace":       {},
-		"schema-location": {},
-	}},
-	"strip-space": {attrs: map[string]attrDef{
-		"elements": {required: true},
-	}},
-	"preserve-space": {attrs: map[string]attrDef{
-		"elements": {required: true},
-	}},
-	"accumulator": {since30: true, attrs: map[string]attrDef{
-		"name":          {required: true},
-		"initial-value": {required: true},
-		"as":            {},
-		"streamable":    {values: []string{"yes", "no", "true", "false", "1", "0"}},
-		// A working-draft spelling the Recommendation's summary (section
-		// 18.2.1) does not carry: name, initial-value, as and streamable are
-		// the whole signature. accumulator-053's description still mentions
-		// it, but no stylesheet in the suite writes it. Listed as removed so
-		// a 3.0 module naming it is refused rather than dropped in silence.
-		"applies-to": {removed30: true},
-	}},
-	// The summary (section 18.2.1) names three attributes and no more:
-	// match, phase? and select?. @priority was accepted here and is defined
-	// nowhere -- no prose associates it with xsl:accumulator-rule, and no
-	// suite case writes it -- so it silently swallowed a misspelling of
-	// @phase instead of raising XTSE0090.
-	"accumulator-rule": {since30: true, attrs: map[string]attrDef{
-		"match":  {required: true},
-		"phase":  {values: []string{"start", "end"}},
-		"select": {},
-	}},
-	"template": {attrs: map[string]attrDef{
-		"match":    {},
-		"name":     {},
-		"priority": {},
-		"mode":     {},
-		"as":       {},
-		// XSLT 3.0 section 3.5: a package declaration states whether it is
-		// visible outside the package. Accepted and ignored — this processor
-		// compiles a package as a stylesheet, where everything is visible.
-		// The summary (section 6.1) stops at "abstract": hidden is acquired
-		// through xsl:accept or xsl:expose, never declared.
-		"visibility": {since30: true, values: []string{"public", "private", "final", "abstract"}},
-	}},
-	"apply-templates": {attrs: map[string]attrDef{
-		"select": {},
-		"mode":   {},
-	}},
-	"apply-imports": {attrs: map[string]attrDef{}},
-	"next-match":    {attrs: map[string]attrDef{}},
-	"for-each": {attrs: map[string]attrDef{
-		"select": {required: true},
-	}},
-	"if": {attrs: map[string]attrDef{
-		"test": {required: true},
-	}},
-	"choose": {attrs: map[string]attrDef{}},
-	"when": {attrs: map[string]attrDef{
-		"test": {required: true},
-	}},
-	"otherwise": {attrs: map[string]attrDef{}},
-	// static marks a declaration whose value is computed before the
-	// stylesheet is analysed; see static.go. It is meaningful only on a
-	// top-level declaration, and 9.5 makes it XTSE0020 anywhere else — a
-	// rule the element grammar cannot state, since it does not know where in
-	// the tree the element sits, so it is checked with the other static
-	// errors.
-	"variable": {attrs: map[string]attrDef{
-		"name":   {required: true},
-		"select": {},
-		"as":     {},
-		"static": {since30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
-		// 9.1's signature carries visibility; 9.2's for xsl:param does not,
-		// which is why the two entries differ. Where the declaration may
-		// appear is varparamattrs.go's rule, not the table's. The summary
-		// (section 9.1) stops at "abstract": hidden is acquired through
-		// xsl:accept or xsl:expose, never declared.
-		"visibility": {since30: true, values: []string{"public", "private", "final", "abstract"}},
-	}},
-	"param": {attrs: map[string]attrDef{
-		"name":     {required: true},
-		"select":   {},
-		"as":       {},
-		"required": {values: []string{"yes", "no"}},
-		"tunnel":   {values: []string{"yes", "no"}},
-		// export is not in 9.2's signature -- the summary reads
-		// "<xsl:param name = eqname select? = expression as? = sequence-type
-		// required? = boolean tunnel? = boolean static? = boolean>" -- so it
-		// is a spelling from an earlier working draft, listed as removed for
-		// the reason bind-group is below.
+var xsltElements = sync.OnceValue(func() map[string]elementDef {
+	return map[string]elementDef{
+		"stylesheet": {attrs: map[string]attrDef{
+			"id":                         {},
+			"extension-element-prefixes": {},
+			"exclude-result-prefixes":    {},
+			"version":                    {required: true},
+			"xpath-default-namespace":    {},
+			"default-validation":         {values: []string{"preserve", "strip"}},
+			"default-collation":          {},
+			"input-type-annotations":     {values: []string{"preserve", "strip", "unspecified"}},
+		}},
+		"package": {since30: true, attrs: map[string]attrDef{
+			"id":                         {},
+			"name":                       {},
+			"package-version":            {},
+			"version":                    {required: true},
+			"declared-modes":             {values: []string{"yes", "no", "true", "false", "1", "0"}},
+			"extension-element-prefixes": {},
+			"exclude-result-prefixes":    {},
+			"xpath-default-namespace":    {},
+			"default-validation":         {values: []string{"preserve", "strip"}},
+			"default-collation":          {},
+			"default-mode":               {},
+			"input-type-annotations":     {values: []string{"preserve", "strip", "unspecified"}},
+			// A working-draft spelling: the Recommendation's xsl:package summary
+			// (section 3.5) has no such attribute; packages are used through the
+			// xsl:use-package child. Listed as removed so that a 3.0 module
+			// naming it is refused rather than tolerated under leniency.
+			"use-package": {removed30: true},
+		}},
+		// The package-composition elements, XSLT 3.0 section 3.5. All carry
+		// since30: an earlier stylesheet using one must be told it is not an
+		// XSLT element, which is what every conforming 2.0 processor says.
+		"use-package": {since30: true, attrs: map[string]attrDef{
+			"name":            {required: true},
+			"package-version": {},
+		}},
+		"expose": {since30: true, attrs: map[string]attrDef{
+			// REC H.1 types @component as xsl:component-kind-type, a closed set
+			// of six tokens. Without it "component=\"accumulator\"" was accepted
+			// and silently exposed nothing; expose-906 and expose-907 are the
+			// suite's "unknown component kind" cases, both XTSE0020.
+			"component": {required: true, values: componentKinds},
+			"names":     {required: true},
+			// The summary (section 3.5.3.1) stops at "abstract"; unlike
+			// xsl:accept's, it carries no "hidden".
+			"visibility": {required: true, values: []string{
+				"public", "private", "final", "abstract"}},
+		}},
+		"accept": {since30: true, attrs: map[string]attrDef{
+			"component": {required: true, values: componentKinds},
+			"names":     {required: true},
+			"visibility": {required: true, values: []string{
+				"public", "private", "final", "abstract", "hidden"}},
+		}},
+		"override": {since30: true, attrs: map[string]attrDef{}},
+		"original": {since30: true, attrs: map[string]attrDef{}},
+		"transform": {attrs: map[string]attrDef{
+			"id":                         {},
+			"extension-element-prefixes": {},
+			"exclude-result-prefixes":    {},
+			"version":                    {required: true},
+			"xpath-default-namespace":    {},
+			"default-validation":         {values: []string{"preserve", "strip"}},
+			"default-collation":          {},
+			"input-type-annotations":     {values: []string{"preserve", "strip", "unspecified"}},
+		}},
+		// xsl:mode is an XSLT 3.0 declaration, and 2.0 has no summary for it.
+		// It is listed here because everything it can say is configuration a
+		// non-streaming XSLT 2.0 processor is free to ignore: streamable="yes"
+		// asks for a streaming evaluation, which the specification always allows
+		// a processor to satisfy by building the tree instead, and the remaining
+		// attributes name defaults that 2.0 already fixes. Rejecting it under
+		// XTSE0010 would refuse a stylesheet whose 2.0 meaning is unambiguous,
+		// so the declaration is accepted and then does nothing. The attributes
+		// are still checked, so a misspelling inside it is not swallowed.
+		"mode": {attrs: map[string]attrDef{
+			"name":                      {},
+			"streamable":                {values: []string{"yes", "no"}},
+			"use-accumulators":          {},
+			"on-no-match":               {values: []string{"deep-copy", "shallow-copy", "deep-skip", "shallow-skip", "text-only-copy", "fail"}},
+			"on-multiple-match":         {values: []string{"use-last", "fail"}},
+			"warning-on-no-match":       {values: []string{"yes", "no"}},
+			"warning-on-multiple-match": {values: []string{"yes", "no"}},
+			// XSLT 3.0 section 6.6: @typed says whether the mode expects typed
+			// input. "lax" and "strict" join the booleans, so the vocabulary is
+			// not the plain yes/no one.
+			"typed": {values: []string{"yes", "no", "true", "false", "1", "0", "lax", "strict", "unspecified"}},
+			// A mode declaration's visibility is drawn from the package
+			// vocabulary minus "abstract": a mode has no signature to leave
+			// unimplemented. "hidden" is not declared either: the summary gives
+			// "public" | "private" | "final", and hidden is a visibility a
+			// component acquires through xsl:accept or xsl:expose.
+			"visibility": {values: []string{"public", "private", "final"}},
+		}},
+		"include": {attrs: map[string]attrDef{
+			"href": {required: true},
+		}},
+		"import": {attrs: map[string]attrDef{
+			"href": {required: true},
+		}},
+		"import-schema": {attrs: map[string]attrDef{
+			"namespace":       {},
+			"schema-location": {},
+		}},
+		"strip-space": {attrs: map[string]attrDef{
+			"elements": {required: true},
+		}},
+		"preserve-space": {attrs: map[string]attrDef{
+			"elements": {required: true},
+		}},
+		"accumulator": {since30: true, attrs: map[string]attrDef{
+			"name":          {required: true},
+			"initial-value": {required: true},
+			"as":            {},
+			"streamable":    {values: []string{"yes", "no", "true", "false", "1", "0"}},
+			// A working-draft spelling the Recommendation's summary (section
+			// 18.2.1) does not carry: name, initial-value, as and streamable are
+			// the whole signature. accumulator-053's description still mentions
+			// it, but no stylesheet in the suite writes it. Listed as removed so
+			// a 3.0 module naming it is refused rather than dropped in silence.
+			"applies-to": {removed30: true},
+		}},
+		// The summary (section 18.2.1) names three attributes and no more:
+		// match, phase? and select?. @priority was accepted here and is defined
+		// nowhere -- no prose associates it with xsl:accumulator-rule, and no
+		// suite case writes it -- so it silently swallowed a misspelling of
+		// @phase instead of raising XTSE0090.
+		"accumulator-rule": {since30: true, attrs: map[string]attrDef{
+			"match":  {required: true},
+			"phase":  {values: []string{"start", "end"}},
+			"select": {},
+		}},
+		"template": {attrs: map[string]attrDef{
+			"match":    {},
+			"name":     {},
+			"priority": {},
+			"mode":     {},
+			"as":       {},
+			// XSLT 3.0 section 3.5: a package declaration states whether it is
+			// visible outside the package. Accepted and ignored — this processor
+			// compiles a package as a stylesheet, where everything is visible.
+			// The summary (section 6.1) stops at "abstract": hidden is acquired
+			// through xsl:accept or xsl:expose, never declared.
+			"visibility": {since30: true, values: []string{"public", "private", "final", "abstract"}},
+		}},
+		"apply-templates": {attrs: map[string]attrDef{
+			"select": {},
+			"mode":   {},
+		}},
+		"apply-imports": {attrs: map[string]attrDef{}},
+		"next-match":    {attrs: map[string]attrDef{}},
+		"for-each": {attrs: map[string]attrDef{
+			"select": {required: true},
+		}},
+		"if": {attrs: map[string]attrDef{
+			"test": {required: true},
+		}},
+		"choose": {attrs: map[string]attrDef{}},
+		"when": {attrs: map[string]attrDef{
+			"test": {required: true},
+		}},
+		"otherwise": {attrs: map[string]attrDef{}},
+		// static marks a declaration whose value is computed before the
+		// stylesheet is analysed; see static.go. It is meaningful only on a
+		// top-level declaration, and 9.5 makes it XTSE0020 anywhere else — a
+		// rule the element grammar cannot state, since it does not know where in
+		// the tree the element sits, so it is checked with the other static
+		// errors.
+		"variable": {attrs: map[string]attrDef{
+			"name":   {required: true},
+			"select": {},
+			"as":     {},
+			"static": {since30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+			// 9.1's signature carries visibility; 9.2's for xsl:param does not,
+			// which is why the two entries differ. Where the declaration may
+			// appear is varparamattrs.go's rule, not the table's. The summary
+			// (section 9.1) stops at "abstract": hidden is acquired through
+			// xsl:accept or xsl:expose, never declared.
+			"visibility": {since30: true, values: []string{"public", "private", "final", "abstract"}},
+		}},
+		"param": {attrs: map[string]attrDef{
+			"name":     {required: true},
+			"select":   {},
+			"as":       {},
+			"required": {values: []string{"yes", "no"}},
+			"tunnel":   {values: []string{"yes", "no"}},
+			// export is not in 9.2's signature -- the summary reads
+			// "<xsl:param name = eqname select? = expression as? = sequence-type
+			// required? = boolean tunnel? = boolean static? = boolean>" -- so it
+			// is a spelling from an earlier working draft, listed as removed for
+			// the reason bind-group is below.
+			//
+			// It was previously accepted and ignored, because the one suite file
+			// that writes it, iterate-024, exists to pin the XTSE0010 for an
+			// xsl:on-completion misplaced further down, and the attribute sweep
+			// reported XTSE0090 before the walk ever reached it. That was a
+			// check-ordering defect, not a reason to tolerate a withdrawn
+			// attribute: the placement rule is now read off the tree ahead of
+			// the grammar sweep, so the structural error wins and the attribute
+			// can be refused. See checkIteratePlacement in iterate_static.go.
+			"export": {removed30: true},
+			// processor30, not since30: a static parameter is supplied by the
+			// caller, so whether one may be declared follows the processor the
+			// caller is driving rather than the module's own @version.
+			// function-1025 declares one in a version="2.0" module and is scoped
+			// XSLT30+, the same shape as function-1032's new-each-time above.
+			"static": {
+				processor30: true,
+				values:      []string{"yes", "no", "true", "false", "1", "0"},
+			},
+		}},
+		"call-template": {attrs: map[string]attrDef{
+			"name": {required: true},
+		}},
+		"with-param": {attrs: map[string]attrDef{
+			"name":   {required: true},
+			"select": {},
+			"as":     {},
+			"tunnel": {values: []string{"yes", "no"}},
+		}},
+		"attribute-set": {attrs: map[string]attrDef{
+			"name":               {required: true},
+			"use-attribute-sets": {},
+			// Both are 3.0 additions to the element's syntax summary (§10.2).
+			// Listing @streamable is what makes si-lre-906's streamable="Yes"
+			// an XTSE0020: the capitalised spelling is not one of the six
+			// xsl:yes-or-no values, and with no entry here it was never checked.
+			"visibility": {processor30: true, values: []string{
+				"public", "private", "final", "abstract"}},
+			"streamable": {processor30: true, values: []string{
+				"yes", "no", "true", "false", "1", "0"}},
+		}},
+		"function": {attrs: map[string]attrDef{
+			"name": {required: true},
+			"as":   {},
+			// A 2.0 attribute, so the 2.0 pair: allowsBoolAliases admits the
+			// other four spellings in a 3.0 module.
+			"override": {values: []string{"yes", "no"}},
+			// Both are 3.0 additions that the table had never listed, which went
+			// unnoticed while an unknown attribute on a version="3.0" module was
+			// silently dropped: they were ignored rather than refused, and
+			// ignoring them is indistinguishable from accepting them. @visibility
+			// is section 10.3's component visibility; @streamability is
+			// 19.8.7's declared classification, which the W3C suite writes in
+			// seventy files.
+			// REC H.1 types xsl:function/@visibility as
+			// xsl:visibility-not-hidden-type, which restricts
+			// xsl:visibility-type by EXCLUDING "hidden": a function cannot be
+			// declared hidden, only made so by xsl:expose.
+			"visibility": {since30: true, values: []string{
+				"public", "private", "final", "abstract"}},
+			// REC H.1 types @streamability as xsl:streamability-type, a UNION of
+			// seven tokens with xsl:EQName-in-namespace -- a processor may name
+			// its own classification by a namespaced EQName. eqnameOK lets such a
+			// name through. It is not an attribute value template: the summary
+			// (section 10.3) writes it without braces, and the suite's
+			// _streamability="{if ($STREAMABLE) then ... }" is a shadow
+			// attribute, expanded by static.go before this table is consulted.
+			"streamability": {since30: true, eqnameOK: true,
+				values: []string{"unclassified", "absorbing", "inspection",
+					"filter", "shallow-descent", "deep-descent", "ascent"}},
+			// identity-sensitive is a Last Call draft spelling
+			// (xslt-lcwd30.xml:14648) that the Recommendation's summary at 10.3
+			// no longer carries: its role passed to new-each-time. Listed as
+			// removed so a 3.0 module naming it is refused rather than tolerated.
+			"identity-sensitive": {removed30: true},
+			// 3.0 renamed @override to @override-extension-function and added
+			// @new-each-time, which says whether two calls with the same
+			// arguments may share one result.
+			//
+			// processor30 rather than since30: both say what the *processor* may
+			// do with a call, not what the module's grammar contains, and
+			// function-1032 writes new-each-time in a version="2.0" module scoped
+			// XSLT30+ -- exactly as message-0009 writes terminate="true" there.
+			"override-extension-function": {
+				processor30: true,
+				values:      []string{"yes", "no", "true", "false", "1", "0"},
+			},
+			// "maybe" is the third value, and the default: it leaves the
+			// processor free to reuse a result or not.
+			// REC H.1 types @new-each-time as xsl:yes-or-no-or-maybe, exactly
+			// these seven spellings. It is not an attribute value template: the
+			// suite's _new-each-time="{$new-each-time}" is a shadow attribute,
+			// expanded before this table is consulted.
+			"new-each-time": {
+				processor30: true,
+				values:      []string{"yes", "no", "true", "false", "1", "0", "maybe"},
+			},
+			// @cache is a hint rather than a promise -- 10.3 leaves a processor
+			// free to ignore it -- but a stylesheet writes it where ignoring it
+			// is ruinous. function-1031 computes fib(92) by naive double
+			// recursion, which is some 2^92 calls without memoisation and
+			// finishes instantly with it.
+			//
+			// The Recommendation's summary types it cache? = boolean, and the
+			// suite's schema-for-xslt30.xsd:803 agrees. The Last Call draft's
+			// "full" | "partial" | "no" was withdrawn, so the table no longer
+			// admits those spellings; compile.go reads the hint through
+			// cacheMemoises.
+			"cache": {
+				processor30: true,
+				values:      []string{"yes", "no", "true", "false", "1", "0"},
+			},
+		}},
+		"namespace-alias": {attrs: map[string]attrDef{
+			"stylesheet-prefix": {required: true},
+			"result-prefix":     {required: true},
+		}},
+		"element": {attrs: map[string]attrDef{
+			"name":               {required: true, avt: true},
+			"namespace":          {avt: true},
+			"inherit-namespaces": {values: []string{"yes", "no"}},
+			"use-attribute-sets": {},
+			"type":               {},
+			"validation":         {values: []string{"strict", "lax", "preserve", "strip"}},
+		}},
+		"attribute": {attrs: map[string]attrDef{
+			"name":       {required: true, avt: true},
+			"namespace":  {avt: true},
+			"select":     {},
+			"separator":  {avt: true},
+			"type":       {},
+			"validation": {values: []string{"strict", "lax", "preserve", "strip"}},
+		}},
+		"text": {attrs: map[string]attrDef{
+			"disable-output-escaping": {values: []string{"yes", "no"}},
+		}},
+		"value-of": {attrs: map[string]attrDef{
+			"select":                  {},
+			"separator":               {avt: true},
+			"disable-output-escaping": {values: []string{"yes", "no"}},
+		}},
+		"document": {attrs: map[string]attrDef{
+			"validation": {values: []string{"strict", "lax", "preserve", "strip"}},
+			"type":       {},
+		}},
+		"processing-instruction": {attrs: map[string]attrDef{
+			"name":   {required: true, avt: true},
+			"select": {},
+		}},
+		"namespace": {attrs: map[string]attrDef{
+			"name":   {required: true, avt: true},
+			"select": {},
+		}},
+		"comment": {attrs: map[string]attrDef{
+			"select": {},
+		}},
+		"copy": {attrs: map[string]attrDef{
+			"select":             {since30: true},
+			"copy-namespaces":    {values: []string{"yes", "no"}},
+			"inherit-namespaces": {values: []string{"yes", "no"}},
+			"use-attribute-sets": {},
+			"type":               {},
+			"validation":         {values: []string{"strict", "lax", "preserve", "strip"}},
+		}},
+		"copy-of": {attrs: map[string]attrDef{
+			"select":          {required: true},
+			"copy-namespaces": {values: []string{"yes", "no"}},
+			// XSLT 3.0 section 18.3: the copy carries the accumulator values of
+			// the node it was copied from, which nothing else can supply — the
+			// copy's own tree is all the document the rules would see.
+			"copy-accumulators": {since30: true, values: []string{"yes", "no"}},
+			"type":              {},
+			// REC H.1 types @validation as xsl:validation-type on xsl:copy-of
+			// exactly as on xsl:copy, xsl:element and the rest, which this table
+			// already enumerated -- copy-of alone was left open.
+			"validation": {avt: true, values: []string{
+				"strict", "lax", "preserve", "strip"}},
+		}},
+		// xsl:evaluate is an XSLT 3.0 instruction, listed here for the same reason
+		// xsl:mode is: rejecting it under XTSE0010 is the wrong error at the wrong
+		// moment. Section 10.4 defines it entirely in terms of machinery a 2.0
+		// processor already has — an XPath expression compiled from a string,
+		// against a static context the instruction itself describes — so it can be
+		// supported rather than refused. The suite treats it as reachable from a
+		// version="2.0" stylesheet: system-property-022 and collations-0128 are
+		// both XSLT20+ tests whose subject is a *different* error, or none, and
+		// neither is observable while the element is a static error.
+		// xsl:iterate and its three companions are XSLT 3.0, and are here for the
+		// reason xsl:evaluate is: an XSLT 2.0 processor can execute them exactly,
+		// because section 8.4 defines the loop in terms of a sequence, a
+		// parameter set and two escape hatches, none of which is new machinery.
+		// number-1004 is the case that makes the difference visible — an XSLT 2.0
+		// test whose subject is the XTTE0990 that xsl:number raises inside
+		// xsl:on-completion, where section 8.4 makes the focus absent. That error
+		// is unreachable while the surrounding element is refused outright.
+		"iterate": {attrs: map[string]attrDef{
+			"select": {required: true},
+		}},
+		"next-iteration": {attrs: map[string]attrDef{}},
+		"break": {attrs: map[string]attrDef{
+			"select": {},
+		}},
+		"on-completion": {attrs: map[string]attrDef{
+			"select": {},
+		}},
+		// The XSLT 3.0 conditional content instructions, section 8.4. Both
+		// xsl:on-empty and xsl:on-non-empty share xsl:sequence's summary;
+		// xsl:where-populated has no attributes at all.
+		// The map constructor instructions of section 14. xsl:map takes no
+		// attributes; on xsl:map-entry the key is required and select is the
+		// alternative to a sequence constructor.
+		"map": {since30: true, attrs: map[string]attrDef{}},
+		"map-entry": {since30: true, attrs: map[string]attrDef{
+			"key":    {required: true},
+			"select": {},
+		}},
+		"on-empty": {since30: true, attrs: map[string]attrDef{
+			"select": {},
+		}},
+		"on-non-empty": {since30: true, attrs: map[string]attrDef{
+			"select": {},
+		}},
+		"where-populated": {since30: true, attrs: map[string]attrDef{}},
+		// xsl:fork, section 16. It has no attributes; its content model is the
+		// alternation in 16.1, which compileFork checks.
+		"fork": {since30: true, attrs: map[string]attrDef{}},
+		// The merging instructions of section 15. Every one of them is XSLT 3.0
+		// only, so a version="2.0" stylesheet writing one gets XTSE0010 rather
+		// than being told xsl:merge is an element it may use.
+		"merge": {since30: true, attrs: map[string]attrDef{}},
+		"merge-source": {since30: true, attrs: map[string]attrDef{
+			"name":          {},
+			"for-each-item": {},
+			// for-each-source is the only spelling. The Recommendation's change
+			// log records the rename: "Bug29804: The for-each-stream attribute
+			// of xsl:merge-source has been generalized to handle both streamed
+			// and unstreamed processing, and it has accordingly been renamed
+			// for-each-source; streaming of the merge input is controlled using
+			// the streamable attribute." The element summary types the later
+			// name, which the Recommendation uses 35 times against 3 for
+			// for-each-stream -- and all three of those are the change-log entry
+			// itself and the stale RELAX NG schema appendix, which no longer
+			// matches the summary. W3C bug 30125 records that the draft's name
+			// is no longer allowed.
+			//
+			// It is removed30 rather than merely absent, for the reason
+			// for-each-group/@bind-group is: the summary never defines it, so a
+			// forwards-compatible module would otherwise drop it silently
+			// instead of reporting the XTSE0090 a withdrawn name has earned. No
+			// suite stylesheet writes it -- the six merge cases that mention it
+			// do so only in XML comments, and every xsl:merge-source in the
+			// suite spells the attribute for-each-source.
+			"for-each-source": {},
+			"for-each-stream": {removed30: true},
+			// The summary types select without a "?", so it is required: with no
+			// anchor there is nothing else an xsl:merge-source could select, and
+			// merge-032b writes one without it and requires XTSE0010.
+			"select":           {required: true},
+			"streamable":       {values: []string{"yes", "no", "true", "false", "1", "0"}},
+			"use-accumulators": {},
+			"sort-before-merge": {
+				values: []string{"yes", "no", "true", "false", "1", "0"}},
+			"validation": {values: []string{"strict", "lax", "preserve", "strip"}},
+			"type":       {},
+		}},
+		// xsl:merge-key is xsl:sort's summary without @stable: 15.5 states the
+		// exception in as many words, and merge-010 is the test that writes
+		// stable="yes" on one and requires XTSE0090.
+		"merge-key": {since30: true, attrs: map[string]attrDef{
+			"select":     {},
+			"lang":       {avt: true},
+			"order":      {values: []string{"ascending", "descending"}, avt: true},
+			"collation":  {avt: true},
+			"case-order": {values: []string{"upper-first", "lower-first"}, avt: true},
+			// { "text" | "number" | eqname }: a prefixed name selects an
+			// implementation-defined type, so it passes as eqnameOK.
+			"data-type": {values: []string{"text", "number"}, eqnameOK: true, avt: true},
+		}},
+		"merge-action": {since30: true, attrs: map[string]attrDef{}},
+		"evaluate": {attrs: map[string]attrDef{
+			"xpath":             {required: true},
+			"as":                {},
+			"base-uri":          {avt: true},
+			"with-params":       {},
+			"context-item":      {},
+			"namespace-context": {},
+			"schema-aware":      {avt: true},
+		}},
+		// XSLT 3.0 section 3.10, a top-level declaration.
+		"global-context-item": {since30: true, attrs: map[string]attrDef{
+			"as":  {},
+			"use": {values: []string{"required", "optional", "absent"}},
+			// @streamable and @use-accumulators were listed here and could never
+			// be consulted: section 3.10's summary gives as? and use? and no
+			// more, and an xsl:global-context-item is checked against the
+			// "context-item" key of this table -- contextitem.go reads the
+			// declaration off that entry for both spellings -- which defines
+			// neither. Both were refused with "not allowed on xsl:context-item"
+			// while the entries here claimed to accept them. Removed rather than
+			// left as a contradiction; TestGlobalContextItemDeadEntries pins the
+			// refusal so they are not restored.
+		}},
+		// XSLT 3.0 section 10.1.1, a child of xsl:template only.
+		"context-item": {since30: true, attrs: map[string]attrDef{
+			"as":  {},
+			"use": {values: []string{"required", "optional", "absent"}},
+		}},
+		"sequence": {attrs: map[string]attrDef{
+			"select": {required: true, optional30: true},
+		}},
+		"number": {attrs: map[string]attrDef{
+			"value":              {},
+			"select":             {},
+			"level":              {values: []string{"single", "multiple", "any"}},
+			"count":              {},
+			"from":               {},
+			"format":             {avt: true},
+			"lang":               {avt: true},
+			"letter-value":       {values: []string{"alphabetic", "traditional"}, avt: true},
+			"ordinal":            {avt: true},
+			"grouping-separator": {avt: true},
+			"grouping-size":      {avt: true},
+			"start-at":           {avt: true, since30: true},
+		}},
+		"sort": {attrs: map[string]attrDef{
+			"select":     {},
+			"lang":       {avt: true},
+			"order":      {values: []string{"ascending", "descending"}, avt: true},
+			"collation":  {avt: true},
+			"stable":     {values: []string{"yes", "no"}, avt: true},
+			"case-order": {values: []string{"upper-first", "lower-first"}, avt: true},
+			// { "text" | "number" | eqname }: a prefixed name selects an
+			// implementation-defined type, so it passes as eqnameOK.
+			"data-type": {values: []string{"text", "number"}, eqnameOK: true, avt: true},
+		}},
+		"perform-sort": {attrs: map[string]attrDef{
+			"select": {},
+		}},
+		"for-each-group": {attrs: map[string]attrDef{
+			"select":              {required: true},
+			"group-by":            {},
+			"group-adjacent":      {},
+			"group-starting-with": {},
+			"group-ending-with":   {},
+			"collation":           {avt: true},
+			// composite="yes" makes the whole key sequence one grouping key.
+			// XSLT 3.0 only: a 2.0 stylesheet naming it must still be told so.
+			"composite": {since30: true,
+				values: []string{"yes", "no", "true", "false", "1", "0"}},
+			// bind-group and bind-grouping-key were proposed by a working draft
+			// and removed before the Recommendation, so a 3.0 stylesheet naming
+			// either is in error rather than merely using a name the summary
+			// never had. They are listed as removed so that the XTSE0090 is
+			// reported even where forwards-compatible leniency would otherwise
+			// ignore an unrecognised attribute -- for-each-group-002 writes
+			// bind-group="g" on a version="3.0" simplified stylesheet and
+			// expects XTSE0090, not the XPST0008 that the unbound $g produces
+			// once the attribute has been silently dropped.
+			"bind-group":        {removed30: true},
+			"bind-grouping-key": {removed30: true},
+		}},
+		"analyze-string": {attrs: map[string]attrDef{
+			"select": {required: true},
+			"regex":  {required: true, avt: true},
+			"flags":  {avt: true},
+		}},
+		"matching-substring":     {attrs: map[string]attrDef{}},
+		"non-matching-substring": {attrs: map[string]attrDef{}},
+		"key": {attrs: map[string]attrDef{
+			"name":      {required: true},
+			"match":     {required: true},
+			"use":       {},
+			"collation": {},
+			// composite is in 6.3's signature for xsl:key beside use and
+			// collation. It selects whether a multi-item use expression yields
+			// one composite key or one key per item, and the engine reads it --
+			// only the table never listed it, which stayed invisible for as long
+			// as forwards compatible processing was dropping the rejection.
+			"composite": {since30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+		}},
+		"decimal-format": {attrs: map[string]attrDef{
+			"name":               {},
+			"decimal-separator":  {},
+			"grouping-separator": {},
+			"infinity":           {},
+			"minus-sign":         {},
+			"NaN":                {},
+			"percent":            {},
+			"per-mille":          {},
+			"zero-digit":         {},
+			"digit":              {},
+			"pattern-separator":  {},
+			// processor30, not since30: format-number-069a writes this in a
+			// version="2.0" module and is scoped XSLT30+, so what decides is
+			// whether the processor implements 3.0 rather than the module's
+			// @version. XSLT 3.0 added the name alongside XPath 3.1's
+			// scientific notation.
+			"exponent-separator": {processor30: true},
+		}},
+		"message": {attrs: map[string]attrDef{
+			"select": {},
+			// 3.0 declares terminate as an AVT yielding xs:boolean, which widens
+			// the set to the four lexical forms of the type. That widening is
+			// applied by allowsBoolAliases rather than listed here, so the
+			// enumeration stays the 2.0 pair and a 2.0 module is held to it.
+			"terminate": {values: []string{"yes", "no"}, avt: true},
+			// processor30, not since30: message-0009 writes @error-code on a
+			// version="2.0" module and is scoped XSLT30+, so the attribute
+			// follows the processor's version rather than the module's. A 2.0
+			// processor (MaxVersion 2.0) refuses it, as XSLT 2.0's summary has
+			// no such attribute.
+			"error-code": {processor30: true, avt: true},
+		}},
+		// xsl:assert, 22.2. The syntax summary is
 		//
-		// It was previously accepted and ignored, because the one suite file
-		// that writes it, iterate-024, exists to pin the XTSE0010 for an
-		// xsl:on-completion misplaced further down, and the attribute sweep
-		// reported XTSE0090 before the walk ever reached it. That was a
-		// check-ordering defect, not a reason to tolerate a withdrawn
-		// attribute: the placement rule is now read off the tree ahead of
-		// the grammar sweep, so the structural error wins and the attribute
-		// can be refused. See checkIteratePlacement in iterate_static.go.
-		"export": {removed30: true},
-		// processor30, not since30: a static parameter is supplied by the
-		// caller, so whether one may be declared follows the processor the
-		// caller is driving rather than the module's own @version.
-		// function-1025 declares one in a version="2.0" module and is scoped
-		// XSLT30+, the same shape as function-1032's new-each-time above.
-		"static": {
-			processor30: true,
-			values:      []string{"yes", "no", "true", "false", "1", "0"},
-		},
-	}},
-	"call-template": {attrs: map[string]attrDef{
-		"name": {required: true},
-	}},
-	"with-param": {attrs: map[string]attrDef{
-		"name":   {required: true},
-		"select": {},
-		"as":     {},
-		"tunnel": {values: []string{"yes", "no"}},
-	}},
-	"attribute-set": {attrs: map[string]attrDef{
-		"name":               {required: true},
-		"use-attribute-sets": {},
-		// Both are 3.0 additions to the element's syntax summary (§10.2).
-		// Listing @streamable is what makes si-lre-906's streamable="Yes"
-		// an XTSE0020: the capitalised spelling is not one of the six
-		// xsl:yes-or-no values, and with no entry here it was never checked.
-		"visibility": {processor30: true, values: []string{
-			"public", "private", "final", "abstract"}},
-		"streamable": {processor30: true, values: []string{
-			"yes", "no", "true", "false", "1", "0"}},
-	}},
-	"function": {attrs: map[string]attrDef{
-		"name": {required: true},
-		"as":   {},
-		// A 2.0 attribute, so the 2.0 pair: allowsBoolAliases admits the
-		// other four spellings in a 3.0 module.
-		"override": {values: []string{"yes", "no"}},
-		// Both are 3.0 additions that the table had never listed, which went
-		// unnoticed while an unknown attribute on a version="3.0" module was
-		// silently dropped: they were ignored rather than refused, and
-		// ignoring them is indistinguishable from accepting them. @visibility
-		// is section 10.3's component visibility; @streamability is
-		// 19.8.7's declared classification, which the W3C suite writes in
-		// seventy files.
-		// REC H.1 types xsl:function/@visibility as
-		// xsl:visibility-not-hidden-type, which restricts
-		// xsl:visibility-type by EXCLUDING "hidden": a function cannot be
-		// declared hidden, only made so by xsl:expose.
-		"visibility": {since30: true, values: []string{
-			"public", "private", "final", "abstract"}},
-		// REC H.1 types @streamability as xsl:streamability-type, a UNION of
-		// seven tokens with xsl:EQName-in-namespace -- a processor may name
-		// its own classification by a namespaced EQName. eqnameOK lets such a
-		// name through. It is not an attribute value template: the summary
-		// (section 10.3) writes it without braces, and the suite's
-		// _streamability="{if ($STREAMABLE) then ... }" is a shadow
-		// attribute, expanded by static.go before this table is consulted.
-		"streamability": {since30: true, eqnameOK: true,
-			values: []string{"unclassified", "absorbing", "inspection",
-				"filter", "shallow-descent", "deep-descent", "ascent"}},
-		// identity-sensitive is a Last Call draft spelling
-		// (xslt-lcwd30.xml:14648) that the Recommendation's summary at 10.3
-		// no longer carries: its role passed to new-each-time. Listed as
-		// removed so a 3.0 module naming it is refused rather than tolerated.
-		"identity-sensitive": {removed30: true},
-		// 3.0 renamed @override to @override-extension-function and added
-		// @new-each-time, which says whether two calls with the same
-		// arguments may share one result.
+		//	<xsl:assert test="expression" select?="expression"
+		//	            error-code?="{eqname}">
 		//
-		// processor30 rather than since30: both say what the *processor* may
-		// do with a call, not what the module's grammar contains, and
-		// function-1032 writes new-each-time in a version="2.0" module scoped
-		// XSLT30+ -- exactly as message-0009 writes terminate="true" there.
-		"override-extension-function": {
-			processor30: true,
-			values:      []string{"yes", "no", "true", "false", "1", "0"},
-		},
-		// "maybe" is the third value, and the default: it leaves the
-		// processor free to reuse a result or not.
-		// REC H.1 types @new-each-time as xsl:yes-or-no-or-maybe, exactly
-		// these seven spellings. It is not an attribute value template: the
-		// suite's _new-each-time="{$new-each-time}" is a shadow attribute,
-		// expanded before this table is consulted.
-		"new-each-time": {
-			processor30: true,
-			values:      []string{"yes", "no", "true", "false", "1", "0", "maybe"},
-		},
-		// @cache is a hint rather than a promise -- 10.3 leaves a processor
-		// free to ignore it -- but a stylesheet writes it where ignoring it
-		// is ruinous. function-1031 computes fib(92) by naive double
-		// recursion, which is some 2^92 calls without memoisation and
-		// finishes instantly with it.
+		// and the element is new in XSLT 3.0, so since30 keeps a 2.0 module from
+		// using it: catalog-006's element-available scan is scoped XSLT30+, and
+		// try-013 shows what the flag is for -- an element a later version added
+		// must not be reported available to a stylesheet that could not use it.
+		"assert": {since30: true, attrs: map[string]attrDef{
+			"test":   {required: true},
+			"select": {},
+			// Written as {eqname} in the summary, so an attribute value template
+			// exactly as it is on xsl:message.
+			"error-code": {avt: true},
+		}},
+		"fallback": {attrs: map[string]attrDef{}},
+		"try": {since30: true, attrs: map[string]attrDef{
+			"select":          {},
+			"rollback-output": {values: []string{"yes", "no"}},
+		}},
+		"catch": {since30: true, attrs: map[string]attrDef{
+			"errors": {},
+			"select": {},
+		}},
+		// xsl:source-document reads a document by URI and evaluates its body with
+		// that document as the context item. streamable asks for streamed
+		// evaluation, which this engine does not do; 18.1 defines the result as
+		// that of the non-streaming process either way, so the attribute is
+		// accepted and the instruction evaluated conventionally.
+		// xsl:stream is the name the XSLT 3.0 working draft gives this
+		// instruction in 18.1; the Recommendation of 8 June 2017 renamed it.
+		// Its own change log says so (Bug29747): "The xsl:stream instruction has
+		// been generalized to handle both streamed and unstreamed processing,
+		// and it has accordingly been renamed xsl:source-document, and has a
+		// streamable attribute."
 		//
-		// The Recommendation's summary types it cache? = boolean, and the
-		// suite's schema-for-xslt30.xsd:803 agrees. The Last Call draft's
-		// "full" | "partial" | "no" was withdrawn, so the table no longer
-		// admits those spellings; compile.go reads the hint through
-		// cacheMemoises.
-		"cache": {
-			processor30: true,
-			values:      []string{"yes", "no", "true", "false", "1", "0"},
-		},
-	}},
-	"namespace-alias": {attrs: map[string]attrDef{
-		"stylesheet-prefix": {required: true},
-		"result-prefix":     {required: true},
-	}},
-	"element": {attrs: map[string]attrDef{
-		"name":               {required: true, avt: true},
-		"namespace":          {avt: true},
-		"inherit-namespaces": {values: []string{"yes", "no"}},
-		"use-attribute-sets": {},
-		"type":               {},
-		"validation":         {values: []string{"strict", "lax", "preserve", "strip"}},
-	}},
-	"attribute": {attrs: map[string]attrDef{
-		"name":       {required: true, avt: true},
-		"namespace":  {avt: true},
-		"select":     {},
-		"separator":  {avt: true},
-		"type":       {},
-		"validation": {values: []string{"strict", "lax", "preserve", "strip"}},
-	}},
-	"text": {attrs: map[string]attrDef{
-		"disable-output-escaping": {values: []string{"yes", "no"}},
-	}},
-	"value-of": {attrs: map[string]attrDef{
-		"select":                  {},
-		"separator":               {avt: true},
-		"disable-output-escaping": {values: []string{"yes", "no"}},
-	}},
-	"document": {attrs: map[string]attrDef{
-		"validation": {values: []string{"strict", "lax", "preserve", "strip"}},
-		"type":       {},
-	}},
-	"processing-instruction": {attrs: map[string]attrDef{
-		"name":   {required: true, avt: true},
-		"select": {},
-	}},
-	"namespace": {attrs: map[string]attrDef{
-		"name":   {required: true, avt: true},
-		"select": {},
-	}},
-	"comment": {attrs: map[string]attrDef{
-		"select": {},
-	}},
-	"copy": {attrs: map[string]attrDef{
-		"select":             {since30: true},
-		"copy-namespaces":    {values: []string{"yes", "no"}},
-		"inherit-namespaces": {values: []string{"yes", "no"}},
-		"use-attribute-sets": {},
-		"type":               {},
-		"validation":         {values: []string{"strict", "lax", "preserve", "strip"}},
-	}},
-	"copy-of": {attrs: map[string]attrDef{
-		"select":          {required: true},
-		"copy-namespaces": {values: []string{"yes", "no"}},
-		// XSLT 3.0 section 18.3: the copy carries the accumulator values of
-		// the node it was copied from, which nothing else can supply — the
-		// copy's own tree is all the document the rules would see.
-		"copy-accumulators": {since30: true, values: []string{"yes", "no"}},
-		"type":              {},
-		// REC H.1 types @validation as xsl:validation-type on xsl:copy-of
-		// exactly as on xsl:copy, xsl:element and the rest, which this table
-		// already enumerated -- copy-of alone was left open.
-		"validation": {avt: true, values: []string{
-			"strict", "lax", "preserve", "strip"}},
-	}},
-	// xsl:evaluate is an XSLT 3.0 instruction, listed here for the same reason
-	// xsl:mode is: rejecting it under XTSE0010 is the wrong error at the wrong
-	// moment. Section 10.4 defines it entirely in terms of machinery a 2.0
-	// processor already has — an XPath expression compiled from a string,
-	// against a static context the instruction itself describes — so it can be
-	// supported rather than refused. The suite treats it as reachable from a
-	// version="2.0" stylesheet: system-property-022 and collations-0128 are
-	// both XSLT20+ tests whose subject is a *different* error, or none, and
-	// neither is observable while the element is a static error.
-	// xsl:iterate and its three companions are XSLT 3.0, and are here for the
-	// reason xsl:evaluate is: an XSLT 2.0 processor can execute them exactly,
-	// because section 8.4 defines the loop in terms of a sequence, a
-	// parameter set and two escape hatches, none of which is new machinery.
-	// number-1004 is the case that makes the difference visible — an XSLT 2.0
-	// test whose subject is the XTTE0990 that xsl:number raises inside
-	// xsl:on-completion, where section 8.4 makes the focus absent. That error
-	// is unreachable while the surrounding element is refused outright.
-	"iterate": {attrs: map[string]attrDef{
-		"select": {required: true},
-	}},
-	"next-iteration": {attrs: map[string]attrDef{}},
-	"break": {attrs: map[string]attrDef{
-		"select": {},
-	}},
-	"on-completion": {attrs: map[string]attrDef{
-		"select": {},
-	}},
-	// The XSLT 3.0 conditional content instructions, section 8.4. Both
-	// xsl:on-empty and xsl:on-non-empty share xsl:sequence's summary;
-	// xsl:where-populated has no attributes at all.
-	// The map constructor instructions of section 14. xsl:map takes no
-	// attributes; on xsl:map-entry the key is required and select is the
-	// alternative to a sequence constructor.
-	"map": {since30: true, attrs: map[string]attrDef{}},
-	"map-entry": {since30: true, attrs: map[string]attrDef{
-		"key":    {required: true},
-		"select": {},
-	}},
-	"on-empty": {since30: true, attrs: map[string]attrDef{
-		"select": {},
-	}},
-	"on-non-empty": {since30: true, attrs: map[string]attrDef{
-		"select": {},
-	}},
-	"where-populated": {since30: true, attrs: map[string]attrDef{}},
-	// xsl:fork, section 16. It has no attributes; its content model is the
-	// alternation in 16.1, which compileFork checks.
-	"fork": {since30: true, attrs: map[string]attrDef{}},
-	// The merging instructions of section 15. Every one of them is XSLT 3.0
-	// only, so a version="2.0" stylesheet writing one gets XTSE0010 rather
-	// than being told xsl:merge is an element it may use.
-	"merge": {since30: true, attrs: map[string]attrDef{}},
-	"merge-source": {since30: true, attrs: map[string]attrDef{
-		"name":          {},
-		"for-each-item": {},
-		// for-each-source is the only spelling. The Recommendation's change
-		// log records the rename: "Bug29804: The for-each-stream attribute
-		// of xsl:merge-source has been generalized to handle both streamed
-		// and unstreamed processing, and it has accordingly been renamed
-		// for-each-source; streaming of the merge input is controlled using
-		// the streamable attribute." The element summary types the later
-		// name, which the Recommendation uses 35 times against 3 for
-		// for-each-stream -- and all three of those are the change-log entry
-		// itself and the stale RELAX NG schema appendix, which no longer
-		// matches the summary. W3C bug 30125 records that the draft's name
-		// is no longer allowed.
+		// Both are accepted because a stylesheet written against either text is a
+		// legal one. The table carried only the later name, so the draft's
+		// spelling was refused outright.
 		//
-		// It is removed30 rather than merely absent, for the reason
-		// for-each-group/@bind-group is: the summary never defines it, so a
-		// forwards-compatible module would otherwise drop it silently
-		// instead of reporting the XTSE0090 a withdrawn name has earned. No
-		// suite stylesheet writes it -- the six merge cases that mention it
-		// do so only in XML comments, and every xsl:merge-source in the
-		// suite spells the attribute for-each-source.
-		"for-each-source": {},
-		"for-each-stream": {removed30: true},
-		// The summary types select without a "?", so it is required: with no
-		// anchor there is nothing else an xsl:merge-source could select, and
-		// merge-032b writes one without it and requires XTSE0010.
-		"select":           {required: true},
-		"streamable":       {values: []string{"yes", "no", "true", "false", "1", "0"}},
-		"use-accumulators": {},
-		"sort-before-merge": {
-			values: []string{"yes", "no", "true", "false", "1", "0"}},
-		"validation": {values: []string{"strict", "lax", "preserve", "strip"}},
-		"type":       {},
-	}},
-	// xsl:merge-key is xsl:sort's summary without @stable: 15.5 states the
-	// exception in as many words, and merge-010 is the test that writes
-	// stable="yes" on one and requires XTSE0090.
-	"merge-key": {since30: true, attrs: map[string]attrDef{
-		"select":     {},
-		"lang":       {avt: true},
-		"order":      {values: []string{"ascending", "descending"}, avt: true},
-		"collation":  {avt: true},
-		"case-order": {values: []string{"upper-first", "lower-first"}, avt: true},
-		// { "text" | "number" | eqname }: a prefixed name selects an
-		// implementation-defined type, so it passes as eqnameOK.
-		"data-type": {values: []string{"text", "number"}, eqnameOK: true, avt: true},
-	}},
-	"merge-action": {since30: true, attrs: map[string]attrDef{}},
-	"evaluate": {attrs: map[string]attrDef{
-		"xpath":             {required: true},
-		"as":                {},
-		"base-uri":          {avt: true},
-		"with-params":       {},
-		"context-item":      {},
-		"namespace-context": {},
-		"schema-aware":      {avt: true},
-	}},
-	// XSLT 3.0 section 3.10, a top-level declaration.
-	"global-context-item": {since30: true, attrs: map[string]attrDef{
-		"as":  {},
-		"use": {values: []string{"required", "optional", "absent"}},
-		// @streamable and @use-accumulators were listed here and could never
-		// be consulted: section 3.10's summary gives as? and use? and no
-		// more, and an xsl:global-context-item is checked against the
-		// "context-item" key of this table -- contextitem.go reads the
-		// declaration off that entry for both spellings -- which defines
-		// neither. Both were refused with "not allowed on xsl:context-item"
-		// while the entries here claimed to accept them. Removed rather than
-		// left as a contradiction; TestGlobalContextItemDeadEntries pins the
-		// refusal so they are not restored.
-	}},
-	// XSLT 3.0 section 10.1.1, a child of xsl:template only.
-	"context-item": {since30: true, attrs: map[string]attrDef{
-		"as":  {},
-		"use": {values: []string{"required", "optional", "absent"}},
-	}},
-	"sequence": {attrs: map[string]attrDef{
-		"select": {required: true, optional30: true},
-	}},
-	"number": {attrs: map[string]attrDef{
-		"value":              {},
-		"select":             {},
-		"level":              {values: []string{"single", "multiple", "any"}},
-		"count":              {},
-		"from":               {},
-		"format":             {avt: true},
-		"lang":               {avt: true},
-		"letter-value":       {values: []string{"alphabetic", "traditional"}, avt: true},
-		"ordinal":            {avt: true},
-		"grouping-separator": {avt: true},
-		"grouping-size":      {avt: true},
-		"start-at":           {avt: true, since30: true},
-	}},
-	"sort": {attrs: map[string]attrDef{
-		"select":     {},
-		"lang":       {avt: true},
-		"order":      {values: []string{"ascending", "descending"}, avt: true},
-		"collation":  {avt: true},
-		"stable":     {values: []string{"yes", "no"}, avt: true},
-		"case-order": {values: []string{"upper-first", "lower-first"}, avt: true},
-		// { "text" | "number" | eqname }: a prefixed name selects an
-		// implementation-defined type, so it passes as eqnameOK.
-		"data-type": {values: []string{"text", "number"}, eqnameOK: true, avt: true},
-	}},
-	"perform-sort": {attrs: map[string]attrDef{
-		"select": {},
-	}},
-	"for-each-group": {attrs: map[string]attrDef{
-		"select":              {required: true},
-		"group-by":            {},
-		"group-adjacent":      {},
-		"group-starting-with": {},
-		"group-ending-with":   {},
-		"collation":           {avt: true},
-		// composite="yes" makes the whole key sequence one grouping key.
-		// XSLT 3.0 only: a 2.0 stylesheet naming it must still be told so.
-		"composite": {since30: true,
-			values: []string{"yes", "no", "true", "false", "1", "0"}},
-		// bind-group and bind-grouping-key were proposed by a working draft
-		// and removed before the Recommendation, so a 3.0 stylesheet naming
-		// either is in error rather than merely using a name the summary
-		// never had. They are listed as removed so that the XTSE0090 is
-		// reported even where forwards-compatible leniency would otherwise
-		// ignore an unrecognised attribute -- for-each-group-002 writes
-		// bind-group="g" on a version="3.0" simplified stylesheet and
-		// expects XTSE0090, not the XPST0008 that the unbound $g produces
-		// once the attribute has been silently dropped.
-		"bind-group":        {removed30: true},
-		"bind-grouping-key": {removed30: true},
-	}},
-	"analyze-string": {attrs: map[string]attrDef{
-		"select": {required: true},
-		"regex":  {required: true, avt: true},
-		"flags":  {avt: true},
-	}},
-	"matching-substring":     {attrs: map[string]attrDef{}},
-	"non-matching-substring": {attrs: map[string]attrDef{}},
-	"key": {attrs: map[string]attrDef{
-		"name":      {required: true},
-		"match":     {required: true},
-		"use":       {},
-		"collation": {},
-		// composite is in 6.3's signature for xsl:key beside use and
-		// collation. It selects whether a multi-item use expression yields
-		// one composite key or one key per item, and the engine reads it --
-		// only the table never listed it, which stayed invisible for as long
-		// as forwards compatible processing was dropping the rejection.
-		"composite": {since30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
-	}},
-	"decimal-format": {attrs: map[string]attrDef{
-		"name":               {},
-		"decimal-separator":  {},
-		"grouping-separator": {},
-		"infinity":           {},
-		"minus-sign":         {},
-		"NaN":                {},
-		"percent":            {},
-		"per-mille":          {},
-		"zero-digit":         {},
-		"digit":              {},
-		"pattern-separator":  {},
-		// processor30, not since30: format-number-069a writes this in a
-		// version="2.0" module and is scoped XSLT30+, so what decides is
-		// whether the processor implements 3.0 rather than the module's
-		// @version. XSLT 3.0 added the name alongside XPath 3.1's
-		// scientific notation.
-		"exponent-separator": {processor30: true},
-	}},
-	"message": {attrs: map[string]attrDef{
-		"select": {},
-		// 3.0 declares terminate as an AVT yielding xs:boolean, which widens
-		// the set to the four lexical forms of the type. That widening is
-		// applied by allowsBoolAliases rather than listed here, so the
-		// enumeration stays the 2.0 pair and a 2.0 module is held to it.
-		"terminate": {values: []string{"yes", "no"}, avt: true},
-		// processor30, not since30: message-0009 writes @error-code on a
-		// version="2.0" module and is scoped XSLT30+, so the attribute
-		// follows the processor's version rather than the module's. A 2.0
-		// processor (MaxVersion 2.0) refuses it, as XSLT 2.0's summary has
-		// no such attribute.
-		"error-code": {processor30: true, avt: true},
-	}},
-	// xsl:assert, 22.2. The syntax summary is
-	//
-	//	<xsl:assert test="expression" select?="expression"
-	//	            error-code?="{eqname}">
-	//
-	// and the element is new in XSLT 3.0, so since30 keeps a 2.0 module from
-	// using it: catalog-006's element-available scan is scoped XSLT30+, and
-	// try-013 shows what the flag is for -- an element a later version added
-	// must not be reported available to a stylesheet that could not use it.
-	"assert": {since30: true, attrs: map[string]attrDef{
-		"test":   {required: true},
-		"select": {},
-		// Written as {eqname} in the summary, so an attribute value template
-		// exactly as it is on xsl:message.
-		"error-code": {avt: true},
-	}},
-	"fallback": {attrs: map[string]attrDef{}},
-	"try": {since30: true, attrs: map[string]attrDef{
-		"select":          {},
-		"rollback-output": {values: []string{"yes", "no"}},
-	}},
-	"catch": {since30: true, attrs: map[string]attrDef{
-		"errors": {},
-		"select": {},
-	}},
-	// xsl:source-document reads a document by URI and evaluates its body with
-	// that document as the context item. streamable asks for streamed
-	// evaluation, which this engine does not do; 18.1 defines the result as
-	// that of the non-streaming process either way, so the attribute is
-	// accepted and the instruction evaluated conventionally.
-	// xsl:stream is the name the XSLT 3.0 working draft gives this
-	// instruction in 18.1; the Recommendation of 8 June 2017 renamed it.
-	// Its own change log says so (Bug29747): "The xsl:stream instruction has
-	// been generalized to handle both streamed and unstreamed processing,
-	// and it has accordingly been renamed xsl:source-document, and has a
-	// streamable attribute."
-	//
-	// Both are accepted because a stylesheet written against either text is a
-	// legal one. The table carried only the later name, so the draft's
-	// spelling was refused outright.
-	//
-	// The attribute list is 18.1's own and is NOT source-document's: the
-	// draft's xsl:stream has no @streamable, which is precisely what the
-	// rename added when the instruction was generalised.
-	// compileSourceDocument reads attributes and never the element's local
-	// name, so one compiler serves both spellings.
-	//
-	// No suite case writes <xsl:stream, so this is invisible to the ratchet
-	// in both directions; it is here because a stylesheet written against the
-	// vendored spec is a legal one that the grammar rejected.
-	"stream": {since30: true, attrs: map[string]attrDef{
-		"href":             {required: true, avt: true},
-		"use-accumulators": {},
-		"validation":       {values: []string{"strict", "lax", "preserve", "strip"}},
-		"type":             {},
-	}},
-	"source-document": {since30: true, attrs: map[string]attrDef{
-		"href":             {required: true, avt: true},
-		"streamable":       {values: []string{"yes", "no", "true", "false", "1", "0"}},
-		"use-accumulators": {},
-		"validation":       {values: []string{"strict", "lax", "preserve", "strip"}},
-		"type":             {},
-	}},
-	"result-document": {attrs: map[string]attrDef{
-		// build-tree says whether the raw result is normalised into a final
-		// result tree or serialised as the sequence it is; see 2.3.6. XSLT
-		// 3.0 added it, along with the two JSON serialisation parameters.
-		"build-tree":            {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
-		"allow-duplicate-names": {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
-		// Both enumerate as on xsl:output, plus braces: a literal outside
-		// the set is XTSE0020 here, a computed one XTDE0030 in resultdoc.go.
-		"json-node-output-method": {processor30: true, avt: true, eqnameOK: true,
-			values: []string{"xml", "html", "xhtml", "text"}},
-		"parameter-document":   {processor30: true, avt: true},
-		"item-separator":       {avt: true},
-		"html-version":         {avt: true},
-		"suppress-indentation": {avt: true},
-		"format":               {avt: true},
-		"href":                 {avt: true},
-		"validation":           {values: []string{"strict", "lax", "preserve", "strip"}},
-		"type":                 {},
-		"method": {avt: true, eqnameOK: true, values: []string{
-			"xml", "html", "xhtml", "text", "json", "adaptive"}},
-		"byte-order-mark":        {values: []string{"yes", "no"}, avt: true},
-		"cdata-section-elements": {avt: true},
-		"doctype-public":         {avt: true},
-		"doctype-system":         {avt: true},
-		"encoding":               {avt: true},
-		"escape-uri-attributes":  {values: []string{"yes", "no"}, avt: true},
-		"include-content-type":   {values: []string{"yes", "no"}, avt: true},
-		"indent":                 {values: []string{"yes", "no"}, avt: true},
-		"media-type":             {avt: true},
-		"normalization-form":     {avt: true, nmtoken: true},
-		"omit-xml-declaration":   {values: []string{"yes", "no"}, avt: true},
-		"standalone":             {values: []string{"yes", "no", "omit"}, avt: true},
-		"undeclare-prefixes":     {values: []string{"yes", "no"}, avt: true},
-		"use-character-maps":     {},
-		"output-version":         {avt: true},
-	}},
-	"output": {attrs: map[string]attrDef{
-		"name":   {},
-		"method": {},
-		// The three XSLT 3.0 serialisation parameters. xsl:result-document
-		// has carried them since they were added; xsl:output, which declares
-		// the very same parameters for the principal result, never listed
-		// them. Nothing noticed while an unknown attribute on a version="3.0"
-		// module was dropped in silence -- being ignored and being accepted
-		// look alike from the stylesheet. json-node-output-method is read by
-		// the serialiser for both spellings, so declaring it here changes
-		// only whether the name is refused.
-		// parameter-document names a document of serialization parameters,
-		// and is in 26.1's signature for xsl:output. Same story as the three
-		// above: read by the serialiser, absent from the table.
+		// The attribute list is 18.1's own and is NOT source-document's: the
+		// draft's xsl:stream has no @streamable, which is precisely what the
+		// rename added when the instruction was generalised.
+		// compileSourceDocument reads attributes and never the element's local
+		// name, so one compiler serves both spellings.
 		//
-		// None of xsl:output's attributes is an attribute value template:
-		// the summary (section 26.1) writes them without braces, and only
-		// xsl:result-document's are braced, so none of these carries avt.
-		//
-		// The two below now carry the types the summary states for them.
-		// Until they did, neither had an enumeration nor a qnameAttrs entry,
-		// so checkAttrValue returned before consulting anything and every
-		// value was accepted -- an invented json-node-output-method, and a
-		// parameter-document that is no URI at all, alike. Clearing avt was
-		// what gave the flag a reader: the check it guards now exists.
-		//
-		// json-node-output-method is "xml" | "html" | "xhtml" | "text" |
-		// eqname. It is NOT @method's list: the summary withholds "json" and
-		// "adaptive" from it, because the attribute names the method used for
-		// a node appearing within JSON output, and neither of those
-		// serialises a node. eqnameOK carries the union's second half, as it
-		// does for xsl:function/@streamability.
-		"json-node-output-method": {processor30: true, eqnameOK: true,
-			values: []string{"xml", "html", "xhtml", "text"}},
-		// parameter-document is "uri". The table has held no URI-typed
-		// attribute to a lexical space before -- the note at the head of this
-		// file records URIs as unenumerable -- but a syntactically impossible
-		// value is still "not one of the permitted values for that
-		// attribute", and a "{...}" here is a literal brace in a URI rather
-		// than a template, since the summary writes the name unbraced.
-		"parameter-document":    {processor30: true, uri: true},
-		"allow-duplicate-names": {processor30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
-		"build-tree":            {processor30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
-		// html-version selects between the HTML 4 and HTML 5 serialisation
-		// rules. It was added after XSLT 2.0, but the test suite uses it in
-		// tests declared XSLT20+, and rejecting an attribute a stylesheet may
-		// legitimately carry is worse than reading one this version does not
-		// otherwise act on.
-		"html-version": {},
-		// suppress-indentation names elements whose content is not
-		// re-indented. Like html-version it postdates XSLT 2.0, and is read
-		// rather than rejected for the same reason.
-		"suppress-indentation": {},
-		// item-separator is the string written between adjacent items of the
-		// sequence being serialised. It is an XSLT 3.0 / Serialization 3.1
-		// parameter, accepted here because the suite carries it in tests
-		// declared XSLT20+ and rejecting the whole stylesheet would hide the
-		// condition those tests are about.
-		//
-		// It is applied during sequence normalisation (5.7.1 step 3), in the
-		// tree rather than at serialisation: validation-0214 asks for
-		// XTTE1550 from validating the result document, and the error is due
-		// precisely because the inserted separators are text nodes at
-		// document level. A separator written only by the serialiser would
-		// leave that document schema-valid.
-		"item-separator":         {},
-		"byte-order-mark":        {values: []string{"yes", "no"}},
-		"cdata-section-elements": {},
-		"doctype-public":         {},
-		"doctype-system":         {},
-		"encoding":               {},
-		"escape-uri-attributes":  {values: []string{"yes", "no"}},
-		"include-content-type":   {values: []string{"yes", "no"}},
-		"indent":                 {values: []string{"yes", "no"}},
-		"media-type":             {},
-		"normalization-form":     {nmtoken: true},
-		"omit-xml-declaration":   {values: []string{"yes", "no"}},
-		// "yes", "no", "omit" and no more, which is the 2.0 vocabulary of REC
-		// H.1's xsl:yes-or-no-or-omit. The three synonym spellings are NOT
-		// listed, and must not be: output-0282 writes standalone="true" in a
-		// version="2.0" module and requires XTSE0020, so at 2.0 the synonyms
-		// are invalid values rather than accepted ones. allowsBoolAliases
-		// admits them once the module is 3.0, exactly as it does for
-		// @indent and @omit-xml-declaration beside this -- the version gate
-		// lives in the check, never in the enumeration.
-		"standalone":         {values: []string{"yes", "no", "omit"}},
-		"undeclare-prefixes": {values: []string{"yes", "no"}},
-		"use-character-maps": {},
-		"version":            {},
-	}},
-	"character-map": {attrs: map[string]attrDef{
-		"name":               {required: true},
-		"use-character-maps": {},
-	}},
-	"output-character": {attrs: map[string]attrDef{
-		"character": {required: true},
-		"string":    {required: true},
-	}},
-}
+		// No suite case writes <xsl:stream, so this is invisible to the ratchet
+		// in both directions; it is here because a stylesheet written against the
+		// vendored spec is a legal one that the grammar rejected.
+		"stream": {since30: true, attrs: map[string]attrDef{
+			"href":             {required: true, avt: true},
+			"use-accumulators": {},
+			"validation":       {values: []string{"strict", "lax", "preserve", "strip"}},
+			"type":             {},
+		}},
+		"source-document": {since30: true, attrs: map[string]attrDef{
+			"href":             {required: true, avt: true},
+			"streamable":       {values: []string{"yes", "no", "true", "false", "1", "0"}},
+			"use-accumulators": {},
+			"validation":       {values: []string{"strict", "lax", "preserve", "strip"}},
+			"type":             {},
+		}},
+		"result-document": {attrs: map[string]attrDef{
+			// build-tree says whether the raw result is normalised into a final
+			// result tree or serialised as the sequence it is; see 2.3.6. XSLT
+			// 3.0 added it, along with the two JSON serialisation parameters.
+			"build-tree":            {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+			"allow-duplicate-names": {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+			// Both enumerate as on xsl:output, plus braces: a literal outside
+			// the set is XTSE0020 here, a computed one XTDE0030 in resultdoc.go.
+			"json-node-output-method": {processor30: true, avt: true, eqnameOK: true,
+				values: []string{"xml", "html", "xhtml", "text"}},
+			"parameter-document":   {processor30: true, avt: true},
+			"item-separator":       {avt: true},
+			"html-version":         {avt: true},
+			"suppress-indentation": {avt: true},
+			"format":               {avt: true},
+			"href":                 {avt: true},
+			"validation":           {values: []string{"strict", "lax", "preserve", "strip"}},
+			"type":                 {},
+			"method": {avt: true, eqnameOK: true, values: []string{
+				"xml", "html", "xhtml", "text", "json", "adaptive"}},
+			"byte-order-mark":        {values: []string{"yes", "no"}, avt: true},
+			"cdata-section-elements": {avt: true},
+			"doctype-public":         {avt: true},
+			"doctype-system":         {avt: true},
+			"encoding":               {avt: true},
+			"escape-uri-attributes":  {values: []string{"yes", "no"}, avt: true},
+			"include-content-type":   {values: []string{"yes", "no"}, avt: true},
+			"indent":                 {values: []string{"yes", "no"}, avt: true},
+			"media-type":             {avt: true},
+			"normalization-form":     {avt: true, nmtoken: true},
+			"omit-xml-declaration":   {values: []string{"yes", "no"}, avt: true},
+			"standalone":             {values: []string{"yes", "no", "omit"}, avt: true},
+			"undeclare-prefixes":     {values: []string{"yes", "no"}, avt: true},
+			"use-character-maps":     {},
+			"output-version":         {avt: true},
+		}},
+		"output": {attrs: map[string]attrDef{
+			"name":   {},
+			"method": {},
+			// The three XSLT 3.0 serialisation parameters. xsl:result-document
+			// has carried them since they were added; xsl:output, which declares
+			// the very same parameters for the principal result, never listed
+			// them. Nothing noticed while an unknown attribute on a version="3.0"
+			// module was dropped in silence -- being ignored and being accepted
+			// look alike from the stylesheet. json-node-output-method is read by
+			// the serialiser for both spellings, so declaring it here changes
+			// only whether the name is refused.
+			// parameter-document names a document of serialization parameters,
+			// and is in 26.1's signature for xsl:output. Same story as the three
+			// above: read by the serialiser, absent from the table.
+			//
+			// None of xsl:output's attributes is an attribute value template:
+			// the summary (section 26.1) writes them without braces, and only
+			// xsl:result-document's are braced, so none of these carries avt.
+			//
+			// The two below now carry the types the summary states for them.
+			// Until they did, neither had an enumeration nor a qnameAttrs entry,
+			// so checkAttrValue returned before consulting anything and every
+			// value was accepted -- an invented json-node-output-method, and a
+			// parameter-document that is no URI at all, alike. Clearing avt was
+			// what gave the flag a reader: the check it guards now exists.
+			//
+			// json-node-output-method is "xml" | "html" | "xhtml" | "text" |
+			// eqname. It is NOT @method's list: the summary withholds "json" and
+			// "adaptive" from it, because the attribute names the method used for
+			// a node appearing within JSON output, and neither of those
+			// serialises a node. eqnameOK carries the union's second half, as it
+			// does for xsl:function/@streamability.
+			"json-node-output-method": {processor30: true, eqnameOK: true,
+				values: []string{"xml", "html", "xhtml", "text"}},
+			// parameter-document is "uri". The table has held no URI-typed
+			// attribute to a lexical space before -- the note at the head of this
+			// file records URIs as unenumerable -- but a syntactically impossible
+			// value is still "not one of the permitted values for that
+			// attribute", and a "{...}" here is a literal brace in a URI rather
+			// than a template, since the summary writes the name unbraced.
+			"parameter-document":    {processor30: true, uri: true},
+			"allow-duplicate-names": {processor30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+			"build-tree":            {processor30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+			// html-version selects between the HTML 4 and HTML 5 serialisation
+			// rules. It was added after XSLT 2.0, but the test suite uses it in
+			// tests declared XSLT20+, and rejecting an attribute a stylesheet may
+			// legitimately carry is worse than reading one this version does not
+			// otherwise act on.
+			"html-version": {},
+			// suppress-indentation names elements whose content is not
+			// re-indented. Like html-version it postdates XSLT 2.0, and is read
+			// rather than rejected for the same reason.
+			"suppress-indentation": {},
+			// item-separator is the string written between adjacent items of the
+			// sequence being serialised. It is an XSLT 3.0 / Serialization 3.1
+			// parameter, accepted here because the suite carries it in tests
+			// declared XSLT20+ and rejecting the whole stylesheet would hide the
+			// condition those tests are about.
+			//
+			// It is applied during sequence normalisation (5.7.1 step 3), in the
+			// tree rather than at serialisation: validation-0214 asks for
+			// XTTE1550 from validating the result document, and the error is due
+			// precisely because the inserted separators are text nodes at
+			// document level. A separator written only by the serialiser would
+			// leave that document schema-valid.
+			"item-separator":         {},
+			"byte-order-mark":        {values: []string{"yes", "no"}},
+			"cdata-section-elements": {},
+			"doctype-public":         {},
+			"doctype-system":         {},
+			"encoding":               {},
+			"escape-uri-attributes":  {values: []string{"yes", "no"}},
+			"include-content-type":   {values: []string{"yes", "no"}},
+			"indent":                 {values: []string{"yes", "no"}},
+			"media-type":             {},
+			"normalization-form":     {nmtoken: true},
+			"omit-xml-declaration":   {values: []string{"yes", "no"}},
+			// "yes", "no", "omit" and no more, which is the 2.0 vocabulary of REC
+			// H.1's xsl:yes-or-no-or-omit. The three synonym spellings are NOT
+			// listed, and must not be: output-0282 writes standalone="true" in a
+			// version="2.0" module and requires XTSE0020, so at 2.0 the synonyms
+			// are invalid values rather than accepted ones. allowsBoolAliases
+			// admits them once the module is 3.0, exactly as it does for
+			// @indent and @omit-xml-declaration beside this -- the version gate
+			// lives in the check, never in the enumeration.
+			"standalone":         {values: []string{"yes", "no", "omit"}},
+			"undeclare-prefixes": {values: []string{"yes", "no"}},
+			"use-character-maps": {},
+			"version":            {},
+		}},
+		"character-map": {attrs: map[string]attrDef{
+			"name":               {required: true},
+			"use-character-maps": {},
+		}},
+		"output-character": {attrs: map[string]attrDef{
+			"character": {required: true},
+			"string":    {required: true},
+		}},
+	}
+})
 
 // contentModels records what each XSLT element may contain, taken from the
 // Content line of the specification's element syntax summaries.
@@ -939,88 +943,90 @@ type contentModel struct {
 	model   string
 }
 
-var contentModels = map[string]contentModel{
-	"analyze-string":         {seqCtor: false, pcdata: false, kids: map[string]bool{"fallback": true, "matching-substring": true, "non-matching-substring": true}, model: "(xsl:matching-substring?, xsl:non-matching-substring?, xsl:fallback*)"},
-	"apply-imports":          {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true}, model: "xsl:with-param*"},
-	"apply-templates":        {seqCtor: false, pcdata: false, kids: map[string]bool{"sort": true, "with-param": true}, model: "(xsl:sort | xsl:with-param)*"},
-	"attribute":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"attribute-set":          {seqCtor: false, pcdata: false, kids: map[string]bool{"attribute": true}, model: "xsl:attribute*"},
-	"call-template":          {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true}, model: "xsl:with-param*"},
-	"character-map":          {seqCtor: false, pcdata: false, kids: map[string]bool{"output-character": true}, model: "(xsl:output-character*)"},
-	"choose":                 {seqCtor: false, pcdata: false, kids: map[string]bool{"otherwise": true, "when": true}, model: "(xsl:when+, xsl:otherwise?)"},
-	"comment":                {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"copy":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"copy-of":                {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"decimal-format":         {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"document":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"element":                {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"fallback":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"try":                    {seqCtor: true, pcdata: false, kids: map[string]bool{"catch": true, "fallback": true}, model: "(sequence-constructor, xsl:catch+)"},
-	"catch":                  {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"for-each":               {seqCtor: true, pcdata: false, kids: map[string]bool{"sort": true}, model: "(xsl:sort*, sequence-constructor)"},
-	"for-each-group":         {seqCtor: true, pcdata: false, kids: map[string]bool{"sort": true}, model: "(xsl:sort*, sequence-constructor)"},
-	"function":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true}, model: "(xsl:param*, sequence-constructor)"},
-	"if":                     {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"iterate":                {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true, "on-completion": true}, model: "(xsl:param*, xsl:on-completion?, sequence-constructor)"},
-	"next-iteration":         {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true}, model: "xsl:with-param*"},
-	"break":                  {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"on-completion":          {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"map":                    {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"map-entry":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"on-empty":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"on-non-empty":           {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"where-populated":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"fork":                   {seqCtor: false, pcdata: false, kids: map[string]bool{"sequence": true, "for-each-group": true, "fallback": true}, model: "(xsl:fallback*, ((xsl:sequence, xsl:fallback*)* | (xsl:for-each-group, xsl:fallback*)))"},
-	"merge":                  {seqCtor: false, pcdata: false, kids: map[string]bool{"merge-source": true, "merge-action": true, "fallback": true}, model: "(xsl:merge-source+, xsl:merge-action, xsl:fallback*)"},
-	"merge-source":           {seqCtor: false, pcdata: false, kids: map[string]bool{"merge-key": true}, model: "xsl:merge-key+"},
-	"merge-key":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"merge-action":           {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"evaluate":               {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true, "fallback": true}, model: "(xsl:with-param | xsl:fallback)*"},
-	"import":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"import-schema":          {seqCtor: false, foreign: "schema", pcdata: false, kids: nil, model: "xs:schema?"},
-	"include":                {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"key":                    {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"matching-substring":     {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"message":                {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"assert":                 {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"namespace":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"mode":                   {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"namespace-alias":        {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"next-match":             {seqCtor: false, pcdata: false, kids: map[string]bool{"fallback": true, "with-param": true}, model: "(xsl:with-param | xsl:fallback)*"},
-	"non-matching-substring": {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"number":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"otherwise":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"output":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"output-character":       {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"param":                  {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"perform-sort":           {seqCtor: true, pcdata: false, kids: map[string]bool{"sort": true}, model: "(xsl:sort+, sequence-constructor)"},
-	"preserve-space":         {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"processing-instruction": {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"result-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"stream":                 {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"source-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"sequence":               {seqCtor30: true, pcdata: false, kids: map[string]bool{"fallback": true}, model: "xsl:fallback*"},
-	"sort":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"strip-space":            {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"stylesheet":             {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
-	"package":                {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true, "use-package": true, "expose": true}, model: "(xsl:import*, xsl:use-package*, xsl:expose*, other-declarations)"},
-	"use-package":            {seqCtor: false, pcdata: false, kids: map[string]bool{"accept": true, "override": true}, model: "(xsl:accept | xsl:override)*"},
-	"expose":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"accept":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"override":               {seqCtor: false, decls: true, pcdata: false, kids: nil, model: "declarations"},
-	"original":               {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"accumulator":            {seqCtor: false, pcdata: false, kids: map[string]bool{"accumulator-rule": true}, model: "xsl:accumulator-rule+"},
-	"accumulator-rule":       {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"context-item":           {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"global-context-item":    {seqCtor: false, pcdata: false, kids: nil, model: ""},
-	"template":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true, "context-item": true}, model: "(xsl:context-item?, xsl:param*, sequence-constructor)"},
-	"text":                   {seqCtor: false, pcdata: true, kids: nil, model: "#PCDATA"},
-	"transform":              {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
-	"value-of":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"variable":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"when":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"with-param":             {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-}
+var contentModels = sync.OnceValue(func() map[string]contentModel {
+	return map[string]contentModel{
+		"analyze-string":         {seqCtor: false, pcdata: false, kids: map[string]bool{"fallback": true, "matching-substring": true, "non-matching-substring": true}, model: "(xsl:matching-substring?, xsl:non-matching-substring?, xsl:fallback*)"},
+		"apply-imports":          {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true}, model: "xsl:with-param*"},
+		"apply-templates":        {seqCtor: false, pcdata: false, kids: map[string]bool{"sort": true, "with-param": true}, model: "(xsl:sort | xsl:with-param)*"},
+		"attribute":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"attribute-set":          {seqCtor: false, pcdata: false, kids: map[string]bool{"attribute": true}, model: "xsl:attribute*"},
+		"call-template":          {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true}, model: "xsl:with-param*"},
+		"character-map":          {seqCtor: false, pcdata: false, kids: map[string]bool{"output-character": true}, model: "(xsl:output-character*)"},
+		"choose":                 {seqCtor: false, pcdata: false, kids: map[string]bool{"otherwise": true, "when": true}, model: "(xsl:when+, xsl:otherwise?)"},
+		"comment":                {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"copy":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"copy-of":                {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"decimal-format":         {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"document":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"element":                {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"fallback":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"try":                    {seqCtor: true, pcdata: false, kids: map[string]bool{"catch": true, "fallback": true}, model: "(sequence-constructor, xsl:catch+)"},
+		"catch":                  {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"for-each":               {seqCtor: true, pcdata: false, kids: map[string]bool{"sort": true}, model: "(xsl:sort*, sequence-constructor)"},
+		"for-each-group":         {seqCtor: true, pcdata: false, kids: map[string]bool{"sort": true}, model: "(xsl:sort*, sequence-constructor)"},
+		"function":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true}, model: "(xsl:param*, sequence-constructor)"},
+		"if":                     {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"iterate":                {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true, "on-completion": true}, model: "(xsl:param*, xsl:on-completion?, sequence-constructor)"},
+		"next-iteration":         {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true}, model: "xsl:with-param*"},
+		"break":                  {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"on-completion":          {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"map":                    {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"map-entry":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"on-empty":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"on-non-empty":           {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"where-populated":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"fork":                   {seqCtor: false, pcdata: false, kids: map[string]bool{"sequence": true, "for-each-group": true, "fallback": true}, model: "(xsl:fallback*, ((xsl:sequence, xsl:fallback*)* | (xsl:for-each-group, xsl:fallback*)))"},
+		"merge":                  {seqCtor: false, pcdata: false, kids: map[string]bool{"merge-source": true, "merge-action": true, "fallback": true}, model: "(xsl:merge-source+, xsl:merge-action, xsl:fallback*)"},
+		"merge-source":           {seqCtor: false, pcdata: false, kids: map[string]bool{"merge-key": true}, model: "xsl:merge-key+"},
+		"merge-key":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"merge-action":           {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"evaluate":               {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true, "fallback": true}, model: "(xsl:with-param | xsl:fallback)*"},
+		"import":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"import-schema":          {seqCtor: false, foreign: "schema", pcdata: false, kids: nil, model: "xs:schema?"},
+		"include":                {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"key":                    {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"matching-substring":     {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"message":                {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"assert":                 {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"namespace":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"mode":                   {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"namespace-alias":        {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"next-match":             {seqCtor: false, pcdata: false, kids: map[string]bool{"fallback": true, "with-param": true}, model: "(xsl:with-param | xsl:fallback)*"},
+		"non-matching-substring": {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"number":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"otherwise":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"output":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"output-character":       {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"param":                  {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"perform-sort":           {seqCtor: true, pcdata: false, kids: map[string]bool{"sort": true}, model: "(xsl:sort+, sequence-constructor)"},
+		"preserve-space":         {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"processing-instruction": {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"result-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"stream":                 {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"source-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"sequence":               {seqCtor30: true, pcdata: false, kids: map[string]bool{"fallback": true}, model: "xsl:fallback*"},
+		"sort":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"strip-space":            {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"stylesheet":             {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
+		"package":                {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true, "use-package": true, "expose": true}, model: "(xsl:import*, xsl:use-package*, xsl:expose*, other-declarations)"},
+		"use-package":            {seqCtor: false, pcdata: false, kids: map[string]bool{"accept": true, "override": true}, model: "(xsl:accept | xsl:override)*"},
+		"expose":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"accept":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"override":               {seqCtor: false, decls: true, pcdata: false, kids: nil, model: "declarations"},
+		"original":               {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"accumulator":            {seqCtor: false, pcdata: false, kids: map[string]bool{"accumulator-rule": true}, model: "xsl:accumulator-rule+"},
+		"accumulator-rule":       {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"context-item":           {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"global-context-item":    {seqCtor: false, pcdata: false, kids: nil, model: ""},
+		"template":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true, "context-item": true}, model: "(xsl:context-item?, xsl:param*, sequence-constructor)"},
+		"text":                   {seqCtor: false, pcdata: true, kids: nil, model: "#PCDATA"},
+		"transform":              {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
+		"value-of":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"variable":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"when":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+		"with-param":             {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	}
+})
 
 // xsltInstructions is the "instruction" category of the element syntax
 // summaries: the elements that may appear in a sequence constructor.
@@ -1140,24 +1146,26 @@ type qnameAttrDef struct {
 // is "not one of the permitted values for that attribute". The distinction
 // the table carries is whether the summary brackets the type, because only a
 // bracketed one may hold a curly-bracket template.
-var qnameAttrs = map[string]map[string]qnameAttrDef{
-	"attribute":       {"name": {avt: true}, "type": {}},
-	"attribute-set":   {"name": {}, "use-attribute-sets": {list: true, code: "XTSE0710"}},
-	"call-template":   {"name": {}},
-	"character-map":   {"name": {}, "use-character-maps": {list: true}},
-	"copy":            {"use-attribute-sets": {list: true, code: "XTSE0710"}, "type": {}},
-	"copy-of":         {"type": {}},
-	"decimal-format":  {"name": {}},
-	"document":        {"type": {}},
-	"element":         {"name": {avt: true, code: "XTDE0820"}, "use-attribute-sets": {list: true, code: "XTSE0710"}, "type": {}},
-	"function":        {"name": {}},
-	"key":             {"name": {}},
-	"output":          {"name": {}, "cdata-section-elements": {list: true}, "use-character-maps": {list: true}},
-	"param":           {"name": {}},
-	"result-document": {"format": {avt: true, code: "XTDE1460"}, "type": {}, "cdata-section-elements": {list: true, avt: true}, "use-character-maps": {list: true}},
-	"stream":          {"type": {}},
-	"source-document": {"type": {}},
-	"template":        {"name": {}},
-	"variable":        {"name": {}},
-	"with-param":      {"name": {}},
-}
+var qnameAttrs = sync.OnceValue(func() map[string]map[string]qnameAttrDef {
+	return map[string]map[string]qnameAttrDef{
+		"attribute":       {"name": {avt: true}, "type": {}},
+		"attribute-set":   {"name": {}, "use-attribute-sets": {list: true, code: "XTSE0710"}},
+		"call-template":   {"name": {}},
+		"character-map":   {"name": {}, "use-character-maps": {list: true}},
+		"copy":            {"use-attribute-sets": {list: true, code: "XTSE0710"}, "type": {}},
+		"copy-of":         {"type": {}},
+		"decimal-format":  {"name": {}},
+		"document":        {"type": {}},
+		"element":         {"name": {avt: true, code: "XTDE0820"}, "use-attribute-sets": {list: true, code: "XTSE0710"}, "type": {}},
+		"function":        {"name": {}},
+		"key":             {"name": {}},
+		"output":          {"name": {}, "cdata-section-elements": {list: true}, "use-character-maps": {list: true}},
+		"param":           {"name": {}},
+		"result-document": {"format": {avt: true, code: "XTDE1460"}, "type": {}, "cdata-section-elements": {list: true, avt: true}, "use-character-maps": {list: true}},
+		"stream":          {"type": {}},
+		"source-document": {"type": {}},
+		"template":        {"name": {}},
+		"variable":        {"name": {}},
+		"with-param":      {"name": {}},
+	}
+})

@@ -814,7 +814,7 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 			if resolved && !unprefixedLexical(name) && uri != xdm.NSXSL {
 				return xdm.One(xdm.NewBoolean(false)), nil
 			}
-			def, ok := xsltElements[local]
+			def, ok := xsltElements()[local]
 			if !ok {
 				return xdm.One(xdm.NewBoolean(false)), nil
 			}

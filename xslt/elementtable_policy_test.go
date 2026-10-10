@@ -97,7 +97,7 @@ func TestElementTablePolicyDeclaresEveryDivergence(t *testing.T) {
 	// the document says. A divergence that was fixed without the row being
 	// removed is drift in the other direction.
 	for _, d := range declaredDivergences {
-		def, ok := xsltElements[d.element]
+		def, ok := xsltElements()[d.element]
 		if !ok {
 			t.Errorf("%s/@%s: docs/element-table-policy.md lists it, but "+
 				"xsl:%s is not in the table", d.element, d.attr, d.element)
@@ -128,7 +128,7 @@ func TestElementTablePolicyDeclaresEveryDivergence(t *testing.T) {
 	// Nothing may carry removed30 without a row. That flag exists only to
 	// name a withdrawn draft spelling, so one appearing undeclared is exactly
 	// the event this test is for.
-	for el, def := range xsltElements {
+	for el, def := range xsltElements() {
 		for attr, ad := range def.attrs {
 			if !ad.removed30 {
 				continue
@@ -144,7 +144,7 @@ func TestElementTablePolicyDeclaresEveryDivergence(t *testing.T) {
 	// The two elements with no syntax summary are enumerated too; a third
 	// invented element is caught by TestElementTableMatchesRecommendation.
 	for _, el := range declaredExtraElements {
-		if _, ok := xsltElements[el]; !ok {
+		if _, ok := xsltElements()[el]; !ok {
 			t.Errorf("docs/element-table-policy.md lists xsl:%s, which the "+
 				"table no longer has", el)
 		}
@@ -243,7 +243,7 @@ func TestElementTableMatchesRecommendation(t *testing.T) {
 	for _, el := range declaredExtraElements {
 		extra[el] = true
 	}
-	for el, def := range xsltElements {
+	for el, def := range xsltElements() {
 		ra, ok := rec[el]
 		if !ok {
 			if !extra[el] {
@@ -281,7 +281,7 @@ func TestElementTableMatchesRecommendation(t *testing.T) {
 	}
 	for el := range rec {
 		// xsl:example-element is section 2.2's illustration of the notation.
-		if _, ok := xsltElements[el]; !ok && el != "example-element" {
+		if _, ok := xsltElements()[el]; !ok && el != "example-element" {
 			t.Errorf("xsl:%s has a syntax summary but is not in the table", el)
 		}
 	}
@@ -333,7 +333,7 @@ func TestElementTablePolicyVisibilityEnumerations(t *testing.T) {
 		{"attribute-set", false},
 		{"mode", false}, // narrower still: no "abstract" either
 	} {
-		ad, ok := xsltElements[c.element].attrs["visibility"]
+		ad, ok := xsltElements()[c.element].attrs["visibility"]
 		if !ok {
 			t.Errorf("xsl:%s has no @visibility", c.element)
 			continue
@@ -349,7 +349,7 @@ func TestElementTablePolicyVisibilityEnumerations(t *testing.T) {
 				c.element, has, c.hidden, ad.values)
 		}
 	}
-	if v := xsltElements["mode"].attrs["visibility"].values; len(v) != 3 {
+	if v := xsltElements()["mode"].attrs["visibility"].values; len(v) != 3 {
 		t.Errorf("xsl:mode/@visibility is %v; the summary gives "+
 			"public|private|final and a mode has no signature to leave "+
 			"unimplemented", v)
@@ -383,7 +383,7 @@ func sameEnumeration(a, b []string) bool {
 // entries are restored as well as if the check is dropped.
 func TestGlobalContextItemDeadEntries(t *testing.T) {
 	for _, attr := range []string{"streamable", "use-accumulators"} {
-		if _, ok := xsltElements["global-context-item"].attrs[attr]; ok {
+		if _, ok := xsltElements()["global-context-item"].attrs[attr]; ok {
 			t.Errorf("xsl:global-context-item/@%s is back in the table; it "+
 				"cannot be consulted, because the element is checked "+
 				"against the context-item key. See "+
@@ -429,7 +429,7 @@ func TestGlobalContextItemDeadEntries(t *testing.T) {
 func TestStandaloneStaysNarrowAtTwoPointZero(t *testing.T) {
 	want := []string{"yes", "no", "omit"}
 	for _, el := range []string{"output", "result-document"} {
-		got := xsltElements[el].attrs["standalone"].values
+		got := xsltElements()[el].attrs["standalone"].values
 		if !sameEnumeration(got, want) {
 			t.Errorf("xsl:%s/@standalone is %v, want %v -- the 3.0 synonyms "+
 				"are admitted by allowsBoolAliases, not by this list; "+

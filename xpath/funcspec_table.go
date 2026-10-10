@@ -64,7 +64,7 @@ import (
 // functions commit 7668773 fixed by hand, so the structural check and the
 // hand fix now answer the same question, and the hand fix's tests are what
 // prove they answer it the same way.
-var specSignatures = func() map[string][]string {
+var specSignatures = sync.OnceValue(func() map[string][]string {
 	m := map[string][]string{
 		"name/1":            {"xs:string", "node()?"},
 		"local-name/1":      {"xs:string", "node()?"},
@@ -534,7 +534,7 @@ var specSignatures = func() map[string][]string {
 	m["format-number/2"] = []string{"xs:string", "xs:numeric?", "xs:string"}
 	m["format-number/3"] = []string{"xs:string", "xs:numeric?", "xs:string", "xs:string?"}
 	return m
-}()
+})
 
 // functionSpecs is the parsed table, built once and shared, keyed by
 // specKey(name, arity).
@@ -568,7 +568,7 @@ func lookupSpecParams(name xdm.QName, arity int) ([]SequenceType, bool) {
 // enforcement test reports such an entry, so it cannot hide.
 func buildFunctionSpecs() {
 	functionSpecs = map[fnKey][]SequenceType{}
-	for key, sig := range specSignatures {
+	for key, sig := range specSignatures() {
 		name, arity, ok := splitSpecEntryKey(key)
 		if !ok || len(sig) < 1 {
 			continue

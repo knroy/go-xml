@@ -130,7 +130,7 @@ func TestEveryStandardBuiltinHasAManifestSignature(t *testing.T) {
 func TestFunctionItemSignaturesMatchSpecSignatures(t *testing.T) {
 	l := Builtins()
 	matched := 0
-	for key, sig := range specSignatures {
+	for key, sig := range specSignatures() {
 		name, arity, ok := splitSpecEntryKey(key)
 		if !ok {
 			t.Errorf("%s: unreadable key", key)

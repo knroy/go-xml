@@ -430,7 +430,7 @@ func checkComputedMethod(name, v string) error {
 	if v == "" || isEQName(v) || (isLexicalQName(v) && strings.Contains(v, ":")) {
 		return nil
 	}
-	for _, want := range xsltElements["result-document"].attrs[name].values {
+	for _, want := range xsltElements()["result-document"].attrs[name].values {
 		if v == want {
 			return nil
 		}
