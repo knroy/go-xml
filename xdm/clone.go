@@ -202,11 +202,13 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 		}
 		d := place(j, r)
 		if s.flags&fTyped != 0 {
-			ty := *s.typ()
-			if o.Detached {
-				ty.env = nil
+			dt := d.ownTyping()
+			*dt = *s.typ() // the names are shared, not copied
+			if o.Detached && dt.get().env != nil {
+				v := *dt.names
+				v.env = nil
+				setNames(dt, v)
 			}
-			*d.ownTyping() = ty
 		}
 		if s.flags&fBase != 0 {
 			if o.Detached && s.kind == uint8(KindAttribute) {

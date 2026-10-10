@@ -28,13 +28,34 @@ var nonPSVIProperties = map[string]string{
 	"env": "the type environment, carried by SetTypeEnv, not by the typing copy",
 }
 
-// The typing a node carries lives in nodeTyping; every field of it is either
-// a PSVI property the typing copies carry or named here as one they do not.
+// typingFields lists the fields of nodeTyping and of the typingNames it
+// points to, which between them hold a node's typing.
+func typingFields() []reflect.StructField {
+	var fs []reflect.StructField
+	for _, rt := range []reflect.Type{reflect.TypeOf(nodeTyping{}), reflect.TypeOf(typingNames{})} {
+		for i := 0; i < rt.NumField(); i++ {
+			if f := rt.Field(i); f.Name != "names" {
+				fs = append(fs, f)
+			}
+		}
+	}
+	return fs
+}
+
+// typingField reads one of typingFields on n.
+func typingField(n *Node, name string) reflect.Value {
+	if f := reflect.ValueOf(n.typ()).Elem().FieldByName(name); f.IsValid() {
+		return f
+	}
+	return reflect.ValueOf(n.typ().get()).Elem().FieldByName(name)
+}
+
+// The typing a node carries lives in nodeTyping and typingNames; every field
+// of them is either a PSVI property the typing copies carry or named here as
+// one they do not.
 func TestPSVIPropertyCensus(t *testing.T) {
-	rt := reflect.TypeOf(nodeTyping{})
 	seen := map[string]bool{}
-	for i := 0; i < rt.NumField(); i++ {
-		f := rt.Field(i)
+	for _, f := range typingFields() {
 		seen[f.Name] = true
 		if psviProperties[f.Name] {
 			continue
@@ -72,11 +93,14 @@ func TestCopyTypingFromCarriesEveryPSVIProperty(t *testing.T) {
 	dst := NewNode(KindElement, QName{}, "")
 	dst.CopyTypingFrom(src)
 
-	sv, dv := reflect.ValueOf(src.typ()).Elem(), reflect.ValueOf(dst.typ()).Elem()
 	for name := range psviProperties {
 		// The fields are unexported, so they are compared by their printed
 		// values: Interface would panic on them.
-		got, want := fmt.Sprint(dv.FieldByName(name)), fmt.Sprint(sv.FieldByName(name))
+		dv, sv := typingField(dst, name), typingField(src, name)
+		if !dv.IsValid() || !sv.IsValid() {
+			t.Fatalf("no typing field %s", name)
+		}
+		got, want := fmt.Sprint(dv), fmt.Sprint(sv)
 		if got != want {
 			t.Errorf("CopyTypingFrom did not carry %s: got %v, want %v", name, got, want)
 		}
@@ -129,4 +153,28 @@ func setEveryPSVIProperty(n *Node) {
 	n.ApplyTyping(Typing{TypeAnnotation: "{urn:census}T", UnionMember: "{urn:census}M",
 		DerivedPrimitive: "decimal", ListItem: "decimal", IsID: true, IsIDREFS: true,
 		IsNilled: true, NoTypedValue: true, MixedContent: true})
+}
+
+// TestTypingNamesAreShared pins that nodes typed alike share one set of names
+// and that changing one node's typing leaves the other's alone.
+func TestTypingNamesAreShared(t *testing.T) {
+	env := NewTypeEnvironment()
+	a := NewNode(KindElement, QName{Local: "a"}, "")
+	b := NewNode(KindElement, QName{Local: "b"}, "")
+	ann := AnnotationName("urn:shared", "T")
+	a.SetAssessedTyping(ann, "decimal", "", env, false, false)
+	b.SetAssessedTyping(ann, "decimal", "", env, true, false)
+	if a.typ().names != b.typ().names {
+		t.Error("equal names are not shared")
+	}
+	b.SetTypeEnv(nil)
+	b.ApplyTyping(Typing{TypeAnnotation: "other", UnionMember: "m"})
+	if got := TypingOf(a); got.TypeAnnotation != ann || got.DerivedPrimitive != "decimal" ||
+		got.UnionMember != "" || got.NoTypedValue || a.TypeEnv() != env {
+		t.Errorf("a changed with b: %+v env %p", got, a.TypeEnv())
+	}
+	if got := TypingOf(b); got.TypeAnnotation != "other" || got.UnionMember != "m" ||
+		got.DerivedPrimitive != "" || b.TypeEnv() != nil {
+		t.Errorf("b: %+v env %p", got, b.TypeEnv())
+	}
 }
