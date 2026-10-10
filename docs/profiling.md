@@ -1,285 +1,487 @@
-# Profiling: what is left to fix
+# Profiling go-xml
 
-This document lists the performance work that is still open on v2, the
-ideas that were measured and rejected, and how to measure. The open fixes and
-the rejected ideas were measured on the `v2` branch at `ef76ae2c` and, for the
-third fix round, on the lanes merged as `v2x-int` (each item against the commit
-before it). The standing in [Where go-xml stands](#where-go-xml-stands) comes
-from full benchmark runs at `377452c0` and at `4068c98c`.
+Where go-xml v2's CPU time and memory go today, how to profile a change and
+A/B it against a baseline, and which ideas were already measured and
+rejected. Every figure here was measured on `a6f334f1` (version 2.0.0).
+What changed and when is in [CHANGELOG.md](../CHANGELOG.md) and `git log`.
+The fix-round records this file used to carry (V1–V51, with each item's
+measured gain) are in `git show 026e873a:docs/profiling.md`, and the earlier
+rounds (T, R and S items) in `git show aefbd8a5:docs/profiling.md`.
 
-Fixes that have landed are not repeated here. Each is in
-[CHANGELOG.md](../CHANGELOG.md) and the git history. The six earlier
-profiling rounds (T1–T23, R1–R13, S1–S11, the round 4–6 changes, the v2
-context split and node records, and the v2 allocation cuts) are in the
-previous version of this file: `git show aefbd8a5:docs/profiling.md`.
+## Contents
+
+- [Where go-xml stands](#where-go-xml-stands)
+- [Where the time goes](#where-the-time-goes)
+  - [Totals](#totals)
+  - [XSLT: DocBook xslTNG](#xslt-docbook-xsltng)
+  - [XSLT: Peppol and XRechnung](#xslt-peppol-and-xrechnung)
+  - [XQuery: XMark](#xquery-xmark)
+  - [XSD validation and typed validation](#xsd-validation-and-typed-validation)
+  - [RELAX NG](#relax-ng)
+  - [Parse and Canonical XML](#parse-and-canonical-xml)
+- [How to profile a change](#how-to-profile-a-change)
+  - [Linux](#linux)
+- [Open opportunities](#open-opportunities)
+- [Measured and rejected](#measured-and-rejected)
 
 ## Where go-xml stands
 
-Warm time, go-xml over the reference engine (geometric mean). Each version is
-compared with the reference times from its own benchmark run
-([benchmark](benchmark.md)). "v2, pre-fix" is the run before the fix rounds;
-"v2, rounds 1–2" is `377452c0`, after the first two rounds; "v2, round 3" is
-`4068c98c` (2026-10-10), after the third round (V17, V21–V51). The fixes are
-under [Landed](#landed-in-the-v2-fix-round); the [open fixes](#open-fixes)
-(V31, V36) are not projected.
+Warm time in a long-running process, go-xml over the reference engine:
+the geometric mean over the items both engines agreed on, with each ratio
+computed against the reference times from the same run. Below 1 means go-xml
+is faster. v1 is the run at `f45068c` (`bench/results-v1-f45068c.json`);
+v2.0.0 is the run at `a6f334f1` on 2026-10-10 (`bench/results-v2.0.0.json`).
+Both ran every engine on the same machine. The cold figures, the memory and the
+per-item tables are in [benchmark.md](benchmark.md).
 
-| Workload | Reference | v1 | v2, pre-fix | v2, rounds 1–2 | v2, round 3 |
-|---|---|---:|---:|---:|---:|
-| DocBook xslTNG | Saxon-HE | 0.46× | 0.37× | 0.24× | 0.19× |
-| DocBook `ptoc.001` | Saxon-HE | 1.49× | 1.17× | 0.98× | 0.86× |
-| Peppol Schematron | Saxon-HE | 1.99× | 1.31× | 1.22× | 1.16× |
-| XRechnung stage 1 | Saxon-HE | 3.00× | 1.77× | 1.46× | 1.25× |
-| XRechnung stage 2 | Saxon-HE | 1.42× | 1.23× | 0.75× | 0.89× |
-| XMark q1–q20 | Saxon-HE | 1.00× | 0.97× | 0.86× | 0.84× |
-| XSD catalogs | Xerces-J | 0.73× | 0.69× | 0.73× | 0.67× |
-| RELAX NG DocBook 5.2 | Jing | 0.60× | 0.75× | 0.91× | 0.76× |
-| Parse 1/10/100 MB | `encoding/xml` | 0.54× | 0.57× | 0.53× | 0.57× |
+| Workload | Reference | v1 | v2.0.0 |
+|---|---|---:|---:|
+| DocBook xslTNG | Saxon-HE | 0.46× | 0.20× |
+| DocBook `ptoc.001` | Saxon-HE | 1.49× | 0.85× |
+| Peppol Schematron | Saxon-HE | 1.99× | 0.94× |
+| XRechnung stage 1 | Saxon-HE | 3.00× | 1.08× |
+| XRechnung stage 2 | Saxon-HE | 1.42× | 0.64× |
+| XMark q1–q20 | Saxon-HE | 1.00× | 0.77× |
+| XSD catalogs | Xerces-J | 0.73× | 0.61× |
+| RELAX NG DocBook 5.2 | Jing | 0.60× | 0.55× |
+| Parse 1/10/100 MB | `encoding/xml` | 0.54× | 0.46× |
 
-The XSD and RELAX NG ratios follow the JVM validators more than go-xml.
-go-xml's geometric mean per document went 1.07 → 1.05 → 1.02 → 0.99 ms on XSD
-and 26.8 → 28.4 → 27.6 → 24.5 µs on RELAX NG, while Xerces ran at 1.47, 1.53,
-1.39 and 1.49 ms and Jing at 44.5, 37.9, 30.4 and 32.5 µs in the same four
-runs. XRechnung stage 2 crossed 1× at `377452c0` partly because Saxon's median
-there was 3.4 ms against 2.8 ms in the pre-fix run, and moved back to 0.89× at
-`4068c98c` because Saxon's was 2.6 ms; go-xml's went 3.3 → 2.6 → 2.3 ms. Parse
-moved from 0.53× to 0.57× with `encoding/xml` level: go-xml's warm 100 MB parse
-took 839 ms at `377452c0` and 890 ms at `4068c98c`, which has not been
-bisected.
+Read Peppol, XRechnung and RELAX NG with the reference engine's own times
+beside them. Against the previous run (v2 at `4068c98c`), go-xml's time on
+those four workloads did not move by more than 4%. The JVM's did:
+- Saxon's geometric mean on Peppol rose from 1.29 to 1.60 ms (+24%).
+- Saxon's on XRechnung stage 1 rose from 2.27 to 2.60 ms (+15%), and on
+  stage 2 from 2.56 to 3.51 ms (+37%).
+- Jing's on RELAX NG rose from 32.5 to 42.6 µs per document.
 
-On XSLT, most of the time left goes to the garbage collector and the
-allocator: 26–47% GC marking and 14–28% `mallocgc`, from Linux profiles. CPU
-follows allocation volume. At factor 0.1, XMark is parse-bound: the parse
-takes 48–50 ms of every query except q10–q12.
+In that run the same four ratios were 1.16×, 1.25×, 0.89× and 0.76×.
+The XMark, XSD and parse moves are go-xml's own: go-xml got 8%, 8% and 19%
+faster, and the reference engines were level.
 
-### The three apparent regressions
+## Where the time goes
 
-| Benchmark figure | Finding |
-|---|---|
-| DocBook compile 55 → 77 ms | **Real.** Bisected to `a81dff28` (the 40-byte records). The stylesheet checks walk ancestors for the version attribute (`effectiveForwards`, `moduleAtLeast30`, `xpathVersionAt` …). Each `Attr` lookup now goes through the name table instead of an inlined field read, which costs about 5 ms. The static-phase copies add about 2 ms, and the smaller heap runs more GC cycles (115 against 84 per 20 compiles). Fixed by V7 (landed, see [Landed](#landed-in-the-v2-fix-round)) |
-| Parse warm 0.54× → 0.57× `encoding/xml` | **Not the parse.** Parse wall time is level with v1 and its CPU is 39% lower. The C14N write that the item includes was 14% slower. V11 (landed, see [Landed](#landed-in-the-v2-fix-round)) cut the write 10–12% and the item 3.7%, from the output buffer rather than the accessors |
-| RELAX NG warm 0.60× → 0.75× Jing | **Mostly Jing.** The same Jing jar ran 15% faster in this run, which accounts for about 73% of the change. go-xml's own share is +4–6% on small documents, from per-document parse set-up (V18, read windows landed, see [Landed](#landed-in-the-v2-fix-round)). Long documents are 18–40% faster than v1 |
+Each workload's warm loop was profiled on its own: compile once, then parse →
+run → serialise to `io.Discard`, with the benchmark's parse options,
+resolvers and parameters. The harness is
+[the one below](#how-to-profile-a-change). Totals (getrusage CPU, exact
+allocation counts) come from the macOS runs, the benchmark's own machine.
+Attribution comes from the same binary cross-compiled for Linux and run in a
+Docker Desktop VM (12 CPUs) on the same M3 Pro, because macOS profiles
+misplace samples (see [Linux](#linux)). Every share below is of all CPU
+samples in that Linux profile.
 
-### Two regressions the ratios do not show
+"GC" is the collector's background mark workers. "Allocator" is time
+under `mallocgc` and its callers in the runtime. On this 12-core machine,
+much of the marking runs on processors that would otherwise be idle. The
+runtime's own estimate (`runtime/metrics`, `/cpu/classes/gc/mark/idle`) puts
+that at 60% of DocBook's GC CPU, 50% of Peppol's and about 15% of
+XRechnung's. Idle marking costs CPU but little wall time. On a fully loaded
+server the same work competes with the transforms.
 
-- **Typed validation** (`ValidateCopy`) costs 2.5–3.4× what v1's in-place
-  annotation did. It makes two full per-node copies: the first to
-  validate, the second to drop whitespace and add defaults. On top of that,
-  three callers still copy the input first, as v1 had to. CLI
-  `-validate strict` on a 2.5 MB catalog takes 11 ms on v1 and 38 ms on v2.
-  Fixed by V2 (landed; see [Landed](#landed-in-the-v2-fix-round)).
-- **XMark q10** evaluation is 55% slower. XQuery element content is copied
-  twice per node (`xdm.Copy`, then `AppendNode`'s own copy), and
-  `limitInherited` builds three maps per constructed element. Fixed by V1
-  (`484cb4e8`, see [Landed](#landed-in-the-v2-fix-round)).
+### Totals
 
-## Open fixes
+Per pass over the benchmark's items, macOS, `GOGC=100`:
 
-The third v2 fix round (`v2x-int`, below) landed V17 and V21–V51 except the
-two items here and the five under [rejected](#measured-and-rejected). Both
-open items were left on their measured ceiling, not on a prototype.
+| Workload | Items | CPU | Allocations | Bytes | GC cycles | GC + allocator (Linux samples) |
+|---|---:|---:|---:|---:|---:|---:|
+| DocBook xslTNG | 42 | 742 ms | 6.51 M | 483 MB | 20.1 | 52% |
+| Peppol (CEN + Peppol rules) | 18 | 53.7 ms | 442 k | 25.5 MB | 2.0 | 49% |
+| XRechnung stage 1 | 8 | 34.0 ms | 347 k | 23.8 MB | 4.9 | 36% |
+| XRechnung stage 2 | 8 | 23.2 ms | 161 k | 15.6 MB | 3.0 | 25% |
+| XMark q1–q20, 1 and 11 MB | 40 | 1,018 ms | 2.29 M | 1,166 MB | 4.0 | 8% |
+| XSD catalogs, `Validate` | 11 | 44.3 ms | 2.8 k | 24.6 MB | 2.0 | 6% |
+| XSD catalogs, `ValidateCopy` | 11 | 66.2 ms | 25.5 k | 45.6 MB | 3.2 | 8% |
+| RELAX NG DocBook 5.2 | 40 | 2.84 ms | 14.9 k | 2.73 MB | 0.33 | 51% |
+| Parse + C14N, 1/10/100 MB | 3 | 885 ms | 19.6 k | 535 MB | 1.7 | 8% |
 
-| ID | Fix | Where | Measured | Risk / API |
-|---|---|---|---|---|
-| V31 | Validate the original tree read-only and clone once instead of twice | `xsd/validate_copy.go:60` | *ceiling* the first clone is 8.9% of `ValidateCopy` CPU and about half its clone bytes; recording typing in a map keyed by node instead comes out about even (estimate) | High: a dense typing layer in xdm and about ten typing read/write sites in xsd rerouted / none |
-| V36 | One namespace-binding stack shared by `validateStartElement` and `buildElement`; name cache keyed on the tokenizer's interned strings | `xdm/parse.go`, `wellformed.go` | *ceiling* prefix resolution 2.8% and `intern` 2.8% of 10 MB parse samples, about 1% on the invoices; V34's name cache took part of it | Medium: changes `validateStartElement`'s signature and rewrites `buildElement` / none |
+Bytes include the harness's `string(src)` copy of each input, as the
+benchmark's warm loop does: 22–24% of the bytes on XMark, XSD and parse.
 
-## Landed in the v2 fix round
+The workloads split into two kinds:
+- **Expression-heavy** (XSLT, RELAX NG): CPU follows allocation volume.
+  Half the CPU of DocBook, Peppol and RELAX NG is GC and allocator, and no
+  single function outside the runtime holds more than 5%.
+- **Parse-bound** (XMark, XSD, parse): most of the CPU is the tokenizer and
+  tree builder. They allocate in large chunks, so GC is under 8%.
 
-### Third round (V17, V21–V51)
+### XSLT: DocBook xslTNG
 
-Eight lanes on `bca42efc`, merged as `v2x-int`. Each item was measured
-against the commit before it (getrusage CPU, exact allocation and byte
-counts, paired medians of 5–30 alternated rounds) with eight lanes sharing
-the machine, so CPU under about 3% is noise and the byte counts are the
-reliable figure. Every item kept its workload outputs byte-identical, and
-the merged tree passed the full gate and the output differential.
+| Cost centre | Share | What it is |
+|---|---:|---|
+| GC mark | 38% | Background marking; `runtime/metrics` counts 22% of all CPU as idle-processor marking |
+| Allocator | 14% | Small objects: atomic values, sequences, context copies |
+| `xpath` (flat) | 15% | Expression evaluation: name and kind tests, sequence-type checks, calls |
+| `xslt` (flat) | 12% | Template dispatch, function calls, parameter binding, lazy globals |
+| `xdm` (flat) | 11% | Node accessors, `QName` comparison, atomisation |
+| Source parse, serialisation | 0.4% each | The documents are small (186 B to 54 KB) |
 
-| ID | Commit | Measured |
-|---|---|---|
-| V21 | `3208c54d` a simple type with no facets on its chain skips the facet checks | XSD catalog validate −12% CPU; allocations and bytes unchanged |
-| V22 | `ea894387` RELAX NG name memos are typed copy-on-write maps keyed by namespace and local name | RELAX NG corpus −15.3% CPU, long documents −6.7%, 40-document set −8.8%; allocations unchanged |
-| V23 | `fb7a15b0` RELAX NG keeps one child stack and one attribute buffer; a single text node skips the builder | After V22: corpus −15.1% CPU, −42% allocations, −33% bytes; long documents −26.8%, −84%, −75%. V22 + V23: −23 to −30% CPU. Verdicts and messages identical on all 589 documents |
-| V24 | `4e8fa840` the typed clone keeps a dense index of default-attribute insertions | Typed validate −5.7% CPU |
-| V25 | `8faf3493` XSD caches each type's annotation and writes typing once (`xdm.Node.SetAssessedTyping`) | Typed validate allocations −29%, −4.3% CPU |
-| V27 | `8e29a38f` a typing entry points at shared, immutable names (16 B instead of 80 B) | Typed validate bytes −42% (53.9 → 31.0 MB a pass), −11% CPU; parse + typed −28% bytes, −7% CPU. The names are shared through a 1,024-slot process-wide table hashed by string address and compared by value; a per-tree table multiplied allocations by 6, since each defaulted attribute starts as a tree of its own |
-| V29 | `d2f1b1b0` `ParseString` keeps its own string as the position source when decoding changes nothing | XSD parse + validate −12% bytes |
-| V33 | `06cf8508` the XML declaration is checked by hand instead of by regexp | Small parse −4.4% CPU |
-| V28 | `d2d1eb1e` character-reference spans are recorded only for XML 1.1 | `regex-syntax` −44% bytes, −7% allocations, GC cycles 1.8 → 1.1 |
-| V48 | `48db5cc1` the tokenizer scratch grows to `min(rest, 8×cap)` when a window would overflow it | XRechnung stage 1 −6.8% bytes, stage 2 −8.5%. Growing to the whole rest, as proposed, cost `regex-syntax` +6 to +17% bytes (140 KB text runs in 2 MB) |
-| V34 | `2dd09c03` a small direct-mapped cache in front of the tokenizer's name map | Parse −8.0% CPU at 1 MB, −6.9% at 10 MB, −5.3% at 100 MB |
-| V50 | `20e3f0f0` the text store keeps a string of 8 KB or more as its own block | XRechnung stage 1 −6.8% bytes, stage 2 −4.9%. Every `unsafe.String` producer feeding the store is append-only; a long substring of a larger string now keeps that string alive with the tree |
-| V37 | `6004f45c` text runs go straight into the text store | XRechnung stage 1 −2.9% bytes, stage 2 −3.9% |
-| V38 | `ae360399` `Rebase` stops at a subtree whose base URI already matches and holds no own base (`xdm.Node.DescendantsInheritBase`) | XMark q10 −5.1% CPU at 0.1; `Rebase` 3.3% → 0.65% of the q10 profile |
-| V39 | `fb01bf29` `smallNames` 8 → 24 | XMark q10 −4.8% allocations, −11% bytes; DocBook, CEN, Peppol within noise (16 also wins everywhere, slightly less) |
-| V41 | `c249ce3e` the six largest xpath and xslt tables are built on first use | Package init 1,893 → 1,121 allocations |
-| V32 | `47db4aa5` the remaining XML-declaration regexps are compiled on first use | With V41: init 785 allocations, 286 → 100 KB, 0.25 → 0.13 ms; cold XSD validate −0.12 ms (−3 to −4%), cold transform within noise. V33 later removed two of the three regexps |
-| V43 | `cf948ed9` the root runtime starts with merge, grouping and regex absent | XRechnung stage 2 −15.3% allocations, −11.8% bytes; DocBook −2.6% bytes |
-| V44 | `1e976a35` an absent bit for the output URI, so calls and pattern matches stop rebinding it | V43 + V44: DocBook −4.6% bytes, CEN −5.4%, Peppol −6.6%, stage 1 −4.8%, stage 2 −13.7% |
-| V45 | `bd28fa9e` templates and functions install their module's base URI once on entry | DocBook −3.5% bytes, −2.4% allocations; stage 1 −4.4% bytes |
-| V46 | `496f46af` int64 fast path for integer `+ - *` (overflow-checked), exact integer positional predicates, shared small-integer rationals | Peppol −13.2% allocations, −6.8% bytes, −10.5% CPU; stage 1 −7.1% CPU |
-| V47 | `71d73165` the whitespace-stripped copy of a `doc()` tree is cached per stylesheet, weakly keyed on the source tree and capped | DocBook −3.3% bytes, −7.9% CPU |
-| V49 | `f51ebda6` every function call counts recursion depth in place | DocBook −4.0% bytes, −3.9% CPU; Peppol −4.3% CPU |
-| V51 | `7f6f1689` `xpath.Context` 112 → 96 B: `Position`, `Size` and `Depth` are `int32` | Bytes −1.0 to −2.2% on every XSLT workload. `Funcs` is unchanged |
-| V17 | `a0250ddb` XSLT local variables and parameters live on one stack per transform, addressed by name, instead of a `WithVar` scope each | DocBook −5.8% CPU, −6.3% allocations, −8.7% bytes after V43. Not compile-time slots: the stack sits above the globals' scope, frames raise its base at template, function, lazy-global and attribute-set entry, a closure captures a frozen copy, and a function item called after its transform returns binds with `WithVar` again. Also fixed a called template or function seeing a caller's local named like a global |
+The profile is flat. The largest single functions are `QName` equality
+(2.0%), `NameTest.Matches` (1.2%), `SequenceType.matchesItem` (1.1%) and
+`sequenceType.convertAs` (1.1%).
 
-All XSLT items together (V43–V51), against `bca42efc`: DocBook −14.2% CPU,
-−9.7% allocations, −17.0% bytes; Peppol −13.4%, −15.3%, −15.2%; XRechnung
-stage 1 −7.5%, −10.6%, −11.6%; stage 2 −8.4%, −21.8%, −18.7%; CEN −0.2%,
-−2.9%, −8.0%. The parse items together: parse 100 MB −10.5% CPU, XRechnung
-stage 1 −17% CPU and −15.6% bytes, invoice parse −42% bytes.
+**Allocations** (155 k and 11.5 MB per document):
 
-The escaped-function-item race on `key()` and the other per-transform
-state is fixed in the same round (`fbd4b74a`; see [Correctness](#correctness)),
-at no measurable cost: no lock is taken until the transform returns.
+| Source | Objects | Bytes |
+|---|---:|---:|
+| `xdm.Atomize` (node values to atomics) | 9.3% | — |
+| `ContextItem.Eval`, `Step.evalFrom` (result sequences) | 9.1% | 4.5% |
+| `xdm.NewString`, `NewUntypedAtomic` | 7.9% | — |
+| `xdmbuild.New`, `AppendNode` (temporary trees) | 3.9% | 3.4% |
+| Context copies: `hostWithCurrent`, `withCurrent` (objects); `withSel` (bytes) | 6.1% | 4.5% |
+| `Tree.alloc` (result-tree records) | — | 6.2% |
+| `evalParams` (cumulative) | — | 6.4% |
 
-### Earlier rounds
+No source exceeds a tenth of the objects. DocBook's cost is many small
+allocations spread over the whole evaluator, and the collector work they
+cause.
 
-A/B against `0ff09c65`, getrusage CPU and allocation counts, medians of three
-alternated runs (four for parse).
+### XSLT: Peppol and XRechnung
 
-| ID | Commit | Measured |
-|---|---|---|
-| V1 | `484cb4e8` | XMark q10 eval −38% at 0.1 (−32% at 0.01), allocations −43%; q13 eval −37%, allocations −27%; q1–q20 allocations −12.7% |
-| V3 | `7186eb0e` | Parse 1 MB −2.2%, 10 MB −2.4%, `xp-striding` catalog −3.2%; XMark parse phase −6.0% at 0.1. Allocations +0.3% (one cache per indexed tree) |
-| V6 | `ae4f4d1b` | `table-cals.049` validate 18.8 → 12.7 ms CPU (−33%); 589-document corpus −18% (−5% with parse); 40-document set flat. Verdicts and messages identical on all 589 documents; pattern bytes +2–24% |
-| V8 | `5509745a` | `HTTPResolver` is `xsdnet.HTTPResolver`; `goxml_nohttp` removed. CLI binary −2.0 MB (−11%); small XSD validation 4.2 → 2.9 ms CPU, RSS 12.5 → 7.7 MB. Only `xsd/xsdnet` links `net/http` |
-| V9 | `c5184cb8` | `default.pgo` regenerated on v2: warm CPU −1 to −6% (DocBook −1 to −2%, CEN −3 to −6%, RELAX NG −3 to −7%, XSD level); cold CLI within ±1.5%. `MemProfileRate = 0` was not added: the CLI does not link `runtime/pprof`, so the linker already turns sampling off (forcing it on costs up to 10% on DocBook). The −8% in the V9 row came from a harness that links `runtime/pprof` |
-| V2 | `18c35f6`, `b48adaf` | XSD catalog warm `ValidateCopy` 102.2 → 53.5 ms CPU per pass, 74.8 → 53.5 MB; `xp-striding` 38–45 → 18–19 ms (v1 22), unicode-90 20.9 → 11.7 ms. 2.5 MB catalog: CLI `-validate strict` 63.0 → 43.2 ms CPU, `xsl:source-document validation="strict"` 77.9 → 54.2 ms, XQuery `validate strict {}` 68.5 → 44.9 ms. The clone is behind `internal/xdmclone`; no exported API. Still per node: a copy whose assessment added namespace declarations, and the ancestors-only first copy of a node below the document element. The source-document and merge pre-copy is kept for modes other than strict-with-schema and for trees with a DTD or positions; XQuery `validate` keeps its copy (made in bulk), since dropping it would change the result for an operand with a parent or a document-node operand |
-| V10 | `e48af61` | XSD catalog warm `Validate` 18.9 → 18.1 ms CPU, unicode-90 5.29 → 4.80 ms, 508 → 19 KB and 387 → 316 allocations per pass |
-| V5 | `462ee9a2` `NameTest.Matches` local name first; `35cd4d60` per-transform fields to `transformState` (runtime copy 176 → 112 B); `16f3d909` one focus context per predicate, behind a static capture check; `f2c08b2e` strip-space answer remembered per package and name (cap 4,096); `db7e1ba3` no position stamp on `next-iteration`/`break`; `40dbca21` `stripAnnotations` skips a never-typed tree (`Node.TreeHasTyping`) | XRechnung stage 1 −12% allocations, −10% CPU (focus reuse); stage 2 −9% CPU (untyped skip), −6% bytes; DocBook items −5% CPU and −8% bytes from the field move, −6% CPU and −6% allocations from the focus reuse; the strip pass 450 → 170 µs per DocBook document; an included `xsl:iterate` −10% per iteration; `Matches` −9% per call (within noise on the workloads) |
-| V7 | `23ace644` version-attribute walks remembered per Compile, off during the static phase; `be9eb58e` `FileResolver` remembers `EvalSymlinks` per path (cap 4,096; `os.Root` still confines at open) | DocBook compile −5% CPU from the walks, −7% CPU and −4% allocations from `EvalSymlinks` (32% → 6% of the compile profile on macOS); CEN compile −3.5% |
-| V11 | `63155c73` C14N appends to its own 64 KiB buffer instead of calling a `bufio.Writer` per token; `da27a7cd` the serializer's `element` has no defers (they forced the runtime's deferred-call path on every element) and calls `WriteString` directly | Against `257ade0d`, 3 alternated rounds: C14N 1 MB −9.6%, 10 MB −11.9% CPU (exclusive −10.8%, −10.5%); parse + C14N −3.7% at 1 and 10 MB; one allocation fewer, +16 KB buffer per call. Serializing a finished result: XMark q10 −22%, q2 −20%, XRechnung stage 2 −8%, DocBook −18%; allocations unchanged. No xdm API was added: a record walker measured slower than the accessors (see rejected) |
-| V4 | `7c5121ca` globals evaluated on first use, bound in one map scope (`xpath.Context.WithLazyVars`); `03adcab8` the errors and their wording stay those of eager evaluation: a global naming itself, reaching a cycle, mentioning `key(`, or with `xsl:message`, `xsl:assert`, `xsl:result-document` or `fn:trace` in its own body is still evaluated at the start, in declaration order. A/B against `257ade0d`, 5 rounds | All 42 DocBook items −9.7% CPU, −11.6% allocations; `ptoc.001`/`indexterm.001`/`chapter.003` −5.2%, −2.8%; XRechnung stage 1 −7.2%, −4.5%; stage 2 −2.4%, −0.3%; Peppol −5.5%, −3.5%; CEN and both compiles within noise. DocBook runs several transforms per document, with 300–950 globals each, and evaluates few of them. The prototype's −13% was against a base before V5, V7 and V13. Output differential: zero unexplained |
-| V13 | `e09f1060` the runtime holds its selection by pointer, allocated with the copy that selects it (runtime copy 112 → 64 B) | DocBook items −5.5% bytes, −3.8% CPU; XRechnung stage 2 −4.4% bytes, −2% CPU; allocation counts unchanged. Allocating the selection separately added 1.8% allocations and was dropped |
-| V14 | `a785e1a4` `xsl:sequence` and `xsl:copy-of` copy into an open element once, through `Builder.AppendCopyOf`; the namespace work of the old detached copy is done on the attached one. `copy-namespaces="no"` and the validating modes keep the detached copy | Copy micro case −49% CPU, −74% allocations; CEN −3.8% allocations, −6.1% bytes, −2.3% CPU; Peppol −2.2%, bytes −4.1%; DocBook −0.3%, bytes −0.7%; XRechnung unchanged (no such copies) |
-| V15 | `e62d96db` the parse-only `Tree` fields (external subset, source text, line index, offsets, foreign positions) behind `Tree.source`: `Tree` 424 → 320 B; `b22d90cc` `xsl:attribute` makes no node when strip or preserve leaves it untyped (that node was a fragment per attribute) | Tree: bytes CEN −1.3%, Peppol −0.8%, XRechnung 1 −1.6%, DocBook −0.6%. Attribute: XRechnung 1 −3.8% allocations, −5.6% bytes; CEN −2.0%, −4.3%; Peppol −1.4%, −3.3%. Both: XRechnung 1 bytes −7.1%, CEN −5.5%, Peppol −4.1%. CPU within noise. A smaller first chunk was measured and rejected |
-| V18 | `9ddd2bc6` a reader of known length gets read windows (encoding sniff, line-end scratch, tokeniser buffer) of its own length within 512–4,096 B instead of 4 KB each | 40 RELAX NG documents, warm parse: bytes −11.4%, CPU −5.7% (paired median), allocations and retained heap unchanged. Sizing the string arena too was measured and rejected |
+**Peppol** (Schematron compiled to XSLT 2.0, hundreds of independent
+assertions per invoice):
 
-Wave 2, A/B against `257ade0d` (V12) and `d5a980b6` (V19), getrusage CPU and
-allocations, medians of 5–7 alternated runs:
+| Cost centre | Share | What it is |
+|---|---:|---|
+| GC mark | 35% | `runtime/metrics` counts 16% of all CPU as idle-processor marking |
+| Allocator | 14% | Atomised values and result sequences |
+| `xpath` (flat) | 24% | `NameTest.Matches` 4.9%, axis walks, general comparisons |
+| `xslt` (flat) | 11% | Template-rule matching (`candidates`, `mayMatch`), serialising the SVRL (2.4%) |
+| `xdm` (flat) | 9.5% | `Tree.rec` 1.8%, `QName` equality 1.6%, `Atomize` |
+| Function-call resolution check | 3.1% | `FuncCall.resolve` re-validating its cache entry |
+| Source parse | 2.2% | |
 
-| ID | Commit | Measured |
-|---|---|---|
-| V12 | `d5a980b6` the transform's context carries the common version (3.1 under a 3.0 processor) and package (`Context.WithStaticHost`); an expression's namespaces are installed only where it reads them (format-date family, `function-lookup`) | CEN −5.1% CPU, −5.5% allocations, −9.2% bytes (the upper bound); Peppol CPU flat, −2.1% allocations, −3.6% bytes; DocBook flat: its included modules carry their own static base URI, which still copies (371,546 of 663,331 evaluations per pass) |
-| V19 | `babd534f` a parsed document indexes its elements by expanded name on the first `descendant::name` lookup (4 B per element, built in one pass; `internal/xdmindex`) | Parse and query each iteration: XMark q7 −7.8% CPU at 0.1, −5.9% at 0.01; q6 −2.8%; q14, q19 within noise (q19's single whole-document lookup: eval +4%). Bytes +5–7% per pass: the index is 0.67 MB (1.6% of an 11 MB document's tree), the rest the build's scratch. One document queried repeatedly: q6 −98.9%, q7 −98.2%, q14 −29.6% CPU. DocBook and the Schematron workloads unaffected: they reach `//name` 0–673 times per pass (the root-path index and keys answer the rest) |
+Allocations per (rule set, invoice) item are 24.6 k and 1.41 MB. By count:
+- `Atomize` 15.5% flat and 21.8% cumulative;
+- `Step.evalFrom` 13.1%;
+- `NewString` 8.7%;
+- `NewUntypedAtomic` 6.3%;
+- `Context.WithFocus` 4.1%.
 
-V1 and V3 together: XMark q1–q20 CPU −8.8% at 0.1 and −7.7% at 0.01; q10
-−33%, q13 −10%. The prototype's −40% q10 eval holds; its parse gains
-(−5.5 to −7%) measured smaller here, with four lanes sharing the machine.
+By bytes, `NewString` (7.1%), `WithFocus` (6.7%), `evalFrom` (6.6%) and
+`WithVar` (5.3%) lead. Each assertion's general comparison atomises node
+values into fresh strings, and that, more than evaluation, is where Peppol's
+time goes.
 
-V14, V15 and V18 were measured against `257ade0d` and each other in turn
-(5–7 alternated rounds); all 77 workload outputs stayed byte-identical.
+**XRechnung stage 1** (UBL to `xr:invoice`):
 
-V5, V7 and V13 together, against `0ff09c65` (7 alternated rounds, CPU and allocations per
-pass): CEN −4.0% CPU, −1.0% allocations; Peppol −6.8%, −2.4%; XRechnung
-stage 1 −11.0%, −11.7%; stage 2 −14.6%, −1.4%; DocBook `ptoc.001`,
-`indexterm.001` and `chapter.003` −17.1%, −7.5% (bytes −21%); all 42 DocBook
-items −18.3%, −4.5%; DocBook compile −11.0%, −4.0%; CEN compile −1.9%.
+| Cost centre | Share | What it is |
+|---|---:|---|
+| `name() = '…'` comparisons (`nameComparison`) | 20% | Cumulative. Half of it (10.5%) is `nameCallArg` proving again, on every evaluation, that `name` is the built-in |
+| Allocator | 22% | `evalGeneralComparison` alone makes 17.5% of the objects |
+| GC mark | 14% | |
+| Serialisation | 7.9% | Text escaping (`plainText`, `escapeTextRun`) |
+| Source parse | 4.6% | |
+
+`FuncCall.resolve`'s cache check (`callResolution.current`, interface
+comparisons) is 9.5% of the profile, two thirds of it from `nameCallArg`.
+Allocations per invoice are 43 k and 3.0 MB.
+
+**XRechnung stage 2** (`xr:invoice` to HTML):
+
+| Cost centre | Share | What it is |
+|---|---:|---|
+| Serialisation | 23% | HTML output with the inlined CSS and JavaScript: `plainText` 3.9%, `escapeTextRun` 3.1%, `bufio` 2.6% |
+| GC mark | 13% | |
+| Allocator | 11% | |
+| Source parse | 6.8% | |
+| `unparsed-text()` | 3.9% | Three files read again on every transform: the read 1.2%, `os.OpenRoot` 0.8%, `EvalSymlinks` on the directory 0.4% |
+
+By bytes, `Tree.alloc` (14%) and the text store (11%) lead; by count,
+`Atomize` (11%) and `key()` (`fnKey`, 24% cumulative). Allocations per
+invoice are 20 k and 1.95 MB.
+
+### XQuery: XMark
+
+| Cost centre | Share | What it is |
+|---|---:|---|
+| Parse | 82% | `internal/xmltok` 50% (`text` 14%, `nameBytes` 11%, `checkChars` 5.9%), tree building in `xdm` 31% |
+| Evaluation and serialisation | 16% | Query evaluation, result construction, output |
+| Allocator | 6.9% | `Tree.alloc`, FLWOR tuples |
+| GC mark | 1.3% | |
+
+Allocations: 42% of the bytes are node-record chunks (`Tree.alloc`), 22% the
+harness's input copy and 16% the text store. By count, FLWOR tuple binding
+(`tuple.bind`) is 27%, but these are small objects and about 2% of CPU. XMark
+at factor 0.1 is a parse benchmark.
+
+### XSD validation and typed validation
+
+**`Validate`** over the 11 catalog files:
+
+| Cost centre | Share | What it is |
+|---|---:|---|
+| Parse | 61% | Includes character references, 16% cumulative (`Decoder.reference`): the 2.1 MB `regex-syntax` catalog holds 184,000 of them |
+| Validation | 35% | Content-model matching, attribute checks, `QName` equality 4.3% |
+| GC mark | 3.6% | |
+
+Allocations are few (255 per document) and large. By count, `matchSequence`
+makes 25%, the position records (`setOffset`, `positionAt`) 34% and
+`Tree.alloc` 19%. By bytes, `Tree.alloc` makes 39%.
+
+**`ValidateCopy`** (typed validation; the typed copy is what XSLT and XQuery
+validation use) costs 1.50× `Validate`'s CPU on macOS (66.2 against 44.3 ms a
+pass), 1.86× its bytes and 9× its allocations:
+
+| Cost centre | Share | What it is |
+|---|---:|---|
+| Parse | 43% | As above |
+| Assessment | 36% | The validation itself, writing typing |
+| Clone | 7.9% | The single typed copy (`cloneSubtree`) |
+| Whitespace stripping | 4.8% | `stripIgnorableWhitespace` |
+| GC mark | 4.1% | |
+
+By count, defaulted attributes account for 79% of the allocations
+(`applyAttributeDefault`, cumulative): each starts as a fragment tree of its
+own. They are 1.7% of CPU. Typing records (`ownTyping`) are 22% of the
+objects. By bytes, `Tree.alloc` makes 21%, the clone 17% and the typing
+15%.
+
+### RELAX NG
+
+| Cost centre | Share | What it is |
+|---|---:|---|
+| Validation | 37% | Derivatives: `attDeriv` 3.7%, `startTagCloseDeriv` 2.3%, pattern interning and hashing |
+| GC mark | 37% | |
+| Parse | 22% | 40 small documents (68 KB of allocation each) |
+| Allocator | 14% | `newAfterPat` alone is 5.4% |
+
+48% of the bytes are the tokenizer's 32 KB string arena, one per document.
+`newAfterPat` makes 37% of the objects and `strings.Fields` (token
+normalisation) 12%. The documents are small, so that fixed arena dominates
+the bytes and drives the GC share. Sizing the arena to the input was measured
+and rejected because of how it moved GC pacing on DocBook (see
+[rejected](#measured-and-rejected)).
+
+### Parse and Canonical XML
+
+| Cost centre | Share | What it is |
+|---|---:|---|
+| Tokenizer (`internal/xmltok`) | 37% | `text` 8.2%, `checkChars` 5.5%, `nameBytes` 4.5%, `getc` 3.4% |
+| Tree building (`xdm`) | 34% | `parse` 4.1%, `Tree.alloc` 3.4%, `validateStartElement` 3.0% |
+| C14N write | 22% | `writeEscaped` 6.1%, `writeQName`, `writeAttrs` |
+| GC mark | 7.0% | Most of it on idle processors |
+| Allocator | 1.2% | |
+
+535 MB allocated a pass for 111 MB of input. Node-record chunks are 67% of
+it, the harness's input copy 23% and the text store 7%. About 19,600
+allocations a pass: the tree is a few large chunks, not an object per node.
+The 1 and 10 MB C14N workload gives the same split (parse 74%, write 22%).
+
+## How to profile a change
+
+**1. Build a warm-loop harness.** Copy the benchmark's warm loop
+(`compileGo` in the local `bench/cmd/benchrun/warm.go`) so the parse options,
+resolvers and parameters match: compile once, then parse →
+transform/query/validate → serialise to `io.Discard`. The figures above came
+from a test file next to it (`bench/cmd/benchrun/prof_test.go`, local like
+the rest of `bench/`). This is its core, which can be dropped into any
+package that can build a `run` function:
+
+```go
+func TestProfile(t *testing.T) {
+	runtime.MemProfileRate = 0 // CPU run: no allocation sampling
+	run := compileOnce(t)      // the warm loop's compile step
+	pass := func() { for _, it := range items { run(it) } }
+	for i := 0; i < passes/5; i++ { pass() } // warm-up, untimed
+
+	var m0, m1 runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&m0)
+	r0 := rusage() // syscall.Getrusage: Utime + Stime
+	f, _ := os.Create(out + "/cpu.pprof")
+	pprof.StartCPUProfile(f)
+	for i := 0; i < passes; i++ { pass() }
+	pprof.StopCPUProfile()
+	r1 := rusage()
+	runtime.ReadMemStats(&m1)
+	t.Logf("CPU/pass %v  allocs/pass %d  bytes/pass %d  GC/pass %.1f",
+		(r1-r0)/time.Duration(passes), (m1.Mallocs-m0.Mallocs)/uint64(passes),
+		(m1.TotalAlloc-m0.TotalAlloc)/uint64(passes),
+		float64(m1.NumGC-m0.NumGC)/float64(passes))
+}
+```
+
+For the allocation run, leave `MemProfileRate` at its default. Write
+`pprof.Lookup("allocs")` to `allocs.base` before the timed passes and to
+`allocs.pprof` after them. Do not take both profiles in one run: with
+allocation sampling on, the same passes used 3–9% more CPU (DocBook +2.7%,
+XRechnung stage 1 +7.3%, Peppol +9.2%).
+
+**2. Run it and read the profile.**
+
+```sh
+go test -c -o /tmp/prof.test ./bench/cmd/benchrun
+PROF_WORKLOAD=peppol-schematron PROF_OUT=/tmp/p PROF_PASSES=40 \
+  /tmp/prof.test -test.run TestProfile -test.count=1 -test.v
+go tool pprof -top -nodecount=30 /tmp/prof.test /tmp/p/cpu.pprof
+go tool pprof -top -cum -nodecount=60 /tmp/prof.test /tmp/p/cpu.pprof
+go tool pprof -peek 'FuncCall..resolve$' /tmp/prof.test /tmp/p/cpu.pprof
+go tool pprof -list 'FuncCall..resolve$' /tmp/prof.test /tmp/p/cpu.pprof
+PROF_MODE=mem PROF_WORKLOAD=peppol-schematron PROF_OUT=/tmp/p PROF_PASSES=40 \
+  /tmp/prof.test -test.run TestProfile -test.count=1
+go tool pprof -top -sample_index=alloc_objects \
+  -base /tmp/p/allocs.base /tmp/prof.test /tmp/p/allocs.pprof
+go tool pprof -top -sample_index=alloc_space \
+  -base /tmp/p/allocs.base /tmp/prof.test /tmp/p/allocs.pprof
+```
+
+Run enough passes for a few seconds of samples: 15 for DocBook, 40–150 for
+the invoices, 600 or more for RELAX NG. Deep XSLT recursion truncates the
+stacks pprof records, so a sample's root frames (the harness, `Transform`)
+are often missing. To split a profile into phases, match on leaf-side frames
+(`internal/xmltok`, `xslt.(*serializer)`) instead of on the caller.
+`go tool pprof -traces` prints every sample's stack for scripts that do this.
+
+**3. A/B against a baseline.** Never prototype in the checkout. Extract the
+baseline with `git archive <base> | tar -x -C /tmp/base`, put the same
+harness in both trees, and alternate the two builds back to back:
+
+```sh
+for i in 1 2 3 4 5 6 7; do
+  (cd /tmp/base/bench/cmd/benchrun && /tmp/base.test -test.run TestProfile ...)
+  (cd ~/go-xml/bench/cmd/benchrun && /tmp/new.test -test.run TestProfile ...)
+done
+```
+
+Compare paired medians of 5–30 rounds:
+- The allocation and byte counts are exact and repeat to three figures. They
+  are the reliable figure.
+- getrusage CPU is the total to compare. A CPU difference under about 3% is
+  noise on a laptop, and more so with other work running.
+- Wall time is the least reliable of the three.
+
+**4. Check the outputs are identical.** Record both trees and compare:
+
+```sh
+tests/record.sh /tmp/recA            # in the baseline tree
+tests/record.sh /tmp/recB            # in the changed tree
+go run ./tests/recdiff compare -allow tests/recdiff/allow.txt /tmp/recA /tmp/recB
+```
+
+Every difference must be explained, or admitted by a rule in
+`tests/recdiff/allow.txt` that names the behaviour change. A performance
+change should produce none.
+
+**5. Run the gate** in the background:
+`sh tests/check.sh > /tmp/gate.log 2>&1 &`. It takes long, and it fails on
+any dropped passing count.
+
+**Traps:**
+- **Measure plain parse too**, not only the workload you targeted. Parsing
+  sits under every workload. `smallNames` 24 (V39) won on XMark q10 but cost
+  plain parsing 7%; it went back to 16 in `44cd0280`.
+- **Concurrent load skews CPU.** Several builds or agents sharing the machine
+  inflate getrusage CPU unevenly between the two arms. Alternate the arms,
+  and trust the allocation counts over CPU when the machine is shared.
+- **GC pacing.** A smaller live heap makes the collector run more often at
+  the same `GOGC`. A change that cuts retained memory can cost CPU elsewhere:
+  starting the string arena small cut small documents' retained heap 20–37%
+  and cost DocBook 5% CPU (85 GC cycles against 77). Count GC cycles a pass
+  in both arms.
+- **The memory profiler costs CPU.** A binary that links `runtime/pprof`
+  samples allocations unless `MemProfileRate` is 0. The CLI does not link it,
+  so a harness that does measures a slightly different program.
+- **macOS profiles mislead** (below). Use getrusage for totals and a Linux
+  profile for attribution.
+- **Warm compile figures are one-shot.** The benchmark times each compile
+  once. XMark's query compile read 0.35 ms at `4068c98c` and 0.85 ms at
+  `a6f334f1`. Compiled 300 times, both trees take about 16 µs a query and
+  make the same 251 allocations.
+
+### Linux
+
+macOS profiles catch 82–90% of the CPU getrusage reports and put samples in
+the wrong places. Linux profiles of the same binary, in a Docker Desktop VM on
+the same machine, catch 99–100%. Shares of all samples:
+
+| Workload | macOS: scheduler waits | macOS: `madvise` | Linux: scheduler waits | Linux: `madvise` |
+|---|---:|---:|---:|---:|
+| DocBook | 23.5% | 3.1% | 1.4% | 0.1% |
+| Peppol | 27.8% | 2.7% | 1.4% | 0.0% |
+| XRechnung stage 1 | 31.6% | 35.4% | 1.2% | 0.3% |
+| XRechnung stage 2 | 26.1% | 23.2% | 1.0% | 0.3% |
+| `ValidateCopy` | 8.1% | 29.8% | 0.6% | 0.6% |
+| RELAX NG | 49.0% | 2.0% | 1.4% | 0.3% |
+| C14N 1/10 MB | 8.4% | 22.7% | 0.0% | 0.0% |
+
+- **Scheduler waits** (`pthread_cond_wait`, `kevent`, `usleep`) take 8–49%
+  of macOS samples and 0–1.4% of Linux ones. Most of it is idle time.
+- **System calls are over-weighted.** On XRechnung stage 2 the macOS profile
+  puts 24% of samples on `EvalSymlinks` in `unparsed-text()`. On Linux all
+  system calls together are 3.4%. A loop timing the same call on macOS gives
+  7.5 µs, three calls per transform of about 2.5 ms, under 1%. `madvise` is
+  the same: Go's darwin runtime calls `madvise(MADV_FREE_REUSE)` whenever it
+  reuses a heap page, and the profile shows it at up to 35%. Yet stage 1 used
+  less CPU on macOS than on Linux (34.0 against 36.1 ms a pass).
+- **On Linux the share moves to GC marking.** Earlier measurements found cold
+  CLI runs used 11–13% less CPU on Linux, and warm loops 2–20% more, with GC
+  marking where macOS has `madvise`.
+- **The VM adds address translation**, so read Linux CPU totals as an upper
+  bound and use them for proportions only.
+
+To profile on Linux, cross-compile the harness and mount the checkout at the
+same path, so the workloads' paths resolve:
+
+```sh
+GOOS=linux GOARCH=arm64 go test -c -o /tmp/p/prof-linux.test ./bench/cmd/benchrun
+docker run --rm -v "$PWD:$PWD:ro" -v /tmp/p:/tmp/p -w "$PWD/bench/cmd/benchrun" \
+  -e PROF_WORKLOAD=docbook-xsltng -e PROF_OUT=/tmp/p -e PROF_PASSES=15 \
+  golang:1.26 /tmp/p/prof-linux.test -test.run TestProfile -test.count=1
+```
+
+## Open opportunities
+
+None of the fixes listed in earlier versions of this file remains open. The
+candidates below are the largest cost centres in the profiles above that
+look removable. Each share is a ceiling: what the workload would save if
+the cost went to zero. **None has been prototyped.**
+
+| Candidate | Workload | Ceiling | What the profile shows |
+|---|---|---:|---|
+| Decide once per call site that `name()` is the built-in | XRechnung stage 1 | 10.5% | `nameCallArg` calls `FuncCall.resolve` and compares names on every evaluation of `name() = '…'`. `resolve`'s cache check alone is 9.5% of stage 1, 3.1% of Peppol and 1.1% of DocBook |
+| Character references without a byte-at-a-time read | XSD catalogs | 16% | `Decoder.reference` reads digits through `mustgetc` and appends them one at a time. Almost all of it is the `regex-syntax` catalog's 184,000 references |
+| Fewer allocations in general comparisons | Peppol, XRechnung stage 1 | 19–22% of objects | `Atomize` (Peppol, 22% cumulative) and `evalGeneralComparison` (stage 1, 19%) allocate a fresh atomic per node value compared. GC and allocator are 36–49% of these workloads' CPU; removing these objects would save at most their share of that |
+| `unparsed-text()` per call | XRechnung stage 2 | 3.9% | Each call opens an `os.Root`, evaluates the directory's symlinks and reads the file again; resolving alone is 1.2% |
+
+Nothing else stands out. DocBook has no function above 2% outside the
+runtime, and the parse-bound workloads spend their time in the tokenizer
+loops; a SWAR text scan was already tried there.
 
 ## Measured and rejected
 
-Each idea here was prototyped and measured, so there is no need to redo it.
-Reopen one only if the reason no longer holds.
+Each idea here was prototyped and measured. Reopen one only if the reason no
+longer holds.
 
 | Idea | Why not |
 |---|---|
 | Compile XPath to closures | Interpretation (AST dispatch, name resolution) is 2–4% of Schematron CPU. A direct child-axis loop, the largest removable piece, measured −2 to −3% at `GOGC=400` and nothing at 100. The cost is allocation, not dispatch |
-| Stream the principal result into the serializer | Building the result tree is ≤8–10% of allocations on Schematron. Every Schematron and XRechnung stylesheet sets `indent="yes"`, and indenting needs an element's children first, so the output could not stay byte-identical without buffering |
-| Pooled argument slices for leaf built-ins; `.` in a pooled slot; `strSeq`/`boolSeq` in one allocation | Allocations −6 to −10%, CPU within noise on v1. Small objects did not turn into CPU; re-measured on v2 (V16, below) |
+| Stream the principal result into the serializer | Building the result tree is 8–10% of Schematron allocations at most. Every Schematron and XRechnung stylesheet sets `indent="yes"`, and indenting needs an element's children first, so output could not stay byte-identical without buffering |
+| Pooled argument slices or arrays for leaf built-ins (v1, then V16 on v2) | On v2: CEN −11% allocations, −4.8% bytes; XRechnung and DocBook −2.2% and −1.5% allocations; CPU −2.0%, +2.5%, −0.3%, all noise. A fixed array does not help: the arguments escape through `Function.Call` |
+| `.` in a pooled slot; `strSeq`/`boolSeq` in one allocation | Allocations −6 to −10% on v1, CPU within noise |
 | `Compiled.scope` without a copy, by mutating the caller's context | −4 to −10% CPU, but `Compiled` is safe for concurrent use. V12 is the version that does not mutate |
-| `Compiled.scope` with the runtime carrying the package's version and static host (v1) | Skipped 0 copies: a top-level evaluation is recognised by `StaticNamespaces == nil`, and CEN alone has 1,238 distinct namespace resolvers. V12 removed that trigger |
-| Pooled argument arrays for leaf built-ins (V16, on v2) | CEN −11% allocations, −4.8% bytes; XRechnung −2.2%, DocBook −1.5% allocations; CPU −2.0%, +2.5%, −0.3%: noise. A fixed array is no alternative: the arguments escape through `Function.Call`, so it is heap-allocated anyway |
-| V12 for the static base URI: no copy for an expression that reads none (DocBook) | DocBook's included modules carry their own base URI, so 56% of its evaluations still copy. Skipping those that call nothing reading it saves at most 1.3% of bytes, and needs a deny-list of every function (host ones included) that reads the base URI to keep correct |
-| Compile-time function resolution (T17) | After struct keys, a lookup allocates nothing and is about 3% of CPU. A cache that stayed correct when a library changed after first use cost more allocations than it saved. The call-site cache (S1) covers it |
+| No static-base-URI copy for an expression that reads none (V12 extended) | DocBook's included modules carry their own base URI, so 56% of its evaluations still copy. Skipping those that call nothing reading it saves at most 1.3% of bytes, and needs a deny-list of every function, host ones included, that reads the base URI |
+| Compile-time function resolution (T17) | A lookup allocates nothing and is about 3% of CPU. A cache that stayed correct when a library changed after first use cost more allocations than it saved; the call-site cache (S1) covers it |
 | Relative-path memo (`cac:A/cac:B` across assertions) | Repeats are about 2.4% of CEN; allocations −0.3%, bytes +5%, no CPU gain |
 | `fuseDescendant` without a step allocation per evaluation | −0.13% allocations on CEN, CPU flat |
 | `//x[p]` fusion into `descendant::x[p]` | Not equivalent: with nested `x`, a different error can win. The per-document root-path index covers the case |
 | Schema-wide RELAX NG derivative memo | 3.5× faster warm only because the benchmark re-validates the same documents. No gain on unseen documents, and twice the bytes |
-| Bitset NFA states in XSD 1.1 restriction checks | The checks are 6–9% of an XSD 1.1 load, so the −15–20% estimate is out of reach |
+| RELAX NG derivative caches keyed by pattern id (V30) | Long documents −2.2 to −2.5% over 30 rounds, corpus −0.8%, allocations unchanged; needs `unsafe` |
+| Bitset NFA states in XSD 1.1 restriction checks | The checks are 6–9% of an XSD 1.1 load, so the estimated −15–20% is out of reach |
+| Interned namespace URIs compared by pointer, local names first (V26) | All 229,428 equal-URI comparisons a pass became pointer-equal, but XSD validation CPU moved 1.001× (0.994× for local-first alone): the cost is comparing equal local names stored apart. The stdlib `unique` package matched nothing, its entries being freed at the next collection |
+| Counting child elements lazily; testing `particleAcceptsEmpty` after the cheap checks (XSD) | Within noise |
+| Interning `nodeTyping` per tree | Bytes −27%, wall +25%: hashing the key on every typing write costs more than the allocation saves |
+| Typing chunks under 32 KB | No gain. The `madvise` time in the typed path is macOS heap growth, not chunk size |
 | Bigger node chunks; 1,024-node chunks | No gain; +0.28 GB peak RSS at 100 MB |
-| String arena starting small | Retained heap −20–37% on small documents, but DocBook +5% CPU: the smaller live heap makes the collector run more often at the same `GOGC` (85 cycles against 77). Reverted in `629cf48` |
-| String arena sized to the input (V18) | 40 small RELAX NG documents: parse bytes −52%, CPU −20%, retained heap −72%. But DocBook ran about 7% more GC cycles (29.3 → 31.3 a pass) from the smaller live heap, as with the small start above. Only the read windows were sized (`9ddd2bc6`) |
 | Smaller first record chunk (2 records, V15) | Most fragments hold one node, but bytes moved −0.4% to +0.2% and allocations up to +0.6%: the next chunk comes sooner for every other tree |
 | Chunked result nodes | −0.9% allocations at most, +0.4–0.7% bytes |
+| String arena starting small | Retained heap −20–37% on small documents, but DocBook +5% CPU: the smaller live heap ran the collector more often (85 cycles against 77). Reverted in `629cf48` |
+| String arena sized to the input (V18) | 40 small RELAX NG documents: parse bytes −52%, CPU −20%, retained heap −72%. But DocBook ran about 7% more GC cycles (29.3 → 31.3 a pass), as above. Only the read windows were sized (`9ddd2bc6`) |
+| Attribute values passed to xdm without the arena copy (V40) | Parse bytes −2.3 to −2.6%, but `regex-syntax` +2.6% bytes, XRechnung +26 to +53 allocations a pass and more GC cycles (7.2 → 7.6); no CPU gain. Reviving it needs the copy at `textStore.add`, since the values sit in a reused buffer |
+| End tags checked against a stack of open names (V35) | After the tokenizer's name cache (V34), parse +0.8 to +1.7% CPU and 7 more allocations a parse |
+| SWAR scan in the tokenizer's `text()` | No gain (round 3, and again on v2): it is already a tight table loop |
+| 64 KiB file read buffer | No gain |
+| A record walker for C14N and the serializer | The accessors and the `Children`/`Attrs` iterators already inline. Walking the 10 MB document: recursive accessors 3.7 ms, a range-over-func pre-order walker 5.4 ms (an indirect call per node), an exported cursor 4.1 ms. A raw chunk scan inside `xdm` takes 1.4 ms but has no enter/leave and cannot leave the package without handing out records |
+| Keyed attribute sort in C14N | No gain |
 | A memory limit (`GOMEMLIMIT`) instead of `GOGC=200` in the CLI | A limit under the live heap costs 10–25× CPU, and the CLI cannot know the live size |
 | Pausing GC around parse and compile instead of `GOGC=200` | Cold CPU summed over four workloads: 812 ms paused against 748 ms at `GOGC=200`, and pausing needs six wrapped call sites (`5fbea36`) |
-| SWAR scan in the tokeniser's `text()` | No gain (round 3, and again on v2): it is already a tight table loop |
-| 64 KiB file read buffer | No gain |
-| A record walker for C14N and the serializer (V11 as proposed) | The accessors and the `Children`/`Attrs` iterators already inline. Walking the 10 MB document reading every name and value: recursive accessors 3.7 ms, a pre-order walker as a range-over-func iterator 5.4 ms (its yield is an indirect call per node), an exported cursor 4.1 ms. A raw chunk scan inside `xdm` takes 1.4 ms but has no enter/leave and is not reachable from another package without handing out records. The C14N gap to v1 was the per-token `bufio.Writer` calls instead |
-| Interning `nodeTyping` per tree | Bytes −27%, wall +25%: hashing the key on every typing write costs more than the allocation it saves |
-| Typing chunks under 32 KB | No gain. The `madvise` time in the typed path is macOS heap growth, not chunk size |
-| Counting child elements lazily; testing `particleAcceptsEmpty` after the cheap checks (XSD) | Within noise |
-| Keyed attribute sort in C14N | No gain |
-| Interned namespace URIs compared by pointer, local names first (V26) | All 229,428 equal-URI comparisons a pass became pointer-equal, but XSD validate CPU moved 1.001× (0.994× for local-first alone): the cost is comparing local names that are equal but stored apart. The stdlib `unique` package matched nothing, its entries being freed at the next collection |
-| RELAX NG derivative caches keyed by pattern id (V30) | Long documents −2.2 to −2.5% over 30 rounds, corpus −0.8%, allocations unchanged; needs `unsafe`. Hashing the attribute name and value strings remains |
-| End tags checked against a stack of open names (V35) | After V34's name cache, parse +0.8 to +1.7% CPU and 7 more allocations a parse: the cache already removed the lookup |
-| Attribute values passed to xdm without the arena copy (V40) | Parse bytes −2.3 to −2.6%, but `regex-syntax` +2.6% bytes, XRechnung +26 to +53 allocations and more GC cycles (7.2 → 7.6); no CPU gain. Reviving it needs the copy at `textStore.add`, since the values sit in a reused buffer |
-| Cache `canonCache` directory reads (V42) | Already done per assembly (`a.canon`, `3b06e4c6`). A one-document CLI schema makes no calls; a two-document include one directory read. Removing that would change which names count as the same document |
-
-## Correctness
-
-Every bug found while profiling has been fixed and is listed in
-[CHANGELOG.md](../CHANGELOG.md). XSD and RELAX NG verdicts and messages are
-identical to v1 (11/11 catalogs, 589/589 RELAX NG documents), and every
-landed change kept its outputs byte-identical.
-
-The third round fixed two:
-- **An escaped function item raced on per-transform state.** Called from
-  several goroutines after its transform returned, a function item reaching
-  `key()`, an accumulator, a `new-each-time="no"` function or any other
-  state the runtime builds on first use wrote maps another goroutine read.
-  The runtime now has one re-entrant lock, shared with its global variables
-  (two locks could deadlock a key build that reads a global), taken where a
-  function item's body enters the runtime, and only once the transform has
-  returned (`fbd4b74a`).
-- **A called template or function could see a caller's local** variable
-  that shared its name with a global, and read the local instead of the
-  global (`a0250ddb`, found while building V17).
-
-Two narrower cases remain open, in [known gaps](known-gaps.md): a Go
-extension function that starts goroutines evaluating against the runtime
-while the transform is still running, and function items passed both ways
-between a transform and an `fn:transform` it starts.
-
-One deliberate difference remains: inside `xsl:merge-action`, go-xml clears
-the current template rule as XSLT 3.0 §6.8 requires, while Saxon 12.10 still
-runs the next rule.
-
-## Method notes
-
-- **Harnesses** copy the benchmark's warm loop: compile once, then
-  parse → transform/query/validate → serialise to `io.Discard`. They use the
-  same parse options, resolvers and parameters as the benchmark items. The
-  `benchrun -helper` used for parse and C14N runs as the CLI does (`GOGC=200`,
-  streamed parse). The warm loops parse with `ParseString` at the harness's own
-  `GOGC`.
-- **Allocation counts are exact** and are the most reliable figure. CPU comes
-  from getrusage. Wall times are noisy when lanes run together, so treat
-  differences under about 3% as noise.
-- **A/B runs alternate** the two builds, back to back, with medians of several
-  runs. A prototype is built on a copy of the tree (`git archive` or a
-  worktree), never in the checkout. It is checked by diffing every workload
-  output against the unmodified build. Run the affected unit tests and the full
-  conformance gate before landing.
-- **Retained heap** is measured after `runtime.GC` with the input dropped. A
-  cheaper measurement that keeps the input under-counts by about the input
-  size.
-- **macOS profiles under-count.** They catch about 80% of the CPU that
-  getrusage reports, and put up to half their samples on scheduler waits
-  (`pthread_cond_wait`, `kevent`). On v2 they also put 25–40% of XSLT samples
-  on `EvalSymlinks` system calls, which an A/B showed cost no warm time. Use
-  getrusage for totals, and Linux profiles for attribution.
-
-### Linux
-
-Measured in a 4-CPU Docker Desktop VM on the same M3 Pro, alternating with
-macOS, with both binaries from one compiler:
-
-- `runtime.madvise` is 0–1.6% of samples on Linux, against 13–26% on macOS for
-  parse, XMark and XSD. On macOS, Go's darwin runtime calls
-  `madvise(MADV_FREE_REUSE)` every time it reuses a heap page.
-- Cold CLI runs use 11–13% less CPU on Linux.
-- Warm in-process loops use 2–20% more CPU on Linux, because GC marking takes
-  the share that `madvise` takes on macOS.
-- The VM adds a layer of address translation, so read the Linux figures as
-  an upper bound.
+| Caching `canonCache` directory reads (V42) | Already done per assembly (`a.canon`, `3b06e4c6`). A one-document CLI schema makes no calls, a two-document include one directory read; removing that would change which names count as the same document |
