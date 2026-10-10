@@ -1502,6 +1502,14 @@ func (s *textStore) add(v string) (uint32, uint32) {
 	if v == "" {
 		return 0, 0
 	}
+	// A string is immutable, so a long one is kept as its own block rather
+	// than copied: its capacity is its length, so nothing appends into it.
+	// Every unsafe.String in the module is over append-only bytes (the
+	// tokeniser's arena, this store), which keeps that true.
+	if len(v) >= textOwnFrom {
+		s.newBlock(unsafe.Slice(unsafe.StringData(v), len(v)))
+		return uint32(len(s.blocks)-1) << textShift, uint32(len(v))
+	}
 	return s.addBytes(unsafe.Slice(unsafe.StringData(v), len(v)), 0)
 }
 

@@ -262,6 +262,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	}
 
 	dec := xml.NewDecoderSize(r, window)
+	dec.Size = sizeHint
 	dec.CharsetReader = charsetReader
 	// Leave Strict on: a validator must not silently accept malformed input.
 	dec.Strict = true
@@ -870,17 +871,29 @@ func resolvePrefix(el *Node, prefix string, isElement bool) string {
 // when the run starts, so that it takes its place in document order, and its
 // value is stored when the run ends.
 type textRun struct {
-	node *Node // the text node being built, nil between runs
-	buf  []byte
+	node   *Node // the text node being built, nil between runs
+	buf    []byte
+	stored bool // the run did not start with white space and is in the store
 }
 
 func (r *textRun) add(parent *Node, b []byte) {
 	if len(b) == 0 {
 		return
 	}
+	if r.stored {
+		r.node.AppendValue(string(b))
+		return
+	}
 	if r.node == nil {
 		r.node = parent.appendChild(KindText)
 		r.buf = r.buf[:0]
+		// A run that starts with anything but white space can be neither
+		// stripped nor shared, so it goes straight to the store.
+		if !onlySpace(b) {
+			r.node.v0, r.node.v1 = r.node.tree.text.addBytes(b, 0)
+			r.stored = true
+			return
+		}
 	}
 	r.buf = append(r.buf, b...)
 }
@@ -895,6 +908,10 @@ func (r *textRun) flush(spaces *spaceTable, strip func(*Node) bool) {
 	}
 	n := r.node
 	r.node = nil
+	if r.stored {
+		r.stored = false
+		return
+	}
 	t := n.tree
 	if onlySpace(r.buf) && strip(n.Parent()) {
 		t.rec(n.parent).v1 = n.prev

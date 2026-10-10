@@ -45,6 +45,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -159,6 +160,11 @@ type Decoder struct {
 	// and returns UTF-8. Without one, such a declaration is an error.
 	CharsetReader func(charset string, input io.Reader) (io.Reader, error)
 
+	// Size, when set, is about how many bytes the stream holds. A long text
+	// run that outgrows the scratch sizes it from what is left, rather than
+	// growing it by append's steps window by window.
+	Size int
+
 	src    io.Reader
 	srcErr error // first error from src; surfaced once buf is drained
 
@@ -181,6 +187,9 @@ type Decoder struct {
 	// repeating a few element and attribute names thousands of times
 	// allocates each once. Only valid names are entered.
 	names map[string]string
+	// nameHot is a direct-mapped cache in front of names, which a name
+	// repeated tag after tag finds without hashing the whole of it.
+	nameHot [64]string
 
 	endPending bool // the last tag was empty; its EndElement is owed
 	endName    Name
@@ -843,7 +852,12 @@ func (d *Decoder) name() (string, bool) {
 	if !ok {
 		return "", false
 	}
+	h := (len(b)*31 + int(b[0])*7 + int(b[len(b)/2])*3 + int(b[len(b)-1])) & (len(d.nameHot) - 1)
+	if s := d.nameHot[h]; s == string(b) {
+		return s, true
+	}
 	if s, ok := d.names[string(b)]; ok {
+		d.nameHot[h] = s
 		return s, true
 	}
 	if !isName(b) {
@@ -859,6 +873,7 @@ func (d *Decoder) name() (string, bool) {
 		}
 		d.names[s] = s
 	}
+	d.nameHot[h] = s
 	return s, true
 }
 
@@ -1008,6 +1023,13 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 				n++
 			}
 			if n > 0 {
+				// A run past a window long that outgrows the scratch is
+				// sized from what is left of the input, not by append's
+				// 1.25x steps. ponytail: capped at 8x the scratch, so that a
+				// run early in a huge document takes at most that.
+				if rest := d.Size - int(d.InputOffset()); n > cap(out)-len(out) && len(out) >= bufSize && rest > n {
+					out = slices.Grow(out, min(rest, 8*cap(out)))
+				}
 				out = append(out, run[:n]...)
 				if n == 1 {
 					p2, p1 = p1, run[0]
@@ -1210,7 +1232,9 @@ func (d *Decoder) reference(out []byte, spans []refSpan, attr bool) ([]byte, []r
 		return out, spans, false
 	}
 	out = append(out[:start], repl...)
-	if charRef {
+	// Only 1.1 needs the extent: under 1.0 a literal character is checked
+	// exactly as a reference to it is, so checkChars re-reading it agrees.
+	if charRef && d.v11 {
 		spans = append(spans, refSpan{start, len(out)})
 	}
 	return out, spans, true

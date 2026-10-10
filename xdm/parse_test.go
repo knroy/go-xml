@@ -546,3 +546,29 @@ func TestParseTextRunIsLinear(t *testing.T) {
 		t.Errorf("parsing 20,000 CDATA sections allocated %d MB, want at most 50", mb)
 	}
 }
+
+// A text run whose first piece is not white space goes straight to the text
+// store and later pieces extend it; one that starts with white space is
+// buffered, so that it can still be stripped or shared.
+func TestTextRunPieces(t *testing.T) {
+	strip := func(QName) bool { return true }
+	for _, c := range []struct{ doc, want string }{
+		{"<a>x<![CDATA[y]]>z<![CDATA[]]>w</a>", "xyzw"},
+		{"<a> <![CDATA[y]]> </a>", " y "},
+		{"<a> <![CDATA[ ]]>\n</a>", ""},
+		{"<a><![CDATA[" + strings.Repeat("v", 9000) + "]]>" + strings.Repeat("w", 9000) + "</a>", strings.Repeat("v", 9000) + strings.Repeat("w", 9000)},
+	} {
+		tr, err := ParseString(c.doc, ParseOptions{StripSpace: strip})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := kids(tr.Root)[0]
+		var got string
+		for _, k := range kids(a) {
+			got += k.Value()
+		}
+		if got != c.want || len(kids(a)) > 1 {
+			t.Errorf("%.40q: %d text nodes %.40q, want one %.40q", c.doc, len(kids(a)), got, c.want)
+		}
+	}
+}
