@@ -252,6 +252,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	}
 
 	dec := xml.NewDecoderSize(r, window)
+	dec.Size = sizeHint
 	dec.CharsetReader = charsetReader
 	// Leave Strict on: a validator must not silently accept malformed input.
 	dec.Strict = true

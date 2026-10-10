@@ -494,3 +494,41 @@ func TestRawTokenDoesNotAllocatePerToken(t *testing.T) {
 		t.Errorf("tokenizing 8,002 tokens took %.0f allocations, want at most 100", allocs)
 	}
 }
+
+// A text run crossing many read windows sizes the scratch from Size instead
+// of growing it by append's steps, and reads the same whatever Size says: unset, too small, exact or
+// far too large.
+func TestLongTextAcrossWindows(t *testing.T) {
+	text := strings.Repeat("abcdefgh", 12500) + "&amp;\r\n" + strings.Repeat("ijklmnop", 22500) // 280 KB, 70 windows
+	want := strings.ReplaceAll(strings.ReplaceAll(text, "&amp;", "&"), "\r\n", "\n")
+	doc := "<r>" + text + "</r>"
+	for _, size := range []int{0, 100, len(doc), 1 << 30} {
+		d := NewDecoder(strings.NewReader(doc))
+		d.Size = size
+		d.RawToken()
+		tok, err := d.RawToken()
+		if err != nil {
+			t.Fatalf("size %d: %v", size, err)
+		}
+		if got := string(*tok.(*CharData)); got != want {
+			t.Fatalf("size %d: text of %d bytes, want %d", size, len(got), len(want))
+		}
+		if _, err := d.RawToken(); err != nil {
+			t.Fatalf("size %d: end tag: %v", size, err)
+		}
+	}
+	allocs := func(size int) float64 {
+		return testing.AllocsPerRun(3, func() {
+			d := NewDecoder(strings.NewReader(doc))
+			d.Size = size
+			for {
+				if _, err := d.RawToken(); err != nil {
+					break
+				}
+			}
+		})
+	}
+	if a, b := allocs(len(doc)), allocs(0); a >= b {
+		t.Errorf("sized scratch took %.0f allocations, unsized %.0f: want fewer", a, b)
+	}
+}

@@ -45,6 +45,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -158,6 +159,11 @@ type Decoder struct {
 	// encoding other than UTF-8. It receives the bytes after the declaration
 	// and returns UTF-8. Without one, such a declaration is an error.
 	CharsetReader func(charset string, input io.Reader) (io.Reader, error)
+
+	// Size, when set, is about how many bytes the stream holds. A long text
+	// run that outgrows the scratch sizes it from what is left, rather than
+	// growing it by append's steps window by window.
+	Size int
 
 	src    io.Reader
 	srcErr error // first error from src; surfaced once buf is drained
@@ -1008,6 +1014,13 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 				n++
 			}
 			if n > 0 {
+				// A run past a window long that outgrows the scratch is
+				// sized from what is left of the input, not by append's
+				// 1.25x steps. ponytail: capped at 8x the scratch, so that a
+				// run early in a huge document takes at most that.
+				if rest := d.Size - int(d.InputOffset()); n > cap(out)-len(out) && len(out) >= bufSize && rest > n {
+					out = slices.Grow(out, min(rest, 8*cap(out)))
+				}
 				out = append(out, run[:n]...)
 				if n == 1 {
 					p2, p1 = p1, run[0]
