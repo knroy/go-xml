@@ -74,6 +74,10 @@ type Context struct {
 	// and separate from it because the two budgets have different natural
 	// boundaries -- a FLWOR for items, one constructed value for bytes.
 	heldBytes bool
+	// foreign marks a context handed to host code (see hostCall), which may
+	// use it from any goroutine: a call or an evaluation made with it takes
+	// the host runtime's EvalLock instead of assuming its caller holds it.
+	foreign bool
 	// host is the host language's dynamic state (XSLT: the transform runtime
 	// and fn:current()), opaque here and copied with the context as the focus
 	// is. A dynamic function call clears its current item and marks it
@@ -648,9 +652,18 @@ type ContextDocumentResolver interface {
 // resolver offers one, and through the plain one otherwise.
 func resolveDocument(ctx *Context, uri, base string) (*xdm.Tree, error) {
 	if cr, ok := ctx.ev().Docs.(ContextDocumentResolver); ok {
-		return cr.ResolveDocumentIn(ctx, uri, base)
+		return resolveDocumentIn(cr, ctx, uri, base)
 	}
 	return ctx.ev().Docs.ResolveDocument(uri, base)
+}
+
+// resolveDocumentIn calls r.ResolveDocumentIn. A resolver not of this
+// module is host code handed the context: see hostCall.
+func resolveDocumentIn(r ContextDocumentResolver, ctx *Context, uri, base string) (*xdm.Tree, error) {
+	if _, ok := r.(xpathleaf.NativeResolver); ok {
+		return r.ResolveDocumentIn(ctx, uri, base)
+	}
+	return hostCall(ctx, func(c *Context) (*xdm.Tree, error) { return r.ResolveDocumentIn(c, uri, base) })
 }
 
 // CollectionResolver loads a named set of documents for fn:collection.
@@ -690,7 +703,10 @@ type ContextCollectionResolver interface {
 // where the resolver offers it, and through the plain interface otherwise.
 func resolveCollectionIn(ctx *Context, uri, base string) (xdm.Sequence, error) {
 	if cr, ok := ctx.ev().Collections.(ContextCollectionResolver); ok {
-		return cr.ResolveCollectionIn(ctx, uri, base)
+		if _, ok := cr.(xpathleaf.NativeResolver); ok {
+			return cr.ResolveCollectionIn(ctx, uri, base)
+		}
+		return hostCall(ctx, func(c *Context) (xdm.Sequence, error) { return cr.ResolveCollectionIn(c, uri, base) })
 	}
 	return ctx.ev().Collections.ResolveCollection(uri, base)
 }
@@ -983,7 +999,11 @@ const (
 )
 
 // EvalLock serializes evaluation of one host's state once a value that can
-// reach it, such as a function item, has left the goroutine that made it.
+// reach it, such as a function item, has left the goroutine that made it:
+// when the evaluation ends (Share), or earlier, when it calls host code that
+// may hand such a value to goroutines of its own (hostCall). From that call
+// on, the goroutine evaluating holds the lock for its own evaluation too,
+// letting it go only while it is in host code, until Share.
 // The lazy variables of a WithLazyVars scope take it while one is forced,
 // and a function item whose body runs under a context carrying a host
 // runtime that implements EvalLocker takes it for the call. One lock for
@@ -993,11 +1013,15 @@ const (
 // holding it, since one function calls another and forcing one variable
 // usually reads others.
 //
-// Until Share it is never taken and costs one atomic load.
+// Until it is shared it is never taken and costs one atomic load.
 type EvalLock struct {
-	shared atomic.Bool // set by Share
+	shared atomic.Bool // set by Share or the first hostCall
 	mu     sync.Mutex
 	owner  atomic.Int64 // goroutine holding mu, or 0
+	// evaluating is set while the goroutine evaluating with the state holds
+	// mu for that evaluation, between a host call's return and the next host
+	// call or Share. Read and written under mu.
+	evaluating bool
 }
 
 // EvalLocker is implemented by a host's xpathleaf.Host.Runtime whose state
@@ -1005,9 +1029,60 @@ type EvalLock struct {
 type EvalLocker interface{ EvalLock() *EvalLock }
 
 // Share marks the state g guards as reachable from other goroutines: from
-// then on Lock takes it. A host calls it before a value that can reach the
-// state leaves the goroutine evaluating with it.
-func (g *EvalLock) Share() { g.shared.Store(true) }
+// then on Lock takes it. A host calls it on the goroutine evaluating with the
+// state when that evaluation ends and a value that can reach the state may
+// outlive it. If a host call shared g earlier, that goroutine has held g
+// since, and Share lets it go.
+func (g *EvalLock) Share() {
+	if !g.shared.Load() {
+		g.shared.Store(true)
+		return
+	}
+	if g.owner.Load() == goroutineID() && g.evaluating {
+		g.evaluating = false
+		g.owner.Store(0)
+		g.mu.Unlock()
+	}
+}
+
+// yield lets other goroutines take g while the calling goroutine runs host
+// code, and returns what takes it back; locals, the host's stack of local
+// bindings, is hidden meanwhile from whoever holds g (see
+// xpathleaf.Locals.Suspend). The first call shares g: until then only the
+// goroutine evaluating has used the state, and it holds g from the host's
+// return on, as any other goroutine does for a call, so that what the host
+// started cannot run beside it. A goroutine not holding g has nothing to let
+// go.
+func (g *EvalLock) yield(locals *xpathleaf.Locals) func() {
+	if !g.shared.Load() {
+		resume := locals.Suspend()
+		g.shared.Store(true)
+		return func() {
+			g.mu.Lock()
+			g.owner.Store(goroutineID())
+			g.evaluating = true
+			resume()
+		}
+	}
+	id := goroutineID()
+	if g.owner.Load() != id {
+		return func() {}
+	}
+	evaluating := g.evaluating
+	resume := func() {}
+	if evaluating {
+		resume = locals.Suspend()
+	}
+	g.evaluating = false
+	g.owner.Store(0)
+	g.mu.Unlock()
+	return func() {
+		g.mu.Lock()
+		g.owner.Store(id)
+		g.evaluating = evaluating
+		resume()
+	}
+}
 
 // Lock takes g for the calling goroutine and returns the release, which does
 // nothing when the goroutine already held it or g is not shared.

@@ -1041,7 +1041,7 @@ func jsonFallback(ctx *Context, opts jsonOptions) func(string) (string, error) {
 		return nil
 	}
 	return func(esc string) (string, error) {
-		out, err := opts.fallback.Invoke(ctx, []xdm.Sequence{xdm.One(xdm.NewString(esc))})
+		out, err := callItem(ctx, opts.fallback, []xdm.Sequence{xdm.One(xdm.NewString(esc))})
 		if err != nil {
 			return "", err
 		}

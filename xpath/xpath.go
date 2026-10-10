@@ -339,7 +339,20 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	if ctx == nil || !ctx.heldBytes {
 		ctx.resetBytes()
 	}
+	if ctx != nil && ctx.foreign {
+		return c.evalForeign(ctx)
+	}
 	return c.expr.Eval(c.scope(ctx))
+}
+
+// evalForeign is Eval with a context handed to host code, which may be
+// evaluating with it on several goroutines at once: it takes the host
+// runtime's lock, and evaluates on a copy, since a call counts its depth on
+// the context it is given in place. See hostCall.
+func (c *Compiled) evalForeign(ctx *Context) (xdm.Sequence, error) {
+	defer enterHost(ctx, nil)()
+	n := *ctx
+	return c.expr.Eval(c.scope(&n))
 }
 
 // scope is the context c's expression evaluates in: ctx with the static

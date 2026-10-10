@@ -63,3 +63,17 @@ type StepMemoHost interface{ StepMemo() any }
 // NewStepMemo returns an empty memo for a StepMemoHost. Package xpath sets it
 // in its init.
 var NewStepMemo func() any
+
+// NativeResolver is implemented by a document or collection resolver of this
+// module, which gives the context it is handed to no host code. Package xpath
+// treats any other resolver taking a context as host code (see its hostCall).
+type NativeResolver interface{ NativeResolver() }
+
+// Package xpath sets these in its init. ResolveDocumentIn loads uri through
+// r, an xpath.ContextDocumentResolver, for a call made at ctx, a
+// *xpath.Context, as fn:doc does. CallItem calls fn at ctx as a dynamic call
+// does.
+var (
+	ResolveDocumentIn func(r, ctx any, uri, base string) (*xdm.Tree, error)
+	CallItem          func(ctx any, fn *xdm.FunctionItem, args []xdm.Sequence) (xdm.Sequence, error)
+)

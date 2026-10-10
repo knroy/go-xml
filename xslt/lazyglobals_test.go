@@ -3,9 +3,11 @@ package xslt_test
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -279,4 +281,270 @@ func TestEscapedFunctionItemBuildsStateFromManyGoroutines(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// hostFunc is a Go extension function: a function item the stylesheet gets
+// as a parameter, whose body is host code.
+func hostFunc(arity int, body func(ctx any, args []xdm.Sequence) (xdm.Sequence, error)) xdm.Sequence {
+	return xdm.One(&xdm.FunctionItem{Arity: arity, Invoke: body})
+}
+
+// An extension function may hand the function items it is given, and its
+// context, to goroutines of its own while the transform is still running:
+// $wait calls the item from 8 goroutines and waits for them, $spawn starts 8
+// and returns at once, so they run while the transform goes on reading the
+// same key, accumulator, global and locals stack. f:get calls $tick, host
+// code too, between binding its locals and reading them, so a goroutine is
+// in host code with a frame half done. Each call, and each expression a
+// goroutine evaluates against the context, must see the runtime to itself.
+// Run with -race.
+func TestExtensionFunctionGoroutinesDuringTransform(t *testing.T) {
+	tree, err := xdm.ParseString(`<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	   xmlns:f="urn:f" version="3.0">
+	  <xsl:param name="wait"/>
+	  <xsl:param name="spawn"/>
+	  <xsl:param name="tick"/>
+	  <xsl:key name="k" match="e" use="@id"/>
+	  <xsl:accumulator name="n" initial-value="0">
+	    <xsl:accumulator-rule match="e" select="$value + 1"/>
+	  </xsl:accumulator>
+	  <xsl:variable name="g" select="'G'"/>
+	  <xsl:function name="f:doc">
+	    <xsl:param name="i"/>
+	    <xsl:document><r><e id="a{$i}"/><e id="b{$i}"/></r></xsl:document>
+	  </xsl:function>
+	  <xsl:function name="f:get">
+	    <xsl:param name="i"/>
+	    <xsl:variable name="d" select="f:doc($i)"/>
+	    <xsl:variable name="t" select="$tick()"/>
+	    <xsl:variable name="e" select="key('k', 'b' || $i, $d)"/>
+	    <xsl:sequence select="string-join(($e/@id, string($e/accumulator-after('n')), $g, string($i)), ' ') || $t"/>
+	  </xsl:function>
+	  <xsl:template name="xsl:initial-template">
+	    <xsl:variable name="mine" select="'m'"/>
+	    <out>
+	      <xsl:value-of select="$wait(function($i) { f:get($i) })"/>
+	      <xsl:value-of select="$spawn(function($i) { f:get($i) })"/>
+	      <xsl:for-each select="1 to 300">
+	        <xsl:variable name="j" select="."/>
+	        <xsl:if test="f:get($j) ne 'b' || $j || ' 2 G ' || $j">bad</xsl:if>
+	      </xsl:for-each>
+	      <xsl:value-of select="$mine"/>
+	    </out>
+	  </xsl:template>
+	</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	get, err := xpath.CompileVersion(`Q{urn:f}get(7)`, nil, xpath.XPath31)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spawned sync.WaitGroup
+	// work calls fn and evaluates get against ctx from 8 goroutines.
+	work := func(ctx any, fn *xdm.FunctionItem, wg *sync.WaitGroup) {
+		for g := range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := range 15 {
+					i := g*100 + j
+					v, err := fn.Invoke(ctx, []xdm.Sequence{xdm.One(xdm.NewInteger(int64(i)))})
+					want := fmt.Sprintf("b%d 2 G %d", i, i)
+					if err != nil || len(v) != 1 || v[0].(*xdm.Atomic).String() != want {
+						t.Errorf("call: got %v, %v; want %q", v, err, want)
+						return
+					}
+					v, err = get.Eval(ctx.(*xpath.Context))
+					if err != nil || len(v) != 1 || v[0].(*xdm.Atomic).String() != "b7 2 G 7" {
+						t.Errorf("eval: got %v, %v", v, err)
+						return
+					}
+				}
+			}()
+		}
+	}
+	params := map[string]xdm.Sequence{
+		"wait": hostFunc(1, func(ctx any, args []xdm.Sequence) (xdm.Sequence, error) {
+			var wg sync.WaitGroup
+			work(ctx, args[0][0].(*xdm.FunctionItem), &wg)
+			wg.Wait()
+			return nil, nil
+		}),
+		"spawn": hostFunc(1, func(ctx any, args []xdm.Sequence) (xdm.Sequence, error) {
+			work(ctx, args[0][0].(*xdm.FunctionItem), &spawned)
+			return nil, nil
+		}),
+		"tick": hostFunc(0, func(any, []xdm.Sequence) (xdm.Sequence, error) {
+			runtime.Gosched()
+			return xdm.One(xdm.NewString("")), nil
+		}),
+	}
+	res, err := sheet.Transform(context.Background(), nil, xslt.TransformOptions{Params: params})
+	spawned.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Nodes[0].(*xdm.Node).StringValue(); got != "m" {
+		t.Errorf("transform output %q, want %q", got, "m")
+	}
+}
+
+// A function item of a nested fn:transform and one of the transform that
+// started it, each calling the other, from two goroutines at once: x is the
+// outer transform's and calls the nested b, y is the nested transform's and
+// calls the outer a. $sync holds each goroutine inside its first item until
+// both are, so the two cross. They must not wait on each other forever.
+func TestFunctionItemsCalledBothWaysAcrossFnTransform(t *testing.T) {
+	inner := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	    xmlns:g="urn:g" version="3.0">
+	  <xsl:function name="g:mk" visibility="public">
+	    <xsl:param name="a"/>
+	    <xsl:param name="sync"/>
+	    <xsl:sequence select="map{
+	      'b': function($s) { 'B' || $s },
+	      'y': function() { $sync('y') || $a('y') }}"/>
+	  </xsl:function>
+	</xsl:stylesheet>`
+	tree, err := xdm.ParseString(`<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	   xmlns:f="urn:f" version="3.0">
+	  <xsl:param name="sync"/>
+	  <xsl:param name="inner"/>
+	  <xsl:function name="f:main" visibility="public">
+	    <xsl:variable name="a" select="function($s) { 'A' || $s }"/>
+	    <xsl:variable name="n" select="transform(map{
+	      'stylesheet-text': $inner,
+	      'initial-function': QName('urn:g', 'mk'),
+	      'function-params': [$a, $sync],
+	      'delivery-format': 'raw'})?output"/>
+	    <xsl:sequence select="map{
+	      'x': function() { $sync('x') || $n?b('x') },
+	      'y': $n?y}"/>
+	  </xsl:function>
+	</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var arrived sync.WaitGroup
+	arrived.Add(2)
+	syncFn := hostFunc(1, func(any, []xdm.Sequence) (xdm.Sequence, error) {
+		arrived.Done()
+		arrived.Wait()
+		return xdm.One(xdm.NewString("")), nil
+	})
+	res, err := sheet.Transform(context.Background(), nil, xslt.TransformOptions{
+		InitialFunction: xdm.QName{URI: "urn:f", Local: "main"},
+		Params: map[string]xdm.Sequence{
+			"sync":  syncFn,
+			"inner": xdm.One(xdm.NewString(inner)),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := res.Nodes[0].(*xdm.MapItem)
+	if !ok || len(res.Nodes) != 1 {
+		t.Fatalf("got %v, want one map", res.Nodes)
+	}
+	got := make(chan string, 2)
+	for _, k := range []string{"x", "y"} {
+		v, _, err := m.Get(xdm.NewString(k))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fn := v[0].(*xdm.FunctionItem)
+		go func() {
+			out, err := fn.Invoke(xpath.NewContext(nil, xpath.Builtins()), nil)
+			if err != nil {
+				got <- err.Error()
+				return
+			}
+			got <- out[0].(*xdm.Atomic).String()
+		}()
+	}
+	seen := map[string]bool{}
+	for range 2 {
+		select {
+		case s := <-got:
+			seen[s] = true
+		case <-time.After(10 * time.Second):
+			t.Fatal("the two calls are waiting on each other")
+		}
+	}
+	if !seen["Bx"] || !seen["Ay"] {
+		t.Errorf("got %v, want Bx and Ay", seen)
+	}
+}
+
+// fanOutCollections is a collection resolver that, handed the context of the
+// fn:collection call, calls the function item the stylesheet binds to $fn
+// from 8 goroutines and waits for them.
+type fanOutCollections struct{ t *testing.T }
+
+func (r fanOutCollections) ResolveCollection(string, string) (xdm.Sequence, error) {
+	return nil, nil
+}
+
+func (r fanOutCollections) ResolveCollectionIn(ctx *xpath.Context, _, _ string) (xdm.Sequence, error) {
+	v, ok := ctx.LookupVar(xdm.QName{Local: "fn"})
+	if !ok {
+		r.t.Error("no $fn in the resolver's context")
+		return nil, nil
+	}
+	fn := v[0].(*xdm.FunctionItem)
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range 15 {
+				i := g*100 + j
+				v, err := fn.Invoke(ctx, []xdm.Sequence{xdm.One(xdm.NewInteger(int64(i)))})
+				if want := fmt.Sprintf("b%d", i); err != nil || len(v) != 1 || v[0].(*xdm.Atomic).String() != want {
+					r.t.Errorf("got %v, %v; want %q", v, err, want)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	return nil, nil
+}
+
+// A resolver handed the context is host code as an extension function is.
+// Run with -race.
+func TestContextResolverGoroutinesDuringTransform(t *testing.T) {
+	tree, err := xdm.ParseString(`<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	   xmlns:f="urn:f" version="3.0">
+	  <xsl:key name="k" match="e" use="@id"/>
+	  <xsl:function name="f:get">
+	    <xsl:param name="i"/>
+	    <xsl:variable name="d"><r><e id="a{$i}"/><e id="b{$i}"/></r></xsl:variable>
+	    <xsl:sequence select="string(key('k', 'b' || $i, $d)/@id)"/>
+	  </xsl:function>
+	  <xsl:variable name="fn" select="function($i) { f:get($i) }"/>
+	  <xsl:template name="xsl:initial-template">
+	    <out><xsl:value-of select="count(collection('c'))"/></out>
+	  </xsl:template>
+	</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sheet.Transform(context.Background(), nil, xslt.TransformOptions{
+		Collections: fanOutCollections{t},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

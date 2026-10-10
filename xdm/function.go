@@ -1,6 +1,15 @@
 package xdm
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/knroy/go-xml/v2/internal/xdmfunc"
+)
+
+func init() {
+	xdmfunc.Mark = func(fn any) { fn.(*FunctionItem).native = true }
+	xdmfunc.Native = func(fn any) bool { return fn.(*FunctionItem).native }
+}
 
 // FunctionItem is the third kind of XDM item, introduced in XPath 3.0.
 //
@@ -70,6 +79,10 @@ type FunctionItem struct {
 	// in the xpath package. The closure the xpath package installs here knows
 	// the concrete type and asserts it; no other package calls this directly.
 	Invoke func(ctx any, args []Sequence) (Sequence, error)
+
+	// native is set on an item this module made, whose Invoke runs no host
+	// code. See internal/xdmfunc.
+	native bool
 }
 
 // VariadicSignature is the declared type of a function that takes a minimum

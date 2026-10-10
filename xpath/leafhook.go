@@ -29,6 +29,12 @@ func init() {
 		n.Item, n.Position, n.Size, n.host = item, int32(pos), int32(size), h
 		return &n
 	}
+	xpathleaf.ResolveDocumentIn = func(r, c any, uri, base string) (*xdm.Tree, error) {
+		return resolveDocumentIn(r.(ContextDocumentResolver), c.(*Context), uri, base)
+	}
+	xpathleaf.CallItem = func(c any, fn *xdm.FunctionItem, args []xdm.Sequence) (xdm.Sequence, error) {
+		return callItem(c.(*Context), fn, args)
+	}
 }
 
 // The host state with no runtime, cleared and marked: shared, since a Host is

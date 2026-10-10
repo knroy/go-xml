@@ -3,6 +3,7 @@ package xpath
 import (
 	"fmt"
 
+	"github.com/knroy/go-xml/v2/internal/xdmfunc"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -81,7 +82,7 @@ var ConstructorArgVar = xdm.QName{
 // The constructor is defined as a cast, so the item binds its one argument and
 // evaluates the cast the parser built. See NamedFunctionRef.Cast.
 func schemaConstructorItem(name xdm.QName, cast Expr) *xdm.FunctionItem {
-	return &xdm.FunctionItem{
+	return native(&xdm.FunctionItem{
 		Name:  name,
 		Arity: 1,
 		Invoke: func(ctx any, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -96,7 +97,7 @@ func schemaConstructorItem(name xdm.QName, cast Expr) *xdm.FunctionItem {
 			}
 			return cast.Eval(c.WithVar(ConstructorArgVar, arg))
 		},
-	}
+	})
 }
 
 // withRetainedFocus wraps an invoke closure so the call runs under the focus
@@ -180,21 +181,61 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 
 // enterHost takes the EvalLock of the host runtime a function item's body is
 // about to run under at to, and returns the release. A caller whose context
-// from carries the same runtime is already running under it, which after
-// Share it can only be by holding the lock, so it is not taken again and
-// nested calls pay no goroutine lookup. Before Share it costs an atomic
-// load. See EvalLock.
+// from carries the same runtime is already running under it, which once the
+// lock is shared it can only be by holding the lock, so it is not taken again
+// and nested calls pay no goroutine lookup -- unless from was handed to host
+// code, which may be using it on any goroutine. Before the lock is shared it
+// costs an atomic load. See EvalLock.
 func enterHost(to, from *Context) func() {
 	l := evalLockOf(to)
-	if l == nil || !l.shared.Load() || from != nil && evalLockOf(from) == l {
+	if l == nil || !l.shared.Load() || from != nil && !from.foreign && evalLockOf(from) == l {
 		return func() {}
 	}
 	return l.Lock()
 }
 
+// native marks fn as made by this module; see callItem.
+func native(fn *xdm.FunctionItem) *xdm.FunctionItem {
+	xdmfunc.Mark(fn)
+	return fn
+}
+
+// callItem calls the function item fn at ctx. An item this module did not
+// make was built by the host, so the call runs host code: see hostCall.
+func callItem(ctx *Context, fn *xdm.FunctionItem, args []xdm.Sequence) (xdm.Sequence, error) {
+	if xdmfunc.Native(fn) {
+		return fn.Invoke(ctx, args)
+	}
+	return hostCall(ctx, func(c *Context) (xdm.Sequence, error) { return fn.Invoke(c, args) })
+}
+
+// hostCall makes call, a call into host code from evaluation at ctx, which
+// is handed the context call receives. Host code may give what it is handed
+// -- function items, the context -- to goroutines of its own, which may use
+// them while the evaluation goes on. So when ctx carries a host runtime with
+// an EvalLock, the lock is shared from here on and let go for the call (see
+// EvalLock.yield), and the host gets a context of its own: its local
+// bindings copied off the host's stack, as an inline function's are, and
+// marked foreign, so that whatever is called or evaluated with it, on any
+// goroutine, takes the lock.
+func hostCall[T any](ctx *Context, call func(*Context) (T, error)) (T, error) {
+	l := evalLockOf(ctx)
+	if l == nil {
+		return call(ctx)
+	}
+	h := *frozenLocals(ctx)
+	h.foreign = true
+	var locals *xpathleaf.Locals
+	if lh, ok := ctx.host.Runtime.(xpathleaf.LocalsHost); ok {
+		locals = lh.Locals()
+	}
+	defer l.yield(locals)()
+	return call(&h)
+}
+
 // evalLockOf is the EvalLock of the host runtime c carries, or nil.
 func evalLockOf(c *Context) *EvalLock {
-	if c.host == nil {
+	if c == nil || c.host == nil {
 		return nil
 	}
 	if h, ok := c.host.Runtime.(EvalLocker); ok {
@@ -246,7 +287,7 @@ func hostBoundCall(ctx *Context, fn Function) func(*Context, []xdm.Sequence) (xd
 // functionItemFor wraps a library function as a function item.
 func functionItemFor(name xdm.QName, arity int,
 	call func(*Context, []xdm.Sequence) (xdm.Sequence, error)) *xdm.FunctionItem {
-	return &xdm.FunctionItem{
+	return native(&xdm.FunctionItem{
 		Name:  name,
 		Arity: arity,
 		Invoke: func(ctx any, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -256,7 +297,7 @@ func functionItemFor(name xdm.QName, arity int,
 			}
 			return call(c, args)
 		},
-	}
+	})
 }
 
 // Eval implements Expr: it captures the inline function as a value.
@@ -274,12 +315,12 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	noFocus := *frozenLocals(ctx)
 	noFocus.Item, noFocus.Position, noFocus.Size = nil, 0, 0
 	captured := &noFocus
-	item := &xdm.FunctionItem{
+	item := native(&xdm.FunctionItem{
 		// No name: fn:function-name returns the empty sequence for an inline
 		// function, which is what the zero QName means here.
 		Arity:     len(e.Params),
 		Signature: inlineSignature(e),
-	}
+	})
 	item.Invoke = func(callCtx any, args []xdm.Sequence) (xdm.Sequence, error) {
 		if len(args) != len(e.Params) {
 			return nil, fmt.Errorf("XPTY0004: inline function expects %d argument(s), got %d",
@@ -427,7 +468,7 @@ func coerceFunctionItem(fn *xdm.FunctionItem, st SequenceType) *xdm.FunctionItem
 	params := st.FunctionParams
 	ret := st.FunctionReturn
 	inner := fn.Invoke
-	return &xdm.FunctionItem{
+	item := &xdm.FunctionItem{
 		Name:      fn.Name,
 		Arity:     fn.Arity,
 		Signature: sig,
@@ -455,6 +496,11 @@ func coerceFunctionItem(fn *xdm.FunctionItem, st SequenceType) *xdm.FunctionItem
 			return out, nil
 		},
 	}
+	// The wrapper runs fn's body, so it is host code exactly when fn is.
+	if xdmfunc.Native(fn) {
+		native(item)
+	}
+	return item
 }
 
 // Eval implements Expr. A placeholder is never evaluated on its own: the call
@@ -497,7 +543,7 @@ func partialApply(name xdm.QName, arity int,
 		fixed[i] = v
 	}
 	captured := ctx
-	item := &xdm.FunctionItem{
+	item := native(&xdm.FunctionItem{
 		// No name. A partial application produces a *new* function, not the
 		// one it was written from: fn:function-name(fn:substring(?, 1)) is
 		// the empty sequence, the same answer an inline function gives.
@@ -521,7 +567,7 @@ func partialApply(name xdm.QName, arity int,
 			defer enterHost(c, cc)()
 			return call(c, full)
 		},
-	}
+	})
 	return xdm.One(item), nil
 }
 
@@ -620,7 +666,7 @@ func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	if hasPlaceholder(e.Args) {
 		return partialApply(fn.Name, fn.Arity,
 			func(c *Context, a []xdm.Sequence) (xdm.Sequence, error) {
-				return fn.Invoke(c, a)
+				return callItem(c, fn, a)
 			}, e.Args, ctx)
 	}
 	args := make([]xdm.Sequence, 0, len(e.Args))
@@ -650,7 +696,7 @@ func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	return fn.Invoke(clearHostVars(sub), args)
+	return callItem(clearHostVars(sub), fn, args)
 }
 
 // singleFunctionItem extracts the one function item a sequence must hold.

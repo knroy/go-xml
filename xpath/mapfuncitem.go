@@ -20,7 +20,7 @@ func functionItemView(it xdm.Item) *xdm.FunctionItem {
 	case *xdm.FunctionItem:
 		return v
 	case *xdm.ArrayItem:
-		return &xdm.FunctionItem{
+		return native(&xdm.FunctionItem{
 			Arity: 1,
 			// The signature is the one the specification gives an array:
 			// function(xs:integer) as item()*. prod-ArrayTest asserts that an
@@ -37,9 +37,9 @@ func functionItemView(it xdm.Item) *xdm.FunctionItem {
 				}
 				return v.Member(n)
 			},
-		}
+		})
 	case *xdm.MapItem:
-		return &xdm.FunctionItem{
+		return native(&xdm.FunctionItem{
 			Arity:     1,
 			Signature: []string{"item()*", "xs:anyAtomicType"},
 			Invoke: func(_ any, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -62,7 +62,7 @@ func functionItemView(it xdm.Item) *xdm.FunctionItem {
 				val, _, err := v.Get(key)
 				return val, err
 			},
-		}
+		})
 	}
 	return nil
 }

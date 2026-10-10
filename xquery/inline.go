@@ -3,6 +3,7 @@ package xquery
 import (
 	"fmt"
 
+	"github.com/knroy/go-xml/v2/internal/xdmfunc"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -168,6 +169,7 @@ func (n *inlineFunc) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		Arity:     len(n.params),
 		Signature: inlineSignature(n),
 	}
+	xdmfunc.Mark(item)
 	item.Invoke = func(callCtx any, args []xdm.Sequence) (xdm.Sequence, error) {
 		if len(args) != len(n.params) {
 			return nil, fmt.Errorf(

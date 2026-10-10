@@ -9,6 +9,7 @@ import (
 	"time"
 	"weak"
 
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -231,6 +232,19 @@ type TransformOptions struct {
 	// TestNestedTransformInheritsTheByteBudget.
 	nestedBudget *xpath.Context
 
+	// nestedLock and nestedLocals are the evaluation lock and the locals
+	// stack of the transform whose fn:transform call started this one, which
+	// this one uses as its own. One lock for a transform and every transform
+	// it starts, because their function items can be passed both ways and
+	// call each other: with a lock each, two goroutines could take the two
+	// in opposite orders and wait on each other for good. One stack, because
+	// the transforms run on one goroutine, which gives the stack up whenever
+	// it calls host code (see locals.go). The outermost transform shares the
+	// lock and closes the stack when it returns. Unexported because only
+	// runNestedTransform sets them.
+	nestedLock   *xpath.EvalLock
+	nestedLocals *xpathleaf.Locals
+
 	// disableMessages is fn:transform's enable-messages=false: a
 	// non-terminating xsl:message is not evaluated, and a terminating one
 	// terminates without recording its text. Unexported because only
@@ -437,17 +451,30 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		opts.Documents = rd
 	}
 
+	// A transform fn:transform started binds in a frame of its own on its
+	// caller's stack, which hides the caller's locals, unless the stack is
+	// off for whoever is running now.
+	if l := opts.nestedLocals; l != nil && !l.Off() {
+		n := l.Len()
+		base := l.SetBase(n)
+		defer func() {
+			l.Truncate(n)
+			l.SetBase(base)
+		}()
+	}
 	rt, err := newRuntime(s, ctx, source, opts)
 	if err != nil {
 		return nil, err
 	}
-	// Until now the runtime has been used by this goroutine alone. A
-	// function item in the result can reach it later from any goroutine, so
-	// it takes its lock from the moment this transform returns.
-	defer rt.evalLock.Share()
-	// For the same reason, such a call binds its locals with WithVar rather
-	// than on this transform's stack (see locals.go).
-	defer rt.finishLocals()
+	if opts.nestedLock == nil {
+		// A function item in the result can reach the runtime later from
+		// any goroutine, so it takes its lock from the moment this transform
+		// returns, if a host call has not made it do so already.
+		defer rt.evalLock.Share()
+		// For the same reason, such a call binds its locals with WithVar
+		// rather than on this transform's stack (see locals.go).
+		defer rt.finishLocals()
+	}
 	rt.readDocs = &readDocs
 	rt.writtenDocs = &writtenDocs
 	// Bind the runtime so key(), current() and xsl:function can reach it.
@@ -817,6 +844,9 @@ type strippedKey struct {
 	pkg  int
 }
 
+// NativeResolver implements xpathleaf.NativeResolver.
+func (r *stripSpaceResolver) NativeResolver() {}
+
 func (r *stripSpaceResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 	return r.resolve(0, uri, base)
 }
@@ -941,6 +971,9 @@ func (r *stripCollectionResolver) ResolveCollection(
 
 	return r.resolve(0, uri, base)
 }
+
+// NativeResolver implements xpathleaf.NativeResolver.
+func (r *stripCollectionResolver) NativeResolver() {}
 
 // ResolveCollectionIn implements xpath.ContextCollectionResolver.
 func (r *stripCollectionResolver) ResolveCollectionIn(
