@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/url"
 	"strings"
+	"unsafe"
 
 	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
@@ -305,6 +306,8 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	tree.Root.SetBaseURI(opts.BaseURI)
 	tree.Root.SetDocumentURI(opts.DocumentURI)
 	cur := tree.Root
+	var ns nsScope
+	var names nameCache
 	depth := 0
 	sawRoot := false
 	sawDecl := false
@@ -393,10 +396,10 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 			if len(attTypes) > 0 {
 				t = normalizeAttTokens(t, attTypes)
 			}
-			if err := validateStartElement(t, cur, dec.IsVersion11()); err != nil {
+			if err := validateStartElement(t, &ns, dec.IsVersion11()); err != nil {
 				return nil, err
 			}
-			el, decls := buildElement(t, cur)
+			el, decls := buildElement(t, cur, &ns, &names)
 			if off := encodeOffset(start, trackPos); off != 0 {
 				el.setOffset(off)
 			}
@@ -449,6 +452,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 			// DTD-derived rule outranks the stylesheet-declared one, so it
 			// must not be gated on a strip-space declaration existing.
 			tree.closeLast()
+			ns.pop(len(cur.frame()))
 			cur = cur.Parent()
 			depth--
 
@@ -765,40 +769,27 @@ func verbatim(s string) bool {
 // xmlns declarations arrive as ordinary attributes with Space "xmlns" (or
 // Local "xmlns" for the default). Those become the element's namespace
 // declarations rather than attributes: the attribute axis must not return
-// them.
-func buildElement(t xml.StartElement, parent *Node) (*Node, int) {
+// them. validateStartElement has pushed them onto ns, and every prefix on the
+// tag is resolved there.
+func buildElement(t xml.StartElement, parent *Node, ns *nsScope, names *nameCache) (*Node, int) {
 	tree := parent.tree
 	el := parent.appendChild(KindElement)
-	var arr [8]nsBinding
-	decls := arr[:0]
-	for _, a := range t.Attr {
-		switch {
-		case a.Name.Space == "xmlns":
-			decls = append(decls, nsBinding{a.Name.Local, a.Value})
-		case a.Name.Space == "" && a.Name.Local == "xmlns":
-			decls = append(decls, nsBinding{"", a.Value})
-		case a.Name.Space == NSXMLNS:
-			decls = append(decls, nsBinding{a.Name.Local, a.Value})
-		}
-	}
+	decls := ns.ownDecls()
 	if len(decls) > 0 {
 		el.setFrame(decls)
 	}
-	// The element's own declarations are in place, so its name and its
-	// attributes' names resolve against them as well as its ancestors'.
-	el.name = tree.intern(QName{
-		Prefix: t.Name.Space,
-		Local:  t.Name.Local,
-		URI:    resolvePrefix(el, t.Name.Space, true),
-	})
+	// validateStartElement has refused an unbound prefix.
+	uri, _ := ns.lookup(t.Name.Space)
+	el.name = names.intern(tree, QName{Prefix: t.Name.Space, Local: t.Name.Local, URI: uri})
 	for _, a := range t.Attr {
-		if a.Name.Space == "xmlns" || a.Name.Space == NSXMLNS ||
-			(a.Name.Space == "" && a.Name.Local == "xmlns") {
+		if a.Name.Space == "xmlns" || (a.Name.Space == "" && a.Name.Local == "xmlns") {
 			continue
 		}
+		// An unprefixed attribute is in no namespace, whatever the default
+		// namespace is.
 		q := QName{Prefix: a.Name.Space, Local: a.Name.Local}
 		if q.Prefix != "" {
-			q.URI = resolvePrefix(el, q.Prefix, false)
+			q.URI, _ = ns.lookup(q.Prefix)
 		}
 		v := a.Value
 		if a.Name.Space == "xml" {
@@ -813,12 +804,41 @@ func buildElement(t xml.StartElement, parent *Node) (*Node, int) {
 			}
 		}
 		attr := el.appendAttrRaw()
-		attr.name = tree.intern(q)
+		attr.name = names.intern(tree, q)
 		if v != "" {
 			attr.v0, attr.v1 = tree.text.add(v)
 		}
 	}
 	return el, len(decls)
+}
+
+// nameCache is a parse's direct-mapped cache in front of Tree.intern, keyed
+// on where a name's strings live rather than on what they say. The tokenizer
+// interns the names it returns and a declaration's URI is one string for
+// every element in its scope, so a name met again arrives in the same
+// storage: comparing pointers and lengths finds it without hashing or
+// comparing its text. Strings are immutable, so the same storage is the same
+// text; a name in other storage only misses.
+type nameCache [64]struct {
+	q   QName
+	idx uint32
+}
+
+func (c *nameCache) intern(t *Tree, q QName) uint32 {
+	p := uintptr(unsafe.Pointer(unsafe.StringData(q.Local))) ^
+		uintptr(unsafe.Pointer(unsafe.StringData(q.URI)))>>3
+	e := &c[uint32(p)*0x9E3779B9>>26] // the top 6 bits: len(c) is 64
+	if sameString(e.q.Local, q.Local) && sameString(e.q.Prefix, q.Prefix) && sameString(e.q.URI, q.URI) {
+		return e.idx
+	}
+	e.q, e.idx = q, t.intern(q)
+	return e.idx
+}
+
+// sameString reports whether a and b are the same storage, which makes them
+// equal; equal strings in different storage report false.
+func sameString(a, b string) bool {
+	return len(a) == len(b) && (len(a) == 0 || unsafe.StringData(a) == unsafe.StringData(b))
 }
 
 // appendAttrRaw appends an empty attribute record to el, which the parser has
@@ -839,32 +859,6 @@ func (el *Node) appendAttrRaw() *Node {
 		el.flags |= fManyAttrs
 	}
 	return a
-}
-
-// resolvePrefix returns the namespace URI bound to prefix at el, walking up
-// the ancestors' declarations. An unprefixed attribute is in no namespace,
-// whatever the default namespace is.
-func resolvePrefix(el *Node, prefix string, isElement bool) string {
-	if prefix == "" && !isElement {
-		return ""
-	}
-	switch prefix {
-	case "xml":
-		return NSXML
-	case "xmlns":
-		return NSXMLNS
-	}
-	if el.tree.frames == nil {
-		return "" // nothing in this tree declares a namespace
-	}
-	for cur := el; cur != nil; cur = cur.Parent() {
-		for _, b := range cur.frame() {
-			if b.prefix == prefix {
-				return b.uri
-			}
-		}
-	}
-	return ""
 }
 
 // textRun accumulates one run of character data. The text node is appended

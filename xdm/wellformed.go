@@ -139,7 +139,11 @@ func isDOCTYPEDirective(d string) bool {
 // validateStartElement checks the constraints RawToken intentionally leaves to
 // callers: duplicate attributes and namespace well-formedness. It runs before
 // buildElement so an invalid document cannot become an XDM tree.
-func validateStartElement(t xml.StartElement, parent *Node, xml11 bool) error {
+//
+// ns holds the bindings in scope at the tag. On success the tag's own
+// declarations are pushed onto it, as the element's frame, for buildElement
+// to read; the caller pops them at the element's end.
+func validateStartElement(t xml.StartElement, ns *nsScope, xml11 bool) error {
 	// Namespaces in XML §3 [7] QName. The tokeniser splits a name at its colon
 	// but leaves "p:", ":l" and "xmlns:" whole in Local, so a colon still there
 	// is a prefix or local part that is empty, which no QName has.
@@ -155,21 +159,23 @@ func validateStartElement(t xml.StartElement, parent *Node, xml11 bool) error {
 	// The in-scope environment, against which every prefix on the tag is
 	// resolved. A declaration on this start tag is in scope for its own
 	// element and attrs; see tagScope for how it is looked up.
-	scope := tagScope{t: t, parent: parent}
+	ns.push()
+	scope := tagScope{ns: ns}
 	if len(t.Attr) > smallTag {
 		scope.m = map[string]string{}
 	}
-	for i, a := range t.Attr {
+	for _, a := range t.Attr {
 		prefix, isDecl := namespaceDecl(a)
 		if !isDecl {
 			continue
 		}
-		if scope.declaredBefore(i, prefix) {
+		if scope.declared(prefix) {
 			return fmt.Errorf("parse XML: duplicate namespace declaration for prefix %q", prefix)
 		}
 		if err := validateNamespaceBinding(prefix, a.Value, xml11); err != nil {
 			return err
 		}
+		ns.declare(prefix, a.Value)
 		if scope.m != nil {
 			scope.m[prefix] = a.Value
 		}
@@ -234,29 +240,70 @@ type expandedName struct{ uri, local string }
 // by scanning it rather than through maps.
 const smallTag = 8
 
-// tagScope resolves the prefixes used on one start tag: the tag's own
-// declarations first, then the xml prefix, then the nearest ancestor that
-// declares the prefix. Building that as a map per start tag, as this once did,
-// copied every ancestor's declarations for every element parsed, a large
-// share of what loading a stylesheet or schema allocated. A tag of at most
-// smallTag attributes is scanned instead, which allocates nothing; a larger
-// one fills m once, so that each of its attributes is not a scan of the tag
-// and of every ancestor.
-type tagScope struct {
-	t      xml.StartElement
-	parent *Node
-	m      map[string]string // every binding in scope, when the tag is large
+// nsScope is the namespace bindings in scope during a parse: one stack,
+// innermost last, which validateStartElement pushes each element's
+// declarations onto and buildElement resolves against. Walking the
+// ancestors' frames instead, once to check a tag and again to build it,
+// cost a parent lookup and a frame lookup per ancestor per prefix.
+//
+// The stack is popped at an element's end by the length of the frame the
+// element was given, which is its declarations; so a document declaring no
+// namespace never allocates one.
+type nsScope struct {
+	b   []nsBinding
+	own int // how many of b the innermost start tag declares
 }
 
-// declaredBefore reports whether an attribute before t.Attr[i] declares
-// prefix. With m in use it holds exactly the tag's declarations so far.
-func (s *tagScope) declaredBefore(i int, prefix string) bool {
+// push opens a start tag's declarations, none until they are appended.
+func (s *nsScope) push() { s.own = 0 }
+
+func (s *nsScope) declare(prefix, uri string) {
+	if s.b == nil {
+		s.b = make([]nsBinding, 0, 8) // a document's root declares a few
+	}
+	s.b = append(s.b, nsBinding{prefix, uri})
+	s.own++
+}
+
+// ownDecls is the innermost start tag's declarations.
+func (s *nsScope) ownDecls() []nsBinding { return s.b[len(s.b)-s.own:] }
+
+// pop drops the n declarations of the element that ends.
+func (s *nsScope) pop(n int) { s.b = s.b[:len(s.b)-n] }
+
+// lookup returns the URI bound to prefix, and whether any binding is in scope.
+// An undeclaration (XML 1.1 xmlns:p="") is a binding to "". The xml prefix
+// may be declared, but only as what it is bound to anyway.
+func (s *nsScope) lookup(prefix string) (string, bool) {
+	for i := len(s.b) - 1; i >= 0; i-- {
+		if s.b[i].prefix == prefix {
+			return s.b[i].uri, true
+		}
+	}
+	if prefix == "xml" {
+		return NSXML, true
+	}
+	return "", false
+}
+
+// tagScope resolves the prefixes used on one start tag. A tag of at most
+// smallTag attributes scans the stack; a larger one fills m once with every
+// binding in scope, so that each of its attributes is not a scan of the
+// stack, which may hold many.
+type tagScope struct {
+	ns *nsScope
+	m  map[string]string // every binding in scope, when the tag is large
+}
+
+// declared reports whether the tag declares prefix among the declarations
+// pushed so far. With m in use it holds exactly those.
+func (s *tagScope) declared(prefix string) bool {
 	if s.m != nil {
 		_, ok := s.m[prefix]
 		return ok
 	}
-	for _, a := range s.t.Attr[:i] {
-		if p, ok := namespaceDecl(a); ok && p == prefix {
+	for _, b := range s.ns.ownDecls() {
+		if b.prefix == prefix {
 			return true
 		}
 	}
@@ -272,38 +319,20 @@ func (s *tagScope) inherit() {
 	if _, ok := s.m["xml"]; !ok {
 		s.m["xml"] = NSXML
 	}
-	for p := s.parent; p != nil; p = p.Parent() {
-		for _, b := range p.frame() {
-			if _, ok := s.m[b.prefix]; !ok {
-				s.m[b.prefix] = b.uri
-			}
+	b := s.ns.b
+	for i := len(b) - s.ns.own - 1; i >= 0; i-- {
+		if _, ok := s.m[b[i].prefix]; !ok {
+			s.m[b[i].prefix] = b[i].uri
 		}
 	}
 }
 
-// lookup returns the URI bound to prefix, and whether any binding is in scope.
-// An undeclaration (XML 1.1 xmlns:p="") is a binding to "".
 func (s *tagScope) lookup(prefix string) (string, bool) {
 	if s.m != nil {
 		uri, ok := s.m[prefix]
 		return uri, ok
 	}
-	for _, a := range s.t.Attr {
-		if p, ok := namespaceDecl(a); ok && p == prefix {
-			return a.Value, true
-		}
-	}
-	if prefix == "xml" {
-		return NSXML, true
-	}
-	for p := s.parent; p != nil; p = p.Parent() {
-		for _, b := range p.frame() {
-			if b.prefix == prefix {
-				return b.uri, true
-			}
-		}
-	}
-	return "", false
+	return s.ns.lookup(prefix)
 }
 
 func requireQName(n xml.Name) error {
