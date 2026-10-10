@@ -341,7 +341,7 @@ func nameHash(q QName) int {
 }
 
 // smallNames is how many names a tree holds before it indexes them.
-const smallNames = 8
+const smallNames = 24
 
 // nextTreeID hands out tree identifiers. Trees created concurrently may
 // interleave, which is fine: the spec requires only a stable order, and each
