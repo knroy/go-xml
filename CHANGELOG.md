@@ -4,7 +4,7 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased — v2 (branch `v2`, in development)
+## v2.0.0 — not yet released (branch `v2`)
 
 v2 breaks the exported API, so it has a new module path. Its plan is phases 3
 and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.md).
@@ -47,6 +47,8 @@ code before and after, and how to run the rewriter on your own module.
 | `xpath.EvalLock`, `xpath.EvalLocker` | A re-entrant lock a host shares once its runtime can be reached from other goroutines; before `Share` it costs one atomic load. A host runtime that implements `EvalLocker` has it taken wherever a function item's body enters it. | fbd4b74a |
 | `xdm.Node.SetAssessedTyping` | Writes a node's annotation, primitive and list item type in one call; the validator uses it once per typed node. | 8faf3493 |
 | `xdm.Node.DescendantsInheritBase` | Whether nothing below the node sets its own base URI, so a rebase can stop there. | ae360399 |
+| `go-xml xquery -validate strict\|lax` | Validates the input document against the schema the query imports before it runs, so a declared typed context item (`document-node(schema-element(...))`) can be satisfied from the command line. | [`130360b`][130360b] |
+| `xquery.Query.Schema` | The schema merged from a query's `import schema` declarations, or nil; mirrors `xslt.Stylesheet.Schema`. | [`130360b`][130360b] |
 | `xdm.Node.TreeHasTyping` | Whether any node of the node's tree was ever typed; false means the whole tree is untyped. XSLT uses it to skip stripping annotations ([migrating](docs/migrating-to-v2.md#validation-never-writes-to-your-tree)). | 40dbca21 |
 
 ### Fixed
@@ -55,6 +57,13 @@ code before and after, and how to run the rewriter on your own module.
 |---|---|---|
 | An escaped function item raced on its transform's state | Called from several goroutines after the transform, `key()`, accumulators and memo maps were written concurrently. One re-entrant lock per runtime, shared with the globals, taken once it escapes. | fbd4b74a |
 | A called template or function could read a caller's local named like a global | A local was visible past its frame where a global of its name existed. Locals now live in frames that a call raises. | a0250ddb |
+| go-xml did not compile for 32-bit targets, and an array position past 2^31 could wrap there | The `xs:date` year bound is compared as int64; `maxArrayIndex` is capped at a quarter of `math.MaxInt`. CI vets `linux/386`, `linux/arm` and `windows/386`. | — |
+
+### Fixed — documentation
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `docs/xquery.md` said `import schema ... at` is not resolved from the command line | It is, through the query's directory and `-allow-dir` roots (and `-catalog`); the sentence is corrected. | — |
 
 ### Changed — performance
 
@@ -87,21 +96,6 @@ code before and after, and how to run the rewriter on your own module.
 | XQuery rebased whole subtrees and `smallNames` scanned only 8 (V38, V39) | `Rebase` stops where nothing changes; 24 names before the map. XMark q10 −5% CPU, −11% bytes. | ae360399, fb01bf29 |
 | XSLT rebound absent context components, copied base URIs, boxed integers and stripped `doc()` per transform (V43–V51) | Absent bits, base URI on entry, int64 arithmetic, per-stylesheet stripped trees, 96 B context. DocBook −14% CPU, −17% bytes; Peppol −13% CPU. | cf948ed9, 1e976a35, bd28fa9e, 496f46af, 71d73165, f51ebda6, 7f6f1689 |
 | Every XSLT local and parameter made a context scope (V17) | One name-addressed stack per transform, frames per call. DocBook −5.8% CPU, −8.7% bytes. | a0250ddb |
-
-## Unreleased
-
-### Added
-
-| Change | What it does | Commit |
-|---|---|---|
-| `go-xml xquery -validate strict\|lax` | Validates the input document against the schema the query imports before it runs, so a declared typed context item (`document-node(schema-element(...))`) can be satisfied from the command line. | [`130360b`][130360b] |
-| `xquery.Query.Schema` | The schema merged from a query's `import schema` declarations, or nil; mirrors `xslt.Stylesheet.Schema`. | [`130360b`][130360b] |
-
-### Fixed — documentation
-
-| Change | Problem → solution | Commit |
-|---|---|---|
-| `docs/xquery.md` said `import schema ... at` is not resolved from the command line | It is, through the query's directory and `-allow-dir` roots (and `-catalog`); the sentence is corrected. | — |
 
 ## v1.7.1 — 2026-10-09
 

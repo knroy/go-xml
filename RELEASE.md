@@ -169,6 +169,35 @@ will always fail. That is not worked around: the alternatives are weakening
 the protection or forcing past it, and a failed step with a clear log is
 better than either. The pin bump is then a normal pull request.
 
+## A major version (v2)
+
+v2 changed the exported API, so it is a second module,
+`github.com/knroy/go-xml/v2`, developed on the `v2` branch while `main` and
+`dev` carry v1. The procedure above applies unchanged, with three
+differences:
+
+- **The release commit goes to `v2`.** Steps 1–3 are done on the `v2` branch
+  and its pull request targets `v2`, not `main`. `internal/version/version.go`
+  on `v2` already says `2.0.0`, and the changelog heading already names
+  v2.0.0 as not yet released; step 2 replaces those words with the date, as
+  `## v2.0.0 — YYYY-MM-DD`. The tag `v2.0.0` is then made on the
+  release commit on `v2`. Go finds a `/v2` module on any branch, by its
+  `go.mod` path and tag.
+- **No `w3cschemas:` line in the tag message.** The workflow's w3cschemas
+  step runs `go get` on `github.com/knroy/go-xml` at the tag, which is the v1
+  path. `w3cschemas` requires v1, and it can only move to `/v2` once
+  `v2.0.0` is on the module proxy, as its own release: its `go.mod` requires
+  `github.com/knroy/go-xml/v2 v2.0.0` and its imports gain `/v2`, tagged by
+  hand as the next `w3cschemas/v0.N.0`.
+- **v1 keeps releasing from `main`.** A v1 fix is released as `v1.7.x` or
+  `v1.8.0` from `main` as before, and merged into `v2` afterwards. A
+  changelog section `dev` adds under `## Unreleased` is folded into the `v2`
+  section when `dev` is merged into `v2`, so the `v2` branch never has an
+  `## Unreleased` heading below its own.
+
+After the tag, check that the proxy serves the module:
+`go list -m github.com/knroy/go-xml/v2@v2.0.0`.
+
 ## The w3cschemas version
 
 `w3cschemas` is a second module, published separately because the schemas it
@@ -188,6 +217,7 @@ one**, and the workflow does not try to derive it:
 | v1.6.0 | w3cschemas/v0.5.0 |
 | v1.7.0 | w3cschemas/v0.6.0 (tagged by hand: the tag message had no `w3cschemas:` line) |
 | v1.7.1 | *(no release)* |
+| v2.0.0 | *(no release: w3cschemas requires v1 until it moves to `/v2`, above)* |
 
 The minor number counts **w3cschemas releases**, not go-xml ones, and two
 go-xml releases produced none at all. Any rule derived from the parent version
