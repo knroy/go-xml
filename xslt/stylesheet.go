@@ -29,6 +29,11 @@ type Stylesheet struct {
 	stripMu   sync.RWMutex
 	stripMemo map[stripKey]bool
 
+	// stripped holds the whitespace-stripped copies of fn:doc trees across
+	// transforms, under strippedMu; see Stylesheet.strippedTree.
+	strippedMu sync.Mutex
+	stripped   map[weakStrippedKey]*xdm.Tree
+
 	// templates are the match templates, pre-sorted by descending priority so
 	// that selection is a linear scan that stops at the first match.
 	templates []*Template
@@ -287,6 +292,10 @@ type Template struct {
 	// declOrder breaks ties between equal-priority templates: the last one
 	// declared wins, per the spec's conflict-resolution rule.
 	declOrder int
+	// baseURI is the xsl:template element's base URI, installed on the
+	// context when the body runs so that its expressions, which carry the
+	// same one, evaluate without copying the context to install it.
+	baseURI string
 	// unionGroup identifies the xsl:template declaration a rule came from.
 	//
 	// compileTemplate splits a union pattern into one rule per branch so that

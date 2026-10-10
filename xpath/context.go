@@ -40,9 +40,11 @@ type Context struct {
 	// which is an error to reference rather than an empty sequence.
 	Item xdm.Item
 	// Position is the context position, 1-based. Zero means "no focus".
-	Position int
+	// It and Size are int32, as is Depth, so that the Context, which every
+	// step, predicate and binding copies, is 96 B rather than 112 B.
+	Position int32
 	// Size is the context size.
-	Size int
+	Size int32
 	// Vars holds in-scope variable bindings, keyed by expanded name.
 	// Lookups walk to Parent, so a nested scope does not copy the map.
 	Vars   map[string]xdm.Sequence
@@ -59,7 +61,7 @@ type Context struct {
 	Funcs FunctionLibrary
 	// Depth guards against unbounded recursion in user-defined functions and
 	// named templates, which the spec does not bound.
-	Depth int
+	Depth int32
 	// heldItems suppresses Compiled.Eval's per-expression reset of items,
 	// because a host language is measuring a larger evaluation against the
 	// same counter. Set by HoldItemBudget, and copied along with the rest of
@@ -811,9 +813,9 @@ type Function struct {
 	VariadicSignature *xdm.VariadicSignature
 
 	// leaf marks a builtin that never calls back into user code, never
-	// keeps the context past its return and never writes to it. A call to
-	// one counts recursion depth on the caller's context in place instead
-	// of copying it with Descend. Set only by markLeafBuiltins.
+	// keeps the context past its return and never writes to it, which is
+	// what lets a call be answered without calling it (see nameOf). Set
+	// only by markLeafBuiltins and xpathleaf.Mark.
 	leaf bool
 }
 
@@ -875,7 +877,7 @@ func NewContext(item xdm.Item, funcs FunctionLibrary, configure ...func(e *Env))
 // should measure first.
 func (c *Context) WithFocus(item xdm.Item, pos, size int) *Context {
 	n := *c
-	n.Item, n.Position, n.Size = item, pos, size
+	n.Item, n.Position, n.Size = item, int32(pos), int32(size)
 	return &n
 }
 
@@ -1205,7 +1207,7 @@ func (c *Context) Descend() (*Context, error) {
 // checkDepth is Descend's limit test, shared with the in-place count
 // FuncCall.Eval uses for a leaf builtin.
 func (c *Context) checkDepth() error {
-	if lim := c.depthLimit(); c.Depth >= lim {
+	if lim := c.depthLimit(); int(c.Depth) >= lim {
 		// XPDY0001 is kept because callers and the conformance suites read
 		// it, but it properly means "no context item is defined" and this
 		// is nothing of the sort: the expression is well-formed and has a

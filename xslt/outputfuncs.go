@@ -32,13 +32,30 @@ func init() { xpath.ClearedOnDynamicCall = append(xpath.ClearedOnDynamicCall, ou
 // output URI. An empty uri puts the runtime in temporary output state as far
 // as fn:current-output-uri is concerned.
 func (rt *runtime) withOutputURI(uri string) *runtime {
-	n := *rt
 	if uri == "" {
-		n.ctx = rt.ctx.WithVar(outputURIVar, xdm.Empty())
-	} else {
-		n.ctx = rt.ctx.WithVar(outputURIVar, xdm.One(xdm.NewAnyURI(uri)))
+		if rt.absent&absentOutputURI != 0 {
+			return rt
+		}
+		n := rt.withVar(outputURIVar, xdm.Empty())
+		n.absent |= absentOutputURI
+		n.noteUnbound(absentOutputURI)
+		return n
 	}
-	return &n
+	return rt.withVar(outputURIVar, xdm.One(xdm.NewAnyURI(uri)))
+}
+
+// withoutOutputURI returns ctx with the current output URI cleared, or ctx
+// itself when its host state records it already absent.
+func withoutOutputURI(ctx *xpath.Context) *xpath.Context {
+	h := hostOf(ctx)
+	if h != nil && h.Unbound&absentOutputURI != 0 {
+		return ctx
+	}
+	ctx = ctx.WithVar(outputURIVar, xdm.Empty())
+	if h != nil {
+		setUnbound(ctx, h.Unbound|absentOutputURI)
+	}
+	return ctx
 }
 
 // registerOutputFuncs adds fn:current-output-uri and the two-argument forms

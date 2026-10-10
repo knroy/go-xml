@@ -751,7 +751,8 @@ func (c *compiler) checkPatternFuncs() error {
 }
 
 func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
-	t := &Template{importPrecedence: precedence, lowPrecedence: c.lowPrecedence}
+	t := &Template{importPrecedence: precedence, lowPrecedence: c.lowPrecedence,
+		baseURI: el.BaseURI()}
 	c.declOrder++
 	t.declOrder = c.declOrder
 
@@ -1627,7 +1628,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 		body = stub
 	}
 	fn := &userFunction{
-		name: qn, params: params, body: body,
+		name: qn, params: params, body: body, baseURI: el.BaseURI(),
 		// Two attributes reach the same machinery. @new-each-time="no" is a
 		// promise the processor must keep -- 10.3 says two such calls return
 		// the same result, and for a node-building function "the same" is

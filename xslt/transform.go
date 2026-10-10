@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	goruntime "runtime"
 	"strings"
 	"time"
+	"weak"
 
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -407,8 +409,9 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 
 	// Documents loaded by fn:doc and fn:document are source documents too, so
 	// the same whitespace declarations apply to them. The wrapper is per
-	// transform because its cache holds the stripped copies, which must not
-	// outlive the declarations that produced them.
+	// transform because its map is what keeps fn:doc stable within one
+	// transform; the stripped copies themselves are shared by the stylesheet
+	// (Stylesheet.strippedTree).
 	callerDocs := opts.Documents
 	if len(s.strip) > 0 && opts.Documents != nil {
 		opts.Documents = &stripSpaceResolver{sheet: s, inner: opts.Documents}
@@ -847,8 +850,7 @@ func (r *stripSpaceResolver) resolve(pkg int, uri, base string) (*xdm.Tree, erro
 	if c, ok := r.done[k]; ok {
 		return c, nil
 	}
-	root := r.sheet.stripWhitespaceFor(pkg, t.Root)
-	out := root.Tree()
+	out := r.sheet.strippedTree(k)
 	if out == nil {
 		return t, nil
 	}
@@ -857,6 +859,57 @@ func (r *stripSpaceResolver) resolve(pkg int, uri, base string) (*xdm.Tree, erro
 	}
 	r.done[k] = out
 	return out, nil
+}
+
+// strippedTree is k's source tree stripped under k's package, shared by every
+// transform of s: a resolver that hands back one parsed tree to each transform
+// (FileResolver caches them) then costs one strip, not one per transform. The
+// trees are read-only once built, as a resolver's own are.
+//
+// The source tree is held weakly, so an entry goes when its source does: a
+// resolver that parses afresh for each call leaves nothing behind. At most
+// resolverCacheMax entries are kept besides, one evicted at random as
+// FileResolver does. The per-transform map in stripSpaceResolver is what
+// keeps fn:doc stable within one transform, whatever is evicted here.
+func (s *Stylesheet) strippedTree(k strippedKey) *xdm.Tree {
+	wk := weakStrippedKey{tree: weak.Make(k.tree), pkg: k.pkg}
+	s.strippedMu.Lock()
+	out, ok := s.stripped[wk]
+	s.strippedMu.Unlock()
+	if ok {
+		return out
+	}
+	out = s.stripWhitespaceFor(k.pkg, k.tree.Root).Tree()
+	if out == nil {
+		return nil
+	}
+	s.strippedMu.Lock()
+	defer s.strippedMu.Unlock()
+	if prev, ok := s.stripped[wk]; ok {
+		return prev // another transform stripped it first
+	}
+	if s.stripped == nil {
+		s.stripped = map[weakStrippedKey]*xdm.Tree{}
+	}
+	for victim := range s.stripped {
+		if len(s.stripped) < resolverCacheMax {
+			break
+		}
+		delete(s.stripped, victim)
+	}
+	s.stripped[wk] = out
+	goruntime.AddCleanup(k.tree, func(wk weakStrippedKey) {
+		s.strippedMu.Lock()
+		delete(s.stripped, wk)
+		s.strippedMu.Unlock()
+	}, wk)
+	return out
+}
+
+// weakStrippedKey is strippedKey with the source tree held weakly.
+type weakStrippedKey struct {
+	tree weak.Pointer[xdm.Tree]
+	pkg  int
 }
 
 // stripCollectionResolver applies the stylesheet's xsl:strip-space and

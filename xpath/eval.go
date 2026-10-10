@@ -350,7 +350,7 @@ func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, er
 			reuse = ctx.WithFocus(it, pos, size)
 			sub = reuse
 		default:
-			reuse.Item, reuse.Position = it, pos
+			reuse.Item, reuse.Position = it, int32(pos)
 			sub = reuse
 		}
 		if h != nil {
@@ -565,6 +565,12 @@ func predicateHolds(v xdm.Sequence, pos int) (bool, error) {
 			// both select position 1, and NaN selects nothing.
 			if a.IsNaN() {
 				return false, nil
+			}
+			// An integer compares exactly, and without the allocations
+			// big.Rat's Float64 makes.
+			if r := a.Rat(); a.Type == xdm.TypeInteger && r != nil && r.IsInt() &&
+				r.Num().IsInt64() {
+				return r.Num().Int64() == int64(pos), nil
 			}
 			return a.Float64() == float64(pos), nil
 		}
@@ -818,23 +824,18 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 		}
 	}
 
-	// A leaf builtin cannot re-enter user code or retain ctx, so the depth
-	// is counted on ctx in place: the same limit and error as Descend,
-	// without copying the context on every call.
-	if fn.leaf {
-		if err := ctx.checkDepth(); err != nil {
-			return nil, err
-		}
-		ctx.Depth++
-		res, err := fn.Call(ctx, args)
-		ctx.Depth--
-		return res, err
-	}
-	sub, err := ctx.Descend()
-	if err != nil {
+	// The depth is counted on ctx in place: the same limit and error as
+	// Descend, without copying the context on every call. A callee that
+	// keeps a context derives its own copy, which carries the raised depth
+	// into whatever it calls; one that keeps ctx itself sees the depth of
+	// this call site once the call returns.
+	if err := ctx.checkDepth(); err != nil {
 		return nil, err
 	}
-	return fn.Call(sub, args)
+	ctx.Depth++
+	res, err := fn.Call(ctx, args)
+	ctx.Depth--
+	return res, err
 }
 
 // Eval implements Expr for unary + and -.

@@ -39,14 +39,17 @@ func TestLeafBuiltinDepthBoundary(t *testing.T) {
 	if fn, _ := Builtins().Lookup(xdm.QName{URI: xdm.NSFN, Local: "string"}, 1); !fn.leaf {
 		t.Fatal("fn:string#1 is not marked leaf; the in-place path is untested")
 	}
-	call := &FuncCall{Name: xdm.QName{URI: xdm.NSFN, Local: "string"}, Args: []Expr{&Literal{Val: xdm.NewInteger(1)}}}
-	for _, max := range []int{3, 4} {
-		ctx := NewContext(nil, Builtins())
-		ctx = ctx.WithEnv(func(e *Env) { e.MaxDepth = max })
-		ctx.Depth = 3
-		_, err := call.Eval(ctx)
-		if (err != nil) != (max == 3) || ctx.Depth != 3 {
-			t.Errorf("MaxDepth %d: err %v, depth after %d; want depth 3 and an error only at 3", max, err, ctx.Depth)
+	// Every call counts in place now, leaf or not (reverse is not a leaf).
+	for _, name := range []string{"string", "reverse"} {
+		call := &FuncCall{Name: xdm.QName{URI: xdm.NSFN, Local: name}, Args: []Expr{&Literal{Val: xdm.NewInteger(1)}}}
+		for _, max := range []int{3, 4} {
+			ctx := NewContext(nil, Builtins())
+			ctx = ctx.WithEnv(func(e *Env) { e.MaxDepth = max })
+			ctx.Depth = 3
+			_, err := call.Eval(ctx)
+			if (err != nil) != (max == 3) || ctx.Depth != 3 {
+				t.Errorf("%s, MaxDepth %d: err %v, depth after %d; want depth 3 and an error only at 3", name, max, err, ctx.Depth)
+			}
 		}
 	}
 }
