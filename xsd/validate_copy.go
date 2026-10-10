@@ -50,10 +50,13 @@ func (s *Schema) ValidateCopyContext(ctx context.Context, root *xdm.Node,
 	return s.typedCopy(ctx, root, opts, (*validator).run)
 }
 
-// typedCopy copies root, runs check over the copy with annotation on, and
-// returns the typed result: the copy itself, or, when the assessment recorded
-// structural edits (or root's ancestors were copied only for context), a
-// second copy with the edits applied.
+// typedCopy runs check with annotation on and returns the typed result.
+//
+// When the whole tree is copied, the assessment reads root's own tree and
+// writes the typing it concludes to a layer, and the typed copy is made once,
+// afterwards, with the layer and the recorded edits applied. Otherwise root's
+// subtree and its ancestors are copied node by node, the assessment types the
+// copy as it goes, and the result is a second copy with the edits applied.
 //
 // The edits are recorded rather than made because a built tree is never
 // edited: see the defaults, fixups and dropped fields of validator.
@@ -63,39 +66,28 @@ func (s *Schema) typedCopy(ctx context.Context, root *xdm.Node, opts ValidateOpt
 		root.Parent().Kind() == xdm.KindDocument
 	v := s.newValidator(ctx, opts)
 	v.typed = true
-	// A whole tree is cloned in bulk, with its source positions, so a
-	// failure reports its line and column without a map back to the
-	// original. The ancestors-only copy is made node by node.
-	var twin *xdm.Node
-	top := topOf(root)
-	t := top.Tree()
-	positions := t != nil && t.Root == top && t.HasPositions()
 	if whole {
-		if m := xdmclone.Clone(top, xdmclone.Options{Positions: positions}); m != nil {
-			twin = m(root).(*xdm.Node)
+		if l, ok := xdmclone.NewLayer(topOf(root)).(typingLayer); ok {
+			v.layer = l
+			err := check(v, root)
+			return v.typedResult(root, true), err
 		}
 	}
-	if twin == nil {
-		c := copier{root: root, whole: whole, track: true}
-		c.copyTree(top)
-		twin, v.twins = c.twin, c.twins
-		positions = false
-	}
-	err := check(v, twin)
-	if positions {
-		// The per-node copy the result stands in for had no positions.
-		xdmclone.DropPositions(twin)
-	}
-	return v.typedResult(twin, whole), err
+	c := copier{root: root, whole: whole, track: true}
+	c.copyTree(topOf(root))
+	v.twins = c.twins
+	err := check(v, c.twin)
+	return v.typedResult(c.twin, whole), err
 }
 
-// typedResult builds the tree a typed copy returns from the validated working
-// copy, applying the recorded edits, and returns twin's counterpart in it.
+// typedResult builds the tree a typed copy returns from the assessed tree,
+// applying the layer and the recorded edits, and returns twin's counterpart
+// in it.
 func (v *validator) typedResult(twin *xdm.Node, whole bool) *xdm.Node {
 	edited := len(v.defaults) > 0 || len(v.fixups) > 0 || len(v.dropped) > 0
 	top := twin
 	if whole {
-		if !edited {
+		if !edited && v.layer == nil {
 			return twin
 		}
 		top = topOf(twin)
@@ -105,7 +97,7 @@ func (v *validator) typedResult(twin *xdm.Node, whole bool) *xdm.Node {
 	// The bulk clone renumbers records around dropped text and added
 	// attributes; added namespace declarations are left to the per-node copy.
 	if len(v.fixups) == 0 {
-		var o xdmclone.Options
+		o := xdmclone.Options{Layer: v.layer}
 		if len(v.dropped) > 0 {
 			o.Drop = func(n any) bool { return v.dropped[n.(*xdm.Node)] }
 		}
@@ -244,13 +236,13 @@ func (c *copier) fill(dst, src *xdm.Node) {
 	}
 	if c.v != nil {
 		for _, a := range c.v.defaults[src] {
-			copyNodeProps(dst.AppendAttr(a.Name(), a.Value()), a)
+			c.props(dst.AppendAttr(a.Name(), a.Value()), a)
 		}
 	}
 }
 
 func (c *copier) note(dst, src *xdm.Node) {
-	copyNodeProps(dst, src)
+	c.props(dst, src)
 	if src == c.root {
 		c.twin = dst
 	}
@@ -259,13 +251,18 @@ func (c *copier) note(dst, src *xdm.Node) {
 	}
 }
 
-// copyNodeProps copies the properties of src that are not its links or its
-// kind, which dst was created with.
-func copyNodeProps(dst, src *xdm.Node) {
+// props copies the properties of src that are not its links or its kind,
+// which dst was created with, taking src's typing from the layer when the
+// assessment kept one.
+func (c *copier) props(dst, src *xdm.Node) {
 	dst.SetName(src.Name())
 	dst.SetValue(src.Value())
 	dst.SetBaseURI(src.BaseURI())
 	dst.SetDocumentURI(src.DocumentURI())
+	if c.v != nil && c.v.layer != nil {
+		c.v.layer.CopyTyping(dst, src)
+		return
+	}
 	dst.CopyTypingFrom(src)
 	dst.SetTypeEnv(src.TypeEnv())
 }

@@ -390,8 +390,7 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 		// input-type-annotations="strip" clears the annotation while
 		// requiring them to survive, and fn:id/fn:idref are defined over
 		// them rather than over the annotation.
-		t := v.schema.annotationFor(decl.Type)
-		a.SetAssessedTyping(t.name, t.prim, t.item, v.schema.typeEnv, false, false)
+		v.setAssessedTyping(a, v.schema.annotationFor(decl.Type), false, false)
 	}
 }
 
