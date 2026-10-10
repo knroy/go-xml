@@ -16,7 +16,7 @@ func init() {
 	xpathleaf.SetHost = func(c any, h *xpathleaf.Host) { c.(*Context).host = h }
 	xpathleaf.WithFocusHost = func(c any, item xdm.Item, pos, size int, h *xpathleaf.Host) any {
 		n := *c.(*Context)
-		n.Item, n.Position, n.Size, n.host = item, pos, size, h
+		n.Item, n.Position, n.Size, n.host = item, int32(pos), int32(size), h
 		return &n
 	}
 }

@@ -381,8 +381,8 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 	// transforms itself that is the same shallow depth every time round.
 	// ctx.Depth is the depth of the fn:transform call actually being made.
 	depth := rt.depth
-	if ctx.Depth > depth {
-		depth = ctx.Depth
+	if int(ctx.Depth) > depth {
+		depth = int(ctx.Depth)
 	}
 	depth++
 	if rt.maxDepth > 0 && depth > rt.maxDepth {

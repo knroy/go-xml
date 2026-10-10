@@ -140,7 +140,7 @@ func expandAttributeSets(rt *runtime, names []attrSetRef, out *outputBuilder,
 		setRT := rt
 		if rt.globalCtx != nil {
 			r := *rt
-			r.ctx = rt.globalCtx.WithFocus(rt.ctx.Item, rt.ctx.Position, rt.ctx.Size)
+			r.ctx = rt.globalCtx.WithFocus(rt.ctx.Item, int(rt.ctx.Position), int(rt.ctx.Size))
 			r.absent = 0
 			setRT = &r
 		}

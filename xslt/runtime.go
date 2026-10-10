@@ -856,7 +856,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// XSLT on the way round -- fn:load-xquery-module into a query that calls
 	// fn:transform again -- since the query sees only its Context, and a
 	// Context starting at zero here restarted the count at every hop.
-	xctx.Depth = opts.nestedDepth
+	xctx.Depth = int32(opts.nestedDepth)
 	// The static base URI of every expression in the stylesheet. Without it
 	// a relative reference in fn:doc or fn:resolve-uri has nothing to
 	// resolve against when there is no context node — which is the case for

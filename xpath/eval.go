@@ -350,7 +350,7 @@ func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, er
 			reuse = ctx.WithFocus(it, pos, size)
 			sub = reuse
 		default:
-			reuse.Item, reuse.Position = it, pos
+			reuse.Item, reuse.Position = it, int32(pos)
 			sub = reuse
 		}
 		if h != nil {
