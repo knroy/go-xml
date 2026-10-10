@@ -1210,7 +1210,9 @@ func (d *Decoder) reference(out []byte, spans []refSpan, attr bool) ([]byte, []r
 		return out, spans, false
 	}
 	out = append(out[:start], repl...)
-	if charRef {
+	// Only 1.1 needs the extent: under 1.0 a literal character is checked
+	// exactly as a reference to it is, so checkChars re-reading it agrees.
+	if charRef && d.v11 {
 		spans = append(spans, refSpan{start, len(out)})
 	}
 	return out, spans, true
