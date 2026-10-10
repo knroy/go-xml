@@ -256,7 +256,7 @@ func (v *validator) checkAgainstType(n *xdm.Node, typ Type, typeName xdm.QName) 
 			// on a value rather than on a declared node. Without it an
 			// attribute validated against a named type came out untyped and
 			// "instance of attribute(a, my:t)" answered false for it.
-			v.schema.setResolvedAnnotation(n,
+			v.setResolvedAnnotation(n,
 				xdm.AnnotationName(typeName.URI, typeName.Local), typ)
 		}
 	default:
@@ -492,14 +492,18 @@ func resolveAnnotationMeaning(key string, t Type) (derivedPrimitive, listItem st
 // the environment here is what lets those walks reach this schema's
 // definitions rather than whatever a later, unrelated schema registered under
 // the same lexical name.
-func (s *Schema) setResolvedAnnotation(n *xdm.Node, annotation string, t Type) {
+func (v *validator) setResolvedAnnotation(n *xdm.Node, annotation string, t Type) {
 	if annotation == "" {
 		return
 	}
 	prim, item := resolveAnnotationMeaning(annotation, t)
-	n.SetTypeAnnotationResolved(annotation, prim, item)
-	if s != nil {
-		n.SetTypeEnv(s.typeEnv)
+	v.setTypeAnnotationResolved(n, annotation, prim, item)
+	if s := v.schema; s != nil {
+		if v.layer != nil {
+			v.layer.SetTypeEnv(n, s.typeEnv)
+		} else {
+			n.SetTypeEnv(s.typeEnv)
+		}
 	}
 }
 

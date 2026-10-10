@@ -312,10 +312,13 @@ type validator struct {
 	// has no source text. nil when the run reads the caller's tree.
 	twins map[*xdm.Node]*xdm.Node
 
-	// typed is set when the run works on a typed copy (ValidateCopy and
-	// its siblings), which it writes typing onto as it goes. Without it the
-	// run reads the caller's tree and writes nothing to it.
+	// typed is set when the run makes a typed copy (ValidateCopy and its
+	// siblings): it writes typing onto the copy it reads as it goes, or,
+	// with layer set, reads the caller's tree and writes typing to layer,
+	// from which the copy is made after the run. Without it the run reads
+	// the caller's tree and writes nothing to it.
 	typed bool
+	layer typingLayer
 
 	// typing holds, when typed is off, the typing facts the run would
 	// otherwise have written onto a node (a union's winning member, dm:nilled),
@@ -1883,11 +1886,11 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 			// they are halves of one fact, so restoring the name
 			// while leaving the meaning from the anyType pass would
 			// describe the old type with the new type's erasure.
-			prev := kid.TypeAnnotation()
-			prevPrim, prevItem := kid.DerivedPrimitive(), kid.ListItem()
+			prev := v.typingOf(kid)
 			v.validateAgainstType(kid, v.schema.anyType(), nil)
 			if v.typed {
-				kid.SetTypeAnnotationResolved(prev, prevPrim, prevItem)
+				v.setTypeAnnotationResolved(kid, prev.TypeAnnotation,
+					prev.DerivedPrimitive, prev.ListItem)
 			}
 			return nil
 		case ProcessStrict:
@@ -2231,7 +2234,39 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 		// has an annotation, so there is nothing to write.
 		return
 	}
-	el.SetAssessedTyping(a.name, a.prim, a.item, v.schema.typeEnv, a.noTypedValue, a.mixed)
+	v.setAssessedTyping(el, a, a.noTypedValue, a.mixed)
+}
+
+// typingLayer is the typing layer xdmclone.NewLayer makes: xdm.Node's typing
+// setters and readers, writing to a layer over a subtree rather than to the
+// subtree's tree.
+type typingLayer interface {
+	SetAssessedTyping(n *xdm.Node, annotation, derivedPrimitive, listItem string,
+		env *xdm.TypeEnvironment, noTypedValue, mixedContent bool)
+	SetTypeAnnotationResolved(n *xdm.Node, annotation, derivedPrimitive, listItem string)
+	SetTypeEnv(n *xdm.Node, env *xdm.TypeEnvironment)
+	ApplyTyping(n *xdm.Node, t xdm.Typing)
+	TypingOf(n *xdm.Node) xdm.Typing
+	CopyTyping(dst, src *xdm.Node)
+}
+
+// setAssessedTyping annotates n with a, in the layer when the run has one.
+func (v *validator) setAssessedTyping(n *xdm.Node, a *typeAnnotation, noTypedValue, mixed bool) {
+	if v.layer != nil {
+		v.layer.SetAssessedTyping(n, a.name, a.prim, a.item, v.schema.typeEnv, noTypedValue, mixed)
+		return
+	}
+	n.SetAssessedTyping(a.name, a.prim, a.item, v.schema.typeEnv, noTypedValue, mixed)
+}
+
+// setTypeAnnotationResolved is xdm.Node.SetTypeAnnotationResolved, in the
+// layer when the run has one.
+func (v *validator) setTypeAnnotationResolved(n *xdm.Node, annotation, prim, item string) {
+	if v.layer != nil {
+		v.layer.SetTypeAnnotationResolved(n, annotation, prim, item)
+		return
+	}
+	n.SetTypeAnnotationResolved(annotation, prim, item)
 }
 
 // typeAnnotation is what a type annotates a node with: the annotation name,
@@ -2333,12 +2368,19 @@ func (v *validator) typingOf(n *xdm.Node) xdm.Typing {
 	if t, ok := v.typing[n]; ok {
 		return t
 	}
+	if v.layer != nil {
+		return v.layer.TypingOf(n)
+	}
 	return xdm.TypingOf(n)
 }
 
 // setTyping gives n the typing t: on the node itself in a typed copy, and in
 // v.typing when the run must not write to the tree it reads.
 func (v *validator) setTyping(n *xdm.Node, t xdm.Typing) {
+	if v.layer != nil {
+		v.layer.ApplyTyping(n, t)
+		return
+	}
 	if v.typed {
 		n.ApplyTyping(t)
 		return

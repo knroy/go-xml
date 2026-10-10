@@ -14,11 +14,11 @@ func init() {
 		}
 		return func(n any) any { return m(n.(*Node)) }
 	}
-	xdmclone.DropPositions = func(n any) {
-		t := n.(*Node).tree
-		if s := t.source; s != nil {
-			s.src, s.offsets, s.foreignPos = "", nil, nil
+	xdmclone.NewLayer = func(top any) any {
+		if n := top.(*Node); n.flags&fSide == 0 {
+			return newTypingLayer(n)
 		}
+		return nil
 	}
 }
 
@@ -103,16 +103,15 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 	if document {
 		c.id.Store(int64(nextTreeID()))
 		c.DocType, c.XMLVersion = t.DocType, t.XMLVersion
-		// The source part is the copy's own: it holds a sync.Once and the
-		// offsets the copy writes. Only its text fields are shared.
+		// The source part is the copy's own. Only its text fields are shared.
 		if s := t.source; s != nil {
 			c.source = &treeSource{externalSubset: s.externalSubset}
-			if o.Positions {
-				c.source.src = s.src
-			}
 		}
 	}
-	keepPos := document && o.Positions
+	layer, _ := o.Layer.(*typingLayer)
+	if layer != nil && layer.src != t {
+		layer = nil
+	}
 	c.names = t.names[:len(t.names):len(t.names)]
 	c.nameIx = maps.Clone(t.nameIx)
 	c.text.blocks = make([][]byte, len(t.text.blocks))
@@ -201,9 +200,15 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 			}
 		}
 		d := place(j, r)
-		if s.flags&fTyped != 0 {
+		from, typed := s.typ(), s.flags&fTyped != 0
+		if layer != nil {
+			if lt, ltyped, ok := layer.typingAt(i); ok {
+				from, typed = lt, ltyped
+			}
+		}
+		if typed {
 			dt := d.ownTyping()
-			*dt = *s.typ() // the names are shared, not copied
+			*dt = *from // the names are shared, not copied
 			if o.Detached && dt.get().env != nil {
 				v := *dt.names
 				v.env = nil
@@ -232,17 +237,6 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 					c.docURIs = map[uint32]string{}
 				}
 				c.docURIs[j] = u
-			}
-		}
-		if keepPos {
-			if p, ok := t.foreign(i); ok {
-				cs := c.ownSource()
-				if cs.foreignPos == nil {
-					cs.foreignPos = map[uint32][2]int32{}
-				}
-				cs.foreignPos[j] = p
-			} else if off := s.offset(); off != 0 {
-				d.setOffset(off)
 			}
 		}
 	}

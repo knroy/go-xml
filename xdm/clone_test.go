@@ -119,10 +119,9 @@ func TestCloneInternsPastSmallNames(t *testing.T) {
 }
 
 // A tree's parse-only fields live behind Tree.source, nil for a constructed
-// tree. The bulk clone gives a document copy a source part of its own (it
-// holds a sync.Once and the offsets the copy writes), and every reader of
-// those fields must cope with nil: a constructed tree cloned with Positions,
-// a parsed one cloned without, positions copied in from another document.
+// tree. The bulk clone gives a document copy a source part of its own, with
+// the external subset and without positions, and every reader of those fields
+// must cope with nil: a constructed fragment's clone has none.
 func TestCloneSourcePart(t *testing.T) {
 	if s := unsafe.Sizeof(Tree{}); s > 320 {
 		t.Errorf("Tree is %d bytes, want at most 320 (a 320-byte size class)", s)
@@ -135,47 +134,19 @@ func TestCloneSourcePart(t *testing.T) {
 	tree.ownSource().externalSubset = "<!-- ext -->"
 	before := dump(tree.Root)
 
-	withPos := xdmclone.Clone(tree.Root, xdmclone.Options{Positions: true})(tree.Root).(*Node)
-	if dump(withPos) != before {
-		t.Errorf("clone with positions:\n%s\nwant\n%s", dump(withPos), before)
+	c := xdmclone.Clone(tree.Root, xdmclone.Options{})(tree.Root).(*Node)
+	if dump(tree.Root) != before || c.StringValue() != tree.Root.StringValue() {
+		t.Errorf("clone %q changed the original:\n%s", c.StringValue(), dump(tree.Root))
 	}
-	c := withPos.Tree()
-	if c.source == nil || c.source == tree.source || c.extSubset() != "<!-- ext -->" || !c.HasPositions() {
-		t.Fatalf("clone's source part: %+v (original %p)", c.source, tree.source)
+	ct := c.Tree()
+	if ct.source == nil || ct.source == tree.source || ct.extSubset() != "<!-- ext -->" {
+		t.Fatalf("clone's source part: %+v (original %p)", ct.source, tree.source)
 	}
-	xdmclone.DropPositions(withPos)
-	if dump(tree.Root) != before {
-		t.Errorf("dropping the clone's positions changed the original:\n%s", dump(tree.Root))
+	if ct.HasPositions() {
+		t.Errorf("clone has positions")
 	}
-	if _, _, ok := withPos.FirstChild().Position(); ok || c.extSubset() != "<!-- ext -->" {
-		t.Errorf("after DropPositions: position kept or external subset lost")
-	}
-
-	noPos := xdmclone.Clone(tree.Root, xdmclone.Options{})(tree.Root).(*Node)
-	if noPos.Tree().HasPositions() {
-		t.Errorf("clone without positions has positions")
-	}
-
-	// A constructed document holding a copy positioned in another document,
-	// then cloned with positions: the foreign position travels.
-	built := NewTree()
-	var a *Node
-	for ch := range tree.Root.FirstChild().Children() {
-		if ch.Kind() == KindElement {
-			a = ch
-			break
-		}
-	}
-	ca := built.Root.AppendCopy(a)
-	CopyPosition(ca, a)
-	built.Finalize()
-	wantLine, wantCol, ok := a.Position()
-	if !ok {
-		t.Fatal("parsed element has no position")
-	}
-	got := xdmclone.Clone(built.Root, xdmclone.Options{Positions: true})(built.Root).(*Node)
-	if l, c, ok := got.FirstChild().Position(); !ok || l != wantLine || c != wantCol {
-		t.Errorf("foreign position in clone: %d:%d %v, want %d:%d", l, c, ok, wantLine, wantCol)
+	if _, _, ok := tree.Root.FirstChild().Position(); !ok {
+		t.Errorf("cloning lost the original's positions")
 	}
 
 	// A fragment has no source part, and its clone none either.
@@ -184,7 +155,7 @@ func TestCloneSourcePart(t *testing.T) {
 	if frag.tree.source != nil {
 		t.Errorf("a constructed fragment has a source part")
 	}
-	fc := xdmclone.Clone(frag, xdmclone.Options{Positions: true})(frag).(*Node)
+	fc := xdmclone.Clone(frag, xdmclone.Options{})(frag).(*Node)
 	if fc.tree.source != nil || fc.StringValue() != "x" {
 		t.Errorf("fragment clone: source %p, value %q", fc.tree.source, fc.StringValue())
 	}
