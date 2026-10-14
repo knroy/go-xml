@@ -4,10 +4,11 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## v2.0.0 — not yet released (branch `v2`)
+## v2.0.0 — 2026-10-14
 
-v2 breaks the exported API, so it has a new module path. Its plan is phases 3
-and later of the XDM analysis summarised in [docs/profiling.md](docs/profiling.md).
+v2 breaks the exported API, so it has a new module path. It is phases 3 and
+later of the XDM analysis; [docs/profiling.md](docs/profiling.md) shows where
+its time goes now.
 [docs/migrating-to-v2.md](docs/migrating-to-v2.md) shows each change below with
 code before and after, and how to run the rewriter on your own module.
 
