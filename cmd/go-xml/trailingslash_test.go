@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/v2/xslt"
+	"github.com/knroy/go-xml/xslt"
 )
 
 // GO-2026-4970: on Unix, an unpatched os.Root (before Go 1.25.12 / 1.26.5)
