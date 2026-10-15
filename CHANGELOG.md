@@ -6,100 +6,80 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## v2.0.0 — 2026-10-14
 
-v2 breaks the exported API, so it has a new module path. It is phases 3 and
-later of the XDM analysis; [docs/profiling.md](docs/profiling.md) shows where
-its time goes now.
-[docs/migrating-to-v2.md](docs/migrating-to-v2.md) shows each change below with
-code before and after, and how to run the rewriter on your own module.
+v2 is a new major version with a new module path, `github.com/knroy/go-xml/v2`.
+Nodes are rebuilt as 40-byte records and the XPath context is split, which
+changes the exported Go API; the command-line tool's flags and output do not
+change. [docs/migrating-to-v2.md](docs/migrating-to-v2.md) has before/after
+code for every breaking change, and `internal/tools/nodeaccess` rewrites most
+of it. v1 continues at `github.com/knroy/go-xml`.
+
+**Behaviour changes to check before upgrading.** Results, error codes and
+serialized output are those of v1, except:
+
+- `generate-id()` strings are record positions, so stored ids change.
+- Nodes of different trees order by when each tree was numbered (a
+  constructed fragment: when first compared).
+- An XSLT global variable is evaluated on first use, so the failure of one
+  nothing reads is not reported (XSLT 3.0 §2.14). One with `xsl:message`,
+  `xsl:assert`, `xsl:result-document` or `fn:trace` in its own body is still
+  evaluated at the start.
+- During a transform, a Go-built function item or a context-taking resolver
+  receives a copy of the context, not the caller's own.
 
 ### Changed — breaking
 
-| Change | What it means for callers | Commit |
+| Change | What to do | Commit |
 |---|---|---|
-| Module path `github.com/knroy/go-xml/v2` | Import `github.com/knroy/go-xml/v2/<package>`; v1 stays at `github.com/knroy/go-xml`. The `w3cschemas` module still requires v1. | — |
-| `xdm.Node` fields are unexported; read through methods | `n.Kind`, `n.Name`, `n.Value`, `n.Parent`, `n.BaseURI`, `n.DocumentURI` and the nine typing fields (`n.TypeAnnotation` … `n.MixedContent`) become calls of the same name. `range n.Children` / `n.Attrs` / `n.Namespaces` becomes `range n.Children()` / `n.Attrs()` / `n.NamespaceDecls()` (iterators); `len` and indexing become `NumChildren`/`ChildAt`/`FirstChild`/`LastChild`, `NumAttrs`/`AttrAt`, `NumNamespaceDecls`/`NamespaceDeclAt`. No slice is handed out. `internal/tools/nodeaccess` rewrites old code mechanically; with `-v1` it also moves another module's imports to `/v2` ([migrating](docs/migrating-to-v2.md#the-rewriter-nodeaccess)). | a8e5346 |
-| Trees are built top-down by appending; nothing is relinked | `xdm.NewNode(k, q, v)` makes a parentless node; children and attributes are appended to an open node: `AppendElement`, `AppendText`, `AppendComment`, `AppendPI`, `AppendAttr` (before the first child), `AppendCopy`, `AppendShallowCopy`, `AddNamespace`. `SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaceDecls`, `AppendChild`/`AddAttr` of a separately made node and `SetSynthesizedOrder` are gone; scalar setters (`SetName`, `SetValue`, `SetBaseURI`, typing) stay. A parsed document is frozen; appending to a closed node panics ([migrating](docs/migrating-to-v2.md#trees-are-built-top-down-by-appending)). | 3f33dce, f64b0d1, a81dff2 |
-| `xdm.Node` is a 40-byte record | `*xdm.Node` still compares, keys maps and boxes into `Item` as before. `NumChildren`/`ChildAt` walk the children; `NextSibling`, `PrevSibling`, `Descendants` are constant time per step. A namespace node exists once per element and prefix, so `Is` is `==`. Nodes of different trees order by when each tree was numbered (a constructed fragment: when first compared); `generate-id` numbers are record positions. | a81dff2 |
-| `xdm.ProcessXInclude` returns a new tree | `tree, err = xdm.ProcessXInclude(tree, opts)`; the input is not edited. | fb2426e |
-| `xdmbuild.SetParent`, `SetChildren`, `SetAttrs`, `SetNamespaces`, `SetName`, `SetBaseURI`, `ShallowCopy`, `ReplaceChild`, `PrependChild` removed | Call the `xdm.Node` method of the same name where there is one (`SetName`, `SetBaseURI`); build a changed tree as a copy. `Builder.ReplaceOpen` swaps an element being built for its typed copy. | 6b34bc3, 13c4f5f |
-| `xsd.HTTPResolver` moves to package `xsd/xsdnet` | Every program importing `xsd` linked `net/http`, TLS and x509; only `-tags goxml_nohttp` kept them out. Use `xsdnet.HTTPResolver`, `ErrPrivateAddress`, `DefaultFetchTimeout`, `DefaultMaxSchemaBytes`; the tag is gone ([migrating](docs/migrating-to-v2.md#httpresolver-moves-to-package-xsdnet)). | 5509745a |
-| `xpath.Context.StaticNamespaces` is set only for an expression that reads it | It holds the expression's resolver only where the expression calls or references `fn:format-date`, `format-dateTime`, `format-time` or `function-lookup`; elsewhere it is the caller's, nil at the top level. A host function expands prefixes against a resolver it captured itself ([migrating](docs/migrating-to-v2.md#staticnamespaces-only-where-an-expression-reads-them)). | d5a980b6 |
-| XSLT global variables are evaluated on first use | A global nothing reads is not evaluated, so its failure is not reported (XSLT 3.0 §2.14 allows this); one with `xsl:message`, `xsl:assert`, `xsl:result-document` or `fn:trace` in its own body is still evaluated at the start, and every error keeps its code and wording ([migrating](docs/migrating-to-v2.md#global-variables-are-evaluated-on-first-use)). | 7c5121ca |
-| `xsd.ValidateOptions.Annotate` removed; `Validate` and its siblings only check | A typed tree comes from `ValidateCopy`, `ValidateElementLaxCopy`, `ValidateAttributeCopy` or `ValidateAgainstTypeCopy`, which return the copy's counterpart of the node given. There is no in-place annotation (v2's interim `AnnotateInPlace` is gone too): annotating adds attributes and strips whitespace, which a built tree cannot take. | 21105fe |
-| `xpath.Context.Position`, `Size` and `Depth` are `int32` | `Context` is 112 → 96 B, one size class down on every scope change. Convert where an `int` is mixed in: `int(ctx.Position)`; `WithFocus(item, pos, size int)` keeps its signature ([migrating](docs/migrating-to-v2.md#xpathcontext-position-size-and-depth-are-int32)). | 7f6f1689 |
-| `LazyVar.Share` removed; `Context.WithLazyVars(vars, lock)` takes an `*xpath.EvalLock` | The lock a scope of lazy variables shares is now the host's, so a host can guard its other state with the same one; nil makes a fresh lock. Call `lock.Share()` where `LazyVar.Share()` was ([migrating](docs/migrating-to-v2.md#global-variables-are-evaluated-on-first-use)). | fbd4b74a |
+| Module path `github.com/knroy/go-xml/v2` | Import `github.com/knroy/go-xml/v2/<package>`; `nodeaccess -v1` moves a module's imports. `w3cschemas` still requires v1. | — |
+| `xdm.Node` fields are unexported | Call the method of the same name (`n.Name()`); range `Children()`, `Attrs()`, `NamespaceDecls()`; index with `ChildAt`, `AttrAt`. | [`a8e5346`][a8e5346] |
+| Trees are built top-down by appending; a parsed tree is frozen | `AppendElement`, `AppendText`, `AppendAttr`, `AppendCopy` replace `SetParent`, `SetChildren`, `AppendChild`, `AddAttr`. | [`3f33dce`][3f33dce], [`f64b0d1`][f64b0d1] |
+| `xdm.ProcessXInclude` returns a new tree | `tree, err = xdm.ProcessXInclude(tree, opts)`; the input is not edited. | [`fb2426e`][fb2426e] |
+| `xdmbuild` relinking setters removed (`SetParent`, `SetChildren`, `ReplaceChild`, …) | Use the `xdm.Node` method of the same name, or build a changed copy; `Builder.ReplaceOpen` swaps in a typed copy. | [`6b34bc3`][6b34bc3], [`13c4f5f`][13c4f5f] |
+| `xpath.Context` per-evaluation fields move to `xpath.Env` | `ctx.Docs = r` → `ctx.WithEnv(func(e *xpath.Env) { e.Docs = r })`; read `ctx.Env().Docs`. | [`9af0e77`][9af0e77] |
+| `xpath.Context` static fields become methods; `WithNow` removed | `ctx.Version` → `ctx.Version()`, set with `WithVersion`; `WithNow(t)` → `WithEnv` setting `Now` and `HasNow`. | [`9af0e77`][9af0e77] |
+| `Context.StaticNamespaces` is set only for an expression that reads it | A host function resolves prefixes against a resolver it captured itself. | [`d5a980b`][d5a980b] |
+| `Context.Position`, `Size` and `Depth` are `int32` | Convert where an `int` is mixed in; `WithFocus` keeps its `int` parameters. | [`7f6f168`][7f6f168] |
+| `LazyVar.Share` removed; `Context.WithLazyVars` takes an `*xpath.EvalLock` | Pass the lock (nil for a fresh one) and call `lock.Share()` where `LazyVar.Share()` was. | [`fbd4b74`][fbd4b74] |
+| `xsd.HTTPResolver` moves to `xsd/xsdnet`; build tag `goxml_nohttp` removed | Use `xsdnet.HTTPResolver`; importing `xsd` no longer links `net/http`. | [`5509745`][5509745] |
+| `xsd.ValidateOptions.Annotate` removed | `Validate` only checks; take a typed tree from `ValidateCopy` or another `...Copy` function. | [`21105fe`][21105fe] |
 
 ### Added
 
 | Change | What it does | Commit |
 |---|---|---|
-| `docs/benchmark.md` v1 and v2; `docs/profiling.md` v2 profile | The benchmark re-run on v2, every table showing v1 `f45068c` and v2 side by side against the reference engines, and a profile explaining v2's three regressions with a ranked fix list (V1–V11). | `694b9c37`, `c9a6e8e7`, `6ec7da09` |
-| `docs/profiling.md` rewritten as the open-fix list | Six rounds of landed fixes hid what was still open. It now ranks only open fixes (V1–V19) and lists what was measured and rejected; landed work stays here and in `git show aefbd8a5:docs/profiling.md`. | — |
-| `xdm.NewFragment`, `Tree.NewRoot`, `Copy`, `CopyPruned`, `ShallowCopy`, `CopyPosition`, `Tree.CopySourceFrom`, `CopyTypeEnvs`, `SetNamespaceDecl`, `RemoveNamespaceDecls`, `DeclaredNamespaces`, `NamespaceNodes`, `RemoveLastChild`, `ReplaceLastChild` | The construction and reading calls the record layout is built on; see [migrating](docs/migrating-to-v2.md#trees-are-built-top-down-by-appending). | 3f33dce, 86f991c, d337fd9 |
-| `docs/migrating-to-v2.md`; `nodeaccess -v1` | Before/after code for every breaking change. The rewriter can be pointed at any module: `-v1` moves its go-xml imports to `/v2` and runs `go mod tidy` before rewriting. | — |
-| `tests/record.sh`, `tests/recdiff`, `GOXSLT_RECORD_DIR` | Suites only count passes; now every case's output is recorded and two checkouts are diffed, allowed differences by rule. | `5aa004e` |
-| `xpath.Context` per-evaluation fields move to `xpath.Env` | `ctx.Docs = r` → `xpath.NewContext(item, funcs, func(e *xpath.Env) { e.Docs = r })` or `ctx = ctx.WithEnv(func(e *xpath.Env) { e.Docs = r })`; reads `ctx.Docs` → `ctx.Env().Docs`. Moved: `Ctx`, `Docs`, `Collections`, `Texts`, `Entities`, `Environment`, `Modules`, `Validator`, `Now`, `HasNow`, `ImplicitTimezone`, `RegexVersion`, `LibraryVersion`, `MaxDepth`, `MaxItems`, `QualifyVar`, `MissingVar`, `MapDuplicateCode`. Budgets cannot be set or reset through `Env`. | [`9af0e77`][9af0e77] |
-| `xpath.Context` static fields become methods | `ctx.Version`, `ctx.StaticBaseURI`, `ctx.StaticHost`, `ctx.StaticNamespaces`, `ctx.Compat` → the same names called; `ctx.Version = v` → `ctx = ctx.WithVersion(v)`, `ctx.StaticBaseURI = u` → `ctx = ctx.WithStaticBaseURI(u)`. | [`9af0e77`][9af0e77] |
-| `Context.WithNow` removed | `ctx.WithNow(t)` → `ctx.WithEnv(func(e *xpath.Env) { e.Now, e.HasNow = t, true })`. | [`9af0e77`][9af0e77] |
-| `xdmbuild.Builder.AppendCopyOf` | Appends a copy of a node straight into the tree being built: the result of `AppendNode(xdm.Copy(n))` with one copy instead of two. Returns the copy (nil when the node was merged as text), so a caller can give it bindings. | `484cb4e8`, a785e1a4 |
-| `xdmbuild.NSDecl`, `Builder.NoteDeclaredList` | `NoteDeclared` for a list of bindings the builder may keep instead of copying; for a constructor that notes the same bindings on every element it builds. | 2c5ea0b |
-| `xpath.Context.WithStaticHost` | Sets the static host for expressions compiled without one, as `WithStaticBaseURI` does for the base URI. The XSLT runtime sets its top-level package once this way. | d5a980b6 |
-| `xpath.LazyVar`, `xpath.ReadyVar`, `Context.WithLazyVars` | Binds a scope of variables each evaluated on first reference; a reference raises the evaluation's error. After its `EvalLock` is shared each is forced once from any goroutine. XSLT globals use it, so a function item returned by a transform may be called concurrently. | 7c5121ca, 03adcab8 |
-| `xpath.EvalLock`, `xpath.EvalLocker` | A re-entrant lock a host shares once its runtime can be reached from other goroutines; before `Share` it costs one atomic load. A host runtime that implements `EvalLocker` has it taken wherever a function item's body enters it. | fbd4b74a |
-| `xdm.Node.SetAssessedTyping` | Writes a node's annotation, primitive and list item type in one call; the validator uses it once per typed node. | 8faf3493 |
-| `xdm.Node.DescendantsInheritBase` | Whether nothing below the node sets its own base URI, so a rebase can stop there. | ae360399 |
-| `go-xml xquery -validate strict\|lax` | Validates the input document against the schema the query imports before it runs, so a declared typed context item (`document-node(schema-element(...))`) can be satisfied from the command line. | [`130360b`][130360b] |
-| `xquery.Query.Schema` | The schema merged from a query's `import schema` declarations, or nil; mirrors `xslt.Stylesheet.Schema`. | [`130360b`][130360b] |
-| `xdm.Node.TreeHasTyping` | Whether any node of the node's tree was ever typed; false means the whole tree is untyped. XSLT uses it to skip stripping annotations ([migrating](docs/migrating-to-v2.md#validation-never-writes-to-your-tree)). | 40dbca21 |
+| `xdm.NewFragment`, `Tree.NewRoot`, `Copy`, `CopyPruned`, `ShallowCopy`, `NamespaceNodes`, … | The construction and reading calls the record layout is built on. | [`3f33dce`][3f33dce], [`86f991c`][86f991c], [`d337fd9`][d337fd9] |
+| `xdm.Node.TreeHasTyping`, `SetAssessedTyping`, `DescendantsInheritBase` | Whether a tree was ever typed; write a node's typing in one call; whether a subtree sets its own base URI. | [`40dbca2`][40dbca2], [`8faf349`][8faf349], [`ae36039`][ae36039] |
+| `xdmbuild.Builder.AppendCopyOf`, `NSDecl`, `NoteDeclaredList` | Copy a node straight into the tree being built; note a list of namespace bindings once. | [`484cb4e`][484cb4e], [`2c5ea0b`][2c5ea0b] |
+| `xpath.LazyVar`, `ReadyVar`, `Context.WithLazyVars`, `WithStaticHost` | Variables evaluated on first reference, forced once from any goroutine once shared; a static host for expressions compiled without one. | [`7c5121c`][7c5121c], [`d5a980b`][d5a980b] |
+| `xpath.EvalLock`, `xpath.EvalLocker` | A re-entrant lock a host runtime shares once other goroutines can reach it; free until shared. | [`fbd4b74`][fbd4b74], [`4954bf0`][4954bf0] |
+| `go-xml xquery -validate strict\|lax`, `xquery.Query.Schema` | Validate the input against the schema the query imports before it runs. Also in v1.8.0. | [`130360b`][130360b] |
+| `tests/record.sh`, `tests/recdiff` | Record every suite case's output and diff two checkouts, with allowed differences by rule. | [`5aa004e`][5aa004e] |
+| `docs/benchmark.md` v1 against v2; `docs/profiling.md` | The benchmark with both versions against the reference engines; where v2's time goes and how to measure a change. | [`dcf9d53`][dcf9d53] |
 
 ### Fixed
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| An escaped function item raced on its transform's state | Called from several goroutines after the transform, `key()`, accumulators and memo maps were written concurrently. One re-entrant lock per runtime, shared with the globals, taken once it escapes. | fbd4b74a |
-| A called template or function could read a caller's local named like a global | A local was visible past its frame where a global of its name existed. Locals now live in frames that a call raises. | a0250ddb |
-| Goroutines a Go extension function started during a transform, and function items called both ways across `fn:transform`, were unguarded | The lock turns on at the first host call and is released around it; a nested transform shares its caller's lock and locals stack, so there is one lock. | 4954bf0f |
-| go-xml did not compile for 32-bit targets, and an array position past 2^31 could wrap there | The `xs:date` year bound is compared as int64; `maxArrayIndex` is capped at a quarter of `math.MaxInt`. CI vets `linux/386`, `linux/arm` and `windows/386`. | — |
-
-### Fixed — documentation
-
-| Change | Problem → solution | Commit |
-|---|---|---|
-| `docs/xquery.md` said `import schema ... at` is not resolved from the command line | It is, through the query's directory and `-allow-dir` roots (and `-catalog`); the sentence is corrected. | — |
+| A function item returned by a transform raced when called from several goroutines | `key()`, accumulators and memoised functions wrote shared maps. One re-entrant lock per transform, also around Go extension calls and `fn:transform`. | [`fbd4b74`][fbd4b74], [`4954bf0`][4954bf0] |
+| A called template or function could read a caller's local variable | It happened where a global of the same name existed. Locals now live in frames that each call raises. | [`a0250dd`][a0250dd] |
+| go-xml did not compile for 32-bit targets | The `xs:date` year bound overflowed `int`, and array positions past 2^31 could wrap. CI now vets `linux/386`, `linux/arm`, `windows/386`. Also in v1.8.0. | [`4f6ed50`][4f6ed50] |
+| `docs/xquery.md` said `import schema ... at` is not resolved from the command line | It is, through the query's directory, `-allow-dir` roots and `-catalog`. | — |
 
 ### Changed — performance
 
+Ratios are warm time over the reference engine from
+[docs/benchmark.md](docs/benchmark.md), v1 at `f45068c` against v2.0.0.
+
 | Change | Problem → solution | Commit |
 |---|---|---|
-| RELAX NG re-walked the whole derivative before every element to check `MaxPatternSize` | Each pattern stores its size when built; close- and end-tag derivatives memoise by pattern alone. `table-cals.049` −33% CPU, corpus −18%; same verdicts. | ae4f4d1b |
-| Every program importing `xsd`, the CLI included, linked `net/http`, TLS and x509 | `HTTPResolver` moved to `xsd/xsdnet`. CLI binary −2.0 MB, small XSD validation 4.2 → 2.9 ms CPU, RSS 12.5 → 7.7 MB. | 5509745a |
-| `default.pgo` named only v1 code, so PGO did nothing for v2 | Regenerated on v2 (`tests/pgo.sh`). Warm CPU −1 to −6% (XSD level); cold CLI within ±1.5%. | c5184cb8 |
-| A parsed node was a 280 B struct of 16 pointers | Nodes are 40 B records in per-tree chunks, one pointer each; names, values, typing, positions and base URIs live in per-tree tables. 10 MB parse: 22 → 2.5 bytes retained per input byte, 127 → 77 ms CPU, 230 → 36 MB allocated; 100 MB parse peak 2.3 GB → 446 MB; descendant walk 10.6 → 1.3 ns per node. | a81dff2 |
-| Every scope change copied the whole 512 B `xpath.Context` | The context is a 160 B scope plus pointers to a shared `Env` and the expression's static part; `Compiled.Eval` swaps a pointer. CEN, Peppol, XRechnung −25% CPU, −36% bytes; DocBook −30% CPU. | [`9af0e77`][9af0e77] |
-| The smaller heap made the collector run 65–75% more often (CEN +32%, Peppol +19% CPU at `GOGC=100`) | Transform allocation cut: `current()` rebinding skipped, `Atomic` 112 → 48 B, runtime copy 352 → 176 B, `Context` 160 → 112 B, shared literal/boolean sequences, lent namespace lists. CEN −2%, Peppol −13%, DocBook −21% CPU against v1's layout. | 90d9a8b, afa3b59, f2e6fb1, 76a7f6a, 0462046, 2c5ea0b |
-| XQuery element content was copied twice per node, and every constructed element built three namespace maps | Content is copied once into the builder; the maps are skipped when nothing in scope declares a namespace. XMark q10 eval −38%, q13 −37%, q1–q20 allocations −13%. | `484cb4e8` |
-| The parser walked ancestors for every prefix and hashed every name into the intern map | No walk in a tree without declarations; a 64-entry cache in front of the map. Parse −2 to −3%, XMark parse phase −6%. | `7186eb0e` |
-| Typed validation made two per-node copies (2.5–3.4× v1's in-place annotation), and three callers copied the input first | `ValidateCopy` clones the record chunks in bulk for both copies; the pre-copies go where they change nothing. Catalog `ValidateCopy` −48% CPU; CLI `-validate strict` −31%, `xsl:source-document` −30%, XQuery `validate` −34%. | 18c35f6, b48adaf |
-| Plain `Validate` kept union-member typing that only assertions read | Kept only inside an element with assertions; text read once per node. Catalog `Validate` −4% CPU, 508 → 19 KB per pass. | e48af61 |
-| XSLT runtime and XPath predicates repeated per-item work (V5) | Runtime copy 176 → 112 B, one focus context per predicate, strip-space memo, untyped trees not stripped. XRechnung 1 −10%, 2 −9%, DocBook items about −11% CPU. | 35cd4d60, 16f3d909, f2c08b2e, 40dbca21, db7e1ba3, 462ee9a2 |
-| DocBook compile 55 → 77 ms on v2 (V7) | Version-attribute walks remembered per Compile (not in the static phase); `FileResolver` remembers `EvalSymlinks`. DocBook compile −11% CPU. | 23ace644, be9eb58e |
-| XSLT evaluated every global at the start of a transform (DocBook declares 300–950 per transform and reads a fraction), each bound in its own scope (V4) | Globals are evaluated on first use from one map scope; ones with direct side effects, a self-reference or a cycle stay eager. DocBook items −10% CPU, −12% allocations; XRechnung 1 −7%, Peppol −5%. | 7c5121ca, 03adcab8 |
-| The runtime copy still carried the 64 B template selection (V13) | Selection held by pointer, allocated with the copy that selects it: copy 112 → 64 B. DocBook items −5.5% bytes, −3.8% CPU. | e09f1060 |
-| C14N wrote each token through a `bufio.Writer` call; the serializer's `element` used defers, which sent every element through the runtime's deferred-call path (V11) | C14N appends to its own 64 KiB buffer; `element` restores its state without defers and calls `WriteString` directly. C14N −10 to −12% CPU, parse + C14N −3.7%; serializing XMark q10 −22%, DocBook −18%, XRechnung stage 2 −8%. | 63155c73, da27a7cd |
-| Every top-level XSLT expression copied the context to install its version, package and namespaces (V12) | The transform's context carries the common version and package; namespaces are installed only where read. CEN −5.1% CPU, −9.2% bytes; Peppol −3.6% bytes. | d5a980b6 |
-| `//name` walked the subtree on every evaluation (V19) | A parsed document builds an element-name index on first use (4 B per element). XMark q7 −8% CPU per parse-and-query; a document queried repeatedly: q6, q7 −98%, q14 −30%. | babd534f |
-| `xsl:sequence` and `xsl:copy-of` copied a node twice into an open element (V14) | Copied once, straight into the builder. CEN −6.1% bytes, −2.3% CPU; copy-heavy case −49% CPU. | a785e1a4 |
-| Every `Tree` carried 104 B of parse-only fields, and `xsl:attribute` made a fragment per attribute (V15) | Fields behind a pointer (`Tree` 424 → 320 B); no node unless validation assesses it. XRechnung 1 −7.1% bytes, CEN −5.5%. | e62d96db, b22d90cc |
-| A small document's parse allocated three 4 KB read windows (V18) | Windows sized to a reader of known length. Small-document parse −11% bytes, −6% CPU. | 9ddd2bc6 |
-| XSD checked every facet of a type that has none, and typed validation wrote 80 B of names per node (V21, V24, V25, V27, V29) | No-facet chains skip the checks; typing points at shared names (16 B), written once. XSD validate −12% CPU; typed validate −42% bytes, −29% allocations. | 3208c54d, 4e8fa840, 8faf3493, 8e29a38f, d2f1b1b0 |
-| RELAX NG hashed `QName` keys through `sync.Map` and allocated buffers per element (V22, V23) | Typed copy-on-write memos; one child stack and attribute buffer per validation. −23 to −30% CPU, long documents −84% allocations. | ea894387, fb7a15b0 |
-| The tokenizer hashed every name, kept XML 1.1 spans for 1.0 and regrew scratch per window (V28, V34, V37, V48, V50) | Name cache, 1.1-only spans, bounded scratch growth, long strings as own blocks. Parse −5 to −10% CPU; XRechnung stage 1 −16% bytes. | d2d1eb1e, 2dd09c03, 6004f45c, 48db5cc1, 20e3f0f0 |
-| Package init built large tables and regexps every run (V32, V33, V41) | Built on first use, or checked by hand. Init 1,893 → 785 allocations; cold XSD validate −3 to −4%. | c249ce3e, 47db4aa5, 06cf8508 |
-| XQuery rebased whole subtrees and `smallNames` scanned only 8 (V38, V39) | `Rebase` stops where nothing changes; 24 names before the map. XMark q10 −5% CPU, −11% bytes. | ae360399, fb01bf29 |
-| XSLT rebound absent context components, copied base URIs, boxed integers and stripped `doc()` per transform (V43–V51) | Absent bits, base URI on entry, int64 arithmetic, per-stylesheet stripped trees, 96 B context. DocBook −14% CPU, −17% bytes; Peppol −13% CPU. | cf948ed9, 1e976a35, bd28fa9e, 496f46af, 71d73165, f51ebda6, 7f6f1689 |
-| Every XSLT local and parameter made a context scope (V17) | One name-addressed stack per transform, frames per call. DocBook −5.8% CPU, −8.7% bytes. | a0250ddb |
-| Typed validation cloned the whole tree twice (V31) | The source is validated read-only into a typing layer, and the typed copy is made once. Catalog typed validation −6.5% CPU, −30% bytes. | d3f48240 |
-| The parser resolved namespaces twice, walking ancestors for every prefix (V36) | One namespace stack shared by the check and the builder, and a name cache keyed on the tokenizer's strings. Parse −13 to −15% CPU. | b08a3d4a |
+| A parsed node was a 280-byte struct of 16 pointers | 40-byte records in per-tree chunks. A 100 MB parse peaks at 371 MB (v1 2.2 GB); parse 0.54× → 0.46× `encoding/xml`. | [`a81dff2`][a81dff2], [`b08a3d4`][b08a3d4], [`2dd09c0`][2dd09c0] |
+| Every scope change copied a 512-byte `xpath.Context` | A 96-byte scope over a shared `Env` and a static part; `Compiled.Eval` swaps a pointer. | [`9af0e77`][9af0e77], [`7f6f168`][7f6f168] |
+| XSLT evaluated every global eagerly and gave each local and call a context copy | Lazy globals, one locals stack per transform, absent-component bits, int64 arithmetic. DocBook 0.46× → 0.20× Saxon. | [`7c5121c`][7c5121c], [`a0250dd`][a0250dd], [`1e976a3`][1e976a3], [`496f46a`][496f46a] |
+| XQuery copied constructed content twice, and `//name` walked the tree each time | Content is copied once into the builder; a document indexes its element names on first use. XMark 1.00× → 0.77× Saxon. | [`484cb4e`][484cb4e], [`babd534`][babd534] |
+| Typed validation copied the tree twice and wrote 80 bytes of typing per node | The source is validated read-only and copied once; typing shares its names. XSD 0.73× → 0.61× Xerces. | [`d3f4824`][d3f4824], [`8e29a38`][8e29a38], [`3208c54`][3208c54] |
+| RELAX NG re-walked derivatives per element and hashed names through `sync.Map` | Sizes stored once, typed memos, reused buffers: −23 to −30% CPU, long documents −84% allocations. | [`ae4f4d1`][ae4f4d1], [`ea89438`][ea89438], [`fb7a15b`][fb7a15b] |
+| C14N and the serializer paid a call or a defer per token and element | C14N writes to its own buffer; the serializer has no defers. C14N −10 to −12% CPU. | [`63155c7`][63155c7], [`da27a7c`][da27a7c] |
+| Package init built large tables and compiled regexps on every run | Built on first use: init allocations 1,893 → 785, cold XSD validation −3 to −4%. `default.pgo` regenerated for v2. | [`c249ce3`][c249ce3], [`47db4aa`][47db4aa], [`c5184cb`][c5184cb] |
 
 ## v1.7.1 — 2026-10-09
 
@@ -1522,3 +1502,44 @@ here so every entry in this file sits under a release.
 [ba09cac]: https://github.com/knroy/go-xml/commit/ba09cac
 [1a3cf7f]: https://github.com/knroy/go-xml/commit/1a3cf7f
 [9af0e77]: https://github.com/knroy/go-xml/commit/9af0e77
+[13c4f5f]: https://github.com/knroy/go-xml/commit/13c4f5f
+[1e976a3]: https://github.com/knroy/go-xml/commit/1e976a3
+[21105fe]: https://github.com/knroy/go-xml/commit/21105fe
+[2c5ea0b]: https://github.com/knroy/go-xml/commit/2c5ea0b
+[2dd09c0]: https://github.com/knroy/go-xml/commit/2dd09c0
+[3208c54]: https://github.com/knroy/go-xml/commit/3208c54
+[3f33dce]: https://github.com/knroy/go-xml/commit/3f33dce
+[40dbca2]: https://github.com/knroy/go-xml/commit/40dbca2
+[47db4aa]: https://github.com/knroy/go-xml/commit/47db4aa
+[484cb4e]: https://github.com/knroy/go-xml/commit/484cb4e
+[4954bf0]: https://github.com/knroy/go-xml/commit/4954bf0
+[496f46a]: https://github.com/knroy/go-xml/commit/496f46a
+[4f6ed50]: https://github.com/knroy/go-xml/commit/4f6ed50
+[5509745]: https://github.com/knroy/go-xml/commit/5509745
+[5aa004e]: https://github.com/knroy/go-xml/commit/5aa004e
+[63155c7]: https://github.com/knroy/go-xml/commit/63155c7
+[6b34bc3]: https://github.com/knroy/go-xml/commit/6b34bc3
+[7c5121c]: https://github.com/knroy/go-xml/commit/7c5121c
+[7f6f168]: https://github.com/knroy/go-xml/commit/7f6f168
+[86f991c]: https://github.com/knroy/go-xml/commit/86f991c
+[8e29a38]: https://github.com/knroy/go-xml/commit/8e29a38
+[8faf349]: https://github.com/knroy/go-xml/commit/8faf349
+[a0250dd]: https://github.com/knroy/go-xml/commit/a0250dd
+[a81dff2]: https://github.com/knroy/go-xml/commit/a81dff2
+[a8e5346]: https://github.com/knroy/go-xml/commit/a8e5346
+[ae36039]: https://github.com/knroy/go-xml/commit/ae36039
+[ae4f4d1]: https://github.com/knroy/go-xml/commit/ae4f4d1
+[b08a3d4]: https://github.com/knroy/go-xml/commit/b08a3d4
+[babd534]: https://github.com/knroy/go-xml/commit/babd534
+[c249ce3]: https://github.com/knroy/go-xml/commit/c249ce3
+[c5184cb]: https://github.com/knroy/go-xml/commit/c5184cb
+[d337fd9]: https://github.com/knroy/go-xml/commit/d337fd9
+[d3f4824]: https://github.com/knroy/go-xml/commit/d3f4824
+[d5a980b]: https://github.com/knroy/go-xml/commit/d5a980b
+[da27a7c]: https://github.com/knroy/go-xml/commit/da27a7c
+[dcf9d53]: https://github.com/knroy/go-xml/commit/dcf9d53
+[ea89438]: https://github.com/knroy/go-xml/commit/ea89438
+[f64b0d1]: https://github.com/knroy/go-xml/commit/f64b0d1
+[fb2426e]: https://github.com/knroy/go-xml/commit/fb2426e
+[fb7a15b]: https://github.com/knroy/go-xml/commit/fb7a15b
+[fbd4b74]: https://github.com/knroy/go-xml/commit/fbd4b74
