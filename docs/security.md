@@ -969,6 +969,19 @@ character.
 
 Each of these was demonstrated by execution, not inferred from reading the code.
 
+### A trailing slash cannot carry a path out of a root
+
+On a Go older than 1.25.12 or 1.26.5, `root.Open("link/")` follows `link` out
+of an `os.Root` when it is a symlink to a directory (GO-2026-4970). Every
+name go-xml hands to `os.Root` is cleaned first (`filepath.Rel`, `Clean`,
+`Abs` or `Join`), and cleaning drops the slash, so os.Root sees `link` and
+refuses it. Probed on the vulnerable Go 1.26.4 with `link/`, `link//`,
+`./link/`, `sub/../link/` and `file://` forms, against symlinks to an outside
+file and an outside directory: zero escapes. `TestTrailingSlashSymlinkStaysConfined`
+in `xsd`, `dtd`, `relaxng`, `xslt` and `cmd/go-xml` pins it; putting the slash
+back before os.Root fails the first four. In `xslt` the path is refused
+earlier, by `resolvePath`, and the test pins that refusal.
+
 ### XXE is absent, even with `AllowDOCTYPE: true`
 
 This is the important result, and it is stronger than the code comments claimed.
