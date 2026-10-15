@@ -4,6 +4,14 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+### Changed — breaking
+
+| Change | What to do | Commit |
+|---|---|---|
+| `w3cschemas` v0.8.0 requires go-xml v2 | `Catalog` returns a v2 `*xsd.CatalogResolver`; import `github.com/knroy/go-xml/v2/xsd` with it. v0.7.x stays with go-xml v1. | — |
+
 ## v2.0.0 — 2026-10-14
 
 v2 is a new major version with a new module path, `github.com/knroy/go-xml/v2`.

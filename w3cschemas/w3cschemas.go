@@ -32,7 +32,7 @@ import (
 	"embed"
 	"io/fs"
 
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 //go:embed schemas/*.xsd

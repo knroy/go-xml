@@ -190,11 +190,11 @@ each major version lives on its own branch:
 - **A v1 fix that v2 also needs** is merged from `v1` into `main` after the
   v1 release. Keep `main`'s version constant, and put the v1 changelog
   section below `main`'s newest one, in date order.
-- **`w3cschemas` requires v1.** Put a `w3cschemas:` line only in a v1 tag
-  message; the workflow refuses it on a v2 tag, since it pins
-  `github.com/knroy/go-xml` at the tag. Moving `w3cschemas` to `/v2` is its
-  own release, once a v2 tag is on the module proxy: its `go.mod` requires
-  `github.com/knroy/go-xml/v2` and its imports gain `/v2`.
+- **`w3cschemas` follows each branch.** On `main` it requires
+  `github.com/knroy/go-xml/v2` (`w3cschemas/v0.8.0` on), on `v1` the v1
+  module (`w3cschemas/v0.7.x`). A `w3cschemas:` line in a tag message pins
+  that tag's module and pushes the bump to that tag's branch. Its versions
+  share one tag series, so a v1-line release takes the next free `v0.7.x`.
 - **`go get github.com/knroy/go-xml@main` does not work.** `main`'s
   `go.mod` declares `/v2`. Use a tag, or `github.com/knroy/go-xml/v2@main`.
 
@@ -221,7 +221,7 @@ one**, and the workflow does not try to derive it:
 | v1.7.0 | w3cschemas/v0.6.0 (tagged by hand: the tag message had no `w3cschemas:` line) |
 | v1.7.1 | *(no release)* |
 | v1.8.0 | w3cschemas/v0.7.0 (tagged by hand: the tag message had no `w3cschemas:` line) |
-| v2.0.0 | *(no release: w3cschemas requires v1 until it moves to `/v2`, see Branches above)* |
+| v2.0.0 | w3cschemas/v0.8.0 (tagged by hand after v2.0.0, when `w3cschemas` moved to `/v2`) |
 
 The minor number counts **w3cschemas releases**, not go-xml ones, and two
 go-xml releases produced none at all. Any rule derived from the parent version

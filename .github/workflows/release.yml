@@ -318,14 +318,15 @@ jobs:
           SCHEMAS: ${{ steps.schemas.outputs.release }}
         run: |
           set -euo pipefail
-          # w3cschemas requires the v1 module, github.com/knroy/go-xml, which
-          # is released from the v1 branch; main carries v2. A v2 tag cannot
-          # be pinned by that path, so it is refused rather than half done.
+          # Each major version is released from its own branch, and that
+          # branch's w3cschemas requires that major's module: a v1 tag pins
+          # github.com/knroy/go-xml on v1, a v2 tag github.com/knroy/go-xml/v2
+          # on main. Anything else is refused rather than half done.
           case "$TAG" in
-            v1.*) BRANCH=v1 ;;
+            v1.*) MOD=github.com/knroy/go-xml BRANCH=v1 ;;
+            v2.*) MOD=github.com/knroy/go-xml/v2 BRANCH=main ;;
             *)
-              echo "::error::w3cschemas requires go-xml v1, released from the v1 branch."
-              echo "Release w3cschemas with a v1 tag, or move it to /v2 first (RELEASE.md)."
+              echo "::error::no branch releases w3cschemas for $TAG (RELEASE.md, Branches)."
               exit 1 ;;
           esac
           cd w3cschemas
@@ -337,7 +338,7 @@ jobs:
           # GOFLAGS is cleared for these two commands specifically: ci.yml
           # runs this module with -mod=readonly, which is right for a gate and
           # wrong here, where editing go.mod is the point.
-          go mod edit -require="github.com/knroy/go-xml@${TAG}"
+          go mod edit -require="${MOD}@${TAG}"
           # The tag was pushed minutes ago, and proxy.golang.org may not have
           # fetched it yet: `go mod tidy` would then fail with "unknown
           # revision" on a tag that demonstrably exists. GOFLAGS is also
@@ -368,16 +369,16 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add w3cschemas/go.mod w3cschemas/go.sum
           git commit -m "w3cschemas: pin go-xml ${TAG}"
-          # Onto the v1 branch, explicitly, not onto the detached tag
+          # Onto the release's branch, explicitly, not onto the detached tag
           # checkout: HEAD here is the tagged commit, and pushing HEAD would
           # either be refused or land nowhere useful. The bump belongs after
-          # the release on the branch that carries v1.
+          # the release on the branch that carries that major version.
           #
           # The w3cschemas tag points at THIS new commit, which is correct:
           # the module released as w3cschemas/vX.Y.Z is the one whose go.mod
           # names the go-xml release it was tested against.
           git tag "w3cschemas/${SCHEMAS}"
-          # If v1 is protected against direct pushes, this push is REFUSED and
+          # If the branch is protected against direct pushes, this push is REFUSED and
           # the step fails -- deliberately not worked around: the tag and the GitHub
           # release are the release, and the pin bump is a follow-up commit
           # anyone can make by hand from the log above.

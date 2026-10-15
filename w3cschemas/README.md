@@ -13,6 +13,16 @@ s, err := xsd.Load(root, base, xsd.Options{
 })
 ```
 
+## Versions
+
+| w3cschemas | go-xml |
+|---|---|
+| v0.8.0 and later | v2, `github.com/knroy/go-xml/v2` |
+| v0.7.x and earlier | v1, `github.com/knroy/go-xml` |
+
+`Catalog` returns the `*xsd.CatalogResolver` of the go-xml it requires, so
+use the w3cschemas line that matches your go-xml major version.
+
 ## Why this exists
 
 Schemas name their imports as absolute URLs, and those fetches are unreliable
