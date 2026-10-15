@@ -81,6 +81,27 @@ Ratios are warm time over the reference engine from
 | C14N and the serializer paid a call or a defer per token and element | C14N writes to its own buffer; the serializer has no defers. C14N −10 to −12% CPU. | [`63155c7`][63155c7], [`da27a7c`][da27a7c] |
 | Package init built large tables and compiled regexps on every run | Built on first use: init allocations 1,893 → 785, cold XSD validation −3 to −4%. `default.pgo` regenerated for v2. | [`c249ce3`][c249ce3], [`47db4aa`][47db4aa], [`c5184cb`][c5184cb] |
 
+## v1.8.0 — 2026-10-10
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| `go-xml xquery -validate strict\|lax` | Validates the input document against the schema the query imports before it runs, so a declared typed context item (`document-node(schema-element(...))`) can be satisfied from the command line. | [`130360b`][130360b] |
+| `xquery.Query.Schema` | The schema merged from a query's `import schema` declarations, or nil; mirrors `xslt.Stylesheet.Schema`. | [`130360b`][130360b] |
+
+### Fixed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| go-xml did not compile for 32-bit targets, and an array position past 2^31 could wrap there | The `xs:date` year bound is compared as int64; `maxArrayIndex` is capped at a quarter of `math.MaxInt`. CI and the gate vet `linux/386`, `linux/arm` and `windows/386`. | [`50ccc85`][50ccc85] |
+
+### Fixed — documentation
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `docs/xquery.md` said `import schema ... at` is not resolved from the command line | It is, through the query's directory and `-allow-dir` roots (and `-catalog`); the sentence is corrected. | — |
+
 ## v1.7.1 — 2026-10-09
 
 v1.7.1 is v1.7.0 with a fix to the release workflow and nothing else. The
@@ -1543,3 +1564,4 @@ here so every entry in this file sits under a release.
 [fb2426e]: https://github.com/knroy/go-xml/commit/fb2426e
 [fb7a15b]: https://github.com/knroy/go-xml/commit/fb7a15b
 [fbd4b74]: https://github.com/knroy/go-xml/commit/fbd4b74
+[50ccc85]: https://github.com/knroy/go-xml/commit/50ccc85
