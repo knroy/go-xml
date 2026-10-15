@@ -3,6 +3,7 @@ package xquery
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -173,12 +174,12 @@ func TestASmallQueryAfterARefusedByteBombSucceeds(t *testing.T) {
 // value. The nil counter must not panic.
 func TestAHandBuiltContextIsUnbounded(t *testing.T) {
 	c := &xpath.Context{Funcs: xpath.Builtins()}
-	if err := c.ChargeBytes(1 << 40); err != nil {
+	if err := c.ChargeBytes(math.MaxInt); err != nil {
 		t.Errorf("a hand-built context charged %v; it has no budget and "+
 			"must be unbounded", err)
 	}
 	var nilCtx *xpath.Context
-	if err := nilCtx.ChargeBytes(1 << 40); err != nil {
+	if err := nilCtx.ChargeBytes(math.MaxInt); err != nil {
 		t.Errorf("a nil context charged %v; the guard must be nil-safe", err)
 	}
 }

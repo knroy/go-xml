@@ -7,7 +7,7 @@ The short version: `tests/check.sh` is the gate, and a change is not done
 until it prints `OK`.
 
 ```
-tests/check.sh fast     # build, vet, gofmt, unit tests, race — about a minute
+tests/check.sh fast     # build, vet (64- and 32-bit), gofmt, unit tests, race — about a minute
 tests/check.sh          # everything available, about eight minutes
 ```
 
@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,766 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,769 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -1286,7 +1286,10 @@ Two jobs, in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 
 **`test`** — gofmt, vet, build, unit tests, and the race detector, with
 `GOXSLT_NO_SUITES=1` throughout. About a minute; catches a broken commit fast.
-gofmt is enforced rather than advisory.
+gofmt is enforced rather than advisory. On Linux it also vets the tree,
+tests included, cross-compiled for `linux/386`, `linux/arm` and
+`windows/386`: no runner is 32-bit, and a 32-bit `int` once stopped the
+library compiling at all. `tests/check.sh` runs the same as its `vet32` lane.
 
 It runs on **`ubuntu-latest`, `windows-latest` and `macos-latest`**. This
 library resolves schema and DTD references by path, and path separators,

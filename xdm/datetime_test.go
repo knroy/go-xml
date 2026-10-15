@@ -1,6 +1,9 @@
 package xdm
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+)
 
 func TestParseDateTimeRoundTrip(t *testing.T) {
 	cases := []struct {
@@ -213,15 +216,18 @@ func TestHour24RejectsNonMidnight(t *testing.T) {
 // wraps to a *positive* number, so a BCE date compared as later than the year
 // 2000 rather than merely being wrong by a fixed amount.
 func TestYearBoundIsExact(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("a 32-bit int cannot hold the bounds; strconv.Atoi refuses such a year first")
+	}
 	for _, c := range []struct {
 		name string
-		y    int
+		y    int64
 	}{
 		{"maxYear", maxYear},
 		{"minYear", minYear},
 	} {
-		d := daysFromCivil(c.y, 1, 1)
-		next := daysFromCivil(c.y+1, 1, 1)
+		d := daysFromCivil(int(c.y), 1, 1)
+		next := daysFromCivil(int(c.y+1), 1, 1)
 		if d >= next {
 			t.Errorf("%s (%d): day count is not monotonic at the bound: %d then %d",
 				c.name, c.y, d, next)
@@ -232,8 +238,10 @@ func TestYearBoundIsExact(t *testing.T) {
 	}
 	// One past the negative bound the count wraps to positive, which is what
 	// makes it a wrong *ordering* rather than a wrong magnitude.
-	if d := daysFromCivil(minYear-1, 1, 1); d > 0 {
-		t.Logf("confirmed: year %d would give day count %d", minYear-1, d)
+	below := int64(minYear)
+	below--
+	if d := daysFromCivil(int(below), 1, 1); d > 0 {
+		t.Logf("confirmed: year %d would give day count %d", below, d)
 	} else {
 		t.Errorf("minYear no longer marks the wrap point: got %d", d)
 	}

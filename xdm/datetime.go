@@ -195,7 +195,7 @@ func (dt *DateTime) parseDatePart(s string) (string, error) {
 	// version of this comment said "one year sooner", which was a guess; the
 	// two bounds below were found by bisecting daysFromCivil itself, and
 	// TestYearBoundIsExact pins them.
-	if y > maxYear || y < minYear {
+	if int64(y) > maxYear || int64(y) < minYear {
 		return "", Errorf("FODT0001", "year %d overflows the date range", y)
 	}
 	dt.Year = y

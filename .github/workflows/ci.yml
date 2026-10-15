@@ -69,6 +69,17 @@ jobs:
           fi
       - run: go vet ./...
       - run: go build ./...
+      # A 32-bit int once made the library fail to compile (the xs:date year
+      # bound) and made array positions past 2^31 wrap to valid ones. No
+      # runner is 32-bit, so the check is a cross-compiled vet, tests included.
+      - name: vet for 32-bit targets
+        if: runner.os == 'Linux'
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          GOOS=linux GOARCH=386 go vet ./...
+          GOOS=linux GOARCH=arm go vet ./...
+          GOOS=windows GOARCH=386 go vet ./...
       # GOXSLT_NO_SUITES keeps the conformance suites out of the fast gate.
       # The suite harnesses fall back to ./testdata when their env var is
       # unset, so if a cached checkout is present they run here too -- which

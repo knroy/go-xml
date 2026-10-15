@@ -377,7 +377,7 @@ at top level is `XQDY0084`; an element that is declared and found invalid is
 `XQDY0084` and `validate lax` is a skipped assessment that yields its operand.
 
 A `Schema` may carry already-assembled `Components` (an `*xsd.Schema` from
-`xsd.Load`, or from a stylesheet's `Schema()`) instead of `Source`, which is
+`xsd.Load`, or from a stylesheet's or another query's `Schema()`) instead of `Source`, which is
 how one schema is shared between a stylesheet and a query without loading it
 twice and risking the two disagreeing.
 
@@ -471,8 +471,19 @@ and the `-allow-dir` roots; a location hint outside them is refused with
 stylesheet and source through the same roots, and a location outside them is
 refused with `FOXT0002`. A stylesheet run by `go-xml -xsl` reads
 `fn:load-xquery-module` modules from its `-allow-dir` roots the same way. `import
-schema ... at` is not resolved from the command line. Run
-`go-xml xquery -h` for every flag.
+schema ... at` resolves through the same roots, and `-catalog` answers the W3C
+schemas from local copies.
+
+`-validate strict|lax` validates `INPUT.xml` against the schema the query
+imports (`Query.Schema`, the merged set of its `import schema` declarations)
+before the query runs, as the transform's `-validate` does for
+`xsl:import-schema`. A validated document carries its schema types, so it
+satisfies a declared typed context item such as
+`declare context item as document-node(schema-element(h:hat)) external`,
+which an unvalidated document fails with `XPTY0004`, and its values atomise to
+typed values. `strict` requires the document element to be declared; `lax`
+checks it only if it is. `-validate` is refused when the query imports no
+schema or there is no input. Run `go-xml xquery -h` for every flag.
 
 ## Security
 

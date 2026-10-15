@@ -120,7 +120,7 @@ and maintains it as a project of his own.
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 2,766 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 2,769 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -449,10 +449,14 @@ go-xml xquery -q generate.xq -now 2024-01-15T09:00:00Z
 
 It takes `-o`, `-p` (an external variable, as `xs:string`), `-allow-dir`,
 `-allow-doctype`, `-allow-external-entities`, `-allow-unparsed-text`,
-`-catalog`, `-max-items`, `-max-bytes`, `-timeout` and `-now`, with the transform's meanings and defaults: `import
+`-catalog`, `-max-items`, `-max-bytes`, `-timeout`, `-now` and `-validate`, with the transform's meanings and defaults: `import
 module ... at`, `import schema ... at`, `doc()` and `unparsed-text()` read only
-the query's own directory and the `-allow-dir` roots. A query types its input
-with the language's own `validate { . }`, so it needs no `-validate` flag.
+the query's own directory and the `-allow-dir` roots. `-validate strict|lax`
+validates the input document against the schema the query imports before the
+query runs. A query can type nodes itself with `validate { }`, but a query
+that declares a typed context item (`declare context item as
+document-node(schema-element(...))`) is checked before its body runs, so only
+`-validate` can satisfy it from the command line.
 
 ## Design notes
 
@@ -1352,7 +1356,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (2,766 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (2,769 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |

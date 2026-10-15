@@ -461,3 +461,19 @@ func (p *parser) loadSchemaImport(imp schemaImport, base string) error {
 	p.sc.schema = p.schemaLoader.merged
 	return nil
 }
+
+// Schema returns the schema assembled from the query's "import schema"
+// declarations (§4.11: one set of in-scope schema definitions, however many
+// imports contributed), or nil when the prolog imports none.
+//
+// It is exposed so that a caller can validate the context document against
+// the same schema the query declares, as `go-xml xquery -validate` does,
+// rather than loading it a second time and risking the two disagreeing. It
+// mirrors xslt.Stylesheet.Schema. The schema is shared with the Query: treat
+// it as read-only.
+func (q *Query) Schema() *xsd.Schema {
+	if q.sc == nil {
+		return nil
+	}
+	return q.sc.schema
+}
