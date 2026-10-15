@@ -11,7 +11,8 @@ go get github.com/knroy/go-xml/v2
 > a smaller node layout, a split evaluation context); see the v2.0.0 section
 > of [CHANGELOG.md](CHANGELOG.md) and [Migrating to v2](docs/migrating-to-v2.md),
 > which has before/after code for each change and a tool that rewrites most of
-> it. v1 stays at `github.com/knroy/go-xml` and still receives fixes.
+> it. v1 stays at `github.com/knroy/go-xml` and still receives fixes on the
+> `v1` branch.
 
 Validate a document against a schema:
 

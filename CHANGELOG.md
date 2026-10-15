@@ -11,7 +11,8 @@ Nodes are rebuilt as 40-byte records and the XPath context is split, which
 changes the exported Go API; the command-line tool's flags and output do not
 change. [docs/migrating-to-v2.md](docs/migrating-to-v2.md) has before/after
 code for every breaking change, and `internal/tools/nodeaccess` rewrites most
-of it. v1 continues at `github.com/knroy/go-xml`.
+of it. v1 continues at `github.com/knroy/go-xml`, released from the `v1`
+branch.
 
 **Behaviour changes to check before upgrading.** Results, error codes and
 serialized output are those of v1, except:
