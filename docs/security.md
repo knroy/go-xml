@@ -46,6 +46,30 @@ with the narrative in [CHANGELOG.md](../CHANGELOG.md).
 |---|---|---|
 | `javascript:` URLs pass through | hostile stylesheet | an XSLT processor is not an HTML sanitiser; see *Open findings*. |
 
+### Build with a patched Go
+
+Some of go-xml's defences are the Go standard library's, so their fixes ship
+in Go releases, not in go-xml. A `govulncheck` run on 2026-10-15 (prompted by
+an external audit of v2.0.0) found two kinds:
+
+- **`golang.org/x/text`**, go-xml's one dependency: an infinite loop on
+  invalid input in Unicode normalisation (GO-2026-5970), reached through
+  collation. Fixed in go-xml: v2.0.1 and v1.8.1 require x/text v0.41.0, the
+  newest that still builds with Go 1.25, and CI now runs `govulncheck`.
+- **The standard library**, fixed only in Go 1.26.9 and 1.27.2 and later. Two
+  concern confinement: an `os.Root` escape through a symlink named with a
+  trailing slash (GO-2026-4970), and, on Windows, `Root.Mkdir` following a
+  junction (GO-2026-6604), which the CLI uses to create secondary-output
+  directories. The rest are in `net/http`, `crypto/tls`, `net/url` and
+  `idna`, reached only through the opt-in `xsd/xsdnet` resolver.
+
+go-xml is not exposed to the trailing-slash escape on any Go: every name is
+cleaned before it reaches `os.Root`, which removes the slash, and regression
+tests in each confined resolver hold that true (see *Verified safe*). The
+others need the patched toolchain. go-xml's `go 1.25.0` directive is the
+oldest Go that builds it, not a recommendation: build with a supported,
+patched release.
+
 Two crash-level defects found on 2026-09-13 by the XQuery fuzz target — one
 non-terminating input and one panicking input, both reached from
 `xquery.Compile` on about twenty bytes of malformed query text — were fixed

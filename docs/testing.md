@@ -8,6 +8,7 @@ until it prints `OK`.
 
 ```
 tests/check.sh fast     # build, vet (64- and 32-bit), gofmt, unit tests, race — about a minute
+                        # (in a checkout without the suites, their lanes are SKIP, not FAIL)
 tests/check.sh          # everything available, about eight minutes
 ```
 
@@ -1347,7 +1348,7 @@ disagree, Saxon's published report at
 
 ## What CI runs
 
-Two jobs, in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+Three jobs, in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 
 **`test`** — gofmt, vet, build, unit tests, and the race detector, with
 `GOXSLT_NO_SUITES=1` throughout. About a minute; catches a broken commit fast.
@@ -1355,6 +1356,12 @@ gofmt is enforced rather than advisory. On Linux it also vets the tree,
 tests included, cross-compiled for `linux/386`, `linux/arm` and
 `windows/386`: no runner is 32-bit, and a 32-bit `int` once stopped the
 library compiling at all. `tests/check.sh` runs the same as its `vet32` lane.
+
+**`vulncheck`** — `govulncheck` over go-xml and `w3cschemas`, on the newest
+Go rather than 1.25. Standard-library fixes ship in Go releases, so on an old
+toolchain it would only report the toolchain's age; on the newest it reports
+go-xml's own dependencies, as it did for `golang.org/x/text` v0.36.0
+(GO-2026-5970).
 
 It runs on **`ubuntu-latest`, `windows-latest` and `macos-latest`**. This
 library resolves schema and DTD references by path, and path separators,

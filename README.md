@@ -109,6 +109,12 @@ learned the Unicode category `Cn` in 1.25, and building on 1.24 costs four
 conformance cases; `golang.org/x/text` v0.35 and later require 1.25 as well.
 See [docs/testing.md](docs/testing.md).
 
+Build with a supported, patched Go (1.26.9 or 1.27.2 and later at the time of
+v2.0.1). Several fixes go-xml relies on ship only in Go releases: `os.Root`,
+which confines every file go-xml reads or writes, and `net/http` and
+`crypto/tls`, which the opt-in `xsd/xsdnet` resolver uses. Go 1.25 no longer
+receives them. See [docs/security.md](docs/security.md#build-with-a-patched-go).
+
 ## Live test
 
 [**go-xml fiddle**](https://martin-honnen.github.io/go-xml-fiddle/index-ace.html)
