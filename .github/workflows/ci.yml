@@ -162,6 +162,24 @@ jobs:
           go vet ./...
           go test ./... -count=1
 
+  # Known vulnerabilities in the code paths go-xml and w3cschemas reach. It
+  # runs on the newest Go, not the 1.25 the other jobs use: standard-library
+  # fixes ship in Go releases, so on an older toolchain this job would only
+  # report that toolchain's age. What it is for is go-xml's own dependencies,
+  # such as the golang.org/x/text loop (GO-2026-5970) that v0.36.0 carried.
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+      - name: govulncheck
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+          cd w3cschemas && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
   # The conformance gate. These suites are third-party and are not vendored,
   # so CI fetches them — which is also the only place they are fetched
   # reproducibly. Without this job the published percentages depend on someone
