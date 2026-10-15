@@ -109,6 +109,12 @@ learned the Unicode category `Cn` in 1.25, and building on 1.24 costs four
 conformance cases; `golang.org/x/text` v0.35 and later require 1.25 as well.
 See [docs/testing.md](docs/testing.md).
 
+Build with a supported, patched Go (1.26.9 or 1.27.2 and later at the time of
+v2.0.1). Several fixes go-xml relies on ship only in Go releases: `os.Root`,
+which confines every file go-xml reads or writes, and `net/http` and
+`crypto/tls`, which the opt-in `xsd/xsdnet` resolver uses. Go 1.25 no longer
+receives them. See [docs/security.md](docs/security.md#build-with-a-patched-go).
+
 ## Live test
 
 [**go-xml fiddle**](https://martin-honnen.github.io/go-xml-fiddle/index-ace.html)
@@ -133,7 +139,7 @@ and maintains it as a project of his own.
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 2,844 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 2,850 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -1382,7 +1388,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (2,844 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (2,850 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |

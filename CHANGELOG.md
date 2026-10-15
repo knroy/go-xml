@@ -4,13 +4,32 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased
+## v2.0.1 — 2026-10-15
 
-### Changed — breaking
+A security and release-gate update from an external audit of v2.0.0. No API
+change. Build with a patched Go as well:
+[docs/security.md](docs/security.md#build-with-a-patched-go) explains which
+fixes ship in Go releases rather than here.
+
+### Fixed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `golang.org/x/text` v0.36.0 loops forever on some invalid input (GO-2026-5970) | Reached through collation. go-xml requires v0.41.0, the newest that still builds with Go 1.25. | [`18efb89`][18efb89] |
+| `tests/check.sh fast` failed in a checkout without the W3C suites | The vendored-schemas lane ran its driver with no roots. It is now SKIP, "fixture roots absent". | [`27f463d`][27f463d] |
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| CI job `vulncheck` | Runs `govulncheck` over go-xml and `w3cschemas` on the newest Go. | [`18efb89`][18efb89] |
+| `TestTrailingSlashSymlinkStaysConfined` in each confined resolver | Pins that a name ending in `/` cannot follow a symlink out of an `os.Root`, even on a Go without the GO-2026-4970 fix. | [`b8f35ea`][b8f35ea] |
+
+### w3cschemas
 
 | Change | What to do | Commit |
 |---|---|---|
-| `w3cschemas` v0.8.0 requires go-xml v2 | `Catalog` returns a v2 `*xsd.CatalogResolver`; import `github.com/knroy/go-xml/v2/xsd` with it. v0.7.x stays with go-xml v1. | — |
+| `w3cschemas` v0.8.0 requires go-xml v2 | `Catalog` returns a v2 `*xsd.CatalogResolver`; import `github.com/knroy/go-xml/v2/xsd` with it. v0.7.x stays with go-xml v1. | [`b76c85d`][b76c85d] |
 
 ## v2.0.0 — 2026-10-14
 
@@ -1574,3 +1593,7 @@ here so every entry in this file sits under a release.
 [fb7a15b]: https://github.com/knroy/go-xml/commit/fb7a15b
 [fbd4b74]: https://github.com/knroy/go-xml/commit/fbd4b74
 [50ccc85]: https://github.com/knroy/go-xml/commit/50ccc85
+[18efb89]: https://github.com/knroy/go-xml/commit/18efb89
+[27f463d]: https://github.com/knroy/go-xml/commit/27f463d
+[b8f35ea]: https://github.com/knroy/go-xml/commit/b8f35ea
+[b76c85d]: https://github.com/knroy/go-xml/commit/b76c85d
