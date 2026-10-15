@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/w3cschemas"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xsd"
+	"github.com/knroy/go-xml/w3cschemas"
 )
 
 // The case the module exists for: the W3C schema for XSLT 3.0 imports the XSD
