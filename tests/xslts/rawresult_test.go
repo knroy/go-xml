@@ -3,8 +3,8 @@ package xslts
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // The raw-result delivery rule, which decides whether the assertions see

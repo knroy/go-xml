@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // fn:format-integer, F&O 3.0 section 4.6.

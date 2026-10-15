@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/knroy/go-xml/internal/fileuri"
-	"github.com/knroy/go-xml/internal/uripath"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/internal/uripath"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Resolver fetches a schema document named by an <externalRef> or <include>.
@@ -251,13 +251,13 @@ const maxIncludeDepth = 40
 func resolveHref(n *xdm.Node, href, docBase string) (string, error) {
 	href = strings.TrimSpace(href)
 	if href == "" {
-		return "", fmt.Errorf("relaxng: <%s> has an empty href", n.Name.Local)
+		return "", fmt.Errorf("relaxng: <%s> has an empty href", n.Name().Local)
 	}
 	if strings.Contains(href, "#") {
 		// §4.5: an href is a URI reference with no fragment. A fragment would
 		// name part of a document, and a schema is included whole.
 		return "", fmt.Errorf(
-			"relaxng: <%s href=%q> has a fragment identifier", n.Name.Local, href)
+			"relaxng: <%s href=%q> has a fragment identifier", n.Name().Local, href)
 	}
 	base := baseInForce(n, docBase)
 	if base == "" {
@@ -307,10 +307,10 @@ func joinRef(base, ref string) string {
 // innermost-last.
 func baseInForce(n *xdm.Node, docBase string) string {
 	var bases []string
-	for cur := n; cur != nil && cur.Kind == xdm.KindElement; cur = cur.Parent {
-		for _, a := range cur.Attrs {
-			if a.Name.URI == xdm.NSXML && a.Name.Local == "base" {
-				bases = append(bases, a.Value)
+	for cur := n; cur != nil && cur.Kind() == xdm.KindElement; cur = cur.Parent() {
+		for a := range cur.Attrs() {
+			if a.Name().URI == xdm.NSXML && a.Name().Local == "base" {
+				bases = append(bases, a.Value())
 			}
 		}
 	}

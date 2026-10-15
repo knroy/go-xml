@@ -3,7 +3,7 @@ package xpath
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 func fiOne(t *testing.T, expr string) string {
@@ -108,7 +108,7 @@ func TestFormatIntegerEmpty(t *testing.T) {
 // spec names.
 func TestFormatIntegerErrors(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath30
+	ctx = ctx.WithVersion(XPath30)
 	for _, expr := range []string{
 		// A separator at the edge, and two adjacent.
 		`format-integer(1, ',000')`,

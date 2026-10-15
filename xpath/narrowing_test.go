@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A differential suite for silent numeric narrowing.
@@ -52,7 +52,7 @@ func (narrowNS) DefaultFunctionNamespace() string { return xdm.NSFN }
 func narrowEval(t *testing.T, expr string) (string, error) {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	s, err := Eval(expr, ctx, narrowNS{})
 	if err != nil {
 		return "", err

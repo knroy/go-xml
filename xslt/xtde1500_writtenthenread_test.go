@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // fixedDocResolver serves one document under one URI, so a stylesheet can
@@ -18,7 +18,7 @@ func (r *fixedDocResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) 
 	if err != nil {
 		return nil, err
 	}
-	t.Root.DocumentURI = r.uri
+	t.Root.SetDocumentURI(r.uri)
 	return t, nil
 }
 

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // posInstr is an instruction that remembers where it was written.
@@ -53,7 +53,7 @@ func withPosition(instr Instruction, n *xdm.Node) Instruction {
 	if !ok {
 		return instr
 	}
-	return &posInstr{Instruction: instr, line: line, module: n.BaseURI}
+	return &posInstr{Instruction: instr, line: line, module: n.BaseURI()}
 }
 
 // stampPosition records where an error was raised, if it does not already say.
@@ -71,6 +71,19 @@ func withPosition(instr Instruction, n *xdm.Node) Instruction {
 func stampPosition(err error, instr Instruction) error {
 	p, ok := instr.(*posInstr)
 	if !ok || err == nil {
+		return err
+	}
+	switch err.(type) {
+	case nextIterationSignal, breakSignal:
+		// Control flow rather than an error: it carries no code and is
+		// never reported, so there is nothing to stamp, and xsl:iterate
+		// passes one up through every enclosing instruction per iteration.
+		return err
+	}
+	if isGlobalError(err) {
+		// A global's failure is reported as evaluating the global raised
+		// it, not as the instruction whose reference happened to need the
+		// value first; see globalError.
 		return err
 	}
 	var e *xdm.Error

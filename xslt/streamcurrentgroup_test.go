@@ -3,7 +3,7 @@ package xslt
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Tests for §19.8.9.4 through §19.8.9.7, the streamability of the

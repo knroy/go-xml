@@ -3,7 +3,7 @@ package xsd
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A contentModel is a compiled particle tree: the finite automaton that decides

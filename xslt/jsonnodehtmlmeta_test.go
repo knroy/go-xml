@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // json-node-output-method="html" serializes the nodes nested in the JSON with

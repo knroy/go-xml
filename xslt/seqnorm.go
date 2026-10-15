@@ -1,6 +1,6 @@
 package xslt
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // joinAdjacentAtomics is step 1 of sequence normalisation (XSLT and XQuery
 // Serialization 3.1, section 2): every maximal run of adjacent atomic values
@@ -35,10 +35,11 @@ func joinAdjacentAtomics(seq xdm.Sequence) xdm.Sequence {
 			continue
 		}
 		if prevAtomic {
-			out[len(out)-1].(*xdm.Node).Value += " " + a.String()
+			last := out[len(out)-1].(*xdm.Node)
+			last.SetValue(last.Value() + " " + a.String())
 			continue
 		}
-		out = append(out, &xdm.Node{Kind: xdm.KindText, Value: a.String()})
+		out = append(out, xdm.NewNode(xdm.KindText, xdm.QName{}, a.String()))
 		prevAtomic = true
 	}
 	return out

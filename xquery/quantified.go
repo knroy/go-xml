@@ -1,7 +1,7 @@
 package xquery
 
 import (
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // quantified is "some ... satisfies" or "every ... satisfies": §3.11.2,

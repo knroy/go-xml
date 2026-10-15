@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 const copySchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
@@ -76,7 +76,7 @@ func parseCopyDoc(t *testing.T, src string) *xdm.Tree {
 	// assessment: the copy must carry that typing over, as the in-place run
 	// leaves it in place.
 	for _, el := range tree.Root.ChildElements()[0].ChildElements() {
-		if el.Name.Local == "free" {
+		if el.Name().Local == "free" {
 			x := el.ChildElements()[0]
 			x.ApplyTyping(xdm.Typing{TypeAnnotation: "string", DerivedPrimitive: "string", IsID: true})
 			x.SetTypeEnv(stampEnv)
@@ -95,7 +95,7 @@ func pickCopyTarget(root *xdm.Node, local string) *xdm.Node {
 		return root
 	}
 	for _, el := range root.ChildElements()[0].ChildElements() {
-		if el.Name.Local == local {
+		if el.Name().Local == local {
 			return el
 		}
 	}
@@ -114,9 +114,9 @@ func errText(err error) string {
 func nodeFacts(n *xdm.Node) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%v %v %q base=%q doc=%q typing=%+v env=%p sv=%q",
-		n.Kind, n.Name, n.Value, n.BaseURI, n.DocumentURI, xdm.TypingOf(n),
+		n.Kind(), n.Name(), n.Value(), n.BaseURI(), n.DocumentURI(), xdm.TypingOf(n),
 		n.TypeEnv(), n.StringValue())
-	if n.Kind == xdm.KindElement || n.Kind == xdm.KindAttribute {
+	if n.Kind() == xdm.KindElement || n.Kind() == xdm.KindAttribute {
 		seq, err := xdm.AtomizeChecked(xdm.One(n))
 		for _, it := range seq {
 			if a, ok := it.(*xdm.Atomic); ok {
@@ -125,10 +125,10 @@ func nodeFacts(n *xdm.Node) string {
 		}
 		fmt.Fprintf(&b, " atomize-err=%v", err != nil)
 	}
-	if n.Kind == xdm.KindElement {
+	if n.Kind() == xdm.KindElement {
 		fmt.Fprintf(&b, " ns=%v", n.InScopeNamespaces())
 	}
-	fmt.Fprintf(&b, " #ns=%d #attrs=%d #kids=%d", len(n.Namespaces), len(n.Attrs), len(n.Children))
+	fmt.Fprintf(&b, " #ns=%d #attrs=%d #kids=%d", n.NumNamespaceDecls(), n.NumAttrs(), n.NumChildren())
 	return b.String()
 }
 
@@ -138,20 +138,20 @@ func sameTree(t *testing.T, label string, a, b *xdm.Node) {
 	if fa, fb := nodeFacts(a), nodeFacts(b); fa != fb {
 		t.Fatalf("%s: nodes differ\n  want %s\n  got  %s", label, fa, fb)
 	}
-	for i := range a.Attrs {
-		sameTree(t, label, a.Attrs[i], b.Attrs[i])
+	for i := range a.NumAttrs() {
+		sameTree(t, label, a.AttrAt(i), b.AttrAt(i))
 	}
-	for i := range a.Children {
-		sameTree(t, label, a.Children[i], b.Children[i])
+	for ac, bc := a.FirstChild(), b.FirstChild(); ac != nil; ac, bc = ac.NextSibling(), bc.NextSibling() {
+		sameTree(t, label, ac, bc)
 	}
 }
 
-// TestValidateCopyMatchesInPlace is the differential: the same documents
-// validated in place and through ValidateCopy must agree on every node's
-// typing, values, URIs and namespaces, on the tree's DTD context, and on the
-// error text including line and column; and the input to ValidateCopy must
-// come out exactly as a fresh parse of it.
-func TestValidateCopyMatchesInPlace(t *testing.T) {
+// TestValidateCopyMatchesVerdict checks ValidateCopy against Validate: the
+// same error text, line and column included; an input that comes out exactly
+// as a fresh parse of it; and a copy that is a new tree carrying the DTD
+// context, or, for an element below the document element, a parentless copy
+// of that element alone.
+func TestValidateCopyMatchesVerdict(t *testing.T) {
 	s := loadAssertionSchema(t, copySchema)
 	cases := []struct {
 		name, doc, target string
@@ -164,13 +164,12 @@ func TestValidateCopyMatchesInPlace(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			opts := ValidateOptions{MaxErrors: -1, SkipIDConstraints: c.target != ""}
-			inPlace := parseCopyDoc(t, c.doc)
-			inOpts := opts
-			inOpts.Annotate = true
-			errIn := s.Validate(pickCopyTarget(inPlace.Root, c.target), inOpts)
+			verdict := parseCopyDoc(t, c.doc)
+			errIn := s.Validate(pickCopyTarget(verdict.Root, c.target), opts)
 			if (errIn == nil) != c.valid {
-				t.Fatalf("in place: %v", errIn)
+				t.Fatalf("verdict: %v", errIn)
 			}
+			sameTree(t, "Validate's input vs fresh parse", parseCopyDoc(t, c.doc).Root, verdict.Root)
 
 			input := parseCopyDoc(t, c.doc)
 			target := pickCopyTarget(input.Root, c.target)
@@ -180,25 +179,27 @@ func TestValidateCopyMatchesInPlace(t *testing.T) {
 				t.Fatalf("an invalid document's errors carry no position: %v", errCp)
 			}
 			if errText(errIn) != errText(errCp) {
-				t.Fatalf("errors differ\n  in place: %s\n  copy:     %s", errText(errIn), errText(errCp))
+				t.Fatalf("errors differ\n  verdict: %s\n  copy:    %s", errText(errIn), errText(errCp))
 			}
-			if got == target || got.Name != target.Name {
+			if got == target || got.Name() != target.Name() {
 				t.Fatalf("ValidateCopy returned %v, want a copy of %v", got, target)
 			}
-			top := got
-			for top.Parent != nil {
-				top = top.Parent
-			}
-			sameTree(t, "copy vs in place", inPlace.Root, top)
 			sameTree(t, "input vs fresh parse", parseCopyDoc(t, c.doc).Root, input.Root)
-
-			ct := top.Tree()
+			if c.target != "" {
+				if got.Parent() != nil || got.TypeAnnotation() != "QName" ||
+					got.InScopeNamespaces()["p"] != "" {
+					t.Fatalf("element copy: parent %v, annotation %q, scope %v",
+						got.Parent(), got.TypeAnnotation(), got.InScopeNamespaces())
+				}
+				return
+			}
+			ct := got.Tree()
 			if ct == nil || ct == input {
 				t.Fatalf("copy tree = %p, want a new tree", ct)
 			}
-			if ct.DocType != inPlace.DocType || ct.XMLVersion != inPlace.XMLVersion {
+			if ct.DocType != input.DocType || ct.XMLVersion != input.XMLVersion {
 				t.Errorf("tree: DocType/XMLVersion %q/%q, want %q/%q",
-					ct.DocType, ct.XMLVersion, inPlace.DocType, inPlace.XMLVersion)
+					ct.DocType, ct.XMLVersion, input.DocType, input.XMLVersion)
 			}
 			if sys, _, _, ok := ct.UnparsedEntity("pic"); !ok || sys == "" {
 				t.Errorf("copy lost the unparsed entity: %q %v", sys, ok)
@@ -213,7 +214,7 @@ func TestValidateCopyMatchesInPlace(t *testing.T) {
 func TestValidateCopyIsNotVacuous(t *testing.T) {
 	s := loadAssertionSchema(t, copySchema)
 	in := parseCopyDoc(t, copyDoc("100", `<n xsi:nil="true"/>`, "1"))
-	kidsBefore := len(in.Root.ChildElements()[0].Children)
+	kidsBefore := in.Root.ChildElements()[0].NumChildren()
 	got, err := s.ValidateCopy(in.Root, ValidateOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -233,11 +234,11 @@ func TestValidateCopyIsNotVacuous(t *testing.T) {
 		seen["mixed"] = seen["mixed"] || ty.MixedContent
 		seen["type env"] = seen["type env"] || n.TypeEnv() != nil
 		seen["default attribute"] = seen["default attribute"] ||
-			(n.Kind == xdm.KindAttribute && n.Value == "dflt")
-		for _, a := range n.Attrs {
+			(n.Kind() == xdm.KindAttribute && n.Value() == "dflt")
+		for a := range n.Attrs() {
 			walk(a)
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}
@@ -248,57 +249,91 @@ func TestValidateCopyIsNotVacuous(t *testing.T) {
 			t.Errorf("no node of the validated copy has %s", p)
 		}
 	}
-	if len(got.ChildElements()[0].Children) >= kidsBefore {
+	if got.ChildElements()[0].NumChildren() >= kidsBefore {
 		t.Errorf("ignorable whitespace was not stripped from the copy")
 	}
-	if got.DocumentURI != "http://ex/doc.xml" || got.BaseURI != "http://ex/doc.xml" {
-		t.Errorf("copy URIs: document %q base %q", got.DocumentURI, got.BaseURI)
+	if got.DocumentURI() != "http://ex/doc.xml" || got.BaseURI() != "http://ex/doc.xml" {
+		t.Errorf("copy URIs: document %q base %q", got.DocumentURI(), got.BaseURI())
 	}
 }
 
-// TestValidateCopyConcurrent validates one tree from several goroutines. In
-// place, each run strips whitespace from and annotates the shared tree, which
-// -race reports; through ValidateCopy each run writes only its own copy.
+// TestValidateCopyConcurrent validates one tree from several goroutines. Each
+// run writes only its own copy, so -race has nothing to report and the input
+// stays as it was.
 func TestValidateCopyConcurrent(t *testing.T) {
 	s := loadAssertionSchema(t, copySchema)
 	in := parseCopyDoc(t, copyDoc("100", `<n xsi:nil="true"/>`, "1"))
 	r := in.Root.ChildElements()[0]
-	kids := len(r.Children)
+	kids := r.NumChildren()
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			got, err := s.ValidateCopy(in.Root, ValidateOptions{})
-			if err != nil || got == in.Root || got.ChildElements()[0].TypeAnnotation == "" {
+			if err != nil || got == in.Root || got.ChildElements()[0].TypeAnnotation() == "" {
 				t.Errorf("ValidateCopy: %v, %p", err, got)
 			}
 		}()
 	}
 	wg.Wait()
-	if len(r.Children) != kids || r.TypeAnnotation != "" {
-		t.Errorf("input changed: %d children (was %d), annotation %q", len(r.Children), kids, r.TypeAnnotation)
+	if r.NumChildren() != kids || r.TypeAnnotation() != "" {
+		t.Errorf("input changed: %d children (was %d), annotation %q", r.NumChildren(), kids, r.TypeAnnotation())
 	}
 }
 
-// TestValidateWritesNothing pins the documented contract: Validate without
-// Annotate only checks. The document that ValidateCopy types, defaults and
-// strips (TestValidateCopyIsNotVacuous) comes back from Validate with no
-// typing written, no defaulted attribute and its whitespace in place. The
-// union member and dm:nilled were the writes that leaked past the gate.
+// TestTypedCopySeesItsRecordedEdits checks that the checks a typed copy runs
+// see the defaulted attributes and the stripped whitespace, which the copy
+// records rather than writes: an assertion counts the default and finds no
+// text, and a unique key collides on two defaulted values.
+func TestTypedCopySeesItsRecordedEdits(t *testing.T) {
+	s := loadAssertionSchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="r"><xs:complexType><xs:sequence>
+    <xs:element name="i" maxOccurs="unbounded"><xs:complexType>
+      <xs:attribute name="k" type="xs:string" default="d"/></xs:complexType></xs:element>
+    </xs:sequence>
+    <xs:assert test="count(i/@k) eq count(i) and empty(text())"/></xs:complexType>
+    <xs:unique name="u"><xs:selector xpath="i"/><xs:field xpath="@k"/></xs:unique>
+  </xs:element>
+</xs:schema>`)
+	parse := func(src string) *xdm.Node {
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tree.Root
+	}
+	got, err := s.ValidateCopy(parse("<r>\n  <i/>\n  <i k=\"x\"/>\n</r>"), ValidateOptions{})
+	if err != nil {
+		t.Fatalf("the assertion did not see the typed copy's edits: %v", err)
+	}
+	r := got.FirstChild()
+	if r.NumChildren() != 2 || r.ChildAt(0).AttrValue("k") != "d" {
+		t.Errorf("typed copy: %d children, first @k %q", r.NumChildren(), r.ChildAt(0).AttrValue("k"))
+	}
+	if _, err := s.ValidateCopy(parse(`<r><i/><i/></r>`), ValidateOptions{}); err == nil ||
+		!strings.Contains(err.Error(), "cvc-identity-constraint") {
+		t.Errorf("two defaulted key values did not collide: %v", err)
+	}
+}
+
+// TestValidateWritesNothing pins the v2 contract: Validate only
+// checks. The document that ValidateCopy types, defaults
+// and strips (TestValidateCopyIsNotVacuous) comes back from Validate with no
+// annotation, no defaulted attribute and its whitespace in place.
 func TestValidateWritesNothing(t *testing.T) {
 	s := loadAssertionSchema(t, copySchema)
 	in := parseCopyDoc(t, copyDoc("100", `<n xsi:nil="true"/>`, "1"))
-	kidsBefore := len(in.Root.ChildElements()[0].Children)
+	kidsBefore := in.Root.ChildElements()[0].NumChildren()
 	// parseCopyDoc stamps <x> as if an earlier assessment had typed it.
 	before := map[*xdm.Node]xdm.Typing{}
 	var snap func(n *xdm.Node)
 	snap = func(n *xdm.Node) {
 		before[n] = xdm.TypingOf(n)
-		for _, a := range n.Attrs {
+		for a := range n.Attrs() {
 			snap(a)
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			snap(c)
 		}
 	}
@@ -309,26 +344,26 @@ func TestValidateWritesNothing(t *testing.T) {
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
 		if got := xdm.TypingOf(n); got != before[n] {
-			t.Errorf("Validate wrote typing to %s: %+v", n.Name.Local, got)
+			t.Errorf("Validate wrote typing to %s: %+v", n.Name().Local, got)
 		}
-		for _, a := range n.Attrs {
-			if a.Value == "dflt" {
-				t.Errorf("Validate added the defaulted attribute %s", a.Name.Local)
+		for a := range n.Attrs() {
+			if a.Value() == "dflt" {
+				t.Errorf("Validate added the defaulted attribute %s", a.Name().Local)
 			}
 			walk(a)
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}
 	walk(in.Root)
-	if got := len(in.Root.ChildElements()[0].Children); got != kidsBefore {
+	if got := in.Root.ChildElements()[0].NumChildren(); got != kidsBefore {
 		t.Errorf("Validate stripped whitespace: %d children, had %d", got, kidsBefore)
 	}
 }
 
 // TestValidateConcurrentCheckOnly validates one tree from several goroutines
-// with Annotate off. Under -race it fails if a check-only run writes to the
+// checking only. Under -race it fails if a check-only run writes to the
 // tree, as the union member, nilled and lax-wildcard restore writes did.
 func TestValidateConcurrentCheckOnly(t *testing.T) {
 	lax := loadAssertionSchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
@@ -379,8 +414,84 @@ func TestCheckOnlyAssertionSeesUnwrittenTyping(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := s.Validate(tree.Root, ValidateOptions{Annotate: annotate}); err != nil {
-			t.Errorf("Annotate=%v: %v", annotate, err)
+		if annotate {
+			_, err = s.ValidateCopy(tree.Root, ValidateOptions{})
+		} else {
+			err = s.Validate(tree.Root, ValidateOptions{})
 		}
+		if err != nil {
+			t.Errorf("typed copy=%v: %v", annotate, err)
+		}
+	}
+}
+
+// TestTypedCopyDefaultsInOrder pins where the bulk clone inserts defaulted
+// attributes: on nested elements, next to dropped whitespace, and on the
+// last record of the tree, so every insertion point is met in order.
+func TestTypedCopyDefaultsInOrder(t *testing.T) {
+	s := loadAssertionSchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="e"><xs:sequence>
+    <xs:element name="i" type="e" minOccurs="0" maxOccurs="unbounded"/></xs:sequence>
+    <xs:attribute name="a" type="xs:string"/>
+    <xs:attribute name="k" type="xs:string" default="d"/></xs:complexType>
+  <xs:element name="i" type="e"/>
+</xs:schema>`)
+	tree, err := xdm.ParseString("<i a=\"0\">\n <i>\n  <i a=\"2\"/> <i k=\"x\"/>\n </i>\n <i/></i>", xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ValidateCopy(tree.Root, ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	var walk func(n *xdm.Node)
+	walk = func(n *xdm.Node) {
+		b.WriteString("<" + n.Name().Local)
+		for a := range n.Attrs() {
+			fmt.Fprintf(&b, " %s=%s:%s", a.Name().Local, a.Value(), a.TypeAnnotation())
+		}
+		b.WriteString(">")
+		for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+			if c.Kind() != xdm.KindElement {
+				fmt.Fprintf(&b, "%q", c.Value())
+				continue
+			}
+			walk(c)
+			if c.Parent() != n {
+				t.Errorf("%s: wrong parent", c.Name().Local)
+			}
+		}
+		b.WriteString("</>")
+	}
+	walk(got.FirstChild())
+	const want = `<i a=0:string k=d:string><i k=d:string><i a=2:string k=d:string></><i k=x:string></></><i k=d:string></></>`
+	if b.String() != want {
+		t.Errorf("typed copy\n  got  %s\n  want %s", b.String(), want)
+	}
+}
+
+// TestTypedCopyAnnotationMemo pins the per-type annotation memo: a second
+// typed copy, written from the memo, carries every property the first,
+// written while the memo was filled, does.
+func TestTypedCopyAnnotationMemo(t *testing.T) {
+	s := loadAssertionSchema(t, copySchema)
+	doc := copyDoc("100", `<n xsi:nil="true"/>`, "1")
+	first, err := s.ValidateCopy(parseCopyDoc(t, doc).Root, ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.ValidateCopy(parseCopyDoc(t, doc).Root, ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameTree(t, "first vs memoised copy", first, second)
+	nums := pickCopyTarget(second, "nums")
+	if got := xdm.TypingOf(nums); got.TypeAnnotation != "{urn:t}l" || got.ListItem != "integer" ||
+		nums.TypeEnv() != s.TypeEnv() {
+		t.Errorf("nums typing %+v, env %p", got, nums.TypeEnv())
+	}
+	if r := second.FirstChild(); !r.NoTypedValue() || r.TypeAnnotation() != "anyType" {
+		t.Errorf("r: no typed value %v, annotation %q", r.NoTypedValue(), r.TypeAnnotation())
 	}
 }

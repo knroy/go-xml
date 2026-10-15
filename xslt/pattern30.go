@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // The XSLT 3.0 pattern forms that the right-to-left step walk cannot express.
@@ -323,7 +322,7 @@ func (g *generalPattern) matches(node *xdm.Node, ctx *xpath.Context) (bool, erro
 	// that x's *parent*, which does not exist — the anchor is the x itself
 	// and the expression is evaluated from one level above where the first
 	// step names. Walking the whole chain covers both.
-	for anc := node; ; anc = anc.Parent {
+	for anc := node; ; anc = anc.Parent() {
 		seq, err := g.expr.Eval(ctx.WithFocus(anc, 1, 1))
 		if err != nil {
 			// A pattern evaluated against a node it was not written for is a
@@ -335,7 +334,7 @@ func (g *generalPattern) matches(node *xdm.Node, ctx *xpath.Context) (bool, erro
 		} else if containsNode(seq, node) {
 			return true, nil
 		}
-		if anc.Parent == nil {
+		if anc.Parent() == nil {
 			// The chain ends at the root. A relative pattern is still
 			// anchored below it — "x/(a|b)" against a tree whose root is the
 			// x needs the x's own parent, which the chain does not have — so
@@ -369,8 +368,8 @@ func (g *generalPattern) matches(node *xdm.Node, ctx *xpath.Context) (bool, erro
 func (g *generalPattern) matchesUnderRoot(root, node *xdm.Node,
 	ctx *xpath.Context) (bool, error) {
 
-	for _, ch := range root.Children {
-		if ch.Kind != xdm.KindElement && ch.Kind != xdm.KindDocument {
+	for ch := range root.Children() {
+		if ch.Kind() != xdm.KindElement && ch.Kind() != xdm.KindDocument {
 			continue
 		}
 		seq, err := g.expr.Eval(ctx.WithFocus(ch, 1, 1))
@@ -480,12 +479,8 @@ func patternsAllow30(ns xpath.NamespaceResolver) bool {
 // declaredXSLTVersion returns the XSLT version stated on el or on the nearest
 // ancestor that states one, defaulting to 2.0 as versionAt does.
 func declaredXSLTVersion(el *xdm.Node) float64 {
-	for a := el; a != nil; a = a.Parent {
-		if a.Kind == xdm.KindElement && hasVersionAttr(a) {
-			return versionAt(a)
-		}
-	}
-	return 2.0
+	_, v := versionHolder(el)
+	return v
 }
 
 // matchesAtomicItem reports whether an atomic value matches the pattern.
@@ -500,7 +495,7 @@ func (p *Pattern) matchesAtomicItem(item xdm.Item, ctx *xpath.Context) (bool, er
 	// value. Pattern.Matches does the same for the node case;
 	// current-output-uri-008 matches atomic values with
 	// group-starting-with and needs both.
-	ctx = ctx.WithVar(outputURIVar, xdm.Empty())
+	ctx = withoutOutputURI(ctx)
 	for _, g := range p.general {
 		ok, err := g.matchesAtomic(item, ctx)
 		if err != nil {
@@ -734,7 +729,7 @@ func (i *nextMatchInstr) nextMatchAtomic(rt *runtime, out *outputBuilder,
 		return err
 	}
 	if tunnels == nil {
-		tunnels = rt.sel.tunnels
+		tunnels = rt.selected().tunnels
 	}
 	var t *Template
 	var next int
@@ -742,11 +737,11 @@ func (i *nextMatchInstr) nextMatchAtomic(rt *runtime, out *outputBuilder,
 		// xsl:apply-imports resumes in the import tree of the rule that
 		// matched, not at the next rule in declaration order.
 		t, next = rt.sheet.findAtomicTemplateInImportTree(
-			item, rt.sel.mode, rt.ctx,
-			rt.sel.template.lowPrecedence, rt.sel.template.importPrecedence)
+			item, rt.selected().mode, rt.ctx,
+			rt.selected().template.lowPrecedence, rt.selected().template.importPrecedence)
 	} else {
 		t, next = rt.sheet.findAtomicTemplateFrom(
-			item, rt.sel.mode, rt.ctx, rt.sel.next)
+			item, rt.selected().mode, rt.ctx, rt.selected().next)
 	}
 	if t == nil {
 		if a, ok := item.(*xdm.Atomic); ok {
@@ -758,7 +753,7 @@ func (i *nextMatchInstr) nextMatchAtomic(rt *runtime, out *outputBuilder,
 		return err
 	}
 	defer rt.ascend()
-	sub := rt.withSelection(t, next, rt.sel.mode, params, tunnels)
+	sub := rt.withSelection(t, next, rt.selected().mode, params, tunnels)
 	return runTemplate(sub, t, params, tunnels, out)
 }
 
@@ -993,36 +988,33 @@ func unwrapParens(src string) (string, bool) {
 func (g *generalPattern) matchesFromVirtualParent(root, node *xdm.Node,
 	ctx *xpath.Context) (bool, error) {
 
-	if root.Kind != xdm.KindElement {
+	if root.Kind() != xdm.KindElement {
 		return false, nil
 	}
-	// The path from the root down to the candidate, as child indexes. It is
-	// what identifies the candidate inside the copy.
-	var path []int
-	for n := node; n != root; n = n.Parent {
-		if n.Parent == nil {
+	// The path from the candidate up to the root. Its position among its
+	// parent's children at each level is what identifies the candidate
+	// inside the copy; an attribute or namespace node is not a child.
+	var path []*xdm.Node
+	for n := node; n != root; n = n.Parent() {
+		if n.Parent() == nil || n.Kind() == xdm.KindAttribute || n.Kind() == xdm.KindNamespace {
 			return false, nil
 		}
-		idx := -1
-		for i, ch := range n.Parent.Children {
-			if ch == n {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			return false, nil
-		}
-		path = append(path, idx)
+		path = append(path, n)
 	}
 
 	doc, copied := wrapInDocument(root)
-	target := copied
+	// Walk the source and the copy in step, taking at each level the copy's
+	// child at the position the path's node holds in the source.
+	src, target := root, copied
 	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] >= len(target.Children) {
+		s, t := src.FirstChild(), target.FirstChild()
+		for s != nil && t != nil && s != path[i] {
+			s, t = s.NextSibling(), t.NextSibling()
+		}
+		if s != path[i] || t == nil {
 			return false, nil
 		}
-		target = target.Children[path[i]]
+		src, target = s, t
 	}
 
 	seq, err := g.expr.Eval(ctx.WithFocus(doc, 1, 1))
@@ -1038,25 +1030,25 @@ func (g *generalPattern) matchesFromVirtualParent(root, node *xdm.Node,
 // wrapInDocument returns a document node whose only child is a deep copy of
 // el, along with that copy.
 func wrapInDocument(el *xdm.Node) (doc, copied *xdm.Node) {
-	var clone func(n, parent *xdm.Node) *xdm.Node
-	clone = func(n, parent *xdm.Node) *xdm.Node {
-		c := xdmbuild.ShallowCopy(n)
-		xdmbuild.SetParent(c, parent)
-		xdmbuild.SetChildren(c, nil)
-		xdmbuild.SetAttrs(c, nil)
-		for _, a := range n.Attrs {
-			ac := xdmbuild.ShallowCopy(a)
-			xdmbuild.SetParent(ac, c)
-			xdmbuild.SetAttrs(c, append(c.Attrs, ac))
+	// The copy keeps every property of the original a pattern can ask
+	// about, the schema that typed it included.
+	var clone func(parent, n *xdm.Node) *xdm.Node
+	clone = func(parent, n *xdm.Node) *xdm.Node {
+		c := parent.AppendShallowCopy(n)
+		c.SetTypeEnv(n.TypeEnv())
+		for prefix, uri := range n.DeclaredNamespaces() {
+			c.AddNamespace(prefix, uri)
 		}
-		for _, ch := range n.Children {
-			xdmbuild.SetChildren(c, append(c.Children, clone(ch, c)))
+		for a := range n.Attrs() {
+			c.AppendShallowCopy(a).SetTypeEnv(a.TypeEnv())
+		}
+		for ch := range n.Children() {
+			clone(c, ch)
 		}
 		return c
 	}
-	doc = xdmbuild.NewDocument("")
-	copied = clone(el, doc)
-	xdmbuild.SetChildren(doc, []*xdm.Node{copied})
+	doc = xdm.NewNode(xdm.KindDocument, xdm.QName{}, "")
+	copied = clone(doc, el)
 	return doc, copied
 }
 

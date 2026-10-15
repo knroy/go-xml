@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Context.MaxDepth at its edges. See xdm/limits_boundary_test.go for why this
+// Env.MaxDepth at its edges. See xdm/limits_boundary_test.go for why this
 // class of test exists.
 //
 // Nested for-expressions are the vehicle: ForExpr.Eval calls Context.Descend
@@ -48,7 +48,7 @@ func TestContextMaxDepthBoundaries(t *testing.T) {
 				t.Fatalf("compiling: %v", err)
 			}
 			ctx := NewContext(nil, nil)
-			ctx.MaxDepth = tt.max
+			ctx = ctx.WithEnv(func(e *Env) { e.MaxDepth = tt.max })
 			_, err = c.Eval(ctx)
 			switch {
 			case tt.wantErr == "" && err != nil:

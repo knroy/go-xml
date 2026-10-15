@@ -3,7 +3,7 @@ package xpath
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 func letResult(t *testing.T, expr string) []string {
@@ -71,7 +71,7 @@ func TestLetIsNotReserved(t *testing.T) {
 
 	for _, v := range []Version{XPath20, XPath30} {
 		ctx := NewContext(doc, Builtins())
-		ctx.Version = v
+		ctx = ctx.WithVersion(v)
 		got, err := Eval(`/root/let/x`, ctx, nil)
 		if err != nil {
 			t.Fatalf("%v: /root/let/x: %v", v, err)

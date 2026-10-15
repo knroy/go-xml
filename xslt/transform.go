@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	goruntime "runtime"
 	"strings"
 	"time"
+	"weak"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // TransformOptions configures one transform.
@@ -69,7 +72,7 @@ type TransformOptions struct {
 	MaxDepth int
 
 	// MaxItems bounds the items the transform's expressions may materialise,
-	// with xpath.Context.MaxItems's meaning: zero is xpath.MaxItems, negative
+	// with xpath.Env.MaxItems's meaning: zero is xpath.MaxItems, negative
 	// is no bound. A transform started by fn:transform keeps its caller's
 	// bound whatever this says.
 	MaxItems int
@@ -228,6 +231,19 @@ type TransformOptions struct {
 	// with its held flag rather than alone, and
 	// TestNestedTransformInheritsTheByteBudget.
 	nestedBudget *xpath.Context
+
+	// nestedLock and nestedLocals are the evaluation lock and the locals
+	// stack of the transform whose fn:transform call started this one, which
+	// this one uses as its own. One lock for a transform and every transform
+	// it starts, because their function items can be passed both ways and
+	// call each other: with a lock each, two goroutines could take the two
+	// in opposite orders and wait on each other for good. One stack, because
+	// the transforms run on one goroutine, which gives the stack up whenever
+	// it calls host code (see locals.go). The outermost transform shares the
+	// lock and closes the stack when it returns. Unexported because only
+	// runNestedTransform sets them.
+	nestedLock   *xpath.EvalLock
+	nestedLocals *xpathleaf.Locals
 
 	// disableMessages is fn:transform's enable-messages=false: a
 	// non-terminating xsl:message is not evaluated, and a terminating one
@@ -401,14 +417,15 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// now works from the root: stripTypeAnnotationsFrom copies the children of
 	// what it is handed, so handing it an inner node discarded everything
 	// above and beside it.
-	if source != nil && source.Kind == xdm.KindDocument && s.stripTypeAnnotations {
+	if source != nil && source.Kind() == xdm.KindDocument && s.stripTypeAnnotations {
 		source = s.stripTypeAnnotationsFrom(source)
 	}
 
 	// Documents loaded by fn:doc and fn:document are source documents too, so
 	// the same whitespace declarations apply to them. The wrapper is per
-	// transform because its cache holds the stripped copies, which must not
-	// outlive the declarations that produced them.
+	// transform because its map is what keeps fn:doc stable within one
+	// transform; the stripped copies themselves are shared by the stylesheet
+	// (Stylesheet.strippedTree).
 	callerDocs := opts.Documents
 	if len(s.strip) > 0 && opts.Documents != nil {
 		opts.Documents = &stripSpaceResolver{sheet: s, inner: opts.Documents}
@@ -434,9 +451,29 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		opts.Documents = rd
 	}
 
+	// A transform fn:transform started binds in a frame of its own on its
+	// caller's stack, which hides the caller's locals, unless the stack is
+	// off for whoever is running now.
+	if l := opts.nestedLocals; l != nil && !l.Off() {
+		n := l.Len()
+		base := l.SetBase(n)
+		defer func() {
+			l.Truncate(n)
+			l.SetBase(base)
+		}()
+	}
 	rt, err := newRuntime(s, ctx, source, opts)
 	if err != nil {
 		return nil, err
+	}
+	if opts.nestedLock == nil {
+		// A function item in the result can reach the runtime later from
+		// any goroutine, so it takes its lock from the moment this transform
+		// returns, if a host call has not made it do so already.
+		defer rt.evalLock.Share()
+		// For the same reason, such a call binds its locals with WithVar
+		// rather than on this transform's stack (see locals.go).
+		defer rt.finishLocals()
 	}
 	rt.readDocs = &readDocs
 	rt.writtenDocs = &writtenDocs
@@ -757,7 +794,7 @@ func (s *Stylesheet) stripWhitespaceFor(pkg int, root *xdm.Node) *xdm.Node {
 func (s *Stylesheet) stripWhitespaceForFrom(pkg int, root, want *xdm.Node) (*xdm.Node, *xdm.Node) {
 	var found *xdm.Node
 	tree := xdm.NewTree()
-	tree.Root.BaseURI = root.BaseURI
+	tree.Root.SetBaseURI(root.BaseURI())
 	// The DOCTYPE text is a property of the tree, not of the root node, and
 	// it is where the unparsed-entity declarations live. Building a fresh
 	// tree without it made fn:unparsed-entity-uri answer "" for every
@@ -770,10 +807,8 @@ func (s *Stylesheet) stripWhitespaceForFrom(pkg int, root, want *xdm.Node) (*xdm
 	if want == root {
 		found = tree.Root
 	}
-	for _, ch := range root.Children {
-		if c := s.stripCopy(pkg, ch, false, want, &found); c != nil {
-			tree.Root.AppendChild(c)
-		}
+	for ch := range root.Children() {
+		s.stripCopy(pkg, tree.Root, ch, false, want, &found)
 	}
 	tree.Finalize()
 	return tree.Root, found
@@ -808,6 +843,9 @@ type strippedKey struct {
 	tree *xdm.Tree
 	pkg  int
 }
+
+// NativeResolver implements xpathleaf.NativeResolver.
+func (r *stripSpaceResolver) NativeResolver() {}
 
 func (r *stripSpaceResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 	return r.resolve(0, uri, base)
@@ -845,8 +883,7 @@ func (r *stripSpaceResolver) resolve(pkg int, uri, base string) (*xdm.Tree, erro
 	if c, ok := r.done[k]; ok {
 		return c, nil
 	}
-	root := r.sheet.stripWhitespaceFor(pkg, t.Root)
-	out := root.Tree()
+	out := r.sheet.strippedTree(k)
 	if out == nil {
 		return t, nil
 	}
@@ -855,6 +892,57 @@ func (r *stripSpaceResolver) resolve(pkg int, uri, base string) (*xdm.Tree, erro
 	}
 	r.done[k] = out
 	return out, nil
+}
+
+// strippedTree is k's source tree stripped under k's package, shared by every
+// transform of s: a resolver that hands back one parsed tree to each transform
+// (FileResolver caches them) then costs one strip, not one per transform. The
+// trees are read-only once built, as a resolver's own are.
+//
+// The source tree is held weakly, so an entry goes when its source does: a
+// resolver that parses afresh for each call leaves nothing behind. At most
+// resolverCacheMax entries are kept besides, one evicted at random as
+// FileResolver does. The per-transform map in stripSpaceResolver is what
+// keeps fn:doc stable within one transform, whatever is evicted here.
+func (s *Stylesheet) strippedTree(k strippedKey) *xdm.Tree {
+	wk := weakStrippedKey{tree: weak.Make(k.tree), pkg: k.pkg}
+	s.strippedMu.Lock()
+	out, ok := s.stripped[wk]
+	s.strippedMu.Unlock()
+	if ok {
+		return out
+	}
+	out = s.stripWhitespaceFor(k.pkg, k.tree.Root).Tree()
+	if out == nil {
+		return nil
+	}
+	s.strippedMu.Lock()
+	defer s.strippedMu.Unlock()
+	if prev, ok := s.stripped[wk]; ok {
+		return prev // another transform stripped it first
+	}
+	if s.stripped == nil {
+		s.stripped = map[weakStrippedKey]*xdm.Tree{}
+	}
+	for victim := range s.stripped {
+		if len(s.stripped) < resolverCacheMax {
+			break
+		}
+		delete(s.stripped, victim)
+	}
+	s.stripped[wk] = out
+	goruntime.AddCleanup(k.tree, func(wk weakStrippedKey) {
+		s.strippedMu.Lock()
+		delete(s.stripped, wk)
+		s.strippedMu.Unlock()
+	}, wk)
+	return out
+}
+
+// weakStrippedKey is strippedKey with the source tree held weakly.
+type weakStrippedKey struct {
+	tree weak.Pointer[xdm.Tree]
+	pkg  int
 }
 
 // stripCollectionResolver applies the stylesheet's xsl:strip-space and
@@ -884,6 +972,9 @@ func (r *stripCollectionResolver) ResolveCollection(
 	return r.resolve(0, uri, base)
 }
 
+// NativeResolver implements xpathleaf.NativeResolver.
+func (r *stripCollectionResolver) NativeResolver() {}
+
 // ResolveCollectionIn implements xpath.ContextCollectionResolver.
 func (r *stripCollectionResolver) ResolveCollectionIn(
 	ctx *xpath.Context, uri, base string) (xdm.Sequence, error) {
@@ -903,7 +994,7 @@ func (r *stripCollectionResolver) resolve(
 		// A collection may hold items that are not document nodes, and only
 		// a document is a source document to be stripped.
 		n, ok := it.(*xdm.Node)
-		if !ok || n.Kind != xdm.KindDocument {
+		if !ok || n.Kind() != xdm.KindDocument {
 			out = append(out, it)
 			continue
 		}
@@ -955,21 +1046,21 @@ func (s *Stylesheet) SourceDocumentResolver(inner xpath.DocumentResolver) xpath.
 	return &stripSpaceResolver{sheet: s, inner: inner}
 }
 
-// stripCopy copies n, dropping whitespace-only text where stripping applies.
+// stripCopy appends a copy of n to parent, dropping whitespace-only text
+// where stripping applies.
 //
 // preserving carries xml:space="preserve" down the subtree, and *only* that:
 // whether an element's own whitespace is stripped is decided from the
 // strip-space and preserve-space declarations matching its name.
-func (s *Stylesheet) stripCopy(pkg int, n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
-	c := s.stripCopyNode(pkg, n, preserving, want, found)
+func (s *Stylesheet) stripCopy(pkg int, parent, n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) {
+	c := s.stripCopyNode(pkg, parent, n, preserving, want, found)
 	if c != nil && n == want {
 		*found = c
 	}
-	return c
 }
 
-func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
-	switch n.Kind {
+func (s *Stylesheet) stripCopyNode(pkg int, parent, n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
+	switch n.Kind() {
 	case xdm.KindText:
 		// Whitespace-only text is dropped unless xml:space preserves it or
 		// its parent element is outside the strip-space list. The parent is
@@ -983,12 +1074,12 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// The exemption is read off the annotation the schema wrote, so
 		// an unvalidated document is unaffected and this stays inside the
 		// existing gate on there being a strip-space declaration at all.
-		if !preserving && xdm.IsXMLWhitespace(n.Value) &&
-			n.Parent != nil && s.stripsElement(pkg, n.Parent.Name) &&
-			!xdm.HasSimpleTypeAnnotation(n.Parent.TypeAnnotation) {
+		if !preserving && xdm.IsXMLWhitespace(n.Value()) &&
+			n.Parent() != nil && s.stripsElement(pkg, n.Parent().Name()) &&
+			!xdm.HasSimpleTypeAnnotation(n.Parent().TypeAnnotation()) {
 			return nil
 		}
-		return &xdm.Node{Kind: xdm.KindText, Value: n.Value}
+		return parent.AppendText(n.Value())
 
 	case xdm.KindElement:
 		// The type annotation travels with the copy. Whitespace stripping is
@@ -998,7 +1089,8 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// document the caller had validated. This pass is gated on there
 		// being a strip-space declaration at all, which is the only reason
 		// the loss was not visible — removing that gate cost 115 tests.
-		c := &xdm.Node{Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI}
+		c := parent.AppendElement(n.Name())
+		c.SetBaseURI(n.BaseURI())
 		// Every PSVI property travels, because stripping whitespace is not an
 		// assessment. Copying the annotation without the rest left the element
 		// annotated as a union whose derivation chain runs to
@@ -1007,13 +1099,12 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// false -- silently, on a document the caller had validated, purely
 		// because the stylesheet declared xsl:strip-space.
 		c.CopyTypingFrom(n)
-		for _, ns := range n.Namespaces {
-			c.AddNamespace(ns.Name.Local, ns.Value)
+		for prefix, uri := range n.DeclaredNamespaces() {
+			c.AddNamespace(prefix, uri)
 		}
-		for _, a := range n.Attrs {
-			ac := &xdm.Node{Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value}
+		for a := range n.Attrs() {
+			ac := c.AppendAttr(a.Name(), a.Value())
 			ac.CopyTypingFrom(a)
-			c.AddAttr(ac)
 			if a == want {
 				*found = ac
 			}
@@ -1031,25 +1122,58 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// all unless it also named the document element.
 		childPreserving := preserving
 		if a := n.Attr(xdm.NSXML, "space"); a != nil {
-			childPreserving = a.Value == "preserve"
+			childPreserving = a.Value() == "preserve"
 		}
 
-		for _, ch := range n.Children {
-			if cc := s.stripCopy(pkg, ch, childPreserving, want, found); cc != nil {
-				c.AppendChild(cc)
-			}
+		for ch := range n.Children() {
+			s.stripCopy(pkg, c, ch, childPreserving, want, found)
 		}
 		return c
 
 	default:
-		return &xdm.Node{Kind: n.Kind, Name: n.Name, Value: n.Value}
+		return appendLeafCopy(parent, n)
 	}
 }
 
+// stripKey names one stripsElement question.
+type stripKey struct {
+	pkg        int
+	uri, local string
+}
+
+// stripMemoCap bounds stripMemo: a document with more distinct element
+// names than this is answered past it without being remembered.
+const stripMemoCap = 4096
+
 // stripsElement reports whether whitespace inside the named element is
-// stripped. A specific preserve-space entry wins over a wildcard strip-space
-// entry, matching the spec's import-precedence rule for the common case.
+// stripped. It is asked once per whitespace text node of every stripped
+// document, and the answer depends only on the package and the name, so it
+// is remembered per stylesheet.
 func (s *Stylesheet) stripsElement(pkg int, name xdm.QName) bool {
+	k := stripKey{pkg, name.URI, name.Local}
+	s.stripMu.RLock()
+	v, ok := s.stripMemo[k]
+	s.stripMu.RUnlock()
+	if ok {
+		return v
+	}
+	v = s.stripsElementUncached(pkg, name)
+	s.stripMu.Lock()
+	if len(s.stripMemo) < stripMemoCap {
+		if s.stripMemo == nil {
+			s.stripMemo = map[stripKey]bool{}
+		}
+		s.stripMemo[k] = v
+	}
+	s.stripMu.Unlock()
+	return v
+}
+
+// stripsElementUncached is stripsElement's answer worked out from the
+// declarations. A specific preserve-space entry wins over a wildcard
+// strip-space entry, matching the spec's import-precedence rule for the
+// common case.
+func (s *Stylesheet) stripsElementUncached(pkg int, name xdm.QName) bool {
 	best, strip := -1, false
 	rank := func(q xdm.QName) int {
 		switch {
@@ -1186,16 +1310,27 @@ func (r *Result) Tree() *xdm.Node {
 	// The document node is manufactured here, so it is the only place the
 	// result's own URI can be put on it. Without this base-uri(/) answered
 	// "" even when every element below it had a base URI.
-	tree.Root.BaseURI = r.BaseURI
+	tree.Root.SetBaseURI(r.BaseURI)
 	// Sequence normalisation runs here for the same reason the serialiser
 	// runs it: a run of adjacent atomic values is one text node with a single
 	// space between each, and a caller navigating the result must see the
 	// same document the serialiser would have written. Appending each value
 	// as its own text node lost the separators and broke the XDM invariant
 	// that no two text nodes are adjacent.
-	for _, it := range joinAdjacentAtomics(insertItemSeparator(r.Nodes, r.output.ItemSeparator)) {
+	items := joinAdjacentAtomics(insertItemSeparator(r.Nodes, r.output.ItemSeparator))
+	// A parentless attribute in the result goes on the document node, and
+	// attributes precede a node's children.
+	for _, it := range items {
+		if v, ok := it.(*xdm.Node); ok && v.Kind() == xdm.KindAttribute {
+			tree.Root.AppendCopy(v)
+		}
+	}
+	for _, it := range items {
 		switch v := it.(type) {
 		case *xdm.Node:
+			if v.Kind() == xdm.KindAttribute {
+				continue
+			}
 			// 5.7.1: "Any document node within the result sequence is
 			// replaced by a sequence containing each of its children, in
 			// document order." A result tree may not hold a document node
@@ -1208,15 +1343,15 @@ func (r *Result) Tree() *xdm.Node {
 			// caller reading the sequence must still see the document node
 			// it asked for; the flattening belongs to building the tree,
 			// which is the step this rule describes.
-			if v.Kind == xdm.KindDocument {
-				for _, ch := range append([]*xdm.Node(nil), v.Children...) {
-					tree.Root.AppendChild(ch)
+			if v.Kind() == xdm.KindDocument {
+				for ch := range v.Children() {
+					tree.Root.AppendCopy(ch)
 				}
 				continue
 			}
-			tree.Root.AppendChild(v)
+			tree.Root.AppendCopy(v)
 		case *xdm.Atomic:
-			tree.Root.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: v.String()})
+			tree.Root.AppendText(v.String())
 		}
 	}
 	tree.Finalize()
@@ -1230,7 +1365,7 @@ func (r *Result) Tree() *xdm.Node {
 // The principal input is stripped in Transform; this is the same rule for the
 // other trees 4.4 lists, which xsl:source-document reads.
 func (s *Stylesheet) stripInputAnnotations(root *xdm.Node) *xdm.Node {
-	if root == nil || root.Kind != xdm.KindDocument || !s.stripTypeAnnotations {
+	if root == nil || root.Kind() != xdm.KindDocument || !s.stripTypeAnnotations {
 		return root
 	}
 	return s.stripTypeAnnotationsFrom(root)
@@ -1251,11 +1386,9 @@ func (s *Stylesheet) stripInputAnnotations(root *xdm.Node) *xdm.Node {
 // some of them ask for the annotations to go.
 func (s *Stylesheet) stripTypeAnnotationsFrom(root *xdm.Node) *xdm.Node {
 	tree := xdm.NewTree()
-	tree.Root.BaseURI = root.BaseURI
-	for _, ch := range root.Children {
-		if c := stripAnnotationCopy(ch); c != nil {
-			tree.Root.AppendChild(c)
-		}
+	tree.Root.SetBaseURI(root.BaseURI())
+	for ch := range root.Children() {
+		stripAnnotationCopy(tree.Root, ch)
 	}
 	tree.Finalize()
 	return tree.Root
@@ -1267,8 +1400,8 @@ func (s *Stylesheet) stripTypeAnnotationsFrom(root *xdm.Node) *xdm.Node {
 // element and xs:untypedAtomic for an attribute: Atomize returns an
 // untypedAtomic for a node carrying none, which is precisely the typed value
 // the specification asks for here.
-func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
-	switch n.Kind {
+func stripAnnotationCopy(parent, n *xdm.Node) {
+	switch n.Kind() {
 	case xdm.KindElement:
 		// Section 3.5 changes the annotation and the typed value but leaves
 		// is-id and is-idrefs alone, which is exactly the split
@@ -1276,43 +1409,42 @@ func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
 		// derives from xs:ID holds the identity in its CONTENT, so dropping
 		// the property here made fn:id miss it — id('id1') found nothing for
 		// an <id-elem> of type xs:ID once the annotations went.
-		c := &xdm.Node{
-			Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI,
-		}
+		c := parent.AppendElement(n.Name())
+		c.SetBaseURI(n.BaseURI())
 		c.CopyTypingStrippedFrom(n)
-		for _, ns := range n.Namespaces {
-			c.AddNamespace(ns.Name.Local, ns.Value)
+		for prefix, uri := range n.DeclaredNamespaces() {
+			c.AddNamespace(prefix, uri)
 		}
-		for _, a := range n.Attrs {
+		for a := range n.Attrs() {
 			// xsi:nil is dropped rather than copied: stripping makes
 			// the is-nilled property of every element false, and the
 			// attribute would otherwise remain as a claim the stripped
 			// tree no longer supports. The property itself is simply
 			// not carried onto the copy above. Every other attribute is
 			// kept, which is what leaves is-id and is-idrefs unchanged.
-			if a.Name.URI == xdm.NSXSI && a.Name.Local == "nil" {
+			if a.Name().URI == xdm.NSXSI && a.Name().Local == "nil" {
 				continue
 			}
-			ac := &xdm.Node{
-				Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value,
-			}
-			ac.CopyTypingStrippedFrom(a)
-			c.AddAttr(ac)
+			c.AppendAttr(a.Name(), a.Value()).CopyTypingStrippedFrom(a)
 		}
-		for _, ch := range n.Children {
-			if cc := stripAnnotationCopy(ch); cc != nil {
-				c.AppendChild(cc)
-			}
+		for ch := range n.Children() {
+			stripAnnotationCopy(c, ch)
 		}
-		return c
-	case xdm.KindText:
-		return &xdm.Node{Kind: xdm.KindText, Value: n.Value}
-	case xdm.KindComment:
-		return &xdm.Node{Kind: xdm.KindComment, Value: n.Value}
-	case xdm.KindPI:
-		return &xdm.Node{Kind: xdm.KindPI, Name: n.Name, Value: n.Value}
+	case xdm.KindText, xdm.KindComment, xdm.KindPI:
+		appendLeafCopy(parent, n)
 	}
-	return nil
+}
+
+// appendLeafCopy appends to parent a copy of n, a text, comment or
+// processing-instruction node, carrying its name and value only.
+func appendLeafCopy(parent, n *xdm.Node) *xdm.Node {
+	switch n.Kind() {
+	case xdm.KindText:
+		return parent.AppendText(n.Value())
+	case xdm.KindComment:
+		return parent.AppendComment(n.Value())
+	}
+	return parent.AppendPI(n.Name().Local, n.Value())
 }
 
 // SerializeAsXML renders a result with the xml output method, ignoring the

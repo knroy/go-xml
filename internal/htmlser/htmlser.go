@@ -6,7 +6,7 @@ package htmlser
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // NSXHTML is the XHTML namespace.
@@ -21,14 +21,14 @@ const NSXHTML = "http://www.w3.org/1999/xhtml"
 // ponytail: area, link and meta, phrasing only in some positions, are left
 // out.
 func Inline(n *xdm.Node, xhtml, html5 bool) bool {
-	if n.Kind != xdm.KindElement {
+	if n.Kind() != xdm.KindElement {
 		return false
 	}
-	local := n.Name.Local
+	local := n.Name().Local
 	switch {
-	case xhtml && n.Name.URI == NSXHTML:
-	case n.Name.URI == "" && (!xhtml || html5),
-		!xhtml && html5 && n.Name.URI == NSXHTML:
+	case xhtml && n.Name().URI == NSXHTML:
+	case n.Name().URI == "" && (!xhtml || html5),
+		!xhtml && html5 && n.Name().URI == NSXHTML:
 		local = strings.ToLower(local)
 	default:
 		return false
@@ -59,19 +59,23 @@ var inlineNames = map[string]bool{
 	"template": true, "time": true, "video": true, "wbr": true,
 }
 
-// SkipIndentBefore reports whether no indent may go before child i of n's
-// children (i == len(children) meaning before n's end tag): next to an inline
-// child, or before the end tag of an inline element. The boundaries inside an
+// SkipIndentBefore reports whether no indent may go before c, a child of n
+// (c == nil meaning before n's end tag): next to an inline child, or before
+// the end tag of an inline element. The boundaries inside an
 // element follow Saxon, which the spec permits: an indent may follow the start
 // tag of an inline element, but none goes before its end tag.
-func SkipIndentBefore(n *xdm.Node, i int, xhtml, html5 bool) bool {
-	if i > 0 && Inline(n.Children[i-1], xhtml, html5) {
+func SkipIndentBefore(n, c *xdm.Node, xhtml, html5 bool) bool {
+	prev := n.LastChild()
+	if c != nil {
+		prev = c.PrevSibling()
+	}
+	if prev != nil && Inline(prev, xhtml, html5) {
 		return true
 	}
-	if i == len(n.Children) {
+	if c == nil {
 		return Inline(n, xhtml, html5)
 	}
-	return Inline(n.Children[i], xhtml, html5)
+	return Inline(c, xhtml, html5)
 }
 
 // ReplacedMeta reports whether n is a meta element the html and xhtml methods
@@ -83,19 +87,19 @@ func SkipIndentBefore(n *xdm.Node, i int, xhtml, html5 bool) bool {
 // head is left alone. The HTML5 charset spelling of the same declaration is
 // discarded too, as Saxon does, since it would contradict the added one.
 func ReplacedMeta(head, n *xdm.Node) bool {
-	if head == nil || n.Parent != head {
+	if head == nil || n.Parent() != head {
 		return false
 	}
-	if n.Kind != xdm.KindElement || !strings.EqualFold(n.Name.Local, "meta") {
+	if n.Kind() != xdm.KindElement || !strings.EqualFold(n.Name().Local, "meta") {
 		return false
 	}
-	for _, a := range n.Attrs {
-		if a.Name.URI != "" {
+	for a := range n.Attrs() {
+		if a.Name().URI != "" {
 			continue
 		}
-		if a.Name.Local == "charset" ||
-			strings.EqualFold(a.Name.Local, "http-equiv") &&
-				strings.EqualFold(strings.TrimSpace(a.Value), "content-type") {
+		if a.Name().Local == "charset" ||
+			strings.EqualFold(a.Name().Local, "http-equiv") &&
+				strings.EqualFold(strings.TrimSpace(a.Value()), "content-type") {
 			return true
 		}
 	}

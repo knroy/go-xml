@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // The bug these tests pin: the data model's derivation registries
@@ -76,11 +76,12 @@ func validateProbe(t *testing.T, s *Schema, value string) *xdm.Node {
 	if err != nil {
 		t.Fatalf("parsing instance: %v", err)
 	}
-	if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
+	doc, err := s.ValidateCopy(tree.Root, ValidateOptions{})
+	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	el := tree.Root.Children[0]
-	if el.TypeAnnotation == "" {
+	el := doc.FirstChild()
+	if el.TypeAnnotation() == "" {
 		t.Fatal("validation did not annotate the element")
 	}
 	return el
@@ -169,9 +170,9 @@ func TestIsolationSurvivesDeepCopy(t *testing.T) {
 	el := validateProbe(t, decimalSchema, "10")
 
 	copied := xdmbuild.DeepCopy(el)
-	if copied.TypeAnnotation != el.TypeAnnotation {
+	if copied.TypeAnnotation() != el.TypeAnnotation() {
 		t.Fatalf("precondition: DeepCopy lost the annotation: %q vs %q",
-			copied.TypeAnnotation, el.TypeAnnotation)
+			copied.TypeAnnotation(), el.TypeAnnotation())
 	}
 
 	loadProbe(t, probeSchema("string"))
@@ -182,9 +183,9 @@ func TestIsolationSurvivesDeepCopy(t *testing.T) {
 	}
 	// The copy must carry the resolved field itself, not merely agree by
 	// accident with a registry that happens to hold the right answer.
-	if copied.DerivedPrimitive != el.DerivedPrimitive {
+	if copied.DerivedPrimitive() != el.DerivedPrimitive() {
 		t.Errorf("DeepCopy did not propagate DerivedPrimitive: %q, want %q",
-			copied.DerivedPrimitive, el.DerivedPrimitive)
+			copied.DerivedPrimitive(), el.DerivedPrimitive())
 	}
 }
 
@@ -194,9 +195,9 @@ func TestListIsolationSurvivesDeepCopy(t *testing.T) {
 	el := validateProbe(t, decimalList, "10 20")
 
 	copied := xdmbuild.DeepCopy(el)
-	if copied.ListItem != el.ListItem {
+	if copied.ListItem() != el.ListItem() {
 		t.Errorf("DeepCopy did not propagate ListItem: %q, want %q",
-			copied.ListItem, el.ListItem)
+			copied.ListItem(), el.ListItem())
 	}
 
 	loadProbe(t, probeListSchema("string"))
@@ -226,12 +227,12 @@ func TestRegistryFallbackStillWorks(t *testing.T) {
 
 	// Built by hand, the way a non-validating producer builds one: the
 	// annotation is set, the resolved fields are not.
-	n := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "e"}}
-	n.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: "10"})
+	n := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
+	n.AppendText("10")
 	n.SetTypeAnnotation(name)
-	if n.DerivedPrimitive != "" {
+	if n.DerivedPrimitive() != "" {
 		t.Fatalf("precondition: SetTypeAnnotation should leave the resolved "+
-			"field empty, got %q", n.DerivedPrimitive)
+			"field empty, got %q", n.DerivedPrimitive())
 	}
 
 	if got := n.Atomize().Type; got != xdm.TypeDecimal {
@@ -241,8 +242,8 @@ func TestRegistryFallbackStillWorks(t *testing.T) {
 
 	listName := xdm.AnnotationName(isolationNS, "FallbackList")
 	xdm.RegisterListType(listName, "decimal")
-	l := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "l"}}
-	l.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: "10 20"})
+	l := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "l"}, "")
+	l.AppendText("10 20")
 	l.SetTypeAnnotation(listName)
 	items, ok := l.AtomizeList()
 	if !ok || len(items) != 2 {
@@ -279,19 +280,19 @@ func TestReloadingSameSchemaIsStillFine(t *testing.T) {
 // stale one is a confident wrong answer of exactly the kind this whole change
 // exists to remove.
 func TestFreshNodeHasNoStaleResolvedFields(t *testing.T) {
-	n := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "e"}}
+	n := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "e"}, "")
 	n.SetTypeAnnotationResolved("t1", "decimal", "decimal")
-	if n.DerivedPrimitive != "decimal" || n.ListItem != "decimal" {
+	if n.DerivedPrimitive() != "decimal" || n.ListItem() != "decimal" {
 		t.Fatalf("precondition: fields not set: %q %q",
-			n.DerivedPrimitive, n.ListItem)
+			n.DerivedPrimitive(), n.ListItem())
 	}
 
 	// Re-annotated by a producer that has no answer: the old answer must go,
 	// not linger.
 	n.SetTypeAnnotationResolved("t2", "", "")
-	if n.DerivedPrimitive != "" || n.ListItem != "" {
+	if n.DerivedPrimitive() != "" || n.ListItem() != "" {
 		t.Errorf("re-annotation left stale resolved fields: %q %q, want empty",
-			n.DerivedPrimitive, n.ListItem)
+			n.DerivedPrimitive(), n.ListItem())
 	}
 }
 
@@ -308,21 +309,19 @@ func TestFreshNodeHasNoStaleResolvedFields(t *testing.T) {
 func TestStripLeavesNoResolvedFields(t *testing.T) {
 	s := loadProbe(t, probeSchema("decimal"))
 	el := validateProbe(t, s, "10")
-	if el.DerivedPrimitive == "" {
+	if el.DerivedPrimitive() == "" {
 		t.Fatal("precondition: validation did not record the erasure")
 	}
 
 	// The strip path's construction: annotation cleared, is-id and is-idrefs
 	// carried, everything else left at the zero value.
-	stripped := &xdm.Node{
-		Kind: xdm.KindElement, Name: el.Name,
-		IsID: el.IsID, IsIDREFS: el.IsIDREFS,
-	}
-	stripped.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: el.StringValue()})
+	stripped := xdm.NewNode(xdm.KindElement, el.Name(), "")
+	stripped.ApplyTyping(xdm.Typing{IsID: el.IsID(), IsIDREFS: el.IsIDREFS()})
+	stripped.AppendText(el.StringValue())
 
-	if stripped.DerivedPrimitive != "" || stripped.ListItem != "" {
+	if stripped.DerivedPrimitive() != "" || stripped.ListItem() != "" {
 		t.Errorf("a stripped node carries resolved fields: %q %q",
-			stripped.DerivedPrimitive, stripped.ListItem)
+			stripped.DerivedPrimitive(), stripped.ListItem())
 	}
 	if got := stripped.Atomize().Type; got != xdm.TypeUntypedAtomic {
 		t.Errorf("a stripped node atomised as %v, want %v",

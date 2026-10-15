@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/knroy/go-xml/internal/fileuri"
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // fn:transform for a caller with no transform of its own -- an XQuery query,
@@ -23,8 +23,8 @@ import (
 // in vars as an xs:string variable.
 func plainContext(docs xpath.DocumentResolver, vars ...string) *xpath.Context {
 	ctx := xpath.NewContext(nil, xpath.Builtins())
-	ctx.Version = xpath.XPath31
-	ctx.Docs = docs
+	ctx = ctx.WithVersion(xpath.XPath31)
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.Docs = docs })
 	for i := 0; i < len(vars); i += 2 {
 		ctx.Vars[vars[i]] = xdm.One(xdm.NewString(vars[i+1]))
 	}
@@ -112,7 +112,7 @@ func TestTransformFromPlainXPathIsSandboxed(t *testing.T) {
 // caller's MaxDepth exactly as one entered through Transform is.
 func TestSelfCallingTransformFromPlainXPathIsRefused(t *testing.T) {
 	ctx := plainContext(nil, "s", selfCallingSheet)
-	ctx.MaxDepth = 5
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.MaxDepth = 5 })
 	_, err := xpath.Eval(`transform(map{'stylesheet-text': $s,
 		'initial-template': QName('','go'),
 		'stylesheet-params': map{QName('','sheet'): $s}})`, ctx, nil)
@@ -139,13 +139,14 @@ func TestTransformRecursionThroughAnotherHostIsBounded(t *testing.T) {
 			return nil, errors.New("fn:transform recursion through a query was not bounded")
 		}
 		q := plainContext(nil, "s", sheet)
-		q.Depth, q.MaxDepth = ctx.Depth, ctx.MaxDepth
+		q = q.WithEnv(func(e *xpath.Env) { e.MaxDepth = ctx.Env().MaxDepth })
+		q.Depth = ctx.Depth
 		return xpath.Eval(query, q, nil)
 	})
 	defer xpath.RegisterXQueryModuleLoader(nil)
 
 	ctx := plainContext(nil, "s", sheet)
-	ctx.MaxDepth = 50
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.MaxDepth = 50 })
 	_, err := xpath.Eval(query, ctx, nil)
 	if xdm.ErrorCode(err) != "XPDY0001" || !errors.Is(err, xdm.ErrResourceLimit) {
 		t.Errorf("err = %v, want a depth refusal", err)

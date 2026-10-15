@@ -48,15 +48,15 @@ func navTree(b *testing.B) {
 		var walk func(n *Node)
 		walk = func(n *Node) {
 			navOnce.nodes = append(navOnce.nodes, n)
-			navOnce.nodes = append(navOnce.nodes, n.Attrs...)
-			if n.Kind == KindElement {
+			navOnce.nodes = append(navOnce.nodes, attrsOf(n)...)
+			if n.Kind() == KindElement {
 				navOnce.elems = append(navOnce.elems, n)
-				ec[QName{URI: n.Name.URI, Local: n.Name.Local}]++
-				for _, a := range n.Attrs {
-					ac[QName{URI: a.Name.URI, Local: a.Name.Local}]++
+				ec[QName{URI: n.Name().URI, Local: n.Name().Local}]++
+				for _, a := range attrsOf(n) {
+					ac[QName{URI: a.Name().URI, Local: a.Name().Local}]++
 				}
 			}
-			for _, c := range n.Children {
+			for _, c := range kids(n) {
 				walk(c)
 			}
 		}
@@ -88,14 +88,9 @@ func BenchmarkNavDescendantWalk(b *testing.B) {
 	navTree(b)
 	for i := 0; i < b.N; i++ {
 		n := 0
-		var f func(x *Node)
-		f = func(x *Node) {
-			for _, c := range x.Children {
-				n += int(c.Kind)
-				f(c)
-			}
+		for c := range navOnce.tree.Root.Descendants() {
+			n += int(c.Kind())
 		}
-		f(navOnce.tree.Root)
 		navSink += n
 	}
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(len(navOnce.nodes)), "ns/node")
@@ -107,8 +102,8 @@ func BenchmarkNavChildNameTest(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		n := 0
 		for _, e := range navOnce.elems {
-			for _, c := range e.Children {
-				if c.Kind == KindElement && c.Name.Local == el.Local && c.Name.URI == el.URI {
+			for c := range e.Children() {
+				if c.Kind() == KindElement && c.Name().Local == el.Local && c.Name().URI == el.URI {
 					n++
 				}
 			}
@@ -125,7 +120,7 @@ func BenchmarkNavAttrLookup(b *testing.B) {
 		n := 0
 		for _, e := range navOnce.elems {
 			if a := e.Attr(al.URI, al.Local); a != nil {
-				n += len(a.Value)
+				n += len(a.Value())
 			}
 		}
 		navSink += n
@@ -245,37 +240,37 @@ func BenchmarkCorpusShape(b *testing.B) {
 			docs, _ := loadCorpus(b, c.glob)
 			var kinds [KindNamespace + 1]int
 			fields := map[string]int{}
-			var kids, attrs []int
+			var kidCounts, attrs []int
 			var walk func(n *Node)
 			walk = func(n *Node) {
-				kinds[n.Kind]++
+				kinds[n.Kind()]++
 				set := func(name string, ok bool) {
 					if ok {
 						fields[name]++
 					}
 				}
-				set("Name.Prefix", n.Name.Prefix != "")
-				set("Name.URI", n.Name.URI != "")
-				set("Value", n.Value != "")
-				set("Namespaces", len(n.Namespaces) > 0)
-				set("BaseURI", n.BaseURI != "")
-				set("BaseURI!=parent", n.Parent != nil && n.BaseURI != n.Parent.BaseURI)
-				set("DocumentURI", n.DocumentURI != "")
-				set("TypeAnnotation", n.TypeAnnotation != "")
-				kinds[KindNamespace] += len(n.Namespaces)
-				if n.Kind == KindElement {
-					kids = append(kids, len(n.Children))
-					attrs = append(attrs, len(n.Attrs))
+				set("Name.Prefix", n.Name().Prefix != "")
+				set("Name.URI", n.Name().URI != "")
+				set("Value", n.Value() != "")
+				set("Namespaces", len(nsOf(n)) > 0)
+				set("BaseURI", n.BaseURI() != "")
+				set("BaseURI!=parent", n.Parent() != nil && n.BaseURI() != n.Parent().BaseURI())
+				set("DocumentURI", n.DocumentURI() != "")
+				set("TypeAnnotation", n.TypeAnnotation() != "")
+				kinds[KindNamespace] += len(nsOf(n))
+				if n.Kind() == KindElement {
+					kidCounts = append(kidCounts, len(kids(n)))
+					attrs = append(attrs, len(attrsOf(n)))
 				}
-				for _, a := range n.Attrs {
+				for _, a := range attrsOf(n) {
 					walk(a)
 				}
-				for _, ch := range n.Children {
+				for _, ch := range kids(n) {
 					walk(ch)
 				}
 			}
 			for i := 0; i < b.N; i++ {
-				kinds, fields, kids, attrs = [KindNamespace + 1]int{}, map[string]int{}, nil, nil
+				kinds, fields, kidCounts, attrs = [KindNamespace + 1]int{}, map[string]int{}, nil, nil
 				for _, d := range docs {
 					t, _ := Parse(bytes.NewReader(d), ParseOptions{MaxBytes: -1})
 					walk(t.Root)
@@ -296,7 +291,7 @@ func BenchmarkCorpusShape(b *testing.B) {
 			for _, f := range names {
 				b.Logf("  %-16s set on %5.1f%% of nodes", f, 100*float64(fields[f])/float64(total))
 			}
-			b.Logf("  children/element %s; attributes/element %s", pctiles(kids), pctiles(attrs))
+			b.Logf("  children/element %s; attributes/element %s", pctiles(kidCounts), pctiles(attrs))
 		})
 	}
 }

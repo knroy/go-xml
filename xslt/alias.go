@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // nsAlias is the result-namespace a stylesheet namespace is rewritten to.
@@ -194,7 +194,7 @@ func (c *compiler) compileCharacterMap(el *xdm.Node, precedence int) error {
 		if !isXSL(ch, "output-character") {
 			return fmt.Errorf(
 				"xsl:character-map may only contain xsl:output-character, found %s",
-				ch.Name.Lexical())
+				ch.Name().Lexical())
 		}
 		charAttr := ch.AttrValue("character")
 		runes := []rune(charAttr)

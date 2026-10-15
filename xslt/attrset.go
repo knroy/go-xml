@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // attributeSet is a compiled xsl:attribute-set.
@@ -76,7 +76,7 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 		if !isXSL(ch, "attribute") {
 			return fmt.Errorf(
 				"xsl:attribute-set %q may only contain xsl:attribute, found %s",
-				name, ch.Name.Lexical())
+				name, ch.Name().Lexical())
 		}
 	}
 	body, err := c.compileSequence(el, el)
@@ -140,17 +140,26 @@ func expandAttributeSets(rt *runtime, names []attrSetRef, out *outputBuilder,
 		setRT := rt
 		if rt.globalCtx != nil {
 			r := *rt
-			r.ctx = rt.globalCtx.WithFocus(rt.ctx.Item, rt.ctx.Position, rt.ctx.Size)
+			r.ctx = rt.globalCtx.WithFocus(rt.ctx.Item, int(rt.ctx.Position), int(rt.ctx.Size))
 			r.absent = 0
 			setRT = &r
 		}
-		for _, as := range sets {
-			if err := expandAttributeSets(setRT, as.uses, out, active); err != nil {
-				return err
+		// The locals bound on the stack are hidden from it the same way.
+		mark, base := rt.enterFrame()
+		err := func() error {
+			for _, as := range sets {
+				if err := expandAttributeSets(setRT, as.uses, out, active); err != nil {
+					return err
+				}
+				if err := execSequence(as.body, setRT, out); err != nil {
+					return err
+				}
 			}
-			if err := execSequence(as.body, setRT, out); err != nil {
-				return err
-			}
+			return nil
+		}()
+		rt.leaveFrame(mark, base)
+		if err != nil {
+			return err
 		}
 		delete(active, key)
 	}
@@ -163,7 +172,7 @@ func expandAttributeSets(rt *runtime, names []attrSetRef, out *outputBuilder,
 func parseUseAttributeSets(el *xdm.Node) ([]attrSetRef, error) {
 	raw := el.AttrValue("use-attribute-sets")
 	if a := el.Attr(xdm.NSXSL, "use-attribute-sets"); a != nil {
-		raw = a.Value
+		raw = a.Value()
 	}
 	pkg := overridingPackage(el, compilePackage)
 	var out []attrSetRef
@@ -373,7 +382,7 @@ func (c *compiler) compileNamespace(n *xdm.Node, ns xpath.NamespaceResolver) (In
 	if na == nil {
 		return nil, fmt.Errorf("xsl:namespace requires a name attribute")
 	}
-	nameAVT, err := compileAVT(na.Value, ns)
+	nameAVT, err := compileAVT(na.Value(), ns)
 	if err != nil {
 		return nil, err
 	}

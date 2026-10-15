@@ -3,7 +3,7 @@ package xdm
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/internal/xmlname"
+	"github.com/knroy/go-xml/v2/internal/xmlname"
 )
 
 // QName is an expanded name: namespace URI plus local part, with the prefix

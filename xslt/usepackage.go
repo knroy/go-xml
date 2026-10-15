@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // xsl:use-package and package composition, XSLT 3.0 section 3.5.
@@ -155,7 +155,7 @@ type PackageResolver interface {
 func packageComponents(root *xdm.Node) ([]*component, error) {
 	var out []*component
 	for _, el := range root.ChildElements() {
-		if el.Name.URI != xdm.NSXSL {
+		if el.Name().URI != xdm.NSXSL {
 			continue
 		}
 		// A declaration this package did not write, but that an enclosing
@@ -168,7 +168,7 @@ func packageComponents(root *xdm.Node) ([]*component, error) {
 			continue
 		}
 		var kind componentKind
-		switch el.Name.Local {
+		switch el.Name().Local {
 		case "template":
 			// Only a *named* template is a component. A match template has no
 			// symbolic name, so it can be neither exposed nor accepted nor
@@ -296,7 +296,7 @@ func parseExposeRule(el *xdm.Node, order int) (*exposeRule, error) {
 	comp := strings.TrimSpace(el.AttrValue("component"))
 	if comp == "" {
 		return nil, fmt.Errorf("XTSE0010: %s requires a component attribute",
-			el.Name.Lexical())
+			el.Name().Lexical())
 	}
 	for _, tok := range strings.Fields(comp) {
 		switch componentKind(tok) {
@@ -311,19 +311,19 @@ func parseExposeRule(el *xdm.Node, order int) (*exposeRule, error) {
 		default:
 			return nil, fmt.Errorf(
 				"XTSE0020: %s/@component may not be %q",
-				el.Name.Lexical(), tok)
+				el.Name().Lexical(), tok)
 		}
 	}
 	vis := strings.TrimSpace(el.AttrValue("visibility"))
 	if vis == "" {
 		return nil, fmt.Errorf("XTSE0010: %s requires a visibility attribute",
-			el.Name.Lexical())
+			el.Name().Lexical())
 	}
 	r.vis = visibility(vis)
 	names := el.AttrValue("names")
 	if strings.TrimSpace(names) == "" {
 		return nil, fmt.Errorf("XTSE0010: %s requires a names attribute",
-			el.Name.Lexical())
+			el.Name().Lexical())
 	}
 	for _, tok := range strings.Fields(names) {
 		nt, err := parseNameToken(el, tok)
@@ -341,7 +341,7 @@ func parseExposeRule(el *xdm.Node, order int) (*exposeRule, error) {
 			}
 			return nil, fmt.Errorf(
 				"%s: %s has component=\"*\", so the token %q in @names must "+
-					"be a wildcard", code, el.Name.Lexical(), nt.lexical)
+					"be a wildcard", code, el.Name().Lexical(), nt.lexical)
 		}
 		r.tokens = append(r.tokens, nt)
 	}
@@ -363,7 +363,7 @@ func parseNameToken(el *xdm.Node, tok string) (nameToken, error) {
 				if r < '0' || r > '9' {
 					return nt, fmt.Errorf(
 						"XTSE0020: %q is not a component name in %s/@names",
-						nt.lexical, el.Name.Lexical())
+						nt.lexical, el.Name().Lexical())
 				}
 				n = n*10 + int(r-'0')
 			}
@@ -377,7 +377,7 @@ func parseNameToken(el *xdm.Node, tok string) (nameToken, error) {
 	if strings.HasPrefix(tok, "#") {
 		return nt, fmt.Errorf(
 			"XTSE0020: %q is not a component name in %s/@names",
-			nt.lexical, el.Name.Lexical())
+			nt.lexical, el.Name().Lexical())
 	}
 	// Q{uri}* is the EQName spelling of prefix:*, and the only way to write a
 	// wildcard over the no-namespace components: there is no prefix bound to
@@ -407,7 +407,7 @@ func parseNameToken(el *xdm.Node, tok string) (nameToken, error) {
 			// error XTSE0280: expose-927 asks for the former.
 			return nt, fmt.Errorf(
 				"XTSE0020: the prefix %q in %s/@names is not bound",
-				prefix, el.Name.Lexical())
+				prefix, el.Name().Lexical())
 		}
 		nt.uri = uri
 		return nt, nil
@@ -425,15 +425,13 @@ func lookupPrefix(el *xdm.Node, prefix string) string {
 	if prefix == "xml" {
 		return xdm.NSXML
 	}
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		for _, ns := range cur.Namespaces {
-			// A namespace node keeps the prefix in its name and the URI in
-			// its value; there are no Prefix and URI fields.
-			if ns.Name.Local == prefix {
-				return ns.Value
+		for nsPrefix, nsURI := range cur.DeclaredNamespaces() {
+			if nsPrefix == prefix {
+				return nsURI
 			}
 		}
 	}
@@ -963,6 +961,11 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	if err := c.runStaticPhase(doc); err != nil {
 		return nil, err
 	}
+	// The package is read, from here on, as the copy the static phase built.
+	u.doc = c.prunedModule(doc)
+	if u.root = firstElement(u.doc); u.root == nil {
+		return nil, fmt.Errorf("XTSE3000: the package named %s is empty", u.name)
+	}
 	// The used package's own static variables are kept for the moment it is
 	// compiled, which happens later and needs them: package-version-001
 	// declares a static parameter and spells a shadow attribute with it.
@@ -1260,10 +1263,10 @@ var overrideChildren = map[string]bool{
 // checkOverrideChildren applies that content model, XTSE0010.
 func checkOverrideChildren(ov *xdm.Node) error {
 	for _, ch := range ov.ChildElements() {
-		if ch.Name.URI != xdm.NSXSL || !overrideChildren[ch.Name.Local] {
+		if ch.Name().URI != xdm.NSXSL || !overrideChildren[ch.Name().Local] {
 			return fmt.Errorf(
 				"XTSE0010: %s is not allowed as a child of xsl:override",
-				ch.Name.Lexical())
+				ch.Name().Lexical())
 		}
 	}
 	return nil
@@ -1460,8 +1463,8 @@ func sameDeclaredTypeIn(elA, elB *xdm.Node, a, b string) bool {
 // package declares under the given name.
 func importedSimpleType(el *xdm.Node, qn xdm.QName) *xdm.Node {
 	root := el
-	for root != nil && root.Parent != nil && root.Parent.Kind == xdm.KindElement {
-		root = root.Parent
+	for root != nil && root.Parent() != nil && root.Parent().Kind() == xdm.KindElement {
+		root = root.Parent()
 	}
 	if root == nil {
 		return nil
@@ -1470,7 +1473,7 @@ func importedSimpleType(el *xdm.Node, qn xdm.QName) *xdm.Node {
 	var walk func(*xdm.Node)
 	walk = func(n *xdm.Node) {
 		for _, ch := range n.ChildElements() {
-			if ch.Name.URI == xdm.NSXS && ch.Name.Local == "simpleType" &&
+			if ch.Name().URI == xdm.NSXS && ch.Name().Local == "simpleType" &&
 				ch.AttrValue("name") == qn.Local {
 				if found == nil {
 					found = ch
@@ -1518,7 +1521,7 @@ func sameSimpleTypeDefinition(a, b *xdm.Node) bool {
 // as a set, and whether the declaration is that shape at all.
 func unionMemberSet(t *xdm.Node) (map[string]bool, bool) {
 	for _, ch := range t.ChildElements() {
-		if ch.Name.URI != xdm.NSXS || ch.Name.Local != "union" {
+		if ch.Name().URI != xdm.NSXS || ch.Name().Local != "union" {
 			continue
 		}
 		mt := ch.AttrValue("memberTypes")
@@ -1695,7 +1698,11 @@ func contextItemAttr(el *xdm.Node, name string) string {
 // deleted outright, so that no later phase can bind a reference to it. That is
 // what makes use-package-003 report XPST0017 for a call to a private function
 // rather than quietly calling it.
+//
+// The used package's tree is not edited: the decisions are recorded in e, and
+// the tree compiled is a copy built with them applied.
 func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
+	e := pkgEdits{}
 	keep := map[*xdm.Node]bool{}
 	for _, comp := range u.comps {
 		if comp.sym.kind == kindMode &&
@@ -1783,15 +1790,15 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		if comp.declared == visAbstract &&
 			u.overriding[comp.sym.key()] == nil &&
 			!(u.hiddenByAccept[comp.sym.key()] &&
-				!referencedWithin(u.root, comp)) {
-			markAbstract(comp.el, comp.sym.String())
+				!referencedWithin(e, u.root, comp)) {
+			e.markAbstract(comp.el, comp.sym.String())
 			keep[comp.el] = true
 			continue
 		}
 		if (v == visHidden || v == visAbsent) &&
 			u.overriding[comp.sym.key()] == nil &&
 			(u.hiddenByAccept[comp.sym.key()] ||
-				!referencedWithin(u.root, comp)) {
+				!referencedWithin(e, u.root, comp)) {
 			// A component the using package cannot see is deleted, so that a
 			// reference to it fails as XPST0017 or XTSE0650 rather than
 			// quietly binding -- which is what use-package-003 asks for.
@@ -1831,18 +1838,18 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		}
 		if ov, ok := u.overriding[comp.sym.String()]; ok {
 			noteOverridingDecl(ov, compilePackage)
-			setAttr(ov, spliced, "yes")
-			appended = append(appended, rewriteOverride(ov, comp.el))
+			e.setAttr(ov, spliced, "yes")
+			appended = append(appended, e.rewriteOverride(ov, comp.el))
 		}
 	}
 	var kept []*xdm.Node
-	for _, ch := range u.root.Children {
-		if ch.Kind != xdm.KindElement {
+	for ch := range u.root.Children() {
+		if ch.Kind() != xdm.KindElement {
 			kept = append(kept, ch)
 			continue
 		}
-		if ch.Name.URI == xdm.NSXSL {
-			switch ch.Name.Local {
+		if ch.Name().URI == xdm.NSXSL {
+			switch ch.Name().Local {
 			case "expose":
 				// The manifest is not compiled: it has already done its work.
 				continue
@@ -1892,8 +1899,8 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 				// compileDocument, with compilePackage set to the used
 				// package. See overridingPackage.
 				noteOverridingDecl(ov, compilePackage)
-				kept = append(kept, rewriteOverride(ov, ch))
-				if !isAbstractDecl(ch) {
+				kept = append(kept, e.rewriteOverride(ov, ch))
+				if !e.isAbstractDecl(ch) {
 					kept = append(kept, ch)
 				}
 				continue
@@ -1902,11 +1909,11 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		kept = append(kept, ch)
 	}
 	kept = append(kept, appended...)
-	u.root.Children = kept
-	for _, ch := range kept {
-		ch.Parent = u.root
-	}
-	forgetSharedNS() // parent links changed
+	u.doc, u.root = e.rebuild(u.doc, u.root, kept)
+	// The rebuilt tree has had its static phase: it is the pruned copy, with
+	// composition's changes made.
+	c.staticDone[u.doc] = u.doc
+	forgetSharedNS() // the declarations are new nodes
 	// The used package's static variables are its own, so they are put back
 	// for the compilation and taken away again after: a using package must
 	// not see them, and the two packages may legitimately declare the same
@@ -1995,7 +2002,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 // spelling the same name counts -- but it errs towards keeping a declaration,
 // and keeping one the package does not use costs nothing while deleting one
 // it does use breaks the package outright.
-func referencedWithin(root *xdm.Node, comp *component) bool {
+func referencedWithin(e pkgEdits, root *xdm.Node, comp *component) bool {
 	name := comp.el.AttrValue("name")
 	if name == "" {
 		return false
@@ -2028,9 +2035,9 @@ func referencedWithin(root *xdm.Node, comp *component) bool {
 		if n == comp.el {
 			return false
 		}
-		if n.Kind == xdm.KindElement {
-			for _, a := range n.Attrs {
-				if mentionsComponent(n, a.Value, local, comp) {
+		if n.Kind() == xdm.KindElement {
+			for _, a := range e.attrList(n) {
+				if mentionsComponent(n, a.value, local, comp) {
 					return true
 				}
 			}
@@ -2044,11 +2051,11 @@ func referencedWithin(root *xdm.Node, comp *component) bool {
 		// inside a TVT, and scanning attributes alone judged the function
 		// unreferenced and deleted it, leaving the package's own call to
 		// fail as XPST0017.
-		if n.Kind == xdm.KindText &&
-			mentionsComponent(n.Parent, n.Value, local, comp) {
+		if n.Kind() == xdm.KindText &&
+			mentionsComponent(n.Parent(), n.Value(), local, comp) {
 			return true
 		}
-		for _, ch := range n.Children {
+		for ch := range n.Children() {
 			if walk(ch) {
 				return true
 			}
@@ -2074,22 +2081,22 @@ func makesDynamicReference(root *xdm.Node) bool {
 	}
 	var walk func(n *xdm.Node) bool
 	walk = func(n *xdm.Node) bool {
-		switch n.Kind {
+		switch n.Kind() {
 		case xdm.KindElement:
 			if isXSL(n, "evaluate") {
 				return true
 			}
-			for _, a := range n.Attrs {
-				if namesDynamicFunction(a.Value) {
+			for a := range n.Attrs() {
+				if namesDynamicFunction(a.Value()) {
 					return true
 				}
 			}
 		case xdm.KindText:
-			if namesDynamicFunction(n.Value) {
+			if namesDynamicFunction(n.Value()) {
 				return true
 			}
 		}
-		for _, ch := range n.Children {
+		for ch := range n.Children() {
 			if walk(ch) {
 				return true
 			}
@@ -2136,8 +2143,8 @@ func namesDynamicFunction(text string) bool {
 // The effective visibility is not consulted: what matters here is whether the
 // declaration has a body, and only the declaration's own visibility attribute
 // says that.
-func isAbstractDecl(el *xdm.Node) bool {
-	return visibility(strings.TrimSpace(el.AttrValue("visibility"))) ==
+func (e pkgEdits) isAbstractDecl(el *xdm.Node) bool {
+	return visibility(strings.TrimSpace(e.attrValue(el, "visibility"))) ==
 		visAbstract
 }
 
@@ -2226,7 +2233,7 @@ const overriddenMarkerNS = "http://go-xml.invalid/xslt/overridden"
 // rewriteOverride renamed it, or "" for a declaration that was not renamed.
 func overriddenNameOf(el *xdm.Node) string {
 	if a := el.Attr(overriddenMarkerNS, "name"); a != nil {
-		return a.Value
+		return a.Value()
 	}
 	return ""
 }
@@ -2262,7 +2269,7 @@ var originalSerial int
 // so all six land on the generated name without a rewriter each. Element
 // names are not affected: they were resolved when the tree was parsed, and
 // the compiler reads Node.Name rather than re-expanding the prefix.
-func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
+func (e pkgEdits) rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 	// The overriding declaration is about to be spliced into the used
 	// package's tree, which detaches it from the xsl:override it was written
 	// under. [xsl:]default-mode is resolved by walking ancestors, so a
@@ -2273,9 +2280,9 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 	// that carries both a match and a name: the name makes it a component and
 	// so a candidate for the splice, and after the move its unprefixed @match
 	// named the unnamed mode instead of m3.
-	if overriding.Attr("", "default-mode") == nil {
+	if !e.hasAttr(overriding, "default-mode") {
 		if dm, err := defaultModeAt(overriding); err == nil && dm != "" {
-			setAttr(overriding, "default-mode", clarkToEQName(dm))
+			e.setAttr(overriding, "default-mode", clarkToEQName(dm))
 		}
 	}
 	originalSerial++
@@ -2299,16 +2306,11 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 	// package overrode it. function-lookup-005's f:subtract is abstract in
 	// the used package and overridden in the using one, and must still be
 	// invisible to the used package's own function-lookup.
-	if realName := original.AttrValue("name"); realName != "" &&
-		!isAbstractDecl(original) {
-		original.Attrs = append(original.Attrs, &xdm.Node{
-			Kind:   xdm.KindAttribute,
-			Name:   xdm.QName{URI: overriddenMarkerNS, Local: "name"},
-			Value:  realName,
-			Parent: original,
-		})
+	if realName := e.attrValue(original, "name"); realName != "" &&
+		!e.isAbstractDecl(original) {
+		e.addAttr(original, xdm.QName{URI: overriddenMarkerNS, Local: "name"}, realName)
 	}
-	setAttr(original, "name", "Q{"+uri+"}original")
+	e.setAttr(original, "name", "Q{"+uri+"}original")
 	if isXSL(original, "param") {
 		// The renamed original is no longer a stylesheet parameter. It is
 		// reachable only through xsl:original, under a name no caller can
@@ -2323,9 +2325,9 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 		// xsl:original to read, and the declaration is marked abstract: that
 		// defers it, so only a stylesheet that actually reads xsl:original
 		// fails, and it fails as the XTDE3052 for a component with no body.
-		original.Name = xdm.QName{
-			Prefix: original.Name.Prefix, URI: xdm.NSXSL, Local: "variable",
-		}
+		e.rename(original, xdm.QName{
+			Prefix: original.Name().Prefix, URI: xdm.NSXSL, Local: "variable",
+		})
 		// required and tunnel belong to xsl:param alone -- 9.2's signature
 		// has them, 9.1's for xsl:variable does not -- so they have to come
 		// off with the rename. The engine used to add required="no" here
@@ -2335,16 +2337,16 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 		// compatible processing stopped swallowing the report. Dropping them
 		// changes nothing else: compileVariable reads both with yesAttr,
 		// which answers false for an attribute that is not there.
-		dropAttrs(original, "required", "tunnel")
-		if original.AttrValue("select") == "" && len(original.ChildElements()) == 0 {
-			markAbstract(original, "the overridden parameter's default")
+		e.dropAttrs(original, "required", "tunnel")
+		if e.attrValue(original, "select") == "" && len(original.ChildElements()) == 0 {
+			e.markAbstract(original, "the overridden parameter's default")
 		}
 	}
 	if isXSL(original, "template") || isXSL(original, "function") {
 		// A renamed component must not stay visible under its old identity,
 		// and a named template renamed this way is no longer an eligible
 		// initial template either.
-		setAttr(original, "visibility", "private")
+		e.setAttr(original, "visibility", "private")
 	}
 	// The rebinding goes on the overriding declaration and nowhere higher.
 	// Widening it to xsl:override or to the package element would capture
@@ -2366,13 +2368,8 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 		if ns != xdm.NSXSL || prefix == "" {
 			continue
 		}
-		overriding.Namespaces = append(overriding.Namespaces, &xdm.Node{
-			Kind:  xdm.KindNamespace,
-			Name:  xdm.QName{Local: prefix},
-			Value: uri,
-		})
+		e.addNS(overriding, prefix, uri)
 	}
-	forgetSharedNS() // overriding's namespaces changed
 	return overriding
 }
 
@@ -2380,42 +2377,6 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 // an identity its declarations can be filed under. It is guarded by compileMu
 // with the rest of the compile-time package state.
 var packageSerial int
-
-// dropAttrs removes unprefixed attributes from an element.
-func dropAttrs(el *xdm.Node, names ...string) {
-	kept := el.Attrs[:0]
-	for _, a := range el.Attrs {
-		drop := false
-		if a.Name.URI == "" {
-			for _, n := range names {
-				if a.Name.Local == n {
-					drop = true
-					break
-				}
-			}
-		}
-		if !drop {
-			kept = append(kept, a)
-		}
-	}
-	el.Attrs = kept
-}
-
-// setAttr sets or replaces an unprefixed attribute of an element.
-func setAttr(el *xdm.Node, name, value string) {
-	for _, a := range el.Attrs {
-		if a.Name.URI == "" && a.Name.Local == name {
-			a.Value = value
-			return
-		}
-	}
-	el.Attrs = append(el.Attrs, &xdm.Node{
-		Kind:   xdm.KindAttribute,
-		Name:   xdm.QName{Local: name},
-		Value:  value,
-		Parent: el,
-	})
-}
 
 // checkPackageVersionRange applies the PackageVersionRange grammar of 3.5.1
 // to an xsl:use-package/@package-version attribute.
@@ -2659,7 +2620,7 @@ func overridingPackage(el *xdm.Node, current int) int {
 	if len(overridingDecls) == 0 {
 		return current
 	}
-	for n := el; n != nil; n = n.Parent {
+	for n := el; n != nil; n = n.Parent() {
 		if pkg, ok := overridingDecls[n]; ok {
 			return pkg
 		}

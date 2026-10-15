@@ -20,7 +20,7 @@ func TestLineEndReader(t *testing.T) {
 	}
 	for _, tc := range cases {
 		for chunk := 1; chunk <= len(tc.in); chunk++ {
-			r := newLineEndReader(&chunkReader{s: tc.in, n: chunk})
+			r := newLineEndReader(&chunkReader{s: tc.in, n: chunk}, 4096)
 			got, err := io.ReadAll(r)
 			if err != nil {
 				t.Fatal(err)
@@ -40,14 +40,14 @@ func TestLineEndsNormalizedBeforeParsing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := tr.Root.Children[0]
-	if got, want := a.Attrs[0].Value, "x y z w v\ru"; got != want {
+	a := kids(tr.Root)[0]
+	if got, want := attrsOf(a)[0].Value(), "x y z w v\ru"; got != want {
 		t.Errorf("attribute %q, want %q", got, want)
 	}
 	want := []string{"t\nu", "c\nd\ne", "x\ny"}
-	for i, c := range a.Children {
-		if c.Value != want[i] {
-			t.Errorf("%v %q, want %q", c.Kind, c.Value, want[i])
+	for i, c := range kids(a) {
+		if c.Value() != want[i] {
+			t.Errorf("%v %q, want %q", c.Kind(), c.Value(), want[i])
 		}
 	}
 }

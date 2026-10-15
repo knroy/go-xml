@@ -1,7 +1,7 @@
 package xpath
 
 import (
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // fn:transform and fn:load-xquery-module each need a processor for another

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xquery"
+	"github.com/knroy/go-xml/v2/xquery"
 )
 
 // unionsNS and unionsSchema are the shapes the four fixes below turn on, cut

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode/utf16"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // This file implements the four XPath 3.1 JSON functions — fn:parse-json,
@@ -1041,7 +1041,7 @@ func jsonFallback(ctx *Context, opts jsonOptions) func(string) (string, error) {
 		return nil
 	}
 	return func(esc string) (string, error) {
-		out, err := opts.fallback.Invoke(ctx, []xdm.Sequence{xdm.One(xdm.NewString(esc))})
+		out, err := callItem(ctx, opts.fallback, []xdm.Sequence{xdm.One(xdm.NewString(esc))})
 		if err != nil {
 			return "", err
 		}
@@ -1082,8 +1082,8 @@ func jsonFallback(ctx *Context, opts jsonOptions) func(string) (string, error) {
 // a value was delivered in escaped form.
 type jsonXMLBuilder struct {
 	opts    jsonOptions
-	stack   []*xdm.Node
-	root    *xdm.Node
+	stack   []*jsonXMLNode
+	root    *jsonXMLNode
 	pending string
 	// pendingRaw records whether the pending key needed escaping, which
 	// decides the escaped-key attribute.
@@ -1095,17 +1095,42 @@ type jsonXMLBuilder struct {
 
 const nsJSON = "http://www.w3.org/2005/xpath-functions"
 
-func jsonElement(local string) *xdm.Node {
-	return xdmbuild.NewElement(xdm.QName{URI: nsJSON, Local: local})
+// jsonXMLNode is an element of the XML representation while the JSON is
+// being read. The tree is collected first and emitted afterwards because the
+// duplicates option use-last replaces an entry already seen, and an xdm tree
+// is only ever appended to.
+type jsonXMLNode struct {
+	local string
+	attrs [][2]string // local name, value, in the order they were set
+	text  string
+	kids  []*jsonXMLNode
 }
 
-func setAttr(el *xdm.Node, local, value string) {
-	el.AddAttr(xdmbuild.NewAttribute(xdm.QName{Local: local}, value))
+func jsonElement(local string) *jsonXMLNode { return &jsonXMLNode{local: local} }
+
+func setAttr(el *jsonXMLNode, local, value string) {
+	el.attrs = append(el.attrs, [2]string{local, value})
+}
+
+// emit appends el, its attributes and its content to p, in document order,
+// and returns the new element.
+func (el *jsonXMLNode) emit(p *xdm.Node) *xdm.Node {
+	n := p.AppendElement(xdm.QName{URI: nsJSON, Local: el.local})
+	for _, a := range el.attrs {
+		n.AppendAttr(xdm.QName{Local: a[0]}, a[1])
+	}
+	if el.text != "" {
+		n.AppendText(el.text)
+	}
+	for _, k := range el.kids {
+		k.emit(n)
+	}
+	return n
 }
 
 // attach places a finished element under the open container, applying the key
 // attribute and the duplicates option.
-func (b *jsonXMLBuilder) attach(el *xdm.Node) error {
+func (b *jsonXMLBuilder) attach(el *jsonXMLNode) error {
 	if len(b.stack) == 0 {
 		if b.root != nil {
 			return errFOJS0001("more than one value at the top level")
@@ -1114,7 +1139,7 @@ func (b *jsonXMLBuilder) attach(el *xdm.Node) error {
 		return nil
 	}
 	parent := b.stack[len(b.stack)-1]
-	if parent.Name.Local == "map" {
+	if parent.local == "map" {
 		k := b.pending
 		// The key attribute is written before the duplicate check so that
 		// use-last can replace the whole element.
@@ -1129,15 +1154,15 @@ func (b *jsonXMLBuilder) attach(el *xdm.Node) error {
 				case "reject":
 					return xdm.Errorf("FOJS0003", "duplicate key %q in a JSON object", k)
 				case "use-last":
-					xdmbuild.ReplaceChild(parent, i, el)
+					parent.kids[i] = el
 				default: // use-first
 				}
 				return nil
 			}
-			idx[k] = len(parent.Children)
+			idx[k] = len(parent.kids)
 		}
 	}
-	parent.AppendChild(el)
+	parent.kids = append(parent.kids, el)
 	return nil
 }
 
@@ -1193,9 +1218,7 @@ func (b *jsonXMLBuilder) str(s string) error {
 	if b.opts.escape && needsEscapeMark(s) {
 		setAttr(el, "escaped", "true")
 	}
-	if s != "" {
-		el.AppendChild(xdmbuild.NewText(s))
-	}
+	el.text = s
 	return b.attach(el)
 }
 
@@ -1210,7 +1233,7 @@ func needsEscapeMark(s string) bool { return strings.Contains(s, "\\") }
 
 func (b *jsonXMLBuilder) number(lexeme string) error {
 	el := jsonElement("number")
-	el.AppendChild(xdmbuild.NewText(lexeme))
+	el.text = lexeme
 	return b.attach(el)
 }
 
@@ -1220,7 +1243,7 @@ func (b *jsonXMLBuilder) boolean(v bool) error {
 	if v {
 		s = "true"
 	}
-	el.AppendChild(xdmbuild.NewText(s))
+	el.text = s
 	return b.attach(el)
 }
 
@@ -1238,14 +1261,15 @@ func jsonToXML(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error
 	// The root element declares the namespace it is in. Without the
 	// declaration the tree serialises with none, so a comparison against the
 	// expected XML sees a differently-named element.
-	b.root.AddNamespace("", nsJSON)
-	doc := xdmbuild.NewDocument(ctx.StaticBaseURI)
-	doc.AppendChild(b.root)
-	setBaseURI(b.root, ctx.StaticBaseURI)
+	doc := xdmbuild.NewDocument(ctx.StaticBaseURI())
+	root := b.root.emit(doc)
+	root.AddNamespace("", nsJSON)
+	setBaseURI(root, ctx.StaticBaseURI())
 	tree := &xdm.Tree{Root: doc}
 	tree.Finalize()
 	if opts.validate {
-		if err := validateJSONTree(ctx, doc); err != nil {
+		var err error
+		if doc, err = validateJSONTree(ctx, doc); err != nil {
 			return nil, err
 		}
 	}
@@ -1265,21 +1289,21 @@ func jsonToXML(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error
 // F&O 3.1 §17.5.3: "An error is raised [err:FOJS0004] if the value of the
 // validate option is true and the processor does not support schema
 // validation or typed data."
-func validateJSONTree(ctx *Context, doc *xdm.Node) error {
-	if ctx == nil || ctx.Validator == nil {
-		return xdm.Errorf("FOJS0004",
+func validateJSONTree(ctx *Context, doc *xdm.Node) (*xdm.Node, error) {
+	if ctx == nil || ctx.ev().Validator == nil {
+		return nil, xdm.Errorf("FOJS0004",
 			"validate=true was requested but this processor cannot validate: "+
 				"no schema for the XML representation of JSON is available")
 	}
-	return ctx.Validator.ValidateJSONTree(doc)
+	return ctx.ev().Validator.ValidateJSONTree(doc)
 }
 
 // setBaseURI propagates the base URI down the constructed tree, since
 // fn:base-uri walks to the nearest ancestor that has one and the document node
 // is not consulted for an element built this way.
 func setBaseURI(n *xdm.Node, base string) {
-	xdmbuild.SetBaseURI(n, base)
-	for _, c := range n.Children {
+	n.SetBaseURI(base)
+	for c := range n.Children() {
 		setBaseURI(c, base)
 	}
 }
@@ -1289,12 +1313,12 @@ func setBaseURI(n *xdm.Node, base string) {
 // xmlToJSON serialises the XML representation back to JSON text.
 func xmlToJSON(n *xdm.Node, indent bool) (string, error) {
 	el := n
-	if el.Kind == xdm.KindDocument {
+	if el.Kind() == xdm.KindDocument {
 		// A document node stands for its single element child; anything else
 		// under it is not the representation of a JSON value.
 		el = nil
-		for _, c := range n.Children {
-			switch c.Kind {
+		for c := range n.Children() {
+			switch c.Kind() {
 			case xdm.KindElement:
 				if el != nil {
 					return "", xdm.Errorf("FOJS0006",
@@ -1303,7 +1327,7 @@ func xmlToJSON(n *xdm.Node, indent bool) (string, error) {
 				el = c
 			case xdm.KindComment, xdm.KindPI:
 			case xdm.KindText:
-				if strings.TrimSpace(c.Value) != "" {
+				if strings.TrimSpace(c.Value()) != "" {
 					return "", xdm.Errorf("FOJS0006",
 						"unexpected text under a document node holding JSON XML")
 				}
@@ -1314,9 +1338,9 @@ func xmlToJSON(n *xdm.Node, indent bool) (string, error) {
 				"a document node holding JSON XML must have one element child")
 		}
 	}
-	if el.Kind != xdm.KindElement {
+	if el.Kind() != xdm.KindElement {
 		return "", xdm.ErrType(
-			"fn:xml-to-json expects an element or document node, got %s", el.Kind)
+			"fn:xml-to-json expects an element or document node, got %s", el.Kind())
 	}
 	var b strings.Builder
 	if err := writeJSONFrom(&b, el, indent, 0, true); err != nil {
@@ -1339,15 +1363,15 @@ type jsonElementChild struct {
 // anything and is FOJS0006.
 func jsonChildren(el *xdm.Node) ([]*xdm.Node, error) {
 	var out []*xdm.Node
-	for _, c := range el.Children {
-		switch c.Kind {
+	for c := range el.Children() {
+		switch c.Kind() {
 		case xdm.KindElement:
 			out = append(out, c)
 		case xdm.KindComment, xdm.KindPI:
 		case xdm.KindText:
-			if strings.TrimSpace(c.Value) != "" {
+			if strings.TrimSpace(c.Value()) != "" {
 				return nil, xdm.Errorf("FOJS0006",
-					"element %s may not contain text", el.Name.Local)
+					"element %s may not contain text", el.Name().Local)
 			}
 		}
 	}
@@ -1360,24 +1384,24 @@ func jsonChildren(el *xdm.Node) ([]*xdm.Node, error) {
 // case xml-to-json-068 covers — but one in the JSON namespace itself is not,
 // and neither is a no-namespace attribute the element does not define.
 func checkJSONAttrs(el *xdm.Node, allowed ...string) error {
-	for _, a := range el.Attrs {
-		if a.Name.URI != "" {
-			if a.Name.URI == nsJSON {
+	for a := range el.Attrs() {
+		if a.Name().URI != "" {
+			if a.Name().URI == nsJSON {
 				return xdm.Errorf("FOJS0006",
-					"attribute %s is not allowed in the JSON namespace", a.Name.Local)
+					"attribute %s is not allowed in the JSON namespace", a.Name().Local)
 			}
 			continue
 		}
 		ok := false
 		for _, name := range allowed {
-			if a.Name.Local == name {
+			if a.Name().Local == name {
 				ok = true
 				break
 			}
 		}
 		if !ok {
 			return xdm.Errorf("FOJS0006",
-				"attribute %q is not allowed on element %s", a.Name.Local, el.Name.Local)
+				"attribute %q is not allowed on element %s", a.Name().Local, el.Name().Local)
 		}
 	}
 	return nil
@@ -1385,9 +1409,9 @@ func checkJSONAttrs(el *xdm.Node, allowed ...string) error {
 
 // attrValue returns a no-namespace attribute's value.
 func attrValue(el *xdm.Node, local string) (string, bool) {
-	for _, a := range el.Attrs {
-		if a.Name.URI == "" && a.Name.Local == local {
-			return a.Value, true
+	for a := range el.Attrs() {
+		if a.Name().URI == "" && a.Name().Local == local {
+			return a.Value(), true
 		}
 	}
 	return "", false
@@ -1417,14 +1441,14 @@ func jsonBooleanAttr(el *xdm.Node, local string) (bool, error) {
 // invisible and is FOJS0006.
 func elementText(el *xdm.Node) (string, error) {
 	var b strings.Builder
-	for _, c := range el.Children {
-		switch c.Kind {
+	for c := range el.Children() {
+		switch c.Kind() {
 		case xdm.KindText:
-			b.WriteString(c.Value)
+			b.WriteString(c.Value())
 		case xdm.KindComment, xdm.KindPI:
 		case xdm.KindElement:
 			return "", xdm.Errorf("FOJS0006",
-				"element %s may not have element children", el.Name.Local)
+				"element %s may not have element children", el.Name().Local)
 		}
 	}
 	return b.String(), nil
@@ -1436,9 +1460,9 @@ func elementText(el *xdm.Node) (string, error) {
 // left over from being selected out of a larger tree: xml-to-json-070 selects
 // a keyed array and expects the key to be dropped rather than to be an error.
 func writeJSONFrom(b *strings.Builder, el *xdm.Node, indent bool, depth int, isRoot bool) error {
-	if el.Name.URI != nsJSON {
+	if el.Name().URI != nsJSON {
 		return xdm.Errorf("FOJS0006",
-			"element %s is not in the XPath functions namespace", el.Name.Local)
+			"element %s is not in the XPath functions namespace", el.Name().Local)
 	}
 	// escaped and escaped-key are allowed on any element of the
 	// representation, including ones where they have no effect: xml-to-json-064
@@ -1447,7 +1471,7 @@ func writeJSONFrom(b *strings.Builder, el *xdm.Node, indent bool, depth int, isR
 	if err := checkJSONAttrs(el, allowed...); err != nil {
 		return err
 	}
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "null":
 		kids, err := jsonChildren(el)
 		if err != nil {
@@ -1575,7 +1599,7 @@ func writeJSONFrom(b *strings.Builder, el *xdm.Node, indent bool, depth int, isR
 		b.WriteByte('}')
 	default:
 		return xdm.Errorf("FOJS0006",
-			"element %s is not part of the JSON XML representation", el.Name.Local)
+			"element %s is not part of the JSON XML representation", el.Name().Local)
 	}
 	// A key on the outermost element is dropped rather than rejected; one on
 	// an element that is not a map's child anywhere else has already been

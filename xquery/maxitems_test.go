@@ -4,14 +4,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xquery"
-	_ "github.com/knroy/go-xml/xslt" // registers fn:transform
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xquery"
+	_ "github.com/knroy/go-xml/v2/xslt" // registers fn:transform
 )
 
 // A transform a query starts with fn:transform is held to the query's
-// Context.MaxItems: the nested runtime mints a Context of its own, and the
+// Env.MaxItems: the nested runtime mints a Context of its own, and the
 // bound must travel with the item counter it adopts.
 func TestNestedTransformKeepsTheQueryItemBound(t *testing.T) {
 	const sheet = `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
@@ -19,7 +19,7 @@ func TestNestedTransformKeepsTheQueryItemBound(t *testing.T) {
 </xsl:stylesheet>`
 	run := func(limit int) (xdm.Sequence, error) {
 		ctx := xpath.NewContext(nil, xpath.Builtins())
-		ctx.MaxItems = limit
+		ctx = ctx.WithEnv(func(e *xpath.Env) { e.MaxItems = limit })
 		ctx = ctx.WithVar(xdm.QName{Local: "s"}, xdm.One(xdm.NewString(sheet)))
 		return xquery.Eval(`declare variable $s external;
 transform(map{'stylesheet-text': $s, 'initial-template': QName('', 'go'),

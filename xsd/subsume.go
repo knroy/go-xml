@@ -27,7 +27,7 @@ package xsd
 import (
 	"sync/atomic"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // budgetStats counts the times an exact procedure in this package DECLINED to

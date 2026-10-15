@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A key sequence is compared MEMBER BY MEMBER (§3.11.4 clause 4), so the table
@@ -51,18 +51,11 @@ const keySepSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
 // have come from the parser, so this is a real input shape, and it is the one
 // an XML 1.1 instance would produce once that path admits the character.
 func keySepTree(pairs ...[2]string) *xdm.Node {
-	root := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "root"}}
+	root := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "root"}, "")
 	for _, p := range pairs {
-		i := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "i"}, Parent: root}
-		for _, at := range [][2]string{{"a", p[0]}, {"b", p[1]}} {
-			i.Attrs = append(i.Attrs, &xdm.Node{
-				Kind:   xdm.KindAttribute,
-				Name:   xdm.QName{Local: at[0]},
-				Value:  at[1],
-				Parent: i,
-			})
-		}
-		root.Children = append(root.Children, i)
+		i := root.AppendElement(xdm.QName{Local: "i"})
+		i.AppendAttr(xdm.QName{Local: "a"}, p[0])
+		i.AppendAttr(xdm.QName{Local: "b"}, p[1])
 	}
 	return root
 }

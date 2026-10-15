@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // envPackageResolver answers xsl:use-package from the packages an environment
@@ -386,7 +386,7 @@ func packageIdentity(path string) (string, string) {
 		return "", ""
 	}
 	for _, el := range doc.Root.ChildElements() {
-		if el.Name.Local != "package" {
+		if el.Name().Local != "package" {
 			continue
 		}
 		ver := el.AttrValue("package-version")

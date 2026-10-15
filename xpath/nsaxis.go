@@ -1,6 +1,6 @@
 package xpath
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // NamespaceNodesOf returns the nodes on n's namespace axis, which is every
 // in-scope binding rather than only those declared on n itself.

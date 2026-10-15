@@ -1,6 +1,6 @@
 package relaxng
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // The derivative algorithm.
 //
@@ -33,9 +33,12 @@ import "github.com/knroy/go-xml/xdm"
 // history.) Patterns that came from another validation through the schema's
 // memo points (memo.go) are not in this table, which only costs a miss.
 type patBuilder struct {
-	intern  map[internKey]pattern
-	memo    map[memoKey]pattern
-	ctxUsed bool // the derivative consulted the namespace context; see att
+	intern map[internKey]pattern
+	memo   map[memoKey]pattern
+	// closeM and endM remember the two derivatives that depend on the
+	// pattern alone, so their lookups hash one pointer, not a memoKey.
+	closeM, endM map[pattern]pattern
+	ctxUsed      bool // the derivative consulted the namespace context; see att
 }
 
 type internKey struct {
@@ -61,8 +64,6 @@ type memoKey struct {
 const (
 	opOpen uint8 = iota
 	opAtt
-	opClose
-	opEnd
 )
 
 // maxMemo bounds each table, so that a document of unique attribute values
@@ -71,7 +72,8 @@ const (
 const maxMemo = 1 << 16
 
 func newPatBuilder() *patBuilder {
-	return &patBuilder{intern: map[internKey]pattern{}, memo: map[memoKey]pattern{}}
+	return &patBuilder{intern: map[internKey]pattern{}, memo: map[memoKey]pattern{},
+		closeM: map[pattern]pattern{}, endM: map[pattern]pattern{}}
 }
 
 // mk returns the interned node; pb is not nil.
@@ -83,15 +85,15 @@ func (pb *patBuilder) mk(k uint8, l, r pattern) pattern {
 	var p pattern
 	switch k {
 	case kChoice:
-		p = &choicePat{l, r}
+		p = newChoicePat(l, r)
 	case kGroup:
-		p = &groupPat{l, r}
+		p = newGroupPat(l, r)
 	case kInterleave:
-		p = &interleavePat{l, r}
+		p = newInterleavePat(l, r)
 	case kAfter:
-		p = &afterPat{l, r}
+		p = newAfterPat(l, r)
 	default:
-		p = &oneOrMorePat{l}
+		p = newOneOrMorePat(l)
 	}
 	if len(pb.intern) < maxMemo {
 		pb.intern[key] = p
@@ -149,12 +151,13 @@ func (pb *patBuilder) closeTag(p pattern) pattern {
 	if pb == nil {
 		return pb.startTagCloseDeriv(p)
 	}
-	k := memoKey{op: opClose, p: p}
-	if v, ok := pb.memo[k]; ok {
+	if v, ok := pb.closeM[p]; ok {
 		return v
 	}
 	d := pb.startTagCloseDeriv(p)
-	pb.remember(k, d)
+	if len(pb.closeM) < maxMemo {
+		pb.closeM[p] = d
+	}
 	return d
 }
 
@@ -162,12 +165,13 @@ func (pb *patBuilder) end(p pattern) pattern {
 	if pb == nil {
 		return pb.endTagDeriv(p)
 	}
-	k := memoKey{op: opEnd, p: p}
-	if v, ok := pb.memo[k]; ok {
+	if v, ok := pb.endM[p]; ok {
 		return v
 	}
 	d := pb.endTagDeriv(p)
-	pb.remember(k, d)
+	if len(pb.endM) < maxMemo {
+		pb.endM[p] = d
+	}
 	return d
 }
 
@@ -209,7 +213,7 @@ func (pb *patBuilder) choice(a, b pattern) pattern {
 	if pb != nil {
 		return pb.mk(kChoice, a, b)
 	}
-	return &choicePat{a, b}
+	return newChoicePat(a, b)
 }
 
 // inChoice reports whether b is already one of a's alternatives. A chain of
@@ -288,7 +292,7 @@ func (pb *patBuilder) group(a, b pattern) pattern {
 	if pb != nil {
 		return pb.mk(kGroup, a, b)
 	}
-	return &groupPat{a, b}
+	return newGroupPat(a, b)
 }
 
 func (pb *patBuilder) interleave(a, b pattern) pattern {
@@ -307,7 +311,7 @@ func (pb *patBuilder) interleave(a, b pattern) pattern {
 	if pb != nil {
 		return pb.mk(kInterleave, a, b)
 	}
-	return &interleavePat{a, b}
+	return newInterleavePat(a, b)
 }
 
 func (pb *patBuilder) after(a, b pattern) pattern {
@@ -320,7 +324,7 @@ func (pb *patBuilder) after(a, b pattern) pattern {
 	if pb != nil {
 		return pb.mk(kAfter, a, b)
 	}
-	return &afterPat{a, b}
+	return newAfterPat(a, b)
 }
 
 func (pb *patBuilder) oneOrMore(p pattern) pattern {
@@ -330,7 +334,7 @@ func (pb *patBuilder) oneOrMore(p pattern) pattern {
 	if pb != nil {
 		return pb.mk(kOneOrMore, p, nil)
 	}
-	return &oneOrMorePat{p}
+	return newOneOrMorePat(p)
 }
 
 // startTagOpenDeriv is the derivative with respect to an element's start tag.
@@ -341,15 +345,11 @@ func (pb *patBuilder) oneOrMore(p pattern) pattern {
 // one recursion handle arbitrary nesting.
 func (pb *patBuilder) startTagOpenDeriv(p pattern, name xdm.QName) pattern {
 	if r, ok := p.(*refPat); ok {
-		if d, ok := r.open.Load(name); ok {
-			return d.(pattern)
+		if d, ok := r.open.load(name); ok {
+			return d
 		}
 		d := pb.startTagOpenDeriv(expand(r), name)
-		// ponytail: per-definition cap, not a global LRU; enough for any
-		// real vocabulary, and past it the derivative is simply recomputed.
-		if r.openN.Add(1) <= maxOpenMemo {
-			r.open.Store(name, d)
-		}
+		r.open.store(name, d)
 		return d
 	}
 	switch t := expand(p).(type) {
@@ -386,7 +386,9 @@ func (pb *patBuilder) startTagOpenDeriv(p pattern, name xdm.QName) pattern {
 	return notAllowedPat{}
 }
 
-// maxOpenMemo bounds refPat.open per definition.
+// maxOpenMemo bounds each nameMemo.
+// ponytail: per-definition cap, not a global LRU; enough for any real
+// vocabulary, and past it the derivative is simply recomputed.
 const maxOpenMemo = 1024
 
 // expand resolves a refPat to the pattern it stands for.
@@ -442,19 +444,17 @@ func (pb *patBuilder) attDeriv(p pattern, a attr, ctx nsContext) pattern {
 			return notAllowedPat{}
 		}
 		if s := r.static; s != nil {
-			if b, ok := s.att.Load(a.name); ok && b.(*patBox).p != nil {
-				return b.(*patBox).p
+			if d, ok := s.att.load(a.name); ok && d != nil {
+				return d
 			} else if ok {
 				return pb.attDeriv(r.cached, a, ctx)
 			}
 			d := pb.attDeriv(r.cached, a, ctx)
-			if s.attN.Add(1) <= maxOpenMemo {
-				b := &patBox{}
-				if anyValueFor(r.cached, a.name, nil) {
-					b.p = d
-				}
-				s.att.Store(a.name, b)
+			keep := d
+			if !anyValueFor(r.cached, a.name, nil) {
+				keep = nil
 			}
+			s.att.store(a.name, keep)
 			return d
 		}
 	}
@@ -745,8 +745,11 @@ func splitTokens(s string) []string {
 	return out
 }
 
-// patternSize measures a pattern's node count, stopping once it exceeds the
-// limit so that measuring an already-huge pattern is not itself expensive.
+// patternSize is a pattern's node count. The compound constructors store it
+// (pattern.go), so reading it is O(1); a static wrapper reports its subtree's.
+// An elementPat's and attributePat's content is not counted: it is the
+// schema's own structure, which is fixed, and only the derivative's
+// accumulation is what grows with the document.
 //
 // It exists to bound the derivative's growth. The algorithm's cost is the size
 // of the pattern it is carrying, and the constructors' simplifications keep
@@ -765,43 +768,24 @@ func splitTokens(s string) []string {
 // the derivative is taken, and a pattern past the limit ends validation with
 // an error that says so rather than with a verdict that cost a gigabyte to
 // reach.
-func patternSize(p pattern, limit int) int {
-	if limit <= 0 {
-		return 0
-	}
-	n := 1
+func patternSize(p pattern) int {
 	switch t := p.(type) {
 	case *choicePat:
-		n += patternSize(t.Left, limit-n)
-		if n <= limit {
-			n += patternSize(t.Right, limit-n)
-		}
+		return t.size
 	case *groupPat:
-		n += patternSize(t.Left, limit-n)
-		if n <= limit {
-			n += patternSize(t.Right, limit-n)
-		}
+		return t.size
 	case *interleavePat:
-		n += patternSize(t.Left, limit-n)
-		if n <= limit {
-			n += patternSize(t.Right, limit-n)
-		}
+		return t.size
 	case *afterPat:
-		n += patternSize(t.Left, limit-n)
-		if n <= limit {
-			n += patternSize(t.Right, limit-n)
-		}
+		return t.size
 	case *oneOrMorePat:
-		n += patternSize(t.Pattern, limit-n)
+		return t.size
 	case *listPat:
-		n += patternSize(t.Pattern, limit-n)
+		return t.size
 	case *refPat:
 		if t.static != nil {
 			return int(t.static.size)
 		}
 	}
-	// An elementPat's and attributePat's content is not descended into: it is
-	// the schema's own structure, which is fixed, and only the derivative's
-	// accumulation is what grows with the document.
-	return n
+	return 1
 }

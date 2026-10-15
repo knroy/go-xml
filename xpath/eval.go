@@ -3,20 +3,26 @@ package xpath
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Eval implements Expr for literals.
 func (e *Literal) Eval(*Context) (xdm.Sequence, error) {
+	if len(e.seq) == 1 && e.seq[0] == xdm.Item(e.Val) {
+		return e.seq, nil
+	}
 	return xdm.One(e.Val), nil
 }
 
 // Eval implements Expr for variable references.
 func (e *VarRef) Eval(ctx *Context) (xdm.Sequence, error) {
-	v, ok := ctx.LookupVar(e.Name)
+	v, ok, err := ctx.lookupVar(e.Name)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
-		if ctx.MissingVar != nil {
-			if err := ctx.MissingVar(ctx, e.Name); err != nil {
+		if ctx.ev().MissingVar != nil {
+			if err := ctx.ev().MissingVar(ctx, e.Name); err != nil {
 				return nil, err
 			}
 		}
@@ -109,7 +115,7 @@ func (e *PathExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			return nil, err
 		}
 		root := node.Root()
-		if root.Kind != xdm.KindDocument {
+		if root.Kind() != xdm.KindDocument {
 			// "/" requires the context node to be in a tree whose root is a
 			// document node; a bare element tree has no document root.
 			return nil, fmt.Errorf("XPDY0050: root of the context node is not a document node")
@@ -326,12 +332,27 @@ func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, er
 		h = newComparisonHoist(ctx, pred)
 	}
 
+	// One focus context serves every item when the predicate cannot keep
+	// it: each item's evaluation is over before the next begins, so the
+	// context is moved on in place instead of copied per item.
+	var reuse *Context
+	share := size > 1 && !mayCaptureFocus(pred)
 	for i, it := range seq {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		pos := i + 1
-		sub := ctx.WithFocus(it, pos, size)
+		var sub *Context
+		switch {
+		case !share:
+			sub = ctx.WithFocus(it, pos, size)
+		case reuse == nil:
+			reuse = ctx.WithFocus(it, pos, size)
+			sub = reuse
+		default:
+			reuse.Item, reuse.Position = it, int32(pos)
+			sub = reuse
+		}
 		if h != nil {
 			keep, ok, err := h.holds(sub)
 			if err != nil {
@@ -361,6 +382,81 @@ func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, er
 	return out, nil
 }
 
+// mayCaptureFocus reports whether evaluating e might keep its context past
+// the evaluation, which would see a later item's focus if applyPredicate
+// moved that context on. A function item is the way one could: an inline
+// function, a named function reference, a partial application or
+// fn:function-lookup builds one, and a dynamic call runs one. Anything not
+// known to be free of them is assumed to capture.
+func mayCaptureFocus(e Expr) bool {
+	anyOf := func(es []Expr) bool {
+		for _, x := range es {
+			if mayCaptureFocus(x) {
+				return true
+			}
+		}
+		return false
+	}
+	bindings := func(bs []Binding) bool {
+		for _, b := range bs {
+			if mayCaptureFocus(b.Seq) {
+				return true
+			}
+		}
+		return false
+	}
+	switch v := e.(type) {
+	case nil, *Literal, *VarRef, *ContextItem, *descendantAttrs:
+		return false
+	case *FuncCall:
+		if v.Name.URI == xdm.NSFN {
+			switch v.Name.Local {
+			case "function-lookup", "load-xquery-module":
+				return true
+			}
+		}
+		return anyOf(v.Args)
+	case *Step:
+		return anyOf(v.Predicates)
+	case *FilterExpr:
+		return mayCaptureFocus(v.Base) || anyOf(v.Predicates)
+	case *PathExpr:
+		return anyOf(v.Steps)
+	case *BinaryOp:
+		return mayCaptureFocus(v.Left) || mayCaptureFocus(v.Right)
+	case *UnaryOp:
+		return mayCaptureFocus(v.Operand)
+	case *CastExpr:
+		return mayCaptureFocus(v.Operand)
+	case *InstanceOfExpr:
+		return mayCaptureFocus(v.Operand)
+	case *TreatExpr:
+		return mayCaptureFocus(v.Operand)
+	case *SequenceExpr:
+		return anyOf(v.Items)
+	case *IfExpr:
+		return mayCaptureFocus(v.Cond) || mayCaptureFocus(v.Then) ||
+			mayCaptureFocus(v.Else)
+	case *StringConcat:
+		return mayCaptureFocus(v.Left) || mayCaptureFocus(v.Right)
+	case *SimpleMap:
+		return mayCaptureFocus(v.Left) || mayCaptureFocus(v.Right)
+	case *ForExpr:
+		return bindings(v.Bindings) || mayCaptureFocus(v.Return)
+	case *LetExpr:
+		return bindings(v.Bindings) || mayCaptureFocus(v.Return)
+	case *QuantifiedExpr:
+		return bindings(v.Bindings) || mayCaptureFocus(v.Test)
+	case *LookupExpr:
+		return mayCaptureFocus(v.Base) || mayCaptureFocus(v.Expr)
+	case *MapConstructor:
+		return anyOf(v.Keys) || anyOf(v.Values)
+	case *ArrayConstructor:
+		return anyOf(v.Members)
+	}
+	return true
+}
+
 // comparisonHoist evaluates a predicate "A op B", a general or value
 // comparison, whose one operand reads no focus and calls only pure built-ins
 // (hoistable and callsBuiltins, as the XQuery join uses them): that operand is
@@ -385,7 +481,7 @@ func newComparisonHoist(ctx *Context, pred Expr) *comparisonHoist {
 	switch b.Op {
 	case "eq", "ne", "lt", "le", "gt", "ge":
 	case "=", "!=", "<", "<=", ">", ">=":
-		if r, isRange := b.Right.(*BinaryOp); ctx.Compat || (isRange && r.Op == "to") {
+		if r, isRange := b.Right.(*BinaryOp); ctx.Compat() || (isRange && r.Op == "to") {
 			return nil
 		}
 	default:
@@ -469,6 +565,12 @@ func predicateHolds(v xdm.Sequence, pos int) (bool, error) {
 			// both select position 1, and NaN selects nothing.
 			if a.IsNaN() {
 				return false, nil
+			}
+			// An integer compares exactly, and without the allocations
+			// big.Rat's Float64 makes.
+			if r := a.Rat(); a.Type == xdm.TypeInteger && r != nil && r.IsInt() &&
+				r.Num().IsInt64() {
+				return r.Num().Int64() == int64(pos), nil
 			}
 			return a.Float64() == float64(pos), nil
 		}
@@ -666,7 +768,7 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 		// A function in no namespace is excluded: that is a call to a builtin
 		// this processor does not have, which is a genuine XPST0017 whatever
 		// mode it is written in.
-		if ctx.Compat && e.Name.URI != "" && e.Name.URI != xdm.NSFN {
+		if ctx.Compat() && e.Name.URI != "" && e.Name.URI != xdm.NSFN {
 			return nil, xdm.Errorf("XTDE1425",
 				"no implementation is available for the extension function "+
 					"%s with %d argument(s)", e.Name.Clark(), len(e.Args))
@@ -699,7 +801,7 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	// B.1 rule 1: under XPath 1.0 compatibility an argument supplied where a
 	// string, a number or a single node is expected is reduced to its first
 	// item instead of raising XPTY0004. See compatCoerceArgs.
-	if ctx.Compat {
+	if ctx.Compat() {
 		args = compatCoerceArgs(e.Name, args)
 	}
 
@@ -722,23 +824,18 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 		}
 	}
 
-	// A leaf builtin cannot re-enter user code or retain ctx, so the depth
-	// is counted on ctx in place: the same limit and error as Descend,
-	// without copying the context on every call.
-	if fn.leaf {
-		if err := ctx.checkDepth(); err != nil {
-			return nil, err
-		}
-		ctx.Depth++
-		res, err := fn.Call(ctx, args)
-		ctx.Depth--
-		return res, err
-	}
-	sub, err := ctx.Descend()
-	if err != nil {
+	// The depth is counted on ctx in place: the same limit and error as
+	// Descend, without copying the context on every call. A callee that
+	// keeps a context derives its own copy, which carries the raised depth
+	// into whatever it calls; one that keeps ctx itself sees the depth of
+	// this call site once the call returns.
+	if err := ctx.checkDepth(); err != nil {
 		return nil, err
 	}
-	return fn.Call(sub, args)
+	ctx.Depth++
+	res, err := fn.Call(ctx, args)
+	ctx.Depth--
+	return res, err
 }
 
 // Eval implements Expr for unary + and -.
@@ -770,7 +867,7 @@ func (e *UnaryOp) Eval(ctx *Context) (xdm.Sequence, error) {
 	// "-0". Only the unary form is rewritten here; the binary operators reach
 	// the same rule through compatNumber in operators.go.
 	var n *xdm.Atomic
-	if ctx.Compat {
+	if ctx.Compat() {
 		n = compatNumber(a)
 	} else {
 		n, err = toNumeric(a)
@@ -896,12 +993,12 @@ func fuseDescendantAttrs(steps []Expr, i int, input xdm.Sequence) *descendantAtt
 type descendantAttrs struct{ test NodeTest }
 
 func (d *descendantAttrs) appendFrom(out xdm.Sequence, n *xdm.Node) xdm.Sequence {
-	for _, a := range n.Attrs {
+	for a := range n.Attrs() {
 		if d.test.Matches(a, xdm.KindAttribute) {
 			out = append(out, a)
 		}
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		out = d.appendFrom(out, c)
 	}
 	return out

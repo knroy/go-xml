@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A parameter the spec declares without "?" must reject the empty sequence
@@ -101,8 +101,8 @@ func TestEmptySequenceAcceptedByOptionalParameters(t *testing.T) {
 // look like a cardinality error without being one.
 func evalCardinality(src string) (string, error) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
-	ctx.LibraryVersion = XPath31
+	ctx = ctx.WithVersion(XPath31)
+	ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	seq, err := Eval(src, ctx, cardinalityNS{})
 	if err != nil {
 		return "", err

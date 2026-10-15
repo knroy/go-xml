@@ -9,7 +9,7 @@ import (
 func evalBig(t *testing.T, expr string) (string, error) {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	seq, err := Eval(expr, ctx, nil)
 	if err != nil {
 		return "", err

@@ -4,6 +4,84 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## v2.0.0 — 2026-10-14
+
+v2 is a new major version with a new module path, `github.com/knroy/go-xml/v2`.
+Nodes are rebuilt as 40-byte records and the XPath context is split, which
+changes the exported Go API; the command-line tool's flags and output do not
+change. [docs/migrating-to-v2.md](docs/migrating-to-v2.md) has before/after
+code for every breaking change, and `internal/tools/nodeaccess` rewrites most
+of it. v1 continues at `github.com/knroy/go-xml`, released from the `v1`
+branch.
+
+**Behaviour changes to check before upgrading.** Results, error codes and
+serialized output are those of v1, except:
+
+- `generate-id()` strings are record positions, so stored ids change.
+- Nodes of different trees order by when each tree was numbered (a
+  constructed fragment: when first compared).
+- An XSLT global variable is evaluated on first use, so the failure of one
+  nothing reads is not reported (XSLT 3.0 §2.14). One with `xsl:message`,
+  `xsl:assert`, `xsl:result-document` or `fn:trace` in its own body is still
+  evaluated at the start.
+- During a transform, a Go-built function item or a context-taking resolver
+  receives a copy of the context, not the caller's own.
+
+### Changed — breaking
+
+| Change | What to do | Commit |
+|---|---|---|
+| Module path `github.com/knroy/go-xml/v2` | Import `github.com/knroy/go-xml/v2/<package>`; `nodeaccess -v1` moves a module's imports. `w3cschemas` still requires v1. | — |
+| `xdm.Node` fields are unexported | Call the method of the same name (`n.Name()`); range `Children()`, `Attrs()`, `NamespaceDecls()`; index with `ChildAt`, `AttrAt`. | [`a8e5346`][a8e5346] |
+| Trees are built top-down by appending; a parsed tree is frozen | `AppendElement`, `AppendText`, `AppendAttr`, `AppendCopy` replace `SetParent`, `SetChildren`, `AppendChild`, `AddAttr`. | [`3f33dce`][3f33dce], [`f64b0d1`][f64b0d1] |
+| `xdm.ProcessXInclude` returns a new tree | `tree, err = xdm.ProcessXInclude(tree, opts)`; the input is not edited. | [`fb2426e`][fb2426e] |
+| `xdmbuild` relinking setters removed (`SetParent`, `SetChildren`, `ReplaceChild`, …) | Use the `xdm.Node` method of the same name, or build a changed copy; `Builder.ReplaceOpen` swaps in a typed copy. | [`6b34bc3`][6b34bc3], [`13c4f5f`][13c4f5f] |
+| `xpath.Context` per-evaluation fields move to `xpath.Env` | `ctx.Docs = r` → `ctx.WithEnv(func(e *xpath.Env) { e.Docs = r })`; read `ctx.Env().Docs`. | [`9af0e77`][9af0e77] |
+| `xpath.Context` static fields become methods; `WithNow` removed | `ctx.Version` → `ctx.Version()`, set with `WithVersion`; `WithNow(t)` → `WithEnv` setting `Now` and `HasNow`. | [`9af0e77`][9af0e77] |
+| `Context.StaticNamespaces` is set only for an expression that reads it | A host function resolves prefixes against a resolver it captured itself. | [`d5a980b`][d5a980b] |
+| `Context.Position`, `Size` and `Depth` are `int32` | Convert where an `int` is mixed in; `WithFocus` keeps its `int` parameters. | [`7f6f168`][7f6f168] |
+| `LazyVar.Share` removed; `Context.WithLazyVars` takes an `*xpath.EvalLock` | Pass the lock (nil for a fresh one) and call `lock.Share()` where `LazyVar.Share()` was. | [`fbd4b74`][fbd4b74] |
+| `xsd.HTTPResolver` moves to `xsd/xsdnet`; build tag `goxml_nohttp` removed | Use `xsdnet.HTTPResolver`; importing `xsd` no longer links `net/http`. | [`5509745`][5509745] |
+| `xsd.ValidateOptions.Annotate` removed | `Validate` only checks; take a typed tree from `ValidateCopy` or another `...Copy` function. | [`21105fe`][21105fe] |
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| `xdm.NewFragment`, `Tree.NewRoot`, `Copy`, `CopyPruned`, `ShallowCopy`, `NamespaceNodes`, … | The construction and reading calls the record layout is built on. | [`3f33dce`][3f33dce], [`86f991c`][86f991c], [`d337fd9`][d337fd9] |
+| `xdm.Node.TreeHasTyping`, `SetAssessedTyping`, `DescendantsInheritBase` | Whether a tree was ever typed; write a node's typing in one call; whether a subtree sets its own base URI. | [`40dbca2`][40dbca2], [`8faf349`][8faf349], [`ae36039`][ae36039] |
+| `xdmbuild.Builder.AppendCopyOf`, `NSDecl`, `NoteDeclaredList` | Copy a node straight into the tree being built; note a list of namespace bindings once. | [`484cb4e`][484cb4e], [`2c5ea0b`][2c5ea0b] |
+| `xpath.LazyVar`, `ReadyVar`, `Context.WithLazyVars`, `WithStaticHost` | Variables evaluated on first reference, forced once from any goroutine once shared; a static host for expressions compiled without one. | [`7c5121c`][7c5121c], [`d5a980b`][d5a980b] |
+| `xpath.EvalLock`, `xpath.EvalLocker` | A re-entrant lock a host runtime shares once other goroutines can reach it; free until shared. | [`fbd4b74`][fbd4b74], [`4954bf0`][4954bf0] |
+| `go-xml xquery -validate strict\|lax`, `xquery.Query.Schema` | Validate the input against the schema the query imports before it runs. Also in v1.8.0. | [`130360b`][130360b] |
+| `tests/record.sh`, `tests/recdiff` | Record every suite case's output and diff two checkouts, with allowed differences by rule. | [`5aa004e`][5aa004e] |
+| `docs/benchmark.md` v1 against v2; `docs/profiling.md` | The benchmark with both versions against the reference engines; where v2's time goes and how to measure a change. | [`dcf9d53`][dcf9d53] |
+
+### Fixed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| A function item returned by a transform raced when called from several goroutines | `key()`, accumulators and memoised functions wrote shared maps. One re-entrant lock per transform, also around Go extension calls and `fn:transform`. | [`fbd4b74`][fbd4b74], [`4954bf0`][4954bf0] |
+| A called template or function could read a caller's local variable | It happened where a global of the same name existed. Locals now live in frames that each call raises. | [`a0250dd`][a0250dd] |
+| go-xml did not compile for 32-bit targets | The `xs:date` year bound overflowed `int`, and array positions past 2^31 could wrap. CI now vets `linux/386`, `linux/arm`, `windows/386`. Also in v1.8.0. | [`4f6ed50`][4f6ed50] |
+| `docs/xquery.md` said `import schema ... at` is not resolved from the command line | It is, through the query's directory, `-allow-dir` roots and `-catalog`. | — |
+
+### Changed — performance
+
+Ratios are warm time over the reference engine from
+[docs/benchmark.md](docs/benchmark.md), v1 at `f45068c` against v2.0.0.
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| A parsed node was a 280-byte struct of 16 pointers | 40-byte records in per-tree chunks. A 100 MB parse peaks at 371 MB (v1 2.2 GB); parse 0.54× → 0.46× `encoding/xml`. | [`a81dff2`][a81dff2], [`b08a3d4`][b08a3d4], [`2dd09c0`][2dd09c0] |
+| Every scope change copied a 512-byte `xpath.Context` | A 96-byte scope over a shared `Env` and a static part; `Compiled.Eval` swaps a pointer. | [`9af0e77`][9af0e77], [`7f6f168`][7f6f168] |
+| XSLT evaluated every global eagerly and gave each local and call a context copy | Lazy globals, one locals stack per transform, absent-component bits, int64 arithmetic. DocBook 0.46× → 0.20× Saxon. | [`7c5121c`][7c5121c], [`a0250dd`][a0250dd], [`1e976a3`][1e976a3], [`496f46a`][496f46a] |
+| XQuery copied constructed content twice, and `//name` walked the tree each time | Content is copied once into the builder; a document indexes its element names on first use. XMark 1.00× → 0.77× Saxon. | [`484cb4e`][484cb4e], [`babd534`][babd534] |
+| Typed validation copied the tree twice and wrote 80 bytes of typing per node | The source is validated read-only and copied once; typing shares its names. XSD 0.73× → 0.61× Xerces. | [`d3f4824`][d3f4824], [`8e29a38`][8e29a38], [`3208c54`][3208c54] |
+| RELAX NG re-walked derivatives per element and hashed names through `sync.Map` | Sizes stored once, typed memos, reused buffers: −23 to −30% CPU, long documents −84% allocations. | [`ae4f4d1`][ae4f4d1], [`ea89438`][ea89438], [`fb7a15b`][fb7a15b] |
+| C14N and the serializer paid a call or a defer per token and element | C14N writes to its own buffer; the serializer has no defers. C14N −10 to −12% CPU. | [`63155c7`][63155c7], [`da27a7c`][da27a7c] |
+| Package init built large tables and compiled regexps on every run | Built on first use: init allocations 1,893 → 785, cold XSD validation −3 to −4%. `default.pgo` regenerated for v2. | [`c249ce3`][c249ce3], [`47db4aa`][47db4aa], [`c5184cb`][c5184cb] |
+
 ## v1.8.0 — 2026-10-10
 
 ### Added
@@ -1371,7 +1449,6 @@ here so every entry in this file sits under a release.
 [373da4b]: https://github.com/knroy/go-xml/commit/373da4b
 [5c2ca9c]: https://github.com/knroy/go-xml/commit/5c2ca9c
 [130360b]: https://github.com/knroy/go-xml/commit/130360b
-[50ccc85]: https://github.com/knroy/go-xml/commit/50ccc85
 [8082a2c]: https://github.com/knroy/go-xml/commit/8082a2c
 [edea87c]: https://github.com/knroy/go-xml/commit/edea87c
 [e7ec81d]: https://github.com/knroy/go-xml/commit/e7ec81d
@@ -1446,3 +1523,46 @@ here so every entry in this file sits under a release.
 [900cece]: https://github.com/knroy/go-xml/commit/900cece
 [ba09cac]: https://github.com/knroy/go-xml/commit/ba09cac
 [1a3cf7f]: https://github.com/knroy/go-xml/commit/1a3cf7f
+[9af0e77]: https://github.com/knroy/go-xml/commit/9af0e77
+[13c4f5f]: https://github.com/knroy/go-xml/commit/13c4f5f
+[1e976a3]: https://github.com/knroy/go-xml/commit/1e976a3
+[21105fe]: https://github.com/knroy/go-xml/commit/21105fe
+[2c5ea0b]: https://github.com/knroy/go-xml/commit/2c5ea0b
+[2dd09c0]: https://github.com/knroy/go-xml/commit/2dd09c0
+[3208c54]: https://github.com/knroy/go-xml/commit/3208c54
+[3f33dce]: https://github.com/knroy/go-xml/commit/3f33dce
+[40dbca2]: https://github.com/knroy/go-xml/commit/40dbca2
+[47db4aa]: https://github.com/knroy/go-xml/commit/47db4aa
+[484cb4e]: https://github.com/knroy/go-xml/commit/484cb4e
+[4954bf0]: https://github.com/knroy/go-xml/commit/4954bf0
+[496f46a]: https://github.com/knroy/go-xml/commit/496f46a
+[4f6ed50]: https://github.com/knroy/go-xml/commit/4f6ed50
+[5509745]: https://github.com/knroy/go-xml/commit/5509745
+[5aa004e]: https://github.com/knroy/go-xml/commit/5aa004e
+[63155c7]: https://github.com/knroy/go-xml/commit/63155c7
+[6b34bc3]: https://github.com/knroy/go-xml/commit/6b34bc3
+[7c5121c]: https://github.com/knroy/go-xml/commit/7c5121c
+[7f6f168]: https://github.com/knroy/go-xml/commit/7f6f168
+[86f991c]: https://github.com/knroy/go-xml/commit/86f991c
+[8e29a38]: https://github.com/knroy/go-xml/commit/8e29a38
+[8faf349]: https://github.com/knroy/go-xml/commit/8faf349
+[a0250dd]: https://github.com/knroy/go-xml/commit/a0250dd
+[a81dff2]: https://github.com/knroy/go-xml/commit/a81dff2
+[a8e5346]: https://github.com/knroy/go-xml/commit/a8e5346
+[ae36039]: https://github.com/knroy/go-xml/commit/ae36039
+[ae4f4d1]: https://github.com/knroy/go-xml/commit/ae4f4d1
+[b08a3d4]: https://github.com/knroy/go-xml/commit/b08a3d4
+[babd534]: https://github.com/knroy/go-xml/commit/babd534
+[c249ce3]: https://github.com/knroy/go-xml/commit/c249ce3
+[c5184cb]: https://github.com/knroy/go-xml/commit/c5184cb
+[d337fd9]: https://github.com/knroy/go-xml/commit/d337fd9
+[d3f4824]: https://github.com/knroy/go-xml/commit/d3f4824
+[d5a980b]: https://github.com/knroy/go-xml/commit/d5a980b
+[da27a7c]: https://github.com/knroy/go-xml/commit/da27a7c
+[dcf9d53]: https://github.com/knroy/go-xml/commit/dcf9d53
+[ea89438]: https://github.com/knroy/go-xml/commit/ea89438
+[f64b0d1]: https://github.com/knroy/go-xml/commit/f64b0d1
+[fb2426e]: https://github.com/knroy/go-xml/commit/fb2426e
+[fb7a15b]: https://github.com/knroy/go-xml/commit/fb7a15b
+[fbd4b74]: https://github.com/knroy/go-xml/commit/fbd4b74
+[50ccc85]: https://github.com/knroy/go-xml/commit/50ccc85

@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/fileuri"
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xsd"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // fn:transform runs a transformation named by an options map. It is bound per

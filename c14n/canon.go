@@ -1,14 +1,13 @@
 package c14n
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"regexp"
 	"slices"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // binding is one prefix-to-URI namespace binding. An empty prefix is the
@@ -61,8 +60,7 @@ type ancestor struct {
 // depth and are truncated rather than reallocated as the walk returns, so a
 // steady-state element costs no allocation.
 type canon struct {
-	w        *bufio.Writer
-	sw       *stickyWriter
+	w        *outBuf
 	set      NodeSet
 	all      bool // set is a Subtree: every node the walk reaches is a member
 	excl     bool
@@ -108,11 +106,9 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 	if root == nil {
 		return nil, ErrUnsupportedNode
 	}
-	sw := &stickyWriter{w: w}
 	_, all := ns.(subtree)
 	c := &canon{
-		w:        bufio.NewWriterSize(sw, outBufSize),
-		sw:       sw,
+		w:        newOutBuf(w),
 		set:      ns,
 		all:      all,
 		excl:     opts.Algorithm.Exclusive(),
@@ -135,7 +131,7 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 	}
 	// Bindings declared above the root are in scope for it. Their order here
 	// is irrelevant: each prefix appears once, and output is sorted.
-	if p := root.Parent; p != nil {
+	if p := root.Parent(); p != nil {
 		for prefix, uri := range p.InScopeNamespaces() {
 			if err := checkNamespaceURI(prefix, uri); err != nil {
 				return nil, err
@@ -144,7 +140,7 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 		}
 	}
 	var err error
-	switch root.Kind {
+	switch root.Kind() {
 	case xdm.KindDocument:
 		err = c.document(root)
 	case xdm.KindElement:
@@ -157,37 +153,53 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 		return nil, ErrUnsupportedNode
 	}
 	if err == nil {
-		err = c.w.Flush()
+		c.w.flush()
 	}
-	if c.sw.err != nil {
-		return c, c.sw.err // unwrapped, as Write documents
+	if c.w.err != nil {
+		return c, c.w.err // unwrapped, as Write documents
 	}
 	return c, err
 }
 
-// stickyWriter remembers the first write error, so the walk can stop at the
-// next element boundary instead of canonicalizing the rest into nothing.
-type stickyWriter struct {
+// outBuf is the output buffer. The canonical form is appended to buf, which
+// goes to w once it holds outBufSize bytes, checked at element and leaf
+// boundaries; appending to a slice costs less per token than a bufio.Writer
+// call, which checks its space and its error on every write. The first write
+// error is kept, nothing is written after it, and the walk stops at the next
+// element boundary (element returns it) instead of canonicalizing the rest
+// into nothing.
+type outBuf struct {
+	buf []byte
 	w   io.Writer
 	err error
 }
 
-// Write is called only by the bufio.Writer, which never writes again after an
-// error, so the first error is the only one recorded.
-func (s *stickyWriter) Write(p []byte) (int, error) {
-	n, err := s.w.Write(p)
-	s.err = err
-	return n, err
+func newOutBuf(w io.Writer) *outBuf {
+	return &outBuf{buf: make([]byte, 0, outBufSize+outBufSize/4), w: w}
 }
 
-// put and putByte discard each write's result on purpose. The bufio.Writer
-// keeps the first error it meets and fails every later write the same way,
-// so checking after each byte would add a branch per byte and learn nothing:
-// the kept error is read at every element boundary (element returns
-// c.sw.err) and at the final Flush, and returned unwrapped from there.
-// writeQName and writeEscaped follow the same rule.
-func (c *canon) put(s string)   { _, _ = c.w.WriteString(s) }
-func (c *canon) putByte(b byte) { _ = c.w.WriteByte(b) }
+// flush hands buf to w. A short write without an error is io.ErrShortWrite,
+// as bufio reports it.
+func (o *outBuf) flush() {
+	if o.err == nil && len(o.buf) > 0 {
+		n, err := o.w.Write(o.buf)
+		if err == nil && n < len(o.buf) {
+			err = io.ErrShortWrite
+		}
+		o.err = err
+	}
+	o.buf = o.buf[:0]
+}
+
+// spill flushes buf once it is full.
+func (o *outBuf) spill() {
+	if len(o.buf) >= outBufSize {
+		o.flush()
+	}
+}
+
+func (c *canon) put(s string)   { c.w.buf = append(c.w.buf, s...) }
+func (c *canon) putByte(b byte) { c.w.buf = append(c.w.buf, b) }
 
 func (c *canon) contains(n *xdm.Node) bool { return c.all || c.set.Contains(n) }
 
@@ -196,8 +208,8 @@ func (c *canon) contains(n *xdm.Node) bool { return c.all || c.set.Contains(n) }
 // the node when it precedes the element, before it when it follows.
 func (c *canon) document(d *xdm.Node) error {
 	after := false
-	for _, ch := range d.Children {
-		if ch.Kind == xdm.KindElement {
+	for ch := range d.Children() {
+		if ch.Kind() == xdm.KindElement {
 			if err := c.element(ch, c.contains(d), 1); err != nil {
 				return err
 			}
@@ -222,7 +234,7 @@ func (c *canon) document(d *xdm.Node) error {
 // kinds that reach it, since elements are walked and attributes are not
 // children.
 func (c *canon) member(n *xdm.Node) bool {
-	if n.Kind == xdm.KindComment && !c.comments {
+	if n.Kind() == xdm.KindComment && !c.comments {
 		return false
 	}
 	return c.contains(n)
@@ -234,16 +246,16 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 	}
 	in := c.contains(e)
 	scopeMark, renderedMark, utilMark := len(c.scope.undo), len(c.rendered.undo), len(c.util.undo)
-	for _, ns := range e.Namespaces {
-		if err := checkNamespaceURI(ns.Name.Local, ns.Value); err != nil {
+	for prefix, uri := range e.DeclaredNamespaces() {
+		if err := checkNamespaceURI(prefix, uri); err != nil {
 			return err
 		}
-		c.scope.set(ns.Name.Local, ns.Value)
+		c.scope.set(prefix, uri)
 	}
 	c.path = append(c.path, ancestor{e, in})
 
 	c.attrs = c.attrs[:0]
-	for _, a := range e.Attrs {
+	for a := range e.Attrs() {
 		if c.contains(a) {
 			c.attrs = append(c.attrs, a)
 		}
@@ -252,7 +264,7 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 	switch {
 	case in:
 		c.putByte('<')
-		writeQName(c.w, e.Name)
+		writeQName(c.w, e.Name())
 		if c.nsSet != nil {
 			c.namespaceNodes(e, true)
 		} else {
@@ -278,8 +290,8 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 		c.putByte('>')
 	}
 
-	for _, ch := range e.Children {
-		if ch.Kind == xdm.KindElement {
+	for ch := range e.Children() {
+		if ch.Kind() == xdm.KindElement {
 			if err := c.element(ch, in, depth+1); err != nil {
 				return err
 			}
@@ -289,7 +301,7 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 	}
 	if in {
 		c.put("</")
-		writeQName(c.w, e.Name)
+		writeQName(c.w, e.Name())
 		c.putByte('>')
 	}
 	c.scope.restore(scopeMark)
@@ -297,7 +309,8 @@ func (c *canon) element(e *xdm.Node, parentIn bool, depth int) error {
 	c.util.restore(utilMark)
 	c.axes = c.axes[:axesMark]
 	c.path = c.path[:len(c.path)-1]
-	return c.sw.err
+	c.w.spill()
+	return c.w.err
 }
 
 // namespaces renders e's namespace axis and records what it rendered.
@@ -321,18 +334,18 @@ func (c *canon) namespaces(e *xdm.Node, parentIn bool) {
 		// own, and those of its attributes in the set (an unprefixed
 		// attribute is in no namespace, so it utilises nothing) — plus the
 		// InclusiveNamespaces PrefixList.
-		c.consider(e.Name.Prefix)
+		c.consider(e.Name().Prefix)
 		for _, a := range c.attrs {
-			if a.Name.Prefix != "" {
-				c.consider(a.Name.Prefix)
+			if a.Name().Prefix != "" {
+				c.consider(a.Name().Prefix)
 			}
 		}
 		for _, p := range c.prefixes {
 			c.consider(p)
 		}
 	} else if parentIn {
-		for _, ns := range e.Namespaces {
-			c.consider(ns.Name.Local)
+		for prefix := range e.DeclaredNamespaces() {
+			c.consider(prefix)
 		}
 	} else {
 		for prefix := range c.scope.m {
@@ -438,10 +451,10 @@ func (c *canon) exclusiveUtilised(e *xdm.Node, axis map[string]string) {
 			used = append(used, p)
 		}
 	}
-	add(e.Name.Prefix)
+	add(e.Name().Prefix)
 	for _, a := range c.attrs {
-		if a.Name.Prefix != "" {
-			add(a.Name.Prefix)
+		if a.Name().Prefix != "" {
+			add(a.Name().Prefix)
 		}
 	}
 	for _, p := range used {
@@ -552,17 +565,17 @@ func (c *canon) inherit(e *xdm.Node) {
 		// without its attribute, all five implementations in that round
 		// signed exactly that, and xmlsec1 1.2.41 was measured doing the
 		// same. The WG's result is followed.
-		for _, at := range e.Attrs {
-			if at.Name.URI == xdm.NSXML && (c.inheritable(at.Name.Local) || at.Name.Local == "base") &&
-				!hasXMLAttr(c.attrs, at.Name.Local) {
+		for at := range e.Attrs() {
+			if at.Name().URI == xdm.NSXML && (c.inheritable(at.Name().Local) || at.Name().Local == "base") &&
+				!hasXMLAttr(c.attrs, at.Name().Local) {
 				c.attrs = append(c.attrs, at)
 			}
 		}
 	}
-	for a := e.Parent; a != nil && a.Kind == xdm.KindElement; a = a.Parent {
-		for _, at := range a.Attrs {
-			if at.Name.URI != xdm.NSXML || !c.inheritable(at.Name.Local) ||
-				hasXMLAttr(e.Attrs, at.Name.Local) || hasXMLAttr(c.attrs, at.Name.Local) {
+	for a := e.Parent(); a != nil && a.Kind() == xdm.KindElement; a = a.Parent() {
+		for at := range a.Attrs() {
+			if at.Name().URI != xdm.NSXML || !c.inheritable(at.Name().Local) ||
+				e.Attr(xdm.NSXML, at.Name().Local) != nil || hasXMLAttr(c.attrs, at.Name().Local) {
 				continue
 			}
 			c.attrs = append(c.attrs, at)
@@ -583,7 +596,7 @@ func (c *canon) inheritable(local string) bool {
 
 func hasXMLAttr(attrs []*xdm.Node, local string) bool {
 	for _, a := range attrs {
-		if a.Name.URI == xdm.NSXML && a.Name.Local == local {
+		if a.Name().URI == xdm.NSXML && a.Name().Local == local {
 			return true
 		}
 	}
@@ -596,8 +609,8 @@ func hasXMLAttr(attrs []*xdm.Node, local string) bool {
 func (c *canon) fixBase(e *xdm.Node) {
 	var bases []string // innermost first
 	i := len(c.path) - 2
-	a := e.Parent
-	for ; a != nil && a.Kind == xdm.KindElement; a = a.Parent {
+	a := e.Parent()
+	for ; a != nil && a.Kind() == xdm.KindElement; a = a.Parent() {
 		if i >= 0 {
 			if c.path[i].in {
 				break
@@ -619,21 +632,17 @@ func (c *canon) fixBase(e *xdm.Node) {
 		v = joinURIReferences(b, v)
 	}
 	c.attrs = slices.DeleteFunc(c.attrs, func(a *xdm.Node) bool {
-		return a.Name.URI == xdm.NSXML && a.Name.Local == "base"
+		return a.Name().URI == xdm.NSXML && a.Name().Local == "base"
 	})
 	if v != "" {
-		c.attrs = append(c.attrs, &xdm.Node{
-			Kind:  xdm.KindAttribute,
-			Name:  xdm.QName{Prefix: "xml", Local: "base", URI: xdm.NSXML},
-			Value: v,
-		})
+		c.attrs = append(c.attrs, xdm.NewNode(xdm.KindAttribute, xdm.QName{Prefix: "xml", Local: "base", URI: xdm.NSXML}, v))
 	}
 }
 
 func xmlAttr(e *xdm.Node, local string) (string, bool) {
-	for _, a := range e.Attrs {
-		if a.Name.URI == xdm.NSXML && a.Name.Local == local {
-			return a.Value, true
+	for a := range e.Attrs() {
+		if a.Name().URI == xdm.NSXML && a.Name().Local == local {
+			return a.Value(), true
 		}
 	}
 	return "", false
@@ -644,64 +653,73 @@ func xmlAttr(e *xdm.Node, local string) (string, bool) {
 // order the specifications require. No collation belongs here.
 func (c *canon) writeAttrs() {
 	slices.SortFunc(c.attrs, func(a, b *xdm.Node) int {
-		if n := strings.Compare(a.Name.URI, b.Name.URI); n != 0 {
+		if n := strings.Compare(a.Name().URI, b.Name().URI); n != 0 {
 			return n
 		}
-		return strings.Compare(a.Name.Local, b.Name.Local)
+		return strings.Compare(a.Name().Local, b.Name().Local)
 	})
 	for _, a := range c.attrs {
 		c.putByte(' ')
-		writeQName(c.w, a.Name)
+		writeQName(c.w, a.Name())
 		c.put(`="`)
-		writeEscaped(c.w, a.Value, true)
+		writeEscaped(c.w, a.Value(), true)
 		c.putByte('"')
 	}
 }
 
 func (c *canon) leaf(n *xdm.Node) {
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindText:
-		writeEscaped(c.w, n.Value, false)
+		writeEscaped(c.w, n.Value(), false)
 	case xdm.KindComment:
 		c.put("<!--")
-		c.put(n.Value)
+		c.put(n.Value())
 		c.put("-->")
 	case xdm.KindPI:
 		c.put("<?")
-		c.put(n.Name.Local)
-		if n.Value != "" {
+		c.put(n.Name().Local)
+		if n.Value() != "" {
 			c.putByte(' ')
-			c.put(n.Value)
+			c.put(n.Value())
 		}
 		c.put("?>")
 	}
+	c.w.spill()
 }
 
-func writeQName(w *bufio.Writer, q xdm.QName) {
+func writeQName(w *outBuf, q xdm.QName) {
 	if q.Prefix != "" {
-		_, _ = w.WriteString(q.Prefix)
-		_ = w.WriteByte(':')
+		w.buf = append(append(w.buf, q.Prefix...), ':')
 	}
-	_, _ = w.WriteString(q.Local)
+	w.buf = append(w.buf, q.Local...)
 }
 
 // writeEscaped writes s with the text or attribute escaping of C14N 1.0
 // §2.3. The two are deliberately asymmetric: text escapes '>' and leaves
 // '"', tab and newline alone; attribute values do the reverse. Do not unify.
-func writeEscaped(w *bufio.Writer, s string, attr bool) {
+//
+// A value longer than the buffer is written a buffer's worth at a time, so
+// one large text node does not grow the buffer to its size. Only ASCII bytes
+// are replaced, so a split inside a UTF-8 sequence changes nothing.
+func writeEscaped(w *outBuf, s string, attr bool) {
 	esc := &textEscapes
 	if attr {
 		esc = &attrEscapes
 	}
+	for len(s) > outBufSize {
+		writeEscaped(w, s[:outBufSize], attr)
+		w.spill()
+		s = s[outBufSize:]
+	}
+	b := w.buf
 	start := 0
 	for i := 0; i < len(s); i++ {
 		if rep := esc[s[i]]; rep != "" {
-			_, _ = w.WriteString(s[start:i])
-			_, _ = w.WriteString(rep)
+			b = append(append(b, s[start:i]...), rep...)
 			start = i + 1
 		}
 	}
-	_, _ = w.WriteString(s[start:])
+	w.buf = append(b, s[start:]...)
 }
 
 // textEscapes and attrEscapes give each byte's replacement, or "" for none:

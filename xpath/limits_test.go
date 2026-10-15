@@ -241,7 +241,7 @@ func TestHoldItemBudgetDoesNotAffectTheCallersContext(t *testing.T) {
 func TestHoldItemBudgetSharesTheCounter(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
 	held := ctx.HoldItemBudget()
-	if held.items != ctx.items {
+	if held.ev().items != ctx.ev().items {
 		t.Fatal("the held context has its own counter; a host holding the " +
 			"budget would not see what nested evaluations charge")
 	}
@@ -297,11 +297,11 @@ func TestAdoptBudgetSharesTheCounters(t *testing.T) {
 	if err := nested.ChargeBytes(9); err != nil {
 		t.Fatalf("charging the nested context: %v", err)
 	}
-	if got := atomic.LoadInt64(caller.items); got != 7 {
+	if got := atomic.LoadInt64(caller.ev().items); got != 7 {
 		t.Errorf("caller items = %d, want 7; the nested evaluation spent an "+
 			"allowance of its own", got)
 	}
-	if got := atomic.LoadInt64(caller.bytes); got != 9 {
+	if got := atomic.LoadInt64(caller.ev().bytes); got != 9 {
 		t.Errorf("caller bytes = %d, want 9; the nested evaluation spent an "+
 			"allowance of its own", got)
 	}
@@ -315,7 +315,7 @@ func TestAdoptBudgetFromNilIsAFreshRoot(t *testing.T) {
 	if got != ctx {
 		t.Fatal("adopting from a nil source returned a different context")
 	}
-	if got.items == nil || got.bytes == nil {
+	if got.ev().items == nil || got.ev().bytes == nil {
 		t.Error("adopting from a nil source unbound the context's own " +
 			"budget, leaving the evaluation unbounded")
 	}

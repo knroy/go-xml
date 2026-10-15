@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xquery"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xquery"
 )
 
 func evalDepth(t *testing.T, q string, max int) error {
@@ -17,7 +17,7 @@ func evalDepth(t *testing.T, q string, max int) error {
 		t.Fatalf("compile: %v", err)
 	}
 	ctx := xpath.NewContext(nil, nil)
-	ctx.MaxDepth = max
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.MaxDepth = max })
 	_, ee := c.Eval(ctx)
 	return ee
 }

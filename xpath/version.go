@@ -1,6 +1,6 @@
 package xpath
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // Version selects the version of the XPath language an expression is written
 // in.
@@ -170,7 +170,7 @@ func synthesizeVariadic(ctx *Context, name xdm.QName, arity int) (Function, bool
 	// keeps a single definition of what fn:concat does. Its own arity is
 	// irrelevant, since the call passes whatever arguments it was given.
 	base, ok := ctx.Funcs.Lookup(name, 2)
-	if !ok || base.Since > ctx.Version {
+	if !ok || base.Since > ctx.Version() {
 		return Function{}, false
 	}
 	base.Arity = arity

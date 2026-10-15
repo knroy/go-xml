@@ -3,8 +3,8 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // groupingScopeVar marks that a grouping is in scope, so that
@@ -57,11 +57,11 @@ func (rt *runtime) withoutGroupingScope() *runtime {
 // streamable mode is not visible from the element, so the mode case is left
 // to the caller; only the lexical ones are answered here.
 func inDeclaredStreamable(n *xdm.Node) bool {
-	for a := n; a != nil; a = a.Parent {
-		if a.Kind != xdm.KindElement || a.Name.URI != xdm.NSXSL {
+	for a := n; a != nil; a = a.Parent() {
+		if a.Kind() != xdm.KindElement || a.Name().URI != xdm.NSXSL {
 			continue
 		}
-		switch a.Name.Local {
+		switch a.Name().Local {
 		case "stream", "source-document", "attribute-set", "function",
 			"merge", "accumulator", "global-context-item":
 			if isYes(a.AttrValue("streamable")) {
@@ -96,9 +96,9 @@ func errNoGrouping(ctx *xpath.Context, code, fn string) error {
 	if ctx == nil {
 		return nil
 	}
-	v := ctx.Version
-	if ctx.LibraryVersion > v {
-		v = ctx.LibraryVersion
+	v := ctx.Version()
+	if ctx.Env().LibraryVersion > v {
+		v = ctx.Env().LibraryVersion
 	}
 	if !v.AtLeast31() {
 		return nil

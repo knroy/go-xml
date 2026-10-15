@@ -1,8 +1,8 @@
 package xslt
 
 import (
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // The static context a static expression is evaluated in, section 9.7.
@@ -85,13 +85,13 @@ func useWhenFuncs(bindings map[string]string) *xpath.Library {
 // came back for a name that is in the XSD namespace and one that is in no
 // namespace at all.
 func xpathDefaultNamespace(el *xdm.Node) string {
-	for n := el; n != nil && n.Kind == xdm.KindElement; n = n.Parent {
+	for n := el; n != nil && n.Kind() == xdm.KindElement; n = n.Parent() {
 		if a := n.Attr(xdm.NSXSL, "xpath-default-namespace"); a != nil {
-			return a.Value
+			return a.Value()
 		}
-		if n.Name.URI == xdm.NSXSL {
+		if n.Name().URI == xdm.NSXSL {
 			if a := n.Attr("", "xpath-default-namespace"); a != nil {
-				return a.Value
+				return a.Value()
 			}
 		}
 	}

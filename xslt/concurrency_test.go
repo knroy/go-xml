@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A compiled Stylesheet is documented as safe to share across goroutines, so

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/xpathleaf"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 type memoRuntime struct{ m any }
@@ -67,9 +67,8 @@ func TestStepMemoAnswersAsTheWalk(t *testing.T) {
 // over it is never remembered.
 func TestStepMemoSkipsConstructedTrees(t *testing.T) {
 	tree := xdm.NewTree()
-	a := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "a"}}
-	tree.Root.AppendChild(a)
-	a.AppendChild(&xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "b"}})
+	a := tree.Root.AppendElement(xdm.QName{Local: "a"})
+	a.AppendElement(xdm.QName{Local: "b"})
 	tree.Finalize()
 	ctx, m := memoContext(tree.Root)
 	count := func() string {
@@ -81,13 +80,6 @@ func TestStepMemoSkipsConstructedTrees(t *testing.T) {
 	}
 	if got := count(); got != "1" {
 		t.Fatalf("got %s b elements, want 1", got)
-	}
-	c := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "c"}}
-	a.AppendChild(c)
-	c.AppendChild(&xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "b"}})
-	tree.Finalize()
-	if got := count(); got != "2" {
-		t.Errorf("after adding a b under a new parent: got %s, want 2", got)
 	}
 	if len(m.parents) != 0 {
 		t.Error("a constructed tree was memoised")

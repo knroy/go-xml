@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // xsl:merge and its three companion elements, XSLT 3.0 section 15.
@@ -254,9 +254,9 @@ func (c *compiler) compileMerge(n *xdm.Node, ns xpath.NamespaceResolver) (Instru
 func checkMergeGroupNames(action *xdm.Node, names map[string]bool) error {
 	var walk func(n *xdm.Node) error
 	walk = func(n *xdm.Node) error {
-		if n.Kind == xdm.KindElement {
+		if n.Kind() == xdm.KindElement {
 			if a := n.Attr("", "select"); a != nil {
-				comp, err := compileExpr(a.Value, newNSResolver(n, ""))
+				comp, err := compileExpr(a.Value(), newNSResolver(n, ""))
 				// A select that does not compile is not this check's error to
 				// report; compileSequence reports it with its own context.
 				if err == nil {
@@ -266,8 +266,8 @@ func checkMergeGroupNames(action *xdm.Node, names map[string]bool) error {
 				}
 			}
 		}
-		for _, ch := range n.Children {
-			if ch.Kind == xdm.KindElement && isXSL(ch, "merge") {
+		for ch := range n.Children() {
+			if ch.Kind() == xdm.KindElement && isXSL(ch, "merge") {
 				continue // a nested merge rebinds the group; not ours
 			}
 			if err := walk(ch); err != nil {
@@ -301,10 +301,10 @@ func checkMergeGroupCalls(comp *xpath.Compiled, names map[string]bool) error {
 
 func (c *compiler) compileMergeSource(n *xdm.Node, idx int) (*mergeSource, error) {
 	ns := newNSResolver(n, "")
-	src := &mergeSource{baseURI: n.BaseURI}
+	src := &mergeSource{baseURI: n.BaseURI()}
 
 	if a := n.Attr("", "name"); a != nil {
-		name := strings.TrimSpace(a.Value)
+		name := strings.TrimSpace(a.Value())
 		// The summary types @name as an ncname, so a value that is not one is
 		// XTSE0020 — the same code the table check gives an attribute whose
 		// value is outside the set the summary allows.
@@ -488,14 +488,14 @@ func (c *compiler) compileMergeKey(n *xdm.Node) (*sortKey, error) {
 	// the condition is tested here rather than letting compileSort report the
 	// sort element's code for a merge key.
 	if n.AttrValue("select") != "" {
-		for _, ch := range n.Children {
-			switch ch.Kind {
+		for ch := range n.Children() {
+			switch ch.Kind() {
 			case xdm.KindElement:
 				return nil, fmt.Errorf(
 					"XTSE3200: an xsl:merge-key element with a select attribute " +
 						"must be empty")
 			case xdm.KindText:
-				if !xdm.IsXMLWhitespace(ch.Value) {
+				if !xdm.IsXMLWhitespace(ch.Value()) {
 					return nil, fmt.Errorf(
 						"XTSE3200: an xsl:merge-key element with a select " +
 							"attribute must be empty")
@@ -545,7 +545,7 @@ func checkMergeKeyCompatibility(sources []*mergeSource) error {
 				if a == nil {
 					continue
 				}
-				av, bv := strings.TrimSpace(a.Value), strings.TrimSpace(b.Value)
+				av, bv := strings.TrimSpace(a.Value()), strings.TrimSpace(b.Value())
 				if strings.Contains(av, "{") || strings.Contains(bv, "{") {
 					continue // computed; decided at run time
 				}
@@ -917,7 +917,7 @@ func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
 					}
 				}
 				sv, err := makeSortValue(v, sk, colls[k],
-					rt.ctx.ImplicitTimezone, rt.sheet.output.Version10Implicit)
+					rt.ctx.Env().ImplicitTimezone, rt.sheet.output.Version10Implicit)
 				if err != nil {
 					// XTTE1020 is the sort-key code; for a merge key the
 					// suite accepts either it or XTTE2230, and the message
@@ -1004,7 +1004,7 @@ func (s *mergeSource) anchorItems(rt *runtime) ([]xdm.Item, error) {
 // the resolver caches its trees, so validating in place would change what a
 // later fn:doc of the same URI sees.
 func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
-	docs := rt.ctx.Docs
+	docs := rt.ctx.Env().Docs
 	if docs == nil {
 		return nil, fmt.Errorf(
 			"FODC0002: document access is disabled (no resolver configured): %q",
@@ -1012,7 +1012,7 @@ func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
 	}
 	base := s.baseURI
 	if base == "" {
-		base = rt.ctx.StaticBaseURI
+		base = rt.ctx.StaticBaseURI()
 	}
 	tree, err := resolveDocumentIn(rt.ctx, href, base)
 	if err != nil {
@@ -1029,19 +1029,14 @@ func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
 	if s.validation.isDefault() {
 		return tree.Root, nil
 	}
-	copied := xdm.NewTree()
-	copied.Root.BaseURI = tree.Root.BaseURI
-	for _, ch := range tree.Root.Children {
-		copied.Root.AppendChild(deepCopy(ch))
-	}
-	copied.Finalize()
-	if s.accums != nil {
-		rt.treeAccums[copied.Root] = s.accums
-	}
-	if err := s.validation.assess(rt, copied.Root); err != nil {
+	root, err := s.validation.assessSource(rt, tree)
+	if err != nil {
 		return nil, err
 	}
-	return copied.Root, nil
+	if s.accums != nil {
+		rt.treeAccums[root] = s.accums
+	}
+	return root, nil
 }
 
 // parseUseAccumulators reads a use-accumulators attribute into the same set

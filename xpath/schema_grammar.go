@@ -347,7 +347,7 @@ func (p *schemaRegexpParser) categoryEsc(esc rune) error {
 	p.pos++ // the closing brace
 
 	if strings.HasPrefix(name, "Is") {
-		if _, ok := unicodeBlocks[name]; ok {
+		if _, ok := unicodeBlocks()[name]; ok {
 			return nil
 		}
 		// 1.1 relaxed *unrecognised* block names, not absent ones: "\p{Is}"

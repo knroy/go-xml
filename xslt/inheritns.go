@@ -4,8 +4,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // blockNamespaceInheritance implements [xsl:]inherit-namespaces="no" on the
@@ -46,34 +46,33 @@ func noAttr(el *xdm.Node, name string) bool {
 }
 
 func blockNamespaceInheritance(el *xdm.Node) {
-	if el == nil || el.Kind != xdm.KindElement {
+	if el == nil || el.Kind() != xdm.KindElement {
 		return
 	}
 	scope := map[string]string{}
-	prefixes := make([]string, 0, len(el.Namespaces))
-	for _, ns := range el.Namespaces {
-		p := ns.Name.Local
+	prefixes := make([]string, 0, el.NumNamespaceDecls())
+	for p, uri := range el.DeclaredNamespaces() {
 		// The xml prefix is bound everywhere by the XML Namespaces
 		// specification and cannot be undeclared.
 		//
 		// An empty value is itself an undeclaration el is carrying, so there
 		// is nothing for the children to inherit and nothing to block.
-		if p == "xml" || ns.Value == "" {
+		if p == "xml" || uri == "" {
 			continue
 		}
-		scope[p] = ns.Value
+		scope[p] = uri
 		prefixes = append(prefixes, p)
 	}
 	// A stable order, for the same reason copyNamespacesTo sorts.
 	sort.Strings(prefixes)
 
-	for _, child := range el.Children {
-		if child.Kind != xdm.KindElement {
+	for child := range el.Children() {
+		if child.Kind() != xdm.KindElement {
 			continue
 		}
 		declared := map[string]bool{}
-		for _, ns := range child.Namespaces {
-			declared[ns.Name.Local] = true
+		for prefix := range child.DeclaredNamespaces() {
+			declared[prefix] = true
 		}
 		for _, p := range prefixes {
 			if declared[p] {
@@ -93,11 +92,11 @@ func blockNamespaceInheritance(el *xdm.Node) {
 // usedByNames reports whether the prefix/URI pair is the binding that el's own
 // name or one of its attribute names depends on.
 func usedByNames(el *xdm.Node, prefix, uri string) bool {
-	if el.Name.URI == uri && el.Name.Prefix == prefix {
+	if el.Name().URI == uri && el.Name().Prefix == prefix {
 		return true
 	}
-	for _, a := range el.Attrs {
-		if a.Name.URI == uri && a.Name.Prefix == prefix {
+	for a := range el.Attrs() {
+		if a.Name().URI == uri && a.Name().Prefix == prefix {
 			return true
 		}
 	}
@@ -110,10 +109,10 @@ func regexDialect(ctx *xpath.Context) xpath.Version {
 	if ctx == nil {
 		return xpath.XPath20
 	}
-	if ctx.RegexVersion > ctx.Version {
-		return ctx.RegexVersion
+	if ctx.Env().RegexVersion > ctx.Version() {
+		return ctx.Env().RegexVersion
 	}
-	return ctx.Version
+	return ctx.Version()
 }
 
 // noXSLAttr is noAttr for an attribute written in the XSLT namespace, which
@@ -124,7 +123,7 @@ func noXSLAttr(el *xdm.Node, name string) bool {
 	if a == nil {
 		return false
 	}
-	switch strings.TrimSpace(a.Value) {
+	switch strings.TrimSpace(a.Value()) {
 	case "yes", "true", "1":
 		return false
 	}

@@ -335,7 +335,7 @@ granted — while `LoadFile` and `LoadFiles` were handed paths and default to a
 not. To follow remote locations, opt in:
 
 ```go
-xsd.Options{Resolver: &xsd.HTTPResolver{
+xsd.Options{Resolver: &xsdnet.HTTPResolver{
     AllowHost: func(host string) bool { return host == "schemas.example.com" },
 }}
 ```
@@ -373,8 +373,8 @@ namespace allowlist; see [xsd.md](xsd.md#xsischemalocation-is-ignored-by-default
 ## xsl:import-schema
 
 A stylesheet can declare a schema, which makes its type names available and
-lets a caller validate the source against the same components. Validated with
-`Annotate`, the source carries its schema types into the transform:
+lets a caller validate the source against the same components. The typed copy
+`ValidateCopy` returns carries its schema types into the transform:
 
 ```go
 sheet, err := xslt.Compile(styleTree.Root, xslt.CompileOptions{
@@ -386,13 +386,16 @@ sheet, err := xslt.Compile(styleTree.Root, xslt.CompileOptions{
 if err != nil {
     return err
 }
+src := srcTree.Root
 if s := sheet.Schema(); s != nil {
-    // Annotate writes each node's type into the tree. Without it the
-    // schema only checks the document, and the stylesheet sees it untyped.
-    if err := s.Validate(srcTree.Root, xsd.ValidateOptions{Annotate: true}); err != nil {
+    // ValidateCopy returns a typed copy and leaves srcTree as it was.
+    // Validate would only check the document, and the stylesheet would
+    // see it untyped.
+    if src, err = s.ValidateCopy(src, xsd.ValidateOptions{}); err != nil {
         return err
     }
 }
+// Transform src.
 ```
 
 A validated node atomises to its typed value, as XPath's atomization rule
@@ -409,7 +412,7 @@ source against the stylesheet's imported schema before the transform.
 
 An earlier revision of this section said a validated node still atomised as
 untyped. That was never the engine's behaviour once annotation existed; the
-example above simply omitted `Annotate`, which is what made it look true.
+example above simply omitted v1's `Annotate`, which is what made it look true.
 
 Most real "invoice validation" pipelines need the first and third, and use the
 second mainly as a cheap early filter. The rules that actually reject documents
@@ -483,15 +486,14 @@ const svrlNS = "http://purl.oclc.org/dsdl/svrl"
 var failures []Failure
 var walk func(*xdm.Node)
 walk = func(n *xdm.Node) {
-    if n.Kind == xdm.KindElement &&
-        n.Name.URI == svrlNS && n.Name.Local == "failed-assert" {
+    if n.IsElement(svrlNS, "failed-assert") {
         failures = append(failures, Failure{
             ID:       n.AttrValue("id"),
             Location: n.AttrValue("location"),
             Message:  strings.TrimSpace(n.StringValue()),
         })
     }
-    for _, c := range n.Children {
+    for c := range n.Children() {
         walk(c)
     }
 }

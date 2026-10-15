@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // Schema validity assessment of constructed nodes.
@@ -97,7 +97,7 @@ func compileValidation(n *xdm.Node, attrPrefix string) (validationSpec, error) {
 	// which then failed XTSE1660 for want of a schema, on a stylesheet that
 	// asked for no validation at all. output-0154 is exactly that stylesheet.
 	v, t := "", ""
-	if n.Name.URI == xdm.NSXSL {
+	if n.Name().URI == xdm.NSXSL {
 		v = n.AttrValue(vAttr)
 		t = n.AttrValue(tAttr)
 	}
@@ -107,12 +107,12 @@ func compileValidation(n *xdm.Node, attrPrefix string) (validationSpec, error) {
 	// silently not being validated at all.
 	if v == "" {
 		if a := n.Attr(xdm.NSXSL, "validation"); a != nil {
-			v = a.Value
+			v = a.Value()
 		}
 	}
 	if t == "" {
 		if a := n.Attr(xdm.NSXSL, "type"); a != nil {
-			t = a.Value
+			t = a.Value()
 		}
 	}
 	if v != "" && t != "" {
@@ -126,7 +126,7 @@ func compileValidation(n *xdm.Node, attrPrefix string) (validationSpec, error) {
 			// valid QName or whose prefix is unbound. The generic XTSE0280
 			// names the condition but not the place it arose.
 			return spec, fmt.Errorf(
-				"XTSE1520: in %s/@%s: %w", n.Name.Lexical(), tAttr, err)
+				"XTSE1520: in %s/@%s: %w", n.Name().Lexical(), tAttr, err)
 		}
 		// Section 19.2.1.2: "If the QName has no prefix, it is expanded using
 		// the default namespace established using the effective
@@ -174,12 +174,12 @@ func constructsElement(n *xdm.Node) bool {
 	if n == nil {
 		return false
 	}
-	if n.Name.URI != xdm.NSXSL {
+	if n.Name().URI != xdm.NSXSL {
 		// A literal result element: anything not in the XSLT namespace that
 		// reached compileValidation is one.
 		return true
 	}
-	switch n.Name.Local {
+	switch n.Name().Local {
 	case "element", "copy":
 		return true
 	}
@@ -201,15 +201,15 @@ func constructsElement(n *xdm.Node) bool {
 // half true: the default "does not extend to included or imported stylesheet
 // modules or used packages".
 func moduleDefaultValidation(n *xdm.Node) string {
-	for a := n; a != nil; a = a.Parent {
-		if a.Kind != xdm.KindElement {
+	for a := n; a != nil; a = a.Parent() {
+		if a.Kind() != xdm.KindElement {
 			continue
 		}
-		if a.Name.URI == xdm.NSXSL {
+		if a.Name().URI == xdm.NSXSL {
 			if v := a.AttrValue("default-validation"); v != "" {
 				return v
 			}
-			switch a.Name.Local {
+			switch a.Name().Local {
 			case "stylesheet", "transform", "package":
 				return ""
 			}
@@ -217,9 +217,9 @@ func moduleDefaultValidation(n *xdm.Node) string {
 		}
 		// A literal result element spells the standard attribute with the
 		// xsl: prefix, to keep it apart from a user-defined attribute.
-		for _, at := range a.Attrs {
-			if at.Name.URI == xdm.NSXSL && at.Name.Local == "default-validation" {
-				return at.Value
+		for at := range a.Attrs() {
+			if at.Name().URI == xdm.NSXSL && at.Name().Local == "default-validation" {
+				return at.Value()
 			}
 		}
 	}
@@ -228,10 +228,16 @@ func moduleDefaultValidation(n *xdm.Node) string {
 
 // assess validates a constructed node, if the instruction asked for it.
 //
+// It returns the node to use in place of n: n itself, when the assessment
+// only reads it or writes its typing in place (strip, preserve), and
+// otherwise the typed copy the schema layer made of it, which carries the
+// validation's annotations, defaulted attributes and namespace fixup.
+//
 // A failure is a dynamic error rather than a recorded one: the stylesheet
 // declared what it was building and built something else, and continuing
 // would write output the author said was wrong.
-func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
+func (spec validationSpec) assess(rt *runtime, n *xdm.Node) (*xdm.Node, error) {
+	orig := n
 	// XSLT 2.0 §11.9.1 and §11.9.2, in identical words for xsl:copy and
 	// xsl:copy-of: "These attributes are ignored when copying an item that is
 	// not an element, attribute or document node." Only those three kinds
@@ -241,10 +247,10 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 	// answered with a complaint about its caller ("needs an element or
 	// attribute") rather than about the stylesheet.
 	if n != nil {
-		switch n.Kind {
+		switch n.Kind() {
 		case xdm.KindElement, xdm.KindAttribute, xdm.KindDocument:
 		default:
-			return nil
+			return n, nil
 		}
 	}
 	if spec.typeName == nil && spec.mode == validatePreserve {
@@ -255,10 +261,10 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		// nodes keep whatever they carried. Leaving it unannotated made
 		// "instance of element(*, xs:anyType)" indistinguishable from
 		// xs:untyped, which is the whole distinction import-schema-076 draws.
-		if spec.constructsElement && n != nil && n.Kind == xdm.KindElement {
+		if spec.constructsElement && n != nil && n.Kind() == xdm.KindElement {
 			n.SetTypeAnnotation("anyType")
 		}
-		return nil
+		return orig, nil
 	}
 	if spec.typeName == nil && spec.mode == validateStrip {
 		// strip is the other half of the same rule: the copy is untyped
@@ -266,7 +272,7 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		// the copy carries the annotation forward by default so that preserve
 		// has something to preserve.
 		stripAnnotations(n)
-		return nil
+		return orig, nil
 	}
 	schema := rt.sheet.schema
 	if schema == nil {
@@ -294,9 +300,9 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 			// therefore cannot be processed without performing the
 			// validation".
 			stripAnnotations(n)
-			return nil
+			return orig, nil
 		} else {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"XTSE1660: validation requires a schema; none was imported")
 		}
 	}
@@ -312,7 +318,7 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		switch spec.typeName.Local {
 		case "untyped", "anyType":
 			stripAnnotations(n)
-			return nil
+			return orig, nil
 		case "untypedAtomic":
 			// xs:untypedAtomic is the *simple* end of the untyped pair: it is
 			// what an unvalidated attribute's typed value is. Naming it as the
@@ -331,10 +337,10 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 			// node the stylesheet had just validated as untypedAtomic. The
 			// annotation is written instead, which is what the general
 			// xsl:type path does for every named type.
-			if n.Kind == xdm.KindElement {
-				for _, c := range n.Children {
-					if c.Kind == xdm.KindElement {
-						return fmt.Errorf(
+			if n.Kind() == xdm.KindElement {
+				for c := range n.Children() {
+					if c.Kind() == xdm.KindElement {
+						return nil, fmt.Errorf(
 							"XTTE1540: %s is not valid against %s: an element "+
 								"with element children has no atomic value",
 							describeNode(n), spec.typeName.Lexical())
@@ -345,11 +351,11 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 			t := xdm.TypingOf(n)
 			t.TypeAnnotation = "untypedAtomic"
 			n.ApplyTyping(t)
-			return nil
+			return orig, nil
 		}
 	}
 
-	if spec.typeName != nil && n.Kind == xdm.KindDocument {
+	if spec.typeName != nil && n.Kind() == xdm.KindDocument {
 		// A [xsl:]type on a document node applies to the element the document
 		// contains: a schema describes elements, not documents. The same
 		// XTTE1550 shape applies as for validation=, so the document must have
@@ -359,7 +365,7 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		// about the stylesheet.
 		elem, err := soleElementChild(n)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		n = elem
 	}
@@ -369,11 +375,11 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		// from, or built by list or union from, xs:ID, xs:IDREF, xs:IDREFS,
 		// xs:ENTITY or xs:ENTITIES. Those types carry document-level
 		// identity, which a constructed attribute has no document to have.
-		if n.Kind == xdm.KindAttribute {
+		if n.Kind() == xdm.KindAttribute {
 			if bad, why := namespaceSensitiveType(schema, *spec.typeName); bad {
-				return fmt.Errorf(
+				return nil, fmt.Errorf(
 					"XTTE1545: attribute %s cannot be validated against %s, "+
-						"which is %s", n.Name.Local, spec.typeName.Lexical(), why)
+						"which is %s", n.Name().Local, spec.typeName.Lexical(), why)
 			}
 			// XTTE1535: "It is a type error if the value of the type
 			// attribute of an xsl:copy or xsl:copy-of instruction refers to a
@@ -386,23 +392,29 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 			// type came from xsl:copy or xsl:copy-of, and 1535 is the code
 			// the spec gives it rather than the general 1540.
 			if _, complex := schema.Types[xdm.QName{URI: spec.typeName.URI, Local: spec.typeName.Local}].(*xsd.ComplexType); complex {
-				return fmt.Errorf(
+				return nil, fmt.Errorf(
 					"XTTE1535: attribute %s cannot be copied against %s, "+
 						"which is a complex type",
-					n.Name.Local, spec.typeName.Lexical())
+					n.Name().Local, spec.typeName.Lexical())
 			}
 		}
-		// Annotate: the whole point of validating a constructed node is that
+		// The typed copy: the whole point of validating a constructed node is that
 		// the result carries the type it was validated against, so that
 		// "instance of element(x, my:t)" and a match pattern naming a type
 		// answer true for it. Without the annotation the node came out of a
 		// successful validation still untyped.
-		if err := schema.ValidateAgainstType(n, *spec.typeName,
-			xsd.ValidateOptions{Annotate: true}); err != nil {
-			return fmt.Errorf("XTTE1540: %s is not valid against %s: %w",
+		typed, err := schema.ValidateAgainstTypeCopy(n, *spec.typeName,
+			xsd.ValidateOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("XTTE1540: %s is not valid against %s: %w",
 				describeNode(n), spec.typeName.Lexical(), err)
 		}
-		return nil
+		if orig != n {
+			// The document's element was validated: the typed copy sits in
+			// a typed copy of the document.
+			typed = typed.Parent()
+		}
+		return typed, nil
 	}
 
 	// XTTE1555: validating a *document* node applies the document-level
@@ -410,36 +422,37 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 	// after the element has been assessed, because it is that assessment
 	// which annotates the tree and so says which nodes carry IDs at all.
 	docNode := false
-	if n.Kind == xdm.KindDocument {
+	if n.Kind() == xdm.KindDocument {
 		elem, err := soleElementChild(n)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		n = elem
 		docNode = true
 	}
 
-	if n.Kind == xdm.KindAttribute {
+	if n.Kind() == xdm.KindAttribute {
 		// An attribute is assessed against the *global attribute*
 		// declaration for its name, which is the attribute counterpart of
 		// what strict and lax do for an element. Passing it over left an
 		// attribute copied under validation="strict" untyped, so a template
 		// declaring as="attribute(a, my:t)" rejected its own result.
-		if spec.mode == validateStrict && !schema.HasAttributeDeclaration(n.Name) {
-			return fmt.Errorf(
+		if spec.mode == validateStrict && !schema.HasAttributeDeclaration(n.Name()) {
+			return nil, fmt.Errorf(
 				"XTTE1512: no top-level declaration for %s", describeNode(n))
 		}
-		if err := schema.ValidateAttribute(n, spec.mode != validateStrict,
-			xsd.ValidateOptions{Annotate: true}); err != nil {
-			return fmt.Errorf("%s: %s is not valid: %w",
+		typed, err := schema.ValidateAttributeCopy(n, spec.mode != validateStrict,
+			xsd.ValidateOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("%s: %s is not valid: %w",
 				invalidCode(spec.mode), describeNode(n), err)
 		}
-		return nil
+		return typed, nil
 	}
-	if n.Kind != xdm.KindElement {
+	if n.Kind() != xdm.KindElement {
 		// Nothing else carries a type annotation, so there is nothing to
 		// assess.
-		return nil
+		return orig, nil
 	}
 	// XSLT 2.0 §19.2.1.3: validating a constructed *element* takes into
 	// account only constraints on its own content. "The validation rule
@@ -450,7 +463,8 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 	// code for failing it there. Applying it to a bare element reported five
 	// duplicate-ID failures as XTTE1510 for element constructions the spec
 	// says are valid.
-	vopts := xsd.ValidateOptions{Annotate: true, SkipIDConstraints: !docNode}
+	vopts := xsd.ValidateOptions{SkipIDConstraints: !docNode}
+	var typed *xdm.Node
 	var err error
 	if spec.mode == validateStrict {
 		// CanAssessStrictly rather than HasElementDeclaration: an element
@@ -461,19 +475,19 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 			// XTTE1512 is the specific code for strict validation finding no
 			// top-level declaration to assess against, as distinct from
 			// XTTE1510, which says the node was assessed and found invalid.
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"XTTE1512: no top-level declaration for %s", describeNode(n))
 		}
-		err = schema.Validate(n, vopts)
+		typed, err = schema.ValidateCopy(n, vopts)
 	} else {
-		err = schema.ValidateElementLax(n, vopts)
+		typed, err = schema.ValidateElementLaxCopy(n, vopts)
 	}
 	if err != nil {
 		// XTTE1555 rather than XTTE1510/XTTE1515 when the only thing the
 		// assessment found wrong was an ID/IDREF constraint, and the node
 		// being validated was a document node. See idConstraintFailure.
 		if docNode && idConstraintFailure(err) {
-			return fmt.Errorf("XTTE1555: %s is not valid: %w",
+			return nil, fmt.Errorf("XTTE1555: %s is not valid: %w",
 				describeNode(n), err)
 		}
 		code := invalidCode(spec.mode)
@@ -488,11 +502,27 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 			// from both.
 			code = "XTTE1510"
 		}
-		return fmt.Errorf("%s: %s is not valid: %w",
+		return nil, fmt.Errorf("%s: %s is not valid: %w",
 			code, describeNode(n), err)
 	}
 	if docNode {
-		return checkDocumentIDs(n)
+		if err := checkDocumentIDs(typed); err != nil {
+			return nil, err
+		}
+		return typed.Parent(), nil
+	}
+	return typed, nil
+}
+
+// assessOpen assesses the element sub is building, which is complete, and
+// puts the node assess returns in its place.
+func (spec validationSpec) assessOpen(rt *runtime, sub *outputBuilder) error {
+	typed, err := spec.assess(rt, sub.Open())
+	if err != nil {
+		return err
+	}
+	if typed != sub.Open() {
+		sub.ReplaceOpen(typed)
 	}
 	return nil
 }
@@ -571,8 +601,8 @@ func invalidCode(mode validationMode) string {
 // schema describes elements rather than documents.
 func soleElementChild(n *xdm.Node) (*xdm.Node, error) {
 	var elem *xdm.Node
-	for _, c := range n.Children {
-		switch c.Kind {
+	for c := range n.Children() {
+		switch c.Kind() {
 		case xdm.KindElement:
 			if elem != nil {
 				return nil, fmt.Errorf(
@@ -581,7 +611,7 @@ func soleElementChild(n *xdm.Node) (*xdm.Node, error) {
 			}
 			elem = c
 		case xdm.KindText:
-			if strings.TrimSpace(c.Value) != "" {
+			if strings.TrimSpace(c.Value()) != "" {
 				return nil, fmt.Errorf(
 					"XTTE1550: a validated document node must have no text " +
 						"node children")
@@ -599,7 +629,9 @@ func soleElementChild(n *xdm.Node) (*xdm.Node, error) {
 // stripAnnotations removes every type annotation from a subtree, which is what
 // validation="strip" means.
 func stripAnnotations(n *xdm.Node) {
-	if n == nil {
+	// A tree no node of which was ever typed has nothing to strip, and the
+	// walk was 8.5% of XRechnung stage 2, which strips every copy it makes.
+	if n == nil || !n.TreeHasTyping() {
 		return
 	}
 	// dm:nilled goes with the annotation, and so do the union member and the
@@ -610,22 +642,22 @@ func stripAnnotations(n *xdm.Node) {
 	// TypeAnnotation directly left DerivedPrimitive and ListItem behind,
 	// describing a type the node no longer claims.
 	n.StripTyping()
-	for _, a := range n.Attrs {
+	for a := range n.Attrs() {
 		a.StripTyping()
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		stripAnnotations(c)
 	}
 }
 
 func describeNode(n *xdm.Node) string {
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindAttribute:
-		return "attribute " + n.Name.Local
+		return "attribute " + n.Name().Local
 	case xdm.KindElement:
-		return "element " + n.Name.Local
+		return "element " + n.Name().Local
 	}
-	return n.Kind.String()
+	return n.Kind().String()
 }
 
 // namespaceSensitiveType reports whether a named type is, or derives from,
@@ -705,21 +737,21 @@ func checkDocumentIDs(doc *xdm.Node) error {
 		if n == nil {
 			return
 		}
-		for _, a := range n.Attrs {
-			if a.TypeAnnotation == "ID" {
-				noteID(n, a.Value)
+		for a := range n.Attrs() {
+			if a.TypeAnnotation() == "ID" {
+				noteID(n, a.Value())
 			} else {
-				noteRefs(a.TypeAnnotation, a.Value)
+				noteRefs(a.TypeAnnotation(), a.Value())
 			}
 		}
-		if n.Kind == xdm.KindElement {
-			if n.TypeAnnotation == "ID" {
+		if n.Kind() == xdm.KindElement {
+			if n.TypeAnnotation() == "ID" {
 				noteID(n, n.StringValue())
 			} else {
-				noteRefs(n.TypeAnnotation, n.StringValue())
+				noteRefs(n.TypeAnnotation(), n.StringValue())
 			}
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}
@@ -764,8 +796,8 @@ func carryAnnotations(doc *xdm.Node, recorded xdm.Sequence) {
 		return
 	}
 	var src []*xdm.Node
-	for _, c := range doc.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range doc.Children() {
+		if c.Kind() == xdm.KindElement {
 			src = append(src, c)
 		}
 	}
@@ -775,14 +807,14 @@ func carryAnnotations(doc *xdm.Node, recorded xdm.Sequence) {
 		if !ok {
 			continue
 		}
-		switch n.Kind {
+		switch n.Kind() {
 		case xdm.KindElement:
 			dst = append(dst, n)
 		case xdm.KindDocument:
 			// toTree absorbs a document node's children rather than the node
 			// itself, so its elements are what the copy holds.
-			for _, c := range n.Children {
-				if c.Kind == xdm.KindElement {
+			for c := range n.Children() {
+				if c.Kind() == xdm.KindElement {
 					dst = append(dst, c)
 				}
 			}
@@ -806,7 +838,7 @@ func carryAnnotations(doc *xdm.Node, recorded xdm.Sequence) {
 // trees disagree in shape, for the same reason carryAnnotations stops on a
 // count mismatch — a wrong annotation is worse than none.
 func copyAnnotationTree(src, dst *xdm.Node) {
-	if src == nil || dst == nil || src.Kind != dst.Kind {
+	if src == nil || dst == nil || src.Kind() != dst.Kind() {
 		return
 	}
 	// Every PSVI property travels, not the annotation name alone. The source
@@ -818,19 +850,19 @@ func copyAnnotationTree(src, dst *xdm.Node) {
 	// the resolved pair the copy asks the process-global registries what the
 	// name means -- which answer for whichever schema loaded last.
 	dst.CopyTypingFrom(src)
-	for _, sa := range src.Attrs {
-		if da := dst.Attr(sa.Name.URI, sa.Name.Local); da != nil {
+	for sa := range src.Attrs() {
+		if da := dst.Attr(sa.Name().URI, sa.Name().Local); da != nil {
 			da.CopyTypingFrom(sa)
 		}
 	}
 	var se, de []*xdm.Node
-	for _, c := range src.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range src.Children() {
+		if c.Kind() == xdm.KindElement {
 			se = append(se, c)
 		}
 	}
-	for _, c := range dst.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range dst.Children() {
+		if c.Kind() == xdm.KindElement {
 			de = append(de, c)
 		}
 	}

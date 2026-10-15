@@ -316,9 +316,18 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
           SCHEMAS: ${{ steps.schemas.outputs.release }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          # w3cschemas requires the v1 module, github.com/knroy/go-xml, which
+          # is released from the v1 branch; main carries v2. A v2 tag cannot
+          # be pinned by that path, so it is refused rather than half done.
+          case "$TAG" in
+            v1.*) BRANCH=v1 ;;
+            *)
+              echo "::error::w3cschemas requires go-xml v1, released from the v1 branch."
+              echo "Release w3cschemas with a v1 tag, or move it to /v2 first (RELEASE.md)."
+              exit 1 ;;
+          esac
           cd w3cschemas
           # Until this release the pin named the PREVIOUS go-xml, so what
           # w3cschemas' tests exercised was the module cache rather than this
@@ -359,24 +368,18 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add w3cschemas/go.mod w3cschemas/go.sum
           git commit -m "w3cschemas: pin go-xml ${TAG}"
-          # Onto the DEFAULT BRANCH, explicitly, not onto the detached tag
+          # Onto the v1 branch, explicitly, not onto the detached tag
           # checkout: HEAD here is the tagged commit, and pushing HEAD would
           # either be refused or land nowhere useful. The bump belongs after
-          # the release on the branch that carries development.
+          # the release on the branch that carries v1.
           #
           # The w3cschemas tag points at THIS new commit, which is correct:
           # the module released as w3cschemas/vX.Y.Z is the one whose go.mod
           # names the go-xml release it was tested against.
           git tag "w3cschemas/${SCHEMAS}"
-          # The default branch by name, from the event payload, rather than a
-          # hardcoded "main": a repository that renames it would otherwise
-          # have this step push a branch into existence under the old name.
-          # If the default branch is protected against direct pushes, this
-          # push is REFUSED and the step fails -- deliberately not worked
-          # around. The alternatives are to weaken the protection or to have
-          # the workflow force past it, and both are worse than a failed step
-          # with a clear message: the tag and the GitHub release are the
-          # release, and the pin bump is a follow-up commit anyone can make by
-          # hand from the log above.
-          git push origin "HEAD:refs/heads/${DEFAULT_BRANCH}"
+          # If v1 is protected against direct pushes, this push is REFUSED and
+          # the step fails -- deliberately not worked around: the tag and the GitHub
+          # release are the release, and the pin bump is a follow-up commit
+          # anyone can make by hand from the log above.
+          git push origin "HEAD:refs/heads/${BRANCH}"
           git push origin "w3cschemas/${SCHEMAS}"

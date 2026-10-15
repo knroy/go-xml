@@ -3,7 +3,7 @@ package xsd
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The declines in subsume.go and restrict.go are SOUND -- budget_soundness_test.go

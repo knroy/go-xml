@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Builtins returns the standard fn: function library.
@@ -424,8 +424,7 @@ func registerIntegerSubtypes(l *Library) {
 	})
 }
 
-// leafBuiltins are the fn: functions FuncCall.Eval may call without copying
-// the context (see Function.leaf). Each takes only atomic or node arguments,
+// leafBuiltins are the fn: functions marked Function.leaf. Each takes only atomic or node arguments,
 // reads the context without writing it, returns a materialised value and
 // calls no function item, host callback or resolver. A function belongs here
 // only after its body has been checked against all of that.

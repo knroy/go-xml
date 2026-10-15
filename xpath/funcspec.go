@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // This file adds the declared-signature layer the audit's finding 6 asks for.

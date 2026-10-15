@@ -3,7 +3,7 @@ package xslt
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // Tests for the data-flow environment behind §19.8.8.2.

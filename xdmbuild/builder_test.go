@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 )
 
 // xsltLike is the policy XSLT uses: a duplicate attribute replaces the
@@ -76,12 +76,12 @@ func TestDuplicateAttributeLastWins(t *testing.T) {
 	_ = el.AddAttribute(qn("a"), "first")
 	_ = el.AddAttribute(qn("a"), "second")
 	root := b.ToTree()
-	got := root.Children[0].Attrs
-	if len(got) != 1 {
-		t.Fatalf("want 1 attribute, got %d", len(got))
+	got := root.FirstChild()
+	if got.NumAttrs() != 1 {
+		t.Fatalf("want 1 attribute, got %d", got.NumAttrs())
 	}
-	if got[0].Value != "second" {
-		t.Errorf("want the later value to win, got %q", got[0].Value)
+	if got.AttrAt(0).Value() != "second" {
+		t.Errorf("want the later value to win, got %q", got.AttrAt(0).Value())
 	}
 }
 
@@ -129,8 +129,8 @@ func TestAtomicRunSpacing(t *testing.T) {
 		}
 		root := b.ToTree()
 		var sb strings.Builder
-		for _, ch := range root.Children[0].Children {
-			sb.WriteString(ch.Value)
+		for ch := range root.FirstChild().Children() {
+			sb.WriteString(ch.Value())
 		}
 		if got := sb.String(); got != c.want {
 			t.Errorf("%s: got %q want %q", c.name, got, c.want)
@@ -147,8 +147,8 @@ func TestTextAdjacentToAtomicHasNoSeparator(t *testing.T) {
 	el.AppendValue(xdm.NewString("a"))
 	root := b.ToTree()
 	var sb strings.Builder
-	for _, ch := range root.Children[0].Children {
-		sb.WriteString(ch.Value)
+	for ch := range root.FirstChild().Children() {
+		sb.WriteString(ch.Value())
 	}
 	if got := sb.String(); got != "xa" {
 		t.Errorf("got %q want %q", got, "xa")
@@ -181,4 +181,24 @@ func TestNewRequiresAPolicy(t *testing.T) {
 		}
 	}()
 	xdmbuild.New(nil)
+}
+
+// A list lent by NoteDeclaredList is shared by every element a literal result
+// element builds, so rebinding a prefix on one element must not write it.
+func TestNoteDeclaredListIsNotWritten(t *testing.T) {
+	list := []xdmbuild.NSDecl{{Prefix: "a", URI: "u1"}, {Prefix: "b", URI: "u2"}}
+	sub := xdmbuild.New(xsltLike{}).StartElement(xdm.QName{Local: "e"})
+	sub.NoteDeclaredList(list)
+	sub.NoteDeclared("a", "u3")
+	if err := sub.AddOwnNameNamespace("b", "u2"); err != nil {
+		t.Fatal(err)
+	}
+	if list[0].URI != "u1" || list[1].URI != "u2" || len(list) != 2 {
+		t.Fatalf("lent list was written: %v", list)
+	}
+	// The element itself sees its own rebinding: binding a to u3 again is no
+	// conflict, binding it to u1 is.
+	if err := sub.AddNamespace("a", "u1"); err == nil {
+		t.Fatal("rebinding a to u1 after noting u3: want a conflict")
+	}
 }

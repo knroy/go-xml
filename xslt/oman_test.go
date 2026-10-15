@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The Oman PINT rule set is a Schematron-compiled validating stylesheet — the

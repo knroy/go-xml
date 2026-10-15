@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // The W3C XSLT suite, filtered to what an XSLT 2.0 processor should pass.

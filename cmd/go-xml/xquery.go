@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xquery"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xquery"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // runXQuery implements "go-xml xquery".
@@ -152,12 +152,14 @@ Exit status: 0 if the query ran, 1 otherwise.
 		}
 		item = tree.Root
 		if *validate != "" {
-			// The same assessment the transform's -validate makes, annotating
-			// the tree this command just parsed, so the query sees schema
-			// types.
-			if err := validateSource(q.Schema(), tree.Root, *validate); err != nil {
+			// The same assessment the transform's -validate makes: a typed
+			// copy of the document becomes the context item, so the query
+			// sees schema types.
+			typed, err := validateSource(q.Schema(), tree.Root, *validate)
+			if err != nil {
 				return fmt.Errorf("%s: %w", in, err)
 			}
+			item = typed
 		}
 	}
 
@@ -171,13 +173,15 @@ Exit status: 0 if the query ran, 1 otherwise.
 
 	cctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	ctx := xpath.NewContext(item, xpath.Builtins()).WithNow(now)
-	ctx.Ctx = cctx
-	ctx.MaxItems = *maxItems
-	ctx.Docs = resolver
-	// The resolver refuses every text read unless -allow-unparsed-text turned
-	// it on, as in the transform.
-	ctx.Texts = resolver
+	ctx := xpath.NewContext(item, xpath.Builtins(), func(e *xpath.Env) {
+		e.Now, e.HasNow = now, true
+		e.Ctx = cctx
+		e.MaxItems = *maxItems
+		e.Docs = resolver
+		// The resolver refuses every text read unless -allow-unparsed-text
+		// turned it on, as in the transform.
+		e.Texts = resolver
+	})
 	// As with -p on the transform, values arrive as xs:string.
 	for k, v := range params {
 		ctx.Vars[k] = xdm.One(xdm.NewString(v))

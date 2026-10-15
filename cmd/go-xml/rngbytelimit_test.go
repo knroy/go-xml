@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/relaxng"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/relaxng"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Containment answers which files may be read, not how much of one.

@@ -23,7 +23,7 @@ Current position:
 | XSLT 3.0 | 99.80% — 11,495 of 11,518 in scope (23 failing); 3 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,769 `func Test` declarations, clean under `-race` |
+| Tests | 2,844 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -556,7 +556,7 @@ small feature rather than a bug in the import:
 
 * **Automatic input validation.** A source document is not validated because
   the query imported a schema, so it stays untyped until `validate { }` or the
-  caller (`xsd.ValidateOptions{Annotate: true}`) types it. That is what the
+  caller (`xsd.Schema.ValidateCopy`) types it. That is what the
   `schemaValidation` and `typedData` dependencies name, and the harness still
   skips on them; `prod-CastExpr.schema`'s `(a, b, c) is not an instance of
   xs:IDREF*` is the shape it takes.
@@ -598,14 +598,14 @@ an expression:
 ```go
 e, _ := xpath.ParseVersion(`parse-json('{"n":42}')`, nil, xpath.XPath31)
 ctx := xpath.NewContext(nil, xpath.Builtins())
-ctx.Version = xpath.XPath31   // and this line, or XPST0017
+ctx = ctx.WithVersion(xpath.XPath31) // and this line, or XPST0017
 seq, _ := e.Eval(ctx)         // seq[0] is an *xdm.MapItem
 ```
 
 Two things make that worse than it looks. The version is set in **two** places
 and both are required: `xpath.Parse` compiles 2.0, so the expression needs
 `ParseVersion(…, XPath31)`, and `parse-json` is registered with
-`registerFnSince(XPath31, …)`, which reads `ctx.Version` rather than the
+`registerFnSince(XPath31, …)`, which reads `ctx.Version()` rather than the
 parser's. Setting one and not the other gives `XPST0017: unknown function`,
 which reads like the function is missing rather than like a version is unset.
 The second is that the JSON text has to be *spliced into an expression*, so a
@@ -693,7 +693,7 @@ charge or the inheritance brings the fatal back.
 
 The guarantee extends to `fn:transform` called from XQuery or `xpath.Eval`
 (the processor `xslt` registers with `xpath`): that path charges from
-`ctx.Depth` under `ctx.MaxDepth`, and the nested runtime's XPath context now
+`ctx.Depth` under `ctx.Env().MaxDepth`, and the nested runtime's XPath context now
 starts at the inherited depth, so a cycle through another host language
 accumulates too. `TestTransformRecursionThroughAnotherHostIsBounded`; removing
 the seed fails it.

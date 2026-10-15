@@ -63,8 +63,7 @@
 # a record of a measurement and stays attached to the run that produced it.
 /tests/release-record.txt
 
-# The benchmark harness is kept local and out of the repository: its engines,
-# inputs and results are machine-specific. Both spellings, for the reason given
-# for testdata above. docs/benchmark.md records what it measured.
+# The benchmark harness is its own repository, github.com/knroy/go-xml-bench,
+# cloned here. Both spellings, for the reason given for testdata above.
 /bench
 /bench/

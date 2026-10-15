@@ -1,10 +1,9 @@
-//go:build !goxml_nohttp
+package xsd_test
 
-package xsd
-
-// The HTTPResolver limits at their edges, kept with the other limit
-// boundary tests (limits_boundary_test.go) but in their own file, because the
-// goxml_nohttp build leaves HTTPResolver out.
+// The xsdnet.HTTPResolver limits at their edges, kept with the other limit
+// boundary tests (limits_boundary_test.go) but in their own file and the
+// external test package, because HTTPResolver lives in package xsdnet, which
+// imports xsd.
 
 import (
 	"io"
@@ -13,6 +12,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/xsd/xsdnet"
 )
 
 func TestHTTPResolverMaxBytesBoundaries(t *testing.T) {
@@ -46,7 +47,7 @@ func TestHTTPResolverMaxBytesBoundaries(t *testing.T) {
 			// httptest binds to loopback, which HTTPResolver refuses by
 			// default; this test is about the MaxBytes boundary, not the
 			// address policy.
-			r := &HTTPResolver{MaxBytes: tt.max, AllowPrivateAddresses: true}
+			r := &xsdnet.HTTPResolver{MaxBytes: tt.max, AllowPrivateAddresses: true}
 			rc, _, err := r.Resolve("", srv.URL, "")
 			if err != nil {
 				t.Fatalf("Resolve: %v", err)
@@ -87,7 +88,7 @@ func TestHTTPResolverMaxBytesNegativeRefuses(t *testing.T) {
 
 	// See the note in TestHTTPResolverMaxBytesBoundaries: loopback is
 	// refused by default and this test is not about that.
-	r := &HTTPResolver{MaxBytes: -1, AllowPrivateAddresses: true}
+	r := &xsdnet.HTTPResolver{MaxBytes: -1, AllowPrivateAddresses: true}
 	rc, _, err := r.Resolve("", srv.URL, "")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -99,5 +100,19 @@ func TestHTTPResolverMaxBytesNegativeRefuses(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exceeds -1 bytes") {
 		t.Errorf("error %q does not name the limit", err)
+	}
+}
+
+// checkBoundaryErr is limits_boundary_test.go's helper, which this external
+// test package cannot reach.
+func checkBoundaryErr(t *testing.T, err error, want string) {
+	t.Helper()
+	switch {
+	case want == "" && err != nil:
+		t.Errorf("accepted input was refused: %v", err)
+	case want != "" && err == nil:
+		t.Errorf("input was accepted; want an error matching %q", want)
+	case want != "" && !strings.Contains(err.Error(), want):
+		t.Errorf("error %q does not name the limit; want it to contain %q", err, want)
 	}
 }

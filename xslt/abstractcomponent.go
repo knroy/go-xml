@@ -3,7 +3,7 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Abstract components and XTDE3052, XSLT 3.0 sections 3.5.2 and 3.5.3.2.
@@ -72,21 +72,16 @@ const abstractMarkerNS = "http://go-xml.invalid/xslt/abstract"
 
 // markAbstract records that a declaration is an abstract component, so that
 // the compiler gives it a stub body.
-func markAbstract(el *xdm.Node, what string) {
-	el.Attrs = append(el.Attrs, &xdm.Node{
-		Kind:   xdm.KindAttribute,
-		Name:   xdm.QName{URI: abstractMarkerNS, Local: "abstract"},
-		Value:  what,
-		Parent: el,
-	})
+func (e pkgEdits) markAbstract(el *xdm.Node, what string) {
+	e.addAttr(el, xdm.QName{URI: abstractMarkerNS, Local: "abstract"}, what)
 }
 
 // abstractStubFor answers the stub body a declaration needs, or nil where the
 // declaration is not an abstract component.
 func abstractStubFor(el *xdm.Node) []Instruction {
-	for _, a := range el.Attrs {
-		if a.Name.URI == abstractMarkerNS && a.Name.Local == "abstract" {
-			return []Instruction{&abstractStub{what: a.Value}}
+	for a := range el.Attrs() {
+		if a.Name().URI == abstractMarkerNS && a.Name().Local == "abstract" {
+			return []Instruction{&abstractStub{what: a.Value()}}
 		}
 	}
 	return nil
@@ -95,9 +90,9 @@ func abstractStubFor(el *xdm.Node) []Instruction {
 // abstractNameOf answers the symbolic name recorded on an abstract
 // declaration, or "" where the declaration is not abstract.
 func abstractNameOf(el *xdm.Node) string {
-	for _, a := range el.Attrs {
-		if a.Name.URI == abstractMarkerNS && a.Name.Local == "abstract" {
-			return a.Value
+	for a := range el.Attrs() {
+		if a.Name().URI == abstractMarkerNS && a.Name().Local == "abstract" {
+			return a.Value()
 		}
 	}
 	return ""

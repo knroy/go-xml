@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xquery"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xquery"
 )
 
 // evalStrings runs a query and returns its result as one space-separated

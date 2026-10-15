@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // With no -root, "go-xml validate" must confine schema reads to the schema's
@@ -165,8 +165,8 @@ func TestValidateOneGivesTheDocumentAURIBase(t *testing.T) {
 		t.Fatal("the validator was never called")
 	}
 	for _, c := range []struct{ what, uri string }{
-		{"base URI", got.BaseURI},
-		{"document URI", got.DocumentURI},
+		{"base URI", got.BaseURI()},
+		{"document URI", got.DocumentURI()},
 	} {
 		if !strings.HasPrefix(c.uri, "file:///") {
 			t.Errorf("%s = %q, want an absolute file: URI", c.what, c.uri)

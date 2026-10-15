@@ -3,7 +3,7 @@ package xsd
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestSchemaForJSONAnnotates checks the built-in schema of F&O 3.1 §C.2 both
@@ -43,20 +43,21 @@ func TestSchemaForJSONAnnotates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parsing %s: %v", tc.in, err)
 		}
-		if err := schema.Validate(tree.Root, ValidateOptions{
-			Annotate: true, SkipIDConstraints: true,
-		}); err != nil {
+		doc, err := schema.ValidateCopy(tree.Root, ValidateOptions{
+			SkipIDConstraints: true,
+		})
+		if err != nil {
 			t.Errorf("%s should be valid against the schema for JSON: %v", tc.in, err)
 			continue
 		}
-		root := tree.Root.Children[0]
-		if root.TypeAnnotation != tc.root {
-			t.Errorf("%s: root annotated %q, want %q", tc.in, root.TypeAnnotation, tc.root)
+		root := doc.FirstChild()
+		if root.TypeAnnotation() != tc.root {
+			t.Errorf("%s: root annotated %q, want %q", tc.in, root.TypeAnnotation(), tc.root)
 		}
 		got := ""
-		for _, c := range root.Children {
-			if c.Kind == xdm.KindElement {
-				got = c.TypeAnnotation
+		for c := range root.Children() {
+			if c.Kind() == xdm.KindElement {
+				got = c.TypeAnnotation()
 			}
 		}
 		if got != tc.child {
@@ -114,23 +115,24 @@ func TestSchemaForJSONWithinMapAnnotations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := schema.Validate(tree.Root, ValidateOptions{
-		Annotate: true, SkipIDConstraints: true,
-	}); err != nil {
+	doc, err := schema.ValidateCopy(tree.Root, ValidateOptions{
+		SkipIDConstraints: true,
+	})
+	if err != nil {
 		t.Fatalf("a map of every kind should be valid: %v", err)
 	}
-	root := tree.Root.Children[0]
-	if root.TypeAnnotation != j+"mapType" {
-		t.Errorf("root annotated %q, want %q", root.TypeAnnotation, j+"mapType")
+	root := doc.FirstChild()
+	if root.TypeAnnotation() != j+"mapType" {
+		t.Errorf("root annotated %q, want %q", root.TypeAnnotation(), j+"mapType")
 	}
 	seen := 0
-	for _, c := range root.Children {
-		if c.Kind != xdm.KindElement {
+	for c := range root.Children() {
+		if c.Kind() != xdm.KindElement {
 			continue
 		}
 		seen++
-		if got := c.TypeAnnotation; got != want[c.Name.Local] {
-			t.Errorf("%s annotated %q, want %q", c.Name.Local, got, want[c.Name.Local])
+		if got := c.TypeAnnotation(); got != want[c.Name().Local] {
+			t.Errorf("%s annotated %q, want %q", c.Name().Local, got, want[c.Name().Local])
 		}
 	}
 	if seen != len(want) {

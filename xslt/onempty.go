@@ -3,8 +3,9 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // The XSLT 3.0 conditional content instructions, section 8.4:
@@ -104,12 +105,12 @@ func (i *wherePopulatedInstr) Execute(rt *runtime, out *outputBuilder) error {
 func deemedEmpty(it xdm.Item) bool {
 	switch v := it.(type) {
 	case *xdm.Node:
-		switch v.Kind {
+		switch v.Kind() {
 		case xdm.KindElement, xdm.KindDocument:
 			// Attributes and namespaces do not save an element here: 8.4.1
 			// says so explicitly, and the section's own example relies on it
 			// — <ul class="my-list"> with no list items is dropped.
-			return len(v.Children) == 0
+			return v.FirstChild() == nil
 		default:
 			return v.StringValue() == ""
 		}
@@ -144,11 +145,11 @@ func deemedEmpty(it xdm.Item) bool {
 func vacuous(it xdm.Item) bool {
 	switch v := it.(type) {
 	case *xdm.Node:
-		switch v.Kind {
+		switch v.Kind() {
 		case xdm.KindDocument:
-			return len(v.Children) == 0
+			return v.FirstChild() == nil
 		case xdm.KindText:
-			return v.Value == ""
+			return v.Value() == ""
 		case xdm.KindElement:
 			// An element is content however empty it is.
 			return false
@@ -223,6 +224,9 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 		// declares $x twice, once before each of two xsl:on-non-empty
 		// instructions, and expects each to see its own.
 		rt *runtime
+		// locals is how many locals were bound there; the ones bound since
+		// are taken off the stack while it runs.
+		locals int
 	}
 	var (
 		r       xdm.Sequence
@@ -242,7 +246,15 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 		for i := len(l) - 1; i >= 0; i-- {
 			p := l[i]
 			sub := newOutputBuilder(rt)
-			if err := p.instr.Execute(p.rt, sub); err != nil {
+			var later *xpathleaf.Locals
+			if st := rt.localStack(); st != nil {
+				later = st.Detach(p.locals)
+			}
+			err := p.instr.Execute(p.rt, sub)
+			if later != nil {
+				rt.localStack().Reattach(later)
+			}
+			if err != nil {
 				return err
 			}
 			items := sub.Sequence()
@@ -271,7 +283,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 			if err != nil {
 				return err
 			}
-			rt = rt.withVar(v.v.Name, val)
+			rt = rt.bindLocal(v.v.Name, val)
 			continue
 		}
 
@@ -284,7 +296,8 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 				}
 				r = append(r, sub.Sequence()...)
 			} else {
-				l = append(l, pending{instr: ci, at: len(r), rt: rt})
+				l = append(l, pending{instr: ci, at: len(r), rt: rt,
+					locals: rt.localsMark()})
 			}
 			continue
 
@@ -368,8 +381,8 @@ func appendItem(out *outputBuilder, it xdm.Item) {
 // node to the real builder would make it a child of the element under
 // construction, which is not a thing an attribute may be.
 func appendItemChecked(out *outputBuilder, it xdm.Item) error {
-	if n, ok := it.(*xdm.Node); ok && n.Kind == xdm.KindAttribute {
-		return out.AddAttributeWithTyping(n.Name, n.Value, xdm.TypingOf(n))
+	if n, ok := it.(*xdm.Node); ok && n.Kind() == xdm.KindAttribute {
+		return out.AddAttributeWithTyping(n.Name(), n.Value(), xdm.TypingOf(n))
 	}
 	appendItem(out, it)
 	return nil
@@ -378,7 +391,7 @@ func appendItemChecked(out *outputBuilder, it xdm.Item) error {
 // compileOnEmpty compiles xsl:on-empty, xsl:on-non-empty and
 // xsl:where-populated.
 func (c *compiler) compileOnEmpty(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
-	switch n.Name.Local {
+	switch n.Name().Local {
 	case "where-populated":
 		body, err := c.compileSequence(n, n)
 		if err != nil {
@@ -393,7 +406,7 @@ func (c *compiler) compileOnEmpty(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	var sel *xpath.Compiled
 	if a := n.Attr("", "select"); a != nil {
 		var err error
-		if sel, err = compileExpr(a.Value, ns); err != nil {
+		if sel, err = compileExpr(a.Value(), ns); err != nil {
 			return nil, err
 		}
 	}
@@ -403,10 +416,10 @@ func (c *compiler) compileOnEmpty(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	}
 	if sel != nil && len(body) > 0 {
 		return nil, fmt.Errorf("XTSE3185: %s has both a select attribute and content",
-			n.Name.Lexical())
+			n.Name().Lexical())
 	}
 
-	if n.Name.Local == "on-empty" {
+	if n.Name().Local == "on-empty" {
 		return &onEmptyInstr{sel: sel, body: body}, nil
 	}
 	return &onNonEmptyInstr{sel: sel, body: body}, nil
@@ -418,21 +431,21 @@ func (c *compiler) compileOnEmpty(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 // because it is a static error about what the stylesheet *says*, and the
 // compiled form has already dropped the stripped whitespace and the comments
 // that decide whether a following text node is significant.
-func checkOnEmptyPlacement(nodes []*xdm.Node) error {
+func (c *compiler) checkOnEmptyPlacement(nodes []*xdm.Node) error {
 	seen := false
 	for _, n := range nodes {
-		switch n.Kind {
+		switch n.Kind() {
 		case xdm.KindText:
 			// Only a text node that survives whitespace stripping counts;
 			// the indentation between two instructions does not.
-			if !seen || xdm.IsXMLWhitespace(n.Value) && !stylesheetTextPreserved(n) {
+			if !seen || xdm.IsXMLWhitespace(n.Value()) && !stylesheetTextPreserved(n, c.textParent(n)) {
 				continue
 			}
 			return fmt.Errorf(
 				"XTSE0010: a significant text node may not follow xsl:on-empty")
 
 		case xdm.KindElement:
-			if n.Name.URI == xdm.NSXSL && n.Name.Local == "on-empty" {
+			if n.Name().URI == xdm.NSXSL && n.Name().Local == "on-empty" {
 				if seen {
 					// "It must be the only xsl:on-empty instruction in the
 					// sequence constructor."
@@ -449,12 +462,12 @@ func checkOnEmptyPlacement(nodes []*xdm.Node) error {
 			// and anything that is not an instruction at all — xsl:catch, a
 			// declaration read by its parent — is not "followed by any other
 			// instruction" in the sense the rule means.
-			if n.Name.URI == xdm.NSXSL {
-				if n.Name.Local == "fallback" || !xsltInstructions[n.Name.Local] {
+			if n.Name().URI == xdm.NSXSL {
+				if n.Name().Local == "fallback" || !xsltInstructions[n.Name().Local] {
 					continue
 				}
 				return fmt.Errorf(
-					"XTSE0010: xsl:%s may not follow xsl:on-empty", n.Name.Local)
+					"XTSE0010: xsl:%s may not follow xsl:on-empty", n.Name().Local)
 			}
 			// A literal result element is named by the rule explicitly.
 			return fmt.Errorf(

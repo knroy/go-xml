@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/version"
+	"github.com/knroy/go-xml/v2/internal/version"
 )
 
 // TestProductVersionIsNotStale covers the defect that made this function

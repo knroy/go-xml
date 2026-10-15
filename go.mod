@@ -1,4 +1,4 @@
-module github.com/knroy/go-xml
+module github.com/knroy/go-xml/v2
 
 go 1.25.0
 

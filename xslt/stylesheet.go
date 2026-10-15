@@ -6,9 +6,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // Stylesheet is a compiled XSLT 2.0 stylesheet.
@@ -23,6 +23,16 @@ type Stylesheet struct {
 	// rtLib is the runtime function library, built once by runtimeLibrary.
 	rtLib     *xpath.Library
 	rtLibOnce sync.Once
+
+	// stripMemo caches stripsElement's answer per package and element
+	// name, under stripMu; see stripsElement.
+	stripMu   sync.RWMutex
+	stripMemo map[stripKey]bool
+
+	// stripped holds the whitespace-stripped copies of fn:doc trees across
+	// transforms, under strippedMu; see Stylesheet.strippedTree.
+	strippedMu sync.Mutex
+	stripped   map[weakStrippedKey]*xdm.Tree
 
 	// templates are the match templates, pre-sorted by descending priority so
 	// that selection is a linear scan that stops at the first match.
@@ -282,6 +292,10 @@ type Template struct {
 	// declOrder breaks ties between equal-priority templates: the last one
 	// declared wins, per the spec's conflict-resolution rule.
 	declOrder int
+	// baseURI is the xsl:template element's base URI, installed on the
+	// context when the body runs so that its expressions, which carry the
+	// same one, evaluate without copying the context to install it.
+	baseURI string
 	// unionGroup identifies the xsl:template declaration a rule came from.
 	//
 	// compileTemplate splits a union pattern into one rule per branch so that
@@ -345,6 +359,16 @@ type Variable struct {
 	// XTDE3052, which 3.5.3.2 makes the error for an invocation that "is
 	// evaluated", so a variable nothing refers to must not raise at all.
 	deferred bool
+	// eager marks a global evaluated when the transform starts rather than
+	// on first use (see evalGlobals): one whose own select or content
+	// writes xsl:message, xsl:assert or xsl:result-document or names
+	// fn:trace, so that its effect does not depend on whether anything
+	// reads it, and one that names itself or depends on a cycle (see
+	// markGlobalOrder).
+	eager bool
+	// selfRef marks a global that names itself (see globalRefs), which is
+	// XPST0008 whether or not anything reads it.
+	selfRef bool
 	// pkg is the package whose module declared this variable. Section 3.5.5
 	// makes a component's identity belong to its package, and a diamond --
 	// one package used by two routes, each overriding the same variable --
@@ -428,7 +452,7 @@ func packageOf(ctx *xpath.Context) int {
 	if ctx == nil {
 		return 0
 	}
-	if p, ok := ctx.StaticHost.(hostPackage); ok {
+	if p, ok := ctx.StaticHost().(hostPackage); ok {
 		return int(p)
 	}
 	return 0
@@ -641,11 +665,11 @@ func stylesheetBase(doc *xdm.Node, opt string) string {
 	// the document node alone ignored it, so a stylesheet that declared its
 	// own base got the file it happened to be loaded from instead.
 	if doc != nil {
-		if root := firstElement(doc); root != nil && root.BaseURI != "" {
-			return root.BaseURI
+		if root := firstElement(doc); root != nil && root.BaseURI() != "" {
+			return root.BaseURI()
 		}
-		if doc.BaseURI != "" {
-			return doc.BaseURI
+		if doc.BaseURI() != "" {
+			return doc.BaseURI()
 		}
 	}
 	return opt
@@ -663,6 +687,8 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	defer compileMu.Unlock()
 	setSharedNS(map[*xdm.Node]map[string]string{})
 	defer setSharedNS(nil)
+	setVersionMemo(true)
+	defer setVersionMemo(false)
 	return compileLocked(doc, opts)
 }
 
@@ -685,22 +711,24 @@ func setSharedNS(m map[*xdm.Node]map[string]string) {
 	sharedNS.Unlock()
 }
 
-// forgetSharedNS drops the cached maps, for a caller that has just changed a
-// stylesheet tree's namespaces or parent links during a compilation.
+// forgetSharedNS drops the cached maps, and the version memo, for a caller
+// that has just changed a stylesheet tree's namespaces or parent links
+// during a compilation.
 func forgetSharedNS() {
 	sharedNS.Lock()
 	if sharedNS.m != nil {
 		clear(sharedNS.m)
 	}
 	sharedNS.Unlock()
+	forgetVersionMemo()
 }
 
 // inScopeNamespacesShared is el.InScopeNamespaces for a caller that only reads
 // the result: the map may be shared and must not be modified.
 func inScopeNamespacesShared(el *xdm.Node) map[string]string {
 	d := el
-	for d != nil && (d.Kind != xdm.KindElement || len(d.Namespaces) == 0) {
-		d = d.Parent
+	for d != nil && (d.Kind() != xdm.KindElement || d.NumNamespaceDecls() == 0) {
+		d = d.Parent()
 	}
 	if d == nil {
 		return el.InScopeNamespaces()
@@ -894,6 +922,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// Every module has compiled, so an xsl:function declared after -- or
 	// imported after -- the global that calls it is now known.
 	c.foldFunctionRefsIntoGlobals()
+	c.markGlobalOrder()
 	// XTSE1290 likewise: two imported xsl:decimal-format declarations may
 	// conflict with each other and still be harmless, because the importing
 	// module overrides both.
@@ -1207,7 +1236,7 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 	return &nsResolver{
 		bindings:  inScopeNamespacesShared(el),
 		defaultNS: defaultElementNS,
-		baseURI:   el.BaseURI,
+		baseURI:   el.BaseURI(),
 		collation: defaultCollationAt(el),
 		compat:    compatModeAt(el),
 		schema:    compileSchema,
@@ -1557,7 +1586,7 @@ func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error
 	}
 	// A named function reference resolves at the processor's version, not the
 	// module's: "#N" names a function, and which functions exist is already a
-	// processor property (see xpath.Context.LibraryVersion). The XSLT suite
+	// processor property (see xpath.Env.LibraryVersion). The XSLT suite
 	// runs version="2.0" modules scoped XSLT30+ that write "current-group#0"
 	// and "system-property#1", and a 3.0 processor must resolve them. Every
 	// other 3.0 construct stays gated on the module's own declaration.
@@ -1706,17 +1735,17 @@ func newStylesheetFuncs() *xpath.Library {
 // element and xpath-default-namespace on an XSLT element, and the innermost
 // occurrence wins — the same scoping [xsl:]default-collation has.
 func xpathDefaultNamespaceAt(el *xdm.Node) string {
-	for n := el; n != nil; n = n.Parent {
-		if n.Kind != xdm.KindElement {
+	for n := el; n != nil; n = n.Parent() {
+		if n.Kind() != xdm.KindElement {
 			continue
 		}
-		if n.Name.URI == xdm.NSXSL {
+		if n.Name().URI == xdm.NSXSL {
 			if a := n.Attr("", "xpath-default-namespace"); a != nil {
-				return a.Value
+				return a.Value()
 			}
 		}
 		if a := n.Attr(xdm.NSXSL, "xpath-default-namespace"); a != nil {
-			return a.Value
+			return a.Value()
 		}
 	}
 	return ""
@@ -1730,19 +1759,19 @@ func xpathDefaultNamespaceAt(el *xdm.Node) string {
 // the implementation recognises is used — which is how a stylesheet names a
 // preferred collation and a fallback in one attribute.
 func defaultCollationAt(el *xdm.Node) string {
-	for n := el; n != nil; n = n.Parent {
-		if n.Kind != xdm.KindElement {
+	for n := el; n != nil; n = n.Parent() {
+		if n.Kind() != xdm.KindElement {
 			continue
 		}
 		v := ""
-		if n.Name.URI == xdm.NSXSL {
+		if n.Name().URI == xdm.NSXSL {
 			if a := n.Attr("", "default-collation"); a != nil {
-				v = a.Value
+				v = a.Value()
 			}
 		}
 		if v == "" {
 			if a := n.Attr(xdm.NSXSL, "default-collation"); a != nil {
-				v = a.Value
+				v = a.Value()
 			}
 		}
 		if v == "" {

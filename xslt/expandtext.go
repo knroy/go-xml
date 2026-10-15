@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Text value templates, XSLT 3.0 section 5.6.2.
@@ -42,8 +42,8 @@ func expandTextAt(el *xdm.Node) bool {
 	if !expandTextVersion(el) {
 		return false
 	}
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
 		v, ok := expandTextAttr(cur)
@@ -66,14 +66,14 @@ func expandTextAt(el *xdm.Node) bool {
 // attribute, and cvt-003 is written to catch exactly that confusion.
 func expandTextAttr(el *xdm.Node) (bool, bool) {
 	var raw string
-	if el.Name.URI == xdm.NSXSL {
+	if el.Name().URI == xdm.NSXSL {
 		if a := el.Attr("", "expand-text"); a != nil {
-			raw = a.Value
+			raw = a.Value()
 		} else {
 			return false, false
 		}
 	} else if a := el.Attr(xdm.NSXSL, "expand-text"); a != nil {
-		raw = a.Value
+		raw = a.Value()
 	} else {
 		return false, false
 	}
@@ -94,18 +94,18 @@ func expandTextAttr(el *xdm.Node) (bool, bool) {
 // not one the summary permits.
 func checkExpandText(el *xdm.Node) error {
 	var raw string
-	if el.Name.URI == xdm.NSXSL {
+	if el.Name().URI == xdm.NSXSL {
 		a := el.Attr("", "expand-text")
 		if a == nil {
 			return nil
 		}
-		raw = a.Value
+		raw = a.Value()
 	} else {
 		a := el.Attr(xdm.NSXSL, "expand-text")
 		if a == nil {
 			return nil
 		}
-		raw = a.Value
+		raw = a.Value()
 	}
 	switch strings.TrimSpace(raw) {
 	case "yes", "true", "1", "no", "false", "0":
@@ -138,11 +138,11 @@ func (i *textValueTemplateInstr) Execute(rt *runtime, out *outputBuilder) error 
 
 // compileText compiles one text node of a sequence constructor, as either
 // literal text or a text value template.
-func (c *compiler) compileText(n *xdm.Node) (Instruction, error) {
-	if n.Parent == nil || !expandTextAt(n.Parent) {
-		return &textInstr{text: n.Value}, nil
+func (c *compiler) compileText(value string, parent *xdm.Node) (Instruction, error) {
+	if parent == nil || !expandTextAt(parent) {
+		return &textInstr{text: value}, nil
 	}
-	tmpl, err := compileAVT(emptyBracesRemoved(n.Value), newNSResolver(n.Parent, ""))
+	tmpl, err := compileAVT(emptyBracesRemoved(value), newNSResolver(parent, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +161,8 @@ func (c *compiler) compileText(n *xdm.Node) (Instruction, error) {
 // version-sensitive decision reads it, so that a 3.0 module included from a
 // 2.0 one keeps its own answer.
 func expandTextVersion(el *xdm.Node) bool {
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement || !hasVersionAttr(cur) {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement || !hasVersionAttr(cur) {
 			continue
 		}
 		return versionAt(cur) >= 3.0

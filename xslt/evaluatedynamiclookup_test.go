@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // 10.4.1 keeps the XSLT-defined functions out of the target expression's

@@ -1,8 +1,8 @@
 package xpath
 
 import (
-	"github.com/knroy/go-xml/internal/xpathleaf"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 func init() {
@@ -14,10 +14,26 @@ func init() {
 		return &n
 	}
 	xpathleaf.SetHost = func(c any, h *xpathleaf.Host) { c.(*Context).host = h }
+	xpathleaf.WithLocals = func(c any, l *xpathleaf.Locals) any {
+		n := *c.(*Context)
+		n.Vars, n.bind, n.Parent = nil, &varBinding{locals: l}, c.(*Context)
+		return &n
+	}
+	xpathleaf.WithBindingsOf = func(c, base any) any {
+		n, b := *c.(*Context), base.(*Context)
+		n.Vars, n.bind, n.Parent = b.Vars, b.bind, b.Parent
+		return &n
+	}
 	xpathleaf.WithFocusHost = func(c any, item xdm.Item, pos, size int, h *xpathleaf.Host) any {
 		n := *c.(*Context)
-		n.Item, n.Position, n.Size, n.host = item, pos, size, h
+		n.Item, n.Position, n.Size, n.host = item, int32(pos), int32(size), h
 		return &n
+	}
+	xpathleaf.ResolveDocumentIn = func(r, c any, uri, base string) (*xdm.Tree, error) {
+		return resolveDocumentIn(r.(ContextDocumentResolver), c.(*Context), uri, base)
+	}
+	xpathleaf.CallItem = func(c any, fn *xdm.FunctionItem, args []xdm.Sequence) (xdm.Sequence, error) {
+		return callItem(c.(*Context), fn, args)
 	}
 }
 

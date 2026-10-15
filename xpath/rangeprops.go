@@ -5,7 +5,7 @@ import (
 	"math"
 	"math/big"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // An integer range is the one sequence in XPath 2.0 whose contents are fully

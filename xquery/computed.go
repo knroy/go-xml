@@ -3,7 +3,7 @@ package xquery
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // parseComputed parses a computed constructor if one starts here.

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // loadCheck parses a document, loads its DTD through Load, and validates.

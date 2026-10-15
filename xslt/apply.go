@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // applyTemplatesInstr implements xsl:apply-templates.
@@ -62,7 +62,7 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if !ok {
 			return fmt.Errorf("XTTE0510: xsl:apply-templates requires a node as the context item")
 		}
-		for _, ch := range node.Children {
+		for ch := range node.Children() {
 			seq = append(seq, ch)
 		}
 	}
@@ -133,7 +133,7 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 func (i *applyTemplatesInstr) effectiveMode(rt *runtime) string {
 	switch i.mode {
 	case "#current":
-		return rt.sel.mode
+		return rt.selected().mode
 	case "#default":
 		return ""
 	}
@@ -198,20 +198,12 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 	//
 	// Binding it here rather than at the call site covers every entry point
 	// at once, and rebinding it to the same node the caller already bound
-	// costs nothing.
+	// costs nothing. sub is withSelection's fresh copy, so its context is
+	// replaced in place rather than copying the runtime again.
 	if node != nil {
-		sub = sub.withCurrentNode(node)
+		sub.ctx = withCurrentItem(sub.ctx, node)
 	}
 	return runTemplate(sub, t, params, tunnels, out)
-}
-
-// withCurrentNode records node as what fn:current() returns, without touching
-// the focus. The focus is already node here; only the current-node binding may
-// be missing.
-func (rt *runtime) withCurrentNode(node *xdm.Node) *runtime {
-	n := *rt
-	n.ctx = withCurrentItem(rt.ctx, node)
-	return &n
 }
 
 // findTemplate returns the highest-priority template matching node in mode.
@@ -371,7 +363,7 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 		// rules match book and bktlong produced an empty result. Attributes
 		// are not visited -- the rule has no select, so it selects children
 		// only, and a document node has no attributes anyway.
-		if node.Kind != xdm.KindDocument {
+		if node.Kind() != xdm.KindDocument {
 			return nil
 		}
 		return builtInDescend(rt, node, mode, params, tunnels, out, false)
@@ -412,15 +404,16 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 		return builtInShallowCopy(rt, node, mode, params, tunnels, out)
 	}
 
-	switch node.Kind {
+	switch node.Kind() {
 	case xdm.KindDocument, xdm.KindElement:
 		if err := rt.descend(); err != nil {
 			return err
 		}
 		defer rt.ascend()
-		size := len(node.Children)
-		for idx, ch := range node.Children {
-			sub := rt.withCurrent(ch, idx+1, size)
+		size, idx := node.NumChildren(), 0
+		for ch := range node.Children() {
+			idx++
+			sub := rt.withCurrent(ch, idx, size)
 			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
 				return err
 			}
@@ -438,8 +431,16 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 	return nil
 }
 
-// runTemplate executes a template with the supplied parameters.
+// runTemplate executes a template with the supplied parameters, in a frame
+// of its own (see locals.go).
 func runTemplate(rt *runtime, t *Template,
+	params map[string]xdm.Sequence, tunnels map[string]xdm.Sequence,
+	out *outputBuilder) error {
+	defer rt.leaveFrame(rt.enterFrame())
+	return runTemplateBody(rt, t, params, tunnels, out)
+}
+
+func runTemplateBody(rt *runtime, t *Template,
 	params map[string]xdm.Sequence, tunnels map[string]xdm.Sequence,
 	out *outputBuilder) error {
 
@@ -476,6 +477,13 @@ func runTemplate(rt *runtime, t *Template,
 	// into it — which is what makes current-merge-group() in a called template
 	// the XTDE3480 that merge-087 and merge-088 require.
 	sub := rt.clearMergeContext()
+	if t.baseURI != "" {
+		if c := sub.ctx.WithStaticBaseURI(t.baseURI); c != sub.ctx {
+			n := *sub
+			n.ctx = c
+			sub = &n
+		}
+	}
 	// use="absent" means "the contained sequence constructor, and any
 	// xsl:param elements, are evaluated with an absent focus". It is not an
 	// error to call such a template with a focus -- the item is simply not
@@ -517,7 +525,7 @@ func runTemplate(rt *runtime, t *Template,
 				if err != nil {
 					return err
 				}
-				sub = sub.withVar(p.Name, v)
+				sub = sub.bindLocal(p.Name, v)
 				continue
 			}
 		} else if v, ok := sub.tunnel[key]; ok {
@@ -525,7 +533,7 @@ func runTemplate(rt *runtime, t *Template,
 			if err != nil {
 				return err
 			}
-			sub = sub.withVar(p.Name, v)
+			sub = sub.bindLocal(p.Name, v)
 			continue
 		}
 		if p.Required {
@@ -565,7 +573,7 @@ func runTemplate(rt *runtime, t *Template,
 			}
 			return err
 		}
-		sub = sub.withVar(p.Name, val)
+		sub = sub.bindLocal(p.Name, val)
 	}
 
 	if t.asType == nil {
@@ -684,6 +692,8 @@ type userFunction struct {
 	// arguments must return identical results -- the SAME nodes, not merely
 	// equal ones.
 	deterministic bool
+	// baseURI is the xsl:function element's base URI; see Template.baseURI.
+	baseURI string
 }
 
 // call adapts the function to the xpath.Function signature.
@@ -724,7 +734,10 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		}
 	}
 
-	sub := rt
+	// The body is a frame of its own, and sees the globals but nothing bound
+	// where it was called.
+	defer rt.leaveFrame(rt.enterFrame())
+	sub := rt.globalBindings()
 	for i, p := range f.params {
 		// A declared parameter type converts the argument. Without this a
 		// parameter declared "as=xs:decimal?" receives an untypedAtomic and
@@ -740,11 +753,14 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		if err != nil {
 			return nil, err
 		}
-		sub = sub.withVar(p.Name, v)
+		sub = sub.bindLocal(p.Name, v)
 	}
 	// A function body has no context item: referring to "." inside one is an
 	// error, which is what stops functions from depending on hidden state.
 	sub = sub.withFocus(nil, 0, 0)
+	if f.baseURI != "" {
+		sub.ctx = sub.ctx.WithStaticBaseURI(f.baseURI)
+	}
 	// Section 5.4's table lists what a call on a stylesheet function clears
 	// as well as the focus: the current group, the current grouping key and
 	// the current captured substrings.
@@ -771,7 +787,7 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	}
 	// Section 24.3: the current output URI is cleared while a stylesheet
 	// function's body is evaluated.
-	sub.ctx = sub.ctx.WithVar(outputURIVar, xdm.Empty())
+	sub = sub.withOutputURI("")
 
 	out := newOutputBuilder(rt)
 	if err := execSequence(f.body, sub, out); err != nil {
@@ -833,7 +849,7 @@ func (rt *runtime) writeIdenticalKey(b *strings.Builder, s xdm.Sequence) error {
 		b.WriteByte(0x1e)
 		switch it := it.(type) {
 		case *xdm.Atomic:
-			k, err := xpath.GroupingKey(it, nil, rt.ctx.ImplicitTimezone)
+			k, err := xpath.GroupingKey(it, nil, rt.ctx.Env().ImplicitTimezone)
 			if err != nil {
 				return err
 			}
@@ -931,7 +947,7 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if i.applyImports {
 		name = "xsl:apply-imports"
 	}
-	if rt.sel.template == nil {
+	if rt.selected().template == nil {
 		return fmt.Errorf("XTDE0560: %s used outside a template rule", name)
 	}
 	// Section 6.7 states two conditions, not one: there must be a current
@@ -946,7 +962,7 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// which moves it to the parent. Checking only for a current rule left
 	// both re-dispatching: 029 against no item at all, and 030 against the
 	// parent, which the same rule matched again -- 5000 levels of it.
-	if !sameFocusItem(rt.sel.item, rt.ctx.Item) {
+	if !sameFocusItem(rt.selected().item, rt.ctx.Item) {
 		return fmt.Errorf(
 			"XTDE0560: %s: the context item is no longer the item the "+
 				"current template rule matched", name)
@@ -965,10 +981,10 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	)
 	if i.applyImports {
 		t, nxt, err = rt.sheet.findTemplateInImportTree(
-			node, rt.sel.mode, rt.ctx,
-			rt.sel.template.lowPrecedence, rt.sel.template.importPrecedence)
+			node, rt.selected().mode, rt.ctx,
+			rt.selected().template.lowPrecedence, rt.selected().template.importPrecedence)
 	} else {
-		t, nxt, err = rt.sheet.findTemplateFrom(node, rt.sel.mode, rt.ctx, rt.sel.next)
+		t, nxt, err = rt.sheet.findTemplateFrom(node, rt.selected().mode, rt.ctx, rt.selected().next)
 	}
 	if err != nil {
 		return err
@@ -988,18 +1004,18 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 	if tunnels == nil {
-		tunnels = rt.sel.tunnels
+		tunnels = rt.selected().tunnels
 	}
 
 	if t == nil {
 		// Falling off the end of the template list lands on the built-in rule.
-		return applyBuiltInRule(rt, node, rt.sel.mode, params, tunnels, out)
+		return applyBuiltInRule(rt, node, rt.selected().mode, params, tunnels, out)
 	}
 	if err := rt.descend(); err != nil {
 		return err
 	}
 	defer rt.ascend()
-	sub := rt.withSelection(t, nxt, rt.sel.mode, params, tunnels)
+	sub := rt.withSelection(t, nxt, rt.selected().mode, params, tunnels)
 	return runTemplate(sub, t, params, tunnels, out)
 }
 
@@ -1009,15 +1025,16 @@ func builtInDescend(rt *runtime, node *xdm.Node, mode string,
 	params, tunnels map[string]xdm.Sequence, out *outputBuilder,
 	copyText bool) error {
 
-	switch node.Kind {
+	switch node.Kind() {
 	case xdm.KindDocument, xdm.KindElement:
 		if err := rt.descend(); err != nil {
 			return err
 		}
 		defer rt.ascend()
-		size := len(node.Children)
-		for idx, ch := range node.Children {
-			sub := rt.withCurrent(ch, idx+1, size)
+		size, idx := node.NumChildren(), 0
+		for ch := range node.Children() {
+			idx++
+			sub := rt.withCurrent(ch, idx, size)
 			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
 				return err
 			}
@@ -1044,7 +1061,7 @@ func builtInDescend(rt *runtime, node *xdm.Node, mode string,
 func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
 	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
 
-	if node.Kind != xdm.KindDocument && node.Kind != xdm.KindElement {
+	if node.Kind() != xdm.KindDocument && node.Kind() != xdm.KindElement {
 		return nil
 	}
 	if err := rt.descend(); err != nil {
@@ -1054,15 +1071,17 @@ func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
 	// Two separate xsl:apply-templates instructions, so position() restarts
 	// at 1 for the children -- the same distinction 6.7.3's note draws about
 	// the identity rule.
-	for idx, a := range node.Attrs {
-		an := rt.withCurrent(a, idx+1, len(node.Attrs))
+	for idx := range node.NumAttrs() {
+		a := node.AttrAt(idx)
+		an := rt.withCurrent(a, idx+1, node.NumAttrs())
 		if err := applyToNode(an, a, mode, params, tunnels, out); err != nil {
 			return err
 		}
 	}
-	size := len(node.Children)
-	for idx, ch := range node.Children {
-		cn := rt.withCurrent(ch, idx+1, size)
+	size, idx := node.NumChildren(), 0
+	for ch := range node.Children() {
+		idx++
+		cn := rt.withCurrent(ch, idx, size)
 		if err := applyToNode(cn, ch, mode, params, tunnels, out); err != nil {
 			return err
 		}
@@ -1081,7 +1100,7 @@ func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
 func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
 
-	switch node.Kind {
+	switch node.Kind() {
 	case xdm.KindDocument:
 		// 6.7.3 spells the rule out as <xsl:copy>...</xsl:copy>, and xsl:copy
 		// over a document node constructs one rather than running the body
@@ -1106,15 +1125,15 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 				dst.DocType = src.DocType
 			}
 		}
-		if doc.BaseURI == "" {
-			doc.BaseURI = node.BaseURI
+		if doc.BaseURI() == "" {
+			doc.SetBaseURI(node.BaseURI())
 		}
 		out.AppendNode(doc)
 		return nil
 	case xdm.KindElement:
-		sub := out.StartElement(node.Name)
-		if out.Open() == nil && sub.Open().BaseURI == "" {
-			sub.Open().BaseURI = node.BaseURI
+		sub := out.StartElement(node.Name())
+		if out.Open() == nil && sub.Open().BaseURI() == "" {
+			sub.Open().SetBaseURI(node.BaseURI())
 		}
 		copyNamespacesTo(rt, sub, node)
 		// The attributes are processed first so that they reach the element
@@ -1124,15 +1143,16 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 			return err
 		}
 		defer rt.ascend()
-		for _, a := range node.Attrs {
-			an := rt.withCurrent(a, 1, len(node.Attrs))
+		for a := range node.Attrs() {
+			an := rt.withCurrent(a, 1, node.NumAttrs())
 			if err := applyToNode(an, a, mode, params, tunnels, sub); err != nil {
 				return err
 			}
 		}
-		size := len(node.Children)
-		for idx, ch := range node.Children {
-			cn := rt.withCurrent(ch, idx+1, size)
+		size, idx := node.NumChildren(), 0
+		for ch := range node.Children() {
+			idx++
+			cn := rt.withCurrent(ch, idx, size)
 			if err := applyToNode(cn, ch, mode, params, tunnels, sub); err != nil {
 				return err
 			}
@@ -1148,19 +1168,19 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 
 // builtInNodeLabel names a node for the on-no-match="fail" diagnostic.
 func builtInNodeLabel(node *xdm.Node) string {
-	switch node.Kind {
+	switch node.Kind() {
 	case xdm.KindDocument:
 		return "the document node"
 	case xdm.KindElement:
-		return "element " + node.Name.Lexical()
+		return "element " + node.Name().Lexical()
 	case xdm.KindAttribute:
-		return "attribute " + node.Name.Lexical()
+		return "attribute " + node.Name().Lexical()
 	case xdm.KindText:
 		return "a text node"
 	case xdm.KindComment:
 		return "a comment"
 	case xdm.KindPI:
-		return "processing instruction " + node.Name.Local
+		return "processing instruction " + node.Name().Local
 	}
 	return "a node"
 }

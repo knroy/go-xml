@@ -6,7 +6,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // register31Funcs adds the XPath 3.1 functions that need nothing from the map
@@ -101,7 +101,7 @@ func registerDefaultLanguage(l *Library) {
 // xquery package registers when it is initialised; see processors.go. A
 // program that imports xquery -- a blank import is enough, and the go-xml
 // command does -- has the function in XPath, XQuery and XSLT alike, reading
-// modules only through Context.Modules.
+// modules only through Env.Modules.
 //
 // A program that does not import xquery has no processor, and FOQM0006 is
 // the code the specification defines for exactly that: "No XQuery processor
@@ -187,7 +187,7 @@ func registerApply(l *Library) {
 				"fn:apply: %s takes %d argument(s), but the array has %d member(s)",
 				fn.String(), fn.Arity, len(members))
 		}
-		return fn.Invoke(ctx, members)
+		return callItem(ctx, fn, members)
 	})
 }
 
@@ -1117,18 +1117,18 @@ func randomGeneratorMap(state uint64) (xdm.Sequence, error) {
 	// "next" is a zero-arity function rather than the map itself, so that a
 	// generator is not an infinite structure: the successor is built only when
 	// it is asked for.
-	m, err = m.Put(xdm.NewString("next"), xdm.One(&xdm.FunctionItem{
+	m, err = m.Put(xdm.NewString("next"), xdm.One(native(&xdm.FunctionItem{
 		Arity:     0,
 		Signature: []string{"map(xs:string, item())"},
 		Invoke: func(_ any, _ []xdm.Sequence) (xdm.Sequence, error) {
 			return randomGeneratorMap(next)
 		},
-	}))
+	})))
 	if err != nil {
 		return nil, err
 	}
 
-	m, err = m.Put(xdm.NewString("permute"), xdm.One(&xdm.FunctionItem{
+	m, err = m.Put(xdm.NewString("permute"), xdm.One(native(&xdm.FunctionItem{
 		Arity:     1,
 		Signature: []string{"item()*", "item()*"},
 		Invoke: func(_ any, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -1137,7 +1137,7 @@ func randomGeneratorMap(state uint64) (xdm.Sequence, error) {
 			}
 			return permuteWith(mixed, args[0]), nil
 		},
-	}))
+	})))
 	if err != nil {
 		return nil, err
 	}

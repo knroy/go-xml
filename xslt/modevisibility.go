@@ -3,7 +3,7 @@ package xslt
 import (
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // modeVisibility records an xsl:mode/@visibility at the precedence it was

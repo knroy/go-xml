@@ -16,6 +16,9 @@
   Exclusive C14N for XML-DSig, SAML and WS-Security; choosing an algorithm,
   node sets with worked examples, namespace nodes, the `xdm` audit behind it,
   and the verification still to do.
+* **[Migrating to v2](migrating-to-v2.md)** — every breaking change from v1,
+  with code before and after, and how to run the `nodeaccess` rewriter on your
+  own module.
 * **[Options](options.md)** — every configuration field in the library,
   what its zero value means, and worked examples. Start here when you want to
   know what you can change.
@@ -58,9 +61,9 @@
   starts a process, and warm DocBook, XMark and XSD), where it is slower (a
   warm JVM on Schematron-shaped stylesheets, memory per byte), and the bugs
   the agreement check found.
-* **[Profiling](profiling.md)** — the causes behind the benchmark's losses
-  (allocation churn, pattern dispatch, nested-loop joins, node size) and the
-  status of each fix.
+* **[Profiling](profiling.md)** — where v2's time and memory go per
+  workload, how to profile and A/B a change, and the ideas measured and
+  rejected.
 * **[Recipes](recipes.md)** — batch validation, splitting documents, reporting
   line numbers, rendering to HTML, custom document resolvers, finding elements
   without XPath.

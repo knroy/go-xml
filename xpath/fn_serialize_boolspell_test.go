@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // boolSpellTree builds a nested element carrying a URI-valued attribute.
@@ -16,20 +16,9 @@ import (
 // at or above 0x80. An attribute outside that table, or an all-ASCII value,
 // would leave the parameter no live path to act on.
 func boolSpellTree() *xdm.Node {
-	root := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "a"}}
-	b := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "b"}, Parent: root}
-	c := &xdm.Node{
-		Kind:   xdm.KindElement,
-		Name:   xdm.QName{Local: "a"},
-		Parent: b,
-		Attrs: []*xdm.Node{{
-			Kind:  xdm.KindAttribute,
-			Name:  xdm.QName{Local: "href"},
-			Value: "p\u00e9",
-		}},
-	}
-	b.Children = []*xdm.Node{c}
-	root.Children = []*xdm.Node{b}
+	root := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "a"}, "")
+	root.AppendElement(xdm.QName{Local: "b"}).AppendElement(xdm.QName{Local: "a"}).
+		AppendAttr(xdm.QName{Local: "href"}, "p\u00e9")
 	return root
 }
 
@@ -44,7 +33,7 @@ func boolSpellTree() *xdm.Node {
 func serializeWithParam(t *testing.T, name, value string, with map[string]string) string {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	params := map[string]string{name: value}
 	for k, v := range with {
 		params[k] = v
@@ -185,7 +174,7 @@ func TestSerializeParamElementStandaloneSpellings(t *testing.T) {
 // disagreeing: indent=true() indented and indent="true" did not.
 func TestSerializeBooleanSpellingsMatchMapForm(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	c := ctx.WithVar(xdm.QName{Local: "n"}, xdm.One(boolSpellTree()))
 	seq, err := Eval(`serialize($n, map{'indent': true()})`, c, nil)
 	if err != nil {

@@ -1,8 +1,8 @@
 package xquery
 
 import (
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // ifExpr is "if (Expr) then ExprSingle else ExprSingle", XQuery 3.1 §3.8,

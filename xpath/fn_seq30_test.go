@@ -3,13 +3,13 @@ package xpath
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 func eval30(t *testing.T, expr string, item xdm.Item) xdm.Sequence {
 	t.Helper()
 	ctx := NewContext(item, Builtins())
-	ctx.Version = XPath30
+	ctx = ctx.WithVersion(XPath30)
 	got, err := Eval(expr, ctx, nil)
 	if err != nil {
 		t.Fatalf("%s: %v", expr, err)
@@ -95,9 +95,9 @@ func idsOf(t *testing.T, seq xdm.Sequence) []string {
 			t.Fatalf("result item is %T, want a node", it)
 		}
 		var id string
-		for _, a := range n.Attrs {
-			if a.Name.Local == "id" {
-				id = a.Value
+		for a := range n.Attrs() {
+			if a.Name().Local == "id" {
+				id = a.Value()
 			}
 		}
 		out = append(out, id)
@@ -158,7 +158,7 @@ func TestOutermostHandlesAttributes(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("outermost((//d, //d/@id)) returned %d items, want 1", len(got))
 	}
-	if n := got[0].(*xdm.Node); n.Kind != xdm.KindElement {
+	if n := got[0].(*xdm.Node); n.Kind() != xdm.KindElement {
 		t.Errorf("outermost kept the attribute, want the element")
 	}
 }
@@ -192,7 +192,7 @@ func TestHasChildren(t *testing.T) {
 
 	// The zero-argument form reads the context item.
 	ctx := NewContext(doc, Builtins())
-	ctx.Version = XPath30
+	ctx = ctx.WithVersion(XPath30)
 	got, err := Eval(`//c/has-children()`, ctx, nil)
 	if err != nil {
 		t.Fatalf("has-children(): %v", err)

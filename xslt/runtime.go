@@ -2,13 +2,14 @@ package xslt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/knroy/go-xml/internal/xpathleaf"
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // runtime holds per-transform state.
@@ -18,7 +19,120 @@ import (
 // mutable — the variable stack, the key index, the recursion depth — lives
 // here, and the Stylesheet itself is read-only.
 type runtime struct {
+	// transformState is what every runtime of one transform shares. Only
+	// the fields below it are copied on a focus, variable or selection
+	// change, which happens per instruction.
+	*transformState
+
+	ctx *xpath.Context
+
+	// absent records which groups of context components clearMergeContext,
+	// withoutGroupingScope, clearRegexGroups and withOutputURI have already
+	// bound to absent in ctx (or that nothing has bound yet), so that the clears every template and function call runs can
+	// return rt unchanged instead of copying the runtime and the context
+	// three times each. withVar drops a group's bit whenever one of its
+	// variables is rebound, and the zero value claims nothing: code that
+	// gives a runtime a context not derived from its own must zero it.
+	absent uint8
+
+	// depth bounds apply-templates recursion, which the spec does not bound
+	// and which a stylesheet with a cycle would otherwise run forever.
+	depth int
+
+	// temporary marks that the runtime is building a temporary tree — the
+	// content of a variable, a function's body, or a grouping key — rather
+	// than a final result tree.
+	//
+	// It exists for XTDE1480: xsl:result-document may not be evaluated in
+	// temporary output state, because there is no final result tree for it
+	// to be a sibling of. The flag is on the runtime rather than the output
+	// builder because the state is inherited by everything the constructor
+	// calls, however deeply.
+	temporary bool
+
+	// tunnel holds tunnel parameters, which pass through templates that do
+	// not declare them.
+	tunnel map[string]xdm.Sequence
+
+	// sel records how the currently-executing template was selected, so that
+	// xsl:next-match and xsl:apply-imports in its body can resume the search
+	// where it left off rather than starting over and picking the same
+	// template forever. Held by pointer, so that the runtime copy every
+	// focus and variable change makes does not carry it; nil is the zero
+	// selection (see selected).
+	sel *selection
+}
+
+// transformState holds the fields of a runtime that are set once, when the
+// transform starts, and shared by every runtime derived from it; the maps
+// and pointers among them are written through, never replaced. deferredErr
+// and globalCtx are the exception in timing only: they are filled in while
+// newRuntime binds the globals, before any template runs. globalActive
+// changes whenever a global is evaluated, which is on first use. Keeping them here rather than on the runtime keeps the runtime copy
+// that every focus, variable and selection change makes small.
+type transformState struct {
 	sheet *Stylesheet
+
+	// locals holds the local variables and parameters in scope; see
+	// locals.go. A transform fn:transform starts shares its caller's.
+	locals *xpathleaf.Locals
+
+	// deferredErr holds the failure of a global whose evaluation is not by
+	// itself the transform's failure -- an abstract variable, whose body
+	// raises XTDE3052. The error is kept against the name so that a
+	// reference to it raises what the reference deserves, and a transform
+	// that never mentions the name raises nothing. See evalGlobals.
+	deferredErr []deferredGlobal
+
+	// globalCtx is the context as it stood once the global variables were
+	// bound, holding those and nothing local. xsl:attribute-set bodies are
+	// evaluated against it; see the comment where it is set.
+	globalCtx *xpath.Context
+
+	// evalLock keeps this transform's state to one goroutine at a time once
+	// Transform has returned and shared it, after which a function item in
+	// the result may reach it from any goroutine: force a global (the
+	// globals' LazyVars take the same lock), build a key index or an
+	// accumulator's values, memoise a function. Nil for a stand-in runtime
+	// that never escapes.
+	evalLock *xpath.EvalLock
+
+	// globalActive names the global variables whose initialiser is currently
+	// being evaluated, by declared local name.
+	//
+	// A global is not in scope within its own binding, so a reference to one
+	// from inside its own evaluation resolves to nothing and is reported as
+	// XPST0008. That is the right answer for a reference written in the
+	// variable's own select expression, but not for one reached indirectly:
+	// error-0640e's key match pattern reads $p while $p's initialiser is
+	// building that very key's index, which is a circularity -- XTDE0640 --
+	// rather than an undeclared name. Pattern matching recovers from an
+	// ordinary error, so without knowing which names are mid-evaluation the
+	// cycle was swallowed and the transform ran to completion.
+	globalActive map[string]bool
+
+	// blocking holds the elements whose body is running under
+	// inherit-namespaces="no". blockNamespaceInheritance reads each child's
+	// own namespace nodes when the body ends, so a child built inside one of
+	// these must keep the bindings it would otherwise leave to its parent;
+	// see parentSupplies. Shared with derived runtimes like treeAccums.
+	blocking map[*xdm.Node]bool
+
+	// readDocs is the set of absolute URIs the transformation has read, for
+	// XTDE1500. A pointer for the same reason secondary and baseURIUsed are:
+	// the runtime is copied on every focus change, and a document read in one
+	// template must be visible to an xsl:result-document in another.
+	readDocs *map[string]bool
+
+	// writtenDocs is the set of absolute URIs xsl:result-document has
+	// written, the twin of readDocs. XTDE1500 is order-independent -- the
+	// spec says "write to an external resource and read from the same
+	// resource during a single transformation" -- so the read side needs the
+	// writes recorded just as the write side needs the reads. A pointer for
+	// the same reason readDocs is: the runtime is copied on every focus
+	// change, and a document written inside one template has to be visible
+	// to a doc() evaluated anywhere else.
+	writtenDocs *map[string]bool
 
 	// goCtx is the caller's context.Context, kept so that a nested transform
 	// started by fn:transform is cancelled with the outer one rather than
@@ -51,50 +165,15 @@ type runtime struct {
 	// so the promise is only kept by evaluating once and reusing. Keyed by
 	// functionCallKey; see apply.go.
 	funcResults map[string]xdm.Sequence
+
 	// itemIDs numbers the nodes and function items functionCallKey keys by
 	// identity; see identityNumber.
 	itemIDs map[any]int
-	ctx     *xpath.Context
-
-	// absent records which groups of context components clearMergeContext,
-	// withoutGroupingScope and clearRegexGroups have already bound to absent
-	// in ctx, so that the clears every template and function call runs can
-	// return rt unchanged instead of copying the runtime and the context
-	// three times each. withVar drops a group's bit whenever one of its
-	// variables is rebound, and the zero value claims nothing: code that
-	// gives a runtime a context not derived from its own must zero it.
-	absent uint8
-
-	// deferredErr holds the failure of a global whose evaluation is not by
-	// itself the transform's failure -- an abstract variable, whose body
-	// raises XTDE3052. The error is kept against the name so that a
-	// reference to it raises what the reference deserves, and a transform
-	// that never mentions the name raises nothing. See evalGlobals.
-	deferredErr []deferredGlobal
-
-	// globalCtx is the context as it stood once the global variables were
-	// bound, holding those and nothing local. xsl:attribute-set bodies are
-	// evaluated against it; see the comment where it is set.
-	globalCtx *xpath.Context
 
 	// keyIndex caches xsl:key lookups per document. Building an index is a
 	// full document scan, so it is done once per (key, document) pair on
 	// first use rather than eagerly for every declared key.
 	keyIndex map[keyCacheKey]map[string]xdm.Sequence
-
-	// globalActive names the global variables whose initialiser is currently
-	// being evaluated, by declared local name.
-	//
-	// A global is not in scope within its own binding, so a reference to one
-	// from inside its own evaluation resolves to nothing and is reported as
-	// XPST0008. That is the right answer for a reference written in the
-	// variable's own select expression, but not for one reached indirectly:
-	// error-0640e's key match pattern reads $p while $p's initialiser is
-	// building that very key's index, which is a circularity -- XTDE0640 --
-	// rather than an undeclared name. Pattern matching recovers from an
-	// ordinary error, so without knowing which names are mid-evaluation the
-	// cycle was swallowed and the transform ran to completion.
-	globalActive map[string]bool
 
 	// keyBuilding marks the (key, document) pairs whose index is currently
 	// being built. keyIndex is only written once a build has *finished*, so
@@ -118,8 +197,10 @@ type runtime struct {
 	// allowed to read values the walk has already recorded (§18.2.4: an
 	// end-phase rule may read the pre-descent value of its own node), and
 	// only a value not yet recorded is circular.
-	accumValues   map[accumCacheKey]*accumulatorValues
+	accumValues map[accumCacheKey]*accumulatorValues
+
 	accumBuilding map[accumCacheKey]*accumulatorValues
+
 	// accumOrigin maps a node produced by a copy-accumulators="yes" copy to
 	// the node it was copied from, which is the only thing that can say what
 	// an accumulator's value at the copy should be. It is a map on the
@@ -138,34 +219,13 @@ type runtime struct {
 	// restricted for the whole of the action that reads it.
 	treeAccums map[*xdm.Node]*modeAccumulators
 
-	// blocking holds the elements whose body is running under
-	// inherit-namespaces="no". blockNamespaceInheritance reads each child's
-	// own namespace nodes when the body ends, so a child built inside one of
-	// these must keep the bindings it would otherwise leave to its parent;
-	// see parentSupplies. Shared with derived runtimes like treeAccums.
-	blocking map[*xdm.Node]bool
-
 	// streamedTrees records the roots that xsl:source-document was asked to
 	// read in streamed mode, which XTDE3362 bars a non-streamable accumulator
 	// from being read over.
 	streamedTrees map[*xdm.Node]bool
 
-	// depth bounds apply-templates recursion, which the spec does not bound
-	// and which a stylesheet with a cycle would otherwise run forever.
-	depth int
 	// maxDepth is the ceiling depth may reach, from TransformOptions.
 	maxDepth int
-
-	// temporary marks that the runtime is building a temporary tree — the
-	// content of a variable, a function's body, or a grouping key — rather
-	// than a final result tree.
-	//
-	// It exists for XTDE1480: xsl:result-document may not be evaluated in
-	// temporary output state, because there is no final result tree for it
-	// to be a sibling of. The flag is on the runtime rather than the output
-	// builder because the state is inherited by everything the constructor
-	// calls, however deeply.
-	temporary bool
 
 	// baseOutputURI is TransformOptions.BaseOutputURI, kept for resolving a
 	// relative xsl:result-document/@href and for the value
@@ -186,21 +246,6 @@ type runtime struct {
 	// reason secondary is: the runtime is copied on every focus change.
 	baseURIUsed *bool
 
-	// readDocs is the set of absolute URIs the transformation has read, for
-	// XTDE1500. A pointer for the same reason secondary and baseURIUsed are:
-	// the runtime is copied on every focus change, and a document read in one
-	// template must be visible to an xsl:result-document in another.
-	readDocs *map[string]bool
-	// writtenDocs is the set of absolute URIs xsl:result-document has
-	// written, the twin of readDocs. XTDE1500 is order-independent -- the
-	// spec says "write to an external resource and read from the same
-	// resource during a single transformation" -- so the read side needs the
-	// writes recorded just as the write side needs the reads. A pointer for
-	// the same reason readDocs is: the runtime is copied on every focus
-	// change, and a document written inside one template has to be visible
-	// to a doc() evaluated anywhere else.
-	writtenDocs *map[string]bool
-
 	// messages collects xsl:message output rather than writing to stderr.
 	//
 	// It is a pointer to a slice because the runtime struct is copied on
@@ -212,16 +257,6 @@ type runtime struct {
 	// warnings collects the recoverable-condition warnings xsl:mode asks for,
 	// and is a pointer for the same reason messages is.
 	warnings *[]string
-
-	// tunnel holds tunnel parameters, which pass through templates that do
-	// not declare them.
-	tunnel map[string]xdm.Sequence
-
-	// sel records how the currently-executing template was selected, so that
-	// xsl:next-match and xsl:apply-imports in its body can resume the search
-	// where it left off rather than starting over and picking the same
-	// template forever.
-	sel selection
 }
 
 // selection is the template-selection state of the enclosing apply-templates.
@@ -241,6 +276,18 @@ type selection struct {
 	// instruction that changes the focus without ending the rule leaves the
 	// first satisfied and the second not; see nextMatchInstr.Execute.
 	item xdm.Item
+}
+
+// noSelection is what selected answers for a runtime no template rule has
+// been selected for.
+var noSelection selection
+
+// selected returns how the running template was selected; see runtime.sel.
+func (rt *runtime) selected() *selection {
+	if rt.sel == nil {
+		return &noSelection
+	}
+	return rt.sel
 }
 
 type keyCacheKey struct {
@@ -308,16 +355,25 @@ func (rt *runtime) withCurrent(item xdm.Item, pos, size int) *runtime {
 // withSelection records the template-selection state for the body about to run.
 func (rt *runtime) withSelection(t *Template, next int, mode string,
 	params, tunnels map[string]xdm.Sequence) *runtime {
-	n := *rt
 	var item xdm.Item
 	if rt.ctx != nil {
 		item = rt.ctx.Item
 	}
-	n.sel = selection{
+	return rt.withSel(selection{
 		template: t, next: next, mode: mode,
 		params: params, tunnels: tunnels, item: item,
-	}
-	return &n
+	})
+}
+
+// withSel returns a copy of rt selected by s. The copy and the selection
+// are one allocation, as they were when the selection was held by value.
+func (rt *runtime) withSel(s selection) *runtime {
+	p := &struct {
+		n runtime
+		s selection
+	}{*rt, s}
+	p.n.sel = &p.s
+	return &p.n
 }
 
 func (rt *runtime) withVar(name xdm.QName, val xdm.Sequence) *runtime {
@@ -338,6 +394,7 @@ const (
 	absentMerge uint8 = 1 << iota
 	absentGrouping
 	absentRegex
+	absentOutputURI
 )
 
 // absentGroupOf names the group a variable belongs to, or 0.
@@ -349,6 +406,8 @@ func absentGroupOf(name xdm.QName) uint8 {
 		return absentGrouping
 	case regexGroupsVar:
 		return absentRegex
+	case outputURIVar:
+		return absentOutputURI
 	}
 	return 0
 }
@@ -362,8 +421,16 @@ func absentGroupOf(name xdm.QName) uint8 {
 
 // --- Instruction execution helpers -----------------------------------------
 
-// execSequence runs a sequence constructor into out.
+// execSequence runs a sequence constructor into out. The locals it declares
+// go out of scope when it returns.
 func execSequence(body []Instruction, rt *runtime, out *outputBuilder) error {
+	n := rt.localsMark()
+	err := execSequenceBody(body, rt, out)
+	rt.localsPop(n)
+	return err
+}
+
+func execSequenceBody(body []Instruction, rt *runtime, out *outputBuilder) error {
 	// A constructor holding xsl:on-empty or xsl:on-non-empty cannot be run
 	// left to right: whether either fires depends on what the whole
 	// constructor produced, so it goes to the section 8.4.4 algorithm
@@ -402,7 +469,7 @@ func execSequence(body []Instruction, rt *runtime, out *outputBuilder) error {
 			if err != nil {
 				return err
 			}
-			rt = rt.withVar(v.v.Name, val)
+			rt = rt.bindLocal(v.v.Name, val)
 			continue
 		}
 		if err := instr.Execute(rt, out); err != nil {
@@ -474,14 +541,14 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree.BaseURI = v.baseURI
+	tree.SetBaseURI(v.baseURI)
 	// The document node's base is known only now, after its content was
 	// built, so the children are rebased against it here rather than as they
 	// were appended. Without this a copied element with a relative xml:base
 	// keeps the base of the document it came from, and a copied element with
 	// none keeps it too, instead of inheriting the temporary tree's.
-	for _, ch := range tree.Children {
-		rebase(ch, tree.BaseURI)
+	for ch := range tree.Children() {
+		rebase(ch, tree.BaseURI())
 	}
 	return xdm.One(tree), nil
 }
@@ -502,9 +569,8 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 // an xsl:for-each has changed the focus there is no such search to resume —
 // the node being processed is no longer the one any template rule matched.
 func (rt *runtime) clearCurrentRule() *runtime {
-	sub := *rt
-	sub.sel = selection{mode: rt.sel.mode, tunnels: rt.sel.tunnels}
-	return &sub
+	cur := rt.selected()
+	return rt.withSel(selection{mode: cur.mode, tunnels: cur.tunnels})
 }
 
 // temporaryOutput returns a runtime in temporary output state.
@@ -594,7 +660,7 @@ func constructedTextChecked(seq xdm.Sequence, sep string) (string, error) {
 func nonTextItems(seq xdm.Sequence) xdm.Sequence {
 	out := make(xdm.Sequence, 0, len(seq))
 	for _, it := range xdm.Flatten(seq) {
-		if n, ok := it.(*xdm.Node); ok && n.Kind == xdm.KindText {
+		if n, ok := it.(*xdm.Node); ok && n.Kind() == xdm.KindText {
 			continue
 		}
 		out = append(out, it)
@@ -619,15 +685,15 @@ func constructedText(seq xdm.Sequence, sep string) string {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
-			if v.Kind == xdm.KindText {
-				if v.Value == "" {
+			if v.Kind() == xdm.KindText {
+				if v.Value() == "" {
 					continue
 				}
 				if inText {
-					parts[len(parts)-1] += v.Value
+					parts[len(parts)-1] += v.Value()
 					continue
 				}
-				parts = append(parts, v.Value)
+				parts = append(parts, v.Value())
 				inText = true
 				continue
 			}
@@ -660,6 +726,12 @@ func (rt *runtime) StepMemo() any { return rt.steps }
 
 var _ xpathleaf.StepMemoHost = (*runtime)(nil)
 
+// EvalLock implements xpath.EvalLocker.
+func (rt *runtime) EvalLock() *xpath.EvalLock { return rt.evalLock }
+
+// Locals implements xpathleaf.LocalsHost.
+func (rt *runtime) Locals() *xpathleaf.Locals { return rt.locals }
+
 // newRuntime builds a runtime for one transform.
 func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts TransformOptions) (*runtime, error) {
 	maxDepth := opts.MaxDepth
@@ -667,32 +739,38 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		maxDepth = DefaultMaxDepth
 	}
 	rt := &runtime{
-		sheet: s,
+		transformState: &transformState{
+			sheet:       s,
+			evalLock:    opts.nestedLock,
+			maxDepth:    maxDepth,
+			keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
+			keyBuilding: map[keyCacheKey]bool{},
+			steps:       xpathleaf.NewStepMemo(),
+
+			accumValues:   map[accumCacheKey]*accumulatorValues{},
+			accumBuilding: map[accumCacheKey]*accumulatorValues{},
+			accumOrigin:   map[*xdm.Node]*xdm.Node{},
+			treeAccums:    map[*xdm.Node]*modeAccumulators{},
+			streamedTrees: map[*xdm.Node]bool{},
+			funcResults:   map[string]xdm.Sequence{},
+			itemIDs:       map[any]int{},
+			messages:      new([]string),
+			warnings:      new([]string),
+			secondary:     new([]SecondaryResult),
+			baseURIUsed:   new(bool),
+			baseOutputURI: opts.BaseOutputURI,
+			opts:          &opts,
+			goCtx:         ctx,
+			blocking:      map[*xdm.Node]bool{},
+		},
 		// A transform started by fn:transform continues its caller's
 		// recursion count rather than restarting at zero; see
 		// TransformOptions.nestedDepth for why the budget is inherited.
-		depth:       opts.nestedDepth,
-		maxDepth:    maxDepth,
-		keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
-		keyBuilding: map[keyCacheKey]bool{},
-		steps:       xpathleaf.NewStepMemo(),
-
-		accumValues:   map[accumCacheKey]*accumulatorValues{},
-		accumBuilding: map[accumCacheKey]*accumulatorValues{},
-		accumOrigin:   map[*xdm.Node]*xdm.Node{},
-		treeAccums:    map[*xdm.Node]*modeAccumulators{},
-		blocking:      map[*xdm.Node]bool{},
-		streamedTrees: map[*xdm.Node]bool{},
-		tunnel:        map[string]xdm.Sequence{},
-		funcResults:   map[string]xdm.Sequence{},
-		itemIDs:       map[any]int{},
-		messages:      new([]string),
-		warnings:      new([]string),
-		secondary:     new([]SecondaryResult),
-		baseURIUsed:   new(bool),
-		baseOutputURI: opts.BaseOutputURI,
-		opts:          &opts,
-		goCtx:         ctx,
+		depth:  opts.nestedDepth,
+		tunnel: map[string]xdm.Sequence{},
+	}
+	if rt.evalLock == nil {
+		rt.evalLock = &xpath.EvalLock{}
 	}
 
 	// A transform started from a named template has no source document, and
@@ -718,9 +796,80 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	if g := s.globalContextItem; g != nil && g.decl.use == "absent" {
 		item = nil
 	}
-	xctx := xpath.NewContext(item, s.funcs)
-	// Set before AdoptBudget, which replaces it with the caller's bound.
-	xctx.MaxItems = opts.MaxItems
+	// One clock reading per transform, so fn:current-dateTime is stable
+	// across every call the stylesheet makes.
+	now := opts.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	xctx := xpath.NewContext(item, s.funcs, func(e *xpath.Env) {
+		// Set before AdoptBudget, which replaces it with the caller's bound.
+		e.MaxItems = opts.MaxItems
+		// A duplicate key in an XPath map constructor is XTDE3365 under XSLT,
+		// not XQuery's XQDY0137: section 17.4 gives the MapExpr its own code,
+		// the same one xsl:map raises for a duplicate among the maps it
+		// merges. The two spellings of a map thus fail alike, which is what
+		// si-fork-814 and sx-MapExpr-007 check.
+		e.MapDuplicateCode = "XTDE3365"
+		// The regular-expression dialect follows the processor, not the
+		// module. A pattern is a string read by fn:matches at the point of
+		// call rather than by the parser, so a version="2.0" stylesheet run
+		// by a 3.0 processor may legitimately write "(?:...)" -- the
+		// regex-syntax set is exactly that, 2.0 stylesheets scoped XSLT30+.
+		// Raising RegexVersion rather than the version keeps every other 3.0
+		// construct gated on the module's own declaration, which is what the
+		// syntax rules require.
+		if s.maxVersion == 0 || s.maxVersion >= 3.0 {
+			e.RegexVersion = xpath.XPath31
+			// Which functions exist follows the processor for the same
+			// reason: calling one is ordinary syntax at every version, and
+			// only the name has to resolve. A 3.0 processor running a
+			// version="2.0" stylesheet must find fn:path for it, which
+			// accessor-050 and its siblings require. The module's own version
+			// still governs the grammar.
+			e.LibraryVersion = xpath.XPath31
+		}
+		e.Ctx = ctx
+		// TransformOptions.MaxDepth bounds recursion in the transform, and an
+		// expression recurses as surely as a template does: a
+		// continuation-passing function like higher-order-functions-068's
+		// fibonacci nests one dynamic call per unit of the result, 707 levels
+		// for fib(11). Left unset, the XPath side kept its own package
+		// default of 500 whatever the caller asked for, so a caller that
+		// raised the bound was refused at 500 and the message named a limit
+		// it had not chosen. Passing it through is what makes the documented
+		// option govern this path.
+		e.MaxDepth = rt.maxDepth
+		e.Docs = opts.Documents
+		e.Collections = opts.Collections
+		e.Texts = opts.Texts
+		e.Environment = opts.Environment
+		e.Modules = opts.Modules
+		// fn:json-to-xml with validate=true needs the schema layer to type
+		// the tree it builds, and reaches it through this hook rather than by
+		// importing xsd from xpath, which the dependency direction forbids.
+		// It is installed unconditionally: whether the processor *can*
+		// validate is a property of the processor, and this one always can —
+		// F&O 3.1 §17.5.3 reserves FOJS0004 for a processor that cannot.
+		// Whether the stylesheet may then write "instance of
+		// element(j:map, j:mapType)" is the separate question
+		// xsl:import-schema answers.
+		e.Validator = jsonTreeValidator{}
+		e.ImplicitTimezone = opts.ImplicitTimezone
+		e.Now, e.HasNow = now, true
+		// A variable reference resolves against the package the expression
+		// was written in, so that two packages' globals of one name stay
+		// distinct. See globalBindingName.
+		e.QualifyVar = func(c *xpath.Context, name xdm.QName) xdm.QName {
+			return rt.qualifyGlobal(c, name)
+		}
+		// A reference to a global whose evaluation was deferred and failed
+		// raises that failure, rather than the XPST0008 an unbound name would
+		// otherwise report. See runtime.deferredErr.
+		e.MissingVar = func(c *xpath.Context, name xdm.QName) error {
+			return rt.deferredError(c, name)
+		}
+	})
 	// A transform started by fn:transform continues its caller's item and byte
 	// allowances rather than restarting on fresh ones, the same policy the
 	// recursion depth above follows. The counters travel with their held flags;
@@ -731,66 +880,23 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// XSLT on the way round -- fn:load-xquery-module into a query that calls
 	// fn:transform again -- since the query sees only its Context, and a
 	// Context starting at zero here restarted the count at every hop.
-	xctx.Depth = opts.nestedDepth
-	// A duplicate key in an XPath map constructor is XTDE3365 under XSLT, not
-	// XQuery's XQDY0137: section 17.4 gives the MapExpr its own code, the same
-	// one xsl:map raises for a duplicate among the maps it merges. The two
-	// spellings of a map thus fail alike, which is what si-fork-814 and
-	// sx-MapExpr-007 check.
-	xctx.MapDuplicateCode = "XTDE3365"
-	// The regular-expression dialect follows the processor, not the module.
-	// A pattern is a string read by fn:matches at the point of call rather
-	// than by the parser, so a version="2.0" stylesheet run by a 3.0
-	// processor may legitimately write "(?:...)" -- the regex-syntax set is
-	// exactly that, 2.0 stylesheets scoped XSLT30+. Raising RegexVersion
-	// rather than Version keeps every other 3.0 construct gated on the
-	// module's own declaration, which is what the syntax rules require.
-	if s.maxVersion == 0 || s.maxVersion >= 3.0 {
-		xctx.RegexVersion = xpath.XPath31
-		// Which functions exist follows the processor for the same reason:
-		// calling one is ordinary syntax at every version, and only the name
-		// has to resolve. A 3.0 processor running a version="2.0" stylesheet
-		// must find fn:path for it, which accessor-050 and its siblings
-		// require. The module's own version still governs the grammar.
-		xctx.LibraryVersion = xpath.XPath31
-	}
-	xctx.Ctx = ctx
-	// TransformOptions.MaxDepth bounds recursion in the transform, and an
-	// expression recurses as surely as a template does: a continuation-passing
-	// function like higher-order-functions-068's fibonacci nests one dynamic
-	// call per unit of the result, 707 levels for fib(11). Left unset, the
-	// XPath side kept its own package default of 500 whatever the caller
-	// asked for, so a caller that raised the bound was refused at 500 and the
-	// message named a limit it had not chosen. Passing it through is what
-	// makes the documented option govern this path.
-	xctx.MaxDepth = rt.maxDepth
-	xctx.Docs = opts.Documents
-	xctx.Collections = opts.Collections
-	xctx.Texts = opts.Texts
-	xctx.Environment = opts.Environment
-	xctx.Modules = opts.Modules
-	// fn:json-to-xml with validate=true needs the schema layer to type the
-	// tree it builds, and reaches it through this hook rather than by
-	// importing xsd from xpath, which the dependency direction forbids. It is
-	// installed unconditionally: whether the processor *can* validate is a
-	// property of the processor, and this one always can — F&O 3.1 §17.5.3
-	// reserves FOJS0004 for a processor that cannot. Whether the stylesheet
-	// may then write "instance of element(j:map, j:mapType)" is the separate
-	// question xsl:import-schema answers.
-	xctx.Validator = jsonTreeValidator{}
-	xctx.ImplicitTimezone = opts.ImplicitTimezone
+	xctx.Depth = int32(opts.nestedDepth)
 	// The static base URI of every expression in the stylesheet. Without it
 	// a relative reference in fn:doc or fn:resolve-uri has nothing to
 	// resolve against when there is no context node — which is the case for
 	// a transform started from a named template.
-	xctx.StaticBaseURI = s.baseURI
-	// One clock reading per transform, so fn:current-dateTime is stable
-	// across every call the stylesheet makes.
-	now := opts.Now
-	if now.IsZero() {
-		now = time.Now()
+	xctx = xctx.WithStaticBaseURI(s.baseURI)
+	// The static part almost every expression carries, so that evaluating
+	// one does not copy the context to install it (xpath.Compiled's scope):
+	// the top-level package, and under a 3.0 processor the XPath 3.1 that
+	// xpathFloor gives every module. The code that reads the version off
+	// this context rather than an expression's (errNoGrouping,
+	// regexDialect) already floors it at the processor's 3.1, so it answers
+	// as before.
+	xctx = xctx.WithStaticHost(hostPackage(0))
+	if s.maxVersion == 0 || s.maxVersion >= 3.0 {
+		xctx = xctx.WithVersion(xpath.XPath31)
 	}
-	xctx = xctx.WithNow(now)
 	// One transform is the unit the byte budget is measured over. The chain
 	// that defeats a narrower boundary is a run of SIBLING xsl:variable
 	// declarations, each holding two xsl:value-of of the one before it: no
@@ -803,18 +909,6 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// and XSpec corpora was 1,031,269 bytes, and the largest in the XSLT 3.0
 	// suite 14,516,346. See xpath.MaxBytes.
 	rt.ctx = xctx.HoldByteBudget()
-	// A variable reference resolves against the package the expression was
-	// written in, so that two packages' globals of one name stay distinct.
-	// See globalBindingName.
-	rt.ctx.QualifyVar = func(c *xpath.Context, name xdm.QName) xdm.QName {
-		return rt.qualifyGlobal(c, name)
-	}
-	// A reference to a global whose evaluation was deferred and failed
-	// raises that failure, rather than the XPST0008 an unbound name would
-	// otherwise report. See runtime.deferredErr.
-	rt.ctx.MissingVar = func(c *xpath.Context, name xdm.QName) error {
-		return rt.deferredError(c, name)
-	}
 
 	// The key() and current() functions need the runtime, so they live in a
 	// library of their own rather than the shared builtin one. It is built
@@ -823,19 +917,25 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// resolution survives from one transform to the next.
 	rt.ctx.Funcs = packageScopedLibrary{inner: s.runtimeLibrary(), sheet: s}
 
-	// Global variables are evaluated in dependency order rather than
-	// declaration order. Section 9.5 puts no ordering constraint on
+	// Global variables are bound here and evaluated when a reference first
+	// needs one; see evalGlobals. Section 9.5 puts no ordering constraint on
 	// declarations, so a global may legitimately be declared above the one it
-	// refers to; evaluating in declaration order made that a spurious
-	// "undeclared variable" instead of working. A variable is evaluated when
-	// something needs it, and the ones nothing needs are evaluated at the end
-	// so that their errors are still reported.
+	// refers to.
 	// Bind the runtime before the globals are evaluated, not after. A global
 	// variable's select expression may call a stylesheet function, and
 	// xsl:function reaches the runtime through this binding — evaluating the
 	// globals first left such a call reporting that it was made outside a
 	// transform.
 	rt.ctx = bindRuntime(rt.ctx, rt)
+	// Nothing has bound a merge, grouping, regex or output-URI component
+	// yet, so every one of them is already absent: the clears every
+	// template and function call makes then return the runtime unchanged.
+	rt.absent = absentMerge | absentGrouping | absentRegex | absentOutputURI
+	setUnbound(rt.ctx, rt.absent)
+	rt.locals = opts.nestedLocals
+	if rt.locals == nil {
+		rt.locals = &xpathleaf.Locals{}
+	}
 
 	if err := rt.evalGlobals(s, opts); err != nil {
 		return nil, err
@@ -858,7 +958,7 @@ func (s *Stylesheet) runtimeLibrary() *xpath.Library {
 		// The functions that need a transform find it through the context;
 		// this runtime answers only the static resolvers, which read nothing
 		// but the stylesheet.
-		registerRuntimeFuncs(lib, &runtime{sheet: s})
+		registerRuntimeFuncs(lib, &runtime{transformState: &transformState{sheet: s}})
 		registerOutputFuncs(lib)
 		// The grouping, merge and position accessors go in here too, rather
 		// than after the globals are bound, because a global may hold a
@@ -878,7 +978,30 @@ func (s *Stylesheet) runtimeLibrary() *xpath.Library {
 	return s.rtLib
 }
 
-// evalGlobals binds every global variable, resolving dependencies on demand.
+// evalGlobals binds every global variable, each one evaluated when a
+// reference first needs it.
+//
+// Section 2.14 lets a processor evaluate only what it uses ("an
+// implementation will signal the error only if it actually executes the
+// instructions and expressions"), and a large stylesheet uses few of its
+// globals: DocBook xslTNG declares 300-950 per transform and reads a
+// fraction. The bindings are one map scope (xpath.Context.WithLazyVars)
+// rather than a WithVar per name, so a reference that reaches them costs one
+// map probe rather than a walk past every global bound after it.
+//
+// Some globals are still evaluated here, in declaration order and with the
+// dependencies globalRefs names first, which is how every global was
+// evaluated before (see Variable.eager):
+//   - a deferred global (an abstract variable), whose failure is owed to a
+//     reference rather than to the transform; see runtime.deferredErr;
+//   - a global whose own select or content writes xsl:message, xsl:assert,
+//     xsl:result-document or calls fn:trace, so that its effect does not
+//     depend on whether anything reads it;
+//   - a global that names itself, or depends on a cycle, so that the error
+//     and the name it reports are the ones evaluating in that order gave.
+//
+// A missing required parameter is reported here too, since it needs no
+// evaluation to detect.
 func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 	byName := make(map[string]*Variable, len(s.globals))
 	for _, g := range s.globals {
@@ -887,33 +1010,40 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 		}
 	}
 
-	// state tracks which globals are done and which are being evaluated, so
-	// that a cycle is reported rather than recursed into forever.
-	const (
-		pending = 0
-		active  = 1
-		done    = 2
-	)
-	state := make(map[string]int, len(s.globals))
+	// gs is the runtime every global is evaluated in: this one as it stands
+	// once the bindings are in place, before any template has run. A later
+	// reference reaches it through the closures below, never through the
+	// runtime of the instruction that made the reference.
+	var gs *runtime
 
-	var bind func(g *Variable) error
-	bind = func(g *Variable) error {
-		// Keyed by the BINDING name, not the declared one: two packages may
-		// each declare a global of the same name and both are live, so the
-		// bare name marked one done and skipped the other entirely. See
-		// globalBindingName and use-package-175.
-		key := globalBindingName(g.Name, g.pkg).Clark()
-		switch state[key] {
-		case done:
-			return nil
-		case active:
-			// XTDE0640: a global variable whose value depends on its own.
-			return fmt.Errorf(
-				"XTDE0640: global variable $%s depends on itself",
-				g.Name.Lexical())
+	// state is per binding name; see globalBindingName. A failure is kept,
+	// so that a second reference raises what the first did rather than
+	// evaluating again. After newRuntime returns it is read and written only
+	// inside a LazyVar's Force, which the scope's lock serialises, so a
+	// function item that outlives the transform may force globals from
+	// several goroutines (see xpath.LazyVar).
+	type gstate struct {
+		active, primed, done bool
+		err                  error
+	}
+	state := make(map[xdm.QName]*gstate, len(s.globals))
+	stateOf := func(g *Variable) *gstate {
+		key := globalBindingName(g.Name, g.pkg)
+		st := state[key]
+		if st == nil {
+			st = &gstate{}
+			state[key] = st
 		}
-		state[key] = active
-		defer func() { state[key] = done }()
+		return st
+	}
+	circular := func(g *Variable) error {
+		// XTDE0640: a global variable whose value depends on its own.
+		return fmt.Errorf("XTDE0640: global variable $%s depends on itself",
+			g.Name.Lexical())
+	}
+
+	// eval computes one global's value.
+	eval := func(g *Variable) (xdm.Sequence, error) {
 		// The DECLARED local name, which is what a reference inside a match
 		// pattern is written with and all recoverPatternError can compare.
 		if rt.globalActive == nil {
@@ -922,150 +1052,235 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 		rt.globalActive[g.Name.Local] = true
 		defer delete(rt.globalActive, g.Name.Local)
 
-		// A static declaration was bound before static analysis began. Its
-		// value cannot depend on anything the run supplies, and a static
-		// xsl:param has already had its one chance to be set — through
-		// CompileOptions.StaticParams, which is where the caller supplies a
-		// value that has to be in hand before the stylesheet is analysed.
-		if g.isStatic {
-			rt.bindGlobal(g, g.staticValue)
-			return nil
-		}
-		// A caller names a parameter by its declared name, not by the
-		// package-qualified one the binding uses.
-		if supplied, ok := opts.Params[g.Name.Clark()]; ok {
-			rt.bindGlobal(g, supplied)
-			return nil
-		}
-		if g.Required {
-			return fmt.Errorf("XTDE0050: required parameter $%s was not supplied",
+		if g.selfRef {
+			// A global variable is not in the scope of its own binding:
+			// XSLT 3.0 §9.1 gives the scope of a global xsl:variable as
+			// every stylesheet module in the package *except* the variable's
+			// own select expression and sequence constructor. A reference to
+			// the name from there is therefore a reference to nothing at
+			// all, and the static error for an unbound variable reference is
+			// XPST0008 rather than the XTDE0640 that a genuine circularity
+			// between two distinct declarations raises.
+			//
+			// higher-order-functions-070 writes the case that makes the
+			// distinction visible: $gcd's select is an inline function whose
+			// body calls $gcd, which "would make sense" as recursion and is
+			// still an error because the name is not in scope.
+			return nil, fmt.Errorf(
+				"XPST0008: undeclared variable $%s: a global variable is "+
+					"not in scope within its own binding",
 				g.Name.Lexical())
 		}
 
-		// Everything this variable refers to is bound first, so that its own
-		// evaluation finds each one already in the context.
-		for _, dep := range globalRefs(g) {
-			d, ok := byName[dep]
-			if !ok {
-				continue
-			}
-			if d == g {
-				// A global variable is not in the scope of its own binding:
-				// XSLT 3.0 §9.1 gives the scope of a global xsl:variable as
-				// every stylesheet module in the package *except* the
-				// variable's own select expression and sequence constructor.
-				// A reference to the name from there is therefore a
-				// reference to nothing at all, and the static error for an
-				// unbound variable reference is XPST0008 rather than the
-				// XTDE0640 that a genuine circularity between two distinct
-				// declarations raises.
-				//
-				// higher-order-functions-070 writes the case that makes the
-				// distinction visible: $gcd's select is an inline function
-				// whose body calls $gcd, which "would make sense" as
-				// recursion and is still an error because the name is not
-				// in scope. The recursion below would never reach it -
-				// bind() has already marked this one active - so it is
-				// reported here directly.
-				return fmt.Errorf(
-					"XPST0008: undeclared variable $%s: a global variable is "+
-						"not in scope within its own binding",
-					g.Name.Lexical())
-			}
-			if err := bind(d); err != nil {
-				return err
-			}
+		val, err := evalVariable(g, globalRuntimeFor(gs, g))
+		if err == nil {
+			return val, nil
 		}
-
-		val, err := evalVariable(g, globalRuntimeFor(rt, g))
-		// globalRefs orders the obvious dependencies, but it only reads the
-		// select expression: a reference reached through a sequence
-		// constructor, a match pattern or the body of a stylesheet function
-		// is invisible to it, and shows up here as XPST0008 for a name that
-		// is in fact a declared global. Which of the two things that means
-		// is decided by the state of the name it could not resolve.
-		for err != nil {
-			dep, ok := unresolvedGlobal(err, byName)
-			if !ok {
-				break
-			}
-			if state[dep.Name.Clark()] == active {
-				// The name is a global already under evaluation further up
-				// this same call chain, so its value depends on itself.
-				// Section 3.10 makes a circularity in a stylesheet
-				// XTDE0640, and reporting the reference as undeclared hid
-				// the cycle behind a static-error code.
-				return fmt.Errorf(
-					"XTDE0640: global variable $%s depends on itself",
-					dep.Name.Lexical())
-			}
-			// Not a cycle, merely an order globalRefs could not see. Bind
-			// the dependency and evaluate this variable again; bind() is
-			// idempotent through the done state, so the retry converges —
-			// each pass either finishes or moves one more name to done.
-			if berr := bind(dep); berr != nil {
-				return berr
-			}
-			val, err = evalVariable(g, globalRuntimeFor(rt, g))
+		if isGlobalError(err) {
+			// Another global's failure, met through a reference: it is that
+			// global's error and is reported as it stands.
+			return nil, err
 		}
-		if err != nil {
-			// A global xsl:param with an "as" type, no explicit default and
-			// no supplied value takes the empty sequence as its default.
-			// Section 10.1.1: if the empty sequence is not a valid instance
-			// of the required type the parameter is treated as required, so
-			// the caller supplying nothing is XTDE0610 rather than the type
-			// error the conversion itself reports. This is the same rule
-			// that governs template parameters in runTemplate.
-			if g.IsParam && g.asType != nil && !hasExplicitDefault(g) {
-				return fmt.Errorf("%s: no value was supplied for parameter $%s, "+
-					"and the empty sequence is not a valid instance of %s",
-					missingParamCode(rt.sheet),
-					g.Name.Lexical(), g.asType.source())
-			}
-			// Only a failure of the *type conversion itself* becomes
-			// XTTE0600. Evaluating the default can fail for reasons that
-			// have nothing to do with the declared type — a schema
-			// validation error inside the default's sequence constructor
-			// carries its own code, and rebranding that as a type error
-			// reported XTTE0600 where the suite expects XTTE1510.
-			if g.IsParam && g.asType != nil &&
-				strings.HasPrefix(err.Error(), "XTTE0570") {
-				return fmt.Errorf("evaluating global $%s: %w",
-					g.Name.Lexical(), recodeError(err, "XTTE0600"))
-			}
-			return fmt.Errorf("evaluating global $%s: %w", g.Name.Lexical(), err)
+		// globalRefs only reads the text, so a reference reached through a
+		// sequence constructor, a match pattern or a function body can meet
+		// a global still under evaluation. A global is out of scope while
+		// it is evaluated (see xpath.LazyVar), so that shows up as XPST0008
+		// for a name that is in fact declared: its value depends on itself.
+		// Section 9.11 makes a circularity XTDE0640, and reporting the
+		// reference as undeclared hid the cycle behind a static-error code.
+		if dep, ok := unresolvedGlobal(err, byName); ok && stateOf(dep).active {
+			return nil, circular(dep)
 		}
-		rt.bindGlobal(g, val)
-		return nil
+		// A global xsl:param with an "as" type, no explicit default and no
+		// supplied value takes the empty sequence as its default. Section
+		// 10.1.1: if the empty sequence is not a valid instance of the
+		// required type the parameter is treated as required, so the caller
+		// supplying nothing is XTDE0610 rather than the type error the
+		// conversion itself reports. This is the same rule that governs
+		// template parameters in runTemplate.
+		if g.IsParam && g.asType != nil && !hasExplicitDefault(g) {
+			return nil, fmt.Errorf("%s: no value was supplied for parameter $%s, "+
+				"and the empty sequence is not a valid instance of %s",
+				missingParamCode(rt.sheet),
+				g.Name.Lexical(), g.asType.source())
+		}
+		// Only a failure of the *type conversion itself* becomes XTTE0600.
+		// Evaluating the default can fail for reasons that have nothing to
+		// do with the declared type — a schema validation error inside the
+		// default's sequence constructor carries its own code, and
+		// rebranding that as a type error reported XTTE0600 where the suite
+		// expects XTTE1510.
+		if g.IsParam && g.asType != nil &&
+			strings.HasPrefix(err.Error(), "XTTE0570") {
+			return nil, fmt.Errorf("evaluating global $%s: %w",
+				g.Name.Lexical(), recodeError(err, "XTTE0600"))
+		}
+		return nil, fmt.Errorf("evaluating global $%s: %w", g.Name.Lexical(), err)
 	}
 
-	for _, g := range s.globals {
-		// A deferred global is bound like any other, but its failure is not
-		// the transform's failure: 3.5.3.2 makes XTDE3052 the error for an
-		// invocation that "is evaluated", so a variable nothing refers to
-		// must raise nothing. The value is simply left unbound, and a
-		// reference to it -- which is an invocation, and so is exactly the
-		// case the error is for -- raises when it is evaluated.
-		//
-		// accept-042 hides an abstract v1 and never mentions it, while the
-		// v1-proxy that selects it is public and equally unreferenced;
-		// accept-043b and -043c refer to the proxy and still expect
-		// XTDE3052. Binding eagerly failed the first pair and skipping
-		// entirely failed the second, because an unbound name reports
-		// XPST0008 rather than the error the reference deserves.
-		if err := bind(g); err != nil {
-			if g.deferred {
-				rt.deferredErr = append(rt.deferredErr, deferredGlobal{
-					name:     globalBindingName(g.Name, g.pkg),
-					declared: g.Name,
-					err:      err,
-				})
-				continue
+	// force is a global's LazyVar.Force.
+	force := func(g *Variable) (xdm.Sequence, error) {
+		st := stateOf(g)
+		if st.done {
+			return nil, st.err
+		}
+		st.active = true
+		val, err := eval(g)
+		st.active = false
+		if err != nil {
+			if !isGlobalError(err) {
+				// Section 9.5: an error evaluating a global "cannot be
+				// suppressed by use of xsl:try around a reference to the
+				// global variable". Evaluated eagerly, it ended the
+				// transform before any xsl:try ran.
+				err = &globalError{err}
 			}
-			return err
+			st.done, st.err = true, err
+		}
+		return val, err
+	}
+
+	// Every global is bound before any is evaluated, under its binding name
+	// and, for a used package's global, under the plain name while no
+	// top-level global or earlier used-package global has that. The plain
+	// binding is what an expression carrying no package resolves against.
+	// A duplicate binding name keeps the first declaration.
+	cellOf := make(map[xdm.QName]*xpath.LazyVar, len(s.globals))
+	vars := make(map[xdm.QName]*xpath.LazyVar, len(s.globals))
+	for _, g := range s.globals {
+		name := globalBindingName(g.Name, g.pkg)
+		lv, dup := cellOf[name]
+		if !dup {
+			switch supplied, ok := opts.Params[g.Name.Clark()]; {
+			case g.isStatic:
+				// A static declaration was bound before static analysis
+				// began. Its value cannot depend on anything the run
+				// supplies, and a static xsl:param has already had its one
+				// chance to be set — through CompileOptions.StaticParams.
+				lv = xpath.ReadyVar(g.staticValue)
+			case ok:
+				// A caller names a parameter by its declared name, not by
+				// the package-qualified one the binding uses.
+				lv = xpath.ReadyVar(supplied)
+			case g.Required:
+				return fmt.Errorf("XTDE0050: required parameter $%s was not supplied",
+					g.Name.Lexical())
+			default:
+				g := g
+				lv = &xpath.LazyVar{Force: func() (xdm.Sequence, error) {
+					// A global is evaluated wherever it is first read, and
+					// must not see the locals in scope there.
+					defer rt.leaveFrame(rt.enterFrame())
+					return force(g)
+				}}
+			}
+			cellOf[name] = lv
+		}
+		vars[name] = cellOf[name]
+		if g.pkg != 0 {
+			if _, taken := vars[g.Name]; !taken {
+				vars[g.Name] = lv
+			}
+		}
+	}
+	rt.ctx = rt.ctx.WithLazyVars(vars, rt.evalLock)
+	// The locals sit above the globals, so a local shadows a global of its
+	// name.
+	rt.ctx = xpathleaf.WithLocals(rt.ctx, rt.locals).(*xpath.Context)
+	// Set here as well as in newRuntime, for the stylesheet functions an
+	// initialiser calls (see globalBindings).
+	rt.globalCtx = rt.ctx
+	snapshot := *rt
+	gs = &snapshot
+
+	// prime evaluates g now, the dependencies globalRefs names first, which
+	// is the order every global was evaluated in before evaluation became
+	// lazy. A deferred global that fails is taken out of scope, as it was
+	// never bound before.
+	var prime func(g *Variable) error
+	prime = func(g *Variable) error {
+		st := stateOf(g)
+		switch {
+		case st.active:
+			return circular(g)
+		case st.primed:
+			return nil
+		}
+		st.primed = true
+		lv := cellOf[globalBindingName(g.Name, g.pkg)]
+		if lv.Force != nil {
+			st.active = true
+			for _, dep := range globalRefs(g) {
+				d, ok := byName[dep]
+				if !ok {
+					continue
+				}
+				if d == g {
+					break // eval reports it
+				}
+				if err := prime(d); err != nil {
+					st.active = false
+					return err
+				}
+			}
+			st.active = false
+		}
+		_, err := lv.Value()
+		if err != nil && g.deferred {
+			lv.Unbind()
+		}
+		return unwrapGlobalError(err)
+	}
+	for _, g := range s.globals {
+		if !g.deferred && !g.eager {
+			continue
+		}
+		if err := prime(g); err != nil {
+			if !g.deferred {
+				return err
+			}
+			// A deferred global's failure is not the transform's failure:
+			// 3.5.3.2 makes XTDE3052 the error for an invocation that "is
+			// evaluated", so a variable nothing refers to must raise
+			// nothing. A reference to it raises the failure through
+			// deferredError.
+			//
+			// accept-042 hides an abstract v1 and never mentions it, while
+			// the v1-proxy that selects it is public and equally
+			// unreferenced; accept-043b and -043c refer to the proxy and
+			// still expect XTDE3052.
+			rt.deferredErr = append(rt.deferredErr, deferredGlobal{
+				name:     globalBindingName(g.Name, g.pkg),
+				declared: g.Name,
+				err:      err,
+			})
 		}
 	}
 	return nil
+}
+
+// globalError is a global variable's evaluation failure as a reference to
+// the variable meets it. Section 9.5: the error "cannot be suppressed by use
+// of xsl:try around a reference to the global variable", and evaluated
+// eagerly it ended the transform before any xsl:try or pattern ran, so
+// neither catchable nor recoverPatternError lets it through.
+type globalError struct{ err error }
+
+func (e *globalError) Error() string { return e.err.Error() }
+func (e *globalError) Unwrap() error { return e.err }
+
+// isGlobalError reports whether err is, or wraps, a globalError.
+func isGlobalError(err error) bool {
+	var ge *globalError
+	return errors.As(err, &ge)
+}
+
+// unwrapGlobalError returns the error a globalError holds, or err itself.
+func unwrapGlobalError(err error) error {
+	if ge, ok := err.(*globalError); ok {
+		return ge.err
+	}
+	return err
 }
 
 // unresolvedGlobal reports whether err is an XPST0008 naming a variable that
@@ -1131,22 +1346,6 @@ func (rt *runtime) hasGlobal(q xdm.QName) bool {
 		}
 	}
 	return false
-}
-
-// bindGlobal puts a global's value in scope under the name its package gives
-// it, and under the plain name as well while nothing else has claimed that.
-//
-// The plain binding is what an expression carrying no package resolves
-// against -- a pattern, or a global of the top-level package naming one it
-// uses. A later binding of the plain name legitimately shadows it; the
-// qualified name is what keeps two packages' copies distinct.
-func (rt *runtime) bindGlobal(g *Variable, val xdm.Sequence) {
-	rt.ctx = rt.ctx.WithVar(globalBindingName(g.Name, g.pkg), val)
-	if g.pkg != 0 {
-		if _, taken := rt.ctx.LookupVar(g.Name); !taken {
-			rt.ctx = rt.ctx.WithVar(g.Name, val)
-		}
-	}
 }
 
 // deferredError answers the failure recorded for a global that a reference
@@ -1326,19 +1525,19 @@ func bodyVariableRefs(el *xdm.Node) []string {
 	bound := map[string]bool{}
 	var names func(n *xdm.Node)
 	names = func(n *xdm.Node) {
-		if n.Kind == xdm.KindElement && isXSL(n, "variable") ||
-			n.Kind == xdm.KindElement && isXSL(n, "param") {
+		if n.Kind() == xdm.KindElement && isXSL(n, "variable") ||
+			n.Kind() == xdm.KindElement && isXSL(n, "param") {
 			if a := n.Attr("", "name"); a != nil {
-				if qn, err := resolveQNameAttr(n, a.Value); err == nil {
+				if qn, err := resolveQNameAttr(n, a.Value()); err == nil {
 					bound[qn.Clark()] = true
 				}
 			}
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			names(c)
 		}
 	}
-	for _, c := range el.Children {
+	for c := range el.Children() {
 		names(c)
 	}
 
@@ -1346,10 +1545,10 @@ func bodyVariableRefs(el *xdm.Node) []string {
 	var out []string
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
-		if n.Kind == xdm.KindElement {
+		if n.Kind() == xdm.KindElement {
 			ns := inScopeNamespacesShared(n)
-			for _, a := range n.Attrs {
-				for _, ref := range variableRefsIn(a.Value, ns) {
+			for a := range n.Attrs() {
+				for _, ref := range variableRefsIn(a.Value(), ns) {
 					if !seen[ref] && !bound[ref] {
 						seen[ref] = true
 						out = append(out, ref)
@@ -1357,11 +1556,11 @@ func bodyVariableRefs(el *xdm.Node) []string {
 				}
 			}
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}
-	for _, c := range el.Children {
+	for c := range el.Children() {
 		walk(c)
 	}
 	return out
@@ -1405,10 +1604,10 @@ func bodyFunctionCalls(el *xdm.Node) []string {
 	var out []string
 	var walk func(n *xdm.Node)
 	walk = func(n *xdm.Node) {
-		if n.Kind == xdm.KindElement {
+		if n.Kind() == xdm.KindElement {
 			ns := inScopeNamespacesShared(n)
-			for _, a := range n.Attrs {
-				for _, c := range functionCallsIn(a.Value, ns) {
+			for a := range n.Attrs() {
+				for _, c := range functionCallsIn(a.Value(), ns) {
 					if !seen[c] {
 						seen[c] = true
 						out = append(out, c)
@@ -1416,7 +1615,7 @@ func bodyFunctionCalls(el *xdm.Node) []string {
 				}
 			}
 		}
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			walk(c)
 		}
 	}
@@ -1486,4 +1685,92 @@ func (rt *runtime) noteUnbound(bits uint8) {
 	if h := hostOf(rt.ctx); h != nil {
 		setUnbound(rt.ctx, h.Unbound|bits)
 	}
+}
+
+// markGlobalOrder sets Variable.selfRef and Variable.eager. It runs once
+// every module has compiled and foldFunctionRefsIntoGlobals has added the
+// references made through stylesheet functions, since globalRefs reads those
+// too.
+//
+// A global is eager when it has effects, names itself, or reaches a cycle of
+// globalRefs dependencies: evaluated at the start, in declaration order and
+// dependencies first, a circularity is reported naming the global it named
+// when every global was evaluated that way.
+func (c *compiler) markGlobalOrder() {
+	byName := make(map[string]*Variable, len(c.sheet.globals))
+	for _, g := range c.sheet.globals {
+		if _, dup := byName[g.Name.Clark()]; !dup {
+			byName[g.Name.Clark()] = g
+		}
+	}
+	// A depth-first walk: meeting a variable still on the walk's path is a
+	// cycle, and everything on the path from it reaches that cycle.
+	const (
+		unseen = iota
+		onPath
+		finished
+	)
+	mark := map[*Variable]int{}
+	reaches := map[*Variable]bool{}
+	var walk func(g *Variable) bool
+	walk = func(g *Variable) bool {
+		switch mark[g] {
+		case onPath:
+			return true
+		case finished:
+			return reaches[g]
+		}
+		mark[g] = onPath
+		r := false
+		for _, dep := range globalRefs(g) {
+			d, ok := byName[dep]
+			if !ok {
+				continue
+			}
+			if d == g {
+				g.selfRef = true
+				continue
+			}
+			if walk(d) {
+				r = true
+			}
+		}
+		mark[g], reaches[g] = finished, r
+		return r
+	}
+	for _, g := range c.sheet.globals {
+		walk(g)
+	}
+	for _, g := range c.sheet.globals {
+		g.eager = g.eager || g.selfRef || reaches[g]
+	}
+}
+
+// hasEffects reports whether a global declaration's own select or content
+// writes xsl:message, xsl:assert or xsl:result-document, or mentions trace
+// or key( anywhere in an attribute, which is generous: a false hit only
+// evaluates the global when the transform starts, as every global once was.
+//
+// key( is here for section 9.11's circularity through a key: a global
+// that builds a key index whose match or use pattern reads that global.
+// Evaluated at the start, the pattern meets the global out of scope and the
+// circularity is reported against the global (error-0640e, -0640f), rather
+// than against the key when a template happened to build the index first.
+func hasEffects(el *xdm.Node) bool {
+	if el.Kind() == xdm.KindElement {
+		if isXSL(el, "message") || isXSL(el, "assert") || isXSL(el, "result-document") {
+			return true
+		}
+		for a := range el.Attrs() {
+			if v := a.Value(); strings.Contains(v, "trace") || strings.Contains(v, "key(") {
+				return true
+			}
+		}
+	}
+	for c := range el.Children() {
+		if hasEffects(c) {
+			return true
+		}
+	}
+	return false
 }

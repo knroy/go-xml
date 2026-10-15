@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // "//T" with no predicate on either step is evaluated as descendant::T. Every
@@ -34,10 +34,10 @@ func TestDescendantFusion(t *testing.T) {
 			case *xdm.Node:
 				// Namespace nodes are made afresh per step; identity is
 				// compared for the others.
-				if x.Kind == xdm.KindNamespace {
+				if x.Kind() == xdm.KindNamespace {
 					got = append(got, "ns:"+x.StringValue())
 				} else {
-					got = append(got, fmt.Sprintf("%s:%s@%p", x.Kind, x.StringValue(), x))
+					got = append(got, fmt.Sprintf("%s:%s@%p", x.Kind(), x.StringValue(), x))
 				}
 			case *xdm.Atomic:
 				got = append(got, x.String())

@@ -78,3 +78,20 @@ func TestCheckCharsInvalidUTF8InLongASCIIRun(t *testing.T) {
 		t.Errorf("valid multi-byte text refused: %v", err)
 	}
 }
+
+// Under XML 1.0 a character reference's extent is not recorded, so checkChars
+// re-reads the expanded bytes; a reference names only a [2] Char, which reads
+// the same literally, so the first refusal, its text and its line are those a
+// recorded extent gave. The expected errors were taken from the build that
+// recorded extents in both versions.
+func TestCheckCharsReferenceNextToBadLiteral10(t *testing.T) {
+	runCases(t, []tokenCase{
+		{name: "after ref", src: "<a>&#65;\x01</a>", wantErr: "XML syntax error on line 1: illegal character code U+0001"},
+		{name: "before ref", src: "<a>\x01&#65;</a>", wantErr: "XML syntax error on line 1: illegal character code U+0001"},
+		{name: "lines", src: "<a>\n&#x10000;\n\x0B&#xE9;\n</a>", wantErr: "XML syntax error on line 4: illegal character code U+000B"},
+		{name: "lead byte then ref", src: "<a>abcdefgh\xe2&#xE9;abcdefgh</a>", wantErr: "XML syntax error on line 1: invalid UTF-8"},
+		{name: "attribute", src: "<a b='&#9;&#13;&#x85;x\x7F\x01'/>", wantErr: "XML syntax error on line 1: illegal character code U+0001"},
+		{name: "refs only", src: "<a b='&#x2028;&#127;'>&#x85;&#xD;&#x10FFFF;" + strings.Repeat("x", 9) + "</a>",
+			want: `<a b="\u2028\x7f">"\u0085\r\U0010ffff` + strings.Repeat("x", 9) + `"</a>`},
+	})
+}

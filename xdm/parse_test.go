@@ -13,11 +13,11 @@ func TestParseBasicTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := tree.Root
-	if root.Kind != KindDocument {
-		t.Fatalf("root kind = %v, want document", root.Kind)
+	if root.Kind() != KindDocument {
+		t.Fatalf("root kind = %v, want document", root.Kind())
 	}
 	els := root.ChildElements()
-	if len(els) != 1 || els[0].Name.Local != "a" {
+	if len(els) != 1 || els[0].Name().Local != "a" {
 		t.Fatalf("expected single element child 'a', got %v", els)
 	}
 	if got := els[0].StringValue(); got != "x" {
@@ -32,23 +32,23 @@ func TestNamespacesBecomeNamespaceNodesNotAttributes(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := tree.Root.ChildElements()[0]
-	if len(a.Attrs) != 2 {
-		t.Errorf("got %d attributes, want 2 (xmlns must not be an attribute)", len(a.Attrs))
-		for _, at := range a.Attrs {
-			t.Logf("  attr %s", at.Name.Clark())
+	if len(attrsOf(a)) != 2 {
+		t.Errorf("got %d attributes, want 2 (xmlns must not be an attribute)", len(attrsOf(a)))
+		for _, at := range attrsOf(a) {
+			t.Logf("  attr %s", at.Name().Clark())
 		}
 	}
-	if len(a.Namespaces) != 2 {
-		t.Errorf("got %d namespace nodes, want 2", len(a.Namespaces))
+	if len(nsOf(a)) != 2 {
+		t.Errorf("got %d namespace nodes, want 2", len(nsOf(a)))
 	}
-	if a.Name.URI != "urn:d" {
-		t.Errorf("element URI = %q, want urn:d", a.Name.URI)
+	if a.Name().URI != "urn:d" {
+		t.Errorf("element URI = %q, want urn:d", a.Name().URI)
 	}
-	if at := a.Attr("urn:p", "k"); at == nil || at.Value != "v" {
+	if at := a.Attr("urn:p", "k"); at == nil || at.Value() != "v" {
 		t.Error("prefixed attribute p:k not found under its resolved URI")
 	}
 	// An unprefixed attribute is in no namespace, even with a default xmlns.
-	if at := a.Attr("", "plain"); at == nil || at.Value != "w" {
+	if at := a.Attr("", "plain"); at == nil || at.Value() != "w" {
 		t.Error("unprefixed attribute should be in no namespace, not the default one")
 	}
 }
@@ -59,10 +59,10 @@ func TestPrefixIsPreservedForSerialisation(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := tree.Root.ChildElements()[0]
-	if a.Name.Prefix != "p" {
-		t.Errorf("prefix = %q, want %q (needed to serialise as the author wrote it)", a.Name.Prefix, "p")
+	if a.Name().Prefix != "p" {
+		t.Errorf("prefix = %q, want %q (needed to serialise as the author wrote it)", a.Name().Prefix, "p")
 	}
-	if got := a.Name.Lexical(); got != "p:a" {
+	if got := a.Name().Lexical(); got != "p:a" {
 		t.Errorf("lexical = %q, want p:a", got)
 	}
 }
@@ -75,8 +75,8 @@ func TestAdjacentTextNodesAreMerged(t *testing.T) {
 	}
 	a := tree.Root.ChildElements()[0]
 	texts := 0
-	for _, c := range a.Children {
-		if c.Kind == KindText {
+	for _, c := range kids(a) {
+		if c.Kind() == KindText {
 			texts++
 		}
 	}
@@ -227,9 +227,9 @@ func TestStripSpace(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := tree.Root.ChildElements()[0]
-	for _, c := range a.Children {
-		if c.Kind == KindText {
-			t.Errorf("whitespace-only text node survived stripping: %q", c.Value)
+	for _, c := range kids(a) {
+		if c.Kind() == KindText {
+			t.Errorf("whitespace-only text node survived stripping: %q", c.Value())
 		}
 	}
 	// Non-whitespace text must survive.
@@ -247,8 +247,8 @@ func TestXMLSpacePreserveOverridesStrip(t *testing.T) {
 	}
 	a := tree.Root.ChildElements()[0]
 	found := false
-	for _, c := range a.Children {
-		if c.Kind == KindText {
+	for _, c := range kids(a) {
+		if c.Kind() == KindText {
 			found = true
 		}
 	}
@@ -286,8 +286,8 @@ func TestCommentsAndPIs(t *testing.T) {
 	}
 	a := tree.Root.ChildElements()[0]
 	var kinds []NodeKind
-	for _, c := range a.Children {
-		kinds = append(kinds, c.Kind)
+	for _, c := range kids(a) {
+		kinds = append(kinds, c.Kind())
 	}
 	want := []NodeKind{KindComment, KindPI, KindText}
 	if len(kinds) != len(want) {
@@ -413,28 +413,28 @@ func TestTreeXMLVersion(t *testing.T) {
 // data still merges into one text node, and the parse no longer pays an
 // allocation per element, attribute and text node.
 func TestParseNodeChunks(t *testing.T) {
-	const n = 3*nodeChunkLen + 7 // elements; three nodes each spans many chunks
+	const n = 3*chunkMax + 7 // elements; three nodes each spans many chunks
 	doc := "<r>" + strings.Repeat(`<e a="1">x&amp;y</e>`, n) + "</r>"
 	tree, err := ParseString(doc, ParseOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := tree.Root.Children[0]
-	if len(r.Children) != n {
-		t.Fatalf("got %d children, want %d", len(r.Children), n)
+	r := kids(tree.Root)[0]
+	if len(kids(r)) != n {
+		t.Fatalf("got %d children, want %d", len(kids(r)), n)
 	}
 	seen := map[*Node]bool{}
-	for i, e := range r.Children {
-		if e.Kind != KindElement || e.Name.Local != "e" || e.Parent != r {
-			t.Fatalf("child %d: kind %v name %q, parent ok %v", i, e.Kind, e.Name.Local, e.Parent == r)
+	for i, e := range kids(r) {
+		if e.Kind() != KindElement || e.Name().Local != "e" || e.Parent() != r {
+			t.Fatalf("child %d: kind %v name %q, parent ok %v", i, e.Kind(), e.Name().Local, e.Parent() == r)
 		}
-		if len(e.Attrs) != 1 || e.Attrs[0].Value != "1" || e.Attrs[0].Parent != e {
-			t.Fatalf("child %d: bad attribute %+v", i, e.Attrs)
+		if len(attrsOf(e)) != 1 || attrsOf(e)[0].Value() != "1" || attrsOf(e)[0].Parent() != e {
+			t.Fatalf("child %d: bad attribute %+v", i, attrsOf(e))
 		}
-		if len(e.Children) != 1 || e.Children[0].Kind != KindText || e.Children[0].Value != "x&y" {
-			t.Fatalf("child %d: text not merged into one node: %d children", i, len(e.Children))
+		if len(kids(e)) != 1 || kids(e)[0].Kind() != KindText || kids(e)[0].Value() != "x&y" {
+			t.Fatalf("child %d: text not merged into one node: %d children", i, len(kids(e)))
 		}
-		for _, m := range []*Node{e, e.Attrs[0], e.Children[0]} {
+		for _, m := range []*Node{e, attrsOf(e)[0], kids(e)[0]} {
 			if seen[m] {
 				t.Fatalf("child %d: node %p handed out twice", i, m)
 			}
@@ -462,10 +462,10 @@ func TestParseSharesRepeatedStrings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := tree.Root.Children[0]
+	r := kids(tree.Root)[0]
 	var els, spaces []*Node
-	for _, c := range r.Children {
-		switch c.Kind {
+	for _, c := range kids(r) {
+		switch c.Kind() {
 		case KindElement:
 			els = append(els, c)
 		case KindText:
@@ -476,22 +476,22 @@ func TestParseSharesRepeatedStrings(t *testing.T) {
 		t.Fatalf("got %d elements and %d text nodes, want 3 and 4", len(els), len(spaces))
 	}
 	same := func(a, b string) bool { return unsafe.StringData(a) == unsafe.StringData(b) }
-	if !same(els[0].Name.Local, els[1].Name.Local) {
+	if !same(els[0].Name().Local, els[1].Name().Local) {
 		t.Errorf("element name item is not shared")
 	}
-	if !same(els[0].Attrs[0].Name.Local, els[1].Attrs[0].Name.Local) {
+	if !same(attrsOf(els[0])[0].Name().Local, attrsOf(els[1])[0].Name().Local) {
 		t.Errorf("attribute name id is not shared")
 	}
-	if !same(spaces[0].Value, spaces[1].Value) || spaces[0].Value != "\n  " {
-		t.Errorf("whitespace text %q is not shared", spaces[0].Value)
+	if !same(spaces[0].Value(), spaces[1].Value()) || spaces[0].Value() != "\n  " {
+		t.Errorf("whitespace text %q is not shared", spaces[0].Value())
 	}
 	var got []string
 	for _, e := range els {
 		var s []string
-		for _, a := range e.Attrs {
-			s = append(s, a.Name.Local+"="+a.Value)
+		for _, a := range attrsOf(e) {
+			s = append(s, a.Name().Local+"="+a.Value())
 		}
-		got = append(got, e.Name.Local+"["+strings.Join(s, ",")+"]")
+		got = append(got, e.Name().Local+"["+strings.Join(s, ",")+"]")
 	}
 	if want := "item[id=1,b=2] item[id=3] f[]"; strings.Join(got, " ") != want {
 		t.Errorf("attributes: got %q, want %q", strings.Join(got, " "), want)
@@ -512,8 +512,8 @@ func TestParseTextRunIsLinear(t *testing.T) {
 			t.Fatal(err)
 		}
 		var got []string
-		for _, k := range tree.Root.Children[0].Children {
-			got = append(got, k.Kind.String()+k.Value)
+		for _, k := range kids(kids(tree.Root)[0]) {
+			got = append(got, k.Kind().String()+k.Value())
 		}
 		return strings.Join(got, " ")
 	}
@@ -547,29 +547,28 @@ func TestParseTextRunIsLinear(t *testing.T) {
 	}
 }
 
-// TestParsedSlicesAreExactSize: a parse cuts every element's Children and
-// Attrs from shared arrays, so each must end at its own last entry. An append
-// through the mutation API then reallocates rather than overwriting the
-// children or attributes of the element parsed next.
-func TestParsedSlicesAreExactSize(t *testing.T) {
-	tree, err := ParseString(`<r><a p="1" q="2"><x/><y/></a><b s="3"><z/></b></r>`, ParseOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := tree.Root.ChildElements()[0]
-	a, b := r.Children[0], r.Children[1]
-	a.AppendChild(&Node{Kind: KindElement, Name: QName{Local: "new"}})
-	a.AddAttr(&Node{Name: QName{Local: "n"}, Value: "4"})
-	if got := b.Children[0].Name.Local; got != "z" {
-		t.Errorf("b's first child is %q after appending to a, want z", got)
-	}
-	if got := b.Attrs[0].Name.Local; got != "s" {
-		t.Errorf("b's first attribute is %q after adding to a, want s", got)
-	}
-	if len(a.Children) != 3 || a.Children[2].Name.Local != "new" || len(a.Attrs) != 3 {
-		t.Errorf("a has %d children and %d attributes, want 3 and 3", len(a.Children), len(a.Attrs))
-	}
-	if len(tree.Root.Children) != 1 || tree.Root.Children[0] != r {
-		t.Errorf("document node children = %v", tree.Root.Children)
+// A text run whose first piece is not white space goes straight to the text
+// store and later pieces extend it; one that starts with white space is
+// buffered, so that it can still be stripped or shared.
+func TestTextRunPieces(t *testing.T) {
+	strip := func(QName) bool { return true }
+	for _, c := range []struct{ doc, want string }{
+		{"<a>x<![CDATA[y]]>z<![CDATA[]]>w</a>", "xyzw"},
+		{"<a> <![CDATA[y]]> </a>", " y "},
+		{"<a> <![CDATA[ ]]>\n</a>", ""},
+		{"<a><![CDATA[" + strings.Repeat("v", 9000) + "]]>" + strings.Repeat("w", 9000) + "</a>", strings.Repeat("v", 9000) + strings.Repeat("w", 9000)},
+	} {
+		tr, err := ParseString(c.doc, ParseOptions{StripSpace: strip})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := kids(tr.Root)[0]
+		var got string
+		for _, k := range kids(a) {
+			got += k.Value()
+		}
+		if got != c.want || len(kids(a)) > 1 {
+			t.Errorf("%.40q: %d text nodes %.40q, want one %.40q", c.doc, len(kids(a)), got, c.want)
+		}
 	}
 }

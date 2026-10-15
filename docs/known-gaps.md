@@ -77,6 +77,22 @@ What this file adds, and that one does not:
 Real gaps: a genuine bug or an unimplemented rule, failing now. Ordered by how
 much each costs.
 
+### Two edges of a transform's lock (XSLT, Go API)
+
+A transform's runtime takes one re-entrant lock wherever host Go code could
+reach it from another goroutine: when a function item it made is called
+after it returns, around every call into a Go-built function item or a
+context-taking resolver during it, and in `fn:transform`, whose nested
+transform shares its caller's lock. Two routes stay outside it:
+- **Evaluating the raw expression tree.** A host that calls `Expr.Eval` on
+  `Compiled.Expr()` with a context it was handed, instead of
+  `Compiled.Eval`, takes no lock.
+- **Items passed between separate `Transform` calls.** Two top-level
+  transforms have two locks. A host that hands each one's function items to
+  the other and calls them from two goroutines in opposite directions can
+  take the locks in opposite order. Within one `Transform`, `fn:transform`
+  included, there is one lock.
+
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
 **3 of the 23 XSLT 3.0 failures** — `si-fork-902`, `si-fork-952` and
@@ -629,7 +645,7 @@ is in the external-entity and DTD layers, and is described in
 `internal/xmltok` still carries these `parity:` behaviours from the
 `encoding/xml` fork it replaced; the others were corrected against the W3C XML
 Conformance Test Suite (see [testing.md](testing.md#tokeniser-differential)) or
-by the parse work in [profiling.md](profiling.md#implementation-status).
+by the parse work recorded in [CHANGELOG.md](../CHANGELOG.md).
 
 * A PI with target `xml` is taken as the XML declaration wherever it appears,
   and the declaration's pseudo-attributes are found by substring search;

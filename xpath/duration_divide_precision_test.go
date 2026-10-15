@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // evalDurDiv evaluates an expression expected to yield one atomic value.

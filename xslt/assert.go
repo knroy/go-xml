@@ -1,7 +1,7 @@
 package xslt
 
 import (
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // xsl:assert, XSLT 3.0 section 22.2.

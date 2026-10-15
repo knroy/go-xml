@@ -781,7 +781,7 @@ would mean the file had been read.
 `fn:load-xquery-module` names a module at run time, and it is given no reach
 of its own: it reads only through the resolver `import module` would use —
 the query's `Options.Modules` and `Options.ModuleResolver`, or
-`xpath.Context.Modules` / `xslt.TransformOptions.Modules`, all nil by default
+`xpath.Env.Modules` / `xslt.TransformOptions.Modules`, all nil by default
 — so with nothing configured it raises `FOQM0002` without opening anything.
 `TestLoadXQueryModuleReadsOnlyThroughTheResolver` names a module file that
 exists and asserts it is not read; sabotaging the loader to open the hint
@@ -1741,7 +1741,7 @@ No `unsafe`, no `cgo`, no `reflect` in any non-test file.
    returning the empty sequence — which the spec permits, because it makes
    availability implementation-dependent. Setting a document or text resolver
    does not set this.
-5. **Set a `Root`** on `FileResolver`, and an `AllowHost` on `HTTPResolver`, if
+5. **Set a `Root`** on `FileResolver`, and an `AllowHost` on `xsdnet.HTTPResolver`, if
    either resolves locations an attacker can influence — `relaxng.FileResolver`
    has a `Root` too, and `cmd/go-xml` passes `-root` to it, or the schema's own
    directory when the flag is absent. An empty `Root` on a non-nil resolver

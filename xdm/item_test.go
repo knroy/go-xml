@@ -60,13 +60,13 @@ func TestNodeTypeNameCoversEveryKind(t *testing.T) {
 	walk = func(n *Node) {
 		name := n.TypeName()
 		if name == "" {
-			t.Errorf("%v has no type name", n.Kind)
+			t.Errorf("%v has no type name", n.Kind())
 		}
-		seen[n.Kind] = name
-		for _, a := range n.Attrs {
+		seen[n.Kind()] = name
+		for _, a := range attrsOf(n) {
 			_ = a
 		}
-		for _, c := range n.Children {
+		for _, c := range kids(n) {
 			walk(c)
 		}
 	}
@@ -87,11 +87,11 @@ func TestNodeTypeNameCoversEveryKind(t *testing.T) {
 	check = func(n *Node) {
 		if o := n.Order(); o <= last {
 			t.Errorf("%v at %q has order %d, not after %d",
-				n.Kind, n.Name.Local, o, last)
+				n.Kind(), n.Name().Local, o, last)
 		} else {
 			last = o
 		}
-		for _, c := range n.Children {
+		for _, c := range kids(n) {
 			check(c)
 		}
 	}

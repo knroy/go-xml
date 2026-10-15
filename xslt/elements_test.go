@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // These cover the XSLT 2.0 elements added after an audit against the spec's
@@ -959,9 +959,9 @@ func TestRawTextCannotEndItsElement(t *testing.T) {
 func TestRawTextGuardSpansTextNodes(t *testing.T) {
 	serialize := func(texts ...string) error {
 		t.Helper()
-		sc := &xdm.Node{Kind: xdm.KindElement, Name: xdm.QName{Local: "script"}}
+		sc := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "script"}, "")
 		for _, v := range texts {
-			sc.Children = append(sc.Children, &xdm.Node{Kind: xdm.KindText, Value: v})
+			sc.AppendText(v)
 		}
 		var sb strings.Builder
 		err := Serialize(&sb, xdm.Sequence{sc}, OutputSettings{Method: "html", OmitXMLDecl: true}, nil)

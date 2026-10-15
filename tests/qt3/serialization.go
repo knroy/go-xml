@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // This file implements the suite's three serialization assertions:
@@ -224,17 +224,17 @@ func paramDocElement(doc *xdm.Node) *xdm.Node {
 		return nil
 	}
 	el := doc
-	if el.Kind != xdm.KindElement {
+	if el.Kind() != xdm.KindElement {
 		el = nil
-		for _, c := range doc.Children {
-			if c.Kind == xdm.KindElement {
+		for c := range doc.Children() {
+			if c.Kind() == xdm.KindElement {
 				el = c
 				break
 			}
 		}
 	}
-	if el == nil || el.Name.URI != nsSerialization ||
-		el.Name.Local != "serialization-parameters" {
+	if el == nil || el.Name().URI != nsSerialization ||
+		el.Name().Local != "serialization-parameters" {
 		return nil
 	}
 	return el

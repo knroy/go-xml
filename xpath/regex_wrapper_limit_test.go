@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Every regex wrapper must classify an exhausted backtracking budget the same
@@ -44,7 +44,7 @@ func regexLimitEval(t *testing.T, expr string) error {
 	SetBacktrackingRegex(true)
 	defer SetBacktrackingRegex(old)
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	_, err := Eval(expr, ctx, nil)
 	return err
 }
@@ -142,7 +142,7 @@ func TestAnalyzeStringAcceptsBackreferencePatterns(t *testing.T) {
 	SetBacktrackingRegex(true)
 	defer SetBacktrackingRegex(old)
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	seq, err := Eval(`analyze-string("xabcabcy", "(abc)\1")`, ctx, nil)
 	if err != nil {
 		t.Fatalf("analyze-string with a backreference = %v; fn:matches, "+
@@ -161,8 +161,8 @@ func TestAnalyzeStringAcceptsBackreferencePatterns(t *testing.T) {
 		t.Errorf("string value = %q, want the whole input back", got)
 	}
 	var kinds []string
-	for _, c := range n.Children {
-		kinds = append(kinds, c.Name.Local)
+	for c := range n.Children() {
+		kinds = append(kinds, c.Name().Local)
 	}
 	want := "non-match match non-match"
 	if got := strings.Join(kinds, " "); got != want {

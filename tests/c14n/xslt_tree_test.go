@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/knroy/go-xml/c14n"
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/c14n"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // TestCanonicalizeXSLTResultTree checks that a tree an XSLT transform BUILT

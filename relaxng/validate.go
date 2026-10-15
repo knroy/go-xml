@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Schema is a compiled RELAX NG schema.
@@ -85,10 +85,10 @@ func (s *Schema) ValidateWithOptions(doc *xdm.Node, opts ValidateOptions) error 
 		return fmt.Errorf("relaxng: nil document")
 	}
 	root := doc
-	if root.Kind == xdm.KindDocument {
+	if root.Kind() == xdm.KindDocument {
 		root = nil
-		for _, c := range doc.Children {
-			if c.Kind == xdm.KindElement {
+		for c := range doc.Children() {
+			if c.Kind() == xdm.KindElement {
 				root = c
 				break
 			}
@@ -127,7 +127,7 @@ func (s *Schema) ValidateWithOptions(doc *xdm.Node, opts ValidateOptions) error 
 	if !p.nullable() {
 		where := v.deepest
 		if where == "" {
-			where = "/" + root.Name.Local
+			where = "/" + root.Name().Local
 		}
 		return &Error{Path: where, Message: v.why}
 	}
@@ -167,6 +167,11 @@ type validator struct {
 	// memoAfter'th element on.
 	pb    *patBuilder
 	elems int
+	// kids is a stack of the content children of the elements being
+	// validated, each level's above its parent's; attrs is the one element's
+	// attributes being matched. Both are reused for every element.
+	kids  []*xdm.Node
+	attrs []attr
 }
 
 // tailPath renders the last few segments of a deep path.
@@ -235,9 +240,9 @@ func (v *validator) textDeriv(p pattern, s string, ctx nsContext) pattern {
 // pattern only accumulates across attributes, not within one.
 func (v *validator) attsDeriv(p pattern, attrs []attr, ctx nsContext, el *xdm.Node) pattern {
 	for _, a := range attrs {
-		if v.maxPattern >= 0 && patternSize(p, v.maxPattern+1) > v.maxPattern {
+		if v.maxPattern >= 0 && patternSize(p) > v.maxPattern {
 			v.tooBig = true
-			v.deepPath = tailPath(v.path, el.Name.Local)
+			v.deepPath = tailPath(v.path, el.Name().Local)
 			return notAllowedPat{}
 		}
 		p = v.pb.att(p, a, ctx)
@@ -247,9 +252,9 @@ func (v *validator) attsDeriv(p pattern, attrs []attr, ctx nsContext, el *xdm.No
 
 // childDeriv takes the derivative with respect to one node of content.
 func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindText:
-		return v.textDeriv(p, n.Value, nsContextOf(n))
+		return v.textDeriv(p, n.Value(), nsContextOf(n))
 
 	case xdm.KindElement:
 		// The depth bound is checked here because this is the only place
@@ -265,7 +270,7 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 			// A path a thousand segments long tells the reader nothing, so
 			// only the last few are kept: what identifies the failure is the
 			// depth, which the message states, not the route to it.
-			v.deepPath = tailPath(v.path, n.Name.Local)
+			v.deepPath = tailPath(v.path, n.Name().Local)
 			return notAllowedPat{}
 		}
 		v.depth++
@@ -273,36 +278,37 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 		if v.elems == memoAfter {
 			v.pb = newPatBuilder()
 		}
-		v.path = append(v.path, n.Name.Local)
+		v.path = append(v.path, n.Name().Local)
 		defer func() {
 			v.depth--
 			v.path = v.path[:len(v.path)-1]
 		}()
 
-		name := xdm.QName{URI: n.Name.URI, Local: n.Name.Local}
+		name := xdm.QName{URI: n.Name().URI, Local: n.Name().Local}
 		// The pattern the derivative carries is checked before the next one
 		// is taken, for the same reason the depth bound is fatal here: the
 		// derivative about to be computed is the expensive one, so noticing
 		// afterwards would spend exactly what the bound exists to refuse.
-		if v.maxPattern >= 0 && patternSize(p, v.maxPattern+1) > v.maxPattern {
+		if v.maxPattern >= 0 && patternSize(p) > v.maxPattern {
 			v.tooBig = true
-			v.deepPath = tailPath(v.path, n.Name.Local)
+			v.deepPath = tailPath(v.path, n.Name().Local)
 			return notAllowedPat{}
 		}
 		p1 := v.pb.open(p, name)
 		if isNotAllowed(p1) {
-			v.note(fmt.Sprintf("element %s is not permitted here", n.Name.Local))
+			v.note(fmt.Sprintf("element %s is not permitted here", n.Name().Local))
 			return notAllowedPat{}
 		}
-		p1 = v.attsDeriv(p1, elementAttrs(n), nsContextOf(n), n)
+		v.attrs = elementAttrs(v.attrs[:0], n)
+		p1 = v.attsDeriv(p1, v.attrs, nsContextOf(n), n)
 		if isNotAllowed(p1) {
-			v.note(fmt.Sprintf("the attributes of %s do not match", n.Name.Local))
+			v.note(fmt.Sprintf("the attributes of %s do not match", n.Name().Local))
 			return notAllowedPat{}
 		}
 		p1 = v.pb.closeTag(p1)
 		if isNotAllowed(p1) {
 			v.note(fmt.Sprintf("element %s is missing a required attribute",
-				n.Name.Local))
+				n.Name().Local))
 			return notAllowedPat{}
 		}
 		p1 = v.childrenDeriv(p1, n)
@@ -311,7 +317,7 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 		}
 		p2 := v.pb.end(p1)
 		if isNotAllowed(p2) {
-			v.note(fmt.Sprintf("the content of %s is incomplete", n.Name.Local))
+			v.note(fmt.Sprintf("the content of %s is incomplete", n.Name().Local))
 		}
 		return p2
 	}
@@ -323,7 +329,12 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 
 // childrenDeriv takes the derivative over an element's children.
 func (v *validator) childrenDeriv(p pattern, el *xdm.Node) pattern {
-	kids := contentChildren(el)
+	base := len(v.kids)
+	v.kids = contentChildren(v.kids, el)
+	// Deeper levels push above this one and pop back to it, so kids stays
+	// valid even when they grow v.kids into a new array.
+	kids := v.kids[base:]
+	defer func() { v.kids = v.kids[:base] }()
 	if len(kids) == 0 {
 		// An empty element and one containing "" are the same document, so a
 		// pattern that admits the empty sequence already matches.
@@ -365,20 +376,24 @@ func (v *validator) childrenDeriv(p pattern, el *xdm.Node) pattern {
 	// left no branch for <f>. Six DocBook documents were rejected that way.
 	hasElem := false
 	for _, c := range kids {
-		if c.Kind == xdm.KindElement {
+		if c.Kind() == xdm.KindElement {
 			hasElem = true
 			break
 		}
 	}
 	for i := 0; i < len(kids); i++ {
 		c := kids[i]
-		if c.Kind == xdm.KindText {
-			var sb strings.Builder
-			for ; i < len(kids) && kids[i].Kind == xdm.KindText; i++ {
-				sb.WriteString(kids[i].Value)
+		if c.Kind() == xdm.KindText {
+			s := c.Value()
+			if i+1 < len(kids) && kids[i+1].Kind() == xdm.KindText {
+				var sb strings.Builder
+				for ; i < len(kids) && kids[i].Kind() == xdm.KindText; i++ {
+					sb.WriteString(kids[i].Value())
+				}
+				i--
+				s = sb.String()
 			}
-			i--
-			switch s := sb.String(); {
+			switch {
 			case !whitespaceOnly(s):
 				p = v.pb.textDeriv(p, s, nsContextOf(el))
 			case hasElem:
@@ -396,11 +411,10 @@ func (v *validator) childrenDeriv(p pattern, el *xdm.Node) pattern {
 	return p
 }
 
-// contentChildren drops the nodes that are not content.
-func contentChildren(el *xdm.Node) []*xdm.Node {
-	var out []*xdm.Node
-	for _, c := range el.Children {
-		switch c.Kind {
+// contentChildren appends the children that are content to out.
+func contentChildren(out []*xdm.Node, el *xdm.Node) []*xdm.Node {
+	for c := range el.Children() {
+		switch c.Kind() {
 		case xdm.KindElement, xdm.KindText:
 			out = append(out, c)
 		}
@@ -408,20 +422,19 @@ func contentChildren(el *xdm.Node) []*xdm.Node {
 	return out
 }
 
-// elementAttrs collects the attributes a pattern may match.
+// elementAttrs appends to out the attributes a pattern may match.
 //
 // Namespace declarations are not attributes in the data model RELAX NG
 // validates: xmlns:p="..." is a binding, not content, and a schema is never
 // asked to declare one.
-func elementAttrs(el *xdm.Node) []attr {
-	var out []attr
-	for _, a := range el.Attrs {
-		if a.Name.URI == xdm.NSXMLNS || a.Name.Local == "xmlns" {
+func elementAttrs(out []attr, el *xdm.Node) []attr {
+	for a := range el.Attrs() {
+		if a.Name().URI == xdm.NSXMLNS || a.Name().Local == "xmlns" {
 			continue
 		}
 		out = append(out, attr{
-			name:  xdm.QName{URI: a.Name.URI, Local: a.Name.Local},
-			value: a.Value,
+			name:  xdm.QName{URI: a.Name().URI, Local: a.Name().Local},
+			value: a.Value(),
 		})
 	}
 	return out

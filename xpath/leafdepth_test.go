@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A leaf builtin counts its call depth in place on the caller's context; the
@@ -24,7 +24,7 @@ func TestLeafBuiltinDepthBoundary(t *testing.T) {
 			want string
 		}{{depth, "XPDY0001: recursion exceeded 5 levels"}, {depth + 1, ""}} {
 			ctx := NewContext(nil, Builtins())
-			ctx.MaxDepth = tc.max
+			ctx = ctx.WithEnv(func(e *Env) { e.MaxDepth = tc.max })
 			_, err := c.Eval(ctx)
 			switch {
 			case tc.want == "" && err != nil:
@@ -39,13 +39,17 @@ func TestLeafBuiltinDepthBoundary(t *testing.T) {
 	if fn, _ := Builtins().Lookup(xdm.QName{URI: xdm.NSFN, Local: "string"}, 1); !fn.leaf {
 		t.Fatal("fn:string#1 is not marked leaf; the in-place path is untested")
 	}
-	call := &FuncCall{Name: xdm.QName{URI: xdm.NSFN, Local: "string"}, Args: []Expr{&Literal{Val: xdm.NewInteger(1)}}}
-	for _, max := range []int{3, 4} {
-		ctx := NewContext(nil, Builtins())
-		ctx.Depth, ctx.MaxDepth = 3, max
-		_, err := call.Eval(ctx)
-		if (err != nil) != (max == 3) || ctx.Depth != 3 {
-			t.Errorf("MaxDepth %d: err %v, depth after %d; want depth 3 and an error only at 3", max, err, ctx.Depth)
+	// Every call counts in place now, leaf or not (reverse is not a leaf).
+	for _, name := range []string{"string", "reverse"} {
+		call := &FuncCall{Name: xdm.QName{URI: xdm.NSFN, Local: name}, Args: []Expr{&Literal{Val: xdm.NewInteger(1)}}}
+		for _, max := range []int{3, 4} {
+			ctx := NewContext(nil, Builtins())
+			ctx = ctx.WithEnv(func(e *Env) { e.MaxDepth = max })
+			ctx.Depth = 3
+			_, err := call.Eval(ctx)
+			if (err != nil) != (max == 3) || ctx.Depth != 3 {
+				t.Errorf("%s, MaxDepth %d: err %v, depth after %d; want depth 3 and an error only at 3", name, max, err, ctx.Depth)
+			}
 		}
 	}
 }

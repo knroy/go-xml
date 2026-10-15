@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // varDecl is one "declare variable" (§4.14).
@@ -1250,9 +1250,14 @@ func (q *Query) withCycleTrap(ctx *xpath.Context, byName map[string]*varDecl,
 	if len(byName) == 0 {
 		return ctx
 	}
-	sub := *ctx
-	prev := sub.MissingVar
-	sub.MissingVar = func(c *xpath.Context, name xdm.QName) error {
+	prev := ctx.Env().MissingVar
+	return ctx.WithEnv(func(e *xpath.Env) { e.MissingVar = cycleTrap(byName, state, prev) })
+}
+
+// cycleTrap is the MissingVar withCycleTrap installs.
+func cycleTrap(byName map[string]*varDecl, state map[string]int,
+	prev func(*xpath.Context, xdm.QName) error) func(*xpath.Context, xdm.QName) error {
+	return func(c *xpath.Context, name xdm.QName) error {
 		for _, d := range byName {
 			if d.name.Clark() != name.Clark() {
 				continue
@@ -1269,7 +1274,6 @@ func (q *Query) withCycleTrap(ctx *xpath.Context, byName map[string]*varDecl,
 		}
 		return nil
 	}
-	return &sub
 }
 
 // The states a global variable passes through while bindVariables walks the

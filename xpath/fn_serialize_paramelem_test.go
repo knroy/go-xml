@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // cdataTree builds an element with a text child that has to be escaped, which
@@ -12,15 +12,8 @@ import (
 // the parameter the "<" is written as &lt;, with it the run is wrapped in a
 // CDATA section instead.
 func cdataTree(local, uri, prefix string) *xdm.Node {
-	root := &xdm.Node{
-		Kind: xdm.KindElement,
-		Name: xdm.QName{Prefix: prefix, URI: uri, Local: local},
-	}
-	root.Children = []*xdm.Node{{
-		Kind:   xdm.KindText,
-		Value:  "x<y",
-		Parent: root,
-	}}
+	root := xdm.NewNode(xdm.KindElement, xdm.QName{Prefix: prefix, URI: uri, Local: local}, "")
+	root.AppendText("x<y")
 	return root
 }
 
@@ -46,7 +39,7 @@ func TestSerializeParamElementCdataSectionElements(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := NewContext(nil, Builtins())
-			ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+			ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 			c := ctx.WithVar(xdm.QName{Local: "n"}, xdm.One(cdataTree("a", "", "")))
 			c = c.WithVar(xdm.QName{Local: "p"}, xdm.One(paramsElement(
 				map[string]string{"cdata-section-elements": tc.param})))
@@ -70,7 +63,7 @@ func TestSerializeParamElementCdataSectionElements(t *testing.T) {
 // same answer whichever way it is written.
 func TestSerializeParamElementCdataMatchesMapForm(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	c := ctx.WithVar(xdm.QName{Local: "n"}, xdm.One(cdataTree("a", "", "")))
 	c = c.WithVar(xdm.QName{Local: "p"}, xdm.One(paramsElement(
 		map[string]string{"cdata-section-elements": "a"})))
@@ -110,15 +103,10 @@ func TestSerializeParamElementCdataMatchesMapForm(t *testing.T) {
 func TestSerializeParamElementCdataResolvesPrefix(t *testing.T) {
 	const ns = "http://example.com/n"
 	params := paramsElement(map[string]string{"cdata-section-elements": "e:a"})
-	params.Namespaces = []*xdm.Node{{
-		Kind:   xdm.KindNamespace,
-		Name:   xdm.QName{Local: "e"},
-		Value:  ns,
-		Parent: params,
-	}}
+	params.AddNamespace("e", ns)
 
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	c := ctx.WithVar(xdm.QName{Local: "p"}, xdm.One(params))
 
 	// The element in that namespace matches; the one with the same local name
@@ -153,7 +141,7 @@ func TestSerializeParamElementCdataResolvesPrefix(t *testing.T) {
 // could not name, and would have got escaped text with no indication why.
 func TestSerializeParamElementCdataUndeclaredPrefix(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	c := ctx.WithVar(xdm.QName{Local: "n"}, xdm.One(cdataTree("a", "", "")))
 	c = c.WithVar(xdm.QName{Local: "p"}, xdm.One(paramsElement(
 		map[string]string{"cdata-section-elements": "zz:a"})))
@@ -174,7 +162,7 @@ func TestSerializeParamElementCdataUndeclaredPrefix(t *testing.T) {
 // parameter and wrote the "xml" default regardless.
 func TestSerializeParamElementJSONNodeOutputMethod(t *testing.T) {
 	ctx := NewContext(nil, Builtins())
-	ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+	ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 	c := ctx.WithVar(xdm.QName{Local: "n"}, xdm.One(cdataTree("a", "", "")))
 	c = c.WithVar(xdm.QName{Local: "p"}, xdm.One(paramsElement(map[string]string{
 		"method": "json", "json-node-output-method": "text"})))

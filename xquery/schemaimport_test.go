@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xquery"
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xquery"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // hatsSchema is the schema these tests import. It is the shape the QT3 suite's

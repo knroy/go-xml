@@ -277,32 +277,3 @@ func typeEnvOf(n *Node) *TypeEnvironment {
 // schema loaded last; this answers from the schema that actually produced the
 // node's annotation, which is the only definition that can be correct for it.
 func TypeEnvOf(n *Node) *TypeEnvironment { return typeEnvOf(n) }
-
-// TypeEnv returns the type environment of the schema that validated this node,
-// or nil when no schema did.
-//
-// Unlike TypeEnvOf this does NOT fall back to the global table: it reports
-// what the node actually carries, which is what a test asserting that the
-// stamping happened needs to see.
-func (n *Node) TypeEnv() *TypeEnvironment {
-	if n == nil {
-		return nil
-	}
-	if ext := n.loadExt(); ext != nil {
-		return ext.typeEnv
-	}
-	return nil
-}
-
-// SetTypeEnv records the type environment of the schema whose assessment
-// produced this node's annotation.
-//
-// The xsd package calls it as it annotates, so that later by-name questions
-// about the node's type reach the definitions that schema actually made rather
-// than whatever a later, unrelated schema registered under the same name.
-func (n *Node) SetTypeEnv(e *TypeEnvironment) {
-	if n == nil || (e == nil && n.loadExt() == nil) {
-		return
-	}
-	n.replaceExt(e)
-}

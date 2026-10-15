@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The cases in this file were each run through Saxon-HE 12.4 and this engine
@@ -1845,7 +1845,7 @@ func TestDocumentURIOnlyOnDocuments(t *testing.T) {
 // from somewhere else, which is the ordinary case.
 func TestStaticBaseURI(t *testing.T) {
 	root := mustParse(t, `<r/>`)
-	root.BaseURI = "file:///docs/input.xml"
+	root.SetBaseURI("file:///docs/input.xml")
 
 	// With none supplied, the context node's is the best available answer.
 	ctx := NewContext(root, Builtins())
@@ -1854,7 +1854,7 @@ func TestStaticBaseURI(t *testing.T) {
 	}
 
 	// When one is supplied it wins, and it is not the document's.
-	ctx.StaticBaseURI = "http://www.example.com"
+	ctx = ctx.WithStaticBaseURI("http://www.example.com")
 	if got := evalOne(t, ctx, `string(static-base-uri())`); got != "http://www.example.com" {
 		t.Errorf("static-base-uri() = %q, want the declared one", got)
 	}

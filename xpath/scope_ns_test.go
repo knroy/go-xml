@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // mapNS is a resolver whose values cannot be compared with ==; ptrNS is one
@@ -49,7 +49,7 @@ func TestNestedEvaluationUsesItsOwnNamespaces(t *testing.T) {
 				t.Fatal(err)
 			}
 			ctx := NewContext(nil, lib)
-			ctx.LibraryVersion = XPath31
+			ctx = ctx.WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 			for i := 0; i < 2; i++ {
 				seq, err := outer.Eval(ctx)
 				if err != nil {

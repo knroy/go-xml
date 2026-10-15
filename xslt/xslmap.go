@@ -3,8 +3,8 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // xsl:map and xsl:map-entry, XSLT 3.0 section 14.
@@ -141,7 +141,7 @@ func (i *mapEntryInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 // compileMap compiles xsl:map and xsl:map-entry.
 func (c *compiler) compileMap(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
-	if n.Name.Local == "map" {
+	if n.Name().Local == "map" {
 		body, err := c.compileSequence(n, n)
 		if err != nil {
 			return nil, err
@@ -155,7 +155,7 @@ func (c *compiler) compileMap(n *xdm.Node, ns xpath.NamespaceResolver) (Instruct
 	}
 	instr := &mapEntryInstr{key: key}
 	if a := n.Attr("", "select"); a != nil {
-		if instr.sel, err = compileExpr(a.Value, ns); err != nil {
+		if instr.sel, err = compileExpr(a.Value(), ns); err != nil {
 			return nil, err
 		}
 	}

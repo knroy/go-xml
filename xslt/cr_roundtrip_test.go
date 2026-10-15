@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A CR must survive parse -> serialize -> parse.
@@ -78,9 +78,9 @@ func crValue(t *testing.T, root *xdm.Node, attr string) string {
 		return root.StringValue()
 	}
 	el := elementOf(t, root)
-	for _, a := range el.Attrs {
-		if a.Name.Local == attr {
-			return a.Value
+	for a := range el.Attrs() {
+		if a.Name().Local == attr {
+			return a.Value()
 		}
 	}
 	t.Fatalf("no attribute %q on the serialized element", attr)
@@ -90,11 +90,11 @@ func crValue(t *testing.T, root *xdm.Node, attr string) string {
 // elementOf digs the document element out of a parsed tree root.
 func elementOf(t *testing.T, n *xdm.Node) *xdm.Node {
 	t.Helper()
-	if n.Kind == xdm.KindElement {
+	if n.Kind() == xdm.KindElement {
 		return n
 	}
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindElement {
 			return c
 		}
 	}

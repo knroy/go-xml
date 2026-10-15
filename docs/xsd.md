@@ -168,10 +168,12 @@ resolves anything. `LoadFile` and `LoadFiles` were handed paths, so a sibling
 absolute path elsewhere or a climb through `..`. `Schema.WithInstanceLocations`
 is rooted the same way, at the directories the schema was loaded from.
 
-To follow remote locations you have to say so, and say which hosts:
+To follow remote locations you have to say so, and say which hosts.
+`HTTPResolver` is in its own package, `github.com/knroy/go-xml/v2/xsd/xsdnet`,
+so a program that does not import it does not link `net/http`:
 
 ```go
-xsd.Options{Resolver: &xsd.HTTPResolver{
+xsd.Options{Resolver: &xsdnet.HTTPResolver{
     AllowHost: func(host string) bool { return host == "schemas.example.com" },
 }}
 ```
@@ -312,24 +314,26 @@ Three things about that shape are deliberate:
   validating many documents against one schema should not pay for it.
 
 The resolver still decides what can actually be fetched. Following untrusted
-documents means pairing this with a `MapResolver`, or an `HTTPResolver` whose
+documents means pairing this with a `MapResolver`, or an `xsdnet.HTTPResolver` whose
 `AllowHost` refuses everything you have not vouched for: the allowlist says
 *which namespaces* an instance may extend, not *what it may reach*.
 
 ## The PSVI
 
-`ValidateOptions.Annotate` writes the type of each validated node into its
-`TypeAnnotation`:
+`Schema.ValidateCopy` validates a copy of the document and returns it typed:
+each node's type is in its `TypeAnnotation`, defaulted attributes are added
+and ignorable whitespace is stripped.
 
 ```go
-err := schema.Validate(doc.Root, xsd.ValidateOptions{Annotate: true})
+typed, err := schema.ValidateCopy(doc.Root, xsd.ValidateOptions{})
 ```
 
 That is the part of the post-schema-validation infoset the XPath and XSLT
 layers consume — it is what makes `element(*, xs:date)` and typed value
-comparison mean anything. It is off by default because **it mutates the tree
-you passed in**, which also makes it the one option that is unsafe to use on a
-tree shared between goroutines.
+comparison mean anything. `Validate` itself only checks and never writes to
+the tree. `ValidateCopy` (and `ValidateElementLaxCopy`, `ValidateAttributeCopy`,
+`ValidateAgainstTypeCopy`) returns a typed copy; there is no in-place
+annotation, because a tree is not edited once it is built.
 
 ## Limits
 
@@ -640,11 +644,9 @@ Its one piece of lazily-built state, the content-model cache, is synchronised
 for that reason: content models are compiled on first use, so the cache is
 written by whichever goroutine reaches a type first and read by the rest.
 
-Two things are *not* shared:
-
-* **A schema still being assembled.** Finish loading before publishing it.
-* **A document tree.** Parse one per goroutine. `Annotate: true` writes into
-  the tree, and even without it the tree is the one mutable thing in play.
+One thing is *not* shared: **a schema still being assembled.** Finish loading
+before publishing it. `Validate` and `ValidateCopy` only read the tree, so one
+parsed document may be validated from several goroutines at once.
 
 This is tested rather than asserted. The suite runs validation from many
 goroutines against both warm and deliberately cold schemas, validates

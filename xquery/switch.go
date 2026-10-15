@@ -1,8 +1,8 @@
 package xquery
 
 import (
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // switchExpr is "switch (Expr) case ... default return ...", XQuery 3.1

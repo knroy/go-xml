@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Unique Particle Attribution (§3.8.6).

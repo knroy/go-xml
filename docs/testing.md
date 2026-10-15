@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,769 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 2,844 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -40,8 +40,8 @@ figures* section, which fails the gate when this table drifts from the tree:
   `grep -rn "^func Test" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`
 * **Limit boundary tests** — `func Test` declarations in the
   `*/limits_boundary*_test.go` files of dtd, relaxng, xdm, xpath, xsd and xslt
-  (xsd's HTTPResolver limits sit in `limits_boundary_http_test.go`, behind the
-  `goxml_nohttp` tag); most
+  (xsd's `xsdnet.HTTPResolver` limits sit in `limits_boundary_http_test.go`, in
+  the external `xsd_test` package); most
   are table-driven, so they run rather more than 13 cases:
   `grep -hc "^func Test" ./*/limits_boundary*_test.go | awk '{n += $1} END {print n + 0}'`
 * **Fuzzing** — `grep -rn "^func Fuzz" --include='*_test.go' . | grep -v '/\.claude/worktrees/' | grep -vc '^\./bench/'`
@@ -331,7 +331,7 @@ wrong limit trips or the document was malformed for an unrelated reason.
 Where a value's meaning is deliberate the test pins it rather than changing it,
 with a comment saying why: `0` means the default everywhere, and negative means
 "no limit" in most places but *the default* for `xdm.ParseOptions.MaxDepth` and
-`xpath.Context.MaxDepth`, since a depth bound of zero would refuse every
+`xpath.Env.MaxDepth`, since a depth bound of zero would refuse every
 document. See [options.md](options.md) for the field-by-field rule.
 
 ---
@@ -465,6 +465,71 @@ element that came from a reference or a CDATA section (§2.1 [1], [27] `Misc`),
 which `&#32;` or `<![CDATA[]]>` did not reveal by its text. None of them
 changed a result in the corpora above. The kept leniencies are listed in
 [known-gaps.md](known-gaps.md#the-tokeniser-keeps-six-leniencies).
+
+### Output differential
+
+The suites count passes, so a change can keep every figure and still change
+what a case writes. v2 rewrites the node record under every package and must
+not change observable behaviour, so it is gated the way the tokeniser swap was:
+record what every case actually produces on both sides and show **zero
+unexplained differences**.
+
+```
+tests/record.sh <dir>                    # ~3 min on an M3 Pro, ~290 MB
+go run ./tests/recdiff compare -allow tests/recdiff/allow.txt <dirA> <dirB>
+```
+
+`GOXSLT_RECORD_DIR` turns on a small hook in each existing runner
+([`internal/record`](../internal/record/record.go)); with it unset nothing is
+recorded and nothing changes. What is recorded per case:
+
+| Suite | Key | Recorded |
+|---|---|---|
+| QT3, four lanes (`qt3-xpath20` … `qt3-xquery31`) | `set/case` | pass flag; the error, or each item's type and the adaptive serialisation; the serialised text a serialization assertion asked for |
+| XSLT 2.0 and 3.0 (`xslt20`, `xslt30`) | `set/case` | the error, or the serialised principal result and every secondary result |
+| XSD 1.0 and 1.1 (`xsd10`, `xsd11`) | `set/group/test` | `valid`, or `invalid:` and the full error text |
+| RELAX NG spectest (`relaxng`) | `case-NNNN/what` | each compile and validate, `ok` or the error |
+| Vendored schemas (`vendored`) | path | `loaded` or the error |
+| DocBook, XSpec (`docbook`, `xspec`) | file`.out`, file`.err` | the CLI's output and stderr, with `tests/check.sh`'s flags |
+| `peppol-cen`, `peppol`, `xrechnung-xr`, `xrechnung-html`, `xmark-0.01`, `xmark-0.1` | file or query | the benchmark workloads through the CLI; stage 2 of XRechnung reads stage 1's output |
+| `parse-c14n` | file | Canonical XML with comments of the 1, 10 and 100 MB parse inputs |
+
+A recording is `<suite>.tsv` manifests (key, SHA-256, length) and the bytes,
+stored once each under `obj/`. Every path handed to the engine is `testdata/`
+with its symlinks resolved, and the CLI runs get a fixed `-now`, so two
+checkouts sharing one `testdata/` record the same base URIs and clocks.
+`tests/record.sh` also keeps each suite's log under `<dir>/logs`; its in-scope
+lines must equal the usual figures, because recording may not change a result.
+
+`compare` prints every case whose bytes differ, with the lines that differ cut
+to a window around the first differing byte, and exits 1 if any are left after
+the allow rules. A rule in `tests/recdiff/allow.txt` is `<suite glob> <key
+glob> <regexp>`, and its matches are deleted from both sides before they are
+compared again; every rule says which behaviour change it admits and how many
+cases it explained. A case recorded on one side only compares as `<missing>`.
+The rules today are generate-id strings (`N<tree>x<order>`, whose tree number
+depends on how many trees the process built first) and the clock in two XSLT
+cases whose harness does not fix `fn:current-dateTime`. Two more rules once
+admitted messages v1 wrote differently from run to run of one binary, XTSE0720
+naming whichever attribute set of a cycle it reached first (`error-0720*`) and
+`cvc-id.2` listing IDs in Go map order (`validation-1602`). Both messages are
+deterministic since `8082a2c` and `edea87c`, and the rules were removed once a
+recording of v1 `dev` with those fixes matched without them.
+
+A v1 checkout records with the same hook: apply its commit with the module
+path rewritten (`sed 's#knroy/go-xml/v2/#knroy/go-xml/#g'`). The baseline,
+`05ca570` (v1 `dev`) against `12720d5` (v2's module rename), 188,903 cases:
+188,898 byte-identical, 5 explained, **zero unexplained**, every suite figure
+unchanged; a second v2 recording against both also reads zero. Against v1
+`dev` at `a33c0b7`, v2 at `5362841` reads 188,903 cases, 188,898 identical, 5
+explained by the generate-id and clock rules alone, zero unexplained. After
+merging `dev` at `062a821` (check-only `Validate` writes nothing; assertion
+copies get the held-back typing), v2 against the same v1 recording reads
+188,899 identical, 4 explained, zero unexplained, check-only xsdsuite
+verdicts included. Without the
+allow file the same comparison reports those 5 and exits 1, and
+`tests/recdiff/main_test.go` pins a real difference and a missing case. An
+empty or mistyped recording directory is an error, never "zero differences".
 
 ---
 

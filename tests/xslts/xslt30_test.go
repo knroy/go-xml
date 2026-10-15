@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // TestXSLT30Suite is TestXSLTSuite at the XSLT 3.0 target.

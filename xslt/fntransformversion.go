@@ -1,7 +1,7 @@
 package xslt
 
 import (
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // transformXSLTVersion reads fn:transform's xslt-version option and returns

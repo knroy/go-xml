@@ -1,6 +1,6 @@
 package xpath
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // StaticCall is one function call or named function reference written in an
 // expression, reported by Compiled.StaticCalls.

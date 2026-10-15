@@ -3,8 +3,9 @@ package xpath
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/internal/xpathleaf"
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/xdmfunc"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // This file implements the function-item half of XPath 3.0: a function is a
@@ -81,7 +82,7 @@ var ConstructorArgVar = xdm.QName{
 // The constructor is defined as a cast, so the item binds its one argument and
 // evaluates the cast the parser built. See NamedFunctionRef.Cast.
 func schemaConstructorItem(name xdm.QName, cast Expr) *xdm.FunctionItem {
-	return &xdm.FunctionItem{
+	return native(&xdm.FunctionItem{
 		Name:  name,
 		Arity: 1,
 		Invoke: func(ctx any, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -96,7 +97,7 @@ func schemaConstructorItem(name xdm.QName, cast Expr) *xdm.FunctionItem {
 			}
 			return cast.Eval(c.WithVar(ConstructorArgVar, arg))
 		},
-	}
+	})
 }
 
 // withRetainedFocus wraps an invoke closure so the call runs under the focus
@@ -107,8 +108,11 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 	return func(callCtx any, args []xdm.Sequence) (xdm.Sequence, error) {
 		sub := captured
 		p := &sub
-		if c, ok := callCtx.(invokeContext); ok && c != nil {
-			sub.Ctx = c.Ctx
+		c, _ := callCtx.(invokeContext)
+		if c != nil {
+			// Cancellation, the item and byte counters and the depth bound
+			// come from the call's environment; see envForCall.
+			sub.env = envForCall(captured.env, c)
 			// Both budgets come from the call, and each with the flag that
 			// says where its boundary is. The counter alone is not enough:
 			// heldBytes rides on the value copy, so a closure captured
@@ -118,8 +122,7 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			// already made -- the leak HoldByteBudget's idempotence guard
 			// exists to prevent, arriving through the closure instead. The
 			// item budget is forwarded the same way for the same reason.
-			sub.items, sub.heldItems = c.items, c.heldItems
-			sub.bytes, sub.heldBytes = c.bytes, c.heldBytes
+			sub.heldItems, sub.heldBytes = c.heldItems, c.heldBytes
 			// The recursion depth comes from the call for the same reason,
 			// and it is the one budget that cannot survive on its own: items
 			// and bytes are pointers that ride the value copy, while Depth is
@@ -131,7 +134,7 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			// which is fatal and uncatchable. InlineFunctionExpr.Eval takes
 			// it from the call below for exactly this reason; a named
 			// reference reaches the body through here instead.
-			sub.Depth, sub.MaxDepth = c.Depth, c.MaxDepth
+			sub.Depth = c.Depth
 			// Only the *focus* is retained from the reference point; the
 			// variable bindings come from the call. The two parts of the
 			// captured context have opposite lifetimes in a prolog, where a
@@ -145,7 +148,7 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			// Bindings are the Vars map, the inline WithVar pair and the
 			// Parent chain lookups walk, so all three come from the call.
 			sub.Vars, sub.Parent = c.Vars, c.Parent
-			sub.varURI, sub.varLocal, sub.varVal = c.varURI, c.varLocal, c.varVal
+			sub.bind = c.bind
 			// The retained focus does not retain the host's dynamic-call
 			// markers. XSLT 3.0 24.3 says the XSLT extensions to the dynamic
 			// context are not part of a function item's closure, so a marker
@@ -171,8 +174,95 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			// the current item cleared as the variables above are.
 			p.host = hostOnCall(c.host, false)
 		}
+		defer enterHost(p, c)()
 		return inner(p, args)
 	}
+}
+
+// enterHost takes the EvalLock of the host runtime a function item's body is
+// about to run under at to, and returns the release. A caller whose context
+// from carries the same runtime is already running under it, which once the
+// lock is shared it can only be by holding the lock, so it is not taken again
+// and nested calls pay no goroutine lookup -- unless from was handed to host
+// code, which may be using it on any goroutine. Before the lock is shared it
+// costs an atomic load. See EvalLock.
+func enterHost(to, from *Context) func() {
+	l := evalLockOf(to)
+	if l == nil || !l.shared.Load() || from != nil && !from.foreign && evalLockOf(from) == l {
+		return func() {}
+	}
+	return l.Lock()
+}
+
+// native marks fn as made by this module; see callItem.
+func native(fn *xdm.FunctionItem) *xdm.FunctionItem {
+	xdmfunc.Mark(fn)
+	return fn
+}
+
+// callItem calls the function item fn at ctx. An item this module did not
+// make was built by the host, so the call runs host code: see hostCall.
+func callItem(ctx *Context, fn *xdm.FunctionItem, args []xdm.Sequence) (xdm.Sequence, error) {
+	if xdmfunc.Native(fn) {
+		return fn.Invoke(ctx, args)
+	}
+	return hostCall(ctx, func(c *Context) (xdm.Sequence, error) { return fn.Invoke(c, args) })
+}
+
+// hostCall makes call, a call into host code from evaluation at ctx, which
+// is handed the context call receives. Host code may give what it is handed
+// -- function items, the context -- to goroutines of its own, which may use
+// them while the evaluation goes on. So when ctx carries a host runtime with
+// an EvalLock, the lock is shared from here on and let go for the call (see
+// EvalLock.yield), and the host gets a context of its own: its local
+// bindings copied off the host's stack, as an inline function's are, and
+// marked foreign, so that whatever is called or evaluated with it, on any
+// goroutine, takes the lock.
+func hostCall[T any](ctx *Context, call func(*Context) (T, error)) (T, error) {
+	l := evalLockOf(ctx)
+	if l == nil {
+		return call(ctx)
+	}
+	h := *frozenLocals(ctx)
+	h.foreign = true
+	var locals *xpathleaf.Locals
+	if lh, ok := ctx.host.Runtime.(xpathleaf.LocalsHost); ok {
+		locals = lh.Locals()
+	}
+	defer l.yield(locals)()
+	return call(&h)
+}
+
+// evalLockOf is the EvalLock of the host runtime c carries, or nil.
+func evalLockOf(c *Context) *EvalLock {
+	if c == nil || c.host == nil {
+		return nil
+	}
+	if h, ok := c.host.Runtime.(EvalLocker); ok {
+		return h.EvalLock()
+	}
+	return nil
+}
+
+// envForCall is the environment a function item's body runs in: the one it
+// captured, with the call's cancellation, item and byte counters and depth
+// bound, which are per evaluation rather than per closure. The entity and node
+// allowances stay the captured ones. Within one evaluation the two
+// environments are the same and nothing is copied.
+//
+// ponytail: environments are compared by pointer, so a closure called across
+// a host boundary copies one per call; compare the four fields if that shows.
+func envForCall(captured *Env, call *Context) *Env {
+	if captured == call.env {
+		return captured
+	}
+	e := zeroEnv
+	if captured != nil {
+		e = *captured
+	}
+	c := call.ev()
+	e.Ctx, e.items, e.bytes, e.MaxDepth = c.Ctx, c.items, c.bytes, c.MaxDepth
+	return &e
 }
 
 // hostBoundCall is fn.Call for a function item made from fn at ctx: wrapped,
@@ -188,14 +278,16 @@ func hostBoundCall(ctx *Context, fn Function) func(*Context, []xdm.Sequence) (xd
 	}
 	call := fn.Call
 	return func(c *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		return call(restore(c).(*Context), args)
+		r := restore(c).(*Context)
+		defer enterHost(r, c)()
+		return call(r, args)
 	}
 }
 
 // functionItemFor wraps a library function as a function item.
 func functionItemFor(name xdm.QName, arity int,
 	call func(*Context, []xdm.Sequence) (xdm.Sequence, error)) *xdm.FunctionItem {
-	return &xdm.FunctionItem{
+	return native(&xdm.FunctionItem{
 		Name:  name,
 		Arity: arity,
 		Invoke: func(ctx any, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -205,7 +297,7 @@ func functionItemFor(name xdm.QName, arity int,
 			}
 			return call(c, args)
 		},
-	}
+	})
 }
 
 // Eval implements Expr: it captures the inline function as a value.
@@ -220,15 +312,15 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	// has no context item, position or size, so "." inside one is XPDY0002
 	// even where the expression that wrote it had a focus. Variables are
 	// captured; the focus is deliberately dropped.
-	noFocus := *ctx
+	noFocus := *frozenLocals(ctx)
 	noFocus.Item, noFocus.Position, noFocus.Size = nil, 0, 0
 	captured := &noFocus
-	item := &xdm.FunctionItem{
+	item := native(&xdm.FunctionItem{
 		// No name: fn:function-name returns the empty sequence for an inline
 		// function, which is what the zero QName means here.
 		Arity:     len(e.Params),
 		Signature: inlineSignature(e),
-	}
+	})
 	item.Invoke = func(callCtx any, args []xdm.Sequence) (xdm.Sequence, error) {
 		if len(args) != len(e.Params) {
 			return nil, fmt.Errorf("XPTY0004: inline function expects %d argument(s), got %d",
@@ -238,14 +330,14 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// context supplies only the resource limits, which are per-evaluation
 		// rather than per-closure.
 		sub := captured
-		if c, ok := callCtx.(invokeContext); ok && c != nil {
+		c, _ := callCtx.(invokeContext)
+		if c != nil {
 			s := *captured
-			s.Ctx = c.Ctx
+			s.env = envForCall(captured.env, c)
 			// Both budgets come from the call, each with the flag that says
 			// where its boundary is -- see withRetainedFocus for why the
 			// counter alone would let a closure reset the caller's charges.
-			s.items, s.heldItems = c.items, c.heldItems
-			s.bytes, s.heldBytes = c.bytes, c.heldBytes
+			s.heldItems, s.heldBytes = c.heldItems, c.heldBytes
 			// The recursion depth is one of those per-evaluation limits, and
 			// it has to come from the CALL rather than the closure: a closure
 			// captures the depth it was written at, which for a function that
@@ -256,7 +348,7 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			// count, and taking MaxDepth with it keeps a caller that raised
 			// its own bound from having the package default reimposed inside
 			// a closure written before it was set.
-			s.Depth, s.MaxDepth = c.Depth, c.MaxDepth
+			s.Depth = c.Depth
 			sub = &s
 		}
 		for i, p := range e.Params {
@@ -273,6 +365,9 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			}
 			sub = sub.WithVar(p.Name, v)
 		}
+		// The captured scope may carry a host runtime the caller is not
+		// running under, such as a transform's after it has returned.
+		defer enterHost(captured, c)()
 		out, err := e.Body.Eval(sub)
 		if err != nil {
 			return nil, err
@@ -373,7 +468,7 @@ func coerceFunctionItem(fn *xdm.FunctionItem, st SequenceType) *xdm.FunctionItem
 	params := st.FunctionParams
 	ret := st.FunctionReturn
 	inner := fn.Invoke
-	return &xdm.FunctionItem{
+	item := &xdm.FunctionItem{
 		Name:      fn.Name,
 		Arity:     fn.Arity,
 		Signature: sig,
@@ -401,6 +496,11 @@ func coerceFunctionItem(fn *xdm.FunctionItem, st SequenceType) *xdm.FunctionItem
 			return out, nil
 		},
 	}
+	// The wrapper runs fn's body, so it is host code exactly when fn is.
+	if xdmfunc.Native(fn) {
+		native(item)
+	}
+	return item
 }
 
 // Eval implements Expr. A placeholder is never evaluated on its own: the call
@@ -443,7 +543,7 @@ func partialApply(name xdm.QName, arity int,
 		fixed[i] = v
 	}
 	captured := ctx
-	item := &xdm.FunctionItem{
+	item := native(&xdm.FunctionItem{
 		// No name. A partial application produces a *new* function, not the
 		// one it was written from: fn:function-name(fn:substring(?, 1)) is
 		// the empty sequence, the same answer an inline function gives.
@@ -460,12 +560,14 @@ func partialApply(name xdm.QName, arity int,
 				full[h] = supplied[i]
 			}
 			c := captured
-			if cc, ok := callCtx.(invokeContext); ok && cc != nil {
+			cc, _ := callCtx.(invokeContext)
+			if cc != nil {
 				c = cc
 			}
+			defer enterHost(c, cc)()
 			return call(c, full)
 		},
-	}
+	})
 	return xdm.One(item), nil
 }
 
@@ -564,7 +666,7 @@ func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	if hasPlaceholder(e.Args) {
 		return partialApply(fn.Name, fn.Arity,
 			func(c *Context, a []xdm.Sequence) (xdm.Sequence, error) {
-				return fn.Invoke(c, a)
+				return callItem(c, fn, a)
 			}, e.Args, ctx)
 	}
 	args := make([]xdm.Sequence, 0, len(e.Args))
@@ -594,7 +696,7 @@ func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	return fn.Invoke(clearHostVars(sub), args)
+	return callItem(clearHostVars(sub), fn, args)
 }
 
 // singleFunctionItem extracts the one function item a sequence must hold.
@@ -663,14 +765,14 @@ func inlineSignature(e *InlineFunctionExpr) []string {
 // fn:function-lookup reports as the empty sequence -- the answer F&O 16.1.1
 // gives for any name that is not in scope.
 func lookupSchemaConstructor(ctx *Context, name xdm.QName, arity int) (*xdm.FunctionItem, bool) {
-	if arity != 1 || ctx == nil || ctx.StaticNamespaces == nil {
+	if arity != 1 || ctx == nil || ctx.StaticNamespaces() == nil {
 		return nil, false
 	}
-	ns := wrapBraced(ctx.StaticNamespaces, []string{name.URI})
+	ns := wrapBraced(ctx.StaticNamespaces(), []string{name.URI})
 	prefix := fmt.Sprintf("%s0", bracedURIPrefix)
 	cast, ok := schemaConstructorCast(
 		xdm.QName{URI: name.URI, Prefix: prefix, Local: name.Local},
-		[]Expr{&VarRef{Name: ConstructorArgVar}}, ns, ctx.Version)
+		[]Expr{&VarRef{Name: ConstructorArgVar}}, ns, ctx.Version())
 	if !ok {
 		return nil, false
 	}

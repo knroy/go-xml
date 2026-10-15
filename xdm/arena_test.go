@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 // Text, attribute values and comments were one heap object each, which made
@@ -34,8 +35,8 @@ func TestParseValuesShareBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, e := range tree.Root.Children[0].Children {
-		got := fmt.Sprintf("%s %s %s %s", e.Attrs[0].Value, e.Attrs[1].Value, e.Children[0].Value, e.Children[1].Value)
+	for i, e := range kids(kids(tree.Root)[0]) {
+		got := fmt.Sprintf("%s %s %s %s", attrsOf(e)[0].Value(), attrsOf(e)[1].Value(), kids(e)[0].Value(), kids(e)[1].Value())
 		if want := fmt.Sprintf("v%d w%d text %d c%d", i, i, i, i); got != want {
 			t.Fatalf("element %d holds %q, want %q", i, got, want)
 		}
@@ -67,11 +68,11 @@ func TestParseNamespacesAndPIsShareChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, e := range tree.Root.Children[0].Children {
-		ns, pi := e.Namespaces[0], e.Children[0]
-		if ns.Parent != e || ns.Name.Local != "p" || ns.Value != fmt.Sprintf("urn:p%d", i) ||
-			pi.Kind != KindPI || pi.Value != fmt.Sprintf("data %d", i) {
-			t.Fatalf("element %d: namespace %s=%q, PI %q", i, ns.Name.Local, ns.Value, pi.Value)
+	for i, e := range kids(kids(tree.Root)[0]) {
+		ns, pi := nsOf(e)[0], kids(e)[0]
+		if ns.Parent() != e || ns.Name().Local != "p" || ns.Value() != fmt.Sprintf("urn:p%d", i) ||
+			pi.Kind() != KindPI || pi.Value() != fmt.Sprintf("data %d", i) {
+			t.Fatalf("element %d: namespace %s=%q, PI %q", i, ns.Name().Local, ns.Value(), pi.Value())
 		}
 	}
 }
@@ -91,5 +92,33 @@ func TestEndTagMatching(t *testing.T) {
 		if got := fmt.Sprint(err); (c.err == "" && err != nil) || (c.err != "" && got != c.err) {
 			t.Errorf("%s: err = %v, want %q", c.doc, err, c.err)
 		}
+	}
+}
+
+// A value of textOwnFrom bytes or more is kept as its own block without a
+// copy, and reads back whole; appending to it copies, leaving both the
+// stored value and the caller's string as they were.
+func TestTextStoreKeepsLongString(t *testing.T) {
+	big := strings.Repeat("0123456789abcdef", 1+textOwnFrom/16) // just over 8 KB
+	var s textStore
+	off, n := s.add(big)
+	got := s.str(off, n)
+	if got != big {
+		t.Fatalf("read back %d bytes, want %d", len(got), len(big))
+	}
+	if unsafe.StringData(got) != unsafe.StringData(big) {
+		t.Errorf("a long string was copied into the store")
+	}
+	off2, n2 := s.extend(off, n, "tail")
+	if s.str(off2, n2) != big+"tail" || s.str(off, n) != big {
+		t.Fatalf("extending a kept string changed it")
+	}
+
+	a := NewNode(KindText, QName{}, big)
+	b := NewNode(KindText, QName{}, "")
+	b.SetValue(a.Value()) // a string the store itself produced
+	a.AppendValue("!")
+	if a.Value() != big+"!" || b.Value() != big {
+		t.Fatalf("values %d and %d bytes, want %d and %d", len(a.Value()), len(b.Value()), len(big)+1, len(big))
 	}
 }

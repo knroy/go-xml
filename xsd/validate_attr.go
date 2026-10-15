@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // validateAttributes checks an element's attributes against a complex type's
@@ -54,8 +54,8 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 		}
 	}
 
-	for _, a := range el.Attrs {
-		name := xdm.QName{URI: a.Name.URI, Local: a.Name.Local}
+	for a := range el.Attrs() {
+		name := xdm.QName{URI: a.Name().URI, Local: a.Name().Local}
 
 		// The four xsi: attributes are permitted on any element and are
 		// not subject to the type's attribute uses — but a type may
@@ -73,8 +73,8 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 			}
 		}
 		// A namespace declaration is not an attribute for this purpose.
-		if name.URI == "http://www.w3.org/2000/xmlns/" || a.Name.Prefix == "xmlns" ||
-			(a.Name.Prefix == "" && a.Name.Local == "xmlns") {
+		if name.URI == "http://www.w3.org/2000/xmlns/" || a.Name().Prefix == "xmlns" ||
+			(a.Name().Prefix == "" && a.Name().Local == "xmlns") {
 			continue
 		}
 
@@ -150,13 +150,14 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 // — reject a written value that differs — is checked in validateAttribute, not
 // here.
 //
-// This is gated on Annotate for the same reason the type annotation is: it
-// mutates the tree the caller handed in, and a caller who only asked "is this
-// valid?" has not asked for their document to be rewritten. recordDefaultID
-// above deliberately stays ungated, because ID/IDREF binding affects the
-// validity *verdict* rather than the tree.
+// It is a property of the typed copy, as the type annotation is: a caller who
+// only asked "is this valid?" has not asked for a document with attributes
+// added. recordDefaultID above deliberately stays ungated, because ID/IDREF
+// binding affects the validity *verdict* rather than the tree. The attribute
+// is recorded in v.defaults rather than added to el, whose tree is built; the
+// typed result carries it.
 func (v *validator) applyAttributeDefault(el *xdm.Node, use *AttributeUse) {
-	if !v.opts.Annotate || use == nil || use.Decl == nil || use.Prohibited {
+	if !v.typed || use == nil || use.Decl == nil || use.Prohibited {
 		return
 	}
 	c := use.Constraint
@@ -179,7 +180,7 @@ func (v *validator) applyAttributeDefault(el *xdm.Node, use *AttributeUse) {
 	// the element already names would be gratuitous.
 	prefix := ""
 	if name.URI != "" {
-		prefix = prefixInScopeFor(el, name.URI)
+		prefix = v.prefixInScopeFor(el, name.URI)
 		if prefix == "" {
 			// Nothing is bound. XSD 1.0 says nothing about what to do here,
 			// so 1.0 leaves the attribute off rather than guessing: one
@@ -196,49 +197,55 @@ func (v *validator) applyAttributeDefault(el *xdm.Node, use *AttributeUse) {
 			if v.schema.Version < Version11 {
 				return
 			}
-			prefix = declareFixupPrefix(el, name.URI)
+			prefix = v.declareFixupPrefix(el, name.URI)
 		}
 	}
-	attr := &xdm.Node{
-		Kind:  xdm.KindAttribute,
-		Name:  xdm.QName{Prefix: prefix, Local: name.Local, URI: name.URI},
-		Value: normalized,
-	}
+	attr := xdm.NewNode(xdm.KindAttribute, xdm.QName{Prefix: prefix, Local: name.Local, URI: name.URI}, normalized)
 	if use.Decl.Type != nil {
-		if a := annotationName(use.Decl.Type); a != "" {
-			v.schema.setResolvedAnnotation(attr, a, use.Decl.Type)
+		// A simple type's annotationFor name is annotationName's.
+		if a := v.schema.annotationFor(use.Decl.Type); a.name != "" {
+			attr.SetAssessedTyping(a.name, a.prim, a.item, v.schema.typeEnv, false, false)
 		}
 	}
-	el.AddAttr(attr)
+	if v.defaults == nil {
+		v.defaults = map[*xdm.Node][]*xdm.Node{}
+		v.attrOwner = map[*xdm.Node]*xdm.Node{}
+	}
+	v.defaults[el] = append(v.defaults[el], attr)
+	v.attrOwner[attr] = el
 }
 
-// declareFixupPrefix binds a namespace on el and returns the prefix it chose.
+// declareFixupPrefix binds a namespace on el, by recording the declaration in
+// v.fixups, and returns the prefix it chose.
 //
 // This is XSD 1.1 3.4.5.1's namespace fixup. The prefix is arbitrary -- the
 // spec leaves the choice to the processor -- so it is generated rather than
 // derived from the URI, and checked against what is already in scope so that
 // the new binding cannot shadow one the element or an ancestor relies on.
-func declareFixupPrefix(el *xdm.Node, uri string) string {
+func (v *validator) declareFixupPrefix(el *xdm.Node, uri string) string {
 	for i := 0; ; i++ {
 		prefix := "ns" + strconv.Itoa(i)
-		if _, taken := el.LookupPrefix(prefix); taken {
+		if _, taken := v.lookupPrefix(el, prefix); taken {
 			continue
 		}
-		el.AddNamespace(prefix, uri)
+		if v.fixups == nil {
+			v.fixups = map[*xdm.Node][]nsBinding{}
+		}
+		v.fixups[el] = append(v.fixups[el], nsBinding{prefix, uri})
 		return prefix
 	}
 }
 
 // prefixInScopeFor finds a prefix bound to a namespace at an element, or ""
 // when none is in scope.
-func prefixInScopeFor(el *xdm.Node, uri string) string {
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+func (v *validator) prefixInScopeFor(el *xdm.Node, uri string) string {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		for _, ns := range cur.Namespaces {
-			if ns.Value == uri && ns.Name.Local != "" && ns.Name.Local != "xmlns" {
-				return ns.Name.Local
+		for ns := range v.namespaceDecls(cur) {
+			if ns.uri == uri && ns.prefix != "" && ns.prefix != "xmlns" {
+				return ns.prefix
 			}
 		}
 	}
@@ -342,7 +349,7 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 	if decl == nil || decl.Type == nil {
 		return
 	}
-	normalized, err := validateSimpleValueIn(a.Value, decl.Type, v.schema.Version, a, v.recordUnionMember)
+	normalized, err := validateSimpleValueIn(a.Value(), decl.Type, v.schema.Version, &instance{a, v})
 	if err != nil {
 		v.fail(a, "cvc-attribute.3",
 			"attribute %s: %v", attrName(decl.Name), err)
@@ -376,16 +383,14 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 	v.recordIDs(a, normalized, decl.Type)
 	v.recordKeyValue(a, normalized, decl.Type)
 
-	if v.opts.Annotate && decl.Type.Name.Local != "" {
+	if v.typed && decl.Type.Name.Local != "" {
 		// SetTypeAnnotation rather than a bare assignment: it also records
 		// the is-id and is-idrefs properties from the declared type. Those
 		// are separate state from the annotation because XSLT's
 		// input-type-annotations="strip" clears the annotation while
 		// requiring them to survive, and fn:id/fn:idref are defined over
 		// them rather than over the annotation.
-		v.schema.setResolvedAnnotation(a,
-			xdm.AnnotationName(decl.Type.Name.URI, decl.Type.Name.Local),
-			decl.Type)
+		v.setAssessedTyping(a, v.schema.annotationFor(decl.Type), false, false)
 	}
 }
 
@@ -418,16 +423,16 @@ func (v *validator) validateWildcardAttribute(a *xdm.Node, w *Wildcard, name xdm
 // namespace declarations. This is clause 3.1.1 of Element Locally Valid (Type),
 // which names those four explicitly.
 func (v *validator) checkNoForeignAttributes(el *xdm.Node, uses []*AttributeUse, w *Wildcard) {
-	for _, a := range el.Attrs {
-		name := xdm.QName{URI: a.Name.URI, Local: a.Name.Local}
+	for a := range el.Attrs() {
+		name := xdm.QName{URI: a.Name().URI, Local: a.Name().Local}
 		if name.URI == NSInstance {
 			switch name.Local {
 			case "type", "nil", "schemaLocation", "noNamespaceSchemaLocation":
 				continue
 			}
 		}
-		if name.URI == "http://www.w3.org/2000/xmlns/" || a.Name.Prefix == "xmlns" ||
-			(a.Name.Prefix == "" && a.Name.Local == "xmlns") {
+		if name.URI == "http://www.w3.org/2000/xmlns/" || a.Name().Prefix == "xmlns" ||
+			(a.Name().Prefix == "" && a.Name().Local == "xmlns") {
 			continue
 		}
 		if findAttributeUse(uses, name) != nil {

@@ -6,8 +6,8 @@ package xpath
 // is parsing. That gate is right for a construct the module builds, but a
 // function reference is not one: it names a function that either exists or
 // does not, and which functions exist is already a property of the processor
-// rather than of the module -- see Context.LibraryVersion, and
-// Context.RegexVersion for the same separation applied to the regex dialect.
+// rather than of the module -- see Env.LibraryVersion, and
+// Env.RegexVersion for the same separation applied to the regex dialect.
 //
 // The XSLT suite settles it the same way it settled those two. Five cases --
 // system-property-023 and -024, regex-090 and -091, and for-each-group-090 --

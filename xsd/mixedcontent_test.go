@@ -3,7 +3,7 @@ package xsd
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestValidateRecordsMixedContent pins the MixedContent property the
@@ -23,18 +23,19 @@ func TestValidateRecordsMixedContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
+	doc, err := s.ValidateCopy(tree.Root, ValidateOptions{})
+	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	r := tree.Root.Children[0]
-	m, k := r.Children[0], r.Children[1]
-	if r.MixedContent || !r.NoTypedValue {
-		t.Errorf("r (element-only): MixedContent=%v NoTypedValue=%v", r.MixedContent, r.NoTypedValue)
+	r := doc.FirstChild()
+	m, k := r.FirstChild(), r.ChildAt(1)
+	if r.MixedContent() || !r.NoTypedValue() {
+		t.Errorf("r (element-only): MixedContent=%v NoTypedValue=%v", r.MixedContent(), r.NoTypedValue())
 	}
-	if !m.MixedContent || m.TypeAnnotation != "anyType" {
-		t.Errorf("m (anonymous mixed): MixedContent=%v annotation=%q", m.MixedContent, m.TypeAnnotation)
+	if !m.MixedContent() || m.TypeAnnotation() != "anyType" {
+		t.Errorf("m (anonymous mixed): MixedContent=%v annotation=%q", m.MixedContent(), m.TypeAnnotation())
 	}
-	if k.MixedContent {
+	if k.MixedContent() {
 		t.Errorf("k (xs:anyType): MixedContent=true")
 	}
 }

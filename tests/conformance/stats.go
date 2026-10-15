@@ -154,8 +154,8 @@ func countKind(root, kind string) (int, error) {
 			}
 			// Only the top-level package directories, matching the documented
 			// `./*/limits_boundary*_test.go`: one directory below the root.
-			// The glob takes xsd's limits_boundary_http_test.go, which a build
-			// tag keeps apart from the rest because it tests HTTPResolver.
+			// The glob takes xsd's limits_boundary_http_test.go, which is kept
+			// apart from the rest because it tests xsdnet.HTTPResolver.
 			rel, err := filepath.Rel(root, path)
 			if err != nil {
 				return false

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // undeclaringTree builds a parent that binds the prefix p and a child that
@@ -13,28 +13,9 @@ import (
 // anything to say about. It is built rather than parsed because an XML 1.0
 // parser cannot read the xmlns:p="" that produces it.
 func undeclaringTree() *xdm.Node {
-	root := &xdm.Node{
-		Kind: xdm.KindElement,
-		Name: xdm.QName{Local: "root"},
-	}
-	root.Namespaces = []*xdm.Node{{
-		Kind:   xdm.KindNamespace,
-		Name:   xdm.QName{Local: "p"},
-		Value:  "http://example.com/p",
-		Parent: root,
-	}}
-	child := &xdm.Node{
-		Kind:   xdm.KindElement,
-		Name:   xdm.QName{Local: "child"},
-		Parent: root,
-	}
-	child.Namespaces = []*xdm.Node{{
-		Kind:   xdm.KindNamespace,
-		Name:   xdm.QName{Local: "p"},
-		Value:  "",
-		Parent: child,
-	}}
-	root.Children = []*xdm.Node{child}
+	root := xdm.NewNode(xdm.KindElement, xdm.QName{Local: "root"}, "")
+	root.AddNamespace("p", "http://example.com/p")
+	root.AppendElement(xdm.QName{Local: "child"}).AddNamespace("p", "")
 	return root
 }
 
@@ -44,10 +25,7 @@ func undeclaringTree() *xdm.Node {
 // variable.
 func paramsElement(params map[string]string) *xdm.Node {
 	const ns = "http://www.w3.org/2010/xslt-xquery-serialization"
-	root := &xdm.Node{
-		Kind: xdm.KindElement,
-		Name: xdm.QName{Prefix: "output", URI: ns, Local: "serialization-parameters"},
-	}
+	root := xdm.NewNode(xdm.KindElement, xdm.QName{Prefix: "output", URI: ns, Local: "serialization-parameters"}, "")
 	// Sorted so the element is the same one on every run; Go randomises map
 	// iteration, and a parameter document is compared by what it holds.
 	names := make([]string, 0, len(params))
@@ -56,18 +34,8 @@ func paramsElement(params map[string]string) *xdm.Node {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		c := &xdm.Node{
-			Kind:   xdm.KindElement,
-			Name:   xdm.QName{Prefix: "output", URI: ns, Local: name},
-			Parent: root,
-		}
-		c.Attrs = []*xdm.Node{{
-			Kind:   xdm.KindAttribute,
-			Name:   xdm.QName{Local: "value"},
-			Value:  params[name],
-			Parent: c,
-		}}
-		root.Children = append(root.Children, c)
+		c := root.AppendElement(xdm.QName{Prefix: "output", URI: ns, Local: name})
+		c.AppendAttr(xdm.QName{Local: "value"}, params[name])
 	}
 	return root
 }
@@ -101,7 +69,7 @@ func TestSerializeUndeclarePrefixes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := NewContext(nil, Builtins())
-			ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+			ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 			c := ctx.WithVar(xdm.QName{Local: "n"}, xdm.One(undeclaringTree()))
 			c = c.WithVar(xdm.QName{Local: "yes"}, xdm.One(paramsElement(
 				map[string]string{"version": "1.1", "undeclare-prefixes": "yes"})))
@@ -132,7 +100,7 @@ func TestSerializeUndeclarePrefixesNeedsXML11(t *testing.T) {
 		`serialize($n, $p)`,
 	} {
 		ctx := NewContext(nil, Builtins())
-		ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+		ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		c := ctx.WithVar(xdm.QName{Local: "n"}, xdm.One(undeclaringTree()))
 		c = c.WithVar(xdm.QName{Local: "p"}, xdm.One(paramsElement(
 			map[string]string{"undeclare-prefixes": "yes"})))
@@ -157,7 +125,7 @@ func TestSerializeUndeclarePrefixesNeedsXML11(t *testing.T) {
 func TestSerializeUndeclarePrefixesOnlyConstrainsXML(t *testing.T) {
 	for _, method := range []string{"text", "html", "json"} {
 		ctx := NewContext(nil, Builtins())
-		ctx.Version, ctx.LibraryVersion = XPath31, XPath31
+		ctx = ctx.WithVersion(XPath31).WithEnv(func(e *Env) { e.LibraryVersion = XPath31 })
 		expr := `serialize($n, map{'method':'` + method +
 			`','undeclare-prefixes':true()})`
 		arg := xdm.One(undeclaringTree())

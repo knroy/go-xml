@@ -3,7 +3,7 @@ package xpath
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // TestNamespaceNodeIdentity pins the identity of namespace nodes under the
@@ -71,7 +71,7 @@ func TestNamespaceNodeIdentity(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := NewContext(tree.Root, Builtins())
-			ctx.Version = XPath31
+			ctx = ctx.WithVersion(XPath31)
 			seq, err := Eval(tc.expr, ctx, nil)
 			if err != nil {
 				t.Fatalf("eval %s: %v", tc.expr, err)

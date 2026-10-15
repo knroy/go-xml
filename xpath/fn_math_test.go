@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // mathResolver binds the "math" prefix, which is how an expression reaches
@@ -27,7 +27,7 @@ func (mathResolver) DefaultFunctionNamespace() string { return xdm.NSFN }
 func evalMath(t *testing.T, expr string) xdm.Sequence {
 	t.Helper()
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath30
+	ctx = ctx.WithVersion(XPath30)
 	got, err := Eval(expr, ctx, mathResolver{})
 	if err != nil {
 		t.Fatalf("%s: %v", expr, err)

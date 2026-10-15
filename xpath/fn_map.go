@@ -1,7 +1,7 @@
 package xpath
 
 import (
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // registerMapFuncs adds the map: functions of F&O 3.1 section 17.1.
@@ -161,7 +161,7 @@ func registerMapFuncs(l *Library) {
 		}
 		out := xdm.Sequence{}
 		err = m.Entries(func(k *xdm.Atomic, v xdm.Sequence) error {
-			r, err := fn.Invoke(ctx, []xdm.Sequence{xdm.One(k), v})
+			r, err := callItem(ctx, fn, []xdm.Sequence{xdm.One(k), v})
 			if err != nil {
 				return err
 			}

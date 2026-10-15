@@ -6,8 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
 	"math/big"
+
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Identity constraint evaluation (§3.11.4, §3.11.5).
@@ -784,22 +785,21 @@ func (v *validator) walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Nod
 	var attrs []*xdm.Node
 	for _, n := range current {
 		// An attribute the type supplied by default is part of the
-		// infoset as much as a written one, so a field selects it. It
-		// is not in n.Attrs, because validation does not rewrite the
-		// caller's tree; the value recorded at the time it was applied
-		// stands in, carried on a node that exists only for this
-		// comparison.
+		// infoset as much as a written one, so a field selects it. A typed
+		// copy records it among v.attrs(n); otherwise the value recorded
+		// at the time it was applied stands in, carried on a node that
+		// exists only for this comparison and belongs to n through
+		// v.attrOwner, being in no element's attribute list.
 		if !alt.AttributeWildcard && alt.Attribute != nil {
 			if val, ok := v.defaultedAttrs[defaultedAttr{
 				el:   n,
 				name: xdm.QName{URI: alt.Attribute.URI, Local: alt.Attribute.Local},
-			}]; ok && !hasWrittenAttr(n, alt.Attribute) {
-				syn := &xdm.Node{
-					Kind:   xdm.KindAttribute,
-					Name:   xdm.QName{Local: alt.Attribute.Local},
-					Value:  val.normalized,
-					Parent: n,
+			}]; ok && !v.hasWrittenAttr(n, alt.Attribute) {
+				syn := xdm.NewNode(xdm.KindAttribute, xdm.QName{Local: alt.Attribute.Local}, val.normalized)
+				if v.attrOwner == nil {
+					v.attrOwner = map[*xdm.Node]*xdm.Node{}
 				}
+				v.attrOwner[syn] = n
 				// The synthetic node needs the same key entry a
 				// written attribute would have, or it compares
 				// by raw string against keys that compare by
@@ -815,7 +815,7 @@ func (v *validator) walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Nod
 				continue
 			}
 		}
-		for _, a := range n.Attrs {
+		for a := range v.attrs(n) {
 			if alt.AttributeWildcard {
 				// "@*" selects every attribute, which is
 				// grammatical even though a field using it can
@@ -834,7 +834,7 @@ func (v *validator) walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Nod
 				attrs = append(attrs, a)
 				continue
 			}
-			if a.Name.Local == alt.Attribute.Local &&
+			if a.Name().Local == alt.Attribute.Local &&
 				attrNamespaceMatches(a, alt.Attribute) {
 				attrs = append(attrs, a)
 			}
@@ -843,11 +843,11 @@ func (v *validator) walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Nod
 	return attrs
 }
 
-// hasWrittenAttr reports whether the document itself carried the attribute a
-// field names, in which case no default was applied.
-func hasWrittenAttr(n *xdm.Node, want *xdm.QName) bool {
-	for _, a := range n.Attrs {
-		if a.Name.Local == want.Local && attrNamespaceMatches(a, want) {
+// hasWrittenAttr reports whether the element carries the attribute a field
+// names: the document wrote it, or a typed copy recorded it as a default.
+func (v *validator) hasWrittenAttr(n *xdm.Node, want *xdm.QName) bool {
+	for a := range v.attrs(n) {
+		if a.Name().Local == want.Local && attrNamespaceMatches(a, want) {
 			return true
 		}
 	}
@@ -861,10 +861,10 @@ func hasWrittenAttr(n *xdm.Node, want *xdm.QName) bool {
 // unqualified attributes live.
 func attrNamespaceMatches(a *xdm.Node, want *xdm.QName) bool {
 	if want.URI != "" {
-		return a.Name.URI == want.URI
+		return a.Name().URI == want.URI
 	}
 	if want.Prefix == "" {
-		return a.Name.URI == ""
+		return a.Name().URI == ""
 	}
 	// A prefix that never resolved: match on the local name alone rather
 	// than silently selecting nothing.
@@ -876,16 +876,16 @@ func stepMatches(step ICStep, el *xdm.Node) bool {
 	if step.Wildcard {
 		return true
 	}
-	if el.Name.Local != step.Name.Local {
+	if el.Name().Local != step.Name.Local {
 		return false
 	}
 	if step.Name.URI != "" {
-		return el.Name.URI == step.Name.URI
+		return el.Name().URI == step.Name.URI
 	}
 	// An unprefixed name in a selector refers to the absent namespace,
 	// unless the prefix simply failed to resolve.
 	if step.Name.Prefix == "" {
-		return el.Name.URI == ""
+		return el.Name().URI == ""
 	}
 	return true
 }
@@ -916,7 +916,7 @@ func (v *validator) inSkippedContent(n *xdm.Node) bool {
 	if len(v.skipped) == 0 {
 		return false
 	}
-	for cur := n; cur != nil; cur = cur.Parent {
+	for cur := n; cur != nil; cur = v.parentOf(cur) {
 		if v.skipped[cur] {
 			return true
 		}
@@ -956,7 +956,7 @@ func (v *validator) keyString(n *xdm.Node) string {
 		}
 		// An unresolvable prefix cannot arise from a value that validated, but
 		// falling back to the lexical form keeps this total.
-		if uri, ok := n.LookupPrefix(prefix); ok {
+		if uri, ok := v.lookupPrefix(n, prefix); ok {
 			return kv.primitive + "/{" + uri + "}" + local
 		}
 		if prefix == "" {

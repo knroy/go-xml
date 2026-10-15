@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // validateString is the test helper: load a schema, parse a document, validate.
@@ -456,12 +456,13 @@ func TestValidateAnnotateWritesTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
+	doc, err := s.ValidateCopy(tree.Root, ValidateOptions{})
+	if err != nil {
 		t.Fatalf("should be valid: %v", err)
 	}
-	n := tree.Root.ChildElements()[0].ChildElements()[0]
-	if n.TypeAnnotation != "int" {
-		t.Errorf("TypeAnnotation is %q, want int", n.TypeAnnotation)
+	n := doc.ChildElements()[0].ChildElements()[0]
+	if n.TypeAnnotation() != "int" {
+		t.Errorf("TypeAnnotation is %q, want int", n.TypeAnnotation())
 	}
 }
 
@@ -774,16 +775,17 @@ func TestAnnotateStripsIgnorableWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
+	typed, err := s.ValidateCopy(tree.Root, ValidateOptions{})
+	if err != nil {
 		t.Fatalf("should be valid: %v", err)
 	}
-	root := tree.Root.ChildElements()[0]
-	for _, c := range root.Children {
-		if c.Kind == xdm.KindText {
-			t.Errorf("element-only content kept whitespace text %q", c.Value)
+	root := typed.ChildElements()[0]
+	for c := range root.Children() {
+		if c.Kind() == xdm.KindText {
+			t.Errorf("element-only content kept whitespace text %q", c.Value())
 		}
 	}
-	if n := len(root.Children); n != 2 {
+	if n := root.NumChildren(); n != 2 {
 		t.Errorf("root has %d children, want 2", n)
 	}
 	// The whitespace inside "keep" is CONTENT: its type is xs:string, so
@@ -812,13 +814,13 @@ func TestAnnotateDoesNotStripWhenValidatingABareElement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	el := tree.Root.ChildElements()[0]
-	if err := s.Validate(el, ValidateOptions{Annotate: true}); err != nil {
+	el, err := s.ValidateCopy(tree.Root.ChildElements()[0], ValidateOptions{})
+	if err != nil {
 		t.Fatalf("should be valid: %v", err)
 	}
 	text := 0
-	for _, c := range el.Children {
-		if c.Kind == xdm.KindText {
+	for c := range el.Children() {
+		if c.Kind() == xdm.KindText {
 			text++
 		}
 	}
@@ -846,11 +848,11 @@ func TestAnnotateHonoursXMLSpacePreserve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = s.Validate(tree.Root, ValidateOptions{Annotate: true})
-	root := tree.Root.ChildElements()[0]
+	typed, _ := s.ValidateCopy(tree.Root, ValidateOptions{})
+	root := typed.ChildElements()[0]
 	text := 0
-	for _, c := range root.Children {
-		if c.Kind == xdm.KindText {
+	for c := range root.Children() {
+		if c.Kind() == xdm.KindText {
 			text++
 		}
 	}
@@ -905,13 +907,13 @@ func TestAlternativeSeesAnEmptyDefaultCollection(t *testing.T) {
 // one specific value, not a blanket "every collection is empty" resolver.
 func TestAssertionNamedCollectionIsStillUnavailable(t *testing.T) {
 	ctx := newAssertContext(nil)
-	if ctx.Collections == nil {
+	if ctx.Env().Collections == nil {
 		t.Fatal("an assertion context must carry a collection resolver")
 	}
-	if _, err := ctx.Collections.ResolveCollection("", ""); err != nil {
+	if _, err := ctx.Env().Collections.ResolveCollection("", ""); err != nil {
 		t.Errorf("the default collection must be the empty sequence: %v", err)
 	}
-	if _, err := ctx.Collections.ResolveCollection("urn:x", ""); err == nil {
+	if _, err := ctx.Env().Collections.ResolveCollection("urn:x", ""); err == nil {
 		t.Error("a named collection must not resolve")
 	}
 }

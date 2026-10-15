@@ -1,14 +1,14 @@
-//go:build !goxml_nohttp
-
+// Package xsdnet resolves XML Schema locations over the network.
+//
 // HTTPResolver is the one part of the module that needs net/http, which
-// brings TLS and x509 into every binary that links xsd. Building with
-// -tags goxml_nohttp leaves this file out: a program that never fetches a
-// schema over the network (the go-xml CLI is one) is smaller and starts
-// faster, and FileResolver still refuses remote locations as before.
-
-package xsd
+// brings TLS and x509 into every binary that links it. It lives in its own
+// package so that package xsd, the go-xml CLI and every program that never
+// imports this one stay without them: smaller and faster to start, and
+// xsd.FileResolver still refuses remote locations as before.
+package xsdnet
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -16,9 +16,28 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/knroy/go-xml/v2/xsd"
 )
+
+// Defaults for HTTPResolver.
+const (
+	// DefaultFetchTimeout bounds one network fetch.
+	DefaultFetchTimeout = 30 * time.Second
+	// DefaultMaxSchemaBytes bounds one fetched schema document. Real
+	// schemas are far smaller; the W3C's own largest is under 200 kB.
+	DefaultMaxSchemaBytes = 16 << 20
+)
+
+// ErrPrivateAddress is returned when a fetch is refused because the host
+// resolved to an address in a range HTTPResolver does not dial by default.
+// It is wrapped by the dial error, so errors.Is finds it through the
+// *url.Error and *net.OpError that net/http puts around it.
+var ErrPrivateAddress = errors.New(
+	"address is in a private range; set AllowPrivateAddresses to permit it")
 
 // HTTPResolver resolves a schemaLocation over the network, falling back to the
 // filesystem for locations that are not remote.
@@ -80,12 +99,12 @@ type HTTPResolver struct {
 	// it is opt-in rather than a default.
 	AllowPrivateAddresses bool
 
-	// Files handles locations that are not remote. When nil, a FileResolver
-	// with no root is used.
-	Files Resolver
+	// Files handles locations that are not remote. When nil, an
+	// xsd.FileResolver with no root is used.
+	Files xsd.Resolver
 }
 
-// Resolve implements Resolver.
+// Resolve implements xsd.Resolver.
 func (r *HTTPResolver) Resolve(namespace, location, base string) (io.ReadCloser, string, error) {
 	if location == "" {
 		return nil, "", nil
@@ -102,7 +121,7 @@ func (r *HTTPResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 	if !isRemote(abs) {
 		files := r.Files
 		if files == nil {
-			files = &FileResolver{}
+			files = &xsd.FileResolver{}
 		}
 		return files.Resolve(namespace, location, base)
 	}
@@ -303,9 +322,17 @@ func isPrivateAddr(ip netip.Addr) bool {
 	return false
 }
 
-// The resolvers a refusal names, and where it points for remote locations.
-// The goxml_nohttp build has its own wording, since HTTPResolver is absent.
-const (
-	resolverChoices = "a FileResolver, a MapResolver or an HTTPResolver"
-	remoteHint      = "see HTTPResolver"
-)
+// isRemote reports whether a location names something to be fetched over the
+// network rather than read from disk. It is xsd's own test, copied so that
+// package xsd need not export it.
+func isRemote(location string) bool {
+	u, err := url.Parse(location)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "ftp":
+		return true
+	}
+	return false
+}

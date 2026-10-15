@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // XSD 1.1 assertions and conditional type assignment.
@@ -213,7 +212,7 @@ func (p *parser) readAlternative(el *xdm.Node) *TypeAlternative {
 	if ref := el.AttrValue("type"); ref != "" {
 		p.resolveTypeRef(el, ref, func(t Type) { alt.Type = t })
 	} else if inline := p.childElement(el, "simpleType", "complexType"); inline != nil {
-		if inline.Name.Local == "simpleType" {
+		if inline.Name().Local == "simpleType" {
 			alt.Type = p.readSimpleType(inline)
 		} else {
 			alt.Type = p.readComplexType(inline)
@@ -237,10 +236,7 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 	if len(t.Assertions) == 0 {
 		return
 	}
-	scoped := scopeForAssertion(el)
-	if len(v.unwritten) > 0 {
-		v.applyUnwritten(el, scoped)
-	}
+	scoped := v.scopeForAssertion(el)
 	annotateForAssertion(scoped, t)
 
 	// $value is in scope in every assertion, not only those on a simple
@@ -320,39 +316,41 @@ func (v *validator) assertionValue(el *xdm.Node, t *ComplexType) xdm.Sequence {
 // evaluating against it directly would let "../x" or "/root" reach outside the
 // element being validated, which XSD 1.1 forbids. Copying also means an
 // assertion cannot mutate the document it is checking.
-func scopeForAssertion(el *xdm.Node) *xdm.Node {
-	tree := xdm.NewTree()
+//
+// XSD 1.1 gives an assertion a context with *no* document node (§3.13.4.2),
+// which is what makes "//" return the empty sequence there: it abbreviates a
+// path from fn:root, and a parentless element is its own root with nothing
+// above it for the leading "/" to select. The suite states the consequence
+// directly — "'//' returns empty sequence" — and pairs it with an assertion
+// that holds only if it does not. So the copy is built parentless.
+//
+// The copy is of the element as the assessment has left it so far: with the
+// attributes its type and its descendants' types supplied by default, without
+// the ignorable whitespace already stripped from it, and with the typing
+// recorded on its descendants.
+func (v *validator) scopeForAssertion(el *xdm.Node) *xdm.Node {
+	clone := xdm.NewNode(xdm.KindElement, el.Name(), el.Value())
+	clone.SetBaseURI(el.BaseURI())
+	clone.ApplyTyping(v.typingOf(el))
+	for ns := range v.namespaceDecls(el) {
+		clone.AddNamespace(ns.prefix, ns.uri)
+	}
 	// The copy is rooted at the element, so namespace declarations made by
 	// an ancestor are out of scope in it. They still apply to the element
 	// in the real document, and a QName-valued attribute cannot be expanded
 	// without them, so the whole in-scope set is copied onto the root of
 	// the confined tree.
-	clone := deepCopyNode(el)
-	for prefix, uri := range inScopeNamespaces(el) {
+	for prefix, uri := range v.inScopeNamespaces(el) {
 		if _, declared := clone.LookupPrefix(prefix); !declared {
 			clone.AddNamespace(prefix, uri)
 		}
 	}
-	tree.Root.AppendChild(clone)
-	tree.Finalize()
-
-	// The element is then detached from the document node it was finalised
-	// under. XSD 1.1 gives an assertion a context with *no* document node
-	// (§3.13.4.2), which is what makes "//" return the empty sequence
-	// there: it abbreviates a path from fn:root, and a parentless element
-	// is its own root with nothing above it for the leading "/" to select.
-	// The suite states the consequence directly — "'//' returns empty
-	// sequence" — and pairs it with an assertion that holds only if it does
-	// not.
-	//
-	// Detaching after finalising keeps the document order the tree assigned,
-	// which the clone still needs for any positional predicate.
-	xdmbuild.SetParent(clone, nil)
-	xdmbuild.SetChildren(tree.Root, nil)
+	v.fillScopeCopy(clone, el)
 	return clone
 }
 
-// deepCopyNode copies a node and its subtree, detached from any parent.
+// fillScopeCopy completes dst, the scope copy of src, with src's attributes
+// and its content.
 //
 // Comments and processing instructions are dropped. XSD 1.1 builds the tree an
 // assertion sees from the element's [children] with comments and PIs excluded
@@ -360,31 +358,45 @@ func scopeForAssertion(el *xdm.Node) *xdm.Node {
 // an assertion writing empty(.//comment()) is asking whether the schema-visible
 // content holds any, and the answer the spec defines is yes-by-default only for
 // a processor that has been told to expose them.
-func deepCopyNode(n *xdm.Node) *xdm.Node {
-	// The clone is what the assertion actually evaluates over, so it must
-	// answer every PSVI property as the validated node does.
-	//
-	// Three of the seven are inert here, and deliberately so rather than by
-	// oversight. IsNilled cannot be set on a node an assertion sees: the
-	// validator records it and returns immediately (see validate.go), so a
-	// nilled element never reaches the deferred checkAssertions at all.
-	// IsID and IsIDREFS have only fn:id and fn:idref as consumers, and both
-	// raise FODC0001 unless the tree root is a document node -- which this
-	// clone deliberately is not, since XSD 1.1 3.13.4.2 gives an assertion
-	// no document node. Copying them anyway is what makes the rule here
-	// "every property travels" rather than a list to re-audit whenever a
-	// property is added.
-	// Dropping any of
-	// them left the assertion looking at a node the validator had annotated
-	// and the clone had not. It matters most where a union's winning member is
-	// a LIST: the union's own name carries no item type, so without the member
-	// the typed value collapsed from a sequence of tokens to one string
-	// holding all of them.
-	return xdmbuild.DeepCopyPruned(n, isCommentOrPI)
+//
+// The copy is what the assertion actually evaluates over, so it must answer
+// every PSVI property as the validated node does.
+//
+// Three of the seven are inert here, and deliberately so rather than by
+// oversight. IsNilled cannot be set on a node an assertion sees: the
+// validator records it and returns immediately (see validate.go), so a
+// nilled element never reaches the deferred checkAssertions at all.
+// IsID and IsIDREFS have only fn:id and fn:idref as consumers, and both
+// raise FODC0001 unless the tree root is a document node -- which this
+// copy deliberately is not, since XSD 1.1 3.13.4.2 gives an assertion
+// no document node. Copying them anyway is what makes the rule here
+// "every property travels" rather than a list to re-audit whenever a
+// property is added.
+// Dropping any of
+// them left the assertion looking at a node the validator had annotated
+// and the copy had not. It matters most where a union's winning member is
+// a LIST: the union's own name carries no item type, so without the member
+// the typed value collapsed from a sequence of tokens to one string
+// holding all of them.
+func (v *validator) fillScopeCopy(dst, src *xdm.Node) {
+	for a := range v.attrs(src) {
+		dst.AppendAttr(a.Name(), a.Value()).ApplyTyping(v.typingOf(a))
+	}
+	for c := range src.Children() {
+		if isCommentOrPI(c) || v.dropped[c] {
+			continue
+		}
+		cc := dst.AppendShallowCopy(c)
+		cc.ApplyTyping(v.typingOf(c))
+		for ns := range v.namespaceDecls(c) {
+			cc.AddNamespace(ns.prefix, ns.uri)
+		}
+		v.fillScopeCopy(cc, c)
+	}
 }
 
 func isCommentOrPI(n *xdm.Node) bool {
-	return n.Kind == xdm.KindComment || n.Kind == xdm.KindPI
+	return n.Kind() == xdm.KindComment || n.Kind() == xdm.KindPI
 }
 
 // scopeForAlternative returns the context element a type alternative's test is
@@ -407,35 +419,38 @@ func isCommentOrPI(n *xdm.Node) bool {
 // Reusing the assertion scope gave the test the element's children and its
 // PSVI annotation, so string() returned the content and the untyped test
 // failed; every alternative then fell through to the xs:error default.
-func scopeForAlternative(el *xdm.Node) *xdm.Node {
-	tree := xdm.NewTree()
-	clone := xdmbuild.NewElement(el.Name)
+func (v *validator) scopeForAlternative(el *xdm.Node) *xdm.Node {
+	// Built parentless for the reason an assertion's copy is: the element
+	// must be its own root, which is what makes (. is root()) hold and "//"
+	// select nothing.
+	clone := xdm.NewNode(xdm.KindElement, el.Name(), "")
 	// The base URI is a property of the element, not of its content, and
 	// survives the copy: cta0021 asks for it. TypeAnnotation is deliberately
 	// left zero. Conditional type assignment chooses the type; it cannot
 	// presuppose one.
-	xdmbuild.SetBaseURI(clone, el.BaseURI)
-	for _, a := range el.Attrs {
+	clone.SetBaseURI(el.BaseURI())
+	for a := range el.Attrs() {
 		// The attributes come across without their annotations for the
 		// same reason the element does.
-		clone.AddAttr(xdmbuild.NewAttribute(a.Name, a.Value))
+		clone.AppendAttr(a.Name(), a.Value())
 	}
 	// Namespace bindings an ancestor declared are still in scope for the
 	// element, and a QName-valued attribute cannot be expanded without
 	// them, so the whole in-scope set is copied onto the clone.
-	for prefix, uri := range inScopeNamespaces(el) {
+	for prefix, uri := range v.inScopeNamespaces(el) {
 		if _, declared := clone.LookupPrefix(prefix); !declared {
 			clone.AddNamespace(prefix, uri)
 		}
 	}
-	tree.Root.AppendChild(clone)
-	tree.Finalize()
-
-	// Detached from the document node for the same reason an assertion's
-	// copy is: the element must be its own root, which is what makes
-	// (. is root()) hold and "//" select nothing.
-	xdmbuild.SetParent(clone, nil)
-	xdmbuild.SetChildren(tree.Root, nil)
+	// An inheritable attribute from an ancestor is visible to the test, but
+	// only where the element does not carry one of the same name: the
+	// nearest declaration wins.
+	for _, a := range v.inherited {
+		if clone.Attr(a.Name().URI, a.Name().Local) != nil {
+			continue
+		}
+		clone.AppendAttr(a.Name(), a.Value())
+	}
 	return clone
 }
 
@@ -450,17 +465,7 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 	if len(decl.Alternatives) == 0 {
 		return decl.Type
 	}
-	scoped := scopeForAlternative(el)
-
-	// An inheritable attribute from an ancestor is visible to the test, but
-	// only where the element does not carry one of the same name: the
-	// nearest declaration wins.
-	for _, a := range v.inherited {
-		if scoped.Attr(a.Name.URI, a.Name.Local) != nil {
-			continue
-		}
-		scoped.AddAttr(xdmbuild.NewAttribute(a.Name, a.Value))
-	}
+	scoped := v.scopeForAlternative(el)
 
 	for _, alt := range decl.Alternatives {
 		if alt.Test == nil {
@@ -470,8 +475,7 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 			}
 			continue
 		}
-		ctx := v.assertContext(scoped)
-		ctx.StaticBaseURI = alt.staticBaseURI
+		ctx := v.assertContext(scoped).WithStaticBaseURI(alt.staticBaseURI)
 		ok, err := alt.Test.EvalBool(ctx)
 		if err != nil || !ok {
 			continue
@@ -531,7 +535,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
 			continue
 		}
 		a := el.Attr(use.Decl.Name.URI, use.Decl.Name.Local)
-		if a != nil && a.TypeAnnotation == "" {
+		if a != nil && a.TypeAnnotation() == "" {
 			a.SetTypeAnnotation(annotationName(use.Decl.Type))
 		}
 	}
@@ -546,7 +550,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
 		//
 		// $value carries the typed value instead, which is how an
 		// assertion reaches it.
-		if !isRoot && el.TypeAnnotation == "" {
+		if !isRoot && el.TypeAnnotation() == "" {
 			el.SetTypeAnnotation(annotationName(t.SimpleContent))
 		}
 		return
@@ -557,13 +561,13 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
 	byName := map[xdm.QName]*ElementDecl{}
 	collectElementDecls(t.Particle, byName, map[*Particle]bool{})
 	for _, c := range el.ChildElements() {
-		d, ok := byName[xdm.QName{URI: c.Name.URI, Local: c.Name.Local}]
+		d, ok := byName[xdm.QName{URI: c.Name().URI, Local: c.Name().Local}]
 		if !ok || d.Type == nil {
 			continue
 		}
 		switch dt := d.Type.(type) {
 		case *SimpleType:
-			if c.TypeAnnotation == "" {
+			if c.TypeAnnotation() == "" {
 				c.SetTypeAnnotation(annotationName(dt))
 			}
 		case *ComplexType:
@@ -658,20 +662,20 @@ func (v *validator) assertContext(item xdm.Item) *xpath.Context {
 // read once per context so that two calls inside one assertion cannot disagree
 // with each other.
 func newAssertContext(item xdm.Item) *xpath.Context {
-	ctx := xpath.NewContext(item, xpath.Builtins())
-	ctx.Now = time.Now()
-	ctx.HasNow = true
-	// XSD 1.1 Structures fixes the XPath dynamic context an assertion or a
-	// type alternative is evaluated in: "available documents" and "available
-	// collections" are both empty, and the *default collection* is the empty
-	// sequence. That last clause is the one that matters here — an empty
-	// default collection is a value, not an absence, so fn:collection() with
-	// no argument returns () rather than raising FODC0002. Leaving the
-	// resolver nil made "empty(collection())" raise instead of being true,
-	// and a type alternative whose test raises is silently skipped, so
-	// cta0022 fell through to its declared union type.
-	ctx.Collections = emptyCollections{}
-	return ctx
+	now := time.Now()
+	return xpath.NewContext(item, xpath.Builtins(), func(e *xpath.Env) {
+		e.Now, e.HasNow = now, true
+		// XSD 1.1 Structures fixes the XPath dynamic context an assertion or a
+		// type alternative is evaluated in: "available documents" and "available
+		// collections" are both empty, and the *default collection* is the empty
+		// sequence. That last clause is the one that matters here — an empty
+		// default collection is a value, not an absence, so fn:collection() with
+		// no argument returns () rather than raising FODC0002. Leaving the
+		// resolver nil made "empty(collection())" raise instead of being true,
+		// and a type alternative whose test raises is silently skipped, so
+		// cta0022 fell through to its declared union type.
+		e.Collections = emptyCollections{}
+	})
 }
 
 // emptyCollections is the collection resolver an assertion sees: the default
@@ -724,7 +728,7 @@ func typedValueFor(normalized string, t *SimpleType) xdm.Item {
 	if p := primitiveOf(t); p != nil {
 		prim = p.Name.Local
 	}
-	n := &xdm.Node{Kind: xdm.KindText, Value: normalized}
+	n := xdm.NewNode(xdm.KindText, xdm.QName{}, normalized)
 	n.ApplyTyping(xdm.Typing{TypeAnnotation: prim})
 	return n.Atomize()
 }
@@ -816,19 +820,20 @@ func listItemTypeOf(t *SimpleType) *SimpleType {
 	return nil
 }
 
-// inScopeNamespaces gathers every prefix binding visible at a node.
+// inScopeNamespaces gathers every prefix binding visible at a node, the
+// recorded ones (see validator.fixups) included.
 //
 // The walk is outward and the innermost declaration wins, which is how XML
 // scoping works: an inner xmlns:p rebinding p hides the outer one.
-func inScopeNamespaces(el *xdm.Node) map[string]string {
+func (v *validator) inScopeNamespaces(el *xdm.Node) map[string]string {
 	out := map[string]string{}
-	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind != xdm.KindElement {
+	for cur := el; cur != nil; cur = cur.Parent() {
+		if cur.Kind() != xdm.KindElement {
 			continue
 		}
-		for _, ns := range cur.Namespaces {
-			if _, seen := out[ns.Name.Local]; !seen {
-				out[ns.Name.Local] = ns.Value
+		for ns := range v.namespaceDecls(cur) {
+			if _, seen := out[ns.prefix]; !seen {
+				out[ns.prefix] = ns.uri
 			}
 		}
 	}

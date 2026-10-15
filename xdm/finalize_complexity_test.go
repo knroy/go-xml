@@ -133,9 +133,9 @@ func TestFinalizeNamespaceCountsUnchanged(t *testing.T) {
 		for _, c := range n.ChildElements() {
 			// deep appears three times; key it by its parent so each is
 			// checked separately.
-			name := c.Name.Local
+			name := c.Name().Local
 			if name == "deep" {
-				name = n.Name.Local + "/deep"
+				name = n.Name().Local + "/deep"
 			}
 			byName[name] = c
 			walk(c)
@@ -174,32 +174,25 @@ func TestFinalizeNamespaceCountsUnchanged(t *testing.T) {
 		}
 	}
 
-	// Document order must stay strictly increasing across the whole tree,
-	// which is what the reservation Tree.assign sizes from these counts is
-	// for: a slot handed out twice would show up as a repeat here.
-	seen := map[int32]*Node{}
+	// Document order must stay strictly increasing across the whole tree:
+	// an element, its namespace nodes, its attributes, then its children.
+	var prev *Node
 	var order func(*Node)
+	step := func(n *Node) {
+		if prev != nil && prev.Compare(n) >= 0 {
+			t.Errorf("%s does not follow %s in document order", n.Name().Local, prev.Name().Local)
+		}
+		prev = n
+	}
 	order = func(n *Node) {
-		if prev, dup := seen[n.order]; dup {
-			t.Errorf("document order %d given to both %s and %s",
-				n.order, prev.Name.Local, n.Name.Local)
+		step(n)
+		for ns := range n.NamespaceNodes() {
+			step(ns)
 		}
-		seen[n.order] = n
-		for _, ns := range n.Namespaces {
-			if prev, dup := seen[ns.order]; dup {
-				t.Errorf("document order %d given to both %s and namespace %q",
-					ns.order, prev.Name.Local, ns.Name.Local)
-			}
-			seen[ns.order] = ns
+		for _, a := range attrsOf(n) {
+			step(a)
 		}
-		for _, a := range n.Attrs {
-			if prev, dup := seen[a.order]; dup {
-				t.Errorf("document order %d given to both %s and attribute %q",
-					a.order, prev.Name.Local, a.Name.Local)
-			}
-			seen[a.order] = a
-		}
-		for _, c := range n.Children {
+		for _, c := range kids(n) {
 			order(c)
 		}
 	}
@@ -231,12 +224,7 @@ func TestFinalizeScopeRestoredAcrossSiblings(t *testing.T) {
 		t.Errorf("few has %d bindings in scope, want 2 (xml, a); the "+
 			"declarations on its preceding sibling leaked into its scope", got)
 	}
-	// The reservation shows up as the gap between the two siblings' order
-	// values: many reserves a slot per in-scope binding. If few's scope had
-	// been inflated by its sibling's declarations the gap after few would
-	// grow too.
-	if few.order <= many.order {
-		t.Fatalf("document order is not increasing: many=%d few=%d",
-			many.order, few.order)
+	if few.Compare(many) <= 0 {
+		t.Fatal("document order is not increasing from many to few")
 	}
 }

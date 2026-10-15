@@ -8,34 +8,51 @@ import "testing"
 func detachedSample() []*Node {
 	var all []*Node
 	el := func(parent *Node, name string, ns ...string) *Node {
-		e := &Node{Kind: KindElement, Name: QName{Local: name}}
+		var e *Node
 		if parent != nil {
-			parent.AppendChild(e)
+			e = parent.AppendElement(QName{Local: name})
+		} else {
+			e = NewNode(KindElement, QName{Local: name}, "")
 		}
 		for i := 0; i < len(ns); i += 2 {
 			e.AddNamespace(ns[i], ns[i+1])
 		}
-		e.AddAttr(&Node{Name: QName{Local: "a"}, Value: "1"})
-		e.AddAttr(&Node{Name: QName{Local: "b"}, Value: "2"})
+		e.AppendAttr(QName{Local: "a"}, "1")
+		e.AppendAttr(QName{Local: "b"}, "2")
 		all = append(all, e)
-		all = append(all, e.Namespaces...)
-		all = append(all, e.Attrs...)
+		all = append(all, nsOf(e)...)
+		all = append(all, attrsOf(e)...)
 		return e
 	}
 	r := el(nil, "r", "p", "u1", "q", "u2")
 	b := el(r, "b", "s", "u3")
-	r.AppendChild(&Node{Kind: KindText, Value: "t"})
-	all = append(all, r.Children[1])
-	c := el(r, "c")
 	el(b, "d", "", "u4")
+	all = append(all, r.AppendText("t"))
+	c := el(r, "c")
 	el(c, "e")
-	// The namespace axis synthesizes inherited bindings: c has no node for p.
-	all = append(all, &Node{Kind: KindNamespace, Name: QName{Local: "p"}, Value: "u1", Parent: c})
+	// The namespace axis has the inherited bindings: c declares no p.
+	for ns := range c.NamespaceNodes() {
+		if ns.Name().Local == "p" {
+			all = append(all, ns)
+		}
+	}
 	return all
 }
 
-// refCompareDetached and refSiblingRank are compareDetached and siblingRank
-// as they were, ranking every pair with the namespace base included.
+// ancestorChain returns n's ancestors root-first, ending with n itself.
+func ancestorChain(n *Node) []*Node {
+	var up []*Node
+	for c := n; c != nil; c = c.Parent() {
+		up = append(up, c)
+	}
+	for i, j := 0, len(up)-1; i < j; i, j = i+1, j-1 {
+		up[i], up[j] = up[j], up[i]
+	}
+	return up
+}
+
+// refCompareDetached and refSiblingRank order two nodes of one tree by
+// walking it: the data model's rule, against which the record order is held.
 func refCompareDetached(n, o *Node) int {
 	na, oa := ancestorChain(n), ancestorChain(o)
 	i := 0
@@ -59,44 +76,44 @@ func refCompareDetached(n, o *Node) int {
 }
 
 func refSiblingRank(p, n *Node) int {
-	if n.Kind == KindNamespace {
-		for i, ns := range p.Namespaces {
+	if n.Kind() == KindNamespace {
+		for i, ns := range nsOf(p) {
 			if ns == n {
 				return i
 			}
 		}
 		i := 0
 		for prefix := range p.InScopeNamespaces() {
-			if prefix < n.Name.Local {
+			if prefix < n.Name().Local {
 				i++
 			}
 		}
 		return i
 	}
-	base := len(p.Namespaces)
+	base := len(nsOf(p))
 	if m := len(p.InScopeNamespaces()); m > base {
 		base = m
 	}
-	if n.Kind == KindAttribute {
-		for i, a := range p.Attrs {
+	if n.Kind() == KindAttribute {
+		for i, a := range attrsOf(p) {
 			if a == n {
 				return base + i
 			}
 		}
-		return base + len(p.Attrs)
+		return base + len(attrsOf(p))
 	}
-	base += len(p.Attrs)
-	for i, c := range p.Children {
+	base += len(attrsOf(p))
+	for i, c := range kids(p) {
 		if c == n {
 			return base + i
 		}
 	}
-	return base + len(p.Children)
+	return base + len(kids(p))
 }
 
-// Skipping the namespace base for two non-namespace siblings must not change
-// any answer.
-func TestCompareDetachedSkipsNamespaceBase(t *testing.T) {
+// The record order of a constructed tree agrees with the structural rule:
+// namespace nodes, then attributes, then children.
+func TestCompareMatchesStructuralOrder(t *testing.T) {
 	all := detachedSample()
 	for _, a := range all {
 		for _, b := range all {
@@ -104,7 +121,7 @@ func TestCompareDetachedSkipsNamespaceBase(t *testing.T) {
 				continue
 			}
 			if got, want := a.Compare(b), refCompareDetached(a, b); got != want {
-				t.Fatalf("%v %q vs %v %q: %d, want %d", a.Kind, a.Name.Local, b.Kind, b.Name.Local, got, want)
+				t.Fatalf("%v %q vs %v %q: %d, want %d", a.Kind(), a.Name().Local, b.Kind(), b.Name().Local, got, want)
 			}
 		}
 	}

@@ -1,6 +1,6 @@
 package xpath
 
-import "github.com/knroy/go-xml/xdm"
+import "github.com/knroy/go-xml/v2/xdm"
 
 // This file exports the small pieces of the expression engine that a host
 // language built on top of it needs and cannot reasonably reimplement.

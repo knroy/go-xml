@@ -1,6 +1,6 @@
 package xslt
 
-import "github.com/knroy/go-xml/xpath"
+import "github.com/knroy/go-xml/v2/xpath"
 
 // The XSLT part of the dynamic context does not survive a dynamic function
 // call.

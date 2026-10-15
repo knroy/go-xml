@@ -4,8 +4,15 @@
 no JVM, no libxml2 — one `go get`, and it cross-compiles like any Go package.
 
 ```
-go get github.com/knroy/go-xml
+go get github.com/knroy/go-xml/v2
 ```
+
+> **This is v2.** v2 changes the exported API (node fields become methods,
+> a smaller node layout, a split evaluation context); see the v2.0.0 section
+> of [CHANGELOG.md](CHANGELOG.md) and [Migrating to v2](docs/migrating-to-v2.md),
+> which has before/after code for each change and a tool that rewrites most of
+> it. v1 stays at `github.com/knroy/go-xml` and still receives fixes on the
+> `v1` branch.
 
 Validate a document against a schema:
 
@@ -21,9 +28,9 @@ Every error carries the spec's code and a path — `cvc-datatype-valid.1` at
 For a document you did not write, use `schema.ValidateContext(ctx, ...)`: it is
 the same call with a deadline, and identity-constraint checking is where an
 untrusted document can make validation expensive. See
-[docs/security.md](docs/security.md). To get a typed tree without touching
-the one you passed in, use `schema.ValidateCopy`
-([options](docs/options.md#annotate-and-concurrency)).
+[docs/security.md](docs/security.md). `Validate` only checks and never writes
+to the tree; to get a typed tree, use `schema.ValidateCopy`, which annotates a
+copy ([options](docs/options.md#typed-trees-and-concurrency)).
 
 ### The packages
 
@@ -66,6 +73,12 @@ variables, the ratchet, and how to read a result:
 tests/check.sh fast                                  # no external suites
 GOXSLT_UBL=<dir> GOXSLT_CII=<dir> tests/check.sh     # everything
 ```
+
+A change that must not move observable behaviour is also checked output for
+output: `tests/record.sh <dir>` records what every suite case and corpus
+document produces, and `go run ./tests/recdiff compare -allow
+tests/recdiff/allow.txt <a> <b>` lists each case that differs between two
+recordings ([docs/testing.md](docs/testing.md#output-differential)).
 
 The real-world stylesheet corpora are found under `testdata/` by default, or
 pointed at a checkout of your own:
@@ -120,7 +133,7 @@ and maintains it as a project of his own.
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 2,769 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 2,844 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -230,9 +243,11 @@ Eight packages, each usable on its own:
 * **[docs/benchmark.md](docs/benchmark.md)** — go-xml against Saxon-HE,
   BaseX, Jing, Xerces-J, libxml2 and `encoding/xml` on DocBook, e-invoicing,
   XMark, schema validation and parsing, cold and warm, with outputs checked
-  for agreement before anything is timed.
-* **[docs/profiling.md](docs/profiling.md)** — why go-xml was slower than a warm
-  JVM, profiled per workload, and which of the fixes it proposed have landed.
+  for agreement before anything is timed. The harness is
+  [go-xml-bench](https://github.com/knroy/go-xml-bench).
+* **[docs/profiling.md](docs/profiling.md)** — where v2's time and memory go
+  per workload, how to profile and A/B a change, and the ideas measured and
+  rejected.
 * **[docs/known-gaps.md](docs/known-gaps.md)** — every measured failure and why
   it is still open, including the fix attempts that were reverted because they
   cost more than they gained.
@@ -429,14 +444,20 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 
 The exit status is 0 only if every input transformed.
 
-`go install -tags goxml_nohttp github.com/knroy/go-xml/cmd/go-xml@latest`
-builds the CLI without `net/http`, which it never uses: it starts about 1.6 ms
-faster and is 12% smaller.
+The CLI does not link `net/http`: `HTTPResolver` lives in its own package,
+`xsd/xsdnet`, which the CLI does not import.
 
 The CLI is built with profile-guided optimisation from the committed
 `cmd/go-xml/default.pgo` (regenerate it with `tests/pgo.sh`), which `go build`
-and `go install` use automatically: 2–3% less CPU per run. A program embedding
-the library gains only from a profile of its own in its main package.
+and `go install` use automatically: on v2, 1–6% less CPU in a warm loop and
+1–2% per cold run. A program embedding the library gains only from a profile
+of its own in its main package.
+
+The CLI runs with Go's allocation sampling off (`runtime.MemProfileRate` 0).
+It does not link `runtime/pprof`, so the Go linker turns the sampling off; a
+build that links it (a `-cpuprofile` flag, `net/http/pprof`) would pay up to
+10% more CPU on the DocBook stylesheets, whose deep recursion makes sampling
+expensive.
 
 `go-xml xquery` runs an XQuery main module. The optional input document is
 the context item; the result is serialized with the query's own
@@ -581,9 +602,10 @@ claim, since it means evaluation never writes back into the document.
 
 That last claim was false until an audit found the counter-example, and it is
 worth recording how it hid. `xsl:sequence` handed source nodes straight to the
-output builder, which calls `AppendChild` on them — and `AppendChild` rewrites
-the node's parent and tree pointers, while `Finalize` renumbers its document
-order. So reading from the document mutated it. The visible symptom was not a
+output builder, which called `AppendChild` on them — and `AppendChild` rewrote
+the node's parent and tree pointers, while `Finalize` renumbered its document
+order. So reading from the document mutated it. (In v2 nothing can relink a
+node: a tree is built top-down, and a node becomes content as a copy.) The visible symptom was not a
 race at all:
 
 ```xslt
@@ -714,8 +736,9 @@ introduces bought exactly zero, so it was reverted. The comment in
 ## Benchmarks
 
 The full comparison with other engines, cold and warm, across nine workloads,
-is in [docs/benchmark.md](docs/benchmark.md), re-run after the performance work
-in [docs/profiling.md](docs/profiling.md). The figures below are the in-process
+is in [docs/benchmark.md](docs/benchmark.md), measured with
+[go-xml-bench](https://github.com/knroy/go-xml-bench) and re-run after the
+performance work in [docs/profiling.md](docs/profiling.md). The figures below are the in-process
 Go benchmarks; they and the Saxon table after them were measured in August 2026, before that
 work, on a UBL and an Oman corpus that are not in this repository, and have not
 been re-run since. benchmark.md has the current figures.
@@ -789,7 +812,7 @@ Every remote-reference mechanism is off unless you turn it on.
   the same resolver, so a nested transformation reaches nothing `fn:doc`
   could not — from a stylesheet, and from an XQuery query or `xpath.Eval`
   caller in a program that links `xslt`, where it is the caller's
-  `Context.Docs`.
+  `Env.Docs`.
 * **`xsl:include` and `xsl:import` fail closed** the same way, via
   `CompileOptions.Resolver`.
 * **XInclude is off** unless a caller runs `xdm.ProcessXInclude` explicitly.
@@ -805,7 +828,7 @@ Every remote-reference mechanism is off unless you turn it on.
   exposes it as `-xinclude`.
 * **`xs:import` and `xs:include` fail closed**, via `xsd.Options.Resolver`.
   The default reads a schema beside the one it was given and **refuses a
-  remote URL outright**; `HTTPResolver` is how you opt in to the network.
+  remote URL outright**; `xsdnet.HTTPResolver` is how you opt in to the network.
   `go-xml validate` is confined on the same terms for `-xsd` and `-rng`: to
   `-root` when given, and otherwise to the schema's own directory, as the
   transform is to its stylesheet's.
@@ -1290,7 +1313,10 @@ inside `\p{Lu}`, the `x` flag strips whitespace *before* escapes are read, and
 Profiling the UBL renderer: the whole transform is ~12% of samples and GC is
 ~40%. The engine is **allocation-bound, not algorithm-bound**. The largest
 single site is `Context.WithFocus`, at roughly a quarter of all allocation,
-because a path step allocates a focus context per node.
+because a path step allocates a focus context per node. In v2 that copy is
+160 bytes rather than 512: the environment and the expression's static
+properties sit behind pointers the copy shares (see
+[options.md](docs/options.md#xpathcontext)).
 
 The unimplemented items that would actually move this are structural, not
 incremental:
@@ -1356,7 +1382,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (2,769 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (2,844 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |

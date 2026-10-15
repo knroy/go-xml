@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // TestWriteSecondaryRefusesPlatformAbsoluteHref pins that an href which is

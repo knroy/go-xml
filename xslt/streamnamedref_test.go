@@ -3,7 +3,7 @@ package xslt
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // namedRefNS resolves the two prefixes these tests use: f: for a stylesheet

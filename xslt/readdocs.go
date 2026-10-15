@@ -3,8 +3,8 @@ package xslt
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // readDocResolver records the absolute URI of every document the
@@ -55,7 +55,7 @@ func (r *readDocResolver) record(t *xdm.Tree) {
 	if t == nil || t.Root == nil {
 		return
 	}
-	if u := t.Root.DocumentURI; u != "" {
+	if u := t.Root.DocumentURI(); u != "" {
 		r.read[u] = true
 	}
 }
@@ -101,7 +101,7 @@ func (r *readDocResolver) checkWrittenThenRead(t *xdm.Tree) error {
 	if t == nil || t.Root == nil || r.written == nil {
 		return nil
 	}
-	u := t.Root.DocumentURI
+	u := t.Root.DocumentURI()
 	if u == "" || !r.written[u] {
 		return nil
 	}
@@ -119,11 +119,14 @@ func (r *readDocResolver) ResolveDocumentIn(
 
 	if cr, ok := r.inner.(xpath.ContextDocumentResolver); ok {
 		return r.cached(docKey{uri, base, packageOf(ctx)}, func() (*xdm.Tree, error) {
-			return cr.ResolveDocumentIn(ctx, uri, base)
+			return resolveDocIn(cr, ctx, uri, base)
 		})
 	}
 	return r.ResolveDocument(uri, base)
 }
+
+// NativeResolver implements xpathleaf.NativeResolver.
+func (r *readDocResolver) NativeResolver() {}
 
 // checkReadThenWrite is XTDE1500 for one xsl:result-document destination.
 //

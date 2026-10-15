@@ -9,7 +9,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Eval implements Expr for all infix operators.
@@ -233,7 +233,7 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 	// makes pairs that 2.0 refuses as incomparable — a string against a
 	// boolean, a string against a number — answer the way 1.0 did. See
 	// compatGeneralCompare for the precedence.
-	if ctx.Compat {
+	if ctx.Compat() {
 		// The raw sequences are passed alongside the atomized ones because the
 		// boolean rule uses the effective boolean value, and that is defined
 		// on the sequence rather than on its atomization: a result tree
@@ -267,7 +267,7 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 // arguments allowed ("." , a variable, current()) are pure, so evaluating one
 // again there raises the same error or yields the same nodes.
 func nameComparison(ctx *Context, e *BinaryOp) (result, ok bool) {
-	if (e.Op != "=" && e.Op != "!=") || ctx.Compat || ctx.collation != nil {
+	if (e.Op != "=" && e.Op != "!=") || ctx.Compat() || ctx.st().collation != nil {
 		return false, false
 	}
 	lc, lName := nameCallArg(ctx, e.Left)
@@ -360,9 +360,9 @@ func nameOf(ctx *Context, c *FuncCall) (q xdm.QName, ok bool) {
 	if n == nil {
 		return q, false
 	}
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindElement, xdm.KindAttribute, xdm.KindPI, xdm.KindNamespace:
-		return n.Name, true
+		return n.Name(), true
 	}
 	return q, true
 }
@@ -610,7 +610,7 @@ func rawCompare(ctx *Context, a, b *xdm.Atomic) (int, bool, error) {
 		// than and friends). Under 2.0 and 3.0 they carry equality only, so
 		// the ordered flag is false there and "lt" reports the type error
 		// those versions expect.
-		return bytes.Compare(av, bv), ctx != nil && ctx.Version.atLeast31(), nil
+		return bytes.Compare(av, bv), ctx != nil && ctx.Version().atLeast31(), nil
 
 	case isStringLike(a.Type) && isStringLike(b.Type):
 		// String comparison uses the default collation from the static
@@ -621,9 +621,9 @@ func rawCompare(ctx *Context, a, b *xdm.Atomic) (int, bool, error) {
 		//
 		// xs:anyURI is the exception the specification carves out: URIs are
 		// always compared by codepoint, whatever the default collation is.
-		if ctx != nil && ctx.collation != nil &&
+		if ctx != nil && ctx.st().collation != nil &&
 			a.Type != xdm.TypeAnyURI && b.Type != xdm.TypeAnyURI {
-			return sign(ctx.collation.Compare(a.Str(), b.Str())), true, nil
+			return sign(ctx.st().collation.Compare(a.Str(), b.Str())), true, nil
 		}
 		switch {
 		case a.Str() < b.Str():
@@ -643,13 +643,13 @@ func rawCompare(ctx *Context, a, b *xdm.Atomic) (int, bool, error) {
 		if xdm.IsGregorian(a.Type) {
 			tz := 0
 			if ctx != nil {
-				tz = ctx.ImplicitTimezone
+				tz = ctx.ev().ImplicitTimezone
 			}
 			return xdm.CompareDT(a.DateTimeVal(), b.DateTimeVal(), tz), false, nil
 		}
 		tz := 0
 		if ctx != nil {
-			tz = ctx.ImplicitTimezone
+			tz = ctx.ev().ImplicitTimezone
 		}
 		av, bv := a.DateTimeVal(), b.DateTimeVal()
 		// An xs:time has no date, so the one its representation carries is
@@ -892,7 +892,7 @@ func bigInteger(ctx *Context, e Expr) (*big.Int, error) {
 	// so under XPath 1.0 compatibility a multi-item operand is reduced to its
 	// first item rather than raising XPTY0004. backwards-042 writes
 	// "(1 to 5) to (3,4)" and expects "1,2,3".
-	if ctx.Compat {
+	if ctx.Compat() {
 		atoms = compatFirst(atoms)
 	}
 	if len(atoms) == 0 {
@@ -1013,7 +1013,7 @@ func (e *BinaryOp) evalArithmetic(ctx *Context) (xdm.Sequence, error) {
 	// there is no 1.0 behaviour to be compatible with, and coercing a date to
 	// NaN would break "current-date() - $d" inside any stylesheet that happens
 	// to declare version="1.0" on an ancestor.
-	if ctx.Compat && !temporalOperands(la, ra) {
+	if ctx.Compat() && !temporalOperands(la, ra) {
 		// compatNumberSeq casts to xs:double unconditionally, not just when
 		// the operand is not already numeric. 1.0 had one numeric type, so
 		// "1 + 1" is an xs:double there and an xs:integer in 2.0;
@@ -1047,6 +1047,11 @@ func (e *BinaryOp) evalArithmetic(ctx *Context) (xdm.Sequence, error) {
 
 // arithmetic applies a binary arithmetic operator to two atomic values.
 func arithmetic(a, b *xdm.Atomic, op string) (*xdm.Atomic, error) {
+	if a.Type == xdm.TypeInteger && b.Type == xdm.TypeInteger {
+		if z, ok := int64Arithmetic(a.Rat(), b.Rat(), op); ok {
+			return xdm.NewInteger(z), nil
+		}
+	}
 	// Date and duration arithmetic is a separate rule table from numeric.
 	if isDateLike(a.Type) || isDurationLike(a.Type) ||
 		isDateLike(b.Type) || isDurationLike(b.Type) {
@@ -1106,6 +1111,32 @@ func arithmetic(a, b *xdm.Atomic, op string) (*xdm.Atomic, error) {
 		return nil, fmt.Errorf("unknown operator %q", op)
 	}
 	return makeFloat(z, common), nil
+}
+
+// int64Arithmetic is integer + - * when both operands and the result fit an
+// int64; ok is false otherwise, and the caller takes the exact path.
+func int64Arithmetic(x, y *big.Rat, op string) (z int64, ok bool) {
+	if x == nil || y == nil || !x.IsInt() || !y.IsInt() ||
+		!x.Num().IsInt64() || !y.Num().IsInt64() {
+		return 0, false
+	}
+	a, b := x.Num().Int64(), y.Num().Int64()
+	switch op {
+	case "+":
+		z = a + b
+		return z, (z > a) == (b > 0)
+	case "-":
+		z = a - b
+		return z, (z < a) == (b > 0)
+	case "*":
+		if a == 0 || b == 0 {
+			return 0, true
+		}
+		z = a * b
+		return z, z/b == a && !(a == -1 && b == math.MinInt64) &&
+			!(b == -1 && a == math.MinInt64)
+	}
+	return 0, false
 }
 
 func divide(a, b *xdm.Atomic, common xdm.TypeCode, exact bool) (*xdm.Atomic, error) {

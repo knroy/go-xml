@@ -3,7 +3,7 @@ package xquery_test
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xquery"
+	"github.com/knroy/go-xml/v2/xquery"
 )
 
 // TestConstructorAsOperand covers the substitution in operand.go: a

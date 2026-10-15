@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // compiler holds state while compiling a stylesheet and its included modules.
@@ -165,7 +165,10 @@ type compiler struct {
 	// walked, so that compileModule does not repeat conditional inclusion
 	// over one and evaluate its use-when expressions a second time.
 	staticVars []staticVar
-	staticDone map[*xdm.Node]bool
+	staticDone map[*xdm.Node]*xdm.Node
+	// mergedText records, for each text node mergeAcrossComments built out
+	// of pieces separated by comments, the element the pieces were in.
+	mergedText map[*xdm.Node]*xdm.Node
 
 	// nextPrecedence allocates import precedence numbers. See compileModule:
 	// precedence is a total order over the import tree rather than a depth,
@@ -293,6 +296,9 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 		c.lowPrecedence = c.nextPrecedence
 		defer func() { c.lowPrecedence = saved }()
 	}
+	// A module the static phase has already walked is read as the copy it
+	// built: conditional inclusion applied, shadow attributes expanded.
+	doc = c.prunedModule(doc)
 	collectPrefixesAll(doc, c.sheet.prefixes, c.sheet.prefixesAll)
 	if err := c.checkInputTypeAnnotations(doc); err != nil {
 		return err
@@ -324,7 +330,7 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 		version := root.AttrValue("version")
 		if version == "" {
 			if a := root.Attr(xdm.NSXSL, "version"); a != nil {
-				version = a.Value
+				version = a.Value()
 			}
 		}
 		c.sheet.output.Version10Implicit = strings.TrimSpace(version) == "1.0"
@@ -346,9 +352,19 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 	if err := checkOverrideTemplates(root); err != nil {
 		return err
 	}
-	if !c.staticDone[doc] {
+	if _, done := c.staticDone[doc]; !done {
 		if err := c.runStaticPhase(doc); err != nil {
 			return err
+		}
+		unpruned := doc
+		doc = c.prunedModule(doc)
+		if root = firstElement(doc); root == nil {
+			return fmt.Errorf("stylesheet has no root element")
+		}
+		// document("") and the principal-module checks read the module as
+		// compiled, which is the copy.
+		if c.sheet.source == unpruned {
+			c.sheet.source = doc
 		}
 	}
 
@@ -385,7 +401,7 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 
 	// A literal result element as the root is the abbreviated form: the whole
 	// document is the body of a single template matching "/".
-	if root.Name.URI != xdm.NSXSL || !isStylesheetRootName(root.Name.Local) {
+	if root.Name().URI != xdm.NSXSL || !isStylesheetRootName(root.Name().Local) {
 		// XTSE0150 names this exact condition: "a literal result element that
 		// is used as the outermost element of a simplified stylesheet module
 		// must have an xsl:version attribute". The unprefixed spelling does
@@ -396,7 +412,7 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 			return fmt.Errorf(
 				"XTSE0150: %s is the outermost element of a simplified "+
 					"stylesheet and has no xsl:version attribute",
-				root.Name.Lexical())
+				root.Name().Lexical())
 		}
 		if !fixed {
 			precedence = c.nextPrecedence
@@ -497,8 +513,8 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 	}
 
 	for _, el := range children {
-		if el.Name.URI == xdm.NSXSL &&
-			(el.Name.Local == "import-schema" || el.Name.Local == "import") {
+		if el.Name().URI == xdm.NSXSL &&
+			(el.Name().Local == "import-schema" || el.Name().Local == "import") {
 			continue
 		}
 		if err := c.compileTopLevel(el, precedence); err != nil {
@@ -543,14 +559,14 @@ func (c *compiler) compileSimplifiedStylesheet(root *xdm.Node, precedence int) e
 
 // compileTopLevel compiles one top-level declaration.
 func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
-	if el.Name.URI != xdm.NSXSL {
+	if el.Name().URI != xdm.NSXSL {
 		// A non-XSL top-level element is a user-defined data element, which
 		// the spec says to ignore rather than reject: stylesheets legitimately
 		// carry their own configuration elements up here.
 		return nil
 	}
 
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "global-context-item":
 		return c.compileGlobalContextItem(el)
 	case "template":
@@ -590,9 +606,10 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		if err != nil {
 			return err
 		}
-		if el.Name.Local == "param" {
+		if el.Name().Local == "param" {
 			v.IsParam = true
 		}
+		v.eager = hasEffects(el)
 		// XTSE0630: two bindings of a global variable may not share a name
 		// at the same import precedence. A higher precedence legitimately
 		// overrides a lower one, so only a tie is an error.
@@ -663,7 +680,7 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 	// stylesheet would run producing quietly wrong output — or a version of
 	// XSLT this engine does not implement. Either way the author needs to know.
 	return fmt.Errorf(
-		"unknown top-level element xsl:%s (XTSE0010)", el.Name.Local)
+		"unknown top-level element xsl:%s (XTSE0010)", el.Name().Local)
 }
 
 // patternFuncRef is one function call found in a match pattern, recorded with
@@ -734,7 +751,8 @@ func (c *compiler) checkPatternFuncs() error {
 }
 
 func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
-	t := &Template{importPrecedence: precedence, lowPrecedence: c.lowPrecedence}
+	t := &Template{importPrecedence: precedence, lowPrecedence: c.lowPrecedence,
+		baseURI: el.BaseURI()}
 	c.declOrder++
 	t.declOrder = c.declOrder
 
@@ -793,7 +811,7 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 	// Testing the value for "" cannot tell an empty list from an absent
 	// attribute, so the empty one went unreported.
 	if ma := el.Attr("", "mode"); ma != nil {
-		modes := strings.Fields(ma.Value)
+		modes := strings.Fields(ma.Value())
 		// XTSE0550: the list may not be empty, may not repeat a token, and
 		// "#all" may not appear beside anything else.
 		if len(modes) == 0 {
@@ -884,11 +902,11 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 	// content model even though it is the first child ELEMENT.
 	// context-item-908 writes "banana" above one and expects XTSE0010.
 	textFirst := false
-	for _, ch := range el.Children {
-		if ch.Kind == xdm.KindElement {
+	for ch := range el.Children() {
+		if ch.Kind() == xdm.KindElement {
 			break
 		}
-		if ch.Kind == xdm.KindText && !xdm.IsXMLWhitespace(ch.Value) {
+		if ch.Kind() == xdm.KindText && !xdm.IsXMLWhitespace(ch.Value()) {
 			textFirst = true
 			break
 		}
@@ -998,7 +1016,7 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 	name := el.AttrValue("name")
 	if name == "" {
-		return nil, fmt.Errorf("%s requires a name attribute", el.Name.Lexical())
+		return nil, fmt.Errorf("%s requires a name attribute", el.Name().Lexical())
 	}
 	qn, err := resolveQNameAttr(el, name)
 	if err != nil {
@@ -1008,12 +1026,12 @@ func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 		Name:     qn,
 		Required: yesAttr(el, "required"),
 		Tunnel:   yesAttr(el, "tunnel"),
-		baseURI:  el.BaseURI,
+		baseURI:  el.BaseURI(),
 	}
 	if as := el.AttrValue("as"); as != "" {
 		t, err := compileSequenceType(as, newNSResolver(el, ""))
 		if err != nil {
-			return nil, fmt.Errorf("in %s/@as: %w", el.Name.Lexical(), err)
+			return nil, fmt.Errorf("in %s/@as: %w", el.Name().Lexical(), err)
 		}
 		v.asType = t
 	}
@@ -1021,14 +1039,14 @@ func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 	if sel := el.AttrValue("select"); sel != "" {
 		comp, err := compileExpr(sel, newNSResolver(el, ""))
 		if err != nil {
-			return nil, fmt.Errorf("in %s/@select: %w", el.Name.Lexical(), err)
+			return nil, fmt.Errorf("in %s/@select: %w", el.Name().Lexical(), err)
 		}
 		v.Select = comp
 		v.selectNS = inScopeNamespacesShared(el)
-		c.noteVariableFuncs(comp, el.Name.Lexical()+" $"+qn.Lexical())
+		c.noteVariableFuncs(comp, el.Name().Lexical()+" $"+qn.Lexical())
 		if len(el.ChildElements()) > 0 {
 			return nil, fmt.Errorf("%s has both a select attribute and content",
-				el.Name.Lexical())
+				el.Name().Lexical())
 		}
 		return v, nil
 	}
@@ -1131,16 +1149,16 @@ func (c *compiler) recordOutputAttrs(el *xdm.Node, precedence int) {
 		seen = map[string][]outputAttrDecl{}
 		c.outputAttrs[definition] = seen
 	}
-	for _, a := range el.Attrs {
-		if a.Name.URI != "" || a.Name.Local == "name" {
+	for a := range el.Attrs() {
+		if a.Name().URI != "" || a.Name().Local == "name" {
 			continue
 		}
-		switch a.Name.Local {
+		switch a.Name().Local {
 		case "cdata-section-elements", "use-character-maps":
 			continue
 		}
-		seen[a.Name.Local] = append(seen[a.Name.Local],
-			outputAttrDecl{value: a.Value, precedence: precedence})
+		seen[a.Name().Local] = append(seen[a.Name().Local],
+			outputAttrDecl{value: a.Value(), precedence: precedence})
 	}
 }
 
@@ -1237,7 +1255,7 @@ func checkLiteralHTMLVersion(el *xdm.Node) error {
 	if _, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err != nil {
 		return fmt.Errorf(
 			"XTSE0020: %s/@html-version value %q is not a decimal number",
-			el.Name.Lexical(), v)
+			el.Name().Lexical(), v)
 	}
 	return nil
 }
@@ -1328,7 +1346,7 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 		// Recorded together with the URI: 25.1 resolves it against the base
 		// URI of the element carrying the attribute, and by the time the
 		// document is fetched at run time that element is long gone.
-		o.ParameterDocumentBase = el.BaseURI
+		o.ParameterDocumentBase = el.BaseURI()
 	}
 	if v := value("standalone"); v != "" {
 		// "omit" is the way to say "no standalone declaration", so it is
@@ -1520,7 +1538,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	// analysis, which is why a non-streaming processor can enforce it. Only
 	// the presence of the attribute is read; §19 decides nothing here.
 	if sa := el.Attr("", "streamability"); sa != nil {
-		v := strings.TrimSpace(sa.Value)
+		v := strings.TrimSpace(sa.Value())
 		hasParam := false
 		for _, ch := range el.ChildElements() {
 			if isXSL(ch, "param") {
@@ -1556,11 +1574,11 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	// override-extension-function="1" beside override="no".
 	if oef := el.Attr("", "override-extension-function"); oef != nil {
 		if ov := el.Attr("", "override"); ov != nil &&
-			isYes(oef.Value) != isYes(ov.Value) {
+			isYes(oef.Value()) != isYes(ov.Value()) {
 			return fmt.Errorf(
 				"XTSE0020: xsl:function/@override-extension-function=%q and "+
 					"its deprecated synonym @override=%q must have the same "+
-					"value", oef.Value, ov.Value)
+					"value", oef.Value(), ov.Value())
 		}
 	}
 
@@ -1610,7 +1628,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 		body = stub
 	}
 	fn := &userFunction{
-		name: qn, params: params, body: body,
+		name: qn, params: params, body: body, baseURI: el.BaseURI(),
 		// Two attributes reach the same machinery. @new-each-time="no" is a
 		// promise the processor must keep -- 10.3 says two such calls return
 		// the same result, and for a node-building function "the same" is
@@ -1799,7 +1817,7 @@ func (c *compiler) compileSpaceControl(el *xdm.Node, precedence int) error {
 			uri, ok := el.LookupPrefix(prefix)
 			if !ok {
 				return fmt.Errorf("XTSE0280: unbound prefix %q in %s/@elements",
-					prefix, el.Name.Lexical())
+					prefix, el.Name().Lexical())
 			}
 			qn = xdm.QName{URI: uri, Local: "*"}
 		default:
@@ -1835,7 +1853,7 @@ func (c *compiler) compileSpaceControl(el *xdm.Node, precedence int) error {
 			ps = &packageSpace{}
 			c.sheet.pkgSpace[compilePackage] = ps
 		}
-		if el.Name.Local == "strip-space" {
+		if el.Name().Local == "strip-space" {
 			c.stripDecls = append(c.stripDecls, d)
 			c.sheet.strip = append(c.sheet.strip, qn)
 			ps.strip = append(ps.strip, qn)
@@ -1845,6 +1863,10 @@ func (c *compiler) compileSpaceControl(el *xdm.Node, precedence int) error {
 			ps.preserve = append(ps.preserve, qn)
 		}
 	}
+	// An answer remembered before this declaration was read is stale.
+	c.sheet.stripMu.Lock()
+	c.sheet.stripMemo = nil
+	c.sheet.stripMu.Unlock()
 	return nil
 }
 
@@ -1862,10 +1884,10 @@ func (c *compiler) hoistImportSchema(root *xdm.Node) error {
 		c.schemaSeen = map[string]bool{}
 	}
 	for _, el := range root.ChildElements() {
-		if el.Name.URI != xdm.NSXSL {
+		if el.Name().URI != xdm.NSXSL {
 			continue
 		}
-		switch el.Name.Local {
+		switch el.Name().Local {
 		case "import-schema":
 			if err := c.compileImportSchema(el); err != nil {
 				return err
@@ -1875,7 +1897,7 @@ func (c *compiler) hoistImportSchema(root *xdm.Node) error {
 			if href == "" || c.opts.Resolver == nil {
 				continue
 			}
-			base := el.BaseURI
+			base := el.BaseURI()
 			if base == "" {
 				base = c.opts.BaseURI
 			}
@@ -1888,7 +1910,7 @@ func (c *compiler) hoistImportSchema(root *xdm.Node) error {
 				continue
 			}
 			c.schemaSeen[resolved] = true
-			sub := embeddedModule(doc, fragment)
+			sub := c.prunedModule(embeddedModule(doc, fragment))
 			if sub == nil {
 				continue
 			}
@@ -1913,16 +1935,16 @@ func (c *compiler) compileInclude(el *xdm.Node, precedence int) error {
 func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecedence bool) error {
 	href := el.AttrValue("href")
 	if href == "" {
-		return fmt.Errorf("%s requires an href attribute", el.Name.Lexical())
+		return fmt.Errorf("%s requires an href attribute", el.Name().Lexical())
 	}
 	if c.opts.Resolver == nil {
 		return fmt.Errorf("%s %q: module loading is disabled (no resolver configured)",
-			el.Name.Lexical(), href)
+			el.Name().Lexical(), href)
 	}
 	if c.seen == nil {
 		c.seen = map[string]bool{}
 	}
-	base := el.BaseURI
+	base := el.BaseURI()
 	if base == "" {
 		base = c.opts.BaseURI
 	}
@@ -1939,17 +1961,17 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 	if err != nil {
 		// XTSE0165: the processor could not retrieve the resource the href
 		// names, or what it retrieved is not a stylesheet module.
-		return fmt.Errorf("XTSE0165: %s %q: %w", el.Name.Lexical(), href, err)
+		return fmt.Errorf("XTSE0165: %s %q: %w", el.Name().Lexical(), href, err)
 	}
 	if c.seen[resolved] {
 		// A module that includes or imports itself, directly or indirectly,
 		// has its own error code, and they differ between the two: XTSE0180
 		// for xsl:include, XTSE0210 for xsl:import.
 		code := "XTSE0180"
-		if el.Name.Local == "import" {
+		if el.Name().Local == "import" {
 			code = "XTSE0210"
 		}
-		return fmt.Errorf("%s: circular %s of %q", code, el.Name.Local, resolved)
+		return fmt.Errorf("%s: circular %s of %q", code, el.Name().Local, resolved)
 	}
 	if c.preNumbered[resolved] && !forcePrecedence {
 		// An xsl:import the include pre-pass already handled. It has its
@@ -1980,7 +2002,7 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 		return fmt.Errorf(
 			"XTSE0165: %s %q retrieved an xsl:package, which is not a "+
 				"stylesheet module; a package is referenced with "+
-				"xsl:use-package", el.Name.Lexical(), href)
+				"xsl:use-package", el.Name().Lexical(), href)
 	}
 	if forcePrecedence {
 		// xsl:include: the module's declarations take the includer's
@@ -2007,8 +2029,8 @@ func importHref(el *xdm.Node) string {
 
 // importBase is the base URI an xsl:import's href resolves against.
 func importBase(c *compiler, el *xdm.Node) string {
-	if el.BaseURI != "" {
-		return el.BaseURI
+	if el.BaseURI() != "" {
+		return el.BaseURI()
 	}
 	return c.opts.BaseURI
 }
@@ -2032,7 +2054,7 @@ func (c *compiler) numberIncludedImports(root *xdm.Node) error {
 		if href == "" {
 			continue
 		}
-		base := el.BaseURI
+		base := el.BaseURI()
 		if base == "" {
 			base = c.opts.BaseURI
 		}
@@ -2050,7 +2072,7 @@ func (c *compiler) numberIncludedImports(root *xdm.Node) error {
 		if c.seen[resolved] {
 			continue
 		}
-		sub := embeddedModule(doc, fragment)
+		sub := c.prunedModule(embeddedModule(doc, fragment))
 		if sub == nil {
 			continue
 		}
@@ -2107,18 +2129,18 @@ func embeddedModule(doc *xdm.Node, id string) *xdm.Node {
 	}
 	var walk func(n *xdm.Node) *xdm.Node
 	walk = func(n *xdm.Node) *xdm.Node {
-		if n.Kind == xdm.KindElement {
-			for _, a := range n.Attrs {
-				if a.Value != id {
+		if n.Kind() == xdm.KindElement {
+			for a := range n.Attrs() {
+				if a.Value() != id {
 					continue
 				}
-				if a.Name.Local == "id" &&
-					(a.Name.URI == "" || a.Name.URI == xdm.NSXML) {
+				if a.Name().Local == "id" &&
+					(a.Name().URI == "" || a.Name().URI == xdm.NSXML) {
 					return n
 				}
 			}
 		}
-		for _, k := range n.Children {
+		for k := range n.Children() {
 			if got := walk(k); got != nil {
 				return got
 			}
@@ -2135,11 +2157,11 @@ func embeddedModule(doc *xdm.Node, id string) *xdm.Node {
 }
 
 func firstElement(n *xdm.Node) *xdm.Node {
-	if n.Kind == xdm.KindElement {
+	if n.Kind() == xdm.KindElement {
 		return n
 	}
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindElement {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindElement {
 			return c
 		}
 	}
@@ -2147,7 +2169,7 @@ func firstElement(n *xdm.Node) *xdm.Node {
 }
 
 func isXSL(n *xdm.Node, local string) bool {
-	return n.Kind == xdm.KindElement && n.Name.URI == xdm.NSXSL && n.Name.Local == local
+	return n.Kind() == xdm.KindElement && n.Name().URI == xdm.NSXSL && n.Name().Local == local
 }
 
 // collectPrefixes records every namespace prefix declared in a module.
@@ -2173,30 +2195,29 @@ func collectPrefixes(n *xdm.Node, into map[string]string) {
 // component that does not exist -- which made key('local:scenarios', ...)
 // raise XTDE1260 purely because of the order the modules were included in.
 func collectPrefixesAll(n *xdm.Node, into map[string]string, all map[string][]string) {
-	if n.Kind == xdm.KindElement {
-		for _, ns := range n.Namespaces {
-			p := ns.Name.Local
+	if n.Kind() == xdm.KindElement {
+		for p, uri := range n.DeclaredNamespaces() {
 			if p == "" {
 				continue
 			}
 			if _, seen := into[p]; !seen {
-				into[p] = ns.Value
+				into[p] = uri
 			}
 			if all != nil {
 				dup := false
 				for _, u := range all[p] {
-					if u == ns.Value {
+					if u == uri {
 						dup = true
 						break
 					}
 				}
 				if !dup {
-					all[p] = append(all[p], ns.Value)
+					all[p] = append(all[p], uri)
 				}
 			}
 		}
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		collectPrefixesAll(c, into, all)
 	}
 }
@@ -2215,14 +2236,14 @@ func collectPrefixesAll(n *xdm.Node, into map[string]string, all map[string][]st
 // conflict, which is why only the two named ones are recorded.
 func (c *compiler) checkInputTypeAnnotations(doc *xdm.Node) error {
 	root := firstElement(doc)
-	if root == nil || root.Name.URI != xdm.NSXSL {
+	if root == nil || root.Name().URI != xdm.NSXSL {
 		return nil
 	}
 	a := root.Attr("", "input-type-annotations")
 	if a == nil {
 		return nil
 	}
-	v := strings.TrimSpace(a.Value)
+	v := strings.TrimSpace(a.Value())
 	if v != "strip" && v != "preserve" {
 		return nil
 	}
@@ -2324,7 +2345,7 @@ func (c *compiler) pruneOverriddenGlobals() {
 func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 	name := ""
 	if na := el.Attr("", "name"); na != nil {
-		tok := strings.TrimSpace(na.Value)
+		tok := strings.TrimSpace(na.Value())
 		switch tok {
 		case "", "#default", "#unnamed":
 		default:
@@ -2351,7 +2372,7 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 			rank = -1 - c.usedPackageDepth
 		}
 		if prev, seen := c.sheet.modeNoMatchPrec[name]; !seen || rank >= prev {
-			c.sheet.modeNoMatch[name] = strings.TrimSpace(nm.Value)
+			c.sheet.modeNoMatch[name] = strings.TrimSpace(nm.Value())
 			c.sheet.modeNoMatchPrec[name] = rank
 		}
 	}
@@ -2359,25 +2380,25 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 		if c.sheet.modeTyped == nil {
 			c.sheet.modeTyped = map[string]string{}
 		}
-		c.sheet.modeTyped[name] = strings.TrimSpace(a.Value)
+		c.sheet.modeTyped[name] = strings.TrimSpace(a.Value())
 	}
 	if a := el.Attr("", "on-multiple-match"); a != nil {
 		if c.sheet.modeFailMultiple == nil {
 			c.sheet.modeFailMultiple = map[string]bool{}
 		}
-		c.sheet.modeFailMultiple[name] = strings.TrimSpace(a.Value) == "fail"
+		c.sheet.modeFailMultiple[name] = strings.TrimSpace(a.Value()) == "fail"
 	}
 	if a := el.Attr("", "warning-on-multiple-match"); a != nil {
 		if c.sheet.modeWarnMultiple == nil {
 			c.sheet.modeWarnMultiple = map[string]bool{}
 		}
-		c.sheet.modeWarnMultiple[name] = stylesheetYes(a.Value)
+		c.sheet.modeWarnMultiple[name] = stylesheetYes(a.Value())
 	}
 	if a := el.Attr("", "warning-on-no-match"); a != nil {
 		if c.sheet.modeWarnNoMatch == nil {
 			c.sheet.modeWarnNoMatch = map[string]bool{}
 		}
-		c.sheet.modeWarnNoMatch[name] = stylesheetYes(a.Value)
+		c.sheet.modeWarnNoMatch[name] = stylesheetYes(a.Value())
 	}
 	if err := checkEntryVisibility(el); err != nil {
 		return err

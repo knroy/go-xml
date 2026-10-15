@@ -83,6 +83,9 @@ tag-push workflow closes.
 
 ## The manual steps
 
+v2 is released from `main` and v1 from the `v1` branch; see
+[Branches](#branches-v2-on-main-v1-on-v1) below.
+
 Four, in this order. The order is the whole point: the version commit precedes
 the tag.
 
@@ -169,6 +172,35 @@ will always fail. That is not worked around: the alternatives are weakening
 the protection or forcing past it, and a failed step with a clear log is
 better than either. The pin bump is then a normal pull request.
 
+## Branches: v2 on main, v1 on v1
+
+Go resolves a module by its `go.mod` path and its tags, not by branch, so
+each major version lives on its own branch:
+
+| Branch | Module | Tags | Install |
+|---|---|---|---|
+| `main` | `github.com/knroy/go-xml/v2` | `v2.x.y` | `go get github.com/knroy/go-xml/v2` |
+| `v1` | `github.com/knroy/go-xml` | `v1.x.y` | `go get github.com/knroy/go-xml` |
+
+- **Work reaches a branch by pull request.** v2 changes go to `main`, v1
+  fixes to `v1`. There is no `dev` branch.
+- **Each version is released from its own branch** with the steps above:
+  the release commit lands on that branch by pull request, and the tag is
+  made on it. `v1`'s copy of this file says the same for v1.
+- **A v1 fix that v2 also needs** is merged from `v1` into `main` after the
+  v1 release. Keep `main`'s version constant, and put the v1 changelog
+  section below `main`'s newest one, in date order.
+- **`w3cschemas` requires v1.** Put a `w3cschemas:` line only in a v1 tag
+  message; the workflow refuses it on a v2 tag, since it pins
+  `github.com/knroy/go-xml` at the tag. Moving `w3cschemas` to `/v2` is its
+  own release, once a v2 tag is on the module proxy: its `go.mod` requires
+  `github.com/knroy/go-xml/v2` and its imports gain `/v2`.
+- **`go get github.com/knroy/go-xml@main` does not work.** `main`'s
+  `go.mod` declares `/v2`. Use a tag, or `github.com/knroy/go-xml/v2@main`.
+
+After a tag, check that the proxy serves it, for example
+`go list -m github.com/knroy/go-xml/v2@v2.0.0`.
+
 ## The w3cschemas version
 
 `w3cschemas` is a second module, published separately because the schemas it
@@ -188,7 +220,8 @@ one**, and the workflow does not try to derive it:
 | v1.6.0 | w3cschemas/v0.5.0 |
 | v1.7.0 | w3cschemas/v0.6.0 (tagged by hand: the tag message had no `w3cschemas:` line) |
 | v1.7.1 | *(no release)* |
-| v1.8.0 | *(no release)* |
+| v1.8.0 | w3cschemas/v0.7.0 (tagged by hand: the tag message had no `w3cschemas:` line) |
+| v2.0.0 | *(no release: w3cschemas requires v1 until it moves to `/v2`, see Branches above)* |
 
 The minor number counts **w3cschemas releases**, not go-xml ones, and two
 go-xml releases produced none at all. Any rule derived from the parent version

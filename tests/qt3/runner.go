@@ -16,12 +16,12 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"github.com/knroy/go-xml/internal/fileuri"
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xquery"
-	"github.com/knroy/go-xml/xsd"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xquery"
+	"github.com/knroy/go-xml/v2/xsd"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // SuiteClock is the fixed value fn:current-dateTime returns during a run.
@@ -662,6 +662,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		if p := recover(); p != nil {
 			rep.Outcome = Fail
 			rep.Reason = fmt.Sprintf("PANIC: %v", p)
+			recordPanic(r.Target, ts, tc, p)
 		}
 	}()
 
@@ -772,15 +773,15 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// The case is evaluated as the version the run is scoped to, so that a
 	// construct 3.0 adds is accepted in the 3.0 run and refused in the 2.0
 	// one. Both are conformance: the 2.0 run asserts the refusals.
-	ctx.Version = xpathVersion(r.Target)
+	ctx = ctx.WithVersion(xpathVersion(r.Target))
 	// fn:unparsed-text reads the suite's own fixtures; see suiteTextResolver
 	// for why this is scoped to the checkout.
-	ctx.Texts = newSuiteTextResolver(r.Root, ts.Dir, env)
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.Texts = newSuiteTextResolver(r.Root, ts.Dir, env) })
 	// A document handed to fn:parse-xml may declare an external entity, and a
 	// few cases assert that its content appears in the result. The engine
 	// refuses every external entity unless a resolver says otherwise; here the
 	// suite is the one input where reading its own fixtures is the point.
-	ctx.Entities = suiteEntityResolver{text: ctx.Texts.(suiteTextResolver)}
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.Entities = suiteEntityResolver{text: ctx.Env().Texts.(suiteTextResolver)} })
 	// A case may declare its own decimal format for fn:format-number. The
 	// builtin library's two-argument form uses the standard symbols, so a
 	// declared format is installed by overriding that entry in a library
@@ -799,7 +800,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		// path has no leading slash, so two slashes made the drive the URI
 		// AUTHORITY and every relative reference in the test set resolved
 		// against a base with the drive letter missing.
-		ctx.StaticBaseURI = fileuri.Dir(abs)
+		ctx = ctx.WithStaticBaseURI(fileuri.Dir(abs))
 	}
 	// The environment may declare the base URI of the expression itself,
 	// which is distinct from the base URI of any document it is applied to.
@@ -808,17 +809,17 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		// absent, not a URI of that spelling. Cases use it to assert what
 		// happens when a relative reference has nothing to resolve against.
 		if b.URI == "#UNDEFINED" {
-			ctx.StaticBaseURI = ""
+			ctx = ctx.WithStaticBaseURI("")
 			continue
 		}
 		if b.URI != "" {
-			ctx.StaticBaseURI = b.URI
+			ctx = ctx.WithStaticBaseURI(b.URI)
 		}
 	}
 	// The suite expects fn:current-dateTime and its siblings to work. A fixed
 	// clock is used rather than the wall clock so that a rerun of the suite
 	// gives the same answers.
-	ctx = ctx.WithNow(SuiteClock)
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.Now, e.HasNow = SuiteClock, true })
 	// A <collection> environment supplies the documents fn:collection
 	// returns. Without this the function has no resolver and refuses, which
 	// is the correct default but not what these cases are testing.
@@ -826,7 +827,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// URI. Without a resolver the function refuses — correct by default, but
 	// not what these cases are testing.
 	if docs := envDocs(r, ts.Dir, env); docs != nil {
-		ctx.Docs = docs
+		ctx = ctx.WithEnv(func(e *xpath.Env) { e.Docs = docs })
 	}
 	if len(env.Collections) > 0 {
 		cr := &envCollections{
@@ -849,7 +850,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 			}
 			cr.queryURI[c.URI] = append(cr.queryURI[c.URI], c.Queries...)
 		}
-		ctx.Collections = cr
+		ctx = ctx.WithEnv(func(e *xpath.Env) { e.Collections = cr })
 	}
 	for name, seq := range vars {
 		ctx = ctx.WithVar(xdm.QName{Local: name}, seq)
@@ -884,7 +885,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// terminate would otherwise take the whole run with it — which is how the
 	// unbounded round() precision was found, after it consumed twenty minutes
 	// and all available memory before the harness could report anything.
-	ctx.Ctx = runCtx
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.Ctx = runCtx })
 	// numberformat121 and 122 recurse five thousand deep on purpose, to build
 	// a decimal of 10^5000 and 10^-5000 and check that format-number prints
 	// each exactly. xpath.MaxDepth is 500 and is a DoS guard for a caller
@@ -897,7 +898,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// its recursion is not a level of Descend: the body is an arrow chain
 	// whose call spends several frames per turn. It is still low enough that
 	// a genuine runaway terminates rather than exhausting the stack.
-	ctx.MaxDepth = 20000
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.MaxDepth = 20000 })
 	res := outcome{}
 	if r.Target == XQuery31 {
 		// An XQuery case holds a whole query, not an expression, and the
@@ -959,7 +960,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 			for _, m := range mods {
 				table[m.Namespace] = m.Source
 			}
-			ctx.Modules = xquery.MapModuleResolver{Modules: table}
+			ctx = ctx.WithEnv(func(e *xpath.Env) { e.Modules = xquery.MapModuleResolver{Modules: table} })
 		}
 		if res.err == nil {
 			res.seq, res.err = xpath.Eval(tc.Test.Query, ctx, ns)
@@ -978,6 +979,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		return rep
 	}
 	ok, why := check(want, &res)
+	recordCase(r.Target, ts, tc, &res, ok)
 	if ok {
 		rep.Outcome = Pass
 		return rep
@@ -1271,7 +1273,7 @@ var assertVersion = xpath.XPath30
 // in.
 func assertContext() *xpath.Context {
 	ctx := xpath.NewContext(nil, xpath.Builtins())
-	ctx.Version = assertVersion
+	ctx = ctx.WithVersion(assertVersion)
 	return ctx
 }
 
@@ -1299,7 +1301,7 @@ func seqString(s xdm.Sequence) string {
 		case *xdm.Atomic:
 			parts = append(parts, v.String())
 		case *xdm.Node:
-			parts = append(parts, "<"+v.Name.Local+">")
+			parts = append(parts, "<"+v.Name().Local+">")
 		}
 	}
 	return "(" + strings.Join(parts, ", ") + ")"
@@ -1467,45 +1469,45 @@ func xmlMatches(got xdm.Sequence, want string) (bool, string) {
 func collapseWS(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func writeNodeXML(sb *strings.Builder, n *xdm.Node) {
-	switch n.Kind {
+	switch n.Kind() {
 	case xdm.KindDocument:
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			writeNodeXML(sb, c)
 		}
 	case xdm.KindElement:
-		sb.WriteString("<" + n.Name.Lexical())
+		sb.WriteString("<" + n.Name().Lexical())
 		// Namespace declarations are part of the serialised element. Omitting
 		// them made a correct result compare unequal to the expected XML,
 		// which reads as an engine bug and is not one.
-		for _, ns := range n.Namespaces {
-			if ns.Name.Local == "" {
-				sb.WriteString(" xmlns=\"" + escapeAttr(ns.Value) + "\"")
+		for prefix, uri := range n.DeclaredNamespaces() {
+			if prefix == "" {
+				sb.WriteString(" xmlns=\"" + escapeAttr(uri) + "\"")
 				continue
 			}
 			// See writeNodeXMLTop: a prefixed undeclaration is a data-model
 			// marker, not XML 1.0 syntax, and writing it makes this string
 			// unparseable for the infosetEqual comparison below.
-			if ns.Value == "" {
+			if uri == "" {
 				continue
 			}
-			sb.WriteString(" xmlns:" + ns.Name.Local + "=\"" + escapeAttr(ns.Value) + "\"")
+			sb.WriteString(" xmlns:" + prefix + "=\"" + escapeAttr(uri) + "\"")
 		}
-		for _, a := range n.Attrs {
-			sb.WriteString(" " + a.Name.Lexical() + "=\"" + escapeAttr(a.Value) + "\"")
+		for a := range n.Attrs() {
+			sb.WriteString(" " + a.Name().Lexical() + "=\"" + escapeAttr(a.Value()) + "\"")
 		}
-		if len(n.Children) == 0 {
+		if n.FirstChild() == nil {
 			sb.WriteString("/>")
 			return
 		}
 		sb.WriteString(">")
-		for _, c := range n.Children {
+		for c := range n.Children() {
 			writeNodeXML(sb, c)
 		}
-		sb.WriteString("</" + n.Name.Lexical() + ">")
+		sb.WriteString("</" + n.Name().Lexical() + ">")
 	case xdm.KindText:
-		sb.WriteString(escapeText(n.Value))
+		sb.WriteString(escapeText(n.Value()))
 	case xdm.KindComment:
-		sb.WriteString("<!--" + n.Value + "-->")
+		sb.WriteString("<!--" + n.Value() + "-->")
 	case xdm.KindPI:
 		// The space is written even for an empty PI, though XML 1.0 §2.6 --
 		//   PI ::= '<?' PITarget (S (Char* - (Char* '?>' Char*)))? '?>'
@@ -1523,10 +1525,10 @@ func writeNodeXML(sb *strings.Builder, n *xdm.Node) {
 		// the comparison to reach infosetEqual, which cannot parse a bare PI
 		// because it has no root element. That is the thing worth fixing;
 		// changing the spelling here only moves which cases fail.
-		sb.WriteString("<?" + n.Name.Local + " " + n.Value + "?>")
+		sb.WriteString("<?" + n.Name().Local + " " + n.Value() + "?>")
 	case xdm.KindAttribute:
 		// A bare attribute in a result sequence serialises as its value.
-		sb.WriteString(escapeText(n.Value))
+		sb.WriteString(escapeText(n.Value()))
 	}
 }
 
@@ -1671,9 +1673,8 @@ func (c *envCollections) resolve(ctx *xpath.Context, uri string) (xdm.Sequence, 
 		if err != nil {
 			return nil, fmt.Errorf("collection %q: %w", uri, err)
 		}
-		sub := *ctx
-		sub.Collections = nil // a collection query does not nest
-		seq, err := compiled.Eval(&sub)
+		sub := ctx.WithEnv(func(e *xpath.Env) { e.Collections = nil }) // a collection query does not nest
+		seq, err := compiled.Eval(sub)
 		if err != nil {
 			return nil, fmt.Errorf("collection %q: %w", uri, err)
 		}
@@ -1829,7 +1830,7 @@ func decimalFormatLibrary(env Environment, ns resolver) xpath.FunctionLibrary {
 		}
 		// The running version, not a fixed 3.0: a picture using scientific
 		// notation is well-formed only from 3.1 on.
-		out, err := xpath.FormatNumberVersion(num, pic, df, ctx.Version)
+		out, err := xpath.FormatNumberVersion(num, pic, df, ctx.Version())
 		if err != nil {
 			return nil, err
 		}
@@ -2256,7 +2257,7 @@ func (d *envDocResolver) ResolveModule(href, base string) (*xdm.Node, string, er
 		return nil, "", fmt.Errorf("relative module href %q with no base URI", href)
 	}
 	if t, err := d.ResolveDocument(href, base); err == nil {
-		return t.Root, t.Root.BaseURI, nil
+		return t.Root, t.Root.BaseURI(), nil
 	}
 	files, err := xslt.NewFileResolver(d.r.Root)
 	if err != nil {
@@ -2483,7 +2484,7 @@ func foldEmptyPIs(s string) string {
 // serialised form uses a prefix nothing defines — which is what a conforming
 // serialiser emits and what the expected XML in the suite shows.
 func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
-	if n.Kind != xdm.KindElement {
+	if n.Kind() != xdm.KindElement {
 		writeNodeXML(sb, n)
 		return
 	}
@@ -2491,8 +2492,8 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 	// Only prefixes the element does not already declare need adding; the
 	// ordinary writer emits those.
 	declared := map[string]bool{}
-	for _, ns := range n.Namespaces {
-		declared[ns.Name.Local] = true
+	for prefix := range n.DeclaredNamespaces() {
+		declared[prefix] = true
 	}
 	extra := make([]string, 0, len(scope))
 	for prefix := range scope {
@@ -2507,10 +2508,10 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 	}
 	sort.Strings(extra)
 
-	sb.WriteString("<" + n.Name.Lexical())
-	for _, ns := range n.Namespaces {
-		if ns.Name.Local == "" {
-			sb.WriteString(" xmlns=\"" + escapeAttr(ns.Value) + "\"")
+	sb.WriteString("<" + n.Name().Lexical())
+	for prefix, uri := range n.DeclaredNamespaces() {
+		if prefix == "" {
+			sb.WriteString(" xmlns=\"" + escapeAttr(uri) + "\"")
 			continue
 		}
 		// A prefixed undeclaration, xmlns:p="", is XML 1.1 syntax that the
@@ -2519,10 +2520,10 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 		// string that is not an XML 1.0 document, so the final infosetEqual
 		// comparison could not parse it. Both real serialisers omit it unless
 		// undeclare-prefixes asks for it; this one does too.
-		if ns.Value == "" {
+		if uri == "" {
 			continue
 		}
-		sb.WriteString(" xmlns:" + ns.Name.Local + "=\"" + escapeAttr(ns.Value) + "\"")
+		sb.WriteString(" xmlns:" + prefix + "=\"" + escapeAttr(uri) + "\"")
 	}
 	for _, prefix := range extra {
 		if prefix == "" {
@@ -2531,18 +2532,18 @@ func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
 			sb.WriteString(" xmlns:" + prefix + "=\"" + escapeAttr(scope[prefix]) + "\"")
 		}
 	}
-	for _, a := range n.Attrs {
-		sb.WriteString(" " + a.Name.Lexical() + "=\"" + escapeAttr(a.Value) + "\"")
+	for a := range n.Attrs() {
+		sb.WriteString(" " + a.Name().Lexical() + "=\"" + escapeAttr(a.Value()) + "\"")
 	}
-	if len(n.Children) == 0 {
+	if n.FirstChild() == nil {
 		sb.WriteString("/>")
 		return
 	}
 	sb.WriteString(">")
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		writeNodeXML(sb, c)
 	}
-	sb.WriteString("</" + n.Name.Lexical() + ">")
+	sb.WriteString("</" + n.Name().Lexical() + ">")
 }
 
 // loadAssertFiles fills in the Value of any assertion whose expected result is
@@ -2610,16 +2611,16 @@ func nodesEqual(a, b *xdm.Node) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	if a.Kind != b.Kind {
+	if a.Kind() != b.Kind() {
 		return false
 	}
-	if a.Name.URI != b.Name.URI || a.Name.Local != b.Name.Local {
+	if a.Name().URI != b.Name().URI || a.Name().Local != b.Name().Local {
 		return false
 	}
-	if a.Kind != xdm.KindElement && a.Kind != xdm.KindDocument && a.Value != b.Value {
+	if a.Kind() != xdm.KindElement && a.Kind() != xdm.KindDocument && a.Value() != b.Value() {
 		return false
 	}
-	if a.Kind == xdm.KindElement && !attrsEqual(a, b) {
+	if a.Kind() == xdm.KindElement && !attrsEqual(a, b) {
 		return false
 	}
 	ac, bc := significantChildren(a), significantChildren(b)
@@ -2637,16 +2638,16 @@ func nodesEqual(a, b *xdm.Node) bool {
 // attrsEqual compares two elements' attributes as sets keyed by expanded name.
 // Namespace declarations are not attributes in the data model and are excluded.
 func attrsEqual(a, b *xdm.Node) bool {
-	if len(a.Attrs) != len(b.Attrs) {
+	if a.NumAttrs() != b.NumAttrs() {
 		return false
 	}
-	want := make(map[string]string, len(b.Attrs))
-	for _, at := range b.Attrs {
-		want[at.Name.Clark()] = at.Value
+	want := make(map[string]string, b.NumAttrs())
+	for at := range b.Attrs() {
+		want[at.Name().Clark()] = at.Value()
 	}
-	for _, at := range a.Attrs {
-		v, ok := want[at.Name.Clark()]
-		if !ok || v != at.Value {
+	for at := range a.Attrs() {
+		v, ok := want[at.Name().Clark()]
+		if !ok || v != at.Value() {
 			return false
 		}
 	}
@@ -2656,9 +2657,9 @@ func attrsEqual(a, b *xdm.Node) bool {
 // significantChildren drops whitespace-only text, which the expected value in
 // a test-set file carries from its own indentation.
 func significantChildren(n *xdm.Node) []*xdm.Node {
-	out := make([]*xdm.Node, 0, len(n.Children))
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindText && strings.TrimSpace(c.Value) == "" {
+	out := []*xdm.Node{}
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) == "" {
 			continue
 		}
 		out = append(out, c)

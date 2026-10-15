@@ -7,8 +7,9 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/internal/xdmfunc"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // fn:load-xquery-module (F&O 3.1 section 14.6.1) is implemented here and
@@ -27,14 +28,14 @@ import (
 // declarations are listed, because the result "does not include global
 // variables or functions declared in such a transitively-imported module".
 //
-// The module text is read ONLY through Context.Modules, which is the same
+// The module text is read ONLY through Env.Modules, which is the same
 // confinement "import module" has: an XQuery caller's Options.Modules and
 // Options.ModuleResolver, or whatever an XPath or XSLT host installed. With
 // none, nothing is read and the call is FOQM0002, as an import would be
 // XQST0059: the module was not found because nothing was allowed to look.
 func init() { xpath.RegisterXQueryModuleLoader(loadXQueryModule) }
 
-// queryModules is what an XQuery query installs as Context.Modules: its own
+// queryModules is what an XQuery query installs as Env.Modules: its own
 // module options, so that a module loaded from it sees the module store and
 // the schemas "import module" and "import schema" would see.
 type queryModules struct{ opts Options }
@@ -70,7 +71,7 @@ func loadXQueryModule(ctx *xpath.Context, uri string, options *xdm.MapItem) (xdm
 	}
 
 	var opts Options
-	switch m := ctx.Modules.(type) {
+	switch m := ctx.Env().Modules.(type) {
 	case queryModules:
 		opts = Options{Modules: m.opts.Modules, ModuleResolver: m.opts.ModuleResolver,
 			MaxModules: m.opts.MaxModules, MaxModuleBytes: m.opts.MaxModuleBytes,
@@ -80,7 +81,7 @@ func loadXQueryModule(ctx *xpath.Context, uri string, options *xdm.MapItem) (xdm
 	default:
 		opts.ModuleResolver = m
 	}
-	opts.BaseURI = ctx.StaticBaseURI
+	opts.BaseURI = ctx.StaticBaseURI()
 
 	src := "import module namespace m = " + quoteLiteral(uri)
 	for i, h := range call.hints {
@@ -117,12 +118,16 @@ func loadXQueryModule(ctx *xpath.Context, uri string, options *xdm.MapItem) (xdm
 	// A fresh context: the module sees none of the caller's variables,
 	// functions or focus, but it spends the caller's budgets and reads
 	// through the caller's resolvers.
-	sub := xpath.NewContext(call.item, xpath.Builtins()).AdoptBudget(ctx)
-	sub.Ctx = ctx.Ctx
-	sub.Docs, sub.Collections, sub.Texts = ctx.Docs, ctx.Collections, ctx.Texts
-	sub.Entities, sub.Environment, sub.Modules = ctx.Entities, ctx.Environment, ctx.Modules
-	sub.Depth, sub.MaxDepth = ctx.Depth, ctx.MaxDepth
-	sub.ImplicitTimezone, sub.Now, sub.HasNow = ctx.ImplicitTimezone, ctx.Now, ctx.HasNow
+	from := ctx.Env()
+	sub := xpath.NewContext(call.item, xpath.Builtins()).AdoptBudget(ctx).
+		WithEnv(func(e *xpath.Env) {
+			e.Ctx = from.Ctx
+			e.Docs, e.Collections, e.Texts = from.Docs, from.Collections, from.Texts
+			e.Entities, e.Environment, e.Modules = from.Entities, from.Environment, from.Modules
+			e.MaxDepth = from.MaxDepth
+			e.ImplicitTimezone, e.Now, e.HasNow = from.ImplicitTimezone, from.Now, from.HasNow
+		})
+	sub.Depth = ctx.Depth
 	for k, v := range call.vars {
 		sub.Vars[k] = v
 	}
@@ -172,16 +177,21 @@ func loadXQueryModule(ctx *xpath.Context, uri string, options *xdm.MapItem) (xdm
 // none of the module's globals.
 func moduleFunction(d *funcDecl, bound *xpath.Context) *xdm.FunctionItem {
 	fn, _ := bound.Funcs.Lookup(d.name, len(d.params))
-	return &xdm.FunctionItem{Name: d.name, Arity: len(d.params), Signature: fn.Signature,
+	item := &xdm.FunctionItem{Name: d.name, Arity: len(d.params), Signature: fn.Signature,
 		Invoke: func(c any, args []xdm.Sequence) (xdm.Sequence, error) {
 			call, ok := c.(*xpath.Context)
 			if !ok {
 				return nil, xdm.ErrType("%s invoked without an evaluation context", d.name.Lexical())
 			}
-			sub := bound.AdoptBudget(call)
-			sub.Ctx, sub.Depth, sub.MaxDepth = call.Ctx, call.Depth, call.MaxDepth
+			from := call.Env()
+			sub := bound.AdoptBudget(call).WithEnv(func(e *xpath.Env) {
+				e.Ctx, e.MaxDepth = from.Ctx, from.MaxDepth
+			})
+			sub.Depth = call.Depth
 			return fn.Call(sub, args)
 		}}
+	xdmfunc.Mark(item)
+	return item
 }
 
 // moduleCompileError maps a failed compile onto §14.6.1's codes: a module

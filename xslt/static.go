@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // Static variables, static parameters and shadow attributes, sections 9.5,
@@ -62,13 +62,14 @@ type staticPhase struct {
 	// tick counts the xsl:import edges the walk has crossed, so that two
 	// imports at the same nesting can still be ordered against one another.
 	tick int
-	// done records the module trees this pass has already walked, so that
-	// compileModule does not run conditional inclusion over them a second
-	// time. The trees are shared: a resolver hands back the same nodes for
-	// the same URI, and pruning a tree twice would be harmless but
-	// re-evaluating its use-when expressions would not, since the second
-	// evaluation would see static variables the first could not.
-	done map[*xdm.Node]bool
+	// done maps each module tree this pass has walked to the tree the rest
+	// of compilation reads in its place: a copy with conditional inclusion
+	// and shadow attributes applied. The module itself is left as the
+	// resolver handed it over -- the resolver shares it, by URI, with every
+	// other reader, fn:doc included -- and is never walked twice, since a
+	// second evaluation of its use-when expressions would see static
+	// variables the first could not.
+	done map[*xdm.Node]*xdm.Node
 	// now is the clock every static expression reads. 9.7 makes the current
 	// dateTime implementation-defined there and evaluates all static
 	// expressions "in a single execution scope", so it is read once, on
@@ -79,18 +80,39 @@ type staticPhase struct {
 
 // runStaticPhase performs conditional element inclusion and static variable
 // evaluation over the whole module graph, starting at the principal module.
+//
+// Every module it reaches is replaced, for the rest of compilation, by the
+// copy it builds; c.staticDone records which, and c.prunedModule looks it up.
 func (c *compiler) runStaticPhase(doc *xdm.Node) error {
+	// The phase rewrites what the version walks read; see versionMemo.
+	defer suspendVersionMemo()()
 	p := &staticPhase{
 		c:    c,
 		seen: map[string]bool{},
-		done: map[*xdm.Node]bool{},
+		done: map[*xdm.Node]*xdm.Node{},
 	}
 	if err := p.module(doc); err != nil {
 		return err
 	}
 	c.staticVars = p.vars
-	c.staticDone = p.done
+	if c.staticDone == nil {
+		c.staticDone = map[*xdm.Node]*xdm.Node{}
+	}
+	for k, v := range p.done {
+		c.staticDone[k] = v
+		c.staticDone[v] = v
+	}
 	return nil
+}
+
+// prunedModule returns the tree compilation reads for a module the resolver
+// handed back: the copy the static phase built of it, or the module itself
+// when that phase has not reached it.
+func (c *compiler) prunedModule(n *xdm.Node) *xdm.Node {
+	if cp, ok := c.staticDone[n]; ok {
+		return cp
+	}
+	return n
 }
 
 // importRankSpan is how far apart two nesting levels are placed, which bounds
@@ -112,9 +134,11 @@ type staticVar struct {
 	prec int
 }
 
-// module walks one stylesheet module.
+// module walks one stylesheet module, building the copy the rest of
+// compilation reads in its place: conditional inclusion applied and shadow
+// attributes expanded. The copy keeps the original's source positions.
 func (p *staticPhase) module(doc *xdm.Node) error {
-	if p.done[doc] {
+	if cp, ok := p.done[doc]; ok {
 		// The tree has already been pruned and its shadow attributes
 		// expanded, both of which must happen once. Its static variables
 		// still have to be re-declared, though: stylesheet tree order
@@ -122,50 +146,182 @@ func (p *staticPhase) module(doc *xdm.Node) error {
 		// names, so a module imported twice contributes its declarations
 		// twice, at two different import precedences. use-when-0137 imports
 		// one module either side of another and expects the two to conflict.
-		return p.redeclare(doc)
+		return p.redeclare(cp)
 	}
-	p.done[doc] = true
 	root := firstElement(doc)
 	if root == nil {
+		p.done[doc] = doc
 		return nil
 	}
+	if !mayPrune(root) {
+		// Nothing in the module can be excluded or rewritten, so it is read
+		// as it is: only its static declarations and module references are
+		// walked.
+		p.done[doc] = doc
+		p.done[root] = root
+		if root.Name().URI != xdm.NSXSL || !isStylesheetRootName(root.Name().Local) {
+			return nil
+		}
+		for ch := range root.Children() {
+			if ch.Kind() == xdm.KindElement {
+				if err := p.topLevel(ch); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	tree := xdm.NewTree()
+	tree.CopySourceFrom(root.Tree())
+	shell := tree.Root
+	if doc.Kind() == xdm.KindDocument {
+		shell.SetBaseURI(doc.BaseURI())
+		shell.SetDocumentURI(doc.DocumentURI())
+		shell.CopyTypingFrom(doc)
+	}
+	p.done[doc] = shell
+	defer tree.Finalize()
+	if doc.Kind() == xdm.KindDocument {
+		// The comments and processing instructions around the document
+		// element travel with it; only the element is walked.
+		for ch := range doc.Children() {
+			if ch != root {
+				copyStylesheetNode(shell, ch)
+				continue
+			}
+			if err := p.moduleRoot(shell, root); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	// An embedded stylesheet: the element is the module, and the bindings it
+	// inherited from the document around it come with it.
+	return p.moduleRoot(shell, root)
+}
+
+// mayPrune reports whether the static phase could change anything in the
+// module rooted at root: an element with a use-when, a shadow attribute, or a
+// top-level element forwards-compatible processing ignores. A module with none
+// is read as it is, which is most of them, and is not copied.
+func mayPrune(root *xdm.Node) bool {
+	if root.Name().URI == xdm.NSXSL && isStylesheetRootName(root.Name().Local) {
+		for ch := range root.Children() {
+			if ch.Kind() == xdm.KindElement && ignoredTopLevel(ch) {
+				return true
+			}
+		}
+	}
+	found := false
+	root.Walk(func(el *xdm.Node) bool {
+		if el.Kind() != xdm.KindElement {
+			return true
+		}
+		xsl := el.Name().URI == xdm.NSXSL
+		for a := range el.Attrs() {
+			switch {
+			case a.Name().URI == "" && xsl &&
+				(a.Name().Local == "use-when" || strings.HasPrefix(a.Name().Local, "_")):
+				found = true
+			case a.Name().URI == xdm.NSXSL && !xsl && a.Name().Local == "use-when":
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// moduleRoot copies a module's document element under shell and walks it.
+func (p *staticPhase) moduleRoot(shell, root *xdm.Node) error {
+	rc := copyStylesheetElement(shell, root)
+	if root.Parent() != nil && root.Parent().Kind() == xdm.KindElement {
+		for prefix, uri := range root.InScopeNamespaces() {
+			if _, declared := rc.LookupPrefix(prefix); !declared || prefix == "" {
+				if !declaresPrefix(root, prefix) {
+					rc.AddNamespace(prefix, uri)
+				}
+			}
+		}
+	}
+	p.done[root] = rc
 	// xsl:stylesheet is treated specially: excluding it excludes its children
 	// but not the element itself, so that one condition at the top of a module
 	// can govern every declaration in it.
-	if root.Kind == xdm.KindElement && root.Name.URI == xdm.NSXSL &&
-		isStylesheetRootName(root.Name.Local) {
-		if err := p.expandShadow(root); err != nil {
+	if root.Name().URI == xdm.NSXSL && isStylesheetRootName(root.Name().Local) {
+		var err error
+		if rc, err = p.expandShadow(shell, root, rc); err != nil {
 			return err
 		}
-		keep, err := p.included(root)
+		p.done[root] = rc
+		keep, err := p.included(rc)
 		if err != nil {
 			return err
 		}
 		if !keep {
-			root.Children = nil
 			return nil
 		}
-		return p.children(root, true)
+		return p.children(root, rc, true)
 	}
 	// A simplified stylesheet: the document element is a literal result
 	// element, so there are no declarations, only a template body.
-	return p.children(root, false)
+	return p.children(root, rc, false)
 }
 
-// children walks n's element children, pruning the excluded ones.
+// declaresPrefix reports whether el itself carries a namespace node for prefix.
+func declaresPrefix(el *xdm.Node, prefix string) bool {
+	for nsPrefix := range el.DeclaredNamespaces() {
+		if nsPrefix == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+// copyStylesheetElement appends a copy of el, its namespace declarations and
+// its attributes, without its children, to parent.
+func copyStylesheetElement(parent, el *xdm.Node) *xdm.Node {
+	c := parent.AppendShallowCopy(el)
+	xdm.CopyPosition(c, el)
+	for prefix, uri := range el.DeclaredNamespaces() {
+		c.AddNamespace(prefix, uri)
+	}
+	for a := range el.Attrs() {
+		xdm.CopyPosition(c.AppendShallowCopy(a), a)
+	}
+	return c
+}
+
+// copyStylesheetNode appends a deep copy of n to parent, positions included.
+func copyStylesheetNode(parent, n *xdm.Node) *xdm.Node {
+	if n.Kind() != xdm.KindElement {
+		c := parent.AppendShallowCopy(n)
+		xdm.CopyPosition(c, n)
+		return c
+	}
+	c := copyStylesheetElement(parent, n)
+	for ch := range n.Children() {
+		copyStylesheetNode(c, ch)
+	}
+	return c
+}
+
+// children walks the element children of n, the original of dst, copying to
+// dst the ones conditional inclusion keeps.
 //
 // topLevel says whether the children are top-level declarations, which is
 // where a static variable declaration and an xsl:include or xsl:import may
 // appear. Everything below that is walked only for its shadow attributes and
 // its use-when.
-func (p *staticPhase) children(n *xdm.Node, topLevel bool) error {
-	var kept []*xdm.Node
-	for _, ch := range n.Children {
-		if ch.Kind != xdm.KindElement {
-			kept = append(kept, ch)
+func (p *staticPhase) children(n, dst *xdm.Node, topLevel bool) error {
+	for ch := range n.Children() {
+		if ch.Kind() != xdm.KindElement {
+			copyStylesheetNode(dst, ch)
 			continue
 		}
-		if err := p.expandShadow(ch); err != nil {
+		cc := copyStylesheetElement(dst, ch)
+		cc, err := p.expandShadow(dst, ch, cc)
+		if err != nil {
 			return err
 		}
 		// A top-level element that forwards compatible behavior ignores is
@@ -173,14 +329,16 @@ func (p *staticPhase) children(n *xdm.Node, topLevel bool) error {
 		// and its content must be ignored", and forwards-008 writes
 		// use-when="fn:new-function()" on such an element -- an expression
 		// this version cannot even compile, which is the point.
-		if topLevel && ignoredTopLevel(ch) {
+		if topLevel && ignoredTopLevel(cc) {
+			dst.RemoveLastChild()
 			continue
 		}
-		keep, err := p.included(ch)
+		keep, err := p.included(cc)
 		if err != nil {
 			return err
 		}
 		if !keep {
+			dst.RemoveLastChild()
 			continue
 		}
 		// The children are walked first, because whether a static
@@ -189,17 +347,15 @@ func (p *staticPhase) children(n *xdm.Node, topLevel bool) error {
 		// with a false [xsl:]use-when inside a static xsl:variable and
 		// expects the declaration to be accepted: the child is not there by
 		// the time 9.5's rule is applied to it.
-		if err := p.children(ch, false); err != nil {
+		if err := p.children(ch, cc, false); err != nil {
 			return err
 		}
 		if topLevel {
-			if err := p.topLevel(ch); err != nil {
+			if err := p.topLevel(cc); err != nil {
 				return err
 			}
 		}
-		kept = append(kept, ch)
 	}
-	n.Children = kept
 	return nil
 }
 
@@ -207,10 +363,10 @@ func (p *staticPhase) children(n *xdm.Node, topLevel bool) error {
 // about: a static variable, whose value it computes, and a module reference,
 // whose target it walks in place.
 func (p *staticPhase) topLevel(el *xdm.Node) error {
-	if el.Name.URI != xdm.NSXSL {
+	if el.Name().URI != xdm.NSXSL {
 		return nil
 	}
-	switch el.Name.Local {
+	switch el.Name().Local {
 	case "variable", "param":
 		// static="yes" is XSLT 3.0's, and a 2.0 stylesheet writing it gets
 		// XTSE0090 from the grammar check. Evaluating the declaration here
@@ -231,7 +387,7 @@ func (p *staticPhase) topLevel(el *xdm.Node) error {
 func (p *staticPhase) declare(el *xdm.Node) error {
 	name := el.AttrValue("name")
 	if name == "" {
-		return fmt.Errorf("%s requires a name attribute", el.Name.Lexical())
+		return fmt.Errorf("%s requires a name attribute", el.Name().Lexical())
 	}
 	qn, err := resolveQNameAttr(el, name)
 	if err != nil {
@@ -267,12 +423,12 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 		if sel != "" {
 			return fmt.Errorf(
 				"XTSE0620: %s has a select attribute and non-empty content",
-				el.Name.Lexical())
+				el.Name().Lexical())
 		}
 		return fmt.Errorf(
 			"XTSE0010: %s has static=\"yes\" and a sequence constructor; "+
 				"a static variable's value must come from its select attribute",
-			el.Name.Lexical())
+			el.Name().Lexical())
 	}
 
 	// required="yes" says the value must come from the caller, and select
@@ -285,7 +441,7 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 		return fmt.Errorf(
 			"XTSE0010: %s has required=\"yes\" and a select attribute; "+
 				"a required parameter takes its value from the caller",
-			el.Name.Lexical())
+			el.Name().Lexical())
 	}
 	if required && !fromCaller {
 		return fmt.Errorf(
@@ -294,7 +450,7 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 	}
 	var val xdm.Sequence
 	switch {
-	case fromCaller && el.Name.Local == "param":
+	case fromCaller && el.Name().Local == "param":
 		val = supplied
 	case sel != "":
 		val, err = p.eval(el, sel)
@@ -317,7 +473,7 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 	if as := el.AttrValue("as"); as != "" {
 		t, terr := compileSequenceType(as, newNSResolver(el, ""))
 		if terr != nil {
-			return fmt.Errorf("in %s/@as: %w", el.Name.Lexical(), terr)
+			return fmt.Errorf("in %s/@as: %w", el.Name().Lexical(), terr)
 		}
 		// A value the CALLER supplied that will not convert is a type error,
 		// XTTE0590 -- the same code an xsl:param gets anywhere else, which is
@@ -326,14 +482,14 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 		// section 9.2 makes it implicitly mandatory and the caller having
 		// supplied nothing is the missing-value error rather than a type one.
 		code := "XTSE0590"
-		if fromCaller && el.Name.Local == "param" {
+		if fromCaller && el.Name().Local == "param" {
 			code = "XTTE0590"
 		}
 		conv, cerr := t.convertAs(val,
-			"static "+strings.TrimPrefix(el.Name.Local, "xsl:")+" $"+qn.Lexical(),
+			"static "+strings.TrimPrefix(el.Name().Local, "xsl:")+" $"+qn.Lexical(),
 			code)
 		if cerr != nil {
-			if !fromCaller && el.Name.Local == "param" {
+			if !fromCaller && el.Name().Local == "param" {
 				if len(val) == 0 && sel == "" {
 					return fmt.Errorf(
 						"XTDE0700: no value was supplied for the static parameter $%s, "+
@@ -355,7 +511,7 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 		val = conv
 	}
 
-	isParam := el.Name.Local == "param"
+	isParam := el.Name().Local == "param"
 	for i := range p.vars {
 		if p.vars[i].name.Clark() != key {
 			continue
@@ -376,7 +532,7 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 					"XTSE3450: static $%s is declared as xsl:%s at a higher "+
 						"import precedence than the xsl:%s declared before it "+
 						"in stylesheet tree order",
-					qn.Lexical(), el.Name.Local,
+					qn.Lexical(), el.Name().Local,
 					declKind(prev.isParam))
 			}
 			// A parameter whose value came from the caller is not
@@ -456,7 +612,7 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 	if href == "" || p.c.opts.Resolver == nil {
 		return nil
 	}
-	base := el.BaseURI
+	base := el.BaseURI()
 	if base == "" {
 		base = p.c.opts.BaseURI
 	}
@@ -480,7 +636,7 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 	}
 	// An imported module ranks below its importer; an included one shares the
 	// includer's precedence, so only xsl:import moves the depth.
-	if el.Name.Local == "import" {
+	if el.Name().Local == "import" {
 		// Section 3.10.2 orders sibling imports as well as nested ones: "the
 		// one that occurs later in document order has higher import
 		// precedence". Depth alone gave two siblings the same rank, which is
@@ -516,7 +672,7 @@ func staticDeclAllowed(el *xdm.Node) bool {
 	if !isStaticDecl(el) {
 		return false
 	}
-	if el.Name.Local == "param" {
+	if el.Name().Local == "param" {
 		return processorAtLeast30()
 	}
 	return moduleAtLeast30(el)
@@ -565,12 +721,12 @@ func cacheMemoises(v string) bool {
 // and reading the indentation as a sequence constructor would reject the
 // declarations 9.5 exists to allow.
 func emptyStaticContent(el *xdm.Node) bool {
-	for _, ch := range el.Children {
-		switch ch.Kind {
+	for ch := range el.Children() {
+		switch ch.Kind() {
 		case xdm.KindElement:
 			return false
 		case xdm.KindText:
-			if strings.TrimSpace(ch.Value) != "" {
+			if strings.TrimSpace(ch.Value()) != "" {
 				return false
 			}
 		}
@@ -591,9 +747,14 @@ func emptyStaticContent(el *xdm.Node) bool {
 // It applies to XSLT elements alone. On a literal result element an underscore
 // is an ordinary first character of an ordinary attribute name, which the
 // result tree carries through unchanged.
-func (p *staticPhase) expandShadow(el *xdm.Node) error {
-	if el.Name.URI != xdm.NSXSL {
-		return nil
+//
+// el is the copy of orig just appended to parent, which is where it is read
+// from: its ancestors are already expanded. When it has shadow attributes it
+// is taken back out and appended again with them expanded, and the new copy
+// is returned.
+func (p *staticPhase) expandShadow(parent, orig, el *xdm.Node) (*xdm.Node, error) {
+	if el.Name().URI != xdm.NSXSL {
+		return el, nil
 	}
 	// Shadow attributes are XSLT 3.0's. To a 2.0 stylesheet an underscore is
 	// the ordinary first character of an attribute name the summaries do not
@@ -616,57 +777,59 @@ func (p *staticPhase) expandShadow(el *xdm.Node) error {
 	// writes _new-each-time in a version="2.0" module scoped XSLT30+, the
 	// same shape as the plain new-each-time beside it.
 	if !processorAtLeast30() && !isModuleElement(el) {
-		return nil
+		return el, nil
 	}
 	// The overwhelmingly common case is an element with no shadow attribute
 	// at all, and this runs for every element of every module.
 	any := false
-	for _, a := range el.Attrs {
-		if a.Name.URI == "" && strings.HasPrefix(a.Name.Local, "_") {
+	for a := range el.Attrs() {
+		if a.Name().URI == "" && strings.HasPrefix(a.Name().Local, "_") {
 			any = true
 			break
 		}
 	}
 	if !any {
-		return nil
+		return el, nil
 	}
 
+	// The values are read from orig, whose attributes el copies: el is
+	// about to be taken back out of the tree.
 	shadowed := map[string]string{}
 	var kept []*xdm.Node
-	for _, a := range el.Attrs {
-		if a.Name.URI != "" || !strings.HasPrefix(a.Name.Local, "_") {
+	for a := range orig.Attrs() {
+		if a.Name().URI != "" || !strings.HasPrefix(a.Name().Local, "_") {
 			kept = append(kept, a)
 			continue
 		}
-		v, err := p.valueTemplate(el, a.Value)
+		v, err := p.valueTemplate(el, a.Value())
 		if err != nil {
-			return fmt.Errorf("in %s/@%s: %w",
-				el.Name.Lexical(), a.Name.Local, err)
+			return nil, fmt.Errorf("in %s/@%s: %w",
+				el.Name().Lexical(), a.Name().Local, err)
 		}
-		shadowed[strings.TrimPrefix(a.Name.Local, "_")] = v
+		shadowed[strings.TrimPrefix(a.Name().Local, "_")] = v
 	}
 	// "If a shadow attribute is present, then any attribute node with name N
 	// is ignored" — including for the purpose of reporting an error in its
 	// value, which is why the target is removed rather than left in place for
 	// the grammar check to object to.
-	el.Attrs = el.Attrs[:0]
+	parent.RemoveLastChild()
+	c := parent.AppendShallowCopy(orig)
+	xdm.CopyPosition(c, orig)
+	for prefix, uri := range orig.DeclaredNamespaces() {
+		c.AddNamespace(prefix, uri)
+	}
 	for _, a := range kept {
-		if a.Name.URI == "" {
-			if _, shadowedOut := shadowed[a.Name.Local]; shadowedOut {
+		if a.Name().URI == "" {
+			if _, shadowedOut := shadowed[a.Name().Local]; shadowedOut {
 				continue
 			}
 		}
-		el.Attrs = append(el.Attrs, a)
+		xdm.CopyPosition(c.AppendShallowCopy(a), a)
 	}
 	for name, v := range shadowed {
-		el.Attrs = append(el.Attrs, &xdm.Node{
-			Kind:   xdm.KindAttribute,
-			Name:   xdm.QName{Local: name},
-			Value:  v,
-			Parent: el,
-		})
+		c.AppendAttr(xdm.QName{Local: name}, v)
 	}
-	return nil
+	return c, nil
 }
 
 // valueTemplate evaluates a value template whose expressions are static.
@@ -741,12 +904,12 @@ func (p *staticPhase) valueTemplate(el *xdm.Node, src string) (string, error) {
 // functions alike, so there is nothing for the zero values to withhold that
 // the specification does not already withhold.
 func (p *staticPhase) staticRuntime() *runtime {
-	rt := &runtime{
+	rt := &runtime{transformState: &transformState{
 		static: true,
 		opts:   &TransformOptions{},
 		sheet:  p.c.sheet,
 		goCtx:  context.Background(),
-	}
+	}}
 	// Only a ModuleResolver that is also a DocumentResolver can answer
 	// stylesheet-location, which is the same pairing eval already requires
 	// for fn:doc, and for the same reason: FileResolver is both, and a
@@ -828,15 +991,22 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 	// run time; the module's own version still governs the grammar. Left at
 	// the default the library was 2.0, so use-when-0127b could not call
 	// fn:generate-id, which F&O 3.0 defines.
-	if processorAtLeast30() {
-		ctx.LibraryVersion = xpath.XPath31
-		ctx.RegexVersion = xpath.XPath31
-	}
-	ctx.StaticBaseURI = el.BaseURI
 	if p.now.IsZero() {
 		p.now = time.Now()
 	}
-	ctx = ctx.WithNow(p.now)
+	ctx = ctx.WithEnv(func(e *xpath.Env) {
+		if processorAtLeast30() {
+			e.LibraryVersion = xpath.XPath31
+			e.RegexVersion = xpath.XPath31
+		}
+		e.Now, e.HasNow = p.now, true
+		// Documents follow the processor version: see the note below.
+		if processorAtLeast30() {
+			if docs, ok := p.c.opts.Resolver.(xpath.DocumentResolver); ok {
+				e.Docs = docs
+			}
+		}
+	}).WithStaticBaseURI(el.BaseURI())
 	// Whether a static expression can read a document follows the PROCESSOR
 	// version, and the two specifications say opposite things about it.
 	//
@@ -863,11 +1033,8 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 	// version from the module's own @version, and doc('') is the empty
 	// reference, which denotes the document it appears in -- the stylesheet
 	// module, whose URI is the static base URI just set. Saxon 9.8 passes it.
-	if processorAtLeast30() {
-		if docs, ok := p.c.opts.Resolver.(xpath.DocumentResolver); ok {
-			ctx.Docs = docs
-		}
-	}
+	//
+	// The resolver is installed with the rest of the environment above.
 	for _, sv := range p.vars {
 		ctx = ctx.WithVar(sv.name, sv.val)
 	}
@@ -882,12 +1049,12 @@ func (p *staticPhase) included(el *xdm.Node) (bool, error) {
 	// element on the strength of an attribute XTSE0090 is about to reject it
 	// for carrying -- and having pruned it, nothing would be left to reject.
 	var expr string
-	if el.Name.URI == xdm.NSXSL {
+	if el.Name().URI == xdm.NSXSL {
 		if a := el.Attr("", "use-when"); a != nil {
-			expr = a.Value
+			expr = a.Value()
 		}
 	} else if a := el.Attr(xdm.NSXSL, "use-when"); a != nil {
-		expr = a.Value
+		expr = a.Value()
 	}
 	if expr == "" {
 		return true, nil
@@ -896,11 +1063,11 @@ func (p *staticPhase) included(el *xdm.Node) (bool, error) {
 	if err != nil {
 		// An error in the use-when expression itself is reported: it is the
 		// one error the exclusion rule does not suppress.
-		return false, fmt.Errorf("in %s/@use-when: %w", el.Name.Lexical(), err)
+		return false, fmt.Errorf("in %s/@use-when: %w", el.Name().Lexical(), err)
 	}
 	b, err := xpath.EffectiveBooleanValue(v)
 	if err != nil {
-		return false, fmt.Errorf("in %s/@use-when: %w", el.Name.Lexical(), err)
+		return false, fmt.Errorf("in %s/@use-when: %w", el.Name().Lexical(), err)
 	}
 	return b, nil
 }
@@ -916,7 +1083,7 @@ func (p *staticPhase) included(el *xdm.Node) (bool, error) {
 func (c *compiler) staticGlobal(el *xdm.Node) (*Variable, error) {
 	name := el.AttrValue("name")
 	if name == "" {
-		return nil, fmt.Errorf("%s requires a name attribute", el.Name.Lexical())
+		return nil, fmt.Errorf("%s requires a name attribute", el.Name().Lexical())
 	}
 	qn, err := resolveQNameAttr(el, name)
 	if err != nil {
@@ -924,9 +1091,9 @@ func (c *compiler) staticGlobal(el *xdm.Node) (*Variable, error) {
 	}
 	v := &Variable{
 		Name:     qn,
-		IsParam:  el.Name.Local == "param",
+		IsParam:  el.Name().Local == "param",
 		isStatic: true,
-		baseURI:  el.BaseURI,
+		baseURI:  el.BaseURI(),
 	}
 	key := qn.Clark()
 	for _, sv := range c.staticVars {
@@ -940,16 +1107,16 @@ func (c *compiler) staticGlobal(el *xdm.Node) (*Variable, error) {
 	// missing here means the two walks disagreed rather than that the
 	// stylesheet is at fault.
 	return nil, fmt.Errorf("static %s $%s was not evaluated by the static phase",
-		el.Name.Local, qn.Lexical())
+		el.Name().Local, qn.Lexical())
 }
 
 // isModuleElement reports whether el is the element a stylesheet module is
 // rooted at.
 func isModuleElement(el *xdm.Node) bool {
-	return el.Kind == xdm.KindElement && el.Name.URI == xdm.NSXSL &&
-		isStylesheetRootName(el.Name.Local) &&
-		(el.Parent == nil || el.Parent.Kind != xdm.KindElement ||
-			el.Parent.Name.URI != xdm.NSXSL)
+	return el.Kind() == xdm.KindElement && el.Name().URI == xdm.NSXSL &&
+		isStylesheetRootName(el.Name().Local) &&
+		(el.Parent() == nil || el.Parent().Kind() != xdm.KindElement ||
+			el.Parent().Name().URI != xdm.NSXSL)
 }
 
 // ignoredTopLevel reports whether ch, a child of a module element, is one
@@ -961,7 +1128,7 @@ func isModuleElement(el *xdm.Node) bool {
 // merely greater than 2.0, so a version="3.0" module on a 3.0 processor has
 // its misplaced top-level elements reported (XTSE0010), not discarded.
 func ignoredTopLevel(ch *xdm.Node) bool {
-	if ch.Name.URI != xdm.NSXSL || !effectiveForwards(ch) {
+	if ch.Name().URI != xdm.NSXSL || !effectiveForwards(ch) {
 		return false
 	}
 	// Not inside an xsl:package: see inPackage. Discarding the element here
@@ -970,10 +1137,10 @@ func ignoredTopLevel(ch *xdm.Node) bool {
 	if inPackage(ch) {
 		return false
 	}
-	if _, known := xsltElements[ch.Name.Local]; !known {
+	if _, known := xsltElements()[ch.Name().Local]; !known {
 		return true
 	}
-	return !xsltDeclarations[ch.Name.Local]
+	return !xsltDeclarations[ch.Name().Local]
 }
 
 // redeclare walks a module tree that has already been pruned, re-evaluating
@@ -986,15 +1153,15 @@ func ignoredTopLevel(ch *xdm.Node) bool {
 // the position in tree order this visit occupies.
 func (p *staticPhase) redeclare(doc *xdm.Node) error {
 	root := firstElement(doc)
-	if root == nil || root.Kind != xdm.KindElement ||
-		root.Name.URI != xdm.NSXSL || !isStylesheetRootName(root.Name.Local) {
+	if root == nil || root.Kind() != xdm.KindElement ||
+		root.Name().URI != xdm.NSXSL || !isStylesheetRootName(root.Name().Local) {
 		return nil
 	}
 	for _, ch := range root.ChildElements() {
-		if ch.Name.URI != xdm.NSXSL {
+		if ch.Name().URI != xdm.NSXSL {
 			continue
 		}
-		switch ch.Name.Local {
+		switch ch.Name().Local {
 		case "variable", "param":
 			if staticDeclAllowed(ch) {
 				if err := p.declare(ch); err != nil {

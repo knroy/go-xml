@@ -3,7 +3,7 @@ package xquery
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // forIsWindow reports whether the "for" at the cursor begins a window clause

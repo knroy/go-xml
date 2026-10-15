@@ -3,7 +3,7 @@ package xsd
 import (
 	"fmt"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Validating a single element against a declaration or a type.
@@ -21,18 +21,18 @@ import (
 // declaration and must be valid against it. An element with no declaration is
 // an error rather than a pass, which is what distinguishes strict from lax.
 func (s *Schema) ValidateElement(el *xdm.Node, opts ValidateOptions) error {
-	if el == nil || el.Kind != xdm.KindElement {
+	if el == nil || el.Kind() != xdm.KindElement {
 		return fmt.Errorf("xsd: ValidateElement needs an element")
 	}
 	// Prefix-insensitive, for the reason given in ValidateAgainstType: the
 	// element was built by a stylesheet using its own prefix, and the schema
 	// stores the declaration under the one its document used.
-	if _, ok := s.Elements[bareName(el.Name)]; !ok {
+	if _, ok := s.Elements[bareName(el.Name())]; !ok {
 		return &ValidationErrors{Errors: []*ValidationError{{
 			Code: "cvc-elt.1",
 			Message: fmt.Sprintf("no global declaration for element %s",
-				showName(el.Name)),
-			Path: "/" + el.Name.Local,
+				showName(el.Name())),
+			Path: "/" + el.Name().Local,
 		}}}
 	}
 	return s.Validate(el, opts)
@@ -56,15 +56,37 @@ func (s *Schema) ValidateElement(el *xdm.Node, opts ValidateOptions) error {
 // returned the element instead of the XQDY0027 the invalid NCName owes
 // (qischema90621-err).
 func (s *Schema) ValidateElementLax(el *xdm.Node, opts ValidateOptions) error {
-	if el == nil || el.Kind != xdm.KindElement {
-		return fmt.Errorf("xsd: ValidateElementLax needs an element")
-	}
-	if _, ok := s.Elements[bareName(el.Name)]; !ok {
-		if el.Attr(NSInstance, "type") == nil {
-			return nil
-		}
+	if ok, err := s.laxAssesses(el); !ok {
+		return err
 	}
 	return s.Validate(el, opts)
+}
+
+// ValidateElementLaxCopy is ValidateElementLax returning the typed copy, as
+// ValidateCopy is to Validate. An element lax assessment skips is returned as
+// it is: nothing was assessed, so there is nothing to type.
+func (s *Schema) ValidateElementLaxCopy(el *xdm.Node, opts ValidateOptions) (*xdm.Node, error) {
+	if ok, err := s.laxAssesses(el); !ok {
+		if err != nil {
+			return nil, err
+		}
+		return el, nil
+	}
+	return s.ValidateCopy(el, opts)
+}
+
+// laxAssesses reports whether lax assessment has anything to assess el
+// against, and an error when el is not an element.
+func (s *Schema) laxAssesses(el *xdm.Node) (bool, error) {
+	if el == nil || el.Kind() != xdm.KindElement {
+		return false, fmt.Errorf("xsd: ValidateElementLax needs an element")
+	}
+	if _, ok := s.Elements[bareName(el.Name())]; !ok {
+		if el.Attr(NSInstance, "type") == nil {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // HasElementDeclaration reports whether the schema declares a global element
@@ -88,10 +110,10 @@ func (s *Schema) HasElementDeclaration(name xdm.QName) bool {
 // there, so <doc xsi:type="xs:anyType"> under validation="strict" reported no
 // top-level declaration rather than validating.
 func (s *Schema) CanAssessStrictly(el *xdm.Node) bool {
-	if el == nil || el.Kind != xdm.KindElement {
+	if el == nil || el.Kind() != xdm.KindElement {
 		return false
 	}
-	if s.HasElementDeclaration(el.Name) {
+	if s.HasElementDeclaration(el.Name()) {
 		return true
 	}
 	return el.Attr(NSInstance, "type") != nil
@@ -112,19 +134,32 @@ func (s *Schema) HasAttributeDeclaration(name xdm.QName) bool {
 // type, and the value has to satisfy it. lax passes an attribute the schema
 // does not declare; strict rejects it.
 func (s *Schema) ValidateAttribute(at *xdm.Node, lax bool, opts ValidateOptions) error {
-	if at == nil || at.Kind != xdm.KindAttribute {
-		return fmt.Errorf("xsd: ValidateAttribute needs an attribute")
+	_, err := s.validateAttribute(at, lax, opts, false)
+	return err
+}
+
+// ValidateAttributeCopy is ValidateAttribute returning the typed copy, as
+// ValidateCopy is to Validate. An attribute lax assessment skips is returned
+// as it is.
+func (s *Schema) ValidateAttributeCopy(at *xdm.Node, lax bool, opts ValidateOptions) (*xdm.Node, error) {
+	return s.validateAttribute(at, lax, opts, true)
+}
+
+func (s *Schema) validateAttribute(at *xdm.Node, lax bool, opts ValidateOptions,
+	typed bool) (*xdm.Node, error) {
+	if at == nil || at.Kind() != xdm.KindAttribute {
+		return nil, fmt.Errorf("xsd: ValidateAttribute needs an attribute")
 	}
-	decl, ok := s.Attributes[bareName(at.Name)]
+	decl, ok := s.Attributes[bareName(at.Name())]
 	if !ok || decl == nil || decl.Type == nil {
 		if lax {
-			return nil
+			return at, nil
 		}
-		return &ValidationErrors{Errors: []*ValidationError{{
+		return nil, &ValidationErrors{Errors: []*ValidationError{{
 			Code: "cvc-attribute.1",
 			Message: fmt.Sprintf("no global declaration for attribute %s",
-				showName(at.Name)),
-			Path: "/@" + at.Name.Local,
+				showName(at.Name())),
+			Path: "/@" + at.Name().Local,
 		}}}
 	}
 	// The declaration's type is passed as a component rather than by name.
@@ -132,7 +167,7 @@ func (s *Schema) ValidateAttribute(at *xdm.Node, lax bool, opts ValidateOptions)
 	// no name to look up — the built-in xml:lang is one, being a union of
 	// xs:language with the empty string — and routing through the name turned
 	// every such declaration into "no type named {…}… in the schema".
-	return s.validateNodeAgainstType(at, decl.Type, decl.Type.TypeName(), opts)
+	return s.validateNodeAgainstType(at, decl.Type, decl.Type.TypeName(), opts, typed)
 }
 
 // ValidateAgainstType checks one element or attribute against a named type.
@@ -142,9 +177,22 @@ func (s *Schema) ValidateAttribute(at *xdm.Node, lax bool, opts ValidateOptions)
 // anything at all may be asked to match xs:integer.
 func (s *Schema) ValidateAgainstType(n *xdm.Node, typeName xdm.QName,
 	opts ValidateOptions) error {
+	_, err := s.validateAgainstNamedType(n, typeName, opts, false)
+	return err
+}
+
+// ValidateAgainstTypeCopy is ValidateAgainstType returning the typed copy, as
+// ValidateCopy is to Validate.
+func (s *Schema) ValidateAgainstTypeCopy(n *xdm.Node, typeName xdm.QName,
+	opts ValidateOptions) (*xdm.Node, error) {
+	return s.validateAgainstNamedType(n, typeName, opts, true)
+}
+
+func (s *Schema) validateAgainstNamedType(n *xdm.Node, typeName xdm.QName,
+	opts ValidateOptions, typed bool) (*xdm.Node, error) {
 
 	if n == nil {
-		return fmt.Errorf("xsd: ValidateAgainstType needs a node")
+		return nil, fmt.Errorf("xsd: ValidateAgainstType needs a node")
 	}
 	// A QName is compared as a whole struct, prefix included, and a schema
 	// stores a type under the prefix its own document used. Looking up the
@@ -158,31 +206,37 @@ func (s *Schema) ValidateAgainstType(n *xdm.Node, typeName xdm.QName,
 			typeName.URI == xdm.NSXS {
 			typ = bt
 		} else {
-			return &ValidationErrors{Errors: []*ValidationError{{
+			return nil, &ValidationErrors{Errors: []*ValidationError{{
 				Code: "cvc-type.1",
 				Message: fmt.Sprintf("no type named %s in the schema",
 					showName(typeName)),
 			}}}
 		}
 	}
-	return s.validateNodeAgainstType(n, typ, typeName, opts)
+	return s.validateNodeAgainstType(n, typ, typeName, opts, typed)
 }
 
 // validateNodeAgainstType is ValidateAgainstType with the type already
 // resolved, so that a caller holding an anonymous type component can use it.
 // typeName is carried alongside only for error messages and the annotation.
+// With typed set it works on a typed copy of n and returns it.
 func (s *Schema) validateNodeAgainstType(n *xdm.Node, typ Type,
-	typeName xdm.QName, opts ValidateOptions) error {
-
-	if opts.MaxErrors == 0 {
-		opts.MaxErrors = DefaultMaxErrors
+	typeName xdm.QName, opts ValidateOptions, typed bool) (*xdm.Node, error) {
+	check := func(v *validator, n *xdm.Node) error {
+		return v.checkAgainstType(n, typ, typeName)
 	}
-	if opts.MaxDepth == 0 {
-		opts.MaxDepth = DefaultMaxDepth
+	if typed {
+		if k := n.Kind(); k != xdm.KindElement && k != xdm.KindAttribute {
+			return nil, check(nil, n)
+		}
+		return s.typedCopy(nil, n, opts, check)
 	}
-	v := &validator{schema: s, opts: opts, ids: map[string]int{}}
+	return nil, check(s.newValidator(nil, opts), n)
+}
 
-	switch n.Kind {
+// checkAgainstType assesses n against typ.
+func (v *validator) checkAgainstType(n *xdm.Node, typ Type, typeName xdm.QName) error {
+	switch n.Kind() {
 	case xdm.KindElement:
 		v.validateAgainstType(n, typ, nil)
 	case xdm.KindAttribute:
@@ -193,16 +247,16 @@ func (s *Schema) validateNodeAgainstType(n *xdm.Node, typ Type,
 		if !ok {
 			return fmt.Errorf(
 				"xsd: attribute %s cannot be validated against complex type %s",
-				n.Name.Local, showName(typeName))
+				n.Name().Local, showName(typeName))
 		}
-		v.validateSimpleContent(n, n.Value, st, nil)
-		if opts.Annotate && len(v.errs) == 0 && typeName.Local != "" {
+		v.validateSimpleContent(n, n.Value(), st, nil)
+		if v.typed && len(v.errs) == 0 && typeName.Local != "" {
 			// The element branch stamps the annotation inside the validator;
 			// this one has to do it here, because validateSimpleContent works
 			// on a value rather than on a declared node. Without it an
 			// attribute validated against a named type came out untyped and
 			// "instance of attribute(a, my:t)" answered false for it.
-			s.setResolvedAnnotation(n,
+			v.setResolvedAnnotation(n,
 				xdm.AnnotationName(typeName.URI, typeName.Local), typ)
 		}
 	default:
@@ -438,14 +492,18 @@ func resolveAnnotationMeaning(key string, t Type) (derivedPrimitive, listItem st
 // the environment here is what lets those walks reach this schema's
 // definitions rather than whatever a later, unrelated schema registered under
 // the same lexical name.
-func (s *Schema) setResolvedAnnotation(n *xdm.Node, annotation string, t Type) {
+func (v *validator) setResolvedAnnotation(n *xdm.Node, annotation string, t Type) {
 	if annotation == "" {
 		return
 	}
 	prim, item := resolveAnnotationMeaning(annotation, t)
-	n.SetTypeAnnotationResolved(annotation, prim, item)
-	if s != nil {
-		n.SetTypeEnv(s.typeEnv)
+	v.setTypeAnnotationResolved(n, annotation, prim, item)
+	if s := v.schema; s != nil {
+		if v.layer != nil {
+			v.layer.SetTypeEnv(n, s.typeEnv)
+		} else {
+			n.SetTypeEnv(s.typeEnv)
+		}
 	}
 }
 

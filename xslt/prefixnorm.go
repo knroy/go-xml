@@ -1,8 +1,7 @@
 package xslt
 
 import (
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // htmlNativeNamespaces are the three vocabularies an HTML5 parser understands
@@ -60,17 +59,17 @@ func sequenceNeedsPrefixNorm(seq xdm.Sequence) bool {
 }
 
 func nodeNeedsPrefixNorm(n *xdm.Node) bool {
-	if n.Kind == xdm.KindElement {
-		if n.Name.Prefix != "" && htmlNativeNamespaces[n.Name.URI] {
+	if n.Kind() == xdm.KindElement {
+		if n.Name().Prefix != "" && htmlNativeNamespaces[n.Name().URI] {
 			return true
 		}
-		for _, ns := range n.Namespaces {
-			if ns.Name.Local != "" && htmlNativeNamespaces[ns.Value] {
+		for prefix, uri := range n.DeclaredNamespaces() {
+			if prefix != "" && htmlNativeNamespaces[uri] {
 				return true
 			}
 		}
 	}
-	for _, c := range n.Children {
+	for c := range n.Children() {
 		if nodeNeedsPrefixNorm(c) {
 			return true
 		}
@@ -80,32 +79,31 @@ func nodeNeedsPrefixNorm(n *xdm.Node) bool {
 
 // normalizeNodePrefixes copies n with the rewriting applied.
 func normalizeNodePrefixes(n *xdm.Node) *xdm.Node {
-	c := xdmbuild.ShallowCopy(n)
-	if c.Kind == xdm.KindElement {
-		if htmlNativeNamespaces[c.Name.URI] {
-			xdmbuild.SetName(c, xdm.QName{URI: c.Name.URI, Local: c.Name.Local})
-		}
+	c := xdm.ShallowCopy(n)
+	normalizeInto(c, n)
+	return c
+}
+
+// normalizeInto completes c, a shallow copy of n, with the rewriting applied:
+// its namespace declarations, attributes and children.
+func normalizeInto(c, n *xdm.Node) {
+	if c.Kind() == xdm.KindElement && htmlNativeNamespaces[c.Name().URI] {
+		c.SetName(xdm.QName{URI: c.Name().URI, Local: c.Name().Local})
+	}
+	for prefix, uri := range n.DeclaredNamespaces() {
 		// A namespace node binding a prefix to one of the three is removed
 		// outright. The default binding is kept: it is how the element's own
 		// unprefixed name is spelled, and dropping it would leave the
 		// serializer to reinvent it lower down the tree than it belongs.
-		var keep []*xdm.Node
-		for _, ns := range c.Namespaces {
-			if ns.Name.Local != "" && htmlNativeNamespaces[ns.Value] {
-				continue
-			}
-			keep = append(keep, ns)
+		if c.Kind() == xdm.KindElement && prefix != "" && htmlNativeNamespaces[uri] {
+			continue
 		}
-		xdmbuild.SetNamespaces(c, keep)
+		c.AddNamespace(prefix, uri)
 	}
-	if len(n.Children) > 0 {
-		kids := make([]*xdm.Node, 0, len(n.Children))
-		for _, k := range n.Children {
-			nk := normalizeNodePrefixes(k)
-			xdmbuild.SetParent(nk, c)
-			kids = append(kids, nk)
-		}
-		xdmbuild.SetChildren(c, kids)
+	for a := range n.Attrs() {
+		c.AppendShallowCopy(a)
 	}
-	return c
+	for k := range n.Children() {
+		normalizeInto(c.AppendShallowCopy(k), k)
+	}
 }

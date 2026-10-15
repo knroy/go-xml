@@ -46,7 +46,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // sweepConvDoc is an untyped tree: every attribute atomizes to
@@ -93,7 +93,7 @@ func evalSweepConv(t *testing.T, doc, expr string) (string, error) {
 	lib := NewLibrary(Builtins())
 	RegisterXSLTFuncs(lib)
 	ctx := NewContext(root, lib)
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	comp, err := CompileVersion(expr, sweepConvNS{}, XPath31)
 	if err != nil {
 		return "", err

@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The language-inclusion procedure unrolls a repetition into one state per

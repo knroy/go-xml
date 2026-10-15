@@ -9,7 +9,7 @@ import (
 	"testing"
 	"unicode/utf16"
 
-	"github.com/knroy/go-xml/internal/fileuri"
+	"github.com/knroy/go-xml/v2/internal/fileuri"
 )
 
 // These tests exist because external entity resolution is the XXE boundary.
@@ -112,10 +112,10 @@ func TestExternalEntityResolvesWhenPermitted(t *testing.T) {
 	}
 	// The replacement text is parsed as MARKUP, not delivered as characters:
 	// an entity is a way to factor out a fragment.
-	if n := len(tree.Root.Children[0].Children); n != 1 {
+	if n := len(kids(kids(tree.Root)[0])); n != 1 {
 		t.Fatalf("want one child element from the entity, got %d", n)
 	}
-	if got := tree.Root.Children[0].Children[0].Name.Local; got != "frag" {
+	if got := kids(kids(tree.Root)[0])[0].Name().Local; got != "frag" {
 		t.Fatalf("entity text was not parsed as markup: got %q", got)
 	}
 }
@@ -402,9 +402,9 @@ func TestTextDeclarationIsStripped(t *testing.T) {
 <r>&e;</r>`,
 	})
 	tree := mustParseExternal(t, dir, "doc.xml")
-	for _, c := range tree.Root.Children[0].Children {
-		if c.Kind == KindPI {
-			t.Fatalf("text declaration survived as a PI: %q", c.Value)
+	for _, c := range kids(kids(tree.Root)[0]) {
+		if c.Kind() == KindPI {
+			t.Fatalf("text declaration survived as a PI: %q", c.Value())
 		}
 	}
 }
@@ -428,34 +428,34 @@ func TestExternalEntityGivesItsNodesItsOwnBaseURI(t *testing.T) {
 	root := tree.Root.ChildElements()[0]
 
 	el := root.ChildElements()[0]
-	if !strings.HasSuffix(el.BaseURI, "level1/element.xml") {
+	if !strings.HasSuffix(el.BaseURI(), "level1/element.xml") {
 		t.Errorf("element base URI = %q, want it to end in level1/element.xml",
-			el.BaseURI)
+			el.BaseURI())
 	}
 	// The base travels down: a descendant inherits from the element it was
 	// written under, which is inside the same entity.
-	if kid := el.ChildElements()[0]; kid.BaseURI != el.BaseURI {
-		t.Errorf("child base URI = %q, want %q", kid.BaseURI, el.BaseURI)
+	if kid := el.ChildElements()[0]; kid.BaseURI() != el.BaseURI() {
+		t.Errorf("child base URI = %q, want %q", kid.BaseURI(), el.BaseURI())
 	}
 
 	var pi *Node
-	for _, c := range root.Children {
-		if c.Kind == KindPI {
+	for _, c := range kids(root) {
+		if c.Kind() == KindPI {
 			pi = c
 		}
 	}
 	if pi == nil {
 		t.Fatal("no processing instruction in the tree")
 	}
-	if !strings.HasSuffix(pi.BaseURI, "level1/pi.xml") {
-		t.Errorf("PI base URI = %q, want it to end in level1/pi.xml", pi.BaseURI)
+	if !strings.HasSuffix(pi.BaseURI(), "level1/pi.xml") {
+		t.Errorf("PI base URI = %q, want it to end in level1/pi.xml", pi.BaseURI())
 	}
 
 	// And the document's own nodes are unaffected: the rule is per entity,
 	// not a blanket override.
-	if !strings.HasSuffix(root.BaseURI, "doc.xml") {
+	if !strings.HasSuffix(root.BaseURI(), "doc.xml") {
 		t.Errorf("document element base URI = %q, want it to end in doc.xml",
-			root.BaseURI)
+			root.BaseURI())
 	}
 }
 
@@ -470,8 +470,8 @@ func TestXMLBaseInsideExternalEntityResolvesAgainstTheEntity(t *testing.T) {
 	})
 	tree := mustParseExternal(t, dir, "doc.xml")
 	frag := tree.Root.ChildElements()[0].ChildElements()[0]
-	if !strings.HasSuffix(frag.BaseURI, "level1/deeper/") {
-		t.Errorf("base URI = %q, want it to end in level1/deeper/", frag.BaseURI)
+	if !strings.HasSuffix(frag.BaseURI(), "level1/deeper/") {
+		t.Errorf("base URI = %q, want it to end in level1/deeper/", frag.BaseURI())
 	}
 }
 
@@ -691,7 +691,7 @@ func TestDeclarationsAfterUnreadParameterEntity(t *testing.T) {
 		s := r.StringValue()
 		for _, n := range []string{"c", "a"} {
 			if a := r.Attr("", n); a != nil {
-				s += " " + n + "=" + a.Value
+				s += " " + n + "=" + a.Value()
 			}
 		}
 		return s

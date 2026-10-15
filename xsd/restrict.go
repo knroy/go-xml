@@ -5,7 +5,7 @@ import (
 	"math/big"
 	"sort"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // Particle Valid (Restriction) (§3.9.6).

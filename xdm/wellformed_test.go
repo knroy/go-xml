@@ -2,10 +2,11 @@ package xdm
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/xmltok"
+	"github.com/knroy/go-xml/v2/internal/xmltok"
 )
 
 func TestParseRejectsDuplicateAndNamespaceIllFormedNames(t *testing.T) {
@@ -112,7 +113,7 @@ func TestParseNamespaceBindsNormalizedValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CDATA xmlns:b: %v", err)
 	}
-	if got := tree.Root.ChildElements()[0].Namespaces; len(got) != 2 || got[1].Value != " urn:x " {
+	if got := nsOf(tree.Root.ChildElements()[0]); len(got) != 2 || got[1].Value() != " urn:x " {
 		t.Errorf("CDATA xmlns:b namespaces = %+v, want the value unnormalized", got)
 	}
 }
@@ -150,11 +151,54 @@ func TestDuplicateAttributeCheck(t *testing.T) {
 	for i := range 6 {
 		tok.Attr = append(tok.Attr, xmltok.Attr{Name: xmltok.Name{Space: "xml", Local: fmt.Sprint("a", i)}, Value: "v"})
 	}
+	var ns nsScope
 	if n := testing.AllocsPerRun(100, func() {
-		if err := validateStartElement(tok, nil, false); err != nil {
+		if err := validateStartElement(tok, &ns, false); err != nil {
 			t.Fatal(err)
 		}
+		ns.pop(ns.own)
 	}); n != 0 {
 		t.Errorf("validateStartElement on six attributes allocated %.0f times, want 0", n)
+	}
+}
+
+// TestParseXMLDeclMatchesGrammar checks parseXMLDecl against the regular
+// expressions it replaced, over every combination of a set of fragments that
+// each sit on one side of a boundary of the grammar.
+func TestParseXMLDeclMatchesGrammar(t *testing.T) {
+	const s, eq = `[ \t\r\n]`, `[ \t\r\n]*=[ \t\r\n]*`
+	syntax := regexp.MustCompile(`^version` + eq + `(?:"1\.[0-9]+"|'1\.[0-9]+')` +
+		`(?:` + s + `+encoding` + eq + `(?:"[A-Za-z][A-Za-z0-9._-]*"|'[A-Za-z][A-Za-z0-9._-]*'))?` +
+		`(?:` + s + `+standalone` + eq + `(?:"(?:yes|no)"|'(?:yes|no)'))?$`)
+	yes := regexp.MustCompile(`standalone` + eq + `(?:"yes"|'yes')`)
+
+	versions := []string{`version="1.0"`, `version = '1.10'`, "version\t=\n\"1.1\"", `version="1."`,
+		`version="2.0"`, `version="1.0'`, `version=1.0`, `version="1.x"`, `versio="1.0"`, ``}
+	encodings := []string{``, ` encoding="UTF-8"`, ` encoding = 'iso-8859-1'`, ` encoding="8bit"`,
+		` encoding=""`, `encoding="UTF-8"`, ` encoding="a b"`, "\r\nencoding='x._-9'", ` encoding="é"`}
+	standalones := []string{``, ` standalone="yes"`, ` standalone='no'`, ` standalone="maybe"`,
+		`standalone="yes"`, `  standalone = 'yes'`, ` standalone="yes'`}
+	tails := []string{``, ` `, ` x`, `"`, ` standalone="no"`}
+	n := 0
+	for _, v := range versions {
+		for _, e := range encodings {
+			for _, st := range standalones {
+				for _, tl := range tails {
+					in := v + e + st + tl
+					sa, ok := parseXMLDecl(in)
+					if want := syntax.MatchString(in); ok != want {
+						t.Errorf("%q: accepted %v, want %v", in, ok, want)
+					} else if ok {
+						n++
+						if (sa == "yes") != yes.MatchString(in) {
+							t.Errorf("%q: standalone %q", in, sa)
+						}
+					}
+				}
+			}
+		}
+	}
+	if n < 20 {
+		t.Errorf("only %d declarations accepted; the cases do not reach the grammar", n)
 	}
 }

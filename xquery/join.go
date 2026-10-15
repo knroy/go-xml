@@ -4,8 +4,8 @@ import (
 	"math"
 	"sort"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // A joinClause is a "for" immediately followed by a "where" whose test is a

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/v2/xsd"
 )
 
 // DTD is the subset of a document type declaration this package applies.

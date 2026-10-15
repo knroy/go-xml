@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // parseXMLBomb is a document whose entity expansion is large but stays UNDER
@@ -39,7 +39,7 @@ func evalAt31(t *testing.T, expr string) (xdm.Sequence, error) {
 		t.Fatalf("compiling: %v", err)
 	}
 	ctx := NewContext(nil, Builtins())
-	ctx.Version = XPath31
+	ctx = ctx.WithVersion(XPath31)
 	return c.Eval(ctx)
 }
 

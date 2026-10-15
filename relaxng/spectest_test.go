@@ -7,7 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/internal/record"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // suiteResolver serves the schemas a test case bundles.
@@ -38,7 +39,7 @@ func collectResources(tc *xdm.Node) *suiteResolver {
 	var walk func(n *xdm.Node, dir string)
 	walk = func(n *xdm.Node, dir string) {
 		for _, kid := range n.ChildElements() {
-			switch kid.Name.Local {
+			switch kid.Name().Local {
 			case "resource":
 				name := kid.AttrValue("name")
 				if name == "" {
@@ -93,10 +94,12 @@ func TestSpectest(t *testing.T) {
 	var failures []string
 
 	var walk func(n *xdm.Node)
+	ncase := 0
 	walk = func(n *xdm.Node) {
 		for _, kid := range n.ChildElements() {
-			if kid.Name.Local == "testCase" {
-				p, f, kind, why := runCase(t, kid)
+			if kid.Name().Local == "testCase" {
+				ncase++
+				p, f, kind, why := runCase(t, kid, fmt.Sprintf("case-%04d", ncase))
 				pass += p
 				fail += f
 				if f > 0 {
@@ -129,11 +132,21 @@ func TestSpectest(t *testing.T) {
 }
 
 // runCase returns the passed and failed assertion counts for one testCase.
-func runCase(t *testing.T, tc *xdm.Node) (pass, fail int, kind, why string) {
+//
+// id names the case in a GOXSLT_RECORD_DIR recording, which stores each
+// assertion's verdict and error text (see internal/record).
+func runCase(t *testing.T, tc *xdm.Node, id string) (pass, fail int, kind, why string) {
+	rec := func(what string, err error) {
+		out := "ok\n"
+		if err != nil {
+			out = "error: " + err.Error() + "\n"
+		}
+		record.Write("relaxng", id+"/"+what, []byte(out))
+	}
 	var correct, incorrect *xdm.Node
 	var valids, invalids []*xdm.Node
 	for _, kid := range tc.ChildElements() {
-		switch kid.Name.Local {
+		switch kid.Name().Local {
 		case "correct":
 			correct = kid
 		case "incorrect":
@@ -156,7 +169,9 @@ func runCase(t *testing.T, tc *xdm.Node) (pass, fail int, kind, why string) {
 		if schema == nil {
 			return 0, 0, "", ""
 		}
-		if _, err := CompileWithOptions(schema, opts); err == nil {
+		_, err := CompileWithOptions(schema, opts)
+		rec("incorrect", err)
+		if err == nil {
 			return 0, 1, "incorrect", "incorrect schema accepted: " + summarise(schema)
 		}
 		return 1, 0, "", ""
@@ -170,6 +185,7 @@ func runCase(t *testing.T, tc *xdm.Node) (pass, fail int, kind, why string) {
 		return 0, 0, "", ""
 	}
 	s, err := CompileWithOptions(schema, opts)
+	rec("correct", err)
 	if err != nil {
 		// One assertion, not one per document: a schema that will not compile
 		// is a single failure, and counting the documents it would have
@@ -178,12 +194,14 @@ func runCase(t *testing.T, tc *xdm.Node) (pass, fail int, kind, why string) {
 	}
 	pass++ // the schema compiled, which is itself an assertion
 
-	for _, v := range valids {
+	for i, v := range valids {
 		doc := firstElement(v)
 		if doc == nil {
 			continue
 		}
-		if err := s.Validate(doc); err != nil {
+		err := s.Validate(doc)
+		rec(fmt.Sprintf("valid-%d", i+1), err)
+		if err != nil {
 			fail++
 			kind = "valid"
 			why = "valid rejected: " + summarise(schema) + " || " +
@@ -192,12 +210,14 @@ func runCase(t *testing.T, tc *xdm.Node) (pass, fail int, kind, why string) {
 			pass++
 		}
 	}
-	for _, v := range invalids {
+	for i, v := range invalids {
 		doc := firstElement(v)
 		if doc == nil {
 			continue
 		}
-		if err := s.Validate(doc); err == nil {
+		err := s.Validate(doc)
+		rec(fmt.Sprintf("invalid-%d", i+1), err)
+		if err == nil {
 			fail++
 			kind = "invalid"
 			why = "invalid accepted: " + summarise(schema) + " || " + summarise(doc)
@@ -220,16 +240,16 @@ func summarise(n *xdm.Node) string {
 	if len(s) > 90 {
 		s = s[:90] + "..."
 	}
-	return "<" + n.Name.Local + "> " + s
+	return "<" + n.Name().Local + "> " + s
 }
 
 func nodeText(n *xdm.Node) string {
 	var sb strings.Builder
-	for _, a := range n.Attrs {
-		sb.WriteString(" " + a.Name.Local + "=" + a.Value)
+	for a := range n.Attrs() {
+		sb.WriteString(" " + a.Name().Local + "=" + a.Value())
 	}
 	for _, c := range n.ChildElements() {
-		sb.WriteString(" <" + c.Name.Local + ">")
+		sb.WriteString(" <" + c.Name().Local + ">")
 	}
 	return sb.String()
 }

@@ -25,16 +25,16 @@ Two sets of exceptions, both verified by the boundary tests described in
 [testing.md](testing.md):
 
 * **A negative `MaxDepth` means the default, not "no limit"**, in
-  `xdm.ParseOptions`, `xpath.Context` and `c14n.MaxDepth` — a depth bound of zero or below would
+  `xdm.ParseOptions`, `xpath.Env` and `c14n.MaxDepth` — a depth bound of zero or below would
   reject every document, so there is no useful reading of a negative value
   other than "the caller set nothing". Elsewhere — `xsd.ValidateOptions`,
   `relaxng.ValidateOptions`, `xslt.TransformOptions` — a negative `MaxDepth`
   really does mean no limit.
-* **A negative `MaxItems` really is no bound** (`xpath.Context`,
+* **A negative `MaxItems` really is no bound** (`xpath.Env`,
   `xslt.TransformOptions`, CLI `-max-items`). With it removed, an expression
   such as `1 to 1000000000000` can exhaust memory and end the process rather
   than return `XPDY0130`, so remove it only for input you trust.
-* **`xsd.HTTPResolver.MaxBytes` has no unlimited setting.** A negative value
+* **`xsdnet.HTTPResolver.MaxBytes` has no unlimited setting.** A negative value
   refuses every fetch, with an error naming the limit. That is deliberate: a
   schema is not a stream, so an unbounded read is a way to be handed an
   unbounded allocation. Use a large number, not `-1`.
@@ -115,7 +115,7 @@ syntax error does *not* carry the sentinel.
 | `MaxItems` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own) |
 | `MaxBytes` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own, and the suite already sanctions it for an over-long string — see `fn/codepoints-to-string.xml`. The wording says bytes rather than items, so the two refusals that share the code are still told apart) |
 | `MaxNodes` (result tree) | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own. Distinct from `xdm/parse.go`'s `MaxNodes`, which bounds a *parse*: this one bounds the nodes a transform or query **constructs**, and the wording says "result-tree nodes" so the three refusals that share the code are told apart) |
-| `Context.MaxDepth` | `xpath/context.go` | `XPDY0001` | no context item is defined |
+| `Env.MaxDepth` | `xpath/context.go` | `XPDY0001` | no context item is defined |
 | `backtrackBudget` | `xpath/regex_backtrack.go` | `FORX0002` | the regular expression is invalid |
 | range bound | `xpath/operators.go` | `FOAR0002` | a numeric operation overflowed |
 | `maxNestDepth` | `xquery/nested.go` | `XPDY0130` | as the XPath caps; it borrowed `XPST0003` until 2026-09-14 |
@@ -255,11 +255,6 @@ schema, err := xsd.LoadFile("main.xsd", xsd.Options{
 
 ### Resolvers
 
-A program that never fetches schemas over the network can build with
-`-tags goxml_nohttp`: `HTTPResolver` and `net/http` are left out, which makes
-the go-xml CLI start about 1.6 ms faster with 4.8 MB less memory. The default
-build is unchanged.
-
 `FileResolver` reads from disk. **Set `Root`** whenever a location could be
 influenced by anyone but you — it refuses `..`, absolute paths, `file:` URLs and
 symlinks that lead outside:
@@ -268,12 +263,14 @@ symlinks that lead outside:
 &xsd.FileResolver{Root: "/srv/schemas"}
 ```
 
-`HTTPResolver` adds network fetching, which is off unless you ask for it:
+`HTTPResolver` adds network fetching, which is off unless you ask for it. It
+lives in its own package, `github.com/knroy/go-xml/v2/xsd/xsdnet`, so only a
+program that imports it links `net/http`:
 
 ```go
-&xsd.HTTPResolver{
-    Timeout:   10 * time.Second,          // DefaultFetchTimeout = 30s
-    MaxBytes:  4 << 20,                   // DefaultMaxSchemaBytes = 16 MB
+&xsdnet.HTTPResolver{
+    Timeout:   10 * time.Second,          // xsdnet.DefaultFetchTimeout = 30s
+    MaxBytes:  4 << 20,                   // xsdnet.DefaultMaxSchemaBytes = 16 MB
     AllowHost: func(h string) bool { return h == "schemas.example.com" },
     Files:     &xsd.FileResolver{Root: "/srv/schemas"},
 }
@@ -307,12 +304,13 @@ chosen how connections are made — apply your own `Control` if you want both.
 
 ## xsd.ValidateOptions
 
-Passed to `Schema.Validate` and `Schema.ValidateContext`.
+Passed to `Schema.Validate`, `ValidateContext`, `ValidateCopy` and
+`ValidateCopyContext`. `Validate` only checks the document; `ValidateCopy`
+returns a typed copy of it.
 
 ```go
-err := schema.Validate(doc.Root, xsd.ValidateOptions{
+typed, err := schema.ValidateCopy(doc.Root, xsd.ValidateOptions{
     MaxErrors: 25,
-    Annotate:  true,
 })
 ```
 
@@ -330,7 +328,6 @@ err := schema.Validate(doc.Root, xsd.ValidateOptions{
 > `Validate` returned `nil` for a flagrantly invalid document — a silent pass.
 > The guard is now `v.opts.MaxErrors > 0 &&`, matching `dtd`, and
 > `xsd/limits_boundary_test.go` fails against any revision that drops it.
-| `Annotate` | `bool` | off | Writes each node's type into `TypeAnnotation`, together with the resolved `DerivedPrimitive`, `ListItem` and `UnionMember` beside it, producing the part of the PSVI that XPath and XSLT consume. The resolved fields are recorded per node rather than looked up later, so a schema loaded afterwards cannot retype a document this one already validated. Off by default because it **mutates the tree you passed in**. |
 
 ### Bounding a run with a context
 
@@ -377,16 +374,18 @@ xdm.ParseOptions{MaxDepth: 5000}       // accept the document
 xsd.ValidateOptions{MaxDepth: 5000}    // and validate it
 ```
 
-### Annotate and concurrency
+### Typed trees and concurrency
 
-`Annotate: true` writes to the tree. A compiled `*Schema` is safe to share
-across goroutines, but a *tree* being annotated is not — give each goroutine its
-own parse, or leave `Annotate` off. With `Annotate` off, validation writes
-nothing to the tree, so one tree can be checked from several goroutines.
+`Validate` only reads the tree. A compiled `*Schema` is safe to share across
+goroutines, and so is a tree being validated. (v1's `Annotate`, which wrote
+types into the tree passed in, is gone in v2: a tree is not edited once
+built.)
 
 `Schema.ValidateCopy(root, opts)` (and `ValidateCopyContext`) validates a copy
-of the whole tree instead and returns the copy's counterpart of `root`, typed
-as `Annotate` would type it, valid or not, together with the error `Validate`
+of the whole tree and returns the copy's counterpart of `root`, typed -- each node's
+annotation, with the resolved `DerivedPrimitive`, `ListItem`, `UnionMember`
+and `nilled` recorded beside it, defaulted attributes added and ignorable
+whitespace stripped -- valid or not, together with the error `Validate`
 would have returned. The input is never written to, so one tree can be
 validated from several goroutines at once. The copy carries every typing
 property, base and document URIs, the DOCTYPE and unparsed entities;
@@ -549,7 +548,7 @@ The nested transform's XPath context starts at that depth too, not at zero, so
 the count survives a hop through another language: an XQuery query or
 `xpath.Eval` caller (which reaches `fn:transform` when the program links
 `xslt`) is charged from its own `Context.Depth` and bounded by its
-`Context.MaxDepth`, and a stylesheet that calls back into a query that
+`Env.MaxDepth`, and a stylesheet that calls back into a query that
 transforms again keeps accumulating rather than restarting.
 
 ### DisableAssertions
@@ -593,9 +592,9 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{})
 A transform indexes the parsed documents it reads: `xsl:key` tables, and,
 for `//x[p]` paths from a document root, which nodes have an `x` child. Both
 are built on first use and kept until the transform ends. Do not change a
-parsed tree's `Children`, `Attrs` or names from Go while a transform that
-reads it is running, for example from a host function; the indexes would
-then answer for the old tree. Trees built during the transform (temporary
+parsed tree's children, attributes or names from Go (the `xdm.Node` setters)
+while a transform that reads it is running, for example from a host
+function; the indexes would then answer for the old tree. Trees built during the transform (temporary
 trees, results) and trees not produced by `xdm.Parse` are never indexed this
 way.
 
@@ -634,32 +633,83 @@ them any more.
 ## xpath.Context
 
 XPath has no `Options` struct; configuration is the evaluation context you build
-with `xpath.NewContext(item, funcs)`.
+with `xpath.NewContext(item, funcs, configure...)`. A context has three parts:
+
+- the **scope** — focus, variables, function library, recursion depth — which
+  the engine copies on every step, predicate and binding, so it is a few words
+  (160 bytes);
+- the **environment** (`xpath.Env`) — cancellation, resolvers, limits, clock,
+  budgets — set up once and shared by every scope of the evaluation behind one
+  pointer;
+- the **static properties** of the expression being evaluated — version, static
+  base URI, namespaces, default collation — which `Compiled.Eval` installs from
+  the compiled expression by swapping one pointer.
 
 ```go
-ctx := xpath.NewContext(doc.Root, xpath.Builtins())
-ctx.Ctx = context.Background()
-ctx.StaticBaseURI = "file:///srv/docs/"
+ctx := xpath.NewContext(doc.Root, xpath.Builtins(), func(e *xpath.Env) {
+    e.Ctx = reqCtx
+    e.Docs = resolver
+}).WithStaticBaseURI("file:///srv/docs/")
 ctx.Vars = map[string]xdm.Sequence{"n": xdm.One(xdm.NewInteger(3))}
 
 seq, err := xpath.Eval(`$n * 2`, ctx, nil)   // [6]
 ```
+
+A context is never modified once it is in use: the `With` methods return a
+copy. `WithEnv(func(*xpath.Env))` changes a copy of the environment;
+`ctx.Env()` reads it and must not be written through.
+
+**Scope** (fields on `Context`):
 
 | Field | Type | What it does |
 |---|---|---|
 | `Item` | `xdm.Item` | The context item — `.` in an expression. |
 | `Position`, `Size` | `int` | `position()` and `last()`. Set by the engine when iterating; set them yourself only when evaluating inside a sequence you are driving. |
 | `Vars` | `map[string]xdm.Sequence` | In-scope variables, keyed by Clark name. |
+| `Parent` | `*Context` | The enclosing scope, which variable lookups walk. |
 | `Funcs` | `FunctionLibrary` | Function resolution. `xpath.Builtins()` is XPath 2.0; XSLT adds its own on top. |
-| `StaticBaseURI` | `string` | What `fn:static-base-uri` returns and what `fn:resolve-uri` resolves against by default. Distinct from a *node's* base URI, which comes from the document. |
+| `Depth` | `int` | Recursion depth, maintained by the engine. |
+
+**Environment** (fields on `xpath.Env`, set through `NewContext`'s configure
+functions or `WithEnv`):
+
+| Field | Type | What it does |
+|---|---|---|
+| `Ctx` | `context.Context` | Cancellation. Set it for untrusted expressions. `context.Background()` by default. |
 | `Docs` | `DocumentResolver` | `fn:doc` and `fn:document`. Nil disables them. |
-| `Ctx` | `context.Context` | Cancellation. Set it for untrusted expressions. |
+| `Collections` | `CollectionResolver` | Resolves `fn:collection`. Nil disables it. Independent of `Docs`. |
+| `Texts` | `TextResolver` | `fn:unparsed-text` and its siblings. Nil disables them. Independent of `Docs`. |
+| `Entities` | `xdm.EntityResolver` | External entities in documents `fn:parse-xml` parses. Nil refuses them. |
+| `Environment` | `EnvironmentResolver` | `fn:environment-variable`. Nil withholds the process environment. |
+| `Modules` | `ModuleResolver` | `fn:load-xquery-module`. Nil reads nothing. |
+| `Validator` | `TreeValidator` | `fn:json-to-xml` with `validate=true`. |
 | `Now`, `HasNow` | `time.Time`, `bool` | Fixes `fn:current-dateTime`. `HasNow` distinguishes "midnight 1 January year 1" from "not set". |
 | `ImplicitTimezone` | `int` | Offset in minutes for values with no timezone. |
-| `Collections` | `CollectionResolver` | Resolves `fn:collection`. Nil disables it. Independent of `Docs`. |
-| `Parent` | `*Context` | The enclosing context, for nested evaluation. |
-| `Depth` | `int` | Recursion depth, maintained by the engine. |
+| `RegexVersion`, `LibraryVersion` | `Version` | Raise the regular-expression dialect and the function library above the expression's version, without admitting new syntax. |
+| `MaxDepth` | `int` | Recursion bound. Zero is `xpath.MaxDepth` (500). |
 | `MaxItems` | `int` | Items an evaluation may materialise. Zero is `xpath.MaxItems` (5,000,000); negative is no bound; a nested evaluation adopts the caller's bound and cannot raise it. |
+| `QualifyVar`, `MissingVar` | funcs | Host hooks for variable references (XSLT packages, XQuery cycles). |
+| `MapDuplicateCode` | `string` | Error code for a duplicate key in a map constructor; `XQDY0137` by default. |
+
+The item, byte, entity and result-node **budget counters** belong to the
+environment but cannot be set through it: `NewContext` installs fresh ones
+after the configure functions run, `WithEnv` keeps the context's own whatever
+the function does, and `AdoptBudget` is the only way to share another
+evaluation's. A nested evaluation therefore never resets or raises a budget.
+
+**Static properties** (read with methods on `Context`): `Version()`,
+`StaticBaseURI()`, `StaticHost()`, `StaticNamespaces()` and `Compat()`.
+`Compiled.Eval` installs the compiled expression's own; `WithVersion`,
+`WithStaticBaseURI` and `WithStaticHost` set the defaults an expression compiled
+without them uses (a one-shot `xpath.Eval` compiles at the context's version).
+A host whose expressions all carry one version or static host sets it once on
+the context, so evaluating them does not copy the context to install it.
+`StaticNamespaces()` is installed only for an expression that calls or
+references `fn:format-date`, `fn:format-dateTime`, `fn:format-time` or
+`fn:function-lookup`; any other expression sees its caller's (nil at the top
+level), so a host function must not use it to expand a prefix. `StaticBaseURI` is
+what `fn:static-base-uri` returns and what `fn:resolve-uri` resolves against by
+default — distinct from a *node's* base URI, which comes from the document.
 
 ### fn:collection
 
@@ -694,7 +744,7 @@ func (c Codelists) ResolveCollection(uri, base string) (xdm.Sequence, error) {
     return out, nil
 }
 
-ctx.Collections = Codelists{dir: "lists"}   // xpath
+ctx = ctx.WithEnv(func(e *xpath.Env) { e.Collections = Codelists{dir: "lists"} }) // xpath
 opts.Collections = Codelists{dir: "lists"}  // xslt.TransformOptions
 ```
 
@@ -711,7 +761,7 @@ join it into a path without checking for traversal.
 ### fn:unparsed-text
 
 Off by default, and it has a switch of its own: `TransformOptions.Texts` in
-`xslt`, `Context.Texts` in `xpath`. Setting the document resolver does not set
+`xslt`, `Env.Texts` in `xpath`. Setting the document resolver does not set
 it, and that separation is the point. `fn:doc` hands back a parsed XML
 document, so a file that is not well-formed discloses nothing; `fn:unparsed-text`
 hands back the raw bytes of any file inside the roots.
@@ -723,7 +773,7 @@ reading from the `-allow-dir` roots.
 ### fn:environment-variable
 
 Off by default, with a switch of its own: `TransformOptions.Environment` in
-`xslt`, `Context.Environment` in `xpath`. Nil withholds the process environment
+`xslt`, `Env.Environment` in `xpath`. Nil withholds the process environment
 from both `fn:environment-variable($name)` and
 `fn:available-environment-variables()`. Setting the document or text resolver
 does not set it — those confine reads to a URI space you chose, while this
@@ -751,7 +801,7 @@ type environment map[string]string
 func (e environment) LookupEnvironment(n string) (string, bool) { v, ok := e[n]; return v, ok }
 func (e environment) EnvironmentNames() []string { /* the keys */ }
 
-ctx.Environment = environment{"REPORT_MODE": "summary"}   // xpath
+ctx = ctx.WithEnv(func(e *xpath.Env) { e.Environment = environment{"REPORT_MODE": "summary"} }) // xpath
 opts.Environment = environment{"REPORT_MODE": "summary"}  // xslt.TransformOptions
 ```
 
@@ -761,7 +811,7 @@ for it only where whatever runs is trusted with the process's own secrets.
 
 ### fn:load-xquery-module
 
-`TransformOptions.Modules` in `xslt`, `Context.Modules` in `xpath`: an
+`TransformOptions.Modules` in `xslt`, `Env.Modules` in `xpath`: an
 `xpath.ModuleResolver`, which any `xquery.ModuleResolver` (such as
 `xquery.MapModuleResolver`) satisfies. Nil reads nothing and every call is
 `FOQM0002`. A query sets it from its own `Options.Modules` and
@@ -813,14 +863,15 @@ one infoset to another, so it runs as a pass over an already-parsed tree.
 ```go
 tree, err := xdm.ParseString(src, opts)
 if err != nil { return err }
-err = xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
+tree, err = xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
     Resolver: resolver, // an *xslt.FileResolver, or your own
     Parse:    opts,     // the included documents get the same limits
 })
 ```
 
-`ProcessXInclude` modifies the tree in place and re-finalises document order,
-so node identities must not be held across the call.
+`ProcessXInclude` returns the included document as a new tree, built
+top-down as every tree is; the tree it is given is left as it was, and node
+identities do not carry over.
 
 **The resolver is the whole of the confinement.** `xdm` has no filesystem and
 no network; it can read only what a resolver hands it. `xslt.FileResolver`
@@ -975,7 +1026,7 @@ markup is **stripped**, so `<a>  <b/>  </a>` constructs `<a><b/></a>`.
 A query is *code*, not data. The sandbox is the same as everywhere else in
 this library — `fn:doc`, `fn:collection` and `fn:unparsed-text` all refuse
 without a resolver, and so does `import module` — but an untrusted query can
-still spend arbitrary CPU and memory, so bound it with `ctx.Ctx` and a timeout
+still spend arbitrary CPU and memory, so bound it with `Env.Ctx` and a timeout
 the way [server.md](server.md) does for stylesheets.
 
 `import module` and `import schema` follow that rule exactly.

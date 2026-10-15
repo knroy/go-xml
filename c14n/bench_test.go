@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // genDoc builds a document of at least size bytes out of a repeated record
@@ -61,7 +61,7 @@ func TestStreamingAllocations(t *testing.T) {
 	for _, alg := range allAlgorithms {
 		opts := Options{Algorithm: alg, InclusiveNamespacePrefixes: []string{"q"}}
 		allocs := func(doc *xdm.Node) float64 {
-			root := doc.Children[0]
+			root := doc.FirstChild()
 			return testing.AllocsPerRun(2, func() {
 				if err := Write(io.Discard, root, opts); err != nil {
 					t.Fatal(err)
@@ -78,10 +78,10 @@ func TestStreamingAllocations(t *testing.T) {
 
 func benchCanon(b *testing.B, size int, exclude bool, alg Algorithm) {
 	doc := cachedDoc(b, size)
-	root := doc.Children[0]
+	root := doc.FirstChild()
 	ns := Subtree(root)
 	if exclude {
-		ns = ExcludeSubtree(root, root.Children[0])
+		ns = ExcludeSubtree(root, root.FirstChild())
 	}
 	opts := Options{Algorithm: alg}
 	b.SetBytes(int64(len(genDoc(size))))

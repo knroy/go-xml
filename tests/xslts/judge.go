@@ -7,10 +7,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xsd"
-	"github.com/knroy/go-xml/xslt"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
+	"github.com/knroy/go-xml/v2/xsd"
+	"github.com/knroy/go-xml/v2/xslt"
 )
 
 // Judging a result against the suite's assertions.
@@ -154,15 +154,23 @@ func treeOf(res *xslt.Result) *xdm.Node {
 		}
 	}
 	tree := xdm.NewTree()
+	// A parentless attribute in the result is carried as an attribute of the
+	// document node, and attributes come before a node's children, so they
+	// are placed first.
+	for _, it := range res.Nodes {
+		if v, ok := it.(*xdm.Node); ok && v.Kind() == xdm.KindAttribute {
+			spliceInto(tree.Root, v)
+		}
+	}
 	for _, it := range res.Nodes {
 		switch v := it.(type) {
 		case *xdm.Node:
+			if v.Kind() == xdm.KindAttribute {
+				continue
+			}
 			spliceInto(tree.Root, v)
 		case *xdm.Atomic:
-			tree.Root.AppendChild(&xdm.Node{
-				Kind:  xdm.KindText,
-				Value: v.String(),
-			})
+			tree.Root.AppendText(v.String())
 		}
 	}
 	tree.Finalize()
@@ -620,19 +628,19 @@ func treesEqual(a, b *xdm.Node, normalizeSpace bool) bool {
 	}
 	for i := range ac {
 		x, y := ac[i], bc[i]
-		if x.Kind != y.Kind {
+		if x.Kind() != y.Kind() {
 			return false
 		}
-		switch x.Kind {
+		switch x.Kind() {
 		case xdm.KindElement:
-			if !sameExpandedName(x.Name, y.Name) || !attrsEqual(x, y) {
+			if !sameExpandedName(x.Name(), y.Name()) || !attrsEqual(x, y) {
 				return false
 			}
 			if !treesEqual(x, y, normalizeSpace) {
 				return false
 			}
 		case xdm.KindText, xdm.KindComment:
-			xv, yv := x.Value, y.Value
+			xv, yv := x.Value(), y.Value()
 			if normalizeSpace {
 				xv, yv = normalize(xv), normalize(yv)
 			}
@@ -640,7 +648,7 @@ func treesEqual(a, b *xdm.Node, normalizeSpace bool) bool {
 				return false
 			}
 		case xdm.KindPI:
-			if !sameExpandedName(x.Name, y.Name) || x.Value != y.Value {
+			if !sameExpandedName(x.Name(), y.Name()) || x.Value() != y.Value() {
 				return false
 			}
 		}
@@ -652,9 +660,9 @@ func treesEqual(a, b *xdm.Node, normalizeSpace bool) bool {
 // whitespace-only text when normalising.
 func contentOf(n *xdm.Node, normalizeSpace bool) []*xdm.Node {
 	var out []*xdm.Node
-	for _, c := range n.Children {
-		if normalizeSpace && c.Kind == xdm.KindText &&
-			strings.TrimSpace(c.Value) == "" {
+	for c := range n.Children() {
+		if normalizeSpace && c.Kind() == xdm.KindText &&
+			strings.TrimSpace(c.Value()) == "" {
 			continue
 		}
 		out = append(out, c)
@@ -676,14 +684,14 @@ func sameExpandedName(a, b xdm.QName) bool {
 }
 
 func attrsEqual(a, b *xdm.Node) bool {
-	if len(a.Attrs) != len(b.Attrs) {
+	if a.NumAttrs() != b.NumAttrs() {
 		return false
 	}
 	// Attribute order is not significant, so each is looked up by name.
-	for _, x := range a.Attrs {
+	for x := range a.Attrs() {
 		found := false
-		for _, y := range b.Attrs {
-			if sameExpandedName(x.Name, y.Name) && x.Value == y.Value {
+		for y := range b.Attrs() {
+			if sameExpandedName(x.Name(), y.Name()) && x.Value() == y.Value() {
 				found = true
 				break
 			}
@@ -734,21 +742,20 @@ func (mapNS) DefaultFunctionNamespace() string  { return xdm.NSFN }
 // puts one directly under <out>, so "/out/node()[1]" saw a single document
 // node where the assertion expects the comment inside it.
 //
-// An element containing one is rebuilt rather than relinked, because the
-// splice changes its child list and the result's own nodes must not be
-// mutated: the failure message serialises them afterwards, and a shared
-// subtree would be reported with the harness's edit in it. An element with no
-// document node anywhere beneath it is passed through untouched, which is the
+// Everything is copied rather than relinked, because the result's own nodes
+// must not be mutated: the failure message serialises them afterwards, and a
+// shared subtree would be reported with the harness's edit in it. An element
+// with no document node anywhere beneath it is copied whole, which is the
 // overwhelmingly common case.
 func spliceInto(parent, n *xdm.Node) {
-	if n.Kind == xdm.KindDocument {
-		for _, c := range n.Children {
+	if n.Kind() == xdm.KindDocument {
+		for c := range n.Children() {
 			spliceInto(parent, c)
 		}
 		return
 	}
 	if !hasDocumentChild(n) {
-		parent.AppendChild(n)
+		parent.AppendCopy(n)
 		return
 	}
 	// Every field of the node is carried across, not the handful the
@@ -758,17 +765,14 @@ func spliceInto(parent, n *xdm.Node) {
 	// URI and the type annotation — and the namespace count in element-0306
 	// went from three to two because the node was no longer the one the
 	// engine built.
-	copied := &xdm.Node{
-		Kind:       n.Kind,
-		Name:       n.Name,
-		Value:      n.Value,
-		Attrs:      n.Attrs,
-		Namespaces: n.Namespaces,
-		BaseURI:    n.BaseURI,
+	copied := parent.AppendShallowCopy(n)
+	for prefix, uri := range n.DeclaredNamespaces() {
+		copied.AddNamespace(prefix, uri)
 	}
-	copied.CopyTypingFrom(n)
-	parent.AppendChild(copied)
-	for _, c := range n.Children {
+	for a := range n.Attrs() {
+		copied.AppendCopy(a)
+	}
+	for c := range n.Children() {
 		spliceInto(copied, c)
 	}
 }
@@ -791,7 +795,7 @@ func needsRebuild(res *xslt.Result) bool {
 		if !ok {
 			continue
 		}
-		if n.Kind == xdm.KindDocument || hasDocumentChild(n) {
+		if n.Kind() == xdm.KindDocument || hasDocumentChild(n) {
 			return true
 		}
 	}
@@ -800,8 +804,8 @@ func needsRebuild(res *xslt.Result) bool {
 
 // hasDocumentChild reports whether a document node appears anywhere below n.
 func hasDocumentChild(n *xdm.Node) bool {
-	for _, c := range n.Children {
-		if c.Kind == xdm.KindDocument || hasDocumentChild(c) {
+	for c := range n.Children() {
+		if c.Kind() == xdm.KindDocument || hasDocumentChild(c) {
 			return true
 		}
 	}
@@ -969,7 +973,7 @@ func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]str
 	// produced by a stylesheet the 2.0 rules would otherwise judge. Raising
 	// the library version alone leaves the grammar where evalAssertExpr's
 	// comment puts it, so only which functions exist changes.
-	ctx.LibraryVersion = xpath.XPath31
+	ctx = ctx.WithEnv(func(e *xpath.Env) { e.LibraryVersion = xpath.XPath31 })
 	// The suite's own driver binds $result to the result of the
 	// transformation. That is the document node the assertions are written
 	// about, the same tree the context item is: on-empty-115b asks

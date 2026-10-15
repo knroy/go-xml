@@ -7,8 +7,8 @@ import (
 
 	"unicode"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // DecimalFormat holds an xsl:decimal-format declaration.
@@ -55,7 +55,7 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node, precedence int) error {
 		if a == nil {
 			return nil
 		}
-		v := a.Value
+		v := a.Value()
 		r := []rune(v)
 		if len(r) != 1 {
 			return fmt.Errorf(
@@ -87,11 +87,11 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node, precedence int) error {
 	// Presence, not a non-empty value: both are xs:string, so NaN="" is a
 	// legal declaration that formats NaN as the empty string.
 	if a := el.Attr("", "infinity"); a != nil {
-		df.Infinity = a.Value
+		df.Infinity = a.Value()
 		stated["infinity"] = true
 	}
 	if a := el.Attr("", "NaN"); a != nil {
-		df.NaN = a.Value
+		df.NaN = a.Value()
 		stated["NaN"] = true
 	}
 
@@ -305,7 +305,7 @@ func registerFormatNumber(l *xpath.Library, s *Stylesheet) {
 		// property of the processor, not of the module: the suite runs
 		// version="2.0" stylesheets under the 3.0 spec and demands the 3.0
 		// code, exactly as it does for XTDE1280 above.
-		picVersion := ctx.Version
+		picVersion := ctx.Version()
 		if s.maxVersion == 0 || s.maxVersion >= 3.0 {
 			picVersion = xpath.XPath31
 		}

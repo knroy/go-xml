@@ -10,7 +10,7 @@ themselves are compiled by [`xpath`](../xpath/), which is at 100% of the same
 suite for 2.0, 3.0 and 3.1.
 
 ```
-go get github.com/knroy/go-xml
+go get github.com/knroy/go-xml/v2
 ```
 
 ## Two calls
@@ -46,7 +46,7 @@ a syntax error can never reach you from `Eval`.
 HTML, JSON or text is a separate step, and it lives in `xslt`:
 
 ```go
-import "github.com/knroy/go-xml/xslt"
+import "github.com/knroy/go-xml/v2/xslt"
 
 seq, err := xquery.Eval(`<sum>{ 1 + 2 }</sum>`, ctx, xquery.Options{})
 err = xslt.Serialize(os.Stdout, seq, xslt.OutputSettings{OmitXMLDecl: true}, nil)
@@ -276,7 +276,7 @@ load-xquery-module("http://example.com/util")("functions")
 
 It reads modules through exactly what `import module` reads through, and
 nothing else. From a query that is the query's own `Options.Modules` and
-`Options.ModuleResolver`; from XPath it is `xpath.Context.Modules`, and from
+`Options.ModuleResolver`; from XPath it is `xpath.Env.Modules`, and from
 XSLT `xslt.TransformOptions.Modules` — both nil by default, so a call finds
 nothing and raises `FOQM0002`, the same answer an import gives as `XQST0059`.
 The `location-hints` option is passed to the resolver, resolved against the
@@ -295,7 +295,7 @@ supplied variable or context item that does not match its declared type is
 
 The function lives in `xpath`'s library, but the processor behind it lives
 here, and `xpath` cannot import `xquery`. So **a Go program gets it by
-importing this package** — a blank `import _ "github.com/knroy/go-xml/xquery"`
+importing this package** — a blank `import _ "github.com/knroy/go-xml/v2/xquery"`
 is enough for a stylesheet or an XPath expression to use it. A program that
 does not import `xquery` gets `FOQM0006`, which the specification defines for
 a processor without the function. The `go-xml` command links `xquery`, so both
@@ -392,7 +392,7 @@ and exceeding it **fails** the compilation with an error wrapping
 **Not implemented on this path.** Automatic validation of the input: a source
 document is not validated because the query imported a schema, so it stays
 untyped until the query asks. `validate strict { . }` types it, as does a
-caller that validates it first with `xsd.ValidateOptions{Annotate: true}`; a
+caller that validates it first with `xsd.Schema.ValidateCopy`; a
 validated node then atomises to its typed value. `SchemaUnionTypes` and `SchemaListTypes` — the two optional
 interfaces `xslt` also implements — are not implemented here, so a union or
 list type an imported schema defines resolves as a name but does not match a
@@ -407,11 +407,10 @@ that imports only `xpath` or `xquery` gets `FOXT0004`, the specification's code
 for "no processor".
 
 ```go
-import "github.com/knroy/go-xml/xslt" // linking xslt registers the processor
+import "github.com/knroy/go-xml/v2/xslt" // linking xslt registers the processor
 
 res, err := xslt.NewFileResolver("/srv/xsl") // all the transformation may read
-ctx := xpath.NewContext(nil, xpath.Builtins())
-ctx.Docs = res
+ctx := xpath.NewContext(nil, xpath.Builtins(), func(e *xpath.Env) { e.Docs = res })
 seq, err := xquery.Eval(`transform(map{
     'stylesheet-location': 'render.xsl', 'source-location': 'in.xml'})?output`,
     ctx, xquery.Options{BaseURI: "file:///srv/xsl/"}) // relative locations resolve here
@@ -419,10 +418,10 @@ seq, err := xquery.Eval(`transform(map{
 
 The nested transformation inherits the query's `Context` and nothing else:
 `stylesheet-location`, `source-location`, its `xsl:include`s and its own
-`fn:doc` resolve through `ctx.Docs` only, so a query with no resolver gets the
+`fn:doc` resolve through `Env.Docs` only, so a query with no resolver gets the
 same `FOXT0002` refusal a stylesheet with none gets, and `package-name` is
 refused (there is no package resolver). Its recursion depth continues the
-query's and is bounded by `ctx.MaxDepth`, so a stylesheet that calls back into
+query's and is bounded by `Env.MaxDepth`, so a stylesheet that calls back into
 a query that transforms again is refused with `XPDY0001` rather than
 exhausting the stack. The options F&O defines that are accepted without effect
 are listed in [known-gaps.md](known-gaps.md).

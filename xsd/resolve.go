@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 )
 
 // A Resolver turns a schemaLocation into schema source.
@@ -263,13 +262,12 @@ func isRemote(location string) bool {
 	return false
 }
 
-// Defaults for HTTPResolver.
+// The resolvers a refusal names, and where it points for remote locations.
+// HTTPResolver lives in package xsdnet, so that this package does not link
+// net/http.
 const (
-	// DefaultFetchTimeout bounds one network fetch.
-	DefaultFetchTimeout = 30 * time.Second
-	// DefaultMaxSchemaBytes bounds one fetched schema document. Real
-	// schemas are far smaller; the W3C's own largest is under 200 kB.
-	DefaultMaxSchemaBytes = 16 << 20
+	resolverChoices = "a FileResolver, a MapResolver or an HTTPResolver"
+	remoteHint      = "see HTTPResolver"
 )
 
 // MapResolver resolves from an in-memory table, for callers that know every
@@ -303,10 +301,3 @@ func (r *MapResolver) Resolve(namespace, location, base string) (io.ReadCloser, 
 	}
 	return nil, "", nil
 }
-
-// ErrPrivateAddress is returned when a fetch is refused because the host
-// resolved to an address in a range HTTPResolver does not dial by default.
-// It is wrapped by the dial error, so errors.Is finds it through the
-// *url.Error and *net.OpError that net/http puts around it.
-var ErrPrivateAddress = errors.New(
-	"address is in a private range; set AllowPrivateAddresses to permit it")

@@ -3,7 +3,7 @@ package relaxng
 import (
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 func parseSchemaDoc(t *testing.T, s string) *xdm.Node {

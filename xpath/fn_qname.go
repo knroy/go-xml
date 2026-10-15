@@ -8,7 +8,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // registerQNameFuncs adds the QName accessors and constructors.
@@ -43,7 +43,7 @@ import (
 // untypedAtomic case and so always the general error.
 func errNotQName(ctx *Context, a *xdm.Atomic, format string, args ...any) error {
 	if a != nil && a.Type == xdm.TypeUntypedAtomic &&
-		ctx != nil && ctx.Version.atLeast30() {
+		ctx != nil && ctx.Version().atLeast30() {
 		return xdm.Errorf("XPTY0117",
 			"%s", fmt.Sprintf(format, args...))
 	}
@@ -219,9 +219,9 @@ func registerQNameFuncs(l *Library) {
 		// error rather than something to walk. in-scope-prefixes(/) was
 		// answering with the root element's prefixes, which is a different
 		// question from the one asked and hides the mistake.
-		if el.Kind != xdm.KindElement {
+		if el.Kind() != xdm.KindElement {
 			return nil, xdm.ErrType(
-				"in-scope-prefixes(): expected an element, got %s", el.Kind)
+				"in-scope-prefixes(): expected an element, got %s", el.Kind())
 		}
 		// InScopeNamespaces returns a map, and Go randomises map
 		// iteration, so the prefixes are sorted before they are
@@ -286,10 +286,10 @@ func registerURIFuncs(l *Library) {
 			// resolved against the source document instead of against the
 			// stylesheet, which is a different answer whenever the two
 			// documents come from different places.
-			base = ctx.StaticBaseURI
+			base = ctx.StaticBaseURI()
 			if base == "" {
 				if n, ok := ctx.Item.(*xdm.Node); ok {
-					base = n.BaseURI
+					base = n.BaseURI()
 				}
 			}
 		}
@@ -444,8 +444,8 @@ func registerURIFuncs(l *Library) {
 	// using. Empty means nothing was set, and codepoint is then the default
 	// the spec states.
 	l.registerFn("default-collation", []int{0}, func(ctx *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
-		if ctx != nil && ctx.collationURI != "" {
-			return strSeq(ctx.collationURI), nil
+		if ctx != nil && ctx.st().collationURI != "" {
+			return strSeq(ctx.st().collationURI), nil
 		}
 		return strSeq(CodepointCollation), nil
 	})

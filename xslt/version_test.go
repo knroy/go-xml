@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knroy/go-xml/internal/version"
+	"github.com/knroy/go-xml/v2/internal/version"
 )
 
 // TestProductVersionIsTheModuleConstant is the xslt half of the version

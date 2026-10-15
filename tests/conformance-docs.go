@@ -31,7 +31,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/knroy/go-xml/tests/conformance"
+	"github.com/knroy/go-xml/v2/tests/conformance"
 )
 
 func main() {

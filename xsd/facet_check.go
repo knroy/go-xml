@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // The Part 2 §4.3 schema component constraints on constraining facets.

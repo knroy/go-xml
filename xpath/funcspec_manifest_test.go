@@ -7,7 +7,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // manifestPath is the normalized data source cmd/genfunctions writes from the
@@ -230,7 +230,7 @@ func TestCallBindingMigrationInventory(t *testing.T) {
 // with the specification.
 func TestMigratedSignaturesMatchManifest(t *testing.T) {
 	manifest := manifestByKey(t)
-	for key, sig := range specSignatures {
+	for key, sig := range specSignatures() {
 		name, arity, ok := splitSpecEntryKey(key)
 		if !ok {
 			t.Errorf("specSignatures key %q is not in \"local/arity\" or "+

@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // SecondaryResult is one document produced by xsl:result-document.
@@ -139,8 +139,8 @@ func (i *resultDocumentInstr) settings(rt *runtime) (OutputSettings, error) {
 	// the xsl:result-document element, which is where the attribute was
 	// written.
 	base := rt.sheet.baseURI
-	if i.overrides != nil && i.overrides.BaseURI != "" {
-		base = i.overrides.BaseURI
+	if i.overrides != nil && i.overrides.BaseURI() != "" {
+		base = i.overrides.BaseURI()
 	}
 	// The URI is resolved against the base URI of the element that wrote the
 	// attribute, which is not always the xsl:result-document: a named
@@ -211,8 +211,8 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if derr != nil {
 			return derr
 		}
-		if err := i.validation.assess(rt, doc); err != nil {
-			return err
+		if doc, derr = i.validation.assess(rt, doc); derr != nil {
+			return derr
 		}
 		// The assessment annotated the document toDocument built, and that
 		// document is a COPY: toTree deep-copies every node it adopts, so
@@ -430,7 +430,7 @@ func checkComputedMethod(name, v string) error {
 	if v == "" || isEQName(v) || (isLexicalQName(v) && strings.Contains(v, ":")) {
 		return nil
 	}
-	for _, want := range xsltElements["result-document"].attrs[name].values {
+	for _, want := range xsltElements()["result-document"].attrs[name].values {
 		if v == want {
 			return nil
 		}

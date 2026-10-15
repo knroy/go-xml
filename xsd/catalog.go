@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // A CatalogResolver answers schemaLocation from an in-memory table keyed by
@@ -118,7 +118,7 @@ func (r *CatalogResolver) Add(namespace string, src []byte, aliases ...string) {
 // Nil, the default, makes a miss an error, which is what a server wants. A
 // command-line tool that should still read a schema beside the one it was
 // given sets a FileResolver here; one that may reach the network sets an
-// HTTPResolver, and thereby says so deliberately.
+// xsdnet.HTTPResolver, and thereby says so deliberately.
 func (r *CatalogResolver) SetFallback(f Resolver) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

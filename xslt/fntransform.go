@@ -8,8 +8,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
-	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
+	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 // fn:transform runs a transformation described by an options map and returns
@@ -98,24 +99,25 @@ func callerOf(rt *runtime) transformCaller {
 // into a query that calls fn:transform again is charged one level per hop.
 func init() {
 	xpath.RegisterTransformProcessor(func(ctx *xpath.Context, opts *xdm.MapItem) (xdm.Sequence, error) {
-		maxDepth := ctx.MaxDepth
+		env := ctx.Env()
+		maxDepth := env.MaxDepth
 		if maxDepth == 0 {
 			maxDepth = xpath.MaxDepth
 		}
 		c := transformCaller{
 			opts: TransformOptions{
-				Documents:        ctx.Docs,
-				Collections:      ctx.Collections,
-				Texts:            ctx.Texts,
-				Environment:      ctx.Environment,
+				Documents:        env.Docs,
+				Collections:      env.Collections,
+				Texts:            env.Texts,
+				Environment:      env.Environment,
 				MaxDepth:         maxDepth,
-				ImplicitTimezone: ctx.ImplicitTimezone,
+				ImplicitTimezone: env.ImplicitTimezone,
 			},
 			maxDepth: maxDepth,
-			goCtx:    ctx.Ctx,
+			goCtx:    env.Ctx,
 		}
-		if ctx.HasNow {
-			c.opts.Now = ctx.Now
+		if env.HasNow {
+			c.opts.Now = env.Now
 		}
 		return runNestedTransform(ctx, c, opts)
 	})
@@ -380,8 +382,8 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 	// transforms itself that is the same shallow depth every time round.
 	// ctx.Depth is the depth of the fn:transform call actually being made.
 	depth := rt.depth
-	if ctx.Depth > depth {
-		depth = ctx.Depth
+	if int(ctx.Depth) > depth {
+		depth = int(ctx.Depth)
 	}
 	depth++
 	if rt.maxDepth > 0 && depth > rt.maxDepth {
@@ -497,6 +499,12 @@ func runNestedTransform(ctx *xpath.Context, rt transformCaller, opts *xdm.MapIte
 	// allowances rather than a fresh pair, on the same policy. See
 	// TransformOptions.nestedBudget.
 	topts.nestedBudget = ctx
+	// It shares the calling transform's lock and locals stack. See
+	// TransformOptions.nestedLock.
+	topts.nestedLock, topts.nestedLocals = nil, nil
+	if prt := runtimeOf(ctx); prt != nil && prt.transformState != nil && prt.evalLock != nil {
+		topts.nestedLock, topts.nestedLocals = prt.evalLock, prt.locals
+	}
 	topts.DisableAssertions = !assertions
 	topts.disableMessages = !messages
 	// The nested transform is a transformation of its own: the outer one's
@@ -678,9 +686,9 @@ func transformSourceLocation(
 	var err error
 	if cr, ok := docs.(xpath.ContextDocumentResolver); ok {
 		// Charged to the calling evaluation's entity allowance, as fn:doc is.
-		tree, err = cr.ResolveDocumentIn(ctx, loc, ctx.StaticBaseURI)
+		tree, err = resolveDocIn(cr, ctx, loc, ctx.StaticBaseURI())
 	} else {
-		tree, err = docs.ResolveDocument(loc, ctx.StaticBaseURI)
+		tree, err = docs.ResolveDocument(loc, ctx.StaticBaseURI())
 	}
 	if err != nil {
 		return nil, xdm.Errorf("FOXT0002",
@@ -741,7 +749,7 @@ func nestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem)
 	// the call, the rule F&O 3.1 states for base-output-uri; err-9a passes
 	// "transform/include.xsl" and expects its xsl:include to resolve.
 	if base != "" {
-		base = resolveAgainst(ctx.StaticBaseURI, base)
+		base = resolveAgainst(ctx.StaticBaseURI(), base)
 	}
 	var named []string
 	for _, k := range []string{"stylesheet-location", "stylesheet-node", "stylesheet-text", "package-name"} {
@@ -827,7 +835,7 @@ func nestedStylesheet(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem)
 					"(no resolver configured): %q", loc)
 		}
 		if base == "" {
-			base = ctx.StaticBaseURI
+			base = ctx.StaticBaseURI()
 		}
 		// ResolveModule is preferred over ResolveDocument because it hands
 		// back the URI it resolved to as well as the tree, and the nested
@@ -1223,7 +1231,7 @@ func postProcess(ctx *xpath.Context, f *xdm.FunctionItem, key string, val xdm.Se
 	if f == nil {
 		return val, nil
 	}
-	out, err := f.Invoke(ctx, []xdm.Sequence{
+	out, err := xpathleaf.CallItem(ctx, f, []xdm.Sequence{
 		{xdm.NewString(key)},
 		val,
 	})
@@ -1266,10 +1274,20 @@ func deliverSecondary(format string, sec SecondaryResult) (xdm.Sequence, error) 
 		}
 		return xdm.Sequence{xdm.NewString(buf.String())}, nil
 	default:
-		doc := &xdm.Node{Kind: xdm.KindDocument}
+		// The document node is built over copies of the result's nodes, so
+		// that each is its child -- parent included -- and a document node in
+		// the result contributes its children, as 5.7.1 has it.
+		doc := xdm.NewNode(xdm.KindDocument, xdm.QName{}, "")
 		for _, it := range sec.Nodes {
-			if n, ok := it.(*xdm.Node); ok {
-				doc.Children = append(doc.Children, n)
+			n, ok := it.(*xdm.Node)
+			switch {
+			case !ok:
+			case n.Kind() == xdm.KindDocument:
+				for ch := range n.Children() {
+					doc.AppendCopy(ch)
+				}
+			default:
+				doc.AppendCopy(n)
 			}
 		}
 		return xdm.Sequence{doc}, nil

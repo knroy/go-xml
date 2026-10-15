@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // xsl:source-document, section 18.1.
@@ -124,7 +124,7 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 	if err := validSourceDocumentURI(href); err != nil {
 		return nil, err
 	}
-	docs := rt.ctx.Docs
+	docs := rt.ctx.Env().Docs
 	if docs == nil {
 		return nil, fmt.Errorf(
 			"FODC0002: document access is disabled (no resolver configured): %q",
@@ -135,11 +135,11 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 	// xml:base on it or an ancestor may move.
 	base := i.baseURI
 	if base == "" {
-		base = rt.ctx.StaticBaseURI
+		base = rt.ctx.StaticBaseURI()
 	}
 	if base == "" {
 		if n, ok := rt.ctx.Item.(*xdm.Node); ok {
-			base = n.BaseURI
+			base = n.BaseURI()
 		}
 	}
 	tree, err := resolveDocumentIn(rt.ctx, href, base)
@@ -149,13 +149,8 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 	if i.validation.isDefault() {
 		return fragmentOf(rt.sheet.stripInputAnnotations(tree.Root), href)
 	}
-	copied := xdm.NewTree()
-	copied.Root.BaseURI = tree.Root.BaseURI
-	for _, ch := range tree.Root.Children {
-		copied.Root.AppendChild(deepCopy(ch))
-	}
-	copied.Finalize()
-	if err := i.validation.assess(rt, copied.Root); err != nil {
+	root, err := i.validation.assessSource(rt, tree)
+	if err != nil {
 		return nil, err
 	}
 	// Stripping happens after assessment, not instead of it. 3.5 scopes
@@ -165,7 +160,7 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 	// error whether or not the annotations it would have produced survive.
 	// Only the annotations go, which is what makes
 	// "data(.) instance of xs:decimal" false over a validated document.
-	return fragmentOf(rt.sheet.stripInputAnnotations(copied.Root), href)
+	return fragmentOf(rt.sheet.stripInputAnnotations(root), href)
 }
 
 // fragmentOf applies the fragment identifier of href, if there is one, to the
@@ -218,6 +213,37 @@ func fragmentOf(root *xdm.Node, href string) (*xdm.Node, error) {
 // conformance harness's preloaded sources already do.
 func (s validationSpec) isDefault() bool {
 	return s.typeName == nil && s.mode == validateStrip
+}
+
+// assessSource applies the validation to tree, a document the resolver
+// retrieved and may have cached, which must not change.
+//
+// The document assessed is a copy that has the original's nodes but none of
+// its document URI, DTD, XML version or positions. Strict validation against
+// an imported schema copies whatever it assesses, so there the original
+// stands in for that copy when it lacks those properties anyway, and the
+// two it may have are cleared from the typed result. Every other mode can
+// return or annotate the node it is given, and gets the copy.
+func (s validationSpec) assessSource(rt *runtime, tree *xdm.Tree) (*xdm.Node, error) {
+	if s.typeName == nil && s.mode == validateStrict && rt.sheet.schema != nil &&
+		tree.DocType == "" && !tree.HasPositions() {
+		root, err := s.assess(rt, tree.Root)
+		if err != nil {
+			return nil, err
+		}
+		if t := root.Tree(); t != nil && t != tree {
+			root.SetDocumentURI("")
+			t.XMLVersion = ""
+		}
+		return root, nil
+	}
+	copied := xdm.NewTree()
+	copied.Root.SetBaseURI(tree.Root.BaseURI())
+	for ch := range tree.Root.Children() {
+		copied.Root.AppendCopy(ch)
+	}
+	copied.Finalize()
+	return s.assess(rt, copied.Root)
 }
 
 // validSourceDocumentURI rejects an @href that is not a usable URI reference,
