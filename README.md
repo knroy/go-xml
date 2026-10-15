@@ -7,6 +7,10 @@ no JVM, no libxml2 — one `go get`, and it cross-compiles like any Go package.
 go get github.com/knroy/go-xml
 ```
 
+> **This is the v1 branch.** v1 receives fixes here and is released as
+> `v1.x.y`. The current major version is v2, on `main`:
+> `go get github.com/knroy/go-xml/v2`.
+
 Validate a document against a schema:
 
 ```go

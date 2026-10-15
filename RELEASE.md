@@ -83,6 +83,11 @@ tag-push workflow closes.
 
 ## The manual steps
 
+v1 is released from the `v1` branch: a fix lands on `v1` by pull request, and
+the release commit and tag are made there. `main` carries v2
+(`github.com/knroy/go-xml/v2`), released by the procedure in `main`'s copy of
+this file.
+
 Four, in this order. The order is the whole point: the version commit precedes
 the tag.
 
@@ -164,7 +169,7 @@ unwind, deliberately. Finish by hand — the remaining work is a `go mod edit`,
 a commit, a tag push and possibly a `gh release create`, all of which the
 workflow logs show in full.
 
-Note that if the default branch is protected against direct pushes, step 5
+Note that if the `v1` branch is protected against direct pushes, step 5
 will always fail. That is not worked around: the alternatives are weakening
 the protection or forcing past it, and a failed step with a clear log is
 better than either. The pin bump is then a normal pull request.
