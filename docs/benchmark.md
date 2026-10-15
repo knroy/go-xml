@@ -535,10 +535,11 @@ The two differences left are not go-xml bugs:
   everything it needs. That is the steady state of a long-running service.
 - **go-xml re-parses each input in both modes**, as the other engines do. No
   engine was allowed to cache documents across passes.
-- **The harness is not part of the repository.** The engine downloads,
-  corpora and generated inputs are large, and none is third-party code this
-  repository should carry. The method above is complete enough to rebuild it.
-  The figures here come from the two runs recorded at the top of this page.
+- **The harness is its own repository,**
+  [go-xml-bench](https://github.com/knroy/go-xml-bench), cloned at `bench/`
+  inside a go-xml checkout. It fetches the engines and inputs rather than
+  carrying them, and keeps the two runs this page reports
+  (`results-v1-f45068c.json`, `results-v2.0.0.json`).
 - **macOS, not Linux.** On macOS, Go's runtime re-commits every reused heap
   page with `madvise`, which costs 13–26% of CPU on parse-heavy work. Linux
   does not. In a 4-CPU Linux VM on the same machine, cold CLI runs used

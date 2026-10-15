@@ -270,11 +270,13 @@ The 1 and 10 MB C14N workload gives the same split (parse 74%, write 22%).
 ## How to profile a change
 
 **1. Build a warm-loop harness.** Copy the benchmark's warm loop
-(`compileGo` in the local `bench/cmd/benchrun/warm.go`) so the parse options,
+(`compileGo` in `bench/cmd/benchrun/warm.go`) so the parse options,
 resolvers and parameters match: compile once, then parse →
 transform/query/validate → serialise to `io.Discard`. The figures above came
-from a test file next to it (`bench/cmd/benchrun/prof_test.go`, local like
-the rest of `bench/`). This is its core, which can be dropped into any
+from a test file next to it (`bench/cmd/benchrun/prof_test.go`).
+`bench/` is the [go-xml-bench](https://github.com/knroy/go-xml-bench)
+repository, cloned inside the checkout; it is its own module, so its commands
+run with `go -C bench`. This is its core, which can be dropped into any
 package that can build a `run` function:
 
 ```go
@@ -310,7 +312,7 @@ XRechnung stage 1 +7.3%, Peppol +9.2%).
 **2. Run it and read the profile.**
 
 ```sh
-go test -c -o /tmp/prof.test ./bench/cmd/benchrun
+go -C bench test -c -o /tmp/prof.test ./cmd/benchrun
 PROF_WORKLOAD=peppol-schematron PROF_OUT=/tmp/p PROF_PASSES=40 \
   /tmp/prof.test -test.run TestProfile -test.count=1 -test.v
 go tool pprof -top -nodecount=30 /tmp/prof.test /tmp/p/cpu.pprof
@@ -423,7 +425,7 @@ To profile on Linux, cross-compile the harness and mount the checkout at the
 same path, so the workloads' paths resolve:
 
 ```sh
-GOOS=linux GOARCH=arm64 go test -c -o /tmp/p/prof-linux.test ./bench/cmd/benchrun
+GOOS=linux GOARCH=arm64 go -C bench test -c -o /tmp/p/prof-linux.test ./cmd/benchrun
 docker run --rm -v "$PWD:$PWD:ro" -v /tmp/p:/tmp/p -w "$PWD/bench/cmd/benchrun" \
   -e PROF_WORKLOAD=docbook-xsltng -e PROF_OUT=/tmp/p -e PROF_PASSES=15 \
   golang:1.26 /tmp/p/prof-linux.test -test.run TestProfile -test.count=1
