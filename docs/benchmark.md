@@ -27,10 +27,15 @@ cited below where it explains a move; it and the earlier runs are in this
 file's history. Where go-xml's time goes, and how to measure a change, is in
 [profiling](profiling.md).
 
+The harness, its workloads and the raw results of both runs are in
+[go-xml-bench](https://github.com/knroy/go-xml-bench); see
+[Reproducing these numbers](#reproducing-these-numbers).
+
 ## Contents
 
 - [Machine and engines](#machine-and-engines)
 - [Method](#method)
+- [Reproducing these numbers](#reproducing-these-numbers)
 - [Results at a glance](#results-at-a-glance)
   - [What changed from v1 to v2](#what-changed-from-v1-to-v2)
 - [XSLT: DocBook xslTNG](#xslt-docbook-xsltng)
@@ -111,6 +116,31 @@ Absolute reference times in the tables below are from the v2 run at
 **go-xml's flags** match what its own test runner uses for the same corpus
 (`-allow-doctype`, `-allow-unparsed-text`, `-allow-dir`). The library refuses
 these features by default; turning them on does not change its speed.
+
+## Reproducing these numbers
+
+The harness is its own repository,
+[go-xml-bench](https://github.com/knroy/go-xml-bench), cloned at `bench/`
+inside a go-xml checkout. It builds against the checked-out go-xml, reads its
+inputs from the checkout's `testdata/`, and downloads the engines and the
+third-party inputs with pinned checksums rather than carrying them.
+
+    git clone https://github.com/knroy/go-xml
+    git clone https://github.com/knroy/go-xml-bench go-xml/bench
+    cd go-xml/bench
+    sh fetch-engines.sh && sh fetch-inputs.sh && sh xrechnung-stage1.sh
+    go run ./cmd/benchrun                  # every workload -> results.json
+
+The figures on this page come from the two runs kept there:
+
+| Run | Results |
+|---|---|
+| v1 at `f45068c` | [`results-v1-f45068c.json`](https://github.com/knroy/go-xml-bench/blob/main/results-v1-f45068c.json) |
+| v2.0.0 at `a6f334f1` | [`results-v2.0.0.json`](https://github.com/knroy/go-xml-bench/blob/main/results-v2.0.0.json) |
+
+The [harness README](https://github.com/knroy/go-xml-bench#readme) lists the
+prerequisites, flags and workload format. Expect different absolute times on
+other hardware; the ratios are what should carry over.
 
 ## Results at a glance
 
@@ -536,10 +566,8 @@ The two differences left are not go-xml bugs:
 - **go-xml re-parses each input in both modes**, as the other engines do. No
   engine was allowed to cache documents across passes.
 - **The harness is its own repository,**
-  [go-xml-bench](https://github.com/knroy/go-xml-bench), cloned at `bench/`
-  inside a go-xml checkout. It fetches the engines and inputs rather than
-  carrying them, and keeps the two runs this page reports
-  (`results-v1-f45068c.json`, `results-v2.0.0.json`).
+  [go-xml-bench](https://github.com/knroy/go-xml-bench); see
+  [Reproducing these numbers](#reproducing-these-numbers).
 - **macOS, not Linux.** On macOS, Go's runtime re-commits every reused heap
   page with `madvise`, which costs 13–26% of CPU on parse-heavy work. Linux
   does not. In a 4-CPU Linux VM on the same machine, cold CLI runs used

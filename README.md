@@ -243,7 +243,8 @@ Eight packages, each usable on its own:
 * **[docs/benchmark.md](docs/benchmark.md)** — go-xml against Saxon-HE,
   BaseX, Jing, Xerces-J, libxml2 and `encoding/xml` on DocBook, e-invoicing,
   XMark, schema validation and parsing, cold and warm, with outputs checked
-  for agreement before anything is timed.
+  for agreement before anything is timed. The harness is
+  [go-xml-bench](https://github.com/knroy/go-xml-bench).
 * **[docs/profiling.md](docs/profiling.md)** — where v2's time and memory go
   per workload, how to profile and A/B a change, and the ideas measured and
   rejected.
@@ -735,8 +736,9 @@ introduces bought exactly zero, so it was reverted. The comment in
 ## Benchmarks
 
 The full comparison with other engines, cold and warm, across nine workloads,
-is in [docs/benchmark.md](docs/benchmark.md), re-run after the performance work
-in [docs/profiling.md](docs/profiling.md). The figures below are the in-process
+is in [docs/benchmark.md](docs/benchmark.md), measured with
+[go-xml-bench](https://github.com/knroy/go-xml-bench) and re-run after the
+performance work in [docs/profiling.md](docs/profiling.md). The figures below are the in-process
 Go benchmarks; they and the Saxon table after them were measured in August 2026, before that
 work, on a UBL and an Oman corpus that are not in this repository, and have not
 been re-run since. benchmark.md has the current figures.
