@@ -77,6 +77,18 @@ What this file adds, and that one does not:
 Real gaps: a genuine bug or an unimplemented rule, failing now. Ordered by how
 much each costs.
 
+### `xs:keyref` memory grows with the square of document depth (XSD, performance)
+
+Validating identity constraints is correct but not cheap on large documents.
+In `xsd`'s identity benchmarks, a `keyref` over nested elements allocates
+3.2 MB at depth 240, 11.8 MB at 480 and 45.4 MB at 960: about four times the
+memory for twice the depth. A key or keyref over 40 sibling fields allocates
+83–90 MB. v2 measures the same allocations.
+The cause has not been profiled; the audit that found it suspects the key
+tables being copied per scope and target nodes being walked again. Found by
+an external audit of v2.0.0; the figures are the `BenchmarkIdentity*`
+benchmarks in `xsd/`.
+
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
 **3 of the 23 XSLT 3.0 failures** — `si-fork-902`, `si-fork-952` and

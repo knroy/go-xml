@@ -4,6 +4,27 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## v1.8.1 — 2026-10-15
+
+A security and release-gate update from an external audit of v2.0.0, which
+applies to v1 too. No API change. Build with a patched Go as well:
+[docs/security.md](docs/security.md#build-with-a-patched-go) explains which
+fixes ship in Go releases rather than here.
+
+### Fixed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `golang.org/x/text` v0.36.0 loops forever on some invalid input (GO-2026-5970) | Reached through collation. go-xml requires v0.41.0, the newest that still builds with Go 1.25. | [`b785a84`][b785a84] |
+| `tests/check.sh fast` failed in a checkout without the W3C suites | The vendored-schemas lane ran its driver with no roots. It is now SKIP, "fixture roots absent". | [`ca9760c`][ca9760c] |
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| CI job `vulncheck` | Runs `govulncheck` over go-xml and `w3cschemas` on the newest Go. | — |
+| `TestTrailingSlashSymlinkStaysConfined` in each confined resolver | Pins that a name ending in `/` cannot follow a symlink out of an `os.Root`, even on a Go without the GO-2026-4970 fix. | [`2a9b961`][2a9b961] |
+
 ## v1.8.0 — 2026-10-10
 
 ### Added
@@ -1446,3 +1467,6 @@ here so every entry in this file sits under a release.
 [900cece]: https://github.com/knroy/go-xml/commit/900cece
 [ba09cac]: https://github.com/knroy/go-xml/commit/ba09cac
 [1a3cf7f]: https://github.com/knroy/go-xml/commit/1a3cf7f
+[b785a84]: https://github.com/knroy/go-xml/commit/b785a84
+[ca9760c]: https://github.com/knroy/go-xml/commit/ca9760c
+[2a9b961]: https://github.com/knroy/go-xml/commit/2a9b961

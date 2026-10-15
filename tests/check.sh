@@ -886,9 +886,19 @@ for _r in xslt30-test qt3tests xspec; do
 		_vend_absent="$_vend_absent $_r"
 	fi
 done
-_vend=$($GO run ./tests/corpora vendored $_vend_roots 2>&1 >/dev/null | tail -1)
+# With NO root present -- a clean checkout, testdata/ is not in git -- there is
+# nothing to measure. The driver used to be run anyway with no arguments,
+# printed its usage line and exited 2, and the lane read FAIL "the corpus
+# produced no result": a missing fixture reported as a broken schema rule. A
+# lane that measured nothing is SKIP, named as not run, never FAIL or PASS.
+_vend=""
+[ -z "$_vend_roots" ] ||
+	_vend=$($GO run ./tests/corpora vendored $_vend_roots 2>&1 >/dev/null | tail -1)
 _vend_ok=$(printf '%s' "$_vend" | sed -n 's/^vendored schemas: \([0-9]*\) loaded.*/\1/p')
-if [ -z "$_vend_ok" ]; then
+if [ -z "$_vend_roots" ]; then
+	skip "vendored schemas: not run -- fixture roots absent:$_vend_absent"
+	lane "vendored schemas" SKIP "not run -- fixture roots absent:$_vend_absent"
+elif [ -z "$_vend_ok" ]; then
 	fail "vendored schemas: the corpus produced no result.
     These schemas are vendored in testdata/, so unlike UBL and CII this
     check has no legitimate skip. A corpus that is present and reports
