@@ -180,7 +180,7 @@ Compile time (warm mode, median per workload):
 | Peppol Schematron (compiled XSLT 2.0; CEN and PEPPOL) | 23 ms | 23 ms | Saxon 599 ms |
 | XRechnung UBL → xr | 6.6 ms | 8.2 ms | Saxon 422 ms |
 | XRechnung xr → HTML | 7.8 ms | 6.3 ms | Saxon 437 ms |
-| XMark query | 1.0 ms | 0.85 ms | Saxon 222 ms, BaseX 229 ms |
+| XMark query | 1.0 ms | 0.85 ms | Saxon 222 ms; BaseX — |
 | XSD catalog schemas | 2.9 ms | 2.2 ms | Xerces 99 ms |
 | DocBook 5.2 RELAX NG (608 KB) | 25 ms | 23 ms | Jing 120 ms |
 
@@ -188,6 +188,13 @@ Each compile is timed once, so a sub-millisecond figure is noisy. XMark's
 query compile read 0.35 ms at `4068c98c` and 0.85 ms here. Compiled 300 times
 in a loop, both trees take about 16 µs a query and make the same 251
 allocations.
+
+A JVM compile is timed once, in a fresh JVM, so it includes class loading.
+Saxon then reuses that compiled query for every item. BaseX can't: it binds
+the input when it compiles, and a context bound after compilation is ignored.
+So BaseX compiles per item, and its warm time per item includes that. On
+XMark that compile is 0.4–0.8 ms, against 10–110 ms to parse the input. The
+229 ms it read here was the cold JVM, not compilation, so no figure is given.
 
 ### What changed from v1 to v2
 
