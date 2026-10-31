@@ -1534,10 +1534,15 @@ func (s *textStore) add(v string) (uint32, uint32) {
 	// Every unsafe.String in the module is over append-only bytes (the
 	// tokeniser's arena, this store), which keeps that true.
 	if len(v) >= textOwnFrom {
-		s.newBlock(unsafe.Slice(unsafe.StringData(v), len(v)))
-		return uint32(len(s.blocks)-1) << textShift, uint32(len(v))
+		return s.keep(unsafe.Slice(unsafe.StringData(v), len(v)))
 	}
 	return s.addBytes(unsafe.Slice(unsafe.StringData(v), len(v)), 0)
+}
+
+// keep stores b, which nothing else writes to, as a block of its own.
+func (s *textStore) keep(b []byte) (uint32, uint32) {
+	s.newBlock(b)
+	return uint32(len(s.blocks)-1) << textShift, uint32(len(b))
 }
 
 // addBytes stores b with room for extra bytes after it, which extend uses

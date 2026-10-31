@@ -472,7 +472,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 				sawPrologToken = true
 				continue
 			}
-			run.add(cur, t)
+			run.add(cur, t, dec)
 
 		case *xml.Comment:
 			t := *tok
@@ -876,7 +876,7 @@ type textRun struct {
 	stored bool // the run did not start with white space and is in the store
 }
 
-func (r *textRun) add(parent *Node, b []byte) {
+func (r *textRun) add(parent *Node, b []byte, dec *xml.Decoder) {
 	if len(b) == 0 {
 		return
 	}
@@ -890,7 +890,14 @@ func (r *textRun) add(parent *Node, b []byte) {
 		// A run that starts with anything but white space can be neither
 		// stripped nor shared, so it goes straight to the store.
 		if !onlySpace(b) {
-			r.node.v0, r.node.v1 = r.node.tree.text.addBytes(b, 0)
+			if len(b) >= textOwnFrom && cap(b)-len(b) <= len(b)/8 {
+				// Long enough for a block of its own, and not much larger
+				// than its value: the decoder's buffer becomes the block,
+				// rather than being copied into one.
+				r.node.v0, r.node.v1 = r.node.tree.text.keep(dec.TakeText())
+			} else {
+				r.node.v0, r.node.v1 = r.node.tree.text.addBytes(b, 0)
+			}
 			r.stored = true
 			return
 		}

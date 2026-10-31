@@ -224,6 +224,15 @@ func NewDecoderSize(r io.Reader, size int) *Decoder {
 // minWindow is the smallest read window NewDecoderSize uses.
 const minWindow = 512
 
+// TakeText hands the caller the CharData last returned, to keep: the Decoder
+// builds its next token in a new buffer rather than over it. It is called
+// only directly after RawToken returned a CharData.
+func (d *Decoder) TakeText() []byte {
+	b := d.tokText
+	d.scratch = nil
+	return b
+}
+
 // IsVersion11 reports whether the document declared version="1.1". The
 // version comes from the XML declaration and nowhere else, so there is no
 // setter: a caller able to assert a version could give a 1.0 document 1.1's

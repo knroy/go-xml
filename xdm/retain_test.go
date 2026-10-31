@@ -52,3 +52,33 @@ func TestNamespaceURIDoesNotPinArena(t *testing.T) {
 		t.Errorf("a namespace declaration costs %d bytes per kept tree, want under 2 KB", ns-plain)
 	}
 }
+
+// A text value long enough for a block of its own was built in the
+// tokeniser's buffer and then copied into the block: two allocations of its
+// size. The buffer is handed over now, when it is not much larger than the
+// value. Measured on the e-invoice corpus, whose attachments are base64 text:
+// 4.10 MB allocated a pass before, 3.49 MB after.
+func TestLongTextIsNotCopied(t *testing.T) {
+	if raceEnabled {
+		t.Skip("allocation sizes are not stable under -race")
+	}
+	long := strings.Repeat("QUJDRA==", 25000) // 200 KB
+	doc := `<r><b>short</b><a>` + long + `</a><c>after</c></r>`
+	var tree *Tree
+	per := allocated(func() {
+		var err error
+		if tree, err = Parse(strings.NewReader(doc), ParseOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Logf("%d bytes allocated for a %d-byte text", per, len(long))
+	// The buffer's growth to the value's size is most of the rest: 323 KB
+	// measured, against 528 KB with the copy.
+	if per > uint64(len(long))*2 {
+		t.Errorf("parsing a %d-byte text allocated %d bytes, want under 2x: one buffer, not a buffer and a copy", len(long), per)
+	}
+	e := kids(kids(tree.Root)[0])
+	if kids(e[0])[0].Value() != "short" || kids(e[1])[0].Value() != long || kids(e[2])[0].Value() != "after" {
+		t.Errorf("values read back wrong")
+	}
+}
