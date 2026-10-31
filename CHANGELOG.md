@@ -4,13 +4,21 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased
+## v2.0.3 — 2026-10-30
+
+An XPath cost fix from an external audit. No API change.
 
 ### Fixed
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| `fn:normalize-space` built a list of every token | 180 calls on a 15 MB value allocated 133 GB. It now collapses in one pass and returns a collapsed value uncopied: 0 GB, 8x faster. | — |
+| `fn:normalize-space` built a list of every token | 180 calls on a 15 MB value allocated 133 GB. It now collapses in one pass and returns a collapsed value uncopied: 0 GB, 8x faster. | [`4264de8`][4264de8] |
+
+### w3cschemas
+
+| Change | What to do | Commit |
+|---|---|---|
+| `w3cschemas` v0.8.3 requires go-xml v2.0.3 | Nothing; the pin follows the release. | — |
 
 ## v2.0.2 — 2026-10-30
 
@@ -1616,3 +1624,4 @@ here so every entry in this file sits under a release.
 [b8f35ea]: https://github.com/knroy/go-xml/commit/b8f35ea
 [b76c85d]: https://github.com/knroy/go-xml/commit/b76c85d
 [8b7aab2]: https://github.com/knroy/go-xml/commit/8b7aab2
+[4264de8]: https://github.com/knroy/go-xml/commit/4264de8

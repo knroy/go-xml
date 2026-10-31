@@ -1859,7 +1859,7 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 
 **Seventeenth pass — normalize-space built a list of every token, 2026-10-30.**
 
-- **`fn:normalize-space` allocated per whitespace token** — cost, driven by document data. It was `strings.Join(splitXMLSpace(s), " ")`, so a value of n tokens built an n-element slice and then the result; a rule set evaluating it 180 times on one 15 MB value allocated 133.5 GB in 20.6 s, and `MaxBytes` charges only the result. It and `fn:tokenize#1` now use `collapseXMLSpace`, one pass into a builder, which returns an already-collapsed value as it is: 0 GB in 2.6 s, and 2.5 GB in 4.2 s for a value that needs collapsing. Pinned by `TestCollapseXMLSpaceMatchesSplitJoin` and `TestCollapseXMLSpaceAllocation` in `xpath/xml_space_test.go`.
+- **`fn:normalize-space` allocated per whitespace token** — cost, driven by document data. It was `strings.Join(splitXMLSpace(s), " ")`, so a value of n tokens built an n-element slice and then the result; a rule set evaluating it 180 times on one 15 MB value allocated 133.5 GB in 20.6 s, and `MaxBytes` charges only the result. It and `fn:tokenize#1` now use `collapseXMLSpace`, one pass into a builder, which returns an already-collapsed value as it is: 0 GB in 2.6 s, and 2.5 GB in 4.2 s for a value that needs collapsing. Pinned by `TestCollapseXMLSpaceMatchesSplitJoin` and `TestCollapseXMLSpaceAllocation` in `xpath/xml_space_test.go`. Fixed in v2.0.3.
 
 **Sixteenth pass — a prefix lookup scanned every declaration in scope, 2026-10-30.**
 
