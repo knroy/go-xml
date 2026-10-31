@@ -176,7 +176,28 @@ func (v *validator) fail(el *xdm.Node, format string, args ...any) {
 	if v.max > 0 && len(v.errs) >= v.max {
 		return
 	}
-	v.errs = append(v.errs, &Error{Path: v.pathOf(el), Message: fmt.Sprintf(format, args...)})
+	// A #FIXED or enumerated value comes from the DTD or the document and
+	// may be megabytes; 200 mismatches against a 1 MB #FIXED value kept
+	// 105 MB. Arguments are clipped before formatting, the message after.
+	for i, a := range args {
+		switch x := a.(type) {
+		case string:
+			args[i] = clip(x)
+		case error:
+			args[i] = clip(x.Error())
+		}
+	}
+	v.errs = append(v.errs, &Error{Path: v.pathOf(el), Message: clip(fmt.Sprintf(format, args...))})
+}
+
+// clip shortens s to 1 KB, marking the cut with "..." as the xsd package
+// does. The concatenation copies, so the result never pins the original.
+func clip(s string) string {
+	const max = 1024
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 // pathOf renders the path from the root to el, as "/root/child". It is built
