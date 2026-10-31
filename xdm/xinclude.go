@@ -113,6 +113,10 @@ func ProcessXInclude(tree *Tree, opts XIncludeOptions) (*Tree, error) {
 	if base == "" {
 		base = tree.Root.DocumentURI()
 	}
+	if !mentionsXInclude(tree) {
+		// Nothing to replace: the copy processTree would make is the tree.
+		return tree, nil
+	}
 	p := &includeProc{opts: opts, budget: &entityBudget{}}
 	if base != "" {
 		p.stack = append(p.stack, base)
@@ -159,6 +163,18 @@ type includeProc struct {
 	// processing has finished to its processed copy, which an href-less
 	// xpointer selects from in its place. See selectLocal.
 	done map[*Node]*Node
+}
+
+// mentionsXInclude reports whether t could hold an XInclude-namespace element.
+// Every element name is in the name table, so a table without the namespace
+// proves the tree has no xi:include or xi:fallback to process.
+func mentionsXInclude(t *Tree) bool {
+	for _, q := range t.names {
+		if q.URI == NSXInclude {
+			return true
+		}
+	}
+	return false
 }
 
 // processTree builds the included form of t: a new tree with every xi:include
@@ -255,18 +271,10 @@ func appendLeafKeep(dst, n *Node) *Node {
 
 // include appends to dst what one xi:include element includes.
 //
-// The inclusion is built in a holder first and only appended once it has
-// succeeded: a failure anywhere in it must leave dst as it was, so that the
-// fallback can take its place.
+// An inclusion is appended only once it has succeeded: a failure anywhere in
+// it must leave dst as it was, so that the fallback can take its place.
 func (p *includeProc) include(dst, inc *Node, depth int) error {
-	holder, err := p.expandInclude(inc, depth)
-	if err != nil {
-		return err
-	}
-	for n := range holder.Children() {
-		appendSubtreeKeep(dst, n)
-	}
-	return nil
+	return p.expandInclude(dst, inc, depth)
 }
 
 // appendSubtreeKeep appends a deep copy of n, merging text as appendLeafKeep
@@ -287,11 +295,10 @@ func appendSubtreeKeep(dst, n *Node) {
 // positions of what it holds survive the move.
 func newHolder() *Node { return NewTree().Root }
 
-// expandInclude computes, in a holder, the replacement for one xi:include
-// element.
-func (p *includeProc) expandInclude(inc *Node, depth int) (*Node, error) {
+// expandInclude appends to dst the replacement for one xi:include element.
+func (p *includeProc) expandInclude(dst, inc *Node, depth int) error {
 	if depth >= maxIncludeDepth {
-		return nil, fatalInclude{fmt.Errorf(
+		return fatalInclude{fmt.Errorf(
 			"resource limit exceeded: xi:include nesting exceeds %d levels: %w",
 			maxIncludeDepth, ErrResourceLimit)}
 	}
@@ -306,20 +313,20 @@ func (p *includeProc) expandInclude(inc *Node, depth int) (*Node, error) {
 			if c.Name().Local != "fallback" {
 				// Section 3.1: the content of xi:include is "(fallback?)",
 				// so any other XInclude-namespace child is a fatal error.
-				return nil, fmt.Errorf(
+				return fmt.Errorf(
 					"xi:%s is not permitted as a child of xi:include", c.Name().Local)
 			}
 			seen++
 		}
 	}
 	if seen > 1 {
-		return nil, fmt.Errorf("xi:include has more than one xi:fallback")
+		return fmt.Errorf("xi:include has more than one xi:fallback")
 	}
 
 	href := inc.AttrValue("href")
 	if href != "" {
 		if err := ValidateXIncludeHref(href); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	parse := inc.AttrValue("parse")
@@ -332,7 +339,7 @@ func (p *includeProc) expandInclude(inc *Node, depth int) (*Node, error) {
 		// something to fall back from: the attribute is the processor's
 		// instruction, not the resource's condition, so a fallback would be
 		// answering the wrong question.
-		return nil, fmt.Errorf("xi:include parse=%q must be \"xml\" or \"text\"", parse)
+		return fmt.Errorf("xi:include parse=%q must be \"xml\" or \"text\"", parse)
 	}
 	xptr := inc.AttrValue("xpointer")
 
@@ -389,10 +396,17 @@ func (p *includeProc) expandInclude(inc *Node, depth int) (*Node, error) {
 		// the loop rule does not apply — a text inclusion cannot recurse.
 		holder, err = p.fetchText(target, base, encoding)
 	default:
-		holder, err = p.fetch(target, base, parse, xptr, encoding, depth)
+		// fetch appends to dst itself, and only once it cannot fail.
+		err = p.fetch(dst, target, base, parse, xptr, encoding, depth)
+		if err == nil {
+			return nil
+		}
 	}
-	if err == nil {
-		return holder, nil
+	if holder != nil && err == nil {
+		for n := range holder.Children() {
+			appendSubtreeKeep(dst, n)
+		}
+		return nil
 	}
 
 	// Section 4.3: "If the resource ... cannot be fetched ... the processor
@@ -406,7 +420,7 @@ func (p *includeProc) expandInclude(inc *Node, depth int) (*Node, error) {
 	// a document could quietly get a different result by being expensive, and
 	// a fallback chain would become a way to keep asking after being told no.
 	if fatalIncludeError(err) {
-		return nil, err
+		return err
 	}
 	if fb := fallbackOf(inc); fb != nil {
 		// The fallback's own content may itself contain xi:include elements
@@ -415,14 +429,10 @@ func (p *includeProc) expandInclude(inc *Node, depth int) (*Node, error) {
 		// like any other content. The depth is carried through so that a
 		// fallback chain cannot be used to sidestep the nesting bound.
 		fbBase := elementBase(fb)
-		holder := newHolder()
-		if err := p.copyChildren(holder, fb, fbBase, depth+1); err != nil {
-			return nil, err
-		}
-		return holder, nil
+		return p.copyChildren(dst, fb, fbBase, depth+1)
 	}
 	// Section 4.3: "if the fallback element is absent, it is a fatal error."
-	return nil, fmt.Errorf("xi:include of %q failed and has no xi:fallback: %w", target, err)
+	return fmt.Errorf("xi:include of %q failed and has no xi:fallback: %w", target, err)
 }
 
 // selectLocal resolves an xpointer against the including document, for an
@@ -540,25 +550,32 @@ func copySubtree(dst, n *Node, base string) {
 	}
 }
 
-// fetch reads one resource and returns, in a holder, the nodes that replace
-// the xi:include element.
-func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth int) (*Node, error) {
+// fetch reads one resource and appends to dst the nodes that replace the
+// xi:include element. It appends only once nothing can fail any more.
+func (p *includeProc) fetch(dst *Node, target, base, parse, xptr, encoding string, depth int) error {
 	if parse == "text" {
-		return p.fetchText(target, base, encoding)
+		holder, err := p.fetchText(target, base, encoding)
+		if err != nil {
+			return err
+		}
+		for n := range holder.Children() {
+			appendSubtreeKeep(dst, n)
+		}
+		return nil
 	}
 	if p.fetches >= maxIncludeFetches {
-		return nil, fatalInclude{fmt.Errorf(
+		return fatalInclude{fmt.Errorf(
 			"resource limit exceeded: document performs more than %d inclusions: %w",
 			maxIncludeFetches, ErrResourceLimit)}
 	}
 	if p.opts.Resolver == nil {
-		return nil, fmt.Errorf("no include resolver: inclusions are not permitted")
+		return fmt.Errorf("no include resolver: inclusions are not permitted")
 	}
 	p.fetches++
 
 	data, uri, err := p.opts.Resolver.ResolveInclude(target, base, encoding)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// A cycle is checked on the URI the resolver reports rather than on the
@@ -567,7 +584,7 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 	// without this the recursion below simply does not terminate.
 	for _, u := range p.stack {
 		if u == uri {
-			return nil, fatalInclude{fmt.Errorf(
+			return fatalInclude{fmt.Errorf(
 				"circular xi:include loop: %q includes itself", uri)}
 		}
 	}
@@ -595,19 +612,22 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 		// entity bomb expanded 6,291,456 bytes — six times the ceiling — and
 		// the document was accepted, the refusal swallowed at every level.
 		if errors.Is(err, ErrResourceLimit) {
-			return nil, fatalInclude{err}
+			return fatalInclude{err}
 		}
-		return nil, err
+		return err
 	}
 
 	// Process the included document before selecting, so that an xpointer
 	// may address content that an inner inclusion brought in. The stack
 	// grows for the duration.
 	p.stack = append(p.stack, uri)
-	done, err := p.processTree(sub, uri, depth+1)
+	done := sub
+	if mentionsXInclude(sub) {
+		done, err = p.processTree(sub, uri, depth+1)
+	}
 	p.stack = p.stack[:len(p.stack)-1]
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	var picked []*Node
@@ -624,22 +644,21 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 	} else {
 		picked, err = selectXPointer(done.Root, xptr)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if len(picked) == 0 {
 			// Section 4.4: an xpointer that "does not identify any
 			// resource" is an error, recoverable through fallback — which
 			// is what returning an error here achieves, since the caller
 			// consults xi:fallback on any error from this function.
-			return nil, fmt.Errorf("xpointer %q selected nothing in %s", xptr, uri)
+			return fmt.Errorf("xpointer %q selected nothing in %s", xptr, uri)
 		}
 	}
 
-	holder := newHolder()
 	for _, n := range picked {
-		copyFixedUp(holder, n, base)
+		copyFixedUp(dst, n, base)
 	}
-	return holder, nil
+	return nil
 }
 
 // copyFixedUp appends a copy of n, a top-level included node, with the base
