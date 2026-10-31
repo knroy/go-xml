@@ -709,6 +709,12 @@ func (n *flworNode) eval(out *builderRef, ctx *evalContext) error {
 	return n.f.evalNode(out, ctx)
 }
 
+// sequence makes a flworNode a valueNode. Built at the top level, its value
+// would come back out of the builder unchanged, but appended a second time.
+func (n *flworNode) sequence(ctx *evalContext) (xdm.Sequence, error) {
+	return n.f.eval(ctx)
+}
+
 type quantifiedNode struct{ q *quantified }
 
 func (n *quantifiedNode) eval(out *builderRef, ctx *evalContext) error {

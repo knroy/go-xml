@@ -1,6 +1,7 @@
 package xquery
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xpath"
@@ -36,5 +37,42 @@ func flworAllocs(t *testing.T, src string, want int) float64 {
 func TestFLWORTupleNamesShared(t *testing.T) {
 	if a := flworAllocs(t, `for $a in 1 to 2000 let $b := $a return $b`, 2000); a > 30000 {
 		t.Errorf("%.0f allocations, want at most 30,000", a)
+	}
+}
+
+// flworBytes is the bytes one evaluation of src allocates, the least of three
+// runs, after checking that it returns want items.
+func flworBytes(t *testing.T, src string, want int) uint64 {
+	t.Helper()
+	q, err := Compile(src, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := xpath.NewContext(nil, xpath.Builtins())
+	least := ^uint64(0)
+	for range 3 {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		got, err := q.Eval(ctx)
+		runtime.ReadMemStats(&after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != want {
+			t.Fatalf("%d items, want %d", len(got), want)
+		}
+		least = min(least, after.TotalAlloc-before.TotalAlloc)
+	}
+	t.Logf("%d bytes", least)
+	return least
+}
+
+// TestFLWORLetValueNotRebuilt pins that a FLWOR bound by "let" is its own
+// value rather than appended item by item through a builder.
+// Measured: 29.4 MB before, 25.1 MB after.
+func TestFLWORLetValueNotRebuilt(t *testing.T) {
+	b := flworBytes(t, `let $l := for $a in 1 to 50000 return $a return $l`, 50000)
+	if b > 27_000_000 {
+		t.Errorf("%d bytes, want at most 27,000,000", b)
 	}
 }
