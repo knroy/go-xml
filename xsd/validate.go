@@ -174,7 +174,7 @@ func (s *Schema) newValidator(ctx context.Context, opts ValidateOptions) *valida
 	if opts.MaxDepth == 0 {
 		opts.MaxDepth = DefaultMaxDepth
 	}
-	return &validator{ctx: ctx, schema: s, opts: opts, ids: map[string]int{}}
+	return &validator{ctx: ctx, schema: s, opts: opts, ids: map[string]idDef{}}
 }
 
 // run assesses root, which is a document or an element.
@@ -356,17 +356,12 @@ type validator struct {
 	// typed copy of a document node.
 	stripIgnorable bool
 
-	// ids records every xs:ID value seen and every xs:IDREF, so that
-	// Validation Root Valid (ID/IDREF) can be checked once at the end. A
-	// count of zero means the value was referenced but never defined.
-	ids map[string]int
+	// ids records every xs:ID value seen, so that Validation Root Valid
+	// (ID/IDREF) can be checked once at the end.
+	ids map[string]idDef
 	// idrefs are the referenced values, checked against ids at the end.
 	idrefs []idref
 
-	// idOwners maps each ID value to the element that defined it, so that
-	// the same value on two attributes of one element counts once. XSD 1.1
-	// permits an element to carry several ID attributes.
-	idOwners map[string]*xdm.Node
 	// dupIDs lists each ID value in the order its second definition was met,
 	// which is where a streaming validator reports it; checkIDs reports in
 	// this order so the errors (and the one MaxErrors keeps) are stable.

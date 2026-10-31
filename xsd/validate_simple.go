@@ -1046,19 +1046,27 @@ func (v *validator) recordID(owner *xdm.Node, value string) {
 		// Nothing to denote; see idOwner.
 		return
 	}
-	if v.idOwners == nil {
-		v.idOwners = map[string]*xdm.Node{}
-	}
-	if prev, seen := v.idOwners[value]; seen {
-		if prev != owner {
-			if v.ids[value]++; v.ids[value] == 2 {
+	if d, seen := v.ids[value]; seen {
+		if d.owner != owner {
+			d.n++
+			v.ids[value] = d
+			if d.n == 2 {
 				v.dupIDs = append(v.dupIDs, value)
 			}
 		}
 		return
 	}
-	v.idOwners[value] = owner
-	v.ids[value]++
+	v.ids[value] = idDef{owner: owner, n: 1}
+}
+
+// idDef is one ID value's definitions. It was two maps with the same keys.
+type idDef struct {
+	// owner is the element that first defined the value, so that the same
+	// value on two attributes of one element counts once. XSD 1.1 permits
+	// an element to carry several ID attributes.
+	owner *xdm.Node
+	// n is the number of elements defining the value.
+	n int
 }
 
 // idKind reports whether a type is or derives from xs:ID, xs:IDREF or
@@ -1118,10 +1126,10 @@ func idKind(t *SimpleType, value string) string {
 func (v *validator) checkIDs() {
 	for _, value := range v.dupIDs {
 		v.fail(nil, "cvc-id.2",
-			"ID value %q is defined %d times", value, v.ids[value])
+			"ID value %q is defined %d times", value, v.ids[value].n)
 	}
 	for _, ref := range v.idrefs {
-		if v.ids[ref.value] == 0 {
+		if v.ids[ref.value].n == 0 {
 			v.fail(ref.node, "cvc-id.1",
 				"IDREF %q does not match any ID in the document", ref.value)
 		}
