@@ -1008,12 +1008,7 @@ func (s *Stylesheet) runtimeLibrary() *xpath.Library {
 // A missing required parameter is reported here too, since it needs no
 // evaluation to detect.
 func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
-	byName := make(map[string]*Variable, len(s.globals))
-	for _, g := range s.globals {
-		if _, dup := byName[g.Name.Clark()]; !dup {
-			byName[g.Name.Clark()] = g
-		}
-	}
+	byName := s.globalByName()
 
 	// gs is the runtime every global is evaluated in: this one as it stands
 	// once the bindings are in place, before any template has run. A later
@@ -1027,19 +1022,20 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 	// inside a LazyVar's Force, which the scope's lock serialises, so a
 	// function item that outlives the transform may force globals from
 	// several goroutines (see xpath.LazyVar).
-	type gstate struct {
+	//
+	// A binding name's state and its cell are one gcell, and every gcell is
+	// in the one slice: a map entry, a state and a LazyVar per global, every
+	// run, were most of what binding the globals cost.
+	type gcell struct {
+		lv                   *xpath.LazyVar
+		own                  xpath.LazyVar
 		active, primed, done bool
 		err                  error
 	}
-	state := make(map[xdm.QName]*gstate, len(s.globals))
-	stateOf := func(g *Variable) *gstate {
-		key := globalBindingName(g.Name, g.pkg)
-		st := state[key]
-		if st == nil {
-			st = &gstate{}
-			state[key] = st
-		}
-		return st
+	cellBuf := make([]gcell, len(s.globals))
+	cellOf := make(map[xdm.QName]*gcell, len(s.globals))
+	stateOf := func(g *Variable) *gcell {
+		return cellOf[globalBindingName(g.Name, g.pkg)]
 	}
 	circular := func(g *Variable) error {
 		// XTDE0640: a global variable whose value depends on its own.
@@ -1150,12 +1146,13 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 	// top-level global or earlier used-package global has that. The plain
 	// binding is what an expression carrying no package resolves against.
 	// A duplicate binding name keeps the first declaration.
-	cellOf := make(map[xdm.QName]*xpath.LazyVar, len(s.globals))
 	vars := make(map[xdm.QName]*xpath.LazyVar, len(s.globals))
-	for _, g := range s.globals {
+	for i, g := range s.globals {
 		name := globalBindingName(g.Name, g.pkg)
-		lv, dup := cellOf[name]
-		if !dup {
+		var lv *xpath.LazyVar
+		if c, dup := cellOf[name]; dup {
+			lv = c.lv
+		} else {
 			switch supplied, ok := opts.Params[g.Name.Clark()]; {
 			case g.isStatic:
 				// A static declaration was bound before static analysis
@@ -1172,16 +1169,18 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 					g.Name.Lexical())
 			default:
 				g := g
-				lv = &xpath.LazyVar{Force: func() (xdm.Sequence, error) {
+				lv = &cellBuf[i].own
+				lv.Force = func() (xdm.Sequence, error) {
 					// A global is evaluated wherever it is first read, and
 					// must not see the locals in scope there.
 					defer rt.leaveFrame(rt.enterFrame())
 					return force(g)
-				}}
+				}
 			}
-			cellOf[name] = lv
+			cellBuf[i].lv = lv
+			cellOf[name] = &cellBuf[i]
 		}
-		vars[name] = cellOf[name]
+		vars[name] = lv
 		if g.pkg != 0 {
 			if _, taken := vars[g.Name]; !taken {
 				vars[g.Name] = lv
@@ -1212,7 +1211,7 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 			return nil
 		}
 		st.primed = true
-		lv := cellOf[globalBindingName(g.Name, g.pkg)]
+		lv := st.lv
 		if lv.Force != nil {
 			st.active = true
 			for _, dep := range globalRefs(g) {

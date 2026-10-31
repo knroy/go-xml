@@ -247,6 +247,10 @@ type Stylesheet struct {
 	source *xdm.Node
 	// nested caches the stylesheets fn:transform compiles; see nestedCache.
 	nested nestedCache
+	// globalsOnce builds globalsByName, the first declaration of each global
+	// by Clark name, for evalGlobals; see globalByName.
+	globalsOnce   sync.Once
+	globalsByName map[string]*Variable
 }
 
 // Template is a compiled xsl:template.
@@ -804,6 +808,20 @@ func inScopeNamespacesShared(el *xdm.Node) map[string]string {
 		sharedNS.m[d] = m
 	}
 	return m
+}
+
+// globalByName is the first declaration of each global by Clark name. It
+// depends only on the compiled globals, so every transform shares one.
+func (s *Stylesheet) globalByName() map[string]*Variable {
+	s.globalsOnce.Do(func() {
+		s.globalsByName = make(map[string]*Variable, len(s.globals))
+		for _, g := range s.globals {
+			if _, dup := s.globalsByName[g.Name.Clark()]; !dup {
+				s.globalsByName[g.Name.Clark()] = g
+			}
+		}
+	})
+	return s.globalsByName
 }
 
 // compileNestedLocked compiles a stylesheet from inside a compilation that is
