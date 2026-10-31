@@ -74,22 +74,7 @@ func (e *Step) Eval(ctx *Context) (xdm.Sequence, error) {
 // nothing would read.
 func (e *Step) evalFrom(ctx *Context, node *xdm.Node) (xdm.Sequence, error) {
 	var err error
-	principal := e.Axis.PrincipalKind()
-	var selected xdm.Sequence
-	if nt, ok := e.Test.(*NameTest); ok && (e.Axis == AxisDescendant || e.Axis == AxisDescendantOrSelf) {
-		// The direct walk selects what walkAxis would, in the same order.
-		if e.Axis == AxisDescendantOrSelf && nt.Matches(node, principal) {
-			selected = append(selected, node)
-		}
-		selected = appendNamedDescendants(selected, node, nt)
-	} else {
-		walkAxis(node, e.Axis, func(n *xdm.Node) bool {
-			if e.Test.Matches(n, principal) {
-				selected = append(selected, n)
-			}
-			return true
-		})
-	}
+	selected := e.appendFrom(nil, node)
 
 	// Predicates apply in axis order, so a reverse axis numbers positions
 	// from the context node outwards.
@@ -103,6 +88,26 @@ func (e *Step) evalFrom(ctx *Context, node *xdm.Node) (xdm.Sequence, error) {
 	// The result of a step is always in document order with duplicates
 	// removed, regardless of the axis direction.
 	return xdm.SortDocumentOrder(selected), nil
+}
+
+// appendFrom appends to selected the nodes e's axis and node test select
+// from node, in axis order, before any predicate.
+func (e *Step) appendFrom(selected xdm.Sequence, node *xdm.Node) xdm.Sequence {
+	principal := e.Axis.PrincipalKind()
+	if nt, ok := e.Test.(*NameTest); ok && (e.Axis == AxisDescendant || e.Axis == AxisDescendantOrSelf) {
+		// The direct walk selects what walkAxis would, in the same order.
+		if e.Axis == AxisDescendantOrSelf && nt.Matches(node, principal) {
+			selected = append(selected, node)
+		}
+		return appendNamedDescendants(selected, node, nt)
+	}
+	walkAxis(node, e.Axis, func(n *xdm.Node) bool {
+		if e.Test.Matches(n, principal) {
+			selected = append(selected, n)
+		}
+		return true
+	})
+	return selected
 }
 
 // Eval implements Expr for a path expression.
@@ -234,6 +239,13 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 		var v xdm.Sequence
 		var err error
 		st, fresh := step.(*Step)
+		if fresh && len(st.Predicates) == 0 && !st.Axis.IsReverse() {
+			// Nothing numbers this node's selection apart from the others,
+			// so it goes straight onto out; the sort below orders and
+			// deduplicates the whole, as it would the per-node results.
+			out = st.appendFrom(out, it.(*xdm.Node))
+			continue
+		}
 		if fresh {
 			v, err = st.evalFrom(ctx, it.(*xdm.Node))
 		} else if da, ok := step.(*descendantAttrs); ok {
