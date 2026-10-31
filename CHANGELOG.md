@@ -4,6 +4,16 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## v2.0.2 — 2026-10-30
+
+A parser cost fix from an external audit. No API change.
+
+### Fixed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| Parsing was quadratic in the namespace declarations in scope | Each prefix scanned the whole stack: 100k declarations and 300k attributes took 33 s. The stack is indexed past 32 bindings: 0.35 s. | [`8b7aab2`][8b7aab2] |
+
 ## v2.0.1 — 2026-10-15
 
 A security and release-gate update from an external audit of v2.0.0. No API
@@ -1597,3 +1607,4 @@ here so every entry in this file sits under a release.
 [27f463d]: https://github.com/knroy/go-xml/commit/27f463d
 [b8f35ea]: https://github.com/knroy/go-xml/commit/b8f35ea
 [b76c85d]: https://github.com/knroy/go-xml/commit/b76c85d
+[8b7aab2]: https://github.com/knroy/go-xml/commit/8b7aab2
