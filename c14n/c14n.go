@@ -192,9 +192,20 @@ func FormatPrefixList(prefixes []string) string {
 // descendants are, with the namespace and xml:* axis treatment the
 // chosen algorithm specifies for a subset apex.
 func Bytes(n *xdm.Node, opts Options) ([]byte, error) {
-	var b bytes.Buffer
-	err := Write(&b, n, opts)
-	return b.Bytes(), err
+	// The output arrives in chunks of about outBufSize. They are kept and
+	// joined once at the end, about twice the canonical form in all, where a
+	// bytes.Buffer grown by doubling from empty cost up to 3.6 times.
+	var c chunkWriter
+	err := Write(&c, n, opts)
+	return bytes.Join(c.chunks, nil), err
+}
+
+// chunkWriter keeps a copy of everything written to it.
+type chunkWriter struct{ chunks [][]byte }
+
+func (c *chunkWriter) Write(p []byte) (int, error) {
+	c.chunks = append(c.chunks, bytes.Clone(p))
+	return len(p), nil
 }
 
 // Digest canonicalizes n and writes the result into h, returning h's sum.
