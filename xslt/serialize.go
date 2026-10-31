@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
@@ -77,13 +78,20 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 	case *bytes.Buffer, *strings.Builder, *bufio.Writer:
 		return serializeTo(w.(stringWriter), seq, opts, charMap)
 	}
-	bw := bufio.NewWriterSize(w, 32<<10)
+	bw := writerPool.Get().(*bufio.Writer)
+	bw.Reset(w)
 	err := serializeTo(bw, seq, opts, charMap)
 	if ferr := bw.Flush(); err == nil {
 		err = ferr
 	}
+	bw.Reset(nil)
+	writerPool.Put(bw)
 	return err
 }
+
+// writerPool holds serialize's write buffers: one is 32 KiB, which on a small
+// result was most of what serializing it cost.
+var writerPool = sync.Pool{New: func() any { return bufio.NewWriterSize(nil, 32<<10) }}
 
 // stringWriter is what serialize writes to: each of its writers has
 // WriteString, which the serializer calls directly rather than through

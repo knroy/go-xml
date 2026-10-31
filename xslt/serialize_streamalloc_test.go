@@ -147,3 +147,21 @@ func TestResultStringAllocation(t *testing.T) {
 		}
 	}
 }
+
+// Each Serialize to an unbuffered writer allocated a 32 KiB buffer, most of
+// what a small result cost. The buffers are pooled now.
+func TestSerializeBufferPooled(t *testing.T) {
+	if raceEnabled {
+		t.Skip("allocation counts are not stable under -race")
+	}
+	seq := streamDoc(t, 10)
+	f := func() {
+		if err := Serialize(io.Discard, seq, OutputSettings{Method: "xml"}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f()
+	if got := allocBytes(f); got > 16<<10 {
+		t.Errorf("a small result allocated %d bytes, want under 16 KiB", got)
+	}
+}
