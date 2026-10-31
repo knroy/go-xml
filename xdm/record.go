@@ -1566,6 +1566,18 @@ func (s *textStore) addBytes(b []byte, extra int) (uint32, uint32) {
 	return uint32(k)<<textShift | uint32(off), uint32(len(b))
 }
 
+// trim copies the block values are appended to into one its length, for a
+// tree nothing more is stored in: blocks double, so the last is on average a
+// quarter empty. A value already handed out keeps reading the old block.
+func (s *textStore) trim() {
+	if s.cur == 0 {
+		return
+	}
+	if b := s.blocks[s.cur-1]; cap(b) > len(b) {
+		s.blocks[s.cur-1] = append([]byte(nil), b...)
+	}
+}
+
 func (s *textStore) newBlock(b []byte) {
 	if len(s.blocks) >= 1<<(32-textShift) {
 		panic("xdm: a tree's text exceeds the text store's addressable blocks")

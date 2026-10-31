@@ -713,6 +713,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	}
 	tree.closeAll()
 	tree.frozen = true
+	tree.text.trim()
 
 	if trackPos {
 		// The decoder stops reading at the end of the root element, so the

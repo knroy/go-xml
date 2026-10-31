@@ -82,3 +82,19 @@ func TestLongTextIsNotCopied(t *testing.T) {
 		t.Errorf("values read back wrong")
 	}
 }
+
+// A parsed tree's last text block was kept at the size it doubled to, on
+// average a quarter empty. Measured on the DocBook corpus: 12.29 MB retained
+// for 591 trees before the trim, 12.03 MB after.
+func TestParsedTextBlockIsTrimmed(t *testing.T) {
+	tree, err := ParseString(`<r>`+strings.Repeat(`<p>some text</p>`, 200)+`</r>`, ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &tree.text
+	b := s.blocks[s.cur-1]
+	// Rounding to the allocator's size class may leave a little.
+	if slack := cap(b) - len(b); slack > len(b)/8 {
+		t.Errorf("last text block holds %d bytes in %d", len(b), cap(b))
+	}
+}
