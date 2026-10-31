@@ -294,3 +294,50 @@ func TestBuiltInRuleResultTreeOverrunIsRefused(t *testing.T) {
 	_, err = st.Transform(context.Background(), doc.Root, TransformOptions{})
 	wantNodeRefusal(t, err)
 }
+
+// runRetainedKeys runs body over crossProductDoc, with a key or group-by of
+// 1,000 values per node. 5,100 nodes retain 5.1 million entries, just past the
+// 5 million item bound; no single expression evaluation comes near it, which
+// is why the per-expression counter never saw it.
+func runRetainedKeys(t *testing.T, body string) error {
+	t.Helper()
+	sd, err := xdm.ParseString(`<xsl:stylesheet version="3.0" `+
+		`xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`+body+
+		`</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := Compile(sd.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := xdm.ParseString(crossProductDoc(5100), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.Transform(context.Background(), doc.Root, TransformOptions{})
+	return err
+}
+
+func wantItemRefusal(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected XPDY0130; the retained keys were not charged")
+	}
+	if !errors.Is(err, xdm.ErrResourceLimit) ||
+		!strings.Contains(err.Error(), "materialised more than") {
+		t.Errorf("not the item-budget refusal: %v", err)
+	}
+}
+
+func TestKeyIndexEntriesAreChargedToTheItemBudget(t *testing.T) {
+	wantItemRefusal(t, runRetainedKeys(t,
+		`<xsl:key name="k" match="i" use="1 to 1000"/>`+
+			`<xsl:template match="/"><xsl:value-of select="count(key('k', 7))"/></xsl:template>`))
+}
+
+func TestGroupByKeysAreChargedToTheItemBudget(t *testing.T) {
+	wantItemRefusal(t, runRetainedKeys(t,
+		`<xsl:template match="/"><xsl:for-each-group select="//i" group-by="1 to 1000">`+
+			`<xsl:sequence select="count(current-group())"/></xsl:for-each-group></xsl:template>`))
+}

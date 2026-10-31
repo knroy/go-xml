@@ -258,11 +258,18 @@ func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 	// when a grouping actually mixes numeric types.
 	var numericGroups []int
 	numericTypes := map[xdm.TypeCode]bool{}
+	// Eval resets the item counter per expression, so what the groups retain
+	// is totalled here: one entry per key value an item joins.
+	var held int64
 
 	for idx, it := range seq {
 		sub := rt.withFocus(it, idx+1, len(seq))
 		vals, err := key.Eval(sub.ctx)
 		if err != nil {
+			return nil, err
+		}
+		held += int64(len(vals))
+		if err := rt.ctx.ItemsRefused(held); err != nil {
 			return nil, err
 		}
 		// Section 14.2 forms the groups from the *distinct* key values of an

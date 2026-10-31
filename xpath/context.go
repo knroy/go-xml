@@ -1333,13 +1333,32 @@ func (c *Context) countItems(n int) error {
 		return nil
 	}
 	if lim := c.itemLimit(); atomic.AddInt64(c.ev().items, int64(n)) > lim {
-		// The code is kept -- the suites and callers read it -- and the
-		// sentinel added, because this is the processor declining to
-		// allocate rather than anything wrong with the expression.
-		return fmt.Errorf(
-			"XPDY0130: evaluation materialised more than %d items; "+
-				"the expression is building a sequence too large to hold: %w",
-			lim, xdm.ErrResourceLimit)
+		return itemsRefusal(lim)
+	}
+	return nil
+}
+
+// itemsRefusal is the XPDY0130 the item budget raises.
+func itemsRefusal(lim int64) error {
+	// The code is kept -- the suites and callers read it -- and the
+	// sentinel added, because this is the processor declining to
+	// allocate rather than anything wrong with the expression.
+	return fmt.Errorf(
+		"XPDY0130: evaluation materialised more than %d items; "+
+			"the expression is building a sequence too large to hold: %w",
+		lim, xdm.ErrResourceLimit)
+}
+
+// ItemsRefused reports the item-budget refusal if total exceeds the item bound
+// in force, and charges nothing.
+//
+// A host that retains items across many expression evaluations -- xsl:key's
+// index, for-each-group's groups -- keeps the running total itself, because
+// Compiled.Eval resets the shared counter for every expression and a charge
+// made through ChargeItems would be cleared by the next node's evaluation.
+func (c *Context) ItemsRefused(total int64) error {
+	if lim := c.itemLimit(); total > lim {
+		return itemsRefusal(lim)
 	}
 	return nil
 }
