@@ -1,7 +1,9 @@
 package xdm
 
 import (
+	"bytes"
 	"iter"
+	"math"
 	"math/bits"
 	"sort"
 	"strconv"
@@ -161,15 +163,10 @@ type treeSource struct {
 	//
 	// Empty unless ParseOptions.ExternalEntities permitted the read.
 	externalSubset string
-	// src is the document text, retained only when the caller asks for
-	// positions. It is what makes Position able to count lines.
-	src string
-	// lineStarts holds the byte offset of each line, built on first use.
-	// Resolving a position is then a binary search rather than a scan from
-	// the start of the document, which matters when a validator reports
-	// thousands of failures over one large file.
-	lineStarts []int
-	lineOnce   sync.Once
+	// lines is where the document's lines start, kept only when the caller
+	// asks for positions. It is what makes Position able to count lines; the
+	// text itself was kept for that once, at a byte per input byte.
+	lines      *lineIndex
 	offsets    [][]int32           // by chunk: source offset + 1, made on first use
 	foreignPos map[uint32][2]int32 // positions copied from another document
 }
@@ -182,12 +179,40 @@ func (t *Tree) ownSource() *treeSource {
 	return t.source
 }
 
-// srcText is the retained document text, or "".
-func (t *Tree) srcText() string {
+// lineIdx is the document's line index, or nil.
+func (t *Tree) lineIdx() *lineIndex {
 	if t.source == nil {
-		return ""
+		return nil
 	}
-	return t.source.src
+	return t.source.lines
+}
+
+// lineIndex holds the offset each line of a source text starts at, so that
+// resolving a position is a binary search rather than a scan from the start
+// of the document, which matters when a validator reports thousands of
+// failures over one large file. Offsets past math.MaxInt32 are not recorded:
+// no node offset (encodeOffset) points there.
+type lineIndex struct {
+	starts []int32 // line 1 starts at 0; every byte after a newline starts another
+	size   int     // how many bytes of text were indexed
+}
+
+// add indexes the next len(b) bytes of the text.
+func (l *lineIndex) add(b []byte) {
+	if l.starts == nil {
+		l.starts = []int32{0}
+	}
+	for i := 0; ; {
+		j := bytes.IndexByte(b[i:], '\n')
+		if j < 0 {
+			break
+		}
+		i += j + 1
+		if off := l.size + i; off < math.MaxInt32 {
+			l.starts = append(l.starts, int32(off))
+		}
+	}
+	l.size += len(b)
 }
 
 // extSubset is the external subset text, or "".
@@ -333,6 +358,11 @@ func (t *Tree) intern(q QName) uint32 {
 	if q == (QName{}) {
 		return 0
 	}
+	// A parsed tree drops its index when it is frozen, and a clone of one
+	// copies none: it is rebuilt here, on first use.
+	if t.nameIx == nil && len(t.names) > smallNames {
+		t.indexNames()
+	}
 	// A small tree -- a constructed fragment, mostly -- has a handful of
 	// names, and finding one by scanning costs less than building a map.
 	if t.nameIx == nil {
@@ -347,11 +377,7 @@ func (t *Tree) intern(q QName) uint32 {
 		i := uint32(len(t.names))
 		t.names = append(t.names, q)
 		if len(t.names) > smallNames {
-			t.nameIx = make(map[QName]uint32, 2*len(t.names))
-			t.nameHot = new([64]uint32)
-			for j, x := range t.names[1:] {
-				t.nameIx[x] = uint32(j + 1)
-			}
+			t.indexNames()
 		}
 		return i
 	}
@@ -372,6 +398,15 @@ func (t *Tree) intern(q QName) uint32 {
 	}
 	t.nameHot[h] = i
 	return i
+}
+
+// indexNames builds the name index over the names the tree holds.
+func (t *Tree) indexNames() {
+	t.nameIx = make(map[QName]uint32, 2*len(t.names))
+	t.nameHot = new([64]uint32)
+	for j, x := range t.names[1:] {
+		t.nameIx[x] = uint32(j + 1)
+	}
 }
 
 // nameHash is a cheap hash of q for nameHot: the lengths and the ends of the
@@ -1050,8 +1085,9 @@ func (t *Tree) internFrame(ns []nsBinding) uint32 {
 		}
 		return t.addFrame(ns)
 	}
-	if len(t.frames) == smallFrames+1 && t.frameOne == nil && t.frameMany == nil {
-		// Past the scan's reach: index what is there.
+	if len(t.frames) > smallFrames && t.frameOne == nil && t.frameMany == nil {
+		// Past the scan's reach: index what is there. A parsed tree drops
+		// the indexes when it is frozen, so this also rebuilds them.
 		for i := 1; i < len(t.frames); i++ {
 			t.indexFrame(uint32(i))
 		}
@@ -1509,10 +1545,15 @@ func (s *textStore) add(v string) (uint32, uint32) {
 	// Every unsafe.String in the module is over append-only bytes (the
 	// tokeniser's arena, this store), which keeps that true.
 	if len(v) >= textOwnFrom {
-		s.newBlock(unsafe.Slice(unsafe.StringData(v), len(v)))
-		return uint32(len(s.blocks)-1) << textShift, uint32(len(v))
+		return s.keep(unsafe.Slice(unsafe.StringData(v), len(v)))
 	}
 	return s.addBytes(unsafe.Slice(unsafe.StringData(v), len(v)), 0)
+}
+
+// keep stores b, which nothing else writes to, as a block of its own.
+func (s *textStore) keep(b []byte) (uint32, uint32) {
+	s.newBlock(b)
+	return uint32(len(s.blocks)-1) << textShift, uint32(len(b))
 }
 
 // addBytes stores b with room for extra bytes after it, which extend uses
@@ -1534,6 +1575,18 @@ func (s *textStore) addBytes(b []byte, extra int) (uint32, uint32) {
 	off := len(s.blocks[k])
 	s.blocks[k] = append(s.blocks[k], b...)
 	return uint32(k)<<textShift | uint32(off), uint32(len(b))
+}
+
+// trim copies the block values are appended to into one its length, for a
+// tree nothing more is stored in: blocks double, so the last is on average a
+// quarter empty. A value already handed out keeps reading the old block.
+func (s *textStore) trim() {
+	if s.cur == 0 {
+		return
+	}
+	if b := s.blocks[s.cur-1]; cap(b) > len(b) {
+		s.blocks[s.cur-1] = append([]byte(nil), b...)
+	}
 }
 
 func (s *textStore) newBlock(b []byte) {

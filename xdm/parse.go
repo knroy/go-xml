@@ -1,12 +1,14 @@
 package xdm
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
 	"math"
 	"net/url"
 	"strings"
+	"sync"
 	"unsafe"
 
 	xml "github.com/knroy/go-xml/v2/internal/xmltok"
@@ -175,7 +177,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	// that costs more than accepting. Wrapped here the ReadAll hits the
 	// limited reader and stops at the bound.
 	// A reader that knows its length (strings.Reader, bytes.Reader) lets the
-	// position-tracking copy below be sized once instead of grown by doubling.
+	// tokeniser's buffers be sized to it.
 	sizeHint := 0
 	if l, ok := r.(interface{ Len() int }); ok {
 		sizeHint = l.Len()
@@ -197,19 +199,16 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		r = &countingReader{r: io.LimitReader(r, lim), max: maxBytes}
 	}
 
-	// Position tracking needs the source text to count lines in, and the
-	// reader is consumed by the decoder. Tee it into a buffer rather than
-	// reading it all up front, so that a parse failing early on a huge
-	// document does not first pull the whole thing into memory.
 	// UTF-16 is decoded to UTF-8 first. XML 1.0 §4.3.3 makes both encodings
 	// mandatory, and encoding/xml reads only UTF-8 — so without this a
 	// UTF-16 document fails with "invalid UTF-8" rather than being read.
 	// This happens before the tee, so that position tracking counts lines
 	// in the text the decoder actually sees.
-	// The read windows are sized to a document known to be small: a 2 KB
-	// document otherwise paid for three 4 KB buffers it never filled.
-	window := readWindow(sizeHint)
-	decoded, err := decodeReader(r, window)
+	// The three read windows are reused parse to parse (see readBufs).
+	bufs := readBufPool.Get().(*readBufs)
+	defer bufs.release()
+	bufs.br.Reset(r)
+	decoded, err := decodeReader(bufs.br)
 	if err != nil {
 		return nil, fmt.Errorf("parse XML: %w", err)
 	}
@@ -219,31 +218,35 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	// parsing. See xdm/lineend.go. Attribute-value normalization (section
 	// 3.3.3) is the tokeniser's, which still sees "&#10;" apart from a
 	// newline the author typed.
-	r = newLineEndReader(r, window)
+	r = newLineEndReader(r, bufs.lineEnd)
 
 	trackPos := opts.TrackPositions
 	var srcBuf strings.Builder
-	// The source is kept when positions are tracked, and also when a DOCTYPE
-	// is permitted: an entity whose replacement text holds markup forces a
-	// re-parse of the substituted source, and by the time that is known the
-	// reader is partly consumed and the decoder has buffered ahead into it.
+	// The source is copied when a DOCTYPE is permitted: an entity whose
+	// replacement text holds markup forces a re-parse of the substituted
+	// source, and by the time that is known the reader is partly consumed and
+	// the decoder has buffered ahead into it.
 	//
 	// The copy is needed only until the document element opens: a re-parse
 	// can start only at the DOCTYPE, which must come first, so past that point
-	// the tee stops and its copy is dropped unless positions are tracked.
-	// entitiesExpanded marks the second parse, which has no entities left to
-	// find and so needs no copy at all.
-	// Only a tracked copy is kept to the end, so only it is sized up front;
-	// never past MaxBytes, which the reader will refuse to go beyond.
+	// the tee stops copying and the copy is dropped. entitiesExpanded marks
+	// the second parse, which has no entities left to find and so needs no
+	// copy at all.
+	//
+	// Positions need only where the source's lines start, which the tee
+	// records as the text goes by.
 	if !verbatim(whole) {
 		whole = ""
 	}
-	if whole == "" && trackPos && sizeHint > 0 && (maxBytes <= 0 || int64(sizeHint) <= maxBytes) {
-		srcBuf.Grow(sizeHint)
-	}
 	var tee *srcTee
 	if whole == "" && (trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded)) {
-		tee = &srcTee{r: r, buf: &srcBuf}
+		tee = &srcTee{r: r}
+		if opts.AllowDOCTYPE && !opts.entitiesExpanded {
+			tee.buf = &srcBuf
+		}
+		if trackPos {
+			tee.lines = &lineIndex{}
+		}
 		r = tee
 	}
 
@@ -262,7 +265,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		r = charger
 	}
 
-	dec := xml.NewDecoderSize(r, window)
+	dec := xml.NewDecoderBuffer(r, bufs.dec)
 	dec.Size = sizeHint
 	dec.CharsetReader = charsetReader
 	// Leave Strict on: a validator must not silently accept malformed input.
@@ -381,7 +384,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 				// kept for one is dropped; and with no entity table installed
 				// by now none ever will be, so the charge reader has nothing
 				// to buffer for.
-				if tee != nil && !trackPos {
+				if tee != nil {
 					tee.buf = nil
 					srcBuf = strings.Builder{}
 				}
@@ -468,7 +471,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 				sawPrologToken = true
 				continue
 			}
-			run.add(cur, t)
+			run.add(cur, t, dec)
 
 		case *xml.Comment:
 			t := *tok
@@ -709,22 +712,54 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	}
 	tree.closeAll()
 	tree.frozen = true
+	tree.text.trim()
+	// The indexes only building uses go; a tree renamed or cloned later
+	// rebuilds the ones it needs.
+	tree.nameIx, tree.nameHot = nil, nil
+	tree.frameOne, tree.frameMany = nil, nil
+	tree.open = nil
 
 	if trackPos {
 		// The decoder stops reading at the end of the root element, so the
-		// tee holds everything up to there — which is all any offset can
+		// tee has seen everything up to there — which is all any offset can
 		// point into.
-		src := srcBuf.String()
+		lines := &lineIndex{}
 		if whole != "" {
-			src = whole
+			lines.add(unsafe.Slice(unsafe.StringData(whole), len(whole)))
+		} else {
+			lines = tee.lines
 		}
-		tree.ownSource().src = src
+		tree.ownSource().lines = lines
 	}
 	tree.XMLVersion = "1.0"
 	if dec.IsVersion11() {
 		tree.XMLVersion = "1.1"
 	}
 	return tree, nil
+}
+
+// readBufs are a parse's read windows: decodeReader's look at the byte order
+// mark, line-end folding's and the tokeniser's. Nothing read through them
+// outlives the parse -- the tree holds copies of what the tokens held -- so
+// they are pooled rather than allocated per document, which for small
+// documents was a sixth of what a parse allocated.
+type readBufs struct {
+	br           *bufio.Reader
+	lineEnd, dec []byte
+}
+
+var readBufPool = sync.Pool{New: func() any {
+	return &readBufs{
+		br:      bufio.NewReaderSize(nil, 4096),
+		lineEnd: make([]byte, 0, 4096),
+		dec:     make([]byte, 0, 4096),
+	}
+}}
+
+// release returns b to the pool, without the caller's reader.
+func (b *readBufs) release() {
+	b.br.Reset(nil)
+	readBufPool.Put(b)
 }
 
 // readWindow is the read buffer size for an input of size bytes (0:
@@ -795,7 +830,7 @@ func buildElement(t xml.StartElement, parent *Node, ns *nsScope, names *nameCach
 		if a.Name.Space == "xml" {
 			switch a.Name.Local {
 			case "base":
-				el.SetBaseURI(resolveBase(el.BaseURI(), a.Value))
+				el.SetBaseURI(resolveBase(el.BaseURI(), strings.Clone(a.Value))) // out of the arena, as nsScope.declare
 			case "id":
 				// xml:id is an ID by definition, and the xml:id
 				// Recommendation requires its value to be normalised as one,
@@ -870,7 +905,7 @@ type textRun struct {
 	stored bool // the run did not start with white space and is in the store
 }
 
-func (r *textRun) add(parent *Node, b []byte) {
+func (r *textRun) add(parent *Node, b []byte, dec *xml.Decoder) {
 	if len(b) == 0 {
 		return
 	}
@@ -884,7 +919,14 @@ func (r *textRun) add(parent *Node, b []byte) {
 		// A run that starts with anything but white space can be neither
 		// stripped nor shared, so it goes straight to the store.
 		if !onlySpace(b) {
-			r.node.v0, r.node.v1 = r.node.tree.text.addBytes(b, 0)
+			if len(b) >= textOwnFrom && cap(b)-len(b) <= len(b)/8 {
+				// Long enough for a block of its own, and not much larger
+				// than its value: the decoder's buffer becomes the block,
+				// rather than being copied into one.
+				r.node.v0, r.node.v1 = r.node.tree.text.keep(dec.TakeText())
+			} else {
+				r.node.v0, r.node.v1 = r.node.tree.text.addBytes(b, 0)
+			}
 			r.stored = true
 			return
 		}
@@ -1212,16 +1254,21 @@ func charsetReader(charset string, input io.Reader) (io.Reader, error) {
 	return nil, fmt.Errorf("unsupported encoding %q", charset)
 }
 
-// srcTee copies what is read from r into buf until buf is set to nil.
+// srcTee copies what is read from r into buf until buf is set to nil, and
+// indexes its lines in lines when that is set.
 type srcTee struct {
-	r   io.Reader
-	buf *strings.Builder
+	r     io.Reader
+	buf   *strings.Builder
+	lines *lineIndex
 }
 
 func (t *srcTee) Read(p []byte) (int, error) {
 	n, err := t.r.Read(p)
 	if t.buf != nil {
 		t.buf.Write(p[:n])
+	}
+	if t.lines != nil {
+		t.lines.add(p[:n])
 	}
 	return n, err
 }

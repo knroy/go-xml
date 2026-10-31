@@ -1,14 +1,15 @@
 package xdm
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 )
 
-// Position resolution builds a line index lazily on first use, guarded by a
-// sync.Once. A parsed tree is shared across concurrent transforms, so several
-// goroutines can reach that initialisation at the same moment.
+// Position resolution reads the tree's line index. A parsed tree is shared
+// across concurrent transforms, so several goroutines resolve positions in it
+// at the same moment.
 func TestConcurrentPositionLookup(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("<r>\n")
@@ -71,6 +72,34 @@ func TestConcurrentDocumentOrder(t *testing.T) {
 				sorted := SortDocumentOrder(seq)
 				if len(sorted) != len(kids) {
 					t.Errorf("got %d nodes, want %d", len(sorted), len(kids))
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// Parses share pooled read windows (readBufs). Concurrent parses of
+// different documents, through readers that hand data over a few bytes at a
+// time, must each build their own tree; run under -race this also checks
+// that no window is used by two parses at once.
+func TestConcurrentParsesShareNoWindow(t *testing.T) {
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			doc := fmt.Sprintf("<r g='%d'>%s</r>", g, strings.Repeat(fmt.Sprintf("<e>%d</e>\r\n", g), 500))
+			want := strings.Repeat(fmt.Sprintf("%d\n", g), 500)
+			for range 20 {
+				tree, err := Parse(&chunkReader{s: doc, n: 7}, ParseOptions{})
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if got := tree.Root.StringValue(); got != want {
+					t.Errorf("goroutine %d parsed %.40q, want %.40q", g, got, want)
 					return
 				}
 			}

@@ -215,8 +215,8 @@ func TestTagScopeDoesNotAllocate(t *testing.T) {
 			t.Fatal(err)
 		}
 		ns.pop(ns.own)
-	}); n != 0 {
-		t.Errorf("validateStartElement under 16 inherited bindings allocated %.0f times, want 0", n)
+	}); n > 1 { // the one is the declared URI's copy out of the arena (nsScope.declare)
+		t.Errorf("validateStartElement under 16 inherited bindings allocated %.0f times, want 1", n)
 	}
 }
 

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -598,7 +598,7 @@ func (n *Node) FirstElement(uri, local string) *Node {
 //
 // A caller that caches trees needs it: one parsed without positions cannot
 // serve a request that needs them, and the only way to tell is to ask.
-func (t *Tree) HasPositions() bool { return t != nil && t.srcText() != "" }
+func (t *Tree) HasPositions() bool { return t != nil && t.lineIdx() != nil }
 
 // positionAt converts a byte offset into a 1-based line and column.
 //
@@ -606,25 +606,19 @@ func (t *Tree) HasPositions() bool { return t != nil && t.srcText() != "" }
 // decoder, and a caller pointing an editor at the failure wants the same
 // units the decoder used.
 func (t *Tree) positionAt(off int) (line, col int, ok bool) {
-	s := t.source
-	if s == nil || s.src == "" || off < 0 || off > len(s.src) {
+	l := t.lineIdx()
+	if l == nil || off < 0 || off > l.size {
 		return 0, 0, false
 	}
-	s.lineOnce.Do(func() {
-		// Line 1 starts at offset 0; every byte after a newline starts another.
-		s.lineStarts = append(s.lineStarts, 0)
-		for i := 0; i < len(s.src); i++ {
-			if s.src[i] == '\n' {
-				s.lineStarts = append(s.lineStarts, i+1)
-			}
-		}
-	})
 	// The line is the last one starting at or before off.
-	i := sort.SearchInts(s.lineStarts, off+1) - 1
+	i, found := slices.BinarySearch(l.starts, int32(off))
+	if !found {
+		i--
+	}
 	if i < 0 {
 		return 0, 0, false
 	}
-	return i + 1, off - s.lineStarts[i] + 1, true
+	return i + 1, off - int(l.starts[i]) + 1, true
 }
 
 // The six functions below are the name-only face of the type derivation
