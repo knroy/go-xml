@@ -1265,9 +1265,24 @@ func (s *Stylesheet) spaceDeclsFor(pkg int) (strip, preserve []xdm.QName) {
 // Transform returns nil for a stylesheet whose output settings are invalid.
 // Use Serialize for anything whose failure you need to see.
 func (r *Result) String() string {
-	var sb strings.Builder
-	_ = r.Serialize(&sb)
-	return sb.String()
+	return serializeString(r.Nodes, r.output, r.charMap)
+}
+
+// serializeString is serialize to a string. The output is kept in the chunks
+// the serializer's buffer flushes and joined once, about twice its size in
+// all, where a strings.Builder grown by doubling cost up to four times.
+func serializeString(seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) string {
+	var c chunkWriter
+	_ = serialize(&c, seq, opts, charMap)
+	return strings.Join(c, "")
+}
+
+// chunkWriter keeps a copy of each write.
+type chunkWriter []string
+
+func (c *chunkWriter) Write(p []byte) (int, error) {
+	*c = append(*c, string(p))
+	return len(p), nil
 }
 
 // Serialize writes the result using the stylesheet's xsl:output settings.
@@ -1470,10 +1485,8 @@ func appendLeafCopy(parent, n *xdm.Node) *xdm.Node {
 // and -020 stopped at "<out>"), reporting a defect in the transform where the
 // only defect was in how the comparison asked for the text.
 func SerializeAsXML(r *Result) string {
-	var sb strings.Builder
-	_ = serialize(&sb, r.Nodes,
+	return serializeString(r.Nodes,
 		OutputSettings{Method: "xml", Version: r.output.Version}, r.charMap)
-	return sb.String()
 }
 
 // applyInitialSelection runs the initial apply-templates over the initial

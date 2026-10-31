@@ -123,3 +123,27 @@ func TestSerializeJSONAdaptiveStream(t *testing.T) {
 		}
 	}
 }
+
+// Result.String and SerializeAsXML grew a strings.Builder by doubling from
+// empty, up to four times the output. They now keep the serializer's flushed
+// chunks and join them once.
+func TestResultStringAllocation(t *testing.T) {
+	if raceEnabled {
+		t.Skip("allocation counts are not stable under -race")
+	}
+	for _, n := range []int{2000, 13000} {
+		r := &Result{Nodes: streamDoc(t, n), output: OutputSettings{Method: "xml"}}
+		out := r.String()
+		for name, f := range map[string]func(){
+			"String":         func() { _ = r.String() },
+			"SerializeAsXML": func() { _ = SerializeAsXML(r) },
+		} {
+			got := allocBytes(f)
+			t.Logf("%s, %d bytes: %d allocated (%.2fx)", name, len(out), got, float64(got)/float64(len(out)))
+			// The 32 KiB write buffer is a fixed cost on top.
+			if got > uint64(len(out))*5/2+64<<10 {
+				t.Errorf("%s allocated %d bytes for %d bytes of output, want under 2.5x and the buffer", name, got, len(out))
+			}
+		}
+	}
+}
