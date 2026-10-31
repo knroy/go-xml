@@ -871,7 +871,8 @@ tree, err = xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
 
 `ProcessXInclude` returns the included document as a new tree, built
 top-down as every tree is; the tree it is given is left as it was, and node
-identities do not carry over.
+identities do not carry over. A parsed tree with no XInclude element has
+nothing to replace and is returned as it is.
 
 **The resolver is the whole of the confinement.** `xdm` has no filesystem and
 no network; it can read only what a resolver hands it. `xslt.FileResolver`

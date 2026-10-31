@@ -231,7 +231,8 @@ Namespace nodes exist once per element and prefix: the namespace axis, and
 agree for them.
 
 `xdm.ProcessXInclude` returns the included document as a new tree instead of
-editing the one it is given: `tree, err = xdm.ProcessXInclude(tree, opts)`.
+editing the one it is given (a parsed tree with nothing to include comes back
+as it is): `tree, err = xdm.ProcessXInclude(tree, opts)`.
 
 ## xdmbuild setters removed
 

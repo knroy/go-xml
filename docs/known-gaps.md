@@ -105,6 +105,17 @@ tables being copied per scope and target nodes being walked again. Found by
 an external audit of v2.0.0; the figures are the `BenchmarkIdentity*`
 benchmarks in `xsd/`.
 
+### `fn:replace` charges a backtracking or backreference result after building it (XPath, resource limits)
+
+The RE2 path of `fn:replace` charges `len(input) + matches × len(replacement)`
+before it builds the result, so a hostile replacement is refused without being
+allocated. The two other engines, the backreference matcher and the opt-in
+backtracking one (`-backtracking-regex`), still build the result and charge it
+afterwards. Their step budgets bound the number of matches, but not the size
+of each replacement, so a long replacement string can allocate past
+`MaxBytes` before the refusal. Found by the second memory audit
+(2026-10-31), which measured only the RE2 path.
+
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
 **3 of the 23 XSLT 3.0 failures** — `si-fork-902`, `si-fork-952` and

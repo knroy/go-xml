@@ -610,6 +610,8 @@ what actually drives them:
   the resolver. `resolverCacheMax = 256` **cleared on full** rather than
   evicting, so past 257 distinct URIs it stopped being a bound and became an
   amplifier; it now evicts one entry at a time, which is also fixed below.
+  Since the memory audit it is also bounded by `resolverCacheMaxBytes`, 32 MB
+  of source (about 5x that in trees); a `Preload`ed tree is charged 0.
 
 Two further sites — `fn:transform`'s `nestedParseOptions`
 (`xslt/fntransform.go:531`) and `relaxng/resolve.go:141` — have the same shape
@@ -1252,7 +1254,12 @@ itself is rejected without it. See
 Go's `regexp` is RE2. `matches('aaaa…!', '^(a+)+$')` is flat at 2–6 µs from
 n=24 to n=40. Go also *rejects* repeat counts over 1000, so `{1,1000000}` cannot
 be used to force an expansion; the XSD pattern translator allocates nothing on
-nested quantifiers or 200-deep groups.
+nested quantifiers or 200-deep groups. That check bounds one repeat and nested
+products, **not sequential repeats**: `\pL{1000}` written 150 times compiled to
+a program of millions of instructions, and 181 KB of such patterns retained
+984 MB. Every pattern now goes through `xpath.CompileBounded`, which counts the
+program before building it and refuses past `MaxRegexpProgram` (100,000; the
+largest in the W3C suites is 4,313), in XPath and in XSD pattern facets.
 
 **Backreferences do not change this, by default.** XPath 2.0 has them and RE2
 does not, and the usual way to bridge that is a backtracking engine — which is
@@ -1721,7 +1728,8 @@ and facets still apply to the substituted type.
   static context an environment of its own; the four reads are marked in the
   file.
 - The `xpath` regex cache is bounded at 1024, as is the backtracking engine's
-  single-character-atom cache; the UCA collation cache is bounded at 256. All
+  single-character-atom cache; the UCA collation cache is bounded at 256. The
+  bound is on entries, so a key over 1 KB (`maxCachedKey`) is never cached. All
   three hold their bound under concurrent use, not merely on a single goroutine:
   each is a `boundedCache` (`xpath/cache.go`) that performs the full-check and
   the insert under one lock hold. An earlier form checked an atomic size counter
@@ -1861,6 +1869,10 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 
 - **`xsd` error messages kept document strings whole** — cost, driven by document data. `fail` and `attrName` quoted names and values in full and the validator keeps up to 100 errors, so 200 foreign attributes in a 1 MB namespace retained 105 MB, and one 15 MB value under a failing rule set retained 1.57 GB (audit 20). Strings and the formatted message are clipped to 1 KB plus "...", and the pattern and list-item errors quote through `truncate`: 0.13 MB. Pinned by `TestValidationMessagesClipDocumentStrings` in `xsd/message_clip_test.go`.
 - **The DTD validator built every element's path, quadratic in depth** — cost, driven by document data. The path string was rebuilt at each element whether or not anything failed: a *valid* 990-deep chain of 4 KB names allocated 2 GB. It is rendered from the ancestors only when a failure is recorded, and an IDREF keeps its element rather than a path. Its `#FIXED`, enum and ID values are clipped to 1 KB too. Pinned by `TestPathBuiltOnlyForFailures` and `TestValidityMessagesClipLongValues` in `dtd/`.
+- **Deeply nested maps and arrays overflowed the Go stack** — availability, driven by a query or stylesheet. `serialize(..., map{"method":"json"})`, the adaptive method, `fn:deep-equal` and `map:find` recursed once per level, so `fold-left(1 to 400000, [], function($a,$i){[$a]})` (96 bytes) ended the process with `fatal error: stack overflow`, which no `recover` can catch; v2.0.3 has it too. Serialization refuses past 1,000 levels (the `parse-json` limit) with XPDY0130, `deep-equal` and `map:find` past the 500-level recursion bound with XPDY0001, and `xdm.Flatten` is iterative. Pinned by `TestDeepNestedValuesAreRefused` in `xpath/deepnest_test.go`.
+- **A built-in rule returned a truncated result tree as a success** — correctness, driven by document size. The result builder latches a `MaxNodes` refusal, but only instruction bodies checked it, so `<xsl:mode on-no-match="shallow-copy"/>` over 1M elements emptied a third of them and exited 0; v2.0.3 has it too. The transform now fails with XPDY0130 whenever the node budget was crossed anywhere, through `xpath.Context.NodesRefused`. Pinned by `TestBuiltInRuleResultTreeOverrunIsRefused`.
+- **`fn:replace`, picture widths, `xsl:key` and `group-by` grew past their budgets** — cost, driven by document or stylesheet data. `replace` charged its result after building it (12.8 GB for a 500 KB input and a 4 KB replacement); a `format-date` width of `[D01,1000000000]` (52 bytes) allocated 2.8 GB through `strings.Repeat`; `use="1 to 1000"` over 100k nodes built 100M key entries at 3.2 GB peak, since the item counter resets per expression. `replace` charges first on the RE2 path (the other two engines are a known gap), widths over 65,536 are FOFD1340, and keys are totalled per index and grouping against `MaxItems`.
+- **Caches bounded by entry count held gigabytes** — cost, driven by document data or the host. 1,024 cached regexes of 200 KB, 256 failed 1 MB collation URIs, or 256 large `FileResolver` documents each held hundreds of MB to GB. Keys over 1 KB are not cached, and the document cache is also bounded by 32 MB of source.
 - **The nested `fn:transform` cache kept compiles for collected resolvers** — cost, driven by the host. The key held each resolver by identity, so a service that made one per request kept up to 16 dead compiles a stylesheet: 49 MB on DocBook after 20 resolvers. Resolvers are weak keys and `put` drops entries whose resolver is gone: 0.3 MB. Pinned by `TestTransformCache/dead_resolver_dropped`.
 
 **Seventeenth pass — normalize-space built a list of every token, 2026-10-30.**
