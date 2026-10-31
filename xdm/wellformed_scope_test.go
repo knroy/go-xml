@@ -3,7 +3,9 @@ package xdm
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
+	"time"
 
 	xml "github.com/knroy/go-xml/v2/internal/xmltok"
 )
@@ -215,5 +217,97 @@ func TestTagScopeDoesNotAllocate(t *testing.T) {
 		ns.pop(ns.own)
 	}); n != 0 {
 		t.Errorf("validateStartElement under 16 inherited bindings allocated %.0f times, want 0", n)
+	}
+}
+
+// TestNSScopeIndexMatchesScan drives nsScope through random element starts and
+// ends deep enough to cross indexAt both ways, and requires every lookup to
+// agree with a scan of the stack, which is what the index stands in for.
+func TestNSScopeIndexMatchesScan(t *testing.T) {
+	scan := func(b []nsBinding, prefix string) (string, bool) {
+		for i := len(b) - 1; i >= 0; i-- {
+			if b[i].prefix == prefix {
+				return b[i].uri, true
+			}
+		}
+		if prefix == "xml" {
+			return NSXML, true
+		}
+		return "", false
+	}
+	rng := rand.New(rand.NewSource(1))
+	var ns nsScope
+	var frames []int
+	indexed := false
+	for step := range 20000 {
+		if len(frames) > 0 && (rng.Intn(2) == 0 || len(ns.b) > 4*indexAt) {
+			ns.pop(frames[len(frames)-1])
+			frames = frames[:len(frames)-1]
+		} else {
+			ns.push()
+			for range rng.Intn(6) {
+				ns.declare(fmt.Sprint("p", rng.Intn(12)), fmt.Sprint("urn:", step))
+			}
+			frames = append(frames, ns.own)
+		}
+		indexed = indexed || ns.top != nil
+		for _, p := range []string{"", "xml", "p0", "p3", "p11", "q"} {
+			gu, gok := ns.lookup(p)
+			wu, wok := scan(ns.b, p)
+			if gu != wu || gok != wok {
+				t.Fatalf("step %d, %d bindings: lookup(%q) = %q %v, want %q %v", step, len(ns.b), p, gu, gok, wu, wok)
+			}
+		}
+	}
+	if !indexed {
+		t.Fatal("the stack never reached indexAt, so the index was not tried")
+	}
+}
+
+// TestManyDeclarationsParseInLinearTime is the audit-18 document: a root
+// declaring n prefixes, under it attributes using the outermost one, on many
+// small tags and on one large tag. Resolving each prefix by a scan of the stack
+// made the parse quadratic in n; quadrupling n must not take near 16 times as
+// long. The best of three runs keeps a slow machine from deciding it.
+func TestManyDeclarationsParseInLinearTime(t *testing.T) {
+	doc := func(n int, big bool) string {
+		var b strings.Builder
+		b.WriteString("<r")
+		for i := range n {
+			fmt.Fprintf(&b, ` xmlns:p%d="u%d"`, i, i)
+		}
+		b.WriteString(">")
+		if big {
+			b.WriteString("<c")
+			for i := range 3 * n {
+				fmt.Fprintf(&b, ` p0:a%d="v"`, i)
+			}
+			b.WriteString("/>")
+		} else {
+			for range n {
+				b.WriteString(`<c p0:a="v" p0:b="v" p0:c="v"/>`)
+			}
+		}
+		b.WriteString("</r>")
+		return b.String()
+	}
+	best := func(s string) time.Duration {
+		var d time.Duration
+		for i := range 3 {
+			t0 := time.Now()
+			if _, err := ParseString(s, ParseOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if e := time.Since(t0); i == 0 || e < d {
+				d = e
+			}
+		}
+		return d
+	}
+	for _, big := range []bool{false, true} {
+		small, large := best(doc(5000, big)), best(doc(20000, big))
+		if r := float64(large) / float64(small); r > 8 {
+			t.Errorf("big tag %v: 4x the declarations took %.1fx as long (%v, %v), want linear", big, r, small, large)
+		}
 	}
 }
