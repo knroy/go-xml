@@ -44,7 +44,7 @@ import "strings"
 // Between them, the constant cannot drift ahead of the changelog or behind
 // the tags without a red build. That is the check the original constant never
 // had.
-const Version = "2.0.2"
+const Version = "2.0.3"
 
 // IsReleaseTriple reports whether v is N.N.N with no empty component.
 //
