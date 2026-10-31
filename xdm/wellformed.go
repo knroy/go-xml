@@ -283,7 +283,7 @@ func (s *nsScope) declare(prefix, uri string) {
 	}
 	// The URI is copied out of the tokeniser's arena: the tree keeps it in
 	// every name and frame it resolves, and one arena string reachable from a
-	// tree keeps its whole 32 KB block alive.
+	// tree keeps its whole block alive.
 	s.b = append(s.b, nsBinding{prefix, strings.Clone(uri)})
 	s.own++
 }
