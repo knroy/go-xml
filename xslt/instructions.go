@@ -1181,6 +1181,9 @@ type notedDecls struct {
 func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	sub := out.StartElement(rt.sheet.aliasFor(i.pkg, i.name))
 	stampConstructedBaseURI(sub.Open(), i.baseURI)
+	// The bindings are added in one step: parentSupplies reads only the
+	// ancestors, so none of them depends on another having been added.
+	pairs := rt.nsPairs[:0]
 	for _, ns := range i.namespaces {
 		// Section 11.1.4: aliasing rewrites the namespace nodes copied from
 		// the literal result element, not only its name. Copying them
@@ -1198,9 +1201,11 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// so the node would only repeat it. It is still a namespace node
 		// the result sequence holds, so XTDE0430 must still see it.
 		if !parentSupplies(rt, sub.Open(), prefix, uri) {
-			sub.Open().AddNamespace(prefix, uri)
+			pairs = append(pairs, prefix, uri)
 		}
 	}
+	sub.Open().AddNamespaces(pairs...)
+	rt.nsPairs = pairs[:0]
 	sub.NoteDeclaredList(i.noted(rt.sheet))
 	// A namespace that exclusion would have dropped comes back if it is the
 	// target of an alias: the point of aliasing onto, say, the XSLT namespace
