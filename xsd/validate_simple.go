@@ -829,7 +829,12 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 
 	for _, st := range steps {
 		f := st.facets
-		// cmp orders the instance value against a bound literal.
+		var rats [4]*big.Rat
+		if st.rats != nil {
+			rats = *st.rats
+		}
+		// cmp orders the instance value against a bound literal, using
+		// the bound pre-parsed with the chain when there is one.
 		//
 		// The floating types have three values with no rational form.
 		// §3.3.5/§3.3.6 order them -INF < every finite value < INF and
@@ -838,7 +843,7 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 		// an unparsable value as "no opinion" is what let INF satisfy
 		// maxInclusive="100": being outside every bound the schema can
 		// write is exactly what makes it invalid.
-		cmp := func(lex *string) (int, bool) {
+		cmp := func(lex *string, pre *big.Rat) (int, bool) {
 			if lex == nil {
 				return 0, false
 			}
@@ -878,6 +883,9 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 			if !finite {
 				return 0, false
 			}
+			if pre != nil {
+				return val.Cmp(pre), true
+			}
 			b, ok := new(big.Rat).SetString(lexs)
 			if !ok {
 				return 0, false
@@ -904,24 +912,41 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 			}
 			continue
 		}
-		if c, ok := cmp(f.MinInclusive); ok && c < 0 {
+		if c, ok := cmp(f.MinInclusive, rats[0]); ok && c < 0 {
 			return facetError(st.typ, FacetMinInclusive,
 				"%s is less than %s", normalized, *f.MinInclusive)
 		}
-		if c, ok := cmp(f.MaxInclusive); ok && c > 0 {
+		if c, ok := cmp(f.MaxInclusive, rats[1]); ok && c > 0 {
 			return facetError(st.typ, FacetMaxInclusive,
 				"%s is greater than %s", normalized, *f.MaxInclusive)
 		}
-		if c, ok := cmp(f.MinExclusive); ok && c <= 0 {
+		if c, ok := cmp(f.MinExclusive, rats[2]); ok && c <= 0 {
 			return facetError(st.typ, FacetMinExclusive,
 				"%s is not greater than %s", normalized, *f.MinExclusive)
 		}
-		if c, ok := cmp(f.MaxExclusive); ok && c >= 0 {
+		if c, ok := cmp(f.MaxExclusive, rats[3]); ok && c >= 0 {
 			return facetError(st.typ, FacetMaxExclusive,
 				"%s is not less than %s", normalized, *f.MaxExclusive)
 		}
 	}
 	return nil
+}
+
+// boundRats parses a facet set's bounds for facetStep.rats.
+func boundRats(f *FacetSet) *[4]*big.Rat {
+	var out *[4]*big.Rat
+	for i, lex := range [4]*string{f.MinInclusive, f.MaxInclusive, f.MinExclusive, f.MaxExclusive} {
+		if lex == nil {
+			continue
+		}
+		if r, ok := new(big.Rat).SetString(trimXMLSpace(*lex)); ok {
+			if out == nil {
+				out = new([4]*big.Rat)
+			}
+			out[i] = r
+		}
+	}
+	return out
 }
 
 // hasBoundFacet reports whether any step of the chain carries one of the four

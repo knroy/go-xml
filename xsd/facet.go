@@ -2,6 +2,7 @@ package xsd
 
 import (
 	"fmt"
+	"math/big"
 	"strings"
 	"unicode/utf8"
 
@@ -500,6 +501,12 @@ func (f *FacetSet) whiteSpaceOnly() bool {
 type facetStep struct {
 	typ    *SimpleType
 	facets *FacetSet
+	// rats are the bound facets parsed as rationals, in the order
+	// MinInclusive, MaxInclusive, MinExclusive, MaxExclusive, with nil for
+	// a bound that is absent or not a rational. They are parsed once with
+	// the memoised chain; checkBounds parsed them again for every value.
+	// The whole array is nil when the step has no rational bound.
+	rats *[4]*big.Rat
 }
 
 // facetChain returns the derivation steps from t up to its primitive, nearest
