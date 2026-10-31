@@ -2,9 +2,11 @@ package xslt
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -700,15 +702,55 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 // Outside a compilation m is nil and nothing is cached. It has its own mutex
 // rather than relying on compileMu because a running transform, which does
 // not hold compileMu, can reach inScopeNamespacesShared too.
+//
+// byContent and lists intern the maps and the literal elements' binding lists
+// by content as well: SchXslt redeclares one prefix on each of the CEN
+// rules' ~980 svrl:failed-assert elements, so keying by the declaring
+// element alone kept that many identical copies in the compiled stylesheet.
 var sharedNS struct {
 	sync.Mutex
-	m map[*xdm.Node]map[string]string
+	m         map[*xdm.Node]map[string]string
+	byContent map[string]map[string]string
+	lists     map[string][]nsBinding
+	resolvers map[nsResolverKey]*nsResolver
 }
 
 func setSharedNS(m map[*xdm.Node]map[string]string) {
 	sharedNS.Lock()
 	sharedNS.m = m
+	sharedNS.byContent, sharedNS.lists, sharedNS.resolvers = nil, nil, nil
+	if m != nil {
+		sharedNS.byContent = map[string]map[string]string{}
+		sharedNS.lists = map[string][]nsBinding{}
+		sharedNS.resolvers = map[nsResolverKey]*nsResolver{}
+	}
 	sharedNS.Unlock()
+}
+
+// internBindings returns a shared copy of s for the rest of the compilation,
+// or s itself outside one. The result must not be modified.
+func internBindings(s []nsBinding) []nsBinding {
+	if len(s) == 0 {
+		return s
+	}
+	var b strings.Builder
+	for _, ns := range s {
+		b.WriteString(ns.prefix)
+		b.WriteByte(0)
+		b.WriteString(ns.uri)
+		b.WriteByte(0)
+	}
+	sharedNS.Lock()
+	defer sharedNS.Unlock()
+	if sharedNS.lists == nil {
+		return s
+	}
+	k := b.String()
+	if v, ok := sharedNS.lists[k]; ok {
+		return v
+	}
+	sharedNS.lists[k] = s
+	return s
 }
 
 // forgetSharedNS drops the cached maps, and the version memo, for a caller
@@ -741,6 +783,24 @@ func inScopeNamespacesShared(el *xdm.Node) map[string]string {
 	m, ok := sharedNS.m[d]
 	if !ok {
 		m = d.InScopeNamespaces()
+		// NUL cannot occur in a prefix or a URI, so it separates them.
+		prefixes := make([]string, 0, len(m))
+		for p := range m {
+			prefixes = append(prefixes, p)
+		}
+		sort.Strings(prefixes)
+		var b strings.Builder
+		for _, p := range prefixes {
+			b.WriteString(p)
+			b.WriteByte(0)
+			b.WriteString(m[p])
+			b.WriteByte(0)
+		}
+		if v, ok := sharedNS.byContent[b.String()]; ok {
+			m = v
+		} else {
+			sharedNS.byContent[b.String()] = m
+		}
 		sharedNS.m[d] = m
 	}
 	return m
@@ -1233,7 +1293,7 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 	if defaultElementNS == "" {
 		defaultElementNS = xpathDefaultNamespaceAt(el)
 	}
-	return &nsResolver{
+	r := &nsResolver{
 		bindings:  inScopeNamespacesShared(el),
 		defaultNS: defaultElementNS,
 		baseURI:   el.BaseURI(),
@@ -1245,6 +1305,38 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 		xpathVersion: xpathVersionAt(el),
 		xsltVersion:  declaredXSLTVersion(el),
 	}
+	return internResolver(r)
+}
+
+// nsResolverKey is an nsResolver as a map key. The bindings map is keyed by
+// identity, which inScopeNamespacesShared has already made content identity
+// for the compilation; every other field must be listed here.
+type nsResolverKey struct {
+	bindings                    unsafe.Pointer
+	defaultNS, baseURI, collate string
+	compat                      bool
+	schema                      *xsd.Schema
+	pkg                         int
+	xpathVersion                xpath.Version
+	xsltVersion                 float64
+}
+
+// internResolver returns the compilation's shared resolver equal to r, or r
+// itself outside a compilation. A resolver is never modified once built
+// (xsl:evaluate copies one to change it), so equal ones can be one.
+func internResolver(r *nsResolver) *nsResolver {
+	sharedNS.Lock()
+	defer sharedNS.Unlock()
+	if sharedNS.resolvers == nil {
+		return r
+	}
+	k := nsResolverKey{reflect.ValueOf(r.bindings).UnsafePointer(), r.defaultNS, r.baseURI,
+		r.collation, r.compat, r.schema, r.pkg, r.xpathVersion, r.xsltVersion}
+	if v, ok := sharedNS.resolvers[k]; ok {
+		return v
+	}
+	sharedNS.resolvers[k] = r
+	return r
 }
 
 // LookupSchemaDeclaration implements xpath.SchemaTypes.

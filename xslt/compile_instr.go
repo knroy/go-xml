@@ -317,7 +317,7 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	// xsl:stylesheet and uses it inside a literal element expects the result
 	// to carry the declaration, and the difference is observable through the
 	// namespace axis of the constructed tree.
-	scope := n.InScopeNamespaces()
+	scope := inScopeNamespacesShared(n)
 	prefixes := make([]string, 0, len(scope))
 	for p := range scope {
 		prefixes = append(prefixes, p)
@@ -343,14 +343,21 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 		}
 		instr.namespaces = append(instr.namespaces, nsBinding{prefix: p, uri: uri})
 	}
+	instr.namespaces = internBindings(instr.namespaces)
+	instr.excludedNamespaces = internBindings(instr.excludedNamespaces)
 
+	// One resolver serves every attribute of the element.
+	var ns *nsResolver
 	for a := range n.Attrs() {
 		// xsl:-prefixed attributes on a literal element are directives, not
 		// output attributes.
 		if a.Name().URI == xdm.NSXSL {
 			continue
 		}
-		avt, err := compileAVT(a.Value(), newNSResolver(n, ""))
+		if ns == nil {
+			ns = newNSResolver(n, "")
+		}
+		avt, err := compileAVT(a.Value(), ns)
 		if err != nil {
 			return nil, fmt.Errorf("in attribute %s: %w", a.Name().Lexical(), err)
 		}
