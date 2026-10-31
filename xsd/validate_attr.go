@@ -623,36 +623,40 @@ func isBase64Binary(v string) bool {
 		b16 = "AEIMQUYcgkosw048"
 		b04 = "AQgw"
 	)
-	isB64 := func(r rune) bool {
-		return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' ||
-			r >= '0' && r <= '9' || r == '+' || r == '/'
+	isB64 := func(c byte) bool {
+		return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' ||
+			c >= '0' && c <= '9' || c == '+' || c == '/'
 	}
 
-	// Strip whitespace first. The grammar is stated over the significant
-	// characters, and a quantum may be split across a line break.
-	buf := make([]rune, 0, len(v))
-	for _, r := range v {
-		switch r {
+	// One pass over the bytes, skipping whitespace: the grammar is stated
+	// over the significant characters, and a quantum may be split across a
+	// line break. Every legal character is ASCII, so a byte pass rejects
+	// exactly what a rune pass would. The last four significant characters
+	// are held in a ring until the next arrives, because only the final
+	// quantum admits padding.
+	var last [4]byte
+	n := 0
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch c {
 		case ' ', '\t', '\n', '\r':
-		default:
-			buf = append(buf, r)
+			continue
 		}
+		// Every quantum but the last admits no padding at all.
+		if n >= 4 && !isB64(last[n%4]) {
+			return false
+		}
+		last[n%4] = c
+		n++
 	}
-	if len(buf)%4 != 0 {
+	if n%4 != 0 {
 		return false
 	}
-	if len(buf) == 0 {
+	if n == 0 {
 		return true
 	}
 
-	// Every quantum but the last admits no padding at all.
-	for _, r := range buf[:len(buf)-4] {
-		if !isB64(r) {
-			return false
-		}
-	}
-
-	last := buf[len(buf)-4:]
+	// n is a multiple of four, so the ring holds the last quantum in order.
 	if !isB64(last[0]) {
 		return false
 	}
@@ -661,10 +665,10 @@ func isBase64Binary(v string) bool {
 		return isB64(last[1]) && isB64(last[2]) && isB64(last[3])
 	case last[2] == '=':
 		// "B04 B64 = =" -- two octets dropped, four bits must be zero.
-		return strings.ContainsRune(b04, last[1])
+		return strings.IndexByte(b04, last[1]) >= 0
 	default:
 		// "B16 B64 B16 =" -- one octet dropped, two bits must be zero.
-		return isB64(last[1]) && strings.ContainsRune(b16, last[2])
+		return isB64(last[1]) && strings.IndexByte(b16, last[2]) >= 0
 	}
 }
 
