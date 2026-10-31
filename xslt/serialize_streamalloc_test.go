@@ -92,3 +92,34 @@ func allocBytes(f func()) uint64 {
 	}
 	return best
 }
+
+// The json and adaptive methods built the whole document as a string before
+// writing it, 7 to 12 times the output in all. They now write as they render,
+// so what they allocate must not grow with the output.
+func TestSerializeJSONAdaptiveStream(t *testing.T) {
+	if raceEnabled {
+		t.Skip("allocation counts are not stable under -race")
+	}
+	seq := streamDoc(t, 20000)
+	for _, tc := range []struct {
+		name string
+		opts OutputSettings
+		cmap map[rune]string
+	}{
+		{"json", OutputSettings{Method: "json"}, nil},
+		{"adaptive", OutputSettings{Method: "adaptive"}, nil},
+		{"adaptive-charmap", OutputSettings{Method: "adaptive"}, map[rune]string{' ': "&nbsp;"}},
+	} {
+		var out bytes.Buffer
+		if err := Serialize(&out, seq, tc.opts, tc.cmap); err != nil {
+			t.Fatal(err)
+		}
+		if got := allocBytes(func() {
+			if err := Serialize(io.Discard, seq, tc.opts, tc.cmap); err != nil {
+				t.Fatal(err)
+			}
+		}); got > uint64(out.Len())/4 {
+			t.Errorf("%s allocated %d bytes for %d bytes of output", tc.name, got, out.Len())
+		}
+	}
+}

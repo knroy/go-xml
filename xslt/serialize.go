@@ -180,10 +180,11 @@ func serializeTo(w stringWriter, seq xdm.Sequence, opts OutputSettings, charMap 
 
 	switch strings.ToLower(opts.Method) {
 	case "json":
-		out, err := xpath.SerializeJSON(seq, jsonParams(opts, charMap))
-		if err != nil {
-			return err
+		if s.err != nil {
+			return s.err
 		}
+		// The document is written as it is rendered rather than built as a
+		// string first, which held several copies of the output at once.
 		// Unicode normalisation has already been applied, inside each JSON
 		// string, by the code that applies the character map there. It has to
 		// happen at that depth rather than to the finished document: a
@@ -194,14 +195,8 @@ func serializeTo(w stringWriter, seq xdm.Sequence, opts OutputSettings, charMap 
 		// for the decomposed spelling back. The structural characters
 		// between the strings -- braces, commas, digits -- are ASCII, which
 		// no normalisation form touches.
-		s.writeString(out)
-		return s.err
+		return xpath.SerializeJSONTo(s.w, seq, jsonParams(opts, charMap))
 	case "adaptive":
-		out, err := xpath.SerializeAdaptive(seq, jsonParams(opts, charMap))
-		if err != nil {
-			return err
-		}
-		out = s.normalized(out)
 		// The adaptive method renders a node by handing it to the XML output
 		// method (Serialization 3.1 §10), so the XML declaration is part of
 		// what it produces and omit-xml-declaration is a parameter it
@@ -213,22 +208,23 @@ func serializeTo(w stringWriter, seq xdm.Sequence, opts OutputSettings, charMap 
 		// "^<\?xml[^<]+><test>AAA</test>$" - the declaration once, ahead of
 		// the whole result rather than ahead of each item, which is why it
 		// is written here and not inside SerializeAdaptive.
-		if !opts.OmitXMLDecl {
-			enc := opts.Encoding
-			if enc == "" {
-				enc = "UTF-8"
+		if s.normalize == nil {
+			// Streamed, as json above. With normalisation the string is
+			// kept: norm's streaming Writer panics on a long run of
+			// combining marks split across writes, so the whole output is
+			// normalised at once instead.
+			s.writeAdaptiveDecl()
+			if s.err != nil {
+				return s.err
 			}
-			decl := `<?xml version="` + xmlDeclVersion(opts) + `" encoding="` + enc + `"`
-			if opts.Standalone != "" {
-				decl += ` standalone="` + opts.Standalone + `"`
-			}
-			if opts.Indent {
-				s.writeString(decl + "?>\n")
-			} else {
-				s.writeString(decl + "?>")
-			}
+			return xpath.SerializeAdaptiveTo(s.w, seq, jsonParams(opts, charMap))
 		}
-		s.writeString(out)
+		out, err := xpath.SerializeAdaptive(seq, jsonParams(opts, charMap))
+		if err != nil {
+			return err
+		}
+		s.writeAdaptiveDecl()
+		s.writeString(s.normalized(out))
 		return s.err
 	}
 
@@ -518,6 +514,27 @@ type serializer struct {
 	// scratch holds a character reference or an encoded character on its way
 	// to w, so that writing one allocates nothing.
 	scratch [16]byte
+}
+
+// writeAdaptiveDecl writes the XML declaration the adaptive method begins
+// with, unless it is omitted.
+func (s *serializer) writeAdaptiveDecl() {
+	opts := s.opts
+	if !opts.OmitXMLDecl {
+		enc := opts.Encoding
+		if enc == "" {
+			enc = "UTF-8"
+		}
+		decl := `<?xml version="` + xmlDeclVersion(opts) + `" encoding="` + enc + `"`
+		if opts.Standalone != "" {
+			decl += ` standalone="` + opts.Standalone + `"`
+		}
+		if opts.Indent {
+			s.writeString(decl + "?>\n")
+		} else {
+			s.writeString(decl + "?>")
+		}
+	}
 }
 
 func (s *serializer) writeString(str string) {
