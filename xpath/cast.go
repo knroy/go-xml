@@ -1337,15 +1337,32 @@ func trimSchemaSpace(s string) string { return trimXMLSpace(s) }
 func removeSchemaSpace(s string) string { return strings.Join(splitXMLSpace(s), "") }
 
 // collapseXMLSpace replaces runs of XML whitespace with a single space and
-// trims the ends, which is the whiteSpace="collapse" facet.
+// trims the ends, which is the whiteSpace="collapse" facet and
+// fn:normalize-space.
 //
 // XML's whitespace is exactly space, tab, carriage return and newline.
 // strings.Fields uses unicode.IsSpace, which is a wider set — U+00A0 among
 // others — and collapsing those changes characters the schema treats as
 // ordinary text.
+//
+// It builds no list of the tokens, and returns a string that is already
+// collapsed as it is: a rule evaluating normalize-space on the same large
+// value many times otherwise copies it every time.
 func collapseXMLSpace(s string) string {
 	isSpace := func(b byte) bool {
 		return b == ' ' || b == '\t' || b == '\n' || b == '\r'
+	}
+	collapsed := true
+	for i := 0; i < len(s) && collapsed; i++ {
+		switch s[i] {
+		case '\t', '\n', '\r':
+			collapsed = false
+		case ' ':
+			collapsed = i > 0 && i < len(s)-1 && s[i+1] != ' '
+		}
+	}
+	if collapsed {
+		return s
 	}
 	var sb strings.Builder
 	sb.Grow(len(s))

@@ -157,7 +157,7 @@ func registerRegexFuncs(l *Library) {
 		// than XML's. A non-breaking space is Unicode whitespace but not XML
 		// whitespace, so fn:normalize-space leaves it alone — and tokenizing
 		// "abc\u00a0def" gave two tokens where the spec wants one.
-		s = strings.Join(splitXMLSpace(s), " ")
+		s = collapseXMLSpace(s)
 		if s == "" {
 			// The empty string has no tokens, the same answer the
 			// two-argument form gives rather than one empty token.
