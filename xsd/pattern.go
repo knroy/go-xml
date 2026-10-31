@@ -2,7 +2,6 @@ package xsd
 
 import (
 	"fmt"
-	"regexp"
 
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -40,7 +39,7 @@ func compilePatternVersion(src string, version Version) (*Pattern, error) {
 	// would reintroduce exactly the widening this wrapping exists to
 	// prevent. The non-capturing group keeps a top-level alternation —
 	// "a|b" — from binding more loosely than the anchors.
-	re, err := regexp.Compile(`\A(?:` + translated + `)\z`)
+	re, err := xpath.CompileBounded(`\A(?:` + translated + `)\z`)
 	if err != nil {
 		return nil, fmt.Errorf("pattern %q: %w", src, err)
 	}

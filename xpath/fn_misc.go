@@ -1313,6 +1313,10 @@ func defaultPresentation(comp byte) string {
 	return "1"
 }
 
+// maxPictureWidth bounds a width modifier's number. The padding it asks for is
+// built before any budget sees it: [D01,1000000000] allocated 2.8 GB.
+const maxPictureWidth = 1 << 16
+
 // checkWidthModifier rejects a width modifier whose syntax is wrong, which is
 // XTDE1340. Both bounds must be "*" or an integer greater than zero.
 func checkWidthModifier(width string) error {
@@ -1333,6 +1337,10 @@ func checkWidthModifier(width string) error {
 				return fmt.Errorf("FOFD1340: malformed width modifier %q", width)
 			}
 			n = n*10 + int(c-'0')
+			if n > maxPictureWidth {
+				return fmt.Errorf("FOFD1340: width modifier %q asks for more than %d "+
+					"characters: %w", width, maxPictureWidth, xdm.ErrResourceLimit)
+			}
 		}
 		if n == 0 {
 			return fmt.Errorf("FOFD1340: width modifier %q must be greater than zero", width)
