@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
+	"weak"
 )
 
 // The node record.
@@ -281,7 +282,12 @@ func (t *nodeTyping) get() *typingNames {
 //
 // Each set of names has two slots, so that two in steady use that hash alike
 // do not keep evicting each other.
-var recentNames [1024]atomic.Pointer[typingNames]
+//
+// The slots are weak: a set of names holds its TypeEnvironment, and a strong
+// slot would keep the schema of a process that reloads schemas alive until
+// 1024 later sets pushed it out (about 23 MB for a 500-type schema). A set
+// no node uses any more is simply made again.
+var recentNames [1024]atomic.Pointer[weak.Pointer[typingNames]]
 
 // recentSlots is the index of v's first slot in recentNames; the second is
 // the one after it.
@@ -986,20 +992,25 @@ func setNames(t *nodeTyping, v typingNames) {
 	}
 	i := recentSlots(&v)
 	a, b := &recentNames[i], &recentNames[i+1]
-	pa := a.Load()
-	if pa != nil && *pa == v {
-		t.names = pa
-		return
+	wa := a.Load()
+	if wa != nil {
+		if pa := wa.Value(); pa != nil && *pa == v {
+			t.names = pa
+			return
+		}
 	}
-	if pb := b.Load(); pb != nil && *pb == v {
-		t.names = pb
-		return
+	if wb := b.Load(); wb != nil {
+		if pb := wb.Value(); pb != nil && *pb == v {
+			t.names = pb
+			return
+		}
 	}
 	p := new(typingNames)
 	*p = v
+	w := weak.Make(p)
 	// The newest goes first; the first moves to second.
-	b.Store(pa)
-	a.Store(p)
+	b.Store(wa)
+	a.Store(&w)
 	t.names = p
 }
 

@@ -729,6 +729,11 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		} else {
 			lines = tee.lines
 		}
+		// append's doubling leaves up to a third of the index unused, kept
+		// for the life of the tree.
+		if cap(lines.starts) > len(lines.starts) {
+			lines.starts = append(make([]int32, 0, len(lines.starts)), lines.starts...)
+		}
 		tree.ownSource().lines = lines
 	}
 	tree.XMLVersion = "1.0"
