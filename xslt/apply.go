@@ -589,8 +589,8 @@ func runTemplateBody(rt *runtime, t *Template,
 	if err := execSequence(t.Body, sub, tmp); err != nil {
 		return err
 	}
-	converted, err := t.asType.convertAs(tmp.Sequence(),
-		"result of template "+templateLabel(t), "XTTE0505")
+	converted, err := t.asType.convertAsLazy(tmp.Sequence(),
+		func() string { return "result of template " + templateLabel(t) }, "XTTE0505")
 	if err != nil {
 		return err
 	}
@@ -796,8 +796,9 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		// section 10.3's XTTE0790 is written specifically for "the value of a
 		// parameter to a stylesheet function". Reporting 0590 here made
 		// error-0790a report the template code for a function call.
-		v, err := p.asType.convertAs(args[i], "parameter $"+p.Name.Lexical()+
-			" of "+f.name.Lexical(), funcParamCode(rt.sheet))
+		v, err := p.asType.convertAsLazy(args[i], func() string {
+			return "parameter $" + p.Name.Lexical() + " of " + f.name.Lexical()
+		}, funcParamCode(rt.sheet))
 		if err != nil {
 			return nil, err
 		}
@@ -843,8 +844,8 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	}
 	// A stylesheet function whose result will not convert to its declared
 	// type is XTTE0780.
-	res, err := f.returns.convertAs(out.Sequence(), "result of "+f.name.Lexical(),
-		"XTTE0780")
+	res, err := f.returns.convertAsLazy(out.Sequence(),
+		func() string { return "result of " + f.name.Lexical() }, "XTTE0780")
 	if err != nil {
 		return nil, err
 	}

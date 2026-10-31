@@ -496,7 +496,7 @@ func evalVariable(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	}
 	// A variable or parameter whose value will not convert to its declared
 	// type is XTTE0570, not the generic XPTY0004.
-	return v.asType.convertAs(seq, "$"+v.Name.Lexical(), "XTTE0570")
+	return v.asType.convertAsLazy(seq, func() string { return "$" + v.Name.Lexical() }, "XTTE0570")
 }
 
 // evalVariableRaw computes the value before the "as" declaration is applied.

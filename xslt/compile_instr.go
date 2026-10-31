@@ -1898,7 +1898,7 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// is what evaluate-018d asks for -- it declares $p2 as xs:integer
 		// over a select that yields 'banana' and accepts XPTY0004 or
 		// XTTE0590, not the variable-binding code.
-		v, err = p.asType.convertAs(v, "$"+p.Name.Lexical(), "XTTE0590")
+		v, err = p.asType.convertAsLazy(v, func() string { return "$" + p.Name.Lexical() }, "XTTE0590")
 		if err != nil {
 			return err
 		}
@@ -2154,9 +2154,9 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 						if !ok {
 							continue
 						}
-						conv, err := p.asType.convertAs(v,
-							"parameter $"+p.Name.Lexical()+" of xsl:iterate",
-							"XTTE0590")
+						conv, err := p.asType.convertAsLazy(v, func() string {
+							return "parameter $" + p.Name.Lexical() + " of xsl:iterate"
+						}, "XTTE0590")
 						if err != nil {
 							return err
 						}
