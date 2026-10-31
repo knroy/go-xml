@@ -434,18 +434,40 @@ func (a *ArrayItem) Members() []Sequence {
 	return out
 }
 
+// AppendMembers appends the members to dst and returns it. It is Members
+// without the intermediate copy, for a caller that is building a new slice
+// anyway.
+func (a *ArrayItem) AppendMembers(dst []Sequence) []Sequence {
+	return append(dst, a.members...)
+}
+
 // Flatten replaces every array in a sequence with its members, recursively,
 // which is what array:flatten and the function conversion rules do.
 func Flatten(seq Sequence) Sequence {
 	out := make(Sequence, 0, len(seq))
-	for _, it := range seq {
-		arr, ok := it.(*ArrayItem)
-		if !ok {
-			out = append(out, it)
+	// An explicit stack rather than recursion: an array nested a million deep
+	// is a value a query can build, and recursing on it overflows the Go stack.
+	type frame struct {
+		seqs []Sequence // the member sequences still to walk
+		i    int        // next item within seqs[0]
+	}
+	stack := []frame{{seqs: []Sequence{seq}}}
+	for len(stack) > 0 {
+		f := &stack[len(stack)-1]
+		if len(f.seqs) == 0 {
+			stack = stack[:len(stack)-1]
 			continue
 		}
-		for _, m := range arr.members {
-			out = append(out, Flatten(m)...)
+		if f.i == len(f.seqs[0]) {
+			f.seqs, f.i = f.seqs[1:], 0
+			continue
+		}
+		it := f.seqs[0][f.i]
+		f.i++
+		if arr, ok := it.(*ArrayItem); ok {
+			stack = append(stack, frame{seqs: arr.members})
+		} else {
+			out = append(out, it)
 		}
 	}
 	return out

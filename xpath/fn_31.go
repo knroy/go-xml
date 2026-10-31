@@ -1203,6 +1203,12 @@ func deepEqualMapArray(ctx *Context, x, y xdm.Item) (eq, handled bool, err error
 }
 
 func deepEqualArrays(ctx *Context, a, b *xdm.ArrayItem) (bool, error) {
+	// Nested values recurse here; bound them like any other recursion.
+	if err := ctx.checkDepth(); err != nil {
+		return false, err
+	}
+	ctx.Depth++
+	defer func() { ctx.Depth-- }()
 	if a.Len() != b.Len() {
 		return false, nil
 	}
@@ -1220,6 +1226,12 @@ func deepEqualArrays(ctx *Context, a, b *xdm.ArrayItem) (bool, error) {
 }
 
 func deepEqualMaps(ctx *Context, a, b *xdm.MapItem) (bool, error) {
+	// Nested values recurse here; bound them like any other recursion.
+	if err := ctx.checkDepth(); err != nil {
+		return false, err
+	}
+	ctx.Depth++
+	defer func() { ctx.Depth-- }()
 	if a.Len() != b.Len() {
 		return false, nil
 	}

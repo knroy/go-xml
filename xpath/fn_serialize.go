@@ -1868,6 +1868,13 @@ func jsonFitsInline(seqs []xdm.Sequence) bool {
 }
 
 func writeJSONItem(sb *serializeSink, it xdm.Item, opts serializeOptions, depth int) error {
+	switch it.(type) {
+	case *xdm.ArrayItem, *xdm.MapItem:
+		if err := sb.enter(); err != nil {
+			return err
+		}
+		defer sb.leave()
+	}
 	switch v := it.(type) {
 	case *xdm.ArrayItem:
 		members := v.Members()
@@ -2281,6 +2288,13 @@ func writeAdaptiveSeq(sb *serializeSink, seq xdm.Sequence, opts serializeOptions
 }
 
 func writeAdaptiveItem(sb *serializeSink, it xdm.Item, opts serializeOptions) {
+	switch it.(type) {
+	case *xdm.ArrayItem, *xdm.MapItem:
+		if sb.enter() != nil {
+			return
+		}
+		defer sb.leave()
+	}
 	switch v := it.(type) {
 	case *xdm.MapItem:
 		sb.WriteString("map{")
@@ -2748,7 +2762,29 @@ type serializeSink struct {
 	// reserve is allowance drawn from the shared counter and not yet spent.
 	// See sinkReserveBlock.
 	reserve int
+	// depth counts the maps and arrays open at this point; see enter.
+	depth int
 }
+
+// enter opens one level of map or array nesting, refusing past maxJSONDepth.
+// The writers recurse, so a value nested a million deep is a million Go stack
+// frames and a fatal stack overflow rather than an error. A caller that gets
+// nil must call leave when the level closes.
+func (s *serializeSink) enter() error {
+	if s.depth >= maxJSONDepth {
+		err := fmt.Errorf("XPDY0130: serialization nests maps and arrays more "+
+			"than %d levels deep: %w", maxJSONDepth, xdm.ErrResourceLimit)
+		if s.e == nil {
+			s.e = err
+		}
+		s.reserve = 0
+		return err
+	}
+	s.depth++
+	return nil
+}
+
+func (s *serializeSink) leave() { s.depth-- }
 
 // sinkReserveBlock is how much allowance the sink draws from the shared
 // counter at a time.

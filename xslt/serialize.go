@@ -2813,15 +2813,5 @@ func flattenArrays(seq xdm.Sequence) xdm.Sequence {
 	if !has {
 		return seq
 	}
-	out := make(xdm.Sequence, 0, len(seq))
-	for _, it := range seq {
-		if a, ok := it.(*xdm.ArrayItem); ok {
-			for _, m := range a.Members() {
-				out = append(out, flattenArrays(m)...)
-			}
-			continue
-		}
-		out = append(out, it)
-	}
-	return out
+	return xdm.Flatten(seq)
 }

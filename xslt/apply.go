@@ -903,6 +903,14 @@ func (rt *runtime) functionCallKey(f *userFunction, args []xdm.Sequence) ([]byte
 // appendIdenticalKey appends the key of one sequence to b. Every atomic key is
 // length-prefixed, so a string holding a delimiter cannot pass for structure.
 func (rt *runtime) appendIdenticalKey(b []byte, s xdm.Sequence) ([]byte, error) {
+	// The walk recurses on the argument's own nesting. Past this depth the
+	// call is simply not cached, which is what any other unkeyable argument
+	// gets, rather than a stack overflow.
+	if rt.keyDepth >= 500 {
+		return nil, errNotCacheable
+	}
+	rt.keyDepth++
+	defer func() { rt.keyDepth-- }()
 	var err error
 	for _, it := range s {
 		b = append(b, 0x1e)
