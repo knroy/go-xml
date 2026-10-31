@@ -1181,6 +1181,9 @@ type notedDecls struct {
 func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	sub := out.StartElement(rt.sheet.aliasFor(i.pkg, i.name))
 	stampConstructedBaseURI(sub.Open(), i.baseURI)
+	// The bindings are added in one step: parentSupplies reads only the
+	// ancestors, so none of them depends on another having been added.
+	pairs := rt.nsPairs[:0]
 	for _, ns := range i.namespaces {
 		// Section 11.1.4: aliasing rewrites the namespace nodes copied from
 		// the literal result element, not only its name. Copying them
@@ -1198,9 +1201,11 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// so the node would only repeat it. It is still a namespace node
 		// the result sequence holds, so XTDE0430 must still see it.
 		if !parentSupplies(rt, sub.Open(), prefix, uri) {
-			sub.Open().AddNamespace(prefix, uri)
+			pairs = append(pairs, prefix, uri)
 		}
 	}
+	sub.Open().AddNamespaces(pairs...)
+	rt.nsPairs = pairs[:0]
 	sub.NoteDeclaredList(i.noted(rt.sheet))
 	// A namespace that exclusion would have dropped comes back if it is the
 	// target of an alias: the point of aliasing onto, say, the XSLT namespace
@@ -1265,7 +1270,7 @@ type elementInstr struct {
 	// the constructed element inherits.
 	baseURI   string
 	namespace *avt
-	scope     *xdm.Node
+	scope     nsMap
 	attrSets  []attrSetRef
 	body      []Instruction
 	// validation is the validation or type attribute, which asks for the
@@ -1394,7 +1399,7 @@ type attributeInstr struct {
 	separator    *avt
 	hasSeparator bool
 	sel          *xpath.Compiled
-	scope        *xdm.Node
+	scope        nsMap
 	body         []Instruction
 	// validation carries [xsl:]validation and [xsl:]type, which assess the
 	// constructed attribute exactly as they assess a constructed element.
@@ -1697,7 +1702,7 @@ type messageInstr struct {
 	// errorCodeNS resolves the prefix of an error-code that was written as a
 	// lexical QName. The attribute is an AVT, so the name is not known until
 	// run time and the namespace context has to be carried to meet it.
-	errorCodeNS *xdm.Node
+	errorCodeNS nsMap
 	// xslt30 enables the 3.0 readings: the wider @terminate vocabulary, and
 	// surviving a dynamic error raised while building the content.
 	xslt30 bool

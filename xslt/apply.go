@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -142,7 +143,7 @@ func (i *applyTemplatesInstr) effectiveMode(rt *runtime) string {
 
 // applyToNode selects and runs the best-matching template for one node.
 func applyToNode(rt *runtime, node *xdm.Node, mode string,
-	params map[string]xdm.Sequence, tunnels map[string]xdm.Sequence,
+	params, tunnels paramValues,
 	out *outputBuilder) error {
 
 	// XTTE3100/XTTE3110 are stated against "an xsl:apply-templates
@@ -342,7 +343,7 @@ func (t *Template) matchesMode(mode string) bool {
 // stylesheet wrote no rule for. Dropping them made those parameters take their
 // defaults instead.
 func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
-	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
+	params, tunnels paramValues, out *outputBuilder) error {
 
 	// Section 6.6: xsl:mode/@on-no-match selects which set of built-in rules
 	// is in force. text-only-copy is the default and the historical XSLT 1.0
@@ -434,14 +435,14 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 // runTemplate executes a template with the supplied parameters, in a frame
 // of its own (see locals.go).
 func runTemplate(rt *runtime, t *Template,
-	params map[string]xdm.Sequence, tunnels map[string]xdm.Sequence,
+	params, tunnels paramValues,
 	out *outputBuilder) error {
 	defer rt.leaveFrame(rt.enterFrame())
 	return runTemplateBody(rt, t, params, tunnels, out)
 }
 
 func runTemplateBody(rt *runtime, t *Template,
-	params map[string]xdm.Sequence, tunnels map[string]xdm.Sequence,
+	params, tunnels paramValues,
 	out *outputBuilder) error {
 
 	// An abstract template fails before anything else it declares is
@@ -505,8 +506,8 @@ func runTemplateBody(rt *runtime, t *Template,
 		for k, v := range sub.tunnel {
 			merged[k] = v
 		}
-		for k, v := range tunnels {
-			merged[k] = v
+		for _, t := range tunnels {
+			merged[t.name] = t.value
 		}
 		n.tunnel = merged
 		sub = &n
@@ -520,7 +521,7 @@ func runTemplateBody(rt *runtime, t *Template,
 		// declaring tunnel="yes" keeps its default when the caller passes an
 		// ordinary parameter of that name.
 		if !p.Tunnel {
-			if v, ok := params[key]; ok {
+			if v, ok := params.get(key); ok {
 				v, err := bindParam(p, v, t)
 				if err != nil {
 					return err
@@ -588,8 +589,8 @@ func runTemplateBody(rt *runtime, t *Template,
 	if err := execSequence(t.Body, sub, tmp); err != nil {
 		return err
 	}
-	converted, err := t.asType.convertAs(tmp.Sequence(),
-		"result of template "+templateLabel(t), "XTTE0505")
+	converted, err := t.asType.convertAsLazy(tmp.Sequence(),
+		func() string { return "result of template " + templateLabel(t) }, "XTTE0505")
 	if err != nil {
 		return err
 	}
@@ -615,22 +616,69 @@ func templateLabel(t *Template) string {
 	return "(anonymous)"
 }
 
+// paramValues is the parameters one invocation supplies, keyed by Clark
+// name. A call passes one or two, so a slice searched in order costs one
+// small allocation where a map cost a header and a bucket group.
+type paramValues []paramValue
+
+type paramValue struct {
+	name  string
+	value xdm.Sequence
+}
+
+// get returns the value supplied for name. The last binding wins, as a map
+// assignment would.
+func (ps paramValues) get(name string) (xdm.Sequence, bool) {
+	for i := len(ps) - 1; i >= 0; i-- {
+		if ps[i].name == name {
+			return ps[i].value, true
+		}
+	}
+	return nil, false
+}
+
+// paramsOf converts a caller's parameter map.
+func paramsOf(m map[string]xdm.Sequence) paramValues {
+	if m == nil {
+		return nil
+	}
+	ps := make(paramValues, 0, len(m))
+	for k, v := range m {
+		ps = append(ps, paramValue{k, v})
+	}
+	return ps
+}
+
 // evalParams evaluates xsl:with-param children, separating tunnel parameters.
-func evalParams(rt *runtime, params []*Variable) (map[string]xdm.Sequence, map[string]xdm.Sequence, error) {
+// With any parameters at all, tunnel is non-nil even when empty, which tells
+// xsl:next-match not to inherit the current tunnel set.
+func evalParams(rt *runtime, params []*Variable) (paramValues, paramValues, error) {
 	if len(params) == 0 {
 		return nil, nil, nil
 	}
-	normal := map[string]xdm.Sequence{}
-	tunnel := map[string]xdm.Sequence{}
+	nt := 0
+	for _, p := range params {
+		if p.Tunnel {
+			nt++
+		}
+	}
+	var normal paramValues
+	if nt < len(params) {
+		normal = make(paramValues, 0, len(params)-nt)
+	}
+	tunnel := paramValues{}
+	if nt > 0 {
+		tunnel = make(paramValues, 0, nt)
+	}
 	for _, p := range params {
 		v, err := evalVariable(p, rt)
 		if err != nil {
 			return nil, nil, fmt.Errorf("evaluating parameter $%s: %w", p.Name.Lexical(), err)
 		}
 		if p.Tunnel {
-			tunnel[p.Name.Clark()] = v
+			tunnel = append(tunnel, paramValue{p.Name.Clark(), v})
 		} else {
-			normal[p.Name.Clark()] = v
+			normal = append(normal, paramValue{p.Name.Clark(), v})
 		}
 	}
 	return normal, tunnel, nil
@@ -727,10 +775,10 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		case err != nil:
 			return nil, err
 		default:
-			if hit, ok := rt.funcResults[k]; ok {
+			if hit, ok := rt.funcResults[string(k)]; ok {
 				return hit, nil
 			}
-			cacheKey = k
+			cacheKey = string(k)
 		}
 	}
 
@@ -748,8 +796,9 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		// section 10.3's XTTE0790 is written specifically for "the value of a
 		// parameter to a stylesheet function". Reporting 0590 here made
 		// error-0790a report the template code for a function call.
-		v, err := p.asType.convertAs(args[i], "parameter $"+p.Name.Lexical()+
-			" of "+f.name.Lexical(), funcParamCode(rt.sheet))
+		v, err := p.asType.convertAsLazy(args[i], func() string {
+			return "parameter $" + p.Name.Lexical() + " of " + f.name.Lexical()
+		}, funcParamCode(rt.sheet))
 		if err != nil {
 			return nil, err
 		}
@@ -795,8 +844,8 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	}
 	// A stylesheet function whose result will not convert to its declared
 	// type is XTTE0780.
-	res, err := f.returns.convertAs(out.Sequence(), "result of "+f.name.Lexical(),
-		"XTTE0780")
+	res, err := f.returns.convertAsLazy(out.Sequence(),
+		func() string { return "result of " + f.name.Lexical() }, "XTTE0780")
 	if err != nil {
 		return nil, err
 	}
@@ -830,43 +879,62 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 //
 // Any other item -- an Opaque, which never reaches a stylesheet function --
 // is errNotCacheable.
-func (rt *runtime) functionCallKey(f *userFunction, args []xdm.Sequence) (string, error) {
-	var b strings.Builder
-	b.WriteString(f.name.Clark())
+func (rt *runtime) functionCallKey(f *userFunction, args []xdm.Sequence) ([]byte, error) {
+	// The key is built in a buffer the transform reuses; the caller copies it
+	// to a string only to store it.
+	b := rt.keyBuf[:0]
+	if f.name.URI != "" { // f.name.Clark(), without building it
+		b = append(b, '{')
+		b = append(b, f.name.URI...)
+		b = append(b, '}')
+	}
+	b = append(b, f.name.Local...)
 	for _, a := range args {
-		b.WriteByte(0x1d)
-		if err := rt.writeIdenticalKey(&b, a); err != nil {
-			return "", err
+		b = append(b, 0x1d)
+		var err error
+		if b, err = rt.appendIdenticalKey(b, a); err != nil {
+			return nil, err
 		}
 	}
-	return b.String(), nil
+	rt.keyBuf = b
+	return b, nil
 }
 
-// writeIdenticalKey appends the key of one sequence to b. Every atomic key is
+// appendIdenticalKey appends the key of one sequence to b. Every atomic key is
 // length-prefixed, so a string holding a delimiter cannot pass for structure.
-func (rt *runtime) writeIdenticalKey(b *strings.Builder, s xdm.Sequence) error {
+func (rt *runtime) appendIdenticalKey(b []byte, s xdm.Sequence) ([]byte, error) {
+	var err error
 	for _, it := range s {
-		b.WriteByte(0x1e)
+		b = append(b, 0x1e)
 		switch it := it.(type) {
 		case *xdm.Atomic:
 			k, err := xpath.GroupingKey(it, nil, rt.ctx.Env().ImplicitTimezone)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			fmt.Fprintf(b, "a%d/%s/%d:%s", it.Type, it.Derived(), len(k), k)
+			b = append(b, 'a')
+			b = strconv.AppendInt(b, int64(it.Type), 10)
+			b = append(b, '/')
+			b = append(b, it.Derived()...)
+			b = append(b, '/')
+			b = strconv.AppendInt(b, int64(len(k)), 10)
+			b = append(b, ':')
+			b = append(b, k...)
 		case *xdm.Node:
-			fmt.Fprintf(b, "n%d", rt.identityNumber(it.Identity()))
+			b = append(b, 'n')
+			b = strconv.AppendInt(b, int64(rt.identityNumber(it.Identity())), 10)
 		case *xdm.FunctionItem:
-			fmt.Fprintf(b, "f%d", rt.identityNumber(it))
+			b = append(b, 'f')
+			b = strconv.AppendInt(b, int64(rt.identityNumber(it)), 10)
 		case *xdm.ArrayItem:
-			b.WriteByte('[')
+			b = append(b, '[')
 			for _, m := range it.Members() {
-				b.WriteByte(0x1f)
-				if err := rt.writeIdenticalKey(b, m); err != nil {
-					return err
+				b = append(b, 0x1f)
+				if b, err = rt.appendIdenticalKey(b, m); err != nil {
+					return nil, err
 				}
 			}
-			b.WriteByte(']')
+			b = append(b, ']')
 		case *xdm.MapItem:
 			// Entries are keyed in "same key" order, not insertion order,
 			// which identity does not depend on.
@@ -881,23 +949,25 @@ func (rt *runtime) writeIdenticalKey(b *strings.Builder, s xdm.Sequence) error {
 				return err
 			})
 			if err != nil {
-				return err
+				return nil, err
 			}
 			sort.Slice(es, func(i, j int) bool { return es[i].key < es[j].key })
-			b.WriteByte('{')
+			b = append(b, '{')
 			for _, e := range es {
-				fmt.Fprintf(b, "%d:%s", len(e.key), e.key)
-				if err := rt.writeIdenticalKey(b, e.val); err != nil {
-					return err
+				b = strconv.AppendInt(b, int64(len(e.key)), 10)
+				b = append(b, ':')
+				b = append(b, e.key...)
+				if b, err = rt.appendIdenticalKey(b, e.val); err != nil {
+					return nil, err
 				}
-				b.WriteByte(0x1f)
+				b = append(b, 0x1f)
 			}
-			b.WriteByte('}')
+			b = append(b, '}')
 		default:
-			return errNotCacheable
+			return nil, errNotCacheable
 		}
 	}
-	return nil
+	return b, nil
 }
 
 // identityNumber numbers an item that is keyed by identity. The table holds
@@ -1022,7 +1092,7 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 // builtInDescend applies the mode's rules to node's children, optionally
 // copying text and attribute values through as the text-only rule does.
 func builtInDescend(rt *runtime, node *xdm.Node, mode string,
-	params, tunnels map[string]xdm.Sequence, out *outputBuilder,
+	params, tunnels paramValues, out *outputBuilder,
 	copyText bool) error {
 
 	switch node.Kind() {
@@ -1059,7 +1129,7 @@ func builtInDescend(rt *runtime, node *xdm.Node, mode string,
 // Every other kind of node produces the empty sequence, which is what falling
 // off the switch does.
 func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
-	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
+	params, tunnels paramValues, out *outputBuilder) error {
 
 	if node.Kind() != xdm.KindDocument && node.Kind() != xdm.KindElement {
 		return nil
@@ -1098,7 +1168,7 @@ func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
 // Attributes do not: the rule processes them like any other child in the
 // mode, and the built-in attribute rule is what puts their values back.
 func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
-	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
+	params, tunnels paramValues, out *outputBuilder) error {
 
 	switch node.Kind() {
 	case xdm.KindDocument:

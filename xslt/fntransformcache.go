@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"weak"
 
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -46,11 +47,29 @@ type nestedEntry struct {
 // stylesheet-node, keyed by identity: XDM trees are immutable, and holding
 // the pointer in the key keeps the tree alive, so the address cannot be
 // reused by another tree while the entry exists. docs and pkgs are the
-// resolvers the nested compilation inherits, likewise held by the key.
+// resolvers the nested compilation inherits, held weakly: a weak pointer
+// keeps its identity after the resolver is collected, so a new resolver at
+// the same address never matches, and a caller that makes a fresh resolver
+// per transform does not keep every compile it made alive (put drops them).
 type nestedKey struct {
 	opts       string
 	node       *xdm.Node
-	docs, pkgs any
+	docs, pkgs weak.Pointer[byte]
+}
+
+// dead reports whether a resolver the key names has been collected, so the
+// entry can never be hit again.
+func (k nestedKey) dead() bool {
+	gone := func(p weak.Pointer[byte]) bool { return p != weak.Pointer[byte]{} && p.Value() == nil }
+	return gone(k.docs) || gone(k.pkgs)
+}
+
+// weakResolver is the weak identity of a resolver keyable accepted.
+func weakResolver(v any) weak.Pointer[byte] {
+	if v == nil {
+		return weak.Pointer[byte]{}
+	}
+	return weak.Make((*byte)(reflect.ValueOf(v).UnsafePointer()))
 }
 
 func (c *nestedCache) get(k nestedKey) *Stylesheet {
@@ -76,6 +95,14 @@ func (c *nestedCache) put(k nestedKey, s *Stylesheet) {
 	}
 	if c.byKey == nil {
 		c.byKey = map[nestedKey]*list.Element{}
+	}
+	for e := c.order.Front(); e != nil; {
+		next := e.Next()
+		if old := e.Value.(*nestedEntry).key; old.dead() {
+			c.order.Remove(e)
+			delete(c.byKey, old)
+		}
+		e = next
 	}
 	c.byKey[k] = c.order.PushFront(&nestedEntry{k, s})
 	if c.order.Len() > nestedCacheSize {
@@ -121,7 +148,7 @@ func nestedCacheKey(ctx *xpath.Context, rt transformCaller, opts *xdm.MapItem) (
 	if !keyable(mr) || !keyable(rt.pkgs) {
 		return nestedKey{}, false
 	}
-	k := nestedKey{docs: mr, pkgs: rt.pkgs}
+	k := nestedKey{docs: weakResolver(mr), pkgs: weakResolver(rt.pkgs)}
 	var b strings.Builder
 	field := func(s string) { fmt.Fprintf(&b, "%d:%s;", len(s), s) }
 	field(ctx.StaticBaseURI())

@@ -317,7 +317,7 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	// xsl:stylesheet and uses it inside a literal element expects the result
 	// to carry the declaration, and the difference is observable through the
 	// namespace axis of the constructed tree.
-	scope := n.InScopeNamespaces()
+	scope := inScopeNamespacesShared(n)
 	prefixes := make([]string, 0, len(scope))
 	for p := range scope {
 		prefixes = append(prefixes, p)
@@ -343,14 +343,21 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 		}
 		instr.namespaces = append(instr.namespaces, nsBinding{prefix: p, uri: uri})
 	}
+	instr.namespaces = internBindings(instr.namespaces)
+	instr.excludedNamespaces = internBindings(instr.excludedNamespaces)
 
+	// One resolver serves every attribute of the element.
+	var ns *nsResolver
 	for a := range n.Attrs() {
 		// xsl:-prefixed attributes on a literal element are directives, not
 		// output attributes.
 		if a.Name().URI == xdm.NSXSL {
 			continue
 		}
-		avt, err := compileAVT(a.Value(), newNSResolver(n, ""))
+		if ns == nil {
+			ns = newNSResolver(n, "")
+		}
+		avt, err := compileAVT(a.Value(), ns)
 		if err != nil {
 			return nil, fmt.Errorf("in attribute %s: %w", a.Name().Lexical(), err)
 		}
@@ -1016,7 +1023,7 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	if err != nil {
 		return nil, err
 	}
-	instr := &elementInstr{name: nameAVT, scope: n, attrSets: sets,
+	instr := &elementInstr{name: nameAVT, scope: inScopeNamespacesShared(n), attrSets: sets,
 		baseURI: n.BaseURI(), noInherit: noAttr(n, "inherit-namespaces")}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
@@ -1044,7 +1051,7 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 	if err != nil {
 		return nil, err
 	}
-	instr := &attributeInstr{name: nameAVT, scope: n}
+	instr := &attributeInstr{name: nameAVT, scope: inScopeNamespacesShared(n)}
 	if sepAttr := n.Attr("", "separator"); sepAttr != nil {
 		sep, err := compileAVT(sepAttr.Value(), ns)
 		if err != nil {
@@ -1141,7 +1148,7 @@ func (c *compiler) compileMessage(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 		if err != nil {
 			return nil, err
 		}
-		instr.errorCode, instr.errorCodeNS = avt, n
+		instr.errorCode, instr.errorCodeNS = avt, inScopeNamespacesShared(n)
 	}
 	if v := n.AttrValue("terminate"); v != "" {
 		avt, err := compileAVT(v, ns)
@@ -1891,7 +1898,7 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// is what evaluate-018d asks for -- it declares $p2 as xs:integer
 		// over a select that yields 'banana' and accepts XPTY0004 or
 		// XTTE0590, not the variable-binding code.
-		v, err = p.asType.convertAs(v, "$"+p.Name.Lexical(), "XTTE0590")
+		v, err = p.asType.convertAsLazy(v, func() string { return "$" + p.Name.Lexical() }, "XTTE0590")
 		if err != nil {
 			return err
 		}
@@ -2147,9 +2154,9 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 						if !ok {
 							continue
 						}
-						conv, err := p.asType.convertAs(v,
-							"parameter $"+p.Name.Lexical()+" of xsl:iterate",
-							"XTTE0590")
+						conv, err := p.asType.convertAsLazy(v, func() string {
+							return "parameter $" + p.Name.Lexical() + " of xsl:iterate"
+						}, "XTTE0590")
 						if err != nil {
 							return err
 						}

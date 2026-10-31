@@ -1184,6 +1184,25 @@ func (n *Node) AddNamespace(prefix, uri string) {
 	n.setFrame(append(ns, nsBinding{prefix, uri}))
 }
 
+// AddNamespaces is AddNamespace for each prefix and URI pair in turn, given
+// as prefix, uri, prefix, uri, ...: n's frame is built and interned once
+// rather than once per binding.
+func (n *Node) AddNamespaces(pairs ...string) {
+	if n.kind != uint8(KindElement) || n.flags&fSide != 0 || len(pairs) < 2 {
+		return
+	}
+	if n.tree.frozen {
+		panic("xdm: declaring a namespace in a parsed document")
+	}
+	old := n.frame()
+	ns := make([]nsBinding, len(old), len(old)+len(pairs)/2)
+	copy(ns, old)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		ns = append(ns, nsBinding{pairs[i], pairs[i+1]})
+	}
+	n.setFrame(ns)
+}
+
 // SetNamespaceDecl binds prefix to uri on n: the declaration n already holds
 // for prefix is changed in place, and otherwise one is added.
 func (n *Node) SetNamespaceDecl(prefix, uri string) {

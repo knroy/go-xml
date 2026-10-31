@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -153,6 +154,50 @@ func TestTransformCache(t *testing.T) {
 		}
 		if c, e := cacheState(st); c != 1 || e != 1 {
 			t.Errorf("compiles=%d entries=%d over three transforms, want 1 and 1", c, e)
+		}
+	})
+
+	// A fresh resolver per transform, the natural pattern in a service: the
+	// entries keyed on resolvers that have been collected are dropped, so the
+	// cache holds only the live one rather than nestedCacheSize dead compiles.
+	t.Run("dead resolver dropped", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "inner.xsl")
+		if err := os.WriteFile(path, []byte(cacheInner), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+		  <xsl:output method="text"/>
+		  <xsl:template name="go">
+		    <xsl:value-of select="string(transform(map{'stylesheet-location': '` + fileuri.Of(path) + `',
+		      'delivery-format': 'raw'})?output)"/>
+		  </xsl:template>
+		</xsl:stylesheet>`
+		sd, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := Compile(sd.Root, CompileOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		run := func() {
+			r, err := NewFileResolver(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.Transform(context.Background(), nil, TransformOptions{
+				InitialTemplate: "go", Documents: r}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for range 5 {
+			run()
+		}
+		goruntime.GC()
+		run()
+		if c, e := cacheState(st); c != 6 || e != 1 {
+			t.Errorf("compiles=%d entries=%d over six resolvers, want 6 and 1", c, e)
 		}
 	})
 

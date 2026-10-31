@@ -532,7 +532,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 			}
 		}
 		if err := runTemplate(rt, t,
-			opts.InitialTemplateParams, opts.InitialTemplateTunnelParams,
+			paramsOf(opts.InitialTemplateParams), paramsOf(opts.InitialTemplateTunnelParams),
 			out); err != nil {
 			return nil, err
 		}
@@ -620,7 +620,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 					"parameter $%s", code, opts.InitialTemplate, p.Name.Lexical())
 		}
 		if err := runTemplate(rt, t,
-			opts.InitialTemplateParams, opts.InitialTemplateTunnelParams,
+			paramsOf(opts.InitialTemplateParams), paramsOf(opts.InitialTemplateTunnelParams),
 			out); err != nil {
 			return nil, err
 		}
@@ -699,7 +699,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 			initialMode = want
 		}
 		if err := applyInitialSelection(rt, source, opts.InitialMatchSelection,
-			initialMode, opts.InitialModeParams, opts.InitialModeTunnelParams,
+			initialMode, paramsOf(opts.InitialModeParams), paramsOf(opts.InitialModeTunnelParams),
 			out); err != nil {
 			return nil, err
 		}
@@ -1485,7 +1485,7 @@ func SerializeAsXML(r *Result) string {
 // position and size of each item have to be set the way xsl:apply-templates
 // sets them, since a template rule reached this way may call fn:position().
 func applyInitialSelection(rt *runtime, source *xdm.Node, sel xdm.Sequence,
-	mode string, params, tunnels map[string]xdm.Sequence,
+	mode string, params, tunnels paramValues,
 	out *outputBuilder) error {
 
 	if sel == nil {

@@ -487,8 +487,9 @@ func (rt *runtime) convertAccum(def *accumulatorDef, seq xdm.Sequence) (xdm.Sequ
 	// XTTE3350 — which this used to raise — appears in no version of the
 	// XSLT recommendation and in no test in the suite. accumulator-038
 	// expects XPTY0004.
-	return def.asType.convertAs(seq,
-		"the value of accumulator "+def.name.Lexical(), "XPTY0004")
+	return def.asType.convertAsLazy(seq, func() string {
+		return "the value of accumulator " + def.name.Lexical()
+	}, "XPTY0004")
 }
 
 // fnAccumulator implements fn:accumulator-before and fn:accumulator-after.
