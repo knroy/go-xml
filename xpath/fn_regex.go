@@ -133,8 +133,18 @@ func registerRegexFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
+		// The result is charged before it is built: 500 KB of input with a 4 KB
+		// replacement allocated 12.8 GB before the old after-the-fact charge
+		// refused it. The estimate is the input plus one replacement per match;
+		// only what the built string exceeds it by is charged afterwards.
+		n := 0
+		re.ReplaceAllStringFunc(s, func(string) string { n++; return "" })
+		est := len(s) + n*len(goRepl)
+		if err := ctx.countBytes(est); err != nil {
+			return nil, err
+		}
 		out := re.ReplaceAllString(s, goRepl)
-		if err := ctx.countBytes(len(out)); err != nil {
+		if err := ctx.countBytes(len(out) - est); err != nil {
 			return nil, err
 		}
 		return strSeq(out), nil
@@ -299,6 +309,9 @@ func compileXPathRegexp(pattern, flags string, v Version) (*regexp.Regexp, error
 // the check and the insert under one lock: doing them separately let concurrent
 // callers interleave between the two and carry the table past its limit.
 func storeRegex(key string, v any) {
+	if len(key) > maxCachedKey {
+		return
+	}
 	regexCache.Put(key, v)
 }
 
@@ -391,7 +404,7 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 	// XPath's fn:matches is a *containment* test, unlike XML Schema's pattern
 	// facet which is anchored. Go's MatchString is also containment, so no
 	// anchoring is added here.
-	re, err := regexp.Compile(translated)
+	re, err := CompileBounded(translated)
 	if err != nil {
 		// A repeat count RE2 will not accept is still a valid XML Schema
 		// pattern — "a{2147483647}" simply matches nothing any input can
@@ -399,7 +412,7 @@ func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 		// when it was merely enormous, so the count is clamped to one past
 		// RE2's limit, which matches exactly what the original would.
 		if clamped, ok := clampRepeatCounts(translated); ok {
-			if re2, err2 := regexp.Compile(clamped); err2 == nil {
+			if re2, err2 := CompileBounded(clamped); err2 == nil {
 				return re2, nil
 			}
 		}
