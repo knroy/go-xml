@@ -268,8 +268,8 @@ type selection struct {
 	// mode, params and tunnels are carried so a resumed dispatch behaves
 	// like the original one.
 	mode    string
-	params  map[string]xdm.Sequence
-	tunnels map[string]xdm.Sequence
+	params  paramValues
+	tunnels paramValues
 	// item is the item the rule matched, kept so xsl:next-match can tell
 	// whether it is still looking at it. Section 6.7 makes the current
 	// template rule and the context item two separate conditions, and an
@@ -354,7 +354,7 @@ func (rt *runtime) withCurrent(item xdm.Item, pos, size int) *runtime {
 
 // withSelection records the template-selection state for the body about to run.
 func (rt *runtime) withSelection(t *Template, next int, mode string,
-	params, tunnels map[string]xdm.Sequence) *runtime {
+	params, tunnels paramValues) *runtime {
 	var item xdm.Item
 	if rt.ctx != nil {
 		item = rt.ctx.Item

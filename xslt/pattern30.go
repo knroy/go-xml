@@ -519,7 +519,7 @@ func (p *Pattern) matchesAtomicItem(item xdm.Item, ctx *xpath.Context) (bool, er
 // phrased about nodes, and none of them has a meaning for a value with no
 // children, no name and no ancestry.
 func applyToAtomic(rt *runtime, item xdm.Item, mode string,
-	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
+	params, tunnels paramValues, out *outputBuilder) error {
 
 	t, next := rt.sheet.findAtomicTemplateFrom(item, mode, rt.ctx, 0)
 	if t == nil {
