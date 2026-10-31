@@ -342,6 +342,27 @@ func TestGroupByKeysAreChargedToTheItemBudget(t *testing.T) {
 			`<xsl:sequence select="count(current-group())"/></xsl:for-each-group></xsl:template>`))
 }
 
+// functionCallKey reuses one scratch buffer for the transform, and a single
+// call with a large argument must not leave its buffer behind.
+func TestFunctionCallKeyDropsAnOversizedBuffer(t *testing.T) {
+	rt := &runtime{transformState: &transformState{itemIDs: map[any]int{}}}
+	f := &userFunction{name: xdm.QName{Local: "f"}}
+	big := xdm.One(xdm.NewString(strings.Repeat("x", 4*maxKeyBufCap)))
+	if _, err := rt.functionCallKey(f, []xdm.Sequence{big}); err != nil {
+		t.Fatal(err)
+	}
+	if c := cap(rt.keyBuf); c > 64<<10 {
+		t.Errorf("keyBuf kept %d bytes after one large call, want at most 64 KB", c)
+	}
+	small := xdm.One(xdm.NewString("x"))
+	if _, err := rt.functionCallKey(f, []xdm.Sequence{small}); err != nil {
+		t.Fatal(err)
+	}
+	if cap(rt.keyBuf) == 0 {
+		t.Error("a small key's buffer should be kept for reuse")
+	}
+}
+
 // internBindings is called for every literal element while compiling, and a
 // hit must not allocate: building the key in a strings.Builder cost one
 // allocation per call and raised CEN's compile allocation by 12-14%.
