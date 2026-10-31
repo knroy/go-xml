@@ -15,6 +15,12 @@ func TestXIncludeSkipsCopyWithoutXIElements(t *testing.T) {
 	if err != nil || out != tree {
 		t.Fatalf("plain tree: got %p (tree %p), err %v; want the tree itself", out, tree, err)
 	}
+	// A tree that is not a frozen parse can still be changed, so it gets its
+	// own copy even with nothing to include.
+	built := &Tree{Root: Copy(tree.Root)}
+	if out, err := ProcessXInclude(built, XIncludeOptions{}); err != nil || out == built {
+		t.Fatalf("built tree: got %p (tree %p), err %v; want a new tree", out, built, err)
+	}
 
 	big := "<r>" + strings.Repeat("<e a='1'>text</e>", 20000) + "</r>"
 	parseBytes := allocBytes(func() { parseWithBase(t, "mem:/big.xml", big) })

@@ -113,8 +113,10 @@ func ProcessXInclude(tree *Tree, opts XIncludeOptions) (*Tree, error) {
 	if base == "" {
 		base = tree.Root.DocumentURI()
 	}
-	if !mentionsXInclude(tree) {
+	if tree.frozen && !mentionsXInclude(tree) {
 		// Nothing to replace: the copy processTree would make is the tree.
+		// Only a parsed tree is returned as is; a built one can still be
+		// changed, and the caller is promised a tree separate from it.
 		return tree, nil
 	}
 	p := &includeProc{opts: opts, budget: &entityBudget{}}
