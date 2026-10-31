@@ -566,7 +566,7 @@ func checkPatterns(steps []facetStep, lexical string) error {
 		}
 		if !ok {
 			return facetError(st.typ, FacetPattern,
-				"%q does not match %s", lexical, describePatterns(st.facets.Patterns))
+				"%q does not match %s", truncate(lexical), describePatterns(st.facets.Patterns))
 		}
 	}
 	return nil

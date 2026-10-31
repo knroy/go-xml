@@ -341,7 +341,9 @@ func attrName(q xdm.QName) string {
 	if q.URI == "" {
 		return q.Local
 	}
-	return "{" + q.URI + "}" + q.Local
+	// Clipped here as well as in fail, because the name is built before
+	// fail can see it, and before fail knows whether MaxErrors drops it.
+	return "{" + clip(q.URI, maxMessage) + "}" + clip(q.Local, maxMessage)
 }
 
 // validateAttribute checks one attribute against its declaration.

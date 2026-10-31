@@ -373,7 +373,7 @@ func validateListValueIn(lexical string, t *SimpleType, at *instance) (string, e
 	if t.ItemType != nil {
 		for _, item := range items {
 			if _, err := validateSimpleValueIn(item, t.ItemType, Version10, at); err != nil {
-				return "", fmt.Errorf("list item %q: %w", item, err)
+				return "", fmt.Errorf("list item %q: %w", truncate(item), err)
 			}
 		}
 	}

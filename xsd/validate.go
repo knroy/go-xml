@@ -535,9 +535,19 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 		v.stopped = true
 		return
 	}
+	// Arguments are clipped before formatting so the full string is never
+	// copied, and the message after, for arguments that are neither.
+	for i, a := range args {
+		switch x := a.(type) {
+		case string:
+			args[i] = clip(x, maxMessage)
+		case error:
+			args[i] = clip(x.Error(), maxMessage)
+		}
+	}
 	e := &ValidationError{
 		Code:    code,
-		Message: fmt.Sprintf(format, args...),
+		Message: clip(fmt.Sprintf(format, args...), maxMessage),
 		Path:    v.pathString(),
 	}
 	if t := v.twins[n]; t != nil {
@@ -1131,8 +1141,16 @@ func nonSpaceTextSeen(el *xdm.Node, seen *string) string {
 	return ""
 }
 
-func truncate(s string) string {
-	const max = 40
+func truncate(s string) string { return clip(s, 40) }
+
+// maxMessage bounds what one ValidationError keeps of a name or value the
+// document supplied. A 15 MB namespace URI quoted in each of 100 errors
+// retained 1.57 GB; real names and values are far shorter than the bound.
+const maxMessage = 1024
+
+// clip shortens s to max bytes, marking the cut with "...". The concatenation
+// copies, so the result never pins the original string.
+func clip(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
