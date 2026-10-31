@@ -174,7 +174,7 @@ func (s *Schema) newValidator(ctx context.Context, opts ValidateOptions) *valida
 	if opts.MaxDepth == 0 {
 		opts.MaxDepth = DefaultMaxDepth
 	}
-	return &validator{ctx: ctx, schema: s, opts: opts, ids: map[string]int{}}
+	return &validator{ctx: ctx, schema: s, opts: opts, ids: map[string]idDef{}}
 }
 
 // run assesses root, which is a document or an element.
@@ -356,17 +356,12 @@ type validator struct {
 	// typed copy of a document node.
 	stripIgnorable bool
 
-	// ids records every xs:ID value seen and every xs:IDREF, so that
-	// Validation Root Valid (ID/IDREF) can be checked once at the end. A
-	// count of zero means the value was referenced but never defined.
-	ids map[string]int
+	// ids records every xs:ID value seen, so that Validation Root Valid
+	// (ID/IDREF) can be checked once at the end.
+	ids map[string]idDef
 	// idrefs are the referenced values, checked against ids at the end.
 	idrefs []idref
 
-	// idOwners maps each ID value to the element that defined it, so that
-	// the same value on two attributes of one element counts once. XSD 1.1
-	// permits an element to carry several ID attributes.
-	idOwners map[string]*xdm.Node
 	// dupIDs lists each ID value in the order its second definition was met,
 	// which is where a streaming validator reports it; checkIDs reports in
 	// this order so the errors (and the one MaxErrors keeps) are stable.
@@ -535,9 +530,19 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 		v.stopped = true
 		return
 	}
+	// Arguments are clipped before formatting so the full string is never
+	// copied, and the message after, for arguments that are neither.
+	for i, a := range args {
+		switch x := a.(type) {
+		case string:
+			args[i] = clip(x, maxMessage)
+		case error:
+			args[i] = clip(x.Error(), maxMessage)
+		}
+	}
 	e := &ValidationError{
 		Code:    code,
-		Message: fmt.Sprintf(format, args...),
+		Message: clip(fmt.Sprintf(format, args...), maxMessage),
 		Path:    v.pathString(),
 	}
 	if t := v.twins[n]; t != nil {
@@ -1131,8 +1136,16 @@ func nonSpaceTextSeen(el *xdm.Node, seen *string) string {
 	return ""
 }
 
-func truncate(s string) string {
-	const max = 40
+func truncate(s string) string { return clip(s, 40) }
+
+// maxMessage bounds what one ValidationError keeps of a name or value the
+// document supplied. A 15 MB namespace URI quoted in each of 100 errors
+// retained 1.57 GB; real names and values are far shorter than the bound.
+const maxMessage = 1024
+
+// clip shortens s to max bytes, marking the cut with "...". The concatenation
+// copies, so the result never pins the original string.
+func clip(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}

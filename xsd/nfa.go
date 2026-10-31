@@ -395,8 +395,13 @@ func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int) (ok
 	enter := make([]int, len(m.counters))
 	var vecs [][]int
 
+	// Two sets, swapped each step: a fresh map per child was three quarters
+	// of the DTD validator's allocation.
+	spare := newStateSet()
 	for i := 0; i < n; i++ {
-		next := newStateSet()
+		next := spare
+		clear(next.seen)
+		next.order = next.order[:0]
 		for _, st := range states.order {
 			for _, pos := range candidates(m, st) {
 				if !match(i, pos) {
@@ -421,7 +426,7 @@ func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int) (ok
 		if next.len() > budget {
 			return false, i, errMatchStates
 		}
-		states = next
+		states, spare = next, states
 	}
 	for _, st := range states.order {
 		if accepting(m, st, cur) {

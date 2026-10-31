@@ -645,7 +645,7 @@ func computeChainFacts(t *SimpleType) *chainFacts {
 	for cur := t; cur != nil && !seen[cur]; {
 		seen[cur] = true
 		if cur.Facets != nil {
-			f.steps = append(f.steps, facetStep{typ: cur, facets: cur.Facets})
+			f.steps = append(f.steps, facetStep{typ: cur, facets: cur.Facets, rats: boundRats(cur.Facets)})
 		}
 		if cur.Name.URI == NSSchema {
 			if cur.Name.Local == "integer" {

@@ -127,7 +127,7 @@ func TestIdentityBookkeepingOnlyInsideAScope(t *testing.T) {
 	root := tree.Root.ChildElements()[0]
 	in := root.ChildElements()[2]
 	v := &validator{schema: s, opts: ValidateOptions{MaxErrors: DefaultMaxErrors,
-		MaxDepth: DefaultMaxDepth}, ids: map[string]int{}}
+		MaxDepth: DefaultMaxDepth}, ids: map[string]idDef{}}
 	v.validateElement(root, s.Elements[xdm.QName{Local: "root"}])
 
 	// 2 and 02 are one xs:int, so the unique is violated: the scope's
