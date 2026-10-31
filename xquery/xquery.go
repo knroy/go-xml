@@ -420,7 +420,11 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 	// expression by compileExpr, because xpath models both as static
 	// properties of an expression. Setting the context's base URI as well is
 	// what fn:static-base-uri and fn:doc's relative resolution read.
-	out := &sub
+	//
+	// The version is installed once here for the same reason: every
+	// expression in the query was compiled under it, and a context that
+	// disagreed made each of their evaluations copy the context to say so.
+	out := (&sub).WithVersion(q.sc.xqVersion.xpathVersion())
 	if q.sc.baseURI != "" {
 		out = out.WithStaticBaseURI(q.sc.baseURI)
 	}

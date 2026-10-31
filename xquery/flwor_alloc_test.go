@@ -76,3 +76,13 @@ func TestFLWORLetValueNotRebuilt(t *testing.T) {
 		t.Errorf("%d bytes, want at most 27,000,000", b)
 	}
 }
+
+// TestEvalInstallsQueryVersion pins that evaluating a query under a context
+// of another XPath version installs the query's once, rather than each
+// expression copying the context to install it. Measured: 36,526
+// allocations before, 34,527 after.
+func TestEvalInstallsQueryVersion(t *testing.T) {
+	if a := flworAllocs(t, `for $a in 1 to 2000 return $a + 1`, 2000); a > 35500 {
+		t.Errorf("%.0f allocations, want at most 35,500", a)
+	}
+}
