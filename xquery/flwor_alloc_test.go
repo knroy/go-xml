@@ -86,3 +86,12 @@ func TestEvalInstallsQueryVersion(t *testing.T) {
 		t.Errorf("%.0f allocations, want at most 35,500", a)
 	}
 }
+
+// TestFLWORResultReserved pins that a FLWOR's result is sized from its tuple
+// stream rather than grown by doubling. Measured: 24.3 MB before, 20.7 MB
+// after.
+func TestFLWORResultReserved(t *testing.T) {
+	if b := flworBytes(t, `for $a in 1 to 50000 return $a`, 50000); b > 22_500_000 {
+		t.Errorf("%d bytes, want at most 22,500,000", b)
+	}
+}

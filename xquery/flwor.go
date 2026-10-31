@@ -161,7 +161,7 @@ func (f *flwor) eval(ctx *evalContext) (xdm.Sequence, error) {
 		}
 	}
 	var out xdm.Sequence
-	for _, t := range stream {
+	for k, t := range stream {
 		seq, err := f.evalReturn(t, ctx)
 		if err != nil {
 			return nil, err
@@ -172,6 +172,12 @@ func (f *flwor) eval(ctx *evalContext) (xdm.Sequence, error) {
 		// sequence per tuple is not.
 		if err := ctx.xp.ChargeItems(len(seq)); err != nil {
 			return nil, err
+		}
+		// Sized for one item from each tuple still to come, which is the
+		// usual return, rather than grown by doubling. The tuples are already
+		// charged, so the reservation is too.
+		if out == nil && len(seq) > 0 {
+			out = make(xdm.Sequence, 0, len(seq)+len(stream)-k-1)
 		}
 		out = append(out, seq...)
 	}
