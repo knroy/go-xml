@@ -175,7 +175,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	// that costs more than accepting. Wrapped here the ReadAll hits the
 	// limited reader and stops at the bound.
 	// A reader that knows its length (strings.Reader, bytes.Reader) lets the
-	// position-tracking copy below be sized once instead of grown by doubling.
+	// read windows and the tokeniser's buffers be sized to it.
 	sizeHint := 0
 	if l, ok := r.(interface{ Len() int }); ok {
 		sizeHint = l.Len()
@@ -223,27 +223,31 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 
 	trackPos := opts.TrackPositions
 	var srcBuf strings.Builder
-	// The source is kept when positions are tracked, and also when a DOCTYPE
-	// is permitted: an entity whose replacement text holds markup forces a
-	// re-parse of the substituted source, and by the time that is known the
-	// reader is partly consumed and the decoder has buffered ahead into it.
+	// The source is copied when a DOCTYPE is permitted: an entity whose
+	// replacement text holds markup forces a re-parse of the substituted
+	// source, and by the time that is known the reader is partly consumed and
+	// the decoder has buffered ahead into it.
 	//
 	// The copy is needed only until the document element opens: a re-parse
 	// can start only at the DOCTYPE, which must come first, so past that point
-	// the tee stops and its copy is dropped unless positions are tracked.
-	// entitiesExpanded marks the second parse, which has no entities left to
-	// find and so needs no copy at all.
-	// Only a tracked copy is kept to the end, so only it is sized up front;
-	// never past MaxBytes, which the reader will refuse to go beyond.
+	// the tee stops copying and the copy is dropped. entitiesExpanded marks
+	// the second parse, which has no entities left to find and so needs no
+	// copy at all.
+	//
+	// Positions need only where the source's lines start, which the tee
+	// records as the text goes by.
 	if !verbatim(whole) {
 		whole = ""
 	}
-	if whole == "" && trackPos && sizeHint > 0 && (maxBytes <= 0 || int64(sizeHint) <= maxBytes) {
-		srcBuf.Grow(sizeHint)
-	}
 	var tee *srcTee
 	if whole == "" && (trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded)) {
-		tee = &srcTee{r: r, buf: &srcBuf}
+		tee = &srcTee{r: r}
+		if opts.AllowDOCTYPE && !opts.entitiesExpanded {
+			tee.buf = &srcBuf
+		}
+		if trackPos {
+			tee.lines = &lineIndex{}
+		}
 		r = tee
 	}
 
@@ -381,7 +385,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 				// kept for one is dropped; and with no entity table installed
 				// by now none ever will be, so the charge reader has nothing
 				// to buffer for.
-				if tee != nil && !trackPos {
+				if tee != nil {
 					tee.buf = nil
 					srcBuf = strings.Builder{}
 				}
@@ -712,13 +716,15 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 
 	if trackPos {
 		// The decoder stops reading at the end of the root element, so the
-		// tee holds everything up to there — which is all any offset can
+		// tee has seen everything up to there — which is all any offset can
 		// point into.
-		src := srcBuf.String()
+		lines := &lineIndex{}
 		if whole != "" {
-			src = whole
+			lines.add(unsafe.Slice(unsafe.StringData(whole), len(whole)))
+		} else {
+			lines = tee.lines
 		}
-		tree.ownSource().src = src
+		tree.ownSource().lines = lines
 	}
 	tree.XMLVersion = "1.0"
 	if dec.IsVersion11() {
@@ -1212,16 +1218,21 @@ func charsetReader(charset string, input io.Reader) (io.Reader, error) {
 	return nil, fmt.Errorf("unsupported encoding %q", charset)
 }
 
-// srcTee copies what is read from r into buf until buf is set to nil.
+// srcTee copies what is read from r into buf until buf is set to nil, and
+// indexes its lines in lines when that is set.
 type srcTee struct {
-	r   io.Reader
-	buf *strings.Builder
+	r     io.Reader
+	buf   *strings.Builder
+	lines *lineIndex
 }
 
 func (t *srcTee) Read(p []byte) (int, error) {
 	n, err := t.r.Read(p)
 	if t.buf != nil {
 		t.buf.Write(p[:n])
+	}
+	if t.lines != nil {
+		t.lines.add(p[:n])
 	}
 	return n, err
 }

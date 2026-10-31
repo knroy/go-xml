@@ -6,16 +6,16 @@ import (
 	"testing"
 )
 
-// retainedPerTree is the heap still live, per tree, with n parses of doc
-// kept, after a collection.
-func retainedPerTree(t *testing.T, doc string, opts ParseOptions, n int) int64 {
+// retainedPerTree is the heap still live, per tree, with the trees of n
+// calls of parse kept, after a collection.
+func retainedPerTree(t *testing.T, n int, parse func() (*Tree, error)) int64 {
 	t.Helper()
 	trees := make([]*Tree, n)
 	var m0, m1 runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&m0)
 	for i := range trees {
-		tr, err := ParseString(doc, opts)
+		tr, err := parse()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -45,8 +45,8 @@ func TestNamespaceURIDoesNotPinArena(t *testing.T) {
 	withNS := `<r xmlns:p="urn:example:p"` + vals + `/>`
 	without := `<r p="urn:example:p"` + vals + `/>`
 	const n = 200
-	plain := retainedPerTree(t, without, ParseOptions{}, n)
-	ns := retainedPerTree(t, withNS, ParseOptions{}, n)
+	plain := retainedPerTree(t, n, func() (*Tree, error) { return ParseString(without, ParseOptions{}) })
+	ns := retainedPerTree(t, n, func() (*Tree, error) { return ParseString(withNS, ParseOptions{}) })
 	t.Logf("retained per tree: %d bytes without a declaration, %d with", plain, ns)
 	if ns-plain > 2<<10 {
 		t.Errorf("a namespace declaration costs %d bytes per kept tree, want under 2 KB", ns-plain)

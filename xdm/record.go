@@ -1,7 +1,9 @@
 package xdm
 
 import (
+	"bytes"
 	"iter"
+	"math"
 	"math/bits"
 	"sort"
 	"strconv"
@@ -161,15 +163,10 @@ type treeSource struct {
 	//
 	// Empty unless ParseOptions.ExternalEntities permitted the read.
 	externalSubset string
-	// src is the document text, retained only when the caller asks for
-	// positions. It is what makes Position able to count lines.
-	src string
-	// lineStarts holds the byte offset of each line, built on first use.
-	// Resolving a position is then a binary search rather than a scan from
-	// the start of the document, which matters when a validator reports
-	// thousands of failures over one large file.
-	lineStarts []int
-	lineOnce   sync.Once
+	// lines is where the document's lines start, kept only when the caller
+	// asks for positions. It is what makes Position able to count lines; the
+	// text itself was kept for that once, at a byte per input byte.
+	lines      *lineIndex
 	offsets    [][]int32           // by chunk: source offset + 1, made on first use
 	foreignPos map[uint32][2]int32 // positions copied from another document
 }
@@ -182,12 +179,40 @@ func (t *Tree) ownSource() *treeSource {
 	return t.source
 }
 
-// srcText is the retained document text, or "".
-func (t *Tree) srcText() string {
+// lineIdx is the document's line index, or nil.
+func (t *Tree) lineIdx() *lineIndex {
 	if t.source == nil {
-		return ""
+		return nil
 	}
-	return t.source.src
+	return t.source.lines
+}
+
+// lineIndex holds the offset each line of a source text starts at, so that
+// resolving a position is a binary search rather than a scan from the start
+// of the document, which matters when a validator reports thousands of
+// failures over one large file. Offsets past math.MaxInt32 are not recorded:
+// no node offset (encodeOffset) points there.
+type lineIndex struct {
+	starts []int32 // line 1 starts at 0; every byte after a newline starts another
+	size   int     // how many bytes of text were indexed
+}
+
+// add indexes the next len(b) bytes of the text.
+func (l *lineIndex) add(b []byte) {
+	if l.starts == nil {
+		l.starts = []int32{0}
+	}
+	for i := 0; ; {
+		j := bytes.IndexByte(b[i:], '\n')
+		if j < 0 {
+			break
+		}
+		i += j + 1
+		if off := l.size + i; off < math.MaxInt32 {
+			l.starts = append(l.starts, int32(off))
+		}
+	}
+	l.size += len(b)
 }
 
 // extSubset is the external subset text, or "".
