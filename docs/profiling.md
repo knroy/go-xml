@@ -131,6 +131,9 @@ The profile is flat. The largest single functions are `QName` equality
 | `Tree.alloc` (result-tree records) | — | 6.2% |
 | `evalParams` (cumulative) | — | 6.4% |
 
+This profile predates the memory audit: `evalParams` now passes a slice of
+pairs, not two maps, and section.001 allocates 15% less (CHANGELOG, *Unreleased*).
+
 No source exceeds a tenth of the objects. DocBook's cost is many small
 allocations spread over the whole evaluator, and the collector work they
 cause.
@@ -201,7 +204,8 @@ invoice are 20 k and 1.95 MB.
 
 Allocations: 42% of the bytes are node-record chunks (`Tree.alloc`), 22% the
 harness's input copy and 16% the text store. By count, FLWOR tuple binding
-(`tuple.bind`) is 27%, but these are small objects and about 2% of CPU. XMark
+(`tuple.bind`) was 27% before the memory audit, which shares one names
+slice per tuple stream, but these are small objects and about 2% of CPU. XMark
 at factor 0.1 is a parse benchmark.
 
 ### XSD validation and typed validation
@@ -248,9 +252,10 @@ objects. By bytes, `Tree.alloc` makes 21%, the clone 17% and the typing
 48% of the bytes are the tokenizer's 32 KB string arena, one per document.
 `newAfterPat` makes 37% of the objects and `strings.Fields` (token
 normalisation) 12%. The documents are small, so that fixed arena dominates
-the bytes and drives the GC share. Sizing the arena to the input was measured
-and rejected because of how it moved GC pacing on DocBook (see
-[rejected](#measured-and-rejected)).
+the bytes and drives the GC share. Sizing the arena to the input was first
+rejected because of how it moved GC pacing on DocBook (see
+[rejected](#measured-and-rejected)); the memory audit adopted it once
+namespace URIs stopped pinning the arena (CHANGELOG, *Unreleased*).
 
 ### Parse and Canonical XML
 
@@ -379,7 +384,10 @@ any dropped passing count.
   the same `GOGC`. A change that cuts retained memory can cost CPU elsewhere:
   starting the string arena small cut small documents' retained heap 20–37%
   and cost DocBook 5% CPU (85 GC cycles against 77). Count GC cycles a pass
-  in both arms.
+  in both arms. The memory audit raised DocBook xslTNG (593 inputs, one
+  process) from about 142 to 174 cycles, the same with or without the sized
+  arena, with peak RSS 1.24–1.35 GB → 1.07–1.15 GB and user CPU within noise
+  over five alternating rounds.
 - **The memory profiler costs CPU.** A binary that links `runtime/pprof`
   samples allocations unless `MemProfileRate` is 0. The CLI does not link it,
   so a harness that does measures a slightly different program.
@@ -477,7 +485,7 @@ longer holds.
 | Smaller first record chunk (2 records, V15) | Most fragments hold one node, but bytes moved −0.4% to +0.2% and allocations up to +0.6%: the next chunk comes sooner for every other tree |
 | Chunked result nodes | −0.9% allocations at most, +0.4–0.7% bytes |
 | String arena starting small | Retained heap −20–37% on small documents, but DocBook +5% CPU: the smaller live heap ran the collector more often (85 cycles against 77). Reverted in `629cf48` |
-| String arena sized to the input (V18) | 40 small RELAX NG documents: parse bytes −52%, CPU −20%, retained heap −72%. But DocBook ran about 7% more GC cycles (29.3 → 31.3 a pass), as above. Only the read windows were sized (`9ddd2bc6`) |
+| String arena sized to the input (V18) | 40 small RELAX NG documents: parse bytes −52%, CPU −20%, retained heap −72%. But DocBook ran about 7% more GC cycles (29.3 → 31.3 a pass), as above. Only the read windows were sized (`9ddd2bc6`). **Adopted later** in `9e13f70`: with namespace URIs copied out (`18d374d`) the arena no longer pinned trees, and an A/B with and without it gave DocBook the same GC count |
 | Attribute values passed to xdm without the arena copy (V40) | Parse bytes −2.3 to −2.6%, but `regex-syntax` +2.6% bytes, XRechnung +26 to +53 allocations a pass and more GC cycles (7.2 → 7.6); no CPU gain. Reviving it needs the copy at `textStore.add`, since the values sit in a reused buffer |
 | End tags checked against a stack of open names (V35) | After the tokenizer's name cache (V34), parse +0.8 to +1.7% CPU and 7 more allocations a parse |
 | SWAR scan in the tokenizer's `text()` | No gain (round 3, and again on v2): it is already a tight table loop |

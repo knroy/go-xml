@@ -177,6 +177,7 @@ doc.Finalize()
 
 The calls are `AppendElement`, `AppendText`, `AppendComment`, `AppendPI`,
 `AppendAttr` (before the element's first child), `AddNamespace`,
+`AddNamespaces` (several bindings in one call),
 `AppendCopy` (a deep copy) and `AppendShallowCopy` (the node alone, for a copy
 you complete yourself). A node is open from the call that made it until you
 append to something that is not it or inside it; appending to a closed node,
@@ -185,7 +186,7 @@ or adding an attribute after a child, panics. `Finalize` closes everything.
 What may still change after a node is made is its scalar state: `SetName`,
 `SetValue`, `AppendValue` (merging adjacent text), `SetBaseURI`,
 `SetDocumentURI`, the typing setters, and the namespace declarations of an
-element (`AddNamespace`, `SetNamespaceDecl`, `RemoveNamespaceDecls`) of a tree
+element (`AddNamespace`, `AddNamespaces`, `SetNamespaceDecl`, `RemoveNamespaceDecls`) of a tree
 that is not a parsed document. A parsed document is frozen.
 
 `xdm.NewNode(kind, name, value)` still makes a parentless node; it belongs to

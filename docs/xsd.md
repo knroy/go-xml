@@ -42,7 +42,9 @@ if errors.As(err, &invalid) {
 
 The code — `cvc-complex-type.2.4.a`, `cvc-datatype-valid.1.2.1` — is what
 lets a caller tell the kinds of failure apart without matching on message
-text. Message wording is not part of the contract; codes are.
+text. Message wording is not part of the contract; codes are. A name or value
+the document supplies is clipped to 1 KB plus "..." in the message, so a
+hostile input cannot make the retained errors large.
 
 There are four ways in, differing only in where the schema comes from:
 

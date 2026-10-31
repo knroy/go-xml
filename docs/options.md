@@ -180,7 +180,7 @@ tree, err := xdm.ParseString(src, xdm.ParseOptions{
 | `BaseURI` | `string` | none | Recorded on the document node; what `fn:base-uri`, `fn:doc` and relative `xsl:include` resolve against. Set it whenever the document came from somewhere addressable. |
 | `StripSpace` | `func(QName) bool` | keep all | Drops whitespace-only text nodes for the element names it returns true for. A predicate rather than a bool because `xsl:strip-space` is per-element. |
 | `AllowDOCTYPE` | `bool` | refuse | Permits a `DOCTYPE` declaration. See below. |
-| `TrackPositions` | `bool` | off | Records where each element starts, so a validation error can name a line. Retains the source text for the life of the tree — about 10% more memory, no extra parse time. |
+| `TrackPositions` | `bool` | off | Records where each element starts, so a validation error can name a line. Keeps each line's start offset and each element's column, not the source text: about 10% more retained memory (parse-10mb 37.2 → 41.5 MB), no extra parse time. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Nesting limit. Deep input is the cheapest route to stack exhaustion. |
 | `MaxBytes` | `int64` | `DefaultMaxBytes` = 64 MB | Source size limit, enforced on the read. |
 | `MaxNodes` | `int` | `DefaultMaxNodes` = 10,000,000 | Node count limit, counting attributes and namespaces. |
