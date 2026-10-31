@@ -352,6 +352,21 @@ func fnDistinctValues(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	// the pairwise scan walks neither the non-numeric results nor the exact
 	// numerics, which the hash key already settles.
 	var inexact []*xdm.Atomic
+	// A later double is compared against an exact value by promoting it to
+	// double, so each exact value kept records which double (and float) it
+	// promotes to as well. That is the key the double will look itself up
+	// under, and it is what makes xs:decimal("1.2") and xs:double(1.2) one
+	// value whichever order they arrive in. Only a float or a double looks
+	// those keys up, so they are recorded once the first one arrives, and
+	// the exact values kept until then wait in pending.
+	var pending []*big.Rat
+	promoting := false
+	promote := func(r *big.Rat) {
+		f, _ := r.Float64()
+		seen["xd\x00"+strconv.FormatFloat(f, 'g', 17, 64)] = true
+		seen["xf\x00"+strconv.FormatFloat(
+			float64(float32(f)), 'g', 17, 32)] = true
+	}
 
 	for _, it := range atoms {
 		a := it.(*xdm.Atomic)
@@ -397,15 +412,11 @@ func fnDistinctValues(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 					continue
 				}
 				seen[key] = true
-				// A later double is compared against this value by promoting
-				// it to double, so record which double it promotes to as
-				// well. That is the key the double will look itself up under,
-				// and it is what makes xs:decimal("1.2") and xs:double(1.2)
-				// one value whichever order they arrive in.
-				f, _ := r.Float64()
-				seen["xd\x00"+strconv.FormatFloat(f, 'g', 17, 64)] = true
-				seen["xf\x00"+strconv.FormatFloat(
-					float64(float32(f)), 'g', 17, 32)] = true
+				if promoting {
+					promote(r)
+				} else {
+					pending = append(pending, r)
+				}
 				out = append(out, a)
 				continue
 			}
@@ -414,7 +425,14 @@ func fnDistinctValues(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			// the scan. An exact value e is equal to this value under eq
 			// exactly when e promoted to this type equals it -- so the double
 			// (or float) that e promotes to is the key to look up, and each
-			// exact value recorded both when it was kept.
+			// exact value records both from here on.
+			if !promoting {
+				promoting = true
+				for _, r := range pending {
+					promote(r)
+				}
+				pending = nil
+			}
 			var key string
 			if a.Type == xdm.TypeFloat {
 				key = "xf\x00" + strconv.FormatFloat(

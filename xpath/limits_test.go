@@ -320,3 +320,27 @@ func TestAdoptBudgetFromNilIsAFreshRoot(t *testing.T) {
 			"budget, leaving the evaluation unbounded")
 	}
 }
+
+// TestRangeInt64Allocations pins that a range whose bounds fit in int64 makes
+// each value with NewInteger rather than through a big.Int and a big.Rat.
+// "1000 to 2999" measured 16,010 allocations through big arithmetic and 8,009
+// without.
+func TestRangeInt64Allocations(t *testing.T) {
+	c := MustCompile(`1000 to 2999`, nil)
+	ctx := NewContext(nil, Builtins())
+	var n int
+	allocs := testing.AllocsPerRun(5, func() {
+		v, err := c.Eval(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n = len(v)
+	})
+	if n != 2000 {
+		t.Fatalf("%d items, want 2000", n)
+	}
+	t.Logf("%.0f allocations", allocs)
+	if allocs > 12000 {
+		t.Errorf("%.0f allocations, want at most 12,000", allocs)
+	}
+}

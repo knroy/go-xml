@@ -515,6 +515,13 @@ func TestRangeBoundBeyondInt64(t *testing.T) {
 		{`count(1000000000000000000000 to 1000000000000000000003)`, "4"},
 		{`(1000000000000000000000 to 1000000000000000000003)[2]`, "1000000000000000000001"},
 		{`count(18446744073709551616 to 18446744073709551620)`, "5"},
+		// Bounds inside int64 are stepped as int64, up to the last value.
+		{`string-join(for $i in 9223372036854775806 to 9223372036854775807 return string($i), ",")`,
+			"9223372036854775806,9223372036854775807"},
+		{`string-join(for $i in -9223372036854775808 to -9223372036854775807 return string($i), ",")`,
+			"-9223372036854775808,-9223372036854775807"},
+		{`string-join(for $i in 9223372036854775807 to 9223372036854775808 return string($i), ",")`,
+			"9223372036854775807,9223372036854775808"},
 		// A range whose length is genuinely unbounded is still refused, and
 		// for the length rather than for the size of the numbers.
 		{`count(-1000000000000000000003 to -1000000000000000000000)`, "4"},

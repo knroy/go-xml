@@ -2,6 +2,7 @@ package xquery
 
 import (
 	"math"
+	"slices"
 	"sort"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -196,6 +197,7 @@ func (c *joinClause) join(in []tuple, ctx *evalContext) (out []tuple, n int, ok 
 	if state == nil || state.released {
 		state = &joinState{} // this apply only
 	}
+	var x nameExt
 	for _, t := range in {
 		if ctx.xp.Err() != nil {
 			return nil, 0, false
@@ -222,8 +224,9 @@ func (c *joinClause) join(in []tuple, ctx *evalContext) (out []tuple, n int, ok 
 			return nil, 0, false
 		}
 		n += len(hits)
+		out = slices.Grow(out, len(hits))
 		for _, i := range hits {
-			out = append(out, t.bind(c.f.name, e.items[i:i+1:i+1]))
+			out = append(out, t.bindx(&x, c.f.name, e.items[i:i+1:i+1]))
 		}
 	}
 	return out, n, true
