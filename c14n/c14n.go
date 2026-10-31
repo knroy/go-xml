@@ -197,7 +197,7 @@ func Bytes(n *xdm.Node, opts Options) ([]byte, error) {
 	// bytes.Buffer grown by doubling from empty cost up to 3.6 times.
 	var c chunkWriter
 	err := Write(&c, n, opts)
-	return bytes.Join(c.chunks, nil), err
+	return c.bytes(), err
 }
 
 // chunkWriter keeps a copy of everything written to it.
@@ -206,6 +206,17 @@ type chunkWriter struct{ chunks [][]byte }
 func (c *chunkWriter) Write(p []byte) (int, error) {
 	c.chunks = append(c.chunks, bytes.Clone(p))
 	return len(p), nil
+}
+
+// bytes joins the chunks. No output is nil, as from an empty bytes.Buffer.
+func (c *chunkWriter) bytes() []byte {
+	switch len(c.chunks) {
+	case 0:
+		return nil
+	case 1:
+		return c.chunks[0]
+	}
+	return bytes.Join(c.chunks, nil)
 }
 
 // Digest canonicalizes n and writes the result into h, returning h's sum.
@@ -288,9 +299,9 @@ func WriteNodeSet(w io.Writer, ns NodeSet, opts Options) error {
 
 // BytesNodeSet mirrors Bytes for a subset.
 func BytesNodeSet(ns NodeSet, opts Options) ([]byte, error) {
-	var b bytes.Buffer
-	err := WriteNodeSet(&b, ns, opts)
-	return b.Bytes(), err
+	var c chunkWriter
+	err := WriteNodeSet(&c, ns, opts)
+	return c.bytes(), err
 }
 
 // DigestNodeSet mirrors Digest for a subset.

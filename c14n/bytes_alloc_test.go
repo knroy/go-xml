@@ -5,9 +5,10 @@ import (
 	"testing"
 )
 
-// Bytes grew a bytes.Buffer by doubling from empty, 3.6 times the canonical
-// form in all, and Equal paid it for its first operand. Bytes now keeps the
-// writer's chunks and joins them once, about twice the output.
+// Bytes and BytesNodeSet grew a bytes.Buffer by doubling from empty, 3.7
+// times the canonical form in all, and Equal paid it for its first operand.
+// They now keep the writer's chunks and join them once, about twice the
+// output.
 func TestBytesAllocation(t *testing.T) {
 	// 3 MB: doubling cost 3.1x the output here and 3.7x at 10 MB.
 	root := cachedDoc(t, 3<<20).FirstChild()
@@ -20,6 +21,7 @@ func TestBytesAllocation(t *testing.T) {
 		f    func()
 	}{
 		{"Bytes", func() { _, _ = Bytes(root, Options{Algorithm: Inclusive10}) }},
+		{"BytesNodeSet", func() { _, _ = BytesNodeSet(Subtree(root), Options{Algorithm: Inclusive10}) }},
 		{"Equal", func() { _, _ = Equal(root, root, Options{Algorithm: Inclusive10}) }},
 	} {
 		got := heapAllocated(tc.f)
