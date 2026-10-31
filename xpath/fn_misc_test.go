@@ -867,6 +867,10 @@ func TestDistinctValuesNumericPromotion(t *testing.T) {
 		{`count(distinct-values((1.2, xs:double(1.2))))`, "1"},
 		{`count(distinct-values((1, xs:double(1))))`, "1"},
 		{`count(distinct-values((1, 1.0, xs:double(1), xs:float(1))))`, "1"},
+		// The promoted keys are recorded from the first double on, for the
+		// exact values kept before it and after it alike.
+		{`count(distinct-values((1.2, xs:double(5), 1.3, xs:double(1.2), xs:double(1.3))))`, "3"},
+		{`count(distinct-values((xs:double(1.2), 1.2)))`, "1"},
 		// Genuinely different values are still distinguished.
 		{`count(distinct-values((1, 2, 3)))`, "3"},
 		{`count(distinct-values((1.2, 1.3)))`, "2"},
@@ -1011,6 +1015,32 @@ func TestDistinctValuesLargeHomogeneous(t *testing.T) {
 	// exact values around it.
 	if got := evalStrXSLT(t, testDoc, `count(distinct-values((1 to 1000, xs:float(1.0))))`); got != "1000" {
 		t.Errorf("range plus equal float = %q, want 1000", got)
+	}
+
+	// With no float or double among them, exact values are keyed once, not
+	// also under the double and float they promote to. 2000 integers
+	// measured 14,061 allocations with the promoted keys and 6,054 without.
+	ctx := NewContext(nil, Builtins())
+	v, err := Eval(`1000 to 2999`, ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx.Vars["v"] = v
+	dv := MustCompile(`distinct-values($v)`, nil)
+	var n int
+	allocs := testing.AllocsPerRun(5, func() {
+		got, err := dv.Eval(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n = len(got)
+	})
+	if n != 2000 {
+		t.Fatalf("distinct-values($v): %d items, want 2000", n)
+	}
+	t.Logf("%.0f allocations", allocs)
+	if allocs > 10000 {
+		t.Errorf("distinct-values($v) allocated %.0f times, want at most 10,000", allocs)
 	}
 }
 
