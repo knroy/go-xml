@@ -717,6 +717,7 @@ var sharedNS struct {
 	byContent map[string]map[string]string
 	lists     map[string][]nsBinding
 	resolvers map[nsResolverKey]*nsResolver
+	keyBuf    []byte // scratch for internBindings, under the lock
 }
 
 func setSharedNS(m map[*xdm.Node]map[string]string) {
@@ -737,23 +738,26 @@ func internBindings(s []nsBinding) []nsBinding {
 	if len(s) == 0 {
 		return s
 	}
-	var b strings.Builder
-	for _, ns := range s {
-		b.WriteString(ns.prefix)
-		b.WriteByte(0)
-		b.WriteString(ns.uri)
-		b.WriteByte(0)
-	}
 	sharedNS.Lock()
 	defer sharedNS.Unlock()
 	if sharedNS.lists == nil {
 		return s
 	}
-	k := b.String()
-	if v, ok := sharedNS.lists[k]; ok {
+	// Built in a buffer reused across calls and looked up as m[string(b)],
+	// which does not allocate: a strings.Builder allocated a key per call
+	// and raised CEN's compile allocation by 12-14%. Only a miss copies it.
+	b := sharedNS.keyBuf[:0]
+	for _, ns := range s {
+		b = append(b, ns.prefix...)
+		b = append(b, 0)
+		b = append(b, ns.uri...)
+		b = append(b, 0)
+	}
+	sharedNS.keyBuf = b
+	if v, ok := sharedNS.lists[string(b)]; ok {
 		return v
 	}
-	sharedNS.lists[k] = s
+	sharedNS.lists[string(b)] = s
 	return s
 }
 

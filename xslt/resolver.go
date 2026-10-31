@@ -92,6 +92,11 @@ type FileResolver struct {
 
 	mu    sync.Mutex
 	cache map[string]*xdm.Tree
+	// sizes is the source size charged for each cache entry, and cacheBytes
+	// their sum, both under mu. A Preload entry is charged nothing: the host
+	// parsed it and holds it already.
+	sizes      map[string]int64
+	cacheBytes int64
 	// inflight tracks a path being read and parsed right now, so that
 	// concurrent callers wait for that one parse rather than each doing their
 	// own. Node identity requires it: fn:doc is defined to return the *same*
@@ -155,6 +160,17 @@ type loadCall struct {
 // life of the process. The bound is generous enough that a normal validation
 // run never reaches it and cheap enough that reaching it costs one reparse.
 const resolverCacheMax = 256
+
+// resolverCacheMaxBytes bounds the source bytes of the documents a resolver
+// retains: 32 MB, charged by file size.
+//
+// The entry count alone does not bound memory, because a document is not a
+// fixed size: 256 documents of 158 KB retained 201 MB, about five times their
+// file size once parsed. 32 MB of source is therefore on the order of 150 MB
+// of trees, and a working set of ordinary stylesheets and code lists is far
+// below it. A document that alone exceeds the bound is still cached, after
+// everything else has been evicted; MaxBytes is what refuses a file outright.
+const resolverCacheMaxBytes int64 = 32 << 20
 
 // DefaultMaxResourceBytes bounds one file read through a FileResolver when
 // MaxBytes is zero: 64 MB.
@@ -487,7 +503,7 @@ func (r *FileResolver) Preload(uri string, tree *xdm.Tree) {
 	// stylesheet can reach, so an unbounded Preload was an invariant violation
 	// and not an attack surface -- but a host that preloads a document per
 	// request would still have grown the map for the life of the process.
-	r.publish(path, tree)
+	r.publish(path, tree, 0)
 }
 
 // load parses a file, caching the result.
@@ -564,11 +580,11 @@ func (r *FileResolver) loadTracked(
 		r.inflight[key] = call
 		r.mu.Unlock()
 
-		tree, err := r.parseUncached(path, trackPos, b)
+		tree, size, err := r.parseUncached(path, trackPos, b)
 
 		r.mu.Lock()
 		if err == nil {
-			r.publish(path, tree)
+			r.publish(path, tree, size)
 		}
 		delete(r.inflight, key)
 		r.mu.Unlock()
@@ -580,7 +596,7 @@ func (r *FileResolver) loadTracked(
 }
 
 // publish stores a parsed tree. The caller holds r.mu.
-func (r *FileResolver) publish(path string, tree *xdm.Tree) {
+func (r *FileResolver) publish(path string, tree *xdm.Tree, size int64) {
 	// The cache is created on first use. A FileResolver is documented as
 	// usable as a plain literal — &FileResolver{Roots: ...} — so a nil map
 	// here is the ordinary case, not a caller's mistake, and writing to one
@@ -606,27 +622,36 @@ func (r *FileResolver) publish(path string, tree *xdm.Tree) {
 	// and still retains a working set, whereas the recency metadata an LRU
 	// wants would have to be written on every cache HIT. A false eviction
 	// costs one reparse, which is what a miss cost before.
-	for len(r.cache) >= resolverCacheMax {
-		if _, ok := r.cache[path]; ok {
-			// Replacing an entry that is already present does not grow the
-			// map, so nothing has to be evicted for it.
-			break
-		}
+	if r.sizes == nil {
+		r.sizes = map[string]int64{}
+	}
+	// A replaced entry is removed first and gives its charge back, so a
+	// replacement never counts against the bounds twice.
+	r.cacheBytes -= r.sizes[path]
+	delete(r.sizes, path)
+	delete(r.cache, path)
+	for len(r.cache) > 0 &&
+		(len(r.cache) >= resolverCacheMax ||
+			r.cacheBytes+size > resolverCacheMaxBytes) {
 		for victim := range r.cache {
 			delete(r.cache, victim)
+			r.cacheBytes -= r.sizes[victim]
+			delete(r.sizes, victim)
 			break
 		}
 	}
 	r.cache[path] = tree
+	r.sizes[path] = size
+	r.cacheBytes += size
 }
 
 // parseUncached reads and parses a file. It holds no lock: this is the work
 // that used to run under r.mu.
 func (r *FileResolver) parseUncached(
-	path string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, error) {
+	path string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, int64, error) {
 	data, err := r.readConfined(path)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	// A file: URI rather than the bare path. This base URI is stamped on
 	// every element of the module and is what fn:document, fn:resolve-uri
@@ -655,9 +680,9 @@ func (r *FileResolver) parseUncached(
 	// in place. See ResolveModuleWith.
 	tree, err := xdm.ParseString(string(data), opts.WithEntityBudget(b))
 	if err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
+		return nil, 0, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	return tree, nil
+	return tree, int64(len(data)), nil
 }
 
 // fileURIToPath turns a file: URI back into a filesystem path, and leaves

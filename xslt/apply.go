@@ -859,6 +859,9 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	return res, nil
 }
 
+// maxKeyBufCap is the largest scratch buffer functionCallKey keeps: 64 KB.
+const maxKeyBufCap = 64 << 10
+
 // functionCallKey identifies one call of a deterministic function by its
 // arguments.
 //
@@ -896,7 +899,13 @@ func (rt *runtime) functionCallKey(f *userFunction, args []xdm.Sequence) ([]byte
 			return nil, err
 		}
 	}
-	rt.keyBuf = b
+	// Kept for the next call only while small: one call with a large argument
+	// would otherwise leave its buffer for the rest of the transform.
+	if cap(b) <= maxKeyBufCap {
+		rt.keyBuf = b
+	} else {
+		rt.keyBuf = nil
+	}
 	return b, nil
 }
 
