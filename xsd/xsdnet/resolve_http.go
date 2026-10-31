@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -155,7 +156,7 @@ func (r *HTTPResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 	if !r.AllowPrivateAddresses {
 		c := *client
 		if c.Transport == nil {
-			c.Transport = newGuardedTransport()
+			c.Transport = guardedTransport()
 			client = &c
 		}
 	}
@@ -244,6 +245,11 @@ func (b *limitedBody) Read(p []byte) (int, error) {
 }
 
 func (b *limitedBody) Close() error { return b.c.Close() }
+
+// guardedTransport is one shared guarded Transport, so fetches reuse
+// connections instead of each building a Transport (and its goroutines).
+// The guard holds no per-resolver state.
+var guardedTransport = sync.OnceValue(newGuardedTransport)
 
 // newGuardedTransport returns a Transport that refuses to connect to the
 // address ranges an SSRF is aimed at.

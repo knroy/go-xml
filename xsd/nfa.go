@@ -88,10 +88,29 @@ type stateSet struct {
 }
 
 func newStateSet() *stateSet {
-	return &stateSet{seen: map[matchState]bool{}}
+	return &stateSet{}
 }
 
+// smallSet is the size up to which add deduplicates by scanning order; the
+// map is only built for a larger set.
+const smallSet = 8
+
 func (s *stateSet) add(st matchState) {
+	if s.seen == nil {
+		for _, o := range s.order {
+			if o == st {
+				return
+			}
+		}
+		s.order = append(s.order, st)
+		if len(s.order) > smallSet {
+			s.seen = make(map[matchState]bool, 2*smallSet)
+			for _, o := range s.order {
+				s.seen[o] = true
+			}
+		}
+		return
+	}
 	if s.seen[st] {
 		return
 	}

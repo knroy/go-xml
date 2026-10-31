@@ -149,6 +149,7 @@ type validator struct {
 	allowUndec bool
 	errs       []*Error
 	matchers   map[string]*xsd.SequenceMatcher
+	names      []xdm.QName // child-name buffer reused across elements
 	// ids are every ID value seen, for uniqueness and for resolving IDREF.
 	ids map[string]bool
 	// partial records that the DTD was read from the internal subset alone
@@ -270,12 +271,13 @@ func (v *validator) checkContent(el *xdm.Node) {
 			v.fail(el, "content model of %s: %v", el.Name().Local, err)
 			return
 		}
-		var names []xdm.QName
+		names := v.names[:0]
 		for c := range el.Children() {
 			if c.Kind() == xdm.KindElement {
 				names = append(names, xdm.QName{Local: c.Name().Local})
 			}
 		}
+		v.names = names
 		if ok, at := m.Match(names); !ok {
 			if at < len(names) {
 				v.fail(el, "element %s is not permitted here in the "+
@@ -302,6 +304,9 @@ func (v *validator) matcherFor(decl *Element) (*xsd.SequenceMatcher, error) {
 // checkAttributes applies the ATTLIST declarations for an element.
 func (v *validator) checkAttributes(el *xdm.Node) {
 	decls := v.dtd.Attributes[el.Name().Local]
+	if len(decls) == 0 {
+		return
+	}
 	present := map[string]string{}
 	for a := range el.Attrs() {
 		name := a.Name().Local
