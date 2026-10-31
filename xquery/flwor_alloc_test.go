@@ -95,3 +95,12 @@ func TestFLWORResultReserved(t *testing.T) {
 		t.Errorf("%d bytes, want at most 22,500,000", b)
 	}
 }
+
+// TestLiftedOperandNoLibrary pins that evaluating an expression with a lifted
+// operand does not build a function library each time. Measured: 6.75 MB
+// before, 4.14 MB after.
+func TestLiftedOperandNoLibrary(t *testing.T) {
+	if b := flworBytes(t, `for $a in 1 to 2000 return $a = <a>5</a>`, 2000); b > 5_400_000 {
+		t.Errorf("%d bytes, want at most 5,400,000", b)
+	}
+}

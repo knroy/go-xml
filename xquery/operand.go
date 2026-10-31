@@ -479,21 +479,40 @@ func (n *operandExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 func bindLifted(xp *xpath.Context, ops []liftedOperand,
 	ctx *evalContext) *xpath.Context {
 
-	lib := xpath.NewLibrary(xp.Funcs)
-	for i, op := range ops {
-		item := op.n
-		lib.Add(xpath.Function{
-			Name:  xdm.QName{URI: callArgNS(ctx.sc), Local: stepFn(i)},
-			Arity: 0,
-			Call: func(c *xpath.Context, _ []xdm.Sequence) (xdm.Sequence, error) {
-				return (&enclosed{items: []node{item}}).sequence(
-					&evalContext{xp: c, sc: ctx.sc, joins: ctx.joins})
-			},
-		})
-	}
 	sub := *xp
-	sub.Funcs = lib
+	sub.Funcs = &liftedLib{parent: xp.Funcs, uri: callArgNS(ctx.sc), ops: ops, ctx: ctx}
 	return &sub
+}
+
+// liftedLib is the library bindLifted installs: ops[i] as the zero-arity
+// function stepFn(i), over parent. It reads the index out of the name rather
+// than holding a map of the functions, which every evaluation had to build.
+type liftedLib struct {
+	parent xpath.FunctionLibrary
+	uri    string
+	ops    []liftedOperand
+	ctx    *evalContext
+}
+
+func (l *liftedLib) Lookup(name xdm.QName, arity int) (xpath.Function, bool) {
+	if rest, ok := strings.CutPrefix(name.Local, "xq-step"); ok && arity == 0 && name.URI == l.uri {
+		if i, err := strconv.Atoi(rest); err == nil && i >= 0 && i < len(l.ops) &&
+			rest == strconv.Itoa(i) {
+			item, ctx := l.ops[i].n, l.ctx
+			return xpath.Function{
+				Name:  name,
+				Arity: 0,
+				Call: func(c *xpath.Context, _ []xdm.Sequence) (xdm.Sequence, error) {
+					return (&enclosed{items: []node{item}}).sequence(
+						&evalContext{xp: c, sc: ctx.sc, joins: ctx.joins})
+				},
+			}, true
+		}
+	}
+	if l.parent != nil {
+		return l.parent.Lookup(name, arity)
+	}
+	return xpath.Function{}, false
 }
 
 func (n *operandExpr) eval(out *builderRef, ctx *evalContext) error {
