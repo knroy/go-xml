@@ -714,6 +714,11 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	tree.closeAll()
 	tree.frozen = true
 	tree.text.trim()
+	// The indexes only building uses go; a tree renamed or cloned later
+	// rebuilds the ones it needs.
+	tree.nameIx, tree.nameHot = nil, nil
+	tree.frameOne, tree.frameMany = nil, nil
+	tree.open = nil
 
 	if trackPos {
 		// The decoder stops reading at the end of the root element, so the

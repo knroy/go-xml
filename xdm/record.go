@@ -358,6 +358,11 @@ func (t *Tree) intern(q QName) uint32 {
 	if q == (QName{}) {
 		return 0
 	}
+	// A parsed tree drops its index when it is frozen, and a clone of one
+	// copies none: it is rebuilt here, on first use.
+	if t.nameIx == nil && len(t.names) > smallNames {
+		t.indexNames()
+	}
 	// A small tree -- a constructed fragment, mostly -- has a handful of
 	// names, and finding one by scanning costs less than building a map.
 	if t.nameIx == nil {
@@ -372,11 +377,7 @@ func (t *Tree) intern(q QName) uint32 {
 		i := uint32(len(t.names))
 		t.names = append(t.names, q)
 		if len(t.names) > smallNames {
-			t.nameIx = make(map[QName]uint32, 2*len(t.names))
-			t.nameHot = new([64]uint32)
-			for j, x := range t.names[1:] {
-				t.nameIx[x] = uint32(j + 1)
-			}
+			t.indexNames()
 		}
 		return i
 	}
@@ -397,6 +398,15 @@ func (t *Tree) intern(q QName) uint32 {
 	}
 	t.nameHot[h] = i
 	return i
+}
+
+// indexNames builds the name index over the names the tree holds.
+func (t *Tree) indexNames() {
+	t.nameIx = make(map[QName]uint32, 2*len(t.names))
+	t.nameHot = new([64]uint32)
+	for j, x := range t.names[1:] {
+		t.nameIx[x] = uint32(j + 1)
+	}
 }
 
 // nameHash is a cheap hash of q for nameHot: the lengths and the ends of the
@@ -1075,8 +1085,9 @@ func (t *Tree) internFrame(ns []nsBinding) uint32 {
 		}
 		return t.addFrame(ns)
 	}
-	if len(t.frames) == smallFrames+1 && t.frameOne == nil && t.frameMany == nil {
-		// Past the scan's reach: index what is there.
+	if len(t.frames) > smallFrames && t.frameOne == nil && t.frameMany == nil {
+		// Past the scan's reach: index what is there. A parsed tree drops
+		// the indexes when it is frozen, so this also rebuilds them.
 		for i := 1; i < len(t.frames); i++ {
 			t.indexFrame(uint32(i))
 		}
