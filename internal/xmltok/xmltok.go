@@ -214,15 +214,13 @@ func NewDecoder(r io.Reader) *Decoder {
 	return &Decoder{Strict: true, src: r, buf: make([]byte, 0, bufSize)}
 }
 
-// NewDecoderSize is NewDecoder for a stream known to hold about size bytes:
-// its read window is no larger than the input needs, where a small document
-// otherwise paid for 4 KB. The string arena's first block is sized by Size.
-func NewDecoderSize(r io.Reader, size int) *Decoder {
-	return &Decoder{Strict: true, src: r, buf: make([]byte, 0, min(max(size, minWindow), bufSize))}
+// NewDecoderBuffer is NewDecoder reading through buf, whose capacity is the
+// read window, so that a caller parsing many documents can reuse one. The
+// Decoder writes into buf until the caller is done with it and with every
+// token it returned.
+func NewDecoderBuffer(r io.Reader, buf []byte) *Decoder {
+	return &Decoder{Strict: true, src: r, buf: buf[:0]}
 }
-
-// minWindow is the smallest read window NewDecoderSize uses.
-const minWindow = 512
 
 // TakeText hands the caller the CharData last returned, to keep: the Decoder
 // builds its next token in a new buffer rather than over it. It is called

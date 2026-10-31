@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -148,7 +149,7 @@ func (t *entityTable) fetchExternal(systemID, publicID, base string) (string, st
 	// UTF-16 entity included by a UTF-8 document is UTF-16 still. The same
 	// detection the document entity goes through decodes it, and drops the
 	// byte order mark, which is not part of the replacement text.
-	dec, err := decodeReader(bytes.NewReader(data), readWindow(len(data)))
+	dec, err := decodeReader(bufio.NewReaderSize(bytes.NewReader(data), readWindow(len(data))))
 	if err == nil {
 		data, err = io.ReadAll(dec)
 	}

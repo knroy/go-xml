@@ -1,12 +1,14 @@
 package xdm
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
 	"math"
 	"net/url"
 	"strings"
+	"sync"
 	"unsafe"
 
 	xml "github.com/knroy/go-xml/v2/internal/xmltok"
@@ -175,7 +177,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	// that costs more than accepting. Wrapped here the ReadAll hits the
 	// limited reader and stops at the bound.
 	// A reader that knows its length (strings.Reader, bytes.Reader) lets the
-	// read windows and the tokeniser's buffers be sized to it.
+	// tokeniser's buffers be sized to it.
 	sizeHint := 0
 	if l, ok := r.(interface{ Len() int }); ok {
 		sizeHint = l.Len()
@@ -197,19 +199,16 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		r = &countingReader{r: io.LimitReader(r, lim), max: maxBytes}
 	}
 
-	// Position tracking needs the source text to count lines in, and the
-	// reader is consumed by the decoder. Tee it into a buffer rather than
-	// reading it all up front, so that a parse failing early on a huge
-	// document does not first pull the whole thing into memory.
 	// UTF-16 is decoded to UTF-8 first. XML 1.0 §4.3.3 makes both encodings
 	// mandatory, and encoding/xml reads only UTF-8 — so without this a
 	// UTF-16 document fails with "invalid UTF-8" rather than being read.
 	// This happens before the tee, so that position tracking counts lines
 	// in the text the decoder actually sees.
-	// The read windows are sized to a document known to be small: a 2 KB
-	// document otherwise paid for three 4 KB buffers it never filled.
-	window := readWindow(sizeHint)
-	decoded, err := decodeReader(r, window)
+	// The three read windows are reused parse to parse (see readBufs).
+	bufs := readBufPool.Get().(*readBufs)
+	defer bufs.release()
+	bufs.br.Reset(r)
+	decoded, err := decodeReader(bufs.br)
 	if err != nil {
 		return nil, fmt.Errorf("parse XML: %w", err)
 	}
@@ -219,7 +218,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	// parsing. See xdm/lineend.go. Attribute-value normalization (section
 	// 3.3.3) is the tokeniser's, which still sees "&#10;" apart from a
 	// newline the author typed.
-	r = newLineEndReader(r, window)
+	r = newLineEndReader(r, bufs.lineEnd)
 
 	trackPos := opts.TrackPositions
 	var srcBuf strings.Builder
@@ -266,7 +265,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		r = charger
 	}
 
-	dec := xml.NewDecoderSize(r, window)
+	dec := xml.NewDecoderBuffer(r, bufs.dec)
 	dec.Size = sizeHint
 	dec.CharsetReader = charsetReader
 	// Leave Strict on: a validator must not silently accept malformed input.
@@ -737,6 +736,30 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		tree.XMLVersion = "1.1"
 	}
 	return tree, nil
+}
+
+// readBufs are a parse's read windows: decodeReader's look at the byte order
+// mark, line-end folding's and the tokeniser's. Nothing read through them
+// outlives the parse -- the tree holds copies of what the tokens held -- so
+// they are pooled rather than allocated per document, which for small
+// documents was a sixth of what a parse allocated.
+type readBufs struct {
+	br           *bufio.Reader
+	lineEnd, dec []byte
+}
+
+var readBufPool = sync.Pool{New: func() any {
+	return &readBufs{
+		br:      bufio.NewReaderSize(nil, 4096),
+		lineEnd: make([]byte, 0, 4096),
+		dec:     make([]byte, 0, 4096),
+	}
+}}
+
+// release returns b to the pool, without the caller's reader.
+func (b *readBufs) release() {
+	b.br.Reset(nil)
+	readBufPool.Put(b)
 }
 
 // readWindow is the read buffer size for an input of size bytes (0:
