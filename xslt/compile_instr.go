@@ -1023,7 +1023,7 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	if err != nil {
 		return nil, err
 	}
-	instr := &elementInstr{name: nameAVT, scope: n, attrSets: sets,
+	instr := &elementInstr{name: nameAVT, scope: inScopeNamespacesShared(n), attrSets: sets,
 		baseURI: n.BaseURI(), noInherit: noAttr(n, "inherit-namespaces")}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
@@ -1051,7 +1051,7 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 	if err != nil {
 		return nil, err
 	}
-	instr := &attributeInstr{name: nameAVT, scope: n}
+	instr := &attributeInstr{name: nameAVT, scope: inScopeNamespacesShared(n)}
 	if sepAttr := n.Attr("", "separator"); sepAttr != nil {
 		sep, err := compileAVT(sepAttr.Value(), ns)
 		if err != nil {
@@ -1148,7 +1148,7 @@ func (c *compiler) compileMessage(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 		if err != nil {
 			return nil, err
 		}
-		instr.errorCode, instr.errorCodeNS = avt, n
+		instr.errorCode, instr.errorCodeNS = avt, inScopeNamespacesShared(n)
 	}
 	if v := n.AttrValue("terminate"); v != "" {
 		avt, err := compileAVT(v, ns)

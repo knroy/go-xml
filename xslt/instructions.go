@@ -1265,7 +1265,7 @@ type elementInstr struct {
 	// the constructed element inherits.
 	baseURI   string
 	namespace *avt
-	scope     *xdm.Node
+	scope     nsMap
 	attrSets  []attrSetRef
 	body      []Instruction
 	// validation is the validation or type attribute, which asks for the
@@ -1394,7 +1394,7 @@ type attributeInstr struct {
 	separator    *avt
 	hasSeparator bool
 	sel          *xpath.Compiled
-	scope        *xdm.Node
+	scope        nsMap
 	body         []Instruction
 	// validation carries [xsl:]validation and [xsl:]type, which assess the
 	// constructed attribute exactly as they assess a constructed element.
@@ -1697,7 +1697,7 @@ type messageInstr struct {
 	// errorCodeNS resolves the prefix of an error-code that was written as a
 	// lexical QName. The attribute is an AVT, so the name is not known until
 	// run time and the namespace context has to be carried to meet it.
-	errorCodeNS *xdm.Node
+	errorCodeNS nsMap
 	// xslt30 enables the 3.0 readings: the wider @terminate vocabulary, and
 	// surviving a dynamic error raised while building the content.
 	xslt30 bool

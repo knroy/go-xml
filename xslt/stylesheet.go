@@ -1758,13 +1758,28 @@ func (r *nsResolver) ResolvePrefix(p string) (string, bool) {
 func (r *nsResolver) DefaultElementNamespace() string  { return r.defaultNS }
 func (r *nsResolver) DefaultFunctionNamespace() string { return xdm.NSFN }
 
+// prefixLookup is an element, or the in-scope namespaces a compiled
+// instruction keeps in its place so as not to keep the stylesheet tree alive.
+type prefixLookup interface {
+	LookupPrefix(prefix string) (string, bool)
+}
+
+// nsMap is an element's in-scope namespaces, as InScopeNamespaces returns
+// them (xml included), answering LookupPrefix exactly as the element would.
+type nsMap map[string]string
+
+func (m nsMap) LookupPrefix(prefix string) (string, bool) {
+	uri, ok := m[prefix]
+	return uri, ok || prefix == ""
+}
+
 // resolveQNameAttr resolves a lexical QName found in a stylesheet attribute
 // against the element's namespace context.
 //
 // An unprefixed QName in an attribute value is in *no* namespace, unlike an
 // unprefixed element name test. This is the rule that makes
 // name="foo" and <foo> mean different things inside a default namespace.
-func resolveQNameAttr(el *xdm.Node, lex string) (xdm.QName, error) {
+func resolveQNameAttr(el prefixLookup, lex string) (xdm.QName, error) {
 	lex = strings.TrimSpace(lex)
 	// The EQName form Q{uri}local carries its own namespace, so no prefix has
 	// to be in scope for it. The suite writes it wherever a QName is
