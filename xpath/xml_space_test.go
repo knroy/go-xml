@@ -1,6 +1,11 @@
 package xpath
 
-import "testing"
+import (
+	"math/rand"
+	"strings"
+	"testing"
+	"unsafe"
+)
 
 // XML S, per F&O 3.1 §5.4.5 and XML 1.0 §2.3, is exactly these four.
 const (
@@ -37,5 +42,45 @@ func TestNormalizeSpaceUsesXMLWhitespaceOnly(t *testing.T) {
 				t.Errorf("normalize-space(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// collapseXMLSpace replaced strings.Join(splitXMLSpace(s), " ") in
+// normalize-space and tokenize#1, which built a list of every token: 43 GB over
+// a rule set normalising one 15 MB value 180 times. Over random strings of XML
+// S, no-break spaces, multi-byte runes and invalid UTF-8 it must give what that
+// expression gave, byte for byte.
+func TestCollapseXMLSpaceMatchesSplitJoin(t *testing.T) {
+	alphabet := []string{" ", " ", "\t", "\n", "\r", "a", "b", nbsp, "é", "\xff", "\xc3"}
+	rng := rand.New(rand.NewSource(1))
+	for range 100000 {
+		var b strings.Builder
+		for range rng.Intn(12) {
+			b.WriteString(alphabet[rng.Intn(len(alphabet))])
+		}
+		s := b.String()
+		if got, want := collapseXMLSpace(s), strings.Join(splitXMLSpace(s), " "); got != want {
+			t.Fatalf("collapseXMLSpace(%q) = %q, want %q", s, got, want)
+		}
+	}
+}
+
+// TestCollapseXMLSpaceAllocation pins the cost the audit measured: a collapsed
+// value comes back without a copy, and one that is not is built in a single
+// allocation, however many tokens it has.
+func TestCollapseXMLSpaceAllocation(t *testing.T) {
+	collapsed := strings.Repeat("a ", 100000) + "a"
+	spread := strings.Repeat(" a\t", 100000)
+	for _, tc := range []struct {
+		name string
+		in   string
+		want float64
+	}{{"collapsed", collapsed, 0}, {"spread", spread, 1}} {
+		if n := testing.AllocsPerRun(10, func() { collapseXMLSpace(tc.in) }); n != tc.want {
+			t.Errorf("%s: %.0f allocations, want %.0f", tc.name, n, tc.want)
+		}
+	}
+	if got := collapseXMLSpace(collapsed); unsafe.StringData(got) != unsafe.StringData(collapsed) {
+		t.Error("a collapsed value was copied")
 	}
 }

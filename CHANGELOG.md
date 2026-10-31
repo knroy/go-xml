@@ -4,6 +4,14 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+### Fixed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `fn:normalize-space` built a list of every token | 180 calls on a 15 MB value allocated 133 GB. It now collapses in one pass and returns a collapsed value uncopied: 0 GB, 8x faster. | — |
+
 ## v2.0.2 — 2026-10-30
 
 A parser cost fix from an external audit. No API change.
