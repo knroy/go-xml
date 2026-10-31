@@ -795,7 +795,7 @@ func buildElement(t xml.StartElement, parent *Node, ns *nsScope, names *nameCach
 		if a.Name.Space == "xml" {
 			switch a.Name.Local {
 			case "base":
-				el.SetBaseURI(resolveBase(el.BaseURI(), a.Value))
+				el.SetBaseURI(resolveBase(el.BaseURI(), strings.Clone(a.Value))) // out of the arena, as nsScope.declare
 			case "id":
 				// xml:id is an ID by definition, and the xml:id
 				// Recommendation requires its value to be normalised as one,
