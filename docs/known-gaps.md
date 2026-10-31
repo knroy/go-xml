@@ -583,7 +583,7 @@ Nothing in the suites scores this. The `XmlVersions` cases reach the parser
 through `xdm`, which is checked; a caller reaching `dtd.Load` directly is the
 uncovered path.
 
-### `xdm` parsing cannot be cancelled, and deep nesting still costs superlinear time
+### `xdm` parsing cannot be cancelled
 
 `xdm` contains no reference to `context`. A parse therefore runs to completion
 or to a resource limit; a caller holding a deadline cannot interrupt one.
@@ -617,19 +617,15 @@ byte length. `TestFinalizeNotQuadraticInDepth` (`xdm/finalize_complexity_test.go
 holds the allocation bound; reverting the fix fails it at 17,780 MB against a
 200 MB budget.
 
-**Time is still superlinear**, and this part is open. With `Tree.assign` no
-longer on the profile, the remaining cost is two other ancestor-chain walks on
-the parse path: `resolvePrefix` (`xdm/parse.go:720`), which scans from the
-element to the root for every prefix it resolves, and `validateStartElement`.
-Together they are ~73% of CPU samples at depth 32,000. The same inherited-scope
-technique would apply to `resolvePrefix`, but it is a change to the parser's
-namespace resolution rather than to document-order numbering, and is left
-separate.
+Time is linear too. The ancestor-chain walks that were left on the profile
+are gone: one namespace stack replaced `resolvePrefix`, and since v2.0.2 that
+stack is indexed past 32 bindings, so a prefix lookup is not a scan of every
+declaration in scope. The 224 kB document above now parses in 2.4 ms at depth
+32,000; with a declaration at every level, 861 ms before v2.0.2 and 19 ms
+after.
 
-**`ParseOptions.MaxDepth` is the only lever a caller has, and its default of
-1000 is what bounds this today.** At the default the worst nesting can do is
-well under a second, and a 1,001-level document is refused before any of that
-work happens. Note that `MaxDepth` clamps `<= 0` to the default
+**`ParseOptions.MaxDepth` still defaults to 1000**, and a 1,001-level
+document is refused before any work on its depth happens. Note that `MaxDepth` clamps `<= 0` to the default
 (`xdm/parse.go:271`), unlike `xslt`, `relaxng` and `xsd`, where a negative
 value does remove the bound: there is no way to disable the parser's depth
 limit, only to raise it.

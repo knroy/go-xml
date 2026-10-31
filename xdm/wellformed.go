@@ -180,7 +180,6 @@ func validateStartElement(t xml.StartElement, ns *nsScope, xml11 bool) error {
 			scope.m[prefix] = a.Value
 		}
 	}
-	scope.inherit()
 
 	if err := requireBoundPrefix(t.Name.Space, &scope); err != nil {
 		return err
@@ -249,10 +248,20 @@ const smallTag = 8
 // The stack is popped at an element's end by the length of the frame the
 // element was given, which is its declarations; so a document declaring no
 // namespace never allocates one.
+//
+// A stack past indexAt bindings is indexed, so that a lookup is not a scan of
+// a stack a document can make as long as it likes: top maps each prefix to one
+// more than the index of its innermost binding, and prev links each binding
+// to the one of its prefix it shadows, or -1.
 type nsScope struct {
-	b   []nsBinding
-	own int // how many of b the innermost start tag declares
+	b    []nsBinding
+	own  int // how many of b the innermost start tag declares
+	top  map[string]int
+	prev []int
 }
+
+// indexAt is how many bindings the stack holds before it is indexed.
+const indexAt = 32
 
 // push opens a start tag's declarations, none until they are appended.
 func (s *nsScope) push() { s.own = 0 }
@@ -260,6 +269,17 @@ func (s *nsScope) push() { s.own = 0 }
 func (s *nsScope) declare(prefix, uri string) {
 	if s.b == nil {
 		s.b = make([]nsBinding, 0, 8) // a document's root declares a few
+	}
+	if s.top == nil && len(s.b) >= indexAt {
+		s.top = make(map[string]int, 2*len(s.b))
+		for _, b := range s.b {
+			s.prev = append(s.prev, s.top[b.prefix]-1)
+			s.top[b.prefix] = len(s.prev)
+		}
+	}
+	if s.top != nil {
+		s.prev = append(s.prev, s.top[prefix]-1)
+		s.top[prefix] = len(s.prev)
 	}
 	s.b = append(s.b, nsBinding{prefix, uri})
 	s.own++
@@ -269,15 +289,33 @@ func (s *nsScope) declare(prefix, uri string) {
 func (s *nsScope) ownDecls() []nsBinding { return s.b[len(s.b)-s.own:] }
 
 // pop drops the n declarations of the element that ends.
-func (s *nsScope) pop(n int) { s.b = s.b[:len(s.b)-n] }
+func (s *nsScope) pop(n int) {
+	if s.top != nil {
+		for i := len(s.b) - 1; i >= len(s.b)-n; i-- {
+			if p := s.prev[i]; p >= 0 {
+				s.top[s.b[i].prefix] = p + 1
+			} else {
+				delete(s.top, s.b[i].prefix)
+			}
+		}
+		s.prev = s.prev[:len(s.b)-n]
+	}
+	s.b = s.b[:len(s.b)-n]
+}
 
 // lookup returns the URI bound to prefix, and whether any binding is in scope.
 // An undeclaration (XML 1.1 xmlns:p="") is a binding to "". The xml prefix
 // may be declared, but only as what it is bound to anyway.
 func (s *nsScope) lookup(prefix string) (string, bool) {
-	for i := len(s.b) - 1; i >= 0; i-- {
-		if s.b[i].prefix == prefix {
-			return s.b[i].uri, true
+	if s.top != nil {
+		if i, ok := s.top[prefix]; ok {
+			return s.b[i-1].uri, true
+		}
+	} else {
+		for i := len(s.b) - 1; i >= 0; i-- {
+			if s.b[i].prefix == prefix {
+				return s.b[i].uri, true
+			}
 		}
 	}
 	if prefix == "xml" {
@@ -286,17 +324,17 @@ func (s *nsScope) lookup(prefix string) (string, bool) {
 	return "", false
 }
 
-// tagScope resolves the prefixes used on one start tag. A tag of at most
-// smallTag attributes scans the stack; a larger one fills m once with every
-// binding in scope, so that each of its attributes is not a scan of the
-// stack, which may hold many.
+// tagScope resolves the prefixes used on one start tag against the stack. A
+// tag of at most smallTag attributes finds its own declarations by a scan of
+// them; a larger one keeps them in m, so that a tag declaring thousands is not
+// checked for duplicates in quadratic time.
 type tagScope struct {
 	ns *nsScope
-	m  map[string]string // every binding in scope, when the tag is large
+	m  map[string]string // the tag's own declarations, when the tag is large
 }
 
 // declared reports whether the tag declares prefix among the declarations
-// pushed so far. With m in use it holds exactly those.
+// pushed so far.
 func (s *tagScope) declared(prefix string) bool {
 	if s.m != nil {
 		_, ok := s.m[prefix]
@@ -310,30 +348,7 @@ func (s *tagScope) declared(prefix string) bool {
 	return false
 }
 
-// inherit completes m, once the tag's own declarations are in it, with the
-// bindings it does not override.
-func (s *tagScope) inherit() {
-	if s.m == nil {
-		return
-	}
-	if _, ok := s.m["xml"]; !ok {
-		s.m["xml"] = NSXML
-	}
-	b := s.ns.b
-	for i := len(b) - s.ns.own - 1; i >= 0; i-- {
-		if _, ok := s.m[b[i].prefix]; !ok {
-			s.m[b[i].prefix] = b[i].uri
-		}
-	}
-}
-
-func (s *tagScope) lookup(prefix string) (string, bool) {
-	if s.m != nil {
-		uri, ok := s.m[prefix]
-		return uri, ok
-	}
-	return s.ns.lookup(prefix)
-}
+func (s *tagScope) lookup(prefix string) (string, bool) { return s.ns.lookup(prefix) }
 
 func requireQName(n xml.Name) error {
 	if strings.Contains(n.Local, ":") {
