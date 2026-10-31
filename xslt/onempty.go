@@ -119,11 +119,10 @@ func deemedEmpty(it xdm.Item) bool {
 	case *xdm.ArrayItem:
 		// "an array where the result of flattening the array is either an
 		// empty sequence, or a sequence in which every item is deemed empty".
-		for _, m := range v.Members() {
-			for _, sub := range m {
-				if !deemedEmpty(sub) {
-					return false
-				}
+		// Flatten is iterative, so a deeply nested array cannot overflow the stack.
+		for _, sub := range xdm.Flatten(xdm.Sequence{v}) {
+			if !deemedEmpty(sub) {
+				return false
 			}
 		}
 		return true
@@ -160,11 +159,10 @@ func vacuous(it xdm.Item) bool {
 			return false
 		}
 	case *xdm.ArrayItem:
-		for _, m := range v.Members() {
-			for _, sub := range m {
-				if !vacuous(sub) {
-					return false
-				}
+		// Flatten is iterative, so a deeply nested array cannot overflow the stack.
+		for _, sub := range xdm.Flatten(xdm.Sequence{v}) {
+			if !vacuous(sub) {
+				return false
 			}
 		}
 		return true

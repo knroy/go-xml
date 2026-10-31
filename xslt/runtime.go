@@ -171,6 +171,8 @@ type transformState struct {
 	itemIDs map[any]int
 	// keyBuf is the scratch buffer functionCallKey builds keys in.
 	keyBuf []byte
+	// keyDepth is how deep appendIdenticalKey has recursed.
+	keyDepth int
 	// nsPairs is the scratch list literalElemInstr.Execute collects an
 	// element's namespace bindings in.
 	nsPairs []string

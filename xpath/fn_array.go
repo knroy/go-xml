@@ -70,7 +70,8 @@ func registerArrayFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return xdm.One(xdm.NewArray(append(a.Members(), seqArg(args, 1))...)), nil
+		members := a.AppendMembers(make([]xdm.Sequence, 0, a.Len()+1))
+		return xdm.One(xdm.NewArray(append(members, seqArg(args, 1))...)), nil
 	})
 
 	// array:subarray($array, $start as xs:integer[, $length as xs:integer])
@@ -161,11 +162,11 @@ func registerArrayFuncs(l *Library) {
 				"array:insert-before: position %d is outside the array's bounds (1 to %d)",
 				i, a.Len()+1)
 		}
-		old := a.Members()
-		members := make([]xdm.Sequence, 0, len(old)+1)
-		members = append(members, old[:i-1]...)
-		members = append(members, seqArg(args, 2))
-		members = append(members, old[i-1:]...)
+		members := make([]xdm.Sequence, 0, a.Len()+1)
+		members = a.AppendMembers(members)
+		members = append(members, nil)
+		copy(members[i:], members[i-1:])
+		members[i-1] = seqArg(args, 2)
 		return xdm.One(xdm.NewArray(members...)), nil
 	})
 
@@ -216,7 +217,7 @@ func registerArrayFuncs(l *Library) {
 				return nil, xdm.ErrType(
 					"array:join: expected an array, got %s", it.TypeName())
 			}
-			members = append(members, a.Members()...)
+			members = a.AppendMembers(members)
 		}
 		return xdm.One(xdm.NewArray(members...)), nil
 	})
