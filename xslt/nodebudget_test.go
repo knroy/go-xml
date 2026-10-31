@@ -341,3 +341,21 @@ func TestGroupByKeysAreChargedToTheItemBudget(t *testing.T) {
 		`<xsl:template match="/"><xsl:for-each-group select="//i" group-by="1 to 1000">`+
 			`<xsl:sequence select="count(current-group())"/></xsl:for-each-group></xsl:template>`))
 }
+
+// internBindings is called for every literal element while compiling, and a
+// hit must not allocate: building the key in a strings.Builder cost one
+// allocation per call and raised CEN's compile allocation by 12-14%.
+func TestInternBindingsHitDoesNotAllocate(t *testing.T) {
+	setSharedNS(map[*xdm.Node]map[string]string{})
+	defer setSharedNS(nil)
+	bs := []nsBinding{{prefix: "svrl", uri: "http://purl.oclc.org/dsdl/svrl"}, {prefix: "xs", uri: xdm.NSXS}}
+	first := internBindings(bs)
+	same := append([]nsBinding(nil), bs...)
+	if n := testing.AllocsPerRun(100, func() {
+		if got := internBindings(same); &got[0] != &first[0] {
+			t.Fatal("equal bindings were not interned to one list")
+		}
+	}); n != 0 {
+		t.Errorf("an interning hit allocates %v times, want 0", n)
+	}
+}
