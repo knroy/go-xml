@@ -1499,19 +1499,36 @@ func (c *Context) countNodes(n int) error {
 		return nil
 	}
 	if atomic.AddInt64(c.ev().nodes, int64(n)) > MaxNodes {
-		// XPDY0130 again, and the wording says nodes so that the three
-		// refusals are not confused with one another. XPath 3.1 §2.3.1
-		// sanctions exactly this: "limitations may exist on the maximum
-		// numbers or sizes of various objects... An error must be raised if
-		// such a limitation is exceeded [err:XPDY0130]". The sentinel is
-		// added alongside so a caller can tell a refusal from a fault. See
-		// xdm.ErrResourceLimit.
-		return fmt.Errorf(
-			"XPDY0130: evaluation constructed more than %d result-tree "+
-				"nodes; the transformation is building a tree too large to "+
-				"hold: %w", MaxNodes, xdm.ErrResourceLimit)
+		return nodesRefusal()
 	}
 	return nil
+}
+
+// nodesRefusal is the XPDY0130 the node budget raises.
+func nodesRefusal() error {
+	// XPDY0130 again, and the wording says nodes so that the three
+	// refusals are not confused with one another. XPath 3.1 §2.3.1
+	// sanctions exactly this: "limitations may exist on the maximum
+	// numbers or sizes of various objects... An error must be raised if
+	// such a limitation is exceeded [err:XPDY0130]". The sentinel is
+	// added alongside so a caller can tell a refusal from a fault. See
+	// xdm.ErrResourceLimit.
+	return fmt.Errorf(
+		"XPDY0130: evaluation constructed more than %d result-tree "+
+			"nodes; the transformation is building a tree too large to "+
+			"hold: %w", MaxNodes, xdm.ErrResourceLimit)
+}
+
+// NodesRefused reports the node-budget refusal if any charge has already
+// crossed MaxNodes, and charges nothing. A host calls it where a transform
+// finishes: the builders latch a refusal per builder, so a built-in rule or a
+// temporary tree that crossed the bound would otherwise end as truncated
+// output with no error.
+func (c *Context) NodesRefused() error {
+	if c == nil || c.ev().nodes == nil || atomic.LoadInt64(c.ev().nodes) <= MaxNodes {
+		return nil
+	}
+	return nodesRefusal()
 }
 
 // ChargeNodes charges n constructed result-tree nodes against the evaluation

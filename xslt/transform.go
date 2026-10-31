@@ -748,6 +748,14 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		}
 	}
 
+	// A budget refusal is latched by the builder that met it and is only
+	// reported by execSequenceBody's loop. The built-in rules, and any
+	// temporary tree, write through a builder nobody polls, so output cut
+	// short at the bound would otherwise be returned as a success. The budget
+	// counter is the transform's, so it sees the overrun wherever it happened.
+	if err := rt.ctx.NodesRefused(); err != nil {
+		return nil, err
+	}
 	nodes := out.Sequence()
 	if haveRaw {
 		nodes = rawResult

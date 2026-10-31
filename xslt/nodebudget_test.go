@@ -269,3 +269,28 @@ func TestRepeatedCopyOfIsRefused(t *testing.T) {
 	_, err = st.Transform(context.Background(), doc.Root, TransformOptions{})
 	wantNodeRefusal(t, err)
 }
+
+// The built-in shallow-copy rule writes through a builder whose latched
+// refusal only execSequenceBody polls, so a mode with nothing but
+// on-no-match="shallow-copy" used to stop building at the bound and return the
+// rest as empty elements, exiting 0. 700,000 <a x="1">t</a> is 2.1 million
+// nodes, over MaxNodes.
+func TestBuiltInRuleResultTreeOverrunIsRefused(t *testing.T) {
+	sd, err := xdm.ParseString(`<xsl:stylesheet version="3.0" `+
+		`xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`+
+		`<xsl:mode on-no-match="shallow-copy"/></xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := Compile(sd.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := xdm.ParseString("<d>"+strings.Repeat(`<a x="1">t</a>`, 700000)+"</d>",
+		xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.Transform(context.Background(), doc.Root, TransformOptions{})
+	wantNodeRefusal(t, err)
+}
