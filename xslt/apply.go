@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -774,10 +775,10 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		case err != nil:
 			return nil, err
 		default:
-			if hit, ok := rt.funcResults[k]; ok {
+			if hit, ok := rt.funcResults[string(k)]; ok {
 				return hit, nil
 			}
-			cacheKey = k
+			cacheKey = string(k)
 		}
 	}
 
@@ -877,43 +878,62 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 //
 // Any other item -- an Opaque, which never reaches a stylesheet function --
 // is errNotCacheable.
-func (rt *runtime) functionCallKey(f *userFunction, args []xdm.Sequence) (string, error) {
-	var b strings.Builder
-	b.WriteString(f.name.Clark())
+func (rt *runtime) functionCallKey(f *userFunction, args []xdm.Sequence) ([]byte, error) {
+	// The key is built in a buffer the transform reuses; the caller copies it
+	// to a string only to store it.
+	b := rt.keyBuf[:0]
+	if f.name.URI != "" { // f.name.Clark(), without building it
+		b = append(b, '{')
+		b = append(b, f.name.URI...)
+		b = append(b, '}')
+	}
+	b = append(b, f.name.Local...)
 	for _, a := range args {
-		b.WriteByte(0x1d)
-		if err := rt.writeIdenticalKey(&b, a); err != nil {
-			return "", err
+		b = append(b, 0x1d)
+		var err error
+		if b, err = rt.appendIdenticalKey(b, a); err != nil {
+			return nil, err
 		}
 	}
-	return b.String(), nil
+	rt.keyBuf = b
+	return b, nil
 }
 
-// writeIdenticalKey appends the key of one sequence to b. Every atomic key is
+// appendIdenticalKey appends the key of one sequence to b. Every atomic key is
 // length-prefixed, so a string holding a delimiter cannot pass for structure.
-func (rt *runtime) writeIdenticalKey(b *strings.Builder, s xdm.Sequence) error {
+func (rt *runtime) appendIdenticalKey(b []byte, s xdm.Sequence) ([]byte, error) {
+	var err error
 	for _, it := range s {
-		b.WriteByte(0x1e)
+		b = append(b, 0x1e)
 		switch it := it.(type) {
 		case *xdm.Atomic:
 			k, err := xpath.GroupingKey(it, nil, rt.ctx.Env().ImplicitTimezone)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			fmt.Fprintf(b, "a%d/%s/%d:%s", it.Type, it.Derived(), len(k), k)
+			b = append(b, 'a')
+			b = strconv.AppendInt(b, int64(it.Type), 10)
+			b = append(b, '/')
+			b = append(b, it.Derived()...)
+			b = append(b, '/')
+			b = strconv.AppendInt(b, int64(len(k)), 10)
+			b = append(b, ':')
+			b = append(b, k...)
 		case *xdm.Node:
-			fmt.Fprintf(b, "n%d", rt.identityNumber(it.Identity()))
+			b = append(b, 'n')
+			b = strconv.AppendInt(b, int64(rt.identityNumber(it.Identity())), 10)
 		case *xdm.FunctionItem:
-			fmt.Fprintf(b, "f%d", rt.identityNumber(it))
+			b = append(b, 'f')
+			b = strconv.AppendInt(b, int64(rt.identityNumber(it)), 10)
 		case *xdm.ArrayItem:
-			b.WriteByte('[')
+			b = append(b, '[')
 			for _, m := range it.Members() {
-				b.WriteByte(0x1f)
-				if err := rt.writeIdenticalKey(b, m); err != nil {
-					return err
+				b = append(b, 0x1f)
+				if b, err = rt.appendIdenticalKey(b, m); err != nil {
+					return nil, err
 				}
 			}
-			b.WriteByte(']')
+			b = append(b, ']')
 		case *xdm.MapItem:
 			// Entries are keyed in "same key" order, not insertion order,
 			// which identity does not depend on.
@@ -928,23 +948,25 @@ func (rt *runtime) writeIdenticalKey(b *strings.Builder, s xdm.Sequence) error {
 				return err
 			})
 			if err != nil {
-				return err
+				return nil, err
 			}
 			sort.Slice(es, func(i, j int) bool { return es[i].key < es[j].key })
-			b.WriteByte('{')
+			b = append(b, '{')
 			for _, e := range es {
-				fmt.Fprintf(b, "%d:%s", len(e.key), e.key)
-				if err := rt.writeIdenticalKey(b, e.val); err != nil {
-					return err
+				b = strconv.AppendInt(b, int64(len(e.key)), 10)
+				b = append(b, ':')
+				b = append(b, e.key...)
+				if b, err = rt.appendIdenticalKey(b, e.val); err != nil {
+					return nil, err
 				}
-				b.WriteByte(0x1f)
+				b = append(b, 0x1f)
 			}
-			b.WriteByte('}')
+			b = append(b, '}')
 		default:
-			return errNotCacheable
+			return nil, errNotCacheable
 		}
 	}
-	return nil
+	return b, nil
 }
 
 // identityNumber numbers an item that is keyed by identity. The table holds

@@ -169,6 +169,8 @@ type transformState struct {
 	// itemIDs numbers the nodes and function items functionCallKey keys by
 	// identity; see identityNumber.
 	itemIDs map[any]int
+	// keyBuf is the scratch buffer functionCallKey builds keys in.
+	keyBuf []byte
 
 	// keyIndex caches xsl:key lookups per document. Building an index is a
 	// full document scan, so it is done once per (key, document) pair on
