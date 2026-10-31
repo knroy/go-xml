@@ -372,9 +372,7 @@ func (sr *SecondaryResult) Serialize(w io.Writer, charMap map[rune]string) error
 // Serialize for anything whose failure you need to see; it takes a character
 // map because a secondary document carries its own.
 func (sr *SecondaryResult) String() string {
-	var sb strings.Builder
-	_ = sr.Serialize(&sb, nil)
-	return sb.String()
+	return serializeString(sr.Nodes, sr.Output, sr.charMap)
 }
 
 // destination resolves @href to the absolute URI this document is written to.

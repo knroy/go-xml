@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
@@ -77,13 +78,20 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 	case *bytes.Buffer, *strings.Builder, *bufio.Writer:
 		return serializeTo(w.(stringWriter), seq, opts, charMap)
 	}
-	bw := bufio.NewWriterSize(w, 32<<10)
+	bw := writerPool.Get().(*bufio.Writer)
+	bw.Reset(w)
 	err := serializeTo(bw, seq, opts, charMap)
 	if ferr := bw.Flush(); err == nil {
 		err = ferr
 	}
+	bw.Reset(nil)
+	writerPool.Put(bw)
 	return err
 }
+
+// writerPool holds serialize's write buffers: one is 32 KiB, which on a small
+// result was most of what serializing it cost.
+var writerPool = sync.Pool{New: func() any { return bufio.NewWriterSize(nil, 32<<10) }}
 
 // stringWriter is what serialize writes to: each of its writers has
 // WriteString, which the serializer calls directly rather than through
@@ -180,10 +188,11 @@ func serializeTo(w stringWriter, seq xdm.Sequence, opts OutputSettings, charMap 
 
 	switch strings.ToLower(opts.Method) {
 	case "json":
-		out, err := xpath.SerializeJSON(seq, jsonParams(opts, charMap))
-		if err != nil {
-			return err
+		if s.err != nil {
+			return s.err
 		}
+		// The document is written as it is rendered rather than built as a
+		// string first, which held several copies of the output at once.
 		// Unicode normalisation has already been applied, inside each JSON
 		// string, by the code that applies the character map there. It has to
 		// happen at that depth rather than to the finished document: a
@@ -194,14 +203,8 @@ func serializeTo(w stringWriter, seq xdm.Sequence, opts OutputSettings, charMap 
 		// for the decomposed spelling back. The structural characters
 		// between the strings -- braces, commas, digits -- are ASCII, which
 		// no normalisation form touches.
-		s.writeString(out)
-		return s.err
+		return xpath.SerializeJSONTo(s.w, seq, jsonParams(opts, charMap))
 	case "adaptive":
-		out, err := xpath.SerializeAdaptive(seq, jsonParams(opts, charMap))
-		if err != nil {
-			return err
-		}
-		out = s.normalized(out)
 		// The adaptive method renders a node by handing it to the XML output
 		// method (Serialization 3.1 §10), so the XML declaration is part of
 		// what it produces and omit-xml-declaration is a parameter it
@@ -213,22 +216,23 @@ func serializeTo(w stringWriter, seq xdm.Sequence, opts OutputSettings, charMap 
 		// "^<\?xml[^<]+><test>AAA</test>$" - the declaration once, ahead of
 		// the whole result rather than ahead of each item, which is why it
 		// is written here and not inside SerializeAdaptive.
-		if !opts.OmitXMLDecl {
-			enc := opts.Encoding
-			if enc == "" {
-				enc = "UTF-8"
+		if s.normalize == nil {
+			// Streamed, as json above. With normalisation the string is
+			// kept: norm's streaming Writer panics on a long run of
+			// combining marks split across writes, so the whole output is
+			// normalised at once instead.
+			s.writeAdaptiveDecl()
+			if s.err != nil {
+				return s.err
 			}
-			decl := `<?xml version="` + xmlDeclVersion(opts) + `" encoding="` + enc + `"`
-			if opts.Standalone != "" {
-				decl += ` standalone="` + opts.Standalone + `"`
-			}
-			if opts.Indent {
-				s.writeString(decl + "?>\n")
-			} else {
-				s.writeString(decl + "?>")
-			}
+			return xpath.SerializeAdaptiveTo(s.w, seq, jsonParams(opts, charMap))
 		}
-		s.writeString(out)
+		out, err := xpath.SerializeAdaptive(seq, jsonParams(opts, charMap))
+		if err != nil {
+			return err
+		}
+		s.writeAdaptiveDecl()
+		s.writeString(s.normalized(out))
 		return s.err
 	}
 
@@ -313,6 +317,19 @@ func serializeTo(w stringWriter, seq xdm.Sequence, opts OutputSettings, charMap 
 							"namespace node cannot be serialised on its own")
 					}
 					return s.err
+				}
+				// Without normalisation the string value is written one
+				// text descendant at a time rather than concatenated first,
+				// which held a copy of the whole output. Normalisation keeps
+				// the concatenation: a combining mark at the start of one
+				// text node composes with the character ending the last.
+				if s.normalize == nil && (v.Kind() == xdm.KindDocument || v.Kind() == xdm.KindElement) {
+					for d := range v.Descendants() {
+						if d.Kind() == xdm.KindText {
+							s.writeString(s.mapChars(d.Value()))
+						}
+					}
+					continue
 				}
 				s.writeString(s.normalized(s.mapChars(v.StringValue())))
 			case *xdm.Atomic:
@@ -496,6 +513,8 @@ type serializer struct {
 	// its single segment. Both callers finish with the slice before asking
 	// again.
 	oneSeg [1]mapSegment
+	// segBuf backs mapSegments' answer when there is one, on the same terms.
+	segBuf []mapSegment
 	// encFrom and encLower cache opts.Encoding lower-cased: representable
 	// asks for it on every non-ASCII character, and lower-casing "UTF-8"
 	// allocated each time. encFrom is the spelling the cache was made from.
@@ -503,6 +522,27 @@ type serializer struct {
 	// scratch holds a character reference or an encoded character on its way
 	// to w, so that writing one allocates nothing.
 	scratch [16]byte
+}
+
+// writeAdaptiveDecl writes the XML declaration the adaptive method begins
+// with, unless it is omitted.
+func (s *serializer) writeAdaptiveDecl() {
+	opts := s.opts
+	if !opts.OmitXMLDecl {
+		enc := opts.Encoding
+		if enc == "" {
+			enc = "UTF-8"
+		}
+		decl := `<?xml version="` + xmlDeclVersion(opts) + `" encoding="` + enc + `"`
+		if opts.Standalone != "" {
+			decl += ` standalone="` + opts.Standalone + `"`
+		}
+		if opts.Indent {
+			s.writeString(decl + "?>\n")
+		} else {
+			s.writeString(decl + "?>")
+		}
+	}
 }
 
 func (s *serializer) writeString(str string) {
@@ -711,7 +751,9 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 			return
 		}
 		s.indent(depth)
-		s.writeString("<!--" + n.Value() + "-->")
+		s.writeString("<!--")
+		s.writeString(n.Value())
+		s.writeString("-->")
 
 	case xdm.KindPI:
 		if err := s.validatePI(n.Name().Local, n.Value()); err != nil {
@@ -730,9 +772,11 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 			return
 		}
 		s.indent(depth)
-		s.writeString("<?" + n.Name().Local)
+		s.writeString("<?")
+		s.writeString(n.Name().Local)
 		if n.Value() != "" {
-			s.writeString(" " + n.Value())
+			s.writeString(" ")
+			s.writeString(n.Value())
 		}
 		// The html method closes a processing instruction with ">" alone,
 		// which is the same rule the SERE0015 check above is written for: if
@@ -1668,30 +1712,36 @@ func (s *serializer) writeCData(text string) {
 	// character the encoding cannot hold — NFD splits "\u00e7" into "c" and a
 	// combining cedilla, and US-ASCII output must then break the section
 	// around the cedilla rather than write it raw.
+	//
+	// The section is written to w in runs, as escapeText writes text: the
+	// function has no error path, so nothing is gained by building it first.
 	text = s.normalized(text)
-	var sb strings.Builder
-	sb.WriteString("<![CDATA[")
+	s.writeString("<![CDATA[")
+	run := 0
 	for i := 0; i < len(text); {
 		if strings.HasPrefix(text[i:], "]]>") {
 			// The section ends at the first "]]>", which the text may itself
 			// contain — so it is split there and the ">" begins a new one.
-			sb.WriteString("]]]]><![CDATA[>")
+			s.writeString(text[run:i])
+			s.writeString("]]]]><![CDATA[>")
 			i += 3
+			run = i
 			continue
 		}
 		r, size := utf8.DecodeRuneInString(text[i:])
 		if !s.representable(r) {
-			sb.WriteString("]]>")
-			fmt.Fprintf(&sb, "&#%d;", r)
-			sb.WriteString("<![CDATA[")
+			s.writeString(text[run:i])
+			s.writeString("]]>")
+			s.writeCharRef(r)
+			s.writeString("<![CDATA[")
 			i += size
+			run = i
 			continue
 		}
-		sb.WriteString(text[i : i+size])
 		i += size
 	}
-	sb.WriteString("]]>")
-	s.writeString(sb.String())
+	s.writeString(text[run:])
+	s.writeString("]]>")
 }
 
 // representable reports whether the declared encoding can hold this
@@ -1785,7 +1835,10 @@ func (s *serializer) mapSegments(text string) []mapSegment {
 		s.oneSeg[0] = mapSegment{text: s.normalized(text)}
 		return s.oneSeg[:]
 	}
-	var segs []mapSegment
+	// The slice is the serializer's own, reused for the same reason as
+	// oneSeg: a fresh one per text node and attribute value was the whole
+	// allocation cost of serialising with a character map.
+	segs := s.segBuf[:0]
 	run := 0
 	for i, r := range text {
 		repl, ok := s.charMap[r]
@@ -1799,7 +1852,9 @@ func (s *serializer) mapSegments(text string) []mapSegment {
 		})
 		run = i + utf8.RuneLen(r)
 	}
-	return append(segs, mapSegment{text: s.normalized(text[run:])})
+	segs = append(segs, mapSegment{text: s.normalized(text[run:])})
+	s.segBuf = segs
+	return segs
 }
 
 // mapSegment is one unmapped run of text and, where the run ended at a
