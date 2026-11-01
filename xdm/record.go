@@ -1673,9 +1673,18 @@ type textStore struct {
 	blocks [][]byte
 	cur    int32 // the ordinary block values are appended to, + 1 (0: none)
 	size   int32 // capacity of the last ordinary block made
+	// aux holds what few trees use, behind one pointer so that the store
+	// stays the size it was.
+	aux *textAux
+}
+
+type textAux struct {
 	// shared maps a string registered by share to where it is stored, so that
 	// add hands the same range to every value that is that string.
 	shared map[sharedKey][2]uint32
+	// ws shares one stored value among the whitespace-only values add is
+	// given, as a parse does.
+	ws spaceTable
 }
 
 // sharedKey identifies a string by where it lives: the same storage is the
@@ -1711,8 +1720,16 @@ func (s *textStore) add(v string) (uint32, uint32) {
 	if v == "" {
 		return 0, 0
 	}
-	if s.shared != nil && len(v) >= shareMin {
-		if r, ok := s.shared[sharedKey{unsafe.StringData(v), len(v)}]; ok {
+	if len(v) <= maxSpaceLen {
+		if b := unsafe.Slice(unsafe.StringData(v), len(v)); onlySpace(b) {
+			if s.aux == nil {
+				s.aux = new(textAux)
+			}
+			return s.aux.ws.text(s, b)
+		}
+	}
+	if s.aux != nil && len(v) >= shareMin {
+		if r, ok := s.aux.shared[sharedKey{unsafe.StringData(v), len(v)}]; ok {
 			return r[0], r[1]
 		}
 	}
@@ -1734,13 +1751,16 @@ func (s *textStore) share(v string) {
 	if len(v) < shareMin {
 		return
 	}
-	if s.shared == nil {
-		s.shared = map[sharedKey][2]uint32{}
+	if s.aux == nil {
+		s.aux = new(textAux)
+	}
+	if s.aux.shared == nil {
+		s.aux.shared = map[sharedKey][2]uint32{}
 	}
 	k := sharedKey{unsafe.StringData(v), len(v)}
-	if _, ok := s.shared[k]; !ok {
+	if _, ok := s.aux.shared[k]; !ok {
 		off, n := s.add(v)
-		s.shared[k] = [2]uint32{off, n}
+		s.aux.shared[k] = [2]uint32{off, n}
 	}
 }
 

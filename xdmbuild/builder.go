@@ -134,6 +134,19 @@ func New(p Policy) *Builder {
 	return &Builder{policy: p, refused: new(error)}
 }
 
+// InPlaceDocument returns a builder whose content is built in place as the children
+// of a new document node, which it also returns. It saves the second copy that
+// building a sequence and wrapping it with ToDocument costs, for a caller whose
+// content cannot be an attribute or a namespace node. Should one arrive anyway
+// it raises FaultAttrOnDocument, exactly as ToDocument does, rather than
+// attaching it to the document node.
+func InPlaceDocument(p Policy) (*Builder, *xdm.Node) {
+	b := New(p)
+	t := xdm.NewTree()
+	b.open = t.Root
+	return b, t.Root
+}
+
 // AppendNode adds a node to the current output position.
 //
 // A node that already belongs to a tree is copied first. AppendChild rewrites
@@ -496,6 +509,11 @@ func (b *Builder) AddAttributeTyped(name xdm.QName, value string,
 func (b *Builder) AddAttributeWithTyping(name xdm.QName, value string,
 	typing xdm.Typing) error {
 
+	if b.open != nil && b.open.Kind() == xdm.KindDocument {
+		return b.policy.Err(FaultAttrOnDocument,
+			fmt.Sprintf("an attribute node (%s) cannot be the content of "+
+				"a document node", name.Lexical()))
+	}
 	if b.open == nil {
 		// A parentless attribute is a legal item in the data model, and a
 		// sequence constructor may produce one: xsl:function as="attribute()"
@@ -661,6 +679,11 @@ func freshPrefixOn(el *xdm.Node, want string) string {
 // add a binding to the element being built, and a namespace node appended as
 // if it were a child would silently vanish from the result.
 func (b *Builder) AddNamespace(prefix, uri string) error {
+	if b.open != nil && b.open.Kind() == xdm.KindDocument {
+		return b.policy.Err(FaultAttrOnDocument,
+			fmt.Sprintf("a namespace node (%s) cannot be the content of "+
+				"a document node", prefix))
+	}
 	if b.open == nil {
 		if !b.countNodes(1) {
 			return b.Refused()
