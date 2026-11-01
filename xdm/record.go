@@ -1685,9 +1685,9 @@ type textAux struct {
 	// ws shares one stored value among the whitespace-only values add is
 	// given, as a parse does.
 	ws spaceTable
-	// lent counts, per block of another tree's store (keyed by address, which
-	// is only a count while the block is not borrowed), the bytes addFrom was
-	// asked to copy from it, and records where a borrowed block sits here.
+	// lent holds the blocks of another tree's store that planFrom named, keyed
+	// by address (a block is pinned by this store once it is borrowed, so its
+	// address cannot be reused while its entry says where it sits here).
 	lent map[uintptr]*lendState
 	// lastKey/last cache the previous lookup; copies run in document order.
 	lastKey uintptr
@@ -1695,8 +1695,7 @@ type textAux struct {
 }
 
 type lendState struct {
-	used int32 // bytes asked for from the block so far
-	idx  int32 // index in this store of the borrowed block, + 1 (0: not borrowed)
+	idx int32 // index in this store of the borrowed block, + 1 (0: not borrowed yet)
 }
 
 // sharedKey identifies a string by where it lives: the same storage is the
@@ -1777,31 +1776,33 @@ func (s *textStore) share(v string) {
 }
 
 // addFrom stores the value at (off, n) of src, the store of another tree, as
-// add would store its string, but lets the range name src's block instead of
-// a copy of the bytes once this store has been asked for half of the block's
-// bytes: from then on every value of that block is free. A borrowed block is
-// the source's slice with its capacity clipped to its length, so nothing is
-// ever appended into it from here, and the source only appends past that
-// length; the bytes below it never change. Borrowing pins the whole block, at
-// worst twice the bytes this store asked of it, which bounds what a small
-// result can retain of a large source.
+// add would store its string, except that a block planFrom named is borrowed:
+// the range names src's block instead of a copy of the bytes. A borrowed
+// block is the source's slice with its capacity clipped to its length, so
+// nothing is ever appended into it from here, and the source only appends past
+// that length; the bytes below it never change. Borrowing pins the whole
+// block, but planFrom names only blocks the copy is about to fill by half or
+// more, so the pinned bytes are at most twice the copy's own.
 func (s *textStore) addFrom(src *textStore, off, n uint32) (uint32, uint32) {
 	if n == 0 {
 		return 0, 0
 	}
-	k := off >> textShift
-	blk := src.blocks[k]
-	// Whitespace goes through add's table; a value of a block of its own is
-	// kept by reference there already; and the store's block numbers must not
-	// run out for want of room to copy into.
-	if s == src || n >= textOwnFrom || len(s.blocks) >= 1<<(31-textShift) ||
-		n <= maxSpaceLen && onlySpace(blk[off&textMask:][:n]) {
+	if s.aux == nil || len(s.aux.lent) == 0 || s == src || n >= textOwnFrom {
 		return s.add(src.str(off, n))
 	}
-	l := s.lend(blk)
+	blk := src.blocks[off>>textShift]
+	// Whitespace goes through add's table, as it does for a parse.
+	if n <= maxSpaceLen && onlySpace(blk[off&textMask:][:n]) {
+		return s.add(src.str(off, n))
+	}
+	l := s.lend(blk, false)
+	if l == nil {
+		return s.add(src.str(off, n))
+	}
 	if l.idx == 0 {
-		l.used += int32(n)
-		if 2*int(l.used) < len(blk) {
+		// The store's block numbers must not run out for want of room to copy
+		// into, so a store this full stops borrowing.
+		if len(s.blocks) >= 1<<(31-textShift) {
 			return s.add(src.str(off, n))
 		}
 		s.newBlock(blk[:len(blk):len(blk)])
@@ -1813,11 +1814,11 @@ func (s *textStore) addFrom(src *textStore, off, n uint32) (uint32, uint32) {
 	return uint32(l.idx-1)<<textShift | off&textMask, n
 }
 
-// planFrom tells the store that the leaves of src's records [lo, hi) are about
-// to be copied in with addFrom, so that a block they fill is borrowed from the
-// first value rather than the one that crosses half of it. The count skips
-// the whitespace-only values addFrom stores through add. A subtree too small
-// for the walk to repay itself is left to addFrom's own count.
+// planFrom tells the store that the leaves of src's records [lo, hi), a deep
+// copy about to be made with addFrom, are to borrow every block they fill by
+// half or more. The count skips the whitespace-only values addFrom stores
+// through add. A subtree too small for the walk to repay itself borrows
+// nothing: a block a few values of it touch is not worth pinning.
 func (s *textStore) planFrom(t *Tree, lo, hi uint32) {
 	if hi-lo < planMin || s == &t.text {
 		return
@@ -1834,8 +1835,8 @@ func (s *textStore) planFrom(t *Tree, lo, hi uint32) {
 		}
 	}
 	for k, c := range counts {
-		if blk := t.text.blocks[k]; c > 0 && 2*int(c) >= len(blk) && len(blk) > 0 {
-			s.lend(blk).used = c
+		if blk := t.text.blocks[k]; c > 0 && 2*int(c) >= len(blk) {
+			s.lend(blk, true)
 		}
 	}
 }
@@ -1843,10 +1844,13 @@ func (s *textStore) planFrom(t *Tree, lo, hi uint32) {
 // planMin is the fewest records planFrom walks.
 const planMin = 4096
 
-// lend returns the account of the block blk of another store.
-func (s *textStore) lend(blk []byte) *lendState {
+// lend returns the account of the block blk of another store, made if create.
+func (s *textStore) lend(blk []byte, create bool) *lendState {
 	a := s.aux
 	if a == nil {
+		if !create {
+			return nil
+		}
 		a = new(textAux)
 		s.aux = a
 	}
@@ -1856,6 +1860,9 @@ func (s *textStore) lend(blk []byte) *lendState {
 	}
 	l := a.lent[key]
 	if l == nil {
+		if !create {
+			return nil
+		}
 		if a.lent == nil {
 			a.lent = map[uintptr]*lendState{}
 		}
