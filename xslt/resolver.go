@@ -86,6 +86,14 @@ type FileResolver struct {
 	// primitive.
 	MaxBytes int64
 
+	// MaxNodes bounds the nodes of one document this resolver parses, as
+	// xdm.ParseOptions.MaxNodes does: zero means xdm.DefaultMaxNodes, and a
+	// negative value no limit. Like MaxBytes, which is also the parser's byte
+	// limit, it is counted over the whole document even when a streamable
+	// xsl:source-document reads it without building it -- so raising both is
+	// what lets such a stylesheet read a document of any size.
+	MaxNodes int
+
 	// There is deliberately no network option. Adding one would mean this
 	// type could not be recommended without caveats, and a validator has no
 	// need to fetch rule sets at transform time.
@@ -702,6 +710,8 @@ func (r *FileResolver) parseOptions(path string, trackPos bool) xdm.ParseOptions
 		DocumentURI:    fileURIOf(path),
 		AllowDOCTYPE:   r.AllowDOCTYPE,
 		TrackPositions: trackPos,
+		MaxBytes:       r.MaxBytes,
+		MaxNodes:       r.MaxNodes,
 	}
 	if r.ExternalEntities {
 		opts.ExternalEntities = r

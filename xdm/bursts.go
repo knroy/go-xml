@@ -1,6 +1,10 @@
 package xdm
 
-import "io"
+import (
+	"io"
+
+	"github.com/knroy/go-xml/v2/internal/xdmclone"
+)
 
 // Burst-mode parsing: the incremental half of streamed XSLT execution.
 //
@@ -109,72 +113,38 @@ func (b *burster) discardLast(p *Node, spaces *spaceTable) {
 	p.RemoveLastChild()
 	p.tree.text.rewind(b.marks[len(b.marks)-1])
 	// The whitespace table remembers ranges in the store, and some of them
-	// were just rewound.
-	*spaces = spaceTable{}
+	// were just released. Its map is not rebuilt for the next burst.
+	*spaces = spaceTable{noMap: true}
 }
 
-// deliver copies el and its ancestry into a tree of its own and hands it to
-// fn.
+// deliver hands el to fn in a tree of its own. By now the parse's tree holds
+// nothing but the document node, any prolog comments and processing
+// instructions, the spine and el, which is exactly the burst's tree: it is
+// copied in bulk, sharing the names, frames and text the records point into.
 func (b *burster) deliver(el *Node) error {
-	src := el.tree
-	t := NewTree()
-	t.XMLVersion = "1.0"
+	m := cloneSubtree(el.tree.Root, xdmclone.Options{})
+	c := m(el)
+	c.tree.XMLVersion = "1.0"
 	if b.v11 {
-		t.XMLVersion = "1.1"
+		c.tree.XMLVersion = "1.1"
 	}
-	t.Root.SetBaseURI(src.Root.BaseURI())
-	t.Root.SetDocumentURI(src.Root.DocumentURI())
-	var chain []*Node
-	for a := el.Parent(); a != nil && a.Kind() == KindElement; a = a.Parent() {
-		chain = append(chain, a)
-	}
-	p := t.Root
-	for i := len(chain) - 1; i >= 0; i-- {
-		a := chain[i]
-		c := p.AppendShallowCopy(a)
-		for prefix, uri := range a.DeclaredNamespaces() {
-			c.AddNamespace(prefix, uri)
-		}
-		for at := range a.Attrs() {
-			c.AppendAttr(at.Name(), at.Value()).CopyTypingFrom(at)
-		}
-		p = c
-	}
-	c := p.AppendCopy(el)
-	t.Finalize()
 	return b.fn(c)
 }
 
 // textMark is a point in a textStore that rewind returns it to.
-type textMark struct {
-	blocks   int
-	cur      int32
-	size     int32
-	curLen   int
-	hasBlock bool
-}
+type textMark struct{ blocks int }
 
-func (s *textStore) mark() textMark {
-	m := textMark{blocks: len(s.blocks), cur: s.cur, size: s.size}
-	if s.cur > 0 {
-		m.curLen = len(s.blocks[s.cur-1])
-		m.hasBlock = true
-	}
-	return m
-}
+func (s *textStore) mark() textMark { return textMark{len(s.blocks)} }
 
-// rewind forgets every value stored since m. Nothing may still read one of
-// them: ParseBursts only rewinds over records it has removed, and the trees it
-// hands out copy their values (a value long enough to be aliased rather than
-// copied lives in a block of its own, which rewind releases and never
-// rewrites).
+// rewind forgets every value stored since m. A burst's tree shares the
+// blocks those values are in, so they are released rather than reused: the
+// block that was current at m is closed to further values, and the blocks
+// made since are dropped from the store -- the burst trees that read them
+// keep them alive as long as they need them.
 func (s *textStore) rewind(m textMark) {
 	for i := m.blocks; i < len(s.blocks); i++ {
 		s.blocks[i] = nil
 	}
 	s.blocks = s.blocks[:m.blocks]
-	s.cur, s.size = m.cur, m.size
-	if m.hasBlock {
-		s.blocks[s.cur-1] = s.blocks[s.cur-1][:m.curLen]
-	}
+	s.cur, s.size = 0, 0
 }

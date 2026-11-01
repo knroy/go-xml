@@ -1017,6 +1017,8 @@ func (r *textRun) flush(spaces *spaceTable, strip func(*Node) bool) {
 type spaceTable struct {
 	m     map[string][2]uint32
 	byLen [maxSpaceLen + 1][2]uint32
+	// noMap keeps m unmade: ParseBursts empties the table at every burst.
+	noMap bool
 }
 
 const (
@@ -1038,7 +1040,7 @@ func (t *spaceTable) text(s *textStore, b []byte) (uint32, uint32) {
 	off, n := s.addBytes(b, 0)
 	r := [2]uint32{off, n}
 	t.byLen[len(b)] = r
-	if len(t.m) < maxSpaceTable {
+	if len(t.m) < maxSpaceTable && !t.noMap {
 		if t.m == nil {
 			t.m = map[string][2]uint32{}
 		}

@@ -50,6 +50,9 @@ type burstPlan struct {
 	target *xdm.Node
 	instr  Instruction
 	sel    *xpath.Compiled
+	// filtered says the last step has predicates. Without them each burst's
+	// element is the item, and sel need not be evaluated.
+	filtered bool
 }
 
 // burstFeed is a burst plan being executed: the loop instruction it drives,
@@ -108,11 +111,11 @@ func planBursts(sd *xdm.Node) *burstPlan {
 			return nil
 		}
 	}
-	path := burstPath(target)
+	path, filtered := burstPath(target)
 	if path == nil || !burstBody(target) {
 		return nil
 	}
-	return &burstPlan{path: path, target: target}
+	return &burstPlan{path: path, target: target, filtered: filtered}
 }
 
 // onlyElementChild is el's one element child, when el has exactly one and
@@ -169,7 +172,7 @@ func lreAttrOK(a *xdm.Node) bool {
 // steps from the document node, or nil. Only the last step may have
 // predicates, and they must not depend on position: a burst's element is
 // the first and only one of its name in its tree.
-func burstPath(target *xdm.Node) []xdm.QName {
+func burstPath(target *xdm.Node) (path []xdm.QName, filtered bool) {
 	e := parseAt(target, target.AttrValue("select"))
 	var steps []xpath.Expr
 	switch x := e.(type) {
@@ -178,29 +181,29 @@ func burstPath(target *xdm.Node) []xdm.QName {
 	case *xpath.Step:
 		steps = []xpath.Expr{x}
 	default:
-		return nil
+		return nil, false
 	}
-	var path []xdm.QName
 	for k, s := range steps {
 		st, ok := s.(*xpath.Step)
 		if !ok || st.Axis != xpath.AxisChild {
-			return nil
+			return nil, false
 		}
 		nt, ok := st.Test.(*xpath.NameTest)
 		if !ok || nt.AnyURI || nt.AnyLocal {
-			return nil
+			return nil, false
 		}
 		if len(st.Predicates) > 0 && k < len(steps)-1 {
-			return nil
+			return nil, false
 		}
 		for _, p := range st.Predicates {
 			if !booleanShaped(p) || !burstSafe(p, true) {
-				return nil
+				return nil, false
 			}
 		}
+		filtered = len(st.Predicates) > 0
 		path = append(path, xdm.QName{URI: nt.Name.URI, Local: nt.Name.Local})
 	}
-	return path
+	return path, filtered
 }
 
 // parseAt parses src as an expression written on el, or returns nil.
@@ -651,7 +654,14 @@ func (i *sourceDocumentInstr) executeBursts(rt *runtime, out *outputBuilder, hre
 		err := br.parseBursts(rt.ctx, href, base, plan.path, func(rec *xdm.Node) error {
 			root := rec.Tree().Root
 			if strip != nil {
-				root = strip.stripWhitespaceFor(pkg, root)
+				root, rec = strip.stripWhitespaceForFrom(pkg, root, rec)
+			}
+			if !plan.filtered {
+				if err := each(rec); err != nil {
+					bodyErr = err
+					return err
+				}
+				return nil
 			}
 			items, err := plan.sel.Eval(sub.withCurrent(root, 1, 1).ctx)
 			if err != nil {
