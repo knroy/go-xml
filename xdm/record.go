@@ -7,8 +7,8 @@ import (
 	"math"
 	"math/bits"
 	"slices"
-	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -1377,6 +1377,9 @@ type scopeSlot struct {
 	frame, index, owner uint32 // owner: the element declaring it
 }
 
+// undeclared marks a scopeSlot built from an undeclaring declaration.
+const undeclared = xmlBinding - 1
+
 // scopeSlots returns n's in-scope bindings ordered by prefix.
 func (n *Node) scopeSlots() []scopeSlot {
 	var chain []*Node
@@ -1385,22 +1388,32 @@ func (n *Node) scopeSlots() []scopeSlot {
 			chain = append(chain, cur)
 		}
 	}
-	m := map[string]scopeSlot{"xml": {"xml", 0, xmlBinding, noIdx}}
+	// Every declaration, outermost first, then one stable sort by prefix: the
+	// last of a run of equal prefixes is the one in force, and an undeclaring
+	// one (marked by index undeclared) removes the prefix. No map, no
+	// reflection-built swapper.
+	all := make([]scopeSlot, 1, 8)
+	all[0] = scopeSlot{"xml", 0, xmlBinding, noIdx}
 	for i := len(chain) - 1; i >= 0; i-- {
 		f := chain[i].v0
 		for j, b := range chain[i].frame() {
 			if b.uri == "" {
-				delete(m, b.prefix)
+				all = append(all, scopeSlot{b.prefix, f, undeclared, noIdx})
 			} else {
-				m[b.prefix] = scopeSlot{b.prefix, f, uint32(j), chain[i].self}
+				all = append(all, scopeSlot{b.prefix, f, uint32(j), chain[i].self})
 			}
 		}
 	}
-	out := make([]scopeSlot, 0, len(m))
-	for _, s := range m {
-		out = append(out, s)
+	slices.SortStableFunc(all, func(a, b scopeSlot) int { return strings.Compare(a.prefix, b.prefix) })
+	out := all[:0]
+	for i, s := range all {
+		if i+1 < len(all) && all[i+1].prefix == s.prefix {
+			continue
+		}
+		if s.index != undeclared {
+			out = append(out, s)
+		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].prefix < out[j].prefix })
 	return out
 }
 
