@@ -11,8 +11,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
+	"runtime/metrics"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -51,12 +54,51 @@ func main() {
 // never in the library, whose callers own their process's GC policy.
 const cliGCPercent = 200
 
+// cliGCBigHeap is the live heap, in bytes, past which the command drops to
+// GOGC=100. At 200 the heap may reach three times what is live, and past this
+// size that is what costs: peak RSS on DocBook table-cals.049 was 1,160 MB at
+// 200 and 789 MB at 100, and on a 100 MB identity transform 1,840-1,956 MB
+// against 1,360-1,400, for the same wall time and 5-10% more CPU. Below it a
+// small heap is cheap to hold and the extra CPU is what 200 saves. The size of
+// the input is no guide -- DocBook's is small -- so it is the live heap that
+// is read.
+const cliGCBigHeap = 128 << 20
+
 // lowerGC applies cliGCPercent unless GOGC is set, so a user who tunes the
-// collector keeps their setting.
+// collector keeps their setting, and watches the live heap to relax it.
 func lowerGC() {
 	if os.Getenv("GOGC") == "" {
 		debug.SetGCPercent(cliGCPercent)
+		watchLiveHeap.Do(armGCSentinel)
 	}
+}
+
+var watchLiveHeap sync.Once
+
+type gcSentinel struct{ _ [16]byte }
+
+// armGCSentinel runs relaxGC after each collection until it has acted. A
+// finalizer on an unreachable object runs once the cycle that found it has
+// marked, so the live-heap metric it reads is that cycle's.
+func armGCSentinel() {
+	runtime.SetFinalizer(new(gcSentinel), func(*gcSentinel) {
+		s := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
+		metrics.Read(s)
+		if s[0].Value.Kind() == metrics.KindUint64 && relaxGC(s[0].Value.Uint64()) {
+			return
+		}
+		armGCSentinel()
+	})
+}
+
+// relaxGC drops to GOGC=100 when live bytes are past cliGCBigHeap, and
+// reports whether it did.
+func relaxGC(live uint64) bool {
+	if live <= cliGCBigHeap {
+		return false
+	}
+	debug.SetGCPercent(100)
+	return true
 }
 
 // paramFlag collects repeated -p name=value flags.

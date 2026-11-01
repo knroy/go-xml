@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1198,15 +1198,12 @@ func (s *serializer) ownNamespaceDecl(n *xdm.Node, base int, prefix, uri string)
 // otherwise the union is sorted by prefix, which is the order a literal
 // result element copies its bindings in.
 func rootNamespaces(n *xdm.Node) []nsPair {
-	scope := n.InScopeNamespaces()
-	own := make(map[string]bool, n.NumNamespaceDecls())
-	for prefix := range n.DeclaredNamespaces() {
-		own[prefix] = true
-	}
-	var out []nsPair
-	for p, uri := range scope {
-		if p != "xml" && !own[p] {
-			out = append(out, nsPair{p, uri})
+	var arr [32]nsBinding
+	scope := scopeBindings(n, arr[:0])
+	out := make([]nsPair, 0, len(scope)+n.NumNamespaceDecls())
+	for _, b := range scope {
+		if !declares(n, b.prefix) {
+			out = append(out, nsPair{b.prefix, b.uri})
 		}
 	}
 	inherited := len(out)
@@ -1214,8 +1211,8 @@ func rootNamespaces(n *xdm.Node) []nsPair {
 		out = append(out, nsPair{prefix, uri})
 	}
 	if inherited > 0 {
-		sort.SliceStable(out, func(i, j int) bool {
-			return out[i].prefix < out[j].prefix
+		slices.SortStableFunc(out, func(a, b nsPair) int {
+			return strings.Compare(a.prefix, b.prefix)
 		})
 	}
 	return out

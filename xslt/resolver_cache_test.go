@@ -218,3 +218,32 @@ func TestResolverCacheIsBoundedByBytes(t *testing.T) {
 		t.Errorf("only %d documents retained; the bound evicted far more than it needed", len(res.cache))
 	}
 }
+
+// An entry that does not fit beside the cache's contents is not admitted, and
+// nothing is evicted for it: four 9 MB files against the 32 MB bound keep the
+// three that fit, rather than evicting one at random for each arrival.
+func TestResolverCacheDoesNotEvictToAdmitAnEntryThatDoesNotFit(t *testing.T) {
+	tree, err := xdm.ParseString("<r/>", xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &FileResolver{}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range []string{"a", "b", "c", "d"} {
+		r.publish(p, tree, 9<<20)
+	}
+	for _, p := range []string{"a", "b", "c"} {
+		if _, ok := r.cache[p]; !ok {
+			t.Errorf("%s was evicted to make room for d", p)
+		}
+	}
+	if _, ok := r.cache["d"]; ok {
+		t.Error("d was admitted although 36 MB does not fit in 32 MB")
+	}
+	// A document over the bound alone is still admitted, alone.
+	r.publish("big", tree, resolverCacheMaxBytes+1)
+	if _, ok := r.cache["big"]; !ok || len(r.cache) != 1 {
+		t.Errorf("oversize entry: cache holds %d entries, want only big", len(r.cache))
+	}
+}

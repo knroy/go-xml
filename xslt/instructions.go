@@ -220,6 +220,12 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// destinations that keep a bare sequence — a variable
 				// declared as="document-node()*", a function body — must see
 				// the wrapper itself.
+				// Charged before the copy is made, as the node branch below
+				// does; copy-of of a 100 MB document copied 5.7M nodes
+				// uncharged while shallow-copy of it was refused.
+				if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
+					return err
+				}
 				c := copyDocumentNode(v)
 				if i.noNamespaces {
 					// §11.9.2's namespace rules are about the elements being
@@ -525,21 +531,11 @@ func copyDocumentNode(n *xdm.Node) *xdm.Node {
 // Declarations the element already carries are left alone: they are the
 // nearest ones, and an inherited binding for the same prefix is masked.
 func inheritNamespaces(dst, src *xdm.Node) {
-	have := map[string]bool{}
-	for prefix := range dst.DeclaredNamespaces() {
-		have[prefix] = true
-	}
-	scope := src.InScopeNamespaces()
-	prefixes := make([]string, 0, len(scope))
-	for p := range scope {
-		prefixes = append(prefixes, p)
-	}
-	sort.Strings(prefixes)
-	for _, p := range prefixes {
-		if p == "xml" || have[p] {
-			continue
+	var arr [32]nsBinding
+	for _, b := range scopeBindings(src, arr[:0]) {
+		if !declares(dst, b.prefix) {
+			dst.AddNamespace(b.prefix, b.uri)
 		}
-		dst.AddNamespace(p, scope[p])
 	}
 }
 
