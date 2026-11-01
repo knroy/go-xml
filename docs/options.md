@@ -688,6 +688,7 @@ functions or `WithEnv`):
 | `RegexVersion`, `LibraryVersion` | `Version` | Raise the regular-expression dialect and the function library above the expression's version, without admitting new syntax. |
 | `MaxDepth` | `int` | Recursion bound. Zero is `xpath.MaxDepth` (500). |
 | `MaxItems` | `int` | Items an evaluation may materialise. Zero is `xpath.MaxItems` (5,000,000); negative is no bound; a nested evaluation adopts the caller's bound and cannot raise it. |
+| `MaxDigits` | `int` | Digits of an `xs:integer` or `xs:decimal` a cast or arithmetic may produce. Zero is `xpath.MaxDigits` (10^6), `FOCA0003` or `FOAR0002` past it; negative is no bound. |
 | `QualifyVar`, `MissingVar` | funcs | Host hooks for variable references (XSLT packages, XQuery cycles). |
 | `MapDuplicateCode` | `string` | Error code for a duplicate key in a map constructor; `XQDY0137` by default. |
 
