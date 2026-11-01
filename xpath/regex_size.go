@@ -58,3 +58,14 @@ func progSize(re *syntax.Regexp, memo map[*syntax.Regexp]int) int {
 	memo[re] = n
 	return n
 }
+
+// maxCachedProgram is the largest program, in estimated RE2 instructions, that
+// the regex cache will retain.
+const maxCachedProgram = 4096
+
+// cachedProgramTooBig reports whether re is too large to cache. It re-parses
+// the compiled source, which is cheap beside the compile that just ran.
+func cachedProgramTooBig(re *regexp.Regexp) bool {
+	p, err := syntax.Parse(re.String(), syntax.Perl)
+	return err == nil && progSize(p.Simplify(), map[*syntax.Regexp]int{}) > maxCachedProgram
+}

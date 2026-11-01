@@ -312,6 +312,13 @@ func storeRegex(key string, v any) {
 	if len(key) > maxCachedKey {
 		return
 	}
+	// A pattern under the key limit can still compile to megabytes (85 copies
+	// of \p{L}{1000} is about 1 KB and retains 3.95 MB), so a large program is
+	// not kept either. The largest real pattern in the corpora is about 2,593
+	// instructions.
+	if re, ok := v.(*regexp.Regexp); ok && cachedProgramTooBig(re) {
+		return
+	}
 	regexCache.Put(key, v)
 }
 
