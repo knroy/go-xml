@@ -43,6 +43,9 @@ func TestScopeSlotsOrderAndAllocs(t *testing.T) {
 		}
 	}
 	walk(tr.Root)
+	if raceEnabled {
+		return // the race detector's instrumentation changes allocation counts
+	}
 	if a := testing.AllocsPerRun(20, func() { leaf.scopeSlots() }); a > 2 {
 		t.Errorf("scopeSlots allocated %v times", a)
 	}
