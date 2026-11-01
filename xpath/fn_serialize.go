@@ -115,6 +115,12 @@ func registerSerialize(l *Library) {
 			if err := serializeItem(sb, it, opts); err != nil {
 				return nil, err
 			}
+			// A refused sink drops every later write, but the loop would
+			// still walk the rest of the items and their separators. The
+			// latched field is read directly: err() settles the reserve.
+			if sb.e != nil {
+				return nil, sb.err()
+			}
 			prevAtomic = atomic
 		}
 		if err := sb.err(); err != nil {
