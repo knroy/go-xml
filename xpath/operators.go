@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -744,6 +745,12 @@ func isOperandDuration(t xdm.TypeCode) bool {
 func compareNumeric(a, b *xdm.Atomic) int {
 	common := xdm.NumericPromote(a.Type, b.Type)
 	if common == xdm.TypeInteger || common == xdm.TypeDecimal {
+		if x, y := a.Rat().Num(), b.Rat().Num(); common == xdm.TypeInteger &&
+			x.IsInt64() && y.IsInt64() {
+			// Integers compare by numerator; Rat.Cmp multiplies the
+			// cross terms into fresh big.Ints.
+			return cmp.Compare(x.Int64(), y.Int64())
+		}
 		return a.Rat().Cmp(b.Rat())
 	}
 	af, bf := a.Float64(), b.Float64()
@@ -1153,6 +1160,17 @@ func int64Arithmetic(x, y *big.Rat, op string) (z int64, ok bool) {
 		return z, z/b == a && !(a == -1 && b == math.MinInt64) &&
 			!(b == -1 && a == math.MinInt64)
 	}
+	// mod and idiv truncate toward zero, as Go's % and / do. A zero divisor
+	// and MinInt64 idiv -1 are left to the exact path, which raises or widens.
+	if b == 0 {
+		return 0, false
+	}
+	switch op {
+	case "mod":
+		return a % b, true
+	case "idiv":
+		return a / b, !(a == math.MinInt64 && b == -1)
+	}
 	return 0, false
 }
 
@@ -1276,6 +1294,9 @@ func toNumeric(a *xdm.Atomic) (*xdm.Atomic, error) {
 func negate(a *xdm.Atomic) *xdm.Atomic {
 	switch a.Type {
 	case xdm.TypeInteger:
+		if n := a.Rat().Num(); n.IsInt64() && n.Int64() != math.MinInt64 {
+			return xdm.NewInteger(-n.Int64())
+		}
 		return xdm.NewIntegerFromRat(new(big.Rat).Neg(a.Rat()))
 	case xdm.TypeDecimal:
 		return xdm.NewDecimal(new(big.Rat).Neg(a.Rat()))
