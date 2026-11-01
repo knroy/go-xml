@@ -45,7 +45,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -424,6 +423,7 @@ func (d *Decoder) startTag() (Token, error) {
 		return nil, d.orSyntaxError("expected element name after <")
 	}
 	attrs := d.attrs[:0]
+	start := d.InputOffset()
 	for {
 		spaced := d.space()
 		b, ok := d.mustgetc()
@@ -475,11 +475,33 @@ func (d *Decoder) startTag() (Token, error) {
 			// to, go on to full blocks.
 			d.arena.buf = make([]byte, 0, min(d.Size, arenaBlock))
 		}
+		if len(attrs) == cap(attrs) && len(attrs) >= bigTag {
+			attrs = d.growAttrs(attrs, start)
+		}
 		attrs = append(attrs, Attr{an, d.arena.String(v)})
 	}
 	d.attrs = attrs
 	d.tokStart = StartElement{name, attrs}
 	return &d.tokStart, nil
+}
+
+// bigTag is how many attributes a start tag has before startTag stops growing
+// the slice of them by append's steps (1.25x at this size, so a chain of them
+// allocates 5x the final slice).
+const bigTag = 256
+
+// growAttrs makes room in attrs for the rest of a tag with many attributes.
+// The input left, over the bytes an attribute has taken so far, bounds how many
+// remain; ponytail: capped at 8x the slice, so that a tag early in a huge
+// document takes at most that, and at least doubling.
+func (d *Decoder) growAttrs(attrs []Attr, start int64) []Attr {
+	est := len(attrs)
+	if rest := d.Size - int(d.InputOffset()); rest > 0 {
+		if used := int(d.InputOffset() - start); used > 0 {
+			est = rest / max(used/len(attrs), 1)
+		}
+	}
+	return append(make([]Attr, 0, len(attrs)+max(len(attrs), min(est, 8*len(attrs)))), attrs...)
 }
 
 // procInst reads [16] PI after "<?", and treats target "xml" as [23] XMLDecl.
@@ -1038,9 +1060,17 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 				// A run past a window long that outgrows the scratch is
 				// sized from what is left of the input, not by append's
 				// 1.25x steps. ponytail: capped at 8x the scratch, so that a
-				// run early in a huge document takes at most that.
+				// run early in a huge document takes at most that; past half
+				// a MiB the cap is 128x, so that one long value is sized in
+				// one step rather than through a chain of them (1.9x its size
+				// at 10 MiB). A document of several such runs pays one
+				// scratch of up to what is left, once.
 				if rest := d.Size - int(d.InputOffset()); n > cap(out)-len(out) && len(out) >= bufSize && rest > n {
-					out = slices.Grow(out, min(rest, 8*cap(out)))
+					step := 8
+					if cap(out) >= 1<<19 {
+						step = 128
+					}
+					out = append(make([]byte, 0, len(out)+min(rest, step*cap(out))), out...)
 				}
 				out = append(out, run[:n]...)
 				if n == 1 {

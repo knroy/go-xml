@@ -3,8 +3,10 @@ package xdm
 import (
 	"bytes"
 	"iter"
+	"maps"
 	"math"
 	"math/bits"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -404,6 +406,35 @@ func (t *Tree) intern(q QName) uint32 {
 	}
 	t.nameHot[h] = i
 	return i
+}
+
+// bigTag is how many attributes a start tag carries before buildElement sizes
+// the name table for them in one step, rather than letting each new name
+// grow it.
+const bigTag = 256
+
+// reserveNames makes room for n more names, the most a start tag of n
+// attributes can add, so that a tag of many distinct names grows the table
+// and its index once instead of through every doubling. The index is
+// rebuilt only when n would at least double it, so a run of big tags that
+// repeat their names rebuilds nothing.
+func (t *Tree) reserveNames(n int) {
+	if t.names == nil {
+		t.names = make([]QName, 1, n+1)
+	} else {
+		t.names = slices.Grow(t.names, n)
+	}
+	if t.nameIx == nil {
+		t.nameIx = make(map[QName]uint32, len(t.names)+n)
+		t.nameHot = new([64]uint32)
+		for j, x := range t.names[1:] {
+			t.nameIx[x] = uint32(j + 1)
+		}
+	} else if n > len(t.nameIx) {
+		ix := make(map[QName]uint32, len(t.nameIx)+n)
+		maps.Copy(ix, t.nameIx)
+		t.nameIx = ix
+	}
 }
 
 // indexNames builds the name index over the names the tree holds.
