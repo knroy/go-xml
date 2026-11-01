@@ -661,6 +661,19 @@ func (r *FileResolver) publish(path string, tree *xdm.Tree, size int64) {
 	r.cacheBytes -= r.sizes[path]
 	delete(r.sizes, path)
 	delete(r.cache, path)
+	// An entry that fits the byte bound alone but not beside what the cache
+	// holds is not admitted, and nothing is evicted for it. Evicting at random
+	// to make room kept throwing out documents that were about to be read
+	// again: four 9 MB files cycled against the 32 MB bound hit 22 times in
+	// 48, where keeping the three that fit hits 3 in 4. The cost is that the
+	// rejected document is parsed again on its next request, which gives a
+	// different tree, and that a resolver whose byte bound filled early keeps
+	// its first documents; the bound on memory is unchanged. A document that
+	// alone exceeds the bound is still admitted, after everything else has
+	// been evicted, because it can never share the cache.
+	if size <= resolverCacheMaxBytes && r.cacheBytes+size > resolverCacheMaxBytes {
+		return
+	}
 	for len(r.cache) > 0 &&
 		(len(r.cache) >= resolverCacheMax ||
 			r.cacheBytes+size > resolverCacheMaxBytes) {
