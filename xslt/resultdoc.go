@@ -261,13 +261,15 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// output URI is known: resolution then yields "" for every document, and
 	// the resolved form would neither catch a real collision nor be safe to
 	// treat as one.
-	for _, prev := range *rt.secondary {
-		if prev.Href == href ||
-			(resolvedHref != "" && prev.BaseURI == resolvedHref) {
-			return fmt.Errorf(
-				"XTDE1490: xsl:result-document: href %q was already produced by an earlier "+
-					"result document", href)
-		}
+	//
+	// Both identities are looked up in a set: the raw href in resultHrefs and
+	// the resolved URI in writtenDocs, which records every resolved URI a
+	// result document has written.
+	if (*rt.resultHrefs)[href] ||
+		(resolvedHref != "" && (*rt.writtenDocs)[resolvedHref]) {
+		return fmt.Errorf(
+			"XTDE1490: xsl:result-document: href %q was already produced by an earlier "+
+				"result document", href)
 	}
 
 	settings := sepSettings
@@ -330,7 +332,8 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// the read-then-write half was detected; see checkWrittenThenRead.
 	// Keyed on the resolved form for the same reason checkReadThenWrite is:
 	// the spec's test is on the absolute URI.
-	if rt.writtenDocs != nil && resolvedHref != "" {
+	(*rt.resultHrefs)[href] = true
+	if resolvedHref != "" {
 		(*rt.writtenDocs)[resolvedHref] = true
 	}
 	return nil
