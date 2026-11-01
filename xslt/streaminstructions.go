@@ -45,6 +45,10 @@ type instrAnalyzer struct {
 	// instruction operand is an XPath expression.
 	known bool
 
+	// unverified and trust are analyzer's, merged the same way.
+	unverified bool
+	trust      *declTrust
+
 	// attrSets resolves an attribute-set name to its declarations, for the
 	// use-attribute-sets operand of §19.8.6. Nil when the enclosing
 	// stylesheet was not scanned, in which case any use-attribute-sets
@@ -124,17 +128,30 @@ func analyzeSequenceConstructor(
 	el *xdm.Node, ctx posture, attrSets map[xdm.QName][]*xdm.Node,
 	funcs map[funcKey]*streamFunc,
 ) (props, bool) {
+	p, known, _ := sequenceConstructorVerdict(el, ctx, attrSets, funcs, nil)
+	return p, known
+}
+
+// sequenceConstructorVerdict is analyzeSequenceConstructor for a caller that
+// will trust the verdict: it also reports whether the verdict rests on a
+// declaration that trust could not verify (streamtrust.go). A nil trust
+// verifies nothing.
+func sequenceConstructorVerdict(
+	el *xdm.Node, ctx posture, attrSets map[xdm.QName][]*xdm.Node,
+	funcs map[funcKey]*streamFunc, trust *declTrust,
+) (props, bool, bool) {
 	a := &instrAnalyzer{
 		ctxPosture:        ctx,
 		ctxAllowsChildren: true,
 		known:             true,
 		attrSets:          attrSets,
 		funcs:             funcs,
+		trust:             trust,
 		// §19.8.9.4 for a container nested inside an xsl:for-each-group: see
 		// enclosingGroupSelect.
 	}
 	var outerStreamed bool
-	a.currentGroup, outerStreamed = enclosingGroupSelect(el, attrSets, funcs)
+	a.currentGroup, outerStreamed, a.unverified = enclosingGroupSelect(el, attrSets, funcs, trust)
 	a.groupInScope = a.currentGroup != props{}
 	// A nested container whose enclosing group is not grounded reads streamed
 	// nodes a second time. §19.8.9.4 calls that roaming, but this walk never
@@ -144,7 +161,7 @@ func analyzeSequenceConstructor(
 	// on the path itself, not by this clause.
 	a.groupOutOfReach = !a.groupInScope && !outerStreamed && hasForEachGroupAncestor(el)
 	p := a.body(el)
-	return p, a.known
+	return p, a.known, a.unverified
 }
 
 // enclosingGroupSelect gives the properties §19.8.9.4 assigns to a call on
@@ -170,16 +187,20 @@ func analyzeSequenceConstructor(
 // withhold: the first is si-group-052, whose refusal §19.8.9.4 derives from
 // the group being streamed, and which is otherwise silenced by
 // groupOutOfReach.
+//
+// The third return value is the select's unverified bit, which the grounded
+// answer rests on.
 func enclosingGroupSelect(
 	el *xdm.Node, attrSets map[xdm.QName][]*xdm.Node, funcs map[funcKey]*streamFunc,
-) (props, bool) {
+	trust *declTrust,
+) (props, bool, bool) {
 	for n := el.Parent(); n != nil; n = n.Parent() {
 		if !isXSL(n, "for-each-group") {
 			continue
 		}
 		at := n.Attr("", "select")
 		if at == nil {
-			return props{}, false
+			return props{}, false, false
 		}
 		outer := &instrAnalyzer{
 			ctxPosture:        postureStriding,
@@ -187,17 +208,18 @@ func enclosingGroupSelect(
 			known:             true,
 			attrSets:          attrSets,
 			funcs:             funcs,
+			trust:             trust,
 		}
 		sel := outer.exprPropsIn(at.Value(), n, postureStriding, true)
 		if !outer.known {
-			return props{}, false
+			return props{}, false, false
 		}
 		if sel.posture != postureGrounded {
-			return props{}, true
+			return props{}, true, false
 		}
-		return groundedMotionless, false
+		return groundedMotionless, false, outer.unverified
 	}
-	return props{}, false
+	return props{}, false, false
 }
 
 // hasForEachGroupAncestor reports whether el is nested inside an
@@ -224,6 +246,8 @@ func (a *instrAnalyzer) sub(ctx posture, allowsChildren bool) *instrAnalyzer {
 		ctxPosture:        ctx,
 		ctxAllowsChildren: allowsChildren,
 		known:             a.known,
+		unverified:        a.unverified,
+		trust:             a.trust,
 		attrSets:          a.attrSets,
 		currentGroup:      a.currentGroup,
 		groupInScope:      a.groupInScope,
@@ -281,6 +305,7 @@ func (a *instrAnalyzer) subFocus(ctx posture, allowsChildren bool) *instrAnalyze
 
 func (a *instrAnalyzer) mergeFrom(b *instrAnalyzer) {
 	a.known = a.known && b.known
+	a.unverified = a.unverified || b.unverified
 }
 
 // exprProps assesses an XPath expression in this analyzer's context posture,
@@ -315,6 +340,8 @@ func (a *instrAnalyzer) exprOperandIn(src string, el *xdm.Node, ctx posture, all
 		ctxPosture:        ctx,
 		ctxAllowsChildren: allowsChildren,
 		known:             a.known,
+		unverified:        a.unverified,
+		trust:             a.trust,
 		decl:              el,
 		currentGroup:      a.currentGroup,
 		groupInScope:      a.groupInScope,
@@ -330,6 +357,7 @@ func (a *instrAnalyzer) exprOperandIn(src string, el *xdm.Node, ctx posture, all
 	p := an.expr(expr)
 	kids := an.allowsChildren(expr)
 	a.known = a.known && an.known
+	a.unverified = a.unverified || an.unverified
 	return p, kids
 }
 
@@ -704,6 +732,12 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		// §19.8.4.4, which §19.8.4.29 makes the rule for xsl:next-match too:
 		// an implicit context item operand (.) with usage absorption, plus
 		// the xsl:with-param children.
+		//
+		// A streamed context item is handed to rules of the current mode,
+		// which are trusted to be streamable (streamtrust.go).
+		if a.ctxPosture != postureGrounded && !a.trust.enclosingRuleModesVerified(el) {
+			a.unverified = true
+		}
 		ops := []operand{{
 			props:          props{a.ctxPosture, sweepMotionless},
 			usage:          usageAbsorption,
@@ -849,6 +883,11 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 			// scan does not resolve. Its declarations decide the usages, so
 			// without them there is no verdict.
 			return a.unknown()
+		}
+		// The usages come from the target's declarations, which another
+		// module could override by import precedence.
+		if !a.trust.local() {
+			a.unverified = true
 		}
 		var ci *xdm.Node
 		for _, c := range target.ChildElements() {
@@ -1003,8 +1042,13 @@ func (a *instrAnalyzer) useAttributeSetOperands(el *xdm.Node) []operand {
 			ops = append(ops, operand{props: roamingFreeRanging, usage: usageAbsorption, allowsChildren: true})
 			continue
 		}
+		p := a.declaredAttributeSetProps(decls)
+		if p == groundedMotionless && !a.trust.attrSetVerified(n, decls) {
+			// Motionless on the declaration's word (streamtrust.go).
+			a.unverified = true
+		}
 		ops = append(ops, operand{
-			props:          a.declaredAttributeSetProps(decls),
+			props:          p,
 			usage:          usageAbsorption,
 			allowsChildren: true,
 		})
@@ -1623,6 +1667,12 @@ func (a *instrAnalyzer) applyTemplates(el *xdm.Node) props {
 		return roamingFreeRanging
 	}
 
+	// The streamed selection is handed to the rules of the mode, which are
+	// trusted to be streamable (streamtrust.go).
+	if !a.appliedModeVerified(el) {
+		a.unverified = true
+	}
+
 	// Clause 5: the general rules, with the select absorbing.
 	ops := []operand{{props: sel, usage: usageAbsorption, allowsChildren: selKids}}
 	ops = append(ops, a.withParamOperands(el, nil)...)
@@ -1681,33 +1731,16 @@ const (
 // its absence is decisive. As soon as another module is pulled in, the
 // declaration may be there, and the answer is modeUnresolved.
 func (a *instrAnalyzer) modeStreamable(el *xdm.Node) modeVerdict {
-	raw := strings.TrimSpace(el.AttrValue("mode"))
-	if raw == "#current" {
+	if strings.TrimSpace(el.AttrValue("mode")) == "#current" {
 		return modeStreamableYes
 	}
 	root := documentElementOf(el)
 	if root == nil {
 		return modeUnresolved
 	}
-	// §3.7.2: an omitted mode attribute, or "#default", takes the mode from
-	// the [xsl:]default-mode of the innermost ancestor that has one, and only
-	// falls back to the unnamed mode when there is none. sf-current-100
-	// declares default-mode="m" on xsl:stylesheet and relies on a bare
-	// xsl:apply-templates reaching the streamable mode m.
-	at, on := el, el
-	if raw == "" || raw == "#default" {
-		raw, on = defaultModeFor(el)
-	}
-	if on != nil {
-		at = on
-	}
-	want := xdm.QName{}
-	if raw != "" && raw != "#default" && raw != "#unnamed" {
-		n, err := resolveQNameAttr(at, raw)
-		if err != nil {
-			return modeUnresolved
-		}
-		want = n
+	want, ok := appliedModeName(el)
+	if !ok {
+		return modeUnresolved
 	}
 	declared := false
 	streamable := false
@@ -1749,6 +1782,46 @@ func (a *instrAnalyzer) modeStreamable(el *xdm.Node) modeVerdict {
 		return modeUnresolved
 	}
 	return modeNotStreamable
+}
+
+// appliedModeName resolves the mode an xsl:apply-templates names other than
+// "#current", and reports false when its prefix does not resolve.
+//
+// §3.7.2: an omitted mode attribute, or "#default", takes the mode from the
+// [xsl:]default-mode of the innermost ancestor that has one, and only falls
+// back to the unnamed mode when there is none. sf-current-100 declares
+// default-mode="m" on xsl:stylesheet and relies on a bare xsl:apply-templates
+// reaching the streamable mode m.
+func appliedModeName(el *xdm.Node) (xdm.QName, bool) {
+	raw := strings.TrimSpace(el.AttrValue("mode"))
+	at, on := el, el
+	if raw == "" || raw == "#default" {
+		raw, on = defaultModeFor(el)
+	}
+	if on != nil {
+		at = on
+	}
+	if raw == "" || raw == "#default" || raw == "#unnamed" {
+		return xdm.QName{}, true
+	}
+	n, err := resolveQNameAttr(at, raw)
+	if err != nil {
+		return xdm.QName{}, false
+	}
+	return n, true
+}
+
+// appliedModeVerified reports whether the rules an xsl:apply-templates
+// dispatches a streamed selection to are verified streamable.
+func (a *instrAnalyzer) appliedModeVerified(el *xdm.Node) bool {
+	if strings.TrimSpace(el.AttrValue("mode")) == "#current" {
+		return a.trust.enclosingRuleModesVerified(el)
+	}
+	want, ok := appliedModeName(el)
+	if !ok {
+		return false
+	}
+	return a.trust.modeVerified(documentElementOf(el), xdm.QName{URI: want.URI, Local: want.Local}.Clark())
 }
 
 // documentElementOf returns the outermost element containing el.
@@ -1978,6 +2051,9 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 			a.known = false
 		} else if free && !patternPredicateOnlySyntacticallyNumeric(p.Value(), el) {
 			return roamingFreeRanging
+		}
+		if !patternVerified(p.Value(), el) {
+			a.unverified = true
 		}
 	}
 

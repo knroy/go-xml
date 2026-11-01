@@ -296,6 +296,7 @@ func (a *analyzer) letExpr(x *xpath.LetExpr) props {
 		inner.operandOf(ret, usageTransmission),
 	}, false)
 	a.known = a.known && inner.known
+	a.unverified = a.unverified || inner.unverified
 	return p
 }
 
@@ -315,6 +316,7 @@ func (a *analyzer) forExpr(x *xpath.ForExpr) props {
 		inner.higherOrderOperand(ret, usageTransmission),
 	}, false)
 	a.known = a.known && inner.known
+	a.unverified = a.unverified || inner.unverified
 	return p
 }
 
@@ -381,6 +383,7 @@ func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 	inner := a.withVar(x.Bindings[0].Var, seq.props)
 	op := inner.higherOrderOperand(test, usageInspection)
 	a.known = a.known && inner.known
+	a.unverified = a.unverified || inner.unverified
 	p := combine([]operand{seq, op}, false)
 	if !p.streamable() {
 		return roamingFreeRanging

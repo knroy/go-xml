@@ -77,18 +77,19 @@ type burstResolver interface {
 }
 
 // planBursts decides, from the stylesheet source, whether the streamable
-// xsl:source-document sd can run in bursts.
-func planBursts(sd *xdm.Node) *burstPlan {
+// xsl:source-document sd can run in bursts. shared says sd's module is not
+// the whole stylesheet (streamtrust.go).
+func planBursts(sd *xdm.Node, shared bool) *burstPlan {
 	for _, a := range []string{"validation", "type", "use-accumulators"} {
 		if sd.Attr("", a) != nil {
 			return nil
 		}
 	}
 	// The §19.8 verdict first: the body must be guaranteed-streamable, from
-	// constructs the analysis fully models. Everything below narrows that to
-	// what bursts can execute.
-	if p, known := analyzeSequenceConstructor(sd, postureStriding, nil, nil); !known ||
-		!p.streamable() || p.posture != postureGrounded {
+	// constructs the analysis fully models, resting on no declaration that
+	// was not itself verified. Everything below narrows that to what bursts
+	// can execute.
+	if !burstVerdict(sd, shared) {
 		return nil
 	}
 	el := sd
@@ -116,6 +117,14 @@ func planBursts(sd *xdm.Node) *burstPlan {
 		return nil
 	}
 	return &burstPlan{path: path, target: target, filtered: filtered}
+}
+
+// burstVerdict reports whether the §19.8 verdict on sd is one execution may
+// trust: known, unverified clear, and grounded.
+func burstVerdict(sd *xdm.Node, shared bool) bool {
+	t := newDeclTrust(documentElementOf(sd), shared)
+	p, known, unverified := sequenceConstructorVerdict(sd, postureStriding, t.sets, t.funcs, t)
+	return known && !unverified && p.streamable() && p.posture == postureGrounded
 }
 
 // onlyElementChild is el's one element child, when el has exactly one and
