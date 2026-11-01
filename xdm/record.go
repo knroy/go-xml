@@ -1681,6 +1681,9 @@ type textStore struct {
 	// shared maps a string registered by share to where it is stored, so that
 	// add hands the same range to every value that is that string.
 	shared map[sharedKey][2]uint32
+	// ws shares one stored value among the whitespace-only values add is
+	// given, as a parse does; made on the first.
+	ws *spaceTable
 }
 
 // sharedKey identifies a string by where it lives: the same storage is the
@@ -1715,6 +1718,14 @@ func (s *textStore) str(off, n uint32) string {
 func (s *textStore) add(v string) (uint32, uint32) {
 	if v == "" {
 		return 0, 0
+	}
+	if len(v) <= maxSpaceLen {
+		if b := unsafe.Slice(unsafe.StringData(v), len(v)); onlySpace(b) {
+			if s.ws == nil {
+				s.ws = new(spaceTable)
+			}
+			return s.ws.text(s, b)
+		}
 	}
 	if s.shared != nil && len(v) >= shareMin {
 		if r, ok := s.shared[sharedKey{unsafe.StringData(v), len(v)}]; ok {
