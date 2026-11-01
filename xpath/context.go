@@ -62,9 +62,6 @@ type Context struct {
 	// Depth guards against unbounded recursion in user-defined functions and
 	// named templates, which the spec does not bound.
 	Depth int32
-	// valueDepth counts the nesting deep-equal and map:find have descended
-	// into, apart from Depth so that function recursion does not shrink it.
-	valueDepth int32
 	// heldItems suppresses Compiled.Eval's per-expression reset of items,
 	// because a host language is measuring a larger evaluation against the
 	// same counter. Set by HoldItemBudget, and copied along with the rest of
@@ -1332,15 +1329,15 @@ func (c *Context) checkDepth() error {
 	return nil
 }
 
-// enterValue is checkDepth for the nesting of a map or array value, bounded
-// at maxJSONDepth like parse-json and counted apart from function recursion.
-// The caller decrements valueDepth when it returns.
-func (c *Context) enterValue() error {
-	if c.valueDepth >= maxJSONDepth {
+// checkValueDepth bounds the nesting of a map or array value that deep-equal
+// or map:find descends into at maxJSONDepth, like parse-json. The depth is
+// passed down by the walkers rather than kept in the Context, whose size is
+// pinned, and so is counted apart from function recursion.
+func checkValueDepth(depth int) error {
+	if depth >= maxJSONDepth {
 		return fmt.Errorf("XPDY0001: value nests more than %d levels: %w",
 			maxJSONDepth, xdm.ErrResourceLimit)
 	}
-	c.valueDepth++
 	return nil
 }
 

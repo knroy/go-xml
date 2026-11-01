@@ -493,11 +493,16 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 // instructions are ignored when comparing element content, which is why this
 // cannot simply compare serialised forms.
 func deepEqual(ctx *Context, a, b xdm.Sequence) (bool, error) {
+	return deepEqualAt(ctx, a, b, 0)
+}
+
+// deepEqualAt is deepEqual for values nested depth maps or arrays down.
+func deepEqualAt(ctx *Context, a, b xdm.Sequence, depth int) (bool, error) {
 	if len(a) != len(b) {
 		return false, nil
 	}
 	for i := range a {
-		eq, err := deepEqualItem(ctx, a[i], b[i])
+		eq, err := deepEqualItem(ctx, a[i], b[i], depth)
 		if err != nil || !eq {
 			return false, err
 		}
@@ -505,7 +510,7 @@ func deepEqual(ctx *Context, a, b xdm.Sequence) (bool, error) {
 	return true, nil
 }
 
-func deepEqualItem(ctx *Context, x, y xdm.Item) (bool, error) {
+func deepEqualItem(ctx *Context, x, y xdm.Item, depth int) (bool, error) {
 	// An Opaque is engine-internal state, not a value the data model defines
 	// equality over. A stylesheet naming the internal namespace can put one
 	// here, so it is compared by identity rather than asserted to be atomic.
@@ -531,7 +536,7 @@ func deepEqualItem(ctx *Context, x, y xdm.Item) (bool, error) {
 	// before the node and atomic branches because neither is either one: the
 	// fallback below compares unrecognised items by identity, so two equal
 	// arrays built separately were answering false.
-	if eq, handled, err := deepEqualMapArray(ctx, x, y); handled {
+	if eq, handled, err := deepEqualMapArray(ctx, x, y, depth); handled {
 		return eq, err
 	}
 
