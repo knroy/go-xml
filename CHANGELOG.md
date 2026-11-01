@@ -4,6 +4,26 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+Memory and CPU fixes from go-xmlsec's measurements against v2.1.0. No API
+change; output is byte-identical.
+
+### Fixed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `c14n.ParsePrefixList` was quadratic in the prefixes | It deduplicated with a scan per token: 1 MiB of distinct prefixes took 10.9 s. It uses a map, keeping first-seen order: about 0.02 s. | [`ad8c47a`][ad8c47a] |
+
+### Changed — memory
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| A large text value cost up to 3.1× its size to parse | `slices.Grow` rounded the buffer past the hand-off check, so the value was copied twice. The buffer is grown exactly and handed to the tree when no later value wants it: 1 MiB 3.10 → 1.12×, 10 MiB 1.87 → 1.08×. | [`707ca28`][707ca28] |
+| A tag with many attributes or namespace declarations peaked at 13–22× its size | Duplicates past 8 attributes are found by sorting, no name index is built for such a tag, one scope index serves both lookups and repeated URIs are interned: 800K attributes 21.5 → 12.8× peak, 100K declarations 16.5 → 6.6×. | [`5475837`][5475837], [`b08624c`][b08624c] |
+| c14n allocated a map per element of a namespace node set; the namespace axis sorted through a map | The map is reused (2,000 elements: 4,016 → 18 allocations); `scopeSlots` uses one stable sort (4 → 1 allocation a call). | [`9572c44`][9572c44], [`fd9750e`][fd9750e] |
+| `/r/l[1]` built every `l` child before the predicate ran | A step whose first predicate is an integer literal stops at that match. | [`5712d9f`][5712d9f] |
+
 ## v2.1.0 — 2026-11-01
 
 Three memory audits across parsing, XPath/XQuery, XSLT, validation,
@@ -1803,3 +1823,10 @@ here so every entry in this file sits under a release.
 [22d32ac]: https://github.com/knroy/go-xml/commit/22d32ac
 [b331aa1]: https://github.com/knroy/go-xml/commit/b331aa1
 [567aa1a]: https://github.com/knroy/go-xml/commit/567aa1a
+[ad8c47a]: https://github.com/knroy/go-xml/commit/ad8c47a
+[707ca28]: https://github.com/knroy/go-xml/commit/707ca28
+[5475837]: https://github.com/knroy/go-xml/commit/5475837
+[b08624c]: https://github.com/knroy/go-xml/commit/b08624c
+[9572c44]: https://github.com/knroy/go-xml/commit/9572c44
+[fd9750e]: https://github.com/knroy/go-xml/commit/fd9750e
+[5712d9f]: https://github.com/knroy/go-xml/commit/5712d9f

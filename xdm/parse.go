@@ -835,8 +835,9 @@ func buildElement(t xml.StartElement, parent *Node, ns *nsScope, names *nameCach
 	// validateStartElement has refused an unbound prefix.
 	uri, _ := ns.lookup(t.Name.Space)
 	el.name = names.intern(tree, QName{Prefix: t.Name.Space, Local: t.Name.Local, URI: uri})
-	if len(t.Attr) >= bigTag {
-		tree.reserveNames(len(t.Attr))
+	old := -1 // how many names the table held, when this tag adds its own without the index
+	if n := len(t.Attr) - len(decls); n >= bigTag {
+		old = tree.reserveNames(n)
 	}
 	for _, a := range t.Attr {
 		if a.Name.Space == "xmlns" || (a.Name.Space == "" && a.Name.Local == "xmlns") {
@@ -861,10 +862,17 @@ func buildElement(t xml.StartElement, parent *Node, ns *nsScope, names *nameCach
 			}
 		}
 		attr := el.appendAttrRaw()
-		attr.name = names.intern(tree, q)
+		if old >= 0 {
+			attr.name = tree.internNew(q, old)
+		} else {
+			attr.name = names.intern(tree, q)
+		}
 		if v != "" {
 			attr.v0, attr.v1 = tree.text.add(v)
 		}
+	}
+	if old >= 0 {
+		tree.endBulkNames()
 	}
 	return el, len(decls)
 }
@@ -941,10 +949,13 @@ func (r *textRun) add(parent *Node, b []byte, dec *xml.Decoder) {
 		// A run that starts with anything but white space can be neither
 		// stripped nor shared, so it goes straight to the store.
 		if !onlySpace(b) {
-			if len(b) >= textOwnFrom && cap(b)-len(b) <= len(b)/8 {
-				// Long enough for a block of its own, and not much larger
-				// than its value: the decoder's buffer becomes the block,
-				// rather than being copied into one.
+			if len(b) >= textOwnFrom && cap(b)-len(b) <= len(b)/8 && (dec.Size <= 0 || dec.Size-int(dec.InputOffset()) < len(b)) {
+				// Long enough for a block of its own, not much larger than
+				// its value, and with less input left than its length, so
+				// that no later value will want the buffer grown for this
+				// one: the decoder's buffer becomes the block, rather than
+				// being copied into one. A document of many long values
+				// keeps the buffer and copies, or each would regrow it.
 				r.node.v0, r.node.v1 = r.node.tree.text.keep(dec.TakeText())
 			} else {
 				r.node.v0, r.node.v1 = r.node.tree.text.addBytes(b, 0)

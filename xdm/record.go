@@ -7,8 +7,8 @@ import (
 	"math"
 	"math/bits"
 	"slices"
-	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -418,11 +418,25 @@ const bigTag = 256
 // and its index once instead of through every doubling. The index is
 // rebuilt only when n would at least double it, so a run of big tags that
 // repeat their names rebuilds nothing.
-func (t *Tree) reserveNames(n int) {
+//
+// A tag that would at least double the table skips its index instead: the
+// attributes of a valid tag have distinct names, so each needs finding only
+// among the names from before the tag. reserveNames then reports how many
+// those are, and the tag adds its names by internNew; endBulkNames drops the
+// index, which is made again by the next intern that wants it. For 800,000
+// attributes the index was 6 times the input, to be dropped when the parse
+// ended. Otherwise it reports -1.
+func (t *Tree) reserveNames(n int) int {
 	if t.names == nil {
 		t.names = make([]QName, 1, n+1)
 	} else {
 		t.names = slices.Grow(t.names, n)
+	}
+	if n >= len(t.names) {
+		if t.nameIx == nil && len(t.names) > smallNames {
+			t.indexNames()
+		}
+		return len(t.names)
 	}
 	if t.nameIx == nil {
 		t.nameIx = make(map[QName]uint32, len(t.names)+n)
@@ -435,7 +449,31 @@ func (t *Tree) reserveNames(n int) {
 		maps.Copy(ix, t.nameIx)
 		t.nameIx = ix
 	}
+	return -1
 }
+
+// internNew is intern for a name of a tag that reserveNames reported old
+// names before: the name is not among the tag's own, so it is looked for in
+// the first old only, and added to the table without the index.
+func (t *Tree) internNew(q QName, old int) uint32 {
+	if t.nameIx != nil {
+		if i, ok := t.nameIx[q]; ok {
+			return i
+		}
+	} else {
+		for i, x := range t.names[:old] {
+			if x == q {
+				return uint32(i)
+			}
+		}
+	}
+	t.names = append(t.names, q)
+	return uint32(len(t.names) - 1)
+}
+
+// endBulkNames ends a tag that internNew added names for: the index lacks
+// them, so it goes, and intern makes it again when next it is wanted.
+func (t *Tree) endBulkNames() { t.nameIx, t.nameHot = nil, nil }
 
 // indexNames builds the name index over the names the tree holds.
 func (t *Tree) indexNames() {
@@ -1377,6 +1415,9 @@ type scopeSlot struct {
 	frame, index, owner uint32 // owner: the element declaring it
 }
 
+// undeclared marks a scopeSlot built from an undeclaring declaration.
+const undeclared = xmlBinding - 1
+
 // scopeSlots returns n's in-scope bindings ordered by prefix.
 func (n *Node) scopeSlots() []scopeSlot {
 	var chain []*Node
@@ -1385,22 +1426,32 @@ func (n *Node) scopeSlots() []scopeSlot {
 			chain = append(chain, cur)
 		}
 	}
-	m := map[string]scopeSlot{"xml": {"xml", 0, xmlBinding, noIdx}}
+	// Every declaration, outermost first, then one stable sort by prefix: the
+	// last of a run of equal prefixes is the one in force, and an undeclaring
+	// one (marked by index undeclared) removes the prefix. No map, no
+	// reflection-built swapper.
+	all := make([]scopeSlot, 1, 8)
+	all[0] = scopeSlot{"xml", 0, xmlBinding, noIdx}
 	for i := len(chain) - 1; i >= 0; i-- {
 		f := chain[i].v0
 		for j, b := range chain[i].frame() {
 			if b.uri == "" {
-				delete(m, b.prefix)
+				all = append(all, scopeSlot{b.prefix, f, undeclared, noIdx})
 			} else {
-				m[b.prefix] = scopeSlot{b.prefix, f, uint32(j), chain[i].self}
+				all = append(all, scopeSlot{b.prefix, f, uint32(j), chain[i].self})
 			}
 		}
 	}
-	out := make([]scopeSlot, 0, len(m))
-	for _, s := range m {
-		out = append(out, s)
+	slices.SortStableFunc(all, func(a, b scopeSlot) int { return strings.Compare(a.prefix, b.prefix) })
+	out := all[:0]
+	for i, s := range all {
+		if i+1 < len(all) && all[i+1].prefix == s.prefix {
+			continue
+		}
+		if s.index != undeclared {
+			out = append(out, s)
+		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].prefix < out[j].prefix })
 	return out
 }
 

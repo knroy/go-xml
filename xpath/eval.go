@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -94,7 +95,7 @@ func (e *Step) Eval(ctx *Context) (xdm.Sequence, error) {
 // nothing would read.
 func (e *Step) evalFrom(ctx *Context, node *xdm.Node) (xdm.Sequence, error) {
 	var err error
-	selected := e.appendFrom(nil, node)
+	selected := e.appendFromN(nil, node, e.firstPosition())
 
 	// Predicates apply in axis order, so a reverse axis numbers positions
 	// from the context node outwards.
@@ -113,6 +114,31 @@ func (e *Step) evalFrom(ctx *Context, node *xdm.Node) (xdm.Sequence, error) {
 // appendFrom appends to selected the nodes e's axis and node test select
 // from node, in axis order, before any predicate.
 func (e *Step) appendFrom(selected xdm.Sequence, node *xdm.Node) xdm.Sequence {
+	return e.appendFromN(selected, node, 0)
+}
+
+// firstPosition is k when e's first predicate is the integer literal k >= 1:
+// that predicate keeps only the k-th selected node, so nothing past the k-th
+// need be built. Zero means no such bound.
+func (e *Step) firstPosition() int {
+	if len(e.Predicates) == 0 {
+		return 0
+	}
+	l, ok := e.Predicates[0].(*Literal)
+	if !ok || l.Val == nil || l.Val.Type != xdm.TypeInteger {
+		return 0
+	}
+	if r := l.Val.Rat(); r != nil && r.IsInt() && r.Num().IsInt64() {
+		if k := r.Num().Int64(); k >= 1 && k <= math.MaxInt32 {
+			return int(k)
+		}
+	}
+	return 0
+}
+
+// appendFromN is appendFrom that stops once limit nodes are selected, where
+// limit is positive and selected started empty.
+func (e *Step) appendFromN(selected xdm.Sequence, node *xdm.Node, limit int) xdm.Sequence {
 	principal := e.Axis.PrincipalKind()
 	if nt, ok := e.Test.(*NameTest); ok && (e.Axis == AxisDescendant || e.Axis == AxisDescendantOrSelf) {
 		// The direct walk selects what walkAxis would, in the same order.
@@ -130,6 +156,7 @@ func (e *Step) appendFrom(selected xdm.Sequence, node *xdm.Node) xdm.Sequence {
 				selected = make(xdm.Sequence, 0, 4)
 			}
 			selected = append(selected, n)
+			return limit == 0 || len(selected) < limit
 		}
 		return true
 	})
