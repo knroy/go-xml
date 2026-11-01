@@ -140,3 +140,144 @@ func TestParseBurstsSpineStaysSmall(t *testing.T) {
 		t.Fatalf("the spine kept %d records and %d text bytes", tree.n, bytes)
 	}
 }
+
+// A burst's tree does not carry the parse's name and frame indexes, which
+// cover every name and declaration of the stream so far: copying them made
+// the cost of each burst grow with the stream. Its names still resolve.
+func TestParseBurstsCopyNoIndexes(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<a>")
+	for i := range 200 {
+		fmt.Fprintf(&b, `<r xmlns:p%d="urn:%d"><n%d/></r>`, i, i, i)
+	}
+	b.WriteString("</a>")
+	i := 0
+	err := ParseBursts(strings.NewReader(b.String()), ParseOptions{}, []QName{{Local: "a"}, {Local: "r"}},
+		func(r *Node) error {
+			c := r.tree
+			if c.nameIx != nil || c.frameOne != nil || c.frameMany != nil {
+				t.Fatalf("burst %d: copied indexes: %d names, %d+%d frames", i, len(c.nameIx), len(c.frameOne), len(c.frameMany))
+			}
+			if got, want := r.FirstChild().Name().Local, fmt.Sprintf("n%d", i); got != want {
+				t.Fatalf("burst %d: child %q, want %q", i, got, want)
+			}
+			if got := c.intern(QName{Local: fmt.Sprintf("n%d", i)}); got != r.FirstChild().name {
+				t.Fatalf("burst %d: intern finds %d, the child has %d", i, got, r.FirstChild().name)
+			}
+			i++
+			return nil
+		})
+	if err != nil || i != 200 {
+		t.Fatalf("%d bursts, %v", i, err)
+	}
+}
+
+// The comments and processing instructions around the document element are
+// not copied into every burst, which made the cost prolog x records.
+func TestParseBurstsNoProlog(t *testing.T) {
+	src := strings.Repeat("<!--c--><?p x?>", 100) + "<a>" + strings.Repeat("<r><x/></r>", 50) + "</a><!--post-->"
+	n := 0
+	err := ParseBursts(strings.NewReader(src), ParseOptions{}, []QName{{Local: "a"}, {Local: "r"}},
+		func(r *Node) error {
+			n++
+			// The document node, a, r and x.
+			if got := r.tree.n; got != 4 {
+				t.Fatalf("burst %d: the tree holds %d records, want 4", n, got)
+			}
+			return nil
+		})
+	if err != nil || n != 50 {
+		t.Fatalf("%d bursts, %v", n, err)
+	}
+	// Still checked: a PI target with a colon in the prolog.
+	err = ParseBursts(strings.NewReader("<?a:b?><a/>"), ParseOptions{}, []QName{{Local: "a"}, {Local: "r"}},
+		func(*Node) error { return nil })
+	if err == nil {
+		t.Fatal("a colon in a prolog PI target: no error")
+	}
+}
+
+// The names and namespace frames that the dropped content interns are taken
+// back as the stream goes, as its text is, and the bursts kept from before
+// still read theirs.
+func TestParseBurstsNamesStaySmall(t *testing.T) {
+	const n = 5000
+	var b strings.Builder
+	b.WriteString("<a>")
+	for i := range n {
+		fmt.Fprintf(&b, `<r xmlns:p%d="urn:%d"><n%d p%d:k="v"/></r><x%d xmlns:q="urn:q%d"/>`, i, i, i, i, i, i)
+	}
+	b.WriteString("</a>")
+	var got []*Node
+	opts := ParseOptions{bursts: &burster{
+		path: []QName{{Local: "a"}, {Local: "r"}},
+		fn:   func(r *Node) error { got = append(got, r); return nil },
+	}}
+	tree, err := parse(strings.NewReader(b.String()), "", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.names) > 3*burstSlack || len(tree.frames) > 2*burstSlack || len(tree.frameData) > 2*burstSlack {
+		t.Fatalf("after %d records the parse holds %d names and %d frames (%d bindings)",
+			n, len(tree.names), len(tree.frames), len(tree.frameData))
+	}
+	if len(got) != n {
+		t.Fatalf("%d bursts", len(got))
+	}
+	for i, r := range got {
+		c := r.FirstChild()
+		a := c.AttrAt(0)
+		ns := r.InScopeNamespaces()
+		if c.Name().Local != fmt.Sprintf("n%d", i) || a.Name().URI != fmt.Sprintf("urn:%d", i) ||
+			ns[fmt.Sprintf("p%d", i)] != fmt.Sprintf("urn:%d", i) {
+			t.Fatalf("burst %d reads %v @%v %v", i, c.Name(), a.Name(), ns)
+		}
+	}
+}
+
+// A large burst's records are taken over by its tree, not copied while the
+// parse still holds them, and stay intact as the parse goes on.
+func TestParseBurstsLargeNotCopied(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`<!DOCTYPE a [<!ATTLIST c id ID #IMPLIED>]><a>`)
+	for i := range 6 {
+		n := 3
+		if i%2 == 0 {
+			n = 20000
+		}
+		fmt.Fprintf(&b, `<r i="%d">`, i)
+		for j := range n {
+			fmt.Fprintf(&b, `<c id="c%d-%d" xml:base="b%d/">t</c>`, i, j, j%3)
+		}
+		b.WriteString("</r>")
+	}
+	b.WriteString("</a>")
+	src := b.String()
+	opts := ParseOptions{AllowDOCTYPE: true}
+	path := []QName{{Local: "a"}, {Local: "r"}}
+	tree, err := ParseString(src, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []*Node
+	burst := allocated(func() {
+		err = ParseBursts(strings.NewReader(src), opts, path, func(r *Node) error { got = append(got, r); return nil })
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	whole := allocated(func() { _, err = ParseString(src, opts) })
+	if burst > whole*5/4 {
+		t.Fatalf("bursts allocated %d bytes, the whole tree %d", burst, whole)
+	}
+	i := 0
+	for r := range tree.Root.FirstChild().Children() {
+		if g, w := dump(got[i])+ancestry(got[i]), dump(r)+ancestry(r); g != w {
+			t.Fatalf("burst %d differs\nwant\n%.2000s\ngot\n%.2000s", i, w, g)
+		}
+		if c := got[i].LastChild(); !c.AttrAt(0).IsID() || c.BaseURI() != r.LastChild().BaseURI() {
+			t.Fatalf("burst %d: the last child lost its ID type or base URI", i)
+		}
+		i++
+	}
+}
