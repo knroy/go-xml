@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -96,7 +97,10 @@ type canon struct {
 const noNode = "\x00"
 
 func canonicalize(w io.Writer, ns NodeSet, opts Options) error {
-	_, err := run(w, ns, opts)
+	c, err := run(w, ns, opts)
+	if c != nil {
+		c.w.release()
+	}
 	return err
 }
 
@@ -108,7 +112,6 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 	}
 	_, all := ns.(subtree)
 	c := &canon{
-		w:        newOutBuf(w),
 		set:      ns,
 		all:      all,
 		excl:     opts.Algorithm.Exclusive(),
@@ -139,6 +142,7 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 			c.scope.m[prefix] = uri
 		}
 	}
+	c.w = newOutBuf(w)
 	var err error
 	switch root.Kind() {
 	case xdm.KindDocument:
@@ -150,6 +154,7 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 			c.leaf(root)
 		}
 	default:
+		c.w.release()
 		return nil, ErrUnsupportedNode
 	}
 	if err == nil {
@@ -170,12 +175,32 @@ func run(w io.Writer, ns NodeSet, opts Options) (*canon, error) {
 // into nothing.
 type outBuf struct {
 	buf []byte
+	pb  *[]byte // the pool entry buf came from
 	w   io.Writer
 	err error
 }
 
+// outBufPool keeps the buffers between calls: a fixed 80 KiB allocated per
+// call was 81 KB of garbage for each Digest of a tiny document.
+var outBufPool = sync.Pool{New: func() any {
+	b := make([]byte, 0, outBufSize+outBufSize/4)
+	return &b
+}}
+
 func newOutBuf(w io.Writer) *outBuf {
-	return &outBuf{buf: make([]byte, 0, outBufSize+outBufSize/4), w: w}
+	pb := outBufPool.Get().(*[]byte)
+	return &outBuf{buf: (*pb)[:0], pb: pb, w: w}
+}
+
+// release returns the buffer to the pool unless output grew it far past its
+// size, so that one large text node does not stay allocated. o is not used
+// afterwards.
+func (o *outBuf) release() {
+	if cap(o.buf) <= 2*outBufSize {
+		*o.pb = o.buf[:0]
+		outBufPool.Put(o.pb)
+	}
+	o.buf, o.pb = nil, nil
 }
 
 // flush hands buf to w. A short write without an error is io.ErrShortWrite,
