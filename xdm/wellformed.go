@@ -163,7 +163,13 @@ func validateStartElement(t xml.StartElement, ns *nsScope, xml11 bool) error {
 	ns.push()
 	scope := tagScope{ns: ns}
 	if len(t.Attr) > smallTag {
-		scope.m = map[string]string{}
+		decls := 0
+		for _, a := range t.Attr {
+			if _, ok := namespaceDecl(a); ok {
+				decls++
+			}
+		}
+		ns.reserve(decls)
 	}
 	for _, a := range t.Attr {
 		prefix, isDecl := namespaceDecl(a)
@@ -177,9 +183,6 @@ func validateStartElement(t xml.StartElement, ns *nsScope, xml11 bool) error {
 			return err
 		}
 		ns.declare(prefix, a.Value)
-		if scope.m != nil {
-			scope.m[prefix] = a.Value
-		}
 	}
 
 	if err := requireBoundPrefix(t.Name.Space, &scope); err != nil {
@@ -300,6 +303,8 @@ type nsScope struct {
 	own  int // how many of b the innermost start tag declares
 	top  map[string]int
 	prev []int
+	more int               // declarations the innermost start tag has yet to make, when it said
+	uris map[string]string // the URIs copied out of the arena, once the stack is indexed
 }
 
 // indexAt is how many bindings the stack holds before it is indexed.
@@ -308,12 +313,25 @@ const indexAt = 32
 // push opens a start tag's declarations, none until they are appended.
 func (s *nsScope) push() { s.own = 0 }
 
+// reserve makes room for the n declarations the innermost start tag is about
+// to make, so that a tag of thousands grows the stack, and its index, once
+// rather than through every doubling.
+func (s *nsScope) reserve(n int) {
+	s.more = n
+	s.b = slices.Grow(s.b, n)
+	if s.top != nil {
+		s.prev = slices.Grow(s.prev, n)
+	}
+}
+
 func (s *nsScope) declare(prefix, uri string) {
 	if s.b == nil {
 		s.b = make([]nsBinding, 0, 8) // a document's root declares a few
 	}
 	if s.top == nil && len(s.b) >= indexAt {
-		s.top = make(map[string]int, 2*len(s.b))
+		s.top = make(map[string]int, len(s.b)+s.more)
+		s.prev = make([]int, 0, len(s.b)+s.more)
+		s.uris = map[string]string{}
 		for _, b := range s.b {
 			s.prev = append(s.prev, s.top[b.prefix]-1)
 			s.top[b.prefix] = len(s.prev)
@@ -326,8 +344,21 @@ func (s *nsScope) declare(prefix, uri string) {
 	// The URI is copied out of the tokeniser's arena: the tree keeps it in
 	// every name and frame it resolves, and one arena string reachable from a
 	// tree keeps its whole block alive.
-	s.b = append(s.b, nsBinding{prefix, strings.Clone(uri)})
+	// A stack long enough to be indexed repeats its URIs, and is copied for
+	// each only once.
+	if s.uris != nil {
+		c, ok := s.uris[uri]
+		if !ok {
+			c = strings.Clone(uri)
+			s.uris[c] = c
+		}
+		uri = c
+	} else {
+		uri = strings.Clone(uri)
+	}
+	s.b = append(s.b, nsBinding{prefix, uri})
 	s.own++
+	s.more = max(s.more-1, 0)
 }
 
 // ownDecls is the innermost start tag's declarations.
@@ -369,21 +400,21 @@ func (s *nsScope) lookup(prefix string) (string, bool) {
 	return "", false
 }
 
-// tagScope resolves the prefixes used on one start tag against the stack. A
-// tag of at most smallTag attributes finds its own declarations by a scan of
-// them; a larger one keeps them in m, so that a tag declaring thousands is not
+// tagScope resolves the prefixes used on one start tag against the stack. The
+// tag's own declarations are found by a scan of them until the stack is
+// indexed, and by the index after, so that a tag declaring thousands is not
 // checked for duplicates in quadratic time.
 type tagScope struct {
 	ns *nsScope
-	m  map[string]string // the tag's own declarations, when the tag is large
 }
 
 // declared reports whether the tag declares prefix among the declarations
 // pushed so far.
 func (s *tagScope) declared(prefix string) bool {
-	if s.m != nil {
-		_, ok := s.m[prefix]
-		return ok
+	if s.ns.top != nil {
+		// The innermost binding of the prefix is the tag's own if it is
+		// among the last own.
+		return s.ns.top[prefix] > len(s.ns.b)-s.ns.own
 	}
 	for _, b := range s.ns.ownDecls() {
 		if b.prefix == prefix {

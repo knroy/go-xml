@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 // A tag with several repeated attributes is refused for the first repeat in
@@ -85,5 +86,57 @@ func TestManyAttrsLeaveNamesUnique(t *testing.T) {
 	}
 	if want := 1000 + 3; len(tree.names)-1 != want { // a0..a999, r, c, d
 		t.Errorf("table holds %d names, want %d", len(tree.names)-1, want)
+	}
+}
+
+func manyDeclsDoc(n, uris int) string {
+	var b strings.Builder
+	b.WriteString("<r")
+	for i := range n {
+		fmt.Fprintf(&b, " xmlns:p%d=\"urn:example:%d\"", i, i%uris)
+	}
+	b.WriteString("/>")
+	return b.String()
+}
+
+// A tag of many namespace declarations kept them four times -- the stack,
+// its index, the tag's own map and the frame -- and grew each by append.
+// Measured at 100,000 declarations of 100 URIs: 22.6x the input allocated
+// before, 7.3x after.
+func TestManyDeclarationsAllocation(t *testing.T) {
+	if raceEnabled {
+		t.Skip("allocation sizes are not stable under -race")
+	}
+	const n = 20000
+	doc := manyDeclsDoc(n, 100)
+	per := allocated(func() {
+		if _, err := ParseString(doc, ParseOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Logf("%d bytes allocated for %d declarations, %d of input", per, n, len(doc))
+	if per > n*400 {
+		t.Errorf("parsing %d declarations allocated %d bytes, %d each, want under 400", n, per, per/n)
+	}
+}
+
+// A URI declared again is the string the first declaration made, not a copy
+// of it; and it is a copy, never the tokeniser's arena string
+// (TestNamespaceURIDoesNotPinArena).
+func TestRepeatedNamespaceURIIsOneString(t *testing.T) {
+	tree, err := ParseString(manyDeclsDoc(2000, 3), ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := tree.Root.FirstChild().frame()
+	if len(frame) != 2000 {
+		t.Fatalf("%d declarations, want 2000", len(frame))
+	}
+	distinct := map[*byte]bool{}
+	for _, b := range frame[indexAt:] { // those before the stack is indexed are copies
+		distinct[unsafe.StringData(b.uri)] = true
+	}
+	if len(distinct) != 3 {
+		t.Errorf("%d declarations of 3 URIs hold %d strings, want 3", len(frame)-indexAt, len(distinct))
 	}
 }
