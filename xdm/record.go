@@ -1685,6 +1685,18 @@ type textAux struct {
 	// ws shares one stored value among the whitespace-only values add is
 	// given, as a parse does.
 	ws spaceTable
+	// lent counts, per block of another tree's store (keyed by address, which
+	// is only a count while the block is not borrowed), the bytes addFrom was
+	// asked to copy from it, and records where a borrowed block sits here.
+	lent map[uintptr]*lendState
+	// lastKey/last cache the previous lookup; copies run in document order.
+	lastKey uintptr
+	last    *lendState
+}
+
+type lendState struct {
+	used int32 // bytes asked for from the block so far
+	idx  int32 // index in this store of the borrowed block, + 1 (0: not borrowed)
 }
 
 // sharedKey identifies a string by where it lives: the same storage is the
@@ -1762,6 +1774,96 @@ func (s *textStore) share(v string) {
 		off, n := s.add(v)
 		s.aux.shared[k] = [2]uint32{off, n}
 	}
+}
+
+// addFrom stores the value at (off, n) of src, the store of another tree, as
+// add would store its string, but lets the range name src's block instead of
+// a copy of the bytes once this store has been asked for half of the block's
+// bytes: from then on every value of that block is free. A borrowed block is
+// the source's slice with its capacity clipped to its length, so nothing is
+// ever appended into it from here, and the source only appends past that
+// length; the bytes below it never change. Borrowing pins the whole block, at
+// worst twice the bytes this store asked of it, which bounds what a small
+// result can retain of a large source.
+func (s *textStore) addFrom(src *textStore, off, n uint32) (uint32, uint32) {
+	if n == 0 {
+		return 0, 0
+	}
+	k := off >> textShift
+	blk := src.blocks[k]
+	// Whitespace goes through add's table; a value of a block of its own is
+	// kept by reference there already; and the store's block numbers must not
+	// run out for want of room to copy into.
+	if s == src || n >= textOwnFrom || len(s.blocks) >= 1<<(31-textShift) ||
+		n <= maxSpaceLen && onlySpace(blk[off&textMask:][:n]) {
+		return s.add(src.str(off, n))
+	}
+	l := s.lend(blk)
+	if l.idx == 0 {
+		l.used += int32(n)
+		if 2*int(l.used) < len(blk) {
+			return s.add(src.str(off, n))
+		}
+		s.newBlock(blk[:len(blk):len(blk)])
+		l.idx = int32(len(s.blocks))
+	}
+	if int(off&textMask)+int(n) > len(s.blocks[l.idx-1]) {
+		return s.add(src.str(off, n)) // stored after the block was borrowed
+	}
+	return uint32(l.idx-1)<<textShift | off&textMask, n
+}
+
+// planFrom tells the store that the leaves of src's records [lo, hi) are about
+// to be copied in with addFrom, so that a block they fill is borrowed from the
+// first value rather than the one that crosses half of it. The count skips
+// the whitespace-only values addFrom stores through add. A subtree too small
+// for the walk to repay itself is left to addFrom's own count.
+func (s *textStore) planFrom(t *Tree, lo, hi uint32) {
+	if hi-lo < planMin || s == &t.text {
+		return
+	}
+	counts := make([]int32, len(t.text.blocks))
+	for i := lo; i < hi; i++ {
+		r := t.rec(i)
+		if r.v1 == 0 || !r.isLeaf() || r.flags&fSide != 0 {
+			continue
+		}
+		b := t.text.blocks[r.v0>>textShift][r.v0&textMask:][:r.v1]
+		if len(b) > maxSpaceLen || !onlySpace(b) {
+			counts[r.v0>>textShift] += int32(len(b))
+		}
+	}
+	for k, c := range counts {
+		if blk := t.text.blocks[k]; c > 0 && 2*int(c) >= len(blk) && len(blk) > 0 {
+			s.lend(blk).used = c
+		}
+	}
+}
+
+// planMin is the fewest records planFrom walks.
+const planMin = 4096
+
+// lend returns the account of the block blk of another store.
+func (s *textStore) lend(blk []byte) *lendState {
+	a := s.aux
+	if a == nil {
+		a = new(textAux)
+		s.aux = a
+	}
+	key := uintptr(unsafe.Pointer(unsafe.SliceData(blk)))
+	if l := a.last; l != nil && a.lastKey == key {
+		return l
+	}
+	l := a.lent[key]
+	if l == nil {
+		if a.lent == nil {
+			a.lent = map[uintptr]*lendState{}
+		}
+		l = new(lendState)
+		a.lent[key] = l
+	}
+	a.lastKey, a.last = key, l
+	return l
 }
 
 // keep stores b, which nothing else writes to, as a block of its own.

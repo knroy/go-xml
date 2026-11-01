@@ -147,4 +147,7 @@ func (s *textStore) rewind(m textMark) {
 	}
 	s.blocks = s.blocks[:m.blocks]
 	s.cur, s.size = 0, 0
+	if s.aux != nil {
+		s.aux.lent, s.aux.last = nil, nil
+	}
 }
