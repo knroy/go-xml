@@ -253,6 +253,13 @@ type Env struct {
 	// AdoptBudget copies it along with the shared counter, so a nested
 	// evaluation cannot raise the bound it is charged against.
 	MaxItems int
+	// MaxDigits bounds the decimal digits of an integer or decimal that a
+	// cast reads from text or an arithmetic operator produces. Zero means
+	// MaxDigits' package default, 10^6; a negative value means no bound. A
+	// cast over it is FOCA0003 and a result over it FOAR0002, both carrying
+	// xdm.ErrResourceLimit: parsing and multiplying are quadratic in the
+	// digit count, so an unbounded value is a time and memory attack.
+	MaxDigits int
 	// items counts the items materialised into intermediate sequences during
 	// this evaluation, bounding memory the way Depth bounds stack.
 	//
@@ -1322,6 +1329,18 @@ func (c *Context) checkDepth() error {
 	return nil
 }
 
+// checkValueDepth bounds the nesting of a map or array value that deep-equal
+// or map:find descends into at maxJSONDepth, like parse-json. The depth is
+// passed down by the walkers rather than kept in the Context, whose size is
+// pinned, and so is counted apart from function recursion.
+func checkValueDepth(depth int) error {
+	if depth >= maxJSONDepth {
+		return fmt.Errorf("XPDY0001: value nests more than %d levels: %w",
+			maxJSONDepth, xdm.ErrResourceLimit)
+	}
+	return nil
+}
+
 // countItems charges n items against the evaluation budget.
 //
 // Accumulating constructs call it as they build, so a runaway is stopped while
@@ -1359,6 +1378,60 @@ func itemsRefusal(lim int64) error {
 func (c *Context) ItemsRefused(total int64) error {
 	if lim := c.itemLimit(); total > lim {
 		return itemsRefusal(lim)
+	}
+	return nil
+}
+
+// MaxDigits is the digit bound in force where Env.MaxDigits is zero.
+const MaxDigits = 1000000
+
+// digitLimit is the digit bound in force, or -1 for none.
+func (c *Context) digitLimit() int {
+	switch {
+	case c == nil || c.ev().MaxDigits == 0:
+		return MaxDigits
+	case c.ev().MaxDigits < 0:
+		return -1
+	}
+	return c.ev().MaxDigits
+}
+
+// checkCastDigits refuses a string cast to xs:integer or xs:decimal whose text
+// is longer than the digit bound, before it is parsed.
+func (c *Context) checkCastDigits(a *xdm.Atomic, target xdm.TypeCode) error {
+	if target != xdm.TypeInteger && target != xdm.TypeDecimal ||
+		a.Type != xdm.TypeString && a.Type != xdm.TypeUntypedAtomic {
+		return nil
+	}
+	if lim := c.digitLimit(); lim >= 0 && len(a.Str()) > lim {
+		return &xdm.Error{
+			Code: "FOCA0003",
+			Message: fmt.Sprintf("a number of more than %d digits: %s",
+				lim, xdm.ErrResourceLimit),
+			Err: xdm.ErrResourceLimit,
+		}
+	}
+	return nil
+}
+
+// checkResultDigits refuses an exact arithmetic result of more than the digit
+// bound. A value held in an int64 has no big.Rat and is always small enough.
+func (c *Context) checkResultDigits(a *xdm.Atomic) error {
+	r := a.Rat()
+	if r == nil {
+		return nil
+	}
+	lim := c.digitLimit()
+	if lim < 0 {
+		return nil
+	}
+	if bits := max(r.Num().BitLen(), r.Denom().BitLen()); bits*30103/100000 > lim {
+		return &xdm.Error{
+			Code: "FOAR0002",
+			Message: fmt.Sprintf("a result of more than %d digits: %s",
+				lim, xdm.ErrResourceLimit),
+			Err: xdm.ErrResourceLimit,
+		}
 	}
 	return nil
 }

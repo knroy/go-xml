@@ -188,14 +188,12 @@ func registerMapFuncs(l *Library) {
 			return nil, err
 		}
 		var found []xdm.Sequence
-		var walk func(seq xdm.Sequence) error
-		walk = func(seq xdm.Sequence) error {
+		var walk func(seq xdm.Sequence, depth int) error
+		walk = func(seq xdm.Sequence, depth int) error {
 			// Recursion on the value's own nesting, so bounded like any other.
-			if err := ctx.checkDepth(); err != nil {
+			if err := checkValueDepth(depth); err != nil {
 				return err
 			}
-			ctx.Depth++
-			defer func() { ctx.Depth-- }()
 			for _, it := range seq {
 				switch v := it.(type) {
 				case *xdm.MapItem:
@@ -209,13 +207,13 @@ func registerMapFuncs(l *Library) {
 						found = append(found, val)
 					}
 					if err := v.Entries(func(_ *xdm.Atomic, val xdm.Sequence) error {
-						return walk(val)
+						return walk(val, depth+1)
 					}); err != nil {
 						return err
 					}
 				case *xdm.ArrayItem:
 					for _, mem := range v.Members() {
-						if err := walk(mem); err != nil {
+						if err := walk(mem, depth+1); err != nil {
 							return err
 						}
 					}
@@ -223,7 +221,7 @@ func registerMapFuncs(l *Library) {
 			}
 			return nil
 		}
-		if err := walk(args[0]); err != nil {
+		if err := walk(args[0], 0); err != nil {
 			return nil, err
 		}
 		return xdm.One(xdm.NewArray(found...)), nil

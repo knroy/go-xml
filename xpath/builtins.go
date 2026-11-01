@@ -197,7 +197,7 @@ func registerConstructors(l *Library) {
 
 	for name, code := range types {
 		target := code
-		l.register(xdm.NSXS, name, 1, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		l.register(xdm.NSXS, name, 1, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			// A constructor applied to the empty sequence yields the empty
 			// sequence rather than raising, so "xs:date($optional)" is safe.
@@ -206,6 +206,9 @@ func registerConstructors(l *Library) {
 			}
 			it, err := atoms.Single()
 			if err != nil {
+				return nil, err
+			}
+			if err := ctx.checkCastDigits(it.(*xdm.Atomic), target); err != nil {
 				return nil, err
 			}
 			out, err := CastAtomic(it.(*xdm.Atomic), target)

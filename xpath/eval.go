@@ -42,14 +42,34 @@ func (e *ContextItem) Eval(ctx *Context) (xdm.Sequence, error) {
 // Eval implements Expr for a sequence constructor.
 func (e *SequenceExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	var out xdm.Sequence
+	widest := 0
 	for _, it := range e.Items {
 		v, err := it.Eval(ctx)
 		if err != nil {
 			return nil, err
 		}
+		widest = max(widest, len(v))
 		out = append(out, v...)
 	}
+	// The widest operand was charged by whatever built it; the rest is
+	// copies, which ($s, $s) in a loop doubles without any other charge.
+	if err := ctx.chargeCopies(len(out) - widest); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// chargeCopyFloor is the size below which chargeCopies charges nothing, so
+// that ordinary small sequences cost no atomic add.
+const chargeCopyFloor = 64
+
+// chargeCopies charges n items a constructor copied beyond those the
+// expressions that built them already charged.
+func (c *Context) chargeCopies(n int) error {
+	if n < chargeCopyFloor {
+		return nil
+	}
+	return c.countItems(n)
 }
 
 // Eval implements Expr for a single axis step.

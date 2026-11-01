@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -744,6 +745,12 @@ func isOperandDuration(t xdm.TypeCode) bool {
 func compareNumeric(a, b *xdm.Atomic) int {
 	common := xdm.NumericPromote(a.Type, b.Type)
 	if common == xdm.TypeInteger || common == xdm.TypeDecimal {
+		if x, y := a.Rat().Num(), b.Rat().Num(); common == xdm.TypeInteger &&
+			x.IsInt64() && y.IsInt64() {
+			// Integers compare by numerator; Rat.Cmp multiplies the
+			// cross terms into fresh big.Ints.
+			return cmp.Compare(x.Int64(), y.Int64())
+		}
 		return a.Rat().Cmp(b.Rat())
 	}
 	af, bf := a.Float64(), b.Float64()
@@ -866,12 +873,7 @@ func (e *BinaryOp) evalRange(ctx *Context) (xdm.Sequence, error) {
 	// would narrow each value to anyway. Testing v against the end before
 	// incrementing it keeps a range ending at MaxInt64 from overflowing.
 	if lo.IsInt64() && hi.IsInt64() {
-		for v, end := lo.Int64(), hi.Int64(); ; v++ {
-			out = append(out, xdm.NewInteger(v))
-			if v == end {
-				return out, nil
-			}
-		}
+		return xdm.AppendIntegers(out, lo.Int64(), count), nil
 	}
 	// Stepping a big.Int keeps the arbitrary precision through the whole
 	// range: the values are what the expression named, not a wrapped
@@ -1034,6 +1036,9 @@ func (e *BinaryOp) evalArithmetic(ctx *Context) (xdm.Sequence, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := ctx.checkResultDigits(res); err != nil {
+			return nil, err
+		}
 		return xdm.One(res), nil
 	}
 
@@ -1051,6 +1056,9 @@ func (e *BinaryOp) evalArithmetic(ctx *Context) (xdm.Sequence, error) {
 	}
 	res, err := arithmetic(lit.(*xdm.Atomic), rit.(*xdm.Atomic), e.Op)
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.checkResultDigits(res); err != nil {
 		return nil, err
 	}
 	return xdm.One(res), nil
@@ -1146,6 +1154,17 @@ func int64Arithmetic(x, y *big.Rat, op string) (z int64, ok bool) {
 		z = a * b
 		return z, z/b == a && !(a == -1 && b == math.MinInt64) &&
 			!(b == -1 && a == math.MinInt64)
+	}
+	// mod and idiv truncate toward zero, as Go's % and / do. A zero divisor
+	// and MinInt64 idiv -1 are left to the exact path, which raises or widens.
+	if b == 0 {
+		return 0, false
+	}
+	switch op {
+	case "mod":
+		return a % b, true
+	case "idiv":
+		return a / b, !(a == math.MinInt64 && b == -1)
 	}
 	return 0, false
 }
@@ -1270,6 +1289,9 @@ func toNumeric(a *xdm.Atomic) (*xdm.Atomic, error) {
 func negate(a *xdm.Atomic) *xdm.Atomic {
 	switch a.Type {
 	case xdm.TypeInteger:
+		if n := a.Rat().Num(); n.IsInt64() && n.Int64() != math.MinInt64 {
+			return xdm.NewInteger(-n.Int64())
+		}
 		return xdm.NewIntegerFromRat(new(big.Rat).Neg(a.Rat()))
 	case xdm.TypeDecimal:
 		return xdm.NewDecimal(new(big.Rat).Neg(a.Rat()))
