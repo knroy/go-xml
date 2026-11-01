@@ -191,11 +191,10 @@ func registerMapFuncs(l *Library) {
 		var walk func(seq xdm.Sequence) error
 		walk = func(seq xdm.Sequence) error {
 			// Recursion on the value's own nesting, so bounded like any other.
-			if err := ctx.checkDepth(); err != nil {
+			if err := ctx.enterValue(); err != nil {
 				return err
 			}
-			ctx.Depth++
-			defer func() { ctx.Depth-- }()
+			defer func() { ctx.valueDepth-- }()
 			for _, it := range seq {
 				switch v := it.(type) {
 				case *xdm.MapItem:
