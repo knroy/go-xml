@@ -102,6 +102,11 @@ func TestStreamTrustReproducers(t *testing.T) {
 			map[string]string{"b.xsl": hdr + `<xsl:function name="f:g" streamability="inspection" as="xs:string"><xsl:param name="n" as="node()"/><xsl:sequence select="name($n)"/></xsl:function>` +
 				sd(fe(`<v><xsl:value-of select="f:g(.)"/></v>`)) + end},
 			hdr + `<xsl:import href="b.xsl"/><xsl:function name="f:g" as="xs:string"><xsl:param name="n" as="node()"/><xsl:sequence select="string($n/` + sib + `)"/></xsl:function>` + end, "b.xsl"},
+		// Operands the analysis skipped, now assessed by their own rules.
+		{"S1 xsl:map-entry nested in xsl:for-each inside xsl:map", "XTSE3430", nil,
+			hdr + sd(`<xsl:variable name="m" as="map(*)"><xsl:map><xsl:for-each select="doc/rec"><xsl:map-entry key="string(@k)" select="."/></xsl:for-each></xsl:map></xsl:variable><xsl:copy-of select="$m('1')/following-sibling::rec[1]"/>`) + end, ""},
+		{"S1 control: xsl:map-entry with a grounded value", "verified", nil,
+			hdr + sd(`<xsl:variable name="m" as="map(*)"><xsl:map><xsl:for-each select="doc/rec"><xsl:map-entry key="string(@k)" select="string(.)"/></xsl:for-each></xsl:map></xsl:variable><v><xsl:value-of select="$m('1')"/></v>`) + end, ""},
 		// The burst path's own shape, which must stay trusted.
 		{"control: record loop", "verified", nil,
 			hdr + sd(fe(`<v><xsl:value-of select="@k"/></v>`)) + end, ""},

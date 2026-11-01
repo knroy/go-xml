@@ -528,6 +528,11 @@ func (a *instrAnalyzer) body(el *xdm.Node) props {
 // xsl:on-completion, xsl:catch, xsl:matching-substring and the rest are
 // operands of their parent instruction under its own rule, not members of its
 // body, and assessing them twice would double-count a consuming operand.
+//
+// xsl:map-entry is not among them: it is an instruction (§19.8.4.24), and
+// one nested in an xsl:for-each or xsl:if inside an xsl:map is a member of
+// that instruction's body, where skipping it let a streamed node be bound into
+// the map unseen.
 func isSequenceConstructorExcluded(el *xdm.Node) bool {
 	if el.Name().URI != xdm.NSXSL {
 		return false
@@ -535,7 +540,7 @@ func isSequenceConstructorExcluded(el *xdm.Node) bool {
 	switch el.Name().Local {
 	case "param", "sort", "with-param", "on-completion", "catch",
 		"matching-substring", "non-matching-substring", "merge-source",
-		"merge-key", "merge-action", "when", "otherwise", "map-entry",
+		"merge-key", "merge-action", "when", "otherwise",
 		"context-item", "fallback":
 		return true
 	}
@@ -1503,8 +1508,7 @@ func (a *instrAnalyzer) mapInstruction(el *xdm.Node) props {
 		return props{postureGrounded, widest}
 	}
 	// Otherwise the posture and sweep are those of the contained sequence
-	// constructor -- which, because xsl:map-entry is excluded from a
-	// sequence constructor, must be assessed with the entries included.
+	// constructor, entries included.
 	var ops []operand
 	for _, c := range el.ChildElements() {
 		ops = append(ops, operand{
