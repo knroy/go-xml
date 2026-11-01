@@ -184,6 +184,7 @@ type nameMemo struct {
 	mu      sync.Mutex
 	pending map[nameKey]pattern // stored but not yet published in m; under mu
 	np      atomic.Int32        // len(pending), so a load skips the lock when empty
+	hits    int                 // locked pending hits since the last publish; under mu
 }
 
 type nameKey struct{ ns, local string }
@@ -200,9 +201,20 @@ func (c *nameMemo) load(n xdm.QName) (pattern, bool) {
 	}
 	c.mu.Lock()
 	p, ok := c.pending[k]
+	// A pending hit costs a lock; after a few, publish so later lookups
+	// are lock-free again.
+	if ok {
+		if c.hits++; c.hits >= pendingHitsPublish {
+			c.publishLocked()
+		}
+	}
 	c.mu.Unlock()
 	return p, ok
 }
+
+// pendingHitsPublish is how many locked lookups of pending entries trigger
+// their publication.
+const pendingHitsPublish = 8
 
 func (c *nameMemo) store(n xdm.QName, p pattern) {
 	c.mu.Lock()
@@ -226,17 +238,27 @@ func (c *nameMemo) store(n xdm.QName, p pattern) {
 	// sum to O(n) over n stores. A load that misses the snapshot checks the
 	// pending map.
 	if len(c.pending) > len(old) {
-		m := make(map[nameKey]pattern, len(old)+len(c.pending))
-		for k, v := range old {
-			m[k] = v
-		}
-		for k, v := range c.pending {
-			m[k] = v
-		}
-		c.m.Store(&m)
-		c.pending = nil
-		c.np.Store(0)
+		c.publishLocked()
 	}
+}
+
+// publishLocked folds the pending entries into a new snapshot.
+func (c *nameMemo) publishLocked() {
+	var old map[nameKey]pattern
+	if o := c.m.Load(); o != nil {
+		old = *o
+	}
+	m := make(map[nameKey]pattern, len(old)+len(c.pending))
+	for k, v := range old {
+		m[k] = v
+	}
+	for k, v := range c.pending {
+		m[k] = v
+	}
+	c.m.Store(&m)
+	c.pending = nil
+	c.np.Store(0)
+	c.hits = 0
 }
 
 type patBox struct {
