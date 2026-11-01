@@ -167,6 +167,12 @@ Measured on branches in 2026-11 and not adopted, each with the reason:
 - **Template-driven shallow-copy does not share source text.** Deep copies
   (`xsl:copy-of`, `xdm.Copy` of 4,096+ records) borrow the source's text
   blocks; a template-built copy adds each value as a string.
+- **With any accumulator declared, every `fn:copy-of`/`fn:snapshot` copy is kept
+  until the transform ends**, with its original: §18.2.2 and §18.2.10 make the
+  copy answer with the original's accumulator values, and the copy-to-original
+  table is how it finds them. Weak references would not free them, since the
+  accumulator value cache holds every tree an accumulator was evaluated over.
+  With no accumulator in any package the table is not made.
 - **Holding millions of namespace nodes costs a sweep per collection.**
   Namespace nodes are held weakly since v2.2.0; while a tree's table is not
   empty, every GC cycle sweeps it.

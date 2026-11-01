@@ -26,6 +26,7 @@ is byte-identical; new API is additive.
 | Built-in shallow-copy built a document result twice | In a mode with no template rules it builds in place: parse-100mb identity peak 1091 → 930 MB, CPU −25 to −40%. | [`302c932`][302c932] |
 | Built trees stored every whitespace-only text value | They share one value per string, as a parse does: an identity result is the size of its source again. | [`c60f8f3`][c60f8f3], [`09f0c5d`][09f0c5d] |
 | A deep copy duplicated the source's text | `xsl:copy-of` of 4,096+ records borrows the source blocks it fills by half or more: XMark identity result −28%, peak −19%. | [`546af03`][546af03], [`b4cd614`][b4cd614] |
+| Every `copy-of` was kept until the transform ended | Each copied node was recorded against its original for accumulators, even with none declared: a 10 MB stream copying each record peaked at 830 MB. The table exists only when an accumulator does: 2.8 MB. Also in v2.1.1. | [`c7952b0`][c7952b0] |
 | Full record chunks were padded 6% by the malloc header | They are allocated two at a time past the 8th, 40,960 B exactly: parse-100mb retained 370 → 350.5 MB. | [`907c674`][907c674] |
 
 ## v2.1.1 — 2026-11-01
@@ -1867,3 +1868,4 @@ here so every entry in this file sits under a release.
 [546af03]: https://github.com/knroy/go-xml/commit/546af03
 [b4cd614]: https://github.com/knroy/go-xml/commit/b4cd614
 [907c674]: https://github.com/knroy/go-xml/commit/907c674
+[c7952b0]: https://github.com/knroy/go-xml/commit/c7952b0
