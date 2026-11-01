@@ -368,3 +368,64 @@ func TestBurstSelectAtomizes(t *testing.T) {
 		t.Fatalf("got %q, %v, bursts %v, heap grew %d MB", out, err, burstRuns, grew)
 	}
 }
+
+// Records nested in records, and in other elements; one in a namespace, and
+// a document in a default namespace.
+const (
+	burstNestDoc = `<doc xmlns:q="urn:q" id="d"><rec k="1" v="1"><a>x</a><rec k="2" v="2"><rec k="3" v="3"/></rec></rec>` +
+		`<grp id="g"><rec k="4" v="4"><b><rec k="5" v="5">t</rec></b></rec></grp><q:rec k="6" v="6"/><rec k="7" v="7"/></doc>`
+	burstNSDoc = `<doc xmlns="urn:d"><rec k="1"><rec k="2"/></rec><x><rec k="3"/></x></doc>`
+)
+
+// TestBurstPatternsMatchTree runs record paths with descendant steps,
+// wildcards and outermost() with bursts and without: a match nested in
+// another is delivered inside it, in document order, and outermost() keeps
+// only the outer one.
+func TestBurstPatternsMatchTree(t *testing.T) {
+	for _, tc := range []struct {
+		body, doc, attrs string
+		bursts           bool
+		want             string
+	}{
+		{`<xsl:for-each select="//rec"><r k="{@k}" d="{count(ancestor::rec)}"/></xsl:for-each>`, burstNestDoc, "", true,
+			`<r k="1" d="0"/><r k="2" d="1"/><r k="3" d="2"/><r k="4" d="0"/><r k="5" d="1"/><r k="7" d="0"/>`},
+		{`<xsl:for-each select="doc//rec[@v > 2]"><r k="{@k}"/></xsl:for-each>`, burstNestDoc, "", true,
+			`<r k="3"/><r k="4"/><r k="5"/><r k="7"/>`},
+		{`<xsl:for-each select="outermost(//rec)"><xsl:copy-of select="."/></xsl:for-each>`, burstNestDoc, "", true, ""},
+		{`<xsl:for-each select="/*/*/rec"><r k="{@k}"/></xsl:for-each>`, burstNestDoc, "", true, `<r k="2"/><r k="4"/>`},
+		{`<xsl:for-each select="/*/*:rec"><r k="{@k}"/></xsl:for-each>`, burstNestDoc, "", true, `<r k="1"/><r k="6"/><r k="7"/>`},
+		{`<xsl:iterate select="descendant::rec"><xsl:param name="t" select="0"/><xsl:on-completion><t v="{$t}"/></xsl:on-completion><xsl:next-iteration><xsl:with-param name="t" select="$t + @v"/></xsl:next-iteration></xsl:iterate>`, burstNestDoc, "", true, `<t v="22"/>`},
+		{`<xsl:value-of select="sum(//rec/@v)"/>`, burstNestDoc, "", true, "22"},
+		{`<xsl:value-of select="count(outermost(//rec))"/>`, burstNestDoc, "", true, "3"},
+		{`<xsl:value-of select="string-join(outermost(//rec)/@k, ',')"/>`, burstNestDoc, "", true, "1,4,7"},
+		{`<xsl:value-of select="count(//*:rec)"/>`, burstNestDoc, "", true, "7"},
+		{`<xsl:value-of select="count(//q:*)"/>`, burstNestDoc, "", true, "1"},
+		{`<xsl:value-of select="count(/*/*)"/>`, burstNestDoc, "", true, "4"},
+		{`<xsl:value-of select="count(//rec//text())"/>`, burstNestDoc, "", true, "2"},
+		{`<xsl:value-of select="//rec/@k"/>`, burstNestDoc, "", true, "1 2 3 4 5 7"},
+		{`<xsl:value-of select="//rec/@k"/>`, burstNSDoc, `xpath-default-namespace="urn:d"`, true, "1 2 3"},
+		{`<xsl:for-each select="outermost(//rec)"><r k="{@k}"/></xsl:for-each>`, burstNSDoc, `xpath-default-namespace="urn:d"`, true, `<r k="1"/><r k="3"/>`},
+		{`<xsl:value-of select="count(//rec)"/>`, burstNSDoc, "", true, "0"},
+		// refused: no element to cut at, or a position among siblings
+		{`<xsl:value-of select="count(//text())"/>`, burstNestDoc, "", false, "2"},
+		{`<xsl:value-of select="sum(//@v)"/>`, burstNestDoc, "", false, "28"},
+		{`<xsl:for-each select="//rec[1]"><r k="{@k}"/></xsl:for-each>`, burstNestDoc, "", false, ""},
+	} {
+		src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:q="urn:q" exclude-result-prefixes="q" ` +
+			tc.attrs + `><xsl:template name="main"><xsl:source-document streamable="yes" href="doc.xml">` +
+			tc.body + `</xsl:source-document></xsl:template></xsl:stylesheet>`
+		got, err := burstRun(t, src, "doc.xml", tc.doc, true)
+		ran := burstRuns
+		want, err2 := burstRun(t, src, "doc.xml", tc.doc, false)
+		if err != nil || err2 != nil || got != want {
+			t.Errorf("%s: bursts differ from the tree\nbursts: %q %v\ntree:   %q %v", tc.body, got, err, want, err2)
+			continue
+		}
+		if ran != tc.bursts {
+			t.Errorf("%s: ran in bursts: %v, want %v", tc.body, ran, tc.bursts)
+		}
+		if tc.want != "" && !strings.HasSuffix(got, ">"+tc.want) {
+			t.Errorf("%s: output %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}

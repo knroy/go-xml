@@ -4,11 +4,13 @@ package xslt
 //
 // The narrowest common streaming pattern -- a streamable xsl:source-document
 // whose body, under literal result elements at most, is one xsl:for-each or
-// xsl:iterate over a child path of the document, reading only the item it is
-// given -- is executed without building the document. xdm.ParseBursts hands
-// over one selected element at a time, in a small tree of its own holding
-// the element and copies of its ancestors, and the loop's body runs on it
-// before the next one is read.
+// xsl:iterate over a path of the document's elements, reading only the item
+// it is given -- is executed without building the document. The path's
+// steps are child or descendant steps by name or wildcard (//rec, /*/*/rec,
+// *:rec), or outermost() of such a path. xdm.ParseBursts hands over one
+// outermost match at a time, in a small tree of its own holding the element
+// and copies of its ancestors, and the loop's body runs on it, and on any
+// match nested in it, before the next one is read.
 //
 // That is correct only where the body cannot tell a burst from the whole
 // tree, so the plan is made from the stylesheet source and fails closed:
@@ -44,6 +46,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -61,8 +64,9 @@ var (
 
 // burstPlan is a streamable xsl:source-document that can run in bursts.
 type burstPlan struct {
-	// path is the select expression's child steps, from the document node.
-	path []xdm.QName
+	// path is the pattern of the select expression's steps, from the
+	// document node, that the bursts are cut at.
+	path []xdmburst.Step
 	// target is the xsl:for-each or xsl:iterate element, and instr its
 	// compiled form; sel is its select expression, evaluated against each
 	// burst's document node to apply the last step's predicates.
@@ -119,7 +123,7 @@ type burstResolver interface {
 	// parseBursts is xdm.ParseBursts over the document uri names, read with
 	// the options and limits ResolveDocument would read it with. An error
 	// from fn is returned as it is.
-	parseBursts(ctx *xpath.Context, uri, base string, path []xdm.QName, fn func(*xdm.Node) error) error
+	parseBursts(ctx *xpath.Context, uri, base string, path []xdmburst.Step, fn func(*xdm.Node) error) error
 }
 
 // planBursts decides, from the stylesheet source, whether the streamable
@@ -210,8 +214,8 @@ func selectTargetOK(el *xdm.Node) bool {
 
 // burstSplit is a select expression taken apart around its record path.
 type burstSplit struct {
-	// path is the element names the bursts are cut at.
-	path []xdm.QName
+	// path is the pattern the bursts are cut at.
+	path []xdmburst.Step
 	// items is the record path, put puts an expression in its place, and
 	// outer holds the whole expression, whatever put has made of it.
 	items xpath.Expr
@@ -440,57 +444,103 @@ func (s *burstSplit) slot(e xpath.Expr, put func(xpath.Expr)) bool {
 	return s.walk(e, put)
 }
 
-// recordPath returns the element names to cut bursts at when e is a record
-// path, nil otherwise. A record path is child steps by name from the
-// document node, the last of them perhaps with predicates that do not
-// depend on position (as burstPath requires), followed by steps that stay
-// within the element -- down, or to its attributes, with any predicates
-// burstSafe allows -- and perhaps one last expression that makes atomic
-// values or copies. Each burst then holds what the path returns from one
-// element, in document order, and the bursts in turn hold all of it.
-func recordPath(e xpath.Expr) []xdm.QName {
+// recordPath returns the pattern to cut bursts at when e is a record
+// path, nil otherwise. A record path is steps by name from the document
+// node (burstPattern), the last of them perhaps with predicates that do not
+// depend on position, followed by steps that stay within the element --
+// down, or to its attributes, with any predicates burstSafe allows -- and
+// perhaps one last expression that makes atomic values or copies; or
+// outermost() or innermost() of a record path, perhaps followed by such
+// steps. Each burst then holds what the path returns from one outermost
+// match of the pattern, in document order, and the bursts in turn hold all
+// of it: a match inside another is in the same burst, so outermost() and
+// innermost() see in each burst every node of the whole sequence that is
+// an ancestor or descendant of one of its own.
+func recordPath(e xpath.Expr) []xdmburst.Step {
 	var steps []xpath.Expr
 	switch x := e.(type) {
 	case *xpath.Step:
 		steps = []xpath.Expr{x}
+	case *xpath.FuncCall:
+		if outerInner(x) {
+			return recordPath(x.Args[0])
+		}
+		return nil
 	case *xpath.PathExpr:
 		steps = x.Steps
+		if f, ok := firstOf(steps).(*xpath.FuncCall); ok && !x.Root && outerInner(f) {
+			if !pathTail(steps[1:]) {
+				return nil
+			}
+			return recordPath(f)
+		}
 		if _, ok := firstOf(steps).(*xpath.ContextItem); ok && !x.Root {
 			steps = steps[1:]
 		}
 	default:
 		return nil
 	}
-	var path []xdm.QName
-	k := 0
-	for ; k < len(steps); k++ {
-		st, ok := steps[k].(*xpath.Step)
-		if !ok || st.Axis != xpath.AxisChild {
-			break
-		}
-		nt, ok := st.Test.(*xpath.NameTest)
-		if !ok || nt.AnyURI || nt.AnyLocal {
-			break
-		}
-		if len(st.Predicates) > 0 {
-			// Positional predicates count within the element above,
-			// which is then the burst.
-			for _, p := range st.Predicates {
-				if !booleanShaped(p) || !burstSafe(p, true) {
-					goto tail
-				}
-			}
-			path = append(path, xdm.QName{URI: nt.Name.URI, Local: nt.Name.Local})
-			k++
-			break
-		}
-		path = append(path, xdm.QName{URI: nt.Name.URI, Local: nt.Name.Local})
-	}
-tail:
-	if len(path) == 0 || !pathTail(steps[k:]) {
+	path, k, _ := burstPattern(steps)
+	if len(path) == 0 || len(path) > xdmburst.MaxSteps || !pathTail(steps[k:]) {
 		return nil
 	}
 	return path
+}
+
+// outerInner reports whether f is fn:outermost or fn:innermost.
+func outerInner(f *xpath.FuncCall) bool {
+	return f.Name.URI == fnNS && len(f.Args) == 1 &&
+		(f.Name.Local == "outermost" || f.Name.Local == "innermost")
+}
+
+// burstPattern takes from steps the pattern of element name tests bursts
+// can be cut at: child or descendant steps (// included) whose test is a
+// name or a wildcard, and returns it with the number of steps it used and
+// whether they include a descendant step. Only the last may have
+// predicates, which must not depend on position: they are evaluated in the
+// burst, where siblings are missing, and a match nested in another is in
+// the other's burst. Earlier steps match ancestors, which a burst holds only
+// shallow copies of.
+func burstPattern(steps []xpath.Expr) (path []xdmburst.Step, k int, desc bool) {
+	pending := false // a descendant-or-self::node() step was taken
+	for ; k < len(steps); k++ {
+		st, ok := steps[k].(*xpath.Step)
+		if !ok {
+			break
+		}
+		if kt, ok := st.Test.(*xpath.KindTest); ok && kt.Any && st.Axis == xpath.AxisDescendantOrSelf &&
+			len(st.Predicates) == 0 && !pending && k+1 < len(steps) {
+			pending = true
+			continue
+		}
+		d := pending
+		if st.Axis == xpath.AxisDescendant {
+			d = true
+		} else if st.Axis != xpath.AxisChild {
+			break
+		}
+		nt, ok := st.Test.(*xpath.NameTest)
+		if !ok {
+			break
+		}
+		for _, p := range st.Predicates {
+			if !booleanShaped(p) || !burstSafe(p, true) {
+				goto tail
+			}
+		}
+		pending = false
+		desc = desc || d
+		path = append(path, xdmburst.Step{URI: nt.Name.URI, Local: nt.Name.Local,
+			AnyURI: nt.AnyURI, AnyLocal: nt.AnyLocal, Descendant: d})
+		if len(st.Predicates) > 0 {
+			return path, k + 1, desc
+		}
+	}
+tail:
+	if pending {
+		k-- // the descendant-or-self::node() step belongs to the tail
+	}
+	return path, k, desc
 }
 
 // pathTail reports whether steps stay within the nodes they start from:
@@ -591,42 +641,37 @@ func lreAttrOK(a *xdm.Node) bool {
 	return false
 }
 
-// burstPath returns the element names of the loop's select, a path of child
-// steps from the document node, or nil. Only the last step may have
-// predicates, and they must not depend on position: a burst's element is
-// the first and only one of its name in its tree.
-func burstPath(target *xdm.Node) (path []xdm.QName, filtered bool) {
-	e := parseAt(target, target.AttrValue("select"))
+// burstPath returns the pattern of the loop's select, a path of steps
+// from the document node that burstPattern takes whole, or outermost() or
+// innermost() of one; or nil. filtered says each burst's element need not be
+// the burst's only item: the last step has predicates, or a match may hold
+// another.
+func burstPath(target *xdm.Node) (path []xdmburst.Step, filtered bool) {
+	return loopPattern(parseAt(target, target.AttrValue("select")))
+}
+
+func loopPattern(e xpath.Expr) (path []xdmburst.Step, filtered bool) {
 	var steps []xpath.Expr
 	switch x := e.(type) {
 	case *xpath.PathExpr:
 		steps = x.Steps
 	case *xpath.Step:
 		steps = []xpath.Expr{x}
+	case *xpath.FuncCall:
+		if outerInner(x) {
+			path, _ = loopPattern(x.Args[0])
+			return path, true
+		}
+		return nil, false
 	default:
 		return nil, false
 	}
-	for k, s := range steps {
-		st, ok := s.(*xpath.Step)
-		if !ok || st.Axis != xpath.AxisChild {
-			return nil, false
-		}
-		nt, ok := st.Test.(*xpath.NameTest)
-		if !ok || nt.AnyURI || nt.AnyLocal {
-			return nil, false
-		}
-		if len(st.Predicates) > 0 && k < len(steps)-1 {
-			return nil, false
-		}
-		for _, p := range st.Predicates {
-			if !booleanShaped(p) || !burstSafe(p, true) {
-				return nil, false
-			}
-		}
-		filtered = len(st.Predicates) > 0
-		path = append(path, xdm.QName{URI: nt.Name.URI, Local: nt.Name.Local})
+	path, k, desc := burstPattern(steps)
+	if k != len(steps) || len(path) == 0 || len(path) > xdmburst.MaxSteps {
+		return nil, false
 	}
-	return path, filtered
+	last := steps[k-1].(*xpath.Step)
+	return path, desc || len(last.Predicates) > 0
 }
 
 // parseAt parses src as an expression written on el, or returns nil.
@@ -1318,7 +1363,7 @@ func (r *FileResolver) wantsBursts(uri, base string) (string, bool) {
 // does -- the same confinement, options, entity allowance and byte limit, and
 // the same errors -- but in bursts, and caches nothing: there is no tree.
 func (r *FileResolver) parseBursts(ctx *xpath.Context, uri, base string,
-	steps []xdm.QName, fn func(*xdm.Node) error) error {
+	steps []xdmburst.Step, fn func(*xdm.Node) error) error {
 
 	path, err := r.resolvePath(uri, base)
 	if err != nil {
@@ -1337,8 +1382,8 @@ func (r *FileResolver) parseBursts(ctx *xpath.Context, uri, base string,
 			src = io.LimitReader(f, lim)
 		}
 		cr := &countedReader{r: src}
-		err := xdm.ParseBursts(cr, opts, steps, func(n *xdm.Node) error {
-			fnErr = fn(n)
+		err := xdmburst.Parse(cr, opts, steps, func(n any) error {
+			fnErr = fn(n.(*xdm.Node))
 			return fnErr
 		})
 		if err != nil && err == fnErr {
