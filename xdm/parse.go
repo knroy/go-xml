@@ -126,6 +126,9 @@ type ParseOptions struct {
 	// It is unexported for the same reason as the two fields above: it
 	// describes this parse's place in a larger document, not a knob.
 	entityBudget *entityBudget
+
+	// bursts, when set, makes this parse ParseBursts: see bursts.go.
+	bursts *burster
 }
 
 // Limits applied when the corresponding ParseOptions field is zero.
@@ -312,6 +315,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	var ns nsScope
 	var names nameCache
 	depth := 0
+	bs := opts.bursts
 	sawRoot := false
 	sawDecl := false
 	standalone := false // the XML declaration said standalone="yes"
@@ -365,6 +369,9 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		// tag, a new sibling -- can look at it.
 		if _, text := tok.(*xml.CharData); !text {
 			run.flush(&spaces, stripSpaceAt)
+			if bs != nil {
+				bs.trimLeaves(cur, depth, &spaces)
+			}
 		}
 
 		// Each token points into the decoder and is copied out here; it is
@@ -411,6 +418,10 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 			if err := validateStartElement(t, &ns, dec.IsVersion11()); err != nil {
 				return nil, err
 			}
+			if bs != nil && cur == tree.Root {
+				bs.marks = append(bs.marks[:0], tree.text.mark())
+				bs.v11 = dec.IsVersion11()
+			}
 			el, decls := buildElement(t, cur, &ns, &names)
 			if off := encodeOffset(start, trackPos); off != 0 {
 				el.setOffset(off)
@@ -444,6 +455,9 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 					maxNodes, ErrResourceLimit)
 			}
 			cur = el
+			if bs != nil {
+				bs.start(el, depth)
+			}
 
 		case *xml.EndElement:
 			t := *tok
@@ -465,8 +479,14 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 			// must not be gated on a strip-space declaration existing.
 			tree.closeLast()
 			ns.pop(len(cur.frame()))
+			closed := cur
 			cur = cur.Parent()
 			depth--
+			if bs != nil {
+				if err := bs.end(closed, depth+1, &spaces); err != nil {
+					return nil, err
+				}
+			}
 
 		case *xml.CharData:
 			t := *tok
