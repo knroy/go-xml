@@ -810,7 +810,7 @@ func (n *Node) NumNamespaceDecls() int { return len(n.frame()) }
 // NamespaceDeclAt returns the namespace node for the i'th declaration held on
 // n itself. It is the node the namespace axis gives for that prefix.
 func (n *Node) NamespaceDeclAt(i int) *Node {
-	return n.sideNode(n.v0, uint32(i), n.self)
+	return n.sideNode(n.v0, uint32(i), n.self, -1)
 }
 
 // NamespaceDecls iterates over the namespace nodes for the declarations held
@@ -1363,8 +1363,8 @@ func (n *Node) NamespaceNodes() iter.Seq[*Node] {
 		if n.kind != uint8(KindElement) || n.flags&fSide != 0 {
 			return
 		}
-		for _, s := range n.scopeSlots() {
-			if !yield(n.sideNode(s.frame, s.index, s.owner)) {
+		for i, s := range n.scopeSlots() {
+			if !yield(n.sideNode(s.frame, s.index, s.owner, i)) {
 				return
 			}
 		}
@@ -1406,8 +1406,9 @@ func (n *Node) scopeSlots() []scopeSlot {
 
 // sideNode returns the namespace node of n for the binding at (frame,
 // index), making it on first use. Making it is safe from any number of
-// goroutines reading one tree.
-func (n *Node) sideNode(frame, index, owner uint32) *Node {
+// goroutines reading one tree. slot is the node's place among n's, or -1 to
+// work it out from n's scope, which costs a rebuild of that scope.
+func (n *Node) sideNode(frame, index, owner uint32, slot int) *Node {
 	t := n.tree
 	var prefix string
 	if index == xmlBinding {
@@ -1424,14 +1425,16 @@ func (n *Node) sideNode(frame, index, owner uint32) *Node {
 	// The slot places the node among n's others, by prefix, for document
 	// order; an undeclaring declaration, which has no place on the axis,
 	// takes the place its prefix would have.
-	slot := uint32(0)
-	for _, s := range n.scopeSlots() {
-		if s.prefix < prefix {
-			slot++
+	if slot < 0 {
+		slot = 0
+		for _, s := range n.scopeSlots() {
+			if s.prefix < prefix {
+				slot++
+			}
 		}
 	}
 	s := &Node{tree: t, kind: uint8(KindNamespace), flags: fSide,
-		self: uint32(len(t.side)), parent: n.self, end: slot, prev: owner,
+		self: uint32(len(t.side)), parent: n.self, end: uint32(slot), prev: owner,
 		v0: frame, v1: index}
 	if t.side == nil {
 		t.side = map[sideKey]*Node{}
