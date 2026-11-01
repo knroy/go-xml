@@ -820,7 +820,9 @@ func ucaCollationFor(uri string) (Collation, error) {
 		return e.c, e.err
 	}
 	c, err := parseUCACollation(uri)
-	ucaCache.Put(uri, ucaCacheEntry{c, err})
+	if len(uri) <= maxCachedKey {
+		ucaCache.Put(uri, ucaCacheEntry{c, err})
+	}
 	return c, err
 }
 

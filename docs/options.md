@@ -180,7 +180,7 @@ tree, err := xdm.ParseString(src, xdm.ParseOptions{
 | `BaseURI` | `string` | none | Recorded on the document node; what `fn:base-uri`, `fn:doc` and relative `xsl:include` resolve against. Set it whenever the document came from somewhere addressable. |
 | `StripSpace` | `func(QName) bool` | keep all | Drops whitespace-only text nodes for the element names it returns true for. A predicate rather than a bool because `xsl:strip-space` is per-element. |
 | `AllowDOCTYPE` | `bool` | refuse | Permits a `DOCTYPE` declaration. See below. |
-| `TrackPositions` | `bool` | off | Records where each element starts, so a validation error can name a line. Retains the source text for the life of the tree — about 10% more memory, no extra parse time. |
+| `TrackPositions` | `bool` | off | Records where each element starts, so a validation error can name a line. Keeps each line's start offset and each element's column, not the source text: about 10% more retained memory (parse-10mb 37.2 → 41.5 MB), no extra parse time. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Nesting limit. Deep input is the cheapest route to stack exhaustion. |
 | `MaxBytes` | `int64` | `DefaultMaxBytes` = 64 MB | Source size limit, enforced on the read. |
 | `MaxNodes` | `int` | `DefaultMaxNodes` = 10,000,000 | Node count limit, counting attributes and namespaces. |
@@ -688,6 +688,7 @@ functions or `WithEnv`):
 | `RegexVersion`, `LibraryVersion` | `Version` | Raise the regular-expression dialect and the function library above the expression's version, without admitting new syntax. |
 | `MaxDepth` | `int` | Recursion bound. Zero is `xpath.MaxDepth` (500). |
 | `MaxItems` | `int` | Items an evaluation may materialise. Zero is `xpath.MaxItems` (5,000,000); negative is no bound; a nested evaluation adopts the caller's bound and cannot raise it. |
+| `MaxDigits` | `int` | Digits of an `xs:integer` or `xs:decimal` a cast or arithmetic may produce. Zero is `xpath.MaxDigits` (10^6), `FOCA0003` or `FOAR0002` past it; negative is no bound. |
 | `QualifyVar`, `MissingVar` | funcs | Host hooks for variable references (XSLT packages, XQuery cycles). |
 | `MapDuplicateCode` | `string` | Error code for a duplicate key in a map constructor; `XQDY0137` by default. |
 
@@ -703,7 +704,11 @@ evaluation's. A nested evaluation therefore never resets or raises a budget.
 `WithStaticBaseURI` and `WithStaticHost` set the defaults an expression compiled
 without them uses (a one-shot `xpath.Eval` compiles at the context's version).
 A host whose expressions all carry one version or static host sets it once on
-the context, so evaluating them does not copy the context to install it.
+the context, so evaluating them does not copy the context to install it. This
+matters for a host that reuses one context: an expression compiled as XPath 3.1
+evaluated against `NewContext`'s 2.0 default copies the 96-byte context on every
+call, about a quarter of a simple filter's allocation per node, until the host
+calls `ctx = ctx.WithVersion(xpath.XPath31)` once.
 `StaticNamespaces()` is installed only for an expression that calls or
 references `fn:format-date`, `fn:format-dateTime`, `fn:format-time` or
 `fn:function-lookup`; any other expression sees its caller's (nil at the top
@@ -871,7 +876,8 @@ tree, err = xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
 
 `ProcessXInclude` returns the included document as a new tree, built
 top-down as every tree is; the tree it is given is left as it was, and node
-identities do not carry over.
+identities do not carry over. A parsed tree with no XInclude element has
+nothing to replace and is returned as it is.
 
 **The resolver is the whole of the confinement.** `xdm` has no filesystem and
 no network; it can read only what a resolver hands it. `xslt.FileResolver`

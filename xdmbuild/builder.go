@@ -777,7 +777,7 @@ func (b *Builder) setDecl(prefix, uri string) {
 		}
 	}
 	if b.declared == nil {
-		b.declared = make([]decl, 0, 8)
+		b.declared = make([]decl, 0, 3)
 	}
 	b.declared = append(b.declared, decl{Prefix: prefix, URI: uri})
 	b.declShared = false // a lent list has no spare capacity, so append copied it

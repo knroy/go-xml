@@ -182,14 +182,18 @@ func registerMapFuncs(l *Library) {
 	// one array. Anything that is neither a map nor an array is passed over
 	// rather than being a type error, which is what makes it usable on a
 	// json-doc whose shape is not known in advance.
-	l.registerMap("find", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerMap("find", []int{2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		key, err := argMapKey(args, 1)
 		if err != nil {
 			return nil, err
 		}
 		var found []xdm.Sequence
-		var walk func(seq xdm.Sequence) error
-		walk = func(seq xdm.Sequence) error {
+		var walk func(seq xdm.Sequence, depth int) error
+		walk = func(seq xdm.Sequence, depth int) error {
+			// Recursion on the value's own nesting, so bounded like any other.
+			if err := checkValueDepth(depth); err != nil {
+				return err
+			}
 			for _, it := range seq {
 				switch v := it.(type) {
 				case *xdm.MapItem:
@@ -203,13 +207,13 @@ func registerMapFuncs(l *Library) {
 						found = append(found, val)
 					}
 					if err := v.Entries(func(_ *xdm.Atomic, val xdm.Sequence) error {
-						return walk(val)
+						return walk(val, depth+1)
 					}); err != nil {
 						return err
 					}
 				case *xdm.ArrayItem:
 					for _, mem := range v.Members() {
-						if err := walk(mem); err != nil {
+						if err := walk(mem, depth+1); err != nil {
 							return err
 						}
 					}
@@ -217,7 +221,7 @@ func registerMapFuncs(l *Library) {
 			}
 			return nil
 		}
-		if err := walk(args[0]); err != nil {
+		if err := walk(args[0], 0); err != nil {
 			return nil, err
 		}
 		return xdm.One(xdm.NewArray(found...)), nil

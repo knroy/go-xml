@@ -105,8 +105,8 @@ func TestCloneInternsPastSmallNames(t *testing.T) {
 	}
 	got := xdmclone.Clone(tree.Root, xdmclone.Options{})(tree.Root).(*Node)
 	c := got.Tree()
-	if c == nil || c.nameIx == nil {
-		t.Fatalf("clone has no name index to exercise (tree %v)", c)
+	if c == nil || len(c.names) <= smallNames {
+		t.Fatalf("clone has too few names to need an index (tree %v)", c)
 	}
 	old := c.intern(QName{Local: "e3"})
 	if c.names[old] != (QName{Local: "e3"}) {

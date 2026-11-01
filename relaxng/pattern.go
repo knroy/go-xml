@@ -175,24 +175,46 @@ type staticInfo struct {
 
 // nameMemo is a copy-on-write map from a name to a pattern, shared by every
 // validation of a schema: a lookup is one atomic load and a map read with no
-// boxing, and a store copies the map under a lock. The entries are capped at
+// boxing, and a store lands in a small pending map under a lock and is published as a
+// new snapshot once the pending entries outgrow it. The entries are capped at
 // maxOpenMemo so that a document cannot grow it without bound by inventing
 // names, which also bounds each copy.
 type nameMemo struct {
-	m  atomic.Pointer[map[nameKey]pattern]
-	mu sync.Mutex
+	m       atomic.Pointer[map[nameKey]pattern]
+	mu      sync.Mutex
+	pending map[nameKey]pattern // stored but not yet published in m; under mu
+	np      atomic.Int32        // len(pending), so a load skips the lock when empty
+	hits    int                 // locked pending hits since the last publish; under mu
 }
 
 type nameKey struct{ ns, local string }
 
 func (c *nameMemo) load(n xdm.QName) (pattern, bool) {
-	m := c.m.Load()
-	if m == nil {
+	k := nameKey{n.URI, n.Local}
+	if m := c.m.Load(); m != nil {
+		if p, ok := (*m)[k]; ok {
+			return p, true
+		}
+	}
+	if c.np.Load() == 0 {
 		return nil, false
 	}
-	p, ok := (*m)[nameKey{n.URI, n.Local}]
+	c.mu.Lock()
+	p, ok := c.pending[k]
+	// A pending hit costs a lock; after a few, publish so later lookups
+	// are lock-free again.
+	if ok {
+		if c.hits++; c.hits >= pendingHitsPublish {
+			c.publishLocked()
+		}
+	}
+	c.mu.Unlock()
 	return p, ok
 }
+
+// pendingHitsPublish is how many locked lookups of pending entries trigger
+// their publication.
+const pendingHitsPublish = 8
 
 func (c *nameMemo) store(n xdm.QName, p pattern) {
 	c.mu.Lock()
@@ -201,15 +223,42 @@ func (c *nameMemo) store(n xdm.QName, p pattern) {
 	if o := c.m.Load(); o != nil {
 		old = *o
 	}
-	if len(old) >= maxOpenMemo {
-		return
+	k := nameKey{n.URI, n.Local}
+	if _, ok := c.pending[k]; !ok {
+		if len(old)+len(c.pending) >= maxOpenMemo {
+			return
+		}
 	}
-	m := make(map[nameKey]pattern, len(old)+1)
+	if c.pending == nil {
+		c.pending = make(map[nameKey]pattern)
+	}
+	c.pending[k] = p
+	c.np.Store(int32(len(c.pending)))
+	// Publish once the pending entries outgrow the snapshot, so the copies
+	// sum to O(n) over n stores. A load that misses the snapshot checks the
+	// pending map.
+	if len(c.pending) > len(old) {
+		c.publishLocked()
+	}
+}
+
+// publishLocked folds the pending entries into a new snapshot.
+func (c *nameMemo) publishLocked() {
+	var old map[nameKey]pattern
+	if o := c.m.Load(); o != nil {
+		old = *o
+	}
+	m := make(map[nameKey]pattern, len(old)+len(c.pending))
 	for k, v := range old {
 		m[k] = v
 	}
-	m[nameKey{n.URI, n.Local}] = p
+	for k, v := range c.pending {
+		m[k] = v
+	}
 	c.m.Store(&m)
+	c.pending = nil
+	c.np.Store(0)
+	c.hits = 0
 }
 
 type patBox struct {

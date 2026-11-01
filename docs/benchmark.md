@@ -472,7 +472,8 @@ Peak RSS in cold runs (median / maximum over items):
 
 For transforms v1 uses a fifth to two thirds of a JVM's memory, and v2 an
 eighth to a quarter. The CLI runs its collector at `GOGC=200` unless `GOGC`
-is set, which trades some peak memory for CPU. For large documents v1's tree
+is set, which trades some peak memory for CPU, and drops to `GOGC=100` once
+the live heap passes 128 MB. For large documents v1's tree
 cost about 23 bytes of RSS per byte of input, 1.6× libxml2's; v2's costs
 under 4, about a quarter of libxml2's. Only `encoding/xml`, which builds no
 tree, uses less.

@@ -2,6 +2,7 @@ package xquery
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -50,11 +51,12 @@ type tuple struct {
 // Copying rather than mutating is what makes "for" correct: the body of a
 // downstream clause may capture the tuple (an inline function closing over
 // $x, a grouped partition holding its members), and a tuple mutated in place
-// would make every capture observe the last value.
+// would make every capture observe the last value. The names are never
+// written once a tuple holds them, so replacing a binding shares them.
 func (t tuple) bind(name xdm.QName, val xdm.Sequence) tuple {
 	for i, n := range t.names {
 		if n == name {
-			out := t.clone()
+			out := tuple{names: t.names, vals: slices.Clone(t.vals)}
 			out.vals[i] = val
 			return out
 		}
@@ -66,11 +68,31 @@ func (t tuple) bind(name xdm.QName, val xdm.Sequence) tuple {
 	return out
 }
 
-func (t tuple) clone() tuple {
-	return tuple{
-		names: append([]xdm.QName(nil), t.names...),
-		vals:  append([]xdm.Sequence(nil), t.vals...),
+// nameExt is the names slice a clause last extended and what it extended it
+// to. A clause binds one name onto every tuple of its stream, and the tuples
+// of a stream mostly share one names slice, so the extended slice is made
+// once per shared input slice rather than once per tuple.
+type nameExt struct{ from, to []xdm.QName }
+
+func (x *nameExt) extend(names []xdm.QName, name xdm.QName) []xdm.QName {
+	if x.to == nil || len(names) != len(x.from) ||
+		(len(names) > 0 && &names[0] != &x.from[0]) {
+		x.from = names
+		x.to = append(append(make([]xdm.QName, 0, len(names)+1), names...), name)
 	}
+	return x.to
+}
+
+// bindx is bind for a clause binding name onto every tuple of a stream, with
+// the extended names slice shared through x.
+func (t tuple) bindx(x *nameExt, name xdm.QName, val xdm.Sequence) tuple {
+	if slices.Contains(t.names, name) {
+		return t.bind(name, val)
+	}
+	vals := make([]xdm.Sequence, len(t.vals)+1)
+	copy(vals, t.vals)
+	vals[len(t.vals)] = val
+	return tuple{names: x.extend(t.names, name), vals: vals}
 }
 
 func (t tuple) lookup(name xdm.QName) (xdm.Sequence, bool) {
@@ -90,11 +112,7 @@ func (t tuple) lookup(name xdm.QName) (xdm.Sequence, bool) {
 // than at parse, so nothing about the names has to reach the expression
 // parser: binding the values here is the whole of the scoping.
 func (t tuple) context(ctx *evalContext) *xpath.Context {
-	xp := ctx.xp
-	for i, n := range t.names {
-		xp = xp.WithVar(n, t.vals[i])
-	}
-	return xp
+	return ctx.xp.WithVars(t.names, t.vals)
 }
 
 // sub is context wrapped back up as an evalContext, which is what a
@@ -139,7 +157,7 @@ func (f *flwor) eval(ctx *evalContext) (xdm.Sequence, error) {
 		}
 	}
 	var out xdm.Sequence
-	for _, t := range stream {
+	for k, t := range stream {
 		seq, err := f.evalReturn(t, ctx)
 		if err != nil {
 			return nil, err
@@ -150,6 +168,12 @@ func (f *flwor) eval(ctx *evalContext) (xdm.Sequence, error) {
 		// sequence per tuple is not.
 		if err := ctx.xp.ChargeItems(len(seq)); err != nil {
 			return nil, err
+		}
+		// Sized for one item from each tuple still to come, which is the
+		// usual return, rather than grown by doubling. The tuples are already
+		// charged, so the reservation is too.
+		if out == nil && len(seq) > 0 {
+			out = make(xdm.Sequence, 0, len(seq)+len(stream)-k-1)
 		}
 		out = append(out, seq...)
 	}
@@ -220,6 +244,7 @@ type forClause struct {
 
 func (c *forClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
 	var out []tuple
+	var x nameExt
 	for _, t := range in {
 		seq, err := c.seq.eval(t.sub(ctx))
 		if err != nil {
@@ -246,8 +271,9 @@ func (c *forClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
 			out = append(out, n)
 			continue
 		}
-		for i, it := range seq {
-			n := t.bind(c.name, xdm.One(it))
+		out = slices.Grow(out, len(seq))
+		for i := range seq {
+			n := t.bindx(&x, c.name, seq[i:i+1:i+1])
 			if c.hasPos {
 				n = n.bind(c.pos, xdm.One(xdm.NewInteger(int64(i+1))))
 			}
@@ -268,12 +294,13 @@ type letClause struct {
 
 func (c *letClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
 	out := make([]tuple, 0, len(in))
+	var x nameExt
 	for _, t := range in {
 		seq, err := c.seq.eval(t.sub(ctx))
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, t.bind(c.name, seq))
+		out = append(out, t.bindx(&x, c.name, seq))
 	}
 	return out, nil
 }
@@ -682,6 +709,12 @@ type flworNode struct{ f *flwor }
 
 func (n *flworNode) eval(out *builderRef, ctx *evalContext) error {
 	return n.f.evalNode(out, ctx)
+}
+
+// sequence makes a flworNode a valueNode. Built at the top level, its value
+// would come back out of the builder unchanged, but appended a second time.
+func (n *flworNode) sequence(ctx *evalContext) (xdm.Sequence, error) {
+	return n.f.eval(ctx)
 }
 
 type quantifiedNode struct{ q *quantified }

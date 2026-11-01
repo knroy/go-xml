@@ -198,7 +198,7 @@ func registerUnparsedText(l *Library, since Version) {
 		if err != nil {
 			return nil, err
 		}
-		return xdm.Sequence(splitTextLines(text)), nil
+		return splitTextLines(ctx, text)
 	})
 }
 
@@ -298,21 +298,26 @@ func readText(ctx *Context, s, enc string) (string, error) {
 // The spec defines the result as the sequence obtained by splitting on \n,
 // \r\n or \r, with a trailing line ending producing no final empty string —
 // "a\n" is one line, not two.
-func splitTextLines(text string) []xdm.Item {
+func splitTextLines(ctx *Context, text string) (xdm.Sequence, error) {
 	if text == "" {
-		return nil
+		return nil, nil
 	}
 	// Normalise the two-character ending first so the split is over single
 	// characters, then treat a lone \r as an ending too.
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	text = strings.TrimSuffix(text, "\n")
+	// Charge the lines before the strings.Split slice and the items are built:
+	// a 67 MB file of newlines is 67M items.
+	out, err := makeSequence(ctx, strings.Count(text, "\n")+1)
+	if err != nil {
+		return nil, err
+	}
 	parts := strings.Split(text, "\n")
-	out := make([]xdm.Item, 0, len(parts))
 	for _, p := range parts {
 		out = append(out, xdm.NewString(p))
 	}
-	return out
+	return out, nil
 }
 
 // unparsedTextArgs pulls the href and the optional encoding out of a call on
@@ -493,11 +498,16 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 // instructions are ignored when comparing element content, which is why this
 // cannot simply compare serialised forms.
 func deepEqual(ctx *Context, a, b xdm.Sequence) (bool, error) {
+	return deepEqualAt(ctx, a, b, 0)
+}
+
+// deepEqualAt is deepEqual for values nested depth maps or arrays down.
+func deepEqualAt(ctx *Context, a, b xdm.Sequence, depth int) (bool, error) {
 	if len(a) != len(b) {
 		return false, nil
 	}
 	for i := range a {
-		eq, err := deepEqualItem(ctx, a[i], b[i])
+		eq, err := deepEqualItem(ctx, a[i], b[i], depth)
 		if err != nil || !eq {
 			return false, err
 		}
@@ -505,7 +515,7 @@ func deepEqual(ctx *Context, a, b xdm.Sequence) (bool, error) {
 	return true, nil
 }
 
-func deepEqualItem(ctx *Context, x, y xdm.Item) (bool, error) {
+func deepEqualItem(ctx *Context, x, y xdm.Item, depth int) (bool, error) {
 	// An Opaque is engine-internal state, not a value the data model defines
 	// equality over. A stylesheet naming the internal namespace can put one
 	// here, so it is compared by identity rather than asserted to be atomic.
@@ -531,7 +541,7 @@ func deepEqualItem(ctx *Context, x, y xdm.Item) (bool, error) {
 	// before the node and atomic branches because neither is either one: the
 	// fallback below compares unrecognised items by identity, so two equal
 	// arrays built separately were answering false.
-	if eq, handled, err := deepEqualMapArray(ctx, x, y); handled {
+	if eq, handled, err := deepEqualMapArray(ctx, x, y, depth); handled {
 		return eq, err
 	}
 
@@ -1313,6 +1323,10 @@ func defaultPresentation(comp byte) string {
 	return "1"
 }
 
+// maxPictureWidth bounds a width modifier's number. The padding it asks for is
+// built before any budget sees it: [D01,1000000000] allocated 2.8 GB.
+const maxPictureWidth = 1 << 16
+
 // checkWidthModifier rejects a width modifier whose syntax is wrong, which is
 // XTDE1340. Both bounds must be "*" or an integer greater than zero.
 func checkWidthModifier(width string) error {
@@ -1333,6 +1347,10 @@ func checkWidthModifier(width string) error {
 				return fmt.Errorf("FOFD1340: malformed width modifier %q", width)
 			}
 			n = n*10 + int(c-'0')
+			if n > maxPictureWidth {
+				return fmt.Errorf("FOFD1340: width modifier %q asks for more than %d "+
+					"characters: %w", width, maxPictureWidth, xdm.ErrResourceLimit)
+			}
 		}
 		if n == 0 {
 			return fmt.Errorf("FOFD1340: width modifier %q must be greater than zero", width)

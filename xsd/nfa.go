@@ -88,10 +88,29 @@ type stateSet struct {
 }
 
 func newStateSet() *stateSet {
-	return &stateSet{seen: map[matchState]bool{}}
+	return &stateSet{}
 }
 
+// smallSet is the size up to which add deduplicates by scanning order; the
+// map is only built for a larger set.
+const smallSet = 8
+
 func (s *stateSet) add(st matchState) {
+	if s.seen == nil {
+		for _, o := range s.order {
+			if o == st {
+				return
+			}
+		}
+		s.order = append(s.order, st)
+		if len(s.order) > smallSet {
+			s.seen = make(map[matchState]bool, 2*smallSet)
+			for _, o := range s.order {
+				s.seen[o] = true
+			}
+		}
+		return
+	}
 	if s.seen[st] {
 		return
 	}
@@ -395,8 +414,13 @@ func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int) (ok
 	enter := make([]int, len(m.counters))
 	var vecs [][]int
 
+	// Two sets, swapped each step: a fresh map per child was three quarters
+	// of the DTD validator's allocation.
+	spare := newStateSet()
 	for i := 0; i < n; i++ {
-		next := newStateSet()
+		next := spare
+		clear(next.seen)
+		next.order = next.order[:0]
 		for _, st := range states.order {
 			for _, pos := range candidates(m, st) {
 				if !match(i, pos) {
@@ -421,7 +445,7 @@ func matchNames(m *contentModel, match func(i, pos int) bool, n, budget int) (ok
 		if next.len() > budget {
 			return false, i, errMatchStates
 		}
-		states = next
+		states, spare = next, states
 	}
 	for _, st := range states.order {
 		if accepting(m, st, cur) {

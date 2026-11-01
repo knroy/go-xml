@@ -167,9 +167,7 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			// names regex-group#1(2) as the example -- the components are
 			// cleared, so regex-090 gets the zero-length string rather than
 			// the enclosing match.
-			for _, name := range ClearedOnDynamicCall {
-				p = p.WithVar(name, nil)
-			}
+			p = p.withVars(ClearedOnDynamicCall, nil)
 			// The host state is a binding too: it comes from the call, with
 			// the current item cleared as the variables above are.
 			p.host = hostOnCall(c.host, false)
@@ -312,7 +310,34 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	// has no context item, position or size, so "." inside one is XPDY0002
 	// even where the expression that wrote it had a focus. Variables are
 	// captured; the focus is deliberately dropped.
-	noFocus := *frozenLocals(ctx)
+	//
+	// Only the variables the body reads are kept, so a closure does not
+	// retain a large value it never mentions. Any binding in a namespace is
+	// kept: a host's hidden variables, which a function called from the body
+	// may read, are named there.
+	cv := e.needs.Load()
+	if cv == nil {
+		names, ok := closureNeeds(e)
+		cv = &closureVars{names: names, all: !ok}
+		e.needs.Store(cv)
+	}
+	var base *Context
+	if cv.all {
+		base = frozenLocals(ctx)
+	} else {
+		base = capturedFor(ctx, func(uri, local string) bool {
+			if uri != "" {
+				return true
+			}
+			for _, q := range cv.names {
+				if q.URI == "" && q.Local == local {
+					return true
+				}
+			}
+			return false
+		}, true)
+	}
+	noFocus := *base
 	noFocus.Item, noFocus.Position, noFocus.Size = nil, 0, 0
 	captured := &noFocus
 	item := native(&xdm.FunctionItem{
@@ -643,13 +668,8 @@ func clearHostVars(ctx *Context) *Context {
 		n.host = h
 		ctx = &n
 	}
-	for _, name := range ClearedOnDynamicCall {
-		ctx = ctx.WithVar(name, nil)
-	}
-	for _, name := range MarkedOnDynamicCall {
-		ctx = ctx.WithVar(name, xdm.One(xdm.NewBoolean(true)))
-	}
-	return ctx
+	ctx = ctx.withVars(ClearedOnDynamicCall, nil)
+	return ctx.withVars(MarkedOnDynamicCall, xdm.One(xdm.NewBoolean(true)))
 }
 
 // Eval implements Expr: it calls the function item the target produces.

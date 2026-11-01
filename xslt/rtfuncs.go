@@ -1320,6 +1320,21 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 	}
 
 	idx := map[string]xdm.Sequence{}
+	// Every key entry is retained until the transform ends, and Eval resets
+	// the item counter per expression, so the running total is kept here
+	// and checked against the item bound. use="1 to 1000" over 100,000 nodes
+	// was a hundred million entries and 3.2 GB.
+	var held int64
+	addKeys := func(ks []string, n *xdm.Node) error {
+		held += int64(len(ks))
+		if err := ctx.ItemsRefused(held); err != nil {
+			return err
+		}
+		for _, k := range ks {
+			idx[k] = append(idx[k], n)
+		}
+		return nil
+	}
 	// A pattern that fails because it reads a global still being computed is
 	// a circularity, not a node-specific failure, and Matches has already
 	// recovered from it by the time it returns -- so the check is made here,
@@ -1359,8 +1374,8 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 			if err != nil {
 				return err
 			}
-			for _, k := range ks {
-				idx[k] = append(idx[k], n)
+			if err := addKeys(ks, n); err != nil {
+				return err
 			}
 		}
 		// Attributes can be key targets, so they are visited too.
@@ -1385,8 +1400,8 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 				if err != nil {
 					return err
 				}
-				for _, k := range ks {
-					idx[k] = append(idx[k], a)
+				if err := addKeys(ks, a); err != nil {
+					return err
 				}
 			}
 		}
@@ -1417,8 +1432,8 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 					if err != nil {
 						return err
 					}
-					for _, k := range ks {
-						idx[k] = append(idx[k], nsNode)
+					if err := addKeys(ks, nsNode); err != nil {
+						return err
 					}
 				}
 			}

@@ -1274,6 +1274,11 @@ func (e *SimpleMap) Eval(ctx *Context) (xdm.Sequence, error) {
 		}
 		out = append(out, v...)
 	}
+	// One result per input is covered by the input's own charge; more than
+	// that is copying, which a doubling right-hand side compounds.
+	if err := ctx.chargeCopies(len(out) - len(in)); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

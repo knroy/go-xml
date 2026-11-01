@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -165,7 +166,7 @@ func TestResolverCacheReplaceDoesNotEvict(t *testing.T) {
 		anyPath, anyTree = k, v
 		break
 	}
-	res.publish(anyPath, anyTree)
+	res.publish(anyPath, anyTree, 0)
 	got := len(res.cache)
 	res.mu.Unlock()
 
@@ -176,5 +177,73 @@ func TestResolverCacheReplaceDoesNotEvict(t *testing.T) {
 		t.Fatalf("replacing an existing entry changed the cache size from "+
 			"%d to %d; it evicted something to make room it did not need",
 			full, got)
+	}
+}
+
+// The entry count is not a memory bound: documents differ in size, and 256 of
+// 158 KB retained 201 MB. 40 documents of 1 MB are far under resolverCacheMax
+// entries and over resolverCacheMaxBytes, so only the byte bound can evict.
+func TestResolverCacheIsBoundedByBytes(t *testing.T) {
+	dir := t.TempDir()
+	res, err := NewFileResolver(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := "<doc>" + strings.Repeat("x", 1<<20) + "</doc>"
+	for i := 0; i < 40; i++ {
+		name := filepath.Join(dir, fmt.Sprintf("big%d.xml", i))
+		if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := res.ResolveDocument(name, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res.mu.Lock()
+	defer res.mu.Unlock()
+	// The documented 32 MB, spelled out so that changing the constant cannot
+	// quietly change what this pins.
+	if res.cacheBytes > 32<<20 {
+		t.Errorf("cache charges %d bytes, over the 32 MB bound", res.cacheBytes)
+	}
+	var sum int64
+	for _, n := range res.sizes {
+		sum += n
+	}
+	if sum != res.cacheBytes || len(res.sizes) != len(res.cache) {
+		t.Errorf("accounting drifted: sizes sum %d (%d entries), cacheBytes %d, cache %d entries",
+			sum, len(res.sizes), res.cacheBytes, len(res.cache))
+	}
+	if len(res.cache) < 20 {
+		t.Errorf("only %d documents retained; the bound evicted far more than it needed", len(res.cache))
+	}
+}
+
+// An entry that does not fit beside the cache's contents is not admitted, and
+// nothing is evicted for it: four 9 MB files against the 32 MB bound keep the
+// three that fit, rather than evicting one at random for each arrival.
+func TestResolverCacheDoesNotEvictToAdmitAnEntryThatDoesNotFit(t *testing.T) {
+	tree, err := xdm.ParseString("<r/>", xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &FileResolver{}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range []string{"a", "b", "c", "d"} {
+		r.publish(p, tree, 9<<20)
+	}
+	for _, p := range []string{"a", "b", "c"} {
+		if _, ok := r.cache[p]; !ok {
+			t.Errorf("%s was evicted to make room for d", p)
+		}
+	}
+	if _, ok := r.cache["d"]; ok {
+		t.Error("d was admitted although 36 MB does not fit in 32 MB")
+	}
+	// A document over the bound alone is still admitted, alone.
+	r.publish("big", tree, resolverCacheMaxBytes+1)
+	if _, ok := r.cache["big"]; !ok || len(r.cache) != 1 {
+		t.Errorf("oversize entry: cache holds %d entries, want only big", len(r.cache))
 	}
 }

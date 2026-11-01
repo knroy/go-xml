@@ -162,7 +162,8 @@ type Decoder struct {
 
 	// Size, when set, is about how many bytes the stream holds. A long text
 	// run that outgrows the scratch sizes it from what is left, rather than
-	// growing it by append's steps window by window.
+	// growing it by append's steps window by window, and the string arena's
+	// first block is no larger than it.
 	Size int
 
 	src    io.Reader
@@ -213,17 +214,22 @@ func NewDecoder(r io.Reader) *Decoder {
 	return &Decoder{Strict: true, src: r, buf: make([]byte, 0, bufSize)}
 }
 
-// NewDecoderSize is NewDecoder for a stream known to hold about size bytes:
-// its read window is no larger than the input needs, where a small document
-// otherwise paid for 4 KB. The string arena is not sized down: a smaller
-// arena retains less heap per tree, which made the collector run more often
-// (docs/profiling.md, "Measured and rejected").
-func NewDecoderSize(r io.Reader, size int) *Decoder {
-	return &Decoder{Strict: true, src: r, buf: make([]byte, 0, min(max(size, minWindow), bufSize))}
+// NewDecoderBuffer is NewDecoder reading through buf, whose capacity is the
+// read window, so that a caller parsing many documents can reuse one. The
+// Decoder writes into buf until the caller is done with it and with every
+// token it returned.
+func NewDecoderBuffer(r io.Reader, buf []byte) *Decoder {
+	return &Decoder{Strict: true, src: r, buf: buf[:0]}
 }
 
-// minWindow is the smallest read window NewDecoderSize uses.
-const minWindow = 512
+// TakeText hands the caller the CharData last returned, to keep: the Decoder
+// builds its next token in a new buffer rather than over it. It is called
+// only directly after RawToken returned a CharData.
+func (d *Decoder) TakeText() []byte {
+	b := d.tokText
+	d.scratch = nil
+	return b
+}
 
 // IsVersion11 reports whether the document declared version="1.1". The
 // version comes from the XML declaration and nowhere else, so there is no
@@ -418,6 +424,7 @@ func (d *Decoder) startTag() (Token, error) {
 		return nil, d.orSyntaxError("expected element name after <")
 	}
 	attrs := d.attrs[:0]
+	start := d.InputOffset()
 	for {
 		spaced := d.space()
 		b, ok := d.mustgetc()
@@ -463,11 +470,39 @@ func (d *Decoder) startTag() (Token, error) {
 		if !ok {
 			return nil, d.err
 		}
+		if d.arena.buf == nil && d.Size > 0 {
+			// A document smaller than a block gets a first block its own
+			// size; the values of a larger one, or what entities expand
+			// to, go on to full blocks.
+			d.arena.buf = make([]byte, 0, min(d.Size, arenaBlock))
+		}
+		if len(attrs) == cap(attrs) && len(attrs) >= bigTag {
+			attrs = d.growAttrs(attrs, start)
+		}
 		attrs = append(attrs, Attr{an, d.arena.String(v)})
 	}
 	d.attrs = attrs
 	d.tokStart = StartElement{name, attrs}
 	return &d.tokStart, nil
+}
+
+// bigTag is how many attributes a start tag has before startTag stops growing
+// the slice of them by append's steps (1.25x at this size, so a chain of them
+// allocates 5x the final slice).
+const bigTag = 256
+
+// growAttrs makes room in attrs for the rest of a tag with many attributes.
+// The input left, over the bytes an attribute has taken so far, bounds how many
+// remain; ponytail: capped at 8x the slice, so that a tag early in a huge
+// document takes at most that, and at least doubling.
+func (d *Decoder) growAttrs(attrs []Attr, start int64) []Attr {
+	est := len(attrs)
+	if rest := d.Size - int(d.InputOffset()); rest > 0 {
+		if used := int(d.InputOffset() - start); used > 0 {
+			est = rest / max(used/len(attrs), 1)
+		}
+	}
+	return append(make([]Attr, 0, len(attrs)+max(len(attrs), min(est, 8*len(attrs)))), attrs...)
 }
 
 // procInst reads [16] PI after "<?", and treats target "xml" as [23] XMLDecl.

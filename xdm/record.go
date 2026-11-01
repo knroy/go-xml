@@ -1,13 +1,18 @@
 package xdm
 
 import (
+	"bytes"
 	"iter"
+	"maps"
+	"math"
 	"math/bits"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"unsafe"
+	"weak"
 )
 
 // The node record.
@@ -161,15 +166,10 @@ type treeSource struct {
 	//
 	// Empty unless ParseOptions.ExternalEntities permitted the read.
 	externalSubset string
-	// src is the document text, retained only when the caller asks for
-	// positions. It is what makes Position able to count lines.
-	src string
-	// lineStarts holds the byte offset of each line, built on first use.
-	// Resolving a position is then a binary search rather than a scan from
-	// the start of the document, which matters when a validator reports
-	// thousands of failures over one large file.
-	lineStarts []int
-	lineOnce   sync.Once
+	// lines is where the document's lines start, kept only when the caller
+	// asks for positions. It is what makes Position able to count lines; the
+	// text itself was kept for that once, at a byte per input byte.
+	lines      *lineIndex
 	offsets    [][]int32           // by chunk: source offset + 1, made on first use
 	foreignPos map[uint32][2]int32 // positions copied from another document
 }
@@ -182,12 +182,40 @@ func (t *Tree) ownSource() *treeSource {
 	return t.source
 }
 
-// srcText is the retained document text, or "".
-func (t *Tree) srcText() string {
+// lineIdx is the document's line index, or nil.
+func (t *Tree) lineIdx() *lineIndex {
 	if t.source == nil {
-		return ""
+		return nil
 	}
-	return t.source.src
+	return t.source.lines
+}
+
+// lineIndex holds the offset each line of a source text starts at, so that
+// resolving a position is a binary search rather than a scan from the start
+// of the document, which matters when a validator reports thousands of
+// failures over one large file. Offsets past math.MaxInt32 are not recorded:
+// no node offset (encodeOffset) points there.
+type lineIndex struct {
+	starts []int32 // line 1 starts at 0; every byte after a newline starts another
+	size   int     // how many bytes of text were indexed
+}
+
+// add indexes the next len(b) bytes of the text.
+func (l *lineIndex) add(b []byte) {
+	if l.starts == nil {
+		l.starts = []int32{0}
+	}
+	for i := 0; ; {
+		j := bytes.IndexByte(b[i:], '\n')
+		if j < 0 {
+			break
+		}
+		i += j + 1
+		if off := l.size + i; off < math.MaxInt32 {
+			l.starts = append(l.starts, int32(off))
+		}
+	}
+	l.size += len(b)
 }
 
 // extSubset is the external subset text, or "".
@@ -256,7 +284,12 @@ func (t *nodeTyping) get() *typingNames {
 //
 // Each set of names has two slots, so that two in steady use that hash alike
 // do not keep evicting each other.
-var recentNames [1024]atomic.Pointer[typingNames]
+//
+// The slots are weak: a set of names holds its TypeEnvironment, and a strong
+// slot would keep the schema of a process that reloads schemas alive until
+// 1024 later sets pushed it out (about 23 MB for a 500-type schema). A set
+// no node uses any more is simply made again.
+var recentNames [1024]atomic.Pointer[weak.Pointer[typingNames]]
 
 // recentSlots is the index of v's first slot in recentNames; the second is
 // the one after it.
@@ -333,6 +366,11 @@ func (t *Tree) intern(q QName) uint32 {
 	if q == (QName{}) {
 		return 0
 	}
+	// A parsed tree drops its index when it is frozen, and a clone of one
+	// copies none: it is rebuilt here, on first use.
+	if t.nameIx == nil && len(t.names) > smallNames {
+		t.indexNames()
+	}
 	// A small tree -- a constructed fragment, mostly -- has a handful of
 	// names, and finding one by scanning costs less than building a map.
 	if t.nameIx == nil {
@@ -347,11 +385,7 @@ func (t *Tree) intern(q QName) uint32 {
 		i := uint32(len(t.names))
 		t.names = append(t.names, q)
 		if len(t.names) > smallNames {
-			t.nameIx = make(map[QName]uint32, 2*len(t.names))
-			t.nameHot = new([64]uint32)
-			for j, x := range t.names[1:] {
-				t.nameIx[x] = uint32(j + 1)
-			}
+			t.indexNames()
 		}
 		return i
 	}
@@ -372,6 +406,44 @@ func (t *Tree) intern(q QName) uint32 {
 	}
 	t.nameHot[h] = i
 	return i
+}
+
+// bigTag is how many attributes a start tag carries before buildElement sizes
+// the name table for them in one step, rather than letting each new name
+// grow it.
+const bigTag = 256
+
+// reserveNames makes room for n more names, the most a start tag of n
+// attributes can add, so that a tag of many distinct names grows the table
+// and its index once instead of through every doubling. The index is
+// rebuilt only when n would at least double it, so a run of big tags that
+// repeat their names rebuilds nothing.
+func (t *Tree) reserveNames(n int) {
+	if t.names == nil {
+		t.names = make([]QName, 1, n+1)
+	} else {
+		t.names = slices.Grow(t.names, n)
+	}
+	if t.nameIx == nil {
+		t.nameIx = make(map[QName]uint32, len(t.names)+n)
+		t.nameHot = new([64]uint32)
+		for j, x := range t.names[1:] {
+			t.nameIx[x] = uint32(j + 1)
+		}
+	} else if n > len(t.nameIx) {
+		ix := make(map[QName]uint32, len(t.nameIx)+n)
+		maps.Copy(ix, t.nameIx)
+		t.nameIx = ix
+	}
+}
+
+// indexNames builds the name index over the names the tree holds.
+func (t *Tree) indexNames() {
+	t.nameIx = make(map[QName]uint32, 2*len(t.names))
+	t.nameHot = new([64]uint32)
+	for j, x := range t.names[1:] {
+		t.nameIx[x] = uint32(j + 1)
+	}
 }
 
 // nameHash is a cheap hash of q for nameHot: the lengths and the ends of the
@@ -738,7 +810,7 @@ func (n *Node) NumNamespaceDecls() int { return len(n.frame()) }
 // NamespaceDeclAt returns the namespace node for the i'th declaration held on
 // n itself. It is the node the namespace axis gives for that prefix.
 func (n *Node) NamespaceDeclAt(i int) *Node {
-	return n.sideNode(n.v0, uint32(i), n.self)
+	return n.sideNode(n.v0, uint32(i), n.self, -1)
 }
 
 // NamespaceDecls iterates over the namespace nodes for the declarations held
@@ -951,20 +1023,25 @@ func setNames(t *nodeTyping, v typingNames) {
 	}
 	i := recentSlots(&v)
 	a, b := &recentNames[i], &recentNames[i+1]
-	pa := a.Load()
-	if pa != nil && *pa == v {
-		t.names = pa
-		return
+	wa := a.Load()
+	if wa != nil {
+		if pa := wa.Value(); pa != nil && *pa == v {
+			t.names = pa
+			return
+		}
 	}
-	if pb := b.Load(); pb != nil && *pb == v {
-		t.names = pb
-		return
+	if wb := b.Load(); wb != nil {
+		if pb := wb.Value(); pb != nil && *pb == v {
+			t.names = pb
+			return
+		}
 	}
 	p := new(typingNames)
 	*p = v
+	w := weak.Make(p)
 	// The newest goes first; the first moves to second.
-	b.Store(pa)
-	a.Store(p)
+	b.Store(wa)
+	a.Store(&w)
 	t.names = p
 }
 
@@ -1050,8 +1127,9 @@ func (t *Tree) internFrame(ns []nsBinding) uint32 {
 		}
 		return t.addFrame(ns)
 	}
-	if len(t.frames) == smallFrames+1 && t.frameOne == nil && t.frameMany == nil {
-		// Past the scan's reach: index what is there.
+	if len(t.frames) > smallFrames && t.frameOne == nil && t.frameMany == nil {
+		// Past the scan's reach: index what is there. A parsed tree drops
+		// the indexes when it is frozen, so this also rebuilds them.
 		for i := 1; i < len(t.frames); i++ {
 			t.indexFrame(uint32(i))
 		}
@@ -1146,6 +1224,25 @@ func (n *Node) AddNamespace(prefix, uri string) {
 	ns := make([]nsBinding, len(old), len(old)+1)
 	copy(ns, old)
 	n.setFrame(append(ns, nsBinding{prefix, uri}))
+}
+
+// AddNamespaces is AddNamespace for each prefix and URI pair in turn, given
+// as prefix, uri, prefix, uri, ...: n's frame is built and interned once
+// rather than once per binding.
+func (n *Node) AddNamespaces(pairs ...string) {
+	if n.kind != uint8(KindElement) || n.flags&fSide != 0 || len(pairs) < 2 {
+		return
+	}
+	if n.tree.frozen {
+		panic("xdm: declaring a namespace in a parsed document")
+	}
+	old := n.frame()
+	ns := make([]nsBinding, len(old), len(old)+len(pairs)/2)
+	copy(ns, old)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		ns = append(ns, nsBinding{pairs[i], pairs[i+1]})
+	}
+	n.setFrame(ns)
 }
 
 // SetNamespaceDecl binds prefix to uri on n: the declaration n already holds
@@ -1266,8 +1363,8 @@ func (n *Node) NamespaceNodes() iter.Seq[*Node] {
 		if n.kind != uint8(KindElement) || n.flags&fSide != 0 {
 			return
 		}
-		for _, s := range n.scopeSlots() {
-			if !yield(n.sideNode(s.frame, s.index, s.owner)) {
+		for i, s := range n.scopeSlots() {
+			if !yield(n.sideNode(s.frame, s.index, s.owner, i)) {
 				return
 			}
 		}
@@ -1309,8 +1406,9 @@ func (n *Node) scopeSlots() []scopeSlot {
 
 // sideNode returns the namespace node of n for the binding at (frame,
 // index), making it on first use. Making it is safe from any number of
-// goroutines reading one tree.
-func (n *Node) sideNode(frame, index, owner uint32) *Node {
+// goroutines reading one tree. slot is the node's place among n's, or -1 to
+// work it out from n's scope, which costs a rebuild of that scope.
+func (n *Node) sideNode(frame, index, owner uint32, slot int) *Node {
 	t := n.tree
 	var prefix string
 	if index == xmlBinding {
@@ -1327,14 +1425,16 @@ func (n *Node) sideNode(frame, index, owner uint32) *Node {
 	// The slot places the node among n's others, by prefix, for document
 	// order; an undeclaring declaration, which has no place on the axis,
 	// takes the place its prefix would have.
-	slot := uint32(0)
-	for _, s := range n.scopeSlots() {
-		if s.prefix < prefix {
-			slot++
+	if slot < 0 {
+		slot = 0
+		for _, s := range n.scopeSlots() {
+			if s.prefix < prefix {
+				slot++
+			}
 		}
 	}
 	s := &Node{tree: t, kind: uint8(KindNamespace), flags: fSide,
-		self: uint32(len(t.side)), parent: n.self, end: slot, prev: owner,
+		self: uint32(len(t.side)), parent: n.self, end: uint32(slot), prev: owner,
 		v0: frame, v1: index}
 	if t.side == nil {
 		t.side = map[sideKey]*Node{}
@@ -1402,6 +1502,53 @@ func (n *Node) Identity() IdentityKey { return IdentityKey{n} }
 // Order returns a number that orders n within its tree. Callers wanting
 // relative position must use Compare: this value says nothing across trees.
 func (n *Node) Order() int { return int(n.orderKey()) }
+
+// Index returns n's position in its tree, or -1 for a namespace node.
+//
+// The document, element, attribute, text, comment and processing-instruction
+// nodes of one tree are numbered 0, 1, 2, ... without gaps, in document order:
+// an element comes before its attributes, which come before its children, and
+// a parent before everything below it. A tree made by a constructor holds
+// several parentless roots; they are numbered in the order they were made.
+// Attributes have indices. Namespace nodes are made on demand, outside the
+// numbering, and have none. Indices of different trees are unrelated.
+//
+// An index never changes once the node exists, so it is stable for the whole
+// life of a parsed tree. A tree still being built only appends, so the indices
+// it has handed out stay valid, except that taking back the last subtree
+// appended (RemoveLastChild, ReplaceLastChild) frees its indices, and later nodes reuse them. Len
+// grows as nodes are appended.
+func (n *Node) Index() int {
+	if n.flags&fSide != 0 {
+		return -1
+	}
+	return int(n.self)
+}
+
+// SubtreeEnd returns one more than the largest Index in n's subtree, its
+// attributes included, so that [n.Index(), n.SubtreeEnd()) is the numbering of
+// the subtree and a table over it needs SubtreeEnd()-Index() entries. A leaf
+// or attribute gives Index()+1. For a node still being built it is the end so
+// far and grows as children are appended. A namespace node gives -1.
+func (n *Node) SubtreeEnd() int {
+	if n.flags&fSide != 0 {
+		return -1
+	}
+	return int(n.tree.endOf(n))
+}
+
+// Len returns the number of indexed nodes in the tree: valid Index values are
+// 0 to Len()-1. For a tree still being built it is the count so far.
+func (t *Tree) Len() int { return int(t.n) }
+
+// NodeAt returns the node whose Index is i, or nil when i is negative or not
+// less than Len. It never returns a namespace node.
+func (t *Tree) NodeAt(i int) *Node {
+	if i < 0 || i >= int(t.n) {
+		return nil
+	}
+	return t.rec(uint32(i))
+}
 
 // generateID returns the string fn:generate-id() gives n: "N", the tree id,
 // "x", and n's position in the tree.
@@ -1478,9 +1625,23 @@ func (n *Node) setOffset(v int32) {
 // a value handed out as a string never changes under its reader.
 type textStore struct {
 	blocks [][]byte
-	cur    int // the ordinary block values are appended to, + 1 (0: none)
-	size   int // capacity of the last ordinary block made
+	cur    int32 // the ordinary block values are appended to, + 1 (0: none)
+	size   int32 // capacity of the last ordinary block made
+	// shared maps a string registered by share to where it is stored, so that
+	// add hands the same range to every value that is that string.
+	shared map[sharedKey][2]uint32
 }
+
+// sharedKey identifies a string by where it lives: the same storage is the
+// same text, because strings are immutable.
+type sharedKey struct {
+	p *byte
+	n int
+}
+
+// shareMin is the shortest value share and add consult the table for; a short
+// one costs less to copy than to look up.
+const shareMin = 64
 
 // Ordinary blocks stop at 32 KB for the reason record chunks do.
 const (
@@ -1504,15 +1665,43 @@ func (s *textStore) add(v string) (uint32, uint32) {
 	if v == "" {
 		return 0, 0
 	}
+	if s.shared != nil && len(v) >= shareMin {
+		if r, ok := s.shared[sharedKey{unsafe.StringData(v), len(v)}]; ok {
+			return r[0], r[1]
+		}
+	}
 	// A string is immutable, so a long one is kept as its own block rather
 	// than copied: its capacity is its length, so nothing appends into it.
 	// Every unsafe.String in the module is over append-only bytes (the
 	// tokeniser's arena, this store), which keeps that true.
 	if len(v) >= textOwnFrom {
-		s.newBlock(unsafe.Slice(unsafe.StringData(v), len(v)))
-		return uint32(len(s.blocks)-1) << textShift, uint32(len(v))
+		return s.keep(unsafe.Slice(unsafe.StringData(v), len(v)))
 	}
 	return s.addBytes(unsafe.Slice(unsafe.StringData(v), len(v)), 0)
+}
+
+// share stores v once and makes every later add of that very string (the same
+// storage, not merely equal text) return the stored range. Bytes are only
+// appended and extend writes only past the end of its own value, so a range
+// held by many values stays valid.
+func (s *textStore) share(v string) {
+	if len(v) < shareMin {
+		return
+	}
+	if s.shared == nil {
+		s.shared = map[sharedKey][2]uint32{}
+	}
+	k := sharedKey{unsafe.StringData(v), len(v)}
+	if _, ok := s.shared[k]; !ok {
+		off, n := s.add(v)
+		s.shared[k] = [2]uint32{off, n}
+	}
+}
+
+// keep stores b, which nothing else writes to, as a block of its own.
+func (s *textStore) keep(b []byte) (uint32, uint32) {
+	s.newBlock(b)
+	return uint32(len(s.blocks)-1) << textShift, uint32(len(b))
 }
 
 // addBytes stores b with room for extra bytes after it, which extend uses
@@ -1526,14 +1715,26 @@ func (s *textStore) addBytes(b []byte, extra int) (uint32, uint32) {
 		return uint32(len(s.blocks)-1) << textShift, uint32(len(b))
 	}
 	if s.cur == 0 || cap(s.blocks[s.cur-1])-len(s.blocks[s.cur-1]) < need {
-		s.size = min(max(2*s.size, 64, need), textBlock)
+		s.size = int32(min(max(2*int(s.size), 64, need), textBlock))
 		s.newBlock(make([]byte, 0, s.size))
-		s.cur = len(s.blocks)
+		s.cur = int32(len(s.blocks))
 	}
 	k := s.cur - 1
 	off := len(s.blocks[k])
 	s.blocks[k] = append(s.blocks[k], b...)
 	return uint32(k)<<textShift | uint32(off), uint32(len(b))
+}
+
+// trim copies the block values are appended to into one its length, for a
+// tree nothing more is stored in: blocks double, so the last is on average a
+// quarter empty. A value already handed out keeps reading the old block.
+func (s *textStore) trim() {
+	if s.cur == 0 {
+		return
+	}
+	if b := s.blocks[s.cur-1]; cap(b) > len(b) {
+		s.blocks[s.cur-1] = append([]byte(nil), b...)
+	}
 }
 
 func (s *textStore) newBlock(b []byte) {

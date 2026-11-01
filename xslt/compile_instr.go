@@ -317,7 +317,7 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	// xsl:stylesheet and uses it inside a literal element expects the result
 	// to carry the declaration, and the difference is observable through the
 	// namespace axis of the constructed tree.
-	scope := n.InScopeNamespaces()
+	scope := inScopeNamespacesShared(n)
 	prefixes := make([]string, 0, len(scope))
 	for p := range scope {
 		prefixes = append(prefixes, p)
@@ -343,14 +343,21 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 		}
 		instr.namespaces = append(instr.namespaces, nsBinding{prefix: p, uri: uri})
 	}
+	instr.namespaces = internBindings(instr.namespaces)
+	instr.excludedNamespaces = internBindings(instr.excludedNamespaces)
 
+	// One resolver serves every attribute of the element.
+	var ns *nsResolver
 	for a := range n.Attrs() {
 		// xsl:-prefixed attributes on a literal element are directives, not
 		// output attributes.
 		if a.Name().URI == xdm.NSXSL {
 			continue
 		}
-		avt, err := compileAVT(a.Value(), newNSResolver(n, ""))
+		if ns == nil {
+			ns = newNSResolver(n, "")
+		}
+		avt, err := compileAVT(a.Value(), ns)
 		if err != nil {
 			return nil, fmt.Errorf("in attribute %s: %w", a.Name().Lexical(), err)
 		}
@@ -1016,7 +1023,7 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	if err != nil {
 		return nil, err
 	}
-	instr := &elementInstr{name: nameAVT, scope: n, attrSets: sets,
+	instr := &elementInstr{name: nameAVT, scope: inScopeNamespacesShared(n), attrSets: sets,
 		baseURI: n.BaseURI(), noInherit: noAttr(n, "inherit-namespaces")}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
@@ -1044,7 +1051,7 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 	if err != nil {
 		return nil, err
 	}
-	instr := &attributeInstr{name: nameAVT, scope: n}
+	instr := &attributeInstr{name: nameAVT, scope: inScopeNamespacesShared(n)}
 	if sepAttr := n.Attr("", "separator"); sepAttr != nil {
 		sep, err := compileAVT(sepAttr.Value(), ns)
 		if err != nil {
@@ -1141,7 +1148,7 @@ func (c *compiler) compileMessage(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 		if err != nil {
 			return nil, err
 		}
-		instr.errorCode, instr.errorCodeNS = avt, n
+		instr.errorCode, instr.errorCodeNS = avt, inScopeNamespacesShared(n)
 	}
 	if v := n.AttrValue("terminate"); v != "" {
 		avt, err := compileAVT(v, ns)
@@ -1891,7 +1898,7 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// is what evaluate-018d asks for -- it declares $p2 as xs:integer
 		// over a select that yields 'banana' and accepts XPTY0004 or
 		// XTTE0590, not the variable-binding code.
-		v, err = p.asType.convertAs(v, "$"+p.Name.Lexical(), "XTTE0590")
+		v, err = p.asType.convertAsLazy(v, func() string { return "$" + p.Name.Lexical() }, "XTTE0590")
 		if err != nil {
 			return err
 		}
@@ -2020,8 +2027,12 @@ type breakSignal struct{}
 func (breakSignal) Error() string { return "xsl:break" }
 
 // nextIterationSignal unwinds to the end of one turn of the loop, carrying the
-// parameter values for the next.
-type nextIterationSignal struct{ params map[string]xdm.Sequence }
+// parameter values for the next. vals runs parallel to the with-params of
+// from, whose slots say which xsl:param of the loop each one is.
+type nextIterationSignal struct {
+	vals []xdm.Sequence
+	from *nextIterationInstr
+}
 
 func (nextIterationSignal) Error() string { return "xsl:next-iteration" }
 
@@ -2050,19 +2061,31 @@ func (i *breakInstr) Execute(rt *runtime, out *outputBuilder) error {
 	return breakSignal{}
 }
 
-type nextIterationInstr struct{ params []*Variable }
+type nextIterationInstr struct {
+	params []*Variable
+	// slots[j] is the position among the enclosing xsl:iterate's xsl:param
+	// children of params[j]; byDecl lists the j in that declaration order.
+	slots  []int
+	byDecl []int
+}
 
 func (i *nextIterationInstr) Execute(rt *runtime, out *outputBuilder) error {
-	vals := map[string]xdm.Sequence{}
-	for _, p := range i.params {
+	vals := make([]xdm.Sequence, len(i.params))
+	for j, p := range i.params {
 		v, err := evalVariable(p, rt)
 		if err != nil {
 			return fmt.Errorf("evaluating parameter $%s of xsl:next-iteration: %w",
 				p.Name.Lexical(), err)
 		}
-		vals[p.Name.Clark()] = v
+		// The value is carried into every later turn, so a binding larger
+		// than the item bound is refused here rather than held.
+		if err := rt.ctx.ItemsRefused(int64(len(v))); err != nil {
+			return fmt.Errorf("parameter $%s of xsl:next-iteration: %w",
+				p.Name.Lexical(), err)
+		}
+		vals[j] = v
 	}
-	return nextIterationSignal{params: vals}
+	return nextIterationSignal{vals: vals, from: i}
 }
 
 // appendSequence writes a sequence to an output builder, the same way
@@ -2100,21 +2123,21 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// The carried state starts at the declared defaults, which are evaluated
 	// in the focus of the xsl:iterate instruction itself rather than of any
 	// item, because on the first turn no item has been reached yet.
-	carried := map[string]xdm.Sequence{}
-	for _, p := range i.params {
+	carried := make([]xdm.Sequence, len(i.params))
+	for k, p := range i.params {
 		v, err := evalVariable(p, rt)
 		if err != nil {
 			return fmt.Errorf("evaluating parameter $%s of xsl:iterate: %w",
 				p.Name.Lexical(), err)
 		}
-		carried[p.Name.Clark()] = v
+		carried[k] = v
 	}
 	broke := false
 	for idx, it := range seq {
 		sub := rt.withCurrent(it, idx+1, len(seq))
 		mark := sub.localsMark()
-		for _, p := range i.params {
-			sub = sub.bindLocal(p.Name, carried[p.Name.Clark()])
+		for k, p := range i.params {
+			sub = sub.bindLocal(p.Name, carried[k])
 		}
 		err := execSequence(i.body, sub, out)
 		sub.localsPop(mark)
@@ -2140,16 +2163,13 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// XTTE0590 reported is the first declared, on every run.
 				// XTSE3130 has already refused a with-param naming no
 				// xsl:param, so nothing supplied is skipped.
-				if len(nx.params) > 0 {
-					for _, p := range i.params {
-						k := p.Name.Clark()
-						v, ok := nx.params[k]
-						if !ok {
-							continue
-						}
-						conv, err := p.asType.convertAs(v,
-							"parameter $"+p.Name.Lexical()+" of xsl:iterate",
-							"XTTE0590")
+				if len(nx.vals) > 0 {
+					for _, j := range nx.from.byDecl {
+						k := nx.from.slots[j]
+						p, v := i.params[k], nx.vals[j]
+						conv, err := p.asType.convertAsLazy(v, func() string {
+							return "parameter $" + p.Name.Lexical() + " of xsl:iterate"
+						}, "XTTE0590")
 						if err != nil {
 							return err
 						}
@@ -2172,8 +2192,8 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// xsl:number with no context node is XTTE0990.
 	done := rt.withFocus(nil, 0, 0)
 	defer done.localsPop(done.localsMark())
-	for _, p := range i.params {
-		done = done.bindLocal(p.Name, carried[p.Name.Clark()])
+	for k, p := range i.params {
+		done = done.bindLocal(p.Name, carried[k])
 	}
 	if i.onCompletionSelect != nil {
 		vals, err := i.onCompletionSelect.Eval(done.ctx)
@@ -2266,7 +2286,40 @@ func (c *compiler) compileNextIteration(n *xdm.Node, ns *nsResolver) (Instructio
 	if err != nil {
 		return nil, err
 	}
-	return &nextIterationInstr{params: params}, nil
+	instr := &nextIterationInstr{params: params}
+	// The innermost xsl:iterate's parameters are known by now: compileIterate
+	// reads them before it compiles the body this instruction is in.
+	var declared []xdm.QName
+	if it := enclosingIterate(n); it != nil {
+		for _, c := range it.ChildElements() {
+			if isXSL(c, "param") {
+				qn, _ := paramName(c)
+				declared = append(declared, qn)
+			}
+		}
+	}
+	for _, p := range params {
+		slot := -1
+		for k, qn := range declared {
+			if qn.URI == p.Name.URI && qn.Local == p.Name.Local {
+				slot = k
+				break
+			}
+		}
+		if slot < 0 {
+			return nil, fmt.Errorf("XTSE3130: xsl:with-param %s names no "+
+				"xsl:param of the containing xsl:iterate", p.Name.Lexical())
+		}
+		instr.slots = append(instr.slots, slot)
+	}
+	instr.byDecl = make([]int, len(params))
+	for j := range instr.byDecl {
+		instr.byDecl[j] = j
+	}
+	sort.Slice(instr.byDecl, func(a, b int) bool {
+		return instr.slots[instr.byDecl[a]] < instr.slots[instr.byDecl[b]]
+	})
+	return instr, nil
 }
 
 // textParent is the stylesheet element a text node of a sequence constructor

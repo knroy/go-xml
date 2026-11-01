@@ -63,6 +63,13 @@ func (t *sequenceType) convert(seq xdm.Sequence, what string) (xdm.Sequence, err
 // a function result is XTTE0780, and a plain expression is XPTY0004. The
 // machinery is identical, so only the code is passed in.
 func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Sequence, error) {
+	return t.convertAsLazy(seq, func() string { return what }, code)
+}
+
+// convertAsLazy is convertAs for a caller whose description of the value
+// costs something to build: what is called only to report a failure, so a
+// conversion that succeeds, as nearly every one does, never builds it.
+func (t *sequenceType) convertAsLazy(seq xdm.Sequence, what func() string, code string) (xdm.Sequence, error) {
 	if t == nil {
 		return seq, nil
 	}
@@ -96,7 +103,7 @@ func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Seque
 		if conv, ok := t.convertUnion(seq); ok {
 			return conv, nil
 		}
-		return nil, fmt.Errorf("%s: %s does not match its declared type %s", code, what, t.src)
+		return nil, fmt.Errorf("%s: %s does not match its declared type %s", code, what(), t.src)
 	}
 
 	// Atomise, then cast each untypedAtomic item to the declared type. A
@@ -134,7 +141,7 @@ func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Seque
 		// has to normalise, not merely widen to xs:string.
 		conv, err := xpath.CastToDerived(a, t.stype.AtomicType, t.stype.FacetName)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %s: %w", code, what, err)
+			return nil, fmt.Errorf("%s: %s: %w", code, what(), err)
 		}
 		if t.stype.SchemaType != "" {
 			// The declared type is an imported schema type, and the
@@ -152,7 +159,7 @@ func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Seque
 	if !t.stype.Matches(out) {
 		return nil, fmt.Errorf("%s: %s does not match its declared type %s (got %d item(s))",
 			code,
-			what, t.src, len(out))
+			what(), t.src, len(out))
 	}
 	return out, nil
 }
@@ -170,8 +177,9 @@ func bindParam(p *Variable, v xdm.Sequence, t *Template) (xdm.Sequence, error) {
 	if p.asType == nil {
 		return v, nil
 	}
-	return p.asType.convertAs(v, "parameter $"+p.Name.Lexical()+
-		" of template "+templateLabel(t), "XTTE0590")
+	return p.asType.convertAsLazy(v, func() string {
+		return "parameter $" + p.Name.Lexical() + " of template " + templateLabel(t)
+	}, "XTTE0590")
 }
 
 // numericPromotes reports whether the function conversion rules promote one

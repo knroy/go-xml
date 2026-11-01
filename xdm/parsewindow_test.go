@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// A reader that knows its length gets read buffers and a first arena block
+// A reader that knows its length gets a first arena block and a text scratch
 // sized to it. The tree must not depend on that: each document here parses
 // to the same tree through a reader that hides its length (default sizes),
 // including tokens longer than the window and values that overflow the first
@@ -39,9 +39,9 @@ func TestSizedParseMatchesUnsized(t *testing.T) {
 }
 
 // A small document's parse allocated three 4 KB read windows whatever its
-// size. Measured on this document: 47,576 bytes a parse with them, 36,942
-// with windows sized to it (most of the rest is the 32 KB string arena,
-// which is kept: see docs/profiling.md, "Measured and rejected").
+// size, and a 32 KB string arena block. Measured on this document: 47,576
+// bytes a parse with them, 36,942 with windows sized to it, 4,424 with the
+// arena's first block sized to it too, and 2,879 with the windows pooled.
 func TestSmallParseAllocatesLittle(t *testing.T) {
 	if raceEnabled {
 		t.Skip("allocation sizes are not stable under -race")
@@ -58,7 +58,8 @@ func TestSmallParseAllocatesLittle(t *testing.T) {
 	runtime.ReadMemStats(&m1)
 	per := (m1.TotalAlloc - m0.TotalAlloc) / n
 	t.Logf("%d bytes per parse", per)
-	if per > 42<<10 {
-		t.Errorf("%d bytes per parse of a %d-byte document, want at most 42 KB", per, len(doc))
+	// Midway between the pooled windows and windows sized to the document.
+	if per > 3650 {
+		t.Errorf("%d bytes per parse of a %d-byte document, want at most 3,650", per, len(doc))
 	}
 }

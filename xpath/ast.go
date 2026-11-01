@@ -315,6 +315,16 @@ type InlineFunctionExpr struct {
 	// Result is the declared return type, or nil if none was written.
 	Result *SequenceType
 	Body   Expr
+
+	// needs is what closureNeeds found, computed on first evaluation.
+	needs atomic.Pointer[closureVars]
+}
+
+// closureVars is the variables a closure's body reads, or all when it must
+// capture every one.
+type closureVars struct {
+	names []xdm.QName
+	all   bool
 }
 
 // InlineParam is one parameter of an inline function.

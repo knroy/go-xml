@@ -2,6 +2,7 @@ package dtd
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -133,7 +134,8 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 			}
 		}
 	}
-	v.walk(root, "")
+	v.root = root
+	v.walk(root)
 	v.checkIDRefs()
 	if len(v.errs) == 0 {
 		return nil
@@ -147,6 +149,7 @@ type validator struct {
 	allowUndec bool
 	errs       []*Error
 	matchers   map[string]*xsd.SequenceMatcher
+	names      []xdm.QName // child-name buffer reused across elements
 	// ids are every ID value seen, for uniqueness and for resolving IDREF.
 	ids map[string]bool
 	// partial records that the DTD was read from the internal subset alone
@@ -161,40 +164,77 @@ type validator struct {
 	// refs are IDREF values and where they appeared, checked once the whole
 	// document has been read — a reference may point forward.
 	refs []idref
+	// root is the element the walk started from, where a path begins.
+	root *xdm.Node
 }
 
 type idref struct {
 	value string
-	path  string
+	el    *xdm.Node
 }
 
-func (v *validator) fail(path, format string, args ...any) {
+func (v *validator) fail(el *xdm.Node, format string, args ...any) {
 	if v.max > 0 && len(v.errs) >= v.max {
 		return
 	}
-	v.errs = append(v.errs, &Error{Path: path, Message: fmt.Sprintf(format, args...)})
+	// A #FIXED or enumerated value comes from the DTD or the document and
+	// may be megabytes; 200 mismatches against a 1 MB #FIXED value kept
+	// 105 MB. Arguments are clipped before formatting, the message after.
+	for i, a := range args {
+		switch x := a.(type) {
+		case string:
+			args[i] = clip(x)
+		case error:
+			args[i] = clip(x.Error())
+		}
+	}
+	v.errs = append(v.errs, &Error{Path: v.pathOf(el), Message: clip(fmt.Sprintf(format, args...))})
 }
 
-func (v *validator) walk(el *xdm.Node, parentPath string) {
-	path := parentPath + "/" + el.Name().Local
-	v.checkContent(el, path)
-	v.checkAttributes(el, path)
+// clip shortens s to 1 KB, marking the cut with "..." as the xsd package
+// does. The concatenation copies, so the result never pins the original.
+func clip(s string) string {
+	const max = 1024
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+// pathOf renders the path from the root to el, as "/root/child". It is built
+// only for a recorded failure: concatenating it at every element cost the
+// square of the depth, 2 GB allocated for a valid 990-deep chain of 4 KB names.
+func (v *validator) pathOf(el *xdm.Node) string {
+	var names []string
+	for n := el; ; n = n.Parent() {
+		names = append(names, n.Name().Local)
+		if n == v.root {
+			break
+		}
+	}
+	slices.Reverse(names)
+	return "/" + strings.Join(names, "/")
+}
+
+func (v *validator) walk(el *xdm.Node) {
+	v.checkContent(el)
+	v.checkAttributes(el)
 	for c := range el.Children() {
 		if c.Kind() == xdm.KindElement {
-			v.walk(c, path)
+			v.walk(c)
 		}
 	}
 }
 
 // checkContent applies the element's content model.
-func (v *validator) checkContent(el *xdm.Node, path string) {
+func (v *validator) checkContent(el *xdm.Node) {
 	decl, ok := v.dtd.Elements[el.Name().Local]
 	if !ok {
 		// An undeclared element is a validity error in a DTD-validated
 		// document — unlike XSD, where a wildcard may admit it. A caller
 		// working with a deliberately partial internal subset can say so.
 		if !v.allowUndec {
-			v.fail(path, "element %s is not declared", el.Name().Local)
+			v.fail(el, "element %s is not declared", el.Name().Local)
 		}
 		return
 	}
@@ -204,7 +244,7 @@ func (v *validator) checkContent(el *xdm.Node, path string) {
 	case ContentEmpty:
 		for c := range el.Children() {
 			if c.Kind() == xdm.KindElement || (c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) != "") {
-				v.fail(path, "element %s is declared EMPTY but has content",
+				v.fail(el, "element %s is declared EMPTY but has content",
 					el.Name().Local)
 				return
 			}
@@ -212,7 +252,7 @@ func (v *validator) checkContent(el *xdm.Node, path string) {
 	case ContentMixed:
 		for c := range el.Children() {
 			if c.Kind() == xdm.KindElement && !decl.Mixed[c.Name().Local] {
-				v.fail(path, "element %s is not permitted in the mixed "+
+				v.fail(el, "element %s is not permitted in the mixed "+
 					"content of %s", c.Name().Local, el.Name().Local)
 			}
 		}
@@ -221,28 +261,29 @@ func (v *validator) checkContent(el *xdm.Node, path string) {
 		// unexpected elements: "(a, b)" does not admit text between them.
 		for c := range el.Children() {
 			if c.Kind() == xdm.KindText && strings.TrimSpace(c.Value()) != "" {
-				v.fail(path, "element %s has element-only content but "+
+				v.fail(el, "element %s has element-only content but "+
 					"contains character data", el.Name().Local)
 				break
 			}
 		}
 		m, err := v.matcherFor(decl)
 		if err != nil {
-			v.fail(path, "content model of %s: %v", el.Name().Local, err)
+			v.fail(el, "content model of %s: %v", el.Name().Local, err)
 			return
 		}
-		var names []xdm.QName
+		names := v.names[:0]
 		for c := range el.Children() {
 			if c.Kind() == xdm.KindElement {
 				names = append(names, xdm.QName{Local: c.Name().Local})
 			}
 		}
+		v.names = names
 		if ok, at := m.Match(names); !ok {
 			if at < len(names) {
-				v.fail(path, "element %s is not permitted here in the "+
+				v.fail(el, "element %s is not permitted here in the "+
 					"content of %s", names[at].Local, el.Name().Local)
 			} else {
-				v.fail(path, "the content of %s is incomplete", el.Name().Local)
+				v.fail(el, "the content of %s is incomplete", el.Name().Local)
 			}
 		}
 	}
@@ -261,8 +302,11 @@ func (v *validator) matcherFor(decl *Element) (*xsd.SequenceMatcher, error) {
 }
 
 // checkAttributes applies the ATTLIST declarations for an element.
-func (v *validator) checkAttributes(el *xdm.Node, path string) {
+func (v *validator) checkAttributes(el *xdm.Node) {
 	decls := v.dtd.Attributes[el.Name().Local]
+	if len(decls) == 0 {
+		return
+	}
 	present := map[string]string{}
 	for a := range el.Attrs() {
 		name := a.Name().Local
@@ -280,16 +324,16 @@ func (v *validator) checkAttributes(el *xdm.Node, path string) {
 		switch d.Default {
 		case AttrRequired:
 			if !have {
-				v.fail(path, "required attribute %s is missing", d.Name)
+				v.fail(el, "required attribute %s is missing", d.Name)
 				continue
 			}
 		case AttrFixed:
 			if have && val != d.Value {
-				v.fail(path, "attribute %s is #FIXED %q but is %q",
+				v.fail(el, "attribute %s is #FIXED %q but is %q",
 					d.Name, d.Value, val)
 			}
 		case AttrInvalid:
-			v.fail(path, "attribute %s has an unrecognised default "+
+			v.fail(el, "attribute %s has an unrecognised default "+
 				"declaration %s, so its presence was not checked",
 				d.Name, d.Value)
 		}
@@ -297,7 +341,7 @@ func (v *validator) checkAttributes(el *xdm.Node, path string) {
 			continue
 		}
 		if len(d.Enum) > 0 && !containsString(d.Enum, val) {
-			v.fail(path, "attribute %s = %q is not one of %s",
+			v.fail(el, "attribute %s = %q is not one of %s",
 				d.Name, val, strings.Join(d.Enum, ", "))
 		}
 		switch d.Type {
@@ -309,34 +353,34 @@ func (v *validator) checkAttributes(el *xdm.Node, path string) {
 			// new here, and it is a property of the DECLARATION rather than
 			// of this element's value — so it is reported once per
 			// declaration, not once per occurrence.
-			v.checkNotationDecl(path, d)
+			v.checkNotationDecl(el, d)
 		case "ENTITY":
 			// §3.3.1: the value must be the name of an unparsed entity —
 			// declared, and declared with an NDATA notation. A parsed
 			// entity's name is as wrong here as an undeclared one.
-			v.checkEntityValue(path, d.Name, val)
+			v.checkEntityValue(el, d.Name, val)
 		case "ENTITIES":
 			// The same rule over a whitespace-separated list. An empty list
 			// is not a Names, so it fails the type as surely as an unknown
 			// name would.
 			names := strings.Fields(val)
 			if len(names) == 0 {
-				v.fail(path, "attribute %s is ENTITIES but is empty, which "+
+				v.fail(el, "attribute %s is ENTITIES but is empty, which "+
 					"names no unparsed entity", d.Name)
 			}
 			for _, n := range names {
-				v.checkEntityValue(path, d.Name, n)
+				v.checkEntityValue(el, d.Name, n)
 			}
 		case "ID":
 			if v.ids[val] {
-				v.fail(path, "duplicate ID %q", val)
+				v.fail(el, "duplicate ID %q", val)
 			}
 			v.ids[val] = true
 		case "IDREF":
-			v.refs = append(v.refs, idref{val, path})
+			v.refs = append(v.refs, idref{val, el})
 		case "IDREFS":
 			for _, r := range strings.Fields(val) {
-				v.refs = append(v.refs, idref{r, path})
+				v.refs = append(v.refs, idref{r, el})
 			}
 		case "CDATA", "NMTOKEN", "NMTOKENS", "ENUMERATION":
 			// Declared, and either unconstrained (CDATA) or constrained by
@@ -348,7 +392,7 @@ func (v *validator) checkAttributes(el *xdm.Node, path string) {
 			// Without this branch an unrecognised type — "IDREFF" for
 			// "IDREFS" — falls through to no check at all, and the caller
 			// cannot tell an attribute that passed from one never examined.
-			v.fail(path, "attribute %s is declared with the unrecognised "+
+			v.fail(el, "attribute %s is declared with the unrecognised "+
 				"type %s, so its value was not checked", d.Name, d.Type)
 		}
 	}
@@ -361,7 +405,7 @@ func (v *validator) checkAttributes(el *xdm.Node, path string) {
 // It is reported once per declaration rather than once per element carrying
 // the attribute, because the fault is in the DTD and repeating it for every
 // instance would bury the finding under its own copies.
-func (v *validator) checkNotationDecl(path string, d *Attribute) {
+func (v *validator) checkNotationDecl(el *xdm.Node, d *Attribute) {
 	if v.partial {
 		// The declarations were never all read, so a name absent from
 		// Notations may simply be in the half that was not fetched.
@@ -376,20 +420,20 @@ func (v *validator) checkNotationDecl(path string, d *Attribute) {
 	v.notationsChecked[key] = true
 	for _, n := range d.Enum {
 		if !v.dtd.Notations[n] {
-			v.fail(path, "attribute %s permits the notation %s, which no "+
+			v.fail(el, "attribute %s permits the notation %s, which no "+
 				"<!NOTATION> declares", d.Name, n)
 		}
 	}
 }
 
 // checkEntityValue applies §3.3.1's Entity Name constraint to one name.
-func (v *validator) checkEntityValue(path, attr, name string) {
+func (v *validator) checkEntityValue(el *xdm.Node, attr, name string) {
 	if v.partial {
 		// As for notations: half a DTD cannot say an entity is undeclared.
 		return
 	}
 	if !v.dtd.Unparsed[name] {
-		v.fail(path, "attribute %s = %q names no unparsed entity", attr, name)
+		v.fail(el, "attribute %s = %q names no unparsed entity", attr, name)
 	}
 }
 
@@ -398,7 +442,7 @@ func (v *validator) checkEntityValue(path, attr, name string) {
 func (v *validator) checkIDRefs() {
 	for _, r := range v.refs {
 		if !v.ids[r.value] {
-			v.fail(r.path, "IDREF %q matches no ID in the document", r.value)
+			v.fail(r.el, "IDREF %q matches no ID in the document", r.value)
 		}
 	}
 }

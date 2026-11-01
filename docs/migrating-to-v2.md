@@ -177,6 +177,7 @@ doc.Finalize()
 
 The calls are `AppendElement`, `AppendText`, `AppendComment`, `AppendPI`,
 `AppendAttr` (before the element's first child), `AddNamespace`,
+`AddNamespaces` (several bindings in one call),
 `AppendCopy` (a deep copy) and `AppendShallowCopy` (the node alone, for a copy
 you complete yourself). A node is open from the call that made it until you
 append to something that is not it or inside it; appending to a closed node,
@@ -185,7 +186,7 @@ or adding an attribute after a child, panics. `Finalize` closes everything.
 What may still change after a node is made is its scalar state: `SetName`,
 `SetValue`, `AppendValue` (merging adjacent text), `SetBaseURI`,
 `SetDocumentURI`, the typing setters, and the namespace declarations of an
-element (`AddNamespace`, `SetNamespaceDecl`, `RemoveNamespaceDecls`) of a tree
+element (`AddNamespace`, `AddNamespaces`, `SetNamespaceDecl`, `RemoveNamespaceDecls`) of a tree
 that is not a parsed document. A parsed document is frozen.
 
 `xdm.NewNode(kind, name, value)` still makes a parentless node; it belongs to
@@ -230,7 +231,8 @@ Namespace nodes exist once per element and prefix: the namespace axis, and
 agree for them.
 
 `xdm.ProcessXInclude` returns the included document as a new tree instead of
-editing the one it is given: `tree, err = xdm.ProcessXInclude(tree, opts)`.
+editing the one it is given (a parsed tree with nothing to include comes back
+as it is): `tree, err = xdm.ProcessXInclude(tree, opts)`.
 
 ## xdmbuild setters removed
 

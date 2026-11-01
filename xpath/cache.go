@@ -31,6 +31,12 @@ import "sync"
 // contended case that would justify an RWMutex is a long read, which this is
 // not. Mutex is also the smaller and simpler primitive, which matters for a
 // type instantiated three times over three different value shapes.
+// maxCachedKey is the longest key worth caching. The caches bound entries, not
+// bytes, and the key (a pattern, a collation URI) can come from document data:
+// 1024 entries of long keys, each with a compiled program behind it, retained
+// gigabytes. A key this long is simply recompiled on each use.
+const maxCachedKey = 1024
+
 type boundedCache[K comparable, V any] struct {
 	mu    sync.Mutex
 	items map[K]V

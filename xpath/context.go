@@ -253,6 +253,13 @@ type Env struct {
 	// AdoptBudget copies it along with the shared counter, so a nested
 	// evaluation cannot raise the bound it is charged against.
 	MaxItems int
+	// MaxDigits bounds the decimal digits of an integer or decimal that a
+	// cast reads from text or an arithmetic operator produces. Zero means
+	// MaxDigits' package default, 10^6; a negative value means no bound. A
+	// cast over it is FOCA0003 and a result over it FOAR0002, both carrying
+	// xdm.ErrResourceLimit: parsing and multiplying are quadratic in the
+	// digit count, so an unbounded value is a time and memory attack.
+	MaxDigits int
 	// items counts the items materialised into intermediate sequences during
 	// this evaluation, bounding memory the way Depth bounds stack.
 	//
@@ -922,6 +929,35 @@ func (c *Context) WithVar(name xdm.QName, val xdm.Sequence) *Context {
 	return n
 }
 
+// withVars binds every name to val in one scope. The names have non-empty
+// local parts; it is what the host registries of a dynamic call are bound with.
+func (c *Context) withVars(names []xdm.QName, val xdm.Sequence) *Context {
+	if len(names) == 0 {
+		return c
+	}
+	s := &struct {
+		n Context
+		b varBinding
+	}{n: *c}
+	s.n.Vars = nil
+	s.b = varBinding{names: names, val: val}
+	s.n.bind = &s.b
+	s.n.Parent = c
+	return &s.n
+}
+
+// WithVars is WithVar for several variables at once: one scope binds names[i]
+// to vals[i]. The names must be distinct, non-empty and as long as vals, and
+// neither slice may be written while the scope is in use.
+func (c *Context) WithVars(names []xdm.QName, vals []xdm.Sequence) *Context {
+	if len(names) == 0 {
+		return c
+	}
+	n := c.withVars(names, nil)
+	n.bind.vals = vals
+	return n
+}
+
 // varBinding is the binding a scope made by WithVar adds. Never written once
 // the scope is published. A scope made by WithLazyVars holds lazy instead,
 // and binds every name in it; one made by xpathleaf.WithLocals holds locals,
@@ -929,6 +965,8 @@ func (c *Context) WithVar(name xdm.QName, val xdm.Sequence) *Context {
 type varBinding struct {
 	uri, local string
 	val        xdm.Sequence
+	names      []xdm.QName // withVars: every name is bound, to vals[i] or else to val
+	vals       []xdm.Sequence
 	lazy       map[varKey]*LazyVar
 	locals     *xpathleaf.Locals
 }
@@ -946,6 +984,38 @@ func frozenLocals(c *Context) *Context {
 		return &n
 	}
 	p := frozenLocals(c.Parent)
+	if p == c.Parent {
+		return c
+	}
+	n := *c
+	n.Parent = p
+	return &n
+}
+
+// capturedFor is frozenLocals for a closure that reads only the variables keep
+// accepts: a scope that binds one name and is not accepted is left out of the
+// chain, and a host stack of locals is cut down to the accepted names. Scopes
+// binding several names, lazily or by the Vars map stay whole.
+func capturedFor(c *Context, keep func(uri, local string) bool, leaf bool) *Context {
+	if c == nil {
+		return nil
+	}
+	if b := c.bind; b != nil && b.locals != nil {
+		n := *c
+		n.bind = &varBinding{locals: b.locals.FrozenOnly(keep)}
+		return &n
+	}
+	p := capturedFor(c.Parent, keep, false)
+	if b := c.bind; b != nil && b.names == nil && b.lazy == nil && b.local != "" &&
+		len(c.Vars) == 0 && !keep(b.uri, b.local) {
+		if !leaf {
+			return p
+		}
+		// The innermost scope also carries the environment the body runs in.
+		n := *c
+		n.bind, n.Parent = nil, p
+		return &n
+	}
 	if p == c.Parent {
 		return c
 	}
@@ -1240,6 +1310,15 @@ func (c *Context) lookupVarPlain(name xdm.QName) (xdm.Sequence, bool, error) {
 						return v, true, err
 					}
 				}
+			} else if b.names != nil {
+				for i, q := range b.names {
+					if q.Local == name.Local && q.URI == name.URI {
+						if b.vals != nil {
+							return b.vals[i], true, nil
+						}
+						return b.val, true, nil
+					}
+				}
 			} else if b.local == name.Local && b.uri == name.URI {
 				return b.val, true, nil
 			}
@@ -1322,6 +1401,18 @@ func (c *Context) checkDepth() error {
 	return nil
 }
 
+// checkValueDepth bounds the nesting of a map or array value that deep-equal
+// or map:find descends into at maxJSONDepth, like parse-json. The depth is
+// passed down by the walkers rather than kept in the Context, whose size is
+// pinned, and so is counted apart from function recursion.
+func checkValueDepth(depth int) error {
+	if depth >= maxJSONDepth {
+		return fmt.Errorf("XPDY0001: value nests more than %d levels: %w",
+			maxJSONDepth, xdm.ErrResourceLimit)
+	}
+	return nil
+}
+
 // countItems charges n items against the evaluation budget.
 //
 // Accumulating constructs call it as they build, so a runaway is stopped while
@@ -1333,13 +1424,86 @@ func (c *Context) countItems(n int) error {
 		return nil
 	}
 	if lim := c.itemLimit(); atomic.AddInt64(c.ev().items, int64(n)) > lim {
-		// The code is kept -- the suites and callers read it -- and the
-		// sentinel added, because this is the processor declining to
-		// allocate rather than anything wrong with the expression.
-		return fmt.Errorf(
-			"XPDY0130: evaluation materialised more than %d items; "+
-				"the expression is building a sequence too large to hold: %w",
-			lim, xdm.ErrResourceLimit)
+		return itemsRefusal(lim)
+	}
+	return nil
+}
+
+// itemsRefusal is the XPDY0130 the item budget raises.
+func itemsRefusal(lim int64) error {
+	// The code is kept -- the suites and callers read it -- and the
+	// sentinel added, because this is the processor declining to
+	// allocate rather than anything wrong with the expression.
+	return fmt.Errorf(
+		"XPDY0130: evaluation materialised more than %d items; "+
+			"the expression is building a sequence too large to hold: %w",
+		lim, xdm.ErrResourceLimit)
+}
+
+// ItemsRefused reports the item-budget refusal if total exceeds the item bound
+// in force, and charges nothing.
+//
+// A host that retains items across many expression evaluations -- xsl:key's
+// index, for-each-group's groups -- keeps the running total itself, because
+// Compiled.Eval resets the shared counter for every expression and a charge
+// made through ChargeItems would be cleared by the next node's evaluation.
+func (c *Context) ItemsRefused(total int64) error {
+	if lim := c.itemLimit(); total > lim {
+		return itemsRefusal(lim)
+	}
+	return nil
+}
+
+// MaxDigits is the digit bound in force where Env.MaxDigits is zero.
+const MaxDigits = 1000000
+
+// digitLimit is the digit bound in force, or -1 for none.
+func (c *Context) digitLimit() int {
+	switch {
+	case c == nil || c.ev().MaxDigits == 0:
+		return MaxDigits
+	case c.ev().MaxDigits < 0:
+		return -1
+	}
+	return c.ev().MaxDigits
+}
+
+// checkCastDigits refuses a string cast to xs:integer or xs:decimal whose text
+// is longer than the digit bound, before it is parsed.
+func (c *Context) checkCastDigits(a *xdm.Atomic, target xdm.TypeCode) error {
+	if target != xdm.TypeInteger && target != xdm.TypeDecimal ||
+		a.Type != xdm.TypeString && a.Type != xdm.TypeUntypedAtomic {
+		return nil
+	}
+	if lim := c.digitLimit(); lim >= 0 && len(a.Str()) > lim {
+		return &xdm.Error{
+			Code: "FOCA0003",
+			Message: fmt.Sprintf("a number of more than %d digits: %s",
+				lim, xdm.ErrResourceLimit),
+			Err: xdm.ErrResourceLimit,
+		}
+	}
+	return nil
+}
+
+// checkResultDigits refuses an exact arithmetic result of more than the digit
+// bound. A value held in an int64 has no big.Rat and is always small enough.
+func (c *Context) checkResultDigits(a *xdm.Atomic) error {
+	r := a.Rat()
+	if r == nil {
+		return nil
+	}
+	lim := c.digitLimit()
+	if lim < 0 {
+		return nil
+	}
+	if bits := max(r.Num().BitLen(), r.Denom().BitLen()); bits*30103/100000 > lim {
+		return &xdm.Error{
+			Code: "FOAR0002",
+			Message: fmt.Sprintf("a result of more than %d digits: %s",
+				lim, xdm.ErrResourceLimit),
+			Err: xdm.ErrResourceLimit,
+		}
 	}
 	return nil
 }
@@ -1499,19 +1663,36 @@ func (c *Context) countNodes(n int) error {
 		return nil
 	}
 	if atomic.AddInt64(c.ev().nodes, int64(n)) > MaxNodes {
-		// XPDY0130 again, and the wording says nodes so that the three
-		// refusals are not confused with one another. XPath 3.1 §2.3.1
-		// sanctions exactly this: "limitations may exist on the maximum
-		// numbers or sizes of various objects... An error must be raised if
-		// such a limitation is exceeded [err:XPDY0130]". The sentinel is
-		// added alongside so a caller can tell a refusal from a fault. See
-		// xdm.ErrResourceLimit.
-		return fmt.Errorf(
-			"XPDY0130: evaluation constructed more than %d result-tree "+
-				"nodes; the transformation is building a tree too large to "+
-				"hold: %w", MaxNodes, xdm.ErrResourceLimit)
+		return nodesRefusal()
 	}
 	return nil
+}
+
+// nodesRefusal is the XPDY0130 the node budget raises.
+func nodesRefusal() error {
+	// XPDY0130 again, and the wording says nodes so that the three
+	// refusals are not confused with one another. XPath 3.1 §2.3.1
+	// sanctions exactly this: "limitations may exist on the maximum
+	// numbers or sizes of various objects... An error must be raised if
+	// such a limitation is exceeded [err:XPDY0130]". The sentinel is
+	// added alongside so a caller can tell a refusal from a fault. See
+	// xdm.ErrResourceLimit.
+	return fmt.Errorf(
+		"XPDY0130: evaluation constructed more than %d result-tree "+
+			"nodes; the transformation is building a tree too large to "+
+			"hold: %w", MaxNodes, xdm.ErrResourceLimit)
+}
+
+// NodesRefused reports the node-budget refusal if any charge has already
+// crossed MaxNodes, and charges nothing. A host calls it where a transform
+// finishes: the builders latch a refusal per builder, so a built-in rule or a
+// temporary tree that crossed the bound would otherwise end as truncated
+// output with no error.
+func (c *Context) NodesRefused() error {
+	if c == nil || c.ev().nodes == nil || atomic.LoadInt64(c.ev().nodes) <= MaxNodes {
+		return nil
+	}
+	return nodesRefusal()
 }
 
 // ChargeNodes charges n constructed result-tree nodes against the evaluation

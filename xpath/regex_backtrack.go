@@ -616,6 +616,9 @@ func (p *btParser) compileCharAtom(src string) (btNode, error) {
 
 // storeCharAtom adds an entry, clearing the cache first if it is full.
 func storeCharAtom(key charAtomKey, v any) {
+	if len(key.src) > maxCachedKey {
+		return
+	}
 	charAtomCache.Put(key, v)
 }
 
@@ -633,7 +636,7 @@ func buildCharAtom(src string, dotAll, fold bool) (*regexp.Regexp, error) {
 	// affect a dot the pattern escaped, which is a literal either way. What it
 	// does buy is that "\n" is matched by a negated class rather than falling
 	// foul of RE2's line handling.
-	re, err := regexp.Compile(prefix + `\A(?:` + translated + `)\z`)
+	re, err := CompileBounded(prefix + `\A(?:` + translated + `)\z`)
 	if err != nil {
 		return nil, fmt.Errorf("FORX0002: invalid regular expression %q: %w", src, err)
 	}

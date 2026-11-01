@@ -653,7 +653,7 @@ func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error
 	if len(goFlags) > 0 {
 		translated = "(?" + strings.Join(goFlags, "") + ")" + translated
 	}
-	re, err := regexp.Compile(translated)
+	re, err := CompileBounded(translated)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"FORX0002: invalid regular expression %q: %w", original, err)

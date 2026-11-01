@@ -164,11 +164,18 @@ type transformState struct {
 	// building nodes means the same nodes rather than merely equal ones --
 	// so the promise is only kept by evaluating once and reusing. Keyed by
 	// functionCallKey; see apply.go.
-	funcResults map[string]xdm.Sequence
+	funcResults map[callHash]xdm.Sequence
 
 	// itemIDs numbers the nodes and function items functionCallKey keys by
 	// identity; see identityNumber.
 	itemIDs map[any]int
+	// keyBuf is the scratch buffer functionCallKey builds keys in.
+	keyBuf []byte
+	// keyDepth is how deep appendIdenticalKey has recursed.
+	keyDepth int
+	// nsPairs is the scratch list literalElemInstr.Execute collects an
+	// element's namespace bindings in.
+	nsPairs []string
 
 	// keyIndex caches xsl:key lookups per document. Building an index is a
 	// full document scan, so it is done once per (key, document) pair on
@@ -239,6 +246,11 @@ type transformState struct {
 	// appending to a copy that the caller never sees.
 	secondary *[]SecondaryResult
 
+	// resultHrefs is the set of @href values, as written, that
+	// xsl:result-document has produced, so that XTDE1490 is a lookup rather
+	// than a scan of secondary. A pointer for the same reason secondary is.
+	resultHrefs *map[string]bool
+
 	// baseURIUsed records that an xsl:result-document claimed the base output
 	// URI — the one an absent or empty @href names. The principal result tree
 	// has that URI too, so a stylesheet that writes to both is producing two
@@ -268,8 +280,8 @@ type selection struct {
 	// mode, params and tunnels are carried so a resumed dispatch behaves
 	// like the original one.
 	mode    string
-	params  map[string]xdm.Sequence
-	tunnels map[string]xdm.Sequence
+	params  paramValues
+	tunnels paramValues
 	// item is the item the rule matched, kept so xsl:next-match can tell
 	// whether it is still looking at it. Section 6.7 makes the current
 	// template rule and the context item two separate conditions, and an
@@ -354,7 +366,7 @@ func (rt *runtime) withCurrent(item xdm.Item, pos, size int) *runtime {
 
 // withSelection records the template-selection state for the body about to run.
 func (rt *runtime) withSelection(t *Template, next int, mode string,
-	params, tunnels map[string]xdm.Sequence) *runtime {
+	params, tunnels paramValues) *runtime {
 	var item xdm.Item
 	if rt.ctx != nil {
 		item = rt.ctx.Item
@@ -491,7 +503,7 @@ func evalVariable(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	}
 	// A variable or parameter whose value will not convert to its declared
 	// type is XTTE0570, not the generic XPTY0004.
-	return v.asType.convertAs(seq, "$"+v.Name.Lexical(), "XTTE0570")
+	return v.asType.convertAsLazy(seq, func() string { return "$" + v.Name.Lexical() }, "XTTE0570")
 }
 
 // evalVariableRaw computes the value before the "as" declaration is applied.
@@ -752,11 +764,12 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 			accumOrigin:   map[*xdm.Node]*xdm.Node{},
 			treeAccums:    map[*xdm.Node]*modeAccumulators{},
 			streamedTrees: map[*xdm.Node]bool{},
-			funcResults:   map[string]xdm.Sequence{},
+			funcResults:   map[callHash]xdm.Sequence{},
 			itemIDs:       map[any]int{},
 			messages:      new([]string),
 			warnings:      new([]string),
 			secondary:     new([]SecondaryResult),
+			resultHrefs:   &map[string]bool{},
 			baseURIUsed:   new(bool),
 			baseOutputURI: opts.BaseOutputURI,
 			opts:          &opts,
@@ -1003,12 +1016,7 @@ func (s *Stylesheet) runtimeLibrary() *xpath.Library {
 // A missing required parameter is reported here too, since it needs no
 // evaluation to detect.
 func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
-	byName := make(map[string]*Variable, len(s.globals))
-	for _, g := range s.globals {
-		if _, dup := byName[g.Name.Clark()]; !dup {
-			byName[g.Name.Clark()] = g
-		}
-	}
+	byName := s.globalByName()
 
 	// gs is the runtime every global is evaluated in: this one as it stands
 	// once the bindings are in place, before any template has run. A later
@@ -1022,19 +1030,20 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 	// inside a LazyVar's Force, which the scope's lock serialises, so a
 	// function item that outlives the transform may force globals from
 	// several goroutines (see xpath.LazyVar).
-	type gstate struct {
+	//
+	// A binding name's state and its cell are one gcell, and every gcell is
+	// in the one slice: a map entry, a state and a LazyVar per global, every
+	// run, were most of what binding the globals cost.
+	type gcell struct {
+		lv                   *xpath.LazyVar
+		own                  xpath.LazyVar
 		active, primed, done bool
 		err                  error
 	}
-	state := make(map[xdm.QName]*gstate, len(s.globals))
-	stateOf := func(g *Variable) *gstate {
-		key := globalBindingName(g.Name, g.pkg)
-		st := state[key]
-		if st == nil {
-			st = &gstate{}
-			state[key] = st
-		}
-		return st
+	cellBuf := make([]gcell, len(s.globals))
+	cellOf := make(map[xdm.QName]*gcell, len(s.globals))
+	stateOf := func(g *Variable) *gcell {
+		return cellOf[globalBindingName(g.Name, g.pkg)]
 	}
 	circular := func(g *Variable) error {
 		// XTDE0640: a global variable whose value depends on its own.
@@ -1145,12 +1154,13 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 	// top-level global or earlier used-package global has that. The plain
 	// binding is what an expression carrying no package resolves against.
 	// A duplicate binding name keeps the first declaration.
-	cellOf := make(map[xdm.QName]*xpath.LazyVar, len(s.globals))
 	vars := make(map[xdm.QName]*xpath.LazyVar, len(s.globals))
-	for _, g := range s.globals {
+	for i, g := range s.globals {
 		name := globalBindingName(g.Name, g.pkg)
-		lv, dup := cellOf[name]
-		if !dup {
+		var lv *xpath.LazyVar
+		if c, dup := cellOf[name]; dup {
+			lv = c.lv
+		} else {
 			switch supplied, ok := opts.Params[g.Name.Clark()]; {
 			case g.isStatic:
 				// A static declaration was bound before static analysis
@@ -1167,16 +1177,18 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 					g.Name.Lexical())
 			default:
 				g := g
-				lv = &xpath.LazyVar{Force: func() (xdm.Sequence, error) {
+				lv = &cellBuf[i].own
+				lv.Force = func() (xdm.Sequence, error) {
 					// A global is evaluated wherever it is first read, and
 					// must not see the locals in scope there.
 					defer rt.leaveFrame(rt.enterFrame())
 					return force(g)
-				}}
+				}
 			}
-			cellOf[name] = lv
+			cellBuf[i].lv = lv
+			cellOf[name] = &cellBuf[i]
 		}
-		vars[name] = cellOf[name]
+		vars[name] = lv
 		if g.pkg != 0 {
 			if _, taken := vars[g.Name]; !taken {
 				vars[g.Name] = lv
@@ -1207,7 +1219,7 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 			return nil
 		}
 		st.primed = true
-		lv := cellOf[globalBindingName(g.Name, g.pkg)]
+		lv := st.lv
 		if lv.Force != nil {
 			st.active = true
 			for _, dep := range globalRefs(g) {

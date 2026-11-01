@@ -97,31 +97,41 @@ func TestSourceCopyStillServesItsUsers(t *testing.T) {
 	})
 }
 
-// TrackPositions keeps the whole source to count lines in. A reader that
-// knows its length lets that copy be allocated once at its final size,
-// rather than grown by doubling to about twice the document in all.
-func TestTrackedCopyIsSizedOnce(t *testing.T) {
-	doc := "<r>\n" + bigBody(100000) + "</r>\n"
-	parse := func(track bool) func() {
-		return func() {
-			if _, err := ParseString(doc, ParseOptions{TrackPositions: track, MaxBytes: -1, MaxNodes: -1}); err != nil {
-				t.Fatal(err)
-			}
+// TrackPositions kept the whole source text, a byte per input byte for the
+// life of the tree, to count lines in. It keeps where the lines start now:
+// four bytes a line. Measured on parse-10mb, a tracked tree went from 50.4 MB
+// to 41.5 MB.
+func TestTrackedTreeKeepsNoSourceText(t *testing.T) {
+	if raceEnabled {
+		t.Skip("heap sizes are not stable under -race")
+	}
+	doc := "<r>\n" + bigBody(20000) + "</r>\n"
+	parse := func(track bool) func() (*Tree, error) {
+		return func() (*Tree, error) {
+			// A reader, not ParseString, whose string the tree may share.
+			return Parse(strings.NewReader(doc), ParseOptions{TrackPositions: track, MaxBytes: -1, MaxNodes: -1})
 		}
 	}
-	plain := allocated(parse(false))
-	tracked := allocated(parse(true))
-	extra := int64(tracked) - int64(plain)
-	// Besides the copy, tracking keeps each node's source offset: four bytes
-	// a record, in a column a parse without positions does not have.
-	tr, err := ParseString(doc, ParseOptions{MaxBytes: -1, MaxNodes: -1})
+	plain := retainedPerTree(t, 4, parse(false))
+	tracked := retainedPerTree(t, 4, parse(true))
+	tr, err := parse(true)()
 	if err != nil {
 		t.Fatal(err)
 	}
-	column := 4 * int64(tr.n)
-	t.Logf("tracked copy cost %d bytes for a %d-byte document (offset column %d)", extra, len(doc), column)
-	if extra > int64(len(doc))*5/4+column {
-		t.Errorf("TrackPositions allocated %d bytes more than without (document %d bytes), want about one copy",
+	// Tracking keeps each element's source offset, four bytes a record in a
+	// column a parse without positions does not have, and the line starts.
+	column := int64(0)
+	for _, ch := range tr.chunks {
+		column += 4 * int64(cap(ch))
+	}
+	lines := 8 * int64(strings.Count(doc, "\n")+1) // a slice grown by doubling
+	extra := tracked - plain
+	t.Logf("tracking kept %d bytes for a %d-byte document (offset column %d, line starts %d)", extra, len(doc), column, lines)
+	if extra > column+lines+int64(len(doc))/8 {
+		t.Errorf("a tracked tree kept %d bytes more than an untracked one (document %d bytes), want no copy of the text",
 			extra, len(doc))
+	}
+	if line, col, ok := kids(kids(tr.Root)[0])[2*20000-1].Position(); !ok || line != 20001 || col != 1 {
+		t.Errorf("last element at line %d col %d (ok=%v), want line 20001 col 1", line, col, ok)
 	}
 }

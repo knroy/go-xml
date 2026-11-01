@@ -92,6 +92,11 @@ type FileResolver struct {
 
 	mu    sync.Mutex
 	cache map[string]*xdm.Tree
+	// sizes is the source size charged for each cache entry, and cacheBytes
+	// their sum, both under mu. A Preload entry is charged nothing: the host
+	// parsed it and holds it already.
+	sizes      map[string]int64
+	cacheBytes int64
 	// inflight tracks a path being read and parsed right now, so that
 	// concurrent callers wait for that one parse rather than each doing their
 	// own. Node identity requires it: fn:doc is defined to return the *same*
@@ -156,6 +161,17 @@ type loadCall struct {
 // run never reaches it and cheap enough that reaching it costs one reparse.
 const resolverCacheMax = 256
 
+// resolverCacheMaxBytes bounds the source bytes of the documents a resolver
+// retains: 32 MB, charged by file size.
+//
+// The entry count alone does not bound memory, because a document is not a
+// fixed size: 256 documents of 158 KB retained 201 MB, about five times their
+// file size once parsed. 32 MB of source is therefore on the order of 150 MB
+// of trees, and a working set of ordinary stylesheets and code lists is far
+// below it. A document that alone exceeds the bound is still cached, after
+// everything else has been evicted; MaxBytes is what refuses a file outright.
+const resolverCacheMaxBytes int64 = 32 << 20
+
 // DefaultMaxResourceBytes bounds one file read through a FileResolver when
 // MaxBytes is zero: 64 MB.
 //
@@ -211,6 +227,17 @@ func NewFileResolver(roots ...string) (*FileResolver, error) {
 // permitted directories, and it is what decides *which* root a path belongs to.
 // This is the enforcement, not the diagnosis.
 func (r *FileResolver) readConfined(path string) ([]byte, error) {
+	var data []byte
+	err := r.openConfined(path, func(f *os.File) (err error) {
+		data, err = r.readLimited(f, path)
+		return err
+	})
+	return data, err
+}
+
+// openConfined is readConfined up to the read: it opens path the same way and
+// hands the open file to use, closing it afterwards.
+func (r *FileResolver) openConfined(path string, use func(f *os.File) error) error {
 	for _, root := range r.Roots {
 		absRoot, err := filepath.Abs(root)
 		if err != nil {
@@ -244,12 +271,12 @@ func (r *FileResolver) readConfined(path string) ([]byte, error) {
 		f, err := rt.Open(filepath.ToSlash(rel))
 		if err != nil {
 			rt.Close()
-			return nil, err
+			return err
 		}
-		data, err := r.readLimited(f, path)
+		err = use(f)
 		f.Close()
 		rt.Close()
-		return data, err
+		return err
 	}
 	// No root contains it. A resolver with no roots at all is the documented
 	// unconfined case, and reaching here means resolvePath admitted a path
@@ -258,12 +285,12 @@ func (r *FileResolver) readConfined(path string) ([]byte, error) {
 	if len(r.Roots) == 0 {
 		f, err := os.Open(path)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		defer f.Close()
-		return r.readLimited(f, path)
+		return use(f)
 	}
-	return nil, fmt.Errorf("%q is outside the permitted directories %v",
+	return fmt.Errorf("%q is outside the permitted directories %v",
 		path, r.Roots)
 }
 
@@ -276,23 +303,9 @@ func (r *FileResolver) readConfined(path string) ([]byte, error) {
 // outcome this library declines to produce. The refusal names the limit so that
 // a caller who wants the file raises MaxBytes rather than guessing.
 func (r *FileResolver) readLimited(f io.Reader, path string) ([]byte, error) {
-	max := r.MaxBytes
-	if max == 0 {
-		max = DefaultMaxResourceBytes
-	}
+	max, lim := r.byteLimit()
 	if max < 0 {
 		return io.ReadAll(f)
-	}
-	// One byte over the limit is read deliberately, so that a file of exactly
-	// the maximum size is accepted and one byte more is distinguishable from
-	// it. The increment saturates: max+1 overflows to a negative limit at
-	// math.MaxInt64, and io.LimitReader reads a negative limit as "nothing
-	// left", so the largest limit a caller can name would silently return an
-	// empty file. An empty read is worse than a refusal, because nothing
-	// downstream can tell it from a genuinely empty resource.
-	lim := max
-	if lim < math.MaxInt64 {
-		lim++
 	}
 	data, err := io.ReadAll(io.LimitReader(f, lim))
 	if err != nil {
@@ -302,6 +315,40 @@ func (r *FileResolver) readLimited(f io.Reader, path string) ([]byte, error) {
 		return nil, fmt.Errorf("%s exceeds the %d byte limit", path, max)
 	}
 	return data, nil
+}
+
+// byteLimit returns the resolver's byte limit (negative: none) and the number
+// of bytes to read to enforce it.
+//
+// One byte over the limit is read deliberately, so that a file of exactly
+// the maximum size is accepted and one byte more is distinguishable from
+// it. The increment saturates: max+1 overflows to a negative limit at
+// math.MaxInt64, and io.LimitReader reads a negative limit as "nothing
+// left", so the largest limit a caller can name would silently return an
+// empty file. An empty read is worse than a refusal, because nothing
+// downstream can tell it from a genuinely empty resource.
+func (r *FileResolver) byteLimit() (max, lim int64) {
+	max = r.MaxBytes
+	if max == 0 {
+		max = DefaultMaxResourceBytes
+	}
+	lim = max
+	if lim >= 0 && lim < math.MaxInt64 {
+		lim++
+	}
+	return max, lim
+}
+
+// countedReader counts the bytes read through it.
+type countedReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countedReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // resolvePath turns an href into a filesystem path inside an allowed root.
@@ -487,7 +534,7 @@ func (r *FileResolver) Preload(uri string, tree *xdm.Tree) {
 	// stylesheet can reach, so an unbounded Preload was an invariant violation
 	// and not an attack surface -- but a host that preloads a document per
 	// request would still have grown the map for the life of the process.
-	r.publish(path, tree)
+	r.publish(path, tree, 0)
 }
 
 // load parses a file, caching the result.
@@ -564,11 +611,11 @@ func (r *FileResolver) loadTracked(
 		r.inflight[key] = call
 		r.mu.Unlock()
 
-		tree, err := r.parseUncached(path, trackPos, b)
+		tree, size, err := r.parseUncached(path, trackPos, b)
 
 		r.mu.Lock()
 		if err == nil {
-			r.publish(path, tree)
+			r.publish(path, tree, size)
 		}
 		delete(r.inflight, key)
 		r.mu.Unlock()
@@ -580,7 +627,7 @@ func (r *FileResolver) loadTracked(
 }
 
 // publish stores a parsed tree. The caller holds r.mu.
-func (r *FileResolver) publish(path string, tree *xdm.Tree) {
+func (r *FileResolver) publish(path string, tree *xdm.Tree, size int64) {
 	// The cache is created on first use. A FileResolver is documented as
 	// usable as a plain literal — &FileResolver{Roots: ...} — so a nil map
 	// here is the ordinary case, not a caller's mistake, and writing to one
@@ -606,28 +653,46 @@ func (r *FileResolver) publish(path string, tree *xdm.Tree) {
 	// and still retains a working set, whereas the recency metadata an LRU
 	// wants would have to be written on every cache HIT. A false eviction
 	// costs one reparse, which is what a miss cost before.
-	for len(r.cache) >= resolverCacheMax {
-		if _, ok := r.cache[path]; ok {
-			// Replacing an entry that is already present does not grow the
-			// map, so nothing has to be evicted for it.
-			break
-		}
+	if r.sizes == nil {
+		r.sizes = map[string]int64{}
+	}
+	// A replaced entry is removed first and gives its charge back, so a
+	// replacement never counts against the bounds twice.
+	r.cacheBytes -= r.sizes[path]
+	delete(r.sizes, path)
+	delete(r.cache, path)
+	// An entry that fits the byte bound alone but not beside what the cache
+	// holds is not admitted, and nothing is evicted for it. Evicting at random
+	// to make room kept throwing out documents that were about to be read
+	// again: four 9 MB files cycled against the 32 MB bound hit 22 times in
+	// 48, where keeping the three that fit hits 3 in 4. The cost is that the
+	// rejected document is parsed again on its next request, which gives a
+	// different tree, and that a resolver whose byte bound filled early keeps
+	// its first documents; the bound on memory is unchanged. A document that
+	// alone exceeds the bound is still admitted, after everything else has
+	// been evicted, because it can never share the cache.
+	if size <= resolverCacheMaxBytes && r.cacheBytes+size > resolverCacheMaxBytes {
+		return
+	}
+	for len(r.cache) > 0 &&
+		(len(r.cache) >= resolverCacheMax ||
+			r.cacheBytes+size > resolverCacheMaxBytes) {
 		for victim := range r.cache {
 			delete(r.cache, victim)
+			r.cacheBytes -= r.sizes[victim]
+			delete(r.sizes, victim)
 			break
 		}
 	}
 	r.cache[path] = tree
+	r.sizes[path] = size
+	r.cacheBytes += size
 }
 
 // parseUncached reads and parses a file. It holds no lock: this is the work
 // that used to run under r.mu.
 func (r *FileResolver) parseUncached(
-	path string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, error) {
-	data, err := r.readConfined(path)
-	if err != nil {
-		return nil, err
-	}
+	path string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, int64, error) {
 	// A file: URI rather than the bare path. This base URI is stamped on
 	// every element of the module and is what fn:document, fn:resolve-uri
 	// and fn:static-base-uri resolve against, and those are defined over
@@ -653,11 +718,43 @@ func (r *FileResolver) parseUncached(
 	// The expansion is charged against the caller's shared allowance rather
 	// than a fresh one per file. A nil budget leaves the per-document ceiling
 	// in place. See ResolveModuleWith.
-	tree, err := xdm.ParseString(string(data), opts.WithEntityBudget(b))
+	//
+	// The file is parsed as it is read, so a large document is never held
+	// as bytes and again as a string beside its tree (62 MB: 477 MB peak
+	// through fn:doc against 245 MB as the source). The byte limit is
+	// enforced as readLimited does: a file whose size is already known to
+	// exceed it is refused before anything is parsed, and one that grows
+	// past it while being read is refused whatever the parser made of the
+	// truncated text, with the same message.
+	var (
+		tree *xdm.Tree
+		size int64
+	)
+	err := r.openConfined(path, func(f *os.File) error {
+		max, lim := r.byteLimit()
+		tooBig := fmt.Errorf("%s exceeds the %d byte limit", path, max)
+		var src io.Reader = f
+		if max >= 0 {
+			if fi, err := f.Stat(); err == nil && fi.Size() > max {
+				return tooBig
+			}
+			src = io.LimitReader(f, lim)
+		}
+		cr := &countedReader{r: src}
+		t, err := xdm.Parse(cr, opts.WithEntityBudget(b))
+		if max >= 0 && cr.n > max {
+			return tooBig
+		}
+		if err != nil {
+			return fmt.Errorf("parsing %s: %w", path, err)
+		}
+		tree, size = t, cr.n
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
+		return nil, 0, err
 	}
-	return tree, nil
+	return tree, size, nil
 }
 
 // fileURIToPath turns a file: URI back into a filesystem path, and leaves

@@ -67,6 +67,12 @@ type nodeTable struct {
 	// the document makes unique. It oscillated with the count: wrong at
 	// three siblings and five, right at two and four.
 	ambiguous map[string]bool
+
+	// dups records that targets holds two nodes with one key sequence, which
+	// buildNodeTable reports again in every enclosing scope. While it is
+	// false, and ambiguous is empty, entries is exactly targets inverted and
+	// an enclosing scope may extend it as it is.
+	dups bool
 }
 
 // mergeEntry folds one sibling's entry into this table.
@@ -272,6 +278,7 @@ func mergeTables(children []icTables) icTables {
 			// A sequence already ambiguous in the child stays ambiguous
 			// here: the ancestor's scope contains that child's whole
 			// subtree, so both occurrences are inside it.
+			existing.dups = existing.dups || tbl.dups
 			for k := range tbl.ambiguous {
 				if existing.ambiguous == nil {
 					existing.ambiguous = map[string]bool{}
@@ -303,10 +310,7 @@ func mergeTables(children []icTables) icTables {
 // buildNodeTable evaluates a key or unique constraint over an element's
 // subtree.
 func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *nodeTable) *nodeTable {
-	tbl := &nodeTable{
-		entries: map[string]*xdm.Node{},
-		targets: map[*xdm.Node]string{},
-	}
+	tbl := &nodeTable{}
 
 	// A per-element check in validateElement does not reach this loop: one
 	// constraint at the top of a deeply recursive document selects the whole
@@ -365,6 +369,25 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 		// carrying it would leave a table holding an order that covers
 		// only part of its targets, for a later reader to trust.
 		tbl.targets = below.targets
+		if !below.dups && len(below.ambiguous) == 0 {
+			// No sequence is held twice, so the subtree's entries are its
+			// targets inverted and there is nothing to report: they are
+			// extended in place. Rebuilding them, and sorting the targets
+			// to do it, at every level of a recursive document cost
+			// O(targets x depth), 730 MB for a 258 KB document.
+			tbl.entries = below.entries
+		} else {
+			tbl.dups = true
+			tbl.entries = map[string]*xdm.Node{}
+		}
+	}
+	if tbl.entries == nil {
+		tbl.entries = map[string]*xdm.Node{}
+	}
+	if tbl.targets == nil {
+		tbl.targets = map[*xdm.Node]string{}
+	}
+	if tbl.dups {
 		// Walked in document order, not map order, so a duplicate is
 		// reported on its later occurrence and several are reported in
 		// the same order on every run.

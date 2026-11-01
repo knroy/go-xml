@@ -119,20 +119,46 @@ func deemedEmpty(it xdm.Item) bool {
 	case *xdm.ArrayItem:
 		// "an array where the result of flattening the array is either an
 		// empty sequence, or a sequence in which every item is deemed empty".
-		for _, m := range v.Members() {
-			for _, sub := range m {
-				if !deemedEmpty(sub) {
-					return false
-				}
-			}
-		}
-		return true
+		return everyLeaf(v, deemedEmpty)
 	case *xdm.Atomic:
 		return v.String() == ""
 	}
 	// A function item has no string value and is not one of the listed cases,
 	// so it is never deemed empty.
 	return false
+}
+
+// everyLeaf reports whether ok holds for every item of a, flattened, and stops
+// at the first that fails. It walks with an explicit stack, as xdm.Flatten
+// does, so a deeply nested array cannot overflow the Go stack, but without
+// materialising the whole flattened sequence first: an array whose first leaf
+// is content is answered after that leaf.
+func everyLeaf(a *xdm.ArrayItem, ok func(xdm.Item) bool) bool {
+	type frame struct {
+		arr  *xdm.ArrayItem
+		m, i int // member (1-based), and item within it
+	}
+	stack := []frame{{arr: a, m: 1}}
+	for len(stack) > 0 {
+		f := &stack[len(stack)-1]
+		if f.m > f.arr.Len() {
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		mem, err := f.arr.Member(f.m)
+		if err != nil || f.i == len(mem) {
+			f.m, f.i = f.m+1, 0
+			continue
+		}
+		it := mem[f.i]
+		f.i++
+		if arr, isArr := it.(*xdm.ArrayItem); isArr {
+			stack = append(stack, frame{arr: arr, m: 1})
+		} else if !ok(it) {
+			return false
+		}
+	}
+	return true
 }
 
 // vacuous is 8.4.2's definition, which decides whether xsl:on-empty fires.
@@ -160,14 +186,7 @@ func vacuous(it xdm.Item) bool {
 			return false
 		}
 	case *xdm.ArrayItem:
-		for _, m := range v.Members() {
-			for _, sub := range m {
-				if !vacuous(sub) {
-					return false
-				}
-			}
-		}
-		return true
+		return everyLeaf(v, vacuous)
 	case *xdm.Atomic:
 		return v.String() == ""
 	}

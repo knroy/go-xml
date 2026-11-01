@@ -42,14 +42,34 @@ func (e *ContextItem) Eval(ctx *Context) (xdm.Sequence, error) {
 // Eval implements Expr for a sequence constructor.
 func (e *SequenceExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	var out xdm.Sequence
+	widest := 0
 	for _, it := range e.Items {
 		v, err := it.Eval(ctx)
 		if err != nil {
 			return nil, err
 		}
+		widest = max(widest, len(v))
 		out = append(out, v...)
 	}
+	// The widest operand was charged by whatever built it; the rest is
+	// copies, which ($s, $s) in a loop doubles without any other charge.
+	if err := ctx.chargeCopies(len(out) - widest); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// chargeCopyFloor is the size below which chargeCopies charges nothing, so
+// that ordinary small sequences cost no atomic add.
+const chargeCopyFloor = 64
+
+// chargeCopies charges n items a constructor copied beyond those the
+// expressions that built them already charged.
+func (c *Context) chargeCopies(n int) error {
+	if n < chargeCopyFloor {
+		return nil
+	}
+	return c.countItems(n)
 }
 
 // Eval implements Expr for a single axis step.
@@ -74,22 +94,7 @@ func (e *Step) Eval(ctx *Context) (xdm.Sequence, error) {
 // nothing would read.
 func (e *Step) evalFrom(ctx *Context, node *xdm.Node) (xdm.Sequence, error) {
 	var err error
-	principal := e.Axis.PrincipalKind()
-	var selected xdm.Sequence
-	if nt, ok := e.Test.(*NameTest); ok && (e.Axis == AxisDescendant || e.Axis == AxisDescendantOrSelf) {
-		// The direct walk selects what walkAxis would, in the same order.
-		if e.Axis == AxisDescendantOrSelf && nt.Matches(node, principal) {
-			selected = append(selected, node)
-		}
-		selected = appendNamedDescendants(selected, node, nt)
-	} else {
-		walkAxis(node, e.Axis, func(n *xdm.Node) bool {
-			if e.Test.Matches(n, principal) {
-				selected = append(selected, n)
-			}
-			return true
-		})
-	}
+	selected := e.appendFrom(nil, node)
 
 	// Predicates apply in axis order, so a reverse axis numbers positions
 	// from the context node outwards.
@@ -103,6 +108,32 @@ func (e *Step) evalFrom(ctx *Context, node *xdm.Node) (xdm.Sequence, error) {
 	// The result of a step is always in document order with duplicates
 	// removed, regardless of the axis direction.
 	return xdm.SortDocumentOrder(selected), nil
+}
+
+// appendFrom appends to selected the nodes e's axis and node test select
+// from node, in axis order, before any predicate.
+func (e *Step) appendFrom(selected xdm.Sequence, node *xdm.Node) xdm.Sequence {
+	principal := e.Axis.PrincipalKind()
+	if nt, ok := e.Test.(*NameTest); ok && (e.Axis == AxisDescendant || e.Axis == AxisDescendantOrSelf) {
+		// The direct walk selects what walkAxis would, in the same order.
+		if e.Axis == AxisDescendantOrSelf && nt.Matches(node, principal) {
+			selected = append(selected, node)
+		}
+		return appendNamedDescendants(selected, node, nt)
+	}
+	// Ancestors come in a chain, so a first match usually has more behind it:
+	// one block of four in place of the 1, 2, 4 growth.
+	chain := e.Axis == AxisAncestor || e.Axis == AxisAncestorOrSelf
+	walkAxis(node, e.Axis, func(n *xdm.Node) bool {
+		if e.Test.Matches(n, principal) {
+			if chain && selected == nil {
+				selected = make(xdm.Sequence, 0, 4)
+			}
+			selected = append(selected, n)
+		}
+		return true
+	})
+	return selected
 }
 
 // Eval implements Expr for a path expression.
@@ -234,6 +265,13 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.S
 		var v xdm.Sequence
 		var err error
 		st, fresh := step.(*Step)
+		if fresh && len(st.Predicates) == 0 && !st.Axis.IsReverse() {
+			// Nothing numbers this node's selection apart from the others,
+			// so it goes straight onto out; the sort below orders and
+			// deduplicates the whole, as it would the per-node results.
+			out = st.appendFrom(out, it.(*xdm.Node))
+			continue
+		}
 		if fresh {
 			v, err = st.evalFrom(ctx, it.(*xdm.Node))
 		} else if da, ok := step.(*descendantAttrs); ok {
@@ -328,8 +366,9 @@ func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, er
 	var out xdm.Sequence
 	size := len(seq)
 	var h *comparisonHoist
-	if size > 1 {
-		h = newComparisonHoist(ctx, pred)
+	var hoist comparisonHoist // on the stack: one allocation less per predicate
+	if size > 1 && hoist.init(ctx, pred) {
+		h = &hoist
 	}
 
 	// One focus context serves every item when the predicate cannot keep
@@ -470,34 +509,36 @@ type comparisonHoist struct {
 	ready bool
 }
 
-// newComparisonHoist returns nil when pred is not such a comparison, under
+// init sets up h for pred and reports true, or reports false when pred is not
+// such a comparison, under
 // XPath 1.0 compatibility (whose conversions need the raw operands), and for
 // "A = (M to N)", which evalGeneralComparison answers from the bounds.
-func newComparisonHoist(ctx *Context, pred Expr) *comparisonHoist {
+func (h *comparisonHoist) init(ctx *Context, pred Expr) bool {
 	b, ok := pred.(*BinaryOp)
 	if !ok {
-		return nil
+		return false
 	}
 	switch b.Op {
 	case "eq", "ne", "lt", "le", "gt", "ge":
 	case "=", "!=", "<", "<=", ">", ">=":
 		if r, isRange := b.Right.(*BinaryOp); ctx.Compat() || (isRange && r.Op == "to") {
-			return nil
+			return false
 		}
 	default:
-		return nil
+		return false
 	}
 	side, left := b.Right, false
 	if !hoistable(side, false) {
 		side, left = b.Left, true
 		if !hoistable(side, false) {
-			return nil
+			return false
 		}
 	}
 	if !callsBuiltins(side, ctx) {
-		return nil
+		return false
 	}
-	return &comparisonHoist{cmp: b, left: left}
+	*h = comparisonHoist{cmp: b, left: left}
+	return true
 }
 
 // holds reports whether the predicate selects sub's context item. The hoisted

@@ -220,6 +220,12 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// destinations that keep a bare sequence — a variable
 				// declared as="document-node()*", a function body — must see
 				// the wrapper itself.
+				// Charged before the copy is made, as the node branch below
+				// does; copy-of of a 100 MB document copied 5.7M nodes
+				// uncharged while shallow-copy of it was refused.
+				if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
+					return err
+				}
 				c := copyDocumentNode(v)
 				if i.noNamespaces {
 					// §11.9.2's namespace rules are about the elements being
@@ -525,21 +531,11 @@ func copyDocumentNode(n *xdm.Node) *xdm.Node {
 // Declarations the element already carries are left alone: they are the
 // nearest ones, and an inherited binding for the same prefix is masked.
 func inheritNamespaces(dst, src *xdm.Node) {
-	have := map[string]bool{}
-	for prefix := range dst.DeclaredNamespaces() {
-		have[prefix] = true
-	}
-	scope := src.InScopeNamespaces()
-	prefixes := make([]string, 0, len(scope))
-	for p := range scope {
-		prefixes = append(prefixes, p)
-	}
-	sort.Strings(prefixes)
-	for _, p := range prefixes {
-		if p == "xml" || have[p] {
-			continue
+	var arr [32]nsBinding
+	for _, b := range scopeBindings(src, arr[:0]) {
+		if !declares(dst, b.prefix) {
+			dst.AddNamespace(b.prefix, b.uri)
 		}
-		dst.AddNamespace(p, scope[p])
 	}
 }
 
@@ -1181,6 +1177,9 @@ type notedDecls struct {
 func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	sub := out.StartElement(rt.sheet.aliasFor(i.pkg, i.name))
 	stampConstructedBaseURI(sub.Open(), i.baseURI)
+	// The bindings are added in one step: parentSupplies reads only the
+	// ancestors, so none of them depends on another having been added.
+	pairs := rt.nsPairs[:0]
 	for _, ns := range i.namespaces {
 		// Section 11.1.4: aliasing rewrites the namespace nodes copied from
 		// the literal result element, not only its name. Copying them
@@ -1198,9 +1197,11 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// so the node would only repeat it. It is still a namespace node
 		// the result sequence holds, so XTDE0430 must still see it.
 		if !parentSupplies(rt, sub.Open(), prefix, uri) {
-			sub.Open().AddNamespace(prefix, uri)
+			pairs = append(pairs, prefix, uri)
 		}
 	}
+	sub.Open().AddNamespaces(pairs...)
+	rt.nsPairs = pairs[:0]
 	sub.NoteDeclaredList(i.noted(rt.sheet))
 	// A namespace that exclusion would have dropped comes back if it is the
 	// target of an alias: the point of aliasing onto, say, the XSLT namespace
@@ -1265,7 +1266,7 @@ type elementInstr struct {
 	// the constructed element inherits.
 	baseURI   string
 	namespace *avt
-	scope     *xdm.Node
+	scope     nsMap
 	attrSets  []attrSetRef
 	body      []Instruction
 	// validation is the validation or type attribute, which asks for the
@@ -1394,7 +1395,7 @@ type attributeInstr struct {
 	separator    *avt
 	hasSeparator bool
 	sel          *xpath.Compiled
-	scope        *xdm.Node
+	scope        nsMap
 	body         []Instruction
 	// validation carries [xsl:]validation and [xsl:]type, which assess the
 	// constructed attribute exactly as they assess a constructed element.
@@ -1697,7 +1698,7 @@ type messageInstr struct {
 	// errorCodeNS resolves the prefix of an error-code that was written as a
 	// lexical QName. The attribute is an AVT, so the name is not known until
 	// run time and the namespace context has to be carried to meet it.
-	errorCodeNS *xdm.Node
+	errorCodeNS nsMap
 	// xslt30 enables the 3.0 readings: the wider @terminate vocabulary, and
 	// surviving a dynamic error raised while building the content.
 	xslt30 bool
@@ -1958,8 +1959,12 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 		return seq, nil
 	}
 
+	// One backing array for every item's keys, rather than a slice header
+	// and an allocation per item.
+	nk := len(sorts)
+	keyBuf := make([]sortValue, n*nk)
 	for i, it := range seq {
-		e := entry{item: it, idx: i, keys: make([]sortValue, len(sorts))}
+		e := entry{item: it, idx: i, keys: keyBuf[i*nk : (i+1)*nk : (i+1)*nk]}
 		// Section 16.6.1: current() is "the item that was the context item at
 		// the point where the expression was invoked from the XSLT
 		// stylesheet". A sort key expression is invoked from xsl:sort with
@@ -2025,28 +2030,24 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 }
 
 // sortValue is a precomputed sort key.
+//
+// One is held per item per key for the length of a sort, so the layout matters:
+// the fields every key carries come first, packed, and the ones only a
+// collation or case-order key needs hang off ext.
 type sortValue struct {
-	numeric bool
-	num     float64
-	str     string
-	// fold is the case-insensitive form, compared first when case-order is
-	// set so that "a" and "A" sort adjacently rather than in separate blocks.
-	fold string
 	// upperFirst selects which of an otherwise-equal pair wins.
 	upperFirst bool
 	caseOrder  bool
-	// strColl is the collation from xsl:sort/@collation, if one was named.
-	strColl xpath.Collation
-	// collFoldKey is collKey for the case-folded form of str, present only
-	// when @lang and @case-order are both given. See where it is built.
-	collFoldKey []byte
-	// collKey is the locale-aware sort key for str, precomputed because a
-	// collator is stateful and cannot be shared across the comparisons that
-	// sort.Slice runs. Comparing two of these byte slices is equivalent to
-	// asking the collator to compare the strings, and is safe concurrently.
-	collKey []byte
+	numeric    bool
 	// empty marks an absent key, which sorts before everything else.
 	empty bool
+	// implicitTZ is needed to order the date/time types, whose comparison
+	// depends on the timezone an untimezoned value is taken to be in.
+	implicitTZ int32
+	num        float64
+	str        string
+	// strColl is the collation from xsl:sort/@collation, if one was named.
+	strColl xpath.Collation
 	// atom is the atomized sort key value, kept for the XSLT 2.0 default
 	// where the comparison follows the value's own type rather than a
 	// conversion the stylesheet asked for. nil when data-type forced a
@@ -2062,9 +2063,51 @@ type sortValue struct {
 	// (1 to 5, 'fred') never reached the branch, because 'fred' arrived with
 	// atom already cleared. error-1030a is exactly that sort.
 	cmpAtom *xdm.Atomic
-	// implicitTZ is needed to order the date/time types, whose comparison
-	// depends on the timezone an untimezoned value is taken to be in.
-	implicitTZ int
+	// ext is set only for a key with @lang or @case-order.
+	ext *sortExt
+}
+
+// sortExt holds what only a case-ordered or locale-aware key carries.
+type sortExt struct {
+	// fold is the case-insensitive form, compared first when case-order is
+	// set so that "a" and "A" sort adjacently rather than in separate blocks.
+	fold string
+	// collKey is the locale-aware sort key for str, precomputed because a
+	// collator is stateful and cannot be shared across the comparisons that
+	// sort.Slice runs. Comparing two of these byte slices is equivalent to
+	// asking the collator to compare the strings, and is safe concurrently.
+	collKey []byte
+	// collFoldKey is collKey for the case-folded form of str, present only
+	// when @lang and @case-order are both given. See where it is built.
+	collFoldKey []byte
+}
+
+func (v *sortValue) setFold(f string) {
+	if v.ext == nil {
+		v.ext = &sortExt{}
+	}
+	v.ext.fold = f
+}
+
+func (v *sortValue) fold() string {
+	if v.ext == nil {
+		return ""
+	}
+	return v.ext.fold
+}
+
+func (v *sortValue) collKey() []byte {
+	if v.ext == nil {
+		return nil
+	}
+	return v.ext.collKey
+}
+
+func (v *sortValue) collFoldKey() []byte {
+	if v.ext == nil {
+		return nil
+	}
+	return v.ext.collFoldKey
 }
 
 // makeSortValue precomputes one sort key.
@@ -2098,7 +2141,7 @@ func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation, implicitT
 		return sortValue{numeric: true, num: conv.Float64()}, nil
 	}
 
-	v := sortValue{str: text, strColl: coll, implicitTZ: implicitTZ}
+	v := sortValue{str: text, strColl: coll, implicitTZ: int32(implicitTZ)}
 	// With no data-type, the value keeps its own type and the comparison is
 	// the XPath "lt" operator: a sequence of xs:integer sorts numerically,
 	// dates sort chronologically. Only a single atomic value can be ordered
@@ -2129,7 +2172,7 @@ func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation, implicitT
 		}
 	}
 	if s.coll != nil {
-		v.collKey = s.coll.key(text)
+		v.ext = &sortExt{collKey: s.coll.key(text)}
 		if s.caseOrder == "upper-first" || s.caseOrder == "lower-first" {
 			// case-order is the caseFirst tailoring: it decides which of a
 			// pair that agrees on every other weight comes first. x/text
@@ -2138,7 +2181,7 @@ func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation, implicitT
 			// the exact ties. The case-folded key is taken through the same
 			// collator so the language's own placement of accented letters
 			// still governs the primary ordering.
-			v.collFoldKey = s.coll.key(strings.ToLower(text))
+			v.ext.collFoldKey = s.coll.key(strings.ToLower(text))
 		}
 	}
 	// case-order only has an effect on text sorts; without it a plain
@@ -2147,10 +2190,10 @@ func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation, implicitT
 	switch s.caseOrder {
 	case "upper-first":
 		v.caseOrder, v.upperFirst = true, true
-		v.fold = strings.ToLower(text)
+		v.setFold(strings.ToLower(text))
 	case "lower-first":
 		v.caseOrder, v.upperFirst = true, false
-		v.fold = strings.ToLower(text)
+		v.setFold(strings.ToLower(text))
 	}
 	return v, nil
 }
@@ -2201,7 +2244,7 @@ func compareSortValues(a, b sortValue) int {
 
 	// A language-sensitive collation replaces codepoint order entirely: it
 	// already places accented and cased letters where that language expects.
-	if a.collKey != nil && b.collKey != nil {
+	if a.collKey() != nil && b.collKey() != nil {
 		// @case-order alongside @lang does not fight the collation, it
 		// tailors it: 13.1.3 makes case-order the choice of which of two
 		// values that are "equal apart from case" comes first, which is
@@ -2209,11 +2252,11 @@ func compareSortValues(a, b sortValue) int {
 		// setting. So the case-insensitive keys order the pair, and case
 		// only breaks a tie the language's own rules left.
 		if a.caseOrder && b.caseOrder &&
-			a.collFoldKey != nil && b.collFoldKey != nil {
-			if c := bytes.Compare(a.collFoldKey, b.collFoldKey); c != 0 {
+			a.collFoldKey() != nil && b.collFoldKey() != nil {
+			if c := bytes.Compare(a.collFoldKey(), b.collFoldKey()); c != 0 {
 				return c
 			}
-			if c := bytes.Compare(a.collKey, b.collKey); c == 0 {
+			if c := bytes.Compare(a.collKey(), b.collKey()); c == 0 {
 				return 0
 			}
 			c := strings.Compare(a.str, b.str)
@@ -2227,7 +2270,7 @@ func compareSortValues(a, b sortValue) int {
 			}
 			return -c
 		}
-		if c := bytes.Compare(a.collKey, b.collKey); c != 0 {
+		if c := bytes.Compare(a.collKey(), b.collKey()); c != 0 {
 			return c
 		}
 		// Equal under the collation but not identical: fall through to
@@ -2238,7 +2281,7 @@ func compareSortValues(a, b sortValue) int {
 	// With case-order set, values are ordered case-insensitively first and the
 	// case distinction only breaks ties.
 	if a.caseOrder && b.caseOrder {
-		if c := strings.Compare(a.fold, b.fold); c != 0 {
+		if c := strings.Compare(a.fold(), b.fold()); c != 0 {
 			return c
 		}
 		c := strings.Compare(a.str, b.str)
@@ -2260,7 +2303,7 @@ func compareSortValues(a, b sortValue) int {
 	// when the values genuinely have no ordering and the suite expects the
 	// sort to complete.
 	if a.atom != nil && b.atom != nil {
-		if c, ok := compareAtoms(a.atom, b.atom, a.implicitTZ); ok {
+		if c, ok := compareAtoms(a.atom, b.atom, int(a.implicitTZ)); ok {
 			return c
 		}
 		// XTDE1030: "it is a non-recoverable dynamic error if, for any sort

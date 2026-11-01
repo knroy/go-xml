@@ -373,7 +373,7 @@ func validateListValueIn(lexical string, t *SimpleType, at *instance) (string, e
 	if t.ItemType != nil {
 		for _, item := range items {
 			if _, err := validateSimpleValueIn(item, t.ItemType, Version10, at); err != nil {
-				return "", fmt.Errorf("list item %q: %w", item, err)
+				return "", fmt.Errorf("list item %q: %w", truncate(item), err)
 			}
 		}
 	}
@@ -829,7 +829,12 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 
 	for _, st := range steps {
 		f := st.facets
-		// cmp orders the instance value against a bound literal.
+		var rats [4]*big.Rat
+		if st.rats != nil {
+			rats = *st.rats
+		}
+		// cmp orders the instance value against a bound literal, using
+		// the bound pre-parsed with the chain when there is one.
 		//
 		// The floating types have three values with no rational form.
 		// §3.3.5/§3.3.6 order them -INF < every finite value < INF and
@@ -838,7 +843,7 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 		// an unparsable value as "no opinion" is what let INF satisfy
 		// maxInclusive="100": being outside every bound the schema can
 		// write is exactly what makes it invalid.
-		cmp := func(lex *string) (int, bool) {
+		cmp := func(lex *string, pre *big.Rat) (int, bool) {
 			if lex == nil {
 				return 0, false
 			}
@@ -878,6 +883,9 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 			if !finite {
 				return 0, false
 			}
+			if pre != nil {
+				return val.Cmp(pre), true
+			}
 			b, ok := new(big.Rat).SetString(lexs)
 			if !ok {
 				return 0, false
@@ -904,24 +912,41 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 			}
 			continue
 		}
-		if c, ok := cmp(f.MinInclusive); ok && c < 0 {
+		if c, ok := cmp(f.MinInclusive, rats[0]); ok && c < 0 {
 			return facetError(st.typ, FacetMinInclusive,
 				"%s is less than %s", normalized, *f.MinInclusive)
 		}
-		if c, ok := cmp(f.MaxInclusive); ok && c > 0 {
+		if c, ok := cmp(f.MaxInclusive, rats[1]); ok && c > 0 {
 			return facetError(st.typ, FacetMaxInclusive,
 				"%s is greater than %s", normalized, *f.MaxInclusive)
 		}
-		if c, ok := cmp(f.MinExclusive); ok && c <= 0 {
+		if c, ok := cmp(f.MinExclusive, rats[2]); ok && c <= 0 {
 			return facetError(st.typ, FacetMinExclusive,
 				"%s is not greater than %s", normalized, *f.MinExclusive)
 		}
-		if c, ok := cmp(f.MaxExclusive); ok && c >= 0 {
+		if c, ok := cmp(f.MaxExclusive, rats[3]); ok && c >= 0 {
 			return facetError(st.typ, FacetMaxExclusive,
 				"%s is not less than %s", normalized, *f.MaxExclusive)
 		}
 	}
 	return nil
+}
+
+// boundRats parses a facet set's bounds for facetStep.rats.
+func boundRats(f *FacetSet) *[4]*big.Rat {
+	var out *[4]*big.Rat
+	for i, lex := range [4]*string{f.MinInclusive, f.MaxInclusive, f.MinExclusive, f.MaxExclusive} {
+		if lex == nil {
+			continue
+		}
+		if r, ok := new(big.Rat).SetString(trimXMLSpace(*lex)); ok {
+			if out == nil {
+				out = new([4]*big.Rat)
+			}
+			out[i] = r
+		}
+	}
+	return out
 }
 
 // hasBoundFacet reports whether any step of the chain carries one of the four
@@ -1046,19 +1071,27 @@ func (v *validator) recordID(owner *xdm.Node, value string) {
 		// Nothing to denote; see idOwner.
 		return
 	}
-	if v.idOwners == nil {
-		v.idOwners = map[string]*xdm.Node{}
-	}
-	if prev, seen := v.idOwners[value]; seen {
-		if prev != owner {
-			if v.ids[value]++; v.ids[value] == 2 {
+	if d, seen := v.ids[value]; seen {
+		if d.owner != owner {
+			d.n++
+			v.ids[value] = d
+			if d.n == 2 {
 				v.dupIDs = append(v.dupIDs, value)
 			}
 		}
 		return
 	}
-	v.idOwners[value] = owner
-	v.ids[value]++
+	v.ids[value] = idDef{owner: owner, n: 1}
+}
+
+// idDef is one ID value's definitions. It was two maps with the same keys.
+type idDef struct {
+	// owner is the element that first defined the value, so that the same
+	// value on two attributes of one element counts once. XSD 1.1 permits
+	// an element to carry several ID attributes.
+	owner *xdm.Node
+	// n is the number of elements defining the value.
+	n int
 }
 
 // idKind reports whether a type is or derives from xs:ID, xs:IDREF or
@@ -1118,10 +1151,10 @@ func idKind(t *SimpleType, value string) string {
 func (v *validator) checkIDs() {
 	for _, value := range v.dupIDs {
 		v.fail(nil, "cvc-id.2",
-			"ID value %q is defined %d times", value, v.ids[value])
+			"ID value %q is defined %d times", value, v.ids[value].n)
 	}
 	for _, ref := range v.idrefs {
-		if v.ids[ref.value] == 0 {
+		if v.ids[ref.value].n == 0 {
 			v.fail(ref.node, "cvc-id.1",
 				"IDREF %q does not match any ID in the document", ref.value)
 		}

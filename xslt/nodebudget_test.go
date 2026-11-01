@@ -269,3 +269,138 @@ func TestRepeatedCopyOfIsRefused(t *testing.T) {
 	_, err = st.Transform(context.Background(), doc.Root, TransformOptions{})
 	wantNodeRefusal(t, err)
 }
+
+// The built-in shallow-copy rule writes through a builder whose latched
+// refusal only execSequenceBody polls, so a mode with nothing but
+// on-no-match="shallow-copy" used to stop building at the bound and return the
+// rest as empty elements, exiting 0. 700,000 <a x="1">t</a> is 2.1 million
+// nodes, over MaxNodes.
+func TestBuiltInRuleResultTreeOverrunIsRefused(t *testing.T) {
+	sd, err := xdm.ParseString(`<xsl:stylesheet version="3.0" `+
+		`xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`+
+		`<xsl:mode on-no-match="shallow-copy"/></xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := Compile(sd.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := xdm.ParseString("<d>"+strings.Repeat(`<a x="1">t</a>`, 700000)+"</d>",
+		xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.Transform(context.Background(), doc.Root, TransformOptions{})
+	wantNodeRefusal(t, err)
+}
+
+// runRetainedKeys runs body over crossProductDoc, with a key or group-by of
+// 1,000 values per node. 5,100 nodes retain 5.1 million entries, just past the
+// 5 million item bound; no single expression evaluation comes near it, which
+// is why the per-expression counter never saw it.
+func runRetainedKeys(t *testing.T, body string) error {
+	t.Helper()
+	sd, err := xdm.ParseString(`<xsl:stylesheet version="3.0" `+
+		`xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`+body+
+		`</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := Compile(sd.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := xdm.ParseString(crossProductDoc(5100), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.Transform(context.Background(), doc.Root, TransformOptions{})
+	return err
+}
+
+func wantItemRefusal(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected XPDY0130; the retained keys were not charged")
+	}
+	if !errors.Is(err, xdm.ErrResourceLimit) ||
+		!strings.Contains(err.Error(), "materialised more than") {
+		t.Errorf("not the item-budget refusal: %v", err)
+	}
+}
+
+func TestKeyIndexEntriesAreChargedToTheItemBudget(t *testing.T) {
+	wantItemRefusal(t, runRetainedKeys(t,
+		`<xsl:key name="k" match="i" use="1 to 1000"/>`+
+			`<xsl:template match="/"><xsl:value-of select="count(key('k', 7))"/></xsl:template>`))
+}
+
+func TestGroupByKeysAreChargedToTheItemBudget(t *testing.T) {
+	wantItemRefusal(t, runRetainedKeys(t,
+		`<xsl:template match="/"><xsl:for-each-group select="//i" group-by="1 to 1000">`+
+			`<xsl:sequence select="count(current-group())"/></xsl:for-each-group></xsl:template>`))
+}
+
+// functionCallKey reuses one scratch buffer for the transform, and a single
+// call with a large argument must not leave its buffer behind.
+func TestFunctionCallKeyDropsAnOversizedBuffer(t *testing.T) {
+	rt := &runtime{transformState: &transformState{itemIDs: map[any]int{}}}
+	f := &userFunction{name: xdm.QName{Local: "f"}}
+	big := xdm.One(xdm.NewString(strings.Repeat("x", 4*maxKeyBufCap)))
+	if _, err := rt.functionCallKey(f, []xdm.Sequence{big}); err != nil {
+		t.Fatal(err)
+	}
+	if c := cap(rt.keyBuf); c > 64<<10 {
+		t.Errorf("keyBuf kept %d bytes after one large call, want at most 64 KB", c)
+	}
+	small := xdm.One(xdm.NewString("x"))
+	if _, err := rt.functionCallKey(f, []xdm.Sequence{small}); err != nil {
+		t.Fatal(err)
+	}
+	if cap(rt.keyBuf) == 0 {
+		t.Error("a small key's buffer should be kept for reuse")
+	}
+}
+
+// internBindings is called for every literal element while compiling, and a
+// hit must not allocate: building the key in a strings.Builder cost one
+// allocation per call and raised CEN's compile allocation by 12-14%.
+func TestInternBindingsHitDoesNotAllocate(t *testing.T) {
+	setSharedNS(map[*xdm.Node]map[string]string{})
+	defer setSharedNS(nil)
+	bs := []nsBinding{{prefix: "svrl", uri: "http://purl.oclc.org/dsdl/svrl"}, {prefix: "xs", uri: xdm.NSXS}}
+	first := internBindings(bs)
+	same := append([]nsBinding(nil), bs...)
+	if n := testing.AllocsPerRun(100, func() {
+		if got := internBindings(same); &got[0] != &first[0] {
+			t.Fatal("equal bindings were not interned to one list")
+		}
+	}); n != 0 {
+		t.Errorf("an interning hit allocates %v times, want 0", n)
+	}
+}
+
+// xsl:copy-of of a document node was the one copy the node budget never saw:
+// the node branch charges, the document branch did not, so copy-of select="/"
+// of a 2.1 million node document exited 0 while shallow-copy of it was refused.
+func TestCopyOfDocumentNodeIsChargedAgainstMaxNodes(t *testing.T) {
+	sd, err := xdm.ParseString(`<xsl:stylesheet version="3.0" `+
+		`xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`+
+		`<xsl:template match="/"><xsl:copy-of select="."/></xsl:template>`+
+		`</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := Compile(sd.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := xdm.ParseString("<d>"+strings.Repeat(`<a x="1">t</a>`, 700000)+"</d>",
+		xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.Transform(context.Background(), doc.Root, TransformOptions{})
+	wantNodeRefusal(t, err)
+}

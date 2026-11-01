@@ -221,7 +221,7 @@ func validateStartElement(t xml.StartElement, ns *nsScope, xml11 bool) error {
 		case len(seen) < len(small):
 			seen = append(seen, k)
 		default:
-			many = make(map[expandedName]bool, 2*len(small))
+			many = make(map[expandedName]bool, max(2*len(small), len(t.Attr)))
 			for _, s := range seen {
 				many[s] = true
 			}
@@ -281,7 +281,10 @@ func (s *nsScope) declare(prefix, uri string) {
 		s.prev = append(s.prev, s.top[prefix]-1)
 		s.top[prefix] = len(s.prev)
 	}
-	s.b = append(s.b, nsBinding{prefix, uri})
+	// The URI is copied out of the tokeniser's arena: the tree keeps it in
+	// every name and frame it resolves, and one arena string reachable from a
+	// tree keeps its whole block alive.
+	s.b = append(s.b, nsBinding{prefix, strings.Clone(uri)})
 	s.own++
 }
 
@@ -361,21 +364,25 @@ func requireQName(n xml.Name) error {
 // attributes to the raw tag, ahead of validateStartElement. Namespaces in
 // XML §3 binds a prefix to the attribute's *normalized* value, so xmlns:b
 // declared NMTOKEN and written " urn:x " binds urn:x — and p:a, b:a collide.
-func normalizeAttTokens(t xml.StartElement, types []attDeclaredType) xml.StartElement {
+func normalizeAttTokens(t xml.StartElement, types []attDeclaredType, ix declIndex) xml.StartElement {
 	var attrs []xml.Attr
-	for _, d := range types {
-		if !lexicalIs(t.Name.Space, t.Name.Local, d.element) && d.element != t.Name.Local {
-			continue
-		}
+	for _, i := range ix.at(t.Name.Space, t.Name.Local) {
+		d := types[i]
 		for i, a := range t.Attr {
 			if !lexicalIs(a.Name.Space, a.Name.Local, d.attr) && a.Name.Local != d.attr {
+				continue
+			}
+			// A value already collapsed is left as it is, so that a default
+			// keeps the storage the text store shares.
+			c := strings.Join(strings.FieldsFunc(a.Value, func(r rune) bool { return r == ' ' }), " ")
+			if c == a.Value {
 				continue
 			}
 			if attrs == nil {
 				// Copy: the tokeniser's attribute slice is not ours to write.
 				attrs = append([]xml.Attr(nil), t.Attr...)
 			}
-			attrs[i].Value = strings.Join(strings.FieldsFunc(a.Value, func(r rune) bool { return r == ' ' }), " ")
+			attrs[i].Value = c
 		}
 	}
 	if attrs != nil {

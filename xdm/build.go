@@ -261,10 +261,10 @@ func (t *Tree) CopySourceFrom(src *Tree) {
 	}
 	t.CopyDTDFrom(src)
 	t.XMLVersion = src.XMLVersion
-	if s := src.srcText(); s != "" {
-		t.ownSource().src = s
+	if l := src.lineIdx(); l != nil {
+		t.ownSource().lines = l
 	} else if t.source != nil {
-		t.source.src = ""
+		t.source.lines = nil
 	}
 }
 
@@ -279,7 +279,7 @@ func CopyPosition(dst, src *Node) {
 	if !ok {
 		return
 	}
-	if _, foreign := src.tree.foreign(src.self); !foreign && dst.tree.srcText() == src.tree.srcText() {
+	if _, foreign := src.tree.foreign(src.self); !foreign && dst.tree.lineIdx() == src.tree.lineIdx() {
 		dst.setOffset(src.offset())
 		return
 	}

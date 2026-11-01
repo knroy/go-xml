@@ -45,9 +45,10 @@ func TestDTDAttributeTypingDoesNotBuildNames(t *testing.T) {
 	}
 	el := NewNode(KindElement, QName{Prefix: "schema", Local: "element-with-a-long-name-x"}, "")
 	el.AppendAttr(QName{Prefix: "prefix", Local: "identifier-with-a-long-name"}, "a")
+	ix := indexDecls(len(types), func(i int) string { return types[i].element })
 	if n := testing.AllocsPerRun(100, func() {
-		normalizeAttTokens(tok, types)
-		applyAttTypes(el, types)
+		normalizeAttTokens(tok, types, ix)
+		applyAttTypes(el, types, ix)
 	}); n != 0 {
 		t.Errorf("typing an element against 40 declarations allocated %.0f times, want 0", n)
 	}

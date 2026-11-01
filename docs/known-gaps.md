@@ -105,6 +105,57 @@ tables being copied per scope and target nodes being walked again. Found by
 an external audit of v2.0.0; the figures are the `BenchmarkIdentity*`
 benchmarks in `xsd/`.
 
+### Memory: what the third memory audit left open (resource limits, performance)
+
+Found by the third memory audit (2026-11-01) and not fixed, each with the reason:
+
+- **No bound on the total across many `fn:doc` calls.** The per-document
+  `MaxBytes` holds, but 40 distinct 500k-element documents were held at 846 MB
+  live. A correct total needs a per-evaluation set of loaded URIs (the
+  `FileResolver` cache is shared, so charging on a miss undercounts), state
+  carried into nested `fn:transform`, and every reader covered. Lower
+  `FileResolver.MaxBytes` or the allowed roots meanwhile.
+- **`Env.MaxDigits` covers casts, constructors and binary arithmetic, not
+  `CastAtomic`, `fn:sum` or `fn:avg`**, which take no context.
+- **RELAX NG's derivative cap still refuses some valid documents.** The choice
+  merge fixed `(a?){n} a{n}` up to about n = 30. At n = 50 and 100 the cap is
+  reached again, though in 20–300 ms rather than 19.9 s. Hash-consing
+  derivatives would close it.
+- **`xsl:number level="any"` is quadratic in CPU** (40k items 44 s). A cached
+  prefix count is not valid, since `count` and `from` patterns may use
+  `current()` or per-call variables.
+- **`fold-left` appending one item a step is quadratic in allocation**
+  (40k items 12.4 GB, all garbage). Appending in place is unsound while other
+  references may share the prefix.
+- **Identity templates allocate about 3.5 KB a node of context copies**
+  (`withSel`, `hostWithCurrent`, the leaf-hook copy), and built-in shallow-copy
+  copies a document-level result twice; removing that copy changes an error
+  case into output.
+- **A single text value of a few to tens of MB allocates up to about 1.9× its
+  size while parsing** (10 MiB: 1.87×; the tree keeps 1.09×; 60 MiB: 1.13×).
+  The decoder's buffer grows in steps of eight. Sizing it to the input left
+  in one step reached 1.08×, but a document of eight 3 MiB values went from
+  1.33× to 2.04×, so it was reverted.
+- **`c14n.BytesNodeSet` on a caller's own `NodeSet` still costs about 2.1× its
+  output.** Sizing it would call `Contains` twice per node, which the API
+  promises not to do; the package's `Subtree` and `ExcludeSubtree` are sized.
+- **XQuery inline functions capture their whole scope.** The XPath and XSLT
+  closure (`InlineFunctionExpr`) keeps only what its body reads;
+  `xquery/inline.go` has its own implementation.
+- **A regex program over 4,096 instructions is compiled on every call**,
+  because it is not cached; the largest QT3 pattern is 4,059.
+
+### `fn:replace` charges a backtracking or backreference result after building it (XPath, resource limits)
+
+The RE2 path of `fn:replace` charges `len(input) + matches × len(replacement)`
+before it builds the result, so a hostile replacement is refused without being
+allocated. The two other engines, the backreference matcher and the opt-in
+backtracking one (`-backtracking-regex`), still build the result and charge it
+afterwards. Their step budgets bound the number of matches, but not the size
+of each replacement, so a long replacement string can allocate past
+`MaxBytes` before the refusal. Found by the second memory audit
+(2026-10-31), which measured only the RE2 path.
+
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
 **3 of the 23 XSLT 3.0 failures** — `si-fork-902`, `si-fork-952` and

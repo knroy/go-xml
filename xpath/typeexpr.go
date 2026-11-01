@@ -596,6 +596,9 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		src.Type == xdm.TypeUntypedAtomic {
 		src = xdm.NewString(src.String())
 	}
+	if err := ctx.checkCastDigits(src, e.Type.AtomicType); err != nil {
+		return nil, err
+	}
 	out, err := CastToDerived(src, e.Type.AtomicType, e.Type.FacetName)
 	if err == nil && e.Type.SchemaValueValid != nil {
 		// The built-in cast succeeded, which settles the lexical form. The

@@ -4,6 +4,92 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+A memory audit across parsing, XPath/XQuery, XSLT, validation and
+serialization. Output is byte-identical except where *Changed* says otherwise.
+Three new exported functions make this a minor release.
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| `xpath.SerializeJSONTo`, `xpath.SerializeAdaptiveTo` | The json and adaptive methods written to an `io.Writer` instead of returned as a string. | [`599b2f9`][599b2f9] |
+| `xdm.Node.AddNamespaces` | Sets several namespace bindings on an element in one call. | [`b42f04a`][b42f04a] |
+| `xdm.Node.Index`, `Node.SubtreeEnd`, `Tree.Len`, `Tree.NodeAt` | A node's dense, document-order position in its tree (attributes included, namespace nodes -1), stable once the node exists; size a table with `SubtreeEnd() - Index()` and look nodes up by position. | [`b37796b`][b37796b] |
+| `xdm.Node.InScopeNamespaceBindings` | Iterates an element's in-scope prefixes and URIs without making a namespace node for each. | [`73249e2`][73249e2] |
+| `xdm.ArrayItem.AppendMembers` | Appends an array's members to a slice without an intermediate copy. | [`59ac569`][59ac569] |
+| `xpath.CompileBounded`, `xpath.MaxRegexpProgram` | `regexp.Compile` that refuses a program over 100,000 instructions; used by XPath and XSD patterns. | [`c1c2bb9`][c1c2bb9] |
+| `xpath.Env.MaxDigits`, `xpath.MaxDigits` | Bounds the digits of an `xs:integer` or `xs:decimal` cast or arithmetic result; 0 is 10^6, negative is none. | [`8577906`][8577906] |
+| `xdm.AppendIntegers`, `xpath.Context.WithVars` | Appends a run of integers allocated a chunk at a time; binds several variables in one scope. | [`30c7c07`][30c7c07], [`5951f24`][5951f24] |
+| `xpath.Context.NodesRefused`, `ItemsRefused` | Whether the node budget was crossed, and whether a running item total is past the item bound, without charging either. | [`4e8f0a5`][4e8f0a5], [`21995a6`][21995a6] |
+
+### Changed
+
+| Change | What to do | Commit |
+|---|---|---|
+| `xsd` and `dtd` error messages clip document-supplied strings to 1 KB plus "..." | Nothing, unless you match messages longer than 1 KB. Message wording is not part of the contract. | [`20958aa`][20958aa], [`bd865e4`][bd865e4] |
+| json and adaptive serialization can leave partial output when an error is raised mid-document | Treat the writer's content as invalid on error, as the XML methods already required. | [`599b2f9`][599b2f9] |
+| New refusals: maps and arrays nested past 1,000 levels in json/adaptive output (XPDY0130), `deep-equal` and `map:find` (XPDY0001), with their own counter, apart from function recursion; regexes over 100,000 instructions (FORX0002, or a pattern error in XSD); picture widths over 65,536 (FOFD1340); `xsl:key` and `group-by` keys past 5,000,000 retained (XPDY0130); integers over 10^6 digits (FOCA0003, FOAR0002); sequences built by `,` or `!`, `xsl:next-iteration` values, `unparsed-text-lines` lines, `parse-json`/`json-doc` values and stored accumulator items past `MaxItems` (XPDY0130); `xsl:copy-of` of a document past `MaxNodes` (XPDY0130) | Nothing for real inputs: the largest W3C suite regex is 4,313 instructions. All wrap `xdm.ErrResourceLimit`. | [`702c6e6`][702c6e6], [`014a862`][014a862], [`c1c2bb9`][c1c2bb9], [`21995a6`][21995a6], [`8577906`][8577906], [`dcb49b2`][dcb49b2], [`c73a06b`][c73a06b], [`a3d8ef6`][a3d8ef6], [`40cd52c`][40cd52c], [`b35ec14`][b35ec14] |
+| The CLI drops its collector from `GOGC=200` to 100 once the live heap passes 128 MB | Nothing; set `GOGC` to keep a fixed value. Peak RSS −20% on DocBook's largest table, about 12% more user CPU. | [`f3449f7`][f3449f7] |
+| The `FileResolver` no longer evicts to admit a document that does not fit beside its cache | A document refused admission is parsed again on its next request, so across transforms it is not the same tree; within one transform it is. | [`f49ff92`][f49ff92] |
+| `xdm.ProcessXInclude` returns a parsed tree unchanged when it has no XInclude element | Nothing; a parsed tree is frozen. A built tree is still copied. | [`e139525`][e139525], [`9c3a983`][9c3a983] |
+
+### Fixed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| `xsd` error messages kept attacker strings whole | A 1 MB namespace in 200 attributes kept 105 MB. `fail` and `attrName` clip to 1 KB: 0.13 MB. | [`20958aa`][20958aa] |
+| The DTD validator built every element's path, quadratic in depth | A valid 990-deep chain of 4 KB names allocated 2 GB. The path is rendered only for a failure, text unchanged. | [`8dcb07f`][8dcb07f] |
+| DTD validity messages kept `#FIXED`, enum and ID values whole | 200 mismatches on a 1 MB `#FIXED` value kept 105 MB. `fail` clips to 1 KB. | [`bd865e4`][bd865e4] |
+| The nested `fn:transform` cache kept compiles for dead resolvers | A fresh resolver per call kept 49 MB on DocBook. Resolvers are weak keys and dead entries are dropped: 0.3 MB. | [`a5b385d`][a5b385d] |
+| Sequences built by `,` or `!` were not counted against `MaxItems` | A 70-byte doubling `fold-left` built 134M items against the 5M limit, at 6.3 GB; through recursive `with-param` too. They are charged above 64 items. Also in v2.0.3. | [`dcb49b2`][dcb49b2] |
+| RELAX NG reported a valid document invalid | `(a?){13} a{13}` against 13 `<a/>` hit the derivative cap, naming a `oneOrMore` the schema lacks; `xmllint` accepts it. Choice chains merge alternative by alternative: N = 12, 13, 18, 30 validate. Also in v2.0.3. | [`44229aa`][44229aa] |
+| Serializing a sequence of atomic values was quadratic | `1 to 100000` took 21.6 s and 6.95 GB, joined by repeated concatenation. Each run is joined once: 0.056 s. Also in v2.0.3. | [`a9ad280`][a9ad280] |
+| Text lines, JSON values, DTD default values, integer digits and accumulator values grew past the limits | `unparsed-text-lines` kept 5.2 GB, 2 MB of DTD defaults 1.97 GB, a 4M-digit cast 34 GB, a 200 KB accumulator 12.4 GB. Each is charged, bounded, stored once or shared. Also in v2.0.3. | [`c73a06b`][c73a06b], [`be5afc3`][be5afc3], [`8577906`][8577906], [`40cd52c`][40cd52c] |
+| `xsl:copy-of` of a document was not counted against `MaxNodes` | It copied 5.7M nodes and exited 0, where shallow-copy is refused. It is charged before copying. | [`b35ec14`][b35ec14] |
+| Deeply nested maps and arrays crashed the process | `serialize(..., json)` or `deep-equal` on a 400,000-deep array from a 96-byte query overflowed the Go stack. They are refused with a resource-limit error; `xdm.Flatten` is iterative. Also in v2.0.3. | [`702c6e6`][702c6e6] |
+| A built-in `shallow-copy` rule returned a truncated result past `MaxNodes` with no error | A 1M-element identity copy emptied a third of its elements and exited 0. The transform now fails with XPDY0130 whenever the node budget was crossed. Also in v2.0.3. | [`4e8f0a5`][4e8f0a5] |
+| Sequential regex repeats compiled to huge programs | `\pL{1000}` repeated 150 times passes Go's 1,000-repeat check: 181 KB of patterns kept 984 MB. Programs over 100,000 instructions are refused in XPath and XSD. | [`c1c2bb9`][c1c2bb9] |
+| `fn:replace`, picture widths, `xsl:key` and `group-by` grew past their budgets | `replace` charged after building (12.8 GB for 500 KB in), `[D01,1000000000]` allocated 2.8 GB, and `use="1 to 1000"` over 100k nodes 3.2 GB. Each is charged or refused first. | [`c1c2bb9`][c1c2bb9], [`21995a6`][21995a6] |
+| Caches bounded by entries held gigabytes of long keys or documents | Regex, collation and char-atom keys over 1 KB are not cached; the `FileResolver` document cache is also bounded by 32 MB of source. | [`c1c2bb9`][c1c2bb9], [`de4a515`][de4a515] |
+
+### Changed — memory
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| Namespace URIs were tokeniser-arena strings | Each parsed tree kept a 32 KB arena block alive. URIs are copied at declaration: DocBook trees retain 31.6 → 12.3 MB. | [`18d374d`][18d374d] |
+| Every parse allocated a 32 KB string-arena block | The first block is sized to the input: DocBook corpus parse 37.6 → 19.6 MB a pass. | [`9e13f70`][9e13f70] |
+| `TrackPositions` kept the source text to count lines | Line starts are recorded as the text is read: a tracked 10 MB tree retains 50.4 → 41.5 MB. | [`ec1ac54`][ec1ac54] |
+| Parsed trees kept build-only indexes, slack and copied long text twice | Indexes dropped at freeze, the last text block trimmed, long text handed over: DocBook retains a further −10%. | [`2ad3a32`][2ad3a32], [`a5ab736`][a5ab736], [`4440665`][4440665] |
+| Each parse allocated three read windows | They are pooled: DocBook corpus parse 19.8 → 17.1 MB a pass. | [`6345114`][6345114] |
+| `isBase64Binary` copied each value into a `[]rune` | One byte pass: a 380 KB value 1.54 MB → 0 allocations. | [`5d8fceb`][5d8fceb] |
+| DTD content matching, ID bookkeeping and bound facets allocated per child or value | Two reused state sets, one ID map, bounds parsed once: `dtd` validation −47%, `xsd` instance −24%. | [`e056467`][e056467], [`f09c1a3`][f09c1a3], [`14c84b5`][14c84b5] |
+| XQuery FLWOR tuples copied names, rebuilt values and grew results by doubling | Shared names, own value, reserved results, version set once, no per-call library: XMark q1–q20 eval 194.9 → 119.0 MB. | [`ba9e7a0`][ba9e7a0], [`f890740`][f890740], [`a8d6e7b`][a8d6e7b], [`24b963c`][24b963c], [`73af7a8`][73af7a8], [`f148247`][f148247] |
+| `a to b` and `fn:distinct-values` used big arithmetic and eager promotion keys | int64 ranges, keys written once a double arrives: `distinct-values(1 to 100000)` 96.0 → 53.2 MB. | [`70ff980`][70ff980], [`ef5f064`][ef5f064] |
+| Compiled stylesheets held ~980 copies of one namespace map and pinned module trees | Interned by content; instructions keep the map, not the element: compiled CEN 9.1 → 6.1 MB, DocBook 12.4 → 9.3 MB. | [`490fc5a`][490fc5a], [`dcb15d1`][dcb15d1] |
+| XSLT calls built parameter maps, memo keys, namespace frames and error text per call | A slice of pairs, a reused key buffer, one-step frames, lazy text, shared global cells: DocBook section.001 −15%. | [`e3b6288`][e3b6288], [`b5aaa52`][b5aaa52], [`b42f04a`][b42f04a], [`b6d4e4e`][b6d4e4e], [`327b09e`][327b09e] |
+| The json, adaptive and text methods built the whole output as a string | They stream to the writer: xmark json 152.7 MB → 12.6 KB, text 41.7 MB → 33 KB. Normalized output keeps the string. | [`599b2f9`][599b2f9], [`cf65d62`][cf65d62] |
+| CDATA sections, character maps and `fn:serialize` escaping copied per node | Written straight to the sink: xmark CDATA 20.4 MB → 34 KB, character map 16.5 MB → 34 KB. | [`cf65d62`][cf65d62], [`599b2f9`][599b2f9] |
+| c14n `Bytes` and `Result.String` doubled a buffer from empty; `Serialize` allocated 32 KB a call | Output chunks are joined once and the write buffer is pooled: c14n 3.7× → 2.1× the output, a small result 33.6 → 0.7 KB. | [`f235795`][f235795], [`9496810`][9496810], [`37206b1`][37206b1], [`c501fc4`][c501fc4], [`1f18b1b`][1f18b1b] |
+| The `xslt` benchmarks read inputs no checkout has, so they always skipped | They run XRechnung and Peppol CEN from `testdata/bench`. | [`beb6072`][beb6072] |
+| `-xinclude` copied every tree, and included documents twice, even with nothing to include | A parsed tree with no XInclude element is returned as is and inclusions are built into the destination: `parse-100mb` 514 → 0 MB. | [`e139525`][e139525] |
+| RELAX NG copied its name memo on every store | Stores land in a pending map published as a snapshot, and after 8 locked hits: 1,024 stores 47.5 → under 2 MB, lookups lock-free. | [`9f0db9c`][9f0db9c], [`676ad52`][676ad52] |
+| Integer `mod`, `idiv`, negation and comparison used big arithmetic; ranges made 3 allocations an integer | int64 fast paths and chunked ranges: comparison 2 → 0 allocations, `sum(1 to 1e6)` 800k → 4.8k allocations. | [`40085f6`][40085f6], [`30c7c07`][30c7c07] |
+| Dynamic calls, FLWOR tuples and window clauses made a scope per variable; closures kept their whole scope | One scope per binding set, and a closure keeps only what its body reads: `$f($i)` over 1M 2,673 → 1,617 MB. | [`5951f24`][5951f24], [`a4f316d`][a4f316d], [`b5aaf06`][b5aaf06] |
+| The function result memo kept each key string | It keeps a 128-bit SHA-256 hash: DocBook `table-cals.049` live heap 359 → 172 MB, peak 1,150 → 533 MB. | [`15273c7`][15273c7] |
+| `fn:doc` read the file whole and copied it; `replace` copied and over-charged a non-matching input | `fn:doc` parses as it reads (16 MB file 82 → 29 MB); `replace` returns early with no match (64 MB: 256 → 0 MB). | [`a6f2eaa`][a6f2eaa], [`6bab64a`][6bab64a] |
+| Every c14n call allocated an 80 KiB buffer, and `Bytes` grew its result by doubling | The buffer is pooled (101 `Digest` calls on a tiny document 8.4 MB → 121 KB); `Bytes` and package-made node sets write into a buffer sized from the tree (about 1.1× the output, from 2.1–3.6×). | [`127b2f2`][127b2f2], [`5d6454a`][5d6454a] |
+| A tag with many unique attribute names grew its slices, name table and duplicate map step by step | They are sized in one step past 256 attributes: 10 MiB of unique attributes 99.5× → 37.6× allocated. Small documents are unchanged. | [`22d32ac`][22d32ac] |
+| Each namespace node rebuilt its element's whole scope to find its place; accumulators kept two maps per node | The slot is passed in (c14n over an XPath node set at 1 MiB 356 → 299 MB); accumulator values sit in slices indexed by `Node.Index` (about 27% less per node). | [`73249e2`][73249e2], [`b331aa1`][b331aa1] |
+| A predicate step heap-allocated its comparison, and an ancestor step grew its result one node at a time | Both are cut: `ancestor-or-self::*[@Id='x']` per node 384 B / 9.75 allocations → 304 B / 7. | [`567aa1a`][567aa1a] |
+| `xsl:sort`, `xsl:iterate`, `xsl:result-document`, built-in shallow-copy, namespace scopes and `on-empty` allocated per item | Smaller sort values in one array, parameter slices, set lookups, no focus copy without rules, frame walks, a lazy leaf walk. `result-document` is linear. | [`6ea432f`][6ea432f], [`a3d8ef6`][a3d8ef6], [`951f0d9`][951f0d9], [`f650a19`][f650a19], [`4b0b564`][4b0b564], [`469c95e`][469c95e] |
+| DTD defaults were scanned per element; XSD key scopes rebuilt their entries per level | Defaults indexed by element (188 → 5 MB); scopes extend in place (960 levels 84 → 1 MB). | [`6293e98`][6293e98], [`996b7db`][996b7db] |
+| Large regex programs were cached; `parse-json` objects and `serialize` refusals cost per key and item | Programs over 4,096 instructions are not cached; objects use `MapBuilder` (about 3.3× less); `serialize` stops at the first refusal. | [`331bc96`][331bc96], [`98811f6`][98811f6], [`6317d49`][6317d49] |
+| DTD validation built a state-set map, a name slice and an attribute map per element | Small sets dedup by scan, the slice is reused, no ATTLIST skips the map: 12,062 → 8,062 allocations for 6,001 elements. | [`5dc120c`][5dc120c] |
+| `xsdnet.HTTPResolver` built a new transport per fetch | One guarded transport is shared, so connections are reused; the SSRF guard is unchanged. | [`da05b16`][da05b16] |
+| Typed copies pinned dropped schemas; `array:append` copied twice; line index, interning key and memo key kept slack | Weak typing-name slots, one copy, clipped index, reused key buffer, oversized memo buffer dropped. | [`967dfb3`][967dfb3], [`59ac569`][59ac569], [`3b71501`][3b71501], [`69414ae`][69414ae], [`887d5d3`][887d5d3] |
+
 ## v2.0.3 — 2026-10-30
 
 An XPath cost fix from an external audit. No API change.
@@ -1625,3 +1711,94 @@ here so every entry in this file sits under a release.
 [b76c85d]: https://github.com/knroy/go-xml/commit/b76c85d
 [8b7aab2]: https://github.com/knroy/go-xml/commit/8b7aab2
 [4264de8]: https://github.com/knroy/go-xml/commit/4264de8
+[599b2f9]: https://github.com/knroy/go-xml/commit/599b2f9
+[b42f04a]: https://github.com/knroy/go-xml/commit/b42f04a
+[20958aa]: https://github.com/knroy/go-xml/commit/20958aa
+[bd865e4]: https://github.com/knroy/go-xml/commit/bd865e4
+[8dcb07f]: https://github.com/knroy/go-xml/commit/8dcb07f
+[a5b385d]: https://github.com/knroy/go-xml/commit/a5b385d
+[18d374d]: https://github.com/knroy/go-xml/commit/18d374d
+[9e13f70]: https://github.com/knroy/go-xml/commit/9e13f70
+[ec1ac54]: https://github.com/knroy/go-xml/commit/ec1ac54
+[2ad3a32]: https://github.com/knroy/go-xml/commit/2ad3a32
+[a5ab736]: https://github.com/knroy/go-xml/commit/a5ab736
+[4440665]: https://github.com/knroy/go-xml/commit/4440665
+[6345114]: https://github.com/knroy/go-xml/commit/6345114
+[5d8fceb]: https://github.com/knroy/go-xml/commit/5d8fceb
+[e056467]: https://github.com/knroy/go-xml/commit/e056467
+[f09c1a3]: https://github.com/knroy/go-xml/commit/f09c1a3
+[14c84b5]: https://github.com/knroy/go-xml/commit/14c84b5
+[ba9e7a0]: https://github.com/knroy/go-xml/commit/ba9e7a0
+[f890740]: https://github.com/knroy/go-xml/commit/f890740
+[a8d6e7b]: https://github.com/knroy/go-xml/commit/a8d6e7b
+[24b963c]: https://github.com/knroy/go-xml/commit/24b963c
+[73af7a8]: https://github.com/knroy/go-xml/commit/73af7a8
+[f148247]: https://github.com/knroy/go-xml/commit/f148247
+[70ff980]: https://github.com/knroy/go-xml/commit/70ff980
+[ef5f064]: https://github.com/knroy/go-xml/commit/ef5f064
+[490fc5a]: https://github.com/knroy/go-xml/commit/490fc5a
+[dcb15d1]: https://github.com/knroy/go-xml/commit/dcb15d1
+[e3b6288]: https://github.com/knroy/go-xml/commit/e3b6288
+[b5aaa52]: https://github.com/knroy/go-xml/commit/b5aaa52
+[b6d4e4e]: https://github.com/knroy/go-xml/commit/b6d4e4e
+[327b09e]: https://github.com/knroy/go-xml/commit/327b09e
+[cf65d62]: https://github.com/knroy/go-xml/commit/cf65d62
+[f235795]: https://github.com/knroy/go-xml/commit/f235795
+[9496810]: https://github.com/knroy/go-xml/commit/9496810
+[37206b1]: https://github.com/knroy/go-xml/commit/37206b1
+[c501fc4]: https://github.com/knroy/go-xml/commit/c501fc4
+[1f18b1b]: https://github.com/knroy/go-xml/commit/1f18b1b
+[beb6072]: https://github.com/knroy/go-xml/commit/beb6072
+[59ac569]: https://github.com/knroy/go-xml/commit/59ac569
+[c1c2bb9]: https://github.com/knroy/go-xml/commit/c1c2bb9
+[4e8f0a5]: https://github.com/knroy/go-xml/commit/4e8f0a5
+[21995a6]: https://github.com/knroy/go-xml/commit/21995a6
+[702c6e6]: https://github.com/knroy/go-xml/commit/702c6e6
+[e139525]: https://github.com/knroy/go-xml/commit/e139525
+[9c3a983]: https://github.com/knroy/go-xml/commit/9c3a983
+[de4a515]: https://github.com/knroy/go-xml/commit/de4a515
+[9f0db9c]: https://github.com/knroy/go-xml/commit/9f0db9c
+[5dc120c]: https://github.com/knroy/go-xml/commit/5dc120c
+[da05b16]: https://github.com/knroy/go-xml/commit/da05b16
+[967dfb3]: https://github.com/knroy/go-xml/commit/967dfb3
+[3b71501]: https://github.com/knroy/go-xml/commit/3b71501
+[69414ae]: https://github.com/knroy/go-xml/commit/69414ae
+[887d5d3]: https://github.com/knroy/go-xml/commit/887d5d3
+[8577906]: https://github.com/knroy/go-xml/commit/8577906
+[30c7c07]: https://github.com/knroy/go-xml/commit/30c7c07
+[5951f24]: https://github.com/knroy/go-xml/commit/5951f24
+[014a862]: https://github.com/knroy/go-xml/commit/014a862
+[dcb49b2]: https://github.com/knroy/go-xml/commit/dcb49b2
+[c73a06b]: https://github.com/knroy/go-xml/commit/c73a06b
+[a3d8ef6]: https://github.com/knroy/go-xml/commit/a3d8ef6
+[40cd52c]: https://github.com/knroy/go-xml/commit/40cd52c
+[b35ec14]: https://github.com/knroy/go-xml/commit/b35ec14
+[f3449f7]: https://github.com/knroy/go-xml/commit/f3449f7
+[f49ff92]: https://github.com/knroy/go-xml/commit/f49ff92
+[44229aa]: https://github.com/knroy/go-xml/commit/44229aa
+[a9ad280]: https://github.com/knroy/go-xml/commit/a9ad280
+[be5afc3]: https://github.com/knroy/go-xml/commit/be5afc3
+[676ad52]: https://github.com/knroy/go-xml/commit/676ad52
+[40085f6]: https://github.com/knroy/go-xml/commit/40085f6
+[a4f316d]: https://github.com/knroy/go-xml/commit/a4f316d
+[b5aaf06]: https://github.com/knroy/go-xml/commit/b5aaf06
+[15273c7]: https://github.com/knroy/go-xml/commit/15273c7
+[a6f2eaa]: https://github.com/knroy/go-xml/commit/a6f2eaa
+[6bab64a]: https://github.com/knroy/go-xml/commit/6bab64a
+[6ea432f]: https://github.com/knroy/go-xml/commit/6ea432f
+[951f0d9]: https://github.com/knroy/go-xml/commit/951f0d9
+[f650a19]: https://github.com/knroy/go-xml/commit/f650a19
+[4b0b564]: https://github.com/knroy/go-xml/commit/4b0b564
+[469c95e]: https://github.com/knroy/go-xml/commit/469c95e
+[6293e98]: https://github.com/knroy/go-xml/commit/6293e98
+[996b7db]: https://github.com/knroy/go-xml/commit/996b7db
+[331bc96]: https://github.com/knroy/go-xml/commit/331bc96
+[98811f6]: https://github.com/knroy/go-xml/commit/98811f6
+[6317d49]: https://github.com/knroy/go-xml/commit/6317d49
+[b37796b]: https://github.com/knroy/go-xml/commit/b37796b
+[73249e2]: https://github.com/knroy/go-xml/commit/73249e2
+[127b2f2]: https://github.com/knroy/go-xml/commit/127b2f2
+[5d6454a]: https://github.com/knroy/go-xml/commit/5d6454a
+[22d32ac]: https://github.com/knroy/go-xml/commit/22d32ac
+[b331aa1]: https://github.com/knroy/go-xml/commit/b331aa1
+[567aa1a]: https://github.com/knroy/go-xml/commit/567aa1a

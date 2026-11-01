@@ -68,9 +68,19 @@ type accumulatorRule struct {
 // that reads an accumulator inside a template rule linear rather than
 // quadratic.
 type accumulatorValues struct {
-	before map[*xdm.Node]xdm.Sequence
-	after  map[*xdm.Node]xdm.Sequence
+	// The tables run over root's subtree, indexed by Index()-base, and are
+	// sized once from SubtreeEnd. state says which values are set: a value
+	// may be the empty sequence, and an after-value must not be readable
+	// before its subtree has finished. Attributes are never set.
+	base          int
+	before, after []xdm.Sequence
+	state         []uint8
 }
+
+const (
+	accumBeforeSet = 1 << iota
+	accumAfterSet
+)
 
 // accumCacheKey identifies one accumulator over one tree.
 type accumCacheKey struct {
@@ -350,9 +360,12 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	if v := rt.accumBuilding[key]; v != nil {
 		return v, nil
 	}
+	size := root.SubtreeEnd() - root.Index()
 	vals := &accumulatorValues{
-		before: map[*xdm.Node]xdm.Sequence{},
-		after:  map[*xdm.Node]xdm.Sequence{},
+		base:   root.Index(),
+		before: make([]xdm.Sequence, size),
+		after:  make([]xdm.Sequence, size),
+		state:  make([]uint8, size),
 	}
 	rt.accumBuilding[key] = vals
 	defer delete(rt.accumBuilding, key)
@@ -369,14 +382,54 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	// The walk is pre/post order over the whole tree: every node records the
 	// value on the way in and the value on the way out, and the start and end
 	// rules that match it move the value between the two.
+	//
+	// A sequence-valued accumulator ($value, 1) used to leave every node its
+	// own full copy, so n nodes held n^2/2 items. extend lets a value that
+	// grows by appending share its predecessor's backing array, and held
+	// counts what is really stored, one entry per item beyond the first, so
+	// that a document of single-item values is not refused by an item bound
+	// that was meant for sequences.
+	var tip xdm.Sequence
+	var held int64
+	extend := func(prev, next xdm.Sequence) (xdm.Sequence, error) {
+		if len(next) == len(prev) && (len(next) == 0 || &next[0] == &prev[0]) {
+			return next, nil
+		}
+		k := len(prev)
+		if k > 0 && len(next) > k && len(tip) == k && &tip[0] == &prev[0] &&
+			sameItems(prev, next[:k]) {
+			held += int64(len(next) - k)
+			next = append(prev, next[k:]...)
+			tip = next
+		} else {
+			if len(next) > 1 {
+				held += int64(len(next))
+			}
+			// Clamped so that a later append reallocates instead of
+			// writing into spare room the rule's value may share.
+			next = next[:len(next):len(next)]
+			tip = next
+		}
+		return next, ctx.ItemsRefused(held)
+	}
 	var walk func(*xdm.Node) error
 	walk = func(n *xdm.Node) error {
 		next, err := rt.applyAccumRules(def, n, cur, ctx, false)
 		if err != nil {
 			return err
 		}
-		cur = next
-		vals.before[n] = cur
+		if cur, err = extend(cur, next); err != nil {
+			return err
+		}
+		i := n.Index() - vals.base
+		if i >= len(vals.state) {
+			// Only a tree still being built outgrows its size.
+			vals.before = append(vals.before, make([]xdm.Sequence, i+1-len(vals.before))...)
+			vals.after = append(vals.after, make([]xdm.Sequence, i+1-len(vals.after))...)
+			vals.state = append(vals.state, make([]uint8, i+1-len(vals.state))...)
+		}
+		vals.before[i] = cur
+		vals.state[i] |= accumBeforeSet
 		// Attributes and namespaces are NOT visited. §18.2.4's formal model
 		// defines an accumulator over the sequence of events a streamed
 		// traversal of the tree produces, and those events are the start and
@@ -403,8 +456,11 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 		if err != nil {
 			return err
 		}
-		cur = end
-		vals.after[n] = cur
+		if cur, err = extend(cur, end); err != nil {
+			return err
+		}
+		vals.after[i] = cur
+		vals.state[i] |= accumAfterSet
 		return nil
 	}
 	if err := walk(root); err != nil {
@@ -413,6 +469,27 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 
 	rt.accumValues[key] = vals
 	return vals, nil
+}
+
+// sameItems reports whether a and b hold the identical items. Only nodes and
+// atomic values are compared, by identity; any other item makes the answer no,
+// which merely costs the sharing.
+func sameItems(a, b xdm.Sequence) bool {
+	for i, x := range a {
+		switch x := x.(type) {
+		case *xdm.Atomic:
+			if y, ok := b[i].(*xdm.Atomic); !ok || x != y {
+				return false
+			}
+		case *xdm.Node:
+			if y, ok := b[i].(*xdm.Node); !ok || x != y {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // applyAccumRules runs the highest-priority rule of the requested phase that
@@ -487,8 +564,9 @@ func (rt *runtime) convertAccum(def *accumulatorDef, seq xdm.Sequence) (xdm.Sequ
 	// XTTE3350 — which this used to raise — appears in no version of the
 	// XSLT recommendation and in no test in the suite. accumulator-038
 	// expects XPTY0004.
-	return def.asType.convertAs(seq,
-		"the value of accumulator "+def.name.Lexical(), "XPTY0004")
+	return def.asType.convertAsLazy(seq, func() string {
+		return "the value of accumulator " + def.name.Lexical()
+	}, "XPTY0004")
 }
 
 // fnAccumulator implements fn:accumulator-before and fn:accumulator-after.
@@ -585,12 +663,14 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	if err != nil {
 		return nil, err
 	}
-	table := vals.before
+	table, set := vals.before, uint8(accumBeforeSet)
 	if post {
-		table = vals.after
+		table, set = vals.after, accumAfterSet
 	}
-	v, ok := table[node]
-	if !ok {
+	// A namespace node has no index, and a node appended to the tree after
+	// the walk lies past the table; neither was visited.
+	i := node.Index() - vals.base
+	if node.Index() < 0 || i < 0 || i >= len(table) || vals.state[i]&set == 0 {
 		// The walk visits every node the checks above let through, so a
 		// missing entry means the walk is still in progress and has not
 		// reached this value: the rule computing it is reading it. That
@@ -601,7 +681,7 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 			"XTDE3400: accumulator %s is defined circularly: a rule reads "+
 				"the value of %s(%q) it is computing", def.name.Lexical(), fname, lex)
 	}
-	return v, nil
+	return table[i], nil
 }
 
 // noteCopiedAccumulators records that copy was made from orig, so that an

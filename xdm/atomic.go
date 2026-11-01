@@ -669,3 +669,44 @@ func NewGregorian(dt *DateTime, t TypeCode) *Atomic {
 func NewDuration(d *Duration, t TypeCode) *Atomic {
 	return &Atomic{Type: t, ext: &atomicExt{dur: d}, str: d.Lexical(t)}
 }
+
+// integerChunk is how many xs:integers AppendIntegers allocates at once.
+const integerChunk = 128
+
+// AppendIntegers appends the count integers lo, lo+1, ... to out. It allocates
+// the Atomics, rationals and numerator words a chunk at a time rather than
+// three allocations per value, which is what NewInteger costs; the values
+// are indistinguishable from NewInteger's. The caller must ensure lo+count-1
+// does not overflow int64.
+func AppendIntegers(out Sequence, lo int64, count int) Sequence {
+	var (
+		atoms []Atomic
+		rats  []big.Rat
+		words []big.Word
+	)
+	for i := 0; i < count; i++ {
+		v := lo + int64(i)
+		if v >= smallIntMin && v < smallIntMin+int64(len(smallInts)) {
+			out = append(out, NewInteger(v))
+			continue
+		}
+		if len(atoms) == 0 {
+			n := min(integerChunk, count-i)
+			atoms, rats, words = make([]Atomic, n), make([]big.Rat, n), make([]big.Word, n)
+		}
+		a, r := &atoms[0], &rats[0]
+		if v < 0 {
+			words[0] = big.Word(-uint64(v))
+		} else {
+			words[0] = big.Word(v)
+		}
+		r.Num().SetBits(words[:1:1])
+		if v < 0 {
+			r.Num().Neg(r.Num())
+		}
+		*a = Atomic{Type: TypeInteger, dec: r}
+		atoms, rats, words = atoms[1:], rats[1:], words[1:]
+		out = append(out, a)
+	}
+	return out
+}

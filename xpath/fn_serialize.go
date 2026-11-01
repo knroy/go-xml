@@ -1,7 +1,9 @@
 package xpath
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strings"
@@ -112,6 +114,12 @@ func registerSerialize(l *Library) {
 			}
 			if err := serializeItem(sb, it, opts); err != nil {
 				return nil, err
+			}
+			// A refused sink drops every later write, but the loop would
+			// still walk the rest of the items and their separators. The
+			// latched field is read directly: err() settles the reserve.
+			if sb.e != nil {
+				return nil, sb.err()
 			}
 			prevAtomic = atomic
 		}
@@ -902,13 +910,13 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 		}
 	case xdm.KindElement:
 		sb.WriteString("<")
-		sb.WriteString(elementName(n))
+		writeName(sb, n)
 		writeNamespaceDecls(sb, n, opts)
 		// Attributes are written in the order the document had them, which is
 		// what a round-trip test compares against.
 		for a := range n.Attrs() {
 			sb.WriteString(" ")
-			sb.WriteString(elementName(a))
+			writeName(sb, a)
 			sb.WriteString(`="`)
 			// A URI-valued attribute under the html or xhtml method has its
 			// non-ASCII characters percent-escaped. XSLT 2.0
@@ -917,9 +925,9 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			// so the two serialisers disagreed on identical input until now.
 			if opts.escapesURIAttrs() && (opts.method == "html" || opts.method == "xhtml") &&
 				isURIAttribute(n.Name().Local, a) {
-				sb.WriteString(escapeAttr(escapeURIAttribute(a.Value())))
+				writeEscaped(sb, escapeURIAttribute(a.Value()), true)
 			} else {
-				sb.WriteString(escapeAttr(a.Value()))
+				writeEscaped(sb, a.Value(), true)
 			}
 			sb.WriteString(`"`)
 		}
@@ -952,7 +960,7 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 					sb.WriteString(">")
 				} else {
 					sb.WriteString("></")
-					sb.WriteString(elementName(n))
+					writeName(sb, n)
 					sb.WriteString(">")
 				}
 				return
@@ -1046,10 +1054,10 @@ func serializeNode(sb *serializeSink, n *xdm.Node, opts serializeOptions, depth 
 			writeIndent(sb, depth)
 		}
 		sb.WriteString("</")
-		sb.WriteString(elementName(n))
+		writeName(sb, n)
 		sb.WriteString(">")
 	case xdm.KindText:
-		sb.WriteString(escapeText(opts.normalized(n.Value())))
+		writeEscaped(sb, opts.normalized(n.Value()), false)
 	case xdm.KindComment:
 		sb.WriteString("<!--")
 		sb.WriteString(n.Value())
@@ -1115,6 +1123,17 @@ func elementName(n *xdm.Node) string {
 	return n.Name().Lexical()
 }
 
+// writeName writes elementName(n) to sb in pieces, so that a prefixed name is
+// not concatenated first.
+func writeName(sb *serializeSink, n *xdm.Node) {
+	q := n.Name()
+	if q.Prefix != "" {
+		sb.WriteString(q.Prefix)
+		sb.WriteString(":")
+	}
+	sb.WriteString(q.Local)
+}
+
 // writeNamespaceDecls writes the namespace declarations an element introduces.
 //
 // Only those not already in force on the parent: repeating an inherited
@@ -1159,14 +1178,14 @@ func writeNamespaceDecls(sb *serializeSink, n *xdm.Node, opts serializeOptions) 
 			sb.WriteString(d.prefix)
 			sb.WriteString(`="`)
 		}
-		sb.WriteString(escapeAttr(d.uri))
+		writeEscaped(sb, d.uri, true)
 		sb.WriteString(`"`)
 	}
 }
 
-// escapeText escapes the characters that may not appear in content.
+// escapeXMLRunes escapes one string for content or for an attribute value.
 //
-// The carriage return is escaped along with the three that are structurally
+// In content, the carriage return is escaped along with the three that are structurally
 // impossible, and for a different reason: it is perfectly legal in content,
 // but an XML parser normalises a literal one to a line feed before the
 // document reaches the data model. Writing it literally therefore loses it,
@@ -1187,11 +1206,6 @@ func writeNamespaceDecls(sb *serializeSink, n *xdm.Node, opts serializeOptions) 
 // &#x85;, and &#x2028;", and "the non-whitespace control characters #x1
 // through #x1F and #x7F through #x9F in text nodes and attribute nodes MUST
 // be output as character references."
-func escapeText(s string) string {
-	return escapeXMLRunes(s, false)
-}
-
-// escapeXMLRunes escapes one string for content or for an attribute value.
 //
 // It walks runes and decides by range rather than matching a fixed list, so
 // the whole of C0 and C1 is covered rather than the handful of characters a
@@ -1204,42 +1218,54 @@ func escapeText(s string) string {
 // and a character reference cannot spell it either, so there is no escape to
 // emit; it is left to the representability check that rejects it upstream.
 func escapeXMLRunes(s string, attr bool) string {
-	var sb strings.Builder
-	sb.Grow(len(s))
-	for _, r := range s {
-		switch r {
-		case '&':
-			sb.WriteString("&amp;")
-			continue
-		case '<':
-			sb.WriteString("&lt;")
-			continue
-		case '>':
-			sb.WriteString("&gt;")
-			continue
-		case '"':
-			if attr {
-				sb.WriteString("&quot;")
-				continue
-			}
-		case '\t', '\n':
-			if !attr {
-				sb.WriteRune(r)
-				continue
-			}
-		}
-		// The line endings a parser would normalise away, and the control
-		// ranges it will not accept as literal text. TAB and LF have already
-		// been written literally above when this is content, so reaching
-		// here with one means attr is set.
-		if r == '\r' || r == '\u0085' || r == '\u2028' ||
-			(r >= 0x1 && r <= 0x1F) || (r >= 0x7F && r <= 0x9F) {
-			fmt.Fprintf(&sb, "&#x%X;", r)
-			continue
-		}
-		sb.WriteRune(r)
-	}
+	sb := newSink(nil)
+	writeEscaped(sb, s, attr)
 	return sb.String()
+}
+
+// writeEscaped is escapeXMLRunes writing to sb: the runs that need no escape
+// go to the sink whole, rather than each string being copied into a builder
+// of its own first. A malformed byte is written as U+FFFD, as ranging over
+// the string and writing each rune did.
+func writeEscaped(sb *serializeSink, s string, attr bool) {
+	run := 0
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		esc, ref := "", false
+		switch {
+		case r == '&':
+			esc = "&amp;"
+		case r == '<':
+			esc = "&lt;"
+		case r == '>':
+			esc = "&gt;"
+		case r == '"' && attr:
+			esc = "&quot;"
+		case (r == '\t' || r == '\n') && !attr:
+		// The line endings a parser would normalise away, and the control
+		// ranges it will not accept as literal text. TAB and LF are written
+		// literally above when this is content, so reaching here with one
+		// means attr is set.
+		case r == '\r' || r == '\u0085' || r == '\u2028' ||
+			(r >= 0x1 && r <= 0x1F) || (r >= 0x7F && r <= 0x9F):
+			ref = true
+		case r == utf8.RuneError && size == 1:
+			esc = "\uFFFD"
+		}
+		if esc == "" && !ref {
+			i += size
+			continue
+		}
+		sb.WriteString(s[run:i])
+		if ref {
+			fmt.Fprintf(sb, "&#x%X;", r)
+		} else {
+			sb.WriteString(esc)
+		}
+		i += size
+		run = i
+	}
+	sb.WriteString(s[run:])
 }
 
 // escapesURIAttrs reports whether URI-valued attributes are percent-escaped.
@@ -1440,7 +1466,7 @@ func escapeURIAttribute(v string) string {
 
 // escapeAttr escapes the characters that may not appear in an attribute value.
 //
-// It differs from escapeText in the two characters a parser normalises inside
+// It differs from content escaping in the two characters a parser normalises inside
 // an attribute value but not in content: §5 of Serialization 3.1 requires
 // "CR, NL, TAB, NEL and LINE SEPARATOR characters in attribute nodes" to be
 // written as references, where content keeps TAB and NL literal.
@@ -1758,21 +1784,30 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 // or empty; a sequence of two is SERE0023 rather than something to concatenate
 // (serialize-json-130). The empty sequence is the JSON null.
 func serializeJSON(ctx *Context, seq xdm.Sequence, opts serializeOptions) (string, error) {
-	if len(seq) == 0 {
-		return "null", nil
-	}
-	if len(seq) > 1 {
-		return "", fmt.Errorf(
-			"SERE0023: the JSON output method takes a single item, got %d", len(seq))
-	}
 	sb := newSink(ctx)
-	if err := writeJSONItem(sb, seq[0], opts, 0); err != nil {
-		return "", err
-	}
-	if err := sb.err(); err != nil {
+	if err := writeJSONDoc(sb, seq, opts); err != nil {
 		return "", err
 	}
 	return sb.String(), nil
+}
+
+// writeJSONDoc is serializeJSON writing to sb, which is finished with on
+// return.
+func writeJSONDoc(sb *serializeSink, seq xdm.Sequence, opts serializeOptions) error {
+	switch len(seq) {
+	case 0:
+		sb.WriteString("null")
+		return sb.err()
+	case 1:
+	default:
+		return fmt.Errorf(
+			"SERE0023: the JSON output method takes a single item, got %d", len(seq))
+	}
+	if err := writeJSONItem(sb, seq[0], opts, 0); err != nil {
+		sb.release()
+		return err
+	}
+	return sb.err()
 }
 
 // writeJSONValue writes a sequence appearing as a map entry or array member.
@@ -1839,6 +1874,13 @@ func jsonFitsInline(seqs []xdm.Sequence) bool {
 }
 
 func writeJSONItem(sb *serializeSink, it xdm.Item, opts serializeOptions, depth int) error {
+	switch it.(type) {
+	case *xdm.ArrayItem, *xdm.MapItem:
+		if err := sb.enter(); err != nil {
+			return err
+		}
+		defer sb.leave()
+	}
 	switch v := it.(type) {
 	case *xdm.ArrayItem:
 		members := v.Members()
@@ -1972,12 +2014,27 @@ func writeJSONItem(sb *serializeSink, it xdm.Item, opts serializeOptions, depth 
 		// memory at once, which is what the doubling chain it was written for
 		// also measures. Charging once would understate a nesting that really
 		// does allocate twice.
-		inner := newSink(sb.ctx)
 		nodeOpts := opts
 		nodeOpts.method = opts.jsonNodeOutputMethod
 		if nodeOpts.method == "" {
 			nodeOpts.method = "xml"
 		}
+		// Without normalisation the markup is escaped into the outer sink
+		// as it is written, rather than built whole and then escaped: every
+		// piece the node serialiser writes is whole characters, so escaping
+		// it piece by piece is escaping the string. Normalisation applies
+		// to the whole string, and keeps the string.
+		if opts.normalize == nil {
+			sb.WriteString(`"`)
+			inner := &serializeSink{ctx: sb.ctx, w: jsonEscaper{sb, opts}}
+			serializeNode(inner, v, nodeOpts, 0)
+			if err := inner.err(); err != nil {
+				return err
+			}
+			sb.WriteString(`"`)
+			return nil
+		}
+		inner := newSink(sb.ctx)
 		serializeNode(inner, v, nodeOpts, 0)
 		if err := inner.err(); err != nil {
 			return err
@@ -2040,6 +2097,16 @@ func writeJSONString(sb *serializeSink, s string, opts serializeOptions) {
 	// is written as the map spelled it. Serialization-json-35 maps "z" to a
 	// "c" plus a combining cedilla and asks for NFC: the run around it
 	// composes, the replacement stays decomposed.
+	writeJSONChars(sb, s, opts)
+	sb.WriteString(`"`)
+}
+
+// writeJSONChars writes the inside of a JSON string literal.
+func writeJSONChars(sb *serializeSink, s string, opts serializeOptions) {
+	if len(opts.charMap) == 0 {
+		writeJSONRun(sb, opts.normalized(s), opts)
+		return
+	}
 	for _, run := range splitOnCharMap(s, opts.charMap) {
 		if run.mapped {
 			sb.WriteString(run.text)
@@ -2047,8 +2114,21 @@ func writeJSONString(sb *serializeSink, s string, opts serializeOptions) {
 		}
 		writeJSONRun(sb, opts.normalized(run.text), opts)
 	}
-	sb.WriteString(`"`)
 }
+
+// jsonEscaper is the writer a node inside a JSON value is serialised to: what
+// is written to it goes to sb escaped as the inside of a JSON string.
+type jsonEscaper struct {
+	sb   *serializeSink
+	opts serializeOptions
+}
+
+func (j jsonEscaper) WriteString(v string) (int, error) {
+	writeJSONChars(j.sb, v, j.opts)
+	return len(v), nil
+}
+
+func (j jsonEscaper) Write(p []byte) (int, error) { return j.WriteString(string(p)) }
 
 // normalized applies the requested Unicode normalization form, if any.
 func (o serializeOptions) normalized(s string) string {
@@ -2114,7 +2194,20 @@ func splitOnCharMap(s string, m map[rune]string) []charMapRun {
 // writeJSONRun writes one unmapped run of a JSON string with the escapes the
 // method requires.
 func writeJSONRun(sb *serializeSink, s string, opts serializeOptions) {
-	for _, r := range s {
+	// The characters that need no escape are written as runs rather than
+	// one rune at a time. A malformed byte is written as U+FFFD, as writing
+	// each rune did.
+	run := 0
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r >= 0x20 && r != '"' && r != '\\' && r != '/' && !(r >= 0x7F && r <= 0x9F) &&
+			!(r == utf8.RuneError && size == 1) && (r < 0x80 || jsonEncodingHolds(opts.encoding, r)) {
+			i += size
+			continue
+		}
+		sb.WriteString(s[run:i])
+		i += size
+		run = i
 		switch r {
 		case '"':
 			sb.WriteString(`\"`)
@@ -2164,9 +2257,10 @@ func writeJSONRun(sb *serializeSink, s string, opts serializeOptions) {
 				fmt.Fprintf(sb, `\u%04X`, r)
 				continue
 			}
-			sb.WriteRune(r)
+			sb.WriteString("\uFFFD")
 		}
 	}
+	sb.WriteString(s[run:])
 }
 
 // serializeAdaptiveSeq renders a sequence with the adaptive output method.
@@ -2177,24 +2271,36 @@ func writeJSONRun(sb *serializeSink, s string, opts serializeOptions) {
 // the XML method it has a rendering for maps, arrays and function items, so
 // nothing in it can fail.
 func serializeAdaptiveSeq(ctx *Context, seq xdm.Sequence, opts serializeOptions) (string, error) {
-	sep := "\n"
-	if opts.hasItemSep {
-		sep = opts.itemSeparator
-	}
 	sb := newSink(ctx)
-	for i, it := range seq {
-		if i > 0 {
-			sb.WriteString(sep)
-		}
-		writeAdaptiveItem(sb, it, opts)
-	}
+	writeAdaptiveSeq(sb, seq, opts)
 	if err := sb.err(); err != nil {
 		return "", err
 	}
 	return sb.String(), nil
 }
 
+// writeAdaptiveSeq writes the items of an adaptive result to sb.
+func writeAdaptiveSeq(sb *serializeSink, seq xdm.Sequence, opts serializeOptions) {
+	sep := "\n"
+	if opts.hasItemSep {
+		sep = opts.itemSeparator
+	}
+	for i, it := range seq {
+		if i > 0 {
+			sb.WriteString(sep)
+		}
+		writeAdaptiveItem(sb, it, opts)
+	}
+}
+
 func writeAdaptiveItem(sb *serializeSink, it xdm.Item, opts serializeOptions) {
+	switch it.(type) {
+	case *xdm.ArrayItem, *xdm.MapItem:
+		if sb.enter() != nil {
+			return
+		}
+		defer sb.leave()
+	}
 	switch v := it.(type) {
 	case *xdm.MapItem:
 		sb.WriteString("map{")
@@ -2235,9 +2341,9 @@ func writeAdaptiveItem(sb *serializeSink, it xdm.Item, opts serializeOptions) {
 		// it the name="value" form it has inside a start tag
 		// (serialize-adaptive-003).
 		if v.Kind() == xdm.KindAttribute {
-			sb.WriteString(elementName(v))
+			writeName(sb, v)
 			sb.WriteString(`="`)
-			sb.WriteString(escapeAttr(v.Value()))
+			writeEscaped(sb, v.Value(), true)
 			sb.WriteString(`"`)
 			return
 		}
@@ -2511,6 +2617,88 @@ func SerializeJSON(seq xdm.Sequence, p SerializeParams) (string, error) {
 	return serializeJSON(p.Budget, seq, p.opts())
 }
 
+// SerializeJSONTo is SerializeJSON writing to w as it goes, rather than
+// building the whole document as a string first. An error can leave part of
+// the document written. A w without WriteString is buffered.
+func SerializeJSONTo(w io.Writer, seq xdm.Sequence, p SerializeParams) error {
+	return toSinkWriter(w, func(sw sinkWriter) error {
+		return writeJSONDoc(&serializeSink{ctx: p.Budget, w: sw}, seq, p.opts())
+	})
+}
+
+// SerializeAdaptiveTo is SerializeAdaptive writing to w as it goes, on the
+// same terms as SerializeJSONTo. The character map is applied as each piece
+// is written, which is applying it to the finished text.
+func SerializeAdaptiveTo(w io.Writer, seq xdm.Sequence, p SerializeParams) error {
+	opts := p.opts()
+	opts.method = "adaptive"
+	return toSinkWriter(w, func(sw sinkWriter) error {
+		if len(opts.charMap) > 0 {
+			sw = &charMapWriter{w: sw, m: opts.charMap, ctx: p.Budget}
+		}
+		sb := &serializeSink{ctx: p.Budget, w: sw}
+		writeAdaptiveSeq(sb, seq, opts)
+		return sb.err()
+	})
+}
+
+// toSinkWriter runs f on w, through a buffer when w has no WriteString.
+func toSinkWriter(w io.Writer, f func(sinkWriter) error) error {
+	if sw, ok := w.(sinkWriter); ok {
+		return f(sw)
+	}
+	bw := bufio.NewWriter(w)
+	err := f(bw)
+	if ferr := bw.Flush(); err == nil {
+		err = ferr
+	}
+	return err
+}
+
+// charMapWriter applies a character map to what is written through it, as
+// applyCharacterMap does to a finished string, charging what a replacement
+// adds to the budget.
+type charMapWriter struct {
+	w   sinkWriter
+	m   map[rune]string
+	ctx *Context
+}
+
+func (c *charMapWriter) WriteString(v string) (int, error) {
+	run, grow := 0, 0
+	for i := 0; i < len(v); {
+		r, size := utf8.DecodeRuneInString(v[i:])
+		to, ok := c.m[r]
+		if !ok && !(r == utf8.RuneError && size == 1) {
+			i += size
+			continue
+		}
+		if !ok {
+			// A malformed byte, written as U+FFFD as applyCharacterMap's
+			// WriteRune does.
+			to = "\uFFFD"
+		}
+		if _, err := c.w.WriteString(v[run:i]); err != nil {
+			return 0, err
+		}
+		grow += len(to) - size
+		if _, err := c.w.WriteString(to); err != nil {
+			return 0, err
+		}
+		i += size
+		run = i
+	}
+	if grow > 0 {
+		if err := c.ctx.countBytes(grow); err != nil {
+			return 0, err
+		}
+	}
+	_, err := c.w.WriteString(v[run:])
+	return len(v), err
+}
+
+func (c *charMapWriter) Write(p []byte) (int, error) { return c.WriteString(string(p)) }
+
 // SerializeAdaptive renders a sequence with the adaptive output method of the
 // same specification, section 10. See SerializeJSON for why it is exported.
 func SerializeAdaptive(seq xdm.Sequence, p SerializeParams) (string, error) {
@@ -2573,11 +2761,36 @@ func jsonEncodingHolds(encoding string, r rune) bool {
 type serializeSink struct {
 	ctx *Context
 	b   strings.Builder
-	e   error
+	// w, when set, receives what is written in place of b. A write error
+	// is latched in e like a refusal.
+	w sinkWriter
+	e error
 	// reserve is allowance drawn from the shared counter and not yet spent.
 	// See sinkReserveBlock.
 	reserve int
+	// depth counts the maps and arrays open at this point; see enter.
+	depth int
 }
+
+// enter opens one level of map or array nesting, refusing past maxJSONDepth.
+// The writers recurse, so a value nested a million deep is a million Go stack
+// frames and a fatal stack overflow rather than an error. A caller that gets
+// nil must call leave when the level closes.
+func (s *serializeSink) enter() error {
+	if s.depth >= maxJSONDepth {
+		err := fmt.Errorf("XPDY0130: serialization nests maps and arrays more "+
+			"than %d levels deep: %w", maxJSONDepth, xdm.ErrResourceLimit)
+		if s.e == nil {
+			s.e = err
+		}
+		s.reserve = 0
+		return err
+	}
+	s.depth++
+	return nil
+}
+
+func (s *serializeSink) leave() { s.depth-- }
 
 // sinkReserveBlock is how much allowance the sink draws from the shared
 // counter at a time.
@@ -2654,14 +2867,26 @@ func (s *serializeSink) release() {
 
 func (s *serializeSink) WriteString(v string) {
 	if s.charge(len(v)) {
-		s.b.WriteString(v)
+		if s.w == nil {
+			s.b.WriteString(v)
+		} else if _, err := s.w.WriteString(v); err != nil {
+			s.latch(err)
+		}
 	}
 }
 
-func (s *serializeSink) WriteRune(r rune) {
-	if s.charge(utf8.RuneLen(r)) {
-		s.b.WriteRune(r)
-	}
+// latch keeps a write error as the sink's error. The reserve is returned
+// first and left at zero, which is what makes every later write take
+// chargeSlow and be refused there.
+func (s *serializeSink) latch(err error) {
+	s.release()
+	s.e = err
+}
+
+// sinkWriter is what a sink with a writer writes to.
+type sinkWriter interface {
+	io.Writer
+	io.StringWriter
 }
 
 // err returns the first budget refusal, if any, and returns the unspent
@@ -2705,7 +2930,11 @@ func charMappedResult(ctx *Context, out string, opts serializeOptions) (xdm.Sequ
 // fmt would turn a short count into its own error and lose the sentinel.
 func (s *serializeSink) Write(p []byte) (int, error) {
 	if s.charge(len(p)) {
-		s.b.Write(p)
+		if s.w == nil {
+			s.b.Write(p)
+		} else if _, err := s.w.Write(p); err != nil {
+			s.latch(err)
+		}
 	}
 	return len(p), nil
 }

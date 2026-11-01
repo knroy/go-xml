@@ -23,7 +23,7 @@ Current position:
 | XSLT 3.0 | 99.80% — 11,495 of 11,518 in scope (23 failing); 3 of those need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 2,854 `func Test` declarations, clean under `-race` |
+| Tests | 2,950 `func Test` declarations, clean under `-race` |
 <!-- END GENERATED STATUS TABLE -->
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -150,7 +150,8 @@ silently replaced the character — which is the corruption the MUST exists to
 prevent, not merely a conformance divergence. `xslt/serialize.go` had the rule
 right all along, so this was again one rule with two implementations.
 
-Both functions now delegate to `escapeXMLRunes`, which walks runes and decides
+Both functions now delegate to `escapeXMLRunes` (since the memory audit, content
+escaping streams through `writeEscaped`, its writer form), which walks runes and decides
 by range rather than by a fixed list: adding U+0085 and U+2028 as two more
 replacer entries would have closed the named half and left the ranges open.
 `#x0` is deliberately not escaped — it is not a valid XML character at any
