@@ -639,6 +639,11 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 				if attDefaults, err = normalizeAttDefaults(attDefaults, ents, dec.IsVersion11(), wfc); err != nil {
 					return nil, fmt.Errorf("parse XML: %w", err)
 				}
+				// Each default lands in every matching element; store its
+				// value once so that they all alias it.
+				for _, d := range attDefaults {
+					tree.text.share(d.value)
+				}
 				if !wfc {
 					declared := ents
 					dec.Undeclared = func(name string) bool { return !declared.declares(name) }

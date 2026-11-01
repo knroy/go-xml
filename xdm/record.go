@@ -1544,9 +1544,23 @@ func (n *Node) setOffset(v int32) {
 // a value handed out as a string never changes under its reader.
 type textStore struct {
 	blocks [][]byte
-	cur    int // the ordinary block values are appended to, + 1 (0: none)
-	size   int // capacity of the last ordinary block made
+	cur    int32 // the ordinary block values are appended to, + 1 (0: none)
+	size   int32 // capacity of the last ordinary block made
+	// shared maps a string registered by share to where it is stored, so that
+	// add hands the same range to every value that is that string.
+	shared map[sharedKey][2]uint32
 }
+
+// sharedKey identifies a string by where it lives: the same storage is the
+// same text, because strings are immutable.
+type sharedKey struct {
+	p *byte
+	n int
+}
+
+// shareMin is the shortest value share and add consult the table for; a short
+// one costs less to copy than to look up.
+const shareMin = 64
 
 // Ordinary blocks stop at 32 KB for the reason record chunks do.
 const (
@@ -1570,6 +1584,11 @@ func (s *textStore) add(v string) (uint32, uint32) {
 	if v == "" {
 		return 0, 0
 	}
+	if s.shared != nil && len(v) >= shareMin {
+		if r, ok := s.shared[sharedKey{unsafe.StringData(v), len(v)}]; ok {
+			return r[0], r[1]
+		}
+	}
 	// A string is immutable, so a long one is kept as its own block rather
 	// than copied: its capacity is its length, so nothing appends into it.
 	// Every unsafe.String in the module is over append-only bytes (the
@@ -1578,6 +1597,24 @@ func (s *textStore) add(v string) (uint32, uint32) {
 		return s.keep(unsafe.Slice(unsafe.StringData(v), len(v)))
 	}
 	return s.addBytes(unsafe.Slice(unsafe.StringData(v), len(v)), 0)
+}
+
+// share stores v once and makes every later add of that very string (the same
+// storage, not merely equal text) return the stored range. Bytes are only
+// appended and extend writes only past the end of its own value, so a range
+// held by many values stays valid.
+func (s *textStore) share(v string) {
+	if len(v) < shareMin {
+		return
+	}
+	if s.shared == nil {
+		s.shared = map[sharedKey][2]uint32{}
+	}
+	k := sharedKey{unsafe.StringData(v), len(v)}
+	if _, ok := s.shared[k]; !ok {
+		off, n := s.add(v)
+		s.shared[k] = [2]uint32{off, n}
+	}
 }
 
 // keep stores b, which nothing else writes to, as a block of its own.
@@ -1597,9 +1634,9 @@ func (s *textStore) addBytes(b []byte, extra int) (uint32, uint32) {
 		return uint32(len(s.blocks)-1) << textShift, uint32(len(b))
 	}
 	if s.cur == 0 || cap(s.blocks[s.cur-1])-len(s.blocks[s.cur-1]) < need {
-		s.size = min(max(2*s.size, 64, need), textBlock)
+		s.size = int32(min(max(2*int(s.size), 64, need), textBlock))
 		s.newBlock(make([]byte, 0, s.size))
-		s.cur = len(s.blocks)
+		s.cur = int32(len(s.blocks))
 	}
 	k := s.cur - 1
 	off := len(s.blocks[k])

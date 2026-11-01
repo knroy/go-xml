@@ -374,11 +374,17 @@ func normalizeAttTokens(t xml.StartElement, types []attDeclaredType) xml.StartEl
 			if !lexicalIs(a.Name.Space, a.Name.Local, d.attr) && a.Name.Local != d.attr {
 				continue
 			}
+			// A value already collapsed is left as it is, so that a default
+			// keeps the storage the text store shares.
+			c := strings.Join(strings.FieldsFunc(a.Value, func(r rune) bool { return r == ' ' }), " ")
+			if c == a.Value {
+				continue
+			}
 			if attrs == nil {
 				// Copy: the tokeniser's attribute slice is not ours to write.
 				attrs = append([]xml.Attr(nil), t.Attr...)
 			}
-			attrs[i].Value = strings.Join(strings.FieldsFunc(a.Value, func(r rune) bool { return r == ' ' }), " ")
+			attrs[i].Value = c
 		}
 	}
 	if attrs != nil {
