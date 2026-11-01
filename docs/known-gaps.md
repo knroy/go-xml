@@ -185,9 +185,14 @@ burst path; the commonest refusals are a body of `xsl:value-of` (840),
 
 - **The result is still built in memory**, so a large filtered copy grows with
   its output and stops at the result-node cap.
-- **Error order can differ from tree mode.** A dynamic error in the body is
-  raised before a malformed tail later in the file would be; tree mode reads
-  the whole file first. `xsl:try` can see which code wins.
+- **Error order can differ from tree mode.** Tree mode reads the whole file,
+  then evaluates the whole `select`, before the body runs; bursts do each per
+  record. So a dynamic error in the body is raised before a malformed tail, a
+  `MaxNodes`/`MaxBytes` refusal or an encoding error later in the file, and
+  before a predicate's error on a later record (`a/r[xs:integer(@v) gt 0]`
+  with `1 idiv 0` in the body: FOAR0001 in bursts, FORG0001 in the tree).
+  `xsl:try` can see which code wins. A differential fuzzer (1.28M generated
+  cases, 495k on the burst path) found no other difference.
 - **`xsl:break` still reads the rest of the file**, so that a malformed tail is
   an error as in tree mode.
 - **Only `FileResolver` streams**; another `DocumentResolver` builds the tree.
