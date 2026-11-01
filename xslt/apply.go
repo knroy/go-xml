@@ -415,7 +415,7 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 		size, idx := node.NumChildren(), 0
 		for ch := range node.Children() {
 			idx++
-			sub := rt.withCurrent(ch, idx, size)
+			sub := rt.builtInFocus(mode, ch, idx, size)
 			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
 				return err
 			}
@@ -1140,7 +1140,7 @@ func builtInDescend(rt *runtime, node *xdm.Node, mode string,
 		size, idx := node.NumChildren(), 0
 		for ch := range node.Children() {
 			idx++
-			sub := rt.withCurrent(ch, idx, size)
+			sub := rt.builtInFocus(mode, ch, idx, size)
 			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
 				return err
 			}
@@ -1179,7 +1179,7 @@ func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
 	// the identity rule.
 	for idx := range node.NumAttrs() {
 		a := node.AttrAt(idx)
-		an := rt.withCurrent(a, idx+1, node.NumAttrs())
+		an := rt.builtInFocus(mode, a, idx+1, node.NumAttrs())
 		if err := applyToNode(an, a, mode, params, tunnels, out); err != nil {
 			return err
 		}
@@ -1187,12 +1187,24 @@ func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
 	size, idx := node.NumChildren(), 0
 	for ch := range node.Children() {
 		idx++
-		cn := rt.withCurrent(ch, idx, size)
+		cn := rt.builtInFocus(mode, ch, idx, size)
 		if err := applyToNode(cn, ch, mode, params, tunnels, out); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// builtInFocus is rt.withCurrent for a child the built-in rules are about to
+// visit. When the mode has no template rules nothing reads the focus -- no
+// pattern is matched and no body runs -- so the copy of the runtime and of
+// its context is skipped. That copy was most of the garbage of an identity
+// shallow-copy.
+func (rt *runtime) builtInFocus(mode string, item xdm.Item, pos, size int) *runtime {
+	if mr := rt.sheet.rules[mode]; mr != nil && mr.empty {
+		return rt
+	}
+	return rt.withCurrent(item, pos, size)
 }
 
 // builtInShallowCopy is the on-no-match="shallow-copy" rule: copy the node
@@ -1250,7 +1262,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		}
 		defer rt.ascend()
 		for a := range node.Attrs() {
-			an := rt.withCurrent(a, 1, node.NumAttrs())
+			an := rt.builtInFocus(mode, a, 1, node.NumAttrs())
 			if err := applyToNode(an, a, mode, params, tunnels, sub); err != nil {
 				return err
 			}
@@ -1258,7 +1270,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		size, idx := node.NumChildren(), 0
 		for ch := range node.Children() {
 			idx++
-			cn := rt.withCurrent(ch, idx, size)
+			cn := rt.builtInFocus(mode, ch, idx, size)
 			if err := applyToNode(cn, ch, mode, params, tunnels, sub); err != nil {
 				return err
 			}

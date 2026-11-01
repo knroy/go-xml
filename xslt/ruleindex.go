@@ -21,6 +21,8 @@ import (
 type ruleIndex map[string]*modeRules
 
 type modeRules struct {
+	// empty records that no template rule is in the mode at all.
+	empty  bool
 	byKind [xdm.KindNamespace + 1][]int
 	byName map[ruleName][]int
 }
@@ -43,6 +45,9 @@ func (s *Stylesheet) buildRuleIndex() {
 			}
 		}
 	}
+	for m := range s.modeNoMatch {
+		modes[m] = true
+	}
 	type keys struct {
 		kinds [xdm.KindNamespace + 1]bool
 		names []ruleName
@@ -53,11 +58,12 @@ func (s *Stylesheet) buildRuleIndex() {
 	}
 	idx := ruleIndex{}
 	for mode := range modes {
-		mr := &modeRules{byName: map[ruleName][]int{}}
+		mr := &modeRules{byName: map[ruleName][]int{}, empty: true}
 		for i, t := range s.templates {
 			if !t.matchesMode(mode) {
 				continue
 			}
+			mr.empty = false
 			kinds, names := tk[i].kinds, tk[i].names
 			for k := range mr.byKind {
 				if kinds[k] {
