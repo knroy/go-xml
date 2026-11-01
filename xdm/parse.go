@@ -1016,7 +1016,8 @@ func (r *textRun) flush(spaces *spaceTable, strip func(*Node) bool) {
 // every repeat.
 type spaceTable struct {
 	m     map[string][2]uint32
-	byLen [maxSpaceLen + 1][2]uint32
+	byLen *[maxSpaceLen + 1][2]uint32 // made after spaceFrom values, so a small tree does not pay for it
+	n     uint8                       // values seen before byLen was made
 	// noMap keeps m unmade: ParseBursts empties the table at every burst.
 	noMap bool
 }
@@ -1024,11 +1025,19 @@ type spaceTable struct {
 const (
 	maxSpaceTable = 256
 	maxSpaceLen   = 128
+	spaceFrom     = 8 // whitespace values stored plainly before sharing starts
 )
 
 func (t *spaceTable) text(s *textStore, b []byte) (uint32, uint32) {
 	if len(b) > maxSpaceLen || !onlySpace(b) {
 		return s.addBytes(b, 0)
+	}
+	if t.byLen == nil {
+		if t.n < spaceFrom {
+			t.n++
+			return s.addBytes(b, 0)
+		}
+		t.byLen = new([maxSpaceLen + 1][2]uint32)
 	}
 	if r := t.byLen[len(b)]; r[1] != 0 && s.str(r[0], r[1]) == string(b) {
 		return r[0], r[1]
