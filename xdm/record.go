@@ -309,7 +309,9 @@ func recentSlots(v *typingNames) uint64 {
 // The cap keeps every chunk a small-object allocation (at most 32 KB): a
 // larger one is allocated and freed as whole pages, which the runtime hands
 // back to the OS and faults in again, and on macOS that round trip costs more
-// than the parse saves.
+// than the parse saves. A large tree's full chunks are the exception: past
+// pairFrom they come two to an allocation (see appendChunk), five pages that
+// the malloc header would otherwise pad by 6%, and measured no slower.
 const (
 	chunkFirst   = 4
 	chunkMaxLog  = 7 // 4<<7 = 512
