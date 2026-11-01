@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/xdmburst"
 )
 
 // burstDoc exercises what a burst must carry over from the whole tree: an
@@ -121,8 +123,9 @@ func TestParseBurstsSpineStaysSmall(t *testing.T) {
 	b.WriteString("</b></a>")
 	n := 0
 	opts := ParseOptions{bursts: &burster{
-		path: []QName{{Local: "a"}, {Local: "b"}, {Local: "r"}},
-		fn:   func(*Node) error { n++; return nil },
+		steps:  []xdmburst.Step{{Local: "a"}, {Local: "b"}, {Local: "r"}},
+		fn:     func(*Node) error { n++; return nil },
+		states: []uint64{1},
 	}}
 	tree, err := parse(strings.NewReader(b.String()), "", opts)
 	if err != nil {
@@ -210,8 +213,9 @@ func TestParseBurstsNamesStaySmall(t *testing.T) {
 	b.WriteString("</a>")
 	var got []*Node
 	opts := ParseOptions{bursts: &burster{
-		path: []QName{{Local: "a"}, {Local: "r"}},
-		fn:   func(r *Node) error { got = append(got, r); return nil },
+		steps:  []xdmburst.Step{{Local: "a"}, {Local: "r"}},
+		fn:     func(r *Node) error { got = append(got, r); return nil },
+		states: []uint64{1},
 	}}
 	tree, err := parse(strings.NewReader(b.String()), "", opts)
 	if err != nil {
@@ -279,5 +283,64 @@ func TestParseBurstsLargeNotCopied(t *testing.T) {
 			t.Fatalf("burst %d: the last child lost its ID type or base URI", i)
 		}
 		i++
+	}
+}
+
+// A pattern with descendant steps and wildcards delivers each outermost
+// match once, in document order, with the matches nested in it inside it
+// and its ancestors' names and attributes as in the whole tree.
+func TestParseBurstsPattern(t *testing.T) {
+	const src = `<doc xmlns:q="urn:q" id="d"><rec k="1"><a/><rec k="2"><rec k="3"/></rec></rec>` +
+		`<g id="g"><rec k="4"><b><rec k="5"/></b></rec></g><q:rec k="6"/><g><g><q:x k="7"/></g></g><rec k="8"/></doc>`
+	for _, tc := range []struct {
+		name  string
+		steps []xdmburst.Step
+		want  string
+	}{
+		{"//rec", []xdmburst.Step{{Local: "rec", Descendant: true}}, "1(2,3)/docd 4(5)/docd/gg 8/docd"},
+		{"doc//rec", []xdmburst.Step{{Local: "doc"}, {Local: "rec", Descendant: true}}, "1(2,3)/docd 4(5)/docd/gg 8/docd"},
+		{"/*/*/rec", []xdmburst.Step{{AnyURI: true, AnyLocal: true}, {AnyURI: true, AnyLocal: true}, {Local: "rec"}}, "2(3)/docd/rec1 4(5)/docd/gg"},
+		{"/*/*:rec", []xdmburst.Step{{AnyURI: true, AnyLocal: true}, {AnyURI: true, Local: "rec"}}, "1(2,3)/docd 6/docd 8/docd"},
+		{"//q:*", []xdmburst.Step{{URI: "urn:q", AnyLocal: true, Descendant: true}}, "6/docd 7/docd/g/g"},
+		{"//g/rec", []xdmburst.Step{{Local: "g", Descendant: true}, {Local: "rec"}}, "4(5)/docd/gg"},
+		{"//*", []xdmburst.Step{{AnyURI: true, AnyLocal: true, Descendant: true}}, "d(1,2,3,g,4,5,6,,,7,8)/"},
+	} {
+		var got []string
+		err := parseBursts(strings.NewReader(src), ParseOptions{}, tc.steps, func(r *Node) error {
+			key := func(n *Node) string {
+				if a := n.Attr("", "k"); a != nil {
+					return a.Value()
+				}
+				if a := n.Attr("", "id"); a != nil {
+					return a.Value()
+				}
+				return ""
+			}
+			var in []string
+			for d := range r.Descendants() {
+				if d.Kind() == KindElement && d.Name().Local != "a" && d.Name().Local != "b" {
+					in = append(in, key(d))
+				}
+			}
+			s := key(r)
+			if len(in) > 0 {
+				s += "(" + strings.Join(in, ",") + ")"
+			}
+			anc := ""
+			for p := r.Parent(); p != nil && p.Kind() == KindElement; p = p.Parent() {
+				anc = "/" + p.Name().Local + key(p) + anc
+			}
+			if r.Parent().Kind() == KindDocument {
+				anc = "/"
+			}
+			got = append(got, s+anc)
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if g := strings.Join(got, " "); g != tc.want {
+			t.Errorf("%s: bursts %q, want %q", tc.name, g, tc.want)
+		}
 	}
 }

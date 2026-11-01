@@ -3,6 +3,7 @@ package xdm
 import (
 	"io"
 
+	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/internal/xdmclone"
 )
 
@@ -29,26 +30,51 @@ import (
 // document order; a node fn keeps stays valid after fn returns.
 
 // ParseBursts parses r and calls fn with each element whose ancestry of
-// element names, from the document element down, is path. An error from fn
-// stops the parse and is returned.
+// element names, from the document element down, is path, of at most
+// xdmburst.MaxSteps names. An error from fn stops the parse and is returned.
 func ParseBursts(r io.Reader, opts ParseOptions, path []QName, fn func(*Node) error) error {
-	if len(path) == 0 {
-		panic("xdm: ParseBursts needs a non-empty path")
+	steps := make([]xdmburst.Step, len(path))
+	for i, q := range path {
+		steps[i] = xdmburst.Step{URI: q.URI, Local: q.Local}
 	}
-	opts.bursts = &burster{path: path, fn: fn}
+	return parseBursts(r, opts, steps, fn)
+}
+
+func init() {
+	xdmburst.Parse = func(r io.Reader, opts any, steps []xdmburst.Step, fn func(any) error) error {
+		return parseBursts(r, opts.(ParseOptions), steps, func(n *Node) error { return fn(n) })
+	}
+}
+
+// parseBursts is ParseBursts over a pattern that may have wildcards and
+// descendant steps. An element whose ancestry matches it is a burst; one
+// whose ancestry could still lead to a match below it is kept on the spine;
+// any other is dropped. A match inside a burst is delivered with it, so the
+// bursts are the outermost matches, in document order.
+func parseBursts(r io.Reader, opts ParseOptions, steps []xdmburst.Step, fn func(*Node) error) error {
+	if len(steps) == 0 || len(steps) > xdmburst.MaxSteps {
+		panic("xdm: ParseBursts needs a path of 1 to 63 names")
+	}
+	opts.bursts = &burster{steps: steps, fn: fn, states: []uint64{1}}
 	_, err := parse(r, "", opts)
 	return err
 }
 
 // burster is ParseBursts' state inside parse.
 type burster struct {
-	path []QName
-	fn   func(*Node) error
-	// spine is how many levels of the open chain match path and are kept.
+	steps []xdmburst.Step
+	fn    func(*Node) error
+	// spine is how many levels of the open chain could lead to a match and
+	// are kept.
 	spine int
 	// drop is the depth of the element being built only to be dropped (a
-	// burst, or an element off the path), or 0.
-	drop int
+	// burst, or an element off the path), or 0; burst says it is a burst.
+	drop  int
+	burst bool
+	// states[d] is the set of pattern steps the spine element at depth d
+	// (0: the document node) has matched, as bits: bit k means the first k
+	// steps are matched by it and its ancestors.
+	states []uint64
 	// marks[d] is the tree's state once the spine element at depth d (0:
 	// the document node) had stored its attributes. Everything stored after
 	// it belongs to content that is dropped.
@@ -75,19 +101,35 @@ func (b *burster) start(el *Node, d int) {
 	if b.drop != 0 {
 		return
 	}
-	if d == b.spine+1 && b.matches(el, d) {
-		if d < len(b.path) {
-			b.spine = d
-			b.marks = append(b.marks, markOf(el.tree))
-			return
-		}
+	n := b.advance(b.states[b.spine], el.Name())
+	switch {
+	case n&(1<<len(b.steps)) != 0:
+		b.drop, b.burst = d, true
+	case n != 0:
+		b.spine = d
+		b.states = append(b.states, n)
+		b.marks = append(b.marks, markOf(el.tree))
+	default:
+		b.drop = d
 	}
-	b.drop = d
 }
 
-func (b *burster) matches(el *Node, d int) bool {
-	n := el.Name()
-	return n.URI == b.path[d-1].URI && n.Local == b.path[d-1].Local
+// advance is the set of steps matched by an element named q whose parent
+// matched the set s.
+func (b *burster) advance(s uint64, q QName) uint64 {
+	var n uint64
+	for k, st := range b.steps {
+		if s&(1<<k) == 0 {
+			continue
+		}
+		if st.Descendant {
+			n |= 1 << k // q may be on the way to step k
+		}
+		if (st.AnyURI || st.URI == q.URI) && (st.AnyLocal || st.Local == q.Local) {
+			n |= 1 << (k + 1)
+		}
+	}
+	return n
 }
 
 // end handles the close of el, at depth d, whose parent is now current. It
@@ -96,7 +138,8 @@ func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) err
 	switch {
 	case b.drop == d:
 		b.drop = 0
-		if d == len(b.path) && d == b.spine+1 && b.matches(el, d) {
+		if b.burst {
+			b.burst = false
 			if err := b.deliver(el); err != nil {
 				return err
 			}
@@ -104,6 +147,7 @@ func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) err
 	case b.drop == 0 && d == b.spine && d > 0:
 		b.spine--
 		b.marks = b.marks[:len(b.marks)-1]
+		b.states = b.states[:len(b.states)-1]
 	default:
 		return nil
 	}
