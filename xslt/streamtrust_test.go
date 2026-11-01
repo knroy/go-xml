@@ -132,6 +132,14 @@ func TestStreamTrustReproducers(t *testing.T) {
 			hdr + sd(fe(`<v><xsl:value-of select="(function(){current()})()/`+sib+`"/></v>`)) + end, ""},
 		{"X1 control: inline function with no closure", "verified", nil,
 			hdr + sd(fe(`<v><xsl:value-of select="(function($n){$n + 1})(1)"/></v>`)) + end, ""},
+		// The same holes in the burst path's own shape: one loop over the
+		// records, where the gate's whitelist is the only other guard.
+		{"B1 nested xsl:map-entry inside the record loop", "XTSE3430", nil,
+			hdr + sd(fe(`<xsl:variable name="m" as="map(*)"><xsl:map><xsl:if test="true()"><xsl:map-entry key="'a'" select="."/></xsl:if></xsl:map></xsl:variable><v><xsl:value-of select="$m('a')/../rec[last()]/@k"/></v>`)) + end, ""},
+		{"B2 closure over a range variable inside the record loop", "unknown", nil,
+			hdr + sd(fe(`<v><xsl:value-of select="some $t in x satisfies (function(){$t})()/../../rec[last()]/@k = 3"/></v>`)) + end, ""},
+		{"B3 closure reaching only an ancestor", "unknown", nil,
+			hdr + sd(fe(`<v><xsl:value-of select="some $t in x satisfies exists((function(){$t})()/ancestor::doc)"/></v>`)) + end, ""},
 		// The burst path's own shape, which must stay trusted.
 		{"control: record loop", "verified", nil,
 			hdr + sd(fe(`<v><xsl:value-of select="@k"/></v>`)) + end, ""},
