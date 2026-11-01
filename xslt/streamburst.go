@@ -22,13 +22,26 @@ package xslt
 // its name or attributes, may not observe node identity (is, <<, >>, union,
 // intersect, except, generate-id, fn:path), may not ask for last(), and may
 // carry nothing but atomic values from one item to the next.
+//
+// The body may instead be one xsl:value-of, xsl:copy-of or xsl:sequence
+// whose select reads one record path, as sum(doc/rec/@v) does (stage 1b).
+// The path is evaluated in each burst, and the rest of the select -- written
+// around it, with the path's place taken by a variable -- once over all their
+// items in order, which is what the path would have returned from the whole
+// tree. count, sum, min and max of the path fold each burst's items instead
+// of keeping them. The select is admitted only where its other parts read no
+// focus, and the items are used only in ways a burst cannot tell from the
+// tree (burstSplit). Any error is handed to the tree path, which reads the
+// document again and reports it as it would have.
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 )
@@ -38,6 +51,9 @@ import (
 var (
 	noBursts    bool
 	traceBursts func(href string)
+	// traceBurstFallback is told of each error that sends a value-of,
+	// copy-of or sequence target back to the tree.
+	traceBurstFallback func(err error)
 )
 
 // burstPlan is a streamable xsl:source-document that can run in bursts.
@@ -53,7 +69,29 @@ type burstPlan struct {
 	// filtered says the last step has predicates. Without them each burst's
 	// element is the item, and sel need not be evaluated.
 	filtered bool
+
+	// For a value-of, copy-of or sequence target, items is the record path
+	// of its select, evaluated against each burst's document node, and outer
+	// the select with $burstItems in the path's place. reducer, when set,
+	// names the count, sum, min or max of the path that folds the bursts
+	// instead: fold is that call over ($burstAcc, $burstItems), and folded
+	// the select with $burstValue in its place.
+	items, outer *xpath.Compiled
+	reducer      string
+	fold, folded *xpath.Compiled
 }
+
+// The variables the parts of a split select are bound to, in a namespace no
+// stylesheet can write.
+var (
+	burstItems = xdm.QName{URI: "urn:x-go-xml:burst", Local: "items"}
+	burstAcc   = xdm.QName{URI: "urn:x-go-xml:burst", Local: "acc"}
+	burstValue = xdm.QName{URI: "urn:x-go-xml:burst", Local: "value"}
+)
+
+// noBurstFold makes a reducer keep every item, as any other select does;
+// the tests compare the two.
+var noBurstFold bool
 
 // burstFeed is a burst plan being executed: the loop instruction it drives,
 // and read, which calls each with every item the loop's select would have
@@ -61,6 +99,8 @@ type burstPlan struct {
 type burstFeed struct {
 	instr Instruction
 	read  func(each func(xdm.Item) error) error
+	// eval is the select of a value-of, copy-of or sequence target.
+	eval func(rt *runtime) (xdm.Sequence, error)
 }
 
 // burstResolver is a document resolver that can parse a document in bursts.
@@ -101,6 +141,15 @@ func planBursts(sd *xdm.Node, shared bool) *burstPlan {
 			return nil
 		case isXSL(kid, "for-each") || isXSL(kid, "iterate"):
 			target = kid
+		case isXSL(kid, "value-of") || isXSL(kid, "copy-of") || isXSL(kid, "sequence"):
+			if !selectTargetOK(kid) {
+				return nil
+			}
+			s := splitSelect(parseAt(kid, kid.AttrValue("select")))
+			if s == nil {
+				return nil
+			}
+			return &burstPlan{path: s.path, target: kid}
 		case kid.Name().URI == xdm.NSXSL || !plainWrapper(kid):
 			return nil
 		default:
@@ -125,6 +174,275 @@ func burstVerdict(sd *xdm.Node, shared bool) bool {
 	t := newDeclTrust(documentElementOf(sd), shared)
 	p, known, unverified := sequenceConstructorVerdict(sd, postureStriding, t.sets, t.funcs, t)
 	return known && !unverified && p.streamable() && p.posture == postureGrounded
+}
+
+// selectTargetOK admits a value-of, copy-of or sequence whose attributes
+// change nothing bursts would have to do differently: a select, and none of
+// validation, type, copy-accumulators or a separator computed from the focus.
+func selectTargetOK(el *xdm.Node) bool {
+	if el.Attr("", "select") == nil {
+		return false
+	}
+	for a := range el.Attrs() {
+		if a.Name().URI != "" {
+			continue
+		}
+		switch a.Name().Local {
+		case "select", "copy-namespaces", "version", "xpath-default-namespace",
+			"default-collation", "exclude-result-prefixes",
+			"extension-element-prefixes", "expand-text", "use-when":
+		case "separator", "disable-output-escaping":
+			if strings.ContainsAny(a.Value(), "{}") {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// burstSplit is a select expression taken apart around its record path.
+type burstSplit struct {
+	// path is the element names the bursts are cut at.
+	path []xdm.QName
+	// items is the record path, put puts an expression in its place, and
+	// outer holds the whole expression, whatever put has made of it.
+	items xpath.Expr
+	put   func(xpath.Expr)
+	outer *xpath.Expr
+	// call is the count, sum, min or max whose first argument is the
+	// record path, and putCall puts an expression in its place.
+	call    *xpath.FuncCall
+	putCall func(xpath.Expr)
+}
+
+// splitSelect finds the one record path in e and checks that everything
+// around it either reads no focus -- it is evaluated once, with no document
+// to read -- or consumes the path's items in a way that cannot tell the
+// items of separate bursts from the tree's: as values, by position in the
+// whole sequence, or by navigating within each item as burstSafe allows.
+// Node identity, reordering and user code are refused, and so is anything
+// that keeps every item when it need not (distinct-values, reverse, sort,
+// last()). It returns nil when e is not admitted.
+func splitSelect(e xpath.Expr) *burstSplit {
+	if e == nil {
+		return nil
+	}
+	root := e
+	s := &burstSplit{outer: &root}
+	if !s.walk(e, func(x xpath.Expr) { root = x }) || s.items == nil {
+		return nil
+	}
+	return s
+}
+
+// burstReducers fold with constant state, and burstConsumers take their
+// arguments whole and observe of a node no more than burstSafe allows.
+var (
+	burstReducers  = map[string]int{"count": 1, "sum": 2, "min": 2, "max": 2}
+	burstConsumers = map[string]bool{
+		"count": true, "sum": true, "avg": true, "min": true, "max": true,
+		"exists": true, "empty": true, "boolean": true, "not": true,
+		"head": true, "tail": true, "exactly-one": true, "zero-or-one": true,
+		"one-or-more": true, "deep-equal": true, "data": true, "copy-of": true,
+		"string": true, "number": true, "string-length": true,
+		"normalize-space": true, "string-join": true, "concat": true,
+		"contains": true, "starts-with": true, "ends-with": true,
+		"matches": true, "compare": true, "upper-case": true, "lower-case": true,
+		"substring": true, "substring-before": true, "substring-after": true,
+		"translate": true, "tokenize": true, "round": true, "floor": true,
+		"ceiling": true, "abs": true, "round-half-to-even": true,
+		"format-number": true, "subsequence": true, "insert-before": true,
+		"remove": true, "index-of": true, "name": true, "local-name": true,
+		"namespace-uri": true, "node-name": true,
+	}
+	burstOps = map[string]bool{
+		"=": true, "!=": true, "<": true, "<=": true, ">": true, ">=": true,
+		"eq": true, "ne": true, "lt": true, "le": true, "gt": true, "ge": true,
+		"+": true, "-": true, "*": true, "div": true, "idiv": true, "mod": true,
+		"and": true, "or": true,
+	}
+)
+
+// walk checks e, which put replaces, for splitSelect.
+func (s *burstSplit) walk(e xpath.Expr, put func(xpath.Expr)) bool {
+	if path := recordPath(e); path != nil {
+		if s.items != nil {
+			return false // a second record path: two passes over the stream
+		}
+		s.path, s.items, s.put = path, e, put
+		return true
+	}
+	switch x := e.(type) {
+	case *xpath.FuncCall:
+		switch x.Name.URI {
+		case fnNS:
+			if !burstConsumers[x.Name.Local] {
+				return false
+			}
+		case xdm.NSXS, xdm.NSMath:
+		default:
+			return false
+		}
+		if n, ok := burstReducers[x.Name.Local]; ok && x.Name.URI == fnNS &&
+			len(x.Args) >= 1 && len(x.Args) <= n && recordPath(x.Args[0]) != nil {
+			s.call, s.putCall = x, put
+		}
+		for k := range x.Args {
+			if !s.slot(x.Args[k], func(y xpath.Expr) { x.Args[k] = y }) {
+				return false
+			}
+		}
+		return true
+	case *xpath.BinaryOp:
+		return burstOps[x.Op] &&
+			s.slot(x.Left, func(y xpath.Expr) { x.Left = y }) &&
+			s.slot(x.Right, func(y xpath.Expr) { x.Right = y })
+	case *xpath.UnaryOp:
+		return s.slot(x.Operand, func(y xpath.Expr) { x.Operand = y })
+	case *xpath.CastExpr:
+		return s.slot(x.Operand, func(y xpath.Expr) { x.Operand = y })
+	case *xpath.InstanceOfExpr:
+		return s.slot(x.Operand, func(y xpath.Expr) { x.Operand = y })
+	case *xpath.TreatExpr:
+		return s.slot(x.Operand, func(y xpath.Expr) { x.Operand = y })
+	case *xpath.IfExpr:
+		return s.slot(x.Cond, func(y xpath.Expr) { x.Cond = y }) &&
+			s.slot(x.Then, func(y xpath.Expr) { x.Then = y }) &&
+			s.slot(x.Else, func(y xpath.Expr) { x.Else = y })
+	case *xpath.SequenceExpr:
+		for k := range x.Items {
+			if !s.slot(x.Items[k], func(y xpath.Expr) { x.Items[k] = y }) {
+				return false
+			}
+		}
+		return true
+	case *xpath.FilterExpr:
+		// The predicates see each item, positioned in the whole sequence.
+		return allBurstSafe(x.Predicates, false) &&
+			s.slot(x.Base, func(y xpath.Expr) { x.Base = y })
+	case *xpath.SimpleMap:
+		return burstSafe(x.Right, false) &&
+			s.slot(x.Left, func(y xpath.Expr) { x.Left = y })
+	case *xpath.QuantifiedExpr:
+		return s.bindings(x.Bindings) && burstSafe(x.Test, false) && focusFree(x.Test)
+	case *xpath.ForExpr:
+		return s.bindings(x.Bindings) && burstSafe(x.Return, false) && focusFree(x.Return)
+	}
+	return false
+}
+
+func (s *burstSplit) bindings(bs []xpath.Binding) bool {
+	for k := range bs {
+		if !s.slot(bs[k].Seq, func(y xpath.Expr) { bs[k].Seq = y }) {
+			return false
+		}
+	}
+	return true
+}
+
+// slot checks an operand: one that reads no focus is evaluated as it is,
+// and any other must hold the record path.
+func (s *burstSplit) slot(e xpath.Expr, put func(xpath.Expr)) bool {
+	if focusFree(e) && burstSafe(e, false) {
+		return true
+	}
+	return s.walk(e, put)
+}
+
+// recordPath returns the element names to cut bursts at when e is a record
+// path, nil otherwise. A record path is child steps by name from the
+// document node, the last of them perhaps with predicates that do not
+// depend on position (as burstPath requires), followed by steps that stay
+// within the element -- down, or to its attributes, with any predicates
+// burstSafe allows -- and perhaps one last expression that makes atomic
+// values or copies. Each burst then holds what the path returns from one
+// element, in document order, and the bursts in turn hold all of it.
+func recordPath(e xpath.Expr) []xdm.QName {
+	var steps []xpath.Expr
+	switch x := e.(type) {
+	case *xpath.Step:
+		steps = []xpath.Expr{x}
+	case *xpath.PathExpr:
+		steps = x.Steps
+		if _, ok := firstOf(steps).(*xpath.ContextItem); ok && !x.Root {
+			steps = steps[1:]
+		}
+	default:
+		return nil
+	}
+	var path []xdm.QName
+	k := 0
+	for ; k < len(steps); k++ {
+		st, ok := steps[k].(*xpath.Step)
+		if !ok || st.Axis != xpath.AxisChild {
+			break
+		}
+		nt, ok := st.Test.(*xpath.NameTest)
+		if !ok || nt.AnyURI || nt.AnyLocal {
+			break
+		}
+		if len(st.Predicates) > 0 {
+			// Positional predicates count within the element above,
+			// which is then the burst.
+			for _, p := range st.Predicates {
+				if !booleanShaped(p) || !burstSafe(p, true) {
+					goto tail
+				}
+			}
+			path = append(path, xdm.QName{URI: nt.Name.URI, Local: nt.Name.Local})
+			k++
+			break
+		}
+		path = append(path, xdm.QName{URI: nt.Name.URI, Local: nt.Name.Local})
+	}
+tail:
+	if len(path) == 0 {
+		return nil
+	}
+	for j := k; j < len(steps); j++ {
+		st, ok := steps[j].(*xpath.Step)
+		if !ok {
+			if j != len(steps)-1 || !tailValue(steps[j]) {
+				return nil
+			}
+			continue
+		}
+		switch st.Axis {
+		case xpath.AxisChild, xpath.AxisAttribute, xpath.AxisSelf,
+			xpath.AxisDescendant, xpath.AxisDescendantOrSelf:
+		default:
+			return nil
+		}
+		if !allBurstSafe(st.Predicates, false) {
+			return nil
+		}
+	}
+	return path
+}
+
+func firstOf(es []xpath.Expr) xpath.Expr {
+	if len(es) == 0 {
+		return nil
+	}
+	return es[0]
+}
+
+// tailValue reports whether x, the last step of a record path, makes items
+// that do not depend on the tree its context node is in: atomic values, or
+// copies. Its focus is each node the path has reached, so position() would
+// count across the whole path.
+func tailValue(x xpath.Expr) bool {
+	switch y := x.(type) {
+	case *xpath.FilterExpr:
+		return tailValue(y.Base) && allBurstSafe(y.Predicates, false)
+	case *xpath.FuncCall:
+		if y.Name.URI == fnNS && y.Name.Local == "copy-of" && len(y.Args) == 0 {
+			return true
+		}
+	}
+	return atomicValued(x) && burstSafe(x, true)
 }
 
 // onlyElementChild is el's one element child, when el has exactly one and
@@ -612,6 +930,59 @@ func (c *compiler) noteBurstLoop(n *xdm.Node, instr Instruction, sel *xpath.Comp
 	}
 }
 
+// noteBurstSelect records instr as the compiled target of the burst plan
+// being compiled, when n is its value-of, copy-of or sequence, and compiles
+// the parts of its select, sel, written where ns resolves names. The select
+// is parsed again as compileExpr parsed it, so the parts are taken from the
+// tree sel was optimised from.
+func (c *compiler) noteBurstSelect(n *xdm.Node, instr Instruction, sel *xpath.Compiled,
+	ns xpath.NamespaceResolver) {
+
+	p := c.burst
+	if p == nil || p.target != n || sel.CompatMode() {
+		return
+	}
+	// fn:current() is the document node, which bursts do not have.
+	for _, call := range sel.StaticCalls() {
+		if call.Name.URI == fnNS && call.Name.Local == "current" {
+			return
+		}
+	}
+	parse := func() *burstSplit {
+		o := exprOptions(ns)
+		var (
+			e   xpath.Expr
+			err error
+		)
+		if o.RefFloor != 0 && o.RefFloor != o.Version {
+			e, err = xpath.ParseVersionRefFloor(sel.Source(), ns, o.Version, o.RefFloor)
+		} else {
+			e, err = xpath.ParseVersion(sel.Source(), ns, o.Version)
+		}
+		if err != nil {
+			return nil
+		}
+		return splitSelect(e)
+	}
+	part := func(e xpath.Expr) *xpath.Compiled {
+		return xpathleaf.WithExpr(sel, e).(*xpath.Compiled)
+	}
+	s := parse()
+	if s == nil {
+		return
+	}
+	s.put(&xpath.VarRef{Name: burstItems})
+	p.items, p.outer = part(s.items), part(*s.outer)
+	if f := parse(); f != nil && f.call != nil {
+		f.putCall(&xpath.VarRef{Name: burstValue})
+		p.reducer, p.folded = f.call.Name.Local, part(*f.outer)
+		args := append([]xpath.Expr{&xpath.SequenceExpr{Items: []xpath.Expr{
+			&xpath.VarRef{Name: burstAcc}, &xpath.VarRef{Name: burstItems}}}}, f.call.Args[1:]...)
+		p.fold = part(&xpath.FuncCall{Name: f.call.Name, Args: args})
+	}
+	p.instr, p.sel = instr, sel
+}
+
 // executeBursts runs i in bursts when its plan and its resolver allow, and
 // reports whether it did.
 func (i *sourceDocumentInstr) executeBursts(rt *runtime, out *outputBuilder, href string) (bool, error) {
@@ -672,13 +1043,43 @@ func (i *sourceDocumentInstr) executeBursts(rt *runtime, out *outputBuilder, hre
 	stand := xdm.NewTree()
 	sub := rt.withCurrent(stand.Root, 1, 1).clearCurrentRule()
 	plan := i.bursts
-	sub.bursts = &burstFeed{instr: plan.instr, read: func(each func(xdm.Item) error) error {
-		var bodyErr error
-		err := br.parseBursts(rt.ctx, href, base, plan.path, func(rec *xdm.Node) error {
+	// records calls fn with each burst's document node and element,
+	// whitespace stripped as the tree would have been.
+	records := func(fn func(root, rec *xdm.Node) error) error {
+		return br.parseBursts(rt.ctx, href, base, plan.path, func(rec *xdm.Node) error {
 			root := rec.Tree().Root
 			if strip != nil {
 				root, rec = strip.stripWhitespaceForFrom(pkg, root, rec)
 			}
+			return fn(root, rec)
+		})
+	}
+	if plan.items != nil {
+		sub.bursts = &burstFeed{instr: plan.instr, eval: func(rt *runtime) (xdm.Sequence, error) {
+			seq, err := plan.evalBursts(rt, records)
+			if err == nil {
+				return seq, nil
+			}
+			// Whatever went wrong -- the select, a limit, the document --
+			// the tree path reads the document again and fails, or not,
+			// exactly as it would have: an error found in a burst may not
+			// be the one the whole tree meets first.
+			if traceBurstFallback != nil {
+				traceBurstFallback(err)
+			}
+			unread()
+			root, err := i.load(rt, href)
+			if err != nil {
+				return nil, err
+			}
+			rt.streamedTrees[root] = true
+			return plan.sel.Eval(rt.withCurrent(root, 1, 1).ctx)
+		}}
+		return true, execSequence(i.body, sub, out)
+	}
+	sub.bursts = &burstFeed{instr: plan.instr, read: func(each func(xdm.Item) error) error {
+		var bodyErr error
+		err := records(func(root, rec *xdm.Node) error {
 			if !plan.filtered {
 				if err := each(rec); err != nil {
 					bodyErr = err
@@ -706,6 +1107,92 @@ func (i *sourceDocumentInstr) executeBursts(rt *runtime, out *outputBuilder, hre
 		return err
 	}}
 	return true, execSequence(i.body, sub, out)
+}
+
+// errBurstGiveUp ends a fold that cannot be exact; the tree path takes over.
+var errBurstGiveUp = errors.New("bursts: the fold cannot be exact")
+
+// evalBursts evaluates the select of a value-of, copy-of or sequence target
+// over the bursts records reads. The item and byte budgets are held across
+// all of it, as they are across one evaluation of the select over the tree.
+func (p *burstPlan) evalBursts(rt *runtime,
+	records func(fn func(root, rec *xdm.Node) error) error) (xdm.Sequence, error) {
+
+	ctx := rt.ctx.HoldItemBudget().HoldByteBudget()
+	fold := p.reducer != "" && !noBurstFold
+	var (
+		all, acc xdm.Sequence
+		n        int64
+		typ      string
+	)
+	err := records(func(root, _ *xdm.Node) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		items, err := p.items.Eval(withFocusCurrent(ctx, root, 1, 1))
+		switch {
+		case err != nil || len(items) == 0:
+			return err
+		case !fold:
+			all = append(all, items...)
+		case p.reducer == "count":
+			n += int64(len(items))
+		default:
+			// min and max over one type compare one way throughout; over
+			// several, promotion makes the answer depend on the order of
+			// the comparisons, which only the whole sequence has.
+			if p.reducer != "sum" && !sameAtomicType(items, &typ) {
+				return errBurstGiveUp
+			}
+			acc, err = p.fold.Eval(ctx.WithVar(burstAcc, acc).WithVar(burstItems, items))
+			return err
+		}
+		return nil
+	})
+	switch {
+	case err != nil:
+		return nil, err
+	case !fold:
+		return p.outer.Eval(ctx.WithVar(burstItems, all))
+	case p.reducer == "count":
+		acc = xdm.One(xdm.NewInteger(n))
+	case acc == nil:
+		if acc, err = p.fold.Eval(ctx.WithVar(burstAcc, nil).WithVar(burstItems, nil)); err != nil {
+			return nil, err
+		}
+	}
+	return p.folded.Eval(ctx.WithVar(burstValue, acc))
+}
+
+// sameAtomicType reports whether items atomize to values of one type, the
+// type of *first, which it sets from the first value seen. xs:untypedAtomic
+// counts as the xs:double min and max make of it.
+func sameAtomicType(items xdm.Sequence, first *string) bool {
+	for _, it := range xdm.Atomize(items) {
+		a, ok := it.(*xdm.Atomic)
+		if !ok {
+			return false
+		}
+		t := a.TypeName()
+		if a.Type == xdm.TypeUntypedAtomic {
+			t = "xs:double"
+		}
+		if *first == "" {
+			*first = t
+		} else if t != *first {
+			return false
+		}
+	}
+	return true
+}
+
+// evalSelect evaluates sel, the select of instr, from the bursts when instr
+// is the target of the plan running.
+func (rt *runtime) evalSelect(instr Instruction, sel *xpath.Compiled) (xdm.Sequence, error) {
+	if f := rt.burstsFor(instr); f != nil && f.eval != nil {
+		return f.eval(rt)
+	}
+	return sel.Eval(rt.ctx)
 }
 
 // burstsFor returns the feed that drives instr, or nil when instr evaluates

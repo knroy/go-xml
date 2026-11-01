@@ -1689,28 +1689,7 @@ func (r *nsResolver) SchemaUnionMemberTypes(name xdm.QName) ([]xdm.TypeCode, boo
 // for everything within. Compiling through here is what keeps that true
 // without threading a base URI through every call site.
 func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error) {
-	// The version is read from the resolver before compiling rather than
-	// applied after, because it decides how the expression *parses*: an
-	// inline function or a map constructor is a syntax error in 2.0, so
-	// compiling first and versioning afterwards would reject a legal 3.0
-	// stylesheet before there was anything to version.
-	v := xpath.XPath20
-	if r, ok := ns.(*nsResolver); ok {
-		v = r.xpathVersion
-	}
-	// A named function reference resolves at the processor's version, not the
-	// module's: "#N" names a function, and which functions exist is already a
-	// processor property (see xpath.Env.LibraryVersion). The XSLT suite
-	// runs version="2.0" modules scoped XSLT30+ that write "current-group#0"
-	// and "system-property#1", and a 3.0 processor must resolve them. Every
-	// other 3.0 construct stays gated on the module's own declaration.
-	refFloor := xpath.Version(0)
-	if processorAtLeast30() {
-		refFloor = xpath.XPath31
-	}
-	c, err := xpath.CompileWith(src, xpath.CompileOptions{
-		Namespaces: ns, Version: v, RefFloor: refFloor,
-	})
+	c, err := xpath.CompileWith(src, exprOptions(ns))
 	if err != nil {
 		return nil, err
 	}
@@ -1744,6 +1723,31 @@ func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error
 		c = c.WithCompatMode(r.compat)
 	}
 	return c, nil
+}
+
+// exprOptions is how compileExpr parses an expression written where ns
+// resolves its names.
+func exprOptions(ns xpath.NamespaceResolver) xpath.CompileOptions {
+	// The version is read from the resolver before compiling rather than
+	// applied after, because it decides how the expression *parses*: an
+	// inline function or a map constructor is a syntax error in 2.0, so
+	// compiling first and versioning afterwards would reject a legal 3.0
+	// stylesheet before there was anything to version.
+	v := xpath.XPath20
+	if r, ok := ns.(*nsResolver); ok {
+		v = r.xpathVersion
+	}
+	// A named function reference resolves at the processor's version, not the
+	// module's: "#N" names a function, and which functions exist is already a
+	// processor property (see xpath.Env.LibraryVersion). The XSLT suite
+	// runs version="2.0" modules scoped XSLT30+ that write "current-group#0"
+	// and "system-property#1", and a 3.0 processor must resolve them. Every
+	// other 3.0 construct stays gated on the module's own declaration.
+	refFloor := xpath.Version(0)
+	if processorAtLeast30() {
+		refFloor = xpath.XPath31
+	}
+	return xpath.CompileOptions{Namespaces: ns, Version: v, RefFloor: refFloor}
 }
 
 func (r *nsResolver) ResolvePrefix(p string) (string, bool) {

@@ -468,13 +468,15 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &copyOfInstr{
+		instr := &copyOfInstr{
 			sel:              sel,
 			noNamespaces:     noAttr(n, "copy-namespaces"),
 			copyAccumulators: yesAttr(n, "copy-accumulators"),
 			validation:       spec,
 			baseURI:          n.BaseURI(),
-		}, nil
+		}
+		c.noteBurstSelect(n, instr, sel, ns)
+		return instr, nil
 	case "evaluate":
 		return c.compileEvaluate(n, ns)
 	case "iterate":
@@ -521,7 +523,9 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 						"child", ch.Name().Lexical())
 			}
 		}
-		return &sequenceInstr{sel: sel}, nil
+		instr := &sequenceInstr{sel: sel}
+		c.noteBurstSelect(n, instr, sel, ns)
+		return instr, nil
 	case "message":
 		return c.compileMessage(n, ns)
 	case "assert":
@@ -680,6 +684,7 @@ func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 			return nil, fmt.Errorf(
 				"XTSE0870: xsl:value-of has both a select attribute and content")
 		}
+		c.noteBurstSelect(n, instr, comp, ns)
 		return instr, nil
 	}
 	body, err := c.compileSequence(n, n)

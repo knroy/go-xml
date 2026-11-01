@@ -35,6 +35,12 @@ func init() {
 	xpathleaf.CallItem = func(c any, fn *xdm.FunctionItem, args []xdm.Sequence) (xdm.Sequence, error) {
 		return callItem(c.(*Context), fn, args)
 	}
+	xpathleaf.WithExpr = func(c, e any) any {
+		n := *c.(*Compiled)
+		n.expr = optimize(e.(Expr))
+		n.nsNeeded = readsStaticNamespaces(n.expr)
+		return n.withOwn()
+	}
 }
 
 // The host state with no runtime, cleared and marked: shared, since a Host is
