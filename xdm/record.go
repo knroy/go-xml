@@ -1469,6 +1469,53 @@ func (n *Node) Identity() IdentityKey { return IdentityKey{n} }
 // relative position must use Compare: this value says nothing across trees.
 func (n *Node) Order() int { return int(n.orderKey()) }
 
+// Index returns n's position in its tree, or -1 for a namespace node.
+//
+// The document, element, attribute, text, comment and processing-instruction
+// nodes of one tree are numbered 0, 1, 2, ... without gaps, in document order:
+// an element comes before its attributes, which come before its children, and
+// a parent before everything below it. A tree made by a constructor holds
+// several parentless roots; they are numbered in the order they were made.
+// Attributes have indices. Namespace nodes are made on demand, outside the
+// numbering, and have none. Indices of different trees are unrelated.
+//
+// An index never changes once the node exists, so it is stable for the whole
+// life of a parsed tree. A tree still being built only appends, so the indices
+// it has handed out stay valid, except that taking back the last subtree
+// appended (RemoveLastChild, ReplaceLastChild) frees its indices, and later nodes reuse them. Len
+// grows as nodes are appended.
+func (n *Node) Index() int {
+	if n.flags&fSide != 0 {
+		return -1
+	}
+	return int(n.self)
+}
+
+// SubtreeEnd returns one more than the largest Index in n's subtree, its
+// attributes included, so that [n.Index(), n.SubtreeEnd()) is the numbering of
+// the subtree and a table over it needs SubtreeEnd()-Index() entries. A leaf
+// or attribute gives Index()+1. For a node still being built it is the end so
+// far and grows as children are appended. A namespace node gives -1.
+func (n *Node) SubtreeEnd() int {
+	if n.flags&fSide != 0 {
+		return -1
+	}
+	return int(n.tree.endOf(n))
+}
+
+// Len returns the number of indexed nodes in the tree: valid Index values are
+// 0 to Len()-1. For a tree still being built it is the count so far.
+func (t *Tree) Len() int { return int(t.n) }
+
+// NodeAt returns the node whose Index is i, or nil when i is negative or not
+// less than Len. It never returns a namespace node.
+func (t *Tree) NodeAt(i int) *Node {
+	if i < 0 || i >= int(t.n) {
+		return nil
+	}
+	return t.rec(uint32(i))
+}
+
 // generateID returns the string fn:generate-id() gives n: "N", the tree id,
 // "x", and n's position in the tree.
 //
