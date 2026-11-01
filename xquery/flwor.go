@@ -112,11 +112,7 @@ func (t tuple) lookup(name xdm.QName) (xdm.Sequence, bool) {
 // than at parse, so nothing about the names has to reach the expression
 // parser: binding the values here is the whole of the scoping.
 func (t tuple) context(ctx *evalContext) *xpath.Context {
-	xp := ctx.xp
-	for i, n := range t.names {
-		xp = xp.WithVar(n, t.vals[i])
-	}
-	return xp
+	return ctx.xp.WithVars(t.names, t.vals)
 }
 
 // sub is context wrapped back up as an evalContext, which is what a
