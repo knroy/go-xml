@@ -86,6 +86,14 @@ type FileResolver struct {
 	// primitive.
 	MaxBytes int64
 
+	// MaxNodes bounds the nodes of one document this resolver parses, as
+	// xdm.ParseOptions.MaxNodes does: zero means xdm.DefaultMaxNodes, and a
+	// negative value no limit. Like MaxBytes, which is also the parser's byte
+	// limit, it is counted over the whole document even when a streamable
+	// xsl:source-document reads it without building it -- so raising both is
+	// what lets such a stylesheet read a document of any size.
+	MaxNodes int
+
 	// There is deliberately no network option. Adding one would mean this
 	// type could not be recommended without caveats, and a validator has no
 	// need to fetch rule sets at transform time.
@@ -689,17 +697,8 @@ func (r *FileResolver) publish(path string, tree *xdm.Tree, size int64) {
 	r.cacheBytes += size
 }
 
-// parseUncached reads and parses a file. It holds no lock: this is the work
-// that used to run under r.mu.
-func (r *FileResolver) parseUncached(
-	path string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, int64, error) {
-	// A file: URI rather than the bare path. This base URI is stamped on
-	// every element of the module and is what fn:document, fn:resolve-uri
-	// and fn:static-base-uri resolve against, and those are defined over
-	// URIs: an absolute filesystem path has no scheme, so it is still a
-	// *relative* URI reference and resolving against it drops everything
-	// before the last separator. resolvePath strips the scheme back off, so
-	// the filesystem sees the same path either way.
+// parseOptions are the options a document at path is parsed with.
+func (r *FileResolver) parseOptions(path string, trackPos bool) xdm.ParseOptions {
 	opts := xdm.ParseOptions{
 		BaseURI: fileURIOf(path),
 		// This document *was* retrieved by URI, so it has a dm:document-uri
@@ -711,10 +710,27 @@ func (r *FileResolver) parseUncached(
 		DocumentURI:    fileURIOf(path),
 		AllowDOCTYPE:   r.AllowDOCTYPE,
 		TrackPositions: trackPos,
+		MaxBytes:       r.MaxBytes,
+		MaxNodes:       r.MaxNodes,
 	}
 	if r.ExternalEntities {
 		opts.ExternalEntities = r
 	}
+	return opts
+}
+
+// parseUncached reads and parses a file. It holds no lock: this is the work
+// that used to run under r.mu.
+func (r *FileResolver) parseUncached(
+	path string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, int64, error) {
+	// A file: URI rather than the bare path. This base URI is stamped on
+	// every element of the module and is what fn:document, fn:resolve-uri
+	// and fn:static-base-uri resolve against, and those are defined over
+	// URIs: an absolute filesystem path has no scheme, so it is still a
+	// *relative* URI reference and resolving against it drops everything
+	// before the last separator. resolvePath strips the scheme back off, so
+	// the filesystem sees the same path either way.
+	opts := r.parseOptions(path, trackPos)
 	// The expansion is charged against the caller's shared allowance rather
 	// than a fresh one per file. A nil budget leaves the per-document ceiling
 	// in place. See ResolveModuleWith.

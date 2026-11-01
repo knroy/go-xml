@@ -971,7 +971,9 @@ func (c *compiler) compileForEach(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	if err != nil {
 		return nil, err
 	}
-	return &forEachInstr{sel: sel, sorts: sorts, body: body}, nil
+	instr := &forEachInstr{sel: sel, sorts: sorts, body: body}
+	c.noteBurstLoop(n, instr, sel)
+	return instr, nil
 }
 
 func (c *compiler) compileIf(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
@@ -2024,6 +2026,9 @@ type iterateInstr struct {
 // from a body compiled here.
 type breakSignal struct{}
 
+// errStopIterate ends iterateInstr's loop after xsl:break.
+var errStopIterate = errors.New("xsl:iterate stopped")
+
 func (breakSignal) Error() string { return "xsl:break" }
 
 // nextIterationSignal unwinds to the end of one turn of the loop, carrying the
@@ -2113,9 +2118,13 @@ func appendSequence(seq xdm.Sequence, out *outputBuilder) error {
 }
 
 func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
-	seq, err := i.sel.Eval(rt.ctx)
-	if err != nil {
-		return err
+	feed := rt.burstsFor(i)
+	var seq xdm.Sequence
+	if feed == nil {
+		var err error
+		if seq, err = i.sel.Eval(rt.ctx); err != nil {
+			return err
+		}
 	}
 	// 6.8: the current template rule is cleared within xsl:iterate.
 	rt = rt.clearCurrentRule()
@@ -2133,8 +2142,9 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		carried[k] = v
 	}
 	broke := false
-	for idx, it := range seq {
-		sub := rt.withCurrent(it, idx+1, len(seq))
+	// step runs one turn; errStopIterate ends the loop.
+	step := func(pos int, it xdm.Item, size int) error {
+		sub := rt.withCurrent(it, pos, size)
 		mark := sub.localsMark()
 		for k, p := range i.params {
 			sub = sub.bindLocal(p.Name, carried[k])
@@ -2144,7 +2154,7 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err != nil {
 			if _, ok := err.(breakSignal); ok {
 				broke = true
-				break
+				return errStopIterate
 			}
 			if nx, ok := err.(nextIterationSignal); ok {
 				// Only the parameters xsl:next-iteration named change; the
@@ -2176,9 +2186,36 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 						carried[k] = conv
 					}
 				}
-				continue
+				return nil
 			}
 			return err
+		}
+		return nil
+	}
+	if feed != nil {
+		// After xsl:break the rest of the document is still read, so that a
+		// malformed tail is the error it is when the tree is built first.
+		pos := 0
+		err := feed.read(func(it xdm.Item) error {
+			if broke {
+				return nil
+			}
+			pos++
+			if err := step(pos, it, 0); err != errStopIterate {
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	} else {
+		for idx, it := range seq {
+			if err := step(idx+1, it, len(seq)); err == errStopIterate {
+				break
+			} else if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -2260,6 +2297,7 @@ func (c *compiler) compileIterate(n *xdm.Node, ns *nsResolver) (Instruction, err
 		return nil, err
 	}
 	instr.body = body
+	c.noteBurstLoop(n, instr, sel)
 	return instr, nil
 }
 
