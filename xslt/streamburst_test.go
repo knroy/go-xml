@@ -285,7 +285,8 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"literal position over values", `<xsl:value-of select="(doc/rec/@v/data())[2] + 1"/>`, recs, true, false},
 		{"exactly-one over values", `<xsl:copy-of select="exactly-one(doc/rec/@k/string())"/>`, recs, true, true},
 		{"simple map over values", `<xsl:value-of select="doc/rec/@k/string() ! upper-case(.)"/>`, recs, true, false},
-		{"copies the path made", `<out><xsl:copy-of select="doc/rec[@v > 2]/copy-of()"/></out>`, recs, true, false},
+		{"copies the path made", `<out><xsl:copy-of select="doc/rec[@v > 2]/copy-of()"/></out>`, recs, false, false},
+		{"copies the path made, counted", `<xsl:value-of select="count(doc/rec[@v > 2]/copy-of())"/>`, recs, true, false},
 		{"unordered over values", `<xsl:value-of select="sum(unordered(doc/rec/@v/data()))"/>`, recs, true, false},
 		{"value-of of the path", `<xsl:value-of select="doc/rec/@k" separator="|"/>`, recs, true, false},
 		// refused (the rows above that expect no bursts keep the path's nodes)

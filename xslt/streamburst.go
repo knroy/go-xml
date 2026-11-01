@@ -29,11 +29,12 @@ package xslt
 // around it, with the path's place taken by a variable -- once over all their
 // items in order, which is what the path would have returned from the whole
 // tree. count, sum, min and max of the path fold each burst's items instead
-// of keeping them. Any other select must atomize the items as each burst is read, or
-// have values or copies for items: one that would keep a burst's nodes is
-// left to the tree, since each node keeps its burst's whole tree. The select is admitted only where its other parts read no
-// focus, and the items are used only in ways a burst cannot tell from the
-// tree (burstSplit). Any error is handed to the tree path, which reads the
+// of keeping them; any other select must atomize the items as each burst is
+// read, or have atomic values for items. One that would keep a burst's
+// nodes, or copies of them, is left to the tree, which then costs no more.
+// The select is admitted only where its other parts read no focus, and the
+// items are used only in ways a burst cannot tell from the tree
+// (burstSplit). Any error is handed to the tree path, which reads the
 // document again and reports it as it would have.
 
 import (
@@ -240,8 +241,9 @@ type burstSplit struct {
 // would make streaming dearer than the tree it replaces. The path's items
 // must be folded (count, sum, min, max), atomized by the expression that
 // consumes them (burstAtomizers; xsl:value-of, valueOf, when the path is
-// its whole select), or values or copies already (a last step tailValue
-// admits).
+// its whole select), or atomic values already. Copies made by a last
+// copy-of() are refused as well: kept to the end, each one a tree of its
+// own, they peaked above the tree path's RSS (4.2 GB against 4.0 GB, 100 MB).
 func splitSelect(e xpath.Expr, valueOf bool) *burstSplit {
 	if e == nil {
 		return nil
@@ -261,14 +263,23 @@ func splitSelect(e xpath.Expr, valueOf bool) *burstSplit {
 }
 
 // endsInValue reports whether the record path p ends in an expression
-// rather than a step: one that makes values or copies (tailValue).
+// that makes atomic values: one tailValue admits other than copy-of().
 func endsInValue(p xpath.Expr) bool {
 	pe, ok := p.(*xpath.PathExpr)
 	if !ok {
 		return false
 	}
-	_, step := pe.Steps[len(pe.Steps)-1].(*xpath.Step)
-	return !step
+	last := pe.Steps[len(pe.Steps)-1]
+	if f, ok := last.(*xpath.FilterExpr); ok {
+		last = f.Base
+	}
+	switch x := last.(type) {
+	case *xpath.Step:
+		return false
+	case *xpath.FuncCall:
+		return x.Name.URI != fnNS || x.Name.Local != "copy-of"
+	}
+	return true
 }
 
 // burstReducers fold with constant state, and burstConsumers take their
