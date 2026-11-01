@@ -45,6 +45,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -1060,17 +1061,9 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 				// A run past a window long that outgrows the scratch is
 				// sized from what is left of the input, not by append's
 				// 1.25x steps. ponytail: capped at 8x the scratch, so that a
-				// run early in a huge document takes at most that; past half
-				// a MiB the cap is 128x, so that one long value is sized in
-				// one step rather than through a chain of them (1.9x its size
-				// at 10 MiB). A document of several such runs pays one
-				// scratch of up to what is left, once.
+				// run early in a huge document takes at most that.
 				if rest := d.Size - int(d.InputOffset()); n > cap(out)-len(out) && len(out) >= bufSize && rest > n {
-					step := 8
-					if cap(out) >= 1<<19 {
-						step = 128
-					}
-					out = append(make([]byte, 0, len(out)+min(rest, step*cap(out))), out...)
+					out = slices.Grow(out, min(rest, 8*cap(out)))
 				}
 				out = append(out, run[:n]...)
 				if n == 1 {
