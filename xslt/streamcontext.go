@@ -78,7 +78,7 @@ func checkStreamableModePatterns(root *xdm.Node) error {
 			return true
 		}
 		free, known := patternIsFreeRanging(a.Value(), el)
-		if known && free && !patternPredicateOnlySyntacticallyNumeric(a.Value(), el) {
+		if known && free {
 			err = fmt.Errorf(
 				"the match pattern %q of a template rule in a streamable "+
 					"mode is not motionless, so it is not "+
@@ -112,83 +112,6 @@ func streamableModeNames(root *xdm.Node) map[string]bool {
 		return true
 	})
 	return out
-}
-
-// patternPredicateOnlySyntacticallyNumeric reports whether a pattern's
-// free-ranging verdict rests only on isPositionalPredicate's deliberately
-// over-broad numeric test, and so must not be raised as an error.
-//
-// §19.8.10 defines a non-positional predicate by the predicate expression's
-// STATIC TYPE: it is non-numeric when the intersection of that type with
-// U{xs:decimal, xs:double, xs:float} is empty. isPositionalPredicate answers a
-// different, syntactic question -- "does a numeric literal appear anywhere
-// inside?" -- and §19.8.8.8, its original caller, can afford that: there an
-// over-broad answer only withholds the scanning-expression rescue, which loses
-// precision and reports nothing.
-//
-// Here the same answer would be reported as XTSE3430, so the gap between the
-// two questions becomes a spurious rejection. accumulator-055s writes
-//
-//	match="p/text()[accumulator-before('text-in-p-count') eq 1]"
-//
-// whose predicate is a comparison. §19.8.10's own list makes the distinction
-// explicitly: "p[@status = $status-codes[1]]" is motionless even though a
-// numeric literal appears in it, because the predicate's static type is
-// xs:boolean, while "p[$pnum + 1]" is not, because its type is numeric.
-//
-// So a predicate whose top-level operator is a comparison or a boolean
-// connective has a boolean static type, and no numeric literal buried in its
-// operands can change that. Where the free-ranging verdict rests on nothing
-// but such a predicate, the classification is withheld rather than reported --
-// the same "no opinion" the analysis gives any construct it does not model.
-func patternPredicateOnlySyntacticallyNumeric(src string, at *xdm.Node) bool {
-	ns := newNSResolver(at, xpathDefaultNamespace(at))
-	expr, err := xpath.ParseVersion(src, ns, xpathVersionAt(at))
-	if err != nil {
-		return false
-	}
-	var preds []xpath.Expr
-	switch x := expr.(type) {
-	case *xpath.Step:
-		preds = x.Predicates
-	case *xpath.PathExpr:
-		if len(x.Steps) == 0 {
-			return false
-		}
-		step, ok := x.Steps[len(x.Steps)-1].(*xpath.Step)
-		if !ok {
-			return false
-		}
-		preds = step.Predicates
-	case *xpath.FilterExpr:
-		// The XSLT 3.0 ".[...]" pattern, which patternExprFreeRanging now
-		// classifies. Its predicates are top-level pattern predicates, so
-		// they need the same rescue as a step's.
-		if _, ok := x.Base.(*xpath.ContextItem); !ok {
-			return false
-		}
-		preds = x.Predicates
-	default:
-		return false
-	}
-	sawRescued := false
-	for _, pred := range preds {
-		if !isPositionalPredicate(pred) {
-			continue
-		}
-		// §19.8.10's first condition is independent of the static type: a
-		// call to position(), last() or function-lookup() outside a nested
-		// predicate makes the predicate positional whatever it returns.
-		// "p[position() gt 2]" is a comparison, and the spec still lists it
-		// as not motionless.
-		if callsPositionOrLast(pred) || !hasBooleanStaticType(pred) {
-			// A genuinely positional predicate -- "p[1]", "p[last()]" -- so
-			// the verdict stands on its own merits.
-			return false
-		}
-		sawRescued = true
-	}
-	return sawRescued
 }
 
 // callsPositionOrLast reports whether an expression calls one of the three
@@ -360,9 +283,8 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 // there would silence a refusal §19.8.4.19 derived on its own.
 //
 // Both tests are deliberately the ones forEachGroup applies, so the two cannot
-// disagree: the same patternIsFreeRanging with the same
-// patternPredicateOnlySyntacticallyNumeric rescue, the same key assessed in
-// the select's own context posture, and the same restriction to a non-grounded
+// disagree: the same patternIsFreeRanging, the same key assessed in the
+// select's own context posture, and the same restriction to a non-grounded
 // select -- which is what keeps si-group-203 running, its select being the
 // grounded "//Item/copy-of()".
 func hasIndependentGroupRefusal(rule *xdm.Node) bool {
@@ -385,7 +307,7 @@ func hasIndependentGroupRefusal(rule *xdm.Node) bool {
 		}
 		if at := groupPatternAttr(el); at != nil {
 			free, known := patternIsFreeRanging(at.Value(), el)
-			if known && free && !patternPredicateOnlySyntacticallyNumeric(at.Value(), el) {
+			if known && free {
 				found = true
 				return false
 			}

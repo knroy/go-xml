@@ -2065,16 +2065,12 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 	// §19.8.10 calls free-ranging on the "p[b]" rule; the catalog asserts
 	// OUTPUT for it, and it is right to, because the snapshot is in memory.
 	//
-	// The verdict is taken only when patternIsFreeRanging is sure of it, and
-	// only when the free-ranging answer does not rest on the deliberately
-	// over-broad numeric test that patternPredicateOnlySyntacticallyNumeric
-	// identifies -- the same withholding checkStreamableModePatterns applies
-	// to a rule's match pattern, and for the same reason.
+	// The verdict is taken only when patternIsFreeRanging is sure of it.
 	if p := groupPatternAttr(el); p != nil && sel.posture != postureGrounded {
 		free, known := patternIsFreeRanging(p.Value(), el)
 		if !known {
 			a.known = false
-		} else if free && !patternPredicateOnlySyntacticallyNumeric(p.Value(), el) {
+		} else if free {
 			return roamingFreeRanging
 		}
 		if !patternVerified(p.Value(), el) {
