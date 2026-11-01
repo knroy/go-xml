@@ -110,7 +110,7 @@ func TestPlainOneOrMoreStillValidates(t *testing.T) {
 // at twelve, which still finishes, rather than hanging at fourteen.
 func TestAttributePatternSizeIsBounded(t *testing.T) {
 	const sch = `<element name="r" xmlns="http://relaxng.org/ns/structure/1.0">
-<oneOrMore><oneOrMore><attribute><anyName/></attribute></oneOrMore></oneOrMore><text/></element>`
+<oneOrMore><oneOrMore><attribute><anyName/><data type="string"/></attribute></oneOrMore></oneOrMore><text/></element>`
 	schTree, err := xdm.ParseString(sch, xdm.ParseOptions{})
 	if err != nil {
 		t.Fatal(err)

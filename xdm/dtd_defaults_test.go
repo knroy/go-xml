@@ -1,6 +1,11 @@
 package xdm
 
-import "testing"
+import (
+	"fmt"
+	"runtime"
+	"strings"
+	"testing"
+)
 
 // An ATTLIST default is supplied to every matching element, including a
 // namespace declaration — "xmlns:p CDATA #FIXED '...'" is how a DTD supplies
@@ -216,5 +221,101 @@ func TestAttListFirstDeclarationBinds(t *testing.T) {
 	}
 	if got := tr.Root.ChildElements()[0].ChildElements()[0].AttrValue("a"); got != "z1" {
 		t.Errorf("s/@a = %q, want z1: the first-binds rule is per element", got)
+	}
+}
+
+// A default is declared once and applies to every element. Its value used to
+// be copied into the tree for each element that received it, so 2 MB of input
+// retained 1.9 GB (250 attributes of 8,000 bytes on 1,000 elements). The
+// value is stored once and aliased: here 20 defaults of 4,000 bytes on 200
+// elements need 80 KB, and 16 MB when copied.
+func TestAttListDefaultValuesAreShared(t *testing.T) {
+	const attrs, elems, size = 20, 200, 4000
+	var dtd, doc strings.Builder
+	dtd.WriteString("<!ELEMENT r ANY><!ELEMENT e EMPTY>")
+	for i := 0; i < attrs; i++ {
+		// Half are NMTOKENS, whose value is collapsed per element.
+		typ, val := "CDATA", strings.Repeat("x", size)
+		if i%2 == 1 {
+			typ, val = "NMTOKENS", strings.Repeat("x ", size/2-1)+"xx"
+		}
+		fmt.Fprintf(&dtd, `<!ATTLIST e a%d %s "%s">`, i, typ, val)
+	}
+	doc.WriteString("<!DOCTYPE r [" + dtd.String() + "]><r>")
+	for i := 0; i < elems; i++ {
+		doc.WriteString("<e/>")
+	}
+	doc.WriteString("</r>")
+	src := doc.String()
+	var tree *Tree
+	var err error
+	var m0, m1 runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&m0)
+	tree, err = ParseString(src, ParseOptions{AllowDOCTYPE: true})
+	runtime.GC()
+	runtime.ReadMemStats(&m1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := int64(m1.HeapAlloc) - int64(m0.HeapAlloc); got > 4<<20 {
+		t.Errorf("tree retains %d KB, want under 4096 KB", got>>10)
+	}
+	n := 0
+	for r := range tree.Root.Children() {
+		for e := range r.Children() {
+			for a := range e.Attrs() {
+				if len(a.Value()) != size {
+					t.Fatalf("attribute %s has %d bytes, want %d", a.Name().Local, len(a.Value()), size)
+				}
+				n++
+			}
+		}
+	}
+	if n != attrs*elems {
+		t.Errorf("%d defaulted attributes, want %d", n, attrs*elems)
+	}
+	runtime.KeepAlive(tree)
+}
+
+// Each element was matched against every ATTLIST declaration, building the
+// element's lexical name for each: 1.4 MB of declarations and elements took
+// 11.8 s. The declarations are now indexed by element name, so the cost per
+// element does not depend on how many others are declared. Measured: 5 MB
+// for 2,000 declarations and 2,000 prefixed elements, against 188 MB scanning
+// them all.
+func TestAttListDefaultsAreIndexedByElement(t *testing.T) {
+	const n = 2000
+	var dtd, doc strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&dtd, `<!ATTLIST p:an-element-with-a-rather-long-name-%d d CDATA "v%d">`, i, i)
+	}
+	doc.WriteString("<!DOCTYPE r [" + dtd.String() + `]><r xmlns:p="urn:p">`)
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&doc, `<p:an-element-with-a-rather-long-name-%d/>`, i)
+	}
+	doc.WriteString("</r>")
+	var tree *Tree
+	var err error
+	b := allocated(func() { tree, err = ParseString(doc.String(), ParseOptions{AllowDOCTYPE: true}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b > 24<<20 {
+		t.Errorf("parse allocated %d MB, want under 24", b>>20)
+	} else {
+		t.Logf("parse allocated %d KB", b>>10)
+	}
+	i := 0
+	for r := range tree.Root.Children() {
+		for e := range r.Children() {
+			if got := e.Attr("", "d"); got == nil || got.Value() != fmt.Sprintf("v%d", i) {
+				t.Fatalf("element %d: default d = %v", i, got)
+			}
+			i++
+		}
+	}
+	if i != n {
+		t.Errorf("%d elements, want %d", i, n)
 	}
 }

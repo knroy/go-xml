@@ -364,21 +364,25 @@ func requireQName(n xml.Name) error {
 // attributes to the raw tag, ahead of validateStartElement. Namespaces in
 // XML §3 binds a prefix to the attribute's *normalized* value, so xmlns:b
 // declared NMTOKEN and written " urn:x " binds urn:x — and p:a, b:a collide.
-func normalizeAttTokens(t xml.StartElement, types []attDeclaredType) xml.StartElement {
+func normalizeAttTokens(t xml.StartElement, types []attDeclaredType, ix declIndex) xml.StartElement {
 	var attrs []xml.Attr
-	for _, d := range types {
-		if !lexicalIs(t.Name.Space, t.Name.Local, d.element) && d.element != t.Name.Local {
-			continue
-		}
+	for _, i := range ix.at(t.Name.Space, t.Name.Local) {
+		d := types[i]
 		for i, a := range t.Attr {
 			if !lexicalIs(a.Name.Space, a.Name.Local, d.attr) && a.Name.Local != d.attr {
+				continue
+			}
+			// A value already collapsed is left as it is, so that a default
+			// keeps the storage the text store shares.
+			c := strings.Join(strings.FieldsFunc(a.Value, func(r rune) bool { return r == ' ' }), " ")
+			if c == a.Value {
 				continue
 			}
 			if attrs == nil {
 				// Copy: the tokeniser's attribute slice is not ours to write.
 				attrs = append([]xml.Attr(nil), t.Attr...)
 			}
-			attrs[i].Value = strings.Join(strings.FieldsFunc(a.Value, func(r rune) bool { return r == ' ' }), " ")
+			attrs[i].Value = c
 		}
 	}
 	if attrs != nil {

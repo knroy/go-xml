@@ -210,22 +210,56 @@ func (pb *patBuilder) choice(a, b pattern) pattern {
 	if patEq(a, b) || pb.inChoice(a, b) {
 		return a
 	}
+	// A choice on the right is merged alternative by alternative. Taking the
+	// derivative of a choice of choices yields chains that share most of their
+	// alternatives, and testing the whole chain against a only finds a chain
+	// that is identical: (a?){13} a{13} then grew past the pattern bound while
+	// holding a few dozen distinct alternatives.
+	//
+	// The merge compares every pair of alternatives, so it is skipped when
+	// the chains are long enough to make that dearer than the copies it
+	// saves: alternatives that never compare equal (values, data) would
+	// otherwise buy a quadratic cost per choice from a hostile document.
+	// ponytail: a fixed pair budget; a hash of the alternatives if a schema
+	// needs more.
+	if c, ok := b.(*choicePat); ok && altCount(a)*altCount(b) <= maxMergePairs {
+		return pb.choice(pb.choice(a, c.Left), c.Right)
+	}
 	if pb != nil {
 		return pb.mk(kChoice, a, b)
 	}
 	return newChoicePat(a, b)
 }
 
+// maxMergePairs bounds the pairs of alternatives choice compares when it
+// merges one chain into another.
+const maxMergePairs = 1 << 10
+
+// altCount is the number of alternatives in a chain of choices.
+func altCount(p pattern) int {
+	n := 1
+	for {
+		c, ok := unstatic(p).(*choicePat)
+		if !ok {
+			return n
+		}
+		n += altCount(c.Right)
+		p = c.Left
+	}
+}
+
 // inChoice reports whether b is already one of a's alternatives. A chain of
 // choices is built leftwards, so the alternatives are the Right of each link
 // and the Left of the last.
 func (pb *patBuilder) inChoice(a, b pattern) bool {
+	// Equal patterns have equal sizes, so a size mismatch skips the walk.
+	sb := patternSize(b)
 	for {
 		c, ok := unstatic(a).(*choicePat)
 		if !ok {
-			return patEq(a, b)
+			return patternSize(a) == sb && patEq(a, b)
 		}
-		if patEq(c.Right, b) {
+		if patternSize(c.Right) == sb && patEq(c.Right, b) {
 			return true
 		}
 		a = c.Left

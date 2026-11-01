@@ -111,8 +111,8 @@ func (s *Schema) ValidateWithOptions(doc *xdm.Node, opts ValidateOptions) error 
 		return &Error{
 			Path: v.deepPath,
 			Message: fmt.Sprintf(
-				"the derivative pattern exceeds %d nodes; a oneOrMore nested "+
-					"inside a oneOrMore grows the pattern multiplicatively in "+
+				"the derivative pattern exceeds %d nodes; nested repetition "+
+					"or optional content grows the pattern multiplicatively in "+
 					"the number of children", maxPattern),
 		}
 	}
