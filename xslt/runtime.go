@@ -26,6 +26,10 @@ type runtime struct {
 
 	ctx *xpath.Context
 
+	// bursts drives the loop of a streamable xsl:source-document running in
+	// bursts; see streamburst.go.
+	bursts *burstFeed
+
 	// absent records which groups of context components clearMergeContext,
 	// withoutGroupingScope, clearRegexGroups and withOutputURI have already
 	// bound to absent in ctx (or that nothing has bound yet), so that the clears every template and function call runs can

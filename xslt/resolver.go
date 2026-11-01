@@ -689,17 +689,8 @@ func (r *FileResolver) publish(path string, tree *xdm.Tree, size int64) {
 	r.cacheBytes += size
 }
 
-// parseUncached reads and parses a file. It holds no lock: this is the work
-// that used to run under r.mu.
-func (r *FileResolver) parseUncached(
-	path string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, int64, error) {
-	// A file: URI rather than the bare path. This base URI is stamped on
-	// every element of the module and is what fn:document, fn:resolve-uri
-	// and fn:static-base-uri resolve against, and those are defined over
-	// URIs: an absolute filesystem path has no scheme, so it is still a
-	// *relative* URI reference and resolving against it drops everything
-	// before the last separator. resolvePath strips the scheme back off, so
-	// the filesystem sees the same path either way.
+// parseOptions are the options a document at path is parsed with.
+func (r *FileResolver) parseOptions(path string, trackPos bool) xdm.ParseOptions {
 	opts := xdm.ParseOptions{
 		BaseURI: fileURIOf(path),
 		// This document *was* retrieved by URI, so it has a dm:document-uri
@@ -715,6 +706,21 @@ func (r *FileResolver) parseUncached(
 	if r.ExternalEntities {
 		opts.ExternalEntities = r
 	}
+	return opts
+}
+
+// parseUncached reads and parses a file. It holds no lock: this is the work
+// that used to run under r.mu.
+func (r *FileResolver) parseUncached(
+	path string, trackPos bool, b *xdm.EntityBudget) (*xdm.Tree, int64, error) {
+	// A file: URI rather than the bare path. This base URI is stamped on
+	// every element of the module and is what fn:document, fn:resolve-uri
+	// and fn:static-base-uri resolve against, and those are defined over
+	// URIs: an absolute filesystem path has no scheme, so it is still a
+	// *relative* URI reference and resolving against it drops everything
+	// before the last separator. resolvePath strips the scheme back off, so
+	// the filesystem sees the same path either way.
+	opts := r.parseOptions(path, trackPos)
 	// The expansion is charged against the caller's shared allowance rather
 	// than a fresh one per file. A nil budget leaves the per-document ceiling
 	// in place. See ResolveModuleWith.

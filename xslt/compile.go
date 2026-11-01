@@ -12,6 +12,9 @@ import (
 
 // compiler holds state while compiling a stylesheet and its included modules.
 type compiler struct {
+	// burst is the burst plan of the streamable xsl:source-document being
+	// compiled, which records the compiled form of its loop.
+	burst     *burstPlan
 	opts      CompileOptions
 	sheet     *Stylesheet
 	declOrder int
