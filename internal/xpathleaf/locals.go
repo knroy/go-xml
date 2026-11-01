@@ -108,6 +108,18 @@ func (l *Locals) Frozen() *Locals {
 		vals: append([]xdm.Sequence(nil), l.vals[l.base:]...)}
 }
 
+// FrozenOnly is Frozen keeping only the bindings keep accepts.
+func (l *Locals) FrozenOnly(keep func(uri, local string) bool) *Locals {
+	f := &Locals{}
+	for i := l.base; i < len(l.names); i++ {
+		if n := l.names[i]; keep(n.uri, n.local) {
+			f.names = append(f.names, n)
+			f.vals = append(f.vals, l.vals[i])
+		}
+	}
+	return f
+}
+
 // Package xpath sets these in its init; ctx and base are *xpath.Context.
 // WithLocals returns a child scope of ctx resolving names through l.
 // WithBindingsOf returns a copy of ctx whose variable bindings are base's.
