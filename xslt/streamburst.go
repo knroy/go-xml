@@ -29,7 +29,9 @@ package xslt
 // around it, with the path's place taken by a variable -- once over all their
 // items in order, which is what the path would have returned from the whole
 // tree. count, sum, min and max of the path fold each burst's items instead
-// of keeping them. The select is admitted only where its other parts read no
+// of keeping them. Any other select must atomize the items as each burst is read, or
+// have values or copies for items: one that would keep a burst's nodes is
+// left to the tree, since each node keeps its burst's whole tree. The select is admitted only where its other parts read no
 // focus, and the items are used only in ways a burst cannot tell from the
 // tree (burstSplit). Any error is handed to the tree path, which reads the
 // document again and reports it as it would have.
@@ -148,7 +150,7 @@ func planBursts(sd *xdm.Node, shared bool) *burstPlan {
 			if !selectTargetOK(kid) {
 				return nil
 			}
-			s := splitSelect(parseAt(kid, kid.AttrValue("select")))
+			s := splitSelect(parseAt(kid, kid.AttrValue("select")), isXSL(kid, "value-of"))
 			if s == nil {
 				return nil
 			}
@@ -231,7 +233,16 @@ type burstSplit struct {
 // Node identity, reordering and user code are refused, and so is anything
 // that keeps every item when it need not (distinct-values, reverse, sort,
 // last()). It returns nil when e is not admitted.
-func splitSelect(e xpath.Expr) *burstSplit {
+//
+// It also refuses a select that would keep the record path's nodes until
+// the end: a node of a burst holds the burst's whole tree, several times
+// what the same element costs in the document's tree, so keeping them
+// would make streaming dearer than the tree it replaces. The path's items
+// must be folded (count, sum, min, max), atomized by the expression that
+// consumes them (burstAtomizers; xsl:value-of, valueOf, when the path is
+// its whole select), or values or copies already (a last step tailValue
+// admits).
+func splitSelect(e xpath.Expr, valueOf bool) *burstSplit {
 	if e == nil {
 		return nil
 	}
@@ -240,7 +251,24 @@ func splitSelect(e xpath.Expr) *burstSplit {
 	if !s.walk(e, func(x xpath.Expr) { root = x }) || s.items == nil {
 		return nil
 	}
+	if valueOf && root == s.items {
+		s.atomize = true
+	}
+	if s.call == nil && !s.atomize && !endsInValue(s.items) {
+		return nil
+	}
 	return s
+}
+
+// endsInValue reports whether the record path p ends in an expression
+// rather than a step: one that makes values or copies (tailValue).
+func endsInValue(p xpath.Expr) bool {
+	pe, ok := p.(*xpath.PathExpr)
+	if !ok {
+		return false
+	}
+	_, step := pe.Steps[len(pe.Steps)-1].(*xpath.Step)
+	return !step
 }
 
 // burstReducers fold with constant state, and burstConsumers take their
@@ -352,14 +380,6 @@ func (s *burstSplit) walk(e xpath.Expr, put func(xpath.Expr)) bool {
 	case *xpath.SimpleMap:
 		return burstSafe(x.Right, false) &&
 			s.slot(x.Left, func(y xpath.Expr) { x.Left = y })
-	case *xpath.PathExpr:
-		// Steps from the items, as a record path's own: the result is put
-		// in document order, which across bursts is the order they were
-		// made in -- the tree's, unless the path made copies of its own
-		// while the bursts were read, earlier than the tree would have.
-		return !x.Root && len(x.Steps) > 1 && pathTail(x.Steps[1:]) &&
-			s.slot(x.Steps[0], func(y xpath.Expr) { x.Steps[0] = y }) &&
-			(s.items == nil || !makesCopies(s.items))
 	case *xpath.QuantifiedExpr:
 		return s.bindings(x.Bindings) && burstSafe(x.Test, false) && focusFree(x.Test)
 	case *xpath.ForExpr:
@@ -472,16 +492,6 @@ func pathTail(steps []xpath.Expr) bool {
 		}
 	}
 	return true
-}
-
-// makesCopies reports whether the record path p ends in copy-of().
-func makesCopies(p xpath.Expr) bool {
-	pe, ok := p.(*xpath.PathExpr)
-	if !ok {
-		return false
-	}
-	f, ok := firstOf(pe.Steps[len(pe.Steps)-1:]).(*xpath.FuncCall)
-	return ok && f.Name.URI == fnNS && f.Name.Local == "copy-of"
 }
 
 func firstOf(es []xpath.Expr) xpath.Expr {
@@ -1024,7 +1034,7 @@ func (c *compiler) noteBurstSelect(n *xdm.Node, instr Instruction, sel *xpath.Co
 		if err != nil {
 			return nil
 		}
-		return splitSelect(e)
+		return splitSelect(e, isXSL(n, "value-of"))
 	}
 	part := func(e xpath.Expr) *xpath.Compiled {
 		return xpathleaf.WithExpr(sel, e).(*xpath.Compiled)
