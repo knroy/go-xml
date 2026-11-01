@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sort"
@@ -766,7 +767,8 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	// declares new-each-time="yes" and requires 10, and function-1029
 	// declares "maybe" and accepts anything from 7 to 10 -- so the caching
 	// must be keyed on the setting and not merely be an optimisation.
-	var cacheKey string
+	var cacheKey callHash
+	var haveKey bool
 	if f.deterministic {
 		switch k, err := rt.functionCallKey(f, args); {
 		case errors.Is(err, errNotCacheable):
@@ -775,10 +777,11 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		case err != nil:
 			return nil, err
 		default:
-			if hit, ok := rt.funcResults[string(k)]; ok {
+			cacheKey = hashCallKey(k)
+			haveKey = true
+			if hit, ok := rt.funcResults[cacheKey]; ok {
 				return hit, nil
 			}
-			cacheKey = string(k)
 		}
 	}
 
@@ -849,7 +852,7 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	if err != nil {
 		return nil, err
 	}
-	if f.deterministic && cacheKey != "" {
+	if f.deterministic && haveKey {
 		// Only a successful call is remembered. An error is not a result, and
 		// caching one would make a failure that depended on transient state
 		// -- an unavailable document, say -- permanent for the rest of the
@@ -857,6 +860,22 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		rt.funcResults[cacheKey] = res
 	}
 	return res, nil
+}
+
+// callHash is the first 128 bits of the SHA-256 of a functionCallKey. The memo
+// keeps this instead of the key itself, which for a map or array argument is
+// its whole content (about 300 B a key on DocBook table-cals.049).
+//
+// A collision would return another call's result, and nothing compares the
+// full key on a hit. That is accepted: SHA-256 is collision resistant, so an
+// input cannot be crafted to collide (MD5 or a 64-bit hash would allow it),
+// and by chance two keys in one transform collide with probability about
+// n^2/2^129, below 1e-20 for a billion calls.
+type callHash [16]byte
+
+func hashCallKey(k []byte) callHash {
+	h := sha256.Sum256(k)
+	return callHash(h[:16])
 }
 
 // maxKeyBufCap is the largest scratch buffer functionCallKey keeps: 64 KB.

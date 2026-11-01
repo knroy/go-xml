@@ -164,7 +164,7 @@ type transformState struct {
 	// building nodes means the same nodes rather than merely equal ones --
 	// so the promise is only kept by evaluating once and reusing. Keyed by
 	// functionCallKey; see apply.go.
-	funcResults map[string]xdm.Sequence
+	funcResults map[callHash]xdm.Sequence
 
 	// itemIDs numbers the nodes and function items functionCallKey keys by
 	// identity; see identityNumber.
@@ -759,7 +759,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 			accumOrigin:   map[*xdm.Node]*xdm.Node{},
 			treeAccums:    map[*xdm.Node]*modeAccumulators{},
 			streamedTrees: map[*xdm.Node]bool{},
-			funcResults:   map[string]xdm.Sequence{},
+			funcResults:   map[callHash]xdm.Sequence{},
 			itemIDs:       map[any]int{},
 			messages:      new([]string),
 			warnings:      new([]string),
