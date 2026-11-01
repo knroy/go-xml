@@ -115,6 +115,17 @@ func TestStreamTrustReproducers(t *testing.T) {
 			hdr + sd(`<xsl:result-document href="o.xml" method="xml" item-separator="{string(doc)}"><xsl:copy-of select="doc/rec"/></xsl:result-document>`) + end, ""},
 		{"S3 control: literal serialization attributes", "verified", nil,
 			hdr + sd(`<xsl:result-document href="o.xml" method="xml" item-separator="|"><xsl:copy-of select="doc/rec"/></xsl:result-document>`) + end, ""},
+		// Closures over a streamed node the inline-function rule does not see.
+		{"S4 inline function closes over a quantified range variable", "unknown", nil,
+			hdr + sd(`<xsl:value-of select="some $t in doc/rec satisfies (function(){$t})()/`+sib+` = 3"/>`) + end, ""},
+		{"S4b closure returns ../rec[last()]", "unknown", nil,
+			hdr + sd(`<xsl:value-of select="every $t in doc/rec satisfies (function(){$t})()/../rec[last()]/@k = 3"/>`) + end, ""},
+		{"S4 control: closure over a grounded range variable", "verified", nil,
+			hdr + sd(`<xsl:value-of select="some $t in doc/rec/@k/string() satisfies (function(){$t})() = '3'"/>`) + end, ""},
+		{"X1 inline function body calls current()", "unknown", nil,
+			hdr + sd(fe(`<v><xsl:value-of select="(function(){current()})()/`+sib+`"/></v>`)) + end, ""},
+		{"X1 control: inline function with no closure", "verified", nil,
+			hdr + sd(fe(`<v><xsl:value-of select="(function($n){$n + 1})(1)"/></v>`)) + end, ""},
 		// The burst path's own shape, which must stay trusted.
 		{"control: record loop", "verified", nil,
 			hdr + sd(fe(`<v><xsl:value-of select="@k"/></v>`)) + end, ""},
