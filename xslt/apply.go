@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xdmbuild"
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
@@ -1227,13 +1228,32 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		// children flatten into the parent either way, but a function
 		// declared as="document-node()" gets its result rejected — which is
 		// exactly what merge-096 does.
-		sub := newOutputBuilder(rt)
-		if err := builtInDescend(rt, node, mode, params, tunnels, sub, false); err != nil {
-			return err
-		}
-		doc, err := sub.ToDocument()
-		if err != nil {
-			return err
+		var doc *xdm.Node
+		if mr := rt.sheet.rules[mode]; mr != nil && mr.empty {
+			// No template rule is in the mode, so only the built-in rules
+			// run and none of them yields an attribute or a namespace node
+			// for the document: build the children in place instead of
+			// building them and copying them into a document afterwards,
+			// which held the result twice. Should one ever arrive, the
+			// builder raises XTDE0420 as ToDocument does.
+			sub, root := xdmbuild.InPlaceDocument(xsltPolicy{nodes: rt.nodeBudget()})
+			if err := builtInDescend(rt, node, mode, params, tunnels, sub, false); err != nil {
+				return err
+			}
+			if err := sub.Refused(); err != nil {
+				return err
+			}
+			root.Tree().Finalize()
+			doc = root
+		} else {
+			sub := newOutputBuilder(rt)
+			if err := builtInDescend(rt, node, mode, params, tunnels, sub, false); err != nil {
+				return err
+			}
+			var err error
+			if doc, err = sub.ToDocument(); err != nil {
+				return err
+			}
 		}
 		// The DOCTYPE and the base URI travel with the copy for the same
 		// reason they do in xsl:copy: the unparsed entity declarations and
