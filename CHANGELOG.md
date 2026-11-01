@@ -4,11 +4,12 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased
+## v2.1.0 — 2026-11-01
 
-A memory audit across parsing, XPath/XQuery, XSLT, validation and
-serialization. Output is byte-identical except where *Changed* says otherwise.
-Three new exported functions make this a minor release.
+Three memory audits across parsing, XPath/XQuery, XSLT, validation,
+serialization and c14n, and the items go-xmlsec reported. Output is
+byte-identical except where *Changed* says otherwise. New exported API, listed
+under *Added*, makes this a minor release.
 
 ### Added
 
