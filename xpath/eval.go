@@ -121,8 +121,14 @@ func (e *Step) appendFrom(selected xdm.Sequence, node *xdm.Node) xdm.Sequence {
 		}
 		return appendNamedDescendants(selected, node, nt)
 	}
+	// Ancestors come in a chain, so a first match usually has more behind it:
+	// one block of four in place of the 1, 2, 4 growth.
+	chain := e.Axis == AxisAncestor || e.Axis == AxisAncestorOrSelf
 	walkAxis(node, e.Axis, func(n *xdm.Node) bool {
 		if e.Test.Matches(n, principal) {
+			if chain && selected == nil {
+				selected = make(xdm.Sequence, 0, 4)
+			}
 			selected = append(selected, n)
 		}
 		return true
@@ -360,8 +366,9 @@ func applyPredicate(ctx *Context, seq xdm.Sequence, pred Expr) (xdm.Sequence, er
 	var out xdm.Sequence
 	size := len(seq)
 	var h *comparisonHoist
-	if size > 1 {
-		h = newComparisonHoist(ctx, pred)
+	var hoist comparisonHoist // on the stack: one allocation less per predicate
+	if size > 1 && hoist.init(ctx, pred) {
+		h = &hoist
 	}
 
 	// One focus context serves every item when the predicate cannot keep
@@ -502,34 +509,36 @@ type comparisonHoist struct {
 	ready bool
 }
 
-// newComparisonHoist returns nil when pred is not such a comparison, under
+// init sets up h for pred and reports true, or reports false when pred is not
+// such a comparison, under
 // XPath 1.0 compatibility (whose conversions need the raw operands), and for
 // "A = (M to N)", which evalGeneralComparison answers from the bounds.
-func newComparisonHoist(ctx *Context, pred Expr) *comparisonHoist {
+func (h *comparisonHoist) init(ctx *Context, pred Expr) bool {
 	b, ok := pred.(*BinaryOp)
 	if !ok {
-		return nil
+		return false
 	}
 	switch b.Op {
 	case "eq", "ne", "lt", "le", "gt", "ge":
 	case "=", "!=", "<", "<=", ">", ">=":
 		if r, isRange := b.Right.(*BinaryOp); ctx.Compat() || (isRange && r.Op == "to") {
-			return nil
+			return false
 		}
 	default:
-		return nil
+		return false
 	}
 	side, left := b.Right, false
 	if !hoistable(side, false) {
 		side, left = b.Left, true
 		if !hoistable(side, false) {
-			return nil
+			return false
 		}
 	}
 	if !callsBuiltins(side, ctx) {
-		return nil
+		return false
 	}
-	return &comparisonHoist{cmp: b, left: left}
+	*h = comparisonHoist{cmp: b, left: left}
+	return true
 }
 
 // holds reports whether the predicate selects sub's context item. The hoisted
