@@ -140,3 +140,34 @@ func TestParseBurstsSpineStaysSmall(t *testing.T) {
 		t.Fatalf("the spine kept %d records and %d text bytes", tree.n, bytes)
 	}
 }
+
+// A burst's tree does not carry the parse's name and frame indexes, which
+// cover every name and declaration of the stream so far: copying them made
+// the cost of each burst grow with the stream. Its names still resolve.
+func TestParseBurstsCopyNoIndexes(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<a>")
+	for i := range 200 {
+		fmt.Fprintf(&b, `<r xmlns:p%d="urn:%d"><n%d/></r>`, i, i, i)
+	}
+	b.WriteString("</a>")
+	i := 0
+	err := ParseBursts(strings.NewReader(b.String()), ParseOptions{}, []QName{{Local: "a"}, {Local: "r"}},
+		func(r *Node) error {
+			c := r.tree
+			if c.nameIx != nil || c.frameOne != nil || c.frameMany != nil {
+				t.Fatalf("burst %d: copied indexes: %d names, %d+%d frames", i, len(c.nameIx), len(c.frameOne), len(c.frameMany))
+			}
+			if got, want := r.FirstChild().Name().Local, fmt.Sprintf("n%d", i); got != want {
+				t.Fatalf("burst %d: child %q, want %q", i, got, want)
+			}
+			if got := c.intern(QName{Local: fmt.Sprintf("n%d", i)}); got != r.FirstChild().name {
+				t.Fatalf("burst %d: intern finds %d, the child has %d", i, got, r.FirstChild().name)
+			}
+			i++
+			return nil
+		})
+	if err != nil || i != 200 {
+		t.Fatalf("%d bursts, %v", i, err)
+	}
+}

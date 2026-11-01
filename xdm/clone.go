@@ -1,8 +1,6 @@
 package xdm
 
 import (
-	"maps"
-
 	"github.com/knroy/go-xml/v2/internal/xdmclone"
 )
 
@@ -112,8 +110,11 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 	if layer != nil && layer.src != t {
 		layer = nil
 	}
+	// The name and frame indexes are not copied: intern and internFrame
+	// rebuild them on the copy's first use, as for a frozen source, which
+	// has none. A burst's copy is made from a tree still being parsed, whose
+	// indexes cover every name and frame of the stream so far.
 	c.names = t.names[:len(t.names):len(t.names)]
-	c.nameIx = maps.Clone(t.nameIx)
 	c.text.blocks = make([][]byte, len(t.text.blocks))
 	for i, b := range t.text.blocks {
 		c.text.blocks[i] = b[:len(b):len(b)]
@@ -121,8 +122,6 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 	c.text.size = t.text.size
 	c.frames = t.frames[:len(t.frames):len(t.frames)]
 	c.frameData = t.frameData[:len(t.frameData):len(t.frameData)]
-	c.frameOne = maps.Clone(t.frameOne)
-	c.frameMany = maps.Clone(t.frameMany)
 
 	total := n
 	if newIdx != nil {
