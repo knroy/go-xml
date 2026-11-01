@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -310,5 +313,47 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 				t.Fatalf("ran in bursts: %v, fell back %v; want %v, %v (output %q, %v)", ran, fell, tc.bursts, tc.fallback, got, err)
 			}
 		})
+	}
+}
+
+// A select that atomizes its record path keeps the values, not each burst's
+// tree: avg over 40,000 records stays within a few megabytes, where holding
+// the attribute nodes kept every burst (about 950 bytes a record, 38 MB).
+func TestBurstSelectAtomizes(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<doc>")
+	for i := range 40000 {
+		fmt.Fprintf(&b, "<rec k=\"K%07d\" v=\"%d\"><a>t</a></rec>\n", i, i%97)
+	}
+	b.WriteString("</doc>")
+	src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+	<xsl:template name="main"><xsl:source-document streamable="yes" href="big.xml">
+	<xsl:value-of select="avg(doc/rec/@v)"/></xsl:source-document></xsl:template></xsl:stylesheet>`
+	goruntime.GC()
+	var m0 goruntime.MemStats
+	goruntime.ReadMemStats(&m0)
+	var peak atomic.Uint64
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		var m goruntime.MemStats
+		for {
+			goruntime.ReadMemStats(&m)
+			if m.HeapAlloc > peak.Load() {
+				peak.Store(m.HeapAlloc)
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}()
+	out, err := burstRun(t, src, "big.xml", b.String(), true)
+	close(stop)
+	<-done
+	grew := (int64(peak.Load()) - int64(m0.HeapAlloc)) >> 20
+	if err != nil || !strings.HasSuffix(out, "47.97255") || !burstRuns || grew > 20 {
+		t.Fatalf("got %q, %v, bursts %v, heap grew %d MB", out, err, burstRuns, grew)
 	}
 }

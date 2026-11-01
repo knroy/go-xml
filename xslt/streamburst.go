@@ -79,6 +79,9 @@ type burstPlan struct {
 	items, outer *xpath.Compiled
 	reducer      string
 	fold, folded *xpath.Compiled
+	// atomize says the path's items are consumed only as atomic values,
+	// so each burst's are atomized at once and its tree let go.
+	atomize bool
 }
 
 // The variables the parts of a split select are bound to, in a namespace no
@@ -215,6 +218,9 @@ type burstSplit struct {
 	// record path, and putCall puts an expression in its place.
 	call    *xpath.FuncCall
 	putCall func(xpath.Expr)
+	// atomize says the expression consuming the record path atomizes it
+	// and keeps none of its nodes (burstAtomizers), or only counts them.
+	atomize bool
 }
 
 // splitSelect finds the one record path in e and checks that everything
@@ -257,6 +263,20 @@ var (
 		"remove": true, "index-of": true, "unordered": true, "name": true, "local-name": true,
 		"namespace-uri": true, "node-name": true,
 	}
+	// burstAtomizers turn every node of their arguments into its typed
+	// value before using it (count, exists and empty use one item per
+	// node, which an atomized untyped node still is), and return no node.
+	burstAtomizers = map[string]bool{
+		"count": true, "exists": true, "empty": true, "sum": true, "avg": true,
+		"min": true, "max": true, "data": true, "string": true, "number": true,
+		"string-length": true, "normalize-space": true, "string-join": true,
+		"concat": true, "contains": true, "starts-with": true, "ends-with": true,
+		"matches": true, "compare": true, "upper-case": true, "lower-case": true,
+		"substring": true, "substring-before": true, "substring-after": true,
+		"translate": true, "tokenize": true, "round": true, "floor": true,
+		"ceiling": true, "abs": true, "round-half-to-even": true,
+		"format-number": true, "index-of": true,
+	}
 	burstOps = map[string]bool{
 		"=": true, "!=": true, "<": true, "<=": true, ">": true, ">=": true,
 		"eq": true, "ne": true, "lt": true, "le": true, "gt": true, "ge": true,
@@ -289,6 +309,9 @@ func (s *burstSplit) walk(e xpath.Expr, put func(xpath.Expr)) bool {
 			len(x.Args) >= 1 && len(x.Args) <= n && recordPath(x.Args[0]) != nil {
 			s.call, s.putCall = x, put
 		}
+		if x.Name.URI == xdm.NSXS || x.Name.URI == fnNS && burstAtomizers[x.Name.Local] {
+			s.atomizes(x.Args...)
+		}
 		for k := range x.Args {
 			if !s.slot(x.Args[k], func(y xpath.Expr) { x.Args[k] = y }) {
 				return false
@@ -296,12 +319,16 @@ func (s *burstSplit) walk(e xpath.Expr, put func(xpath.Expr)) bool {
 		}
 		return true
 	case *xpath.BinaryOp:
+		if x.Op != "and" && x.Op != "or" {
+			s.atomizes(x.Left, x.Right)
+		}
 		return burstOps[x.Op] &&
 			s.slot(x.Left, func(y xpath.Expr) { x.Left = y }) &&
 			s.slot(x.Right, func(y xpath.Expr) { x.Right = y })
 	case *xpath.UnaryOp:
 		return s.slot(x.Operand, func(y xpath.Expr) { x.Operand = y })
 	case *xpath.CastExpr:
+		s.atomizes(x.Operand)
 		return s.slot(x.Operand, func(y xpath.Expr) { x.Operand = y })
 	case *xpath.InstanceOfExpr:
 		return s.slot(x.Operand, func(y xpath.Expr) { x.Operand = y })
@@ -339,6 +366,16 @@ func (s *burstSplit) walk(e xpath.Expr, put func(xpath.Expr)) bool {
 		return s.bindings(x.Bindings) && burstSafe(x.Return, false) && focusFree(x.Return)
 	}
 	return false
+}
+
+// atomizes notes that the operands es, of an expression that atomizes them,
+// include the record path itself.
+func (s *burstSplit) atomizes(es ...xpath.Expr) {
+	for _, e := range es {
+		if recordPath(e) != nil {
+			s.atomize = true
+		}
+	}
 }
 
 func (s *burstSplit) bindings(bs []xpath.Binding) bool {
@@ -997,7 +1034,7 @@ func (c *compiler) noteBurstSelect(n *xdm.Node, instr Instruction, sel *xpath.Co
 		return
 	}
 	s.put(&xpath.VarRef{Name: burstItems})
-	p.items, p.outer = part(s.items), part(*s.outer)
+	p.items, p.outer, p.atomize = part(s.items), part(*s.outer), s.atomize
 	if f := parse(); f != nil && f.call != nil {
 		f.putCall(&xpath.VarRef{Name: burstValue})
 		p.reducer, p.folded = f.call.Name.Local, part(*f.outer)
@@ -1158,6 +1195,8 @@ func (p *burstPlan) evalBursts(rt *runtime,
 		switch {
 		case err != nil || len(items) == 0:
 			return err
+		case !fold && p.atomize:
+			all = append(all, xdm.Atomize(items)...)
 		case !fold:
 			all = append(all, items...)
 		case p.reducer == "count":
