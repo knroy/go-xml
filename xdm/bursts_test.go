@@ -171,3 +171,28 @@ func TestParseBurstsCopyNoIndexes(t *testing.T) {
 		t.Fatalf("%d bursts, %v", i, err)
 	}
 }
+
+// The comments and processing instructions around the document element are
+// not copied into every burst, which made the cost prolog x records.
+func TestParseBurstsNoProlog(t *testing.T) {
+	src := strings.Repeat("<!--c--><?p x?>", 100) + "<a>" + strings.Repeat("<r><x/></r>", 50) + "</a><!--post-->"
+	n := 0
+	err := ParseBursts(strings.NewReader(src), ParseOptions{}, []QName{{Local: "a"}, {Local: "r"}},
+		func(r *Node) error {
+			n++
+			// The document node, a, r and x.
+			if got := r.tree.n; got != 4 {
+				t.Fatalf("burst %d: the tree holds %d records, want 4", n, got)
+			}
+			return nil
+		})
+	if err != nil || n != 50 {
+		t.Fatalf("%d bursts, %v", n, err)
+	}
+	// Still checked: a PI target with a colon in the prolog.
+	err = ParseBursts(strings.NewReader("<?a:b?><a/>"), ParseOptions{}, []QName{{Local: "a"}, {Local: "r"}},
+		func(*Node) error { return nil })
+	if err == nil {
+		t.Fatal("a colon in a prolog PI target: no error")
+	}
+}

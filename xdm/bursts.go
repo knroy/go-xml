@@ -23,7 +23,8 @@ import (
 // declarations, attributes, base URI) and a deep copy of the element. So the
 // element's base URI, in-scope namespaces, attributes, parent and ancestors
 // read as they would in the whole tree; its siblings, and anything else
-// outside its ancestry, do not exist there. Each burst is a new tree, so
+// outside its ancestry -- the comments and processing instructions outside
+// the document element too -- do not exist there. Each burst is a new tree, so
 // nodes from different bursts are distinct and order by creation, which is
 // document order; a node fn keeps stays valid after fn returns.
 
@@ -118,8 +119,9 @@ func (b *burster) discardLast(p *Node, spaces *spaceTable) {
 }
 
 // deliver hands el to fn in a tree of its own. By now the parse's tree holds
-// nothing but the document node, any prolog comments and processing
-// instructions, the spine and el, which is exactly the burst's tree: it is
+// nothing but the document node, the spine and el (a burst parse does not
+// keep the prolog's comments and processing instructions, which every burst
+// would copy), which is exactly the burst's tree: it is
 // copied in bulk, sharing the names, frames and text the records point into.
 func (b *burster) deliver(el *Node) error {
 	m := cloneSubtree(el.tree.Root, xdmclone.Options{})

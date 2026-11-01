@@ -505,6 +505,9 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		case *xml.Comment:
 			t := *tok
 			sawPrologToken = true
+			if bs != nil && cur == tree.Root {
+				continue // a burst's tree holds no prolog (see bursts.go)
+			}
 			c := cur.appendChild(KindComment)
 			c.v0, c.v1 = tree.text.addBytes(t, 0)
 
@@ -529,6 +532,9 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 				return nil, fmt.Errorf("parse XML: processing-instruction target %q contains a colon", t.Target)
 			}
 			sawPrologToken = true
+			if bs != nil && cur == tree.Root {
+				continue
+			}
 			pi := cur.appendChild(KindPI)
 			pi.name = tree.intern(QName{Local: t.Target})
 			pi.v0, pi.v1 = tree.text.addBytes(t.Inst, 0)
