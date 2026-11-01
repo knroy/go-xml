@@ -235,6 +235,23 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 		if !inStreamableMode(el, streamable) {
 			return true
 		}
+		// §6.6.4's third condition: "Every expression and contained
+		// sequence constructor in a contained xsl:param element (the
+		// construct that provides the default value of the parameter) is
+		// motionless."
+		for _, c := range el.ChildElements() {
+			if !isXSL(c, "param") {
+				continue
+			}
+			if p, known, _ := ruleParamDefault(c, sets, funcs, nil); known && p.sweep != sweepMotionless {
+				err = fmt.Errorf(
+					"the default of parameter %q of the template rule matching %q "+
+						"in a streamable mode is %v, but §6.6.4 requires it to be "+
+						"motionless, so it is not guaranteed-streamable (XTSE3430)",
+					c.AttrValue("name"), el.AttrValue("match"), p.sweep)
+				return false
+			}
+		}
 		p, known := analyzeSequenceConstructor(el, postureStriding, sets, funcs)
 		if !known || (bodyCallsCurrentGroup(el) && !hasIndependentGroupRefusal(el)) {
 			return true
@@ -264,6 +281,22 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 		return true
 	})
 	return err
+}
+
+// ruleParamDefault assesses the default of a template rule's xsl:param,
+// which is evaluated with the rule's own focus: striding, by §19.6.
+func ruleParamDefault(
+	param *xdm.Node, sets map[xdm.QName][]*xdm.Node, funcs map[funcKey]*streamFunc, trust *declTrust,
+) (props, bool, bool) {
+	a := &instrAnalyzer{ctxPosture: postureStriding, ctxAllowsChildren: true,
+		known: true, attrSets: sets, funcs: funcs, trust: trust}
+	var p props
+	if s := param.Attr("", "select"); s != nil {
+		p = a.exprProps(s.Value(), param)
+	} else {
+		p = a.body(param)
+	}
+	return p, a.known, a.unverified
 }
 
 // hasIndependentGroupRefusal reports whether some xsl:for-each-group in the

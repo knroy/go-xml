@@ -278,15 +278,7 @@ func (t *declTrust) ruleOK(rule *xdm.Node) bool {
 		if !isXSL(c, "param") {
 			continue
 		}
-		a := &instrAnalyzer{ctxPosture: postureStriding, ctxAllowsChildren: true,
-			known: true, attrSets: t.sets, funcs: t.funcs, trust: t}
-		var p props
-		if s := c.Attr("", "select"); s != nil {
-			p = a.exprProps(s.Value(), c)
-		} else {
-			p = a.body(c)
-		}
-		if !a.known || a.unverified || p.sweep != sweepMotionless {
+		if p, known, unverified := ruleParamDefault(c, t.sets, t.funcs, t); !known || unverified || p.sweep != sweepMotionless {
 			return false
 		}
 	}
