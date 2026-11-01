@@ -985,6 +985,38 @@ func frozenLocals(c *Context) *Context {
 	return &n
 }
 
+// capturedFor is frozenLocals for a closure that reads only the variables keep
+// accepts: a scope that binds one name and is not accepted is left out of the
+// chain, and a host stack of locals is cut down to the accepted names. Scopes
+// binding several names, lazily or by the Vars map stay whole.
+func capturedFor(c *Context, keep func(uri, local string) bool, leaf bool) *Context {
+	if c == nil {
+		return nil
+	}
+	if b := c.bind; b != nil && b.locals != nil {
+		n := *c
+		n.bind = &varBinding{locals: b.locals.FrozenOnly(keep)}
+		return &n
+	}
+	p := capturedFor(c.Parent, keep, false)
+	if b := c.bind; b != nil && b.names == nil && b.lazy == nil && b.local != "" &&
+		len(c.Vars) == 0 && !keep(b.uri, b.local) {
+		if !leaf {
+			return p
+		}
+		// The innermost scope also carries the environment the body runs in.
+		n := *c
+		n.bind, n.Parent = nil, p
+		return &n
+	}
+	if p == c.Parent {
+		return c
+	}
+	n := *c
+	n.Parent = p
+	return &n
+}
+
 // varKey is a variable's expanded name as a map key that needs no Clark
 // string built for a lookup.
 type varKey struct{ uri, local string }

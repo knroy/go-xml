@@ -310,7 +310,34 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	// has no context item, position or size, so "." inside one is XPDY0002
 	// even where the expression that wrote it had a focus. Variables are
 	// captured; the focus is deliberately dropped.
-	noFocus := *frozenLocals(ctx)
+	//
+	// Only the variables the body reads are kept, so a closure does not
+	// retain a large value it never mentions. Any binding in a namespace is
+	// kept: a host's hidden variables, which a function called from the body
+	// may read, are named there.
+	cv := e.needs.Load()
+	if cv == nil {
+		names, ok := closureNeeds(e)
+		cv = &closureVars{names: names, all: !ok}
+		e.needs.Store(cv)
+	}
+	var base *Context
+	if cv.all {
+		base = frozenLocals(ctx)
+	} else {
+		base = capturedFor(ctx, func(uri, local string) bool {
+			if uri != "" {
+				return true
+			}
+			for _, q := range cv.names {
+				if q.URI == "" && q.Local == local {
+					return true
+				}
+			}
+			return false
+		}, true)
+	}
+	noFocus := *base
 	noFocus.Item, noFocus.Position, noFocus.Size = nil, 0, 0
 	captured := &noFocus
 	item := native(&xdm.FunctionItem{

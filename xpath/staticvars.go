@@ -153,5 +153,28 @@ func walkFreeVars(e Expr, in bound, out *[]xdm.QName, seen map[string]bool) {
 	case *StringConcat:
 		walkFreeVars(v.Left, in, out, seen)
 		walkFreeVars(v.Right, in, out, seen)
+	case *dynamicQName:
+		walkFreeVars(v.arg, in, out, seen)
+	case *Literal, *ContextItem, *NamedFunctionRef, *ArgumentPlaceholder:
+	default:
+		// A node this walk does not know may read any variable.
+		seen[unknownExpr] = true
 	}
+}
+
+// unknownExpr is the key walkFreeVars sets in seen when it meets a node it
+// cannot analyse, which closureNeeds reads as "capture everything".
+const unknownExpr = "\x00unknown"
+
+// closureNeeds is the variables an inline function's body reads from the
+// scope it was written in, or ok=false when the body holds a node the walk
+// does not know and the closure must capture the whole scope.
+func closureNeeds(e *InlineFunctionExpr) (names []xdm.QName, ok bool) {
+	seen := map[string]bool{}
+	inner := bound(nil)
+	for _, p := range e.Params {
+		inner = append(inner, p.Name)
+	}
+	walkFreeVars(e.Body, inner, &names, seen)
+	return names, !seen[unknownExpr]
 }
