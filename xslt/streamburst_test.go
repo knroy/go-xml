@@ -272,6 +272,9 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"copy-of filtered", `<xsl:copy-of select="copy-of(doc/rec)[x = 'r']"/>`, recs, true, false},
 		{"sequence data", `<xsl:sequence select="doc/rec/x/data()"/>`, recs, true, false},
 		{"for", `<xsl:value-of select="for $v in doc/rec/@v/data() return $v * 2"/>`, recs, true, false},
+		{"path from the items", `<xsl:value-of select="tail(doc/rec)/@v"/>`, recs, true, false},
+		{"path from copies", `<xsl:value-of select="count(copy-of(doc/rec)/x)"/>`, recs, true, false},
+		{"unordered", `<xsl:value-of select="sum(unordered(doc/rec/@v))"/>`, recs, true, false},
 		{"malformed tail", `<xsl:value-of select="doc/rec/@v"/>`, tail, true, true},
 		// refused
 		{"distinct-values", `<xsl:value-of select="count(distinct-values(doc/rec/@k))"/>`, recs, false, false},
@@ -279,6 +282,7 @@ func TestBurstSelectsMatchTree(t *testing.T) {
 		{"last()", `<xsl:value-of select="(doc/rec/@k)[last()]"/>`, recs, false, false},
 		{"union", `<xsl:value-of select="count(doc/rec union ())"/>`, recs, false, false},
 		{"two paths", `<xsl:value-of select="sum(doc/rec/@v) div count(doc/rec)"/>`, recs, false, false},
+		{"path from copies the path made", `<xsl:value-of select="(doc/rec/copy-of())/x"/>`, recs, false, false},
 		{"let", `<xsl:value-of select="let $r := doc/rec return count($r)"/>`, recs, false, false},
 		{"computed separator", `<xsl:value-of select="doc/rec/@k" separator="{count(doc/rec)}"/>`, recs, false, false},
 	} {

@@ -254,7 +254,7 @@ var (
 		"translate": true, "tokenize": true, "round": true, "floor": true,
 		"ceiling": true, "abs": true, "round-half-to-even": true,
 		"format-number": true, "subsequence": true, "insert-before": true,
-		"remove": true, "index-of": true, "name": true, "local-name": true,
+		"remove": true, "index-of": true, "unordered": true, "name": true, "local-name": true,
 		"namespace-uri": true, "node-name": true,
 	}
 	burstOps = map[string]bool{
@@ -325,6 +325,14 @@ func (s *burstSplit) walk(e xpath.Expr, put func(xpath.Expr)) bool {
 	case *xpath.SimpleMap:
 		return burstSafe(x.Right, false) &&
 			s.slot(x.Left, func(y xpath.Expr) { x.Left = y })
+	case *xpath.PathExpr:
+		// Steps from the items, as a record path's own: the result is put
+		// in document order, which across bursts is the order they were
+		// made in -- the tree's, unless the path made copies of its own
+		// while the bursts were read, earlier than the tree would have.
+		return !x.Root && len(x.Steps) > 1 && pathTail(x.Steps[1:]) &&
+			s.slot(x.Steps[0], func(y xpath.Expr) { x.Steps[0] = y }) &&
+			(s.items == nil || !makesCopies(s.items))
 	case *xpath.QuantifiedExpr:
 		return s.bindings(x.Bindings) && burstSafe(x.Test, false) && focusFree(x.Test)
 	case *xpath.ForExpr:
@@ -398,14 +406,21 @@ func recordPath(e xpath.Expr) []xdm.QName {
 		path = append(path, xdm.QName{URI: nt.Name.URI, Local: nt.Name.Local})
 	}
 tail:
-	if len(path) == 0 {
+	if len(path) == 0 || !pathTail(steps[k:]) {
 		return nil
 	}
-	for j := k; j < len(steps); j++ {
-		st, ok := steps[j].(*xpath.Step)
+	return path
+}
+
+// pathTail reports whether steps stay within the nodes they start from:
+// down or to attributes, with any predicates burstSafe allows, and perhaps
+// one last expression that makes values (tailValue).
+func pathTail(steps []xpath.Expr) bool {
+	for j, s := range steps {
+		st, ok := s.(*xpath.Step)
 		if !ok {
-			if j != len(steps)-1 || !tailValue(steps[j]) {
-				return nil
+			if j != len(steps)-1 || !tailValue(s) {
+				return false
 			}
 			continue
 		}
@@ -413,13 +428,23 @@ tail:
 		case xpath.AxisChild, xpath.AxisAttribute, xpath.AxisSelf,
 			xpath.AxisDescendant, xpath.AxisDescendantOrSelf:
 		default:
-			return nil
+			return false
 		}
 		if !allBurstSafe(st.Predicates, false) {
-			return nil
+			return false
 		}
 	}
-	return path
+	return true
+}
+
+// makesCopies reports whether the record path p ends in copy-of().
+func makesCopies(p xpath.Expr) bool {
+	pe, ok := p.(*xpath.PathExpr)
+	if !ok {
+		return false
+	}
+	f, ok := firstOf(pe.Steps[len(pe.Steps)-1:]).(*xpath.FuncCall)
+	return ok && f.Name.URI == fnNS && f.Name.Local == "copy-of"
 }
 
 func firstOf(es []xpath.Expr) xpath.Expr {
