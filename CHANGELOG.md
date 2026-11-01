@@ -18,6 +18,13 @@ is byte-identical; new API is additive.
 | `xslt.FileResolver.MaxNodes`; `MaxBytes` reaches the parser | Raising `MaxBytes` past 64 MB had no effect on `fn:doc`, the parser kept its own default. Both limits now apply to what the resolver parses. | [`80f999f`][80f999f] |
 | `xdmbuild.InPlaceDocument` | A builder rooted at a new document node, for content built straight into it. | [`302c932`][302c932] |
 
+### Changed — streamability analysis
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| Six constructs escaped the §19.8 check and compiled | A nested `xsl:map-entry`, extension instructions (their `xsl:fallback`), `xsl:result-document` serialization AVTs, boolean pattern predicates, `mode="#all"` rules and rule `xsl:param` defaults are now judged: such stylesheets get XTSE3430. | [`b5703be`][b5703be], [`8c391d8`][8c391d8], [`ff0ed5e`][ff0ed5e], [`ca1b029`][ca1b029], [`268acce`][268acce], [`7920635`][7920635] |
+| A verdict could rest on a declaration nobody checked | Verdicts carry an unverified bit for streamable functions, attribute sets, accumulators, modes and other modules; streamed execution requires it clear. No refusal changes. | [`b12ecbf`][b12ecbf], [`e94cdf9`][e94cdf9] |
+
 ### Changed — memory
 
 | Change | Problem → solution | Commit |
@@ -1869,3 +1876,11 @@ here so every entry in this file sits under a release.
 [b4cd614]: https://github.com/knroy/go-xml/commit/b4cd614
 [907c674]: https://github.com/knroy/go-xml/commit/907c674
 [c7952b0]: https://github.com/knroy/go-xml/commit/c7952b0
+[b5703be]: https://github.com/knroy/go-xml/commit/b5703be
+[8c391d8]: https://github.com/knroy/go-xml/commit/8c391d8
+[ff0ed5e]: https://github.com/knroy/go-xml/commit/ff0ed5e
+[ca1b029]: https://github.com/knroy/go-xml/commit/ca1b029
+[268acce]: https://github.com/knroy/go-xml/commit/268acce
+[7920635]: https://github.com/knroy/go-xml/commit/7920635
+[b12ecbf]: https://github.com/knroy/go-xml/commit/b12ecbf
+[e94cdf9]: https://github.com/knroy/go-xml/commit/e94cdf9

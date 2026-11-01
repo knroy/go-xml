@@ -182,7 +182,8 @@ Measured on branches in 2026-11 and not adopted, each with the reason:
 Since v2.2.0 an `xsl:source-document streamable="yes"` whose body is one
 `xsl:for-each` or `xsl:iterate` (optionally inside constant literal result
 elements) over a child path of plain names, with non-positional predicates on
-the last step only, and a body the gate recognises, runs record by record
+the last step only, and a body the gate recognises with a known and verified
+§19.8 verdict, runs record by record
 through `xdm.ParseBursts`: a 1 GB file totalled by `xsl:iterate` peaks at
 27 MB RSS against 3.7 GB, at about 2× the CPU. Everything else builds the tree,
 as before. In the W3C suite 9 of the 2,599 streamable source documents take the
@@ -246,7 +247,13 @@ reports whether it *modelled* every construct it met separately from what it
 concluded, and an error is raised only on a fully-modelled verdict; anything
 else is "no opinion". A missing rule leaves a case failing, while a wrong rule
 would reject a valid stylesheet, and it is the second that the whole-corpus
-scan measures at zero.
+scan measures at zero. Since v2.2.0 a verdict also carries an *unverified* bit:
+it is set when the verdict rests on a streamable function, attribute set,
+accumulator or mode whose own check gave up, or on a declaration in another
+module. Refusals ignore the bit, so no XTSE3430 result moves; streamed execution
+requires it clear. In the W3C streaming stylesheets the static checks accept,
+58 known, grounded containers in 41 files are unverified (modes 28, functions
+10, cross-module 10, accumulators 7, other 3).
 
 **All three are measured, and each known fix costs more than it gains.**
 Modelling `||` refuses `si-fork-902`/`-952` and costs 18 `sx-union` cases
@@ -312,7 +319,10 @@ None is a wrong verdict.
   other arity is unmodelled.
 - `*xpath.LookupExpr` (`?`) is modelled in `expr()` (§19.8.8.18), but the
   inline-function walker `bodyMentionsStreamingParam` still lacks it, along
-  with `*xpath.StringConcat` and `*xpath.ArgumentPlaceholder`. The
+  with `*xpath.StringConcat` and `*xpath.ArgumentPlaceholder`. Since v2.2.0 the
+  walker runs on every inline function in a streamable construct (it looks for
+  `current()`), so such a body is unknown anywhere, not only in a stylesheet
+  function. The
   dispatcher half of `||` is measured and reverted; see
   [*The `||` operator*](conformance-gaps.md#the--operator--2-cases-gained-18-lost).
 - `functionParamTypes` splits a declared function type by hand: the comma in
@@ -1337,6 +1347,11 @@ kept because a negative result that was believed for two revisions is more
 dangerous than an open bug, and deleting one invites the same probe again.
 
 ### "An inline function declaration is grounded" — only if it mentions nothing streamed
+
+Since v2.2.0 two more closures are unknown rather than grounded: one over a
+quantified range variable bound to streamed nodes, and one calling `current()`
+or `current#0`. Read literally, §19.8.8.16 grounds both; withholding the verdict
+keeps execution from trusting it without refusing anything.
 
 Three §19.8.8 expression rules were proposed with code to implement them, and
 reading the Recommendation first changed two of them.
