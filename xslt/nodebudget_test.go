@@ -380,3 +380,27 @@ func TestInternBindingsHitDoesNotAllocate(t *testing.T) {
 		t.Errorf("an interning hit allocates %v times, want 0", n)
 	}
 }
+
+// xsl:copy-of of a document node was the one copy the node budget never saw:
+// the node branch charges, the document branch did not, so copy-of select="/"
+// of a 2.1 million node document exited 0 while shallow-copy of it was refused.
+func TestCopyOfDocumentNodeIsChargedAgainstMaxNodes(t *testing.T) {
+	sd, err := xdm.ParseString(`<xsl:stylesheet version="3.0" `+
+		`xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`+
+		`<xsl:template match="/"><xsl:copy-of select="."/></xsl:template>`+
+		`</xsl:stylesheet>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := Compile(sd.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := xdm.ParseString("<d>"+strings.Repeat(`<a x="1">t</a>`, 700000)+"</d>",
+		xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.Transform(context.Background(), doc.Root, TransformOptions{})
+	wantNodeRefusal(t, err)
+}

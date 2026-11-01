@@ -220,6 +220,12 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// destinations that keep a bare sequence — a variable
 				// declared as="document-node()*", a function body — must see
 				// the wrapper itself.
+				// Charged before the copy is made, as the node branch below
+				// does; copy-of of a 100 MB document copied 5.7M nodes
+				// uncharged while shallow-copy of it was refused.
+				if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
+					return err
+				}
 				c := copyDocumentNode(v)
 				if i.noNamespaces {
 					// §11.9.2's namespace rules are about the elements being
