@@ -2,6 +2,7 @@ package xdm
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	xml "github.com/knroy/go-xml/v2/internal/xmltok"
@@ -191,11 +192,13 @@ func validateStartElement(t xml.StartElement, ns *nsScope, xml11 bool) error {
 	// XML checks raw names; Namespaces in XML strengthens that to expanded names.
 	// Keying on {URI, local} makes p:a and q:a collide when p and q bind alike.
 	// A tag's few attributes are checked by a scan of those before them, which
-	// allocates nothing; past a handful the keys move into a map, so that a tag
+	// allocates nothing; a larger tag is sorted (checkManyAttrs), so that a tag
 	// with thousands of attributes is not checked in quadratic time.
+	if len(t.Attr) > smallTag {
+		return checkManyAttrs(t.Attr, &scope)
+	}
 	var small [smallTag]expandedName
 	seen := small[:0]
-	var many map[expandedName]bool
 	for _, a := range t.Attr {
 		if _, declaration := namespaceDecl(a); declaration {
 			continue
@@ -208,28 +211,67 @@ func validateStartElement(t xml.StartElement, ns *nsScope, xml11 bool) error {
 			uri, _ = scope.lookup(a.Name.Space)
 		}
 		k := expandedName{uri, a.Name.Local}
-		dup := many[k]
-		for _, s := range seen {
-			dup = dup || s == k
-		}
-		if dup {
+		if slices.Contains(seen, k) {
 			return fmt.Errorf("parse XML: duplicate attribute {%s}%s", uri, a.Name.Local)
 		}
-		switch {
-		case many != nil:
-			many[k] = true
-		case len(seen) < len(small):
-			seen = append(seen, k)
-		default:
-			many = make(map[expandedName]bool, max(2*len(small), len(t.Attr)))
-			for _, s := range seen {
-				many[s] = true
-			}
-			many[k] = true
-			seen = nil
-		}
+		seen = append(seen, k)
 	}
 	return nil
+}
+
+// checkManyAttrs is the attribute check of a tag with more than smallTag
+// attributes. It sorts the attributes by expanded name instead of keeping them
+// in a map, which for the 800,000 attributes of a 10 MiB tag is 6 MB rather
+// than 50. It reports what the scan in order would: the first attribute, in
+// document order, that repeats an earlier one, unless an unbound prefix comes
+// before it.
+func checkManyAttrs(attrs []xml.Attr, scope *tagScope) error {
+	var uris []string // by attribute, allocated at the first prefixed one
+	idx := make([]int, 0, len(attrs))
+	var unbound error
+	for i, a := range attrs {
+		if _, declaration := namespaceDecl(a); declaration {
+			continue
+		}
+		if unbound = requireBoundPrefix(a.Name.Space, scope); unbound != nil {
+			break // a duplicate before this one is reported first, one after is not
+		}
+		if a.Name.Space != "" {
+			if uris == nil {
+				uris = make([]string, len(attrs))
+			}
+			uris[i], _ = scope.lookup(a.Name.Space)
+		}
+		idx = append(idx, i)
+	}
+	uri := func(i int) string {
+		if uris == nil {
+			return ""
+		}
+		return uris[i]
+	}
+	// Equal names sort in document order, so each repeat follows the
+	// attribute it repeats.
+	slices.SortFunc(idx, func(x, y int) int {
+		if c := strings.Compare(uri(x), uri(y)); c != 0 {
+			return c
+		}
+		if c := strings.Compare(attrs[x].Name.Local, attrs[y].Name.Local); c != 0 {
+			return c
+		}
+		return x - y
+	})
+	dup := -1
+	for j := 1; j < len(idx); j++ {
+		x, y := idx[j-1], idx[j]
+		if uri(x) == uri(y) && attrs[x].Name.Local == attrs[y].Name.Local && (dup < 0 || y < dup) {
+			dup = y
+		}
+	}
+	if dup >= 0 {
+		return fmt.Errorf("parse XML: duplicate attribute {%s}%s", uri(dup), attrs[dup].Name.Local)
+	}
+	return unbound
 }
 
 // expandedName is an attribute's {namespace URI, local name}.
