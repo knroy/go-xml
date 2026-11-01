@@ -241,7 +241,7 @@ type burstSplit struct {
 // would make streaming dearer than the tree it replaces. The path's items
 // must be folded (count, sum, min, max), atomized by the expression that
 // consumes them (burstAtomizers; xsl:value-of, valueOf, when the path is
-// its whole select), or atomic values already. Copies made by a last
+// its whole select and ends in attributes), or atomic values already. Copies made by a last
 // copy-of() are refused as well: kept to the end, each one a tree of its
 // own, they peaked above the tree path's RSS (4.2 GB against 4.0 GB, 100 MB).
 func splitSelect(e xpath.Expr, valueOf bool) *burstSplit {
@@ -253,13 +253,26 @@ func splitSelect(e xpath.Expr, valueOf bool) *burstSplit {
 	if !s.walk(e, func(x xpath.Expr) { root = x }) || s.items == nil {
 		return nil
 	}
-	if valueOf && root == s.items {
+	// xsl:value-of joins adjacent text nodes with no separator, so only
+	// attributes are as good as their values to it.
+	if valueOf && root == s.items && endsInAttribute(s.items) {
 		s.atomize = true
 	}
 	if s.call == nil && !s.atomize && !endsInValue(s.items) {
 		return nil
 	}
 	return s
+}
+
+// endsInAttribute reports whether the record path p ends in a step on the
+// attribute axis.
+func endsInAttribute(p xpath.Expr) bool {
+	var last xpath.Expr = p
+	if pe, ok := p.(*xpath.PathExpr); ok {
+		last = pe.Steps[len(pe.Steps)-1]
+	}
+	st, ok := last.(*xpath.Step)
+	return ok && st.Axis == xpath.AxisAttribute
 }
 
 // endsInValue reports whether the record path p ends in an expression
