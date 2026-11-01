@@ -129,9 +129,9 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 		total = newIdx[n]
 	}
 	last, _ := chunkOf(total - 1)
-	c.chunks = make([][]Node, last+1)
-	for k := range c.chunks {
-		c.chunks[k] = make([]Node, chunkLen(k))
+	c.chunks = make([][]Node, 0, last+1)
+	for len(c.chunks) <= last {
+		c.chunks = appendChunk(c.chunks, len(c.chunks), last)
 	}
 	c.n = total
 
