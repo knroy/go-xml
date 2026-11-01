@@ -16,6 +16,8 @@ Three new exported functions make this a minor release.
 |---|---|---|
 | `xpath.SerializeJSONTo`, `xpath.SerializeAdaptiveTo` | The json and adaptive methods written to an `io.Writer` instead of returned as a string. | [`599b2f9`][599b2f9] |
 | `xdm.Node.AddNamespaces` | Sets several namespace bindings on an element in one call. | [`b42f04a`][b42f04a] |
+| `xdm.Node.Index`, `Node.SubtreeEnd`, `Tree.Len`, `Tree.NodeAt` | A node's dense, document-order position in its tree (attributes included, namespace nodes -1), stable once the node exists; size a table with `SubtreeEnd() - Index()` and look nodes up by position. | [`b37796b`][b37796b] |
+| `xdm.Node.InScopeNamespaceBindings` | Iterates an element's in-scope prefixes and URIs without making a namespace node for each. | [`73249e2`][73249e2] |
 | `xdm.ArrayItem.AppendMembers` | Appends an array's members to a slice without an intermediate copy. | [`59ac569`][59ac569] |
 | `xpath.CompileBounded`, `xpath.MaxRegexpProgram` | `regexp.Compile` that refuses a program over 100,000 instructions; used by XPath and XSD patterns. | [`c1c2bb9`][c1c2bb9] |
 | `xpath.Env.MaxDigits`, `xpath.MaxDigits` | Bounds the digits of an `xs:integer` or `xs:decimal` cast or arithmetic result; 0 is 10^6, negative is none. | [`8577906`][8577906] |
@@ -77,6 +79,10 @@ Three new exported functions make this a minor release.
 | Dynamic calls, FLWOR tuples and window clauses made a scope per variable; closures kept their whole scope | One scope per binding set, and a closure keeps only what its body reads: `$f($i)` over 1M 2,673 → 1,617 MB. | [`5951f24`][5951f24], [`a4f316d`][a4f316d], [`b5aaf06`][b5aaf06] |
 | The function result memo kept each key string | It keeps a 128-bit SHA-256 hash: DocBook `table-cals.049` live heap 359 → 172 MB, peak 1,150 → 533 MB. | [`15273c7`][15273c7] |
 | `fn:doc` read the file whole and copied it; `replace` copied and over-charged a non-matching input | `fn:doc` parses as it reads (16 MB file 82 → 29 MB); `replace` returns early with no match (64 MB: 256 → 0 MB). | [`a6f2eaa`][a6f2eaa], [`6bab64a`][6bab64a] |
+| Every c14n call allocated an 80 KiB buffer, and `Bytes` grew its result by doubling | The buffer is pooled (101 `Digest` calls on a tiny document 8.4 MB → 121 KB); `Bytes` and package-made node sets write into a buffer sized from the tree (about 1.1× the output, from 2.1–3.6×). | [`127b2f2`][127b2f2], [`5d6454a`][5d6454a] |
+| A tag with many unique attribute names grew its slices, name table and duplicate map step by step | They are sized in one step past 256 attributes: 10 MiB of unique attributes 99.5× → 37.6× allocated. Small documents are unchanged. | [`22d32ac`][22d32ac] |
+| Each namespace node rebuilt its element's whole scope to find its place; accumulators kept two maps per node | The slot is passed in (c14n over an XPath node set at 1 MiB 356 → 299 MB); accumulator values sit in slices indexed by `Node.Index` (about 27% less per node). | [`73249e2`][73249e2], [`b331aa1`][b331aa1] |
+| A predicate step heap-allocated its comparison, and an ancestor step grew its result one node at a time | Both are cut: `ancestor-or-self::*[@Id='x']` per node 384 B / 9.75 allocations → 304 B / 7. | [`567aa1a`][567aa1a] |
 | `xsl:sort`, `xsl:iterate`, `xsl:result-document`, built-in shallow-copy, namespace scopes and `on-empty` allocated per item | Smaller sort values in one array, parameter slices, set lookups, no focus copy without rules, frame walks, a lazy leaf walk. `result-document` is linear. | [`6ea432f`][6ea432f], [`a3d8ef6`][a3d8ef6], [`951f0d9`][951f0d9], [`f650a19`][f650a19], [`4b0b564`][4b0b564], [`469c95e`][469c95e] |
 | DTD defaults were scanned per element; XSD key scopes rebuilt their entries per level | Defaults indexed by element (188 → 5 MB); scopes extend in place (960 levels 84 → 1 MB). | [`6293e98`][6293e98], [`996b7db`][996b7db] |
 | Large regex programs were cached; `parse-json` objects and `serialize` refusals cost per key and item | Programs over 4,096 instructions are not cached; objects use `MapBuilder` (about 3.3× less); `serialize` stops at the first refusal. | [`331bc96`][331bc96], [`98811f6`][98811f6], [`6317d49`][6317d49] |
@@ -1789,3 +1795,10 @@ here so every entry in this file sits under a release.
 [331bc96]: https://github.com/knroy/go-xml/commit/331bc96
 [98811f6]: https://github.com/knroy/go-xml/commit/98811f6
 [6317d49]: https://github.com/knroy/go-xml/commit/6317d49
+[b37796b]: https://github.com/knroy/go-xml/commit/b37796b
+[73249e2]: https://github.com/knroy/go-xml/commit/73249e2
+[127b2f2]: https://github.com/knroy/go-xml/commit/127b2f2
+[5d6454a]: https://github.com/knroy/go-xml/commit/5d6454a
+[22d32ac]: https://github.com/knroy/go-xml/commit/22d32ac
+[b331aa1]: https://github.com/knroy/go-xml/commit/b331aa1
+[567aa1a]: https://github.com/knroy/go-xml/commit/567aa1a

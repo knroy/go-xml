@@ -131,8 +131,14 @@ Found by the third memory audit (2026-11-01) and not fixed, each with the reason
   (`withSel`, `hostWithCurrent`, the leaf-hook copy), and built-in shallow-copy
   copies a document-level result twice; removing that copy changes an error
   case into output.
-- **Accumulators keep two per-node maps.** Node-indexed slices need an ordinal
-  `xdm.Node` does not export.
+- **A single text value of a few to tens of MB allocates up to about 1.9× its
+  size while parsing** (10 MiB: 1.87×; the tree keeps 1.09×; 60 MiB: 1.13×).
+  The decoder's buffer grows in steps of eight. Sizing it to the input left
+  in one step reached 1.08×, but a document of eight 3 MiB values went from
+  1.33× to 2.04×, so it was reverted.
+- **`c14n.BytesNodeSet` on a caller's own `NodeSet` still costs about 2.1× its
+  output.** Sizing it would call `Contains` twice per node, which the API
+  promises not to do; the package's `Subtree` and `ExcludeSubtree` are sized.
 - **XQuery inline functions capture their whole scope.** The XPath and XSLT
   closure (`InlineFunctionExpr`) keeps only what its body reads;
   `xquery/inline.go` has its own implementation.

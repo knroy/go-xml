@@ -704,7 +704,11 @@ evaluation's. A nested evaluation therefore never resets or raises a budget.
 `WithStaticBaseURI` and `WithStaticHost` set the defaults an expression compiled
 without them uses (a one-shot `xpath.Eval` compiles at the context's version).
 A host whose expressions all carry one version or static host sets it once on
-the context, so evaluating them does not copy the context to install it.
+the context, so evaluating them does not copy the context to install it. This
+matters for a host that reuses one context: an expression compiled as XPath 3.1
+evaluated against `NewContext`'s 2.0 default copies the 96-byte context on every
+call, about a quarter of a simple filter's allocation per node, until the host
+calls `ctx = ctx.WithVersion(xpath.XPath31)` once.
 `StaticNamespaces()` is installed only for an expression that calls or
 references `fn:format-date`, `fn:format-dateTime`, `fn:format-time` or
 `fn:function-lookup`; any other expression sees its caller's (nil at the top
