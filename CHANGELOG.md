@@ -13,6 +13,7 @@ is byte-identical; new API is additive.
 
 | Change | What it does | Commit |
 |---|---|---|
+| Streamed aggregates over records | A lone `value-of`/`copy-of`/`sequence` over one record path streams too; `count`/`sum`/`min`/`max` fold per record: 1 GB summed in 33 MB RSS. Any error re-runs on the tree. | [`457aa03`][457aa03], [`9f3d815`][9f3d815], [`48b1a38`][48b1a38], [`3157566`][3157566], [`4944511`][4944511] |
 | Streamed `xsl:source-document`, first stage | A streamable `xsl:for-each`/`xsl:iterate` over a child path reads one record at a time: 1 GB totalled at 27 MB RSS, not 3.7 GB, at about 2× CPU. Other shapes build the tree. | [`3f185fe`][3f185fe], [`27757b3`][27757b3] |
 | `xdm.ParseBursts` | Parses a document handing over one selected element at a time in a tree of its own, with limits counted over the whole document; memory stays at the spine plus one record. | [`b4b6052`][b4b6052], [`80f999f`][80f999f] |
 | `xslt.FileResolver.MaxNodes`; `MaxBytes` reaches the parser | Raising `MaxBytes` past 64 MB had no effect on `fn:doc`, the parser kept its own default. Both limits now apply to what the resolver parses. | [`80f999f`][80f999f] |
@@ -1884,3 +1885,8 @@ here so every entry in this file sits under a release.
 [7920635]: https://github.com/knroy/go-xml/commit/7920635
 [b12ecbf]: https://github.com/knroy/go-xml/commit/b12ecbf
 [e94cdf9]: https://github.com/knroy/go-xml/commit/e94cdf9
+[457aa03]: https://github.com/knroy/go-xml/commit/457aa03
+[9f3d815]: https://github.com/knroy/go-xml/commit/9f3d815
+[48b1a38]: https://github.com/knroy/go-xml/commit/48b1a38
+[3157566]: https://github.com/knroy/go-xml/commit/3157566
+[4944511]: https://github.com/knroy/go-xml/commit/4944511

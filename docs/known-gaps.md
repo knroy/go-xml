@@ -177,7 +177,7 @@ Measured on branches in 2026-11 and not adopted, each with the reason:
   Namespace nodes are held weakly since v2.2.0; while a tree's table is not
   empty, every GC cycle sweeps it.
 
-### Streamed execution covers one shape (XSLT 3.0, performance)
+### Streamed execution covers two shapes (XSLT 3.0, performance)
 
 Since v2.2.0 an `xsl:source-document streamable="yes"` whose body is one
 `xsl:for-each` or `xsl:iterate` (optionally inside constant literal result
@@ -186,13 +186,34 @@ the last step only, and a body the gate recognises with a known and verified
 §19.8 verdict, runs record by record
 through `xdm.ParseBursts`: a 1 GB file totalled by `xsl:iterate` peaks at
 27 MB RSS against 3.7 GB, at about 2× the CPU. Everything else builds the tree,
-as before. In the W3C suite 9 of the 2,599 streamable source documents take the
-burst path; the commonest refusals are a body of `xsl:value-of` (840),
-`xsl:copy-of` (344) or `xsl:apply-templates` (175). Also:
+as before.
+
+The second shape is a body that is one `xsl:value-of`, `xsl:copy-of` or
+`xsl:sequence` (again optionally inside constant literal result elements) whose
+select reads one record path, such as `sum(doc/rec/@v)` or
+`count(doc/rec[@k = 'x'])`. The path runs per record; the rest of the select
+runs once over the values. `count`, `sum`, `min` and `max` fold per record and
+stay flat: over a 1 GB file of 25.9M records, `count` peaks at 3.4 MB heap /
+25 MB RSS and `sum` at 11 MB / 33 MB, where tree mode needs 773–1,284 MB at
+100 MB. Other consumers (`avg`, comparisons, `string-join`, a bare `value-of`
+of attributes) keep one atomic value per item, about half the tree's memory,
+still growing with the input. A select that would keep the records' nodes or
+copies (`copy-of(doc/rec)`, filters returning nodes, `head`/`tail` passed on)
+is refused and runs on the tree, because a kept record costs more there than in
+a whole tree (945 B against 208 B). Also refused: `distinct-values`, `reverse`,
+`sort`, `last()`, union/intersect/except, `let`, user functions, wildcard steps.
+
+In the W3C XSLT 3.0 run 364 cases take the burst path (9 before the second
+shape). Of the 786 single-instruction bodies over one record path with a known
+and verified verdict, 294 are admitted (261 bounded reducers, 33 pipelined).
+Also:
 
 - **The result is still built in memory**, so a large filtered copy grows with
   its output and stops at the result-node cap.
-- **Error order can differ from tree mode.** Tree mode reads the whole file,
+- **Error order can differ from tree mode, for the loop shape.** (The single-instruction
+  shape re-runs on the tree after any error, so its errors are the tree's; the
+  cost is a second read of the document, and the 1 GiB string budget charges the
+  strings both attempts built.) Tree mode reads the whole file,
   then evaluates the whole `select`, before the body runs; bursts do each per
   record. So a dynamic error in the body is raised before a malformed tail, a
   `MaxNodes`/`MaxBytes` refusal or an encoding error later in the file, and
@@ -237,7 +258,7 @@ and §18.1's grounded demand at both the sites it names.
 All three fail in the same direction: the suite expects `XTSE3430` — *this
 construct is not guaranteed streamable* — and the transform succeeds instead.
 The engine builds a tree for these (it reads in bursts only the narrow shape
-described under *Streamed execution covers one shape*), so it produces the **right
+described under *Streamed execution covers two shapes*), so it produces the **right
 answer** for all three; what it does not produce is the static refusal §19.8
 requires a streaming processor to make before running anything. These are not
 wrong answers; they are a static analysis that is not complete.
