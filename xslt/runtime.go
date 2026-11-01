@@ -217,6 +217,11 @@ type transformState struct {
 	// an accumulator's value at the copy should be. It is a map on the
 	// runtime rather than a field on the node so that copying leaves the
 	// tree itself untouched.
+	//
+	// It is nil when no package of the stylesheet declares an accumulator:
+	// accumulator-before and -after then fail XTDE3340 before they could
+	// consult it, and every entry would pin a copy and its original for the
+	// rest of the transform. See newAccumOrigin.
 	accumOrigin map[*xdm.Node]*xdm.Node
 
 	// treeAccums records, per document root, which accumulators 18.2.2 makes
@@ -765,7 +770,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 
 			accumValues:   map[accumCacheKey]*accumulatorValues{},
 			accumBuilding: map[accumCacheKey]*accumulatorValues{},
-			accumOrigin:   map[*xdm.Node]*xdm.Node{},
+			accumOrigin:   newAccumOrigin(s),
 			treeAccums:    map[*xdm.Node]*modeAccumulators{},
 			streamedTrees: map[*xdm.Node]bool{},
 			funcResults:   map[callHash]xdm.Sequence{},
