@@ -941,10 +941,13 @@ func (r *textRun) add(parent *Node, b []byte, dec *xml.Decoder) {
 		// A run that starts with anything but white space can be neither
 		// stripped nor shared, so it goes straight to the store.
 		if !onlySpace(b) {
-			if len(b) >= textOwnFrom && cap(b)-len(b) <= len(b)/8 {
-				// Long enough for a block of its own, and not much larger
-				// than its value: the decoder's buffer becomes the block,
-				// rather than being copied into one.
+			if len(b) >= textOwnFrom && cap(b)-len(b) <= len(b)/8 && (dec.Size <= 0 || dec.Size-int(dec.InputOffset()) < len(b)) {
+				// Long enough for a block of its own, not much larger than
+				// its value, and with less input left than its length, so
+				// that no later value will want the buffer grown for this
+				// one: the decoder's buffer becomes the block, rather than
+				// being copied into one. A document of many long values
+				// keeps the buffer and copies, or each would regrow it.
 				r.node.v0, r.node.v1 = r.node.tree.text.keep(dec.TakeText())
 			} else {
 				r.node.v0, r.node.v1 = r.node.tree.text.addBytes(b, 0)

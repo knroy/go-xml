@@ -45,7 +45,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -119,6 +118,9 @@ type Directive []byte
 // bufSize is the read window. It matches bufio's default, which is what the
 // stream was read through before.
 const bufSize = 4096
+
+// textFit: see Decoder.text.
+const textFit = 32
 
 // A Decoder reads tokens from an XML byte stream.
 //
@@ -1060,10 +1062,20 @@ func (d *Decoder) text(quote byte, cdata bool) ([]byte, bool) {
 			if n > 0 {
 				// A run past a window long that outgrows the scratch is
 				// sized from what is left of the input, not by append's
-				// 1.25x steps. ponytail: capped at 8x the scratch, so that a
-				// run early in a huge document takes at most that.
+				// 1.25x steps, and by an exact make and copy so that the
+				// capacity is what was asked for. ponytail: the step is capped
+				// at 8x the scratch, so that a run early in a huge document
+				// takes at most that; but when what is left is within textFit
+				// times the scratch it is taken whole, so that a lone value ends
+				// its life fitted and not a step short of it or past it.
 				if rest := d.Size - int(d.InputOffset()); n > cap(out)-len(out) && len(out) >= bufSize && rest > n {
-					out = slices.Grow(out, min(rest, 8*cap(out)))
+					grow := min(rest, 8*cap(out))
+					if rest <= textFit*cap(out) {
+						grow = rest
+					}
+					bigger := make([]byte, len(out), len(out)+grow)
+					copy(bigger, out)
+					out = bigger
 				}
 				out = append(out, run[:n]...)
 				if n == 1 {
