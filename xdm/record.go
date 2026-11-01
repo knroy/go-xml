@@ -333,6 +333,23 @@ func chunkOf(i uint32) (k int, off uint32) {
 	return chunkMaxLog + 1 + int(j/chunkMax), j % chunkMax
 }
 
+// pairFrom is the first full chunk (counted from 0) that is allocated in a
+// pair; before it a tree stays small.
+const pairFrom = 8
+
+// appendChunk appends chunk k to cs. A full chunk is 20480 B, which the runtime
+// pads to 21760 B once it adds its 8-byte malloc header; two together are 40960
+// B, a large object of exactly five pages with no header and no padding. The
+// pair is allocated only if chunk k+1 is wanted (k < last), and each chunk is
+// capped so it still looks like a separate allocation.
+func appendChunk(cs [][]Node, k, last int) [][]Node {
+	if b := k - chunkMaxLog - 1; b >= pairFrom && b%2 == 0 && k < last {
+		s := make([]Node, 2*chunkMax)
+		return append(cs, s[:chunkMax:chunkMax], s[chunkMax:])
+	}
+	return append(cs, make([]Node, chunkLen(k)))
+}
+
 // rec returns the record at index i.
 func (t *Tree) rec(i uint32) *Node {
 	k, off := chunkOf(i)
@@ -344,7 +361,7 @@ func (t *Tree) alloc() *Node {
 	i := t.n
 	k, off := chunkOf(i)
 	if k == len(t.chunks) {
-		t.chunks = append(t.chunks, make([]Node, chunkLen(k)))
+		t.chunks = appendChunk(t.chunks, k, 1<<30)
 	}
 	t.n++
 	r := &t.chunks[k][off]
