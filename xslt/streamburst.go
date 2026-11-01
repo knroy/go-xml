@@ -235,8 +235,16 @@ func booleanShaped(e xpath.Expr) bool {
 				return true
 			}
 		}
-	case *xpath.PathExpr, *xpath.Step:
+	case *xpath.Step:
 		return true
+	case *xpath.PathExpr:
+		// A path's last step can be any expression, a number among them
+		// (@k/xs:integer(.)), which would make the predicate positional.
+		if len(x.Steps) == 0 {
+			return true // "/"
+		}
+		_, ok := x.Steps[len(x.Steps)-1].(*xpath.Step)
+		return ok
 	}
 	return false
 }
@@ -632,7 +640,13 @@ func (i *sourceDocumentInstr) executeBursts(rt *runtime, out *outputBuilder, hre
 	if !ok {
 		return false, nil
 	}
+	// Tree mode records the document only once it has loaded; a document
+	// that fails to parse must not count as read here either (unread).
+	unread := func() {}
 	if rd != nil && docURI != "" {
+		if !rd.read[docURI] {
+			unread = func() { delete(rd.read, docURI) }
+		}
 		rd.read[docURI] = true
 		if rd.written[docURI] {
 			return true, fmt.Errorf(
@@ -677,6 +691,7 @@ func (i *sourceDocumentInstr) executeBursts(rt *runtime, out *outputBuilder, hre
 			return nil
 		})
 		if err != nil && err != bodyErr {
+			unread()
 			return fmt.Errorf("FODC0002: cannot retrieve %q: %w", href, err)
 		}
 		return err

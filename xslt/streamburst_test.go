@@ -138,3 +138,81 @@ func TestBurstsManyRecords(t *testing.T) {
 		t.Fatalf("got %q, %v, bursts %v", out, err, burstRuns)
 	}
 }
+
+// Inputs on which bursts once differed from the tree: whitespace-only
+// attribute values read from released text blocks (a wrong value, or a
+// panic), and a path predicate ending in a number, which is positional.
+func TestBurstsMatchTreeOn(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, doc string
+		bursts          bool
+	}{
+		{"space attributes", `<xsl:for-each select="doc/rec"><v a="[{@a}]"/></xsl:for-each>`,
+			`<doc><rec a="  "/><rec x="abcdefghij" a="  "/></doc>`, true},
+		{"space attributes, three records", `<xsl:for-each select="doc/rec"><v a="[{@a}]"/></xsl:for-each>`,
+			`<doc><rec x="hello" a="  "/><rec x="abcdefg" a="  "/><rec x="zz" a="  "/></doc>`, true},
+		{"space attributes on the spine", `<xsl:for-each select="doc/g/rec"><v a="[{../@a}]" b="[{@b}]"/></xsl:for-each>`,
+			`<doc><g a=" "><rec b=" "/><rec x="qqqq" b=" "/></g><g a=" "><rec b=" "/></g></doc>`, true},
+		{"numeric path predicate", `<xsl:for-each select="doc/rec[@k/xs:integer(.)]"><xsl:copy-of select="."/></xsl:for-each>`,
+			`<doc><rec k="1"/><rec k="2"/><rec k="3"/></doc>`, false},
+		{"axis path predicate", `<xsl:for-each select="doc/rec[@k]"><xsl:copy-of select="."/></xsl:for-each>`,
+			`<doc><rec k="1"/><rec/></doc>`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema" exclude-result-prefixes="xs">` +
+				`<xsl:template name="main"><xsl:source-document streamable="yes" href="doc.xml">` +
+				tc.body + `</xsl:source-document></xsl:template></xsl:stylesheet>`
+			got, err := burstRun(t, src, "doc.xml", tc.doc, true)
+			ran := burstRuns
+			want, err2 := burstRun(t, src, "doc.xml", tc.doc, false)
+			if (err == nil) != (err2 == nil) || got != want {
+				t.Fatalf("bursts differ from the tree\nbursts: %q %v\ntree:   %q %v", got, err, want, err2)
+			}
+			if ran != tc.bursts {
+				t.Fatalf("ran in bursts: %v, want %v (output %q)", ran, tc.bursts, got)
+			}
+		})
+	}
+}
+
+// A document that fails to parse is not read, in bursts as in the tree: once
+// xsl:try has caught the FODC0002, writing that URI is not XTDE1500.
+func TestBurstsFailedReadIsNotRead(t *testing.T) {
+	src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+	<xsl:template name="main"><xsl:try><xsl:source-document streamable="yes" href="doc.xml">
+	<xsl:for-each select="a/r"><xsl:copy-of select="."/></xsl:for-each>
+	</xsl:source-document><xsl:catch><caught/></xsl:catch></xsl:try>
+	<xsl:result-document href="doc.xml"><a/></xsl:result-document></xsl:template></xsl:stylesheet>`
+	for _, bursts := range []bool{true, false} {
+		// The resolver records the path with symlinks resolved (macOS
+		// temporary directories are under one), so the output must be too.
+		dir, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte("<a><r/><r/></b>"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sheet, err := Compile(tree.Root, CompileOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		docs, err := NewFileResolver(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		burstRuns = false
+		noBursts = !bursts
+		traceBursts = func(string) { burstRuns = true }
+		_, err = sheet.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main",
+			Documents: docs, BaseOutputURI: fileURIOf(filepath.Join(dir, "out.xml"))})
+		noBursts, traceBursts = false, nil
+		if err != nil || burstRuns != bursts {
+			t.Errorf("bursts %v (ran %v): %v", bursts, burstRuns, err)
+		}
+	}
+}
