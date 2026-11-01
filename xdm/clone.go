@@ -25,6 +25,15 @@ func init() {
 // point into are append-only, so the copy shares them, with capacities
 // clipped so that whatever the copy appends lands in storage of its own.
 func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
+	return cloneMoving(top, o, noIdx)
+}
+
+// cloneMoving is cloneSubtree that, cloning a whole tree as it is, takes
+// over the source's chunks that lie wholly past the one holding record from
+// instead of copying them: their records become the copy's, in place. The
+// source must not read them through its own records again, and must drop
+// them (see burster.deliver).
+func cloneMoving(top *Node, o xdmclone.Options, from uint32) func(*Node) *Node {
 	if top.flags&fSide != 0 {
 		return nil
 	}
@@ -128,9 +137,17 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 		total = newIdx[n]
 	}
 	last, _ := chunkOf(total - 1)
+	keep := last // the last chunk allocated rather than taken over
+	if from != noIdx && lo == 0 && newIdx == nil {
+		keep, _ = chunkOf(from)
+		keep = min(keep, last)
+	}
 	c.chunks = make([][]Node, 0, last+1)
-	for len(c.chunks) <= last {
-		c.chunks = appendChunk(c.chunks, len(c.chunks), last)
+	for len(c.chunks) <= keep {
+		c.chunks = appendChunk(c.chunks, len(c.chunks), keep)
+	}
+	if keep < last {
+		c.chunks = append(c.chunks, t.chunks[keep+1:last+1]...)
 	}
 	c.n = total
 
@@ -198,16 +215,17 @@ func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
 				}
 			}
 		}
+		// Read before r is placed, which in a chunk taken over is over s.
+		ty, typed := s.typ(), s.flags&fTyped != 0
 		d := place(j, r)
-		from, typed := s.typ(), s.flags&fTyped != 0
 		if layer != nil {
 			if lt, ltyped, ok := layer.typingAt(i); ok {
-				from, typed = lt, ltyped
+				ty, typed = lt, ltyped
 			}
 		}
 		if typed {
 			dt := d.ownTyping()
-			*dt = *from // the names are shared, not copied
+			*dt = *ty // the names are shared, not copied
 			if o.Detached && dt.get().env != nil {
 				v := *dt.names
 				v.env = nil

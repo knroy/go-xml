@@ -53,6 +53,9 @@ type burster struct {
 	// the document node) had stored its attributes. Everything stored after
 	// it belongs to content that is dropped.
 	marks []burstMark
+	// moved is the first of the parse's chunks the last burst's tree took
+	// over, or 0.
+	moved int
 	v11   bool
 }
 
@@ -124,6 +127,12 @@ func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCa
 // frames stored since p's spine mark; names is the parse's name cache.
 func (b *burster) discardLast(p *Node, spaces *spaceTable, names *nameCache) {
 	p.RemoveLastChild()
+	if t := p.tree; b.moved > 0 {
+		// Those chunks are the burst's now; the parse allocates afresh.
+		clear(t.chunks[b.moved:])
+		t.chunks = t.chunks[:b.moved]
+		b.moved = 0
+	}
 	m := b.marks[len(b.marks)-1]
 	p.tree.text.rewind(m.text)
 	rewindNames(p.tree, m.names, names)
@@ -138,8 +147,15 @@ func (b *burster) discardLast(p *Node, spaces *spaceTable, names *nameCache) {
 // keep the prolog's comments and processing instructions, which every burst
 // would copy), which is exactly the burst's tree: it is
 // copied in bulk, sharing the names, frames and text the records point into.
+// The chunks wholly past el's first are not copied but taken over, so that
+// one large burst is not held twice; discardLast drops them from the parse.
 func (b *burster) deliver(el *Node) error {
-	m := cloneSubtree(el.tree.Root, xdmclone.Options{})
+	t := el.tree
+	m := cloneMoving(t.Root, xdmclone.Options{}, el.self)
+	k, _ := chunkOf(el.self)
+	if last, _ := chunkOf(t.n - 1); last > k {
+		b.moved = k + 1
+	}
 	c := m(el)
 	c.tree.XMLVersion = "1.0"
 	if b.v11 {

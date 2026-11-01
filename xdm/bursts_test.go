@@ -234,3 +234,50 @@ func TestParseBurstsNamesStaySmall(t *testing.T) {
 		}
 	}
 }
+
+// A large burst's records are taken over by its tree, not copied while the
+// parse still holds them, and stay intact as the parse goes on.
+func TestParseBurstsLargeNotCopied(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`<!DOCTYPE a [<!ATTLIST c id ID #IMPLIED>]><a>`)
+	for i := range 6 {
+		n := 3
+		if i%2 == 0 {
+			n = 20000
+		}
+		fmt.Fprintf(&b, `<r i="%d">`, i)
+		for j := range n {
+			fmt.Fprintf(&b, `<c id="c%d-%d" xml:base="b%d/">t</c>`, i, j, j%3)
+		}
+		b.WriteString("</r>")
+	}
+	b.WriteString("</a>")
+	src := b.String()
+	opts := ParseOptions{AllowDOCTYPE: true}
+	path := []QName{{Local: "a"}, {Local: "r"}}
+	tree, err := ParseString(src, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []*Node
+	burst := allocated(func() {
+		err = ParseBursts(strings.NewReader(src), opts, path, func(r *Node) error { got = append(got, r); return nil })
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	whole := allocated(func() { _, err = ParseString(src, opts) })
+	if burst > whole*5/4 {
+		t.Fatalf("bursts allocated %d bytes, the whole tree %d", burst, whole)
+	}
+	i := 0
+	for r := range tree.Root.FirstChild().Children() {
+		if g, w := dump(got[i])+ancestry(got[i]), dump(r)+ancestry(r); g != w {
+			t.Fatalf("burst %d differs\nwant\n%.2000s\ngot\n%.2000s", i, w, g)
+		}
+		if c := got[i].LastChild(); !c.AttrAt(0).IsID() || c.BaseURI() != r.LastChild().BaseURI() {
+			t.Fatalf("burst %d: the last child lost its ID type or base URI", i)
+		}
+		i++
+	}
+}

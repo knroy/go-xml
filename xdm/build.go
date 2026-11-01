@@ -244,7 +244,9 @@ func CopyTypeEnvs(dst, src *Node) {
 	}
 }
 
-// truncate drops the records from index i on.
+// truncate drops the records from index i on. It reaches t's tables by
+// index, not through the records, which a burst's tree may have taken over
+// (see cloneMoving).
 func (t *Tree) truncate(i uint32) {
 	for len(t.open) > 0 && t.open[len(t.open)-1] >= i {
 		t.open = t.open[:len(t.open)-1]
@@ -254,18 +256,21 @@ func (t *Tree) truncate(i uint32) {
 		if r.flags&fBase != 0 {
 			delete(t.bases, j)
 		}
+		k, off := chunkOf(j)
 		if r.flags&fTyped != 0 {
-			*r.typ() = nodeTyping{}
+			t.typing[k][off] = nodeTyping{}
 		}
 		if r.flags&fManyAttrs != 0 {
 			if t.source != nil {
 				delete(t.source.attrCounts, j)
 			}
 		}
-		r.setOffset(0)
 		delete(t.docURIs, j)
-		if t.source != nil {
-			delete(t.source.foreignPos, j)
+		if s := t.source; s != nil {
+			if k < len(s.offsets) && s.offsets[k] != nil {
+				s.offsets[k][off] = 0
+			}
+			delete(s.foreignPos, j)
 		}
 	}
 	if t.side != nil {
