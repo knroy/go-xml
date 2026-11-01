@@ -427,7 +427,13 @@ func (c *canon) namespaceNodes(e *xdm.Node, in bool) {
 	}
 	var axis map[string]string
 	if in {
-		axis = map[string]string{}
+		// Reuse the map a finished element left in c.axes's backing array.
+		if n := len(c.axes); n < cap(c.axes) && c.axes[:n+1][n] != nil {
+			axis = c.axes[:n+1][n]
+			clear(axis)
+		} else {
+			axis = map[string]string{}
+		}
 	}
 	hasDefault := false
 	for prefix, uri := range c.scope.m {
