@@ -268,9 +268,7 @@ func (t *Tree) truncate(i uint32) {
 			delete(t.source.foreignPos, j)
 		}
 	}
-	if t.side != nil {
-		t.sideTruncate(i)
-	}
+	t.sideTruncate(i) // locks: the sweep cleanup writes t.side
 	t.n = i
 }
 

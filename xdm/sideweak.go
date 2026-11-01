@@ -2,8 +2,13 @@ package xdm
 
 import (
 	"runtime"
+	"sync/atomic"
 	"weak"
 )
+
+// sideSweeps counts the sweeps that have run, for the test that checks a tree
+// keeps one sweep chain.
+var sideSweeps atomic.Int64
 
 // sideChunkLen is how many namespace nodes share one allocation, and so one
 // weak handle: the runtime keeps a list per heap span of every object with a
@@ -85,6 +90,7 @@ type sideTick struct{ _ *int }
 // sideSweep drops the entries whose nodes a collection has freed, and gives
 // the memory of a table that has shrunk a lot back (a Go map never does).
 func sideSweep(t *Tree) {
+	sideSweeps.Add(1)
 	t.sideMu.Lock()
 	defer t.sideMu.Unlock()
 	st := t.side
@@ -134,6 +140,12 @@ func (t *Tree) sideTruncate(i uint32) {
 		}
 	}
 	if len(t.side.m) == 0 {
-		t.side = nil
+		// While a sweep is pending the empty table stays, or the next
+		// sideAdd would arm a second chain; the sweep drops it.
+		if t.side.armed {
+			t.side.seq = 0
+		} else {
+			t.side = nil
+		}
 	}
 }
