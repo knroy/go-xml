@@ -133,19 +133,31 @@ func registerRegexFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
+		// No match leaves the input as it is: nothing is built and nothing is
+		// charged.
+		if !re.MatchString(s) {
+			return strSeq(s), nil
+		}
 		// The result is charged before it is built: 500 KB of input with a 4 KB
 		// replacement allocated 12.8 GB before the old after-the-fact charge
-		// refused it. The estimate is the input plus one replacement per match;
-		// only what the built string exceeds it by is charged afterwards.
-		n := 0
-		re.ReplaceAllStringFunc(s, func(string) string { n++; return "" })
-		est := len(s) + n*len(goRepl)
+		// refused it. The estimate is an upper bound -- the unmatched text, one
+		// replacement per match, and for each "$" in the replacement at most
+		// the matched text again, since a group lies inside its match. What
+		// the built string comes to is then settled against it, so a bound
+		// that was generous is handed back rather than kept.
+		n, matched := 0, 0
+		re.ReplaceAllStringFunc(s, func(m string) string { n++; matched += len(m); return "" })
+		est := len(s) - matched + n*len(goRepl) + strings.Count(goRepl, "$")*matched
 		if err := ctx.countBytes(est); err != nil {
 			return nil, err
 		}
 		out := re.ReplaceAllString(s, goRepl)
-		if err := ctx.countBytes(len(out) - est); err != nil {
-			return nil, err
+		if len(out) > est {
+			if err := ctx.countBytes(len(out) - est); err != nil {
+				return nil, err
+			}
+		} else {
+			ctx.refundBytes(est - len(out))
 		}
 		return strSeq(out), nil
 	})
