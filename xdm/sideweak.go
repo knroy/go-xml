@@ -5,16 +5,35 @@ import (
 	"weak"
 )
 
+// sideChunkLen is how many namespace nodes share one allocation, and so one
+// weak handle: the runtime keeps a list per heap span of every object with a
+// weak handle, and a handle per node made a namespace-heavy query several
+// times slower.
+const sideChunkLen = 16
+
+type sideChunk [sideChunkLen]Node
+
+// sideEnt locates a namespace node: slot i of a chunk, held weakly.
+type sideEnt struct {
+	w weak.Pointer[sideChunk]
+	i uint8
+}
+
 // sideTable is a tree's namespace nodes. They are made on demand and held
-// weakly: a node lives while a caller holds it, so pointer identity, Is and
-// IdentityKey (which holds the pointer) stay true for every holder, and a
-// node nobody holds is freed instead of staying for the life of the tree, and
-// its entry is swept after the next collection. seq numbers the nodes in the order they were made.
+// weakly, a chunk at a time: a node lives while a caller holds it or any
+// node of its chunk, so pointer identity, Is and IdentityKey (which holds the
+// pointer) stay true for every holder, and nodes nobody holds are freed
+// instead of staying for the life of the tree. Their entries are swept after
+// the next collection. seq numbers the nodes in the order they were made.
 type sideTable struct {
-	m     map[sideKey]weak.Pointer[Node]
+	m     map[sideKey]sideEnt
 	seq   uint32
 	peak  int  // most entries held since the map was last rebuilt
 	armed bool // a sweep is waiting for the next collection
+
+	cur  *sideChunk // being filled; held strongly until the next sweep
+	used int
+	curW weak.Pointer[sideChunk]
 }
 
 // sideLive returns the live node for key, or nil. Caller holds sideMu.
@@ -22,30 +41,40 @@ func (t *Tree) sideLive(key sideKey) *Node {
 	if t.side == nil {
 		return nil
 	}
-	if w, ok := t.side.m[key]; ok {
-		return w.Value()
+	if e, ok := t.side.m[key]; ok {
+		if c := e.w.Value(); c != nil {
+			return &c[e.i]
+		}
 	}
 	return nil
 }
 
-// sideAdd records s under key. Caller holds sideMu.
-func (t *Tree) sideAdd(key sideKey, s *Node) {
+// sideAdd makes the node proto describes and records it under key. Caller
+// holds sideMu.
+func (t *Tree) sideAdd(key sideKey, proto Node) *Node {
 	if t.side == nil {
-		t.side = &sideTable{m: map[sideKey]weak.Pointer[Node]{}}
+		t.side = &sideTable{m: map[sideKey]sideEnt{}}
 	}
 	st := t.side
+	if st.cur == nil || st.used == sideChunkLen {
+		st.cur, st.used = new(sideChunk), 0
+		st.curW = weak.Make(st.cur)
+	}
+	s := &st.cur[st.used]
+	*s = proto
+	st.m[key] = sideEnt{st.curW, uint8(st.used)}
+	st.used++
 	st.seq++
-	st.m[key] = weak.Make(s)
 	if len(st.m) > st.peak {
 		st.peak = len(st.m)
 	}
 	if !st.armed {
 		st.armed = true
-		// A cleanup per node costs a second runtime special each; one per
-		// garbage collection, while the table is not empty, sweeps the
-		// entries the collection has cleared.
+		// One cleanup per garbage collection, while the table is not
+		// empty, sweeps the entries the collection has cleared.
 		runtime.AddCleanup(&sideTick{}, sideSweep, t)
 	}
+	return s
 }
 
 // sideTick is what the sweep cleanup is attached to: nothing refers to it,
@@ -63,8 +92,9 @@ func sideSweep(t *Tree) {
 		return
 	}
 	st.armed = false
-	for k, w := range st.m {
-		if w.Value() == nil {
+	st.cur = nil // else its entries would never clear
+	for k, e := range st.m {
+		if e.w.Value() == nil {
 			delete(st.m, k)
 		}
 	}
@@ -73,9 +103,9 @@ func sideSweep(t *Tree) {
 		t.side = nil
 		return
 	case len(st.m) < st.peak/4:
-		m := make(map[sideKey]weak.Pointer[Node], len(st.m))
-		for k, w := range st.m {
-			m[k] = w
+		m := make(map[sideKey]sideEnt, len(st.m))
+		for k, e := range st.m {
+			m[k] = e
 		}
 		st.m, st.peak = m, len(m)
 	}

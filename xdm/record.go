@@ -1484,11 +1484,9 @@ func (n *Node) sideNode(frame, index, owner uint32, slot int) *Node {
 			}
 		}
 	}
-	s := &Node{tree: t, kind: uint8(KindNamespace), flags: fSide,
+	return t.sideAdd(key, Node{tree: t, kind: uint8(KindNamespace), flags: fSide,
 		self: t.sideSeq(), parent: n.self, end: uint32(slot), prev: owner,
-		v0: frame, v1: index}
-	t.sideAdd(key, s)
-	return s
+		v0: frame, v1: index})
 }
 
 // --- Identity and order ---------------------------------------------------
