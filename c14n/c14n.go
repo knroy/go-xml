@@ -49,7 +49,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"slices"
 	"strings"
 
 	"github.com/knroy/go-xml/v2/xdm"
@@ -162,11 +161,13 @@ var (
 // string. Repeated and empty tokens are ignored.
 func ParsePrefixList(s string) []string {
 	var out []string
-	for _, f := range strings.Fields(s) {
+	seen := map[string]struct{}{}
+	for f := range strings.FieldsSeq(s) {
 		if f == "#default" {
 			f = ""
 		}
-		if !slices.Contains(out, f) {
+		if _, dup := seen[f]; !dup {
+			seen[f] = struct{}{}
 			out = append(out, f)
 		}
 	}
