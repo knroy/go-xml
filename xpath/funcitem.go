@@ -167,9 +167,7 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			// names regex-group#1(2) as the example -- the components are
 			// cleared, so regex-090 gets the zero-length string rather than
 			// the enclosing match.
-			for _, name := range ClearedOnDynamicCall {
-				p = p.WithVar(name, nil)
-			}
+			p = p.withVars(ClearedOnDynamicCall, nil)
 			// The host state is a binding too: it comes from the call, with
 			// the current item cleared as the variables above are.
 			p.host = hostOnCall(c.host, false)
@@ -643,13 +641,8 @@ func clearHostVars(ctx *Context) *Context {
 		n.host = h
 		ctx = &n
 	}
-	for _, name := range ClearedOnDynamicCall {
-		ctx = ctx.WithVar(name, nil)
-	}
-	for _, name := range MarkedOnDynamicCall {
-		ctx = ctx.WithVar(name, xdm.One(xdm.NewBoolean(true)))
-	}
-	return ctx
+	ctx = ctx.withVars(ClearedOnDynamicCall, nil)
+	return ctx.withVars(MarkedOnDynamicCall, xdm.One(xdm.NewBoolean(true)))
 }
 
 // Eval implements Expr: it calls the function item the target produces.

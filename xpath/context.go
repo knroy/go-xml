@@ -922,6 +922,35 @@ func (c *Context) WithVar(name xdm.QName, val xdm.Sequence) *Context {
 	return n
 }
 
+// withVars binds every name to val in one scope. The names have non-empty
+// local parts; it is what the host registries of a dynamic call are bound with.
+func (c *Context) withVars(names []xdm.QName, val xdm.Sequence) *Context {
+	if len(names) == 0 {
+		return c
+	}
+	s := &struct {
+		n Context
+		b varBinding
+	}{n: *c}
+	s.n.Vars = nil
+	s.b = varBinding{names: names, val: val}
+	s.n.bind = &s.b
+	s.n.Parent = c
+	return &s.n
+}
+
+// WithVars is WithVar for several variables at once: one scope binds names[i]
+// to vals[i]. The names must be distinct, non-empty and as long as vals, and
+// neither slice may be written while the scope is in use.
+func (c *Context) WithVars(names []xdm.QName, vals []xdm.Sequence) *Context {
+	if len(names) == 0 {
+		return c
+	}
+	n := c.withVars(names, nil)
+	n.bind.vals = vals
+	return n
+}
+
 // varBinding is the binding a scope made by WithVar adds. Never written once
 // the scope is published. A scope made by WithLazyVars holds lazy instead,
 // and binds every name in it; one made by xpathleaf.WithLocals holds locals,
@@ -929,6 +958,8 @@ func (c *Context) WithVar(name xdm.QName, val xdm.Sequence) *Context {
 type varBinding struct {
 	uri, local string
 	val        xdm.Sequence
+	names      []xdm.QName // withVars: every name is bound, to vals[i] or else to val
+	vals       []xdm.Sequence
 	lazy       map[varKey]*LazyVar
 	locals     *xpathleaf.Locals
 }
@@ -1238,6 +1269,15 @@ func (c *Context) lookupVarPlain(name xdm.QName) (xdm.Sequence, bool, error) {
 				if l, ok := b.lazy[varKey{name.URI, name.Local}]; ok {
 					if v, ok, err := l.get(); ok || err != nil {
 						return v, true, err
+					}
+				}
+			} else if b.names != nil {
+				for i, q := range b.names {
+					if q.Local == name.Local && q.URI == name.URI {
+						if b.vals != nil {
+							return b.vals[i], true, nil
+						}
+						return b.val, true, nil
 					}
 				}
 			} else if b.local == name.Local && b.uri == name.URI {
