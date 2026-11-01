@@ -873,12 +873,7 @@ func (e *BinaryOp) evalRange(ctx *Context) (xdm.Sequence, error) {
 	// would narrow each value to anyway. Testing v against the end before
 	// incrementing it keeps a range ending at MaxInt64 from overflowing.
 	if lo.IsInt64() && hi.IsInt64() {
-		for v, end := lo.Int64(), hi.Int64(); ; v++ {
-			out = append(out, xdm.NewInteger(v))
-			if v == end {
-				return out, nil
-			}
-		}
+		return xdm.AppendIntegers(out, lo.Int64(), count), nil
 	}
 	// Stepping a big.Int keeps the arbitrary precision through the whole
 	// range: the values are what the expression named, not a wrapped
