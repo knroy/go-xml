@@ -418,11 +418,25 @@ const bigTag = 256
 // and its index once instead of through every doubling. The index is
 // rebuilt only when n would at least double it, so a run of big tags that
 // repeat their names rebuilds nothing.
-func (t *Tree) reserveNames(n int) {
+//
+// A tag that would at least double the table skips its index instead: the
+// attributes of a valid tag have distinct names, so each needs finding only
+// among the names from before the tag. reserveNames then reports how many
+// those are, and the tag adds its names by internNew; endBulkNames drops the
+// index, which is made again by the next intern that wants it. For 800,000
+// attributes the index was 6 times the input, to be dropped when the parse
+// ended. Otherwise it reports -1.
+func (t *Tree) reserveNames(n int) int {
 	if t.names == nil {
 		t.names = make([]QName, 1, n+1)
 	} else {
 		t.names = slices.Grow(t.names, n)
+	}
+	if n >= len(t.names) {
+		if t.nameIx == nil && len(t.names) > smallNames {
+			t.indexNames()
+		}
+		return len(t.names)
 	}
 	if t.nameIx == nil {
 		t.nameIx = make(map[QName]uint32, len(t.names)+n)
@@ -435,7 +449,31 @@ func (t *Tree) reserveNames(n int) {
 		maps.Copy(ix, t.nameIx)
 		t.nameIx = ix
 	}
+	return -1
 }
+
+// internNew is intern for a name of a tag that reserveNames reported old
+// names before: the name is not among the tag's own, so it is looked for in
+// the first old only, and added to the table without the index.
+func (t *Tree) internNew(q QName, old int) uint32 {
+	if t.nameIx != nil {
+		if i, ok := t.nameIx[q]; ok {
+			return i
+		}
+	} else {
+		for i, x := range t.names[:old] {
+			if x == q {
+				return uint32(i)
+			}
+		}
+	}
+	t.names = append(t.names, q)
+	return uint32(len(t.names) - 1)
+}
+
+// endBulkNames ends a tag that internNew added names for: the index lacks
+// them, so it goes, and intern makes it again when next it is wanted.
+func (t *Tree) endBulkNames() { t.nameIx, t.nameHot = nil, nil }
 
 // indexNames builds the name index over the names the tree holds.
 func (t *Tree) indexNames() {

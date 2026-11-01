@@ -835,8 +835,9 @@ func buildElement(t xml.StartElement, parent *Node, ns *nsScope, names *nameCach
 	// validateStartElement has refused an unbound prefix.
 	uri, _ := ns.lookup(t.Name.Space)
 	el.name = names.intern(tree, QName{Prefix: t.Name.Space, Local: t.Name.Local, URI: uri})
-	if len(t.Attr) >= bigTag {
-		tree.reserveNames(len(t.Attr))
+	old := -1 // how many names the table held, when this tag adds its own without the index
+	if n := len(t.Attr) - len(decls); n >= bigTag {
+		old = tree.reserveNames(n)
 	}
 	for _, a := range t.Attr {
 		if a.Name.Space == "xmlns" || (a.Name.Space == "" && a.Name.Local == "xmlns") {
@@ -861,10 +862,17 @@ func buildElement(t xml.StartElement, parent *Node, ns *nsScope, names *nameCach
 			}
 		}
 		attr := el.appendAttrRaw()
-		attr.name = names.intern(tree, q)
+		if old >= 0 {
+			attr.name = tree.internNew(q, old)
+		} else {
+			attr.name = names.intern(tree, q)
+		}
 		if v != "" {
 			attr.v0, attr.v1 = tree.text.add(v)
 		}
+	}
+	if old >= 0 {
+		tree.endBulkNames()
 	}
 	return el, len(decls)
 }
