@@ -133,19 +133,31 @@ func registerRegexFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
+		// No match leaves the input as it is: nothing is built and nothing is
+		// charged.
+		if !re.MatchString(s) {
+			return strSeq(s), nil
+		}
 		// The result is charged before it is built: 500 KB of input with a 4 KB
 		// replacement allocated 12.8 GB before the old after-the-fact charge
-		// refused it. The estimate is the input plus one replacement per match;
-		// only what the built string exceeds it by is charged afterwards.
-		n := 0
-		re.ReplaceAllStringFunc(s, func(string) string { n++; return "" })
-		est := len(s) + n*len(goRepl)
+		// refused it. The estimate is an upper bound -- the unmatched text, one
+		// replacement per match, and for each "$" in the replacement at most
+		// the matched text again, since a group lies inside its match. What
+		// the built string comes to is then settled against it, so a bound
+		// that was generous is handed back rather than kept.
+		n, matched := 0, 0
+		re.ReplaceAllStringFunc(s, func(m string) string { n++; matched += len(m); return "" })
+		est := len(s) - matched + n*len(goRepl) + strings.Count(goRepl, "$")*matched
 		if err := ctx.countBytes(est); err != nil {
 			return nil, err
 		}
 		out := re.ReplaceAllString(s, goRepl)
-		if err := ctx.countBytes(len(out) - est); err != nil {
-			return nil, err
+		if len(out) > est {
+			if err := ctx.countBytes(len(out) - est); err != nil {
+				return nil, err
+			}
+		} else {
+			ctx.refundBytes(est - len(out))
 		}
 		return strSeq(out), nil
 	})
@@ -310,6 +322,13 @@ func compileXPathRegexp(pattern, flags string, v Version) (*regexp.Regexp, error
 // callers interleave between the two and carry the table past its limit.
 func storeRegex(key string, v any) {
 	if len(key) > maxCachedKey {
+		return
+	}
+	// A pattern under the key limit can still compile to megabytes (85 copies
+	// of \p{L}{1000} is about 1 KB and retains 3.95 MB), so a large program is
+	// not kept either. The largest real pattern in the corpora is about 2,593
+	// instructions.
+	if re, ok := v.(*regexp.Regexp); ok && cachedProgramTooBig(re) {
 		return
 	}
 	regexCache.Put(key, v)
