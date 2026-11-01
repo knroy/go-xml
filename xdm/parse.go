@@ -322,6 +322,9 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	// the common case is none at all.
 	var attDefaults []attDefault
 	var attTypes []attDeclaredType
+	// The declarations by element name, built when the first element needs
+	// them, after the DOCTYPE has settled both lists.
+	var defIdx, typeIdx declIndex
 	// Element names whose DTD content model is element-only. Whitespace-only
 	// text in such an element is ignorable (XML §2.10) and is stripped
 	// regardless of what the stylesheet declares (XSLT 2.0 §4.4).
@@ -394,10 +397,16 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 				}
 			}
 			if len(attDefaults) > 0 {
-				t = applyAttDefaults(t, attDefaults)
+				if defIdx == nil {
+					defIdx = indexDecls(len(attDefaults), func(i int) string { return attDefaults[i].element })
+				}
+				t = applyAttDefaults(t, attDefaults, defIdx)
 			}
 			if len(attTypes) > 0 {
-				t = normalizeAttTokens(t, attTypes)
+				if typeIdx == nil {
+					typeIdx = indexDecls(len(attTypes), func(i int) string { return attTypes[i].element })
+				}
+				t = normalizeAttTokens(t, attTypes, typeIdx)
 			}
 			if err := validateStartElement(t, &ns, dec.IsVersion11()); err != nil {
 				return nil, err
@@ -423,7 +432,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 				}
 			}
 			if len(attTypes) > 0 {
-				applyAttTypes(el, attTypes)
+				applyAttTypes(el, attTypes, typeIdx)
 			}
 			// Attributes and namespaces are nodes too, and a document made
 			// of elements carrying many attributes allocates most of its

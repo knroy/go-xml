@@ -277,3 +277,45 @@ func TestAttListDefaultValuesAreShared(t *testing.T) {
 	}
 	runtime.KeepAlive(tree)
 }
+
+// Each element was matched against every ATTLIST declaration, building the
+// element's lexical name for each: 1.4 MB of declarations and elements took
+// 11.8 s. The declarations are now indexed by element name, so the cost per
+// element does not depend on how many others are declared. Measured: 5 MB
+// for 2,000 declarations and 2,000 prefixed elements, against 188 MB scanning
+// them all.
+func TestAttListDefaultsAreIndexedByElement(t *testing.T) {
+	const n = 2000
+	var dtd, doc strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&dtd, `<!ATTLIST p:an-element-with-a-rather-long-name-%d d CDATA "v%d">`, i, i)
+	}
+	doc.WriteString("<!DOCTYPE r [" + dtd.String() + `]><r xmlns:p="urn:p">`)
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&doc, `<p:an-element-with-a-rather-long-name-%d/>`, i)
+	}
+	doc.WriteString("</r>")
+	var tree *Tree
+	var err error
+	b := allocated(func() { tree, err = ParseString(doc.String(), ParseOptions{AllowDOCTYPE: true}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b > 24<<20 {
+		t.Errorf("parse allocated %d MB, want under 24", b>>20)
+	} else {
+		t.Logf("parse allocated %d KB", b>>10)
+	}
+	i := 0
+	for r := range tree.Root.Children() {
+		for e := range r.Children() {
+			if got := e.Attr("", "d"); got == nil || got.Value() != fmt.Sprintf("v%d", i) {
+				t.Fatalf("element %d: default d = %v", i, got)
+			}
+			i++
+		}
+	}
+	if i != n {
+		t.Errorf("%d elements, want %d", i, n)
+	}
+}

@@ -34,6 +34,49 @@ type attDefault struct {
 	entities map[string]int
 }
 
+// declIndex maps the element name an ATTLIST declaration was written with to
+// the positions of its declarations, in order. Every element is matched
+// against the declarations, so scanning them all cost a document of n elements
+// and m declarations n*m.
+type declIndex map[string][]int
+
+func indexDecls(n int, element func(i int) string) declIndex {
+	ix := declIndex{}
+	for i := range n {
+		e := element(i)
+		ix[e] = append(ix[e], i)
+	}
+	return ix
+}
+
+// at returns the positions of the declarations that apply to an element
+// written prefix:local: those naming it as written and those naming its local
+// name alone, in declaration order.
+func (ix declIndex) at(prefix, local string) []int {
+	byLocal := ix[local]
+	if prefix == "" {
+		return byLocal
+	}
+	var buf [64]byte // stays on the stack for a name that fits
+	b := append(append(append(buf[:0], prefix...), ':'), local...)
+	lexical := ix[string(b)]
+	if len(byLocal) == 0 {
+		return lexical
+	}
+	if len(lexical) == 0 {
+		return byLocal
+	}
+	out := make([]int, 0, len(lexical)+len(byLocal))
+	for len(lexical) > 0 && len(byLocal) > 0 {
+		if lexical[0] < byLocal[0] {
+			out, lexical = append(out, lexical[0]), lexical[1:]
+		} else {
+			out, byLocal = append(out, byLocal[0]), byLocal[1:]
+		}
+	}
+	return append(append(out, lexical...), byLocal...)
+}
+
 // parseAttListDefaults extracts the defaulted attributes from a DOCTYPE
 // internal subset.
 //
@@ -193,16 +236,14 @@ func unquote(s string) string {
 // that was omitted, it does not override one that was given. Even a #FIXED
 // default only constrains what may be written, and validating that constraint
 // is DTD validation, which this parser does not do.
-func applyAttDefaults(t xml.StartElement, defs []attDefault) xml.StartElement {
+func applyAttDefaults(t xml.StartElement, defs []attDefault, ix declIndex) xml.StartElement {
 	var add []xml.Attr
-	for _, d := range defs {
-		// A DTD is not namespace-aware: an ATTLIST names the element as
-		// written, prefix included. Matching the local name alone missed
-		// "p:doc", and with it a defaulted xmlns:p the element's own name
-		// needs. The local-name match stays, as applyAttTypes has it.
-		if d.element != attrLexical(t.Name) && d.element != t.Name.Local {
-			continue
-		}
+	// A DTD is not namespace-aware: an ATTLIST names the element as
+	// written, prefix included. Matching the local name alone missed
+	// "p:doc", and with it a defaulted xmlns:p the element's own name
+	// needs. The local-name match stays, as applyAttTypes has it.
+	for _, i := range ix.at(t.Name.Space, t.Name.Local) {
+		d := defs[i]
 		if hasAttrNamed(t.Attr, d.name) {
 			continue
 		}
@@ -274,12 +315,10 @@ func lexicalIs(prefix, local, s string) bool {
 // Recording the annotation here puts a DTD-validated document on the same
 // footing as a schema-validated one, so fn:id finds the same attributes in
 // both.
-func applyAttTypes(el *Node, types []attDeclaredType) {
+func applyAttTypes(el *Node, types []attDeclaredType, ix declIndex) {
 	en := el.Name()
-	for _, t := range types {
-		if !lexicalIs(en.Prefix, en.Local, t.element) && t.element != en.Local {
-			continue
-		}
+	for _, i := range ix.at(en.Prefix, en.Local) {
+		t := types[i]
 		for a := range el.Attrs() {
 			if an := a.Name(); !lexicalIs(an.Prefix, an.Local, t.attr) && an.Local != t.attr {
 				continue
