@@ -239,14 +239,8 @@ func (t *Tree) truncate(i uint32) {
 			delete(t.source.foreignPos, j)
 		}
 	}
-	if len(t.side) > 0 {
-		t.sideMu.Lock()
-		for k := range t.side {
-			if k.owner >= i {
-				delete(t.side, k)
-			}
-		}
-		t.sideMu.Unlock()
+	if t.side != nil {
+		t.sideTruncate(i)
 	}
 	t.n = i
 }

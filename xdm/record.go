@@ -145,7 +145,7 @@ type Tree struct {
 
 	// Namespace nodes, made on demand.
 	sideMu sync.Mutex
-	side   map[sideKey]*Node
+	side   *sideTable
 }
 
 // treeSource is the part of a Tree that parsing fills in (see Tree.source).
@@ -1470,7 +1470,7 @@ func (n *Node) sideNode(frame, index, owner uint32, slot int) *Node {
 	key := sideKey{n.self, prefix}
 	t.sideMu.Lock()
 	defer t.sideMu.Unlock()
-	if s, ok := t.side[key]; ok {
+	if s := t.sideLive(key); s != nil {
 		return s
 	}
 	// The slot places the node among n's others, by prefix, for document
@@ -1485,12 +1485,9 @@ func (n *Node) sideNode(frame, index, owner uint32, slot int) *Node {
 		}
 	}
 	s := &Node{tree: t, kind: uint8(KindNamespace), flags: fSide,
-		self: uint32(len(t.side)), parent: n.self, end: uint32(slot), prev: owner,
+		self: t.sideSeq(), parent: n.self, end: uint32(slot), prev: owner,
 		v0: frame, v1: index}
-	if t.side == nil {
-		t.side = map[sideKey]*Node{}
-	}
-	t.side[key] = s
+	t.sideAdd(key, s)
 	return s
 }
 
