@@ -995,6 +995,19 @@ func (a *instrAnalyzer) absorbingSelectOrBody(el *xdm.Node, avts []string) props
 // literalResultElement applies §19.8.4.1.
 func (a *instrAnalyzer) literalResultElement(el *xdm.Node) props {
 	var ops []operand
+	// §19.8.4.2: an element in an extension namespace is an instruction, not
+	// a literal result element, and this processor recognises none
+	// (compileLiteralElement), so its operands are the sequence constructors
+	// of its xsl:fallback children, with usage transmission -- which is what
+	// runs.
+	if isExtensionInstruction(el) {
+		for _, c := range el.ChildElements() {
+			if isXSL(c, "fallback") {
+				ops = append(ops, a.bodyOperand(c, usageTransmission))
+			}
+		}
+		return combine(ops, false)
+	}
 	for at := range el.Attrs() {
 		// xsl:use-attribute-sets is handled below, and is not itself an
 		// attribute value template.
