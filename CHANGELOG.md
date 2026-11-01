@@ -14,7 +14,7 @@ is byte-identical; new API is additive.
 | Change | What it does | Commit |
 |---|---|---|
 | Streamed `xsl:source-document`, first stage | A streamable `xsl:for-each`/`xsl:iterate` over a child path reads one record at a time: 1 GB totalled at 27 MB RSS, not 3.7 GB, at about 2× CPU. Other shapes build the tree. | [`3f185fe`][3f185fe], [`27757b3`][27757b3] |
-| `xdm.ParseBursts` | Parses a document handing over one selected element at a time in a tree of its own, with limits counted over the whole document. | [`b4b6052`][b4b6052], [`80f999f`][80f999f] |
+| `xdm.ParseBursts` | Parses a document handing over one selected element at a time in a tree of its own, with limits counted over the whole document; memory stays at the spine plus one record. | [`b4b6052`][b4b6052], [`80f999f`][80f999f] |
 | `xslt.FileResolver.MaxNodes`; `MaxBytes` reaches the parser | Raising `MaxBytes` past 64 MB had no effect on `fn:doc`, the parser kept its own default. Both limits now apply to what the resolver parses. | [`80f999f`][80f999f] |
 | `xdmbuild.InPlaceDocument` | A builder rooted at a new document node, for content built straight into it. | [`302c932`][302c932] |
 
