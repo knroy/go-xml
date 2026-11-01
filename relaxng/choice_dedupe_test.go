@@ -59,3 +59,33 @@ func TestChoiceMergesEqualAlternatives(t *testing.T) {
 		t.Error("choice(value, value) merged two values")
 	}
 }
+
+// (a?){n} a{n} against n <a/> is valid. The derivative is a choice of
+// choices whose chains share nearly every alternative; merging only a
+// whole chain left the copies in, and from n = 13 the pattern passed the
+// 100,000-node bound and the valid document was refused. xmllint agrees
+// that it validates for n = 12, 13, 18 and 30.
+func TestOptionalsBeforeRequiredStayValid(t *testing.T) {
+	for _, n := range []int{12, 13, 18, 30} {
+		var b strings.Builder
+		b.WriteString(`<element name="r"` + rngNS + `><group>`)
+		for i := 0; i < n; i++ {
+			b.WriteString(`<optional><element name="a"><empty/></element></optional>`)
+		}
+		for i := 0; i < n; i++ {
+			b.WriteString(`<element name="a"><empty/></element>`)
+		}
+		b.WriteString(`</group></element>`)
+		s, err := compileString(t, b.String())
+		if err != nil {
+			t.Fatalf("compile: %v", err)
+		}
+		doc, err := xdm.ParseString("<r>"+strings.Repeat("<a/>", n)+"</r>", xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Validate(doc.Root); err != nil {
+			t.Errorf("n=%d: %v", n, err)
+		}
+	}
+}
