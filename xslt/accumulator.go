@@ -369,13 +369,45 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	// The walk is pre/post order over the whole tree: every node records the
 	// value on the way in and the value on the way out, and the start and end
 	// rules that match it move the value between the two.
+	//
+	// A sequence-valued accumulator ($value, 1) used to leave every node its
+	// own full copy, so n nodes held n^2/2 items. extend lets a value that
+	// grows by appending share its predecessor's backing array, and held
+	// counts what is really stored, one entry per item beyond the first, so
+	// that a document of single-item values is not refused by an item bound
+	// that was meant for sequences.
+	var tip xdm.Sequence
+	var held int64
+	extend := func(prev, next xdm.Sequence) (xdm.Sequence, error) {
+		if len(next) == len(prev) && (len(next) == 0 || &next[0] == &prev[0]) {
+			return next, nil
+		}
+		k := len(prev)
+		if k > 0 && len(next) > k && len(tip) == k && &tip[0] == &prev[0] &&
+			sameItems(prev, next[:k]) {
+			held += int64(len(next) - k)
+			next = append(prev, next[k:]...)
+			tip = next
+		} else {
+			if len(next) > 1 {
+				held += int64(len(next))
+			}
+			// Clamped so that a later append reallocates instead of
+			// writing into spare room the rule's value may share.
+			next = next[:len(next):len(next)]
+			tip = next
+		}
+		return next, ctx.ItemsRefused(held)
+	}
 	var walk func(*xdm.Node) error
 	walk = func(n *xdm.Node) error {
 		next, err := rt.applyAccumRules(def, n, cur, ctx, false)
 		if err != nil {
 			return err
 		}
-		cur = next
+		if cur, err = extend(cur, next); err != nil {
+			return err
+		}
 		vals.before[n] = cur
 		// Attributes and namespaces are NOT visited. §18.2.4's formal model
 		// defines an accumulator over the sequence of events a streamed
@@ -403,7 +435,9 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 		if err != nil {
 			return err
 		}
-		cur = end
+		if cur, err = extend(cur, end); err != nil {
+			return err
+		}
 		vals.after[n] = cur
 		return nil
 	}
@@ -413,6 +447,27 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 
 	rt.accumValues[key] = vals
 	return vals, nil
+}
+
+// sameItems reports whether a and b hold the identical items. Only nodes and
+// atomic values are compared, by identity; any other item makes the answer no,
+// which merely costs the sharing.
+func sameItems(a, b xdm.Sequence) bool {
+	for i, x := range a {
+		switch x := x.(type) {
+		case *xdm.Atomic:
+			if y, ok := b[i].(*xdm.Atomic); !ok || x != y {
+				return false
+			}
+		case *xdm.Node:
+			if y, ok := b[i].(*xdm.Node); !ok || x != y {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // applyAccumRules runs the highest-priority rule of the requested phase that
