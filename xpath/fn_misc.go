@@ -198,7 +198,7 @@ func registerUnparsedText(l *Library, since Version) {
 		if err != nil {
 			return nil, err
 		}
-		return xdm.Sequence(splitTextLines(text)), nil
+		return splitTextLines(ctx, text)
 	})
 }
 
@@ -298,21 +298,26 @@ func readText(ctx *Context, s, enc string) (string, error) {
 // The spec defines the result as the sequence obtained by splitting on \n,
 // \r\n or \r, with a trailing line ending producing no final empty string —
 // "a\n" is one line, not two.
-func splitTextLines(text string) []xdm.Item {
+func splitTextLines(ctx *Context, text string) (xdm.Sequence, error) {
 	if text == "" {
-		return nil
+		return nil, nil
 	}
 	// Normalise the two-character ending first so the split is over single
 	// characters, then treat a lone \r as an ending too.
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	text = strings.TrimSuffix(text, "\n")
+	// Charge the lines before the strings.Split slice and the items are built:
+	// a 67 MB file of newlines is 67M items.
+	out, err := makeSequence(ctx, strings.Count(text, "\n")+1)
+	if err != nil {
+		return nil, err
+	}
 	parts := strings.Split(text, "\n")
-	out := make([]xdm.Item, 0, len(parts))
 	for _, p := range parts {
 		out = append(out, xdm.NewString(p))
 	}
-	return out
+	return out, nil
 }
 
 // unparsedTextArgs pulls the href and the optional encoding out of a call on

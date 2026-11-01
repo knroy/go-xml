@@ -882,6 +882,8 @@ type jsonBuilder struct {
 	// to; finishing one pops it and hands the finished item to its parent.
 	stack []*jsonFrame
 	opts  jsonOptions
+	// ctx is charged one item for every value the parse produces.
+	ctx *Context
 	// result is the top-level value, once one has been produced.
 	result xdm.Sequence
 	done   bool
@@ -901,6 +903,9 @@ type jsonFrame struct {
 }
 
 func (b *jsonBuilder) emit(v xdm.Sequence) error {
+	if err := b.ctx.countItems(1); err != nil {
+		return err
+	}
 	if len(b.stack) == 0 {
 		if b.done {
 			return errFOJS0001("more than one value at the top level")
@@ -1023,7 +1028,7 @@ func jsonDocReadError(err error) error {
 
 // parseJSONText is the shared body of fn:parse-json and fn:json-doc.
 func parseJSONText(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error) {
-	b := &jsonBuilder{opts: opts}
+	b := &jsonBuilder{opts: opts, ctx: ctx}
 	fb := jsonFallback(ctx, opts)
 	if err := scanJSON(text, opts, b, fb); err != nil {
 		return nil, err
