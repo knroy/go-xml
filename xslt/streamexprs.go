@@ -296,6 +296,7 @@ func (a *analyzer) letExpr(x *xpath.LetExpr) props {
 		inner.operandOf(ret, usageTransmission),
 	}, false)
 	a.known = a.known && inner.known
+	a.unverified = a.unverified || inner.unverified
 	return p
 }
 
@@ -315,6 +316,7 @@ func (a *analyzer) forExpr(x *xpath.ForExpr) props {
 		inner.higherOrderOperand(ret, usageTransmission),
 	}, false)
 	a.known = a.known && inner.known
+	a.unverified = a.unverified || inner.unverified
 	return p
 }
 
@@ -381,6 +383,7 @@ func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 	inner := a.withVar(x.Bindings[0].Var, seq.props)
 	op := inner.higherOrderOperand(test, usageInspection)
 	a.known = a.known && inner.known
+	a.unverified = a.unverified || inner.unverified
 	p := combine([]operand{seq, op}, false)
 	if !p.streamable() {
 		return roamingFreeRanging
@@ -426,10 +429,34 @@ func (a *analyzer) withVar(name xdm.QName, p props) *analyzer {
 // access a streamed node is by having the streamed node in its closure, and
 // this is prevented by the rule above". A walker that stopped at a nested
 // function boundary would let exactly that closure through.
+//
+// Two closures the section does not foresee are unknown rather than grounded.
+// A range variable that this analysis's own data flow (quantifiedExpr) bound
+// to streamed nodes is not a streaming parameter, but closing over it carries
+// the streamed node out exactly as the note fears. And fn:current() in the
+// body denotes the item that was current where the function was created --
+// a streamed node in a streamable construct -- which no variable reference
+// betrays. The spec read literally grounds both; the verdict is withheld
+// rather than refused, because the first rests on data flow the spec does
+// not have and the second on a gap in its rules.
 func (a *analyzer) inlineFunction(x *xpath.InlineFunctionExpr) props {
+	for name, p := range a.vars {
+		if p.posture == postureGrounded {
+			continue
+		}
+		b := *a
+		b.hasStreamParam, b.streamingParam = true, name
+		if b.bodyMentionsStreamingParam(x.Body) != mentionNo {
+			return a.unknown()
+		}
+	}
 	if !a.hasStreamParam {
 		// With no streaming parameter in scope there is nothing the body
-		// could refer to, so the second sentence applies directly.
+		// could refer to, so the second sentence applies directly -- once
+		// the walk has found no call on fn:current().
+		if a.bodyMentionsStreamingParam(x.Body) == mentionUnknown {
+			return a.unknown()
+		}
 		return groundedMotionless
 	}
 	switch a.bodyMentionsStreamingParam(x.Body) {
@@ -484,8 +511,12 @@ func (a *analyzer) bodyMentionsStreamingParam(e xpath.Expr) mention {
 	case *xpath.Literal, *xpath.ContextItem:
 		return mentionNo
 
-	// A name, not a reference to a variable.
+	// A name, not a reference to a variable -- except fn:current#0, which
+	// reaches the creating context's current item as a call does.
 	case *xpath.NamedFunctionRef:
+		if x.Name.URI == fnNS && x.Name.Local == "current" {
+			return mentionUnknown
+		}
 		return mentionNo
 
 	// Nested, and still within this declaration's text -- which is the point.
@@ -502,6 +533,11 @@ func (a *analyzer) bodyMentionsStreamingParam(e xpath.Expr) mention {
 		return a.mentionAny(append(bindingExprs(x.Bindings), x.Test))
 
 	case *xpath.FuncCall:
+		// See inlineFunction: no variable reference, and still a streamed
+		// node.
+		if x.Name.URI == fnNS && x.Name.Local == "current" {
+			return mentionUnknown
+		}
 		return a.mentionAny(x.Args)
 	case *xpath.DynamicCall:
 		return a.mentionAny(append([]xpath.Expr{x.Target}, x.Args...))

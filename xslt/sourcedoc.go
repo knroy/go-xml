@@ -71,7 +71,9 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	}
 	var plan *burstPlan
 	if isYes(n.AttrValue("streamable")) {
-		plan = planBursts(n)
+		// A module other than the principal one, or a principal that pulls
+		// in others, is not the whole stylesheet.
+		plan = planBursts(n, n.Root() != c.sheet.source)
 	}
 	outer := c.burst
 	c.burst = plan

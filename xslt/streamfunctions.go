@@ -540,6 +540,13 @@ func checkStreamableFunctions(root *xdm.Node, funcs map[funcKey]*streamFunc) err
 // rules for sequence constructors, which are not implemented, so it reports
 // "not known" and no error is raised for it.
 func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, bool) {
+	p, known, _ := functionBodyVerdict(f, funcs, nil)
+	return p, known
+}
+
+// functionBodyVerdict is analyzeFunctionBody plus the unverified bit, for
+// declTrust.funcVerified.
+func functionBodyVerdict(f *streamFunc, funcs map[funcKey]*streamFunc, trust *declTrust) (props, bool, bool) {
 	var instr *xdm.Node
 	for _, c := range f.body.ChildElements() {
 		if isXSL(c, "param") {
@@ -547,25 +554,25 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 		}
 		if instr != nil {
 			// More than one instruction in the body.
-			return roamingFreeRanging, false
+			return roamingFreeRanging, false, false
 		}
 		instr = c
 	}
 	if instr == nil {
 		// An empty body returns the empty sequence: grounded and motionless.
-		return groundedMotionless, true
+		return groundedMotionless, true, false
 	}
 	if !isXSL(instr, "sequence") && !isXSL(instr, "value-of") {
-		return roamingFreeRanging, false
+		return roamingFreeRanging, false, false
 	}
 	sel := instr.Attr("", "select")
 	if sel == nil {
-		return roamingFreeRanging, false
+		return roamingFreeRanging, false, false
 	}
 	ns := newNSResolver(instr, xpathDefaultNamespace(instr))
 	expr, err := xpath.ParseVersion(sel.Value(), ns, xpathVersionAt(instr))
 	if err != nil {
-		return roamingFreeRanging, false
+		return roamingFreeRanging, false, false
 	}
 
 	// A recursive body needs no iteration to reach its fixed point, because
@@ -597,6 +604,7 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 		known:             true,
 		funcs:             funcs,
 		decl:              instr,
+		trust:             trust,
 	}
 	// The streaming parameter is the first parameter, and only when the
 	// function is declared-streamable and that parameter's declared type
@@ -611,7 +619,7 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 	}
 	p := a.expr(expr)
 	if !a.known {
-		return roamingFreeRanging, false
+		return roamingFreeRanging, false, false
 	}
 
 	// xsl:value-of builds a text node from the atomized value, so its result
@@ -638,7 +646,7 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 	// children, what turns motionless into consuming.
 	res := typeAdjust(p, f.asType, bodyAllowsChildren(instr, expr))
 
-	return res, true
+	return res, true, a.unverified
 }
 
 // satisfiesCategory reports whether a function result meets the body rule of
@@ -784,6 +792,8 @@ func (a *analyzer) simpleMap(x *xpath.SimpleMap) props {
 		ctxPosture:        left.posture,
 		ctxAllowsChildren: a.allowsChildren(x.Left),
 		known:             a.known,
+		unverified:        a.unverified,
+		trust:             a.trust,
 		funcs:             a.funcs,
 		streamingParam:    a.streamingParam,
 		paramCategory:     a.paramCategory,
@@ -807,6 +817,7 @@ func (a *analyzer) simpleMap(x *xpath.SimpleMap) props {
 	}
 	p := inner.expr(x.Right)
 	a.known = a.known && inner.known
+	a.unverified = a.unverified || inner.unverified
 	return p
 }
 
@@ -833,6 +844,12 @@ func (a *analyzer) callProps(x *xpath.FuncCall) (props, bool) {
 	// empty operand list.
 	if f.arity() == 0 {
 		return groundedMotionless, true
+	}
+	// The call is assessed from the declaration -- its category, or its
+	// parameter types -- so the verdict holds only once the declaration is
+	// verified and cannot be overridden from another module.
+	if f.category.declaredStreamable() && !a.trust.funcVerified(f) || !a.trust.local() {
+		a.unverified = true
 	}
 
 	switch f.category {

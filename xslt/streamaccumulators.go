@@ -429,10 +429,20 @@ func patternStepFreeRanging(e xpath.Expr, at *xdm.Node, matchedAllowsChildren bo
 func patternPredicatesFreeRanging(preds []xpath.Expr, allowsChildren, matchedAllowsChildren bool) (bool, bool) {
 	for _, pred := range preds {
 		// Condition (b), second half: the predicate must be non-positional.
-		// isPositionalPredicate already implements §19.8.10's definition --
-		// a call to position(), last(), or function-lookup() outside a
-		// nested predicate, or a numeric predicate expression.
-		if isPositionalPredicate(pred) {
+		// §19.8.10 defines that by a call to position(), last() or
+		// function-lookup() outside a nested predicate, or by the
+		// predicate's STATIC TYPE being numeric. isPositionalPredicate
+		// answers a syntactic question instead -- "does a numeric literal
+		// appear anywhere?" -- which over-reaches on a comparison:
+		// §19.8.10's own list calls "p[@status = $status-codes[1]]"
+		// motionless, its type being xs:boolean, and accumulator-055s
+		// matches "p/text()[accumulator-before('text-in-p-count') eq 1]".
+		// So a boolean-typed predicate that calls none of the three is
+		// non-positional, and goes on to the motionless test below like any
+		// other. (It used to be withheld instead, which let
+		// "rec[following-sibling::rec/@k = 3]" through unjudged.)
+		if isPositionalPredicate(pred) &&
+			(callsPositionOrLast(pred) || !hasBooleanStaticType(pred)) {
 			return true, true
 		}
 		// Condition (b), first half: the expression immediately contained in

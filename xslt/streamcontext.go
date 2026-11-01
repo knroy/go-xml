@@ -60,25 +60,16 @@ func checkStreamableModePatterns(root *xdm.Node) error {
 		if !isXSL(el, "template") {
 			return true
 		}
-		// templateModeNames returns nil for a named template (no @match) and
-		// for "#all"/"#current", neither of which names a mode that can be
-		// looked up. A rule with no match pattern has no pattern to judge.
+		// A rule with no match pattern has no pattern to judge.
 		a := el.Attr("", "match")
 		if a == nil {
 			return true
 		}
-		inStreamable := false
-		for _, m := range templateModeNames(el) {
-			if streamable[m] {
-				inStreamable = true
-				break
-			}
-		}
-		if !inStreamable {
+		if !inStreamableMode(el, streamable) {
 			return true
 		}
 		free, known := patternIsFreeRanging(a.Value(), el)
-		if known && free && !patternPredicateOnlySyntacticallyNumeric(a.Value(), el) {
+		if known && free {
 			err = fmt.Errorf(
 				"the match pattern %q of a template rule in a streamable "+
 					"mode is not motionless, so it is not "+
@@ -88,6 +79,21 @@ func checkStreamableModePatterns(root *xdm.Node) error {
 		return true
 	})
 	return err
+}
+
+// inStreamableMode reports whether a template rule belongs to a mode the
+// module declares streamable. mode="#all" belongs to every mode (§6.6.4),
+// which templateModeNames, naming modes, leaves out.
+func inStreamableMode(el *xdm.Node, streamable map[string]bool) bool {
+	if len(streamable) > 0 && strings.Contains(" "+el.AttrValue("mode")+" ", " #all ") {
+		return true
+	}
+	for _, m := range templateModeNames(el) {
+		if streamable[m] {
+			return true
+		}
+	}
+	return false
 }
 
 // streamableModeNames collects the Clark names of the modes an xsl:mode
@@ -112,83 +118,6 @@ func streamableModeNames(root *xdm.Node) map[string]bool {
 		return true
 	})
 	return out
-}
-
-// patternPredicateOnlySyntacticallyNumeric reports whether a pattern's
-// free-ranging verdict rests only on isPositionalPredicate's deliberately
-// over-broad numeric test, and so must not be raised as an error.
-//
-// §19.8.10 defines a non-positional predicate by the predicate expression's
-// STATIC TYPE: it is non-numeric when the intersection of that type with
-// U{xs:decimal, xs:double, xs:float} is empty. isPositionalPredicate answers a
-// different, syntactic question -- "does a numeric literal appear anywhere
-// inside?" -- and §19.8.8.8, its original caller, can afford that: there an
-// over-broad answer only withholds the scanning-expression rescue, which loses
-// precision and reports nothing.
-//
-// Here the same answer would be reported as XTSE3430, so the gap between the
-// two questions becomes a spurious rejection. accumulator-055s writes
-//
-//	match="p/text()[accumulator-before('text-in-p-count') eq 1]"
-//
-// whose predicate is a comparison. §19.8.10's own list makes the distinction
-// explicitly: "p[@status = $status-codes[1]]" is motionless even though a
-// numeric literal appears in it, because the predicate's static type is
-// xs:boolean, while "p[$pnum + 1]" is not, because its type is numeric.
-//
-// So a predicate whose top-level operator is a comparison or a boolean
-// connective has a boolean static type, and no numeric literal buried in its
-// operands can change that. Where the free-ranging verdict rests on nothing
-// but such a predicate, the classification is withheld rather than reported --
-// the same "no opinion" the analysis gives any construct it does not model.
-func patternPredicateOnlySyntacticallyNumeric(src string, at *xdm.Node) bool {
-	ns := newNSResolver(at, xpathDefaultNamespace(at))
-	expr, err := xpath.ParseVersion(src, ns, xpathVersionAt(at))
-	if err != nil {
-		return false
-	}
-	var preds []xpath.Expr
-	switch x := expr.(type) {
-	case *xpath.Step:
-		preds = x.Predicates
-	case *xpath.PathExpr:
-		if len(x.Steps) == 0 {
-			return false
-		}
-		step, ok := x.Steps[len(x.Steps)-1].(*xpath.Step)
-		if !ok {
-			return false
-		}
-		preds = step.Predicates
-	case *xpath.FilterExpr:
-		// The XSLT 3.0 ".[...]" pattern, which patternExprFreeRanging now
-		// classifies. Its predicates are top-level pattern predicates, so
-		// they need the same rescue as a step's.
-		if _, ok := x.Base.(*xpath.ContextItem); !ok {
-			return false
-		}
-		preds = x.Predicates
-	default:
-		return false
-	}
-	sawRescued := false
-	for _, pred := range preds {
-		if !isPositionalPredicate(pred) {
-			continue
-		}
-		// §19.8.10's first condition is independent of the static type: a
-		// call to position(), last() or function-lookup() outside a nested
-		// predicate makes the predicate positional whatever it returns.
-		// "p[position() gt 2]" is a comparison, and the spec still lists it
-		// as not motionless.
-		if callsPositionOrLast(pred) || !hasBooleanStaticType(pred) {
-			// A genuinely positional predicate -- "p[1]", "p[last()]" -- so
-			// the verdict stands on its own merits.
-			return false
-		}
-		sawRescued = true
-	}
-	return sawRescued
 }
 
 // callsPositionOrLast reports whether an expression calls one of the three
@@ -275,9 +204,10 @@ func hasBooleanStaticType(e xpath.Expr) bool {
 // decidable: "apply-templates select='.//section'" is free-ranging because
 // .//section descends, whatever the section rule then goes on to do.
 //
-// A rule whose @mode is "#all" is not assessed. templateModeNames excludes it,
-// because "#all" names every mode rather than any particular one, and a rule
-// written for every mode cannot be held to the streamability of one of them.
+// A rule whose @mode is "#all" is assessed too: §6.6.4 holds to the rules
+// every template rule "that includes that mode (explicitly or implicitly,
+// including by specifying #all)", and §19.10 makes the consequences the same.
+// (This comment once said the opposite, and such a rule was never checked.)
 //
 // The verdict is withheld unless the analysis fully modelled the body (known),
 // which is the guard the whole check rests on, and unless it rests on
@@ -302,15 +232,25 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 		if !isXSL(el, "template") || el.Attr("", "match") == nil {
 			return true
 		}
-		inStreamable := false
-		for _, m := range templateModeNames(el) {
-			if streamable[m] {
-				inStreamable = true
-				break
-			}
-		}
-		if !inStreamable {
+		if !inStreamableMode(el, streamable) {
 			return true
+		}
+		// §6.6.4's third condition: "Every expression and contained
+		// sequence constructor in a contained xsl:param element (the
+		// construct that provides the default value of the parameter) is
+		// motionless."
+		for _, c := range el.ChildElements() {
+			if !isXSL(c, "param") {
+				continue
+			}
+			if p, known, _ := ruleParamDefault(c, sets, funcs, nil); known && p.sweep != sweepMotionless {
+				err = fmt.Errorf(
+					"the default of parameter %q of the template rule matching %q "+
+						"in a streamable mode is %v, but §6.6.4 requires it to be "+
+						"motionless, so it is not guaranteed-streamable (XTSE3430)",
+					c.AttrValue("name"), el.AttrValue("match"), p.sweep)
+				return false
+			}
 		}
 		p, known := analyzeSequenceConstructor(el, postureStriding, sets, funcs)
 		if !known || (bodyCallsCurrentGroup(el) && !hasIndependentGroupRefusal(el)) {
@@ -343,6 +283,22 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 	return err
 }
 
+// ruleParamDefault assesses the default of a template rule's xsl:param,
+// which is evaluated with the rule's own focus: striding, by §19.6.
+func ruleParamDefault(
+	param *xdm.Node, sets map[xdm.QName][]*xdm.Node, funcs map[funcKey]*streamFunc, trust *declTrust,
+) (props, bool, bool) {
+	a := &instrAnalyzer{ctxPosture: postureStriding, ctxAllowsChildren: true,
+		known: true, attrSets: sets, funcs: funcs, trust: trust}
+	var p props
+	if s := param.Attr("", "select"); s != nil {
+		p = a.exprProps(s.Value(), param)
+	} else {
+		p = a.body(param)
+	}
+	return p, a.known, a.unverified
+}
+
 // hasIndependentGroupRefusal reports whether some xsl:for-each-group in the
 // rule is refused by §19.8.4.19 for a reason that has nothing to do with the
 // call on fn:current-group -- either a grouping pattern §19.8.10 classifies as
@@ -360,9 +316,8 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 // there would silence a refusal §19.8.4.19 derived on its own.
 //
 // Both tests are deliberately the ones forEachGroup applies, so the two cannot
-// disagree: the same patternIsFreeRanging with the same
-// patternPredicateOnlySyntacticallyNumeric rescue, the same key assessed in
-// the select's own context posture, and the same restriction to a non-grounded
+// disagree: the same patternIsFreeRanging, the same key assessed in the
+// select's own context posture, and the same restriction to a non-grounded
 // select -- which is what keeps si-group-203 running, its select being the
 // grounded "//Item/copy-of()".
 func hasIndependentGroupRefusal(rule *xdm.Node) bool {
@@ -385,7 +340,7 @@ func hasIndependentGroupRefusal(rule *xdm.Node) bool {
 		}
 		if at := groupPatternAttr(el); at != nil {
 			free, known := patternIsFreeRanging(at.Value(), el)
-			if known && free && !patternPredicateOnlySyntacticallyNumeric(at.Value(), el) {
+			if known && free {
 				found = true
 				return false
 			}
