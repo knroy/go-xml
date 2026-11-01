@@ -423,6 +423,7 @@ func (d *Decoder) startTag() (Token, error) {
 		return nil, d.orSyntaxError("expected element name after <")
 	}
 	attrs := d.attrs[:0]
+	start := d.InputOffset()
 	for {
 		spaced := d.space()
 		b, ok := d.mustgetc()
@@ -474,11 +475,33 @@ func (d *Decoder) startTag() (Token, error) {
 			// to, go on to full blocks.
 			d.arena.buf = make([]byte, 0, min(d.Size, arenaBlock))
 		}
+		if len(attrs) == cap(attrs) && len(attrs) >= bigTag {
+			attrs = d.growAttrs(attrs, start)
+		}
 		attrs = append(attrs, Attr{an, d.arena.String(v)})
 	}
 	d.attrs = attrs
 	d.tokStart = StartElement{name, attrs}
 	return &d.tokStart, nil
+}
+
+// bigTag is how many attributes a start tag has before startTag stops growing
+// the slice of them by append's steps (1.25x at this size, so a chain of them
+// allocates 5x the final slice).
+const bigTag = 256
+
+// growAttrs makes room in attrs for the rest of a tag with many attributes.
+// The input left, over the bytes an attribute has taken so far, bounds how many
+// remain; ponytail: capped at 8x the slice, so that a tag early in a huge
+// document takes at most that, and at least doubling.
+func (d *Decoder) growAttrs(attrs []Attr, start int64) []Attr {
+	est := len(attrs)
+	if rest := d.Size - int(d.InputOffset()); rest > 0 {
+		if used := int(d.InputOffset() - start); used > 0 {
+			est = rest / max(used/len(attrs), 1)
+		}
+	}
+	return append(make([]Attr, 0, len(attrs)+max(len(attrs), min(est, 8*len(attrs)))), attrs...)
 }
 
 // procInst reads [16] PI after "<?", and treats target "xml" as [23] XMLDecl.

@@ -221,7 +221,7 @@ func validateStartElement(t xml.StartElement, ns *nsScope, xml11 bool) error {
 		case len(seen) < len(small):
 			seen = append(seen, k)
 		default:
-			many = make(map[expandedName]bool, 2*len(small))
+			many = make(map[expandedName]bool, max(2*len(small), len(t.Attr)))
 			for _, s := range seen {
 				many[s] = true
 			}

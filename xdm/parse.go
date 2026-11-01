@@ -835,6 +835,9 @@ func buildElement(t xml.StartElement, parent *Node, ns *nsScope, names *nameCach
 	// validateStartElement has refused an unbound prefix.
 	uri, _ := ns.lookup(t.Name.Space)
 	el.name = names.intern(tree, QName{Prefix: t.Name.Space, Local: t.Name.Local, URI: uri})
+	if len(t.Attr) >= bigTag {
+		tree.reserveNames(len(t.Attr))
+	}
 	for _, a := range t.Attr {
 		if a.Name.Space == "xmlns" || (a.Name.Space == "" && a.Name.Local == "xmlns") {
 			continue
