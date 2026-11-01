@@ -948,15 +948,13 @@ func (b *jsonBuilder) key(k string) error {
 func (b *jsonBuilder) endMap() error {
 	f := b.stack[len(b.stack)-1]
 	b.stack = b.stack[:len(b.stack)-1]
-	m := xdm.NewMap()
+	mb := xdm.NewMapBuilder()
 	for i, k := range f.keys {
-		next, err := m.Put(xdm.NewString(k), f.values[i])
-		if err != nil {
+		if err := mb.Set(xdm.NewString(k), f.values[i]); err != nil {
 			return err
 		}
-		m = next
 	}
-	return b.emit(xdm.One(m))
+	return b.emit(xdm.One(mb.Build()))
 }
 
 func (b *jsonBuilder) startArray() error {
