@@ -4,6 +4,30 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+Memory footprint work: what a tree holds and what a transform peaks at. Output
+is byte-identical; new API is additive.
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| Streamed `xsl:source-document`, first stage | A streamable `xsl:for-each`/`xsl:iterate` over a child path reads one record at a time: 1 GB totalled at 27 MB RSS, not 3.7 GB, at about 2× CPU. Other shapes build the tree. | [`3f185fe`][3f185fe], [`27757b3`][27757b3] |
+| `xdm.ParseBursts` | Parses a document handing over one selected element at a time in a tree of its own, with limits counted over the whole document. | [`b4b6052`][b4b6052], [`80f999f`][80f999f] |
+| `xslt.FileResolver.MaxNodes`; `MaxBytes` reaches the parser | Raising `MaxBytes` past 64 MB had no effect on `fn:doc`, the parser kept its own default. Both limits now apply to what the resolver parses. | [`80f999f`][80f999f] |
+| `xdmbuild.InPlaceDocument` | A builder rooted at a new document node, for content built straight into it. | [`302c932`][302c932] |
+
+### Changed — memory
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| Namespace nodes lived as long as their tree | `//namespace::*` on 5 MiB kept 140 MB. They are held weakly, 16 to a chunk, and freed when nothing holds them: under 0.5 MB after the query. | [`ac4973e`][ac4973e], [`fcab85a`][fcab85a], [`e1b5e1f`][e1b5e1f] |
+| Built-in shallow-copy built a document result twice | In a mode with no template rules it builds in place: parse-100mb identity peak 1091 → 930 MB, CPU −25 to −40%. | [`302c932`][302c932] |
+| Built trees stored every whitespace-only text value | They share one value per string, as a parse does: an identity result is the size of its source again. | [`c60f8f3`][c60f8f3], [`09f0c5d`][09f0c5d] |
+| A deep copy duplicated the source's text | `xsl:copy-of` of 4,096+ records borrows the source blocks it fills by half or more: XMark identity result −28%, peak −19%. | [`546af03`][546af03], [`b4cd614`][b4cd614] |
+| Full record chunks were padded 6% by the malloc header | They are allocated two at a time past the 8th, 40,960 B exactly: parse-100mb retained 370 → 350.5 MB. | [`907c674`][907c674] |
+
 ## v2.1.1 — 2026-11-01
 
 Memory and CPU fixes from go-xmlsec's measurements against v2.1.0. No API
@@ -1830,3 +1854,16 @@ here so every entry in this file sits under a release.
 [9572c44]: https://github.com/knroy/go-xml/commit/9572c44
 [fd9750e]: https://github.com/knroy/go-xml/commit/fd9750e
 [5712d9f]: https://github.com/knroy/go-xml/commit/5712d9f
+[3f185fe]: https://github.com/knroy/go-xml/commit/3f185fe
+[27757b3]: https://github.com/knroy/go-xml/commit/27757b3
+[b4b6052]: https://github.com/knroy/go-xml/commit/b4b6052
+[80f999f]: https://github.com/knroy/go-xml/commit/80f999f
+[302c932]: https://github.com/knroy/go-xml/commit/302c932
+[ac4973e]: https://github.com/knroy/go-xml/commit/ac4973e
+[fcab85a]: https://github.com/knroy/go-xml/commit/fcab85a
+[e1b5e1f]: https://github.com/knroy/go-xml/commit/e1b5e1f
+[c60f8f3]: https://github.com/knroy/go-xml/commit/c60f8f3
+[09f0c5d]: https://github.com/knroy/go-xml/commit/09f0c5d
+[546af03]: https://github.com/knroy/go-xml/commit/546af03
+[b4cd614]: https://github.com/knroy/go-xml/commit/b4cd614
+[907c674]: https://github.com/knroy/go-xml/commit/907c674

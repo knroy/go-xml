@@ -128,9 +128,10 @@ Found by the third memory audit (2026-11-01) and not fixed, each with the reason
   (40k items 12.4 GB, all garbage). Appending in place is unsound while other
   references may share the prefix.
 - **Identity templates allocate about 3.5 KB a node of context copies**
-  (`withSel`, `hostWithCurrent`, the leaf-hook copy), and built-in shallow-copy
-  copies a document-level result twice; removing that copy changes an error
-  case into output.
+  (`withSel`, `hostWithCurrent`, the leaf-hook copy). Built-in shallow-copy of
+  a document node builds the result once in a mode with no template rules
+  (v2.2.0), but still builds it and copies it into a document in a mode that
+  has rules, where a rule could add an attribute that must stay `XTDE0420`.
 - **Several large text values in one document cost about 1.3× their size to
   parse** (eight 3 MiB values: 1.30×). A single value is about 1.1× at every
   size since v2.1.1; with several, the first value's buffer overshoots once
@@ -149,6 +150,50 @@ Found by the third memory audit (2026-11-01) and not fixed, each with the reason
   `xquery/inline.go` has its own implementation.
 - **A regex program over 4,096 instructions is compiled on every call**,
   because it is not cached; the largest QT3 pattern is 4,059.
+
+### Memory: what the footprint round left open (performance)
+
+Measured on branches in 2026-11 and not adopted, each with the reason:
+
+- **A 32-byte node record** (the tree pointer read from a chunk header):
+  −11 to −22% retained, rejected because a by-value copy of an `xdm.Node`
+  would then read foreign memory instead of failing safely.
+- **Compact attribute records** (16 B, nodes made on demand): −10% retained on
+  parse-100mb, −16% on SAML, about 0 on XMark, but +10–25% CPU on
+  attribute-heavy XPath, c14n and copies (+45% worst case), and a held
+  attribute would cost 62 B instead of 40. Pointer identity of `*xdm.Node`
+  forces a real record per held node; denser storage needs a value-type node
+  handle, which is a breaking change.
+- **Template-driven shallow-copy does not share source text.** Deep copies
+  (`xsl:copy-of`, `xdm.Copy` of 4,096+ records) borrow the source's text
+  blocks; a template-built copy adds each value as a string.
+- **Holding millions of namespace nodes costs a sweep per collection.**
+  Namespace nodes are held weakly since v2.2.0; while a tree's table is not
+  empty, every GC cycle sweeps it.
+
+### Streamed execution covers one shape (XSLT 3.0, performance)
+
+Since v2.2.0 an `xsl:source-document streamable="yes"` whose body is one
+`xsl:for-each` or `xsl:iterate` (optionally inside constant literal result
+elements) over a child path of plain names, with non-positional predicates on
+the last step only, and a body the gate recognises, runs record by record
+through `xdm.ParseBursts`: a 1 GB file totalled by `xsl:iterate` peaks at
+27 MB RSS against 3.7 GB, at about 2× the CPU. Everything else builds the tree,
+as before. In the W3C suite 9 of the 2,599 streamable source documents take the
+burst path; the commonest refusals are a body of `xsl:value-of` (840),
+`xsl:copy-of` (344) or `xsl:apply-templates` (175). Also:
+
+- **The result is still built in memory**, so a large filtered copy grows with
+  its output and stops at the result-node cap.
+- **Error order can differ from tree mode.** A dynamic error in the body is
+  raised before a malformed tail later in the file would be; tree mode reads
+  the whole file first. `xsl:try` can see which code wins.
+- **`xsl:break` still reads the rest of the file**, so that a malformed tail is
+  an error as in tree mode.
+- **Only `FileResolver` streams**; another `DocumentResolver` builds the tree.
+  The streamed document is not cached, so a later `fn:doc` of it reads it again.
+- **The `FileResolver` limits apply to the whole file**: raise `MaxBytes` and
+  `MaxNodes` to stream a document past 64 MB or 10M nodes.
 
 ### `fn:replace` charges a backtracking or backreference result after building it (XPath, resource limits)
 
@@ -179,7 +224,8 @@ and §18.1's grounded demand at both the sites it names.
 
 All three fail in the same direction: the suite expects `XTSE3430` — *this
 construct is not guaranteed streamable* — and the transform succeeds instead.
-The engine builds a tree and streams nothing, so it produces the **right
+The engine builds a tree for these (it reads in bursts only the narrow shape
+described under *Streamed execution covers one shape*), so it produces the **right
 answer** for all three; what it does not produce is the static refusal §19.8
 requires a streaming processor to make before running anything. These are not
 wrong answers; they are a static analysis that is not complete.

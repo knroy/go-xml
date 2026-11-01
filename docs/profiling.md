@@ -482,6 +482,7 @@ longer holds.
 | Interning `nodeTyping` per tree | Bytes −27%, wall +25%: hashing the key on every typing write costs more than the allocation saves |
 | Typing chunks under 32 KB | No gain. The `madvise` time in the typed path is macOS heap growth, not chunk size |
 | Bigger node chunks; 1,024-node chunks | No gain; +0.28 GB peak RSS at 100 MB |
+| 508- or 511-record full chunks, to fit the 20,480 B size class (2026-11) | −4.6 to −5.1% retained on parse-100mb, but `chunkOf` divides instead of shifting: tree walk 1.32–1.46×, child name test 1.20–1.31×. **Adopted instead:** 512-record chunks allocated two at a time past the 8th full chunk (`appendChunk`), 40,960 B with no malloc header to pad: −5.3% retained and peak on parse-100mb, CPU within noise |
 | Smaller first record chunk (2 records, V15) | Most fragments hold one node, but bytes moved −0.4% to +0.2% and allocations up to +0.6%: the next chunk comes sooner for every other tree |
 | Chunked result nodes | −0.9% allocations at most, +0.4–0.7% bytes |
 | String arena starting small | Retained heap −20–37% on small documents, but DocBook +5% CPU: the smaller live heap ran the collector more often (85 cycles against 77). Reverted in `629cf48` |
