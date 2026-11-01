@@ -1034,6 +1034,9 @@ func (e *BinaryOp) evalArithmetic(ctx *Context) (xdm.Sequence, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := ctx.checkResultDigits(res); err != nil {
+			return nil, err
+		}
 		return xdm.One(res), nil
 	}
 
@@ -1051,6 +1054,9 @@ func (e *BinaryOp) evalArithmetic(ctx *Context) (xdm.Sequence, error) {
 	}
 	res, err := arithmetic(lit.(*xdm.Atomic), rit.(*xdm.Atomic), e.Op)
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.checkResultDigits(res); err != nil {
 		return nil, err
 	}
 	return xdm.One(res), nil
