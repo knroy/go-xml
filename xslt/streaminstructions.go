@@ -632,9 +632,17 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 	case "result-document":
 		// §19.8.4.35: href and the serialization AVTs absorb, as does the
 		// body. The serialization attributes are all AVTs; treating every
-		// attribute other than the ones with expression values as an AVT
-		// covers them without listing forty names.
+		// attribute other than the few that are not as an AVT covers them
+		// without listing forty names.
 		ops := a.avtOperands(el, "href")
+		for at := range el.Attrs() {
+			switch n := at.Name(); {
+			case n.URI != "", standardAttributes[n.Local], n.Local == "href",
+				n.Local == "validation", n.Local == "type", n.Local == "use-character-maps":
+			default:
+				ops = append(ops, a.avtOperands(el, n.Local)...)
+			}
+		}
 		ops = append(ops, a.bodyOperand(el, usageAbsorption))
 		return combine(ops, false)
 
