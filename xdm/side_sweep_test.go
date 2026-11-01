@@ -21,7 +21,7 @@ func TestSideTruncateRacesSweep(t *testing.T) {
 	r := tree.Root.AppendElement(QName{Local: "r"})
 	nsAxis(r)
 	runtime.GC()
-	time.Sleep(50 * time.Millisecond) // no happens-before edge for the detector
+	time.Sleep(50 * time.Millisecond)  // no happens-before edge for the detector
 	r.AppendElement(QName{Local: "e"}) // no namespace query: nothing locks sideMu first
 	r.RemoveLastChild()
 }
