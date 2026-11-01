@@ -246,6 +246,11 @@ type transformState struct {
 	// appending to a copy that the caller never sees.
 	secondary *[]SecondaryResult
 
+	// resultHrefs is the set of @href values, as written, that
+	// xsl:result-document has produced, so that XTDE1490 is a lookup rather
+	// than a scan of secondary. A pointer for the same reason secondary is.
+	resultHrefs *map[string]bool
+
 	// baseURIUsed records that an xsl:result-document claimed the base output
 	// URI — the one an absent or empty @href names. The principal result tree
 	// has that URI too, so a stylesheet that writes to both is producing two
@@ -764,6 +769,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 			messages:      new([]string),
 			warnings:      new([]string),
 			secondary:     new([]SecondaryResult),
+			resultHrefs:   &map[string]bool{},
 			baseURIUsed:   new(bool),
 			baseOutputURI: opts.BaseOutputURI,
 			opts:          &opts,
