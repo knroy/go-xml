@@ -71,8 +71,10 @@ func TestStreamTrustReproducers(t *testing.T) {
 				sdAcc(fe(`<v><xsl:value-of select="accumulator-before('a')"/></v>`)) + end, ""},
 		// Template rules of a streamable mode that its check did not hold
 		// to §6.6.4.
-		{"M1 mode=#all rule", "unverified", nil,
+		{"M1 mode=#all rule", "XTSE3430", nil,
 			hdr + mode + `<xsl:template match="rec" mode="#all"><v><xsl:value-of select="` + sib + `"/></v></xsl:template>` + apply + end, ""},
+		{"M1 control: a grounded mode=#all rule", "verified", nil,
+			hdr + mode + `<xsl:template match="rec" mode="#all"><v><xsl:value-of select="@k"/></v></xsl:template>` + apply + end, ""},
 		{"M2 rule parameter default", "unverified", nil,
 			hdr + mode + `<xsl:template match="rec" mode="s"><xsl:param name="p" select="string(` + sib + `)"/><v p="{$p}"/></xsl:template>` + apply + end, ""},
 		{"M3 pattern withheld: numeric literal in a comparison", "XTSE3430", nil,

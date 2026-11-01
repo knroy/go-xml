@@ -60,21 +60,12 @@ func checkStreamableModePatterns(root *xdm.Node) error {
 		if !isXSL(el, "template") {
 			return true
 		}
-		// templateModeNames returns nil for a named template (no @match) and
-		// for "#all"/"#current", neither of which names a mode that can be
-		// looked up. A rule with no match pattern has no pattern to judge.
+		// A rule with no match pattern has no pattern to judge.
 		a := el.Attr("", "match")
 		if a == nil {
 			return true
 		}
-		inStreamable := false
-		for _, m := range templateModeNames(el) {
-			if streamable[m] {
-				inStreamable = true
-				break
-			}
-		}
-		if !inStreamable {
+		if !inStreamableMode(el, streamable) {
 			return true
 		}
 		free, known := patternIsFreeRanging(a.Value(), el)
@@ -88,6 +79,21 @@ func checkStreamableModePatterns(root *xdm.Node) error {
 		return true
 	})
 	return err
+}
+
+// inStreamableMode reports whether a template rule belongs to a mode the
+// module declares streamable. mode="#all" belongs to every mode (§6.6.4),
+// which templateModeNames, naming modes, leaves out.
+func inStreamableMode(el *xdm.Node, streamable map[string]bool) bool {
+	if len(streamable) > 0 && strings.Contains(" "+el.AttrValue("mode")+" ", " #all ") {
+		return true
+	}
+	for _, m := range templateModeNames(el) {
+		if streamable[m] {
+			return true
+		}
+	}
+	return false
 }
 
 // streamableModeNames collects the Clark names of the modes an xsl:mode
@@ -198,9 +204,10 @@ func hasBooleanStaticType(e xpath.Expr) bool {
 // decidable: "apply-templates select='.//section'" is free-ranging because
 // .//section descends, whatever the section rule then goes on to do.
 //
-// A rule whose @mode is "#all" is not assessed. templateModeNames excludes it,
-// because "#all" names every mode rather than any particular one, and a rule
-// written for every mode cannot be held to the streamability of one of them.
+// A rule whose @mode is "#all" is assessed too: §6.6.4 holds to the rules
+// every template rule "that includes that mode (explicitly or implicitly,
+// including by specifying #all)", and §19.10 makes the consequences the same.
+// (This comment once said the opposite, and such a rule was never checked.)
 //
 // The verdict is withheld unless the analysis fully modelled the body (known),
 // which is the guard the whole check rests on, and unless it rests on
@@ -225,14 +232,7 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 		if !isXSL(el, "template") || el.Attr("", "match") == nil {
 			return true
 		}
-		inStreamable := false
-		for _, m := range templateModeNames(el) {
-			if streamable[m] {
-				inStreamable = true
-				break
-			}
-		}
-		if !inStreamable {
+		if !inStreamableMode(el, streamable) {
 			return true
 		}
 		p, known := analyzeSequenceConstructor(el, postureStriding, sets, funcs)
