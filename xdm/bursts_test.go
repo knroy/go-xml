@@ -196,3 +196,41 @@ func TestParseBurstsNoProlog(t *testing.T) {
 		t.Fatal("a colon in a prolog PI target: no error")
 	}
 }
+
+// The names and namespace frames that the dropped content interns are taken
+// back as the stream goes, as its text is, and the bursts kept from before
+// still read theirs.
+func TestParseBurstsNamesStaySmall(t *testing.T) {
+	const n = 5000
+	var b strings.Builder
+	b.WriteString("<a>")
+	for i := range n {
+		fmt.Fprintf(&b, `<r xmlns:p%d="urn:%d"><n%d p%d:k="v"/></r><x%d xmlns:q="urn:q%d"/>`, i, i, i, i, i, i)
+	}
+	b.WriteString("</a>")
+	var got []*Node
+	opts := ParseOptions{bursts: &burster{
+		path: []QName{{Local: "a"}, {Local: "r"}},
+		fn:   func(r *Node) error { got = append(got, r); return nil },
+	}}
+	tree, err := parse(strings.NewReader(b.String()), "", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.names) > 3*burstSlack || len(tree.frames) > 2*burstSlack || len(tree.frameData) > 2*burstSlack {
+		t.Fatalf("after %d records the parse holds %d names and %d frames (%d bindings)",
+			n, len(tree.names), len(tree.frames), len(tree.frameData))
+	}
+	if len(got) != n {
+		t.Fatalf("%d bursts", len(got))
+	}
+	for i, r := range got {
+		c := r.FirstChild()
+		a := c.AttrAt(0)
+		ns := r.InScopeNamespaces()
+		if c.Name().Local != fmt.Sprintf("n%d", i) || a.Name().URI != fmt.Sprintf("urn:%d", i) ||
+			ns[fmt.Sprintf("p%d", i)] != fmt.Sprintf("urn:%d", i) {
+			t.Fatalf("burst %d reads %v @%v %v", i, c.Name(), a.Name(), ns)
+		}
+	}
+}

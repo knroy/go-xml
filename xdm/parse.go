@@ -370,7 +370,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		if _, text := tok.(*xml.CharData); !text {
 			run.flush(&spaces, stripSpaceAt)
 			if bs != nil {
-				bs.trimLeaves(cur, depth, &spaces)
+				bs.trimLeaves(cur, depth, &spaces, &names)
 			}
 		}
 
@@ -419,7 +419,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 				return nil, err
 			}
 			if bs != nil && cur == tree.Root {
-				bs.marks = append(bs.marks[:0], tree.text.mark())
+				bs.marks = append(bs.marks[:0], markOf(tree))
 				bs.v11 = dec.IsVersion11()
 			}
 			el, decls := buildElement(t, cur, &ns, &names)
@@ -483,7 +483,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 			cur = cur.Parent()
 			depth--
 			if bs != nil {
-				if err := bs.end(closed, depth+1, &spaces); err != nil {
+				if err := bs.end(closed, depth+1, &spaces, &names); err != nil {
 					return nil, err
 				}
 			}
