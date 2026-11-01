@@ -147,9 +147,11 @@ func (s *textStore) rewind(m textMark) {
 	}
 	s.blocks = s.blocks[:m.blocks]
 	s.cur, s.size = 0, 0
-	// The shared whitespace values may lie in the blocks just dropped. The
-	// values share registers come from the DTD, stored before any mark.
+	// The shared whitespace values and any borrowed blocks may lie in the
+	// blocks just dropped. The values share registers come from the DTD,
+	// stored before any mark.
 	if s.aux != nil {
 		s.aux.ws = spaceTable{}
+		s.aux.lent, s.aux.last = nil, nil
 	}
 }

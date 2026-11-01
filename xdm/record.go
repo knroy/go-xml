@@ -1704,6 +1704,17 @@ type textAux struct {
 	// ws shares one stored value among the whitespace-only values add is
 	// given, as a parse does.
 	ws spaceTable
+	// lent holds the blocks of another tree's store that planFrom named, keyed
+	// by address (a block is pinned by this store once it is borrowed, so its
+	// address cannot be reused while its entry says where it sits here).
+	lent map[uintptr]*lendState
+	// lastKey/last cache the previous lookup; copies run in document order.
+	lastKey uintptr
+	last    *lendState
+}
+
+type lendState struct {
+	idx int32 // index in this store of the borrowed block, + 1 (0: not borrowed yet)
 }
 
 // sharedKey identifies a string by where it lives: the same storage is the
@@ -1781,6 +1792,104 @@ func (s *textStore) share(v string) {
 		off, n := s.add(v)
 		s.aux.shared[k] = [2]uint32{off, n}
 	}
+}
+
+// addFrom stores the value at (off, n) of src, the store of another tree, as
+// add would store its string, except that a block planFrom named is borrowed:
+// the range names src's block instead of a copy of the bytes. A borrowed
+// block is the source's slice with its capacity clipped to its length, so
+// nothing is ever appended into it from here, and the source only appends past
+// that length; the bytes below it never change. Borrowing pins the whole
+// block, but planFrom names only blocks the copy is about to fill by half or
+// more, so the pinned bytes are at most twice the copy's own.
+func (s *textStore) addFrom(src *textStore, off, n uint32) (uint32, uint32) {
+	if n == 0 {
+		return 0, 0
+	}
+	if s.aux == nil || len(s.aux.lent) == 0 || s == src || n >= textOwnFrom {
+		return s.add(src.str(off, n))
+	}
+	blk := src.blocks[off>>textShift]
+	// Whitespace goes through add's table, as it does for a parse.
+	if n <= maxSpaceLen && onlySpace(blk[off&textMask:][:n]) {
+		return s.add(src.str(off, n))
+	}
+	l := s.lend(blk, false)
+	if l == nil {
+		return s.add(src.str(off, n))
+	}
+	if l.idx == 0 {
+		// The store's block numbers must not run out for want of room to copy
+		// into, so a store this full stops borrowing.
+		if len(s.blocks) >= 1<<(31-textShift) {
+			return s.add(src.str(off, n))
+		}
+		s.newBlock(blk[:len(blk):len(blk)])
+		l.idx = int32(len(s.blocks))
+	}
+	if int(off&textMask)+int(n) > len(s.blocks[l.idx-1]) {
+		return s.add(src.str(off, n)) // stored after the block was borrowed
+	}
+	return uint32(l.idx-1)<<textShift | off&textMask, n
+}
+
+// planFrom tells the store that the leaves of src's records [lo, hi), a deep
+// copy about to be made with addFrom, are to borrow every block they fill by
+// half or more. The count skips the whitespace-only values addFrom stores
+// through add. A subtree too small for the walk to repay itself borrows
+// nothing: a block a few values of it touch is not worth pinning.
+func (s *textStore) planFrom(t *Tree, lo, hi uint32) {
+	if hi-lo < planMin || s == &t.text {
+		return
+	}
+	counts := make([]int32, len(t.text.blocks))
+	for i := lo; i < hi; i++ {
+		r := t.rec(i)
+		if r.v1 == 0 || !r.isLeaf() || r.flags&fSide != 0 {
+			continue
+		}
+		b := t.text.blocks[r.v0>>textShift][r.v0&textMask:][:r.v1]
+		if len(b) > maxSpaceLen || !onlySpace(b) {
+			counts[r.v0>>textShift] += int32(len(b))
+		}
+	}
+	for k, c := range counts {
+		if blk := t.text.blocks[k]; c > 0 && 2*int(c) >= len(blk) {
+			s.lend(blk, true)
+		}
+	}
+}
+
+// planMin is the fewest records planFrom walks.
+const planMin = 4096
+
+// lend returns the account of the block blk of another store, made if create.
+func (s *textStore) lend(blk []byte, create bool) *lendState {
+	a := s.aux
+	if a == nil {
+		if !create {
+			return nil
+		}
+		a = new(textAux)
+		s.aux = a
+	}
+	key := uintptr(unsafe.Pointer(unsafe.SliceData(blk)))
+	if l := a.last; l != nil && a.lastKey == key {
+		return l
+	}
+	l := a.lent[key]
+	if l == nil {
+		if !create {
+			return nil
+		}
+		if a.lent == nil {
+			a.lent = map[uintptr]*lendState{}
+		}
+		l = new(lendState)
+		a.lent[key] = l
+	}
+	a.lastKey, a.last = key, l
+	return l
 }
 
 // keep stores b, which nothing else writes to, as a block of its own.

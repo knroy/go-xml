@@ -52,12 +52,30 @@ func (p *Node) AppendPI(target, value string) *Node {
 }
 
 func (p *Node) appendLeaf(kind NodeKind, name QName, value string) *Node {
+	return p.appendLeafFrom(kind, name, value, nil)
+}
+
+// appendLeafFrom is appendLeaf for a copy of from, a leaf of another tree
+// whose value is value: the copy's text may share the original's blocks.
+func (p *Node) appendLeafFrom(kind NodeKind, name QName, value string, from *Node) *Node {
 	c := p.appendChild(kind)
 	c.name = p.tree.intern(name)
-	if value != "" {
+	if from = lender(p, from); from != nil {
+		c.v0, c.v1 = p.tree.text.addFrom(&from.tree.text, from.v0, from.v1)
+	} else if value != "" {
 		c.v0, c.v1 = p.tree.text.add(value)
 	}
 	return c
+}
+
+// lender returns from if the text of a copy of it appended to p can be taken
+// from its store: from is a leaf of another tree that keeps its value in its
+// text store.
+func lender(p, from *Node) *Node {
+	if from == nil || from.tree == nil || from.tree == p.tree || from.flags&fSide != 0 || !from.isLeaf() {
+		return nil
+	}
+	return from
 }
 
 // AppendAttr appends an attribute to p, which must be an element with no
@@ -65,6 +83,12 @@ func (p *Node) appendLeaf(kind NodeKind, name QName, value string) *Node {
 // caller assembling a tree out of a result sequence that holds a parentless
 // attribute; nothing the data model builds does that.)
 func (p *Node) AppendAttr(name QName, value string) *Node {
+	return p.appendAttrFrom(name, value, nil)
+}
+
+// appendAttrFrom is AppendAttr for a copy of from, an attribute of another
+// tree whose value is value.
+func (p *Node) appendAttrFrom(name QName, value string, from *Node) *Node {
 	t := p.tree
 	t.openTo(p)
 	if p.isLeaf() || p.v1 != noIdx || t.n != p.self+1+p.attrCount() {
@@ -75,7 +99,9 @@ func (p *Node) AppendAttr(name QName, value string) *Node {
 	a.parent = p.self
 	a.v1 = 0
 	a.name = t.intern(name)
-	if value != "" {
+	if from = lender(p, from); from != nil {
+		a.v0, a.v1 = t.text.addFrom(&from.tree.text, from.v0, from.v1)
+	} else if value != "" {
 		a.v0, a.v1 = t.text.add(value)
 	}
 	if k := p.attrCount() + 1; k < 0xFFFF && p.flags&fManyAttrs == 0 {
@@ -97,6 +123,9 @@ func (p *Node) AppendCopy(src *Node) *Node {
 	// A subtree still being built in p's own tree grows as the copy is
 	// appended; the copy stops where src ended when it began.
 	limit := src.tree.n
+	if !src.isLeaf() && src.flags&fSide == 0 {
+		p.tree.text.planFrom(src.tree, src.self, min(src.tree.endOf(src), limit))
+	}
 	c := p.AppendShallowCopy(src)
 	fillCopy(c, src, nil, limit)
 	return c
@@ -109,12 +138,12 @@ func (p *Node) AppendShallowCopy(src *Node) *Node {
 	var c *Node
 	switch src.Kind() {
 	case KindAttribute:
-		c = p.AppendAttr(src.Name(), src.Value())
+		c = p.appendAttrFrom(src.Name(), src.Value(), src)
 	case KindElement, KindDocument:
 		c = p.appendChild(src.Kind())
 		c.name = p.tree.intern(src.Name())
 	default:
-		c = p.appendLeaf(src.Kind(), src.Name(), src.Value())
+		c = p.appendLeafFrom(src.Kind(), src.Name(), src.Value(), src)
 	}
 	c.SetBaseURI(src.BaseURI())
 	c.CopyTypingFrom(src)
@@ -157,7 +186,7 @@ func fillCopy(c, src *Node, drop func(*Node) bool, limit uint32) {
 		c.AddNamespace(prefix, uri)
 	}
 	for a := range src.Attrs() {
-		c.AppendAttr(a.Name(), a.Value()).CopyTypingFrom(a)
+		c.appendAttrFrom(a.Name(), a.Value(), a).CopyTypingFrom(a)
 	}
 	if src.v1 == noIdx {
 		return
