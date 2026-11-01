@@ -4,7 +4,7 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased
+## v2.1.1 — 2026-11-01
 
 Memory and CPU fixes from go-xmlsec's measurements against v2.1.0. No API
 change; output is byte-identical.
