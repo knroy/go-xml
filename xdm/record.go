@@ -1854,7 +1854,7 @@ func (s *textStore) planFrom(t *Tree, lo, hi uint32) {
 		}
 	}
 	for k, c := range counts {
-		if blk := t.text.blocks[k]; c > 0 && 2*int(c) >= len(blk) {
+		if blk := t.text.blocks[k]; c > 0 && 2*int(c) >= cap(blk) { // borrowing pins the array
 			s.lend(blk, true)
 		}
 	}
