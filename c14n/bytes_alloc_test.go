@@ -6,9 +6,9 @@ import (
 )
 
 // Bytes and BytesNodeSet grew a bytes.Buffer by doubling from empty, 3.7
-// times the canonical form in all, and Equal paid it for its first operand.
-// They now keep the writer's chunks and join them once, about twice the
-// output.
+// times the canonical form in all, then kept the writer's chunks and joined
+// them, 2.1 times, and Equal paid it for its first operand. They now size
+// the result from the node set and write into it once, about 1.1 times.
 func TestBytesAllocation(t *testing.T) {
 	// 3 MB: doubling cost 3.1x the output here and 3.7x at 10 MB.
 	root := cachedDoc(t, 3<<20).FirstChild()
@@ -26,8 +26,8 @@ func TestBytesAllocation(t *testing.T) {
 	} {
 		got := heapAllocated(tc.f)
 		t.Logf("%s: %d bytes allocated for %d bytes of output (%.2fx)", tc.name, got, len(out), float64(got)/float64(len(out)))
-		if got > uint64(len(out))*5/2 {
-			t.Errorf("%s allocated %d bytes for %d bytes of output, want under 2.5x", tc.name, got, len(out))
+		if got > uint64(len(out))*7/5 {
+			t.Errorf("%s allocated %d bytes for %d bytes of output, want under 1.4x", tc.name, got, len(out))
 		}
 	}
 }
