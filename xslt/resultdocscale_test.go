@@ -44,16 +44,18 @@ func TestResultDocumentCollisionCheckIsLinear(t *testing.T) {
 		return time.Since(start)
 	}
 	best := func(n int) time.Duration {
-		a, b := run(n), run(n)
-		if b < a {
-			return b
+		best := run(n)
+		for i := 0; i < 4; i++ {
+			if d := run(n); d < best {
+				best = d
+			}
 		}
-		return a
+		return best
 	}
-	small, large := best(3000), best(12000)
+	small, large := best(6000), best(24000)
 	// 4x the documents: about 4x the time when linear, about 16x when not.
-	if large > 9*small {
-		t.Fatalf("12000 documents took %v against %v for 3000", large, small)
+	if large > 12*small {
+		t.Fatalf("24000 documents took %v against %v for 6000", large, small)
 	}
 
 	// A repeated href is still XTDE1490.
