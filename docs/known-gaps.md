@@ -131,11 +131,16 @@ Found by the third memory audit (2026-11-01) and not fixed, each with the reason
   (`withSel`, `hostWithCurrent`, the leaf-hook copy), and built-in shallow-copy
   copies a document-level result twice; removing that copy changes an error
   case into output.
-- **A single text value of a few to tens of MB allocates up to about 1.9× its
-  size while parsing** (10 MiB: 1.87×; the tree keeps 1.09×; 60 MiB: 1.13×).
-  The decoder's buffer grows in steps of eight. Sizing it to the input left
-  in one step reached 1.08×, but a document of eight 3 MiB values went from
-  1.33× to 2.04×, so it was reverted.
+- **Several large text values in one document cost about 1.3× their size to
+  parse** (eight 3 MiB values: 1.30×). A single value is about 1.1× at every
+  size since v2.1.1; with several, the first value's buffer overshoots once
+  before each later value is copied exactly once.
+- **An XPath expression in 1.0 compatibility mode copies its context on every
+  evaluation** when the caller's context is not in that mode (96 bytes a call;
+  12× of an XPath 1.0 transform's allocation in go-xmlsec). The mode can be
+  set only on a `Compiled` (`WithCompatMode`), and a `*Context` is updated in
+  place during evaluation, so a cached copy would be unsafe. Needs a
+  context-side setter: new API, so a minor release.
 - **`c14n.BytesNodeSet` on a caller's own `NodeSet` still costs about 2.1× its
   output.** Sizing it would call `Contains` twice per node, which the API
   promises not to do; the package's `Subtree` and `ExcludeSubtree` are sized.

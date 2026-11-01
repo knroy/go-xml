@@ -1865,6 +1865,10 @@ Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
 
+**Twentieth pass — go-xmlsec's measurements against v2.1.0, 2026-11-01.**
+
+- **`c14n.ParsePrefixList` was quadratic in its tokens** — cost, driven by a signed document. It parses the `PrefixList` of an `ec:InclusiveNamespaces` element, which the document under verification supplies, and deduplicated each token with a scan of those before it: 1 MiB of distinct prefixes took 10.9 s of CPU. It deduplicates with a map, keeping first-seen order: about 0.02 s. go-xmlsec caps the list at 1,024 prefixes before calling it; other callers were exposed. Pinned by `TestParsePrefixListLinear` in `c14n/prefixlist_test.go`. Fixed in v2.1.1.
+
 **Nineteenth pass — a third memory audit, 2026-11-01.** The findings and figures are in the audit's own write-up; the retention and allocation fixes are in CHANGELOG under *Changed — memory*.
 
 - **Sequences built by `,` and `!` were not counted against `MaxItems`** — availability, driven by a query or stylesheet. `fold-left(1 to 26,(1,2),function($s,$i){($s,$s)})` (70 bytes) built 134M items against the 5M limit at 6.3 GB, and the same doubling through a recursive `xsl:with-param` reached 4.6 GB on v2.0.3. `SequenceExpr` and `!` charge the copies beyond their widest operand above 64 items, and `xsl:next-iteration` values are checked against the bound. Pinned by `TestSequenceCopiesAreCharged`.

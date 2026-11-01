@@ -221,9 +221,10 @@ func (c *chunkWriter) bytes() []byte {
 // sizedWriter collects everything written to it in one buffer, sized once
 // from the tree under the node set's root at the first write (after the options were validated, so
 // a refused call allocates nothing). The estimate runs 5% to 15% over the
-// output, so the result costs about 1.1 times its size where a buffer grown
-// by doubling cost 2.1 times and joined chunks twice; a short estimate (an
-// escaped value is longer than its text) costs one more copy.
+// output on generated documents and averages 0.96 of it on DocBook, so the
+// result costs about 1.1 times its size where a buffer grown by doubling cost
+// 2.1 times and joined chunks twice; a short estimate (an escaped value is
+// longer than its text) costs one more copy.
 type sizedWriter struct {
 	ns   NodeSet
 	opts Options
