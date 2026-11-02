@@ -57,17 +57,17 @@ func walk(n *xdm.Node, d int, skip func(*xdm.Node) bool, out *[]string) {
 	for c := range n.Children() {
 		switch c.Kind() {
 		case xdm.KindElement:
-			*out = append(*out, show(Event{StartElement, d, c}))
+			*out = append(*out, show(Event{StartElement, d, c, 0}))
 			if skip == nil || !skip(c) {
 				walk(c, d+1, skip, out)
 			}
-			*out = append(*out, show(Event{EndElement, d, c}))
+			*out = append(*out, show(Event{EndElement, d, c, 0}))
 		case xdm.KindText:
-			*out = append(*out, show(Event{Text, d, c}))
+			*out = append(*out, show(Event{Text, d, c, 0}))
 		case xdm.KindComment:
-			*out = append(*out, show(Event{Comment, d, c}))
+			*out = append(*out, show(Event{Comment, d, c, 0}))
 		case xdm.KindPI:
-			*out = append(*out, show(Event{PI, d, c}))
+			*out = append(*out, show(Event{PI, d, c, 0}))
 		}
 	}
 }
@@ -631,5 +631,96 @@ func TestCursorSkipDiscards(t *testing.T) {
 	c2.Next()
 	if s, err := c2.Text(); err != nil || s != "xyz" {
 		t.Errorf("Text %q, %v", s, err)
+	}
+}
+
+// TestCursorNextTag checks NextTag and SkipTag against Next: they return
+// the events their filter reports, in order, each with the least depth at
+// which an element passed over closed before it; and passing over costs no
+// switch to the parse.
+func TestCursorNextTag(t *testing.T) {
+	src := doc(40)
+	isR := func(el *xdm.Node) bool { return el.Name().Local == "r" || el.Name().Local == "b" }
+	filters := []Filter{
+		{Accept: isR},
+		{Accept: isR, Leaves: true, Depth: 2},
+		{Accept: isR, Ends: true},
+		{Leaves: true, Depth: 1},
+		{Accept: func(*xdm.Node) bool { return false }},
+	}
+	for fi, f := range filters {
+		for _, skipR := range []bool{false, true} {
+			// The model: Next's events, filtered by the consumer.
+			var want []string
+			c := Open(strings.NewReader(src), opts)
+			state := map[int]bool{} // depth: the open element there is hidden
+			closed := 0
+			for {
+				ev, err := c.Next()
+				if err != nil {
+					t.Fatal(err)
+				}
+				report := true
+				switch ev.Kind {
+				case StartElement:
+					hidden := f.Accept != nil && !f.Accept(ev.Node)
+					state[ev.Depth] = hidden
+					report = !hidden
+					if report && skipR && ev.Node.Name().Local == "r" {
+						want = append(want, fmt.Sprintf("%s closed=%d", show(ev), closed))
+						closed = 0
+						if err := c.Skip(); err != nil {
+							t.Fatal(err)
+						}
+						continue
+					}
+				case EndElement:
+					if state[ev.Depth] || ev.Depth > f.Depth && !f.Ends {
+						report = false
+						closed = min0(closed, ev.Depth)
+					}
+				case Text, Comment, PI:
+					report = f.Leaves
+				}
+				if report {
+					want = append(want, fmt.Sprintf("%s closed=%d", show(ev), closed))
+					closed = 0
+				}
+				if ev.Kind == EndDocument {
+					break
+				}
+			}
+			c.Close()
+
+			var got []string
+			c = Open(strings.NewReader(src), opts)
+			skip := false
+			for {
+				var ev Event
+				var err error
+				if skip {
+					ev, err = c.SkipTag(&f)
+				} else {
+					ev, err = c.NextTag(&f)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, fmt.Sprintf("%s closed=%d", show(ev), ev.Closed))
+				skip = skipR && ev.Kind == StartElement && ev.Node.Name().Local == "r"
+				if ev.Kind == EndDocument {
+					break
+				}
+			}
+			resumes := c.resumes
+			c.Close()
+			if strings.Join(got, "\n") != strings.Join(want, "\n") {
+				t.Fatalf("filter %d skip %v:\ngot\n%s\nwant\n%s", fi, skipR, strings.Join(got, "\n"), strings.Join(want, "\n"))
+			}
+			// One switch per event returned (and one to start the parse).
+			if resumes > len(got)+1 {
+				t.Errorf("filter %d skip %v: %d switches for %d events", fi, skipR, resumes, len(got))
+			}
+		}
 	}
 }

@@ -52,6 +52,10 @@ type Event struct {
 	Kind  Kind
 	Depth int
 	Node  *xdm.Node
+	// Closed is the least depth at which an element NextTag passed over
+	// closed since the event before, 0 when none did: what was open there
+	// is not the element open there now.
+	Closed int
 }
 
 // An Observer is told of every element's start and its end (end true), in
@@ -84,7 +88,44 @@ type Cursor struct {
 	// strip says whitespace-only text inside an element is stripped
 	// (StripWhitespace).
 	strip func(el *xdm.Node) bool
+	// For NextTag and SkipTag: filt is the filter of the call resuming the
+	// parse; quiet hides the end of the element SkipTag skips, and hide the
+	// start tag a Peek read that the filter drops. open says, per depth,
+	// what became of the open element there; closed is Event.Closed of the
+	// next event.
+	filt        *Filter
+	quiet, hide bool
+	open        []openState
+	closed      int
+	// resumes counts the switches to the parse, for the tests.
+	resumes int
 }
+
+// A Filter says which events NextTag and SkipTag report. What they pass
+// over is still parsed and checked, and an element whose start tag they
+// pass over is descended into, so that what is inside it is met; its end
+// tag is passed over too.
+type Filter struct {
+	// Accept reports whether the start tag of el is reported; every one is
+	// when Accept is nil. It is called during the parse, with el open in
+	// the parse's tree, and must not call the cursor.
+	Accept func(el *xdm.Node) bool
+	// Leaves says text, comments and processing instructions are reported.
+	Leaves bool
+	// The end tag of an element descended into is reported at Depth or
+	// above, and deeper only with Ends.
+	Depth int
+	Ends  bool
+}
+
+// openState is what became of an element at its start tag.
+type openState uint8
+
+const (
+	openKept    openState = iota // reported, and descended into
+	openHidden                   // not reported (NextTag's filter), its end neither
+	openDecided                  // reported, and skipped or grounded
+)
 
 // errStop ends the parse when the cursor is closed.
 var errStop = errors.New("xdmstream: closed")
@@ -104,7 +145,7 @@ func Open(r io.Reader, opts xdm.ParseOptions) *Cursor {
 		err := xdmburst.Drive(r, opts, &client{c, yield})
 		switch {
 		case err == nil:
-			yield(Event{Kind: EndDocument})
+			yield(Event{Kind: EndDocument, Closed: c.closed})
 		case err != errStop:
 			c.err = err
 		}
@@ -183,6 +224,57 @@ func (c *Cursor) Peek() (Event, error) {
 		return Event{}, c.peekErr
 	}
 	return *c.peeked, nil
+}
+
+// NextTag is Next for a reader that needs only some of the document's
+// events, those f reports (see Filter), and EndDocument. Passing over events
+// costs no switch to the reader: it is what makes a reader that wants few of
+// them cheap. Event.Closed says how far up the elements passed over closed.
+func (c *Cursor) NextTag(f *Filter) (Event, error) {
+	if p := c.peeked; p != nil || c.peekErr != nil {
+		c.peeked = nil
+		if c.peekErr != nil {
+			return Event{}, c.peekErr
+		}
+		switch {
+		case p.Kind == StartElement && f.Accept != nil && !f.Accept(p.Node):
+			c.hide = true // the parse waits at its start tag
+			c.closed = min0(c.closed, p.Closed)
+		case p.Kind >= Text && p.Kind <= PI && !f.Leaves:
+			c.closed = min0(c.closed, p.Closed)
+		case p.Kind == EndElement && p.Depth > f.Depth && !f.Ends:
+			c.closed = min0(min0(c.closed, p.Closed), p.Depth)
+		default:
+			c.ev, c.viewed = *p, nil
+			return c.ev, nil
+		}
+	}
+	c.filt = f
+	ev, err := c.resume(xdmburst.Keep)
+	c.filt, c.hide = nil, false
+	c.ev, c.viewed = ev, nil
+	return ev, err
+}
+
+// SkipTag is Skip, then NextTag: the end tag of the element skipped is not
+// returned, and the skip and the next event cost one switch to the reader.
+func (c *Cursor) SkipTag(f *Filter) (Event, error) {
+	if c.ev.Kind != StartElement || c.peeked != nil || c.peekErr != nil {
+		return Event{}, errNotAtStart
+	}
+	c.filt, c.quiet = f, true
+	ev, err := c.resume(xdmburst.Discard)
+	c.filt, c.quiet = nil, false
+	c.ev, c.viewed = ev, nil
+	return ev, err
+}
+
+// min0 is the least of a and b that is not 0, or 0.
+func min0(a, b int) int {
+	if a == 0 || b != 0 && b < a {
+		return b
+	}
+	return a
 }
 
 // Skip moves past the current element, a start tag Next just returned, to
@@ -267,6 +359,7 @@ func (c *Cursor) decide(act xdmburst.Action) (Event, error) {
 // stopped at, if any.
 func (c *Cursor) resume(act xdmburst.Action) (Event, error) {
 	c.act = act
+	c.resumes++
 	ev, ok := c.next()
 	if !ok {
 		if c.err != nil {
@@ -284,14 +377,40 @@ type client struct {
 	yield func(Event) bool
 }
 
+// send hands ev to the consumer, with what was closed unseen before it.
+func (k *client) send(ev Event) bool {
+	ev.Closed, k.c.closed = k.c.closed, 0
+	return k.yield(ev)
+}
+
 func (k *client) Start(el any, d int) (xdmburst.Action, error) {
-	if !k.yield(Event{StartElement, d, el.(*xdm.Node)}) {
+	c, n := k.c, el.(*xdm.Node)
+	for len(c.open) <= d {
+		c.open = append(c.open, openKept)
+	}
+	if f := c.filt; f != nil && f.Accept != nil && !f.Accept(n) {
+		c.open[d] = openHidden
+		return xdmburst.Keep, nil
+	}
+	if !k.send(Event{Kind: StartElement, Depth: d, Node: n}) {
 		return 0, errStop
 	}
-	return k.c.act, nil
+	switch {
+	case c.hide:
+		// NextTag dropped it after a Peek had read it.
+		c.hide, c.open[d] = false, openHidden
+	case c.act == xdmburst.Keep:
+		c.open[d] = openKept
+	default:
+		c.open[d] = openDecided
+	}
+	return c.act, nil
 }
 
 func (k *client) Leaf(n any, d int) error {
+	if f := k.c.filt; f != nil && !f.Leaves {
+		return nil
+	}
 	x := n.(*xdm.Node)
 	kind := Text
 	switch x.Kind() {
@@ -300,17 +419,33 @@ func (k *client) Leaf(n any, d int) error {
 	case xdm.KindPI:
 		kind = PI
 	}
-	if !k.yield(Event{kind, d, x}) {
+	if !k.send(Event{Kind: kind, Depth: d, Node: x}) {
 		return errStop
 	}
 	return nil
 }
 
 func (k *client) End(el any, d int, grounded any) error {
+	c := k.c
 	if grounded != nil {
-		k.c.grounded = grounded.(*xdm.Node)
+		c.grounded = grounded.(*xdm.Node)
 	}
-	if !k.yield(Event{EndElement, d, el.(*xdm.Node)}) {
+	switch c.open[d] {
+	case openHidden:
+		c.closed = min0(c.closed, d)
+		return nil
+	case openDecided:
+		if c.quiet {
+			c.quiet = false // SkipTag's element: on to the next event
+			return nil
+		}
+	case openKept:
+		if f := c.filt; f != nil && d > f.Depth && !f.Ends {
+			c.closed = min0(c.closed, d)
+			return nil
+		}
+	}
+	if !k.send(Event{Kind: EndElement, Depth: d, Node: el.(*xdm.Node)}) {
 		return errStop
 	}
 	return nil

@@ -806,19 +806,17 @@ func (run *streamRun) fallback(rt *runtime, sel *xpath.Compiled) (xdm.Sequence, 
 	return sel.Eval(rt.withCurrent(root, 1, 1).ctx)
 }
 
+// drainAll passes over every event: NextTag returns EndDocument.
+var drainAll = xdmstream.Filter{Accept: acceptNone}
+
 // drain reads the rest of the context, the document, dropping it.
 func (run *streamRun) drain() error {
 	for {
-		ev, err := run.c.Next()
+		ev, err := run.c.NextTag(&drainAll)
 		if err != nil {
 			return err
 		}
-		switch ev.Kind {
-		case xdmstream.StartElement:
-			if err := run.c.Skip(); err != nil {
-				return err
-			}
-		case xdmstream.EndDocument:
+		if ev.Kind == xdmstream.EndDocument {
 			return nil
 		}
 	}

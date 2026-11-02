@@ -121,6 +121,16 @@ type streamSplit struct {
 	outer    *xpath.Compiled
 	outerVar xdm.QName
 	kids     bool // the outer (or a choice above) reads has-children(.)
+	// accept and leaves are what walk reads of the cursor (accepts); insts
+	// holds a context of each step, shared by the nodes that are one for
+	// a step without positions to count.
+	accept func(*xdm.Node) bool
+	leaves bool
+	insts  []splitInst
+	own1   []*splitInst // &insts[j] at j
+	// attr, for a matchView tail that is an attribute by name whose values
+	// are all the outer takes, names it: it is read off the start tag.
+	attr *xdm.QName
 	// noRoot gives up (errSplitGiveUp) at a match that would ground the
 	// document element: that copy is the tree (C5's streamed copy-of).
 	noRoot bool
@@ -331,12 +341,19 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 	if tail != nil {
 		s.tail = part(tail)
 		s.tailFail = !splitCannotFail(tail)
+		if st, ok := tail.(*xpath.Step); ok && s.mode == matchView && s.atomize &&
+			st.Axis == xpath.AxisAttribute && len(st.Predicates) == 0 {
+			if nt, ok := st.Test.(*xpath.NameTest); ok && !nt.AnyURI && !nt.AnyLocal {
+				s.attr = &nt.Name
+			}
+		}
 	}
 	if leaf && s.mode == matchGround {
 		// A leaf match is taken at once: so must the elements be, to keep
 		// document order.
 		s.later = false
 	}
+	s.accepts()
 	s.folds(w, part)
 	return ""
 }
@@ -1116,8 +1133,12 @@ type splitFrame struct {
 func (f *splitFrame) live() bool { return len(f.own) > 0 || len(f.desc) > 0 }
 
 func (s *streamSplit) inst(j int) *splitInst {
+	st := &s.steps[j]
+	if !st.pos && s.insts != nil {
+		return &s.insts[j] // no counters: nothing to keep apart
+	}
 	in := &splitInst{step: j}
-	if st := &s.steps[j]; st.pos {
+	if st.pos {
 		in.n = make([]int64, len(st.preds))
 	}
 	return in
@@ -1135,6 +1156,10 @@ func (s *streamSplit) reach(f *splitFrame, j int) bool {
 			if in.step == j {
 				return false
 			}
+		}
+		if len(f.own) == 0 && !st.pos && s.own1 != nil {
+			f.own = s.own1[j : j+1 : j+1] // shared: an append copies it
+			return false
 		}
 		f.own = append(f.own, s.inst(j))
 		return false
@@ -1418,54 +1443,103 @@ type splitOpen struct {
 }
 
 // walk reads the context's content, matching P.
+//
+// It reads the cursor with NextTag: only start tags whose name some step of
+// P tests for are reported (leaves only when a step can match one), and the
+// elements passed over are descended into. Such an element is a match of no
+// step but a // one, so walk makes up its frame (hidden) when an event below
+// it arrives.
 func (r *splitRun) walk(root splitFrame, d int) error {
 	s, c := r.s, r.c
 	stack := []splitOpen{{f: root}}
+	// pop closes the open element on top of the stack.
+	pop := func() error {
+		top := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if top.silent {
+			r.silent--
+		}
+		if top.match && r.seen == top.seen {
+			// innermost: nothing matched inside it.
+			if s.mode == matchCount {
+				top.pending = xdm.Sequence{nil}
+			}
+			return r.take(top.pending)
+		}
+		return nil
+	}
+	// The end tags of the open elements are wanted only where closing one
+	// does more than drop its frame: an innermost match's, and a silent
+	// region's (outermost).
+	ends := s.innermost || s.outermost
+	want := xdmstream.Filter{Accept: s.accept, Leaves: s.leaves, Depth: d, Ends: ends}
+	none := xdmstream.Filter{Accept: acceptNone, Depth: d, Ends: ends}
+	skip := false
 	for {
-		ev, err := c.Next()
+		// Nothing left to find, nor any predicate whose error the tree
+		// would raise: only the ends of the open elements are wanted.
+		idle := s.steps == nil || r.done && !s.predFail && !s.tailFail
+		filt := &want
+		if idle {
+			filt = &none
+		}
+		var (
+			ev  xdmstream.Event
+			err error
+		)
+		if skip {
+			ev, err = c.SkipTag(filt)
+		} else {
+			ev, err = c.NextTag(filt)
+		}
+		skip = false
 		if err != nil {
 			return err
 		}
-		switch ev.Kind {
-		case xdmstream.EndDocument:
+		if ev.Kind == xdmstream.EndDocument {
 			return nil
-		case xdmstream.EndElement:
-			if ev.Depth == d {
-				return nil
+		}
+		if ev.Kind == xdmstream.EndElement && ev.Depth == d {
+			return nil
+		}
+		// The elements passed over that closed are gone; those above the
+		// event, open, get their frames.
+		for ev.Closed > 0 && d+len(stack)-1 >= ev.Closed {
+			if err := pop(); err != nil {
+				return err
 			}
-			top := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			if top.silent {
-				r.silent--
+		}
+		at := ev.Depth
+		if ev.Kind == xdmstream.EndElement {
+			at++
+		}
+		for d+len(stack) > at {
+			if err := pop(); err != nil {
+				return err
 			}
-			if top.match && r.seen == top.seen {
-				// innermost: nothing matched inside it.
-				if s.mode == matchCount {
-					top.pending = xdm.Sequence{nil}
-				}
-				if err := r.take(top.pending); err != nil {
-					return err
-				}
+		}
+		for d+len(stack) < at {
+			stack = append(stack, splitOpen{f: s.hidden(&stack[len(stack)-1].f)})
+		}
+		if ev.Kind == xdmstream.EndElement {
+			if err := pop(); err != nil {
+				return err
 			}
 			continue
 		}
-		if s.steps == nil || r.done && !s.predFail && !s.tailFail {
-			// Nothing left to find, nor any predicate whose error the
-			// tree would raise.
+		if idle {
 			if ev.Kind == xdmstream.StartElement {
-				if err := c.Skip(); err != nil {
-					return err
-				}
+				skip = true
 			}
 			continue
 		}
-		at := splitAt{r: r, n: ev.Node, leaf: ev.Kind != xdmstream.StartElement}
-		f, match, err := s.enter(&stack[len(stack)-1].f, &at)
+		cand := splitAt{r: r, n: ev.Node, leaf: ev.Kind != xdmstream.StartElement}
+		f, match, err := s.enter(&stack[len(stack)-1].f, &cand)
 		if err != nil {
 			return err
 		}
 		quiet := r.silent > 0 || r.done && !s.tailFail
-		if at.leaf {
+		if cand.leaf {
 			if match && !quiet {
 				r.seen++ // a leaf match makes its ancestors not innermost
 				if !s.noLeaves {
@@ -1512,6 +1586,19 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					return err
 				}
 			case matchView:
+				if s.attr != nil {
+					// The values of one attribute: off the start tag.
+					var items xdm.Sequence
+					if a := ev.Node.Attr(s.attr.URI, s.attr.Local); a != nil {
+						items = xdm.Atomize(xdm.One(a))
+					}
+					if s.innermost {
+						open.match, open.seen, open.pending = true, r.seen, items
+					} else if err := r.take(items); err != nil {
+						return err
+					}
+					break
+				}
 				v, err := c.View()
 				if err != nil {
 					return err
@@ -1547,17 +1634,67 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 		}
 		switch {
 		case decided:
-		case descend || at.peeked || open.match:
+		case descend || cand.peeked || open.match:
 			if open.silent {
 				r.silent++
 			}
 			stack = append(stack, open)
 		default:
-			if err := c.Skip(); err != nil {
-				return err
-			}
+			skip = true
 		}
 	}
+}
+
+// acceptNone takes no element: NextTag then reports only end tags.
+func acceptNone(*xdm.Node) bool { return false }
+
+// accepts sets s.accept, the start tags walk must see -- those of elements
+// some step tests for, all when a step's test is not a name -- and
+// s.leaves, whether a step can match a leaf.
+//
+// A descendant-or-self::node() step (//) matches every node, as the
+// context of the step after it: hidden makes that frame for an element
+// passed over. It is not tested for, unless it is the last step, when every
+// element is a match.
+func (s *streamSplit) accepts() {
+	s.insts = make([]splitInst, len(s.steps))
+	s.own1 = make([]*splitInst, len(s.steps))
+	for j := range s.insts {
+		s.insts[j].step = j
+		s.own1[j] = &s.insts[j]
+	}
+	var tests []xpath.NodeTest
+	for i, st := range s.steps {
+		leaf, _ := testKinds(st.test)
+		s.leaves = s.leaves || leaf
+		if st.axis == xpath.AxisDescendantOrSelf && i+1 < len(s.steps) {
+			continue
+		}
+		if _, ok := st.test.(*xpath.NameTest); !ok {
+			return // accept stays nil: every start tag
+		}
+		tests = append(tests, st.test)
+	}
+	s.accept = func(n *xdm.Node) bool {
+		for _, t := range tests {
+			if t.Matches(n, xdm.KindElement) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// hidden is the frame of an element under pf that walk passed over, which
+// no step but a // one matches: what enter would make of it.
+func (s *streamSplit) hidden(pf *splitFrame) splitFrame {
+	f := splitFrame{desc: pf.desc, base: len(pf.desc)}
+	for _, in := range pf.desc {
+		if s.steps[in.step].axis == xpath.AxisDescendantOrSelf {
+			s.reach(&f, in.step+1)
+		}
+	}
+	return f
 }
 
 // textAtomic is the value a match's string value t gives.
