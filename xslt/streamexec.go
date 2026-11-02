@@ -100,6 +100,9 @@ type streamOp struct {
 	sel   *xpath.Compiled
 	split *streamSplit
 	dead  string // why it cannot run streamed, found as it compiled
+	// copies says a copy-of hands each item over as it is read (its split
+	// would collect grounded copies): copyOfInstr copies it and lets go.
+	copies bool
 	// For a loop: inner are the consuming instructions of the body, kinds
 	// its sNodes, planned whether every one is one the core runs, and
 	// grounded whether the body may run on a grounded copy instead.
@@ -454,7 +457,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := parseAt(el, src)
 	if e == nil || !(viewCheck{pos: true}).safe(e, f, nodeOK) {
-		return b.refuse("not motionless on the view: " + src)
+		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
 	}
 	return true
 }
@@ -572,7 +575,7 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 		case op.dead != "":
 			return op.dead
 		case !op.loop:
-			if why := op.split.memory(minD); why != "" {
+			if why := x.readySelect(op, minD); why != "" {
 				return why
 			}
 			continue
@@ -603,6 +606,29 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 		}
 	}
 	return ""
+}
+
+// readySelect readies a select op whose context element is at depth minD or
+// deeper. A copy-of whose split would collect grounded copies copies each as
+// it is read instead (DESIGN section 1.6: copy-of streams to the output), so
+// it holds one at a time; one that would ground the document element gives
+// up there, which at the document node falls back to the tree.
+func (x *streamExec) readySelect(op *streamOp, minD int) string {
+	s := op.split
+	if c := s.class(); isXSL(op.el, "copy-of") && (c == "nodes" || c == "subtree") &&
+		s.cond == nil && s.red == "" && isVarRef(s.outer.Expr(), splitItems) {
+		switch {
+		case s.ctxItem && minD < 2:
+			return "copy-of(.) of the document element"
+		case minD == 0:
+			s.noRoot = s.minDepth() < 2
+		case minD+s.minDepth() < 2:
+			return "copy-of may ground the document element"
+		}
+		op.copies = true
+		return ""
+	}
+	return s.memory(minD)
 }
 
 // minDepth is the least depth below the context a match of P can be at.
@@ -667,6 +693,30 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 	if op == nil || run.off {
 		return nil
 	}
+	if op.copies {
+		return &burstFeed{instr: instr, read: func(each func(xdm.Item) error) error {
+			if run.used {
+				return errStreamPlan
+			}
+			run.used = true
+			err := op.split.loop(rt.ctx, run.c, run.d, each, nil)
+			if err == errSplitGiveUp && run.d == 0 {
+				// The document element itself is copied: from the tree,
+				// nothing of it having been copied yet.
+				items, err := run.fallback(rt, op.sel)
+				if err != nil {
+					return err
+				}
+				for _, it := range xdm.Flatten(items) {
+					if err := each(it); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			return err
+		}}
+	}
 	if !op.loop {
 		return &burstFeed{instr: instr, eval: func(rt *runtime) (xdm.Sequence, error) {
 			if run.used {
@@ -695,10 +745,10 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 				return read, err
 			})
 		}
-		return op.split.loop(rt.ctx, run.c, d, func(n *xdm.Node) error {
+		return op.split.loop(rt.ctx, run.c, d, func(it xdm.Item) error {
 			off := run.off
 			run.off = true
-			err := each(n)
+			err := each(it)
 			run.off = off
 			return err
 		}, nil)

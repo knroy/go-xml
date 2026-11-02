@@ -51,13 +51,14 @@ func coreSheetWith(decls, body string) string {
 var coreDocs = map[string]string{
 	"flat": `<doc id="d"><rec k="a" v="1"><sub x="1">t1</sub><sub x="2"/></rec><rec k="b" v="2"><sub x="3">t3</sub></rec>` +
 		`<other/><rec k="a" v="3"/></doc>`,
-	"nested": `<doc><rec k="a" v="1"><rec k="b" v="2"><sub x="1"/></rec></rec><w><rec k="c" v="x"><sub>s</sub></rec></w></doc>`,
-	"mixed":  `<?pi a?><!--c--><doc>text <rec k="a" v="5">in<![CDATA[ cdata ]]><sub/>tail</rec> more <!--c2--><?p2 x?></doc>`,
-	"ns":     `<doc xmlns="urn:d" xmlns:p="urn:p"><p:rec k="a" v="1"/><rec k="b" v="2" p:z="q"/></doc>`,
-	"deep":   `<doc><a><b><c><rec k="a" v="1"><sub x="1"/></rec></c></b></a><a><rec k="b" v="2"/></a></doc>`,
-	"empty":  `<doc/>`,
-	"bad":    `<doc><rec k="a" v="1"/><rec k="b"></doc>`,
-	"wide":   "<doc>" + strings.Repeat(`<rec k="a" v="1"><sub x="1">s</sub></rec>`, 500) + "</doc>",
+	"nested":  `<doc><rec k="a" v="1"><rec k="b" v="2"><sub x="1"/></rec></rec><w><rec k="c" v="x"><sub>s</sub></rec></w></doc>`,
+	"mixed":   `<?pi a?><!--c--><doc>text <rec k="a" v="5">in<![CDATA[ cdata ]]><sub/>tail</rec> more <!--c2--><?p2 x?></doc>`,
+	"ns":      `<doc xmlns="urn:d" xmlns:p="urn:p"><p:rec k="a" v="1"/><rec k="b" v="2" p:z="q"/></doc>`,
+	"deep":    `<doc><a><b><c><rec k="a" v="1"><sub x="1"/></rec></c></b></a><a><rec k="b" v="2"/></a></doc>`,
+	"empty":   `<doc/>`,
+	"recroot": `<rec k="r" v="0"><rec k="a" v="1"><sub x="1"/></rec><sub x="2">t</sub></rec>`,
+	"bad":     `<doc><rec k="a" v="1"/><rec k="b"></doc>`,
+	"wide":    "<doc>" + strings.Repeat(`<rec k="a" v="1"><sub x="1">s</sub></rec>`, 500) + "</doc>",
 	"spaces": "<doc>\n <rec k=\"a\" v=\"1\">\n  <sub x=\"1\"> </sub>\n  <sub x=\"2\">\n t </sub>\n </rec>\n" +
 		" <w xml:space=\"preserve\">\n  <rec k=\"b\" v=\"2\">\n   <sub x=\"3\">  </sub>\n  </rec>\n" +
 		"  <rec k=\"c\" v=\"3\" xml:space=\"default\">\n <sub/>\n </rec>\n </w>\n</doc>",
@@ -112,6 +113,14 @@ var coreBodies = []struct {
 		`<xsl:next-iteration><xsl:with-param name="t" select="$t + count(.//node())"/></xsl:next-iteration></xsl:iterate>`, false},
 	{`<xsl:for-each select="outermost(//rec)"><r><xsl:value-of select="."/></r></xsl:for-each>`, true},
 	{`<xsl:for-each select="/doc/rec"><r n="{count(.//node())}"/></xsl:for-each>`, true},
+	// copy-of streamed to the output, a copy at a time; one that would
+	// ground the document element copies it from the tree.
+	{`<out><xsl:copy-of select="//rec"/></out>`, true},
+	{`<out><xsl:copy-of select="/*/rec/sub"/></out>`, true},
+	{`<out><xsl:copy-of select="//sub/@x"/></out>`, true},
+	{`<out><xsl:copy-of select="//*"/></out>`, true},
+	{`<xsl:copy-of select="outermost(//rec)"/>`, true},
+	{`<xsl:for-each select="/*/rec"><r><xsl:copy-of select="sub"/></r></xsl:for-each>`, true},
 	// Nested container.
 	{`<out><xsl:source-document href="doc.xml" streamable="yes"><n><xsl:value-of select="count(//rec)"/></n></xsl:source-document>` +
 		`<xsl:value-of select="count(//sub)"/></out>`, true},
@@ -119,7 +128,8 @@ var coreBodies = []struct {
 	{`<xsl:for-each select="//rec"><r><xsl:value-of select="."/></r></xsl:for-each>`, false},
 	{`<xsl:for-each select="//rec"><r n="{count(.//node())}"/></xsl:for-each>`, false},
 	{`<out><xsl:value-of select="(//rec)[2]/@k"/></out>`, false},
-	{`<out><xsl:copy-of select="//rec"/></out>`, false},
+	// Refused: copy-of(.) of what may be the document element.
+	{`<xsl:for-each select="/*"><xsl:copy-of select="."/></xsl:for-each>`, false},
 	{`<xsl:for-each select="//rec"><xsl:sort select="@k"/><r/></xsl:for-each>`, false},
 	{`<xsl:apply-templates select="//rec"/>`, false},
 }
@@ -176,4 +186,67 @@ func coreCheck(t *testing.T, sheet, dir, where string, stream bool, opts Transfo
 		return 1
 	}
 	return 0
+}
+
+// TestStreamCoreCopyOfRoot: a streamed copy-of that meets the document
+// element as a match copies the document from the tree, nothing of the
+// stream having been copied, and goes on: one fallback, no re-run, the
+// tree's output. Without the give-up it would ground the whole document.
+func TestStreamCoreCopyOfRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["recroot"]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sheet := coreSheet(`<out><xsl:copy-of select="//rec"/></out><n><xsl:value-of select="1"/></n>`)
+	so, se, st := coreRun(sheet, dir, true, TransformOptions{})
+	to, te, _ := coreRun(sheet, dir, false, TransformOptions{})
+	if so != to || se != te {
+		t.Fatalf("core %q %q\ntree %q %q", so, se, to, te)
+	}
+	if st.Runs[streamtrace.Core] != 1 || st.Fallbacks != 1 || st.Reruns != 0 || st.Guards != 0 {
+		t.Errorf("trace %+v: want one core run, one fallback, no re-run", st)
+	}
+}
+
+// TestStreamCoreMemory: a container on the core holds what its plan says --
+// a count or a drain next to nothing, a loop or a streamed copy-of its
+// output -- never the tree. Each is measured against the tree's run of the
+// same transform: the tree holds the document and the output.
+func TestStreamCoreMemory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("memory test")
+	}
+	var b strings.Builder
+	b.WriteString("<doc>")
+	for i := range 150000 {
+		fmt.Fprintf(&b, `<rec k="%c" v="%d">%d<sub x="%d"/><sub x="1">x</sub></rec>`, 'a'+i%5, i%100, i%10, i%7)
+	}
+	b.WriteString("</doc>")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		body string
+		frac float64 // the most of the tree's peak the core may take
+	}{
+		{`<out><xsl:value-of select="count(//rec)"/></out>`, 0.2},
+		{`<out>static</out>`, 0.2},
+		{`<out><xsl:for-each select="//rec"><r k="{@k}"/></xsl:for-each></out>`, 0.6},
+		{`<xsl:for-each select="/*/rec"><r><xsl:value-of select="."/></r></xsl:for-each>`, 0.6},
+		{`<out><xsl:copy-of select="//rec"/></out>`, 0.75},
+	} {
+		sheet := coreSheet(c.body)
+		var st streamtrace.Counts
+		core := splitPeak(func() { _, _, st = coreRun(sheet, dir, true, TransformOptions{}) })
+		tree := splitPeak(func() { coreRun(sheet, dir, false, TransformOptions{}) })
+		t.Logf("%s: core %.1f MB, tree %.1f MB", c.body, float64(core)/1e6, float64(tree)/1e6)
+		if st.Runs[streamtrace.Core] != 1 || st.Reruns != 0 {
+			t.Errorf("%s: trace %+v", c.body, st)
+		}
+		if float64(core) > c.frac*float64(tree) {
+			t.Errorf("%s: peak live heap %.1f MB, tree %.1f MB (bound %.0f%%)", c.body,
+				float64(core)/1e6, float64(tree)/1e6, 100*c.frac)
+		}
+	}
 }

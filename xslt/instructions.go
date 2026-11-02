@@ -194,6 +194,11 @@ type copyOfInstr struct {
 }
 
 func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if f := rt.burstsFor(i); f != nil && f.read != nil {
+		// Streamed (streamexec.go): each node of the select's value is
+		// copied as it is read, in order, and let go.
+		return f.read(func(it xdm.Item) error { return i.copyItem(rt, out, it) })
+	}
 	seq, err := rt.evalSelect(i, i.sel)
 	if err != nil {
 		return err
@@ -208,226 +213,234 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// nothing at all.
 	seq = xdm.Flatten(seq)
 	for _, it := range seq {
-		switch v := it.(type) {
-		case *xdm.Node:
-			// A deep copy is required: the result tree must not alias the
-			// source, or a later instruction mutating one would change the
-			// other.
-			if v.Kind() == xdm.KindDocument {
-				// The copy of a document node is a document node (11.9.1).
-				// Flattening happens only where the copy is attached as the
-				// content of an element (5.7.1), which appendNode decides;
-				// destinations that keep a bare sequence — a variable
-				// declared as="document-node()*", a function body — must see
-				// the wrapper itself.
-				// Charged before the copy is made, as the node branch below
-				// does; copy-of of a 100 MB document copied 5.7M nodes
-				// uncharged while shallow-copy of it was refused.
-				if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
-					return err
-				}
-				c := copyDocumentNode(v)
-				if i.noNamespaces {
-					// §11.9.2's namespace rules are about the elements being
-					// copied; a document node is only the wrapper they arrive
-					// in, and it carries no declarations of its own. Leaving
-					// this branch out let copy-of of a temporary tree keep the
-					// declarations copy-namespaces="no" had asked to be
-					// dropped -- copy-0614 and -0615 graft a whole $inner and
-					// expect the inner element's own xmlns:s to go with them.
-					for ch := range c.Children() {
-						if ch.Kind() == xdm.KindElement {
-							stripNamespaces(ch)
-						}
-					}
-				}
-				// The document node itself is assessed, not its children one
-				// at a time. Section 11.9.2 validates the copy, and the copy
-				// of a document node is a document node -- which is what
-				// brings the DOCUMENT-LEVEL constraints into play. Assessing
-				// each child instead reported the ID/IDREF failures with the
-				// element codes XTTE1510/XTTE1515, where XTTE1555 is the code
-				// for "document-level constraints are not satisfied".
-				c, err := i.validation.assess(rt, c)
-				if err != nil {
-					return err
-				}
-				out.AppendNode(c)
-				continue
-			}
-			if v.Kind() == xdm.KindAttribute {
-				// XTTE0950, second sentence: copying an attribute with
-				// namespace-sensitive content under validation="preserve" is
-				// a type error "unless the parent element is also copied".
-				// An attribute selected by xsl:copy-of arrives on its own --
-				// its parent, if it has one, is not what this instruction is
-				// copying -- so the exemption never applies on this path.
-				// The prefix in the copied QName would keep pointing at a
-				// binding the new parent element need not declare.
-				if i.validation.mode == validatePreserve &&
-					isNamespaceSensitiveType(xdm.TypeEnvOf(v), v.TypeAnnotation()) {
-					return fmt.Errorf(
-						"XTTE0950: xsl:copy-of with validation=\"preserve\" "+
-							"cannot copy attribute %s on its own, because its "+
-							"content is namespace-sensitive",
-						v.Name().Lexical())
-				}
-				// Assessed on a copy, never on v. Validation strips type
-				// annotations in place, and the default mode is "strip", so
-				// assessing the source attribute erased the annotation from
-				// the *input document* — which then answered differently for
-				// every later expression that read it.
-				//
-				// Every other branch of this switch already assesses a copy;
-				// this one did not, which is why copying attributes made
-				// fn:idref appear one-directional: the first copy stripped
-				// the annotations the later lookups needed.
-				// The node assessed below is an exact copy of the source's
-				// typing, which is what validation="preserve" then keeps and
-				// what every other mode overwrites or clears. Assessment and
-				// stripping both read more than the annotation name, so the
-				// node they are handed must carry more than the name.
-				//
-				// All of it reaches the RESULT: the attribute goes into the
-				// output through AddAttributeWithTyping, which takes the
-				// resolved xdm.Typing rather than an annotation name. The
-				// older AddAttributeTyped took a name only, so a copied
-				// attribute arrived in the output tree with its union member
-				// and its resolved primitive gone, to be guessed at later
-				// from the process-global registries.
-				a := xdm.NewNode(xdm.KindAttribute, v.Name(), v.Value())
-				a.CopyTypingFrom(v)
-				a, err := i.validation.assess(rt, a)
-				if err != nil {
-					return err
-				}
-				if err := out.AddAttributeWithTyping(a.Name(), a.Value(),
-					xdm.TypingOf(a)); err != nil {
-					return err
-				}
-				continue
-			}
-			if v.Kind() == xdm.KindNamespace {
-				// A namespace node joins the element's bindings rather than
-				// its children. Appending it as a child put it nowhere the
-				// namespace axis or the serialiser would ever look.
-				if err := out.AddNamespace(v.Name().Local, v.Value()); err != nil {
-					return err
-				}
-				continue
-			}
-			// XTTE0950: copying a node with namespace-sensitive content
-			// under copy-namespaces="no" and validation="preserve". The two
-			// together ask for the QName's prefix to be kept and its
-			// declaration to be thrown away, which leaves a value whose
-			// validity depended on a binding that is no longer there.
-			if i.noNamespaces && i.validation.mode == validatePreserve &&
-				hasNamespaceSensitiveContent(v) {
-				return fmt.Errorf(
-					"XTTE0950: xsl:copy-of with copy-namespaces=\"no\" and "+
-						"validation=\"preserve\" cannot copy %s, whose "+
-						"content is namespace-sensitive", describeNode(v))
-			}
-			// Charged before the copy is made, so a refusal allocates
-			// none of it. xsl:copy-of copies here rather than letting the
-			// builder do it -- it has to rebase and strip namespaces on its
-			// own copy first -- so the builder's charge never sees this
-			// node, and copying a large subtree once per node of a large
-			// document would otherwise build the cross product uncharged.
+		if err := i.copyItem(rt, out, it); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyItem copies it, one item of the select's value, to out.
+func (i *copyOfInstr) copyItem(rt *runtime, out *outputBuilder, it xdm.Item) error {
+	switch v := it.(type) {
+	case *xdm.Node:
+		// A deep copy is required: the result tree must not alias the
+		// source, or a later instruction mutating one would change the
+		// other.
+		if v.Kind() == xdm.KindDocument {
+			// The copy of a document node is a document node (11.9.1).
+			// Flattening happens only where the copy is attached as the
+			// content of an element (5.7.1), which appendNode decides;
+			// destinations that keep a bare sequence — a variable
+			// declared as="document-node()*", a function body — must see
+			// the wrapper itself.
+			// Charged before the copy is made, as the node branch below
+			// does; copy-of of a 100 MB document copied 5.7M nodes
+			// uncharged while shallow-copy of it was refused.
 			if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
 				return err
 			}
-			// Under an open element the copy is made once, straight into the
-			// tree being built, whenever the pre-copy below would leave it as
-			// it is: a text, comment or processing instruction always (only
-			// elements are rebased, stripped or assessed), and an element
-			// when copy-namespaces is "yes" and the validation neither
-			// replaces nor retypes it -- preserve, or strip of a tree that
-			// was never typed. What is done to the detached copy below is
-			// then done to this one, in the same order.
-			if out.Open() != nil && (v.Kind() != xdm.KindElement ||
-				!i.noNamespaces && i.validation.typeName == nil &&
-					(i.validation.mode == validatePreserve && !i.validation.constructsElement ||
-						i.validation.mode == validateStrip && !v.TreeHasTyping())) {
-				if c := out.AppendCopyOf(v); c != nil && c.Kind() == xdm.KindElement {
-					inheritNamespaces(c, v)
-					if i.copyAccumulators {
-						rt.noteCopiedAccumulators(v, c)
+			c := copyDocumentNode(v)
+			if i.noNamespaces {
+				// §11.9.2's namespace rules are about the elements being
+				// copied; a document node is only the wrapper they arrive
+				// in, and it carries no declarations of its own. Leaving
+				// this branch out let copy-of of a temporary tree keep the
+				// declarations copy-namespaces="no" had asked to be
+				// dropped -- copy-0614 and -0615 graft a whole $inner and
+				// expect the inner element's own xmlns:s to go with them.
+				for ch := range c.Children() {
+					if ch.Kind() == xdm.KindElement {
+						stripNamespaces(ch)
 					}
-					fixupNamespaces(c)
-				}
-				continue
-			}
-			c := deepCopy(v)
-			if i.copyAccumulators {
-				rt.noteCopiedAccumulators(v, c)
-			}
-			if out.Open() == nil {
-				// A parentless copy keeps its own xml:base, resolved against
-				// the instruction's base URI rather than against the document
-				// it came from. appendNode only rebases when there is a
-				// parent to inherit from, so a copy that lands directly in a
-				// variable would otherwise keep the source's resolved base.
-				rebaseDetached(c, i.baseURI)
-			}
-			if v.Kind() == xdm.KindElement {
-				if i.noNamespaces {
-					stripNamespaces(c)
-				} else {
-					// The copy carries only the declarations written on the
-					// source element, so the ones it inherits from ancestors
-					// it is being lifted away from are added here. Without
-					// them a copied subtree loses the binding its own prefix
-					// depends on.
-					inheritNamespaces(c, v)
 				}
 			}
-
-			// The copy is assessed rather than the original: validation may
-			// annotate, and annotating the source document would leak a
-			// property of this instruction into the tree everything else
-			// still reads.
-			typed, err := i.validation.assess(rt, c)
+			// The document node itself is assessed, not its children one
+			// at a time. Section 11.9.2 validates the copy, and the copy
+			// of a document node is a document node -- which is what
+			// brings the DOCUMENT-LEVEL constraints into play. Assessing
+			// each child instead reported the ID/IDREF failures with the
+			// element codes XTTE1510/XTTE1515, where XTTE1555 is the code
+			// for "document-level constraints are not satisfied".
+			c, err := i.validation.assess(rt, c)
 			if err != nil {
 				return err
 			}
-			if typed != c && i.copyAccumulators {
-				// The typed copy is the copy now, and answers as v does.
-				rt.noteCopiedAccumulators(v, typed)
-			}
-			c = typed
 			out.AppendNode(c)
-			// Under an open element the node in the result is a copy of c,
-			// made as it was appended; that is the node the repair below and
-			// the accumulators are about.
-			if open := out.Open(); open != nil && c.Kind() == xdm.KindElement {
-				c = open.LastChild()
+			return nil
+		}
+		if v.Kind() == xdm.KindAttribute {
+			// XTTE0950, second sentence: copying an attribute with
+			// namespace-sensitive content under validation="preserve" is
+			// a type error "unless the parent element is also copied".
+			// An attribute selected by xsl:copy-of arrives on its own --
+			// its parent, if it has one, is not what this instruction is
+			// copying -- so the exemption never applies on this path.
+			// The prefix in the copied QName would keep pointing at a
+			// binding the new parent element need not declare.
+			if i.validation.mode == validatePreserve &&
+				isNamespaceSensitiveType(xdm.TypeEnvOf(v), v.TypeAnnotation()) {
+				return fmt.Errorf(
+					"XTTE0950: xsl:copy-of with validation=\"preserve\" "+
+						"cannot copy attribute %s on its own, because its "+
+						"content is namespace-sensitive",
+					v.Name().Lexical())
+			}
+			// Assessed on a copy, never on v. Validation strips type
+			// annotations in place, and the default mode is "strip", so
+			// assessing the source attribute erased the annotation from
+			// the *input document* — which then answered differently for
+			// every later expression that read it.
+			//
+			// Every other branch of this switch already assesses a copy;
+			// this one did not, which is why copying attributes made
+			// fn:idref appear one-directional: the first copy stripped
+			// the annotations the later lookups needed.
+			// The node assessed below is an exact copy of the source's
+			// typing, which is what validation="preserve" then keeps and
+			// what every other mode overwrites or clears. Assessment and
+			// stripping both read more than the annotation name, so the
+			// node they are handed must carry more than the name.
+			//
+			// All of it reaches the RESULT: the attribute goes into the
+			// output through AddAttributeWithTyping, which takes the
+			// resolved xdm.Typing rather than an annotation name. The
+			// older AddAttributeTyped took a name only, so a copied
+			// attribute arrived in the output tree with its union member
+			// and its resolved primitive gone, to be guessed at later
+			// from the process-global registries.
+			a := xdm.NewNode(xdm.KindAttribute, v.Name(), v.Value())
+			a.CopyTypingFrom(v)
+			a, err := i.validation.assess(rt, a)
+			if err != nil {
+				return err
+			}
+			if err := out.AddAttributeWithTyping(a.Name(), a.Value(),
+				xdm.TypingOf(a)); err != nil {
+				return err
+			}
+			return nil
+		}
+		if v.Kind() == xdm.KindNamespace {
+			// A namespace node joins the element's bindings rather than
+			// its children. Appending it as a child put it nowhere the
+			// namespace axis or the serialiser would ever look.
+			if err := out.AddNamespace(v.Name().Local, v.Value()); err != nil {
+				return err
+			}
+			return nil
+		}
+		// XTTE0950: copying a node with namespace-sensitive content
+		// under copy-namespaces="no" and validation="preserve". The two
+		// together ask for the QName's prefix to be kept and its
+		// declaration to be thrown away, which leaves a value whose
+		// validity depended on a binding that is no longer there.
+		if i.noNamespaces && i.validation.mode == validatePreserve &&
+			hasNamespaceSensitiveContent(v) {
+			return fmt.Errorf(
+				"XTTE0950: xsl:copy-of with copy-namespaces=\"no\" and "+
+					"validation=\"preserve\" cannot copy %s, whose "+
+					"content is namespace-sensitive", describeNode(v))
+		}
+		// Charged before the copy is made, so a refusal allocates
+		// none of it. xsl:copy-of copies here rather than letting the
+		// builder do it -- it has to rebase and strip namespaces on its
+		// own copy first -- so the builder's charge never sees this
+		// node, and copying a large subtree once per node of a large
+		// document would otherwise build the cross product uncharged.
+		if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
+			return err
+		}
+		// Under an open element the copy is made once, straight into the
+		// tree being built, whenever the pre-copy below would leave it as
+		// it is: a text, comment or processing instruction always (only
+		// elements are rebased, stripped or assessed), and an element
+		// when copy-namespaces is "yes" and the validation neither
+		// replaces nor retypes it -- preserve, or strip of a tree that
+		// was never typed. What is done to the detached copy below is
+		// then done to this one, in the same order.
+		if out.Open() != nil && (v.Kind() != xdm.KindElement ||
+			!i.noNamespaces && i.validation.typeName == nil &&
+				(i.validation.mode == validatePreserve && !i.validation.constructsElement ||
+					i.validation.mode == validateStrip && !v.TreeHasTyping())) {
+			if c := out.AppendCopyOf(v); c != nil && c.Kind() == xdm.KindElement {
+				inheritNamespaces(c, v)
 				if i.copyAccumulators {
 					rt.noteCopiedAccumulators(v, c)
 				}
-			}
-			// After the copy has a parent, because the repair §5.8.3 needs
-			// depends on what the destination declares: an element in no
-			// namespace landing under one that declares a default has to
-			// undeclare it, or the copy silently changes namespace.
-			// copy-1220 grafts elements in no namespace into a
-			// <doc xmlns="http://www.out.com/">.
-			if c.Kind() == xdm.KindElement {
 				fixupNamespaces(c)
 			}
-		case *xdm.Atomic:
-			out.AppendValue(v)
-		default:
-			// What survives Flatten and is neither a node nor an atomic value
-			// is a map or a function item. Neither has a representation
-			// inside element content, and dropping one silently is what hid
-			// this whole defect: appendOpaqueItem accepts it at the top level
-			// of a sequence and raises XTDE0450 under an open element, which
-			// is what §5.8.1 requires ("it is a dynamic error if the result
-			// sequence contains a function item").
-			if err := appendOpaqueItem(out, it); err != nil {
-				return err
+			return nil
+		}
+		c := deepCopy(v)
+		if i.copyAccumulators {
+			rt.noteCopiedAccumulators(v, c)
+		}
+		if out.Open() == nil {
+			// A parentless copy keeps its own xml:base, resolved against
+			// the instruction's base URI rather than against the document
+			// it came from. appendNode only rebases when there is a
+			// parent to inherit from, so a copy that lands directly in a
+			// variable would otherwise keep the source's resolved base.
+			rebaseDetached(c, i.baseURI)
+		}
+		if v.Kind() == xdm.KindElement {
+			if i.noNamespaces {
+				stripNamespaces(c)
+			} else {
+				// The copy carries only the declarations written on the
+				// source element, so the ones it inherits from ancestors
+				// it is being lifted away from are added here. Without
+				// them a copied subtree loses the binding its own prefix
+				// depends on.
+				inheritNamespaces(c, v)
 			}
+		}
+
+		// The copy is assessed rather than the original: validation may
+		// annotate, and annotating the source document would leak a
+		// property of this instruction into the tree everything else
+		// still reads.
+		typed, err := i.validation.assess(rt, c)
+		if err != nil {
+			return err
+		}
+		if typed != c && i.copyAccumulators {
+			// The typed copy is the copy now, and answers as v does.
+			rt.noteCopiedAccumulators(v, typed)
+		}
+		c = typed
+		out.AppendNode(c)
+		// Under an open element the node in the result is a copy of c,
+		// made as it was appended; that is the node the repair below and
+		// the accumulators are about.
+		if open := out.Open(); open != nil && c.Kind() == xdm.KindElement {
+			c = open.LastChild()
+			if i.copyAccumulators {
+				rt.noteCopiedAccumulators(v, c)
+			}
+		}
+		// After the copy has a parent, because the repair §5.8.3 needs
+		// depends on what the destination declares: an element in no
+		// namespace landing under one that declares a default has to
+		// undeclare it, or the copy silently changes namespace.
+		// copy-1220 grafts elements in no namespace into a
+		// <doc xmlns="http://www.out.com/">.
+		if c.Kind() == xdm.KindElement {
+			fixupNamespaces(c)
+		}
+	case *xdm.Atomic:
+		out.AppendValue(v)
+	default:
+		// What survives Flatten and is neither a node nor an atomic value
+		// is a map or a function item. Neither has a representation
+		// inside element content, and dropping one silently is what hid
+		// this whole defect: appendOpaqueItem accepts it at the top level
+		// of a sequence and raises XTDE0450 under an open element, which
+		// is what §5.8.1 requires ("it is a dynamic error if the result
+		// sequence contains a function item").
+		if err := appendOpaqueItem(out, it); err != nil {
+			return err
 		}
 	}
 	return nil

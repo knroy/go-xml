@@ -121,6 +121,9 @@ type streamSplit struct {
 	outer    *xpath.Compiled
 	outerVar xdm.QName
 	kids     bool // the outer (or a choice above) reads has-children(.)
+	// noRoot gives up (errSplitGiveUp) at a match that would ground the
+	// document element: that copy is the tree (C5's streamed copy-of).
+	noRoot bool
 }
 
 // splitStream splits e, an expression whose context item is the document
@@ -1286,7 +1289,7 @@ type splitRun struct {
 	// view (matchView) or a copy (matchGround). body runs a matchBody loop's
 	// body at a match's start tag, at depth d, and reports whether it read
 	// the match to its end.
-	each func(n *xdm.Node) error
+	each func(it xdm.Item) error
 	body func(v *xdm.Node, d int) (bool, error)
 }
 
@@ -1350,7 +1353,7 @@ func (s *streamSplit) eval(ctx *xpath.Context, c *xdmstream.Cursor, d int) (xdm.
 // (matchView, matchGround) or, at its start tag, to body (matchBody). s is a
 // bare path: no choice, tail, reducer or outer.
 func (s *streamSplit) loop(ctx *xpath.Context, c *xdmstream.Cursor, d int,
-	each func(*xdm.Node) error, body func(*xdm.Node, int) (bool, error)) error {
+	each func(xdm.Item) error, body func(*xdm.Node, int) (bool, error)) error {
 
 	var v *xdm.Node
 	if d > 0 {
@@ -1525,6 +1528,9 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					return err
 				}
 			case matchGround:
+				if s.noRoot && ev.Depth == 1 {
+					return errSplitGiveUp
+				}
 				decided = true
 				if err := r.ground(f); err != nil {
 					return err
@@ -1711,7 +1717,7 @@ func (r *splitRun) take(items xdm.Sequence) error {
 	s := r.s
 	if r.each != nil {
 		for _, it := range items {
-			if err := r.each(it.(*xdm.Node)); err != nil {
+			if err := r.each(it); err != nil {
 				return err
 			}
 		}
