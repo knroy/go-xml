@@ -38,9 +38,12 @@ func coreRun(sheet, dir string, core bool, opts TransformOptions) (out, errText 
 }
 
 // coreSheet wraps a container body in a stylesheet.
-func coreSheet(body string) string {
+func coreSheet(body string) string { return coreSheetWith("", body) }
+
+// coreSheetWith is coreSheet with top-level declarations decls.
+func coreSheetWith(decls, body string) string {
 	return `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
- xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:p="urn:p" exclude-result-prefixes="xs p">
+ xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:p="urn:p" exclude-result-prefixes="xs p">` + decls + `
 <xsl:template name="main"><top><xsl:source-document streamable="yes" href="doc.xml">` + body +
 		`</xsl:source-document></top></xsl:template></xsl:stylesheet>`
 }
@@ -55,7 +58,14 @@ var coreDocs = map[string]string{
 	"empty":  `<doc/>`,
 	"bad":    `<doc><rec k="a" v="1"/><rec k="b"></doc>`,
 	"wide":   "<doc>" + strings.Repeat(`<rec k="a" v="1"><sub x="1">s</sub></rec>`, 500) + "</doc>",
+	"spaces": "<doc>\n <rec k=\"a\" v=\"1\">\n  <sub x=\"1\"> </sub>\n  <sub x=\"2\">\n t </sub>\n </rec>\n" +
+		" <w xml:space=\"preserve\">\n  <rec k=\"b\" v=\"2\">\n   <sub x=\"3\">  </sub>\n  </rec>\n" +
+		"  <rec k=\"c\" v=\"3\" xml:space=\"default\">\n <sub/>\n </rec>\n </w>\n</doc>",
 }
+
+// coreDecls are the whitespace declarations the bodies run under.
+var coreDecls = []string{"", `<xsl:strip-space elements="*"/>`,
+	`<xsl:strip-space elements="*"/><xsl:preserve-space elements="sub"/>`}
 
 // coreBodies are container bodies. stream says the core must take the
 // container: a body that only the tree may run has false.
@@ -114,9 +124,10 @@ var coreBodies = []struct {
 	{`<xsl:apply-templates select="//rec"/>`, false},
 }
 
-// TestStreamCoreMatchesTree: every body over every document gives, on the
-// core, the tree's output or the tree's error; the ones that must stream ran
-// on the core and nothing hit a guard.
+// TestStreamCoreMatchesTree: every body over every document, under every
+// whitespace declaration, gives on the core the tree's output or the tree's
+// error; the ones that must stream ran on the core without a re-run, and
+// nothing hit a guard.
 func TestStreamCoreMatchesTree(t *testing.T) {
 	dir := t.TempDir()
 	streamed := 0
@@ -125,37 +136,44 @@ func TestStreamCoreMatchesTree(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, c := range coreBodies {
-			sheet := coreSheet(c.body)
-			so, se, st := coreRun(sheet, dir, true, TransformOptions{})
-			to, te, tt := coreRun(sheet, dir, false, TransformOptions{})
-			where := fmt.Sprintf("doc %s, body %s", name, c.body)
-			if so != to || se != te {
-				t.Errorf("%s:\ncore %q %q\ntree %q %q", where, so, se, to, te)
-			}
-			if st.Guards+tt.Guards != 0 {
-				t.Errorf("%s: %d guard hits", where, st.Guards+tt.Guards)
-			}
-			if tt.Streamed() != 0 {
-				t.Errorf("%s: streamed with the core off", where)
-			}
-			core := st.Runs[streamtrace.Core]
-			if c.stream && core == 0 {
-				t.Errorf("%s: not on the core", where)
-			}
-			if !c.stream && core != 0 {
-				t.Errorf("%s: on the core", where)
-			}
-			if core > 0 && st.Reruns == 0 {
-				streamed++
-			}
-			// A re-run would hide a wrong stream behind the tree's answer:
-			// only a document the tree also fails on may need one.
-			if core > 0 && st.Reruns != 0 && te == "" {
-				t.Errorf("%s: re-run on the tree (%d), which succeeds", where, st.Reruns)
+			for _, d := range coreDecls {
+				where := fmt.Sprintf("doc %s, decls %q, body %s", name, d, c.body)
+				streamed += coreCheck(t, coreSheetWith(d, c.body), dir, where, c.stream, TransformOptions{})
 			}
 		}
 	}
 	if streamed == 0 {
 		t.Error("nothing streamed without a re-run")
 	}
+}
+
+// coreCheck runs sheet over dir's doc.xml on the core and on the tree and
+// reports any difference; it returns 1 when the core ran without a re-run.
+func coreCheck(t *testing.T, sheet, dir, where string, stream bool, opts TransformOptions) int {
+	t.Helper()
+	so, se, st := coreRun(sheet, dir, true, opts)
+	to, te, tt := coreRun(sheet, dir, false, opts)
+	if so != to || se != te {
+		t.Errorf("%s:\ncore %q %q\ntree %q %q", where, so, se, to, te)
+	}
+	if st.Guards+tt.Guards != 0 {
+		t.Errorf("%s: %d guard hits", where, st.Guards+tt.Guards)
+	}
+	if tt.Streamed() != 0 {
+		t.Errorf("%s: streamed with the core off", where)
+	}
+	core := st.Runs[streamtrace.Core]
+	switch {
+	case stream && core == 0:
+		t.Errorf("%s: not on the core", where)
+	case !stream && core != 0:
+		t.Errorf("%s: on the core", where)
+	case core > 0 && st.Reruns != 0 && te == "":
+		// A re-run would hide a wrong stream behind the tree's answer:
+		// only a document the tree also fails on may need one.
+		t.Errorf("%s: re-run on the tree (%d), which succeeds", where, st.Reruns)
+	case core > 0 && st.Reruns == 0:
+		return 1
+	}
+	return 0
 }

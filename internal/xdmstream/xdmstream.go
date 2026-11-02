@@ -81,6 +81,9 @@ type Cursor struct {
 	viewed *xdm.Node
 	// flush hands over the copies GroundLater holds (Flush).
 	flush func() error
+	// strip says whitespace-only text inside an element is stripped
+	// (StripWhitespace).
+	strip func(el *xdm.Node) bool
 }
 
 // errStop ends the parse when the cursor is closed.
@@ -108,6 +111,12 @@ func Open(r io.Reader, opts xdm.ParseOptions) *Cursor {
 	})
 	return c
 }
+
+// StripWhitespace has the parse drop whitespace-only text directly inside
+// each element el for which strip reports true, as xsl:strip-space does: el
+// is open in the parse's tree, with its ancestors. Such text is not an event,
+// nor in a copy, nor in Text's value. It must be set before the first call.
+func (c *Cursor) StripWhitespace(strip func(el *xdm.Node) bool) { c.strip = strip }
 
 // Close stops the parse. The cursor is spent.
 func (c *Cursor) Close() { c.stop() }
@@ -316,6 +325,8 @@ func (k *client) Later(g any) error {
 func (k *client) Viewer(view func() any) { k.c.view = view }
 
 func (k *client) Flusher(flush func() error) { k.c.flush = flush }
+
+func (k *client) Strips(el any) bool { return k.c.strip != nil && k.c.strip(el.(*xdm.Node)) }
 
 func (k *client) Watch(el any, d int, end bool) {
 	for _, o := range k.c.obs {

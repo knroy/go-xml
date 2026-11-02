@@ -73,6 +73,9 @@ type burster struct {
 	// leaves hands c the text, comments and processing instructions of the
 	// spine, the document node's own too, before they are dropped.
 	leaves bool
+	// strip, when set, says whitespace-only text directly inside an open
+	// element is dropped as it is parsed (xdmburst.Stripping).
+	strip func(el *Node) bool
 	// watch, when set, is told of every element's start and end, those
 	// inside a burst or a dropped element too.
 	watch func(el *Node, d int, end bool)

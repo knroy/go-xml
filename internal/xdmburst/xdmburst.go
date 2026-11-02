@@ -85,6 +85,15 @@ type Viewing interface {
 	Viewer(view func() any)
 }
 
+// Stripping is a Client that strips whitespace as XSLT's xsl:strip-space
+// does: Strips reports whether whitespace-only text directly inside el (an
+// *xdm.Node open in the parse's tree, its ancestors with it) is dropped. The
+// parse asks it of each such text run beside its own rules, and a run it
+// drops never joins the tree.
+type Stripping interface {
+	Strips(el any) bool
+}
+
 // Flushing is a Client that can have the copies GroundLater still holds
 // handed over before the document element closes: Drive hands it, before
 // the first event, the function that calls Later with each of them now. It

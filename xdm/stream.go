@@ -39,6 +39,9 @@ func driver(c xdmburst.Client) *burster {
 	if f, ok := c.(xdmburst.Flushing); ok {
 		f.Flusher(b.flush)
 	}
+	if s, ok := c.(xdmburst.Stripping); ok {
+		b.strip = func(el *Node) bool { return s.Strips(el) }
+	}
 	return b
 }
 

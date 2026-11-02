@@ -341,7 +341,8 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	// node never joins the tree.
 	stripSpaceAt := func(el *Node) bool {
 		return (elementOnly != nil && ignorableWhitespaceIn(el, elementOnly)) ||
-			(opts.StripSpace != nil && stripsWhitespaceIn(el, opts.StripSpace))
+			(opts.StripSpace != nil && stripsWhitespaceIn(el, opts.StripSpace)) ||
+			(bs != nil && bs.strip != nil && bs.strip(el))
 	}
 
 	for {

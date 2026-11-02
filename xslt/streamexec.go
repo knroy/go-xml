@@ -754,20 +754,23 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 		return false, nil
 	}
 	// The resolvers Transform wraps around the caller's, as executeBursts
-	// looks through them. Whitespace stripping is not done on the cursor:
-	// a stylesheet with xsl:strip-space reads the tree.
+	// looks through them; whitespace is stripped as the cursor parses.
 	base := i.base(rt)
+	pkg := packageOf(rt.ctx)
 	var (
-		rd *readDocResolver
-		br burstResolver
+		rd    *readDocResolver
+		br    burstResolver
+		strip func(*xdm.Node) bool
 	)
 	for d := rt.ctx.Env().Docs; br == nil; {
 		switch v := d.(type) {
 		case *readDocResolver:
-			if _, seen := v.docs[docKey{href, base, packageOf(rt.ctx)}]; seen {
+			if _, seen := v.docs[docKey{href, base, pkg}]; seen {
 				return false, nil
 			}
 			rd, d = v, v.inner
+		case *stripSpaceResolver:
+			strip, d = v.sheet.whitespaceStripper(pkg), v.inner
 		case burstResolver:
 			br = v
 		default:
@@ -793,7 +796,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	i.stream.count()
 	sig, mark := signature(out), rt.localsMark()
 	n0, b0 := xpathleaf.Charged(rt.ctx)
-	err := i.runStream(rt, out, br, href, base, unread)
+	err := i.runStream(rt, out, br, href, base, strip, unread)
 	if err == nil {
 		return true, nil
 	}
@@ -820,7 +823,7 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 // runStream runs i's body on a cursor over href. A posture fault is
 // returned as its error; any other panic goes on.
 func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burstResolver,
-	href, base string, unread func()) (err error) {
+	href, base string, strip func(*xdm.Node) bool, unread func()) (err error) {
 
 	defer func() {
 		if p := recover(); p != nil {
@@ -832,6 +835,9 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		}
 	}()
 	return br.streamDoc(rt.ctx, href, base, func(c *xdmstream.Cursor) error {
+		if strip != nil {
+			c.StripWhitespace(strip)
+		}
 		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread}
 		// The body's focus is the document node, which the stream does not
 		// build: the plan reads of it only what an empty one has.
@@ -851,6 +857,25 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		}
 		return nil
 	})
+}
+
+// whitespaceStripper is xsl:strip-space for the cursor: whitespace-only text
+// inside el is stripped as stripCopy strips it for the tree -- the package's
+// declarations matched against el's name, unless the nearest xml:space on el
+// or an ancestor says preserve. (The simple-type exemption reads an
+// annotation, which a streamed document, never validated, does not have.)
+func (s *Stylesheet) whitespaceStripper(pkg int) func(*xdm.Node) bool {
+	return func(el *xdm.Node) bool {
+		if !s.stripsElement(pkg, el.Name()) {
+			return false
+		}
+		for n := el; n != nil; n = n.Parent() {
+			if a := n.Attr(xdm.NSXML, "space"); a != nil {
+				return a.Value() != "preserve"
+			}
+		}
+		return true
+	}
 }
 
 // streamDoc implements burstResolver. It reads the file as parseBursts does
