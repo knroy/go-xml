@@ -2,12 +2,11 @@ package xslt
 
 // The streamed core (full streaming, component C5; DESIGN sections 1.6, 2).
 //
-// A trusted streamable xsl:source-document whose burst plan (streamburst.go)
-// is refused gets a core plan: a tree of sNodes over its body, built from
-// the §19.8 plan map (C3) and run on the stream cursor (C1) with the
-// streamed XPath split (C4). Order: the burst plan is tried first and keeps
-// every container it accepts; the core takes the rest (M1.6 retires the
-// burst plans into it).
+// A trusted streamable xsl:source-document gets a core plan: a tree of
+// sNodes over its body, built from the §19.8 plan map (C3) and run on the
+// stream cursor (C1) with the streamed XPath split (C4). It is the only
+// streamed path: the burst plans that came before it were retired into it
+// (M1.6); their body rules live on in streamburst.go.
 //
 // The sNodes are a classification of the body, not a second interpreter:
 //
@@ -69,15 +68,11 @@ import (
 	"github.com/knroy/go-xml/v2/xpath"
 )
 
-// noCore turns the core off, so that a test can compare it with the tree,
-// and noBurstPlan the burst plans, so that the core takes their containers.
-var noCore, noBurstPlan bool
-
 // traceRerun, when set, is told of the failure behind each re-run.
 var traceRerun func(err error)
 
 // traceCore, when set, is told why the core refused each trusted container
-// the burst plans refused ("" when it took it), for the coverage tests.
+// ("" when it took it), for the coverage tests.
 var traceCore func(sd *xdm.Node, why string)
 
 // streamExec is the core plan of one container.
@@ -134,7 +129,8 @@ func (b *streamBuilder) refuse(why string) bool {
 }
 
 // planStream builds the core plan of the streamable xsl:source-document sd,
-// or returns nil and why not. shared is planBursts'.
+// or returns nil and why not. shared says sd's module is not the whole
+// stylesheet (streamtrust.go).
 func planStream(sd *xdm.Node, shared bool) (*streamExec, string) {
 	for _, a := range []string{"validation", "type", "use-accumulators"} {
 		if sd.Attr("", a) != nil {
@@ -838,6 +834,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 // up, on the tree: the document is read again as a tree, and the stream is
 // left where it is (nothing else reads it: its one consumer was sel).
 func (run *streamRun) fallback(rt *runtime, sel *xpath.Compiled) (xdm.Sequence, error) {
+	if traceBurstFallback != nil {
+		traceBurstFallback(errSplitGiveUp)
+	}
 	streamtrace.Fallback()
 	run.unread()
 	root, err := run.i.load(rt, run.href)
@@ -877,11 +876,14 @@ func (x *streamExec) count() {
 // executeStream runs i on its core plan when its resolver can stream the
 // document, and reports whether it did (DESIGN section 2.1, rule 4).
 func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, href string) (bool, error) {
-	if noBursts || noCore || streamtrace.Off() || validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') {
+	if noBursts || streamtrace.Off() || validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') {
 		return false, nil
 	}
-	// The resolvers Transform wraps around the caller's, as executeBursts
-	// looks through them; whitespace is stripped as the cursor parses.
+	// The resolvers Transform wraps around the caller's are looked through
+	// here, doing for this read what each does for a tree: readDocResolver
+	// records it for XTDE1500 and answers from its own memory when the
+	// transformation has read the document already, and stripSpaceResolver
+	// strips whitespace, which the cursor does as it parses.
 	base := i.base(rt)
 	pkg := packageOf(rt.ctx)
 	var (
@@ -908,6 +910,8 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	if !ok {
 		return false, nil
 	}
+	// Tree mode records the document only once it has loaded; a document
+	// that fails to parse must not count as read here either (unread).
 	unread := func() {}
 	if rd != nil && docURI != "" {
 		if !rd.read[docURI] {
@@ -919,6 +923,9 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 				"XTDE1500: this transformation reads %q, which xsl:result-document "+
 					"has already written", docURI)
 		}
+	}
+	if traceBursts != nil {
+		traceBursts(href)
 	}
 	i.stream.count()
 	sig, mark := signature(out), rt.localsMark()
@@ -1008,9 +1015,10 @@ func (s *Stylesheet) whitespaceStripper(pkg int) func(*xdm.Node) bool {
 	}
 }
 
-// streamDoc implements burstResolver. It reads the file as parseBursts does
-// -- the same confinement, options, entity allowance and byte limit -- on a
-// cursor fn reads, and caches nothing.
+// streamDoc implements burstResolver. It reads the file as parseUncached
+// does -- the same confinement, options, entity allowance and byte limit,
+// and the same errors -- on a cursor fn reads, and caches nothing: there is
+// no tree.
 func (r *FileResolver) streamDoc(ctx *xpath.Context, uri, base string, fn func(*xdmstream.Cursor) error) error {
 	path, err := r.resolvePath(uri, base)
 	if err != nil {

@@ -49,11 +49,8 @@ type sourceDocumentInstr struct {
 	// expression -- a per-element property, not a per-module one. Taking the
 	// module's base instead ignored xml:base, which non-stream-004 catches.
 	baseURI string
-	// bursts is the plan for running the body without building the
-	// document, when it qualifies; see streamburst.go.
-	bursts *burstPlan
-	// stream is the core plan, when the burst plans refuse the body; see
-	// streamexec.go.
+	// stream is the plan for running the body without building the
+	// document, when it qualifies; see streamexec.go.
 	stream *streamExec
 }
 
@@ -72,34 +69,22 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	if err != nil {
 		return nil, err
 	}
-	var (
-		plan *burstPlan
-		core *streamExec
-	)
+	var core *streamExec
 	if isYes(n.AttrValue("streamable")) {
 		// A module other than the principal one, or a principal that pulls
-		// in others, is not the whole stylesheet. A container the burst
-		// plans take keeps them; the core takes the rest (streamexec.go).
+		// in others, is not the whole stylesheet (streamtrust.go).
 		shared := n.Root() != c.sheet.source
-		if !noBurstPlan {
-			plan = planBursts(n, shared)
-		}
-		if plan == nil {
-			var why string
-			if core, why = planStream(n, shared); core == nil && traceCore != nil && why != "verdict not trusted" {
-				traceCore(n, why)
-			}
+		var why string
+		if core, why = planStream(n, shared); core == nil && traceCore != nil && why != "verdict not trusted" {
+			traceCore(n, why)
 		}
 	}
-	outer, outerCore := c.burst, c.stream
-	c.burst, c.stream = plan, core
+	outer := c.stream
+	c.stream = core
 	body, err := c.compileSequence(n, n)
-	c.burst, c.stream = outer, outerCore
+	c.stream = outer
 	if err != nil {
 		return nil, err
-	}
-	if plan != nil && plan.instr == nil {
-		plan = nil // the loop was not compiled (use-when)
 	}
 	if core != nil {
 		why := core.ready()
@@ -111,7 +96,7 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 		}
 	}
 	instr := &sourceDocumentInstr{href: href, validation: spec, body: body,
-		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI, bursts: plan, stream: core}
+		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI, stream: core}
 	if n.Attr("", "use-accumulators") != nil {
 		accums, err := parseUseAccumulators(n)
 		if err != nil {
@@ -126,11 +111,6 @@ func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	href, err := i.href.eval(rt)
 	if err != nil {
 		return err
-	}
-	if i.bursts != nil {
-		if done, err := i.executeBursts(rt, out, href); done {
-			return err
-		}
 	}
 	if i.stream != nil {
 		if done, err := i.executeStream(rt, out, href); done {

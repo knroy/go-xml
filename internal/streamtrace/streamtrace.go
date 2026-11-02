@@ -15,22 +15,14 @@ import "sync/atomic"
 type Strategy int
 
 const (
-	// SelectFolded is a value-of, copy-of or sequence whose select is a
-	// count, sum, min or max of a record path, folded burst by burst.
-	SelectFolded Strategy = iota
-	// SelectCollected is any other such select: each burst's items are
-	// collected and the rest of the select evaluated once over them.
-	SelectCollected
-	// LoopForEach and LoopIterate are the loop shape: the body runs per item.
-	LoopForEach
-	LoopIterate
 	// Core is a container run by the streamed core (xslt/streamexec.go):
-	// its plan is a tree of sNodes, counted by Kind.
-	Core
+	// its plan is a tree of sNodes, counted by Kind. (The burst plans' four
+	// strategies, fold, collect, for-each and iterate, were retired into it.)
+	Core Strategy = iota
 	NumStrategies
 )
 
-var names = [NumStrategies]string{"fold", "collect", "for-each", "iterate", "core"}
+var names = [NumStrategies]string{"core"}
 
 func (s Strategy) String() string { return names[s] }
 

@@ -149,6 +149,33 @@ func TestParseBurstsSpineStaysSmall(t *testing.T) {
 	}
 }
 
+// An element off the path is checked but dropped as it is parsed
+// (xdmburst.Discard): a large one is never held whole, nor are the
+// elements it holds.
+func TestParseBurstsDropsOffPath(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<a><big>")
+	for i := range 20000 {
+		fmt.Fprintf(&b, "<x i='%d'><y>t</y></x>", i)
+	}
+	b.WriteString("</big><r/></a>")
+	n, held := 0, 0
+	opts := ParseOptions{bursts: &burster{
+		c:     &patternClient{steps: []xdmburst.Step{{Local: "a"}, {Local: "r"}}, states: []uint64{1}},
+		fn:    func(*Node) error { n++; return nil },
+		gens:  []uint64{0},
+		watch: func(el *Node, _ int, _ bool) { held = max(held, int(el.tree.n)) },
+	}}
+	if _, err := parse(strings.NewReader(b.String()), "", opts); err != nil {
+		t.Fatal(err)
+	}
+	// The open path: a, big, x, y and an attribute or two, against 80,000
+	// records for big whole.
+	if n != 1 || held > 64 {
+		t.Fatalf("%d bursts; the parse held %d records", n, held)
+	}
+}
+
 // A burst's tree does not carry the parse's name and frame indexes, which
 // cover every name and declaration of the stream so far: copying them made
 // the cost of each burst grow with the stream. Its names still resolve.

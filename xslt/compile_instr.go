@@ -475,7 +475,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			validation:       spec,
 			baseURI:          n.BaseURI(),
 		}
-		c.noteBurstSelect(n, instr, sel, ns)
+		c.noteStreamSelect(n, instr, sel, ns)
 		return instr, nil
 	case "evaluate":
 		return c.compileEvaluate(n, ns)
@@ -524,7 +524,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			}
 		}
 		instr := &sequenceInstr{sel: sel}
-		c.noteBurstSelect(n, instr, sel, ns)
+		c.noteStreamSelect(n, instr, sel, ns)
 		return instr, nil
 	case "message":
 		return c.compileMessage(n, ns)
@@ -684,7 +684,7 @@ func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 			return nil, fmt.Errorf(
 				"XTSE0870: xsl:value-of has both a select attribute and content")
 		}
-		c.noteBurstSelect(n, instr, comp, ns)
+		c.noteStreamSelect(n, instr, comp, ns)
 		return instr, nil
 	}
 	body, err := c.compileSequence(n, n)
@@ -977,7 +977,7 @@ func (c *compiler) compileForEach(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 		return nil, err
 	}
 	instr := &forEachInstr{sel: sel, sorts: sorts, body: body}
-	c.noteBurstLoop(n, instr, sel, ns)
+	c.noteStreamLoop(n, instr, sel, ns)
 	return instr, nil
 }
 
@@ -2308,7 +2308,7 @@ func (c *compiler) compileIterate(n *xdm.Node, ns *nsResolver) (Instruction, err
 		return nil, err
 	}
 	instr.body = body
-	c.noteBurstLoop(n, instr, sel, ns)
+	c.noteStreamLoop(n, instr, sel, ns)
 	return instr, nil
 }
 

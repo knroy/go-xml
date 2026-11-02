@@ -40,12 +40,6 @@ func ParseBursts(r io.Reader, opts ParseOptions, path []QName, fn func(*Node) er
 	return parseBursts(r, opts, steps, fn)
 }
 
-func init() {
-	xdmburst.Parse = func(r io.Reader, opts any, steps []xdmburst.Step, fn func(any) error) error {
-		return parseBursts(r, opts.(ParseOptions), steps, func(n *Node) error { return fn(n) })
-	}
-}
-
 // parseBursts is ParseBursts over a pattern that may have wildcards and
 // descendant steps. An element whose ancestry matches it is a burst; one
 // whose ancestry could still lead to a match below it is kept on the spine;
@@ -178,7 +172,8 @@ func (p *patternClient) start(el *Node, d int) (xdmburst.Action, error) {
 		p.states = append(p.states, n)
 		return xdmburst.Keep, nil
 	}
-	return xdmburst.Skip, nil
+	// Off the path: checked, and dropped as it is parsed.
+	return xdmburst.Discard, nil
 }
 
 func (p *patternClient) leaf(*Node, int) error { return nil }

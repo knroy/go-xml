@@ -6,10 +6,9 @@ package xslt
 // value-of/copy-of/sequence over a record path or a for-each/iterate over
 // one, many of them shapes the gate must refuse, or (fuzzCoreShapes) the
 // streamed core's shapes: wrappers, loops whose bodies read their matches,
-// selects inside -- runs with streaming on, with no folding, on the tree,
-// and with the burst plans off, so that the core takes their containers
-// too; all four must agree, the last exactly (the core re-runs on any
-// failure, so its errors are the tree's).
+// selects inside -- runs streamed and on the tree, which must agree exactly,
+// error text and all: the core re-runs on any failure, so its errors are the
+// tree's; a re-run where the tree succeeds is a difference too.
 //
 //	go test ./xslt -run 'TestStreamFuzz$' -v                      # default 1000 cases from seed 1
 //	GOXSLT_STREAM_FUZZ=100000 GOXSLT_STREAM_FUZZ_SEED=1 go test ./xslt -run 'TestStreamFuzz$' -v -timeout 0
@@ -539,18 +538,15 @@ type fuzzRes struct {
 	trace           streamtrace.Counts
 }
 
-// fuzzRun runs c from dir: bursts says whether streaming is on (off is
-// streamtrace's switch, as GOXSLT_STREAM_OFF sets it), fold whether reducers
-// fold, core whether the burst plans are off, so that the core takes their
-// containers.
-func fuzzRun(c fuzzCase, dir string, bursts, fold, core bool) (r fuzzRes) {
+// fuzzRun runs c from dir, with streaming on or off (streamtrace's switch,
+// as GOXSLT_STREAM_OFF sets it).
+func fuzzRun(c fuzzCase, dir string, streamed bool) (r fuzzRes) {
 	before := streamtrace.Snapshot()
 	defer func() {
 		if p := recover(); p != nil {
 			r.panic = fmt.Sprint(p)
 		}
 		streamtrace.SetOff(false)
-		noBurstFold, noBurstPlan = false, false
 		r.trace = streamtrace.Snapshot().Sub(before)
 	}()
 	tree, err := xdm.ParseString(c.sheet, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
@@ -558,17 +554,14 @@ func fuzzRun(c fuzzCase, dir string, bursts, fold, core bool) (r fuzzRes) {
 		r.err = "SHEET: " + err.Error()
 		return
 	}
-	noBurstPlan = core
 	sheet, err := Compile(tree.Root, CompileOptions{})
-	noBurstPlan = false
 	if err != nil {
 		r.err = "COMPILE: " + err.Error()
 		return
 	}
 	docs, _ := NewFileResolver(dir)
 	docs.MaxNodes, docs.MaxBytes = c.maxNodes, c.maxBytes
-	streamtrace.SetOff(!bursts)
-	noBurstFold = !fold
+	streamtrace.SetOff(!streamed)
 	res, err := sheet.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
 	if err != nil {
 		r.err = err.Error()
@@ -601,37 +594,16 @@ func fuzzCode(r fuzzRes) string {
 	return "nocode"
 }
 
-// fuzzDiff says how b (bursts) or k (bursts, no fold) differs from tr (the
-// tree), or "" when they agree.
-func fuzzDiff(b, k, tr fuzzRes) string {
-	switch {
-	case b.panic != "" || k.panic != "" || tr.panic != "":
-		return "PANIC"
-	case b.trace.Guards+k.trace.Guards+tr.trace.Guards != 0:
-		return "GUARD"
-	case tr.trace.Streamed() != 0:
-		return "STREAMED WHILE OFF"
-	case b.out != tr.out || k.out != tr.out:
-		return "OUTPUT"
-	case (b.err == "") != (tr.err == "") || (k.err == "") != (tr.err == ""):
-		return "SUCCESS/ERROR"
-	case b.err != tr.err || k.err != tr.err:
-		if fuzzCode(b) != fuzzCode(tr) || fuzzCode(k) != fuzzCode(tr) {
-			return "ERRCODE " + fuzzCode(b) + "/" + fuzzCode(k) + " vs " + fuzzCode(tr)
-		}
-		return "ERRTEXT"
-	}
-	return ""
-}
-
-// fuzzCoreDiff says how co, the run with the burst plans off, differs from
-// tr, the tree's, or "": exactly, error text and all.
-func fuzzCoreDiff(c fuzzCase, co, tr fuzzRes) string {
+// fuzzDiff says how co, the streamed run, differs from tr, the tree's, or
+// "": exactly, error text and all.
+func fuzzDiff(c fuzzCase, co, tr fuzzRes) string {
 	switch {
 	case co.panic != "" || tr.panic != "":
 		return "PANIC"
-	case co.trace.Guards != 0:
+	case co.trace.Guards+tr.trace.Guards != 0:
 		return "GUARD"
+	case tr.trace.Streamed() != 0:
+		return "STREAMED WHILE OFF"
 	case co.out != tr.out:
 		return "OUTPUT"
 	case co.err != tr.err:
@@ -643,30 +615,6 @@ func fuzzCoreDiff(c fuzzCase, co, tr fuzzRes) string {
 		return "RE-RUN where the tree succeeds"
 	}
 	return ""
-}
-
-// fuzzKnown reports whether difference d of loop-shape case c is the
-// documented loop-shape error order (docs/known-gaps.md, "Error order can
-// differ from tree mode, for the loop shape"): the loop writes as it reads
-// and reports the first error it meets, the tree reads the whole document and
-// evaluates the whole select first. The class is exactly the one the stage-1b
-// fuzzer admitted, and nothing wider:
-//   - bursts and no-fold agree with each other, and
-//   - either the document is malformed or over MaxNodes/MaxBytes, the tree
-//     fails with FODC0002 (raised or caught) and bursts do not succeed -- a
-//     body error met before the bad tail or the limit;
-//   - or both fail with the same code but a different message -- with
-//     nested matches the tree evaluates //rec[p] parent by parent and bursts
-//     in document order, so a predicate error can name another item
-//     (XPath 3.1 §2.3.4 allows either).
-func fuzzKnown(c fuzzCase, d string, b, k, tr fuzzRes) bool {
-	if !strings.HasSuffix(c.kind, "-loop") || b.out != k.out || b.err != k.err {
-		return false
-	}
-	bc, tc := fuzzCode(b), fuzzCode(tr)
-	return (c.malform || c.maxNodes > 0 || c.maxBytes > 0) &&
-		(tc == "FODC0002" || tc == "caught:FODC0002") && bc != "ok" ||
-		d == "ERRTEXT"
 }
 
 func TestStreamFuzz(t *testing.T) {
@@ -699,52 +647,36 @@ func TestStreamFuzz(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(c.doc), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		b := fuzzRun(c, dir, true, true, false)
-		k := fuzzRun(c, dir, true, false, false)
-		tr := fuzzRun(c, dir, false, false, false)
-		co := fuzzRun(c, dir, true, true, true)
+		co := fuzzRun(c, dir, true)
+		tr := fuzzRun(c, dir, false)
 		tally["cases"]++
-		if co.trace.Runs[streamtrace.Core] > 0 {
-			tally["core leg: on the core"]++
+		if co.trace.Streamed() > 0 {
+			tally["streamed"]++
 			if co.trace.Reruns > 0 {
-				tally["core leg: re-run on the tree"]++
+				tally["streamed: re-run on the tree"]++
+			}
+			if co.trace.Fallbacks > 0 {
+				tally["streamed: a select fell back to the tree"]++
+			}
+			if strings.HasSuffix(c.kind, "-loop") {
+				tally["streamed: loop shapes"]++
 			}
 		}
 		if strings.HasPrefix(c.kind, "core") {
 			tally["core shapes"]++
 		}
-		if d := fuzzCoreDiff(c, co, tr); d != "" {
-			tally["DIFFERENCES"]++
-			if tally["DIFFERENCES"] <= 10 {
-				t.Errorf("seed %d: core leg %s\nreplay: GOXSLT_STREAM_FUZZ=1 GOXSLT_STREAM_FUZZ_SEED=%d go test ./xslt -run 'TestStreamFuzz$' -v\n"+
-					"stylesheet:\n%s\ndocument:\n%s\ncore %+v\ntree %+v", c.seed, d, c.seed, c.sheet, c.doc, co, tr)
-			}
-		}
-		if b.trace.Streamed() > 0 {
-			tally["on burst path"]++
-			if b.trace.Fallbacks > 0 {
-				tally["fell back to tree"]++
-			}
-		}
-		for j, r := range b.trace.Runs {
+		for j, r := range co.trace.Runs {
 			trace.Runs[j] += r
 		}
 		for j, n := range co.trace.Kinds {
 			coreKinds[j] += n
 		}
-		d := fuzzDiff(b, k, tr)
-		if d != "" && fuzzKnown(c, d, b, k, tr) {
-			tally["known loop error order: "+d]++
-			d = ""
-		}
-		if d == "" {
-			continue
-		}
-		tally["DIFFERENCES"]++
-		if tally["DIFFERENCES"] <= 10 {
-			t.Errorf("seed %d: %s\nreplay: GOXSLT_STREAM_FUZZ=1 GOXSLT_STREAM_FUZZ_SEED=%d go test ./xslt -run 'TestStreamFuzz$' -v\n"+
-				"stylesheet:\n%s\ndocument:\n%s\nbursts  %+v\nno-fold %+v\ntree    %+v",
-				c.seed, d, c.seed, c.sheet, c.doc, b, k, tr)
+		if d := fuzzDiff(c, co, tr); d != "" {
+			tally["DIFFERENCES"]++
+			if tally["DIFFERENCES"] <= 10 {
+				t.Errorf("seed %d: %s\nreplay: GOXSLT_STREAM_FUZZ=1 GOXSLT_STREAM_FUZZ_SEED=%d go test ./xslt -run 'TestStreamFuzz$' -v\n"+
+					"stylesheet:\n%s\ndocument:\n%s\nstreamed %+v\ntree     %+v", c.seed, d, c.seed, c.sheet, c.doc, co, tr)
+			}
 		}
 	}
 	keys := make([]string, 0, len(tally))
@@ -759,7 +691,7 @@ func TestStreamFuzz(t *testing.T) {
 		t.Logf("STREAMFUZZ runs %-45s %d", streamtrace.Strategy(j), r)
 	}
 	for j, r := range coreKinds {
-		t.Logf("STREAMFUZZ core leg sNodes %-35s %d", streamtrace.Kind(j), r)
+		t.Logf("STREAMFUZZ sNodes %-44s %d", streamtrace.Kind(j), r)
 	}
 	t.Logf("STREAMFUZZ seeds %d..%d", seed0, seed0+int64(n)-1)
 }

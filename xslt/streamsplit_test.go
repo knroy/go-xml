@@ -481,12 +481,6 @@ func TestStreamSplitMatchesTree(t *testing.T) {
 	sort.Strings(names)
 	var n struct{ cases, accepted, refused, nonEmpty, giveUp int }
 	for _, src := range splitExprs {
-		// Where the burst split takes an expression, the split must too.
-		if e, err := xpath.ParseVersion(src, ns, xpath.XPath31); err == nil && splitSelect(e, false) != nil {
-			if c := (splitCase{src: src, doc: docs["shallow"], ns: ns, v: xpath.XPath31}); c.check().refused != "" {
-				t.Errorf("%s: the burst split takes it, the split refuses it: %s", src, c.check().refused)
-			}
-		}
 		accepted := false
 		for _, dn := range names {
 			doc := docs[dn]
@@ -769,11 +763,9 @@ func splitSiteAtDocument(el, sd *xdm.Node) bool {
 // TestStreamSplitSuite reports which of the suite's consuming expressions
 // the split accepts, why it refuses the rest, and checks every accepted one
 // that needs no variable against the tree on documents made from its names.
-// It also checks the split accepts what the burst split (splitSelect)
-// accepts at the document node.
 func TestStreamSplitSuite(t *testing.T) {
 	sites := splitSuiteSites(t)
-	var n struct{ sites, accepted, checked, nonEmpty, giveUp, burst, burstRefused int }
+	var n struct{ sites, accepted, checked, nonEmpty, giveUp int }
 	refusals := map[string]int{}
 	examples := map[string]string{}
 	for _, st := range sites {
@@ -791,16 +783,6 @@ func TestStreamSplitSuite(t *testing.T) {
 			continue
 		}
 		e, _ := xpath.ParseVersion(st.src, ns, v)
-		if st.doc {
-			if b := splitSelect(parseAt(st.el, st.src), false); b != nil {
-				n.burst++
-				e2, _ := xpath.ParseVersion(st.src, ns, v)
-				if s, why := splitStream(e2, base, true); s == nil {
-					n.burstRefused++
-					t.Errorf("burst split accepts %q, the split refuses it: %s", st.src, why)
-				}
-			}
-		}
 		if s, why := splitStream(e, base, st.doc); s == nil {
 			reason := splitReason(why)
 			refusals[reason]++
@@ -845,9 +827,8 @@ func TestStreamSplitSuite(t *testing.T) {
 	for _, k := range keys {
 		fmt.Fprintf(&b, "\n  %5d  %s   e.g. %q", refusals[k], k, examples[k])
 	}
-	t.Logf("split suite: %d distinct consuming expressions, %d accepted, %d refused; %d checks (%d non-empty, %d gave up); "+
-		"burst split accepts %d, of which the split refuses %d; refusals:%s",
-		n.sites, n.accepted, n.sites-n.accepted, n.checked, n.nonEmpty, n.giveUp, n.burst, n.burstRefused, b.String())
+	t.Logf("split suite: %d distinct consuming expressions, %d accepted, %d refused; %d checks (%d non-empty, %d gave up); refusals:%s",
+		n.sites, n.accepted, n.sites-n.accepted, n.checked, n.nonEmpty, n.giveUp, b.String())
 }
 
 // TestStreamSplitMemory: a split over a large document holds what its

@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,8 +18,7 @@ import (
 // what streamtrace counted.
 func coreRun(sheet, dir string, core bool, opts TransformOptions) (out, errText string, tr streamtrace.Counts) {
 	before := streamtrace.Snapshot()
-	defer func() { noCore, noBurstPlan, noBursts = false, false, false; tr = streamtrace.Snapshot().Sub(before) }()
-	noBurstPlan = core
+	defer func() { noBursts = false; tr = streamtrace.Snapshot().Sub(before) }()
 	tree, err := xdm.ParseString(sheet, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
 	if err != nil {
 		return "", "SHEET: " + err.Error(), tr
@@ -29,7 +29,7 @@ func coreRun(sheet, dir string, core bool, opts TransformOptions) (out, errText 
 	}
 	docs, _ := NewFileResolver(dir)
 	opts.InitialTemplate, opts.Documents = "main", docs
-	noCore, noBursts = !core, !core
+	noBursts = !core
 	res, err := s.Transform(context.Background(), nil, opts)
 	if err != nil {
 		return "", err.Error(), tr
@@ -260,6 +260,9 @@ func TestStreamCoreMemory(t *testing.T) {
 		// tree holds beside the document (65-76% of the tree's peak,
 		// measured); collecting grounded copies first would pass the tree.
 		{`<out><xsl:copy-of select="//rec"/></out>`, 0.9},
+		// Values collected: their own strings, not ones into the parse's
+		// text blocks, each of which would keep its block.
+		{`<out><xsl:value-of select="string-length(string-join(//rec/@k, ','))"/></out>`, 0.27},
 	} {
 		sheet := coreSheet(c.body)
 		var st streamtrace.Counts
@@ -276,10 +279,11 @@ func TestStreamCoreMemory(t *testing.T) {
 	}
 }
 
-// TestStreamCoreLimits: the result budgets count on the core as on the burst
-// path -- an item that writes nothing hands back what it built, one that
-// writes keeps it charged -- so a loop both run gives, under tight MaxNodes,
-// MaxBytes and the built limits, the burst path's output or error exactly.
+// TestStreamCoreLimits: under tight result budgets, streamed loops succeed or
+// fail as the burst path did before M1.6 retired it into the core (its
+// results at 7ee0ebb9, pinned: the error text, or the output's SHA-256
+// prefix), the temporaries a loop item builds handed back per item and the
+// output it writes kept.
 func TestStreamCoreLimits(t *testing.T) {
 	dir := t.TempDir()
 	var b strings.Builder
@@ -306,46 +310,45 @@ func TestStreamCoreLimits(t *testing.T) {
 	}
 	limits := []TransformOptions{{MaxNodes: 200}, {MaxNodes: 4000}, {MaxBytes: 2000}, {MaxBytes: 40000},
 		{MaxNodes: 4000, MaxNodesBuilt: 9000}, {MaxBytes: 40000, MaxBytesBuilt: 90000}}
-	refusals := 0
-	for _, body := range bodies {
+	// The burst path's results, by body then limit.
+	want := []struct{ err, sha string }{
+		{"", "d58e6668c5d00778"},
+		{"", "d58e6668c5d00778"},
+		{"", "d58e6668c5d00778"},
+		{"", "d58e6668c5d00778"},
+		{"", "d58e6668c5d00778"},
+		{"", "d58e6668c5d00778"},
+		{"", "d58e6668c5d00778"},
+		{"", "d58e6668c5d00778"},
+		{"", "d58e6668c5d00778"},
+		{"", "d58e6668c5d00778"},
+		{"", "d58e6668c5d00778"},
+		{"", "d58e6668c5d00778"},
+		{"XPDY0130: evaluation constructed more than 200 result-tree nodes; the transformation is building a tree too large to hold: processor resource limit exceeded", "e3b0c44298fc1c14"},
+		{"XPDY0130: evaluation constructed more than 4000 result-tree nodes; the transformation is building a tree too large to hold: processor resource limit exceeded", "e3b0c44298fc1c14"},
+		{"XPDY0130: evaluation built more than 2000 bytes of string content; the expression is building a string too large to hold: processor resource limit exceeded", "e3b0c44298fc1c14"},
+		{"", "cc412448ee8b0b06"},
+		{"XPDY0130: evaluation constructed more than 4000 result-tree nodes; the transformation is building a tree too large to hold: processor resource limit exceeded", "e3b0c44298fc1c14"},
+		{"", "cc412448ee8b0b06"},
+		{"", "a972ffcac06d8df5"},
+		{"", "a972ffcac06d8df5"},
+		{"", "a972ffcac06d8df5"},
+		{"", "a972ffcac06d8df5"},
+		{"", "a972ffcac06d8df5"},
+		{"", "a972ffcac06d8df5"},
+	}
+	for bi, body := range bodies {
 		sheet := coreSheet(body)
-		for _, o := range limits {
-			bo, be, bt := coreRunBursts(sheet, dir, o)
+		for li, o := range limits {
 			co, ce, ct := coreRun(sheet, dir, true, o)
 			where := fmt.Sprintf("%s, nodes %d bytes %d built %d/%d", body, o.MaxNodes, o.MaxBytes, o.MaxNodesBuilt, o.MaxBytesBuilt)
-			if bt.Streamed() == 0 || ct.Runs[streamtrace.Core] == 0 {
-				t.Errorf("%s: bursts %+v core %+v: both must stream", where, bt, ct)
+			if ct.Runs[streamtrace.Core] == 0 {
+				t.Errorf("%s: %+v: must stream", where, ct)
 			}
-			if bo != co || be != ce {
-				t.Errorf("%s:\ncore   %.200q %q\nbursts %.200q %q", where, co, ce, bo, be)
-			}
-			if ce != "" {
-				refusals++
+			w := want[bi*len(limits)+li]
+			if sum := fmt.Sprintf("%x", sha256.Sum256([]byte(co)))[:16]; ce != w.err || sum != w.sha {
+				t.Errorf("%s:\ngot  %q %s %.200q\nwant %q %s", where, ce, sum, co, w.err, w.sha)
 			}
 		}
 	}
-	if refusals == 0 || refusals == len(bodies)*len(limits) {
-		t.Errorf("%d of %d runs refused: the limits must bite in some and not all", refusals, len(bodies)*len(limits))
-	}
-}
-
-// coreRunBursts runs sheet with the burst plans, as Transform does.
-func coreRunBursts(sheet, dir string, opts TransformOptions) (out, errText string, tr streamtrace.Counts) {
-	before := streamtrace.Snapshot()
-	defer func() { tr = streamtrace.Snapshot().Sub(before) }()
-	tree, err := xdm.ParseString(sheet, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
-	if err != nil {
-		return "", err.Error(), tr
-	}
-	s, err := Compile(tree.Root, CompileOptions{})
-	if err != nil {
-		return "", err.Error(), tr
-	}
-	docs, _ := NewFileResolver(dir)
-	opts.InitialTemplate, opts.Documents = "main", docs
-	res, err := s.Transform(context.Background(), nil, opts)
-	if err != nil {
-		return "", err.Error(), tr
-	}
-	return res.String(), "", tr
 }

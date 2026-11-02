@@ -36,6 +36,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
@@ -1610,6 +1611,13 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 					var items xdm.Sequence
 					if a := ev.Node.Attr(s.attr.URI, s.attr.Local); a != nil {
 						items = xdm.Atomize(xdm.One(a))
+						if s.red == "" && len(items) == 1 {
+							// Kept: its own string, not one into the
+							// parse's text block, which it would pin.
+							if v, ok := items[0].(*xdm.Atomic); ok && v.Type == xdm.TypeUntypedAtomic {
+								items[0] = xdm.NewUntypedAtomic(strings.Clone(v.String()))
+							}
+						}
 					}
 					if s.innermost {
 						open.match, open.seen, open.pending = true, r.seen, items
