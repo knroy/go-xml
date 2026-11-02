@@ -230,7 +230,7 @@ func (a *avt) eval(rt *runtime) (string, error) {
 			sb.WriteString(p.text)
 			continue
 		}
-		seq, err := rt.evalAVTPart(p.expr)
+		seq, err := rt.evalStreamExpr(p.expr)
 		if err != nil {
 			return "", err
 		}

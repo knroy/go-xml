@@ -803,6 +803,9 @@ func (c *compiler) compileParamsAndSorts(n *xdm.Node, ns xpath.NamespaceResolver
 			if err != nil {
 				return nil, nil, err
 			}
+			if v.Select != nil {
+				c.noteStreamParam(ch, v.Select, ns)
+			}
 			params = append(params, v)
 		case isXSL(ch, "sort"):
 			s, err := c.compileSort(ch)
@@ -2057,7 +2060,7 @@ func (i *breakInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// of the xsl:iterate instruction as a whole" — so it writes to the same
 	// output builder before the loop unwinds, not after.
 	if i.sel != nil {
-		seq, err := i.sel.Eval(rt.ctx)
+		seq, err := rt.evalSelect(i, i.sel)
 		if err != nil {
 			return err
 		}
@@ -2318,6 +2321,7 @@ func (c *compiler) compileBreak(n *xdm.Node, ns *nsResolver) (Instruction, error
 			return nil, fmt.Errorf("in xsl:break/@select: %w", err)
 		}
 		instr.sel = sel
+		c.noteStreamSelect(n, instr, sel, ns)
 		return instr, nil
 	}
 	body, err := c.compileSequence(n, n)

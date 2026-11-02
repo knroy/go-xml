@@ -522,7 +522,7 @@ func evalVariable(v *Variable, rt *runtime) (xdm.Sequence, error) {
 // evalVariableRaw computes the value before the "as" declaration is applied.
 func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	if v.Select != nil {
-		return v.Select.Eval(rt.ctx)
+		return rt.evalStreamExpr(v.Select)
 	}
 	if len(v.Body) == 0 {
 		// A variable with neither select nor content is the empty string, not

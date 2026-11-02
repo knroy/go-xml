@@ -83,8 +83,7 @@ type streamExec struct {
 	top     []*streamOp
 	ops     map[*xdm.Node]*streamOp
 	byInstr map[Instruction]*streamOp
-	// byExpr holds the consuming attribute value templates' ops, by the
-	// compiled expression of their part (avtOp).
+	// byExpr holds the exprOps by their compiled expressions.
 	byExpr map[*xpath.Compiled]*streamOp
 	// kinds counts the plan's sNodes outside the loops; ready adds theirs.
 	kinds [streamtrace.NumKinds]int64
@@ -93,8 +92,10 @@ type streamExec struct {
 	drainFirst bool
 	// promoted are the instructions promote took as consuming.
 	promoted map[*xdm.Node]bool
-	// avts are the consuming value templates' ops, until compiled.
-	avts []*streamOp
+	// exprOps are the ops of consuming expressions that are not an
+	// instruction's select: a value template's part, an xsl:with-param's
+	// select (byExpr, once compiled).
+	exprOps []*streamOp
 	// For apply ops (streamapply.go): class is the kind of node the plan's
 	// context is, and modes the modes #current and xsl:next-match may name
 	// in it (those of the template rule it is the body of, or that holds
@@ -256,7 +257,7 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 	local := el.Name().Local
 	if el.Attr("", "select") != nil {
 		switch local {
-		case "value-of", "copy-of", "sequence", "attribute":
+		case "value-of", "copy-of", "sequence", "attribute", "break":
 			return b.selectOp(el, f)
 		case "for-each", "iterate":
 			return b.loopOp(el, f)
@@ -309,6 +310,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 		return b.applyOp(el, f)
 	case "next-match", "apply-imports":
 		return b.nextOp(el, f)
+	case "next-iteration":
+		return b.nextIteration(el, f)
 	}
 	return b.refuse("consuming xsl:" + local)
 }
@@ -343,10 +346,70 @@ func (b *streamBuilder) avtOps(el *xdm.Node, f vfocus) bool {
 	}
 	if op != nil {
 		*b.ops = append(*b.ops, op)
-		b.x.avts = append(b.x.avts, op)
+		b.x.exprOps = append(b.x.exprOps, op)
 		b.kinds[streamtrace.KindSelect]++
 	}
 	return true
+}
+
+// nextIteration plans an xsl:next-iteration whose one consuming parameter
+// (§19.8.4.28: its value grounded, a copy of the item, or values made of
+// it) is read off the cursor at the item, the others motionless values; a
+// node they carry over is a copy, which stays valid (no stream node may be
+// carried: the analysis makes it free-ranging).
+func (b *streamBuilder) nextIteration(el *xdm.Node, f vfocus) bool {
+	var op *streamOp
+	for ch := range el.Children() {
+		switch {
+		case ch.Kind() == xdm.KindText && strings.TrimSpace(ch.Value()) == "",
+			ch.Kind() == xdm.KindComment, ch.Kind() == xdm.KindPI:
+			continue
+		case !isXSL(ch, "with-param"):
+			return b.refuse(elName(ch) + " in xsl:next-iteration")
+		}
+		// The analysis records the instruction, not its parameters: one a
+		// view cannot answer is the consumer, which the split decides.
+		if sb := b.strict(); sb.motionless(ch, f) {
+			continue
+		}
+		if op != nil || ch.Attr("", "select") == nil {
+			return b.refuse("consuming xsl:with-param of xsl:next-iteration")
+		}
+		for a := range ch.Attrs() {
+			if n := a.Name(); n.URI == "" && !streamAttrsOK[n.Local] {
+				return b.refuse("attribute " + n.Local + " of xsl:with-param")
+			}
+		}
+		op = &streamOp{x: b.x, el: ch, doc: f == vNone, inGroup: b.grp, key: b.key}
+	}
+	if op != nil {
+		*b.ops = append(*b.ops, op)
+		b.x.exprOps = append(b.x.exprOps, op)
+		b.kinds[streamtrace.KindSelect]++
+	}
+	b.kinds[streamtrace.KindElement]++
+	return true
+}
+
+// noteStreamParam splits sel, the select of n, an xsl:with-param of the
+// plans being compiled that consumes (nextIteration).
+func (c *compiler) noteStreamParam(n *xdm.Node, sel *xpath.Compiled, ns xpath.NamespaceResolver) {
+	if c.stream == nil && len(c.ruleExecs) == 0 {
+		return
+	}
+	for _, x := range append([]*streamExec{c.stream}, c.ruleExecs...) {
+		if x == nil {
+			continue
+		}
+		for _, op := range x.exprOps {
+			if op.el == n && op.avt == "" && op.instr == nil {
+				op.instr, op.sel = exprInstr{}, sel
+				if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead == "" {
+					x.byExpr[sel] = op
+				}
+			}
+		}
+	}
 }
 
 // noteStreamAVT splits the part of the value template a of the literal
@@ -359,7 +422,7 @@ func (c *compiler) noteStreamAVT(n *xdm.Node, a *avt, ns xpath.NamespaceResolver
 		if x == nil {
 			continue
 		}
-		for _, op := range x.avts {
+		for _, op := range x.exprOps {
 			if op.el != n || op.instr != nil {
 				continue
 			}
@@ -367,7 +430,7 @@ func (c *compiler) noteStreamAVT(n *xdm.Node, a *avt, ns xpath.NamespaceResolver
 				if p.expr == nil || p.expr.Source() != op.avt {
 					continue
 				}
-				op.instr, op.sel = avtInstr{}, p.expr
+				op.instr, op.sel = exprInstr{}, p.expr
 				if op.split, op.dead = c.splitFor(p.expr, ns, op.doc, true, op.inGroup, op.key); op.dead == "" {
 					x.byExpr[p.expr] = op
 				}
@@ -377,15 +440,16 @@ func (c *compiler) noteStreamAVT(n *xdm.Node, a *avt, ns xpath.NamespaceResolver
 	}
 }
 
-// avtInstr stands for the instruction of a consuming value template's op,
-// which is the literal result element's.
-type avtInstr struct{}
+// exprInstr stands for the instruction of an expression op (exprOps),
+// which runs from its holder's: no feed is made for it.
+type exprInstr struct{}
 
-func (avtInstr) Execute(*runtime, *outputBuilder) error { return errStreamPlan }
+func (exprInstr) Execute(*runtime, *outputBuilder) error { return errStreamPlan }
 
-// evalAVTPart evaluates e, a part of an attribute value template, from the
-// stream when it is the consuming part of the plan running.
-func (rt *runtime) evalAVTPart(e *xpath.Compiled) (xdm.Sequence, error) {
+// evalStreamExpr evaluates e -- a part of an attribute value template, a
+// variable's or parameter's select -- from the stream when it is an
+// expression op of the plan running.
+func (rt *runtime) evalStreamExpr(e *xpath.Compiled) (xdm.Sequence, error) {
 	if f := rt.bursts; f != nil && f.run != nil && !f.run.off {
 		if op := f.run.x.byExpr[e]; op != nil {
 			return f.run.evalOp(rt, op)
@@ -541,9 +605,11 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 		if !streamMotionless[local] || local == "copy" && f == vNone {
 			return b.refuse("motionless xsl:" + local)
 		}
-		if local == "with-param" && !carriedAtomic(el) {
-			return b.refuse("xsl:next-iteration carries a node")
-		}
+		// A node an xsl:with-param carries on is a copy, valid however
+		// far the cursor moves: §19.8.4.28's usage (navigation of item()*)
+		// makes passing a node of the stream free-ranging, so a trusted
+		// container carries none.
+
 	}
 	return b.attrs(el, f) && b.content(el, f)
 }

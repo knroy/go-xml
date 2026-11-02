@@ -1177,6 +1177,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		if n == "position" && vc.pos && len(x.Args) == 0 || n == "current-grouping-key" && vc.key && len(x.Args) == 0 {
 			return true
 		}
+		if (n == "copy-of" || n == "snapshot") && len(x.Args) == 1 && focusFree(x.Args[0]) {
+			return true // a copy of a variable's value: nothing of the focus
+		}
 		if burstFnBanned[n] || n == "copy-of" || n == "snapshot" || n == "current" ||
 			n == "has-children" && f != vLeaf || vc.noIdent && identFns[n] {
 			return false

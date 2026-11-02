@@ -74,6 +74,20 @@ var groupBodies = []struct {
 	{`<xsl:for-each select="/doc/t"><r k="{@k}" n="{count(n)}"/></xsl:for-each>`, true},
 	{`<out><xsl:for-each select="/doc/g"><g><xsl:for-each-group select="t" group-adjacent="@d"><n c="{count(current-group())}"/></xsl:for-each-group></g></xsl:for-each></out>`, true},
 	{`<out n="{count(//t)}"><xsl:value-of select="count(//n)"/></out>`, false},
+	// xsl:iterate carrying a copy of the item (si-iterate-136..138), or all
+	// of them (the copies are the tree's too), and xsl:break with a value
+	// read off it (the analysis does not trust it: on the tree).
+	{`<out><xsl:iterate select="/*/t"><xsl:param name="prev" select="()"/><xsl:on-completion><y><xsl:copy-of select="$prev"/></y></xsl:on-completion>` +
+		`<xsl:if test="$prev"><x><xsl:copy-of select="$prev"/></x></xsl:if><xsl:next-iteration><xsl:with-param name="prev" select="copy-of(.)"/></xsl:next-iteration></xsl:iterate></out>`, true},
+	{`<out><xsl:iterate select="/*/t"><xsl:param name="prev" select="()"/><xsl:param name="this" select="()"/><xsl:on-completion><y><xsl:copy-of select="$prev"/></y></xsl:on-completion>` +
+		`<z><xsl:copy-of select="$this"/></z><xsl:next-iteration><xsl:with-param name="prev" select="copy-of(.)"/><xsl:with-param name="this" select="copy-of($prev)"/></xsl:next-iteration></xsl:iterate></out>`, true},
+	{`<out><xsl:iterate select="/*/t"><xsl:param name="n" select="1" as="xs:integer"/><xsl:param name="prev" select="()"/><x n="{$n}" v="{$prev/@v}"/>` +
+		`<xsl:next-iteration><xsl:with-param name="n" select="$n + 1"/><xsl:with-param name="prev" select="copy-of(.)[$n gt 2]"/></xsl:next-iteration></xsl:iterate></out>`, true},
+	{`<out><xsl:iterate select="/*/t"><xsl:param name="s" select="''"/><xsl:on-completion><s v="{$s}"/></xsl:on-completion>` +
+		`<xsl:next-iteration><xsl:with-param name="s" select="concat($s, string(.))"/></xsl:next-iteration></xsl:iterate></out>`, false},
+	{`<out><xsl:iterate select="/*/t"><xsl:if test="@v &lt; 0"><xsl:break select="copy-of(.)"/></xsl:if><i k="{@k}"/></xsl:iterate></out>`, false},
+	{`<out><xsl:iterate select="/*/t"><xsl:param name="all" select="()"/><xsl:on-completion><xsl:copy-of select="$all"/></xsl:on-completion>` +
+		`<xsl:next-iteration><xsl:with-param name="all" select="($all, copy-of(.))"/></xsl:next-iteration></xsl:iterate></out>`, true},
 	// Refused: group-by, sort, a crawling population, a key a view cannot
 	// decide, current-group() read twice.
 	{`<out><xsl:for-each-group select="/doc/t" group-by="@d"><g/></xsl:for-each-group></out>`, false},
