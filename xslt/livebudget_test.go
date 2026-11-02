@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -241,4 +242,29 @@ func liveRunGlobal(t *testing.T, body, decl string, opts TransformOptions) (stri
 		return "", err
 	}
 	return res.String(), nil
+}
+
+// TestSignatureIsConstant: the output signature a streamed loop takes twice
+// per item does not count the open element's children, or a loop writing
+// under one element costs the square of its items (50x tree mode at 20,000
+// records). An element of 100,000 children must cost what one of 10 does.
+func TestSignatureIsConstant(t *testing.T) {
+	per := func(kids int) time.Duration {
+		out := newOutputBuilder(nil)
+		el := out.StartElement(xdm.QName{Local: "out"})
+		for range kids {
+			el.AppendText("x")
+			el.StartElement(xdm.QName{Local: "r"})
+		}
+		const n = 2000
+		start := time.Now()
+		for range n {
+			signature(el)
+		}
+		return time.Since(start) / n
+	}
+	small, large := per(10), per(100000)
+	if large > 50*small+time.Microsecond {
+		t.Errorf("signature over 100,000 children takes %v, over 10 %v", large, small)
+	}
 }

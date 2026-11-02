@@ -72,14 +72,17 @@ type liveLoop struct {
 	sig    outSig
 }
 
-// outSig is what an item could change by writing to its output.
-type outSig struct{ items, kids, attrs, ns, text int }
+// outSig is what an item could change by writing to its output. end is
+// the open element's subtree end, which moves with every child or
+// descendant appended to it: O(1), where counting its children made a loop
+// writing under one element quadratic.
+type outSig struct{ items, end, attrs, ns, text int }
 
 func signature(out *outputBuilder) outSig {
 	s := outSig{items: len(out.Items())}
 	var last *xdm.Node
 	if e := out.Open(); e != nil {
-		s.kids, s.attrs, s.ns = e.NumChildren(), e.NumAttrs(), e.NumNamespaceDecls()
+		s.end, s.attrs, s.ns = e.SubtreeEnd(), e.NumAttrs(), e.NumNamespaceDecls()
 		last = e.LastChild()
 	} else if s.items > 0 {
 		last, _ = out.Items()[s.items-1].(*xdm.Node)
