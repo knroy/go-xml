@@ -118,9 +118,10 @@ type burster struct {
 	cur   *Node
 	curD  int
 	views *viewBatch
-	// viewCopies counts the records views copied for ancestors, for the
-	// test that keeps it in proportion to the elements viewed.
-	viewCopies int
+	// viewCopies counts the records views copied for ancestors, and
+	// viewScans the copies they looked past, for the test that keeps them
+	// in proportion to the elements viewed.
+	viewCopies, viewScans int
 }
 
 // burstMark is how much of the text store, the name table and the frame

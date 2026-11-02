@@ -167,8 +167,12 @@ func TestDriveViewsShareTheSpine(t *testing.T) {
 	}
 	// The spine once (4 records an element), and again for each batch the
 	// views fill: at most a quarter of the records made.
-	t.Logf("%d ancestor records copied for %d views", bs.viewCopies, views)
+	t.Logf("%d ancestor records copied, %d copies looked past, for %d views", bs.viewCopies, bs.viewScans, views)
 	if read := 4*depth + (4*depth+3*2*n)/3; bs.viewCopies > read {
 		t.Fatalf("%d ancestor records copied for %d views", bs.viewCopies, views)
+	}
+	// Finding the copies a view shares looks past only those it drops.
+	if bs.viewScans > views+bs.viewCopies {
+		t.Fatalf("%d copies looked past for %d views", bs.viewScans, views)
 	}
 }

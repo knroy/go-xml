@@ -172,10 +172,13 @@ func (b *burster) view() *Node {
 	if vb == nil || int(vb.t.n) >= max(viewBatchRecords, 4*vb.anc) {
 		vb = b.newViews(t)
 	}
-	// The copies of the open elements this batch already has.
-	k := 1
-	for k < len(vb.path) && k < d && vb.gens[k] == b.gens[k] {
-		k++
+	// The copies of the open elements this batch already has: a copy that
+	// is of the open element at its depth has its ancestors' copies above
+	// it, so the search goes up from the deepest, over the copies it drops.
+	k := min(len(vb.path), d)
+	for k > 1 && vb.gens[k-1] != b.gens[k-1] {
+		k--
+		b.viewScans++
 	}
 	vb.path, vb.gens = vb.path[:k], vb.gens[:k]
 	anc := make([]*Node, d-k)
