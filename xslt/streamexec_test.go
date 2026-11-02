@@ -261,3 +261,77 @@ func TestStreamCoreMemory(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamCoreLimits: the result budgets count on the core as on the burst
+// path -- an item that writes nothing hands back what it built, one that
+// writes keeps it charged -- so a loop both run gives, under tight MaxNodes,
+// MaxBytes and the built limits, the burst path's output or error exactly.
+func TestStreamCoreLimits(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	b.WriteString("<doc>")
+	for i := range 3000 {
+		fmt.Fprintf(&b, `<rec k="K%05d" v="%d"><a>t</a></rec>`, i, i%97)
+	}
+	b.WriteString("</doc>")
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bodies := []string{
+		// Temporaries only: handed back per item.
+		`<xsl:for-each select="/doc/rec"><xsl:variable name="t"><x><xsl:value-of select="@k"/></x></xsl:variable>` +
+			`<xsl:if test="string($t) = 'never'"><hit/></xsl:if></xsl:for-each>`,
+		// The same, the body reading its match (matchBody).
+		`<xsl:for-each select="/doc/rec"><xsl:variable name="t"><x><xsl:value-of select="."/></x></xsl:variable>` +
+			`<xsl:if test="string($t) = 'never'"><hit/></xsl:if></xsl:for-each>`,
+		// Output per item: kept.
+		`<xsl:for-each select="/doc/rec"><r k="{@k}"/></xsl:for-each>`,
+		// Carried state.
+		`<xsl:iterate select="/doc/rec"><xsl:param name="t" select="0"/><xsl:on-completion><t v="{$t}"/></xsl:on-completion>` +
+			`<xsl:next-iteration><xsl:with-param name="t" select="$t + 1"/></xsl:next-iteration></xsl:iterate>`,
+	}
+	limits := []TransformOptions{{MaxNodes: 200}, {MaxNodes: 4000}, {MaxBytes: 2000}, {MaxBytes: 40000},
+		{MaxNodes: 4000, MaxNodesBuilt: 9000}, {MaxBytes: 40000, MaxBytesBuilt: 90000}}
+	refusals := 0
+	for _, body := range bodies {
+		sheet := coreSheet(body)
+		for _, o := range limits {
+			bo, be, bt := coreRunBursts(sheet, dir, o)
+			co, ce, ct := coreRun(sheet, dir, true, o)
+			where := fmt.Sprintf("%s, nodes %d bytes %d built %d/%d", body, o.MaxNodes, o.MaxBytes, o.MaxNodesBuilt, o.MaxBytesBuilt)
+			if bt.Streamed() == 0 || ct.Runs[streamtrace.Core] == 0 {
+				t.Errorf("%s: bursts %+v core %+v: both must stream", where, bt, ct)
+			}
+			if bo != co || be != ce {
+				t.Errorf("%s:\ncore   %.200q %q\nbursts %.200q %q", where, co, ce, bo, be)
+			}
+			if ce != "" {
+				refusals++
+			}
+		}
+	}
+	if refusals == 0 || refusals == len(bodies)*len(limits) {
+		t.Errorf("%d of %d runs refused: the limits must bite in some and not all", refusals, len(bodies)*len(limits))
+	}
+}
+
+// coreRunBursts runs sheet with the burst plans, as Transform does.
+func coreRunBursts(sheet, dir string, opts TransformOptions) (out, errText string, tr streamtrace.Counts) {
+	before := streamtrace.Snapshot()
+	defer func() { tr = streamtrace.Snapshot().Sub(before) }()
+	tree, err := xdm.ParseString(sheet, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+	if err != nil {
+		return "", err.Error(), tr
+	}
+	s, err := Compile(tree.Root, CompileOptions{})
+	if err != nil {
+		return "", err.Error(), tr
+	}
+	docs, _ := NewFileResolver(dir)
+	opts.InitialTemplate, opts.Documents = "main", docs
+	res, err := s.Transform(context.Background(), nil, opts)
+	if err != nil {
+		return "", err.Error(), tr
+	}
+	return res.String(), "", tr
+}

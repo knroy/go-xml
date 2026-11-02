@@ -626,7 +626,7 @@ func fuzzDiff(b, k, tr fuzzRes) string {
 
 // fuzzCoreDiff says how co, the run with the burst plans off, differs from
 // tr, the tree's, or "": exactly, error text and all.
-func fuzzCoreDiff(co, tr fuzzRes) string {
+func fuzzCoreDiff(c fuzzCase, co, tr fuzzRes) string {
 	switch {
 	case co.panic != "" || tr.panic != "":
 		return "PANIC"
@@ -636,9 +636,10 @@ func fuzzCoreDiff(co, tr fuzzRes) string {
 		return "OUTPUT"
 	case co.err != tr.err:
 		return "ERROR " + fuzzCode(co) + " vs " + fuzzCode(tr)
-	case co.trace.Reruns > 0 && tr.err == "" && fuzzCaughtRe.FindString(tr.out) == "":
-		// The tree's answer hides what the stream did wrong. (Where an
-		// xsl:catch caught it the container failed on the tree too.)
+	case co.trace.Reruns > 0 && tr.err == "" && !strings.Contains(c.sheet, "<xsl:try>"):
+		// The tree's answer hides what the stream did wrong. (Under an
+		// xsl:try the container may have failed on the tree too, the
+		// catch, whose output method may not show it, taking over.)
 		return "RE-RUN where the tree succeeds"
 	}
 	return ""
@@ -712,7 +713,7 @@ func TestStreamFuzz(t *testing.T) {
 		if strings.HasPrefix(c.kind, "core") {
 			tally["core shapes"]++
 		}
-		if d := fuzzCoreDiff(co, tr); d != "" {
+		if d := fuzzCoreDiff(c, co, tr); d != "" {
 			tally["DIFFERENCES"]++
 			if tally["DIFFERENCES"] <= 10 {
 				t.Errorf("seed %d: core leg %s\nreplay: GOXSLT_STREAM_FUZZ=1 GOXSLT_STREAM_FUZZ_SEED=%d go test ./xslt -run 'TestStreamFuzz$' -v\n"+
