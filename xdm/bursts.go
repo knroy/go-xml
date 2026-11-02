@@ -92,7 +92,7 @@ type burster struct {
 	// it belongs to content that is dropped.
 	marks []burstMark
 	// gens[d] tells the spine element at depth d from the others that have
-	// been there: gen counts the spine elements opened.
+	// been there: gen counts the elements the client was asked about.
 	gens []uint64
 	gen  uint64
 	// batch holds the small bursts not yet delivered (burstBatch), or is nil.
@@ -104,6 +104,23 @@ type burster struct {
 	// over, or 0.
 	moved int
 	v11   bool
+
+	// For the stream driver only (ords non-nil), what copies out of the
+	// stream are given to carry their originals' order and identity
+	// (streamview.go). ords[d] is the ordinal of the spine element at depth
+	// d, beside gens; discarded counts the records the parse has taken back,
+	// so that record i of its tree is the original numbered i + discarded.
+	ords      []uint64
+	discarded uint64
+	origin    *streamOrigin
+	// cur is the element start is asking the client about, at depth curD,
+	// whose gen is gen; views is the batch its view goes into.
+	cur   *Node
+	curD  int
+	views *viewBatch
+	// viewCopies counts the records views copied for ancestors, for the
+	// test that keeps it in proportion to the elements viewed.
+	viewCopies int
 }
 
 // burstMark is how much of the text store, the name table and the frame
@@ -172,7 +189,12 @@ func (b *burster) start(el *Node, d int) error {
 	if b.drop != 0 {
 		return nil
 	}
+	// Every element asked about has a gen of its own, so that its view can
+	// serve as the copy of it its descendants' views share once it is kept.
+	b.gen++
+	b.cur, b.curD = el, d
 	act, err := b.c.start(el, d)
+	b.cur = nil
 	if err != nil {
 		return err
 	}
@@ -182,8 +204,10 @@ func (b *burster) start(el *Node, d int) error {
 	case xdmburst.Keep:
 		b.spine = d
 		b.marks = append(b.marks, markOf(el.tree))
-		b.gen++
 		b.gens = append(b.gens, b.gen)
+		if b.ords != nil {
+			b.ords = append(b.ords, b.ordOf(el))
+		}
 	default:
 		b.drop = d
 	}
@@ -229,6 +253,9 @@ func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) err
 		b.spine--
 		b.marks = b.marks[:len(b.marks)-1]
 		b.gens = b.gens[:len(b.gens)-1]
+		if b.ords != nil {
+			b.ords = b.ords[:len(b.ords)-1]
+		}
 	default:
 		return nil
 	}
@@ -306,9 +333,11 @@ func (b *burster) prolog(root *Node) error {
 	if err := b.tellLeaves(root, 0); err != nil {
 		return err
 	}
+	n := root.tree.n
 	for root.LastChild() != nil {
 		root.RemoveLastChild()
 	}
+	b.discarded += uint64(n - root.tree.n)
 	return nil
 }
 
@@ -325,7 +354,9 @@ func textSince(t *Tree, from int) int {
 // discardLast removes p's last child and the text, names and namespace
 // frames stored since p's spine mark; names is the parse's name cache.
 func (b *burster) discardLast(p *Node, spaces *spaceTable, names *nameCache) {
+	n := p.tree.n
 	p.RemoveLastChild()
+	b.discarded += uint64(n - p.tree.n)
 	if t := p.tree; b.moved > 0 {
 		// Those chunks are the burst's now; the parse allocates afresh.
 		clear(t.chunks[b.moved:])
@@ -416,6 +447,8 @@ type burstBatch struct {
 	// blocks is how many text blocks the parse had when the batch began.
 	blocks int
 	src    *Tree
+	// o, for the stream driver, is the batch's origin (streamview.go).
+	o *treeOrigin
 }
 
 // add copies el, a small burst, into the batch, under copies of the spine
@@ -426,7 +459,15 @@ func (b *burster) add(el *Node) {
 	if bt == nil {
 		bt = &burstBatch{t: &Tree{}, blocks: len(t.text.blocks), src: t}
 		b.batch = bt
-		bt.t.rec(bt.copyRange(t, 0, 1, noIdx, noIdx)).v1 = noIdx
+		if b.ords != nil {
+			bt.o = bt.t.setOrigin(b.stream(t))
+			bt.o.add(0, 0)
+		}
+		r := bt.t.rec(bt.copyRange(t, 0, 1, noIdx, noIdx))
+		r.v1 = noIdx
+		if bt.o != nil {
+			r.flags |= fShallow
+		}
 		bt.path, bt.gens = append(bt.path, 0), append(bt.gens, 0)
 	}
 	d := len(b.gens) - 1 // el's parent
@@ -443,12 +484,20 @@ func (b *burster) add(el *Node) {
 		s := anc[i]
 		j := bt.appendUnder(t, s.self, s.self+1+s.attrCount())
 		e := bt.t.rec(j)
+		if bt.o != nil {
+			bt.o.add(j, b.ords[k])
+			e.flags |= fShallow // its content is not all here
+		}
 		e.end, e.v1 = openEnd, noIdx
 		bt.path, bt.gens = append(bt.path, j), append(bt.gens, b.gens[k])
 		b.spineCopies += 1 + int(s.attrCount())
 		k++
 	}
-	bt.els = append(bt.els, bt.appendUnder(t, el.self, t.endOf(el)))
+	j := bt.appendUnder(t, el.self, t.endOf(el))
+	if bt.o != nil {
+		bt.o.add(j, b.ordOf(el))
+	}
+	bt.els = append(bt.els, j)
 }
 
 // appendUnder copies the records [lo, hi) of t, a node's own and those after
@@ -486,6 +535,9 @@ func (bt *burstBatch) copyRange(t *Tree, lo, hi, parent, prev uint32) uint32 {
 		d := c.alloc()
 		j := d.self
 		r.tree, r.self = c, j
+		if bt.o != nil {
+			r.flags |= fOrigin
+		}
 		if i == lo {
 			r.parent, r.prev = parent, prev
 		} else {
@@ -543,7 +595,9 @@ func (b *burster) flush() error {
 	c, t := bt.t, bt.src
 	c.rec(0).end = c.n
 	c.Root = c.rec(0)
-	c.id.Store(int64(nextTreeID()))
+	if bt.o == nil {
+		c.id.Store(int64(nextTreeID()))
+	}
 	c.DocType, c.XMLVersion = t.DocType, "1.0"
 	if b.v11 {
 		c.XMLVersion = "1.1"
@@ -576,12 +630,25 @@ func (b *burster) flush() error {
 // one large burst is not held twice; discardLast drops them from the parse.
 func (b *burster) deliver(el *Node) *Node {
 	t := el.tree
-	m := cloneMoving(t.Root, xdmclone.Options{}, el.self)
+	m := cloneMoving(t.Root, xdmclone.Options{}, el.self, b.ords != nil)
 	k, _ := chunkOf(el.self)
 	if last, _ := chunkOf(t.n - 1); last > k {
 		b.moved = k + 1
 	}
 	c := m(el)
+	if b.ords != nil {
+		// The copy's records are the parse's, at the same indices: the
+		// document node, the spine (each with its attributes), then el.
+		o := c.tree.setOrigin(b.stream(t))
+		o.add(0, 0)
+		for d, i := range t.open[1:] {
+			o.add(i, b.ords[d+1])
+		}
+		o.add(el.self, b.ordOf(el))
+		for p := c.Parent(); p != nil; p = p.Parent() {
+			p.flags |= fShallow // its content is not all here
+		}
+	}
 	b.spineCopies += int(el.self)
 	c.tree.XMLVersion = "1.0"
 	if b.v11 {

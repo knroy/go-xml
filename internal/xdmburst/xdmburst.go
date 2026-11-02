@@ -71,3 +71,12 @@ type Client interface {
 // Drive parses r as xdm.Parse does, with opts an xdm.ParseOptions, telling
 // c what it meets. An error from c stops the parse and is returned.
 var Drive func(r io.Reader, opts any, c Client) error
+
+// Viewing is a Client that builds views: Drive hands it, before the first
+// event, the function that returns the view of the element Start is asking
+// about (a *xdm.Node), valid only during Start: a node in a small tree of
+// its own holding shallow copies of the element, its ancestors and the
+// document node, without content, that may be kept.
+type Viewing interface {
+	Viewer(view func() any)
+}

@@ -80,20 +80,21 @@ func registerSeq30Funcs(l *Library) {
 		// The set of nodes that some member has as an ancestor. Walking each
 		// member's ancestor chain once is O(n·depth) and needs no ordering,
 		// where comparing every pair would be O(n²).
-		ancestors := map[*xdm.Node]bool{}
+		// Keyed on Identity, as outermost is.
+		ancestors := map[xdm.IdentityKey]bool{}
 		for _, n := range nodes {
 			for p := parentOf(n); p != nil; p = parentOf(p) {
-				if ancestors[p] {
+				if ancestors[p.Identity()] {
 					// This chain has already been walked to the root by an
 					// earlier member; the rest of it is known.
 					break
 				}
-				ancestors[p] = true
+				ancestors[p.Identity()] = true
 			}
 		}
 		out := make(xdm.Sequence, 0, len(nodes))
 		for _, n := range nodes {
-			if !ancestors[n] {
+			if !ancestors[n.Identity()] {
 				out = append(out, n)
 			}
 		}

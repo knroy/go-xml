@@ -20,13 +20,23 @@ func init() {
 
 // driver is the burster that serves c.
 func driver(c xdmburst.Client) *burster {
-	return &burster{
+	b := &burster{
 		c:      &driveClient{c},
 		fn:     func(n *Node) error { return c.Later(n) },
 		leaves: true,
 		watch:  func(el *Node, d int, end bool) { c.Watch(el, d, end) },
 		gens:   []uint64{0},
+		ords:   []uint64{0},
 	}
+	if v, ok := c.(xdmburst.Viewing); ok {
+		v.Viewer(func() any {
+			if n := b.view(); n != nil {
+				return n
+			}
+			return nil // not a typed nil
+		})
+	}
+	return b
 }
 
 // driveClient is an xdmburst.Client as a streamClient.
