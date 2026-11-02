@@ -37,6 +37,10 @@ type applyTemplatesInstr struct {
 }
 
 func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if f := rt.burstsFor(i); f != nil && f.apply != nil {
+		// Streamed (streamapply.go): dispatched as the cursor reads.
+		return i.executeStream(rt, out, f.run, f.apply)
+	}
 	var seq xdm.Sequence
 	if i.sel != nil {
 		v, err := i.sel.Eval(rt.ctx)
@@ -1050,6 +1054,11 @@ type nextMatchInstr struct {
 }
 
 func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
+	// Streamed (streamapply.go), the next rule runs on the cursor.
+	var run *streamRun
+	if f := rt.burstsFor(i); f != nil && f.apply != nil {
+		run = f.run
+	}
 	name := "xsl:next-match"
 	if i.applyImports {
 		name = "xsl:apply-imports"
@@ -1113,9 +1122,15 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if tunnels == nil {
 		tunnels = rt.selected().tunnels
 	}
+	if run != nil && run.used {
+		return errStreamPlan
+	}
 
 	if t == nil {
 		// Falling off the end of the template list lands on the built-in rule.
+		if run != nil {
+			return run.builtIn(rt, node, rt.selected().mode, params, tunnels, out)
+		}
 		return applyBuiltInRule(rt, node, rt.selected().mode, params, tunnels, out)
 	}
 	if err := rt.descend(); err != nil {
@@ -1123,6 +1138,9 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	defer rt.ascend()
 	sub := rt.withSelection(t, nxt, rt.selected().mode, params, tunnels)
+	if run != nil {
+		return run.rule(sub, t, node, params, tunnels, out)
+	}
 	return runTemplate(sub, t, params, tunnels, out)
 }
 

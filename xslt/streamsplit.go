@@ -943,7 +943,9 @@ const (
 // place to read $splitKids, which the cursor answers by Peek. With pos,
 // position() is admitted: the focus is an instruction's, whose position is
 // known (C5's motionless parts), not a candidate's (a split's predicates).
-type viewCheck struct{ kids, pos bool }
+// With noIdent, nothing may ask for the identity of a node, nor reach the
+// document through one (C6: a copy of a text node stands in for it).
+type viewCheck struct{ kids, pos, noIdent bool }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
 // nodes e returns are not atomized by what holds e.
@@ -972,6 +974,12 @@ func (vc viewCheck) safe(e xpath.Expr, f vfocus, nodeOK bool) bool {
 		}
 		return vc.safe(x.Base, f, nodeOK)
 	case *xpath.BinaryOp:
+		switch x.Op {
+		case "is", "<<", ">>", "union", "intersect", "except":
+			if vc.noIdent {
+				return false
+			}
+		}
 		switch x.Op {
 		case "is", "<<", ">>", "and", "or":
 			return vc.safe(x.Left, f, true) && vc.safe(x.Right, f, true)
@@ -1105,7 +1113,7 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 			return true
 		}
 		if burstFnBanned[n] || n == "copy-of" || n == "snapshot" || n == "current" ||
-			n == "has-children" && f != vLeaf {
+			n == "has-children" && f != vLeaf || vc.noIdent && identFns[n] {
 			return false
 		}
 		if focusDependent[keyOf(x.Name, len(x.Args))] && !splitViewFns[f][n] {
@@ -1127,6 +1135,13 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 	}
 	return false
 }
+
+// identFns read a node's identity, or reach the document or other nodes
+// through it, whatever focus they are given.
+var identFns = map[string]bool{"generate-id": true, "path": true, "root": true, "base-uri": true,
+	"document-uri": true, "lang": true, "has-children": true, "id": true, "idref": true,
+	"element-with-id": true, "in-scope-prefixes": true, "namespace-uri-for-prefix": true,
+	"unparsed-entity-uri": true, "unparsed-entity-public-id": true, "deep-equal": true}
 
 func isContextItem(e xpath.Expr) bool {
 	_, ok := e.(*xpath.ContextItem)

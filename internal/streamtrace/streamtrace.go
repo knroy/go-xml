@@ -28,7 +28,9 @@ func (s Strategy) String() string { return names[s] }
 
 // Kind is a kind of sNode of the streamed core's plan (DESIGN section 1.6),
 // plus Select, a value-of, copy-of, sequence or attribute whose select is
-// split (the consuming operand of DESIGN's sElement).
+// split (the consuming operand of DESIGN's sElement), and Apply, an
+// xsl:apply-templates, xsl:next-match or xsl:apply-imports run on the cursor
+// (DESIGN's sApply).
 type Kind int
 
 const (
@@ -41,11 +43,12 @@ const (
 	KindWherePop
 	KindSourceDoc
 	KindSelect
+	KindApply
 	NumKinds
 )
 
 var kindNames = [NumKinds]string{"tree", "ground", "seq", "element", "choose", "for-each",
-	"where-pop", "source-doc", "select"}
+	"where-pop", "source-doc", "select", "apply"}
 
 func (k Kind) String() string { return kindNames[k] }
 

@@ -542,18 +542,14 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		return c.compileNamespace(n, ns)
 	case "perform-sort":
 		return c.compilePerformSort(n, ns)
-	case "next-match":
+	case "next-match", "apply-imports":
 		params, _, err := c.compileParamsAndSorts(n, ns)
 		if err != nil {
 			return nil, err
 		}
-		return &nextMatchInstr{params: params}, nil
-	case "apply-imports":
-		params, _, err := c.compileParamsAndSorts(n, ns)
-		if err != nil {
-			return nil, err
-		}
-		return &nextMatchInstr{applyImports: true, params: params}, nil
+		instr := &nextMatchInstr{applyImports: n.Name().Local == "apply-imports", params: params}
+		c.noteStreamApply(n, instr, nil, nil)
+		return instr, nil
 	case "document":
 		body, err := c.compileSequence(n, n)
 		if err != nil {
@@ -768,6 +764,7 @@ func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver
 		return nil, err
 	}
 	instr.params, instr.sorts = params, sorts
+	c.noteStreamApply(n, instr, instr.sel, ns)
 	return instr, nil
 }
 

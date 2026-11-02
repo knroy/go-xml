@@ -86,9 +86,10 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	if err != nil {
 		return nil, err
 	}
+	link := false
 	if core != nil {
 		why := core.ready()
-		if traceCore != nil {
+		if link = why == "" && core.hasApply(); !link && traceCore != nil {
 			traceCore(n, why)
 		}
 		if why != "" {
@@ -97,6 +98,10 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	}
 	instr := &sourceDocumentInstr{href: href, validation: spec, body: body,
 		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI, stream: core}
+	if link {
+		// Its apply ops reach rules that may not have compiled yet.
+		c.streamLinks = append(c.streamLinks, streamLink{n, instr})
+	}
 	if n.Attr("", "use-accumulators") != nil {
 		accums, err := parseUseAccumulators(n)
 		if err != nil {

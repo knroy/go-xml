@@ -16,7 +16,7 @@ import (
 // (a syntactic hole, closed by a spec rule), compile with its verdict marked
 // unverified (a declaration hole: the verdict rests on a declaration whose own
 // check gave up, or that another module can override), or compile with an
-// unknown verdict -- and none may reach the burst path. The "verified" rows
+// unknown verdict -- and none may reach the streamed path. The "verified" rows
 // are controls: the same declarations written so that their checks pass,
 // which must not be marked.
 func TestStreamTrustReproducers(t *testing.T) {
@@ -165,8 +165,12 @@ func TestStreamTrustReproducers(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compile or run: %v", err)
 			}
-			if burstRuns != (tc.name == "control: record loop") {
-				t.Fatalf("burst path taken: %v", burstRuns)
+			// The record loop streams, and since M2 so do the controls that
+			// apply templates in a verified streamable mode.
+			mustStream := tc.name == "control: record loop" ||
+				strings.HasPrefix(tc.name, "M") && strings.Contains(tc.name, "control")
+			if burstRuns != mustStream {
+				t.Fatalf("streamed path taken: %v", burstRuns)
 			}
 			// The verdict, read as the burst gate reads it.
 			src := tc.main

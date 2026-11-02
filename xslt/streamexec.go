@@ -89,10 +89,25 @@ type streamExec struct {
 	drainFirst bool
 	// promoted are the instructions promote took as consuming.
 	promoted map[*xdm.Node]bool
+	// For apply ops (streamapply.go): class is the kind of node the plan's
+	// context is, and modes the modes #current and xsl:next-match may name
+	// in it (those of the template rule it is the body of, or that holds
+	// the container); nil when no rule does.
+	class nodeClass
+	modes []string
+	// rule says it is a template rule's body (streamapply.go), whose
+	// context element may be, but need not be, the document element.
+	rule bool
+}
+
+func newStreamExec() *streamExec {
+	return &streamExec{ops: map[*xdm.Node]*streamOp{}, byInstr: map[Instruction]*streamOp{},
+		promoted: map[*xdm.Node]bool{}}
 }
 
 // streamOp is a consuming instruction of the plan.
 type streamOp struct {
+	x     *streamExec // the plan it is in
 	el    *xdm.Node
 	doc   bool // its context is the document node
 	loop  bool // xsl:for-each or xsl:iterate
@@ -110,6 +125,9 @@ type streamOp struct {
 	kinds    [streamtrace.NumKinds]int64
 	planned  bool
 	grounded bool
+	// apply says it is an xsl:apply-templates, xsl:next-match or
+	// xsl:apply-imports, and how it reads its context (streamapply.go).
+	apply applyKind
 }
 
 // streamBuilder builds a plan from the source of a container.
@@ -119,6 +137,9 @@ type streamBuilder struct {
 	ops   *[]*streamOp // the list the consuming instructions met go into
 	kinds *[streamtrace.NumKinds]int64
 	why   string
+	// noIdent says the focus is a copy standing in for a node of the
+	// document: nothing may ask for its identity (streamapply.go).
+	noIdent bool
 }
 
 func (b *streamBuilder) refuse(why string) bool {
@@ -141,8 +162,8 @@ func planStream(sd *xdm.Node, shared bool) (*streamExec, string) {
 	if !pl.trusted() {
 		return nil, "verdict not trusted"
 	}
-	x := &streamExec{ops: map[*xdm.Node]*streamOp{}, byInstr: map[Instruction]*streamOp{},
-		promoted: map[*xdm.Node]bool{}}
+	x := newStreamExec()
+	x.class, x.modes = classDoc, enclosingRuleModes(sd)
 	b := &streamBuilder{pl: pl, x: x, ops: &x.top, kinds: &x.kinds}
 	if !b.seq(sd, vNone) {
 		return nil, b.why
@@ -217,6 +238,8 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 			return b.selectOp(el, f)
 		case "for-each", "iterate":
 			return b.loopOp(el, f)
+		case "apply-templates":
+			return b.applyOp(el, f)
 		}
 		return b.refuse("consuming select of xsl:" + local)
 	}
@@ -258,6 +281,10 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 			}
 		}
 		return true
+	case "apply-templates":
+		return b.applyOp(el, f)
+	case "next-match", "apply-imports":
+		return b.nextOp(el, f)
 	}
 	return b.refuse("consuming xsl:" + local)
 }
@@ -268,7 +295,7 @@ func (b *streamBuilder) selectOp(el *xdm.Node, f vfocus) bool {
 	if !b.attrs(el, f) {
 		return false
 	}
-	op := &streamOp{el: el, doc: f == vNone}
+	op := &streamOp{x: b.x, el: el, doc: f == vNone}
 	b.x.ops[el] = op
 	*b.ops = append(*b.ops, op)
 	b.kinds[streamtrace.KindSelect]++
@@ -281,7 +308,7 @@ func (b *streamBuilder) loopOp(el *xdm.Node, f vfocus) bool {
 	if !b.attrs(el, f) {
 		return false
 	}
-	op := &streamOp{el: el, doc: f == vNone, loop: true}
+	op := &streamOp{x: b.x, el: el, doc: f == vNone, loop: true}
 	inner := &streamBuilder{pl: b.pl, x: b.x, ops: &op.inner, kinds: &op.kinds}
 	var body []*xdm.Node
 	op.planned = true
@@ -398,6 +425,13 @@ func (b *streamBuilder) motionless(el *xdm.Node, f vfocus) bool {
 			b.kinds[streamtrace.KindSourceDoc]++
 			return true
 		}
+		if local == "apply-templates" {
+			return b.attrApply(el, f)
+		}
+		if b.noIdent && (local == "sequence" || local == "variable") {
+			// They could hand the copy on as the node it stands for.
+			return b.refuse("xsl:" + local + " on a copied text, comment or PI node")
+		}
 		if !streamMotionless[local] || local == "copy" && f == vNone {
 			return b.refuse("motionless xsl:" + local)
 		}
@@ -434,6 +468,7 @@ var streamAttrsOK = map[string]bool{
 	"use-when": true, "default-mode": true, "copy-namespaces": true, "inherit-namespaces": true,
 	"name": true, "namespace": true, "separator": true, "as": true, "select": true, "test": true,
 	"disable-output-escaping": true, "href": true, "streamable": true,
+	"mode": true, "tunnel": true, "required": true,
 }
 
 // attrs checks el's own expressions: the select (values only: what it
@@ -485,7 +520,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 // what f has, and returns nodes of it only where nodeOK.
 func (b *streamBuilder) expr(el *xdm.Node, src string, f vfocus, nodeOK bool) bool {
 	e := parseAt(el, src)
-	if e == nil || !(viewCheck{pos: true}).safe(e, f, nodeOK) {
+	if e == nil || !(viewCheck{pos: true, noIdent: b.noIdent}).safe(e, f, nodeOK) {
 		return b.refuse("not motionless on the view, in " + elName(el) + ": " + src)
 	}
 	return true
@@ -516,16 +551,17 @@ func (b *streamBuilder) avt(el *xdm.Node, src string, f vfocus) bool {
 func (c *compiler) noteStreamSelect(n *xdm.Node, instr Instruction, sel *xpath.Compiled,
 	ns xpath.NamespaceResolver) {
 
-	op := c.streamOp(n)
-	if op == nil || op.loop {
-		return
+	for _, op := range c.streamOps(n) {
+		if op.loop || op.apply != applyNone {
+			continue
+		}
+		op.instr, op.sel = instr, sel
+		simple := isXSL(n, "value-of") || isXSL(n, "attribute")
+		if op.split, op.dead = c.splitFor(sel, ns, op.doc, simple); op.dead != "" {
+			continue
+		}
+		op.x.byInstr[instr] = op
 	}
-	op.instr, op.sel = instr, sel
-	simple := isXSL(n, "value-of") || isXSL(n, "attribute")
-	if op.split, op.dead = c.splitFor(sel, ns, op.doc, simple); op.dead != "" {
-		return
-	}
-	c.stream.byInstr[instr] = op
 }
 
 // noteStreamLoop splits the select of n, a consuming for-each or iterate of
@@ -533,28 +569,44 @@ func (c *compiler) noteStreamSelect(n *xdm.Node, instr Instruction, sel *xpath.C
 func (c *compiler) noteStreamLoop(n *xdm.Node, instr Instruction, sel *xpath.Compiled,
 	ns xpath.NamespaceResolver) {
 
-	op := c.streamOp(n)
-	if op == nil || !op.loop {
-		return
+	for _, op := range c.streamOps(n) {
+		if !op.loop {
+			continue
+		}
+		op.instr, op.sel = instr, sel
+		if op.split, op.dead = c.splitFor(sel, ns, op.doc, false); op.dead != "" {
+			continue
+		}
+		if !op.split.bare() {
+			op.dead = "loop select is not a bare path"
+			continue
+		}
+		op.x.byInstr[instr] = op
 	}
-	op.instr, op.sel = instr, sel
-	if op.split, op.dead = c.splitFor(sel, ns, op.doc, false); op.dead != "" {
-		return
-	}
-	s := op.split
-	if s.cond != nil || s.ctxItem || s.red != "" || s.tail != nil || s.tailText != "" ||
-		s.steps == nil || !isVarRef(s.outer.Expr(), splitItems) {
-		op.dead = "loop select is not a bare path"
-		return
-	}
-	c.stream.byInstr[instr] = op
 }
 
-func (c *compiler) streamOp(n *xdm.Node) *streamOp {
-	if c.stream == nil {
-		return nil
+// bare reports whether s is a path and nothing else: no choice, tail,
+// reducer or outer, the matches what it returns.
+func (s *streamSplit) bare() bool {
+	return s.cond == nil && !s.ctxItem && s.red == "" && s.tail == nil && s.tailText == "" &&
+		s.steps != nil && isVarRef(s.outer.Expr(), splitItems)
+}
+
+// streamOps returns the ops of the plans being compiled -- the container's,
+// and those of the template rule whose body is (streamapply.go) -- that n is.
+func (c *compiler) streamOps(n *xdm.Node) []*streamOp {
+	var ops []*streamOp
+	if c.stream != nil {
+		if op := c.stream.ops[n]; op != nil {
+			ops = append(ops, op)
+		}
 	}
-	return c.stream.ops[n]
+	for _, x := range c.ruleExecs {
+		if op := x.ops[n]; op != nil {
+			ops = append(ops, op)
+		}
+	}
+	return ops
 }
 
 // splitFor splits sel for the cursor, or says why not. simple says sel
@@ -629,10 +681,11 @@ func isVarRef(e xpath.Expr, q xdm.QName) bool {
 // instruction compiled and split, the memory rule kept (DESIGN section 2.1,
 // rule 3), each loop's strategy chosen; it returns why not.
 func (x *streamExec) ready() string {
-	if why := x.readyOps(x.top, 0, &x.kinds); why != "" {
-		return why
+	minD := 0
+	if x.class == classElem {
+		minD = 1 // a rule's context element: the document element, or below
 	}
-	return ""
+	return x.readyOps(x.top, minD, &x.kinds)
 }
 
 // readyOps readies ops, whose context element is at depth minD or deeper
@@ -644,6 +697,11 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 			return "not compiled (use-when)"
 		case op.dead != "":
 			return op.dead
+		case op.apply != applyNone:
+			if why := op.readyApply(); why != "" {
+				return why
+			}
+			continue
 		case !op.loop:
 			if why := x.readySelect(op, minD); why != "" {
 				return why
@@ -690,8 +748,11 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 	if c := s.class(); isXSL(op.el, "copy-of") && (c == "nodes" || c == "subtree") &&
 		s.cond == nil && s.red == "" && isVarRef(s.outer.Expr(), splitItems) {
 		switch {
-		case s.ctxItem && minD < 2:
+		case s.ctxItem && (minD == 0 || minD < 2 && !x.rule):
 			return "copy-of(.) of the document element"
+		case s.ctxItem:
+			// In a rule's body the match is copied whole, the document
+			// element too, which costs what its tree does.
 		case minD == 0:
 			s.noRoot = s.minDepth() < 2
 		case minD+s.minDepth() < 2:
@@ -754,6 +815,10 @@ type streamRun struct {
 	d    int
 	used bool
 	off  bool
+	// root is the stand-in for the document node; top the document node of
+	// the first view a dispatch met, whose properties root then takes
+	// (streamapply.go).
+	root, top *xdm.Node
 	// For the fallback of a select that gives up: the container, its href,
 	// and how to unmark the document as read before the tree reads it.
 	i      *sourceDocumentInstr
@@ -767,6 +832,9 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 	op := run.x.byInstr[instr]
 	if op == nil || run.off {
 		return nil
+	}
+	if op.apply != applyNone {
+		return &burstFeed{instr: instr, run: run, apply: op}
 	}
 	if op.copies {
 		return &burstFeed{instr: instr, read: func(each func(xdm.Item) error) error {
@@ -975,10 +1043,10 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		if strip != nil {
 			c.StripWhitespace(strip)
 		}
-		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread}
+		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: xdm.NewTree().Root}
 		// The body's focus is the document node, which the stream does not
 		// build: the plan reads of it only what an empty one has.
-		sub := rt.withCurrent(xdm.NewTree().Root, 1, 1).clearCurrentRule()
+		sub := rt.withCurrent(run.root, 1, 1).clearCurrentRule()
 		sub.bursts = &burstFeed{run: run}
 		if i.stream.drainFirst {
 			if err := run.drain(); err != nil {

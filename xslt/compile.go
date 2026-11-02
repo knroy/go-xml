@@ -15,10 +15,17 @@ type compiler struct {
 	// stream is the core plan of the streamable xsl:source-document being
 	// compiled (streamexec.go), which records the compiled form of its
 	// consuming instructions.
-	stream    *streamExec
-	opts      CompileOptions
-	sheet     *Stylesheet
-	declOrder int
+	stream *streamExec
+	// ruleExecs are the plans of the template rule whose body is being
+	// compiled, rulePlans the walks they are made from, by module, and
+	// streamLinks the containers whose plans apply templates, linked once
+	// every rule has compiled (streamapply.go).
+	ruleExecs   []*streamExec
+	rulePlans   map[*xdm.Node]*rulesPlan
+	streamLinks []streamLink
+	opts        CompileOptions
+	sheet       *Stylesheet
+	declOrder   int
 	// seen guards against include cycles, which would otherwise recurse until
 	// the stack runs out. schemaSeen does the same for the xsl:import-schema
 	// pre-pass, which walks the module graph separately and must not visit a
@@ -954,7 +961,17 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		t.Params = append(t.Params, v)
 	}
 
+	// A rule's body is planned for streamed dispatch before it compiles
+	// (streamapply.go): its instructions are noted into the plans.
+	var rp *rulePlan
+	if t.Match != nil {
+		rp = c.planRule(el, t.Match, i)
+	}
 	body, err := c.compileSequenceFrom(el, el, i)
+	if rp != nil {
+		c.readyRule(rp)
+		t.stream = rp
+	}
 	if err != nil {
 		return err
 	}

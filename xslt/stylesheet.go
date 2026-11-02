@@ -316,6 +316,9 @@ type Template struct {
 	// so the ambiguity check can skip a candidate that is really the winner
 	// seen through a different branch.
 	unionGroup int
+	// stream is how the rule's body runs when a streamed apply op hands it a
+	// node (streamapply.go); nil when it cannot.
+	stream *rulePlan
 }
 
 // Variable is a compiled xsl:variable, xsl:param or xsl:with-param.
@@ -945,6 +948,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	}
 	c.sheet.sortTemplates()
 	c.sheet.buildRuleIndex()
+	c.linkStreams()
 	// A global variable overridden by a higher-precedence declaration is not
 	// evaluated at all, so the overridden bindings are dropped before the
 	// stylesheet is handed back.
