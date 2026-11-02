@@ -40,10 +40,10 @@ import (
 )
 
 // defaultFloor is the streamed case count the last stage reached: 450 with
-// the burst plans alone (M1.1-M1.4), 564 with the streamed core (M1.5,
-// whose containers are the ones the burst plans refuse). A stage may only
-// raise it.
-const defaultFloor = 564
+// the burst plans alone (M1.1-M1.4), 564 with the streamed core beside them
+// (M1.5), 576 with the core alone (M1.6, the burst plans retired into it).
+// A stage may only raise it.
+const defaultFloor = 576
 
 func main() {
 	floor := defaultFloor
