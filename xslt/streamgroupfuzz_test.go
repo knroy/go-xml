@@ -186,7 +186,13 @@ func fuzzMakeGroups(seed int64) fuzzCase {
 	doc := g.groupDocument()
 	steps := strings.Join(append(append([]string{g.root}, g.wrappers...), g.rec), "/")
 	var content string
-	if len(g.wrappers) > 0 && g.p(40) {
+	if g.p(15) {
+		// xsl:iterate carrying a copy of its item, or values of it, on.
+		w := g.pick(`copy-of(.)`, `copy-of(.)[$n gt 2]`, `($p, copy-of(.))`, `copy-of($p)`, `string(@k)`, `$p`)
+		content = `<xsl:iterate select="` + steps + `"><xsl:param name="n" select="1" as="xs:integer"/><xsl:param name="p" select="()"/>` +
+			`<xsl:on-completion><e n="{$n}"><xsl:copy-of select="$p"/></e></xsl:on-completion><i n="{$n}" k="{$p/@k}"/>` +
+			`<xsl:next-iteration><xsl:with-param name="n" select="$n + 1"/><xsl:with-param name="p" select="` + w + `"/></xsl:next-iteration></xsl:iterate>`
+	} else if len(g.wrappers) > 0 && g.p(40) {
 		// In a loop over the wrappers: the population from each.
 		w := strings.Join(append([]string{g.root}, g.wrappers...), "/")
 		content = `<xsl:for-each select="` + w + `"><l>` + g.group(g.pick(g.rec, "*", g.rec+"[@v > 0]")) + `</l></xsl:for-each>`

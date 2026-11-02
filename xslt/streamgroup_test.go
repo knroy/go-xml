@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // groupDocs are documents with runs of keys: equal neighbours, a key on the
@@ -88,6 +91,13 @@ var groupBodies = []struct {
 	{`<out><xsl:iterate select="/*/t"><xsl:if test="@v &lt; 0"><xsl:break select="copy-of(.)"/></xsl:if><i k="{@k}"/></xsl:iterate></out>`, false},
 	{`<out><xsl:iterate select="/*/t"><xsl:param name="all" select="()"/><xsl:on-completion><xsl:copy-of select="$all"/></xsl:on-completion>` +
 		`<xsl:next-iteration><xsl:with-param name="all" select="($all, copy-of(.))"/></xsl:next-iteration></xsl:iterate></out>`, true},
+	// A population of several steps: levels open and close, counters per
+	// parent.
+	{`<out><xsl:for-each-group select="*/g/t" group-adjacent="@d"><g n="{count(current-group())}" k="{@k}"/></xsl:for-each-group></out>`, true},
+	{`<out><xsl:for-each-group select="*/g/t[1]" group-starting-with="*[@v &lt; 0]"><g><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></out>`, true},
+	// Refused by the memory rule: the members collected as grounded
+	// copies (a group may be all of the document element's children).
+	{`<out><xsl:for-each-group select="*/g/t" group-adjacent="@d"><g><xsl:value-of select="string-join(current-group() ! name(), ',')"/></g></xsl:for-each-group></out>`, false},
 	// Refused: group-by, sort, a crawling population, a key a view cannot
 	// decide, current-group() read twice.
 	{`<out><xsl:for-each-group select="/doc/t" group-by="@d"><g/></xsl:for-each-group></out>`, false},
@@ -117,5 +127,98 @@ func TestStreamGroupMatchesTree(t *testing.T) {
 	}
 	if streamed == 0 {
 		t.Error("nothing streamed without a re-run")
+	}
+}
+
+// TestStreamGroupErrors: a streamed principal input (TransformReader, which
+// has no tree to re-run on) whose grouping meets errors in an order other
+// than the tree's -- a body's error before a later item's key error or a
+// later predicate's, a key error before a later predicate's -- returns the
+// tree's error: the select's predicates first, then the keys, then the
+// bodies (groupRun.settle).
+func TestStreamGroupErrors(t *testing.T) {
+	rule := func(sel, by, body string) string {
+		return mainSheet(`<xsl:mode streamable="yes"/><xsl:template match="doc"><out><xsl:for-each-group select="` + sel +
+			`" ` + by + `>` + body + `</xsl:for-each-group></out></xsl:template>`)
+	}
+	boom := `<g><xsl:value-of select="xs:integer(@v)"/></g>`
+	docs := []string{
+		// the body fails at the first group, a key (XTTE1100) at the fourth item
+		`<doc><t k="a" v="x"/><t k="a" v="1"/><t k="b" v="2"/><t v="3"/><t k="c" v="4"/></doc>`,
+		// the body fails at the first group, a predicate at the last item
+		`<doc><t k="a" v="x" n="1"/><t k="b" v="1" n="2"/><t k="b" v="2" n="z"/></doc>`,
+		// a key fails at the second item, a predicate at the third
+		`<doc><t k="a" v="1" n="1"/><t v="1" n="2"/><t k="b" v="2" n="z"/></doc>`,
+		// no error: every group
+		`<doc><t k="a" v="1" n="1"/><t k="a" v="2" n="2"/><t k="b" v="3" n="3"/></doc>`,
+	}
+	sheets := []string{
+		rule("t", `group-adjacent="@k"`, boom),
+		rule("t[xs:integer(@n) gt 0]", `group-adjacent="@k"`, boom),
+		rule("t[xs:integer(@n) gt 0]", `group-adjacent="@k"`, `<g n="{count(current-group())}"/>`),
+		rule("t", `group-starting-with="t[xs:integer(@n) = 2]"`, boom),
+		rule("t", `group-ending-with="t[xs:integer(@n) = 2]"`, `<g><xsl:copy-of select="current-group()"/></g>`),
+	}
+	opts := TransformOptions{SourceParseOptions: xdm.ParseOptions{BaseURI: "file:///f/doc.xml"}}
+	streamed := 0
+	for i, sheet := range sheets {
+		for j, doc := range docs {
+			so, st := mainRun(sheet, doc, true, opts)
+			to, _ := mainRun(sheet, doc, false, opts)
+			if so != to {
+				t.Errorf("sheet %d, doc %d:\nstreamed %s\ntree     %s", i, j, so, to)
+			}
+			if st.Guards != 0 {
+				t.Errorf("sheet %d, doc %d: %d guard hits", i, j, st.Guards)
+			}
+			if st.Runs[streamtrace.Main] > 0 {
+				streamed++
+			}
+		}
+	}
+	if streamed != len(sheets)*len(docs) {
+		t.Errorf("%d of %d runs streamed", streamed, len(sheets)*len(docs))
+	}
+}
+
+// TestStreamGroupMemory: a streamed grouping over 150,000 records holds one
+// item of look-ahead and its output, never the tree: counting each group,
+// and copying each group a member at a time.
+func TestStreamGroupMemory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("memory test")
+	}
+	var b strings.Builder
+	b.WriteString("<doc>")
+	for i := range 150000 {
+		fmt.Fprintf(&b, `<t d="%d" v="%d"><n>%d</n><n x="1">x</n></t>`, i/7, i%100, i%10)
+	}
+	b.WriteString("</doc>")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		body string
+		frac float64 // the most of the tree's peak the core may take
+	}{
+		{`<out><xsl:for-each-group select="/doc/t" group-adjacent="@d"><g n="{count(current-group())}"/></xsl:for-each-group></out>`, 0.25},
+		{`<out><xsl:for-each-group select="/doc/t" group-starting-with="t[@v = '0']"><g><xsl:value-of select="sum(current-group()/@v)"/></g></xsl:for-each-group></out>`, 0.25},
+		// Its output is a copy of the whole document: what the tree holds
+		// beside the document.
+		{`<out><xsl:for-each-group select="/doc/t" group-adjacent="@d"><g><xsl:copy-of select="current-group()"/></g></xsl:for-each-group></out>`, 0.9},
+	} {
+		sheet := coreSheet(c.body)
+		var st streamtrace.Counts
+		core := splitPeak(func() { _, _, st = coreRun(sheet, dir, true, TransformOptions{}) })
+		tree := splitPeak(func() { coreRun(sheet, dir, false, TransformOptions{}) })
+		t.Logf("%s: core %.1f MB, tree %.1f MB", c.body, float64(core)/1e6, float64(tree)/1e6)
+		if st.Runs[streamtrace.Core] != 1 || st.Reruns != 0 {
+			t.Errorf("%s: trace %+v", c.body, st)
+		}
+		if float64(core) > c.frac*float64(tree) && !raceEnabled {
+			t.Errorf("%s: peak live heap %.1f MB, tree %.1f MB (bound %.0f%%)", c.body,
+				float64(core)/1e6, float64(tree)/1e6, 100*c.frac)
+		}
 	}
 }

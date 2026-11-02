@@ -295,14 +295,11 @@ func (p *popWalk) next(read bool) (xdmstream.Event, bool, error) {
 			p.done = true
 			return xdmstream.Event{}, false, nil
 		}
-		// What closed is no longer a context; nor is what was open at the
-		// event's depth or below.
-		if ev.Closed > 0 && len(p.insts) > ev.Closed-p.d {
-			p.insts = p.insts[:ev.Closed-p.d]
-		}
 		if ev.Kind != xdmstream.StartElement {
 			continue
 		}
+		// What was open at the event's depth or below has closed (the
+		// filter reports end tags only at the context's depth).
 		e := ev.Depth - p.d
 		if len(p.insts) > e {
 			p.insts = p.insts[:e]
