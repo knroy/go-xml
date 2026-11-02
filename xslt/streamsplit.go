@@ -321,9 +321,11 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		return "a tail after text, comment or PI matches"
 	case !tailKindOK(tail):
 		return "tail " + tail.String() + ": may give both nodes and values (XPTY0018)"
-	case nodeValued(tail) && climbs(tail):
-		// Matches share ancestors: the tree would return each once.
-		return "tail " + tail.String() + ": returns ancestors' nodes"
+	case climbs(tail):
+		// Matches share ancestors: the tree makes each once, then what
+		// follows of it (//P/ancestor::*/data(@a) too), a match at a time
+		// would make it once per match.
+		return "tail " + tail.String() + ": climbs to ancestors' nodes"
 	case (viewCheck{}).safe(tail, vElem, splitCounts[s.red]):
 		s.mode = matchView
 	case (pathTail(p.tail) || burstSafe(tail, true)) && (!s.nests || tailValue(tail) || ownAttributes(p.tail)):
