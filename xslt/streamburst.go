@@ -46,6 +46,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
@@ -1185,7 +1186,7 @@ func (c *compiler) noteBurstSelect(n *xdm.Node, instr Instruction, sel *xpath.Co
 // executeBursts runs i in bursts when its plan and its resolver allow, and
 // reports whether it did.
 func (i *sourceDocumentInstr) executeBursts(rt *runtime, out *outputBuilder, href string) (bool, error) {
-	if noBursts || validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') {
+	if noBursts || streamtrace.Off() || validSourceDocumentURI(href) != nil || strings.ContainsRune(href, '#') {
 		return false, nil
 	}
 	// The resolvers Transform wraps around the caller's are looked through
@@ -1236,6 +1237,7 @@ func (i *sourceDocumentInstr) executeBursts(rt *runtime, out *outputBuilder, hre
 	if traceBursts != nil {
 		traceBursts(href)
 	}
+	streamtrace.Run(i.bursts.strategy())
 	// The body's own focus is the document node, which the bursts do not
 	// build. Nothing planBursts admits reads it, so an empty document node
 	// with the document's URIs stands in for it.
@@ -1277,6 +1279,7 @@ func (i *sourceDocumentInstr) executeBursts(rt *runtime, out *outputBuilder, hre
 			if traceBurstFallback != nil {
 				traceBurstFallback(err)
 			}
+			streamtrace.Fallback()
 			unread()
 			root, err := i.load(rt, href)
 			if err != nil {
@@ -1317,6 +1320,19 @@ func (i *sourceDocumentInstr) executeBursts(rt *runtime, out *outputBuilder, hre
 		return err
 	}}
 	return true, execSequence(i.body, sub, out)
+}
+
+// strategy names how p runs, for streamtrace.
+func (p *burstPlan) strategy() streamtrace.Strategy {
+	switch {
+	case p.items == nil && isXSL(p.target, "iterate"):
+		return streamtrace.LoopIterate
+	case p.items == nil:
+		return streamtrace.LoopForEach
+	case p.reducer != "" && !noBurstFold:
+		return streamtrace.SelectFolded
+	}
+	return streamtrace.SelectCollected
 }
 
 // errBurstGiveUp ends a fold that cannot be exact; the tree path takes over.

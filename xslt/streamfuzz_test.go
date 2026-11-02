@@ -1,0 +1,591 @@
+package xslt
+
+// TestStreamFuzz is the differential fuzzer for burst execution: each
+// generated case -- a random record document, possibly malformed or over a
+// node or byte limit, and a streamable xsl:source-document whose body is one
+// value-of/copy-of/sequence over a record path or a for-each/iterate over
+// one, many of them shapes the gate must refuse -- runs with bursts, with
+// bursts but no folding, and on the tree, and all three must agree.
+//
+//	go test ./xslt -run 'TestStreamFuzz$' -v                      # default 1000 cases from seed 1
+//	GOXSLT_STREAM_FUZZ=100000 GOXSLT_STREAM_FUZZ_SEED=1 go test ./xslt -run 'TestStreamFuzz$' -v -timeout 0
+//
+// A failing case prints its seed and the command that replays it alone.
+
+import (
+	"context"
+	"fmt"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/xdm"
+)
+
+type fuzzGen struct {
+	r        *rand.Rand
+	root     string
+	wrappers []string
+	rec      string
+	malform  bool
+	defNS    bool // the document's default namespace is urn:d
+	kind     string
+	depth    int
+}
+
+func (g *fuzzGen) n(k int) int              { return g.r.Intn(k) }
+func (g *fuzzGen) p(pc int) bool            { return g.r.Intn(100) < pc }
+func (g *fuzzGen) pick(xs ...string) string { return xs[g.r.Intn(len(xs))] }
+
+var fuzzNums = []string{"1", "2", "3", "-1", "0", "-0", "2.5", "10", "1e3", "1.0E-2", "NaN", "INF", "-INF",
+	"007", " 4 ", "x", "", "12345678901234567890", "0.1", "0.2", "0.30000000000000004", "3.0"}
+var fuzzKeys = []string{"a", "A", "b", "B", "ab", "", " a", "é", "E", "z", "1", "10", "2"}
+
+func (g *fuzzGen) record() string {
+	var b strings.Builder
+	b.WriteString("<" + g.rec)
+	if g.p(85) {
+		b.WriteString(` k="` + g.pick(fuzzKeys...) + `"`)
+	}
+	if g.p(85) {
+		b.WriteString(` v="` + g.pick(fuzzNums...) + `"`)
+	}
+	if g.p(10) {
+		b.WriteString(` xml:lang="` + g.pick("en", "de") + `"`)
+	}
+	if g.p(15) {
+		b.WriteString("/>")
+		return b.String()
+	}
+	b.WriteString(">")
+	for i, c := 0, g.n(4); i < c; i++ {
+		if g.depth < 4 && g.p(20) {
+			g.depth++
+			if g.p(50) {
+				b.WriteString(g.record())
+			} else {
+				w := g.pick("sub", "other", "wrap", "p:w")
+				b.WriteString("<" + w + g.pick("", ` id="n"`) + ">" + g.record() + "</" + w + ">")
+			}
+			g.depth--
+			continue
+		}
+		switch g.n(6) {
+		case 0:
+			b.WriteString(`<sub x="` + g.pick(fuzzNums...) + `">` + g.pick(fuzzKeys...) + "</sub>")
+		case 1:
+			b.WriteString("<name>" + g.pick(fuzzKeys...) + "</name>")
+		case 2:
+			b.WriteString(g.pick("text", " ", "\n  ", "5"))
+		case 3:
+			b.WriteString("<x>" + g.pick(fuzzNums...) + "</x>")
+		case 4:
+			b.WriteString("<!-- c -->")
+		default:
+			b.WriteString(`<sub><x>` + g.pick(fuzzNums...) + `</x></sub>`)
+		}
+	}
+	b.WriteString("</" + g.rec + ">")
+	return b.String()
+}
+
+func (g *fuzzGen) document() string {
+	var b strings.Builder
+	if g.p(30) {
+		b.WriteString(`<?xml version="1.0"?>` + "\n")
+	}
+	b.WriteString("<" + g.root + ` xmlns:p="urn:p"`)
+	if g.defNS {
+		b.WriteString(` xmlns="urn:d"`)
+	}
+	if g.p(20) {
+		b.WriteString(` xml:base="http://ex/a/"`)
+	}
+	b.WriteString(">\n")
+	for _, w := range g.wrappers {
+		b.WriteString("<" + w + g.pick("", ` id="w"`) + ">\n")
+	}
+	nrec := g.n(6)
+	if g.p(5) {
+		nrec = 50 + g.n(400)
+	}
+	if g.p(2) {
+		nrec = 1500 + g.n(1000) // several burst batches
+	}
+	for i := 0; i < nrec; i++ {
+		if g.p(25) {
+			b.WriteString(g.pick("<!-- between -->", "<other v=\"9\"><rec v=\"inner\"/></other>", "stray", "<rec2 v=\"5\"/>", "  ") + "\n")
+		}
+		if g.p(1) {
+			// a record of more than one batch's small-burst limit
+			b.WriteString("<" + g.rec + ` k="big" v="1">` + strings.Repeat("<x>1</x>", 300+g.n(300)) + "</" + g.rec + ">\n")
+		}
+		b.WriteString(g.record() + "\n")
+	}
+	for i := len(g.wrappers) - 1; i >= 0; i-- {
+		b.WriteString("</" + g.wrappers[i] + ">\n")
+	}
+	b.WriteString("</" + g.root + ">")
+	doc := b.String()
+	if g.p(8) {
+		g.malform = true
+		switch g.n(4) {
+		case 0:
+			doc = doc[:g.n(len(doc)+1)]
+		case 1:
+			doc = strings.Replace(doc, "</"+g.root+">", "</wrong>", 1)
+		case 2:
+			doc += "<second/>"
+		default:
+			doc = strings.Replace(doc, "</"+g.root+">", `<`+g.rec+` v="1" v="2"/></`+g.root+">", 1)
+		}
+	}
+	return doc
+}
+
+// path is a record path, sometimes mutated into one the gate must refuse.
+func (g *fuzzGen) path() string {
+	if g.p(60) {
+		g.kind = "p2"
+		return g.path2()
+	}
+	g.kind = "p1"
+	return g.path1()
+}
+
+// wild replaces a name step by a wildcard that still matches it, or not.
+func (g *fuzzGen) wild(step string) string {
+	local, prefixed := step, false
+	if i := strings.IndexByte(step, ':'); i >= 0 {
+		local, prefixed = step[i+1:], true
+	}
+	switch g.n(10) {
+	case 0, 1, 2:
+		return "*"
+	case 3, 4:
+		return "*:" + local
+	case 5:
+		if prefixed {
+			return "p:*"
+		}
+		return "q:*"
+	case 6:
+		return "*:nomatch"
+	}
+	return step
+}
+
+// path2 is a record path with descendant steps, wildcards or outermost().
+func (g *fuzzGen) path2() string {
+	preds := func() string {
+		s := ""
+		for i, c := 0, g.n(3); i < c; i++ {
+			if g.p(50) {
+				s += "[" + g.pred() + "]"
+			}
+		}
+		return s
+	}
+	tail := func() string {
+		if g.p(40) {
+			return ""
+		}
+		return g.tail()
+	}
+	steps := append([]string{g.root}, g.wrappers...)
+	steps = append(steps, g.rec)
+	switch g.n(16) {
+	case 0, 1, 2:
+		return "//" + g.rec + preds() + tail()
+	case 3:
+		return g.pick("", "/") + g.root + "//" + g.rec + preds() + tail()
+	case 4, 5:
+		for i := range steps {
+			if g.p(50) {
+				steps[i] = g.wild(steps[i])
+			}
+		}
+		return g.pick("", "/") + strings.Join(steps, "/") + preds() + tail()
+	case 6:
+		return "//" + g.wild(g.rec) + preds() + tail()
+	case 7, 8:
+		in := g.pick("//"+g.rec, g.root+"//"+g.rec, "//"+g.wild(g.rec), "descendant::"+g.rec, "//"+g.rec+"/sub")
+		p := g.pick("outermost", "outermost", "innermost") + "(" + in + preds() + ")"
+		if t := tail(); t != "" {
+			p += t
+		}
+		return p
+	case 9:
+		return "descendant::" + g.rec + preds() + tail()
+	case 10:
+		return g.pick("//text()", "//@v", "//*", "//node()", "//@*", "//sub", "//x", "//comment()", "//*/@k", "/descendant::*", "//*[@v]")
+	case 11:
+		return "//" + g.rec + g.pick("//text()", "//sub", "//@x", "//"+g.rec, "/descendant::x", "//*")
+	case 12:
+		return ".//" + g.rec + preds() + tail()
+	case 13:
+		w := g.pick("sub", "other", "wrap", "p:w")
+		return "//" + w + "/" + g.rec + preds() + tail()
+	case 14:
+		return "//" + g.rec + "//" + g.rec + preds() + tail()
+	}
+	return "/" + g.root + "/descendant::" + g.rec + preds() + tail()
+}
+
+func (g *fuzzGen) path1() string {
+	steps := append([]string{g.root}, g.wrappers...)
+	steps = append(steps, g.rec)
+	last := len(steps) - 1
+	switch g.n(25) {
+	case 0:
+		steps[last] = "*"
+	case 1:
+		return "//" + g.rec + g.tail()
+	case 2:
+		steps = append([]string{"."}, steps...)
+		last++
+	case 3:
+		if len(steps) > 1 {
+			steps[0] += "[" + g.pred() + "]"
+		}
+	}
+	for i, c := 0, g.n(3); i < c; i++ {
+		if g.p(60) {
+			steps[last] += "[" + g.pred() + "]"
+		}
+	}
+	p := strings.Join(steps, "/") + g.tail()
+	if g.p(30) {
+		p = "/" + p
+	}
+	return p
+}
+
+func (g *fuzzGen) pred() string {
+	return g.pick("@k = 'a'", "@k", "@v > 2", "@v = 1", "sub", "not(@v)", "1", "2", "last()", "position() = 1",
+		"@k = ('a', 'B')", "string-length(@k) > 0", "exists(sub/@x)", "../@id", "@v castable as xs:double",
+		"xs:integer(@v) = 1", "number(@v) = number(@v)", "@xml:lang = 'en'", "name = 'a'", "x > 1", "*[1]",
+		"@k eq 'a'", "@v gt 1", "ancestor::*/@id", "count(sub) = 1")
+}
+
+func (g *fuzzGen) tail() string {
+	if g.p(25) {
+		return ""
+	}
+	return "/" + g.pick("@v", "@v", "@k", "@k", "@*", "sub", "sub/@x", "name", "text()", "x", "@v/data()",
+		"@v/xs:decimal(.)", "@v/xs:double(.)", "@v/number()", "@v/xs:integer(.)", "@v/xs:float(.)",
+		"(if (@k) then xs:decimal(@v) else xs:double(@v))", "(if (@k = 'a') then xs:float(@v) else xs:integer(@v))",
+		"@k/string()", "copy-of()", "descendant::*", "*[1]", "sub[1]/@x", "string()", "string-length(.)",
+		"(@v castable as xs:double)", "x/data()[. > 1]", "@v/xs:untypedAtomic(.)", "@k/xs:anyURI(.)",
+		"(if (@v castable as xs:integer) then xs:integer(@v) else xs:string(@v))", "..", "../@id",
+		"(@k, @v)", "node()", "descendant-or-self::x", "@v/(. + 1)", "sub/x/number()", "position()")
+}
+
+const fuzzColl = `'http://www.w3.org/2005/xpath-functions/collation/html-ascii-case-insensitive'`
+
+func (g *fuzzGen) selectExpr() string {
+	p := g.path()
+	t := g.pick(
+		"count(P)", "count(P)", "sum(P)", "sum(P)", "sum(P, 'zero')", "sum(P, ())", "avg(P)", "min(P)", "max(P)",
+		"min(P)", "max(P)", "min(P, "+fuzzColl+")", "max(P, "+fuzzColl+")", "max(P ! string())", "min(P ! number())",
+		"sum(P ! xs:decimal(.))", "exists(P)", "empty(P)", "boolean(P)", "not(P)", "head(P)", "exactly-one(P)",
+		"zero-or-one(P)", "one-or-more(P)", "deep-equal(P ! string(), ('a', 'B'))", "P = 'a'", "P != 1", "P > 2",
+		"P eq 1", "(P)[1]", "(P)[2]", "(P)[1] + 1", "string(head(P))", "number(head(P))", "xs:string(P)",
+		"string(P)", "some $x in P satisfies $x = 'a'", "every $x in P satisfies $x > 0",
+		"if (P) then 1 else 0", "P instance of xs:string*", "count(P) + 1", "round(sum(P))", "string-join(P, ',')",
+		"P ! string()", "P ! position()", "for $x in P return string($x)", "copy-of(P)", "copy-of(P)[1]",
+		"tail(P)/@k", "copy-of(P)/sub", "data(P)", "insert-before(P, 1, 'z')", "remove(P, 1)", "subsequence(P, 2, 2)",
+		"index-of(P ! string(), 'a')", "count(P[. = 'a'])", "P[position() > 1]", "sum(unordered(P))",
+		"max(P) - min(P)", "-sum(P)", "avg(P) * 2", "count(P) = 0", "(sum(P), 1)", "(1, count(P))",
+		"concat('n=', count(P))", "string-length(string-join(P ! string(), ''))", "upper-case(string(head(P)))",
+		// refused
+		"distinct-values(P)", "reverse(P)", "P[last()]", "count(P union ())", "let $x := P return count($x)",
+		"count(P) + count(P)", "sort(P)", "(P) ! name(..)", "P is P",
+	)
+	if g.p(15) {
+		return p // bare: the whole select is the path
+	}
+	return strings.ReplaceAll(t, "P", "("+p+")")
+}
+
+type fuzzCase struct {
+	seed       int64
+	sheet, doc string
+	malform    bool
+	maxNodes   int
+	maxBytes   int64
+	kind       string
+}
+
+func fuzzMake(seed int64) fuzzCase {
+	g := &fuzzGen{r: rand.New(rand.NewSource(seed))}
+	g.root = g.pick("doc", "root", "account")
+	g.rec = g.pick("rec", "rec", "item", "p:rec")
+	g.defNS = g.p(15)
+	for i, c := 0, g.n(3); i < c; i++ {
+		if g.p(50) {
+			g.wrappers = append(g.wrappers, g.pick("wrap", "data", "list"))
+		}
+	}
+	doc := g.document()
+	var s strings.Builder
+	s.WriteString(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:p="urn:p" xmlns:err="http://www.w3.org/2005/xqt-errors" exclude-result-prefixes="xs p err"`)
+	if g.p(10) {
+		s.WriteString(` default-collation=` + strings.ReplaceAll(fuzzColl, "'", `"`))
+	}
+	if g.defNS && g.p(85) || g.p(3) {
+		s.WriteString(` xpath-default-namespace="urn:d"`)
+	}
+	s.WriteString(">\n")
+	if g.p(20) {
+		s.WriteString(g.pick(`<xsl:strip-space elements="*"/>`, `<xsl:strip-space elements="sub"/>`) + "\n")
+	}
+	if g.p(15) {
+		s.WriteString(`<xsl:output method="` + g.pick("xml", "text", "adaptive") + `"/>` + "\n")
+	}
+	s.WriteString(`<xsl:template name="main">` + "\n")
+	try := g.p(10)
+	if try {
+		s.WriteString("<xsl:try>")
+	}
+	s.WriteString(`<xsl:source-document streamable="yes" href="doc.xml">`)
+	wrap := g.p(30)
+	if wrap {
+		s.WriteString(`<out a="x">`)
+	}
+	esc := func(x string) string { return strings.ReplaceAll(strings.ReplaceAll(x, "<", "&lt;"), `"`, "&quot;") }
+	if g.p(40) {
+		p := esc(g.path())
+		g.kind += "-loop"
+		switch g.n(10) {
+		case 0:
+			s.WriteString(`<xsl:iterate select="` + p + `"><xsl:param name="t" select="0"/><xsl:on-completion><t v="{$t}"/></xsl:on-completion><xsl:next-iteration><xsl:with-param name="t" select="$t + count(.//node())"/></xsl:next-iteration></xsl:iterate>`)
+		case 1:
+			s.WriteString(`<xsl:iterate select="` + p + `"><xsl:if test="@k = 'b'"><xsl:break><b/></xsl:break></xsl:if><i><xsl:value-of select="@k"/></i></xsl:iterate>`)
+		default:
+			body := g.pick(`<r k="{@k}"/>`, `<xsl:copy-of select="."/>`, `<xsl:value-of select="@v"/>`,
+				`<r n="{name()}" d="{count(ancestor::*)}"/>`, `<r p="{position()}"><xsl:copy-of select="@*"/></r>`,
+				`<xsl:value-of select="count(.//node())"/>`, `<r a="{ancestor::*[1]/@id}" l="{local-name(..)}"/>`,
+				`<xsl:sequence select="string(.)"/>`, `<xsl:copy-of select="sub"/>`, `<r b="{base-uri(.)}"/>`,
+				`<xsl:for-each select="sub"><s x="{@x}"/></xsl:for-each>`, `<r i="{count(ancestor::`+g.rec+`)}"/>`)
+			s.WriteString(`<xsl:for-each select="` + p + `">` + body + `</xsl:for-each>`)
+		}
+		goto done
+	}
+	{
+		sel := esc(g.selectExpr())
+		switch g.n(3) {
+		case 0:
+			sep := ""
+			if g.p(30) {
+				sep = ` separator="` + g.pick("", "|", ", ") + `"`
+			}
+			s.WriteString(`<xsl:value-of select="` + sel + `"` + sep + "/>")
+		case 1:
+			s.WriteString(`<xsl:copy-of select="` + sel + `"/>`)
+		default:
+			s.WriteString(`<xsl:sequence select="` + sel + `"/>`)
+		}
+	}
+done:
+	if wrap {
+		s.WriteString(`</out>`)
+	}
+	s.WriteString("</xsl:source-document>")
+	if try {
+		s.WriteString(`<xsl:catch><caught code="{local-name-from-QName($err:code)}"/></xsl:catch></xsl:try>`)
+	}
+	s.WriteString("\n</xsl:template>\n</xsl:stylesheet>\n")
+	c := fuzzCase{seed: seed, sheet: s.String(), doc: doc, malform: g.malform, kind: g.kind}
+	if g.p(3) {
+		c.maxNodes = 5 + g.n(60)
+	}
+	if g.p(3) {
+		c.maxBytes = int64(50 + g.n(800))
+	}
+	return c
+}
+
+type fuzzRes struct {
+	out, err, panic string
+	trace           streamtrace.Counts
+}
+
+// fuzzRun runs c from dir: bursts says whether streaming is on (off is
+// streamtrace's switch, as GOXSLT_STREAM_OFF sets it), fold whether reducers
+// fold.
+func fuzzRun(c fuzzCase, dir string, bursts, fold bool) (r fuzzRes) {
+	before := streamtrace.Snapshot()
+	defer func() {
+		if p := recover(); p != nil {
+			r.panic = fmt.Sprint(p)
+		}
+		streamtrace.SetOff(false)
+		noBurstFold = false
+		r.trace = streamtrace.Snapshot().Sub(before)
+	}()
+	tree, err := xdm.ParseString(c.sheet, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+	if err != nil {
+		r.err = "SHEET: " + err.Error()
+		return
+	}
+	sheet, err := Compile(tree.Root, CompileOptions{})
+	if err != nil {
+		r.err = "COMPILE: " + err.Error()
+		return
+	}
+	docs, _ := NewFileResolver(dir)
+	docs.MaxNodes, docs.MaxBytes = c.maxNodes, c.maxBytes
+	streamtrace.SetOff(!bursts)
+	noBurstFold = !fold
+	res, err := sheet.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
+	if err != nil {
+		r.err = err.Error()
+		return
+	}
+	r.out = res.String()
+	return
+}
+
+var (
+	fuzzCodeRe   = regexp.MustCompile(`\b[A-Z]{4}[0-9]{4}\b`)
+	fuzzCaughtRe = regexp.MustCompile(`<caught code="([A-Za-z0-9]*)"`)
+)
+
+// fuzzCode is the outcome of r: ok, compile, an error code, or the code an
+// xsl:catch caught.
+func fuzzCode(r fuzzRes) string {
+	if r.err == "" {
+		if m := fuzzCaughtRe.FindStringSubmatch(r.out); m != nil {
+			return "caught:" + m[1]
+		}
+		return "ok"
+	}
+	if strings.HasPrefix(r.err, "COMPILE") {
+		return "compile"
+	}
+	if m := fuzzCodeRe.FindString(r.err); m != "" {
+		return m
+	}
+	return "nocode"
+}
+
+// fuzzDiff says how b (bursts) or k (bursts, no fold) differs from tr (the
+// tree), or "" when they agree.
+func fuzzDiff(b, k, tr fuzzRes) string {
+	switch {
+	case b.panic != "" || k.panic != "" || tr.panic != "":
+		return "PANIC"
+	case b.trace.Guards+k.trace.Guards+tr.trace.Guards != 0:
+		return "GUARD"
+	case tr.trace.Streamed() != 0:
+		return "STREAMED WHILE OFF"
+	case b.out != tr.out || k.out != tr.out:
+		return "OUTPUT"
+	case (b.err == "") != (tr.err == "") || (k.err == "") != (tr.err == ""):
+		return "SUCCESS/ERROR"
+	case b.err != tr.err || k.err != tr.err:
+		if fuzzCode(b) != fuzzCode(tr) || fuzzCode(k) != fuzzCode(tr) {
+			return "ERRCODE " + fuzzCode(b) + "/" + fuzzCode(k) + " vs " + fuzzCode(tr)
+		}
+		return "ERRTEXT"
+	}
+	return ""
+}
+
+// fuzzKnown reports whether difference d of loop-shape case c is the
+// documented loop-shape error order (docs/known-gaps.md, "Error order can
+// differ from tree mode, for the loop shape"): the loop writes as it reads
+// and reports the first error it meets, the tree reads the whole document and
+// evaluates the whole select first. The class is exactly the one the stage-1b
+// fuzzer admitted, and nothing wider:
+//   - bursts and no-fold agree with each other, and
+//   - either the document is malformed or over MaxNodes/MaxBytes, the tree
+//     fails with FODC0002 (raised or caught) and bursts do not succeed -- a
+//     body error met before the bad tail or the limit;
+//   - or both fail with the same code but a different message -- with
+//     nested matches the tree evaluates //rec[p] parent by parent and bursts
+//     in document order, so a predicate error can name another item
+//     (XPath 3.1 §2.3.4 allows either).
+func fuzzKnown(c fuzzCase, d string, b, k, tr fuzzRes) bool {
+	if !strings.HasSuffix(c.kind, "-loop") || b.out != k.out || b.err != k.err {
+		return false
+	}
+	bc, tc := fuzzCode(b), fuzzCode(tr)
+	return (c.malform || c.maxNodes > 0 || c.maxBytes > 0) &&
+		(tc == "FODC0002" || tc == "caught:FODC0002") && bc != "ok" ||
+		d == "ERRTEXT"
+}
+
+func TestStreamFuzz(t *testing.T) {
+	if testing.Short() {
+		t.Skip("-short")
+	}
+	n, seed0 := 1000, int64(1)
+	if v := os.Getenv("GOXSLT_STREAM_FUZZ"); v != "" {
+		var err error
+		if n, err = strconv.Atoi(v); err != nil {
+			t.Fatalf("GOXSLT_STREAM_FUZZ: %v", err)
+		}
+	}
+	if v := os.Getenv("GOXSLT_STREAM_FUZZ_SEED"); v != "" {
+		var err error
+		if seed0, err = strconv.ParseInt(v, 10, 64); err != nil {
+			t.Fatalf("GOXSLT_STREAM_FUZZ_SEED: %v", err)
+		}
+	}
+	dir := t.TempDir()
+	tally := map[string]int{}
+	var trace streamtrace.Counts
+	for i := 0; i < n; i++ {
+		c := fuzzMake(seed0 + int64(i))
+		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(c.doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		b := fuzzRun(c, dir, true, true)
+		k := fuzzRun(c, dir, true, false)
+		tr := fuzzRun(c, dir, false, false)
+		tally["cases"]++
+		if b.trace.Streamed() > 0 {
+			tally["on burst path"]++
+			if b.trace.Fallbacks > 0 {
+				tally["fell back to tree"]++
+			}
+		}
+		for j, r := range b.trace.Runs {
+			trace.Runs[j] += r
+		}
+		d := fuzzDiff(b, k, tr)
+		if d != "" && fuzzKnown(c, d, b, k, tr) {
+			tally["known loop error order: "+d]++
+			d = ""
+		}
+		if d == "" {
+			continue
+		}
+		tally["DIFFERENCES"]++
+		if tally["DIFFERENCES"] <= 10 {
+			t.Errorf("seed %d: %s\nreplay: GOXSLT_STREAM_FUZZ=1 GOXSLT_STREAM_FUZZ_SEED=%d go test ./xslt -run 'TestStreamFuzz$' -v\n"+
+				"stylesheet:\n%s\ndocument:\n%s\nbursts  %+v\nno-fold %+v\ntree    %+v",
+				c.seed, d, c.seed, c.sheet, c.doc, b, k, tr)
+		}
+	}
+	keys := make([]string, 0, len(tally))
+	for k := range tally {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		t.Logf("STREAMFUZZ %-50s %d", k, tally[k])
+	}
+	for j, r := range trace.Runs {
+		t.Logf("STREAMFUZZ runs %-45s %d", streamtrace.Strategy(j), r)
+	}
+	t.Logf("STREAMFUZZ seeds %d..%d", seed0, seed0+int64(n)-1)
+}

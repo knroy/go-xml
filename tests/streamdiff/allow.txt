@@ -1,0 +1,27 @@
+# Differences tests/streamdiff accepts between its three recordings of
+# TestXSLT30Suite (base tree, branch, branch with GOXSLT_STREAM_OFF=1), in
+# tests/recdiff's rule format. Each rule names one case and why it moves from
+# run to run whatever the streaming code does; every one was seen in the
+# recorded differentials of the stage-1b streaming work. Anything else that
+# differs is a streaming bug until shown otherwise.
+
+# generate-id() is N<tree>x<order> (xdm Node.generateID). The tree number is
+# a process-wide counter (xdm nextTreeID), so it moves with how many trees
+# the cases before this one built -- bursts build trees of their own, and it
+# has moved between two runs of the same base too. The string is
+# implementation-dependent (F&O 3.1 §14.5.4). docbook-002 writes it into
+# fo:block ids, si-fork-801 into link hrefs.
+xslt30 docbook/docbook-002 N\d+x\d+
+xslt30 si-fork/si-fork-801 N\d+x\d+
+
+# fn:current-dateTime is not fixed by the XSLT harness, so these write the
+# instant each run happened.
+xslt30 evaluate/evaluate-052 \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z
+xslt30 expand-text/cvt-042 \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z
+
+# fn:current-date: these differ only when two legs run on either side of
+# midnight (UTC). format-date-037 writes the date; error-3160a evaluates
+# concat(current-date(), '/') and its XPST0003 message quotes the date and its
+# day ("01" must be separated from what follows in "2026-11-01Z/").
+xslt30 format-date/format-date-037 \d{4}-\d\d-\d\d
+xslt30 error/error-3160a \d{4}-\d\d-\d\d|"\d\d"

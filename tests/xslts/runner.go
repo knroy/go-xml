@@ -215,6 +215,7 @@ func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 		return out
 	}
 
+	markStreams()
 	res, terr := r.transformSafely(set, tc)
 
 	// A failure that is really an engine limitation the suite does not
