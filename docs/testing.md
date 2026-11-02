@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,017 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,025 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -550,6 +550,12 @@ a hit.
 go run ./tests/streamdiff <base-rev> <outdir>     # ~3 min
 go test ./xslt -run 'TestStreamFuzz$' -v          # 1000 cases; GOXSLT_STREAM_FUZZ=N, _SEED=S
 ```
+
+The streamed XPath split ([`xslt/streamsplit.go`](../xslt/streamsplit.go))
+has its own differential against tree evaluation of the same expression:
+`go test ./xslt -run TestStreamSplit -v` runs hand-written constructs, the W3C
+suite's consuming expressions, and a fuzzer (`GOXSLT_SPLIT_FUZZ=N`,
+`GOXSLT_SPLIT_FUZZ_SEED=S`).
 
 `tests/streamdiff` records TestXSLT30Suite three times:
 1. on `<base-rev>`, extracted with `git archive`;
