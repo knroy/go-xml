@@ -492,7 +492,8 @@ func (c *compiler) noteStreamSelect(n *xdm.Node, instr Instruction, sel *xpath.C
 		return
 	}
 	op.instr, op.sel = instr, sel
-	if op.split, op.dead = c.splitFor(sel, ns, op.doc, isXSL(n, "value-of")); op.dead != "" {
+	simple := isXSL(n, "value-of") || isXSL(n, "attribute")
+	if op.split, op.dead = c.splitFor(sel, ns, op.doc, simple); op.dead != "" {
 		return
 	}
 	c.stream.byInstr[instr] = op
@@ -527,9 +528,10 @@ func (c *compiler) streamOp(n *xdm.Node) *streamOp {
 	return c.stream.ops[n]
 }
 
-// splitFor splits sel for the cursor, or says why not. valueOf says sel is
-// an xsl:value-of's, which atomizes what it returns.
-func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc, valueOf bool) (*streamSplit, string) {
+// splitFor splits sel for the cursor, or says why not. simple says sel
+// makes simple content (xsl:value-of, xsl:attribute), which atomizes what it
+// returns.
+func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc, simple bool) (*streamSplit, string) {
 	if sel.CompatMode() {
 		return nil, "XPath 1.0 compatibility mode"
 	}
@@ -537,10 +539,11 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 	if e == nil {
 		return nil, "select does not parse again"
 	}
-	if _, ok := e.(*xpath.ContextItem); ok && valueOf {
-		// The value of the one node "." is its string value: read off the
-		// cursor rather than grounded. (Not in general: value-of merges
-		// adjacent text nodes before atomizing.)
+	if _, ctx := e.(*xpath.ContextItem); simple && (ctx || noTextNodes(e)) {
+		// Simple content (§5.7.2) drops zero-length text nodes, merges
+		// adjacent ones, then atomizes: with no text node in the value the
+		// first two do nothing, so it is data() of it, which the split
+		// reads off the cursor instead of grounding each node.
 		e = &xpath.FuncCall{Name: xdm.QName{URI: fnNS, Local: "data"}, Args: []xpath.Expr{e}}
 	}
 	s, why := splitStream(e, sel, doc)
@@ -548,6 +551,34 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 		return nil, "split: " + why
 	}
 	return s, ""
+}
+
+// noTextNodes reports, conservatively, whether e can return no text node:
+// a path ending in elements or attributes by name, or atomic values.
+func noTextNodes(e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.Step:
+		_, name := x.Test.(*xpath.NameTest)
+		kt, kind := x.Test.(*xpath.KindTest)
+		return name && x.Axis != xpath.AxisNamespace ||
+			kind && kt.Kind == xdm.KindElement && !kt.Any
+	case *xpath.PathExpr:
+		return len(x.Steps) > 0 && noTextNodes(x.Steps[len(x.Steps)-1])
+	case *xpath.FilterExpr:
+		return noTextNodes(x.Base)
+	case *xpath.FuncCall:
+		if outerInner(x) {
+			return noTextNodes(x.Args[0])
+		}
+	case *xpath.SequenceExpr:
+		for _, it := range x.Items {
+			if !noTextNodes(it) {
+				return false
+			}
+		}
+		return true
+	}
+	return atomicValued(e)
 }
 
 func isVarRef(e xpath.Expr, q xdm.QName) bool {
@@ -628,7 +659,10 @@ func (x *streamExec) readySelect(op *streamOp, minD int) string {
 		op.copies = true
 		return ""
 	}
-	return s.memory(minD)
+	if why := s.memory(minD); why != "" {
+		return elName(op.el) + " " + why + ": " + op.sel.Source()
+	}
+	return ""
 }
 
 // minDepth is the least depth below the context a match of P can be at.

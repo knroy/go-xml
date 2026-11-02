@@ -121,6 +121,15 @@ var coreBodies = []struct {
 	{`<out><xsl:copy-of select="//*"/></out>`, true},
 	{`<xsl:copy-of select="outermost(//rec)"/>`, true},
 	{`<xsl:for-each select="/*/rec"><r><xsl:copy-of select="sub"/></r></xsl:for-each>`, true},
+	// Simple content over nodes with no text node: their values read off
+	// the cursor; with text nodes, refused (they merge first).
+	{`<out><xsl:value-of select="/*/rec/sub"/></out>`, true},
+	{`<out><xsl:value-of select="//rec" separator="|"/></out>`, true},
+	{`<out><xsl:value-of select="(//sub)[2]"/></out>`, true},
+	{`<e><xsl:attribute name="a" select="//sub/@x"/></e>`, true},
+	{`<e><xsl:attribute name="a" select="//rec" separator="-"/></e>`, true},
+	{`<out><xsl:value-of select="//rec/text()"/></out>`, false},
+	{`<out><xsl:value-of select="//rec/node()"/></out>`, false},
 	// Nested container.
 	{`<out><xsl:source-document href="doc.xml" streamable="yes"><n><xsl:value-of select="count(//rec)"/></n></xsl:source-document>` +
 		`<xsl:value-of select="count(//sub)"/></out>`, true},
