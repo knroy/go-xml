@@ -1,7 +1,8 @@
 // Package xdmburst lets streamed XSLT cut bursts at a pattern with wildcards
-// and descendant steps without adding exported API to xdm. Package xdm sets
-// Parse in its init. The arguments typed any are xdm types: this package
-// cannot import xdm, which imports it.
+// and descendant steps, and internal/xdmstream drive xdm's stream parse,
+// without adding exported API to xdm. Package xdm sets Parse and Drive in its
+// init. The arguments typed any are xdm types: this package cannot import
+// xdm, which imports it.
 package xdmburst
 
 import "io"
