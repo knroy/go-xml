@@ -323,6 +323,44 @@ type Env struct {
 	// accumulate its own. Nil means unbounded, which is what a hand-built
 	// Context gets; NewContext installs a budget.
 	nodes *int64
+	// limits are the bounds nodes and bytes are checked against, and the
+	// running totals a host's caller may bound beside them. A pointer that
+	// travels with the counters, so a nested evaluation that adopts the
+	// budget cannot raise its bounds. Nil means the package defaults.
+	limits *budgetLimits
+}
+
+// budgetLimits bounds an evaluation's result-node and byte counters.
+//
+// The counters themselves (Env.nodes, Env.bytes) are what is checked against
+// nodes and bytes. A host may refund them for what it knows is no longer held
+// -- XSLT does for a streamed loop's items -- so they measure what the
+// evaluation holds rather than everything it built; nodesBuilt and
+// bytesBuilt, when positive, bound everything it built, through totals no
+// refund lowers. Set through xpathleaf.SetLimits.
+type budgetLimits struct {
+	nodes, bytes           int64 // resolved: math.MaxInt64 for none
+	nodesBuilt, bytesBuilt int64 // zero for none
+	builtNodes, builtBytes atomic.Int64
+	// nodesHit latches a node refusal, so that NodesRefused still reports a
+	// refusal a builder latched after a refund has brought the counter back
+	// under the bound.
+	nodesHit atomic.Bool
+}
+
+// nodeLimit and byteLimit are the bounds in force.
+func (e *Env) nodeLimit() int64 {
+	if e.limits == nil {
+		return MaxNodes
+	}
+	return e.limits.nodes
+}
+
+func (e *Env) byteLimit() int64 {
+	if e.limits == nil {
+		return MaxBytes
+	}
+	return e.limits.bytes
 }
 
 // staticContext is the static part of the context: the properties of the
@@ -444,8 +482,8 @@ func (c *Context) WithEnv(set func(e *Env)) *Context {
 	own := c.ev()
 	env := *own
 	set(&env)
-	env.items, env.bytes, env.entities, env.nodes =
-		own.items, own.bytes, own.entities, own.nodes
+	env.items, env.bytes, env.entities, env.nodes, env.limits =
+		own.items, own.bytes, own.entities, own.nodes, own.limits
 	n := *c
 	n.env = &env
 	return &n
@@ -856,12 +894,15 @@ func NewContext(item xdm.Item, funcs FunctionLibrary, configure ...func(e *Env))
 	r := &struct {
 		c Context
 		e Env
+		l budgetLimits
 	}{}
 	r.e.Ctx = context.Background()
 	for _, set := range configure {
 		set(&r.e)
 	}
 	r.e.items, r.e.bytes, r.e.nodes = new(int64), new(int64), new(int64)
+	r.l.nodes, r.l.bytes = MaxNodes, MaxBytes
+	r.e.limits = &r.l
 	// One entity-expansion allowance for the whole evaluation. Unlike items
 	// and bytes it is NOT reset per expression by Compiled.Eval: the reset is
 	// what the per-call mint already amounted to, and a budget an expression
@@ -1606,7 +1647,13 @@ func (c *Context) countBytes(n int) error {
 	if c == nil || c.ev().bytes == nil || n <= 0 {
 		return nil
 	}
-	if atomic.AddInt64(c.ev().bytes, int64(n)) > MaxBytes {
+	e := c.ev()
+	lim := e.byteLimit()
+	over := atomic.AddInt64(e.bytes, int64(n)) > lim
+	if b := e.limits; !over && b != nil && b.bytesBuilt > 0 && b.builtBytes.Add(int64(n)) > b.bytesBuilt {
+		over, lim = true, b.bytesBuilt
+	}
+	if over {
 		// XPDY0130 is this engine's own code for "the evaluation asked for
 		// more than I will allocate", and the wording says bytes rather than
 		// items so the two refusals are not confused. The suite sanctions it
@@ -1617,7 +1664,7 @@ func (c *Context) countBytes(n int) error {
 		return fmt.Errorf(
 			"XPDY0130: evaluation built more than %d bytes of string "+
 				"content; the expression is building a string too large to "+
-				"hold: %w", MaxBytes, xdm.ErrResourceLimit)
+				"hold: %w", lim, xdm.ErrResourceLimit)
 	}
 	return nil
 }
@@ -1639,6 +1686,9 @@ func (c *Context) refundBytes(n int) {
 		return
 	}
 	atomic.AddInt64(c.ev().bytes, -int64(n))
+	if b := c.ev().limits; b != nil && b.bytesBuilt > 0 {
+		b.builtBytes.Add(-int64(n))
+	}
 }
 
 // ChargeBytes charges n bytes of built string content against the evaluation
@@ -1662,14 +1712,23 @@ func (c *Context) countNodes(n int) error {
 	if c == nil || c.ev().nodes == nil || n <= 0 {
 		return nil
 	}
-	if atomic.AddInt64(c.ev().nodes, int64(n)) > MaxNodes {
-		return nodesRefusal()
+	e := c.ev()
+	lim := e.nodeLimit()
+	over := atomic.AddInt64(e.nodes, int64(n)) > lim
+	if b := e.limits; !over && b != nil && b.nodesBuilt > 0 && b.builtNodes.Add(int64(n)) > b.nodesBuilt {
+		over, lim = true, b.nodesBuilt
+	}
+	if over {
+		if e.limits != nil {
+			e.limits.nodesHit.Store(true)
+		}
+		return nodesRefusal(lim)
 	}
 	return nil
 }
 
 // nodesRefusal is the XPDY0130 the node budget raises.
-func nodesRefusal() error {
+func nodesRefusal(lim int64) error {
 	// XPDY0130 again, and the wording says nodes so that the three
 	// refusals are not confused with one another. XPath 3.1 §2.3.1
 	// sanctions exactly this: "limitations may exist on the maximum
@@ -1680,7 +1739,7 @@ func nodesRefusal() error {
 	return fmt.Errorf(
 		"XPDY0130: evaluation constructed more than %d result-tree "+
 			"nodes; the transformation is building a tree too large to "+
-			"hold: %w", MaxNodes, xdm.ErrResourceLimit)
+			"hold: %w", lim, xdm.ErrResourceLimit)
 }
 
 // NodesRefused reports the node-budget refusal if any charge has already
@@ -1689,10 +1748,19 @@ func nodesRefusal() error {
 // temporary tree that crossed the bound would otherwise end as truncated
 // output with no error.
 func (c *Context) NodesRefused() error {
-	if c == nil || c.ev().nodes == nil || atomic.LoadInt64(c.ev().nodes) <= MaxNodes {
+	if c == nil || c.ev().nodes == nil {
 		return nil
 	}
-	return nodesRefusal()
+	e := c.ev()
+	switch b := e.limits; {
+	case atomic.LoadInt64(e.nodes) > e.nodeLimit():
+		return nodesRefusal(e.nodeLimit())
+	case b != nil && b.nodesBuilt > 0 && b.builtNodes.Load() > b.nodesBuilt:
+		return nodesRefusal(b.nodesBuilt)
+	case b != nil && b.nodesHit.Load():
+		return nodesRefusal(e.nodeLimit())
+	}
+	return nil
 }
 
 // ChargeNodes charges n constructed result-tree nodes against the evaluation
@@ -1816,6 +1884,10 @@ func (c *Context) AdoptBudget(src *Context) *Context {
 	// could build MaxNodes again at every level of the nest.
 	if from.nodes != nil {
 		env.nodes = from.nodes
+	}
+	// The bounds travel with the counters they are checked against.
+	if from.limits != nil {
+		env.limits = from.limits
 	}
 	n.env = &env
 	return &n
