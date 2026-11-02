@@ -92,6 +92,8 @@ type streamExec struct {
 	// drainFirst says nothing at the document node consumes: the document
 	// is read through before the body runs, so its errors come first.
 	drainFirst bool
+	// promoted are the instructions promote took as consuming.
+	promoted map[*xdm.Node]bool
 }
 
 // streamOp is a consuming instruction of the plan.
@@ -143,7 +145,8 @@ func planStream(sd *xdm.Node, shared bool) (*streamExec, string) {
 	if !pl.trusted() {
 		return nil, "verdict not trusted"
 	}
-	x := &streamExec{ops: map[*xdm.Node]*streamOp{}, byInstr: map[Instruction]*streamOp{}}
+	x := &streamExec{ops: map[*xdm.Node]*streamOp{}, byInstr: map[Instruction]*streamOp{},
+		promoted: map[*xdm.Node]bool{}}
 	b := &streamBuilder{pl: pl, x: x, ops: &x.top, kinds: &x.kinds}
 	if !b.seq(sd, vNone) {
 		return nil, b.why
@@ -181,11 +184,13 @@ func (b *streamBuilder) seq(el *xdm.Node, f vfocus) bool {
 		}
 		switch r.props.sweep {
 		case sweepMotionless:
-			if !b.motionless(ch, f) {
+			if !b.motionless(ch, f) && !b.promote(ch) {
 				return false
 			}
-			b.kinds[streamtrace.KindTree]++
-			continue
+			if !b.x.promoted[ch] {
+				b.kinds[streamtrace.KindTree]++
+				continue
+			}
 		case sweepConsuming:
 		default:
 			return b.refuse("free-ranging " + elName(ch))
@@ -330,13 +335,14 @@ func (b *streamBuilder) members(el *xdm.Node, body []*xdm.Node) bool {
 			return b.refuse("no trusted record for " + elName(ch))
 		}
 		if r.props.sweep == sweepMotionless {
-			if !b.motionless(ch, vElem) {
+			if !b.motionless(ch, vElem) && !b.promote(ch) {
 				return false
 			}
-			b.kinds[streamtrace.KindTree]++
-			continue
-		}
-		if r.props.sweep != sweepConsuming {
+			if !b.x.promoted[ch] {
+				b.kinds[streamtrace.KindTree]++
+				continue
+			}
+		} else if r.props.sweep != sweepConsuming {
 			return b.refuse("free-ranging " + elName(ch))
 		}
 		if consumers++; consumers > 1 {
@@ -346,6 +352,30 @@ func (b *streamBuilder) members(el *xdm.Node, body []*xdm.Node) bool {
 			return false
 		}
 	}
+	return true
+}
+
+// promote takes el, an instruction the analysis calls motionless whose
+// select a view cannot answer, as a consuming one instead, when it is one a
+// split may take (selectOp): the split, which checks the select's own
+// structure, decides at compile time. (The analysis's simple map is one such
+// verdict: the sweep of A ! B is B's, where §19.8.8.7 says the wider.)
+//
+// A literal result element is promoted too, so that its content is planned
+// as a consumer's: one such select may be inside it.
+func (b *streamBuilder) promote(el *xdm.Node) bool {
+	if el.Name().URI == xdm.NSXSL {
+		switch el.Name().Local {
+		case "value-of", "copy-of", "sequence":
+			if el.Attr("", "select") == nil {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	b.why = ""
+	b.x.promoted[el] = true
 	return true
 }
 
@@ -435,7 +465,7 @@ func (b *streamBuilder) attrs(el *xdm.Node, f vfocus) bool {
 		}
 		switch name.Local {
 		case "select":
-			if r := b.pl.rec(el); r != nil && r.props.sweep == sweepConsuming {
+			if r := b.pl.rec(el); r != nil && r.props.sweep == sweepConsuming || b.x.promoted[el] {
 				continue
 			}
 			if !b.expr(el, a.Value(), f, false) {
@@ -546,8 +576,16 @@ func (c *compiler) splitFor(sel *xpath.Compiled, ns xpath.NamespaceResolver, doc
 		// Simple content (§5.7.2) drops zero-length text nodes, merges
 		// adjacent ones, then atomizes: with no text node in the value the
 		// first two do nothing, so it is data() of it, which the split
-		// reads off the cursor instead of grounding each node.
-		e = &xpath.FuncCall{Name: xdm.QName{URI: fnNS, Local: "data"}, Args: []xpath.Expr{e}}
+		// reads off the cursor instead of grounding each node. Of a choice,
+		// it is the choice of data() of each branch, which the split takes.
+		data := func(x xpath.Expr) xpath.Expr {
+			return &xpath.FuncCall{Name: xdm.QName{URI: fnNS, Local: "data"}, Args: []xpath.Expr{x}}
+		}
+		if x, ok := e.(*xpath.IfExpr); ok {
+			e = &xpath.IfExpr{Cond: x.Cond, Then: data(x.Then), Else: data(x.Else)}
+		} else {
+			e = data(e)
+		}
 	}
 	s, why := splitStream(e, sel, doc)
 	if s == nil {
@@ -580,6 +618,8 @@ func noTextNodes(e xpath.Expr) bool {
 			}
 		}
 		return true
+	case *xpath.IfExpr:
+		return noTextNodes(x.Then) && noTextNodes(x.Else)
 	}
 	return atomicValued(e)
 }
@@ -625,8 +665,10 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 			// Matches cannot nest, or those inside an outermost one are not
 			// results and no predicate's error is to be raised there.
 			s.mode = matchBody
-		case op.grounded && k >= 2:
-			// The body reads its match's content as it likes, on a copy.
+		case op.grounded && k >= 1:
+			// The body reads its match's content as it likes, on a copy
+			// of one match at a time: a match that is the document element
+			// is copied whole, which costs what its tree costs.
 			s.mode = matchGround
 			kinds[streamtrace.KindGround]++
 			kinds[streamtrace.KindForEach]++

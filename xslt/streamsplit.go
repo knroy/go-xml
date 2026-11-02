@@ -392,7 +392,9 @@ func (s *streamSplit) class() string {
 		return "subtree"
 	case s.red != "":
 		return "bounded"
-	case s.steps == nil || s.atomize || s.tailText != "" || s.mode == matchView && atomicTail(s.tail):
+	case s.steps == nil || s.atomize || s.tailText != "" ||
+		(s.mode == matchView || s.mode == matchGround) && s.tail != nil && valueTail(s.tail.Expr()):
+		// A grounded match's copy is let go once its tail has made values.
 		return "output"
 	}
 	return "nodes"
@@ -400,7 +402,24 @@ func (s *streamSplit) class() string {
 
 var splitClassRank = map[string]int{"bounded": 0, "output": 1, "nodes": 2, "subtree": 3}
 
-func atomicTail(c *xpath.Compiled) bool { return atomicValued(c.Expr()) }
+// valueTail reports, conservatively, whether a tail makes only atomic
+// values: its last step does, perhaps filtered.
+func valueTail(e xpath.Expr) bool {
+	if pe, ok := e.(*xpath.PathExpr); ok && len(pe.Steps) > 0 {
+		e = pe.Steps[len(pe.Steps)-1]
+	}
+	for {
+		f, ok := e.(*xpath.FilterExpr)
+		if !ok {
+			break
+		}
+		e = f.Base
+	}
+	if f, ok := e.(*xpath.FuncCall); ok && f.Name.URI == fnNS && splitAtomicFns[f.Name.Local] {
+		return true
+	}
+	return atomicValued(e)
+}
 
 // splitCounts are the reducers that need only how many items there are, and
 // splitFolds those that fold their values.

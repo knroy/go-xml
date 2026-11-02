@@ -132,6 +132,16 @@ var coreBodies = []struct {
 	{`<e><xsl:attribute name="a" select="//rec" separator="-"/></e>`, true},
 	{`<out><xsl:value-of select="//rec/text()"/></out>`, false},
 	{`<out><xsl:value-of select="//rec/node()"/></out>`, false},
+	// The burst plans' shapes the core took at M1.6: values made from each
+	// grounded match (sf-deep-equal, si-lre-C), a choice under simple
+	// content (sx-ifExpr), a simple map the analysis calls motionless
+	// (sx-bang), a body on a copy of a match that may be the document
+	// element (si-lre-A).
+	{`<out><xsl:sequence select="/*/rec/sub/number()"/></out>`, true},
+	{`<out><xsl:sequence select="/*/rec[position() lt 3]/(@v * 2)"/></out>`, true},
+	{`<out><xsl:value-of select="if (false()) then () else data(/*/rec/@v)"/></out>`, true},
+	{`<out><xsl:sequence select="subsequence(data(*/rec/@v), 1, 2) ! (position(), .)"/></out>`, true},
+	{`<xsl:for-each select="outermost(//rec)"><r><xsl:sequence select="text()"/></r></xsl:for-each>`, true},
 	// Nested container.
 	{`<out><xsl:source-document href="doc.xml" streamable="yes"><n><xsl:value-of select="count(//rec)"/></n></xsl:source-document>` +
 		`<xsl:value-of select="count(//sub)"/></out>`, true},
@@ -139,8 +149,9 @@ var coreBodies = []struct {
 	{`<xsl:for-each select="//rec"><r><xsl:value-of select="."/></r></xsl:for-each>`, false},
 	{`<xsl:for-each select="//rec"><r n="{count(.//node())}"/></xsl:for-each>`, false},
 	{`<out><xsl:value-of select="(//rec)[2]/@k"/></out>`, false},
-	// Refused: copy-of(.) of what may be the document element.
-	{`<xsl:for-each select="/*"><xsl:copy-of select="."/></xsl:for-each>`, false},
+	// A body on a grounded copy of what may be the document element: the
+	// copy costs what its tree does (the burst path's shape, si-lre-C).
+	{`<xsl:for-each select="/*"><xsl:copy-of select="."/></xsl:for-each>`, true},
 	{`<xsl:for-each select="//rec"><xsl:sort select="@k"/><r/></xsl:for-each>`, false},
 	{`<xsl:apply-templates select="//rec"/>`, false},
 }
