@@ -370,7 +370,9 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		if _, text := tok.(*xml.CharData); !text {
 			run.flush(&spaces, stripSpaceAt)
 			if bs != nil {
-				bs.trimLeaves(cur, depth, &spaces, &names)
+				if err := bs.trimLeaves(cur, depth, &spaces, &names); err != nil {
+					return nil, err
+				}
 			}
 		}
 

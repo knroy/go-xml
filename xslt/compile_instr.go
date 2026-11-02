@@ -977,7 +977,7 @@ func (c *compiler) compileForEach(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 		return nil, err
 	}
 	instr := &forEachInstr{sel: sel, sorts: sorts, body: body}
-	c.noteBurstLoop(n, instr, sel)
+	c.noteBurstLoop(n, instr, sel, ns)
 	return instr, nil
 }
 
@@ -2201,12 +2201,17 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// After xsl:break the rest of the document is still read, so that a
 		// malformed tail is the error it is when the tree is built first.
 		pos := 0
+		live := rt.liveLoop()
 		err := feed.read(func(it xdm.Item) error {
 			if broke {
 				return nil
 			}
 			pos++
+			live.begin(rt, out)
 			if err := step(pos, it, 0); err != errStopIterate {
+				if err == nil {
+					live.end(rt, out, carried)
+				}
 				return err
 			}
 			return nil
@@ -2302,7 +2307,7 @@ func (c *compiler) compileIterate(n *xdm.Node, ns *nsResolver) (Instruction, err
 		return nil, err
 	}
 	instr.body = body
-	c.noteBurstLoop(n, instr, sel)
+	c.noteBurstLoop(n, instr, sel, ns)
 	return instr, nil
 }
 

@@ -181,12 +181,18 @@ Measured on branches in 2026-11 and not adopted, each with the reason:
 
 Since v2.2.0 an `xsl:source-document streamable="yes"` whose body is one
 `xsl:for-each` or `xsl:iterate` (optionally inside constant literal result
-elements) over a child path of plain names, with non-positional predicates on
-the last step only, and a body the gate recognises with a known and verified
+elements) over a record path, with non-positional predicates on the last step
+only, and a body the gate recognises with a known and verified
 §19.8 verdict, runs record by record
 through `xdm.ParseBursts`: a 1 GB file totalled by `xsl:iterate` peaks at
 27 MB RSS against 3.7 GB, at about 2× the CPU. Everything else builds the tree,
-as before.
+as before. A record path is child or descendant steps whose tests are names or
+wildcards (`doc/rec`, `//rec`, `doc//rec`, `/*/*/rec`, `*:rec`, `p:*`, names
+resolved through `xpath-default-namespace`), or `outermost()`/`innermost()` of
+one (since v2.3.0). A record is cut at its outermost match, so a match nested
+in it is delivered inside its tree, in document order. Small records share one
+tree, so ancestors are copied once per element opened: `count(//rec)` under a
+900-deep spine takes 2.0 s of CPU against the tree's 1.6 s.
 
 The second shape is a body that is one `xsl:value-of`, `xsl:copy-of` or
 `xsl:sequence` (again optionally inside constant literal result elements) whose
@@ -201,7 +207,8 @@ still growing with the input. A select that would keep the records' nodes or
 copies (`copy-of(doc/rec)`, filters returning nodes, `head`/`tail` passed on)
 is refused and runs on the tree, because a kept record costs more there than in
 a whole tree (945 B against 208 B). Also refused: `distinct-values`, `reverse`,
-`sort`, `last()`, union/intersect/except, `let`, user functions, wildcard steps.
+`sort`, `last()`, union/intersect/except, `let`, user functions, and paths to
+non-elements (`//text()`, `//@x`).
 
 In the W3C XSLT 3.0 run 364 cases take the burst path (9 before the second
 shape). Of the 786 single-instruction bodies over one record path with a known
@@ -209,7 +216,16 @@ and verified verdict, 294 are admitted (261 bounded reducers, 33 pipelined).
 Also:
 
 - **The result is still built in memory**, so a large filtered copy grows with
-  its output and stops at the result-node cap.
+  its output and stops at the result-node cap. Temporary work per record is not
+  charged cumulatively since v2.3.0: a loop item that writes nothing to the
+  output hands back up to 4,096 nodes and 64 KiB it dropped
+  (`TransformOptions.MaxNodesBuilt`/`MaxBytesBuilt` lift that cap). An item that
+  writes output keeps all it built charged, so a stream that both writes and
+  builds temporaries per record reaches the cap sooner than its output alone.
+- **Growing state is bounded only per value or per expression.** A carried
+  integer multiplied each record (`MaxDigits`), a sequence appended to or
+  passed through `distinct-values` each record (`MaxItems`) run quadratic time
+  and are stopped by the context deadline, before and after v2.3.0.
 - **Error order can differ from tree mode, for the loop shape.** (The single-instruction
   shape re-runs on the tree after any error, so its errors are the tree's; the
   cost is a second read of the document, and the 1 GiB string budget charges the

@@ -1,6 +1,9 @@
 package xpath
 
 import (
+	"math"
+	"sync/atomic"
+
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 )
@@ -67,4 +70,51 @@ func hostOnCall(h *xpathleaf.Host, mark bool) *xpathleaf.Host {
 	n.Current, n.CurrentSet = nil, true
 	n.Absent = n.Absent || mark
 	return &n
+}
+
+func init() {
+	xpathleaf.SetLimits = func(c any, l xpathleaf.Limits) {
+		b := c.(*Context).ev().limits
+		if b == nil {
+			return
+		}
+		b.nodes, b.bytes = limitOr(l.Nodes, MaxNodes), limitOr(l.Bytes, MaxBytes)
+		b.nodesBuilt, b.bytesBuilt = max(l.NodesBuilt, 0), max(l.BytesBuilt, 0)
+	}
+	xpathleaf.Charged = func(c any) (int64, int64) {
+		e := c.(*Context).ev()
+		if e.nodes == nil || e.bytes == nil {
+			return 0, 0
+		}
+		return atomic.LoadInt64(e.nodes), atomic.LoadInt64(e.bytes)
+	}
+	xpathleaf.Refund = func(c any, nodes, bytes int64) {
+		e := c.(*Context).ev()
+		refund(e.nodes, nodes)
+		refund(e.bytes, bytes)
+	}
+}
+
+// limitOr is a caller's limit: def for zero, none for negative.
+func limitOr(v, def int64) int64 {
+	switch {
+	case v == 0:
+		return def
+	case v < 0:
+		return math.MaxInt64
+	}
+	return v
+}
+
+// refund lowers *p by n, never below zero.
+func refund(p *int64, n int64) {
+	if p == nil || n <= 0 {
+		return
+	}
+	for {
+		old := atomic.LoadInt64(p)
+		if atomic.CompareAndSwapInt64(p, old, max(old-n, 0)) {
+			return
+		}
+	}
 }

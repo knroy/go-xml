@@ -84,3 +84,26 @@ var (
 // select expression in parts this way (xslt/streamburst.go). Package xpath
 // sets it in its init.
 var WithExpr func(c, e any) any
+
+// Limits are the bounds an evaluation's result-node and string-byte counters
+// are checked against, for a host that offers its caller more than the
+// package defaults. Nodes and Bytes bound the counters, which a host may
+// refund (Refund); zero is xpath.MaxNodes or xpath.MaxBytes and a negative
+// value is no bound. NodesBuilt and BytesBuilt, when positive, bound every
+// node and byte charged, refunds notwithstanding; zero or negative is none.
+type Limits struct {
+	Nodes, Bytes           int64
+	NodesBuilt, BytesBuilt int64
+}
+
+// Package xpath sets these in its init. ctx is a *xpath.Context. SetLimits
+// writes the limits of a context the caller has just made with NewContext and
+// not yet shared; a nested evaluation that adopts the budget takes them with
+// it. Charged reports the result-node and byte counters, and Refund lowers
+// them by what the host knows is no longer held (never below zero). Neither
+// touches the NodesBuilt and BytesBuilt totals.
+var (
+	SetLimits func(ctx any, l Limits)
+	Charged   func(ctx any) (nodes, bytes int64)
+	Refund    func(ctx any, nodes, bytes int64)
+)

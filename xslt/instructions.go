@@ -1666,12 +1666,18 @@ type forEachInstr struct {
 func (i *forEachInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if f := rt.burstsFor(i); f != nil {
 		pos := 0
+		live := rt.liveLoop()
 		return f.read(func(it xdm.Item) error {
 			if err := rt.ctx.Err(); err != nil {
 				return err
 			}
 			pos++
-			return execSequence(i.body, rt.withCurrent(it, pos, 0).clearCurrentRule(), out)
+			live.begin(rt, out)
+			if err := execSequence(i.body, rt.withCurrent(it, pos, 0).clearCurrentRule(), out); err != nil {
+				return err
+			}
+			live.end(rt, out, nil)
+			return nil
 		})
 	}
 	seq, err := i.sel.Eval(rt.ctx)
