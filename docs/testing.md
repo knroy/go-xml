@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,011 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,015 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -540,7 +540,11 @@ Streamed execution must be byte-identical to tree mode, which stays the
 oracle. Two tools check this, and both count what took the streamed path
 ([`internal/streamtrace`](../internal/streamtrace/streamtrace.go)): runs per
 strategy (fold, collect, for-each, iterate), fallbacks to the tree, and guard
-hits, which must be 0.
+hits, which must be 0. The guard is xdm's posture guard: a view of a
+streamed element (`Cursor.View` in
+[`internal/xdmstream`](../internal/xdmstream/xdmstream.go)) asked for
+content it does not have panics with `streamtrace.PostureError` and counts
+a hit.
 
 ```
 go run ./tests/streamdiff <base-rev> <outdir>     # ~3 min
