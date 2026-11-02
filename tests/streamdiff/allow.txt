@@ -16,6 +16,12 @@ xslt30 si-fork/si-fork-801 N\d+x\d+
 # document-2011 writes generate-id(document('')) into @id; it moved when M2
 # streamed the attr/streamable cases that run before it (views are trees).
 xslt30 document/document-2011 N\d+x\d+
+# streamable-007 and -022 write generate-id() of their streamed principal
+# input: under TransformReader (M2b) the harness builds no tree of it, its
+# views being trees of their own, so the tree number differs from the off
+# leg's and the base's; the order part (x...) is the same.
+xslt30 streamable/streamable-007 N\d+x\d+
+xslt30 streamable/streamable-022 N\d+x\d+
 
 # fn:current-dateTime is not fixed by the XSLT harness, so these write the
 # instant each run happened.
