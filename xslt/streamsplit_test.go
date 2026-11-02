@@ -874,7 +874,7 @@ func TestStreamSplitMemory(t *testing.T) {
 			}
 		})
 		t.Logf("%s: peak %.1f MB, tree %.1f MB", src, float64(peak)/1e6, float64(tree)/1e6)
-		if peak > 24<<20 || peak > tree/3 {
+		if (peak > 24<<20 || peak > tree/3) && !raceEnabled { // see TestStreamCoreMemory
 			t.Errorf("%s: peak live heap %.1f MB (tree %.1f MB)", src, float64(peak)/1e6, float64(tree)/1e6)
 		}
 	}
