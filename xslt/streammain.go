@@ -44,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
@@ -59,6 +60,9 @@ var traceMain func(mode, why string)
 // principal input can be streamed in, once it has compiled.
 func (c *compiler) planMainStreams() {
 	s := c.sheet
+	if s.source == nil {
+		return
+	}
 	els := s.source.ChildElements()
 	if len(els) == 0 {
 		return
@@ -68,13 +72,7 @@ func (c *compiler) planMainStreams() {
 		return
 	}
 	why := s.mainRefusal()
-	for _, m := range slices.Sorted(func(yield func(string) bool) {
-		for m := range rs.modes {
-			if !yield(m) {
-				return
-			}
-		}
-	}) {
+	for _, m := range slices.Sorted(maps.Keys(rs.modes)) {
 		w := why
 		if w == "" {
 			w = s.linkMain(m, rs)
