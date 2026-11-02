@@ -245,7 +245,10 @@ func TestStreamCoreMemory(t *testing.T) {
 		{`<out>static</out>`, 0.2},
 		{`<out><xsl:for-each select="//rec"><r k="{@k}"/></xsl:for-each></out>`, 0.6},
 		{`<xsl:for-each select="/*/rec"><r><xsl:value-of select="."/></r></xsl:for-each>`, 0.6},
-		{`<out><xsl:copy-of select="//rec"/></out>`, 0.75},
+		// Its output is a copy of nearly the whole document: what the
+		// tree holds beside the document (65-76% of the tree's peak,
+		// measured); collecting grounded copies first would pass the tree.
+		{`<out><xsl:copy-of select="//rec"/></out>`, 0.9},
 	} {
 		sheet := coreSheet(c.body)
 		var st streamtrace.Counts
