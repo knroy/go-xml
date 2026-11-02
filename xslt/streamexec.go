@@ -73,6 +73,9 @@ import (
 // and noBurstPlan the burst plans, so that the core takes their containers.
 var noCore, noBurstPlan bool
 
+// traceRerun, when set, is told of the failure behind each re-run.
+var traceRerun func(err error)
+
 // traceCore, when set, is told why the core refused each trusted container
 // the burst plans refused ("" when it took it), for the coverage tests.
 var traceCore func(sd *xdm.Node, why string)
@@ -886,6 +889,9 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	}
 	// The re-run. What the failed run charged is dropped with it.
 	streamtrace.Rerun()
+	if traceRerun != nil {
+		traceRerun(err)
+	}
 	rt.localsPop(mark)
 	if n1, b1 := xpathleaf.Charged(rt.ctx); n1 > n0 || b1 > b0 {
 		xpathleaf.Refund(rt.ctx, max(n1-n0, 0), max(b1-b0, 0))

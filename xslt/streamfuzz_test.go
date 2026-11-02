@@ -1,14 +1,21 @@
 package xslt
 
-// TestStreamFuzz is the differential fuzzer for burst execution: each
+// TestStreamFuzz is the differential fuzzer for streamed execution: each
 // generated case -- a random record document, possibly malformed or over a
 // node or byte limit, and a streamable xsl:source-document whose body is one
 // value-of/copy-of/sequence over a record path or a for-each/iterate over
-// one, many of them shapes the gate must refuse -- runs with bursts, with
-// bursts but no folding, and on the tree, and all three must agree.
+// one, many of them shapes the gate must refuse, or (fuzzCoreShapes) the
+// streamed core's shapes: wrappers, loops whose bodies read their matches,
+// selects inside -- runs with streaming on, with no folding, on the tree,
+// and with the burst plans off, so that the core takes their containers
+// too; all four must agree, the last exactly (the core re-runs on any
+// failure, so its errors are the tree's).
 //
 //	go test ./xslt -run 'TestStreamFuzz$' -v                      # default 1000 cases from seed 1
 //	GOXSLT_STREAM_FUZZ=100000 GOXSLT_STREAM_FUZZ_SEED=1 go test ./xslt -run 'TestStreamFuzz$' -v -timeout 0
+//
+// GOXSLT_STREAM_FUZZ_CORE=0 makes only the stage-1b cases, each exactly as
+// that grammar made it for its seed, for comparing a run with an older one.
 //
 // A failing case prints its seed and the command that replays it alone.
 
@@ -323,6 +330,97 @@ type fuzzCase struct {
 	kind       string
 }
 
+// fuzzCoreShapes says fuzzMake may make a case of the core's shapes (C5): off
+// with GOXSLT_STREAM_FUZZ_CORE=0, when every case is the one the stage-1b
+// grammar made for its seed, so that a run compares with the base's.
+var fuzzCoreShapes = os.Getenv("GOXSLT_STREAM_FUZZ_CORE") != "0"
+
+// fuzzIsCore decides, from a random stream of its own, whether the case of
+// seed is a core shape: the stage-1b cases keep their draws.
+func fuzzIsCore(seed int64) bool {
+	return fuzzCoreShapes && rand.New(rand.NewSource(seed*7919+17)).Intn(100) < 40
+}
+
+// coreLeaf is an element-context consumer for a loop body (C5): the match's
+// own content read at its start tag, a reducer of its children, a nested
+// loop, or none (a motionless body).
+func (g *fuzzGen) coreBody() string {
+	return g.pick(
+		`<r><xsl:value-of select="."/></r>`, `<xsl:copy-of select="."/>`,
+		`<r n="{name()}"><xsl:value-of select="count(sub)"/></r>`,
+		`<r><xsl:value-of select="sum(sub/@x)"/></r>`, `<r><xsl:sequence select="exists(sub)"/></r>`,
+		`<r k="{@k}"><xsl:for-each select="sub"><s x="{@x}" p="{position()}"/></xsl:for-each></r>`,
+		`<xsl:copy><xsl:copy-of select="@*"/><xsl:value-of select="string(.)"/></xsl:copy>`,
+		`<xsl:if test="@k = 'a'"><a><xsl:value-of select="."/></a></xsl:if>`,
+		`<xsl:choose><xsl:when test="@v = '1'"><one><xsl:copy-of select="sub"/></one></xsl:when>`+
+			`<xsl:otherwise><r p="{position()}"/></xsl:otherwise></xsl:choose>`,
+		`<r><xsl:attribute name="n" select="count(.//node())"/></r>`,
+		`<xsl:element name="e{position()}"><xsl:value-of select="sub[1]/@x"/></xsl:element>`,
+		`<r><xsl:value-of select="max(sub/@x)"/></r>`, // refused: no fallback below the document
+		`<r k="{@k}" p="{position()}"/>`, `<xsl:copy/>`, `<r a="{ancestor::*[1]/@id}" d="{count(ancestor::*)}"/>`,
+		`<r><xsl:copy-of select="sub"/></r>`, `<r><xsl:value-of select="string-join(sub/@x, '-')"/></r>`,
+	)
+}
+
+// coreWrap wraps s, the content of a container, in a random wrapper.
+func (g *fuzzGen) coreWrap(s string) string {
+	switch g.n(8) {
+	case 0:
+		return `<out a="{1 + 1}">` + s + `</out>`
+	case 1:
+		return `<xsl:element name="w{2}">` + s + `</xsl:element>`
+	case 2:
+		return `<xsl:if test="true()">` + s + `</xsl:if>`
+	case 3:
+		return `<xsl:choose><xsl:when test="false()"><no/></xsl:when><xsl:otherwise>` + s + `</xsl:otherwise></xsl:choose>`
+	case 4:
+		return `<xsl:variable name="m" select="'v'"/><o m="{$m}">` + s + `</o>`
+	case 5:
+		return `<pre/>` + s + `<post n="{1}"/>`
+	case 6:
+		return `<x><xsl:source-document streamable="yes" href="doc.xml"><n><xsl:value-of select="count(//sub)"/></n>` +
+			`</xsl:source-document>` + s + `</x>`
+	}
+	return `<w>` + s + `</w>`
+}
+
+// coreContent is a container body of the core's shapes, and whether it is
+// a loop.
+func (g *fuzzGen) coreContent(esc func(string) string) (string, bool) {
+	var s string
+	loop := true
+	switch g.n(10) {
+	case 0, 1, 2:
+		loop = false
+		sel := esc(g.selectExpr())
+		switch g.n(4) {
+		case 0:
+			s = `<xsl:value-of select="` + sel + `"/>`
+		case 1:
+			s = `<xsl:copy-of select="` + sel + `"/>`
+		case 2:
+			s = `<xsl:sequence select="` + sel + `"/>`
+		default:
+			s = `<e><xsl:attribute name="n" select="` + sel + `"/></e>`
+		}
+	case 3:
+		loop = false
+		s = `<static>text</static>`
+	case 4:
+		p := esc(g.path())
+		s = `<xsl:iterate select="` + p + `"><xsl:param name="t" select="0"/><xsl:on-completion><t v="{$t}"/></xsl:on-completion>` +
+			`<xsl:next-iteration><xsl:with-param name="t" select="$t + ` + g.pick("1", "count(.//node())", "string-length(@k)") +
+			`"/></xsl:next-iteration></xsl:iterate>`
+	default:
+		p := esc(g.path())
+		s = `<xsl:for-each select="` + p + `">` + g.coreBody() + `</xsl:for-each>`
+	}
+	for i, n := 0, g.n(3); i < n; i++ {
+		s = g.coreWrap(s)
+	}
+	return s, loop
+}
+
 func fuzzMake(seed int64) fuzzCase {
 	g := &fuzzGen{r: rand.New(rand.NewSource(seed))}
 	g.root = g.pick("doc", "root", "account")
@@ -355,6 +453,30 @@ func fuzzMake(seed int64) fuzzCase {
 		s.WriteString("<xsl:try>")
 	}
 	s.WriteString(`<xsl:source-document streamable="yes" href="doc.xml">`)
+	if fuzzIsCore(seed) {
+		content, loop := g.coreContent(func(x string) string {
+			return strings.ReplaceAll(strings.ReplaceAll(x, "<", "&lt;"), `"`, "&quot;")
+		})
+		// A loop the burst path takes has its error order (fuzzKnown).
+		g.kind = "core"
+		if loop {
+			g.kind = "core-loop"
+		}
+		s.WriteString(content)
+		s.WriteString("</xsl:source-document>")
+		if try {
+			s.WriteString(`<xsl:catch><caught code="{local-name-from-QName($err:code)}"/></xsl:catch></xsl:try>`)
+		}
+		s.WriteString("\n</xsl:template>\n</xsl:stylesheet>\n")
+		c := fuzzCase{seed: seed, sheet: s.String(), doc: doc, malform: g.malform, kind: g.kind}
+		if g.p(3) {
+			c.maxNodes = 5 + g.n(60)
+		}
+		if g.p(3) {
+			c.maxBytes = int64(50 + g.n(800))
+		}
+		return c
+	}
 	wrap := g.p(30)
 	if wrap {
 		s.WriteString(`<out a="x">`)
@@ -419,15 +541,16 @@ type fuzzRes struct {
 
 // fuzzRun runs c from dir: bursts says whether streaming is on (off is
 // streamtrace's switch, as GOXSLT_STREAM_OFF sets it), fold whether reducers
-// fold.
-func fuzzRun(c fuzzCase, dir string, bursts, fold bool) (r fuzzRes) {
+// fold, core whether the burst plans are off, so that the core takes their
+// containers.
+func fuzzRun(c fuzzCase, dir string, bursts, fold, core bool) (r fuzzRes) {
 	before := streamtrace.Snapshot()
 	defer func() {
 		if p := recover(); p != nil {
 			r.panic = fmt.Sprint(p)
 		}
 		streamtrace.SetOff(false)
-		noBurstFold = false
+		noBurstFold, noBurstPlan = false, false
 		r.trace = streamtrace.Snapshot().Sub(before)
 	}()
 	tree, err := xdm.ParseString(c.sheet, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
@@ -435,7 +558,9 @@ func fuzzRun(c fuzzCase, dir string, bursts, fold bool) (r fuzzRes) {
 		r.err = "SHEET: " + err.Error()
 		return
 	}
+	noBurstPlan = core
 	sheet, err := Compile(tree.Root, CompileOptions{})
+	noBurstPlan = false
 	if err != nil {
 		r.err = "COMPILE: " + err.Error()
 		return
@@ -499,6 +624,26 @@ func fuzzDiff(b, k, tr fuzzRes) string {
 	return ""
 }
 
+// fuzzCoreDiff says how co, the run with the burst plans off, differs from
+// tr, the tree's, or "": exactly, error text and all.
+func fuzzCoreDiff(co, tr fuzzRes) string {
+	switch {
+	case co.panic != "" || tr.panic != "":
+		return "PANIC"
+	case co.trace.Guards != 0:
+		return "GUARD"
+	case co.out != tr.out:
+		return "OUTPUT"
+	case co.err != tr.err:
+		return "ERROR " + fuzzCode(co) + " vs " + fuzzCode(tr)
+	case co.trace.Reruns > 0 && tr.err == "" && fuzzCaughtRe.FindString(tr.out) == "":
+		// The tree's answer hides what the stream did wrong. (Where an
+		// xsl:catch caught it the container failed on the tree too.)
+		return "RE-RUN where the tree succeeds"
+	}
+	return ""
+}
+
 // fuzzKnown reports whether difference d of loop-shape case c is the
 // documented loop-shape error order (docs/known-gaps.md, "Error order can
 // differ from tree mode, for the loop shape"): the loop writes as it reads
@@ -534,6 +679,10 @@ func TestStreamFuzz(t *testing.T) {
 			t.Fatalf("GOXSLT_STREAM_FUZZ: %v", err)
 		}
 	}
+	if os.Getenv("GOXSLT_STREAM_FUZZ_RERUN") != "" {
+		traceRerun = func(err error) { t.Logf("re-run after: %v", err) }
+		defer func() { traceRerun = nil }()
+	}
 	if v := os.Getenv("GOXSLT_STREAM_FUZZ_SEED"); v != "" {
 		var err error
 		if seed0, err = strconv.ParseInt(v, 10, 64); err != nil {
@@ -543,15 +692,33 @@ func TestStreamFuzz(t *testing.T) {
 	dir := t.TempDir()
 	tally := map[string]int{}
 	var trace streamtrace.Counts
+	var coreKinds [streamtrace.NumKinds]int64
 	for i := 0; i < n; i++ {
 		c := fuzzMake(seed0 + int64(i))
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(c.doc), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		b := fuzzRun(c, dir, true, true)
-		k := fuzzRun(c, dir, true, false)
-		tr := fuzzRun(c, dir, false, false)
+		b := fuzzRun(c, dir, true, true, false)
+		k := fuzzRun(c, dir, true, false, false)
+		tr := fuzzRun(c, dir, false, false, false)
+		co := fuzzRun(c, dir, true, true, true)
 		tally["cases"]++
+		if co.trace.Runs[streamtrace.Core] > 0 {
+			tally["core leg: on the core"]++
+			if co.trace.Reruns > 0 {
+				tally["core leg: re-run on the tree"]++
+			}
+		}
+		if strings.HasPrefix(c.kind, "core") {
+			tally["core shapes"]++
+		}
+		if d := fuzzCoreDiff(co, tr); d != "" {
+			tally["DIFFERENCES"]++
+			if tally["DIFFERENCES"] <= 10 {
+				t.Errorf("seed %d: core leg %s\nreplay: GOXSLT_STREAM_FUZZ=1 GOXSLT_STREAM_FUZZ_SEED=%d go test ./xslt -run 'TestStreamFuzz$' -v\n"+
+					"stylesheet:\n%s\ndocument:\n%s\ncore %+v\ntree %+v", c.seed, d, c.seed, c.sheet, c.doc, co, tr)
+			}
+		}
 		if b.trace.Streamed() > 0 {
 			tally["on burst path"]++
 			if b.trace.Fallbacks > 0 {
@@ -560,6 +727,9 @@ func TestStreamFuzz(t *testing.T) {
 		}
 		for j, r := range b.trace.Runs {
 			trace.Runs[j] += r
+		}
+		for j, n := range co.trace.Kinds {
+			coreKinds[j] += n
 		}
 		d := fuzzDiff(b, k, tr)
 		if d != "" && fuzzKnown(c, d, b, k, tr) {
@@ -586,6 +756,9 @@ func TestStreamFuzz(t *testing.T) {
 	}
 	for j, r := range trace.Runs {
 		t.Logf("STREAMFUZZ runs %-45s %d", streamtrace.Strategy(j), r)
+	}
+	for j, r := range coreKinds {
+		t.Logf("STREAMFUZZ core leg sNodes %-35s %d", streamtrace.Kind(j), r)
 	}
 	t.Logf("STREAMFUZZ seeds %d..%d", seed0, seed0+int64(n)-1)
 }

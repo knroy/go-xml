@@ -101,6 +101,8 @@ var coreBodies = []struct {
 	{`<xsl:for-each select="*/rec"><xsl:copy-of select="."/></xsl:for-each>`, true},
 	{`<xsl:for-each select="/doc/rec"><r><xsl:for-each select="sub"><s x="{@x}"/></xsl:for-each></r></xsl:for-each>`, true},
 	{`<xsl:for-each select="/*/*"><xsl:copy><xsl:value-of select="count(*)"/></xsl:copy></xsl:for-each>`, true},
+	// A body that reads only some matches: the others are skipped.
+	{`<xsl:for-each select="/*/rec"><xsl:if test="@k = 'a'"><r><xsl:value-of select="."/></r></xsl:if><n/></xsl:for-each>`, true},
 	{`<xsl:iterate select="/doc/rec"><xsl:param name="t" select="0"/><xsl:on-completion><t v="{$t}"/></xsl:on-completion>` +
 		`<xsl:next-iteration><xsl:with-param name="t" select="$t + 1"/></xsl:next-iteration></xsl:iterate>`, true},
 	{`<xsl:iterate select="/doc/rec"><xsl:if test="@k = 'b'"><xsl:break/></xsl:if><i><xsl:value-of select="@k"/></i></xsl:iterate>`, false},
