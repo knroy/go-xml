@@ -77,6 +77,10 @@ type runtime struct {
 type transformState struct {
 	sheet *Stylesheet
 
+	// globalsForced counts the global variables evaluated so far, so that a
+	// streamed item that forced one keeps charged what it built (liveItem).
+	globalsForced int
+
 	// locals holds the local variables and parameters in scope; see
 	// locals.go. A transform fn:transform starts shares its caller's.
 	locals *xpathleaf.Locals
@@ -892,6 +896,10 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 			return rt.deferredError(c, name)
 		}
 	})
+	xpathleaf.SetLimits(xctx, xpathleaf.Limits{
+		Nodes: int64(opts.MaxNodes), Bytes: opts.MaxBytes,
+		NodesBuilt: opts.MaxNodesBuilt, BytesBuilt: opts.MaxBytesBuilt,
+	})
 	// A transform started by fn:transform continues its caller's item and byte
 	// allowances rather than restarting on fresh ones, the same policy the
 	// recursion depth above follows. The counters travel with their held flags;
@@ -1062,6 +1070,8 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 
 	// eval computes one global's value.
 	eval := func(g *Variable) (xdm.Sequence, error) {
+		// Its value outlives whatever streamed item forced it; see liveItem.
+		rt.globalsForced++
 		// The DECLARED local name, which is what a reference inside a match
 		// pattern is written with and all recoverPatternError can compare.
 		if rt.globalActive == nil {

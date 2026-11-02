@@ -77,6 +77,45 @@ type TransformOptions struct {
 	// bound whatever this says.
 	MaxItems int
 
+	// MaxNodes bounds the result-tree and temporary-tree nodes the transform
+	// holds: zero is xpath.MaxNodes (2,000,000), negative is no bound, and
+	// past it the transform fails with XPDY0130 wrapping
+	// xdm.ErrResourceLimit.
+	//
+	// What counts as held is every node built, except in a streamed
+	// xsl:for-each or xsl:iterate over an xsl:source-document read in
+	// bursts: there an item that writes nothing to the loop's output hands
+	// back, when it finishes, what it built and dropped -- its variables'
+	// temporary trees, its fn:copy-of copies, the iteration parameters the
+	// next item replaced -- and keeps charged only what it carries on. So a
+	// correct stream whose state stays flat runs over any input, while one
+	// whose carried state grows is refused once that state crosses the bound.
+	// Only the first 4,096 nodes an item drops are handed back unless
+	// MaxNodesBuilt is set; see there.
+	MaxNodes int
+
+	// MaxBytes bounds the string content the transform holds, in bytes, on
+	// MaxNodes's terms: zero is xpath.MaxBytes (1 GiB), negative is no bound,
+	// XPDY0130 past it, and a streamed item hands back up to 65,536 bytes of
+	// what it built and dropped unless MaxBytesBuilt is set.
+	MaxBytes int64
+
+	// MaxNodesBuilt bounds every node the transform builds, whatever it
+	// later drops. Zero leaves the total bounded by the per-item hand-back
+	// MaxNodes describes: each streamed item returns at most 4,096 of the
+	// nodes it dropped, so the transform builds at most MaxNodes plus 4,096
+	// per streamed item, and a stream whose work per item keeps growing is
+	// refused in bounded time even while what it holds is small. A positive
+	// value bounds the total at that instead and lets every item hand back
+	// all it dropped; a negative value removes both, leaving only what is
+	// held bounded -- the choice for trusted input whose items legitimately
+	// do more work than the allowance. XPDY0130 past it.
+	MaxNodesBuilt int64
+
+	// MaxBytesBuilt is MaxNodesBuilt for string content, with a hand-back of
+	// 65,536 bytes per streamed item when it is zero.
+	MaxBytesBuilt int64
+
 	// DisableAssertions turns off xsl:assert checking for the whole
 	// transformation. The zero value leaves assertions enabled, which is what
 	// XSLT 3.0 section 22.2 requires: "By default, assertions are enabled."

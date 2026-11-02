@@ -43,6 +43,9 @@ func registerCopyFuncs(l *xpath.Library) {
 				if err != nil {
 					return nil, err
 				}
+				if err := chargeCopies(ctx, args, false); err != nil {
+					return nil, err
+				}
 				return mapItemsChecked(ctx, args, checkParentlessQName,
 					func(it xdm.Item) xdm.Item {
 						return noteCopy(rt, it, copyItem(it))
@@ -55,6 +58,9 @@ func registerCopyFuncs(l *xpath.Library) {
 			Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 				rt, err := rtFor(ctx)
 				if err != nil {
+					return nil, err
+				}
+				if err := chargeCopies(ctx, args, true); err != nil {
 					return nil, err
 				}
 				return mapItems(ctx, args, func(it xdm.Item) xdm.Item {
@@ -124,6 +130,31 @@ func mapItems(ctx *xpath.Context, args []xdm.Sequence,
 		out = append(out, f(it))
 	}
 	return out, nil
+}
+
+// chargeCopies charges the nodes fn:copy-of, or with spine fn:snapshot, is
+// about to copy, as xsl:copy-of charges its copies: before they are made, so
+// a refusal allocates none of them. A snapshot copies each ancestor too.
+// An absent context item is left for the copy to report.
+func chargeCopies(ctx *xpath.Context, args []xdm.Sequence, spine bool) error {
+	in, err := inputItems(ctx, args)
+	if err != nil {
+		return nil
+	}
+	n := 0
+	for _, it := range in {
+		v, ok := it.(*xdm.Node)
+		if !ok {
+			continue
+		}
+		n += countSubtree(v)
+		if spine && v.Kind() != xdm.KindDocument {
+			for a := v.Parent(); a != nil; a = a.Parent() {
+				n += 1 + a.NumAttrs() + a.NumNamespaceDecls()
+			}
+		}
+	}
+	return ctx.ChargeNodes(n)
 }
 
 // copyItem is internal:copy-item: a deep copy of a node, anything else
