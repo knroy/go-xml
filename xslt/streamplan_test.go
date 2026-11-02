@@ -51,6 +51,21 @@ func insideFunction(el *xdm.Node) bool {
 	return false
 }
 
+// recombine applies the general rules again to recorded operands, without
+// and with the singleton-builtin rule (which the record does not keep).
+func recombine(ops []planOperand) [2]props {
+	in := make([]operand, len(ops))
+	for i, o := range ops {
+		in[i] = operand{props: o.props, usage: o.usage, allowsChildren: true,
+			higherOrder: o.higherOrder, choiceGroup: o.choice,
+			// The one way a grounded, motionless or consuming operand
+			// comes out free-ranging: navigation from a streaming
+			// parameter (operand.streamedGrounded).
+			streamedGrounded: o.sweep == sweepFreeRanging && o.props.posture == postureGrounded}
+	}
+	return [2]props{combine(in, false), combine(in, true)}
+}
+
 // planSrcRec resolves an operand's src to the record of the construct it
 // names.
 func planSrcRec(pl *streamPlan, src any) *planRec {
@@ -126,17 +141,31 @@ func TestStreamPlanAgreesWithAnalysis(t *testing.T) {
 				}
 				if r.ops != nil {
 					n.withOps++
+					if got := recombine(r.ops); got[0] != r.props && got[1] != r.props {
+						t.Errorf("%s: %T: its operands combine to %v, map %v", name, key, got[0], r.props)
+					}
 				}
 				for _, o := range r.ops {
 					if o.src == nil {
 						continue
 					}
-					if c := planSrcRec(pl, o.src); c != nil {
-						n.links++
-						if c.props != o.props {
-							t.Errorf("%s: operand %T of %T: map says %v, combine saw %v",
-								name, o.src, key, c.props, o.props)
+					c := planSrcRec(pl, o.src)
+					if c == nil {
+						// Only "." and "?" have no record, and an operand
+						// whose expression did not parse (an unknown).
+						e, ok := o.src.(xpath.Expr)
+						if st, isSite := o.src.(planSite); isSite {
+							e, ok = pl.root(st), pl.root(st) != nil
 						}
+						if (!ok || !unkeyable(e)) && r.known {
+							t.Errorf("%s: operand %T of %T names no record", name, o.src, key)
+						}
+						continue
+					}
+					n.links++
+					if c.props != o.props {
+						t.Errorf("%s: operand %T of %T: map says %v, combine saw %v",
+							name, o.src, key, c.props, o.props)
 					}
 				}
 				if e, ok := key.(xpath.Expr); ok {
