@@ -137,3 +137,39 @@ func TestStreamApplyDeep(t *testing.T) {
 	}
 	coreCheck(t, sheet, dir, "400 deep, MaxDepth 300", true, TransformOptions{MaxDepth: 300})
 }
+
+// TestStreamApplyTopLevel: at the top of a sequence the tree's built-in
+// shallow-copy keeps the source's own text nodes, whose parents a later
+// instruction reads; the stream has parentless copies. A container whose
+// output is such a sequence (not the principal result's) runs on the tree,
+// and so does an apply op in a sequence-typed variable.
+func TestStreamApplyTopLevel(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["flat"]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const decls = `<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="sub"><xsl:apply-templates/></xsl:template>`
+	outer := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` + decls +
+		`<xsl:template name="main"><xsl:variable name="v" as="node()*"><xsl:source-document streamable="yes" href="doc.xml">` +
+		`<xsl:apply-templates select="*/rec/sub"/></xsl:source-document></xsl:variable>` +
+		`<out n="{count($v)}" p="{count($v/..)}"/></xsl:template></xsl:stylesheet>`
+	coreCheck(t, outer, dir, "container in a sequence-typed variable", false, TransformOptions{})
+	inner := coreSheetWith(decls, `<xsl:variable name="v" as="node()*"><xsl:apply-templates select="*/rec/sub"/></xsl:variable>`+
+		`<out n="{count($v)}"/>`)
+	coreCheck(t, inner, dir, "apply-templates in a sequence-typed variable", false, TransformOptions{})
+	// The principal result streams.
+	main := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` + decls +
+		`<xsl:template name="main"><xsl:source-document streamable="yes" href="doc.xml">` +
+		`<xsl:apply-templates select="*/rec/sub"/></xsl:source-document></xsl:template></xsl:stylesheet>`
+	coreCheck(t, main, dir, "principal result", true, TransformOptions{})
+	// The built-in deep-copy at the top of the principal result: the copy
+	// keeps the namespaces its element inherits (fuzzer seed 15).
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["ns"]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deep := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xpath-default-namespace="urn:d">` +
+		`<xsl:mode streamable="yes" on-no-match="deep-copy"/><xsl:template name="main">` +
+		`<xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="doc/*"/></xsl:source-document>` +
+		`</xsl:template></xsl:stylesheet>`
+	coreCheck(t, deep, dir, "deep-copy at the top of the principal result", true, TransformOptions{})
+}

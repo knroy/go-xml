@@ -975,6 +975,13 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 			return false, nil
 		}
 	}
+	if i.stream.hasApply() && out.Open() == nil && out != rt.principal {
+		// At the top of a sequence the tree's built-in rules keep the
+		// source's own nodes, which a later instruction may navigate from;
+		// the stream has copies (streamapply.go). Decided before anything
+		// is read.
+		return false, nil
+	}
 	docURI, ok := br.wantsBursts(href, base)
 	if !ok {
 		return false, nil

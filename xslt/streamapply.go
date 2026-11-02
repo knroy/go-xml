@@ -158,6 +158,17 @@ func (b *streamBuilder) withParams(el *xdm.Node, f vfocus) bool {
 }
 
 func (b *streamBuilder) addApply(el *xdm.Node, f vfocus, kind applyKind) bool {
+	// In a variable's sequence (@as) the built-in rules' nodes are kept as
+	// they are, and the tree keeps the source's own: see executeStream.
+	for n := el.Parent(); n != nil && n.Kind() == xdm.KindElement; n = n.Parent() {
+		if n.Name().URI != xdm.NSXSL || isXSL(n, "element") || isXSL(n, "copy") ||
+			isXSL(n, "template") || isXSL(n, "source-document") {
+			break
+		}
+		if (isXSL(n, "variable") || isXSL(n, "param") || isXSL(n, "with-param")) && n.Attr("", "as") != nil {
+			return b.refuse(elName(el) + " in a sequence-typed " + elName(n))
+		}
+	}
 	op := &streamOp{x: b.x, el: el, doc: f == vNone, apply: kind}
 	b.x.ops[el] = op
 	*b.ops = append(*b.ops, op)
@@ -597,8 +608,15 @@ func (s *Stylesheet) linkApply(x *streamExec, rs *rulesPlan) string {
 
 // executeStream runs i, an apply op of the plan running, on the cursor.
 func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run *streamRun, op *streamOp) error {
+	var attrs xdm.Sequence
 	if op.apply == applyAttrs {
-		return run.offCursor(func() error { return i.Execute(rt, out) })
+		// Attributes of the view, which has them all: evaluated as the tree
+		// does, before the parameters.
+		seq, err := i.sel.Eval(rt.ctx)
+		if err != nil {
+			return err
+		}
+		attrs = seq
 	}
 	params, tunnels, err := evalParams(rt, i.params)
 	if err != nil {
@@ -617,6 +635,20 @@ func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run
 	// admitted in a plan.
 	focus := func(n *xdm.Node, pos int) *runtime { return disp.withCurrent(n, pos, 0) }
 	switch op.apply {
+	case applyAttrs:
+		for idx, it := range attrs {
+			if err := rt.ctx.Err(); err != nil {
+				return err
+			}
+			a, ok := it.(*xdm.Node)
+			if !ok || a.Kind() != xdm.KindAttribute {
+				return errStreamPlan // attrApply admits attribute paths only
+			}
+			if err := run.dispatch(disp.withCurrent(a, idx+1, len(attrs)), a, mode, params, tunnels, out); err != nil {
+				return err
+			}
+		}
+		return nil
 	case applySelf:
 		if run.used {
 			return errStreamPlan
@@ -667,9 +699,10 @@ func (run *streamRun) offCursor(fn func() error) error {
 }
 
 // children dispatches mode to each child of the context, at depth run.d:
-// an element at its start tag, a text, comment or PI node as a copy, off the
-// cursor. focus makes a child's runtime (rt, for the instruction's checks);
-// it reads to the context's end.
+// an element at its start tag, a text, comment or PI node as a copy. focus
+// makes a child's runtime; rt, when set, is the instruction's (its focus
+// checked for cancellation per child, as xsl:apply-templates does). It reads
+// to the context's end.
 func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, params, tunnels paramValues,
 	focus func(*xdm.Node, int) *runtime) error {
 
@@ -709,9 +742,7 @@ func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, par
 		pos++
 		if ev.Kind != xdmstream.StartElement {
 			n := xdm.Copy(ev.Node)
-			if err := run.offCursor(func() error {
-				return applyToNode(focus(n, pos), n, mode, params, tunnels, out)
-			}); err != nil {
+			if err := run.dispatch(focus(n, pos), n, mode, params, tunnels, out); err != nil {
 				return err
 			}
 			continue
@@ -753,9 +784,18 @@ func (run *streamRun) element(rt *runtime, v *xdm.Node, md int, mode string, par
 	return read, err
 }
 
-// dispatch is applyToNode for node, the context on the cursor (an
-// element's view, or the document node's stand-in): the same selection,
-// the rule's body or the built-in rule run on the stream.
+// onCursor reports whether node is read off the cursor (an element's view,
+// or the document node), not complete (a copy of a leaf, an attribute).
+func onCursor(node *xdm.Node) bool {
+	k := node.Kind()
+	return k == xdm.KindElement || k == xdm.KindDocument
+}
+
+// dispatch is applyToNode for node, as an apply op hands it over: the
+// context on the cursor (an element's view, the document node's stand-in),
+// or off it (a copy of a text, comment or PI node, an attribute of a view).
+// The selection is the tree's; the rule's body, or the built-in rule, runs
+// on the stream.
 func (run *streamRun) dispatch(rt *runtime, node *xdm.Node, mode string, params, tunnels paramValues,
 	out *outputBuilder) error {
 
@@ -778,6 +818,10 @@ func (run *streamRun) dispatch(rt *runtime, node *xdm.Node, mode string, params,
 	}
 	sub := rt.withSelection(t, next, mode, params, tunnels)
 	sub.ctx = withCurrentItem(sub.ctx, node)
+	if !onCursor(node) {
+		// Its body was checked to read only what the node has.
+		return run.offCursor(func() error { return runTemplate(sub, t, params, tunnels, out) })
+	}
 	return run.rule(sub, t, node, params, tunnels, out)
 }
 
@@ -805,10 +849,47 @@ func (run *streamRun) rule(rt *runtime, t *Template, node *xdm.Node, params, tun
 	return err
 }
 
-// builtIn is applyBuiltInRule for node on the cursor, as dispatch has it.
+// detached is n as the built-in rules append it to out. At the top of a
+// sequence (the principal result: executeStream refuses any other) a node is
+// kept as it is, and the tree keeps the source's own; one with views for
+// ancestors would be navigable from Result.Nodes to content that is not
+// there. So an element grounded from the cursor is copied into a document of
+// its own, as content construction copies it (its in-scope namespaces with
+// it), and an attribute of a view is copied parentless.
+func detached(out *outputBuilder, n *xdm.Node) *xdm.Node {
+	switch {
+	case out.Open() != nil || n.Parent() == nil:
+		return n
+	case n.Kind() == xdm.KindAttribute:
+		a := xdm.NewNode(xdm.KindAttribute, n.Name(), n.Value())
+		a.CopyTypingFrom(n)
+		return a
+	}
+	b, root := xdmbuild.InPlaceDocument(xsltPolicy{}) // charged as the tree charges it: not at all
+	b.AppendNode(n)
+	root.Tree().Finalize()
+	return root.FirstChild()
+}
+
+// builtIn is applyBuiltInRule for node, as dispatch has it.
 func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, tunnels paramValues,
 	out *outputBuilder) error {
 
+	nm := rt.sheet.modeNoMatch[mode]
+	if !onCursor(node) {
+		switch nm {
+		case "deep-skip", "shallow-skip":
+		case "fail":
+			return builtInFail(node, mode)
+		case "deep-copy", "shallow-copy", "copy":
+			out.AppendNode(detached(out, node))
+		default:
+			if k := node.Kind(); k == xdm.KindText || k == xdm.KindAttribute {
+				out.AppendText(node.StringValue())
+			}
+		}
+		return nil
+	}
 	doc := node.Kind() == xdm.KindDocument
 	kids := func(out *outputBuilder) error {
 		return run.children(nil, out, mode, params, tunnels, func(n *xdm.Node, pos int) *runtime {
@@ -823,7 +904,16 @@ func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, 
 		defer rt.ascend()
 		return kids(out)
 	}
-	switch rt.sheet.modeNoMatch[mode] {
+	attrs := func(out *outputBuilder, pos func(int) int) error {
+		for idx := range node.NumAttrs() {
+			a := node.AttrAt(idx)
+			if err := run.dispatch(rt.builtInFocus(mode, a, pos(idx), node.NumAttrs()), a, mode, params, tunnels, out); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	switch nm {
 	case "deep-skip":
 		if !doc {
 			return nil // the caller skips it
@@ -835,19 +925,13 @@ func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, 
 		}
 		defer rt.ascend()
 		if !doc {
-			for idx := range node.NumAttrs() {
-				a := node.AttrAt(idx)
-				an := rt.builtInFocus(mode, a, idx+1, node.NumAttrs())
-				if err := run.offCursor(func() error { return applyToNode(an, a, mode, params, tunnels, out) }); err != nil {
-					return err
-				}
+			if err := attrs(out, func(i int) int { return i + 1 }); err != nil {
+				return err
 			}
 		}
 		return kids(out)
 	case "fail":
-		return fmt.Errorf(
-			"XTDE0555: no template rule matches %s in mode %q, and the mode "+
-				"declares on-no-match=\"fail\"", builtInNodeLabel(node), mode)
+		return builtInFail(node, mode)
 	case "deep-copy":
 		if doc || run.used {
 			return errStreamPlan // linkApply refuses the document node
@@ -857,7 +941,7 @@ func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, 
 		if err != nil {
 			return err
 		}
-		out.AppendNode(g)
+		out.AppendNode(detached(out, g))
 		return nil
 	case "shallow-copy", "copy":
 		if doc {
@@ -872,15 +956,20 @@ func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, 
 			return err
 		}
 		defer rt.ascend()
-		for a := range node.Attrs() {
-			an := rt.builtInFocus(mode, a, 1, node.NumAttrs())
-			if err := run.offCursor(func() error { return applyToNode(an, a, mode, params, tunnels, sub) }); err != nil {
-				return err
-			}
+		// builtInShallowCopy gives each attribute position 1.
+		if err := attrs(sub, func(int) int { return 1 }); err != nil {
+			return err
 		}
 		return kids(sub)
 	}
 	return descend(out)
+}
+
+// builtInFail is the on-no-match="fail" rule's error.
+func builtInFail(node *xdm.Node, mode string) error {
+	return fmt.Errorf(
+		"XTDE0555: no template rule matches %s in mode %q, and the mode "+
+			"declares on-no-match=\"fail\"", builtInNodeLabel(node), mode)
 }
 
 // shallowCopyDoc is builtInShallowCopy for the document node: its copy built
