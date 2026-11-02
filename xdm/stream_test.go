@@ -176,3 +176,47 @@ func TestDriveViewsShareTheSpine(t *testing.T) {
 		t.Fatalf("%d copies looked past for %d views", bs.viewScans, views)
 	}
 }
+
+// A view batch is replaced at a bounded size when the views' ancestors are
+// themselves never viewed, each one new: views of x under rec after rec
+// (the C4 split's view of a match whose parent it only reads past).
+func TestDriveViewBatchBounded(t *testing.T) {
+	const n = 20000
+	var b strings.Builder
+	b.WriteString("<doc>")
+	for i := range n {
+		fmt.Fprintf(&b, "<rec k='%d' v='1'><x a='1'/><x a='2'/></rec>", i)
+	}
+	b.WriteString("</doc>")
+	most := 0
+	var bs *burster
+	c := &viewAll{}
+	c.fn = func(v *Node, d int) {}
+	vc := &viewSome{viewAll: c, want: "x", fn: func() {
+		if n := int(bs.views.t.n); n > most {
+			most = n
+		}
+	}}
+	bs = driver(vc)
+	if _, err := parse(strings.NewReader(b.String()), "", ParseOptions{bursts: bs}); err != nil {
+		t.Fatal(err)
+	}
+	if most == 0 || most > 2*viewBatchRecords {
+		t.Fatalf("a view batch grew to %d records (bound %d)", most, 2*viewBatchRecords)
+	}
+}
+
+// viewSome views only the elements named want.
+type viewSome struct {
+	*viewAll
+	want string
+	fn   func()
+}
+
+func (c *viewSome) Start(el any, d int) (xdmburst.Action, error) {
+	if el.(*Node).Name().Local == c.want {
+		c.view()
+		c.fn()
+	}
+	return xdmburst.Keep, nil
+}

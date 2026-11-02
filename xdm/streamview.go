@@ -22,10 +22,12 @@ import (
 // element viewed under the same ancestors as the one before it shares their
 // copies, so a view costs the element's own records and those of the
 // ancestors opened since the last view, not its depth. A batch is replaced
-// once it holds viewBatchRecords records, or four times those it copied for
-// ancestors if that is more: what a retained view keeps alive is bounded,
-// and the ancestors a new batch copies again are paid for by the views
-// made in the old one.
+// once it holds viewBatchRecords records, or four times the records of the
+// copies of the open path if that is more: what a retained view keeps alive
+// is bounded, and the ancestors a new batch copies again are paid for by the
+// views made in the old one. (Not four times all it ever copied for
+// ancestors: under ancestors that are not themselves viewed, each one new,
+// that grew with the batch, and the batch was never replaced.)
 //
 // Every copied element and document node is shallow (fShallow): asking it
 // for anything its content would answer -- children, descendants, siblings,
@@ -153,8 +155,8 @@ type viewBatch struct {
 	// node), and gens[d] that element's gen.
 	path []*Node
 	gens []uint64
-	// anc is how many records the batch copied for ancestors.
-	anc int
+	// recs[d] is how many records the copies path[:d+1] hold.
+	recs []int
 }
 
 // view returns the view of the element the client is being asked about
@@ -169,7 +171,7 @@ func (b *burster) view() *Node {
 	}
 	t := el.tree
 	vb := b.views
-	if vb == nil || int(vb.t.n) >= max(viewBatchRecords, 4*vb.anc) {
+	if vb == nil || int(vb.t.n) >= max(viewBatchRecords, 4*vb.recs[len(vb.recs)-1]) {
 		vb = b.newViews(t)
 	}
 	// The copies of the open elements this batch already has: a copy that
@@ -180,7 +182,7 @@ func (b *burster) view() *Node {
 		k--
 		b.viewScans++
 	}
-	vb.path, vb.gens = vb.path[:k], vb.gens[:k]
+	vb.path, vb.gens, vb.recs = vb.path[:k], vb.gens[:k], vb.recs[:k]
 	anc := make([]*Node, d-k)
 	p := el
 	for i := len(anc) - 1; i >= 0; i-- {
@@ -189,7 +191,6 @@ func (b *burster) view() *Node {
 	}
 	for i, a := range anc {
 		vb.push(a, b.ords[k+i], b.gens[k+i])
-		vb.anc += 1 + a.NumAttrs()
 		b.viewCopies += 1 + a.NumAttrs()
 	}
 	vb.push(el, b.ordOf(el), b.gen)
@@ -218,7 +219,7 @@ func (b *burster) newViews(t *Tree) *viewBatch {
 		c.source.externalSubset = s.externalSubset
 	}
 	vb.o.add(0, 0)
-	vb.path, vb.gens = append(vb.path, r), append(vb.gens, 0)
+	vb.path, vb.gens, vb.recs = append(vb.path, r), append(vb.gens, 0), append(vb.recs, 1)
 	b.views = vb
 	return vb
 }
@@ -241,6 +242,7 @@ func (vb *viewBatch) push(s *Node, ord, gen uint64) {
 		copyProps(d, a)
 	}
 	vb.path, vb.gens = append(vb.path, c), append(vb.gens, gen)
+	vb.recs = append(vb.recs, vb.recs[len(vb.recs)-1]+1+s.NumAttrs())
 }
 
 // copyProps gives d, a copy of s in another tree, s's own base URI and
