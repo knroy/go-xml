@@ -49,7 +49,7 @@ W3C disagreements: 0 + 0 + 0 + 1 + 8 + 23 + 30 + 31 + 0 = 93. Measured 2026-09-1
 <!-- BEGIN GENERATED UNIT TEST COUNT -->
 <!-- Generated from tests/conformance/results.json and the source tree by
      tests/conformance-docs.go. Do not edit; see docs/stats.md. -->
-The unit-test suite is 3,015 tests.
+The unit-test suite is 3,017 tests.
 <!-- END GENERATED UNIT TEST COUNT -->
 
 The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
@@ -366,11 +366,11 @@ rather than against the code they test.
 are covered — call it 15%", and listed the §19.8.6 instruction rules, §19.8.5
 stylesheet functions and §19.8.4 accumulators as "absent entirely". **That was
 three sessions out of date and is corrected here.** The figure is now measured
-rather than estimated: `xslt/stream*.go` cites **92 distinct §19 subsections**,
+rather than estimated: `xslt/stream*.go` cites **96 distinct §19 subsections**,
 and the blocks named as absent are precisely the ones that have since been
-built — `xslt/streaminstructions.go` (2,218 lines) models 48 `xsl:`
+built — `xslt/streaminstructions.go` (2,338 lines) models 48 `xsl:`
 instructions including all four §19.8.6 calls intricate, `streamfunctions.go`
-(1,013 lines) carries §19.8.5 including the streaming-parameter signature rule,
+(1,017 lines) carries §19.8.5 including the streaming-parameter signature rule,
 and `streamaccumulators.go` covers the §19.8.4.x block. Coverage of the rule
 sections is on the order of **85%**, not 15%.
 
