@@ -10,14 +10,16 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does | Commit |
 |---|---|---|
-| Streamed record paths with `//`, wildcards and `outermost()` | `//rec`, `doc//rec`, `/*/*/rec`, `*:rec`, `p:*` stream in both shapes; nested matches ride inside their outermost record. Small records share one tree: 900-deep `count(//rec)` 2.0 s CPU. | [`df9677e`][df9677e], [`fd31bb3`][fd31bb3], [`382983c`][382983c], [`22af5f4`][22af5f4] |
-| Streamed core for `xsl:source-document` | Trusted containers the burst shapes refused (wrappers, choose, loops reading their matches, split selects) now stream; any error re-runs on the tree. W3C streamed cases 450 → 564. | [`ff0c463`][ff0c463], [`44db07f`][44db07f], [`096a587`][096a587] |
+| Streamed record paths with `//`, wildcards and `outermost()` | `//rec`, `doc//rec`, `/*/*/rec`, `*:rec`, `p:*` stream; nested matches ride inside their outermost record. Small records share one tree: 900-deep `count(//rec)` 2.0 s CPU. | [`df9677e`][df9677e], [`fd31bb3`][fd31bb3], [`382983c`][382983c], [`22af5f4`][22af5f4] |
+| Streamed core for `xsl:source-document` | One streamed path for every trusted container: wrappers, choose, loops, split selects; any error re-runs on the tree, so errors are the tree's. W3C streamed cases 450 → 576. | [`ff0c463`][ff0c463], [`44db07f`][44db07f], [`096a587`][096a587], [`d1a98a8`][d1a98a8] |
 | `TransformOptions` `MaxNodes`, `MaxBytes`, `MaxNodesBuilt`, `MaxBytesBuilt` | Held and total-work bounds for result and temporary trees and strings. Zero keeps the defaults; negative removes the bound. | [`294b965`][294b965] |
 
 ### Changed
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| `xdm.ParseBursts` built an element off its path whole before dropping it | It now drops it as it parses, holding only the open path. | [`d1a98a8`][d1a98a8] |
+| Streamed loop errors could come in a different order from tree mode | The burst loops are gone; the core re-runs on the tree after any error. | [`d1a98a8`][d1a98a8] |
 | Streamed loops were refused after ~1M records of flat state | The node and byte budgets counted every temporary ever built. A loop item that writes no output now hands back what it dropped. | [`294b965`][294b965] |
 | `fn:copy-of` and `fn:snapshot` copies were not charged to the result-node budget | Unlike `xsl:copy-of`. They are charged before the copy, so a transform making over 2M such copies is now refused. | [`294b965`][294b965] |
 
@@ -1911,6 +1913,7 @@ here so every entry in this file sits under a release.
 [fd31bb3]: https://github.com/knroy/go-xml/commit/fd31bb3
 [382983c]: https://github.com/knroy/go-xml/commit/382983c
 [22af5f4]: https://github.com/knroy/go-xml/commit/22af5f4
+[d1a98a8]: https://github.com/knroy/go-xml/commit/d1a98a8
 [ff0c463]: https://github.com/knroy/go-xml/commit/ff0c463
 [44db07f]: https://github.com/knroy/go-xml/commit/44db07f
 [096a587]: https://github.com/knroy/go-xml/commit/096a587

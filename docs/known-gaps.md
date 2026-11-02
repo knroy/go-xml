@@ -177,53 +177,40 @@ Measured on branches in 2026-11 and not adopted, each with the reason:
   Namespace nodes are held weakly since v2.2.0; while a tree's table is not
   empty, every GC cycle sweeps it.
 
-### Streamed execution covers three shapes (XSLT 3.0, performance)
+### Streamed execution covers `xsl:source-document` only (XSLT 3.0, performance)
 
-Since v2.2.0 an `xsl:source-document streamable="yes"` whose body is one
-`xsl:for-each` or `xsl:iterate` (optionally inside constant literal result
-elements) over a record path, with non-positional predicates on the last step
-only, and a body the gate recognises with a known and verified
-§19.8 verdict, runs record by record
-through `xdm.ParseBursts`: a 1 GB file totalled by `xsl:iterate` peaks at
-27 MB RSS against 3.7 GB, at about 2× the CPU. Everything else builds the tree,
-as before. A record path is child or descendant steps whose tests are names or
-wildcards (`doc/rec`, `//rec`, `doc//rec`, `/*/*/rec`, `*:rec`, `p:*`, names
-resolved through `xpath-default-namespace`), or `outermost()`/`innermost()` of
-one (since v2.3.0). A record is cut at its outermost match, so a match nested
-in it is delivered inside its tree, in document order. Small records share one
-tree, so ancestors are copied once per element opened: `count(//rec)` under a
-900-deep spine takes 2.0 s of CPU against the tree's 1.6 s.
+An `xsl:source-document streamable="yes"` whose body has a known and verified
+§19.8 verdict runs on the streamed core: the document is read through a
+cursor and never built. Everything else builds the tree, as before. The core
+takes literal result elements, `xsl:element`, `xsl:copy`, `xsl:attribute`,
+`xsl:if` and `xsl:choose`, nested `xsl:source-document`, `xsl:for-each` and
+`xsl:iterate` over a consuming path, and selects split on the cursor. A path
+is child or descendant steps by name, wildcard or kind (`doc/rec`, `//rec`,
+`/*/*/rec`, `*:rec`, `p:*`, names resolved through `xpath-default-namespace`),
+optionally under `outermost()`/`innermost()`, with motionless or positional
+predicates. `count`, `sum`, `avg`, `min`, `max`, `exists`, `empty`, `head`
+and `[n]` fold as the document is read; `xsl:copy-of` writes one copy at a
+time; `xsl:strip-space` is applied as the cursor reads.
 
-The second shape is a body that is one `xsl:value-of`, `xsl:copy-of` or
-`xsl:sequence` (again optionally inside constant literal result elements) whose
-select reads one record path, such as `sum(doc/rec/@v)` or
-`count(doc/rec[@k = 'x'])`. The path runs per record; the rest of the select
-runs once over the values. `count`, `sum`, `min` and `max` fold per record and
-stay flat: over a 1 GB file of 25.9M records, `count` peaks at 3.4 MB heap /
-25 MB RSS and `sum` at 11 MB / 33 MB, where tree mode needs 773–1,284 MB at
-100 MB. Other consumers (`avg`, comparisons, `string-join`, a bare `value-of`
-of attributes) keep one atomic value per item, about half the tree's memory,
-still growing with the input. A select that would keep the records' nodes or
-copies (`copy-of(doc/rec)`, filters returning nodes, `head`/`tail` passed on)
-is refused and runs on the tree, because a kept record costs more there than in
-a whole tree (945 B against 208 B). Also refused: `distinct-values`, `reverse`,
-`sort`, `last()`, union/intersect/except, `let`, user functions, and paths to
-non-elements (`//text()`, `//@x`).
+Figures for the core, on this machine:
+- a 1 GB file totalled by `xsl:iterate`: 26 MB RSS against the tree's
+  4.3 GB; 15.9 s CPU against the tree's 13.8 s;
+- `count` and `sum` over 25.9M records (1 GB): 3.0 MB heap, where tree mode
+  needs 773–1,284 MB at 100 MB;
+- `count(//rec)` under a 900-deep spine: 2.1 s CPU and 3 MB heap against the
+  tree's 1.7 s; `count(outermost(//rec))` there: 1.5 s against 10.6 s.
 
-The third shape, the streamed core, takes the trusted containers the first
-two refuse. It reads the document through a cursor and handles literal
-result elements, `xsl:element`, `xsl:copy`, `xsl:attribute`, `xsl:if` and
-`xsl:choose`, nested `xsl:source-document`, `xsl:for-each` and `xsl:iterate`
-whose bodies read their matches, and selects split on the cursor (striding
-and crawling paths, positional predicates, the reducers). `xsl:copy-of` writes
-one copy at a time, and `xsl:strip-space` is applied as the cursor reads. A
-select that would collect grounded copies at the document node is refused,
-because it would hold more than the tree. Any error re-runs the container on
-the tree, so the core's errors are the tree's, at the cost of a second read.
+On flat documents the core costs 1.2–1.8× the tree's CPU (each match is a
+coroutine round trip on the cursor); on deep ones 0.14–1.5×.
 
-In the W3C XSLT 3.0 run 564 cases stream (9 before the second shape, 364
-before `//` record paths, 450 before the core; the core adds 114). Of the 786 single-instruction bodies over one record path with a known
-and verified verdict, 294 are admitted (261 bounded reducers, 33 pipelined).
+Refused, and run on the tree: a select that would collect grounded copies at
+the document node (it would hold more than the tree); `xsl:apply-templates`;
+paths whose tail climbs; kept text, comment or processing-instruction nodes;
+union/intersect/except; `xsl:try`, `xsl:for-each-group`, `xsl:fork`,
+`xsl:result-document`; `last()`, `reverse`, `sort`, user functions.
+
+In the W3C XSLT 3.0 run 576 cases stream (9 before the second burst shape,
+364 before `//` record paths, 450 before the core).
 Also:
 
 - **The result is still built in memory**, so a large filtered copy grows with
@@ -237,17 +224,13 @@ Also:
   integer multiplied each record (`MaxDigits`), a sequence appended to or
   passed through `distinct-values` each record (`MaxItems`) run quadratic time
   and are stopped by the context deadline, before and after v2.3.0.
-- **Error order can differ from tree mode, for the loop shape.** (The single-instruction
-  shape re-runs on the tree after any error, so its errors are the tree's; the
-  cost is a second read of the document, and the 1 GiB string budget charges the
-  strings both attempts built.) Tree mode reads the whole file,
-  then evaluates the whole `select`, before the body runs; bursts do each per
-  record. So a dynamic error in the body is raised before a malformed tail, a
-  `MaxNodes`/`MaxBytes` refusal or an encoding error later in the file, and
-  before a predicate's error on a later record (`a/r[xs:integer(@v) gt 0]`
-  with `1 idiv 0` in the body: FOAR0001 in bursts, FORG0001 in the tree).
-  `xsl:try` can see which code wins. A differential fuzzer (1.28M generated
-  cases, 495k on the burst path) found no other difference.
+- **Any error re-runs the container on the tree**, so errors are the tree's,
+  in the tree's order. The cost is a second read of the document, and the
+  1 GiB string budget charges the strings both attempts built. Under
+  `xsl:try rollback-output="no"`, output already written can turn a caught
+  error into `XTDE3530` where the tree fails before writing; no case shows it.
+  A differential fuzzer (250k generated cases) compares streamed and tree runs
+  exactly and finds no difference.
 - **`xsl:break` still reads the rest of the file**, so that a malformed tail is
   an error as in tree mode.
 - **Only `FileResolver` streams**; another `DocumentResolver` builds the tree.
@@ -285,7 +268,7 @@ and §18.1's grounded demand at both the sites it names.
 All three fail in the same direction: the suite expects `XTSE3430` — *this
 construct is not guaranteed streamable* — and the transform succeeds instead.
 The engine builds a tree for these (it reads in bursts only the narrow shape
-described under *Streamed execution covers three shapes*), so it produces the **right
+described under *Streamed execution covers `xsl:source-document` only*), so it produces the **right
 answer** for all three; what it does not produce is the static refusal §19.8
 requires a streaming processor to make before running anything. These are not
 wrong answers; they are a static analysis that is not complete.

@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,031 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,032 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -538,9 +538,9 @@ empty or mistyped recording directory is an error, never "zero differences".
 
 Streamed execution must be byte-identical to tree mode, which stays the
 oracle. Two tools check this, and both count what took the streamed path
-([`internal/streamtrace`](../internal/streamtrace/streamtrace.go)): runs per
-strategy (fold, collect, for-each, iterate), fallbacks to the tree, and guard
-hits, which must be 0. The guard is xdm's posture guard: a view of a
+([`internal/streamtrace`](../internal/streamtrace/streamtrace.go)): runs of
+the streamed core, its sNodes by kind, fallbacks and re-runs on the tree, and
+guard hits, which must be 0. The guard is xdm's posture guard: a view of a
 streamed element (`Cursor.View` in
 [`internal/xdmstream`](../internal/xdmstream/xdmstream.go)) asked for
 content it does not have panics with `streamtrace.PostureError` and counts
@@ -573,39 +573,32 @@ With `GOXSLT_RECORD_DIR` set, tests/xslts writes
 fails when any of these is true:
 - a difference is unexplained;
 - fewer cases streamed than the floor (`-floor`, `GOXSLT_STREAM_FLOOR`,
-  default 564);
+  default 576);
 - a guard fired;
 - the off leg streamed.
 
-At 42392ae1 it reads:
-- 564 cases on the streamed path, 12 with a burst fallback, 3 re-run on the
-  tree;
-- fold 81, collect 336, for-each 30, iterate 4 runs, and 115 runs of the
-  streamed core;
-- the core's sNodes by kind: tree 29, ground 2, seq 255, element 104,
-  choose 1, for-each 36, where-pop 0, source-doc 2, select 94;
+At 8213f8d3 it reads:
+- 576 cases on the streamed path, 578 core runs, 15 re-run on the tree;
+- the core's sNodes by kind: tree 43, ground 9, seq 1,210, element 561,
+  choose 2, for-each 71, where-pop 0, source-doc 2, select 544;
 - zero unexplained differences.
 
-The TSV line also holds the core's runs, re-runs and sNodes per kind. The
-core has its own differential, `go test ./xslt -run TestStreamCore -v`:
-hand-written bodies × documents × whitespace declarations, the
-document-element fallback, the result budgets against the burst path, and,
-without `-short`, peak heap against the tree.
+The TSV line holds the core's runs, fallbacks, guard hits, re-runs and
+sNodes per kind. The core has its own differential, `go test ./xslt -run
+TestStreamCore -v`: hand-written bodies × documents × whitespace
+declarations, the document-element fallback, the result budgets pinned to
+the retired burst path's, and, without `-short`, peak heap against the tree.
 
 `TestStreamFuzz` (skipped under `-short`) generates a record document and a
-streamable stylesheet per seed. It runs each with bursts, with bursts but no
-folding, on the tree, and with the burst plans off so that the streamed core
-takes their containers, and requires the same output and error. The only
-exception is the documented loop-shape error order (see known-gaps.md); the
-fourth leg must equal the tree exactly, and a re-run where the tree succeeds
-counts as a difference. The core's shapes come from their own random stream
-(`GOXSLT_STREAM_FUZZ_CORE=0` reproduces the earlier cases). A
+streamable stylesheet per seed. It runs each streamed and on the tree and
+requires exactly the same output and error text; a re-run where the tree
+succeeds counts as a difference. The core's shapes come from their own random
+stream (`GOXSLT_STREAM_FUZZ_CORE=0` reproduces the earlier cases). A
 failing case prints its seed and the command that replays it.
 
-At aeaf6cbe, 120,000 cases put 35,350 on the burst path, with 0 differences
-and 10 in the allowed class. Breaking the count fold made 17 of 20,000 cases
-differ. At fe895f84, 100,000 cases (seed 1) give 0 differences, 34,958 of
-them on the core in the fourth leg.
+At 75a97759, 100,000 cases (seed 1) give 0 differences, 37,783 of them
+streamed; 100,000 of the earlier grammar alone, in which the retired burst
+loops needed an error-order allowance of 9 per 100k, give 0 too.
 
 
 ## The ratchet
