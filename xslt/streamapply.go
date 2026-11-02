@@ -633,7 +633,7 @@ func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run
 	mode := i.effectiveMode(rt)
 	// The size of the selection is not known as it is read; last() is not
 	// admitted in a plan.
-	focus := func(n *xdm.Node, pos int) *runtime { return disp.withCurrent(n, pos, 0) }
+	focus := focuser{disp, mode, false}
 	switch op.apply {
 	case applyAttrs:
 		for idx, it := range attrs {
@@ -674,7 +674,7 @@ func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run
 			return false, err
 		}
 		pos++
-		return run.element(focus(v, pos), v, md, mode, params, tunnels, out)
+		return run.element(focus.at(v, pos), v, md, mode, params, tunnels, out)
 	})
 }
 
@@ -704,7 +704,7 @@ func (run *streamRun) offCursor(fn func() error) error {
 // checked for cancellation per child, as xsl:apply-templates does). It reads
 // to the context's end.
 func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, params, tunnels paramValues,
-	focus func(*xdm.Node, int) *runtime) error {
+	focus focuser) error {
 
 	if run.used {
 		return errStreamPlan
@@ -741,8 +741,7 @@ func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, par
 		}
 		pos++
 		if ev.Kind != xdmstream.StartElement {
-			n := xdm.Copy(ev.Node)
-			if err := run.dispatch(focus(n, pos), n, mode, params, tunnels, out); err != nil {
+			if err := run.leaf(focus, pos, ev.Node, mode, params, tunnels, out); err != nil {
 				return err
 			}
 			continue
@@ -751,7 +750,7 @@ func (run *streamRun) children(rt *runtime, out *outputBuilder, mode string, par
 		if err != nil {
 			return err
 		}
-		read, err := run.element(focus(v, pos), v, d+1, mode, params, tunnels, out)
+		read, err := run.element(focus.at(v, pos), v, d+1, mode, params, tunnels, out)
 		if err != nil {
 			return err
 		}
@@ -782,6 +781,55 @@ func (run *streamRun) element(rt *runtime, v *xdm.Node, md int, mode string, par
 	read := run.used
 	run.d, run.used = d, true
 	return read, err
+}
+
+// leaf dispatches a text, comment or PI node n, live on the cursor until
+// its next call, at position pos: matched as it is (a pattern that may match
+// one reads the node alone: patternClasses), and copied for a rule's body to
+// run on, which reads only what a copy has (rulePlan). A built-in rule
+// copies what it keeps (detached).
+func (run *streamRun) leaf(focus focuser, pos int, n *xdm.Node, mode string,
+	params, tunnels paramValues, out *outputBuilder) error {
+
+	rt := focus.at(n, pos)
+	if err := rt.sheet.checkModeTyped(n, mode); err != nil {
+		return err
+	}
+	t, next, err := rt.sheet.findTemplateFrom(n, mode, rt.ctx, 0)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		rt.sheet.warnNoMatch(rt, n, mode)
+		return run.builtIn(rt, n, mode, params, tunnels, out)
+	}
+	c := xdm.Copy(n)
+	rt = focus.at(c, pos)
+	if err := rt.sheet.warnMultipleMatch(rt, c, mode, t, next, rt.ctx); err != nil {
+		return err
+	}
+	if err := rt.sheet.failMultipleMatch(c, mode, t, next, rt.ctx); err != nil {
+		return err
+	}
+	sub := rt.withSelection(t, next, mode, params, tunnels)
+	sub.ctx = withCurrentItem(sub.ctx, c)
+	return run.offCursor(func() error { return runTemplate(sub, t, params, tunnels, out) })
+}
+
+// focuser makes the runtime a child is dispatched in, at position pos:
+// with disp's focus moved to it, or, for a built-in rule, as builtInFocus
+// does. The size is not known as it is read; last() is not admitted.
+type focuser struct {
+	disp    *runtime
+	mode    string
+	builtIn bool
+}
+
+func (f focuser) at(n *xdm.Node, pos int) *runtime {
+	if f.builtIn {
+		return f.disp.builtInFocus(f.mode, n, pos, 0)
+	}
+	return f.disp.withCurrent(n, pos, 0)
 }
 
 // onCursor reports whether node is read off the cursor (an element's view,
@@ -860,6 +908,8 @@ func detached(out *outputBuilder, n *xdm.Node) *xdm.Node {
 	switch {
 	case out.Open() != nil || n.Parent() == nil:
 		return n
+	case n.Kind() != xdm.KindElement && n.Kind() != xdm.KindAttribute:
+		return xdm.Copy(n) // a leaf, live on the cursor
 	case n.Kind() == xdm.KindAttribute:
 		a := xdm.NewNode(xdm.KindAttribute, n.Name(), n.Value())
 		a.CopyTypingFrom(n)
@@ -891,45 +941,24 @@ func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, 
 		return nil
 	}
 	doc := node.Kind() == xdm.KindDocument
-	kids := func(out *outputBuilder) error {
-		return run.children(nil, out, mode, params, tunnels, func(n *xdm.Node, pos int) *runtime {
-			return rt.builtInFocus(mode, n, pos, 0)
-		})
-	}
-	// descend is builtInDescend's: rt.descend around the children.
-	descend := func(out *outputBuilder) error {
-		if err := rt.descend(); err != nil {
-			return err
-		}
-		defer rt.ascend()
-		return kids(out)
-	}
-	attrs := func(out *outputBuilder, pos func(int) int) error {
-		for idx := range node.NumAttrs() {
-			a := node.AttrAt(idx)
-			if err := run.dispatch(rt.builtInFocus(mode, a, pos(idx), node.NumAttrs()), a, mode, params, tunnels, out); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
+	b := builtInRun{run, rt, node, mode, params, tunnels}
 	switch nm {
 	case "deep-skip":
 		if !doc {
 			return nil // the caller skips it
 		}
-		return descend(out)
+		return b.descend(out)
 	case "shallow-skip":
 		if err := rt.descend(); err != nil {
 			return err
 		}
 		defer rt.ascend()
 		if !doc {
-			if err := attrs(out, func(i int) int { return i + 1 }); err != nil {
+			if err := b.attrs(out, false); err != nil {
 				return err
 			}
 		}
-		return kids(out)
+		return b.kids(out)
 	case "fail":
 		return builtInFail(node, mode)
 	case "deep-copy":
@@ -945,7 +974,7 @@ func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, 
 		return nil
 	case "shallow-copy", "copy":
 		if doc {
-			return run.shallowCopyDoc(rt, node, mode, out, descend)
+			return b.shallowCopyDoc(out)
 		}
 		sub := out.StartElement(node.Name())
 		if out.Open() == nil && sub.Open().BaseURI() == "" {
@@ -957,12 +986,51 @@ func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, 
 		}
 		defer rt.ascend()
 		// builtInShallowCopy gives each attribute position 1.
-		if err := attrs(sub, func(int) int { return 1 }); err != nil {
+		if err := b.attrs(sub, true); err != nil {
 			return err
 		}
-		return kids(sub)
+		return b.kids(sub)
 	}
-	return descend(out)
+	return b.descend(out)
+}
+
+// builtInRun is a built-in rule running for node on the cursor.
+type builtInRun struct {
+	run            *streamRun
+	rt             *runtime
+	node           *xdm.Node
+	mode           string
+	params, tunnel paramValues
+}
+
+// kids applies the mode to the node's children.
+func (b builtInRun) kids(out *outputBuilder) error {
+	return b.run.children(nil, out, b.mode, b.params, b.tunnel, focuser{b.rt, b.mode, true})
+}
+
+// descend is builtInDescend's: rt.descend around the children.
+func (b builtInRun) descend(out *outputBuilder) error {
+	if err := b.rt.descend(); err != nil {
+		return err
+	}
+	defer b.rt.ascend()
+	return b.kids(out)
+}
+
+// attrs applies the mode to the node's attributes, each at position 1
+// (one), as builtInShallowCopy has them, or at its own.
+func (b builtInRun) attrs(out *outputBuilder, one bool) error {
+	n := b.node.NumAttrs()
+	for idx := range n {
+		a, pos := b.node.AttrAt(idx), idx+1
+		if one {
+			pos = 1
+		}
+		if err := b.run.dispatch(b.rt.builtInFocus(b.mode, a, pos, n), a, b.mode, b.params, b.tunnel, out); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // builtInFail is the on-no-match="fail" rule's error.
@@ -975,9 +1043,8 @@ func builtInFail(node *xdm.Node, mode string) error {
 // shallowCopyDoc is builtInShallowCopy for the document node: its copy built
 // aside, then appended; the document's DOCTYPE and base URI come from the
 // views (element), which the descent has met by then.
-func (run *streamRun) shallowCopyDoc(rt *runtime, node *xdm.Node, mode string, out *outputBuilder,
-	descend func(*outputBuilder) error) error {
-
+func (b builtInRun) shallowCopyDoc(out *outputBuilder) error {
+	run, rt, node, mode, descend := b.run, b.rt, b.node, b.mode, b.descend
 	var doc *xdm.Node
 	if mr := rt.sheet.rules[mode]; mr != nil && mr.empty {
 		sub, root := xdmbuild.InPlaceDocument(xsltPolicy{nodes: rt.nodeBudget()})
