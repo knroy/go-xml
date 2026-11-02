@@ -40,7 +40,7 @@ func (r *Runner) recordCase(set *TestSet, tc *TestCase, res *xslt.Result, terr e
 
 // writeStreams appends, for a case that ran a container on the streamed path,
 // one line to <GOXSLT_RECORD_DIR>/streams/<suite>.tsv: the key, its runs per
-// streamtrace strategy in Strategy order (core), its fallbacks to the tree, its guard hits, its containers re-run on
+// streamtrace strategy in Strategy order (core, main), its fallbacks to the tree, its guard hits, its containers re-run on
 // the tree, and the core's sNodes per streamtrace Kind in Kind order. It is a
 // subdirectory so that tests/recdiff, which reads every <dir>/*.tsv as a
 // recording, never sees it.
