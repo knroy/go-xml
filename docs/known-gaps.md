@@ -177,7 +177,7 @@ Measured on branches in 2026-11 and not adopted, each with the reason:
   Namespace nodes are held weakly since v2.2.0; while a tree's table is not
   empty, every GC cycle sweeps it.
 
-### Streamed execution covers `xsl:source-document` only (XSLT 3.0, performance)
+### Streamed execution covers `xsl:source-document` and `TransformReader`'s principal input (XSLT 3.0, performance)
 
 An `xsl:source-document streamable="yes"` whose body has a known and verified
 §19.8 verdict runs on the streamed core: the document is read through a
@@ -197,6 +197,21 @@ predicates. `count`, `sum`, `avg`, `min`, `max`, `exists`, `empty`, `head`
 and `[n]` fold as the document is read; `xsl:copy-of` writes one copy at a
 time; `xsl:strip-space` is applied as the cursor reads.
 
+`Stylesheet.TransformReader` streams the document it reads in the same way
+when the transform starts by applying templates to it in a streamable mode
+(§6.6.4): the document node is dispatched on a cursor over the reader, and
+the rules run as above. It takes the tree path, `xdm.Parse` then `Transform`
+exactly, for an initial template, function or match selection; a mode that
+is not streamable, not verified, or reaches a rule or built-in the core does
+not run; an `xsl:global-context-item`, an accumulator,
+`input-type-annotations="strip"`, or a global variable or parameter whose
+value may read the context item (§5.3.3: the global context item is
+grounded); a built-in rule that would copy a node of the document to the top
+of the principal result (`Result.Nodes` would hold a copy where the tree
+holds the source's node); a deep-copy mode; a select at the document node
+that may give up (`min`/`max` over mixed types); a stylesheet of more than
+one module.
+
 Figures for the core, on this machine:
 - a 1 GB file totalled by `xsl:iterate`: 26 MB RSS against the tree's
   4.3 GB; 15.9 s CPU against the tree's 13.8 s;
@@ -208,7 +223,11 @@ Figures for the core, on this machine:
   against the tree's 2.6 s and 1,011 MB; 1 GB in 46 s and 5.4 GB against 33 s
   and 9.0 GB (the heap is the output, which is still built in memory);
 - a filter keeping 1 record in 10: 100 MB in 2.3 s and 60 MB against 1.7 s
-  and 739 MB; 1 GB in 23.6 s and 624 MB against 23.4 s and 7.4 GB.
+  and 739 MB; 1 GB in 23.6 s and 624 MB against 23.4 s and 7.4 GB;
+- through `TransformReader`: the identity over 100 MB in 4.1 s and 573 MB
+  against Parse + Transform's 2.5 s and 1,034 MB, 1 GB in 42 s and 5.2 GB
+  against 36 s and 9.1 GB; the filter over 1 GB in 23.3 s and 620 MB against
+  22.2 s and 7.3 GB.
 
 On flat documents the core costs 1.2–1.8× the tree's CPU (each match is a
 coroutine round trip on the cursor); on deep ones 0.14–1.5×.
@@ -221,9 +240,11 @@ pattern a view cannot decide (positional, reading content, `id()`/`key()`,
 union/intersect/except; `xsl:try`, `xsl:for-each-group`, `xsl:fork`,
 `xsl:result-document`; `last()`, `reverse`, `sort`, user functions.
 
-In the W3C XSLT 3.0 run 606 cases stream (9 before the second burst shape,
+In the W3C XSLT 3.0 run 629 cases stream (9 before the second burst shape,
 364 before `//` record paths, 450 before the core, 576 before streamable
-modes).
+modes, 606 before `TransformReader`). 23 of the 225 cases with a streamed
+principal input stream; the rest need grouping, accumulators, `xsl:fork`,
+`xsl:try` or streamable functions, or their mode is not verified.
 Also:
 
 - **The result is still built in memory**, so a large filtered copy grows with
@@ -237,7 +258,8 @@ Also:
   integer multiplied each record (`MaxDigits`), a sequence appended to or
   passed through `distinct-values` each record (`MaxItems`) run quadratic time
   and are stopped by the context deadline, before and after v2.3.0.
-- **Any error re-runs the container on the tree**, so errors are the tree's,
+- **Any error re-runs the container on the tree** (a container: see the
+  `TransformReader` bullet for a streamed principal input), so errors are the tree's,
   in the tree's order. The cost is a second read of the document, and the
   1 GiB string budget charges the strings both attempts built. Under
   `xsl:try rollback-output="no"`, output already written can turn a caught
@@ -246,6 +268,18 @@ Also:
   at its top runs on the tree, as the tree keeps the source's own nodes there.
   A differential fuzzer (250k generated cases) compares streamed and tree runs
   exactly and finds no difference.
+- **`TransformReader` reads its document once**, so it cannot re-run on the
+  tree as a container does. Everything that would need the tree is refused
+  when the stylesheet compiles, and its errors are the tree's as they come. A
+  malformed document or a parse limit is reported as `xdm.Parse` reports it
+  even when the transform failed first: the rest of the document is read
+  before the error is returned (not after a cancelled context). A defect of
+  the streaming plans, which a container would hide by re-running on the
+  tree, is returned as `streaming: internal error: ...`, because there is no
+  tree to answer. None occurs in the W3C run or in 100,000 fuzzed cases.
+  `generate-id()` of a node of a streamed document has another tree number
+  than the same node parsed into a tree; the string is
+  implementation-dependent and differs between any two parses.
 - **`xsl:break` still reads the rest of the file**, so that a malformed tail is
   an error as in tree mode.
 - **Only `FileResolver` streams**; another `DocumentResolver` builds the tree.

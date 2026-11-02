@@ -139,7 +139,7 @@ and maintains it as a project of his own.
 | **XSD 1.1** | 99.98% instance (26,217 of 26,222); **99.97%** schema-validity (15,350 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100.00% of James Clark's spectest (965 of 965 assertions); XML and compact syntax, from Go and from `go-xml validate -rng` |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 3,038 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 3,042 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -178,14 +178,15 @@ true here:
    each test's declared version dependency — a different kind of measurement
    from running a suite written for the version under test.
 
-   **Streamed execution covers `xsl:source-document streamable="yes"` only**:
+   **Streamed execution covers `xsl:source-document streamable="yes"` and a
+   principal input read through `Stylesheet.TransformReader`**:
    one `xsl:for-each` or `xsl:iterate` over a record path such as `//rec` or
    `doc/rec`, or one `xsl:value-of`/`xsl:copy-of`/`xsl:sequence` over one
    record path such as `sum(doc/rec/@v)`, read one record at a time; and,
    through the streamed core, sequence constructors of literal result
    elements, `xsl:element`, `xsl:copy`, `xsl:choose`, loops, split selects and
    `xsl:apply-templates` into streamable modes
-   (606 W3C cases stream; see [known gaps](docs/known-gaps.md)). Otherwise the streaming cases are in
+   (629 W3C cases stream; see [known gaps](docs/known-gaps.md)). Otherwise the streaming cases are in
    scope and counted: the stylesheet-level half of streaming, the §19.8
    streamability analysis that refuses a construct with `XTSE3430`, is
    implemented and measured. What is absent is streamed *execution*, not the
@@ -361,6 +362,29 @@ for _, doc := range result.Secondary {
 ```
 
 Nothing is written to disk unless you write it — see *Security defaults*.
+
+A large document can be streamed rather than built. `TransformReader` reads
+it once, as the transform runs, when the stylesheet starts in a mode declared
+`streamable="yes"` whose rules are guaranteed streamable; otherwise it is
+exactly `xdm.Parse` then `Transform`, so the result, errors and limits are the
+same either way:
+
+```go
+f, err := os.Open("big.xml")
+defer f.Close()
+result, err := sheet.TransformReader(ctx, f, xslt.TransformOptions{
+    SourceParseOptions: xdm.ParseOptions{
+        BaseURI:     "file:///data/big.xml", // fn:base-uri, relative fn:doc
+        DocumentURI: "file:///data/big.xml", // fn:document-uri
+        MaxBytes:    -1,                     // the default refuses over 64 MB
+        MaxNodes:    -1,
+    },
+})
+```
+
+Nothing outside the rules may read the document for it to stream: no global
+variable reading `.`, no `xsl:global-context-item`, no accumulator. See
+[known gaps](docs/known-gaps.md) for the full conditions.
 
 `Compile` is the expensive step and `Transform` does not mutate the compiled
 stylesheet, so compile once and transform concurrently — the test suite
@@ -1395,7 +1419,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (3,038 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (3,042 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 22,054 XPath and 30,517 XQuery cases | XSLT (it is an XPath suite) |

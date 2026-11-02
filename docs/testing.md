@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,038 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,042 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -564,8 +564,9 @@ suite's consuming expressions, and a fuzzer (`GOXSLT_SPLIT_FUZZ=N`,
    to the tree.
 
 It compares base with branch, and branch with off, using `tests/recdiff`
-and `tests/streamdiff/allow.txt`. That file holds seven case-scoped rules:
-generate-id numbering in docbook-002, si-fork-801 and document-2011, and the clock in
+and `tests/streamdiff/allow.txt`. That file holds nine case-scoped rules:
+generate-id numbering in docbook-002, si-fork-801, document-2011 and
+streamable-007/-022 (a principal input `TransformReader` streamed), and the clock in
 evaluate-052, cvt-042, format-date-037 and error-3160a.
 
 With `GOXSLT_RECORD_DIR` set, tests/xslts writes
@@ -573,17 +574,24 @@ With `GOXSLT_RECORD_DIR` set, tests/xslts writes
 fails when any of these is true:
 - a difference is unexplained;
 - fewer cases streamed than the floor (`-floor`, `GOXSLT_STREAM_FLOOR`,
-  default 606);
+  default 629);
 - a guard fired;
 - the off leg streamed.
 
-At 2e4c8cfe it reads:
-- 606 cases on the streamed path, 15 re-run on the tree;
-- the core's sNodes by kind: tree 49, ground 9, seq 1,252, element 563,
-  choose 7, for-each 71, where-pop 0, source-doc 2, select 544, apply 35;
+A principal input the catalog declares `streaming="true"` (no `@select`,
+content, XInclude or validation, no initial-mode selection) is handed to
+`TransformReader` unparsed; under `GOXSLT_STREAM_OFF=1` it is parsed and given
+to `Transform`, so the off leg compares Parse + Transform.
+
+At 6a4d2832 it reads:
+- 629 cases on the streamed path: 609 container runs and 23 principal inputs,
+  15 re-run on the tree;
+- the core's sNodes by kind as at M2, with apply 58 (35 plus 23 initial
+  dispatches);
 - zero unexplained differences.
 
-The TSV line holds the core's runs, fallbacks, guard hits, re-runs and
+The TSV line holds the runs per strategy (core: containers; main: principal
+inputs `TransformReader` streamed), fallbacks, guard hits, re-runs and
 sNodes per kind. The core has its own differential, `go test ./xslt -run
 TestStreamCore -v`: hand-written bodies × documents × whitespace
 declarations, the document-element fallback, the result budgets pinned to
@@ -601,6 +609,15 @@ At 7344aa13, 100,000 cases (seed 1) give 0 differences, 36,142 of them
 streamed and 11,523 of those mode shapes; 100,000 of the M1 grammar alone
 give 0 too, as do 100,000 of the earlier grammar, in which the retired burst
 loops needed an error-order allowance of 9 per 100k (at 75a97759).
+
+`TestStreamFuzzMain` applies each case of the modes grammar to its document
+in an initial mode through `TransformReader` and through `xdm.Parse` +
+`Transform`, compared exactly, `Result.Nodes` included (`GOXSLT_STREAM_FUZZ=N`,
+`_SEED=S`). At 6a4d2832, 100,000 cases give 0 differences: 32,613 streamed,
+7,855 of them ending in an error, each Parse + Transform's. `go test ./xslt
+-run TestStreamMain -v` compares `TransformReader` with Parse + Transform over
+hand-written cases, errors and parse limits, and, without `-short`, peak
+heap.
 
 
 ## The ratchet
