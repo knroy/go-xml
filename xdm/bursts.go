@@ -55,15 +55,28 @@ func parseBursts(r io.Reader, opts ParseOptions, steps []xdmburst.Step, fn func(
 	if len(steps) == 0 || len(steps) > xdmburst.MaxSteps {
 		panic("xdm: ParseBursts needs a path of 1 to 63 names")
 	}
-	opts.bursts = &burster{steps: steps, fn: fn, states: []uint64{1}, gens: []uint64{0}}
+	opts.bursts = &burster{c: &patternClient{steps: steps, states: []uint64{1}}, fn: fn, gens: []uint64{0}}
 	_, err := parse(r, "", opts)
 	return err
 }
 
-// burster is ParseBursts' state inside parse.
+// burster is the stream driver: the state a streamed parse keeps inside
+// parse. Its client decides, at each start tag outside an element already
+// decided, whether the element is kept on the spine (its content then met
+// piece by piece), built whole and handed to fn at its end (a burst), or
+// built, checked and dropped. ParseBursts' client is patternClient; the
+// pull cursor (internal/xdmstream) is the other, through xdmburst.Drive.
 type burster struct {
-	steps []xdmburst.Step
-	fn    func(*Node) error
+	c  streamClient
+	fn func(*Node) error
+	// leaves hands c the text, comments and processing instructions of the
+	// spine, the document node's own too, before they are dropped.
+	leaves bool
+	// noBatch delivers every burst at once, in a tree of its own.
+	noBatch bool
+	// watch, when set, is told of every element's start and end, those
+	// inside a burst or a dropped element too.
+	watch func(el *Node, d int, end bool)
 	// spine is how many levels of the open chain could lead to a match and
 	// are kept.
 	spine int
@@ -71,10 +84,6 @@ type burster struct {
 	// burst, or an element off the path), or 0; burst says it is a burst.
 	drop  int
 	burst bool
-	// states[d] is the set of pattern steps the spine element at depth d
-	// (0: the document node) has matched, as bits: bit k means the first k
-	// steps are matched by it and its ancestors.
-	states []uint64
 	// marks[d] is the tree's state once the spine element at depth d (0:
 	// the document node) had stored its attributes. Everything stored after
 	// it belongs to content that is dropped.
@@ -105,31 +114,84 @@ func markOf(t *Tree) burstMark {
 	return burstMark{t.text.mark(), len(t.names), len(t.frames), len(t.frameData)}
 }
 
-// start classifies the element just built at depth d and opened as el.
-func (b *burster) start(el *Node, d int) {
-	if b.drop != 0 {
-		return
-	}
-	n := b.advance(b.states[b.spine], el.Name())
+// streamClient is what a burster asks and tells (see burster). Its nodes
+// are the parse's own: valid until the call returns, and not to be kept.
+type streamClient interface {
+	// start decides what becomes of el, just opened at depth d under a
+	// spine element.
+	start(el *Node, d int) (xdmburst.Action, error)
+	// leaf is told of n, a leaf at depth d inside a spine element (or the
+	// document node), once it is complete; only with burster.leaves.
+	leaf(n *Node, d int) error
+	// end is told that el, at depth d, has closed: an element start kept
+	// (kept), or one it made a burst of, which has been delivered, or
+	// dropped, still whole in the parse's tree.
+	end(el *Node, d int, kept bool) error
+}
+
+// patternClient is ParseBursts' client: an element whose ancestry matches
+// the pattern is a burst; one whose ancestry could still lead to a match
+// below it is kept on the spine; any other is dropped.
+type patternClient struct {
+	steps []xdmburst.Step
+	// states[d] is the set of pattern steps the spine element at depth d
+	// (0: the document node) has matched, as bits: bit k means the first k
+	// steps are matched by it and its ancestors.
+	states []uint64
+}
+
+func (p *patternClient) start(el *Node, d int) (xdmburst.Action, error) {
+	n := p.advance(p.states[len(p.states)-1], el.Name())
 	switch {
-	case n&(1<<len(b.steps)) != 0:
-		b.drop, b.burst = d, true
+	case n&(1<<len(p.steps)) != 0:
+		return xdmburst.Ground, nil
 	case n != 0:
+		p.states = append(p.states, n)
+		return xdmburst.Keep, nil
+	}
+	return xdmburst.Skip, nil
+}
+
+func (p *patternClient) leaf(*Node, int) error { return nil }
+
+func (p *patternClient) end(_ *Node, _ int, kept bool) error {
+	if kept {
+		p.states = p.states[:len(p.states)-1]
+	}
+	return nil
+}
+
+// start classifies the element just built at depth d and opened as el.
+func (b *burster) start(el *Node, d int) error {
+	if b.watch != nil {
+		b.watch(el, d, false)
+	}
+	if b.drop != 0 {
+		return nil
+	}
+	act, err := b.c.start(el, d)
+	if err != nil {
+		return err
+	}
+	switch act {
+	case xdmburst.Ground:
+		b.drop, b.burst = d, true
+	case xdmburst.Keep:
 		b.spine = d
-		b.states = append(b.states, n)
 		b.marks = append(b.marks, markOf(el.tree))
 		b.gen++
 		b.gens = append(b.gens, b.gen)
 	default:
 		b.drop = d
 	}
+	return nil
 }
 
 // advance is the set of steps matched by an element named q whose parent
 // matched the set s.
-func (b *burster) advance(s uint64, q QName) uint64 {
+func (p *patternClient) advance(s uint64, q QName) uint64 {
 	var n uint64
-	for k, st := range b.steps {
+	for k, st := range p.steps {
 		if s&(1<<k) == 0 {
 			continue
 		}
@@ -146,6 +208,10 @@ func (b *burster) advance(s uint64, q QName) uint64 {
 // end handles the close of el, at depth d, whose parent is now current. It
 // delivers a burst and drops whatever is not spine.
 func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) error {
+	if b.watch != nil {
+		b.watch(el, d, true)
+	}
+	kept := false
 	switch {
 	case b.drop == d:
 		b.drop = 0
@@ -156,12 +222,15 @@ func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) err
 			}
 		}
 	case b.drop == 0 && d == b.spine && d > 0:
+		kept = true
 		b.spine--
 		b.marks = b.marks[:len(b.marks)-1]
-		b.states = b.states[:len(b.states)-1]
 		b.gens = b.gens[:len(b.gens)-1]
 	default:
 		return nil
+	}
+	if err := b.c.end(el, d, kept); err != nil {
+		return err
 	}
 	if d == 1 {
 		// The document element is done: so is the last batch.
@@ -175,14 +244,21 @@ func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) err
 
 // trimLeaves drops the leaves completed directly inside the spine element
 // cur, at depth d: text, comments and processing instructions no path step
-// selects.
+// selects. With leaves, the client is told of them first, and the document
+// node's own (d 0) are trimmed too once the document element has opened
+// (see prolog).
 //
 // It is also where a batch is delivered early: what the parse stored since
 // cur's mark is all garbage now, and once a child of cur opens it cannot be
 // taken back until cur closes, so it is not let grow past burstFrozen.
 func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCache) error {
-	if b.drop != 0 || d == 0 || d != b.spine {
+	if b.drop != 0 || d != b.spine || d == 0 && (!b.leaves || len(b.marks) == 0) {
 		return nil
+	}
+	if b.leaves {
+		if err := b.tellLeaves(cur, d); err != nil {
+			return err
+		}
 	}
 	for last := cur.LastChild(); last != nil && last.isLeaf(); last = cur.LastChild() {
 		b.discardLast(cur, spaces, names)
@@ -192,6 +268,41 @@ func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCa
 			return err
 		}
 		b.rewind(cur.tree, spaces, names)
+	}
+	return nil
+}
+
+// tellLeaves tells the client of the leaves at the end of cur's children,
+// at depth d, in document order.
+func (b *burster) tellLeaves(cur *Node, d int) error {
+	first := cur.LastChild()
+	if first == nil || !first.isLeaf() {
+		return nil
+	}
+	for p := first.PrevSibling(); p != nil && p.isLeaf(); p = p.PrevSibling() {
+		first = p
+	}
+	for n := first; n != nil; n = n.NextSibling() {
+		if err := b.c.leaf(n, d+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// prolog tells the client of the comments and processing instructions
+// before the document element, at its start tag, and drops them. They wait
+// until then because a parse that meets an entity with markup in the DOCTYPE
+// starts again (parseExpanded) and would meet them twice.
+func (b *burster) prolog(root *Node) error {
+	if !b.leaves {
+		return nil
+	}
+	if err := b.tellLeaves(root, 0); err != nil {
+		return err
+	}
+	for root.LastChild() != nil {
+		root.RemoveLastChild()
 	}
 	return nil
 }
@@ -240,7 +351,7 @@ func (b *burster) rewind(t *Tree, spaces *spaceTable, names *nameCache) {
 // (deliver), and a small one with the bursts before it (burstBatch).
 func (b *burster) take(el *Node) error {
 	t := el.tree
-	if t.endOf(el)-el.self > burstSmall {
+	if b.noBatch || t.endOf(el)-el.self > burstSmall {
 		if err := b.flush(); err != nil {
 			return err
 		}

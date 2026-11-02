@@ -129,9 +129,8 @@ func TestParseBurstsSpineStaysSmall(t *testing.T) {
 	b.WriteString("</b></a>")
 	n := 0
 	opts := ParseOptions{bursts: &burster{
-		steps:  []xdmburst.Step{{Local: "a"}, {Local: "b"}, {Local: "r"}},
-		fn:     func(*Node) error { n++; return nil },
-		states: []uint64{1},
+		c:  &patternClient{steps: []xdmburst.Step{{Local: "a"}, {Local: "b"}, {Local: "r"}}, states: []uint64{1}},
+		fn: func(*Node) error { n++; return nil },
 	}}
 	tree, err := parse(strings.NewReader(b.String()), "", opts)
 	if err != nil {
@@ -226,9 +225,8 @@ func TestParseBurstsNamesStaySmall(t *testing.T) {
 	b.WriteString("</a>")
 	var got []*Node
 	opts := ParseOptions{bursts: &burster{
-		steps:  []xdmburst.Step{{Local: "a"}, {Local: "r"}},
-		fn:     func(r *Node) error { got = append(got, r); return nil },
-		states: []uint64{1},
+		c:  &patternClient{steps: []xdmburst.Step{{Local: "a"}, {Local: "r"}}, states: []uint64{1}},
+		fn: func(r *Node) error { got = append(got, r); return nil },
 	}}
 	tree, err := parse(strings.NewReader(b.String()), "", opts)
 	if err != nil {
@@ -377,7 +375,7 @@ func TestParseBurstsSpineCopiedOnce(t *testing.T) {
 		}
 		b.WriteString(strings.Repeat("</w>", depth))
 		got := 0
-		bs := &burster{steps: []xdmburst.Step{{Local: "rec", Descendant: true}}, states: []uint64{1}, gens: []uint64{0},
+		bs := &burster{c: &patternClient{steps: []xdmburst.Step{{Local: "rec", Descendant: true}}, states: []uint64{1}}, gens: []uint64{0},
 			fn: func(r *Node) error {
 				// Each burst still has its whole ancestry.
 				d := 0

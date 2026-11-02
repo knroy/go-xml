@@ -421,6 +421,9 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 				return nil, err
 			}
 			if bs != nil && cur == tree.Root {
+				if err := bs.prolog(tree.Root); err != nil {
+					return nil, err
+				}
 				bs.marks = append(bs.marks[:0], markOf(tree))
 				bs.v11 = dec.IsVersion11()
 			}
@@ -458,7 +461,9 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 			}
 			cur = el
 			if bs != nil {
-				bs.start(el, depth)
+				if err := bs.start(el, depth); err != nil {
+					return nil, err
+				}
 			}
 
 		case *xml.EndElement:
@@ -507,7 +512,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 		case *xml.Comment:
 			t := *tok
 			sawPrologToken = true
-			if bs != nil && cur == tree.Root {
+			if bs != nil && cur == tree.Root && !bs.leaves {
 				continue // a burst's tree holds no prolog (see bursts.go)
 			}
 			c := cur.appendChild(KindComment)
@@ -534,7 +539,7 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 				return nil, fmt.Errorf("parse XML: processing-instruction target %q contains a colon", t.Target)
 			}
 			sawPrologToken = true
-			if bs != nil && cur == tree.Root {
+			if bs != nil && cur == tree.Root && !bs.leaves {
 				continue
 			}
 			pi := cur.appendChild(KindPI)
@@ -751,6 +756,13 @@ func parse(r io.Reader, whole string, opts ParseOptions) (*Tree, error) {
 	}
 	if cur != tree.Root {
 		return nil, fmt.Errorf("parse XML: unexpected EOF, %q left open", cur.Name().Local)
+	}
+	if bs != nil {
+		// The comments and processing instructions after the document
+		// element.
+		if err := bs.trimLeaves(cur, 0, &spaces, &names); err != nil {
+			return nil, err
+		}
 	}
 	tree.closeAll()
 	tree.frozen = true
