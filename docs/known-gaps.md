@@ -177,7 +177,7 @@ Measured on branches in 2026-11 and not adopted, each with the reason:
   Namespace nodes are held weakly since v2.2.0; while a tree's table is not
   empty, every GC cycle sweeps it.
 
-### Streamed execution covers two shapes (XSLT 3.0, performance)
+### Streamed execution covers three shapes (XSLT 3.0, performance)
 
 Since v2.2.0 an `xsl:source-document streamable="yes"` whose body is one
 `xsl:for-each` or `xsl:iterate` (optionally inside constant literal result
@@ -210,8 +210,19 @@ a whole tree (945 B against 208 B). Also refused: `distinct-values`, `reverse`,
 `sort`, `last()`, union/intersect/except, `let`, user functions, and paths to
 non-elements (`//text()`, `//@x`).
 
-In the W3C XSLT 3.0 run 364 cases take the burst path (9 before the second
-shape). Of the 786 single-instruction bodies over one record path with a known
+The third shape, the streamed core, takes the trusted containers the first
+two refuse. It reads the document through a cursor and handles literal
+result elements, `xsl:element`, `xsl:copy`, `xsl:attribute`, `xsl:if` and
+`xsl:choose`, nested `xsl:source-document`, `xsl:for-each` and `xsl:iterate`
+whose bodies read their matches, and selects split on the cursor (striding
+and crawling paths, positional predicates, the reducers). `xsl:copy-of` writes
+one copy at a time, and `xsl:strip-space` is applied as the cursor reads. A
+select that would collect grounded copies at the document node is refused,
+because it would hold more than the tree. Any error re-runs the container on
+the tree, so the core's errors are the tree's, at the cost of a second read.
+
+In the W3C XSLT 3.0 run 564 cases stream (9 before the second shape, 364
+before `//` record paths, 450 before the core; the core adds 114). Of the 786 single-instruction bodies over one record path with a known
 and verified verdict, 294 are admitted (261 bounded reducers, 33 pipelined).
 Also:
 
@@ -274,7 +285,7 @@ and §18.1's grounded demand at both the sites it names.
 All three fail in the same direction: the suite expects `XTSE3430` — *this
 construct is not guaranteed streamable* — and the transform succeeds instead.
 The engine builds a tree for these (it reads in bursts only the narrow shape
-described under *Streamed execution covers two shapes*), so it produces the **right
+described under *Streamed execution covers three shapes*), so it produces the **right
 answer** for all three; what it does not produce is the static refusal §19.8
 requires a streaming processor to make before running anything. These are not
 wrong answers; they are a static analysis that is not complete.
@@ -291,6 +302,13 @@ module. Refusals ignore the bit, so no XTSE3430 result moves; streamed execution
 requires it clear. In the W3C streaming stylesheets the static checks accept,
 58 known, grounded containers in 41 files are unverified (modes 28, functions
 10, cross-module 10, accumulators 7, other 3).
+
+One rule is coded against its own comment: `simpleMap` in
+`xslt/streamfunctions.go` returns the right operand's properties, where
+§19.8.8 takes the wider sweep of the two, so `(//ITEM!string(.))!number(.)` is
+recorded as motionless. Streamed execution does not trust it: the core checks
+every expression against what a view can answer and refuses these containers.
+Fixing the rule can move XTSE3430 verdicts, so it waits for the analysis work.
 
 **All three are measured, and each known fix costs more than it gains.**
 Modelling `||` refuses `si-fork-902`/`-952` and costs 18 `sx-union` cases

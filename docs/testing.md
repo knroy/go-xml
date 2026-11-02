@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,025 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,031 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -573,24 +573,39 @@ With `GOXSLT_RECORD_DIR` set, tests/xslts writes
 fails when any of these is true:
 - a difference is unexplained;
 - fewer cases streamed than the floor (`-floor`, `GOXSLT_STREAM_FLOOR`,
-  default 450);
+  default 564);
 - a guard fired;
 - the off leg streamed.
 
-At aeaf6cbe it reads:
-- 450 cases on the streamed path, 12 with a fallback;
-- fold 81, collect 336, for-each 30, iterate 4 runs;
+At 42392ae1 it reads:
+- 564 cases on the streamed path, 12 with a burst fallback, 3 re-run on the
+  tree;
+- fold 81, collect 336, for-each 30, iterate 4 runs, and 115 runs of the
+  streamed core;
+- the core's sNodes by kind: tree 29, ground 2, seq 255, element 104,
+  choose 1, for-each 36, where-pop 0, source-doc 2, select 94;
 - zero unexplained differences.
+
+The TSV line also holds the core's runs, re-runs and sNodes per kind. The
+core has its own differential, `go test ./xslt -run TestStreamCore -v`:
+hand-written bodies × documents × whitespace declarations, the
+document-element fallback, the result budgets against the burst path, and,
+without `-short`, peak heap against the tree.
 
 `TestStreamFuzz` (skipped under `-short`) generates a record document and a
 streamable stylesheet per seed. It runs each with bursts, with bursts but no
-folding, and on the tree, and requires the same output and error. The only
-exception is the documented loop-shape error order (see known-gaps.md). A
+folding, on the tree, and with the burst plans off so that the streamed core
+takes their containers, and requires the same output and error. The only
+exception is the documented loop-shape error order (see known-gaps.md); the
+fourth leg must equal the tree exactly, and a re-run where the tree succeeds
+counts as a difference. The core's shapes come from their own random stream
+(`GOXSLT_STREAM_FUZZ_CORE=0` reproduces the earlier cases). A
 failing case prints its seed and the command that replays it.
 
 At aeaf6cbe, 120,000 cases put 35,350 on the burst path, with 0 differences
 and 10 in the allowed class. Breaking the count fold made 17 of 20,000 cases
-differ.
+differ. At fe895f84, 100,000 cases (seed 1) give 0 differences, 34,958 of
+them on the core in the fourth leg.
 
 
 ## The ratchet
