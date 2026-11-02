@@ -69,7 +69,13 @@ func TestParseBurstsMatchesTree(t *testing.T) {
 		if g := dump(r) + ancestry(r); g != want[i] {
 			t.Fatalf("burst %d differs\nwant\n%s\ngot\n%s", i, want[i], g)
 		}
-		if i > 0 && got[i-1].Tree().ident() >= r.Tree().ident() {
+		// Small bursts share a tree (burstBatch); either way they order
+		// as they came.
+		if i == 0 {
+			continue
+		}
+		if p := got[i-1]; p.Tree() == r.Tree() && p.self >= r.self ||
+			p.Tree() != r.Tree() && p.Tree().ident() >= r.Tree().ident() {
 			t.Fatalf("burst %d does not order after burst %d", i, i-1)
 		}
 	}
@@ -155,15 +161,18 @@ func TestParseBurstsCopyNoIndexes(t *testing.T) {
 	}
 	b.WriteString("</a>")
 	i := 0
+	seen := map[*Tree]bool{}
 	err := ParseBursts(strings.NewReader(b.String()), ParseOptions{}, []QName{{Local: "a"}, {Local: "r"}},
 		func(r *Node) error {
 			c := r.tree
-			if c.nameIx != nil || c.frameOne != nil || c.frameMany != nil {
+			// Checked on a tree's first burst: the intern below builds one.
+			if !seen[c] && (c.nameIx != nil || c.frameOne != nil || c.frameMany != nil) {
 				t.Fatalf("burst %d: copied indexes: %d names, %d+%d frames", i, len(c.nameIx), len(c.frameOne), len(c.frameMany))
 			}
 			if got, want := r.FirstChild().Name().Local, fmt.Sprintf("n%d", i); got != want {
 				t.Fatalf("burst %d: child %q, want %q", i, got, want)
 			}
+			seen[c] = true
 			if got := c.intern(QName{Local: fmt.Sprintf("n%d", i)}); got != r.FirstChild().name {
 				t.Fatalf("burst %d: intern finds %d, the child has %d", i, got, r.FirstChild().name)
 			}
@@ -183,9 +192,13 @@ func TestParseBurstsNoProlog(t *testing.T) {
 	err := ParseBursts(strings.NewReader(src), ParseOptions{}, []QName{{Local: "a"}, {Local: "r"}},
 		func(r *Node) error {
 			n++
-			// The document node, a, r and x.
-			if got := r.tree.n; got != 4 {
-				t.Fatalf("burst %d: the tree holds %d records, want 4", n, got)
+			// The document node holds a, and a only bursts: r and x.
+			kids := uint32(0)
+			for range r.Parent().Children() {
+				kids++
+			}
+			if got, want := r.tree.n, 2+2*kids; got != want {
+				t.Fatalf("burst %d: the tree holds %d records, want %d", n, got, want)
 			}
 			return nil
 		})
@@ -341,6 +354,51 @@ func TestParseBurstsPattern(t *testing.T) {
 		}
 		if g := strings.Join(got, " "); g != tc.want {
 			t.Errorf("%s: bursts %q, want %q", tc.name, g, tc.want)
+		}
+	}
+}
+
+// Under a deep spine, small bursts share copies of their ancestors: the
+// ancestors copied stay in proportion to the elements read, rather than
+// growing with bursts x depth.
+func TestParseBurstsSpineCopiedOnce(t *testing.T) {
+	const depth, n = 300, 3000
+	for _, wrap := range []bool{false, true} {
+		var b strings.Builder
+		b.WriteString(strings.Repeat(`<w a="1">`, depth))
+		for i := range n {
+			if wrap {
+				b.WriteString("<g>")
+			}
+			fmt.Fprintf(&b, `<rec k="%d"><x/></rec>`, i)
+			if wrap {
+				b.WriteString("</g>")
+			}
+		}
+		b.WriteString(strings.Repeat("</w>", depth))
+		got := 0
+		bs := &burster{steps: []xdmburst.Step{{Local: "rec", Descendant: true}}, states: []uint64{1}, gens: []uint64{0},
+			fn: func(r *Node) error {
+				// Each burst still has its whole ancestry.
+				d := 0
+				for p := r.Parent(); p != nil && p.Kind() == KindElement; p = p.Parent() {
+					d++
+				}
+				if want := depth + map[bool]int{false: 0, true: 1}[wrap]; d != want || r.Attr("", "k").Value() != fmt.Sprint(got) {
+					t.Fatalf("burst %d: %d ancestors, want %d", got, d, want)
+				}
+				got++
+				return nil
+			}}
+		if _, err := parse(strings.NewReader(b.String()), "", ParseOptions{bursts: bs}); err != nil {
+			t.Fatal(err)
+		}
+		opened := depth + 2*n
+		if wrap {
+			opened += n
+		}
+		if got != n || bs.spineCopies > opened {
+			t.Errorf("wrap %v: %d bursts; %d ancestor records copied for %d elements read", wrap, got, bs.spineCopies, opened)
 		}
 	}
 }

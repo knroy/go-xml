@@ -1242,15 +1242,26 @@ func (i *sourceDocumentInstr) executeBursts(rt *runtime, out *outputBuilder, hre
 	stand := xdm.NewTree()
 	sub := rt.withCurrent(stand.Root, 1, 1).clearCurrentRule()
 	plan := i.bursts
-	// records calls fn with each burst's document node and element,
-	// whitespace stripped as the tree would have been.
-	records := func(fn func(root, rec *xdm.Node) error) error {
+	// records calls fn with each burst's document node and element. Small
+	// bursts come several to a tree (xdm's burst batches), and a select
+	// evaluated against the document node reads all of them: with perRoot,
+	// fn is called once for each tree, whitespace stripped as the tree would
+	// have been, and with no element.
+	records := func(perRoot bool, fn func(root, rec *xdm.Node) error) error {
+		var last *xdm.Tree
 		return br.parseBursts(rt.ctx, href, base, plan.path, func(rec *xdm.Node) error {
 			root := rec.Tree().Root
-			if strip != nil {
-				root, rec = strip.stripWhitespaceForFrom(pkg, root, rec)
+			if !perRoot {
+				return fn(root, rec)
 			}
-			return fn(root, rec)
+			if rec.Tree() == last {
+				return nil
+			}
+			last = rec.Tree()
+			if strip != nil {
+				root = strip.stripWhitespaceFor(pkg, root)
+			}
+			return fn(root, nil)
 		})
 	}
 	if plan.items != nil {
@@ -1278,8 +1289,8 @@ func (i *sourceDocumentInstr) executeBursts(rt *runtime, out *outputBuilder, hre
 	}
 	sub.bursts = &burstFeed{instr: plan.instr, read: func(each func(xdm.Item) error) error {
 		var bodyErr error
-		err := records(func(root, rec *xdm.Node) error {
-			if !plan.filtered {
+		err := records(plan.filtered || strip != nil, func(root, rec *xdm.Node) error {
+			if rec != nil {
 				if err := each(rec); err != nil {
 					bodyErr = err
 					return err
@@ -1315,7 +1326,7 @@ var errBurstGiveUp = errors.New("bursts: the fold cannot be exact")
 // over the bursts records reads. The item and byte budgets are held across
 // all of it, as they are across one evaluation of the select over the tree.
 func (p *burstPlan) evalBursts(rt *runtime,
-	records func(fn func(root, rec *xdm.Node) error) error) (xdm.Sequence, error) {
+	records func(perRoot bool, fn func(root, rec *xdm.Node) error) error) (xdm.Sequence, error) {
 
 	ctx := rt.ctx.HoldItemBudget().HoldByteBudget()
 	fold := p.reducer != "" && !noBurstFold
@@ -1324,7 +1335,7 @@ func (p *burstPlan) evalBursts(rt *runtime,
 		n        int64
 		typ      string
 	)
-	err := records(func(root, _ *xdm.Node) error {
+	err := records(true, func(root, _ *xdm.Node) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
