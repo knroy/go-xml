@@ -18,11 +18,11 @@
 //
 // It fails (exit 1) when base vs branch or branch vs off differ anywhere the
 // allow file (default tests/streamdiff/allow.txt) does not explain, when fewer
-// cases than the floor (-floor, else GOXSLT_STREAM_FLOOR, else 450) ran a
-// container on the streamed path, when any guard fired, or when the off leg
-// streamed anything. The summary comes from <outdir>/branch/streams/
+// cases than the floor (-floor, else GOXSLT_STREAM_FLOOR, else defaultFloor)
+// ran a container on the streamed path, when any guard fired, or when the off
+// leg streamed anything. The summary comes from <outdir>/branch/streams/
 // xslt30.tsv, which tests/xslts writes (key, runs per strategy, fallbacks,
-// guard hits).
+// guard hits, re-runs, the core's sNodes per kind).
 package main
 
 import (
@@ -39,8 +39,13 @@ import (
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
 )
 
+// defaultFloor is the streamed case count the last stage reached: 450 with
+// the burst plans alone (M1.1-M1.4), (to be raised) with the streamed core (M1.5).
+// A stage may only raise it.
+const defaultFloor = 450
+
 func main() {
-	floor := 450
+	floor := defaultFloor
 	if v := os.Getenv("GOXSLT_STREAM_FLOOR"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -114,8 +119,12 @@ func main() {
 	for i, n := range br.total.Runs {
 		fmt.Printf("  %-9s %6d runs\n", streamtrace.Strategy(i), n)
 	}
-	fmt.Printf("  fallbacks %d, guard hits %d; off leg: %d cases streamed, %d guard hits\n",
-		br.total.Fallbacks, br.total.Guards, off.cases, off.total.Guards)
+	fmt.Printf("  core sNodes by kind:")
+	for i, n := range br.total.Kinds {
+		fmt.Printf(" %s %d", streamtrace.Kind(i), n)
+	}
+	fmt.Printf("\n  fallbacks %d, re-runs %d (%d cases), guard hits %d; off leg: %d cases streamed, %d guard hits\n",
+		br.total.Fallbacks, br.total.Reruns, br.rerunCases, br.total.Guards, off.cases, off.total.Guards)
 	if br.cases < floor {
 		fmt.Printf("FAIL %d cases on the streamed path, below the floor %d\n", br.cases, floor)
 		bad = true
@@ -189,8 +198,8 @@ func cleanEnv() []string {
 }
 
 type streams struct {
-	cases, fellCases int
-	total            streamtrace.Counts
+	cases, fellCases, rerunCases int
+	total                        streamtrace.Counts
 }
 
 // summary totals <dir>/streams/xslt30.tsv; a leg with no file streamed nothing.
@@ -206,7 +215,7 @@ func summary(dir string) (s streams) {
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		fs := strings.Split(sc.Text(), "\t")
-		if len(fs) != 1+int(streamtrace.NumStrategies)+2 {
+		if len(fs) != 1+int(streamtrace.NumStrategies)+3+int(streamtrace.NumKinds) {
 			die(fmt.Errorf("%s: bad line %q", f.Name(), sc.Text()))
 		}
 		var n []int64
@@ -218,19 +227,28 @@ func summary(dir string) (s streams) {
 			n = append(n, v)
 		}
 		var c streamtrace.Counts
+		ns := int(streamtrace.NumStrategies)
 		copy(c.Runs[:], n)
-		c.Fallbacks, c.Guards = n[len(n)-2], n[len(n)-1]
+		c.Fallbacks, c.Guards, c.Reruns = n[ns], n[ns+1], n[ns+2]
+		copy(c.Kinds[:], n[ns+3:])
 		if c.Streamed() > 0 {
 			s.cases++
 		}
 		if c.Fallbacks > 0 {
 			s.fellCases++
 		}
+		if c.Reruns > 0 {
+			s.rerunCases++
+		}
 		for i := range c.Runs {
 			s.total.Runs[i] += c.Runs[i]
 		}
+		for i := range c.Kinds {
+			s.total.Kinds[i] += c.Kinds[i]
+		}
 		s.total.Fallbacks += c.Fallbacks
 		s.total.Guards += c.Guards
+		s.total.Reruns += c.Reruns
 	}
 	if err := sc.Err(); err != nil {
 		die(err)

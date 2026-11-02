@@ -49,12 +49,12 @@ var coreDocs = map[string]string{
 	"flat": `<doc id="d"><rec k="a" v="1"><sub x="1">t1</sub><sub x="2"/></rec><rec k="b" v="2"><sub x="3">t3</sub></rec>` +
 		`<other/><rec k="a" v="3"/></doc>`,
 	"nested": `<doc><rec k="a" v="1"><rec k="b" v="2"><sub x="1"/></rec></rec><w><rec k="c" v="x"><sub>s</sub></rec></w></doc>`,
-	"mixed": `<?pi a?><!--c--><doc>text <rec k="a" v="5">in<![CDATA[ cdata ]]><sub/>tail</rec> more <!--c2--><?p2 x?></doc>`,
-	"ns": `<doc xmlns="urn:d" xmlns:p="urn:p"><p:rec k="a" v="1"/><rec k="b" v="2" p:z="q"/></doc>`,
-	"deep": `<doc><a><b><c><rec k="a" v="1"><sub x="1"/></rec></c></b></a><a><rec k="b" v="2"/></a></doc>`,
-	"empty": `<doc/>`,
-	"bad":   `<doc><rec k="a" v="1"/><rec k="b"></doc>`,
-	"wide":  "<doc>" + strings.Repeat(`<rec k="a" v="1"><sub x="1">s</sub></rec>`, 500) + "</doc>",
+	"mixed":  `<?pi a?><!--c--><doc>text <rec k="a" v="5">in<![CDATA[ cdata ]]><sub/>tail</rec> more <!--c2--><?p2 x?></doc>`,
+	"ns":     `<doc xmlns="urn:d" xmlns:p="urn:p"><p:rec k="a" v="1"/><rec k="b" v="2" p:z="q"/></doc>`,
+	"deep":   `<doc><a><b><c><rec k="a" v="1"><sub x="1"/></rec></c></b></a><a><rec k="b" v="2"/></a></doc>`,
+	"empty":  `<doc/>`,
+	"bad":    `<doc><rec k="a" v="1"/><rec k="b"></doc>`,
+	"wide":   "<doc>" + strings.Repeat(`<rec k="a" v="1"><sub x="1">s</sub></rec>`, 500) + "</doc>",
 }
 
 // coreBodies are container bodies. stream says the core must take the
