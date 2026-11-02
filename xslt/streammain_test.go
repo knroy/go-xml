@@ -109,7 +109,12 @@ var mainCases = []struct {
 	{`<xsl:mode streamable="yes" on-no-match="deep-copy"/><xsl:template match="/"><xsl:apply-templates/></xsl:template>`, false},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><xsl:apply-templates select="*"/></xsl:template>` +
 		`<xsl:template match="/*"><xsl:apply-templates select="@*"/></xsl:template>`, false},
-	{`<xsl:mode streamable="yes" on-no-match="shallow-skip"/><xsl:template match="@k"><xsl:sequence select="."/></xsl:template>`, false},
+	// What a rule writes is its own: a copy, or a new node, in both
+	// (§19.8: an attribute rule may not return its node). Inside a literal
+	// result element nothing is at the top.
+	{`<xsl:mode streamable="yes" on-no-match="shallow-skip"/><xsl:template match="@k"><xsl:copy-of select="."/></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-skip"/><xsl:template match="@k|text()"><xsl:copy/></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><o><xsl:apply-templates/></o></xsl:template>`, true},
 	// The built-in deep-copy of the document node is its tree (linkApply
 	// asks it of the document node whatever rule matches it).
 	{`<xsl:mode streamable="yes" on-no-match="deep-copy"/><xsl:template match="/*"><o><xsl:apply-templates/></o></xsl:template>`, false},

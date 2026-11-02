@@ -850,3 +850,87 @@ func TestStreamFuzz(t *testing.T) {
 	}
 	t.Logf("STREAMFUZZ seeds %d..%d", seed0, seed0+int64(n)-1)
 }
+
+// TestStreamFuzzMain is the fuzzer's leg for a streamed principal input
+// (C7): each case of the M2 grammar (fuzzMakeModes: modes, rules, built-in
+// rules over a random record document, perhaps malformed or over a parse
+// limit) is applied to its document in an initial mode, with or without
+// parameters and a result budget, through TransformReader and through
+// xdm.Parse + Transform, which must agree exactly: output, Result.Nodes,
+// error text.
+//
+//	GOXSLT_STREAM_FUZZ=100000 GOXSLT_STREAM_FUZZ_SEED=1 go test ./xslt -run 'TestStreamFuzzMain$' -v -timeout 0
+func TestStreamFuzzMain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("-short")
+	}
+	n, seed0 := 1000, int64(1)
+	if v := os.Getenv("GOXSLT_STREAM_FUZZ"); v != "" {
+		var err error
+		if n, err = strconv.Atoi(v); err != nil {
+			t.Fatalf("GOXSLT_STREAM_FUZZ: %v", err)
+		}
+	}
+	if v := os.Getenv("GOXSLT_STREAM_FUZZ_SEED"); v != "" {
+		var err error
+		if seed0, err = strconv.ParseInt(v, 10, 64); err != nil {
+			t.Fatalf("GOXSLT_STREAM_FUZZ_SEED: %v", err)
+		}
+	}
+	tally := map[string]int{}
+	for i := 0; i < n; i++ {
+		seed := seed0 + int64(i)
+		c := fuzzMakeModes(seed)
+		r := rand.New(rand.NewSource(seed*15485863 + 3))
+		opts := TransformOptions{SourceParseOptions: xdm.ParseOptions{MaxNodes: c.maxNodes, MaxBytes: c.maxBytes,
+			BaseURI: "file:///f/doc.xml", DocumentURI: "file:///f/doc.xml"}}
+		if strings.Contains(c.sheet, `name="m"`) && r.Intn(2) == 0 {
+			opts.InitialMode = "m"
+		} else if r.Intn(4) == 0 {
+			opts.InitialMode = "#default"
+		}
+		if r.Intn(4) == 0 {
+			opts.InitialModeParams = map[string]xdm.Sequence{"q": {xdm.NewString("P")}}
+		}
+		if r.Intn(4) == 0 {
+			opts.InitialModeTunnelParams = map[string]xdm.Sequence{"t": {xdm.NewString("T")}}
+		}
+		if r.Intn(30) == 0 {
+			opts.MaxNodes = 5 + r.Intn(60)
+		}
+		co, ct := mainRun(c.sheet, c.doc, true, opts)
+		tr, tt := mainRun(c.sheet, c.doc, false, opts)
+		tally["cases"]++
+		if ct.Runs[streamtrace.Main] > 0 {
+			tally["streamed"]++
+			if strings.HasPrefix(co, "error: ") {
+				tally["streamed: an error"]++
+			}
+		}
+		d := ""
+		switch {
+		case ct.Guards+tt.Guards != 0:
+			d = "GUARD"
+		case tt.Streamed() != 0:
+			d = "STREAMED ON THE TREE"
+		case co != tr:
+			d = "RESULT"
+		}
+		if d != "" {
+			tally["DIFFERENCES"]++
+			if tally["DIFFERENCES"] <= 10 {
+				t.Errorf("seed %d: %s\nreplay: GOXSLT_STREAM_FUZZ=1 GOXSLT_STREAM_FUZZ_SEED=%d go test ./xslt -run 'TestStreamFuzzMain$' -v\n"+
+					"opts %+v\nstylesheet:\n%s\ndocument:\n%s\nstreamed %s\ntree     %s", seed, d, seed, opts, c.sheet, c.doc, co, tr)
+			}
+		}
+	}
+	keys := make([]string, 0, len(tally))
+	for k := range tally {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		t.Logf("STREAMFUZZMAIN %-30s %d", k, tally[k])
+	}
+	t.Logf("STREAMFUZZMAIN seeds %d..%d", seed0, seed0+int64(n)-1)
+}

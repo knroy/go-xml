@@ -650,9 +650,6 @@ func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 				continue
 			case r.why[k.class] != "":
 				return label() + ": rule " + t.Match.String() + ": " + r.why[k.class]
-			case k.top && k.class == classAttr:
-				// Its body may return the attribute of the view itself.
-				return label() + ": rule " + t.Match.String() + " at the top of the result"
 			}
 			if x := r.x[k.class]; x != nil {
 				visit(x, k.top)
