@@ -12,18 +12,23 @@ import (
 // each grounded element is copied out at once, in a tree of its own.
 func init() {
 	xdmburst.Drive = func(r io.Reader, opts any, c xdmburst.Client) error {
-		a := &driveClient{c: c}
 		o := opts.(ParseOptions)
-		o.bursts = &burster{
-			c:       a,
-			fn:      func(n *Node) error { a.grounded = n; return nil },
-			leaves:  true,
-			noBatch: true,
-			watch:   func(el *Node, d int, end bool) { c.Watch(el, d, end) },
-			gens:    []uint64{0},
-		}
+		o.bursts = driver(c)
 		_, err := parse(r, "", o)
 		return err
+	}
+}
+
+// driver is the burster that serves c.
+func driver(c xdmburst.Client) *burster {
+	a := &driveClient{c: c}
+	return &burster{
+		c:       a,
+		fn:      func(n *Node) error { a.grounded = n; return nil },
+		leaves:  true,
+		noBatch: true,
+		watch:   func(el *Node, d int, end bool) { c.Watch(el, d, end) },
+		gens:    []uint64{0},
 	}
 }
 
