@@ -521,6 +521,10 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{
 | `Collections` | `xpath.CollectionResolver` | disabled | Resolves `fn:collection`. **Nil disables it**, and setting `Documents` does not set this — the two are separate switches on purpose. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Template recursion limit, and the bound on `fn:transform` nesting. Catches a stylesheet with no base case. |
 | `MaxItems` | `int` | `xpath.MaxItems` = 5,000,000 | Items one transformation may materialise, `XPDY0130` past it. Negative removes the bound; nested `fn:transform` and `xsl:evaluate` keep the caller's. |
+| `MaxNodes` | `int` | `xpath.MaxNodes` = 2,000,000 | Result- and temporary-tree nodes the transform may hold, `XPDY0130` past it. Negative removes the bound. In a streamed `xsl:for-each`/`xsl:iterate` an item that writes no output hands back what it dropped, so only what it carries on counts; elsewhere every node built counts. |
+| `MaxBytes` | `int64` | `xpath.MaxBytes` = 1 GiB | String content held, on `MaxNodes`' terms. |
+| `MaxNodesBuilt` | `int64` | 0: a streamed item hands back at most 4,096 nodes | Every node built, refunds notwithstanding. Positive bounds the total and lifts the per-item cap; negative removes both, so only what is held is bounded. |
+| `MaxBytesBuilt` | `int64` | 0: at most 65,536 bytes per item | `MaxNodesBuilt` for string content. |
 | `DisableAssertions` | `bool` | `false` — assertions enabled | Turns off `xsl:assert` checking for the whole transformation. XSLT 3.0 §22.2: "By default, assertions are enabled." |
 | `InitialMode` | `string` | default mode | Mode for the initial `apply-templates`. |
 | `InitialTemplate` | `string` | match the root | Invokes a named template instead, which is how a stylesheet of only named templates is entered. |

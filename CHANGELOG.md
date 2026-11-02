@@ -4,6 +4,22 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+### Added
+
+| Change | What it does | Commit |
+|---|---|---|
+| Streamed record paths with `//`, wildcards and `outermost()` | `//rec`, `doc//rec`, `/*/*/rec`, `*:rec`, `p:*` stream in both shapes; nested matches ride inside their outermost record. Small records share one tree: 900-deep `count(//rec)` 2.0 s CPU. | [`df9677e`][df9677e], [`fd31bb3`][fd31bb3], [`382983c`][382983c], [`22af5f4`][22af5f4] |
+| `TransformOptions` `MaxNodes`, `MaxBytes`, `MaxNodesBuilt`, `MaxBytesBuilt` | Held and total-work bounds for result and temporary trees and strings. Zero keeps the defaults; negative removes the bound. | [`294b965`][294b965] |
+
+### Changed
+
+| Change | Problem → solution | Commit |
+|---|---|---|
+| Streamed loops were refused after ~1M records of flat state | The node and byte budgets counted every temporary ever built. A loop item that writes no output now hands back what it dropped. | [`294b965`][294b965] |
+| `fn:copy-of` and `fn:snapshot` copies were not charged to the result-node budget | Unlike `xsl:copy-of`. They are charged before the copy, so a transform making over 2M such copies is now refused. | [`294b965`][294b965] |
+
 ## v2.2.0 — 2026-11-01
 
 Memory footprint work: what a tree holds and what a transform peaks at. Output
@@ -1890,3 +1906,8 @@ here so every entry in this file sits under a release.
 [48b1a38]: https://github.com/knroy/go-xml/commit/48b1a38
 [3157566]: https://github.com/knroy/go-xml/commit/3157566
 [4944511]: https://github.com/knroy/go-xml/commit/4944511
+[df9677e]: https://github.com/knroy/go-xml/commit/df9677e
+[fd31bb3]: https://github.com/knroy/go-xml/commit/fd31bb3
+[382983c]: https://github.com/knroy/go-xml/commit/382983c
+[22af5f4]: https://github.com/knroy/go-xml/commit/22af5f4
+[294b965]: https://github.com/knroy/go-xml/commit/294b965
