@@ -15,6 +15,9 @@ package xslt
 //
 // GOXSLT_STREAM_FUZZ_CORE=0 makes only the stage-1b cases, each exactly as
 // that grammar made it for its seed, for comparing a run with an older one.
+// GOXSLT_STREAM_FUZZ_MODES=0 leaves out the M2 cases (fuzzMakeModes: modes,
+// template rules and the built-in rules), so that every other case is the one
+// the M1 grammar made for its seed.
 //
 // A failing case prints its seed and the command that replays it alone.
 
@@ -43,6 +46,8 @@ type fuzzGen struct {
 	defNS    bool // the document's default namespace is urn:d
 	kind     string
 	depth    int
+	// maxDepth bounds how deep records nest; 0 is 4.
+	maxDepth int
 }
 
 func (g *fuzzGen) n(k int) int              { return g.r.Intn(k) }
@@ -71,7 +76,7 @@ func (g *fuzzGen) record() string {
 	}
 	b.WriteString(">")
 	for i, c := 0, g.n(4); i < c; i++ {
-		if g.depth < 4 && g.p(20) {
+		if g.depth < max(g.maxDepth, 4) && g.p(20) {
 			g.depth++
 			if g.p(50) {
 				b.WriteString(g.record())
@@ -340,6 +345,147 @@ func fuzzIsCore(seed int64) bool {
 	return fuzzCoreShapes && rand.New(rand.NewSource(seed*7919+17)).Intn(100) < 40
 }
 
+// fuzzModeShapes says fuzzMake may make a case of the M2 grammar
+// (GOXSLT_STREAM_FUZZ_MODES=0 turns it off).
+var fuzzModeShapes = os.Getenv("GOXSLT_STREAM_FUZZ_MODES") != "0"
+
+// fuzzIsModes decides, from a random stream of its own, whether the case of
+// seed is one of fuzzMakeModes'.
+func fuzzIsModes(seed int64) bool {
+	return fuzzModeShapes && rand.New(rand.NewSource(seed*104729+31)).Intn(100) < 35
+}
+
+// fuzzPatterns are match patterns: of elements, attributes, text, the
+// document node; a few a view cannot decide (positional, reading content).
+var fuzzPatterns = []string{"REC", "REC", "*", "*", "node()", "text()", "@*", "@k", "@v", "sub", "x", "name",
+	"REC[@k = 'a']", "REC[@v > 2]", "REC[@k][@v]", "ROOT/REC", "/ROOT", "/", "document-node()", "*:REC", "p:*",
+	"sub[@x]", "wrap//REC", "REC/sub", "comment()", "node()[not(self::x)]", "text()[. = 'text']",
+	"sub|x", "REC|@v", "other", "REC[1]", "REC[sub]", "REC[. = 'a']", "*[last()]", "sub/text()", "@*[. = '1']"}
+
+// fuzzRuleBodies are template rule bodies; MODE is replaced by a mode name.
+var fuzzRuleBodies = []string{
+	``, `<xsl:copy><xsl:apply-templates select="@*"/><xsl:apply-templates/></xsl:copy>`,
+	`<r k="{@k}"><xsl:apply-templates/></r>`, `<xsl:apply-templates/>`, `<xsl:apply-templates mode="MODE"/>`,
+	`<xsl:apply-templates mode="#current"/>`, `<w><xsl:next-match/></w>`, `<xsl:copy-of select="."/>`,
+	`<v><xsl:value-of select="."/></v>`, `<xsl:apply-templates select="sub"/>`, `<xsl:apply-templates select="*"/>`,
+	`<n p="{position()}" l="{local-name()}"/>`, `<xsl:value-of select="upper-case(.)"/>`, `<xsl:copy/>`,
+	`<w><xsl:next-match><xsl:with-param name="q" select="'Q'"/></xsl:next-match></w>`, `<xsl:apply-imports/>`,
+	`<xsl:param name="q" select="'-'"/><q v="{$q}"><xsl:apply-templates/></q>`,
+	`<xsl:param name="t" tunnel="yes" select="'d'"/><t t="{$t}"><xsl:apply-templates>` +
+		`<xsl:with-param name="t" tunnel="yes" select="concat($t, '+')"/></xsl:apply-templates></t>`,
+	`<xsl:param name="t" tunnel="yes" select="'d'"/><t t="{$t}"><xsl:next-match/></t>`,
+	`<xsl:attribute name="a-{local-name()}" select="."/>`, `<xsl:if test="@k = 'a'"><a><xsl:apply-templates/></a></xsl:if>`,
+	`<xsl:choose><xsl:when test="@v = '1'"><one><xsl:copy-of select="."/></one></xsl:when>` +
+		`<xsl:otherwise><xsl:apply-templates/></xsl:otherwise></xsl:choose>`,
+	`<d n="{count(ancestor::*)}"><xsl:apply-templates select="outermost(.//REC)"/></d>`,
+	`<xsl:apply-templates select="REC[@k = 'a']"/>`, `<s><xsl:value-of select="sum(sub/@x)"/></s>`,
+	`<xsl:for-each select="sub"><f x="{@x}"><xsl:apply-templates/></f></xsl:for-each>`,
+	`<xsl:apply-templates select="."  mode="MODE"/>`, `<c><xsl:value-of select="count(*)"/></c>`,
+	// refused
+	`<xsl:apply-templates/><xsl:apply-templates/>`, `<xsl:value-of select="following-sibling::*[1]"/>`,
+	`<xsl:apply-templates select="sub"><xsl:sort select="@x"/></xsl:apply-templates>`,
+}
+
+// fuzzMakeModes is an M2 case (C6): one or two modes, streamable or not,
+// with on-no-match, template rules of random patterns, priorities and
+// bodies (apply-templates, next-match, tunnels, mode switches), and a
+// container that applies them, over a record document perhaps nested deep.
+func fuzzMakeModes(seed int64) fuzzCase {
+	g := &fuzzGen{r: rand.New(rand.NewSource(seed*31 + 7))}
+	g.root = g.pick("doc", "root", "account")
+	g.rec = g.pick("rec", "rec", "item", "p:rec")
+	g.defNS = g.p(10)
+	if g.p(30) {
+		g.maxDepth = 4 + g.n(12)
+	}
+	for i, c := 0, g.n(3); i < c; i++ {
+		if g.p(50) {
+			g.wrappers = append(g.wrappers, g.pick("wrap", "data", "list"))
+		}
+	}
+	doc := g.document()
+	sub := func(x string) string {
+		x = strings.ReplaceAll(x, "ROOT", g.root)
+		return strings.ReplaceAll(x, "REC", g.rec)
+	}
+	modes := []string{""}
+	if g.p(50) {
+		modes = append(modes, "m")
+	}
+	var s strings.Builder
+	s.WriteString(`<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:p="urn:p" xmlns:err="http://www.w3.org/2005/xqt-errors" exclude-result-prefixes="xs p err"`)
+	if g.defNS && g.p(85) {
+		s.WriteString(` xpath-default-namespace="urn:d"`)
+	}
+	s.WriteString(">\n")
+	if g.p(30) {
+		s.WriteString(g.pick(`<xsl:strip-space elements="*"/>`, `<xsl:strip-space elements="sub"/>`) + "\n")
+	}
+	for _, m := range modes {
+		s.WriteString(`<xsl:mode`)
+		if m != "" {
+			s.WriteString(` name="` + m + `"`)
+		}
+		if g.p(92) {
+			s.WriteString(` streamable="yes"`)
+		}
+		if g.p(75) {
+			s.WriteString(` on-no-match="` + g.pick("shallow-copy", "shallow-copy", "deep-copy", "shallow-skip",
+				"deep-skip", "text-only-copy", "fail") + `"`)
+		}
+		if g.p(8) {
+			s.WriteString(` on-multiple-match="fail"`)
+		}
+		s.WriteString("/>\n")
+	}
+	for i, n := 0, g.n(6); i < n; i++ {
+		s.WriteString(`<xsl:template match="` + strings.ReplaceAll(sub(g.pick(fuzzPatterns...)), "<", "&lt;") + `"`)
+		if g.p(40) || len(modes) > 1 && g.p(50) {
+			m := g.pick(modes...)
+			if m == "" {
+				m = g.pick("#unnamed", "#default")
+			}
+			s.WriteString(` mode="` + m + `"`)
+		}
+		if g.p(30) {
+			s.WriteString(` priority="` + g.pick("-1", "0", "1", "2", "0.5") + `"`)
+		}
+		body := sub(g.pick(fuzzRuleBodies...))
+		body = strings.ReplaceAll(body, "MODE", g.pick(modes[len(modes)-1], "#default", "#current"))
+		s.WriteString(">" + body + "</xsl:template>\n")
+	}
+	s.WriteString(`<xsl:template name="main">` + "\n")
+	try := g.p(8)
+	if try {
+		s.WriteString("<xsl:try>")
+	}
+	s.WriteString(`<xsl:source-document streamable="yes" href="doc.xml">`)
+	body := g.pick(`<xsl:apply-templates select="."/>`, `<xsl:apply-templates select="."/>`, `<xsl:apply-templates/>`,
+		`<xsl:apply-templates select="ROOT/REC"/>`, `<xsl:apply-templates select="*/*"/>`,
+		`<xsl:apply-templates select="." mode="m"/>`, `<xsl:apply-templates mode="m"/>`,
+		`<xsl:apply-templates select="."><xsl:with-param name="t" tunnel="yes" select="'T'"/></xsl:apply-templates>`,
+		`<xsl:apply-templates><xsl:with-param name="q" select="'P'"/></xsl:apply-templates>`,
+		`<xsl:for-each select="ROOT/REC"><xsl:apply-templates select="."/></xsl:for-each>`)
+	body = sub(body)
+	if g.p(30) {
+		body = g.coreWrap(body)
+	}
+	s.WriteString(body)
+	s.WriteString("</xsl:source-document>")
+	if try {
+		s.WriteString(`<xsl:catch><caught code="{local-name-from-QName($err:code)}"/></xsl:catch></xsl:try>`)
+	}
+	s.WriteString("\n</xsl:template>\n</xsl:stylesheet>\n")
+	c := fuzzCase{seed: seed, sheet: s.String(), doc: doc, malform: g.malform, kind: "modes"}
+	if g.p(3) {
+		c.maxNodes = 5 + g.n(60)
+	}
+	if g.p(3) {
+		c.maxBytes = int64(50 + g.n(800))
+	}
+	return c
+}
+
 // coreLeaf is an element-context consumer for a loop body (C5): the match's
 // own content read at its start tag, a reducer of its children, a nested
 // loop, or none (a motionless body).
@@ -421,6 +567,9 @@ func (g *fuzzGen) coreContent(esc func(string) string) (string, bool) {
 }
 
 func fuzzMake(seed int64) fuzzCase {
+	if fuzzIsModes(seed) {
+		return fuzzMakeModes(seed)
+	}
 	g := &fuzzGen{r: rand.New(rand.NewSource(seed))}
 	g.root = g.pick("doc", "root", "account")
 	g.rec = g.pick("rec", "rec", "item", "p:rec")
@@ -664,6 +813,12 @@ func TestStreamFuzz(t *testing.T) {
 		}
 		if strings.HasPrefix(c.kind, "core") {
 			tally["core shapes"]++
+		}
+		if c.kind == "modes" {
+			tally["mode shapes"]++
+			if co.trace.Streamed() > 0 {
+				tally["streamed: mode shapes"]++
+			}
 		}
 		for j, r := range co.trace.Runs {
 			trace.Runs[j] += r

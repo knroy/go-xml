@@ -337,7 +337,7 @@ func (b *streamBuilder) loopOp(el *xdm.Node, f vfocus) bool {
 	}
 	// The body is planned in a builder of its own: a refusal there leaves
 	// the grounded strategy, whose rules are the burst path's.
-	op.planned = inner.members(el, body)
+	op.planned = inner.members(el, body, vElem)
 	op.grounded = burstBody(el)
 	if !op.planned && !op.grounded {
 		return b.refuse(inner.why)
@@ -348,8 +348,9 @@ func (b *streamBuilder) loopOp(el *xdm.Node, f vfocus) bool {
 }
 
 // members plans the elements body of el's sequence constructor, whose
-// focus is an element's view: seq, over a subset of the children.
-func (b *streamBuilder) members(el *xdm.Node, body []*xdm.Node) bool {
+// focus is f (a loop's: an element's view): seq, over a subset of the
+// children.
+func (b *streamBuilder) members(el *xdm.Node, body []*xdm.Node, f vfocus) bool {
 	b.kinds[streamtrace.KindSeq]++
 	consumers := 0
 	for _, ch := range body {
@@ -358,7 +359,7 @@ func (b *streamBuilder) members(el *xdm.Node, body []*xdm.Node) bool {
 			return b.refuse("no trusted record for " + elName(ch))
 		}
 		if r.props.sweep == sweepMotionless {
-			if !b.motionless(ch, vElem) && !b.promote(ch) {
+			if !b.motionless(ch, f) && !b.promote(ch) {
 				return false
 			}
 			if !b.x.promoted[ch] {
@@ -371,7 +372,7 @@ func (b *streamBuilder) members(el *xdm.Node, body []*xdm.Node) bool {
 		if consumers++; consumers > 1 {
 			return b.refuse("two consuming instructions in one sequence constructor")
 		}
-		if !b.consumer(ch, vElem) {
+		if !b.consumer(ch, f) {
 			return false
 		}
 	}

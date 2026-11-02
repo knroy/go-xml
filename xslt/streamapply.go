@@ -344,7 +344,7 @@ func (b *streamBuilder) ruleBody(el *xdm.Node, kids []*xdm.Node, from int, f vfo
 		}
 		return true
 	}
-	return b.members(el, kids[from:])
+	return b.members(el, kids[from:], f)
 }
 
 // readyRule finishes the plans of r once the rule's body has compiled.

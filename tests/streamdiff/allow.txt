@@ -13,6 +13,9 @@
 # fo:block ids, si-fork-801 into link hrefs.
 xslt30 docbook/docbook-002 N\d+x\d+
 xslt30 si-fork/si-fork-801 N\d+x\d+
+# document-2011 writes generate-id(document('')) into @id; it moved when M2
+# streamed the attr/streamable cases that run before it (views are trees).
+xslt30 document/document-2011 N\d+x\d+
 
 # fn:current-dateTime is not fixed by the XSLT harness, so these write the
 # instant each run happened.
