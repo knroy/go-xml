@@ -594,3 +594,42 @@ func TestCursorFlushBatched(t *testing.T) {
 		}
 	}
 }
+
+// TestCursorSkipDiscards: a skipped element is dropped as it is parsed, so
+// the parse holds its open path, not its content -- skipping the document
+// element of a large document costs what reading it event by event does,
+// not the tree. Text still reads the element whole.
+func TestCursorSkipDiscards(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<doc>")
+	for i := range 20000 {
+		fmt.Fprintf(&b, `<rec i="%d"><sub>text %d</sub><!--c--><sub/></rec>`, i, i)
+	}
+	b.WriteString("</doc>")
+	src := b.String()
+	held := 0
+	c := Open(strings.NewReader(src), opts)
+	defer c.Close()
+	c.Observe(func(el *xdm.Node, _ int, _ bool) { held = max(held, el.Tree().Len()) })
+	if ev, err := c.Next(); err != nil || ev.Kind != StartElement {
+		t.Fatalf("first event %v, %v", ev, err)
+	}
+	if err := c.Skip(); err != nil {
+		t.Fatal(err)
+	}
+	// The open path is doc, rec, sub and their attributes and text: a few
+	// records, against 120,000 for the whole document.
+	if held > 64 {
+		t.Errorf("skipping the document element held %d records", held)
+	}
+	if ev, err := c.Next(); err != nil || ev.Kind != EndDocument {
+		t.Errorf("after Skip: %v, %v", ev, err)
+	}
+	// Text holds the element whole until its end, and reads it.
+	c2 := Open(strings.NewReader(`<doc><a>x<b>y</b></a>z</doc>`), opts)
+	defer c2.Close()
+	c2.Next()
+	if s, err := c2.Text(); err != nil || s != "xyz" {
+		t.Errorf("Text %q, %v", s, err)
+	}
+}

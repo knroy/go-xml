@@ -178,9 +178,10 @@ func (c *Cursor) Peek() (Event, error) {
 
 // Skip moves past the current element, a start tag Next just returned, to
 // its end. Its content is still parsed and checked, and an error in it is
-// Skip's.
+// Skip's, but it is dropped as it is parsed: the parse holds no more of it
+// than the path to the node being read.
 func (c *Cursor) Skip() error {
-	_, err := c.decide(xdmburst.Skip)
+	_, err := c.decide(xdmburst.Discard)
 	return err
 }
 
@@ -233,7 +234,7 @@ func (c *Cursor) Flush() error {
 
 // Text moves past the current element, as Skip, and returns its string
 // value, read from the parse's tree before the element is dropped: nothing
-// is copied out.
+// is copied out, but the parse holds the element whole until its end.
 func (c *Cursor) Text() (string, error) {
 	ev, err := c.decide(xdmburst.Skip)
 	if err != nil {

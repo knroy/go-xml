@@ -40,6 +40,10 @@ const (
 	// Later, perhaps after more of the document: small elements grounded so
 	// are copied into one tree, sharing the copies of their ancestors.
 	GroundLater
+	// Discard checks the element as Skip does, but drops its content as it
+	// is parsed, each child once it closes, so that the parse holds no more
+	// of it than its open path: End sees the element without its content.
+	Discard
 )
 
 // Client is told what a stream parse (Drive) meets. Its nodes are

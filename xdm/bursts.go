@@ -83,6 +83,11 @@ type burster struct {
 	// burst, or an element off the path), or 0; burst says it is a burst.
 	drop  int
 	burst bool
+	// quiet is the depth of the element being discarded (Discard), or 0:
+	// it and its descendants are kept on the spine, so that each closed
+	// child is taken back as a spine element's is, but the client is told
+	// nothing of them.
+	quiet int
 	// later says the burst is GroundLater's; grounded is the copy of the
 	// one just closed that is not.
 	later    bool
@@ -190,6 +195,10 @@ func (b *burster) start(el *Node, d int) error {
 	if b.drop != 0 {
 		return nil
 	}
+	if b.quiet != 0 {
+		b.keep(el, d)
+		return nil
+	}
 	// Every element asked about has a gen of its own, so that its view can
 	// serve as the copy of it its descendants' views share once it is kept.
 	b.gen++
@@ -203,16 +212,24 @@ func (b *burster) start(el *Node, d int) error {
 	case xdmburst.Ground, xdmburst.GroundLater:
 		b.drop, b.burst, b.later = d, true, act == xdmburst.GroundLater
 	case xdmburst.Keep:
-		b.spine = d
-		b.marks = append(b.marks, markOf(el.tree))
-		b.gens = append(b.gens, b.gen)
-		if b.ords != nil {
-			b.ords = append(b.ords, b.ordOf(el))
-		}
+		b.keep(el, d)
+	case xdmburst.Discard:
+		b.quiet = d
+		b.keep(el, d)
 	default:
 		b.drop = d
 	}
 	return nil
+}
+
+// keep puts el, just opened at depth d, on the spine.
+func (b *burster) keep(el *Node, d int) {
+	b.spine = d
+	b.marks = append(b.marks, markOf(el.tree))
+	b.gens = append(b.gens, b.gen)
+	if b.ords != nil {
+		b.ords = append(b.ords, b.ordOf(el))
+	}
 }
 
 // advance is the set of steps matched by an element named q whose parent
@@ -257,6 +274,14 @@ func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) err
 		if b.ords != nil {
 			b.ords = b.ords[:len(b.ords)-1]
 		}
+		if b.quiet != 0 {
+			if d > b.quiet {
+				// Inside a discarded element: taken back now, told nothing.
+				b.discardLast(el.Parent(), spaces, names)
+				return nil
+			}
+			b.quiet, kept = 0, false // the discarded element: told as skipped
+		}
 	default:
 		return nil
 	}
@@ -288,7 +313,7 @@ func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCa
 	if b.drop != 0 || d != b.spine || d == 0 && (!b.leaves || len(b.marks) == 0) {
 		return nil
 	}
-	if b.leaves {
+	if b.leaves && b.quiet == 0 {
 		if err := b.tellLeaves(cur, d); err != nil {
 			return err
 		}
