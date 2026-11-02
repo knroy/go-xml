@@ -1,11 +1,15 @@
 package xslt
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/xdm"
 )
 
 // applyCases are template rules and modes (decls) and a container body that
@@ -49,6 +53,12 @@ var applyCases = []struct {
 		`<xsl:apply-templates select="."/>`, false},
 	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><xsl:attribute name="a" select="."/></xsl:template>`,
 		`<xsl:apply-templates select="."/>`, false},
+	// xsl:copy of the document node, its children applied (streamable-001):
+	// the copy takes the DOCTYPE and base URI the dispatch gave the stand-in.
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><xsl:copy><xsl:apply-templates/></xsl:copy></xsl:template>` +
+		`<xsl:template match="*"><xsl:copy><xsl:apply-templates/></xsl:copy></xsl:template><xsl:template match="sub"/>`,
+		`<xsl:variable name="d"><xsl:apply-templates select="."/></xsl:variable><b u="{base-uri($d/*)}"/><xsl:copy-of select="$d"/>`, true},
+	{`<xsl:mode streamable="yes"/>`, `<xsl:copy><xsl:apply-templates select="*/rec"/></xsl:copy>`, false},
 	// Built-in rules: deep-skip, shallow-skip, deep-copy, fail.
 	{`<xsl:mode streamable="yes" on-no-match="deep-skip"/><xsl:template match="/"><o><xsl:apply-templates/></o></xsl:template>` +
 		`<xsl:template match="doc|rec"><xsl:apply-templates/></xsl:template><xsl:template match="sub"><s x="{@x}"/></xsl:template>`,
@@ -198,5 +208,58 @@ func TestStreamApplyLeafAllocs(t *testing.T) {
 	t.Logf("allocations: core %.0f, tree %.0f", core, tree)
 	if core > 6*tree {
 		t.Errorf("core %.0f allocations, tree %.0f: more than 6x", core, tree)
+	}
+}
+
+// TestStreamApplyDocCopy: the document node's copy at the top of the
+// principal result (xsl:copy in its rule, the built-in shallow-copy) has
+// the document's DOCTYPE and base URI, which the streamed run takes from the
+// views' document node, as the tree's run has them.
+func TestStreamApplyDocCopy(t *testing.T) {
+	dir := t.TempDir()
+	doc := `<!DOCTYPE doc [<!ENTITY e "x">]><doc xml:base="http://ex/b/"><rec k="a">&e;</rec></doc>`
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, rules := range []string{
+		`<xsl:mode streamable="yes"/><xsl:template match="/"><xsl:copy><xsl:apply-templates/></xsl:copy></xsl:template>`,
+		`<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`,
+	} {
+		sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` + rules +
+			`<xsl:template name="main"><xsl:source-document streamable="yes" href="doc.xml">` +
+			`<xsl:apply-templates select="."/></xsl:source-document></xsl:template></xsl:stylesheet>`
+		props := func(core bool) string {
+			defer func() { noBursts = false }()
+			tree, err := xdm.ParseString(sheet, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := Compile(tree.Root, CompileOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			docs, _ := NewFileResolver(dir)
+			docs.AllowDOCTYPE = true
+			noBursts = !core
+			before := streamtrace.Snapshot()
+			res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tr := streamtrace.Snapshot().Sub(before); core && (tr.Runs[streamtrace.Core] != 1 || tr.Reruns != 0) {
+				t.Errorf("%s: not streamed: %+v", rules, tr)
+			}
+			if len(res.Nodes) != 1 {
+				return fmt.Sprintf("%d nodes", len(res.Nodes))
+			}
+			d, ok := res.Nodes[0].(*xdm.Node)
+			if !ok {
+				return "not a node"
+			}
+			return fmt.Sprintf("kind %v base %q doctype %q", d.Kind(), d.BaseURI(), d.Tree().DocType)
+		}
+		if c, tr := props(true), props(false); c != tr {
+			t.Errorf("%s:\ncore %s\ntree %s", rules, c, tr)
+		}
 	}
 }

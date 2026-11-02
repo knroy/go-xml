@@ -246,7 +246,7 @@ func (b *streamBuilder) consumer(el *xdm.Node, f vfocus) bool {
 	switch local {
 	case "copy":
 		if f == vNone {
-			return b.refuse("xsl:copy of the document node")
+			return b.copyDoc(el)
 		}
 		fallthrough
 	case "element", "attribute", "comment", "processing-instruction", "document",

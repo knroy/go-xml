@@ -176,6 +176,23 @@ func (b *streamBuilder) addApply(el *xdm.Node, f vfocus, kind applyKind) bool {
 	return true
 }
 
+// copyDoc plans an xsl:copy of the document node, which takes the
+// document's DOCTYPE and base URI once its body has run: from the stand-in,
+// which has them once a dispatch has met the first view (element). So its one
+// consumer must be an apply op reading the document node's children, which
+// dispatches the document element first.
+func (b *streamBuilder) copyDoc(el *xdm.Node) bool {
+	n := len(*b.ops)
+	if !b.attrs(el, vNone) || !b.seq(el, vNone) {
+		return false
+	}
+	if ops := (*b.ops)[n:]; len(ops) != 1 || ops[0].apply != applyKids || ops[0].el.Parent() != el {
+		return b.refuse("xsl:copy of the document node")
+	}
+	b.kinds[streamtrace.KindElement]++
+	return true
+}
+
 // childNodes reports whether e is node() or child::node(): the children.
 func childNodes(e xpath.Expr) bool {
 	st, ok := e.(*xpath.Step)
