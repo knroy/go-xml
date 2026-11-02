@@ -180,11 +180,10 @@ func planBursts(sd *xdm.Node, shared bool) *burstPlan {
 }
 
 // burstVerdict reports whether the §19.8 verdict on sd is one execution may
-// trust: known, unverified clear, and grounded.
+// trust: known, unverified clear, and grounded. The walk records the plan
+// side map as it goes (streamplan.go); nothing reads it yet.
 func burstVerdict(sd *xdm.Node, shared bool) bool {
-	t := newDeclTrust(documentElementOf(sd), shared)
-	p, known, unverified := sequenceConstructorVerdict(sd, postureStriding, t.sets, t.funcs, t)
-	return known && !unverified && p.streamable() && p.posture == postureGrounded
+	return buildStreamPlan(sd, shared).trusted()
 }
 
 // selectTargetOK admits a value-of, copy-of or sequence whose attributes

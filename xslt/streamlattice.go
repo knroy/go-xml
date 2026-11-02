@@ -205,6 +205,12 @@ type operand struct {
 	// That is what makes fn:path on a streaming parameter unstreamable:
 	// §19.8.9's table gives fn:path the operand usage navigation.
 	streamedGrounded bool
+
+	// src names the construct the operand was assessed from, for the plan
+	// side map (streamplan.go); nil where the rule built the operand inline
+	// (an implicit context item, a with-param, a sort key). The rules never
+	// read it.
+	src any
 }
 
 // adjustedUsage applies the §19.8.1 downgrade of absorption to inspection for

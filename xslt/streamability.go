@@ -197,8 +197,8 @@ func (a *analyzer) unknown() props {
 	return roamingFreeRanging
 }
 
-// expr dispatches on the kind of expression.
-func (a *analyzer) expr(e xpath.Expr) props {
+// exprRule dispatches on the kind of expression; expr (streamplan.go) wraps it.
+func (a *analyzer) exprRule(e xpath.Expr) props {
 	switch x := e.(type) {
 	case nil:
 		return groundedMotionless
@@ -233,7 +233,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		for _, it := range x.Items {
 			ops = append(ops, a.operandOf(it, usageTransmission))
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case *xpath.IfExpr:
 		// §19.8.8.3: the condition is inspected; the two arms transmit and
@@ -243,7 +243,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		els := a.operandOf(x.Else, usageTransmission)
 		then.choiceGroup = true
 		els.choiceGroup = true
-		return combine([]operand{cond, then, els}, false)
+		return a.combine([]operand{cond, then, els}, false)
 
 	case *xpath.BinaryOp:
 		return a.binary(x)
@@ -259,11 +259,11 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		if x.Expr != nil {
 			ops = append(ops, a.operandOf(x.Expr, usageAbsorption))
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case *xpath.UnaryOp:
 		// Arithmetic negation atomizes its operand.
-		return combine([]operand{a.operandOf(x.Operand, usageAbsorption)}, false)
+		return a.combine([]operand{a.operandOf(x.Operand, usageAbsorption)}, false)
 
 	case *xpath.FilterExpr:
 		return a.filter(x)
@@ -278,7 +278,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		if isDocumentNodeWithContent(x.Type) {
 			u = usageAbsorption
 		}
-		return combine([]operand{a.operandOf(x.Operand, u)}, false)
+		return a.combine([]operand{a.operandOf(x.Operand, u)}, false)
 
 	case *xpath.CastExpr, *xpath.TreatExpr:
 		// A cast atomizes. "treat as" transmits, but modelling it as
@@ -286,7 +286,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		// both are handled explicitly below.
 		switch y := e.(type) {
 		case *xpath.CastExpr:
-			return combine([]operand{a.operandOf(y.Operand, usageAbsorption)}, false)
+			return a.combine([]operand{a.operandOf(y.Operand, usageAbsorption)}, false)
 		case *xpath.TreatExpr:
 			return a.treatExpr(y)
 		}
@@ -383,6 +383,7 @@ func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
 		usage:          u,
 		allowsChildren: inner.allowsChildren(e),
 		higherOrder:    true,
+		src:            e,
 	}
 }
 
@@ -395,6 +396,7 @@ func (a *analyzer) operandOf(e xpath.Expr, u usage) operand {
 		usage:            u,
 		allowsChildren:   a.allowsChildren(e),
 		streamedGrounded: a.isStreamingParamRef(e),
+		src:              e,
 	}
 }
 
@@ -431,7 +433,7 @@ func (a *analyzer) binary(x *xpath.BinaryOp) props {
 		"to":
 		// Arithmetic and comparison atomize both operands. A general
 		// comparison atomizes too: it compares the atomized values.
-		return combine([]operand{
+		return a.combine([]operand{
 			a.operandOf(x.Left, usageAbsorption),
 			a.operandOf(x.Right, usageAbsorption),
 		}, false)
@@ -443,7 +445,7 @@ func (a *analyzer) binary(x *xpath.BinaryOp) props {
 		// "and" and "or" are not a choice operand group: the spec gives
 		// that status only to constructs whose operands are mutually
 		// exclusive, and both arms of "and" may be evaluated.
-		return combine([]operand{
+		return a.combine([]operand{
 			a.operandOf(x.Left, usageInspection),
 			a.operandOf(x.Right, usageInspection),
 		}, false)
@@ -451,7 +453,7 @@ func (a *analyzer) binary(x *xpath.BinaryOp) props {
 	case "is", "<<", ">>":
 		// Node identity and order compare node identity, which is available
 		// without reading the subtree.
-		return combine([]operand{
+		return a.combine([]operand{
 			a.operandOf(x.Left, usageInspection),
 			a.operandOf(x.Right, usageInspection),
 		}, false)
@@ -893,7 +895,7 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		// A constructor function is any name in the XML Schema namespace
 		// with one argument, since that namespace holds nothing else that
 		// is callable.
-		return combine([]operand{a.operandOf(x.Args[0], usageAbsorption)}, false)
+		return a.combine([]operand{a.operandOf(x.Args[0], usageAbsorption)}, false)
 	}
 	if x.Name.URI != fnNS {
 		// A stylesheet function is assessed under §19.8.5 (streamfunctions.go).
@@ -1000,7 +1002,7 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 	// striding asserts. The exception is a narrowing, so modelling it can
 	// only make a call streamable where abandoning it said nothing.
 	if x.Name.Local == "outermost" && len(x.Args) == 1 {
-		p := combine([]operand{a.operandOf(x.Args[0], usageTransmission)}, false)
+		p := a.combine([]operand{a.operandOf(x.Args[0], usageTransmission)}, false)
 		if p.posture == postureCrawling {
 			p.posture = postureStriding
 		}
@@ -1085,7 +1087,7 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 			// it costs the same either way. See operand.streamedGrounded.
 			streamedGrounded: a.ctxStreamedGrounded,
 		}
-		return combine([]operand{ci}, false)
+		return a.combine([]operand{ci}, false)
 	}
 	// A function whose last argument defaults to the context item, called
 	// without it. §19.8.9's list gives both forms: "fn:lang(x) -- Equivalent
@@ -1105,7 +1107,7 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 			allowsChildren:   a.ctxAllowsChildren,
 			streamedGrounded: a.ctxStreamedGrounded,
 		})
-		return combine(ops, singletonBuiltin[x.Name.Local])
+		return a.combine(ops, singletonBuiltin[x.Name.Local])
 	}
 	if len(usages) != len(x.Args) {
 		return a.unknown()
@@ -1114,7 +1116,7 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 	for i, arg := range x.Args {
 		ops = append(ops, a.operandOf(arg, usages[i]))
 	}
-	return combine(ops, singletonBuiltin[x.Name.Local])
+	return a.combine(ops, singletonBuiltin[x.Name.Local])
 }
 
 // contextDefaultingBuiltin names the built-in functions whose FINAL argument

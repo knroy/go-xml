@@ -356,6 +356,9 @@ func (a *instrAnalyzer) exprOperandIn(src string, el *xdm.Node, ctx posture, all
 	}
 	p := an.expr(expr)
 	kids := an.allowsChildren(expr)
+	if pl := a.trust.planOf(); pl != nil {
+		pl.site(el, src, expr, ctx, allowsChildren)
+	}
 	a.known = a.known && an.known
 	a.unverified = a.unverified || an.unverified
 	return p, kids
@@ -373,7 +376,7 @@ func (a *instrAnalyzer) avtProps(el *xdm.Node, attr string) (props, bool) {
 	return a.avtPropsOf(at.Value(), el), true
 }
 
-func (a *instrAnalyzer) avtPropsOf(src string, el *xdm.Node) props {
+func (a *instrAnalyzer) avtRule(src string, el *xdm.Node) props {
 	exprs, ok := avtExpressions(src)
 	if !ok {
 		// Malformed braces: some other check's error.
@@ -388,9 +391,9 @@ func (a *instrAnalyzer) avtPropsOf(src string, el *xdm.Node) props {
 		// the operand is atomized; whether that reads the stream depends on
 		// whether the expression can deliver a node with children (§19.8.1).
 		p, kids := a.exprOperandIn(e, el, a.ctxPosture, a.ctxAllowsChildren)
-		ops = append(ops, operand{props: p, usage: usageAbsorption, allowsChildren: kids})
+		ops = append(ops, operand{props: p, usage: usageAbsorption, allowsChildren: kids, src: planSite{el, e}})
 	}
-	return combine(ops, false)
+	return a.combine(ops, false)
 }
 
 // avtExpressions extracts the source of each expression inside braces in an
@@ -437,7 +440,7 @@ func (a *instrAnalyzer) selectOperand(el *xdm.Node, u usage) (operand, bool) {
 		return operand{}, false
 	}
 	p, kids := a.exprOperandIn(at.Value(), el, a.ctxPosture, a.ctxAllowsChildren)
-	return operand{props: p, usage: u, allowsChildren: kids}, true
+	return operand{props: p, usage: u, allowsChildren: kids, src: planSite{el, at.Value()}}, true
 }
 
 // exprOperand builds an operand from an attribute holding an XPath expression,
@@ -448,7 +451,7 @@ func (a *instrAnalyzer) exprOperand(el *xdm.Node, attr string, u usage) (operand
 		return operand{}, false
 	}
 	p, kids := a.exprOperandIn(at.Value(), el, a.ctxPosture, a.ctxAllowsChildren)
-	return operand{props: p, usage: u, allowsChildren: kids}, true
+	return operand{props: p, usage: u, allowsChildren: kids, src: planSite{el, at.Value()}}, true
 }
 
 // bodyOperand builds an operand from the contained sequence constructor.
@@ -457,6 +460,7 @@ func (a *instrAnalyzer) bodyOperand(el *xdm.Node, u usage) operand {
 		props:          a.body(el),
 		usage:          u,
 		allowsChildren: true,
+		src:            planBody{el},
 	}
 }
 
@@ -469,17 +473,18 @@ func (a *instrAnalyzer) avtOperands(el *xdm.Node, attrs ...string) []operand {
 		if !present {
 			continue
 		}
-		ops = append(ops, operand{props: p, usage: usageAbsorption, allowsChildren: true})
+		ops = append(ops, operand{props: p, usage: usageAbsorption, allowsChildren: true,
+			src: planAVT{el, el.AttrValue(name)}})
 	}
 	return ops
 }
 
-// body assesses the sequence constructor formed by the element children of el.
+// bodyRule assesses the sequence constructor formed by the element children of el.
 //
 // §19.8.1 makes a sequence constructor a construct whose operands are its
 // instructions, each with usage transmission: what an instruction returns is
 // returned by the constructor, in order.
-func (a *instrAnalyzer) body(el *xdm.Node) props {
+func (a *instrAnalyzer) bodyRule(el *xdm.Node) props {
 	var ops []operand
 	// §19.8.9.1 rule 8 asks whether ANY enclosing node N of the call has a
 	// preceding sibling P, within N's own sequence constructor, whose sweep
@@ -518,9 +523,10 @@ func (a *instrAnalyzer) body(el *xdm.Node) props {
 			props:          p,
 			usage:          usageTransmission,
 			allowsChildren: true,
+			src:            c,
 		})
 	}
-	return combine(ops, false)
+	return a.combine(ops, false)
 }
 
 // isSequenceConstructorExcluded reports whether a child element is not part of
@@ -547,9 +553,9 @@ func isSequenceConstructorExcluded(el *xdm.Node) bool {
 	return false
 }
 
-// instruction applies the §19.8.4 rule for a single instruction or literal
+// instructionRule applies the §19.8.4 rule for a single instruction or literal
 // result element.
-func (a *instrAnalyzer) instruction(el *xdm.Node) props {
+func (a *instrAnalyzer) instructionRule(el *xdm.Node) props {
 	if el.Name().URI != xdm.NSXSL {
 		// §19.8.4.1: a literal result element. Its operands are the
 		// contained sequence constructor, the expressions in its attribute
@@ -569,12 +575,12 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		} else {
 			ops = append(ops, a.bodyOperand(el, usageAbsorption))
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "copy-of":
 		// §19.8.4.13: the select expression, usage absorption.
 		if o, ok := a.selectOperand(el, usageAbsorption); ok {
-			return combine([]operand{o}, false)
+			return a.combine([]operand{o}, false)
 		}
 		return groundedMotionless
 
@@ -586,7 +592,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		} else {
 			ops = append(ops, a.bodyOperand(el, usageTransmission))
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "comment":
 		// §19.8.4.11.
@@ -594,7 +600,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 
 	case "document":
 		// §19.8.4.14: the contained sequence constructor, usage absorption.
-		return combine([]operand{a.bodyOperand(el, usageAbsorption)}, false)
+		return a.combine([]operand{a.bodyOperand(el, usageAbsorption)}, false)
 
 	case "text":
 		// §19.8.4.38: no operands.
@@ -627,7 +633,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		} else {
 			ops = append(ops, a.bodyOperand(el, usageAbsorption))
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "result-document":
 		// §19.8.4.35: href and the serialization AVTs absorb, as does the
@@ -644,7 +650,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 			}
 		}
 		ops = append(ops, a.bodyOperand(el, usageAbsorption))
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "if":
 		// §19.8.4.21: test inspects, body transmits.
@@ -653,7 +659,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 			ops = append(ops, o)
 		}
 		ops = append(ops, a.bodyOperand(el, usageTransmission))
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "choose":
 		// §19.8.4.10: each xsl:when test inspects; the bodies of xsl:when
@@ -667,6 +673,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 						props:          a.exprProps(at.Value(), c),
 						usage:          usageInspection,
 						allowsChildren: true,
+						src:            planSite{c, at.Value()},
 					})
 				}
 				o := a.bodyOperand(c, usageTransmission)
@@ -678,7 +685,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 				ops = append(ops, o)
 			}
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "try":
 		// §19.8.4.39: the xsl:try select or body transmits; the xsl:catch
@@ -704,7 +711,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 			o.choiceGroup = true
 			ops = append(ops, o)
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "element":
 		// §19.8.4.15: name, namespace, on-empty, the attribute sets, and
@@ -715,7 +722,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		}
 		ops = append(ops, a.useAttributeSetOperands(el)...)
 		ops = append(ops, a.bodyOperand(el, usageAbsorption))
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "break":
 		// §19.8.4.8: the select expression and the contained sequence
@@ -726,7 +733,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		} else {
 			ops = append(ops, a.bodyOperand(el, usageTransmission))
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "next-iteration":
 		// §19.8.4.28: the xsl:with-param children and nothing else. Their
@@ -739,7 +746,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 				break
 			}
 		}
-		return combine(a.withParamOperands(el, targets), false)
+		return a.combine(a.withParamOperands(el, targets), false)
 
 	case "apply-imports", "next-match":
 		// §19.8.4.4, which §19.8.4.29 makes the rule for xsl:next-match too:
@@ -757,7 +764,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 			allowsChildren: a.ctxAllowsChildren,
 		}}
 		ops = append(ops, a.withParamOperands(el, nil)...)
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "analyze-string":
 		// §19.8.4.3: select absorbs, the regex value template absorbs, and
@@ -776,12 +783,13 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 			}
 			ops = append(ops, operand{
 				props:          sub.body(c),
+				src:            planBody{c},
 				usage:          usageNavigation,
 				allowsChildren: true,
 			})
 		}
 		a.mergeFrom(sub)
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "number":
 		// §19.8.4.30: value absorbs if present; otherwise select navigates,
@@ -803,7 +811,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 				allowsChildren: a.ctxAllowsChildren,
 			})
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "copy":
 		return a.copyInstruction(el)
@@ -826,7 +834,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		} else {
 			ops = append(ops, a.bodyOperand(el, bodyUsage))
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "map-entry":
 		// §19.8.4.24: the key absorbs, the select navigates, the body
@@ -841,7 +849,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		} else {
 			ops = append(ops, a.bodyOperand(el, usageNavigation))
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "perform-sort":
 		// §19.8.4.33: the select navigates, because sorting does not
@@ -854,7 +862,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 			selPosture = o.props.posture
 		}
 		ops = append(ops, a.sortOperands(el, selPosture)...)
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "fallback":
 		// §19.8.4.17: this processor does not perform fallback when the
@@ -929,7 +937,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 			})
 		}
 		ops = append(ops, a.withParamOperands(el, declaredParamTypes(target))...)
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "evaluate":
 		// §19.8.4.16: xpath absorbs, context-item and with-params navigate,
@@ -950,7 +958,7 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 			ops = append(ops, o)
 		}
 		ops = append(ops, a.withParamOperands(el, nil)...)
-		return combine(ops, false)
+		return a.combine(ops, false)
 
 	case "stream", "source-document":
 		// §19.8.4.37. xsl:source-document is the Recommendation's name for
@@ -997,7 +1005,7 @@ func (a *instrAnalyzer) absorbingSelectOrBody(el *xdm.Node, avts []string) props
 	} else {
 		ops = append(ops, a.bodyOperand(el, usageAbsorption))
 	}
-	return combine(ops, false)
+	return a.combine(ops, false)
 }
 
 // literalResultElement applies §19.8.4.1.
@@ -1014,7 +1022,7 @@ func (a *instrAnalyzer) literalResultElement(el *xdm.Node) props {
 				ops = append(ops, a.bodyOperand(c, usageTransmission))
 			}
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 	}
 	for at := range el.Attrs() {
 		// xsl:use-attribute-sets is handled below, and is not itself an
@@ -1027,7 +1035,7 @@ func (a *instrAnalyzer) literalResultElement(el *xdm.Node) props {
 	}
 	ops = append(ops, a.useAttributeSetOperands(el)...)
 	ops = append(ops, a.bodyOperand(el, usageAbsorption))
-	return combine(ops, false)
+	return a.combine(ops, false)
 }
 
 // useAttributeSetOperands builds the operands for the attribute sets named in
@@ -1124,7 +1132,7 @@ func (a *instrAnalyzer) attributeSetProps(decls []*xdm.Node) props {
 		ops = append(ops, sub.useAttributeSetOperands(d)...)
 		a.mergeFrom(sub)
 	}
-	return combine(ops, false)
+	return a.combine(ops, false)
 }
 
 // attributeSetNames returns the names in a use-attribute-sets attribute,
@@ -1384,6 +1392,7 @@ func (a *instrAnalyzer) sortOperands(el *xdm.Node, ctx posture) []operand {
 		} else {
 			ops = append(ops, operand{
 				props:          sub.body(c),
+				src:            planBody{c},
 				usage:          usageAbsorption,
 				allowsChildren: true,
 			})
@@ -1486,12 +1495,13 @@ func (a *instrAnalyzer) copyInstruction(el *xdm.Node) props {
 	}
 	ops = append(ops, operand{
 		props:          sub.body(el),
+		src:            planBody{el},
 		usage:          usageAbsorption,
 		allowsChildren: true,
 	})
 	a.mergeFrom(sub)
 
-	p := combine(ops, false)
+	p := a.combine(ops, false)
 	if !p.streamable() {
 		return roamingFreeRanging
 	}
@@ -1538,7 +1548,7 @@ func (a *instrAnalyzer) mapInstruction(el *xdm.Node) props {
 			allowsChildren: true,
 		})
 	}
-	return combine(ops, false)
+	return a.combine(ops, false)
 }
 
 // forkInstruction applies §19.8.4.20.
@@ -1644,8 +1654,10 @@ func (a *instrAnalyzer) applyTemplates(el *xdm.Node) props {
 	// "If there is no select attribute, the following analysis assumes the
 	// presence of an implicit operand select='child::node()'."
 	sel, selKids := props{a.ctxPosture, sweepMotionless}, true
+	var selSrc any
 	if at := el.Attr("", "select"); at != nil {
 		sel, selKids = a.exprOperandIn(at.Value(), el, a.ctxPosture, a.ctxAllowsChildren)
+		selSrc = planSite{el, at.Value()}
 	} else {
 		// child::node() from the context item strides, and reading it
 		// consumes; from a grounded context it stays grounded.
@@ -1659,10 +1671,10 @@ func (a *instrAnalyzer) applyTemplates(el *xdm.Node) props {
 	// <xsl:apply-templates select="copy-of(.)"/> is grounded and consuming
 	// exactly as the spec's example says.
 	if sel.posture == postureGrounded {
-		ops := []operand{{props: sel, usage: usageAbsorption, allowsChildren: selKids}}
+		ops := []operand{{props: sel, usage: usageAbsorption, allowsChildren: selKids, src: selSrc}}
 		ops = append(ops, a.withParamOperands(el, nil)...)
 		ops = append(ops, a.sortOperands(el, postureGrounded)...)
-		return combine(ops, false)
+		return a.combine(ops, false)
 	}
 
 	// Clause 2: "If there is an xsl:sort child element, then roaming and
@@ -1699,9 +1711,9 @@ func (a *instrAnalyzer) applyTemplates(el *xdm.Node) props {
 	}
 
 	// Clause 5: the general rules, with the select absorbing.
-	ops := []operand{{props: sel, usage: usageAbsorption, allowsChildren: selKids}}
+	ops := []operand{{props: sel, usage: usageAbsorption, allowsChildren: selKids, src: selSrc}}
 	ops = append(ops, a.withParamOperands(el, nil)...)
-	return combine(ops, false)
+	return a.combine(ops, false)
 }
 
 // defaultModeFor returns the [xsl:]default-mode in scope for el and the element
@@ -1875,10 +1887,11 @@ func (a *instrAnalyzer) forEach(el *xdm.Node) props {
 	// apply. A higher-order consuming operand is roaming (§19.8.1), which
 	// is why a grounded select does not make everything streamable.
 	if sel.posture == postureGrounded {
-		ops := []operand{{props: sel, usage: usageInspection, allowsChildren: true}}
+		ops := []operand{{props: sel, usage: usageInspection, allowsChildren: true, src: planSite{el, at.Value()}}}
 		sub := a.subFocus(postureGrounded, true)
 		bo := operand{
 			props:          sub.body(el),
+			src:            planBody{el},
 			usage:          usageTransmission,
 			allowsChildren: true,
 			higherOrder:    true,
@@ -1889,7 +1902,7 @@ func (a *instrAnalyzer) forEach(el *xdm.Node) props {
 			o.higherOrder = true
 			ops = append(ops, o)
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 	}
 
 	// Clause 2: an xsl:sort child makes the instruction roaming, because
@@ -1934,7 +1947,7 @@ func (a *instrAnalyzer) iterate(el *xdm.Node) props {
 	// xsl:on-completion operands are navigation and transmission
 	// respectively; the body transmits.
 	if sel.posture == postureGrounded {
-		ops := []operand{{props: sel, usage: usageInspection, allowsChildren: true}}
+		ops := []operand{{props: sel, usage: usageInspection, allowsChildren: true, src: planSite{el, at.Value()}}}
 		for _, c := range el.ChildElements() {
 			if !isXSL(c, "param") {
 				continue
@@ -1948,6 +1961,7 @@ func (a *instrAnalyzer) iterate(el *xdm.Node) props {
 		sub := a.subFocus(postureGrounded, true)
 		ops = append(ops, operand{
 			props:          sub.body(el),
+			src:            planBody{el},
 			usage:          usageTransmission,
 			allowsChildren: true,
 		})
@@ -1965,7 +1979,7 @@ func (a *instrAnalyzer) iterate(el *xdm.Node) props {
 			a.mergeFrom(ocSub)
 			ops = append(ops, operand{props: p, usage: usageTransmission, allowsChildren: true})
 		}
-		return combine(ops, false)
+		return a.combine(ops, false)
 	}
 
 	if !sel.streamable() {
@@ -2080,7 +2094,7 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 
 	if sel.posture == postureGrounded {
 		// Clause 1: a grounded select follows the general rules.
-		ops := []operand{{props: sel, usage: usageInspection, allowsChildren: true}}
+		ops := []operand{{props: sel, usage: usageInspection, allowsChildren: true, src: planSite{el, at.Value()}}}
 		ops = append(ops, a.avtOperands(el, "collation")...)
 		for _, gat := range []*xdm.Node{groupBy, groupAdj} {
 			if gat == nil {
@@ -2110,12 +2124,13 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 		sub.groupInScope, sub.groupOutOfReach = true, false
 		ops = append(ops, operand{
 			props:          sub.body(el),
+			src:            planBody{el},
 			usage:          usageTransmission,
 			allowsChildren: true,
 			higherOrder:    true,
 		})
 		a.mergeFrom(sub)
-		return combine(ops, false)
+		return a.combine(ops, false)
 	}
 
 	// Clause 2: group-by outside an xsl:fork is roaming. Grouping by an

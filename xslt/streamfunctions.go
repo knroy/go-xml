@@ -626,7 +626,7 @@ func functionBodyVerdict(f *streamFunc, funcs map[funcKey]*streamFunc, trust *de
 	// is grounded whatever the select expression's own posture; the sweep is
 	// what absorbing the select costs.
 	if isXSL(instr, "value-of") {
-		p = combine([]operand{{
+		p = a.combine([]operand{{
 			props:          p,
 			usage:          usageAbsorption,
 			allowsChildren: true,
@@ -900,7 +900,7 @@ func (a *analyzer) callByGeneralRules(
 		}
 		ops = append(ops, a.operandOf(arg, u))
 	}
-	return combine(ops, false), true
+	return a.combine(ops, false), true
 }
 
 // callAscent applies the call rules of §19.8.5.7.
@@ -979,7 +979,7 @@ func (a *analyzer) callDescent(x *xpath.FuncCall, f *streamFunc) (props, bool) {
 		for i := 1; i < len(x.Args); i++ {
 			rest = append(rest, a.operandOf(x.Args[i], typeDeterminedUsage(f.params[i])))
 		}
-		c := combine(rest, false)
+		c := a.combine(rest, false)
 		p1, s1 = c.posture, c.sweep
 	}
 

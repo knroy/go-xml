@@ -50,6 +50,9 @@ type declTrust struct {
 	depth          int
 	chain          []any
 	cyclic, failed bool
+
+	// plan, when set, records what the walk computes (streamplan.go).
+	plan *streamPlan
 }
 
 type trustState int8

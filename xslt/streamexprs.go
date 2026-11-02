@@ -106,7 +106,7 @@ func (a *analyzer) mapConstructor(x *xpath.MapConstructor) props {
 	// the widest sweep of the xsl:map-entry children."
 	widest := sweepMotionless
 	for i, key := range x.Keys {
-		entry := combine([]operand{
+		entry := a.combine([]operand{
 			a.operandOf(key, usageAbsorption),
 			a.operandOf(x.Values[i], usageNavigation),
 		}, false)
@@ -149,7 +149,7 @@ func (a *analyzer) mapConstructor(x *xpath.MapConstructor) props {
 func (a *analyzer) arrayConstructor(x *xpath.ArrayConstructor) props {
 	widest := sweepMotionless
 	for _, m := range x.Members {
-		p := combine([]operand{a.operandOf(m, usageNavigation)}, false)
+		p := a.combine([]operand{a.operandOf(m, usageNavigation)}, false)
 		if !p.streamable() {
 			return roamingFreeRanging
 		}
@@ -202,9 +202,9 @@ func (a *analyzer) lastFunction() props {
 // of the test, which is what sx-treat-902 and sx-treat-903 exist to catch.
 func (a *analyzer) treatExpr(x *xpath.TreatExpr) props {
 	if !isDocumentNodeWithContent(x.Type) {
-		return combine([]operand{a.operandOf(x.Operand, usageTransmission)}, false)
+		return a.combine([]operand{a.operandOf(x.Operand, usageTransmission)}, false)
 	}
-	return combine([]operand{
+	return a.combine([]operand{
 		a.operandOf(x.Operand, usageTransmission),
 		a.operandOf(x.Operand, usageAbsorption),
 	}, false)
@@ -291,7 +291,7 @@ func (a *analyzer) letExpr(x *xpath.LetExpr) props {
 	// The variable is recorded as grounded, which is what §19.8.8.12 gives
 	// it anyway, so that a declared variable it shadows is not consulted.
 	inner := a.withVar(x.Bindings[0].Var, groundedMotionless)
-	p := combine([]operand{
+	p := a.combine([]operand{
 		seq,
 		inner.operandOf(ret, usageTransmission),
 	}, false)
@@ -311,7 +311,7 @@ func (a *analyzer) forExpr(x *xpath.ForExpr) props {
 	}
 	// Recorded as grounded for the reason letExpr gives.
 	inner := a.withVar(x.Bindings[0].Var, groundedMotionless)
-	p := combine([]operand{
+	p := a.combine([]operand{
 		seq,
 		inner.higherOrderOperand(ret, usageTransmission),
 	}, false)
@@ -384,7 +384,7 @@ func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
 	op := inner.higherOrderOperand(test, usageInspection)
 	a.known = a.known && inner.known
 	a.unverified = a.unverified || inner.unverified
-	p := combine([]operand{seq, op}, false)
+	p := a.combine([]operand{seq, op}, false)
 	if !p.streamable() {
 		return roamingFreeRanging
 	}
@@ -692,7 +692,7 @@ func (a *analyzer) dynamicCall(x *xpath.DynamicCall) props {
 		}
 		ops = append(ops, a.operandOf(arg, u))
 	}
-	return combine(ops, false)
+	return a.combine(ops, false)
 }
 
 // dynamicCallUsages reads the argument usages §19.8.8.11 derives from the
