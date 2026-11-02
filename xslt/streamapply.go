@@ -506,10 +506,12 @@ func (x *streamExec) eachApply(fn func(*streamOp)) {
 	walk(x.top)
 }
 
-// modeClass is a mode handed a class of node.
+// modeClass is a mode handed a class of node; top says at the top of the
+// principal result (linkMain).
 type modeClass struct {
 	mode  string
 	class nodeClass
+	top   bool
 }
 
 // linkApply checks what the apply ops of x reach, transitively: each mode
@@ -517,24 +519,47 @@ type modeClass struct {
 // can run for the class of node it is handed, and each of its rules that
 // may match such a node planned for it. It returns why not.
 func (s *Stylesheet) linkApply(x *streamExec, rs *rulesPlan) string {
+	return s.link(rs, x, modeClass{})
+}
+
+// linkMain is linkApply for a principal input streamed in mode m
+// (streammain.go): what dispatching the document node in m reaches, with,
+// besides, nothing that would put a node of the stream at the top of the
+// principal result, where the tree's result holds the source's own node
+// (Result.Nodes), and nothing at the document node that would fall back to
+// a tree there is none of.
+func (s *Stylesheet) linkMain(m string, rs *rulesPlan) string {
+	return s.link(rs, nil, modeClass{m, classDoc, true})
+}
+
+// link is linkApply from the apply ops of x, or, x nil, linkMain from main.
+func (s *Stylesheet) link(rs *rulesPlan, x *streamExec, main modeClass) string {
 	if rs == nil {
 		return "apply-templates: no streamable mode"
 	}
 	seen := map[modeClass]bool{}
 	var work []modeClass
-	add := func(m string, cl nodeClass) {
-		if k := (modeClass{m, cl}); !seen[k] {
+	add := func(m string, cl nodeClass, top bool) {
+		if k := (modeClass{m, cl, top}); !seen[k] {
 			seen[k] = true
 			work = append(work, k)
 		}
 	}
-	visited := map[*streamExec]bool{}
+	type visitKey struct {
+		x   *streamExec
+		top bool
+	}
+	visited := map[visitKey]bool{}
 	var why string
-	visit := func(x *streamExec) {
-		if visited[x] {
+	streamed := x == nil // a principal input: no tree to fall back to
+	visit := func(x *streamExec, top bool) {
+		if visited[visitKey{x, top}] {
 			return
 		}
-		visited[x] = true
+		visited[visitKey{x, top}] = true
+		if streamed && x.class == classDoc && x.mayGiveUp() && why == "" {
+			why = "a select at the document node may fall back to its tree"
+		}
 		x.eachApply(func(op *streamOp) {
 			var modes []string
 			switch i := op.instr.(type) {
@@ -553,24 +578,29 @@ func (s *Stylesheet) linkApply(x *streamExec, rs *rulesPlan) string {
 			if len(modes) == 0 && why == "" {
 				why = elName(op.el) + ": no template rule's mode to name"
 			}
+			t := top && atTop(op.el)
 			for _, m := range modes {
 				switch op.apply {
 				case applyKids:
-					add(m, classElem)
-					add(m, classLeaf)
+					add(m, classElem, t)
+					add(m, classLeaf, t)
 				case applySelf:
-					add(m, x.class)
+					add(m, x.class, t)
 				case applySplit:
-					add(m, classElem)
+					add(m, classElem, t)
 				case applyAttrs:
-					add(m, classAttr)
+					add(m, classAttr, t)
 				case applyNext:
-					add(m, x.class)
+					add(m, x.class, t)
 				}
 			}
 		})
 	}
-	visit(x)
+	if x != nil {
+		visit(x, false)
+	} else {
+		add(main.mode, main.class, main.top)
+	}
 	for len(work) > 0 && why == "" {
 		k := work[0]
 		work = work[1:]
@@ -578,12 +608,20 @@ func (s *Stylesheet) linkApply(x *streamExec, rs *rulesPlan) string {
 		if !rs.verified(k.mode) {
 			return label() + ": not a verified streamable mode"
 		}
+		nm := s.modeNoMatch[k.mode]
+		copies := nm == "shallow-copy" || nm == "copy" || nm == "deep-copy"
+		if k.top && (copies && k.class != classDoc && (k.class != classElem || nm == "deep-copy")) {
+			return label() + ": the built-in " + nm + " would put a node of the stream at the top of the result"
+		}
 		if k.class == classElem || k.class == classDoc {
-			switch s.modeNoMatch[k.mode] {
+			// Inside the copy a shallow-copy makes, its descent is not at
+			// the top of the result.
+			in := k.top && nm != "shallow-copy" && nm != "copy"
+			switch nm {
 			case "", "text-only-copy", "deep-skip":
 			case "shallow-copy", "copy", "shallow-skip":
 				if k.class == classElem {
-					add(k.mode, classAttr)
+					add(k.mode, classAttr, in)
 				}
 			case "deep-copy":
 				if k.class == classDoc {
@@ -591,11 +629,11 @@ func (s *Stylesheet) linkApply(x *streamExec, rs *rulesPlan) string {
 				}
 			case "fail":
 			default:
-				return label() + ": on-no-match " + s.modeNoMatch[k.mode]
+				return label() + ": on-no-match " + nm
 			}
-			if nm := s.modeNoMatch[k.mode]; nm != "deep-copy" && nm != "fail" && (nm != "deep-skip" || k.class == classDoc) {
-				add(k.mode, classElem)
-				add(k.mode, classLeaf)
+			if nm != "deep-copy" && nm != "fail" && (nm != "deep-skip" || k.class == classDoc) {
+				add(k.mode, classElem, in)
+				add(k.mode, classLeaf, in)
 			}
 		}
 		for _, t := range s.templates {
@@ -612,9 +650,12 @@ func (s *Stylesheet) linkApply(x *streamExec, rs *rulesPlan) string {
 				continue
 			case r.why[k.class] != "":
 				return label() + ": rule " + t.Match.String() + ": " + r.why[k.class]
+			case k.top && k.class == classAttr:
+				// Its body may return the attribute of the view itself.
+				return label() + ": rule " + t.Match.String() + " at the top of the result"
 			}
 			if x := r.x[k.class]; x != nil {
-				visit(x)
+				visit(x, k.top)
 			}
 		}
 	}

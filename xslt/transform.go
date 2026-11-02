@@ -238,6 +238,15 @@ type TransformOptions struct {
 	// resolves against the stylesheet's own location instead.
 	BaseOutputURI string
 
+	// SourceParseOptions are the options TransformReader parses its reader
+	// with, streamed or not: the document's base URI and document URI, its
+	// DOCTYPE and entity allowances, and its limits (the zero value's
+	// xdm.DefaultMaxBytes refuses a document over 64 MB, so a caller
+	// streaming a larger one sets MaxBytes, and MaxNodes, as it would for
+	// xdm.Parse). They are what a caller of Transform passes to xdm.Parse.
+	// Transform ignores them: its source is already a tree.
+	SourceParseOptions xdm.ParseOptions
+
 	// nestedDepth seeds the runtime's recursion depth, so that a transform
 	// started by fn:transform continues its caller's count instead of
 	// starting a fresh one. It is unexported because it is not a caller's
@@ -324,6 +333,75 @@ type Result struct {
 // The Stylesheet is not mutated, so one compiled stylesheet may be used from
 // many goroutines concurrently.
 func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts TransformOptions) (*Result, error) {
+	return s.transform(ctx, source, opts, nil)
+}
+
+// TransformReader applies the stylesheet to the XML document r reads, which
+// it parses with opts.SourceParseOptions. Its result, its errors and the
+// limits it applies are those of
+//
+//	tree, err := xdm.Parse(r, opts.SourceParseOptions)
+//	if err != nil {
+//		return nil, err
+//	}
+//	return s.Transform(ctx, tree.Root, opts)
+//
+// which is what it does, unless the document can be streamed: then it is
+// read once, as the transform runs, and no tree of it is built. A document
+// that is not well-formed, or is over a limit of SourceParseOptions, is
+// reported as xdm.Parse reports it, whatever the transform did before the
+// parse got there: the rest of the document is read first.
+//
+// The document is streamed (section 6.6.4 of XSLT 3.0: an initial mode
+// declared streamable, with a streamed initial match selection) when every
+// one of these holds, which is decided when the stylesheet compiles, for each
+// of its modes, except for the invocation itself:
+//
+//   - the transform starts by applying templates to the document, in the
+//     initial mode (no InitialTemplate, InitialFunction or
+//     InitialMatchSelection), and that mode is declared streamable="yes";
+//   - the rules that mode, and every mode it reaches, can apply to the
+//     nodes of the document are guaranteed streamable (section 19), and each
+//     is one this engine runs on a stream (see docs/known-gaps.md for what
+//     it does not yet: grouping, accumulators, xsl:fork, xsl:try, streamable
+//     functions, xsl:result-document);
+//   - nothing reads the document outside those rules: no
+//     xsl:global-context-item, no global variable or parameter whose value
+//     depends on the context item (section 5.3.3 makes the global context
+//     item a grounded one), no accumulator, no input-type-annotations="strip";
+//   - the result keeps no node of the document itself: no built-in rule
+//     copies a node of it to the top of the principal result, where
+//     Result.Nodes would hold the document's own node;
+//   - the stylesheet is a single module, as for a streamed
+//     xsl:source-document.
+//
+// Otherwise the document is parsed into a tree and Transform runs on it.
+// Streaming, the memory a transform takes is that of its result and of what
+// its rules hold, never more than Transform's on the tree; its CPU is of the
+// same order (see docs/known-gaps.md).
+//
+// r is read to its end, and not closed. The base URI and document URI of
+// the document are those of SourceParseOptions (BaseURI, DocumentURI), as
+// for xdm.Parse; set them for fn:base-uri, fn:document-uri and relative
+// fn:doc references from the document to answer.
+func (s *Stylesheet) TransformReader(ctx context.Context, r io.Reader, opts TransformOptions) (*Result, error) {
+	if !s.streamsMain(opts) {
+		tree, err := xdm.Parse(r, opts.SourceParseOptions)
+		if err != nil {
+			return nil, err
+		}
+		return s.Transform(ctx, tree.Root, opts)
+	}
+	return s.transformStream(ctx, r, opts)
+}
+
+// transform is Transform, or, with main set, TransformReader's streamed run:
+// the stand-in for the document node is then the source, and the initial
+// apply-templates dispatches it on the cursor (streammain.go).
+func (s *Stylesheet) transform(ctx context.Context, source *xdm.Node, opts TransformOptions, main *mainInput) (*Result, error) {
+	if main != nil {
+		source = main.root
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -426,7 +504,8 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// left as they parsed it. Stripping in place would surprise a caller that
 	// reuses one parsed document across several stylesheets with different
 	// strip-space declarations.
-	if source != nil && len(s.strip) > 0 {
+	// (A streamed principal input is stripped as the cursor parses it.)
+	if source != nil && len(s.strip) > 0 && main == nil {
 		// Stripping applies to the whole tree the initial context node belongs
 		// to, not to the node itself. When the caller starts the transform at
 		// an inner node -- the suite does this with <source select="..."/> --
@@ -456,7 +535,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// now works from the root: stripTypeAnnotationsFrom copies the children of
 	// what it is handed, so handing it an inner node discarded everything
 	// above and beside it.
-	if source != nil && source.Kind() == xdm.KindDocument && s.stripTypeAnnotations {
+	if source != nil && source.Kind() == xdm.KindDocument && s.stripTypeAnnotations && main == nil {
 		source = s.stripTypeAnnotationsFrom(source)
 	}
 
@@ -664,82 +743,17 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 			return nil, err
 		}
 	} else {
-		// "#default" and "#unnamed" both name the unnamed mode; a caller
-		// passing either means "start where a stylesheet with no @mode
-		// starts", which is the empty name.
-		initialMode := opts.InitialMode
-		if initialMode == "#unnamed" {
-			initialMode = ""
+		initialMode, err := s.initialModeOf(opts)
+		if err != nil {
+			return nil, err
 		}
-		// An invocation that names no mode at all starts in the module's
-		// default mode, which @default-mode on the root moves off the unnamed
-		// one. The rules written without @mode moved with it, so starting in
-		// the unnamed mode would find none of them; mode-1701 is exactly that
-		// stylesheet. An explicit "#unnamed" is a different request and is
-		// left alone, which is why this reads opts rather than initialMode.
-		// "#default" is not a mode name: it asks for THE DEFAULT MODE, which
-		// is what @default-mode on the top-level package names and only the
-		// unnamed mode in the absence of that attribute. 5.7.1's definition
-		// of the invocation puts it as "if no initial mode is supplied, then
-		// the mode used is that named in the default-mode attribute of the
-		// (explicit or implicit) xsl:package element of the top-level package
-		// or in the absence of such an attribute, the unnamed mode", and
-		// "#default" is how a caller spells "none supplied".
-		//
-		// "#unnamed" is the different request, and is the one the grammar
-		// offers beside an EQName in @default-mode itself; it is normalised
-		// above and left alone here.
-		//
-		// package-001p, -001q and -001r each declare default-mode="start" and
-		// are invoked with initial-mode "#default". Treating that as the
-		// unnamed mode ran the built-in rules and copied the text through
-		// instead of firing the rule in mode "start".
-		if opts.InitialMode == "" || opts.InitialMode == "#default" {
-			initialMode = s.rootDefaultMode
+		params, tunnels := paramsOf(opts.InitialModeParams), paramsOf(opts.InitialModeTunnelParams)
+		if main != nil {
+			err = main.run(rt, initialMode, params, tunnels, out)
+		} else {
+			err = applyInitialSelection(rt, source, opts.InitialMatchSelection, initialMode, params, tunnels, out)
 		}
-		// XTDE0045: "it is a non-recoverable dynamic error if the invocation
-		// of the stylesheet specifies an initial mode (other than the default
-		// mode) that does not match the expanded-QName in the mode attribute
-		// of any template". mode="#all" makes a template apply in every mode
-		// but does not NAME one, so it cannot satisfy the invocation: per
-		// W3C bugzilla 3690 an initial mode matched only by "#all" is still
-		// this error. Only tokens that are real names count as declaring.
-		if initialMode != "" {
-			// The caller's name is lexical, so a prefix in it is resolved
-			// against the stylesheet's declarations before comparison, the
-			// same way InitialTemplate is above.
-			want := initialMode
-			if prefix, local, found := strings.Cut(initialMode, ":"); found {
-				if uri, ok := s.prefixes[prefix]; ok {
-					want = xdm.QName{URI: uri, Local: local}.Clark()
-				}
-			}
-			// The mode named by the module's own @default-mode is an entry
-			// point the module nominated, so it is eligible whether or not a
-			// rule mentions it and whatever its visibility; mode-1803
-			// declares such a mode and no rule uses it. Tested first because
-			// it excuses both of the checks below.
-			if want != s.rootDefaultMode {
-				if !s.declaresMode(want) {
-					return nil, fmt.Errorf(
-						"XTDE0045: the invocation specifies initial mode %q, "+
-							"which no template declares", opts.InitialMode)
-				}
-				// Existing is not the same as invocable: a mode a package
-				// keeps private cannot be entered from outside it. See
-				// modevisibility.go.
-				if !s.eligibleInitialMode(want) {
-					return nil, fmt.Errorf(
-						"XTDE0045: the invocation specifies initial mode %q, "+
-							"which is not an eligible initial mode because "+
-							"the package declares it private", opts.InitialMode)
-				}
-			}
-			initialMode = want
-		}
-		if err := applyInitialSelection(rt, source, opts.InitialMatchSelection,
-			initialMode, paramsOf(opts.InitialModeParams), paramsOf(opts.InitialModeTunnelParams),
-			out); err != nil {
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -808,6 +822,86 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		output:    output,
 		charMap:   charMap,
 	}, nil
+}
+
+// initialModeOf is the mode the initial apply-templates starts in: the mode
+// opts.InitialMode names, resolved against the stylesheet, or the default
+// mode; XTDE0045 when the stylesheet offers no such mode.
+func (s *Stylesheet) initialModeOf(opts TransformOptions) (string, error) {
+	// "#default" and "#unnamed" both name the unnamed mode; a caller
+	// passing either means "start where a stylesheet with no @mode
+	// starts", which is the empty name.
+	initialMode := opts.InitialMode
+	if initialMode == "#unnamed" {
+		initialMode = ""
+	}
+	// An invocation that names no mode at all starts in the module's
+	// default mode, which @default-mode on the root moves off the unnamed
+	// one. The rules written without @mode moved with it, so starting in
+	// the unnamed mode would find none of them; mode-1701 is exactly that
+	// stylesheet. An explicit "#unnamed" is a different request and is
+	// left alone, which is why this reads opts rather than initialMode.
+	// "#default" is not a mode name: it asks for THE DEFAULT MODE, which
+	// is what @default-mode on the top-level package names and only the
+	// unnamed mode in the absence of that attribute. 5.7.1's definition
+	// of the invocation puts it as "if no initial mode is supplied, then
+	// the mode used is that named in the default-mode attribute of the
+	// (explicit or implicit) xsl:package element of the top-level package
+	// or in the absence of such an attribute, the unnamed mode", and
+	// "#default" is how a caller spells "none supplied".
+	//
+	// "#unnamed" is the different request, and is the one the grammar
+	// offers beside an EQName in @default-mode itself; it is normalised
+	// above and left alone here.
+	//
+	// package-001p, -001q and -001r each declare default-mode="start" and
+	// are invoked with initial-mode "#default". Treating that as the
+	// unnamed mode ran the built-in rules and copied the text through
+	// instead of firing the rule in mode "start".
+	if opts.InitialMode == "" || opts.InitialMode == "#default" {
+		initialMode = s.rootDefaultMode
+	}
+	// XTDE0045: "it is a non-recoverable dynamic error if the invocation
+	// of the stylesheet specifies an initial mode (other than the default
+	// mode) that does not match the expanded-QName in the mode attribute
+	// of any template". mode="#all" makes a template apply in every mode
+	// but does not NAME one, so it cannot satisfy the invocation: per
+	// W3C bugzilla 3690 an initial mode matched only by "#all" is still
+	// this error. Only tokens that are real names count as declaring.
+	if initialMode != "" {
+		// The caller's name is lexical, so a prefix in it is resolved
+		// against the stylesheet's declarations before comparison, the
+		// same way InitialTemplate is above.
+		want := initialMode
+		if prefix, local, found := strings.Cut(initialMode, ":"); found {
+			if uri, ok := s.prefixes[prefix]; ok {
+				want = xdm.QName{URI: uri, Local: local}.Clark()
+			}
+		}
+		// The mode named by the module's own @default-mode is an entry
+		// point the module nominated, so it is eligible whether or not a
+		// rule mentions it and whatever its visibility; mode-1803
+		// declares such a mode and no rule uses it. Tested first because
+		// it excuses both of the checks below.
+		if want != s.rootDefaultMode {
+			if !s.declaresMode(want) {
+				return "", fmt.Errorf(
+					"XTDE0045: the invocation specifies initial mode %q, "+
+						"which no template declares", opts.InitialMode)
+			}
+			// Existing is not the same as invocable: a mode a package
+			// keeps private cannot be entered from outside it. See
+			// modevisibility.go.
+			if !s.eligibleInitialMode(want) {
+				return "", fmt.Errorf(
+					"XTDE0045: the invocation specifies initial mode %q, "+
+						"which is not an eligible initial mode because "+
+						"the package declares it private", opts.InitialMode)
+			}
+		}
+		initialMode = want
+	}
+	return initialMode, nil
 }
 
 // stripWhitespace returns a copy of the tree with whitespace-only text nodes

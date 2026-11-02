@@ -1,0 +1,279 @@
+package xslt
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/xdm"
+)
+
+// readOnly hides every method of a reader but Read: TransformReader is
+// handed what cannot be sought or measured.
+type readOnly struct{ r io.Reader }
+
+func (o readOnly) Read(p []byte) (int, error) { return o.r.Read(p) }
+
+// mainRun runs sheet over doc through TransformReader (streamed) or through
+// xdm.Parse and Transform, and describes the result: its serialisation, or
+// the error, then the shape of Result.Nodes.
+func mainRun(sheet, doc string, streamed bool, opts TransformOptions) (out string, tr streamtrace.Counts) {
+	before := streamtrace.Snapshot()
+	defer func() { tr = streamtrace.Snapshot().Sub(before) }()
+	tree, err := xdm.ParseString(sheet, xdm.ParseOptions{BaseURI: "file:///s/s.xsl"})
+	if err != nil {
+		return "SHEET: " + err.Error(), tr
+	}
+	s, err := Compile(tree.Root, CompileOptions{})
+	if err != nil {
+		return "COMPILE: " + err.Error(), tr
+	}
+	var res *Result
+	if streamed {
+		res, err = s.TransformReader(context.Background(), readOnly{strings.NewReader(doc)}, opts)
+	} else {
+		var src *xdm.Tree
+		if src, err = xdm.Parse(strings.NewReader(doc), opts.SourceParseOptions); err == nil {
+			res, err = s.Transform(context.Background(), src.Root, opts)
+		}
+	}
+	if err != nil {
+		return "error: " + err.Error(), tr
+	}
+	return res.String() + "\n" + nodesShape(res.Nodes), tr
+}
+
+// nodesShape describes each item of nodes: kind, name, value, parent, root,
+// and which other items it is, or is a sibling of (TestStreamResultNodes).
+func nodesShape(nodes xdm.Sequence) string {
+	var b strings.Builder
+	for i, it := range nodes {
+		n, ok := it.(*xdm.Node)
+		if !ok {
+			fmt.Fprintf(&b, "[%d atomic %v]", i, it)
+			continue
+		}
+		fmt.Fprintf(&b, "[%d %v %s %q base %q doc %q", i, n.Kind(), n.Name().Local, n.StringValue(), n.BaseURI(), n.DocumentURI())
+		if p := n.Parent(); p != nil {
+			fmt.Fprintf(&b, " parent %v %s", p.Kind(), p.Name().Local)
+		}
+		for j, o := range nodes {
+			if m, ok := o.(*xdm.Node); ok && j != i && (n.Is(m) || j < i && n.Parent() != nil && m.Parent() != nil && n.Parent().Is(m.Parent())) {
+				fmt.Fprintf(&b, " with %d", j)
+			}
+		}
+		b.WriteString("]")
+	}
+	return b.String()
+}
+
+// mainSheet is a stylesheet of declarations decls.
+func mainSheet(decls string) string {
+	return `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+ xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:p="urn:p" exclude-result-prefixes="xs p">` + decls + `</xsl:stylesheet>`
+}
+
+// mainCases are stylesheets a principal input is applied to in the unnamed
+// mode; stream says TransformReader must stream it.
+var mainCases = []struct {
+	decls  string
+	stream bool
+}{
+	// The identity transform, a filter, rules for elements and text.
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="sub"/>` +
+		`<xsl:template match="rec[@k = 'a']"><a v="{@v}"><xsl:apply-templates/></a></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="rec"><r k="{@k}" p="{position()}"><xsl:apply-templates/></r></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o b="{base-uri(.)}"><xsl:apply-templates/></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><xsl:copy><xsl:apply-templates/></xsl:copy></xsl:template>` +
+		`<xsl:template match="*"><xsl:copy><xsl:copy-of select="@*"/><xsl:apply-templates/></xsl:copy></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/*"><o><xsl:value-of select="count(.//rec)"/></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:value-of select="sum(//rec/@v)"/></o></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:template match="rec"><xsl:copy-of select="."/></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="fail"/><xsl:template match="/|doc|rec"><xsl:apply-templates/></xsl:template>`, true},
+	{`<xsl:mode streamable="yes" on-no-match="deep-skip"/><xsl:template match="/"><o><xsl:apply-templates/></o></xsl:template>` +
+		`<xsl:template match="doc|rec"><xsl:apply-templates/></xsl:template><xsl:template match="sub"><s x="{@x}"/></xsl:template>`, true},
+	{`<xsl:mode streamable="yes"/><xsl:param name="g" select="'G'"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, true},
+	// A global that reads the context item, the global context item, an
+	// accumulator: the tree's document node is read outside the rules.
+	{`<xsl:mode streamable="yes"/><xsl:variable name="g" select="count(//rec)"/><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, false},
+	{`<xsl:mode streamable="yes"/><xsl:variable name="g"><xsl:value-of select="name(/*)"/></xsl:variable><xsl:template match="rec"><r g="{$g}"/></xsl:template>`, false},
+	{`<xsl:mode streamable="yes"/><xsl:global-context-item use="required"/><xsl:template match="rec"><r/></xsl:template>`, false},
+	{`<xsl:mode streamable="yes"/><xsl:accumulator name="a" initial-value="0" streamable="yes"><xsl:accumulator-rule match="rec" select="$value + 1"/></xsl:accumulator>`, false},
+	// At the top of the principal result the tree keeps the source's own
+	// nodes: the built-ins' copies of leaves, a deep-copy, an attribute rule.
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><xsl:apply-templates/></xsl:template>`, false},
+	{`<xsl:mode streamable="yes" on-no-match="deep-copy"/><xsl:template match="/"><xsl:apply-templates/></xsl:template>`, false},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="/"><xsl:apply-templates select="*"/></xsl:template>` +
+		`<xsl:template match="/*"><xsl:apply-templates select="@*"/></xsl:template>`, false},
+	{`<xsl:mode streamable="yes" on-no-match="shallow-skip"/><xsl:template match="@k"><xsl:sequence select="."/></xsl:template>`, false},
+	// The built-in deep-copy of the document node is its tree (linkApply
+	// asks it of the document node whatever rule matches it).
+	{`<xsl:mode streamable="yes" on-no-match="deep-copy"/><xsl:template match="/*"><o><xsl:apply-templates/></o></xsl:template>`, false},
+	// A max at the document node may give up for the tree to answer.
+	{`<xsl:mode streamable="yes"/><xsl:template match="/"><o><xsl:value-of select="max(//rec/@v)"/></o></xsl:template>`, false},
+	// Not a streamable mode, or a rule the core does not take.
+	{`<xsl:template match="rec"><r/></xsl:template>`, false},
+	{`<xsl:mode streamable="yes"/><xsl:template match="rec[1]"><f/></xsl:template>`, false},
+}
+
+// mainDocs are documents for the main-input cases: mixed content, comments
+// and PIs beside the document element, a DOCTYPE.
+var mainDocs = map[string]string{
+	"flat":    coreDocs["flat"],
+	"mixed":   coreDocs["mixed"],
+	"ns":      coreDocs["ns"],
+	"deep":    coreDocs["deep"],
+	"empty":   coreDocs["empty"],
+	"recroot": coreDocs["recroot"],
+	"doctype": `<!DOCTYPE doc [<!ENTITY e "ent">]><doc><rec k="a" v="1">&e;</rec><!--c--></doc><?tail t?>`,
+	"space":   "<doc>\n  <rec k=\"a\" v=\"1\">\n    <sub x=\"1\"> </sub>\n  </rec>\n  <rec k=\"b\" v=\"2\" xml:space=\"preserve\">\n    <sub/>\n  </rec>\n</doc>\n",
+}
+
+// TestStreamMainMatchesTree: TransformReader gives Parse + Transform's
+// result, Result.Nodes and error, over every main case, every apply case's
+// rules, every document and whitespace declaration; the main cases that
+// must stream do, the others do not, and no guard fires.
+func TestStreamMainMatchesTree(t *testing.T) {
+	opts := TransformOptions{SourceParseOptions: xdm.ParseOptions{AllowDOCTYPE: true,
+		BaseURI: "file:///d/doc.xml", DocumentURI: "file:///d/doc.xml"}}
+	type sheetCase struct {
+		decls  string
+		stream int // 1 must, 0 must not, -1 either
+	}
+	var cases []sheetCase
+	for _, c := range mainCases {
+		st := 0
+		if c.stream {
+			st = 1
+		}
+		cases = append(cases, sheetCase{c.decls, st})
+	}
+	for _, c := range applyCases {
+		cases = append(cases, sheetCase{c.decls, -1})
+	}
+	var why string
+	traceMain = func(m, w string) {
+		if m == "" {
+			why = w
+		}
+	}
+	defer func() { traceMain = nil }()
+	streamed := 0
+	for name, doc := range mainDocs {
+		for _, c := range cases {
+			for _, d := range coreDecls {
+				sheet := mainSheet(d + c.decls)
+				co, ct := mainRun(sheet, doc, true, opts)
+				tr, _ := mainRun(sheet, doc, false, opts)
+				where := fmt.Sprintf("doc %s, decls %q", name, d+c.decls)
+				if co != tr {
+					t.Errorf("%s:\nstreamed %s\ntree     %s", where, co, tr)
+				}
+				if ct.Guards != 0 {
+					t.Errorf("%s: %d guard hits", where, ct.Guards)
+				}
+				if m := ct.Runs[streamtrace.Main]; c.stream == 1 && m != 1 || c.stream == 0 && m != 0 {
+					t.Errorf("%s: %d streamed runs (must stream: %v): %s", where, m, c.stream == 1, why)
+				}
+				streamed += int(ct.Runs[streamtrace.Main])
+			}
+		}
+	}
+	t.Logf("%d runs streamed", streamed)
+}
+
+// TestStreamMainErrors: a streamed run that fails gives Parse + Transform's
+// error: a malformed document or a parse limit after the transform's own
+// error is reported, as Parse reports it before the transform starts; the
+// transform's errors, its result budgets and depth are the tree's.
+func TestStreamMainErrors(t *testing.T) {
+	failing := `<xsl:mode streamable="yes" on-no-match="fail"/><xsl:template match="/|doc"><xsl:apply-templates/></xsl:template>`
+	typed := `<xsl:mode streamable="yes"/><xsl:template match="rec"><r v="{xs:integer(@v) + 1}"/></xsl:template>`
+	div := `<xsl:mode streamable="yes"/><xsl:template match="rec"><r v="{1 idiv (xs:integer(@v) - 2)}"/></xsl:template>`
+	deep := `<xsl:mode streamable="yes"/><xsl:template match="*"><e><xsl:apply-templates/></e></xsl:template>`
+	identity := `<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`
+	var deepDoc strings.Builder
+	for range 60 {
+		deepDoc.WriteString("<a>")
+	}
+	for range 60 {
+		deepDoc.WriteString("</a>")
+	}
+	docs := []string{
+		`<doc><rec k="a" v="1"/><zz/><rec k="b" v="x"/></doc>`,
+		`<doc><rec k="a" v="1"/><zz/><rec k="b" v="x"></doc>`,      // malformed after the error
+		`<doc><rec k="a" v="1"/><zz/><rec k="b" v="2"/></doc><x/>`, // two document elements
+		`<doc><rec k="a" v="1"/><zz/><rec k="b" v="2"/>`,           // unclosed
+		`<doc><rec k="a" v="1"/><rec k="b" v="x"/>&undeclared;</doc>`,
+		`<!DOCTYPE doc><doc><rec k="b" v="1"/></doc>`, // a DOCTYPE, not allowed
+		deepDoc.String(),
+		``,
+	}
+	sheets := []string{failing, typed, div, deep, identity}
+	limits := []TransformOptions{
+		{},
+		{SourceParseOptions: xdm.ParseOptions{MaxNodes: 4}},
+		{SourceParseOptions: xdm.ParseOptions{MaxBytes: 30}},
+		{SourceParseOptions: xdm.ParseOptions{MaxDepth: 20}},
+		{MaxDepth: 30},
+		{MaxNodes: 3},
+	}
+	for _, d := range sheets {
+		sheet := mainSheet(d)
+		for _, doc := range docs {
+			for _, o := range limits {
+				co, ct := mainRun(sheet, doc, true, o)
+				tr, _ := mainRun(sheet, doc, false, o)
+				if co != tr {
+					t.Errorf("sheet %s, doc %s, opts %+v:\nstreamed %s\ntree     %s", d, doc, o, co, tr)
+				}
+				if ct.Runs[streamtrace.Main] != 1 || ct.Guards != 0 {
+					t.Errorf("sheet %s, doc %s: trace %+v", d, doc, ct)
+				}
+			}
+		}
+	}
+}
+
+// TestStreamMainMemory: streaming a principal input takes less live heap
+// than Parse + Transform, by the shape's bound; peak live heap of the whole
+// transform, document text excluded (both read it from one string).
+func TestStreamMainMemory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("memory test")
+	}
+	var b strings.Builder
+	b.WriteString("<doc>")
+	for i := range 150000 {
+		fmt.Fprintf(&b, `<rec k="%c" v="%d">%d<sub x="%d"/><sub x="1">x</sub></rec>`, 'a'+i%5, i%100, i%10, i%7)
+	}
+	b.WriteString("</doc>")
+	doc := b.String()
+	opts := TransformOptions{SourceParseOptions: xdm.ParseOptions{MaxBytes: -1, MaxNodes: -1}}
+	for _, c := range []struct {
+		decls string
+		frac  float64 // the most of the tree's peak streaming may take
+	}{
+		{`<xsl:mode streamable="yes"/><xsl:template match="/"><n><xsl:value-of select="count(//rec)"/></n></xsl:template>`, 0.2},
+		{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="sub"/><xsl:template match="rec[@k != 'a']"/>`, 0.4},
+		{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`, 0.9},
+	} {
+		sheet := mainSheet(c.decls)
+		var st streamtrace.Counts
+		var co, tr string
+		streamed := splitPeak(func() { co, st = mainRun(sheet, doc, true, opts) })
+		tree := splitPeak(func() { tr, _ = mainRun(sheet, doc, false, opts) })
+		t.Logf("%s: streamed %.1f MB, tree %.1f MB", c.decls, float64(streamed)/1e6, float64(tree)/1e6)
+		if st.Runs[streamtrace.Main] != 1 || co != tr {
+			t.Errorf("%s: trace %+v, outputs equal %v", c.decls, st, co == tr)
+		}
+		if float64(streamed) > c.frac*float64(tree) && !raceEnabled {
+			t.Errorf("%s: peak live heap %.1f MB, tree %.1f MB (bound %.0f%%)", c.decls,
+				float64(streamed)/1e6, float64(tree)/1e6, 100*c.frac)
+		}
+	}
+}

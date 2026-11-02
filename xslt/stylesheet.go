@@ -245,6 +245,9 @@ type Stylesheet struct {
 	// keeps — reads them through it. Keeping the tree costs one reference
 	// per compiled stylesheet.
 	source *xdm.Node
+	// mainStreams are the modes TransformReader can stream a principal
+	// input in (streammain.go).
+	mainStreams map[string]bool
 	// nested caches the stylesheets fn:transform compiles; see nestedCache.
 	nested nestedCache
 	// globalsOnce builds globalsByName, the first declaration of each global
@@ -1039,6 +1042,7 @@ func compileLocked(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	if err := c.sheet.resolveOutputCharacterMaps(c.sheet.output.UseCharacterMaps); err != nil {
 		return nil, err
 	}
+	c.planMainStreams()
 	return c.sheet, nil
 }
 

@@ -825,7 +825,8 @@ type streamRun struct {
 	kept      bool
 	held      *outputBuilder // the container's result, when a sequence
 	// For the fallback of a select that gives up: the container, its href,
-	// and how to unmark the document as read before the tree reads it.
+	// and how to unmark the document as read before the tree reads it (nil
+	// for a principal input, which has no tree to fall back to: linkMain).
 	i      *sourceDocumentInstr
 	href   string
 	unread func()
@@ -848,7 +849,7 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 			}
 			run.used = true
 			err := op.split.loop(rt.ctx, run.c, run.d, each, nil)
-			if err == errSplitGiveUp && run.d == 0 {
+			if err == errSplitGiveUp && run.d == 0 && run.i != nil {
 				// The document element itself is copied: from the tree,
 				// nothing of it having been copied yet.
 				items, err := run.fallback(rt, op.sel)
@@ -872,7 +873,7 @@ func (run *streamRun) feed(instr Instruction, rt *runtime) *burstFeed {
 			}
 			run.used = true
 			seq, err := op.split.eval(rt.ctx, run.c, run.d)
-			if err == errSplitGiveUp && run.d == 0 {
+			if err == errSplitGiveUp && run.d == 0 && run.i != nil {
 				return run.fallback(rt, op.sel)
 			}
 			return seq, err

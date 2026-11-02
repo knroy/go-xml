@@ -19,10 +19,14 @@ const (
 	// its plan is a tree of sNodes, counted by Kind. (The burst plans' four
 	// strategies, fold, collect, for-each and iterate, were retired into it.)
 	Core Strategy = iota
+	// Main is a principal input streamed by xslt's TransformReader
+	// (xslt/streammain.go): the initial mode's dispatch of the document
+	// node, run on the cursor as the core runs an apply op.
+	Main
 	NumStrategies
 )
 
-var names = [NumStrategies]string{"core"}
+var names = [NumStrategies]string{"core", "main"}
 
 func (s Strategy) String() string { return names[s] }
 
