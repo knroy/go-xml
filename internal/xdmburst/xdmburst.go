@@ -69,6 +69,11 @@ type Client interface {
 // c what it meets. An error from c stops the parse and is returned.
 var Drive func(r io.Reader, opts any, c Client) error
 
+// FromStream reports whether n, a *xdm.Node, was copied out of a stream: a
+// view, or a node of a grounded copy (its order and identity are its
+// original's). Set by xdm's init.
+var FromStream func(n any) bool
+
 // Viewing is a Client that builds views: Drive hands it, before the first
 // event, the function that returns the view of the element Start is asking
 // about (a *xdm.Node), valid only during Start: a node in a small tree of

@@ -151,8 +151,9 @@ func TestStreamApplyDeep(t *testing.T) {
 // TestStreamApplyTopLevel: at the top of a sequence the tree's built-in
 // shallow-copy keeps the source's own text nodes, whose parents a later
 // instruction reads; the stream has parentless copies. A container whose
-// output is such a sequence (not the principal result's) runs on the tree,
-// and so does an apply op in a sequence-typed variable.
+// result is such a sequence runs on the tree once the stream shows it
+// (a fallback, not a failure), and an apply op in a sequence-typed variable
+// is refused.
 func TestStreamApplyTopLevel(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["flat"]), 0o600); err != nil {
@@ -163,25 +164,112 @@ func TestStreamApplyTopLevel(t *testing.T) {
 		`<xsl:template name="main"><xsl:variable name="v" as="node()*"><xsl:source-document streamable="yes" href="doc.xml">` +
 		`<xsl:apply-templates select="*/rec/sub"/></xsl:source-document></xsl:variable>` +
 		`<out n="{count($v)}" p="{count($v/..)}"/></xsl:template></xsl:stylesheet>`
-	coreCheck(t, outer, dir, "container in a sequence-typed variable", false, TransformOptions{})
+	so, se, st := coreRun(outer, dir, true, TransformOptions{})
+	to, te, _ := coreRun(outer, dir, false, TransformOptions{})
+	if so != to || se != te || st.Fallbacks != 1 || st.Reruns != 0 || st.Guards != 0 {
+		t.Errorf("container in a sequence-typed variable:\ncore %q %q %+v\ntree %q %q", so, se, st, to, te)
+	}
 	inner := coreSheetWith(decls, `<xsl:variable name="v" as="node()*"><xsl:apply-templates select="*/rec/sub"/></xsl:variable>`+
 		`<out n="{count($v)}"/>`)
 	coreCheck(t, inner, dir, "apply-templates in a sequence-typed variable", false, TransformOptions{})
-	// The principal result streams.
+	// Elements the built-in rules make at the top of the principal result
+	// are new nodes in both: it streams.
 	main := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` + decls +
 		`<xsl:template name="main"><xsl:source-document streamable="yes" href="doc.xml">` +
-		`<xsl:apply-templates select="*/rec/sub"/></xsl:source-document></xsl:template></xsl:stylesheet>`
-	coreCheck(t, main, dir, "principal result", true, TransformOptions{})
-	// The built-in deep-copy at the top of the principal result: the copy
-	// keeps the namespaces its element inherits (fuzzer seed 15).
-	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["ns"]), 0o600); err != nil {
+		`<xsl:apply-templates select="*/rec"/></xsl:source-document></xsl:template></xsl:stylesheet>`
+	if _, _, st := coreRun(main, dir, true, TransformOptions{}); st.Runs[streamtrace.Core] != 1 || st.Fallbacks+st.Reruns != 0 {
+		t.Errorf("principal result: %+v", st)
+	}
+}
+
+// TestStreamResultNodes: Result.Nodes, the raw principal result, holds the
+// tree's nodes whatever streamed: where a node of the stream would be at its
+// top (a text node or an element a built-in rule keeps), the container runs
+// on the tree, so that parent, root and identity are the source's, as in tree
+// mode. A loop body or select returning a streamed node is XTSE3430 (§18.1:
+// not grounded) in both modes; copies are new nodes in both.
+func TestStreamResultNodes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(coreDocs["flat"]), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	deep := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xpath-default-namespace="urn:d">` +
-		`<xsl:mode streamable="yes" on-no-match="deep-copy"/><xsl:template name="main">` +
-		`<xsl:source-document streamable="yes" href="doc.xml"><xsl:apply-templates select="doc/*"/></xsl:source-document>` +
-		`</xsl:template></xsl:stylesheet>`
-	coreCheck(t, deep, dir, "deep-copy at the top of the principal result", true, TransformOptions{})
+	for _, c := range []struct{ decls, body string }{
+		{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/><xsl:template match="sub"><xsl:apply-templates/></xsl:template>`,
+			`<xsl:apply-templates select="*/rec/sub"/>`},
+		{`<xsl:mode streamable="yes" on-no-match="deep-copy"/>`, `<xsl:apply-templates select="*/rec"/>`},
+		{`<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`, `<xsl:apply-templates select="*/rec/@k"/>`},
+		{``, `<xsl:for-each select="/doc/rec"><xsl:sequence select="@k"/></xsl:for-each>`},
+		{``, `<xsl:for-each select="/doc/rec"><xsl:sequence select="."/></xsl:for-each>`},
+		{``, `<xsl:for-each select="/doc/rec"><xsl:sequence select="sub"/></xsl:for-each>`},
+		{``, `<xsl:for-each select="//rec"><xsl:sequence select="@v"/></xsl:for-each>`},
+		// Copies, in both modes: it streams, nothing falls back.
+		{``, `<xsl:for-each select="/doc/rec"><xsl:copy-of select="."/></xsl:for-each>`},
+		{`<xsl:mode streamable="yes"/><xsl:template match="rec"><xsl:copy-of select="."/></xsl:template>`,
+			`<xsl:apply-templates select="*/rec"/>`},
+	} {
+		sheet := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` + c.decls +
+			`<xsl:template name="main"><xsl:source-document streamable="yes" href="doc.xml">` + c.body +
+			`</xsl:source-document></xsl:template></xsl:stylesheet>`
+		nodes := func(core bool) string {
+			defer func() { noBursts = false }()
+			tree, err := xdm.ParseString(sheet, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := Compile(tree.Root, CompileOptions{})
+			if err != nil {
+				return "compile " + err.Error() // the analysis refuses it (§18.1: not grounded)
+			}
+			docs, _ := NewFileResolver(dir)
+			noBursts = !core
+			before := streamtrace.Snapshot()
+			res, err := s.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: docs})
+			if core {
+				tr := streamtrace.Snapshot().Sub(before)
+				t.Logf("%s: runs %d fallbacks %d re-runs %d guards %d", c.body, tr.Runs[streamtrace.Core], tr.Fallbacks, tr.Reruns, tr.Guards)
+				if tr.Guards != 0 {
+					t.Errorf("%s: guard hits", c.body)
+				}
+			}
+			if err != nil {
+				return "error " + err.Error()
+			}
+			var b strings.Builder
+			for i, it := range res.Nodes {
+				n, ok := it.(*xdm.Node)
+				if !ok {
+					fmt.Fprintf(&b, "[%d atomic %v]", i, it)
+					continue
+				}
+				fmt.Fprintf(&b, "[%d %v %s %q", i, n.Kind(), n.Name().Local, n.StringValue())
+				if p := n.Parent(); p != nil {
+					fmt.Fprintf(&b, " parent %v %s", p.Kind(), p.Name().Local)
+				} else {
+					b.WriteString(" no parent")
+				}
+				r := n
+				for r.Parent() != nil {
+					r = r.Parent()
+				}
+				fmt.Fprintf(&b, " root %v", r.Kind())
+				for j, o := range res.Nodes {
+					if m, ok := o.(*xdm.Node); ok && j != i && n.Is(m) {
+						fmt.Fprintf(&b, " is %d", j)
+					}
+				}
+				for j, o := range res.Nodes {
+					if m, ok := o.(*xdm.Node); ok && j < i && n.Parent() != nil && m.Parent() != nil && n.Parent().Is(m.Parent()) {
+						fmt.Fprintf(&b, " sibling of %d", j)
+					}
+				}
+				b.WriteString("]")
+			}
+			return b.String()
+		}
+		if co, tr := nodes(true), nodes(false); co != tr {
+			t.Errorf("%s %s:\ncore %s\ntree %s", c.decls, c.body, co, tr)
+		}
+	}
 }
 
 // TestStreamApplyLeafAllocs: the streamed identity transform does not copy

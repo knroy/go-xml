@@ -62,6 +62,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
+	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
@@ -817,9 +818,12 @@ type streamRun struct {
 	used bool
 	off  bool
 	// root is the stand-in for the document node; top the document node of
-	// the first view a dispatch met, whose properties root then takes
+	// the first view a dispatch met, whose properties root then takes; kept
+	// says a built-in rule appended a copy of a leaf at the top of a sequence
 	// (streamapply.go).
 	root, top *xdm.Node
+	kept      bool
+	held      *outputBuilder // the container's result, when a sequence
 	// For the fallback of a select that gives up: the container, its href,
 	// and how to unmark the document as read before the tree reads it.
 	i      *sourceDocumentInstr
@@ -975,13 +979,6 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 			return false, nil
 		}
 	}
-	if i.stream.hasApply() && out.Open() == nil && out != rt.principal {
-		// At the top of a sequence the tree's built-in rules keep the
-		// source's own nodes, which a later instruction may navigate from;
-		// the stream has copies (streamapply.go). Decided before anything
-		// is read.
-		return false, nil
-	}
 	docURI, ok := br.wantsBursts(href, base)
 	if !ok {
 		return false, nil
@@ -1006,12 +1003,37 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	i.stream.count()
 	sig, mark := signature(out), rt.localsMark()
 	n0, b0 := xpathleaf.Charged(rt.ctx)
-	err := i.runStream(rt, out, br, href, base, strip, unread)
-	if err == nil {
-		return true, nil
+	// At the top of a sequence (the principal result's raw nodes, a
+	// variable's, a function's) the tree keeps the source's own nodes where
+	// they are appended as they are. The stream has copies of them, whose
+	// parents, roots and identities are not the tree's: so the body writes
+	// into a builder of its own first, and when a node of the stream is at
+	// its top -- a view, a grounded copy, a text node a built-in rule copied --
+	// the container runs on the tree instead, nothing having reached out.
+	target, held := out, (*outputBuilder)(nil)
+	if out.Open() == nil {
+		held = newOutputBuilder(rt)
+		target = held
 	}
-	// The re-run. What the failed run charged is dropped with it.
-	streamtrace.Rerun()
+	kept := false
+	err := i.runStream(rt, target, br, href, base, strip, unread, held, &kept)
+	if err == nil && held != nil {
+		err = held.Refused()
+	}
+	switch {
+	case err == nil && held == nil:
+		return true, nil
+	case err == nil && !kept && !keepsStreamNode(held.Sequence()):
+		return true, appendSequence(held.Sequence(), out)
+	}
+	if err == nil {
+		// Not a failure: the tree has the nodes this result must hold.
+		streamtrace.Fallback()
+		err = errKeptStreamNode
+	} else {
+		// The re-run. What the failed run charged is dropped with it.
+		streamtrace.Rerun()
+	}
 	if traceRerun != nil {
 		traceRerun(err)
 	}
@@ -1033,10 +1055,26 @@ func (i *sourceDocumentInstr) executeStream(rt *runtime, out *outputBuilder, hre
 	return true, terr
 }
 
+// errKeptStreamNode sends a container to the tree when its result, a
+// sequence, would hold a node of the stream at its top.
+var errKeptStreamNode = errors.New("streaming: a node of the stream at the top of the result")
+
+// keepsStreamNode reports whether seq holds a node copied out of a stream.
+func keepsStreamNode(seq xdm.Sequence) bool {
+	for _, it := range seq {
+		if n, ok := it.(*xdm.Node); ok && xdmburst.FromStream(n) {
+			return true
+		}
+	}
+	return false
+}
+
 // runStream runs i's body on a cursor over href. A posture fault is
-// returned as its error; any other panic goes on.
+// returned as its error; any other panic goes on. kept is set when a
+// built-in rule appended a node of the stream at the top of held, the
+// container's own result when that is a sequence (streamapply.go).
 func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burstResolver,
-	href, base string, strip func(*xdm.Node) bool, unread func()) (err error) {
+	href, base string, strip func(*xdm.Node) bool, unread func(), held *outputBuilder, kept *bool) (err error) {
 
 	defer func() {
 		if p := recover(); p != nil {
@@ -1051,7 +1089,8 @@ func (i *sourceDocumentInstr) runStream(rt *runtime, out *outputBuilder, br burs
 		if strip != nil {
 			c.StripWhitespace(strip)
 		}
-		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: xdm.NewTree().Root}
+		run := &streamRun{x: i.stream, c: c, i: i, href: href, unread: unread, root: xdm.NewTree().Root, held: held}
+		defer func() { *kept = run.kept }()
 		// The body's focus is the document node, which the stream does not
 		// build: the plan reads of it only what an empty one has.
 		sub := rt.withCurrent(run.root, 1, 1).clearCurrentRule()

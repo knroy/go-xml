@@ -526,7 +526,6 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	rt = rt.withOutputURI(opts.BaseOutputURI)
 
 	out := newOutputBuilder(rt)
-	rt.principal = out
 
 	// rawResult carries the initial function's return value, which is a
 	// sequence rather than a tree. It is kept beside the output builder

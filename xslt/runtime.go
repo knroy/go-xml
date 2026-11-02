@@ -77,10 +77,6 @@ type runtime struct {
 type transformState struct {
 	sheet *Stylesheet
 
-	// principal is the principal result's builder, whose items nothing
-	// reads as nodes but the caller (streamapply.go).
-	principal *outputBuilder
-
 	// globalsForced counts the global variables evaluated so far, so that a
 	// streamed item that forced one keeps charged what it built (liveItem).
 	globalsForced int

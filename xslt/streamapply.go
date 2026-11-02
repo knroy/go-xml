@@ -914,28 +914,21 @@ func (run *streamRun) rule(rt *runtime, t *Template, node *xdm.Node, params, tun
 	return err
 }
 
-// detached is n as the built-in rules append it to out. At the top of a
-// sequence (the principal result: executeStream refuses any other) a node is
-// kept as it is, and the tree keeps the source's own; one with views for
-// ancestors would be navigable from Result.Nodes to content that is not
-// there. So an element grounded from the cursor is copied into a document of
-// its own, as content construction copies it (its in-scope namespaces with
-// it), and an attribute of a view is copied parentless.
-func detached(out *outputBuilder, n *xdm.Node) *xdm.Node {
-	switch {
-	case out.Open() != nil || n.Parent() == nil:
-		return n
-	case n.Kind() != xdm.KindElement && n.Kind() != xdm.KindAttribute:
-		return xdm.Copy(n) // a leaf, live on the cursor
-	case n.Kind() == xdm.KindAttribute:
-		a := xdm.NewNode(xdm.KindAttribute, n.Name(), n.Value())
-		a.CopyTypingFrom(n)
-		return a
+// keep appends n, a node of the stream, as the built-in rules append the
+// source's. At the top of a sequence a builder keeps the node itself: a leaf
+// live on the cursor is copied first (its record is reused once the cursor
+// moves), and at the top of the container's own result the tree's node is
+// the source's, so the result is the tree's to make (kept, executeStream).
+func (run *streamRun) keep(out *outputBuilder, n *xdm.Node) {
+	if out.Open() == nil {
+		if out == run.held {
+			run.kept = true
+		}
+		if k := n.Kind(); k != xdm.KindElement && k != xdm.KindAttribute && k != xdm.KindDocument {
+			n = xdm.Copy(n)
+		}
 	}
-	b, root := xdmbuild.InPlaceDocument(xsltPolicy{}) // charged as the tree charges it: not at all
-	b.AppendNode(n)
-	root.Tree().Finalize()
-	return root.FirstChild()
+	out.AppendNode(n)
 }
 
 // builtIn is applyBuiltInRule for node, as dispatch has it.
@@ -949,7 +942,7 @@ func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, 
 		case "fail":
 			return builtInFail(node, mode)
 		case "deep-copy", "shallow-copy", "copy":
-			out.AppendNode(detached(out, node))
+			run.keep(out, node)
 		default:
 			if k := node.Kind(); k == xdm.KindText || k == xdm.KindAttribute {
 				out.AppendText(node.StringValue())
@@ -987,7 +980,7 @@ func (run *streamRun) builtIn(rt *runtime, node *xdm.Node, mode string, params, 
 		if err != nil {
 			return err
 		}
-		out.AppendNode(detached(out, g))
+		run.keep(out, g)
 		return nil
 	case "shallow-copy", "copy":
 		if doc {

@@ -16,6 +16,7 @@ func init() {
 		_, err := parse(r, "", o)
 		return err
 	}
+	xdmburst.FromStream = func(n any) bool { return n.(*Node).flags&fOrigin != 0 }
 }
 
 // driver is the burster that serves c.
