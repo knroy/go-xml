@@ -10,8 +10,11 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"weak"
 
+	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/xdm"
+	"github.com/knroy/go-xml/v2/xpath"
 )
 
 const burstDoc = `<?xml version="1.0"?>
@@ -426,6 +429,68 @@ func TestBurstPatternsMatchTree(t *testing.T) {
 		}
 		if tc.want != "" && !strings.HasSuffix(got, ">"+tc.want) {
 			t.Errorf("%s: output %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
+// keepCounter is a FileResolver that remembers, weakly, each burst's
+// document node and counts how many are still reachable once the parse is
+// over, while the transform that read them is still running.
+type keepCounter struct {
+	*FileResolver
+	live int
+}
+
+func (k *keepCounter) parseBursts(ctx *xpath.Context, uri, base string, path []xdmburst.Step, fn func(*xdm.Node) error) error {
+	var seen []weak.Pointer[xdm.Node]
+	err := k.FileResolver.parseBursts(ctx, uri, base, path, func(n *xdm.Node) error {
+		seen = append(seen, weak.Make(n.Tree().Root))
+		return fn(n)
+	})
+	goruntime.GC()
+	goruntime.GC()
+	for _, w := range seen {
+		if w.Value() != nil {
+			k.live++
+		}
+	}
+	return err
+}
+
+// Each burst's tree is let go once it has been read: //rec from a burst's
+// document node is not left in package xpath's per-transform step memo,
+// which would keep every burst's tree to the end of the transform.
+func TestBurstsDropTheirTrees(t *testing.T) {
+	dir := t.TempDir()
+	doc := "<doc>" + strings.Repeat(`<rec v="1"><a>x</a><rec v="2"/></rec>`, 2000) + "</doc>"
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		`<xsl:value-of select="count(//rec)"/>`,
+		`<xsl:value-of select="sum(outermost(//rec)/@v)"/>`,
+		`<xsl:for-each select="//rec[@v = 2]"><xsl:value-of select="@v"/></xsl:for-each>`,
+	} {
+		src := `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:template name="main"><xsl:source-document streamable="yes" href="doc.xml">` +
+			body + `</xsl:source-document></xsl:template></xsl:stylesheet>`
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: fileURIOf(filepath.Join(dir, "s.xsl"))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sheet, err := Compile(tree.Root, CompileOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fr, err := NewFileResolver(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		k := &keepCounter{FileResolver: fr}
+		if _, err := sheet.Transform(context.Background(), nil, TransformOptions{InitialTemplate: "main", Documents: k}); err != nil {
+			t.Fatal(err)
+		}
+		if k.live > 10 {
+			t.Errorf("%s: %d of 2000 burst trees still held after the parse", body, k.live)
 		}
 	}
 }

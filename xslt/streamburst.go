@@ -1064,11 +1064,81 @@ func pathSafe(steps []xpath.Expr, noPos, upEnd bool) bool {
 }
 
 // noteBurstLoop records instr as the compiled loop of the burst plan being
-// compiled, when n is its loop element.
-func (c *compiler) noteBurstLoop(n *xdm.Node, instr Instruction, sel *xpath.Compiled) {
+// compiled, when n is its loop element, and sel, written where ns resolves
+// names, as its select; a select that starts with // is evaluated in each
+// burst as descendant:: (descendantFirst).
+func (c *compiler) noteBurstLoop(n *xdm.Node, instr Instruction, sel *xpath.Compiled,
+	ns xpath.NamespaceResolver) {
+
 	if c.burst != nil && c.burst.target == n {
 		c.burst.instr, c.burst.sel = instr, sel
+		if e := reparse(sel, ns); e != nil && descendantFirst(e) {
+			c.burst.sel = xpathleaf.WithExpr(sel, e).(*xpath.Compiled)
+		}
 	}
+}
+
+// reparse parses the source of sel, written where ns resolves names,
+// exactly as compileExpr parsed it, or returns nil.
+func reparse(sel *xpath.Compiled, ns xpath.NamespaceResolver) xpath.Expr {
+	o := exprOptions(ns)
+	var (
+		e   xpath.Expr
+		err error
+	)
+	if o.RefFloor != 0 && o.RefFloor != o.Version {
+		e, err = xpath.ParseVersionRefFloor(sel.Source(), ns, o.Version, o.RefFloor)
+	} else {
+		e, err = xpath.ParseVersion(sel.Source(), ns, o.Version)
+	}
+	if err != nil {
+		return nil
+	}
+	return e
+}
+
+// descendantFirst rewrites the record path e when it starts from the
+// document node with //X[p], descendant-or-self::node()/child::X[p], as
+// descendant::X[p], and reports whether it did. The two select the same
+// nodes in the same order, since burstPattern admitted no predicate that
+// depends on position; but package xpath memoises the first form over a
+// parsed document node for the rest of the transform (stepmemo.go), and
+// each burst's document node held there would keep its whole tree: a
+// count(//rec) over 100 MB peaked at 1.8 GB against the tree's 0.8 GB.
+func descendantFirst(e xpath.Expr) bool {
+	switch x := e.(type) {
+	case *xpath.FuncCall:
+		return outerInner(x) && descendantFirst(x.Args[0])
+	case *xpath.PathExpr:
+		if f, ok := firstOf(x.Steps).(*xpath.FuncCall); ok && !x.Root {
+			return descendantFirst(f)
+		}
+		k := 0
+		if _, ok := firstOf(x.Steps).(*xpath.ContextItem); ok && !x.Root {
+			k = 1
+		}
+		if k+1 >= len(x.Steps) {
+			return false
+		}
+		dos, ok := x.Steps[k].(*xpath.Step)
+		if !ok || dos.Axis != xpath.AxisDescendantOrSelf || len(dos.Predicates) > 0 {
+			return false
+		}
+		if kt, ok := dos.Test.(*xpath.KindTest); !ok || !kt.Any {
+			return false
+		}
+		ch, ok := x.Steps[k+1].(*xpath.Step)
+		if !ok || ch.Axis != xpath.AxisChild {
+			return false
+		}
+		if _, ok := ch.Test.(*xpath.NameTest); !ok {
+			return false
+		}
+		d := &xpath.Step{Axis: xpath.AxisDescendant, Test: ch.Test, Predicates: ch.Predicates}
+		x.Steps = append(append(x.Steps[:k:k], d), x.Steps[k+2:]...)
+		return true
+	}
+	return false
 }
 
 // noteBurstSelect records instr as the compiled target of the burst plan
@@ -1090,20 +1160,7 @@ func (c *compiler) noteBurstSelect(n *xdm.Node, instr Instruction, sel *xpath.Co
 		}
 	}
 	parse := func() *burstSplit {
-		o := exprOptions(ns)
-		var (
-			e   xpath.Expr
-			err error
-		)
-		if o.RefFloor != 0 && o.RefFloor != o.Version {
-			e, err = xpath.ParseVersionRefFloor(sel.Source(), ns, o.Version, o.RefFloor)
-		} else {
-			e, err = xpath.ParseVersion(sel.Source(), ns, o.Version)
-		}
-		if err != nil {
-			return nil
-		}
-		return splitSelect(e, isXSL(n, "value-of"))
+		return splitSelect(reparse(sel, ns), isXSL(n, "value-of"))
 	}
 	part := func(e xpath.Expr) *xpath.Compiled {
 		return xpathleaf.WithExpr(sel, e).(*xpath.Compiled)
@@ -1113,6 +1170,7 @@ func (c *compiler) noteBurstSelect(n *xdm.Node, instr Instruction, sel *xpath.Co
 		return
 	}
 	s.put(&xpath.VarRef{Name: burstItems})
+	descendantFirst(s.items)
 	p.items, p.outer, p.atomize = part(s.items), part(*s.outer), s.atomize
 	if f := parse(); f != nil && f.call != nil {
 		f.putCall(&xpath.VarRef{Name: burstValue})
