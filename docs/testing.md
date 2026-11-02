@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 2,999 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,011 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -533,6 +533,55 @@ allow file the same comparison reports those 5 and exits 1, and
 empty or mistyped recording directory is an error, never "zero differences".
 
 ---
+
+### Streaming differential
+
+Streamed execution must be byte-identical to tree mode, which stays the
+oracle. Two tools check this, and both count what took the streamed path
+([`internal/streamtrace`](../internal/streamtrace/streamtrace.go)): runs per
+strategy (fold, collect, for-each, iterate), fallbacks to the tree, and guard
+hits, which must be 0.
+
+```
+go run ./tests/streamdiff <base-rev> <outdir>     # ~3 min
+go test ./xslt -run 'TestStreamFuzz$' -v          # 1000 cases; GOXSLT_STREAM_FUZZ=N, _SEED=S
+```
+
+`tests/streamdiff` records TestXSLT30Suite three times:
+1. on `<base-rev>`, extracted with `git archive`;
+2. on the checkout;
+3. on the checkout with `GOXSLT_STREAM_OFF=1`, which sends every container
+   to the tree.
+
+It compares base with branch, and branch with off, using `tests/recdiff`
+and `tests/streamdiff/allow.txt`. That file holds six case-scoped rules:
+generate-id numbering in docbook-002 and si-fork-801, and the clock in
+evaluate-052, cvt-042, format-date-037 and error-3160a.
+
+With `GOXSLT_RECORD_DIR` set, tests/xslts writes
+`<dir>/streams/<suite>.tsv`, one line per case that streamed. The runner
+fails when any of these is true:
+- a difference is unexplained;
+- fewer cases streamed than the floor (`-floor`, `GOXSLT_STREAM_FLOOR`,
+  default 450);
+- a guard fired;
+- the off leg streamed.
+
+At aeaf6cbe it reads:
+- 450 cases on the streamed path, 12 with a fallback;
+- fold 81, collect 336, for-each 30, iterate 4 runs;
+- zero unexplained differences.
+
+`TestStreamFuzz` (skipped under `-short`) generates a record document and a
+streamable stylesheet per seed. It runs each with bursts, with bursts but no
+folding, and on the tree, and requires the same output and error. The only
+exception is the documented loop-shape error order (see known-gaps.md). A
+failing case prints its seed and the command that replays it.
+
+At aeaf6cbe, 120,000 cases put 35,350 on the burst path, with 0 differences
+and 10 in the allowed class. Breaking the count fold made 17 of 20,000 cases
+differ.
+
 
 ## The ratchet
 
