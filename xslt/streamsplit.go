@@ -736,8 +736,14 @@ func (w *splitter) walk(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 			w.noPath(x.Then, use, "the consuming path in a branch below the top") &&
 			w.noPath(x.Else, use, "the consuming path in a branch below the top")
 	case *xpath.SequenceExpr:
+		// The EBV of a sequence is not that of its items: boolean(($b, P))
+		// is FORG0006 for a non-empty P, true for an empty one.
+		u := use
+		if u == useEBV {
+			u = useKeep
+		}
 		for k := range x.Items {
-			if !w.slot(x.Items[k], func(y xpath.Expr) { x.Items[k] = y }, use) {
+			if !w.slot(x.Items[k], func(y xpath.Expr) { x.Items[k] = y }, u) {
 				return false
 			}
 		}

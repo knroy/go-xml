@@ -416,7 +416,7 @@ var splitExprs = []string{
 	// reducers
 	`sum(//rec/@v)`, `sum(doc/rec/@v)`, `sum(//item/@v, 0)`, `sum(//rec)`, `sum(//item)`, `sum(rec/@v)`,
 	`avg(//rec/@v)`, `avg(//item)`, `avg(//rec[@k='zz']/@v)`, `min(//rec/@v)`, `max(//rec/@k)`, `max(//item)`,
-	`min(//item/@v)`, `max(//rec/@v)`, `exists(//rec[@k='b'])`, `empty(//rec[@k='zz'])`, `boolean(//rec)`,
+	`min(//item/@v)`, `max(//rec/@v)`, `exists(//rec[@k='b'])`, `empty(//rec[@k='zz'])`, `boolean((true(), //rec[@k = 'zz']))`, `boolean((true(), //rec))`, `not((1, //rec/@v))`, `if ((false(), //rec)) then 1 else 2`, `boolean(//rec)`,
 	`not(//rec[@k='a'])`, `boolean(//rec/@v)`, `not(//rec/string())`, `if (//rec) then 1 else 0`,
 	`head(//rec)`, `(//rec)[3]`, `(//item)[2]`, `string((//rec)[2])`, `(//rec/@v)[2]`,
 	`count(//rec/@v)`, `count(//@*)`, `count(.//@id)`, `.//@id`, `count(//rec/(@k, @v))`, `exists(//comment())`,
