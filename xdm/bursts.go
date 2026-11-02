@@ -3,6 +3,7 @@ package xdm
 import (
 	"io"
 
+	"github.com/knroy/go-xml/v2/internal/xdmburst"
 	"github.com/knroy/go-xml/v2/internal/xdmclone"
 )
 
@@ -29,30 +30,64 @@ import (
 // document order; a node fn keeps stays valid after fn returns.
 
 // ParseBursts parses r and calls fn with each element whose ancestry of
-// element names, from the document element down, is path. An error from fn
-// stops the parse and is returned.
+// element names, from the document element down, is path, of at most
+// xdmburst.MaxSteps names. An error from fn stops the parse and is returned.
 func ParseBursts(r io.Reader, opts ParseOptions, path []QName, fn func(*Node) error) error {
-	if len(path) == 0 {
-		panic("xdm: ParseBursts needs a non-empty path")
+	steps := make([]xdmburst.Step, len(path))
+	for i, q := range path {
+		steps[i] = xdmburst.Step{URI: q.URI, Local: q.Local}
 	}
-	opts.bursts = &burster{path: path, fn: fn}
+	return parseBursts(r, opts, steps, fn)
+}
+
+func init() {
+	xdmburst.Parse = func(r io.Reader, opts any, steps []xdmburst.Step, fn func(any) error) error {
+		return parseBursts(r, opts.(ParseOptions), steps, func(n *Node) error { return fn(n) })
+	}
+}
+
+// parseBursts is ParseBursts over a pattern that may have wildcards and
+// descendant steps. An element whose ancestry matches it is a burst; one
+// whose ancestry could still lead to a match below it is kept on the spine;
+// any other is dropped. A match inside a burst is delivered with it, so the
+// bursts are the outermost matches, in document order.
+func parseBursts(r io.Reader, opts ParseOptions, steps []xdmburst.Step, fn func(*Node) error) error {
+	if len(steps) == 0 || len(steps) > xdmburst.MaxSteps {
+		panic("xdm: ParseBursts needs a path of 1 to 63 names")
+	}
+	opts.bursts = &burster{steps: steps, fn: fn, states: []uint64{1}, gens: []uint64{0}}
 	_, err := parse(r, "", opts)
 	return err
 }
 
 // burster is ParseBursts' state inside parse.
 type burster struct {
-	path []QName
-	fn   func(*Node) error
-	// spine is how many levels of the open chain match path and are kept.
+	steps []xdmburst.Step
+	fn    func(*Node) error
+	// spine is how many levels of the open chain could lead to a match and
+	// are kept.
 	spine int
 	// drop is the depth of the element being built only to be dropped (a
-	// burst, or an element off the path), or 0.
-	drop int
+	// burst, or an element off the path), or 0; burst says it is a burst.
+	drop  int
+	burst bool
+	// states[d] is the set of pattern steps the spine element at depth d
+	// (0: the document node) has matched, as bits: bit k means the first k
+	// steps are matched by it and its ancestors.
+	states []uint64
 	// marks[d] is the tree's state once the spine element at depth d (0:
 	// the document node) had stored its attributes. Everything stored after
 	// it belongs to content that is dropped.
 	marks []burstMark
+	// gens[d] tells the spine element at depth d from the others that have
+	// been there: gen counts the spine elements opened.
+	gens []uint64
+	gen  uint64
+	// batch holds the small bursts not yet delivered (burstBatch), or is nil.
+	batch *burstBatch
+	// spineCopies counts the records copied as ancestors of a burst, for
+	// the test that keeps it in proportion to the elements read.
+	spineCopies int
 	// moved is the first of the parse's chunks the last burst's tree took
 	// over, or 0.
 	moved int
@@ -75,19 +110,37 @@ func (b *burster) start(el *Node, d int) {
 	if b.drop != 0 {
 		return
 	}
-	if d == b.spine+1 && b.matches(el, d) {
-		if d < len(b.path) {
-			b.spine = d
-			b.marks = append(b.marks, markOf(el.tree))
-			return
-		}
+	n := b.advance(b.states[b.spine], el.Name())
+	switch {
+	case n&(1<<len(b.steps)) != 0:
+		b.drop, b.burst = d, true
+	case n != 0:
+		b.spine = d
+		b.states = append(b.states, n)
+		b.marks = append(b.marks, markOf(el.tree))
+		b.gen++
+		b.gens = append(b.gens, b.gen)
+	default:
+		b.drop = d
 	}
-	b.drop = d
 }
 
-func (b *burster) matches(el *Node, d int) bool {
-	n := el.Name()
-	return n.URI == b.path[d-1].URI && n.Local == b.path[d-1].Local
+// advance is the set of steps matched by an element named q whose parent
+// matched the set s.
+func (b *burster) advance(s uint64, q QName) uint64 {
+	var n uint64
+	for k, st := range b.steps {
+		if s&(1<<k) == 0 {
+			continue
+		}
+		if st.Descendant {
+			n |= 1 << k // q may be on the way to step k
+		}
+		if (st.AnyURI || st.URI == q.URI) && (st.AnyLocal || st.Local == q.Local) {
+			n |= 1 << (k + 1)
+		}
+	}
+	return n
 }
 
 // end handles the close of el, at depth d, whose parent is now current. It
@@ -96,16 +149,25 @@ func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) err
 	switch {
 	case b.drop == d:
 		b.drop = 0
-		if d == len(b.path) && d == b.spine+1 && b.matches(el, d) {
-			if err := b.deliver(el); err != nil {
+		if b.burst {
+			b.burst = false
+			if err := b.take(el); err != nil {
 				return err
 			}
 		}
 	case b.drop == 0 && d == b.spine && d > 0:
 		b.spine--
 		b.marks = b.marks[:len(b.marks)-1]
+		b.states = b.states[:len(b.states)-1]
+		b.gens = b.gens[:len(b.gens)-1]
 	default:
 		return nil
+	}
+	if d == 1 {
+		// The document element is done: so is the last batch.
+		if err := b.flush(); err != nil {
+			return err
+		}
 	}
 	b.discardLast(el.Parent(), spaces, names)
 	return nil
@@ -114,13 +176,34 @@ func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) err
 // trimLeaves drops the leaves completed directly inside the spine element
 // cur, at depth d: text, comments and processing instructions no path step
 // selects.
-func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCache) {
+//
+// It is also where a batch is delivered early: what the parse stored since
+// cur's mark is all garbage now, and once a child of cur opens it cannot be
+// taken back until cur closes, so it is not let grow past burstFrozen.
+func (b *burster) trimLeaves(cur *Node, d int, spaces *spaceTable, names *nameCache) error {
 	if b.drop != 0 || d == 0 || d != b.spine {
-		return
+		return nil
 	}
 	for last := cur.LastChild(); last != nil && last.isLeaf(); last = cur.LastChild() {
 		b.discardLast(cur, spaces, names)
 	}
+	if b.batch != nil && textSince(cur.tree, b.marks[len(b.marks)-1].text.blocks) >= burstFrozen {
+		if err := b.flush(); err != nil {
+			return err
+		}
+		b.rewind(cur.tree, spaces, names)
+	}
+	return nil
+}
+
+// textSince is how many bytes t's text store holds in blocks from the
+// block numbered from on.
+func textSince(t *Tree, from int) int {
+	n := 0
+	for _, blk := range t.text.blocks[from:] {
+		n += len(blk)
+	}
+	return n
 }
 
 // discardLast removes p's last child and the text, names and namespace
@@ -133,13 +216,233 @@ func (b *burster) discardLast(p *Node, spaces *spaceTable, names *nameCache) {
 		t.chunks = t.chunks[:b.moved]
 		b.moved = 0
 	}
+	if b.batch != nil {
+		// The batch's records point into the stores: they are taken back
+		// once it has been delivered.
+		return
+	}
+	b.rewind(p.tree, spaces, names)
+}
+
+// rewind takes back what the parse's tree t stored since the deepest
+// spine element's mark.
+func (b *burster) rewind(t *Tree, spaces *spaceTable, names *nameCache) {
 	m := b.marks[len(b.marks)-1]
-	p.tree.text.rewind(m.text)
-	rewindNames(p.tree, m.names, names)
-	p.tree.rewindFrames(m.frames, m.frameData)
+	t.text.rewind(m.text)
+	rewindNames(t, m.names, names)
+	t.rewindFrames(m.frames, m.frameData)
 	// The whitespace table remembers ranges in the store, and some of them
 	// were just released. Its map is not rebuilt for the next burst.
 	*spaces = spaceTable{noMap: true}
+}
+
+// take delivers the burst el: a large one at once, in a tree of its own
+// (deliver), and a small one with the bursts before it (burstBatch).
+func (b *burster) take(el *Node) error {
+	t := el.tree
+	if t.endOf(el)-el.self > burstSmall {
+		if err := b.flush(); err != nil {
+			return err
+		}
+		return b.deliver(el)
+	}
+	b.add(el)
+	if bt := b.batch; int(bt.t.n) >= max(burstBatchRecords, 4*len(b.gens)) ||
+		textSince(t, bt.blocks) >= burstBatchText {
+		return b.flush()
+	}
+	return nil
+}
+
+// A burst of more than burstSmall records is delivered on its own; smaller
+// ones are batched until the batch holds burstBatchRecords records (or four
+// times the spine's depth), or the parse has stored burstBatchText bytes of
+// text since the batch began. The text a spine element's content stored
+// before a child of it opened waits for the element to close: burstFrozen
+// bounds it.
+//
+// ponytail: per level, so a batch open under a deep spine can leave up to
+// depth x burstFrozen (64 MB at MaxDepth 1000) waiting; a total would need
+// the levels' shares tracked.
+const (
+	burstSmall        = chunkMax
+	burstBatchRecords = 4096
+	burstBatchText    = 1 << 20
+	burstFrozen       = 64 << 10
+)
+
+// burstBatch is a tree that small bursts are copied into, each under copies
+// of its ancestors, until it is delivered: its bursts are handed to fn one
+// after another, all in the one tree. A burst under the same ancestors as
+// the one before it shares their copies, so the ancestors are copied once
+// for each that is opened, and once more for each batch, rather than once
+// for every burst: a burst under a deep spine cost the spine's depth.
+//
+// Its records are copied verbatim, sharing the parse's names, frames and
+// text, which the parse therefore does not take back (discardLast) until
+// the batch has been delivered. Bursts in one tree are still disjoint
+// subtrees in document order, each with its whole ancestry, and nothing a
+// burst may read tells it from a tree of its own (see the xslt gate).
+type burstBatch struct {
+	t *Tree
+	// path[d] is the copy of the spine element at depth d (0: the document
+	// node), and gens[d] that element's gens entry.
+	path []uint32
+	gens []uint64
+	// els are the bursts, in order.
+	els []uint32
+	// blocks is how many text blocks the parse had when the batch began.
+	blocks int
+	src    *Tree
+}
+
+// add copies el, a small burst, into the batch, under copies of the spine
+// elements it does not share with the burst before it.
+func (b *burster) add(el *Node) {
+	t := el.tree
+	bt := b.batch
+	if bt == nil {
+		bt = &burstBatch{t: &Tree{}, blocks: len(t.text.blocks), src: t}
+		b.batch = bt
+		bt.t.rec(bt.copyRange(t, 0, 1, noIdx, noIdx)).v1 = noIdx
+		bt.path, bt.gens = append(bt.path, 0), append(bt.gens, 0)
+	}
+	d := len(b.gens) - 1 // el's parent
+	k := 1
+	for k < len(bt.path) && k <= d && bt.gens[k] == b.gens[k] {
+		k++
+	}
+	bt.closeTo(k)
+	anc := make([]*Node, 0, d-k+1)
+	for p := el.Parent(); len(anc) < d-k+1; p = p.Parent() {
+		anc = append(anc, p)
+	}
+	for i := len(anc) - 1; i >= 0; i-- {
+		s := anc[i]
+		j := bt.appendUnder(t, s.self, s.self+1+s.attrCount())
+		e := bt.t.rec(j)
+		e.end, e.v1 = openEnd, noIdx
+		bt.path, bt.gens = append(bt.path, j), append(bt.gens, b.gens[k])
+		b.spineCopies += 1 + int(s.attrCount())
+		k++
+	}
+	bt.els = append(bt.els, bt.appendUnder(t, el.self, t.endOf(el)))
+}
+
+// appendUnder copies the records [lo, hi) of t, a node's own and those after
+// it, as the last child of the batch's deepest copy, and returns its index.
+func (bt *burstBatch) appendUnder(t *Tree, lo, hi uint32) uint32 {
+	p := bt.t.rec(bt.path[len(bt.path)-1])
+	j := bt.copyRange(t, lo, hi, p.self, p.v1)
+	p.v1 = j
+	return j
+}
+
+// closeTo ends the copies at depths k and deeper.
+func (bt *burstBatch) closeTo(k int) {
+	for i := len(bt.path) - 1; i >= k; i-- {
+		bt.t.rec(bt.path[i]).end = bt.t.n
+	}
+	bt.path, bt.gens = bt.path[:k], bt.gens[:k]
+}
+
+// copyRange appends copies of the records [lo, hi) of t, whose links within
+// the range are renumbered; the first's parent and previous sibling are
+// parent and prev. It returns the first's index.
+func (bt *burstBatch) copyRange(t *Tree, lo, hi, parent, prev uint32) uint32 {
+	c := bt.t
+	base := c.n
+	remap := func(x uint32) uint32 {
+		if x >= lo && x <= hi {
+			return x - lo + base
+		}
+		return x
+	}
+	for i := lo; i < hi; i++ {
+		s := t.rec(i)
+		r := *s
+		d := c.alloc()
+		j := d.self
+		r.tree, r.self = c, j
+		if i == lo {
+			r.parent, r.prev = parent, prev
+		} else {
+			r.parent = remap(r.parent)
+			if r.prev != noIdx {
+				r.prev = remap(r.prev)
+			}
+		}
+		if r.isLeaf() {
+			r.end = j + 1
+		} else {
+			r.end = remap(t.endOf(s))
+			if r.v1 != noIdx {
+				r.v1 = remap(r.v1)
+			}
+		}
+		*d = r
+		if s.flags&fTyped != 0 {
+			*d.ownTyping() = *s.typ() // the names are shared, not copied
+		}
+		if s.flags&fBase != 0 {
+			if c.bases == nil {
+				c.bases = map[uint32]string{}
+			}
+			c.bases[j] = t.bases[i]
+		}
+		if s.flags&fManyAttrs != 0 {
+			if src := c.ownSource(); src.attrCounts == nil {
+				src.attrCounts = map[uint32]uint32{}
+			}
+			c.source.attrCounts[j] = t.source.attrCounts[i]
+		}
+		if s.kind == uint8(KindDocument) {
+			if u := t.docURIs[i]; u != "" {
+				if c.docURIs == nil {
+					c.docURIs = map[uint32]string{}
+				}
+				c.docURIs[j] = u
+			}
+		}
+	}
+	return base
+}
+
+// flush delivers the batch, if there is one: it becomes a document as a
+// burst's tree is (deliver), sharing the parse's stores as they now are,
+// and fn is called with each of its bursts in order.
+func (b *burster) flush() error {
+	bt := b.batch
+	if bt == nil {
+		return nil
+	}
+	b.batch = nil
+	bt.closeTo(0)
+	c, t := bt.t, bt.src
+	c.rec(0).end = c.n
+	c.Root = c.rec(0)
+	c.id.Store(int64(nextTreeID()))
+	c.DocType, c.XMLVersion = t.DocType, "1.0"
+	if b.v11 {
+		c.XMLVersion = "1.1"
+	}
+	if s := t.source; s != nil {
+		c.ownSource().externalSubset = s.externalSubset
+	}
+	c.names = t.names[:len(t.names):len(t.names)]
+	c.text.blocks = make([][]byte, len(t.text.blocks))
+	for i, blk := range t.text.blocks {
+		c.text.blocks[i] = blk[:len(blk):len(blk)]
+	}
+	c.text.size = t.text.size
+	c.frames = t.frames[:len(t.frames):len(t.frames)]
+	c.frameData = t.frameData[:len(t.frameData):len(t.frameData)]
+	for _, i := range bt.els {
+		if err := b.fn(c.rec(i)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // deliver hands el to fn in a tree of its own. By now the parse's tree holds
@@ -157,6 +460,7 @@ func (b *burster) deliver(el *Node) error {
 		b.moved = k + 1
 	}
 	c := m(el)
+	b.spineCopies += int(el.self)
 	c.tree.XMLVersion = "1.0"
 	if b.v11 {
 		c.tree.XMLVersion = "1.1"

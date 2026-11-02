@@ -977,7 +977,7 @@ func (c *compiler) compileForEach(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 		return nil, err
 	}
 	instr := &forEachInstr{sel: sel, sorts: sorts, body: body}
-	c.noteBurstLoop(n, instr, sel)
+	c.noteBurstLoop(n, instr, sel, ns)
 	return instr, nil
 }
 
@@ -2307,7 +2307,7 @@ func (c *compiler) compileIterate(n *xdm.Node, ns *nsResolver) (Instruction, err
 		return nil, err
 	}
 	instr.body = body
-	c.noteBurstLoop(n, instr, sel)
+	c.noteBurstLoop(n, instr, sel, ns)
 	return instr, nil
 }
 
