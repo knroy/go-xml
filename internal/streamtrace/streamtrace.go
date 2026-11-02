@@ -48,11 +48,13 @@ const (
 	KindSourceDoc
 	KindSelect
 	KindApply
+	// KindGroup is a streamed xsl:for-each-group (xslt/streamgroup.go).
+	KindGroup
 	NumKinds
 )
 
 var kindNames = [NumKinds]string{"tree", "ground", "seq", "element", "choose", "for-each",
-	"where-pop", "source-doc", "select", "apply"}
+	"where-pop", "source-doc", "select", "apply", "group"}
 
 func (k Kind) String() string { return kindNames[k] }
 

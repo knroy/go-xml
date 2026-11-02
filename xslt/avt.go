@@ -230,7 +230,7 @@ func (a *avt) eval(rt *runtime) (string, error) {
 			sb.WriteString(p.text)
 			continue
 		}
-		seq, err := p.expr.Eval(rt.ctx)
+		seq, err := rt.evalAVTPart(p.expr)
 		if err != nil {
 			return "", err
 		}

@@ -375,6 +375,7 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 			}
 		}
 		instr.attrs = append(instr.attrs, attrTemplate{name: an, value: avt})
+		c.noteStreamAVT(n, avt, ns)
 	}
 
 	body, err := c.compileSequence(n, n)

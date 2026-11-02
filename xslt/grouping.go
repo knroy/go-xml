@@ -48,6 +48,10 @@ type group struct {
 }
 
 func (i *forEachGroupInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if f := rt.burstsFor(i); f != nil && f.group != nil {
+		// Streamed (streamgroup.go): each group as the cursor reaches it.
+		return f.run.group(rt, out, i, f.group)
+	}
 	seq, err := i.sel.Eval(rt.ctx)
 	if err != nil {
 		return err
@@ -376,32 +380,48 @@ func groupAdjacentKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 	first := true
 
 	for idx, it := range seq {
-		sub := rt.withFocus(it, idx+1, len(seq))
-		vals, err := key.Eval(sub.ctx)
-		if err != nil {
-			return nil, err
-		}
-		// XTTE1100: a group-adjacent key must be exactly one item. An empty
-		// sequence leaves the item in no group at all and more than one
-		// leaves it ambiguous, so both are errors rather than something to
-		// silently pick from.
-		atoms := xdm.Atomize(vals)
-		if len(atoms) != 1 {
-			return nil, fmt.Errorf(
-				"XTTE1100: the group-adjacent key produced %d items, want exactly one",
-				len(atoms))
-		}
-		k, err := groupingKey(rt, atoms[0].(*xdm.Atomic), coll)
+		kv, k, err := adjacentKeyOf(rt, it, idx+1, len(seq), key, coll, false)
 		if err != nil {
 			return nil, err
 		}
 		if first || k != prev {
-			groups = append(groups, group{key: xdm.One(atoms[0])})
+			groups = append(groups, group{key: kv})
 			first, prev = false, k
 		}
 		groups[len(groups)-1].items = append(groups[len(groups)-1].items, it)
 	}
 	return groups, nil
+}
+
+// adjacentKeyOf is the group-adjacent key of it, at position pos of size in
+// the population: the key the group keeps (current-grouping-key()) and its
+// collated form, which two items of one group share. composite says
+// composite="yes". The streamed grouping (streamgroup.go) asks it item by
+// item, so that its keys and errors are the tree's.
+func adjacentKeyOf(rt *runtime, it xdm.Item, pos, size int, key *xpath.Compiled,
+	coll xpath.Collation, composite bool) (xdm.Sequence, string, error) {
+
+	vals, err := key.Eval(rt.withFocus(it, pos, size).ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if composite {
+		atoms := atomizeGroupingKey(vals)
+		k, err := compositeKey(rt, atoms, coll)
+		return xdm.Sequence(atoms), k, err
+	}
+	// XTTE1100: a group-adjacent key must be exactly one item. An empty
+	// sequence leaves the item in no group at all and more than one
+	// leaves it ambiguous, so both are errors rather than something to
+	// silently pick from.
+	atoms := xdm.Atomize(vals)
+	if len(atoms) != 1 {
+		return nil, "", fmt.Errorf(
+			"XTTE1100: the group-adjacent key produced %d items, want exactly one",
+			len(atoms))
+	}
+	k, err := groupingKey(rt, atoms[0].(*xdm.Atomic), coll)
+	return xdm.One(atoms[0]), k, err
 }
 
 // groupStartingWith begins a new group at each item matching the pattern.
@@ -564,6 +584,7 @@ func (c *compiler) compileForEachGroup(n *xdm.Node, ns xpath.NamespaceResolver) 
 		return nil, err
 	}
 	instr.body = body
+	c.noteStreamGroup(n, instr, ns)
 	return instr, nil
 }
 

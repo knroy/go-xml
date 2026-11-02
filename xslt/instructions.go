@@ -139,38 +139,51 @@ func (i *sequenceInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if i.sel == nil {
 		return execSequence(i.body, rt, out)
 	}
+	if f := rt.burstsFor(i); f != nil && f.read != nil {
+		// Streamed (streamexec.go): in an element's content, each node is
+		// copied as it is read, in order, and let go.
+		return f.read(func(it xdm.Item) error { return i.appendItem(rt, out, it) })
+	}
 	seq, err := rt.evalSelect(i, i.sel)
 	if err != nil {
 		return err
 	}
 	for _, it := range seq {
-		switch v := it.(type) {
-		case *xdm.Node:
-			if dest := out.Open(); dest != nil && v.Kind() == xdm.KindElement &&
-				v.Parent() != nil {
-				// The builder would copy v itself and give the copy every
-				// binding v inherited. Copying here instead lets the copy
-				// leave out those its new parent already supplies, which a
-				// constructed tree mostly shares with the element it is
-				// sequenced into. Charged first, as the builder charges.
-				// The copy is made once, straight into dest, and given the
-				// bindings there: a detached copy appended afterwards was
-				// copied a second time by the builder.
-				if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
-					return err
-				}
-				inheritNamespacesAt(rt, out.AppendCopyOf(v), v, dest)
-				continue
-			}
-			out.AppendNode(v)
-		case *xdm.Atomic:
-			out.AppendValue(v)
-		default:
-			// A function item, a map or an array. xsl:sequence returns
-			// whatever its select produced, so all three reach here.
-			if err := appendOpaqueItem(out, it); err != nil {
+		if err := i.appendItem(rt, out, it); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// appendItem appends it, one item of the select's value, to out.
+func (i *sequenceInstr) appendItem(rt *runtime, out *outputBuilder, it xdm.Item) error {
+	switch v := it.(type) {
+	case *xdm.Node:
+		if dest := out.Open(); dest != nil && v.Kind() == xdm.KindElement &&
+			v.Parent() != nil {
+			// The builder would copy v itself and give the copy every
+			// binding v inherited. Copying here instead lets the copy
+			// leave out those its new parent already supplies, which a
+			// constructed tree mostly shares with the element it is
+			// sequenced into. Charged first, as the builder charges.
+			// The copy is made once, straight into dest, and given the
+			// bindings there: a detached copy appended afterwards was
+			// copied a second time by the builder.
+			if err := rt.ctx.ChargeNodes(countSubtree(v)); err != nil {
 				return err
 			}
+			inheritNamespacesAt(rt, out.AppendCopyOf(v), v, dest)
+			return nil
+		}
+		out.AppendNode(v)
+	case *xdm.Atomic:
+		out.AppendValue(v)
+	default:
+		// A function item, a map or an array. xsl:sequence returns
+		// whatever its select produced, so all three reach here.
+		if err := appendOpaqueItem(out, it); err != nil {
+			return err
 		}
 	}
 	return nil

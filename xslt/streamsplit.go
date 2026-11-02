@@ -100,8 +100,12 @@ type streamSplit struct {
 
 	// steps is P, nil when the expression consumes nothing but, with
 	// ctxItem, the context itself (string(.), copy-of(.)), or nothing.
-	steps                []splitStep
-	ctxItem              bool
+	steps   []splitStep
+	ctxItem bool
+	// group says P starts at the current group (streamgroup.go): its first
+	// step's candidates are the group's members, which a memberSource hands
+	// over, not the children of the context.
+	group                bool
 	outermost, innermost bool
 	nests                bool // a match can lie inside another
 	noLeaves             bool // a text, comment or PI match gives nothing
@@ -143,19 +147,27 @@ type streamSplit struct {
 // for the split (reparse), as noteBurstSelect does. base is the compiled
 // expression e was parsed from, which gives the parts their static context.
 func splitStream(e xpath.Expr, base *xpath.Compiled, doc bool) (*streamSplit, string) {
+	return splitStreamIn(e, base, doc, false, false)
+}
+
+// splitStreamIn is splitStream in the body of a streamed xsl:for-each-group
+// (streamgroup.go): with group, current-group() is a path whose first step
+// is the group's members; with key, current-grouping-key() is a value
+// known at the focus, as a motionless operand.
+func splitStreamIn(e xpath.Expr, base *xpath.Compiled, doc, group, key bool) (*streamSplit, string) {
 	part := func(x xpath.Expr) *xpath.Compiled { return xpathleaf.WithExpr(base, x).(*xpath.Compiled) }
 	focus := vElem
 	if doc {
 		focus = vNone
 	}
 	if x, ok := e.(*xpath.IfExpr); ok {
-		vc := viewCheck{kids: true}
+		vc := viewCheck{kids: true, key: key}
 		if vc.safe(x.Cond, focus, true) && !(vc.safe(x.Then, focus, false) && vc.safe(x.Else, focus, false)) {
-			t, why := splitStream(x.Then, base, doc)
+			t, why := splitStreamIn(x.Then, base, doc, group, key)
 			if t == nil {
 				return nil, why
 			}
-			f, why := splitStream(x.Else, base, doc)
+			f, why := splitStreamIn(x.Else, base, doc, group, key)
 			if f == nil {
 				return nil, why
 			}
@@ -164,7 +176,7 @@ func splitStream(e xpath.Expr, base *xpath.Compiled, doc bool) (*streamSplit, st
 			return s, ""
 		}
 	}
-	w := &splitter{focus: focus, doc: doc}
+	w := &splitter{focus: focus, doc: doc, group: group, key: key}
 	root := e
 	if !w.slot(e, func(y xpath.Expr) { root = y }, useKeep) {
 		return nil, w.why
@@ -186,6 +198,9 @@ func splitStream(e xpath.Expr, base *xpath.Compiled, doc bool) (*streamSplit, st
 	if s.kids && s.ctxItem {
 		return nil, "has-children(.) beside the context's own content"
 	}
+	if s.kids && s.group {
+		return nil, "has-children(.) beside the current group"
+	}
 	return s, ""
 }
 
@@ -203,6 +218,9 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 		return ""
 	}
 	s.outermost, s.innermost = p.oi == "outermost", p.oi == "innermost"
+	if s.group = p.group; s.group && p.oi != "" {
+		return p.oi + "() of the current group"
+	}
 	// A step whose predicate needs more than the candidate's view
 	// (ITEM[position() lt 4], rec[item]) ends P: it and the rest become a
 	// tail, evaluated on each match's grounded copy, which holds all of the
@@ -240,7 +258,7 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 				ss.pos, positional = true, true
 				continue
 			}
-			vc := viewCheck{kids: true}
+			vc := viewCheck{kids: true, key: w.key}
 			// safe first: it rewrites has-children(.) to boolean($kids).
 			if elem && !vc.safe(pr, vElem, true) || leaf && !vc.safe(pr, vLeaf, true) || !booleanShaped(pr) {
 				return "predicate " + pr.String() + ": not motionless or positional"
@@ -267,7 +285,10 @@ func (s *streamSplit) path(w *splitter, part func(xpath.Expr) *xpath.Compiled) s
 			}
 		}
 	}
-	s.later = !s.nests || !positional
+	// A group's members are grounded one at a time: the cursor is left at a
+	// member's end, where the next member is looked for, not at the
+	// context's, where Flush would hand GroundLater's copies over.
+	s.later = (!s.nests || !positional) && !s.group
 	last := p.steps[len(p.steps)-1]
 	leaf, elem := testKinds(last.Test)
 	if last.Axis == xpath.AxisDescendantOrSelf {
@@ -642,6 +663,7 @@ type splitPathParts struct {
 	tail    []xpath.Expr  // what follows P, per match
 	oi      string        // "outermost" or "innermost" around P
 	ctxItem bool          // the path is "." itself
+	group   bool          // its first step is current-group()'s members
 }
 
 // splitter finds the one consuming path of an expression and checks that
@@ -665,7 +687,25 @@ type splitter struct {
 	putRed  func(xpath.Expr)
 	nth     int64
 	kids    bool // a predicate of P reads has-children(.)
-	why     string
+	// group and key are splitStreamIn's; groupStep is the step that stands
+	// for current-group() in the path found.
+	group, key bool
+	groupStep  *xpath.Step
+	why        string
+}
+
+// isCurrentGroup reports whether e is a call on fn:current-group().
+func isCurrentGroup(e xpath.Expr) bool {
+	f, ok := e.(*xpath.FuncCall)
+	return ok && f.Name.URI == fnNS && f.Name.Local == "current-group" && len(f.Args) == 0
+}
+
+// newGroupStep is the step current-group() is read as, filtered by preds:
+// child::element() of a context whose children are the group's members,
+// each an element at its start tag (streamgroup.go hands them over).
+func (w *splitter) newGroupStep(preds []xpath.Expr) *xpath.Step {
+	w.groupStep = &xpath.Step{Axis: xpath.AxisChild, Test: &xpath.KindTest{Kind: xdm.KindElement}, Predicates: preds}
+	return w.groupStep
 }
 
 func (w *splitter) refuse(why string) bool {
@@ -678,7 +718,7 @@ func (w *splitter) refuse(why string) bool {
 // slot checks an operand consumed as use: motionless, it is evaluated with
 // the outer; otherwise it must hold the consuming path.
 func (w *splitter) slot(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
-	if (viewCheck{kids: true}).safe(e, w.focus, use == useCount || use == useEBV) {
+	if (viewCheck{kids: true, key: w.key}).safe(e, w.focus, use == useCount || use == useEBV) {
 		return true
 	}
 	return w.walk(e, put, use)
@@ -688,7 +728,7 @@ func (w *splitter) slot(e xpath.Expr, put func(xpath.Expr), use splitUse) bool {
 // the tree might not evaluate it (the right of and/or, a branch of an if
 // below the top): an error in it the stream would raise and the tree not.
 func (w *splitter) noPath(e xpath.Expr, use splitUse, why string) bool {
-	if (viewCheck{kids: true}).safe(e, w.focus, use == useCount || use == useEBV) {
+	if (viewCheck{kids: true, key: w.key}).safe(e, w.focus, use == useCount || use == useEBV) {
 		return true
 	}
 	return w.refuse(why)
@@ -862,7 +902,20 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 		return pp, true
 	case *xpath.Step:
 		list = []xpath.Expr{x}
+	case *xpath.FilterExpr:
+		if !w.group || !isCurrentGroup(x.Base) {
+			return pp, false
+		}
+		// current-group()[p]: the members p keeps, p seeing each at its
+		// position in the group -- the members' step, so filtered.
+		list = []xpath.Expr{w.newGroupStep(x.Predicates)}
+		pp.group = true
 	case *xpath.FuncCall:
+		if w.group && isCurrentGroup(x) {
+			list = []xpath.Expr{w.newGroupStep(nil)}
+			pp.group = true
+			break
+		}
 		if !outerInner(x) {
 			return pp, false
 		}
@@ -884,7 +937,17 @@ func (w *splitter) pathOf(e xpath.Expr) (splitPathParts, bool) {
 			switch f := list[0].(type) {
 			case *xpath.ContextItem:
 				list = list[1:]
+			case *xpath.FilterExpr:
+				if w.group && isCurrentGroup(f.Base) {
+					list = append([]xpath.Expr{w.newGroupStep(f.Predicates)}, list[1:]...)
+					pp.group = true
+				}
 			case *xpath.FuncCall:
+				if w.group && isCurrentGroup(f) {
+					list = append([]xpath.Expr{w.newGroupStep(nil)}, list[1:]...)
+					pp.group = true
+					break
+				}
 				if outerInner(f) {
 					inner, ok := w.pathOf(f)
 					if !ok {
@@ -944,8 +1007,10 @@ const (
 // position() is admitted: the focus is an instruction's, whose position is
 // known (C5's motionless parts), not a candidate's (a split's predicates).
 // With noIdent, nothing may ask for the identity of a node, nor reach the
-// document through one (C6: a copy of a text node stands in for it).
-type viewCheck struct{ kids, pos, noIdent bool }
+// document through one (C6: a copy of a text node stands in for it). With
+// key, current-grouping-key() is admitted: it is a value the focus has, in
+// the body of a streamed xsl:for-each-group (streamgroup.go).
+type viewCheck struct{ kids, pos, noIdent, key bool }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
 // nodes e returns are not atomized by what holds e.
@@ -1109,7 +1174,7 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 				return true
 			}
 		}
-		if n == "position" && vc.pos && len(x.Args) == 0 {
+		if n == "position" && vc.pos && len(x.Args) == 0 || n == "current-grouping-key" && vc.key && len(x.Args) == 0 {
 			return true
 		}
 		if burstFnBanned[n] || n == "copy-of" || n == "snapshot" || n == "current" ||
@@ -1353,6 +1418,28 @@ type splitRun struct {
 	// the match to its end.
 	each func(it xdm.Item) error
 	body func(v *xdm.Node, d int) (bool, error)
+	// src, for a group split, hands over the members: the walk's context is
+	// then a stand-in at the depth above them, whose children they are.
+	src memberSource
+}
+
+// read is the walk's next event: the cursor's, through the filter f
+// (skipping the element at hand first); or, for a group split at the top
+// (no member open), the next member, at its start tag, and after the last
+// the end of the stand-in context, at depth d.
+func (r *splitRun) read(skip bool, f *xdmstream.Filter, top bool, d int) (xdmstream.Event, error) {
+	switch {
+	case r.src != nil && top:
+		ev, ok, err := r.src.next(!skip)
+		if err != nil || ok {
+			ev.Closed = 0 // what closed before it is above the stand-in
+			return ev, err
+		}
+		return xdmstream.Event{Kind: xdmstream.EndElement, Depth: d}, nil
+	case skip:
+		return r.c.SkipTag(f)
+	}
+	return r.c.NextTag(f)
 }
 
 // eval evaluates s over the cursor c at depth d: 0, before its first
@@ -1362,6 +1449,31 @@ type splitRun struct {
 // which is then the cursor's current event. A parse error is the cursor's;
 // errSplitGiveUp says the tree must answer instead.
 func (s *streamSplit) eval(ctx *xpath.Context, c *xdmstream.Cursor, d int) (xdm.Sequence, error) {
+	return s.evalAt(ctx, c, d, nil)
+}
+
+// groupAt is where a split in the body of a streamed xsl:for-each-group
+// reads: the current group's members from src, the first of them at its
+// start tag, at depth d, its view the body's focus.
+type groupAt struct {
+	src  memberSource
+	d    int
+	view *xdm.Node
+}
+
+// at moves r to g when s, the split it runs, starts at the current group:
+// the walk's context is then the stand-in above the members.
+func (r *splitRun) at(g *groupAt, d int) int {
+	if g != nil && r.s.group {
+		r.src = g.src
+		return g.d - 1
+	}
+	return d
+}
+
+// evalAt is eval, in the body of a streamed xsl:for-each-group when g is
+// set (d is then g.d, the first member's).
+func (s *streamSplit) evalAt(ctx *xpath.Context, c *xdmstream.Cursor, d int, g *groupAt) (xdm.Sequence, error) {
 	ctx = ctx.HoldItemBudget().HoldByteBudget()
 	octx := ctx
 	var view *xdm.Node
@@ -1400,7 +1512,7 @@ func (s *streamSplit) eval(ctx *xpath.Context, c *xdmstream.Cursor, d int) (xdm.
 		}
 	}
 	r := &splitRun{s: s, ctx: ctx, c: c}
-	if err := r.run(view, d); err != nil {
+	if err := r.run(view, r.at(g, d)); err != nil {
 		return nil, err
 	}
 	value, err := r.finish()
@@ -1416,6 +1528,12 @@ func (s *streamSplit) eval(ctx *xpath.Context, c *xdmstream.Cursor, d int) (xdm.
 // bare path: no choice, tail, reducer or outer.
 func (s *streamSplit) loop(ctx *xpath.Context, c *xdmstream.Cursor, d int,
 	each func(xdm.Item) error, body func(*xdm.Node, int) (bool, error)) error {
+	return s.loopAt(ctx, c, d, nil, each, body)
+}
+
+// loopAt is loop, in the body of a streamed xsl:for-each-group when g is set.
+func (s *streamSplit) loopAt(ctx *xpath.Context, c *xdmstream.Cursor, d int, g *groupAt,
+	each func(xdm.Item) error, body func(*xdm.Node, int) (bool, error)) error {
 
 	var v *xdm.Node
 	if d > 0 {
@@ -1425,7 +1543,7 @@ func (s *streamSplit) loop(ctx *xpath.Context, c *xdmstream.Cursor, d int,
 		}
 	}
 	r := &splitRun{s: s, ctx: ctx, c: c, each: each, body: body}
-	return r.run(v, d)
+	return r.run(v, r.at(g, d))
 }
 
 // run reads the context, the element whose view is v or the document.
@@ -1509,8 +1627,12 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 	// does more than drop its frame: an innermost match's, and a silent
 	// region's (outermost).
 	ends := s.innermost || s.outermost
-	want := xdmstream.Filter{Accept: s.accept, Leaves: s.leaves, Depth: d, Ends: ends}
-	none := xdmstream.Filter{Accept: acceptNone, Depth: d, Ends: ends}
+	fd := d
+	if r.src != nil {
+		fd = d + 1 // inside a member: its own end tag is the last event
+	}
+	want := xdmstream.Filter{Accept: s.accept, Leaves: s.leaves, Depth: fd, Ends: ends}
+	none := xdmstream.Filter{Accept: acceptNone, Depth: fd, Ends: ends}
 	skip := false
 	for {
 		// Nothing left to find, nor any predicate whose error the tree
@@ -1524,11 +1646,7 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 			ev  xdmstream.Event
 			err error
 		)
-		if skip {
-			ev, err = c.SkipTag(filt)
-		} else {
-			ev, err = c.NextTag(filt)
-		}
+		ev, err = r.read(skip, filt, len(stack) == 1, d)
 		skip = false
 		if err != nil {
 			return err
@@ -1709,6 +1827,9 @@ func (s *streamSplit) accepts() {
 	}
 	var tests []xpath.NodeTest
 	for i, st := range s.steps {
+		if i == 0 && s.group {
+			continue // its candidates are the members: not read by the filter
+		}
 		leaf, _ := testKinds(st.test)
 		s.leaves = s.leaves || leaf
 		if st.axis == xpath.AxisDescendantOrSelf && i+1 < len(s.steps) {

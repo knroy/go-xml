@@ -1468,6 +1468,7 @@ func registerGroupingFuncs(l *xpath.Library) {
 				return nil, errNoGrouping(ctx, "XTDE1061", "current-group")
 			}
 			seq, _ := ctx.LookupVar(currentGroupVar)
+			streamGroupFault(seq)
 			return seq, nil
 		},
 	})

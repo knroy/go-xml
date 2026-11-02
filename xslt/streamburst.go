@@ -51,8 +51,9 @@ type burstFeed struct {
 	// makes the feeds of its consuming instructions (streamexec.go).
 	run *streamRun
 	// apply, with run, drives an xsl:apply-templates, xsl:next-match or
-	// xsl:apply-imports from the cursor (streamapply.go).
-	apply *streamOp
+	// xsl:apply-imports from the cursor (streamapply.go); group an
+	// xsl:for-each-group (streamgroup.go).
+	apply, group *streamOp
 }
 
 // burstResolver is a document resolver that can stream a document.

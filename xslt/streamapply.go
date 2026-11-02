@@ -81,7 +81,7 @@ var classNames = [numClasses]string{"element", "document node", "text, comment o
 // strict is b with no records: every expression is checked.
 func (b *streamBuilder) strict() *streamBuilder {
 	return &streamBuilder{pl: &streamPlan{recs: map[any]*planRec{}}, x: b.x, ops: b.ops,
-		kinds: b.kinds, noIdent: b.noIdent}
+		kinds: b.kinds, noIdent: b.noIdent, key: b.key}
 }
 
 // applyOp plans an xsl:apply-templates that reads its context, focus f.
@@ -169,7 +169,7 @@ func (b *streamBuilder) addApply(el *xdm.Node, f vfocus, kind applyKind) bool {
 			return b.refuse(elName(el) + " in a sequence-typed " + elName(n))
 		}
 	}
-	op := &streamOp{x: b.x, el: el, doc: f == vNone, apply: kind}
+	op := &streamOp{x: b.x, el: el, doc: f == vNone, apply: kind, inGroup: b.grp, key: b.key}
 	b.x.ops[el] = op
 	*b.ops = append(*b.ops, op)
 	b.kinds[streamtrace.KindApply]++
@@ -214,7 +214,7 @@ func (c *compiler) noteStreamApply(n *xdm.Node, instr Instruction, sel *xpath.Co
 		}
 		op.instr, op.sel = instr, sel
 		if op.apply == applySplit {
-			if op.split, op.dead = c.splitFor(sel, ns, op.doc, false); op.dead != "" {
+			if op.split, op.dead = c.splitFor(sel, ns, op.doc, false, op.inGroup, op.key); op.dead != "" {
 				continue
 			}
 			if !op.split.bare() {
@@ -724,7 +724,7 @@ func (i *applyTemplatesInstr) executeStream(rt *runtime, out *outputBuilder, run
 	}
 	run.used = true
 	pos := 0
-	return op.split.loop(rt.ctx, run.c, run.d, nil, func(v *xdm.Node, md int) (bool, error) {
+	return op.split.loopAt(rt.ctx, run.c, run.d, run.groupAt(op), nil, func(v *xdm.Node, md int) (bool, error) {
 		if err := rt.ctx.Err(); err != nil {
 			return false, err
 		}
