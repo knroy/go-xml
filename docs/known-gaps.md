@@ -184,7 +184,12 @@ An `xsl:source-document streamable="yes"` whose body has a known and verified
 cursor and never built. Everything else builds the tree, as before. The core
 takes literal result elements, `xsl:element`, `xsl:copy`, `xsl:attribute`,
 `xsl:if` and `xsl:choose`, nested `xsl:source-document`, `xsl:for-each` and
-`xsl:iterate` over a consuming path, and selects split on the cursor. A path
+`xsl:iterate` over a consuming path, selects split on the cursor, and
+`xsl:apply-templates`, `xsl:next-match` and `xsl:apply-imports` into verified
+streamable modes: rules chosen as the tree chooses them (priorities,
+precedence, patterns decided on the start tag), every `on-no-match` built-in,
+tunnel and ordinary parameters, `#current` and mode switches, to any depth on
+one cursor. A path
 is child or descendant steps by name, wildcard or kind (`doc/rec`, `//rec`,
 `/*/*/rec`, `*:rec`, `p:*`, names resolved through `xpath-default-namespace`),
 optionally under `outermost()`/`innermost()`, with motionless or positional
@@ -198,19 +203,27 @@ Figures for the core, on this machine:
 - `count` and `sum` over 25.9M records (1 GB): 3.0 MB heap, where tree mode
   needs 773–1,284 MB at 100 MB;
 - `count(//rec)` under a 900-deep spine: 2.1 s CPU and 3 MB heap against the
-  tree's 1.7 s; `count(outermost(//rec))` there: 1.5 s against 10.6 s.
+  tree's 1.7 s; `count(outermost(//rec))` there: 1.5 s against 10.6 s;
+- the identity transform (`shallow-copy`): 100 MB in 4.0 s and 588 MB heap
+  against the tree's 2.6 s and 1,011 MB; 1 GB in 46 s and 5.4 GB against 33 s
+  and 9.0 GB (the heap is the output, which is still built in memory);
+- a filter keeping 1 record in 10: 100 MB in 2.3 s and 60 MB against 1.7 s
+  and 739 MB; 1 GB in 23.6 s and 624 MB against 23.4 s and 7.4 GB.
 
 On flat documents the core costs 1.2–1.8× the tree's CPU (each match is a
 coroutine round trip on the cursor); on deep ones 0.14–1.5×.
 
 Refused, and run on the tree: a select that would collect grounded copies at
-the document node (it would hold more than the tree); `xsl:apply-templates`;
-paths whose tail climbs; kept text, comment or processing-instruction nodes;
+the document node (it would hold more than the tree); `xsl:apply-templates`
+over a select that is not a bare path, or in a sequence-typed variable; a
+pattern a view cannot decide (positional, reading content, `id()`/`key()`,
+`text()` below a step); paths whose tail climbs; kept text, comment or processing-instruction nodes;
 union/intersect/except; `xsl:try`, `xsl:for-each-group`, `xsl:fork`,
 `xsl:result-document`; `last()`, `reverse`, `sort`, user functions.
 
-In the W3C XSLT 3.0 run 576 cases stream (9 before the second burst shape,
-364 before `//` record paths, 450 before the core).
+In the W3C XSLT 3.0 run 606 cases stream (9 before the second burst shape,
+364 before `//` record paths, 450 before the core, 576 before streamable
+modes).
 Also:
 
 - **The result is still built in memory**, so a large filtered copy grows with
@@ -229,6 +242,8 @@ Also:
   1 GiB string budget charges the strings both attempts built. Under
   `xsl:try rollback-output="no"`, output already written can turn a caught
   error into `XTDE3530` where the tree fails before writing; no case shows it.
+  A container whose result is a sequence that would hold a node of the stream
+  at its top runs on the tree, as the tree keeps the source's own nodes there.
   A differential fuzzer (250k generated cases) compares streamed and tree runs
   exactly and finds no difference.
 - **`xsl:break` still reads the rest of the file**, so that a malformed tail is

@@ -21,7 +21,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 3,032 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 3,038 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 14 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 152,241 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -564,8 +564,8 @@ suite's consuming expressions, and a fuzzer (`GOXSLT_SPLIT_FUZZ=N`,
    to the tree.
 
 It compares base with branch, and branch with off, using `tests/recdiff`
-and `tests/streamdiff/allow.txt`. That file holds six case-scoped rules:
-generate-id numbering in docbook-002 and si-fork-801, and the clock in
+and `tests/streamdiff/allow.txt`. That file holds seven case-scoped rules:
+generate-id numbering in docbook-002, si-fork-801 and document-2011, and the clock in
 evaluate-052, cvt-042, format-date-037 and error-3160a.
 
 With `GOXSLT_RECORD_DIR` set, tests/xslts writes
@@ -573,14 +573,14 @@ With `GOXSLT_RECORD_DIR` set, tests/xslts writes
 fails when any of these is true:
 - a difference is unexplained;
 - fewer cases streamed than the floor (`-floor`, `GOXSLT_STREAM_FLOOR`,
-  default 576);
+  default 606);
 - a guard fired;
 - the off leg streamed.
 
-At 8213f8d3 it reads:
-- 576 cases on the streamed path, 578 core runs, 15 re-run on the tree;
-- the core's sNodes by kind: tree 43, ground 9, seq 1,210, element 561,
-  choose 2, for-each 71, where-pop 0, source-doc 2, select 544;
+At 2e4c8cfe it reads:
+- 606 cases on the streamed path, 15 re-run on the tree;
+- the core's sNodes by kind: tree 49, ground 9, seq 1,252, element 563,
+  choose 7, for-each 71, where-pop 0, source-doc 2, select 544, apply 35;
 - zero unexplained differences.
 
 The TSV line holds the core's runs, fallbacks, guard hits, re-runs and
@@ -593,12 +593,14 @@ the retired burst path's, and, without `-short`, peak heap against the tree.
 streamable stylesheet per seed. It runs each streamed and on the tree and
 requires exactly the same output and error text; a re-run where the tree
 succeeds counts as a difference. The core's shapes come from their own random
-stream (`GOXSLT_STREAM_FUZZ_CORE=0` reproduces the earlier cases). A
+stream, and modes and template rules from a third (`GOXSLT_STREAM_FUZZ_CORE=0`
+and `GOXSLT_STREAM_FUZZ_MODES=0` reproduce the earlier cases). A
 failing case prints its seed and the command that replays it.
 
-At 75a97759, 100,000 cases (seed 1) give 0 differences, 37,783 of them
-streamed; 100,000 of the earlier grammar alone, in which the retired burst
-loops needed an error-order allowance of 9 per 100k, give 0 too.
+At 7344aa13, 100,000 cases (seed 1) give 0 differences, 36,142 of them
+streamed and 11,523 of those mode shapes; 100,000 of the M1 grammar alone
+give 0 too, as do 100,000 of the earlier grammar, in which the retired burst
+loops needed an error-order allowance of 9 per 100k (at 75a97759).
 
 
 ## The ratchet
