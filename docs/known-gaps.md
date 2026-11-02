@@ -267,9 +267,9 @@ and §18.1's grounded demand at both the sites it names.
 
 All three fail in the same direction: the suite expects `XTSE3430` — *this
 construct is not guaranteed streamable* — and the transform succeeds instead.
-The engine builds a tree for these (it reads in bursts only the narrow shape
-described under *Streamed execution covers `xsl:source-document` only*), so it produces the **right
-answer** for all three; what it does not produce is the static refusal §19.8
+The engine builds a tree for these (it streams only what is described under
+*Streamed execution covers `xsl:source-document` only*), so it produces the
+**right answer** for all three; what it does not produce is the static refusal §19.8
 requires a streaming processor to make before running anything. These are not
 wrong answers; they are a static analysis that is not complete.
 
