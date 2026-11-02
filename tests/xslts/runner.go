@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/knroy/go-xml/v2/internal/fileuri"
+	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
 	"github.com/knroy/go-xml/v2/xsd"
@@ -512,9 +513,17 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		}
 	}
 
-	src, srcPath, err := r.principalSource(set, tc)
-	if err != nil {
-		return nil, err
+	// A principal input the catalog declares streaming="true" is handed to
+	// TransformReader unparsed (streamedSource), which streams it when the
+	// stylesheet allows; under GOXSLT_STREAM_OFF=1 it is parsed here and
+	// given to Transform, as every other source is.
+	streamPath, streamOpts := r.streamedSource(set, tc)
+	var src *xdm.Node
+	var srcPath string
+	if streamPath == "" {
+		if src, srcPath, err = r.principalSource(set, tc); err != nil {
+			return nil, err
+		}
 	}
 
 	docs := &xslt.FileResolver{
@@ -716,7 +725,52 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	if streamPath != "" {
+		data, err := os.ReadFile(streamPath)
+		if err != nil {
+			return nil, err
+		}
+		opts.SourceParseOptions = streamOpts
+		return ss.TransformReader(ctx, strings.NewReader(string(stripBOM(data))), opts)
+	}
 	return ss.Transform(ctx, src, opts)
+}
+
+// streamedSource returns the file of the principal input when the catalog
+// declares it streaming="true" and nothing must be done to it between its
+// parse and the transform -- no @select, inline content, XInclude or
+// validation, no initial-mode selection evaluated over it -- with the
+// options principalSource would parse it with; "" otherwise, and always
+// under GOXSLT_STREAM_OFF=1.
+func (r *Runner) streamedSource(set *TestSet, tc *TestCase) (string, xdm.ParseOptions) {
+	env := r.environment(set, tc)
+	if env == nil || streamtrace.Off() || tc.Test.InitialMode != nil && tc.Test.InitialMode.Select != "" {
+		return "", xdm.ParseOptions{}
+	}
+	for _, s := range env.Sources {
+		if s.Role != "." {
+			continue
+		}
+		if s.Streaming != "true" || s.Select != "" || s.Content != "" || s.File == "" ||
+			s.XInclude == "true" || s.Validation == "strict" || s.Validation == "lax" {
+			return "", xdm.ParseOptions{}
+		}
+		p := filepath.Join(set.Dir, filepath.FromSlash(s.File))
+		return p, r.sourceParseOptions(p)
+	}
+	return "", xdm.ParseOptions{}
+}
+
+// sourceParseOptions are the options a principal input read from the file
+// p is parsed with.
+func (r *Runner) sourceParseOptions(p string) xdm.ParseOptions {
+	return xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p),
+		// Retrieved by URI, so it has a dm:document-uri as well
+		// as a base URI and fn:document-uri must report it. A
+		// tree a stylesheet builds gets neither, which is the
+		// distinction that function exists to make.
+		DocumentURI:      fileURI(p),
+		ExternalEntities: r.entityResolver()}
 }
 
 // noNS resolves no prefixes, which is what a parameter expression written in
@@ -881,13 +935,7 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, string,
 			if err != nil {
 				return nil, "", err
 			}
-			popts := xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p),
-				// Retrieved by URI, so it has a dm:document-uri as well
-				// as a base URI and fn:document-uri must report it. A
-				// tree a stylesheet builds gets neither, which is the
-				// distinction that function exists to make.
-				DocumentURI:      fileURI(p),
-				ExternalEntities: r.entityResolver()}
+			popts := r.sourceParseOptions(p)
 			tree, err := xdm.ParseString(string(stripBOM(data)), popts)
 			if err != nil {
 				return nil, "", err

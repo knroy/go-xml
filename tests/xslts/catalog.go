@@ -147,6 +147,10 @@ type Source struct {
 	// environment's schema, which is what makes "instance of my:type"
 	// answer true for a value read out of it.
 	Validation string `xml:"validation,attr"`
+	// Streaming is "true" when the source is to be supplied as a stream,
+	// which for the principal input asks for an initial mode run streamed
+	// (TransformReader).
+	Streaming string `xml:"streaming,attr"`
 }
 
 type Param struct {
