@@ -18,8 +18,11 @@
 //
 // Event.Node is a node in the parse's own tree, whose records are reused
 // once it is dropped: it is valid until the next call on the cursor and
-// must not be kept (a kept one would read another node). Strings read from
-// it stay valid. Ground copies an element out for keeping.
+// must not be kept (a kept one would read another node), nor compared with
+// the nodes below. Strings read from it stay valid. View gives a start
+// tag's element as a node that may be kept, without its content; Ground
+// and GroundLater copy an element out whole. Those are the nodes of the
+// document to identity and order: copies of one node are that node.
 package xdmstream
 
 import (
@@ -72,6 +75,10 @@ type Cursor struct {
 	later []func(*xdm.Node) error
 	err   error
 	obs   []Observer
+	// view builds the view of the start tag the parse is stopped at, and
+	// viewed is the one built for ev.
+	view   func() any
+	viewed *xdm.Node
 }
 
 // errStop ends the parse when the cursor is closed.
@@ -112,20 +119,49 @@ func (c *Cursor) Next() (Event, error) {
 		if c.peekErr != nil {
 			return Event{}, c.peekErr
 		}
-		c.ev = *p
+		c.ev, c.viewed = *p, nil
 		return c.ev, nil
 	}
 	ev, err := c.resume(xdmburst.Keep)
-	c.ev = ev
+	c.ev, c.viewed = ev, nil
 	return ev, err
+}
+
+// View returns the view of the current element, a start tag Next just
+// returned: a node that may be kept, in a small tree of its own, with the
+// element's name, attributes, namespaces, base URI, ancestors (copies of
+// them, with theirs) and identity, as a full parse has them, and no content.
+// Asking it for content -- children, descendants, siblings, its string or
+// typed value -- panics with a *streamtrace.PostureError (counted by
+// streamtrace.Guard) instead of answering. Views of one element, and the
+// copies Ground and GroundLater make, are one node to Is, Identity,
+// Compare and generate-id, and order as a full parse's nodes do.
+//
+// It may be asked again, and after Peek, until the cursor moves on; then it
+// fails as Skip would.
+func (c *Cursor) View() (*xdm.Node, error) {
+	if c.ev.Kind != StartElement {
+		return nil, errNotAtStart
+	}
+	if c.viewed == nil {
+		if c.peeked != nil || c.peekErr != nil {
+			return nil, errNotAtStart // Peek built it, or there was none to build
+		}
+		c.viewed = c.view().(*xdm.Node)
+	}
+	return c.viewed, nil
 }
 
 // Peek returns the event Next will return, without moving to it. At a
 // start tag it decides to descend: Skip, Ground and Text are no longer
-// possible there. The current event's node stays valid only if it is a
-// start tag.
+// possible there, and the view is made first, since it can be made only
+// there. The current event's node stays valid only if it is a start tag.
 func (c *Cursor) Peek() (Event, error) {
 	if c.peeked == nil && c.peekErr == nil {
+		if c.ev.Kind == StartElement && c.viewed == nil {
+			// The view can be made only while the parse is at the tag.
+			c.View()
+		}
 		ev, err := c.resume(xdmburst.Keep)
 		c.peeked, c.peekErr = &ev, err
 	}
@@ -256,6 +292,8 @@ func (k *client) Later(g any) error {
 	k.c.later = k.c.later[1:]
 	return fn(g.(*xdm.Node))
 }
+
+func (k *client) Viewer(view func() any) { k.c.view = view }
 
 func (k *client) Watch(el any, d int, end bool) {
 	for _, o := range k.c.obs {

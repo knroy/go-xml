@@ -179,7 +179,10 @@ func ShallowCopy(n *Node) *Node {
 // declarations, attributes and children. Records at limit and beyond are
 // not read: they were appended after the copy began.
 func fillCopy(c, src *Node, drop func(*Node) bool, limit uint32) {
-	if src.isLeaf() || src.flags&fSide != 0 {
+	if src.isLeaf() || src.flags&(fSide|fShallow) != 0 {
+		if src.flags&fShallow != 0 {
+			shallowFault(src, "copy")
+		}
 		return
 	}
 	for prefix, uri := range src.DeclaredNamespaces() {

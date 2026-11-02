@@ -52,9 +52,9 @@ func Run(s Strategy) { runs[s].Add(1) }
 func Fallback() { fallbacks.Add(1) }
 
 // Guard counts one hit of a runtime guard: a streamed run that met
-// something the static gate should have kept off the streamed path. No guard
-// is wired yet (C2 adds them); the count must stay 0, and tests/streamdiff
-// fails when it is not.
+// something the static gate should have kept off the streamed path. The
+// posture guard of xdm's views counts here (PostureError); the count must
+// stay 0, and tests/streamdiff fails when it is not.
 func Guard() { guards.Add(1) }
 
 // Counts is a reading of the counters.
@@ -91,4 +91,14 @@ func (c Counts) Streamed() int64 {
 		n += r
 	}
 	return n
+}
+
+// PostureError is the panic a posture guard raises: a streamed node was
+// asked for what its posture does not have (Op, such as "children", of a
+// node of kind Kind). The streamed executor recovers it and runs the
+// container on the tree instead; Guard has counted it.
+type PostureError struct{ Op, Kind string }
+
+func (e *PostureError) Error() string {
+	return "streaming: " + e.Op + " of a streamed " + e.Kind + " was asked for at its start tag (posture guard)"
 }

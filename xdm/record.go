@@ -67,6 +67,8 @@ const (
 	fBase                  // has a base URI of its own in tree.bases
 	fTyped                 // has an entry in tree.typing
 	fManyAttrs             // attribute count is in tree.source.attrCounts
+	fShallow               // a streamed element or document node without its content (streamview.go)
+	fOrigin                // copied out of a stream: order and identity are its original's (streamview.go)
 )
 
 // Tree owns the records of one document, or of a fragment: the parentless
@@ -172,6 +174,9 @@ type treeSource struct {
 	lines      *lineIndex
 	offsets    [][]int32           // by chunk: source offset + 1, made on first use
 	foreignPos map[uint32][2]int32 // positions copied from another document
+	// orig is where the records of a tree copied out of a stream come from
+	// (streamview.go), or nil.
+	orig *treeOrigin
 }
 
 // ownSource returns t's source part, made on first use.
@@ -719,7 +724,10 @@ func (n *Node) firstChildIdx() uint32 { return n.self + 1 + n.attrCount() }
 // namespace nodes are not children.
 func (n *Node) Children() iter.Seq[*Node] {
 	return func(yield func(*Node) bool) {
-		if n.v1 == noIdx || n.flags&fSide != 0 || n.isLeaf() {
+		if n.flags&(fSide|fShallow) != 0 || n.v1 == noIdx || n.isLeaf() {
+			if n.flags&fShallow != 0 {
+				shallowFault(n, "children")
+			}
 			return
 		}
 		t := n.tree
@@ -778,7 +786,10 @@ func (n *Node) ChildAt(i int) *Node {
 
 // FirstChild returns the first child of n, or nil if it has none.
 func (n *Node) FirstChild() *Node {
-	if n.v1 == noIdx || n.flags&fSide != 0 || n.isLeaf() {
+	if n.flags&(fSide|fShallow) != 0 || n.v1 == noIdx || n.isLeaf() {
+		if n.flags&fShallow != 0 {
+			shallowFault(n, "children")
+		}
 		return nil
 	}
 	return n.tree.rec(n.firstChildIdx())
@@ -786,7 +797,10 @@ func (n *Node) FirstChild() *Node {
 
 // LastChild returns the last child of n, or nil if it has none.
 func (n *Node) LastChild() *Node {
-	if n.v1 == noIdx || n.flags&fSide != 0 || n.isLeaf() {
+	if n.flags&(fSide|fShallow) != 0 || n.v1 == noIdx || n.isLeaf() {
+		if n.flags&fShallow != 0 {
+			shallowFault(n, "children")
+		}
 		return nil
 	}
 	return n.tree.rec(n.v1)
@@ -795,7 +809,10 @@ func (n *Node) LastChild() *Node {
 // NextSibling returns the child of n's parent that follows n, or nil when n
 // is the last child, has no parent, or is an attribute or namespace node.
 func (n *Node) NextSibling() *Node {
-	if n.parent == noIdx || n.kind == uint8(KindAttribute) || n.flags&fSide != 0 || n.end == openEnd {
+	if n.parent == noIdx || n.kind == uint8(KindAttribute) || n.flags&(fSide|fShallow) != 0 || n.end == openEnd {
+		if n.flags&fShallow != 0 && n.parent != noIdx {
+			shallowFault(n, "following siblings")
+		}
 		return nil
 	}
 	t := n.tree
@@ -808,7 +825,10 @@ func (n *Node) NextSibling() *Node {
 // PrevSibling returns the child of n's parent that precedes n, or nil when n
 // is the first child, has no parent, or is an attribute or namespace node.
 func (n *Node) PrevSibling() *Node {
-	if n.prev == noIdx || n.flags&fSide != 0 || n.kind == uint8(KindAttribute) {
+	if n.flags&(fSide|fShallow) != 0 || n.prev == noIdx || n.kind == uint8(KindAttribute) {
+		if n.flags&fShallow != 0 && n.parent != noIdx {
+			shallowFault(n, "preceding siblings")
+		}
 		return nil
 	}
 	return n.tree.rec(n.prev)
@@ -819,7 +839,10 @@ func (n *Node) PrevSibling() *Node {
 // descendants.
 func (n *Node) Descendants() iter.Seq[*Node] {
 	return func(yield func(*Node) bool) {
-		if n.v1 == noIdx || n.flags&fSide != 0 || n.isLeaf() {
+		if n.flags&(fSide|fShallow) != 0 || n.v1 == noIdx || n.isLeaf() {
+			if n.flags&fShallow != 0 {
+				shallowFault(n, "descendants")
+			}
 			return
 		}
 		t := n.tree
@@ -952,7 +975,10 @@ func (n *Node) SetBaseURI(base string) {
 // URI: none has one of its own, and no element there or on n carries an
 // xml:base attribute. Setting n's base URI then settles the whole subtree.
 func (n *Node) DescendantsInheritBase() bool {
-	if n.isLeaf() || n.flags&fSide != 0 {
+	if n.isLeaf() || n.flags&(fSide|fShallow) != 0 {
+		if n.flags&fShallow != 0 {
+			shallowFault(n, "descendants")
+		}
 		return true
 	}
 	t := n.tree
@@ -1503,7 +1529,7 @@ func (n *Node) sideNode(frame, index, owner uint32, slot int) *Node {
 			}
 		}
 	}
-	return t.sideAdd(key, Node{tree: t, kind: uint8(KindNamespace), flags: fSide,
+	return t.sideAdd(key, Node{tree: t, kind: uint8(KindNamespace), flags: fSide | n.flags&fOrigin,
 		self: t.sideSeq(), parent: n.self, end: uint32(slot), prev: owner,
 		v0: frame, v1: index})
 }
@@ -1537,12 +1563,21 @@ func (n *Node) Compare(o *Node) int {
 		return 0
 	}
 	if n.tree != o.tree {
+		// Two copies out of one stream order as their originals. (The
+		// stream's trees share its id, so they order as one tree among
+		// the others.)
+		if n.flags&o.flags&fOrigin != 0 && n.origin().s == o.origin().s {
+			return cmpKeys(n.originKey(), o.originKey())
+		}
 		if n.tree.ident() < o.tree.ident() {
 			return -1
 		}
 		return 1
 	}
-	a, b := n.orderKey(), o.orderKey()
+	return cmpKeys(n.orderKey(), o.orderKey())
+}
+
+func cmpKeys(a, b uint64) int {
 	switch {
 	case a < b:
 		return -1
@@ -1554,15 +1589,24 @@ func (n *Node) Compare(o *Node) int {
 
 // Is reports whether n and o are the same node, which is what the "is"
 // operator asks and what XDM means by node identity. Every node, namespace
-// nodes included, exists once, so this is pointer equality.
-func (n *Node) Is(o *Node) bool { return n == o }
+// nodes included, exists once, so this is pointer equality -- except that
+// the copies a streamed run makes of one node of its document (views and
+// grounded copies, streamview.go) are all that node.
+func (n *Node) Is(o *Node) bool {
+	return n == o || n.flags&o.flags&fOrigin != 0 && n.sameOrigin(o)
+}
 
 // IdentityKey is a comparable value equal for two node references exactly when
 // Is reports them the same node.
 type IdentityKey struct{ ptr *Node }
 
 // Identity returns the key that stands for this node's identity.
-func (n *Node) Identity() IdentityKey { return IdentityKey{n} }
+func (n *Node) Identity() IdentityKey {
+	if n.flags&fOrigin != 0 {
+		return IdentityKey{n.canonical()}
+	}
+	return IdentityKey{n}
+}
 
 // Order returns a number that orders n within its tree. Callers wanting
 // relative position must use Compare: this value says nothing across trees.
@@ -1596,7 +1640,10 @@ func (n *Node) Index() int {
 // or attribute gives Index()+1. For a node still being built it is the end so
 // far and grows as children are appended. A namespace node gives -1.
 func (n *Node) SubtreeEnd() int {
-	if n.flags&fSide != 0 {
+	if n.flags&(fSide|fShallow) != 0 {
+		if n.flags&fShallow != 0 {
+			shallowFault(n, "subtree")
+		}
 		return -1
 	}
 	return int(n.tree.endOf(n))
@@ -1626,7 +1673,16 @@ func (n *Node) generateID() string {
 	b = strconv.AppendInt(b, n.tree.ident(), 10)
 	b = append(b, 'x')
 	k := uint64(n.self)
-	if n.flags&fSide != 0 {
+	switch {
+	case n.flags&fOrigin != 0:
+		// The original's: a copy out of a stream is in a tree with the
+		// stream's id, and numbered as a tree-mode parse numbers it.
+		if k = n.originKey(); n.flags&fSide != 0 {
+			k |= 1 << 48
+		} else {
+			k >>= 16
+		}
+	case n.flags&fSide != 0:
 		k = 1<<48 | n.orderKey()
 	}
 	b = strconv.AppendUint(b, k, 10)

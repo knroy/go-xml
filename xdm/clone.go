@@ -25,15 +25,20 @@ func init() {
 // point into are append-only, so the copy shares them, with capacities
 // clipped so that whatever the copy appends lands in storage of its own.
 func cloneSubtree(top *Node, o xdmclone.Options) func(*Node) *Node {
-	return cloneMoving(top, o, noIdx)
+	if top.flags&fShallow != 0 {
+		shallowFault(top, "copy")
+	}
+	return cloneMoving(top, o, noIdx, false)
 }
 
 // cloneMoving is cloneSubtree that, cloning a whole tree as it is, takes
 // over the source's chunks that lie wholly past the one holding record from
 // instead of copying them: their records become the copy's, in place. The
 // source must not read them through its own records again, and must drop
-// them (see burster.deliver).
-func cloneMoving(top *Node, o xdmclone.Options, from uint32) func(*Node) *Node {
+// them (see burster.deliver). origin marks every record of the copy as
+// copied out of a stream (fOrigin; the caller gives the tree its origin);
+// otherwise the copy is a node of its own, whatever its source was.
+func cloneMoving(top *Node, o xdmclone.Options, from uint32, origin bool) func(*Node) *Node {
 	if top.flags&fSide != 0 {
 		return nil
 	}
@@ -192,6 +197,10 @@ func cloneMoving(top *Node, o xdmclone.Options, from uint32) func(*Node) *Node {
 		j := mapIdx(i)
 		r := *s
 		r.tree, r.self = c, j
+		r.flags &^= fOrigin
+		if origin {
+			r.flags |= fOrigin
+		}
 		if i == lo {
 			r.parent, r.prev = noIdx, noIdx
 		} else {

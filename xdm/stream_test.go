@@ -116,3 +116,63 @@ func (c *laterAll) Leaf(any, int) error           { return nil }
 func (c *laterAll) End(_ any, _ int, _ any) error { return nil }
 func (c *laterAll) Watch(any, int, bool)          {}
 func (c *laterAll) Later(g any) error             { c.fn(g.(*Node)); return nil }
+
+// viewAll keeps every element and views each one.
+type viewAll struct {
+	view func() any
+	fn   func(*Node, int)
+}
+
+func (c *viewAll) Viewer(v func() any) { c.view = v }
+func (c *viewAll) Start(_ any, d int) (xdmburst.Action, error) {
+	c.fn(c.view().(*Node), d)
+	return xdmburst.Keep, nil
+}
+func (c *viewAll) Leaf(any, int) error           { return nil }
+func (c *viewAll) End(_ any, _ int, _ any) error { return nil }
+func (c *viewAll) Watch(any, int, bool)          {}
+func (c *viewAll) Later(any) error               { return nil }
+
+// Views under a deep spine share the copies of their ancestors: a view
+// costs what the elements opened since the last one do, not the depth
+// (records x depth), and a new batch copies the spine again only after the
+// old one has paid for it.
+func TestDriveViewsShareTheSpine(t *testing.T) {
+	const depth, n = 1000, 20000
+	var b strings.Builder
+	b.WriteString(strings.Repeat("<w a='1' b='2' c='3'>", depth))
+	for i := range n {
+		fmt.Fprintf(&b, "<rec k='%d'><x/></rec>", i)
+	}
+	b.WriteString(strings.Repeat("</w>", depth))
+	views := 0
+	c := &viewAll{fn: func(v *Node, d int) {
+		views++
+		if views%1000 == 0 {
+			k := 0
+			for p := v.Parent(); p != nil && p.Kind() == KindElement; p = p.Parent() {
+				k++
+			}
+			if k != d-1 {
+				t.Fatalf("view at depth %d has %d ancestors", d, k)
+			}
+		}
+	}}
+	bs := driver(c)
+	if _, err := parse(strings.NewReader(b.String()), "", ParseOptions{bursts: bs, MaxDepth: 2000}); err != nil {
+		t.Fatal(err)
+	}
+	if views != depth+2*n {
+		t.Fatalf("%d views", views)
+	}
+	// The spine once (4 records an element), and again for each batch the
+	// views fill: at most a quarter of the records made.
+	t.Logf("%d ancestor records copied, %d copies looked past, for %d views", bs.viewCopies, bs.viewScans, views)
+	if read := 4*depth + (4*depth+3*2*n)/3; bs.viewCopies > read {
+		t.Fatalf("%d ancestor records copied for %d views", bs.viewCopies, views)
+	}
+	// Finding the copies a view shares looks past only those it drops.
+	if bs.viewScans > views+bs.viewCopies {
+		t.Fatalf("%d copies looked past for %d views", bs.viewScans, views)
+	}
+}
