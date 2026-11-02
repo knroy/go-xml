@@ -1,6 +1,6 @@
 package xslt
 
-// The streamed XPath split (full streaming, component C4; DESIGN §1.5).
+// The streamed XPath split (full streaming, component C4; DESIGN section 1.5).
 //
 // A consuming expression is taken apart around its one consuming path, P,
 // as burstSplit does for the burst shapes, but P runs on the stream cursor
@@ -353,7 +353,7 @@ func (s *streamSplit) folds(w *splitter, part func(xpath.Expr) *xpath.Compiled) 
 }
 
 // class names what holding the split's result costs, for the plan's memory
-// rule (DESIGN §2.1.3): "bounded" (a fold), "output" (atomic values
+// rule (DESIGN section 2.1, rule 3): "bounded" (a fold), "output" (atomic values
 // collected), "nodes" (grounded copies collected: more than the tree holds
 // for them, so a plan must not collect them), "subtree" (the context
 // grounded whole).
@@ -1043,7 +1043,7 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 		n := x.Name.Local
 		if n == "has-children" && vc.kids && f != vLeaf {
 			if len(x.Args) == 0 || len(x.Args) == 1 && isContextItem(x.Args[0]) {
-				// has-children(.): the cursor's Peek answers it (DESIGN §1.4).
+				// has-children(.): the cursor's Peek answers it (DESIGN section 1.4).
 				x.Name.Local, x.Args = "boolean", []xpath.Expr{&xpath.VarRef{Name: splitKids}}
 				return true
 			}
