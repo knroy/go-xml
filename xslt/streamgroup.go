@@ -221,12 +221,19 @@ func (run *streamRun) groupAt(op *streamOp) *groupAt {
 	return nil
 }
 
+// traceGroup, when set, is told of each streamed grouping run, for the
+// fuzzers' tallies.
+var traceGroup func()
+
 // group runs i, a grouping op of the plan running, on the cursor.
 func (run *streamRun) group(rt *runtime, out *outputBuilder, i *forEachGroupInstr, op *streamOp) error {
 	if run.used || op.fromGroup && run.grp == nil {
 		return errStreamPlan
 	}
 	run.used = true
+	if traceGroup != nil {
+		traceGroup()
+	}
 	g := &groupRun{sr: run, rt: rt, i: i}
 	if op.fromGroup {
 		g.src = run.grp.src

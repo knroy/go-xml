@@ -438,6 +438,7 @@ func fuzzMakeModes(seed int64) fuzzCase {
 		}
 		s.WriteString("/>\n")
 	}
+	gr := rand.New(rand.NewSource(seed*39916801 + 13)) // the grouping rule bodies' draws
 	for i, n := 0, g.n(6); i < n; i++ {
 		s.WriteString(`<xsl:template match="` + strings.ReplaceAll(sub(g.pick(fuzzPatterns...)), "<", "&lt;") + `"`)
 		if g.p(40) || len(modes) > 1 && g.p(50) {
@@ -452,6 +453,9 @@ func fuzzMakeModes(seed int64) fuzzCase {
 		}
 		body := sub(g.pick(fuzzRuleBodies...))
 		body = strings.ReplaceAll(body, "MODE", g.pick(modes[len(modes)-1], "#default", "#current"))
+		if gb := fuzzGroupRule(gr, g.rec, modes[len(modes)-1]); gb != "" {
+			body = gb
+		}
 		s.WriteString(">" + body + "</xsl:template>\n")
 	}
 	s.WriteString(`<xsl:template name="main">` + "\n")
@@ -567,6 +571,9 @@ func (g *fuzzGen) coreContent(esc func(string) string) (string, bool) {
 }
 
 func fuzzMake(seed int64) fuzzCase {
+	if fuzzIsGroups(seed) {
+		return fuzzMakeGroups(seed)
+	}
 	if fuzzIsModes(seed) {
 		return fuzzMakeModes(seed)
 	}
@@ -796,7 +803,10 @@ func TestStreamFuzz(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(c.doc), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		groups := 0
+		traceGroup = func() { groups++ }
 		co := fuzzRun(c, dir, true)
+		traceGroup = nil
 		tr := fuzzRun(c, dir, false)
 		tally["cases"]++
 		if co.trace.Streamed() > 0 {
@@ -813,6 +823,15 @@ func TestStreamFuzz(t *testing.T) {
 		}
 		if strings.HasPrefix(c.kind, "core") {
 			tally["core shapes"]++
+		}
+		if c.kind == "groups" {
+			tally["group shapes"]++
+			if co.trace.Streamed() > 0 {
+				tally["streamed: group shapes"]++
+			}
+		}
+		if groups > 0 {
+			tally["streamed: a grouping ran"]++
 		}
 		if c.kind == "modes" {
 			tally["mode shapes"]++
@@ -898,9 +917,18 @@ func TestStreamFuzzMain(t *testing.T) {
 		if r.Intn(30) == 0 {
 			opts.MaxNodes = 5 + r.Intn(60)
 		}
+		groups := 0
+		traceGroup = func() { groups++ }
 		co, ct := mainRun(c.sheet, c.doc, true, opts)
+		traceGroup = nil
 		tr, tt := mainRun(c.sheet, c.doc, false, opts)
+		if groups > 0 {
+			tally["streamed: a grouping ran"]++
+		}
 		tally["cases"]++
+		if ct.Runs[streamtrace.Main] > 0 && strings.Contains(c.sheet, "for-each-group") {
+			tally["streamed: with a grouping rule"]++
+		}
 		if ct.Runs[streamtrace.Main] > 0 {
 			tally["streamed"]++
 			if strings.HasPrefix(co, "error: ") {
