@@ -249,6 +249,36 @@ func TestCursorGroundAndText(t *testing.T) {
 		}
 	}
 
+	// GroundLater gives the same copies, in order.
+	c = Open(strings.NewReader(src), opts)
+	defer c.Close()
+	got = got[:0]
+	for {
+		e, err := c.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Kind == EndDocument {
+			break
+		}
+		if e.Kind == StartElement && e.Node.Name().Local == "r" {
+			if err := c.GroundLater(func(g *xdm.Node) error { got = append(got, g); return nil }); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if e.Kind == StartElement && e.Node.Name().Local == "skip" {
+			c.Skip()
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%d grounded later, want %d", len(got), len(want))
+	}
+	for i, g := range got {
+		if d := dump(g); d != want[i] {
+			t.Fatalf("grounded later %d differs\ngot\n%s\nwant\n%s", i, d, want[i])
+		}
+	}
+
 	c = Open(strings.NewReader(src), opts)
 	defer c.Close()
 	for {
@@ -344,13 +374,15 @@ func TestCursorObserve(t *testing.T) {
 			break
 		}
 		if e.Kind == StartElement && e.Depth == 3 {
-			switch k++; k % 3 {
+			switch k++; k % 4 {
 			case 0:
 				err = c.Skip()
 			case 1:
 				_, err = c.Ground()
 			case 2:
 				_, err = c.Text()
+			case 3:
+				err = c.GroundLater(func(*xdm.Node) error { return nil })
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -377,7 +409,7 @@ func TestCursorLimitsSpanTheStream(t *testing.T) {
 		if !errors.Is(want, xdm.ErrResourceLimit) {
 			t.Fatalf("%+v: Parse: %v", tc.o, want)
 		}
-		for mode := range 4 {
+		for mode := range 5 {
 			got := consume(tc.src, tc.o, mode)
 			if got == nil || got.Error() != want.Error() || !errors.Is(got, xdm.ErrResourceLimit) {
 				t.Fatalf("%+v mode %d: got %v, want %v", tc.o, mode, got, want)
@@ -388,7 +420,7 @@ func TestCursorLimitsSpanTheStream(t *testing.T) {
 
 // consume reads src to its end, each element at depth 2 descended into
 // (mode 0), skipped (1), grounded (2) or read by Text (3), and returns the
-// error that stopped it.
+// error that stopped it; mode 4 grounds it for later.
 func consume(src string, o xdm.ParseOptions, mode int) error {
 	c := Open(strings.NewReader(src), o)
 	defer c.Close()
@@ -410,6 +442,8 @@ func consume(src string, o xdm.ParseOptions, mode int) error {
 			_, err = c.Ground()
 		case 3:
 			_, err = c.Text()
+		case 4:
+			err = c.GroundLater(func(*xdm.Node) error { return nil })
 		}
 		if err != nil {
 			return err
@@ -441,7 +475,7 @@ func TestCursorMalformed(t *testing.T) {
 		if want == nil {
 			t.Fatalf("%q: Parse accepts it", src)
 		}
-		for mode := range 4 {
+		for mode := range 5 {
 			if got := consume(src, xdm.ParseOptions{}, mode); got == nil || got.Error() != want.Error() {
 				t.Fatalf("%q mode %d: got %v, want %v", src, mode, got, want)
 			}

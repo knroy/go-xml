@@ -68,8 +68,10 @@ type Cursor struct {
 	// resumed.
 	act      xdmburst.Action
 	grounded *xdm.Node
-	err      error
-	obs      []Observer
+	// later are GroundLater's functions waiting for their copies, in order.
+	later []func(*xdm.Node) error
+	err   error
+	obs   []Observer
 }
 
 // errStop ends the parse when the cursor is closed.
@@ -154,6 +156,26 @@ func (c *Cursor) Ground() (*xdm.Node, error) {
 	return g, nil
 }
 
+// GroundLater moves past the current element, as Skip, and has fn called
+// with a copy of it, as Ground returns one, perhaps after more of the
+// document has been read. Small elements grounded so share one tree and the
+// copies of their ancestors (xdm's burst batches), where a Ground of each
+// copies all its ancestors every time: under a deep spine that is the
+// difference between linear and records x depth. Such a tree holds those
+// elements under their common ancestors' copies, so the ancestors' content
+// is not one element's alone. fn is called in document order, before any
+// later Ground returns, and at the latest when the document element closes;
+// its error stops the parse and is returned by the call that met it. A copy
+// is not handed over when the parse fails first.
+func (c *Cursor) GroundLater(fn func(*xdm.Node) error) error {
+	if c.ev.Kind != StartElement || c.peeked != nil || c.peekErr != nil {
+		return errNotAtStart
+	}
+	c.later = append(c.later, fn)
+	_, err := c.decide(xdmburst.GroundLater)
+	return err
+}
+
 // Text moves past the current element, as Skip, and returns its string
 // value, read from the parse's tree before the element is dropped: nothing
 // is copied out.
@@ -227,6 +249,12 @@ func (k *client) End(el any, d int, grounded any) error {
 		return errStop
 	}
 	return nil
+}
+
+func (k *client) Later(g any) error {
+	fn := k.c.later[0]
+	k.c.later = k.c.later[1:]
+	return fn(g.(*xdm.Node))
 }
 
 func (k *client) Watch(el any, d int, end bool) {

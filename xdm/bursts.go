@@ -63,7 +63,8 @@ func parseBursts(r io.Reader, opts ParseOptions, steps []xdmburst.Step, fn func(
 // burster is the stream driver: the state a streamed parse keeps inside
 // parse. Its client decides, at each start tag outside an element already
 // decided, whether the element is kept on the spine (its content then met
-// piece by piece), built whole and handed to fn at its end (a burst), or
+// piece by piece), built whole and copied out at its end (grounded: handed
+// to the client's end at once, or, for GroundLater, to fn in a batch), or
 // built, checked and dropped. ParseBursts' client is patternClient; the
 // pull cursor (internal/xdmstream) is the other, through xdmburst.Drive.
 type burster struct {
@@ -72,8 +73,6 @@ type burster struct {
 	// leaves hands c the text, comments and processing instructions of the
 	// spine, the document node's own too, before they are dropped.
 	leaves bool
-	// noBatch delivers every burst at once, in a tree of its own.
-	noBatch bool
 	// watch, when set, is told of every element's start and end, those
 	// inside a burst or a dropped element too.
 	watch func(el *Node, d int, end bool)
@@ -84,6 +83,10 @@ type burster struct {
 	// burst, or an element off the path), or 0; burst says it is a burst.
 	drop  int
 	burst bool
+	// later says the burst is GroundLater's; grounded is the copy of the
+	// one just closed that is not.
+	later    bool
+	grounded *Node
 	// marks[d] is the tree's state once the spine element at depth d (0:
 	// the document node) had stored its attributes. Everything stored after
 	// it belongs to content that is dropped.
@@ -124,9 +127,9 @@ type streamClient interface {
 	// document node), once it is complete; only with burster.leaves.
 	leaf(n *Node, d int) error
 	// end is told that el, at depth d, has closed: an element start kept
-	// (kept), or one it made a burst of, which has been delivered, or
-	// dropped, still whole in the parse's tree.
-	end(el *Node, d int, kept bool) error
+	// (kept); or one it grounded, when g is its copy (nil for GroundLater,
+	// whose copy goes to fn); or dropped, still whole in the parse's tree.
+	end(el *Node, d int, kept bool, g *Node) error
 }
 
 // patternClient is ParseBursts' client: an element whose ancestry matches
@@ -144,7 +147,7 @@ func (p *patternClient) start(el *Node, d int) (xdmburst.Action, error) {
 	n := p.advance(p.states[len(p.states)-1], el.Name())
 	switch {
 	case n&(1<<len(p.steps)) != 0:
-		return xdmburst.Ground, nil
+		return xdmburst.GroundLater, nil
 	case n != 0:
 		p.states = append(p.states, n)
 		return xdmburst.Keep, nil
@@ -154,7 +157,7 @@ func (p *patternClient) start(el *Node, d int) (xdmburst.Action, error) {
 
 func (p *patternClient) leaf(*Node, int) error { return nil }
 
-func (p *patternClient) end(_ *Node, _ int, kept bool) error {
+func (p *patternClient) end(_ *Node, _ int, kept bool, _ *Node) error {
 	if kept {
 		p.states = p.states[:len(p.states)-1]
 	}
@@ -174,8 +177,8 @@ func (b *burster) start(el *Node, d int) error {
 		return err
 	}
 	switch act {
-	case xdmburst.Ground:
-		b.drop, b.burst = d, true
+	case xdmburst.Ground, xdmburst.GroundLater:
+		b.drop, b.burst, b.later = d, true, act == xdmburst.GroundLater
 	case xdmburst.Keep:
 		b.spine = d
 		b.marks = append(b.marks, markOf(el.tree))
@@ -229,7 +232,9 @@ func (b *burster) end(el *Node, d int, spaces *spaceTable, names *nameCache) err
 	default:
 		return nil
 	}
-	if err := b.c.end(el, d, kept); err != nil {
+	g := b.grounded
+	b.grounded = nil
+	if err := b.c.end(el, d, kept, g); err != nil {
 		return err
 	}
 	if d == 1 {
@@ -347,15 +352,21 @@ func (b *burster) rewind(t *Tree, spaces *spaceTable, names *nameCache) {
 	*spaces = spaceTable{noMap: true}
 }
 
-// take delivers the burst el: a large one at once, in a tree of its own
-// (deliver), and a small one with the bursts before it (burstBatch).
+// take delivers the burst el: a large one, or one grounded for now, at
+// once, in a tree of its own (deliver), and a small one with the bursts
+// before it (burstBatch).
 func (b *burster) take(el *Node) error {
 	t := el.tree
-	if b.noBatch || t.endOf(el)-el.self > burstSmall {
+	if !b.later || t.endOf(el)-el.self > burstSmall {
 		if err := b.flush(); err != nil {
 			return err
 		}
-		return b.deliver(el)
+		g := b.deliver(el)
+		if !b.later {
+			b.grounded = g
+			return nil
+		}
+		return b.fn(g)
 	}
 	b.add(el)
 	if bt := b.batch; int(bt.t.n) >= max(burstBatchRecords, 4*len(b.gens)) ||
@@ -563,7 +574,7 @@ func (b *burster) flush() error {
 // copied in bulk, sharing the names, frames and text the records point into.
 // The chunks wholly past el's first are not copied but taken over, so that
 // one large burst is not held twice; discardLast drops them from the parse.
-func (b *burster) deliver(el *Node) error {
+func (b *burster) deliver(el *Node) *Node {
 	t := el.tree
 	m := cloneMoving(t.Root, xdmclone.Options{}, el.self)
 	k, _ := chunkOf(el.self)
@@ -576,7 +587,7 @@ func (b *burster) deliver(el *Node) error {
 	if b.v11 {
 		c.tree.XMLVersion = "1.1"
 	}
-	return b.fn(c)
+	return c
 }
 
 // textMark is a point in a textStore that rewind returns it to.

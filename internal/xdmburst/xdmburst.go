@@ -36,6 +36,10 @@ const (
 	Ground
 	// Skip builds the element, checks it, and drops it at its end.
 	Skip
+	// GroundLater grounds the element, as Ground, but hands its copy to
+	// Later, perhaps after more of the document: small elements grounded so
+	// are copied into one tree, sharing the copies of their ancestors.
+	GroundLater
 )
 
 // Client is told what a stream parse (Drive) meets. Its nodes are
@@ -51,9 +55,14 @@ type Client interface {
 	// is complete.
 	Leaf(n any, d int) error
 	// End is told that el, at depth d, closed: one kept, or one grounded,
-	// when grounded is its copy, or skipped, when el is still whole in the
-	// parse's tree.
+	// when grounded is its copy (nil for GroundLater), or skipped, when el
+	// is still whole in the parse's tree.
 	End(el any, d int, grounded any) error
+	// Later is handed the copies of the elements grounded by GroundLater,
+	// in document order: before the copy of any later Ground, and at the
+	// latest when the document element closes. A copy is not handed over
+	// when the parse fails first.
+	Later(grounded any) error
 	// Watch is told of every element's start (end false) and end, those
 	// inside a grounded or skipped element too, before Start or End.
 	Watch(el any, d int, end bool)

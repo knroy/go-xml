@@ -31,6 +31,7 @@ func (c *keepAll) End(_ any, _ int, g any) error {
 	return nil
 }
 func (c *keepAll) Watch(any, int, bool) {}
+func (c *keepAll) Later(any) error      { c.grounded++; return nil }
 
 // A stream read element by element keeps only the open elements: what each
 // element, leaf and grounded copy leaves in the parse's tree is taken back.
@@ -64,3 +65,54 @@ func TestDriveKeepsOnlyTheSpine(t *testing.T) {
 		}
 	}
 }
+
+// Grounded later, small elements under a deep spine share the copies of
+// their ancestors, as ParseBursts' do: a Ground of each copied the whole
+// spine every time (records x depth).
+func TestDriveGroundLaterSharesTheSpine(t *testing.T) {
+	const depth, n = 300, 3000
+	var b strings.Builder
+	b.WriteString(strings.Repeat("<w>", depth))
+	for i := range n {
+		fmt.Fprintf(&b, "<rec k='%d'><x/></rec>", i)
+	}
+	b.WriteString(strings.Repeat("</w>", depth))
+	got := 0
+	c := &laterAll{depth: depth, fn: func(r *Node) {
+		d := 0
+		for p := r.Parent(); p != nil && p.Kind() == KindElement; p = p.Parent() {
+			d++
+		}
+		if d != depth || r.Attr("", "k").Value() != fmt.Sprint(got) {
+			t.Fatalf("copy %d: %d ancestors, k=%s", got, d, r.Attr("", "k").Value())
+		}
+		got++
+	}}
+	bs := driver(c)
+	if _, err := parse(strings.NewReader(b.String()), "", ParseOptions{bursts: bs}); err != nil {
+		t.Fatal(err)
+	}
+	if got != n {
+		t.Fatalf("%d copies, want %d", got, n)
+	}
+	if read := depth + 2*n; bs.spineCopies > read {
+		t.Fatalf("%d ancestor records copied for %d elements read", bs.spineCopies, read)
+	}
+}
+
+// laterAll keeps the spine and grounds every element below it for later.
+type laterAll struct {
+	depth int
+	fn    func(*Node)
+}
+
+func (c *laterAll) Start(_ any, d int) (xdmburst.Action, error) {
+	if d > c.depth {
+		return xdmburst.GroundLater, nil
+	}
+	return xdmburst.Keep, nil
+}
+func (c *laterAll) Leaf(any, int) error           { return nil }
+func (c *laterAll) End(_ any, _ int, _ any) error { return nil }
+func (c *laterAll) Watch(any, int, bool)          {}
+func (c *laterAll) Later(g any) error             { c.fn(g.(*Node)); return nil }
