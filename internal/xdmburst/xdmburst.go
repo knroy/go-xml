@@ -80,3 +80,11 @@ var Drive func(r io.Reader, opts any, c Client) error
 type Viewing interface {
 	Viewer(view func() any)
 }
+
+// Flushing is a Client that can have the copies GroundLater still holds
+// handed over before the document element closes: Drive hands it, before
+// the first event, the function that calls Later with each of them now. It
+// may be called only while End is telling the client of an element's close.
+type Flushing interface {
+	Flusher(flush func() error)
+}

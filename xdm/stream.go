@@ -36,6 +36,9 @@ func driver(c xdmburst.Client) *burster {
 			return nil // not a typed nil
 		})
 	}
+	if f, ok := c.(xdmburst.Flushing); ok {
+		f.Flusher(b.flush)
+	}
 	return b
 }
 

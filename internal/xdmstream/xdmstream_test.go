@@ -496,3 +496,101 @@ func TestCursorClose(t *testing.T) {
 		t.Fatalf("after Close: %v", err)
 	}
 }
+
+// TestCursorFlush: GroundLater's copies are held for a batch; Flush, at an
+// end tag, hands them over then, and the parse goes on as before.
+func TestCursorFlush(t *testing.T) {
+	src := `<a><b><r i="1">x</r><r i="2"/></b><b><r i="3"/></b><c/></a>`
+	c := Open(strings.NewReader(src), opts)
+	defer c.Close()
+	var got []string
+	var rest []string
+	for {
+		e, err := c.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Kind == EndDocument {
+			break
+		}
+		switch {
+		case e.Kind == StartElement && e.Node.Name().Local == "r":
+			if err := c.GroundLater(func(g *xdm.Node) error {
+				got = append(got, g.AttrValue("i")+g.StringValue())
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Flush(); err != nil {
+				t.Fatal(err) // at the r's end: allowed, and delivers it
+			}
+			if n := len(got); n == 0 {
+				t.Fatal("Flush at an end tag delivered nothing")
+			}
+		case e.Kind == StartElement:
+			rest = append(rest, e.Node.Name().Local)
+			if err := c.Flush(); err == nil {
+				t.Fatal("Flush at a start tag: no error")
+			}
+		case e.Kind == EndElement && e.Node.Name().Local == "b":
+			if err := c.Flush(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if want := "1x 2 3"; strings.Join(got, " ") != want {
+		t.Fatalf("copies %q, want %q", strings.Join(got, " "), want)
+	}
+	if want := "a b b c"; strings.Join(rest, " ") != want {
+		t.Fatalf("events %q, want %q", strings.Join(rest, " "), want)
+	}
+}
+
+// TestCursorFlushBatched: without Flush the copies of small elements wait
+// for their batch; with it they are all handed over at the end tag asked.
+func TestCursorFlushBatched(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<a>")
+	for range 3 {
+		b.WriteString("<b>")
+		for i := range 5 {
+			fmt.Fprintf(&b, `<r i="%d"/>`, i)
+		}
+		b.WriteString("</b>")
+	}
+	b.WriteString("</a>")
+	for _, flush := range []bool{false, true} {
+		c := Open(strings.NewReader(b.String()), opts)
+		n, atEnds := 0, []int{}
+		for {
+			e, err := c.Next()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e.Kind == EndDocument {
+				break
+			}
+			if e.Kind == StartElement && e.Node.Name().Local == "r" {
+				if err := c.GroundLater(func(*xdm.Node) error { n++; return nil }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if e.Kind == EndElement && e.Node.Name().Local == "b" {
+				if flush {
+					if err := c.Flush(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				atEnds = append(atEnds, n)
+			}
+		}
+		c.Close()
+		want := []int{0, 0, 0}
+		if flush {
+			want = []int{5, 10, 15}
+		}
+		if fmt.Sprint(atEnds) != fmt.Sprint(want) || n != 15 {
+			t.Fatalf("flush %v: copies at each </b> %v, want %v; %d in all", flush, atEnds, want, n)
+		}
+	}
+}

@@ -79,10 +79,15 @@ type Cursor struct {
 	// viewed is the one built for ev.
 	view   func() any
 	viewed *xdm.Node
+	// flush hands over the copies GroundLater holds (Flush).
+	flush func() error
 }
 
 // errStop ends the parse when the cursor is closed.
 var errStop = errors.New("xdmstream: closed")
+
+// errNotAtEnd is Flush's error away from an end tag.
+var errNotAtEnd = errors.New("xdmstream: not at an end tag")
 
 // errNotAtStart is the error of Skip, Ground and Text away from an
 // undecided start tag.
@@ -212,6 +217,20 @@ func (c *Cursor) GroundLater(fn func(*xdm.Node) error) error {
 	return err
 }
 
+// Flush calls now the functions GroundLater was given whose copies are
+// still held, rather than when the document element closes. It may be
+// called only at an end tag: when the last event Next, Skip, Ground,
+// GroundLater or Text returned is an EndElement, and nothing is peeked. A
+// consumer whose reading ends inside the document -- at the close of the
+// element it was handed -- calls it there, so that every copy it asked for
+// has arrived. The error is the first those functions returned.
+func (c *Cursor) Flush() error {
+	if c.ev.Kind != EndElement || c.peeked != nil || c.peekErr != nil {
+		return errNotAtEnd
+	}
+	return c.flush()
+}
+
 // Text moves past the current element, as Skip, and returns its string
 // value, read from the parse's tree before the element is dropped: nothing
 // is copied out.
@@ -294,6 +313,8 @@ func (k *client) Later(g any) error {
 }
 
 func (k *client) Viewer(view func() any) { k.c.view = view }
+
+func (k *client) Flusher(flush func() error) { k.c.flush = flush }
 
 func (k *client) Watch(el any, d int, end bool) {
 	for _, o := range k.c.obs {
