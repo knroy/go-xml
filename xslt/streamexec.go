@@ -670,7 +670,7 @@ func (x *streamExec) readyOps(ops []*streamOp, minD int, kinds *[streamtrace.Num
 			kinds[streamtrace.KindForEach]++
 			continue
 		default:
-			return "loop body: neither streamed nor grounded below the document element"
+			return "loop body: neither streamed nor grounded (a match may be the document node)"
 		}
 		kinds[streamtrace.KindForEach]++
 		for i := range kinds {
