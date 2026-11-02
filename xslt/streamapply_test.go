@@ -173,3 +173,30 @@ func TestStreamApplyTopLevel(t *testing.T) {
 		`</xsl:template></xsl:stylesheet>`
 	coreCheck(t, deep, dir, "deep-copy at the top of the principal result", true, TransformOptions{})
 }
+
+// TestStreamApplyLeafAllocs: the streamed identity transform does not copy
+// each text node it hands to the built-in rule (a tree per node): its
+// allocations stay within 6x the tree's run of the same transform (measured
+// at d2b7f885: 36,940 against 9,800, the views and the cursor's events; a
+// copy per text node made it 129,941).
+func TestStreamApplyLeafAllocs(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	b.WriteString("<doc>")
+	for i := range 3000 {
+		fmt.Fprintf(&b, "<r>t%d<s>u</s>v<s>w</s>x</r>\n", i)
+	}
+	b.WriteString("</doc>")
+	if err := os.WriteFile(filepath.Join(dir, "doc.xml"), []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sheet := coreSheetWith(`<xsl:mode streamable="yes" on-no-match="shallow-copy"/>`, `<xsl:apply-templates/>`)
+	allocs := func(core bool) float64 {
+		return testing.AllocsPerRun(2, func() { coreRun(sheet, dir, core, TransformOptions{}) })
+	}
+	core, tree := allocs(true), allocs(false)
+	t.Logf("allocations: core %.0f, tree %.0f", core, tree)
+	if core > 6*tree {
+		t.Errorf("core %.0f allocations, tree %.0f: more than 6x", core, tree)
+	}
+}
