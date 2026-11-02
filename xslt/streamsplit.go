@@ -67,6 +67,9 @@ const (
 	matchText                    // its string value, read off the cursor (Text)
 	matchView                    // the tail, evaluated on its view
 	matchGround                  // a copy of it, whole (Ground / GroundLater)
+	// matchBody is a loop's (C5, streamexec.go): its body runs at the match's
+	// start tag and may read the match's content off the cursor.
+	matchBody
 )
 
 // splitStep is one downward step of P.
@@ -889,8 +892,10 @@ const (
 
 // viewCheck reports whether expressions read of their focus only what a
 // view has (§19.8: motionless). With kids, has-children(.) is rewritten in
-// place to read $splitKids, which the cursor answers by Peek.
-type viewCheck struct{ kids bool }
+// place to read $splitKids, which the cursor answers by Peek. With pos,
+// position() is admitted: the focus is an instruction's, whose position is
+// known (C5's motionless parts), not a candidate's (a split's predicates).
+type viewCheck struct{ kids, pos bool }
 
 // safe reports whether e reads of focus f only what f has. nodeOK says the
 // nodes e returns are not atomized by what holds e.
@@ -1047,6 +1052,9 @@ func (vc viewCheck) call(x *xpath.FuncCall, f vfocus, nodeOK bool) bool {
 				x.Name.Local, x.Args = "boolean", []xpath.Expr{&xpath.VarRef{Name: splitKids}}
 				return true
 			}
+		}
+		if n == "position" && vc.pos && len(x.Args) == 0 {
+			return true
 		}
 		if burstFnBanned[n] || n == "copy-of" || n == "snapshot" || n == "current" ||
 			n == "has-children" && f != vLeaf {
@@ -1268,6 +1276,12 @@ type splitRun struct {
 	silent int
 	// seen counts matches, for innermost.
 	seen int64
+	// each, for a loop (loop), is handed every match in place of take: a
+	// view (matchView) or a copy (matchGround). body runs a matchBody loop's
+	// body at a match's start tag, at depth d, and reports whether it read
+	// the match to its end.
+	each func(n *xdm.Node) error
+	body func(v *xdm.Node, d int) (bool, error)
 }
 
 // eval evaluates s over the cursor c at depth d: 0, before its first
@@ -1323,6 +1337,24 @@ func (s *streamSplit) eval(ctx *xpath.Context, c *xdmstream.Cursor, d int) (xdm.
 		return nil, err
 	}
 	return s.outer.Eval(octx.WithVar(s.outerVar, value))
+}
+
+// loop runs P for an xsl:for-each or xsl:iterate (C5) over the cursor c at
+// depth d, as eval reads it, handing each match over as s.mode says: to each
+// (matchView, matchGround) or, at its start tag, to body (matchBody). s is a
+// bare path: no choice, tail, reducer or outer.
+func (s *streamSplit) loop(ctx *xpath.Context, c *xdmstream.Cursor, d int,
+	each func(*xdm.Node) error, body func(*xdm.Node, int) (bool, error)) error {
+
+	var v *xdm.Node
+	if d > 0 {
+		var err error
+		if v, err = c.View(); err != nil {
+			return err
+		}
+	}
+	r := &splitRun{s: s, ctx: ctx, c: c, each: each, body: body}
+	return r.run(v, d)
 }
 
 // run reads the context, the element whose view is v or the document.
@@ -1475,9 +1507,11 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 				if err != nil {
 					return err
 				}
-				items, err := s.tail.Eval(r.ctx.WithFocus(v, 1, 1))
-				if err != nil {
-					return err
+				items := xdm.One(v) // a loop's: the match itself
+				if s.tail != nil {
+					if items, err = s.tail.Eval(r.ctx.WithFocus(v, 1, 1)); err != nil {
+						return err
+					}
 				}
 				if s.innermost {
 					open.match, open.seen, open.pending = true, r.seen, items
@@ -1487,6 +1521,14 @@ func (r *splitRun) walk(root splitFrame, d int) error {
 			case matchGround:
 				decided = true
 				if err := r.ground(f); err != nil {
+					return err
+				}
+			case matchBody:
+				v, err := c.View()
+				if err != nil {
+					return err
+				}
+				if decided, err = r.body(v, ev.Depth); err != nil {
 					return err
 				}
 			}
@@ -1661,6 +1703,14 @@ func (r *splitRun) yield(n *xdm.Node) error {
 // a match that is only counted.
 func (r *splitRun) take(items xdm.Sequence) error {
 	s := r.s
+	if r.each != nil {
+		for _, it := range items {
+			if err := r.each(it.(*xdm.Node)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	switch s.red {
 	case "":
 		if s.atomize {

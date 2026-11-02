@@ -1428,7 +1428,7 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	var value string
 	if i.sel != nil {
-		seq, err := i.sel.Eval(rt.ctx)
+		seq, err := rt.evalSelect(i, i.sel)
 		if err != nil {
 			return err
 		}

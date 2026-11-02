@@ -1085,6 +1085,7 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 			return nil, err
 		}
 		instr.sel = comp
+		c.noteStreamSelect(n, instr, comp, ns)
 		return instr, nil
 	}
 	body, err := c.compileSequence(n, n)

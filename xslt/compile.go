@@ -14,7 +14,10 @@ import (
 type compiler struct {
 	// burst is the burst plan of the streamable xsl:source-document being
 	// compiled, which records the compiled form of its loop.
-	burst     *burstPlan
+	burst *burstPlan
+	// stream is the core plan of the one being compiled (streamexec.go),
+	// which records the compiled form of its consuming instructions.
+	stream    *streamExec
 	opts      CompileOptions
 	sheet     *Stylesheet
 	declOrder int

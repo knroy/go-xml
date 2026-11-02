@@ -52,6 +52,9 @@ type sourceDocumentInstr struct {
 	// bursts is the plan for running the body without building the
 	// document, when it qualifies; see streamburst.go.
 	bursts *burstPlan
+	// stream is the core plan, when the burst plans refuse the body; see
+	// streamexec.go.
+	stream *streamExec
 }
 
 func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
@@ -69,24 +72,46 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	if err != nil {
 		return nil, err
 	}
-	var plan *burstPlan
+	var (
+		plan *burstPlan
+		core *streamExec
+	)
 	if isYes(n.AttrValue("streamable")) {
 		// A module other than the principal one, or a principal that pulls
-		// in others, is not the whole stylesheet.
-		plan = planBursts(n, n.Root() != c.sheet.source)
+		// in others, is not the whole stylesheet. A container the burst
+		// plans take keeps them; the core takes the rest (streamexec.go).
+		shared := n.Root() != c.sheet.source
+		if !noBurstPlan {
+			plan = planBursts(n, shared)
+		}
+		if plan == nil {
+			var why string
+			if core, why = planStream(n, shared); core == nil && traceCore != nil && why != "verdict not trusted" {
+				traceCore(n, why)
+			}
+		}
 	}
-	outer := c.burst
-	c.burst = plan
+	outer, outerCore := c.burst, c.stream
+	c.burst, c.stream = plan, core
 	body, err := c.compileSequence(n, n)
-	c.burst = outer
+	c.burst, c.stream = outer, outerCore
 	if err != nil {
 		return nil, err
 	}
 	if plan != nil && plan.instr == nil {
 		plan = nil // the loop was not compiled (use-when)
 	}
+	if core != nil {
+		why := core.ready()
+		if traceCore != nil {
+			traceCore(n, why)
+		}
+		if why != "" {
+			core = nil
+		}
+	}
 	instr := &sourceDocumentInstr{href: href, validation: spec, body: body,
-		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI, bursts: plan}
+		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI, bursts: plan, stream: core}
 	if n.Attr("", "use-accumulators") != nil {
 		accums, err := parseUseAccumulators(n)
 		if err != nil {
@@ -107,6 +132,16 @@ func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 			return err
 		}
 	}
+	if i.stream != nil {
+		if done, err := i.executeStream(rt, out, href); done {
+			return err
+		}
+	}
+	return i.executeTree(rt, out, href)
+}
+
+// executeTree runs i on the tree of the document href names.
+func (i *sourceDocumentInstr) executeTree(rt *runtime, out *outputBuilder, href string) error {
 	root, err := i.load(rt, href)
 	if err != nil {
 		return err
@@ -122,6 +157,7 @@ func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		rt.treeAccums[root] = i.accums
 	}
 	sub := rt.withCurrent(root, 1, 1).clearCurrentRule()
+	sub.bursts = nil // an outer container's stream is not this document
 	return execSequence(i.body, sub, out)
 }
 

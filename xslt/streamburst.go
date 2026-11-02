@@ -48,6 +48,7 @@ import (
 
 	"github.com/knroy/go-xml/v2/internal/streamtrace"
 	"github.com/knroy/go-xml/v2/internal/xdmburst"
+	"github.com/knroy/go-xml/v2/internal/xdmstream"
 	"github.com/knroy/go-xml/v2/internal/xpathleaf"
 	"github.com/knroy/go-xml/v2/xdm"
 	"github.com/knroy/go-xml/v2/xpath"
@@ -112,6 +113,9 @@ type burstFeed struct {
 	read  func(each func(xdm.Item) error) error
 	// eval is the select of a value-of, copy-of or sequence target.
 	eval func(rt *runtime) (xdm.Sequence, error)
+	// run, on a feed with no instr, is the streamed core's run, which
+	// makes the feeds of its consuming instructions (streamexec.go).
+	run *streamRun
 }
 
 // burstResolver is a document resolver that can parse a document in bursts.
@@ -125,6 +129,9 @@ type burstResolver interface {
 	// the options and limits ResolveDocument would read it with. An error
 	// from fn is returned as it is.
 	parseBursts(ctx *xpath.Context, uri, base string, path []xdmburst.Step, fn func(*xdm.Node) error) error
+	// streamDoc reads the document uri names on a cursor fn reads, with the
+	// options and limits ResolveDocument would read it with (streamexec.go).
+	streamDoc(ctx *xpath.Context, uri, base string, fn func(*xdmstream.Cursor) error) error
 }
 
 // planBursts decides, from the stylesheet source, whether the streamable
@@ -1070,6 +1077,7 @@ func pathSafe(steps []xpath.Expr, noPos, upEnd bool) bool {
 func (c *compiler) noteBurstLoop(n *xdm.Node, instr Instruction, sel *xpath.Compiled,
 	ns xpath.NamespaceResolver) {
 
+	c.noteStreamLoop(n, instr, sel, ns)
 	if c.burst != nil && c.burst.target == n {
 		c.burst.instr, c.burst.sel = instr, sel
 		if e := reparse(sel, ns); e != nil && descendantFirst(e) {
@@ -1149,6 +1157,7 @@ func descendantFirst(e xpath.Expr) bool {
 func (c *compiler) noteBurstSelect(n *xdm.Node, instr Instruction, sel *xpath.Compiled,
 	ns xpath.NamespaceResolver) {
 
+	c.noteStreamSelect(n, instr, sel, ns)
 	p := c.burst
 	if p == nil || p.target != n || sel.CompatMode() {
 		return
@@ -1425,8 +1434,13 @@ func (rt *runtime) evalSelect(instr Instruction, sel *xpath.Compiled) (xdm.Seque
 // burstsFor returns the feed that drives instr, or nil when instr evaluates
 // its select as usual.
 func (rt *runtime) burstsFor(instr Instruction) *burstFeed {
-	if f := rt.bursts; f != nil && f.instr == instr {
-		return f
+	if f := rt.bursts; f != nil {
+		if f.instr == instr {
+			return f
+		}
+		if f.run != nil {
+			return f.run.feed(instr, rt)
+		}
 	}
 	return nil
 }
